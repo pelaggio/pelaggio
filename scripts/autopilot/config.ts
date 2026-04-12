@@ -1,6 +1,10 @@
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 // ── Paths ──────────────────────────────────────────────────────────────
+
+/** ESM-compatible `__dirname` — required because this package is `"type": "module"`. */
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export const REPO = resolve(__dirname, "../..");
 export const LOG_PATH = resolve(REPO, ".dev", "autopilot-log.jsonl");
