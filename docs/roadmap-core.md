@@ -17,7 +17,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | TOOL-3. Scope suggestion in /charter from description | — |
 | TOOL-4. pipeline.ts integration tests via SDK query mock | — |
 | TOOL-5. Skill body linter (frontmatter validity, rubric references) | — |
-| TOOL-6. Biome config for scripts/ + pre-commit hook | — |
+| ~~TOOL-6. Biome config for scripts/ + pre-commit hook~~ | **Done** — Biome config added, pre-commit hook wired (2026-04-11) |
 
 ---
 
@@ -122,23 +122,9 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 
 ---
 
-### TOOL-6. Biome config for scripts/ + pre-commit hook
+### TOOL-6. Biome config for scripts/ + pre-commit hook ✓
 
-| What | Scope | Deps |
-|------|-------|------|
-| Add Biome config scoped to `scripts/`, install the dependency, wire a lefthook pre-commit hook that runs biome on staged TypeScript files. | XS | — |
-
-**Deliverables:**
-- `biome.json` at repo root, `files.include: ["scripts/**/*.ts"]`, formatting style matches Fathom's conventions (tabs, double quotes, trailing commas)
-- `pnpm add -D -w @biomejs/biome`
-- `pnpm check` script that runs `biome check scripts/`
-- `lefthook.yml` with a pre-commit hook running biome on staged `scripts/**/*.ts` files
-- `pnpm add -D -w lefthook`
-
-**Out of scope:**
-- Linting `.claude-templates/` (markdown)
-- Linting `.claude/skills/` (markdown)
-- Strict type-checking (the rubric says tsx runtime is good enough for now)
+Completed. See git history for implementation details.
 
 ---
 

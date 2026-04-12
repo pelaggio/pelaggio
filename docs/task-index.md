@@ -15,8 +15,6 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 | TOOL-3 | Scope suggestion in /charter from description | — | — | core |
 | TOOL-4 | pipeline.ts integration tests via SDK query mock | — | — | core |
 | TOOL-5 | Skill body linter (frontmatter validity, rubric references) | — | — | core |
-| TOOL-6 | Biome config for scripts/ + pre-commit hook | — | — | core |
-
 ## Recently completed
 
-*(Nothing shipped yet — fresh repo.)*
+- TOOL-6 ✓
