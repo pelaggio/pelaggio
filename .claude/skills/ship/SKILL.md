@@ -1,0 +1,165 @@
+---
+name: ship
+description: Finalize, commit, push, and clean up a completed work item
+argument-hint: "[--no-squash] [--pr]"
+disable-model-invocation: true
+allowed-tools: Read Edit Bash(git:*) Bash(pnpm:*) Bash(npx jest:*) Bash(npx biome:*) Bash(gh pr:*)
+---
+
+# /ship — Finalize and Ship
+
+## Context
+
+Run `git rev-parse --path-format=absolute --git-common-dir` — the output ends with `/.git`. Strip that suffix to get MAIN_REPO. Use the resulting absolute path in all paths below.
+
+| Path | Purpose |
+|------|---------|
+| `{MAIN_REPO}/docs/plans/` | Implementation plans (keyed by branch) |
+| `{MAIN_REPO}/docs/roadmap-*.md` | Task-tracking planning docs |
+
+Resolve MAIN_REPO. Parse `$ARGUMENTS` for `--no-squash` and `--pr` flags.
+
+**CWD rule**: run steps 1-3 from your current working directory (the worktree). `HEAD` here is your feature branch. After the merge (step 4), all remaining steps run in `{MAIN_REPO}` on `main`.
+
+## 1. Verify
+
+!`cat .claude/skills/_rubric.md`
+
+All three verifications must pass (exit 0) — stop and report if any fail.
+
+**Biome**: only *errors* block shipping. Warnings are acceptable — do not spend turns fixing them. Check the exit code, not the warning count.
+
+**Pre-existing test failures**: if a test fails but the test file does not appear in `git diff main...HEAD --name-only`, the failure is pre-existing. Note it and move on — do not investigate or fix.
+
+## 2. Identify
+
+Get item ID from branch name (e.g. `feat/b3-rolling-averages` → `B3`). Find the source doc by grepping `{MAIN_REPO}/docs/roadmap-*.md` for that ID. Read the planning doc for title/description.
+
+## 3. Squash (unless `--no-squash`)
+
+Verify clean working tree (`git status --porcelain` must be empty — stop if not).
+
+```bash
+git reset --soft $(git merge-base main HEAD)
+git commit -m "$(cat <<'EOF'
+{type}: {description} ({item ID})
+
+- {bullet 1}
+- {bullet 2}
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+EOF
+)"
+```
+
+Types: `feat`, `fix`, `refactor`, `docs`. Imperative mood, lowercase, no period.
+
+If the commit fails after reset, all changes are still staged — just re-run the commit command.
+
+**Phantom ship guard**: after squashing, verify the commit contains non-docs code:
+```bash
+git diff --name-only main..HEAD | grep -v '^docs/' | grep -v '\.md$'
+```
+If the output is empty (only docs files changed), **stop and report** — the feature branch has no implementation. Do not proceed with merge.
+
+## 4. Merge code
+
+**If `--pr`**: skip merge, `git push -u origin HEAD`, create PR via `gh pr create`. Then skip to step 9 (Report) — docs updates will happen when the PR is merged.
+
+**Otherwise** (direct merge):
+
+**If in worktree** (worktree path != MAIN_REPO):
+```bash
+cd "{MAIN_REPO}"
+git pull --no-rebase origin main
+git merge "$BRANCH" --no-edit
+```
+
+**If not in worktree**:
+```bash
+git checkout main
+git pull --no-rebase origin main
+git merge "$BRANCH" --no-edit
+```
+
+**Merge conflicts**: resolve these known-safe additive patterns, then re-run typecheck to confirm:
+- `migrations.ts` journal: accept both entries, bump the incoming migration's `idx` and rename its constant (e.g., `m0019` → `m0020`) so indices are sequential
+- `migrations.ts` SQL + exports: keep both migration constants and add both to the exports object
+- i18n JSON (`en/*.json`, `fr/*.json`): accept both key additions (additive-only — both sides added different keys)
+- Component files (a11y + feature): keep a11y attributes/wrappers from main and feature logic from the branch
+
+For any other conflict pattern (edits to the same lines, deletions, non-additive changes): stop and report — do not force through.
+
+## 5. Post-merge verification
+
+If `pnpm-lock.yaml` was modified in the merge, run `pnpm install --frozen-lockfile` from `{MAIN_REPO}` first — the lockfile is merged but new packages won't be available until installed.
+
+Re-run the three verification commands from step 1 (`pnpm typecheck`, `pnpm check` in apps/mobile, `npx jest --no-coverage` in apps/mobile) from `{MAIN_REPO}`. If any fail, **stop and fix** — do not push broken code to main. This catches regressions introduced by the merge itself (e.g., main moved while the feature branch was in flight).
+
+## 6. Mark done (on main)
+
+All paths below use `{MAIN_REPO}` — you are now on `main`. The item ID, title, and description were already extracted in step 2.
+
+Update the item in its planning doc (detect checkbox vs table format):
+- Checkbox: `- [ ]` → `- [x]`, append ` *(YYYY-MM-DD)*`
+- Table: status → `**Done** — {description} (YYYY-MM-DD)`
+
+Check cross-references in other `{MAIN_REPO}/docs/roadmap-*.md` files.
+
+**Collapse the spec section**: in the roadmap, replace the item's full spec (the `### ID. Title` section with What/Scope/Deps table and Deliverables list) with:
+```
+### {ID}. {Title} ✓
+
+Completed. See git history for implementation details.
+```
+Keep the heading so links still resolve.
+
+**Update task index**: in `{MAIN_REPO}/docs/task-index.md`:
+- Remove the item's row from the "Open items" table
+- Add `- {ID} ✓` as a new line in the "Recently completed" list, in alphabetical order (alpha by prefix, then numeric within prefix)
+
+## 7. Archive plan docs (on main)
+
+If a plan file exists in `{MAIN_REPO}/docs/plans/` for this item (filename matches the branch slug or item ID prefix) and the work is complete: `git mv` it to `docs/archived/`. Don't archive multi-item or in-progress docs.
+
+## 8. Commit doc updates and push
+
+Stage and commit all doc changes from steps 6-7 as a separate commit on `main`:
+```bash
+git add docs/
+git commit -m "docs: mark {item ID} done"
+```
+
+Then push:
+```bash
+git push origin main
+```
+
+If `git push` fails because main moved, run `git pull --no-rebase origin main`, re-run post-merge verification (step 5), and retry the push (up to 2 retries).
+
+## 9. Clean up
+
+**If in worktree**:
+```bash
+# Clean node_modules first — git worktree remove fails on Windows with deeply nested dirs
+# Use cmd rmdir on Windows (rm -rf hangs for minutes on deeply nested node_modules)
+cmd //c "rmdir /s /q $WORKTREE\\node_modules" 2>/dev/null
+cmd //c "rmdir /s /q $WORKTREE\\apps\\mobile\\node_modules" 2>/dev/null
+cmd //c "rmdir /s /q $WORKTREE\\apps\\server\\node_modules" 2>/dev/null
+cmd //c "rmdir /s /q $WORKTREE\\apps\\web\\node_modules" 2>/dev/null
+git worktree remove "$WORKTREE" --force
+# If worktree remove fails (dir not empty), force delete and prune
+# cmd //c "rmdir /s /q $WORKTREE" && git worktree prune
+git branch -d "$BRANCH"
+git push origin --delete "$BRANCH" 2>/dev/null
+```
+
+**If not in worktree**:
+```bash
+git branch -d "$BRANCH"
+git push origin --delete "$BRANCH" 2>/dev/null
+```
+
+## 10. Report
+
+What shipped: item, branch, commit, planning doc updated, archives, worktree status.

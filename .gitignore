@@ -1,0 +1,7 @@
+node_modules/
+.dev/
+.claude/worktrees/
+.claude/settings.local.json
+.claude/shipwreck.log
+*.log
+.DS_Store

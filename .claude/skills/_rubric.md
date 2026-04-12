@@ -1,0 +1,49 @@
+# Quality Rubric — claude-autopilot Tooling
+
+Six dimensions — apply when planning, reviewing, or fixing code in this repo. This rubric is for the autopilot *tooling itself*, not for downstream projects that use it.
+
+**Scope of this repo**: TypeScript CLI pipeline built on `@anthropic-ai/claude-agent-sdk`. Files under `scripts/autopilot/`, `.claude/skills/`, and `.claude-templates/`. No UI, no user-facing surface.
+
+## Dimensions
+
+**Well-typed** — No `any`. Discriminated unions over boolean flags where state matters (e.g., `StepEvent`, `SDKResultMessage`). Explicit return types on all exported functions. `Step` is a literal union — new step names must land in config.ts's `STEPS` const and every `Record<Step, T>` must be exhaustive. No `as Step` casts outside controlled entry points (`detectResumeStep` log parsing is the one exception, and it validates via `STEPS.indexOf`).
+
+**Well-tested** — Pure helpers in `helpers.ts` have unit tests in `__tests__/helpers.test.ts` via `node:test` + `npx tsx --test`. Pipeline integration is harder to test (it spawns real SDK sessions) — acceptable to leave untested until a mocking approach emerges. Edge cases matter especially in `parseResetTime`, `parseWaitFlag`, `parseItemId`, `parseVerdict` — all of which are regex-driven and failure-prone.
+
+**Well-factored** — Strict module boundaries:
+- `config.ts` — static configuration (BUDGETS, TURN_LIMITS, EFFORT, MODEL_PROFILES, STEPS, REPO path). No business logic. No hardcoded model strings anywhere else.
+- `helpers.ts` — pure functions and shell wrappers (git, fs). No SDK calls, no event emission.
+- `types.ts` — type-only. No runtime code.
+- `step-runner.ts` — owns the SDK `query()` loop, hook installation, event streaming. No business logic.
+- `pipeline.ts` — the orchestration loop. Composes everything above. No direct SDK imports (goes through `step-runner`).
+- `main.ts` / `autopilot.ts` — entry points. Arg parsing and orchestrator invocation only.
+- `tui.ts` — display layer. No business logic, no mutation.
+
+Skills live in `.claude/skills/` — each skill is self-contained markdown with frontmatter. Shared rubric + review logic via `!cat` includes. Skill bodies read by `expandSkill()` which strips frontmatter before passing to the SDK.
+
+**Idiomatic** — Biome-clean (tabs for indent, double quotes, trailing commas). Imports order: node builtins → external packages → local paths. `.js` extension in relative imports (ESM convention, required by `tsx`). No default exports — everything named. Async iteration via `for await` over SDK generators. Error handling via `try/catch` with specific subtype categorization (`error_rate_limit`, `error_budget`, `error_max_turns`, etc.). Environment variable overrides read via `process.env.X ?? default`.
+
+**Correct** — Load-bearing invariants specific to this pipeline:
+- **Step exhaustiveness**: `STEPS` const is the source of truth. `BUDGETS`, `TURN_LIMITS`, `EFFORT`, and every `MODEL_PROFILES[profile]` must have an entry for every Step. Missing keys cause runtime lookups of `undefined` which crash late.
+- **Frontmatter stripping**: `expandSkill()` MUST strip frontmatter before returning. Downstream consumers pass the result directly as a SDK prompt; leaked frontmatter pollutes the prompt and confuses the model.
+- **Verdict parsing default**: `parseVerdict()` returns `APPROVE` when no verdict keyword is found. This is a fail-safe — unclear review output should proceed, not abort. Changing this default requires a comment explaining why.
+- **Worktree isolation**: `step-runner` installs `PreToolUse` hooks when running in a worktree to block Write/Edit/Bash calls targeting `MAIN_REPO` paths. This prevents agents from corrupting sibling worktrees. The hook must run before every mutating tool — don't add exceptions without a test.
+- **Rate-limit parking preserves work**: on rate limit rejection, `parkSignal.parked` is set, and `parkExit()` runs `checkpoint()` before returning. Any new exit path from the pipeline must call `parkExit()` first or risk losing committed-but-not-pushed work.
+- **`listWorktrees()` filters by prefix**: new worktree detection matches `WORKTREE_PREFIX` to ignore unrelated worktrees. `WORKTREE_PREFIX` is derived from `basename(REPO)` by default — tests that mock REPO need to set `CLAUDE_AUTOPILOT_WORKTREE_PREFIX` env var.
+- **`detectResumeStep` trusts only valid Step names**: when reading log entries from disk, it validates parsed step names against `STEPS.indexOf()`. Unknown names (from legacy logs or corruption) fall through to `"ship"` as a safe default — *not* to a random step.
+- **Phantom ship guard**: `/ship` verifies `git log main..HEAD` contains non-docs commits before proceeding. Don't bypass.
+
+**Concise** — YAGNI. No dead code. Early returns. No premature abstractions — the pipeline is ~600 lines across 7 files and should stay that way. Avoid "configurability" that nobody has asked for. When adding a feature, prefer extending an existing function over adding a new helper. No backwards-compat shims — this repo has no external consumers beyond the user's own projects, and those can update.
+
+## Verification
+
+```bash
+npx tsx --test scripts/autopilot/__tests__/helpers.test.ts   # unit tests for helpers
+npx tsx -e "import('./scripts/autopilot/config.ts')"          # parse-check config
+npx tsx -e "import('./scripts/autopilot/helpers.ts')"         # parse-check helpers
+npx tsx -e "import('./scripts/autopilot/pipeline.ts')"        # parse-check pipeline
+```
+
+All four must succeed. No formal `pnpm typecheck` setup yet — tsx's runtime checking catches most issues. If you add a `tsconfig.json` + typecheck script, update this section.
+
+**Biome is not yet configured** for this repo. Skill bodies (`.md`) are not Biome-linted. If you add Biome, run it against `scripts/` only.
