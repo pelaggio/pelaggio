@@ -90,7 +90,7 @@ Run `/ship` flow from step 3 onward: squash, mark done, archive plan, commit doc
 
 ## 4. Verify
 
-From MAIN_REPO, run the three checks from the rubric (`pnpm typecheck`, `pnpm check` in apps/mobile, `npx jest --no-coverage` in apps/mobile). All must exit 0. Biome warnings don't block.
+From MAIN_REPO, run the verification commands listed in `.claude/skills/_rubric.md`'s Verification section. All must exit 0. Biome warnings don't block (if biome is configured).
 
 If verification fails due to a conflict resolution error, fix and amend the merge commit.
 

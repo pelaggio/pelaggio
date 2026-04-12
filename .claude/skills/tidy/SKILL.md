@@ -64,11 +64,7 @@ If `{MAIN_REPO}/.dev/autopilot-log.jsonl` exists, read it and report:
 
 ## 5. Codebase health check
 
-Run from MAIN_REPO:
-```bash
-pnpm typecheck
-pnpm check          # from apps/mobile
-```
+Run from MAIN_REPO the verification commands listed in `.claude/skills/_rubric.md`'s Verification section.
 
 Report any errors. These should be zero — if not, flag as blocking for autopilot.
 

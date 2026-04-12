@@ -195,21 +195,21 @@ async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, flags: Fl
 				"## Strategy — work incrementally",
 				"1. Read the full plan first. Identify the implementation order.",
 				"2. Implement one logical chunk at a time (e.g., one new file, one screen, one hook).",
-				"3. After each chunk, run `pnpm typecheck` (from repo root). Fix errors before moving on.",
+				"3. After each chunk, run the verification commands from `.claude/skills/_rubric.md`'s Verification section. Fix errors before moving on.",
 				"4. If the same error persists after 3 fix attempts, commit what works, skip the problematic piece, and note it.",
-				"5. Run `pnpm check` from `apps/mobile` before finishing.",
-				"6. Do NOT implement all files first and typecheck at the end — that causes cascading errors.",
+				"5. Run all verification commands from the rubric before finishing.",
+				"6. Do NOT implement all files first and verify at the end — that causes cascading errors.",
 			].join("\n");
 
 		const continuePrompt = [
 			"The previous implementation session ran out of turns. Code has been committed to disk.",
 			"", "## Plan", planRef,
 			"", "## Instructions",
-			"1. Run `pnpm typecheck` (from repo root) to see the current state.",
+			"1. Run the verification commands from `.claude/skills/_rubric.md`'s Verification section to see the current state.",
 			"2. Read the plan and compare against what's already implemented.",
 			"3. Identify what's missing or broken and finish the remaining work.",
-			"4. Follow the same incremental strategy — one chunk at a time, typecheck between.",
-			"5. Run `pnpm check` from `apps/mobile` before finishing.",
+			"4. Follow the same incremental strategy — one chunk at a time, verify between.",
+			"5. Run all verification commands from the rubric before finishing.",
 		].join("\n");
 
 		let lastLoopFile: string | null = null;
@@ -281,12 +281,11 @@ async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, flags: Fl
 					"## Context", shakedownPlanRef,
 					"",
 					"## Instructions",
-					"1. Run `pnpm typecheck` (from repo root) to see the current state.",
-					"2. Run `pnpm check` from `apps/mobile` for biome lint.",
-					"3. Check what's already been fixed vs. what remains.",
-					"4. Focus on fix-now items only (type errors, test failures, lint errors, bugs).",
-					"5. Skip near-term items (missing tests, i18n gaps, refactoring) — add them as deferred to the roadmap.",
-					"6. Run all three verifications before finishing.",
+					"1. Run the verification commands from `.claude/skills/_rubric.md`'s Verification section to see the current state.",
+					"2. Check what's already been fixed vs. what remains.",
+					"3. Focus on fix-now items only (type errors, test failures, lint errors, bugs).",
+					"4. Skip near-term items (missing tests, i18n gaps, refactoring) — add them as deferred to the roadmap.",
+					"5. Re-run the verification commands before finishing.",
 				].join("\n");
 
 			const shakedown = await step("shakedown-code", shakedownPrompt, worktree!);

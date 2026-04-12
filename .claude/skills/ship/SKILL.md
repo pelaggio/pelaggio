@@ -94,7 +94,7 @@ For any other conflict pattern (edits to the same lines, deletions, non-additive
 
 If `pnpm-lock.yaml` was modified in the merge, run `pnpm install --frozen-lockfile` from `{MAIN_REPO}` first — the lockfile is merged but new packages won't be available until installed.
 
-Re-run the three verification commands from step 1 (`pnpm typecheck`, `pnpm check` in apps/mobile, `npx jest --no-coverage` in apps/mobile) from `{MAIN_REPO}`. If any fail, **stop and fix** — do not push broken code to main. This catches regressions introduced by the merge itself (e.g., main moved while the feature branch was in flight).
+Re-run the verification commands from `.claude/skills/_rubric.md`'s Verification section from `{MAIN_REPO}`. If any fail, **stop and fix** — do not push broken code to main. This catches regressions introduced by the merge itself (e.g., main moved while the feature branch was in flight).
 
 ## 6. Mark done (on main)
 

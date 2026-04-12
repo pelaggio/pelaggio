@@ -58,10 +58,10 @@ Target: a `.md` plan file (usually `docs/plans/{branch-slug}.md`).
 Target: the diff — union of unstaged, staged, and `git diff main...HEAD`.
 
 1. Identify every changed file. Read each in full. Do not review hunks in isolation.
-2. Run the three verifications from the rubric (`pnpm typecheck` from repo root, `pnpm check` from `apps/mobile`, `npx jest --no-coverage` from `apps/mobile`). Any failure is a fix-now item. Biome *warnings* are acceptable — only errors block.
+2. **Run the verification commands listed in the rubric's "Verification" section above.** The rubric is authoritative — do not substitute your own commands. Any failure is a fix-now item. If the rubric says biome warnings are acceptable, respect that; only errors block.
 3. Apply the rubric. Categorize findings.
 4. **Fix every fix-now and near-term item.** Edit files directly, commit nothing (the pipeline checkpoints).
-5. Re-run the three verifications until all pass. Fix any regressions your changes introduced.
+5. Re-run the verifications until all pass. Fix any regressions your changes introduced.
 6. Output the summary and verdict.
 
 ## Autopilot extensions
