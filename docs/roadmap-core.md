@@ -4,7 +4,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 
 **Related:** [task-index.md](task-index.md)
 
-> **Sequencing:** Items are mostly independent. TOOL-6 (Biome) is a good first cycle — it's small, touches config files only, and validates the full pipeline works end-to-end on a trivial change before we throw harder items at it.
+> **Sequencing:** TOOL-6 validated the pipeline end-to-end. TOOL-7 (doc-only, XS) and TOOL-12 (stats, S) are good next cycles to keep validating while building real value. TOOL-4 (pipeline tests) unblocks the plugin refactors. Critical path to "usable for outfit-assembler": TOOL-7 → TOOL-8 → TOOL-12 → TOOL-4 → TOOL-11 → TOOL-13.
 
 ## Progress
 
@@ -18,6 +18,15 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | TOOL-4. pipeline.ts integration tests via SDK query mock | — |
 | TOOL-5. Skill body linter (frontmatter validity, rubric references) | — |
 | ~~TOOL-6. Biome config for scripts/ + pre-commit hook~~ | **Done** — Biome config added, pre-commit hook wired (2026-04-11) |
+| TOOL-7. Document in-context vs out-of-context review + add Idioms section to rubric | — |
+| TOOL-8. `.autopilot.yml` project config file + loader | — |
+| TOOL-9. RoadmapSource abstraction + MarkdownRoadmap adapter | TOOL-4, TOOL-8 |
+| TOOL-10. GitHubIssuesRoadmap adapter via gh CLI | TOOL-9 |
+| TOOL-11. ShipTarget abstraction + 3 adapters | TOOL-4, TOOL-8 |
+| TOOL-12. Running totals — token counts + stats dashboard | — |
+| TOOL-13. Publish as `@cdhorne/claude-autopilot` on npm + `init` CLI | TOOL-8, TOOL-11 |
+| TOOL-14. `sync` CLI — upgrade installed skills with diff prompts | TOOL-13 |
+| TOOL-15. LinearRoadmap adapter | TOOL-9 |
 
 ---
 
@@ -125,6 +134,189 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 ### TOOL-6. Biome config for scripts/ + pre-commit hook ✓
 
 Completed. See git history for implementation details.
+
+---
+
+### TOOL-7. Document in-context vs out-of-context review + add Idioms section to rubric
+
+| What | Scope | Deps |
+|------|-------|------|
+| Codify the two-pass review model the pipeline already runs: `/plan`'s self-review is in-context (sees the reasoning that produced the artifact), `/shakedown`'s forked review is out-of-context (reads cold, no bias). Add an "Idioms" section to `_rubric.md` for framework-time best practices, design patterns, and simplicity. The out-of-context pass is responsible for stress-testing Idioms because it has the fresh eyes needed to catch convention drift. | XS | — |
+
+**Deliverables:**
+- Update `.claude/skills/_rubric.md` with a new "Idioms" section covering: current-framework-version idioms (name the version), well-established design patterns, simplicity over cleverness, consistency with industry conventions
+- Update `.claude/skills/shakedown/SKILL.md` to note that the forked out-of-context review is primarily responsible for the Idioms section
+- Update `.claude/skills/plan/SKILL.md` self-review section to note it's the in-context pass focused on project invariants (not Idioms)
+- Update `CLAUDE.md` with a "Review model" section documenting the in/out-of-context distinction
+
+**Out of scope:**
+- Implementing a separate idioms file (we decided single file is fine)
+- Any code changes — this is doc-only
+
+---
+
+### TOOL-8. `.autopilot.yml` project config file + loader
+
+| What | Scope | Deps |
+|------|-------|------|
+| Extract every hardcoded path, budget, turn limit, model profile, and step constant from `config.ts` into a declarative YAML config at the repo root. `config.ts` becomes defaults + a loader that merges `.autopilot.yml` on top. Consuming projects override what they need; unspecified fields fall through to defaults. | M | — |
+
+**Deliverables:**
+- `.autopilot.yml` schema with keys: `project`, `docs.{rubric,philosophy,architecture,task-index}`, `roadmap.{source,glob,plans}`, `ship.{target,main-branch,squash}`, `models.profiles.{standard,quick}.*`, `budgets.*`, `turn-limits.*`, `worktree.prefix`
+- `scripts/autopilot/config.ts` refactored: DEFAULTS export (current values), `loadConfig()` function that reads `.autopilot.yml` and deep-merges with defaults, exports `BUDGETS`, `TURN_LIMITS`, etc. as resolved values
+- YAML parser: use `yaml` npm package (small, well-known)
+- Backward compat: if `.autopilot.yml` is absent, current defaults apply unchanged — no existing behavior breaks
+- Document the schema in `CLAUDE.md` and optionally in a new `docs/config.md`
+- Unit tests: loader handles missing file, partial override, invalid YAML
+
+**Out of scope:**
+- Runtime reload (config is read once at pipeline start)
+- JSON Schema validation — defer until needed
+- Secret handling — there are no secrets in config today
+
+---
+
+### TOOL-9. RoadmapSource abstraction + MarkdownRoadmap adapter
+
+| What | Scope | Deps |
+|------|-------|------|
+| Define a `RoadmapSource` interface with `listOpenItems`, `claimItem`, `markDone`, `getItemPlan`. Factor all markdown-specific code currently in `helpers.ts` (findPlanFile, findPlanPath, parseItemId, isQuickScope, plus the ship skill's mark-done logic) into a `MarkdownRoadmap` adapter class. Pipeline reads `roadmap.source` from config and instantiates the right adapter. | M | TOOL-4, TOOL-8 |
+
+**Deliverables:**
+- `scripts/autopilot/roadmap/index.ts` — interface + factory
+- `scripts/autopilot/roadmap/markdown.ts` — MarkdownRoadmap adapter, wraps existing helpers
+- Refactor pipeline.ts to call `roadmap.claimItem(id)` instead of hardcoded markdown functions
+- Refactor `/ship` skill body to call a provided mark-done function (or keep ship markdown-aware for now — document in the adapter interface what ship needs)
+- Integration tests via mock RoadmapSource
+- `pnpm autopilot --dry-run` still works with the default markdown source
+
+**Out of scope:**
+- Additional adapters (TOOL-10, TOOL-15)
+- Changing the markdown format — existing `roadmap-*.md` + `task-index.md` behavior is preserved
+
+---
+
+### TOOL-10. GitHubIssuesRoadmap adapter via gh CLI
+
+| What | Scope | Deps |
+|------|-------|------|
+| Implement `RoadmapSource` backed by GitHub Issues. Items = issues with a configurable label (default `autopilot`). Plans stored as issue comments (or PR descriptions once `/ship` creates a PR). Uses `gh` CLI rather than a raw GitHub API client to avoid adding octokit as a dependency. | M | TOOL-9 |
+
+**Deliverables:**
+- `scripts/autopilot/roadmap/github-issues.ts` — adapter implementing `RoadmapSource`
+- Config schema: `roadmap.source: github-issues`, `roadmap.github.repo`, `roadmap.github.label`, `roadmap.github.plan-location: issue-comment | pr-description`
+- `listOpenItems`: `gh issue list --label <label> --state open --json number,title,labels,body`
+- `claimItem`: mark issue as "in progress" (add label or assign), create branch + worktree
+- `markDone`: close issue with a comment linking the merged PR/commit
+- `getItemPlan`: fetch issue comment matching a specific tag (e.g. `<!-- autopilot-plan -->`)
+- Graceful failure when `gh` CLI is not installed or not authenticated
+- Tests with `gh` CLI mocked at the shell level
+
+**Out of scope:**
+- Bidirectional sync — GH Issues is the source, no local cache
+- Multi-repo issue sources — one repo per autopilot instance
+
+---
+
+### TOOL-11. ShipTarget abstraction + DirectPush/PullRequest/AutoMergePR adapters
+
+| What | Scope | Deps |
+|------|-------|------|
+| Define `ShipTarget` interface with `ship(branch, metadata) → ShipResult`. Factor `/ship` skill's merge/push logic into three adapters: `DirectPush` (current default: merge locally, push main), `PullRequest` (push branch, create PR via `gh pr create`, stop), `AutoMergePR` (push branch, create PR with auto-merge enabled). Pipeline reads `ship.target` from config. | M | TOOL-4, TOOL-8 |
+
+**Deliverables:**
+- `scripts/autopilot/ship/index.ts` — interface + factory
+- `scripts/autopilot/ship/direct-push.ts` — wraps current `/ship` merge+push flow
+- `scripts/autopilot/ship/pull-request.ts` — push + `gh pr create` + stop
+- `scripts/autopilot/ship/auto-merge-pr.ts` — push + PR + `gh pr merge --auto`
+- Refactor `/ship` skill to delegate to the configured target
+- Merge conflict handling stays adapter-local (each target knows how to resolve its own)
+- Integration tests for all three targets
+
+**Out of scope:**
+- Multi-target ship (pick one per repo, not mix-and-match)
+- Custom conflict resolution strategies beyond the built-ins
+
+---
+
+### TOOL-12. Running totals — token counts + stats JSON + `pnpm autopilot stats`
+
+| What | Scope | Deps |
+|------|-------|------|
+| The `claude-agent-sdk` `SDKResultMessage` exposes `usage` (input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens). Capture these per step, append to `.dev/autopilot-stats.json` after each cycle, and add a `pnpm autopilot stats` subcommand that prints a dashboard. | S | — |
+
+**Deliverables:**
+- Read `usage` from `SDKResultMessage` in `step-runner.ts`, thread into `StepResult`
+- `.dev/autopilot-stats.json` append-only with fields: totalCycles, completedCycles, failedCycles, totalCostUsd, totalInputTokens, totalOutputTokens, cacheReadTokens, itemsDelivered (array with id, title, date, cost), costByProfile, costByStep
+- `scripts/autopilot/stats.ts` — reads the JSON, renders a dashboard via `tui.ts`
+- `autopilot.ts` entry point routes `stats` subcommand to the dashboard
+- `README.md` updated with a dashboard screenshot / example
+
+**Out of scope:**
+- Per-day / per-week aggregations (dashboard is cumulative + last-N-items)
+- Exporting stats to external dashboards (Grafana, etc.)
+- Per-token cost breakdown by model (just by step for now)
+
+---
+
+### TOOL-13. Publish as `@cdhorne/claude-autopilot` on npm + `init` CLI
+
+| What | Scope | Deps |
+|------|-------|------|
+| Package the pipeline runtime + skill templates as a publishable npm package. Consuming projects install via `pnpm add -D @cdhorne/claude-autopilot` and run `npx claude-autopilot init` to scaffold `.claude/skills/`, `.autopilot.yml`, and example `docs/roadmap-*.md`. Package exports pipeline as a library so consuming projects can wrap it with custom logic if needed. | L | TOOL-8, TOOL-11 |
+
+**Deliverables:**
+- `package.json` with `name: @cdhorne/claude-autopilot`, correct `files`, `bin`, `exports` fields
+- `bin/claude-autopilot.js` — CLI entry point with subcommands: `init`, `sync`, `run`, `stats`
+- `init` subcommand: copies `.claude/skills/` templates into consuming project (non-destructive — skip if files exist unless `--force`), creates stub `.autopilot.yml`, wires `pnpm autopilot` script in consuming project's package.json
+- Library exports: `run(options)`, `loadConfig()`, individual pipeline functions for programmatic use
+- `.npmignore` to exclude `.dev/`, `docs/plans/`, `scripts/autopilot/__tests__/`
+- Published version 0.1.0 (alpha, unstable)
+- README updated with installation + usage instructions
+
+**Out of scope:**
+- Sync command (TOOL-14)
+- Semver stability — this is alpha, breaking changes expected
+- Publishing automation (manual `pnpm publish` for first release)
+
+---
+
+### TOOL-14. `sync` CLI — upgrade installed skills with diff prompts
+
+| What | Scope | Deps |
+|------|-------|------|
+| `npx claude-autopilot sync` diffs the consuming project's `.claude/skills/*/SKILL.md` against the package's versions and prompts per-file: overwrite, skip, merge. Never touches `_rubric.md`, `docs/`, `plans/`, or any project-specific content. Handles the upgrade case cleanly so projects can pull autopilot improvements without losing customizations. | M | TOOL-13 |
+
+**Deliverables:**
+- `sync` subcommand in `bin/claude-autopilot.js`
+- Diff computation using `diff` npm package (standard)
+- Interactive prompts via `@clack/prompts` or similar (small, cross-platform)
+- `--dry-run` flag previews without applying
+- `--force` flag overwrites without prompting (for CI)
+- Explicit allowlist of files the sync touches (SKILL.md in named skill directories) — everything else is off-limits
+- Merge strategy: show diff, user decides; no auto-merge of conflicts
+
+**Out of scope:**
+- Downgrades
+- Syncing `scripts/autopilot/` (that's a package upgrade, not a sync operation)
+
+---
+
+### TOOL-15. LinearRoadmap adapter
+
+| What | Scope | Deps |
+|------|-------|------|
+| Implement `RoadmapSource` backed by Linear. Lower priority than TOOL-10 — defer until actually using Linear. | M | TOOL-9 |
+
+**Deliverables:**
+- `scripts/autopilot/roadmap/linear.ts` — adapter implementing `RoadmapSource`
+- Uses Linear GraphQL API via `@linear/sdk`
+- Config: `roadmap.source: linear`, `roadmap.linear.{workspace-id,team-id,label}`
+- API key handling via `LINEAR_API_KEY` env var (never committed)
+- `listOpenItems`, `claimItem`, `markDone`, `getItemPlan` symmetrical to GitHub adapter
+
+**Out of scope:**
+- Same as TOOL-10 — single workspace per instance
 
 ---
 
