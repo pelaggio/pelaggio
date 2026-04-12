@@ -1,15 +1,27 @@
+import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
-import { existsSync, mkdirSync, appendFileSync } from "node:fs";
-import { REPO, MODEL_PROFILES } from "./config.js";
-import type { Step, StepResult, StepLog, CycleResult, CycleStatus, PipelineOpts, ParkSignal, Flags } from "./types.js";
-import { A, StatusBar, LiveStatus, fmtElapsed, createStepRenderer } from "./tui.js";
+import { MODEL_PROFILES, REPO } from "./config.js";
 import {
-	expandSkill, parseItemId, resolveWorktree, listWorktrees,
-	findPlanPath, parseVerdict, checkpoint, ensureCheckpointed,
-	isQuickScope, detectResumeStep, appendLog, stepIndex, createMutex,
-	parseWaitFlag, fmtWait, WORKTREE_PREFIX,
+	appendLog,
+	checkpoint,
+	createMutex,
+	detectResumeStep,
+	ensureCheckpointed,
+	expandSkill,
+	findPlanPath,
+	fmtWait,
+	isQuickScope,
+	listWorktrees,
+	parseItemId,
+	parseVerdict,
+	parseWaitFlag,
+	resolveWorktree,
+	stepIndex,
+	WORKTREE_PREFIX,
 } from "./helpers.js";
 import { runStep } from "./step-runner.js";
+import { A, createStepRenderer, fmtElapsed, LiveStatus, StatusBar } from "./tui.js";
+import type { CycleResult, CycleStatus, Flags, ParkSignal, PipelineOpts, Step, StepLog, StepResult } from "./types.js";
 
 // ── Pipeline ───────────────────────────────────────────────────────────
 
@@ -41,13 +53,18 @@ async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, flags: Fl
 			workerStatus: opts.workerStatus,
 		});
 
-		const result = await runStep(name, prompt, {
-			cwd,
-			profile,
-			trace: flags.trace,
-			itemId: itemId ?? undefined,
-			parkSignal,
-		}, emit);
+		const result = await runStep(
+			name,
+			prompt,
+			{
+				cwd,
+				profile,
+				trace: flags.trace,
+				itemId: itemId ?? undefined,
+				parkSignal,
+			},
+			emit,
+		);
 
 		steps.push({ name, model: MODEL_PROFILES[profile]?.[name] ?? "default", cost: result.cost, turns: result.turns, ok: result.ok });
 		if (opts.workerStatus) opts.workerStatus.cost += result.cost;
@@ -85,8 +102,7 @@ async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, flags: Fl
 		if (ws && mutex) ws.step = "waiting";
 		if (mutex) await mutex.acquire();
 		try {
-			if (parkSignal.parked)
-				return finish({ itemId: null, completed: false, cost, error: "parked" });
+			if (parkSignal.parked) return finish({ itemId: null, completed: false, cost, error: "parked" });
 			const worktreesBefore = new Set(opts.dryRun ? [] : listWorktrees());
 
 			log(`/pick ${itemId ?? "next"}`);
@@ -94,23 +110,19 @@ async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, flags: Fl
 			cost += pick.cost;
 			pickText = pick.text + "\n" + pick.fullText;
 
-			if (!pick.ok)
-				return finish({ itemId: null, completed: false, cost, error: "pick failed" });
+			if (!pick.ok) return finish({ itemId: null, completed: false, cost, error: "pick failed" });
 
 			const pickAll = pick.text + "\n" + pick.fullText;
-			if (!opts.dryRun && !/claimed|worktree add|successfully/i.test(pickAll))
-				return finish({ itemId: null, completed: false, cost, error: "nothing to pick" });
+			if (!opts.dryRun && !/claimed|worktree add|successfully/i.test(pickAll)) return finish({ itemId: null, completed: false, cost, error: "nothing to pick" });
 
 			itemId = opts.dryRun ? (itemId ?? "DRY") : (parseItemId(pick.text) ?? parseItemId(pick.fullText));
-			if (!itemId)
-				return finish({ itemId: null, completed: false, cost, error: "no item ID parsed" });
+			if (!itemId) return finish({ itemId: null, completed: false, cost, error: "no item ID parsed" });
 
 			worktree = resolveWorktree(itemId);
 			if (!opts.dryRun && (!existsSync(worktree) || worktreesBefore.has(worktree))) {
 				const newWt = listWorktrees().find((p) => !worktreesBefore.has(p) && p.includes(WORKTREE_PREFIX));
 				if (newWt) worktree = newWt;
-				else if (!existsSync(worktree))
-					return finish({ itemId, completed: false, cost, error: "worktree missing" });
+				else if (!existsSync(worktree)) return finish({ itemId, completed: false, cost, error: "worktree missing" });
 			}
 		} finally {
 			mutex?.release();
@@ -152,7 +164,8 @@ async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, flags: Fl
 		if (existingPlan) {
 			log(`plan exists at ${existingPlan} — skipping plan generation`);
 		} else {
-			const parked = parkExit(); if (parked) return parked;
+			const parked = parkExit();
+			if (parked) return parked;
 			log("planning...");
 			const plan = await step("plan", expandSkill("plan"), worktree!);
 			cost += plan.cost;
@@ -161,7 +174,8 @@ async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, flags: Fl
 	}
 
 	if (shouldRun("shakedown-plan")) {
-		const parked = parkExit(); if (parked) return parked;
+		const parked = parkExit();
+		if (parked) return parked;
 		log("shakedown (plan)...");
 		const shakedown = await step("shakedown-plan", expandSkill("shakedown", "autopilot plan-review"), worktree!);
 		cost += shakedown.cost;
@@ -170,41 +184,42 @@ async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, flags: Fl
 		verdict = parseVerdict(shakedown.text);
 		shakedownPlanText = shakedown.text;
 		log(`verdict: ${verdict}`);
-		if (verdict === "RETHINK")
-			return finish({ itemId, completed: false, cost, verdict, error: "plan needs rethink" });
+		if (verdict === "RETHINK") return finish({ itemId, completed: false, cost, verdict, error: "plan needs rethink" });
 	}
 
 	// ── Implement ──
 
 	if (shouldRun("implement")) {
-		const parked = parkExit(); if (parked) return parked;
+		const parked = parkExit();
+		if (parked) return parked;
 		const planPath = findPlanPath(worktree!);
-		const planRef = planPath
-			? `Read the plan at \`${planPath}\`.`
-			: `Find the plan in \`${resolve(REPO, ".dev", "plans")}/\` (filename matches branch without \`feat/\` prefix).`;
+		const planRef = planPath ? `Read the plan at \`${planPath}\`.` : `Find the plan in \`${resolve(REPO, ".dev", "plans")}/\` (filename matches branch without \`feat/\` prefix).`;
 
-		const implementPrompt = profile === "quick"
-			? `This is a small-scope item (bug fix or scope S). Implement it directly — no formal plan needed. Read the roadmap entry for ${itemId} to understand the requirements.`
-			: [
-				verdict === "APPROVE"
-					? "Plan approved."
-					: `Shakedown requested revisions:\n${shakedownPlanText.slice(0, 2000)}${shakedownPlanText.length > 2000 ? "\n...(truncated)" : ""}\nAddress the feedback, then implement.`,
-				"",
-				"## Plan", planRef,
-				"",
-				"## Strategy — work incrementally",
-				"1. Read the full plan first. Identify the implementation order.",
-				"2. Implement one logical chunk at a time (e.g., one new file, one screen, one hook).",
-				"3. After each chunk, run the verification commands from `.claude/skills/_rubric.md`'s Verification section. Fix errors before moving on.",
-				"4. If the same error persists after 3 fix attempts, commit what works, skip the problematic piece, and note it.",
-				"5. Run all verification commands from the rubric before finishing.",
-				"6. Do NOT implement all files first and verify at the end — that causes cascading errors.",
-			].join("\n");
+		const implementPrompt =
+			profile === "quick"
+				? `This is a small-scope item (bug fix or scope S). Implement it directly — no formal plan needed. Read the roadmap entry for ${itemId} to understand the requirements.`
+				: [
+						verdict === "APPROVE" ? "Plan approved." : `Shakedown requested revisions:\n${shakedownPlanText.slice(0, 2000)}${shakedownPlanText.length > 2000 ? "\n...(truncated)" : ""}\nAddress the feedback, then implement.`,
+						"",
+						"## Plan",
+						planRef,
+						"",
+						"## Strategy — work incrementally",
+						"1. Read the full plan first. Identify the implementation order.",
+						"2. Implement one logical chunk at a time (e.g., one new file, one screen, one hook).",
+						"3. After each chunk, run the verification commands from `.claude/skills/_rubric.md`'s Verification section. Fix errors before moving on.",
+						"4. If the same error persists after 3 fix attempts, commit what works, skip the problematic piece, and note it.",
+						"5. Run all verification commands from the rubric before finishing.",
+						"6. Do NOT implement all files first and verify at the end — that causes cascading errors.",
+					].join("\n");
 
 		const continuePrompt = [
 			"The previous implementation session ran out of turns. Code has been committed to disk.",
-			"", "## Plan", planRef,
-			"", "## Instructions",
+			"",
+			"## Plan",
+			planRef,
+			"",
+			"## Instructions",
 			"1. Run the verification commands from `.claude/skills/_rubric.md`'s Verification section to see the current state.",
 			"2. Read the plan and compare against what's already implemented.",
 			"3. Identify what's missing or broken and finish the remaining work.",
@@ -220,15 +235,15 @@ async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, flags: Fl
 			log(attempt === 1 ? "implementing..." : "continuing implementation (attempt 2)...");
 			const retryPrompt = lastLoopFile
 				? [
-					continuePrompt,
-					"",
-					`## ⚠ IMPORTANT: The previous session got stuck editing \`${lastLoopFile}\` in a loop.`,
-					"Take a DIFFERENT approach to fix the type errors:",
-					"- Read the file and the actual error message carefully before editing",
-					"- Consider if the type/interface needs to change upstream instead",
-					"- If a component prop type is wrong, fix the type definition, not the call site repeatedly",
-					"- If stuck after 2 attempts on the same error, skip it and move on",
-				].join("\n")
+						continuePrompt,
+						"",
+						`## ⚠ IMPORTANT: The previous session got stuck editing \`${lastLoopFile}\` in a loop.`,
+						"Take a DIFFERENT approach to fix the type errors:",
+						"- Read the file and the actual error message carefully before editing",
+						"- Consider if the type/interface needs to change upstream instead",
+						"- If a component prop type is wrong, fix the type definition, not the call site repeatedly",
+						"- If stuck after 2 attempts on the same error, skip it and move on",
+					].join("\n")
 				: continuePrompt;
 			const impl = await step("implement", attempt === 1 ? implementPrompt : retryPrompt, worktree!);
 			cost += impl.cost;
@@ -240,7 +255,10 @@ async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, flags: Fl
 				ensureCheckpointed(worktree!, cpLabel, log);
 			}
 
-			if (impl.ok) { implOk = true; break; }
+			if (impl.ok) {
+				implOk = true;
+				break;
+			}
 
 			if (impl.subtype === "edit_loop") {
 				const match = impl.text.match(/Edit loop detected: (.+?) edited/);
@@ -255,8 +273,7 @@ async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, flags: Fl
 			}
 		}
 
-		if (!implOk)
-			return finish({ itemId, completed: false, cost, error: "implement failed (max retries)" });
+		if (!implOk) return finish({ itemId, completed: false, cost, error: "implement failed (max retries)" });
 	}
 
 	// ── Shakedown-code ──
@@ -265,28 +282,29 @@ async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, flags: Fl
 		const MAX_SHAKEDOWN_ATTEMPTS = 2;
 		let shakedownOk = false;
 		const planPath = findPlanPath(worktree!);
-		const shakedownPlanRef = planPath
-			? `Read the plan at \`${planPath}\` and the roadmap entry for ${itemId} to understand the scope.`
-			: `Find the plan in \`${resolve(REPO, "docs", "plans")}/\` or the roadmap entry for ${itemId}.`;
+		const shakedownPlanRef = planPath ? `Read the plan at \`${planPath}\` and the roadmap entry for ${itemId} to understand the scope.` : `Find the plan in \`${resolve(REPO, "docs", "plans")}/\` or the roadmap entry for ${itemId}.`;
 
 		for (let attempt = 1; attempt <= MAX_SHAKEDOWN_ATTEMPTS; attempt++) {
-			const parked = parkExit(); if (parked) return parked;
+			const parked = parkExit();
+			if (parked) return parked;
 			log(attempt === 1 ? "shakedown (code)..." : "continuing shakedown (attempt 2)...");
 
-			const shakedownPrompt = attempt === 1
-				? expandSkill("shakedown", "autopilot code-review")
-				: [
-					"The previous shakedown session ran out of turns. Work has been committed to disk.",
-					"",
-					"## Context", shakedownPlanRef,
-					"",
-					"## Instructions",
-					"1. Run the verification commands from `.claude/skills/_rubric.md`'s Verification section to see the current state.",
-					"2. Check what's already been fixed vs. what remains.",
-					"3. Focus on fix-now items only (type errors, test failures, lint errors, bugs).",
-					"4. Skip near-term items (missing tests, i18n gaps, refactoring) — add them as deferred to the roadmap.",
-					"5. Re-run the verification commands before finishing.",
-				].join("\n");
+			const shakedownPrompt =
+				attempt === 1
+					? expandSkill("shakedown", "autopilot code-review")
+					: [
+							"The previous shakedown session ran out of turns. Work has been committed to disk.",
+							"",
+							"## Context",
+							shakedownPlanRef,
+							"",
+							"## Instructions",
+							"1. Run the verification commands from `.claude/skills/_rubric.md`'s Verification section to see the current state.",
+							"2. Check what's already been fixed vs. what remains.",
+							"3. Focus on fix-now items only (type errors, test failures, lint errors, bugs).",
+							"4. Skip near-term items (missing tests, i18n gaps, refactoring) — add them as deferred to the roadmap.",
+							"5. Re-run the verification commands before finishing.",
+						].join("\n");
 
 			const shakedown = await step("shakedown-code", shakedownPrompt, worktree!);
 			cost += shakedown.cost;
@@ -297,7 +315,10 @@ async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, flags: Fl
 				ensureCheckpointed(worktree!, "shakedown checkpoint", log);
 			}
 
-			if (shakedown.ok) { shakedownOk = true; break; }
+			if (shakedown.ok) {
+				shakedownOk = true;
+				break;
+			}
 
 			if (shakedown.subtype === "error_rate_limit" || parkSignal.parked) {
 				return parkExit() ?? finish({ itemId, completed: false, cost, error: "shakedown-code failed" });
@@ -310,14 +331,14 @@ async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, flags: Fl
 			log(`shakedown hit turn limit (attempt ${attempt}/${MAX_SHAKEDOWN_ATTEMPTS})`);
 		}
 
-		if (!shakedownOk)
-			return finish({ itemId, completed: false, cost, error: "shakedown-code failed (max retries)" });
+		if (!shakedownOk) return finish({ itemId, completed: false, cost, error: "shakedown-code failed (max retries)" });
 	}
 
 	// ── Ship ──
 
 	{
-		const parked = parkExit(); if (parked) return parked;
+		const parked = parkExit();
+		if (parked) return parked;
 	}
 	log(`shipping...${opts.pr ? " (PR mode)" : ""}`);
 	const ship = await step("ship", expandSkill("ship", opts.pr ? "--pr" : undefined), worktree!);
@@ -378,25 +399,38 @@ export async function orchestrate(flags: Flags): Promise<void> {
 		liveStatus.cycles.push(status);
 		liveStatus.totalCycles = 1;
 		if (v) statusBar.setup();
-		const cleanup = (): void => { statusBar.teardown(); process.stderr.write(A.showCursor); };
+		const cleanup = (): void => {
+			statusBar.teardown();
+			process.stderr.write(A.showCursor);
+		};
 		process.on("exit", cleanup);
-		process.on("SIGINT", () => { cleanup(); process.exit(130); });
+		process.on("SIGINT", () => {
+			cleanup();
+			process.exit(130);
+		});
 
-		const result = await runPipeline({
-			itemId: id,
-			worktree,
-			startFrom,
-			cycle: 1,
-			verbose: v,
-			pr: flags.pr,
-			dryRun: false,
-			workerStatus: status,
-			liveStatus,
-		}, parkSignal, flags);
+		const result = await runPipeline(
+			{
+				itemId: id,
+				worktree,
+				startFrom,
+				cycle: 1,
+				verbose: v,
+				pr: flags.pr,
+				dryRun: false,
+				workerStatus: status,
+				liveStatus,
+			},
+			parkSignal,
+			flags,
+		);
 
 		status.status = resultStatus(result);
 		status.step = undefined;
-		if (v) { liveStatus.render(); statusBar.teardown(); }
+		if (v) {
+			liveStatus.render();
+			statusBar.teardown();
+		}
 		console.log(`\n${result.completed ? A.green("✓") : A.red("✗")} ${id} — $${result.cost.toFixed(2)}`);
 		process.exit(result.completed ? 0 : 1);
 	}
@@ -408,7 +442,11 @@ export async function orchestrate(flags: Flags): Promise<void> {
 	const maxBudget = parseFloat(flags.budget);
 	const dryRun = flags["dry-run"];
 	const v = flags.verbose;
-	const items = flags.item?.split(",").map((s) => s.trim()).filter(Boolean) ?? [];
+	const items =
+		flags.item
+			?.split(",")
+			.map((s) => s.trim())
+			.filter(Boolean) ?? [];
 	const isParallel = parallel > 1;
 
 	console.log(
@@ -423,15 +461,11 @@ export async function orchestrate(flags: Flags): Promise<void> {
 	liveStatus.multiline = isParallel;
 	if (v) {
 		const rows = process.stderr.rows || 24;
-		const barLines = isParallel
-			? Math.min(parallel + 1, Math.floor(rows / 3))
-			: 2;
+		const barLines = isParallel ? Math.min(parallel + 1, Math.floor(rows / 3)) : 2;
 		statusBar.setup(barLines);
 	}
 
-	const statusInterval = isParallel && v
-		? setInterval(() => liveStatus.render(), 200)
-		: null;
+	const statusInterval = isParallel && v ? setInterval(() => liveStatus.render(), 200) : null;
 
 	const cleanup = (): void => {
 		if (statusInterval) clearInterval(statusInterval);
@@ -439,7 +473,10 @@ export async function orchestrate(flags: Flags): Promise<void> {
 		process.stderr.write(A.showCursor);
 	};
 	process.on("exit", cleanup);
-	process.on("SIGINT", () => { cleanup(); process.exit(130); });
+	process.on("SIGINT", () => {
+		cleanup();
+		process.exit(130);
+	});
 
 	const pickMutex = isParallel ? createMutex() : undefined;
 	let nextCycle = 0;
@@ -470,17 +507,21 @@ export async function orchestrate(flags: Flags): Promise<void> {
 				appendFileSync(logPath, `${"=".repeat(60)}\nautopilot cycle ${cycle} — ${new Date().toISOString()}\n${"=".repeat(60)}\n`);
 			}
 
-			const result = await runPipeline({
-				itemId: items[cycle - 1],
-				cycle,
-				verbose: !isParallel && v,
-				pr: flags.pr,
-				dryRun,
-				pickMutex,
-				workerStatus: status,
-				logPath,
-				liveStatus,
-			}, parkSignal, flags);
+			const result = await runPipeline(
+				{
+					itemId: items[cycle - 1],
+					cycle,
+					verbose: !isParallel && v,
+					pr: flags.pr,
+					dryRun,
+					pickMutex,
+					workerStatus: status,
+					logPath,
+					liveStatus,
+				},
+				parkSignal,
+				flags,
+			);
 
 			totalSpent += result.cost;
 			results.push(result);
@@ -509,9 +550,7 @@ export async function orchestrate(flags: Flags): Promise<void> {
 		if (v) statusBar.teardown();
 		if (statusInterval) clearInterval(statusInterval);
 
-		const parkedItems = results
-			.filter((r) => r.error === "parked" && r.itemId)
-			.map((r) => r.itemId!);
+		const parkedItems = results.filter((r) => r.error === "parked" && r.itemId).map((r) => r.itemId!);
 
 		if (parkedItems.length === 0) {
 			console.log(`${A.yellow("⏸")} Rate limit hit but no items to resume.`);
@@ -576,24 +615,29 @@ export async function orchestrate(flags: Flags): Promise<void> {
 				const st: CycleStatus = { itemId: id, status: "running", cost: 0 };
 				liveStatus.cycles.push(st);
 				if (v) liveStatus.render();
-				const r = await runPipeline({
-					itemId: id,
-					worktree: wt,
-					startFrom: sf,
-					cycle: results.length + i + 1,
-					verbose: !isParallel && v,
-					pr: flags.pr,
-					dryRun: false,
-					workerStatus: st,
-					logPath: isParallel && v
-						? (() => {
-								const lp = resolve(REPO, ".dev", `autopilot-resume-${id.toLowerCase()}.log`);
-								appendFileSync(lp, `${"=".repeat(60)}\nresume ${id} — ${new Date().toISOString()}\n${"=".repeat(60)}\n`);
-								return lp;
-							})()
-						: undefined,
-					liveStatus,
-				}, parkSignal, flags);
+				const r = await runPipeline(
+					{
+						itemId: id,
+						worktree: wt,
+						startFrom: sf,
+						cycle: results.length + i + 1,
+						verbose: !isParallel && v,
+						pr: flags.pr,
+						dryRun: false,
+						workerStatus: st,
+						logPath:
+							isParallel && v
+								? (() => {
+										const lp = resolve(REPO, ".dev", `autopilot-resume-${id.toLowerCase()}.log`);
+										appendFileSync(lp, `${"=".repeat(60)}\nresume ${id} — ${new Date().toISOString()}\n${"=".repeat(60)}\n`);
+										return lp;
+									})()
+								: undefined,
+						liveStatus,
+					},
+					parkSignal,
+					flags,
+				);
 				st.status = resultStatus(r);
 				st.cost = r.cost;
 				st.step = undefined;

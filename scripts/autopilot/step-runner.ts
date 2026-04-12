@@ -1,10 +1,10 @@
 import { resolve } from "node:path";
+import type { HookInput, HookJSONOutput, SDKAssistantMessage, SDKRateLimitEvent, SDKResultMessage, SDKSystemMessage } from "@anthropic-ai/claude-agent-sdk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import type { SDKAssistantMessage, SDKRateLimitEvent, SDKResultMessage, SDKSystemMessage, HookInput, HookJSONOutput } from "@anthropic-ai/claude-agent-sdk";
-import { REPO, BUDGETS, TURN_LIMITS, EFFORT, MODEL_PROFILES } from "./config.js";
-import type { Step, StepResult, StepEmit, ParkSignal } from "./types.js";
-import { MUTATING_TOOLS, toolBrief } from "./tui.js";
+import { BUDGETS, EFFORT, MODEL_PROFILES, REPO, TURN_LIMITS } from "./config.js";
 import { parseResetTime } from "./helpers.js";
+import { MUTATING_TOOLS, toolBrief } from "./tui.js";
+import type { ParkSignal, Step, StepEmit, StepResult } from "./types.js";
 
 // ── Step runner ────────────────────────────────────────────────────────
 
@@ -18,12 +18,7 @@ export interface RunStepOpts {
 
 const EDIT_LOOP_THRESHOLD = 12;
 
-export async function runStep(
-	name: Step,
-	prompt: string,
-	opts: RunStepOpts,
-	emit: StepEmit,
-): Promise<StepResult> {
+export async function runStep(name: Step, prompt: string, opts: RunStepOpts, emit: StepEmit): Promise<StepResult> {
 	const budget = BUDGETS[name];
 	const turns = TURN_LIMITS[name];
 	const model = MODEL_PROFILES[opts.profile]?.[name];
@@ -201,9 +196,7 @@ export async function runStep(
 				if (u.isSynthetic) {
 					for (const block of u.message?.content ?? []) {
 						if (block.type === "tool_result" && block.is_error) {
-							const body = Array.isArray(block.content)
-								? (block.content as Array<{ text?: string }>).map((c) => c.text ?? "").join("")
-								: String(block.content ?? "");
+							const body = Array.isArray(block.content) ? (block.content as Array<{ text?: string }>).map((c) => c.text ?? "").join("") : String(block.content ?? "");
 							emit({ type: "tool_error", name: lastToolName, brief: "", error: body });
 						}
 					}

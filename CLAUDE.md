@@ -46,7 +46,7 @@ N/A — no persistent data. State is the git working tree + `.dev/autopilot-log.
 - **Frontmatter is NOT consumed by the pipeline**: `expandSkill()` strips it. Frontmatter's purpose is for inline Claude Code usage (where a human types `/shakedown`); the pipeline reads only the body.
 - **`context: fork` in skill frontmatter is only meaningful inline**: the SDK `query()` call already spawns an isolated session, so frontmatter `context` is redundant for pipeline use.
 - **Worktree prefix auto-derived from `basename(REPO)`**: override via `CLAUDE_AUTOPILOT_WORKTREE_PREFIX` env var if your directory name doesn't match your project slug.
-- **Biome is not configured for this repo yet**. Skill bodies are not linted. If adding Biome, scope it to `scripts/`.
+- **Biome is scoped to `scripts/**/*.ts`** via `biome.json` at the repo root. Skill and template markdown is not linted. Run `pnpm check` to lint or `pnpm format` to auto-fix. A lefthook `pre-commit` hook auto-formats staged `scripts/**/*.ts` and re-stages the fixes (`pnpm install` installs the hooks via the `prepare` script); autopilot checkpoint commits bypass it via `--no-verify` in `helpers.ts`.
 
 ## Running things
 

@@ -1,5 +1,5 @@
 import { appendFileSync } from "node:fs";
-import type { CycleStatus, StepEvent, StepEmit } from "./types.js";
+import type { CycleStatus, StepEmit, StepEvent } from "./types.js";
 
 // ── ANSI helpers ───────────────────────────────────────────────────────
 
@@ -25,9 +25,7 @@ export function fmtElapsed(ms: number): string {
 	const h = Math.floor(totalSec / 3600);
 	const m = Math.floor((totalSec % 3600) / 60);
 	const s = totalSec % 60;
-	return h > 0
-		? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
-		: `${m}:${String(s).padStart(2, "0")}`;
+	return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}` : `${m}:${String(s).padStart(2, "0")}`;
 }
 
 export function truncate(text: string, max: number): string {
@@ -37,8 +35,13 @@ export function truncate(text: string, max: number): string {
 // ── Tool display helpers ───────────────────────────────────────────────
 
 const TOOL_VERBS: Record<string, string> = {
-	Read: "Reading", Write: "Writing", Edit: "Editing",
-	Bash: "Running", Glob: "Searching", Grep: "Searching", Agent: "Delegating",
+	Read: "Reading",
+	Write: "Writing",
+	Edit: "Editing",
+	Bash: "Running",
+	Glob: "Searching",
+	Grep: "Searching",
+	Agent: "Delegating",
 };
 
 export const MUTATING_TOOLS = new Set(["Write", "Edit", "Bash", "Agent"]);
@@ -48,8 +51,7 @@ export function toolVerb(name: string): string {
 }
 
 export function toolBrief(name: string, input: Record<string, unknown>): string {
-	const rel = (p: unknown): string =>
-		String(p).replace(/^.*[/\\](?=apps|packages|src|scripts|docs|\.claude)/, "");
+	const rel = (p: unknown): string => String(p).replace(/^.*[/\\](?=apps|packages|src|scripts|docs|\.claude)/, "");
 	switch (name) {
 		case "Read":
 		case "Write":
@@ -112,7 +114,9 @@ export class Spinner {
 		}
 	}
 
-	get active(): boolean { return this.interval !== null; }
+	get active(): boolean {
+		return this.interval !== null;
+	}
 }
 
 // ── Status bar (pinned at terminal bottom) ─────────────────────────────
@@ -208,11 +212,7 @@ export class LiveStatus {
 			this.statusBar.update(lines);
 		} else {
 			const items = this.cycles.map((s) => {
-				const icon =
-					s.status === "done" ? A.green("✓")
-					: s.status === "running" ? A.cyan("◆")
-					: s.status === "failed" ? A.red("✗")
-					: A.dim("○");
+				const icon = s.status === "done" ? A.green("✓") : s.status === "running" ? A.cyan("◆") : s.status === "failed" ? A.red("✗") : A.dim("○");
 				let label = `${icon} ${s.itemId}`;
 				if (s.status === "running") {
 					if (s.step) {
@@ -251,11 +251,16 @@ export function createStepRenderer(opts: StepRendererOpts): StepEmit {
 	const v = verbose && !toFile;
 	const fv = toFile;
 
-	const w = (s: string): void => { if (v) process.stderr.write(s); };
+	const w = (s: string): void => {
+		if (v) process.stderr.write(s);
+	};
 	const ln = (s: string): void => w(`│  ${s}\n`);
-	const flog = fv && logPath
-		? (s: string): void => { appendFileSync(logPath, stripAnsi(s)); }
-		: (_s: string): void => {};
+	const flog =
+		fv && logPath
+			? (s: string): void => {
+					appendFileSync(logPath, stripAnsi(s));
+				}
+			: (_s: string): void => {};
 
 	const spinner = v ? new Spinner(liveStatus) : null;
 	let lastToolName = "";
@@ -266,7 +271,11 @@ export function createStepRenderer(opts: StepRendererOpts): StepEmit {
 	return (event: StepEvent): void => {
 		switch (event.type) {
 			case "step_header": {
-				if (ws) { ws.step = event.name; ws.turns = 0; ws.lastActivity = undefined; }
+				if (ws) {
+					ws.step = event.name;
+					ws.turns = 0;
+					ws.lastActivity = undefined;
+				}
 				if (v) {
 					w(`\n╭─ ${A.bold(event.name)} ${A.dim("─".repeat(Math.max(1, 48 - event.name.length)))}\n`);
 					ln(`${A.dim("model")} ${A.cyan(event.model)}  ${A.dim("budget")} $${event.budget.toFixed(2)}  ${A.dim("max")} ${event.maxTurns} turns`);

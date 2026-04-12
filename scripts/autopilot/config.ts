@@ -20,18 +20,33 @@ export type Step = PipelineStep | "shipwreck";
 
 /** Safety-net dollar caps (~3x observed max — only fire on true runaways) */
 export const BUDGETS: Record<Step, number> = {
-	pick: 2, plan: 8, "shakedown-plan": 5,
-	implement: 25, "shakedown-code": 25, ship: 3, shipwreck: 3,
+	pick: 2,
+	plan: 8,
+	"shakedown-plan": 5,
+	implement: 25,
+	"shakedown-code": 25,
+	ship: 3,
+	shipwreck: 3,
 };
 
 export const TURN_LIMITS: Record<Step, number> = {
-	pick: 30, plan: 80, "shakedown-plan": 40,
-	implement: 200, "shakedown-code": 150, ship: 40, shipwreck: 40,
+	pick: 30,
+	plan: 80,
+	"shakedown-plan": 40,
+	implement: 200,
+	"shakedown-code": 150,
+	ship: 40,
+	shipwreck: 40,
 };
 
 export const EFFORT: Record<Step, "low" | "medium" | "high"> = {
-	pick: "medium", plan: "high", "shakedown-plan": "high",
-	implement: "high", "shakedown-code": "high", ship: "medium", shipwreck: "medium",
+	pick: "medium",
+	plan: "high",
+	"shakedown-plan": "high",
+	implement: "high",
+	"shakedown-code": "high",
+	ship: "medium",
+	shipwreck: "medium",
 };
 
 // ── Model profiles ─────────────────────────────────────────────────────

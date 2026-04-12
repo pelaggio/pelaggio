@@ -1,8 +1,8 @@
-import { basename, resolve } from "node:path";
-import { existsSync, mkdirSync, appendFileSync, readFileSync, readdirSync } from "node:fs";
 import { execSync } from "node:child_process";
-import { REPO, LOG_PATH, STEPS } from "./config.js";
-import type { Step, Mutex } from "./types.js";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { basename, resolve } from "node:path";
+import { LOG_PATH, REPO, STEPS } from "./config.js";
+import type { Mutex, Step } from "./types.js";
 
 /** Worktree prefix derived from the repo's directory name (e.g. `claude-autopilot-`). Override via CLAUDE_AUTOPILOT_WORKTREE_PREFIX env var if needed. */
 const WORKTREE_PREFIX = process.env.CLAUDE_AUTOPILOT_WORKTREE_PREFIX ?? `${basename(REPO)}-`;
@@ -13,7 +13,8 @@ export function expandSkill(name: string, skillArgs?: string): string {
 	const upper = resolve(REPO, ".claude", "skills", name, "SKILL.md");
 	const lower = resolve(REPO, ".claude", "skills", name, "skill.md");
 	const body = readFileSync(existsSync(upper) ? upper : lower, "utf-8")
-		.replace(/^---[\s\S]*?---\n*/, "").trim();
+		.replace(/^---[\s\S]*?---\n*/, "")
+		.trim();
 	return skillArgs ? `${body}\n\nArguments: ${skillArgs}` : body;
 }
 
@@ -77,7 +78,9 @@ export function findPlanPath(worktree: string): string | null {
 		const branch = execSync("git branch --show-current", { cwd: worktree, encoding: "utf-8" }).trim();
 		const slug = branch.replace(/^feat\//, "");
 		return findPlanFile(slug);
-	} catch { return null; }
+	} catch {
+		return null;
+	}
 }
 
 // ── Verdict parsing ────────────────────────────────────────────────────
@@ -95,7 +98,9 @@ export function parseVerdict(text: string): "APPROVE" | "REVISE" | "RETHINK" {
 export function checkpoint(cwd: string, label: string): boolean {
 	try {
 		execSync(`git add -A && git commit -m "wip: autopilot ${label}" --no-verify`, {
-			cwd, encoding: "utf-8", stdio: "pipe",
+			cwd,
+			encoding: "utf-8",
+			stdio: "pipe",
 		});
 		return true;
 	} catch (e: unknown) {
@@ -131,7 +136,13 @@ export function detectResumeStep(itemId: string, worktree: string): Step {
 		try {
 			const lines = readFileSync(LOG_PATH, "utf-8").trim().split("\n").filter(Boolean);
 			const entries = lines
-				.map((l) => { try { return JSON.parse(l); } catch { return null; } })
+				.map((l) => {
+					try {
+						return JSON.parse(l);
+					} catch {
+						return null;
+					}
+				})
 				.filter((e): e is Record<string, unknown> => e != null && typeof e.item === "string" && (e.item as string).toUpperCase() === itemId.toUpperCase());
 			if (entries.length > 0) {
 				const last = entries[entries.length - 1];
@@ -139,7 +150,10 @@ export function detectResumeStep(itemId: string, worktree: string): Step {
 				if (steps && steps.length > 0) {
 					let lastOk = -1;
 					for (let i = steps.length - 1; i >= 0; i--) {
-						if (steps[i].ok) { lastOk = i; break; }
+						if (steps[i].ok) {
+							lastOk = i;
+							break;
+						}
 					}
 					if (typeof last.error === "string" && (last.error as string).toLowerCase().includes("ship failed")) return "ship";
 					const lastStep = steps[steps.length - 1];
@@ -152,7 +166,9 @@ export function detectResumeStep(itemId: string, worktree: string): Step {
 					}
 				}
 			}
-		} catch { /* log parse failed — fall through to git heuristics */ }
+		} catch {
+			/* log parse failed — fall through to git heuristics */
+		}
 	}
 
 	const branches = execSync("git branch --list 'feat/*'", { cwd: REPO, encoding: "utf-8" });
@@ -163,8 +179,16 @@ export function detectResumeStep(itemId: string, worktree: string): Step {
 
 	try {
 		const log = execSync("git log main..HEAD --oneline", { cwd: worktree, encoding: "utf-8" });
-		if (log.trim().split("\n").filter((l) => l.trim()).length === 0) return "shakedown-plan";
-	} catch { /* empty */ }
+		if (
+			log
+				.trim()
+				.split("\n")
+				.filter((l) => l.trim()).length === 0
+		)
+			return "shakedown-plan";
+	} catch {
+		/* empty */
+	}
 
 	return "shakedown-code";
 }
@@ -201,7 +225,9 @@ export function parseResetTime(msg: string): number {
 		const now = new Date();
 		const parts = new Intl.DateTimeFormat("en-CA", {
 			timeZone: tz,
-			year: "numeric", month: "2-digit", day: "2-digit",
+			year: "numeric",
+			month: "2-digit",
+			day: "2-digit",
 		}).formatToParts(now);
 
 		const y = parseInt(parts.find((p) => p.type === "year")!.value, 10);
@@ -253,7 +279,10 @@ export function createMutex(): Mutex {
 	let locked = false;
 	return {
 		acquire(): Promise<void> {
-			if (!locked) { locked = true; return Promise.resolve(); }
+			if (!locked) {
+				locked = true;
+				return Promise.resolve();
+			}
 			return new Promise<void>((r) => queue.push(r));
 		},
 		release() {
