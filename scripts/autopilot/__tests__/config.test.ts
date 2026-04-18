@@ -149,6 +149,45 @@ describe("loadConfig — roadmap.source", () => {
 	});
 });
 
+describe("loadConfig — roadmap.github", () => {
+	it("defaults github block to {ghRepo:'', label:'autopilot', planLocation:'issue-comment'}", () => {
+		const repo = tmpRepo();
+		const cfg = loadConfig({ repo, configPath: join(repo, ".autopilot.yml") });
+		assert.equal(cfg.roadmapGithub.ghRepo, "");
+		assert.equal(cfg.roadmapGithub.label, "autopilot");
+		assert.equal(cfg.roadmapGithub.planLocation, "issue-comment");
+	});
+
+	it("parses roadmap.github.{repo,label,plan-location} overrides", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, ["roadmap:", "  source: github-issues", "  github:", "    repo: acme/widgets", "    label: pipeline", "    plan-location: issue-comment", ""].join("\n"));
+		const cfg = loadConfig({ repo, configPath: path });
+		assert.equal(cfg.roadmapSource, "github-issues");
+		assert.equal(cfg.roadmapGithub.ghRepo, "acme/widgets");
+		assert.equal(cfg.roadmapGithub.label, "pipeline");
+		assert.equal(cfg.roadmapGithub.planLocation, "issue-comment");
+	});
+
+	it("throws when roadmap.source=github-issues and roadmap.github.repo is missing", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "roadmap:\n  source: github-issues\n");
+		assert.throws(() => loadConfig({ repo, configPath: path }), /roadmap\.github\.repo.*required/);
+	});
+
+	it("throws on invalid plan-location", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, ["roadmap:", "  source: github-issues", "  github:", "    repo: acme/widgets", "    plan-location: wiki-page", ""].join("\n"));
+		assert.throws(() => loadConfig({ repo, configPath: path }), /plan-location.*issue-comment\|pr-description/);
+	});
+
+	it("accepts plan-location: pr-description (parsed; adapter surfaces 'not yet implemented' at call-time)", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, ["roadmap:", "  source: github-issues", "  github:", "    repo: acme/widgets", "    plan-location: pr-description", ""].join("\n"));
+		const cfg = loadConfig({ repo, configPath: path });
+		assert.equal(cfg.roadmapGithub.planLocation, "pr-description");
+	});
+});
+
 describe("resolveRepo", () => {
 	const REPO_ENV = "CLAUDE_AUTOPILOT_REPO";
 	let savedRepoEnv: string | undefined;
