@@ -14,7 +14,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 |------|-----------|
 | ~~TOOL-1. Consistency check: task-index ↔ roadmap drift~~ | **Done** — Consistency check script + pnpm check:roadmap added (2026-04-18) |
 | TOOL-2. Dep graph visualization from roadmap files | — |
-| TOOL-3. Scope suggestion in /charter from description | — |
+| ~~TOOL-3. Scope suggestion in /charter from description~~ | **Done** — Keyword heuristics for XS/S/M/L/XL scope inference added to /charter (2026-04-18) |
 | ~~TOOL-4. pipeline.ts integration tests via SDK query mock~~ | **Done** — Pipeline integration tests + mock SDK query infrastructure added (2026-04-17) |
 | ~~TOOL-5. Skill body linter (frontmatter validity, rubric references)~~ | **Done** — Skill body linter added, validates frontmatter + includes (2026-04-18) |
 | ~~TOOL-6. Biome config for scripts/ + pre-commit hook~~ | **Done** — Biome config added, pre-commit hook wired (2026-04-11) |
@@ -67,21 +67,9 @@ Completed. See git history for implementation details.
 
 ---
 
-### TOOL-3. Scope suggestion in /charter from description
+### TOOL-3. Scope suggestion in /charter from description ✓
 
-| What | Scope | Deps |
-|------|-------|------|
-| When `/charter` is called without `--scope`, infer XS/S/M/L/XL from the description using keyword heuristics. Report the inferred scope + a one-line rationale. | S | — |
-
-**Deliverables:**
-- Update `.claude/skills/charter/SKILL.md` with a "Scope inference" section listing the heuristics
-- Heuristics: "fix" / "typo" / "rename" → XS; "add X" / "one file" → S; "new screen" / "new hook" → M; "new system" / "new engine" → L; "migration" / "rewrite" / "schema change" → XL
-- The skill already has `--scope` override — don't break that path
-- Report: `"Inferred scope: M (new screen/component)"`
-
-**Out of scope:**
-- ML-based scope estimation — keyword heuristics are fine
-- Changing the XS/S/M/L/XL taxonomy
+Completed. See git history for implementation details.
 
 ---
 
