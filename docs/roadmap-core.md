@@ -35,6 +35,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | TOOL-23. Fix implement-step path resolution for worktree-relative deliverables | TOOL-4 |
 | TOOL-24. Skill extension points — product-context include + sync allowlist | — |
 | TOOL-25. Telemetry v2 — per-step file list, tool histogram, output tail, stats JSON | — |
+| TOOL-26. Share `node_modules` across worktrees to skip per-worktree `pnpm install` | — |
 
 ---
 
@@ -362,6 +363,26 @@ Completed. See git history for implementation details.
 - Populating `_project-context.md` for this repo itself — autopilot is the generic baseline; no product context to inject here (keep the file absent so the `!cat` fallback exercises).
 - Per-step context files (e.g. separate `_plan-context.md` vs `_ship-context.md`) — one file per consumer is sufficient; split later if volume warrants.
 - Migrating fathom's existing in-skill customizations into `_project-context.md` — that's fathom-side work after this lands.
+
+---
+
+### TOOL-26. Share `node_modules` across worktrees to skip per-worktree `pnpm install`
+
+| What | Scope | Deps |
+|------|-------|------|
+| `pick/SKILL.md` runs `pnpm install --frozen-lockfile` in every new worktree. Even with `--silent` (landed separately), this still costs turns and cache-population time, and at high parallelism the I/O contention adds wall-clock time. Git worktrees share `.git/` but not `node_modules/` — each worktree needs its own unless we arrange sharing. Set up a mechanism so new worktrees reuse main's `node_modules` when the lockfile matches, and only run `pnpm install` when the lockfile actually differs. | S | — |
+
+**Deliverables:**
+- In `pick/SKILL.md`'s Claim step, before running `pnpm install`: compare the worktree's `pnpm-lock.yaml` hash against main's. If they match, symlink `<worktree>/node_modules` → `<MAIN_REPO>/node_modules` and skip install. If they differ, fall through to the existing install step.
+- Handle the nested-workspace case: repos with workspace packages have `node_modules` at multiple levels. Either symlink only the root and accept workspace-package installs, or symlink each workspace's `node_modules` individually. Start with root-only; document the limitation.
+- Add a guard: if the worktree's `pnpm-lock.yaml` changes mid-cycle (dep bump in the branch), break the symlink and run `pnpm install` on the next tool invocation that needs deps. Simplest signal: check lockfile hash before verification commands.
+- Update `CLAUDE.md`'s Running things section to note the optimization.
+- Smoke-test: run `pnpm autopilot --item X,Y,Z --parallel 3 --dry-run` and verify no install output appears; then run a real cycle and verify tests still pass in the worktree.
+
+**Out of scope:**
+- Changing pnpm's node-linker mode globally (e.g. `node-linker=hoisted` in `.npmrc`) — too invasive; many repos rely on pnpm's isolated default.
+- Handling yarn / npm consumers — pnpm-specific optimization. Document that non-pnpm consumers should customize their fork of `pick/SKILL.md`.
+- Caching `node_modules` across autopilot runs on the same item (separate concern).
 
 ---
 

@@ -24,6 +24,7 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 | TOOL-23 | Fix implement-step path resolution for worktree-relative deliverables | — | — | core |
 | TOOL-24 | Skill extension points — product-context include + sync allowlist | — | — | core |
 | TOOL-25 | Telemetry v2 — per-step file list, tool histogram, output tail, stats JSON | — | — | core |
+| TOOL-26 | Share `node_modules` across worktrees to skip per-worktree `pnpm install` | — | — | core |
 
 ## Recently completed
 
