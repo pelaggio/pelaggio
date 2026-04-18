@@ -1,7 +1,8 @@
 import { execSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { LOG_PATH, REPO, STEPS, WORKTREE_PREFIX } from "./config.js";
+import { MarkdownRoadmap } from "./roadmap/markdown.js";
 import type { Mutex, Step } from "./types.js";
 
 // ── Skill loading ──────────────────────────────────────────────────────
@@ -15,21 +16,6 @@ export function expandSkill(name: string, skillArgs?: string): string {
 	return skillArgs ? `${body}\n\nArguments: ${skillArgs}` : body;
 }
 
-// ── Item ID parsing ────────────────────────────────────────────────────
-
-export function parseItemId(text: string): string | null {
-	const branchMatch = text.match(/feat\/([a-z][a-z0-9]*(?:-[a-z0-9]+)*)/i);
-	if (branchMatch) {
-		const slug = branchMatch[1];
-		// Match mixed alpha-digit IDs like a11y4, mcy2b, comp13, fore-2
-		const idMatch = slug.match(/^([a-z][\da-z]*(?:-\d+)?)/i);
-		if (idMatch) return idMatch[1].toUpperCase();
-	}
-	// Explicit uppercase IDs: A11Y4, MCY2B, COMP13, FORE-2
-	const explicit = text.match(/\b([A-Z]{1,4}-?\d[\dA-Z]*)\b/);
-	return explicit?.[1] ?? null;
-}
-
 // ── Worktree utilities ─────────────────────────────────────────────────
 
 export function resolveWorktree(itemId: string): string {
@@ -41,40 +27,6 @@ export function listWorktrees(): string[] {
 		.split("\n")
 		.filter((l) => l.startsWith("worktree "))
 		.map((l) => l.slice(9).trim());
-}
-
-// ── Plan file discovery ────────────────────────────────────────────────
-
-/** Search docs/plans/ (primary) and .dev/plans/ (legacy) for a plan file matching the slug or item ID prefix. */
-export function findPlanFile(slug: string): string | null {
-	const dirs = [resolve(REPO, "docs", "plans"), resolve(REPO, ".dev", "plans")];
-
-	for (const dir of dirs) {
-		const exact = resolve(dir, `${slug}.md`);
-		if (existsSync(exact)) return exact;
-	}
-
-	const idMatch = slug.match(/^([a-z]+-?\d+)/i);
-	if (idMatch) {
-		const prefix = `${idMatch[1].toLowerCase()}-`;
-		for (const dir of dirs) {
-			if (!existsSync(dir)) continue;
-			const hit = readdirSync(dir).find((f) => f.toLowerCase().startsWith(prefix) && f.endsWith(".md"));
-			if (hit) return resolve(dir, hit);
-		}
-	}
-
-	return null;
-}
-
-export function findPlanPath(worktree: string): string | null {
-	try {
-		const branch = execSync("git branch --show-current", { cwd: worktree, encoding: "utf-8" }).trim();
-		const slug = branch.replace(/^feat\//, "");
-		return findPlanFile(slug);
-	} catch {
-		return null;
-	}
 }
 
 // ── Verdict parsing ────────────────────────────────────────────────────
@@ -206,15 +158,11 @@ export function verifyShipLanded(mainRepo: string, mainShaBefore: string, featSh
 	}
 }
 
-// ── Scope detection ────────────────────────────────────────────────────
-
-export function isQuickScope(text: string): boolean {
-	return /scope:\s*x?s\b/i.test(text) || /\bbug\b|\bfix:/i.test(text);
-}
-
 // ── Resume detection ───────────────────────────────────────────────────
 
 export function detectResumeStep(itemId: string, worktree: string): Step {
+	const roadmap = new MarkdownRoadmap({ repo: REPO });
+
 	if (existsSync(LOG_PATH)) {
 		try {
 			const lines = readFileSync(LOG_PATH, "utf-8").trim().split("\n").filter(Boolean);
@@ -258,7 +206,7 @@ export function detectResumeStep(itemId: string, worktree: string): Step {
 	const line = branches.split("\n").find((l) => l.toLowerCase().includes(itemId.toLowerCase()));
 	const slug = (line?.replace(/^[*+]?\s*/, "").trim() ?? "").replace("feat/", "");
 
-	if (!findPlanFile(slug)) return "plan";
+	if (!roadmap.findPlanFile(slug)) return "plan";
 
 	try {
 		const log = execSync("git log main..HEAD --oneline", { cwd: worktree, encoding: "utf-8" });

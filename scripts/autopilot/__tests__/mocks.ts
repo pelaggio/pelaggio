@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { RunStepFn, runPipeline } from "../pipeline.js";
+import type { RoadmapSource } from "../roadmap/index.js";
 import { LiveStatus, StatusBar } from "../tui.js";
 import type { CycleResult, Flags, ParkSignal, PipelineOpts, Step, StepResult } from "../types.js";
 
@@ -128,6 +129,32 @@ export function makeTempGitRepo(): string {
 	execSync("git commit --allow-empty -q -m init", { cwd: dir });
 	execSync("git checkout -q -b feat/tool-99", { cwd: dir });
 	return dir;
+}
+
+export function makeMockRoadmap(overrides: Partial<RoadmapSource> = {}): RoadmapSource {
+	const base: RoadmapSource = {
+		name: "markdown",
+		async listOpenItems() {
+			return [];
+		},
+		async claimItem() {
+			throw new Error("mock: claimItem not wired");
+		},
+		async markDone() {
+			/* noop */
+		},
+		async getItemPlan() {
+			return null;
+		},
+		parseItemId(text) {
+			const m = text.match(/\b([A-Z]{1,4}-?\d[\dA-Z]*)\b/);
+			return m?.[1] ?? null;
+		},
+		isQuickScope() {
+			return false;
+		},
+	};
+	return { ...base, ...overrides };
 }
 
 export function allCommitMessages(dir: string): string[] {

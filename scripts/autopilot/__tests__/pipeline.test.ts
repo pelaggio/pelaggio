@@ -4,7 +4,7 @@ import { describe, it } from "node:test";
 import { runPipeline } from "../pipeline.js";
 import { getShipTarget } from "../ship/index.js";
 import type { Flags, PipelineOpts } from "../types.js";
-import { allCommitMessages, createMockRunStep, makeLiveStatus, makeParkSignal, makeTempGitRepo } from "./mocks.js";
+import { allCommitMessages, createMockRunStep, makeLiveStatus, makeMockRoadmap, makeParkSignal, makeTempGitRepo } from "./mocks.js";
 
 const baseFlags: Flags = {
 	cycles: "1",
@@ -248,6 +248,55 @@ describe("runPipeline — ghost-ship detection", () => {
 		assert.equal(logs.length, 1);
 		assert.equal(logs[0].completed, false);
 		assert.equal(logs[0].shipwrecked, true);
+	});
+});
+
+describe("runPipeline — RoadmapSource injection", () => {
+	it("calls the injected roadmap.getItemPlan({ worktree }) and flows its result into implement prompt", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const getItemPlanCalls: Array<{ worktree?: string; id?: string }> = [];
+		const roadmap = makeMockRoadmap({
+			async getItemPlan(ref) {
+				getItemPlanCalls.push(ref);
+				return "/fake/plans/tool-99.md";
+			},
+		});
+		const { runStep, calls } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				ship: {
+					ok: true,
+					sideEffect: (cwd) => {
+						execSync("git checkout -q main", { cwd });
+						execSync("git merge -q --no-ff feat/tool-99", { cwd });
+						execSync("git checkout -q feat/tool-99", { cwd });
+					},
+				},
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
+			runStep,
+			roadmap,
+			mainRepo: worktree,
+			listWorktrees: () => [],
+			appendLog: () => {},
+		});
+
+		assert.equal(result.completed, true);
+		assert.ok(getItemPlanCalls.length >= 1, "expected roadmap.getItemPlan to be called at least once");
+		assert.ok(
+			getItemPlanCalls.every((c) => c.worktree === worktree),
+			`expected every getItemPlan call with { worktree }; got ${JSON.stringify(getItemPlanCalls)}`,
+		);
+
+		const implementPrompt = calls.find((c) => c.step === "implement")?.prompt ?? "";
+		assert.ok(implementPrompt.includes("/fake/plans/tool-99.md"), `expected implement prompt to include mock plan path; got: ${implementPrompt.slice(0, 400)}`);
 	});
 });
 
