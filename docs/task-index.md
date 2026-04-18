@@ -24,6 +24,7 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 | TOOL-13 | Publish as `@cdhorne/claude-autopilot` on npm + `init` CLI | TOOL-8, TOOL-11 | — | core |
 | TOOL-14 | `sync` CLI — upgrade installed skills with diff prompts | TOOL-13 | — | core |
 | TOOL-15 | LinearRoadmap adapter | TOOL-9 | — | core |
+| TOOL-16 | Split /refit → /bump-models + self-hosted Renovate | — | — | core |
 
 ## Recently completed
 

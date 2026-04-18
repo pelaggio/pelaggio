@@ -27,6 +27,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | TOOL-13. Publish as `@cdhorne/claude-autopilot` on npm + `init` CLI | TOOL-8, TOOL-11 |
 | TOOL-14. `sync` CLI — upgrade installed skills with diff prompts | TOOL-13 |
 | TOOL-15. LinearRoadmap adapter | TOOL-9 |
+| TOOL-16. Split /refit → /bump-models + self-hosted Renovate | — |
 
 ---
 
@@ -317,6 +318,30 @@ Completed. See git history for implementation details.
 
 **Out of scope:**
 - Same as TOOL-10 — single workspace per instance
+
+---
+
+### TOOL-16. Split /refit → /bump-models + self-hosted Renovate
+
+| What | Scope | Deps |
+|------|-------|------|
+| The current `/refit` skill bundles two concerns: Anthropic model ID drift (legitimately manual — no `-latest` alias) and package dependency drift (redundant with Renovate/Dependabot and has fragile `pnpm outdated` parsing). Shrink the skill to model-IDs-only, and delegate package bumps to self-hosted Renovate running on the existing self-hosted runner (same machine as `../fathom`). Keeps everything in-repo, zero GitHub-hosted Actions minutes consumed. | M | — |
+
+**Deliverables:**
+- Replace `.claude/skills/refit/SKILL.md` with `.claude/skills/bump-models/SKILL.md` (~20 lines): fetches current Opus/Sonnet IDs (prefer `https://api.anthropic.com/v1/models` when `ANTHROPIC_API_KEY` is set, fall back to docs page), edits the `OPUS`/`SONNET` constants in `scripts/autopilot/config.ts`, runs `pnpm test && pnpm check`, commits with a clear `Why:` line
+- Rubric guard in the skill: `rg 'claude-(opus|sonnet|haiku)-' scripts/` must only match `scripts/autopilot/config.ts` — skill fails loudly otherwise
+- `.github/workflows/ci.yml` with `runs-on: self-hosted`, triggered on `pull_request` to main + `push` to main, running `pnpm install --frozen-lockfile && pnpm test && pnpm check`. Mirror fathom's `ci.yml` structure
+- `.github/workflows/renovate.yml` with `runs-on: self-hosted` and a weekly cron (e.g. Monday 06:00), running the Renovate CLI directly (`npx renovate` or the official `renovatebot/github-action`) — no Mend GitHub App install
+- `renovate.json` at repo root: `extends: ["config:recommended", ":automergeMinor", ":automergePatch"]`, `schedule: ["before 6am on monday"]`, `packageRules` with `dependencyDashboardApproval: true` for major updates
+- Delete `.claude/skills/refit/` and its row in the `CLAUDE.md` skill table; add `/bump-models` row
+- Update `~/.claude/projects/-home-chris-workspace-claude-autopilot/memory/feedback_dependency_bumps.md` to note deps are Renovate-managed; only the bump-models flow remains manual
+- Verify the Renovate workflow runs end-to-end once (trigger manually via `workflow_dispatch`) before considering this done
+
+**Out of scope:**
+- Migrating fathom to Renovate (separate charter if desired)
+- Renovate's Mend app — explicitly rejected in favor of self-hosted
+- Changing autopilot's self-hosted runner config — reuse the existing runner as-is
+- Handling secrets for Renovate (PAT scope): out of scope if the default `GITHUB_TOKEN` suffices; if not, document the required PAT scope but don't commit one
 
 ---
 
