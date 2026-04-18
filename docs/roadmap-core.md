@@ -21,7 +21,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | ~~TOOL-7. Document in-context vs out-of-context review + add Idioms section to rubric~~ | **Done** — Idioms rubric dimension + Review model docs (manual, 2026-04-18) |
 | ~~TOOL-8. `.autopilot.yml` project config file + loader~~ | **Done** — `.autopilot.yml` config loader added (2026-04-17) |
 | ~~TOOL-9. RoadmapSource abstraction + MarkdownRoadmap adapter~~ | **Done** — RoadmapSource interface + MarkdownRoadmap adapter added (2026-04-18) |
-| TOOL-10. GitHubIssuesRoadmap adapter via gh CLI | TOOL-9 |
+| ~~TOOL-10. GitHubIssuesRoadmap adapter via gh CLI~~ | **Done** — GitHubIssues roadmap adapter via gh CLI added (2026-04-18) |
 | ~~TOOL-11. ShipTarget abstraction + 3 adapters~~ | **Done** — ShipTarget abstraction + 3 adapters added (2026-04-17) |
 | ~~TOOL-12. Running totals — tokens + quality signals + stats dashboard~~ | **Done** — Stats command + token/quality tracking added (2026-04-17) |
 | ~~TOOL-13. Package shape + git-dep consumption + `init` CLI~~ | **Done** — Package shape, init CLI, and library exports added (2026-04-18) |
@@ -121,25 +121,9 @@ Completed. See git history for implementation details.
 
 ---
 
-### TOOL-10. GitHubIssuesRoadmap adapter via gh CLI
+### TOOL-10. GitHubIssuesRoadmap adapter via gh CLI ✓
 
-| What | Scope | Deps |
-|------|-------|------|
-| Implement `RoadmapSource` backed by GitHub Issues. Items = issues with a configurable label (default `autopilot`). Plans stored as issue comments (or PR descriptions once `/ship` creates a PR). Uses `gh` CLI rather than a raw GitHub API client to avoid adding octokit as a dependency. | M | TOOL-9 |
-
-**Deliverables:**
-- `scripts/autopilot/roadmap/github-issues.ts` — adapter implementing `RoadmapSource`
-- Config schema: `roadmap.source: github-issues`, `roadmap.github.repo`, `roadmap.github.label`, `roadmap.github.plan-location: issue-comment | pr-description`
-- `listOpenItems`: `gh issue list --label <label> --state open --json number,title,labels,body`
-- `claimItem`: mark issue as "in progress" (add label or assign), create branch + worktree
-- `markDone`: close issue with a comment linking the merged PR/commit
-- `getItemPlan`: fetch issue comment matching a specific tag (e.g. `<!-- autopilot-plan -->`)
-- Graceful failure when `gh` CLI is not installed or not authenticated
-- Tests with `gh` CLI mocked at the shell level
-
-**Out of scope:**
-- Bidirectional sync — GH Issues is the source, no local cache
-- Multi-repo issue sources — one repo per autopilot instance
+Completed. See git history for implementation details.
 
 ---
 
