@@ -36,7 +36,7 @@ describe("runPipeline — happy path", () => {
 			{
 				plan: { ok: true },
 				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
-				implement: { ok: true },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
 				"shakedown-code": { ok: true },
 				ship: { ok: true },
 			},
@@ -152,6 +152,40 @@ describe("runPipeline — implement turn-limit retry", () => {
 			implEntries.some((s) => s.attempt === 2),
 			`expected implement entry with attempt=2; got ${JSON.stringify(implEntries)}`,
 		);
+	});
+});
+
+describe("runPipeline — no deliverable commits", () => {
+	it("aborts before ship when branch has only docs commits", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep, calls } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "docs/plans/tool-99.md": "docs only" } },
+				"shakedown-code": { ok: true },
+				ship: { ok: true },
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
+			runStep,
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+		});
+
+		assert.equal(result.completed, false);
+		assert.match(result.error ?? "", /nothing to ship/);
+		const stepsRun = calls.map((c) => c.step);
+		assert.ok(!stepsRun.includes("ship"), `ship should not have been called; got ${stepsRun.join(",")}`);
+		assert.equal(logs.length, 1);
+		assert.equal(logs[0].completed, false);
+		assert.match((logs[0].error as string) ?? "", /nothing to ship/);
 	});
 });
 

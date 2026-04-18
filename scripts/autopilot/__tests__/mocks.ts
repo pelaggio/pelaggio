@@ -72,6 +72,7 @@ export function makeTempGitRepo(): string {
 	execSync("git config user.email t@t", { cwd: dir });
 	execSync("git config commit.gpgsign false", { cwd: dir });
 	execSync("git commit --allow-empty -q -m init", { cwd: dir });
+	execSync("git checkout -q -b feat/tool-99", { cwd: dir });
 	return dir;
 }
 

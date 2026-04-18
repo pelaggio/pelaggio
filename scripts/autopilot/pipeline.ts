@@ -10,6 +10,7 @@ import {
 	expandSkill,
 	findPlanPath,
 	fmtWait,
+	hasDeliverableCommits,
 	isQuickScope,
 	listWorktrees as listWorktreesDefault,
 	parseItemId,
@@ -382,6 +383,16 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	{
 		const parked = parkExit();
 		if (parked) return parked;
+	}
+	if (!opts.dryRun && !hasDeliverableCommits(worktree!)) {
+		log("⚠ no deliverable commits on branch — skipping ship");
+		return finish({
+			itemId,
+			completed: false,
+			cost,
+			verdict,
+			error: "nothing to ship: branch has no non-docs commits",
+		});
 	}
 	log(`shipping...${opts.pr ? " (PR mode)" : ""}`);
 	const ship = await step("ship", expandSkill("ship", opts.pr ? "--pr" : undefined), worktree!);

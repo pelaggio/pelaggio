@@ -1,6 +1,29 @@
 import assert from "node:assert/strict";
+import { execSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { describe, it } from "node:test";
-import { fmtWait, parseResetTime, parseWaitFlag } from "../helpers.js";
+import { fmtWait, hasDeliverableCommits, parseResetTime, parseWaitFlag } from "../helpers.js";
+
+function makeFeatRepo(): string {
+	const dir = mkdtempSync(join(tmpdir(), "autopilot-helpers-test-"));
+	execSync("git init -q -b main", { cwd: dir });
+	execSync("git config user.name t", { cwd: dir });
+	execSync("git config user.email t@t", { cwd: dir });
+	execSync("git config commit.gpgsign false", { cwd: dir });
+	execSync("git commit --allow-empty -q -m init", { cwd: dir });
+	execSync("git checkout -q -b feat/tool-99", { cwd: dir });
+	return dir;
+}
+
+function commitFile(dir: string, rel: string, content: string, msg: string): void {
+	const full = resolve(dir, rel);
+	mkdirSync(dirname(full), { recursive: true });
+	writeFileSync(full, content);
+	execSync("git add -A", { cwd: dir });
+	execSync(`git commit -q -m "${msg}"`, { cwd: dir });
+}
 
 describe("parseWaitFlag", () => {
 	it("parses hours", () => {
@@ -103,5 +126,41 @@ describe("parseResetTime", () => {
 		const result = parseResetTime(msg);
 		// Should return a valid timestamp (either today or tomorrow)
 		assert.ok(result > 0, `expected positive timestamp, got ${result}`);
+	});
+});
+
+describe("hasDeliverableCommits", () => {
+	it("returns true when branch has a non-docs code commit", () => {
+		const dir = makeFeatRepo();
+		commitFile(dir, "src/foo.ts", "export const x = 1;\n", "feat code");
+		assert.equal(hasDeliverableCommits(dir), true);
+	});
+
+	it("returns false when branch has only docs/ commits", () => {
+		const dir = makeFeatRepo();
+		commitFile(dir, "docs/plans/x.md", "# plan\n", "docs plan");
+		assert.equal(hasDeliverableCommits(dir), false);
+	});
+
+	it("returns false when branch has only .md commits outside docs/", () => {
+		const dir = makeFeatRepo();
+		commitFile(dir, "README.md", "# readme\n", "readme only");
+		assert.equal(hasDeliverableCommits(dir), false);
+	});
+
+	it("returns false when branch is identical to main", () => {
+		const dir = makeFeatRepo();
+		assert.equal(hasDeliverableCommits(dir), false);
+	});
+
+	it("returns false for a non-existent worktree (no throw)", () => {
+		assert.equal(hasDeliverableCommits("/nonexistent/path/does/not/exist"), false);
+	});
+
+	it("returns true when branch has mixed docs + code commits", () => {
+		const dir = makeFeatRepo();
+		commitFile(dir, "docs/plans/x.md", "# plan\n", "docs");
+		commitFile(dir, "src/foo.ts", "export const x = 1;\n", "code");
+		assert.equal(hasDeliverableCommits(dir), true);
 	});
 });

@@ -32,6 +32,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | TOOL-18. Public-npm publish hardening | TOOL-13 |
 | TOOL-19. `orchestrate()` test coverage — resume, parallel, park-and-resume | TOOL-4 |
 | TOOL-20. Fix false-success on cycles that ship nothing | TOOL-4 |
+| TOOL-21. Tighten `/ship` phantom-guard wording + update `_rubric.md` phantom-guard bullet | — |
 
 ---
 
@@ -396,6 +397,16 @@ Completed. See git history for implementation details.
 - Cleaning up the TOOL-7 ghost worktree — user decision, separate from the bug fix
 - Retrying TOOL-7's actual work — handled separately via `--resume TOOL-7`
 - Refunding the $2.51 spent on the false-success cycle — gone
+
+---
+
+### TOOL-21. Tighten `/ship` phantom-guard wording + update `_rubric.md` phantom-guard bullet
+
+| What | Scope | Deps |
+|------|-------|------|
+| Update `.claude/skills/ship/SKILL.md` phantom-guard wording to "abort immediately" (not "stop and report") and note the pipeline pre-check is primary; update the matching bullet in `.claude/skills/_rubric.md` Correct section to reference `hasDeliverableCommits()` in `pipeline.ts`. | XS | — |
+
+**Why:** TOOL-20 added the pipeline-level pre-check in `pipeline.ts` but the paired wording edits to `/ship`'s SKILL.md and `_rubric.md`'s Correct-section bullet (specified in the TOOL-20 plan) were not applied during the code-review shakedown — edits were denied. Defense-in-depth + docs/code-level consistency still wants both updated.
 
 ---
 

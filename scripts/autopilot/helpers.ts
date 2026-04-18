@@ -123,6 +123,27 @@ export function ensureCheckpointed(cwd: string, label: string, log: (s: string) 
 	}
 }
 
+// ── Ship pre-condition ─────────────────────────────────────────────────
+
+/**
+ * True iff the feat branch has at least one commit beyond main that touches
+ * a file outside `docs/` and not ending in `.md`. Matches the phantom-ship
+ * guard in `.claude/skills/ship/SKILL.md`. Returns false on any git error.
+ */
+export function hasDeliverableCommits(worktree: string): boolean {
+	try {
+		const files = execSync("git diff --name-only main..HEAD", {
+			cwd: worktree,
+			encoding: "utf-8",
+			stdio: ["ignore", "pipe", "pipe"],
+		}).trim();
+		if (!files) return false;
+		return files.split("\n").some((f) => !f.startsWith("docs/") && !f.endsWith(".md"));
+	} catch {
+		return false;
+	}
+}
+
 // ── Scope detection ────────────────────────────────────────────────────
 
 export function isQuickScope(text: string): boolean {
