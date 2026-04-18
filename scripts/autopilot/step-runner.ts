@@ -19,6 +19,11 @@ export interface RunStepOpts {
 
 const EDIT_LOOP_THRESHOLD = 12;
 
+// Steps whose entire job is iteratively editing the plan document. The raw-edit
+// loop guard would false-positive on legitimate refinement passes, so it is
+// skipped here. Steps editing code (`implement`, `shakedown-code`) keep it.
+const EDIT_LOOP_EXEMPT_STEPS: ReadonlySet<Step> = new Set(["plan", "shakedown-plan"]);
+
 // Plan-polish guard: during `implement`, block writes to docs/plans/ so the model
 // executes the plan instead of editing it. Surfaced as a named helper because the
 // reason — not the mechanics — is the non-obvious part worth locating.
@@ -231,8 +236,8 @@ export async function runStep(name: Step, prompt: string, opts: RunStepOpts, emi
 
 						toolCounts.set(toolName, (toolCounts.get(toolName) ?? 0) + 1);
 
-						// Track edits per file
-						if (toolName === "Edit" && input.file_path) {
+						// Track edits per file (skipped for plan-editing steps)
+						if (toolName === "Edit" && input.file_path && !EDIT_LOOP_EXEMPT_STEPS.has(name)) {
 							const fp = String(input.file_path);
 							const count = (editCounts.get(fp) ?? 0) + 1;
 							editCounts.set(fp, count);
