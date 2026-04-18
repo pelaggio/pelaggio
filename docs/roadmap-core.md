@@ -42,6 +42,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | ~~TOOL-30. Drop vendored script paths from skill prose~~ | **Done** — Removed stale `parseVerdict` path references from _review-logic.md and shakedown/SKILL.md (2026-04-18) |
 | TOOL-31. Rewire skill bodies through `RoadmapSource` (github-issues + linear) | TOOL-10, TOOL-15 |
 | ~~TOOL-32. `consumer: false` frontmatter flag — sync skips maintainer-only skills~~ | **Done** — `consumer: false` frontmatter filters maintainer-only skills from sync; `/bump-models` marked; summary line + check-skills lint added (2026-04-18) |
+| TOOL-33. GitHub Issues bug → autopilot PR POC (no-worktree mode + CI workflow, dogfooded) | TOOL-10, TOOL-11, TOOL-31 (partial) |
 
 ---
 
@@ -263,6 +264,31 @@ Completed. See git history for implementation details.
 ### TOOL-32. `consumer: false` frontmatter flag — sync skips maintainer-only skills ✓
 
 Completed. See git history for implementation details.
+
+---
+
+### TOOL-33. GitHub Issues bug → autopilot PR POC (no-worktree mode + CI workflow, dogfooded)
+
+| What | Scope | Deps |
+|------|-------|------|
+| First end-to-end proof-of-concept for CI-triggered autopilot: a GitHub Issue labeled `autopilot:fix` fires a workflow that runs autopilot headlessly in the ephemeral runner's clone (no sibling worktree), which produces a PR resolving the issue. Dogfood it on this repo — replace the current "bug reporter commits to main" flow in `CLAUDE.md` with this autopilot PR flow. Proves out the ephemeral-container execution model and unblocks adoption in other orgs. | L | TOOL-10, TOOL-11, TOOL-31 (partial) |
+
+**Deliverables:**
+- `--no-worktree` CLI flag (or auto-detect via `CI=true` / `CLAUDE_AUTOPILOT_SINGLE_SHOT=1`) that sets `worktree = REPO` and skips sibling-path creation. Only valid with `--parallel 1 --cycles 1 --item <ID>` (explicit item required; no `/pick next` from roadmap).
+- Skill guards: `/pick` skips `git worktree add` when in no-worktree mode; `/ship` skips `git worktree remove`. Both still create/check out the feature branch in place.
+- `step-runner.ts`'s existing `isWorktree = resolve(cwd) !== resolve(REPO)` already self-disables the MAIN_REPO-write guard — verify this stays correct, add a test.
+- `.github/workflows/autopilot-fix.yml`: triggers on `issues.labeled` with `autopilot:fix`, runs on the self-hosted runner, checks out the repo fresh, installs deps, invokes `pnpm autopilot --item <issue-number> --no-worktree --ship-target pull-request`, reports back to the issue on success/failure. Needs `ANTHROPIC_API_KEY` + `GH_TOKEN` secrets.
+- `ship.target: pull-request` fallback path when invoked via workflow (the workflow can pass `--ship-target` to override `.autopilot.yml`).
+- Dogfood: rewrite the "Bug reporter — automated fix instructions" section in `CLAUDE.md`. Replace "commit directly to main" guidance with "file a GitHub issue with `autopilot:fix` label; autopilot produces a PR; human reviews and merges." Keep the original guidance as a fallback for cases where autopilot declines the work.
+- Smoke-test on a real bug in this repo's issue tracker end-to-end before marking done.
+- Docs: add a `docs/ci-integration.md` section covering the workflow setup, required secrets, label conventions, and known limits (single-shot only, explicit item required).
+
+**Out of scope:**
+- Linear webhook trigger (needs TOOL-31 fully landed for `/pick`/`/ship` Linear parity; file as a follow-up once TOOL-33 proves the pattern).
+- `parallel > 1` support in no-worktree mode (ephemeral runner is already isolation; fan-out happens at the workflow-job level, not inside autopilot).
+- Post-merge finalizer (closing the issue, archiving plan) — rely on GitHub's "close issue" linked-PR behavior for the POC; revisit if it's insufficient.
+- Full `RoadmapSource` wiring of `/pick` and `/ship` skill bodies (TOOL-31's job). This POC uses explicit `--item <N>` to sidestep `/pick`'s markdown assumption; `/ship` will still touch `docs/task-index.md` for now, which is acceptable since the issue number is the source of truth.
+- Webhook-to-workflow glue for non-GitHub sources (Linear, Jira, etc.) — separate charter.
 
 ---
 
