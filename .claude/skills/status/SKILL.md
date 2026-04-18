@@ -35,18 +35,18 @@ Resolve MAIN_REPO.
 Show a compact summary:
 
 ```
-Branch:    feat/b3-rolling-averages
-Item:      B3 — Rolling 30/90-day averages (roadmap-data-quality.md)
-Worktree:  C:/Users/.../{project}-b3
+Branch:    feat/tool-16-refit-split
+Item:      TOOL-16 — Split /refit → /bump-models + self-hosted Renovate (roadmap-core.md)
+Worktree:  /path/to/{project}-tool-16
 
 Commits (3):
-  abc1234 add rolling average engine
-  def5678 add unit tests
-  ghi9012 wire up to bearings screen
+  abc1234 scaffold bump-models skill
+  def5678 add Renovate workflow
+  ghi9012 wire self-hosted runner config
 
 Uncommitted: 2 modified, 1 untracked
 
-Plan: docs/plans/b3-rolling-averages.md (exists)
+Plan: docs/plans/tool-16-refit-split.md (exists)
 ```
 
 ## Suggest next step

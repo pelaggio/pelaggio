@@ -23,6 +23,8 @@ Skills live in `.claude/skills/` — each skill is self-contained markdown with 
 
 **Idiomatic** — Biome-clean (tabs for indent, double quotes, trailing commas). Imports order: node builtins → external packages → local paths. `.js` extension in relative imports (ESM convention, required by `tsx`). No default exports — everything named. Async iteration via `for await` over SDK generators. Error handling via `try/catch` with specific subtype categorization (`error_rate_limit`, `error_budget`, `error_max_turns`, etc.). Environment variable overrides read via `process.env.X ?? default`.
 
+**Idioms** — Framework-version-current conventions (name the version when it matters: Node 22 `node:test`, TypeScript 6 `satisfies`, `@anthropic-ai/claude-agent-sdk` streaming `query()` iteration). Well-established design patterns over ad-hoc invention. Simplicity over cleverness — the boring, widely-understood solution wins. Consistency with broad industry convention, not just this repo. Stress-tested primarily by `/shakedown`'s forked (out-of-context) review because catching convention drift needs fresh eyes.
+
 **Correct** — Load-bearing invariants specific to this pipeline:
 - **Step exhaustiveness**: `STEPS` const is the source of truth. `BUDGETS`, `TURN_LIMITS`, `EFFORT`, and every `MODEL_PROFILES[profile]` must have an entry for every Step. Missing keys cause runtime lookups of `undefined` which crash late.
 - **Frontmatter stripping**: `expandSkill()` MUST strip frontmatter before returning. Downstream consumers pass the result directly as a SDK prompt; leaked frontmatter pollutes the prompt and confuses the model.
@@ -31,7 +33,7 @@ Skills live in `.claude/skills/` — each skill is self-contained markdown with 
 - **Rate-limit parking preserves work**: on rate limit rejection, `parkSignal.parked` is set, and `parkExit()` runs `checkpoint()` before returning. Any new exit path from the pipeline must call `parkExit()` first or risk losing committed-but-not-pushed work.
 - **`listWorktrees()` filters by prefix**: new worktree detection matches `WORKTREE_PREFIX` to ignore unrelated worktrees. `WORKTREE_PREFIX` is derived from `basename(REPO)` by default — tests that mock REPO need to set `CLAUDE_AUTOPILOT_WORKTREE_PREFIX` env var.
 - **`detectResumeStep` trusts only valid Step names**: when reading log entries from disk, it validates parsed step names against `STEPS.indexOf()`. Unknown names (from legacy logs or corruption) fall through to `"ship"` as a safe default — *not* to a random step.
-- **Phantom ship guard**: `/ship` verifies `git log main..HEAD` contains non-docs commits before proceeding. Don't bypass.
+- **Phantom ship guard**: `pipeline.ts` calls `hasDeliverableCommits()` (three-dot diff against main; branches that only touch `docs/plans/` are phantoms) before invoking `/ship`, and `verifyShipLanded()` afterward to confirm `main` actually advanced. The identical checks in `/ship`'s SKILL.md are defense-in-depth for inline (non-pipeline) use. Don't bypass either layer.
 
 **Concise** — YAGNI. No dead code. Early returns. No premature abstractions — the pipeline is ~600 lines across 7 files and should stay that way. Avoid "configurability" that nobody has asked for. When adding a feature, prefer extending an existing function over adding a new helper. No backwards-compat shims — this repo has no external consumers beyond the user's own projects, and those can update.
 
@@ -44,6 +46,6 @@ npx tsx -e "import('./scripts/autopilot/helpers.ts')"         # parse-check help
 npx tsx -e "import('./scripts/autopilot/pipeline.ts')"        # parse-check pipeline
 ```
 
-All four must succeed. No formal `pnpm typecheck` setup yet — tsx's runtime checking catches most issues. If you add a `tsconfig.json` + typecheck script, update this section.
+All four must succeed. No formal `pnpm typecheck` setup — tsx handles transpilation via swc and we rely on runtime parse-checks.
 
-**Biome is not yet configured** for this repo. Skill bodies (`.md`) are not Biome-linted. If you add Biome, run it against `scripts/` only.
+**Biome** lints `scripts/**/*.ts` via `biome.json`; run `pnpm check` (or `pnpm format` to auto-fix). Skill and template markdown is not linted. A lefthook `pre-commit` hook auto-formats staged TS files.

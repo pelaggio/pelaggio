@@ -3,7 +3,7 @@ name: ship
 description: Finalize, commit, push, and clean up a completed work item
 argument-hint: "[--no-squash] [--pr]"
 disable-model-invocation: true
-allowed-tools: Read Edit Bash(git:*) Bash(pnpm:*) Bash(npx jest:*) Bash(npx biome:*) Bash(gh pr:*)
+allowed-tools: Read Edit Bash(git:*) Bash(pnpm:*) Bash(npx tsx:*) Bash(npx biome:*) Bash(gh pr:*)
 ---
 
 # /ship — Finalize and Ship
@@ -33,7 +33,7 @@ All three verifications must pass (exit 0) — stop and report if any fail.
 
 ## 2. Identify
 
-Get item ID from branch name (e.g. `feat/b3-rolling-averages` → `B3`). Find the source doc by grepping `{MAIN_REPO}/docs/roadmap-*.md` for that ID. Read the planning doc for title/description.
+Get item ID from branch name (e.g. `feat/tool-16-refit-split` → `TOOL-16`). Find the source doc by grepping `{MAIN_REPO}/docs/roadmap-*.md` for that ID. Read the planning doc for title/description.
 
 ## 3. Squash (unless `--no-squash`)
 
@@ -47,7 +47,7 @@ git commit -m "$(cat <<'EOF'
 - {bullet 1}
 - {bullet 2}
 
-Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 EOF
 )"
 ```
@@ -56,11 +56,11 @@ Types: `feat`, `fix`, `refactor`, `docs`. Imperative mood, lowercase, no period.
 
 If the commit fails after reset, all changes are still staged — just re-run the commit command.
 
-**Phantom ship guard**: after squashing, verify the commit contains non-docs code:
+**Phantom ship guard** (defense-in-depth — the pipeline's `hasDeliverableCommits()` pre-check is primary; this inline guard covers non-pipeline use). After squashing, verify the branch touches something beyond the plan file:
 ```bash
-git diff --name-only main..HEAD | grep -v '^docs/' | grep -v '\.md$'
+git diff --name-only main...HEAD | grep -v '^docs/plans/'
 ```
-If the output is empty (only docs files changed), **stop and report** — the feature branch has no implementation. Do not proceed with merge.
+If the output is empty (only the `/plan` artifact changed), **abort immediately** — the feature branch has no implementation. Do not proceed with merge. Doc-only work outside `docs/plans/` (rubric, skill bodies, README, roadmap edits) is legitimate and should pass.
 
 ## 4. Merge code
 
@@ -82,13 +82,7 @@ git pull --no-rebase origin main
 git merge "$BRANCH" --no-edit
 ```
 
-**Merge conflicts**: resolve these known-safe additive patterns, then re-run typecheck to confirm:
-- `migrations.ts` journal: accept both entries, bump the incoming migration's `idx` and rename its constant (e.g., `m0019` → `m0020`) so indices are sequential
-- `migrations.ts` SQL + exports: keep both migration constants and add both to the exports object
-- i18n JSON (`en/*.json`, `fr/*.json`): accept both key additions (additive-only — both sides added different keys)
-- Component files (a11y + feature): keep a11y attributes/wrappers from main and feature logic from the branch
-
-For any other conflict pattern (edits to the same lines, deletions, non-additive changes): stop and report — do not force through.
+**Merge conflicts**: only auto-resolve clearly-additive patterns where both sides added independent content (e.g. both sides added rows to a table, both appended to an exports list). For anything else — edits to the same lines, deletions, non-additive changes — stop and report. Do not force through.
 
 ## 5. Post-merge verification
 
@@ -141,15 +135,7 @@ If `git push` fails because main moved, run `git pull --no-rebase origin main`, 
 
 **If in worktree**:
 ```bash
-# Clean node_modules first — git worktree remove fails on Windows with deeply nested dirs
-# Use cmd rmdir on Windows (rm -rf hangs for minutes on deeply nested node_modules)
-cmd //c "rmdir /s /q $WORKTREE\\node_modules" 2>/dev/null
-cmd //c "rmdir /s /q $WORKTREE\\apps\\mobile\\node_modules" 2>/dev/null
-cmd //c "rmdir /s /q $WORKTREE\\apps\\server\\node_modules" 2>/dev/null
-cmd //c "rmdir /s /q $WORKTREE\\apps\\web\\node_modules" 2>/dev/null
 git worktree remove "$WORKTREE" --force
-# If worktree remove fails (dir not empty), force delete and prune
-# cmd //c "rmdir /s /q $WORKTREE" && git worktree prune
 git branch -d "$BRANCH"
 git push origin --delete "$BRANCH" 2>/dev/null
 ```
@@ -159,6 +145,8 @@ git push origin --delete "$BRANCH" 2>/dev/null
 git branch -d "$BRANCH"
 git push origin --delete "$BRANCH" 2>/dev/null
 ```
+
+If `git worktree remove` fails because of files the consuming project left behind (e.g. `node_modules` on Windows), clean those first from the worktree path, then retry.
 
 ## 10. Report
 

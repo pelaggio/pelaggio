@@ -18,7 +18,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | ~~TOOL-4. pipeline.ts integration tests via SDK query mock~~ | **Done** — Pipeline integration tests + mock SDK query infrastructure added (2026-04-17) |
 | TOOL-5. Skill body linter (frontmatter validity, rubric references) | — |
 | ~~TOOL-6. Biome config for scripts/ + pre-commit hook~~ | **Done** — Biome config added, pre-commit hook wired (2026-04-11) |
-| TOOL-7. Document in-context vs out-of-context review + add Idioms section to rubric | — |
+| ~~TOOL-7. Document in-context vs out-of-context review + add Idioms section to rubric~~ | **Done** — Idioms rubric dimension + Review model docs (manual, 2026-04-18) |
 | ~~TOOL-8. `.autopilot.yml` project config file + loader~~ | **Done** — `.autopilot.yml` config loader added (2026-04-17) |
 | TOOL-9. RoadmapSource abstraction + MarkdownRoadmap adapter | — |
 | TOOL-10. GitHubIssuesRoadmap adapter via gh CLI | TOOL-9 |
@@ -31,7 +31,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | TOOL-17. Pipeline pick-step test coverage (needs REPO injectability) | TOOL-4 |
 | TOOL-18. Public-npm publish hardening | TOOL-13 |
 | TOOL-19. `orchestrate()` test coverage — resume, parallel, park-and-resume | TOOL-4 |
-| TOOL-21. Tighten `/ship` phantom-guard wording + update `_rubric.md` phantom-guard bullet | — |
+| ~~TOOL-21. Tighten `/ship` phantom-guard wording + update `_rubric.md` phantom-guard bullet~~ | **Done** — `/ship` phantom-guard + rubric bullet tightened (manual, 2026-04-18) |
 | TOOL-23. Fix implement-step path resolution for worktree-relative deliverables | TOOL-4 |
 
 ---
@@ -127,21 +127,9 @@ Completed. See git history for implementation details.
 
 ---
 
-### TOOL-7. Document in-context vs out-of-context review + add Idioms section to rubric
+### TOOL-7. Document in-context vs out-of-context review + add Idioms section to rubric ✓
 
-| What | Scope | Deps |
-|------|-------|------|
-| Codify the two-pass review model the pipeline already runs: `/plan`'s self-review is in-context (sees the reasoning that produced the artifact), `/shakedown`'s forked review is out-of-context (reads cold, no bias). Add an "Idioms" section to `_rubric.md` for framework-time best practices, design patterns, and simplicity. The out-of-context pass is responsible for stress-testing Idioms because it has the fresh eyes needed to catch convention drift. | XS | — |
-
-**Deliverables:**
-- Update `.claude/skills/_rubric.md` with a new "Idioms" section covering: current-framework-version idioms (name the version), well-established design patterns, simplicity over cleverness, consistency with industry conventions
-- Update `.claude/skills/shakedown/SKILL.md` to note that the forked out-of-context review is primarily responsible for the Idioms section
-- Update `.claude/skills/plan/SKILL.md` self-review section to note it's the in-context pass focused on project invariants (not Idioms)
-- Update `CLAUDE.md` with a "Review model" section documenting the in/out-of-context distinction
-
-**Out of scope:**
-- Implementing a separate idioms file (we decided single file is fine)
-- Any code changes — this is doc-only
+Completed. See git history for implementation details.
 
 ---
 
@@ -324,13 +312,9 @@ Completed. See git history for implementation details.
 
 ---
 
-### TOOL-21. Tighten `/ship` phantom-guard wording + update `_rubric.md` phantom-guard bullet
+### TOOL-21. Tighten `/ship` phantom-guard wording + update `_rubric.md` phantom-guard bullet ✓
 
-| What | Scope | Deps |
-|------|-------|------|
-| Update `.claude/skills/ship/SKILL.md` phantom-guard wording to "abort immediately" (not "stop and report") and note the pipeline pre-check is primary; update the matching bullet in `.claude/skills/_rubric.md` Correct section to reference `hasDeliverableCommits()` in `pipeline.ts`. | XS | — |
-
-**Why:** TOOL-20 added the pipeline-level pre-check in `pipeline.ts` but the paired wording edits to `/ship`'s SKILL.md and `_rubric.md`'s Correct-section bullet (specified in the TOOL-20 plan) were not applied during the code-review shakedown — edits were denied. Defense-in-depth + docs/code-level consistency still wants both updated.
+Completed. See git history for implementation details.
 
 ---
 

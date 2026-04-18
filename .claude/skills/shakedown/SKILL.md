@@ -5,7 +5,7 @@ context: fork
 agent: general-purpose
 effort: max
 argument-hint: "[path | 'autopilot plan-review' | 'autopilot code-review']"
-allowed-tools: Read Glob Grep Edit Write Bash(git:*) Bash(ls:*) Bash(pnpm:*) Bash(npx jest:*) Bash(npx biome:*)
+allowed-tools: Read Glob Grep Edit Write Bash(git:*) Bash(ls:*) Bash(pnpm:*) Bash(npx tsx:*) Bash(npx biome:*)
 ---
 
 # /shakedown — Review and Fix
@@ -36,6 +36,8 @@ Resolve MAIN_REPO. Must be on a feature branch (not `main`).
 
 ## Dispatch
 
+This forked, out-of-context review is the primary enforcer of the **Idioms** rubric dimension. Fresh eyes — unbiased by the authoring session's reasoning trail — are what catch convention drift, framework-version creep, and cleverness-over-simplicity. `/plan`'s self-review owns project-invariant checks; shakedown owns Idioms.
+
 Apply the target detection rules above. You will land in one of two modes.
 
 ### Plan review mode
@@ -44,13 +46,13 @@ Target: a `.md` plan file (usually `docs/plans/{branch-slug}.md`).
 
 1. Read the plan in full.
 2. Extract the item ID from the branch name. Read `{MAIN_REPO}/docs/task-index.md` to find the roadmap file that owns the item, then read only that roadmap entry for scope and dependencies.
-3. Read related design docs in `{MAIN_REPO}/docs/` (`plan-*.md`, `design-*.md`) if the plan references them.
-4. Read `apps/mobile/src/db/schema.ts` if the plan proposes data changes.
-5. Find reference implementations for similar features already in the codebase — don't review in a vacuum.
-6. **Verify component APIs**: for every shared component the plan references (`StatCard`, `InfoRow`, `Button`, `IconButton`, `Screen`, `ScreenHeader`, `ContentContainer`, `ButtonGroup`, `ItemTable`, `ResultCard`, etc.), read its actual source file and confirm the real props interface. Flag any mismatches (e.g., "plan assumes `StatCard` has a `trend` prop but it doesn't").
-7. Apply the rubric. Focus on design soundness and project-specific invariants: correct column types (ULID, integer cents, ISO-8601, soft deletes), data flowing through `transaction_candidates`, confidence-gated automation, i18n parity, evidence chain, transfer exclusion on spend/income, shared component reuse, performance targets.
+3. Read related design docs in `{MAIN_REPO}/docs/` if the plan references them.
+4. Read any source files the plan names as deliverables — confirm file existence, current shape, and that the plan's proposed edits are compatible with what's actually there.
+5. **Verify APIs the plan assumes** — for every function, type, or component the plan calls or extends, read the actual source and confirm signatures match. Flag mismatches concretely (e.g., "plan assumes `foo()` returns `X` but it returns `Y`").
+6. Find reference implementations for similar features already in the codebase — don't review in a vacuum.
+7. Apply the rubric. Focus on design soundness, project invariants from the Correct dimension, and Idioms drift.
 8. **Fix issues in place** — edit the plan file directly to address every fix-now item. The user wants a better plan, not just a list of complaints.
-9. **If the plan has a fundamental design flaw** that in-place editing cannot fix (wrong data model, wrong architectural layer, contradicts a core invariant that the whole approach depends on) — emit `Verdict: RETHINK` and stop. Do not paper over structural problems.
+9. **If the plan has a fundamental design flaw** that in-place editing cannot fix (wrong data model, wrong architectural layer, contradicts a core invariant the whole approach depends on) — emit `Verdict: RETHINK` and stop. Do not paper over structural problems.
 10. Output the summary and verdict per the review logic above.
 
 ### Code review mode

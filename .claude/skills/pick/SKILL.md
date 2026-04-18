@@ -23,7 +23,7 @@ Resolve MAIN_REPO now.
 
 Read `{MAIN_REPO}/docs/task-index.md` — this is the compact index of all open items (~1K tokens vs ~37K for full roadmaps). It lists ID, title, deps, plan link, and which roadmap file each item lives in.
 
-Run `git branch --list 'feat/*'` to get in-flight branches. Extract item IDs from branch names (e.g. `feat/b3-rolling-averages` → `B3`) to exclude already-claimed items.
+Run `git branch --list 'feat/*'` to get in-flight branches. Extract item IDs from branch names (e.g. `feat/tool-16-refit-split` → `TOOL-16`) to exclude already-claimed items.
 
 Only read a full `docs/roadmap-*.md` file if you need the detailed spec for a specific item (e.g. to report scope/deliverables). Use the "Roadmap" column in the task index to know which file to open — don't read all of them.
 
@@ -31,7 +31,7 @@ Only read a full `docs/roadmap-*.md` file if you need the detailed spec for a sp
 
 Parse `$ARGUMENTS` (may be empty).
 
-**`/pick B3`** (argument is an item ID) — find that item by ID. If not found, report which docs were searched and stop. If the item's Deps column starts with `blocked:`, **stop immediately** and report: "⚠ {ID} is blocked: {blocker text from Deps column}. Cannot pick a blocked item." Do not create a branch or worktree. Skip to Claim only if unblocked.
+**`/pick TOOL-16`** (argument is an item ID) — find that item by ID. If not found, report which docs were searched and stop. If the item's Deps column starts with `blocked:`, **stop immediately** and report: "⚠ {ID} is blocked: {blocker text from Deps column}. Cannot pick a blocked item." Do not create a branch or worktree. Skip to Claim only if unblocked.
 
 **`/pick next`** (argument is exactly "next", no topic) — rank ALL **unblocked** pending items by: no unmet dependencies → calendar urgency → unblocks others → no overlap with claimed items. **Hard-skip any item whose Deps column contains `blocked:`** — these are never eligible for auto-pick. **Immediately auto-claim the top match — do NOT ask for confirmation, do NOT list alternatives, do NOT wait for user input.** Go straight from ranking to the Claim section below. Do NOT filter by topic — consider all tracks.
 

@@ -8,7 +8,7 @@ Detect what to review, in order:
 
 1. **Explicit argument** — if `Arguments:` below names a `.md` file, review it as a plan; if it names a commit range or file list, review it as code.
 2. **Autopilot directive** — if `Arguments:` contains `autopilot plan-review` or `autopilot code-review`, dispatch to that mode regardless of git state.
-3. **Plan-only state** — if `docs/plans/{branch-slug}.md` exists AND `git log main..HEAD --oneline` shows no non-docs commits, it's plan review mode — target is the plan file.
+3. **Plan-only state** — if `docs/plans/{branch-slug}.md` exists AND `git diff --name-only main...HEAD` lists only paths under `docs/plans/`, it's plan review mode — target is the plan file.
 4. **Code state** — otherwise, review the diff. Target is the union of:
    - Unstaged changes (`git diff`)
    - Staged changes (`git diff --cached`)
@@ -21,7 +21,7 @@ If neither a plan nor a diff exists, report "nothing to review" and stop.
 Sort every issue into exactly one bucket:
 
 - **Fix now** — type errors, test failures, lint errors, bugs, convention violations, security issues, correctness gaps, rubric violations that will produce broken output. Must be fixed in this session before the verdict.
-- **Near-term** — missing tests, i18n gaps, factoring improvements, accessibility, missing press feedback, shared-component opportunities. Fix in this session when within scope; otherwise defer.
+- **Near-term** — missing tests, factoring improvements, incomplete error handling, reuse opportunities, documentation gaps. Fix in this session when within scope; otherwise defer.
 - **Deferred** — feature extensions beyond scope, performance optimizations without evidence, refactors to untouched code, logical future extensions. Add to the roadmap (autopilot mode) or list in the output (inline mode).
 
 ## Stopping rule
@@ -54,4 +54,4 @@ Above the verdict, summarize:
 2. **Fix-now** — items addressed this session
 3. **Near-term** — items addressed or deferred
 4. **Deferred** — items added to roadmap (autopilot) or listed (inline)
-5. **Verification** — typecheck / biome / jest results (code review only)
+5. **Verification** — results of the rubric's Verification commands (code review only)

@@ -14,7 +14,6 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 | TOOL-2 | Dep graph visualization from roadmap files | — | — | core |
 | TOOL-3 | Scope suggestion in /charter from description | — | — | core |
 | TOOL-5 | Skill body linter (frontmatter validity, rubric references) | — | — | core |
-| TOOL-7 | Document in-context vs out-of-context review + add Idioms section to rubric | — | — | core |
 | TOOL-9 | RoadmapSource abstraction + MarkdownRoadmap adapter | — | — | core |
 | TOOL-10 | GitHubIssuesRoadmap adapter via gh CLI | TOOL-9 | — | core |
 | TOOL-15 | LinearRoadmap adapter | TOOL-9 | — | core |
@@ -22,17 +21,18 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 | TOOL-17 | Pipeline pick-step test coverage (needs REPO injectability) | — | — | core |
 | TOOL-18 | Public-npm publish hardening | — | — | core |
 | TOOL-19 | `orchestrate()` test coverage — resume, parallel, park-and-resume | — | — | core |
-| TOOL-21 | Tighten `/ship` phantom-guard wording + update `_rubric.md` phantom-guard bullet | — | — | core |
 | TOOL-23 | Fix implement-step path resolution for worktree-relative deliverables | — | — | core |
 
 ## Recently completed
 
 - TOOL-4 ✓
 - TOOL-6 ✓
+- TOOL-7 ✓
 - TOOL-8 ✓
 - TOOL-11 ✓
 - TOOL-12 ✓
 - TOOL-13 ✓
 - TOOL-14 ✓
 - TOOL-20 ✓
+- TOOL-21 ✓
 - TOOL-22 ✓

@@ -45,6 +45,15 @@ See `docs/config.md` for the annotated schema. The `.autopilot.yml` file is
 intentionally **not** checked into this repo — defaults live in `DEFAULTS`
 inside `config.ts` and the example lives in the doc.
 
+## Review model
+
+Two review passes with deliberately different context shapes:
+
+- **`/plan`'s self-review — in-context.** Same session that wrote the plan. Sees the reasoning trail. Best at catching the **Correct** dimension (step exhaustiveness, frontmatter stripping, phantom ship guard, rate-limit parking, worktree isolation) because those were top-of-mind while planning.
+- **`/shakedown`'s forked review — out-of-context.** Fresh SDK session, reads the artifact cold. Best at catching the **Idioms** dimension (convention drift, cleverness-over-simplicity, outdated framework patterns) because bias from the authoring session is absent.
+
+Don't fold shakedown back into plan to save a cycle — the context-shape difference is the whole point.
+
 ## Pipeline steps (the nautical vocabulary)
 
 | Skill | Role |

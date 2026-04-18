@@ -22,10 +22,10 @@ Resolve MAIN_REPO now.
 **Target item: `$ARGUMENTS`** — if a value appears above, find the matching branch via `git branch --list 'feat/*'`. Otherwise get the branch from `git branch --show-current` (must not be `main`).
 
 1. Extract item ID from branch name. Read `{MAIN_REPO}/docs/task-index.md` to find which roadmap file contains the item. Then read only that roadmap file for the item's full scope and dependencies. Don't read all roadmaps.
-3. Read related `{MAIN_REPO}/docs/plan-*.md` and `{MAIN_REPO}/docs/design-*.md` files.
-4. Read `apps/mobile/src/db/schema.ts` if data changes are involved.
-5. Find reference implementations for similar features already in the codebase.
-6. **Verify component APIs**: for every shared component you plan to use (`StatCard`, `InfoRow`, `Button`, `IconButton`, `Screen`, `ScreenHeader`, `ContentContainer`, etc.), read its actual source file and confirm the real props interface. Do not assume prop names — check them. If a component doesn't support what you need, note it in the plan and either propose extending the component or use an alternative approach.
+2. Read related `{MAIN_REPO}/docs/plan-*.md` and `{MAIN_REPO}/docs/design-*.md` files.
+3. Read any source files named as deliverables — confirm they exist and note their current shape.
+4. Find reference implementations for similar features already in the codebase.
+5. **Verify APIs you plan to call or extend**: for every function, type, or module the plan will touch, read the actual source and confirm the signature. Don't assume names — check them. If something doesn't exist or has the wrong shape, note it in the plan and propose either extending it or an alternative approach.
 
 ## Quality rubric
 
@@ -43,13 +43,15 @@ git commit -m "docs: add implementation plan for {item ID}"
 
 Note: `{MAIN_REPO}` is the path resolved via `git rev-parse` above — NOT the current working directory (which may be a worktree). The `docs/plans/` directory lives in the main repo so it's shared across worktrees.
 
-Cover: scope (what it does and doesn't touch), approach (why this over alternatives), files to change, schema changes, test strategy, i18n needs, and a rubric self-check.
+Cover: scope (what it does and doesn't touch), approach (why this over alternatives), files to change, test strategy, and a rubric self-check.
 
 ## Self-review
 
+This is the **in-context pass** — the same session wrote the plan, so you see the reasoning trail. That makes you strong at catching project invariants (the Correct dimension: step exhaustiveness, frontmatter stripping, worktree isolation, rate-limit parking, phantom ship guard, etc.) and weak at catching Idioms drift (out-of-context `/shakedown` owns that — fresh eyes are the right tool for convention enforcement).
+
 Re-read the plan as a critical reviewer:
-- Score each rubric dimension. Are there blockers or concerns?
-- Check project-specific invariants: correct column types, data flows through `transaction_candidates`, confidence-gated automation, evidence chain, transfer exclusion, shared component reuse, performance targets.
+- Score each rubric dimension. Are there blockers or concerns on Correct, Well-typed, Well-factored, Well-tested, or Concise?
+- Skip Idioms — defer to `/shakedown`.
 - If you find issues, **revise the plan inline** and note what changed.
 
 ## Output

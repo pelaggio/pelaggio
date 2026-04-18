@@ -23,14 +23,14 @@ Resolve MAIN_REPO.
 
 ## Selection
 
-**`/pickup F2`** — find a branch matching that item ID via `git branch --list 'feat/*'`. If no matching branch, report and stop.
+**`/pickup TOOL-16`** — find a branch matching that item ID via `git branch --list 'feat/*'`. If no matching branch, report and stop.
 
 **`/pickup`** (no argument) — if on a feature branch, use the current branch. If on `main`, list in-flight items from `git branch --list 'feat/*'` and `git worktree list`, and ask which to pick up.
 
 ## Gather
 
 1. Current branch: `git branch --show-current`
-2. Extract item ID from branch name (e.g. `feat/b3-rolling-averages` → `B3`). Read `{MAIN_REPO}/docs/task-index.md` to find which roadmap contains the item, then read only that file for scope/deps. Get worktree path from `git worktree list`.
+2. Extract item ID from branch name (e.g. `feat/tool-16-refit-split` → `TOOL-16`). Read `{MAIN_REPO}/docs/task-index.md` to find which roadmap contains the item, then read only that file for scope/deps. Get worktree path from `git worktree list`.
 3. Read the source doc entry for full scope and dependencies
 4. Read `{MAIN_REPO}/docs/plans/{branch-without-feat-prefix}.md` if it exists
 5. Progress: `git log main..HEAD --oneline` (run in the item's worktree)
@@ -42,17 +42,17 @@ Resolve MAIN_REPO.
 Compact summary:
 
 ```
-Item:      B3 — Rolling 30/90-day averages (roadmap-data-quality.md)
-Branch:    feat/b3-rolling-averages
-Worktree:  C:/Users/.../{project}-b3
+Item:      TOOL-16 — Split /refit → /bump-models + self-hosted Renovate (roadmap-core.md)
+Branch:    feat/tool-16-refit-split
+Worktree:  /path/to/{project}-tool-16
 
-Plan: docs/plans/b3-rolling-averages.md
+Plan: docs/plans/tool-16-refit-split.md
 Scope: {1-2 sentence summary from plan}
 
 Commits (3):
-  abc1234 add rolling average engine
-  def5678 add unit tests
-  ghi9012 wire up to bearings screen
+  abc1234 scaffold bump-models skill
+  def5678 add Renovate workflow
+  ghi9012 wire self-hosted runner config
 
 Uncommitted: 2 modified, 1 untracked
 Files touched: 8 files (+240, -30)
