@@ -29,7 +29,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | TOOL-15. LinearRoadmap adapter | TOOL-9 |
 | ~~TOOL-16. Split /refit → /bump-models + self-hosted Renovate~~ | **Done** — /refit replaced with /bump-models; Renovate + CI self-hosted workflows added (2026-04-18) |
 | ~~TOOL-17. Pipeline pick-step test coverage (needs REPO injectability)~~ | **Done** — resolveWorktree injection seam + pick-step test coverage added (2026-04-18) |
-| TOOL-18. Public-npm publish hardening | TOOL-13 |
+| ~~TOOL-18. Public-npm publish hardening~~ | **Done** — npm publish hardening: files allowlist, secret scanner, publish workflow added (2026-04-18) |
 | ~~TOOL-19. `orchestrate()` test coverage — resume, parallel, park-and-resume~~ | **Done** — orchestrate() test coverage for resume, parallel, and park-and-resume added (2026-04-18) |
 | ~~TOOL-21. Tighten `/ship` phantom-guard wording + update `_rubric.md` phantom-guard bullet~~ | **Done** — `/ship` phantom-guard + rubric bullet tightened (manual, 2026-04-18) |
 | ~~TOOL-23. Fix implement-step path resolution for worktree-relative deliverables~~ | **Done** — worktree path injected into implement prompt; pipeline.test.ts added (2026-04-18) |
@@ -176,30 +176,9 @@ Completed. See git history for implementation details.
 
 ---
 
-### TOOL-18. Public-npm publish hardening
+### TOOL-18. Public-npm publish hardening ✓
 
-| What | Scope | Deps |
-|------|-------|------|
-| Safeguards required before flipping `@cdhorne/claude-autopilot` from private (git-dep) to public npm. Intentionally deferred until there's a second or third external consumer — until then, git-dep keeps the blast radius small and avoids the publish surface area entirely. This item captures the checklist so the flip is deliberate, not ad-hoc. | S | TOOL-13 |
-
-**Deliverables:**
-- Strict `files` allowlist in `package.json` (allowlist, not denylist): `scripts/autopilot/`, `.claude/skills/`, `.claude-templates/`, `README.md`, `LICENSE`, `bin/`. Explicitly exclude `docs/`, `.dev/`, `biome.json`, `lefthook.yml`, tests, `CLAUDE.md`.
-- `scripts/check-publish.ts` — runs `npm publish --dry-run`, greps the packed file list against the allowlist, greps packed file contents for secret patterns (`sk-ant-`, `ghp_`, `AKIA`, `BEGIN PRIVATE KEY`, etc.), **fails the publish** if anything leaks. Wired as `pnpm check:publish`.
-- Git history audit before first publish: run `gitleaks detect --source .` (or `trufflehog git file://.`). Document the scan result in `docs/publish-audit.md` before flipping the repo to public. If secrets are found, rewrite history with `git filter-repo` and redo the scan.
-- npm account hardening:
-  - 2FA enabled at `auth-and-writes` level on the publishing npm account
-  - Granular automation token scoped to publish only, stored as a GitHub Actions secret used by the self-hosted runner
-  - `--provenance` attestation enabled via GitHub Actions publish workflow
-  - Package-level setting: require 2FA for every publish
-- `.github/workflows/publish.yml` (runs-on: self-hosted): runs `pnpm check:publish`, signs the release tag (ssh-signed), invokes `npm publish --provenance`. Triggered on tag push (e.g. `v0.1.0`).
-- `CLAUDE.md` note: never add `preinstall`/`install`/`postinstall` scripts. The publish check should also grep `package.json` for these and fail.
-- Repo visibility flip: convert `cdhorne/claude-autopilot` from private to public as the final deliverable, after all other safeguards are in place.
-
-**Out of scope:**
-- Sigstore or alternate signing schemes beyond npm provenance
-- Alternative registries (GitHub Packages) — we either stay private via git-dep or go public via npm, not both
-- Automated semver / changeset release management — manual tag-push publish is fine for alpha
-- Stripping historical commits beyond whatever gitleaks flags
+Completed. See git history for implementation details.
 
 ---
 
