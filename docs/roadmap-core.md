@@ -32,6 +32,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | TOOL-18. Public-npm publish hardening | TOOL-13 |
 | TOOL-19. `orchestrate()` test coverage — resume, parallel, park-and-resume | TOOL-4 |
 | TOOL-21. Tighten `/ship` phantom-guard wording + update `_rubric.md` phantom-guard bullet | — |
+| TOOL-22. Verify `/ship` actually merged — ghost-ship bug root cause | TOOL-4 |
 
 ---
 
@@ -362,6 +363,35 @@ Completed. See git history for implementation details.
 | Update `.claude/skills/ship/SKILL.md` phantom-guard wording to "abort immediately" (not "stop and report") and note the pipeline pre-check is primary; update the matching bullet in `.claude/skills/_rubric.md` Correct section to reference `hasDeliverableCommits()` in `pipeline.ts`. | XS | — |
 
 **Why:** TOOL-20 added the pipeline-level pre-check in `pipeline.ts` but the paired wording edits to `/ship`'s SKILL.md and `_rubric.md`'s Correct-section bullet (specified in the TOOL-20 plan) were not applied during the code-review shakedown — edits were denied. Defense-in-depth + docs/code-level consistency still wants both updated.
+
+---
+
+### TOOL-22. Verify `/ship` actually merged — ghost-ship bug root cause
+
+| What | Scope | Deps |
+|------|-------|------|
+| TOOL-20 + TOOL-20b added defense-in-depth (`hasDeliverableCommits()` with three-dot diff) to block phantom cycles at the guard level. But cycles still ghost-ship when there's a `wip: autopilot implementation checkpoint` commit on a non-plan file — the guard thinks real work happened, `/ship` runs 12+ turns, returns `ok:true`, and the log reports `completed:true` **even though main's HEAD never advances**. The underlying bug: the ship step's `ok` signal reflects SDK completion, not whether the merge actually landed. Instrument the call site with a post-condition that verifies main moved, and fail the cycle if it didn't. | S | TOOL-4 |
+
+**Evidence (2026-04-18 TOOL-7 fresh cycle):**
+- Full pipeline ran, all steps reported `ok:true`, `completed:true` in log
+- Worktree ended with `3cf094d wip: autopilot implementation checkpoint` + plan commit
+- `git log main..<ship-time>` shows **no TOOL-7 merge commit on main**
+- Ship step cost $0.16, turns=12 — agent "ran" but didn't actually merge
+- `hasDeliverableCommits()` correctly returned true (CLAUDE.md was in the diff via the checkpoint), so the guard was not at fault
+
+**Deliverables:**
+- Capture `main` sha before invoking `/ship` in `pipeline.ts` (at the existing ship call site)
+- After `/ship` returns with `ok:true`, verify at least one of:
+  - `main`'s sha changed (new commit on main)
+  - OR the feat branch tip before ship is now an ancestor of `main` (fast-forward case)
+- If neither holds, override `ok` → `false`, set `error: "ship claimed success but main did not advance"`, log the ship step's output tail for diagnosis, and fall through to `/shipwreck` recovery
+- Regression test in `pipeline.test.ts`: mock ship step returning `ok:true` with no git side effects, assert the cycle ends with `completed:false` and the diagnostic error message
+- Separately, diagnose WHY `/ship` returns ok without merging — read TOOL-7's ship step output from the log (if captured) or re-run with trace. Root cause report in the commit message. Candidates: (a) `/ship` skill prompt doesn't actually require the merge before reporting success, (b) the mark-done commit on the feat branch satisfies the step's success criteria without requiring a merge to main, (c) ship is silently short-circuiting on some state it doesn't recognize
+
+**Out of scope:**
+- Tightening `/ship`'s SKILL.md prompt — chart as TOOL-23 if the root cause analysis shows the skill body is at fault
+- Handling PR-mode ship (where main doesn't advance by design) — the verification should only fire in direct-push mode
+- Retrying TOOL-7 and TOOL-21 — separate work after this fix lands
 
 ---
 

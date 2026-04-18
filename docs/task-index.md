@@ -25,6 +25,7 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 | TOOL-18 | Public-npm publish hardening | TOOL-13 | — | core |
 | TOOL-19 | `orchestrate()` test coverage — resume, parallel, park-and-resume | — | — | core |
 | TOOL-21 | Tighten `/ship` phantom-guard wording + update `_rubric.md` phantom-guard bullet | — | — | core |
+| TOOL-22 | Verify `/ship` actually merged — ghost-ship bug root cause | — | — | core |
 
 ## Recently completed
 
