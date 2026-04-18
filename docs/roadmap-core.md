@@ -31,6 +31,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | TOOL-17. Pipeline pick-step test coverage (needs REPO injectability) | TOOL-4 |
 | TOOL-18. Public-npm publish hardening | TOOL-13 |
 | TOOL-19. `orchestrate()` test coverage — resume, parallel, park-and-resume | TOOL-4 |
+| TOOL-20. Fix false-success on cycles that ship nothing | TOOL-4 |
 
 ---
 
@@ -375,6 +376,26 @@ Completed. See git history for implementation details.
 **Out of scope:**
 - Real SDK integration (still mocked)
 - Signal-handler testing (`SIGINT` cleanup)
+
+---
+
+### TOOL-20. Fix false-success on cycles that ship nothing
+
+| What | Scope | Deps |
+|------|-------|------|
+| The TOOL-7 autopilot cycle on 2026-04-18 reported `"completed": true, "verdict": "APPROVE"` and ship `ok: true`, burning $2.51 — but the `feat/tool-7-rubric-idioms-review-docs` branch had only the plan commit. No implementation, no rubric edits, no merge to main. The cycle log lied, and the roadmap is only right by accident because /ship never marked the item done. Add a guardrail so a cycle cannot report `completed: true` unless the branch actually merged (or at minimum produced deliverable commits beyond the plan). | S | TOOL-4 |
+
+**Deliverables:**
+- Reproduce via a pipeline integration test (possible now that TOOL-4 landed): simulate a step that returns `ok: true` without committing anything, assert that orchestrate/ship refuses to mark the cycle completed
+- Diagnose which step(s) falsely returned `ok: true` for the TOOL-7 cycle — read the `de5cd21` worktree state, cross-reference step output, and document the root cause in the commit message. Candidate hypotheses: (a) implement step returns ok when no files changed, (b) shakedown-code APPROVE despite no new commits, (c) ship step's merge is a silent no-op on empty branches, (d) step-runner's `ok` signal doesn't require observable git progress
+- Fix: add a post-condition to the ship step — if `git rev-list --count main..HEAD` on the feat branch equals zero or equals one (plan-only), fail the ship step with a clear error; cycle is marked `completed: false` with a diagnostic message
+- Regression test in `pipeline.test.ts` covering the fixed path
+- Update `/ship` skill body to require verifying the branch has deliverable commits before declaring success
+
+**Out of scope:**
+- Cleaning up the TOOL-7 ghost worktree — user decision, separate from the bug fix
+- Retrying TOOL-7's actual work — handled separately via `--resume TOOL-7`
+- Refunding the $2.51 spent on the false-success cycle — gone
 
 ---
 
