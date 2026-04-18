@@ -13,7 +13,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | Item | Depends on |
 |------|-----------|
 | ~~TOOL-1. Consistency check: task-index ↔ roadmap drift~~ | **Done** — Consistency check script + pnpm check:roadmap added (2026-04-18) |
-| TOOL-2. Dep graph visualization from roadmap files | — |
+| ~~TOOL-2. Dep graph visualization from roadmap files~~ | **Done** — Mermaid dep graph script + pnpm graph:roadmap added (2026-04-18) |
 | ~~TOOL-3. Scope suggestion in /charter from description~~ | **Done** — Keyword heuristics for XS/S/M/L/XL scope inference added to /charter (2026-04-18) |
 | ~~TOOL-4. pipeline.ts integration tests via SDK query mock~~ | **Done** — Pipeline integration tests + mock SDK query infrastructure added (2026-04-17) |
 | ~~TOOL-5. Skill body linter (frontmatter validity, rubric references)~~ | **Done** — Skill body linter added, validates frontmatter + includes (2026-04-18) |
@@ -51,22 +51,9 @@ Completed. See git history for implementation details.
 
 ---
 
-### TOOL-2. Dep graph visualization from roadmap files
+### TOOL-2. Dep graph visualization from roadmap files ✓
 
-| What | Scope | Deps |
-|------|-------|------|
-| Parse `Depends on` columns across all roadmaps and emit a Mermaid flowchart that can be dropped into docs. | S | — |
-
-**Deliverables:**
-- `scripts/roadmap-graph.ts` — walks all `docs/roadmap-*.md`, builds a dep graph, emits Mermaid `flowchart LR` syntax to stdout
-- `pnpm graph:roadmap` script that writes the output to `docs/dep-graph.md`
-- Distinguishes open (box) vs blocked (rounded) vs completed (dashed) items
-- Fails cleanly if a dep references an unknown ID
-
-**Out of scope:**
-- Interactive graph (Mermaid is enough)
-- Priority-weighted layout
-- Cross-repo deps (one repo at a time)
+Completed. See git history for implementation details.
 
 ---
 

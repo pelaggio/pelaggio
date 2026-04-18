@@ -10,7 +10,6 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 
 | ID | Title | Deps | Plan | Roadmap |
 |----|-------|------|------|---------|
-| TOOL-2 | Dep graph visualization from roadmap files | — | — | core |
 | TOOL-15 | LinearRoadmap adapter | TOOL-9 | — | core |
 | TOOL-18 | Public-npm publish hardening | — | — | core |
 | TOOL-28 | `worktree-deps` bin subcommand (consumer-friendly path) | — | — | core |
@@ -20,6 +19,7 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 ## Recently completed
 
 - TOOL-1 ✓
+- TOOL-2 ✓
 - TOOL-3 ✓
 - TOOL-4 ✓
 - TOOL-5 ✓
