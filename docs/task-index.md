@@ -11,6 +11,7 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 | ID | Title | Deps | Plan | Roadmap |
 |----|-------|------|------|---------|
 | TOOL-31 | Rewire skill bodies through RoadmapSource | TOOL-10, TOOL-15 | — | core |
+| TOOL-33 | GitHub Issues bug → autopilot PR POC (no-worktree + CI workflow, dogfooded) | — | — | core |
 
 ## Recently completed
 
