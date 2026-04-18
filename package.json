@@ -17,6 +17,7 @@
   "scripts": {
     "autopilot": "tsx scripts/autopilot.ts",
     "check:roadmap": "tsx scripts/check-roadmap.ts",
+    "graph:roadmap": "tsx scripts/roadmap-graph.ts",
     "test": "tsx --test scripts/autopilot/__tests__/*.test.ts",
     "check": "biome check scripts/",
     "check:skills": "tsx scripts/autopilot/check-skills.ts",

@@ -108,6 +108,7 @@ pnpm autopilot --cycles 3 --parallel 2 --verbose          # parallel cycles (aut
 pnpm autopilot --item A-1,A-2,A-3 --parallel 2 --verbose  # targeted multi-item batch (cycles auto-sized to list length)
 pnpm autopilot --resume INFRA-1                           # resume a parked/failed cycle
 pnpm check:roadmap                                        # verify task-index ↔ roadmap consistency (--fix adds missing index rows)
+pnpm graph:roadmap                                        # regenerate docs/dep-graph.md (Mermaid) from roadmap-*.md; --stdout to pipe
 npx tsx --test scripts/autopilot/__tests__/*.test.ts      # run unit tests
 npx claude-autopilot sync --dry-run                       # preview skill-upgrade plan (consumer-side CLI)
 ```
