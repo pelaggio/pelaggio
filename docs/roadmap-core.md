@@ -24,7 +24,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | TOOL-10. GitHubIssuesRoadmap adapter via gh CLI | TOOL-9 |
 | ~~TOOL-11. ShipTarget abstraction + 3 adapters~~ | **Done** — ShipTarget abstraction + 3 adapters added (2026-04-17) |
 | ~~TOOL-12. Running totals — tokens + quality signals + stats dashboard~~ | **Done** — Stats command + token/quality tracking added (2026-04-17) |
-| TOOL-13. Package shape + git-dep consumption + `init` CLI | TOOL-11 |
+| ~~TOOL-13. Package shape + git-dep consumption + `init` CLI~~ | **Done** — Package shape, init CLI, and library exports added (2026-04-18) |
 | TOOL-14. `sync` CLI — upgrade installed skills with diff prompts | TOOL-13 |
 | TOOL-15. LinearRoadmap adapter | TOOL-9 |
 | TOOL-16. Split /refit → /bump-models + self-hosted Renovate | — |
@@ -204,26 +204,9 @@ Completed. See git history for implementation details.
 
 ---
 
-### TOOL-13. Package shape + git-dep consumption + `init` CLI
+### TOOL-13. Package shape + git-dep consumption + `init` CLI ✓
 
-| What | Scope | Deps |
-|------|-------|------|
-| Shape `@cdhorne/claude-autopilot` as a consumable package — correct `bin`, `exports`, `main` fields; library exports for programmatic use; an `init` CLI that scaffolds `.claude/skills/`, `.autopilot.yml`, and example `docs/roadmap-*.md` in consumer projects. Fathom and subsequent early consumers install via **git dep** (`"@cdhorne/claude-autopilot": "github:cdhorne/claude-autopilot#<sha>"`) — repo stays private, no npm publish. Public-npm publishing is deferred to TOOL-18 until there's a second or third external consumer. | L | TOOL-8, TOOL-11 |
-
-**Deliverables:**
-- `package.json` with `name: @cdhorne/claude-autopilot`, correct `bin`, `exports`, `main` fields (no `files` allowlist yet — that's a TOOL-18 concern, since git-dep clones the whole repo)
-- `bin/claude-autopilot.js` — CLI entry point with subcommands: `init`, `sync`, `run`, `stats`
-- `init` subcommand: copies `.claude/skills/` templates into consuming project (non-destructive — skip if files exist unless `--force`), creates stub `.autopilot.yml`, wires `pnpm autopilot` script in consuming project's package.json
-- Library exports: `run(options)`, `loadConfig()`, individual pipeline functions for programmatic use
-- README updated with **git-dep install instructions** (`pnpm add github:cdhorne/claude-autopilot#<sha>`) plus a one-line note pointing at TOOL-18 for public-npm plans
-- End-to-end smoke test: install this package into fathom as a git dep, run `npx claude-autopilot init`, and verify the scaffolded state is usable
-
-**Out of scope:**
-- npm publish / registry presence — deferred to TOOL-18
-- Sync command (TOOL-14)
-- Semver stability — consumers pin by SHA until publish
-- `.npmignore` / `files` allowlist — not load-bearing for git-dep
-
+Completed. See git history for implementation details.
 ---
 
 ### TOOL-14. `sync` CLI — upgrade installed skills with diff prompts
