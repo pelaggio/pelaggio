@@ -30,6 +30,10 @@ ship:
   target: direct-push           # default: direct-push
                                 # values: direct-push | pull-request | auto-merge-pr
 
+roadmap:
+  source: markdown              # default: markdown
+                                # values: markdown (TOOL-10/15 will extend this)
+
 budgets:                        # dollars per step (safety-net caps)
   pick: 2
   plan: 8
@@ -108,6 +112,16 @@ In PR modes the worktree, local branch, and post-merge doc updates
 (task-index, roadmap "Recently completed", plan archive) are intentionally
 **not** touched in-session — those land after the PR merges externally.
 Automating the post-merge side is planned for TOOL-10 / TOOL-15.
+
+## Roadmap source
+
+`roadmap.source` selects the backend that drives `/pick`, plan lookup, and
+scope heuristics. Today only `markdown` is implemented — it reads
+`docs/roadmap-*.md` + `docs/task-index.md`. TOOL-10 (`github-issues`) and
+TOOL-15 (`linear`) will widen this union. Invalid values fail loudly at
+startup. The `roadmap.*` subtree is otherwise reserved: other keys under it
+(e.g. `roadmap.github.label`) are silently ignored today so adapters can
+extend the schema without breaking older configs.
 
 ## Unknown keys
 

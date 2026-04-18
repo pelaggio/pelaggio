@@ -128,6 +128,27 @@ describe("loadConfig — unknown keys", () => {
 	});
 });
 
+describe("loadConfig — roadmap.source", () => {
+	it("defaults to 'markdown' when unset", () => {
+		const repo = tmpRepo();
+		const cfg = loadConfig({ repo, configPath: join(repo, ".autopilot.yml") });
+		assert.equal(cfg.roadmapSource, "markdown");
+	});
+
+	it("accepts explicit 'markdown'", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "roadmap:\n  source: markdown\n");
+		const cfg = loadConfig({ repo, configPath: path });
+		assert.equal(cfg.roadmapSource, "markdown");
+	});
+
+	it("throws on unknown roadmap.source value", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "roadmap:\n  source: gh-issues\n");
+		assert.throws(() => loadConfig({ repo, configPath: path }), /roadmap\.source.*markdown/);
+	});
+});
+
 describe("resolveRepo", () => {
 	const REPO_ENV = "CLAUDE_AUTOPILOT_REPO";
 	let savedRepoEnv: string | undefined;

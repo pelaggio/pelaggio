@@ -2,6 +2,7 @@ import { execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
+import { ROADMAP_SOURCE_NAMES, type RoadmapSourceName } from "./roadmap/types.js";
 import type { ShipTargetName } from "./types.js";
 
 const SHIP_TARGET_NAMES: readonly ShipTargetName[] = ["direct-push", "pull-request", "auto-merge-pr"];
@@ -54,6 +55,7 @@ export interface ResolvedConfig {
 	effort: Record<Step, Effort>;
 	modelProfiles: Record<string, Partial<Record<Step, string>>>;
 	shipTarget: ShipTargetName;
+	roadmapSource: RoadmapSourceName;
 }
 
 export const DEFAULTS = {
@@ -213,7 +215,23 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		}
 	}
 
-	return { repo, worktreePrefix, budgets, turnLimits, effort, modelProfiles, shipTarget };
+	// roadmap.source: default "markdown"; validate against ROADMAP_SOURCE_NAMES
+	let roadmapSource: RoadmapSourceName = "markdown";
+	const roadmapBlock = yml.roadmap;
+	if (roadmapBlock !== undefined) {
+		if (!isPlainObject(roadmapBlock)) {
+			throw new Error(`${configPath}: expected \`roadmap\` to be a map`);
+		}
+		const s = roadmapBlock.source;
+		if (s !== undefined) {
+			if (!isString(s) || !(ROADMAP_SOURCE_NAMES as readonly string[]).includes(s)) {
+				throw new Error(`${configPath}: expected \`roadmap.source\` to be one of ${ROADMAP_SOURCE_NAMES.join("|")}, got ${JSON.stringify(s)}`);
+			}
+			roadmapSource = s as RoadmapSourceName;
+		}
+	}
+
+	return { repo, worktreePrefix, budgets, turnLimits, effort, modelProfiles, shipTarget, roadmapSource };
 }
 
 // ── Resolved exports (populated at import time) ────────────────────────
@@ -226,3 +244,4 @@ export const TURN_LIMITS: Record<Step, number> = CONFIG.turnLimits;
 export const EFFORT: Record<Step, Effort> = CONFIG.effort;
 export const MODEL_PROFILES: Record<string, Partial<Record<Step, string>>> = CONFIG.modelProfiles;
 export const SHIP_TARGET: ShipTargetName = CONFIG.shipTarget;
+export const ROADMAP_SOURCE: RoadmapSourceName = CONFIG.roadmapSource;

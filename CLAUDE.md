@@ -33,8 +33,8 @@ optional; missing file or empty file = defaults. Parsed once at startup by
 `loadConfig()` in `config.ts` — parse errors fail loudly with the file path.
 
 Live keys (consumed today): `worktree.prefix`, `budgets.*`, `turn-limits.*`,
-`effort.*`, `models.profiles.<name>.*`, `ship.target`. Unknown top-level keys
-(e.g. `project`, `docs`, `roadmap`) are silently ignored for
+`effort.*`, `models.profiles.<name>.*`, `ship.target`, `roadmap.source`.
+Unknown top-level keys (e.g. `project`, `docs`) are silently ignored for
 forward-compatibility as future TOOLs extend the schema.
 
 Precedence for worktree prefix: `CLAUDE_AUTOPILOT_WORKTREE_PREFIX` env >
@@ -69,6 +69,19 @@ Don't fold shakedown back into plan to save a cycle — the context-shape differ
 | `/tidy` | Clean up stale worktrees and archived roadmap items |
 | `/refit` | Refresh Claude model IDs + deps — scan, categorize by risk, bump in reviewed stages |
 | `sync` (CLI) | `npx claude-autopilot sync` — diff installed `.claude/skills/<name>/SKILL.md` against the package and prompt overwrite/skip/merge per file. Not a pipeline step. |
+
+## Roadmap sources
+
+The pipeline reads roadmap + task-index data through a `RoadmapSource`
+interface (`scripts/autopilot/roadmap/index.ts`). Today the only adapter is
+`MarkdownRoadmap` (parses `docs/roadmap-*.md` + `docs/task-index.md`).
+`getRoadmapSource(name, { repo })` is the factory; the resolved name comes
+from `roadmap.source` in `.autopilot.yml` (default `"markdown"`). Adding a
+new adapter (GitHub Issues, Linear) means adding a file under
+`scripts/autopilot/roadmap/`, widening the `RoadmapSourceName` union in
+`roadmap/types.ts`, and extending the factory `switch`. The `/pick` and
+`/ship` skill bodies are still markdown-aware — wiring them through the
+adapter is TOOL-10's scope.
 
 ## Non-obvious conventions
 

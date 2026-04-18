@@ -1,6 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
-import { MODEL_PROFILES, REPO, SHIP_TARGET, WORKTREE_PREFIX } from "./config.js";
+import { MODEL_PROFILES, REPO, ROADMAP_SOURCE, SHIP_TARGET, WORKTREE_PREFIX } from "./config.js";
 import {
 	appendLog as appendLogDefault,
 	captureShipState,
@@ -9,18 +9,16 @@ import {
 	detectResumeStep,
 	ensureCheckpointed,
 	expandSkill,
-	findPlanPath,
 	fmtWait,
 	hasDeliverableCommits,
-	isQuickScope,
 	listWorktrees as listWorktreesDefault,
-	parseItemId,
 	parseVerdict,
 	parseWaitFlag,
 	resolveWorktree,
 	stepIndex,
 	verifyShipLanded,
 } from "./helpers.js";
+import { getRoadmapSource, type RoadmapSource } from "./roadmap/index.js";
 import { getShipTarget, isShipTargetName, SHIP_TARGET_NAMES } from "./ship/index.js";
 import { runStep as runStepDefault } from "./step-runner.js";
 import { A, createStepRenderer, fmtElapsed, LiveStatus, StatusBar } from "./tui.js";
@@ -36,6 +34,8 @@ export interface PipelineDeps {
 	appendLog?: (entry: Record<string, unknown>) => void;
 	/** Override the main-repo path used for ghost-ship verification. Defaults to REPO. */
 	mainRepo?: string;
+	/** Roadmap source adapter. Defaults to one constructed from `ROADMAP_SOURCE` + `REPO`. */
+	roadmap?: RoadmapSource;
 }
 
 export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, flags: Flags, deps: PipelineDeps = {}): Promise<CycleResult> {
@@ -43,6 +43,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	const listWorktrees = deps.listWorktrees ?? listWorktreesDefault;
 	const appendLog = deps.appendLog ?? appendLogDefault;
 	const mainRepo = deps.mainRepo ?? REPO;
+	const roadmap = deps.roadmap ?? getRoadmapSource(ROADMAP_SOURCE, { repo: REPO });
 	let cost = 0;
 	let profile = "standard";
 	const steps: StepLog[] = [];
@@ -146,7 +147,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			const pickAll = pick.text + "\n" + pick.fullText;
 			if (!opts.dryRun && !/claimed|worktree add|successfully/i.test(pickAll)) return finish({ itemId: null, completed: false, cost, error: "nothing to pick" });
 
-			itemId = opts.dryRun ? (itemId ?? "DRY") : (parseItemId(pick.text) ?? parseItemId(pick.fullText));
+			itemId = opts.dryRun ? (itemId ?? "DRY") : (roadmap.parseItemId(pick.text) ?? roadmap.parseItemId(pick.fullText));
 			if (!itemId) return finish({ itemId: null, completed: false, cost, error: "no item ID parsed" });
 
 			worktree = resolveWorktree(itemId);
@@ -169,7 +170,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 
 	// ── Detect quick mode ──
 
-	if (pickText && isQuickScope(pickText)) {
+	if (pickText && roadmap.isQuickScope(pickText)) {
 		profile = "quick";
 		log("scope S/XS or bug — quick mode (Sonnet, skip plan+shakedown-plan)");
 		startFrom ??= "implement";
@@ -191,7 +192,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	let shakedownPlanText = "";
 
 	if (shouldRun("plan")) {
-		const existingPlan = findPlanPath(worktree!);
+		const existingPlan = await roadmap.getItemPlan({ worktree: worktree! });
 		if (existingPlan) {
 			log(`plan exists at ${existingPlan} — skipping plan generation`);
 		} else {
@@ -202,7 +203,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			cost += plan.cost;
 			if (!plan.ok) return parkExit() ?? finish({ itemId, completed: false, cost, error: "plan failed" });
 		}
-		const planPath = findPlanPath(worktree!);
+		const planPath = await roadmap.getItemPlan({ worktree: worktree! });
 		if (planPath) log(`plan: file://${planPath}`);
 	}
 
@@ -241,7 +242,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	if (shouldRun("implement")) {
 		const parked = parkExit();
 		if (parked) return parked;
-		const planPath = findPlanPath(worktree!);
+		const planPath = await roadmap.getItemPlan({ worktree: worktree! });
 		const planRef = planPath ? `Read the plan at \`${planPath}\`.` : `Find the plan in \`${resolve(REPO, ".dev", "plans")}/\` (filename matches branch without \`feat/\` prefix).`;
 		const worktreeHint = [
 			`**Your working directory is**: \`${worktree}\`.`,
@@ -345,7 +346,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	if (shouldRun("shakedown-code")) {
 		const MAX_SHAKEDOWN_ATTEMPTS = 2;
 		let shakedownOk = false;
-		const planPath = findPlanPath(worktree!);
+		const planPath = await roadmap.getItemPlan({ worktree: worktree! });
 		const shakedownPlanRef = planPath ? `Read the plan at \`${planPath}\` and the roadmap entry for ${itemId} to understand the scope.` : `Find the plan in \`${resolve(REPO, "docs", "plans")}/\` or the roadmap entry for ${itemId}.`;
 
 		for (let attempt = 1; attempt <= MAX_SHAKEDOWN_ATTEMPTS; attempt++) {
