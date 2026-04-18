@@ -17,7 +17,6 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 | TOOL-7 | Document in-context vs out-of-context review + add Idioms section to rubric | — | — | core |
 | TOOL-9 | RoadmapSource abstraction + MarkdownRoadmap adapter | — | — | core |
 | TOOL-10 | GitHubIssuesRoadmap adapter via gh CLI | TOOL-9 | — | core |
-| TOOL-11 | ShipTarget abstraction + DirectPush/PullRequest/AutoMergePR adapters | — | — | core |
 | TOOL-13 | Package shape + git-dep consumption + `init` CLI | TOOL-11 | — | core |
 | TOOL-14 | `sync` CLI — upgrade installed skills with diff prompts | TOOL-13 | — | core |
 | TOOL-15 | LinearRoadmap adapter | TOOL-9 | — | core |
@@ -32,5 +31,6 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 - TOOL-4 ✓
 - TOOL-6 ✓
 - TOOL-8 ✓
+- TOOL-11 ✓
 - TOOL-12 ✓
 - TOOL-20 ✓

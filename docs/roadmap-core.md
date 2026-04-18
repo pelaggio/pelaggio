@@ -22,7 +22,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | ~~TOOL-8. `.autopilot.yml` project config file + loader~~ | **Done** — `.autopilot.yml` config loader added (2026-04-17) |
 | TOOL-9. RoadmapSource abstraction + MarkdownRoadmap adapter | — |
 | TOOL-10. GitHubIssuesRoadmap adapter via gh CLI | TOOL-9 |
-| TOOL-11. ShipTarget abstraction + 3 adapters | — |
+| ~~TOOL-11. ShipTarget abstraction + 3 adapters~~ | **Done** — ShipTarget abstraction + 3 adapters added (2026-04-17) |
 | ~~TOOL-12. Running totals — tokens + quality signals + stats dashboard~~ | **Done** — Stats command + token/quality tracking added (2026-04-17) |
 | TOOL-13. Package shape + git-dep consumption + `init` CLI | TOOL-11 |
 | TOOL-14. `sync` CLI — upgrade installed skills with diff prompts | TOOL-13 |
@@ -192,24 +192,9 @@ Completed. See git history for implementation details.
 
 ---
 
-### TOOL-11. ShipTarget abstraction + DirectPush/PullRequest/AutoMergePR adapters
+### TOOL-11. ShipTarget abstraction + DirectPush/PullRequest/AutoMergePR adapters ✓
 
-| What | Scope | Deps |
-|------|-------|------|
-| Define `ShipTarget` interface with `ship(branch, metadata) → ShipResult`. Factor `/ship` skill's merge/push logic into three adapters: `DirectPush` (current default: merge locally, push main), `PullRequest` (push branch, create PR via `gh pr create`, stop), `AutoMergePR` (push branch, create PR with auto-merge enabled). Pipeline reads `ship.target` from config. | M | TOOL-4, TOOL-8 |
-
-**Deliverables:**
-- `scripts/autopilot/ship/index.ts` — interface + factory
-- `scripts/autopilot/ship/direct-push.ts` — wraps current `/ship` merge+push flow
-- `scripts/autopilot/ship/pull-request.ts` — push + `gh pr create` + stop
-- `scripts/autopilot/ship/auto-merge-pr.ts` — push + PR + `gh pr merge --auto`
-- Refactor `/ship` skill to delegate to the configured target
-- Merge conflict handling stays adapter-local (each target knows how to resolve its own)
-- Integration tests for all three targets
-
-**Out of scope:**
-- Multi-target ship (pick one per repo, not mix-and-match)
-- Custom conflict resolution strategies beyond the built-ins
+Completed. See git history for implementation details.
 
 ---
 
