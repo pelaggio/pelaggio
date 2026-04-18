@@ -11,7 +11,6 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 | ID | Title | Deps | Plan | Roadmap |
 |----|-------|------|------|---------|
 | TOOL-31 | Rewire skill bodies through RoadmapSource | TOOL-10, TOOL-15 | — | core |
-| TOOL-32 | `consumer: false` frontmatter flag — sync skips maintainer-only skills | — | — | core |
 
 ## Recently completed
 
@@ -45,4 +44,5 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 - TOOL-28 ✓
 - TOOL-30 ✓
 - TOOL-29 ✓
+- TOOL-32 ✓
 
