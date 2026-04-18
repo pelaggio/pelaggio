@@ -36,7 +36,7 @@ Reviews have diminishing returns; actual code surfaces real edge cases faster th
 
 ## Output format
 
-End the review with a single verdict line that `scripts/autopilot/helpers.ts:parseVerdict` can match:
+End the review with a single verdict line that the pipeline's verdict parser can match:
 
 ```
 Verdict: APPROVE
