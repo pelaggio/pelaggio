@@ -26,7 +26,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | ~~TOOL-12. Running totals — tokens + quality signals + stats dashboard~~ | **Done** — Stats command + token/quality tracking added (2026-04-17) |
 | ~~TOOL-13. Package shape + git-dep consumption + `init` CLI~~ | **Done** — Package shape, init CLI, and library exports added (2026-04-18) |
 | ~~TOOL-14. `sync` CLI — upgrade installed skills with diff prompts~~ | **Done** — sync CLI for skill upgrade with diff prompts added (2026-04-18) |
-| TOOL-15. LinearRoadmap adapter | TOOL-9 |
+| ~~TOOL-15. LinearRoadmap adapter~~ | **Done** — LinearRoadmap adapter via @linear/sdk added (2026-04-18) |
 | ~~TOOL-16. Split /refit → /bump-models + self-hosted Renovate~~ | **Done** — /refit replaced with /bump-models; Renovate + CI self-hosted workflows added (2026-04-18) |
 | ~~TOOL-17. Pipeline pick-step test coverage (needs REPO injectability)~~ | **Done** — resolveWorktree injection seam + pick-step test coverage added (2026-04-18) |
 | ~~TOOL-18. Public-npm publish hardening~~ | **Done** — npm publish hardening: files allowlist, secret scanner, publish workflow added (2026-04-18) |
@@ -40,7 +40,8 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | ~~TOOL-28. `worktree-deps` bin subcommand (consumer-friendly path)~~ | **Done** — exposed as `npx claude-autopilot worktree-deps` bin subcommand; pick/SKILL.md updated (2026-04-18) |
 | ~~TOOL-29. Broaden `Bash(npx tsx:*)` → `Bash(npx:*)` in shakedown + ship~~ | **Done** — Broadened npx allowlist from tsx:* to npx:* in pick, shakedown, ship, shipwreck skills (2026-04-18) |
 | ~~TOOL-30. Drop vendored script paths from skill prose~~ | **Done** — Removed stale `parseVerdict` path references from _review-logic.md and shakedown/SKILL.md (2026-04-18) |
-| TOOL-31. `consumer: false` frontmatter flag — sync skips maintainer-only skills | — |
+| TOOL-31. Rewire skill bodies through `RoadmapSource` (github-issues + linear) | TOOL-10, TOOL-15 |
+| TOOL-32. `consumer: false` frontmatter flag — sync skips maintainer-only skills | — |
 
 ---
 
@@ -129,21 +130,9 @@ Completed. See git history for implementation details.
 
 ---
 
-### TOOL-15. LinearRoadmap adapter
+### TOOL-15. LinearRoadmap adapter ✓
 
-| What | Scope | Deps |
-|------|-------|------|
-| Implement `RoadmapSource` backed by Linear. Lower priority than TOOL-10 — defer until actually using Linear. | M | TOOL-9 |
-
-**Deliverables:**
-- `scripts/autopilot/roadmap/linear.ts` — adapter implementing `RoadmapSource`
-- Uses Linear GraphQL API via `@linear/sdk`
-- Config: `roadmap.source: linear`, `roadmap.linear.{workspace-id,team-id,label}`
-- API key handling via `LINEAR_API_KEY` env var (never committed)
-- `listOpenItems`, `claimItem`, `markDone`, `getItemPlan` symmetrical to GitHub adapter
-
-**Out of scope:**
-- Same as TOOL-10 — single workspace per instance
+Completed. See git history for implementation details.
 
 ---
 
@@ -254,7 +243,24 @@ Completed. See git history for implementation details.
 
 ---
 
-### TOOL-31. `consumer: false` frontmatter flag — sync skips maintainer-only skills
+### TOOL-31. Rewire skill bodies through `RoadmapSource` (github-issues + linear)
+
+| What | Scope | Deps |
+|------|-------|------|
+| Both `GitHubIssuesRoadmap` (TOOL-10) and `LinearRoadmap` (TOOL-15) ship as "adapter-only" — the factory and config are wired, but `/pick`, `/plan`, `/ship`, `/charter`, `/status`, `/pickup`, `/shakedown`, and `/tidy` still read markdown directly. Set `roadmap.source: github-issues` or `linear` today and no end-to-end cycle runs. This ticket threads the `RoadmapSource` interface through each skill body so all three adapters reach parity. | L | TOOL-10, TOOL-15 |
+
+**Deliverables:**
+- Replace markdown-file reads in the skill bodies with `RoadmapSource` calls (`listOpenItems`, `claimItem`, `markDone`, `getItemPlan`, `parseItemId`, `isQuickScope`).
+- Keep `MarkdownRoadmap` as the default; no behavior change for consumers not opting in.
+- End-to-end smoke test against `github-issues` (fathom) and `linear` (pick a workspace) once wired.
+- Remove the "adapter-only" caveat blocks from `docs/config.md` when shipped.
+
+**Out of scope:**
+- New adapters. This is a wiring-only ticket.
+
+---
+
+### TOOL-32. `consumer: false` frontmatter flag — sync skips maintainer-only skills
 
 | What | Scope | Deps |
 |------|-------|------|

@@ -36,6 +36,7 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.113",
+    "@linear/sdk": "^50.1.1",
     "diff": "^7.0.0",
     "tsx": "^4.19.0",
     "yaml": "^2.8.3"

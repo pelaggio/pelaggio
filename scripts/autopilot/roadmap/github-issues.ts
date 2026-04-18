@@ -2,7 +2,7 @@ import { execSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { WORKTREE_PREFIX } from "../config.js";
-import type { GhPlanLocation, GithubRoadmapConfig, MarkDoneContext, RoadmapItem, RoadmapSource, RoadmapSourceName } from "./types.js";
+import type { GithubRoadmapConfig, MarkDoneContext, PlanLocation, RoadmapItem, RoadmapSource, RoadmapSourceName } from "./types.js";
 
 const PLAN_MARKER = "<!-- autopilot-plan -->";
 
@@ -35,7 +35,7 @@ export class GitHubIssuesRoadmap implements RoadmapSource {
 	private readonly repo: string;
 	private readonly ghRepo: string;
 	private readonly label: string;
-	private readonly planLocation: GhPlanLocation;
+	private readonly planLocation: PlanLocation;
 	private readonly ghRun: GhRunner;
 
 	constructor(opts: GitHubIssuesRoadmapOpts) {

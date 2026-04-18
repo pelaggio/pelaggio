@@ -188,6 +188,38 @@ describe("loadConfig — roadmap.github", () => {
 	});
 });
 
+describe("loadConfig — roadmap.linear", () => {
+	it("defaults linear block to {teamId:'', label:'', planLocation:'issue-comment'}", () => {
+		const repo = tmpRepo();
+		const cfg = loadConfig({ repo, configPath: join(repo, ".autopilot.yml") });
+		assert.equal(cfg.roadmapLinear.teamId, "");
+		assert.equal(cfg.roadmapLinear.label, "");
+		assert.equal(cfg.roadmapLinear.planLocation, "issue-comment");
+	});
+
+	it("parses roadmap.linear.{team,label,plan-location} overrides", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, ["roadmap:", "  source: linear", "  linear:", "    team: ENG", "    label: autopilot", "    plan-location: issue-comment", ""].join("\n"));
+		const cfg = loadConfig({ repo, configPath: path });
+		assert.equal(cfg.roadmapSource, "linear");
+		assert.equal(cfg.roadmapLinear.teamId, "ENG");
+		assert.equal(cfg.roadmapLinear.label, "autopilot");
+		assert.equal(cfg.roadmapLinear.planLocation, "issue-comment");
+	});
+
+	it("throws when roadmap.source=linear and roadmap.linear.team is missing", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "roadmap:\n  source: linear\n");
+		assert.throws(() => loadConfig({ repo, configPath: path }), /roadmap\.linear\.team.*required/);
+	});
+
+	it("throws on invalid linear plan-location", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, ["roadmap:", "  source: linear", "  linear:", "    team: ENG", "    plan-location: wiki", ""].join("\n"));
+		assert.throws(() => loadConfig({ repo, configPath: path }), /plan-location.*issue-comment\|pr-description/);
+	});
+});
+
 describe("resolveRepo", () => {
 	const REPO_ENV = "CLAUDE_AUTOPILOT_REPO";
 	let savedRepoEnv: string | undefined;

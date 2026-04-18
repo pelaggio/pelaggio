@@ -32,11 +32,15 @@ ship:
 
 roadmap:
   source: markdown              # default: markdown
-                                # values: markdown | github-issues
+                                # values: markdown | github-issues | linear
   # github:                     # only consulted when source is github-issues
   #   repo: acme/widgets        # required when source=github-issues (owner/repo)
   #   label: autopilot          # default: autopilot
   #   plan-location: issue-comment  # default: issue-comment | pr-description
+  # linear:                     # only consulted when source is linear
+  #   team: <team-uuid>         # required when source=linear (Linear team UUID)
+  #   label: autopilot          # default: "" (no label filter)
+  #   plan-location: issue-comment  # default: issue-comment (pr-description reserved)
 
 budgets:                        # dollars per step (safety-net caps)
   pick: 2
@@ -126,6 +130,7 @@ scope heuristics. Invalid values fail loudly at startup.
 |-----------------|--------------|----------------------------------------------------|
 | `markdown`      | ready        | `docs/roadmap-*.md` + `docs/task-index.md`         |
 | `github-issues` | adapter-only | GitHub Issues via the `gh` CLI (see caveat below)  |
+| `linear`        | adapter-only | Linear via `@linear/sdk` (see caveat below)        |
 
 ### `github-issues` — adapter-only in TOOL-10
 
@@ -169,6 +174,46 @@ then the most recent issue comment whose body begins with the
 `<!-- autopilot-plan -->` marker. Comment-sourced plans are materialized to
 `.dev/plans/<n>.md` (scratch, typically `.gitignore`'d), **not**
 `docs/plans/` — that directory remains `/plan`'s canonical committed output.
+
+### `linear` — adapter-only in TOOL-15
+
+The `LinearRoadmap` adapter lands with the same caveat as `github-issues`:
+**setting `roadmap.source: linear` today will not produce a working end-to-end
+cycle** because `/pick`, `/plan`, `/ship`, `/charter`, `/status`, `/pickup`,
+`/shakedown`, and `/tidy` still read markdown directly. Rewiring the skill
+bodies through the `RoadmapSource` interface is a shared follow-up across
+both remote adapters. The adapter is exercisable inline (e.g. a TS script
+that instantiates `LinearRoadmap` directly) and fully unit-tested against an
+in-memory stub `LinearApi` — zero network in CI.
+
+### `roadmap.linear.*`
+
+Consumed only when `roadmap.source` is `linear`:
+
+| Key                            | Default          | Meaning                                                                 |
+|--------------------------------|------------------|-------------------------------------------------------------------------|
+| `roadmap.linear.team`          | *(required)*     | Linear team UUID. Missing value fails at startup.                       |
+| `roadmap.linear.label`         | `""`             | Label filter for `listOpenItems`. Empty string = no filter.             |
+| `roadmap.linear.plan-location` | `issue-comment`  | Where plan bodies live. `pr-description` is reserved; not implemented.  |
+
+`LINEAR_API_KEY` is read from the environment on first adapter call. Missing
+or unauthorized keys surface a clear diagnostic — never logged, never stored
+in config. Linear API keys are scoped to a single workspace, so there is no
+`workspace-id` field.
+
+Item IDs are Linear issue identifiers (`ENG-42`). Branches follow
+`feat/<team>-<n>[-slug]` lower-cased (e.g. `feat/eng-42-fix-thing`).
+Worktrees follow the same `${WORKTREE_PREFIX}${id.toLowerCase()}` convention
+as the markdown and github adapters so `--resume ENG-42` lookups work
+identically (dashes in directory names are filesystem-safe on every target
+OS).
+
+Plan bodies resolve in two stages: a local-disk lookup
+(`docs/plans/<team>-<n>-*.md`, then `.dev/plans/<team>-<n>.md`) followed by
+the most recent issue comment whose body begins with
+`<!-- autopilot-plan -->`. Comment-sourced plans materialize to
+`.dev/plans/<team>-<n>.md` in the worktree — **not** `docs/plans/`, which
+remains `/plan`'s canonical committed output.
 
 ## Unknown keys
 
