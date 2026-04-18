@@ -1,6 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
-import { MODEL_PROFILES, REPO } from "./config.js";
+import { MODEL_PROFILES, REPO, WORKTREE_PREFIX } from "./config.js";
 import {
 	appendLog as appendLogDefault,
 	checkpoint,
@@ -18,7 +18,6 @@ import {
 	parseWaitFlag,
 	resolveWorktree,
 	stepIndex,
-	WORKTREE_PREFIX,
 } from "./helpers.js";
 import { runStep as runStepDefault } from "./step-runner.js";
 import { A, createStepRenderer, fmtElapsed, LiveStatus, StatusBar } from "./tui.js";

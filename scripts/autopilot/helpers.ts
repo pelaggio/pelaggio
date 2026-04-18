@@ -1,11 +1,8 @@
 import { execSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
-import { basename, resolve } from "node:path";
-import { LOG_PATH, REPO, STEPS } from "./config.js";
+import { resolve } from "node:path";
+import { LOG_PATH, REPO, STEPS, WORKTREE_PREFIX } from "./config.js";
 import type { Mutex, Step } from "./types.js";
-
-/** Worktree prefix derived from the repo's directory name (e.g. `claude-autopilot-`). Override via CLAUDE_AUTOPILOT_WORKTREE_PREFIX env var if needed. */
-const WORKTREE_PREFIX = process.env.CLAUDE_AUTOPILOT_WORKTREE_PREFIX ?? `${basename(REPO)}-`;
 
 // ── Skill loading ──────────────────────────────────────────────────────
 
@@ -38,9 +35,6 @@ export function parseItemId(text: string): string | null {
 export function resolveWorktree(itemId: string): string {
 	return resolve(REPO, "..", `${WORKTREE_PREFIX}${itemId.toLowerCase()}`);
 }
-
-/** Exported so pipeline.ts can match newly-created worktrees by prefix. */
-export { WORKTREE_PREFIX };
 
 export function listWorktrees(): string[] {
 	return execSync("git worktree list --porcelain", { cwd: REPO, encoding: "utf-8" })

@@ -19,6 +19,7 @@
     "@biomejs/biome": "^2.4.12",
     "lefthook": "^2.1.6",
     "tsx": "^4.19.0",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "yaml": "^2.8.3"
   }
 }

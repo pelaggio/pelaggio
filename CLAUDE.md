@@ -25,6 +25,25 @@ N/A — no persistent data. State is the git working tree + `.dev/autopilot-log.
 - **No hardcoded model strings**: all model names live in `MODEL_PROFILES` in `config.ts`. No other file references `claude-opus-*` or `claude-sonnet-*` literals.
 - **Phantom ship guard**: `pipeline.ts` calls `hasDeliverableCommits()` before invoking `ship` — cycles whose branch only touches `docs/plans/` (i.e. only the `/plan` artifact with no implementation) are flagged `completed: false` with a "nothing to ship" error, and ship is never invoked. Doc-only work outside `docs/plans/` (rubric, skill bodies, README, roadmap edits) is still deliverable. The identical guard inside `/ship`'s SKILL.md is defense in depth for inline (non-pipeline) use.
 
+## Configuration
+
+Optional `.autopilot.yml` at the repo root overrides defaults. All keys are
+optional; missing file or empty file = defaults. Parsed once at startup by
+`loadConfig()` in `config.ts` — parse errors fail loudly with the file path.
+
+Live keys (consumed today): `worktree.prefix`, `budgets.*`, `turn-limits.*`,
+`effort.*`, `models.profiles.<name>.*`. Unknown top-level keys (e.g.
+`project`, `docs`, `roadmap`, `ship`) are silently ignored for
+forward-compatibility as future TOOLs extend the schema.
+
+Precedence for worktree prefix: `CLAUDE_AUTOPILOT_WORKTREE_PREFIX` env >
+`worktree.prefix` in yml > `${basename(REPO)}-`. The env var is the
+pre-existing escape hatch and still wins.
+
+See `docs/config.md` for the annotated schema. The `.autopilot.yml` file is
+intentionally **not** checked into this repo — defaults live in `DEFAULTS`
+inside `config.ts` and the example lives in the doc.
+
 ## Pipeline steps (the nautical vocabulary)
 
 | Skill | Role |
