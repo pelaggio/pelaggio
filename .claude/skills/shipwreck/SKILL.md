@@ -3,7 +3,7 @@ name: shipwreck
 description: Recover a failed /ship attempt — diagnose state, resolve, merge, and log the failure pattern
 argument-hint: "[item-id]"
 disable-model-invocation: true
-allowed-tools: Read Edit Bash(git:*) Bash(pnpm:*) Bash(npx jest:*) Bash(npx biome:*)
+allowed-tools: Read Edit Bash(git:*) Bash(pnpm:*) Bash(npx:*)
 ---
 
 # /shipwreck — Recover a Failed Ship
