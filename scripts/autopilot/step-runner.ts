@@ -4,7 +4,7 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import { BUDGETS, EFFORT, MODEL_PROFILES, REPO, TURN_LIMITS } from "./config.js";
 import { parseResetTime } from "./helpers.js";
 import { MUTATING_TOOLS, toolBrief } from "./tui.js";
-import type { ParkSignal, Step, StepEmit, StepResult } from "./types.js";
+import type { ParkSignal, Step, StepEmit, StepResult, TokenUsage } from "./types.js";
 
 // ── Step runner ────────────────────────────────────────────────────────
 
@@ -119,6 +119,7 @@ export async function runStep(name: Step, prompt: string, opts: RunStepOpts, emi
 	let ok = true;
 	let subtype = "unknown";
 	let lastToolName = "";
+	let tokens: TokenUsage | undefined;
 
 	// Edit loop detection
 	const editCounts = new Map<string, number>();
@@ -211,6 +212,15 @@ export async function runStep(name: Step, prompt: string, opts: RunStepOpts, emi
 				resultTurns = r.num_turns ?? 0;
 				subtype = r.subtype ?? "unknown";
 				ok = subtype === "success";
+				const u = (r as { usage?: Record<string, number> }).usage;
+				if (u) {
+					tokens = {
+						input: u.input_tokens ?? 0,
+						output: u.output_tokens ?? 0,
+						cacheCreation: u.cache_creation_input_tokens ?? 0,
+						cacheRead: u.cache_read_input_tokens ?? 0,
+					};
+				}
 			}
 		}
 	} catch (err) {
@@ -245,5 +255,5 @@ export async function runStep(name: Step, prompt: string, opts: RunStepOpts, emi
 	const elapsed = Date.now() - t0;
 	emit({ type: "done", ok, subtype, cost, turns: resultTurns, elapsed });
 
-	return { ok, subtype, text, fullText, cost, turns: resultTurns };
+	return { ok, subtype, text, fullText, cost, turns: resultTurns, ...(tokens ? { tokens } : {}) };
 }

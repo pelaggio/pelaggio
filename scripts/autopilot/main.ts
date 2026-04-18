@@ -2,9 +2,11 @@
 
 import { parseArgs } from "node:util";
 import { orchestrate } from "./pipeline.js";
+import { runStatsCommand } from "./stats.js";
 import type { Flags } from "./types.js";
 
-const { values } = parseArgs({
+const { values, positionals } = parseArgs({
+	allowPositionals: true,
 	options: {
 		cycles: { type: "string", default: "1" },
 		parallel: { type: "string", default: "1" },
@@ -18,5 +20,10 @@ const { values } = parseArgs({
 		"dry-run": { type: "boolean", default: false },
 	},
 });
+
+if (positionals[0] === "stats") {
+	runStatsCommand();
+	process.exit(0);
+}
 
 orchestrate(values as Flags);

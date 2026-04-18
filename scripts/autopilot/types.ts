@@ -4,6 +4,13 @@ export type { Step };
 
 // ── Step results ───────────────────────────────────────────────────────
 
+export interface TokenUsage {
+	input: number;
+	output: number;
+	cacheCreation: number;
+	cacheRead: number;
+}
+
 export interface StepResult {
 	ok: boolean;
 	subtype: string;
@@ -12,6 +19,7 @@ export interface StepResult {
 	fullText: string;
 	cost: number;
 	turns: number;
+	tokens?: TokenUsage;
 }
 
 export interface StepLog {
@@ -20,6 +28,28 @@ export interface StepLog {
 	cost: number;
 	turns: number;
 	ok: boolean;
+	tokens?: TokenUsage;
+	/** 1-indexed attempt number; absent means 1. */
+	attempt?: number;
+	/** Verdict from shakedown-plan only. */
+	verdict?: "APPROVE" | "REVISE" | "RETHINK";
+}
+
+// ── Log entries (read from .dev/autopilot-log.jsonl) ───────────────────
+
+export interface CycleLogEntry {
+	ts: string;
+	cycle: number;
+	item: string | null;
+	quick: boolean;
+	steps: StepLog[];
+	total_cost: number;
+	verdict: string | null;
+	completed: boolean;
+	error: string | null;
+	parked?: boolean;
+	parkReason?: string | null;
+	shipwrecked?: boolean;
 }
 
 // ── Cycle / pipeline ───────────────────────────────────────────────────
