@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { describe, it } from "node:test";
-import { fmtWait, hasDeliverableCommits, parseResetTime, parseWaitFlag } from "../helpers.js";
+import { filesChangedSince, fmtWait, getHeadSha, hasDeliverableCommits, parseResetTime, parseWaitFlag } from "../helpers.js";
 
 function makeFeatRepo(): string {
 	const dir = mkdtempSync(join(tmpdir(), "autopilot-helpers-test-"));
@@ -126,6 +126,19 @@ describe("parseResetTime", () => {
 		const result = parseResetTime(msg);
 		// Should return a valid timestamp (either today or tomorrow)
 		assert.ok(result > 0, `expected positive timestamp, got ${result}`);
+	});
+});
+
+describe("filesChangedSince", () => {
+	it("returns [] when preSha is null", () => {
+		assert.deepEqual(filesChangedSince("/does/not/matter", null), []);
+	});
+
+	it("returns [] when preSha matches HEAD (no-op)", () => {
+		const dir = makeFeatRepo();
+		const head = getHeadSha(dir);
+		assert.ok(head);
+		assert.deepEqual(filesChangedSince(dir, head), []);
 	});
 });
 

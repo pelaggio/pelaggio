@@ -9,8 +9,10 @@ import {
 	detectResumeStep,
 	ensureCheckpointed,
 	expandSkill,
+	filesChangedSince,
 	findPlanPath,
 	fmtWait,
+	getHeadSha,
 	hasDeliverableCommits,
 	isQuickScope,
 	listWorktrees as listWorktreesDefault,
@@ -54,7 +56,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		console.log(`${A.dim(ts)} [${logLabel}] ${A.dim(elapsed)} ${msg}`);
 	};
 
-	async function step(name: Step, prompt: string, cwd: string, attempt = 1): Promise<StepResult> {
+	async function step(name: Step, prompt: string, cwd: string, { attempt = 1, commitLabel }: { attempt?: number; commitLabel?: string } = {}): Promise<StepResult> {
 		if (opts.dryRun) {
 			log(`[dry-run] ${name}: "${prompt.slice(0, 60)}" in ${cwd}`);
 			steps.push({ name, model: MODEL_PROFILES[profile]?.[name] ?? "default", cost: 0, turns: 0, ok: true, ...(attempt > 1 ? { attempt } : {}) });
@@ -70,6 +72,8 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			workerStatus: opts.workerStatus,
 		});
 
+		const preSha = getHeadSha(cwd);
+
 		const result = await runStep(
 			name,
 			prompt,
@@ -83,6 +87,14 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			emit,
 		);
 
+		if (commitLabel) {
+			const committed = checkpoint(cwd, commitLabel);
+			log(committed ? `${commitLabel} committed` : `no changes to commit (${commitLabel})`);
+			ensureCheckpointed(cwd, commitLabel, log);
+		}
+
+		const filesChanged = filesChangedSince(cwd, preSha);
+
 		steps.push({
 			name,
 			model: MODEL_PROFILES[profile]?.[name] ?? "default",
@@ -91,6 +103,9 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			ok: result.ok,
 			...(result.tokens ? { tokens: result.tokens } : {}),
 			...(attempt > 1 ? { attempt } : {}),
+			...(result.toolCounts ? { toolCounts: result.toolCounts } : {}),
+			...(result.outputTail ? { outputTail: result.outputTail } : {}),
+			...(filesChanged.length > 0 ? { filesChanged } : {}),
 		});
 		if (opts.workerStatus) opts.workerStatus.cost += result.cost;
 		return result;
@@ -309,15 +324,9 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 						"- If stuck after 2 attempts on the same error, skip it and move on",
 					].join("\n")
 				: continuePrompt;
-			const impl = await step("implement", attempt === 1 ? implementPrompt : retryPrompt, worktree!, attempt);
+			const cpLabel = attempt === 1 ? "implementation checkpoint" : "implementation continued";
+			const impl = await step("implement", attempt === 1 ? implementPrompt : retryPrompt, worktree!, { attempt, commitLabel: cpLabel });
 			cost += impl.cost;
-
-			if (!opts.dryRun) {
-				const cpLabel = attempt === 1 ? "implementation checkpoint" : "implementation continued";
-				const committed = checkpoint(worktree!, cpLabel);
-				log(committed ? "implementation committed" : "no changes to commit");
-				ensureCheckpointed(worktree!, cpLabel, log);
-			}
 
 			if (impl.ok) {
 				implOk = true;
@@ -370,14 +379,8 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 							"5. Re-run the verification commands before finishing.",
 						].join("\n");
 
-			const shakedown = await step("shakedown-code", shakedownPrompt, worktree!, attempt);
+			const shakedown = await step("shakedown-code", shakedownPrompt, worktree!, { attempt, commitLabel: "shakedown checkpoint" });
 			cost += shakedown.cost;
-
-			if (!opts.dryRun) {
-				const committed = checkpoint(worktree!, "shakedown checkpoint");
-				log(committed ? "shakedown committed" : "no shakedown changes to commit");
-				ensureCheckpointed(worktree!, "shakedown checkpoint", log);
-			}
 
 			if (shakedown.ok) {
 				shakedownOk = true;

@@ -117,6 +117,31 @@ export function ensureCheckpointed(cwd: string, label: string, log: (s: string) 
 	}
 }
 
+// ── Step-boundary diff ─────────────────────────────────────────────────
+
+export function getHeadSha(cwd: string): string | null {
+	try {
+		return execSync("git rev-parse HEAD", { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+	} catch {
+		return null;
+	}
+}
+
+export function filesChangedSince(cwd: string, preSha: string | null): string[] {
+	if (!preSha) return [];
+	try {
+		const out = execSync(`git diff --name-only ${preSha}..HEAD`, {
+			cwd,
+			encoding: "utf-8",
+			stdio: ["ignore", "pipe", "pipe"],
+		}).trim();
+		if (!out) return [];
+		return out.split("\n").filter(Boolean);
+	} catch {
+		return [];
+	}
+}
+
 // ── Ship pre-condition ─────────────────────────────────────────────────
 
 /**

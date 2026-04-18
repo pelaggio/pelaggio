@@ -18,11 +18,12 @@ const { values, positionals } = parseArgs({
 		"max-wait": { type: "string", default: "6h" },
 		target: { type: "string" },
 		"dry-run": { type: "boolean", default: false },
+		json: { type: "boolean", default: false },
 	},
 });
 
 if (positionals[0] === "stats") {
-	runStatsCommand();
+	runStatsCommand({ json: !!values.json });
 	process.exit(0);
 }
 

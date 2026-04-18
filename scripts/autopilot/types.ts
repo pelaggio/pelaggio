@@ -20,6 +20,8 @@ export interface StepResult {
 	cost: number;
 	turns: number;
 	tokens?: TokenUsage;
+	toolCounts?: Record<string, number>;
+	outputTail?: string;
 }
 
 export interface StepLog {
@@ -33,6 +35,9 @@ export interface StepLog {
 	attempt?: number;
 	/** Verdict from shakedown-plan only. */
 	verdict?: "APPROVE" | "REVISE" | "RETHINK";
+	toolCounts?: Record<string, number>;
+	outputTail?: string;
+	filesChanged?: string[];
 }
 
 // ── Log entries (read from .dev/autopilot-log.jsonl) ───────────────────

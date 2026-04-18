@@ -123,6 +123,7 @@ export async function runStep(name: Step, prompt: string, opts: RunStepOpts, emi
 
 	// Edit loop detection
 	const editCounts = new Map<string, number>();
+	const toolCounts = new Map<string, number>();
 	let loopFile: string | null = null;
 
 	try {
@@ -174,6 +175,8 @@ export async function runStep(name: Step, prompt: string, opts: RunStepOpts, emi
 						if (input.description) fullText += String(input.description) + "\n";
 						const brief = toolBrief(toolName, input);
 						const mutating = MUTATING_TOOLS.has(toolName);
+
+						toolCounts.set(toolName, (toolCounts.get(toolName) ?? 0) + 1);
 
 						// Track edits per file
 						if (toolName === "Edit" && input.file_path) {
@@ -260,5 +263,18 @@ export async function runStep(name: Step, prompt: string, opts: RunStepOpts, emi
 	const elapsed = Date.now() - t0;
 	emit({ type: "done", ok, subtype, cost, turns: resultTurns, elapsed });
 
-	return { ok, subtype, text, fullText, cost, turns: resultTurns, ...(tokens ? { tokens } : {}) };
+	const outputTail = text ? text.replace(/\x1b\[[0-9;]*m/g, "").slice(-200) : undefined;
+	const toolCountsObj = toolCounts.size > 0 ? Object.fromEntries(toolCounts) : undefined;
+
+	return {
+		ok,
+		subtype,
+		text,
+		fullText,
+		cost,
+		turns: resultTurns,
+		...(tokens ? { tokens } : {}),
+		...(toolCountsObj ? { toolCounts: toolCountsObj } : {}),
+		...(outputTail ? { outputTail } : {}),
+	};
 }
