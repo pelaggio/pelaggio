@@ -12,6 +12,7 @@ claude-autopilot <command> [options]
 
 Commands:
   init    Scaffold .claude/skills/, .autopilot.yml, and starter docs into this project.
+  sync    Diff and update installed .claude/skills/<name>/SKILL.md against the package.
   run     Run the pipeline (same flags as \`pnpm autopilot\`: --cycles --parallel --item …).
   stats   Print the stats dashboard from .dev/autopilot-log.jsonl.
 
@@ -20,6 +21,7 @@ See README for full options.
 
 const routes = {
 	init: ["scripts/autopilot/init.ts"],
+	sync: ["scripts/autopilot/sync.ts"],
 	run: ["scripts/autopilot.ts"],
 	stats: ["scripts/autopilot.ts", "stats"],
 };

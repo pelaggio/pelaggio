@@ -59,6 +59,7 @@ inside `config.ts` and the example lives in the doc.
 | `/status` | Where am I (current branch, plan, uncommitted, commits ahead) |
 | `/tidy` | Clean up stale worktrees and archived roadmap items |
 | `/refit` | Refresh Claude model IDs + deps — scan, categorize by risk, bump in reviewed stages |
+| `sync` (CLI) | `npx claude-autopilot sync` — diff installed `.claude/skills/<name>/SKILL.md` against the package and prompt overwrite/skip/merge per file. Not a pipeline step. |
 
 ## Non-obvious conventions
 
@@ -80,6 +81,7 @@ pnpm autopilot --item INFRA-1 --verbose                   # specific item
 pnpm autopilot --cycles 3 --parallel 2 --verbose          # parallel cycles
 pnpm autopilot --resume INFRA-1                           # resume a parked/failed cycle
 npx tsx --test scripts/autopilot/__tests__/*.test.ts      # run unit tests
+npx claude-autopilot sync --dry-run                       # preview skill-upgrade plan (consumer-side CLI)
 ```
 
 ## Bug reporter — automated fix instructions
