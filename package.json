@@ -14,9 +14,19 @@
     ".": "./scripts/autopilot/index.ts",
     "./package.json": "./package.json"
   },
+  "files": [
+    "scripts/autopilot.ts",
+    "scripts/autopilot/**",
+    ".claude/skills/**",
+    ".claude-templates/**",
+    "bin/**",
+    "!scripts/autopilot/__tests__/**",
+    "!scripts/autopilot/**/*.test.ts"
+  ],
   "scripts": {
     "autopilot": "tsx scripts/autopilot.ts",
     "check:roadmap": "tsx scripts/check-roadmap.ts",
+    "check:publish": "tsx scripts/check-publish.ts",
     "test": "tsx --test scripts/autopilot/__tests__/*.test.ts",
     "check": "biome check scripts/",
     "check:skills": "tsx scripts/autopilot/check-skills.ts",

@@ -27,6 +27,7 @@ N/A — no persistent data. State is the git working tree + `.dev/autopilot-log.
 - **No hardcoded model strings**: all model names live in `MODEL_PROFILES` in `config.ts`. No other file references `claude-opus-*` or `claude-sonnet-*` literals.
 - **Phantom ship guard**: `pipeline.ts` calls `hasDeliverableCommits()` before invoking `ship` — cycles whose branch only touches `docs/plans/` (i.e. only the `/plan` artifact with no implementation) are flagged `completed: false` with a "nothing to ship" error, and ship is never invoked. Doc-only work outside `docs/plans/` (rubric, skill bodies, README, roadmap edits) is still deliverable. The identical guard inside `/ship`'s SKILL.md is defense in depth for inline (non-pipeline) use.
 - **Ship target is config-driven**: `/ship`'s merge vs PR behavior is selected by `ship.target` (`.autopilot.yml`) and dispatched via adapters in `scripts/autopilot/ship/`. The skill body branches on the `--target` arg; don't hardcode merge logic in TS. `/shipwreck` recovery only runs for `direct-push` — PR modes never merge in-session, so a ship failure there is reported as-is.
+- **No install-script hooks in `package.json`**: never add `preinstall`, `install`, or `postinstall`. `scripts/check-publish.ts` (run via `pnpm check:publish` and in the publish workflow) fails the build if any of these appear. They run on every `npm install` of a consumer and are the standard supply-chain attack surface.
 
 ## Configuration
 

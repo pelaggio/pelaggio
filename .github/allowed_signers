@@ -1,0 +1,14 @@
+# Allowed SSH signers for git tag verification.
+#
+# Format (one signer per line):
+#   <principal> namespaces="git" <ssh-key-type> <base64-key>
+#
+# The principal is a free-form identifier (email is conventional). The workflow
+# verifies release tags against this list via:
+#   git config gpg.ssh.allowedSignersFile .github/allowed_signers
+#   git tag -v "$GITHUB_REF_NAME"
+#
+# Replace the placeholder below with the maintainer's real SSH public key before
+# the first publish. docs/publish-audit.md blocks the flip on this being done.
+#
+# maintainer@example.com namespaces="git" ssh-ed25519 AAAA...replace-me...
