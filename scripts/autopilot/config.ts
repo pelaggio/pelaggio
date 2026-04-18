@@ -2,7 +2,7 @@ import { execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
-import { ROADMAP_SOURCE_NAMES, type RoadmapSourceName } from "./roadmap/types.js";
+import { GH_PLAN_LOCATIONS, type GhPlanLocation, type GithubRoadmapConfig, ROADMAP_SOURCE_NAMES, type RoadmapSourceName } from "./roadmap/types.js";
 import type { ShipTargetName } from "./types.js";
 
 const SHIP_TARGET_NAMES: readonly ShipTargetName[] = ["direct-push", "pull-request", "auto-merge-pr"];
@@ -56,7 +56,14 @@ export interface ResolvedConfig {
 	modelProfiles: Record<string, Partial<Record<Step, string>>>;
 	shipTarget: ShipTargetName;
 	roadmapSource: RoadmapSourceName;
+	roadmapGithub: GithubRoadmapConfig;
 }
+
+const DEFAULT_GITHUB_ROADMAP: GithubRoadmapConfig = {
+	ghRepo: "",
+	label: "autopilot",
+	planLocation: "issue-comment",
+};
 
 export const DEFAULTS = {
 	budgets: {
@@ -217,6 +224,7 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 
 	// roadmap.source: default "markdown"; validate against ROADMAP_SOURCE_NAMES
 	let roadmapSource: RoadmapSourceName = "markdown";
+	const roadmapGithub: GithubRoadmapConfig = { ...DEFAULT_GITHUB_ROADMAP };
 	const roadmapBlock = yml.roadmap;
 	if (roadmapBlock !== undefined) {
 		if (!isPlainObject(roadmapBlock)) {
@@ -229,9 +237,38 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 			}
 			roadmapSource = s as RoadmapSourceName;
 		}
+		const gh = roadmapBlock.github;
+		if (gh !== undefined) {
+			if (!isPlainObject(gh)) {
+				throw new Error(`${configPath}: expected \`roadmap.github\` to be a map`);
+			}
+			if (gh.repo !== undefined) {
+				if (!isString(gh.repo)) {
+					throw new Error(`${configPath}: expected \`roadmap.github.repo\` to be a string (owner/repo)`);
+				}
+				roadmapGithub.ghRepo = gh.repo;
+			}
+			if (gh.label !== undefined) {
+				if (!isString(gh.label)) {
+					throw new Error(`${configPath}: expected \`roadmap.github.label\` to be a string`);
+				}
+				roadmapGithub.label = gh.label;
+			}
+			const pl = gh["plan-location"];
+			if (pl !== undefined) {
+				if (!isString(pl) || !(GH_PLAN_LOCATIONS as readonly string[]).includes(pl)) {
+					throw new Error(`${configPath}: expected \`roadmap.github.plan-location\` to be one of ${GH_PLAN_LOCATIONS.join("|")}, got ${JSON.stringify(pl)}`);
+				}
+				roadmapGithub.planLocation = pl as GhPlanLocation;
+			}
+		}
 	}
 
-	return { repo, worktreePrefix, budgets, turnLimits, effort, modelProfiles, shipTarget, roadmapSource };
+	if (roadmapSource === "github-issues" && !roadmapGithub.ghRepo) {
+		throw new Error(`${configPath}: \`roadmap.github.repo\` (owner/repo) is required when roadmap.source is github-issues`);
+	}
+
+	return { repo, worktreePrefix, budgets, turnLimits, effort, modelProfiles, shipTarget, roadmapSource, roadmapGithub };
 }
 
 // ── Resolved exports (populated at import time) ────────────────────────
@@ -245,3 +282,4 @@ export const EFFORT: Record<Step, Effort> = CONFIG.effort;
 export const MODEL_PROFILES: Record<string, Partial<Record<Step, string>>> = CONFIG.modelProfiles;
 export const SHIP_TARGET: ShipTargetName = CONFIG.shipTarget;
 export const ROADMAP_SOURCE: RoadmapSourceName = CONFIG.roadmapSource;
+export const ROADMAP_GITHUB: GithubRoadmapConfig = CONFIG.roadmapGithub;

@@ -1,6 +1,23 @@
-export type RoadmapSourceName = "markdown";
+export type RoadmapSourceName = "markdown" | "github-issues";
 
-export const ROADMAP_SOURCE_NAMES: readonly RoadmapSourceName[] = ["markdown"];
+export const ROADMAP_SOURCE_NAMES: readonly RoadmapSourceName[] = ["markdown", "github-issues"];
+
+export type GhPlanLocation = "issue-comment" | "pr-description";
+
+export const GH_PLAN_LOCATIONS: readonly GhPlanLocation[] = ["issue-comment", "pr-description"];
+
+export interface GithubRoadmapConfig {
+	/**
+	 * `owner/repo`. Required when roadmap.source is github-issues. Named
+	 * `ghRepo` (not `repo`) to avoid collision with the factory's local-git
+	 * `opts.repo` when threading config through.
+	 */
+	ghRepo: string;
+	/** Label filtering open issues. Default: `autopilot`. */
+	label: string;
+	/** Where to look for plan bodies. Default: `issue-comment`. */
+	planLocation: GhPlanLocation;
+}
 
 export interface RoadmapItem {
 	id: string;
@@ -28,4 +45,8 @@ export interface RoadmapSource {
 
 export function isRoadmapSourceName(v: unknown): v is RoadmapSourceName {
 	return typeof v === "string" && (ROADMAP_SOURCE_NAMES as readonly string[]).includes(v);
+}
+
+export function isGhPlanLocation(v: unknown): v is GhPlanLocation {
+	return typeof v === "string" && (GH_PLAN_LOCATIONS as readonly string[]).includes(v);
 }

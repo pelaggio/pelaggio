@@ -30,7 +30,7 @@ describe("getRoadmapSource — factory", () => {
 	});
 
 	it("throws on unknown name", () => {
-		const bogus = "github-issues" as RoadmapSourceName;
+		const bogus = "linear" as unknown as RoadmapSourceName;
 		assert.throws(() => getRoadmapSource(bogus, { repo: "/tmp" }), /Unknown roadmap source/);
 	});
 });

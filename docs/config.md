@@ -32,7 +32,11 @@ ship:
 
 roadmap:
   source: markdown              # default: markdown
-                                # values: markdown (TOOL-10/15 will extend this)
+                                # values: markdown | github-issues
+  # github:                     # only consulted when source is github-issues
+  #   repo: acme/widgets        # required when source=github-issues (owner/repo)
+  #   label: autopilot          # default: autopilot
+  #   plan-location: issue-comment  # default: issue-comment | pr-description
 
 budgets:                        # dollars per step (safety-net caps)
   pick: 2
@@ -116,12 +120,55 @@ Automating the post-merge side is planned for TOOL-10 / TOOL-15.
 ## Roadmap source
 
 `roadmap.source` selects the backend that drives `/pick`, plan lookup, and
-scope heuristics. Today only `markdown` is implemented — it reads
-`docs/roadmap-*.md` + `docs/task-index.md`. TOOL-10 (`github-issues`) and
-TOOL-15 (`linear`) will widen this union. Invalid values fail loudly at
-startup. The `roadmap.*` subtree is otherwise reserved: other keys under it
-(e.g. `roadmap.github.label`) are silently ignored today so adapters can
-extend the schema without breaking older configs.
+scope heuristics. Invalid values fail loudly at startup.
+
+| Value           | Status       | Reads                                              |
+|-----------------|--------------|----------------------------------------------------|
+| `markdown`      | ready        | `docs/roadmap-*.md` + `docs/task-index.md`         |
+| `github-issues` | adapter-only | GitHub Issues via the `gh` CLI (see caveat below)  |
+
+### `github-issues` — adapter-only in TOOL-10
+
+The `GitHubIssuesRoadmap` adapter lands as a **typed, tested ingest surface**
+only. The `/pick`, `/ship`, `/plan`, `/charter`, `/status`, `/pickup`,
+`/shakedown`, and `/tidy` skill bodies are still markdown-aware — they read
+`docs/roadmap-*.md` / `docs/task-index.md` directly instead of going through
+the `RoadmapSource` interface. **Setting `roadmap.source: github-issues` in
+`.autopilot.yml` today will not produce a working end-to-end cycle**; `/pick`
+will fail to find items. Rewiring the skill bodies through the adapter is
+scheduled as a TOOL-10.x follow-up. The adapter is exercisable inline (e.g.
+via a TS script that instantiates `GitHubIssuesRoadmap` directly) and is
+fully unit-tested against an in-memory `gh` stub.
+
+### `roadmap.github.*`
+
+Consumed only when `roadmap.source` is `github-issues`:
+
+| Key                           | Default          | Meaning                                                                 |
+|-------------------------------|------------------|-------------------------------------------------------------------------|
+| `roadmap.github.repo`         | *(required)*     | `owner/name` passed to `gh --repo`. Missing value fails at startup.     |
+| `roadmap.github.label`        | `autopilot`      | Label used to filter open issues for `listOpenItems`.                   |
+| `roadmap.github.plan-location`| `issue-comment`  | Where plan bodies live. `pr-description` is reserved; not implemented.  |
+
+`gh` availability is probed lazily on first adapter call. If `gh` is not
+installed or not authenticated, the adapter throws a clear diagnostic
+(`gh CLI required — install https://cli.github.com/` or `gh CLI not
+authenticated — run 'gh auth login'`). No config-time probe — tests and
+dry-runs can construct the adapter with a stub runner without `gh` on
+`PATH`.
+
+Item IDs are bare issue numbers (`"42"`). Branches follow
+`feat/issue-<n>[-slug]` where `slug` is a kebab-cased, 40-char-capped
+derivation of the issue title. Worktrees follow the same
+`${WORKTREE_PREFIX}${id}` convention as the markdown adapter so `--resume`
+lookups work identically.
+
+Plan bodies are resolved in two stages: first a local-disk lookup mirroring
+the markdown adapter (`docs/plans/issue-<n>-*.md`, then `.dev/plans/<n>.md`),
+then the most recent issue comment whose body begins with the
+`<!-- autopilot-plan -->` marker. Comment-sourced plans are materialized to
+`.dev/plans/<n>.md` (scratch, typically `.gitignore`'d), **not**
+`docs/plans/` — that directory remains `/plan`'s canonical committed output.
 
 ## Unknown keys
 
