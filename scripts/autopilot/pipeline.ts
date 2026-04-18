@@ -390,7 +390,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			completed: false,
 			cost,
 			verdict,
-			error: "nothing to ship: branch has no non-docs commits",
+			error: "nothing to ship: branch only touches docs/plans/ (plan-only / no implementation)",
 		});
 	}
 	log(`shipping...${opts.pr ? " (PR mode)" : ""}`);

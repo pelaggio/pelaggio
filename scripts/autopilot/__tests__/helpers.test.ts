@@ -175,4 +175,18 @@ describe("hasDeliverableCommits", () => {
 		commitFile(dir, "src/foo.ts", "export const x = 1;\n", "code");
 		assert.equal(hasDeliverableCommits(dir), true);
 	});
+
+	it("returns false when feat branch is plan-only but main advanced independently", () => {
+		// Regression for two-dot vs three-dot diff: if main has moved forward
+		// with code/doc commits since the feat branch was created, a two-dot
+		// diff (`main..HEAD`) would show those files too and falsely credit
+		// the feat branch with them. Three-dot (`main...HEAD`) only counts
+		// changes on the feat branch side.
+		const dir = makeFeatRepo();
+		commitFile(dir, "docs/plans/x.md", "# plan\n", "plan-only on feat");
+		execSync("git checkout -q main", { cwd: dir });
+		commitFile(dir, "src/unrelated.ts", "export const y = 2;\n", "main moved ahead");
+		execSync("git checkout -q feat/tool-99", { cwd: dir });
+		assert.equal(hasDeliverableCommits(dir), false);
+	});
 });

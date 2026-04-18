@@ -128,7 +128,12 @@ export function ensureCheckpointed(cwd: string, label: string, log: (s: string) 
  */
 export function hasDeliverableCommits(worktree: string): boolean {
 	try {
-		const files = execSync("git diff --name-only main..HEAD", {
+		// Three-dot diff: compare merge-base(main, HEAD) to HEAD. This restricts
+		// the file list to changes introduced on the feat branch. Two-dot
+		// (main..HEAD) would also include files main advanced past while the
+		// feat branch was dormant, which falsely credits the branch for work
+		// it didn't do.
+		const files = execSync("git diff --name-only main...HEAD", {
 			cwd: worktree,
 			encoding: "utf-8",
 			stdio: ["ignore", "pipe", "pipe"],
