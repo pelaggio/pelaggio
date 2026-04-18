@@ -18,6 +18,23 @@ export interface RunStepOpts {
 
 const EDIT_LOOP_THRESHOLD = 12;
 
+// Plan-polish guard: during `implement`, block writes to docs/plans/ so the model
+// executes the plan instead of editing it. Surfaced as a named helper because the
+// reason — not the mechanics — is the non-obvious part worth locating.
+export function blockPlanPolish(input: HookInput, cwd: string): HookJSONOutput {
+	const tn = "tool_name" in input ? String(input.tool_name) : "";
+	if (tn !== "Write" && tn !== "Edit") return {};
+	const ti = ("tool_input" in input ? input.tool_input : {}) as Record<string, unknown>;
+	const fp = String(ti.file_path ?? "");
+	if (!fp) return {};
+	const abs = fp.startsWith("/") ? fp : resolve(cwd, fp);
+	if (!/\/docs\/plans\//.test(abs)) return {};
+	return {
+		decision: "block" as const,
+		reason: `"${fp}" is under docs/plans/, which is READ-ONLY during implement. Execute the plan by writing code to other files — do not edit the plan itself. If the plan is genuinely wrong, stop and report the issue instead of editing around it.`,
+	};
+}
+
 export async function runStep(name: Step, prompt: string, opts: RunStepOpts, emit: StepEmit): Promise<StepResult> {
 	const budget = BUDGETS[name];
 	const turns = TURN_LIMITS[name];
@@ -50,45 +67,63 @@ export async function runStep(name: Step, prompt: string, opts: RunStepOpts, emi
 			].join("\n")
 		: undefined;
 
+	const planBlockActive = name === "implement";
+	const planAppend = planBlockActive
+		? [
+				"",
+				"## CRITICAL: Do not edit the plan",
+				"Files under `docs/plans/` are READ-ONLY for this step. Your job is to EXECUTE the plan by writing code to other files — not to polish, clarify, or extend the plan document itself.",
+				"Writes to `docs/plans/*` will be blocked by a hook. If you believe the plan is wrong, stop and surface the issue in your final message instead of editing around it.",
+			].join("\n")
+		: undefined;
+
+	const systemAppend = [worktreeAppend, planAppend].filter(Boolean).join("\n");
+
 	const mainAbs = resolve(REPO) + "/";
 	const worktreeCwd = resolve(opts.cwd);
-	const worktreeHooks = isWorktree
-		? {
-				PreToolUse: [
-					{
-						hooks: [
-							async (input: HookInput): Promise<HookJSONOutput> => {
-								const tn = "tool_name" in input ? String(input.tool_name) : "";
-								const ti = ("tool_input" in input ? input.tool_input : {}) as Record<string, unknown>;
+	const hooks =
+		isWorktree || planBlockActive
+			? {
+					PreToolUse: [
+						{
+							hooks: [
+								async (input: HookInput): Promise<HookJSONOutput> => {
+									const tn = "tool_name" in input ? String(input.tool_name) : "";
+									const ti = ("tool_input" in input ? input.tool_input : {}) as Record<string, unknown>;
 
-								if (tn === "Write" || tn === "Edit") {
-									const fp = String(ti.file_path ?? "");
-									if (fp.startsWith(mainAbs)) {
-										const rel = fp.slice(mainAbs.length);
-										return {
-											decision: "block" as const,
-											reason: `Path "${fp}" targets main repo. Use "${resolve(worktreeCwd, rel)}" instead.`,
-										};
+									if (isWorktree && (tn === "Write" || tn === "Edit")) {
+										const fp = String(ti.file_path ?? "");
+										if (fp.startsWith(mainAbs)) {
+											const rel = fp.slice(mainAbs.length);
+											return {
+												decision: "block" as const,
+												reason: `Path "${fp}" targets main repo. Use "${resolve(worktreeCwd, rel)}" instead.`,
+											};
+										}
 									}
-								}
 
-								if (tn === "Bash") {
-									const cmd = String(ti.command ?? "");
-									if (cmd.includes(mainAbs) && !cmd.includes(worktreeCwd)) {
-										return {
-											decision: "block" as const,
-											reason: `Command references main repo "${REPO}". Use worktree "${opts.cwd}" paths instead.`,
-										};
+									if (isWorktree && tn === "Bash") {
+										const cmd = String(ti.command ?? "");
+										if (cmd.includes(mainAbs) && !cmd.includes(worktreeCwd)) {
+											return {
+												decision: "block" as const,
+												reason: `Command references main repo "${REPO}". Use worktree "${opts.cwd}" paths instead.`,
+											};
+										}
 									}
-								}
 
-								return {};
-							},
-						],
-					},
-				],
-			}
-		: undefined;
+									if (planBlockActive) {
+										const out = blockPlanPolish(input, worktreeCwd);
+										if (out.decision === "block") return out;
+									}
+
+									return {};
+								},
+							],
+						},
+					],
+				}
+			: undefined;
 
 	const gen = query({
 		prompt,
@@ -99,16 +134,16 @@ export async function runStep(name: Step, prompt: string, opts: RunStepOpts, emi
 			maxTurns: turns,
 			effort,
 			...(model ? { model } : {}),
-			...(worktreeAppend
+			...(systemAppend
 				? {
 						systemPrompt: {
 							type: "preset" as const,
 							preset: "claude_code" as const,
-							append: worktreeAppend,
+							append: systemAppend,
 						},
 					}
 				: {}),
-			...(worktreeHooks ? { hooks: worktreeHooks } : {}),
+			...(hooks ? { hooks } : {}),
 		},
 	});
 
