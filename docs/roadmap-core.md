@@ -25,7 +25,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | ~~TOOL-11. ShipTarget abstraction + 3 adapters~~ | **Done** — ShipTarget abstraction + 3 adapters added (2026-04-17) |
 | ~~TOOL-12. Running totals — tokens + quality signals + stats dashboard~~ | **Done** — Stats command + token/quality tracking added (2026-04-17) |
 | ~~TOOL-13. Package shape + git-dep consumption + `init` CLI~~ | **Done** — Package shape, init CLI, and library exports added (2026-04-18) |
-| TOOL-14. `sync` CLI — upgrade installed skills with diff prompts | TOOL-13 |
+| ~~TOOL-14. `sync` CLI — upgrade installed skills with diff prompts~~ | **Done** — sync CLI for skill upgrade with diff prompts added (2026-04-18) |
 | TOOL-15. LinearRoadmap adapter | TOOL-9 |
 | TOOL-16. Split /refit → /bump-models + self-hosted Renovate | — |
 | TOOL-17. Pipeline pick-step test coverage (needs REPO injectability) | TOOL-4 |
@@ -209,24 +209,9 @@ Completed. See git history for implementation details.
 Completed. See git history for implementation details.
 ---
 
-### TOOL-14. `sync` CLI — upgrade installed skills with diff prompts
+### TOOL-14. `sync` CLI — upgrade installed skills with diff prompts ✓
 
-| What | Scope | Deps |
-|------|-------|------|
-| `npx claude-autopilot sync` diffs the consuming project's `.claude/skills/*/SKILL.md` against the package's versions and prompts per-file: overwrite, skip, merge. Never touches `_rubric.md`, `docs/`, `plans/`, or any project-specific content. Handles the upgrade case cleanly so projects can pull autopilot improvements without losing customizations. | M | TOOL-13 |
-
-**Deliverables:**
-- `sync` subcommand in `bin/claude-autopilot.js`
-- Diff computation using `diff` npm package (standard)
-- Interactive prompts via `@clack/prompts` or similar (small, cross-platform)
-- `--dry-run` flag previews without applying
-- `--force` flag overwrites without prompting (for CI)
-- Explicit allowlist of files the sync touches (SKILL.md in named skill directories) — everything else is off-limits
-- Merge strategy: show diff, user decides; no auto-merge of conflicts
-
-**Out of scope:**
-- Downgrades
-- Syncing `scripts/autopilot/` (that's a package upgrade, not a sync operation)
+Completed. See git history for implementation details.
 
 ---
 
