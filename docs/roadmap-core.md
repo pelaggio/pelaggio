@@ -16,7 +16,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | TOOL-2. Dep graph visualization from roadmap files | — |
 | TOOL-3. Scope suggestion in /charter from description | — |
 | ~~TOOL-4. pipeline.ts integration tests via SDK query mock~~ | **Done** — Pipeline integration tests + mock SDK query infrastructure added (2026-04-17) |
-| TOOL-5. Skill body linter (frontmatter validity, rubric references) | — |
+| ~~TOOL-5. Skill body linter (frontmatter validity, rubric references)~~ | **Done** — Skill body linter added, validates frontmatter + includes (2026-04-18) |
 | ~~TOOL-6. Biome config for scripts/ + pre-commit hook~~ | **Done** — Biome config added, pre-commit hook wired (2026-04-11) |
 | ~~TOOL-7. Document in-context vs out-of-context review + add Idioms section to rubric~~ | **Done** — Idioms rubric dimension + Review model docs (manual, 2026-04-18) |
 | ~~TOOL-8. `.autopilot.yml` project config file + loader~~ | **Done** — `.autopilot.yml` config loader added (2026-04-17) |
@@ -90,24 +90,9 @@ Completed. See git history for implementation details.
 
 ---
 
-### TOOL-5. Skill body linter (frontmatter validity, rubric references)
+### TOOL-5. Skill body linter (frontmatter validity, rubric references) ✓
 
-| What | Scope | Deps |
-|------|-------|------|
-| Lint all `.claude/skills/*/SKILL.md` files for: valid frontmatter, required fields, consistent `!cat` includes, no dangling references to removed skills or files. | S | — |
-
-**Deliverables:**
-- `scripts/check-skills.ts` — reads all SKILL.md files, parses frontmatter, validates against a schema
-- Required fields: `name`, `description`, `allowed-tools`
-- Optional fields: `argument-hint`, `context`, `agent`, `effort`, `disable-model-invocation`
-- Flags unknown frontmatter fields
-- Validates `!cat .claude/skills/X.md` references point at real files
-- Flags `$ARGUMENTS` usage where `argument-hint` is missing
-- Wire into `pnpm` as `pnpm check:skills`
-
-**Out of scope:**
-- Validating skill prose content (too subjective)
-- Markdown linting (defer until/if biome supports MD)
+Completed. See git history for implementation details.
 
 ---
 
@@ -388,3 +373,4 @@ Completed. See git history for implementation details.
 - **XL** — major feature, definitely needs a plan + shakedown-plan pass
 
 Autopilot detects scope from the `scope: X` hint in the item text. XS/S items skip the planning step and go straight to implementation.
+

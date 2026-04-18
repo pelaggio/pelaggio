@@ -12,7 +12,6 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 |----|-------|------|------|---------|
 | TOOL-2 | Dep graph visualization from roadmap files | — | — | core |
 | TOOL-3 | Scope suggestion in /charter from description | — | — | core |
-| TOOL-5 | Skill body linter (frontmatter validity, rubric references) | — | — | core |
 | TOOL-9 | RoadmapSource abstraction + MarkdownRoadmap adapter | — | — | core |
 | TOOL-10 | GitHubIssuesRoadmap adapter via gh CLI | TOOL-9 | — | core |
 | TOOL-15 | LinearRoadmap adapter | TOOL-9 | — | core |
@@ -28,6 +27,7 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 
 - TOOL-1 ✓
 - TOOL-4 ✓
+- TOOL-5 ✓
 - TOOL-6 ✓
 - TOOL-7 ✓
 - TOOL-8 ✓
@@ -39,3 +39,4 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 - TOOL-21 ✓
 - TOOL-22 ✓
 - TOOL-23 ✓
+
