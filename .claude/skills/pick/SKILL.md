@@ -3,7 +3,7 @@ name: pick
 description: Select next work item from planning docs, claim it, create branch and worktree
 argument-hint: "[item-id | next [topic]]"
 disable-model-invocation: true
-allowed-tools: Read Glob Grep Bash(git:*) Bash(pnpm:*) Bash(npx tsx:*)
+allowed-tools: Read Glob Grep Bash(git:*) Bash(pnpm:*) Bash(npx:*)
 ---
 
 # /pick — Select and Claim a Work Item

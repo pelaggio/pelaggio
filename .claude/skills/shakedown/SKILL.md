@@ -5,7 +5,7 @@ context: fork
 agent: general-purpose
 effort: max
 argument-hint: "[path | 'autopilot plan-review' | 'autopilot code-review']"
-allowed-tools: Read Glob Grep Edit Write Bash(git:*) Bash(ls:*) Bash(pnpm:*) Bash(npx tsx:*) Bash(npx biome:*)
+allowed-tools: Read Glob Grep Edit Write Bash(git:*) Bash(ls:*) Bash(pnpm:*) Bash(npx:*)
 ---
 
 # /shakedown — Review and Fix

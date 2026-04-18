@@ -3,7 +3,7 @@ name: ship
 description: Finalize, commit, push, and clean up a completed work item
 argument-hint: "[--no-squash] [--pr]"
 disable-model-invocation: true
-allowed-tools: Read Edit Bash(git:*) Bash(pnpm:*) Bash(npx tsx:*) Bash(npx biome:*) Bash(gh pr:*)
+allowed-tools: Read Edit Bash(git:*) Bash(pnpm:*) Bash(npx:*) Bash(gh pr:*)
 ---
 
 # /ship — Finalize and Ship
