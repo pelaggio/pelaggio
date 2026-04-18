@@ -33,6 +33,8 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | TOOL-19. `orchestrate()` test coverage — resume, parallel, park-and-resume | TOOL-4 |
 | ~~TOOL-21. Tighten `/ship` phantom-guard wording + update `_rubric.md` phantom-guard bullet~~ | **Done** — `/ship` phantom-guard + rubric bullet tightened (manual, 2026-04-18) |
 | TOOL-23. Fix implement-step path resolution for worktree-relative deliverables | TOOL-4 |
+| TOOL-24. Skill extension points — product-context include + sync allowlist | — |
+| TOOL-25. Telemetry v2 — per-step file list, tool histogram, output tail, stats JSON | — |
 
 ---
 
@@ -340,6 +342,46 @@ Completed. See git history for implementation details.
 ### TOOL-22. Verify `/ship` actually merged — ghost-ship bug root cause ✓
 
 Completed. See git history for implementation details.
+
+---
+
+### TOOL-24. Skill extension points — product-context include + sync allowlist
+
+| What | Scope | Deps |
+|------|-------|------|
+| This repo's `.claude/skills/` are the generic autopilot baseline. Consumers (fathom, future products) need a way to inject product-specific context (data model invariants, shared component catalog, domain conventions) without forking SKILL.md files — otherwise every skill upgrade via TOOL-14 `sync` becomes a merge conflict. Add a consistent `!cat` extension point that each base skill optionally pulls in, and make `sync` never touch the extension file. | S | — |
+
+**Deliverables:**
+- Add `!cat .claude/skills/_project-context.md 2>/dev/null` (or equivalent graceful-fallback syntax) at the top of the three skills that need product context: `plan/SKILL.md`, `shakedown/SKILL.md`, `ship/SKILL.md`. Place it under the rubric `!cat` so it follows the general quality rules with the project-specific ones.
+- Create `.claude/skills/_project-context.md.example` — a template with commented-out sections for "Data model invariants", "Shared components", "Domain conventions", "Merge-conflict resolution patterns". Ship the example so products know what to put in their own `_project-context.md`.
+- Update `scripts/autopilot/sync.ts` allowlist/denylist to **exclude** `_project-context.md` — sync never overwrites it. Also exclude the `.example` (consumers shouldn't have it re-synced after they've customized their copy).
+- Add a short section to `CLAUDE.md` explaining the extension model: base skills live in the autopilot package, product context in `_project-context.md` stays local to each consumer.
+- Add a regression test in `sync.test.ts` that the allowlist skips `_project-context.md` even if it differs between source and target.
+
+**Out of scope:**
+- Populating `_project-context.md` for this repo itself — autopilot is the generic baseline; no product context to inject here (keep the file absent so the `!cat` fallback exercises).
+- Per-step context files (e.g. separate `_plan-context.md` vs `_ship-context.md`) — one file per consumer is sufficient; split later if volume warrants.
+- Migrating fathom's existing in-skill customizations into `_project-context.md` — that's fathom-side work after this lands.
+
+---
+
+### TOOL-25. Telemetry v2 — per-step file list, tool histogram, output tail, stats JSON
+
+| What | Scope | Deps |
+|------|-------|------|
+| TOOL-12 shipped cost/tokens/verdicts/parked-state instrumentation. This session surfaced signals we wished we had: per-step file-change list (would have caught plan-polish in one glance — "implement touched only `docs/plans/`"), tool-call histogram (Read=3 Edit=1 → probably noop), and a short output tail (agent's last 100-200 chars — critical for post-mortems without replaying). Also add a `stats --json` mode so consumers can feed the log into dashboards. | S | — |
+
+**Deliverables:**
+- Extend `StepResult` in `types.ts` with: `filesChanged` (array of paths the step committed or staged — compute via `git diff --name-only HEAD~1 HEAD` after the step), `toolCounts` (Record<string, number> — Read/Edit/Write/Bash counts from the SDK event stream; already partially tracked via `editCounts` in `step-runner.ts`), `outputTail` (last 200 chars of the step's final assistant message, trimmed of ANSI)
+- Thread those fields through to the log entry's per-step block in `pipeline.ts`'s `finish()`
+- Extend `stats.ts` dashboard with a "recent failures" section that surfaces `outputTail` for cycles where `completed=false` — turns post-mortems into a single `pnpm autopilot stats` glance
+- Add `pnpm autopilot stats --json` that emits the aggregated record as JSON on stdout (no TTY rendering). Consumers pipe it into their own dashboards or Grafana.
+- Regression tests for the reducer with new fields populated
+
+**Out of scope:**
+- Prompt input size tracking (could be a follow-up; requires capturing before SDK call)
+- Attempt-count rollups (implement retries are in the log but not aggregated) — file as TOOL-26 if useful
+- Any log schema migration tooling — treat new fields as additive; old entries just lack them
 
 ---
 

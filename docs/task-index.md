@@ -22,6 +22,8 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 | TOOL-18 | Public-npm publish hardening | — | — | core |
 | TOOL-19 | `orchestrate()` test coverage — resume, parallel, park-and-resume | — | — | core |
 | TOOL-23 | Fix implement-step path resolution for worktree-relative deliverables | — | — | core |
+| TOOL-24 | Skill extension points — product-context include + sync allowlist | — | — | core |
+| TOOL-25 | Telemetry v2 — per-step file list, tool histogram, output tail, stats JSON | — | — | core |
 
 ## Recently completed
 
