@@ -145,6 +145,42 @@ export function hasDeliverableCommits(worktree: string): boolean {
 	}
 }
 
+// ── Ghost-ship verification ────────────────────────────────────────────
+
+/**
+ * Capture the state needed to verify a direct-push ship landed. Returns null
+ * if either git command fails (e.g. no main branch in test env — skip check).
+ */
+export function captureShipState(mainRepo: string, worktree: string): { mainSha: string; featSha: string } | null {
+	try {
+		const mainSha = execSync("git rev-parse main", { cwd: mainRepo, encoding: "utf-8" }).trim();
+		const featSha = execSync("git rev-parse HEAD", { cwd: worktree, encoding: "utf-8" }).trim();
+		return { mainSha, featSha };
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Returns true if main advanced after a direct-push ship: either the sha
+ * changed or the pre-ship feat tip is now reachable from main (fast-forward).
+ * Returns true on unexpected git errors so unknown environments don't block cycles.
+ */
+export function verifyShipLanded(mainRepo: string, mainShaBefore: string, featShaBefore: string): boolean {
+	try {
+		const mainShaAfter = execSync("git rev-parse main", { cwd: mainRepo, encoding: "utf-8" }).trim();
+		if (mainShaAfter !== mainShaBefore) return true;
+		try {
+			execSync(`git merge-base --is-ancestor ${featShaBefore} main`, { cwd: mainRepo, stdio: "ignore" });
+			return true;
+		} catch {
+			return false;
+		}
+	} catch {
+		return true;
+	}
+}
+
 // ── Scope detection ────────────────────────────────────────────────────
 
 export function isQuickScope(text: string): boolean {

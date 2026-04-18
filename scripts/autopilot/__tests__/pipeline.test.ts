@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execSync } from "node:child_process";
 import { describe, it } from "node:test";
 import { runPipeline } from "../pipeline.js";
 import { getShipTarget } from "../ship/index.js";
@@ -38,13 +39,21 @@ describe("runPipeline — happy path", () => {
 				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
 				implement: { ok: true, writes: { "impl.txt": "x" } },
 				"shakedown-code": { ok: true },
-				ship: { ok: true },
+				ship: {
+					ok: true,
+					sideEffect: (cwd) => {
+						execSync("git checkout -q main", { cwd });
+						execSync("git merge -q --no-ff feat/tool-99", { cwd });
+						execSync("git checkout -q feat/tool-99", { cwd });
+					},
+				},
 			},
 			parkSignal,
 		);
 
 		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
 			runStep,
+			mainRepo: worktree,
 			listWorktrees: () => [],
 			appendLog: (e) => {
 				logs.push(e);
@@ -115,13 +124,21 @@ describe("runPipeline — implement turn-limit retry", () => {
 					{ ok: true, writes: { "impl-b.txt": "attempt 2" } },
 				],
 				"shakedown-code": { ok: true },
-				ship: { ok: true },
+				ship: {
+					ok: true,
+					sideEffect: (cwd) => {
+						execSync("git checkout -q main", { cwd });
+						execSync("git merge -q --no-ff feat/tool-99", { cwd });
+						execSync("git checkout -q feat/tool-99", { cwd });
+					},
+				},
 			},
 			parkSignal,
 		);
 
 		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
 			runStep,
+			mainRepo: worktree,
 			listWorktrees: () => [],
 			appendLog: (e) => {
 				logs.push(e);
@@ -186,6 +203,43 @@ describe("runPipeline — no deliverable commits", () => {
 		assert.equal(logs.length, 1);
 		assert.equal(logs[0].completed, false);
 		assert.match((logs[0].error as string) ?? "", /nothing to ship/);
+	});
+});
+
+describe("runPipeline — ghost-ship detection", () => {
+	it("detects ship ok:true but main did not advance, triggers shipwreck, returns completed:false", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep, calls } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				// ship claims success but does NOT advance main
+				ship: { ok: true },
+				shipwreck: { ok: false },
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
+			runStep,
+			mainRepo: worktree,
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+		});
+
+		assert.equal(result.completed, false);
+		assert.match(result.error ?? "", /ship claimed success but main did not advance/);
+		const stepsRun = calls.map((c) => c.step);
+		assert.ok(stepsRun.includes("shipwreck"), `expected shipwreck to run; got ${stepsRun.join(",")}`);
+		assert.equal(logs.length, 1);
+		assert.equal(logs[0].completed, false);
+		assert.equal(logs[0].shipwrecked, true);
 	});
 });
 

@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { MODEL_PROFILES, REPO, SHIP_TARGET, WORKTREE_PREFIX } from "./config.js";
 import {
 	appendLog as appendLogDefault,
+	captureShipState,
 	checkpoint,
 	createMutex,
 	detectResumeStep,
@@ -18,6 +19,7 @@ import {
 	parseWaitFlag,
 	resolveWorktree,
 	stepIndex,
+	verifyShipLanded,
 } from "./helpers.js";
 import { getShipTarget, isShipTargetName, SHIP_TARGET_NAMES } from "./ship/index.js";
 import { runStep as runStepDefault } from "./step-runner.js";
@@ -32,12 +34,15 @@ export interface PipelineDeps {
 	runStep?: RunStepFn;
 	listWorktrees?: () => string[];
 	appendLog?: (entry: Record<string, unknown>) => void;
+	/** Override the main-repo path used for ghost-ship verification. Defaults to REPO. */
+	mainRepo?: string;
 }
 
 export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, flags: Flags, deps: PipelineDeps = {}): Promise<CycleResult> {
 	const runStep = deps.runStep ?? runStepDefault;
 	const listWorktrees = deps.listWorktrees ?? listWorktreesDefault;
 	const appendLog = deps.appendLog ?? appendLogDefault;
+	const mainRepo = deps.mainRepo ?? REPO;
 	let cost = 0;
 	let profile = "standard";
 	const steps: StepLog[] = [];
@@ -398,13 +403,26 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	const targetSuffix = target.name === "direct-push" ? "" : ` (${target.name})`;
 	log(`shipping...${targetSuffix}`);
 	const shipPrompt = `${expandSkill("ship", `--target=${target.name}`)}\n\n${target.buildPrompt({ itemId: itemId!, worktree: worktree! })}`;
+
+	// Capture pre-ship git state for ghost-ship verification (direct-push only).
+	const preShipState = !opts.dryRun && target.name === "direct-push" ? captureShipState(mainRepo, worktree!) : null;
+
 	const ship = await step("ship", shipPrompt, worktree!);
 	cost += ship.cost;
 
+	// Ghost-ship check: did main actually advance after a reported-ok direct-push?
+	let ghostShip = false;
+	if (ship.ok && preShipState && !opts.dryRun) {
+		if (!verifyShipLanded(mainRepo, preShipState.mainSha, preShipState.featSha)) {
+			ghostShip = true;
+			log(`⚠ ghost-ship: ship reported ok but main did not advance — output tail: ${ship.text.slice(-300)}`);
+		}
+	}
+
 	const shipResult = target.interpretResult(ship);
 
-	if (!ship.ok && ship.subtype !== "error_rate_limit" && !parkSignal.parked && target.name === "direct-push") {
-		log("ship failed — attempting /shipwreck recovery...");
+	if ((!ship.ok || ghostShip) && ship.subtype !== "error_rate_limit" && !parkSignal.parked && target.name === "direct-push") {
+		log(ghostShip ? "ghost-ship — attempting /shipwreck recovery..." : "ship failed — attempting /shipwreck recovery...");
 		shipwrecked = true;
 		const wreck = await step("shipwreck", expandSkill("shipwreck", itemId!), REPO);
 		cost += wreck.cost;
@@ -413,7 +431,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			completed: wreck.ok,
 			cost,
 			verdict,
-			error: wreck.ok ? undefined : "ship failed (recovery also failed)",
+			error: wreck.ok ? undefined : ghostShip ? "ship claimed success but main did not advance (recovery also failed)" : "ship failed (recovery also failed)",
 		});
 	}
 

@@ -15,6 +15,8 @@ export interface StepOutcome extends Partial<StepResult> {
 	 * fails with "nothing to commit" on a clean tree and no commit lands.
 	 */
 	writes?: Record<string, string>;
+	/** Called after writes — use to simulate git side-effects (e.g. advancing main). */
+	sideEffect?: (cwd: string) => void;
 }
 
 /** Per-step behavior. Array = sequential attempts; single = every call. */
@@ -41,6 +43,7 @@ export function createMockRunStep(behavior: MockBehavior, parkSignal: ParkSignal
 				writeFileSync(full, content);
 			}
 		}
+		outcome.sideEffect?.(opts.cwd);
 		if (outcome.park) Object.assign(parkSignal, outcome.park);
 		const result: StepResult = {
 			ok: outcome.ok ?? true,
