@@ -18,7 +18,6 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 | TOOL-16 | Split /refit → /bump-models + self-hosted Renovate | — | — | core |
 | TOOL-17 | Pipeline pick-step test coverage (needs REPO injectability) | — | — | core |
 | TOOL-18 | Public-npm publish hardening | — | — | core |
-| TOOL-19 | `orchestrate()` test coverage — resume, parallel, park-and-resume | — | — | core |
 | TOOL-24 | Skill extension points — product-context include + sync allowlist | — | — | core |
 | TOOL-25 | Telemetry v2 — per-step file list, tool histogram, output tail, stats JSON | — | — | core |
 | TOOL-26 | Share `node_modules` across worktrees to skip per-worktree `pnpm install` | — | — | core |
@@ -35,6 +34,7 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 - TOOL-12 ✓
 - TOOL-13 ✓
 - TOOL-14 ✓
+- TOOL-19 ✓
 - TOOL-20 ✓
 - TOOL-21 ✓
 - TOOL-22 ✓

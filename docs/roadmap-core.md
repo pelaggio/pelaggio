@@ -30,7 +30,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | TOOL-16. Split /refit → /bump-models + self-hosted Renovate | — |
 | TOOL-17. Pipeline pick-step test coverage (needs REPO injectability) | TOOL-4 |
 | TOOL-18. Public-npm publish hardening | TOOL-13 |
-| TOOL-19. `orchestrate()` test coverage — resume, parallel, park-and-resume | TOOL-4 |
+| ~~TOOL-19. `orchestrate()` test coverage — resume, parallel, park-and-resume~~ | **Done** — orchestrate() test coverage for resume, parallel, and park-and-resume added (2026-04-18) |
 | ~~TOOL-21. Tighten `/ship` phantom-guard wording + update `_rubric.md` phantom-guard bullet~~ | **Done** — `/ship` phantom-guard + rubric bullet tightened (manual, 2026-04-18) |
 | ~~TOOL-23. Fix implement-step path resolution for worktree-relative deliverables~~ | **Done** — worktree path injected into implement prompt; pipeline.test.ts added (2026-04-18) |
 | TOOL-24. Skill extension points — product-context include + sync allowlist | — |
@@ -264,20 +264,9 @@ Completed. See git history for implementation details.
 
 ---
 
-### TOOL-19. `orchestrate()` test coverage — resume, parallel, park-and-resume
+### TOOL-19. `orchestrate()` test coverage — resume, parallel, park-and-resume ✓
 
-| What | Scope | Deps |
-|------|-------|------|
-| Scoped out of TOOL-4: only `runPipeline` is mocked and tested. The outer `orchestrate()` loop has meaningful branching (resume mode, parallel workers via `createMutex`, park-and-resume wait logic with `parseWaitFlag`/`fmtWait`) that isn't exercised. Add targeted tests that inject a fake `runPipeline` (or keep using the mocked `runStep` deps) to cover these paths. | M | TOOL-4 |
-
-**Deliverables:**
-- Either export `orchestrate()` with injectable `runPipeline` or restructure so the branching logic can be unit-tested
-- Scenarios: resume flow uses `detectResumeStep` + starts from the correct step; parallel workers serialize through `pickMutex`; park-and-resume respects `--max-wait`; weekly-limit message variant
-- Timer control via Node test mocks (`mock.timers`) so the wait path doesn't actually sleep
-
-**Out of scope:**
-- Real SDK integration (still mocked)
-- Signal-handler testing (`SIGINT` cleanup)
+Completed. See git history for implementation details.
 
 ---
 
