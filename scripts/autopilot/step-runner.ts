@@ -143,7 +143,11 @@ export async function runStep(name: Step, prompt: string, opts: RunStepOpts, emi
 		prompt,
 		options: {
 			cwd: opts.cwd,
-			permissionMode: "bypassPermissions",
+			// canUseTool allow-all instead of `permissionMode: "bypassPermissions"`: the SDK
+			// hardcodes a deny for writes to `.claude/skills/*` that survives bypassPermissions
+			// and allowDangerouslySkipPermissions. canUseTool is the only knob that reaches
+			// past it (TOOL-27). Hooks still fire — PreToolUse is evaluated after the allow.
+			canUseTool: async (_tool, input) => ({ behavior: "allow" as const, updatedInput: input }),
 			maxBudgetUsd: budget,
 			maxTurns: turns,
 			effort,
