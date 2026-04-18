@@ -112,6 +112,19 @@ Intro paragraph.
 		assert.equal(v[0].line, 9);
 	});
 
+	it("accepts dangling !cat include when 2>/dev/null suffix is present", () => {
+		const body = `---
+name: demo
+description: d
+allowed-tools: Read
+---
+
+!\`cat .claude/skills/_optional.md 2>/dev/null\`
+`;
+		const { repoRoot, skillFile } = makeRepoWithSkill("demo", body);
+		assert.deepEqual(lintSkillFile(skillFile, repoRoot), []);
+	});
+
 	it("accepts resolved !cat include", () => {
 		const body = `---
 name: demo

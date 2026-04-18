@@ -205,6 +205,25 @@ describe("sync — runSync", () => {
 		assert.equal(readFileSync(rubricDest, "utf-8"), "SENTINEL\n");
 	});
 
+	it("--force never touches _project-context.md or .example", async () => {
+		const pkg = makeFakePkg(
+			{ pick: "NEW\n" },
+			{
+				"_project-context.md": "PKG_CONTEXT\n",
+				"_project-context.md.example": "PKG_EXAMPLE\n",
+			},
+		);
+		const consumer = makeGitRepo();
+		const contextDest = join(consumer, ".claude/skills/_project-context.md");
+		const exampleDest = join(consumer, ".claude/skills/_project-context.md.example");
+		mkdirSync(dirname(contextDest), { recursive: true });
+		writeFileSync(contextDest, "SENTINEL\n");
+		writeFileSync(exampleDest, "CONSUMER_EXAMPLE\n");
+		await runSync({ pkgRoot: pkg, consumerRoot: consumer, force: true, dryRun: false, isTTY: false });
+		assert.equal(readFileSync(contextDest, "utf-8"), "SENTINEL\n");
+		assert.equal(readFileSync(exampleDest, "utf-8"), "CONSUMER_EXAMPLE\n");
+	});
+
 	it("prompter cycles through overwrite/skip/merge", async () => {
 		const pkg = makeFakePkg({ one: "N1\n", two: "N2\n", three: "N3\n" });
 		const consumer = makeGitRepo();
