@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { DEFAULTS, loadConfig } from "../config.js";
+import { DEFAULTS, loadConfig, resolveRepo } from "../config.js";
 
 function tmpRepo(): string {
 	return mkdtempSync(join(tmpdir(), "autopilot-config-test-"));
@@ -125,6 +125,43 @@ describe("loadConfig — unknown keys", () => {
 		assert.equal(cfg.budgets.implement, 30);
 		assert.equal(cfg.budgets.plan, DEFAULTS.budgets.plan);
 		assert.ok(!("bogus" in cfg.budgets));
+	});
+});
+
+describe("resolveRepo", () => {
+	const REPO_ENV = "CLAUDE_AUTOPILOT_REPO";
+	let savedRepoEnv: string | undefined;
+	let savedCwd: string;
+
+	beforeEach(() => {
+		savedRepoEnv = process.env[REPO_ENV];
+		savedCwd = process.cwd();
+		delete process.env[REPO_ENV];
+	});
+
+	afterEach(() => {
+		if (savedRepoEnv === undefined) delete process.env[REPO_ENV];
+		else process.env[REPO_ENV] = savedRepoEnv;
+		process.chdir(savedCwd);
+	});
+
+	it("respects CLAUDE_AUTOPILOT_REPO env var", () => {
+		const fake = tmpRepo();
+		process.env[REPO_ENV] = fake;
+		assert.equal(resolveRepo(), fake);
+	});
+
+	it("falls back to git rev-parse — returns the current repo when run inside one", () => {
+		// savedCwd is inside a git repo (the autopilot worktree itself)
+		const result = resolveRepo();
+		assert.ok(result.length > 0);
+		assert.ok(!result.includes("\n"));
+	});
+
+	it("throws when neither env nor git repo is available", () => {
+		const notARepo = mkdtempSync(join(tmpdir(), "autopilot-no-git-"));
+		process.chdir(notARepo);
+		assert.throws(() => resolveRepo(), /git repository/);
 	});
 });
 

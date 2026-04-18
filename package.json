@@ -1,11 +1,19 @@
 {
-  "name": "claude-autopilot",
+  "name": "@cdhorne/claude-autopilot",
   "version": "0.1.0",
   "private": true,
   "description": "Headless pipeline for running Claude Agent SDK cycles per roadmap item",
   "license": "UNLICENSED",
   "packageManager": "pnpm@10.32.1",
   "type": "module",
+  "bin": {
+    "claude-autopilot": "./bin/claude-autopilot.js"
+  },
+  "main": "./scripts/autopilot/index.ts",
+  "exports": {
+    ".": "./scripts/autopilot/index.ts",
+    "./package.json": "./package.json"
+  },
   "scripts": {
     "autopilot": "tsx scripts/autopilot.ts",
     "test": "tsx --test scripts/autopilot/__tests__/*.test.ts",
@@ -13,13 +21,15 @@
     "format": "biome check --write scripts/",
     "prepare": "lefthook install"
   },
-  "devDependencies": {
+  "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.113",
+    "tsx": "^4.19.0",
+    "yaml": "^2.8.3"
+  },
+  "devDependencies": {
     "@anthropic-ai/claude-code": "^2.1.113",
     "@biomejs/biome": "^2.4.12",
     "lefthook": "^2.1.6",
-    "tsx": "^4.19.0",
-    "typescript": "^6.0.3",
-    "yaml": "^2.8.3"
+    "typescript": "^6.0.3"
   }
 }
