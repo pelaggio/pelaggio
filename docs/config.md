@@ -26,6 +26,10 @@ All other values use: `yml value` > default.
 worktree:
   prefix: "myproj-"            # default: `${basename(REPO)}-`
 
+ship:
+  target: direct-push           # default: direct-push
+                                # values: direct-push | pull-request | auto-merge-pr
+
 budgets:                        # dollars per step (safety-net caps)
   pick: 2
   plan: 8
@@ -87,11 +91,29 @@ models:
   names (`pick`, `plan`, `shakedown-plan`, etc.) are literal keys whose
   internal hyphens are part of the step identifier.
 
+## Ship target
+
+`ship.target` selects how `/ship` lands the branch. Three modes:
+
+| Value            | Behavior                                                         |
+|------------------|------------------------------------------------------------------|
+| `direct-push`    | Squash, merge into local `main`, push, update docs, clean up.    |
+| `pull-request`   | Squash, push branch, `gh pr create`. Stop. No docs, no merge.    |
+| `auto-merge-pr`  | As `pull-request` + `gh pr merge --auto --squash`.               |
+
+Default: `direct-push`. Precedence: `--target` CLI flag > `ship.target` yml > default.
+Invalid values fail fast at startup with the list of valid names.
+
+In PR modes the worktree, local branch, and post-merge doc updates
+(task-index, roadmap "Recently completed", plan archive) are intentionally
+**not** touched in-session — those land after the PR merges externally.
+Automating the post-merge side is planned for TOOL-10 / TOOL-15.
+
 ## Unknown keys
 
 Top-level keys not recognized by the current loader (`project`, `docs`,
-`roadmap`, `ship`, …) are silently ignored. This keeps forward-compatibility
-as future tools extend the schema. Unknown step keys inside a recognized
+`roadmap`, …) are silently ignored. This keeps forward-compatibility as
+future tools extend the schema. Unknown step keys inside a recognized
 section (e.g. `budgets.bogus: 5`) are also ignored.
 
 ## Not configurable (yet)

@@ -1,6 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
-import { MODEL_PROFILES, REPO, WORKTREE_PREFIX } from "./config.js";
+import { MODEL_PROFILES, REPO, SHIP_TARGET, WORKTREE_PREFIX } from "./config.js";
 import {
 	appendLog as appendLogDefault,
 	checkpoint,
@@ -19,6 +19,7 @@ import {
 	resolveWorktree,
 	stepIndex,
 } from "./helpers.js";
+import { getShipTarget, isShipTargetName, SHIP_TARGET_NAMES } from "./ship/index.js";
 import { runStep as runStepDefault } from "./step-runner.js";
 import { A, createStepRenderer, fmtElapsed, LiveStatus, StatusBar } from "./tui.js";
 import type { CycleResult, CycleStatus, Flags, ParkSignal, PipelineOpts, Step, StepLog, StepResult } from "./types.js";
@@ -393,11 +394,16 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			error: "nothing to ship: branch only touches docs/plans/ (plan-only / no implementation)",
 		});
 	}
-	log(`shipping...${opts.pr ? " (PR mode)" : ""}`);
-	const ship = await step("ship", expandSkill("ship", opts.pr ? "--pr" : undefined), worktree!);
+	const target = opts.shipTarget;
+	const targetSuffix = target.name === "direct-push" ? "" : ` (${target.name})`;
+	log(`shipping...${targetSuffix}`);
+	const shipPrompt = `${expandSkill("ship", `--target=${target.name}`)}\n\n${target.buildPrompt({ itemId: itemId!, worktree: worktree! })}`;
+	const ship = await step("ship", shipPrompt, worktree!);
 	cost += ship.cost;
 
-	if (!ship.ok && ship.subtype !== "error_rate_limit" && !parkSignal.parked) {
+	const shipResult = target.interpretResult(ship);
+
+	if (!ship.ok && ship.subtype !== "error_rate_limit" && !parkSignal.parked && target.name === "direct-push") {
 		log("ship failed — attempting /shipwreck recovery...");
 		shipwrecked = true;
 		const wreck = await step("shipwreck", expandSkill("shipwreck", itemId!), REPO);
@@ -413,10 +419,12 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 
 	return finish({
 		itemId,
-		completed: ship.ok,
+		completed: shipResult.completed,
 		cost,
 		verdict,
-		error: ship.ok ? undefined : "ship failed",
+		error: shipResult.error,
+		...(shipResult.awaitingMerge ? { awaitingMerge: true } : {}),
+		...(shipResult.prUrl ? { prUrl: shipResult.prUrl } : {}),
 	});
 }
 
@@ -440,6 +448,17 @@ export async function orchestrate(flags: Flags): Promise<void> {
 	const statusBar = new StatusBar();
 	const liveStatus = new LiveStatus(statusBar);
 	const parkSignal: ParkSignal = { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" };
+
+	// Resolve ship target: CLI --target > config SHIP_TARGET > default
+	let shipTargetName = SHIP_TARGET;
+	if (flags.target !== undefined) {
+		if (!isShipTargetName(flags.target)) {
+			console.error(`invalid --target ${JSON.stringify(flags.target)}; valid: ${SHIP_TARGET_NAMES.join(", ")}`);
+			process.exit(2);
+		}
+		shipTargetName = flags.target;
+	}
+	const shipTarget = getShipTarget(shipTargetName);
 
 	// Resume mode
 	if (flags.resume) {
@@ -470,7 +489,7 @@ export async function orchestrate(flags: Flags): Promise<void> {
 				startFrom,
 				cycle: 1,
 				verbose: v,
-				pr: flags.pr,
+				shipTarget,
 				dryRun: false,
 				workerStatus: status,
 				liveStatus,
@@ -503,9 +522,8 @@ export async function orchestrate(flags: Flags): Promise<void> {
 			.filter(Boolean) ?? [];
 	const isParallel = parallel > 1;
 
-	console.log(
-		`${A.bold("autopilot")}  ${cycles} cycle(s)${isParallel ? `  ${A.dim("×")}${parallel} parallel` : ""}  ${A.dim("budget")} $${maxBudget.toFixed(2)}${flags.pr ? `  ${A.dim("PR mode")}` : ""}${dryRun ? `  ${A.yellow("[DRY RUN]")}` : ""}`,
-	);
+	const targetBanner = shipTargetName === "direct-push" ? "" : `  ${A.dim(`target=${shipTargetName}`)}`;
+	console.log(`${A.bold("autopilot")}  ${cycles} cycle(s)${isParallel ? `  ${A.dim("×")}${parallel} parallel` : ""}  ${A.dim("budget")} $${maxBudget.toFixed(2)}${targetBanner}${dryRun ? `  ${A.yellow("[DRY RUN]")}` : ""}`);
 	if (isParallel && v) {
 		console.log(`${A.dim("logs")}  .dev/autopilot-{N}.log`);
 	}
@@ -566,7 +584,7 @@ export async function orchestrate(flags: Flags): Promise<void> {
 					itemId: items[cycle - 1],
 					cycle,
 					verbose: !isParallel && v,
-					pr: flags.pr,
+					shipTarget,
 					dryRun,
 					pickMutex,
 					workerStatus: status,
@@ -676,7 +694,7 @@ export async function orchestrate(flags: Flags): Promise<void> {
 						startFrom: sf,
 						cycle: results.length + i + 1,
 						verbose: !isParallel && v,
-						pr: flags.pr,
+						shipTarget,
 						dryRun: false,
 						workerStatus: st,
 						logPath:
@@ -710,7 +728,15 @@ export async function orchestrate(flags: Flags): Promise<void> {
 	console.log("");
 	console.log(`${A.bold("summary")}  $${totalSpent.toFixed(2)} across ${results.length} cycle(s)${isParallel ? `  ${A.dim("×")}${parallel} parallel` : ""}`);
 	for (const r of results) {
-		console.log(`  ${resultIcon(r)} ${r.itemId ?? "?"}: ${r.completed ? A.green("shipped") : A.dim(r.error ?? "failed")}`);
+		let label: string;
+		if (r.completed && r.awaitingMerge) {
+			label = `${A.green("↗ PR opened")}${r.prUrl ? ` ${A.dim(r.prUrl)}` : ""}`;
+		} else if (r.completed) {
+			label = A.green("shipped");
+		} else {
+			label = A.dim(r.error ?? "failed");
+		}
+		console.log(`  ${resultIcon(r)} ${r.itemId ?? "?"}: ${label}`);
 	}
 
 	process.exit(results.every((r) => r.completed) ? 0 : 1);

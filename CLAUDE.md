@@ -24,6 +24,7 @@ N/A — no persistent data. State is the git working tree + `.dev/autopilot-log.
 - **Rate-limit parking preserves work**: every pipeline exit path must call `parkExit()` (which checkpoints uncommitted work) before returning on rate-limit rejection.
 - **No hardcoded model strings**: all model names live in `MODEL_PROFILES` in `config.ts`. No other file references `claude-opus-*` or `claude-sonnet-*` literals.
 - **Phantom ship guard**: `pipeline.ts` calls `hasDeliverableCommits()` before invoking `ship` — cycles whose branch only touches `docs/plans/` (i.e. only the `/plan` artifact with no implementation) are flagged `completed: false` with a "nothing to ship" error, and ship is never invoked. Doc-only work outside `docs/plans/` (rubric, skill bodies, README, roadmap edits) is still deliverable. The identical guard inside `/ship`'s SKILL.md is defense in depth for inline (non-pipeline) use.
+- **Ship target is config-driven**: `/ship`'s merge vs PR behavior is selected by `ship.target` (`.autopilot.yml`) and dispatched via adapters in `scripts/autopilot/ship/`. The skill body branches on the `--target` arg; don't hardcode merge logic in TS. `/shipwreck` recovery only runs for `direct-push` — PR modes never merge in-session, so a ship failure there is reported as-is.
 
 ## Configuration
 
@@ -32,8 +33,8 @@ optional; missing file or empty file = defaults. Parsed once at startup by
 `loadConfig()` in `config.ts` — parse errors fail loudly with the file path.
 
 Live keys (consumed today): `worktree.prefix`, `budgets.*`, `turn-limits.*`,
-`effort.*`, `models.profiles.<name>.*`. Unknown top-level keys (e.g.
-`project`, `docs`, `roadmap`, `ship`) are silently ignored for
+`effort.*`, `models.profiles.<name>.*`, `ship.target`. Unknown top-level keys
+(e.g. `project`, `docs`, `roadmap`) are silently ignored for
 forward-compatibility as future TOOLs extend the schema.
 
 Precedence for worktree prefix: `CLAUDE_AUTOPILOT_WORKTREE_PREFIX` env >
@@ -52,7 +53,7 @@ inside `config.ts` and the example lives in the doc.
 | `/plan` | Generate implementation plan, write to `docs/plans/{slug}.md`, commit |
 | `/shakedown` | Review against rubric + fix issues. Plan-review mode (before implement) or code-review mode (after implement) |
 | `/charter` | Add new work item to a roadmap + task-index |
-| `/ship` | Squash, merge, update docs, push, clean up worktree |
+| `/ship` | Squash, then one of: direct-push (merge → update docs → clean up) \| pull-request (push + `gh pr create`) \| auto-merge-pr (PR + `gh pr merge --auto`). Target picked by `ship.target`. |
 | `/shipwreck` | Recovery skill when `/ship` fails partway through |
 | `/pickup` | Rebuild context for in-progress work — read plan, show progress, suggest next step |
 | `/status` | Where am I (current branch, plan, uncommitted, commits ahead) |

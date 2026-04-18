@@ -1,0 +1,322 @@
+import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, it } from "node:test";
+import { loadConfig } from "../config.js";
+import { runPipeline } from "../pipeline.js";
+import { getShipTarget, isShipTargetName, SHIP_TARGET_NAMES } from "../ship/index.js";
+import type { Flags, PipelineOpts, ShipTargetName, StepResult } from "../types.js";
+import { createMockRunStep, makeLiveStatus, makeParkSignal, makeTempGitRepo } from "./mocks.js";
+
+const PR_URL = "https://github.com/acme/widget/pull/42";
+
+function makeStepResult(over: Partial<StepResult> = {}): StepResult {
+	return { ok: true, subtype: "success", text: "", fullText: "", cost: 0, turns: 0, ...over };
+}
+
+const baseFlags: Flags = {
+	cycles: "1",
+	parallel: "1",
+	verbose: false,
+	trace: false,
+	budget: "10",
+	"max-wait": "6h",
+	"dry-run": false,
+};
+
+function baseOpts(worktree: string, name: ShipTargetName): PipelineOpts {
+	return {
+		itemId: "TOOL-99",
+		worktree,
+		cycle: 1,
+		verbose: false,
+		shipTarget: getShipTarget(name),
+		dryRun: false,
+		liveStatus: makeLiveStatus(),
+	};
+}
+
+// ── Factory ───────────────────────────────────────────────────────────
+
+describe("getShipTarget — factory", () => {
+	it("returns adapter whose name matches for each valid name", () => {
+		for (const name of SHIP_TARGET_NAMES) {
+			assert.equal(getShipTarget(name).name, name);
+		}
+	});
+
+	it("isShipTargetName narrows correctly", () => {
+		assert.equal(isShipTargetName("direct-push"), true);
+		assert.equal(isShipTargetName("pull-request"), true);
+		assert.equal(isShipTargetName("auto-merge-pr"), true);
+		assert.equal(isShipTargetName("rocket"), false);
+		assert.equal(isShipTargetName(undefined), false);
+	});
+
+	it("throws with the list of valid names on unknown target", () => {
+		assert.throws(
+			() => getShipTarget("bogus" as ShipTargetName),
+			(err: Error) => {
+				assert.match(err.message, /direct-push/);
+				assert.match(err.message, /pull-request/);
+				assert.match(err.message, /auto-merge-pr/);
+				return true;
+			},
+		);
+	});
+});
+
+// ── Adapter units ─────────────────────────────────────────────────────
+
+describe("direct-push adapter", () => {
+	const a = getShipTarget("direct-push");
+
+	it("buildPrompt mentions direct-push mode", () => {
+		const prompt = a.buildPrompt({ itemId: "TOOL-99", worktree: "/tmp/wt" });
+		assert.match(prompt, /direct-push/);
+		assert.match(prompt, /merge/i);
+	});
+
+	it("interpretResult: success", () => {
+		const r = a.interpretResult(makeStepResult({ ok: true }));
+		assert.equal(r.completed, true);
+		assert.equal(r.awaitingMerge, undefined);
+		assert.equal(r.prUrl, undefined);
+		assert.equal(r.error, undefined);
+	});
+
+	it("interpretResult: failure", () => {
+		const r = a.interpretResult(makeStepResult({ ok: false }));
+		assert.equal(r.completed, false);
+		assert.equal(r.error, "ship failed");
+	});
+});
+
+describe("pull-request adapter", () => {
+	const a = getShipTarget("pull-request");
+
+	it("buildPrompt includes gh pr create and 'do NOT merge'", () => {
+		const prompt = a.buildPrompt({ itemId: "TOOL-99", worktree: "/tmp/wt" });
+		assert.match(prompt, /gh pr create/);
+		assert.match(prompt, /NOT merge/);
+	});
+
+	it("interpretResult extracts PR URL from text", () => {
+		const r = a.interpretResult(makeStepResult({ ok: true, text: `Opened ${PR_URL}` }));
+		assert.equal(r.completed, true);
+		assert.equal(r.awaitingMerge, true);
+		assert.equal(r.prUrl, PR_URL);
+	});
+
+	it("interpretResult extracts PR URL from fullText when text is empty", () => {
+		const r = a.interpretResult(makeStepResult({ ok: true, text: "done", fullText: `created PR: ${PR_URL}` }));
+		assert.equal(r.prUrl, PR_URL);
+	});
+
+	it("interpretResult: success with no URL still reports awaitingMerge", () => {
+		const r = a.interpretResult(makeStepResult({ ok: true, text: "done" }));
+		assert.equal(r.completed, true);
+		assert.equal(r.awaitingMerge, true);
+		assert.equal(r.prUrl, undefined);
+	});
+
+	it("interpretResult: failure", () => {
+		const r = a.interpretResult(makeStepResult({ ok: false }));
+		assert.equal(r.completed, false);
+		assert.equal(r.awaitingMerge, undefined);
+		assert.equal(r.error, "ship failed");
+	});
+});
+
+describe("auto-merge-pr adapter", () => {
+	const a = getShipTarget("auto-merge-pr");
+
+	it("buildPrompt includes both gh pr create and gh pr merge --auto", () => {
+		const prompt = a.buildPrompt({ itemId: "TOOL-99", worktree: "/tmp/wt" });
+		assert.match(prompt, /gh pr create/);
+		assert.match(prompt, /gh pr merge --auto/);
+	});
+
+	it("interpretResult extracts PR URL and marks awaitingMerge", () => {
+		const r = a.interpretResult(makeStepResult({ ok: true, text: `auto-merge enabled on ${PR_URL}` }));
+		assert.equal(r.completed, true);
+		assert.equal(r.awaitingMerge, true);
+		assert.equal(r.prUrl, PR_URL);
+	});
+});
+
+// ── Pipeline integration ─────────────────────────────────────────────
+
+describe("runPipeline — ship target dispatch", () => {
+	it("direct-push: ship prompt contains mode signature, no awaitingMerge", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const { runStep, calls } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				ship: { ok: true, text: "merged and pushed" },
+			},
+			parkSignal,
+		);
+		const result = await runPipeline(baseOpts(worktree, "direct-push"), parkSignal, baseFlags, {
+			runStep,
+			listWorktrees: () => [],
+			appendLog: () => {},
+		});
+		assert.equal(result.completed, true);
+		assert.equal(result.awaitingMerge, undefined);
+		assert.equal(result.prUrl, undefined);
+		const shipCall = calls.find((c) => c.step === "ship");
+		assert.ok(shipCall);
+		assert.match(shipCall.prompt, /direct-push/);
+	});
+
+	it("pull-request: prompt mentions gh pr create, result marks awaitingMerge + prUrl", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const { runStep, calls } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				ship: { ok: true, text: `PR opened: ${PR_URL}` },
+			},
+			parkSignal,
+		);
+		const result = await runPipeline(baseOpts(worktree, "pull-request"), parkSignal, baseFlags, {
+			runStep,
+			listWorktrees: () => [],
+			appendLog: () => {},
+		});
+		assert.equal(result.completed, true);
+		assert.equal(result.awaitingMerge, true);
+		assert.equal(result.prUrl, PR_URL);
+		const shipCall = calls.find((c) => c.step === "ship");
+		assert.ok(shipCall);
+		assert.match(shipCall.prompt, /gh pr create/);
+		assert.match(shipCall.prompt, /pull-request/);
+	});
+
+	it("auto-merge-pr: prompt includes gh pr merge --auto", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const { runStep, calls } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				ship: { ok: true, text: `auto-merge on ${PR_URL}` },
+			},
+			parkSignal,
+		);
+		const result = await runPipeline(baseOpts(worktree, "auto-merge-pr"), parkSignal, baseFlags, {
+			runStep,
+			listWorktrees: () => [],
+			appendLog: () => {},
+		});
+		assert.equal(result.completed, true);
+		assert.equal(result.awaitingMerge, true);
+		assert.equal(result.prUrl, PR_URL);
+		const shipCall = calls.find((c) => c.step === "ship");
+		assert.ok(shipCall);
+		assert.match(shipCall.prompt, /gh pr merge --auto/);
+	});
+});
+
+describe("runPipeline — shipwreck skipped for PR modes", () => {
+	it("pull-request: ship fails, shipwreck NOT invoked", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const { runStep, calls } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				ship: { ok: false, subtype: "error", text: "push failed" },
+			},
+			parkSignal,
+		);
+		const result = await runPipeline(baseOpts(worktree, "pull-request"), parkSignal, baseFlags, {
+			runStep,
+			listWorktrees: () => [],
+			appendLog: () => {},
+		});
+		assert.equal(result.completed, false);
+		assert.equal(result.error, "ship failed");
+		const stepsRun = calls.map((c) => c.step);
+		assert.ok(!stepsRun.includes("shipwreck"), `shipwreck should not run; got ${stepsRun.join(",")}`);
+	});
+
+	it("direct-push: ship fails, shipwreck IS invoked", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const { runStep, calls } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				ship: { ok: false, subtype: "error", text: "merge failed" },
+				shipwreck: { ok: true },
+			},
+			parkSignal,
+		);
+		const result = await runPipeline(baseOpts(worktree, "direct-push"), parkSignal, baseFlags, {
+			runStep,
+			listWorktrees: () => [],
+			appendLog: () => {},
+		});
+		const stepsRun = calls.map((c) => c.step);
+		assert.ok(stepsRun.includes("shipwreck"), `shipwreck should run; got ${stepsRun.join(",")}`);
+		assert.equal(result.completed, true);
+	});
+});
+
+// ── Config validation ────────────────────────────────────────────────
+
+describe("loadConfig — ship.target validation", () => {
+	function writeYml(contents: string): string {
+		const dir = mkdtempSync(join(tmpdir(), "autopilot-config-test-"));
+		const path = join(dir, ".autopilot.yml");
+		writeFileSync(path, contents);
+		return path;
+	}
+
+	it("defaults to direct-push when ship block absent", () => {
+		const path = writeYml("");
+		assert.equal(loadConfig({ configPath: path }).shipTarget, "direct-push");
+	});
+
+	it("accepts each valid target name", () => {
+		for (const name of SHIP_TARGET_NAMES) {
+			const path = writeYml(`ship:\n  target: ${name}\n`);
+			assert.equal(loadConfig({ configPath: path }).shipTarget, name);
+		}
+	});
+
+	it("throws on invalid ship.target with list of valid names", () => {
+		const path = writeYml("ship:\n  target: rocket\n");
+		assert.throws(
+			() => loadConfig({ configPath: path }),
+			(err: Error) => {
+				assert.match(err.message, /ship\.target/);
+				assert.match(err.message, /direct-push/);
+				assert.match(err.message, /pull-request/);
+				assert.match(err.message, /auto-merge-pr/);
+				return true;
+			},
+		);
+	});
+
+	it("throws when ship is not a map", () => {
+		const path = writeYml("ship: nope\n");
+		assert.throws(() => loadConfig({ configPath: path }), /ship.*map/);
+	});
+});

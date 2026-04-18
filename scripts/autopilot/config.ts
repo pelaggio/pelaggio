@@ -2,6 +2,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
+import type { ShipTargetName } from "./types.js";
+
+const SHIP_TARGET_NAMES: readonly ShipTargetName[] = ["direct-push", "pull-request", "auto-merge-pr"];
 
 // ── Paths ──────────────────────────────────────────────────────────────
 
@@ -36,6 +39,7 @@ export interface ResolvedConfig {
 	turnLimits: Record<Step, number>;
 	effort: Record<Step, Effort>;
 	modelProfiles: Record<string, Partial<Record<Step, string>>>;
+	shipTarget: ShipTargetName;
 }
 
 export const DEFAULTS = {
@@ -179,7 +183,23 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 	}
 	const worktreePrefix = process.env.CLAUDE_AUTOPILOT_WORKTREE_PREFIX ?? ymlPrefix ?? `${basename(repo)}-`;
 
-	return { repo, worktreePrefix, budgets, turnLimits, effort, modelProfiles };
+	// ship.target: default "direct-push"; validate against SHIP_TARGET_NAMES
+	let shipTarget: ShipTargetName = "direct-push";
+	const shipBlock = yml.ship;
+	if (shipBlock !== undefined) {
+		if (!isPlainObject(shipBlock)) {
+			throw new Error(`${configPath}: expected \`ship\` to be a map`);
+		}
+		const t = shipBlock.target;
+		if (t !== undefined) {
+			if (!isString(t) || !(SHIP_TARGET_NAMES as readonly string[]).includes(t)) {
+				throw new Error(`${configPath}: expected \`ship.target\` to be one of ${SHIP_TARGET_NAMES.join("|")}, got ${JSON.stringify(t)}`);
+			}
+			shipTarget = t as ShipTargetName;
+		}
+	}
+
+	return { repo, worktreePrefix, budgets, turnLimits, effort, modelProfiles, shipTarget };
 }
 
 // ── Resolved exports (populated at import time) ────────────────────────
@@ -191,3 +211,4 @@ export const BUDGETS: Record<Step, number> = CONFIG.budgets;
 export const TURN_LIMITS: Record<Step, number> = CONFIG.turnLimits;
 export const EFFORT: Record<Step, Effort> = CONFIG.effort;
 export const MODEL_PROFILES: Record<string, Partial<Record<Step, string>>> = CONFIG.modelProfiles;
+export const SHIP_TARGET: ShipTargetName = CONFIG.shipTarget;

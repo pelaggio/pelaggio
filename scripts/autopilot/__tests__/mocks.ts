@@ -22,16 +22,16 @@ export type MockBehavior = Partial<Record<Step, StepOutcome | StepOutcome[]>>;
 
 export interface MockRunStep {
 	runStep: RunStepFn;
-	calls: Array<{ step: Step; attempt: number }>;
+	calls: Array<{ step: Step; attempt: number; prompt: string }>;
 }
 
 export function createMockRunStep(behavior: MockBehavior, parkSignal: ParkSignal): MockRunStep {
 	const calls: MockRunStep["calls"] = [];
 	const attempts: Partial<Record<Step, number>> = {};
-	const runStep: RunStepFn = async (name, _prompt, opts, emit) => {
+	const runStep: RunStepFn = async (name, prompt, opts, emit) => {
 		const attempt = (attempts[name] ?? 0) + 1;
 		attempts[name] = attempt;
-		calls.push({ step: name, attempt });
+		calls.push({ step: name, attempt, prompt });
 		const spec = behavior[name];
 		const outcome: StepOutcome = Array.isArray(spec) ? (spec[Math.min(attempt - 1, spec.length - 1)] ?? {}) : (spec ?? {});
 		if (outcome.writes) {

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { runPipeline } from "../pipeline.js";
+import { getShipTarget } from "../ship/index.js";
 import type { Flags, PipelineOpts } from "../types.js";
 import { allCommitMessages, createMockRunStep, makeLiveStatus, makeParkSignal, makeTempGitRepo } from "./mocks.js";
 
@@ -11,7 +12,6 @@ const baseFlags: Flags = {
 	trace: false,
 	budget: "10",
 	"max-wait": "6h",
-	pr: false,
 	"dry-run": false,
 };
 
@@ -21,7 +21,7 @@ function baseOpts(worktree: string): PipelineOpts {
 		worktree,
 		cycle: 1,
 		verbose: false,
-		pr: false,
+		shipTarget: getShipTarget("direct-push"),
 		dryRun: false,
 		liveStatus: makeLiveStatus(),
 	};

@@ -60,6 +60,30 @@ export interface CycleResult {
 	cost: number;
 	verdict?: string;
 	error?: string;
+	awaitingMerge?: boolean;
+	prUrl?: string;
+}
+
+// ── Ship targets ───────────────────────────────────────────────────────
+
+export type ShipTargetName = "direct-push" | "pull-request" | "auto-merge-pr";
+
+export interface ShipContext {
+	itemId: string;
+	worktree: string;
+}
+
+export interface ShipResult {
+	completed: boolean;
+	awaitingMerge?: boolean;
+	prUrl?: string;
+	error?: string;
+}
+
+export interface ShipTarget {
+	readonly name: ShipTargetName;
+	buildPrompt(ctx: ShipContext): string;
+	interpretResult(step: StepResult): ShipResult;
 }
 
 export interface CycleStatus {
@@ -77,7 +101,7 @@ export interface PipelineOpts {
 	startFrom?: Step;
 	cycle: number;
 	verbose: boolean;
-	pr: boolean;
+	shipTarget: ShipTarget;
 	dryRun: boolean;
 	pickMutex?: Mutex;
 	workerStatus?: CycleStatus;
@@ -106,7 +130,7 @@ export interface Flags {
 	trace: boolean;
 	budget: string;
 	"max-wait": string;
-	pr: boolean;
+	target?: string;
 	"dry-run": boolean;
 }
 

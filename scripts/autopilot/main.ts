@@ -16,7 +16,7 @@ const { values, positionals } = parseArgs({
 		trace: { type: "boolean", default: false },
 		budget: { type: "string", default: "40" },
 		"max-wait": { type: "string", default: "6h" },
-		pr: { type: "boolean", default: false },
+		target: { type: "string" },
 		"dry-run": { type: "boolean", default: false },
 	},
 });
