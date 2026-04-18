@@ -1,22 +1,24 @@
 import { GitHubIssuesRoadmap } from "./github-issues.js";
+import { LinearRoadmap } from "./linear.js";
 import { MarkdownRoadmap } from "./markdown.js";
-import { type GithubRoadmapConfig, ROADMAP_SOURCE_NAMES, type RoadmapSource, type RoadmapSourceName } from "./types.js";
+import { type GithubRoadmapConfig, type LinearRoadmapConfig, ROADMAP_SOURCE_NAMES, type RoadmapSource, type RoadmapSourceName } from "./types.js";
 
 export {
-	GH_PLAN_LOCATIONS,
-	type GhPlanLocation,
 	type GithubRoadmapConfig,
-	isGhPlanLocation,
+	isPlanLocation,
 	isRoadmapSourceName,
+	type LinearRoadmapConfig,
 	type MarkDoneContext,
+	PLAN_LOCATIONS,
+	type PlanLocation,
 	ROADMAP_SOURCE_NAMES,
 	type RoadmapItem,
 	type RoadmapSource,
 	type RoadmapSourceName,
 } from "./types.js";
-export { GitHubIssuesRoadmap, MarkdownRoadmap };
+export { GitHubIssuesRoadmap, LinearRoadmap, MarkdownRoadmap };
 
-export function getRoadmapSource(name: RoadmapSourceName, opts: { repo: string; github?: GithubRoadmapConfig }): RoadmapSource {
+export function getRoadmapSource(name: RoadmapSourceName, opts: { repo: string; github?: GithubRoadmapConfig; linear?: LinearRoadmapConfig }): RoadmapSource {
 	switch (name) {
 		case "markdown":
 			return new MarkdownRoadmap({ repo: opts.repo });
@@ -29,6 +31,16 @@ export function getRoadmapSource(name: RoadmapSourceName, opts: { repo: string; 
 				ghRepo: opts.github.ghRepo,
 				label: opts.github.label,
 				planLocation: opts.github.planLocation,
+			});
+		case "linear":
+			if (!opts.linear?.teamId) {
+				throw new Error("linear roadmap requires `roadmap.linear.team` in .autopilot.yml");
+			}
+			return new LinearRoadmap({
+				repo: opts.repo,
+				teamId: opts.linear.teamId,
+				label: opts.linear.label,
+				planLocation: opts.linear.planLocation,
 			});
 		default: {
 			const exhaustive: never = name;

@@ -1,10 +1,10 @@
-export type RoadmapSourceName = "markdown" | "github-issues";
+export type RoadmapSourceName = "markdown" | "github-issues" | "linear";
 
-export const ROADMAP_SOURCE_NAMES: readonly RoadmapSourceName[] = ["markdown", "github-issues"];
+export const ROADMAP_SOURCE_NAMES: readonly RoadmapSourceName[] = ["markdown", "github-issues", "linear"];
 
-export type GhPlanLocation = "issue-comment" | "pr-description";
+export type PlanLocation = "issue-comment" | "pr-description";
 
-export const GH_PLAN_LOCATIONS: readonly GhPlanLocation[] = ["issue-comment", "pr-description"];
+export const PLAN_LOCATIONS: readonly PlanLocation[] = ["issue-comment", "pr-description"];
 
 export interface GithubRoadmapConfig {
 	/**
@@ -16,7 +16,16 @@ export interface GithubRoadmapConfig {
 	/** Label filtering open issues. Default: `autopilot`. */
 	label: string;
 	/** Where to look for plan bodies. Default: `issue-comment`. */
-	planLocation: GhPlanLocation;
+	planLocation: PlanLocation;
+}
+
+export interface LinearRoadmapConfig {
+	/** Linear team UUID. Required when roadmap.source is linear. */
+	teamId: string;
+	/** Label filtering open issues. Default `""` = no label filter. */
+	label: string;
+	/** Where to look for plan bodies. Only `issue-comment` is implemented. */
+	planLocation: PlanLocation;
 }
 
 export interface RoadmapItem {
@@ -47,6 +56,6 @@ export function isRoadmapSourceName(v: unknown): v is RoadmapSourceName {
 	return typeof v === "string" && (ROADMAP_SOURCE_NAMES as readonly string[]).includes(v);
 }
 
-export function isGhPlanLocation(v: unknown): v is GhPlanLocation {
-	return typeof v === "string" && (GH_PLAN_LOCATIONS as readonly string[]).includes(v);
+export function isPlanLocation(v: unknown): v is PlanLocation {
+	return typeof v === "string" && (PLAN_LOCATIONS as readonly string[]).includes(v);
 }

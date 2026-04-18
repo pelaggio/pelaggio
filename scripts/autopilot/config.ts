@@ -2,7 +2,7 @@ import { execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
-import { GH_PLAN_LOCATIONS, type GhPlanLocation, type GithubRoadmapConfig, ROADMAP_SOURCE_NAMES, type RoadmapSourceName } from "./roadmap/types.js";
+import { type GithubRoadmapConfig, type LinearRoadmapConfig, PLAN_LOCATIONS, type PlanLocation, ROADMAP_SOURCE_NAMES, type RoadmapSourceName } from "./roadmap/types.js";
 import type { ShipTargetName } from "./types.js";
 
 const SHIP_TARGET_NAMES: readonly ShipTargetName[] = ["direct-push", "pull-request", "auto-merge-pr"];
@@ -57,11 +57,18 @@ export interface ResolvedConfig {
 	shipTarget: ShipTargetName;
 	roadmapSource: RoadmapSourceName;
 	roadmapGithub: GithubRoadmapConfig;
+	roadmapLinear: LinearRoadmapConfig;
 }
 
 const DEFAULT_GITHUB_ROADMAP: GithubRoadmapConfig = {
 	ghRepo: "",
 	label: "autopilot",
+	planLocation: "issue-comment",
+};
+
+const DEFAULT_LINEAR_ROADMAP: LinearRoadmapConfig = {
+	teamId: "",
+	label: "",
 	planLocation: "issue-comment",
 };
 
@@ -225,6 +232,7 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 	// roadmap.source: default "markdown"; validate against ROADMAP_SOURCE_NAMES
 	let roadmapSource: RoadmapSourceName = "markdown";
 	const roadmapGithub: GithubRoadmapConfig = { ...DEFAULT_GITHUB_ROADMAP };
+	const roadmapLinear: LinearRoadmapConfig = { ...DEFAULT_LINEAR_ROADMAP };
 	const roadmapBlock = yml.roadmap;
 	if (roadmapBlock !== undefined) {
 		if (!isPlainObject(roadmapBlock)) {
@@ -256,10 +264,35 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 			}
 			const pl = gh["plan-location"];
 			if (pl !== undefined) {
-				if (!isString(pl) || !(GH_PLAN_LOCATIONS as readonly string[]).includes(pl)) {
-					throw new Error(`${configPath}: expected \`roadmap.github.plan-location\` to be one of ${GH_PLAN_LOCATIONS.join("|")}, got ${JSON.stringify(pl)}`);
+				if (!isString(pl) || !(PLAN_LOCATIONS as readonly string[]).includes(pl)) {
+					throw new Error(`${configPath}: expected \`roadmap.github.plan-location\` to be one of ${PLAN_LOCATIONS.join("|")}, got ${JSON.stringify(pl)}`);
 				}
-				roadmapGithub.planLocation = pl as GhPlanLocation;
+				roadmapGithub.planLocation = pl as PlanLocation;
+			}
+		}
+		const lin = roadmapBlock.linear;
+		if (lin !== undefined) {
+			if (!isPlainObject(lin)) {
+				throw new Error(`${configPath}: expected \`roadmap.linear\` to be a map`);
+			}
+			if (lin.team !== undefined) {
+				if (!isString(lin.team)) {
+					throw new Error(`${configPath}: expected \`roadmap.linear.team\` to be a string`);
+				}
+				roadmapLinear.teamId = lin.team;
+			}
+			if (lin.label !== undefined) {
+				if (!isString(lin.label)) {
+					throw new Error(`${configPath}: expected \`roadmap.linear.label\` to be a string`);
+				}
+				roadmapLinear.label = lin.label;
+			}
+			const pl = lin["plan-location"];
+			if (pl !== undefined) {
+				if (!isString(pl) || !(PLAN_LOCATIONS as readonly string[]).includes(pl)) {
+					throw new Error(`${configPath}: expected \`roadmap.linear.plan-location\` to be one of ${PLAN_LOCATIONS.join("|")}, got ${JSON.stringify(pl)}`);
+				}
+				roadmapLinear.planLocation = pl as PlanLocation;
 			}
 		}
 	}
@@ -267,8 +300,11 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 	if (roadmapSource === "github-issues" && !roadmapGithub.ghRepo) {
 		throw new Error(`${configPath}: \`roadmap.github.repo\` (owner/repo) is required when roadmap.source is github-issues`);
 	}
+	if (roadmapSource === "linear" && !roadmapLinear.teamId) {
+		throw new Error(`${configPath}: \`roadmap.linear.team\` is required when roadmap.source is linear`);
+	}
 
-	return { repo, worktreePrefix, budgets, turnLimits, effort, modelProfiles, shipTarget, roadmapSource, roadmapGithub };
+	return { repo, worktreePrefix, budgets, turnLimits, effort, modelProfiles, shipTarget, roadmapSource, roadmapGithub, roadmapLinear };
 }
 
 // ── Resolved exports (populated at import time) ────────────────────────
@@ -283,3 +319,4 @@ export const MODEL_PROFILES: Record<string, Partial<Record<Step, string>>> = CON
 export const SHIP_TARGET: ShipTargetName = CONFIG.shipTarget;
 export const ROADMAP_SOURCE: RoadmapSourceName = CONFIG.roadmapSource;
 export const ROADMAP_GITHUB: GithubRoadmapConfig = CONFIG.roadmapGithub;
+export const ROADMAP_LINEAR: LinearRoadmapConfig = CONFIG.roadmapLinear;

@@ -40,6 +40,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | ~~TOOL-28. `worktree-deps` bin subcommand (consumer-friendly path)~~ | **Done** — exposed as `npx claude-autopilot worktree-deps` bin subcommand; pick/SKILL.md updated (2026-04-18) |
 | ~~TOOL-29. Broaden `Bash(npx tsx:*)` → `Bash(npx:*)` in shakedown + ship~~ | **Done** — Broadened npx allowlist from tsx:* to npx:* in pick, shakedown, ship, shipwreck skills (2026-04-18) |
 | ~~TOOL-30. Drop vendored script paths from skill prose~~ | **Done** — Removed stale `parseVerdict` path references from _review-logic.md and shakedown/SKILL.md (2026-04-18) |
+| TOOL-31. Rewire skill bodies through `RoadmapSource` (github-issues + linear) | TOOL-10, TOOL-15 |
 
 ---
 
@@ -250,6 +251,23 @@ Completed. See git history for implementation details.
 ### TOOL-30. Drop vendored script paths from skill prose ✓
 
 Completed. See git history for implementation details.
+
+---
+
+### TOOL-31. Rewire skill bodies through `RoadmapSource` (github-issues + linear)
+
+| What | Scope | Deps |
+|------|-------|------|
+| Both `GitHubIssuesRoadmap` (TOOL-10) and `LinearRoadmap` (TOOL-15) ship as "adapter-only" — the factory and config are wired, but `/pick`, `/plan`, `/ship`, `/charter`, `/status`, `/pickup`, `/shakedown`, and `/tidy` still read markdown directly. Set `roadmap.source: github-issues` or `linear` today and no end-to-end cycle runs. This ticket threads the `RoadmapSource` interface through each skill body so all three adapters reach parity. | L | TOOL-10, TOOL-15 |
+
+**Deliverables:**
+- Replace markdown-file reads in the skill bodies with `RoadmapSource` calls (`listOpenItems`, `claimItem`, `markDone`, `getItemPlan`, `parseItemId`, `isQuickScope`).
+- Keep `MarkdownRoadmap` as the default; no behavior change for consumers not opting in.
+- End-to-end smoke test against `github-issues` (fathom) and `linear` (pick a workspace) once wired.
+- Remove the "adapter-only" caveat blocks from `docs/config.md` when shipped.
+
+**Out of scope:**
+- New adapters. This is a wiring-only ticket.
 
 ---
 

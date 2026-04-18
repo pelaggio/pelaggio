@@ -1,6 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
-import { MODEL_PROFILES, REPO, ROADMAP_GITHUB, ROADMAP_SOURCE, SHIP_TARGET, WORKTREE_PREFIX } from "./config.js";
+import { MODEL_PROFILES, REPO, ROADMAP_GITHUB, ROADMAP_LINEAR, ROADMAP_SOURCE, SHIP_TARGET, WORKTREE_PREFIX } from "./config.js";
 import {
 	appendLog as appendLogDefault,
 	captureShipState,
@@ -48,7 +48,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	const appendLog = deps.appendLog ?? appendLogDefault;
 	const mainRepo = deps.mainRepo ?? REPO;
 	const _resolveWorktree = deps.resolveWorktree ?? resolveWorktree;
-	const roadmap = deps.roadmap ?? getRoadmapSource(ROADMAP_SOURCE, { repo: REPO, github: ROADMAP_GITHUB });
+	const roadmap = deps.roadmap ?? getRoadmapSource(ROADMAP_SOURCE, { repo: REPO, github: ROADMAP_GITHUB, linear: ROADMAP_LINEAR });
 	let cost = 0;
 	let profile = "standard";
 	const steps: StepLog[] = [];

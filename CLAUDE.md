@@ -76,15 +76,16 @@ Don't fold shakedown back into plan to save a cycle — the context-shape differ
 ## Roadmap sources
 
 The pipeline reads roadmap + task-index data through a `RoadmapSource`
-interface (`scripts/autopilot/roadmap/index.ts`). Today the only adapter is
-`MarkdownRoadmap` (parses `docs/roadmap-*.md` + `docs/task-index.md`).
+interface (`scripts/autopilot/roadmap/index.ts`). Adapters today:
+`MarkdownRoadmap` (parses `docs/roadmap-*.md` + `docs/task-index.md`),
+`GitHubIssuesRoadmap` (via `gh` CLI), and `LinearRoadmap` (via `@linear/sdk`).
 `getRoadmapSource(name, { repo })` is the factory; the resolved name comes
 from `roadmap.source` in `.autopilot.yml` (default `"markdown"`). Adding a
-new adapter (GitHub Issues, Linear) means adding a file under
-`scripts/autopilot/roadmap/`, widening the `RoadmapSourceName` union in
-`roadmap/types.ts`, and extending the factory `switch`. The `/pick` and
-`/ship` skill bodies are still markdown-aware — wiring them through the
-adapter is TOOL-10's scope.
+new adapter means adding a file under `scripts/autopilot/roadmap/`, widening
+the `RoadmapSourceName` union in `roadmap/types.ts`, and extending the
+factory `switch`. The `/pick` and `/ship` skill bodies are still
+markdown-aware — wiring them through the remote adapters is a shared
+follow-up across `github-issues` and `linear`.
 
 ## Non-obvious conventions
 

@@ -11,6 +11,7 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 | ID | Title | Deps | Plan | Roadmap |
 |----|-------|------|------|---------|
 | TOOL-15 | LinearRoadmap adapter | TOOL-9 | — | core |
+| TOOL-31 | Rewire skill bodies through RoadmapSource | TOOL-10, TOOL-15 | — | core |
 
 ## Recently completed
 
