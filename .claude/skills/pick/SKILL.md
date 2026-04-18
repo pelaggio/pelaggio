@@ -53,7 +53,7 @@ If the branch already exists (item is already in-flight), report it and ask whet
 
 2. Note related `docs/plan-*.md` and `docs/design-*.md` files.
 
-3. Install deps: `cd "$WORKTREE" && pnpm install --frozen-lockfile`
+3. Install deps: `cd "$WORKTREE" && pnpm install --frozen-lockfile --silent` (the `--silent` suppresses per-package progress lines — cuts this step's token bill roughly in half without hiding errors).
 
 4. Report: item, branch, worktree, scope, related docs, dependencies.
    Next step: "Open a new terminal, `cd {worktree}`, run `claude`, then `/plan`."
