@@ -12,7 +12,6 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 |----|-------|------|------|---------|
 | TOOL-2 | Dep graph visualization from roadmap files | — | — | core |
 | TOOL-15 | LinearRoadmap adapter | TOOL-9 | — | core |
-| TOOL-16 | Split /refit → /bump-models + self-hosted Renovate | — | — | core |
 | TOOL-18 | Public-npm publish hardening | — | — | core |
 
 ## Recently completed
@@ -30,6 +29,7 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 - TOOL-12 ✓
 - TOOL-13 ✓
 - TOOL-14 ✓
+- TOOL-16 ✓
 - TOOL-17 ✓
 - TOOL-19 ✓
 - TOOL-20 ✓

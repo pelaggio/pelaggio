@@ -69,7 +69,7 @@ Don't fold shakedown back into plan to save a cycle — the context-shape differ
 | `/pickup` | Rebuild context for in-progress work — read plan, show progress, suggest next step |
 | `/status` | Where am I (current branch, plan, uncommitted, commits ahead) |
 | `/tidy` | Clean up stale worktrees and archived roadmap items |
-| `/refit` | Refresh Claude model IDs + deps — scan, categorize by risk, bump in reviewed stages |
+| `/bump-models` | Refresh Claude model IDs when Anthropic ships new Opus/Sonnet versions. Package deps are Renovate-managed. |
 | `sync` (CLI) | `npx claude-autopilot sync` — diff installed `.claude/skills/<name>/SKILL.md` against the package and prompt overwrite/skip/merge per file. Not a pipeline step. |
 
 ## Roadmap sources

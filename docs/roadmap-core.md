@@ -27,7 +27,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | ~~TOOL-13. Package shape + git-dep consumption + `init` CLI~~ | **Done** — Package shape, init CLI, and library exports added (2026-04-18) |
 | ~~TOOL-14. `sync` CLI — upgrade installed skills with diff prompts~~ | **Done** — sync CLI for skill upgrade with diff prompts added (2026-04-18) |
 | TOOL-15. LinearRoadmap adapter | TOOL-9 |
-| TOOL-16. Split /refit → /bump-models + self-hosted Renovate | — |
+| ~~TOOL-16. Split /refit → /bump-models + self-hosted Renovate~~ | **Done** — /refit replaced with /bump-models; Renovate + CI self-hosted workflows added (2026-04-18) |
 | ~~TOOL-17. Pipeline pick-step test coverage (needs REPO injectability)~~ | **Done** — resolveWorktree injection seam + pick-step test coverage added (2026-04-18) |
 | TOOL-18. Public-npm publish hardening | TOOL-13 |
 | ~~TOOL-19. `orchestrate()` test coverage — resume, parallel, park-and-resume~~ | **Done** — orchestrate() test coverage for resume, parallel, and park-and-resume added (2026-04-18) |
@@ -156,7 +156,7 @@ Completed. See git history for implementation details.
 
 ---
 
-### TOOL-16. Split /refit → /bump-models + self-hosted Renovate
+### TOOL-16. Split /refit → /bump-models + self-hosted Renovate ✓
 
 | What | Scope | Deps |
 |------|-------|------|
