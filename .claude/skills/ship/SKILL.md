@@ -25,6 +25,8 @@ Resolve MAIN_REPO. Parse `$ARGUMENTS` for `--no-squash` and `--pr` flags.
 
 !`cat .claude/skills/_rubric.md`
 
+!`cat .claude/skills/_project-context.md 2>/dev/null`
+
 **If `Arguments:` at the bottom of this prompt contains the string `autopilot`**, you were invoked by the pipeline immediately after `/shakedown` — which just blocked on any rubric-failing state. Pre-merge re-verification is redundant: **skip to step 2**. Post-merge verification at step 5 still runs unconditionally (merging main can break things independent of this branch).
 
 **Otherwise (inline invocation)**, run the rubric's verification commands now. All must pass (exit 0) — stop and report if any fail.

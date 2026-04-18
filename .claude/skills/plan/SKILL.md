@@ -32,6 +32,8 @@ Resolve MAIN_REPO now.
 
 !`cat .claude/skills/_rubric.md`
 
+!`cat .claude/skills/_project-context.md 2>/dev/null`
+
 ## Write the plan
 
 **You MUST write the plan to a file on disk** at `{MAIN_REPO}/docs/plans/{branch-name-without-feat-prefix}.md` (create the directory if needed). Use the Write tool — do not just output the plan as text. This file is read by `/shakedown` in a separate session.

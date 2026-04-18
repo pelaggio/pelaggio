@@ -30,6 +30,8 @@ Resolve MAIN_REPO. Must be on a feature branch (not `main`).
 
 !`cat .claude/skills/_rubric.md`
 
+!`cat .claude/skills/_project-context.md 2>/dev/null`
+
 ## Review logic
 
 !`cat .claude/skills/_review-logic.md`

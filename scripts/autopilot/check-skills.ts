@@ -24,7 +24,10 @@ export const SKILL_SCHEMA: SkillSchema = {
 const ALLOWED_EFFORTS = ["min", "low", "medium", "high", "max"] as const;
 
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
-const INCLUDE_RE = /!\x60cat\s+([^\x60\s]+)(?:\s+2>\/dev\/null)?\x60/g;
+// Group 1: include path. Group 2: optional `2>/dev/null` graceful suffix — when
+// present, a missing file is opt-in (not a violation), matching the shell
+// semantics that the include is allowed to be absent at the consumer's discretion.
+const INCLUDE_RE = /!\x60cat\s+([^\x60\s]+)(\s+2>\/dev\/null)?\x60/g;
 
 function lineOf(body: string, index: number): number {
 	let line = 1;
@@ -156,8 +159,9 @@ export function lintSkillFile(absPath: string, repoRoot: string): Violation[] {
 	// biome-ignore lint/suspicious/noAssignInExpressions: standard regex exec loop
 	while ((m = INCLUDE_RE.exec(body)) !== null) {
 		const includePath = m[1];
+		const graceful = m[2] !== undefined;
 		const resolved = resolve(repoRoot, includePath);
-		if (!existsSync(resolved)) {
+		if (!existsSync(resolved) && !graceful) {
 			violations.push({
 				file: rel,
 				line: lineOf(body, m.index),
