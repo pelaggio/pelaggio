@@ -246,16 +246,20 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 
 		const implementPrompt =
 			profile === "quick"
-				? `This is a small-scope item (bug fix or scope S). Implement it directly — no formal plan needed. Read the roadmap entry for ${itemId} to understand the requirements.`
+				? `This is a small-scope item (bug fix or scope S). Implement it directly — no formal plan needed. Read the roadmap entry for ${itemId} to understand the requirements. Edit the target files the roadmap names; do NOT create or edit a plan file.`
 				: [
 						verdict === "APPROVE" ? "Plan approved." : `Shakedown requested revisions:\n${shakedownPlanText.slice(0, 2000)}${shakedownPlanText.length > 2000 ? "\n...(truncated)" : ""}\nAddress the feedback, then implement.`,
 						"",
 						"## Plan",
 						planRef,
 						"",
+						"## CRITICAL — execute the plan, do not polish it",
+						"The plan file is your **reference only**; it is already approved and locked. Your deliverables are the **target files the plan names** (look for a `Files to change` table or file paths under headings). Do NOT edit the plan file itself to refine wording or add detail — that is not progress, it is plan-polishing and it will fail the cycle.",
+						"Before finishing, confirm `git diff --name-only main...HEAD` lists target files, not only `docs/plans/*`.",
+						"",
 						"## Strategy — work incrementally",
-						"1. Read the full plan first. Identify the implementation order.",
-						"2. Implement one logical chunk at a time (e.g., one new file, one screen, one hook).",
+						"1. Read the full plan first. Identify the target files and the implementation order.",
+						"2. Implement one logical chunk at a time (e.g., one target file, one new function, one section). For doc-only items the 'chunk' is a specific file or section edit.",
 						"3. After each chunk, run the verification commands from `.claude/skills/_rubric.md`'s Verification section. Fix errors before moving on.",
 						"4. If the same error persists after 3 fix attempts, commit what works, skip the problematic piece, and note it.",
 						"5. Run all verification commands from the rubric before finishing.",
@@ -267,6 +271,9 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			"",
 			"## Plan",
 			planRef,
+			"",
+			"## CRITICAL — execute the plan, do not polish it",
+			"The plan file is your **reference only**. Your deliverables are the **target files the plan names**. Do NOT edit the plan file itself to refine wording — that is not progress. Before finishing, confirm `git diff --name-only main...HEAD` lists target files, not only `docs/plans/*`.",
 			"",
 			"## Instructions",
 			"1. Run the verification commands from `.claude/skills/_rubric.md`'s Verification section to see the current state.",
