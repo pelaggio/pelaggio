@@ -141,12 +141,15 @@ export async function runStep(name: Step, prompt: string, opts: RunStepOpts, emi
 			if (msg.type === "rate_limit_event") {
 				const rle = msg as SDKRateLimitEvent;
 				const info = rle.rate_limit_info;
-				if (info?.status === "rejected" && !opts.parkSignal.parked) {
+				const overageAvailable = info?.overageStatus === "allowed" || info?.overageStatus === "allowed_warning";
+				if (info?.status === "rejected" && !opts.parkSignal.parked && !overageAvailable) {
 					opts.parkSignal.parked = true;
 					opts.parkSignal.resetsAt = info.resetsAt ?? 0;
 					opts.parkSignal.limitType = info.rateLimitType ?? "unknown";
 					opts.parkSignal.triggerWorker = opts.itemId ?? "";
 					emit({ type: "rate_limit", limitType: opts.parkSignal.limitType, resetsAt: opts.parkSignal.resetsAt });
+				} else if (info?.status === "rejected" && overageAvailable) {
+					emit({ type: "rate_limit", limitType: `${info.rateLimitType ?? "unknown"} (continuing on extra usage)`, resetsAt: 0 });
 				}
 			}
 
@@ -222,6 +225,8 @@ export async function runStep(name: Step, prompt: string, opts: RunStepOpts, emi
 			subtype = "error_budget";
 		} else if (/abort/i.test(errMsg)) {
 			subtype = "error_abort";
+		} else if (/max.*turns|turn.?limit|maximum.*turns/i.test(errMsg)) {
+			subtype = "error_max_turns";
 		} else {
 			subtype = "error_sdk";
 		}

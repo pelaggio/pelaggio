@@ -171,20 +171,36 @@ async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, flags: Fl
 			cost += plan.cost;
 			if (!plan.ok) return parkExit() ?? finish({ itemId, completed: false, cost, error: "plan failed" });
 		}
+		const planPath = findPlanPath(worktree!);
+		if (planPath) log(`plan: file://${planPath}`);
 	}
 
 	if (shouldRun("shakedown-plan")) {
-		const parked = parkExit();
-		if (parked) return parked;
-		log("shakedown (plan)...");
-		const shakedown = await step("shakedown-plan", expandSkill("shakedown", "autopilot plan-review"), worktree!);
-		cost += shakedown.cost;
-		if (!shakedown.ok) return finish({ itemId, completed: false, cost, error: "shakedown-plan failed" });
+		const MAX_SHAKEDOWN_PLAN_ATTEMPTS = 2;
+		for (let attempt = 1; attempt <= MAX_SHAKEDOWN_PLAN_ATTEMPTS; attempt++) {
+			const parked = parkExit();
+			if (parked) return parked;
+			log(attempt === 1 ? "shakedown (plan)..." : "continuing shakedown-plan (attempt 2)...");
+			const shakedown = await step("shakedown-plan", expandSkill("shakedown", "autopilot plan-review"), worktree!);
+			cost += shakedown.cost;
 
-		verdict = parseVerdict(shakedown.text);
-		shakedownPlanText = shakedown.text;
-		log(`verdict: ${verdict}`);
-		if (verdict === "RETHINK") return finish({ itemId, completed: false, cost, verdict, error: "plan needs rethink" });
+			if (shakedown.ok) {
+				verdict = parseVerdict(shakedown.text);
+				shakedownPlanText = shakedown.text;
+				log(`verdict: ${verdict}`);
+				if (verdict === "RETHINK") return finish({ itemId, completed: false, cost, verdict, error: "plan needs rethink" });
+				break;
+			}
+
+			if (shakedown.subtype === "error_rate_limit" || parkSignal.parked) {
+				return parkExit() ?? finish({ itemId, completed: false, cost, error: "shakedown-plan failed" });
+			}
+			if (shakedown.subtype !== "error_max_turns") {
+				return finish({ itemId, completed: false, cost, error: "shakedown-plan failed" });
+			}
+			log(`shakedown-plan hit turn limit (attempt ${attempt}/${MAX_SHAKEDOWN_PLAN_ATTEMPTS})`);
+			if (attempt === MAX_SHAKEDOWN_PLAN_ATTEMPTS) return finish({ itemId, completed: false, cost, error: "shakedown-plan failed (max retries)" });
+		}
 	}
 
 	// ── Implement ──
