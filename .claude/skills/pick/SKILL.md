@@ -3,7 +3,7 @@ name: pick
 description: Select next work item from planning docs, claim it, create branch and worktree
 argument-hint: "[item-id | next [topic]]"
 disable-model-invocation: true
-allowed-tools: Read Glob Grep Bash(git:*) Bash(pnpm:*) Bash(npx tsx:*)
+allowed-tools: Read Glob Grep Bash(git:*) Bash(pnpm:*) Bash(npx claude-autopilot:*)
 ---
 
 # /pick — Select and Claim a Work Item
@@ -53,7 +53,7 @@ If the branch already exists (item is already in-flight), report it and ask whet
 
 2. Note related `docs/plan-*.md` and `docs/design-*.md` files.
 
-3. Install deps: `npx tsx "{MAIN_REPO}/scripts/autopilot/worktree-deps.ts" "$WORKTREE"`. When the worktree's `pnpm-lock.yaml` matches the main repo's, this symlinks `node_modules` to MAIN_REPO's instead of running a fresh install — fast and avoids I/O contention between parallel worktrees. On lockfile drift or a missing main `node_modules`, it falls through to `pnpm install --frozen-lockfile --silent`. The helper prints the action taken (`link` / `noop` / `install` / `reinstall` / `relink`).
+3. Install deps: `npx claude-autopilot worktree-deps "$WORKTREE"`. When the worktree's `pnpm-lock.yaml` matches the main repo's, this symlinks `node_modules` to MAIN_REPO's instead of running a fresh install — fast and avoids I/O contention between parallel worktrees. On lockfile drift or a missing main `node_modules`, it falls through to `pnpm install --frozen-lockfile --silent`. The helper prints the action taken (`link` / `noop` / `install` / `reinstall` / `relink`).
 
 4. Report: item, branch, worktree, scope, related docs, dependencies.
    Next step: "Open a new terminal, `cd {worktree}`, run `claude`, then `/plan`."
