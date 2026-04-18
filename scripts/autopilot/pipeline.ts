@@ -37,10 +37,10 @@ async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, flags: Fl
 		console.log(`${A.dim(ts)} [${logLabel}] ${A.dim(elapsed)} ${msg}`);
 	};
 
-	async function step(name: Step, prompt: string, cwd: string): Promise<StepResult> {
+	async function step(name: Step, prompt: string, cwd: string, attempt = 1): Promise<StepResult> {
 		if (opts.dryRun) {
 			log(`[dry-run] ${name}: "${prompt.slice(0, 60)}" in ${cwd}`);
-			steps.push({ name, model: MODEL_PROFILES[profile]?.[name] ?? "default", cost: 0, turns: 0, ok: true });
+			steps.push({ name, model: MODEL_PROFILES[profile]?.[name] ?? "default", cost: 0, turns: 0, ok: true, ...(attempt > 1 ? { attempt } : {}) });
 			return { ok: true, subtype: "success", text: `[dry-run] ${name}`, fullText: `[dry-run] ${name}`, cost: 0, turns: 0 };
 		}
 
@@ -66,13 +66,24 @@ async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, flags: Fl
 			emit,
 		);
 
-		steps.push({ name, model: MODEL_PROFILES[profile]?.[name] ?? "default", cost: result.cost, turns: result.turns, ok: result.ok });
+		steps.push({
+			name,
+			model: MODEL_PROFILES[profile]?.[name] ?? "default",
+			cost: result.cost,
+			turns: result.turns,
+			ok: result.ok,
+			...(result.tokens ? { tokens: result.tokens } : {}),
+			...(attempt > 1 ? { attempt } : {}),
+		});
 		if (opts.workerStatus) opts.workerStatus.cost += result.cost;
 		return result;
 	}
 
+	let shipwrecked = false;
+
 	function finish(result: CycleResult): CycleResult {
 		if (!opts.dryRun) {
+			const parked = result.error === "parked";
 			appendLog({
 				ts: new Date().toISOString(),
 				cycle: opts.cycle,
@@ -83,6 +94,9 @@ async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, flags: Fl
 				verdict: result.verdict ?? null,
 				completed: result.completed,
 				error: result.error ?? null,
+				parked,
+				parkReason: parked ? parkSignal.limitType || null : null,
+				shipwrecked,
 			});
 		}
 		return result;
@@ -187,6 +201,8 @@ async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, flags: Fl
 			if (shakedown.ok) {
 				verdict = parseVerdict(shakedown.text);
 				shakedownPlanText = shakedown.text;
+				const lastStep = steps[steps.length - 1];
+				if (lastStep && lastStep.name === "shakedown-plan") lastStep.verdict = verdict;
 				log(`verdict: ${verdict}`);
 				if (verdict === "RETHINK") return finish({ itemId, completed: false, cost, verdict, error: "plan needs rethink" });
 				break;
@@ -261,7 +277,7 @@ async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, flags: Fl
 						"- If stuck after 2 attempts on the same error, skip it and move on",
 					].join("\n")
 				: continuePrompt;
-			const impl = await step("implement", attempt === 1 ? implementPrompt : retryPrompt, worktree!);
+			const impl = await step("implement", attempt === 1 ? implementPrompt : retryPrompt, worktree!, attempt);
 			cost += impl.cost;
 
 			if (!opts.dryRun) {
@@ -322,7 +338,7 @@ async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, flags: Fl
 							"5. Re-run the verification commands before finishing.",
 						].join("\n");
 
-			const shakedown = await step("shakedown-code", shakedownPrompt, worktree!);
+			const shakedown = await step("shakedown-code", shakedownPrompt, worktree!, attempt);
 			cost += shakedown.cost;
 
 			if (!opts.dryRun) {
@@ -362,6 +378,7 @@ async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, flags: Fl
 
 	if (!ship.ok && ship.subtype !== "error_rate_limit" && !parkSignal.parked) {
 		log("ship failed — attempting /shipwreck recovery...");
+		shipwrecked = true;
 		const wreck = await step("shipwreck", expandSkill("shipwreck", itemId!), REPO);
 		cost += wreck.cost;
 		return finish({

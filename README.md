@@ -84,6 +84,40 @@ See `.claude-templates/migration-checklist.md` for the step-by-step bootstrap. T
 4. Fill in `CLAUDE.md` + `docs/philosophy.md` + the starter roadmap items
 5. Run `pnpm autopilot --cycles 1 --verbose`
 
+## Stats dashboard
+
+`pnpm autopilot stats` streams `.dev/autopilot-log.jsonl` and prints an aggregate dashboard — token totals, cost per step, cache-hit ratio, retry and rethink rates, and a list of recent items. Example:
+
+```
+autopilot stats                                             14 cycles  $12.34
+
+Cost & tokens
+  Cycles       14    completed 10  failed 2  parked 1  shipwrecked 1
+  Spend        $12.34
+  Tokens       in 1.2M  out 180K  cache-write 340K  cache-read 2.1M
+  Cache-hit    63.6%
+
+  By step         cost      in    out   cache-rd   hit%
+    pick        $0.12     22K   800K        45K   65.0%
+    plan        $2.30    180K    25K       320K   64.0%
+    ...
+
+Quality
+  Retry rate (turn-exhaustion)
+    implement        0.28 per cycle
+    shakedown-code   0.14 per cycle
+  Rethink rate (plan review)
+    shakedown-plan   14.3%
+  Avg shakedown iterations  1.18
+
+Recent items (last 10)
+  2026-04-17  TOOL-12     $1.10  128K tok  0 rethinks  ✓
+  2026-04-15  TOOL-6      $0.82   92K tok  0 rethinks  ✓
+  ...
+```
+
+No separate state file — the reducer runs over the append-only log on each invocation. Legacy log lines (no token fields) are tolerated; their step tokens count as zero.
+
 ## Using it on itself (meta)
 
 This repo uses its own pipeline to work on its own roadmap. See `docs/roadmap-core.md` for open items. Run `pnpm autopilot --cycles 1` to pick one up.
