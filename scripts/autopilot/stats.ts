@@ -14,6 +14,13 @@ interface DeliveredItem {
 	parked: boolean;
 }
 
+interface RecentFailure {
+	ts: string;
+	item: string | null;
+	error: string | null;
+	outputTail?: string;
+}
+
 export interface Stats {
 	totalCycles: number;
 	completedCycles: number;
@@ -30,6 +37,7 @@ export interface Stats {
 	tokensByStep: Record<string, TokenUsage>;
 	cacheHitRatioByStep: Record<string, number>;
 	itemsDelivered: DeliveredItem[];
+	recentFailures: RecentFailure[];
 }
 
 // ── Reducer ────────────────────────────────────────────────────────────
@@ -140,6 +148,21 @@ export function reduce(entries: CycleLogEntry[]): Stats {
 		cacheHitRatioByStep[name] = cacheHitRatio(tokensByStep[name]);
 	}
 
+	const recentFailures: RecentFailure[] = entries
+		.filter((e) => !e.completed)
+		.slice(-5)
+		.reverse()
+		.map((e) => {
+			const lastStep = e.steps?.[e.steps.length - 1];
+			const tail = lastStep?.outputTail;
+			return {
+				ts: e.ts,
+				item: e.item,
+				error: e.error,
+				...(tail ? { outputTail: tail } : {}),
+			};
+		});
+
 	return {
 		totalCycles: entries.length,
 		completedCycles: completed,
@@ -156,6 +179,7 @@ export function reduce(entries: CycleLogEntry[]): Stats {
 		tokensByStep,
 		cacheHitRatioByStep,
 		itemsDelivered,
+		recentFailures,
 	};
 }
 
@@ -255,13 +279,33 @@ export function renderDashboard(stats: Stats): string {
 		lines.push(A.dim("No completed items yet."));
 	}
 
+	if (stats.recentFailures.length > 0) {
+		lines.push("");
+		lines.push(A.bold(`Recent failures (last ${stats.recentFailures.length})`));
+		for (const f of stats.recentFailures) {
+			const date = (f.ts ?? "").slice(0, 10);
+			const id = (f.item ?? "?").padEnd(10);
+			const err = f.error ?? "(no error)";
+			lines.push(`  ${date}  ${id} ${A.red("✗")} ${err}`);
+			if (f.outputTail) lines.push(`    ${A.dim(f.outputTail.replace(/\n+/g, " "))}`);
+		}
+	}
+
 	return lines.join("\n");
+}
+
+export function renderJson(stats: Stats): string {
+	return JSON.stringify(stats, null, 2);
 }
 
 // ── Entry point ────────────────────────────────────────────────────────
 
-export function runStatsCommand(): void {
+export function runStatsCommand(opts: { json: boolean } = { json: false }): void {
 	if (!existsSync(LOG_PATH)) {
+		if (opts.json) {
+			console.log(renderJson(reduce([])));
+			return;
+		}
 		console.log(A.dim("No autopilot log found at") + " " + LOG_PATH);
 		return;
 	}
@@ -280,5 +324,5 @@ export function runStatsCommand(): void {
 		.filter((e): e is CycleLogEntry => e !== null && Array.isArray((e as { steps?: StepLog[] }).steps));
 
 	const stats = reduce(entries);
-	console.log(renderDashboard(stats));
+	console.log(opts.json ? renderJson(stats) : renderDashboard(stats));
 }
