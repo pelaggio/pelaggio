@@ -34,7 +34,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | ~~TOOL-21. Tighten `/ship` phantom-guard wording + update `_rubric.md` phantom-guard bullet~~ | **Done** — `/ship` phantom-guard + rubric bullet tightened (manual, 2026-04-18) |
 | ~~TOOL-23. Fix implement-step path resolution for worktree-relative deliverables~~ | **Done** — worktree path injected into implement prompt; pipeline.test.ts added (2026-04-18) |
 | TOOL-24. Skill extension points — product-context include + sync allowlist | — |
-| TOOL-25. Telemetry v2 — per-step file list, tool histogram, output tail, stats JSON | — |
+| ~~TOOL-25. Telemetry v2 — per-step file list, tool histogram, output tail, stats JSON~~ | **Done** — filesChanged/toolCounts/outputTail in StepResult, stats --json mode, recent-failures dashboard section (2026-04-18) |
 | TOOL-26. Share `node_modules` across worktrees to skip per-worktree `pnpm install` | — |
 
 ---
@@ -333,23 +333,9 @@ Completed. See git history for implementation details.
 
 ---
 
-### TOOL-25. Telemetry v2 — per-step file list, tool histogram, output tail, stats JSON
+### TOOL-25. Telemetry v2 — per-step file list, tool histogram, output tail, stats JSON ✓
 
-| What | Scope | Deps |
-|------|-------|------|
-| TOOL-12 shipped cost/tokens/verdicts/parked-state instrumentation. This session surfaced signals we wished we had: per-step file-change list (would have caught plan-polish in one glance — "implement touched only `docs/plans/`"), tool-call histogram (Read=3 Edit=1 → probably noop), and a short output tail (agent's last 100-200 chars — critical for post-mortems without replaying). Also add a `stats --json` mode so consumers can feed the log into dashboards. | S | — |
-
-**Deliverables:**
-- Extend `StepResult` in `types.ts` with: `filesChanged` (array of paths the step committed or staged — compute via `git diff --name-only HEAD~1 HEAD` after the step), `toolCounts` (Record<string, number> — Read/Edit/Write/Bash counts from the SDK event stream; already partially tracked via `editCounts` in `step-runner.ts`), `outputTail` (last 200 chars of the step's final assistant message, trimmed of ANSI)
-- Thread those fields through to the log entry's per-step block in `pipeline.ts`'s `finish()`
-- Extend `stats.ts` dashboard with a "recent failures" section that surfaces `outputTail` for cycles where `completed=false` — turns post-mortems into a single `pnpm autopilot stats` glance
-- Add `pnpm autopilot stats --json` that emits the aggregated record as JSON on stdout (no TTY rendering). Consumers pipe it into their own dashboards or Grafana.
-- Regression tests for the reducer with new fields populated
-
-**Out of scope:**
-- Prompt input size tracking (could be a follow-up; requires capturing before SDK call)
-- Attempt-count rollups (implement retries are in the log but not aggregated) — file as TOOL-26 if useful
-- Any log schema migration tooling — treat new fields as additive; old entries just lack them
+Completed. See git history for implementation details.
 
 ---
 
