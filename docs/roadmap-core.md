@@ -33,7 +33,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | ~~TOOL-19. `orchestrate()` test coverage — resume, parallel, park-and-resume~~ | **Done** — orchestrate() test coverage for resume, parallel, and park-and-resume added (2026-04-18) |
 | ~~TOOL-21. Tighten `/ship` phantom-guard wording + update `_rubric.md` phantom-guard bullet~~ | **Done** — `/ship` phantom-guard + rubric bullet tightened (manual, 2026-04-18) |
 | ~~TOOL-23. Fix implement-step path resolution for worktree-relative deliverables~~ | **Done** — worktree path injected into implement prompt; pipeline.test.ts added (2026-04-18) |
-| TOOL-24. Skill extension points — product-context include + sync allowlist | — |
+| ~~TOOL-24. Skill extension points — product-context include + sync allowlist~~ | **Done** — _project-context.md extension point + sync allowlist + check-skills support added (2026-04-18) |
 | ~~TOOL-25. Telemetry v2 — per-step file list, tool histogram, output tail, stats JSON~~ | **Done** — filesChanged/toolCounts/outputTail in StepResult, stats --json mode, recent-failures dashboard section (2026-04-18) |
 | TOOL-26. Share `node_modules` across worktrees to skip per-worktree `pnpm install` | — |
 
@@ -293,23 +293,9 @@ Completed. See git history for implementation details.
 
 ---
 
-### TOOL-24. Skill extension points — product-context include + sync allowlist
+### TOOL-24. Skill extension points — product-context include + sync allowlist ✓
 
-| What | Scope | Deps |
-|------|-------|------|
-| This repo's `.claude/skills/` are the generic autopilot baseline. Consumers (fathom, future products) need a way to inject product-specific context (data model invariants, shared component catalog, domain conventions) without forking SKILL.md files — otherwise every skill upgrade via TOOL-14 `sync` becomes a merge conflict. Add a consistent `!cat` extension point that each base skill optionally pulls in, and make `sync` never touch the extension file. | S | — |
-
-**Deliverables:**
-- Add `!cat .claude/skills/_project-context.md 2>/dev/null` (or equivalent graceful-fallback syntax) at the top of the three skills that need product context: `plan/SKILL.md`, `shakedown/SKILL.md`, `ship/SKILL.md`. Place it under the rubric `!cat` so it follows the general quality rules with the project-specific ones.
-- Create `.claude/skills/_project-context.md.example` — a template with commented-out sections for "Data model invariants", "Shared components", "Domain conventions", "Merge-conflict resolution patterns". Ship the example so products know what to put in their own `_project-context.md`.
-- Update `scripts/autopilot/sync.ts` allowlist/denylist to **exclude** `_project-context.md` — sync never overwrites it. Also exclude the `.example` (consumers shouldn't have it re-synced after they've customized their copy).
-- Add a short section to `CLAUDE.md` explaining the extension model: base skills live in the autopilot package, product context in `_project-context.md` stays local to each consumer.
-- Add a regression test in `sync.test.ts` that the allowlist skips `_project-context.md` even if it differs between source and target.
-
-**Out of scope:**
-- Populating `_project-context.md` for this repo itself — autopilot is the generic baseline; no product context to inject here (keep the file absent so the `!cat` fallback exercises).
-- Per-step context files (e.g. separate `_plan-context.md` vs `_ship-context.md`) — one file per consumer is sufficient; split later if volume warrants.
-- Migrating fathom's existing in-skill customizations into `_project-context.md` — that's fathom-side work after this lands.
+Completed. See git history for implementation details.
 
 ---
 
