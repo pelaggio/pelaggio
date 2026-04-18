@@ -18,7 +18,7 @@ export type SkillSchema = { required: readonly string[]; optional: readonly stri
 
 export const SKILL_SCHEMA: SkillSchema = {
 	required: ["name", "description", "allowed-tools"],
-	optional: ["argument-hint", "context", "agent", "effort", "disable-model-invocation"],
+	optional: ["argument-hint", "context", "agent", "effort", "disable-model-invocation", "consumer"],
 };
 
 const ALLOWED_EFFORTS = ["min", "low", "medium", "high", "max"] as const;
@@ -112,6 +112,14 @@ export function lintSkillFile(absPath: string, repoRoot: string): Violation[] {
 		});
 	}
 
+	if ("consumer" in fm && typeof fm.consumer !== "boolean") {
+		violations.push({
+			file: rel,
+			line: findFieldLine(frontmatterBody, "consumer"),
+			rule: "frontmatter.type-mismatch",
+			message: `"consumer" must be a boolean`,
+		});
+	}
 	if ("disable-model-invocation" in fm && typeof fm["disable-model-invocation"] !== "boolean") {
 		violations.push({
 			file: rel,
@@ -151,6 +159,21 @@ export function lintSkillFile(absPath: string, repoRoot: string): Violation[] {
 			rule: "frontmatter.type-mismatch",
 			message: `"argument-hint" must be a non-empty string`,
 		});
+	}
+
+	// Skills that reference autopilot internals (scripts/autopilot/*.ts) make no
+	// sense when synced into a consumer repo — those paths don't exist there.
+	// Require them to declare `consumer: false` so sync omits them.
+	if (fm.consumer !== false) {
+		const internalRef = /scripts\/autopilot\/[\w.-]+\.ts/.exec(body);
+		if (internalRef) {
+			violations.push({
+				file: rel,
+				line: lineOf(body, internalRef.index),
+				rule: "consumer.internal-ref",
+				message: `references \`${internalRef[0]}\` (package internal) but is not marked \`consumer: false\``,
+			});
+		}
 	}
 
 	// !cat include resolution

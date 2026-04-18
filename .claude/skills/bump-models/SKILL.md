@@ -2,6 +2,7 @@
 name: bump-models
 description: Refresh Claude model IDs in scripts/autopilot/config.ts when Anthropic ships new Opus/Sonnet versions
 allowed-tools: Read Edit Bash(pnpm:*) Bash(git:*) Bash(rg:*) WebFetch
+consumer: false
 ---
 
 # /bump-models — Claude model ID refresh

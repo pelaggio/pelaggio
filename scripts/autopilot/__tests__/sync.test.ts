@@ -51,7 +51,7 @@ describe("sync — planSync", () => {
 	it("emits create for skills absent in the consumer", () => {
 		const pkg = makeFakePkg({ pick: "PICK BODY\n", plan: "PLAN BODY\n" });
 		const consumer = makeGitRepo();
-		const plans = planSync(pkg, consumer);
+		const { plans } = planSync(pkg, consumer);
 		assert.equal(plans.length, 2);
 		assert.ok(plans.every((p) => p.kind === "create"));
 	});
@@ -60,7 +60,7 @@ describe("sync — planSync", () => {
 		const pkg = makeFakePkg({ pick: "PICK BODY\n" });
 		const consumer = makeGitRepo();
 		writeConsumerSkill(consumer, "pick", "PICK BODY\n");
-		const plans = planSync(pkg, consumer);
+		const { plans } = planSync(pkg, consumer);
 		assert.equal(plans.length, 1);
 		assert.equal(plans[0].kind, "identical");
 	});
@@ -69,7 +69,7 @@ describe("sync — planSync", () => {
 		const pkg = makeFakePkg({ pick: "NEW\n" });
 		const consumer = makeGitRepo();
 		writeConsumerSkill(consumer, "pick", "OLD\n");
-		const plans = planSync(pkg, consumer);
+		const { plans } = planSync(pkg, consumer);
 		assert.equal(plans.length, 1);
 		assert.equal(plans[0].kind, "conflict");
 		if (plans[0].kind === "conflict") {
@@ -81,7 +81,7 @@ describe("sync — planSync", () => {
 	it("excludes underscore-prefixed entries and non-directories", () => {
 		const pkg = makeFakePkg({ pick: "B\n" }, { "_rubric.md": "RUBRIC\n", "_review-logic.md": "RL\n" });
 		const consumer = makeGitRepo();
-		const plans = planSync(pkg, consumer);
+		const { plans } = planSync(pkg, consumer);
 		assert.equal(plans.length, 1);
 		assert.equal(plans[0].rel, ".claude/skills/pick/SKILL.md");
 	});
@@ -90,9 +90,33 @@ describe("sync — planSync", () => {
 		const pkg = makeFakePkg({ pick: "B\n" });
 		const consumer = makeGitRepo();
 		writeConsumerSkill(consumer, "my-custom", "CONSUMER\n");
-		const plans = planSync(pkg, consumer);
+		const { plans } = planSync(pkg, consumer);
 		const rels = plans.map((p) => p.rel);
 		assert.deepEqual(rels, [".claude/skills/pick/SKILL.md"]);
+	});
+
+	it("omits consumer:false skills and reports them via maintainerOnly", () => {
+		const pkg = makeFakePkg({
+			pick: "PICK\n",
+			"bump-models": "---\nname: bump-models\ndescription: x\nallowed-tools: Read\nconsumer: false\n---\nbody\n",
+		});
+		const consumer = makeGitRepo();
+		const { plans, maintainerOnly } = planSync(pkg, consumer);
+		assert.deepEqual(
+			plans.map((p) => p.rel),
+			[".claude/skills/pick/SKILL.md"],
+		);
+		assert.deepEqual(maintainerOnly, ["bump-models"]);
+	});
+
+	it("self-sync (pkgRoot === consumerRoot) sees all skills regardless of consumer flag", () => {
+		const pkg = makeFakePkg({
+			"bump-models": "---\nname: bump-models\ndescription: x\nallowed-tools: Read\nconsumer: false\n---\nbody\n",
+		});
+		const { plans, maintainerOnly } = planSync(pkg, pkg);
+		assert.equal(plans.length, 1);
+		assert.equal(plans[0].rel, ".claude/skills/bump-models/SKILL.md");
+		assert.deepEqual(maintainerOnly, []);
 	});
 });
 
@@ -287,7 +311,7 @@ describe("sync — runSync", () => {
 	it("smoke: real PKG_ROOT against itself reports all-identical (or creates for missing)", async () => {
 		const consumer = makeGitRepo();
 		// Pre-populate consumer from the real package so every SKILL.md matches.
-		const plans = planSync(REAL_PKG_ROOT, consumer);
+		const { plans } = planSync(REAL_PKG_ROOT, consumer);
 		for (const p of plans) {
 			mkdirSync(dirname(p.dest), { recursive: true });
 			writeFileSync(p.dest, readFileSync(p.src, "utf-8"));

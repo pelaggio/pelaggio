@@ -16,6 +16,7 @@ import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { createTwoFilesPatch } from "diff";
+import { parse as parseYaml } from "yaml";
 
 const PKG_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -44,6 +45,7 @@ export interface SyncResult {
 	merged: number;
 	conflicts: number;
 	sidecars: string[];
+	maintainerOnly: string[];
 }
 
 export function resolveConsumerRoot(cwd: string = process.cwd()): string {
@@ -54,14 +56,37 @@ export function resolveConsumerRoot(cwd: string = process.cwd()): string {
 	}
 }
 
+const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
+
+function isMaintainerOnly(skillBody: string): boolean {
+	const match = skillBody.match(FRONTMATTER_RE);
+	if (!match) return false;
+	try {
+		const fm = parseYaml(match[1]);
+		return fm !== null && typeof fm === "object" && !Array.isArray(fm) && (fm as Record<string, unknown>).consumer === false;
+	} catch {
+		return false;
+	}
+}
+
+export interface PlanSyncResult {
+	plans: SyncPlan[];
+	maintainerOnly: string[];
+}
+
 /**
  * Walk the package's `.claude/skills/` and return a plan per `<name>/SKILL.md`
- * where `<name>` is a directory entry that does not start with `_`.
+ * where `<name>` is a directory entry that does not start with `_`. Skills
+ * marked `consumer: false` in frontmatter are omitted from the plan and
+ * reported separately via `maintainerOnly` — unless `pkgRoot === consumerRoot`
+ * (self-sync inside the package itself), in which case all skills are emitted.
  */
-export function planSync(pkgRoot: string, consumerRoot: string): SyncPlan[] {
+export function planSync(pkgRoot: string, consumerRoot: string): PlanSyncResult {
 	const plans: SyncPlan[] = [];
+	const maintainerOnly: string[] = [];
 	const pkgSkillsRoot = resolve(pkgRoot, ".claude/skills");
-	if (!existsSync(pkgSkillsRoot)) return plans;
+	if (!existsSync(pkgSkillsRoot)) return { plans, maintainerOnly };
+	const selfSync = resolve(pkgRoot) === resolve(consumerRoot);
 
 	for (const entry of readdirSync(pkgSkillsRoot).sort()) {
 		if (entry.startsWith("_")) continue;
@@ -69,6 +94,12 @@ export function planSync(pkgRoot: string, consumerRoot: string): SyncPlan[] {
 		if (!statSync(skillDir).isDirectory()) continue;
 		const src = resolve(skillDir, "SKILL.md");
 		if (!existsSync(src)) continue;
+
+		const packageBody = readFileSync(src, "utf-8");
+		if (!selfSync && isMaintainerOnly(packageBody)) {
+			maintainerOnly.push(entry);
+			continue;
+		}
 
 		const rel = `.claude/skills/${entry}/SKILL.md`;
 		const dest = resolve(consumerRoot, rel);
@@ -78,7 +109,6 @@ export function planSync(pkgRoot: string, consumerRoot: string): SyncPlan[] {
 			continue;
 		}
 
-		const packageBody = readFileSync(src, "utf-8");
 		const consumerBody = readFileSync(dest, "utf-8");
 		if (packageBody === consumerBody) {
 			plans.push({ kind: "identical", rel, src, dest });
@@ -87,7 +117,7 @@ export function planSync(pkgRoot: string, consumerRoot: string): SyncPlan[] {
 		}
 	}
 
-	return plans;
+	return { plans, maintainerOnly };
 }
 
 const ALLOWED_DEST = /\/\.claude\/skills\/([^/_][^/]*)\/SKILL\.md(\.upstream)?$/;
@@ -164,7 +194,7 @@ export async function runSync(opts: SyncOptions): Promise<SyncResult> {
 		throw new Error("claude-autopilot sync: --force or --dry-run required when not running interactively");
 	}
 
-	const plans = planSync(pkgRoot, consumerRoot);
+	const { plans, maintainerOnly } = planSync(pkgRoot, consumerRoot);
 	const prompter = opts.prompter ?? defaultPrompter;
 
 	const result: SyncResult = {
@@ -174,6 +204,7 @@ export async function runSync(opts: SyncOptions): Promise<SyncResult> {
 		merged: 0,
 		conflicts: 0,
 		sidecars: [],
+		maintainerOnly,
 	};
 
 	for (const plan of plans) {
@@ -225,15 +256,18 @@ function printSummary(result: SyncResult, dryRun: boolean): void {
 	console.log("");
 	if (dryRun) {
 		console.log(`Would create: ${result.created}, identical: ${result.skipped}, conflicts: ${result.conflicts}`);
-		console.log("\n(dry run — no files were modified)");
-		return;
+	} else {
+		console.log(`create: ${result.created}, overwrite: ${result.overwritten}, skip: ${result.skipped}, merge: ${result.merged}`);
 	}
-	console.log(`create: ${result.created}, overwrite: ${result.overwritten}, skip: ${result.skipped}, merge: ${result.merged}`);
-	if (result.sidecars.length > 0) {
+	if (result.maintainerOnly.length > 0) {
+		console.log(`maintainer-only skills (not for consumers): ${result.maintainerOnly.join(", ")}`);
+	}
+	if (!dryRun && result.sidecars.length > 0) {
 		console.log("");
 		console.log("Sidecars written (resolve manually):");
 		for (const s of result.sidecars) console.log(`  ${s}`);
 	}
+	if (dryRun) console.log("\n(dry run — no files were modified)");
 }
 
 async function main(): Promise<void> {

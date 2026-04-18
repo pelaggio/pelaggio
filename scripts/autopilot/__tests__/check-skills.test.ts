@@ -94,6 +94,35 @@ describe("check-skills — lintSkillFile", () => {
 		assert.deepEqual(lintSkillFile(skillFile, repoRoot), []);
 	});
 
+	it("flags consumer with non-boolean value", () => {
+		const body = '---\nname: demo\ndescription: d\nallowed-tools: Read\nconsumer: "false"\n---\n\nbody\n';
+		const { repoRoot, skillFile } = makeRepoWithSkill("demo", body);
+		const v = lintSkillFile(skillFile, repoRoot);
+		assert.equal(v.length, 1);
+		assert.equal(v[0].rule, "frontmatter.type-mismatch");
+		assert.match(v[0].message, /boolean/);
+	});
+
+	it("accepts consumer: false as boolean", () => {
+		const body = "---\nname: demo\ndescription: d\nallowed-tools: Read\nconsumer: false\n---\n\nbody\n";
+		const { repoRoot, skillFile } = makeRepoWithSkill("demo", body);
+		assert.deepEqual(lintSkillFile(skillFile, repoRoot), []);
+	});
+
+	it("flags skill referencing scripts/autopilot/*.ts without consumer:false", () => {
+		const body = "---\nname: demo\ndescription: d\nallowed-tools: Read\n---\n\nEdit scripts/autopilot/config.ts as needed.\n";
+		const { repoRoot, skillFile } = makeRepoWithSkill("demo", body);
+		const v = lintSkillFile(skillFile, repoRoot);
+		assert.equal(v.length, 1);
+		assert.equal(v[0].rule, "consumer.internal-ref");
+	});
+
+	it("accepts internal ref when consumer: false is set", () => {
+		const body = "---\nname: demo\ndescription: d\nallowed-tools: Read\nconsumer: false\n---\n\nEdit scripts/autopilot/config.ts as needed.\n";
+		const { repoRoot, skillFile } = makeRepoWithSkill("demo", body);
+		assert.deepEqual(lintSkillFile(skillFile, repoRoot), []);
+	});
+
 	it("flags dangling !cat include with correct line number", () => {
 		const body = `---
 name: demo
