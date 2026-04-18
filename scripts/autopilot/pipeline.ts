@@ -34,8 +34,10 @@ export interface PipelineDeps {
 	runStep?: RunStepFn;
 	listWorktrees?: () => string[];
 	appendLog?: (entry: Record<string, unknown>) => void;
-	/** Override the main-repo path used for ghost-ship verification. Defaults to REPO. */
+	/** Override the main-repo path used for ghost-ship verification, pick cwd, and shipwreck cwd. Defaults to REPO. */
 	mainRepo?: string;
+	/** Override worktree-path derivation (mirrors OrchestratorDeps). Defaults to the helpers.ts export. */
+	resolveWorktree?: typeof resolveWorktree;
 	/** Roadmap source adapter. Defaults to one constructed from `ROADMAP_SOURCE` + `REPO`. */
 	roadmap?: RoadmapSource;
 }
@@ -45,6 +47,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	const listWorktrees = deps.listWorktrees ?? listWorktreesDefault;
 	const appendLog = deps.appendLog ?? appendLogDefault;
 	const mainRepo = deps.mainRepo ?? REPO;
+	const _resolveWorktree = deps.resolveWorktree ?? resolveWorktree;
 	const roadmap = deps.roadmap ?? getRoadmapSource(ROADMAP_SOURCE, { repo: REPO });
 	let cost = 0;
 	let profile = "standard";
@@ -153,7 +156,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			const worktreesBefore = new Set(opts.dryRun ? [] : listWorktrees());
 
 			log(`/pick ${itemId ?? "next"}`);
-			const pick = await step("pick", expandSkill("pick", itemId ?? "next"), REPO);
+			const pick = await step("pick", expandSkill("pick", itemId ?? "next"), mainRepo);
 			cost += pick.cost;
 			pickText = pick.text + "\n" + pick.fullText;
 
@@ -165,7 +168,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			itemId = opts.dryRun ? (itemId ?? "DRY") : (roadmap.parseItemId(pick.text) ?? roadmap.parseItemId(pick.fullText));
 			if (!itemId) return finish({ itemId: null, completed: false, cost, error: "no item ID parsed" });
 
-			worktree = resolveWorktree(itemId);
+			worktree = _resolveWorktree(itemId);
 			if (!opts.dryRun && (!existsSync(worktree) || worktreesBefore.has(worktree))) {
 				const newWt = listWorktrees().find((p) => !worktreesBefore.has(p) && p.includes(WORKTREE_PREFIX));
 				if (newWt) worktree = newWt;
@@ -443,7 +446,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	if ((!ship.ok || ghostShip) && ship.subtype !== "error_rate_limit" && !parkSignal.parked && target.name === "direct-push") {
 		log(ghostShip ? "ghost-ship — attempting /shipwreck recovery..." : "ship failed — attempting /shipwreck recovery...");
 		shipwrecked = true;
-		const wreck = await step("shipwreck", expandSkill("shipwreck", itemId!), REPO);
+		const wreck = await step("shipwreck", expandSkill("shipwreck", itemId!), mainRepo);
 		cost += wreck.cost;
 		return finish({
 			itemId,
