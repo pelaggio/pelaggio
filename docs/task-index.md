@@ -21,10 +21,11 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 | TOOL-10 | GitHubIssuesRoadmap adapter via gh CLI | TOOL-9 | — | core |
 | TOOL-11 | ShipTarget abstraction + DirectPush/PullRequest/AutoMergePR adapters | TOOL-4, TOOL-8 | — | core |
 | TOOL-12 | Running totals — token counts + stats JSON + `pnpm autopilot stats` | — | — | core |
-| TOOL-13 | Publish as `@cdhorne/claude-autopilot` on npm + `init` CLI | TOOL-8, TOOL-11 | — | core |
+| TOOL-13 | Package shape + git-dep consumption + `init` CLI | TOOL-8, TOOL-11 | — | core |
 | TOOL-14 | `sync` CLI — upgrade installed skills with diff prompts | TOOL-13 | — | core |
 | TOOL-15 | LinearRoadmap adapter | TOOL-9 | — | core |
 | TOOL-16 | Split /refit → /bump-models + self-hosted Renovate | — | — | core |
+| TOOL-18 | Public-npm publish hardening | TOOL-13 | — | core |
 
 ## Recently completed
 
