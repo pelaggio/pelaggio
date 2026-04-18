@@ -23,7 +23,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | TOOL-9. RoadmapSource abstraction + MarkdownRoadmap adapter | TOOL-4, TOOL-8 |
 | TOOL-10. GitHubIssuesRoadmap adapter via gh CLI | TOOL-9 |
 | TOOL-11. ShipTarget abstraction + 3 adapters | TOOL-4, TOOL-8 |
-| TOOL-12. Running totals — token counts + stats dashboard | — |
+| TOOL-12. Running totals — tokens + quality signals + stats dashboard | — |
 | TOOL-13. Publish as `@cdhorne/claude-autopilot` on npm + `init` CLI | TOOL-8, TOOL-11 |
 | TOOL-14. `sync` CLI — upgrade installed skills with diff prompts | TOOL-13 |
 | TOOL-15. LinearRoadmap adapter | TOOL-9 |
@@ -240,23 +240,38 @@ Completed. See git history for implementation details.
 
 ---
 
-### TOOL-12. Running totals — token counts + stats JSON + `pnpm autopilot stats`
+### TOOL-12. Running totals — tokens + quality signals + `pnpm autopilot stats`
 
 | What | Scope | Deps |
 |------|-------|------|
-| The `claude-agent-sdk` `SDKResultMessage` exposes `usage` (input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens). Capture these per step, append to `.dev/autopilot-stats.json` after each cycle, and add a `pnpm autopilot stats` subcommand that prints a dashboard. | S | — |
+| The `claude-agent-sdk` `SDKResultMessage` exposes `usage` (input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens). Capture those plus quality signals (retries, shakedown verdicts, parked vs completed) per step and cycle, append to `.dev/autopilot-stats.json`, and add `pnpm autopilot stats` that prints a dashboard. Must instrument *both* token efficiency (to optimize prompt caching) and quality (to optimize prompt/skill design) since either alone is insufficient to direct subsequent tuning. | M | — |
 
 **Deliverables:**
 - Read `usage` from `SDKResultMessage` in `step-runner.ts`, thread into `StepResult`
-- `.dev/autopilot-stats.json` append-only with fields: totalCycles, completedCycles, failedCycles, totalCostUsd, totalInputTokens, totalOutputTokens, cacheReadTokens, itemsDelivered (array with id, title, date, cost), costByProfile, costByStep
-- `scripts/autopilot/stats.ts` — reads the JSON, renders a dashboard via `tui.ts`
+- Extend `StepResult` to carry: `inputTokens`, `outputTokens`, `cacheCreationTokens`, `cacheReadTokens`, `retries` (turn-exhaustion retry count), `verdictTrail` (for shakedown steps: array of `APPROVE`/`RETHINK` verdicts across iterations)
+- Extend cycle-level log fields: `parked` (boolean), `parkReason` (string|null), `shipwreckInvoked` (boolean)
+- `.dev/autopilot-stats.json` append-only with fields:
+  - Aggregates: totalCycles, completedCycles, failedCycles, parkedCycles, shipwreckedCycles
+  - Cost/tokens: totalCostUsd, totalInputTokens, totalOutputTokens, cacheCreationTokens, cacheReadTokens, **cacheHitRatio** (cacheReadTokens / (inputTokens + cacheReadTokens))
+  - Quality: avgRetriesByStep (record keyed by step), rethinkRateByStep (record keyed by shakedown step), avgShakedownIterations
+  - Per-item: itemsDelivered array with `{id, title, date, cost, tokens, rethinks, parked}`
+  - Per-step breakdown: costByStep, tokensByStep, cacheHitRatioByStep
+- `scripts/autopilot/stats.ts` — reads the JSON, renders a dashboard via `tui.ts` with three sections: cost/tokens, quality, per-item history (last 10)
 - `autopilot.ts` entry point routes `stats` subcommand to the dashboard
-- `README.md` updated with a dashboard screenshot / example
+- `README.md` updated with a dashboard example (plain text, no screenshot needed)
+- Unit tests for the aggregation reducer (given N cycle records, produces correct aggregates)
+
+**Why these signals specifically:**
+- `cacheHitRatio` is the #1 lever for cost reduction — if low, prompts aren't structured for cache reuse
+- `rethinkRateByStep` on shakedown-plan / shakedown-code tells you if planning is converging or thrashing
+- `avgRetriesByStep` flags turn-limit pressure before cycles fail outright
+- `parkedCycles` / `shipwreckedCycles` separate environmental failures from quality failures
 
 **Out of scope:**
 - Per-day / per-week aggregations (dashboard is cumulative + last-N-items)
 - Exporting stats to external dashboards (Grafana, etc.)
-- Per-token cost breakdown by model (just by step for now)
+- Per-token cost breakdown by model ID (just by step for now)
+- Time-series plots — tabular output only
 
 ---
 
