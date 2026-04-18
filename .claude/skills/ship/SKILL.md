@@ -21,15 +21,17 @@ Resolve MAIN_REPO. Parse `$ARGUMENTS` for `--no-squash` and `--pr` flags.
 
 **CWD rule**: run steps 1-3 from your current working directory (the worktree). `HEAD` here is your feature branch. After the merge (step 4), all remaining steps run in `{MAIN_REPO}` on `main`.
 
-## 1. Verify
+## 1. Verify (conditional)
 
 !`cat .claude/skills/_rubric.md`
 
-All three verifications must pass (exit 0) — stop and report if any fail.
+**Pipeline mode (default inside autopilot):** `/shakedown` just ran the rubric's verification commands and blocked on failures — there's nothing to re-verify pre-merge. **Skip to step 2.** Post-merge verification at step 5 still runs unconditionally (merging main can break things independent of this branch).
 
-**Biome**: only *errors* block shipping. Warnings are acceptable — do not spend turns fixing them. Check the exit code, not the warning count.
+**Inline mode (human invokes `/ship` directly without a prior `/shakedown`):** run the rubric's verification commands now. All must pass (exit 0) — stop and report if any fail.
 
-**Pre-existing test failures**: if a test fails but the test file does not appear in `git diff main...HEAD --name-only`, the failure is pre-existing. Note it and move on — do not investigate or fix.
+**Policy (applies to any verification run, pre- or post-merge):**
+- **Biome** — only *errors* block shipping. Warnings are acceptable; do not spend turns fixing them. Check the exit code, not the warning count.
+- **Pre-existing test failures** — if a test fails but the test file is not in `git diff main...HEAD --name-only`, the failure is pre-existing. Note it and move on; do not investigate or fix.
 
 ## 2. Identify
 

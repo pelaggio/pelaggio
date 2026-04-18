@@ -40,12 +40,15 @@ Skills live in `.claude/skills/` — each skill is self-contained markdown with 
 ## Verification
 
 ```bash
-npx tsx --test scripts/autopilot/__tests__/helpers.test.ts   # unit tests for helpers
-npx tsx -e "import('./scripts/autopilot/config.ts')"          # parse-check config
-npx tsx -e "import('./scripts/autopilot/helpers.ts')"         # parse-check helpers
-npx tsx -e "import('./scripts/autopilot/pipeline.ts')"        # parse-check pipeline
+npx tsx --test --test-reporter=dot scripts/autopilot/__tests__/*.test.ts   # unit + pipeline tests (terse dot reporter)
+npx tsx -e "import('./scripts/autopilot/config.ts')"                        # parse-check config
+npx tsx -e "import('./scripts/autopilot/helpers.ts')"                       # parse-check helpers
+npx tsx -e "import('./scripts/autopilot/pipeline.ts')"                      # parse-check pipeline
+pnpm check                                                                   # biome (exit 0 on success — output is already compact)
 ```
 
-All four must succeed. No formal `pnpm typecheck` setup — tsx handles transpilation via swc and we rely on runtime parse-checks.
+All must succeed. No formal `pnpm typecheck` setup — tsx handles transpilation via swc and we rely on runtime parse-checks.
+
+**Reporter choice matters for token cost.** Inside autopilot cycles, verification stdout lands in the agent's event stream and counts as tool-result tokens. Default `node:test` spec reporter emits ~20-30 tokens per test — at 100+ tests a verification pass costs ~2k tokens; at 3500+ tests (fathom scale) it costs ~100k tokens per pass × 3 passes per cycle. **Always use a terse reporter in the rubric's verification commands.** Equivalents by framework: `node:test --test-reporter=dot`, `vitest --reporter=dot`, `jest --silent --reporters=summary`, `biome check --reporter=summary`. Verbose output is for humans debugging a failure, not for autopilot to re-confirm success.
 
 **Biome** lints `scripts/**/*.ts` via `biome.json`; run `pnpm check` (or `pnpm format` to auto-fix). Skill and template markdown is not linted. A lefthook `pre-commit` hook auto-formats staged TS files.
