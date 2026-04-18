@@ -37,6 +37,7 @@ N/A — no persistent data. State is the git working tree + `.dev/autopilot-log.
 | `/pickup` | Rebuild context for in-progress work — read plan, show progress, suggest next step |
 | `/status` | Where am I (current branch, plan, uncommitted, commits ahead) |
 | `/tidy` | Clean up stale worktrees and archived roadmap items |
+| `/refit` | Refresh Claude model IDs + deps — scan, categorize by risk, bump in reviewed stages |
 
 ## Non-obvious conventions
 
