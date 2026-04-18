@@ -31,17 +31,15 @@ Only read a full `docs/roadmap-*.md` file if you need the detailed spec for a sp
 
 Parse `$ARGUMENTS` (may be empty).
 
-**`/pick B3`** (argument is an item ID) — find that item by ID. If not found, report which docs were searched and stop. Skip to Claim.
+**`/pick B3`** (argument is an item ID) — find that item by ID. If not found, report which docs were searched and stop. If the item's Deps column starts with `blocked:`, **stop immediately** and report: "⚠ {ID} is blocked: {blocker text from Deps column}. Cannot pick a blocked item." Do not create a branch or worktree. Skip to Claim only if unblocked.
 
-**`/pick next`** (argument is exactly "next", no topic) — rank ALL pending items by: no unmet dependencies → not blocked on external factors → calendar urgency → unblocks others → no overlap with claimed items. **Immediately auto-claim the top match — do NOT ask for confirmation, do NOT list alternatives, do NOT wait for user input.** Go straight from ranking to the Claim section below. Do NOT filter by topic — consider all tracks.
+**`/pick next`** (argument is exactly "next", no topic) — rank ALL **unblocked** pending items by: no unmet dependencies → calendar urgency → unblocks others → no overlap with claimed items. **Hard-skip any item whose Deps column contains `blocked:`** — these are never eligible for auto-pick. **Immediately auto-claim the top match — do NOT ask for confirmation, do NOT list alternatives, do NOT wait for user input.** Go straight from ranking to the Claim section below. Do NOT filter by topic — consider all tracks.
 
-**`/pick next web-sync`** (argument is "next" followed by a topic) — same ranking as above but filter pending items by the given topic (fuzzy match).
+**`/pick next web-sync`** (argument is "next" followed by a topic) — same ranking as above but filter pending items by the given topic (fuzzy match). Same blocked-item exclusion applies.
 
-**`/pick`** (no argument) — show all pending items grouped by source doc. Suggest a best pick. Ask user to confirm.
+**`/pick`** (no argument) — show all pending items grouped by source doc. Mark blocked items with their blocker reason but do not suggest them as a best pick. Suggest a best pick from unblocked items only. Ask user to confirm.
 
 If the branch already exists (item is already in-flight), report it and ask whether to reuse or pick a different item.
-
-Items marked as **blocked** on external factors (regulatory, third-party APIs not yet available, etc.) should be ranked below unblocked items, but can still be picked if nothing else is available.
 
 ## Claim
 
