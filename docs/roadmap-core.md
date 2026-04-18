@@ -36,6 +36,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | ~~TOOL-24. Skill extension points — product-context include + sync allowlist~~ | **Done** — _project-context.md extension point + sync allowlist + check-skills support added (2026-04-18) |
 | ~~TOOL-25. Telemetry v2 — per-step file list, tool histogram, output tail, stats JSON~~ | **Done** — filesChanged/toolCounts/outputTail in StepResult, stats --json mode, recent-failures dashboard section (2026-04-18) |
 | ~~TOOL-26. Share `node_modules` across worktrees to skip per-worktree `pnpm install`~~ | **Done** — symlink node_modules when lockfiles match, fall through to install on drift; worktree-deps.ts + step-runner guard + tests (2026-04-18) |
+| TOOL-27. Investigate silent Edit failures on skill files during implement | — |
 
 ---
 
@@ -284,6 +285,29 @@ Completed. See git history for implementation details.
 ### TOOL-25. Telemetry v2 — per-step file list, tool histogram, output tail, stats JSON ✓
 
 Completed. See git history for implementation details.
+
+---
+
+### TOOL-27. Investigate silent Edit failures on skill files during implement
+
+| What | Scope | Deps |
+|------|-------|------|
+| TOOL-3's autopilot cycle (2026-04-18) reported success but nothing landed. The implement step's toolCounts showed 5 `Edit` + 2 `Write` attempts against `.claude/skills/charter/SKILL.md`, and the TUI log shows a large number of "Editing .claude/skills/charter/SKILL.md" re-renders. Yet the post-step wip commit contained zero changes to that file — only the plan (+10/-4 from shakedown-plan) and the new `node_modules` symlink. No tool_error surfaced in the TUI; the model's final turn read "No other files change (plan scope is skill-body only). Waiting on your approval." Shakedown-code flagged REVISE, ship correctly refused, shipwreck asked the user to "allow edits to `.claude/skills/` files". | S | — |
+
+**Investigation goals:**
+- Determine whether this is (a) Claude Code SDK default protection for `.claude/skills/*` that survives `bypassPermissions` mode; (b) `Edit` tool failing old_string matching silently across all 5 attempts (if the worktree's `.claude/skills/charter/SKILL.md` content diverged from the plan's assumptions); (c) something else (a hook we don't know about, a race with the concurrent TOOL-26 cycle).
+- Reproduce in isolation: a single-cycle run of TOOL-3 with `--verbose` and the full SDK trace retained, against a clean main (no parallel cycles, no post-TOOL-26 artifacts).
+- If root cause is SDK-side: file a bug or document the workaround in CLAUDE.md. If it's old_string mismatches: surface Edit tool errors into the log (TOOL-25's `outputTail` captures only the final assistant message, not tool errors — a gap).
+- Landed as either a fix or a durable documentation of the failure mode.
+
+**Deliverables:**
+- A short write-up in `docs/notes/tool-27-silent-edit-failures.md` (or `docs/incidents/`) with the reproduction, the root cause, and the fix or workaround.
+- If the root cause is instrumentable: extend telemetry v2 (`step-runner.ts`) to surface tool-level errors (not just the final message tail) into the log — `toolErrors?: Array<{name, brief, error}>` alongside `toolCounts`.
+- Retry TOOL-3 once the block is understood.
+
+**Out of scope:**
+- Generalizing beyond `.claude/skills/*` — if the failure only affects skill files, document that scope.
+- Broader SDK error-surfacing refactor — keep telemetry changes minimal.
 
 ---
 

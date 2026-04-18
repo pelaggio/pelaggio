@@ -16,6 +16,7 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 | TOOL-15 | LinearRoadmap adapter | TOOL-9 | — | core |
 | TOOL-16 | Split /refit → /bump-models + self-hosted Renovate | — | — | core |
 | TOOL-18 | Public-npm publish hardening | — | — | core |
+| TOOL-27 | Investigate silent Edit failures on skill files during implement | — | — | core |
 
 ## Recently completed
 
