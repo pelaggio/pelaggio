@@ -2,9 +2,9 @@ import { execSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import type { RunStepFn } from "../pipeline.js";
+import type { RunStepFn, runPipeline } from "../pipeline.js";
 import { LiveStatus, StatusBar } from "../tui.js";
-import type { ParkSignal, Step, StepResult } from "../types.js";
+import type { CycleResult, Flags, ParkSignal, PipelineOpts, Step, StepResult } from "../types.js";
 
 export interface StepOutcome extends Partial<StepResult> {
 	/** If set, merged into parkSignal before the mock returns. */
@@ -58,6 +58,57 @@ export function createMockRunStep(behavior: MockBehavior, parkSignal: ParkSignal
 		return result;
 	};
 	return { runStep, calls };
+}
+
+export interface PipelineOutcome extends Partial<CycleResult> {
+	/** If set, merged into parkSignal before the mock returns. */
+	park?: Partial<ParkSignal>;
+}
+
+export type PipelineBehavior = {
+	/** Per-itemId outcome queue — array is consumed by successive calls for that item. */
+	byItem?: Record<string, PipelineOutcome | PipelineOutcome[]>;
+	/** Fallback outcome when no itemId match (or queue exhausted). */
+	default?: PipelineOutcome;
+	/** Invoked for every call — inspect/mutate parkSignal after the outcome is applied. */
+	onCall?: (opts: PipelineOpts, parkSignal: ParkSignal) => void;
+};
+
+export interface MockRunPipeline {
+	runPipeline: typeof runPipeline;
+	calls: Array<{ itemId: string | undefined; opts: PipelineOpts; flags: Flags }>;
+}
+
+export function createMockRunPipeline(behavior: PipelineBehavior): MockRunPipeline {
+	const calls: MockRunPipeline["calls"] = [];
+	const perItemIdx: Record<string, number> = {};
+	const fn: typeof runPipeline = async (opts, parkSignal, flags) => {
+		calls.push({ itemId: opts.itemId, opts, flags });
+		const key = opts.itemId ?? "";
+		const spec = behavior.byItem?.[key];
+		let outcome: PipelineOutcome;
+		if (Array.isArray(spec)) {
+			const idx = perItemIdx[key] ?? 0;
+			outcome = spec[Math.min(idx, spec.length - 1)] ?? {};
+			perItemIdx[key] = idx + 1;
+		} else if (spec) {
+			outcome = spec;
+		} else {
+			outcome = behavior.default ?? { completed: false, cost: 0, error: "nothing to pick" };
+		}
+		if (outcome.park) Object.assign(parkSignal, outcome.park);
+		behavior.onCall?.(opts, parkSignal);
+		return {
+			itemId: outcome.itemId ?? opts.itemId ?? null,
+			completed: outcome.completed ?? false,
+			cost: outcome.cost ?? 0,
+			...(outcome.verdict ? { verdict: outcome.verdict } : {}),
+			...(outcome.error ? { error: outcome.error } : {}),
+			...(outcome.awaitingMerge ? { awaitingMerge: outcome.awaitingMerge } : {}),
+			...(outcome.prUrl ? { prUrl: outcome.prUrl } : {}),
+		};
+	};
+	return { runPipeline: fn, calls };
 }
 
 export function makeLiveStatus(): LiveStatus {

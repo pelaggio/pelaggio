@@ -477,17 +477,27 @@ function resultStatus(r: CycleResult): "done" | "skipped" | "failed" | "parked" 
 	return "failed";
 }
 
-export async function orchestrate(flags: Flags): Promise<void> {
-	const statusBar = new StatusBar();
+export interface OrchestratorDeps {
+	runPipeline?: typeof runPipeline;
+	detectResumeStep?: typeof detectResumeStep;
+	resolveWorktree?: typeof resolveWorktree;
+}
+
+export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {}, statusBar: StatusBar = new StatusBar()): Promise<{ exitCode: number; results: CycleResult[] }> {
+	const _runPipeline = deps.runPipeline ?? runPipeline;
+	const _detectResumeStep = deps.detectResumeStep ?? detectResumeStep;
+	const _resolveWorktree = deps.resolveWorktree ?? resolveWorktree;
+
 	const liveStatus = new LiveStatus(statusBar);
 	const parkSignal: ParkSignal = { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" };
+	const results: CycleResult[] = [];
 
 	// Resolve ship target: CLI --target > config SHIP_TARGET > default
 	let shipTargetName = SHIP_TARGET;
 	if (flags.target !== undefined) {
 		if (!isShipTargetName(flags.target)) {
 			console.error(`invalid --target ${JSON.stringify(flags.target)}; valid: ${SHIP_TARGET_NAMES.join(", ")}`);
-			process.exit(2);
+			return { exitCode: 2, results };
 		}
 		shipTargetName = flags.target;
 	}
@@ -496,8 +506,8 @@ export async function orchestrate(flags: Flags): Promise<void> {
 	// Resume mode
 	if (flags.resume) {
 		const id = flags.resume.toUpperCase();
-		const worktree = resolveWorktree(id);
-		const startFrom = detectResumeStep(id, worktree);
+		const worktree = _resolveWorktree(id);
+		const startFrom = _detectResumeStep(id, worktree);
 		const v = flags.verbose;
 		console.log(`${A.bold("resume")} ${id} from ${A.bold(startFrom)}`);
 
@@ -505,17 +515,8 @@ export async function orchestrate(flags: Flags): Promise<void> {
 		liveStatus.cycles.push(status);
 		liveStatus.totalCycles = 1;
 		if (v) statusBar.setup();
-		const cleanup = (): void => {
-			statusBar.teardown();
-			process.stderr.write(A.showCursor);
-		};
-		process.on("exit", cleanup);
-		process.on("SIGINT", () => {
-			cleanup();
-			process.exit(130);
-		});
 
-		const result = await runPipeline(
+		const result = await _runPipeline(
 			{
 				itemId: id,
 				worktree,
@@ -530,6 +531,7 @@ export async function orchestrate(flags: Flags): Promise<void> {
 			parkSignal,
 			flags,
 		);
+		results.push(result);
 
 		status.status = resultStatus(result);
 		status.step = undefined;
@@ -538,7 +540,7 @@ export async function orchestrate(flags: Flags): Promise<void> {
 			statusBar.teardown();
 		}
 		console.log(`\n${result.completed ? A.green("✓") : A.red("✗")} ${id} — $${result.cost.toFixed(2)}`);
-		process.exit(result.completed ? 0 : 1);
+		return { exitCode: result.completed ? 0 : 1, results };
 	}
 
 	// Normal mode
@@ -575,21 +577,9 @@ export async function orchestrate(flags: Flags): Promise<void> {
 
 	const statusInterval = isParallel && v ? setInterval(() => liveStatus.render(), 200) : null;
 
-	const cleanup = (): void => {
-		if (statusInterval) clearInterval(statusInterval);
-		statusBar.teardown();
-		process.stderr.write(A.showCursor);
-	};
-	process.on("exit", cleanup);
-	process.on("SIGINT", () => {
-		cleanup();
-		process.exit(130);
-	});
-
 	const pickMutex = isParallel ? createMutex() : undefined;
 	let nextCycle = 0;
 	let totalSpent = 0;
-	const results: CycleResult[] = [];
 	const RECOVERABLE = new Set(["plan needs rethink", "nothing to pick", "parked"]);
 
 	async function worker(): Promise<void> {
@@ -615,7 +605,7 @@ export async function orchestrate(flags: Flags): Promise<void> {
 				appendFileSync(logPath, `${"=".repeat(60)}\nautopilot cycle ${cycle} — ${new Date().toISOString()}\n${"=".repeat(60)}\n`);
 			}
 
-			const result = await runPipeline(
+			const result = await _runPipeline(
 				{
 					itemId: items[cycle - 1],
 					cycle,
@@ -662,7 +652,7 @@ export async function orchestrate(flags: Flags): Promise<void> {
 
 		if (parkedItems.length === 0) {
 			console.log(`${A.yellow("⏸")} Rate limit hit but no items to resume.`);
-			process.exit(1);
+			return { exitCode: 1, results };
 		}
 
 		const maxWaitMs = parseWaitFlag(flags["max-wait"]);
@@ -675,7 +665,7 @@ export async function orchestrate(flags: Flags): Promise<void> {
 			console.log(`${A.yellow("⏸")} ${parkSignal.limitType} limit hit — unknown reset time`);
 			console.log(`  Parked: ${parkedItems.join(", ")}`);
 			console.log(`  Resume: ${A.bold(resumeCmd)}`);
-			process.exit(1);
+			return { exitCode: 1, results };
 		}
 
 		if (waitMs > maxWaitMs) {
@@ -684,7 +674,7 @@ export async function orchestrate(flags: Flags): Promise<void> {
 			console.log(`${A.yellow("⏸")} ${label} — wait ${fmtWait(waitMs)} exceeds --max-wait ${fmtWait(maxWaitMs)}`);
 			console.log(`  Parked: ${parkedItems.join(", ")}`);
 			console.log(`  Resume: ${A.bold(resumeCmd)}`);
-			process.exit(1);
+			return { exitCode: 1, results };
 		}
 
 		const eta = new Date(parkSignal.resetsAt + 30_000).toLocaleTimeString("en-CA", { hour12: false });
@@ -718,12 +708,12 @@ export async function orchestrate(flags: Flags): Promise<void> {
 
 		const resumeResults = await Promise.all(
 			parkedItems.map(async (id, i) => {
-				const wt = resolveWorktree(id);
-				const sf = detectResumeStep(id, wt);
+				const wt = _resolveWorktree(id);
+				const sf = _detectResumeStep(id, wt);
 				const st: CycleStatus = { itemId: id, status: "running", cost: 0 };
 				liveStatus.cycles.push(st);
 				if (v) liveStatus.render();
-				const r = await runPipeline(
+				const r = await _runPipeline(
 					{
 						itemId: id,
 						worktree: wt,
@@ -775,5 +765,20 @@ export async function orchestrate(flags: Flags): Promise<void> {
 		console.log(`  ${resultIcon(r)} ${r.itemId ?? "?"}: ${label}`);
 	}
 
-	process.exit(results.every((r) => r.completed) ? 0 : 1);
+	return { exitCode: results.every((r) => r.completed) ? 0 : 1, results };
+}
+
+export async function orchestrate(flags: Flags): Promise<void> {
+	const statusBar = new StatusBar();
+	const cleanup = (): void => {
+		statusBar.teardown();
+		process.stderr.write(A.showCursor);
+	};
+	process.on("exit", cleanup);
+	process.on("SIGINT", () => {
+		cleanup();
+		process.exit(130);
+	});
+	const { exitCode } = await runOrchestrator(flags, {}, statusBar);
+	process.exit(exitCode);
 }
