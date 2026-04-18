@@ -15,9 +15,7 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 | TOOL-10 | GitHubIssuesRoadmap adapter via gh CLI | TOOL-9 | — | core |
 | TOOL-15 | LinearRoadmap adapter | TOOL-9 | — | core |
 | TOOL-16 | Split /refit → /bump-models + self-hosted Renovate | — | — | core |
-| TOOL-17 | Pipeline pick-step test coverage (needs REPO injectability) | — | — | core |
 | TOOL-18 | Public-npm publish hardening | — | — | core |
-| TOOL-26 | Share `node_modules` across worktrees to skip per-worktree `pnpm install` | — | — | core |
 
 ## Recently completed
 
@@ -32,6 +30,7 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 - TOOL-12 ✓
 - TOOL-13 ✓
 - TOOL-14 ✓
+- TOOL-17 ✓
 - TOOL-19 ✓
 - TOOL-20 ✓
 - TOOL-21 ✓
@@ -39,4 +38,5 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 - TOOL-23 ✓
 - TOOL-24 ✓
 - TOOL-25 ✓
+- TOOL-26 ✓
 

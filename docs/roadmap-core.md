@@ -28,14 +28,14 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | ~~TOOL-14. `sync` CLI — upgrade installed skills with diff prompts~~ | **Done** — sync CLI for skill upgrade with diff prompts added (2026-04-18) |
 | TOOL-15. LinearRoadmap adapter | TOOL-9 |
 | TOOL-16. Split /refit → /bump-models + self-hosted Renovate | — |
-| TOOL-17. Pipeline pick-step test coverage (needs REPO injectability) | TOOL-4 |
+| ~~TOOL-17. Pipeline pick-step test coverage (needs REPO injectability)~~ | **Done** — resolveWorktree injection seam + pick-step test coverage added (2026-04-18) |
 | TOOL-18. Public-npm publish hardening | TOOL-13 |
 | ~~TOOL-19. `orchestrate()` test coverage — resume, parallel, park-and-resume~~ | **Done** — orchestrate() test coverage for resume, parallel, and park-and-resume added (2026-04-18) |
 | ~~TOOL-21. Tighten `/ship` phantom-guard wording + update `_rubric.md` phantom-guard bullet~~ | **Done** — `/ship` phantom-guard + rubric bullet tightened (manual, 2026-04-18) |
 | ~~TOOL-23. Fix implement-step path resolution for worktree-relative deliverables~~ | **Done** — worktree path injected into implement prompt; pipeline.test.ts added (2026-04-18) |
 | ~~TOOL-24. Skill extension points — product-context include + sync allowlist~~ | **Done** — _project-context.md extension point + sync allowlist + check-skills support added (2026-04-18) |
 | ~~TOOL-25. Telemetry v2 — per-step file list, tool histogram, output tail, stats JSON~~ | **Done** — filesChanged/toolCounts/outputTail in StepResult, stats --json mode, recent-failures dashboard section (2026-04-18) |
-| TOOL-26. Share `node_modules` across worktrees to skip per-worktree `pnpm install` | — |
+| ~~TOOL-26. Share `node_modules` across worktrees to skip per-worktree `pnpm install`~~ | **Done** — symlink node_modules when lockfiles match, fall through to install on drift; worktree-deps.ts + step-runner guard + tests (2026-04-18) |
 
 ---
 
@@ -207,19 +207,9 @@ Completed. See git history for implementation details.
 
 ---
 
-### TOOL-17. Pipeline pick-step test coverage (needs REPO injectability)
+### TOOL-17. Pipeline pick-step test coverage (needs REPO injectability) ✓
 
-| What | Scope | Deps |
-|------|-------|------|
-| Scoped out of TOOL-4: exercising the pick step in a unit test would force sibling-of-real-repo directory creation because `resolveWorktree(itemId)` is rooted at the real `REPO/..`. Make `REPO` injectable (likely via the same `PipelineDeps` pattern or a module-level override) so tests can redirect to a temp parent directory, then add coverage for pick. | S | TOOL-4 |
-
-**Deliverables:**
-- Either a `repo?: string` field on `PipelineDeps` OR a `resolveWorktree` injection seam that tests can redirect
-- New scenario(s) in `pipeline.test.ts`: pick success (claim + worktree add detected), "nothing to pick", "no item ID parsed", "worktree missing"
-- Verify the existing worktree-prefix detection in `runPipeline` still works against the injected REPO
-
-**Out of scope:**
-- Refactoring all uses of `REPO` across the codebase — keep the surface minimal
+Completed. See git history for implementation details.
 
 ---
 
@@ -285,23 +275,9 @@ Completed. See git history for implementation details.
 
 ---
 
-### TOOL-26. Share `node_modules` across worktrees to skip per-worktree `pnpm install`
+### TOOL-26. Share `node_modules` across worktrees to skip per-worktree `pnpm install` ✓
 
-| What | Scope | Deps |
-|------|-------|------|
-| `pick/SKILL.md` runs `pnpm install --frozen-lockfile` in every new worktree. Even with `--silent` (landed separately), this still costs turns and cache-population time, and at high parallelism the I/O contention adds wall-clock time. Git worktrees share `.git/` but not `node_modules/` — each worktree needs its own unless we arrange sharing. Set up a mechanism so new worktrees reuse main's `node_modules` when the lockfile matches, and only run `pnpm install` when the lockfile actually differs. | S | — |
-
-**Deliverables:**
-- In `pick/SKILL.md`'s Claim step, before running `pnpm install`: compare the worktree's `pnpm-lock.yaml` hash against main's. If they match, symlink `<worktree>/node_modules` → `<MAIN_REPO>/node_modules` and skip install. If they differ, fall through to the existing install step.
-- Handle the nested-workspace case: repos with workspace packages have `node_modules` at multiple levels. Either symlink only the root and accept workspace-package installs, or symlink each workspace's `node_modules` individually. Start with root-only; document the limitation.
-- Add a guard: if the worktree's `pnpm-lock.yaml` changes mid-cycle (dep bump in the branch), break the symlink and run `pnpm install` on the next tool invocation that needs deps. Simplest signal: check lockfile hash before verification commands.
-- Update `CLAUDE.md`'s Running things section to note the optimization.
-- Smoke-test: run `pnpm autopilot --item X,Y,Z --parallel 3 --dry-run` and verify no install output appears; then run a real cycle and verify tests still pass in the worktree.
-
-**Out of scope:**
-- Changing pnpm's node-linker mode globally (e.g. `node-linker=hoisted` in `.npmrc`) — too invasive; many repos rely on pnpm's isolated default.
-- Handling yarn / npm consumers — pnpm-specific optimization. Document that non-pnpm consumers should customize their fork of `pick/SKILL.md`.
-- Caching `node_modules` across autopilot runs on the same item (separate concern).
+Completed. See git history for implementation details.
 
 ---
 
