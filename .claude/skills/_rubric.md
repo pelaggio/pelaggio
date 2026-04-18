@@ -45,6 +45,7 @@ npx tsx -e "import('./scripts/autopilot/config.ts')"                        # pa
 npx tsx -e "import('./scripts/autopilot/helpers.ts')"                       # parse-check helpers
 npx tsx -e "import('./scripts/autopilot/pipeline.ts')"                      # parse-check pipeline
 pnpm check                                                                   # biome (exit 0 on success — output is already compact)
+pnpm check:skills                                                            # lint .claude/skills/*/SKILL.md frontmatter + includes
 ```
 
 All must succeed. No formal `pnpm typecheck` setup — tsx handles transpilation via swc and we rely on runtime parse-checks.

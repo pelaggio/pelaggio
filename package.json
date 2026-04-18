@@ -18,6 +18,7 @@
     "autopilot": "tsx scripts/autopilot.ts",
     "test": "tsx --test scripts/autopilot/__tests__/*.test.ts",
     "check": "biome check scripts/",
+    "check:skills": "tsx scripts/autopilot/check-skills.ts",
     "format": "biome check --write scripts/",
     "prepare": "lefthook install"
   },
