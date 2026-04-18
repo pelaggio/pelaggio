@@ -5,6 +5,7 @@ import { BUDGETS, EFFORT, MODEL_PROFILES, REPO, TURN_LIMITS } from "./config.js"
 import { parseResetTime } from "./helpers.js";
 import { MUTATING_TOOLS, toolBrief } from "./tui.js";
 import type { ParkSignal, Step, StepEmit, StepResult, TokenUsage } from "./types.js";
+import { ensureWorktreeDeps } from "./worktree-deps.js";
 
 // ── Step runner ────────────────────────────────────────────────────────
 
@@ -55,6 +56,19 @@ export async function runStep(name: Step, prompt: string, opts: RunStepOpts, emi
 
 	// Worktree guardrail: block mutating tools that target the main repo
 	const isWorktree = resolve(opts.cwd) !== resolve(REPO);
+
+	// Mid-cycle drift guard: re-evaluate the shared-node_modules decision
+	// before each worktree-cwd step. If the branch bumped pnpm-lock.yaml,
+	// the stale symlink is replaced by a real install before verification
+	// commands (pnpm test, pnpm check) run downstream.
+	if (isWorktree) {
+		try {
+			ensureWorktreeDeps(opts.cwd, REPO);
+		} catch (err) {
+			emit({ type: "sdk_error", message: `worktree-deps guard failed: ${err instanceof Error ? err.message : String(err)}` });
+		}
+	}
+
 	const worktreeAppend = isWorktree
 		? [
 				"",
