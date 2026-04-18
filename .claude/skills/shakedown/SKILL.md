@@ -75,7 +75,7 @@ If `Arguments:` at the bottom of this prompt contains the string `autopilot`:
 - `autopilot plan-review` → force plan review mode regardless of git state. The pipeline is staging the plan for implementation and wants a verdict.
 - `autopilot code-review` → force code review mode regardless of git state. The pipeline has finished implementation and wants fixes + verification + roadmap updates.
 - In code review mode, additionally: for each deferred item, append it to the appropriate `{MAIN_REPO}/docs/roadmap-*.md` file (detect checkbox vs table format and match) AND add a row to `{MAIN_REPO}/docs/task-index.md` "Open items" so `/pick` finds it.
-- The `Verdict:` line is parsed by `scripts/autopilot/helpers.ts:parseVerdict` — emit it with the exact format `Verdict: APPROVE` / `REVISE` / `RETHINK`.
+- The `Verdict:` line is parsed by the pipeline's verdict parser — emit it with the exact format `Verdict: APPROVE` / `REVISE` / `RETHINK`.
 
 If `Arguments:` is absent or doesn't mention `autopilot`, you're running inline. Skip the roadmap-update step for deferred items — just list them in the output so the user decides whether to track them.
 
