@@ -37,6 +37,9 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | ~~TOOL-25. Telemetry v2 — per-step file list, tool histogram, output tail, stats JSON~~ | **Done** — filesChanged/toolCounts/outputTail in StepResult, stats --json mode, recent-failures dashboard section (2026-04-18) |
 | ~~TOOL-26. Share `node_modules` across worktrees to skip per-worktree `pnpm install`~~ | **Done** — symlink node_modules when lockfiles match, fall through to install on drift; worktree-deps.ts + step-runner guard + tests (2026-04-18) |
 | ~~TOOL-27. Investigate silent Edit failures on skill files during implement~~ | **Done** — root cause: SDK hardcodes `.claude/skills/**` deny that survives bypassPermissions. Fix: canUseTool allow-all in step-runner (2026-04-18) |
+| TOOL-28. `worktree-deps` bin subcommand (consumer-friendly path) | — |
+| TOOL-29. Broaden `Bash(npx tsx:*)` → `Bash(npx:*)` in shakedown + ship | — |
+| TOOL-30. Drop vendored script paths from skill prose | — |
 
 ---
 
@@ -263,6 +266,62 @@ Completed. See git history for implementation details.
 ### TOOL-27. Investigate silent Edit failures on skill files during implement ✓
 
 Completed. See git history for implementation details.
+
+---
+
+### TOOL-28. `worktree-deps` bin subcommand (consumer-friendly path)
+
+| What | Scope | Deps |
+|------|-------|------|
+| `pick/SKILL.md` currently instructs the agent to run `npx tsx "{MAIN_REPO}/scripts/autopilot/worktree-deps.ts" "$WORKTREE"`. That absolute path points into the package root, not the consumer repo, and the script has relative imports (`./config.js`) so it can't be copied standalone. Expose it as a subcommand so consumers invoke a path-opaque CLI instead. | S | — |
+
+**Deliverables:**
+- Add a `worktree-deps` route to `bin/claude-autopilot.js`, forwarding to `scripts/autopilot/worktree-deps.ts` (same `spawn(tsx, ...)` pattern as the existing `init` / `sync` / `run` routes)
+- Update `.claude/skills/pick/SKILL.md` step 3 to call `npx claude-autopilot worktree-deps "$WORKTREE"` — no `{MAIN_REPO}` substitution in the command
+- Update the `HELP` block in `bin/claude-autopilot.js` to list the new subcommand
+- Same behavior for the autopilot repo's own pipeline usage — the subcommand wins for both upstream and consumers
+- Unit-test-style smoke check: the existing `worktree-deps.test.ts` still passes
+
+**Out of scope:**
+- Monorepo workspace symlinking (still root-only — deferred to a future charter)
+- Refactoring `worktree-deps.ts` internals
+- Renaming the script file
+
+---
+
+### TOOL-29. Broaden `Bash(npx tsx:*)` → `Bash(npx:*)` in shakedown + ship
+
+| What | Scope | Deps |
+|------|-------|------|
+| `shakedown/SKILL.md` and `ship/SKILL.md` frontmatter lists `Bash(npx tsx:*)` because autopilot's own tests run via `tsx`. Consumers using jest/vitest/playwright/etc. currently have to fork the skill locally, and `claude-autopilot sync` then flags it forever. Verification runs through `pnpm run` scripts anyway, so the specific runner is a consumer concern — the upstream allowlist should permit any `npx` invocation. | XS | — |
+
+**Deliverables:**
+- `.claude/skills/shakedown/SKILL.md` frontmatter: replace `Bash(npx tsx:*)` with `Bash(npx:*)`
+- `.claude/skills/ship/SKILL.md` frontmatter: same replacement
+- Leave `Bash(npx biome:*)` in place (narrower and still useful) or subsume under `Bash(npx:*)` — pick the cleaner one and document the choice in the commit
+- No body changes; this is a frontmatter-only edit
+
+**Out of scope:**
+- Broadening other skills' allow-lists preemptively — only touch the two skills consumers have actually hit
+- Reworking how autopilot invokes its own tests
+
+---
+
+### TOOL-30. Drop vendored script paths from skill prose
+
+| What | Scope | Deps |
+|------|-------|------|
+| `_review-logic.md` and `shakedown/SKILL.md` reference `scripts/autopilot/helpers.ts:parseVerdict`. After a consumer install, that path resolves to `node_modules/@cdhorne/claude-autopilot/scripts/autopilot/helpers.ts` — stale documentation for any human reading the skill. The pipeline consumes only the verdict string, not the path, so the path is incidental to the skill's instructions. | XS | — |
+
+**Deliverables:**
+- `.claude/skills/_review-logic.md`: replace `scripts/autopilot/helpers.ts:parseVerdict` with a path-free phrase ("the pipeline's verdict parser" or similar)
+- `.claude/skills/shakedown/SKILL.md`: same replacement in the `Verdict:` bullet
+- Cosmetic only — do not change the actual parsing behavior or verdict grammar
+- Leave `_rubric.md`'s references to `parseVerdict` as-is; that file is autopilot-internal rubric, not a consumer-facing skill
+
+**Out of scope:**
+- Auditing every skill for vendored path references — opportunistic cleanup only
+- Renaming `parseVerdict` itself
 
 ---
 

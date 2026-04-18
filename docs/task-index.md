@@ -13,6 +13,9 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 | TOOL-2 | Dep graph visualization from roadmap files | — | — | core |
 | TOOL-15 | LinearRoadmap adapter | TOOL-9 | — | core |
 | TOOL-18 | Public-npm publish hardening | — | — | core |
+| TOOL-28 | `worktree-deps` bin subcommand (consumer-friendly path) | — | — | core |
+| TOOL-29 | Broaden `Bash(npx tsx:*)` → `Bash(npx:*)` in shakedown + ship | — | — | core |
+| TOOL-30 | Drop vendored script paths from skill prose | — | — | core |
 
 ## Recently completed
 
