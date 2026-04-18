@@ -23,7 +23,7 @@ N/A — no persistent data. State is the git working tree + `.dev/autopilot-log.
 - **Worktree isolation**: `step-runner` installs PreToolUse hooks blocking writes to `MAIN_REPO` paths when running in a worktree. This prevents sibling-worktree corruption. Don't bypass.
 - **Rate-limit parking preserves work**: every pipeline exit path must call `parkExit()` (which checkpoints uncommitted work) before returning on rate-limit rejection.
 - **No hardcoded model strings**: all model names live in `MODEL_PROFILES` in `config.ts`. No other file references `claude-opus-*` or `claude-sonnet-*` literals.
-- **Phantom ship guard**: `pipeline.ts` calls `hasDeliverableCommits()` before invoking `ship` — cycles that produced only docs-only commits are flagged `completed: false` with a "nothing to ship" error, and ship is never invoked. The identical guard inside `/ship`'s SKILL.md is defense in depth for inline (non-pipeline) use.
+- **Phantom ship guard**: `pipeline.ts` calls `hasDeliverableCommits()` before invoking `ship` — cycles whose branch only touches `docs/plans/` (i.e. only the `/plan` artifact with no implementation) are flagged `completed: false` with a "nothing to ship" error, and ship is never invoked. Doc-only work outside `docs/plans/` (rubric, skill bodies, README, roadmap edits) is still deliverable. The identical guard inside `/ship`'s SKILL.md is defense in depth for inline (non-pipeline) use.
 
 ## Pipeline steps (the nautical vocabulary)
 

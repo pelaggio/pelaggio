@@ -127,8 +127,10 @@ export function ensureCheckpointed(cwd: string, label: string, log: (s: string) 
 
 /**
  * True iff the feat branch has at least one commit beyond main that touches
- * a file outside `docs/` and not ending in `.md`. Matches the phantom-ship
- * guard in `.claude/skills/ship/SKILL.md`. Returns false on any git error.
+ * a file outside `docs/plans/`. Plan artifacts live at `docs/plans/<slug>.md`
+ * and are produced by `/plan` — a branch that only touches those is the
+ * ghost-ship case (plan-only, no implementation). Doc-only work like rubric
+ * or skill-body edits is still deliverable. Returns false on any git error.
  */
 export function hasDeliverableCommits(worktree: string): boolean {
 	try {
@@ -138,7 +140,7 @@ export function hasDeliverableCommits(worktree: string): boolean {
 			stdio: ["ignore", "pipe", "pipe"],
 		}).trim();
 		if (!files) return false;
-		return files.split("\n").some((f) => !f.startsWith("docs/") && !f.endsWith(".md"));
+		return files.split("\n").some((f) => !f.startsWith("docs/plans/"));
 	} catch {
 		return false;
 	}

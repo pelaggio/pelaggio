@@ -130,22 +130,34 @@ describe("parseResetTime", () => {
 });
 
 describe("hasDeliverableCommits", () => {
-	it("returns true when branch has a non-docs code commit", () => {
+	it("returns true when branch has a non-plan code commit", () => {
 		const dir = makeFeatRepo();
 		commitFile(dir, "src/foo.ts", "export const x = 1;\n", "feat code");
 		assert.equal(hasDeliverableCommits(dir), true);
 	});
 
-	it("returns false when branch has only docs/ commits", () => {
+	it("returns false when branch only touches docs/plans/ (plan-only ghost)", () => {
 		const dir = makeFeatRepo();
 		commitFile(dir, "docs/plans/x.md", "# plan\n", "docs plan");
 		assert.equal(hasDeliverableCommits(dir), false);
 	});
 
-	it("returns false when branch has only .md commits outside docs/", () => {
+	it("returns true for doc-only work outside docs/plans/ (rubric/skill edits)", () => {
+		const dir = makeFeatRepo();
+		commitFile(dir, ".claude/skills/_rubric.md", "# rubric\n", "rubric edit");
+		assert.equal(hasDeliverableCommits(dir), true);
+	});
+
+	it("returns true for README-only edits (not a plan)", () => {
 		const dir = makeFeatRepo();
 		commitFile(dir, "README.md", "# readme\n", "readme only");
-		assert.equal(hasDeliverableCommits(dir), false);
+		assert.equal(hasDeliverableCommits(dir), true);
+	});
+
+	it("returns true for docs/ edits that are not plans (e.g. roadmap)", () => {
+		const dir = makeFeatRepo();
+		commitFile(dir, "docs/roadmap-core.md", "# roadmap\n", "roadmap edit");
+		assert.equal(hasDeliverableCommits(dir), true);
 	});
 
 	it("returns false when branch is identical to main", () => {
@@ -157,9 +169,9 @@ describe("hasDeliverableCommits", () => {
 		assert.equal(hasDeliverableCommits("/nonexistent/path/does/not/exist"), false);
 	});
 
-	it("returns true when branch has mixed docs + code commits", () => {
+	it("returns true when branch has plan + code commits", () => {
 		const dir = makeFeatRepo();
-		commitFile(dir, "docs/plans/x.md", "# plan\n", "docs");
+		commitFile(dir, "docs/plans/x.md", "# plan\n", "plan");
 		commitFile(dir, "src/foo.ts", "export const x = 1;\n", "code");
 		assert.equal(hasDeliverableCommits(dir), true);
 	});
