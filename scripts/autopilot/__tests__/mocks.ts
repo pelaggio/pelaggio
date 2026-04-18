@@ -131,6 +131,24 @@ export function makeTempGitRepo(): string {
 	return dir;
 }
 
+/**
+ * Creates a tmp parent dir containing a git repo, so tests can inject a `mainRepo`
+ * and also derive a sibling worktree path under the same parent (mirroring the
+ * production layout where `resolveWorktree` returns `resolve(REPO, "..", ...)`).
+ */
+export function makeTempRepoWithParent(): { parent: string; repo: string } {
+	const parent = mkdtempSync(join(tmpdir(), "autopilot-parent-"));
+	const repo = join(parent, "repo");
+	mkdirSync(repo);
+	execSync("git init -q -b main", { cwd: repo });
+	execSync("git config user.name t", { cwd: repo });
+	execSync("git config user.email t@t", { cwd: repo });
+	execSync("git config commit.gpgsign false", { cwd: repo });
+	execSync("git commit --allow-empty -q -m init", { cwd: repo });
+	// Leave repo on main so tests can `git worktree add -b feat/tool-99 <path>` for the sibling worktree.
+	return { parent, repo };
+}
+
 export function makeMockRoadmap(overrides: Partial<RoadmapSource> = {}): RoadmapSource {
 	const base: RoadmapSource = {
 		name: "markdown",

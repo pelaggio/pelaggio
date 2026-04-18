@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { describe, it } from "node:test";
+import { WORKTREE_PREFIX } from "../config.js";
 import { runPipeline } from "../pipeline.js";
 import { getShipTarget } from "../ship/index.js";
 import type { Flags, PipelineOpts } from "../types.js";
-import { allCommitMessages, createMockRunStep, makeLiveStatus, makeMockRoadmap, makeParkSignal, makeTempGitRepo } from "./mocks.js";
+import { allCommitMessages, createMockRunStep, makeLiveStatus, makeMockRoadmap, makeParkSignal, makeTempGitRepo, makeTempRepoWithParent } from "./mocks.js";
 
 const baseFlags: Flags = {
 	cycles: "1",
@@ -341,5 +344,230 @@ describe("runPipeline — rate-limit park preserves state", () => {
 
 		assert.equal(logs[0].parked, true);
 		assert.equal(logs[0].parkReason, "5h");
+	});
+});
+
+describe("runPipeline — pick step", () => {
+	function pickOpts(): PipelineOpts {
+		return {
+			cycle: 1,
+			verbose: false,
+			shipTarget: getShipTarget("direct-push"),
+			dryRun: false,
+			liveStatus: makeLiveStatus(),
+		};
+	}
+
+	it("pick success — runs all six steps and lands the worktree under the injected parent", async () => {
+		const { parent, repo } = makeTempRepoWithParent();
+		const worktreePath = join(parent, `${WORKTREE_PREFIX}tool-99`);
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep, calls } = createMockRunStep(
+			{
+				pick: {
+					ok: true,
+					text: "claimed TOOL-99",
+					sideEffect: (cwd) => {
+						// cwd is the injected mainRepo — using it here implicitly proves injection end-to-end.
+						execSync(`git worktree add -q -b feat/tool-99 "${worktreePath}"`, { cwd });
+					},
+				},
+				plan: { ok: true },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				ship: {
+					ok: true,
+					sideEffect: () => {
+						execSync("git merge -q --no-ff feat/tool-99", { cwd: repo });
+					},
+				},
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline(pickOpts(), parkSignal, baseFlags, {
+			runStep,
+			mainRepo: repo,
+			resolveWorktree: (id) => join(parent, `${WORKTREE_PREFIX}${id.toLowerCase()}`),
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+		});
+
+		assert.equal(result.completed, true);
+		assert.equal(result.itemId, "TOOL-99");
+		assert.deepEqual(
+			calls.map((c) => c.step),
+			["pick", "plan", "shakedown-plan", "implement", "shakedown-code", "ship"],
+		);
+		assert.ok(existsSync(worktreePath), `expected worktree at ${worktreePath}`);
+		assert.equal(logs.length, 1);
+		assert.equal(logs[0].completed, true);
+		const msgs = allCommitMessages(worktreePath);
+		assert.ok(
+			msgs.some((m) => m === "wip: autopilot implementation checkpoint"),
+			`expected implementation checkpoint commit; got:\n${msgs.join("\n")}`,
+		);
+	});
+
+	it("pick failed — returns 'pick failed' with null itemId, no subsequent steps", async () => {
+		const { parent, repo } = makeTempRepoWithParent();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep, calls } = createMockRunStep({ pick: { ok: false, subtype: "error_max_turns" } }, parkSignal);
+
+		const result = await runPipeline(pickOpts(), parkSignal, baseFlags, {
+			runStep,
+			mainRepo: repo,
+			resolveWorktree: (id) => join(parent, `${WORKTREE_PREFIX}${id.toLowerCase()}`),
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+		});
+
+		assert.equal(result.completed, false);
+		assert.equal(result.error, "pick failed");
+		assert.equal(result.itemId, null);
+		assert.deepEqual(
+			calls.map((c) => c.step),
+			["pick"],
+		);
+		assert.equal(logs[0].completed, false);
+	});
+
+	it("nothing to pick — aborts when pick text has no claim/worktree/successfully match", async () => {
+		const { parent, repo } = makeTempRepoWithParent();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep, calls } = createMockRunStep({ pick: { ok: true, text: "no items available" } }, parkSignal);
+
+		const result = await runPipeline(pickOpts(), parkSignal, baseFlags, {
+			runStep,
+			mainRepo: repo,
+			resolveWorktree: (id) => join(parent, `${WORKTREE_PREFIX}${id.toLowerCase()}`),
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+		});
+
+		assert.equal(result.completed, false);
+		assert.equal(result.error, "nothing to pick");
+		assert.equal(result.itemId, null);
+		assert.deepEqual(
+			calls.map((c) => c.step),
+			["pick"],
+		);
+	});
+
+	it("no item ID parsed — aborts when roadmap.parseItemId returns null for pick output", async () => {
+		const { parent, repo } = makeTempRepoWithParent();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const roadmap = makeMockRoadmap({ parseItemId: () => null });
+		const { runStep, calls } = createMockRunStep({ pick: { ok: true, text: "claimed something" } }, parkSignal);
+
+		const result = await runPipeline(pickOpts(), parkSignal, baseFlags, {
+			runStep,
+			roadmap,
+			mainRepo: repo,
+			resolveWorktree: (id) => join(parent, `${WORKTREE_PREFIX}${id.toLowerCase()}`),
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+		});
+
+		assert.equal(result.completed, false);
+		assert.equal(result.error, "no item ID parsed");
+		assert.equal(result.itemId, null);
+		assert.deepEqual(
+			calls.map((c) => c.step),
+			["pick"],
+		);
+	});
+
+	it("worktree missing — pick succeeds, id parses, but worktree dir not created and listWorktrees empty", async () => {
+		const { parent, repo } = makeTempRepoWithParent();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep, calls } = createMockRunStep({ pick: { ok: true, text: "claimed TOOL-99" } }, parkSignal);
+
+		const result = await runPipeline(pickOpts(), parkSignal, baseFlags, {
+			runStep,
+			mainRepo: repo,
+			resolveWorktree: (id) => join(parent, `${WORKTREE_PREFIX}${id.toLowerCase()}`),
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+		});
+
+		assert.equal(result.completed, false);
+		assert.equal(result.error, "worktree missing");
+		assert.equal(result.itemId, "TOOL-99");
+		assert.deepEqual(
+			calls.map((c) => c.step),
+			["pick"],
+		);
+	});
+
+	it("worktree-prefix fallback — redirects to a new listWorktrees entry containing WORKTREE_PREFIX", async () => {
+		const { parent, repo } = makeTempRepoWithParent();
+		const resolvedPath = join(parent, "nonexistent-tool-99");
+		const fallbackPath = join(parent, `${WORKTREE_PREFIX}renamed`);
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		let listCalls = 0;
+		const { runStep, calls } = createMockRunStep(
+			{
+				pick: {
+					ok: true,
+					text: "claimed TOOL-99",
+					sideEffect: (cwd) => {
+						// Creates a real worktree at a DIFFERENT path — the one resolveWorktree returns is never created.
+						execSync(`git worktree add -q -b feat/tool-99 "${fallbackPath}"`, { cwd });
+					},
+				},
+				plan: { ok: true },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				ship: {
+					ok: true,
+					sideEffect: () => {
+						execSync("git merge -q --no-ff feat/tool-99", { cwd: repo });
+					},
+				},
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline(pickOpts(), parkSignal, baseFlags, {
+			runStep,
+			mainRepo: repo,
+			resolveWorktree: () => resolvedPath,
+			listWorktrees: () => {
+				listCalls++;
+				// First call captures worktreesBefore (empty); second call surfaces the newly added path.
+				return listCalls === 1 ? [] : [repo, fallbackPath];
+			},
+			appendLog: (e) => {
+				logs.push(e);
+			},
+		});
+
+		assert.equal(result.completed, true, `expected prefix fallback to let pipeline complete; got error=${result.error}`);
+		assert.equal(result.itemId, "TOOL-99");
+		assert.ok(!existsSync(resolvedPath), "resolved path should never have been created");
+		assert.ok(existsSync(fallbackPath), "fallback path should have been created by sideEffect");
+		assert.deepEqual(
+			calls.map((c) => c.step),
+			["pick", "plan", "shakedown-plan", "implement", "shakedown-code", "ship"],
+		);
 	});
 });
