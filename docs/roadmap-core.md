@@ -20,7 +20,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | ~~TOOL-6. Biome config for scripts/ + pre-commit hook~~ | **Done** — Biome config added, pre-commit hook wired (2026-04-11) |
 | ~~TOOL-7. Document in-context vs out-of-context review + add Idioms section to rubric~~ | **Done** — Idioms rubric dimension + Review model docs (manual, 2026-04-18) |
 | ~~TOOL-8. `.autopilot.yml` project config file + loader~~ | **Done** — `.autopilot.yml` config loader added (2026-04-17) |
-| TOOL-9. RoadmapSource abstraction + MarkdownRoadmap adapter | — |
+| ~~TOOL-9. RoadmapSource abstraction + MarkdownRoadmap adapter~~ | **Done** — RoadmapSource interface + MarkdownRoadmap adapter added (2026-04-18) |
 | TOOL-10. GitHubIssuesRoadmap adapter via gh CLI | TOOL-9 |
 | ~~TOOL-11. ShipTarget abstraction + 3 adapters~~ | **Done** — ShipTarget abstraction + 3 adapters added (2026-04-17) |
 | ~~TOOL-12. Running totals — tokens + quality signals + stats dashboard~~ | **Done** — Stats command + token/quality tracking added (2026-04-17) |
@@ -114,23 +114,9 @@ Completed. See git history for implementation details.
 
 ---
 
-### TOOL-9. RoadmapSource abstraction + MarkdownRoadmap adapter
+### TOOL-9. RoadmapSource abstraction + MarkdownRoadmap adapter ✓
 
-| What | Scope | Deps |
-|------|-------|------|
-| Define a `RoadmapSource` interface with `listOpenItems`, `claimItem`, `markDone`, `getItemPlan`. Factor all markdown-specific code currently in `helpers.ts` (findPlanFile, findPlanPath, parseItemId, isQuickScope, plus the ship skill's mark-done logic) into a `MarkdownRoadmap` adapter class. Pipeline reads `roadmap.source` from config and instantiates the right adapter. | M | TOOL-4, TOOL-8 |
-
-**Deliverables:**
-- `scripts/autopilot/roadmap/index.ts` — interface + factory
-- `scripts/autopilot/roadmap/markdown.ts` — MarkdownRoadmap adapter, wraps existing helpers
-- Refactor pipeline.ts to call `roadmap.claimItem(id)` instead of hardcoded markdown functions
-- Refactor `/ship` skill body to call a provided mark-done function (or keep ship markdown-aware for now — document in the adapter interface what ship needs)
-- Integration tests via mock RoadmapSource
-- `pnpm autopilot --dry-run` still works with the default markdown source
-
-**Out of scope:**
-- Additional adapters (TOOL-10, TOOL-15)
-- Changing the markdown format — existing `roadmap-*.md` + `task-index.md` behavior is preserved
+Completed. See git history for implementation details.
 
 ---
 
