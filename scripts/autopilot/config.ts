@@ -32,7 +32,7 @@ export const BUDGETS: Record<Step, number> = {
 export const TURN_LIMITS: Record<Step, number> = {
 	pick: 30,
 	plan: 80,
-	"shakedown-plan": 40,
+	"shakedown-plan": 60,
 	implement: 200,
 	"shakedown-code": 150,
 	ship: 40,
@@ -51,7 +51,7 @@ export const EFFORT: Record<Step, "low" | "medium" | "high"> = {
 
 // ── Model profiles ─────────────────────────────────────────────────────
 
-const OPUS = "claude-opus-4-6";
+const OPUS = "claude-opus-4-7";
 const SONNET = "claude-sonnet-4-6";
 
 export const MODEL_PROFILES: Record<string, Partial<Record<Step, string>>> = {
