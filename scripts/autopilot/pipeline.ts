@@ -243,11 +243,17 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		if (parked) return parked;
 		const planPath = findPlanPath(worktree!);
 		const planRef = planPath ? `Read the plan at \`${planPath}\`.` : `Find the plan in \`${resolve(REPO, ".dev", "plans")}/\` (filename matches branch without \`feat/\` prefix).`;
+		const worktreeHint = [
+			`**Your working directory is**: \`${worktree}\`.`,
+			`Any path the plan writes as \`foo/bar\` (project-relative) means \`${worktree}/foo/bar\` — use that absolute form when calling Edit/Write/Bash, so the worktree-isolation hook does not mistake it for a main-repo reference.`,
+		].join("\n");
 
 		const implementPrompt =
 			profile === "quick"
-				? `This is a small-scope item (bug fix or scope S). Implement it directly — no formal plan needed. Read the roadmap entry for ${itemId} to understand the requirements. Edit the target files the roadmap names; do NOT create or edit a plan file.`
+				? `${worktreeHint}\n\nThis is a small-scope item (bug fix or scope S). Implement it directly — no formal plan needed. Read the roadmap entry for ${itemId} to understand the requirements. Edit the target files the roadmap names; do NOT create or edit a plan file.`
 				: [
+						worktreeHint,
+						"",
 						verdict === "APPROVE" ? "Plan approved." : `Shakedown requested revisions:\n${shakedownPlanText.slice(0, 2000)}${shakedownPlanText.length > 2000 ? "\n...(truncated)" : ""}\nAddress the feedback, then implement.`,
 						"",
 						"## Plan",
@@ -267,6 +273,8 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 					].join("\n");
 
 		const continuePrompt = [
+			worktreeHint,
+			"",
 			"The previous implementation session ran out of turns. Code has been committed to disk.",
 			"",
 			"## Plan",

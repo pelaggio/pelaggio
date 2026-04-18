@@ -73,6 +73,11 @@ describe("runPipeline — happy path", () => {
 		const steps = entry.steps as Array<{ name: string }>;
 		assert.equal(steps.length, 5);
 		assert.ok(Math.abs(result.cost - 0.05) < 1e-9, `expected cost ≈ 0.05, got ${result.cost}`);
+
+		const implementPrompt = calls.find((c) => c.step === "implement")?.prompt ?? "";
+		assert.ok(implementPrompt.includes(worktree), `expected implement prompt to mention worktree path ${worktree}; got: ${implementPrompt.slice(0, 400)}`);
+		assert.ok(implementPrompt.includes("project-relative"), `expected implement prompt to include resolution rule ("project-relative"); got: ${implementPrompt.slice(0, 400)}`);
+		assert.ok(implementPrompt.includes("use that absolute form"), `expected implement prompt to include "use that absolute form"; got: ${implementPrompt.slice(0, 400)}`);
 	});
 });
 
@@ -169,6 +174,9 @@ describe("runPipeline — implement turn-limit retry", () => {
 			implEntries.some((s) => s.attempt === 2),
 			`expected implement entry with attempt=2; got ${JSON.stringify(implEntries)}`,
 		);
+
+		const continuePrompt = implementCalls[1]?.prompt ?? "";
+		assert.ok(continuePrompt.includes("project-relative") && continuePrompt.includes("use that absolute form"), `expected continuePrompt to carry worktree hint; got: ${continuePrompt.slice(0, 400)}`);
 	});
 });
 
