@@ -19,12 +19,12 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | TOOL-5. Skill body linter (frontmatter validity, rubric references) | — |
 | ~~TOOL-6. Biome config for scripts/ + pre-commit hook~~ | **Done** — Biome config added, pre-commit hook wired (2026-04-11) |
 | TOOL-7. Document in-context vs out-of-context review + add Idioms section to rubric | — |
-| TOOL-8. `.autopilot.yml` project config file + loader | — |
-| TOOL-9. RoadmapSource abstraction + MarkdownRoadmap adapter | TOOL-4, TOOL-8 |
+| ~~TOOL-8. `.autopilot.yml` project config file + loader~~ | **Done** — `.autopilot.yml` config loader added (2026-04-17) |
+| TOOL-9. RoadmapSource abstraction + MarkdownRoadmap adapter | — |
 | TOOL-10. GitHubIssuesRoadmap adapter via gh CLI | TOOL-9 |
-| TOOL-11. ShipTarget abstraction + 3 adapters | TOOL-4, TOOL-8 |
+| TOOL-11. ShipTarget abstraction + 3 adapters | — |
 | ~~TOOL-12. Running totals — tokens + quality signals + stats dashboard~~ | **Done** — Stats command + token/quality tracking added (2026-04-17) |
-| TOOL-13. Package shape + git-dep consumption + `init` CLI | TOOL-8, TOOL-11 |
+| TOOL-13. Package shape + git-dep consumption + `init` CLI | TOOL-11 |
 | TOOL-14. `sync` CLI — upgrade installed skills with diff prompts | TOOL-13 |
 | TOOL-15. LinearRoadmap adapter | TOOL-9 |
 | TOOL-16. Split /refit → /bump-models + self-hosted Renovate | — |
@@ -144,24 +144,9 @@ Completed. See git history for implementation details.
 
 ---
 
-### TOOL-8. `.autopilot.yml` project config file + loader
+### TOOL-8. `.autopilot.yml` project config file + loader ✓
 
-| What | Scope | Deps |
-|------|-------|------|
-| Extract every hardcoded path, budget, turn limit, model profile, and step constant from `config.ts` into a declarative YAML config at the repo root. `config.ts` becomes defaults + a loader that merges `.autopilot.yml` on top. Consuming projects override what they need; unspecified fields fall through to defaults. | M | — |
-
-**Deliverables:**
-- `.autopilot.yml` schema with keys: `project`, `docs.{rubric,philosophy,architecture,task-index}`, `roadmap.{source,glob,plans}`, `ship.{target,main-branch,squash}`, `models.profiles.{standard,quick}.*`, `budgets.*`, `turn-limits.*`, `worktree.prefix`
-- `scripts/autopilot/config.ts` refactored: DEFAULTS export (current values), `loadConfig()` function that reads `.autopilot.yml` and deep-merges with defaults, exports `BUDGETS`, `TURN_LIMITS`, etc. as resolved values
-- YAML parser: use `yaml` npm package (small, well-known)
-- Backward compat: if `.autopilot.yml` is absent, current defaults apply unchanged — no existing behavior breaks
-- Document the schema in `CLAUDE.md` and optionally in a new `docs/config.md`
-- Unit tests: loader handles missing file, partial override, invalid YAML
-
-**Out of scope:**
-- Runtime reload (config is read once at pipeline start)
-- JSON Schema validation — defer until needed
-- Secret handling — there are no secrets in config today
+Completed. See git history for implementation details.
 
 ---
 
