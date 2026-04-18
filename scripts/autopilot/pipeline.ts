@@ -417,7 +417,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	const target = opts.shipTarget;
 	const targetSuffix = target.name === "direct-push" ? "" : ` (${target.name})`;
 	log(`shipping...${targetSuffix}`);
-	const shipPrompt = `${expandSkill("ship", `--target=${target.name}`)}\n\n${target.buildPrompt({ itemId: itemId!, worktree: worktree! })}`;
+	const shipPrompt = `${expandSkill("ship", `autopilot --target=${target.name}`)}\n\n${target.buildPrompt({ itemId: itemId!, worktree: worktree! })}`;
 
 	// Capture pre-ship git state for ghost-ship verification (direct-push only).
 	const preShipState = !opts.dryRun && target.name === "direct-push" ? captureShipState(mainRepo, worktree!) : null;
@@ -544,15 +544,18 @@ export async function orchestrate(flags: Flags): Promise<void> {
 	// Normal mode
 	const requestedCycles = parseInt(flags.cycles, 10);
 	const parallel = parseInt(flags.parallel, 10);
-	const cycles = Math.max(requestedCycles, parallel);
-	const maxBudget = parseFloat(flags.budget);
-	const dryRun = flags["dry-run"];
-	const v = flags.verbose;
 	const items =
 		flags.item
 			?.split(",")
 			.map((s) => s.trim())
 			.filter(Boolean) ?? [];
+	// Auto-derive cycles to cover the full item list when --cycles isn't
+	// explicitly sized for it — otherwise items beyond index `max(cycles-1,
+	// parallel-1)` would silently drop off the worker queue.
+	const cycles = Math.max(requestedCycles, parallel, items.length);
+	const maxBudget = parseFloat(flags.budget);
+	const dryRun = flags["dry-run"];
+	const v = flags.verbose;
 	const isParallel = parallel > 1;
 
 	const targetBanner = shipTargetName === "direct-push" ? "" : `  ${A.dim(`target=${shipTargetName}`)}`;

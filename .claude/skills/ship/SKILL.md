@@ -25,9 +25,9 @@ Resolve MAIN_REPO. Parse `$ARGUMENTS` for `--no-squash` and `--pr` flags.
 
 !`cat .claude/skills/_rubric.md`
 
-**Pipeline mode (default inside autopilot):** `/shakedown` just ran the rubric's verification commands and blocked on failures — there's nothing to re-verify pre-merge. **Skip to step 2.** Post-merge verification at step 5 still runs unconditionally (merging main can break things independent of this branch).
+**If `Arguments:` at the bottom of this prompt contains the string `autopilot`**, you were invoked by the pipeline immediately after `/shakedown` — which just blocked on any rubric-failing state. Pre-merge re-verification is redundant: **skip to step 2**. Post-merge verification at step 5 still runs unconditionally (merging main can break things independent of this branch).
 
-**Inline mode (human invokes `/ship` directly without a prior `/shakedown`):** run the rubric's verification commands now. All must pass (exit 0) — stop and report if any fail.
+**Otherwise (inline invocation)**, run the rubric's verification commands now. All must pass (exit 0) — stop and report if any fail.
 
 **Policy (applies to any verification run, pre- or post-merge):**
 - **Biome** — only *errors* block shipping. Warnings are acceptable; do not spend turns fixing them. Check the exit code, not the warning count.
