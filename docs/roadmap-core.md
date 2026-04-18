@@ -37,7 +37,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | ~~TOOL-25. Telemetry v2 — per-step file list, tool histogram, output tail, stats JSON~~ | **Done** — filesChanged/toolCounts/outputTail in StepResult, stats --json mode, recent-failures dashboard section (2026-04-18) |
 | ~~TOOL-26. Share `node_modules` across worktrees to skip per-worktree `pnpm install`~~ | **Done** — symlink node_modules when lockfiles match, fall through to install on drift; worktree-deps.ts + step-runner guard + tests (2026-04-18) |
 | ~~TOOL-27. Investigate silent Edit failures on skill files during implement~~ | **Done** — root cause: SDK hardcodes `.claude/skills/**` deny that survives bypassPermissions. Fix: canUseTool allow-all in step-runner (2026-04-18) |
-| TOOL-28. `worktree-deps` bin subcommand (consumer-friendly path) | — |
+| ~~TOOL-28. `worktree-deps` bin subcommand (consumer-friendly path)~~ | **Done** — exposed as `npx claude-autopilot worktree-deps` bin subcommand; pick/SKILL.md updated (2026-04-18) |
 | ~~TOOL-29. Broaden `Bash(npx tsx:*)` → `Bash(npx:*)` in shakedown + ship~~ | **Done** — Broadened npx allowlist from tsx:* to npx:* in pick, shakedown, ship, shipwreck skills (2026-04-18) |
 | ~~TOOL-30. Drop vendored script paths from skill prose~~ | **Done** — Removed stale `parseVerdict` path references from _review-logic.md and shakedown/SKILL.md (2026-04-18) |
 
@@ -235,23 +235,9 @@ Completed. See git history for implementation details.
 
 ---
 
-### TOOL-28. `worktree-deps` bin subcommand (consumer-friendly path)
+### TOOL-28. `worktree-deps` bin subcommand (consumer-friendly path) ✓
 
-| What | Scope | Deps |
-|------|-------|------|
-| `pick/SKILL.md` currently instructs the agent to run `npx tsx "{MAIN_REPO}/scripts/autopilot/worktree-deps.ts" "$WORKTREE"`. That absolute path points into the package root, not the consumer repo, and the script has relative imports (`./config.js`) so it can't be copied standalone. Expose it as a subcommand so consumers invoke a path-opaque CLI instead. | S | — |
-
-**Deliverables:**
-- Add a `worktree-deps` route to `bin/claude-autopilot.js`, forwarding to `scripts/autopilot/worktree-deps.ts` (same `spawn(tsx, ...)` pattern as the existing `init` / `sync` / `run` routes)
-- Update `.claude/skills/pick/SKILL.md` step 3 to call `npx claude-autopilot worktree-deps "$WORKTREE"` — no `{MAIN_REPO}` substitution in the command
-- Update the `HELP` block in `bin/claude-autopilot.js` to list the new subcommand
-- Same behavior for the autopilot repo's own pipeline usage — the subcommand wins for both upstream and consumers
-- Unit-test-style smoke check: the existing `worktree-deps.test.ts` still passes
-
-**Out of scope:**
-- Monorepo workspace symlinking (still root-only — deferred to a future charter)
-- Refactoring `worktree-deps.ts` internals
-- Renaming the script file
+Completed. See git history for implementation details.
 
 ---
 

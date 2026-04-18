@@ -11,7 +11,6 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 | ID | Title | Deps | Plan | Roadmap |
 |----|-------|------|------|---------|
 | TOOL-15 | LinearRoadmap adapter | TOOL-9 | — | core |
-| TOOL-28 | `worktree-deps` bin subcommand (consumer-friendly path) | — | — | core |
 
 ## Recently completed
 
@@ -41,6 +40,7 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 - TOOL-25 ✓
 - TOOL-26 ✓
 - TOOL-27 ✓
+- TOOL-28 ✓
 - TOOL-30 ✓
 - TOOL-29 ✓
 
