@@ -2,7 +2,7 @@ import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { MODEL_PROFILES, REPO } from "./config.js";
 import {
-	appendLog,
+	appendLog as appendLogDefault,
 	checkpoint,
 	createMutex,
 	detectResumeStep,
@@ -11,7 +11,7 @@ import {
 	findPlanPath,
 	fmtWait,
 	isQuickScope,
-	listWorktrees,
+	listWorktrees as listWorktreesDefault,
 	parseItemId,
 	parseVerdict,
 	parseWaitFlag,
@@ -19,13 +19,24 @@ import {
 	stepIndex,
 	WORKTREE_PREFIX,
 } from "./helpers.js";
-import { runStep } from "./step-runner.js";
+import { runStep as runStepDefault } from "./step-runner.js";
 import { A, createStepRenderer, fmtElapsed, LiveStatus, StatusBar } from "./tui.js";
 import type { CycleResult, CycleStatus, Flags, ParkSignal, PipelineOpts, Step, StepLog, StepResult } from "./types.js";
 
 // ── Pipeline ───────────────────────────────────────────────────────────
 
-async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, flags: Flags): Promise<CycleResult> {
+export type RunStepFn = typeof runStepDefault;
+
+export interface PipelineDeps {
+	runStep?: RunStepFn;
+	listWorktrees?: () => string[];
+	appendLog?: (entry: Record<string, unknown>) => void;
+}
+
+export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, flags: Flags, deps: PipelineDeps = {}): Promise<CycleResult> {
+	const runStep = deps.runStep ?? runStepDefault;
+	const listWorktrees = deps.listWorktrees ?? listWorktreesDefault;
+	const appendLog = deps.appendLog ?? appendLogDefault;
 	let cost = 0;
 	let profile = "standard";
 	const steps: StepLog[] = [];

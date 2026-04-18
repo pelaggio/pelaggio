@@ -28,7 +28,9 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | TOOL-14. `sync` CLI — upgrade installed skills with diff prompts | TOOL-13 |
 | TOOL-15. LinearRoadmap adapter | TOOL-9 |
 | TOOL-16. Split /refit → /bump-models + self-hosted Renovate | — |
+| TOOL-17. Pipeline pick-step test coverage (needs REPO injectability) | TOOL-4 |
 | TOOL-18. Public-npm publish hardening | TOOL-13 |
+| TOOL-19. `orchestrate()` test coverage — resume, parallel, park-and-resume | TOOL-4 |
 
 ---
 
@@ -332,6 +334,22 @@ Completed. See git history for implementation details.
 
 ---
 
+### TOOL-17. Pipeline pick-step test coverage (needs REPO injectability)
+
+| What | Scope | Deps |
+|------|-------|------|
+| Scoped out of TOOL-4: exercising the pick step in a unit test would force sibling-of-real-repo directory creation because `resolveWorktree(itemId)` is rooted at the real `REPO/..`. Make `REPO` injectable (likely via the same `PipelineDeps` pattern or a module-level override) so tests can redirect to a temp parent directory, then add coverage for pick. | S | TOOL-4 |
+
+**Deliverables:**
+- Either a `repo?: string` field on `PipelineDeps` OR a `resolveWorktree` injection seam that tests can redirect
+- New scenario(s) in `pipeline.test.ts`: pick success (claim + worktree add detected), "nothing to pick", "no item ID parsed", "worktree missing"
+- Verify the existing worktree-prefix detection in `runPipeline` still works against the injected REPO
+
+**Out of scope:**
+- Refactoring all uses of `REPO` across the codebase — keep the surface minimal
+
+---
+
 ### TOOL-18. Public-npm publish hardening
 
 | What | Scope | Deps |
@@ -356,6 +374,23 @@ Completed. See git history for implementation details.
 - Alternative registries (GitHub Packages) — we either stay private via git-dep or go public via npm, not both
 - Automated semver / changeset release management — manual tag-push publish is fine for alpha
 - Stripping historical commits beyond whatever gitleaks flags
+
+---
+
+### TOOL-19. `orchestrate()` test coverage — resume, parallel, park-and-resume
+
+| What | Scope | Deps |
+|------|-------|------|
+| Scoped out of TOOL-4: only `runPipeline` is mocked and tested. The outer `orchestrate()` loop has meaningful branching (resume mode, parallel workers via `createMutex`, park-and-resume wait logic with `parseWaitFlag`/`fmtWait`) that isn't exercised. Add targeted tests that inject a fake `runPipeline` (or keep using the mocked `runStep` deps) to cover these paths. | M | TOOL-4 |
+
+**Deliverables:**
+- Either export `orchestrate()` with injectable `runPipeline` or restructure so the branching logic can be unit-tested
+- Scenarios: resume flow uses `detectResumeStep` + starts from the correct step; parallel workers serialize through `pickMutex`; park-and-resume respects `--max-wait`; weekly-limit message variant
+- Timer control via Node test mocks (`mock.timers`) so the wait path doesn't actually sleep
+
+**Out of scope:**
+- Real SDK integration (still mocked)
+- Signal-handler testing (`SIGINT` cleanup)
 
 ---
 

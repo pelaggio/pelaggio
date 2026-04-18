@@ -24,7 +24,9 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 | TOOL-14 | `sync` CLI — upgrade installed skills with diff prompts | TOOL-13 | — | core |
 | TOOL-15 | LinearRoadmap adapter | TOOL-9 | — | core |
 | TOOL-16 | Split /refit → /bump-models + self-hosted Renovate | — | — | core |
+| TOOL-17 | Pipeline pick-step test coverage (needs REPO injectability) | TOOL-4 | — | core |
 | TOOL-18 | Public-npm publish hardening | TOOL-13 | — | core |
+| TOOL-19 | `orchestrate()` test coverage — resume, parallel, park-and-resume | TOOL-4 | — | core |
 
 ## Recently completed
 
