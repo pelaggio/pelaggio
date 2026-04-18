@@ -20,8 +20,10 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 | TOOL-15 | LinearRoadmap adapter | TOOL-9 | — | core |
 | TOOL-16 | Split /refit → /bump-models + self-hosted Renovate | — | — | core |
 | TOOL-17 | Pipeline pick-step test coverage (needs REPO injectability) | — | — | core |
-| TOOL-18 | Public-npm publish hardening | TOOL-19 | `orchestrate()` test coverage — resume, parallel, park-and-resume | — | — | core |
+| TOOL-18 | Public-npm publish hardening | — | — | core |
+| TOOL-19 | `orchestrate()` test coverage — resume, parallel, park-and-resume | — | — | core |
 | TOOL-21 | Tighten `/ship` phantom-guard wording + update `_rubric.md` phantom-guard bullet | — | — | core |
+| TOOL-23 | Fix implement-step path resolution for worktree-relative deliverables | — | — | core |
 
 ## Recently completed
 

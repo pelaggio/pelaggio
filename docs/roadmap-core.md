@@ -32,6 +32,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | TOOL-18. Public-npm publish hardening | TOOL-13 |
 | TOOL-19. `orchestrate()` test coverage — resume, parallel, park-and-resume | TOOL-4 |
 | TOOL-21. Tighten `/ship` phantom-guard wording + update `_rubric.md` phantom-guard bullet | — |
+| TOOL-23. Fix implement-step path resolution for worktree-relative deliverables | TOOL-4 |
 
 ---
 
@@ -330,6 +331,25 @@ Completed. See git history for implementation details.
 | Update `.claude/skills/ship/SKILL.md` phantom-guard wording to "abort immediately" (not "stop and report") and note the pipeline pre-check is primary; update the matching bullet in `.claude/skills/_rubric.md` Correct section to reference `hasDeliverableCommits()` in `pipeline.ts`. | XS | — |
 
 **Why:** TOOL-20 added the pipeline-level pre-check in `pipeline.ts` but the paired wording edits to `/ship`'s SKILL.md and `_rubric.md`'s Correct-section bullet (specified in the TOOL-20 plan) were not applied during the code-review shakedown — edits were denied. Defense-in-depth + docs/code-level consistency still wants both updated.
+
+---
+
+### TOOL-23. Fix implement-step path resolution for worktree-relative deliverables
+
+| What | Scope | Deps |
+|------|-------|------|
+| Consistent failure mode observed across 5 attempts on TOOL-7 and TOOL-21 (2026-04-18): the implement step edits the plan file instead of the deliverables. Prompt-level fix ("execute the plan, do not polish it") did not change behavior. Diagnosis: the agent is given an absolute path for the plan via `planRef` but the plan references targets using project-relative paths like `.claude/skills/_rubric.md`. The worktree-isolation system prompt warns "NEVER use absolute paths starting with `<main-repo>/`", so the agent treats project-relative paths in the plan as forbidden main-repo refs and edits only what it has a known-good worktree path for: the plan itself. Consumers will hit this on doc-heavy or XS items. | S | TOOL-4 |
+
+**Deliverables:**
+- In `pipeline.ts`'s implement prompt, include the absolute worktree path alongside each target file reference the agent is likely to need. Simplest approach: prepend the prompt with `**Your working directory is**: \`${worktree}\`. Any path the plan writes as \`foo/bar\` means \`${worktree}/foo/bar\` — use that absolute form.` This makes the worktree-relative resolution explicit so the worktree-isolation guard never flags legitimate target edits.
+- Alternatively/additionally: parse the plan's "Files to change" table (if present) and append the list as absolute worktree paths to the prompt. Out-of-scope for first pass if regex parsing gets ugly; the prompt-level hint above is the cheap fix.
+- Regression test using the mock SDK harness from TOOL-4: simulate an implement step that attempts to Edit a project-relative path, assert the prompt context would have resolved it to a worktree-absolute path.
+- Once fixed, retry TOOL-7 and TOOL-21 via autopilot as end-to-end validation. If they now ship cleanly, close TOOL-23.
+
+**Out of scope:**
+- Changing the worktree-isolation prompt itself — it's correct, just under-specified on the resolution side.
+- Retro-fitting existing plan files to use absolute paths — plans should stay portable; the fix belongs in the prompt construction layer.
+- Investigating whether the agent could infer the worktree path from cwd without help — may work for some models but not a robust fix.
 
 ---
 
