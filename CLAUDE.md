@@ -90,6 +90,7 @@ pnpm autopilot --item INFRA-1 --verbose                   # specific item
 pnpm autopilot --cycles 3 --parallel 2 --verbose          # parallel cycles (auto-pick from queue)
 pnpm autopilot --item A-1,A-2,A-3 --parallel 2 --verbose  # targeted multi-item batch (cycles auto-sized to list length)
 pnpm autopilot --resume INFRA-1                           # resume a parked/failed cycle
+pnpm check:roadmap                                        # verify task-index ↔ roadmap consistency (--fix adds missing index rows)
 npx tsx --test scripts/autopilot/__tests__/*.test.ts      # run unit tests
 npx claude-autopilot sync --dry-run                       # preview skill-upgrade plan (consumer-side CLI)
 ```
