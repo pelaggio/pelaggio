@@ -15,7 +15,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | TOOL-1. Consistency check: task-index ↔ roadmap drift | — |
 | TOOL-2. Dep graph visualization from roadmap files | — |
 | TOOL-3. Scope suggestion in /charter from description | — |
-| TOOL-4. pipeline.ts integration tests via SDK query mock | — |
+| ~~TOOL-4. pipeline.ts integration tests via SDK query mock~~ | **Done** — Pipeline integration tests + mock SDK query infrastructure added (2026-04-17) |
 | TOOL-5. Skill body linter (frontmatter validity, rubric references) | — |
 | ~~TOOL-6. Biome config for scripts/ + pre-commit hook~~ | **Done** — Biome config added, pre-commit hook wired (2026-04-11) |
 | TOOL-7. Document in-context vs out-of-context review + add Idioms section to rubric | — |
@@ -92,25 +92,9 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 
 ---
 
-### TOOL-4. pipeline.ts integration tests via SDK query mock
+### TOOL-4. pipeline.ts integration tests via SDK query mock ✓
 
-| What | Scope | Deps |
-|------|-------|------|
-| Add integration tests for `pipeline.ts` that mock the `claude-agent-sdk` `query()` generator to simulate step outcomes without real API calls. | M | — |
-
-**Deliverables:**
-- `scripts/autopilot/__tests__/pipeline.test.ts` with at least 4 scenarios:
-  - Happy path: pick → plan → shakedown-plan (APPROVE) → implement → shakedown-code → ship all succeed
-  - RETHINK verdict on plan review aborts the cycle cleanly
-  - Implement turn exhaustion retries once, then commits a checkpoint
-  - Rate limit parking preserves state for resume
-- Mock infrastructure for `query()` — a generator factory that yields configured `SDKAssistantMessage` / `SDKResultMessage` events
-- Tests run via `npx tsx --test`
-- No real SDK calls, no real git operations (use a temp directory)
-
-**Out of scope:**
-- E2E tests with real SDK (too expensive)
-- UI testing for `tui.ts`
+Completed. See git history for implementation details.
 
 ---
 
