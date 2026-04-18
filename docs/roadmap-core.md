@@ -12,7 +12,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 
 | Item | Depends on |
 |------|-----------|
-| TOOL-1. Consistency check: task-index ↔ roadmap drift | — |
+| ~~TOOL-1. Consistency check: task-index ↔ roadmap drift~~ | **Done** — Consistency check script + pnpm check:roadmap added (2026-04-18) |
 | TOOL-2. Dep graph visualization from roadmap files | — |
 | TOOL-3. Scope suggestion in /charter from description | — |
 | ~~TOOL-4. pipeline.ts integration tests via SDK query mock~~ | **Done** — Pipeline integration tests + mock SDK query infrastructure added (2026-04-17) |
@@ -41,22 +41,9 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 
 ## Items
 
-### TOOL-1. Consistency check: task-index ↔ roadmap drift
+### TOOL-1. Consistency check: task-index ↔ roadmap drift ✓
 
-| What | Scope | Deps |
-|------|-------|------|
-| Script that verifies every open item in a `roadmap-*.md` has a matching row in `task-index.md`, and vice versa. Flags missing/extra rows and ID collisions. Run as a standalone command or as a pre-commit hook. | S | — |
-
-**Deliverables:**
-- `scripts/check-roadmap.ts` — reads all `docs/roadmap-*.md`, extracts open items, cross-checks against `docs/task-index.md`
-- Exit 0 when consistent, exit 1 with actionable diff when not
-- Optional `--fix` flag that adds missing task-index rows from roadmaps (roadmaps are source of truth)
-- Wire into `pnpm` scripts as `pnpm check:roadmap`
-- Unit tests for the parser
-
-**Out of scope:**
-- Bidirectional sync (roadmaps are source of truth, task-index is derived)
-- Detecting semantic drift (title changed in one file but not the other) — only structural presence/absence
+Completed. See git history for implementation details.
 
 ---
 

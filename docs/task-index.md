@@ -10,7 +10,6 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 
 | ID | Title | Deps | Plan | Roadmap |
 |----|-------|------|------|---------|
-| TOOL-1 | Consistency check: task-index ↔ roadmap drift | — | — | core |
 | TOOL-2 | Dep graph visualization from roadmap files | — | — | core |
 | TOOL-3 | Scope suggestion in /charter from description | — | — | core |
 | TOOL-5 | Skill body linter (frontmatter validity, rubric references) | — | — | core |
@@ -27,6 +26,7 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 
 ## Recently completed
 
+- TOOL-1 ✓
 - TOOL-4 ✓
 - TOOL-6 ✓
 - TOOL-7 ✓
