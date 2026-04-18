@@ -1,0 +1,13 @@
+# .autopilot.yml — see https://github.com/cdhorne/claude-autopilot/blob/main/docs/config.md
+#
+# All keys are optional. Defaults live in `DEFAULTS` in scripts/autopilot/config.ts.
+# Uncomment only the overrides you need.
+#
+# worktree:
+#   prefix: my-project-
+#
+# budgets:
+#   implement: 25
+#
+# ship:
+#   target: direct-push  # direct-push | pull-request | auto-merge-pr

@@ -1,6 +1,6 @@
+import { execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { basename, dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { basename, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import type { ShipTargetName } from "./types.js";
 
@@ -8,10 +8,24 @@ const SHIP_TARGET_NAMES: readonly ShipTargetName[] = ["direct-push", "pull-reque
 
 // ── Paths ──────────────────────────────────────────────────────────────
 
-/** ESM-compatible `__dirname` — required because this package is `"type": "module"`. */
-const __dirname = dirname(fileURLToPath(import.meta.url));
+/**
+ * Resolve the consuming repo's root.
+ *
+ * Resolution order:
+ *   1. `CLAUDE_AUTOPILOT_REPO` env var (escape hatch, mirrors `CLAUDE_AUTOPILOT_WORKTREE_PREFIX`).
+ *   2. `git rev-parse --show-toplevel` from CWD — works whether autopilot lives
+ *      in the repo itself (dogfooding) or under `node_modules/` (consumer install).
+ */
+export function resolveRepo(): string {
+	if (process.env.CLAUDE_AUTOPILOT_REPO) return resolve(process.env.CLAUDE_AUTOPILOT_REPO);
+	try {
+		return execSync("git rev-parse --show-toplevel", { encoding: "utf-8" }).trim();
+	} catch {
+		throw new Error("claude-autopilot must run inside a git repository (or set CLAUDE_AUTOPILOT_REPO)");
+	}
+}
 
-export const REPO = resolve(__dirname, "../..");
+export const REPO = resolveRepo();
 export const LOG_PATH = resolve(REPO, ".dev", "autopilot-log.jsonl");
 
 // ── Pipeline steps ─────────────────────────────────────────────────────

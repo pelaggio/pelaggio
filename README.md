@@ -74,9 +74,38 @@ scripts/autopilot/        # TypeScript pipeline orchestrator
     decisions.md          # ADR-style decision log template
 ```
 
-## Using it in a new project
+## Install it in another project (recommended path)
 
-See `.claude-templates/migration-checklist.md` for the step-by-step bootstrap. TL;DR:
+Until TOOL-18 lands the public npm publish, install via git dep and pin by SHA:
+
+```bash
+pnpm add -D github:cdhorne/claude-autopilot#<sha>
+npx claude-autopilot init
+```
+
+`init` scaffolds `.claude/skills/`, a `_rubric.md` template, `docs/task-index.md`,
+`docs/roadmap-example.md`, and an `.autopilot.yml` stub into the consuming repo, and adds
+a `"autopilot": "claude-autopilot run"` entry to `package.json` scripts. Re-running is a
+no-op unless you pass `--force`. Use `--dry-run` to preview the file plan.
+
+After scaffolding:
+
+1. **Author `.claude/skills/_rubric.md` for your project** — the highest-leverage task
+2. Replace `docs/roadmap-example.md` content with your real roadmap, link it from `docs/task-index.md`
+3. Run `pnpm autopilot --cycles 1 --verbose`
+
+Pin by SHA — the package intentionally provides no semver stability guarantees yet.
+
+**Known limitation**: `package.json#exports` points at `.ts` files. The CLI works
+everywhere because `bin/claude-autopilot.js` invokes `tsx` explicitly, but
+`import { run } from "@cdhorne/claude-autopilot"` only works under a `.ts` loader (i.e.
+consumers already running on `tsx`). Plain Node and bundlers without a TypeScript loader
+will hit import errors. TOOL-18 adds a build step.
+
+## Using it in a new project — legacy path
+
+See `.claude-templates/migration-checklist.md` for the step-by-step manual bootstrap.
+The `init` command above is the recommended replacement; this path is kept for reference.
 
 1. Clone this repo's `.claude/skills/` + `scripts/autopilot/` + `.claude-templates/` into your new project
 2. Sanitize: find-replace project name, worktree prefix, verification commands
