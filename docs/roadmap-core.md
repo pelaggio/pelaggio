@@ -40,6 +40,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | ~~TOOL-28. `worktree-deps` bin subcommand (consumer-friendly path)~~ | **Done** — exposed as `npx claude-autopilot worktree-deps` bin subcommand; pick/SKILL.md updated (2026-04-18) |
 | ~~TOOL-29. Broaden `Bash(npx tsx:*)` → `Bash(npx:*)` in shakedown + ship~~ | **Done** — Broadened npx allowlist from tsx:* to npx:* in pick, shakedown, ship, shipwreck skills (2026-04-18) |
 | ~~TOOL-30. Drop vendored script paths from skill prose~~ | **Done** — Removed stale `parseVerdict` path references from _review-logic.md and shakedown/SKILL.md (2026-04-18) |
+| TOOL-31. `consumer: false` frontmatter flag — sync skips maintainer-only skills | — |
 
 ---
 
@@ -250,6 +251,29 @@ Completed. See git history for implementation details.
 ### TOOL-30. Drop vendored script paths from skill prose ✓
 
 Completed. See git history for implementation details.
+
+---
+
+### TOOL-31. `consumer: false` frontmatter flag — sync skips maintainer-only skills
+
+| What | Scope | Deps |
+|------|-------|------|
+| `claude-autopilot sync` currently copies every skill from the package into the consumer. That's wrong for skills that only make sense in the autopilot repo itself — `bump-models` edits `scripts/autopilot/config.ts` and greps `scripts/` for hardcoded model IDs, both of which resolve to the consumer's workspace (where the config doesn't exist and the grep is empty). It's a no-op at best, misleading at worst. Give a skill a way to declare itself maintainer-only so sync skips it on consumer installs. | S | — |
+
+**Deliverables:**
+- Extend skill frontmatter with an optional `consumer: false` field (default `true` when absent). Only the literal value `false` means "maintainer-only"; anything else behaves as today.
+- In `scripts/autopilot/sync.ts` (`planSync()`), parse the frontmatter for each skill and omit any `consumer: false` skill from the plan entirely — not as a "skip" entry, because the consumer shouldn't see it as a choice. Keep a list of skipped skills for the summary.
+- Append a single line to the sync summary output: `maintainer-only skills (not for consumers): <names>`. Don't bury it behind a verbose flag — observable by default.
+- Apply `consumer: false` to `.claude/skills/bump-models/SKILL.md` frontmatter as part of this change.
+- Package's own sync (if ever invoked inside the autopilot repo itself) should still see every skill. Simplest detection: compare the resolved sync target directory to `pkgRoot`; if they're the same, skip the consumer filter. If detection is fiddly, accept that running sync inside the package is a no-op in practice and punt — call this out in the plan.
+- Extend `scripts/autopilot/__tests__/sync.test.ts` (or whatever covers planSync) with a case that proves `consumer: false` skills are absent from the plan and surfaced in the summary list.
+- `scripts/check-skills.ts`: add a lint rule that a skill referencing `scripts/autopilot/` internals (e.g. `config.ts`, `helpers.ts`, `step-runner.ts`) must declare `consumer: false`. Nice-to-have — ship it if cheap, flag as follow-up if it grows the diff.
+
+**Out of scope:**
+- General-purpose skill categories, tags, or visibility levels. This is a single boolean; layer on later if a second axis emerges.
+- Retroactive cleanup of consumers that already have a copy of `bump-models/` from a previous sync. That's a consumer decision, not sync's problem.
+- Migrating other skills to `consumer: false` without evidence they break downstream — only `bump-models` is known-maintainer-only today.
+- Touching `claude-autopilot init` — init scaffolds only the downstream-relevant skill set already, not the full mirror.
 
 ---
 
