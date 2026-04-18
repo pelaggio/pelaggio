@@ -1,6 +1,7 @@
 ---
 name: plan
 description: Generate an implementation plan for the current work item, self-review it, and revise until solid
+argument-hint: "[item-id]"
 allowed-tools: Read Glob Grep Bash(git:*) Bash(ls:*)
 ---
 
