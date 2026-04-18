@@ -38,8 +38,8 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | ~~TOOL-26. Share `node_modules` across worktrees to skip per-worktree `pnpm install`~~ | **Done** — symlink node_modules when lockfiles match, fall through to install on drift; worktree-deps.ts + step-runner guard + tests (2026-04-18) |
 | ~~TOOL-27. Investigate silent Edit failures on skill files during implement~~ | **Done** — root cause: SDK hardcodes `.claude/skills/**` deny that survives bypassPermissions. Fix: canUseTool allow-all in step-runner (2026-04-18) |
 | TOOL-28. `worktree-deps` bin subcommand (consumer-friendly path) | — |
-| TOOL-29. Broaden `Bash(npx tsx:*)` → `Bash(npx:*)` in shakedown + ship | — |
-| TOOL-30. Drop vendored script paths from skill prose | — |
+| ~~TOOL-29. Broaden `Bash(npx tsx:*)` → `Bash(npx:*)` in shakedown + ship~~ | **Done** — Broadened npx allowlist from tsx:* to npx:* in pick, shakedown, ship, shipwreck skills (2026-04-18) |
+| ~~TOOL-30. Drop vendored script paths from skill prose~~ | **Done** — Removed stale `parseVerdict` path references from _review-logic.md and shakedown/SKILL.md (2026-04-18) |
 
 ---
 
@@ -255,39 +255,15 @@ Completed. See git history for implementation details.
 
 ---
 
-### TOOL-29. Broaden `Bash(npx tsx:*)` → `Bash(npx:*)` in shakedown + ship
+### TOOL-29. Broaden `Bash(npx tsx:*)` → `Bash(npx:*)` in shakedown + ship ✓
 
-| What | Scope | Deps |
-|------|-------|------|
-| `shakedown/SKILL.md` and `ship/SKILL.md` frontmatter lists `Bash(npx tsx:*)` because autopilot's own tests run via `tsx`. Consumers using jest/vitest/playwright/etc. currently have to fork the skill locally, and `claude-autopilot sync` then flags it forever. Verification runs through `pnpm run` scripts anyway, so the specific runner is a consumer concern — the upstream allowlist should permit any `npx` invocation. | XS | — |
-
-**Deliverables:**
-- `.claude/skills/shakedown/SKILL.md` frontmatter: replace `Bash(npx tsx:*)` with `Bash(npx:*)`
-- `.claude/skills/ship/SKILL.md` frontmatter: same replacement
-- Leave `Bash(npx biome:*)` in place (narrower and still useful) or subsume under `Bash(npx:*)` — pick the cleaner one and document the choice in the commit
-- No body changes; this is a frontmatter-only edit
-
-**Out of scope:**
-- Broadening other skills' allow-lists preemptively — only touch the two skills consumers have actually hit
-- Reworking how autopilot invokes its own tests
+Completed. See git history for implementation details.
 
 ---
 
-### TOOL-30. Drop vendored script paths from skill prose
+### TOOL-30. Drop vendored script paths from skill prose ✓
 
-| What | Scope | Deps |
-|------|-------|------|
-| `_review-logic.md` and `shakedown/SKILL.md` reference `scripts/autopilot/helpers.ts:parseVerdict`. After a consumer install, that path resolves to `node_modules/@cdhorne/claude-autopilot/scripts/autopilot/helpers.ts` — stale documentation for any human reading the skill. The pipeline consumes only the verdict string, not the path, so the path is incidental to the skill's instructions. | XS | — |
-
-**Deliverables:**
-- `.claude/skills/_review-logic.md`: replace `scripts/autopilot/helpers.ts:parseVerdict` with a path-free phrase ("the pipeline's verdict parser" or similar)
-- `.claude/skills/shakedown/SKILL.md`: same replacement in the `Verdict:` bullet
-- Cosmetic only — do not change the actual parsing behavior or verdict grammar
-- Leave `_rubric.md`'s references to `parseVerdict` as-is; that file is autopilot-internal rubric, not a consumer-facing skill
-
-**Out of scope:**
-- Auditing every skill for vendored path references — opportunistic cleanup only
-- Renaming `parseVerdict` itself
+Completed. See git history for implementation details.
 
 ---
 
