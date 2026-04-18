@@ -177,7 +177,7 @@ export function detectResumeStep(itemId: string, worktree: string): Step {
 				.filter((e): e is Record<string, unknown> => e != null && typeof e.item === "string" && (e.item as string).toUpperCase() === itemId.toUpperCase());
 			if (entries.length > 0) {
 				const last = entries[entries.length - 1];
-				const steps = last.steps as Array<{ name: string; ok: boolean }> | undefined;
+				const steps = last.steps as Array<{ name: string; ok: boolean; verdict?: string }> | undefined;
 				if (steps && steps.length > 0) {
 					let lastOk = -1;
 					for (let i = steps.length - 1; i >= 0; i--) {
@@ -189,6 +189,7 @@ export function detectResumeStep(itemId: string, worktree: string): Step {
 					if (typeof last.error === "string" && (last.error as string).toLowerCase().includes("ship failed")) return "ship";
 					const lastStep = steps[steps.length - 1];
 					if (!lastStep.ok && lastStep.name === "implement") return "implement";
+					if (lastStep.name === "shakedown-plan" && lastStep.verdict === "RETHINK") return "plan";
 					if (lastOk >= 0) {
 						const okStepName = steps[lastOk].name as Step;
 						const idx = STEPS.indexOf(okStepName);
