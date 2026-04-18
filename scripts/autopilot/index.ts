@@ -2,7 +2,7 @@
  * Public library surface for `@cdhorne/claude-autopilot`.
  *
  * Consumers running under `tsx` can `import { run, loadConfig } from "@cdhorne/claude-autopilot"`.
- * Plain Node / bundler consumers need a `.ts` loader until TOOL-18 adds a build step.
+ * The package ships `.ts` source; plain Node / bundler consumers need a `.ts` loader.
  */
 
 export { loadConfig } from "./config.js";
