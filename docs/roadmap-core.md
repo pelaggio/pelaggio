@@ -46,7 +46,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | ~~TOOL-34. Close charter→pick race — uncommitted charter rows invisible to worktree~~ | **Done** — `/charter` now commits roadmap + task-index edits; pick validates ID exists in HEAD before claiming (2026-04-19) |
 | ~~TOOL-35. Fix `/pick` claiming parent ID when nested sub-items own worktrees~~ | **Done** — longest-match parseItemId + machine-readable pick-item marker |
 | ~~TOOL-36. AbortController-based cancellation for in-flight SDK + exec calls~~ | **Done** — AbortController-based cancellation for in-flight SDK + exec calls |
-| TOOL-37. GitHub Issues bug → autopilot PR POC (no-worktree mode + CI workflow, dogfooded) | TOOL-10, TOOL-11, TOOL-31 (partial) |
+| ~~TOOL-37. GitHub Issues bug → autopilot PR POC (no-worktree mode + CI workflow, dogfooded)~~ | **Done** — GitHub Issues bug-to-PR pipeline with no-worktree CI mode and autopilot-fix workflow |
 | TOOL-38. Convert repo to pnpm workspace monorepo (packages/autopilot + placeholder packages/server) | — |
 | TOOL-39. Autopilot control-plane daemon (local, tailnet-bound, Hono + systemd) | TOOL-38 |
 | TOOL-42. Autopilot control-plane web UI (Astro + React + Tailwind, mobile-responsive PWA) | TOOL-39 |
