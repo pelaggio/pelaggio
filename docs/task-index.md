@@ -11,8 +11,6 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 | ID | Title | Deps | Plan | Roadmap |
 |----|-------|------|------|---------|
 | TOOL-31 | Rewire skill bodies through RoadmapSource | TOOL-10, TOOL-15 | — | core |
-| TOOL-34 | Close charter→pick race (uncommitted rows invisible to worktree) | — | — | core |
-
 ## Recently completed
 
 - TOOL-1 ✓
@@ -47,4 +45,5 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 - TOOL-29 ✓
 - TOOL-32 ✓
 - TOOL-33 ✓
+- TOOL-34 ✓
 

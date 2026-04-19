@@ -43,7 +43,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | TOOL-31. Rewire skill bodies through `RoadmapSource` (github-issues + linear) | TOOL-10, TOOL-15 |
 | ~~TOOL-32. `consumer: false` frontmatter flag — sync skips maintainer-only skills~~ | **Done** — `consumer: false` frontmatter filters maintainer-only skills from sync; `/bump-models` marked; summary line + check-skills lint added (2026-04-18) |
 | ~~TOOL-33. Autopilot run-quality fixes from Fathom telemetry (ship budget/model, pick exit reasons, dynamic implement budget, edit-loop threshold)~~ | **Done** — ship turn limit raised to 60, pick rejection reasons tagged, dynamic implement budget from plan file-count, edit-loop threshold raised to 25 (2026-04-19) |
-| TOOL-34. Close charter→pick race — uncommitted charter rows invisible to worktree | — |
+| ~~TOOL-34. Close charter→pick race — uncommitted charter rows invisible to worktree~~ | **Done** — `/charter` now commits roadmap + task-index edits; pick validates ID exists in HEAD before claiming (2026-04-19) |
 
 ---
 
@@ -288,21 +288,9 @@ Completed. See git history for implementation details.
 
 ---
 
-### TOOL-34. Close charter→pick race — uncommitted charter rows invisible to worktree
+### TOOL-34. Close charter→pick race — uncommitted charter rows invisible to worktree ✓
 
-| What | Scope | Deps |
-|------|-------|------|
-| `/charter` edits `docs/roadmap-*.md` and `docs/task-index.md` but does not commit. If `/pick <ID>` runs before those edits land on `main`, pick reads the uncommitted row from the main working tree, creates a branch off the current `HEAD` (which lacks the row), and moves to a worktree where the charter is invisible — `/plan` has nothing to plan against and `/shakedown-plan` correctly returns RETHINK. Observed 2026-04-19 on TOOL-33's first run. | S | — |
-
-**Deliverables:**
-- Pick one of two fixes (leaning toward the first — simpler, preserves `/charter`'s "review before committing" ergonomics for interactive use):
-  - **Option A — `/pick` detects the desync.** At claim time, check whether the target ID exists in the branch's own `HEAD` copy of `task-index.md`. If not, refuse with an explicit error ("TOOL-XX is only in uncommitted main-tree changes; commit the charter first") instead of silently proceeding into a doomed worktree.
-  - **Option B — `/charter` commits.** Add a final step to `charter/SKILL.md` that commits the roadmap + task-index edits with a `docs: charter <ID>` message (matching existing `df820d5 docs: charter TOOL-31 ...` convention).
-- Whichever path: a regression test in `scripts/autopilot/__tests__/` that simulates the race (uncommitted charter row + pick invocation) and asserts the chosen behavior.
-
-**Out of scope:**
-- Broader uncommitted-state checks in other skills.
-- Auto-committing from any skill other than `/charter` if Option B is chosen.
+Completed. See git history for implementation details.
 
 ---
 
