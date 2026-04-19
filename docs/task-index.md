@@ -10,11 +10,11 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 
 | ID | Title | Deps | Plan | Roadmap |
 |----|-------|------|------|---------|
-| TOOL-35 | Fix /pick claiming parent ID when nested sub-items own worktrees | — | — | core |
 | TOOL-36 | AbortController-based cancellation for in-flight SDK + exec calls | — | — | core |
 
 ## Recently completed
 
+- TOOL-35 ✓
 - TOOL-1 ✓
 - TOOL-2 ✓
 - TOOL-3 ✓
