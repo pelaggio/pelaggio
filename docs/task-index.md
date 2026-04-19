@@ -13,7 +13,9 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 | TOOL-36 | AbortController-based cancellation for in-flight SDK + exec calls | — | — | core |
 | TOOL-37 | GitHub Issues bug → autopilot PR POC (no-worktree + CI workflow, dogfooded) | — | — | core |
 | TOOL-38 | Convert repo to pnpm workspace monorepo (packages/autopilot + placeholder packages/server) | — | — | core |
-| TOOL-39 | Autopilot control-plane server + web UI (Hetzner/Cloudflare/Terraform/GHA) | TOOL-38 | — | core |
+| TOOL-39 | Autopilot control-plane daemon (local, tailnet-bound, Hono + systemd) | TOOL-38 | — | core |
+| TOOL-42 | Autopilot control-plane web UI (Astro + React + Tailwind, mobile-responsive PWA) | TOOL-39 | — | core |
+| TOOL-43 | Cloudflare Tunnel + bearer auth for off-tailnet control-plane access | TOOL-39 | — | core |
 
 ## Recently completed
 

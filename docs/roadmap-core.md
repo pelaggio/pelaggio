@@ -48,7 +48,9 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | TOOL-36. AbortController-based cancellation for in-flight SDK + exec calls | — |
 | TOOL-37. GitHub Issues bug → autopilot PR POC (no-worktree mode + CI workflow, dogfooded) | TOOL-10, TOOL-11, TOOL-31 (partial) |
 | TOOL-38. Convert repo to pnpm workspace monorepo (packages/autopilot + placeholder packages/server) | — |
-| TOOL-39. Autopilot control-plane server + web UI (Hetzner/Cloudflare/Terraform/GHA) | TOOL-38 |
+| TOOL-39. Autopilot control-plane daemon (local, tailnet-bound, Hono + systemd) | TOOL-38 |
+| TOOL-42. Autopilot control-plane web UI (Astro + React + Tailwind, mobile-responsive PWA) | TOOL-39 |
+| TOOL-43. Cloudflare Tunnel + bearer auth for off-tailnet control-plane access | TOOL-39 |
 
 ---
 
@@ -389,49 +391,101 @@ Completed. See git history for implementation details.
 
 ---
 
-### TOOL-39. Autopilot control-plane server + web UI (Hetzner/Cloudflare/Terraform/GHA)
+### TOOL-39. Autopilot control-plane daemon (local, tailnet-bound, Hono + systemd)
 
 | What | Scope | Deps |
 |------|-------|------|
-| A long-lived daemon that remotely manages autopilot on the user's beefy Tailscale-connected machine. Exposes HTTP endpoints to start/pause/resume/stop runs, streams verbose logs over SSE, and serves a small web UI showing live runs, plans, and stats. Deployable via the Fathom pattern: Hetzner VM provisioned by Terraform, CI/CD via GitHub Actions, optional public access via Cloudflare Tunnel. Solves three pain points: SSH-over-Tailscale kickoffs, processes lost on disconnect, and no dashboard for plans/stats/outcomes. | XL | TOOL-38 |
+| A long-lived Hono daemon running as a systemd user unit on the beefy box where autopilot already executes. Binds to the tailnet IP so a Tailscale-enabled phone or laptop can start/pause/resume/stop runs and watch live logs over SSE without a public internet surface. Replaces SSH-over-Tailscale kickoffs and the "runs lost on disconnect" failure mode. Deliberately co-located with the execution plane — runs need the repo state, worktree paths, and Claude SDK credentials that already live on this box, so putting the daemon anywhere else just forces an extra SSH hop. Web UI and public-tunnel access are separate tickets (TOOL-42, TOOL-43). | L | TOOL-38 |
 
 **Deliverables:**
-- `packages/server/` workspace containing the HTTP daemon (Node `node:http` or Fastify — pick the lightest option that matches Fathom conventions).
-- HTTP API (Tailscale-bound by default; optional bearer token for Cloudflare Tunnel exposure):
-  - `POST /runs` — start a new cycle (`{ item, parallel?, cycles?, shipTarget? }`). Spawns `pnpm autopilot` as a supervised child, returns a run ID.
+- Fill in the `packages/server/` placeholder landed by TOOL-38 with a Hono daemon. Stack matches fathom's `apps/server`: Hono for HTTP, ulid for run IDs. Drizzle + libSQL only if the run-state store needs it — a flat JSON file is likely sufficient since the data is small and non-critical (systemd restart repopulates from live children).
+- HTTP API (tailnet-bound by default):
+  - `POST /runs` — start a cycle (`{ item, parallel?, cycles?, shipTarget? }`). Spawns `pnpm autopilot` as a supervised child, returns a run ID.
   - `GET /runs` — list active + recent runs with status, started-at, current step, budget consumed.
-  - `GET /runs/:id` — detail view: current step, plan path, file list, tool counts, output tail.
+  - `GET /runs/:id` — detail: current step, plan path, filesChanged, tool counts, output tail (TOOL-25 telemetry fields).
   - `POST /runs/:id/pause` — checkpoint-and-exit at next safe step boundary (reuses `parkExit()` semantics).
   - `POST /runs/:id/resume` — spawns `pnpm autopilot --resume <item>` against the parked checkpoint.
-  - `POST /runs/:id/stop` — SIGTERM with `parkExit()` graceful shutdown. Abandons rather than parks if already parked.
-  - `GET /runs/:id/log` — SSE stream of verbose stdout + structured events from `.dev/autopilot-log.jsonl`. Supports tail-and-follow.
+  - `POST /runs/:id/stop` — SIGTERM with `parkExit()` graceful shutdown; abandons rather than parks if already parked.
+  - `GET /runs/:id/log` — SSE stream of child stdout + structured events tailed from `.dev/autopilot-log.jsonl`. Supports tail-and-follow for completed runs.
   - `GET /stats` — proxy `pnpm autopilot stats --json` (TOOL-25 output).
-  - `GET /roadmap` — resolve the configured `RoadmapSource` and return open items (powers the UI's "start run" picker).
-- Process supervisor: small SQLite (or flat-file) store tracking run IDs → child PIDs → status, so the daemon can reattach/clean up after restart. Systemd handles daemon survival; this layer handles run survival.
-- Web UI (separate `packages/web/` or bundled into `packages/server/` — decide in `/plan`): SPA showing live run list, per-run detail with streaming log viewer, stats dashboard, "start run" button with roadmap-item picker. Match Fathom's stack conventions (React + Vite, Astro, or htmx — pick in `/plan`).
-- Auth: default Tailscale-only listener (bind to tailnet IP). Optional bearer token for Cloudflare Tunnel public access. Document both modes.
+  - `GET /roadmap` — resolve the configured `RoadmapSource` and return open items (powers the UI's "start run" picker, landed in TOOL-42).
+- Process supervisor: tracks run IDs → child PIDs → status. Systemd keeps the daemon alive; this layer keeps run metadata coherent across daemon restarts (reattaches to live PIDs where possible, marks dead ones `abandoned`).
+- Auth: bind explicitly to the tailnet IP (not `0.0.0.0`). Bearer-token middleware present but no-op by default — TOOL-43 flips it on when the tunnel lands. Document the bind address in `docs/server.md`.
 - Deployment:
-  - `infra/` directory at repo root with Terraform: Hetzner VM (Cloud or Dedicated), Cloudflare DNS + optional Tunnel, DNS records.
-  - systemd unit file (`infra/systemd/autopilot-server.service`) managing the daemon.
-  - `.github/workflows/deploy-server.yml`: build server package, push artifact, SSH-deploy to Hetzner (or pull-deploy via agent), restart systemd unit. Mirror fathom's deploy pattern.
-- Secrets: `ANTHROPIC_API_KEY`, `GH_TOKEN`, `LINEAR_API_KEY` passed via systemd environment file (not committed). Terraform provisions placeholders; operator fills in via sops/1Password/whatever Fathom uses.
-- Local dev: `pnpm --filter @cdhorne/claude-autopilot-server dev` hot-reloads. Web UI has a dev proxy to the daemon.
-- Docs: `docs/server.md` covering API reference, deploy steps, Tailscale vs. Cloudflare modes, pause/resume semantics.
-- End-to-end smoke test: from the deployed instance, kick off a real cycle on this repo, pause it, resume it, watch the log stream, confirm the stats update.
+  - `infra/systemd/autopilot-server.service` — user unit on the beefy box. `EnvironmentFile=` for secrets (`ANTHROPIC_API_KEY`, `GH_TOKEN`, `LINEAR_API_KEY`); file path documented but file itself not committed.
+  - `.github/workflows/deploy-server.yml` — on push to main, self-hosted runner pulls, `pnpm --filter @cdhorne/claude-autopilot-server build`, restarts the systemd unit. Mirrors fathom's self-hosted-runner deploy pattern. No Hetzner, no Terraform — the runner already lives on the target box.
+- Local dev: `pnpm --filter @cdhorne/claude-autopilot-server dev` hot-reloads via `tsx watch` (matches fathom's server dev command).
+- Docs: `docs/server.md` covering API reference, systemd setup, pause/resume semantics, tailnet bind address, and the bearer-token hook reserved for TOOL-43.
+- End-to-end smoke test: deploy via the workflow, `curl` a cycle start against this repo, pause it, resume it, watch the SSE log stream, confirm `/stats` updates.
 
 **Out of scope:**
-- Multi-user / multi-tenant auth (single operator, Tailscale ACL is sufficient).
-- Metrics export (Prometheus, OpenTelemetry) — reserve for a follow-up if the dashboard isn't enough.
-- Mobile-responsive web UI polish — desktop-first for v1.
-- Moving `.dev/autopilot-log.jsonl` schema — the server reads it as a public interface; schema changes would be a coordinated separate ticket.
-- Horizontal scaling / multi-machine coordination — one beefy box, many children.
-- Replacing the CLI — `pnpm autopilot` remains the ground truth; the server is a control plane on top.
+- Web UI — TOOL-42.
+- Public / off-tailnet access via Cloudflare Tunnel — TOOL-43.
+- Push notifications on run events — separate follow-up if polling the UI isn't enough.
+- Multi-user / multi-tenant auth — single operator, tailnet ACL is sufficient.
+- Metrics export (Prometheus, OpenTelemetry) — reserve for follow-up.
+- Moving `.dev/autopilot-log.jsonl` schema — the server reads it as a public interface.
+- Horizontal scaling / multi-machine coordination — one beefy box, many child processes.
+- Replacing the CLI — `pnpm autopilot` remains ground truth; the server is a control plane on top.
 
 **Open questions for `/plan`:**
-- Pause semantics: reuse `parkExit()` signal path, or add a new "pause at next step boundary" flag? The former is simpler but couples pause to the rate-limit code path.
-- Web UI framework: match Fathom's stack (confirm which) vs. pick something newer for this tool.
-- Cloudflare Tunnel vs. Tailscale-only as the default access mode.
-- Log streaming: pipe child stdout directly (live, no persistence overhead) vs. tail `autopilot-log.jsonl` + outputTail fields. Probably both — live for active runs, persisted for completed runs.
+- Pause semantics: reuse `parkExit()` signal path, or add a new "pause at next step boundary" flag? Former is simpler but couples pause to the rate-limit code path.
+- Run-state store: flat JSON vs. libSQL + Drizzle. Probably flat JSON — tiny data, no schema migration overhead, matches the "ephemeral state is the git tree + JSONL log" ethos in CLAUDE.md.
+- Log streaming: pipe child stdout directly (live, no persistence overhead) vs. tail `autopilot-log.jsonl` + outputTail fields. Probably both — live for active runs, persisted for completed.
+
+---
+
+### TOOL-42. Autopilot control-plane web UI (Astro + React + Tailwind, mobile-responsive PWA)
+
+| What | Scope | Deps |
+|------|-------|------|
+| Mobile-responsive web UI served by the TOOL-39 daemon — live run list, per-run detail with streaming log viewer, stats dashboard, and a "start run" button backed by the roadmap picker. Stack matches fathom's `apps/web`: Astro 5 + React 19 + Tailwind v4. PWA manifest so the phone can install it to the home screen and treat it as an app surface over Tailscale. Desktop is a first-class target too; nothing is mobile-only. | M | TOOL-39 |
+
+**Deliverables:**
+- `packages/web/` workspace with Astro + React + Tailwind (mirror `apps/web` conventions from fathom: scripts, biome config, tsconfig).
+- Routes / views:
+  - `/` — live run list, auto-refreshing. Columns: item, step, started-at, budget. Row click → detail.
+  - `/runs/:id` — detail page. Shows plan path (with a "view plan" link), filesChanged, tool counts, output tail. SSE-driven live log pane. Buttons: pause, resume, stop (with confirm).
+  - `/start` — roadmap picker (consumes `GET /roadmap`) + form (parallel, cycles, shipTarget override). Submits to `POST /runs`.
+  - `/stats` — TOOL-25 dashboard view: tokens, quality signals, recent failures.
+- Mobile-responsive layout throughout. Touch targets ≥ 44px. SSE works over the Tailscale tunnel on cellular (tested on iOS Safari + Android Chrome).
+- PWA: `manifest.webmanifest`, icons, `theme_color`, "Add to Home Screen" tested on iOS + Android. No service worker caching of API responses — the UI is thin and always hits the daemon live.
+- Dev proxy: `astro dev` proxies `/api/*` + `/runs/:id/log` (SSE) to the daemon on the tailnet IP during local development. Document the setup in `docs/server.md`.
+- Build artifacts served by the Hono daemon (static-file handler mounted at `/`) — no separate Cloudflare Pages deploy for the UI; it ships alongside the daemon so tailnet access is enough.
+- End-to-end smoke test: from the beefy box, load the UI on a phone over Tailscale, kick off a run, watch the log stream, pause and resume, confirm stats update.
+
+**Out of scope:**
+- Off-tailnet public access — TOOL-43.
+- Push notifications — separate follow-up.
+- Multi-operator UX (shared sessions, per-user state) — single operator.
+- Theming / dark mode polish — ship with a minimal, readable default.
+- Replacing the CLI — the UI wraps the daemon, the daemon wraps the CLI.
+
+**Open questions for `/plan`:**
+- Astro server islands vs. pure client React for the live-updating views — SSE + React hooks probably wins over server islands' polling semantics.
+- Auth UX when TOOL-43 lands: bearer in localStorage on first load, or a login form posting to a `/auth/token` exchange? Former is lighter; latter is less scary to paste into.
+
+---
+
+### TOOL-43. Cloudflare Tunnel + bearer auth for off-tailnet control-plane access
+
+| What | Scope | Deps |
+|------|-------|------|
+| `cloudflared` tunnel exposing the TOOL-39 daemon at a stable hostname so the operator can reach the UI from a device that isn't on the tailnet (borrowed laptop, phone with Tailscale disabled, etc.). The daemon's bearer-token middleware (plumbed in TOOL-39, no-op by default) flips on when this ships. Reuses fathom's existing `infra/cloudflare/` Terraform scaffolding for DNS and Tunnel config. | S | TOOL-39 |
+
+**Deliverables:**
+- `infra/cloudflare/tunnel.tf` — Cloudflare Tunnel + DNS record for a hostname like `autopilot.{domain}`. Matches the shape of fathom's Cloudflare Terraform.
+- `infra/systemd/cloudflared.service` — user unit on the beefy box running `cloudflared tunnel run`, tunnel credentials loaded from an `EnvironmentFile` (not committed).
+- Bearer-token enforcement in the Hono daemon: when `CONTROL_PLANE_TOKEN` env is set, middleware requires `Authorization: Bearer <token>` on every request. When unset, middleware is a pass-through (preserves tailnet-only UX for TOOL-39-only deployments).
+- Web UI (TOOL-42) gains a minimal token-entry flow: on 401, prompt for token, store in `localStorage`, attach to fetch + EventSource requests. No login page; just a modal.
+- Docs: append to `docs/server.md` — tunnel setup, token rotation, how to run tailnet-only vs. tunnel-exposed. Call out that the token is the only thing between the public internet and your beefy box.
+- End-to-end smoke test: from cellular-only phone with Tailscale off, hit the tunnel hostname, enter the token, start a run, watch the log stream.
+
+**Out of scope:**
+- OAuth / SSO — overkill for one operator.
+- Multiple tokens / per-device revocation — single token, rotate by editing the env file and restarting the daemon.
+- Rate limiting beyond what Cloudflare WAF provides by default — revisit if abused.
+- Automatic token provisioning / 1Password integration — operator pastes the token once per device.
 
 ---
 
