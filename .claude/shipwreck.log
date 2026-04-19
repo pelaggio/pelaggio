@@ -1,0 +1,20 @@
+## TOOL-5 — 2026-04-18
+
+State: aborted-push
+Failure: /ship completed the merge (e5ddf38) and two docs commits (d766215, 7bc18a0) on main but halted before pushing to origin and cleaning up the worktree/branch.
+Resolution: Ran verification (150 tests pass, biome clean), pushed main to origin, removed worktree, deleted local branch. Remote branch did not exist.
+Pattern: none
+
+## TOOL-33 — 2026-04-19
+
+State: mid-merge
+Failure: git pull --no-rebase origin main during /ship conflicted because local main had the new TOOL-33 charter (run-quality fixes + TOOL-34) while origin/main still had the old charter (GitHub Issues POC). The two charters diverged before the feature branch was created, so the pull created a two-sided conflict in docs/roadmap-core.md and docs/task-index.md.
+Resolution: Kept HEAD (local main) for all conflicts — it had the correct, up-to-date charter. Committed the resolved merge, then merged the feature branch cleanly, updated docs to mark TOOL-33 done, archived the plan.
+Pattern: charter-divergence — local main has a newer charter than origin/main when the feature branch was already created from local main. Safe resolution: always prefer HEAD (local main) in docs/ conflicts when origin/main's version predates the feature branch's base commit.
+
+## TOOL-31 — 2026-04-19
+
+State: mid-merge
+Failure: /ship merged feat/tool-31-rewire-skill-bodies into main but hit conflicts in docs/roadmap-core.md and docs/task-index.md. HEAD had added TOOL-35 (fix pick nested sub-items) and TOOL-36 to both files after the feature branch was cut; the feature branch had an older TOOL-35 definition ("Extend gh/linear adapter tests with TOOL-31 new methods"). TOOL-31 was also not yet marked done.
+Resolution: Kept HEAD's TOOL-35 and TOOL-36 rows; discarded feature branch's stale TOOL-35. Marked TOOL-31 as done in roadmap-core.md, added TOOL-31 to recently-completed in task-index.md. Committed merge, verified (349 tests pass, biome clean).
+Pattern: none — standard docs row conflict from parallel work; keeping HEAD is correct whenever HEAD's roadmap rows postdate the feature branch's base commit.
