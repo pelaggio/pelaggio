@@ -300,16 +300,10 @@ export function renderJson(stats: Stats): string {
 
 // ── Entry point ────────────────────────────────────────────────────────
 
-export function runStatsCommand(opts: { json: boolean } = { json: false }): void {
-	if (!existsSync(LOG_PATH)) {
-		if (opts.json) {
-			console.log(renderJson(reduce([])));
-			return;
-		}
-		console.log(A.dim("No autopilot log found at") + " " + LOG_PATH);
-		return;
-	}
-	const raw = readFileSync(LOG_PATH, "utf-8");
+export function computeStats(opts: { logPath?: string } = {}): Stats {
+	const path = opts.logPath ?? LOG_PATH;
+	if (!existsSync(path)) return reduce([]);
+	const raw = readFileSync(path, "utf-8");
 	const entries: CycleLogEntry[] = raw
 		.split("\n")
 		.map((l) => l.trim())
@@ -322,7 +316,18 @@ export function runStatsCommand(opts: { json: boolean } = { json: false }): void
 			}
 		})
 		.filter((e): e is CycleLogEntry => e !== null && Array.isArray((e as { steps?: StepLog[] }).steps));
+	return reduce(entries);
+}
 
-	const stats = reduce(entries);
+export function runStatsCommand(opts: { json: boolean } = { json: false }): void {
+	if (!existsSync(LOG_PATH)) {
+		if (opts.json) {
+			console.log(renderJson(reduce([])));
+			return;
+		}
+		console.log(A.dim("No autopilot log found at") + " " + LOG_PATH);
+		return;
+	}
+	const stats = computeStats();
 	console.log(opts.json ? renderJson(stats) : renderDashboard(stats));
 }

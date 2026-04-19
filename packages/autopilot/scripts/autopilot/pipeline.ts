@@ -560,146 +560,59 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 	const parkSignal: ParkSignal = { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" };
 	const results: CycleResult[] = [];
 
-	// Resolve ship target: CLI --target > config SHIP_TARGET > default
-	let shipTargetName = SHIP_TARGET;
-	if (flags.target !== undefined) {
-		if (!isShipTargetName(flags.target)) {
-			console.error(`invalid --target ${JSON.stringify(flags.target)}; valid: ${SHIP_TARGET_NAMES.join(", ")}`);
+	const onPause = (): void => {
+		parkSignal.parked = true;
+		parkSignal.limitType = "paused";
+		parkSignal.resetsAt = 0;
+	};
+	process.on("SIGUSR2", onPause);
+
+	try {
+		// Resolve ship target: CLI --target > config SHIP_TARGET > default
+		let shipTargetName = SHIP_TARGET;
+		if (flags.target !== undefined) {
+			if (!isShipTargetName(flags.target)) {
+				console.error(`invalid --target ${JSON.stringify(flags.target)}; valid: ${SHIP_TARGET_NAMES.join(", ")}`);
+				return { exitCode: 2, results };
+			}
+			shipTargetName = flags.target;
+		}
+		const shipTarget = getShipTarget(shipTargetName);
+
+		// Resolve no-worktree: --no-worktree flag, CI=true, or CLAUDE_AUTOPILOT_SINGLE_SHOT=1
+		const noWorktree = flags["no-worktree"] || process.env.CI === "true" || process.env.CLAUDE_AUTOPILOT_SINGLE_SHOT === "1";
+		if (noWorktree && !flags.item) {
+			console.error("--no-worktree / CI mode requires --item <ID> (explicit item required; no auto-pick)");
 			return { exitCode: 2, results };
 		}
-		shipTargetName = flags.target;
-	}
-	const shipTarget = getShipTarget(shipTargetName);
-
-	// Resolve no-worktree: --no-worktree flag, CI=true, or CLAUDE_AUTOPILOT_SINGLE_SHOT=1
-	const noWorktree = flags["no-worktree"] || process.env.CI === "true" || process.env.CLAUDE_AUTOPILOT_SINGLE_SHOT === "1";
-	if (noWorktree && !flags.item) {
-		console.error("--no-worktree / CI mode requires --item <ID> (explicit item required; no auto-pick)");
-		return { exitCode: 2, results };
-	}
-	if (noWorktree && Number(flags.parallel) > 1) {
-		console.error("--no-worktree / CI mode does not support --parallel > 1");
-		return { exitCode: 2, results };
-	}
-
-	// Resume mode
-	if (flags.resume) {
-		const id = flags.resume.toUpperCase();
-		const worktree = noWorktree ? REPO : _resolveWorktree(id);
-		const startFrom = _detectResumeStep(id, worktree);
-		const v = flags.verbose;
-		console.log(`${A.bold("resume")} ${id} from ${A.bold(startFrom)}`);
-
-		const status: CycleStatus = { itemId: id, status: "running", cost: 0 };
-		liveStatus.cycles.push(status);
-		liveStatus.totalCycles = 1;
-		if (v) statusBar.setup();
-
-		const result = await _runPipeline(
-			{
-				itemId: id,
-				worktree,
-				startFrom,
-				cycle: 1,
-				verbose: v,
-				shipTarget,
-				dryRun: false,
-				workerStatus: status,
-				liveStatus,
-				...(noWorktree ? { noWorktree: true } : {}),
-				...(signal ? { signal } : {}),
-			},
-			parkSignal,
-			flags,
-		);
-		results.push(result);
-
-		status.status = resultStatus(result);
-		status.step = undefined;
-		if (v) {
-			liveStatus.render();
-			statusBar.teardown();
+		if (noWorktree && Number(flags.parallel) > 1) {
+			console.error("--no-worktree / CI mode does not support --parallel > 1");
+			return { exitCode: 2, results };
 		}
-		console.log(`\n${result.completed ? A.green("✓") : A.red("✗")} ${id} — $${result.cost.toFixed(2)}`);
-		return { exitCode: result.completed ? 0 : 1, results };
-	}
 
-	// Normal mode
-	const requestedCycles = parseInt(flags.cycles, 10);
-	const parallel = parseInt(flags.parallel, 10);
-	const items =
-		flags.item
-			?.split(",")
-			.map((s) => s.trim())
-			.filter(Boolean) ?? [];
-	// Auto-derive cycles to cover the full item list when --cycles isn't
-	// explicitly sized for it — otherwise items beyond index `max(cycles-1,
-	// parallel-1)` would silently drop off the worker queue.
-	const cycles = Math.max(requestedCycles, parallel, items.length);
-	const maxBudget = parseFloat(flags.budget);
-	const dryRun = flags["dry-run"];
-	const v = flags.verbose;
-	const isParallel = parallel > 1;
+		// Resume mode
+		if (flags.resume) {
+			const id = flags.resume.toUpperCase();
+			const worktree = noWorktree ? REPO : _resolveWorktree(id);
+			const startFrom = _detectResumeStep(id, worktree);
+			const v = flags.verbose;
+			console.log(`${A.bold("resume")} ${id} from ${A.bold(startFrom)}`);
 
-	const targetBanner = shipTargetName === "direct-push" ? "" : `  ${A.dim(`target=${shipTargetName}`)}`;
-	console.log(`${A.bold("autopilot")}  ${cycles} cycle(s)${isParallel ? `  ${A.dim("×")}${parallel} parallel` : ""}  ${A.dim("budget")} $${maxBudget.toFixed(2)}${targetBanner}${dryRun ? `  ${A.yellow("[DRY RUN]")}` : ""}`);
-	if (isParallel && v) {
-		console.log(`${A.dim("logs")}  .dev/autopilot-{N}.log`);
-	}
-	console.log("");
-
-	liveStatus.totalCycles = cycles;
-	liveStatus.multiline = isParallel;
-	if (v) {
-		const rows = process.stderr.rows || 24;
-		const barLines = isParallel ? Math.min(parallel + 1, Math.floor(rows / 3)) : 2;
-		statusBar.setup(barLines);
-	}
-
-	const statusInterval = isParallel && v ? setInterval(() => liveStatus.render(), 200) : null;
-
-	const pickMutex = isParallel ? createMutex() : undefined;
-	let nextCycle = 0;
-	let totalSpent = 0;
-	// `pick:unknown-id` and `pick:blocked` are intentionally fatal so typos in
-	// `--item X,Y,Z` and user-requested blocked items halt loudly instead of
-	// silently skipping. `pick:unknown` (parser fallback) stays recoverable to
-	// preserve the old lenient behaviour when the skill emits an unrecognised tag.
-	const RECOVERABLE = new Set(["plan needs rethink", "parked", "pick:queue-empty", "pick:worktree-exists", "pick:already-done", "pick:unknown"]);
-
-	async function worker(): Promise<void> {
-		while (true) {
-			const cycle = ++nextCycle;
-			if (cycle > cycles) return;
-			if (totalSpent >= maxBudget) {
-				console.log(`${A.yellow("⚠")} spend ($${totalSpent.toFixed(2)}) exceeds --budget threshold ($${maxBudget.toFixed(2)})`);
-			}
-
-			const status: CycleStatus = {
-				itemId: items[cycle - 1] ?? "…",
-				status: "running",
-				cost: 0,
-			};
+			const status: CycleStatus = { itemId: id, status: "running", cost: 0 };
 			liveStatus.cycles.push(status);
-			if (v) liveStatus.render();
-
-			let logPath: string | undefined;
-			if (isParallel && v) {
-				mkdirSync(resolve(REPO, ".dev"), { recursive: true });
-				logPath = resolve(REPO, ".dev", `autopilot-${cycle}.log`);
-				appendFileSync(logPath, `${"=".repeat(60)}\nautopilot cycle ${cycle} — ${new Date().toISOString()}\n${"=".repeat(60)}\n`);
-			}
+			liveStatus.totalCycles = 1;
+			if (v) statusBar.setup();
 
 			const result = await _runPipeline(
 				{
-					itemId: items[cycle - 1],
-					cycle,
-					verbose: !isParallel && v,
+					itemId: id,
+					worktree,
+					startFrom,
+					cycle: 1,
+					verbose: v,
 					shipTarget,
-					dryRun,
-					pickMutex,
+					dryRun: false,
 					workerStatus: status,
-					logPath,
 					liveStatus,
 					...(noWorktree ? { noWorktree: true } : {}),
 					...(signal ? { signal } : {}),
@@ -707,117 +620,94 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				parkSignal,
 				flags,
 			);
-
-			totalSpent += result.cost;
 			results.push(result);
 
-			status.itemId = result.itemId ?? "?";
 			status.status = resultStatus(result);
-			status.cost = result.cost;
 			status.step = undefined;
-			status.turns = undefined;
-
-			const logRef = logPath ? `  ${A.dim(`→ .dev/autopilot-${cycle}.log`)}` : "";
-			console.log(`${resultIcon(result)} cycle ${cycle}: ${A.bold(result.itemId ?? "?")} — $${result.cost.toFixed(2)}${result.error ? `  ${A.dim(result.error)}` : ""}${logRef}`);
-
-			if (v) liveStatus.render();
-
-			if (parkSignal.parked) break;
-			if (!result.completed && !RECOVERABLE.has(result.error ?? "")) return;
-		}
-	}
-
-	await Promise.all(Array.from({ length: Math.min(parallel, cycles) }, () => worker()));
-
-	// ── Park-and-resume ──
-
-	if (parkSignal.parked) {
-		if (v) statusBar.teardown();
-		if (statusInterval) clearInterval(statusInterval);
-
-		const parkedItems = results.filter((r) => r.error === "parked" && r.itemId).map((r) => r.itemId!);
-
-		if (parkedItems.length === 0) {
-			console.log(`${A.yellow("⏸")} Rate limit hit but no items to resume.`);
-			return { exitCode: 1, results };
-		}
-
-		const maxWaitMs = parseWaitFlag(flags["max-wait"]);
-		const waitMs = parkSignal.resetsAt - Date.now();
-		const isWeekly = /week/i.test(parkSignal.limitType);
-		const resumeCmd = `pnpm autopilot --item ${parkedItems.join(",")} --verbose`;
-
-		if (waitMs <= 0 || !parkSignal.resetsAt) {
-			console.log("");
-			console.log(`${A.yellow("⏸")} ${parkSignal.limitType} limit hit — unknown reset time`);
-			console.log(`  Parked: ${parkedItems.join(", ")}`);
-			console.log(`  Resume: ${A.bold(resumeCmd)}`);
-			return { exitCode: 1, results };
-		}
-
-		if (waitMs > maxWaitMs) {
-			const label = isWeekly ? "Weekly rate limit" : `${parkSignal.limitType} limit`;
-			console.log("");
-			console.log(`${A.yellow("⏸")} ${label} — wait ${fmtWait(waitMs)} exceeds --max-wait ${fmtWait(maxWaitMs)}`);
-			console.log(`  Parked: ${parkedItems.join(", ")}`);
-			console.log(`  Resume: ${A.bold(resumeCmd)}`);
-			return { exitCode: 1, results };
-		}
-
-		const eta = new Date(parkSignal.resetsAt + 30_000).toLocaleTimeString("en-CA", { hour12: false });
-		console.log("");
-		console.log(`${A.yellow("⏸")} ${A.bold("Parked")} — ${parkSignal.limitType} limit, waiting ${fmtWait(waitMs)} (ETA ${eta})`);
-		console.log(`  Items: ${parkedItems.join(", ")}`);
-
-		const countdownInterval = setInterval(() => {
-			const remaining = parkSignal.resetsAt + 30_000 - Date.now();
-			if (remaining > 0) {
-				console.log(`  ${A.dim("⏳")} ${fmtWait(remaining)} remaining...`);
+			if (v) {
+				liveStatus.render();
+				statusBar.teardown();
 			}
-		}, 5 * 60_000);
-
-		await new Promise((r) => setTimeout(r, waitMs + 30_000));
-		clearInterval(countdownInterval);
-
-		parkSignal.parked = false;
-		parkSignal.resetsAt = 0;
-		parkSignal.limitType = "";
-		parkSignal.triggerWorker = "";
-		totalSpent = 0;
-
-		console.log(`\n${A.green("▶")} ${A.bold("Resuming")} ${parkedItems.length} item(s)...`);
-
-		if (v) {
-			liveStatus.cycles = [];
-			liveStatus.totalCycles = parkedItems.length;
-			statusBar.setup();
+			console.log(`\n${result.completed ? A.green("✓") : A.red("✗")} ${id} — $${result.cost.toFixed(2)}`);
+			return { exitCode: result.completed ? 0 : 1, results };
 		}
 
-		const resumeResults = await Promise.all(
-			parkedItems.map(async (id, i) => {
-				const wt = noWorktree ? REPO : _resolveWorktree(id);
-				const sf = _detectResumeStep(id, wt);
-				const st: CycleStatus = { itemId: id, status: "running", cost: 0 };
-				liveStatus.cycles.push(st);
+		// Normal mode
+		const requestedCycles = parseInt(flags.cycles, 10);
+		const parallel = parseInt(flags.parallel, 10);
+		const items =
+			flags.item
+				?.split(",")
+				.map((s) => s.trim())
+				.filter(Boolean) ?? [];
+		// Auto-derive cycles to cover the full item list when --cycles isn't
+		// explicitly sized for it — otherwise items beyond index `max(cycles-1,
+		// parallel-1)` would silently drop off the worker queue.
+		const cycles = Math.max(requestedCycles, parallel, items.length);
+		const maxBudget = parseFloat(flags.budget);
+		const dryRun = flags["dry-run"];
+		const v = flags.verbose;
+		const isParallel = parallel > 1;
+
+		const targetBanner = shipTargetName === "direct-push" ? "" : `  ${A.dim(`target=${shipTargetName}`)}`;
+		console.log(`${A.bold("autopilot")}  ${cycles} cycle(s)${isParallel ? `  ${A.dim("×")}${parallel} parallel` : ""}  ${A.dim("budget")} $${maxBudget.toFixed(2)}${targetBanner}${dryRun ? `  ${A.yellow("[DRY RUN]")}` : ""}`);
+		if (isParallel && v) {
+			console.log(`${A.dim("logs")}  .dev/autopilot-{N}.log`);
+		}
+		console.log("");
+
+		liveStatus.totalCycles = cycles;
+		liveStatus.multiline = isParallel;
+		if (v) {
+			const rows = process.stderr.rows || 24;
+			const barLines = isParallel ? Math.min(parallel + 1, Math.floor(rows / 3)) : 2;
+			statusBar.setup(barLines);
+		}
+
+		const statusInterval = isParallel && v ? setInterval(() => liveStatus.render(), 200) : null;
+
+		const pickMutex = isParallel ? createMutex() : undefined;
+		let nextCycle = 0;
+		let totalSpent = 0;
+		// `pick:unknown-id` and `pick:blocked` are intentionally fatal so typos in
+		// `--item X,Y,Z` and user-requested blocked items halt loudly instead of
+		// silently skipping. `pick:unknown` (parser fallback) stays recoverable to
+		// preserve the old lenient behaviour when the skill emits an unrecognised tag.
+		const RECOVERABLE = new Set(["plan needs rethink", "parked", "pick:queue-empty", "pick:worktree-exists", "pick:already-done", "pick:unknown"]);
+
+		async function worker(): Promise<void> {
+			while (true) {
+				const cycle = ++nextCycle;
+				if (cycle > cycles) return;
+				if (totalSpent >= maxBudget) {
+					console.log(`${A.yellow("⚠")} spend ($${totalSpent.toFixed(2)}) exceeds --budget threshold ($${maxBudget.toFixed(2)})`);
+				}
+
+				const status: CycleStatus = {
+					itemId: items[cycle - 1] ?? "…",
+					status: "running",
+					cost: 0,
+				};
+				liveStatus.cycles.push(status);
 				if (v) liveStatus.render();
-				const r = await _runPipeline(
+
+				let logPath: string | undefined;
+				if (isParallel && v) {
+					mkdirSync(resolve(REPO, ".dev"), { recursive: true });
+					logPath = resolve(REPO, ".dev", `autopilot-${cycle}.log`);
+					appendFileSync(logPath, `${"=".repeat(60)}\nautopilot cycle ${cycle} — ${new Date().toISOString()}\n${"=".repeat(60)}\n`);
+				}
+
+				const result = await _runPipeline(
 					{
-						itemId: id,
-						worktree: wt,
-						startFrom: sf,
-						cycle: results.length + i + 1,
+						itemId: items[cycle - 1],
+						cycle,
 						verbose: !isParallel && v,
 						shipTarget,
-						dryRun: false,
-						workerStatus: st,
-						logPath:
-							isParallel && v
-								? (() => {
-										const lp = resolve(REPO, ".dev", `autopilot-resume-${id.toLowerCase()}.log`);
-										appendFileSync(lp, `${"=".repeat(60)}\nresume ${id} — ${new Date().toISOString()}\n${"=".repeat(60)}\n`);
-										return lp;
-									})()
-								: undefined,
+						dryRun,
+						pickMutex,
+						workerStatus: status,
+						logPath,
 						liveStatus,
 						...(noWorktree ? { noWorktree: true } : {}),
 						...(signal ? { signal } : {}),
@@ -825,36 +715,157 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					parkSignal,
 					flags,
 				);
-				st.status = resultStatus(r);
-				st.cost = r.cost;
-				st.step = undefined;
+
+				totalSpent += result.cost;
+				results.push(result);
+
+				status.itemId = result.itemId ?? "?";
+				status.status = resultStatus(result);
+				status.cost = result.cost;
+				status.step = undefined;
+				status.turns = undefined;
+
+				const logRef = logPath ? `  ${A.dim(`→ .dev/autopilot-${cycle}.log`)}` : "";
+				console.log(`${resultIcon(result)} cycle ${cycle}: ${A.bold(result.itemId ?? "?")} — $${result.cost.toFixed(2)}${result.error ? `  ${A.dim(result.error)}` : ""}${logRef}`);
+
 				if (v) liveStatus.render();
-				console.log(`${resultIcon(r)} resume ${id} — $${r.cost.toFixed(2)}${r.error ? `  ${A.dim(r.error)}` : ""}`);
-				return r;
-			}),
-		);
 
-		results.push(...resumeResults);
-		totalSpent = results.reduce((s, r) => s + r.cost, 0);
-	}
-
-	if (v) statusBar.teardown();
-	if (statusInterval) clearInterval(statusInterval);
-	console.log("");
-	console.log(`${A.bold("summary")}  $${totalSpent.toFixed(2)} across ${results.length} cycle(s)${isParallel ? `  ${A.dim("×")}${parallel} parallel` : ""}`);
-	for (const r of results) {
-		let label: string;
-		if (r.completed && r.awaitingMerge) {
-			label = `${A.green("↗ PR opened")}${r.prUrl ? ` ${A.dim(r.prUrl)}` : ""}`;
-		} else if (r.completed) {
-			label = A.green("shipped");
-		} else {
-			label = A.dim(r.error ?? "failed");
+				if (parkSignal.parked) break;
+				if (!result.completed && !RECOVERABLE.has(result.error ?? "")) return;
+			}
 		}
-		console.log(`  ${resultIcon(r)} ${r.itemId ?? "?"}: ${label}`);
-	}
 
-	return { exitCode: results.every((r) => r.completed) ? 0 : 1, results };
+		await Promise.all(Array.from({ length: Math.min(parallel, cycles) }, () => worker()));
+
+		// ── Park-and-resume ──
+
+		if (parkSignal.parked) {
+			if (v) statusBar.teardown();
+			if (statusInterval) clearInterval(statusInterval);
+
+			const parkedItems = results.filter((r) => r.error === "parked" && r.itemId).map((r) => r.itemId!);
+
+			if (parkedItems.length === 0) {
+				console.log(`${A.yellow("⏸")} Rate limit hit but no items to resume.`);
+				return { exitCode: 1, results };
+			}
+
+			const maxWaitMs = parseWaitFlag(flags["max-wait"]);
+			const waitMs = parkSignal.resetsAt - Date.now();
+			const isWeekly = /week/i.test(parkSignal.limitType);
+			const resumeCmd = `pnpm autopilot --item ${parkedItems.join(",")} --verbose`;
+
+			if (waitMs <= 0 || !parkSignal.resetsAt) {
+				console.log("");
+				console.log(`${A.yellow("⏸")} ${parkSignal.limitType} limit hit — unknown reset time`);
+				console.log(`  Parked: ${parkedItems.join(", ")}`);
+				console.log(`  Resume: ${A.bold(resumeCmd)}`);
+				return { exitCode: 1, results };
+			}
+
+			if (waitMs > maxWaitMs) {
+				const label = isWeekly ? "Weekly rate limit" : `${parkSignal.limitType} limit`;
+				console.log("");
+				console.log(`${A.yellow("⏸")} ${label} — wait ${fmtWait(waitMs)} exceeds --max-wait ${fmtWait(maxWaitMs)}`);
+				console.log(`  Parked: ${parkedItems.join(", ")}`);
+				console.log(`  Resume: ${A.bold(resumeCmd)}`);
+				return { exitCode: 1, results };
+			}
+
+			const eta = new Date(parkSignal.resetsAt + 30_000).toLocaleTimeString("en-CA", { hour12: false });
+			console.log("");
+			console.log(`${A.yellow("⏸")} ${A.bold("Parked")} — ${parkSignal.limitType} limit, waiting ${fmtWait(waitMs)} (ETA ${eta})`);
+			console.log(`  Items: ${parkedItems.join(", ")}`);
+
+			const countdownInterval = setInterval(() => {
+				const remaining = parkSignal.resetsAt + 30_000 - Date.now();
+				if (remaining > 0) {
+					console.log(`  ${A.dim("⏳")} ${fmtWait(remaining)} remaining...`);
+				}
+			}, 5 * 60_000);
+
+			await new Promise((r) => setTimeout(r, waitMs + 30_000));
+			clearInterval(countdownInterval);
+
+			parkSignal.parked = false;
+			parkSignal.resetsAt = 0;
+			parkSignal.limitType = "";
+			parkSignal.triggerWorker = "";
+			totalSpent = 0;
+
+			console.log(`\n${A.green("▶")} ${A.bold("Resuming")} ${parkedItems.length} item(s)...`);
+
+			if (v) {
+				liveStatus.cycles = [];
+				liveStatus.totalCycles = parkedItems.length;
+				statusBar.setup();
+			}
+
+			const resumeResults = await Promise.all(
+				parkedItems.map(async (id, i) => {
+					const wt = noWorktree ? REPO : _resolveWorktree(id);
+					const sf = _detectResumeStep(id, wt);
+					const st: CycleStatus = { itemId: id, status: "running", cost: 0 };
+					liveStatus.cycles.push(st);
+					if (v) liveStatus.render();
+					const r = await _runPipeline(
+						{
+							itemId: id,
+							worktree: wt,
+							startFrom: sf,
+							cycle: results.length + i + 1,
+							verbose: !isParallel && v,
+							shipTarget,
+							dryRun: false,
+							workerStatus: st,
+							logPath:
+								isParallel && v
+									? (() => {
+											const lp = resolve(REPO, ".dev", `autopilot-resume-${id.toLowerCase()}.log`);
+											appendFileSync(lp, `${"=".repeat(60)}\nresume ${id} — ${new Date().toISOString()}\n${"=".repeat(60)}\n`);
+											return lp;
+										})()
+									: undefined,
+							liveStatus,
+							...(noWorktree ? { noWorktree: true } : {}),
+							...(signal ? { signal } : {}),
+						},
+						parkSignal,
+						flags,
+					);
+					st.status = resultStatus(r);
+					st.cost = r.cost;
+					st.step = undefined;
+					if (v) liveStatus.render();
+					console.log(`${resultIcon(r)} resume ${id} — $${r.cost.toFixed(2)}${r.error ? `  ${A.dim(r.error)}` : ""}`);
+					return r;
+				}),
+			);
+
+			results.push(...resumeResults);
+			totalSpent = results.reduce((s, r) => s + r.cost, 0);
+		}
+
+		if (v) statusBar.teardown();
+		if (statusInterval) clearInterval(statusInterval);
+		console.log("");
+		console.log(`${A.bold("summary")}  $${totalSpent.toFixed(2)} across ${results.length} cycle(s)${isParallel ? `  ${A.dim("×")}${parallel} parallel` : ""}`);
+		for (const r of results) {
+			let label: string;
+			if (r.completed && r.awaitingMerge) {
+				label = `${A.green("↗ PR opened")}${r.prUrl ? ` ${A.dim(r.prUrl)}` : ""}`;
+			} else if (r.completed) {
+				label = A.green("shipped");
+			} else {
+				label = A.dim(r.error ?? "failed");
+			}
+			console.log(`  ${resultIcon(r)} ${r.itemId ?? "?"}: ${label}`);
+		}
+
+		return { exitCode: results.every((r) => r.completed) ? 0 : 1, results };
+	} finally {
+		process.off("SIGUSR2", onPause);
+	}
 }
 
 export async function orchestrate(flags: Flags): Promise<void> {

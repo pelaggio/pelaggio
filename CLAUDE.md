@@ -11,7 +11,7 @@ This is a pnpm workspace. Two packages today:
 - `packages/autopilot/` — the published pipeline (`@cdhorne/claude-autopilot`). All TypeScript runs on tsx; no build step.
   - Pipeline modules: `packages/autopilot/scripts/autopilot/` (read by `expandSkill()` in the pipeline)
   - Entry points: `packages/autopilot/scripts/autopilot.ts` → `…/autopilot/main.ts`; `packages/autopilot/bin/claude-autopilot.js` for the published CLI.
-- `packages/server/` — placeholder for the control-plane daemon (TOOL-39). No code yet.
+- `packages/server/` — control-plane daemon (`@cdhorne/claude-autopilot-server`, private). Hono HTTP service that supervises `pnpm autopilot` subprocesses, exposes them over `POST /runs`, `POST /runs/:id/{pause,resume,stop}`, `GET /runs/:id/log` (SSE), `GET /stats`, `GET /roadmap`, `GET /healthz`. State persists to `${repo}/.dev/server-state.json`; per-run stdout tees to `${repo}/.dev/server-logs/${id}.log`. Deployed as a systemd user unit (`infra/systemd/autopilot-server.service`); deploy workflow at `.github/workflows/deploy-server.yml`. See `docs/server.md` for API + setup.
 
 Repo root holds shared assets and dev tooling:
 

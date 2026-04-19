@@ -7,5 +7,8 @@
 
 export { loadConfig } from "./config.js";
 export { orchestrate as run } from "./pipeline.js";
-export { runStatsCommand } from "./stats.js";
-export type { CycleResult, Flags, PipelineOpts, Step } from "./types.js";
+export type { RoadmapItem, RoadmapSource, RoadmapSourceName } from "./roadmap/index.js";
+export { getRoadmapSource } from "./roadmap/index.js";
+export type { Stats } from "./stats.js";
+export { computeStats, runStatsCommand } from "./stats.js";
+export type { CycleResult, Flags, PipelineOpts, ShipTargetName, Step } from "./types.js";

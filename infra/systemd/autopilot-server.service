@@ -1,0 +1,17 @@
+[Unit]
+Description=Claude Autopilot control-plane daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/workspace/claude-autopilot
+EnvironmentFile=%h/.config/autopilot-server.env
+ExecStart=/usr/bin/env pnpm --filter @cdhorne/claude-autopilot-server start
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

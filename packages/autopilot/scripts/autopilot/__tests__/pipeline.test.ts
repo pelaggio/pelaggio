@@ -4,10 +4,10 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { WORKTREE_PREFIX } from "../config.js";
-import { runPipeline } from "../pipeline.js";
+import { runOrchestrator, runPipeline } from "../pipeline.js";
 import { getShipTarget } from "../ship/index.js";
-import type { Flags, PipelineOpts } from "../types.js";
-import { allCommitMessages, createMockRunStep, makeLiveStatus, makeMockRoadmap, makeParkSignal, makeTempGitRepo, makeTempRepoWithParent } from "./mocks.js";
+import type { Flags, ParkSignal, PipelineOpts } from "../types.js";
+import { allCommitMessages, createMockRunPipeline, createMockRunStep, makeLiveStatus, makeMockRoadmap, makeParkSignal, makeTempGitRepo, makeTempRepoWithParent } from "./mocks.js";
 
 const baseFlags: Flags = {
 	cycles: "1",
@@ -725,5 +725,51 @@ describe("runPipeline — SIGINT cancellation", () => {
 		assert.equal(result.error, "aborted");
 		assert.ok(elapsed < 2000, `expected abort to return well under the 2s grace window; got ${elapsed}ms`);
 		assert.equal(calls[0].step, "plan");
+	});
+});
+
+describe("runOrchestrator — SIGUSR2 pause handler", () => {
+	it("SIGUSR2 mid-cycle parks parkSignal and stops the worker before subsequent items", async () => {
+		const seenAfter: ParkSignal[] = [];
+		const { runPipeline: mockRun, calls } = createMockRunPipeline({
+			byItem: {
+				"A-1": { completed: true, cost: 0.1 },
+				"A-2": { completed: true, cost: 0.1 },
+			},
+		});
+
+		// Wrapper: send SIGUSR2 inside the cycle, then await one event-loop turn
+		// so the signal handler runs before the worker re-checks parkSignal.
+		const wrappedRun: typeof mockRun = async (opts, parkSignal, flags) => {
+			const result = await mockRun(opts, parkSignal, flags);
+			if (opts.itemId === "A-1") {
+				process.kill(process.pid, "SIGUSR2");
+				// Yield until the signal handler fires.
+				for (let i = 0; i < 5 && !parkSignal.parked; i++) await new Promise(setImmediate);
+			}
+			seenAfter.push({ ...parkSignal });
+			return result;
+		};
+
+		const flags: Flags = { ...baseFlags, item: "A-1,A-2" };
+		const { results } = await runOrchestrator(flags, { runPipeline: wrappedRun });
+
+		assert.equal(calls.length, 1, `expected only A-1 to run; got ${calls.length} calls`);
+		assert.equal(calls[0].opts.itemId, "A-1");
+		assert.equal(results.length, 1);
+		// Handler must set the three fields the rate-limit handler sets.
+		const snap = seenAfter[0];
+		assert.equal(snap.parked, true);
+		assert.equal(snap.limitType, "paused");
+		assert.equal(snap.resetsAt, 0);
+	});
+
+	it("removes its SIGUSR2 listener on return so repeated invocations do not leak", async () => {
+		const before = process.listenerCount("SIGUSR2");
+		const { runPipeline } = createMockRunPipeline({ default: { completed: true, cost: 0 } });
+		await runOrchestrator({ ...baseFlags, item: "A-1" }, { runPipeline });
+		await runOrchestrator({ ...baseFlags, item: "A-1" }, { runPipeline });
+		const after = process.listenerCount("SIGUSR2");
+		assert.equal(after, before, `SIGUSR2 listener leak: before=${before} after=${after}`);
 	});
 });

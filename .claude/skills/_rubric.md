@@ -41,9 +41,11 @@ Skills live in `.claude/skills/` — each skill is self-contained markdown with 
 
 ```bash
 npx tsx --test --test-reporter=dot packages/autopilot/scripts/autopilot/__tests__/*.test.ts   # unit + pipeline tests (terse dot reporter)
+npx tsx --test --test-reporter=dot packages/server/__tests__/*.test.ts                         # server unit tests (supervisor, state-store, auth, app)
 npx tsx -e "import('./packages/autopilot/scripts/autopilot/config.ts')"                        # parse-check config
 npx tsx -e "import('./packages/autopilot/scripts/autopilot/helpers.ts')"                       # parse-check helpers
 npx tsx -e "import('./packages/autopilot/scripts/autopilot/pipeline.ts')"                      # parse-check pipeline
+npx tsx -e "import('./packages/server/src/app.ts')"                                            # parse-check server entry
 pnpm check                                                                   # biome (exit 0 on success — output is already compact)
 pnpm check:skills                                                            # lint .claude/skills/*/SKILL.md frontmatter + includes
 ```

@@ -2,7 +2,22 @@
 	"name": "@cdhorne/claude-autopilot-server",
 	"version": "0.0.0",
 	"private": true,
-	"description": "Placeholder for the claude-autopilot control-plane daemon (TOOL-39).",
+	"description": "Control-plane daemon for claude-autopilot — supervises pipeline subprocesses over HTTP.",
 	"license": "UNLICENSED",
-	"type": "module"
+	"type": "module",
+	"scripts": {
+		"dev": "tsx watch scripts/server.ts",
+		"start": "tsx scripts/server.ts",
+		"build": "tsx -e \"import('./src/app.ts')\"",
+		"test": "tsx --test __tests__/*.test.ts"
+	},
+	"dependencies": {
+		"@cdhorne/claude-autopilot": "workspace:*",
+		"@hono/node-server": "^1.13.0",
+		"hono": "^4.7.0",
+		"ulid": "^3.0.0"
+	},
+	"devDependencies": {
+		"tsx": "^4.19.0"
+	}
 }
