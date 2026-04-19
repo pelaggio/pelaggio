@@ -70,7 +70,7 @@ export interface RoadmapSource {
 	listItems(opts?: { includeDone?: boolean }): Promise<RoadmapItemStatus[]>;
 	/** Single-item lookup with status (`unknown` if not found in open or done sets). */
 	getItem(id: string): Promise<RoadmapItemStatus | null>;
-	claimItem(id: string): Promise<{ branch: string; worktree: string }>;
+	claimItem(id: string, opts?: { noWorktree?: boolean }): Promise<{ branch: string; worktree: string }>;
 	markDone(id: string, ctx?: MarkDoneContext): Promise<void>;
 	getItemPlan(ref: { worktree?: string; id?: string }): Promise<string | null>;
 	/** Resolve the path where /plan should write, whether or not the file exists yet. */

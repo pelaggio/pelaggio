@@ -115,6 +115,8 @@ export interface PipelineOpts {
 	liveStatus: import("./tui.js").LiveStatus;
 	/** SIGINT-driven cancellation. When aborted, the in-flight SDK query tears down and the cycle surfaces `error: "aborted"`. */
 	signal?: AbortSignal;
+	/** CI/single-shot mode: use REPO as worktree, skip sibling-path creation. */
+	noWorktree?: boolean;
 }
 
 // ── Shared mutable state ───────────────────────────────────────────────
@@ -139,6 +141,7 @@ export interface Flags {
 	"max-wait": string;
 	target?: string;
 	"dry-run": boolean;
+	"no-worktree": boolean;
 }
 
 // ── Observer: step events ──────────────────────────────────────────────

@@ -117,7 +117,9 @@ npx claude-autopilot sync --dry-run                       # preview skill-upgrad
 
 ## Bug reporter — automated fix instructions
 
-When fixing bugs from automated reports:
+**Primary flow (preferred):** File a GitHub issue describing the bug and apply the `autopilot:fix` label. The `.github/workflows/autopilot-fix.yml` workflow triggers automatically, runs autopilot headlessly, and opens a PR. Review and merge the PR when satisfied.
+
+**Fallback (when autopilot declines or the fix requires human judgement):**
 - Make minimal, surgical edits only
 - Commit directly to main (solo workflow)
 - Do not modify GitHub Actions workflow files

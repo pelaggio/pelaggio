@@ -40,6 +40,11 @@ If the `feat/<id-lower>-*` branch already exists, report it, ask whether to reus
 
 ## Claim
 
+**If `$ARGUMENTS` contains `--no-worktree`** (CI / single-shot mode):
+Run `npx claude-autopilot roadmap claim --no-worktree <ID>` instead of the regular claim. This creates and checks out the feature branch in-place (no sibling worktree directory is created). The returned `worktree=` value will be the main repo path itself. Skip the `worktree-deps` install step — node_modules is already present in the working directory. Proceed directly to step 3 (Report).
+
+**Otherwise** (normal mode):
+
 1. Create branch + worktree via the adapter:
    ```bash
    npx claude-autopilot roadmap claim <ID>

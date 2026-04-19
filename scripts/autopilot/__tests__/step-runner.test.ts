@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { HookInput } from "@anthropic-ai/claude-agent-sdk";
-import { blockPlanPolish } from "../step-runner.js";
+import { blockPlanPolish, isWorktreePath } from "../step-runner.js";
 
 function write(fp: string): HookInput {
 	return { tool_name: "Write", tool_input: { file_path: fp } } as unknown as HookInput;
@@ -45,5 +45,23 @@ describe("blockPlanPolish", () => {
 	it("handles missing file_path gracefully", () => {
 		const bad = { tool_name: "Write", tool_input: {} } as unknown as HookInput;
 		assert.deepEqual(blockPlanPolish(bad, cwd), {});
+	});
+});
+
+describe("isWorktreePath", () => {
+	it("returns false when cwd equals repo (no-worktree / CI mode)", () => {
+		assert.equal(isWorktreePath("/home/user/my-repo", "/home/user/my-repo"), false);
+	});
+
+	it("returns true when cwd is a sibling worktree", () => {
+		assert.equal(isWorktreePath("/home/user/my-repo-tool-99", "/home/user/my-repo"), true);
+	});
+
+	it("returns false when paths resolve to the same directory (trailing slash)", () => {
+		assert.equal(isWorktreePath("/home/user/my-repo/", "/home/user/my-repo"), false);
+	});
+
+	it("returns true for distinct paths with matching prefix", () => {
+		assert.equal(isWorktreePath("/home/user/my-repo-extra", "/home/user/my-repo"), true);
 	});
 });

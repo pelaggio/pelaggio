@@ -18,6 +18,7 @@ const { values, positionals } = parseArgs({
 		"max-wait": { type: "string", default: "6h" },
 		target: { type: "string" },
 		"dry-run": { type: "boolean", default: false },
+		"no-worktree": { type: "boolean", default: false },
 		json: { type: "boolean", default: false },
 	},
 });

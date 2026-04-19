@@ -161,13 +161,12 @@ export class LinearRoadmap implements RoadmapSource {
 		}));
 	}
 
-	async claimItem(id: string): Promise<{ branch: string; worktree: string }> {
+	async claimItem(id: string, opts?: { noWorktree?: boolean }): Promise<{ branch: string; worktree: string }> {
 		const api = await this.api();
 		const issue = await api.getIssue(id);
 		if (!issue) throw new Error(`Linear issue not found: ${id}`);
 		const slug = kebab(issue.title).slice(0, 40);
 		const branch = `feat/${id.toLowerCase()}${slug ? `-${slug}` : ""}`;
-		const worktree = resolve(this.repo, "..", `${WORKTREE_PREFIX}${id.toLowerCase()}`);
 
 		try {
 			await api.transitionIssue(issue.id, this.teamId, "started");
@@ -180,6 +179,11 @@ export class LinearRoadmap implements RoadmapSource {
 			// best-effort — label may not exist on the workspace
 		}
 
+		if (opts?.noWorktree) {
+			execSync(`git checkout -b ${branch} main`, { cwd: this.repo, stdio: "pipe" });
+			return { branch, worktree: this.repo };
+		}
+		const worktree = resolve(this.repo, "..", `${WORKTREE_PREFIX}${id.toLowerCase()}`);
 		execSync(`git worktree add -b ${branch} ${worktree} main`, { cwd: this.repo, stdio: "pipe" });
 		return { branch, worktree };
 	}
