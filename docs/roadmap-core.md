@@ -51,6 +51,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | TOOL-39. Autopilot control-plane daemon (local, tailnet-bound, Hono + systemd) | TOOL-38 |
 | TOOL-42. Autopilot control-plane web UI (Astro + React + Tailwind, mobile-responsive PWA) | TOOL-39 |
 | TOOL-43. Cloudflare Tunnel + bearer auth for off-tailnet control-plane access | TOOL-39 |
+| TOOL-44. MarkdownRoadmap: read checkbox-format items (write/read parity) | — |
 
 ---
 
@@ -486,6 +487,25 @@ Completed. See git history for implementation details.
 - Multiple tokens / per-device revocation — single token, rotate by editing the env file and restarting the daemon.
 - Rate limiting beyond what Cloudflare WAF provides by default — revisit if abused.
 - Automatic token provisioning / 1Password integration — operator pastes the token once per device.
+
+---
+
+### TOOL-44. MarkdownRoadmap: read checkbox-format items (write/read parity)
+
+| What | Scope | Deps |
+|------|-------|------|
+| The markdown adapter has a write/read asymmetry: `createItem` writes checkbox rows (`- [ ] **ID. Title** — ...`) when the target file is checkbox-formatted, but `listItems` / `listOpenItems` / `getItem` only parse `\| Item \| Depends on \|` tables. Any item chartered into a checkbox-format roadmap file becomes invisible to `/pick` → `pick-result: unknown-id`. Fix: teach the list/get path to also parse checkbox rows, so the adapter reads back what it writes. | S | — |
+
+**Deliverables:**
+- `scripts/autopilot/roadmap/markdown.ts` — extend `parseOpenTableRows` (or add a `parseCheckboxRows` sibling invoked from the same list loop) to extract ID, title, and deps from lines matching `^-\s+\[([ x])\]\s+\*\*([A-Z]+-?\d[\dA-Z-]*)\.\s*(.+?)\*\*(?:\s+—\s+.*?)?(?:\s+Depends on\s+(.+?)\.)?\s*$`. Treat `[x]` as done, `[ ]` as open. Support `blocked:` in the deps span if present.
+- `listItems` and `listOpenItems` emit both formats' rows uniformly — same `RoadmapItem` / `RoadmapItemStatus` shape.
+- `getItem`, `markDone`, `strikethroughRoadmapRow` / `moveToCompleted` gain a checkbox branch: marking done rewrites `- [ ]` → `- [x]` with the `ctx.note` appended in the same row (or moves to a "Completed" section if one exists).
+- The task-index update path in `createItem` currently resolves `docs/task-index.md`; on repos where the file is named `docs/roadmap-task-index.md` (e.g. fathom) the update is silently skipped. Either detect either name, or make it configurable via `.autopilot.yml`.
+- Tests: `scripts/__tests__/markdown-roadmap.test.ts` — fixture with a checkbox-format roadmap file, assert list/get/markDone round-trip. Add a regression fixture for the fathom case (release-roadmap-style file with A-54/55/56).
+
+**Out of scope:**
+- Migrating existing checkbox files to tables — both formats remain supported.
+- Ordering / grouping changes in checkbox files — new rows still append at EOF like today.
 
 ---
 

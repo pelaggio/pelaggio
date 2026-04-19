@@ -16,6 +16,7 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 | TOOL-39 | Autopilot control-plane daemon (local, tailnet-bound, Hono + systemd) | TOOL-38 | — | core |
 | TOOL-42 | Autopilot control-plane web UI (Astro + React + Tailwind, mobile-responsive PWA) | TOOL-39 | — | core |
 | TOOL-43 | Cloudflare Tunnel + bearer auth for off-tailnet control-plane access | TOOL-39 | — | core |
+| TOOL-44 | MarkdownRoadmap: read checkbox-format items (write/read parity) | — | — | core |
 
 ## Recently completed
 
