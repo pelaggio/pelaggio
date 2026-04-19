@@ -516,6 +516,135 @@ describe("runPipeline — pick step", () => {
 		);
 	});
 
+	it("honors pick-item marker over free-text parseItemId", async () => {
+		const { parent, repo } = makeTempRepoWithParent();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		// Mock roadmap.parseItemId returns "TOOL-9" from free text — the marker names "COMP-11C-II".
+		const roadmap = makeMockRoadmap({
+			async parseItemId() {
+				return "TOOL-9";
+			},
+		});
+		const worktreePath = join(parent, `${WORKTREE_PREFIX}comp-11c-ii`);
+		const { runStep, calls } = createMockRunStep(
+			{
+				pick: {
+					ok: true,
+					text: "found TOOL-9 blocker, claimed COMP-11C-II successfully\npick-item: COMP-11C-II\npick-result: claimed",
+					sideEffect: (cwd) => {
+						execSync(`git worktree add -q -b feat/comp-11c-ii "${worktreePath}"`, { cwd });
+					},
+				},
+				plan: { ok: true },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				ship: {
+					ok: true,
+					sideEffect: () => {
+						execSync("git merge -q --no-ff feat/comp-11c-ii", { cwd: repo });
+					},
+				},
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline(pickOpts(), parkSignal, baseFlags, {
+			runStep,
+			roadmap,
+			mainRepo: repo,
+			resolveWorktree: (id) => join(parent, `${WORKTREE_PREFIX}${id.toLowerCase()}`),
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+		});
+
+		assert.equal(result.itemId, "COMP-11C-II");
+		assert.equal(result.completed, true);
+		assert.deepEqual(
+			calls.map((c) => c.step),
+			["pick", "plan", "shakedown-plan", "implement", "shakedown-code", "ship"],
+		);
+	});
+
+	it("worktree cross-reference adopts a nested sub-item worktree when _resolveWorktree misses", async () => {
+		const { parent, repo } = makeTempRepoWithParent();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const nestedPath = join(parent, `${WORKTREE_PREFIX}comp-11c-ii-fixes`);
+		const resolvedPath = join(parent, "nonexistent-comp-11c-ii");
+
+		// Pre-create the nested worktree on a fresh branch so listWorktrees has something to adopt.
+		execSync(`git worktree add -q -b feat/comp-11c-ii-fixes "${nestedPath}"`, { cwd: repo });
+
+		let listCalls = 0;
+		const { runStep, calls } = createMockRunStep(
+			{
+				pick: { ok: true, text: "claimed COMP-11C-II\npick-item: COMP-11C-II\npick-result: claimed" },
+				plan: { ok: true },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				ship: {
+					ok: true,
+					sideEffect: () => {
+						execSync("git merge -q --no-ff feat/comp-11c-ii-fixes", { cwd: repo });
+					},
+				},
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline(pickOpts(), parkSignal, baseFlags, {
+			runStep,
+			mainRepo: repo,
+			resolveWorktree: () => resolvedPath,
+			listWorktrees: () => {
+				listCalls++;
+				// First call captures worktreesBefore (nested already exists, so pretend it was there before);
+				// cross-reference on miss should find nested path among listWorktrees() entries.
+				return [repo, nestedPath];
+			},
+			appendLog: (e) => {
+				logs.push(e);
+			},
+		});
+
+		assert.ok(listCalls >= 1);
+		assert.equal(result.itemId, "COMP-11C-II");
+		assert.equal(result.completed, true, `expected cross-ref adoption; got error=${result.error}`);
+		assert.deepEqual(
+			calls.map((c) => c.step),
+			["pick", "plan", "shakedown-plan", "implement", "shakedown-code", "ship"],
+		);
+	});
+
+	it("worktree cross-reference aborts with 'ambiguous' when multiple nested siblings match", async () => {
+		const { parent, repo } = makeTempRepoWithParent();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const aPath = join(parent, `${WORKTREE_PREFIX}comp-11-a`);
+		const bPath = join(parent, `${WORKTREE_PREFIX}comp-11-b`);
+
+		const { runStep } = createMockRunStep({ pick: { ok: true, text: "claimed COMP-11\npick-item: COMP-11\npick-result: claimed" } }, parkSignal);
+
+		const result = await runPipeline(pickOpts(), parkSignal, baseFlags, {
+			runStep,
+			mainRepo: repo,
+			resolveWorktree: () => join(parent, "nonexistent-comp-11"),
+			listWorktrees: () => [repo, aPath, bPath],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+		});
+
+		assert.equal(result.itemId, "COMP-11");
+		assert.equal(result.completed, false);
+		assert.match(result.error ?? "", /worktree ambiguous/);
+	});
+
 	it("worktree-prefix fallback — redirects to a new listWorktrees entry containing WORKTREE_PREFIX", async () => {
 		const { parent, repo } = makeTempRepoWithParent();
 		const resolvedPath = join(parent, "nonexistent-tool-99");

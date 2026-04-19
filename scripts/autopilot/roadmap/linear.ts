@@ -64,7 +64,7 @@ export class LinearRoadmap implements RoadmapSource {
 		return this.cachedApi;
 	}
 
-	parseItemId(text: string): string | null {
+	async parseItemId(text: string): Promise<string | null> {
 		const branch = text.match(/\bfeat\/([a-z][a-z0-9]*-\d+)(?:[-/]|$)/i);
 		if (branch) return branch[1].toUpperCase();
 		const bare = text.match(/\b([A-Za-z][A-Za-z0-9]*-\d+)\b/);
@@ -128,7 +128,7 @@ export class LinearRoadmap implements RoadmapSource {
 		if (this.planLocation !== "issue-comment") {
 			throw new Error(`plan-location '${this.planLocation}' not yet implemented for linear adapter`);
 		}
-		const id = this.resolveIdentifier(ref);
+		const id = await this.resolveIdentifier(ref);
 		if (!id) return null;
 
 		const local = this.findPlanFile(id);
@@ -148,15 +148,15 @@ export class LinearRoadmap implements RoadmapSource {
 		return destPath;
 	}
 
-	private resolveIdentifier(ref: { worktree?: string; id?: string }): string | null {
+	private async resolveIdentifier(ref: { worktree?: string; id?: string }): Promise<string | null> {
 		if (ref.id) {
-			const parsed = this.parseItemId(ref.id);
+			const parsed = await this.parseItemId(ref.id);
 			if (parsed) return parsed;
 		}
 		if (ref.worktree) {
 			try {
 				const branch = execSync("git branch --show-current", { cwd: ref.worktree, encoding: "utf-8" }).trim();
-				const parsed = this.parseItemId(branch);
+				const parsed = await this.parseItemId(branch);
 				if (parsed) return parsed;
 			} catch {
 				// fall through

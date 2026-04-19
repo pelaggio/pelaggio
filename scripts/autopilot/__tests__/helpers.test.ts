@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { describe, it } from "node:test";
-import { computeImplementTurns, countPlanFiles, filesChangedSince, fmtWait, getHeadSha, hasDeliverableCommits, isCharterPickRace, parsePickResult, parseResetTime, parseWaitFlag } from "../helpers.js";
+import { computeImplementTurns, countPlanFiles, filesChangedSince, fmtWait, getHeadSha, hasDeliverableCommits, isCharterPickRace, parsePickItem, parsePickResult, parseResetTime, parseWaitFlag } from "../helpers.js";
 
 function makeFeatRepo(): string {
 	const dir = mkdtempSync(join(tmpdir(), "autopilot-helpers-test-"));
@@ -248,6 +248,31 @@ describe("parsePickResult", () => {
 
 	it("returns null for unknown tag", () => {
 		assert.equal(parsePickResult("pick-result: bogus"), null);
+	});
+});
+
+describe("parsePickItem", () => {
+	it("parses a plain ID", () => {
+		assert.equal(parsePickItem("pick-item: TOOL-9"), "TOOL-9");
+	});
+
+	it("parses a nested/hierarchical ID", () => {
+		assert.equal(parsePickItem("pick-item: COMP-11C-II"), "COMP-11C-II");
+	});
+
+	it("returns null when absent", () => {
+		assert.equal(parsePickItem("nothing to see here"), null);
+	});
+
+	it("last occurrence wins when repeated", () => {
+		const text = "pick-item: TOOL-1\nsummary...\npick-item: TOOL-2\n";
+		assert.equal(parsePickItem(text), "TOOL-2");
+	});
+
+	it("rejects malformed values", () => {
+		assert.equal(parsePickItem("pick-item: foo bar"), null);
+		assert.equal(parsePickItem("pick-item: lowercase-99"), null);
+		assert.equal(parsePickItem("pick-item: "), null);
 	});
 });
 

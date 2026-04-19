@@ -58,24 +58,24 @@ function mk(opts: Partial<ConstructorParameters<typeof GitHubIssuesRoadmap>[0]> 
 describe("GitHubIssuesRoadmap.parseItemId", () => {
 	const r = mk({ repo: "/tmp" });
 
-	it("extracts from feat/issue-<n> branch names", () => {
-		assert.equal(r.parseItemId("feat/issue-42"), "42");
-		assert.equal(r.parseItemId("feat/issue-42-fix-bug"), "42");
-		assert.equal(r.parseItemId("checked out feat/issue-7-thing"), "7");
+	it("extracts from feat/issue-<n> branch names", async () => {
+		assert.equal(await r.parseItemId("feat/issue-42"), "42");
+		assert.equal(await r.parseItemId("feat/issue-42-fix-bug"), "42");
+		assert.equal(await r.parseItemId("checked out feat/issue-7-thing"), "7");
 	});
 
-	it("extracts from #<n>", () => {
-		assert.equal(r.parseItemId("closes #123"), "123");
-		assert.equal(r.parseItemId("#9"), "9");
+	it("extracts from #<n>", async () => {
+		assert.equal(await r.parseItemId("closes #123"), "123");
+		assert.equal(await r.parseItemId("#9"), "9");
 	});
 
-	it("extracts from loose 'issue <n>'", () => {
-		assert.equal(r.parseItemId("issue 42"), "42");
-		assert.equal(r.parseItemId("Issue-42 tracking"), "42");
+	it("extracts from loose 'issue <n>'", async () => {
+		assert.equal(await r.parseItemId("issue 42"), "42");
+		assert.equal(await r.parseItemId("Issue-42 tracking"), "42");
 	});
 
-	it("returns null when no match", () => {
-		assert.equal(r.parseItemId("nothing in here"), null);
+	it("returns null when no match", async () => {
+		assert.equal(await r.parseItemId("nothing in here"), null);
 	});
 });
 

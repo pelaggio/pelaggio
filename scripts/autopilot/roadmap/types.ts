@@ -48,7 +48,7 @@ export interface RoadmapSource {
 	claimItem(id: string): Promise<{ branch: string; worktree: string }>;
 	markDone(id: string, ctx?: MarkDoneContext): Promise<void>;
 	getItemPlan(ref: { worktree?: string; id?: string }): Promise<string | null>;
-	parseItemId(text: string): string | null;
+	parseItemId(text: string): Promise<string | null>;
 	isQuickScope(text: string): boolean;
 }
 

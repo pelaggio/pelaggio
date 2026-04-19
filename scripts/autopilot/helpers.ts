@@ -48,6 +48,19 @@ export function parsePickResult(text: string): PickReason | null {
 	return PICK_REASONS.has(last as PickReason) ? (last as PickReason) : null;
 }
 
+/**
+ * Parse a structured `pick-item: <ID>` line from the /pick skill output.
+ * Last occurrence wins. Accepts IDs matching `[A-Z]+-?\d[\dA-Z-]*` — the
+ * hyphens allow nested sub-items (`COMP-11C-II`). Malformed values → null.
+ */
+export function parsePickItem(text: string): string | null {
+	const re = /^[ \t]*pick-item:[ \t]*([^\s][^\n]*?)[ \t]*$/gim;
+	let last: string | null = null;
+	for (const m of text.matchAll(re)) last = m[1];
+	if (last === null) return null;
+	return /^[A-Z]+-?\d[\dA-Z-]*$/.test(last) ? last : null;
+}
+
 // ── Charter→pick race detection ───────────────────────────────────────
 
 /**

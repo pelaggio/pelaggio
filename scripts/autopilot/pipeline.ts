@@ -16,6 +16,7 @@ import {
 	hasDeliverableCommits,
 	isCharterPickRace,
 	listWorktrees as listWorktreesDefault,
+	parsePickItem,
 	parsePickResult,
 	parseVerdict,
 	parseWaitFlag,
@@ -176,14 +177,24 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				}
 			}
 
-			itemId = opts.dryRun ? (itemId ?? "DRY") : (roadmap.parseItemId(pick.text) ?? roadmap.parseItemId(pick.fullText));
+			itemId = opts.dryRun ? (itemId ?? "DRY") : (parsePickItem(pickText) ?? (await roadmap.parseItemId(pick.text)) ?? (await roadmap.parseItemId(pick.fullText)));
 			if (!itemId) return finish({ itemId: null, completed: false, cost, error: "no item ID parsed" });
 
 			worktree = _resolveWorktree(itemId);
 			if (!opts.dryRun && (!existsSync(worktree) || worktreesBefore.has(worktree))) {
 				const newWt = listWorktrees().find((p) => !worktreesBefore.has(p) && p.includes(WORKTREE_PREFIX));
 				if (newWt) worktree = newWt;
-				else if (!existsSync(worktree)) return finish({ itemId, completed: false, cost, error: "worktree missing" });
+				else if (!existsSync(worktree)) {
+					const idLower = itemId.toLowerCase();
+					const expected = `${WORKTREE_PREFIX}${idLower}`;
+					const nested = listWorktrees().filter((p) => {
+						const base = p.split(/[/\\]/).pop() ?? "";
+						return base === expected || base.startsWith(`${expected}-`);
+					});
+					if (nested.length === 1) worktree = nested[0];
+					else if (nested.length > 1) return finish({ itemId, completed: false, cost, error: `worktree ambiguous: ${nested.join(", ")}` });
+					else return finish({ itemId, completed: false, cost, error: "worktree missing" });
+				}
 			}
 		} finally {
 			mutex?.release();
