@@ -42,6 +42,8 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | ~~TOOL-30. Drop vendored script paths from skill prose~~ | **Done** — Removed stale `parseVerdict` path references from _review-logic.md and shakedown/SKILL.md (2026-04-18) |
 | TOOL-31. Rewire skill bodies through `RoadmapSource` (github-issues + linear) | TOOL-10, TOOL-15 |
 | ~~TOOL-32. `consumer: false` frontmatter flag — sync skips maintainer-only skills~~ | **Done** — `consumer: false` frontmatter filters maintainer-only skills from sync; `/bump-models` marked; summary line + check-skills lint added (2026-04-18) |
+| TOOL-33. Autopilot run-quality fixes from Fathom telemetry (ship budget/model, pick exit reasons, dynamic implement budget, edit-loop threshold) | — |
+| TOOL-34. Close charter→pick race — uncommitted charter rows invisible to worktree | — |
 
 ---
 
@@ -263,6 +265,44 @@ Completed. See git history for implementation details.
 ### TOOL-32. `consumer: false` frontmatter flag — sync skips maintainer-only skills ✓
 
 Completed. See git history for implementation details.
+
+---
+
+### TOOL-33. Autopilot run-quality fixes from Fathom telemetry
+
+| What | Scope | Deps |
+|------|-------|------|
+| A 2026-04-18 batch of ~25 cycles against fathom surfaced four recurring inefficiencies in the pipeline. Address them together so the next batch runs cleaner. | L | — |
+
+**Evidence:** `/home/chris/workspace/fathom/.dev/autopilot-log.jsonl` (cycles after `2026-04-18T22:09`).
+
+**Deliverables:**
+- **Ship budget / model.** 9/25 cycles (36%) shipwrecked; every failing ship hit **exactly 41 turns** (budget exhaustion, not logic). Bump `TURN_LIMITS.ship` in `config.ts` to ~60 and/or switch `ship` in `MODEL_PROFILES` from Sonnet-4.6 to Opus-4.7. Measure shipwreck rate on the next fathom batch.
+- **Distinguish pick rejection reasons.** Today every non-claim path returns `error: "nothing to pick"`. In yesterday's run this masked five distinct cases: item blocked on dep, unknown ID (typo), already completed, worktree already exists, ambiguous. Replace the single error string with tagged reasons (e.g. `blocked`, `unknown-id`, `already-done`, `worktree-exists`, `ambiguous`, `queue-empty`) surfaced from the `/pick` skill body and recorded in the JSONL. Lets `--item X` invocations fail loud on typos and lets `--parallel` batches distinguish transient from terminal.
+- **Dynamic implement turn budget.** MAN-1 hit the static 201-turn wall on a 32-file scope, then succeeded at 79 turns on retry once scope was clearer. Scale `TURN_LIMITS.implement` from the plan's file-count (e.g. `max(100, 2 × fileCount + 60)`, capped at 250) instead of a fixed value. The plan is already on disk when `implement` starts, so the budget can be computed from it.
+- **Relax edit-loop detector threshold.** COMP-12a tripped at 12 edits-per-file (0 turns, full abort), then succeeded in 44 turns on retry. Raise the threshold to ~20-25 edits per file per attempt, or make it relative to the attempt's total turn count.
+
+**Out of scope:**
+- Batch-runner saturation / rate-limit backoff (not observed in yesterday's scoped window; earlier signal was from pre-change runs).
+- Broader telemetry changes — `TOOL-25` already gives us what we need to measure this.
+
+---
+
+### TOOL-34. Close charter→pick race — uncommitted charter rows invisible to worktree
+
+| What | Scope | Deps |
+|------|-------|------|
+| `/charter` edits `docs/roadmap-*.md` and `docs/task-index.md` but does not commit. If `/pick <ID>` runs before those edits land on `main`, pick reads the uncommitted row from the main working tree, creates a branch off the current `HEAD` (which lacks the row), and moves to a worktree where the charter is invisible — `/plan` has nothing to plan against and `/shakedown-plan` correctly returns RETHINK. Observed 2026-04-19 on TOOL-33's first run. | S | — |
+
+**Deliverables:**
+- Pick one of two fixes (leaning toward the first — simpler, preserves `/charter`'s "review before committing" ergonomics for interactive use):
+  - **Option A — `/pick` detects the desync.** At claim time, check whether the target ID exists in the branch's own `HEAD` copy of `task-index.md`. If not, refuse with an explicit error ("TOOL-XX is only in uncommitted main-tree changes; commit the charter first") instead of silently proceeding into a doomed worktree.
+  - **Option B — `/charter` commits.** Add a final step to `charter/SKILL.md` that commits the roadmap + task-index edits with a `docs: charter <ID>` message (matching existing `df820d5 docs: charter TOOL-31 ...` convention).
+- Whichever path: a regression test in `scripts/autopilot/__tests__/` that simulates the race (uncommitted charter row + pick invocation) and asserts the chosen behavior.
+
+**Out of scope:**
+- Broader uncommitted-state checks in other skills.
+- Auto-committing from any skill other than `/charter` if Option B is chosen.
 
 ---
 
