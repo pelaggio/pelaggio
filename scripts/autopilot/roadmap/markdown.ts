@@ -1,7 +1,7 @@
 import { execSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import type { MarkDoneContext, RoadmapItem, RoadmapSource, RoadmapSourceName } from "./types.js";
+import type { CreateItemOpts, ItemStatus, MarkDoneContext, RoadmapItem, RoadmapItemStatus, RoadmapSource, RoadmapSourceName } from "./types.js";
 
 export class MarkdownRoadmap implements RoadmapSource {
 	readonly name: RoadmapSourceName = "markdown";
@@ -35,6 +35,14 @@ export class MarkdownRoadmap implements RoadmapSource {
 		return null;
 	}
 
+	resolvePlanPath(ctx: { id: string; worktree: string }): string {
+		return resolve(ctx.worktree, "docs", "plans", `${ctx.id.toLowerCase()}.md`);
+	}
+
+	async publishPlan(_body: string, _ctx: { id: string; worktree: string }): Promise<void> {
+		// Markdown: plan already lives on disk after /plan writes it. No-op.
+	}
+
 	async listOpenItems(): Promise<RoadmapItem[]> {
 		const out: RoadmapItem[] = [];
 		const docsDir = resolve(this.repo, "docs");
@@ -52,6 +60,57 @@ export class MarkdownRoadmap implements RoadmapSource {
 			}
 		}
 		return out;
+	}
+
+	async listItems(opts?: { includeDone?: boolean }): Promise<RoadmapItemStatus[]> {
+		const out: RoadmapItemStatus[] = [];
+		const docsDir = resolve(this.repo, "docs");
+		if (!existsSync(docsDir)) return out;
+		const roadmaps = readdirSync(docsDir).filter((f) => f.startsWith("roadmap-") && f.endsWith(".md"));
+		for (const file of roadmaps) {
+			const path = resolve(docsDir, file);
+			const body = readFileSync(path, "utf-8");
+			for (const row of parseOpenTableRows(body)) {
+				const isDone = row.item.startsWith("~~");
+				if (isDone && !opts?.includeDone) continue;
+				const cleaned = row.item.replace(/^~~|~~$/g, "");
+				const m = cleaned.match(/^([A-Z]+-?\d[\dA-Z]*)\.?\s*(.*)$/);
+				if (!m) continue;
+				const id = m[1];
+				const title = m[2].trim();
+				let status: ItemStatus = "open";
+				let blockedReason: string | undefined;
+				if (isDone) status = "done";
+				else if (/^blocked:/i.test(row.deps)) {
+					status = "blocked";
+					blockedReason = row.deps.replace(/^blocked:\s*/i, "").trim();
+				}
+				const item: RoadmapItemStatus = { id, title, deps: row.deps, sourceRef: path, status };
+				if (blockedReason) item.blockedReason = blockedReason;
+				out.push(item);
+			}
+		}
+		return out;
+	}
+
+	async getItem(id: string): Promise<RoadmapItemStatus | null> {
+		const all = await this.listItems({ includeDone: true });
+		const hit = all.find((r) => r.id.toUpperCase() === id.toUpperCase());
+		if (hit) return hit;
+		// Also check "Recently completed" lists across roadmap files and task-index.md.
+		const completedRe = new RegExp(`^-\\s+${escapeRegex(id)}\\s*✓`, "mi");
+		const docsDir = resolve(this.repo, "docs");
+		if (existsSync(docsDir)) {
+			for (const file of readdirSync(docsDir)) {
+				if (!file.endsWith(".md")) continue;
+				if (!file.startsWith("roadmap-") && file !== "task-index.md") continue;
+				const path = resolve(docsDir, file);
+				if (completedRe.test(readFileSync(path, "utf-8"))) {
+					return { id, title: "", deps: "", sourceRef: path, status: "done" };
+				}
+			}
+		}
+		return null;
 	}
 
 	async claimItem(id: string): Promise<{ branch: string; worktree: string }> {
@@ -83,6 +142,96 @@ export class MarkdownRoadmap implements RoadmapSource {
 		execSync(`git add docs/roadmap-*.md docs/task-index.md`, { cwd: this.repo, stdio: "pipe" });
 		const msg = note ? `docs: mark ${id} done — ${note}` : `docs: mark ${id} done`;
 		execSync(`git commit -m ${JSON.stringify(msg)}`, { cwd: this.repo, stdio: "pipe" });
+	}
+
+	async createItem(opts: CreateItemOpts): Promise<RoadmapItem> {
+		const docsDir = resolve(this.repo, "docs");
+		if (!existsSync(docsDir)) throw new Error("createItem: docs/ dir missing");
+
+		// Pick target roadmap.
+		const roadmaps = readdirSync(docsDir).filter((f) => f.startsWith("roadmap-") && f.endsWith(".md"));
+		if (roadmaps.length === 0) throw new Error("createItem: no docs/roadmap-*.md files found");
+		let targetFile: string | undefined;
+		if (opts.roadmap) {
+			targetFile = roadmaps.find((f) => f.toLowerCase().includes(opts.roadmap!.toLowerCase()));
+			if (!targetFile) throw new Error(`createItem: no roadmap file matches '${opts.roadmap}'`);
+		} else {
+			targetFile = roadmaps[0];
+		}
+		const targetPath = resolve(docsDir, targetFile);
+		const body = readFileSync(targetPath, "utf-8");
+
+		// Determine ID prefix by scanning existing IDs in the file.
+		const idRe = /\b([A-Z]{1,6})-?(\d+)\b/g;
+		const prefixCounts = new Map<string, number>();
+		const maxByPrefix = new Map<string, number>();
+		for (const m of body.matchAll(idRe)) {
+			const p = m[1];
+			const n = parseInt(m[2], 10);
+			prefixCounts.set(p, (prefixCounts.get(p) ?? 0) + 1);
+			maxByPrefix.set(p, Math.max(maxByPrefix.get(p) ?? 0, n));
+		}
+		const prefix = [...prefixCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "ITEM";
+		const nextN = (maxByPrefix.get(prefix) ?? 0) + 1;
+		const id = `${prefix}-${nextN}`;
+
+		const deps = (opts.deps ?? []).join(", ") || "—";
+		const scope = opts.scope ?? "M";
+		const title = opts.title;
+
+		// Detect format: table vs checkbox.
+		const format = detectFormat(body);
+		let updated = body;
+		if (format === "table") {
+			const row = `| ${id}. ${title} | ${deps} |`;
+			updated = appendOpenTableRow(body, row);
+		} else {
+			const line = `- [ ] **${id}. ${title}** — ${title}. Scope: ${scope}.${opts.deps && opts.deps.length > 0 ? ` Depends on ${deps}.` : ""}`;
+			updated = `${body.replace(/\n*$/, "")}\n${line}\n`;
+		}
+		writeFileSync(targetPath, updated);
+
+		// Update task-index.md if present.
+		const indexPath = resolve(docsDir, "task-index.md");
+		if (existsSync(indexPath)) {
+			const indexBody = readFileSync(indexPath, "utf-8");
+			const roadmapSlug = targetFile.replace(/^roadmap-/, "").replace(/\.md$/, "");
+			const row = `| ${id} | ${title} | ${deps} | — | ${roadmapSlug} |`;
+			const updatedIndex = appendOpenTableRow(indexBody, row);
+			if (updatedIndex !== indexBody) writeFileSync(indexPath, updatedIndex);
+		}
+
+		return { id, title, deps, sourceRef: targetPath };
+	}
+
+	async archivePlan(id: string): Promise<void> {
+		const planPath = this.findPlanFile(id.toLowerCase());
+		if (!planPath) return;
+		const plansDir = resolve(this.repo, "docs", "plans");
+		const archivedDir = resolve(this.repo, "docs", "archived");
+		if (!planPath.startsWith(plansDir)) return;
+		const filename = planPath.slice(plansDir.length + 1);
+		const dest = resolve(archivedDir, filename);
+		mkdirSync(archivedDir, { recursive: true });
+		execSync(`git mv ${JSON.stringify(planPath)} ${JSON.stringify(dest)}`, { cwd: this.repo, stdio: "pipe" });
+		execSync(`git commit -m ${JSON.stringify(`docs: archive plan for ${id}`)}`, { cwd: this.repo, stdio: "pipe" });
+	}
+
+	isCharterPickRace(id: string): boolean {
+		const indexPath = resolve(this.repo, "docs", "task-index.md");
+		if (!existsSync(indexPath)) return false;
+		if (!readFileSync(indexPath, "utf-8").includes(id)) return false;
+		try {
+			const head = execSync("git show HEAD:docs/task-index.md", {
+				cwd: this.repo,
+				encoding: "utf-8",
+				stdio: ["pipe", "pipe", "pipe"],
+			});
+			return !head.includes(id);
+		} catch {
+			// HEAD has no task-index.md yet — the whole file is uncommitted.
+			return true;
+		}
 	}
 
 	private findPlanPathFromWorktree(worktree: string): string | null {
@@ -183,6 +332,36 @@ function moveToCompleted(body: string, id: string): string {
 	let insertAt = completedIdx + 1;
 	while (insertAt < lines.length && lines[insertAt].trim() === "") insertAt++;
 	lines.splice(insertAt, 0, `- ${id} ✓`);
+	return lines.join("\n");
+}
+
+function detectFormat(body: string): "table" | "checkbox" {
+	if (/^\|\s*Item\s*\|\s*Depends on\s*\|/m.test(body)) return "table";
+	if (/^-\s+\[[ x]\]\s+\*\*/m.test(body)) return "checkbox";
+	return "table";
+}
+
+function appendOpenTableRow(body: string, row: string): string {
+	const lines = body.split("\n");
+	// Roadmap files use `| Item | Depends on |`; task-index uses `| ID | Title | ...`.
+	// Accept either as the open-items header.
+	let headerIdx = -1;
+	for (let i = 0; i < lines.length; i++) {
+		if (/^\|\s*(Item|ID)\s*\|/.test(lines[i])) {
+			headerIdx = i;
+			break;
+		}
+	}
+	if (headerIdx < 0) {
+		// Append to end.
+		return `${body.replace(/\n*$/, "")}\n${row}\n`;
+	}
+	// Skip header + separator.
+	let j = headerIdx + 1;
+	if (j < lines.length && /^\|[-\s|]+\|$/.test(lines[j])) j++;
+	// Advance through body rows.
+	while (j < lines.length && lines[j].startsWith("|")) j++;
+	lines.splice(j, 0, row);
 	return lines.join("\n");
 }
 

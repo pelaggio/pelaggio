@@ -83,12 +83,12 @@ interface (`scripts/autopilot/roadmap/index.ts`). Adapters today:
 from `roadmap.source` in `.autopilot.yml` (default `"markdown"`). Adding a
 new adapter means adding a file under `scripts/autopilot/roadmap/`, widening
 the `RoadmapSourceName` union in `roadmap/types.ts`, and extending the
-factory `switch`. The `/pick` and `/ship` skill bodies are still
-markdown-aware — wiring them through the remote adapters is a shared
-follow-up across `github-issues` and `linear`.
+factory `switch`. Skill bodies access the adapter via the `roadmap` CLI
+subcommand (see below), so no skill edits are needed.
 
 ## Non-obvious conventions
 
+- **Skill → adapter bridge is `npx claude-autopilot roadmap <subcommand>`.** Skill bodies never read roadmap files or issue trackers directly — they shell out to the `roadmap` CLI (`scripts/autopilot/roadmap-cli.ts`), which dispatches to the configured `RoadmapSource`. Subcommands: `list`, `get`, `claim`, `plan-path`, `publish-plan`, `mark-done`, `create-item`, `archive-plan`, `source`. Same idiom as `worktree-deps`. Adding a new adapter requires no skill edits.
 - **Relative imports use `.js` extension** (ESM convention, required by tsx for resolution). e.g., `from "./config.js"` even though the file is `.ts`.
 - **No formal build step**: everything runs via `tsx`. `pnpm autopilot` = `tsx scripts/autopilot.ts`.
 - **Tests run via `node:test`**: `npx tsx --test scripts/autopilot/__tests__/helpers.test.ts`. No Jest, no Vitest — keeping dependencies minimal.

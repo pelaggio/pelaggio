@@ -37,6 +37,27 @@ export interface RoadmapItem {
 	sourceRef: string;
 }
 
+export type ItemStatus = "open" | "done" | "blocked" | "unknown" | "in-progress";
+
+export interface RoadmapItemStatus extends RoadmapItem {
+	status: ItemStatus;
+	/** Parsed "blocked: waiting on X" reason; present only when status is blocked */
+	blockedReason?: string;
+}
+
+export interface CreateItemOpts {
+	title: string;
+	deps?: string[];
+	scope?: "XS" | "S" | "M" | "L" | "XL";
+	/** Markdown: target roadmap file (partial match). Gh/Linear: no-op (issue goes to configured repo/team). */
+	roadmap?: string;
+	/** Markdown-only. Gh/Linear ignore. */
+	after?: string;
+	priority?: "high" | "normal";
+	/** Shakedown-origin flag. Adapters may use it for triage labeling; markdown ignores. */
+	deferred?: boolean;
+}
+
 export interface MarkDoneContext {
 	/** Human-readable closure note; adapters decide placement (commit body / issue comment / etc.). */
 	note?: string;
@@ -45,9 +66,23 @@ export interface MarkDoneContext {
 export interface RoadmapSource {
 	readonly name: RoadmapSourceName;
 	listOpenItems(): Promise<RoadmapItem[]>;
+	/** List items with status; optionally include done/closed items. */
+	listItems(opts?: { includeDone?: boolean }): Promise<RoadmapItemStatus[]>;
+	/** Single-item lookup with status (`unknown` if not found in open or done sets). */
+	getItem(id: string): Promise<RoadmapItemStatus | null>;
 	claimItem(id: string): Promise<{ branch: string; worktree: string }>;
 	markDone(id: string, ctx?: MarkDoneContext): Promise<void>;
 	getItemPlan(ref: { worktree?: string; id?: string }): Promise<string | null>;
+	/** Resolve the path where /plan should write, whether or not the file exists yet. */
+	resolvePlanPath(ctx: { id: string; worktree: string }): string;
+	/** Publish a written plan to the adapter's upstream. Markdown: no-op. Gh/Linear: post comment. */
+	publishPlan(body: string, ctx: { id: string; worktree: string }): Promise<void>;
+	/** Create a new backlog item. Returns the item; id is source-assigned for gh/linear. */
+	createItem(opts: CreateItemOpts): Promise<RoadmapItem>;
+	/** Archive a shipped plan. Markdown: `git mv` + commit. No-op elsewhere. */
+	archivePlan(id: string): Promise<void>;
+	/** True when the item exists in uncommitted working-tree state but not yet in HEAD. Gh/linear: always false. */
+	isCharterPickRace(id: string): boolean;
 	parseItemId(text: string): string | null;
 	isQuickScope(text: string): boolean;
 }

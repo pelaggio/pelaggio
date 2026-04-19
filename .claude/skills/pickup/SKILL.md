@@ -3,7 +3,7 @@ name: pickup
 description: Rebuild context for in-progress work — read plan, show progress, suggest next step
 argument-hint: "[item-id]"
 disable-model-invocation: true
-allowed-tools: Read Glob Grep Bash(git:*) Bash(ls:*)
+allowed-tools: Read Glob Grep Bash(git:*) Bash(ls:*) Bash(npx:*)
 ---
 
 # /pickup — Pick Up Where You Left Off
@@ -12,14 +12,9 @@ Rebuild context for in-progress work so you can continue without re-reading ever
 
 ## Context
 
-Run `git rev-parse --path-format=absolute --git-common-dir` — the output ends with `/.git`. Strip that suffix to get MAIN_REPO. Use the resulting absolute path in all paths below.
+Run `git rev-parse --path-format=absolute --git-common-dir` — the output ends with `/.git`. Strip that suffix to get MAIN_REPO.
 
-| Path | Purpose |
-|------|---------|
-| `{MAIN_REPO}/docs/plans/` | Implementation plans (keyed by branch) |
-| `{MAIN_REPO}/docs/roadmap-*.md` | Task-tracking planning docs |
-
-Resolve MAIN_REPO.
+Roadmap lookups go through `npx claude-autopilot roadmap ...`.
 
 ## Selection
 
@@ -30,23 +25,23 @@ Resolve MAIN_REPO.
 ## Gather
 
 1. Current branch: `git branch --show-current`
-2. Extract item ID from branch name (e.g. `feat/tool-16-refit-split` → `TOOL-16`). Read `{MAIN_REPO}/docs/task-index.md` to find which roadmap contains the item, then read only that file for scope/deps. Get worktree path from `git worktree list`.
-3. Read the source doc entry for full scope and dependencies
-4. Read `{MAIN_REPO}/docs/plans/{branch-without-feat-prefix}.md` if it exists
-5. Progress: `git log main..HEAD --oneline` (run in the item's worktree)
-6. Uncommitted work: `git status --short` (run in the item's worktree)
-7. Files changed: `git diff main...HEAD --stat` (run in the item's worktree)
+2. Extract item ID from branch name (e.g. `feat/tool-16-refit-split` → `TOOL-16`). Run `npx claude-autopilot roadmap get <ID> --json` for title, deps, sourceRef. Get worktree path from `git worktree list`.
+3. Resolve plan path: `npx claude-autopilot roadmap plan-path --id <ID> --worktree "$PWD"` — exit 0 means it exists, exit 2 means it doesn't. Read it if present.
+4. Progress: `git log main..HEAD --oneline` (run in the item's worktree)
+5. Uncommitted work: `git status --short` (run in the item's worktree)
+6. Files changed: `git diff main...HEAD --stat` (run in the item's worktree)
 
 ## Report
 
 Compact summary:
 
 ```
-Item:      TOOL-16 — Split /refit → /bump-models + self-hosted Renovate (roadmap-core.md)
+Item:      TOOL-16 — Split /refit → /bump-models + self-hosted Renovate
+Source:    <sourceRef from roadmap get>
 Branch:    feat/tool-16-refit-split
 Worktree:  /path/to/{project}-tool-16
 
-Plan: docs/plans/tool-16-refit-split.md
+Plan: <resolved plan-path> (exists)
 Scope: {1-2 sentence summary from plan}
 
 Commits (3):

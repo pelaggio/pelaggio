@@ -8,7 +8,7 @@ Detect what to review, in order:
 
 1. **Explicit argument** — if `Arguments:` below names a `.md` file, review it as a plan; if it names a commit range or file list, review it as code.
 2. **Autopilot directive** — if `Arguments:` contains `autopilot plan-review` or `autopilot code-review`, dispatch to that mode regardless of git state.
-3. **Plan-only state** — if `docs/plans/{branch-slug}.md` exists AND `git diff --name-only main...HEAD` lists only paths under `docs/plans/`, it's plan review mode — target is the plan file.
+3. **Plan-only state** — extract the item ID from the current branch name and resolve the plan path via `npx claude-autopilot roadmap plan-path --id <ID> --worktree "$PWD"` (exit 0 means it exists). If the plan exists AND `git diff --name-only main...HEAD` lists only that plan path (or other paths under the same `docs/plans/` or `.dev/plans/` directory), it's plan review mode — target is the resolved plan path.
 4. **Code state** — otherwise, review the diff. Target is the union of:
    - Unstaged changes (`git diff`)
    - Staged changes (`git diff --cached`)

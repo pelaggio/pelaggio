@@ -14,15 +14,11 @@ Stress-test current work against the rubric. Surface every issue, fix what's fix
 
 ## Context
 
-Run `git rev-parse --path-format=absolute --git-common-dir` — the output ends with `/.git`. Strip that suffix to get MAIN_REPO. Use the resulting absolute path in all paths below.
+Run `git rev-parse --path-format=absolute --git-common-dir` — the output ends with `/.git`. Strip that suffix to get MAIN_REPO.
 
-| Path | Purpose |
-|------|---------|
-| `{MAIN_REPO}/docs/plans/` | Implementation plans (keyed by branch) |
-| `{MAIN_REPO}/docs/roadmap-*.md` | Task-tracking planning docs |
-| `{MAIN_REPO}/docs/task-index.md` | Cross-roadmap item index |
+Roadmap lookups go through `npx claude-autopilot roadmap ...`; all plan-path resolution and deferred-item creation dispatches to the configured adapter.
 
-Resolve MAIN_REPO. Must be on a feature branch (not `main`).
+Must be on a feature branch (not `main`).
 
 **CWD rule**: run all `git` commands from your current working directory (the worktree). `HEAD` here is your feature branch. Only use `{MAIN_REPO}` paths for reading shared docs — never `cd` there for git operations.
 
@@ -47,7 +43,7 @@ Apply the target detection rules above. You will land in one of two modes.
 Target: a `.md` plan file (usually `docs/plans/{branch-slug}.md`).
 
 1. Read the plan in full.
-2. Extract the item ID from the branch name. Read `{MAIN_REPO}/docs/task-index.md` to find the roadmap file that owns the item, then read only that roadmap entry for scope and dependencies.
+2. Extract the item ID from the branch name. Run `npx claude-autopilot roadmap get <ID> --json` for title, deps, and `sourceRef` (markdown: roadmap file path; github-issues/linear: issue URL + full body). Read the `sourceRef` file / review the body for scope and dependencies.
 3. Read related design docs in `{MAIN_REPO}/docs/` if the plan references them.
 4. Read any source files the plan names as deliverables — confirm file existence, current shape, and that the plan's proposed edits are compatible with what's actually there.
 5. **Verify APIs the plan assumes** — for every function, type, or component the plan calls or extends, read the actual source and confirm signatures match. Flag mismatches concretely (e.g., "plan assumes `foo()` returns `X` but it returns `Y`").
@@ -74,7 +70,7 @@ If `Arguments:` at the bottom of this prompt contains the string `autopilot`:
 
 - `autopilot plan-review` → force plan review mode regardless of git state. The pipeline is staging the plan for implementation and wants a verdict.
 - `autopilot code-review` → force code review mode regardless of git state. The pipeline has finished implementation and wants fixes + verification + roadmap updates.
-- In code review mode, additionally: for each deferred item, append it to the appropriate `{MAIN_REPO}/docs/roadmap-*.md` file (detect checkbox vs table format and match) AND add a row to `{MAIN_REPO}/docs/task-index.md` "Open items" so `/pick` finds it.
+- In code review mode, additionally: for each deferred item, run `npx claude-autopilot roadmap create-item --title "<concise imperative title>" [--scope <XS|S|M|L|XL>] [--deps "<csv of IDs>"] --json` (from `{MAIN_REPO}`) so `/pick` can find it later. The markdown adapter appends to the roadmap + task-index; gh/linear open an issue.
 - The `Verdict:` line is parsed by the pipeline's verdict parser — emit it with the exact format `Verdict: APPROVE` / `REVISE` / `RETHINK`.
 
 If `Arguments:` is absent or doesn't mention `autopilot`, you're running inline. Skip the roadmap-update step for deferred items — just list them in the output so the user decides whether to track them.

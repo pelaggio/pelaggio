@@ -155,6 +155,12 @@ export function makeMockRoadmap(overrides: Partial<RoadmapSource> = {}): Roadmap
 		async listOpenItems() {
 			return [];
 		},
+		async listItems() {
+			return [];
+		},
+		async getItem() {
+			return null;
+		},
 		async claimItem() {
 			throw new Error("mock: claimItem not wired");
 		},
@@ -163,6 +169,21 @@ export function makeMockRoadmap(overrides: Partial<RoadmapSource> = {}): Roadmap
 		},
 		async getItemPlan() {
 			return null;
+		},
+		resolvePlanPath({ id, worktree }) {
+			return `${worktree}/docs/plans/${id.toLowerCase()}.md`;
+		},
+		async publishPlan() {
+			/* noop */
+		},
+		async createItem({ title, deps }) {
+			return { id: "MOCK-1", title, deps: (deps ?? []).join(", "), sourceRef: "mock" };
+		},
+		async archivePlan() {
+			/* noop */
+		},
+		isCharterPickRace() {
+			return false;
 		},
 		parseItemId(text) {
 			const m = text.match(/\b([A-Z]{1,4}-?\d[\dA-Z]*)\b/);

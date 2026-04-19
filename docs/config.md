@@ -126,24 +126,17 @@ Automating the post-merge side is planned for TOOL-10 / TOOL-15.
 `roadmap.source` selects the backend that drives `/pick`, plan lookup, and
 scope heuristics. Invalid values fail loudly at startup.
 
-| Value           | Status       | Reads                                              |
-|-----------------|--------------|----------------------------------------------------|
-| `markdown`      | ready        | `docs/roadmap-*.md` + `docs/task-index.md`         |
-| `github-issues` | adapter-only | GitHub Issues via the `gh` CLI (see caveat below)  |
-| `linear`        | adapter-only | Linear via `@linear/sdk` (see caveat below)        |
+| Value           | Status | Reads                                              |
+|-----------------|--------|----------------------------------------------------|
+| `markdown`      | ready  | `docs/roadmap-*.md` + `docs/task-index.md`         |
+| `github-issues` | ready  | GitHub Issues via the `gh` CLI                     |
+| `linear`        | ready  | Linear via `@linear/sdk`                           |
 
-### `github-issues` — adapter-only in TOOL-10
+Skill bodies (`/pick`, `/plan`, `/ship`, `/charter`, `/status`, `/pickup`,
+`/shakedown`, `/tidy`) are adapter-agnostic — all roadmap access flows through
+`npx claude-autopilot roadmap ...`, which dispatches to the configured source.
 
-The `GitHubIssuesRoadmap` adapter lands as a **typed, tested ingest surface**
-only. The `/pick`, `/ship`, `/plan`, `/charter`, `/status`, `/pickup`,
-`/shakedown`, and `/tidy` skill bodies are still markdown-aware — they read
-`docs/roadmap-*.md` / `docs/task-index.md` directly instead of going through
-the `RoadmapSource` interface. **Setting `roadmap.source: github-issues` in
-`.autopilot.yml` today will not produce a working end-to-end cycle**; `/pick`
-will fail to find items. Rewiring the skill bodies through the adapter is
-scheduled as a TOOL-10.x follow-up. The adapter is exercisable inline (e.g.
-via a TS script that instantiates `GitHubIssuesRoadmap` directly) and is
-fully unit-tested against an in-memory `gh` stub.
+### `github-issues`
 
 ### `roadmap.github.*`
 
@@ -175,16 +168,7 @@ then the most recent issue comment whose body begins with the
 `.dev/plans/<n>.md` (scratch, typically `.gitignore`'d), **not**
 `docs/plans/` — that directory remains `/plan`'s canonical committed output.
 
-### `linear` — adapter-only in TOOL-15
-
-The `LinearRoadmap` adapter lands with the same caveat as `github-issues`:
-**setting `roadmap.source: linear` today will not produce a working end-to-end
-cycle** because `/pick`, `/plan`, `/ship`, `/charter`, `/status`, `/pickup`,
-`/shakedown`, and `/tidy` still read markdown directly. Rewiring the skill
-bodies through the `RoadmapSource` interface is a shared follow-up across
-both remote adapters. The adapter is exercisable inline (e.g. a TS script
-that instantiates `LinearRoadmap` directly) and fully unit-tested against an
-in-memory stub `LinearApi` — zero network in CI.
+### `linear`
 
 ### `roadmap.linear.*`
 

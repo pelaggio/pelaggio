@@ -2,7 +2,7 @@
 name: plan
 description: Generate an implementation plan for the current work item, self-review it, and revise until solid
 argument-hint: "[item-id]"
-allowed-tools: Read Glob Grep Bash(git:*) Bash(ls:*)
+allowed-tools: Read Glob Grep Write Bash(git:*) Bash(ls:*) Bash(npx:*)
 ---
 
 # /plan — Plan and Self-Review
@@ -11,19 +11,14 @@ Generate an implementation plan for the current work item. Then review it yourse
 
 ## Context
 
-Run `git rev-parse --path-format=absolute --git-common-dir` — the output ends with `/.git`. Strip that suffix to get MAIN_REPO. Use the resulting absolute path in all paths below.
+Run `git rev-parse --path-format=absolute --git-common-dir` — the output ends with `/.git`. Strip that suffix to get MAIN_REPO.
 
-| Path | Purpose |
-|------|---------|
-| `{MAIN_REPO}/docs/plans/` | Implementation plans (keyed by branch) |
-| `{MAIN_REPO}/docs/roadmap-*.md` | Task-tracking planning docs |
+Roadmap lookups go through `npx claude-autopilot roadmap ...`; the CLI dispatches to the configured adapter (markdown / github-issues / linear).
 
-Resolve MAIN_REPO now.
+**Target item: `$ARGUMENTS`** — if a value appears above, use it as the ID. Otherwise get the branch from `git branch --show-current` (must not be `main`) and extract the item ID from the branch name.
 
-**Target item: `$ARGUMENTS`** — if a value appears above, find the matching branch via `git branch --list 'feat/*'`. Otherwise get the branch from `git branch --show-current` (must not be `main`).
-
-1. Extract item ID from branch name. Read `{MAIN_REPO}/docs/task-index.md` to find which roadmap file contains the item. Then read only that roadmap file for the item's full scope and dependencies. Don't read all roadmaps.
-2. Read related `{MAIN_REPO}/docs/plan-*.md` and `{MAIN_REPO}/docs/design-*.md` files.
+1. Run `npx claude-autopilot roadmap get <ID> --json` to fetch the item. Parse `title`, `deps`, `sourceRef`, `body` (github-issues / linear include the full body/description in the JSON; markdown's `sourceRef` is the roadmap file path — read that file for the full spec).
+2. Read related `{MAIN_REPO}/docs/plan-*.md` and `{MAIN_REPO}/docs/design-*.md` files if referenced.
 3. Read any source files named as deliverables — confirm they exist and note their current shape.
 4. Find reference implementations for similar features already in the codebase.
 5. **Verify APIs you plan to call or extend**: for every function, type, or module the plan will touch, read the actual source and confirm the signature. Don't assume names — check them. If something doesn't exist or has the wrong shape, note it in the plan and propose either extending it or an alternative approach.
@@ -36,17 +31,29 @@ Resolve MAIN_REPO now.
 
 ## Write the plan
 
-**You MUST write the plan to a file on disk** at `{MAIN_REPO}/docs/plans/{branch-name-without-feat-prefix}.md` (create the directory if needed). Use the Write tool — do not just output the plan as text. This file is read by `/shakedown` in a separate session.
+Resolve the target path via the adapter (so markdown lands in `docs/plans/` while gh/linear land in `.dev/plans/`):
 
-**After writing the plan file, commit it** so it isn't left as untracked debris:
 ```bash
-git add "{MAIN_REPO}/docs/plans/{slug}.md"
-git commit -m "docs: add implementation plan for {item ID}"
+npx claude-autopilot roadmap plan-path --id <ID> --worktree "$PWD"
 ```
 
-Note: `{MAIN_REPO}` is the path resolved via `git rev-parse` above — NOT the current working directory (which may be a worktree). The `docs/plans/` directory lives in the main repo so it's shared across worktrees.
+This prints one line — the absolute path where the plan should live. Exit code 0 if it already exists, 2 if not.
 
-Cover: scope (what it does and doesn't touch), approach (why this over alternatives), files to change, test strategy, and a rubric self-check.
+**You MUST write the plan to that path** using the Write tool. Create parent directories if needed. Do not just output the plan as text — the file is read by `/shakedown` in a separate session.
+
+After writing, commit it:
+```bash
+git add "<resolved-path>"
+git commit -m "docs: add implementation plan for <ID>"
+```
+
+Then publish the plan via the adapter (markdown: no-op; github-issues / linear: posts an issue comment with the `<!-- autopilot-plan -->` marker):
+
+```bash
+npx claude-autopilot roadmap publish-plan --id <ID> --file "<resolved-path>"
+```
+
+Cover in the plan: scope (what it does and doesn't touch), approach (why this over alternatives), files to change, test strategy, and a rubric self-check.
 
 ## Self-review
 

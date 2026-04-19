@@ -2,7 +2,7 @@
 name: status
 description: Show current work context — branch, plan, progress, and next steps
 disable-model-invocation: true
-allowed-tools: Read Glob Grep Bash(git:*) Bash(ls:*)
+allowed-tools: Read Glob Grep Bash(git:*) Bash(ls:*) Bash(npx:*)
 ---
 
 # /status — Where Am I?
@@ -11,24 +11,19 @@ Quick orientation for resuming work or checking progress.
 
 ## Context
 
-Run `git rev-parse --path-format=absolute --git-common-dir` — the output ends with `/.git`. Strip that suffix to get MAIN_REPO. Use the resulting absolute path in all paths below.
+Run `git rev-parse --path-format=absolute --git-common-dir` — the output ends with `/.git`. Strip that suffix to get MAIN_REPO.
 
-| Path | Purpose |
-|------|---------|
-| `{MAIN_REPO}/docs/plans/` | Implementation plans (keyed by branch) |
-| `{MAIN_REPO}/docs/roadmap-*.md` | Task-tracking planning docs |
-
-Resolve MAIN_REPO.
+Roadmap lookups go through `npx claude-autopilot roadmap ...`.
 
 ## Gather
 
-1. Current branch: `git branch --show-current`
-2. List in-flight items: `git branch --list 'feat/*'` and `git worktree list`. Extract item IDs from branch names, look up titles and status in `{MAIN_REPO}/docs/task-index.md`. Highlight current branch's entry.
+1. Current branch: `git branch --show-current`.
+2. List in-flight items: `git branch --list 'feat/*'` and `git worktree list`. Extract item IDs from branch names; for each, call `npx claude-autopilot roadmap get <ID> --json` to fetch title + status. Highlight the current branch.
 3. If on a feature branch:
    - Progress: `git log main..HEAD --oneline`
    - Uncommitted work: `git status --short`
-   - Plan: read `{MAIN_REPO}/docs/plans/{branch-without-feat-prefix}.md` if it exists
-4. If on `main`: show all in-flight feature branches and their worktrees
+   - Plan: `npx claude-autopilot roadmap plan-path --id <ID> --worktree "$PWD"` — prints the path; exit 0 means it exists, exit 2 means it doesn't. Read it if present.
+4. If on `main`: show all in-flight feature branches and their worktrees.
 
 ## Report
 
@@ -36,7 +31,8 @@ Show a compact summary:
 
 ```
 Branch:    feat/tool-16-refit-split
-Item:      TOOL-16 — Split /refit → /bump-models + self-hosted Renovate (roadmap-core.md)
+Item:      TOOL-16 — Split /refit → /bump-models + self-hosted Renovate
+Source:    <sourceRef from roadmap get — file path, issue URL, or Linear ID>
 Worktree:  /path/to/{project}-tool-16
 
 Commits (3):
@@ -46,7 +42,7 @@ Commits (3):
 
 Uncommitted: 2 modified, 1 untracked
 
-Plan: docs/plans/tool-16-refit-split.md (exists)
+Plan: <resolved plan-path> (exists)
 ```
 
 ## Suggest next step
