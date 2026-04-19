@@ -51,8 +51,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | TOOL-39. Autopilot control-plane daemon (local, tailnet-bound, Hono + systemd) | TOOL-38 |
 | TOOL-42. Autopilot control-plane web UI (Astro + React + Tailwind, mobile-responsive PWA) | TOOL-39 |
 | TOOL-43. Cloudflare Tunnel + bearer auth for off-tailnet control-plane access | TOOL-39 |
-| TOOL-44. MarkdownRoadmap: read checkbox-format items (write/read parity) | — |
-
+| ~~TOOL-44. MarkdownRoadmap: read checkbox-format items (write/read parity)~~ | **Done** — checkbox-format read parity in MarkdownRoadmap |
 ---
 
 ## Items
