@@ -306,6 +306,130 @@ describe("MarkdownRoadmap.archivePlan", () => {
 	});
 });
 
+describe("MarkdownRoadmap — checkbox-format roadmap", () => {
+	function seedCheckboxRoadmap(): string {
+		const repo = seedRepo();
+		seedFile(
+			repo,
+			"docs/roadmap-release.md",
+			["# Release", "", "- [ ] **A-54. First open** — First. Scope: M.", "- [ ] **A-55. Blocked one** — Blocked. Scope: S. Depends on blocked: waiting on upstream.", "- [x] **A-56. Done one** — Done. Scope: XS.", ""].join("\n"),
+		);
+		execSync("git add -A && git commit -q -m seed", { cwd: repo });
+		return repo;
+	}
+
+	it("listItems surfaces open and blocked checkbox rows, skips [x] by default", async () => {
+		const repo = seedCheckboxRoadmap();
+		const r = new MarkdownRoadmap({ repo });
+		const items = await r.listItems();
+		const ids = items.map((i) => i.id);
+		assert.deepEqual(ids, ["A-54", "A-55"]);
+		const blocked = items.find((i) => i.id === "A-55");
+		assert.equal(blocked?.status, "blocked");
+		assert.equal(blocked?.blockedReason, "waiting on upstream");
+	});
+
+	it("listItems includeDone tags [x] rows as done", async () => {
+		const repo = seedCheckboxRoadmap();
+		const r = new MarkdownRoadmap({ repo });
+		const items = await r.listItems({ includeDone: true });
+		const done = items.find((i) => i.id === "A-56");
+		assert.equal(done?.status, "done");
+	});
+
+	it("getItem finds a checkbox row by ID", async () => {
+		const repo = seedCheckboxRoadmap();
+		const r = new MarkdownRoadmap({ repo });
+		const item = await r.getItem("A-54");
+		assert.equal(item?.id, "A-54");
+		assert.equal(item?.title, "First open");
+		assert.equal(item?.status, "open");
+	});
+
+	it("listOpenItems filters out [x] rows", async () => {
+		const repo = seedCheckboxRoadmap();
+		const r = new MarkdownRoadmap({ repo });
+		const items = await r.listOpenItems();
+		const ids = items.map((i) => i.id);
+		assert.ok(ids.includes("A-54"));
+		assert.ok(ids.includes("A-55"));
+		assert.ok(!ids.includes("A-56"));
+	});
+
+	it("markDone flips [ ] → [x] and appends note on a checkbox row", async () => {
+		const repo = seedCheckboxRoadmap();
+		const r = new MarkdownRoadmap({ repo });
+		await r.markDone("A-54", { note: "landed" });
+		const body = readFileSync(resolve(repo, "docs/roadmap-release.md"), "utf-8");
+		assert.match(body, /^- \[x\] \*\*A-54\. First open\*\* — First\. Scope: M\. \*\*Done\*\* — landed$/m);
+		const lastMsg = execSync("git log -1 --format=%s", { cwd: repo, encoding: "utf-8" }).trim();
+		assert.match(lastMsg, /docs: mark A-54 done — landed/);
+	});
+});
+
+describe("MarkdownRoadmap — alt task-index filename (fathom)", () => {
+	it("createItem updates docs/roadmap-task-index.md when that is the present file", async () => {
+		const repo = seedRepo();
+		seedFile(repo, "docs/roadmap-release.md", ["# Release", "", "- [ ] **A-1. First** — First. Scope: M.", ""].join("\n"));
+		seedFile(
+			repo,
+			"docs/roadmap-task-index.md",
+			["# Index", "", "## Open items", "", "| ID | Title | Deps | Plan | Roadmap |", "|----|-------|------|------|---------|", "| A-1 | First | — | — | release |", "", "## Recently completed", "", ""].join("\n"),
+		);
+		execSync("git add -A && git commit -q -m seed", { cwd: repo });
+
+		const r = new MarkdownRoadmap({ repo });
+		const created = await r.createItem({ title: "Second", scope: "S" });
+		assert.equal(created.id, "A-2");
+
+		const index = readFileSync(resolve(repo, "docs/roadmap-task-index.md"), "utf-8");
+		assert.match(index, /\| A-2 \| Second \|/);
+		assert.ok(!existsSync(resolve(repo, "docs/task-index.md")));
+	});
+
+	it("createItem ignores roadmap-task-index.md as a target even when it sorts first", async () => {
+		const repo = seedRepo();
+		// Seed the index FIRST so readdir on ext4 surfaces it before the real roadmap.
+		seedFile(
+			repo,
+			"docs/roadmap-task-index.md",
+			["# Index", "", "## Open items", "", "| ID | Title | Deps | Plan | Roadmap |", "|----|-------|------|------|---------|", "| A-1 | First | — | — | release |", "", "## Recently completed", "", ""].join("\n"),
+		);
+		seedFile(repo, "docs/roadmap-release.md", ["# Release", "", "- [ ] **A-1. First** — First. Scope: M.", ""].join("\n"));
+		execSync("git add -A && git commit -q -m seed", { cwd: repo });
+
+		const r = new MarkdownRoadmap({ repo });
+		await r.createItem({ title: "Second", scope: "S" });
+
+		const release = readFileSync(resolve(repo, "docs/roadmap-release.md"), "utf-8");
+		assert.match(release, /^- \[ \] \*\*A-2\. Second\*\*/m);
+		const index = readFileSync(resolve(repo, "docs/roadmap-task-index.md"), "utf-8");
+		// Index gets one task-index-style row, not a roadmap-style one.
+		assert.match(index, /\| A-2 \| Second \|/);
+		assert.doesNotMatch(index, /\| A-2\. Second \|/);
+	});
+
+	it("markDone commits index changes when only the alt filename exists", async () => {
+		const repo = seedRepo();
+		seedFile(repo, "docs/roadmap-release.md", ["# Release", "", "- [ ] **A-1. First** — First. Scope: M.", ""].join("\n"));
+		seedFile(
+			repo,
+			"docs/roadmap-task-index.md",
+			["# Index", "", "## Open items", "", "| ID | Title | Deps | Plan | Roadmap |", "|----|-------|------|------|---------|", "| A-1 | First | — | — | release |", "", "## Recently completed", "", ""].join("\n"),
+		);
+		execSync("git add -A && git commit -q -m seed", { cwd: repo });
+
+		const r = new MarkdownRoadmap({ repo });
+		await r.markDone("A-1", { note: "done" });
+
+		const index = readFileSync(resolve(repo, "docs/roadmap-task-index.md"), "utf-8");
+		assert.doesNotMatch(index, /^\| A-1 \|/m);
+		assert.match(index, /- A-1 ✓/);
+		const changed = execSync("git show --name-only --format= HEAD", { cwd: repo, encoding: "utf-8" });
+		assert.match(changed, /docs\/roadmap-task-index\.md/);
+	});
+});
+
 describe("MarkdownRoadmap.isCharterPickRace", () => {
 	function commitIndex(dir: string, content: string): void {
 		seedFile(dir, "docs/task-index.md", content);
