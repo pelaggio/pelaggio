@@ -271,7 +271,8 @@ export function verifyShipLanded(mainRepo: string, mainShaBefore: string, featSh
 // ── Resume detection ───────────────────────────────────────────────────
 
 export function detectResumeStep(itemId: string, worktree: string): Step {
-	const roadmap = new MarkdownRoadmap({ repo: REPO });
+	// Plan files live on the feature branch, so scan the worktree's tree — not main.
+	const roadmap = new MarkdownRoadmap({ repo: worktree });
 
 	if (existsSync(LOG_PATH)) {
 		try {
