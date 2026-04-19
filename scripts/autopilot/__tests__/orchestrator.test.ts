@@ -80,10 +80,10 @@ describe("runOrchestrator — parallel workers share mutex", () => {
 });
 
 describe("runOrchestrator — worker continuation", () => {
-	it("recoverable error ('nothing to pick') keeps worker pulling subsequent cycles", async () => {
+	it("recoverable error ('pick:queue-empty') keeps worker pulling subsequent cycles", async () => {
 		const { runPipeline, calls } = createMockRunPipeline({
 			byItem: {
-				"A-1": { completed: false, cost: 0, error: "nothing to pick" },
+				"A-1": { completed: false, cost: 0, error: "pick:queue-empty" },
 				"A-2": { completed: true, cost: 0.1 },
 				"A-3": { completed: true, cost: 0.1 },
 			},

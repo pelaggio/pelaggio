@@ -31,15 +31,19 @@ Only read a full `docs/roadmap-*.md` file if you need the detailed spec for a sp
 
 Parse `$ARGUMENTS` (may be empty).
 
-**`/pick TOOL-16`** (argument is an item ID) — find that item by ID. If not found, report which docs were searched and stop. If the item's Deps column starts with `blocked:`, **stop immediately** and report: "⚠ {ID} is blocked: {blocker text from Deps column}. Cannot pick a blocked item." Do not create a branch or worktree. Skip to Claim only if unblocked.
+**`/pick TOOL-16`** (argument is an item ID) — find that item by ID:
+- If the ID is absent from task-index.md's **Open items** table but appears in the **Recently completed** list, report it and emit `pick-result: already-done`.
+- If the ID is in neither list, report which docs were searched and emit `pick-result: unknown-id`.
+- If the item's Deps column starts with `blocked:`, **stop immediately** and report: "⚠ {ID} is blocked: {blocker text from Deps column}. Cannot pick a blocked item." Do not create a branch or worktree. Emit `pick-result: blocked`.
+- Otherwise proceed to Claim.
 
-**`/pick next`** (argument is exactly "next", no topic) — rank ALL **unblocked** pending items by: no unmet dependencies → calendar urgency → unblocks others → no overlap with claimed items. **Hard-skip any item whose Deps column contains `blocked:`** — these are never eligible for auto-pick. **Immediately auto-claim the top match — do NOT ask for confirmation, do NOT list alternatives, do NOT wait for user input.** Go straight from ranking to the Claim section below. Do NOT filter by topic — consider all tracks.
+**`/pick next`** (argument is exactly "next", no topic) — rank ALL **unblocked** pending items by: no unmet dependencies → calendar urgency → unblocks others → no overlap with claimed items. **Hard-skip any item whose Deps column contains `blocked:`** — these are never eligible for auto-pick. **Immediately auto-claim the top match — do NOT ask for confirmation, do NOT list alternatives, do NOT wait for user input.** Go straight from ranking to the Claim section below. Do NOT filter by topic — consider all tracks. If the ranked list is empty after filtering, emit `pick-result: queue-empty`.
 
-**`/pick next web-sync`** (argument is "next" followed by a topic) — same ranking as above but filter pending items by the given topic (fuzzy match). Same blocked-item exclusion applies.
+**`/pick next web-sync`** (argument is "next" followed by a topic) — same ranking as above but filter pending items by the given topic (fuzzy match). Same blocked-item exclusion applies. Emit `pick-result: queue-empty` if nothing matches.
 
 **`/pick`** (no argument) — show all pending items grouped by source doc. Mark blocked items with their blocker reason but do not suggest them as a best pick. Suggest a best pick from unblocked items only. Ask user to confirm.
 
-If the branch already exists (item is already in-flight), report it and ask whether to reuse or pick a different item.
+If the `feat/<id-lower>-*` branch already exists (item is already in-flight), report it, ask whether to reuse or pick a different item, and emit `pick-result: worktree-exists`.
 
 ## Claim
 
@@ -57,3 +61,29 @@ If the branch already exists (item is already in-flight), report it and ask whet
 
 4. Report: item, branch, worktree, scope, related docs, dependencies.
    Next step: "Open a new terminal, `cd {worktree}`, run `claude`, then `/plan`."
+
+5. Emit a final `pick-result: claimed` line (see below).
+
+## Result tag
+
+Every exit path MUST end with a single structured line on its own:
+
+```
+pick-result: <tag>
+```
+
+where `<tag>` is one of:
+
+| Tag | When |
+|-----|------|
+| `claimed` | Branch + worktree created successfully. |
+| `blocked` | `/pick <ID>` for an item whose Deps column starts with `blocked:`. |
+| `unknown-id` | `/pick <ID>` for an ID absent from both task-index.md's Open items and Recently completed lists. |
+| `already-done` | `/pick <ID>` for an ID in the Recently completed list. |
+| `worktree-exists` | `/pick <ID>` where the `feat/<id-lower>-*` branch already exists. |
+| `queue-empty` | `/pick next [topic]` whose ranked list is empty after filtering blocked items. |
+
+The pipeline parses this line to decide whether the cycle continues (recoverable:
+`queue-empty`, `worktree-exists`, `already-done`) or halts (`blocked`,
+`unknown-id`). Restating the tag in a summary paragraph is fine — the pipeline
+uses the last occurrence.
