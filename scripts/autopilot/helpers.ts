@@ -48,6 +48,30 @@ export function parsePickResult(text: string): PickReason | null {
 	return PICK_REASONS.has(last as PickReason) ? (last as PickReason) : null;
 }
 
+// ── Charter→pick race detection ───────────────────────────────────────
+
+/**
+ * Returns true when `id` appears in the working-tree task-index but is absent
+ * from the HEAD revision — i.e. /charter edited the file without committing.
+ * In that state any worktree branched from HEAD cannot see the new item.
+ */
+export function isCharterPickRace(id: string, repo: string): boolean {
+	const indexPath = resolve(repo, "docs", "task-index.md");
+	if (!existsSync(indexPath)) return false;
+	if (!readFileSync(indexPath, "utf-8").includes(id)) return false;
+	try {
+		const head = execSync("git show HEAD:docs/task-index.md", {
+			cwd: repo,
+			encoding: "utf-8",
+			stdio: ["pipe", "pipe", "pipe"],
+		});
+		return !head.includes(id);
+	} catch {
+		// HEAD has no task-index.md yet — the whole file is uncommitted.
+		return true;
+	}
+}
+
 // ── Plan file-count helpers (dynamic implement-turn budget) ────────────
 
 function extractFilesSection(body: string): string | null {

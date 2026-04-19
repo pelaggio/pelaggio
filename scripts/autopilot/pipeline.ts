@@ -14,6 +14,7 @@ import {
 	fmtWait,
 	getHeadSha,
 	hasDeliverableCommits,
+	isCharterPickRace,
 	listWorktrees as listWorktreesDefault,
 	parsePickResult,
 	parseVerdict,
@@ -158,6 +159,9 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			if (parkSignal.parked) return finish({ itemId: null, completed: false, cost, error: "parked" });
 			const worktreesBefore = new Set(opts.dryRun ? [] : listWorktrees());
 
+			if (!opts.dryRun && itemId && isCharterPickRace(itemId, REPO)) {
+				return finish({ itemId, completed: false, cost, error: "pick:unknown-id" });
+			}
 			log(`/pick ${itemId ?? "next"}`);
 			const pick = await step("pick", expandSkill("pick", itemId ?? "next"), mainRepo);
 			cost += pick.cost;

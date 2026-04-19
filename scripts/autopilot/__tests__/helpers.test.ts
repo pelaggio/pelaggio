@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { describe, it } from "node:test";
-import { computeImplementTurns, countPlanFiles, filesChangedSince, fmtWait, getHeadSha, hasDeliverableCommits, parsePickResult, parseResetTime, parseWaitFlag } from "../helpers.js";
+import { computeImplementTurns, countPlanFiles, filesChangedSince, fmtWait, getHeadSha, hasDeliverableCommits, isCharterPickRace, parsePickResult, parseResetTime, parseWaitFlag } from "../helpers.js";
 
 function makeFeatRepo(): string {
 	const dir = mkdtempSync(join(tmpdir(), "autopilot-helpers-test-"));
@@ -279,6 +279,58 @@ describe("countPlanFiles", () => {
 
 	it("returns 0 for empty body", () => {
 		assert.equal(countPlanFiles(""), 0);
+	});
+});
+
+describe("isCharterPickRace", () => {
+	function makeMainRepo(): string {
+		const dir = mkdtempSync(join(tmpdir(), "autopilot-race-test-"));
+		execSync("git init -q -b main", { cwd: dir });
+		execSync("git config user.name t", { cwd: dir });
+		execSync("git config user.email t@t", { cwd: dir });
+		execSync("git config commit.gpgsign false", { cwd: dir });
+		execSync("git commit --allow-empty -q -m init", { cwd: dir });
+		return dir;
+	}
+
+	function commitIndex(dir: string, content: string): void {
+		const full = resolve(dir, "docs", "task-index.md");
+		mkdirSync(resolve(dir, "docs"), { recursive: true });
+		writeFileSync(full, content);
+		execSync("git add -A && git commit -q -m 'docs: task-index'", { cwd: dir });
+	}
+
+	it("returns false when item exists in both working tree and HEAD", () => {
+		const repo = makeMainRepo();
+		commitIndex(repo, "| TOOL-1 | Existing item | — | — | core |\n");
+		assert.equal(isCharterPickRace("TOOL-1", repo), false);
+	});
+
+	it("returns true when item is in working tree but not HEAD (race condition)", () => {
+		const repo = makeMainRepo();
+		commitIndex(repo, "| TOOL-1 | Existing item | — | — | core |\n");
+		// Simulate /charter adding a new item without committing
+		writeFileSync(resolve(repo, "docs", "task-index.md"), "| TOOL-1 | Existing item | — | — | core |\n| TOOL-2 | New item | — | — | core |\n");
+		assert.equal(isCharterPickRace("TOOL-2", repo), true);
+	});
+
+	it("returns false when item is absent from working tree entirely", () => {
+		const repo = makeMainRepo();
+		commitIndex(repo, "| TOOL-1 | Existing item | — | — | core |\n");
+		assert.equal(isCharterPickRace("TOOL-99", repo), false);
+	});
+
+	it("returns false when task-index.md does not exist", () => {
+		const repo = makeMainRepo();
+		assert.equal(isCharterPickRace("TOOL-1", repo), false);
+	});
+
+	it("returns true when task-index.md exists in working tree but HEAD has no such file", () => {
+		const repo = makeMainRepo();
+		// Write without committing
+		mkdirSync(resolve(repo, "docs"), { recursive: true });
+		writeFileSync(resolve(repo, "docs", "task-index.md"), "| TOOL-5 | Brand new item | — | — | core |\n");
+		assert.equal(isCharterPickRace("TOOL-5", repo), true);
 	});
 });
 

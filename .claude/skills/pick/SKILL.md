@@ -35,6 +35,11 @@ Parse `$ARGUMENTS` (may be empty).
 - If the ID is absent from task-index.md's **Open items** table but appears in the **Recently completed** list, report it and emit `pick-result: already-done`.
 - If the ID is in neither list, report which docs were searched and emit `pick-result: unknown-id`.
 - If the item's Deps column starts with `blocked:`, **stop immediately** and report: "⚠ {ID} is blocked: {blocker text from Deps column}. Cannot pick a blocked item." Do not create a branch or worktree. Emit `pick-result: blocked`.
+- **Charter→pick race guard:** If the item is found in the working-tree `task-index.md`, verify it is also committed by running:
+  ```bash
+  git show HEAD:docs/task-index.md | grep -F "{ID}"
+  ```
+  If this command fails (exit code non-zero), the item exists only in uncommitted working-tree edits — `/charter` ran but did not commit. **Stop immediately** and report: "⚠ {ID} is only in uncommitted main-tree changes; commit the charter first." Do not create a branch or worktree. Emit `pick-result: unknown-id`.
 - Otherwise proceed to Claim.
 
 **`/pick next`** (argument is exactly "next", no topic) — rank ALL **unblocked** pending items by: no unmet dependencies → calendar urgency → unblocks others → no overlap with claimed items. **Hard-skip any item whose Deps column contains `blocked:`** — these are never eligible for auto-pick. **Immediately auto-claim the top match — do NOT ask for confirmation, do NOT list alternatives, do NOT wait for user input.** Go straight from ranking to the Claim section below. Do NOT filter by topic — consider all tracks. If the ranked list is empty after filtering, emit `pick-result: queue-empty`.
