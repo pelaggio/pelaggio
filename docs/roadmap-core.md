@@ -46,6 +46,9 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | ~~TOOL-34. Close charter→pick race — uncommitted charter rows invisible to worktree~~ | **Done** — `/charter` now commits roadmap + task-index edits; pick validates ID exists in HEAD before claiming (2026-04-19) |
 | ~~TOOL-35. Fix `/pick` claiming parent ID when nested sub-items own worktrees~~ | **Done** — longest-match parseItemId + machine-readable pick-item marker |
 | TOOL-36. AbortController-based cancellation for in-flight SDK + exec calls | — |
+| TOOL-37. GitHub Issues bug → autopilot PR POC (no-worktree mode + CI workflow, dogfooded) | TOOL-10, TOOL-11, TOOL-31 (partial) |
+| TOOL-38. Convert repo to pnpm workspace monorepo (packages/autopilot + placeholder packages/server) | — |
+| TOOL-39. Autopilot control-plane server + web UI (Hetzner/Cloudflare/Terraform/GHA) | TOOL-38 |
 
 ---
 
@@ -329,6 +332,106 @@ Completed. See git history for implementation details.
 **Out of scope:**
 - Resumable cancellation (i.e. "abort the current step, continue with the next"). One-shot teardown only.
 - Changing the exit code semantics for non-SIGINT failures.
+
+---
+
+### TOOL-37. GitHub Issues bug → autopilot PR POC (no-worktree mode + CI workflow, dogfooded)
+
+| What | Scope | Deps |
+|------|-------|------|
+| First end-to-end proof-of-concept for CI-triggered autopilot: a GitHub Issue labeled `autopilot:fix` fires a workflow that runs autopilot headlessly in the ephemeral runner's clone (no sibling worktree), which produces a PR resolving the issue. Dogfood it on this repo — replace the current "bug reporter commits to main" flow in `CLAUDE.md` with this autopilot PR flow. Proves out the ephemeral-container execution model and unblocks adoption in other orgs. | L | TOOL-10, TOOL-11, TOOL-31 (partial) |
+
+**Deliverables:**
+- `--no-worktree` CLI flag (or auto-detect via `CI=true` / `CLAUDE_AUTOPILOT_SINGLE_SHOT=1`) that sets `worktree = REPO` and skips sibling-path creation. Only valid with `--parallel 1 --cycles 1 --item <ID>` (explicit item required; no `/pick next` from roadmap).
+- Skill guards: `/pick` skips `git worktree add` when in no-worktree mode; `/ship` skips `git worktree remove`. Both still create/check out the feature branch in place.
+- `step-runner.ts`'s existing `isWorktree = resolve(cwd) !== resolve(REPO)` already self-disables the MAIN_REPO-write guard — verify this stays correct, add a test.
+- `.github/workflows/autopilot-fix.yml`: triggers on `issues.labeled` with `autopilot:fix`, runs on the self-hosted runner, checks out the repo fresh, installs deps, invokes `pnpm autopilot --item <issue-number> --no-worktree --ship-target pull-request`, reports back to the issue on success/failure. Needs `ANTHROPIC_API_KEY` + `GH_TOKEN` secrets.
+- `ship.target: pull-request` override path when invoked via workflow (CLI flag can override `.autopilot.yml`).
+- Dogfood: rewrite the "Bug reporter — automated fix instructions" section in `CLAUDE.md`. Replace "commit directly to main" guidance with "file a GitHub issue with `autopilot:fix` label; autopilot produces a PR; human reviews and merges." Keep the original guidance as a fallback for cases where autopilot declines the work.
+- Smoke-test on a real bug in this repo's issue tracker end-to-end before marking done.
+- Docs: add a `docs/ci-integration.md` section covering the workflow setup, required secrets, label conventions, and known limits (single-shot only, explicit item required).
+
+**Out of scope:**
+- Linear webhook trigger (needs TOOL-31 fully landed for `/pick`/`/ship` Linear parity; file as a follow-up once TOOL-37 proves the pattern).
+- `parallel > 1` support in no-worktree mode (ephemeral runner is already isolation; fan-out happens at the workflow-job level).
+- Post-merge finalizer (closing the issue, archiving plan) — rely on GitHub's "close issue" linked-PR behavior for the POC; revisit if insufficient.
+- Webhook-to-workflow glue for non-GitHub sources (Linear, Jira, etc.) — separate charter.
+
+---
+
+### TOOL-38. Convert repo to pnpm workspace monorepo (packages/autopilot + placeholder packages/server)
+
+| What | Scope | Deps |
+|------|-------|------|
+| Prerequisite refactor for TOOL-39. The pipeline lives in `scripts/autopilot/` today as a single package. Split the repo into a pnpm workspace with `packages/autopilot` (the pipeline, published as `@cdhorne/claude-autopilot`) and a placeholder `packages/server` (filled in by TOOL-39). Hoist shared tooling (biome, lefthook, tsconfig base) to the root. Keep dogfooding intact — `pnpm autopilot` at repo root must still work end-to-end against this codebase. | L | — |
+
+**Deliverables:**
+- `pnpm-workspace.yaml` at repo root listing `packages/*`.
+- Move `scripts/autopilot/`, `scripts/autopilot.ts`, `bin/`, and package-scoped configs into `packages/autopilot/`. Update `main`/`exports`/`files`/`bin` paths in `packages/autopilot/package.json` accordingly.
+- Keep at repo root (dogfood + repo-wide artifacts): `.claude/skills/`, `.claude-templates/`, `docs/`, `.dev/autopilot-log.jsonl`, `CLAUDE.md`, `renovate.json`, `.github/workflows/`.
+- Root `package.json` becomes workspace root with dev-only tooling (biome, lefthook, tsx) and convenience scripts that proxy to `packages/autopilot` (e.g. `pnpm autopilot` = `pnpm --filter @cdhorne/claude-autopilot autopilot`).
+- `tsconfig.base.json` at root, extended by each package.
+- `biome.json` stays at root; extend its `include` to cover `packages/**/src/**`.
+- Update `lefthook.yml` globs for the new paths.
+- Update `scripts/check-*.ts` (roadmap, skills, publish, graph-roadmap) — decide per-script whether it's repo-wide (stays at root) or package-local (moves into `packages/autopilot/scripts/`).
+- `worktree-deps.ts`: verify the lockfile-sha comparison still works with a workspace root lockfile.
+- Update `step-runner.ts`'s MAIN_REPO resolution + skill path resolution for the new layout. The `.claude/skills/` path stays root-relative; verify `expandSkill()` + `canUseTool` paths are unaffected.
+- `.github/workflows/ci.yml` updated to `pnpm -r test` / `pnpm -r check`.
+- `CLAUDE.md` updated with the new layout diagram (Orientation section).
+- Smoke test: `pnpm autopilot --dry-run --cycles 1` + `pnpm test` + `pnpm check` + `pnpm check:roadmap` all pass from the new workspace root.
+- `packages/server/` directory created with a stub `package.json` (`@cdhorne/claude-autopilot-server`, `private: true`) and a README placeholder pointing at TOOL-39. No server code yet.
+
+**Out of scope:**
+- Extracting `.claude/skills/` into its own `@cdhorne/claude-autopilot-skills` package (possible future split; skills remain consumer-sync'd artifacts in the current layout).
+- Changing `sync` CLI's consumer-facing UX (install path is still `./.claude/skills/` in the consumer's repo).
+- Adding the server itself — that's TOOL-39. This ticket ships the placeholder only.
+- Re-verifying the npm publish end-to-end (publish hardening handled by TOOL-18; keep the allowlist coverage correct).
+
+---
+
+### TOOL-39. Autopilot control-plane server + web UI (Hetzner/Cloudflare/Terraform/GHA)
+
+| What | Scope | Deps |
+|------|-------|------|
+| A long-lived daemon that remotely manages autopilot on the user's beefy Tailscale-connected machine. Exposes HTTP endpoints to start/pause/resume/stop runs, streams verbose logs over SSE, and serves a small web UI showing live runs, plans, and stats. Deployable via the Fathom pattern: Hetzner VM provisioned by Terraform, CI/CD via GitHub Actions, optional public access via Cloudflare Tunnel. Solves three pain points: SSH-over-Tailscale kickoffs, processes lost on disconnect, and no dashboard for plans/stats/outcomes. | XL | TOOL-38 |
+
+**Deliverables:**
+- `packages/server/` workspace containing the HTTP daemon (Node `node:http` or Fastify — pick the lightest option that matches Fathom conventions).
+- HTTP API (Tailscale-bound by default; optional bearer token for Cloudflare Tunnel exposure):
+  - `POST /runs` — start a new cycle (`{ item, parallel?, cycles?, shipTarget? }`). Spawns `pnpm autopilot` as a supervised child, returns a run ID.
+  - `GET /runs` — list active + recent runs with status, started-at, current step, budget consumed.
+  - `GET /runs/:id` — detail view: current step, plan path, file list, tool counts, output tail.
+  - `POST /runs/:id/pause` — checkpoint-and-exit at next safe step boundary (reuses `parkExit()` semantics).
+  - `POST /runs/:id/resume` — spawns `pnpm autopilot --resume <item>` against the parked checkpoint.
+  - `POST /runs/:id/stop` — SIGTERM with `parkExit()` graceful shutdown. Abandons rather than parks if already parked.
+  - `GET /runs/:id/log` — SSE stream of verbose stdout + structured events from `.dev/autopilot-log.jsonl`. Supports tail-and-follow.
+  - `GET /stats` — proxy `pnpm autopilot stats --json` (TOOL-25 output).
+  - `GET /roadmap` — resolve the configured `RoadmapSource` and return open items (powers the UI's "start run" picker).
+- Process supervisor: small SQLite (or flat-file) store tracking run IDs → child PIDs → status, so the daemon can reattach/clean up after restart. Systemd handles daemon survival; this layer handles run survival.
+- Web UI (separate `packages/web/` or bundled into `packages/server/` — decide in `/plan`): SPA showing live run list, per-run detail with streaming log viewer, stats dashboard, "start run" button with roadmap-item picker. Match Fathom's stack conventions (React + Vite, Astro, or htmx — pick in `/plan`).
+- Auth: default Tailscale-only listener (bind to tailnet IP). Optional bearer token for Cloudflare Tunnel public access. Document both modes.
+- Deployment:
+  - `infra/` directory at repo root with Terraform: Hetzner VM (Cloud or Dedicated), Cloudflare DNS + optional Tunnel, DNS records.
+  - systemd unit file (`infra/systemd/autopilot-server.service`) managing the daemon.
+  - `.github/workflows/deploy-server.yml`: build server package, push artifact, SSH-deploy to Hetzner (or pull-deploy via agent), restart systemd unit. Mirror fathom's deploy pattern.
+- Secrets: `ANTHROPIC_API_KEY`, `GH_TOKEN`, `LINEAR_API_KEY` passed via systemd environment file (not committed). Terraform provisions placeholders; operator fills in via sops/1Password/whatever Fathom uses.
+- Local dev: `pnpm --filter @cdhorne/claude-autopilot-server dev` hot-reloads. Web UI has a dev proxy to the daemon.
+- Docs: `docs/server.md` covering API reference, deploy steps, Tailscale vs. Cloudflare modes, pause/resume semantics.
+- End-to-end smoke test: from the deployed instance, kick off a real cycle on this repo, pause it, resume it, watch the log stream, confirm the stats update.
+
+**Out of scope:**
+- Multi-user / multi-tenant auth (single operator, Tailscale ACL is sufficient).
+- Metrics export (Prometheus, OpenTelemetry) — reserve for a follow-up if the dashboard isn't enough.
+- Mobile-responsive web UI polish — desktop-first for v1.
+- Moving `.dev/autopilot-log.jsonl` schema — the server reads it as a public interface; schema changes would be a coordinated separate ticket.
+- Horizontal scaling / multi-machine coordination — one beefy box, many children.
+- Replacing the CLI — `pnpm autopilot` remains the ground truth; the server is a control plane on top.
+
+**Open questions for `/plan`:**
+- Pause semantics: reuse `parkExit()` signal path, or add a new "pause at next step boundary" flag? The former is simpler but couples pause to the rate-limit code path.
+- Web UI framework: match Fathom's stack (confirm which) vs. pick something newer for this tool.
+- Cloudflare Tunnel vs. Tailscale-only as the default access mode.
+- Log streaming: pipe child stdout directly (live, no persistence overhead) vs. tail `autopilot-log.jsonl` + outputTail fields. Probably both — live for active runs, persisted for completed runs.
 
 ---
 
