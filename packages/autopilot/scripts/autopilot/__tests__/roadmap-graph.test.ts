@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join } from "node:path";
 import { describe, it } from "node:test";
-import { fileURLToPath } from "node:url";
-import type { RoadmapItem } from "../../check-roadmap.js";
-import { buildGraph, emitMermaid, parseDeps, runCli } from "../../roadmap-graph.js";
+import type { RoadmapItem } from "../../../../../scripts/check-roadmap.js";
+import { buildGraph, emitMermaid, parseDeps, runCli } from "../../../../../scripts/roadmap-graph.js";
+import { resolveArtifactRoot } from "../artifact-root.js";
 
-const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+const REPO_ROOT = resolveArtifactRoot(import.meta.url);
 
 function item(id: string, title: string, deps: string, status: "open" | "done" = "open", roadmap = "core"): RoadmapItem {
 	return { id, title, deps, status, roadmap };

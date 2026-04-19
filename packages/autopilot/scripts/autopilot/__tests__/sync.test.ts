@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { fileURLToPath } from "node:url";
+import { resolveArtifactRoot } from "../artifact-root.js";
 import { type Action, applyAction, type Prompter, planSync, resolveConsumerRoot, runSync, type SyncPlan } from "../sync.js";
 
-const REAL_PKG_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+const REAL_PKG_ROOT = resolveArtifactRoot(import.meta.url);
 
 function makeGitRepo(): string {
 	const dir = mkdtempSync(join(tmpdir(), "autopilot-sync-test-"));

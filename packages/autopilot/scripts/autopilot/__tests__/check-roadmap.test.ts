@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join } from "node:path";
 import { describe, it } from "node:test";
-import { fileURLToPath } from "node:url";
-import { applyFix, deriveFixDeps, findDrift, formatDrift, parseRoadmap, parseTaskIndex } from "../../check-roadmap.js";
+import { applyFix, deriveFixDeps, findDrift, formatDrift, parseRoadmap, parseTaskIndex } from "../../../../../scripts/check-roadmap.js";
+import { resolveArtifactRoot } from "../artifact-root.js";
 
-const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+const REPO_ROOT = resolveArtifactRoot(import.meta.url);
 
 const SAMPLE_ROADMAP = `# Core Roadmap
 

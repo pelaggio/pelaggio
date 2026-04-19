@@ -5,7 +5,7 @@ keys are optional — omit anything you don't want to change and the default
 applies. If the file is absent or empty, behavior is identical to today.
 
 The file is read once at startup by `loadConfig()` in
-`scripts/autopilot/config.ts`. Parse errors fail loudly with the file path in
+`packages/autopilot/scripts/autopilot/config.ts`. Parse errors fail loudly with the file path in
 the message — delete the file to fall back to defaults.
 
 ## Precedence

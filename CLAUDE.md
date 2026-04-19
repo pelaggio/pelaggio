@@ -2,15 +2,26 @@
 
 Headless pipeline for running `@anthropic-ai/claude-agent-sdk` cycles on a per-item basis: pick → plan → shakedown-plan → implement → shakedown-code → ship. Worktree-based parallelism, rate-limit parking, cost tracking, per-step model profiles.
 
-This repo contains the *tooling*, not any product code. Products consume it by cloning `.claude/skills/`, `scripts/autopilot/`, and (optionally) `.claude-templates/` into their own repos. The migration process lives in `.claude-templates/migration-checklist.md`.
+This repo contains the *tooling*, not any product code. Products consume it by cloning `.claude/skills/`, `packages/autopilot/scripts/autopilot/`, and (optionally) `.claude-templates/` into their own repos. The migration process lives in `.claude-templates/migration-checklist.md`.
 
 ## Orientation
 
-- Skills: `.claude/skills/` — each is a markdown file with frontmatter, read by `expandSkill()` in the pipeline
-- Pipeline: `scripts/autopilot/` — TypeScript, runs on tsx (no build step)
-- Rubric for this repo: `.claude/skills/_rubric.md` — meta-rubric for the tooling itself
-- Templates for new projects: `.claude-templates/` — do NOT confuse with `.claude/skills/`
-- Entry point: `scripts/autopilot.ts` → `scripts/autopilot/main.ts`
+This is a pnpm workspace. Two packages today:
+
+- `packages/autopilot/` — the published pipeline (`@cdhorne/claude-autopilot`). All TypeScript runs on tsx; no build step.
+  - Pipeline modules: `packages/autopilot/scripts/autopilot/` (read by `expandSkill()` in the pipeline)
+  - Entry points: `packages/autopilot/scripts/autopilot.ts` → `…/autopilot/main.ts`; `packages/autopilot/bin/claude-autopilot.js` for the published CLI.
+- `packages/server/` — placeholder for the control-plane daemon (TOOL-39). No code yet.
+
+Repo root holds shared assets and dev tooling:
+
+- Skills: `.claude/skills/` — markdown with frontmatter; lives at root for dogfooding (`REPO` from `git rev-parse --show-toplevel` is the workspace root). Copied into `packages/autopilot/.claude/skills/` by the package's `prepack` lifecycle so the published tarball includes them.
+- Templates for consumers: `.claude-templates/` — same `prepack` treatment.
+- Rubric: `.claude/skills/_rubric.md` — meta-rubric for the tooling itself.
+- Repo-wide scripts: `scripts/check-roadmap.ts`, `scripts/roadmap-graph.ts` — operate on `docs/`, stay at root.
+- Workspace config: `pnpm-workspace.yaml`, `tsconfig.base.json`, `biome.json`, `lefthook.yml`.
+
+`pnpm autopilot` at the root proxies into the package via `pnpm --filter @cdhorne/claude-autopilot autopilot`.
 
 ## Data model shape
 
@@ -26,8 +37,8 @@ N/A — no persistent data. State is the git working tree + `.dev/autopilot-log.
 - **Rate-limit parking preserves work**: every pipeline exit path must call `parkExit()` (which checkpoints uncommitted work) before returning on rate-limit rejection.
 - **No hardcoded model strings**: all model names live in `MODEL_PROFILES` in `config.ts`. No other file references `claude-opus-*` or `claude-sonnet-*` literals.
 - **Phantom ship guard**: `pipeline.ts` calls `hasDeliverableCommits()` before invoking `ship` — cycles whose branch only touches `docs/plans/` (i.e. only the `/plan` artifact with no implementation) are flagged `completed: false` with a "nothing to ship" error, and ship is never invoked. Doc-only work outside `docs/plans/` (rubric, skill bodies, README, roadmap edits) is still deliverable. The identical guard inside `/ship`'s SKILL.md is defense in depth for inline (non-pipeline) use.
-- **Ship target is config-driven**: `/ship`'s merge vs PR behavior is selected by `ship.target` (`.autopilot.yml`) and dispatched via adapters in `scripts/autopilot/ship/`. The skill body branches on the `--target` arg; don't hardcode merge logic in TS. `/shipwreck` recovery only runs for `direct-push` — PR modes never merge in-session, so a ship failure there is reported as-is.
-- **No install-script hooks in `package.json`**: never add `preinstall`, `install`, or `postinstall`. `scripts/check-publish.ts` (run via `pnpm check:publish` and in the publish workflow) fails the build if any of these appear. They run on every `npm install` of a consumer and are the standard supply-chain attack surface.
+- **Ship target is config-driven**: `/ship`'s merge vs PR behavior is selected by `ship.target` (`.autopilot.yml`) and dispatched via adapters in `packages/autopilot/scripts/autopilot/ship/`. The skill body branches on the `--target` arg; don't hardcode merge logic in TS. `/shipwreck` recovery only runs for `direct-push` — PR modes never merge in-session, so a ship failure there is reported as-is.
+- **No install-script hooks in `package.json`**: never add `preinstall`, `install`, or `postinstall`. `packages/autopilot/scripts/check-publish.ts` (run via `pnpm check:publish` and in the publish workflow) fails the build if any of these appear. They run on every `npm install` of a consumer and are the standard supply-chain attack surface.
 
 ## Configuration
 
@@ -76,28 +87,29 @@ Don't fold shakedown back into plan to save a cycle — the context-shape differ
 ## Roadmap sources
 
 The pipeline reads roadmap + task-index data through a `RoadmapSource`
-interface (`scripts/autopilot/roadmap/index.ts`). Adapters today:
+interface (`packages/autopilot/scripts/autopilot/roadmap/index.ts`). Adapters today:
 `MarkdownRoadmap` (parses `docs/roadmap-*.md` + `docs/task-index.md`),
 `GitHubIssuesRoadmap` (via `gh` CLI), and `LinearRoadmap` (via `@linear/sdk`).
 `getRoadmapSource(name, { repo })` is the factory; the resolved name comes
 from `roadmap.source` in `.autopilot.yml` (default `"markdown"`). Adding a
-new adapter means adding a file under `scripts/autopilot/roadmap/`, widening
+new adapter means adding a file under `packages/autopilot/scripts/autopilot/roadmap/`, widening
 the `RoadmapSourceName` union in `roadmap/types.ts`, and extending the
 factory `switch`. Skill bodies access the adapter via the `roadmap` CLI
 subcommand (see below), so no skill edits are needed.
 
 ## Non-obvious conventions
 
-- **Skill → adapter bridge is `npx claude-autopilot roadmap <subcommand>`.** Skill bodies never read roadmap files or issue trackers directly — they shell out to the `roadmap` CLI (`scripts/autopilot/roadmap-cli.ts`), which dispatches to the configured `RoadmapSource`. Subcommands: `list`, `get`, `claim`, `plan-path`, `publish-plan`, `mark-done`, `create-item`, `archive-plan`, `source`. Same idiom as `worktree-deps`. Adding a new adapter requires no skill edits.
+- **Skill → adapter bridge is `npx claude-autopilot roadmap <subcommand>`.** Skill bodies never read roadmap files or issue trackers directly — they shell out to the `roadmap` CLI (`packages/autopilot/scripts/autopilot/roadmap-cli.ts`), which dispatches to the configured `RoadmapSource`. Subcommands: `list`, `get`, `claim`, `plan-path`, `publish-plan`, `mark-done`, `create-item`, `archive-plan`, `source`. Same idiom as `worktree-deps`. Adding a new adapter requires no skill edits.
 - **Relative imports use `.js` extension** (ESM convention, required by tsx for resolution). e.g., `from "./config.js"` even though the file is `.ts`.
-- **No formal build step**: everything runs via `tsx`. `pnpm autopilot` = `tsx scripts/autopilot.ts`.
-- **Tests run via `node:test`**: `npx tsx --test scripts/autopilot/__tests__/helpers.test.ts`. No Jest, no Vitest — keeping dependencies minimal.
+- **No formal build step**: everything runs via `tsx`. `pnpm autopilot` at the root proxies to `pnpm --filter @cdhorne/claude-autopilot autopilot`, which runs `tsx scripts/autopilot.ts` inside the package.
+- **Tests run via `node:test`**: `pnpm -r test` from the root, or `npx tsx --test packages/autopilot/scripts/autopilot/__tests__/helpers.test.ts` for a single file. No Jest, no Vitest — keeping dependencies minimal.
 - **Frontmatter is NOT consumed by the pipeline**: `expandSkill()` strips it. Frontmatter's purpose is for inline Claude Code usage (where a human types `/shakedown`); the pipeline reads only the body.
 - **`context: fork` in skill frontmatter is only meaningful inline**: the SDK `query()` call already spawns an isolated session, so frontmatter `context` is redundant for pipeline use.
 - **Worktree prefix auto-derived from `basename(REPO)`**: override via `CLAUDE_AUTOPILOT_WORKTREE_PREFIX` env var if your directory name doesn't match your project slug.
 - **`_project-context.md` is the consumer-side extension point** for the three review skills (`plan`, `shakedown`, `ship`). They read it opt-in via `!cat .claude/skills/_project-context.md 2>/dev/null`, so the file is deliberately absent from this repo — autopilot itself is the generic baseline, and exercising the fallback path keeps the graceful include honest. Upstream `claude-autopilot sync` never touches it (the underscore-prefix skip in `planSync()` + the `ALLOWED_DEST` regex in `applyAction()` cover both `_project-context.md` and `.example`); consumers copy `.claude/skills/_project-context.md.example` to get started. `check-skills.ts` treats the `2>/dev/null` suffix as "dangling is fine" via the second capture group on `INCLUDE_RE`.
-- **Worktrees share MAIN_REPO's `node_modules` via symlink when lockfiles match.** `/pick`'s Claim step (and a mid-cycle guard at the top of every worktree-cwd step in `step-runner.ts`) calls `scripts/autopilot/worktree-deps.ts`: if `<worktree>/pnpm-lock.yaml` sha256 matches `<MAIN_REPO>/pnpm-lock.yaml`, it symlinks `<worktree>/node_modules → <MAIN_REPO>/node_modules`; on drift or missing main `node_modules`, falls through to `pnpm install --frozen-lockfile --silent`. Root-only — workspace subpackages still install normally. Real (non-symlink) `node_modules` in the worktree is always left alone (user-managed). Ownership test is `lstatSync().isSymbolicLink()`.
-- **Biome is scoped to `scripts/**/*.ts`** via `biome.json` at the repo root. Skill and template markdown is not linted. Run `pnpm check` to lint or `pnpm format` to auto-fix. A lefthook `pre-commit` hook auto-formats staged `scripts/**/*.ts` and re-stages the fixes (`pnpm install` installs the hooks via the `prepare` script); autopilot checkpoint commits bypass it via `--no-verify` in `helpers.ts`.
+- **Worktrees share MAIN_REPO's `node_modules` via symlink when lockfiles match.** `/pick`'s Claim step (and a mid-cycle guard at the top of every worktree-cwd step in `step-runner.ts`) calls `packages/autopilot/scripts/autopilot/worktree-deps.ts`: if `<worktree>/pnpm-lock.yaml` sha256 matches `<MAIN_REPO>/pnpm-lock.yaml`, it symlinks `<worktree>/node_modules → <MAIN_REPO>/node_modules`; on drift or missing main `node_modules`, falls through to `pnpm install --frozen-lockfile --silent`. Root-only — workspace subpackages still install normally. Real (non-symlink) `node_modules` in the worktree is always left alone (user-managed). Ownership test is `lstatSync().isSymbolicLink()`.
+- **Biome is scoped via one root `biome.json`** with `includes: ["packages/*/scripts/**/*.ts", "scripts/**/*.ts"]`. Skill and template markdown is not linted. Run `pnpm check` to lint or `pnpm format` to auto-fix. A lefthook `pre-commit` hook auto-formats staged TypeScript and re-stages the fixes (`pnpm install` installs the hooks via the `prepare` script); autopilot checkpoint commits bypass it via `--no-verify` in `helpers.ts`.
+- **Skills + templates ship via `prepack`.** The published `@cdhorne/claude-autopilot` tarball needs `.claude/skills/` and `.claude-templates/`, but those live at the monorepo root for dogfooding. The package's `prepack` script (`packages/autopilot/scripts/pack-prepare.ts`) copies them in before `npm pack`; `postpack` (`pack-cleanup.ts`) removes them; both paths are listed in `packages/autopilot/.gitignore` so the working copy is single-sourced. `check-publish` imports `copySkillsIn` / `cleanSkillsOut` directly and runs `npm pack --dry-run --ignore-scripts` — the manual copy synthesizes the prepack tree while keeping `postpack` from firing mid-inspection (the secret scan still needs to read the copied files after `npm pack` returns).
 
 ## Running things
 
@@ -111,7 +123,7 @@ pnpm autopilot --item A-1,A-2,A-3 --parallel 2 --verbose  # targeted multi-item 
 pnpm autopilot --resume INFRA-1                           # resume a parked/failed cycle
 pnpm check:roadmap                                        # verify task-index ↔ roadmap consistency (--fix adds missing index rows)
 pnpm graph:roadmap                                        # regenerate docs/dep-graph.md (Mermaid) from roadmap-*.md; --stdout to pipe
-npx tsx --test scripts/autopilot/__tests__/*.test.ts      # run unit tests
+pnpm -r test                                              # run unit tests across the workspace
 npx claude-autopilot sync --dry-run                       # preview skill-upgrade plan (consumer-side CLI)
 ```
 
@@ -121,4 +133,4 @@ When fixing bugs from automated reports:
 - Make minimal, surgical edits only
 - Commit directly to main (solo workflow)
 - Do not modify GitHub Actions workflow files
-- Run the unit tests before shipping (`npx tsx --test scripts/autopilot/__tests__/helpers.test.ts`)
+- Run the unit tests before shipping (`pnpm -r test`)

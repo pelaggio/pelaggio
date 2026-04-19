@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
-import { fileURLToPath } from "node:url";
+import { resolveArtifactRoot } from "../artifact-root.js";
 import { lintAllSkills, lintSkillFile, type Violation } from "../check-skills.js";
 
-const REAL_REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+const REAL_REPO_ROOT = resolveArtifactRoot(import.meta.url);
 
 function makeRepoWithSkill(skillName: string, body: string, extras: Record<string, string> = {}): { repoRoot: string; skillFile: string } {
 	const repoRoot = mkdtempSync(join(tmpdir(), "autopilot-lint-test-"));
