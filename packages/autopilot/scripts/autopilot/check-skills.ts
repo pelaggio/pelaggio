@@ -165,7 +165,7 @@ export function lintSkillFile(absPath: string, repoRoot: string): Violation[] {
 	// sense when synced into a consumer repo — those paths don't exist there.
 	// Require them to declare `consumer: false` so sync omits them.
 	if (fm.consumer !== false) {
-		const internalRef = /scripts\/autopilot\/[\w.-]+\.ts/.exec(body);
+		const internalRef = /(?:packages\/autopilot\/)?scripts\/autopilot\/[\w.-]+\.ts/.exec(body);
 		if (internalRef) {
 			violations.push({
 				file: rel,

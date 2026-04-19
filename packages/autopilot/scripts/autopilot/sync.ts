@@ -17,8 +17,9 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { createTwoFilesPatch } from "diff";
 import { parse as parseYaml } from "yaml";
+import { resolveArtifactRoot } from "./artifact-root.js";
 
-const PKG_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const PKG_ROOT = resolveArtifactRoot(import.meta.url);
 
 export type Action = "overwrite" | "skip" | "merge" | "quit";
 

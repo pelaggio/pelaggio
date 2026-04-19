@@ -1,0 +1,47 @@
+{
+	"name": "@cdhorne/claude-autopilot",
+	"version": "0.1.0",
+	"description": "Headless pipeline for running Claude Agent SDK cycles per roadmap item",
+	"license": "UNLICENSED",
+	"packageManager": "pnpm@10.32.1",
+	"type": "module",
+	"bin": {
+		"claude-autopilot": "./bin/claude-autopilot.js"
+	},
+	"main": "./scripts/autopilot/index.ts",
+	"exports": {
+		".": "./scripts/autopilot/index.ts",
+		"./package.json": "./package.json"
+	},
+	"files": [
+		"scripts/autopilot.ts",
+		"scripts/autopilot/**",
+		".claude/skills/**",
+		".claude-templates/**",
+		"bin/**",
+		"!scripts/autopilot/__tests__/**",
+		"!scripts/autopilot/**/*.test.ts"
+	],
+	"scripts": {
+		"autopilot": "tsx scripts/autopilot.ts",
+		"check:publish": "tsx scripts/check-publish.ts",
+		"check:skills": "tsx scripts/autopilot/check-skills.ts",
+		"test": "tsx --test scripts/autopilot/__tests__/*.test.ts",
+		"prepack": "tsx scripts/pack-prepare.ts",
+		"postpack": "tsx scripts/pack-cleanup.ts"
+	},
+	"dependencies": {
+		"@anthropic-ai/claude-agent-sdk": "^0.2.113",
+		"diff": "^7.0.0",
+		"tsx": "^4.19.0",
+		"yaml": "^2.8.3"
+	},
+	"peerDependencies": {
+		"@linear/sdk": ">=50"
+	},
+	"peerDependenciesMeta": {
+		"@linear/sdk": {
+			"optional": true
+		}
+	}
+}

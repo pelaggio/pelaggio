@@ -1,57 +1,27 @@
 {
-  "name": "@cdhorne/claude-autopilot",
-  "version": "0.1.0",
-  "private": true,
-  "description": "Headless pipeline for running Claude Agent SDK cycles per roadmap item",
-  "license": "UNLICENSED",
-  "packageManager": "pnpm@10.32.1",
-  "type": "module",
-  "bin": {
-    "claude-autopilot": "./bin/claude-autopilot.js"
-  },
-  "main": "./scripts/autopilot/index.ts",
-  "exports": {
-    ".": "./scripts/autopilot/index.ts",
-    "./package.json": "./package.json"
-  },
-  "files": [
-    "scripts/autopilot.ts",
-    "scripts/autopilot/**",
-    ".claude/skills/**",
-    ".claude-templates/**",
-    "bin/**",
-    "!scripts/autopilot/__tests__/**",
-    "!scripts/autopilot/**/*.test.ts"
-  ],
-  "scripts": {
-    "autopilot": "tsx scripts/autopilot.ts",
-    "check:roadmap": "tsx scripts/check-roadmap.ts",
-"graph:roadmap": "tsx scripts/roadmap-graph.ts",
-    "check:publish": "tsx scripts/check-publish.ts",
-    "test": "tsx --test scripts/autopilot/__tests__/*.test.ts",
-    "check": "biome check scripts/",
-    "check:skills": "tsx scripts/autopilot/check-skills.ts",
-    "format": "biome check --write scripts/",
-    "prepare": "lefthook install"
-  },
-  "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.113",
-    "diff": "^7.0.0",
-    "tsx": "^4.19.0",
-    "yaml": "^2.8.3"
-  },
-  "peerDependencies": {
-    "@linear/sdk": ">=50"
-  },
-  "peerDependenciesMeta": {
-    "@linear/sdk": {
-      "optional": true
-    }
-  },
-  "devDependencies": {
-    "@anthropic-ai/claude-code": "^2.1.113",
-    "@biomejs/biome": "^2.4.12",
-    "lefthook": "^2.1.6",
-    "typescript": "^6.0.3"
-  }
+	"name": "claude-autopilot-workspace",
+	"version": "0.0.0",
+	"private": true,
+	"description": "Workspace root for claude-autopilot — see packages/autopilot for the published pipeline.",
+	"license": "UNLICENSED",
+	"packageManager": "pnpm@10.32.1",
+	"type": "module",
+	"scripts": {
+		"autopilot": "pnpm --filter @cdhorne/claude-autopilot autopilot",
+		"test": "pnpm -r test",
+		"check": "biome check",
+		"check:skills": "pnpm --filter @cdhorne/claude-autopilot check:skills",
+		"check:publish": "pnpm --filter @cdhorne/claude-autopilot check:publish",
+		"check:roadmap": "tsx scripts/check-roadmap.ts",
+		"graph:roadmap": "tsx scripts/roadmap-graph.ts",
+		"format": "biome check --write",
+		"prepare": "lefthook install"
+	},
+	"devDependencies": {
+		"@anthropic-ai/claude-code": "^2.1.113",
+		"@biomejs/biome": "^2.4.12",
+		"lefthook": "^2.1.6",
+		"tsx": "^4.19.0",
+		"typescript": "^6.0.3"
+	}
 }

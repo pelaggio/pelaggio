@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { cleanSkillsOut, copySkillsIn } from "./pack-prepare.js";
 
 export type PackedFile = { path: string; size: number };
 export type Violation = { kind: "disallowed-path"; path: string } | { kind: "secret"; path: string; pattern: string; match: string } | { kind: "install-script"; name: string };
@@ -74,18 +75,32 @@ export function checkPackageScripts(pkg: { scripts?: Record<string, string> }): 
 type NpmPackEntry = { path: string; size: number };
 type NpmPackResult = { files: NpmPackEntry[] };
 
-function npmPackDryRun(repoRoot: string): PackedFile[] {
-	const raw = execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] });
-	// npm still emits lines like "> pkg@x prepare" and "sync hooks: ..." to stdout
-	// before the JSON, so locate the first `[` and parse from there.
-	const jsonStart = raw.indexOf("[");
-	if (jsonStart < 0) throw new Error("npm pack --dry-run --json produced no JSON array");
-	const parsed = JSON.parse(raw.slice(jsonStart)) as NpmPackResult[];
-	const first = parsed[0];
-	if (!first || !Array.isArray(first.files)) {
-		throw new Error("npm pack --dry-run --json returned unexpected shape");
+type PackedWithContents = { files: PackedFile[]; entries: Array<{ path: string; contents: string }> };
+
+function npmPackDryRun(repoRoot: string): PackedWithContents {
+	// Synthesize what `prepack` does, then call `npm pack --dry-run --ignore-scripts`.
+	// We can't let npm run the lifecycle because `postpack` would fire before this
+	// function returns, deleting the skills/templates we still need to read for
+	// the secret scan. Doing the copy ourselves and skipping the lifecycle gives
+	// us a stable file tree from pack-time through content read.
+	copySkillsIn(repoRoot);
+	try {
+		const raw = execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] });
+		// npm still emits lines like "> pkg@x prepare" and "sync hooks: ..." to stdout
+		// before the JSON, so locate the first `[` and parse from there.
+		const jsonStart = raw.indexOf("[");
+		if (jsonStart < 0) throw new Error("npm pack --dry-run --json produced no JSON array");
+		const parsed = JSON.parse(raw.slice(jsonStart)) as NpmPackResult[];
+		const first = parsed[0];
+		if (!first || !Array.isArray(first.files)) {
+			throw new Error("npm pack --dry-run --json returned unexpected shape");
+		}
+		const files = first.files.map((f) => ({ path: f.path, size: f.size }));
+		const entries = files.map((f) => ({ path: f.path, contents: readFileSync(resolve(repoRoot, f.path), "utf8") }));
+		return { files, entries };
+	} finally {
+		cleanSkillsOut(repoRoot);
 	}
-	return first.files.map((f) => ({ path: f.path, size: f.size }));
 }
 
 function formatViolation(v: Violation): string {
@@ -108,10 +123,8 @@ export function runCli(): number {
 	const repoRoot = findRepoRoot();
 	const pkg = JSON.parse(readFileSync(resolve(repoRoot, "package.json"), "utf8")) as { scripts?: Record<string, string> };
 
-	const packed = npmPackDryRun(repoRoot);
+	const { files: packed, entries } = npmPackDryRun(repoRoot);
 	const pathViolations = checkAllowlist(packed);
-
-	const entries = packed.map((f) => ({ path: f.path, contents: readFileSync(resolve(repoRoot, f.path), "utf8") }));
 	const secretViolations = scanContentsForSecrets(entries);
 
 	const scriptViolations = checkPackageScripts(pkg);

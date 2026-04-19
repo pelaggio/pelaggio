@@ -12,8 +12,9 @@ import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSyn
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { resolveArtifactRoot } from "./artifact-root.js";
 
-const PKG_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const PKG_ROOT = resolveArtifactRoot(import.meta.url);
 
 interface Plan {
 	src: string;

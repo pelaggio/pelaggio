@@ -2,7 +2,7 @@
 
 Six dimensions — apply when planning, reviewing, or fixing code in this repo. This rubric is for the autopilot *tooling itself*, not for downstream projects that use it.
 
-**Scope of this repo**: TypeScript CLI pipeline built on `@anthropic-ai/claude-agent-sdk`. Files under `scripts/autopilot/`, `.claude/skills/`, and `.claude-templates/`. No UI, no user-facing surface.
+**Scope of this repo**: TypeScript CLI pipeline built on `@anthropic-ai/claude-agent-sdk`. Files under `packages/autopilot/scripts/autopilot/`, `.claude/skills/`, and `.claude-templates/`. No UI, no user-facing surface.
 
 ## Dimensions
 
@@ -40,10 +40,10 @@ Skills live in `.claude/skills/` — each skill is self-contained markdown with 
 ## Verification
 
 ```bash
-npx tsx --test --test-reporter=dot scripts/autopilot/__tests__/*.test.ts   # unit + pipeline tests (terse dot reporter)
-npx tsx -e "import('./scripts/autopilot/config.ts')"                        # parse-check config
-npx tsx -e "import('./scripts/autopilot/helpers.ts')"                       # parse-check helpers
-npx tsx -e "import('./scripts/autopilot/pipeline.ts')"                      # parse-check pipeline
+npx tsx --test --test-reporter=dot packages/autopilot/scripts/autopilot/__tests__/*.test.ts   # unit + pipeline tests (terse dot reporter)
+npx tsx -e "import('./packages/autopilot/scripts/autopilot/config.ts')"                        # parse-check config
+npx tsx -e "import('./packages/autopilot/scripts/autopilot/helpers.ts')"                       # parse-check helpers
+npx tsx -e "import('./packages/autopilot/scripts/autopilot/pipeline.ts')"                      # parse-check pipeline
 pnpm check                                                                   # biome (exit 0 on success — output is already compact)
 pnpm check:skills                                                            # lint .claude/skills/*/SKILL.md frontmatter + includes
 ```
