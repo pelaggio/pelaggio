@@ -12,6 +12,7 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 |----|-------|------|------|---------|
 | TOOL-31 | Rewire skill bodies through RoadmapSource | TOOL-10, TOOL-15 | — | core |
 | TOOL-35 | Fix /pick claiming parent ID when nested sub-items own worktrees | — | — | core |
+| TOOL-36 | AbortController-based cancellation for in-flight SDK + exec calls | — | — | core |
 ## Recently completed
 
 - TOOL-1 ✓

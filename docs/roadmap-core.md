@@ -45,6 +45,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | ~~TOOL-33. Autopilot run-quality fixes from Fathom telemetry (ship budget/model, pick exit reasons, dynamic implement budget, edit-loop threshold)~~ | **Done** — ship turn limit raised to 60, pick rejection reasons tagged, dynamic implement budget from plan file-count, edit-loop threshold raised to 25 (2026-04-19) |
 | ~~TOOL-34. Close charter→pick race — uncommitted charter rows invisible to worktree~~ | **Done** — `/charter` now commits roadmap + task-index edits; pick validates ID exists in HEAD before claiming (2026-04-19) |
 | TOOL-35. Fix `/pick` claiming parent ID when nested sub-items own worktrees | — |
+| TOOL-36. AbortController-based cancellation for in-flight SDK + exec calls | — |
 
 ---
 
@@ -310,6 +311,24 @@ Completed. See git history for implementation details.
 **Out of scope:**
 - Changing the roadmap hierarchy format itself — consumers with nested IDs are a supported shape.
 - Reworking `/pick`'s disambiguation prose — the marker is structural; the prose around it can evolve independently.
+
+---
+
+### TOOL-36. AbortController-based cancellation for in-flight SDK + exec calls
+
+| What | Scope | Deps |
+|------|-------|------|
+| The SIGINT handler in `pipeline.ts:811` only tears down the status bar before exiting — long-running SDK queries and child `exec` calls are not aborted, so Ctrl-C can leave orphaned subprocesses or hang waiting for a fetch response that the user has already given up on. Thread an `AbortController` through `runOrchestrator` and the step runner so SIGINT aborts the controller and every cancellable async caller observes the signal. Originally surfaced as a deferred slice of fathom DX-2; chartered here because autopilot is the right home. | S | — |
+
+**Deliverables:**
+- A single `AbortController` constructed at process top in `pipeline.ts`; signal threaded into `runOrchestrator(flags, opts, statusBar, signal)`.
+- SDK `query()` calls and any `execFile`/`spawn` invocations in step-runner accept the signal and pass it through (SDK clients already support `AbortSignal`).
+- SIGINT handler calls `controller.abort()` before exit; replace `process.exit(130)` with a graceful path that waits up to 2s for in-flight work to settle, then exits 130.
+- New test in `pipeline.test.ts` simulates SIGINT mid-step and asserts the in-flight mock is aborted and the process exits within the budget.
+
+**Out of scope:**
+- Resumable cancellation (i.e. "abort the current step, continue with the next"). One-shot teardown only.
+- Changing the exit code semantics for non-SIGINT failures.
 
 ---
 
