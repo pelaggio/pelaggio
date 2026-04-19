@@ -44,6 +44,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | ~~TOOL-32. `consumer: false` frontmatter flag — sync skips maintainer-only skills~~ | **Done** — `consumer: false` frontmatter filters maintainer-only skills from sync; `/bump-models` marked; summary line + check-skills lint added (2026-04-18) |
 | ~~TOOL-33. Autopilot run-quality fixes from Fathom telemetry (ship budget/model, pick exit reasons, dynamic implement budget, edit-loop threshold)~~ | **Done** — ship turn limit raised to 60, pick rejection reasons tagged, dynamic implement budget from plan file-count, edit-loop threshold raised to 25 (2026-04-19) |
 | ~~TOOL-34. Close charter→pick race — uncommitted charter rows invisible to worktree~~ | **Done** — `/charter` now commits roadmap + task-index edits; pick validates ID exists in HEAD before claiming (2026-04-19) |
+| TOOL-35. Extend gh/linear adapter tests with TOOL-31 new methods | TOOL-31 |
 
 ---
 

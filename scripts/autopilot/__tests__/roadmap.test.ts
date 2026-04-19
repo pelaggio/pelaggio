@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { describe, it } from "node:test";
@@ -150,5 +150,174 @@ describe("MarkdownRoadmap.markDone", () => {
 		execSync("git add -A && git commit -q -m 'seed'", { cwd: repo });
 		const r = new MarkdownRoadmap({ repo });
 		await assert.rejects(() => r.markDone("TOOL-404"), /TOOL-404 not found/);
+	});
+});
+
+describe("MarkdownRoadmap.listItems / getItem", () => {
+	function seedStandard(): string {
+		const repo = seedRepo();
+		seedFile(
+			repo,
+			"docs/roadmap-core.md",
+			[
+				"# Core",
+				"",
+				"| Item | Depends on |",
+				"|------|-----------|",
+				"| TOOL-1. Open one | — |",
+				"| TOOL-2. Blocked one | blocked: waiting on upstream |",
+				"| ~~TOOL-3. Done one~~ | **Done** |",
+				"",
+				"## Recently completed",
+				"",
+				"- TOOL-0 ✓",
+				"",
+			].join("\n"),
+		);
+		execSync("git add -A && git commit -q -m seed", { cwd: repo });
+		return repo;
+	}
+
+	it("lists open items with open/blocked status and skips done rows by default", async () => {
+		const repo = seedStandard();
+		const r = new MarkdownRoadmap({ repo });
+		const items = await r.listItems();
+		const ids = items.map((i) => i.id);
+		assert.deepEqual(ids, ["TOOL-1", "TOOL-2"]);
+		const blocked = items.find((i) => i.id === "TOOL-2");
+		assert.equal(blocked?.status, "blocked");
+		assert.equal(blocked?.blockedReason, "waiting on upstream");
+	});
+
+	it("listItems includeDone tags strike-through rows as done", async () => {
+		const repo = seedStandard();
+		const r = new MarkdownRoadmap({ repo });
+		const items = await r.listItems({ includeDone: true });
+		const done = items.find((i) => i.id === "TOOL-3");
+		assert.equal(done?.status, "done");
+	});
+
+	it("getItem returns 'done' for items in Recently completed list", async () => {
+		const repo = seedStandard();
+		const r = new MarkdownRoadmap({ repo });
+		const item = await r.getItem("TOOL-0");
+		assert.equal(item?.status, "done");
+	});
+
+	it("getItem returns null for unknown ids", async () => {
+		const repo = seedStandard();
+		const r = new MarkdownRoadmap({ repo });
+		assert.equal(await r.getItem("TOOL-999"), null);
+	});
+});
+
+describe("MarkdownRoadmap.resolvePlanPath", () => {
+	it("returns <worktree>/docs/plans/<id-lower>.md", () => {
+		const r = new MarkdownRoadmap({ repo: "/tmp/any" });
+		const path = r.resolvePlanPath({ id: "TOOL-9", worktree: "/wt" });
+		assert.equal(path, resolve("/wt", "docs", "plans", "tool-9.md"));
+	});
+});
+
+describe("MarkdownRoadmap.createItem", () => {
+	it("inserts a new row inside the Open items table of task-index (bug regression)", async () => {
+		const repo = seedRepo();
+		seedFile(repo, "docs/roadmap-core.md", ["# Core", "", "| Item | Depends on |", "|---|---|", "| TOOL-1. First | — |", ""].join("\n"));
+		seedFile(
+			repo,
+			"docs/task-index.md",
+			["# Index", "", "## Open items", "", "| ID | Title | Deps | Plan | Roadmap |", "|----|-------|------|------|---------|", "| TOOL-1 | First | — | — | core |", "", "## Recently completed", "", "- TOOL-0 ✓", ""].join("\n"),
+		);
+		execSync("git add -A && git commit -q -m seed", { cwd: repo });
+
+		const r = new MarkdownRoadmap({ repo });
+		const created = await r.createItem({ title: "New thing", scope: "M" });
+		assert.equal(created.id, "TOOL-2");
+
+		const index = readFileSync(resolve(repo, "docs/task-index.md"), "utf-8");
+		// New row must land BEFORE the "Recently completed" heading (inside the Open items table),
+		// not appended to the end of the file.
+		const newRowIdx = index.indexOf("| TOOL-2 | New thing |");
+		const completedIdx = index.indexOf("## Recently completed");
+		assert.ok(newRowIdx > 0, "new row should appear in task-index");
+		assert.ok(newRowIdx < completedIdx, "new row should land inside Open items, not after Recently completed");
+	});
+
+	it("appends to the configured target roadmap file", async () => {
+		const repo = seedRepo();
+		seedFile(repo, "docs/roadmap-core.md", ["# Core", "", "| Item | Depends on |", "|---|---|", "| TOOL-1. First | — |", ""].join("\n"));
+		seedFile(repo, "docs/roadmap-other.md", ["# Other", "", "| Item | Depends on |", "|---|---|", "| COMP-1. Other | — |", ""].join("\n"));
+		execSync("git add -A && git commit -q -m seed", { cwd: repo });
+
+		const r = new MarkdownRoadmap({ repo });
+		const created = await r.createItem({ title: "New other", scope: "S", roadmap: "other" });
+		assert.ok(created.id.startsWith("COMP-"));
+		const body = readFileSync(resolve(repo, "docs/roadmap-other.md"), "utf-8");
+		assert.match(body, /COMP-2\. New other/);
+	});
+});
+
+describe("MarkdownRoadmap.archivePlan", () => {
+	it("git-mvs the plan file from docs/plans to docs/archived and commits", async () => {
+		const repo = seedRepo();
+		seedFile(repo, "docs/plans/tool-9.md", "# plan\n");
+		execSync("git add -A && git commit -q -m seed", { cwd: repo });
+
+		const r = new MarkdownRoadmap({ repo });
+		await r.archivePlan("TOOL-9");
+
+		assert.ok(!existsSync(resolve(repo, "docs/plans/tool-9.md")));
+		assert.ok(existsSync(resolve(repo, "docs/archived/tool-9.md")));
+		const lastMsg = execSync("git log -1 --format=%s", { cwd: repo, encoding: "utf-8" }).trim();
+		assert.match(lastMsg, /docs: archive plan for TOOL-9/);
+	});
+
+	it("is a no-op when the plan file is absent", async () => {
+		const repo = seedRepo();
+		const r = new MarkdownRoadmap({ repo });
+		await r.archivePlan("TOOL-NONE");
+	});
+});
+
+describe("MarkdownRoadmap.isCharterPickRace", () => {
+	function commitIndex(dir: string, content: string): void {
+		seedFile(dir, "docs/task-index.md", content);
+		execSync("git add -A && git commit -q -m 'docs: task-index'", { cwd: dir });
+	}
+
+	it("returns false when item exists in both working tree and HEAD", () => {
+		const repo = seedRepo();
+		commitIndex(repo, "| TOOL-1 | Existing | — | — | core |\n");
+		const r = new MarkdownRoadmap({ repo });
+		assert.equal(r.isCharterPickRace("TOOL-1"), false);
+	});
+
+	it("returns true when item is in working tree but not HEAD (charter→pick race)", () => {
+		const repo = seedRepo();
+		commitIndex(repo, "| TOOL-1 | Existing | — | — | core |\n");
+		// Simulate /charter adding a new item without committing.
+		writeFileSync(resolve(repo, "docs", "task-index.md"), "| TOOL-1 | Existing | — | — | core |\n| TOOL-2 | New | — | — | core |\n");
+		const r = new MarkdownRoadmap({ repo });
+		assert.equal(r.isCharterPickRace("TOOL-2"), true);
+	});
+
+	it("returns false when item is absent from the working tree entirely", () => {
+		const repo = seedRepo();
+		commitIndex(repo, "| TOOL-1 | Existing | — | — | core |\n");
+		const r = new MarkdownRoadmap({ repo });
+		assert.equal(r.isCharterPickRace("TOOL-99"), false);
+	});
+
+	it("returns false when task-index.md does not exist", () => {
+		const repo = seedRepo();
+		const r = new MarkdownRoadmap({ repo });
+		assert.equal(r.isCharterPickRace("TOOL-1"), false);
+	});
+
+	it("returns true when task-index.md exists in working tree but HEAD has no such file", () => {
+		const repo = seedRepo();
+		seedFile(repo, "docs/task-index.md", "| TOOL-5 | Brand new | — | — | core |\n");
+		const r = new MarkdownRoadmap({ repo });
+		assert.equal(r.isCharterPickRace("TOOL-5"), true);
 	});
 });

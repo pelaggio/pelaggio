@@ -2,7 +2,7 @@ import { execSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { WORKTREE_PREFIX } from "../config.js";
-import type { GithubRoadmapConfig, MarkDoneContext, PlanLocation, RoadmapItem, RoadmapSource, RoadmapSourceName } from "./types.js";
+import type { CreateItemOpts, GithubRoadmapConfig, ItemStatus, MarkDoneContext, PlanLocation, RoadmapItem, RoadmapItemStatus, RoadmapSource, RoadmapSourceName } from "./types.js";
 
 const PLAN_MARKER = "<!-- autopilot-plan -->";
 
@@ -19,6 +19,7 @@ interface GhIssueSummary {
 	number: number;
 	title: string;
 	body: string;
+	state?: string;
 	labels?: { name: string }[];
 }
 
@@ -58,6 +59,86 @@ export class GitHubIssuesRoadmap implements RoadmapSource {
 
 	isQuickScope(text: string): boolean {
 		return /scope:\s*x?s\b/i.test(text) || /\bbug\b|\bfix:/i.test(text);
+	}
+
+	async listItems(opts?: { includeDone?: boolean }): Promise<RoadmapItemStatus[]> {
+		const state = opts?.includeDone ? "all" : "open";
+		const raw = this.runGh(["issue", "list", "--repo", this.ghRepo, "--label", this.label, "--state", state, "--json", "number,title,body,labels,state", "--limit", "200"]);
+		const issues = parseGhJson<GhIssueSummary[]>(raw, (v) => Array.isArray(v));
+		return issues.map((it) => {
+			const labels = (it.labels ?? []).map((l) => l.name);
+			let status: ItemStatus = "open";
+			if ((it.state ?? "").toLowerCase() === "closed") status = "done";
+			else if (labels.includes("blocked")) status = "blocked";
+			const item: RoadmapItemStatus = {
+				id: String(it.number),
+				title: it.title,
+				deps: extractDeps(it.body ?? ""),
+				sourceRef: `${this.ghRepo}#${it.number}`,
+				status,
+			};
+			return item;
+		});
+	}
+
+	async getItem(id: string): Promise<RoadmapItemStatus | null> {
+		try {
+			const raw = this.runGh(["issue", "view", id, "--repo", this.ghRepo, "--json", "number,title,body,labels,state"]);
+			const it = parseGhJson<GhIssueSummary>(raw, (v) => isPlainObject(v) && typeof (v as { number?: unknown }).number === "number");
+			const labels = (it.labels ?? []).map((l) => l.name);
+			let status: ItemStatus = "open";
+			if ((it.state ?? "").toLowerCase() === "closed") status = "done";
+			else if (labels.includes("blocked")) status = "blocked";
+			return {
+				id: String(it.number),
+				title: it.title,
+				deps: extractDeps(it.body ?? ""),
+				sourceRef: `${this.ghRepo}#${it.number}`,
+				status,
+			};
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : String(e);
+			if (/not found|could not resolve/i.test(msg)) return null;
+			throw e;
+		}
+	}
+
+	resolvePlanPath(ctx: { id: string; worktree: string }): string {
+		return resolve(ctx.worktree, ".dev", "plans", `${ctx.id}.md`);
+	}
+
+	async publishPlan(body: string, ctx: { id: string; worktree: string }): Promise<void> {
+		const marked = `${PLAN_MARKER}\n${body}`;
+		this.runGh(["issue", "comment", ctx.id, "--repo", this.ghRepo, "--body", marked]);
+	}
+
+	async createItem(opts: CreateItemOpts): Promise<RoadmapItem> {
+		const deps = opts.deps ?? [];
+		const bodyParts: string[] = [];
+		if (deps.length > 0) bodyParts.push(`Depends on: ${deps.join(", ")}`);
+		if (opts.scope) bodyParts.push(`Scope: ${opts.scope}`);
+		if (opts.priority) bodyParts.push(`Priority: ${opts.priority}`);
+		const body = bodyParts.join("\n");
+		const args = ["issue", "create", "--repo", this.ghRepo, "--title", opts.title, "--label", this.label, "--body", body];
+		if (opts.deferred) args.push("--label", "deferred");
+		const rawUrl = this.runGh(args).trim();
+		// `gh issue create` prints the URL on stdout.
+		const m = rawUrl.match(/\/issues\/(\d+)/);
+		const number = m ? m[1] : "";
+		return {
+			id: number,
+			title: opts.title,
+			deps: deps.join(", "),
+			sourceRef: `${this.ghRepo}#${number}`,
+		};
+	}
+
+	async archivePlan(_id: string): Promise<void> {
+		// No-op: closing the issue already moves it out of the open set.
+	}
+
+	isCharterPickRace(_id: string): boolean {
+		return false;
 	}
 
 	async listOpenItems(): Promise<RoadmapItem[]> {

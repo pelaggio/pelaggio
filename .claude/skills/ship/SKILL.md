@@ -10,14 +10,11 @@ allowed-tools: Read Edit Bash(git:*) Bash(pnpm:*) Bash(npx:*) Bash(gh pr:*)
 
 ## Context
 
-Run `git rev-parse --path-format=absolute --git-common-dir` — the output ends with `/.git`. Strip that suffix to get MAIN_REPO. Use the resulting absolute path in all paths below.
+Run `git rev-parse --path-format=absolute --git-common-dir` — the output ends with `/.git`. Strip that suffix to get MAIN_REPO.
 
-| Path | Purpose |
-|------|---------|
-| `{MAIN_REPO}/docs/plans/` | Implementation plans (keyed by branch) |
-| `{MAIN_REPO}/docs/roadmap-*.md` | Task-tracking planning docs |
+Roadmap lookups go through `npx claude-autopilot roadmap ...`; all mark-done / archive logic dispatches to the configured adapter.
 
-Resolve MAIN_REPO. Parse `$ARGUMENTS` for `--no-squash` and `--pr` flags.
+Parse `$ARGUMENTS` for `--no-squash` and `--pr` flags.
 
 **CWD rule**: run steps 1-3 from your current working directory (the worktree). `HEAD` here is your feature branch. After the merge (step 4), all remaining steps run in `{MAIN_REPO}` on `main`.
 
@@ -37,7 +34,7 @@ Resolve MAIN_REPO. Parse `$ARGUMENTS` for `--no-squash` and `--pr` flags.
 
 ## 2. Identify
 
-Get item ID from branch name (e.g. `feat/tool-16-refit-split` → `TOOL-16`). Find the source doc by grepping `{MAIN_REPO}/docs/roadmap-*.md` for that ID. Read the planning doc for title/description.
+Get item ID from the current branch name. Run `npx claude-autopilot roadmap get <ID> --json` to fetch title + description for the commit message. The `title` field is the commit subject source.
 
 ## 3. Squash (unless `--no-squash`)
 
@@ -68,7 +65,7 @@ If the output is empty (only the `/plan` artifact changed), **abort immediately*
 
 ## 4. Merge code
 
-**If `--pr`**: skip merge, `git push -u origin HEAD`, create PR via `gh pr create`. Then skip to step 9 (Report) — docs updates will happen when the PR is merged.
+**If `--pr`**: skip merge, `git push -u origin HEAD`, create PR via `gh pr create`. Then skip to step 8 (Report) — docs updates will happen when the PR is merged.
 
 **Otherwise** (direct merge):
 
@@ -92,43 +89,28 @@ git merge "$BRANCH" --no-edit
 
 If `pnpm-lock.yaml` was modified in the merge, run `pnpm install --frozen-lockfile` from `{MAIN_REPO}` first — the lockfile is merged but new packages won't be available until installed.
 
-Re-run the verification commands from `.claude/skills/_rubric.md`'s Verification section from `{MAIN_REPO}`. If any fail, **stop and fix** — do not push broken code to main. This catches regressions introduced by the merge itself (e.g., main moved while the feature branch was in flight).
+Re-run the verification commands from `.claude/skills/_rubric.md`'s Verification section from `{MAIN_REPO}`. If any fail, **stop and fix** — do not push broken code to main. This catches regressions introduced by the merge itself.
 
-## 6. Mark done (on main)
+## 6. Mark done
 
-All paths below use `{MAIN_REPO}` — you are now on `main`. The item ID, title, and description were already extracted in step 2.
+From `{MAIN_REPO}`, dispatch to the adapter:
 
-Update the item in its planning doc (detect checkbox vs table format):
-- Checkbox: `- [ ]` → `- [x]`, append ` *(YYYY-MM-DD)*`
-- Table: status → `**Done** — {description} (YYYY-MM-DD)`
-
-Check cross-references in other `{MAIN_REPO}/docs/roadmap-*.md` files.
-
-**Collapse the spec section**: in the roadmap, replace the item's full spec (the `### ID. Title` section with What/Scope/Deps table and Deliverables list) with:
-```
-### {ID}. {Title} ✓
-
-Completed. See git history for implementation details.
-```
-Keep the heading so links still resolve.
-
-**Update task index**: in `{MAIN_REPO}/docs/task-index.md`:
-- Remove the item's row from the "Open items" table
-- Add `- {ID} ✓` as a new line in the "Recently completed" list, in alphabetical order (alpha by prefix, then numeric within prefix)
-
-## 7. Archive plan docs (on main)
-
-If a plan file exists in `{MAIN_REPO}/docs/plans/` for this item (filename matches the branch slug or item ID prefix) and the work is complete: `git mv` it to `docs/archived/`. Don't archive multi-item or in-progress docs.
-
-## 8. Commit doc updates and push
-
-Stage and commit all doc changes from steps 6-7 as a separate commit on `main`:
 ```bash
-git add docs/
-git commit -m "docs: mark {item ID} done"
+npx claude-autopilot roadmap mark-done <ID> --note "<short description>"
 ```
 
-Then push:
+Markdown adapter: strikes the roadmap row, moves the task-index entry to "Recently completed", and commits internally. Github-issues: posts a comment and closes the issue. Linear: posts a comment and transitions the issue to completed. Either way, nothing further to stage on `main`.
+
+## 7. Archive plan docs
+
+```bash
+npx claude-autopilot roadmap archive-plan <ID>
+```
+
+Markdown: `git mv` the plan from `docs/plans/` to `docs/archived/` and commit. Gh/linear: no-op.
+
+## 8. Push
+
 ```bash
 git push origin main
 ```
@@ -154,4 +136,4 @@ If `git worktree remove` fails because of files the consuming project left behin
 
 ## 10. Report
 
-What shipped: item, branch, commit, planning doc updated, archives, worktree status.
+What shipped: item, branch, commit, archives, worktree status.

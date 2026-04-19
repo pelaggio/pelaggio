@@ -4,7 +4,9 @@ import { MarkdownRoadmap } from "./markdown.js";
 import { type GithubRoadmapConfig, type LinearRoadmapConfig, ROADMAP_SOURCE_NAMES, type RoadmapSource, type RoadmapSourceName } from "./types.js";
 
 export {
+	type CreateItemOpts,
 	type GithubRoadmapConfig,
+	type ItemStatus,
 	isPlanLocation,
 	isRoadmapSourceName,
 	type LinearRoadmapConfig,
@@ -13,6 +15,7 @@ export {
 	type PlanLocation,
 	ROADMAP_SOURCE_NAMES,
 	type RoadmapItem,
+	type RoadmapItemStatus,
 	type RoadmapSource,
 	type RoadmapSourceName,
 } from "./types.js";

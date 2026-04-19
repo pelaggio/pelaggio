@@ -2,7 +2,7 @@ import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { WORKTREE_PREFIX } from "../config.js";
-import type { LinearRoadmapConfig, MarkDoneContext, PlanLocation, RoadmapItem, RoadmapSource, RoadmapSourceName } from "./types.js";
+import type { CreateItemOpts, ItemStatus, LinearRoadmapConfig, MarkDoneContext, PlanLocation, RoadmapItem, RoadmapItemStatus, RoadmapSource, RoadmapSourceName } from "./types.js";
 
 const PLAN_MARKER = "<!-- autopilot-plan -->";
 const IN_PROGRESS_LABEL = "in-progress";
@@ -25,13 +25,14 @@ export interface LinearCommentNode {
  * Tests inject a stub implementation; production path lazy-imports `@linear/sdk`.
  */
 export interface LinearApi {
-	listIssues(opts: { teamId: string; label?: string }): Promise<LinearIssueListItem[]>;
-	getIssue(identifier: string): Promise<{ id: string; identifier: string; title: string } | null>;
+	listIssues(opts: { teamId: string; label?: string; includeDone?: boolean }): Promise<LinearIssueListItem[]>;
+	getIssue(identifier: string): Promise<{ id: string; identifier: string; title: string; description?: string | null; stateType?: string; labels?: string[]; relations?: { type: string; relatedIdentifier: string }[] } | null>;
 	createComment(issueId: string, body: string): Promise<void>;
 	transitionIssue(issueId: string, teamId: string, stateType: "started" | "completed"): Promise<void>;
 	addLabel(issueId: string, labelName: string): Promise<void>;
 	removeLabel(issueId: string, labelName: string): Promise<void>;
 	getIssueComments(identifier: string): Promise<LinearCommentNode[]>;
+	createIssue(input: { teamId: string; title: string; description?: string; labelNames?: string[] }): Promise<{ id: string; identifier: string; title: string }>;
 }
 
 export interface LinearRoadmapOpts extends LinearRoadmapConfig {
@@ -74,6 +75,79 @@ export class LinearRoadmap implements RoadmapSource {
 
 	isQuickScope(text: string): boolean {
 		return /scope:\s*x?s\b/i.test(text) || /\bbug\b|\bfix:/i.test(text);
+	}
+
+	async listItems(opts?: { includeDone?: boolean }): Promise<RoadmapItemStatus[]> {
+		const api = await this.api();
+		const issues = await api.listIssues({ teamId: this.teamId, label: this.label || undefined, includeDone: opts?.includeDone });
+		return issues.map((it) => {
+			const relations = it.relations ?? [];
+			const blocked = relations.some((r) => r.type === "blocked_by");
+			const status: ItemStatus = blocked ? "blocked" : "open";
+			return {
+				id: it.identifier,
+				title: it.title,
+				deps: formatDeps(relations),
+				sourceRef: it.identifier,
+				status,
+			};
+		});
+	}
+
+	async getItem(id: string): Promise<RoadmapItemStatus | null> {
+		const api = await this.api();
+		const issue = await api.getIssue(id);
+		if (!issue) return null;
+		const relations = issue.relations ?? [];
+		let status: ItemStatus = "open";
+		if (issue.stateType === "completed" || issue.stateType === "canceled") status = "done";
+		else if (relations.some((r) => r.type === "blocked_by")) status = "blocked";
+		return {
+			id: issue.identifier,
+			title: issue.title,
+			deps: formatDeps(relations),
+			sourceRef: issue.identifier,
+			status,
+		};
+	}
+
+	resolvePlanPath(ctx: { id: string; worktree: string }): string {
+		return resolve(ctx.worktree, ".dev", "plans", `${ctx.id.toLowerCase()}.md`);
+	}
+
+	async publishPlan(body: string, ctx: { id: string; worktree: string }): Promise<void> {
+		const api = await this.api();
+		const issue = await api.getIssue(ctx.id);
+		if (!issue) throw new Error(`Linear issue not found: ${ctx.id}`);
+		const marked = `${PLAN_MARKER}\n${body}`;
+		await api.createComment(issue.id, marked);
+	}
+
+	async createItem(opts: CreateItemOpts): Promise<RoadmapItem> {
+		const api = await this.api();
+		const parts: string[] = [];
+		if (opts.deps && opts.deps.length > 0) parts.push(`Depends on: ${opts.deps.join(", ")}`);
+		if (opts.scope) parts.push(`Scope: ${opts.scope}`);
+		if (opts.priority) parts.push(`Priority: ${opts.priority}`);
+		const description = parts.join("\n");
+		const labelNames: string[] = [];
+		if (this.label) labelNames.push(this.label);
+		if (opts.deferred) labelNames.push("deferred");
+		const created = await api.createIssue({ teamId: this.teamId, title: opts.title, description: description || undefined, labelNames: labelNames.length > 0 ? labelNames : undefined });
+		return {
+			id: created.identifier,
+			title: created.title,
+			deps: (opts.deps ?? []).join(", "),
+			sourceRef: created.identifier,
+		};
+	}
+
+	async archivePlan(_id: string): Promise<void> {
+		// No-op: plan lives on the issue; closing moves it out of open set.
+	}
+
+	isCharterPickRace(_id: string): boolean {
+		return false;
 	}
 
 	async listOpenItems(): Promise<RoadmapItem[]> {
@@ -209,8 +283,10 @@ interface LinearSdkIssue {
 	title: string;
 	description: string | null;
 	labelIds?: string[];
+	state?: { type: string } | (() => Promise<{ type: string } | null>);
 	relations?: () => Promise<{ nodes: LinearSdkRelation[] }>;
 	comments?: () => Promise<{ nodes: LinearSdkComment[] }>;
+	labels?: () => Promise<{ nodes: { name: string }[] }>;
 }
 
 interface LinearSdkRelation {
@@ -230,6 +306,7 @@ interface LinearSdkClient {
 	updateIssue(id: string, input: { stateId?: string; labelIds?: string[] }): Promise<unknown>;
 	workflowStates(args: unknown): Promise<{ nodes: { id: string; type: string }[] }>;
 	issueLabels(args: unknown): Promise<{ nodes: { id: string; name: string }[] }>;
+	createIssue(input: { teamId: string; title: string; description?: string; labelIds?: string[] }): Promise<{ issue?: () => Promise<LinearSdkIssue | null> }>;
 }
 
 interface LinearSdkModule {
@@ -261,11 +338,11 @@ async function defaultLinearApi(): Promise<LinearApi> {
 	}
 
 	return {
-		async listIssues({ teamId, label }) {
+		async listIssues({ teamId, label, includeDone }) {
 			const filter: Record<string, unknown> = {
 				team: { id: { eq: teamId } },
-				state: { type: { in: ["unstarted", "backlog", "triage"] } },
 			};
+			if (!includeDone) filter.state = { type: { in: ["unstarted", "backlog", "triage"] } };
 			if (label) filter.labels = { some: { name: { eq: label } } };
 			const res = await client.issues({ filter, first: 200 });
 			const items: LinearIssueListItem[] = [];
@@ -285,7 +362,27 @@ async function defaultLinearApi(): Promise<LinearApi> {
 		async getIssue(identifier) {
 			const issue = await client.issue(identifier);
 			if (!issue) return null;
-			return { id: issue.id, identifier: issue.identifier, title: issue.title };
+			let stateType: string | undefined;
+			if (typeof issue.state === "function") {
+				const s = await issue.state();
+				stateType = s?.type;
+			} else if (issue.state && typeof issue.state === "object") {
+				stateType = (issue.state as { type: string }).type;
+			}
+			const relations: { type: string; relatedIdentifier: string }[] = [];
+			if (typeof issue.relations === "function") {
+				const rel = await issue.relations();
+				for (const r of rel.nodes) {
+					const related = typeof r.relatedIssue === "function" ? await r.relatedIssue() : null;
+					if (related?.identifier) relations.push({ type: r.type, relatedIdentifier: related.identifier });
+				}
+			}
+			let labels: string[] | undefined;
+			if (typeof issue.labels === "function") {
+				const l = await issue.labels();
+				labels = l.nodes.map((n) => n.name);
+			}
+			return { id: issue.id, identifier: issue.identifier, title: issue.title, description: issue.description ?? null, stateType, labels, relations };
 		},
 		async createComment(issueId, body) {
 			await client.createComment({ issueId, body });
@@ -316,6 +413,20 @@ async function defaultLinearApi(): Promise<LinearApi> {
 				body: c.body,
 				createdAt: typeof c.createdAt === "string" ? c.createdAt : c.createdAt.toISOString(),
 			}));
+		},
+		async createIssue({ teamId, title, description, labelNames }) {
+			const labelIds: string[] = [];
+			for (const name of labelNames ?? []) {
+				const id = await resolveLabelId(name);
+				if (id) labelIds.push(id);
+			}
+			const input: { teamId: string; title: string; description?: string; labelIds?: string[] } = { teamId, title };
+			if (description) input.description = description;
+			if (labelIds.length > 0) input.labelIds = labelIds;
+			const res = await client.createIssue(input);
+			const issue = typeof res.issue === "function" ? await res.issue() : null;
+			if (!issue) throw new Error("Linear createIssue returned no issue");
+			return { id: issue.id, identifier: issue.identifier, title: issue.title };
 		},
 	};
 }

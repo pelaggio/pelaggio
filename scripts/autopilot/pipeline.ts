@@ -14,7 +14,6 @@ import {
 	fmtWait,
 	getHeadSha,
 	hasDeliverableCommits,
-	isCharterPickRace,
 	listWorktrees as listWorktreesDefault,
 	parsePickResult,
 	parseVerdict,
@@ -159,7 +158,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			if (parkSignal.parked) return finish({ itemId: null, completed: false, cost, error: "parked" });
 			const worktreesBefore = new Set(opts.dryRun ? [] : listWorktrees());
 
-			if (!opts.dryRun && itemId && isCharterPickRace(itemId, REPO)) {
+			if (!opts.dryRun && itemId && roadmap.isCharterPickRace(itemId)) {
 				return finish({ itemId, completed: false, cost, error: "pick:unknown-id" });
 			}
 			log(`/pick ${itemId ?? "next"}`);

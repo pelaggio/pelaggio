@@ -1,7 +1,7 @@
 ---
 name: tidy
 description: Clean up roadmaps — archive completed tracks, remove stale worktrees, verify codebase health
-allowed-tools: Read Glob Grep Edit Bash(git:*) Bash(pnpm:*)
+allowed-tools: Read Glob Grep Edit Bash(git:*) Bash(pnpm:*) Bash(npx:*)
 ---
 
 # /tidy — Roadmap & Workspace Cleanup
@@ -12,7 +12,9 @@ Periodic maintenance: archive completed work, prune stale state, verify health.
 
 Run `git rev-parse --path-format=absolute --git-common-dir` — the output ends with `/.git`. Strip that suffix to get MAIN_REPO.
 
-## 1. Roadmap audit
+Detect the configured roadmap source via `npx claude-autopilot roadmap source` (prints e.g. `markdown`, `github-issues`, `linear`). Sections §1 and §1b below are markdown-specific — **skip them** when the source is not `markdown` (remote adapters own their own archival/indexing; there is no local roadmap file or task index to sync).
+
+## 1. Roadmap audit (markdown only)
 
 Glob `{MAIN_REPO}/docs/roadmap-*.md`. For each file, count done vs pending items.
 
@@ -33,7 +35,7 @@ Glob `{MAIN_REPO}/docs/roadmap-*.md`. For each file, count done vs pending items
 - If a track/section within a roadmap is 100% done and has 5+ items, consider collapsing the detail into a one-line summary (e.g. "Sync Track: 5/5 Done (see archived/roadmap-phase3.md)")
 - Don't archive tracks with <5 items — not worth the churn
 
-## 1b. Task index sync
+## 1b. Task index sync (markdown only)
 
 Read `{MAIN_REPO}/docs/task-index.md` and verify it matches the roadmap state:
 - Every "Not started" item in roadmaps should appear in the "Open items" table
