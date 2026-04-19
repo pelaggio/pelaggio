@@ -186,7 +186,8 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				return finish({ itemId, completed: false, cost, error: "pick:unknown-id" });
 			}
 			log(`/pick ${itemId ?? "next"}`);
-			const pick = await step("pick", expandSkill("pick", itemId ?? "next"), mainRepo);
+			const pickArgs = itemId ? (opts.noWorktree ? `${itemId} --no-worktree` : itemId) : "next";
+			const pick = await step("pick", expandSkill("pick", pickArgs), mainRepo);
 			cost += pick.cost;
 			pickText = pick.text + "\n" + pick.fullText;
 
@@ -202,20 +203,25 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			itemId = opts.dryRun ? (itemId ?? "DRY") : (parsePickItem(pickText) ?? (await roadmap.parseItemId(pick.text)) ?? (await roadmap.parseItemId(pick.fullText)));
 			if (!itemId) return finish({ itemId: null, completed: false, cost, error: "no item ID parsed" });
 
-			worktree = _resolveWorktree(itemId);
-			if (!opts.dryRun && (!existsSync(worktree) || worktreesBefore.has(worktree))) {
-				const newWt = listWorktrees().find((p) => !worktreesBefore.has(p) && p.includes(WORKTREE_PREFIX));
-				if (newWt) worktree = newWt;
-				else if (!existsSync(worktree)) {
-					const idLower = itemId.toLowerCase();
-					const expected = `${WORKTREE_PREFIX}${idLower}`;
-					const nested = listWorktrees().filter((p) => {
-						const base = p.split(/[/\\]/).pop() ?? "";
-						return base === expected || base.startsWith(`${expected}-`);
-					});
-					if (nested.length === 1) worktree = nested[0];
-					else if (nested.length > 1) return finish({ itemId, completed: false, cost, error: `worktree ambiguous: ${nested.join(", ")}` });
-					else return finish({ itemId, completed: false, cost, error: "worktree missing" });
+			if (opts.noWorktree) {
+				// In no-worktree mode, the feature branch was checked out in-place.
+				worktree = mainRepo;
+			} else {
+				worktree = _resolveWorktree(itemId);
+				if (!opts.dryRun && (!existsSync(worktree) || worktreesBefore.has(worktree))) {
+					const newWt = listWorktrees().find((p) => !worktreesBefore.has(p) && p.includes(WORKTREE_PREFIX));
+					if (newWt) worktree = newWt;
+					else if (!existsSync(worktree)) {
+						const idLower = itemId.toLowerCase();
+						const expected = `${WORKTREE_PREFIX}${idLower}`;
+						const nested = listWorktrees().filter((p) => {
+							const base = p.split(/[/\\]/).pop() ?? "";
+							return base === expected || base.startsWith(`${expected}-`);
+						});
+						if (nested.length === 1) worktree = nested[0];
+						else if (nested.length > 1) return finish({ itemId, completed: false, cost, error: `worktree ambiguous: ${nested.join(", ")}` });
+						else return finish({ itemId, completed: false, cost, error: "worktree missing" });
+					}
 				}
 			}
 		} finally {
@@ -565,10 +571,21 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 	}
 	const shipTarget = getShipTarget(shipTargetName);
 
+	// Resolve no-worktree: --no-worktree flag, CI=true, or CLAUDE_AUTOPILOT_SINGLE_SHOT=1
+	const noWorktree = flags["no-worktree"] || process.env.CI === "true" || process.env.CLAUDE_AUTOPILOT_SINGLE_SHOT === "1";
+	if (noWorktree && !flags.item) {
+		console.error("--no-worktree / CI mode requires --item <ID> (explicit item required; no auto-pick)");
+		return { exitCode: 2, results };
+	}
+	if (noWorktree && Number(flags.parallel) > 1) {
+		console.error("--no-worktree / CI mode does not support --parallel > 1");
+		return { exitCode: 2, results };
+	}
+
 	// Resume mode
 	if (flags.resume) {
 		const id = flags.resume.toUpperCase();
-		const worktree = _resolveWorktree(id);
+		const worktree = noWorktree ? REPO : _resolveWorktree(id);
 		const startFrom = _detectResumeStep(id, worktree);
 		const v = flags.verbose;
 		console.log(`${A.bold("resume")} ${id} from ${A.bold(startFrom)}`);
@@ -589,6 +606,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				dryRun: false,
 				workerStatus: status,
 				liveStatus,
+				...(noWorktree ? { noWorktree: true } : {}),
 				...(signal ? { signal } : {}),
 			},
 			parkSignal,
@@ -683,6 +701,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					workerStatus: status,
 					logPath,
 					liveStatus,
+					...(noWorktree ? { noWorktree: true } : {}),
 					...(signal ? { signal } : {}),
 				},
 				parkSignal,
@@ -776,7 +795,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 
 		const resumeResults = await Promise.all(
 			parkedItems.map(async (id, i) => {
-				const wt = _resolveWorktree(id);
+				const wt = noWorktree ? REPO : _resolveWorktree(id);
 				const sf = _detectResumeStep(id, wt);
 				const st: CycleStatus = { itemId: id, status: "running", cost: 0 };
 				liveStatus.cycles.push(st);
@@ -800,6 +819,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 									})()
 								: undefined,
 						liveStatus,
+						...(noWorktree ? { noWorktree: true } : {}),
 						...(signal ? { signal } : {}),
 					},
 					parkSignal,

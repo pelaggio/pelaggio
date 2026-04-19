@@ -107,10 +107,11 @@ async function cmdClaim(args: Args): Promise<number> {
 	const roadmap = makeRoadmap();
 	const id = args.positional[0];
 	if (!id) {
-		process.stderr.write("usage: roadmap claim <id>\n");
+		process.stderr.write("usage: roadmap claim <id> [--no-worktree]\n");
 		return 1;
 	}
-	const { branch, worktree } = await roadmap.claimItem(id);
+	const noWorktree = args.flags["no-worktree"] === true;
+	const { branch, worktree } = await roadmap.claimItem(id, noWorktree ? { noWorktree: true } : undefined);
 	process.stdout.write(`branch=${branch}\nworktree=${worktree}\n`);
 	return 0;
 }

@@ -31,6 +31,11 @@ const EDIT_LOOP_THRESHOLD = 22;
 // skipped here. Steps editing code (`implement`, `shakedown-code`) keep it.
 const EDIT_LOOP_EXEMPT_STEPS: ReadonlySet<Step> = new Set(["plan", "shakedown-plan"]);
 
+/** True when `cwd` is a sibling worktree, not the main repo. Exported for testing. */
+export function isWorktreePath(cwd: string, repo: string): boolean {
+	return resolve(cwd) !== resolve(repo);
+}
+
 // Plan-polish guard: during `implement`, block writes to docs/plans/ so the model
 // executes the plan instead of editing it. Surfaced as a named helper because the
 // reason — not the mechanics — is the non-obvious part worth locating.
@@ -67,7 +72,7 @@ export async function runStep(name: Step, prompt: string, opts: RunStepOpts, emi
 	const t0 = Date.now();
 
 	// Worktree guardrail: block mutating tools that target the main repo
-	const isWorktree = resolve(opts.cwd) !== resolve(REPO);
+	const isWorktree = isWorktreePath(opts.cwd, REPO);
 
 	// Mid-cycle drift guard: re-evaluate the shared-node_modules decision
 	// before each worktree-cwd step. If the branch bumped pnpm-lock.yaml,

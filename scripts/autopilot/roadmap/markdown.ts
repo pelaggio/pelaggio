@@ -131,8 +131,12 @@ export class MarkdownRoadmap implements RoadmapSource {
 		return null;
 	}
 
-	async claimItem(id: string): Promise<{ branch: string; worktree: string }> {
+	async claimItem(id: string, opts?: { noWorktree?: boolean }): Promise<{ branch: string; worktree: string }> {
 		const branch = `feat/${id.toLowerCase()}`;
+		if (opts?.noWorktree) {
+			execSync(`git checkout -b ${branch} main`, { cwd: this.repo, stdio: "pipe" });
+			return { branch, worktree: this.repo };
+		}
 		const prefix = process.env.CLAUDE_AUTOPILOT_WORKTREE_PREFIX ?? `${this.repo.split("/").pop()}-`;
 		const worktree = resolve(this.repo, "..", `${prefix}${id.toLowerCase()}`);
 		execSync(`git worktree add -b ${branch} ${worktree} main`, { cwd: this.repo, stdio: "pipe" });

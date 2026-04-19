@@ -152,12 +152,11 @@ export class GitHubIssuesRoadmap implements RoadmapSource {
 		}));
 	}
 
-	async claimItem(id: string): Promise<{ branch: string; worktree: string }> {
+	async claimItem(id: string, opts?: { noWorktree?: boolean }): Promise<{ branch: string; worktree: string }> {
 		const titleRaw = this.runGh(["issue", "view", id, "--repo", this.ghRepo, "--json", "title"]);
 		const { title } = parseGhJson<GhIssueTitle>(titleRaw, (v) => isPlainObject(v) && typeof (v as { title?: unknown }).title === "string");
 		const slug = kebab(title).slice(0, 40);
 		const branch = `feat/issue-${id}${slug ? `-${slug}` : ""}`;
-		const worktree = resolve(this.repo, "..", `${WORKTREE_PREFIX}${id.toLowerCase()}`);
 
 		// Best-effort label add — advisory, not critical.
 		try {
@@ -166,6 +165,11 @@ export class GitHubIssuesRoadmap implements RoadmapSource {
 			// swallowed — label may not exist on the repo
 		}
 
+		if (opts?.noWorktree) {
+			execSync(`git checkout -b ${branch} main`, { cwd: this.repo, stdio: "pipe" });
+			return { branch, worktree: this.repo };
+		}
+		const worktree = resolve(this.repo, "..", `${WORKTREE_PREFIX}${id.toLowerCase()}`);
 		execSync(`git worktree add -b ${branch} ${worktree} main`, { cwd: this.repo, stdio: "pipe" });
 		return { branch, worktree };
 	}
