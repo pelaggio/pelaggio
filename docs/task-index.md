@@ -10,7 +10,6 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 
 | ID | Title | Deps | Plan | Roadmap |
 |----|-------|------|------|---------|
-| TOOL-36 | AbortController-based cancellation for in-flight SDK + exec calls | — | — | core |
 | TOOL-37 | GitHub Issues bug → autopilot PR POC (no-worktree + CI workflow, dogfooded) | — | — | core |
 | TOOL-38 | Convert repo to pnpm workspace monorepo (packages/autopilot + placeholder packages/server) | — | — | core |
 | TOOL-39 | Autopilot control-plane daemon (local, tailnet-bound, Hono + systemd) | TOOL-38 | — | core |
@@ -20,6 +19,7 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 
 ## Recently completed
 
+- TOOL-36 ✓
 - TOOL-35 ✓
 - TOOL-1 ✓
 - TOOL-2 ✓
