@@ -44,6 +44,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | ~~TOOL-32. `consumer: false` frontmatter flag — sync skips maintainer-only skills~~ | **Done** — `consumer: false` frontmatter filters maintainer-only skills from sync; `/bump-models` marked; summary line + check-skills lint added (2026-04-18) |
 | ~~TOOL-33. Autopilot run-quality fixes from Fathom telemetry (ship budget/model, pick exit reasons, dynamic implement budget, edit-loop threshold)~~ | **Done** — ship turn limit raised to 60, pick rejection reasons tagged, dynamic implement budget from plan file-count, edit-loop threshold raised to 25 (2026-04-19) |
 | ~~TOOL-34. Close charter→pick race — uncommitted charter rows invisible to worktree~~ | **Done** — `/charter` now commits roadmap + task-index edits; pick validates ID exists in HEAD before claiming (2026-04-19) |
+| TOOL-35. Fix `/pick` claiming parent ID when nested sub-items own worktrees | — |
 
 ---
 
@@ -291,6 +292,24 @@ Completed. See git history for implementation details.
 ### TOOL-34. Close charter→pick race — uncommitted charter rows invisible to worktree ✓
 
 Completed. See git history for implementation details.
+
+---
+
+### TOOL-35. Fix `/pick` claiming parent ID when nested sub-items own worktrees
+
+| What | Scope | Deps |
+|------|-------|------|
+| Filed as GitHub issue #1 by the fathom consumer. On hierarchical item IDs (`COMP-11` → `COMP-11c-ii`), the pipeline claims the parent ID then errors `worktree missing` because three interacting layers all misbehave: `parseItemId` is greedy and stops at the first numeric group, pick-claim detection in `pipeline.ts` fuzzy-matches the word "successfully" in discursive replies, and `_resolveWorktree` doesn't cross-reference `git worktree list`. Observed in 2/14 cycles on 2026-04-19 against fathom. | S | — |
+
+**Deliverables:**
+- **Prefer longest-match in `parseItemId`** (`scripts/autopilot/roadmap/markdown.ts`): resolve branch-form slugs against the known open-items list and pick the longest ID whose normalized form is a prefix of the slug, instead of returning the shortest regex hit.
+- **Machine-readable claim marker in `/pick`**: have the skill body emit `CLAIMED: <ID>` on a line by itself on success; tighten the detection regex in `pipeline.ts:166` to match that marker instead of keyword-scanning for `claimed|worktree add|successfully`.
+- **Cross-reference `listWorktrees()` before erroring** (`pipeline.ts:171-175`): if `_resolveWorktree(itemId)` fails, scan in-flight worktrees for branches whose slug extends `itemId`; if exactly one matches, use it; if multiple or none, abort with a clearer error naming the in-flight children.
+- **Test coverage**: extend `parseItemId` tests for hierarchical IDs (`FOO-1` vs `FOO-1a-ii`); add a pipeline test that simulates a pick reply naming a blocked parent while a sub-item worktree exists.
+
+**Out of scope:**
+- Changing the roadmap hierarchy format itself — consumers with nested IDs are a supported shape.
+- Reworking `/pick`'s disambiguation prose — the marker is structural; the prose around it can evolve independently.
 
 ---
 
