@@ -185,7 +185,7 @@ export function makeMockRoadmap(overrides: Partial<RoadmapSource> = {}): Roadmap
 		isCharterPickRace() {
 			return false;
 		},
-		parseItemId(text) {
+		async parseItemId(text) {
 			const m = text.match(/\b([A-Z]{1,4}-?\d[\dA-Z]*)\b/);
 			return m?.[1] ?? null;
 		},

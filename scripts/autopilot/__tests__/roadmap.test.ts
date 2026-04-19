@@ -38,19 +38,46 @@ describe("getRoadmapSource — factory", () => {
 describe("MarkdownRoadmap.parseItemId", () => {
 	const r = new MarkdownRoadmap({ repo: "/tmp" });
 
-	it("extracts from feat/ branch names", () => {
-		assert.equal(r.parseItemId("feat/tool-9-roadmap"), "TOOL-9");
-		assert.equal(r.parseItemId("checked out feat/a11y4-fix"), "A11Y4");
-		assert.equal(r.parseItemId("feat/fore-2-follow"), "FORE-2");
+	it("extracts from feat/ branch names (fallback path — no known items)", async () => {
+		assert.equal(await r.parseItemId("feat/tool-9-roadmap"), "TOOL-9");
+		assert.equal(await r.parseItemId("checked out feat/a11y4-fix"), "A11Y4");
+		assert.equal(await r.parseItemId("feat/fore-2-follow"), "FORE-2");
 	});
 
-	it("extracts explicit uppercase IDs", () => {
-		assert.equal(r.parseItemId("claimed TOOL-9 successfully"), "TOOL-9");
-		assert.equal(r.parseItemId("item COMP13"), "COMP13");
+	it("extracts explicit uppercase IDs (fallback path)", async () => {
+		assert.equal(await r.parseItemId("claimed TOOL-9 successfully"), "TOOL-9");
+		assert.equal(await r.parseItemId("item COMP13"), "COMP13");
 	});
 
-	it("returns null when no ID found", () => {
-		assert.equal(r.parseItemId("nothing in here"), null);
+	it("returns null when no ID found", async () => {
+		assert.equal(await r.parseItemId("nothing in here"), null);
+	});
+
+	function seedRoadmap(ids: string[]): MarkdownRoadmap {
+		const repo = seedRepo();
+		const rows = ids.map((id) => `| ${id}. Title for ${id} | — |`).join("\n");
+		seedFile(repo, "docs/roadmap-core.md", ["# Core", "", "| Item | Depends on |", "|------|-----------|", rows, ""].join("\n"));
+		return new MarkdownRoadmap({ repo });
+	}
+
+	it("hierarchical: picks longest known ID that is a prefix of the branch slug", async () => {
+		const src = seedRoadmap(["COMP-11", "COMP-11C", "COMP-11C-II"]);
+		assert.equal(await src.parseItemId("feat/comp-11c-ii-fixes"), "COMP-11C-II");
+	});
+
+	it("hierarchical: baseline TOOL-9 preserved when only TOOL-9 is known", async () => {
+		const src = seedRoadmap(["TOOL-9"]);
+		assert.equal(await src.parseItemId("feat/tool-9-roadmap-source"), "TOOL-9");
+	});
+
+	it("hierarchical: known-parent-only stops at the parent (does not invent deeper form)", async () => {
+		const src = seedRoadmap(["COMP-11"]);
+		assert.equal(await src.parseItemId("feat/comp-11c-ii-fixes"), "COMP-11");
+	});
+
+	it("explicit-ID path disambiguates between known parent and child", async () => {
+		const src = seedRoadmap(["COMP-11", "COMP-11C"]);
+		assert.equal(await src.parseItemId("claimed COMP-11C successfully"), "COMP-11C");
 	});
 });
 

@@ -47,7 +47,7 @@ export class GitHubIssuesRoadmap implements RoadmapSource {
 		this.ghRun = opts.ghRun ?? defaultGhRun;
 	}
 
-	parseItemId(text: string): string | null {
+	async parseItemId(text: string): Promise<string | null> {
 		const branch = text.match(/feat\/issue-(\d+)/);
 		if (branch) return branch[1];
 		const hash = text.match(/#(\d+)/);
@@ -185,7 +185,7 @@ export class GitHubIssuesRoadmap implements RoadmapSource {
 		if (this.planLocation !== "issue-comment") {
 			throw new Error(`plan-location '${this.planLocation}' not yet implemented for TOOL-10; track TOOL-10.1`);
 		}
-		const n = this.resolveIssueNumber(ref);
+		const n = await this.resolveIssueNumber(ref);
 		if (!n) return null;
 
 		const local = this.findPlanFile(n);
@@ -207,15 +207,15 @@ export class GitHubIssuesRoadmap implements RoadmapSource {
 		return destPath;
 	}
 
-	private resolveIssueNumber(ref: { worktree?: string; id?: string }): string | null {
+	private async resolveIssueNumber(ref: { worktree?: string; id?: string }): Promise<string | null> {
 		if (ref.id) {
-			const digits = ref.id.match(/^\d+$/) ? ref.id : this.parseItemId(ref.id);
+			const digits = ref.id.match(/^\d+$/) ? ref.id : await this.parseItemId(ref.id);
 			if (digits) return digits;
 		}
 		if (ref.worktree) {
 			try {
 				const branch = execSync("git branch --show-current", { cwd: ref.worktree, encoding: "utf-8" }).trim();
-				const n = this.parseItemId(branch);
+				const n = await this.parseItemId(branch);
 				if (n) return n;
 			} catch {
 				// fall through

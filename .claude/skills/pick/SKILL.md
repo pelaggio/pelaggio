@@ -56,17 +56,18 @@ If the `feat/<id-lower>-*` branch already exists, report it, ask whether to reus
 3. Report: item, branch, worktree, related docs, dependencies.
    Next step: "Open a new terminal, `cd {worktree}`, run `claude`, then `/plan`."
 
-4. Emit a final `pick-result: claimed` line (see below).
+4. Emit `pick-item: <ID>` on its own line (the ID you just claimed, e.g. `pick-item: COMP-11C-II`) immediately followed by `pick-result: claimed` on the next line. The pipeline reads the ID from this marker — free-text ID mentions elsewhere in the output can be ambiguous when parent/child IDs share a prefix.
 
 ## Result tag
 
-Every exit path MUST end with a single structured line on its own:
+Every claim path MUST end with two structured lines on their own:
 
 ```
+pick-item: <ID>
 pick-result: <tag>
 ```
 
-where `<tag>` is one of:
+`pick-item:` is only emitted on the `claimed` path (it names the successfully-claimed ID). All other exit paths emit just `pick-result: <tag>`, where `<tag>` is one of:
 
 | Tag | When |
 |-----|------|

@@ -83,7 +83,7 @@ export interface RoadmapSource {
 	archivePlan(id: string): Promise<void>;
 	/** True when the item exists in uncommitted working-tree state but not yet in HEAD. Gh/linear: always false. */
 	isCharterPickRace(id: string): boolean;
-	parseItemId(text: string): string | null;
+	parseItemId(text: string): Promise<string | null>;
 	isQuickScope(text: string): boolean;
 }
 

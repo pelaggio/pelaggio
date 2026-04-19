@@ -98,20 +98,20 @@ function mk(opts: { repo: string; teamId?: string; label?: string; planLocation?
 describe("LinearRoadmap.parseItemId", () => {
 	const r = mk({ repo: "/tmp" });
 
-	it("extracts from feat/<team>-<n> branch names", () => {
-		assert.equal(r.parseItemId("feat/eng-42"), "ENG-42");
-		assert.equal(r.parseItemId("feat/eng-42-fix-bug"), "ENG-42");
-		assert.equal(r.parseItemId("checked out feat/tool-7-thing"), "TOOL-7");
+	it("extracts from feat/<team>-<n> branch names", async () => {
+		assert.equal(await r.parseItemId("feat/eng-42"), "ENG-42");
+		assert.equal(await r.parseItemId("feat/eng-42-fix-bug"), "ENG-42");
+		assert.equal(await r.parseItemId("checked out feat/tool-7-thing"), "TOOL-7");
 	});
 
-	it("extracts bare TEAM-<n>", () => {
-		assert.equal(r.parseItemId("Closes ENG-42"), "ENG-42");
-		assert.equal(r.parseItemId("TOOL-9"), "TOOL-9");
+	it("extracts bare TEAM-<n>", async () => {
+		assert.equal(await r.parseItemId("Closes ENG-42"), "ENG-42");
+		assert.equal(await r.parseItemId("TOOL-9"), "TOOL-9");
 	});
 
-	it("returns null when no match", () => {
-		assert.equal(r.parseItemId("nothing in here"), null);
-		assert.equal(r.parseItemId("feat/some-other-branch"), null);
+	it("returns null when no match", async () => {
+		assert.equal(await r.parseItemId("nothing in here"), null);
+		assert.equal(await r.parseItemId("feat/some-other-branch"), null);
 	});
 });
 

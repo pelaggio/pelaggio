@@ -11,8 +11,26 @@ export class MarkdownRoadmap implements RoadmapSource {
 		this.repo = opts.repo;
 	}
 
-	parseItemId(text: string): string | null {
-		const branchMatch = text.match(/feat\/([a-z][a-z0-9]*(?:-[a-z0-9]+)*)/i);
+	async parseItemId(text: string): Promise<string | null> {
+		const known = (await this.listOpenItems()).map((it) => it.id);
+		const branchMatch = text.match(/feat\/([a-z0-9][a-z0-9-]*)/i);
+		if (branchMatch && known.length > 0) {
+			const slug = branchMatch[1].toLowerCase();
+			let best: string | null = null;
+			for (const id of known) {
+				const lower = id.toLowerCase();
+				if (slug.startsWith(lower) && (!best || lower.length > best.length)) best = id;
+			}
+			if (best) return best;
+		}
+		if (known.length > 0) {
+			let best: string | null = null;
+			for (const id of known) {
+				const re = new RegExp(`\\b${escapeRegex(id)}\\b`);
+				if (re.test(text) && (!best || id.length > best.length)) best = id;
+			}
+			if (best) return best;
+		}
 		if (branchMatch) {
 			const slug = branchMatch[1];
 			const idMatch = slug.match(/^([a-z][\da-z]*(?:-\d+)?)/i);
@@ -54,7 +72,7 @@ export class MarkdownRoadmap implements RoadmapSource {
 			for (const row of parseOpenTableRows(body)) {
 				// Skip crossed-out (completed) rows.
 				if (row.item.startsWith("~~")) continue;
-				const m = row.item.match(/^([A-Z]+-?\d[\dA-Z]*)\.?\s*(.*)$/);
+				const m = row.item.match(/^([A-Z]+-?\d[\dA-Z-]*)\.?\s*(.*)$/);
 				if (!m) continue;
 				out.push({ id: m[1], title: m[2].trim(), deps: row.deps, sourceRef: path });
 			}
