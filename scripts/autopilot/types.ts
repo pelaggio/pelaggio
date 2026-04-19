@@ -113,6 +113,8 @@ export interface PipelineOpts {
 	logPath?: string;
 	/** Required for creating step renderers — injected by orchestrate() */
 	liveStatus: import("./tui.js").LiveStatus;
+	/** SIGINT-driven cancellation. When aborted, the in-flight SDK query tears down and the cycle surfaces `error: "aborted"`. */
+	signal?: AbortSignal;
 }
 
 // ── Shared mutable state ───────────────────────────────────────────────

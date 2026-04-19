@@ -700,3 +700,30 @@ describe("runPipeline — pick step", () => {
 		);
 	});
 });
+
+describe("runPipeline — SIGINT cancellation", () => {
+	it("step receiving an aborted signal returns error_abort and the cycle surfaces error: 'aborted'", async () => {
+		const controller = new AbortController();
+		const parkSignal = makeParkSignal();
+		const worktree = makeTempGitRepo();
+
+		const { runStep, calls } = createMockRunStep(
+			{
+				plan: { awaitAbort: true, ok: false, subtype: "error_abort", text: "aborted" },
+			},
+			parkSignal,
+		);
+
+		const abortAt = setTimeout(() => controller.abort(), 20);
+
+		const t0 = Date.now();
+		const result = await runPipeline({ ...baseOpts(worktree), signal: controller.signal }, parkSignal, baseFlags, { runStep, mainRepo: worktree, listWorktrees: () => [], appendLog: () => {}, roadmap: makeMockRoadmap() });
+		const elapsed = Date.now() - t0;
+		clearTimeout(abortAt);
+
+		assert.equal(result.completed, false);
+		assert.equal(result.error, "aborted");
+		assert.ok(elapsed < 2000, `expected abort to return well under the 2s grace window; got ${elapsed}ms`);
+		assert.equal(calls[0].step, "plan");
+	});
+});

@@ -64,6 +64,22 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	};
 
 	async function step(name: Step, prompt: string, cwd: string, { attempt = 1, commitLabel, maxTurnsOverride }: { attempt?: number; commitLabel?: string; maxTurnsOverride?: number } = {}): Promise<StepResult> {
+		// Short-circuit before runStep when SIGINT fired between steps; also covers
+		// --dry-run so Ctrl-C during a dry run bails promptly.
+		if (opts.signal?.aborted) {
+			const emitAbort = createStepRenderer({
+				verbose: opts.verbose,
+				trace: flags.trace,
+				toFile: !!opts.logPath,
+				logPath: opts.logPath,
+				liveStatus: opts.liveStatus!,
+				workerStatus: opts.workerStatus,
+			});
+			emitAbort({ type: "done", ok: false, subtype: "error_abort", cost: 0, turns: 0, elapsed: 0 });
+			steps.push({ name, model: MODEL_PROFILES[profile]?.[name] ?? "default", cost: 0, turns: 0, ok: false, ...(attempt > 1 ? { attempt } : {}) });
+			return { ok: false, subtype: "error_abort", text: "aborted", fullText: "", cost: 0, turns: 0 };
+		}
+
 		if (opts.dryRun) {
 			log(`[dry-run] ${name}: "${prompt.slice(0, 60)}" in ${cwd}`);
 			steps.push({ name, model: MODEL_PROFILES[profile]?.[name] ?? "default", cost: 0, turns: 0, ok: true, ...(attempt > 1 ? { attempt } : {}) });
@@ -91,6 +107,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				itemId: itemId ?? undefined,
 				parkSignal,
 				...(maxTurnsOverride !== undefined ? { maxTurnsOverride } : {}),
+				...(opts.signal ? { signal: opts.signal } : {}),
 			},
 			emit,
 		);
@@ -122,6 +139,12 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	let shipwrecked = false;
 
 	function finish(result: CycleResult): CycleResult {
+		// Park wins over abort (it's a preserve-work path; abort is discard-work).
+		// Don't relabel successful cycles — SIGINT during the 2s grace after ship
+		// completed shouldn't turn a real success into a phantom abort.
+		if (opts.signal?.aborted && !result.completed && result.error !== "parked") {
+			result = { ...result, error: "aborted" };
+		}
 		if (!opts.dryRun) {
 			const parked = result.error === "parked";
 			appendLog({
@@ -522,7 +545,7 @@ export interface OrchestratorDeps {
 	resolveWorktree?: typeof resolveWorktree;
 }
 
-export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {}, statusBar: StatusBar = new StatusBar()): Promise<{ exitCode: number; results: CycleResult[] }> {
+export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {}, statusBar: StatusBar = new StatusBar(), signal?: AbortSignal): Promise<{ exitCode: number; results: CycleResult[] }> {
 	const _runPipeline = deps.runPipeline ?? runPipeline;
 	const _detectResumeStep = deps.detectResumeStep ?? detectResumeStep;
 	const _resolveWorktree = deps.resolveWorktree ?? resolveWorktree;
@@ -566,6 +589,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				dryRun: false,
 				workerStatus: status,
 				liveStatus,
+				...(signal ? { signal } : {}),
 			},
 			parkSignal,
 			flags,
@@ -659,6 +683,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					workerStatus: status,
 					logPath,
 					liveStatus,
+					...(signal ? { signal } : {}),
 				},
 				parkSignal,
 				flags,
@@ -775,6 +800,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 									})()
 								: undefined,
 						liveStatus,
+						...(signal ? { signal } : {}),
 					},
 					parkSignal,
 					flags,
@@ -818,10 +844,26 @@ export async function orchestrate(flags: Flags): Promise<void> {
 		process.stderr.write(A.showCursor);
 	};
 	process.on("exit", cleanup);
+
+	// Two-stage SIGINT: first aborts in-flight SDK call and gives a 2s grace window
+	// for the orchestrator to unwind cleanly; second Ctrl-C bypasses grace (standard
+	// Unix expectation — first interrupt is polite, second is force). `.unref()`
+	// lets the process exit naturally if the promise resolves before the timer.
+	const controller = new AbortController();
+	let sigintCount = 0;
 	process.on("SIGINT", () => {
-		cleanup();
-		process.exit(130);
+		sigintCount += 1;
+		if (sigintCount >= 2) {
+			cleanup();
+			process.exit(130);
+		}
+		controller.abort();
+		setTimeout(() => {
+			cleanup();
+			process.exit(130);
+		}, 2_000).unref();
 	});
-	const { exitCode } = await runOrchestrator(flags, {}, statusBar);
+
+	const { exitCode } = await runOrchestrator(flags, {}, statusBar, controller.signal);
 	process.exit(exitCode);
 }

@@ -19,6 +19,9 @@ export interface RunStepOpts {
 	 * budget from the plan's file count (see `computeImplementTurns` in helpers.ts).
 	 * When undefined, falls back to the static `TURN_LIMITS[name]`. */
 	maxTurnsOverride?: number;
+	/** SIGINT-driven cancellation. Threaded through to the SDK's `query()` call so an
+	 * in-flight fetch stream tears down when the parent controller aborts. */
+	signal?: AbortSignal;
 }
 
 const EDIT_LOOP_THRESHOLD = 22;
@@ -148,6 +151,21 @@ export async function runStep(name: Step, prompt: string, opts: RunStepOpts, emi
 				}
 			: undefined;
 
+	// Adapt the parent AbortSignal into a child controller for the SDK: `query()`
+	// wants an AbortController, but the public type chain carries a signal so
+	// downstream callers don't gain `.abort()` authority. The listener is removed
+	// explicitly on happy-path completion — `{ once: true }` alone only covers the
+	// fired case, leaving a closure leak across N steps when abort never fires.
+	const sdkCtrl = new AbortController();
+	let onParentAbort: (() => void) | undefined;
+	if (opts.signal) {
+		if (opts.signal.aborted) sdkCtrl.abort();
+		else {
+			onParentAbort = () => sdkCtrl.abort();
+			opts.signal.addEventListener("abort", onParentAbort, { once: true });
+		}
+	}
+
 	const gen = query({
 		prompt,
 		options: {
@@ -160,6 +178,7 @@ export async function runStep(name: Step, prompt: string, opts: RunStepOpts, emi
 			maxBudgetUsd: budget,
 			maxTurns: turns,
 			effort,
+			abortController: sdkCtrl,
 			...(model ? { model } : {}),
 			...(systemAppend
 				? {
@@ -321,6 +340,8 @@ export async function runStep(name: Step, prompt: string, opts: RunStepOpts, emi
 		const parsed = parseResetTime(text);
 		if (parsed) opts.parkSignal.resetsAt = parsed;
 	}
+
+	if (onParentAbort) opts.signal?.removeEventListener("abort", onParentAbort);
 
 	const elapsed = Date.now() - t0;
 	emit({ type: "done", ok, subtype, cost, turns: resultTurns, elapsed });

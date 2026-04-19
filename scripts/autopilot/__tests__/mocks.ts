@@ -18,6 +18,9 @@ export interface StepOutcome extends Partial<StepResult> {
 	writes?: Record<string, string>;
 	/** Called after writes — use to simulate git side-effects (e.g. advancing main). */
 	sideEffect?: (cwd: string) => void;
+	/** If true, the mock awaits `opts.signal`'s abort event before applying the rest of
+	 * the outcome. Lets tests simulate a step that's in-flight when SIGINT fires. */
+	awaitAbort?: boolean;
 }
 
 /** Per-step behavior. Array = sequential attempts; single = every call. */
@@ -37,6 +40,13 @@ export function createMockRunStep(behavior: MockBehavior, parkSignal: ParkSignal
 		calls.push({ step: name, attempt, prompt });
 		const spec = behavior[name];
 		const outcome: StepOutcome = Array.isArray(spec) ? (spec[Math.min(attempt - 1, spec.length - 1)] ?? {}) : (spec ?? {});
+		if (opts.signal?.aborted) {
+			emit({ type: "done", ok: false, subtype: "error_abort", cost: 0, turns: 0, elapsed: 0 });
+			return { ok: false, subtype: "error_abort", text: "aborted", fullText: "", cost: 0, turns: 0 };
+		}
+		if (outcome.awaitAbort && opts.signal) {
+			await new Promise<void>((resolve) => opts.signal?.addEventListener("abort", () => resolve(), { once: true }));
+		}
 		if (outcome.writes) {
 			for (const [rel, content] of Object.entries(outcome.writes)) {
 				const full = resolve(opts.cwd, rel);
