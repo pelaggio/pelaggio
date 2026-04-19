@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { describe, it } from "node:test";
-import { filesChangedSince, fmtWait, getHeadSha, hasDeliverableCommits, parseResetTime, parseWaitFlag } from "../helpers.js";
+import { computeImplementTurns, countPlanFiles, filesChangedSince, fmtWait, getHeadSha, hasDeliverableCommits, parsePickResult, parseResetTime, parseWaitFlag } from "../helpers.js";
 
 function makeFeatRepo(): string {
 	const dir = mkdtempSync(join(tmpdir(), "autopilot-helpers-test-"));
@@ -201,5 +201,113 @@ describe("hasDeliverableCommits", () => {
 		commitFile(dir, "src/unrelated.ts", "export const y = 2;\n", "main moved ahead");
 		execSync("git checkout -q feat/tool-99", { cwd: dir });
 		assert.equal(hasDeliverableCommits(dir), false);
+	});
+});
+
+describe("parsePickResult", () => {
+	it("returns null when no tag is present", () => {
+		assert.equal(parsePickResult("nothing to see here"), null);
+	});
+
+	it("parses claimed", () => {
+		assert.equal(parsePickResult("done\npick-result: claimed\n"), "claimed");
+	});
+
+	it("parses blocked", () => {
+		assert.equal(parsePickResult("pick-result: blocked"), "blocked");
+	});
+
+	it("parses unknown-id", () => {
+		assert.equal(parsePickResult("pick-result: unknown-id"), "unknown-id");
+	});
+
+	it("parses already-done", () => {
+		assert.equal(parsePickResult("pick-result: already-done"), "already-done");
+	});
+
+	it("parses worktree-exists", () => {
+		assert.equal(parsePickResult("pick-result: worktree-exists"), "worktree-exists");
+	});
+
+	it("parses queue-empty", () => {
+		assert.equal(parsePickResult("pick-result: queue-empty"), "queue-empty");
+	});
+
+	it("last occurrence wins", () => {
+		const text = "pick-result: queue-empty\nsome summary...\npick-result: claimed\n";
+		assert.equal(parsePickResult(text), "claimed");
+	});
+
+	it("tolerates leading/trailing whitespace", () => {
+		assert.equal(parsePickResult("   pick-result:  blocked   "), "blocked");
+	});
+
+	it("is case-insensitive on the key", () => {
+		assert.equal(parsePickResult("PICK-RESULT: claimed"), "claimed");
+	});
+
+	it("returns null for unknown tag", () => {
+		assert.equal(parsePickResult("pick-result: bogus"), null);
+	});
+});
+
+describe("countPlanFiles", () => {
+	it("parses a Files-to-change table", () => {
+		const body = ["# Plan", "", "## Files to change", "", "| Path | Change |", "|------|--------|", "| `scripts/a.ts` | thing |", "| `scripts/b.ts` | thing |", "| `scripts/c.ts` | thing |", "", "## Other"].join("\n");
+		assert.equal(countPlanFiles(body), 3);
+	});
+
+	it("dedupes repeats in the table", () => {
+		const body = ["## Files", "", "| Path | Change |", "|------|--------|", "| `x.ts` | a |", "| `x.ts` | b |", "| `y.ts` | c |"].join("\n");
+		assert.equal(countPlanFiles(body), 2);
+	});
+
+	it("falls back to path-shaped tokens when no Files table exists", () => {
+		const body = ["# Plan", "Touch scripts/foo.ts and scripts/bar.ts.", "Also scripts/config.yml."].join("\n");
+		assert.equal(countPlanFiles(body), 3);
+	});
+
+	it("ignores path-shaped tokens inside fenced code blocks", () => {
+		const body = ["# Plan", "", "```ts", "import { x } from './foo.ts';", "```", "", "Edit scripts/a.ts."].join("\n");
+		assert.equal(countPlanFiles(body), 1);
+	});
+
+	it("ignores docs/plans/ self-references in the fallback", () => {
+		const body = "See docs/plans/thing.md. Touch scripts/a.ts.";
+		assert.equal(countPlanFiles(body), 1);
+	});
+
+	it("returns 0 for empty body", () => {
+		assert.equal(countPlanFiles(""), 0);
+	});
+});
+
+describe("computeImplementTurns", () => {
+	it("returns fallback when plan is null", () => {
+		assert.equal(computeImplementTurns(null, 200), 200);
+	});
+
+	it("returns fallback when plan has 0 files", () => {
+		assert.equal(computeImplementTurns("# Plan with no paths\nJust prose.\n", 200), 200);
+	});
+
+	it("clamps small file counts up to 100", () => {
+		const body = ["## Files", "", "| Path | Change |", "|---|---|", "| `a.ts` | x |"].join("\n");
+		// 2*1 + 60 = 62 → clamped to 100
+		assert.equal(computeImplementTurns(body, 200), 100);
+	});
+
+	it("scales linearly in the middle band", () => {
+		const rows = Array.from({ length: 30 }, (_, i) => `| \`file${i}.ts\` | x |`).join("\n");
+		const body = ["## Files", "", "| Path | Change |", "|---|---|", rows].join("\n");
+		// 2*30 + 60 = 120
+		assert.equal(computeImplementTurns(body, 200), 120);
+	});
+
+	it("clamps large file counts to 250", () => {
+		const rows = Array.from({ length: 150 }, (_, i) => `| \`file${i}.ts\` | x |`).join("\n");
+		const body = ["## Files", "", "| Path | Change |", "|---|---|", rows].join("\n");
+		// 2*150 + 60 = 360 → clamped to 250
+		assert.equal(computeImplementTurns(body, 200), 250);
 	});
 });

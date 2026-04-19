@@ -367,7 +367,7 @@ describe("runPipeline — pick step", () => {
 			{
 				pick: {
 					ok: true,
-					text: "claimed TOOL-99",
+					text: "claimed TOOL-99\npick-result: claimed",
 					sideEffect: (cwd) => {
 						// cwd is the injected mainRepo — using it here implicitly proves injection end-to-end.
 						execSync(`git worktree add -q -b feat/tool-99 "${worktreePath}"`, { cwd });
@@ -439,11 +439,11 @@ describe("runPipeline — pick step", () => {
 		assert.equal(logs[0].completed, false);
 	});
 
-	it("nothing to pick — aborts when pick text has no claim/worktree/successfully match", async () => {
+	it("queue empty — maps pick-result: queue-empty to error 'pick:queue-empty' (recoverable)", async () => {
 		const { parent, repo } = makeTempRepoWithParent();
 		const parkSignal = makeParkSignal();
 		const logs: Array<Record<string, unknown>> = [];
-		const { runStep, calls } = createMockRunStep({ pick: { ok: true, text: "no items available" } }, parkSignal);
+		const { runStep, calls } = createMockRunStep({ pick: { ok: true, text: "no unblocked items available\npick-result: queue-empty" } }, parkSignal);
 
 		const result = await runPipeline(pickOpts(), parkSignal, baseFlags, {
 			runStep,
@@ -456,7 +456,7 @@ describe("runPipeline — pick step", () => {
 		});
 
 		assert.equal(result.completed, false);
-		assert.equal(result.error, "nothing to pick");
+		assert.equal(result.error, "pick:queue-empty");
 		assert.equal(result.itemId, null);
 		assert.deepEqual(
 			calls.map((c) => c.step),
@@ -469,7 +469,7 @@ describe("runPipeline — pick step", () => {
 		const parkSignal = makeParkSignal();
 		const logs: Array<Record<string, unknown>> = [];
 		const roadmap = makeMockRoadmap({ parseItemId: () => null });
-		const { runStep, calls } = createMockRunStep({ pick: { ok: true, text: "claimed something" } }, parkSignal);
+		const { runStep, calls } = createMockRunStep({ pick: { ok: true, text: "claimed something\npick-result: claimed" } }, parkSignal);
 
 		const result = await runPipeline(pickOpts(), parkSignal, baseFlags, {
 			runStep,
@@ -495,7 +495,7 @@ describe("runPipeline — pick step", () => {
 		const { parent, repo } = makeTempRepoWithParent();
 		const parkSignal = makeParkSignal();
 		const logs: Array<Record<string, unknown>> = [];
-		const { runStep, calls } = createMockRunStep({ pick: { ok: true, text: "claimed TOOL-99" } }, parkSignal);
+		const { runStep, calls } = createMockRunStep({ pick: { ok: true, text: "claimed TOOL-99\npick-result: claimed" } }, parkSignal);
 
 		const result = await runPipeline(pickOpts(), parkSignal, baseFlags, {
 			runStep,
@@ -527,7 +527,7 @@ describe("runPipeline — pick step", () => {
 			{
 				pick: {
 					ok: true,
-					text: "claimed TOOL-99",
+					text: "claimed TOOL-99\npick-result: claimed",
 					sideEffect: (cwd) => {
 						// Creates a real worktree at a DIFFERENT path — the one resolveWorktree returns is never created.
 						execSync(`git worktree add -q -b feat/tool-99 "${fallbackPath}"`, { cwd });

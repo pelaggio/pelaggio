@@ -88,7 +88,7 @@ export const DEFAULTS = {
 		"shakedown-plan": 60,
 		implement: 200,
 		"shakedown-code": 150,
-		ship: 40,
+		ship: 60,
 		shipwreck: 40,
 	} satisfies Record<Step, number>,
 	effort: {
@@ -101,7 +101,7 @@ export const DEFAULTS = {
 		shipwreck: "medium",
 	} satisfies Record<Step, Effort>,
 	modelProfiles: {
-		standard: { pick: SONNET, plan: OPUS, "shakedown-plan": OPUS, implement: OPUS, "shakedown-code": OPUS, ship: SONNET, shipwreck: SONNET },
+		standard: { pick: SONNET, plan: OPUS, "shakedown-plan": OPUS, implement: OPUS, "shakedown-code": OPUS, ship: OPUS, shipwreck: SONNET },
 		quick: { pick: SONNET, plan: SONNET, "shakedown-plan": SONNET, implement: SONNET, "shakedown-code": SONNET, ship: SONNET, shipwreck: SONNET },
 	} satisfies Record<string, Partial<Record<Step, string>>>,
 } as const;

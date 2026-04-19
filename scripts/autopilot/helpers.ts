@@ -29,6 +29,103 @@ export function listWorktrees(): string[] {
 		.map((l) => l.slice(9).trim());
 }
 
+// ── Pick result parsing ────────────────────────────────────────────────
+
+export type PickReason = "claimed" | "blocked" | "unknown-id" | "already-done" | "worktree-exists" | "queue-empty";
+
+const PICK_REASONS: ReadonlySet<PickReason> = new Set(["claimed", "blocked", "unknown-id", "already-done", "worktree-exists", "queue-empty"]);
+
+/**
+ * Parse a structured `pick-result: <tag>` trailing line from the /pick skill output.
+ * Last occurrence wins so the skill can safely restate the tag in a summary
+ * paragraph. Unknown tags → null. No tag present → null.
+ */
+export function parsePickResult(text: string): PickReason | null {
+	const re = /^[ \t]*pick-result:[ \t]*([a-z-]+)[ \t]*$/gim;
+	let last: string | null = null;
+	for (const m of text.matchAll(re)) last = m[1].toLowerCase();
+	if (last === null) return null;
+	return PICK_REASONS.has(last as PickReason) ? (last as PickReason) : null;
+}
+
+// ── Plan file-count helpers (dynamic implement-turn budget) ────────────
+
+function extractFilesSection(body: string): string | null {
+	const headingRe = /^#{1,6}[ \t]+.*\bfiles\b.*$/im;
+	const match = body.match(headingRe);
+	if (!match) return null;
+	const start = (match.index ?? 0) + match[0].length;
+	const rest = body.slice(start);
+	const nextHeading = rest.search(/^#{1,6}[ \t]+/m);
+	return nextHeading >= 0 ? rest.slice(0, nextHeading) : rest;
+}
+
+function parseTableFirstColumn(section: string): Set<string> {
+	const files = new Set<string>();
+	const lines = section.split("\n");
+	let inTable = false;
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i].trim();
+		if (!line.startsWith("|")) {
+			inTable = false;
+			continue;
+		}
+		if (!inTable) {
+			const next = (lines[i + 1] ?? "").trim();
+			if (/^\|[\s\-:|]+\|$/.test(next)) {
+				inTable = true;
+				i++;
+				continue;
+			}
+			continue;
+		}
+		const cells = line
+			.split("|")
+			.slice(1, -1)
+			.map((c) => c.trim());
+		if (cells.length === 0) continue;
+		const first = cells[0].replace(/`/g, "").trim();
+		if (first) files.add(first);
+	}
+	return files;
+}
+
+const PATH_EXT = /\b[\w.-]+(?:\/[\w.-]+)+\.(?:ts|tsx|js|md|yml|yaml|json|sh|py)\b/g;
+
+/**
+ * Count distinct file paths in a plan body. Prefers the first-column values of
+ * a markdown table under a heading containing "Files" (case-insensitive).
+ * Falls back to path-shaped tokens in the prose, ignoring fenced code blocks
+ * and plan self-references under `docs/plans/`.
+ */
+export function countPlanFiles(body: string): number {
+	const section = extractFilesSection(body);
+	if (section) {
+		const fromTable = parseTableFirstColumn(section);
+		if (fromTable.size > 0) return fromTable.size;
+	}
+	const stripped = body.replace(/```[\s\S]*?```/g, "");
+	const files = new Set<string>();
+	for (const m of stripped.match(PATH_EXT) ?? []) {
+		if (m.startsWith("docs/plans/")) continue;
+		files.add(m);
+	}
+	return files.size;
+}
+
+/**
+ * Derive a per-cycle implement turn budget from the plan's file count:
+ *   `clamp(2 × files + 60, 100, 250)`.
+ * Falls back to the static `fallback` when the plan is absent or parses to zero
+ * files (e.g. a `--resume` that starts at `implement` with no plan on disk).
+ */
+export function computeImplementTurns(planBody: string | null, fallback: number): number {
+	if (!planBody) return fallback;
+	const files = countPlanFiles(planBody);
+	if (files === 0) return fallback;
+	return Math.max(100, Math.min(250, 2 * files + 60));
+}
+
 // ── Verdict parsing ────────────────────────────────────────────────────
 
 export function parseVerdict(text: string): "APPROVE" | "REVISE" | "RETHINK" {

@@ -1,10 +1,11 @@
-import { appendFileSync, existsSync, mkdirSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { MODEL_PROFILES, REPO, ROADMAP_GITHUB, ROADMAP_LINEAR, ROADMAP_SOURCE, SHIP_TARGET, WORKTREE_PREFIX } from "./config.js";
+import { MODEL_PROFILES, REPO, ROADMAP_GITHUB, ROADMAP_LINEAR, ROADMAP_SOURCE, SHIP_TARGET, TURN_LIMITS, WORKTREE_PREFIX } from "./config.js";
 import {
 	appendLog as appendLogDefault,
 	captureShipState,
 	checkpoint,
+	computeImplementTurns,
 	createMutex,
 	detectResumeStep,
 	ensureCheckpointed,
@@ -14,6 +15,7 @@ import {
 	getHeadSha,
 	hasDeliverableCommits,
 	listWorktrees as listWorktreesDefault,
+	parsePickResult,
 	parseVerdict,
 	parseWaitFlag,
 	resolveWorktree,
@@ -60,7 +62,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		console.log(`${A.dim(ts)} [${logLabel}] ${A.dim(elapsed)} ${msg}`);
 	};
 
-	async function step(name: Step, prompt: string, cwd: string, { attempt = 1, commitLabel }: { attempt?: number; commitLabel?: string } = {}): Promise<StepResult> {
+	async function step(name: Step, prompt: string, cwd: string, { attempt = 1, commitLabel, maxTurnsOverride }: { attempt?: number; commitLabel?: string; maxTurnsOverride?: number } = {}): Promise<StepResult> {
 		if (opts.dryRun) {
 			log(`[dry-run] ${name}: "${prompt.slice(0, 60)}" in ${cwd}`);
 			steps.push({ name, model: MODEL_PROFILES[profile]?.[name] ?? "default", cost: 0, turns: 0, ok: true, ...(attempt > 1 ? { attempt } : {}) });
@@ -87,6 +89,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				trace: flags.trace,
 				itemId: itemId ?? undefined,
 				parkSignal,
+				...(maxTurnsOverride !== undefined ? { maxTurnsOverride } : {}),
 			},
 			emit,
 		);
@@ -162,8 +165,12 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 
 			if (!pick.ok) return finish({ itemId: null, completed: false, cost, error: "pick failed" });
 
-			const pickAll = pick.text + "\n" + pick.fullText;
-			if (!opts.dryRun && !/claimed|worktree add|successfully/i.test(pickAll)) return finish({ itemId: null, completed: false, cost, error: "nothing to pick" });
+			if (!opts.dryRun) {
+				const reason = parsePickResult(pickText);
+				if (reason !== "claimed") {
+					return finish({ itemId: null, completed: false, cost, error: `pick:${reason ?? "unknown"}` });
+				}
+			}
 
 			itemId = opts.dryRun ? (itemId ?? "DRY") : (roadmap.parseItemId(pick.text) ?? roadmap.parseItemId(pick.fullText));
 			if (!itemId) return finish({ itemId: null, completed: false, cost, error: "no item ID parsed" });
@@ -261,6 +268,17 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		const parked = parkExit();
 		if (parked) return parked;
 		const planPath = await roadmap.getItemPlan({ worktree: worktree! });
+		// Dynamic implement budget: scale turns with the plan's file count.
+		// Plan absent (e.g. quick mode, resume without plan on disk) → static fallback.
+		let planBody: string | null = null;
+		if (planPath) {
+			try {
+				planBody = readFileSync(planPath, "utf-8");
+			} catch {
+				planBody = null;
+			}
+		}
+		const implementTurns = computeImplementTurns(planBody, TURN_LIMITS.implement);
 		const planRef = planPath ? `Read the plan at \`${planPath}\`.` : `Find the plan in \`${resolve(REPO, ".dev", "plans")}/\` (filename matches branch without \`feat/\` prefix).`;
 		const worktreeHint = [
 			`**Your working directory is**: \`${worktree}\`.`,
@@ -329,7 +347,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 					].join("\n")
 				: continuePrompt;
 			const cpLabel = attempt === 1 ? "implementation checkpoint" : "implementation continued";
-			const impl = await step("implement", attempt === 1 ? implementPrompt : retryPrompt, worktree!, { attempt, commitLabel: cpLabel });
+			const impl = await step("implement", attempt === 1 ? implementPrompt : retryPrompt, worktree!, { attempt, commitLabel: cpLabel, maxTurnsOverride: implementTurns });
 			cost += impl.cost;
 
 			if (impl.ok) {
@@ -587,7 +605,11 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 	const pickMutex = isParallel ? createMutex() : undefined;
 	let nextCycle = 0;
 	let totalSpent = 0;
-	const RECOVERABLE = new Set(["plan needs rethink", "nothing to pick", "parked"]);
+	// `pick:unknown-id` and `pick:blocked` are intentionally fatal so typos in
+	// `--item X,Y,Z` and user-requested blocked items halt loudly instead of
+	// silently skipping. `pick:unknown` (parser fallback) stays recoverable to
+	// preserve the old lenient behaviour when the skill emits an unrecognised tag.
+	const RECOVERABLE = new Set(["plan needs rethink", "parked", "pick:queue-empty", "pick:worktree-exists", "pick:already-done", "pick:unknown"]);
 
 	async function worker(): Promise<void> {
 		while (true) {

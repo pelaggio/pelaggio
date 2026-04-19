@@ -15,9 +15,13 @@ export interface RunStepOpts {
 	trace: boolean;
 	itemId?: string;
 	parkSignal: ParkSignal;
+	/** Per-call override for the step's `maxTurns`. Used by `implement` to size the
+	 * budget from the plan's file count (see `computeImplementTurns` in helpers.ts).
+	 * When undefined, falls back to the static `TURN_LIMITS[name]`. */
+	maxTurnsOverride?: number;
 }
 
-const EDIT_LOOP_THRESHOLD = 12;
+const EDIT_LOOP_THRESHOLD = 22;
 
 // Steps whose entire job is iteratively editing the plan document. The raw-edit
 // loop guard would false-positive on legitimate refinement passes, so it is
@@ -43,7 +47,7 @@ export function blockPlanPolish(input: HookInput, cwd: string): HookJSONOutput {
 
 export async function runStep(name: Step, prompt: string, opts: RunStepOpts, emit: StepEmit): Promise<StepResult> {
 	const budget = BUDGETS[name];
-	const turns = TURN_LIMITS[name];
+	const turns = opts.maxTurnsOverride ?? TURN_LIMITS[name];
 	const model = MODEL_PROFILES[opts.profile]?.[name];
 	const effort = EFFORT[name];
 
