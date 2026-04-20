@@ -54,6 +54,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | ~~TOOL-44. MarkdownRoadmap: read checkbox-format items (write/read parity)~~ | **Done** — checkbox-format read parity in MarkdownRoadmap |
 | TOOL-45. Make autopilot-server.service pnpm discovery portable for node-version managers (fnm/nvm/volta) | — |
 | TOOL-46. Fix AUTOPILOT_SERVER_WEB_DIST default for external consumers + startup log for UI mount | — |
+| TOOL-47. Control-plane web UI: only prompt for token on 401, not on cold load when localStorage is empty | — |
 ---
 
 ## Items
