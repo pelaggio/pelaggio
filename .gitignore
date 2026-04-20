@@ -1,4 +1,5 @@
 node_modules
+packages/*/node_modules/
 .dev/
 .claude/worktrees/
 .claude/settings.local.json
@@ -6,3 +7,7 @@ node_modules
 *.log
 .DS_Store
 lefthook-local.yml
+packages/web/dist/
+packages/web/.astro/
+packages/web/public/icon-*.png
+packages/web/public/apple-touch-icon.png

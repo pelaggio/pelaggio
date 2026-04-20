@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 
 export interface ServerConfig {
@@ -7,6 +8,7 @@ export interface ServerConfig {
 	token: string | undefined;
 	statePath: string;
 	logDir: string;
+	webDist: string | undefined;
 }
 
 function required(name: string, value: string | undefined): string {
@@ -30,5 +32,7 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
 	const statePath = env.AUTOPILOT_SERVER_STATE_PATH ? resolve(env.AUTOPILOT_SERVER_STATE_PATH) : resolve(repo, ".dev", "server-state.json");
 	const logDir = env.AUTOPILOT_SERVER_LOG_DIR ? resolve(env.AUTOPILOT_SERVER_LOG_DIR) : resolve(repo, ".dev", "server-logs");
 	const token = env.CONTROL_PLANE_TOKEN || undefined;
-	return { host, port, repo, token, statePath, logDir };
+	const webDistCandidate = env.AUTOPILOT_SERVER_WEB_DIST ? resolve(env.AUTOPILOT_SERVER_WEB_DIST) : resolve(repo, "packages/web/dist");
+	const webDist = existsSync(webDistCandidate) ? webDistCandidate : undefined;
+	return { host, port, repo, token, statePath, logDir, webDist };
 }

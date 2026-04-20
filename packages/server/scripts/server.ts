@@ -24,6 +24,7 @@ const app = createApp({
 	roadmap,
 	computeStats: () => computeStats(),
 	token: cfg.token,
+	webDist: cfg.webDist,
 });
 
 serve({ fetch: app.fetch, hostname: cfg.host, port: cfg.port }, (info) => {

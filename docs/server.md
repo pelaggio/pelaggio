@@ -142,6 +142,30 @@ mismatches before the compare so attackers can't probe length via timing.
 deploy environments specify the tailnet interface explicitly. Local dev can
 use `127.0.0.1`.
 
+## Serving the web UI
+
+The daemon optionally serves `@cdhorne/claude-autopilot-web` from the same
+process. `AUTOPILOT_SERVER_WEB_DIST` (default `${repo}/packages/web/dist`) names
+the build output. If the path is missing, the daemon boots without the static
+handler — pre-build deploys still come up.
+
+URL layout:
+
+| Path | Handler |
+|---|---|
+| `/runs`, `/roadmap`, `/stats`, `/healthz` | API routes (JSON) |
+| `/ui/*` | Astro static (`dist/...`); the `/ui` prefix is stripped before resolving |
+| `/` | 302 → `/ui/` (only when `webDist` is set) |
+
+The web build emits all internal links under `/ui/...` via Astro's `base`
+option, so dev (`astro dev` proxying to the daemon) and prod (daemon serving
+`dist/`) resolve the same URLs.
+
+For dev: run the daemon on its tailnet IP, then
+`AUTOPILOT_SERVER_URL=http://127.0.0.1:7777 pnpm --filter @cdhorne/claude-autopilot-web dev`.
+Vite proxies the API paths (incl. SSE) to the daemon and serves the UI at
+`http://localhost:4321/ui/`.
+
 ## Deploy workflow
 
 `.github/workflows/deploy-server.yml` runs on `[self-hosted, autopilot]` (the

@@ -5,6 +5,12 @@
 	"description": "Control-plane daemon for claude-autopilot — supervises pipeline subprocesses over HTTP.",
 	"license": "UNLICENSED",
 	"type": "module",
+	"exports": {
+		"./types": {
+			"types": "./src/types.ts",
+			"default": "./src/types.ts"
+		}
+	},
 	"scripts": {
 		"dev": "tsx watch scripts/server.ts",
 		"start": "tsx scripts/server.ts",

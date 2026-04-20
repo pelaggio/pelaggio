@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -42,7 +42,7 @@ function makeRoadmap(items: RoadmapItem[]): RoadmapSource {
 	} satisfies RoadmapSource;
 }
 
-function setup(opts: { token?: string } = {}) {
+function setup(opts: { token?: string; webDist?: string } = {}) {
 	const dir = mkdtempSync(join(tmpdir(), "app-test-"));
 	const store = new StateStore(join(dir, "state.json"));
 	const broker = new LogBroker();
@@ -56,8 +56,8 @@ function setup(opts: { token?: string } = {}) {
 	});
 	const stats: Stats = { totals: { cycles: 0, completed: 0, failed: 0, parked: 0, costUsd: 0, durationMs: 0, tokens: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 } }, byItem: {}, recent: [] } as unknown as Stats;
 	const roadmap = makeRoadmap([{ id: "TOOL-1", title: "x", deps: "—", sourceRef: "x" }]);
-	const app = createApp({ supervisor, roadmap, computeStats: () => stats, token: opts.token });
-	return { app, supervisor, store };
+	const app = createApp({ supervisor, roadmap, computeStats: () => stats, token: opts.token, webDist: opts.webDist });
+	return { app, supervisor, store, dir };
 }
 
 describe("createApp", () => {
@@ -143,5 +143,44 @@ describe("createApp", () => {
 		const { app } = setup({ token: "secret" });
 		const res = await app.request("/stats", { headers: { Authorization: "Bearer secret" } });
 		assert.equal(res.status, 200);
+	});
+
+	it("static handler serves /ui/index.html when webDist is set", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "web-dist-"));
+		writeFileSync(join(dir, "index.html"), "<!doctype html><html><body>autopilot ui</body></html>");
+		const { app } = setup({ webDist: dir });
+		const res = await app.request("/ui/");
+		assert.equal(res.status, 200);
+		const body = await res.text();
+		assert.match(body, /autopilot ui/);
+	});
+
+	it("API routes still return JSON when webDist is set (no /ui collision)", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "web-dist-"));
+		writeFileSync(join(dir, "index.html"), "<!doctype html>");
+		const { app } = setup({ webDist: dir });
+		const runs = await app.request("/runs");
+		assert.equal(runs.status, 200);
+		assert.match(runs.headers.get("content-type") ?? "", /application\/json/);
+		const stats = await app.request("/stats");
+		assert.equal(stats.status, 200);
+		assert.match(stats.headers.get("content-type") ?? "", /application\/json/);
+	});
+
+	it("GET / 302s to /ui/ when webDist is set", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "web-dist-"));
+		writeFileSync(join(dir, "index.html"), "<!doctype html>");
+		const { app } = setup({ webDist: dir });
+		const res = await app.request("/");
+		assert.equal(res.status, 302);
+		assert.equal(res.headers.get("location"), "/ui/");
+	});
+
+	it("no static handler / no redirect when webDist is undefined", async () => {
+		const { app } = setup();
+		const root = await app.request("/");
+		assert.equal(root.status, 404);
+		const ui = await app.request("/ui/");
+		assert.equal(ui.status, 404);
 	});
 });
