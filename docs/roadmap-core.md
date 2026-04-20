@@ -52,6 +52,8 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | ~~TOOL-42. Autopilot control-plane web UI (Astro + React + Tailwind, mobile-responsive PWA)~~ | **Done** — Autopilot control-plane web UI shipped |
 | ~~TOOL-43. Cloudflare Tunnel + bearer auth for off-tailnet control-plane access~~ | **Done** — cloudflare tunnel + bearer auth shipped |
 | ~~TOOL-44. MarkdownRoadmap: read checkbox-format items (write/read parity)~~ | **Done** — checkbox-format read parity in MarkdownRoadmap |
+| TOOL-45. Make autopilot-server.service pnpm discovery portable for node-version managers (fnm/nvm/volta) | — |
+| TOOL-46. Fix AUTOPILOT_SERVER_WEB_DIST default for external consumers + startup log for UI mount | — |
 ---
 
 ## Items
