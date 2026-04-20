@@ -16,7 +16,8 @@ function baseEnv(repo: string): NodeJS.ProcessEnv {
 describe("loadServerConfig", () => {
 	it("webDist is undefined when default path is missing (UI not built)", () => {
 		const repo = mkdtempSync(join(tmpdir(), "cfg-test-"));
-		const cfg = loadServerConfig(baseEnv(repo));
+		// Inject a non-existent default so the test is stable whether or not the web package is built.
+		const cfg = loadServerConfig(baseEnv(repo), { webDistDefault: join(repo, "dist") });
 		assert.equal(cfg.webDist, undefined);
 	});
 
