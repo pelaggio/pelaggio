@@ -11,13 +11,13 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 | ID | Title | Deps | Plan | Roadmap |
 |----|-------|------|------|---------|
 | TOOL-45 | Make autopilot-server.service pnpm discovery portable for node-version managers (fnm/nvm/volta) | — | — | core |
-| TOOL-46 | Fix AUTOPILOT_SERVER_WEB_DIST default for external consumers + startup log for UI mount | — | — | core |
 | TOOL-47 | Control-plane web UI: only prompt for token on 401, not on cold load when localStorage is empty | — | — | core |
 | TOOL-48 | Multi-repo control plane: AUTOPILOT_REPOS list, per-repo state stores, UI repo switcher | — | — | core |
 | TOOL-49 | TUI non-TTY fallback: plain-line events when stderr isn't a terminal (server/SSE consumers) | — | — | core |
 
 ## Recently completed
 
+- TOOL-46 ✓
 - TOOL-43 ✓
 - TOOL-42 ✓
 - TOOL-39 ✓
