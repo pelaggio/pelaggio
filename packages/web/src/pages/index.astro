@@ -1,0 +1,8 @@
+---
+import Base from "../layouts/Base.astro";
+import { RunList } from "../components/RunList.tsx";
+---
+<Base title="Runs">
+	<h1 class="mb-4 text-2xl font-semibold">Runs</h1>
+	<RunList client:load />
+</Base>

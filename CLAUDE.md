@@ -6,12 +6,13 @@ This repo contains the *tooling*, not any product code. Products consume it by c
 
 ## Orientation
 
-This is a pnpm workspace. Two packages today:
+This is a pnpm workspace. Three packages today:
 
 - `packages/autopilot/` — the published pipeline (`@cdhorne/claude-autopilot`). All TypeScript runs on tsx; no build step.
   - Pipeline modules: `packages/autopilot/scripts/autopilot/` (read by `expandSkill()` in the pipeline)
   - Entry points: `packages/autopilot/scripts/autopilot.ts` → `…/autopilot/main.ts`; `packages/autopilot/bin/claude-autopilot.js` for the published CLI.
-- `packages/server/` — control-plane daemon (`@cdhorne/claude-autopilot-server`, private). Hono HTTP service that supervises `pnpm autopilot` subprocesses, exposes them over `POST /runs`, `POST /runs/:id/{pause,resume,stop}`, `GET /runs/:id/log` (SSE), `GET /stats`, `GET /roadmap`, `GET /healthz`. State persists to `${repo}/.dev/server-state.json`; per-run stdout tees to `${repo}/.dev/server-logs/${id}.log`. Deployed as a systemd user unit (`infra/systemd/autopilot-server.service`); deploy workflow at `.github/workflows/deploy-server.yml`. See `docs/server.md` for API + setup.
+- `packages/server/` — control-plane daemon (`@cdhorne/claude-autopilot-server`, private). Hono HTTP service that supervises `pnpm autopilot` subprocesses, exposes them over `POST /runs`, `POST /runs/:id/{pause,resume,stop}`, `GET /runs/:id/log` (SSE), `GET /stats`, `GET /roadmap`, `GET /healthz`. State persists to `${repo}/.dev/server-state.json`; per-run stdout tees to `${repo}/.dev/server-logs/${id}.log`. Also serves `packages/web/dist/` under `/ui/*` when `AUTOPILOT_SERVER_WEB_DIST` resolves. Deployed as a systemd user unit (`infra/systemd/autopilot-server.service`); deploy workflow at `.github/workflows/deploy-server.yml`. See `docs/server.md` for API + setup.
+- `packages/web/` — mobile-responsive control UI (`@cdhorne/claude-autopilot-web`, private). Astro 5 + React 19 islands + Tailwind v4, `output: "static"`, `base: "/ui/"`. Dev: `pnpm --filter @cdhorne/claude-autopilot-web dev` proxies API calls to the daemon. Prod: `astro build` → daemon static-mounts `dist/`. Manifest-based PWA, no service worker.
 
 Repo root holds shared assets and dev tooling:
 

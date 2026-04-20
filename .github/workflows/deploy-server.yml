@@ -6,6 +6,7 @@ on:
     paths:
       - "packages/server/**"
       - "packages/autopilot/**"
+      - "packages/web/**"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
       - ".github/workflows/deploy-server.yml"
@@ -27,4 +28,5 @@ jobs:
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @cdhorne/claude-autopilot-server build
+      - run: pnpm --filter @cdhorne/claude-autopilot-web build
       - run: systemctl --user restart autopilot-server

@@ -1,0 +1,14 @@
+{
+	"name": "Autopilot Control",
+	"short_name": "Autopilot",
+	"display": "standalone",
+	"theme_color": "#0f172a",
+	"background_color": "#f8fafc",
+	"scope": "/ui/",
+	"start_url": "/ui/",
+	"icons": [
+		{ "src": "/ui/icon.svg", "type": "image/svg+xml", "sizes": "any" },
+		{ "src": "/ui/icon-192.png", "type": "image/png", "sizes": "192x192" },
+		{ "src": "/ui/icon-512.png", "type": "image/png", "sizes": "512x512", "purpose": "any maskable" }
+	]
+}

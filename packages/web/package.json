@@ -1,0 +1,33 @@
+{
+	"name": "@cdhorne/claude-autopilot-web",
+	"version": "0.0.0",
+	"private": true,
+	"description": "Mobile-responsive web UI (Astro 5 + React 19 + Tailwind v4) for the autopilot control-plane daemon.",
+	"license": "UNLICENSED",
+	"type": "module",
+	"scripts": {
+		"dev": "astro dev",
+		"build": "tsx scripts/gen-icons.ts && astro build",
+		"check:types": "astro check",
+		"test": "tsx --test __tests__/*.test.ts"
+	},
+	"dependencies": {
+		"@astrojs/react": "^4.2.0",
+		"@cdhorne/claude-autopilot": "workspace:*",
+		"@cdhorne/claude-autopilot-server": "workspace:*",
+		"@tailwindcss/vite": "^4.0.0",
+		"astro": "^5.0.0",
+		"react": "^19.0.0",
+		"react-dom": "^19.0.0",
+		"tailwindcss": "^4.0.0"
+	},
+	"devDependencies": {
+		"@astrojs/check": "^0.9.0",
+		"@resvg/resvg-js": "^2.6.0",
+		"@types/node": "^24.0.0",
+		"@types/react": "^19.0.0",
+		"@types/react-dom": "^19.0.0",
+		"tsx": "^4.19.0",
+		"typescript": "^5.6.0"
+	}
+}

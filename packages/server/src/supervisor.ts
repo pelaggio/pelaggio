@@ -1,4 +1,4 @@
-import { spawn as childProcessSpawn, type ChildProcess } from "node:child_process";
+import { type ChildProcess, spawn as childProcessSpawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { ulid } from "ulid";
@@ -138,7 +138,7 @@ export class Supervisor {
 			child.once("exit", onExit);
 		});
 		const updated: PersistedRun = {
-			...this.store.get(id) ?? run,
+			...(this.store.get(id) ?? run),
 			status: "abandoned",
 			endedAt: this.now().toISOString(),
 		};
@@ -187,7 +187,10 @@ export class Supervisor {
 }
 
 export class SupervisorError extends Error {
-	constructor(message: string, readonly code: "not-found" | "invalid-state" | "no-process") {
+	constructor(
+		message: string,
+		readonly code: "not-found" | "invalid-state" | "no-process",
+	) {
 		super(message);
 	}
 }
