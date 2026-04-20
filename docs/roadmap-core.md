@@ -50,7 +50,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | ~~TOOL-38. Convert repo to pnpm workspace monorepo (packages/autopilot + placeholder packages/server)~~ | **Done** — Convert repo to pnpm workspace monorepo |
 | ~~TOOL-39. Autopilot control-plane daemon (local, tailnet-bound, Hono + systemd)~~ | **Done** — Autopilot control-plane daemon shipped |
 | ~~TOOL-42. Autopilot control-plane web UI (Astro + React + Tailwind, mobile-responsive PWA)~~ | **Done** — Autopilot control-plane web UI shipped |
-| TOOL-43. Cloudflare Tunnel + bearer auth for off-tailnet control-plane access | TOOL-39 |
+| ~~TOOL-43. Cloudflare Tunnel + bearer auth for off-tailnet control-plane access~~ | **Done** — cloudflare tunnel + bearer auth shipped |
 | ~~TOOL-44. MarkdownRoadmap: read checkbox-format items (write/read parity)~~ | **Done** — checkbox-format read parity in MarkdownRoadmap |
 ---
 
