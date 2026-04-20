@@ -112,6 +112,19 @@ systemctl --user daemon-reload
 systemctl --user enable --now autopilot-server
 ```
 
+**Why the wrapper script?** systemd user instances boot with a minimal `PATH`
+that excludes the bin directories used by fnm / nvm / volta. The unit's
+`ExecStart=` points at `infra/systemd/autopilot-server-exec.sh`, which sources
+the right init hook for whichever manager is installed (falling through cleanly
+when none is) and then `exec`s `pnpm --filter @cdhorne/claude-autopilot-server
+start`. Signal handling, journal tees, and `Restart=on-failure` are unchanged.
+If your setup isn't covered, you have two options:
+
+1. Add `PATH=/your/bin:$PATH` to `~/.config/autopilot-server.env`. systemd
+   reads `EnvironmentFile` before `ExecStart`, so the wrapper inherits it.
+2. Drop a `~/.config/systemd/user/autopilot-server.service.d/override.conf`
+   with a custom `ExecStart=` that points at your own launcher.
+
 `EnvironmentFile=%h/.config/autopilot-server.env` — operator-managed, **not
 committed**:
 
