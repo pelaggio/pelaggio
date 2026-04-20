@@ -10,11 +10,11 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 
 | ID | Title | Deps | Plan | Roadmap |
 |----|-------|------|------|---------|
-| TOOL-42 | Autopilot control-plane web UI (Astro + React + Tailwind, mobile-responsive PWA) | TOOL-39 | — | core |
 | TOOL-43 | Cloudflare Tunnel + bearer auth for off-tailnet control-plane access | TOOL-39 | — | core |
 
 ## Recently completed
 
+- TOOL-42 ✓
 - TOOL-39 ✓
 - TOOL-38 ✓
 - TOOL-37 ✓
