@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 export interface ServerConfig {
 	host: string;
@@ -18,7 +19,10 @@ function required(name: string, value: string | undefined): string {
 	return value;
 }
 
-export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
+// Resolved relative to this file: packages/server/src/ → ../../web/dist = packages/web/dist
+const packageRelativeWebDist = fileURLToPath(new URL("../../web/dist", import.meta.url));
+
+export function loadServerConfig(env: NodeJS.ProcessEnv = process.env, { webDistDefault = packageRelativeWebDist }: { webDistDefault?: string } = {}): ServerConfig {
 	const host = required("AUTOPILOT_SERVER_HOST", env.AUTOPILOT_SERVER_HOST);
 	if (host === "0.0.0.0") {
 		throw new Error("AUTOPILOT_SERVER_HOST must be a specific interface (e.g. tailnet IP), not 0.0.0.0");
@@ -32,7 +36,7 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
 	const statePath = env.AUTOPILOT_SERVER_STATE_PATH ? resolve(env.AUTOPILOT_SERVER_STATE_PATH) : resolve(repo, ".dev", "server-state.json");
 	const logDir = env.AUTOPILOT_SERVER_LOG_DIR ? resolve(env.AUTOPILOT_SERVER_LOG_DIR) : resolve(repo, ".dev", "server-logs");
 	const token = env.CONTROL_PLANE_TOKEN || undefined;
-	const webDistCandidate = env.AUTOPILOT_SERVER_WEB_DIST ? resolve(env.AUTOPILOT_SERVER_WEB_DIST) : resolve(repo, "packages/web/dist");
+	const webDistCandidate = env.AUTOPILOT_SERVER_WEB_DIST ? resolve(env.AUTOPILOT_SERVER_WEB_DIST) : webDistDefault;
 	const webDist = existsSync(webDistCandidate) ? webDistCandidate : undefined;
 	return { host, port, repo, token, statePath, logDir, webDist };
 }

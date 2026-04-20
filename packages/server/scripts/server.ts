@@ -29,4 +29,9 @@ const app = createApp({
 
 serve({ fetch: app.fetch, hostname: cfg.host, port: cfg.port }, (info) => {
 	console.log(`autopilot-server listening on http://${info.address}:${info.port} (repo: ${cfg.repo})`);
+	if (cfg.webDist !== undefined) {
+		console.log(`UI mounted from ${cfg.webDist}`);
+	} else {
+		console.log("UI not mounted (build @cdhorne/claude-autopilot-web or set AUTOPILOT_SERVER_WEB_DIST)");
+	}
 });
