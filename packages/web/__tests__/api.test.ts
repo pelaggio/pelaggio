@@ -1,6 +1,20 @@
 import assert from "node:assert/strict";
-import { afterEach, describe, it } from "node:test";
+import { afterEach, beforeEach, describe, it } from "node:test";
 import { ApiError, getRoadmap, getRun, getStats, listRuns, pauseRun, startRun, stopRun } from "../src/lib/api.js";
+import { __setStorageForTests, registerPromptHandler, setToken } from "../src/lib/token.js";
+
+class FakeStorage {
+	private map = new Map<string, string>();
+	getItem(key: string): string | null {
+		return this.map.get(key) ?? null;
+	}
+	setItem(key: string, value: string): void {
+		this.map.set(key, value);
+	}
+	removeItem(key: string): void {
+		this.map.delete(key);
+	}
+}
 
 interface Call {
 	url: string;
@@ -21,6 +35,10 @@ function installFetch(fn: (req: Call) => Response | Promise<Response>): Call[] {
 const originalFetch = globalThis.fetch;
 afterEach(() => {
 	globalThis.fetch = originalFetch;
+});
+
+beforeEach(() => {
+	__setStorageForTests(new FakeStorage());
 });
 
 function jsonResponse(body: unknown, init?: ResponseInit): Response {
@@ -100,6 +118,48 @@ describe("api client", () => {
 		await assert.rejects(
 			() => listRuns(),
 			(err: unknown) => err instanceof ApiError && err.status === 500,
+		);
+	});
+
+	it("injects Authorization: Bearer <token> when a token is stored", async () => {
+		setToken("secret-abc");
+		const calls = installFetch(() => jsonResponse({ runs: [] }));
+		await listRuns();
+		const headers = new Headers(calls[0]?.init?.headers);
+		assert.equal(headers.get("authorization"), "Bearer secret-abc");
+	});
+
+	it("omits Authorization when no token is stored", async () => {
+		const calls = installFetch(() => jsonResponse({ runs: [] }));
+		await listRuns();
+		const headers = new Headers(calls[0]?.init?.headers);
+		assert.equal(headers.get("authorization"), null);
+	});
+
+	it("on 401, awaits promptForToken() and retries once with the new token", async () => {
+		let attempt = 0;
+		const calls = installFetch(() => {
+			attempt++;
+			if (attempt === 1) return new Response("", { status: 401 });
+			return jsonResponse({ runs: [] });
+		});
+		registerPromptHandler(() => {
+			setTimeout(() => setToken("fresh-tok"), 0);
+		});
+		await listRuns();
+		assert.equal(calls.length, 2);
+		const retryHeaders = new Headers(calls[1]?.init?.headers);
+		assert.equal(retryHeaders.get("authorization"), "Bearer fresh-tok");
+	});
+
+	it("two consecutive 401s throw ApiError(401)", async () => {
+		installFetch(() => new Response(JSON.stringify({ error: "unauthorized", code: "unauthorized" }), { status: 401, headers: { "content-type": "application/json" } }));
+		registerPromptHandler(() => {
+			setTimeout(() => setToken("still-bad"), 0);
+		});
+		await assert.rejects(
+			() => listRuns(),
+			(err: unknown) => err instanceof ApiError && err.status === 401,
 		);
 	});
 });

@@ -1,5 +1,6 @@
 import type { RoadmapItem, Stats } from "@cdhorne/claude-autopilot";
 import type { PersistedRun, RunSummary, ShipTargetName } from "@cdhorne/claude-autopilot-server/types";
+import { getToken, markTokenRejected, promptForToken } from "./token.js";
 
 export class ApiError extends Error {
 	readonly status: number;
@@ -31,15 +32,26 @@ export interface RoadmapResponse {
 	items: RoadmapItem[];
 }
 
-async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
-	const res = await fetch(path, {
+async function doFetch(path: string, init: RequestInit | undefined): Promise<Response> {
+	const token = getToken();
+	return fetch(path, {
 		...init,
 		headers: {
 			Accept: "application/json",
 			...(init?.body ? { "content-type": "application/json" } : {}),
+			...(token ? { Authorization: `Bearer ${token}` } : {}),
 			...(init?.headers ?? {}),
 		},
 	});
+}
+
+async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
+	let res = await doFetch(path, init);
+	if (res.status === 401) {
+		markTokenRejected();
+		await promptForToken();
+		res = await doFetch(path, init);
+	}
 	if (!res.ok) {
 		let code: string | undefined;
 		let message = `${res.status} ${res.statusText}`;

@@ -128,13 +128,19 @@ CONTROL_PLANE_TOKEN=...                       # optional; bearer-gates everythin
 
 `StandardOutput=journal` — tail with `journalctl --user -u autopilot-server -f`.
 
-## Bearer-token hook (TOOL-43 reservation)
+## Bearer-token auth
 
 `bearerAuth(token)` is a no-op when `CONTROL_PLANE_TOKEN` is unset, so the
-middleware ships dormant. The expected TOOL-43 deployment binds the daemon to
-a tailnet-only interface, fronts it with Cloudflare Tunnel, and turns the
-token on. Comparison uses `crypto.timingSafeEqual` and rejects length
-mismatches before the compare so attackers can't probe length via timing.
+middleware ships dormant. Live deployments bind the daemon to a tailnet-only
+interface, front it with Cloudflare Tunnel (see below), and set
+`CONTROL_PLANE_TOKEN` in the env file — everything except `/healthz` then
+requires `Authorization: Bearer <token>`. Comparison uses
+`crypto.timingSafeEqual` and rejects length mismatches before the compare so
+attackers can't probe length via timing.
+
+Rotate the token by editing `~/.config/autopilot-server.env` and running
+`systemctl --user restart autopilot-server`. SSE streams reconnect with the
+new token on the next page load.
 
 ## Tailnet bind
 
@@ -175,3 +181,90 @@ target box). Triggers on `push` to `main` touching `packages/server/**`,
 `tsx -e "import('./src/app.ts')"` — matches repo ethos of no formal build) →
 `systemctl --user restart autopilot-server`. `concurrency` prevents
 overlapping deploys; `timeout-minutes: 10` bounds stuck jobs.
+
+## Cloudflare Tunnel setup
+
+The tailnet bind keeps the daemon unreachable from the public internet; a
+Cloudflare Tunnel provides off-tailnet access (mobile, cellular, etc.)
+without opening inbound ports. `cloudflared` runs on the same box, dials out
+to Cloudflare, and proxies `https://<hostname>/*` to the local daemon.
+
+### 1. Provision the tunnel
+
+Terraform config lives under `infra/cloudflare/`. One-time state is local
+(upgrade to R2 when a second infra target joins the repo).
+
+```bash
+cd infra/cloudflare
+cp terraform.tfvars.example terraform.tfvars   # fill in account/zone/domain
+terraform init
+terraform apply
+terraform output -raw tunnel_token             # copy into env file, next step
+```
+
+The applied config creates: a `cloudflare_zero_trust_tunnel_cloudflared`
+resource, a `..._config` with ingress mapping `<tunnel_name>.<domain>` →
+`http://127.0.0.1:7777` (override via `tunnel_target`), and a proxied
+`cloudflare_dns_record` CNAME to `<tunnel-id>.cfargotunnel.com`.
+
+### 2. Install cloudflared as a user unit
+
+```bash
+# one-time: install cloudflared from https://pkg.cloudflare.com/
+mkdir -p ~/.config
+cat > ~/.config/cloudflared.env <<EOF
+TUNNEL_TOKEN=<paste from terraform output above>
+EOF
+chmod 600 ~/.config/cloudflared.env
+
+cp infra/systemd/cloudflared.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now cloudflared
+journalctl --user -u cloudflared -f             # confirm "Connection registered"
+```
+
+The unit mirrors `autopilot-server.service` conventions: user-level,
+`EnvironmentFile` for the token, `Restart=on-failure`, journal logging.
+Keeping cloudflared on its own unit means server redeploys
+(`.github/workflows/deploy-server.yml`) don't interrupt the tunnel.
+
+### 3. Enable the bearer token
+
+Edit `~/.config/autopilot-server.env`:
+
+```bash
+CONTROL_PLANE_TOKEN=$(openssl rand -hex 32)
+```
+
+Then `systemctl --user restart autopilot-server`. The web UI will prompt for
+the token on first load and on any 401. The token is stored in browser
+`localStorage` under the key `autopilot-token` — any XSS on the UI would
+expose it. Roadmap out-of-scope to harden further; if that changes, an
+httpOnly cookie + server-side session is the upgrade path.
+
+### 4. Rotate the tunnel token (rare)
+
+Cloudflare regenerates the `tunnel_token` when the underlying tunnel
+resource is replaced (e.g., `terraform taint` + apply). Sequence:
+
+```bash
+terraform -chdir=infra/cloudflare apply
+terraform -chdir=infra/cloudflare output -raw tunnel_token > ~/.config/cloudflared.env.new
+# edit to keep TUNNEL_TOKEN=... format, then atomic swap
+mv ~/.config/cloudflared.env.new ~/.config/cloudflared.env
+systemctl --user restart cloudflared
+```
+
+### Operator acceptance checklist (manual smoke test)
+
+The roadmap's end-to-end test is inherently out-of-tailnet and has no CI
+path. Run it after any tunnel or auth change:
+
+- [ ] Tailscale off on the client device (phone, cellular data).
+- [ ] Open `https://<tunnel_name>.<domain>/ui/`.
+- [ ] Token modal appears; paste the `CONTROL_PLANE_TOKEN`.
+- [ ] Runs list loads.
+- [ ] Start a small cycle (e.g., `--dry-run`).
+- [ ] Run detail page streams SSE log without disconnect.
+- [ ] Pause/resume/stop buttons each return 200 and reflect in the UI.
+- [ ] `clear token` in the nav clears `localStorage` and re-prompts.

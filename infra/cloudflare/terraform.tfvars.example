@@ -1,0 +1,7 @@
+# Copy to terraform.tfvars (gitignored) and fill in.
+cloudflare_api_token  = "cf-token-with-tunnel-and-dns-edit-scopes"
+cloudflare_account_id = "your-cloudflare-account-id"
+zone_id               = "zone-id-for-the-domain"
+domain                = "example.com"
+tunnel_name           = "autopilot"
+tunnel_target         = "http://127.0.0.1:7777"

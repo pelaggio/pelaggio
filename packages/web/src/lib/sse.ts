@@ -1,3 +1,5 @@
+import { getToken, markTokenRejected, promptForToken } from "./token.js";
+
 export interface SseHandlers {
 	onLine: (line: string) => void;
 	onEnd?: (exitCode: number | undefined) => void;
@@ -28,14 +30,24 @@ function parseEvent(block: string): ParsedEvent | null {
 
 export async function subscribeSse(url: string, handlers: SseHandlers): Promise<void> {
 	const { onLine, onEnd, onError, signal, headers } = handlers;
-	try {
-		const res = await fetch(url, {
+	const openStream = async (): Promise<Response> => {
+		const token = getToken();
+		return fetch(url, {
 			signal,
 			headers: {
 				Accept: "text/event-stream",
+				...(token ? { Authorization: `Bearer ${token}` } : {}),
 				...(headers ?? {}),
 			},
 		});
+	};
+	try {
+		let res = await openStream();
+		if (res.status === 401) {
+			markTokenRejected();
+			await promptForToken();
+			res = await openStream();
+		}
 		if (!res.ok || !res.body) {
 			onError?.(new Error(`SSE ${url} → ${res.status}`));
 			onEnd?.(undefined);
