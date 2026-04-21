@@ -11,10 +11,10 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 | ID | Title | Deps | Plan | Roadmap |
 |----|-------|------|------|---------|
 | TOOL-48 | Multi-repo control plane: AUTOPILOT_REPOS list, per-repo state stores, UI repo switcher | — | — | core |
-| TOOL-50 | Skill CLI invocation is collision-vulnerable; pipeline entry accepts unknown positional args (recursion risk) | — | — | core |
 
 ## Recently completed
 
+- TOOL-50 ✓
 - TOOL-47 ✓
 - TOOL-49 ✓
 - TOOL-45 ✓
