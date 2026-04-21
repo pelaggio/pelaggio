@@ -12,11 +12,11 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 |----|-------|------|------|---------|
 | TOOL-47 | Control-plane web UI: only prompt for token on 401, not on cold load when localStorage is empty | — | — | core |
 | TOOL-48 | Multi-repo control plane: AUTOPILOT_REPOS list, per-repo state stores, UI repo switcher | — | — | core |
-| TOOL-49 | TUI non-TTY fallback: plain-line events when stderr isn't a terminal (server/SSE consumers) | — | — | core |
 | TOOL-50 | Skill CLI invocation is collision-vulnerable; pipeline entry accepts unknown positional args (recursion risk) | — | — | core |
 
 ## Recently completed
 
+- TOOL-49 ✓
 - TOOL-45 ✓
 - TOOL-46 ✓
 - TOOL-43 ✓
