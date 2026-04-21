@@ -14,6 +14,9 @@ importers:
       '@biomejs/biome':
         specifier: ^2.4.12
         version: 2.4.12
+      '@cdhorne/claude-autopilot':
+        specifier: workspace:*
+        version: link:packages/autopilot
       lefthook:
         specifier: ^2.1.6
         version: 2.1.6

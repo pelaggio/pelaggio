@@ -16,7 +16,7 @@ Stress-test current work against the rubric. Surface every issue, fix what's fix
 
 Run `git rev-parse --path-format=absolute --git-common-dir` — the output ends with `/.git`. Strip that suffix to get MAIN_REPO.
 
-Roadmap lookups go through `npx claude-autopilot roadmap ...`; all plan-path resolution and deferred-item creation dispatches to the configured adapter.
+Roadmap lookups go through `npx @cdhorne/claude-autopilot roadmap ...`; all plan-path resolution and deferred-item creation dispatches to the configured adapter.
 
 Must be on a feature branch (not `main`).
 
@@ -43,7 +43,7 @@ Apply the target detection rules above. You will land in one of two modes.
 Target: a `.md` plan file (usually `docs/plans/{branch-slug}.md`).
 
 1. Read the plan in full.
-2. Extract the item ID from the branch name. Run `npx claude-autopilot roadmap get <ID> --json` for title, deps, and `sourceRef` (markdown: roadmap file path; github-issues/linear: issue URL + full body). Read the `sourceRef` file / review the body for scope and dependencies.
+2. Extract the item ID from the branch name. Run `npx @cdhorne/claude-autopilot roadmap get <ID> --json` for title, deps, and `sourceRef` (markdown: roadmap file path; github-issues/linear: issue URL + full body). Read the `sourceRef` file / review the body for scope and dependencies.
 3. Read related design docs in `{MAIN_REPO}/docs/` if the plan references them.
 4. Read any source files the plan names as deliverables — confirm file existence, current shape, and that the plan's proposed edits are compatible with what's actually there.
 5. **Verify APIs the plan assumes** — for every function, type, or component the plan calls or extends, read the actual source and confirm signatures match. Flag mismatches concretely (e.g., "plan assumes `foo()` returns `X` but it returns `Y`").
@@ -70,7 +70,7 @@ If `Arguments:` at the bottom of this prompt contains the string `autopilot`:
 
 - `autopilot plan-review` → force plan review mode regardless of git state. The pipeline is staging the plan for implementation and wants a verdict.
 - `autopilot code-review` → force code review mode regardless of git state. The pipeline has finished implementation and wants fixes + verification + roadmap updates.
-- In code review mode, additionally: for each deferred item, run `npx claude-autopilot roadmap create-item --title "<concise imperative title>" [--scope <XS|S|M|L|XL>] [--deps "<csv of IDs>"] --json` (from `{MAIN_REPO}`) so `/pick` can find it later. The markdown adapter appends to the roadmap + task-index; gh/linear open an issue.
+- In code review mode, additionally: for each deferred item, run `npx @cdhorne/claude-autopilot roadmap create-item --title "<concise imperative title>" [--scope <XS|S|M|L|XL>] [--deps "<csv of IDs>"] --json` (from `{MAIN_REPO}`) so `/pick` can find it later. The markdown adapter appends to the roadmap + task-index; gh/linear open an issue.
 - The `Verdict:` line is parsed by the pipeline's verdict parser — emit it with the exact format `Verdict: APPROVE` / `REVISE` / `RETHINK`.
 
 If `Arguments:` is absent or doesn't mention `autopilot`, you're running inline. Skip the roadmap-update step for deferred items — just list them in the output so the user decides whether to track them.

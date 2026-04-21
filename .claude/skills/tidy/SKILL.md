@@ -12,7 +12,7 @@ Periodic maintenance: archive completed work, prune stale state, verify health.
 
 Run `git rev-parse --path-format=absolute --git-common-dir` — the output ends with `/.git`. Strip that suffix to get MAIN_REPO.
 
-Detect the configured roadmap source via `npx claude-autopilot roadmap source` (prints e.g. `markdown`, `github-issues`, `linear`). Sections §1 and §1b below are markdown-specific — **skip them** when the source is not `markdown` (remote adapters own their own archival/indexing; there is no local roadmap file or task index to sync).
+Detect the configured roadmap source via `npx @cdhorne/claude-autopilot roadmap source` (prints e.g. `markdown`, `github-issues`, `linear`). Sections §1 and §1b below are markdown-specific — **skip them** when the source is not `markdown` (remote adapters own their own archival/indexing; there is no local roadmap file or task index to sync).
 
 ## 1. Roadmap audit (markdown only)
 

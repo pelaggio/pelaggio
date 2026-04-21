@@ -28,6 +28,13 @@ const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 // present, a missing file is opt-in (not a violation), matching the shell
 // semantics that the include is allowed to be absent at the consumer's discretion.
 const INCLUDE_RE = /!\x60cat\s+([^\x60\s]+)(\s+2>\/dev\/null)?\x60/g;
+// `npx claude-autopilot …` (bare, no scope) — collides with an unrelated public
+// package on stale npx caches and triggered the recursion incident in TOOL-50.
+const NPX_BARE_AUTOPILOT_RE = /\bnpx\s+(?:--\S+\s+)*claude-autopilot\b/g;
+// `pnpm autopilot <subcommand>` — the exact substitution the agent reached for
+// when the bare-name invocation failed. `pnpm autopilot` is the pipeline entry,
+// not a CLI dispatcher, so this shape would re-enter the pipeline.
+const PNPM_AUTOPILOT_SUBCOMMAND_RE = /\bpnpm\s+autopilot\s+(?:roadmap|worktree-deps|sync)\b/g;
 
 function lineOf(body: string, index: number): number {
 	let line = 1;
@@ -192,6 +199,32 @@ export function lintSkillFile(absPath: string, repoRoot: string): Violation[] {
 				message: `!\`cat ${includePath}\` — file not found`,
 			});
 		}
+	}
+
+	// TOOL-50 collision-vulnerable invocations
+	const skillBody = body.slice(match[0].length);
+	const bodyOffset = match[0].length;
+	NPX_BARE_AUTOPILOT_RE.lastIndex = 0;
+	let bareHit: RegExpExecArray | null;
+	// biome-ignore lint/suspicious/noAssignInExpressions: standard regex exec loop
+	while ((bareHit = NPX_BARE_AUTOPILOT_RE.exec(skillBody)) !== null) {
+		violations.push({
+			file: rel,
+			line: lineOf(body, bodyOffset + bareHit.index),
+			rule: "skill.npx-bare-autopilot",
+			message: "use 'npx @cdhorne/claude-autopilot' — the bare 'claude-autopilot' name collides with a public package and can recurse the pipeline (TOOL-50)",
+		});
+	}
+	PNPM_AUTOPILOT_SUBCOMMAND_RE.lastIndex = 0;
+	let pnpmHit: RegExpExecArray | null;
+	// biome-ignore lint/suspicious/noAssignInExpressions: standard regex exec loop
+	while ((pnpmHit = PNPM_AUTOPILOT_SUBCOMMAND_RE.exec(skillBody)) !== null) {
+		violations.push({
+			file: rel,
+			line: lineOf(body, bodyOffset + pnpmHit.index),
+			rule: "skill.pnpm-autopilot-subcommand",
+			message: "'pnpm autopilot' is the pipeline entry; subcommands go through 'npx @cdhorne/claude-autopilot' (TOOL-50)",
+		});
 	}
 
 	// $ARGUMENTS without argument-hint

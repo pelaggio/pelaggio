@@ -12,7 +12,7 @@ allowed-tools: Read Edit Bash(git:*) Bash(pnpm:*) Bash(npx:*) Bash(gh pr:*)
 
 Run `git rev-parse --path-format=absolute --git-common-dir` — the output ends with `/.git`. Strip that suffix to get MAIN_REPO.
 
-Roadmap lookups go through `npx claude-autopilot roadmap ...`; all mark-done / archive logic dispatches to the configured adapter.
+Roadmap lookups go through `npx @cdhorne/claude-autopilot roadmap ...`; all mark-done / archive logic dispatches to the configured adapter.
 
 Parse `$ARGUMENTS` for `--no-squash` and `--pr` flags.
 
@@ -34,7 +34,7 @@ Parse `$ARGUMENTS` for `--no-squash` and `--pr` flags.
 
 ## 2. Identify
 
-Get item ID from the current branch name. Run `npx claude-autopilot roadmap get <ID> --json` to fetch title + description for the commit message. The `title` field is the commit subject source.
+Get item ID from the current branch name. Run `npx @cdhorne/claude-autopilot roadmap get <ID> --json` to fetch title + description for the commit message. The `title` field is the commit subject source.
 
 ## 3. Squash (unless `--no-squash`)
 
@@ -96,7 +96,7 @@ Re-run the verification commands from `.claude/skills/_rubric.md`'s Verification
 From `{MAIN_REPO}`, dispatch to the adapter:
 
 ```bash
-npx claude-autopilot roadmap mark-done <ID> --note "<short description>"
+npx @cdhorne/claude-autopilot roadmap mark-done <ID> --note "<short description>"
 ```
 
 Markdown adapter: strikes the roadmap row, moves the task-index entry to "Recently completed", and commits internally. Github-issues: posts a comment and closes the issue. Linear: posts a comment and transitions the issue to completed. Either way, nothing further to stage on `main`.
@@ -104,7 +104,7 @@ Markdown adapter: strikes the roadmap row, moves the task-index entry to "Recent
 ## 7. Archive plan docs
 
 ```bash
-npx claude-autopilot roadmap archive-plan <ID>
+npx @cdhorne/claude-autopilot roadmap archive-plan <ID>
 ```
 
 Markdown: `git mv` the plan from `docs/plans/` to `docs/archived/` and commit. Gh/linear: no-op.

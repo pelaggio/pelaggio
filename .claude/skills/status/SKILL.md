@@ -13,16 +13,16 @@ Quick orientation for resuming work or checking progress.
 
 Run `git rev-parse --path-format=absolute --git-common-dir` — the output ends with `/.git`. Strip that suffix to get MAIN_REPO.
 
-Roadmap lookups go through `npx claude-autopilot roadmap ...`.
+Roadmap lookups go through `npx @cdhorne/claude-autopilot roadmap ...`.
 
 ## Gather
 
 1. Current branch: `git branch --show-current`.
-2. List in-flight items: `git branch --list 'feat/*'` and `git worktree list`. Extract item IDs from branch names; for each, call `npx claude-autopilot roadmap get <ID> --json` to fetch title + status. Highlight the current branch.
+2. List in-flight items: `git branch --list 'feat/*'` and `git worktree list`. Extract item IDs from branch names; for each, call `npx @cdhorne/claude-autopilot roadmap get <ID> --json` to fetch title + status. Highlight the current branch.
 3. If on a feature branch:
    - Progress: `git log main..HEAD --oneline`
    - Uncommitted work: `git status --short`
-   - Plan: `npx claude-autopilot roadmap plan-path --id <ID> --worktree "$PWD"` — prints the path; exit 0 means it exists, exit 2 means it doesn't. Read it if present.
+   - Plan: `npx @cdhorne/claude-autopilot roadmap plan-path --id <ID> --worktree "$PWD"` — prints the path; exit 0 means it exists, exit 2 means it doesn't. Read it if present.
 4. If on `main`: show all in-flight feature branches and their worktrees.
 
 ## Report

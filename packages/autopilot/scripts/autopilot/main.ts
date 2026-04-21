@@ -1,31 +1,21 @@
 #!/usr/bin/env tsx
 
-import { parseArgs } from "node:util";
+import { parseCli } from "./cli.js";
 import { orchestrate } from "./pipeline.js";
 import { runStatsCommand } from "./stats.js";
-import type { Flags } from "./types.js";
 
-const { values, positionals } = parseArgs({
-	allowPositionals: true,
-	options: {
-		cycles: { type: "string", default: "1" },
-		parallel: { type: "string", default: "1" },
-		item: { type: "string" },
-		resume: { type: "string" },
-		verbose: { type: "boolean", default: false },
-		trace: { type: "boolean", default: false },
-		budget: { type: "string", default: "40" },
-		"max-wait": { type: "string", default: "6h" },
-		target: { type: "string" },
-		"dry-run": { type: "boolean", default: false },
-		"no-worktree": { type: "boolean", default: false },
-		json: { type: "boolean", default: false },
-	},
-});
+const intent = parseCli(process.argv.slice(2));
 
-if (positionals[0] === "stats") {
-	runStatsCommand({ json: !!values.json });
-	process.exit(0);
+switch (intent.kind) {
+	case "stats":
+		runStatsCommand({ json: intent.json });
+		process.exit(0);
+		break;
+	case "error":
+		console.error(intent.message);
+		process.exit(intent.exitCode);
+		break;
+	case "run":
+		orchestrate(intent.flags);
+		break;
 }
-
-orchestrate(values as Flags);

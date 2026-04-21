@@ -20,6 +20,7 @@
 	"devDependencies": {
 		"@anthropic-ai/claude-code": "^2.1.113",
 		"@biomejs/biome": "^2.4.12",
+		"@cdhorne/claude-autopilot": "workspace:*",
 		"lefthook": "^2.1.6",
 		"tsx": "^4.19.0",
 		"typescript": "^6.0.3"

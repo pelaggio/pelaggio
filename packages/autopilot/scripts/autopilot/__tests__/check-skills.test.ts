@@ -169,6 +169,63 @@ allowed-tools: Read
 		assert.deepEqual(lintSkillFile(skillFile, repoRoot), []);
 	});
 
+	it("flags bare 'npx claude-autopilot' invocation", () => {
+		const body = `---
+name: demo
+description: d
+allowed-tools: Read
+---
+
+Run \`npx claude-autopilot roadmap get TOOL-1 --json\` to fetch.
+`;
+		const { repoRoot, skillFile } = makeRepoWithSkill("demo", body);
+		const v = lintSkillFile(skillFile, repoRoot);
+		assert.equal(v.length, 1);
+		assert.equal(v[0].rule, "skill.npx-bare-autopilot");
+		assert.equal(v[0].line, 7);
+	});
+
+	it("accepts scoped 'npx @cdhorne/claude-autopilot' invocation", () => {
+		const body = `---
+name: demo
+description: d
+allowed-tools: Read
+---
+
+Run \`npx @cdhorne/claude-autopilot roadmap get TOOL-1 --json\` to fetch.
+`;
+		const { repoRoot, skillFile } = makeRepoWithSkill("demo", body);
+		assert.deepEqual(lintSkillFile(skillFile, repoRoot), []);
+	});
+
+	it("flags 'pnpm autopilot roadmap' (recursion-shaped substitution)", () => {
+		const body = `---
+name: demo
+description: d
+allowed-tools: Read
+---
+
+When npx fails, fall back to \`pnpm autopilot roadmap get <ID>\`.
+`;
+		const { repoRoot, skillFile } = makeRepoWithSkill("demo", body);
+		const v = lintSkillFile(skillFile, repoRoot);
+		assert.equal(v.length, 1);
+		assert.equal(v[0].rule, "skill.pnpm-autopilot-subcommand");
+	});
+
+	it("does not scan frontmatter for collision-prone invocations", () => {
+		const body = `---
+name: demo
+description: "Use npx claude-autopilot to invoke"
+allowed-tools: Read
+---
+
+Body is clean.
+`;
+		const { repoRoot, skillFile } = makeRepoWithSkill("demo", body);
+		assert.deepEqual(lintSkillFile(skillFile, repoRoot), []);
+	});
+
 	it("flags $ARGUMENTS without argument-hint", () => {
 		const body = `---
 name: demo

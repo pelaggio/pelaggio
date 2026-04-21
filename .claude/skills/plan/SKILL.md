@@ -13,11 +13,11 @@ Generate an implementation plan for the current work item. Then review it yourse
 
 Run `git rev-parse --path-format=absolute --git-common-dir` — the output ends with `/.git`. Strip that suffix to get MAIN_REPO.
 
-Roadmap lookups go through `npx claude-autopilot roadmap ...`; the CLI dispatches to the configured adapter (markdown / github-issues / linear).
+Roadmap lookups go through `npx @cdhorne/claude-autopilot roadmap ...`; the CLI dispatches to the configured adapter (markdown / github-issues / linear).
 
 **Target item: `$ARGUMENTS`** — if a value appears above, use it as the ID. Otherwise get the branch from `git branch --show-current` (must not be `main`) and extract the item ID from the branch name.
 
-1. Run `npx claude-autopilot roadmap get <ID> --json` to fetch the item. Parse `title`, `deps`, `sourceRef`, `body` (github-issues / linear include the full body/description in the JSON; markdown's `sourceRef` is the roadmap file path — read that file for the full spec).
+1. Run `npx @cdhorne/claude-autopilot roadmap get <ID> --json` to fetch the item. Parse `title`, `deps`, `sourceRef`, `body` (github-issues / linear include the full body/description in the JSON; markdown's `sourceRef` is the roadmap file path — read that file for the full spec).
 2. Read related `{MAIN_REPO}/docs/plan-*.md` and `{MAIN_REPO}/docs/design-*.md` files if referenced.
 3. Read any source files named as deliverables — confirm they exist and note their current shape.
 4. Find reference implementations for similar features already in the codebase.
@@ -34,7 +34,7 @@ Roadmap lookups go through `npx claude-autopilot roadmap ...`; the CLI dispatche
 Resolve the target path via the adapter (so markdown lands in `docs/plans/` while gh/linear land in `.dev/plans/`):
 
 ```bash
-npx claude-autopilot roadmap plan-path --id <ID> --worktree "$PWD"
+npx @cdhorne/claude-autopilot roadmap plan-path --id <ID> --worktree "$PWD"
 ```
 
 This prints one line — the absolute path where the plan should live. Exit code 0 if it already exists, 2 if not.
@@ -50,7 +50,7 @@ git commit -m "docs: add implementation plan for <ID>"
 Then publish the plan via the adapter (markdown: no-op; github-issues / linear: posts an issue comment with the `<!-- autopilot-plan -->` marker):
 
 ```bash
-npx claude-autopilot roadmap publish-plan --id <ID> --file "<resolved-path>"
+npx @cdhorne/claude-autopilot roadmap publish-plan --id <ID> --file "<resolved-path>"
 ```
 
 Cover in the plan: scope (what it does and doesn't touch), approach (why this over alternatives), files to change, test strategy, and a rubric self-check.
