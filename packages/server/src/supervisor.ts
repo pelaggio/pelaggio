@@ -55,7 +55,7 @@ export class Supervisor {
 		const args = this.buildArgs(opts, resumedFrom);
 		const child = this.spawn("pnpm", args, {
 			cwd: this.repoCwd,
-			env: { ...process.env, CLAUDE_AUTOPILOT_REPO: this.repoCwd },
+			env: { ...process.env, CLAUDE_AUTOPILOT_REPO: this.repoCwd, CLAUDE_AUTOPILOT_PLAIN: "1" },
 			stdio: ["ignore", "pipe", "pipe"],
 		});
 		const startedAt = this.now().toISOString();

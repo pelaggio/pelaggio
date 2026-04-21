@@ -65,6 +65,8 @@ Spawns a new child with `pnpm autopilot --resume <item>`. Returns the *new* run 
 ### `GET /runs/:id/log`
 Server-sent events. `data: <log line>\n\n` per line. For completed runs, replays the file and closes with `event: end\ndata: {"exitCode":N}\n\n`. For live runs, replay is subscribe-first: the broker captures a watermark via `bytesWritten`, replays bytes 0..watermark, then drains a buffered queue to dedup against newly-arrived lines — no race, no dropped lines.
 
+The supervisor spawns every child with `CLAUDE_AUTOPILOT_PLAIN=1` in its env, so tee'd log files and SSE streams are ANSI-free: no spinner repaints, no scroll-region escapes, no color bytes. Auto-detection via non-TTY stderr already covers piped stdio, but the explicit env var is defensive against wrapper shims that might allocate a pty. Humans piping `pnpm autopilot` output outside the server (`pnpm autopilot … 2>&1 | tee`, `| less`, etc.) can set the same env var to opt in to plain lines.
+
 ### `GET /stats`
 Pure `computeStats()` from autopilot — same shape as the CLI's `stats` subcommand.
 

@@ -1,19 +1,36 @@
 import { appendFileSync } from "node:fs";
 import type { CycleStatus, StepEmit, StepEvent } from "./types.js";
 
+// ── TUI-enabled detection ──────────────────────────────────────────────
+
+export function computeTuiEnabled(env: NodeJS.ProcessEnv = process.env, stderr: { isTTY?: boolean } = process.stderr): boolean {
+	if (env.CLAUDE_AUTOPILOT_PLAIN === "1") return false;
+	return !!stderr.isTTY;
+}
+
+export const TUI_ENABLED = computeTuiEnabled();
+
 // ── ANSI helpers ───────────────────────────────────────────────────────
 
+const wrap = TUI_ENABLED
+	? (open: string, close: string) =>
+			(s: string): string =>
+				`\x1b[${open}m${s}\x1b[${close}m`
+	: (_open: string, _close: string) =>
+			(s: string): string =>
+				s;
+
 export const A = {
-	bold: (s: string): string => `\x1b[1m${s}\x1b[22m`,
-	dim: (s: string): string => `\x1b[2m${s}\x1b[22m`,
-	cyan: (s: string): string => `\x1b[36m${s}\x1b[39m`,
-	yellow: (s: string): string => `\x1b[33m${s}\x1b[39m`,
-	green: (s: string): string => `\x1b[32m${s}\x1b[39m`,
-	red: (s: string): string => `\x1b[31m${s}\x1b[39m`,
-	magenta: (s: string): string => `\x1b[35m${s}\x1b[39m`,
-	clearLine: "\x1b[2K\r",
-	hideCursor: "\x1b[?25l",
-	showCursor: "\x1b[?25h",
+	bold: wrap("1", "22"),
+	dim: wrap("2", "22"),
+	cyan: wrap("36", "39"),
+	yellow: wrap("33", "39"),
+	green: wrap("32", "39"),
+	red: wrap("31", "39"),
+	magenta: wrap("35", "39"),
+	clearLine: TUI_ENABLED ? "\x1b[2K\r" : "",
+	hideCursor: TUI_ENABLED ? "\x1b[?25l" : "",
+	showCursor: TUI_ENABLED ? "\x1b[?25h" : "",
 };
 
 export function stripAnsi(s: string): string {
@@ -81,12 +98,15 @@ export class Spinner {
 	private interval: ReturnType<typeof setInterval> | null = null;
 	private text = "";
 	private liveStatus: LiveStatus | null;
+	private readonly plain: boolean;
 
-	constructor(liveStatus: LiveStatus | null = null) {
+	constructor(liveStatus: LiveStatus | null = null, opts: { plain?: boolean } = {}) {
 		this.liveStatus = liveStatus;
+		this.plain = opts.plain ?? !TUI_ENABLED;
 	}
 
 	start(text: string): void {
+		if (this.plain) return;
 		this.text = text;
 		this.frame = 0;
 		this.render();
@@ -105,6 +125,7 @@ export class Spinner {
 	}
 
 	stop(finalLine?: string): void {
+		if (this.plain) return;
 		if (this.interval) clearInterval(this.interval);
 		this.interval = null;
 		process.stderr.write(A.clearLine);
@@ -122,11 +143,17 @@ export class Spinner {
 // ── Status bar (pinned at terminal bottom) ─────────────────────────────
 
 export class StatusBar {
+	readonly plain: boolean;
 	active = false;
 	reservedLines = 2;
 	lastLines: string[] = [];
 
+	constructor(opts: { plain?: boolean } = {}) {
+		this.plain = opts.plain ?? !TUI_ENABLED;
+	}
+
 	setup(lines = 2): void {
+		if (this.plain) return;
 		this.reservedLines = lines;
 		this.applyScrollRegion();
 		process.stderr.write("\x1b[1;1H");
@@ -145,7 +172,7 @@ export class StatusBar {
 	}
 
 	update(lines: string[]): void {
-		if (!this.active) return;
+		if (this.plain || !this.active) return;
 		this.lastLines = lines;
 		const rows = process.stderr.rows || 24;
 		const cols = process.stderr.columns || 80;
@@ -162,6 +189,7 @@ export class StatusBar {
 	}
 
 	teardown(): void {
+		if (this.plain) return;
 		if (!this.active) return;
 		const rows = process.stderr.rows || 24;
 		const startRow = rows - this.reservedLines + 1;
@@ -242,31 +270,36 @@ export interface StepRendererOpts {
 	logPath?: string;
 	liveStatus: LiveStatus;
 	workerStatus?: CycleStatus;
+	plain?: boolean;
 }
 
 export function createStepRenderer(opts: StepRendererOpts): StepEmit {
 	const { verbose, trace, toFile, logPath, liveStatus, workerStatus: ws } = opts;
 
-	// Terminal verbose vs file verbose
-	const v = verbose && !toFile;
-	const fv = toFile;
+	const plain = opts.plain ?? !TUI_ENABLED;
+	const ttyVerbose = verbose && !toFile && !plain;
+	const plainVerbose = verbose && !toFile && plain;
+	const fileVerbose = toFile;
 
 	const w = (s: string): void => {
-		if (v) process.stderr.write(s);
+		if (ttyVerbose) process.stderr.write(s);
 	};
 	const ln = (s: string): void => w(`│  ${s}\n`);
-	const flog =
-		fv && logPath
-			? (s: string): void => {
+	const plainLine: (s: string) => void = plainVerbose
+		? (s): void => {
+				process.stderr.write(stripAnsi(s));
+			}
+		: fileVerbose && logPath
+			? (s): void => {
 					appendFileSync(logPath, stripAnsi(s));
 				}
-			: (_s: string): void => {};
+			: (_s): void => {};
 
-	const spinner = v ? new Spinner(liveStatus) : null;
+	const spinner = ttyVerbose ? new Spinner(liveStatus) : null;
 	let lastToolName = "";
 	let lastToolBrief = "";
 
-	if (v) process.stderr.write(A.hideCursor);
+	if (ttyVerbose) process.stderr.write(A.hideCursor);
 
 	return (event: StepEvent): void => {
 		switch (event.type) {
@@ -276,7 +309,7 @@ export function createStepRenderer(opts: StepRendererOpts): StepEmit {
 					ws.turns = 0;
 					ws.lastActivity = undefined;
 				}
-				if (v) {
+				if (ttyVerbose) {
 					w(`\n╭─ ${A.bold(event.name)} ${A.dim("─".repeat(Math.max(1, 48 - event.name.length)))}\n`);
 					ln(`${A.dim("model")} ${A.cyan(event.model)}  ${A.dim("budget")} $${event.budget.toFixed(2)}  ${A.dim("max")} ${event.maxTurns} turns`);
 					if (trace && event.prompt) {
@@ -288,14 +321,12 @@ export function createStepRenderer(opts: StepRendererOpts): StepEmit {
 					}
 					w("│\n");
 				}
-				if (fv) {
-					flog(`\n── ${event.name} ── model: ${event.model}  budget: $${event.budget.toFixed(2)}  max: ${event.maxTurns} turns\n`);
-					if (trace && event.prompt) {
-						const lines = event.prompt.split("\n");
-						flog(`   prompt (${event.prompt.length} chars):\n`);
-						for (const pl of lines.slice(0, 6)) flog(`     ${pl.slice(0, 120)}\n`);
-						if (lines.length > 6) flog(`     … +${lines.length - 6} lines\n`);
-					}
+				plainLine(`\n── ${event.name} ── model: ${event.model}  budget: $${event.budget.toFixed(2)}  max: ${event.maxTurns} turns\n`);
+				if (trace && event.prompt) {
+					const lines = event.prompt.split("\n");
+					plainLine(`   prompt (${event.prompt.length} chars):\n`);
+					for (const pl of lines.slice(0, 6)) plainLine(`     ${pl.slice(0, 120)}\n`);
+					if (lines.length > 6) plainLine(`     … +${lines.length - 6} lines\n`);
 				}
 				break;
 			}
@@ -304,23 +335,23 @@ export function createStepRenderer(opts: StepRendererOpts): StepEmit {
 				if (trace) {
 					spinner?.stop();
 					const info = `${event.model} · ${event.toolCount} tools`;
-					if (v) ln(A.cyan(info));
-					flog(`   ${info}\n`);
+					if (ttyVerbose) ln(A.cyan(info));
+					plainLine(`   ${info}\n`);
 				}
 				break;
 			}
 
 			case "compact": {
 				spinner?.stop();
-				if (v) ln(A.dim("⟳ context compacted"));
-				flog("   ⟳ context compacted\n");
+				if (ttyVerbose) ln(A.dim("⟳ context compacted"));
+				plainLine("   ⟳ context compacted\n");
 				break;
 			}
 
 			case "rate_limit": {
 				spinner?.stop();
-				if (v) ln(A.yellow(`⏸ rate limit hit (${event.limitType}) — parking`));
-				flog(`   ⏸ rate limit hit (${event.limitType}) — parking\n`);
+				if (ttyVerbose) ln(A.yellow(`⏸ rate limit hit (${event.limitType}) — parking`));
+				plainLine(`   ⏸ rate limit hit (${event.limitType}) — parking\n`);
 				break;
 			}
 
@@ -333,21 +364,19 @@ export function createStepRenderer(opts: StepRendererOpts): StepEmit {
 				if (trace) {
 					spinner?.stop();
 					const lines = event.content.trim().split("\n");
-					if (v) {
+					if (ttyVerbose) {
 						for (const l of lines.slice(0, 4)) ln(`  ${A.dim(l.slice(0, 100))}`);
 						if (lines.length > 4) ln(`  ${A.dim(`… +${lines.length - 4} lines`)}`);
 					}
-					if (fv) {
-						for (const l of lines.slice(0, 4)) flog(`     ${l.slice(0, 100)}\n`);
-						if (lines.length > 4) flog(`     … +${lines.length - 4} lines\n`);
-					}
+					for (const l of lines.slice(0, 4)) plainLine(`     ${l.slice(0, 100)}\n`);
+					if (lines.length > 4) plainLine(`     … +${lines.length - 4} lines\n`);
 				}
 				break;
 			}
 
 			case "tool_use": {
 				const verb = toolVerb(event.name);
-				if (v) {
+				if (ttyVerbose) {
 					if (spinner!.active && MUTATING_TOOLS.has(lastToolName)) {
 						spinner!.stop(`${A.yellow("▸")} ${A.bold(lastToolName)}  ${A.dim(lastToolBrief)}`);
 					} else {
@@ -355,10 +384,8 @@ export function createStepRenderer(opts: StepRendererOpts): StepEmit {
 					}
 					spinner!.start(`${verb} ${event.brief}`);
 				}
-				if (fv) {
-					const marker = event.mutating ? "▸" : "·";
-					flog(`   ${marker} ${verb} ${event.brief}\n`);
-				}
+				const marker = event.mutating ? "▸" : "·";
+				plainLine(`   ${marker} ${verb} ${event.brief}\n`);
 				lastToolName = event.name;
 				lastToolBrief = event.brief;
 				if (ws) ws.lastActivity = `${event.mutating ? "▸" : "·"} ${verb} ${event.brief}`;
@@ -366,41 +393,39 @@ export function createStepRenderer(opts: StepRendererOpts): StepEmit {
 			}
 
 			case "tool_error": {
-				if (v) {
+				if (ttyVerbose) {
 					spinner!.stop(`${A.red("✗")} ${A.bold(event.name)}  ${A.dim(event.brief)}`);
 					ln(`  ${A.red(event.error.slice(0, 120))}`);
 				}
-				flog(`   ✗ ${event.name}: ${event.error.slice(0, 200)}\n`);
+				plainLine(`   ✗ ${event.name}: ${event.error.slice(0, 200)}\n`);
 				break;
 			}
 
 			case "edit_loop": {
 				const fileName = event.file.replace(/^.*[/\\]/, "");
 				spinner?.stop(`${A.red("⚠")} edit loop: ${A.bold(fileName)} edited ${event.count} times`);
-				if (v) ln(A.red(`aborting — stuck in edit loop on ${fileName}`));
-				flog(`   ⚠ EDIT LOOP: ${fileName} edited ${event.count} times — aborting\n`);
+				if (ttyVerbose) ln(A.red(`aborting — stuck in edit loop on ${fileName}`));
+				plainLine(`   ⚠ EDIT LOOP: ${fileName} edited ${event.count} times — aborting\n`);
 				break;
 			}
 
 			case "sdk_error": {
 				spinner?.stop();
-				if (v) ln(`${A.red("✗")} SDK error: ${A.dim(event.message.slice(0, 120))}`);
-				flog(`   ✗ SDK error: ${event.message.slice(0, 200)}\n`);
+				if (ttyVerbose) ln(`${A.red("✗")} SDK error: ${A.dim(event.message.slice(0, 120))}`);
+				plainLine(`   ✗ SDK error: ${event.message.slice(0, 200)}\n`);
 				break;
 			}
 
 			case "done": {
 				spinner?.stop();
-				if (v) {
+				if (ttyVerbose) {
 					process.stderr.write(A.showCursor);
 					w("│\n");
 					const icon = event.ok ? A.green("✓") : A.red("✗");
 					ln(`${icon} ${event.ok ? A.green("done") : A.red(`FAILED (${event.subtype})`)}  ${A.dim("$")}${event.cost.toFixed(2)}  ${A.dim("·")} ${event.turns} turns  ${A.dim("·")} ${fmtElapsed(event.elapsed)}`);
 					w(`╰${"─".repeat(51)}\n`);
 				}
-				if (fv) {
-					flog(`   ${event.ok ? "✓ done" : `✗ FAILED (${event.subtype})`}  $${event.cost.toFixed(2)}  ${event.turns} turns  ${fmtElapsed(event.elapsed)}\n`);
-				}
+				plainLine(`   ${event.ok ? "✓ done" : `✗ FAILED (${event.subtype})`}  $${event.cost.toFixed(2)}  ${event.turns} turns  ${fmtElapsed(event.elapsed)}\n`);
 				if (ws) ws.step = undefined;
 				break;
 			}

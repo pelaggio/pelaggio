@@ -26,7 +26,7 @@ import {
 import { getRoadmapSource, type RoadmapSource } from "./roadmap/index.js";
 import { getShipTarget, isShipTargetName, SHIP_TARGET_NAMES } from "./ship/index.js";
 import { runStep as runStepDefault } from "./step-runner.js";
-import { A, createStepRenderer, fmtElapsed, LiveStatus, StatusBar } from "./tui.js";
+import { A, createStepRenderer, fmtElapsed, LiveStatus, StatusBar, TUI_ENABLED } from "./tui.js";
 import type { CycleResult, CycleStatus, Flags, ParkSignal, PipelineOpts, Step, StepLog, StepResult } from "./types.js";
 
 // ── Pipeline ───────────────────────────────────────────────────────────
@@ -664,7 +664,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			statusBar.setup(barLines);
 		}
 
-		const statusInterval = isParallel && v ? setInterval(() => liveStatus.render(), 200) : null;
+		const statusInterval = isParallel && v && TUI_ENABLED ? setInterval(() => liveStatus.render(), 200) : null;
 
 		const pickMutex = isParallel ? createMutex() : undefined;
 		let nextCycle = 0;

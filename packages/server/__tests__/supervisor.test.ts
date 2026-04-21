@@ -35,11 +35,11 @@ function setup() {
 	const dir = mkdtempSync(join(tmpdir(), "supervisor-"));
 	const store = new StateStore(join(dir, "state.json"));
 	const broker = new LogBroker();
-	const spawned: Array<{ cmd: string; args: string[]; child: FakeChild }> = [];
+	const spawned: Array<{ cmd: string; args: string[]; opts: unknown; child: FakeChild }> = [];
 	let nextPid = 1000;
-	const spawn = ((cmd: string, args: string[]) => {
+	const spawn = ((cmd: string, args: string[], opts: unknown) => {
 		const child = makeFakeChild(nextPid++);
-		spawned.push({ cmd, args, child });
+		spawned.push({ cmd, args, opts, child });
 		return child as unknown as ChildProcess;
 	}) as unknown as typeof import("node:child_process").spawn;
 	const supervisor = new Supervisor({
@@ -63,6 +63,8 @@ describe("Supervisor.start", () => {
 		assert.equal(run.status, "running");
 		assert.equal(run.item, "TOOL-1");
 		assert.equal(run.pid, 1000);
+		const opts = spawned[0].opts as { env: Record<string, string> };
+		assert.equal(opts.env.CLAUDE_AUTOPILOT_PLAIN, "1");
 	});
 });
 
