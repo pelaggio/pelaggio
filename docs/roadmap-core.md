@@ -54,7 +54,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | ~~TOOL-44. MarkdownRoadmap: read checkbox-format items (write/read parity)~~ | **Done** — checkbox-format read parity in MarkdownRoadmap |
 | ~~TOOL-45. Make autopilot-server.service pnpm discovery portable for node-version managers (fnm/nvm/volta)~~ | **Done** — pnpm discovery via shell-init wrapper |
 | ~~TOOL-46. Fix AUTOPILOT_SERVER_WEB_DIST default for external consumers + startup log for UI mount~~ | **Done** — webDist default resolved relative to package file; startup log added for UI mount status |
-| TOOL-47. Control-plane web UI: only prompt for token on 401, not on cold load when localStorage is empty | — |
+| ~~TOOL-47. Control-plane web UI: only prompt for token on 401, not on cold load when localStorage is empty~~ | **Done** — only prompt for token on 401, not on cold load |
 | TOOL-48. Multi-repo control plane: AUTOPILOT_REPOS list, per-repo state stores, UI repo switcher | — |
 | ~~TOOL-49. TUI non-TTY fallback: plain-line events when stderr isn't a terminal (server/SSE consumers)~~ | **Done** — TUI non-TTY fallback emits plain-line events for SSE consumers |
 | TOOL-50. Skill CLI invocation is collision-vulnerable; pipeline entry accepts unknown positional args (recursion risk) | — |
