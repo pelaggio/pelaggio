@@ -1,5 +1,5 @@
 import { type SyntheticEvent, useEffect, useRef, useState } from "react";
-import { getToken, promptForToken, registerPromptHandler, setToken, wasLastRejected } from "../lib/token.js";
+import { registerPromptHandler, setToken, wasLastRejected } from "../lib/token.js";
 
 export function TokenPrompt() {
 	const dialogRef = useRef<HTMLDialogElement | null>(null);
@@ -12,9 +12,6 @@ export function TokenPrompt() {
 			const dlg = dialogRef.current;
 			if (dlg && !dlg.open) dlg.showModal();
 		});
-		if (typeof window !== "undefined" && !getToken()) {
-			void promptForToken();
-		}
 		return () => registerPromptHandler(null);
 	}, []);
 
