@@ -58,6 +58,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | TOOL-48. Multi-repo control plane: AUTOPILOT_REPOS list, per-repo state stores, UI repo switcher | — |
 | ~~TOOL-49. TUI non-TTY fallback: plain-line events when stderr isn't a terminal (server/SSE consumers)~~ | **Done** — TUI non-TTY fallback emits plain-line events for SSE consumers |
 | ~~TOOL-50. Skill CLI invocation is collision-vulnerable; pipeline entry accepts unknown positional args (recursion risk)~~ | **Done** — scoped CLI name + pipeline arg-validation guard against npx-cache recursion |
+| TOOL-51. `_resolveWorktree` fallback: cross-reference `git worktree list` before erroring "worktree missing" | — |
 ---
 
 ## Items
@@ -511,6 +512,22 @@ Completed. See git history for implementation details.
 **Out of scope:**
 - Migrating existing checkbox files to tables — both formats remain supported.
 - Ordering / grouping changes in checkbox files — new rows still append at EOF like today.
+
+---
+
+### TOOL-51. `_resolveWorktree` fallback: cross-reference `git worktree list` before erroring "worktree missing"
+
+| What | Scope | Deps |
+|------|-------|------|
+| TOOL-35 fixed two of three layers from GitHub issue #1 (longest-match `parseItemId` + machine-readable `CLAIMED:` marker), but skipped the defense-in-depth fallback. Today, when `_resolveWorktree(itemId)` doesn't find the expected path, the pipeline aborts the cycle with a bare `"worktree missing"` — no diagnostic about what *is* in flight. Add the third layer so future regressions of either upstream layer (or any other path-resolution drift) fail with an actionable message instead of silently swallowing context. | XS | — |
+
+**Deliverables:**
+- `packages/autopilot/scripts/autopilot/pipeline.ts` — when `_resolveWorktree(itemId)` returns a non-existent path, scan `listWorktrees()` for branches whose normalized slug **extends** `itemId` (i.e. `itemId` is a prefix of the slug-derived ID, separated by `-`). If exactly one matches, log a clear "expected `<path>`, using `<found path>` for in-flight `<extendedId>`" line and use it; if multiple match, abort naming the in-flight children; if none match, abort with the current "worktree missing" but include `itemId`, the expected path, and a one-line summary of what `git worktree list` returned.
+- Tests in `packages/autopilot/scripts/autopilot/__tests__/pipeline.test.ts` — extend the existing nested-ID coverage with: (a) single-extension-match → resolves; (b) multiple extension matches → aborts with named children; (c) no match → enriched error message includes itemId + worktree list summary.
+
+**Out of scope:**
+- Re-litigating TOOL-35's fixes (`parseItemId`, `CLAIMED:` marker) — both shipped and have test coverage.
+- Auto-recovery / re-creation of missing worktrees — this item only improves diagnostics + the legitimate sibling-worktree case.
 
 ---
 
