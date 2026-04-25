@@ -508,7 +508,9 @@ describe("runPipeline — pick step", () => {
 		});
 
 		assert.equal(result.completed, false);
-		assert.equal(result.error, "worktree missing");
+		assert.match(result.error ?? "", /TOOL-99/);
+		assert.match(result.error ?? "", new RegExp(`${WORKTREE_PREFIX}tool-99`));
+		assert.match(result.error ?? "", /git worktree list \(/);
 		assert.equal(result.itemId, "TOOL-99");
 		assert.deepEqual(
 			calls.map((c) => c.step),
@@ -569,7 +571,7 @@ describe("runPipeline — pick step", () => {
 		);
 	});
 
-	it("worktree cross-reference adopts a nested sub-item worktree when _resolveWorktree misses", async () => {
+	it("worktree cross-reference adopts a nested sub-item worktree when _resolveWorktree misses", async (t) => {
 		const { parent, repo } = makeTempRepoWithParent();
 		const parkSignal = makeParkSignal();
 		const logs: Array<Record<string, unknown>> = [];
@@ -578,6 +580,8 @@ describe("runPipeline — pick step", () => {
 
 		// Pre-create the nested worktree on a fresh branch so listWorktrees has something to adopt.
 		execSync(`git worktree add -q -b feat/comp-11c-ii-fixes "${nestedPath}"`, { cwd: repo });
+
+		const consoleLog = t.mock.method(console, "log", () => {});
 
 		let listCalls = 0;
 		const { runStep, calls } = createMockRunStep(
@@ -619,6 +623,8 @@ describe("runPipeline — pick step", () => {
 			calls.map((c) => c.step),
 			["pick", "plan", "shakedown-plan", "implement", "shakedown-code", "ship"],
 		);
+		const adoptionLog = consoleLog.mock.calls.map((c) => String(c.arguments[0])).find((s) => /expected .* using .* for in-flight COMP-11C-II-FIXES/.test(s));
+		assert.ok(adoptionLog, `expected adoption log naming COMP-11C-II-FIXES; got: ${consoleLog.mock.calls.map((c) => c.arguments[0]).join(" | ")}`);
 	});
 
 	it("worktree cross-reference aborts with 'ambiguous' when multiple nested siblings match", async () => {

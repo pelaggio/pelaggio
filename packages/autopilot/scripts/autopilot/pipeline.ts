@@ -215,13 +215,21 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 					else if (!existsSync(worktree)) {
 						const idLower = itemId.toLowerCase();
 						const expected = `${WORKTREE_PREFIX}${idLower}`;
-						const nested = listWorktrees().filter((p) => {
+						const all = listWorktrees();
+						const nested = all.filter((p) => {
 							const base = p.split(/[/\\]/).pop() ?? "";
 							return base === expected || base.startsWith(`${expected}-`);
 						});
-						if (nested.length === 1) worktree = nested[0];
-						else if (nested.length > 1) return finish({ itemId, completed: false, cost, error: `worktree ambiguous: ${nested.join(", ")}` });
-						else return finish({ itemId, completed: false, cost, error: "worktree missing" });
+						if (nested.length === 1) {
+							const base = nested[0].split(/[/\\]/).pop() ?? "";
+							const extendedId = (base.startsWith(WORKTREE_PREFIX) ? base.slice(WORKTREE_PREFIX.length) : base).toUpperCase();
+							log(`expected ${worktree}, using ${nested[0]} for in-flight ${extendedId}`);
+							worktree = nested[0];
+						} else if (nested.length > 1) return finish({ itemId, completed: false, cost, error: `worktree ambiguous: ${nested.join(", ")}` });
+						else {
+							const summary = all.map((p) => p.split(/[/\\]/).pop()).join(", ");
+							return finish({ itemId, completed: false, cost, error: `worktree missing for ${itemId}: expected ${expected}; git worktree list (${all.length} entries): ${summary}` });
+						}
 					}
 				}
 			}
