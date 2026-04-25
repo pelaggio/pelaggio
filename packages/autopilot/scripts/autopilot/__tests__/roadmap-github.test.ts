@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { describe, it } from "node:test";
+import { afterEach, describe, it } from "node:test";
 import { type GhRunner, GitHubIssuesRoadmap } from "../roadmap/github-issues.js";
 import { getRoadmapSource } from "../roadmap/index.js";
 
@@ -136,6 +136,11 @@ function freshId(): string {
 }
 
 describe("GitHubIssuesRoadmap.claimItem", () => {
+	const claimedWorktrees: string[] = [];
+	afterEach(() => {
+		while (claimedWorktrees.length) rmSync(claimedWorktrees.pop() as string, { recursive: true, force: true });
+	});
+
 	it("adds in-progress label, creates worktree, returns slugged branch", async () => {
 		const repo = seedRepo();
 		const id = freshId();
@@ -150,6 +155,7 @@ describe("GitHubIssuesRoadmap.claimItem", () => {
 		});
 		const r = mk({ repo, ghRun: run });
 		const { branch, worktree } = await r.claimItem(id);
+		claimedWorktrees.push(worktree);
 
 		assert.match(branch, new RegExp(`^feat/issue-${id}-fix-the-thing`));
 		assert.ok(branch.length <= `feat/issue-${id}-`.length + 40);
@@ -175,6 +181,7 @@ describe("GitHubIssuesRoadmap.claimItem", () => {
 		});
 		const r = mk({ repo, ghRun: run });
 		const { branch, worktree } = await r.claimItem(id);
+		claimedWorktrees.push(worktree);
 		assert.ok(branch.startsWith(`feat/issue-${id}`));
 		const wtList = execSync("git worktree list", { cwd: repo, encoding: "utf-8" });
 		assert.ok(wtList.includes(worktree));
