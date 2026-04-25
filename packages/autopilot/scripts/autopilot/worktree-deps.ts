@@ -11,12 +11,18 @@
 
 import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parse as parseYaml } from "yaml";
 import { REPO } from "./config.js";
 
 export type DepsAction = { type: "noop" } | { type: "link"; target: string } | { type: "relink"; target: string } | { type: "reinstall" } | { type: "install" } | { type: "restore"; target: string };
+
+export interface DepsReport {
+	root: DepsAction;
+	subpackages: Array<{ pkg: string; action: DepsAction }>;
+}
 
 export interface OutboundSymlink {
 	name: string;
@@ -116,38 +122,135 @@ export function decideDepsAction(worktree: string, mainRepo: string): DepsAction
 }
 
 /**
- * Apply the decided action: remove a stale symlink if needed, create a new
- * one, or invoke `pnpm install`. Returns the action taken so callers can log.
+ * Read the workspace subpackage manifest from `<mainRepo>/pnpm-lock.yaml`'s
+ * `importers:` keys, dropping the root `.` entry. The lockfile is the
+ * authoritative manifest of what is *actually installed* — same source the
+ * lockfile-hash gate already trusts. Returns `[]` on missing or unparseable
+ * lockfile (the root install/reinstall fallback will provision everything).
  */
-export function ensureWorktreeDeps(worktree: string, mainRepo: string = REPO): DepsAction {
-	const action = decideDepsAction(worktree, mainRepo);
-	const worktreeNm = resolve(worktree, "node_modules");
+export function listWorkspaceSubpackages(mainRepo: string): string[] {
+	const lock = resolve(mainRepo, "pnpm-lock.yaml");
+	let raw: string;
+	try {
+		raw = readFileSync(lock, "utf8");
+	} catch {
+		return [];
+	}
+	let parsed: unknown;
+	try {
+		parsed = parseYaml(raw);
+	} catch {
+		return [];
+	}
+	if (!parsed || typeof parsed !== "object") return [];
+	const importers = (parsed as { importers?: unknown }).importers;
+	if (!importers || typeof importers !== "object") return [];
+	return Object.keys(importers as Record<string, unknown>).filter((k) => k !== ".");
+}
 
+/**
+ * Per-subpackage decision. Mirrors `decideDepsAction` minus `install` /
+ * `reinstall` — root install handles drift, so we never invoke `pnpm install`
+ * per-subpackage. The corruption-signature gate at the subpackage level
+ * couples to the root: pnpm only writes `.pnpm/` at the root, so the only
+ * trustworthy signal that a subpackage's real dir is pnpm-managed (not
+ * user data) is that the same incident corrupted the root.
+ */
+export function decideSubpackageAction(worktree: string, mainRepo: string, pkg: string, rootWillRestore: boolean): DepsAction {
+	const worktreeNm = resolve(worktree, pkg, "node_modules");
+	const mainNm = resolve(mainRepo, pkg, "node_modules");
+	const worktreeLock = resolve(worktree, "pnpm-lock.yaml");
+	const mainLock = resolve(mainRepo, "pnpm-lock.yaml");
+
+	const mainLockHash = hashFile(mainLock);
+	const worktreeLockHash = hashFile(worktreeLock);
+	const lockfilesMatch = mainLockHash !== undefined && mainLockHash === worktreeLockHash;
+	const mainNmReady = isRealDir(mainNm);
+
+	if (isRealDir(worktreeNm)) {
+		if (rootWillRestore && lockfilesMatch && mainNmReady) {
+			return { type: "restore", target: mainNm };
+		}
+		return { type: "noop" };
+	}
+
+	if (isSymlink(worktreeNm)) {
+		let currentTarget: string | undefined;
+		try {
+			currentTarget = readlinkSync(worktreeNm);
+		} catch {
+			currentTarget = undefined;
+		}
+		if (lockfilesMatch && mainNmReady && currentTarget === mainNm) {
+			return { type: "noop" };
+		}
+		if (lockfilesMatch && mainNmReady) {
+			return { type: "relink", target: mainNm };
+		}
+		return { type: "noop" };
+	}
+
+	if (lockfilesMatch && mainNmReady) {
+		return { type: "link", target: mainNm };
+	}
+	return { type: "noop" };
+}
+
+function applyAction(worktreeNm: string, action: DepsAction, worktreeCwd: string): void {
 	switch (action.type) {
 		case "noop":
-			return action;
+			return;
 		case "link":
+			mkdirSync(dirname(worktreeNm), { recursive: true });
 			symlinkSync(action.target, worktreeNm, "dir");
-			return action;
+			return;
 		case "relink":
 			unlinkSync(worktreeNm);
 			symlinkSync(action.target, worktreeNm, "dir");
-			return action;
+			return;
 		case "reinstall":
 			unlinkSync(worktreeNm);
-			execSync("pnpm install --frozen-lockfile --silent", { cwd: worktree, stdio: "inherit" });
-			return action;
+			execSync("pnpm install --frozen-lockfile --silent", { cwd: worktreeCwd, stdio: "inherit" });
+			return;
 		case "install":
-			execSync("pnpm install --frozen-lockfile --silent", { cwd: worktree, stdio: "inherit" });
-			return action;
+			execSync("pnpm install --frozen-lockfile --silent", { cwd: worktreeCwd, stdio: "inherit" });
+			return;
 		case "restore":
-			// Only reachable when decideDepsAction confirmed the dir contains a `.pnpm/`
-			// store (i.e. pnpm-managed, not user data) and lockfiles match. The
-			// recursive rm is safe under that gate.
+			// Only reachable when the decision confirmed the dir contains a `.pnpm/`
+			// store (root) or coupled to a root restore (subpackage), and lockfiles
+			// match. The recursive rm is safe under that gate.
 			rmSync(worktreeNm, { recursive: true, force: true });
 			symlinkSync(action.target, worktreeNm, "dir");
-			return action;
+			return;
 	}
+}
+
+/**
+ * Apply the decided actions: root first, then each workspace subpackage.
+ * Returns the report of all actions taken so callers can log.
+ *
+ * When the root decision is `install` or `reinstall`, subpackages are skipped
+ * — the install will provision every subpackage in one pass.
+ */
+export function ensureWorktreeDeps(worktree: string, mainRepo: string = REPO): DepsReport {
+	const root = decideDepsAction(worktree, mainRepo);
+	const worktreeRootNm = resolve(worktree, "node_modules");
+
+	applyAction(worktreeRootNm, root, worktree);
+
+	if (root.type === "install" || root.type === "reinstall") {
+		return { root, subpackages: [] };
+	}
+
+	const rootWillRestore = root.type === "restore";
+	const subpackages: Array<{ pkg: string; action: DepsAction }> = [];
+	for (const pkg of listWorkspaceSubpackages(mainRepo)) {
+		const action = decideSubpackageAction(worktree, mainRepo, pkg, rootWillRestore);
+		applyAction(resolve(worktree, pkg, "node_modules"), action, worktree);
+		subpackages.push({ pkg, action });
+	}
+
+	return { root, subpackages };
 }
 
 /**
@@ -259,8 +362,11 @@ if (isDirectInvocation) {
 	}
 
 	try {
-		const action = ensureWorktreeDeps(resolve(arg), REPO);
-		console.log(action.type);
+		const report = ensureWorktreeDeps(resolve(arg), REPO);
+		console.log(report.root.type);
+		for (const { pkg, action } of report.subpackages) {
+			if (action.type !== "noop") console.log(`  ${pkg}: ${action.type}`);
+		}
 		process.exit(0);
 	} catch (err) {
 		console.error(err instanceof Error ? err.message : String(err));

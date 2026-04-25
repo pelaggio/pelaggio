@@ -103,18 +103,26 @@ export async function runStep(name: Step, prompt: string, opts: RunStepOpts, emi
 	// commands (pnpm test, pnpm check) run downstream.
 	if (isWorktree) {
 		try {
-			const action = ensureWorktreeDeps(opts.cwd, REPO);
-			if (action.type === "restore") {
+			const report = ensureWorktreeDeps(opts.cwd, REPO);
+			if (report.root.type === "restore") {
 				emit({
 					type: "sdk_error",
 					message: "worktree node_modules was a real directory with .pnpm/ — restored symlink to MAIN_REPO (lockfiles match; recovered from worktree-side pnpm install)",
 				});
 			}
+			for (const { pkg, action } of report.subpackages) {
+				if (action.type === "restore") {
+					emit({
+						type: "sdk_error",
+						message: `worktree ${pkg}/node_modules was a real directory — restored symlink to MAIN_REPO (coupled to root restore; lockfiles match)`,
+					});
+				}
+			}
 			// TOOL-52 corruption signature: noop + real-dir worktree-nm + .pnpm/ inside.
 			// `restore` already covers the lockfiles-match case; this branch warns when
 			// lockfile drift prevents safe restoration and ship-time repair is the
 			// remaining safety net.
-			if (action.type === "noop") {
+			if (report.root.type === "noop") {
 				const wtNm = resolve(opts.cwd, "node_modules");
 				try {
 					const s = lstatSync(wtNm);
