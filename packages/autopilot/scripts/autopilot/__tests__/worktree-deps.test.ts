@@ -3,25 +3,46 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readlinkSync, symlinkSyn
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, it } from "node:test";
-import { decideDepsAction, ensureWorktreeDeps, findOutboundMainSymlinks, repairMainNodeModules } from "../worktree-deps.js";
+import { decideDepsAction, decideSubpackageAction, ensureWorktreeDeps, findOutboundMainSymlinks, listWorkspaceSubpackages, repairMainNodeModules } from "../worktree-deps.js";
 
 interface Setup {
 	main: string;
 	worktree: string;
 }
 
-function makeSetup(opts: { mainLock?: string | null; worktreeLock?: string | null; mainNm?: "dir" | null; worktreeNm?: "dir" | "symlink-to-main" | null; worktreePnpmStore?: boolean }): Setup {
+interface SubpackageSpec {
+	name: string;
+	mainNm?: "dir" | null;
+	worktreeNm?: "dir" | "symlink-to-main-sub" | "symlink-to-wrong" | null;
+}
+
+function buildLock(body: string | null | undefined, subpackages: SubpackageSpec[] | undefined): string | null | undefined {
+	if (body === null || body === undefined) return body;
+	if (!subpackages || subpackages.length === 0) return body;
+	// Encode the body as a YAML comment so the file's sha256 still varies with
+	// `body` (the hash gate's signal) while the parsed document is a clean
+	// mapping with a usable `importers:` block.
+	const importerLines = ["importers:", "  .: {}"];
+	for (const sp of subpackages) {
+		importerLines.push(`  ${sp.name}: {}`);
+	}
+	return `# tag: ${body}\n${importerLines.join("\n")}\n`;
+}
+
+function makeSetup(opts: { mainLock?: string | null; worktreeLock?: string | null; mainNm?: "dir" | null; worktreeNm?: "dir" | "symlink-to-main" | null; worktreePnpmStore?: boolean; subpackages?: SubpackageSpec[] }): Setup {
 	const root = mkdtempSync(join(tmpdir(), "worktree-deps-test-"));
 	const main = resolve(root, "main");
 	const worktree = resolve(root, "worktree");
 	mkdirSync(main, { recursive: true });
 	mkdirSync(worktree, { recursive: true });
 
-	if (opts.mainLock !== null && opts.mainLock !== undefined) {
-		writeFileSync(resolve(main, "pnpm-lock.yaml"), opts.mainLock);
+	const mainLock = buildLock(opts.mainLock, opts.subpackages);
+	const worktreeLock = buildLock(opts.worktreeLock, opts.subpackages);
+	if (mainLock !== null && mainLock !== undefined) {
+		writeFileSync(resolve(main, "pnpm-lock.yaml"), mainLock);
 	}
-	if (opts.worktreeLock !== null && opts.worktreeLock !== undefined) {
-		writeFileSync(resolve(worktree, "pnpm-lock.yaml"), opts.worktreeLock);
+	if (worktreeLock !== null && worktreeLock !== undefined) {
+		writeFileSync(resolve(worktree, "pnpm-lock.yaml"), worktreeLock);
 	}
 	if (opts.mainNm === "dir") {
 		mkdirSync(resolve(main, "node_modules"));
@@ -34,6 +55,21 @@ function makeSetup(opts: { mainLock?: string | null; worktreeLock?: string | nul
 	}
 	if (opts.worktreePnpmStore) {
 		mkdirSync(resolve(worktreeNm, ".pnpm"), { recursive: true });
+	}
+
+	for (const sp of opts.subpackages ?? []) {
+		const mainSubNm = resolve(main, sp.name, "node_modules");
+		const worktreeSubNm = resolve(worktree, sp.name, "node_modules");
+		mkdirSync(resolve(main, sp.name), { recursive: true });
+		mkdirSync(resolve(worktree, sp.name), { recursive: true });
+		if (sp.mainNm === "dir") mkdirSync(mainSubNm);
+		if (sp.worktreeNm === "dir") {
+			mkdirSync(worktreeSubNm);
+		} else if (sp.worktreeNm === "symlink-to-main-sub") {
+			symlinkSync(mainSubNm, worktreeSubNm, "dir");
+		} else if (sp.worktreeNm === "symlink-to-wrong") {
+			symlinkSync(resolve(root, "elsewhere"), worktreeSubNm, "dir");
+		}
 	}
 
 	return { main, worktree };
@@ -172,6 +208,106 @@ describe("decideDepsAction", () => {
 	});
 });
 
+describe("listWorkspaceSubpackages", () => {
+	it("returns [] when pnpm-lock.yaml is absent", () => {
+		const { main } = makeSetup({ mainLock: null, worktreeLock: null });
+		assert.deepEqual(listWorkspaceSubpackages(main), []);
+	});
+
+	it("returns [] when lockfile parses but has no importers block", () => {
+		const { main } = makeSetup({ mainLock: "lockfileVersion: '9.0'\n" });
+		assert.deepEqual(listWorkspaceSubpackages(main), []);
+	});
+
+	it("returns relative subpackage paths excluding the root '.' entry", () => {
+		const { main } = makeSetup({
+			mainLock: "lockfileVersion: '9.0'\n",
+			subpackages: [{ name: "packages/a" }, { name: "packages/b" }],
+		});
+		assert.deepEqual(listWorkspaceSubpackages(main).sort(), ["packages/a", "packages/b"]);
+	});
+});
+
+describe("decideSubpackageAction", () => {
+	it("link when worktree sub-nm absent + main sub-nm present + lockfiles match", () => {
+		const { main, worktree } = makeSetup({
+			mainLock: "A",
+			worktreeLock: "A",
+			subpackages: [{ name: "packages/a", mainNm: "dir", worktreeNm: null }],
+		});
+		const action = decideSubpackageAction(worktree, main, "packages/a", false);
+		assert.equal(action.type, "link");
+		if (action.type === "link") assert.equal(action.target, resolve(main, "packages/a", "node_modules"));
+	});
+
+	it("noop when worktree sub-nm absent + lockfiles drift (root install will handle)", () => {
+		const { main, worktree } = makeSetup({
+			mainLock: "A",
+			worktreeLock: "B",
+			subpackages: [{ name: "packages/a", mainNm: "dir", worktreeNm: null }],
+		});
+		assert.equal(decideSubpackageAction(worktree, main, "packages/a", false).type, "noop");
+	});
+
+	it("noop when symlink already targets main sub-nm + lockfiles match", () => {
+		const { main, worktree } = makeSetup({
+			mainLock: "A",
+			worktreeLock: "A",
+			subpackages: [{ name: "packages/a", mainNm: "dir", worktreeNm: "symlink-to-main-sub" }],
+		});
+		assert.equal(decideSubpackageAction(worktree, main, "packages/a", false).type, "noop");
+	});
+
+	it("relink when symlink targets wrong path + lockfiles match", () => {
+		const { main, worktree } = makeSetup({
+			mainLock: "A",
+			worktreeLock: "A",
+			subpackages: [{ name: "packages/a", mainNm: "dir", worktreeNm: "symlink-to-wrong" }],
+		});
+		const action = decideSubpackageAction(worktree, main, "packages/a", false);
+		assert.equal(action.type, "relink");
+		if (action.type === "relink") assert.equal(action.target, resolve(main, "packages/a", "node_modules"));
+	});
+
+	it("noop when real dir + rootWillRestore=false (user-managed)", () => {
+		const { main, worktree } = makeSetup({
+			mainLock: "A",
+			worktreeLock: "A",
+			subpackages: [{ name: "packages/a", mainNm: "dir", worktreeNm: "dir" }],
+		});
+		assert.equal(decideSubpackageAction(worktree, main, "packages/a", false).type, "noop");
+	});
+
+	it("restore when real dir + rootWillRestore=true + lockfiles match + main sub-nm present", () => {
+		const { main, worktree } = makeSetup({
+			mainLock: "A",
+			worktreeLock: "A",
+			subpackages: [{ name: "packages/a", mainNm: "dir", worktreeNm: "dir" }],
+		});
+		const action = decideSubpackageAction(worktree, main, "packages/a", true);
+		assert.equal(action.type, "restore");
+		if (action.type === "restore") assert.equal(action.target, resolve(main, "packages/a", "node_modules"));
+	});
+
+	it("noop when real dir + rootWillRestore=true but lockfiles drift", () => {
+		const { main, worktree } = makeSetup({
+			mainLock: "A",
+			worktreeLock: "B",
+			subpackages: [{ name: "packages/a", mainNm: "dir", worktreeNm: "dir" }],
+		});
+		assert.equal(decideSubpackageAction(worktree, main, "packages/a", true).type, "noop");
+	});
+
+	it("noop when real dir + rootWillRestore=true but main sub-nm missing", () => {
+		const { main, worktree } = makeSetup({
+			mainLock: "A",
+			worktreeLock: "A",
+			subpackages: [{ name: "packages/a", mainNm: null, worktreeNm: "dir" }],
+		});
+		assert.equal(decideSubpackageAction(worktree, main, "packages/a", true).type, "noop");
+	});
+});
+
 describe("ensureWorktreeDeps", () => {
 	it("creates a symlink on the link action (happy path, no pnpm invoked)", () => {
 		const { main, worktree } = makeSetup({
@@ -180,8 +316,9 @@ describe("ensureWorktreeDeps", () => {
 			mainNm: "dir",
 			worktreeNm: null,
 		});
-		const action = ensureWorktreeDeps(worktree, main);
-		assert.equal(action.type, "link");
+		const report = ensureWorktreeDeps(worktree, main);
+		assert.equal(report.root.type, "link");
+		assert.deepEqual(report.subpackages, []);
 		const link = resolve(worktree, "node_modules");
 		assert.ok(lstatSync(link).isSymbolicLink(), "node_modules should be a symlink");
 		assert.equal(readlinkSync(link), resolve(main, "node_modules"));
@@ -200,12 +337,108 @@ describe("ensureWorktreeDeps", () => {
 		writeFileSync(resolve(worktreeNm, ".pnpm", "marker.txt"), "stale");
 		assert.ok(existsSync(resolve(worktreeNm, ".pnpm", "marker.txt")));
 
-		const action = ensureWorktreeDeps(worktree, main);
-		assert.equal(action.type, "restore");
+		const report = ensureWorktreeDeps(worktree, main);
+		assert.equal(report.root.type, "restore");
+		assert.deepEqual(report.subpackages, []);
 		assert.ok(lstatSync(worktreeNm).isSymbolicLink(), "node_modules should be a symlink after restore");
 		assert.equal(readlinkSync(worktreeNm), resolve(main, "node_modules"));
 		// The stale marker is gone (its directory was removed before the symlink was created).
 		assert.equal(existsSync(resolve(worktreeNm, ".pnpm", "marker.txt")), false);
+	});
+
+	it("links root + each subpackage on a fresh worktree (lockfiles match, mains ready)", () => {
+		const { main, worktree } = makeSetup({
+			mainLock: "A",
+			worktreeLock: "A",
+			mainNm: "dir",
+			worktreeNm: null,
+			subpackages: [
+				{ name: "packages/a", mainNm: "dir", worktreeNm: null },
+				{ name: "packages/b", mainNm: "dir", worktreeNm: null },
+			],
+		});
+		const report = ensureWorktreeDeps(worktree, main);
+		assert.equal(report.root.type, "link");
+		assert.deepEqual(
+			report.subpackages.map((s) => ({ pkg: s.pkg, type: s.action.type })),
+			[
+				{ pkg: "packages/a", type: "link" },
+				{ pkg: "packages/b", type: "link" },
+			],
+		);
+		assert.ok(lstatSync(resolve(worktree, "node_modules")).isSymbolicLink());
+		assert.ok(lstatSync(resolve(worktree, "packages/a/node_modules")).isSymbolicLink());
+		assert.ok(lstatSync(resolve(worktree, "packages/b/node_modules")).isSymbolicLink());
+		assert.equal(readlinkSync(resolve(worktree, "packages/a/node_modules")), resolve(main, "packages/a/node_modules"));
+	});
+
+	it("restores root + couples each subpackage real dir to the root restore", () => {
+		const { main, worktree } = makeSetup({
+			mainLock: "A",
+			worktreeLock: "A",
+			mainNm: "dir",
+			worktreeNm: "dir",
+			worktreePnpmStore: true,
+			subpackages: [
+				{ name: "packages/a", mainNm: "dir", worktreeNm: "dir" },
+				{ name: "packages/b", mainNm: "dir", worktreeNm: null },
+			],
+		});
+		const report = ensureWorktreeDeps(worktree, main);
+		assert.equal(report.root.type, "restore");
+		assert.deepEqual(
+			report.subpackages.map((s) => ({ pkg: s.pkg, type: s.action.type })),
+			[
+				{ pkg: "packages/a", type: "restore" },
+				{ pkg: "packages/b", type: "link" },
+			],
+		);
+		assert.ok(lstatSync(resolve(worktree, "node_modules")).isSymbolicLink());
+		assert.ok(lstatSync(resolve(worktree, "packages/a/node_modules")).isSymbolicLink());
+		assert.ok(lstatSync(resolve(worktree, "packages/b/node_modules")).isSymbolicLink());
+	});
+
+	it("decides install at the root when lockfiles drift (subpackage logic is skipped by ensureWorktreeDeps's early return)", () => {
+		// Side-effect verification (that pnpm install runs and subpackages are not
+		// touched) requires a real pnpm — out of scope for unit tests. Asserting the
+		// pure decision documents the contract that drives the early return.
+		const { main, worktree } = makeSetup({
+			mainLock: "A",
+			worktreeLock: "B",
+			mainNm: "dir",
+			worktreeNm: null,
+			subpackages: [{ name: "packages/a", mainNm: "dir", worktreeNm: null }],
+		});
+		assert.equal(decideDepsAction(worktree, main).type, "install");
+	});
+
+	it("leaves a subpackage real dir alone when root decision is noop", () => {
+		const { main, worktree } = makeSetup({
+			mainLock: "A",
+			worktreeLock: "A",
+			mainNm: "dir",
+			worktreeNm: "symlink-to-main",
+			subpackages: [{ name: "packages/a", mainNm: "dir", worktreeNm: "dir" }],
+		});
+		// Plant a marker so we can verify the dir is untouched.
+		writeFileSync(resolve(worktree, "packages/a/node_modules", "marker.txt"), "user-managed");
+		const report = ensureWorktreeDeps(worktree, main);
+		assert.equal(report.root.type, "noop");
+		assert.equal(report.subpackages[0].action.type, "noop");
+		assert.ok(existsSync(resolve(worktree, "packages/a/node_modules", "marker.txt")));
+	});
+
+	it("relinks a subpackage symlink that targets the wrong path (lockfiles match)", () => {
+		const { main, worktree } = makeSetup({
+			mainLock: "A",
+			worktreeLock: "A",
+			mainNm: "dir",
+			worktreeNm: "symlink-to-main",
+			subpackages: [{ name: "packages/a", mainNm: "dir", worktreeNm: "symlink-to-wrong" }],
+		});
+		const report = ensureWorktreeDeps(worktree, main);
+		assert.equal(report.subpackages[0].action.type, "relink");
+		assert.equal(readlinkSync(resolve(worktree, "packages/a/node_modules")), resolve(main, "packages/a/node_modules"));
 	});
 });
 
