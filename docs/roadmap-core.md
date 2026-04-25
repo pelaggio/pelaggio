@@ -61,6 +61,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | ~~TOOL-51. `_resolveWorktree` fallback: cross-reference `git worktree list` before erroring "worktree missing"~~ | **Done** — fallback to git worktree list when recorded path missing |
 | ~~TOOL-52. Worktree pnpm install corrupts main node_modules symlinks (dangling after ship cleanup)~~ | **Done** — repair MAIN node_modules symlinks corrupted by worktree pnpm install |
 | ~~TOOL-53. orchestrator.test.ts parent-runner IPC deserialize error (pre-existing flake)~~ | **Done** — silenced console.log in orchestrator.test.ts to avoid IPC deserialize flake |
+| TOOL-54. Block worktree-side pnpm install: PreToolUse hook + proactive symlink restore in step-runner guard | — |
 ---
 
 ## Items
@@ -565,6 +566,24 @@ Completed. See git history for implementation details.
 **Out of scope:**
 - Filing an upstream Node bug — the workaround is local; upstream report is optional follow-up.
 - Rewriting the test mocks to a different style.
+
+---
+
+### TOOL-54. Block worktree-side pnpm install: PreToolUse hook + proactive symlink restore in step-runner guard
+
+| What | Scope | Deps |
+|------|-------|------|
+| TOOL-52's repair logic catches MAIN_REPO symlink corruption at ship time, but the underlying trigger was traced (subagent investigation, 2026-04-25) to the agent itself running `pnpm install` from inside the worktree during plan/implement steps — typically when investigating a dep-related issue. The current step-runner guard at `step-runner.ts:82-104` only **detects** the corruption; it doesn't restore the symlink even when lockfiles still match (the cheap, safe case). And nothing prevents the agent from running the install in the first place. The agent has no legitimate reason to install inside a worktree — TOOL-26's symlink share guarantees deps are already present. Close the loop with both prevention (block) and recovery (restore). | S | — |
+
+**Deliverables:**
+- **PreToolUse hook in `step-runner.ts`**: when running in a worktree (cwd != MAIN_REPO), block Bash invocations whose command matches `pnpm\s+(install|i|add|update|up|upgrade|remove|rm)\b` or `npm\s+(install|i|ci)\b` with a clear error explaining the symlink share. Same shape as the existing MAIN_REPO write-block and `blockPlanPolish` hooks. Skip the block when the command is the explicit `--repair-main` invocation that TOOL-52's worktree-deps subcommand runs.
+- **Proactive symlink restore in the mid-cycle guard** (`step-runner.ts` ~line 84): when `ensureWorktreeDeps()` decides "noop" (lockfiles match) but the worktree's `node_modules` is a real directory containing `.pnpm`, delete the real directory and recreate the symlink to MAIN_REPO/node_modules before continuing. Log the restore so it's visible. This handles any third-party tool that bypasses the hook (e.g. a Makefile target, a test that shells out via Node).
+- **Tests**: extend `worktree-deps.test.ts` and/or add `step-runner.test.ts` coverage for: (a) hook blocks `pnpm install` in worktree cwd, (b) hook allows `pnpm install` from MAIN_REPO cwd, (c) hook allows `worktree-deps --repair-main`, (d) guard restores symlink when worktree node_modules became a real directory but lockfiles match.
+
+**Out of scope:**
+- Reverting TOOL-52's repair-at-ship-time logic — defense in depth: if the hook is bypassed AND the proactive restore fails, ship-time repair remains the last line.
+- Blocking other pnpm subcommands (`pnpm test`, `pnpm exec`, `pnpm <script>`) — only the install/add/update family touches `node_modules`.
+- Allowing the agent to opt out of the block (no escape hatch needed; if a real use case emerges, add it then).
 
 ---
 
