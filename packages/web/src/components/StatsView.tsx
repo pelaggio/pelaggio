@@ -2,18 +2,23 @@ import type { Stats } from "@cdhorne/claude-autopilot";
 import { useEffect, useState } from "react";
 import { ApiError, getStats } from "../lib/api.js";
 import { formatTokens, formatUsd } from "../lib/format.js";
+import { useRepos } from "../lib/repo.js";
 
 const POLL_MS = 30_000;
 
 export function StatsView() {
+	const reposState = useRepos();
+	const currentRepo = reposState.status === "ready" ? reposState.current : null;
 	const [stats, setStats] = useState<Stats | undefined>(undefined);
 	const [error, setError] = useState<string | undefined>(undefined);
 
 	useEffect(() => {
+		if (!currentRepo) return;
 		let cancelled = false;
+		setStats(undefined);
 		const tick = async () => {
 			try {
-				const s = await getStats();
+				const s = await getStats(currentRepo);
 				if (!cancelled) {
 					setStats(s);
 					setError(undefined);
@@ -28,8 +33,10 @@ export function StatsView() {
 			cancelled = true;
 			clearInterval(id);
 		};
-	}, []);
+	}, [currentRepo]);
 
+	if (reposState.status === "empty") return <p className="text-slate-500">No repos configured.</p>;
+	if (reposState.status === "loading") return <p className="text-slate-500">Loading…</p>;
 	if (error) return <p className="text-red-700">Error loading stats: {error}</p>;
 	if (!stats) return <p className="text-slate-500">Loading…</p>;
 
@@ -38,7 +45,7 @@ export function StatsView() {
 
 	return (
 		<div className="space-y-8">
-			<h1 className="text-2xl font-semibold">Stats</h1>
+			<h1 className="text-2xl font-semibold">Stats — {currentRepo}</h1>
 
 			<section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
 				<Card label="Cycles" value={String(stats.totalCycles)} />

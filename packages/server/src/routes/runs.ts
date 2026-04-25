@@ -2,7 +2,7 @@ import type { Context, Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import type { Supervisor } from "../supervisor.js";
 import { SupervisorError } from "../supervisor.js";
-import type { PersistedRun, ShipTargetName } from "../types.js";
+import type { PersistedRun, RunSummary, ShipTargetName } from "../types.js";
 
 const SHIP_TARGETS: readonly ShipTargetName[] = ["direct-push", "pull-request", "auto-merge-pr"];
 
@@ -18,7 +18,7 @@ function badRequest(c: Context, message: string): Response {
 	return c.json({ error: message, code: "bad-request" }, 400);
 }
 
-function summarize(run: PersistedRun) {
+function summarize(run: PersistedRun): RunSummary {
 	return {
 		id: run.id,
 		repo: run.repo,

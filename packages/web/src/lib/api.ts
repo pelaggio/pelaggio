@@ -1,6 +1,8 @@
 import type { RoadmapItem, Stats } from "@cdhorne/claude-autopilot";
-import type { PersistedRun, RunSummary, ShipTargetName } from "@cdhorne/claude-autopilot-server/types";
+import type { PersistedRun, RepoEntry, RunSummary, ShipTargetName } from "@cdhorne/claude-autopilot-server/types";
 import { getToken, markTokenRejected, promptForToken } from "./token.js";
+
+export type { RepoEntry };
 
 export class ApiError extends Error {
 	readonly status: number;
@@ -14,6 +16,7 @@ export class ApiError extends Error {
 }
 
 export interface StartRunBody {
+	repo: string;
 	item: string;
 	parallel?: number;
 	cycles?: number;
@@ -22,6 +25,7 @@ export interface StartRunBody {
 
 export interface StartRunResponse {
 	id: string;
+	repo: string;
 	item: string;
 	startedAt: string;
 	logPath: string;
@@ -67,11 +71,15 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
 	return (await res.json()) as T;
 }
 
-export const listRuns = (): Promise<{ runs: RunSummary[] }> => fetchJson("/runs");
+export const listRepos = (): Promise<{ repos: RepoEntry[] }> => fetchJson("/repos");
+export const listRuns = (opts?: { repo?: string }): Promise<{ runs: RunSummary[] }> => {
+	const qs = opts?.repo ? `?repo=${encodeURIComponent(opts.repo)}` : "";
+	return fetchJson(`/runs${qs}`);
+};
 export const getRun = (id: string): Promise<PersistedRun> => fetchJson(`/runs/${encodeURIComponent(id)}`);
 export const startRun = (body: StartRunBody): Promise<StartRunResponse> => fetchJson("/runs", { method: "POST", body: JSON.stringify(body) });
 export const pauseRun = (id: string): Promise<PersistedRun> => fetchJson(`/runs/${encodeURIComponent(id)}/pause`, { method: "POST" });
 export const resumeRun = (id: string): Promise<PersistedRun> => fetchJson(`/runs/${encodeURIComponent(id)}/resume`, { method: "POST" });
 export const stopRun = (id: string): Promise<PersistedRun> => fetchJson(`/runs/${encodeURIComponent(id)}/stop`, { method: "POST" });
-export const getRoadmap = (): Promise<RoadmapResponse> => fetchJson("/roadmap");
-export const getStats = (): Promise<Stats> => fetchJson("/stats");
+export const getRoadmap = (repo: string): Promise<RoadmapResponse> => fetchJson(`/repos/${encodeURIComponent(repo)}/roadmap`);
+export const getStats = (repo: string): Promise<Stats> => fetchJson(`/repos/${encodeURIComponent(repo)}/stats`);

@@ -5,6 +5,7 @@ import type { Context, Hono } from "hono";
 import type { Registry } from "../registry.js";
 import { RegistryError } from "../registry.js";
 import type { RoadmapCache } from "../roadmap-cache.js";
+import type { RepoEntry } from "../types.js";
 
 export interface ReposDeps {
 	registry: Registry;
@@ -17,7 +18,7 @@ function notFound(c: Context, slug: string): Response {
 
 export function registerReposRoutes(app: Hono, deps: ReposDeps): void {
 	app.get("/repos", (c) => {
-		const entries = deps.registry.entries().map((e) => ({
+		const entries: RepoEntry[] = deps.registry.entries().map((e) => ({
 			slug: e.slug,
 			path: e.path,
 			exists: existsSync(e.path),
