@@ -149,7 +149,7 @@ No separate state file — the reducer runs over the append-only log on each inv
 
 ## Using it on itself (meta)
 
-This repo uses its own pipeline to work on its own roadmap. See `docs/roadmap-core.md` for open items. Run `pnpm autopilot --cycles 1` to pick one up.
+This repo uses its own pipeline to work on its own roadmap. Open work lives in [GitHub issues](https://github.com/cdhorne/claude-autopilot/issues?q=is%3Aopen+is%3Aissue+label%3Aautopilot) under the `autopilot` label (configured via `.autopilot.yml` → `roadmap.source: github-issues`). Run `pnpm autopilot --cycles 1` to pick one up.
 
 ## Status
 

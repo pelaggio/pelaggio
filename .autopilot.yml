@@ -1,0 +1,8 @@
+roadmap:
+  source: github-issues
+  github:
+    repo: cdhorne/claude-autopilot
+    label: autopilot
+    plan-location: issue-comment
+ship:
+  target: pull-request

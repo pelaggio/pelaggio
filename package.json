@@ -12,8 +12,6 @@
 		"check": "biome check",
 		"check:skills": "pnpm --filter @cdhorne/claude-autopilot check:skills",
 		"check:publish": "pnpm --filter @cdhorne/claude-autopilot check:publish",
-		"check:roadmap": "tsx scripts/check-roadmap.ts",
-		"graph:roadmap": "tsx scripts/roadmap-graph.ts",
 		"format": "biome check --write",
 		"prepare": "lefthook install"
 	},

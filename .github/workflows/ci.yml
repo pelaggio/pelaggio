@@ -29,4 +29,3 @@ jobs:
       - run: pnpm --filter @cdhorne/claude-autopilot-web build
       - run: pnpm check
       - run: pnpm check:skills
-      - run: pnpm check:roadmap
