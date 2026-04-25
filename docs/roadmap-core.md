@@ -59,6 +59,8 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | ~~TOOL-49. TUI non-TTY fallback: plain-line events when stderr isn't a terminal (server/SSE consumers)~~ | **Done** — TUI non-TTY fallback emits plain-line events for SSE consumers |
 | ~~TOOL-50. Skill CLI invocation is collision-vulnerable; pipeline entry accepts unknown positional args (recursion risk)~~ | **Done** — scoped CLI name + pipeline arg-validation guard against npx-cache recursion |
 | ~~TOOL-51. `_resolveWorktree` fallback: cross-reference `git worktree list` before erroring "worktree missing"~~ | **Done** — fallback to git worktree list when recorded path missing |
+| TOOL-52. Worktree pnpm install corrupts main node_modules symlinks (dangling after ship cleanup) | — |
+| TOOL-53. orchestrator.test.ts parent-runner IPC deserialize error (pre-existing flake) | — |
 ---
 
 ## Items
@@ -528,6 +530,41 @@ Completed. See git history for implementation details.
 **Out of scope:**
 - Re-litigating TOOL-35's fixes (`parseItemId`, `CLAIMED:` marker) — both shipped and have test coverage.
 - Auto-recovery / re-creation of missing worktrees — this item only improves diagnostics + the legitimate sibling-worktree case.
+
+---
+
+### TOOL-52. Worktree pnpm install corrupts main node_modules symlinks (dangling after ship cleanup)
+
+| What | Scope | Deps |
+|------|-------|------|
+| Observed during the TOOL-51 cycle on 2026-04-25: after the worktree was deleted in `/ship`, six top-level packages in the main repo's `node_modules` (`tsx`, `typescript`, `lefthook`, `@biomejs/biome`, `@anthropic-ai/claude-code`, `@cdhorne/claude-autopilot`) were dangling symlinks pointing into `../../claude-autopilot-tool-51/node_modules/.pnpm/`. Two root-level smoke tests (`check-roadmap CLI smoke test`, `runCli integration` in `roadmap-graph.test.ts`) failed with `ERR_MODULE_NOT_FOUND: Cannot find package 'tsx'` until `pnpm install` repaired the layout. TOOL-26's `worktree-deps.ts` is supposed to symlink `<worktree>/node_modules → <MAIN_REPO>/node_modules` when lockfiles match — short-circuiting any worktree-side install. Either that short-circuit didn't fire, or some pipeline step (likely `step-runner`'s mid-cycle dep guard, or a `pnpm install` invoked indirectly by an SDK tool call) ran from inside the worktree and let pnpm regenerate symlinks pointing at a worktree-local `.pnpm` store. | S | — |
+
+**Deliverables:**
+- **Reproduce + diagnose**: cycle a tiny no-op item, log `ls -la node_modules/tsx` from the main repo before/after each step (pick, plan, implement, ship). Identify which step re-pointed the symlink.
+- **Fix in `packages/autopilot/scripts/autopilot/worktree-deps.ts`** (or `step-runner`): make the symlink mode robust — verify after creation that `<worktree>/node_modules` is genuinely a symlink to `<MAIN_REPO>/node_modules` and stays that way; abort with a clear error if any subsequent step replaces it. Alternative: detect when a worktree's node_modules became a real directory and refuse to ship until it's reconciled.
+- **`/ship` cleanup safety**: before deleting the worktree, check whether main repo's `node_modules` contains symlinks pointing into the worktree's path; if so, run `pnpm install --frozen-lockfile` at main repo before removing the worktree.
+- **Test**: `worktree-deps.test.ts` regression — simulate a worktree whose node_modules became a real directory containing its own `.pnpm` store; assert main repo's symlinks aren't repointed.
+
+**Out of scope:**
+- Reworking TOOL-26's "share node_modules across worktrees" approach itself — the symlink strategy is right; only its durability needs reinforcing.
+- Migrating the workspace away from pnpm.
+
+---
+
+### TOOL-53. orchestrator.test.ts parent-runner IPC deserialize error (pre-existing flake)
+
+| What | Scope | Deps |
+|------|-------|------|
+| `npx tsx --test packages/autopilot/scripts/autopilot/__tests__/orchestrator.test.ts` consistently reports `not ok 1` for the file with `failureType: 'uncaughtException'`, `error: 'Unable to deserialize cloned data due to invalid or unsupported version.'` originating in `node:internal/test_runner/runner` (`#processRawBuffer` / `FileTest.parseMessage`). All 7 inner subtests pass; only the parent reporter chokes on a stream message from the child. Verified pre-existing since TOOL-38 (the monorepo conversion, commit `aebad39`) — checking out the original file there reproduces the same failure. Currently masking the suite as "1 fail" in CI even though the test logic succeeds. | S | — |
+
+**Deliverables:**
+- **Identify trigger**: bisect the test body to find which subtest produces the IPC frame the parent can't deserialize. Most likely candidates: a `console.log`-ed object containing a non-cloneable type (function, class instance with private fields, AbortSignal, etc.), or a large diagnostic object that exceeds an internal buffer threshold.
+- **Fix at the source** in `packages/autopilot/scripts/autopilot/__tests__/orchestrator.test.ts`: stringify diagnostic output before logging, or stop logging the offending value. Don't silence with `--reporter`.
+- **Verify**: 10 consecutive runs of the file in isolation report `# pass 8 # fail 0`; full `pnpm -r test` exits 0.
+
+**Out of scope:**
+- Filing an upstream Node bug — the workaround is local; upstream report is optional follow-up.
+- Rewriting the test mocks to a different style.
 
 ---
 
