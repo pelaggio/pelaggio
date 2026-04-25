@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { lstatSync, mkdirSync, mkdtempSync, readlinkSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readlinkSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, it } from "node:test";
@@ -10,7 +10,7 @@ interface Setup {
 	worktree: string;
 }
 
-function makeSetup(opts: { mainLock?: string | null; worktreeLock?: string | null; mainNm?: "dir" | null; worktreeNm?: "dir" | "symlink-to-main" | null }): Setup {
+function makeSetup(opts: { mainLock?: string | null; worktreeLock?: string | null; mainNm?: "dir" | null; worktreeNm?: "dir" | "symlink-to-main" | null; worktreePnpmStore?: boolean }): Setup {
 	const root = mkdtempSync(join(tmpdir(), "worktree-deps-test-"));
 	const main = resolve(root, "main");
 	const worktree = resolve(root, "worktree");
@@ -31,6 +31,9 @@ function makeSetup(opts: { mainLock?: string | null; worktreeLock?: string | nul
 		mkdirSync(worktreeNm);
 	} else if (opts.worktreeNm === "symlink-to-main") {
 		symlinkSync(resolve(main, "node_modules"), worktreeNm, "dir");
+	}
+	if (opts.worktreePnpmStore) {
+		mkdirSync(resolve(worktreeNm, ".pnpm"), { recursive: true });
 	}
 
 	return { main, worktree };
@@ -120,6 +123,53 @@ describe("decideDepsAction", () => {
 		});
 		assert.equal(decideDepsAction(worktree, main).type, "noop");
 	});
+
+	it("restores when worktree has a real directory with .pnpm/ store and lockfiles match", () => {
+		const { main, worktree } = makeSetup({
+			mainLock: "A",
+			worktreeLock: "A",
+			mainNm: "dir",
+			worktreeNm: "dir",
+			worktreePnpmStore: true,
+		});
+		const action = decideDepsAction(worktree, main);
+		assert.equal(action.type, "restore");
+		if (action.type === "restore") {
+			assert.equal(action.target, resolve(main, "node_modules"));
+		}
+	});
+
+	it("noop when corruption signature exists but lockfiles drift (restore unsafe)", () => {
+		const { main, worktree } = makeSetup({
+			mainLock: "A",
+			worktreeLock: "B",
+			mainNm: "dir",
+			worktreeNm: "dir",
+			worktreePnpmStore: true,
+		});
+		assert.equal(decideDepsAction(worktree, main).type, "noop");
+	});
+
+	it("noop when corruption signature exists but main nm is missing (restore unsafe)", () => {
+		const { main, worktree } = makeSetup({
+			mainLock: "A",
+			worktreeLock: "A",
+			mainNm: null,
+			worktreeNm: "dir",
+			worktreePnpmStore: true,
+		});
+		assert.equal(decideDepsAction(worktree, main).type, "noop");
+	});
+
+	it("noop when worktree has a real dir without .pnpm/ store (user-managed, not pnpm)", () => {
+		const { main, worktree } = makeSetup({
+			mainLock: "A",
+			worktreeLock: "A",
+			mainNm: "dir",
+			worktreeNm: "dir",
+		});
+		assert.equal(decideDepsAction(worktree, main).type, "noop");
+	});
 });
 
 describe("ensureWorktreeDeps", () => {
@@ -135,6 +185,27 @@ describe("ensureWorktreeDeps", () => {
 		const link = resolve(worktree, "node_modules");
 		assert.ok(lstatSync(link).isSymbolicLink(), "node_modules should be a symlink");
 		assert.equal(readlinkSync(link), resolve(main, "node_modules"));
+	});
+
+	it("removes the corrupted dir and recreates a symlink on the restore action", () => {
+		const { main, worktree } = makeSetup({
+			mainLock: "A",
+			worktreeLock: "A",
+			mainNm: "dir",
+			worktreeNm: "dir",
+			worktreePnpmStore: true,
+		});
+		const worktreeNm = resolve(worktree, "node_modules");
+		// Plant a marker file inside the corrupted dir so we can verify deletion.
+		writeFileSync(resolve(worktreeNm, ".pnpm", "marker.txt"), "stale");
+		assert.ok(existsSync(resolve(worktreeNm, ".pnpm", "marker.txt")));
+
+		const action = ensureWorktreeDeps(worktree, main);
+		assert.equal(action.type, "restore");
+		assert.ok(lstatSync(worktreeNm).isSymbolicLink(), "node_modules should be a symlink after restore");
+		assert.equal(readlinkSync(worktreeNm), resolve(main, "node_modules"));
+		// The stale marker is gone (its directory was removed before the symlink was created).
+		assert.equal(existsSync(resolve(worktreeNm, ".pnpm", "marker.txt")), false);
 	});
 });
 

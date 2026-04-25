@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { HookInput } from "@anthropic-ai/claude-agent-sdk";
-import { blockPlanPolish, isWorktreePath } from "../step-runner.js";
+import { blockPlanPolish, blockWorktreeInstall, isWorktreePath } from "../step-runner.js";
+
+function bash(command: string): HookInput {
+	return { tool_name: "Bash", tool_input: { command } } as unknown as HookInput;
+}
 
 function write(fp: string): HookInput {
 	return { tool_name: "Write", tool_input: { file_path: fp } } as unknown as HookInput;
@@ -45,6 +49,52 @@ describe("blockPlanPolish", () => {
 	it("handles missing file_path gracefully", () => {
 		const bad = { tool_name: "Write", tool_input: {} } as unknown as HookInput;
 		assert.deepEqual(blockPlanPolish(bad, cwd), {});
+	});
+});
+
+describe("blockWorktreeInstall", () => {
+	it("blocks each pnpm install-family subcommand", () => {
+		for (const sub of ["install", "i", "add", "update", "up", "upgrade", "remove", "rm"]) {
+			const out = blockWorktreeInstall(bash(`pnpm ${sub}`));
+			assert.equal(out.decision, "block", `pnpm ${sub} should be blocked`);
+			assert.match(out.reason ?? "", /symlink/i);
+		}
+	});
+
+	it("blocks each npm install-family subcommand", () => {
+		for (const sub of ["install", "i", "ci"]) {
+			const out = blockWorktreeInstall(bash(`npm ${sub}`));
+			assert.equal(out.decision, "block", `npm ${sub} should be blocked`);
+		}
+	});
+
+	it("allows the worktree-deps --repair-main escape hatch", () => {
+		assert.deepEqual(blockWorktreeInstall(bash("npx @cdhorne/claude-autopilot worktree-deps --repair-main")), {});
+	});
+
+	it("allows the chained escape hatch even when the trailing command would otherwise match", () => {
+		assert.deepEqual(blockWorktreeInstall(bash("npx @cdhorne/claude-autopilot worktree-deps --repair-main && pnpm install")), {});
+	});
+
+	it("allows non-install pnpm/npm subcommands", () => {
+		for (const cmd of ["pnpm test", "pnpm exec tsx foo.ts", "pnpm autopilot --dry-run", "pnpm check", "npm test"]) {
+			assert.deepEqual(blockWorktreeInstall(bash(cmd)), {}, `should allow: ${cmd}`);
+		}
+	});
+
+	it("ignores non-Bash tools", () => {
+		const write = { tool_name: "Write", tool_input: { file_path: "foo.ts" } } as unknown as HookInput;
+		assert.deepEqual(blockWorktreeInstall(write), {});
+	});
+
+	it("handles missing command field gracefully", () => {
+		const empty = { tool_name: "Bash", tool_input: {} } as unknown as HookInput;
+		assert.deepEqual(blockWorktreeInstall(empty), {});
+	});
+
+	it("blocks chained forms (cd ... && pnpm install)", () => {
+		const out = blockWorktreeInstall(bash("cd packages/autopilot && pnpm install"));
+		assert.equal(out.decision, "block");
 	});
 });
 

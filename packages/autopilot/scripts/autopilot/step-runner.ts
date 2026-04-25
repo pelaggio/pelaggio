@@ -37,6 +37,28 @@ export function isWorktreePath(cwd: string, repo: string): boolean {
 	return resolve(cwd) !== resolve(repo);
 }
 
+// Worktree-side install guard: the worktree shares MAIN_REPO's `node_modules`
+// via symlink, so any in-worktree `pnpm install` (or equivalent) re-points the
+// shared symlinks into the worktree's `.pnpm` store and corrupts main once the
+// worktree is removed. The escape hatch is the explicit `worktree-deps
+// --repair-main` invocation, which restores the layout from the lockfile.
+const INSTALL_PATTERN = /\b(pnpm\s+(install|i|add|update|up|upgrade|remove|rm)|npm\s+(install|i|ci))\b/;
+
+export function blockWorktreeInstall(input: HookInput): HookJSONOutput {
+	const tn = "tool_name" in input ? String(input.tool_name) : "";
+	if (tn !== "Bash") return {};
+	const ti = ("tool_input" in input ? input.tool_input : {}) as Record<string, unknown>;
+	const cmd = String(ti.command ?? "");
+	if (!cmd) return {};
+	if (cmd.includes("worktree-deps") && cmd.includes("--repair-main")) return {};
+	if (!INSTALL_PATTERN.test(cmd)) return {};
+	return {
+		decision: "block" as const,
+		reason:
+			"Worktree-side `pnpm install` (or equivalent) is blocked: this worktree shares MAIN_REPO's `node_modules` via symlink, and a worktree-side install re-points the symlinks into the worktree's `.pnpm` store, which corrupts the main repo when the worktree is removed. If you genuinely need a dep change, raise it in your final message — dep updates are managed via Renovate / patch-bump cadence, not in-cycle.",
+	};
+}
+
 // Plan-polish guard: during `implement`, block writes to docs/plans/ so the model
 // executes the plan instead of editing it. Surfaced as a named helper because the
 // reason — not the mechanics — is the non-obvious part worth locating.
@@ -82,10 +104,16 @@ export async function runStep(name: Step, prompt: string, opts: RunStepOpts, emi
 	if (isWorktree) {
 		try {
 			const action = ensureWorktreeDeps(opts.cwd, REPO);
+			if (action.type === "restore") {
+				emit({
+					type: "sdk_error",
+					message: "worktree node_modules was a real directory with .pnpm/ — restored symlink to MAIN_REPO (lockfiles match; recovered from worktree-side pnpm install)",
+				});
+			}
 			// TOOL-52 corruption signature: noop + real-dir worktree-nm + .pnpm/ inside.
-			// Distinguishes "pnpm install rebuilt the worktree locally" (case b) from
-			// "symlink-to-main is correct" (case a) — the latter would also be `noop`,
-			// but `lstatSync(<worktree>/node_modules)` returns isSymbolicLink in that case.
+			// `restore` already covers the lockfiles-match case; this branch warns when
+			// lockfile drift prevents safe restoration and ship-time repair is the
+			// remaining safety net.
 			if (action.type === "noop") {
 				const wtNm = resolve(opts.cwd, "node_modules");
 				try {
@@ -93,7 +121,7 @@ export async function runStep(name: Step, prompt: string, opts: RunStepOpts, emi
 					if (s.isDirectory() && !s.isSymbolicLink() && existsSync(join(wtNm, ".pnpm"))) {
 						emit({
 							type: "sdk_error",
-							message: "worktree node_modules became a real directory mid-cycle (pnpm install re-installed locally); main repo will be repaired at ship time",
+							message: "worktree node_modules became a real directory mid-cycle (pnpm install re-installed locally) and lockfile drift prevents safe restore; main repo will be repaired at ship time",
 						});
 					}
 				} catch {}
@@ -151,6 +179,9 @@ export async function runStep(name: Step, prompt: string, opts: RunStepOpts, emi
 									}
 
 									if (isWorktree && tn === "Bash") {
+										const installOut = blockWorktreeInstall(input);
+										if (installOut.decision === "block") return installOut;
+
 										const cmd = String(ti.command ?? "");
 										if (cmd.includes(mainAbs) && !cmd.includes(worktreeCwd)) {
 											return {

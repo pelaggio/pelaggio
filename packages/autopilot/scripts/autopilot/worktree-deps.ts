@@ -11,12 +11,12 @@
 
 import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { lstatSync, readdirSync, readFileSync, readlinkSync, symlinkSync, unlinkSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { REPO } from "./config.js";
 
-export type DepsAction = { type: "noop" } | { type: "link"; target: string } | { type: "relink"; target: string } | { type: "reinstall" } | { type: "install" };
+export type DepsAction = { type: "noop" } | { type: "link"; target: string } | { type: "relink"; target: string } | { type: "reinstall" } | { type: "install" } | { type: "restore"; target: string };
 
 export interface OutboundSymlink {
 	name: string;
@@ -75,13 +75,22 @@ export function decideDepsAction(worktree: string, mainRepo: string): DepsAction
 	const worktreeLock = resolve(worktree, "pnpm-lock.yaml");
 	const mainLock = resolve(mainRepo, "pnpm-lock.yaml");
 
-	// Real (non-symlink) directory: never mutate — user-managed, left alone.
-	if (isRealDir(worktreeNm)) return { type: "noop" };
-
 	const mainLockHash = hashFile(mainLock);
 	const worktreeLockHash = hashFile(worktreeLock);
 	const lockfilesMatch = mainLockHash !== undefined && mainLockHash === worktreeLockHash;
 	const mainNmReady = isRealDir(mainNm);
+
+	// Real (non-symlink) directory: corruption recovery. A `.pnpm/` store inside
+	// confirms it was created by `pnpm install` (not user data), and matching
+	// lockfiles guarantee the symlink-to-MAIN_REPO yields equivalent deps. Without
+	// the signature, leave the dir alone — user-managed.
+	if (isRealDir(worktreeNm)) {
+		const hasPnpmStore = existsSync(join(worktreeNm, ".pnpm"));
+		if (hasPnpmStore && lockfilesMatch && mainNmReady) {
+			return { type: "restore", target: mainNm };
+		}
+		return { type: "noop" };
+	}
 
 	if (isSymlink(worktreeNm)) {
 		let currentTarget: string | undefined;
@@ -130,6 +139,13 @@ export function ensureWorktreeDeps(worktree: string, mainRepo: string = REPO): D
 			return action;
 		case "install":
 			execSync("pnpm install --frozen-lockfile --silent", { cwd: worktree, stdio: "inherit" });
+			return action;
+		case "restore":
+			// Only reachable when decideDepsAction confirmed the dir contains a `.pnpm/`
+			// store (i.e. pnpm-managed, not user data) and lockfiles match. The
+			// recursive rm is safe under that gate.
+			rmSync(worktreeNm, { recursive: true, force: true });
+			symlinkSync(action.target, worktreeNm, "dir");
 			return action;
 	}
 }
