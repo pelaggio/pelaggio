@@ -7,6 +7,7 @@ import type { PersistedRun, ShipTargetName } from "../types.js";
 const SHIP_TARGETS: readonly ShipTargetName[] = ["direct-push", "pull-request", "auto-merge-pr"];
 
 interface StartBody {
+	repo?: unknown;
 	item?: unknown;
 	parallel?: unknown;
 	cycles?: unknown;
@@ -20,6 +21,7 @@ function badRequest(c: Context, message: string): Response {
 function summarize(run: PersistedRun) {
 	return {
 		id: run.id,
+		repo: run.repo,
 		item: run.item,
 		status: run.status,
 		startedAt: run.startedAt,
@@ -35,6 +37,9 @@ export function registerRunRoutes(app: Hono, supervisor: Supervisor): void {
 		} catch {
 			return badRequest(c, "request body must be JSON");
 		}
+		if (typeof body.repo !== "string" || body.repo.trim() === "") {
+			return badRequest(c, "field `repo` is required (string)");
+		}
 		if (typeof body.item !== "string" || body.item.trim() === "") {
 			return badRequest(c, "field `item` is required (string)");
 		}
@@ -47,17 +52,29 @@ export function registerRunRoutes(app: Hono, supervisor: Supervisor): void {
 		if (body.shipTarget !== undefined && !SHIP_TARGETS.includes(body.shipTarget as ShipTargetName)) {
 			return badRequest(c, `\`shipTarget\` must be one of ${SHIP_TARGETS.join(", ")}`);
 		}
-		const run = supervisor.start({
-			item: body.item.trim(),
-			...(typeof body.parallel === "number" ? { parallel: body.parallel } : {}),
-			...(typeof body.cycles === "number" ? { cycles: body.cycles } : {}),
-			...(body.shipTarget ? { shipTarget: body.shipTarget as ShipTargetName } : {}),
-		});
-		return c.json({ id: run.id, item: run.item, startedAt: run.startedAt, logPath: run.logPath });
+		let run: PersistedRun;
+		try {
+			run = supervisor.start({
+				repo: body.repo.trim(),
+				item: body.item.trim(),
+				...(typeof body.parallel === "number" ? { parallel: body.parallel } : {}),
+				...(typeof body.cycles === "number" ? { cycles: body.cycles } : {}),
+				...(body.shipTarget ? { shipTarget: body.shipTarget as ShipTargetName } : {}),
+			});
+		} catch (err) {
+			if (err instanceof SupervisorError && err.code === "unknown-repo") {
+				return badRequest(c, err.message);
+			}
+			throw err;
+		}
+		return c.json({ id: run.id, repo: run.repo, item: run.item, startedAt: run.startedAt, logPath: run.logPath });
 	});
 
 	app.get("/runs", (c) => {
-		return c.json({ runs: supervisor.list().map(summarize) });
+		const repoFilter = c.req.query("repo");
+		const runs = supervisor.list();
+		const filtered = repoFilter ? runs.filter((r) => r.repo === repoFilter) : runs;
+		return c.json({ runs: filtered.map(summarize) });
 	});
 
 	app.get("/runs/:id", (c) => {
@@ -78,7 +95,7 @@ export function registerRunRoutes(app: Hono, supervisor: Supervisor): void {
 	app.post("/runs/:id/resume", (c) => {
 		try {
 			const run = supervisor.resume(c.req.param("id"));
-			return c.json({ id: run.id, item: run.item, status: run.status, resumedFrom: run.resumedFrom });
+			return c.json({ id: run.id, repo: run.repo, item: run.item, status: run.status, resumedFrom: run.resumedFrom });
 		} catch (err) {
 			return supervisorError(c, err);
 		}
@@ -122,7 +139,7 @@ export function registerRunRoutes(app: Hono, supervisor: Supervisor): void {
 
 function supervisorError(c: Context, err: unknown): Response {
 	if (err instanceof SupervisorError) {
-		const status = err.code === "not-found" ? 404 : 409;
+		const status = err.code === "not-found" ? 404 : err.code === "unknown-repo" ? 400 : 409;
 		return c.json({ error: err.message, code: err.code }, status);
 	}
 	throw err;

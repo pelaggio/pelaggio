@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { describe, it } from "node:test";
+import { afterEach, describe, it } from "node:test";
 import { getRoadmapSource } from "../roadmap/index.js";
 import { type LinearApi, type LinearCommentNode, type LinearIssueListItem, LinearRoadmap } from "../roadmap/linear.js";
 
@@ -180,6 +180,11 @@ function freshId(): string {
 }
 
 describe("LinearRoadmap.claimItem", () => {
+	const claimedWorktrees: string[] = [];
+	afterEach(() => {
+		while (claimedWorktrees.length) rmSync(claimedWorktrees.pop() as string, { recursive: true, force: true });
+	});
+
 	it("transitions to started, adds in-progress label, creates worktree, returns slugged branch", async () => {
 		const repo = seedRepo();
 		const id = freshId();
@@ -188,6 +193,7 @@ describe("LinearRoadmap.claimItem", () => {
 		});
 		const r = mk({ repo, teamId: "team-x", api });
 		const { branch, worktree } = await r.claimItem(id);
+		claimedWorktrees.push(worktree);
 
 		const lower = id.toLowerCase();
 		assert.match(branch, new RegExp(`^feat/${lower}-fix-the-thing`));
@@ -210,6 +216,7 @@ describe("LinearRoadmap.claimItem", () => {
 		});
 		const r = mk({ repo, api });
 		const { branch, worktree } = await r.claimItem(id);
+		claimedWorktrees.push(worktree);
 		assert.ok(branch.startsWith(`feat/${id.toLowerCase()}`));
 		const wtList = execSync("git worktree list", { cwd: repo, encoding: "utf-8" });
 		assert.ok(wtList.includes(worktree));

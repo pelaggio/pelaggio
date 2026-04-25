@@ -3,19 +3,22 @@ import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { ulid } from "ulid";
 import type { LogBroker, LogSubscriber } from "./log-broker.js";
+import type { Registry } from "./registry.js";
+import { RegistryError } from "./registry.js";
 import type { StateStore } from "./state-store.js";
 import type { PersistedRun, ShipTargetName } from "./types.js";
 
 export interface SupervisorDeps {
 	store: StateStore;
 	broker: LogBroker;
-	repoCwd: string;
+	registry: Registry;
 	logDir: string;
 	spawn?: typeof childProcessSpawn;
 	now?: () => Date;
 }
 
 export interface StartOpts {
+	repo: string;
 	item: string;
 	parallel?: number;
 	cycles?: number;
@@ -25,7 +28,7 @@ export interface StartOpts {
 export class Supervisor {
 	private readonly store: StateStore;
 	private readonly broker: LogBroker;
-	private readonly repoCwd: string;
+	private readonly registry: Registry;
 	private readonly logDir: string;
 	private readonly spawn: typeof childProcessSpawn;
 	private readonly now: () => Date;
@@ -34,7 +37,7 @@ export class Supervisor {
 	constructor(deps: SupervisorDeps) {
 		this.store = deps.store;
 		this.broker = deps.broker;
-		this.repoCwd = deps.repoCwd;
+		this.registry = deps.registry;
 		this.logDir = deps.logDir;
 		this.spawn = deps.spawn ?? childProcessSpawn;
 		this.now = deps.now ?? (() => new Date());
@@ -50,23 +53,25 @@ export class Supervisor {
 	}
 
 	start(opts: StartOpts, resumedFrom?: string): PersistedRun {
+		const repoCwd = this.resolveRepo(opts.repo);
 		const id = ulid();
 		const logPath = resolve(this.logDir, `${id}.log`);
 		const args = this.buildArgs(opts, resumedFrom);
 		const child = this.spawn("pnpm", args, {
-			cwd: this.repoCwd,
-			env: { ...process.env, CLAUDE_AUTOPILOT_REPO: this.repoCwd, CLAUDE_AUTOPILOT_PLAIN: "1" },
+			cwd: repoCwd,
+			env: { ...process.env, CLAUDE_AUTOPILOT_REPO: repoCwd, CLAUDE_AUTOPILOT_PLAIN: "1" },
 			stdio: ["ignore", "pipe", "pipe"],
 		});
 		const startedAt = this.now().toISOString();
 		const run: PersistedRun = {
 			id,
+			repo: opts.repo,
 			item: opts.item,
 			status: "running",
 			pid: child.pid ?? null,
 			startedAt,
 			logPath,
-			cwd: this.repoCwd,
+			cwd: repoCwd,
 			...(opts.shipTarget ? { shipTarget: opts.shipTarget } : {}),
 			...(opts.parallel ? { parallel: opts.parallel } : {}),
 			...(opts.cycles ? { cycles: opts.cycles } : {}),
@@ -78,6 +83,17 @@ export class Supervisor {
 		if (child.stderr) this.broker.tee(id, logPath, child.stderr);
 		child.on("exit", (code) => this.handleExit(id, code));
 		return run;
+	}
+
+	private resolveRepo(slug: string): string {
+		try {
+			return this.registry.path(slug);
+		} catch (err) {
+			if (err instanceof RegistryError) {
+				throw new SupervisorError(`unknown repo ${JSON.stringify(slug)}`, "unknown-repo");
+			}
+			throw err;
+		}
 	}
 
 	private buildArgs(opts: StartOpts, resumedFrom: string | undefined): string[] {
@@ -110,7 +126,7 @@ export class Supervisor {
 
 	resume(id: string): PersistedRun {
 		const run = this.requireRun(id);
-		return this.start({ item: run.item, ...(run.shipTarget ? { shipTarget: run.shipTarget } : {}) }, id);
+		return this.start({ repo: run.repo, item: run.item, ...(run.shipTarget ? { shipTarget: run.shipTarget } : {}) }, id);
 	}
 
 	async stop(id: string): Promise<PersistedRun> {
@@ -189,7 +205,7 @@ export class Supervisor {
 export class SupervisorError extends Error {
 	constructor(
 		message: string,
-		readonly code: "not-found" | "invalid-state" | "no-process",
+		readonly code: "not-found" | "invalid-state" | "no-process" | "unknown-repo",
 	) {
 		super(message);
 	}

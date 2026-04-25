@@ -1,25 +1,31 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import { cleanSkillsOut, copySkillsIn, PACK_TARGETS } from "../../pack-prepare.js";
 
-const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../../..");
 
 describe("pack-prepare", () => {
+	let target: string | null = null;
 	afterEach(() => {
-		cleanSkillsOut(PACKAGE_ROOT);
+		if (target) {
+			rmSync(target, { recursive: true, force: true });
+			target = null;
+		}
 	});
 
 	it("copies skills + templates into the package, then removes them", () => {
-		copySkillsIn(PACKAGE_ROOT);
-		assert.ok(existsSync(resolve(PACKAGE_ROOT, ".claude/skills/_rubric.md")), "skills copied");
-		assert.ok(existsSync(resolve(PACKAGE_ROOT, ".claude-templates")), ".claude-templates copied");
+		target = mkdtempSync(join(tmpdir(), "autopilot-prepack-"));
+		copySkillsIn(target, REPO_ROOT);
+		assert.ok(existsSync(resolve(target, ".claude/skills/_rubric.md")), "skills copied");
+		assert.ok(existsSync(resolve(target, ".claude-templates")), ".claude-templates copied");
 
-		cleanSkillsOut(PACKAGE_ROOT);
+		cleanSkillsOut(target);
 		for (const rel of PACK_TARGETS) {
-			assert.equal(existsSync(resolve(PACKAGE_ROOT, rel)), false, `${rel} removed`);
+			assert.equal(existsSync(resolve(target, rel)), false, `${rel} removed`);
 		}
 	});
 });

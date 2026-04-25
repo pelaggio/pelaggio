@@ -19,7 +19,6 @@ Repo root holds shared assets and dev tooling:
 - Skills: `.claude/skills/` — markdown with frontmatter; lives at root for dogfooding (`REPO` from `git rev-parse --show-toplevel` is the workspace root). Copied into `packages/autopilot/.claude/skills/` by the package's `prepack` lifecycle so the published tarball includes them.
 - Templates for consumers: `.claude-templates/` — same `prepack` treatment.
 - Rubric: `.claude/skills/_rubric.md` — meta-rubric for the tooling itself.
-- Repo-wide scripts: `scripts/check-roadmap.ts`, `scripts/roadmap-graph.ts` — operate on `docs/`, stay at root.
 - Workspace config: `pnpm-workspace.yaml`, `tsconfig.base.json`, `biome.json`, `lefthook.yml`.
 
 `pnpm autopilot` at the root proxies into the package via `pnpm --filter @cdhorne/claude-autopilot autopilot`.
@@ -73,10 +72,10 @@ Don't fold shakedown back into plan to save a cycle — the context-shape differ
 
 | Skill | Role |
 |---|---|
-| `/pick` | Select next item from `docs/task-index.md`, create branch + worktree |
+| `/pick` | Select next item from the configured `RoadmapSource`, create branch + worktree |
 | `/plan` | Generate implementation plan, write to `docs/plans/{slug}.md`, commit |
 | `/shakedown` | Review against rubric + fix issues. Plan-review mode (before implement) or code-review mode (after implement) |
-| `/charter` | Add new work item to a roadmap + task-index |
+| `/charter` | Add new work item via the configured `RoadmapSource` (markdown roadmap + task-index, GitHub issue, or Linear issue) |
 | `/ship` | Squash, then one of: direct-push (merge → update docs → clean up) \| pull-request (push + `gh pr create`) \| auto-merge-pr (PR + `gh pr merge --auto`). Target picked by `ship.target`. |
 | `/shipwreck` | Recovery skill when `/ship` fails partway through |
 | `/pickup` | Rebuild context for in-progress work — read plan, show progress, suggest next step |
@@ -123,8 +122,6 @@ pnpm autopilot --item INFRA-1 --verbose                   # specific item
 pnpm autopilot --cycles 3 --parallel 2 --verbose          # parallel cycles (auto-pick from queue)
 pnpm autopilot --item A-1,A-2,A-3 --parallel 2 --verbose  # targeted multi-item batch (cycles auto-sized to list length)
 pnpm autopilot --resume INFRA-1                           # resume a parked/failed cycle
-pnpm check:roadmap                                        # verify task-index ↔ roadmap consistency (--fix adds missing index rows)
-pnpm graph:roadmap                                        # regenerate docs/dep-graph.md (Mermaid) from roadmap-*.md; --stdout to pipe
 pnpm -r test                                              # run unit tests across the workspace
 npx claude-autopilot sync --dry-run                       # preview skill-upgrade plan (consumer-side CLI)
 ```
