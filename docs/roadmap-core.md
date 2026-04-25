@@ -59,7 +59,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | ~~TOOL-49. TUI non-TTY fallback: plain-line events when stderr isn't a terminal (server/SSE consumers)~~ | **Done** — TUI non-TTY fallback emits plain-line events for SSE consumers |
 | ~~TOOL-50. Skill CLI invocation is collision-vulnerable; pipeline entry accepts unknown positional args (recursion risk)~~ | **Done** — scoped CLI name + pipeline arg-validation guard against npx-cache recursion |
 | ~~TOOL-51. `_resolveWorktree` fallback: cross-reference `git worktree list` before erroring "worktree missing"~~ | **Done** — fallback to git worktree list when recorded path missing |
-| TOOL-52. Worktree pnpm install corrupts main node_modules symlinks (dangling after ship cleanup) | — |
+| ~~TOOL-52. Worktree pnpm install corrupts main node_modules symlinks (dangling after ship cleanup)~~ | **Done** — repair MAIN node_modules symlinks corrupted by worktree pnpm install |
 | TOOL-53. orchestrator.test.ts parent-runner IPC deserialize error (pre-existing flake) | — |
 ---
 
