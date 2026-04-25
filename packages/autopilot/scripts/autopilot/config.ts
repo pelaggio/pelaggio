@@ -45,7 +45,7 @@ const SONNET = "claude-sonnet-4-6";
 
 // ── Defaults ───────────────────────────────────────────────────────────
 
-type Effort = "low" | "medium" | "high";
+type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface ResolvedConfig {
 	repo: string;
@@ -93,10 +93,10 @@ export const DEFAULTS = {
 	} satisfies Record<Step, number>,
 	effort: {
 		pick: "medium",
-		plan: "high",
-		"shakedown-plan": "high",
-		implement: "high",
-		"shakedown-code": "high",
+		plan: "xhigh",
+		"shakedown-plan": "xhigh",
+		implement: "xhigh",
+		"shakedown-code": "xhigh",
 		ship: "medium",
 		shipwreck: "medium",
 	} satisfies Record<Step, Effort>,
@@ -179,7 +179,7 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 	const yml = parseFile(configPath);
 
 	const isNumber = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
-	const isEffort = (v: unknown): v is Effort => v === "low" || v === "medium" || v === "high";
+	const isEffort = (v: unknown): v is Effort => v === "low" || v === "medium" || v === "high" || v === "xhigh" || v === "max";
 	const isString = (v: unknown): v is string => typeof v === "string";
 
 	const budgets = mergeStepRecord(DEFAULTS.budgets, yml.budgets, "budgets", isNumber, configPath);

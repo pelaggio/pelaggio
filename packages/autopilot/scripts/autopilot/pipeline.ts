@@ -126,6 +126,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			cost: result.cost,
 			turns: result.turns,
 			ok: result.ok,
+			...(!result.ok ? { subtype: result.subtype } : {}),
 			...(result.tokens ? { tokens: result.tokens } : {}),
 			...(attempt > 1 ? { attempt } : {}),
 			...(result.toolCounts ? { toolCounts: result.toolCounts } : {}),

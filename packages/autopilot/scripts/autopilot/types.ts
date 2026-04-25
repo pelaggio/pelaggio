@@ -30,6 +30,8 @@ export interface StepLog {
 	cost: number;
 	turns: number;
 	ok: boolean;
+	/** Failure category from `step-runner.ts` — present only on failed steps. */
+	subtype?: string;
 	tokens?: TokenUsage;
 	/** 1-indexed attempt number; absent means 1. */
 	attempt?: number;

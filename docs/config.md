@@ -60,12 +60,12 @@ turn-limits:                    # SDK turn cap per step
   ship: 40
   shipwreck: 40
 
-effort:                         # "low" | "medium" | "high"
-  pick: medium
-  plan: high
-  shakedown-plan: high
-  implement: high
-  shakedown-code: high
+effort:                         # "low" | "medium" | "high" | "xhigh" | "max"
+  pick: medium                  # xhigh is Opus 4.7-only; falls back to high on other models.
+  plan: xhigh                   # max is Opus 4.6/4.7-only.
+  shakedown-plan: xhigh
+  implement: xhigh
+  shakedown-code: xhigh
   ship: medium
   shipwreck: medium
 
