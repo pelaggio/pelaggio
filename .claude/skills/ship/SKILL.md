@@ -121,6 +121,9 @@ If `git push` fails because main moved, run `git pull --no-rebase origin main`, 
 
 **If in worktree**:
 ```bash
+# TOOL-52: repair MAIN's node_modules if a worktree-side `pnpm install`
+# re-pointed any top-level symlinks into the worktree's .pnpm store.
+npx @cdhorne/claude-autopilot worktree-deps --repair-main
 git worktree remove "$WORKTREE" --force
 git branch -d "$BRANCH"
 git push origin --delete "$BRANCH" 2>/dev/null

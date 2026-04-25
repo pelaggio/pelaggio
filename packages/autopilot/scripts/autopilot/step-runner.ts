@@ -1,4 +1,5 @@
-import { resolve } from "node:path";
+import { existsSync, lstatSync } from "node:fs";
+import { join, resolve } from "node:path";
 import type { HookInput, HookJSONOutput, SDKAssistantMessage, SDKRateLimitEvent, SDKResultMessage, SDKSystemMessage } from "@anthropic-ai/claude-agent-sdk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { BUDGETS, EFFORT, MODEL_PROFILES, REPO, TURN_LIMITS } from "./config.js";
@@ -80,7 +81,23 @@ export async function runStep(name: Step, prompt: string, opts: RunStepOpts, emi
 	// commands (pnpm test, pnpm check) run downstream.
 	if (isWorktree) {
 		try {
-			ensureWorktreeDeps(opts.cwd, REPO);
+			const action = ensureWorktreeDeps(opts.cwd, REPO);
+			// TOOL-52 corruption signature: noop + real-dir worktree-nm + .pnpm/ inside.
+			// Distinguishes "pnpm install rebuilt the worktree locally" (case b) from
+			// "symlink-to-main is correct" (case a) — the latter would also be `noop`,
+			// but `lstatSync(<worktree>/node_modules)` returns isSymbolicLink in that case.
+			if (action.type === "noop") {
+				const wtNm = resolve(opts.cwd, "node_modules");
+				try {
+					const s = lstatSync(wtNm);
+					if (s.isDirectory() && !s.isSymbolicLink() && existsSync(join(wtNm, ".pnpm"))) {
+						emit({
+							type: "sdk_error",
+							message: "worktree node_modules became a real directory mid-cycle (pnpm install re-installed locally); main repo will be repaired at ship time",
+						});
+					}
+				} catch {}
+			}
 		} catch (err) {
 			emit({ type: "sdk_error", message: `worktree-deps guard failed: ${err instanceof Error ? err.message : String(err)}` });
 		}
