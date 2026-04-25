@@ -61,7 +61,7 @@ Real backlog for the autopilot tooling. These are items we've identified during 
 | ~~TOOL-51. `_resolveWorktree` fallback: cross-reference `git worktree list` before erroring "worktree missing"~~ | **Done** — fallback to git worktree list when recorded path missing |
 | ~~TOOL-52. Worktree pnpm install corrupts main node_modules symlinks (dangling after ship cleanup)~~ | **Done** — repair MAIN node_modules symlinks corrupted by worktree pnpm install |
 | ~~TOOL-53. orchestrator.test.ts parent-runner IPC deserialize error (pre-existing flake)~~ | **Done** — silenced console.log in orchestrator.test.ts to avoid IPC deserialize flake |
-| TOOL-54. Block worktree-side pnpm install: PreToolUse hook + proactive symlink restore in step-runner guard | — |
+| ~~TOOL-54. Block worktree-side pnpm install: PreToolUse hook + proactive symlink restore in step-runner guard~~ | **Done** — Block worktree-side pnpm install + proactive symlink restore |
 ---
 
 ## Items
