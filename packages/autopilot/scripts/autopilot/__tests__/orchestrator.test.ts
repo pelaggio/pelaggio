@@ -18,7 +18,8 @@ const fakeResolveWorktree = (id: string): string => `/fake/wt-${id.toLowerCase()
 const fakeDetectResumeStep = () => "implement" as const;
 
 describe("runOrchestrator — resume mode", () => {
-	it("success: runPipeline called with startFrom and exitCode 0", async () => {
+	it("success: runPipeline called with startFrom and exitCode 0", async (t) => {
+		t.mock.method(console, "log", () => {});
 		const { runPipeline, calls } = createMockRunPipeline({
 			byItem: { "TOOL-99": { completed: true, cost: 1 } },
 		});
@@ -32,7 +33,8 @@ describe("runOrchestrator — resume mode", () => {
 		assert.equal(results[0].completed, true);
 	});
 
-	it("failure: exitCode 1 when runPipeline returns completed false", async () => {
+	it("failure: exitCode 1 when runPipeline returns completed false", async (t) => {
+		t.mock.method(console, "log", () => {});
 		const { runPipeline } = createMockRunPipeline({
 			byItem: { "TOOL-99": { completed: false, cost: 0, error: "plan failed" } },
 		});
@@ -44,6 +46,7 @@ describe("runOrchestrator — resume mode", () => {
 describe("runOrchestrator — invalid target", () => {
 	it("exits 2 without invoking runPipeline", async (t) => {
 		t.mock.method(console, "error", () => {});
+		t.mock.method(console, "log", () => {});
 		const { runPipeline, calls } = createMockRunPipeline({ default: { completed: true } });
 		const { exitCode } = await runOrchestrator({ ...baseFlags, item: "A-1", target: "bogus" }, { runPipeline });
 		assert.equal(exitCode, 2);
@@ -52,7 +55,8 @@ describe("runOrchestrator — invalid target", () => {
 });
 
 describe("runOrchestrator — cycle auto-sizing", () => {
-	it("runs one cycle per --item entry when --cycles < items.length", async () => {
+	it("runs one cycle per --item entry when --cycles < items.length", async (t) => {
+		t.mock.method(console, "log", () => {});
 		const { runPipeline, calls } = createMockRunPipeline({
 			default: { completed: true, cost: 0.1 },
 		});
@@ -67,7 +71,8 @@ describe("runOrchestrator — cycle auto-sizing", () => {
 });
 
 describe("runOrchestrator — parallel workers share mutex", () => {
-	it("every runPipeline call receives the same pickMutex reference", async () => {
+	it("every runPipeline call receives the same pickMutex reference", async (t) => {
+		t.mock.method(console, "log", () => {});
 		const { runPipeline, calls } = createMockRunPipeline({
 			default: { completed: true, cost: 0.1 },
 		});
@@ -80,7 +85,8 @@ describe("runOrchestrator — parallel workers share mutex", () => {
 });
 
 describe("runOrchestrator — worker continuation", () => {
-	it("recoverable error ('pick:queue-empty') keeps worker pulling subsequent cycles", async () => {
+	it("recoverable error ('pick:queue-empty') keeps worker pulling subsequent cycles", async (t) => {
+		t.mock.method(console, "log", () => {});
 		const { runPipeline, calls } = createMockRunPipeline({
 			byItem: {
 				"A-1": { completed: false, cost: 0, error: "pick:queue-empty" },
@@ -93,7 +99,8 @@ describe("runOrchestrator — worker continuation", () => {
 		assert.equal(exitCode, 1); // overall still non-zero because A-1 didn't complete
 	});
 
-	it("fatal error stops the worker and skips remaining items", async () => {
+	it("fatal error stops the worker and skips remaining items", async (t) => {
+		t.mock.method(console, "log", () => {});
 		const { runPipeline, calls } = createMockRunPipeline({
 			byItem: {
 				"A-1": { completed: false, cost: 0, error: "plan failed" },
@@ -111,6 +118,7 @@ describe("runOrchestrator — worker continuation", () => {
 describe("runOrchestrator — park-and-resume", () => {
 	it("success: resumes after wait, uses detectResumeStep startFrom, exitCode 0", async (t) => {
 		t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
+		t.mock.method(console, "log", () => {});
 		const baseNow = 1_700_000_000_000;
 		t.mock.timers.setTime(baseNow);
 
@@ -150,6 +158,7 @@ describe("runOrchestrator — park-and-resume", () => {
 
 	it("exceeds --max-wait: exitCode 1, runPipeline not re-invoked", async (t) => {
 		t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
+		t.mock.method(console, "log", () => {});
 		const baseNow = 1_700_000_000_000;
 		t.mock.timers.setTime(baseNow);
 
@@ -188,6 +197,7 @@ describe("runOrchestrator — park-and-resume", () => {
 
 	it("unknown reset time (resetsAt=0): exitCode 1, runPipeline not re-invoked", async (t) => {
 		t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
+		t.mock.method(console, "log", () => {});
 		const baseNow = 1_700_000_000_000;
 		t.mock.timers.setTime(baseNow);
 
