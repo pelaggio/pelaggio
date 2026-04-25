@@ -4,6 +4,7 @@ export type RunStatus = "running" | "completed" | "failed" | "parked" | "paused"
 
 export interface PersistedRun {
 	id: string;
+	repo: string;
 	item: string;
 	status: RunStatus;
 	pid: number | null;

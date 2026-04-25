@@ -12,21 +12,24 @@ It replaces SSH-over-Tailscale kickoffs. Web UI (TOOL-42) and Cloudflare Tunnel
 ```
 HTTP client ──► Hono routes ──► Supervisor ──► child process (`pnpm autopilot ...`)
                   │                  │              │
-                  │                  ├──► StateStore (.dev/server-state.json)
+                  │                  ├──► StateStore ($XDG_STATE_HOME/autopilot-server/state.json)
                   │                  └──► LogBroker (file tee + SSE fan-out)
-                  └──► RoadmapSource / computeStats (pure helpers reused from @cdhorne/claude-autopilot)
+                  ├──► Registry  ($XDG_CONFIG_HOME/autopilot-server/repos.yml — slug → repo path)
+                  └──► RoadmapCache → RoadmapSource / computeStats (per-repo, lazy)
 ```
 
 Module boundaries (`packages/server/src/`):
 
 | Module | Responsibility |
 |---|---|
-| `scripts/server.ts` | Entry: env → `createApp(deps)` → `serve(...)`. |
+| `scripts/server.ts` | Entry: env → registry → `createApp(deps)` → `serve(...)`. |
 | `src/app.ts` | Composition. `/healthz` is registered outside the auth chain. |
-| `src/config.ts` | Env parsing. Refuses `AUTOPILOT_SERVER_HOST=0.0.0.0`. |
+| `src/config.ts` | Env parsing. Refuses `AUTOPILOT_SERVER_HOST=0.0.0.0`. XDG-aware defaults for registry/state/log paths. |
+| `src/registry.ts` | Loads + validates `repos.yml`. `Registry.path(slug)` resolves slug → absolute repo path. |
+| `src/roadmap-cache.ts` | Lazy `Map<slug, RoadmapSource>`; first hit per slug instantiates via injected factory. |
 | `src/auth.ts` | Bearer middleware; constant-time compare via `crypto.timingSafeEqual`. No-op when token is undefined. |
 | `src/state-store.ts` | Flat-JSON persistence. Atomic writes (temp file → `renameSync`). |
-| `src/supervisor.ts` | `start` / `pause` / `resume` / `stop` / `bootReattach`. Spawn is DI for tests. |
+| `src/supervisor.ts` | `start` / `pause` / `resume` / `stop` / `bootReattach`. Resolves `start({ repo })` via registry. Spawn is DI for tests. |
 | `src/log-broker.ts` | Per-run pubsub; tees child stdout/stderr to `${logDir}/${id}.log` and to live SSE subscribers. |
 | `src/routes/*.ts` | Thin HTTP shells. No business logic. |
 
@@ -37,16 +40,18 @@ All responses JSON unless noted. Errors: `{ error: string; code: string }` with 
 ### `POST /runs`
 ```jsonc
 // body
-{ "item": "TOOL-1", "parallel": 2, "cycles": 3, "shipTarget": "pull-request" }
+{ "repo": "claude-autopilot", "item": "TOOL-1", "parallel": 2, "cycles": 3, "shipTarget": "pull-request" }
 // 200
-{ "id": "01HX...", "item": "TOOL-1", "startedAt": "2026-04-19T...", "logPath": "/.../01HX....log" }
+{ "id": "01HX...", "repo": "claude-autopilot", "item": "TOOL-1", "startedAt": "2026-04-19T...", "logPath": "/.../01HX....log" }
 ```
+`repo` is a slug from the registry (`GET /repos`); unknown slugs → 400.
 `shipTarget` ∈ `direct-push` | `pull-request` | `auto-merge-pr`.
 
 ### `GET /runs`
 ```jsonc
-{ "runs": [{ "id", "item", "status", "startedAt", "endedAt"? }] }
+{ "runs": [{ "id", "repo", "item", "status", "startedAt", "endedAt"? }] }
 ```
+`?repo=<slug>` filters to runs from that registry entry. Unknown slug returns `{ "runs": [] }`.
 
 ### `GET /runs/:id`
 Full `PersistedRun` (see `src/types.ts`). 404 if unknown.
@@ -67,25 +72,59 @@ Server-sent events. `data: <log line>\n\n` per line. For completed runs, replays
 
 The supervisor spawns every child with `CLAUDE_AUTOPILOT_PLAIN=1` in its env, so tee'd log files and SSE streams are ANSI-free: no spinner repaints, no scroll-region escapes, no color bytes. Auto-detection via non-TTY stderr already covers piped stdio, but the explicit env var is defensive against wrapper shims that might allocate a pty. Humans piping `pnpm autopilot` output outside the server (`pnpm autopilot … 2>&1 | tee`, `| less`, etc.) can set the same env var to opt in to plain lines.
 
-### `GET /stats`
-Pure `computeStats()` from autopilot — same shape as the CLI's `stats` subcommand.
+### `GET /repos`
+```jsonc
+{ "repos": [{ "slug": "claude-autopilot", "path": "/abs/path", "exists": true }, ...] }
+```
+Lists registry entries in insertion order; `exists` reflects whether the path resolves on disk.
 
-### `GET /roadmap`
+### `GET /repos/:slug/roadmap`
 ```jsonc
 { "source": "markdown" | "github-issues" | "linear", "items": RoadmapItem[] }
 ```
-Open items only.
+Open items only. 404 on unknown slug.
+
+### `GET /repos/:slug/stats`
+Pure `computeStats({ logPath: <repo>/.dev/autopilot-log.jsonl })` from autopilot — same shape as the CLI's `stats` subcommand. 404 on unknown slug.
 
 ### `GET /healthz`
 `{ "ok": true }`. Bypasses bearer auth — uptime probing.
 
+## Repo registry
+
+The daemon is repo-agnostic; it learns about repos from a YAML file at
+`$XDG_CONFIG_HOME/autopilot-server/repos.yml` (override:
+`AUTOPILOT_SERVER_REGISTRY=/abs/path`). See
+`infra/autopilot-server/repos.yml.example` for the format. Restart the daemon
+after editing — there is no hot-reload.
+
+```yaml
+repos:
+  claude-autopilot: /home/USER/workspace/claude-autopilot
+  fathom: /home/USER/workspace/fathom
+```
+
+Each `PersistedRun` carries its own `repo` slug; the supervisor resolves
+`start({ repo })` via the registry and uses the resolved path as the spawn
+`cwd` and `CLAUDE_AUTOPILOT_REPO`. Unknown slugs surface as
+`SupervisorError(code: "unknown-repo")` → HTTP 400.
+
+If two registry paths share the same `basename(path)`, autopilot's
+worktree-prefix detection (`listWorktrees()` filters by basename) can
+misattribute branches across the repos. The daemon emits a single
+`console.warn` at boot and continues — operator decides whether to rename.
+
 ## Persisted state
 
 `PersistedRun` is the canonical shape. Stored as `{ runs: PersistedRun[] }` at
-`AUTOPILOT_SERVER_STATE_PATH` (default `<repo>/.dev/server-state.json`). The
-supervisor is the single writer; writes are atomic (temp file → `renameSync`).
-On startup, `bootReattach()` walks every `running`/`paused` entry and probes
-its PID with `process.kill(pid, 0)`. Dead PIDs are marked `abandoned` with
+`AUTOPILOT_SERVER_STATE_PATH` (default
+`$XDG_STATE_HOME/autopilot-server/state.json`, fallback
+`~/.local/state/autopilot-server/state.json`). Per-run logs default to
+`$XDG_STATE_HOME/autopilot-server/logs/<id>.log`
+(override: `AUTOPILOT_SERVER_LOG_DIR`). The supervisor is the single writer;
+writes are atomic (temp file → `renameSync`). On startup, `bootReattach()`
+walks every `running`/`paused` entry and probes its PID with
+`process.kill(pid, 0)`. Dead PIDs are marked `abandoned` with
 `error: "daemon restart lost stream"`. Live PIDs keep their metadata; the
 in-memory subscriber set starts empty (clients reconnect via SSE).
 
@@ -137,11 +176,40 @@ GH_TOKEN=ghp_...
 LINEAR_API_KEY=lin_api_...                    # optional, only if roadmap.source=linear
 AUTOPILOT_SERVER_HOST=100.x.x.x               # tailnet IP (NOT 0.0.0.0 — server refuses to start)
 AUTOPILOT_SERVER_PORT=7777
-AUTOPILOT_REPO=/home/USER/workspace/claude-autopilot
+# AUTOPILOT_SERVER_REGISTRY=/abs/path/repos.yml  # optional override; default $XDG_CONFIG_HOME/autopilot-server/repos.yml
 CONTROL_PLANE_TOKEN=...                       # optional; bearer-gates everything except /healthz
 ```
 
+The repo registry itself lives separately at
+`~/.config/autopilot-server/repos.yml` — see
+`infra/autopilot-server/repos.yml.example`.
+
 `StandardOutput=journal` — tail with `journalctl --user -u autopilot-server -f`.
+
+### Cutover from single-repo to registry
+
+If you're upgrading a host that previously ran the daemon with `AUTOPILOT_REPO=…`,
+state moves out of `<repo>/.dev/server-state.json` and into XDG, and routes
+move from `/roadmap` and `/stats` to `/repos/:slug/...`. There is no
+migration code — perform the cutover manually:
+
+```bash
+# 1. Drop the old single-repo env line
+sed -i '/^AUTOPILOT_REPO=/d' ~/.config/autopilot-server.env
+
+# 2. Create the registry (one-time)
+mkdir -p ~/.config/autopilot-server
+cp infra/autopilot-server/repos.yml.example ~/.config/autopilot-server/repos.yml
+$EDITOR ~/.config/autopilot-server/repos.yml
+
+# 3. Wipe pre-cutover state (in-flight runs from the old layout cannot be
+#    resumed under the new schema — `repo` becomes a required field).
+rm -f <old_repo>/.dev/server-state.json
+rm -f ~/.local/state/autopilot-server/state.json    # in case a prior boot wrote here
+
+# 4. Restart
+systemctl --user restart autopilot-server
+```
 
 ## Bearer-token auth
 
@@ -174,7 +242,7 @@ URL layout:
 
 | Path | Handler |
 |---|---|
-| `/runs`, `/roadmap`, `/stats`, `/healthz` | API routes (JSON) |
+| `/runs`, `/repos`, `/repos/:slug/roadmap`, `/repos/:slug/stats`, `/healthz` | API routes (JSON) |
 | `/ui/*` | Astro static (`dist/...`); the `/ui` prefix is stripped before resolving |
 | `/` | 302 → `/ui/` (only when `webDist` is set) |
 

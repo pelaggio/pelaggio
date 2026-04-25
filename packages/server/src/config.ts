@@ -1,11 +1,12 @@
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export interface ServerConfig {
 	host: string;
 	port: number;
-	repo: string;
+	registryPath: string;
 	token: string | undefined;
 	statePath: string;
 	logDir: string;
@@ -22,6 +23,14 @@ function required(name: string, value: string | undefined): string {
 // Resolved relative to this file: packages/server/src/ → ../../web/dist = packages/web/dist
 const packageRelativeWebDist = fileURLToPath(new URL("../../web/dist", import.meta.url));
 
+function xdgConfigHome(env: NodeJS.ProcessEnv): string {
+	return env.XDG_CONFIG_HOME ? resolve(env.XDG_CONFIG_HOME) : resolve(homedir(), ".config");
+}
+
+function xdgStateHome(env: NodeJS.ProcessEnv): string {
+	return env.XDG_STATE_HOME ? resolve(env.XDG_STATE_HOME) : resolve(homedir(), ".local", "state");
+}
+
 export function loadServerConfig(env: NodeJS.ProcessEnv = process.env, { webDistDefault = packageRelativeWebDist }: { webDistDefault?: string } = {}): ServerConfig {
 	const host = required("AUTOPILOT_SERVER_HOST", env.AUTOPILOT_SERVER_HOST);
 	if (host === "0.0.0.0") {
@@ -32,11 +41,12 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env, { webDist
 	if (!Number.isInteger(port) || port <= 0 || port > 65535) {
 		throw new Error(`AUTOPILOT_SERVER_PORT must be an integer 1-65535; got ${JSON.stringify(portRaw)}`);
 	}
-	const repo = resolve(required("AUTOPILOT_REPO", env.AUTOPILOT_REPO));
-	const statePath = env.AUTOPILOT_SERVER_STATE_PATH ? resolve(env.AUTOPILOT_SERVER_STATE_PATH) : resolve(repo, ".dev", "server-state.json");
-	const logDir = env.AUTOPILOT_SERVER_LOG_DIR ? resolve(env.AUTOPILOT_SERVER_LOG_DIR) : resolve(repo, ".dev", "server-logs");
+	const registryPath = env.AUTOPILOT_SERVER_REGISTRY ? resolve(env.AUTOPILOT_SERVER_REGISTRY) : resolve(xdgConfigHome(env), "autopilot-server", "repos.yml");
+	const stateRoot = resolve(xdgStateHome(env), "autopilot-server");
+	const statePath = env.AUTOPILOT_SERVER_STATE_PATH ? resolve(env.AUTOPILOT_SERVER_STATE_PATH) : resolve(stateRoot, "state.json");
+	const logDir = env.AUTOPILOT_SERVER_LOG_DIR ? resolve(env.AUTOPILOT_SERVER_LOG_DIR) : resolve(stateRoot, "logs");
 	const token = env.CONTROL_PLANE_TOKEN || undefined;
 	const webDistCandidate = env.AUTOPILOT_SERVER_WEB_DIST ? resolve(env.AUTOPILOT_SERVER_WEB_DIST) : webDistDefault;
 	const webDist = existsSync(webDistCandidate) ? webDistCandidate : undefined;
-	return { host, port, repo, token, statePath, logDir, webDist };
+	return { host, port, registryPath, token, statePath, logDir, webDist };
 }

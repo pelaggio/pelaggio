@@ -13,6 +13,7 @@ function tmp(): string {
 function makeRun(id: string, patch: Partial<PersistedRun> = {}): PersistedRun {
 	return {
 		id,
+		repo: "main",
 		item: "TOOL-1",
 		status: "running",
 		pid: 1234,
