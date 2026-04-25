@@ -11,10 +11,10 @@ Deps column shows only **unsatisfied** dependencies. `—` means ready to pick. 
 | ID | Title | Deps | Plan | Roadmap |
 |----|-------|------|------|---------|
 | TOOL-48 | Multi-repo control plane: AUTOPILOT_REPOS list, per-repo state stores, UI repo switcher | — | — | core |
-| TOOL-53 | orchestrator.test.ts parent-runner IPC deserialize error (pre-existing flake) | — | — | core |
 
 ## Recently completed
 
+- TOOL-53 ✓
 - TOOL-52 ✓
 - TOOL-51 ✓
 - TOOL-50 ✓
