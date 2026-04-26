@@ -1,4 +1,4 @@
-import { setCurrentRepo, useRepos } from "../lib/repo.js";
+import { retryInit, setCurrentRepo, useRepos } from "../lib/repo.js";
 
 function basename(p: string): string {
 	const trimmed = p.replace(/\/+$/, "");
@@ -11,6 +11,16 @@ export function RepoNav() {
 
 	if (state.status === "loading") {
 		return <span className="text-xs text-slate-500">loading repos…</span>;
+	}
+	if (state.status === "error") {
+		return (
+			<span className="text-xs text-red-700">
+				failed to load repos: {state.error}
+				<button type="button" onClick={() => void retryInit()} className="ml-2 underline">
+					retry
+				</button>
+			</span>
+		);
 	}
 	if (state.status === "empty") {
 		return <span className="text-xs text-slate-500">no repos configured</span>;

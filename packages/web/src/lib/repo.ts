@@ -4,7 +4,7 @@ import { listRepos } from "./api.js";
 
 export const STORAGE_KEY = "autopilot-current-repo";
 
-export type RepoState = { status: "loading" } | { status: "empty"; repos: readonly RepoEntry[] } | { status: "ready"; repos: readonly RepoEntry[]; current: string };
+export type RepoState = { status: "loading" } | { status: "error"; error: string } | { status: "empty"; repos: readonly RepoEntry[] } | { status: "ready"; repos: readonly RepoEntry[]; current: string };
 
 interface StorageLike {
 	getItem(key: string): string | null;
@@ -48,21 +48,32 @@ export function subscribe(fn: () => void): () => void {
 export async function init(): Promise<RepoState> {
 	if (initPromise) return initPromise;
 	initPromise = (async () => {
-		const { repos } = await fetcher();
-		if (repos.length === 0) {
-			state = { status: "empty", repos };
-			notify();
-			return state;
+		try {
+			const { repos } = await fetcher();
+			if (repos.length === 0) {
+				state = { status: "empty", repos };
+			} else {
+				const stored = storage?.getItem(STORAGE_KEY) ?? null;
+				const match = stored && repos.find((r) => r.slug === stored);
+				const current = match ? match.slug : repos[0]!.slug;
+				if (current !== stored) storage?.setItem(STORAGE_KEY, current);
+				state = { status: "ready", repos, current };
+			}
+		} catch (err) {
+			state = { status: "error", error: err instanceof Error ? err.message : String(err) };
 		}
-		const stored = storage?.getItem(STORAGE_KEY) ?? null;
-		const match = stored && repos.find((r) => r.slug === stored);
-		const current = match ? match.slug : repos[0]!.slug;
-		if (current !== stored) storage?.setItem(STORAGE_KEY, current);
-		state = { status: "ready", repos, current };
 		notify();
 		return state;
 	})();
 	return initPromise;
+}
+
+export async function retryInit(): Promise<RepoState> {
+	if (state.status !== "error") return state;
+	initPromise = null;
+	state = { status: "loading" };
+	notify();
+	return init();
 }
 
 export function setCurrentRepo(slug: string): void {
