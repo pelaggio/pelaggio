@@ -2,10 +2,13 @@ import type { RoadmapItem } from "@cdhorne/claude-autopilot";
 import type { ShipTargetName } from "@cdhorne/claude-autopilot-server/types";
 import { type SyntheticEvent, useEffect, useState } from "react";
 import { ApiError, getRoadmap, startRun } from "../lib/api.js";
+import { useRepos } from "../lib/repo.js";
 
 const SHIP_TARGETS: ShipTargetName[] = ["direct-push", "pull-request", "auto-merge-pr"];
 
 export function StartForm() {
+	const reposState = useRepos();
+	const currentRepo = reposState.status === "ready" ? reposState.current : null;
 	const [items, setItems] = useState<RoadmapItem[] | undefined>(undefined);
 	const [item, setItem] = useState("");
 	const [parallel, setParallel] = useState<string>("");
@@ -15,24 +18,33 @@ export function StartForm() {
 	const [busy, setBusy] = useState(false);
 
 	useEffect(() => {
+		if (!currentRepo) return;
+		let cancelled = false;
+		setItems(undefined);
+		setError(undefined);
 		void (async () => {
 			try {
-				const res = await getRoadmap();
+				const res = await getRoadmap(currentRepo);
+				if (cancelled) return;
 				setItems(res.items);
-				if (res.items[0]) setItem(res.items[0].id);
+				setItem(res.items[0]?.id ?? "");
 			} catch (err) {
-				setError(err instanceof ApiError ? err.message : String(err));
+				if (!cancelled) setError(err instanceof ApiError ? err.message : String(err));
 			}
 		})();
-	}, []);
+		return () => {
+			cancelled = true;
+		};
+	}, [currentRepo]);
 
 	const submit = async (e: SyntheticEvent<HTMLFormElement>) => {
 		e.preventDefault();
-		if (!item) return;
+		if (!item || !currentRepo) return;
 		setBusy(true);
 		setError(undefined);
 		try {
 			const body = {
+				repo: currentRepo,
 				item,
 				...(parallel ? { parallel: Number(parallel) } : {}),
 				...(cycles ? { cycles: Number(cycles) } : {}),
@@ -46,11 +58,16 @@ export function StartForm() {
 		}
 	};
 
+	if (reposState.status === "loading") return <p className="text-slate-500">Loading…</p>;
+	if (reposState.status === "empty") return <p className="text-slate-500">No repos configured.</p>;
 	if (items === undefined && !error) return <p className="text-slate-500">Loading roadmap…</p>;
 
 	return (
 		<form onSubmit={submit} className="space-y-4">
 			<h1 className="text-2xl font-semibold">Start a run</h1>
+			<p className="text-sm text-slate-600">
+				repo: <code>{currentRepo}</code>
+			</p>
 			<label className="block">
 				<span className="mb-1 block text-sm font-medium">Item</span>
 				<select value={item} onChange={(e) => setItem(e.target.value)} required>

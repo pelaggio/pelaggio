@@ -1,5 +1,6 @@
 ---
 import "../styles/global.css";
+import { RepoNav } from "../components/RepoNav.tsx";
 import { TokenPrompt } from "../components/TokenPrompt.tsx";
 const { title } = Astro.props as { title: string };
 ---
@@ -21,7 +22,10 @@ const { title } = Astro.props as { title: string };
 				<a href="/ui/" class="no-underline">runs</a>
 				<a href="/ui/start/" class="no-underline">start</a>
 				<a href="/ui/stats/" class="no-underline">stats</a>
-				<button id="clear-token" type="button" class="ml-auto text-xs text-slate-500 hover:text-slate-900">clear token</button>
+				<div class="ml-auto flex items-center gap-3">
+					<RepoNav client:load />
+					<button id="clear-token" type="button" class="text-xs text-slate-500 hover:text-slate-900">clear token</button>
+				</div>
 			</nav>
 		</header>
 		<main class="mx-auto max-w-5xl px-4 py-6">
@@ -29,9 +33,11 @@ const { title } = Astro.props as { title: string };
 			<slot />
 		</main>
 		<script>
-			import { STORAGE_KEY } from "../lib/token.ts";
+			import { STORAGE_KEY as TOKEN_KEY } from "../lib/token.ts";
+			import { STORAGE_KEY as REPO_KEY } from "../lib/repo.ts";
 			document.getElementById("clear-token")?.addEventListener("click", () => {
-				localStorage.removeItem(STORAGE_KEY);
+				localStorage.removeItem(TOKEN_KEY);
+				localStorage.removeItem(REPO_KEY);
 				location.reload();
 			});
 		</script>

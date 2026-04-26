@@ -56,6 +56,9 @@ export function RunDetail({ id }: RunDetailProps) {
 					<span className="text-slate-600">
 						id: <code>{run.id}</code>
 					</span>
+					<span className="text-slate-600">
+						repo: <code>{run.repo}</code>
+					</span>
 					{run.shipTarget && <span className="text-slate-600">ship: {run.shipTarget}</span>}
 					{run.parallel != null && <span className="text-slate-600">parallel: {run.parallel}</span>}
 					{run.cycles != null && <span className="text-slate-600">cycles: {run.cycles}</span>}

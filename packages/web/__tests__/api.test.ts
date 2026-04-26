@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { ApiError, getRoadmap, getRun, getStats, listRuns, pauseRun, startRun, stopRun } from "../src/lib/api.js";
+import { ApiError, getRoadmap, getRun, getStats, listRepos, listRuns, pauseRun, startRun, stopRun } from "../src/lib/api.js";
 import { __setStorageForTests, registerPromptHandler, setToken } from "../src/lib/token.js";
 
 class FakeStorage {
@@ -64,13 +64,13 @@ describe("api client", () => {
 	});
 
 	it("startRun sends JSON body and POST", async () => {
-		const calls = installFetch(() => jsonResponse({ id: "1", item: "TOOL-1", startedAt: "x", logPath: "/x" }));
-		await startRun({ item: "TOOL-1", parallel: 2 });
+		const calls = installFetch(() => jsonResponse({ id: "1", repo: "main", item: "TOOL-1", startedAt: "x", logPath: "/x" }));
+		await startRun({ repo: "main", item: "TOOL-1", parallel: 2 });
 		assert.equal(calls[0]?.url, "/runs");
 		assert.equal(calls[0]?.init?.method, "POST");
 		const headers = new Headers(calls[0]?.init?.headers);
 		assert.equal(headers.get("content-type"), "application/json");
-		assert.equal(calls[0]?.init?.body, JSON.stringify({ item: "TOOL-1", parallel: 2 }));
+		assert.equal(calls[0]?.init?.body, JSON.stringify({ repo: "main", item: "TOOL-1", parallel: 2 }));
 	});
 
 	it("pauseRun POSTs to /runs/:id/pause", async () => {
@@ -87,15 +87,36 @@ describe("api client", () => {
 		assert.equal(calls[0]?.init?.method, "POST");
 	});
 
-	it("getRoadmap and getStats hit unprefixed paths", async () => {
-		installFetch((req) => {
-			if (req.url === "/roadmap") return jsonResponse({ source: "markdown", items: [] });
-			if (req.url === "/stats") return jsonResponse({ totalCycles: 0 });
-			return new Response("nope", { status: 404 });
-		});
-		const r = await getRoadmap();
+	it("listRepos hits GET /repos and returns parsed body", async () => {
+		const calls = installFetch(() => jsonResponse({ repos: [] }));
+		const res = await listRepos();
+		assert.deepEqual(res, { repos: [] });
+		assert.equal(calls[0]?.url, "/repos");
+	});
+
+	it("listRuns hits /runs?repo=<slug> when repo passed", async () => {
+		const calls = installFetch(() => jsonResponse({ runs: [] }));
+		await listRuns({ repo: "main" });
+		assert.equal(calls[0]?.url, "/runs?repo=main");
+	});
+
+	it("getRoadmap hits per-repo path with encoded slug", async () => {
+		const calls = installFetch(() => jsonResponse({ source: "markdown", items: [] }));
+		const r = await getRoadmap("foo");
+		assert.equal(calls[0]?.url, "/repos/foo/roadmap");
 		assert.equal(r.source, "markdown");
-		const s = await getStats();
+	});
+
+	it("getRoadmap encodes slug segment", async () => {
+		const calls = installFetch(() => jsonResponse({ source: "markdown", items: [] }));
+		await getRoadmap("ns/with-slash");
+		assert.equal(calls[0]?.url, "/repos/ns%2Fwith-slash/roadmap");
+	});
+
+	it("getStats hits per-repo path", async () => {
+		const calls = installFetch(() => jsonResponse({ totalCycles: 0 }));
+		const s = await getStats("foo");
+		assert.equal(calls[0]?.url, "/repos/foo/stats");
 		assert.equal((s as { totalCycles: number }).totalCycles, 0);
 	});
 
@@ -108,7 +129,7 @@ describe("api client", () => {
 				}),
 		);
 		await assert.rejects(
-			() => startRun({ item: "" }),
+			() => startRun({ repo: "main", item: "" }),
 			(err: unknown) => err instanceof ApiError && err.status === 400 && err.code === "bad-request" && err.message === "bad item",
 		);
 	});

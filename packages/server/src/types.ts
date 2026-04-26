@@ -22,12 +22,19 @@ export interface PersistedRun {
 
 export interface RunSummary {
 	id: string;
+	repo: string;
 	item: string;
 	status: RunStatus;
 	startedAt: string;
 	endedAt?: string;
 	lastStep?: string;
 	lastCost?: number;
+}
+
+export interface RepoEntry {
+	slug: string;
+	path: string;
+	exists: boolean;
 }
 
 export type { ShipTargetName };
