@@ -2,7 +2,7 @@ import type { RunSummary } from "@cdhorne/claude-autopilot-server/types";
 import { useEffect, useState } from "react";
 import { ApiError, listRuns } from "../lib/api.js";
 import { formatDate, statusBadgeClass } from "../lib/format.js";
-import { useRepos } from "../lib/repo.js";
+import { retryInit, useRepos } from "../lib/repo.js";
 
 const POLL_MS = 5_000;
 
@@ -43,6 +43,16 @@ export function RunList() {
 		};
 	}, [reposState.status, currentRepo, groupAll]);
 
+	if (reposState.status === "error") {
+		return (
+			<p className="text-red-700">
+				Failed to load repos: {reposState.error}
+				<button type="button" onClick={() => void retryInit()} className="ml-2 underline">
+					retry
+				</button>
+			</p>
+		);
+	}
 	if (reposState.status === "empty") {
 		return <p className="text-slate-500">No repos configured.</p>;
 	}

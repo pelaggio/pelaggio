@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { beforeEach, describe, it } from "node:test";
 import type { RepoEntry } from "@cdhorne/claude-autopilot-server/types";
-import { __setFetcherForTests, __setStorageForTests, getSnapshot, init, STORAGE_KEY, setCurrentRepo, subscribe } from "../src/lib/repo.js";
+import { __setFetcherForTests, __setStorageForTests, getSnapshot, init, retryInit, STORAGE_KEY, setCurrentRepo, subscribe } from "../src/lib/repo.js";
 
 class FakeStorage {
 	private map = new Map<string, string>();
@@ -110,5 +110,62 @@ describe("repo store", () => {
 		const [s1, s2] = await Promise.all([init(), init()]);
 		assert.equal(fetches, 1);
 		assert.equal(s1, s2);
+	});
+
+	it("init surfaces fetch failure as error state and notifies subscribers", async () => {
+		__setFetcherForTests(async () => {
+			throw new Error("boom");
+		});
+		let calls = 0;
+		const unsubscribe = subscribe(() => {
+			calls++;
+		});
+		const s = await init();
+		assert.equal(s.status, "error");
+		if (s.status === "error") assert.equal(s.error, "boom");
+		assert.equal(calls, 1);
+		unsubscribe();
+	});
+
+	it("init does not reject when fetcher throws", async () => {
+		__setFetcherForTests(async () => {
+			throw new Error("nope");
+		});
+		await assert.doesNotReject(init());
+	});
+
+	it("retryInit re-fetches and recovers on success", async () => {
+		let attempts = 0;
+		__setFetcherForTests(async () => {
+			attempts++;
+			if (attempts === 1) throw new Error("first failure");
+			return { repos: [a, b] };
+		});
+		const first = await init();
+		assert.equal(first.status, "error");
+		let calls = 0;
+		const unsubscribe = subscribe(() => {
+			calls++;
+		});
+		const recovered = await retryInit();
+		assert.equal(recovered.status, "ready");
+		if (recovered.status === "ready") assert.equal(recovered.current, "a");
+		assert.equal(storage.getItem(STORAGE_KEY), "a");
+		assert.equal(attempts, 2);
+		assert.equal(calls, 2);
+		unsubscribe();
+	});
+
+	it("retryInit is a no-op outside error state", async () => {
+		let fetches = 0;
+		__setFetcherForTests(async () => {
+			fetches++;
+			return { repos: [a, b] };
+		});
+		const ready = await init();
+		assert.equal(ready.status, "ready");
+		const after = await retryInit();
+		assert.equal(after, ready);
+		assert.equal(fetches, 1);
 	});
 });

@@ -2,7 +2,7 @@ import type { Stats } from "@cdhorne/claude-autopilot";
 import { useEffect, useState } from "react";
 import { ApiError, getStats } from "../lib/api.js";
 import { formatTokens, formatUsd } from "../lib/format.js";
-import { useRepos } from "../lib/repo.js";
+import { retryInit, useRepos } from "../lib/repo.js";
 
 const POLL_MS = 30_000;
 
@@ -35,6 +35,16 @@ export function StatsView() {
 		};
 	}, [currentRepo]);
 
+	if (reposState.status === "error") {
+		return (
+			<p className="text-red-700">
+				Failed to load repos: {reposState.error}
+				<button type="button" onClick={() => void retryInit()} className="ml-2 underline">
+					retry
+				</button>
+			</p>
+		);
+	}
 	if (reposState.status === "empty") return <p className="text-slate-500">No repos configured.</p>;
 	if (reposState.status === "loading") return <p className="text-slate-500">Loading…</p>;
 	if (error) return <p className="text-red-700">Error loading stats: {error}</p>;

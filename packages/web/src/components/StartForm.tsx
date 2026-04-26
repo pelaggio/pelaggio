@@ -2,7 +2,7 @@ import type { RoadmapItem } from "@cdhorne/claude-autopilot";
 import type { ShipTargetName } from "@cdhorne/claude-autopilot-server/types";
 import { type SyntheticEvent, useEffect, useState } from "react";
 import { ApiError, getRoadmap, startRun } from "../lib/api.js";
-import { useRepos } from "../lib/repo.js";
+import { retryInit, useRepos } from "../lib/repo.js";
 
 const SHIP_TARGETS: ShipTargetName[] = ["direct-push", "pull-request", "auto-merge-pr"];
 
@@ -59,6 +59,16 @@ export function StartForm() {
 	};
 
 	if (reposState.status === "loading") return <p className="text-slate-500">Loading…</p>;
+	if (reposState.status === "error") {
+		return (
+			<p className="text-red-700">
+				Failed to load repos: {reposState.error}
+				<button type="button" onClick={() => void retryInit()} className="ml-2 underline">
+					retry
+				</button>
+			</p>
+		);
+	}
 	if (reposState.status === "empty") return <p className="text-slate-500">No repos configured.</p>;
 	if (items === undefined && !error) return <p className="text-slate-500">Loading roadmap…</p>;
 
