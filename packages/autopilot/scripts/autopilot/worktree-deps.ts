@@ -11,13 +11,25 @@
 
 import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
+import { lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { REPO } from "./config.js";
 
-export type DepsAction = { type: "noop" } | { type: "link"; target: string } | { type: "relink"; target: string } | { type: "reinstall" } | { type: "install" } | { type: "restore"; target: string };
+export interface WorkspaceEntry {
+	name: string;
+	packagePath: string;
+}
+
+export type DepsAction =
+	| { type: "noop" }
+	| { type: "link"; target: string }
+	| { type: "relink"; target: string }
+	| { type: "reinstall" }
+	| { type: "install" }
+	| { type: "restore"; target: string }
+	| { type: "materialize"; mainNm: string; workspaceEntries: WorkspaceEntry[] };
 
 export interface DepsReport {
 	root: DepsAction;
@@ -72,10 +84,118 @@ function isRealDir(path: string): boolean {
 }
 
 /**
+ * Build a name → worktree-relative path map for every workspace subpackage by
+ * reading each one's `package.json`. The map is the source of truth for "is
+ * this top-level node_modules entry a workspace package?" — same set pnpm
+ * derives from `pnpm-lock.yaml` + manifests. Entries with missing or
+ * unparseable `package.json` are skipped.
+ */
+export function listWorkspacePackageMap(mainRepo: string): Map<string, string> {
+	const map = new Map<string, string>();
+	for (const subpkg of listWorkspaceSubpackages(mainRepo)) {
+		const pkgJsonPath = resolve(mainRepo, subpkg, "package.json");
+		let raw: string;
+		try {
+			raw = readFileSync(pkgJsonPath, "utf8");
+		} catch {
+			continue;
+		}
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(raw);
+		} catch {
+			continue;
+		}
+		if (parsed && typeof parsed === "object" && typeof (parsed as { name?: unknown }).name === "string") {
+			map.set((parsed as { name: string }).name, subpkg);
+		}
+	}
+	return map;
+}
+
+/**
+ * Intersect the workspace name set against `nmDir`'s top-level + `@scope/`
+ * entries — the entries we'd materialize as worktree-local symlinks. Returns
+ * `[]` when `nmDir` doesn't exist or contains no workspace packages.
+ */
+export function findWorkspaceEntriesIn(nmDir: string, workspacePackages: Map<string, string>): WorkspaceEntry[] {
+	if (!isRealDir(nmDir)) return [];
+	let entries: string[];
+	try {
+		entries = readdirSync(nmDir);
+	} catch {
+		return [];
+	}
+	const out: WorkspaceEntry[] = [];
+	for (const entry of entries) {
+		if (entry.startsWith(".")) continue;
+		if (entry.startsWith("@")) {
+			let subs: string[];
+			try {
+				subs = readdirSync(join(nmDir, entry));
+			} catch {
+				continue;
+			}
+			for (const sub of subs) {
+				const name = `${entry}/${sub}`;
+				const wsPath = workspacePackages.get(name);
+				if (wsPath !== undefined) out.push({ name, packagePath: wsPath });
+			}
+			continue;
+		}
+		const wsPath = workspacePackages.get(entry);
+		if (wsPath !== undefined) out.push({ name: entry, packagePath: wsPath });
+	}
+	return out;
+}
+
+type MaterializedShape = "correctly-materialized" | "incorrectly-materialized" | "user-managed";
+
+/**
+ * Classify a real worktree node_modules dir by the resolved targets of its
+ * workspace-name symlinks. `correctly-materialized` → all workspace entries
+ * resolve into `worktreeRoot` (autopilot-emitted, current). `incorrectly-
+ * materialized` → at least one resolves outside (autopilot-emitted but stale,
+ * e.g. inherited from MAIN's pnpm layout via the parent symlink). `user-
+ * managed` → no workspace symlinks present at all.
+ */
+function inspectMaterializedShape(nmDir: string, worktreeRoot: string, workspaceEntries: WorkspaceEntry[]): MaterializedShape {
+	let resolvedRoot: string;
+	try {
+		resolvedRoot = realpathSync(worktreeRoot);
+	} catch {
+		resolvedRoot = worktreeRoot;
+	}
+	let saw = false;
+	let bad = false;
+	for (const { name } of workspaceEntries) {
+		const p = join(nmDir, name);
+		if (!isSymlink(p)) continue;
+		saw = true;
+		let resolved: string;
+		try {
+			resolved = realpathSync(p);
+		} catch {
+			bad = true;
+			continue;
+		}
+		if (resolved !== resolvedRoot && !resolved.startsWith(resolvedRoot + sep)) {
+			bad = true;
+		}
+	}
+	if (!saw) return "user-managed";
+	return bad ? "incorrectly-materialized" : "correctly-materialized";
+}
+
+/**
  * Pure decision: inspect the filesystem and return the action to take.
  * No side effects — safe to call repeatedly.
+ *
+ * `workspacePackages` may be precomputed by `ensureWorktreeDeps` to avoid
+ * re-reading every importer's `package.json` per subpackage; direct callers
+ * can omit it and the map is built on demand.
  */
-export function decideDepsAction(worktree: string, mainRepo: string): DepsAction {
+export function decideDepsAction(worktree: string, mainRepo: string, workspacePackages?: Map<string, string>): DepsAction {
 	const worktreeNm = resolve(worktree, "node_modules");
 	const mainNm = resolve(mainRepo, "node_modules");
 	const worktreeLock = resolve(worktree, "pnpm-lock.yaml");
@@ -86,12 +206,25 @@ export function decideDepsAction(worktree: string, mainRepo: string): DepsAction
 	const lockfilesMatch = mainLockHash !== undefined && mainLockHash === worktreeLockHash;
 	const mainNmReady = isRealDir(mainNm);
 
-	// Real (non-symlink) directory: corruption recovery. A `.pnpm/` store inside
-	// confirms it was created by `pnpm install` (not user data), and matching
-	// lockfiles guarantee the symlink-to-MAIN_REPO yields equivalent deps. Without
-	// the signature, leave the dir alone — user-managed.
+	const wsPackages = workspacePackages ?? listWorkspacePackageMap(mainRepo);
+	const workspaceEntries = mainNmReady ? findWorkspaceEntriesIn(mainNm, wsPackages) : [];
+	const hasWorkspaceEntries = workspaceEntries.length > 0;
+
+	// Real (non-symlink) directory: corruption recovery / materialize fixup.
+	// A real `.pnpm/` directory (lstat — *not* `existsSync`, since after a
+	// previous materialize `.pnpm` is a symlink and we must NOT re-classify
+	// that as corruption) confirms the dir was created by `pnpm install`.
+	// Without the signature, leave the dir alone — user-managed.
 	if (isRealDir(worktreeNm)) {
-		const hasPnpmStore = existsSync(join(worktreeNm, ".pnpm"));
+		const hasPnpmStore = isRealDir(join(worktreeNm, ".pnpm"));
+		if (hasWorkspaceEntries && lockfilesMatch && mainNmReady) {
+			const shape = inspectMaterializedShape(worktreeNm, worktree, workspaceEntries);
+			if (shape === "correctly-materialized") return { type: "noop" };
+			if (shape === "incorrectly-materialized" || hasPnpmStore) {
+				return { type: "materialize", mainNm, workspaceEntries };
+			}
+			return { type: "noop" };
+		}
 		if (hasPnpmStore && lockfilesMatch && mainNmReady) {
 			return { type: "restore", target: mainNm };
 		}
@@ -105,6 +238,9 @@ export function decideDepsAction(worktree: string, mainRepo: string): DepsAction
 		} catch {
 			currentTarget = undefined;
 		}
+		if (hasWorkspaceEntries && lockfilesMatch && mainNmReady) {
+			return { type: "materialize", mainNm, workspaceEntries };
+		}
 		if (lockfilesMatch && mainNmReady && currentTarget === mainNm) {
 			return { type: "noop" };
 		}
@@ -115,6 +251,9 @@ export function decideDepsAction(worktree: string, mainRepo: string): DepsAction
 	}
 
 	// No worktree node_modules at all.
+	if (hasWorkspaceEntries && lockfilesMatch && mainNmReady) {
+		return { type: "materialize", mainNm, workspaceEntries };
+	}
 	if (lockfilesMatch && mainNmReady) {
 		return { type: "link", target: mainNm };
 	}
@@ -156,7 +295,7 @@ export function listWorkspaceSubpackages(mainRepo: string): string[] {
  * trustworthy signal that a subpackage's real dir is pnpm-managed (not
  * user data) is that the same incident corrupted the root.
  */
-export function decideSubpackageAction(worktree: string, mainRepo: string, pkg: string, rootWillRestore: boolean): DepsAction {
+export function decideSubpackageAction(worktree: string, mainRepo: string, pkg: string, rootWillRestore: boolean, workspacePackages?: Map<string, string>): DepsAction {
 	const worktreeNm = resolve(worktree, pkg, "node_modules");
 	const mainNm = resolve(mainRepo, pkg, "node_modules");
 	const worktreeLock = resolve(worktree, "pnpm-lock.yaml");
@@ -167,7 +306,19 @@ export function decideSubpackageAction(worktree: string, mainRepo: string, pkg: 
 	const lockfilesMatch = mainLockHash !== undefined && mainLockHash === worktreeLockHash;
 	const mainNmReady = isRealDir(mainNm);
 
+	const wsPackages = workspacePackages ?? listWorkspacePackageMap(mainRepo);
+	const workspaceEntries = mainNmReady ? findWorkspaceEntriesIn(mainNm, wsPackages) : [];
+	const hasWorkspaceEntries = workspaceEntries.length > 0;
+
 	if (isRealDir(worktreeNm)) {
+		if (hasWorkspaceEntries && lockfilesMatch && mainNmReady) {
+			const shape = inspectMaterializedShape(worktreeNm, worktree, workspaceEntries);
+			if (shape === "correctly-materialized") return { type: "noop" };
+			if (shape === "incorrectly-materialized" || rootWillRestore) {
+				return { type: "materialize", mainNm, workspaceEntries };
+			}
+			return { type: "noop" };
+		}
 		if (rootWillRestore && lockfilesMatch && mainNmReady) {
 			return { type: "restore", target: mainNm };
 		}
@@ -181,6 +332,9 @@ export function decideSubpackageAction(worktree: string, mainRepo: string, pkg: 
 		} catch {
 			currentTarget = undefined;
 		}
+		if (hasWorkspaceEntries && lockfilesMatch && mainNmReady) {
+			return { type: "materialize", mainNm, workspaceEntries };
+		}
 		if (lockfilesMatch && mainNmReady && currentTarget === mainNm) {
 			return { type: "noop" };
 		}
@@ -190,6 +344,9 @@ export function decideSubpackageAction(worktree: string, mainRepo: string, pkg: 
 		return { type: "noop" };
 	}
 
+	if (hasWorkspaceEntries && lockfilesMatch && mainNmReady) {
+		return { type: "materialize", mainNm, workspaceEntries };
+	}
 	if (lockfilesMatch && mainNmReady) {
 		return { type: "link", target: mainNm };
 	}
@@ -222,6 +379,61 @@ function applyAction(worktreeNm: string, action: DepsAction, worktreeCwd: string
 			rmSync(worktreeNm, { recursive: true, force: true });
 			symlinkSync(action.target, worktreeNm, "dir");
 			return;
+		case "materialize": {
+			// Tear down any existing entry — symlink (was sharing MAIN's nm) or
+			// real dir (was a stale materialize / pnpm-emitted dir we own).
+			if (isSymlink(worktreeNm)) {
+				unlinkSync(worktreeNm);
+			} else if (isRealDir(worktreeNm)) {
+				rmSync(worktreeNm, { recursive: true, force: true });
+			}
+			mkdirSync(worktreeNm, { recursive: true });
+
+			// Mirror MAIN's top-level entries. Workspace packages → absolute
+			// symlinks into the worktree's source. Everything else (.pnpm/,
+			// .bin/, .modules.yaml, external deps) → absolute symlinks into
+			// MAIN, preserving the shared store.
+			const workspaceMap = new Map(action.workspaceEntries.map((e) => [e.name, e.packagePath] as const));
+			let mainEntries: string[];
+			try {
+				mainEntries = readdirSync(action.mainNm);
+			} catch {
+				return;
+			}
+			for (const entry of mainEntries) {
+				const dest = join(worktreeNm, entry);
+				if (entry.startsWith("@")) {
+					const scopeMain = join(action.mainNm, entry);
+					let scopeEntries: string[];
+					try {
+						scopeEntries = readdirSync(scopeMain);
+					} catch {
+						// Edge case: @scope is itself a symlink/file in MAIN. Treat as leaf.
+						symlinkSync(resolve(action.mainNm, entry), dest, "dir");
+						continue;
+					}
+					mkdirSync(dest);
+					for (const sub of scopeEntries) {
+						const fullName = `${entry}/${sub}`;
+						const subDest = join(dest, sub);
+						const wsPath = workspaceMap.get(fullName);
+						if (wsPath !== undefined) {
+							symlinkSync(resolve(worktreeCwd, wsPath), subDest, "dir");
+						} else {
+							symlinkSync(resolve(scopeMain, sub), subDest, "dir");
+						}
+					}
+					continue;
+				}
+				const wsPath = workspaceMap.get(entry);
+				if (wsPath !== undefined) {
+					symlinkSync(resolve(worktreeCwd, wsPath), dest, "dir");
+				} else {
+					symlinkSync(resolve(action.mainNm, entry), dest, "dir");
+				}
+			}
+			return;
+		}
 	}
 }
 
@@ -233,7 +445,8 @@ function applyAction(worktreeNm: string, action: DepsAction, worktreeCwd: string
  * — the install will provision every subpackage in one pass.
  */
 export function ensureWorktreeDeps(worktree: string, mainRepo: string = REPO): DepsReport {
-	const root = decideDepsAction(worktree, mainRepo);
+	const workspacePackages = listWorkspacePackageMap(mainRepo);
+	const root = decideDepsAction(worktree, mainRepo, workspacePackages);
 	const worktreeRootNm = resolve(worktree, "node_modules");
 
 	applyAction(worktreeRootNm, root, worktree);
@@ -245,7 +458,7 @@ export function ensureWorktreeDeps(worktree: string, mainRepo: string = REPO): D
 	const rootWillRestore = root.type === "restore";
 	const subpackages: Array<{ pkg: string; action: DepsAction }> = [];
 	for (const pkg of listWorkspaceSubpackages(mainRepo)) {
-		const action = decideSubpackageAction(worktree, mainRepo, pkg, rootWillRestore);
+		const action = decideSubpackageAction(worktree, mainRepo, pkg, rootWillRestore, workspacePackages);
 		applyAction(resolve(worktree, pkg, "node_modules"), action, worktree);
 		subpackages.push({ pkg, action });
 	}

@@ -1,4 +1,4 @@
-import { existsSync, lstatSync } from "node:fs";
+import { lstatSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { HookInput, HookJSONOutput, SDKAssistantMessage, SDKRateLimitEvent, SDKResultMessage, SDKSystemMessage } from "@anthropic-ai/claude-agent-sdk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
@@ -118,7 +118,10 @@ export async function runStep(name: Step, prompt: string, opts: RunStepOpts, emi
 					});
 				}
 			}
-			// TOOL-52 corruption signature: noop + real-dir worktree-nm + .pnpm/ inside.
+			// TOOL-52 corruption signature: noop + real-dir worktree-nm + a *real*
+			// `.pnpm/` directory inside (lstat — not existsSync, since after a
+			// materialize `.pnpm` is a symlink to MAIN's store and existsSync would
+			// follow it, producing a spurious warning every step).
 			// `restore` already covers the lockfiles-match case; this branch warns when
 			// lockfile drift prevents safe restoration and ship-time repair is the
 			// remaining safety net.
@@ -126,11 +129,18 @@ export async function runStep(name: Step, prompt: string, opts: RunStepOpts, emi
 				const wtNm = resolve(opts.cwd, "node_modules");
 				try {
 					const s = lstatSync(wtNm);
-					if (s.isDirectory() && !s.isSymbolicLink() && existsSync(join(wtNm, ".pnpm"))) {
-						emit({
-							type: "sdk_error",
-							message: "worktree node_modules became a real directory mid-cycle (pnpm install re-installed locally) and lockfile drift prevents safe restore; main repo will be repaired at ship time",
-						});
+					if (s.isDirectory() && !s.isSymbolicLink()) {
+						let pnpmIsRealDir = false;
+						try {
+							const ps = lstatSync(join(wtNm, ".pnpm"));
+							pnpmIsRealDir = ps.isDirectory() && !ps.isSymbolicLink();
+						} catch {}
+						if (pnpmIsRealDir) {
+							emit({
+								type: "sdk_error",
+								message: "worktree node_modules became a real directory mid-cycle (pnpm install re-installed locally) and lockfile drift prevents safe restore; main repo will be repaired at ship time",
+							});
+						}
 					}
 				} catch {}
 			}
