@@ -28,13 +28,16 @@ Parse `$ARGUMENTS` (may be empty).
 - `unknown` (exit 2) → report which source was queried and emit `pick-result: unknown-id`.
 - `done` → report it and emit `pick-result: already-done`.
 - `blocked` → **stop immediately** and report "⚠ {ID} is blocked: {blockedReason or deps text}. Cannot pick a blocked item." Do not create a branch or worktree. Emit `pick-result: blocked`.
-- `open` or `in-progress` → proceed to Claim.
+- `in-progress` → a live cycle already holds this item (the claim ledger overlays `in-progress` onto any open item with an active claim). Report "⚠ {ID} is already claimed by a live cycle." Do not create a branch or worktree. Emit `pick-result: already-claimed`.
+- `open` → proceed to Claim.
 
-**`/pick next`** (argument is exactly "next", no topic) — from the `roadmap list --json` output, **hard-skip any item with `status === "blocked"`**, then rank the remainder by: no unmet dependencies (empty `deps` or all deps satisfied) → calendar urgency → unblocks others → no overlap with claimed items. **Immediately auto-claim the top match — do NOT ask for confirmation, do NOT list alternatives, do NOT wait for user input.** Go straight from ranking to Claim. Do NOT filter by topic — consider all tracks. If the ranked list is empty after filtering, emit `pick-result: queue-empty`.
+**`/pick next`** (argument is exactly "next", no topic) — from the `roadmap list --json` output, **hard-skip any item with `status === "blocked"` or `status === "in-progress"`** (in-progress means the ledger already records a live claim), then rank the remainder by: no unmet dependencies (empty `deps` or all deps satisfied) → calendar urgency → unblocks others → no overlap with claimed items. **Immediately auto-claim the top match — do NOT ask for confirmation, do NOT list alternatives, do NOT wait for user input.** Go straight from ranking to Claim. Do NOT filter by topic — consider all tracks. If the ranked list is empty after filtering, emit `pick-result: queue-empty`.
 
-**`/pick next web-sync`** (argument is "next" followed by a topic) — same ranking but fuzzy-match the item's title against the topic. Same blocked exclusion. Emit `pick-result: queue-empty` if nothing matches.
+**`/pick next web-sync`** (argument is "next" followed by a topic) — same ranking but fuzzy-match the item's title against the topic. Same blocked/in-progress exclusion. Emit `pick-result: queue-empty` if nothing matches.
 
 **`/pick`** (no argument) — show all items from `roadmap list --json` grouped by source (use the `sourceRef` field). Mark blocked items but don't suggest them. Suggest a best unblocked pick. Ask user to confirm.
+
+The claim ledger (an `in-progress` status in `roadmap list`/`get`) is the source of truth for a **live** claim. The `feat/<id-lower>-*` branch check below is a separate backstop for **leftover/crashed** work: a reaped (dead) claim drops out of the `in-progress` overlay but leaves its branch/worktree intact for `--resume`/`/tidy`, so a still-present branch means "route to resume, not a fresh re-pick."
 
 If the `feat/<id-lower>-*` branch already exists, report it, ask whether to reuse or pick a different item, and emit `pick-result: worktree-exists`.
 
@@ -49,12 +52,14 @@ Run `npx @cdhorne/claude-autopilot roadmap claim --no-worktree <ID>` instead of 
    ```bash
    npx @cdhorne/claude-autopilot roadmap claim <ID>
    ```
-   This prints two lines:
+   On success this prints two lines:
    ```
    branch=<branch-name>
    worktree=<absolute-path>
    ```
    Parse both. The adapter picks adapter-correct branch/worktree names (e.g. `feat/tool-16-refit-split` for markdown, `feat/issue-123-<slug>` for github-issues, `feat/acme-7-<slug>` for linear).
+
+   The claim runs under the ledger lock with a last-instant TOCTOU guard: if another live cycle won the race between your `roadmap get` and this `claim`, the command exits **3** and prints `claim-result: already-claimed` instead of `branch=`/`worktree=`. When that happens, do not create anything — report "⚠ {ID} was claimed by another cycle mid-pick." and emit `pick-result: already-claimed`.
 
 2. Install deps: `npx @cdhorne/claude-autopilot worktree-deps "$WORKTREE"`. When the worktree's `pnpm-lock.yaml` matches the main repo's, this symlinks `node_modules` to MAIN_REPO's instead of running a fresh install — fast and avoids I/O contention between parallel worktrees. On lockfile drift or a missing main `node_modules`, it falls through to `pnpm install --frozen-lockfile --silent`. The helper prints the action taken (`link` / `noop` / `install` / `reinstall` / `relink`).
 
@@ -80,10 +85,12 @@ pick-result: <tag>
 | `blocked` | `/pick <ID>` for an item whose `status` is `blocked`. |
 | `unknown-id` | `/pick <ID>` for an ID the adapter reports as `unknown` (exit 2). |
 | `already-done` | `/pick <ID>` for an item whose `status` is `done`. |
+| `already-claimed` | `/pick <ID>` for an item whose `status` is `in-progress`, or the `claim` command lost the TOCTOU race (exit 3). |
 | `worktree-exists` | `/pick <ID>` where the `feat/<id-lower>-*` branch already exists. |
-| `queue-empty` | `/pick next [topic]` whose ranked list is empty after filtering blocked items. |
+| `queue-empty` | `/pick next [topic]` whose ranked list is empty after filtering blocked / in-progress items. |
 
 The pipeline parses this line to decide whether the cycle continues (recoverable:
-`queue-empty`, `worktree-exists`, `already-done`) or halts (`blocked`,
-`unknown-id`). Restating the tag in a summary paragraph is fine — the pipeline
-uses the last occurrence.
+`queue-empty`, `worktree-exists`, `already-done`, `already-claimed`) or halts
+(`blocked`, `unknown-id`). A lost race is recoverable because re-picking simply
+selects the next item. Restating the tag in a summary paragraph is fine — the
+pipeline uses the last occurrence.

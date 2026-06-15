@@ -206,6 +206,24 @@ Top-level keys not recognized by the current loader (`project`, `docs`,
 future tools extend the schema. Unknown step keys inside a recognized
 section (e.g. `budgets.bogus: 5`) are also ignored.
 
+## Claim ledger (`.dev/` artifact)
+
+Parallel `/pick` cycles serialize through an ephemeral, gitignored claim ledger
+at `${MAIN_REPO}/.dev/autopilot-claims.json`, guarded by a sibling
+`${MAIN_REPO}/.dev/autopilot-claims.lock` directory-mutex. It is **not** an
+`.autopilot.yml` key — it has no tunables (lock TTL / retry are module
+constants) and is created on demand. `.dev/` is already gitignored, so both
+files inherit that. The durable roadmap source stays the source of record; the
+ledger only prevents two cycles from claiming the same item and lets `list`/`get`
+overlay `in-progress` onto open items a live cycle already holds.
+
+Two environment variables affect it:
+
+| Variable                     | Purpose                                                                                          |
+|------------------------------|-------------------------------------------------------------------------------------------------|
+| `AUTOPILOT_OWNER_PID`        | Set by `orchestrate()` so the `npx roadmap claim` subprocess records the long-lived orchestrator pid. Liveness of this pid is how stale (crashed) claims are reaped. Falls back to `process.ppid`. |
+| `CLAUDE_AUTOPILOT_MAIN_REPO` | Test / escape-hatch override for the MAIN_REPO root that hosts the ledger (normally resolved via `git rev-parse --git-common-dir`, so worktrees share one ledger). |
+
 ## Not configurable (yet)
 
 - `REPO` / `LOG_PATH` — derived from the module location.

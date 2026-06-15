@@ -12,7 +12,8 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import type { RoadmapSource } from "./roadmap/index.js";
+import { activeClaim, activeClaims, type Claim, canonicalId, ownerPid, reapStale, recordClaim, releaseClaim, resolveMainRepo, withClaimLock } from "./claim-ledger.js";
+import type { RoadmapItemStatus, RoadmapSource } from "./roadmap/index.js";
 
 type Args = {
 	flags: Record<string, string | boolean>;
@@ -68,15 +69,30 @@ function printJson(v: unknown): void {
 	process.stdout.write(`${JSON.stringify(v)}\n`);
 }
 
+/**
+ * Overlay `in-progress` onto an open item that has an active (live) claim in the
+ * ledger. Blocked/done/unknown statuses are left as-is — the durable source
+ * still wins for those; the ledger only distinguishes "open" from "open but a
+ * live cycle already holds it".
+ */
+function overlayInProgress(item: RoadmapItemStatus, claims: Record<string, Claim>): RoadmapItemStatus {
+	if (item.status === "open" && canonicalId(item.id) in claims) {
+		return { ...item, status: "in-progress" };
+	}
+	return item;
+}
+
 async function cmdList(args: Args): Promise<number> {
 	const roadmap = makeRoadmap();
 	const includeDone = args.flags["include-done"] === true;
 	const items = await roadmap.listItems({ includeDone });
+	const claims = activeClaims(resolveMainRepo());
+	const overlaid = items.map((it) => overlayInProgress(it, claims));
 	if (args.flags.json) {
-		printJson(items);
+		printJson(overlaid);
 		return 0;
 	}
-	for (const it of items) {
+	for (const it of overlaid) {
 		process.stdout.write(`${it.id}\t${it.status}\t${it.title}\t${it.deps}\n`);
 	}
 	return 0;
@@ -95,10 +111,12 @@ async function cmdGet(args: Args): Promise<number> {
 		else process.stderr.write(`not found: ${id}\n`);
 		return 2;
 	}
+	const claim = activeClaim(resolveMainRepo(), id);
+	const overlaid = overlayInProgress(item, claim ? { [canonicalId(id)]: claim } : {});
 	if (args.flags.json) {
-		printJson(item);
+		printJson(overlaid);
 	} else {
-		process.stdout.write(`${item.id}\t${item.status}\t${item.title}\t${item.deps}\n`);
+		process.stdout.write(`${overlaid.id}\t${overlaid.status}\t${overlaid.title}\t${overlaid.deps}\n`);
 	}
 	return 0;
 }
@@ -111,9 +129,21 @@ async function cmdClaim(args: Args): Promise<number> {
 		return 1;
 	}
 	const noWorktree = args.flags["no-worktree"] === true;
-	const { branch, worktree } = await roadmap.claimItem(id, noWorktree ? { noWorktree: true } : undefined);
-	process.stdout.write(`branch=${branch}\nworktree=${worktree}\n`);
-	return 0;
+	const mainRepo = resolveMainRepo();
+	// The atomic unit is check-not-claimed → create branch+worktree → record. It
+	// must be one critical section regardless of adapter, so the whole claim runs
+	// under the lock (network adapters' API call included — claims are rare).
+	return withClaimLock(mainRepo, async () => {
+		reapStale(mainRepo);
+		if (activeClaim(mainRepo, id)) {
+			process.stdout.write("claim-result: already-claimed\n");
+			return 3;
+		}
+		const { branch, worktree } = await roadmap.claimItem(id, noWorktree ? { noWorktree: true } : undefined);
+		recordClaim(mainRepo, { id, branch, worktree, claimedAt: Date.now(), pid: ownerPid() });
+		process.stdout.write(`branch=${branch}\nworktree=${worktree}\n`);
+		return 0;
+	});
 }
 
 async function cmdPlanPath(args: Args): Promise<number> {
@@ -150,7 +180,20 @@ async function cmdMarkDone(args: Args): Promise<number> {
 		return 1;
 	}
 	const note = typeof args.flags.note === "string" ? args.flags.note : undefined;
-	await roadmap.markDone(id, note ? { note } : undefined);
+	const mainRepo = resolveMainRepo();
+	if (roadmap.name === "markdown") {
+		// Markdown mutates shared local roadmap files — serialize the edit under
+		// the lock alongside releasing the claim.
+		await withClaimLock(mainRepo, async () => {
+			await roadmap.markDone(id, note ? { note } : undefined);
+			releaseClaim(mainRepo, id);
+		});
+	} else {
+		// Network adapters mutate a remote that already serializes — keep the API
+		// call outside the lock and only lock the JSON release.
+		await roadmap.markDone(id, note ? { note } : undefined);
+		await withClaimLock(mainRepo, () => releaseClaim(mainRepo, id));
+	}
 	return 0;
 }
 
@@ -173,7 +216,10 @@ async function cmdCreateItem(args: Args): Promise<number> {
 	const after = typeof args.flags.after === "string" ? args.flags.after : undefined;
 	const priority = args.flags.priority === "high" ? "high" : args.flags.priority === "normal" ? "normal" : undefined;
 	const deferred = args.flags.deferred === true;
-	const created = await roadmap.createItem({ title, deps, scope, roadmap: roadmapArg, after, priority, deferred });
+	const opts = { title, deps, scope, roadmap: roadmapArg, after, priority, deferred };
+	// Markdown appends to shared local roadmap files — serialize under the lock.
+	// Network adapters POST to a remote that already serializes.
+	const created = roadmap.name === "markdown" ? await withClaimLock(resolveMainRepo(), () => roadmap.createItem(opts)) : await roadmap.createItem(opts);
 	if (args.flags.json) printJson(created);
 	else process.stdout.write(`${created.id}\t${created.title}\n`);
 	return 0;

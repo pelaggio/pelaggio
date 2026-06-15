@@ -682,7 +682,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		// `--item X,Y,Z` and user-requested blocked items halt loudly instead of
 		// silently skipping. `pick:unknown` (parser fallback) stays recoverable to
 		// preserve the old lenient behaviour when the skill emits an unrecognised tag.
-		const RECOVERABLE = new Set(["plan needs rethink", "parked", "pick:queue-empty", "pick:worktree-exists", "pick:already-done", "pick:unknown"]);
+		const RECOVERABLE = new Set(["plan needs rethink", "parked", "pick:queue-empty", "pick:worktree-exists", "pick:already-done", "pick:already-claimed", "pick:unknown"]);
 
 		async function worker(): Promise<void> {
 			while (true) {
@@ -878,6 +878,12 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 }
 
 export async function orchestrate(flags: Flags): Promise<void> {
+	// Stamp the long-lived owner pid so the short-lived `npx roadmap claim`
+	// subprocess (a descendant; the SDK does not curate `env`) records this
+	// orchestrator's pid in the claim ledger, not its own. `??=` preserves an
+	// outer override (e.g. a server supervisor that already set it).
+	process.env.AUTOPILOT_OWNER_PID ??= String(process.pid);
+
 	const statusBar = new StatusBar();
 	const cleanup = (): void => {
 		statusBar.teardown();

@@ -225,6 +225,10 @@ describe("parsePickResult", () => {
 		assert.equal(parsePickResult("pick-result: already-done"), "already-done");
 	});
 
+	it("parses already-claimed", () => {
+		assert.equal(parsePickResult("pick-result: already-claimed"), "already-claimed");
+	});
+
 	it("parses worktree-exists", () => {
 		assert.equal(parsePickResult("pick-result: worktree-exists"), "worktree-exists");
 	});
