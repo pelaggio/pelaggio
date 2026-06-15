@@ -19,12 +19,12 @@
 	},
 	"dependencies": {
 		"@cdhorne/claude-autopilot": "workspace:*",
-		"@hono/node-server": "^2.0.0",
-		"hono": "^4.12.15",
+		"@hono/node-server": "^2.0.4",
+		"hono": "^4.12.25",
 		"ulid": "^3.0.2",
-		"yaml": "^2.8.3"
+		"yaml": "^2.9.0"
 	},
 	"devDependencies": {
-		"tsx": "^4.21.0"
+		"tsx": "^4.22.4"
 	}
 }

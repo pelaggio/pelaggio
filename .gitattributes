@@ -1,0 +1,17 @@
+# Normalize line endings to LF for all text files.
+# Overrides any user-side `core.autocrlf=true` so Windows checkouts
+# match Linux/CI and Biome's LF formatter policy.
+* text=auto eol=lf
+
+# Lock common binary types so git doesn't try to normalize them.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary
+*.pdf binary
