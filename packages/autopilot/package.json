@@ -19,6 +19,7 @@
 		".claude/skills/**",
 		".claude-templates/**",
 		"bin/**",
+		"LICENSE",
 		"!scripts/autopilot/__tests__/**",
 		"!scripts/autopilot/**/*.test.ts"
 	],

@@ -168,7 +168,7 @@ optionally `.claude-templates/` into your own repo — see
 
 Copyright © 2026 Chris Horne.
 
-Licensed under the **GNU Affero General Public License v3.0 or later**
+Licensed under the **GNU Affero General Public License v3.0**
 (`AGPL-3.0-only`) — see [`LICENSE`](./LICENSE). The AGPL's network-use clause
 requires that anyone who runs a modified version as a network service make the
 corresponding source available under the same terms.
