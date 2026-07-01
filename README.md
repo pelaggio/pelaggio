@@ -155,4 +155,28 @@ This repo uses its own pipeline to work on its own roadmap. Open work lives in [
 
 Provenance: extracted from [Fathom](https://github.com/cdhorne/fathom) at commit `c243744` on 2026-04-11. History pre-extraction lives in Fathom's git log under `.claude/skills/` and `scripts/autopilot/` paths.
 
-Not published to npm. Not a library. Personal infrastructure you're welcome to fork.
+**Not yet on npm.** The `@cdhorne/claude-autopilot` package is set up to publish
+— tagging a signed `v*` release triggers [`.github/workflows/publish.yml`](.github/workflows/publish.yml),
+which verifies the tag signature, runs the `check:publish` safeguards, and runs
+`npm publish --provenance --access public` — but no version has been pushed to
+the registry yet. Until a release ships, consume it by forking or cloning this
+repo (copy `.claude/skills/`, `packages/autopilot/scripts/autopilot/`, and
+optionally `.claude-templates/` into your own repo — see
+[`.claude-templates/migration-checklist.md`](.claude-templates/migration-checklist.md)).
+
+## License
+
+Copyright © 2026 Chris Horne.
+
+Licensed under the **GNU Affero General Public License v3.0**
+(`AGPL-3.0-only`) — see [`LICENSE`](./LICENSE). The AGPL's network-use clause
+requires that anyone who runs a modified version as a network service make the
+corresponding source available under the same terms.
+
+**Commercial licensing:** the AGPL is not the only option. A separate
+commercial license (without the AGPL's copyleft obligations) is available from
+the copyright holder on request.
+
+Contributions are accepted under the [Developer Certificate of Origin](./DCO);
+see [`CONTRIBUTING.md`](./CONTRIBUTING.md) for the required `Signed-off-by`
+sign-off.

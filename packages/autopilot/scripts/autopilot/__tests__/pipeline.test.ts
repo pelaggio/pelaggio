@@ -2,12 +2,27 @@ import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { describe, it } from "node:test";
+import { after, before, describe, it, mock } from "node:test";
 import { WORKTREE_PREFIX } from "../config.js";
 import { runOrchestrator, runPipeline } from "../pipeline.js";
 import { getShipTarget } from "../ship/index.js";
 import type { Flags, ParkSignal, PipelineOpts } from "../types.js";
 import { allCommitMessages, createMockRunPipeline, createMockRunStep, makeLiveStatus, makeMockRoadmap, makeParkSignal, makeTempGitRepo, makeTempRepoWithParent } from "./mocks.js";
+
+// The pipeline under test streams progress through console.log (see log() in
+// pipeline.ts). Left unmuted, that high-volume output floods the node:test
+// runner's parent<->subprocess stdout IPC and, on CI's constrained runners,
+// deterministically triggers "Unable to deserialize cloned data due to invalid
+// or unsupported version" as the parent mis-parses the buffer. Mute console
+// output for the whole file; the one test that asserts on log content re-mocks
+// console.log locally, which still captures its own calls.
+before(() => {
+	mock.method(console, "log", () => {});
+	mock.method(console, "error", () => {});
+});
+after(() => {
+	mock.restoreAll();
+});
 
 const baseFlags: Flags = {
 	cycles: "1",
