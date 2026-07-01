@@ -3,7 +3,7 @@
 	"version": "0.0.0",
 	"private": true,
 	"description": "Mobile-responsive web UI (Astro 5 + React 19 + Tailwind v4) for the autopilot control-plane daemon.",
-	"license": "UNLICENSED",
+	"license": "AGPL-3.0-only",
 	"type": "module",
 	"scripts": {
 		"dev": "astro dev",

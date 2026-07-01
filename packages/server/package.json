@@ -3,7 +3,7 @@
 	"version": "0.0.0",
 	"private": true,
 	"description": "Control-plane daemon for claude-autopilot — supervises pipeline subprocesses over HTTP.",
-	"license": "UNLICENSED",
+	"license": "AGPL-3.0-only",
 	"type": "module",
 	"exports": {
 		"./types": {

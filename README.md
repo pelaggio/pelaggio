@@ -156,3 +156,20 @@ This repo uses its own pipeline to work on its own roadmap. Open work lives in [
 Provenance: extracted from [Fathom](https://github.com/cdhorne/fathom) at commit `c243744` on 2026-04-11. History pre-extraction lives in Fathom's git log under `.claude/skills/` and `scripts/autopilot/` paths.
 
 Not published to npm. Not a library. Personal infrastructure you're welcome to fork.
+
+## License
+
+Copyright © 2026 Chris Horne.
+
+Licensed under the **GNU Affero General Public License v3.0 or later**
+(`AGPL-3.0-only`) — see [`LICENSE`](./LICENSE). The AGPL's network-use clause
+requires that anyone who runs a modified version as a network service make the
+corresponding source available under the same terms.
+
+**Commercial licensing:** the AGPL is not the only option. A separate
+commercial license (without the AGPL's copyleft obligations) is available from
+the copyright holder on request.
+
+Contributions are accepted under the [Developer Certificate of Origin](./DCO);
+see [`CONTRIBUTING.md`](./CONTRIBUTING.md) for the required `Signed-off-by`
+sign-off.
