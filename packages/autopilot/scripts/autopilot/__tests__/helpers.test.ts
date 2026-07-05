@@ -4,7 +4,22 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { describe, it } from "node:test";
-import { computeImplementTurns, countPlanFiles, filesChangedSince, fmtWait, getHeadSha, hasDeliverableCommits, parsePickItem, parsePickResult, parseResetTime, parseWaitFlag } from "../helpers.js";
+import {
+	classifyStepError,
+	computeImplementTurns,
+	countPlanFiles,
+	filesChangedSince,
+	fmtWait,
+	getHeadSha,
+	hasDeliverableCommits,
+	isRefusal,
+	looksLikeRefusal,
+	parsePickItem,
+	parsePickResult,
+	parseResetTime,
+	parseVerdict,
+	parseWaitFlag,
+} from "../helpers.js";
 
 function makeFeatRepo(): string {
 	const dir = mkdtempSync(join(tmpdir(), "autopilot-helpers-test-"));
@@ -334,5 +349,105 @@ describe("computeImplementTurns", () => {
 		const body = ["## Files", "", "| Path | Change |", "|---|---|", rows].join("\n");
 		// 2*150 + 60 = 360 → clamped to 250
 		assert.equal(computeImplementTurns(body, 200), 250);
+	});
+});
+
+describe("classifyStepError", () => {
+	it("classifies rate-limit messages", () => {
+		assert.equal(classifyStepError("rate limit exceeded", false), "error_rate_limit");
+		assert.equal(classifyStepError("usage limit reached", false), "error_rate_limit");
+		assert.equal(classifyStepError("quota exhausted", false), "error_rate_limit");
+	});
+
+	it("lets the authoritative parked flag win over an unrelated message", () => {
+		assert.equal(classifyStepError("some unrelated failure", true), "error_rate_limit");
+	});
+
+	it("does NOT classify a safety 'rejected' as a rate limit (dropped-word regression guard)", () => {
+		assert.equal(classifyStepError("request rejected by safety filter", false), "error_sdk");
+	});
+
+	it("classifies budget, abort, and max-turns", () => {
+		assert.equal(classifyStepError("budget exceeded", false), "error_budget");
+		assert.equal(classifyStepError("aborted", false), "error_abort");
+		assert.equal(classifyStepError("max turns reached", false), "error_max_turns");
+	});
+
+	it("falls through to error_sdk for a generic message", () => {
+		assert.equal(classifyStepError("something else broke", false), "error_sdk");
+	});
+});
+
+describe("looksLikeRefusal", () => {
+	it("matches each refusal opener variant", () => {
+		assert.equal(looksLikeRefusal("I can't help with that."), true);
+		assert.equal(looksLikeRefusal("I cannot assist with this request."), true);
+		assert.equal(looksLikeRefusal("I'm not able to continue here."), true);
+		assert.equal(looksLikeRefusal("I am unable to comply."), true);
+		assert.equal(looksLikeRefusal("I won't be able to help with this."), true);
+		assert.equal(looksLikeRefusal("I must decline this task."), true);
+		assert.equal(looksLikeRefusal("I'm sorry, but I can't do that."), true);
+	});
+
+	it("does not match a decline discussed mid-paragraph (anchoring guard)", () => {
+		assert.equal(looksLikeRefusal("The reviewer notes the code can't be simplified further."), false);
+	});
+
+	it("does not match a long legitimate review", () => {
+		const review = `The plan is well-structured. It correctly addresses the rubric's Correct dimension by ${"padding ".repeat(40)}and the verdict is sound.`;
+		assert.equal(looksLikeRefusal(review), false);
+	});
+
+	it("returns false for empty input", () => {
+		assert.equal(looksLikeRefusal(""), false);
+	});
+});
+
+describe("isRefusal", () => {
+	it("is true for the structured refusal stop_reason regardless of text", () => {
+		assert.equal(isRefusal("refusal", ""), true);
+		assert.equal(isRefusal("refusal", "Here is a normal-looking review."), true);
+	});
+
+	it("trusts a populated non-refusal stop_reason over refusal-shaped text", () => {
+		assert.equal(isRefusal("end_turn", "I can't help with that."), false);
+	});
+
+	it("falls back to the text heuristic when stop_reason is absent", () => {
+		assert.equal(isRefusal(null, "I can't help with that. This request touches security tooling."), true);
+		assert.equal(isRefusal(undefined, "I must decline this review."), true);
+	});
+
+	it("does not treat a mid-paragraph decline as a refusal when stop_reason is absent", () => {
+		assert.equal(isRefusal(null, "The reviewer notes the code can't be simplified further."), false);
+	});
+});
+
+describe("parseVerdict", () => {
+	it("parses an explicit Verdict: line", () => {
+		assert.equal(parseVerdict("Verdict: APPROVE"), "APPROVE");
+		assert.equal(parseVerdict("Verdict: REVISE"), "REVISE");
+		assert.equal(parseVerdict("Verdict: RETHINK"), "RETHINK");
+	});
+
+	it("parses existing VERDICT: and bold shapes", () => {
+		assert.equal(parseVerdict("VERDICT: APPROVE"), "APPROVE");
+		assert.equal(parseVerdict("Verdict: **APPROVE**"), "APPROVE");
+	});
+
+	it("parses a bare keyword when no verdict line is present", () => {
+		assert.equal(parseVerdict("This plan needs a RETHINK before proceeding."), "RETHINK");
+		assert.equal(parseVerdict("Please REVISE the approach."), "REVISE");
+	});
+
+	it("returns APPROVE for an engaged review that omitted the keyword (fail-safe preserved)", () => {
+		const review = `This review checks the plan against the rubric. The Correct dimension holds: ${"the approach is sound and ".repeat(8)}no blocker found.`;
+		assert.equal(parseVerdict(review), "APPROVE");
+	});
+
+	it("fails closed to RETHINK for empty, refused, or non-review output", () => {
+		assert.equal(parseVerdict(""), "RETHINK");
+		assert.equal(parseVerdict("I can't help with that."), "RETHINK");
+		assert.equal(parseVerdict("ok done"), "RETHINK");
 	});
 });

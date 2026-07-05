@@ -306,6 +306,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			if (shakedown.subtype === "error_rate_limit" || parkSignal.parked) {
 				return parkExit() ?? finish({ itemId, completed: false, cost, error: "shakedown-plan failed" });
 			}
+			if (shakedown.subtype === "error_refusal") return finish({ itemId, completed: false, cost, error: "shakedown-plan refused (model declined the review)" });
 			if (shakedown.subtype !== "error_max_turns") {
 				return finish({ itemId, completed: false, cost, error: "shakedown-plan failed" });
 			}
@@ -413,6 +414,8 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				log(`edit loop on ${lastLoopFile ?? "unknown file"} — will retry with fresh approach`);
 			} else if (impl.subtype === "error_rate_limit" || parkSignal.parked) {
 				return parkExit() ?? finish({ itemId, completed: false, cost, error: "implement failed" });
+			} else if (impl.subtype === "error_refusal") {
+				return finish({ itemId, completed: false, cost, error: "implement refused (model declined the task)" });
 			} else if (impl.subtype !== "error_max_turns") {
 				return finish({ itemId, completed: false, cost, error: "implement failed" });
 			} else {
@@ -464,6 +467,8 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			if (shakedown.subtype === "error_rate_limit" || parkSignal.parked) {
 				return parkExit() ?? finish({ itemId, completed: false, cost, error: "shakedown-code failed" });
 			}
+
+			if (shakedown.subtype === "error_refusal") return finish({ itemId, completed: false, cost, error: "shakedown-code refused (model declined the review)" });
 
 			if (shakedown.subtype !== "error_max_turns") {
 				return finish({ itemId, completed: false, cost, error: "shakedown-code failed" });

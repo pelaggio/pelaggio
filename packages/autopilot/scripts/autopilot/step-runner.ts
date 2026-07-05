@@ -3,7 +3,7 @@ import { join, resolve } from "node:path";
 import type { HookInput, HookJSONOutput, SDKAssistantMessage, SDKRateLimitEvent, SDKResultMessage, SDKSystemMessage } from "@anthropic-ai/claude-agent-sdk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { BUDGETS, EFFORT, MODEL_PROFILES, REPO, TURN_LIMITS } from "./config.js";
-import { parseResetTime } from "./helpers.js";
+import { classifyStepError, isRefusal, parseResetTime } from "./helpers.js";
 import { MUTATING_TOOLS, toolBrief } from "./tui.js";
 import type { ParkSignal, Step, StepEmit, StepResult, TokenUsage } from "./types.js";
 import { ensureWorktreeDeps } from "./worktree-deps.js";
@@ -370,6 +370,15 @@ export async function runStep(name: Step, prompt: string, opts: RunStepOpts, emi
 				resultTurns = r.num_turns ?? 0;
 				subtype = r.subtype ?? "unknown";
 				ok = subtype === "success";
+				// A safety-classifier decline arrives as subtype:"success" with
+				// stop_reason:"refusal" (or, rarely, refusal-shaped text and no
+				// stop_reason). Downgrade to a terminal error_refusal so the pipeline
+				// neither ships it as done nor parks it as a rate limit.
+				if (ok && isRefusal(r.stop_reason, text)) {
+					ok = false;
+					subtype = "error_refusal";
+					emit({ type: "sdk_error", message: "model refused / declined the task" });
+				}
 				const u = (r as { usage?: Record<string, number> }).usage;
 				if (u) {
 					tokens = {
@@ -384,17 +393,7 @@ export async function runStep(name: Step, prompt: string, opts: RunStepOpts, emi
 	} catch (err) {
 		ok = false;
 		const errMsg = err instanceof Error ? err.message : String(err);
-		if (/rate.?limit|usage.?limit|quota|rejected/i.test(errMsg) || opts.parkSignal.parked) {
-			subtype = "error_rate_limit";
-		} else if (/budget/i.test(errMsg)) {
-			subtype = "error_budget";
-		} else if (/abort/i.test(errMsg)) {
-			subtype = "error_abort";
-		} else if (/max.*turns|turn.?limit|maximum.*turns/i.test(errMsg)) {
-			subtype = "error_max_turns";
-		} else {
-			subtype = "error_sdk";
-		}
+		subtype = classifyStepError(errMsg, opts.parkSignal.parked);
 		text = errMsg;
 		emit({ type: "sdk_error", message: errMsg });
 	}
