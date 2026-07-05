@@ -18,6 +18,14 @@ CLAUDE_AUTOPILOT_WORKTREE_PREFIX  >  worktree.prefix (yml)  >  basename(REPO) + 
 
 All other values use: `yml value` > default.
 
+`budgets`, `turn-limits`, and `effort` also support a per-profile layer that
+overrides the global step value for one profile only (see
+[Per-profile step overrides](#per-profile-step-overrides)):
+
+```
+models.profiles.<name>.<section>.<step>  >  <section>.<step> (global yml)  >  default
+```
+
 ## Annotated example
 
 ```yaml
@@ -88,6 +96,17 @@ models:
       ship: claude-sonnet-4-6
       shipwreck: claude-sonnet-4-6
     # Additional named profiles (e.g. `thrifty`) can be added here.
+    # A profile may also carry its own budgets / effort / turn-limits, which
+    # override the global step values above for that profile only (sparse —
+    # list only the steps you want to bump):
+    # deep:
+    #   plan: claude-opus-4-8
+    #   budgets:
+    #     plan: 16                # this profile's plan cap; other steps stay global
+    #   effort:
+    #     plan: max
+    #   turn-limits:
+    #     plan: 120
 ```
 
 ## Merge semantics
@@ -102,6 +121,42 @@ models:
 - Section keys use kebab-case (`turn-limits`), matching YAML convention. Step
   names (`pick`, `plan`, `shakedown-plan`, etc.) are literal keys whose
   internal hyphens are part of the step identifier.
+
+## Per-profile step overrides
+
+The top-level `budgets`, `turn-limits`, and `effort` blocks set values that
+apply to *every* profile. A profile that swaps a step onto a differently-priced
+or differently-tuned model often needs matching cost/effort headroom — so each
+`models.profiles.<name>` may also carry its own `budgets:`, `effort:`, and
+`turn-limits:` sub-blocks:
+
+```yaml
+models:
+  profiles:
+    deep:
+      plan: claude-opus-4-8       # step → model, as usual
+      budgets:
+        plan: 16                  # raise just this profile's plan budget
+      effort:
+        plan: max
+      turn-limits:
+        plan: 120
+```
+
+- **Sparse.** A per-profile block lists only the steps it changes. Any step you
+  omit falls through to the global value for that section, then to the default.
+  Precedence per step:
+  `models.profiles.<name>.<section>.<step>` > `<section>.<step>` (global) > default.
+- **Isolated.** An override on `deep` never affects `standard`, `quick`, or any
+  other profile — and never affects `deep`'s *other* steps.
+- **Same value rules as the global blocks.** `budgets`/`turn-limits` take
+  numbers; `effort` takes one of `low | medium | high | xhigh | max`. A wrong
+  type or a non-map block fails loudly at startup with the file path and the
+  dotted key (e.g. `models.profiles.deep.budgets.plan`).
+- **Unknown steps ignored.** A non-step key inside an override block (e.g.
+  `budgets.bogus`) is silently dropped, same as the global sections.
+- The built-in `standard` and `quick` profiles carry no override blocks, so out
+  of the box every profile resolves to the global/default step values.
 
 ## Ship target
 

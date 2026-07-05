@@ -2,7 +2,7 @@ import { lstatSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { HookInput, HookJSONOutput, SDKAssistantMessage, SDKRateLimitEvent, SDKResultMessage, SDKSystemMessage } from "@anthropic-ai/claude-agent-sdk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { BUDGETS, EFFORT, MODEL_PROFILES, REPO, TURN_LIMITS } from "./config.js";
+import { CONFIG, REPO, resolveStepSettings } from "./config.js";
 import { parseResetTime } from "./helpers.js";
 import { MUTATING_TOOLS, toolBrief } from "./tui.js";
 import type { ParkSignal, Step, StepEmit, StepResult, TokenUsage } from "./types.js";
@@ -18,7 +18,7 @@ export interface RunStepOpts {
 	parkSignal: ParkSignal;
 	/** Per-call override for the step's `maxTurns`. Used by `implement` to size the
 	 * budget from the plan's file count (see `computeImplementTurns` in helpers.ts).
-	 * When undefined, falls back to the static `TURN_LIMITS[name]`. */
+	 * When undefined, falls back to the profile-resolved turn limit. */
 	maxTurnsOverride?: number;
 	/** SIGINT-driven cancellation. Threaded through to the SDK's `query()` call so an
 	 * in-flight fetch stream tears down when the parent controller aborts. */
@@ -77,10 +77,8 @@ export function blockPlanPolish(input: HookInput, cwd: string): HookJSONOutput {
 }
 
 export async function runStep(name: Step, prompt: string, opts: RunStepOpts, emit: StepEmit): Promise<StepResult> {
-	const budget = BUDGETS[name];
-	const turns = opts.maxTurnsOverride ?? TURN_LIMITS[name];
-	const model = MODEL_PROFILES[opts.profile]?.[name];
-	const effort = EFFORT[name];
+	const { budget, turns: baseTurns, effort, model } = resolveStepSettings(CONFIG, opts.profile, name);
+	const turns = opts.maxTurnsOverride ?? baseTurns;
 
 	const modelLabel = model ? model.replace("claude-", "") : "default";
 	emit({
