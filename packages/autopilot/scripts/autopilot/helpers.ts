@@ -139,14 +139,81 @@ export function computeImplementTurns(planBody: string | null, fallback: number)
 	return Math.max(100, Math.min(250, 2 * files + 60));
 }
 
+// ── Refusal & error classification ─────────────────────────────────────
+
+// Anchored refusal openers: a decline announces itself in the first sentence.
+// Matching only at the start of the trimmed final result keeps a review that
+// merely *discusses* a decline mid-paragraph ("the code can't be simplified")
+// from tripping the heuristic.
+const REFUSAL_OPENERS: readonly RegExp[] = [
+	/^i can(?:'|no)?t (?:help|assist|comply|continue|provide|do)\b/i,
+	/^i cannot (?:help|assist|comply|continue|provide|do)\b/i,
+	/^i(?:'m| am) (?:not able|unable) to\b/i,
+	/^i won'?t (?:be able|help|assist)\b/i,
+	/^i must decline\b/i,
+	/^i(?:'m| am) sorry,? but i (?:can(?:'|no)?t|cannot|won'?t)\b/i,
+];
+
+/** Conservative, anchored text heuristic: does the output *open* with a refusal? */
+export function looksLikeRefusal(text: string): boolean {
+	const head = text.trim().slice(0, 200);
+	return REFUSAL_OPENERS.some((re) => re.test(head));
+}
+
+/**
+ * Structured-first refusal classifier. A streaming safety decline surfaces as
+ * `subtype: "success"` with `stop_reason: "refusal"` — trust that signal first.
+ * A populated non-refusal `stop_reason` means the turn completed normally, so
+ * don't second-guess it. Only fall back to the text heuristic when the SDK
+ * surfaced no `stop_reason` at all.
+ */
+export function isRefusal(stopReason: string | null | undefined, resultText: string): boolean {
+	if (stopReason === "refusal") return true;
+	if (stopReason != null) return false;
+	return looksLikeRefusal(resultText);
+}
+
+/**
+ * Categorize a thrown SDK step error into a `subtype`. The authoritative
+ * `parked` flag (set by the structured `rate_limit_event` handler) wins first;
+ * remaining branches key off the message text. Deliberately does NOT match a
+ * bare "rejected" — that word also appears in safety refusals, which must be
+ * terminal (`error_sdk`), not parked forever as a phantom rate limit.
+ */
+export function classifyStepError(errMsg: string, parked: boolean): string {
+	if (parked || /rate.?limit|usage.?limit|quota/i.test(errMsg)) return "error_rate_limit";
+	if (/budget/i.test(errMsg)) return "error_budget";
+	if (/abort/i.test(errMsg)) return "error_abort";
+	if (/max.*turns|turn.?limit|maximum.*turns/i.test(errMsg)) return "error_max_turns";
+	return "error_sdk";
+}
+
 // ── Verdict parsing ────────────────────────────────────────────────────
+
+// Vocabulary a genuine rubric review uses. Presence of any term (in a
+// substantial, non-refusal body) is what distinguishes a real review that
+// merely omitted the verdict keyword from an empty/refused/truncated one.
+const REVIEW_SIGNAL = /\b(?:rubric|verdict|fix[- ]?now|near[- ]?term|deferred|well-(?:typed|tested|factored)|idiomatic|idioms|concise|correctness|blocker)\b/i;
+
+function reviewEngaged(text: string): boolean {
+	const t = text.trim();
+	if (t.length < 120) return false; // a real review is substantial
+	if (looksLikeRefusal(t)) return false; // a decline is not engagement
+	return REVIEW_SIGNAL.test(t);
+}
 
 export function parseVerdict(text: string): "APPROVE" | "REVISE" | "RETHINK" {
 	const match = text.match(/verdict[:\s*]+\*{0,2}(APPROVE|REVISE|RETHINK)\b/i);
 	if (match) return match[1].toUpperCase() as "APPROVE" | "REVISE" | "RETHINK";
 	if (/\bRETHINK\b/i.test(text)) return "RETHINK";
 	if (/\bREVISE\b/i.test(text)) return "REVISE";
-	return "APPROVE";
+	// No verdict keyword. Fail closed: an empty/refused/truncated shakedown must
+	// not read as an implicit APPROVE and ship on a phantom sign-off. Return
+	// RETHINK — the only verdict that HALTS the cycle (REVISE still proceeds to
+	// implement+ship) — unless the output shows the review actually engaged with
+	// the rubric, which preserves the historical APPROVE fail-safe for a genuine
+	// review that merely omitted the keyword.
+	return reviewEngaged(text) ? "APPROVE" : "RETHINK";
 }
 
 // ── Git checkpointing ──────────────────────────────────────────────────
