@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { DEFAULTS, loadConfig, resolveRepo } from "../config.js";
+import { DEFAULTS, loadConfig, resolveRepo, resolveStepSettings } from "../config.js";
 
 function tmpRepo(): string {
 	return mkdtempSync(join(tmpdir(), "autopilot-config-test-"));
@@ -125,6 +125,119 @@ describe("loadConfig — unknown keys", () => {
 		assert.equal(cfg.budgets.implement, 30);
 		assert.equal(cfg.budgets.plan, DEFAULTS.budgets.plan);
 		assert.ok(!("bogus" in cfg.budgets));
+	});
+});
+
+describe("loadConfig — per-profile overrides", () => {
+	it("parses a profile budgets override into profileBudgets", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, ["models:", "  profiles:", "    deep:", "      budgets:", "        plan: 16", ""].join("\n"));
+		const cfg = loadConfig({ repo, configPath: path });
+		assert.equal(cfg.profileBudgets.deep.plan, 16);
+	});
+
+	it("parses effort and turn-limits (kebab) override blocks", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, ["models:", "  profiles:", "    deep:", "      effort:", "        plan: high", "      turn-limits:", "        plan: 100", ""].join("\n"));
+		const cfg = loadConfig({ repo, configPath: path });
+		assert.equal(cfg.profileEffort.deep.plan, "high");
+		assert.equal(cfg.profileTurnLimits.deep.plan, 100);
+	});
+
+	it("keeps override maps sparse — omitted steps are absent", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, ["models:", "  profiles:", "    deep:", "      budgets:", "        plan: 16", ""].join("\n"));
+		const cfg = loadConfig({ repo, configPath: path });
+		assert.ok(!("implement" in cfg.profileBudgets.deep));
+	});
+
+	it("ignores unknown steps inside an override block", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, ["models:", "  profiles:", "    deep:", "      budgets:", "        bogus: 5", "        plan: 16", ""].join("\n"));
+		const cfg = loadConfig({ repo, configPath: path });
+		assert.equal(cfg.profileBudgets.deep.plan, 16);
+		assert.ok(!("bogus" in cfg.profileBudgets.deep));
+	});
+
+	it("throws with file path and dotted key on wrong value type", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, ["models:", "  profiles:", "    deep:", "      budgets:", "        plan: high", ""].join("\n"));
+		assert.throws(() => loadConfig({ repo, configPath: path }), /\.autopilot\.yml/);
+		assert.throws(() => loadConfig({ repo, configPath: path }), /models\.profiles\.deep\.budgets\.plan/);
+	});
+
+	it("throws with file path when an override block is not a map", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, ["models:", "  profiles:", "    deep:", "      budgets: 16", ""].join("\n"));
+		assert.throws(() => loadConfig({ repo, configPath: path }), /\.autopilot\.yml/);
+		assert.throws(() => loadConfig({ repo, configPath: path }), /models\.profiles\.deep\.budgets/);
+	});
+
+	it("built-in profiles carry no override entries", () => {
+		const repo = tmpRepo();
+		const cfg = loadConfig({ repo, configPath: join(repo, ".autopilot.yml") });
+		assert.deepEqual(cfg.profileBudgets, {});
+		assert.deepEqual(cfg.profileTurnLimits, {});
+		assert.deepEqual(cfg.profileEffort, {});
+	});
+
+	it("adding override blocks to a default profile leaves its models intact", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, ["models:", "  profiles:", "    standard:", "      budgets:", "        plan: 16", ""].join("\n"));
+		const cfg = loadConfig({ repo, configPath: path });
+		assert.equal(cfg.profileBudgets.standard.plan, 16);
+		assert.equal(cfg.modelProfiles.standard.plan, DEFAULTS.modelProfiles.standard.plan);
+		assert.equal(cfg.modelProfiles.standard.pick, DEFAULTS.modelProfiles.standard.pick);
+	});
+});
+
+describe("resolveStepSettings — precedence & fallback", () => {
+	it("profile override wins over a top-level global override and the default", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, ["budgets:", "  plan: 10", "models:", "  profiles:", "    deep:", "      budgets:", "        plan: 16", ""].join("\n"));
+		const cfg = loadConfig({ repo, configPath: path });
+		assert.equal(resolveStepSettings(cfg, "deep", "plan").budget, 16);
+	});
+
+	it("falls back to the global step value when the profile omits the step", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, ["budgets:", "  plan: 10", ""].join("\n"));
+		const cfg = loadConfig({ repo, configPath: path });
+		assert.equal(resolveStepSettings(cfg, "deep", "plan").budget, 10);
+	});
+
+	it("falls back to DEFAULTS when neither profile nor global set it", () => {
+		const repo = tmpRepo();
+		const cfg = loadConfig({ repo, configPath: join(repo, ".autopilot.yml") });
+		assert.equal(resolveStepSettings(cfg, "standard", "plan").budget, DEFAULTS.budgets.plan);
+	});
+
+	it("applies the same precedence to turns and effort", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, ["models:", "  profiles:", "    deep:", "      turn-limits:", "        plan: 100", "      effort:", "        plan: high", ""].join("\n"));
+		const cfg = loadConfig({ repo, configPath: path });
+		const s = resolveStepSettings(cfg, "deep", "plan");
+		assert.equal(s.turns, 100);
+		assert.equal(s.effort, "high");
+	});
+
+	it("resolves model from modelProfiles — value when set, undefined when the profile lacks the step", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, ["models:", "  profiles:", "    thrifty:", "      plan: claude-haiku-4-5-20251001", ""].join("\n"));
+		const cfg = loadConfig({ repo, configPath: path });
+		assert.equal(resolveStepSettings(cfg, "thrifty", "plan").model, "claude-haiku-4-5-20251001");
+		assert.equal(resolveStepSettings(cfg, "thrifty", "ship").model, undefined);
+	});
+
+	it("resolves a profile with zero override blocks entirely to globals/defaults", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, ["models:", "  profiles:", "    thrifty:", "      plan: claude-haiku-4-5-20251001", ""].join("\n"));
+		const cfg = loadConfig({ repo, configPath: path });
+		const s = resolveStepSettings(cfg, "thrifty", "plan");
+		assert.equal(s.budget, DEFAULTS.budgets.plan);
+		assert.equal(s.turns, DEFAULTS.turnLimits.plan);
+		assert.equal(s.effort, DEFAULTS.effort.plan);
+		assert.equal(s.model, "claude-haiku-4-5-20251001");
 	});
 });
 

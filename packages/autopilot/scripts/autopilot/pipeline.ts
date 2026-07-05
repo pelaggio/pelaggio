@@ -1,6 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { MODEL_PROFILES, REPO, ROADMAP_GITHUB, ROADMAP_LINEAR, ROADMAP_SOURCE, SHIP_TARGET, TURN_LIMITS, WORKTREE_PREFIX } from "./config.js";
+import { CONFIG, MODEL_PROFILES, REPO, ROADMAP_GITHUB, ROADMAP_LINEAR, ROADMAP_SOURCE, resolveStepSettings, SHIP_TARGET, WORKTREE_PREFIX } from "./config.js";
 import {
 	appendLog as appendLogDefault,
 	captureShipState,
@@ -331,7 +331,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				planBody = null;
 			}
 		}
-		const implementTurns = computeImplementTurns(planBody, TURN_LIMITS.implement);
+		const implementTurns = computeImplementTurns(planBody, resolveStepSettings(CONFIG, profile, "implement").turns);
 		const planRef = planPath ? `Read the plan at \`${planPath}\`.` : `Find the plan in \`${resolve(REPO, ".dev", "plans")}/\` (filename matches branch without \`feat/\` prefix).`;
 		const worktreeHint = [
 			`**Your working directory is**: \`${worktree}\`.`,
