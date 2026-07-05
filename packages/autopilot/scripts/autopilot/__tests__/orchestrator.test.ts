@@ -1,8 +1,28 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { after, before, describe, it } from "node:test";
 import { runOrchestrator } from "../pipeline.js";
 import type { Flags } from "../types.js";
 import { createMockRunPipeline } from "./mocks.js";
+
+// runOrchestrator derives no-worktree (single-shot) mode from ambient env —
+// CI=true or CLAUDE_AUTOPILOT_SINGLE_SHOT=1 (see pipeline.ts). These tests
+// exercise the default worktree orchestration, so neutralize those vars for the
+// duration of the file. Without this the suite fails under any CI runner, since
+// GitHub Actions always sets CI=true, which flips the orchestrator onto the
+// single-shot path and short-circuits before runPipeline is called.
+const savedEnv: Record<string, string | undefined> = {};
+before(() => {
+	for (const key of ["CI", "CLAUDE_AUTOPILOT_SINGLE_SHOT"]) {
+		savedEnv[key] = process.env[key];
+		delete process.env[key];
+	}
+});
+after(() => {
+	for (const [key, value] of Object.entries(savedEnv)) {
+		if (value === undefined) delete process.env[key];
+		else process.env[key] = value;
+	}
+});
 
 const baseFlags: Flags = {
 	cycles: "1",

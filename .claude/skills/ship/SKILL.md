@@ -48,7 +48,7 @@ git commit -m "$(cat <<'EOF'
 - {bullet 1}
 - {bullet 2}
 
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
 EOF
 )"
 ```
