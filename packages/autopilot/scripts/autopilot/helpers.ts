@@ -227,7 +227,12 @@ export function checkpoint(cwd: string, label: string): boolean {
 		});
 		return true;
 	} catch (e: unknown) {
-		const msg = ((e as Record<string, unknown>).stderr ?? (e as Record<string, unknown>).stdout ?? (e as Error).message ?? "").toString().slice(0, 300);
+		const err = e as Record<string, unknown>;
+		// git reports "nothing to commit" on stdout with stderr set to "" (not null),
+		// so `stderr ?? stdout` short-circuits on the empty string — concatenate both
+		// streams before classifying, or the empty-tree case logs a bogus warning.
+		const streams = `${err.stderr ?? ""}${err.stdout ?? ""}`;
+		const msg = (streams || String((e as Error).message ?? "")).slice(0, 300);
 		if (/nothing to commit|clean/i.test(msg)) return false;
 		process.stderr.write(`⚠ checkpoint commit failed: ${msg}\n`);
 		return false;
