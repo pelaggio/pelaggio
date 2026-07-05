@@ -12,7 +12,9 @@ concurrency:
 
 jobs:
   ci:
-    runs-on: self-hosted
+    # GitHub-hosted (not self-hosted): CI runs on untrusted fork PRs once this
+    # repo is public, so it must not execute on our own infrastructure.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 

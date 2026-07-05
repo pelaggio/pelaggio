@@ -2,7 +2,7 @@
 	"name": "@cdhorne/claude-autopilot",
 	"version": "0.1.0",
 	"description": "Headless pipeline for running Claude Agent SDK cycles per roadmap item",
-	"license": "UNLICENSED",
+	"license": "AGPL-3.0-only",
 	"packageManager": "pnpm@10.32.1",
 	"type": "module",
 	"bin": {
@@ -19,6 +19,7 @@
 		".claude/skills/**",
 		".claude-templates/**",
 		"bin/**",
+		"LICENSE",
 		"!scripts/autopilot/__tests__/**",
 		"!scripts/autopilot/**/*.test.ts"
 	],
@@ -31,10 +32,10 @@
 		"postpack": "tsx scripts/pack-cleanup.ts"
 	},
 	"dependencies": {
-		"@anthropic-ai/claude-agent-sdk": "^0.2.119",
+		"@anthropic-ai/claude-agent-sdk": "^0.3.177",
 		"diff": "^9.0.0",
-		"tsx": "^4.21.0",
-		"yaml": "^2.8.3"
+		"tsx": "^4.22.4",
+		"yaml": "^2.9.0"
 	},
 	"peerDependencies": {
 		"@linear/sdk": ">=50"
