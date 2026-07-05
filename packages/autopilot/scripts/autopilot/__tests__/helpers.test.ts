@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { describe, it } from "node:test";
-import { computeImplementTurns, countPlanFiles, filesChangedSince, fmtWait, getHeadSha, hasDeliverableCommits, parsePickItem, parsePickResult, parseResetTime, parseWaitFlag } from "../helpers.js";
+import { checkpoint, computeImplementTurns, countPlanFiles, filesChangedSince, fmtWait, getHeadSha, hasDeliverableCommits, parsePickItem, parsePickResult, parseResetTime, parseWaitFlag } from "../helpers.js";
 
 function makeFeatRepo(): string {
 	const dir = mkdtempSync(join(tmpdir(), "autopilot-helpers-test-"));
@@ -334,5 +334,35 @@ describe("computeImplementTurns", () => {
 		const body = ["## Files", "", "| Path | Change |", "|---|---|", rows].join("\n");
 		// 2*150 + 60 = 360 → clamped to 250
 		assert.equal(computeImplementTurns(body, 200), 250);
+	});
+});
+
+describe("checkpoint", () => {
+	it("returns false silently on a clean tree (git reports on stdout, stderr is empty string)", () => {
+		const dir = makeFeatRepo();
+		const writes: string[] = [];
+		const orig = process.stderr.write.bind(process.stderr);
+		process.stderr.write = ((chunk: string | Uint8Array) => {
+			writes.push(chunk.toString());
+			return true;
+		}) as typeof process.stderr.write;
+		try {
+			assert.equal(checkpoint(dir, "test"), false);
+		} finally {
+			process.stderr.write = orig;
+		}
+		assert.deepEqual(
+			writes.filter((w) => w.includes("checkpoint commit failed")),
+			[],
+			`clean tree must not warn; got:\n${writes.join("")}`,
+		);
+	});
+
+	it("returns true and commits when the tree is dirty", () => {
+		const dir = makeFeatRepo();
+		writeFileSync(resolve(dir, "f.txt"), "x");
+		assert.equal(checkpoint(dir, "test"), true);
+		const log = execSync("git log --format=%s -1", { cwd: dir, encoding: "utf-8" }).trim();
+		assert.equal(log, "wip: autopilot test");
 	});
 });
