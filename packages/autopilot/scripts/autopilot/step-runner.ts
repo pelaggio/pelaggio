@@ -3,7 +3,7 @@ import { join, resolve } from "node:path";
 import type { HookInput, HookJSONOutput, SDKAssistantMessage, SDKRateLimitEvent, SDKResultMessage, SDKSystemMessage } from "@anthropic-ai/claude-agent-sdk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { CONFIG, REPO, resolveStepSettings } from "./config.js";
-import { parseResetTime } from "./helpers.js";
+import { classifyStepError, isRefusal, parseResetTime } from "./helpers.js";
 import { MUTATING_TOOLS, toolBrief } from "./tui.js";
 import type { ParkSignal, Step, StepEmit, StepResult, TokenUsage } from "./types.js";
 import { ensureWorktreeDeps } from "./worktree-deps.js";
@@ -31,6 +31,16 @@ const EDIT_LOOP_THRESHOLD = 22;
 // loop guard would false-positive on legitimate refinement passes, so it is
 // skipped here. Steps editing code (`implement`, `shakedown-code`) keep it.
 const EDIT_LOOP_EXEMPT_STEPS: ReadonlySet<Step> = new Set(["plan", "shakedown-plan"]);
+
+// Autonomy framing: rides on every SDK call for every step. Opus 4.8 asks
+// clarifying questions more readily than 4.7, but here a question ends the turn
+// with unfinished work and retry logic can't tell it apart from progress. Terse
+// on purpose — this is a per-call token cost on every step.
+const AUTONOMY_APPEND = [
+	"",
+	"## Operating autonomously",
+	"You are operating autonomously inside a headless pipeline. Nobody is watching in real time and nobody can answer questions mid-step, so ending your turn with a question stalls the step. For minor choices (naming, formatting, defaults, which of two equivalent approaches), pick a reasonable option and note it in your final message. End your turn only when the step is complete or you are genuinely blocked — and if blocked, state precisely what is missing rather than asking permission to proceed.",
+].join("\n");
 
 /** True when `cwd` is a sibling worktree, not the main repo. Exported for testing. */
 export function isWorktreePath(cwd: string, repo: string): boolean {
@@ -74,6 +84,34 @@ export function blockPlanPolish(input: HookInput, cwd: string): HookJSONOutput {
 		decision: "block" as const,
 		reason: `"${fp}" is under docs/plans/, which is READ-ONLY during implement. Execute the plan by writing code to other files — do not edit the plan itself. If the plan is genuinely wrong, stop and report the issue instead of editing around it.`,
 	};
+}
+
+/** Composes the per-step system-prompt append. The autonomy block is
+ * unconditional; the worktree-isolation and plan-polish blocks layer on when
+ * their conditions hold. Exported for testing. */
+export function composeSystemAppend(args: { isWorktree: boolean; cwd: string; repo: string; planBlockActive: boolean }): string {
+	const worktreeAppend = args.isWorktree
+		? [
+				"",
+				"## CRITICAL: Worktree isolation",
+				`Your working directory is a git worktree at: ${args.cwd}`,
+				`The main repository is at: ${args.repo}`,
+				"You MUST use relative paths or paths under your working directory for ALL file operations.",
+				`NEVER use absolute paths starting with ${args.repo}/ — those point to the main worktree and will corrupt another workspace.`,
+				"Use $PWD-relative paths, or resolve from your cwd. The codebase in your worktree is identical — read and write here.",
+			].join("\n")
+		: undefined;
+
+	const planAppend = args.planBlockActive
+		? [
+				"",
+				"## CRITICAL: Do not edit the plan",
+				"Files under `docs/plans/` are READ-ONLY for this step. Your job is to EXECUTE the plan by writing code to other files — not to polish, clarify, or extend the plan document itself.",
+				"Writes to `docs/plans/*` will be blocked by a hook. If you believe the plan is wrong, stop and surface the issue in your final message instead of editing around it.",
+			].join("\n")
+		: undefined;
+
+	return [AUTONOMY_APPEND, worktreeAppend, planAppend].filter(Boolean).join("\n");
 }
 
 export async function runStep(name: Step, prompt: string, opts: RunStepOpts, emit: StepEmit): Promise<StepResult> {
@@ -147,29 +185,8 @@ export async function runStep(name: Step, prompt: string, opts: RunStepOpts, emi
 		}
 	}
 
-	const worktreeAppend = isWorktree
-		? [
-				"",
-				"## CRITICAL: Worktree isolation",
-				`Your working directory is a git worktree at: ${opts.cwd}`,
-				`The main repository is at: ${REPO}`,
-				"You MUST use relative paths or paths under your working directory for ALL file operations.",
-				`NEVER use absolute paths starting with ${REPO}/ — those point to the main worktree and will corrupt another workspace.`,
-				"Use $PWD-relative paths, or resolve from your cwd. The codebase in your worktree is identical — read and write here.",
-			].join("\n")
-		: undefined;
-
 	const planBlockActive = name === "implement";
-	const planAppend = planBlockActive
-		? [
-				"",
-				"## CRITICAL: Do not edit the plan",
-				"Files under `docs/plans/` are READ-ONLY for this step. Your job is to EXECUTE the plan by writing code to other files — not to polish, clarify, or extend the plan document itself.",
-				"Writes to `docs/plans/*` will be blocked by a hook. If you believe the plan is wrong, stop and surface the issue in your final message instead of editing around it.",
-			].join("\n")
-		: undefined;
-
-	const systemAppend = [worktreeAppend, planAppend].filter(Boolean).join("\n");
+	const systemAppend = composeSystemAppend({ isWorktree, cwd: opts.cwd, repo: REPO, planBlockActive });
 
 	const mainAbs = resolve(REPO) + "/";
 	const worktreeCwd = resolve(opts.cwd);
@@ -249,15 +266,11 @@ export async function runStep(name: Step, prompt: string, opts: RunStepOpts, emi
 			effort,
 			abortController: sdkCtrl,
 			...(model ? { model } : {}),
-			...(systemAppend
-				? {
-						systemPrompt: {
-							type: "preset" as const,
-							preset: "claude_code" as const,
-							append: systemAppend,
-						},
-					}
-				: {}),
+			systemPrompt: {
+				type: "preset" as const,
+				preset: "claude_code" as const,
+				append: systemAppend,
+			},
 			...(hooks ? { hooks } : {}),
 		},
 	});
@@ -368,6 +381,15 @@ export async function runStep(name: Step, prompt: string, opts: RunStepOpts, emi
 				resultTurns = r.num_turns ?? 0;
 				subtype = r.subtype ?? "unknown";
 				ok = subtype === "success";
+				// A safety-classifier decline arrives as subtype:"success" with
+				// stop_reason:"refusal" (or, rarely, refusal-shaped text and no
+				// stop_reason). Downgrade to a terminal error_refusal so the pipeline
+				// neither ships it as done nor parks it as a rate limit.
+				if (ok && isRefusal(r.stop_reason, text)) {
+					ok = false;
+					subtype = "error_refusal";
+					emit({ type: "sdk_error", message: "model refused / declined the task" });
+				}
 				const u = (r as { usage?: Record<string, number> }).usage;
 				if (u) {
 					tokens = {
@@ -382,17 +404,7 @@ export async function runStep(name: Step, prompt: string, opts: RunStepOpts, emi
 	} catch (err) {
 		ok = false;
 		const errMsg = err instanceof Error ? err.message : String(err);
-		if (/rate.?limit|usage.?limit|quota|rejected/i.test(errMsg) || opts.parkSignal.parked) {
-			subtype = "error_rate_limit";
-		} else if (/budget/i.test(errMsg)) {
-			subtype = "error_budget";
-		} else if (/abort/i.test(errMsg)) {
-			subtype = "error_abort";
-		} else if (/max.*turns|turn.?limit|maximum.*turns/i.test(errMsg)) {
-			subtype = "error_max_turns";
-		} else {
-			subtype = "error_sdk";
-		}
+		subtype = classifyStepError(errMsg, opts.parkSignal.parked);
 		text = errMsg;
 		emit({ type: "sdk_error", message: errMsg });
 	}

@@ -19,7 +19,7 @@ Read `packages/autopilot/scripts/autopilot/config.ts`. The `OPUS` and `SONNET` c
 
 ## 3. Rubric guard
 
-Run `rg 'claude-[a-z]+-[0-9]' packages/autopilot/scripts/ --glob '!**/__tests__/**'` — it must match **only** `packages/autopilot/scripts/autopilot/config.ts`. The pattern catches any current or future Anthropic family ID (Opus / Sonnet / Haiku / Fable / Mythos / …); any other production match means the "No hardcoded model strings" invariant is breaking; stop and investigate. Test fixtures under `__tests__/` legitimately pin literal IDs and are excluded.
+Run `rg 'claude-[a-z]+-[0-9]' packages/autopilot/scripts/ .claude/skills/ .claude-templates/ --glob '!**/__tests__/**' --glob '!**/bump-models/SKILL.md'` — it must match **only** `packages/autopilot/scripts/autopilot/config.ts`. The pattern catches any current or future Anthropic family ID (Opus / Sonnet / Haiku / Fable / Mythos / …); any other match means the "No hardcoded model strings" invariant is breaking — a stale model ID leaked into production source, a skill body, or a template; stop and investigate. Excluded by design: `__tests__/` fixtures legitimately pin literal IDs, and this skill's own `SKILL.md` names model-ID patterns in its instructions.
 
 ## 4. Verify
 
