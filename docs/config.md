@@ -61,8 +61,8 @@ turn-limits:                    # SDK turn cap per step
   shipwreck: 40
 
 effort:                         # "low" | "medium" | "high" | "xhigh" | "max"
-  pick: medium                  # xhigh is Opus 4.7-only; falls back to high on other models.
-  plan: xhigh                   # max is Opus 4.6/4.7-only.
+  pick: medium                  # xhigh is Opus 4.7/4.8-only; falls back to high on other models.
+  plan: xhigh                   # Opus 4.8 defaults to `high` when effort is omitted; max is Opus 4.6/4.7/4.8-only.
   shakedown-plan: xhigh
   implement: xhigh
   shakedown-code: xhigh
@@ -73,10 +73,10 @@ models:
   profiles:
     standard:
       pick: claude-sonnet-4-6
-      plan: claude-opus-4-7
-      shakedown-plan: claude-opus-4-7
-      implement: claude-opus-4-7
-      shakedown-code: claude-opus-4-7
+      plan: claude-opus-4-8
+      shakedown-plan: claude-opus-4-8
+      implement: claude-opus-4-8
+      shakedown-code: claude-opus-4-8
       ship: claude-sonnet-4-6
       shipwreck: claude-sonnet-4-6
     quick:
