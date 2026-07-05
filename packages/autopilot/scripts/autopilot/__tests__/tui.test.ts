@@ -91,7 +91,7 @@ describe("createStepRenderer plain mode", () => {
 				workerStatus: ws,
 			});
 
-			emit({ type: "step_header", name: "plan", model: "claude-opus-4-7", budget: 1.5, maxTurns: 12, prompt: "" });
+			emit({ type: "step_header", name: "plan", model: "claude-opus-4-8", budget: 1.5, maxTurns: 12, prompt: "" });
 			emit({ type: "tool_use", name: "Edit", brief: "foo.ts", mutating: true });
 			emit({ type: "tool_use", name: "Grep", brief: "needle", mutating: false });
 			emit({ type: "done", ok: true, subtype: "end_turn", cost: 0.42, turns: 3, elapsed: 1000 });
