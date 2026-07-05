@@ -19,7 +19,7 @@ Read `packages/autopilot/scripts/autopilot/config.ts`. The `OPUS` and `SONNET` c
 
 ## 3. Rubric guard
 
-Run `rg 'claude-(opus|sonnet|haiku)-' packages/autopilot/scripts/ scripts/ --glob '!**/__tests__/**'` — it must match **only** `packages/autopilot/scripts/autopilot/config.ts`. Any other production match means the "No hardcoded model strings" invariant is breaking; stop and investigate. Test fixtures under `__tests__/` legitimately pin literal IDs and are excluded.
+Run `rg 'claude-(opus|sonnet|haiku)-' packages/autopilot/scripts/ .claude/skills/ .claude-templates/ --glob '!**/__tests__/**' --glob '!**/bump-models/SKILL.md'` — it must match **only** `packages/autopilot/scripts/autopilot/config.ts`. Any other match means the "No hardcoded model strings" invariant is breaking — a stale model ID leaked into production source, a skill body, or a template; stop and investigate. Excluded by design: `__tests__/` fixtures legitimately pin literal IDs, and this skill's own `bump-models/SKILL.md` names `claude-opus-4-*` / `claude-sonnet-4-*` as glob patterns.
 
 ## 4. Verify
 
