@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { HookInput } from "@anthropic-ai/claude-agent-sdk";
-import { blockPlanPolish, blockWorktreeInstall, isWorktreePath } from "../step-runner.js";
+import { blockPlanPolish, blockWorktreeInstall, composeSystemAppend, isWorktreePath } from "../step-runner.js";
 
 function bash(command: string): HookInput {
 	return { tool_name: "Bash", tool_input: { command } } as unknown as HookInput;
@@ -113,5 +113,48 @@ describe("isWorktreePath", () => {
 
 	it("returns true for distinct paths with matching prefix", () => {
 		assert.equal(isWorktreePath("/home/user/my-repo-extra", "/home/user/my-repo"), true);
+	});
+});
+
+describe("composeSystemAppend", () => {
+	const base = { cwd: "/tmp/wt", repo: "/home/user/repo" };
+
+	it("includes the autonomy block in every combination", () => {
+		for (const isWorktree of [true, false])
+			for (const planBlockActive of [true, false]) {
+				const out = composeSystemAppend({ ...base, isWorktree, planBlockActive });
+				assert.match(out, /## Operating autonomously/);
+				assert.match(out, /operating autonomously inside a headless pipeline/);
+				assert.notEqual(out.trim(), "");
+			}
+	});
+
+	it("emits only the autonomy block when neither worktree nor plan applies", () => {
+		const out = composeSystemAppend({ ...base, isWorktree: false, planBlockActive: false });
+		assert.match(out, /## Operating autonomously/);
+		assert.doesNotMatch(out, /## CRITICAL/);
+	});
+
+	it("layers the worktree block after autonomy, interpolating cwd and repo", () => {
+		const out = composeSystemAppend({ ...base, isWorktree: true, planBlockActive: false });
+		assert.match(out, /## CRITICAL: Worktree isolation/);
+		assert.match(out, /git worktree at: \/tmp\/wt/);
+		assert.match(out, /main repository is at: \/home\/user\/repo/);
+		assert.ok(out.indexOf("## Operating autonomously") < out.indexOf("## CRITICAL"), "autonomy precedes CRITICAL");
+	});
+
+	it("layers the plan block when planBlockActive", () => {
+		const out = composeSystemAppend({ ...base, isWorktree: false, planBlockActive: true });
+		assert.match(out, /## CRITICAL: Do not edit the plan/);
+		assert.doesNotMatch(out, /## CRITICAL: Worktree isolation/);
+	});
+
+	it("composes all three blocks in order when worktree and plan both apply", () => {
+		const out = composeSystemAppend({ ...base, isWorktree: true, planBlockActive: true });
+		const iAuto = out.indexOf("## Operating autonomously");
+		const iWt = out.indexOf("## CRITICAL: Worktree isolation");
+		const iPlan = out.indexOf("## CRITICAL: Do not edit the plan");
+		assert.ok(iAuto >= 0 && iWt >= 0 && iPlan >= 0);
+		assert.ok(iAuto < iWt && iWt < iPlan, "order: autonomy → worktree → plan");
 	});
 });
