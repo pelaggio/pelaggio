@@ -6,3 +6,5 @@ roadmap:
     plan-location: issue-comment
 ship:
   target: pull-request
+budgets:
+  shakedown-plan: 8
