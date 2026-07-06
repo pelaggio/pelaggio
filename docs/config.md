@@ -65,12 +65,12 @@ turn-limits:                    # SDK turn cap per step
   shakedown-plan: 60
   implement: 200
   shakedown-code: 150
-  ship: 40
+  ship: 60
   shipwreck: 40
 
 effort:                         # "low" | "medium" | "high" | "xhigh" | "max"
-  pick: medium                  # xhigh is Opus 4.7/4.8-only; falls back to high on other models.
-  plan: xhigh                   # Opus 4.8 defaults to `high` when effort is omitted; max is Opus 4.6/4.7/4.8-only.
+  pick: medium                  # xhigh needs Opus 4.7/4.8 or Sonnet 5; falls back to high on models without it.
+  plan: xhigh                   # Opus 4.8 defaults to `high` when effort is omitted; max needs Opus 4.6/4.7/4.8 or Sonnet 5.
   shakedown-plan: xhigh
   implement: xhigh
   shakedown-code: xhigh
@@ -80,21 +80,21 @@ effort:                         # "low" | "medium" | "high" | "xhigh" | "max"
 models:
   profiles:
     standard:
-      pick: claude-sonnet-4-6
+      pick: claude-sonnet-5
       plan: claude-opus-4-8
       shakedown-plan: claude-opus-4-8
       implement: claude-opus-4-8
       shakedown-code: claude-opus-4-8
-      ship: claude-sonnet-4-6
-      shipwreck: claude-sonnet-4-6
+      ship: claude-opus-4-8
+      shipwreck: claude-sonnet-5
     quick:
-      pick: claude-sonnet-4-6
-      plan: claude-sonnet-4-6
-      shakedown-plan: claude-sonnet-4-6
-      implement: claude-sonnet-4-6
-      shakedown-code: claude-sonnet-4-6
-      ship: claude-sonnet-4-6
-      shipwreck: claude-sonnet-4-6
+      pick: claude-sonnet-5
+      plan: claude-sonnet-5
+      shakedown-plan: claude-sonnet-5
+      implement: claude-sonnet-5
+      shakedown-code: claude-sonnet-5
+      ship: claude-sonnet-5
+      shipwreck: claude-sonnet-5
     # Additional named profiles (e.g. `thrifty`) can be added here.
     # A profile may also carry its own budgets / effort / turn-limits, which
     # override the global step values above for that profile only (sparse —
