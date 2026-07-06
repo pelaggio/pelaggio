@@ -216,6 +216,45 @@ export function parseVerdict(text: string): "APPROVE" | "REVISE" | "RETHINK" {
 	return reviewEngaged(text) ? "APPROVE" : "RETHINK";
 }
 
+// ── Blocked / stalled-ask parsing ──────────────────────────────────────
+
+/**
+ * A step that cannot finish ends its final message with a trailing sentinel line
+ * `BLOCKED: <reason>` (see `AUTONOMY_APPEND`). Parsed out-of-band because the SDK
+ * reports a polite stall as `subtype: "success"`. Trailing-line semantics (last
+ * non-blank line must match) so a mid-text mention — "is this BLOCKED: no, …" —
+ * followed by a normal finish is NOT a false positive. Bold markers tolerated,
+ * matching `parseVerdict`. `BLOCKED` stays uppercase/case-sensitive so prose
+ * ("the task is blocked") never matches. Returns the reason, or null when not blocked.
+ */
+export function parseBlockedReason(text: string): string | null {
+	const lines = text.split("\n");
+	let i = lines.length - 1;
+	while (i >= 0 && lines[i].trim() === "") i--;
+	if (i < 0) return null;
+	const m = lines[i].match(/^\s*\*{0,2}BLOCKED:\*{0,2}\s*(.*\S)?\s*$/);
+	if (!m) return null;
+	return m[1]?.trim() || "(no reason given)";
+}
+
+// Offer-to-continue phrasings that read as a stall even without a trailing `?`.
+const STALLED_ASK_PHRASING = /\b(want me to|shall i|should i|let me know|would you like|do you want)\b/i;
+
+/**
+ * Observe-only soft heuristic: a final message that ends in a question or an
+ * offer-to-continue without the `BLOCKED:` sentinel. Never fails a step —
+ * legitimate final messages can contain questions — it only feeds the
+ * `stalled_ask` telemetry, so false positives are acceptable.
+ */
+export function looksLikeStalledAsk(text: string): boolean {
+	const lines = text.split("\n");
+	let i = lines.length - 1;
+	while (i >= 0 && lines[i].trim() === "") i--;
+	if (i < 0) return false;
+	const last = lines[i].trim();
+	return last.endsWith("?") || STALLED_ASK_PHRASING.test(last);
+}
+
 // ── Git checkpointing ──────────────────────────────────────────────────
 
 export function checkpoint(cwd: string, label: string): boolean {

@@ -3,7 +3,7 @@ import { join, resolve } from "node:path";
 import type { HookInput, HookJSONOutput, SDKAssistantMessage, SDKRateLimitEvent, SDKResultMessage, SDKSystemMessage } from "@anthropic-ai/claude-agent-sdk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { CONFIG, REPO, resolveStepSettings } from "./config.js";
-import { classifyStepError, isRefusal, parseResetTime } from "./helpers.js";
+import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseResetTime } from "./helpers.js";
 import { MUTATING_TOOLS, toolBrief } from "./tui.js";
 import type { ParkSignal, Step, StepEmit, StepResult, TokenUsage } from "./types.js";
 import { ensureWorktreeDeps } from "./worktree-deps.js";
@@ -40,6 +40,7 @@ const AUTONOMY_APPEND = [
 	"",
 	"## Operating autonomously",
 	"You are operating autonomously inside a headless pipeline. Nobody is watching in real time and nobody can answer questions mid-step, so ending your turn with a question stalls the step. For minor choices (naming, formatting, defaults, which of two equivalent approaches), pick a reasonable option and note it in your final message. End your turn only when the step is complete or you are genuinely blocked — and if blocked, state precisely what is missing rather than asking permission to proceed.",
+	"If you genuinely cannot complete the step, make the final line of your reply exactly `BLOCKED: <one-line reason — what is missing>` with nothing after it, instead of asking a question or offering options. Completing the step normally needs no sentinel.",
 ].join("\n");
 
 /** True when `cwd` is a sibling worktree, not the main repo. Exported for testing. */
@@ -281,6 +282,7 @@ export async function runStep(name: Step, prompt: string, opts: RunStepOpts, emi
 	let resultTurns = 0;
 	let ok = true;
 	let subtype = "unknown";
+	let stalledAsk = false;
 	let lastToolName = "";
 	let tokens: TokenUsage | undefined;
 
@@ -416,6 +418,23 @@ export async function runStep(name: Step, prompt: string, opts: RunStepOpts, emi
 		text = `Edit loop detected: ${loopFile} edited ${editCounts.get(loopFile)} times`;
 	}
 
+	// Structured stall contract (AUTONOMY_APPEND): a step that self-reports it can't
+	// finish ends with a trailing `BLOCKED: <reason>` line. The SDK reports this as
+	// subtype:"success", so reclassify out-of-band — but only when the step otherwise
+	// succeeded (edit-loop / refusal / errors already own `ok` + `subtype`).
+	if (ok) {
+		const blockedReason = parseBlockedReason(text);
+		if (blockedReason) {
+			ok = false;
+			subtype = "blocked";
+			text = blockedReason;
+			emit({ type: "blocked", reason: blockedReason });
+		} else if (looksLikeStalledAsk(text)) {
+			stalledAsk = true;
+			emit({ type: "stalled_ask", tail: text.replace(/\s+$/, "").slice(-160) });
+		}
+	}
+
 	// Backfill resetsAt from error/result text when the rate_limit_event didn't provide it
 	if (opts.parkSignal.parked && !opts.parkSignal.resetsAt) {
 		const parsed = parseResetTime(text);
@@ -440,5 +459,6 @@ export async function runStep(name: Step, prompt: string, opts: RunStepOpts, emi
 		...(tokens ? { tokens } : {}),
 		...(toolCountsObj ? { toolCounts: toolCountsObj } : {}),
 		...(outputTail ? { outputTail } : {}),
+		...(stalledAsk ? { stalledAsk: true } : {}),
 	};
 }

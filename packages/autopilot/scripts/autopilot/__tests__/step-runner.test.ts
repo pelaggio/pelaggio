@@ -129,6 +129,15 @@ describe("composeSystemAppend", () => {
 			}
 	});
 
+	it("includes the BLOCKED output contract in every combination", () => {
+		for (const isWorktree of [true, false])
+			for (const planBlockActive of [true, false]) {
+				const out = composeSystemAppend({ ...base, isWorktree, planBlockActive });
+				assert.match(out, /BLOCKED:/, "autonomy append must document the BLOCKED sentinel");
+				assert.match(out, /final line/, "contract must specify the sentinel is the final line");
+			}
+	});
+
 	it("emits only the autonomy block when neither worktree nor plan applies", () => {
 		const out = composeSystemAppend({ ...base, isWorktree: false, planBlockActive: false });
 		assert.match(out, /## Operating autonomously/);
