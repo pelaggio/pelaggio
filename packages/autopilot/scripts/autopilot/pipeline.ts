@@ -558,9 +558,12 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		// /shipwreck, which re-runs verification with its own budget and can roll
 		// the merge back. (There is no consumer-agnostic verification command the
 		// tail could run itself — verification is agent-delegated via `_rubric.md`.)
-		const canTail = merged && ship.ok;
-		if (canTail) {
-			log("merge landed and verified — running deterministic bookkeeping tail");
+		// DRY the two identical "run the deterministic tail → incomplete on !ok, else
+		// completed" call sites (the canTail happy path and the verified-shipwreck
+		// recovery path). `cost` is a `let` captured by reference, so each call reads
+		// the up-to-date accumulated cost (ship-only for canTail; ship+wreck here).
+		const runTail = async (intro: string): Promise<CycleResult> => {
+			log(intro);
 			const bk = await runShipBookkeeping({ mainRepo, worktree: worktree!, branch: preShipState.branch, itemId: itemId! }, { roadmap, log });
 			if (!bk.ok) {
 				// A blocking bookkeeping failure (real mark-done/archive error, push
@@ -571,7 +574,10 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				return finish({ itemId, completed: false, cost, verdict, error: bk.error ?? "ship bookkeeping failed" });
 			}
 			return finish({ itemId, completed: true, cost, verdict });
-		}
+		};
+
+		const canTail = merged && ship.ok;
+		if (canTail) return runTail("merge landed and verified — running deterministic bookkeeping tail");
 		// Not merged (ghost-ship / clean failure) OR merged-but-unverified (agent
 		// ran out of turns / hard-failed after merging) → /shipwreck, unless
 		// rate-limited / parked (those fall through to interpretResult, preserving
@@ -580,15 +586,31 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			const reason = merged ? "merge landed but ship did not complete verification" : ship.ok ? "ghost-ship" : "ship failed";
 			log(`${reason} — attempting /shipwreck recovery...`);
 			shipwrecked = true;
-			const wreck = await step("shipwreck", expandSkill("shipwreck", itemId!), mainRepo);
+			// Hand shipwreck the same autopilot/direct-push signal /ship gets so it
+			// stops at its hand-off gate (finish + verify the merge, then STOP) instead
+			// of running mark-done/archive/push/cleanup itself.
+			const wreck = await step("shipwreck", expandSkill("shipwreck", `${itemId!} autopilot --target=direct-push`), mainRepo);
 			cost += wreck.cost;
-			return finish({
-				itemId,
-				completed: wreck.ok,
-				cost,
-				verdict,
-				error: wreck.ok ? undefined : merged ? "ship merged but post-merge verification/recovery failed" : ship.ok ? "ship claimed success but main did not advance (recovery also failed)" : "ship failed (recovery also failed)",
-			});
+
+			// Tail runs ONLY on a shipwreck that actually LANDED the merge — mirrors the
+			// canTail gate (`merged && ship.ok`). verifyShipLanded fails closed, so a
+			// shipwreck reporting ok without advancing main (e.g. diagnosed "unknown")
+			// never reaches the destructive push/branch-delete steps.
+			const recoveredMerge = wreck.ok && verifyShipLanded(mainRepo, preShipState.mainSha, preShipState.featSha);
+			if (!recoveredMerge) {
+				return finish({
+					itemId,
+					completed: false,
+					cost,
+					verdict,
+					error: merged ? "ship merged but post-merge verification/recovery failed" : ship.ok ? "ship claimed success but main did not advance (recovery also failed)" : "ship failed (recovery also failed)",
+				});
+			}
+
+			// Shipwreck recovered + verified the merge and handed off at its gate — run
+			// the SAME deterministic tail the canTail path runs (issue #30: the #28
+			// failure mode had merely relocated to this recovery path).
+			return runTail("shipwreck recovered the merge — running deterministic bookkeeping tail");
 		}
 	}
 
