@@ -1,13 +1,40 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { execSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { loadConfig } from "../config.js";
 import { runPipeline } from "../pipeline.js";
+import type { ShipBookkeepingCtx, ShipBookkeepingResult } from "../ship/index.js";
 import { getShipTarget, isShipTargetName, SHIP_TARGET_NAMES } from "../ship/index.js";
 import type { Flags, PipelineOpts, ShipTargetName, StepResult } from "../types.js";
-import { createMockRunStep, makeLiveStatus, makeParkSignal, makeTempGitRepo } from "./mocks.js";
+import { allCommitMessages, createMockRunStep, makeLiveStatus, makeParkSignal, makeTempGitRepo, makeTempRepoWithParent } from "./mocks.js";
+
+// A real mainRepo + sibling worktree on `feat/tool-99`, mirroring production layout.
+// Direct-push integration tests MUST inject this as `mainRepo` — the pipeline's
+// pre-ship recover guard commits to mainRepo, and defaulting to the real REPO
+// would mutate the working tree.
+function setupShipRepo(): { repo: string; worktree: string; mergeIntoMain: () => void } {
+	const { parent, repo } = makeTempRepoWithParent();
+	const worktree = join(parent, "wt-tool-99");
+	execSync(`git worktree add -q -b feat/tool-99 ${JSON.stringify(worktree)} main`, { cwd: repo });
+	// Feature branch gets a commit (the mock implement writes impl.txt); merging it
+	// advances main, which is what `verifyShipLanded` keys on.
+	const mergeIntoMain = (): void => {
+		execSync("git merge feat/tool-99 --no-edit -q", { cwd: repo });
+	};
+	return { repo, worktree, mergeIntoMain };
+}
+
+function makeBkSpy(over: Partial<ShipBookkeepingResult> = {}): { fn: NonNullable<Parameters<typeof runPipeline>[3]["runShipBookkeeping"]>; calls: ShipBookkeepingCtx[] } {
+	const calls: ShipBookkeepingCtx[] = [];
+	const fn = async (ctx: ShipBookkeepingCtx): Promise<ShipBookkeepingResult> => {
+		calls.push(ctx);
+		return { recovered: false, markedDone: true, archived: true, pushed: true, cleanedUp: true, ok: true, ...over };
+	};
+	return { fn, calls };
+}
 
 const PR_URL = "https://github.com/acme/widget/pull/42";
 
@@ -149,30 +176,158 @@ describe("auto-merge-pr adapter", () => {
 // ── Pipeline integration ─────────────────────────────────────────────
 
 describe("runPipeline — ship target dispatch", () => {
-	it("direct-push: ship prompt contains mode signature, no awaitingMerge", async () => {
-		const worktree = makeTempGitRepo();
+	it("direct-push: merge landed → deterministic tail runs, no awaitingMerge, no shipwreck", async () => {
+		const { repo, worktree, mergeIntoMain } = setupShipRepo();
 		const parkSignal = makeParkSignal();
+		const bk = makeBkSpy();
 		const { runStep, calls } = createMockRunStep(
 			{
 				plan: { ok: true },
 				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
 				implement: { ok: true, writes: { "impl.txt": "x" } },
 				"shakedown-code": { ok: true },
-				ship: { ok: true, text: "merged and pushed" },
+				ship: { ok: true, text: "ship-merged: TOOL-99", sideEffect: () => mergeIntoMain() },
 			},
 			parkSignal,
 		);
 		const result = await runPipeline(baseOpts(worktree, "direct-push"), parkSignal, baseFlags, {
 			runStep,
+			mainRepo: repo,
 			listWorktrees: () => [],
 			appendLog: () => {},
+			runShipBookkeeping: bk.fn,
 		});
 		assert.equal(result.completed, true);
 		assert.equal(result.awaitingMerge, undefined);
 		assert.equal(result.prUrl, undefined);
+		// Tail invoked once with the resolved ctx.
+		assert.equal(bk.calls.length, 1);
+		assert.deepEqual(bk.calls[0], { mainRepo: repo, worktree, branch: "feat/tool-99", itemId: "TOOL-99" });
+		const stepsRun = calls.map((c) => c.step);
+		assert.ok(!stepsRun.includes("shipwreck"), `shipwreck should not run; got ${stepsRun.join(",")}`);
 		const shipCall = calls.find((c) => c.step === "ship");
 		assert.ok(shipCall);
 		assert.match(shipCall.prompt, /direct-push/);
+	});
+
+	it("direct-push: merged but turn-exhausted (error_max_turns) is UNVERIFIED → shipwreck, tail NOT run (finding #1)", async () => {
+		const { repo, worktree, mergeIntoMain } = setupShipRepo();
+		const parkSignal = makeParkSignal();
+		const bk = makeBkSpy();
+		const { runStep, calls } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				// Merge landed (step 4) but the agent ran out of turns before completing
+				// post-merge verification (step 5) — the merge is unverified, so the
+				// deterministic tail must NOT blindly push it.
+				ship: { ok: false, subtype: "error_max_turns", text: "out of turns", sideEffect: () => mergeIntoMain() },
+				shipwreck: { ok: true },
+			},
+			parkSignal,
+		);
+		const result = await runPipeline(baseOpts(worktree, "direct-push"), parkSignal, baseFlags, {
+			runStep,
+			mainRepo: repo,
+			listWorktrees: () => [],
+			appendLog: () => {},
+			runShipBookkeeping: bk.fn,
+		});
+		assert.equal(bk.calls.length, 0, "tail must not run on an unverified (turn-exhausted) merge");
+		assert.ok(calls.map((c) => c.step).includes("shipwreck"), "shipwreck must assess the unverified merge");
+		assert.equal(result.completed, true);
+	});
+
+	it("direct-push: merge verified but bookkeeping fails (ok:false) → completed:false with error, no shipwreck (finding #3)", async () => {
+		const { repo, worktree, mergeIntoMain } = setupShipRepo();
+		const parkSignal = makeParkSignal();
+		// Tail ran but the push failed — local main holds the merge, origin did not.
+		const bk = makeBkSpy({ ok: false, pushed: false, cleanedUp: false, error: "push failed after pull + retry — merge is on local main" });
+		const { runStep, calls } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				ship: { ok: true, text: "ship-merged: TOOL-99", sideEffect: () => mergeIntoMain() },
+			},
+			parkSignal,
+		);
+		const result = await runPipeline(baseOpts(worktree, "direct-push"), parkSignal, baseFlags, {
+			runStep,
+			mainRepo: repo,
+			listWorktrees: () => [],
+			appendLog: () => {},
+			runShipBookkeeping: bk.fn,
+		});
+		assert.equal(bk.calls.length, 1);
+		assert.equal(result.completed, false, "a failed push must not report the cycle as shipped");
+		assert.match(result.error ?? "", /push failed/);
+		assert.ok(!calls.map((c) => c.step).includes("shipwreck"), "a push failure is surfaced, not routed to shipwreck");
+	});
+
+	it("direct-push: merged but agent hard-failed (error) → tail NOT run, shipwreck runs", async () => {
+		const { repo, worktree, mergeIntoMain } = setupShipRepo();
+		const parkSignal = makeParkSignal();
+		const bk = makeBkSpy();
+		const { runStep, calls } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				// Merge landed but the agent flagged a genuine post-merge regression.
+				ship: { ok: false, subtype: "error", text: "post-merge tests broke", sideEffect: () => mergeIntoMain() },
+				shipwreck: { ok: true },
+			},
+			parkSignal,
+		);
+		const result = await runPipeline(baseOpts(worktree, "direct-push"), parkSignal, baseFlags, {
+			runStep,
+			mainRepo: repo,
+			listWorktrees: () => [],
+			appendLog: () => {},
+			runShipBookkeeping: bk.fn,
+		});
+		assert.equal(bk.calls.length, 0, "blind push must be gated — tail must not run on a hard post-merge failure");
+		const stepsRun = calls.map((c) => c.step);
+		assert.ok(stepsRun.includes("shipwreck"), `shipwreck should run; got ${stepsRun.join(",")}`);
+		assert.equal(result.completed, true);
+	});
+
+	it("direct-push: pre-ship dirty MAIN_REPO is recovered as a commit, not discarded (acceptance #4)", async () => {
+		const { repo, worktree, mergeIntoMain } = setupShipRepo();
+		const parkSignal = makeParkSignal();
+		const bk = makeBkSpy();
+		// A prior cycle left an uncommitted doc change in MAIN_REPO.
+		writeFileSync(join(repo, "deferred.md"), "deferred create-item that must survive");
+		const { runStep } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				ship: { ok: true, text: "ship-merged: TOOL-99", sideEffect: () => mergeIntoMain() },
+			},
+			parkSignal,
+		);
+		const result = await runPipeline(baseOpts(worktree, "direct-push"), parkSignal, baseFlags, {
+			runStep,
+			mainRepo: repo,
+			listWorktrees: () => [],
+			appendLog: () => {},
+			runShipBookkeeping: bk.fn,
+		});
+		assert.equal(result.completed, true);
+		// The stray file survived — content preserved and committed (never discarded).
+		assert.ok(existsSync(join(repo, "deferred.md")));
+		assert.equal(readFileSync(join(repo, "deferred.md"), "utf-8"), "deferred create-item that must survive");
+		assert.ok(
+			allCommitMessages(repo).some((m) => /recover uncommitted bookkeeping \(TOOL-99\)/.test(m)),
+			`expected a recover commit; got:\n${allCommitMessages(repo).join("\n")}`,
+		);
 	});
 
 	it("pull-request: prompt mentions gh pr create, result marks awaitingMerge + prUrl", async () => {
@@ -254,15 +409,17 @@ describe("runPipeline — shipwreck skipped for PR modes", () => {
 		assert.ok(!stepsRun.includes("shipwreck"), `shipwreck should not run; got ${stepsRun.join(",")}`);
 	});
 
-	it("direct-push: ship fails, shipwreck IS invoked", async () => {
-		const worktree = makeTempGitRepo();
+	it("direct-push: ship fails and main never advanced → shipwreck IS invoked, tail NOT run", async () => {
+		const { repo, worktree } = setupShipRepo();
 		const parkSignal = makeParkSignal();
+		const bk = makeBkSpy();
 		const { runStep, calls } = createMockRunStep(
 			{
 				plan: { ok: true },
 				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
 				implement: { ok: true, writes: { "impl.txt": "x" } },
 				"shakedown-code": { ok: true },
+				// No sideEffect — main never advances, so the merge did not land.
 				ship: { ok: false, subtype: "error", text: "merge failed" },
 				shipwreck: { ok: true },
 			},
@@ -270,11 +427,14 @@ describe("runPipeline — shipwreck skipped for PR modes", () => {
 		);
 		const result = await runPipeline(baseOpts(worktree, "direct-push"), parkSignal, baseFlags, {
 			runStep,
+			mainRepo: repo,
 			listWorktrees: () => [],
 			appendLog: () => {},
+			runShipBookkeeping: bk.fn,
 		});
 		const stepsRun = calls.map((c) => c.step);
 		assert.ok(stepsRun.includes("shipwreck"), `shipwreck should run; got ${stepsRun.join(",")}`);
+		assert.equal(bk.calls.length, 0);
 		assert.equal(result.completed, true);
 	});
 });

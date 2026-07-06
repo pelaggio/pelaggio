@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { after, before, describe, it, mock } from "node:test";
 import { WORKTREE_PREFIX } from "../config.js";
 import { runOrchestrator, runPipeline } from "../pipeline.js";
+import type { ShipBookkeepingResult } from "../ship/index.js";
 import { getShipTarget } from "../ship/index.js";
 import type { Flags, ParkSignal, PipelineOpts } from "../types.js";
 import { allCommitMessages, createMockRunPipeline, createMockRunStep, makeLiveStatus, makeMockRoadmap, makeParkSignal, makeTempGitRepo, makeTempRepoWithParent } from "./mocks.js";
@@ -46,6 +47,19 @@ function baseOpts(worktree: string): PipelineOpts {
 	};
 }
 
+// Stub the direct-push bookkeeping tail: these pipeline tests assert on pick /
+// implement / ship control flow, not on the tail (which is unit-tested in
+// ship.test.ts + ship-bookkeeping.test.ts). Left un-stubbed, the real tail would
+// remove the very worktree these tests inspect and mark-done against the real REPO.
+const noopBookkeeping = async (): Promise<ShipBookkeepingResult> => ({
+	recovered: false,
+	markedDone: true,
+	archived: true,
+	pushed: true,
+	cleanedUp: true,
+	ok: true,
+});
+
 describe("runPipeline — happy path", () => {
 	it("runs plan → shakedown-plan → implement → shakedown-code → ship with APPROVE verdict", async () => {
 		const worktree = makeTempGitRepo();
@@ -76,6 +90,7 @@ describe("runPipeline — happy path", () => {
 			appendLog: (e) => {
 				logs.push(e);
 			},
+			runShipBookkeeping: noopBookkeeping,
 		});
 
 		assert.equal(result.completed, true);
@@ -166,6 +181,7 @@ describe("runPipeline — implement turn-limit retry", () => {
 			appendLog: (e) => {
 				logs.push(e);
 			},
+			runShipBookkeeping: noopBookkeeping,
 		});
 
 		assert.equal(result.completed, true);
@@ -435,6 +451,7 @@ describe("runPipeline — RoadmapSource injection", () => {
 			mainRepo: worktree,
 			listWorktrees: () => [],
 			appendLog: () => {},
+			runShipBookkeeping: noopBookkeeping,
 		});
 
 		assert.equal(result.completed, true);
@@ -541,6 +558,7 @@ describe("runPipeline — pick step", () => {
 			appendLog: (e) => {
 				logs.push(e);
 			},
+			runShipBookkeeping: noopBookkeeping,
 		});
 
 		assert.equal(result.completed, true);
@@ -707,6 +725,7 @@ describe("runPipeline — pick step", () => {
 			appendLog: (e) => {
 				logs.push(e);
 			},
+			runShipBookkeeping: noopBookkeeping,
 		});
 
 		assert.equal(result.itemId, "COMP-11C-II");
@@ -760,6 +779,7 @@ describe("runPipeline — pick step", () => {
 			appendLog: (e) => {
 				logs.push(e);
 			},
+			runShipBookkeeping: noopBookkeeping,
 		});
 
 		assert.ok(listCalls >= 1);
@@ -840,6 +860,7 @@ describe("runPipeline — pick step", () => {
 			appendLog: (e) => {
 				logs.push(e);
 			},
+			runShipBookkeeping: noopBookkeeping,
 		});
 
 		assert.equal(result.completed, true, `expected prefix fallback to let pipeline complete; got error=${result.error}`);

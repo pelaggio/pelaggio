@@ -24,7 +24,7 @@ import {
 	verifyShipLanded,
 } from "./helpers.js";
 import { getRoadmapSource, type RoadmapSource } from "./roadmap/index.js";
-import { getShipTarget, isShipTargetName, SHIP_TARGET_NAMES } from "./ship/index.js";
+import { commitStrayBookkeeping, getShipTarget, isShipTargetName, runShipBookkeeping as runShipBookkeepingDefault, SHIP_TARGET_NAMES } from "./ship/index.js";
 import { runStep as runStepDefault } from "./step-runner.js";
 import { A, createStepRenderer, fmtElapsed, LiveStatus, StatusBar, TUI_ENABLED } from "./tui.js";
 import type { CycleResult, CycleStatus, Flags, ParkSignal, PipelineOpts, Step, StepLog, StepResult } from "./types.js";
@@ -43,6 +43,8 @@ export interface PipelineDeps {
 	resolveWorktree?: typeof resolveWorktree;
 	/** Roadmap source adapter. Defaults to one constructed from `ROADMAP_SOURCE` + `REPO`. */
 	roadmap?: RoadmapSource;
+	/** Deterministic direct-push bookkeeping tail. Injectable for testing the merged-path branch with a spy. */
+	runShipBookkeeping?: typeof runShipBookkeepingDefault;
 }
 
 export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, flags: Flags, deps: PipelineDeps = {}): Promise<CycleResult> {
@@ -52,6 +54,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	const mainRepo = deps.mainRepo ?? REPO;
 	const _resolveWorktree = deps.resolveWorktree ?? resolveWorktree;
 	const roadmap = deps.roadmap ?? getRoadmapSource(ROADMAP_SOURCE, { repo: REPO, github: ROADMAP_GITHUB, linear: ROADMAP_LINEAR });
+	const runShipBookkeeping = deps.runShipBookkeeping ?? runShipBookkeepingDefault;
 	let cost = 0;
 	let profile = "standard";
 	const steps: StepLog[] = [];
@@ -515,7 +518,16 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	log(`shipping...${targetSuffix}`);
 	const shipPrompt = `${expandSkill("ship", `autopilot --target=${target.name}`)}\n\n${target.buildPrompt({ itemId: itemId!, worktree: worktree! })}`;
 
-	// Capture pre-ship git state for ghost-ship verification (direct-push only).
+	// Direct-push only: the pipeline owns everything past the merge. Recover any
+	// stray MAIN_REPO changes as a commit *before* the agent runs so the merge
+	// never faces a dirty tree and never has cause to discard uncommitted work
+	// (a prior cycle's deferred create-item, pending bookkeeping, etc.). Never
+	// discards — see commitStrayBookkeeping.
+	if (!opts.dryRun && target.name === "direct-push") {
+		commitStrayBookkeeping(mainRepo, itemId!, log);
+	}
+
+	// Capture pre-ship git state for merge detection (direct-push only).
 	const preShipState = !opts.dryRun && target.name === "direct-push" ? captureShipState(mainRepo, worktree!) : null;
 
 	const ship = await step("ship", shipPrompt, worktree!);
@@ -530,31 +542,58 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	}
 	if (ship.subtype === "blocked") return finish({ itemId, completed: false, cost, verdict, error: `ship blocked: ${ship.text}` });
 
-	// Ghost-ship check: did main actually advance after a reported-ok direct-push?
-	let ghostShip = false;
-	if (ship.ok && preShipState && !opts.dryRun) {
-		if (!verifyShipLanded(mainRepo, preShipState.mainSha, preShipState.featSha)) {
-			ghostShip = true;
-			log(`⚠ ghost-ship: ship reported ok but main did not advance — output tail: ${ship.text.slice(-300)}`);
+	// Direct-push: the agent's job ended at the merge. Detect whether it landed
+	// on local `main`, then either run the deterministic bookkeeping tail (the
+	// pipeline owns mark-done / archive / push / cleanup) or route to /shipwreck.
+	// PR modes never merge in-session, so they skip this and fall through to
+	// interpretResult exactly as before.
+	if (target.name === "direct-push" && !opts.dryRun && preShipState) {
+		const merged = verifyShipLanded(mainRepo, preShipState.mainSha, preShipState.featSha);
+		// The deterministic tail runs ONLY on a cleanly-verified merge. `ship.ok`
+		// means the agent completed post-merge verification (SKILL.md step 5) before
+		// reporting `ship-merged` — the merge is safe to push. A merge that landed
+		// but the agent then ran out of turns (`error_max_turns`) is potentially
+		// UNVERIFIED (the ship skill merges in step 4, before verifying in step 5),
+		// and a hard failure (`error`) flags a genuine regression — both route to
+		// /shipwreck, which re-runs verification with its own budget and can roll
+		// the merge back. (There is no consumer-agnostic verification command the
+		// tail could run itself — verification is agent-delegated via `_rubric.md`.)
+		const canTail = merged && ship.ok;
+		if (canTail) {
+			log("merge landed and verified — running deterministic bookkeeping tail");
+			const bk = await runShipBookkeeping({ mainRepo, worktree: worktree!, branch: preShipState.branch, itemId: itemId! }, { roadmap, log });
+			if (!bk.ok) {
+				// A blocking bookkeeping failure (real mark-done/archive error, push
+				// failure, or pull conflict): local main holds the merge + bookkeeping
+				// (recoverable) and the feature branch was left intact. Surface as an
+				// incomplete cycle so origin-never-got-it is visible, not reported shipped.
+				log(`⚠ bookkeeping incomplete: ${bk.error}`);
+				return finish({ itemId, completed: false, cost, verdict, error: bk.error ?? "ship bookkeeping failed" });
+			}
+			return finish({ itemId, completed: true, cost, verdict });
+		}
+		// Not merged (ghost-ship / clean failure) OR merged-but-unverified (agent
+		// ran out of turns / hard-failed after merging) → /shipwreck, unless
+		// rate-limited / parked (those fall through to interpretResult, preserving
+		// today's park semantics).
+		if (ship.subtype !== "error_rate_limit" && !parkSignal.parked) {
+			const reason = merged ? "merge landed but ship did not complete verification" : ship.ok ? "ghost-ship" : "ship failed";
+			log(`${reason} — attempting /shipwreck recovery...`);
+			shipwrecked = true;
+			const wreck = await step("shipwreck", expandSkill("shipwreck", itemId!), mainRepo);
+			cost += wreck.cost;
+			return finish({
+				itemId,
+				completed: wreck.ok,
+				cost,
+				verdict,
+				error: wreck.ok ? undefined : merged ? "ship merged but post-merge verification/recovery failed" : ship.ok ? "ship claimed success but main did not advance (recovery also failed)" : "ship failed (recovery also failed)",
+			});
 		}
 	}
 
+	// PR modes, dry-run, and direct-push rate-limit fall-through.
 	const shipResult = target.interpretResult(ship);
-
-	if ((!ship.ok || ghostShip) && ship.subtype !== "error_rate_limit" && !parkSignal.parked && target.name === "direct-push") {
-		log(ghostShip ? "ghost-ship — attempting /shipwreck recovery..." : "ship failed — attempting /shipwreck recovery...");
-		shipwrecked = true;
-		const wreck = await step("shipwreck", expandSkill("shipwreck", itemId!), mainRepo);
-		cost += wreck.cost;
-		return finish({
-			itemId,
-			completed: wreck.ok,
-			cost,
-			verdict,
-			error: wreck.ok ? undefined : ghostShip ? "ship claimed success but main did not advance (recovery also failed)" : "ship failed (recovery also failed)",
-		});
-	}
-
 	return finish({
 		itemId,
 		completed: shipResult.completed,

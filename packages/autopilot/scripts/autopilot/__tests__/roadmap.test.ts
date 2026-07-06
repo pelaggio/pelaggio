@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { describe, it } from "node:test";
@@ -178,6 +178,37 @@ describe("MarkdownRoadmap.markDone", () => {
 		const r = new MarkdownRoadmap({ repo });
 		await assert.rejects(() => r.markDone("TOOL-404"), /TOOL-404 not found/);
 	});
+
+	it("is an idempotent no-op when the item is already marked done (no throw, no new commit) — finding #4", async () => {
+		const repo = seedRepo();
+		// Row is already struck through (the shape strikethroughRoadmapRow emits).
+		seedFile(repo, "docs/roadmap-core.md", ["# Core Roadmap", "", "| Item | Depends on |", "|------|-----------|", "| ~~TOOL-9. RoadmapSource abstraction~~ | **Done** |", ""].join("\n"));
+		execSync("git add -A && git commit -q -m 'seed'", { cwd: repo });
+		const before = execSync("git rev-parse HEAD", { cwd: repo, encoding: "utf-8" }).trim();
+
+		const r = new MarkdownRoadmap({ repo });
+		await r.markDone("TOOL-9"); // must NOT throw — already done is a safe no-op
+
+		assert.equal(execSync("git status --porcelain", { cwd: repo, encoding: "utf-8" }).trim(), "", "already-done markDone leaves a clean tree");
+		assert.equal(execSync("git rev-parse HEAD", { cwd: repo, encoding: "utf-8" }).trim(), before, "no new commit for an already-done item");
+	});
+
+	it("commits only its own pathspec — an unrelated staged change is not swept in (finding #6)", async () => {
+		const repo = seedRepo();
+		seedFile(repo, "docs/roadmap-core.md", ["# Core Roadmap", "", "| Item | Depends on |", "|------|-----------|", "| TOOL-9. RoadmapSource abstraction | — |", ""].join("\n"));
+		execSync("git add -A && git commit -q -m 'seed'", { cwd: repo });
+		// An unrelated file is staged before markDone runs.
+		seedFile(repo, "unrelated.txt", "do not commit me");
+		execSync("git add unrelated.txt", { cwd: repo });
+
+		const r = new MarkdownRoadmap({ repo });
+		await r.markDone("TOOL-9");
+
+		const changed = execSync("git show --name-only --format= HEAD", { cwd: repo, encoding: "utf-8" });
+		assert.match(changed, /docs\/roadmap-core\.md/);
+		assert.doesNotMatch(changed, /unrelated\.txt/, "unrelated staged file must not be swept into the mark-done commit");
+		assert.match(execSync("git status --porcelain", { cwd: repo, encoding: "utf-8" }), /unrelated\.txt/, "unrelated staged change is preserved");
+	});
 });
 
 describe("MarkdownRoadmap.listItems / getItem", () => {
@@ -281,6 +312,40 @@ describe("MarkdownRoadmap.createItem", () => {
 		assert.ok(created.id.startsWith("COMP-"));
 		const body = readFileSync(resolve(repo, "docs/roadmap-other.md"), "utf-8");
 		assert.match(body, /COMP-2\. New other/);
+	});
+
+	it("commits its edits immediately, leaving a clean tree (bug #28 — deferred items must not linger unstaged)", async () => {
+		const repo = seedRepo();
+		seedFile(repo, "docs/roadmap-core.md", ["# Core", "", "| Item | Depends on |", "|---|---|", "| TOOL-1. First | — |", ""].join("\n"));
+		seedFile(repo, "docs/task-index.md", ["# Index", "", "## Open items", "", "| ID | Title | Deps | Plan | Roadmap |", "|----|-------|------|------|---------|", "| TOOL-1 | First | — | — | core |", ""].join("\n"));
+		execSync("git add -A && git commit -q -m seed", { cwd: repo });
+
+		const r = new MarkdownRoadmap({ repo });
+		await r.createItem({ title: "New thing", scope: "M" });
+
+		// Working tree is clean — the new item was staged + committed, not left dangling.
+		assert.equal(execSync("git status --porcelain", { cwd: repo, encoding: "utf-8" }).trim(), "");
+		const lastMsg = execSync("git log -1 --format=%s", { cwd: repo, encoding: "utf-8" }).trim();
+		assert.match(lastMsg, /docs: add roadmap item TOOL-2 — New thing/);
+		// The commit actually contains the roadmap file edit.
+		const changed = execSync("git show --name-only --format= HEAD", { cwd: repo, encoding: "utf-8" });
+		assert.match(changed, /docs\/roadmap-core\.md/);
+	});
+
+	it("commits with --no-verify so a failing pre-commit hook does not break the step (finding #6)", async () => {
+		const repo = seedRepo();
+		seedFile(repo, "docs/roadmap-core.md", ["# Core", "", "| Item | Depends on |", "|---|---|", "| TOOL-1. First | — |", ""].join("\n"));
+		execSync("git add -A && git commit -q -m seed", { cwd: repo });
+		// A pre-commit hook that always fails — would abort the commit without --no-verify.
+		const hookPath = resolve(repo, ".git", "hooks", "pre-commit");
+		mkdirSync(dirname(hookPath), { recursive: true });
+		writeFileSync(hookPath, "#!/bin/sh\nexit 1\n");
+		chmodSync(hookPath, 0o755);
+
+		const r = new MarkdownRoadmap({ repo });
+		const created = await r.createItem({ title: "New thing", scope: "M" }); // must not throw
+		assert.equal(created.id, "TOOL-2");
+		assert.equal(execSync("git status --porcelain", { cwd: repo, encoding: "utf-8" }).trim(), "", "createItem must commit despite the failing hook");
 	});
 });
 
