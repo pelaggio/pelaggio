@@ -15,6 +15,8 @@ import {
 	hasDeliverableCommits,
 	isRefusal,
 	looksLikeRefusal,
+	looksLikeStalledAsk,
+	parseBlockedReason,
 	parsePickItem,
 	parsePickResult,
 	parseResetTime,
@@ -450,6 +452,63 @@ describe("parseVerdict", () => {
 		assert.equal(parseVerdict(""), "RETHINK");
 		assert.equal(parseVerdict("I can't help with that."), "RETHINK");
 		assert.equal(parseVerdict("ok done"), "RETHINK");
+	});
+});
+
+describe("parseBlockedReason", () => {
+	it("parses a trailing BLOCKED: line into its reason", () => {
+		assert.equal(parseBlockedReason("Investigated the issue.\nBLOCKED: missing API key"), "missing API key");
+	});
+
+	it("tolerates bold markers (matching parseVerdict)", () => {
+		assert.equal(parseBlockedReason("**BLOCKED:** missing X"), "missing X");
+	});
+
+	it("parses even when trailing blank lines follow the sentinel", () => {
+		assert.equal(parseBlockedReason("BLOCKED: schema field absent\n\n  \n"), "schema field absent");
+	});
+
+	it("returns a placeholder reason for an empty BLOCKED: sentinel", () => {
+		assert.equal(parseBlockedReason("BLOCKED:"), "(no reason given)");
+	});
+
+	it("returns null for a normal final paragraph", () => {
+		assert.equal(parseBlockedReason("Implemented the feature and ran the tests. All green."), null);
+	});
+
+	it("does not fire on a mid-text mention followed by a normal finish (false-positive guard)", () => {
+		const text = "I considered whether this is BLOCKED: no, I found a workaround.\nImplemented successfully.";
+		assert.equal(parseBlockedReason(text), null);
+	});
+
+	it("is case-sensitive — lowercase blocked prose does not match", () => {
+		assert.equal(parseBlockedReason("the task is blocked: on a missing dependency"), null);
+	});
+
+	it("returns null for empty input", () => {
+		assert.equal(parseBlockedReason(""), null);
+	});
+});
+
+describe("looksLikeStalledAsk", () => {
+	it("flags a trailing question", () => {
+		assert.equal(looksLikeStalledAsk("Here is what I did.\nShall I proceed?"), true);
+	});
+
+	it("flags an offer-to-continue without a question mark", () => {
+		assert.equal(looksLikeStalledAsk("Want me to continue with the next file"), true);
+	});
+
+	it("returns false for a plain completion statement", () => {
+		assert.equal(looksLikeStalledAsk("Implemented the feature and ran the tests. All green."), false);
+	});
+
+	it("returns false for empty input", () => {
+		assert.equal(looksLikeStalledAsk(""), false);
+	});
+
+	it("returns false on a plain completion even though a BLOCKED line is the caller's precedence concern", () => {
+		assert.equal(looksLikeStalledAsk("Done. Everything is committed."), false);
 	});
 });
 

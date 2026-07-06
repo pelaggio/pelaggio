@@ -22,6 +22,8 @@ export interface StepResult {
 	tokens?: TokenUsage;
 	toolCounts?: Record<string, number>;
 	outputTail?: string;
+	/** Observe-only stall heuristic: the final message ended in a question / offer-to-continue (no `BLOCKED:` sentinel). Never fails a step. */
+	stalledAsk?: boolean;
 }
 
 export interface StepLog {
@@ -40,6 +42,8 @@ export interface StepLog {
 	toolCounts?: Record<string, number>;
 	outputTail?: string;
 	filesChanged?: string[];
+	/** Observe-only stall heuristic — the step ended in a question / offer-to-continue. Telemetry only; never fails the step. */
+	stalledAsk?: boolean;
 }
 
 // ── Log entries (read from .dev/autopilot-log.jsonl) ───────────────────
@@ -159,6 +163,8 @@ export type StepEvent =
 	| { type: "text"; content: string }
 	| { type: "edit_loop"; file: string; count: number }
 	| { type: "sdk_error"; message: string }
+	| { type: "blocked"; reason: string }
+	| { type: "stalled_ask"; tail: string }
 	| { type: "done"; ok: boolean; subtype: string; cost: number; turns: number; elapsed: number };
 
 export type StepEmit = (event: StepEvent) => void;

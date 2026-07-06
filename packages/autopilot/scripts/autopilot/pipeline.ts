@@ -132,6 +132,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			...(result.toolCounts ? { toolCounts: result.toolCounts } : {}),
 			...(result.outputTail ? { outputTail: result.outputTail } : {}),
 			...(filesChanged.length > 0 ? { filesChanged } : {}),
+			...(result.stalledAsk ? { stalledAsk: true } : {}),
 		});
 		if (opts.workerStatus) opts.workerStatus.cost += result.cost;
 		return result;
@@ -192,7 +193,10 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			cost += pick.cost;
 			pickText = pick.text + "\n" + pick.fullText;
 
-			if (!pick.ok) return finish({ itemId: null, completed: false, cost, error: "pick failed" });
+			if (!pick.ok) {
+				const err = pick.subtype === "blocked" ? `pick blocked: ${pick.text}` : "pick failed";
+				return finish({ itemId: null, completed: false, cost, error: err });
+			}
 
 			if (!opts.dryRun) {
 				const reason = parsePickResult(pickText);
@@ -278,7 +282,12 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			log("planning...");
 			const plan = await step("plan", expandSkill("plan"), worktree!);
 			cost += plan.cost;
-			if (!plan.ok) return parkExit() ?? finish({ itemId, completed: false, cost, error: "plan failed" });
+			if (!plan.ok) {
+				const parked = parkExit();
+				if (parked) return parked;
+				if (plan.subtype === "blocked") return finish({ itemId, completed: false, cost, error: `plan blocked: ${plan.text}` });
+				return finish({ itemId, completed: false, cost, error: "plan failed" });
+			}
 		}
 		const planPath = await roadmap.getItemPlan({ worktree: worktree! });
 		if (planPath) log(`plan: file://${planPath}`);
@@ -306,6 +315,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			if (shakedown.subtype === "error_rate_limit" || parkSignal.parked) {
 				return parkExit() ?? finish({ itemId, completed: false, cost, error: "shakedown-plan failed" });
 			}
+			if (shakedown.subtype === "blocked") return finish({ itemId, completed: false, cost, error: `shakedown-plan blocked: ${shakedown.text}` });
 			if (shakedown.subtype === "error_refusal") return finish({ itemId, completed: false, cost, error: "shakedown-plan refused (model declined the review)" });
 			if (shakedown.subtype !== "error_max_turns") {
 				return finish({ itemId, completed: false, cost, error: "shakedown-plan failed" });
@@ -416,6 +426,8 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				return parkExit() ?? finish({ itemId, completed: false, cost, error: "implement failed" });
 			} else if (impl.subtype === "error_refusal") {
 				return finish({ itemId, completed: false, cost, error: "implement refused (model declined the task)" });
+			} else if (impl.subtype === "blocked") {
+				return finish({ itemId, completed: false, cost, error: `implement blocked: ${impl.text}` });
 			} else if (impl.subtype !== "error_max_turns") {
 				return finish({ itemId, completed: false, cost, error: "implement failed" });
 			} else {
@@ -468,6 +480,8 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				return parkExit() ?? finish({ itemId, completed: false, cost, error: "shakedown-code failed" });
 			}
 
+			if (shakedown.subtype === "blocked") return finish({ itemId, completed: false, cost, error: `shakedown-code blocked: ${shakedown.text}` });
+
 			if (shakedown.subtype === "error_refusal") return finish({ itemId, completed: false, cost, error: "shakedown-code refused (model declined the review)" });
 
 			if (shakedown.subtype !== "error_max_turns") {
@@ -506,6 +520,15 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 
 	const ship = await step("ship", shipPrompt, worktree!);
 	cost += ship.cost;
+
+	// Park always wins (a mid-ship rate limit must still checkpoint + resume); a
+	// self-reported `blocked` ship is terminal-with-reason before /shipwreck recovery
+	// (recovery is retry-in-spirit and would mask the actionable reason).
+	{
+		const parked = parkExit();
+		if (parked) return parked;
+	}
+	if (ship.subtype === "blocked") return finish({ itemId, completed: false, cost, verdict, error: `ship blocked: ${ship.text}` });
 
 	// Ghost-ship check: did main actually advance after a reported-ok direct-push?
 	let ghostShip = false;

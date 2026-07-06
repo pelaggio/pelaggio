@@ -263,6 +263,72 @@ describe("runPipeline — refusal terminates without retry or park", () => {
 	});
 });
 
+describe("runPipeline — blocked terminates without retry or park", () => {
+	it("implement blocked → completed:false, reason surfaced, no attempt-2 retry, no park, subtype logged", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep, calls } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: false, subtype: "blocked", text: "the schema field does not exist" },
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
+			runStep,
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+		});
+
+		assert.equal(result.completed, false);
+		assert.equal(result.error, "implement blocked: the schema field does not exist");
+		const implementCalls = calls.filter((c) => c.step === "implement");
+		assert.equal(implementCalls.length, 1, `expected no implement retry; got ${implementCalls.length} calls`);
+		const stepsRun = calls.map((c) => c.step);
+		assert.ok(!stepsRun.includes("shakedown-code"), `expected no shakedown-code; got ${stepsRun.join(",")}`);
+		assert.ok(!stepsRun.includes("ship"), `expected no ship; got ${stepsRun.join(",")}`);
+		assert.equal(parkSignal.parked, false);
+		assert.equal(logs.length, 1);
+		const steps = logs[0].steps as Array<{ name: string; subtype?: string }>;
+		const implEntry = steps.find((s) => s.name === "implement");
+		assert.equal(implEntry?.subtype, "blocked", `expected implement entry subtype "blocked"; got ${JSON.stringify(implEntry)}`);
+	});
+
+	it("shakedown-plan blocked → terminates before implement, reason in error", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep, calls } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": { ok: false, subtype: "blocked", text: "rubric file is missing" },
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
+			runStep,
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+		});
+
+		assert.equal(result.completed, false);
+		assert.equal(result.error, "shakedown-plan blocked: rubric file is missing");
+		assert.deepEqual(
+			calls.map((c) => c.step),
+			["plan", "shakedown-plan"],
+		);
+		assert.equal(parkSignal.parked, false);
+	});
+});
+
 describe("runPipeline — no deliverable commits", () => {
 	it("aborts before ship when branch has only docs commits", async () => {
 		const worktree = makeTempGitRepo();
