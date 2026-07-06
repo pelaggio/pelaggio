@@ -349,11 +349,15 @@ export function hasDeliverableCommits(worktree: string): boolean {
  * Capture the state needed to verify a direct-push ship landed. Returns null
  * if either git command fails (e.g. no main branch in test env — skip check).
  */
-export function captureShipState(mainRepo: string, worktree: string): { mainSha: string; featSha: string } | null {
+export function captureShipState(mainRepo: string, worktree: string): { mainSha: string; featSha: string; branch: string } | null {
 	try {
 		const mainSha = execSync("git rev-parse main", { cwd: mainRepo, encoding: "utf-8" }).trim();
 		const featSha = execSync("git rev-parse HEAD", { cwd: worktree, encoding: "utf-8" }).trim();
-		return { mainSha, featSha };
+		// The worktree is on the feature branch at capture time (pre-merge). The
+		// pipeline-owned bookkeeping tail needs this name to clean up the branch
+		// after the merge lands.
+		const branch = execSync("git branch --show-current", { cwd: worktree, encoding: "utf-8" }).trim();
+		return { mainSha, featSha, branch };
 	} catch {
 		return null;
 	}
@@ -362,7 +366,11 @@ export function captureShipState(mainRepo: string, worktree: string): { mainSha:
 /**
  * Returns true if main advanced after a direct-push ship: either the sha
  * changed or the pre-ship feat tip is now reachable from main (fast-forward).
- * Returns true on unexpected git errors so unknown environments don't block cycles.
+ * **Fails closed** — a git error during verification returns false, so the
+ * merge is treated as *not* landed and routes to /shipwreck (which assesses the
+ * real state) rather than to a blind push. Failing open here would classify a
+ * ghost-ship-plus-git-error as merged and push it, defeating the very gate this
+ * implements.
  */
 export function verifyShipLanded(mainRepo: string, mainShaBefore: string, featShaBefore: string): boolean {
 	try {
@@ -375,7 +383,7 @@ export function verifyShipLanded(mainRepo: string, mainShaBefore: string, featSh
 			return false;
 		}
 	} catch {
-		return true;
+		return false;
 	}
 }
 

@@ -171,6 +171,24 @@ models:
 Default: `direct-push`. Precedence: `--target` CLI flag > `ship.target` yml > default.
 Invalid values fail fast at startup with the list of valid names.
 
+**`direct-push` splits the work at the merge.** In pipeline runs the `ship`
+step's job ends once the branch is squashed, merged into local `main`, and
+post-merge verification passes — it then stops (`ship-merged: <ID>`). Everything
+past the merge — recovering any stray `MAIN_REPO` changes as a commit (never
+discarded), mark-done, archive-plan, the single `git push`, and worktree/branch
+cleanup — is run by the **pipeline itself** as deterministic, zero-turn,
+idempotent code (`ship/bookkeeping.ts`), not by the budget-capped agent. This
+guarantees bookkeeping can't be dropped when the ship step runs out of turns
+after merging, and can't destroy a sibling cycle's uncommitted work. The tail
+runs only on a **verified** merge (the ship step reported success, i.e. it
+completed post-merge verification): a merge that lands but is unverified (the
+step ran out of turns) or fails post-merge verification routes to `/shipwreck`
+instead of a blind push. The tail's destructive steps (worktree/branch removal)
+are gated on mark-done + archive + push all succeeding — a real mark-done/archive
+error, a push failure, or a `git pull` conflict leaves the branch intact
+(recoverable on local `main`) and reports the cycle incomplete rather than
+shipped. Inline (human-typed) `/ship` still runs the full flow itself.
+
 In PR modes the worktree, local branch, and post-merge doc updates
 (task-index, roadmap "Recently completed", plan archive) are intentionally
 **not** touched in-session — those land after the PR merges externally.

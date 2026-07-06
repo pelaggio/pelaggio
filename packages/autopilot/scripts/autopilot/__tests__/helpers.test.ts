@@ -22,6 +22,7 @@ import {
 	parseResetTime,
 	parseVerdict,
 	parseWaitFlag,
+	verifyShipLanded,
 } from "../helpers.js";
 
 function makeFeatRepo(): string {
@@ -219,6 +220,31 @@ describe("hasDeliverableCommits", () => {
 		commitFile(dir, "src/unrelated.ts", "export const y = 2;\n", "main moved ahead");
 		execSync("git checkout -q feat/tool-99", { cwd: dir });
 		assert.equal(hasDeliverableCommits(dir), false);
+	});
+});
+
+describe("verifyShipLanded", () => {
+	it("returns true when main advanced (feat merged in)", () => {
+		const dir = makeFeatRepo();
+		commitFile(dir, "src/foo.ts", "export const x = 1;\n", "feat code");
+		const featSha = execSync("git rev-parse HEAD", { cwd: dir, encoding: "utf-8" }).trim();
+		execSync("git checkout -q main", { cwd: dir });
+		const mainBefore = execSync("git rev-parse main", { cwd: dir, encoding: "utf-8" }).trim();
+		execSync("git merge feat/tool-99 --no-edit -q", { cwd: dir });
+		assert.equal(verifyShipLanded(dir, mainBefore, featSha), true);
+	});
+
+	it("returns false when main did not advance (ghost-ship)", () => {
+		const dir = makeFeatRepo();
+		commitFile(dir, "src/foo.ts", "export const x = 1;\n", "feat code");
+		const featSha = execSync("git rev-parse HEAD", { cwd: dir, encoding: "utf-8" }).trim();
+		const mainSha = execSync("git rev-parse main", { cwd: dir, encoding: "utf-8" }).trim();
+		// main never merged the feat branch.
+		assert.equal(verifyShipLanded(dir, mainSha, featSha), false);
+	});
+
+	it("fails closed: a git error during verification returns false (routes to /shipwreck, not a blind push)", () => {
+		assert.equal(verifyShipLanded("/nonexistent/path/does/not/exist", "deadbeef", "cafebabe"), false);
 	});
 });
 
