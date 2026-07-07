@@ -225,7 +225,10 @@ describe("runOrchestrator — park-and-resume", () => {
 
 	it("exceeds --max-wait: exitCode 1, runPipeline not re-invoked", async (t) => {
 		t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
-		t.mock.method(console, "log", () => {});
+		const logs: string[] = [];
+		t.mock.method(console, "log", (...args: unknown[]) => {
+			logs.push(args.join(" "));
+		});
 		const baseNow = 1_700_000_000_000;
 		t.mock.timers.setTime(baseNow);
 
@@ -237,6 +240,10 @@ describe("runOrchestrator — park-and-resume", () => {
 		const { exitCode } = await runOrchestrator({ ...baseFlags, item: "X-1", "max-wait": "1h" }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });
 		assert.equal(exitCode, 1);
 		assert.equal(calls.length, 1);
+		assert.ok(
+			logs.some((l) => l.includes("Resume:") && l.includes("pnpm autopilot --resume X-1")),
+			`expected the --resume hint in logs; got:\n${logs.join("\n")}`,
+		);
 	});
 
 	it("weekly limit: uses 'Weekly rate limit' wording when exceeding max-wait", async (t) => {
@@ -264,7 +271,10 @@ describe("runOrchestrator — park-and-resume", () => {
 
 	it("unknown reset time (resetsAt=0): exitCode 1, runPipeline not re-invoked", async (t) => {
 		t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
-		t.mock.method(console, "log", () => {});
+		const logs: string[] = [];
+		t.mock.method(console, "log", (...args: unknown[]) => {
+			logs.push(args.join(" "));
+		});
 		const baseNow = 1_700_000_000_000;
 		t.mock.timers.setTime(baseNow);
 
@@ -276,6 +286,10 @@ describe("runOrchestrator — park-and-resume", () => {
 		const { exitCode } = await runOrchestrator({ ...baseFlags, item: "X-1" }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });
 		assert.equal(exitCode, 1);
 		assert.equal(calls.length, 1);
+		assert.ok(
+			logs.some((l) => l.includes("Resume:") && l.includes("pnpm autopilot --resume X-1")),
+			`expected the --resume hint in logs; got:\n${logs.join("\n")}`,
+		);
 	});
 });
 
@@ -299,9 +313,32 @@ describe("runOrchestrator — auto-resume config", () => {
 			`expected off-switch wording in logs; got:\n${logs.join("\n")}`,
 		);
 		assert.ok(
-			logs.some((l) => l.includes("Resume:")),
-			`expected a Resume: hand-back command in logs; got:\n${logs.join("\n")}`,
+			logs.some((l) => l.includes("Resume:") && l.includes("pnpm autopilot --resume X-1")),
+			`expected the --resume hint (not --item, which pick's worktree-exists guard refuses) in logs; got:\n${logs.join("\n")}`,
 		);
+	});
+
+	it("off-switch: multiple parked items each get their own --resume line (#56)", async (t) => {
+		const logs: string[] = [];
+		t.mock.method(console, "log", (...args: unknown[]) => {
+			logs.push(args.join(" "));
+		});
+		const baseNow = 1_700_000_000_000;
+		const { runPipeline } = createMockRunPipeline({
+			byItem: {
+				"X-1": { completed: false, cost: 0.1, error: "parked", park: { parked: true, resetsAt: baseNow + 60_000, limitType: "5h" } },
+				"X-2": { completed: false, cost: 0.1, error: "parked", park: { parked: true, resetsAt: baseNow + 60_000, limitType: "5h" } },
+			},
+		});
+		// parallel: "2" so both cycles are pulled by their own worker before either observes
+		// parkSignal.parked — with the default parallel: "1" the single worker's `if
+		// (parkSignal.parked) break;` (pipeline.ts) would stop after X-1 and X-2 would never run.
+		const { exitCode } = await runOrchestrator({ ...baseFlags, item: "X-1,X-2", parallel: "2" }, { runPipeline, park: { autoResume: false }, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });
+		assert.equal(exitCode, 1);
+		const resumeLine = logs.find((l) => l.includes("Resume:"));
+		assert.ok(resumeLine, `expected a Resume: line in logs; got:\n${logs.join("\n")}`);
+		assert.ok(resumeLine.includes("pnpm autopilot --resume X-1") && resumeLine.includes("pnpm autopilot --resume X-2"), `expected one --resume command per parked item; got:\n${resumeLine}`);
+		assert.ok(!resumeLine.includes("--item"), `--item is refused by pick's worktree-exists guard on an already-claimed id; got:\n${resumeLine}`);
 	});
 
 	it("multi-window: park→park→success resumes across two windows (3 runPipeline calls)", async (t) => {

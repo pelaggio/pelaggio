@@ -314,7 +314,7 @@ then decides whether to wait out the window and pick the parked items back up.
 behavior into a named, disableable knob rather than introducing a wait. Set
 `auto-resume: false` for interactive use where you'd rather get your prompt back
 immediately — the run prints the parked item IDs and a ready-to-paste
-`pnpm autopilot --item … ` resume command, then exits with code 1.
+`pnpm autopilot --resume <id>` command per parked item, then exits with code 1.
 
 **Multi-window.** Resuming is looped: if the resumed work re-parks in a *later*
 rate-limit window, the orchestrator waits again and resumes again, up to an

@@ -577,6 +577,13 @@ export function fmtWait(ms: number): string {
 	return `${h}h ${m}m`;
 }
 
+// `--item` on an already-claimed id is refused by pick's worktree-exists guard (#56) — the
+// working re-entry path is `--resume <id>`, one process per id. `--resume` doesn't accept a
+// list, so multiple parked items print one hint line each.
+export function formatResumeHint(ids: string[]): string {
+	return ids.map((id) => `pnpm autopilot --resume ${id}`).join("\n          ");
+}
+
 // ── Mutex ──────────────────────────────────────────────────────────────
 
 export function createMutex(): Mutex {

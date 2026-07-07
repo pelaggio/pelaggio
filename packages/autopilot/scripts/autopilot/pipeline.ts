@@ -13,6 +13,7 @@ import {
 	expandSkill,
 	filesChangedSince,
 	fmtWait,
+	formatResumeHint,
 	getHeadSha,
 	hasDeliverableCommits,
 	listWorktrees as listWorktreesDefault,
@@ -1026,7 +1027,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				console.log("");
 				console.log(`${A.yellow("⏸")} ${parkSignal.limitType} limit hit — auto-resume disabled`);
 				console.log(`  Parked: ${pending.join(", ")}`);
-				console.log(`  Resume: ${A.bold(`pnpm autopilot --item ${pending.join(",")} --verbose`)}`);
+				console.log(`  Resume: ${A.bold(formatResumeHint(pending))}`);
 				return { exitCode: 1, results };
 			}
 
@@ -1035,7 +1036,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				round++;
 				const waitMs = parkSignal.resetsAt - Date.now();
 				const isWeekly = /week/i.test(parkSignal.limitType);
-				const resumeCmd = `pnpm autopilot --item ${pending.join(",")} --verbose`;
+				const resumeCmd = formatResumeHint(pending);
 
 				// Unknown reset → never spin (checked every round, not just the first). `break`
 				// (not `return`) so we funnel through the shared teardown+summary below — a
