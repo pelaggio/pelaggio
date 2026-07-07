@@ -2,19 +2,35 @@ import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { describe, it } from "node:test";
+import { after, before, describe, it, mock } from "node:test";
 import { WORKTREE_PREFIX } from "../config.js";
 import { runOrchestrator, runPipeline } from "../pipeline.js";
+import type { ShipBookkeepingResult } from "../ship/index.js";
 import { getShipTarget } from "../ship/index.js";
 import type { Flags, ParkSignal, PipelineOpts } from "../types.js";
 import { allCommitMessages, createMockRunPipeline, createMockRunStep, makeLiveStatus, makeMockRoadmap, makeParkSignal, makeTempGitRepo, makeTempRepoWithParent } from "./mocks.js";
+
+// The pipeline under test streams progress through console.log (see log() in
+// pipeline.ts). Left unmuted, that high-volume output floods the node:test
+// runner's parent<->subprocess stdout IPC and, on CI's constrained runners,
+// deterministically triggers "Unable to deserialize cloned data due to invalid
+// or unsupported version" as the parent mis-parses the buffer. Mute console
+// output for the whole file; the one test that asserts on log content re-mocks
+// console.log locally, which still captures its own calls.
+before(() => {
+	mock.method(console, "log", () => {});
+	mock.method(console, "error", () => {});
+});
+after(() => {
+	mock.restoreAll();
+});
 
 const baseFlags: Flags = {
 	cycles: "1",
 	parallel: "1",
 	verbose: false,
 	trace: false,
-	budget: "10",
+	budget: "40",
 	"max-wait": "6h",
 	"dry-run": false,
 };
@@ -30,6 +46,19 @@ function baseOpts(worktree: string): PipelineOpts {
 		liveStatus: makeLiveStatus(),
 	};
 }
+
+// Stub the direct-push bookkeeping tail: these pipeline tests assert on pick /
+// implement / ship control flow, not on the tail (which is unit-tested in
+// ship.test.ts + ship-bookkeeping.test.ts). Left un-stubbed, the real tail would
+// remove the very worktree these tests inspect and mark-done against the real REPO.
+const noopBookkeeping = async (): Promise<ShipBookkeepingResult> => ({
+	recovered: false,
+	markedDone: true,
+	archived: true,
+	pushed: true,
+	cleanedUp: true,
+	ok: true,
+});
 
 describe("runPipeline — happy path", () => {
 	it("runs plan → shakedown-plan → implement → shakedown-code → ship with APPROVE verdict", async () => {
@@ -61,6 +90,7 @@ describe("runPipeline — happy path", () => {
 			appendLog: (e) => {
 				logs.push(e);
 			},
+			runShipBookkeeping: noopBookkeeping,
 		});
 
 		assert.equal(result.completed, true);
@@ -151,6 +181,7 @@ describe("runPipeline — implement turn-limit retry", () => {
 			appendLog: (e) => {
 				logs.push(e);
 			},
+			runShipBookkeeping: noopBookkeeping,
 		});
 
 		assert.equal(result.completed, true);
@@ -171,15 +202,231 @@ describe("runPipeline — implement turn-limit retry", () => {
 			`expected implementation continued commit; got:\n${msgs.join("\n")}`,
 		);
 
-		const steps = logs[0].steps as Array<{ name: string; attempt?: number }>;
+		const steps = logs[0].steps as Array<{ name: string; attempt?: number; retriedMaxTurns?: boolean }>;
 		const implEntries = steps.filter((s) => s.name === "implement");
 		assert.ok(
 			implEntries.some((s) => s.attempt === 2),
 			`expected implement entry with attempt=2; got ${JSON.stringify(implEntries)}`,
 		);
+		const attempt2 = implEntries.find((s) => s.attempt === 2);
+		assert.equal(attempt2?.retriedMaxTurns, true, `expected attempt-2 implement entry to mark retriedMaxTurns; got ${JSON.stringify(attempt2)}`);
+		const attempt1 = implEntries.find((s) => s.attempt === undefined || s.attempt === 1);
+		assert.ok(!attempt1?.retriedMaxTurns, `expected attempt-1 implement entry NOT to mark retriedMaxTurns; got ${JSON.stringify(attempt1)}`);
 
 		const continuePrompt = implementCalls[1]?.prompt ?? "";
 		assert.ok(continuePrompt.includes("project-relative") && continuePrompt.includes("use that absolute form"), `expected continuePrompt to carry worktree hint; got: ${continuePrompt.slice(0, 400)}`);
+	});
+});
+
+describe("runPipeline — plan turn-limit retry", () => {
+	it("retries plan after error_max_turns and succeeds on attempt 2, marking retriedMaxTurns", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep, calls } = createMockRunStep(
+			{
+				plan: [{ ok: false, subtype: "error_max_turns" }, { ok: true }],
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				ship: {
+					ok: true,
+					sideEffect: (cwd) => {
+						execSync("git checkout -q main", { cwd });
+						execSync("git merge -q --no-ff feat/tool-99", { cwd });
+						execSync("git checkout -q feat/tool-99", { cwd });
+					},
+				},
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
+			runStep,
+			mainRepo: worktree,
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+			runShipBookkeeping: noopBookkeeping,
+		});
+
+		assert.equal(result.completed, true);
+		const planCalls = calls.filter((c) => c.step === "plan");
+		assert.equal(planCalls.length, 2, `expected two plan attempts; got ${planCalls.length}`);
+		assert.deepEqual(
+			planCalls.map((c) => c.attempt),
+			[1, 2],
+		);
+
+		const steps = logs[0].steps as Array<{ name: string; attempt?: number; retriedMaxTurns?: boolean }>;
+		const planEntries = steps.filter((s) => s.name === "plan");
+		const attempt2 = planEntries.find((s) => s.attempt === 2);
+		assert.equal(attempt2?.retriedMaxTurns, true, `expected attempt-2 plan entry to carry retriedMaxTurns; got ${JSON.stringify(planEntries)}`);
+	});
+});
+
+describe("runPipeline — budget guard skips turn-limit retry", () => {
+	it("skips the plan retry when remaining budget is below the step budget", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		// plan step budget is $8; a --budget of $1 cannot fund a retry.
+		const lowBudget: Flags = { ...baseFlags, budget: "1" };
+		const { runStep, calls } = createMockRunStep(
+			{
+				plan: [{ ok: false, subtype: "error_max_turns" }, { ok: true }],
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline(baseOpts(worktree), parkSignal, lowBudget, {
+			runStep,
+			mainRepo: worktree,
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+		});
+
+		assert.equal(result.completed, false);
+		assert.match(result.error ?? "", /insufficient budget to retry/);
+		const planCalls = calls.filter((c) => c.step === "plan");
+		assert.equal(planCalls.length, 1, `expected exactly one plan attempt (retry skipped); got ${planCalls.length}`);
+		const stepsRun = calls.map((c) => c.step);
+		assert.ok(!stepsRun.includes("implement"), `expected no implement; got ${stepsRun.join(",")}`);
+		assert.equal(parkSignal.parked, false);
+	});
+});
+
+describe("runPipeline — refusal terminates without retry or park", () => {
+	it("shakedown-plan refusal → completed:false, error /refused/, no retry, no park", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep, calls } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": { ok: false, subtype: "error_refusal", text: "I can't help with that." },
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
+			runStep,
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+		});
+
+		assert.equal(result.completed, false);
+		assert.match(result.error ?? "", /refused/);
+		assert.deepEqual(
+			calls.map((c) => c.step),
+			["plan", "shakedown-plan"],
+		);
+		assert.equal(parkSignal.parked, false);
+		assert.equal(logs.length, 1);
+		assert.equal(logs[0].completed, false);
+		assert.equal(logs[0].parked, false);
+	});
+
+	it("implement refusal → cycle terminal, error /refused/, no second implement attempt", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep, calls } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: false, subtype: "error_refusal", text: "I must decline this task." },
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
+			runStep,
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+		});
+
+		assert.equal(result.completed, false);
+		assert.match(result.error ?? "", /refused/);
+		const implementCalls = calls.filter((c) => c.step === "implement");
+		assert.equal(implementCalls.length, 1, `expected no implement retry; got ${implementCalls.length} calls`);
+		const stepsRun = calls.map((c) => c.step);
+		assert.ok(!stepsRun.includes("shakedown-code"), `expected no shakedown-code; got ${stepsRun.join(",")}`);
+		assert.ok(!stepsRun.includes("ship"), `expected no ship; got ${stepsRun.join(",")}`);
+		assert.equal(parkSignal.parked, false);
+	});
+});
+
+describe("runPipeline — blocked terminates without retry or park", () => {
+	it("implement blocked → completed:false, reason surfaced, no attempt-2 retry, no park, subtype logged", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep, calls } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: false, subtype: "blocked", text: "the schema field does not exist" },
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
+			runStep,
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+		});
+
+		assert.equal(result.completed, false);
+		assert.equal(result.error, "implement blocked: the schema field does not exist");
+		const implementCalls = calls.filter((c) => c.step === "implement");
+		assert.equal(implementCalls.length, 1, `expected no implement retry; got ${implementCalls.length} calls`);
+		const stepsRun = calls.map((c) => c.step);
+		assert.ok(!stepsRun.includes("shakedown-code"), `expected no shakedown-code; got ${stepsRun.join(",")}`);
+		assert.ok(!stepsRun.includes("ship"), `expected no ship; got ${stepsRun.join(",")}`);
+		assert.equal(parkSignal.parked, false);
+		assert.equal(logs.length, 1);
+		const steps = logs[0].steps as Array<{ name: string; subtype?: string }>;
+		const implEntry = steps.find((s) => s.name === "implement");
+		assert.equal(implEntry?.subtype, "blocked", `expected implement entry subtype "blocked"; got ${JSON.stringify(implEntry)}`);
+	});
+
+	it("shakedown-plan blocked → terminates before implement, reason in error", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep, calls } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": { ok: false, subtype: "blocked", text: "rubric file is missing" },
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
+			runStep,
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+		});
+
+		assert.equal(result.completed, false);
+		assert.equal(result.error, "shakedown-plan blocked: rubric file is missing");
+		assert.deepEqual(
+			calls.map((c) => c.step),
+			["plan", "shakedown-plan"],
+		);
+		assert.equal(parkSignal.parked, false);
 	});
 });
 
@@ -289,6 +536,7 @@ describe("runPipeline — RoadmapSource injection", () => {
 			mainRepo: worktree,
 			listWorktrees: () => [],
 			appendLog: () => {},
+			runShipBookkeeping: noopBookkeeping,
 		});
 
 		assert.equal(result.completed, true);
@@ -395,6 +643,7 @@ describe("runPipeline — pick step", () => {
 			appendLog: (e) => {
 				logs.push(e);
 			},
+			runShipBookkeeping: noopBookkeeping,
 		});
 
 		assert.equal(result.completed, true);
@@ -561,6 +810,7 @@ describe("runPipeline — pick step", () => {
 			appendLog: (e) => {
 				logs.push(e);
 			},
+			runShipBookkeeping: noopBookkeeping,
 		});
 
 		assert.equal(result.itemId, "COMP-11C-II");
@@ -614,6 +864,7 @@ describe("runPipeline — pick step", () => {
 			appendLog: (e) => {
 				logs.push(e);
 			},
+			runShipBookkeeping: noopBookkeeping,
 		});
 
 		assert.ok(listCalls >= 1);
@@ -694,6 +945,7 @@ describe("runPipeline — pick step", () => {
 			appendLog: (e) => {
 				logs.push(e);
 			},
+			runShipBookkeeping: noopBookkeeping,
 		});
 
 		assert.equal(result.completed, true, `expected prefix fallback to let pipeline complete; got error=${result.error}`);

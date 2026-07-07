@@ -4,6 +4,8 @@ import { directPush } from "./direct-push.js";
 import { pullRequest } from "./pull-request.js";
 
 export type { ShipContext, ShipResult, ShipTarget, ShipTargetName } from "../types.js";
+export type { ShipBookkeepingCtx, ShipBookkeepingDeps, ShipBookkeepingResult } from "./bookkeeping.js";
+export { commitStrayBookkeeping, runShipBookkeeping } from "./bookkeeping.js";
 
 export const SHIP_TARGET_NAMES: readonly ShipTargetName[] = ["direct-push", "pull-request", "auto-merge-pr"];
 

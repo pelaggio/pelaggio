@@ -139,14 +139,134 @@ export function computeImplementTurns(planBody: string | null, fallback: number)
 	return Math.max(100, Math.min(250, 2 * files + 60));
 }
 
+// ── Refusal & error classification ─────────────────────────────────────
+
+// Anchored refusal openers: a decline announces itself in the first sentence.
+// Matching only at the start of the trimmed final result keeps a review that
+// merely *discusses* a decline mid-paragraph ("the code can't be simplified")
+// from tripping the heuristic.
+const REFUSAL_OPENERS: readonly RegExp[] = [
+	/^i can(?:'|no)?t (?:help|assist|comply|continue|provide|do)\b/i,
+	/^i cannot (?:help|assist|comply|continue|provide|do)\b/i,
+	/^i(?:'m| am) (?:not able|unable) to\b/i,
+	/^i won'?t (?:be able|help|assist)\b/i,
+	/^i must decline\b/i,
+	/^i(?:'m| am) sorry,? but i (?:can(?:'|no)?t|cannot|won'?t)\b/i,
+];
+
+/** Conservative, anchored text heuristic: does the output *open* with a refusal? */
+export function looksLikeRefusal(text: string): boolean {
+	const head = text.trim().slice(0, 200);
+	return REFUSAL_OPENERS.some((re) => re.test(head));
+}
+
+/**
+ * Structured-first refusal classifier. A streaming safety decline surfaces as
+ * `subtype: "success"` with `stop_reason: "refusal"` — trust that signal first.
+ * A populated non-refusal `stop_reason` means the turn completed normally, so
+ * don't second-guess it. Only fall back to the text heuristic when the SDK
+ * surfaced no `stop_reason` at all.
+ */
+export function isRefusal(stopReason: string | null | undefined, resultText: string): boolean {
+	if (stopReason === "refusal") return true;
+	if (stopReason != null) return false;
+	return looksLikeRefusal(resultText);
+}
+
+/**
+ * Categorize a thrown SDK step error into a `subtype`. The authoritative
+ * `parked` flag (set by the structured `rate_limit_event` handler) wins first;
+ * remaining branches key off the message text. Deliberately does NOT match a
+ * bare "rejected" — that word also appears in safety refusals, which must be
+ * terminal (`error_sdk`), not parked forever as a phantom rate limit.
+ */
+export function classifyStepError(errMsg: string, parked: boolean): string {
+	if (parked || /rate.?limit|usage.?limit|quota/i.test(errMsg)) return "error_rate_limit";
+	if (/budget/i.test(errMsg)) return "error_budget";
+	if (/abort/i.test(errMsg)) return "error_abort";
+	if (/max.*turns|turn.?limit|maximum.*turns/i.test(errMsg)) return "error_max_turns";
+	return "error_sdk";
+}
+
+// ── Retry budget decision ──────────────────────────────────────────────
+
+/**
+ * Whether a step that ended in `error_max_turns` may be re-entered once more with a
+ * fresh turn budget (issue #33). The attempt-count bound is owned by the caller's loop;
+ * this owns only the dollar gate: a retry is funded up to the step's configured budget
+ * again, so skip it when too little remains. A non-finite `maxBudget` (unset / unparseable
+ * `--budget`) disables the gate — the caller's attempt cap still bounds the retry.
+ */
+export function canRetryWithinBudget(args: { spent: number; maxBudget: number; stepBudget: number }): boolean {
+	if (!Number.isFinite(args.maxBudget)) return true;
+	return args.maxBudget - args.spent >= args.stepBudget;
+}
+
 // ── Verdict parsing ────────────────────────────────────────────────────
+
+// Vocabulary a genuine rubric review uses. Presence of any term (in a
+// substantial, non-refusal body) is what distinguishes a real review that
+// merely omitted the verdict keyword from an empty/refused/truncated one.
+const REVIEW_SIGNAL = /\b(?:rubric|verdict|fix[- ]?now|near[- ]?term|deferred|well-(?:typed|tested|factored)|idiomatic|idioms|concise|correctness|blocker)\b/i;
+
+function reviewEngaged(text: string): boolean {
+	const t = text.trim();
+	if (t.length < 120) return false; // a real review is substantial
+	if (looksLikeRefusal(t)) return false; // a decline is not engagement
+	return REVIEW_SIGNAL.test(t);
+}
 
 export function parseVerdict(text: string): "APPROVE" | "REVISE" | "RETHINK" {
 	const match = text.match(/verdict[:\s*]+\*{0,2}(APPROVE|REVISE|RETHINK)\b/i);
 	if (match) return match[1].toUpperCase() as "APPROVE" | "REVISE" | "RETHINK";
 	if (/\bRETHINK\b/i.test(text)) return "RETHINK";
 	if (/\bREVISE\b/i.test(text)) return "REVISE";
-	return "APPROVE";
+	// No verdict keyword. Fail closed: an empty/refused/truncated shakedown must
+	// not read as an implicit APPROVE and ship on a phantom sign-off. Return
+	// RETHINK — the only verdict that HALTS the cycle (REVISE still proceeds to
+	// implement+ship) — unless the output shows the review actually engaged with
+	// the rubric, which preserves the historical APPROVE fail-safe for a genuine
+	// review that merely omitted the keyword.
+	return reviewEngaged(text) ? "APPROVE" : "RETHINK";
+}
+
+// ── Blocked / stalled-ask parsing ──────────────────────────────────────
+
+/**
+ * A step that cannot finish ends its final message with a trailing sentinel line
+ * `BLOCKED: <reason>` (see `AUTONOMY_APPEND`). Parsed out-of-band because the SDK
+ * reports a polite stall as `subtype: "success"`. Trailing-line semantics (last
+ * non-blank line must match) so a mid-text mention — "is this BLOCKED: no, …" —
+ * followed by a normal finish is NOT a false positive. Bold markers tolerated,
+ * matching `parseVerdict`. `BLOCKED` stays uppercase/case-sensitive so prose
+ * ("the task is blocked") never matches. Returns the reason, or null when not blocked.
+ */
+export function parseBlockedReason(text: string): string | null {
+	const lines = text.split("\n");
+	let i = lines.length - 1;
+	while (i >= 0 && lines[i].trim() === "") i--;
+	if (i < 0) return null;
+	const m = lines[i].match(/^\s*\*{0,2}BLOCKED:\*{0,2}\s*(.*\S)?\s*$/);
+	if (!m) return null;
+	return m[1]?.trim() || "(no reason given)";
+}
+
+// Offer-to-continue phrasings that read as a stall even without a trailing `?`.
+const STALLED_ASK_PHRASING = /\b(want me to|shall i|should i|let me know|would you like|do you want)\b/i;
+
+/**
+ * Observe-only soft heuristic: a final message that ends in a question or an
+ * offer-to-continue without the `BLOCKED:` sentinel. Never fails a step —
+ * legitimate final messages can contain questions — it only feeds the
+ * `stalled_ask` telemetry, so false positives are acceptable.
+ */
+export function looksLikeStalledAsk(text: string): boolean {
+	const lines = text.split("\n");
+	let i = lines.length - 1;
+	while (i >= 0 && lines[i].trim() === "") i--;
+	if (i < 0) return false;
+	const last = lines[i].trim();
+	return last.endsWith("?") || STALLED_ASK_PHRASING.test(last);
 }
 
 // ── Git checkpointing ──────────────────────────────────────────────────
@@ -160,7 +280,12 @@ export function checkpoint(cwd: string, label: string): boolean {
 		});
 		return true;
 	} catch (e: unknown) {
-		const msg = ((e as Record<string, unknown>).stderr ?? (e as Record<string, unknown>).stdout ?? (e as Error).message ?? "").toString().slice(0, 300);
+		const err = e as Record<string, unknown>;
+		// git reports "nothing to commit" on stdout with stderr set to "" (not null),
+		// so `stderr ?? stdout` short-circuits on the empty string — concatenate both
+		// streams before classifying, or the empty-tree case logs a bogus warning.
+		const streams = `${err.stderr ?? ""}${err.stdout ?? ""}`;
+		const msg = (streams || String((e as Error).message ?? "")).slice(0, 300);
 		if (/nothing to commit|clean/i.test(msg)) return false;
 		process.stderr.write(`⚠ checkpoint commit failed: ${msg}\n`);
 		return false;
@@ -238,11 +363,15 @@ export function hasDeliverableCommits(worktree: string): boolean {
  * Capture the state needed to verify a direct-push ship landed. Returns null
  * if either git command fails (e.g. no main branch in test env — skip check).
  */
-export function captureShipState(mainRepo: string, worktree: string): { mainSha: string; featSha: string } | null {
+export function captureShipState(mainRepo: string, worktree: string): { mainSha: string; featSha: string; branch: string } | null {
 	try {
 		const mainSha = execSync("git rev-parse main", { cwd: mainRepo, encoding: "utf-8" }).trim();
 		const featSha = execSync("git rev-parse HEAD", { cwd: worktree, encoding: "utf-8" }).trim();
-		return { mainSha, featSha };
+		// The worktree is on the feature branch at capture time (pre-merge). The
+		// pipeline-owned bookkeeping tail needs this name to clean up the branch
+		// after the merge lands.
+		const branch = execSync("git branch --show-current", { cwd: worktree, encoding: "utf-8" }).trim();
+		return { mainSha, featSha, branch };
 	} catch {
 		return null;
 	}
@@ -251,7 +380,11 @@ export function captureShipState(mainRepo: string, worktree: string): { mainSha:
 /**
  * Returns true if main advanced after a direct-push ship: either the sha
  * changed or the pre-ship feat tip is now reachable from main (fast-forward).
- * Returns true on unexpected git errors so unknown environments don't block cycles.
+ * **Fails closed** — a git error during verification returns false, so the
+ * merge is treated as *not* landed and routes to /shipwreck (which assesses the
+ * real state) rather than to a blind push. Failing open here would classify a
+ * ghost-ship-plus-git-error as merged and push it, defeating the very gate this
+ * implements.
  */
 export function verifyShipLanded(mainRepo: string, mainShaBefore: string, featShaBefore: string): boolean {
 	try {
@@ -264,7 +397,7 @@ export function verifyShipLanded(mainRepo: string, mainShaBefore: string, featSh
 			return false;
 		}
 	} catch {
-		return true;
+		return false;
 	}
 }
 

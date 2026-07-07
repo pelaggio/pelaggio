@@ -151,7 +151,14 @@ export class MarkdownRoadmap implements RoadmapSource {
 		const note = ctx?.note?.trim();
 		const roadmapBody = readFileSync(roadmapPath, "utf-8");
 		const updatedRoadmap = detectFormat(roadmapBody) === "checkbox" ? markCheckboxRowDone(roadmapBody, id, note) : strikethroughRoadmapRow(roadmapBody, id, note);
-		if (updatedRoadmap === roadmapBody) throw new Error(`markDone: could not locate open row for ${id} in ${roadmapPath}`);
+		if (updatedRoadmap === roadmapBody) {
+			// No open row was rewritten. Distinguish the idempotent case (the item is
+			// already marked done → a safe no-op the bookkeeping tail relies on) from a
+			// real failure (the row is genuinely absent / format has drifted while the
+			// item is still open → must surface, not be swallowed as "already done").
+			if (roadmapRowState(roadmapBody, id) === "done") return;
+			throw new Error(`markDone: could not locate open row for ${id} in ${roadmapPath}`);
+		}
 		writeFileSync(roadmapPath, updatedRoadmap);
 
 		const indexPath = resolveTaskIndexPath(docsDir);
@@ -162,12 +169,15 @@ export class MarkdownRoadmap implements RoadmapSource {
 			if (updatedIndex !== indexBody) writeFileSync(indexPath, updatedIndex);
 		}
 
-		execSync(`git add docs/roadmap-*.md`, { cwd: this.repo, stdio: "pipe" });
-		if (indexExists) {
-			execSync(`git add ${JSON.stringify(relative(this.repo, indexPath))}`, { cwd: this.repo, stdio: "pipe" });
-		}
+		// Commit only the paths this call touched (own pathspec) with `--no-verify`,
+		// so a consumer's pre-commit hook can't break the pipeline and an unrelated
+		// staged change can't be swept into the roadmap commit.
+		const paths = [relative(this.repo, roadmapPath)];
+		if (indexExists) paths.push(relative(this.repo, indexPath));
+		const pathArgs = paths.map((p) => JSON.stringify(p)).join(" ");
+		execSync(`git add ${pathArgs}`, { cwd: this.repo, stdio: "pipe" });
 		const msg = note ? `docs: mark ${id} done — ${note}` : `docs: mark ${id} done`;
-		execSync(`git commit -m ${JSON.stringify(msg)}`, { cwd: this.repo, stdio: "pipe" });
+		execSync(`git commit --no-verify -m ${JSON.stringify(msg)} -- ${pathArgs}`, { cwd: this.repo, stdio: "pipe" });
 	}
 
 	async createItem(opts: CreateItemOpts): Promise<RoadmapItem> {
@@ -219,13 +229,26 @@ export class MarkdownRoadmap implements RoadmapSource {
 
 		// Update task-index.md if present.
 		const indexPath = resolveTaskIndexPath(docsDir);
-		if (existsSync(indexPath)) {
+		const indexExists = existsSync(indexPath);
+		if (indexExists) {
 			const indexBody = readFileSync(indexPath, "utf-8");
 			const roadmapSlug = targetFile.replace(/^roadmap-/, "").replace(/\.md$/, "");
 			const row = `| ${id} | ${title} | ${deps} | — | ${roadmapSlug} |`;
 			const updatedIndex = appendOpenTableRow(indexBody, row);
 			if (updatedIndex !== indexBody) writeFileSync(indexPath, updatedIndex);
 		}
+
+		// Commit the new item immediately. markDone/archivePlan already commit;
+		// createItem was the lone write that left the tree dirty — the exact
+		// unstaged state a later ship's clean-tree requirement (or a merge's
+		// discard-dirty recovery) could destroy, taking a deferred item with it.
+		// `--no-verify` + own pathspec: a consumer's pre-commit hook must not break
+		// the calling step, and only the files this call touched are committed.
+		const staged = [relative(this.repo, targetPath)];
+		if (indexExists) staged.push(relative(this.repo, indexPath));
+		const stagedArgs = staged.map((p) => JSON.stringify(p)).join(" ");
+		execSync(`git add ${stagedArgs}`, { cwd: this.repo, stdio: "pipe" });
+		execSync(`git commit --no-verify -m ${JSON.stringify(`docs: add roadmap item ${id} — ${title}`)} -- ${stagedArgs}`, { cwd: this.repo, stdio: "pipe" });
 
 		return { id, title, deps, sourceRef: targetPath };
 	}
@@ -240,7 +263,9 @@ export class MarkdownRoadmap implements RoadmapSource {
 		const dest = resolve(archivedDir, filename);
 		mkdirSync(archivedDir, { recursive: true });
 		execSync(`git mv ${JSON.stringify(planPath)} ${JSON.stringify(dest)}`, { cwd: this.repo, stdio: "pipe" });
-		execSync(`git commit -m ${JSON.stringify(`docs: archive plan for ${id}`)}`, { cwd: this.repo, stdio: "pipe" });
+		// `--no-verify` + own pathspec (the renamed pair), consistent with markDone/createItem.
+		const renamed = `${JSON.stringify(relative(this.repo, planPath))} ${JSON.stringify(relative(this.repo, dest))}`;
+		execSync(`git commit --no-verify -m ${JSON.stringify(`docs: archive plan for ${id}`)} -- ${renamed}`, { cwd: this.repo, stdio: "pipe" });
 	}
 
 	isCharterPickRace(id: string): boolean {
@@ -299,7 +324,10 @@ export class MarkdownRoadmap implements RoadmapSource {
 		for (const file of listRoadmapFiles(docsDir)) {
 			const path = resolve(docsDir, file);
 			const body = readFileSync(path, "utf-8");
-			if (new RegExp(`^\\|\\s*${escapeRegex(id)}\\.`, "m").test(body)) return path;
+			// Match open AND already-done rows (a struck-through `| ~~ID. …~~ |`) so
+			// markDone can recognize an already-done item and treat it as an idempotent
+			// no-op rather than mistaking it for a genuinely-absent item.
+			if (new RegExp(`^\\|\\s*(?:~~\\s*)?${escapeRegex(id)}\\.`, "m").test(body)) return path;
 			if (new RegExp(`^-\\s+\\[[ x]\\]\\s+\\*\\*${escapeRegex(id)}\\.`, "m").test(body)) return path;
 		}
 		return null;
@@ -382,6 +410,25 @@ function strikethroughRoadmapRow(body: string, id: string, note?: string): strin
 		const done = note ? `**Done** — ${note}` : "**Done**";
 		return `| ~~${trimmedItem}~~ | ${done} |`;
 	});
+}
+
+/**
+ * Whether an item's row is open, already marked done, or genuinely absent — in
+ * either roadmap format. Lets `markDone` treat an already-done item as an
+ * idempotent no-op while still surfacing a real "row not found" (format drift
+ * with the item still open) as an error the bookkeeping tail must not swallow.
+ */
+function roadmapRowState(body: string, id: string): "open" | "done" | "absent" {
+	const esc = escapeRegex(id);
+	if (detectFormat(body) === "checkbox") {
+		if (new RegExp(`^-\\s+\\[ \\]\\s+\\*\\*${esc}\\.`, "m").test(body)) return "open";
+		if (new RegExp(`^-\\s+\\[x\\]\\s+\\*\\*${esc}\\.`, "im").test(body)) return "done";
+		return "absent";
+	}
+	// Table format: a done row is struck through — `| ~~ID. …~~ | **Done** |`.
+	if (new RegExp(`^\\|\\s*~~\\s*${esc}\\.`, "m").test(body)) return "done";
+	if (new RegExp(`^\\|\\s*${esc}\\.`, "m").test(body)) return "open";
+	return "absent";
 }
 
 function moveToCompleted(body: string, id: string): string {

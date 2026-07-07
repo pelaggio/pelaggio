@@ -1,8 +1,9 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { MODEL_PROFILES, REPO, ROADMAP_GITHUB, ROADMAP_LINEAR, ROADMAP_SOURCE, SHIP_TARGET, TURN_LIMITS, WORKTREE_PREFIX } from "./config.js";
+import { CONFIG, isPipelineStep, MODEL_PROFILES, REPO, ROADMAP_GITHUB, ROADMAP_LINEAR, ROADMAP_SOURCE, resolveStepSettings, SHIP_TARGET, STEPS, WORKTREE_PREFIX } from "./config.js";
 import {
 	appendLog as appendLogDefault,
+	canRetryWithinBudget,
 	captureShipState,
 	checkpoint,
 	computeImplementTurns,
@@ -24,7 +25,7 @@ import {
 	verifyShipLanded,
 } from "./helpers.js";
 import { getRoadmapSource, type RoadmapSource } from "./roadmap/index.js";
-import { getShipTarget, isShipTargetName, SHIP_TARGET_NAMES } from "./ship/index.js";
+import { commitStrayBookkeeping, getShipTarget, isShipTargetName, runShipBookkeeping as runShipBookkeepingDefault, SHIP_TARGET_NAMES } from "./ship/index.js";
 import { runStep as runStepDefault } from "./step-runner.js";
 import { A, createStepRenderer, fmtElapsed, LiveStatus, StatusBar, TUI_ENABLED } from "./tui.js";
 import type { CycleResult, CycleStatus, Flags, ParkSignal, PipelineOpts, Step, StepLog, StepResult } from "./types.js";
@@ -43,6 +44,8 @@ export interface PipelineDeps {
 	resolveWorktree?: typeof resolveWorktree;
 	/** Roadmap source adapter. Defaults to one constructed from `ROADMAP_SOURCE` + `REPO`. */
 	roadmap?: RoadmapSource;
+	/** Deterministic direct-push bookkeeping tail. Injectable for testing the merged-path branch with a spy. */
+	runShipBookkeeping?: typeof runShipBookkeepingDefault;
 }
 
 export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, flags: Flags, deps: PipelineDeps = {}): Promise<CycleResult> {
@@ -52,6 +55,11 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	const mainRepo = deps.mainRepo ?? REPO;
 	const _resolveWorktree = deps.resolveWorktree ?? resolveWorktree;
 	const roadmap = deps.roadmap ?? getRoadmapSource(ROADMAP_SOURCE, { repo: REPO, github: ROADMAP_GITHUB, linear: ROADMAP_LINEAR });
+	const runShipBookkeeping = deps.runShipBookkeeping ?? runShipBookkeepingDefault;
+	// The cycle's dollar ceiling. A turn-exhaustion retry (issue #33) is funded up to the
+	// step's configured budget again, so the budget guard skips a retry we can't fully fund.
+	// A non-finite value (unset / unparseable --budget) disables the dollar gate.
+	const maxBudget = Number.parseFloat(flags.budget);
 	let cost = 0;
 	let profile = "standard";
 	const steps: StepLog[] = [];
@@ -63,7 +71,12 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		console.log(`${A.dim(ts)} [${logLabel}] ${A.dim(elapsed)} ${msg}`);
 	};
 
-	async function step(name: Step, prompt: string, cwd: string, { attempt = 1, commitLabel, maxTurnsOverride }: { attempt?: number; commitLabel?: string; maxTurnsOverride?: number } = {}): Promise<StepResult> {
+	async function step(
+		name: Step,
+		prompt: string,
+		cwd: string,
+		{ attempt = 1, commitLabel, maxTurnsOverride, retriedMaxTurns = false }: { attempt?: number; commitLabel?: string; maxTurnsOverride?: number; retriedMaxTurns?: boolean } = {},
+	): Promise<StepResult> {
 		// Short-circuit before runStep when SIGINT fired between steps; also covers
 		// --dry-run so Ctrl-C during a dry run bails promptly.
 		if (opts.signal?.aborted) {
@@ -129,9 +142,11 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			...(!result.ok ? { subtype: result.subtype } : {}),
 			...(result.tokens ? { tokens: result.tokens } : {}),
 			...(attempt > 1 ? { attempt } : {}),
+			...(retriedMaxTurns ? { retriedMaxTurns: true } : {}),
 			...(result.toolCounts ? { toolCounts: result.toolCounts } : {}),
 			...(result.outputTail ? { outputTail: result.outputTail } : {}),
 			...(filesChanged.length > 0 ? { filesChanged } : {}),
+			...(result.stalledAsk ? { stalledAsk: true } : {}),
 		});
 		if (opts.workerStatus) opts.workerStatus.cost += result.cost;
 		return result;
@@ -192,7 +207,10 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			cost += pick.cost;
 			pickText = pick.text + "\n" + pick.fullText;
 
-			if (!pick.ok) return finish({ itemId: null, completed: false, cost, error: "pick failed" });
+			if (!pick.ok) {
+				const err = pick.subtype === "blocked" ? `pick blocked: ${pick.text}` : "pick failed";
+				return finish({ itemId: null, completed: false, cost, error: err });
+			}
 
 			if (!opts.dryRun) {
 				const reason = parsePickResult(pickText);
@@ -273,12 +291,26 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		if (existingPlan) {
 			log(`plan exists at ${existingPlan} — skipping plan generation`);
 		} else {
-			const parked = parkExit();
-			if (parked) return parked;
-			log("planning...");
-			const plan = await step("plan", expandSkill("plan"), worktree!);
-			cost += plan.cost;
-			if (!plan.ok) return parkExit() ?? finish({ itemId, completed: false, cost, error: "plan failed" });
+			const MAX_PLAN_ATTEMPTS = 2;
+			for (let attempt = 1; attempt <= MAX_PLAN_ATTEMPTS; attempt++) {
+				const parked = parkExit();
+				if (parked) return parked;
+				log(attempt === 1 ? "planning..." : "continuing plan (attempt 2)...");
+				const plan = await step("plan", expandSkill("plan"), worktree!, { attempt, retriedMaxTurns: attempt > 1 });
+				cost += plan.cost;
+				if (plan.ok) break;
+				if (plan.subtype === "error_rate_limit" || parkSignal.parked) {
+					return parkExit() ?? finish({ itemId, completed: false, cost, error: "plan failed" });
+				}
+				if (plan.subtype === "blocked") return finish({ itemId, completed: false, cost, error: `plan blocked: ${plan.text}` });
+				if (plan.subtype === "error_refusal") return finish({ itemId, completed: false, cost, error: "plan refused (model declined the task)" });
+				if (plan.subtype !== "error_max_turns") return finish({ itemId, completed: false, cost, error: "plan failed" });
+				log(`plan hit turn limit (attempt ${attempt}/${MAX_PLAN_ATTEMPTS})`);
+				if (attempt === MAX_PLAN_ATTEMPTS) return finish({ itemId, completed: false, cost, error: "plan failed (max retries)" });
+				if (!canRetryWithinBudget({ spent: cost, maxBudget, stepBudget: resolveStepSettings(CONFIG, profile, "plan").budget })) {
+					return finish({ itemId, completed: false, cost, error: "plan failed (insufficient budget to retry after max turns)" });
+				}
+			}
 		}
 		const planPath = await roadmap.getItemPlan({ worktree: worktree! });
 		if (planPath) log(`plan: file://${planPath}`);
@@ -290,7 +322,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			const parked = parkExit();
 			if (parked) return parked;
 			log(attempt === 1 ? "shakedown (plan)..." : "continuing shakedown-plan (attempt 2)...");
-			const shakedown = await step("shakedown-plan", expandSkill("shakedown", "autopilot plan-review"), worktree!);
+			const shakedown = await step("shakedown-plan", expandSkill("shakedown", "autopilot plan-review"), worktree!, { attempt, retriedMaxTurns: attempt > 1 });
 			cost += shakedown.cost;
 
 			if (shakedown.ok) {
@@ -306,11 +338,16 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			if (shakedown.subtype === "error_rate_limit" || parkSignal.parked) {
 				return parkExit() ?? finish({ itemId, completed: false, cost, error: "shakedown-plan failed" });
 			}
+			if (shakedown.subtype === "blocked") return finish({ itemId, completed: false, cost, error: `shakedown-plan blocked: ${shakedown.text}` });
+			if (shakedown.subtype === "error_refusal") return finish({ itemId, completed: false, cost, error: "shakedown-plan refused (model declined the review)" });
 			if (shakedown.subtype !== "error_max_turns") {
 				return finish({ itemId, completed: false, cost, error: "shakedown-plan failed" });
 			}
 			log(`shakedown-plan hit turn limit (attempt ${attempt}/${MAX_SHAKEDOWN_PLAN_ATTEMPTS})`);
 			if (attempt === MAX_SHAKEDOWN_PLAN_ATTEMPTS) return finish({ itemId, completed: false, cost, error: "shakedown-plan failed (max retries)" });
+			if (!canRetryWithinBudget({ spent: cost, maxBudget, stepBudget: resolveStepSettings(CONFIG, profile, "shakedown-plan").budget })) {
+				return finish({ itemId, completed: false, cost, error: "shakedown-plan failed (insufficient budget to retry after max turns)" });
+			}
 		}
 	}
 
@@ -330,7 +367,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				planBody = null;
 			}
 		}
-		const implementTurns = computeImplementTurns(planBody, TURN_LIMITS.implement);
+		const implementTurns = computeImplementTurns(planBody, resolveStepSettings(CONFIG, profile, "implement").turns);
 		const planRef = planPath ? `Read the plan at \`${planPath}\`.` : `Find the plan in \`${resolve(REPO, ".dev", "plans")}/\` (filename matches branch without \`feat/\` prefix).`;
 		const worktreeHint = [
 			`**Your working directory is**: \`${worktree}\`.`,
@@ -383,6 +420,9 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		let lastLoopFile: string | null = null;
 		const MAX_ATTEMPTS = 2;
 		let implOk = false;
+		// Attempt 2 can follow EITHER an edit_loop OR error_max_turns — track the prior
+		// failure so only genuine turn-exhaustion retries get marked `retriedMaxTurns`.
+		let prevMaxTurns = false;
 
 		for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
 			log(attempt === 1 ? "implementing..." : "continuing implementation (attempt 2)...");
@@ -399,7 +439,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 					].join("\n")
 				: continuePrompt;
 			const cpLabel = attempt === 1 ? "implementation checkpoint" : "implementation continued";
-			const impl = await step("implement", attempt === 1 ? implementPrompt : retryPrompt, worktree!, { attempt, commitLabel: cpLabel, maxTurnsOverride: implementTurns });
+			const impl = await step("implement", attempt === 1 ? implementPrompt : retryPrompt, worktree!, { attempt, commitLabel: cpLabel, maxTurnsOverride: implementTurns, retriedMaxTurns: prevMaxTurns });
 			cost += impl.cost;
 
 			if (impl.ok) {
@@ -410,13 +450,24 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			if (impl.subtype === "edit_loop") {
 				const match = impl.text.match(/Edit loop detected: (.+?) edited/);
 				lastLoopFile = match?.[1]?.replace(/^.*[/\\]/, "") ?? null;
+				prevMaxTurns = false;
 				log(`edit loop on ${lastLoopFile ?? "unknown file"} — will retry with fresh approach`);
 			} else if (impl.subtype === "error_rate_limit" || parkSignal.parked) {
 				return parkExit() ?? finish({ itemId, completed: false, cost, error: "implement failed" });
+			} else if (impl.subtype === "error_refusal") {
+				return finish({ itemId, completed: false, cost, error: "implement refused (model declined the task)" });
+			} else if (impl.subtype === "blocked") {
+				return finish({ itemId, completed: false, cost, error: `implement blocked: ${impl.text}` });
 			} else if (impl.subtype !== "error_max_turns") {
 				return finish({ itemId, completed: false, cost, error: "implement failed" });
 			} else {
 				log(`implement hit turn limit (attempt ${attempt}/${MAX_ATTEMPTS})`);
+				prevMaxTurns = true;
+				// Skip the budget-guarded retry only when there IS a next attempt (the final
+				// attempt exits via the post-loop `!implOk` guard, not here).
+				if (attempt < MAX_ATTEMPTS && !canRetryWithinBudget({ spent: cost, maxBudget, stepBudget: resolveStepSettings(CONFIG, profile, "implement").budget })) {
+					return finish({ itemId, completed: false, cost, error: "implement failed (insufficient budget to retry after max turns)" });
+				}
 			}
 		}
 
@@ -453,7 +504,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 							"5. Re-run the verification commands before finishing.",
 						].join("\n");
 
-			const shakedown = await step("shakedown-code", shakedownPrompt, worktree!, { attempt, commitLabel: "shakedown checkpoint" });
+			const shakedown = await step("shakedown-code", shakedownPrompt, worktree!, { attempt, commitLabel: "shakedown checkpoint", retriedMaxTurns: attempt > 1 });
 			cost += shakedown.cost;
 
 			if (shakedown.ok) {
@@ -465,11 +516,20 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				return parkExit() ?? finish({ itemId, completed: false, cost, error: "shakedown-code failed" });
 			}
 
+			if (shakedown.subtype === "blocked") return finish({ itemId, completed: false, cost, error: `shakedown-code blocked: ${shakedown.text}` });
+
+			if (shakedown.subtype === "error_refusal") return finish({ itemId, completed: false, cost, error: "shakedown-code refused (model declined the review)" });
+
 			if (shakedown.subtype !== "error_max_turns") {
 				return finish({ itemId, completed: false, cost, error: "shakedown-code failed" });
 			}
 
 			log(`shakedown hit turn limit (attempt ${attempt}/${MAX_SHAKEDOWN_ATTEMPTS})`);
+			// Skip the budget-guarded retry only when there IS a next attempt (the final
+			// attempt exits via the post-loop `!shakedownOk` guard, not here).
+			if (attempt < MAX_SHAKEDOWN_ATTEMPTS && !canRetryWithinBudget({ spent: cost, maxBudget, stepBudget: resolveStepSettings(CONFIG, profile, "shakedown-code").budget })) {
+				return finish({ itemId, completed: false, cost, error: "shakedown-code failed (insufficient budget to retry after max turns)" });
+			}
 		}
 
 		if (!shakedownOk) return finish({ itemId, completed: false, cost, error: "shakedown-code failed (max retries)" });
@@ -496,37 +556,104 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	log(`shipping...${targetSuffix}`);
 	const shipPrompt = `${expandSkill("ship", `autopilot --target=${target.name}`)}\n\n${target.buildPrompt({ itemId: itemId!, worktree: worktree! })}`;
 
-	// Capture pre-ship git state for ghost-ship verification (direct-push only).
+	// Direct-push only: the pipeline owns everything past the merge. Recover any
+	// stray MAIN_REPO changes as a commit *before* the agent runs so the merge
+	// never faces a dirty tree and never has cause to discard uncommitted work
+	// (a prior cycle's deferred create-item, pending bookkeeping, etc.). Never
+	// discards — see commitStrayBookkeeping.
+	if (!opts.dryRun && target.name === "direct-push") {
+		commitStrayBookkeeping(mainRepo, itemId!, log);
+	}
+
+	// Capture pre-ship git state for merge detection (direct-push only).
 	const preShipState = !opts.dryRun && target.name === "direct-push" ? captureShipState(mainRepo, worktree!) : null;
 
 	const ship = await step("ship", shipPrompt, worktree!);
 	cost += ship.cost;
 
-	// Ghost-ship check: did main actually advance after a reported-ok direct-push?
-	let ghostShip = false;
-	if (ship.ok && preShipState && !opts.dryRun) {
-		if (!verifyShipLanded(mainRepo, preShipState.mainSha, preShipState.featSha)) {
-			ghostShip = true;
-			log(`⚠ ghost-ship: ship reported ok but main did not advance — output tail: ${ship.text.slice(-300)}`);
+	// Park always wins (a mid-ship rate limit must still checkpoint + resume); a
+	// self-reported `blocked` ship is terminal-with-reason before /shipwreck recovery
+	// (recovery is retry-in-spirit and would mask the actionable reason).
+	{
+		const parked = parkExit();
+		if (parked) return parked;
+	}
+	if (ship.subtype === "blocked") return finish({ itemId, completed: false, cost, verdict, error: `ship blocked: ${ship.text}` });
+
+	// Direct-push: the agent's job ended at the merge. Detect whether it landed
+	// on local `main`, then either run the deterministic bookkeeping tail (the
+	// pipeline owns mark-done / archive / push / cleanup) or route to /shipwreck.
+	// PR modes never merge in-session, so they skip this and fall through to
+	// interpretResult exactly as before.
+	if (target.name === "direct-push" && !opts.dryRun && preShipState) {
+		const merged = verifyShipLanded(mainRepo, preShipState.mainSha, preShipState.featSha);
+		// The deterministic tail runs ONLY on a cleanly-verified merge. `ship.ok`
+		// means the agent completed post-merge verification (SKILL.md step 5) before
+		// reporting `ship-merged` — the merge is safe to push. A merge that landed
+		// but the agent then ran out of turns (`error_max_turns`) is potentially
+		// UNVERIFIED (the ship skill merges in step 4, before verifying in step 5),
+		// and a hard failure (`error`) flags a genuine regression — both route to
+		// /shipwreck, which re-runs verification with its own budget and can roll
+		// the merge back. (There is no consumer-agnostic verification command the
+		// tail could run itself — verification is agent-delegated via `_rubric.md`.)
+		// DRY the two identical "run the deterministic tail → incomplete on !ok, else
+		// completed" call sites (the canTail happy path and the verified-shipwreck
+		// recovery path). `cost` is a `let` captured by reference, so each call reads
+		// the up-to-date accumulated cost (ship-only for canTail; ship+wreck here).
+		const runTail = async (intro: string): Promise<CycleResult> => {
+			log(intro);
+			const bk = await runShipBookkeeping({ mainRepo, worktree: worktree!, branch: preShipState.branch, itemId: itemId! }, { roadmap, log });
+			if (!bk.ok) {
+				// A blocking bookkeeping failure (real mark-done/archive error, push
+				// failure, or pull conflict): local main holds the merge + bookkeeping
+				// (recoverable) and the feature branch was left intact. Surface as an
+				// incomplete cycle so origin-never-got-it is visible, not reported shipped.
+				log(`⚠ bookkeeping incomplete: ${bk.error}`);
+				return finish({ itemId, completed: false, cost, verdict, error: bk.error ?? "ship bookkeeping failed" });
+			}
+			return finish({ itemId, completed: true, cost, verdict });
+		};
+
+		const canTail = merged && ship.ok;
+		if (canTail) return runTail("merge landed and verified — running deterministic bookkeeping tail");
+		// Not merged (ghost-ship / clean failure) OR merged-but-unverified (agent
+		// ran out of turns / hard-failed after merging) → /shipwreck, unless
+		// rate-limited / parked (those fall through to interpretResult, preserving
+		// today's park semantics).
+		if (ship.subtype !== "error_rate_limit" && !parkSignal.parked) {
+			const reason = merged ? "merge landed but ship did not complete verification" : ship.ok ? "ghost-ship" : "ship failed";
+			log(`${reason} — attempting /shipwreck recovery...`);
+			shipwrecked = true;
+			// Hand shipwreck the same autopilot/direct-push signal /ship gets so it
+			// stops at its hand-off gate (finish + verify the merge, then STOP) instead
+			// of running mark-done/archive/push/cleanup itself.
+			const wreck = await step("shipwreck", expandSkill("shipwreck", `${itemId!} autopilot --target=direct-push`), mainRepo);
+			cost += wreck.cost;
+
+			// Tail runs ONLY on a shipwreck that actually LANDED the merge — mirrors the
+			// canTail gate (`merged && ship.ok`). verifyShipLanded fails closed, so a
+			// shipwreck reporting ok without advancing main (e.g. diagnosed "unknown")
+			// never reaches the destructive push/branch-delete steps.
+			const recoveredMerge = wreck.ok && verifyShipLanded(mainRepo, preShipState.mainSha, preShipState.featSha);
+			if (!recoveredMerge) {
+				return finish({
+					itemId,
+					completed: false,
+					cost,
+					verdict,
+					error: merged ? "ship merged but post-merge verification/recovery failed" : ship.ok ? "ship claimed success but main did not advance (recovery also failed)" : "ship failed (recovery also failed)",
+				});
+			}
+
+			// Shipwreck recovered + verified the merge and handed off at its gate — run
+			// the SAME deterministic tail the canTail path runs (issue #30: the #28
+			// failure mode had merely relocated to this recovery path).
+			return runTail("shipwreck recovered the merge — running deterministic bookkeeping tail");
 		}
 	}
 
+	// PR modes, dry-run, and direct-push rate-limit fall-through.
 	const shipResult = target.interpretResult(ship);
-
-	if ((!ship.ok || ghostShip) && ship.subtype !== "error_rate_limit" && !parkSignal.parked && target.name === "direct-push") {
-		log(ghostShip ? "ghost-ship — attempting /shipwreck recovery..." : "ship failed — attempting /shipwreck recovery...");
-		shipwrecked = true;
-		const wreck = await step("shipwreck", expandSkill("shipwreck", itemId!), mainRepo);
-		cost += wreck.cost;
-		return finish({
-			itemId,
-			completed: wreck.ok,
-			cost,
-			verdict,
-			error: wreck.ok ? undefined : ghostShip ? "ship claimed success but main did not advance (recovery also failed)" : "ship failed (recovery also failed)",
-		});
-	}
-
 	return finish({
 		itemId,
 		completed: shipResult.completed,
@@ -599,13 +726,34 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			return { exitCode: 2, results };
 		}
 
+		// --from overrides the auto-detected restart step, but only makes sense in resume mode
+		// (normal/--item mode has no worktree or plan yet — pick must create them first).
+		if (flags.from !== undefined && !flags.resume) {
+			console.error("--from <step> requires --resume <id> (it overrides the auto-detected restart step)");
+			return { exitCode: 2, results };
+		}
+
 		// Resume mode
 		if (flags.resume) {
 			const id = flags.resume.toUpperCase();
 			const worktree = noWorktree ? REPO : _resolveWorktree(id);
-			const startFrom = _detectResumeStep(id, worktree);
 			const v = flags.verbose;
-			console.log(`${A.bold("resume")} ${id} from ${A.bold(startFrom)}`);
+
+			let startFrom: Step;
+			if (flags.from !== undefined) {
+				// "pick" is excluded: resume mode starts with the worktree already resolved,
+				// so the pick step (worktree/branch creation) never executes — accepting it
+				// would silently start at plan instead of honoring the override.
+				if (!isPipelineStep(flags.from) || flags.from === "pick") {
+					console.error(`invalid --from ${JSON.stringify(flags.from)}; valid: ${STEPS.filter((s) => s !== "pick").join(", ")}`);
+					return { exitCode: 2, results };
+				}
+				startFrom = flags.from;
+				console.log(`${A.bold("resume")} ${id} from ${A.bold(startFrom)} ${A.dim("(--from override)")}`);
+			} else {
+				startFrom = _detectResumeStep(id, worktree);
+				console.log(`${A.bold("resume")} ${id} from ${A.bold(startFrom)}`);
+			}
 
 			const status: CycleStatus = { itemId: id, status: "running", cost: 0 };
 			liveStatus.cycles.push(status);

@@ -22,6 +22,8 @@ export interface StepResult {
 	tokens?: TokenUsage;
 	toolCounts?: Record<string, number>;
 	outputTail?: string;
+	/** Observe-only stall heuristic: the final message ended in a question / offer-to-continue (no `BLOCKED:` sentinel). Never fails a step. */
+	stalledAsk?: boolean;
 }
 
 export interface StepLog {
@@ -35,11 +37,16 @@ export interface StepLog {
 	tokens?: TokenUsage;
 	/** 1-indexed attempt number; absent means 1. */
 	attempt?: number;
+	/** Set when this attempt re-entered the step after the prior attempt hit its turn limit
+	 *  (issue #33). Distinguishes turn-exhaustion retries from edit-loop retries in stats. */
+	retriedMaxTurns?: boolean;
 	/** Verdict from shakedown-plan only. */
 	verdict?: "APPROVE" | "REVISE" | "RETHINK";
 	toolCounts?: Record<string, number>;
 	outputTail?: string;
 	filesChanged?: string[];
+	/** Observe-only stall heuristic — the step ended in a question / offer-to-continue. Telemetry only; never fails the step. */
+	stalledAsk?: boolean;
 }
 
 // ── Log entries (read from .dev/autopilot-log.jsonl) ───────────────────
@@ -137,6 +144,8 @@ export interface Flags {
 	parallel: string;
 	item?: string;
 	resume?: string;
+	/** Resume-only: override the auto-detected restart step. Validated against STEPS in runOrchestrator. */
+	from?: string;
 	verbose: boolean;
 	trace: boolean;
 	budget: string;
@@ -159,6 +168,8 @@ export type StepEvent =
 	| { type: "text"; content: string }
 	| { type: "edit_loop"; file: string; count: number }
 	| { type: "sdk_error"; message: string }
+	| { type: "blocked"; reason: string }
+	| { type: "stalled_ask"; tail: string }
 	| { type: "done"; ok: boolean; subtype: string; cost: number; turns: number; elapsed: number };
 
 export type StepEmit = (event: StepEvent) => void;

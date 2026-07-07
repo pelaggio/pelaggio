@@ -16,6 +16,8 @@ Run `git rev-parse --path-format=absolute --git-common-dir` — strip the traili
 
 ## 1. Identify
 
+The **first token** of `$ARGUMENTS` is the item ID (or empty → infer from the worktree). A trailing `autopilot --target=direct-push` is the pipeline's hand-off signal — it is **not** part of the ID; it is consumed at step 5a to decide whether to stop after the merge.
+
 **`/shipwreck COMP3`** — find branch matching item ID via `git branch --list 'feat/*'`.
 
 **`/shipwreck`** — if in a worktree on a feature branch, use that. Otherwise list worktrees and ask.
@@ -77,16 +79,16 @@ Staged changes from `git reset --soft` need a commit:
 git commit -m "$(cat <<'EOF'
 {type}: {description} ({ITEM_ID})
 
-Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+Co-Authored-By: Claude <noreply@anthropic.com>
 EOF
 )"
 ```
 
-Check if docs were updated (steps 4-6 of `/ship`). If not, do them. Then proceed to 3b.
+Then proceed to 3b. (mark-done / archive / push now live past the gate — step 5a or step 6.)
 
 ### 3d: Full recovery
 
-Run `/ship` flow from step 3 onward: squash, mark done, archive plan, commit docs, merge.
+Run `/ship` steps 3–4: squash, then merge into `main`. Stop there — mark-done / archive / push / cleanup are deferred to the gate (step 5a hands them to the pipeline; inline runs them at step 6).
 
 ## 4. Verify
 
@@ -109,11 +111,24 @@ Pattern: {novel conflict pattern to add to /ship, or "none"}
 
 If Pattern is non-empty, suggest updating `/ship`'s merge-conflict list in the report.
 
-## 6. Push and clean up
+## 5a. Autopilot hand-off gate
+
+**If `Arguments` contains `autopilot` and `--target=direct-push`**: you were invoked by the pipeline's ship-recovery path. The merge has landed on `main` and step 4 verification passed. **STOP here** — report `ship-merged: {ITEM_ID}` on the final line. Do **not** run step 6 (mark-done, archive, push, cleanup): the pipeline owns them deterministically once it re-verifies the merge. They are zero-turn, idempotent, best-effort code — running them yourself only burns budget the pipeline will redo. If recovery could **not** land or verify the merge, report that failure instead of `ship-merged`, so the pipeline's `verifyShipLanded` gate keeps it from pushing an unlanded merge.
+
+**Otherwise (inline / human-invoked)**: continue to step 6 and run the bookkeeping tail yourself.
+
+## 6. Finish bookkeeping (inline only)
+
+Reached only from step 5a's inline branch. Mirror `/ship` steps 6–9 — mark done, archive plan, push, then clean up:
 
 ```bash
 cd "{MAIN_REPO}"
+npx @cdhorne/claude-autopilot roadmap mark-done "$ITEM_ID"
+npx @cdhorne/claude-autopilot roadmap archive-plan "$ITEM_ID"
 git push origin main
+# TOOL-52: repair MAIN's node_modules if a worktree-side `pnpm install`
+# re-pointed any top-level symlinks into the worktree's .pnpm store.
+npx @cdhorne/claude-autopilot worktree-deps --repair-main
 git worktree remove "$WORKTREE" --force 2>/dev/null
 git branch -d "$BRANCH" 2>/dev/null
 git push origin --delete "$BRANCH" 2>/dev/null

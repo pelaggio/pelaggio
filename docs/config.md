@@ -18,6 +18,14 @@ CLAUDE_AUTOPILOT_WORKTREE_PREFIX  >  worktree.prefix (yml)  >  basename(REPO) + 
 
 All other values use: `yml value` > default.
 
+`budgets`, `turn-limits`, and `effort` also support a per-profile layer that
+overrides the global step value for one profile only (see
+[Per-profile step overrides](#per-profile-step-overrides)):
+
+```
+models.profiles.<name>.<section>.<step>  >  <section>.<step> (global yml)  >  default
+```
+
 ## Annotated example
 
 ```yaml
@@ -57,12 +65,12 @@ turn-limits:                    # SDK turn cap per step
   shakedown-plan: 60
   implement: 200
   shakedown-code: 150
-  ship: 40
+  ship: 60
   shipwreck: 40
 
 effort:                         # "low" | "medium" | "high" | "xhigh" | "max"
-  pick: medium                  # xhigh is Opus 4.7/4.8-only; falls back to high on other models.
-  plan: xhigh                   # Opus 4.8 defaults to `high` when effort is omitted; max is Opus 4.6/4.7/4.8-only.
+  pick: medium                  # xhigh needs Opus 4.7/4.8 or Sonnet 5; falls back to high on models without it.
+  plan: xhigh                   # Opus 4.8 defaults to `high` when effort is omitted; max needs Opus 4.6/4.7/4.8 or Sonnet 5.
   shakedown-plan: xhigh
   implement: xhigh
   shakedown-code: xhigh
@@ -72,22 +80,33 @@ effort:                         # "low" | "medium" | "high" | "xhigh" | "max"
 models:
   profiles:
     standard:
-      pick: claude-sonnet-4-6
+      pick: claude-sonnet-5
       plan: claude-opus-4-8
       shakedown-plan: claude-opus-4-8
       implement: claude-opus-4-8
       shakedown-code: claude-opus-4-8
-      ship: claude-sonnet-4-6
-      shipwreck: claude-sonnet-4-6
+      ship: claude-opus-4-8
+      shipwreck: claude-sonnet-5
     quick:
-      pick: claude-sonnet-4-6
-      plan: claude-sonnet-4-6
-      shakedown-plan: claude-sonnet-4-6
-      implement: claude-sonnet-4-6
-      shakedown-code: claude-sonnet-4-6
-      ship: claude-sonnet-4-6
-      shipwreck: claude-sonnet-4-6
+      pick: claude-sonnet-5
+      plan: claude-sonnet-5
+      shakedown-plan: claude-sonnet-5
+      implement: claude-sonnet-5
+      shakedown-code: claude-sonnet-5
+      ship: claude-sonnet-5
+      shipwreck: claude-sonnet-5
     # Additional named profiles (e.g. `thrifty`) can be added here.
+    # A profile may also carry its own budgets / effort / turn-limits, which
+    # override the global step values above for that profile only (sparse —
+    # list only the steps you want to bump):
+    # deep:
+    #   plan: claude-opus-4-8
+    #   budgets:
+    #     plan: 16                # this profile's plan cap; other steps stay global
+    #   effort:
+    #     plan: max
+    #   turn-limits:
+    #     plan: 120
 ```
 
 ## Merge semantics
@@ -103,6 +122,42 @@ models:
   names (`pick`, `plan`, `shakedown-plan`, etc.) are literal keys whose
   internal hyphens are part of the step identifier.
 
+## Per-profile step overrides
+
+The top-level `budgets`, `turn-limits`, and `effort` blocks set values that
+apply to *every* profile. A profile that swaps a step onto a differently-priced
+or differently-tuned model often needs matching cost/effort headroom — so each
+`models.profiles.<name>` may also carry its own `budgets:`, `effort:`, and
+`turn-limits:` sub-blocks:
+
+```yaml
+models:
+  profiles:
+    deep:
+      plan: claude-opus-4-8       # step → model, as usual
+      budgets:
+        plan: 16                  # raise just this profile's plan budget
+      effort:
+        plan: max
+      turn-limits:
+        plan: 120
+```
+
+- **Sparse.** A per-profile block lists only the steps it changes. Any step you
+  omit falls through to the global value for that section, then to the default.
+  Precedence per step:
+  `models.profiles.<name>.<section>.<step>` > `<section>.<step>` (global) > default.
+- **Isolated.** An override on `deep` never affects `standard`, `quick`, or any
+  other profile — and never affects `deep`'s *other* steps.
+- **Same value rules as the global blocks.** `budgets`/`turn-limits` take
+  numbers; `effort` takes one of `low | medium | high | xhigh | max`. A wrong
+  type or a non-map block fails loudly at startup with the file path and the
+  dotted key (e.g. `models.profiles.deep.budgets.plan`).
+- **Unknown steps ignored.** A non-step key inside an override block (e.g.
+  `budgets.bogus`) is silently dropped, same as the global sections.
+- The built-in `standard` and `quick` profiles carry no override blocks, so out
+  of the box every profile resolves to the global/default step values.
+
 ## Ship target
 
 `ship.target` selects how `/ship` lands the branch. Three modes:
@@ -115,6 +170,24 @@ models:
 
 Default: `direct-push`. Precedence: `--target` CLI flag > `ship.target` yml > default.
 Invalid values fail fast at startup with the list of valid names.
+
+**`direct-push` splits the work at the merge.** In pipeline runs the `ship`
+step's job ends once the branch is squashed, merged into local `main`, and
+post-merge verification passes — it then stops (`ship-merged: <ID>`). Everything
+past the merge — recovering any stray `MAIN_REPO` changes as a commit (never
+discarded), mark-done, archive-plan, the single `git push`, and worktree/branch
+cleanup — is run by the **pipeline itself** as deterministic, zero-turn,
+idempotent code (`ship/bookkeeping.ts`), not by the budget-capped agent. This
+guarantees bookkeeping can't be dropped when the ship step runs out of turns
+after merging, and can't destroy a sibling cycle's uncommitted work. The tail
+runs only on a **verified** merge (the ship step reported success, i.e. it
+completed post-merge verification): a merge that lands but is unverified (the
+step ran out of turns) or fails post-merge verification routes to `/shipwreck`
+instead of a blind push. The tail's destructive steps (worktree/branch removal)
+are gated on mark-done + archive + push all succeeding — a real mark-done/archive
+error, a push failure, or a `git pull` conflict leaves the branch intact
+(recoverable on local `main`) and reports the cycle incomplete rather than
+shipped. Inline (human-typed) `/ship` still runs the full flow itself.
 
 In PR modes the worktree, local branch, and post-merge doc updates
 (task-index, roadmap "Recently completed", plan archive) are intentionally

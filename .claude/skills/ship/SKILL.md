@@ -48,7 +48,7 @@ git commit -m "$(cat <<'EOF'
 - {bullet 1}
 - {bullet 2}
 
-Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+Co-Authored-By: Claude <noreply@anthropic.com>
 EOF
 )"
 ```
@@ -64,6 +64,8 @@ git diff --name-only main...HEAD | grep -v '^docs/plans/'
 If the output is empty (only the `/plan` artifact changed), **abort immediately** — the feature branch has no implementation. Do not proceed with merge. Doc-only work outside `docs/plans/` (rubric, skill bodies, README, roadmap edits) is legitimate and should pass.
 
 ## 4. Merge code
+
+**Never discard MAIN_REPO changes.** If the merge target (`{MAIN_REPO}` on `main`) has uncommitted changes — e.g. a prior cycle's deferred `create-item` or pending bookkeeping — **commit them** (`git add -A && git commit -m "chore: recover uncommitted bookkeeping" --no-verify`); do **not** `git checkout`/`reset --hard`/`stash drop`/`git clean` them away to get a clean tree. Destroying a sibling cycle's work to make your merge tidy is never acceptable.
 
 **If `--pr`**: skip merge, `git push -u origin HEAD`, create PR via `gh pr create`. Then skip to step 8 (Report) — docs updates will happen when the PR is merged.
 
@@ -90,6 +92,12 @@ git merge "$BRANCH" --no-edit
 If `pnpm-lock.yaml` was modified in the merge, run `pnpm install --frozen-lockfile` from `{MAIN_REPO}` first — the lockfile is merged but new packages won't be available until installed.
 
 Re-run the verification commands from `.claude/skills/_rubric.md`'s Verification section from `{MAIN_REPO}`. If any fail, **stop and fix** — do not push broken code to main. This catches regressions introduced by the merge itself.
+
+## 5a. Autopilot hand-off gate
+
+**If `Arguments` contains `autopilot` and `--target=direct-push`**: you are the pipeline's ship step, and the merge has now landed on local `main`. **STOP here** — report `ship-merged: {ID}` on the final line. Do **not** run steps 6–10 (mark-done, archive, push, cleanup): the pipeline owns them deterministically once it detects the merge. They are zero-turn, idempotent, best-effort code — running them yourself only burns budget the pipeline will redo. If post-merge verification (step 5) surfaced a genuine regression you could not fix, report that as a failure instead of `ship-merged` so the pipeline routes to `/shipwreck`.
+
+**Otherwise (inline `/ship`, human-invoked)**: continue to step 6 and run the flow end to end yourself.
 
 ## 6. Mark done
 

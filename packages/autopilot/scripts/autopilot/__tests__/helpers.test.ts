@@ -4,7 +4,27 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { describe, it } from "node:test";
-import { computeImplementTurns, countPlanFiles, filesChangedSince, fmtWait, getHeadSha, hasDeliverableCommits, parsePickItem, parsePickResult, parseResetTime, parseWaitFlag } from "../helpers.js";
+import {
+	canRetryWithinBudget,
+	checkpoint,
+	classifyStepError,
+	computeImplementTurns,
+	countPlanFiles,
+	filesChangedSince,
+	fmtWait,
+	getHeadSha,
+	hasDeliverableCommits,
+	isRefusal,
+	looksLikeRefusal,
+	looksLikeStalledAsk,
+	parseBlockedReason,
+	parsePickItem,
+	parsePickResult,
+	parseResetTime,
+	parseVerdict,
+	parseWaitFlag,
+	verifyShipLanded,
+} from "../helpers.js";
 
 function makeFeatRepo(): string {
 	const dir = mkdtempSync(join(tmpdir(), "autopilot-helpers-test-"));
@@ -204,6 +224,31 @@ describe("hasDeliverableCommits", () => {
 	});
 });
 
+describe("verifyShipLanded", () => {
+	it("returns true when main advanced (feat merged in)", () => {
+		const dir = makeFeatRepo();
+		commitFile(dir, "src/foo.ts", "export const x = 1;\n", "feat code");
+		const featSha = execSync("git rev-parse HEAD", { cwd: dir, encoding: "utf-8" }).trim();
+		execSync("git checkout -q main", { cwd: dir });
+		const mainBefore = execSync("git rev-parse main", { cwd: dir, encoding: "utf-8" }).trim();
+		execSync("git merge feat/tool-99 --no-edit -q", { cwd: dir });
+		assert.equal(verifyShipLanded(dir, mainBefore, featSha), true);
+	});
+
+	it("returns false when main did not advance (ghost-ship)", () => {
+		const dir = makeFeatRepo();
+		commitFile(dir, "src/foo.ts", "export const x = 1;\n", "feat code");
+		const featSha = execSync("git rev-parse HEAD", { cwd: dir, encoding: "utf-8" }).trim();
+		const mainSha = execSync("git rev-parse main", { cwd: dir, encoding: "utf-8" }).trim();
+		// main never merged the feat branch.
+		assert.equal(verifyShipLanded(dir, mainSha, featSha), false);
+	});
+
+	it("fails closed: a git error during verification returns false (routes to /shipwreck, not a blind push)", () => {
+		assert.equal(verifyShipLanded("/nonexistent/path/does/not/exist", "deadbeef", "cafebabe"), false);
+	});
+});
+
 describe("parsePickResult", () => {
 	it("returns null when no tag is present", () => {
 		assert.equal(parsePickResult("nothing to see here"), null);
@@ -338,5 +383,210 @@ describe("computeImplementTurns", () => {
 		const body = ["## Files", "", "| Path | Change |", "|---|---|", rows].join("\n");
 		// 2*150 + 60 = 360 → clamped to 250
 		assert.equal(computeImplementTurns(body, 200), 250);
+	});
+});
+
+describe("canRetryWithinBudget", () => {
+	it("allows the retry when remaining budget ≥ step budget", () => {
+		assert.equal(canRetryWithinBudget({ spent: 10, maxBudget: 40, stepBudget: 25 }), true);
+	});
+
+	it("skips the retry when remaining budget < step budget", () => {
+		assert.equal(canRetryWithinBudget({ spent: 20, maxBudget: 40, stepBudget: 25 }), false);
+	});
+
+	it("allows the retry at the exact boundary (remaining === step budget)", () => {
+		assert.equal(canRetryWithinBudget({ spent: 15, maxBudget: 40, stepBudget: 25 }), true);
+	});
+
+	it("disables the gate for a non-finite maxBudget (unset / unparseable --budget)", () => {
+		assert.equal(canRetryWithinBudget({ spent: 100, maxBudget: NaN, stepBudget: 25 }), true);
+	});
+});
+
+describe("classifyStepError", () => {
+	it("classifies rate-limit messages", () => {
+		assert.equal(classifyStepError("rate limit exceeded", false), "error_rate_limit");
+		assert.equal(classifyStepError("usage limit reached", false), "error_rate_limit");
+		assert.equal(classifyStepError("quota exhausted", false), "error_rate_limit");
+	});
+
+	it("lets the authoritative parked flag win over an unrelated message", () => {
+		assert.equal(classifyStepError("some unrelated failure", true), "error_rate_limit");
+	});
+
+	it("does NOT classify a safety 'rejected' as a rate limit (dropped-word regression guard)", () => {
+		assert.equal(classifyStepError("request rejected by safety filter", false), "error_sdk");
+	});
+
+	it("classifies budget, abort, and max-turns", () => {
+		assert.equal(classifyStepError("budget exceeded", false), "error_budget");
+		assert.equal(classifyStepError("aborted", false), "error_abort");
+		assert.equal(classifyStepError("max turns reached", false), "error_max_turns");
+	});
+
+	it("falls through to error_sdk for a generic message", () => {
+		assert.equal(classifyStepError("something else broke", false), "error_sdk");
+	});
+});
+
+describe("looksLikeRefusal", () => {
+	it("matches each refusal opener variant", () => {
+		assert.equal(looksLikeRefusal("I can't help with that."), true);
+		assert.equal(looksLikeRefusal("I cannot assist with this request."), true);
+		assert.equal(looksLikeRefusal("I'm not able to continue here."), true);
+		assert.equal(looksLikeRefusal("I am unable to comply."), true);
+		assert.equal(looksLikeRefusal("I won't be able to help with this."), true);
+		assert.equal(looksLikeRefusal("I must decline this task."), true);
+		assert.equal(looksLikeRefusal("I'm sorry, but I can't do that."), true);
+	});
+
+	it("does not match a decline discussed mid-paragraph (anchoring guard)", () => {
+		assert.equal(looksLikeRefusal("The reviewer notes the code can't be simplified further."), false);
+	});
+
+	it("does not match a long legitimate review", () => {
+		const review = `The plan is well-structured. It correctly addresses the rubric's Correct dimension by ${"padding ".repeat(40)}and the verdict is sound.`;
+		assert.equal(looksLikeRefusal(review), false);
+	});
+
+	it("returns false for empty input", () => {
+		assert.equal(looksLikeRefusal(""), false);
+	});
+});
+
+describe("isRefusal", () => {
+	it("is true for the structured refusal stop_reason regardless of text", () => {
+		assert.equal(isRefusal("refusal", ""), true);
+		assert.equal(isRefusal("refusal", "Here is a normal-looking review."), true);
+	});
+
+	it("trusts a populated non-refusal stop_reason over refusal-shaped text", () => {
+		assert.equal(isRefusal("end_turn", "I can't help with that."), false);
+	});
+
+	it("falls back to the text heuristic when stop_reason is absent", () => {
+		assert.equal(isRefusal(null, "I can't help with that. This request touches security tooling."), true);
+		assert.equal(isRefusal(undefined, "I must decline this review."), true);
+	});
+
+	it("does not treat a mid-paragraph decline as a refusal when stop_reason is absent", () => {
+		assert.equal(isRefusal(null, "The reviewer notes the code can't be simplified further."), false);
+	});
+});
+
+describe("parseVerdict", () => {
+	it("parses an explicit Verdict: line", () => {
+		assert.equal(parseVerdict("Verdict: APPROVE"), "APPROVE");
+		assert.equal(parseVerdict("Verdict: REVISE"), "REVISE");
+		assert.equal(parseVerdict("Verdict: RETHINK"), "RETHINK");
+	});
+
+	it("parses existing VERDICT: and bold shapes", () => {
+		assert.equal(parseVerdict("VERDICT: APPROVE"), "APPROVE");
+		assert.equal(parseVerdict("Verdict: **APPROVE**"), "APPROVE");
+	});
+
+	it("parses a bare keyword when no verdict line is present", () => {
+		assert.equal(parseVerdict("This plan needs a RETHINK before proceeding."), "RETHINK");
+		assert.equal(parseVerdict("Please REVISE the approach."), "REVISE");
+	});
+
+	it("returns APPROVE for an engaged review that omitted the keyword (fail-safe preserved)", () => {
+		const review = `This review checks the plan against the rubric. The Correct dimension holds: ${"the approach is sound and ".repeat(8)}no blocker found.`;
+		assert.equal(parseVerdict(review), "APPROVE");
+	});
+
+	it("fails closed to RETHINK for empty, refused, or non-review output", () => {
+		assert.equal(parseVerdict(""), "RETHINK");
+		assert.equal(parseVerdict("I can't help with that."), "RETHINK");
+		assert.equal(parseVerdict("ok done"), "RETHINK");
+	});
+});
+
+describe("parseBlockedReason", () => {
+	it("parses a trailing BLOCKED: line into its reason", () => {
+		assert.equal(parseBlockedReason("Investigated the issue.\nBLOCKED: missing API key"), "missing API key");
+	});
+
+	it("tolerates bold markers (matching parseVerdict)", () => {
+		assert.equal(parseBlockedReason("**BLOCKED:** missing X"), "missing X");
+	});
+
+	it("parses even when trailing blank lines follow the sentinel", () => {
+		assert.equal(parseBlockedReason("BLOCKED: schema field absent\n\n  \n"), "schema field absent");
+	});
+
+	it("returns a placeholder reason for an empty BLOCKED: sentinel", () => {
+		assert.equal(parseBlockedReason("BLOCKED:"), "(no reason given)");
+	});
+
+	it("returns null for a normal final paragraph", () => {
+		assert.equal(parseBlockedReason("Implemented the feature and ran the tests. All green."), null);
+	});
+
+	it("does not fire on a mid-text mention followed by a normal finish (false-positive guard)", () => {
+		const text = "I considered whether this is BLOCKED: no, I found a workaround.\nImplemented successfully.";
+		assert.equal(parseBlockedReason(text), null);
+	});
+
+	it("is case-sensitive — lowercase blocked prose does not match", () => {
+		assert.equal(parseBlockedReason("the task is blocked: on a missing dependency"), null);
+	});
+
+	it("returns null for empty input", () => {
+		assert.equal(parseBlockedReason(""), null);
+	});
+});
+
+describe("looksLikeStalledAsk", () => {
+	it("flags a trailing question", () => {
+		assert.equal(looksLikeStalledAsk("Here is what I did.\nShall I proceed?"), true);
+	});
+
+	it("flags an offer-to-continue without a question mark", () => {
+		assert.equal(looksLikeStalledAsk("Want me to continue with the next file"), true);
+	});
+
+	it("returns false for a plain completion statement", () => {
+		assert.equal(looksLikeStalledAsk("Implemented the feature and ran the tests. All green."), false);
+	});
+
+	it("returns false for empty input", () => {
+		assert.equal(looksLikeStalledAsk(""), false);
+	});
+
+	it("returns false on a plain completion even though a BLOCKED line is the caller's precedence concern", () => {
+		assert.equal(looksLikeStalledAsk("Done. Everything is committed."), false);
+	});
+});
+
+describe("checkpoint", () => {
+	it("returns false silently on a clean tree (git reports on stdout, stderr is empty string)", () => {
+		const dir = makeFeatRepo();
+		const writes: string[] = [];
+		const orig = process.stderr.write.bind(process.stderr);
+		process.stderr.write = ((chunk: string | Uint8Array) => {
+			writes.push(chunk.toString());
+			return true;
+		}) as typeof process.stderr.write;
+		try {
+			assert.equal(checkpoint(dir, "test"), false);
+		} finally {
+			process.stderr.write = orig;
+		}
+		assert.deepEqual(
+			writes.filter((w) => w.includes("checkpoint commit failed")),
+			[],
+			`clean tree must not warn; got:\n${writes.join("")}`,
+		);
+	});
+
+	it("returns true and commits when the tree is dirty", () => {
+		const dir = makeFeatRepo();
+		writeFileSync(resolve(dir, "f.txt"), "x");
+		assert.equal(checkpoint(dir, "test"), true);
+		const log = execSync("git log --format=%s -1", { cwd: dir, encoding: "utf-8" }).trim();
+		assert.equal(log, "wip: autopilot test");
 	});
 });

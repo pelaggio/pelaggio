@@ -1,7 +1,7 @@
 import type { RunSummary } from "@cdhorne/claude-autopilot-server/types";
 import { useEffect, useState } from "react";
 import { ApiError, listRuns } from "../lib/api.js";
-import { formatDate, statusBadgeClass } from "../lib/format.js";
+import { formatDate, formatItemId, statusBadgeClass } from "../lib/format.js";
 import { retryInit, useRepos } from "../lib/repo.js";
 
 const POLL_MS = 5_000;
@@ -151,7 +151,7 @@ function RunRow({ r }: { r: RunSummary }) {
 		<tr>
 			<td>
 				<a href={`/ui/runs/?id=${encodeURIComponent(r.id)}`} className="block min-h-[44px] py-2">
-					{r.item}
+					{formatItemId(r.item, r.repo)}
 				</a>
 			</td>
 			<td>{r.lastStep ?? "—"}</td>

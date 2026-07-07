@@ -36,12 +36,17 @@ export type PipelineStep = (typeof STEPS)[number];
 /** Pipeline steps + recovery actions (shipwreck runs after ship failure, not as a pipeline stage) */
 export type Step = PipelineStep | "shipwreck";
 
+/** Type guard for a valid pipeline step. Excludes `shipwreck` (not a pipeline stage) — see `--from` validation in pipeline.ts. */
+export function isPipelineStep(s: string): s is PipelineStep {
+	return (STEPS as readonly string[]).includes(s);
+}
+
 const ALL_STEPS: readonly Step[] = [...STEPS, "shipwreck"];
 
 // ── Model literals ─────────────────────────────────────────────────────
 
 const OPUS = "claude-opus-4-8";
-const SONNET = "claude-sonnet-4-6";
+const SONNET = "claude-sonnet-5";
 
 // ── Defaults ───────────────────────────────────────────────────────────
 
@@ -54,6 +59,9 @@ export interface ResolvedConfig {
 	turnLimits: Record<Step, number>;
 	effort: Record<Step, Effort>;
 	modelProfiles: Record<string, Partial<Record<Step, string>>>;
+	profileBudgets: Record<string, Partial<Record<Step, number>>>;
+	profileTurnLimits: Record<string, Partial<Record<Step, number>>>;
+	profileEffort: Record<string, Partial<Record<Step, Effort>>>;
 	shipTarget: ShipTargetName;
 	roadmapSource: RoadmapSourceName;
 	roadmapGithub: GithubRoadmapConfig;
@@ -116,6 +124,10 @@ function isStep(key: string): key is Step {
 	return (ALL_STEPS as readonly string[]).includes(key);
 }
 
+const isNumber = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+const isEffort = (v: unknown): v is Effort => v === "low" || v === "medium" || v === "high" || v === "xhigh" || v === "max";
+const isString = (v: unknown): v is string => typeof v === "string";
+
 function mergeStepRecord<T>(defaults: Record<Step, T>, override: unknown, section: string, validate: (v: unknown) => v is T, configPath: string): Record<Step, T> {
 	if (override === undefined) return { ...defaults };
 	if (!isPlainObject(override)) {
@@ -132,18 +144,53 @@ function mergeStepRecord<T>(defaults: Record<Step, T>, override: unknown, sectio
 	return out;
 }
 
-function mergeProfiles(defaults: Record<string, Partial<Record<Step, string>>>, override: unknown, configPath: string): Record<string, Partial<Record<Step, string>>> {
-	if (override === undefined) return Object.fromEntries(Object.entries(defaults).map(([k, v]) => [k, { ...v }]));
+/**
+ * Parse a per-profile override block (`budgets` / `effort` / `turn-limits`) into
+ * a *sparse* step map. Unlike `mergeStepRecord`, it starts from `{}` (no default
+ * fill), so a profile only carries the steps it explicitly sets — the resolver's
+ * `?? global[step]` fallback (see `resolveStepSettings`) supplies everything else.
+ * Pre-filling with defaults here would let a per-profile default wrongly shadow a
+ * top-level global override.
+ */
+function parseSparseStepRecord<T>(override: unknown, section: string, validate: (v: unknown) => v is T, configPath: string): Partial<Record<Step, T>> {
+	if (override === undefined) return {};
+	if (!isPlainObject(override)) {
+		throw new Error(`${configPath}: expected \`${section}\` to be a map, got ${Array.isArray(override) ? "array" : typeof override}`);
+	}
+	const out: Partial<Record<Step, T>> = {};
+	for (const [k, v] of Object.entries(override)) {
+		if (!isStep(k)) continue;
+		if (!validate(v)) {
+			throw new Error(`${configPath}: invalid value at \`${section}.${k}\``);
+		}
+		out[k] = v;
+	}
+	return out;
+}
+
+interface ParsedProfiles {
+	models: Record<string, Partial<Record<Step, string>>>;
+	budgets: Record<string, Partial<Record<Step, number>>>;
+	turnLimits: Record<string, Partial<Record<Step, number>>>;
+	effort: Record<string, Partial<Record<Step, Effort>>>;
+}
+
+function parseProfiles(defaults: Record<string, Partial<Record<Step, string>>>, override: unknown, configPath: string): ParsedProfiles {
+	const models: Record<string, Partial<Record<Step, string>>> = {};
+	for (const [name, base] of Object.entries(defaults)) models[name] = { ...base };
+	const budgets: Record<string, Partial<Record<Step, number>>> = {};
+	const turnLimits: Record<string, Partial<Record<Step, number>>> = {};
+	const effort: Record<string, Partial<Record<Step, Effort>>> = {};
+
+	if (override === undefined) return { models, budgets, turnLimits, effort };
 	if (!isPlainObject(override)) {
 		throw new Error(`${configPath}: expected \`models.profiles\` to be a map, got ${Array.isArray(override) ? "array" : typeof override}`);
 	}
-	const out: Record<string, Partial<Record<Step, string>>> = {};
-	for (const [name, base] of Object.entries(defaults)) out[name] = { ...base };
 	for (const [name, profile] of Object.entries(override)) {
 		if (!isPlainObject(profile)) {
 			throw new Error(`${configPath}: expected \`models.profiles.${name}\` to be a map`);
 		}
-		const merged: Partial<Record<Step, string>> = { ...(out[name] ?? {}) };
+		const merged: Partial<Record<Step, string>> = { ...(models[name] ?? {}) };
 		for (const [step, model] of Object.entries(profile)) {
 			if (!isStep(step)) continue;
 			if (typeof model !== "string") {
@@ -151,9 +198,16 @@ function mergeProfiles(defaults: Record<string, Partial<Record<Step, string>>>, 
 			}
 			merged[step] = model;
 		}
-		out[name] = merged;
+		models[name] = merged;
+
+		const b = parseSparseStepRecord(profile.budgets, `models.profiles.${name}.budgets`, isNumber, configPath);
+		if (Object.keys(b).length > 0) budgets[name] = b;
+		const t = parseSparseStepRecord(profile["turn-limits"], `models.profiles.${name}.turn-limits`, isNumber, configPath);
+		if (Object.keys(t).length > 0) turnLimits[name] = t;
+		const e = parseSparseStepRecord(profile.effort, `models.profiles.${name}.effort`, isEffort, configPath);
+		if (Object.keys(e).length > 0) effort[name] = e;
 	}
-	return out;
+	return { models, budgets, turnLimits, effort };
 }
 
 function parseFile(configPath: string): Record<string, unknown> {
@@ -178,10 +232,6 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 	const configPath = opts.configPath ?? resolve(repo, ".autopilot.yml");
 	const yml = parseFile(configPath);
 
-	const isNumber = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
-	const isEffort = (v: unknown): v is Effort => v === "low" || v === "medium" || v === "high" || v === "xhigh" || v === "max";
-	const isString = (v: unknown): v is string => typeof v === "string";
-
 	const budgets = mergeStepRecord(DEFAULTS.budgets, yml.budgets, "budgets", isNumber, configPath);
 	const turnLimits = mergeStepRecord(DEFAULTS.turnLimits, yml["turn-limits"], "turn-limits", isNumber, configPath);
 	const effort = mergeStepRecord(DEFAULTS.effort, yml.effort, "effort", isEffort, configPath);
@@ -194,7 +244,7 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		}
 		profilesOverride = modelsBlock.profiles;
 	}
-	const modelProfiles = mergeProfiles(DEFAULTS.modelProfiles, profilesOverride, configPath);
+	const { models: modelProfiles, budgets: profileBudgets, turnLimits: profileTurnLimits, effort: profileEffort } = parseProfiles(DEFAULTS.modelProfiles, profilesOverride, configPath);
 
 	// Worktree prefix: env > yml > basename default
 	let ymlPrefix: string | undefined;
@@ -304,17 +354,40 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		throw new Error(`${configPath}: \`roadmap.linear.team\` is required when roadmap.source is linear`);
 	}
 
-	return { repo, worktreePrefix, budgets, turnLimits, effort, modelProfiles, shipTarget, roadmapSource, roadmapGithub, roadmapLinear };
+	return { repo, worktreePrefix, budgets, turnLimits, effort, modelProfiles, profileBudgets, profileTurnLimits, profileEffort, shipTarget, roadmapSource, roadmapGithub, roadmapLinear };
+}
+
+// ── Step-settings resolver ─────────────────────────────────────────────
+
+export interface StepSettings {
+	budget: number;
+	turns: number;
+	effort: Effort;
+	model: string | undefined;
+}
+
+/**
+ * Resolve the effective per-step settings for a profile.
+ * Precedence: profile override > global step value (top-level yml merged onto
+ * DEFAULTS). The sparse override maps hold only steps a profile explicitly sets,
+ * so a missing key falls through to the always-present global — a resolution can
+ * never surface `undefined` for budget/turns/effort. `model` stays
+ * `string | undefined` (a profile need not name every step; the SDK defaults).
+ */
+export function resolveStepSettings(config: ResolvedConfig, profile: string, step: Step): StepSettings {
+	return {
+		budget: config.profileBudgets[profile]?.[step] ?? config.budgets[step],
+		turns: config.profileTurnLimits[profile]?.[step] ?? config.turnLimits[step],
+		effort: config.profileEffort[profile]?.[step] ?? config.effort[step],
+		model: config.modelProfiles[profile]?.[step],
+	};
 }
 
 // ── Resolved exports (populated at import time) ────────────────────────
 
-const CONFIG = loadConfig();
+export const CONFIG = loadConfig();
 
 export const WORKTREE_PREFIX = CONFIG.worktreePrefix;
-export const BUDGETS: Record<Step, number> = CONFIG.budgets;
-export const TURN_LIMITS: Record<Step, number> = CONFIG.turnLimits;
-export const EFFORT: Record<Step, Effort> = CONFIG.effort;
 export const MODEL_PROFILES: Record<string, Partial<Record<Step, string>>> = CONFIG.modelProfiles;
 export const SHIP_TARGET: ShipTargetName = CONFIG.shipTarget;
 export const ROADMAP_SOURCE: RoadmapSourceName = CONFIG.roadmapSource;

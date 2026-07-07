@@ -33,6 +33,11 @@ export function formatTokens(n: number): string {
 	return `${(n / 1_000_000).toFixed(2)}M`;
 }
 
+export function formatItemId(id: string, repo: string | null | undefined): string {
+	if (!repo || !/^\d+$/.test(id)) return id;
+	return `${repo}#${id}`;
+}
+
 const STATUS_CLASSES: Record<RunStatus, string> = {
 	running: "bg-blue-100 text-blue-800",
 	completed: "bg-green-100 text-green-800",

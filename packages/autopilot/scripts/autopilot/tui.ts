@@ -416,6 +416,19 @@ export function createStepRenderer(opts: StepRendererOpts): StepEmit {
 				break;
 			}
 
+			case "blocked": {
+				spinner?.stop();
+				if (ttyVerbose) ln(`${A.red("⚠")} blocked: ${A.dim(event.reason.slice(0, 120))}`);
+				plainLine(`   ⚠ BLOCKED: ${event.reason.slice(0, 200)}\n`);
+				break;
+			}
+
+			case "stalled_ask": {
+				if (ttyVerbose) ln(A.dim(`… stalled-ask (observe-only): ${event.tail.slice(0, 100)}`));
+				plainLine(`   … stalled-ask (observe-only): ${event.tail.slice(0, 120)}\n`);
+				break;
+			}
+
 			case "done": {
 				spinner?.stop();
 				if (ttyVerbose) {

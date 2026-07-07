@@ -1,8 +1,28 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { after, before, describe, it } from "node:test";
 import { runOrchestrator } from "../pipeline.js";
 import type { Flags } from "../types.js";
 import { createMockRunPipeline } from "./mocks.js";
+
+// runOrchestrator derives no-worktree (single-shot) mode from ambient env —
+// CI=true or CLAUDE_AUTOPILOT_SINGLE_SHOT=1 (see pipeline.ts). These tests
+// exercise the default worktree orchestration, so neutralize those vars for the
+// duration of the file. Without this the suite fails under any CI runner, since
+// GitHub Actions always sets CI=true, which flips the orchestrator onto the
+// single-shot path and short-circuits before runPipeline is called.
+const savedEnv: Record<string, string | undefined> = {};
+before(() => {
+	for (const key of ["CI", "CLAUDE_AUTOPILOT_SINGLE_SHOT"]) {
+		savedEnv[key] = process.env[key];
+		delete process.env[key];
+	}
+});
+after(() => {
+	for (const [key, value] of Object.entries(savedEnv)) {
+		if (value === undefined) delete process.env[key];
+		else process.env[key] = value;
+	}
+});
 
 const baseFlags: Flags = {
 	cycles: "1",
@@ -40,6 +60,52 @@ describe("runOrchestrator — resume mode", () => {
 		});
 		const { exitCode } = await runOrchestrator({ ...baseFlags, resume: "tool-99" }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });
 		assert.equal(exitCode, 1);
+	});
+});
+
+describe("runOrchestrator — resume --from override", () => {
+	it("override wins and short-circuits detectResumeStep", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({
+			byItem: { "TOOL-99": { completed: true, cost: 1 } },
+		});
+		let detectCalled = 0;
+		const detectResumeStep = () => {
+			detectCalled++;
+			return "ship" as const;
+		};
+		const { exitCode } = await runOrchestrator({ ...baseFlags, resume: "tool-99", from: "implement" }, { runPipeline, detectResumeStep, resolveWorktree: fakeResolveWorktree });
+		assert.equal(exitCode, 0);
+		assert.equal(calls.length, 1);
+		assert.equal(calls[0].opts.startFrom, "implement");
+		assert.equal(detectCalled, 0, "detectResumeStep must not run when --from overrides");
+	});
+
+	it("invalid --from exits 2 without invoking runPipeline", async (t) => {
+		t.mock.method(console, "error", () => {});
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({ default: { completed: true } });
+		const { exitCode } = await runOrchestrator({ ...baseFlags, resume: "X", from: "bogus" }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });
+		assert.equal(exitCode, 2);
+		assert.equal(calls.length, 0);
+	});
+
+	it("--from pick exits 2 without invoking runPipeline (pick never executes in resume mode)", async (t) => {
+		t.mock.method(console, "error", () => {});
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({ default: { completed: true } });
+		const { exitCode } = await runOrchestrator({ ...baseFlags, resume: "X", from: "pick" }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });
+		assert.equal(exitCode, 2);
+		assert.equal(calls.length, 0);
+	});
+
+	it("--from without --resume exits 2 without invoking runPipeline", async (t) => {
+		t.mock.method(console, "error", () => {});
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({ default: { completed: true } });
+		const { exitCode } = await runOrchestrator({ ...baseFlags, item: "X-1", from: "implement" }, { runPipeline });
+		assert.equal(exitCode, 2);
+		assert.equal(calls.length, 0);
 	});
 });
 

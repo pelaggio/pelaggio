@@ -1,7 +1,7 @@
 import type { PersistedRun, RunStatus } from "@cdhorne/claude-autopilot-server/types";
 import { useCallback, useEffect, useState } from "react";
 import { ApiError, getRun, pauseRun, resumeRun, stopRun } from "../lib/api.js";
-import { formatDate, statusBadgeClass } from "../lib/format.js";
+import { formatDate, formatItemId, statusBadgeClass } from "../lib/format.js";
 import { LogStream } from "./LogStream.js";
 
 interface RunDetailProps {
@@ -50,7 +50,7 @@ export function RunDetail({ id }: RunDetailProps) {
 	return (
 		<div className="space-y-6">
 			<header className="space-y-2">
-				<h1 className="text-2xl font-semibold">{run.item}</h1>
+				<h1 className="text-2xl font-semibold">{formatItemId(run.item, run.repo)}</h1>
 				<div className="flex flex-wrap items-center gap-3 text-sm">
 					<span className={statusBadgeClass(run.status)}>{run.status}</span>
 					<span className="text-slate-600">
