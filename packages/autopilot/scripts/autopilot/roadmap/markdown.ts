@@ -197,15 +197,27 @@ export class MarkdownRoadmap implements RoadmapSource {
 		const targetPath = resolve(docsDir, targetFile);
 		const body = readFileSync(targetPath, "utf-8");
 
-		// Determine ID prefix by scanning existing IDs in the file.
-		const idRe = /\b([A-Z]{1,6})-?(\d+)\b/g;
+		// Determine ID prefix by scanning existing item rows (checkbox/table) plus
+		// "Recently completed" list lines (`- ID ✓`, the shape getItem honors and
+		// /tidy produces) — not arbitrary prose. Prose tokens like "ADR-0003" or
+		// "WSL2" would otherwise pollute the count and mis-allocate the next ID
+		// (issue #46). Completed lines must count or the ID high-water mark is lost
+		// when rows are pruned, re-minting a shipped item's ID. The prefix grammar
+		// is [A-Z]+ (unbounded, like the row parsers') so any row they accept counts.
+		const idRe = /^([A-Z]+)-?(\d+)/;
 		const prefixCounts = new Map<string, number>();
 		const maxByPrefix = new Map<string, number>();
-		for (const m of body.matchAll(idRe)) {
-			const p = m[1];
-			const n = parseInt(m[2], 10);
+		const count = (p: string, n: number) => {
 			prefixCounts.set(p, (prefixCounts.get(p) ?? 0) + 1);
 			maxByPrefix.set(p, Math.max(maxByPrefix.get(p) ?? 0, n));
+		};
+		for (const row of [...parseOpenTableRows(body), ...parseCheckboxRows(body)]) {
+			const m = row.item.replace(/^~~\s*|\s*~~$/g, "").match(idRe);
+			if (!m) continue;
+			count(m[1], parseInt(m[2], 10));
+		}
+		for (const m of body.matchAll(/^-\s+([A-Z]+)-?(\d+)[\dA-Z-]*\s*✓/gmu)) {
+			count(m[1], parseInt(m[2], 10));
 		}
 		const prefix = [...prefixCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "ITEM";
 		const nextN = (maxByPrefix.get(prefix) ?? 0) + 1;
