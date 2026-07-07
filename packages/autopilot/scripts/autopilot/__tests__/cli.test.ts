@@ -28,6 +28,13 @@ describe("parseCli", () => {
 		assert.equal(intent.flags.from, "implement");
 	});
 
+	it("parses `--review-findings <path>` (issue #60)", () => {
+		const intent = parseCli(["--resume", "X", "--from", "implement", "--review-findings", "p.md"]);
+		assert.equal(intent.kind, "run");
+		if (intent.kind !== "run") return;
+		assert.equal(intent.flags["review-findings"], "p.md");
+	});
+
 	it("returns stats for `stats`", () => {
 		const intent = parseCli(["stats"]);
 		assert.deepEqual(intent, { kind: "stats", json: false });

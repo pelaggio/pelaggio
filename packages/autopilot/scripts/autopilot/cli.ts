@@ -9,6 +9,9 @@ const OPTIONS = {
 	item: { type: "string" },
 	resume: { type: "string" },
 	from: { type: "string" },
+	// Resume-only: path to a file of PR-review findings injected into the implement step
+	// (issue #60). No default → unset stays `undefined`.
+	"review-findings": { type: "string" },
 	verbose: { type: "boolean", default: false },
 	trace: { type: "boolean", default: false },
 	budget: { type: "string", default: "40" },

@@ -120,10 +120,38 @@ autonomous recipe needs.
 > and skips fork/draft PRs *inside* the job rather than via a job-level `if:` — either
 > would leave `review` stuck pending and block every PR forever.
 
+## Closing the loop on BLOCK (issue #60)
+
+A red `review` gate no longer just parks forever. `.github/workflows/pr-review-revise.yml`
+triggers on the review workflow's `workflow_run: completed` with `conclusion == failure` and,
+**exactly once per PR**, re-implements from the findings and re-pushes so the gate re-runs.
+
+- **Trigger** — `workflow_run` on `"PR review gate"` (the `pr-review.yml` job's `name:`), gated to
+  same-repo, non-fork, `feat/issue-*` branches whose linked issue carries the `autopilot` label.
+- **One-pass bound** — the workflow adds an `autopilot:revised` label to the PR **before** doing any
+  work. On a second red review the label is already present, so the workflow posts a park-for-human
+  comment and stops. A per-branch `concurrency` group (`cancel-in-progress: false`, which serializes
+  rather than cancels) makes the label check effectively atomic. The label doubles as a **manual kill
+  switch**: pre-apply `autopilot:revised` to opt a PR out of auto-revision entirely.
+- **Global off-switch** — set the repo Actions variable `AUTOPILOT_AUTO_REVISE` to `false` to disable
+  the loop repo-wide (the workflow's job `if:` checks `vars.AUTOPILOT_AUTO_REVISE != 'false'`).
+- **The revision seam** — the workflow writes the pr-review findings comment to
+  `.dev/review-findings-<id>.md` and runs
+  `autopilot --resume <id> --from implement --no-worktree --target pull-request --review-findings <path>`.
+  `--review-findings` is a **resume-only** flag: it reads the file best-effort and injects the findings
+  into the implement step as revision input (mirroring the plan-shakedown feedback injection). An
+  absent/unreadable file never crashes the resume. The `pull-request` ship is idempotent — it skips
+  `gh pr create` when a PR is already open and just pushes to the existing branch.
+- **PAT push is load-bearing** — commits pushed with the default `GITHUB_TOKEN` do **not** trigger
+  `pull_request` workflows (GitHub anti-recursion). The re-review depends on a `synchronize` (push)
+  event, so the workflow's `actions/checkout` uses `token: ${{ secrets.GH_TOKEN }}` (a PAT). Without
+  it the ship pushes but the loop silently never re-reviews.
+
+Every failure branch terminates: if the revision run itself crashes/parks before pushing, no
+re-review fires, the label is already set, and the `if: failure()` step posts a park comment — no
+second attempt.
+
 ## Follow-ups (not in this gate)
 
-- **Close the loop on BLOCK** — on a red `review`, trigger
-  `autopilot --resume <id> --from implement` with the findings as revision input
-  (bounded to one pass). Named by the issue as a separate item.
 - **Escalate to two-session finder→verifier** if single-session precision proves noisy.
 - **Notifications** — surface a red gate as a park-for-attention alert (issue #34).

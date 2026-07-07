@@ -23,6 +23,7 @@ import {
 	parseVerdict,
 	parseWaitFlag,
 	resolveWorktree,
+	reviewFindingsPreamble,
 	stepIndex,
 	verifyShipLanded,
 } from "./helpers.js";
@@ -451,11 +452,25 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			`Any path the plan writes as \`foo/bar\` (project-relative) means \`${worktree}/foo/bar\` — use that absolute form when calling Edit/Write/Bash, so the worktree-isolation hook does not mistake it for a main-repo reference.`,
 		].join("\n");
 
+		// Revision input (issue #60): on a resume driven by a red PR review, `--review-findings <path>`
+		// points at a findings file the closed-loop workflow wrote. Read best-effort — an absent or
+		// unreadable file must never crash a resume; it just means no review preamble is injected.
+		let reviewNote = "";
+		const findingsPath = flags["review-findings"];
+		if (findingsPath) {
+			try {
+				reviewNote = reviewFindingsPreamble(readFileSync(findingsPath, "utf-8"));
+			} catch {
+				reviewNote = "";
+			}
+		}
+
 		const implementPrompt =
 			profile === "quick"
 				? `${worktreeHint}\n\nThis is a small-scope item (bug fix or scope S). Implement it directly — no formal plan needed. Read the roadmap entry for ${itemId} to understand the requirements. Edit the target files the roadmap names; do NOT create or edit a plan file.`
 				: [
 						worktreeHint,
+						...(reviewNote ? ["", reviewNote] : []),
 						"",
 						verdict === "APPROVE" ? "Plan approved." : `Shakedown requested revisions:\n${shakedownPlanText.slice(0, 2000)}${shakedownPlanText.length > 2000 ? "\n...(truncated)" : ""}\nAddress the feedback, then implement.`,
 						"",
@@ -477,6 +492,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 
 		const continuePrompt = [
 			worktreeHint,
+			...(reviewNote ? ["", reviewNote] : []),
 			"",
 			"The previous implementation session ran out of turns. Code has been committed to disk.",
 			"",
@@ -780,8 +796,8 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 
 		// Resolve no-worktree: --no-worktree flag, CI=true, or CLAUDE_AUTOPILOT_SINGLE_SHOT=1
 		const noWorktree = flags["no-worktree"] || process.env.CI === "true" || process.env.CLAUDE_AUTOPILOT_SINGLE_SHOT === "1";
-		if (noWorktree && !flags.item) {
-			console.error("--no-worktree / CI mode requires --item <ID> (explicit item required; no auto-pick)");
+		if (noWorktree && !flags.item && !flags.resume) {
+			console.error("--no-worktree / CI mode requires --item <ID> or --resume <ID> (explicit id required; no auto-pick)");
 			return { exitCode: 2, results };
 		}
 		if (noWorktree && Number(flags.parallel) > 1) {
@@ -793,6 +809,13 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		// (normal/--item mode has no worktree or plan yet — pick must create them first).
 		if (flags.from !== undefined && !flags.resume) {
 			console.error("--from <step> requires --resume <id> (it overrides the auto-detected restart step)");
+			return { exitCode: 2, results };
+		}
+
+		// --review-findings feeds the implement step's revision input on a resume (issue #60);
+		// it is meaningless without a resume (a fresh --item run implements from the plan, not findings).
+		if (flags["review-findings"] !== undefined && !flags.resume) {
+			console.error("--review-findings <path> requires --resume <id> (it feeds the implement step revision input)");
 			return { exitCode: 2, results };
 		}
 

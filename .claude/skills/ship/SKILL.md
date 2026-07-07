@@ -67,7 +67,18 @@ If the output is empty (only the `/plan` artifact changed), **abort immediately*
 
 **Never discard MAIN_REPO changes.** If the merge target (`{MAIN_REPO}` on `main`) has uncommitted changes — e.g. a prior cycle's deferred `create-item` or pending bookkeeping — **commit them** (`git add -A && git commit -m "chore: recover uncommitted bookkeeping" --no-verify`); do **not** `git checkout`/`reset --hard`/`stash drop`/`git clean` them away to get a clean tree. Destroying a sibling cycle's work to make your merge tidy is never acceptable.
 
-**If `--pr`**: skip merge, `git push -u origin HEAD`, create PR via `gh pr create`. Then skip to step 8 (Report) — docs updates will happen when the PR is merged.
+**If `--pr`**: skip merge, push the branch, and create a PR **only if one is not already open** — a re-ship (e.g. issue #60's revision pass) pushes new commits to a branch whose PR is still open, and `gh pr create` errors on a duplicate. The push already updated the open PR; creation is idempotent:
+
+```bash
+git push -u origin HEAD
+if url=$(gh pr view --json url --jq .url 2>/dev/null); then
+  echo "PR already open: $url"   # report this exact URL on the final line
+else
+  gh pr create --fill            # or a title/body derived from the squashed commit
+fi
+```
+
+Then skip to step 8 (Report) — docs updates will happen when the PR is merged. **The final line must carry the PR URL whether the PR was just created or already existed** (the pipeline's `extractPrUrl` scans for it), so echo the pre-existing URL when creation is skipped.
 
 **Otherwise** (direct merge):
 

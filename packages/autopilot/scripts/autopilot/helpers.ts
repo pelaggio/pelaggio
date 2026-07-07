@@ -155,6 +155,33 @@ export function computeImplementTurns(planBody: string | null, fallback: number)
 	return Math.max(100, Math.min(250, 2 * files + 60));
 }
 
+// ── PR-review revision injection (issue #60) ───────────────────────────
+
+const REVIEW_FINDINGS_MAX = 6000;
+
+/**
+ * Build the implement-step preamble that turns a resume into a *revision* of already-shipped
+ * code driven by PR-review findings (issue #60). Empty/whitespace input → "" (caller omits the
+ * block). Truncated at REVIEW_FINDINGS_MAX with an explicit marker. Pure — unit-tested.
+ * Findings are more load-bearing than plan-shakedown text, so the cap is more generous than the
+ * 2000-char `shakedownPlanText.slice`.
+ */
+export function reviewFindingsPreamble(findings: string): string {
+	const body = findings.trim();
+	if (!body) return "";
+	const clipped = body.length > REVIEW_FINDINGS_MAX ? `${body.slice(0, REVIEW_FINDINGS_MAX)}\n...(truncated)` : body;
+	return [
+		"## A prior PR review BLOCKED this change — fix these findings",
+		"An automated PR-review gate blocked the merge. The plan below is ALREADY implemented on this",
+		"branch. Your job is to FIX the specific blocking issues the review found by editing the code —",
+		"not to re-implement from scratch. Address every blocking finding, then run the rubric",
+		"verification before finishing.",
+		"",
+		"### Review findings",
+		clipped,
+	].join("\n");
+}
+
 // ── Refusal & error classification ─────────────────────────────────────
 
 // Anchored refusal openers: a decline announces itself in the first sentence.
