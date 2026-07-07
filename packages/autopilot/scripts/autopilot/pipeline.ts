@@ -19,6 +19,7 @@ import {
 	listWorktrees as listWorktreesDefault,
 	parsePickItem,
 	parsePickResult,
+	parseShipMerged,
 	parseVerdict,
 	parseWaitFlag,
 	resolveWorktree,
@@ -622,6 +623,15 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	// interpretResult exactly as before.
 	if (target.name === "direct-push" && !opts.dryRun && preShipState) {
 		const merged = verifyShipLanded(mainRepo, preShipState.mainSha, preShipState.featSha);
+		// The skill contract (ship / shipwreck SKILL.md hand-off gates) requires the
+		// agent to emit `ship-merged: <itemId>` as proof it reached the gate — i.e. ran
+		// post-merge verification — rather than ending its session successfully some
+		// other way (issue #37). Session `ok` + an advanced `main` are necessary but not
+		// sufficient; without the marker the merge is treated as UNVERIFIED.
+		const reportedShipMerged = (r: StepResult): boolean => {
+			const id = parseShipMerged(`${r.text}\n${r.fullText}`);
+			return id !== null && id.toLowerCase() === itemId!.toLowerCase();
+		};
 		// The deterministic tail runs ONLY on a cleanly-verified merge. `ship.ok`
 		// means the agent completed post-merge verification (SKILL.md step 5) before
 		// reporting `ship-merged` — the merge is safe to push. A merge that landed
@@ -649,7 +659,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			return finish({ itemId, completed: true, cost, verdict });
 		};
 
-		const canTail = merged && ship.ok;
+		const canTail = merged && ship.ok && reportedShipMerged(ship);
 		if (canTail) return runTail("merge landed and verified — running deterministic bookkeeping tail");
 		// Not merged (ghost-ship / clean failure) OR merged-but-unverified (agent
 		// ran out of turns / hard-failed after merging) → /shipwreck, unless
@@ -666,10 +676,11 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			cost += wreck.cost;
 
 			// Tail runs ONLY on a shipwreck that actually LANDED the merge — mirrors the
-			// canTail gate (`merged && ship.ok`). verifyShipLanded fails closed, so a
-			// shipwreck reporting ok without advancing main (e.g. diagnosed "unknown")
-			// never reaches the destructive push/branch-delete steps.
-			const recoveredMerge = wreck.ok && verifyShipLanded(mainRepo, preShipState.mainSha, preShipState.featSha);
+			// canTail gate (`merged && ship.ok && reportedShipMerged(ship)`), including the
+			// #37 marker requirement. verifyShipLanded fails closed, so a shipwreck reporting
+			// ok without advancing main (e.g. diagnosed "unknown") never reaches the
+			// destructive push/branch-delete steps.
+			const recoveredMerge = wreck.ok && reportedShipMerged(wreck) && verifyShipLanded(mainRepo, preShipState.mainSha, preShipState.featSha);
 			if (!recoveredMerge) {
 				return finish({
 					itemId,

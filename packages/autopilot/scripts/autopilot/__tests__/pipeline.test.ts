@@ -73,6 +73,7 @@ describe("runPipeline — happy path", () => {
 				"shakedown-code": { ok: true },
 				ship: {
 					ok: true,
+					text: "ship-merged: TOOL-99",
 					sideEffect: (cwd) => {
 						execSync("git checkout -q main", { cwd });
 						execSync("git merge -q --no-ff feat/tool-99", { cwd });
@@ -164,6 +165,7 @@ describe("runPipeline — implement turn-limit retry", () => {
 				"shakedown-code": { ok: true },
 				ship: {
 					ok: true,
+					text: "ship-merged: TOOL-99",
 					sideEffect: (cwd) => {
 						execSync("git checkout -q main", { cwd });
 						execSync("git merge -q --no-ff feat/tool-99", { cwd });
@@ -231,6 +233,7 @@ describe("runPipeline — plan turn-limit retry", () => {
 				"shakedown-code": { ok: true },
 				ship: {
 					ok: true,
+					text: "ship-merged: TOOL-99",
 					sideEffect: (cwd) => {
 						execSync("git checkout -q main", { cwd });
 						execSync("git merge -q --no-ff feat/tool-99", { cwd });
@@ -282,6 +285,7 @@ describe("runPipeline — shakedown-plan turn-limit retry", () => {
 				"shakedown-code": { ok: true },
 				ship: {
 					ok: true,
+					text: "ship-merged: TOOL-99",
 					sideEffect: (cwd) => {
 						execSync("git checkout -q main", { cwd });
 						execSync("git merge -q --no-ff feat/tool-99", { cwd });
@@ -329,6 +333,7 @@ describe("runPipeline — shakedown-code turn-limit retry", () => {
 				"shakedown-code": [{ ok: false, subtype: "error_max_turns" }, { ok: true }],
 				ship: {
 					ok: true,
+					text: "ship-merged: TOOL-99",
 					sideEffect: (cwd) => {
 						execSync("git checkout -q main", { cwd });
 						execSync("git merge -q --no-ff feat/tool-99", { cwd });
@@ -658,6 +663,7 @@ describe("runPipeline — RoadmapSource injection", () => {
 				"shakedown-code": { ok: true },
 				ship: {
 					ok: true,
+					text: "ship-merged: TOOL-99",
 					sideEffect: (cwd) => {
 						execSync("git checkout -q main", { cwd });
 						execSync("git merge -q --no-ff feat/tool-99", { cwd });
@@ -765,6 +771,7 @@ describe("runPipeline — pick step", () => {
 				"shakedown-code": { ok: true },
 				ship: {
 					ok: true,
+					text: "ship-merged: TOOL-99",
 					sideEffect: () => {
 						execSync("git merge -q --no-ff feat/tool-99", { cwd: repo });
 					},
@@ -931,6 +938,7 @@ describe("runPipeline — pick step", () => {
 				"shakedown-code": { ok: true },
 				ship: {
 					ok: true,
+					text: "ship-merged: COMP-11C-II",
 					sideEffect: () => {
 						execSync("git merge -q --no-ff feat/comp-11c-ii", { cwd: repo });
 					},
@@ -981,6 +989,8 @@ describe("runPipeline — pick step", () => {
 				"shakedown-code": { ok: true },
 				ship: {
 					ok: true,
+					// Marker names the resolved itemId (COMP-11C-II), NOT the branch (feat/comp-11c-ii-fixes).
+					text: "ship-merged: COMP-11C-II",
 					sideEffect: () => {
 						execSync("git merge -q --no-ff feat/comp-11c-ii-fixes", { cwd: repo });
 					},
@@ -1063,6 +1073,7 @@ describe("runPipeline — pick step", () => {
 				"shakedown-code": { ok: true },
 				ship: {
 					ok: true,
+					text: "ship-merged: TOOL-99",
 					sideEffect: () => {
 						execSync("git merge -q --no-ff feat/tool-99", { cwd: repo });
 					},
