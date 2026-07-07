@@ -18,7 +18,7 @@ All roadmap lookups go through `npx @cdhorne/claude-autopilot roadmap ...`. The 
 
 Run `npx @cdhorne/claude-autopilot roadmap list --json` to get the open set (each item has `id`, `title`, `deps`, `sourceRef`, `status`).
 
-Run `git branch --list 'feat/*'` to get in-flight branches. Extract item IDs (e.g. `feat/tool-16-refit-split` → `TOOL-16`) to exclude already-claimed items.
+Claimed items arrive pre-marked: the adapter reports them as `status === "in-progress"` (markdown: a `feat/<id>` branch exists; github/linear: the server-side claim marker). Do NOT re-derive claims from `git branch --list` prose — the adapter is the single source.
 
 ## Selection
 
@@ -28,11 +28,12 @@ Parse `$ARGUMENTS` (may be empty).
 - `unknown` (exit 2) → report which source was queried and emit `pick-result: unknown-id`.
 - `done` → report it and emit `pick-result: already-done`.
 - `blocked` → **stop immediately** and report "⚠ {ID} is blocked: {blockedReason or deps text}. Cannot pick a blocked item." Do not create a branch or worktree. Emit `pick-result: blocked`.
-- `open` or `in-progress` → proceed to Claim.
+- `open` → proceed to Claim.
+- `in-progress` → a cycle (or stale branch) holds the claim: report it and go to the reuse flow below (ask whether to reuse the existing worktree or pick a different item; emit `pick-result: worktree-exists`). Never attempt a fresh claim on an in-progress item — it deterministically exits 3.
 
-**`/pick next`** (argument is exactly "next", no topic) — from the `roadmap list --json` output, **hard-skip any item with `status === "blocked"`**, then rank the remainder by: no unmet dependencies (empty `deps` or all deps satisfied) → calendar urgency → unblocks others → no overlap with claimed items. **Immediately auto-claim the top match — do NOT ask for confirmation, do NOT list alternatives, do NOT wait for user input.** Go straight from ranking to Claim. Do NOT filter by topic — consider all tracks. If the ranked list is empty after filtering, emit `pick-result: queue-empty`.
+**`/pick next`** (argument is exactly "next", no topic) — from the `roadmap list --json` output, **hard-skip any item with `status === "blocked"` or `status === "in-progress"`** (in-progress means a live cycle holds its `feat/<id>` branch or server-side claim marker — deterministic from the adapter, not a prose check), then rank the remainder by: no unmet dependencies (empty `deps` or all deps satisfied) → calendar urgency → unblocks others → no overlap with claimed items. **Immediately auto-claim the top match — do NOT ask for confirmation, do NOT list alternatives, do NOT wait for user input.** Go straight from ranking to Claim. Do NOT filter by topic — consider all tracks. If the ranked list is empty after filtering, emit `pick-result: queue-empty`.
 
-**`/pick next web-sync`** (argument is "next" followed by a topic) — same ranking but fuzzy-match the item's title against the topic. Same blocked exclusion. Emit `pick-result: queue-empty` if nothing matches.
+**`/pick next web-sync`** (argument is "next" followed by a topic) — same ranking but fuzzy-match the item's title against the topic. Same blocked/in-progress exclusion. Emit `pick-result: queue-empty` if nothing matches.
 
 **`/pick`** (no argument) — show all items from `roadmap list --json` grouped by source (use the `sourceRef` field). Mark blocked items but don't suggest them. Suggest a best unblocked pick. Ask user to confirm.
 
@@ -55,6 +56,13 @@ Run `npx @cdhorne/claude-autopilot roadmap claim --no-worktree <ID>` instead of 
    worktree=<absolute-path>
    ```
    Parse both. The adapter picks adapter-correct branch/worktree names (e.g. `feat/tool-16-refit-split` for markdown, `feat/issue-123-<slug>` for github-issues, `feat/acme-7-<slug>` for linear).
+
+   **If the claim exits 3** (already claimed — another pick won the race for the
+   `feat/<id>` branch, or the claim's server-side marker never surfaced), do NOT
+   retry the same ID. In `/pick next` mode: exclude that ID from your ranked list
+   and claim the next candidate (repeat as needed; emit `pick-result: queue-empty`
+   if the list empties). For an explicit `/pick <ID>`: emit
+   `pick-result: already-claimed`. The pipeline treats it as recoverable.
 
 2. Install deps: `npx @cdhorne/claude-autopilot worktree-deps "$WORKTREE"`. When the worktree's `pnpm-lock.yaml` matches the main repo's, this symlinks `node_modules` to MAIN_REPO's instead of running a fresh install — fast and avoids I/O contention between parallel worktrees. On lockfile drift or a missing main `node_modules`, it falls through to `pnpm install --frozen-lockfile --silent`. The helper prints the action taken (`link` / `noop` / `install` / `reinstall` / `relink`).
 
@@ -81,9 +89,10 @@ pick-result: <tag>
 | `unknown-id` | `/pick <ID>` for an ID the adapter reports as `unknown` (exit 2). |
 | `already-done` | `/pick <ID>` for an item whose `status` is `done`. |
 | `worktree-exists` | `/pick <ID>` where the `feat/<id-lower>-*` branch already exists. |
-| `queue-empty` | `/pick next [topic]` whose ranked list is empty after filtering blocked items. |
+| `already-claimed` | `roadmap claim` exited 3 — another pick raced you to the `feat/<id>` branch. |
+| `queue-empty` | `/pick next [topic]` whose ranked list is empty after filtering blocked and in-progress items. |
 
 The pipeline parses this line to decide whether the cycle continues (recoverable:
-`queue-empty`, `worktree-exists`, `already-done`) or halts (`blocked`,
-`unknown-id`). Restating the tag in a summary paragraph is fine — the pipeline
-uses the last occurrence.
+`queue-empty`, `worktree-exists`, `already-claimed`, `already-done`) or halts
+(`blocked`, `unknown-id`). Restating the tag in a summary paragraph is fine — the
+pipeline uses the last occurrence.

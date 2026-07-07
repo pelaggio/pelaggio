@@ -574,7 +574,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	// (a prior cycle's deferred create-item, pending bookkeeping, etc.). Never
 	// discards — see commitStrayBookkeeping.
 	if (!opts.dryRun && target.name === "direct-push") {
-		commitStrayBookkeeping(mainRepo, itemId!, log);
+		await commitStrayBookkeeping(mainRepo, itemId!, log);
 	}
 
 	// Capture pre-ship git state for merge detection (direct-push only).
@@ -855,7 +855,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		// `--item X,Y,Z` and user-requested blocked items halt loudly instead of
 		// silently skipping. `pick:unknown` (parser fallback) stays recoverable to
 		// preserve the old lenient behaviour when the skill emits an unrecognised tag.
-		const RECOVERABLE = new Set(["plan needs rethink", "parked", "pick:queue-empty", "pick:worktree-exists", "pick:already-done", "pick:unknown"]);
+		const RECOVERABLE = new Set(["plan needs rethink", "parked", "pick:queue-empty", "pick:worktree-exists", "pick:already-claimed", "pick:already-done", "pick:unknown"]);
 
 		async function worker(): Promise<void> {
 			while (true) {

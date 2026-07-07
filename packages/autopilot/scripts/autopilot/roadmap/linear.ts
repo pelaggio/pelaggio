@@ -1,7 +1,7 @@
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { WORKTREE_PREFIX } from "../config.js";
+import { createClaimWorkspace } from "./git-claim.js";
 import type { CreateItemOpts, ItemStatus, LinearRoadmapConfig, MarkDoneContext, PlanLocation, RoadmapItem, RoadmapItemStatus, RoadmapSource, RoadmapSourceName } from "./types.js";
 
 const PLAN_MARKER = "<!-- autopilot-plan -->";
@@ -13,6 +13,9 @@ export interface LinearIssueListItem {
 	title: string;
 	description: string | null;
 	relations: { type: string; relatedIdentifier: string }[];
+	/** Optional claim markers (issue #12); stubs that omit them read as unclaimed. */
+	stateType?: string;
+	labels?: string[];
 }
 
 export interface LinearCommentNode {
@@ -83,7 +86,9 @@ export class LinearRoadmap implements RoadmapSource {
 		return issues.map((it) => {
 			const relations = it.relations ?? [];
 			const blocked = relations.some((r) => r.type === "blocked_by");
-			const status: ItemStatus = blocked ? "blocked" : "open";
+			// Server-side claim markers double as the cross-host claim signal (issue #12).
+			const claimed = it.stateType === "started" || (it.labels ?? []).includes(IN_PROGRESS_LABEL);
+			const status: ItemStatus = blocked ? "blocked" : claimed ? "in-progress" : "open";
 			return {
 				id: it.identifier,
 				title: it.title,
@@ -102,6 +107,7 @@ export class LinearRoadmap implements RoadmapSource {
 		let status: ItemStatus = "open";
 		if (issue.stateType === "completed" || issue.stateType === "canceled") status = "done";
 		else if (relations.some((r) => r.type === "blocked_by")) status = "blocked";
+		else if (issue.stateType === "started" || (issue.labels ?? []).includes(IN_PROGRESS_LABEL)) status = "in-progress";
 		return {
 			id: issue.identifier,
 			title: issue.title,
@@ -153,12 +159,17 @@ export class LinearRoadmap implements RoadmapSource {
 	async listOpenItems(): Promise<RoadmapItem[]> {
 		const api = await this.api();
 		const issues = await api.listIssues({ teamId: this.teamId, label: this.label || undefined });
-		return issues.map((it) => ({
-			id: it.identifier,
-			title: it.title,
-			deps: formatDeps(it.relations),
-			sourceRef: it.identifier,
-		}));
+		// This status-less list feeds the server /roadmap endpoint and the web
+		// StartForm — claimed (started/in-progress) issues must not look startable,
+		// preserving pre-#12 membership now that listIssues includes "started".
+		return issues
+			.filter((it) => !(it.stateType === "started" || (it.labels ?? []).includes(IN_PROGRESS_LABEL)))
+			.map((it) => ({
+				id: it.identifier,
+				title: it.title,
+				deps: formatDeps(it.relations),
+				sourceRef: it.identifier,
+			}));
 	}
 
 	async claimItem(id: string, opts?: { noWorktree?: boolean }): Promise<{ branch: string; worktree: string }> {
@@ -179,13 +190,7 @@ export class LinearRoadmap implements RoadmapSource {
 			// best-effort — label may not exist on the workspace
 		}
 
-		if (opts?.noWorktree) {
-			execSync(`git checkout -b ${branch} main`, { cwd: this.repo, stdio: "pipe" });
-			return { branch, worktree: this.repo };
-		}
-		const worktree = resolve(this.repo, "..", `${WORKTREE_PREFIX}${id.toLowerCase()}`);
-		execSync(`git worktree add -b ${branch} ${worktree} main`, { cwd: this.repo, stdio: "pipe" });
-		return { branch, worktree };
+		return createClaimWorkspace(this.repo, id, branch, opts);
 	}
 
 	async markDone(id: string, ctx?: MarkDoneContext): Promise<void> {
@@ -341,12 +346,24 @@ async function defaultLinearApi(): Promise<LinearApi> {
 		return res.nodes[0]?.id ?? null;
 	}
 
+	// SDK v82 exposes Issue.state as a GETTER returning LinearFetch (a promise) —
+	// `typeof state === "function"` is false, so probe all three shapes: method
+	// (older SDKs), promise-from-getter (v82), plain object (test stubs).
+	async function stateTypeOf(holder: { state?: unknown }): Promise<string | undefined> {
+		let s = holder.state;
+		if (typeof s === "function") s = (s as () => unknown).call(holder);
+		if (s && typeof (s as { then?: unknown }).then === "function") s = await (s as Promise<unknown>);
+		return (s as { type?: string } | undefined)?.type;
+	}
+
 	return {
 		async listIssues({ teamId, label, includeDone }) {
 			const filter: Record<string, unknown> = {
 				team: { id: { eq: teamId } },
 			};
-			if (!includeDone) filter.state = { type: { in: ["unstarted", "backlog", "triage"] } };
+			// "started" stays in the open listing so claimed items surface as
+			// in-progress instead of silently vanishing (issue #12).
+			if (!includeDone) filter.state = { type: { in: ["unstarted", "backlog", "triage", "started"] } };
 			if (label) filter.labels = { some: { name: { eq: label } } };
 			const res = await client.issues({ filter, first: 200 });
 			const items: LinearIssueListItem[] = [];
@@ -359,20 +376,14 @@ async function defaultLinearApi(): Promise<LinearApi> {
 						if (related?.identifier) relations.push({ type: r.type, relatedIdentifier: related.identifier });
 					}
 				}
-				items.push({ id: node.id, identifier: node.identifier, title: node.title, description: node.description ?? null, relations });
+				items.push({ id: node.id, identifier: node.identifier, title: node.title, description: node.description ?? null, relations, stateType: await stateTypeOf(node) });
 			}
 			return items;
 		},
 		async getIssue(identifier) {
 			const issue = await client.issue(identifier);
 			if (!issue) return null;
-			let stateType: string | undefined;
-			if (typeof issue.state === "function") {
-				const s = await issue.state();
-				stateType = s?.type;
-			} else if (issue.state && typeof issue.state === "object") {
-				stateType = (issue.state as { type: string }).type;
-			}
+			const stateType = await stateTypeOf(issue);
 			const relations: { type: string; relatedIdentifier: string }[] = [];
 			if (typeof issue.relations === "function") {
 				const rel = await issue.relations();

@@ -31,9 +31,9 @@ export function listWorktrees(): string[] {
 
 // ── Pick result parsing ────────────────────────────────────────────────
 
-export type PickReason = "claimed" | "blocked" | "unknown-id" | "already-done" | "worktree-exists" | "queue-empty";
+export type PickReason = "claimed" | "blocked" | "unknown-id" | "already-done" | "worktree-exists" | "already-claimed" | "queue-empty";
 
-const PICK_REASONS: ReadonlySet<PickReason> = new Set(["claimed", "blocked", "unknown-id", "already-done", "worktree-exists", "queue-empty"]);
+const PICK_REASONS: ReadonlySet<PickReason> = new Set(["claimed", "blocked", "unknown-id", "already-done", "worktree-exists", "already-claimed", "queue-empty"]);
 
 /**
  * Parse a structured `pick-result: <tag>` trailing line from the /pick skill output.

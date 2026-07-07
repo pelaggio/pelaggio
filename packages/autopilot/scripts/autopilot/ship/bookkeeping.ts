@@ -1,5 +1,6 @@
 import { execSync } from "node:child_process";
 import type { RoadmapSource } from "../roadmap/index.js";
+import { withMutationLock } from "../roadmap/mutation-lock.js";
 import { repairMainNodeModules } from "../worktree-deps.js";
 
 // ── Pipeline-owned deterministic bookkeeping tail (direct-push) ─────────
@@ -22,6 +23,8 @@ import { repairMainNodeModules } from "../worktree-deps.js";
 export type ExecFn = (cmd: string, cwd: string) => string;
 /** `git status --porcelain` seam. Injectable for tests. */
 export type StatusFn = (cwd: string) => string;
+/** Mutation-lock seam. Injectable for tests whose mainRepo is a fake path. */
+export type LockFn = <T>(repo: string, fn: () => Promise<T> | T) => Promise<T>;
 
 const defaultExec: ExecFn = (cmd, cwd) => execSync(cmd, { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
@@ -43,6 +46,7 @@ export interface ShipBookkeepingDeps {
 	log: (msg: string) => void;
 	exec?: ExecFn;
 	status?: StatusFn;
+	lock?: LockFn;
 	/** Repair MAIN's `node_modules` symlinks after worktree removal. Injectable for tests. */
 	repairMain?: (mainRepo: string) => void;
 	/**
@@ -88,23 +92,35 @@ function short(e: unknown): string {
  * a dirty tree and never has cause to `git checkout`/`reset` it away) and as
  * step 1 of the tail. Returns true iff a commit was created.
  */
-export function commitStrayBookkeeping(mainRepo: string, itemId: string, log: (msg: string) => void, io: { exec?: ExecFn; status?: StatusFn } = {}): boolean {
+export async function commitStrayBookkeeping(mainRepo: string, itemId: string, log: (msg: string) => void, io: { exec?: ExecFn; status?: StatusFn; lock?: LockFn } = {}): Promise<boolean> {
 	const exec = io.exec ?? defaultExec;
 	const status = io.status ?? defaultStatus;
-	let dirty: string;
+	const lock = io.lock ?? withMutationLock;
+	// `git add -A` in the shared MAIN_REPO must not run while another process's
+	// locked roadmap mutation is between its file writes and its own commit —
+	// the sweep would steal those edits into this recovery commit and make the
+	// rightful holder's commit fail. Same lock the adapter mutations take.
 	try {
-		dirty = status(mainRepo);
-	} catch {
-		return false;
-	}
-	if (!dirty) return false;
-	log(`recovering ${dirty.split("\n").length} stray MAIN_REPO change(s) as a commit (never discarded)`);
-	try {
-		exec(`git add -A && git commit -m ${JSON.stringify(`chore: recover uncommitted bookkeeping (${itemId})`)} --no-verify`, mainRepo);
-		return true;
+		return await lock(mainRepo, () => {
+			let dirty: string;
+			try {
+				dirty = status(mainRepo);
+			} catch {
+				return false;
+			}
+			if (!dirty) return false;
+			log(`recovering ${dirty.split("\n").length} stray MAIN_REPO change(s) as a commit (never discarded)`);
+			try {
+				exec(`git add -A -- . ':(exclude).dev' && git commit -m ${JSON.stringify(`chore: recover uncommitted bookkeeping (${itemId})`)} --no-verify`, mainRepo);
+				return true;
+			} catch (e) {
+				log(`⚠ recover-commit failed: ${short(e)}`);
+				return false;
+			}
+		});
 	} catch (e) {
-		log(`⚠ recover-commit failed: ${short(e)}`);
-		return false;
+		log(`⚠ recover-commit skipped (mutation lock): ${short(e)}`);
+		return false; // best-effort contract preserved: lock timeout ≠ tail failure
 	}
 }
 
@@ -181,7 +197,7 @@ export async function runShipBookkeeping(ctx: ShipBookkeepingCtx, deps: ShipBook
 	const inWorktree = worktree !== mainRepo;
 
 	// 1. Recover stray MAIN_REPO changes (never discard).
-	const recovered = commitStrayBookkeeping(mainRepo, itemId, log, { exec, status });
+	const recovered = await commitStrayBookkeeping(mainRepo, itemId, log, { exec, status, ...(deps.lock ? { lock: deps.lock } : {}) });
 
 	// 2. Mark done. The markdown adapter no-ops an already-done item (idempotent),
 	//    so a throw here is a REAL failure (format drift with the item still open,
