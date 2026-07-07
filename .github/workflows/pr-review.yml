@@ -1,0 +1,63 @@
+name: PR review gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [main]
+
+# One in-flight review per PR; a new push supersedes the previous run.
+concurrency:
+  group: pr-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  # Job id `review` == the required-status-check context. The job ALWAYS runs to
+  # completion so the `review` check always reports green/red (never perpetually
+  # pending). Fork/draft PRs skip the agent *inside* the job and still report
+  # green — gating via a job-level `if` would leave a required check stuck pending.
+  review:
+    runs-on: self-hosted
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Gate — same-repo, non-draft only
+        id: gate
+        run: |
+          if [ "${{ github.event.pull_request.head.repo.full_name }}" = "${{ github.repository }}" ] \
+             && [ "${{ github.event.pull_request.draft }}" = "false" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping review (fork PR or draft) — reporting green. Secrets are unavailable to forks and forks can't be autopilot PRs."
+          fi
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        if: steps.gate.outputs.run == 'true'
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
+        if: steps.gate.outputs.run == 'true'
+
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        if: steps.gate.outputs.run == 'true'
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - run: pnpm install --frozen-lockfile
+        if: steps.gate.outputs.run == 'true'
+
+      # The CLI produces the review, posts one PR comment, and exits non-zero on a
+      # confirmed blocking finding (or on any refusal / SDK error — fail closed).
+      # That exit code is the job result, hence the `review` check color.
+      - name: Run review gate
+        if: steps.gate.outputs.run == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          CI: "true"
+        run: npx @cdhorne/claude-autopilot pr-review --pr "${{ github.event.pull_request.number }}"

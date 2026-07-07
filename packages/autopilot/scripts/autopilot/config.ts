@@ -33,15 +33,16 @@ export const LOG_PATH = resolve(REPO, ".dev", "autopilot-log.jsonl");
 
 export const STEPS = ["pick", "plan", "shakedown-plan", "implement", "shakedown-code", "ship"] as const;
 export type PipelineStep = (typeof STEPS)[number];
-/** Pipeline steps + recovery actions (shipwreck runs after ship failure, not as a pipeline stage) */
-export type Step = PipelineStep | "shipwreck";
+/** Pipeline steps + non-pipeline actions: `shipwreck` (runs after ship failure) and `pr-review`
+ *  (the standalone CI review gate) — both carry per-step config but are absent from `STEPS`. */
+export type Step = PipelineStep | "shipwreck" | "pr-review";
 
 /** Type guard for a valid pipeline step. Excludes `shipwreck` (not a pipeline stage) — see `--from` validation in pipeline.ts. */
 export function isPipelineStep(s: string): s is PipelineStep {
 	return (STEPS as readonly string[]).includes(s);
 }
 
-const ALL_STEPS: readonly Step[] = [...STEPS, "shipwreck"];
+const ALL_STEPS: readonly Step[] = [...STEPS, "shipwreck", "pr-review"];
 
 // ── Model literals ─────────────────────────────────────────────────────
 
@@ -92,6 +93,7 @@ export const DEFAULTS = {
 		"shakedown-code": 25,
 		ship: 3,
 		shipwreck: 3,
+		"pr-review": 5,
 	} satisfies Record<Step, number>,
 	turnLimits: {
 		pick: 30,
@@ -101,6 +103,7 @@ export const DEFAULTS = {
 		"shakedown-code": 150,
 		ship: 60,
 		shipwreck: 40,
+		"pr-review": 60,
 	} satisfies Record<Step, number>,
 	effort: {
 		pick: "medium",
@@ -110,10 +113,11 @@ export const DEFAULTS = {
 		"shakedown-code": "xhigh",
 		ship: "medium",
 		shipwreck: "medium",
+		"pr-review": "xhigh",
 	} satisfies Record<Step, Effort>,
 	modelProfiles: {
-		standard: { pick: SONNET, plan: OPUS, "shakedown-plan": OPUS, implement: OPUS, "shakedown-code": OPUS, ship: OPUS, shipwreck: SONNET },
-		quick: { pick: SONNET, plan: SONNET, "shakedown-plan": SONNET, implement: SONNET, "shakedown-code": SONNET, ship: SONNET, shipwreck: SONNET },
+		standard: { pick: SONNET, plan: OPUS, "shakedown-plan": OPUS, implement: OPUS, "shakedown-code": OPUS, ship: OPUS, shipwreck: SONNET, "pr-review": OPUS },
+		quick: { pick: SONNET, plan: SONNET, "shakedown-plan": SONNET, implement: SONNET, "shakedown-code": SONNET, ship: SONNET, shipwreck: SONNET, "pr-review": SONNET },
 	} satisfies Record<string, Partial<Record<Step, string>>>,
 	// Default `autoResume: true` preserves today's waiting behavior (the pipeline already
 	// waits by default via the old `--max-wait` 6h default) — flipping it false would

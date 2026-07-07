@@ -21,6 +21,7 @@ import {
 	parsePickItem,
 	parsePickResult,
 	parseResetTime,
+	parseReviewGate,
 	parseVerdict,
 	parseWaitFlag,
 	verifyShipLanded,
@@ -497,6 +498,33 @@ describe("parseVerdict", () => {
 		assert.equal(parseVerdict(""), "RETHINK");
 		assert.equal(parseVerdict("I can't help with that."), "RETHINK");
 		assert.equal(parseVerdict("ok done"), "RETHINK");
+	});
+});
+
+describe("parseReviewGate", () => {
+	it("passes only on an explicit Verdict: PASS from a successful run", () => {
+		assert.equal(parseReviewGate("Summary…\n\nVerdict: PASS", true), "pass");
+		assert.equal(parseReviewGate("verdict: pass", true), "pass");
+		assert.equal(parseReviewGate("**Verdict:** PASS", true), "pass");
+	});
+
+	it("blocks on an explicit Verdict: BLOCK", () => {
+		assert.equal(parseReviewGate("Found a bug.\n\nVerdict: BLOCK", true), "block");
+		assert.equal(parseReviewGate("**Verdict:** BLOCK", true), "block");
+	});
+
+	it("blocks when ok is false even if the text says PASS (ok-gate precedence)", () => {
+		assert.equal(parseReviewGate("Verdict: PASS", false), "block");
+	});
+
+	it("blocks an engaged review that omitted the verdict keyword (no engagement fail-safe — diverges from parseVerdict)", () => {
+		const review = `This review checks the diff against the rubric. The Correct dimension holds: ${"the change is sound and ".repeat(8)}no blocker found.`;
+		assert.equal(parseReviewGate(review, true), "block");
+	});
+
+	it("blocks empty or refusal-shaped output", () => {
+		assert.equal(parseReviewGate("", true), "block");
+		assert.equal(parseReviewGate("I can't help with that.", true), "block");
 	});
 });
 

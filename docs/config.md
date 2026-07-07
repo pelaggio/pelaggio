@@ -64,6 +64,7 @@ budgets:                        # dollars per step (safety-net caps)
   shakedown-code: 25
   ship: 3
   shipwreck: 3
+  pr-review: 5                  # CI merge-gate review (non-pipeline step; see docs/pr-review.md)
 
 turn-limits:                    # SDK turn cap per step
   pick: 30
@@ -73,6 +74,7 @@ turn-limits:                    # SDK turn cap per step
   shakedown-code: 150
   ship: 60
   shipwreck: 40
+  pr-review: 60
 
 effort:                         # "low" | "medium" | "high" | "xhigh" | "max"
   pick: medium                  # xhigh needs Opus 4.7/4.8 or Sonnet 5; falls back to high on models without it.
@@ -82,6 +84,7 @@ effort:                         # "low" | "medium" | "high" | "xhigh" | "max"
   shakedown-code: xhigh
   ship: medium
   shipwreck: medium
+  pr-review: xhigh
 
 models:
   profiles:
@@ -93,6 +96,7 @@ models:
       shakedown-code: claude-opus-4-8
       ship: claude-opus-4-8
       shipwreck: claude-sonnet-5
+      pr-review: claude-opus-4-8
     quick:
       pick: claude-sonnet-5
       plan: claude-sonnet-5
@@ -101,6 +105,7 @@ models:
       shakedown-code: claude-sonnet-5
       ship: claude-sonnet-5
       shipwreck: claude-sonnet-5
+      pr-review: claude-sonnet-5
     # Additional named profiles (e.g. `thrifty`) can be added here.
     # A profile may also carry its own budgets / effort / turn-limits, which
     # override the global step values above for that profile only (sparse —
@@ -127,6 +132,10 @@ models:
 - Section keys use kebab-case (`turn-limits`), matching YAML convention. Step
   names (`pick`, `plan`, `shakedown-plan`, etc.) are literal keys whose
   internal hyphens are part of the step identifier.
+- `shipwreck` and `pr-review` are **non-pipeline** steps: they carry the same
+  per-step config as pipeline stages but never run as part of a `/pick → … →
+  /ship` cycle. `shipwreck` is ship-failure recovery; `pr-review` is the
+  standalone CI merge gate (see [docs/pr-review.md](./pr-review.md)).
 
 ## Per-profile step overrides
 
