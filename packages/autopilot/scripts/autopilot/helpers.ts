@@ -390,7 +390,9 @@ export function hasDeliverableCommits(worktree: string): boolean {
 
 /**
  * Capture the state needed to verify a direct-push ship landed. Returns null
- * if either git command fails (e.g. no main branch in test env — skip check).
+ * if either git command fails (e.g. no main branch). The caller (pipeline.ts)
+ * fails the cycle closed on a null result for direct-push rather than shipping
+ * blind — a repo that can't answer `rev-parse` is not shippable.
  */
 export function captureShipState(mainRepo: string, worktree: string): { mainSha: string; featSha: string; branch: string } | null {
 	try {

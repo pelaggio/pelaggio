@@ -8,7 +8,7 @@ import { runOrchestrator, runPipeline } from "../pipeline.js";
 import type { ShipBookkeepingResult } from "../ship/index.js";
 import { getShipTarget } from "../ship/index.js";
 import type { Flags, ParkSignal, PipelineOpts } from "../types.js";
-import { allCommitMessages, createMockRunPipeline, createMockRunStep, makeLiveStatus, makeMockRoadmap, makeParkSignal, makeTempGitRepo, makeTempRepoWithParent } from "./mocks.js";
+import { allCommitMessages, createMockRunPipeline, createMockRunStep, makeLiveStatus, makeMockRoadmap, makeNonGitDir, makeParkSignal, makeTempGitRepo, makeTempRepoWithParent } from "./mocks.js";
 
 // The pipeline under test streams progress through console.log (see log() in
 // pipeline.ts). Left unmuted, that high-volume output floods the node:test
@@ -599,6 +599,43 @@ describe("runPipeline — ghost-ship detection", () => {
 		assert.equal(logs.length, 1);
 		assert.equal(logs[0].completed, false);
 		assert.equal(logs[0].shipwrecked, true);
+	});
+});
+
+describe("runPipeline — pre-ship state capture failure", () => {
+	it("fails closed when captureShipState returns null: no blind completion, no bookkeeping tail", async () => {
+		const worktree = makeTempGitRepo();
+		const nonGitMainRepo = makeNonGitDir();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep, calls } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				// Even if ship were invoked and reported success, a failed pre-ship
+				// capture must never reach this outcome blindly.
+				ship: { ok: true },
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
+			runStep,
+			mainRepo: nonGitMainRepo,
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+		});
+
+		assert.equal(result.completed, false);
+		assert.match(result.error ?? "", /cannot capture pre-ship git state/);
+		const stepsRun = calls.map((c) => c.step);
+		assert.ok(!stepsRun.includes("ship"), `ship should not have been invoked; got ${stepsRun.join(",")}`);
+		assert.equal(logs.length, 1);
+		assert.equal(logs[0].completed, false);
 	});
 });
 

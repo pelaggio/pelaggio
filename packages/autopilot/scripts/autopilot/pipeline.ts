@@ -586,6 +586,23 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	// Capture pre-ship git state for merge detection (direct-push only).
 	const preShipState = !opts.dryRun && target.name === "direct-push" ? captureShipState(mainRepo, worktree!) : null;
 
+	// Fail closed if the pre-ship capture itself failed: `preShipState === null` would
+	// otherwise skip the merge-verification block below entirely (its guard requires a
+	// truthy preShipState) and fall through to `target.interpretResult(ship)`, which for
+	// direct-push blindly returns `completed: ship.ok` with no verification, no shipwreck
+	// recovery, and no bookkeeping tail. A repo whose main repo can't answer `rev-parse` is
+	// not shippable — refuse before invoking the ship step rather than let the agent merge
+	// ungoverned.
+	if (target.name === "direct-push" && !opts.dryRun && !preShipState) {
+		return finish({
+			itemId,
+			completed: false,
+			cost,
+			verdict,
+			error: "cannot capture pre-ship git state — refusing to ship blind",
+		});
+	}
+
 	const ship = await step("ship", shipPrompt, worktree!);
 	cost += ship.cost;
 

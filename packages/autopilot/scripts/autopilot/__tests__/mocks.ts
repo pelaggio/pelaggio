@@ -142,6 +142,12 @@ export function makeTempGitRepo(): string {
 	return dir;
 }
 
+/** Plain tmp dir with no git repo — `git rev-parse` fails inside it, so passing it as
+ *  `mainRepo` makes `captureShipState` return null (simulates an unreadable main repo). */
+export function makeNonGitDir(): string {
+	return mkdtempSync(join(tmpdir(), "autopilot-nongit-"));
+}
+
 /**
  * Creates a tmp parent dir containing a git repo, so tests can inject a `mainRepo`
  * and also derive a sibling worktree path under the same parent (mirroring the
