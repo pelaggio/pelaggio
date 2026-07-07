@@ -49,7 +49,8 @@ optional; missing file or empty file = defaults. Parsed once at startup by
 `loadConfig()` in `config.ts` — parse errors fail loudly with the file path.
 
 Live keys (consumed today): `worktree.prefix`, `budgets.*`, `turn-limits.*`,
-`effort.*`, `models.profiles.<name>.*`, `ship.target`, `roadmap.source`.
+`effort.*`, `models.profiles.<name>.*`, `ship.target`, `roadmap.source`,
+`park.auto-resume`, `park.max-wait`.
 Unknown top-level keys (e.g. `project`, `docs`) are silently ignored for
 forward-compatibility as future TOOLs extend the schema.
 
