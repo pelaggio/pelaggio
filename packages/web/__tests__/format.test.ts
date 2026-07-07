@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { formatDate, formatDuration, formatTokens, formatUsd, statusBadgeClass } from "../src/lib/format.js";
+import { formatDate, formatDuration, formatItemId, formatTokens, formatUsd, statusBadgeClass } from "../src/lib/format.js";
 
 describe("formatDate", () => {
 	it("returns em-dash on undefined", () => {
@@ -53,6 +53,20 @@ describe("formatTokens", () => {
 	it("k-suffix under 1M", () => assert.equal(formatTokens(12_500), "12.5k"));
 	it("M-suffix at 1M+", () => assert.equal(formatTokens(2_500_000), "2.50M"));
 	it("em-dash on negative", () => assert.equal(formatTokens(-1), "—"));
+});
+
+describe("formatItemId", () => {
+	it("prefixes bare-numeric ids with the repo slug", () => {
+		assert.equal(formatItemId("30", "claude-autopilot"), "claude-autopilot#30");
+	});
+	it("leaves ids with their own prefix alone", () => {
+		assert.equal(formatItemId("TOOL-47", "claude-autopilot"), "TOOL-47");
+		assert.equal(formatItemId("AGT-1", "trellis-term"), "AGT-1");
+	});
+	it("returns the id unchanged when no repo is known", () => {
+		assert.equal(formatItemId("30", null), "30");
+		assert.equal(formatItemId("30", undefined), "30");
+	});
 });
 
 describe("statusBadgeClass", () => {

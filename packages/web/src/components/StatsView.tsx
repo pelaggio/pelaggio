@@ -1,7 +1,7 @@
 import type { Stats } from "@cdhorne/claude-autopilot";
 import { useEffect, useState } from "react";
 import { ApiError, getStats } from "../lib/api.js";
-import { formatTokens, formatUsd } from "../lib/format.js";
+import { formatItemId, formatTokens, formatUsd } from "../lib/format.js";
 import { retryInit, useRepos } from "../lib/repo.js";
 
 const POLL_MS = 30_000;
@@ -100,7 +100,7 @@ export function StatsView() {
 						.reverse()
 						.map((i) => (
 							<li key={`${i.id}-${i.date}`}>
-								<code>{i.id}</code> · {i.date} · {formatUsd(i.cost)}
+								<code>{formatItemId(i.id, currentRepo)}</code> · {i.date} · {formatUsd(i.cost)}
 								{i.parked ? " · parked" : ""}
 							</li>
 						))}
@@ -113,7 +113,7 @@ export function StatsView() {
 					<ul className="space-y-1 text-sm">
 						{stats.recentFailures.map((f) => (
 							<li key={`${f.ts}-${f.item ?? "?"}-${f.error ?? "?"}`}>
-								<span className="text-slate-500">{f.ts}</span> · {f.item ?? "?"} · {f.error ?? "?"}
+								<span className="text-slate-500">{f.ts}</span> · {f.item ? formatItemId(f.item, currentRepo) : "?"} · {f.error ?? "?"}
 							</li>
 						))}
 					</ul>

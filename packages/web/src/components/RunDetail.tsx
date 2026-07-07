@@ -50,7 +50,7 @@ export function RunDetail({ id }: RunDetailProps) {
 	return (
 		<div className="space-y-6">
 			<header className="space-y-2">
-				<h1 className="text-2xl font-semibold">{run.item}</h1>
+				<h1 className="text-2xl font-semibold">{formatItemId(run.item, run.repo)}</h1>
 				<div className="flex flex-wrap items-center gap-3 text-sm">
 					<span className={statusBadgeClass(run.status)}>{run.status}</span>
 					<span className="text-slate-600">
