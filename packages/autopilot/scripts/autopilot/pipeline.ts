@@ -703,8 +703,11 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 
 			let startFrom: Step;
 			if (flags.from !== undefined) {
-				if (!isPipelineStep(flags.from)) {
-					console.error(`invalid --from ${JSON.stringify(flags.from)}; valid: ${STEPS.join(", ")}`);
+				// "pick" is excluded: resume mode starts with the worktree already resolved,
+				// so the pick step (worktree/branch creation) never executes — accepting it
+				// would silently start at plan instead of honoring the override.
+				if (!isPipelineStep(flags.from) || flags.from === "pick") {
+					console.error(`invalid --from ${JSON.stringify(flags.from)}; valid: ${STEPS.filter((s) => s !== "pick").join(", ")}`);
 					return { exitCode: 2, results };
 				}
 				startFrom = flags.from;

@@ -90,6 +90,15 @@ describe("runOrchestrator — resume --from override", () => {
 		assert.equal(calls.length, 0);
 	});
 
+	it("--from pick exits 2 without invoking runPipeline (pick never executes in resume mode)", async (t) => {
+		t.mock.method(console, "error", () => {});
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({ default: { completed: true } });
+		const { exitCode } = await runOrchestrator({ ...baseFlags, resume: "X", from: "pick" }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });
+		assert.equal(exitCode, 2);
+		assert.equal(calls.length, 0);
+	});
+
 	it("--from without --resume exits 2 without invoking runPipeline", async (t) => {
 		t.mock.method(console, "error", () => {});
 		t.mock.method(console, "log", () => {});
