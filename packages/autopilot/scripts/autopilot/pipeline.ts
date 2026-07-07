@@ -1,6 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { CONFIG, MODEL_PROFILES, REPO, ROADMAP_GITHUB, ROADMAP_LINEAR, ROADMAP_SOURCE, resolveStepSettings, SHIP_TARGET, WORKTREE_PREFIX } from "./config.js";
+import { CONFIG, isPipelineStep, MODEL_PROFILES, REPO, ROADMAP_GITHUB, ROADMAP_LINEAR, ROADMAP_SOURCE, resolveStepSettings, SHIP_TARGET, STEPS, WORKTREE_PREFIX } from "./config.js";
 import {
 	appendLog as appendLogDefault,
 	captureShipState,
@@ -688,13 +688,34 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			return { exitCode: 2, results };
 		}
 
+		// --from overrides the auto-detected restart step, but only makes sense in resume mode
+		// (normal/--item mode has no worktree or plan yet — pick must create them first).
+		if (flags.from !== undefined && !flags.resume) {
+			console.error("--from <step> requires --resume <id> (it overrides the auto-detected restart step)");
+			return { exitCode: 2, results };
+		}
+
 		// Resume mode
 		if (flags.resume) {
 			const id = flags.resume.toUpperCase();
 			const worktree = noWorktree ? REPO : _resolveWorktree(id);
-			const startFrom = _detectResumeStep(id, worktree);
 			const v = flags.verbose;
-			console.log(`${A.bold("resume")} ${id} from ${A.bold(startFrom)}`);
+
+			let startFrom: Step;
+			if (flags.from !== undefined) {
+				// "pick" is excluded: resume mode starts with the worktree already resolved,
+				// so the pick step (worktree/branch creation) never executes — accepting it
+				// would silently start at plan instead of honoring the override.
+				if (!isPipelineStep(flags.from) || flags.from === "pick") {
+					console.error(`invalid --from ${JSON.stringify(flags.from)}; valid: ${STEPS.filter((s) => s !== "pick").join(", ")}`);
+					return { exitCode: 2, results };
+				}
+				startFrom = flags.from;
+				console.log(`${A.bold("resume")} ${id} from ${A.bold(startFrom)} ${A.dim("(--from override)")}`);
+			} else {
+				startFrom = _detectResumeStep(id, worktree);
+				console.log(`${A.bold("resume")} ${id} from ${A.bold(startFrom)}`);
+			}
 
 			const status: CycleStatus = { itemId: id, status: "running", cost: 0 };
 			liveStatus.cycles.push(status);

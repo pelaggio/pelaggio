@@ -36,6 +36,11 @@ export type PipelineStep = (typeof STEPS)[number];
 /** Pipeline steps + recovery actions (shipwreck runs after ship failure, not as a pipeline stage) */
 export type Step = PipelineStep | "shipwreck";
 
+/** Type guard for a valid pipeline step. Excludes `shipwreck` (not a pipeline stage) — see `--from` validation in pipeline.ts. */
+export function isPipelineStep(s: string): s is PipelineStep {
+	return (STEPS as readonly string[]).includes(s);
+}
+
 const ALL_STEPS: readonly Step[] = [...STEPS, "shipwreck"];
 
 // ── Model literals ─────────────────────────────────────────────────────

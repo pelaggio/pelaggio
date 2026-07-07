@@ -124,6 +124,7 @@ pnpm autopilot --item INFRA-1 --verbose                   # specific item
 pnpm autopilot --cycles 3 --parallel 2 --verbose          # parallel cycles (auto-pick from queue)
 pnpm autopilot --item A-1,A-2,A-3 --parallel 2 --verbose  # targeted multi-item batch (cycles auto-sized to list length)
 pnpm autopilot --resume INFRA-1                           # resume a parked/failed cycle
+pnpm autopilot --resume INFRA-1 --from implement          # re-enter a shipped item (amend plan first) at an explicit step to address review feedback
 pnpm -r test                                              # run unit tests across the workspace
 npx claude-autopilot sync --dry-run                       # preview skill-upgrade plan (consumer-side CLI)
 ```

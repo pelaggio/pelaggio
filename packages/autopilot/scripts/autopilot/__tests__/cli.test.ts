@@ -20,6 +20,14 @@ describe("parseCli", () => {
 		assert.equal(intent.flags.verbose, true);
 	});
 
+	it("parses `--resume X --from implement`", () => {
+		const intent = parseCli(["--resume", "X", "--from", "implement"]);
+		assert.equal(intent.kind, "run");
+		if (intent.kind !== "run") return;
+		assert.equal(intent.flags.resume, "X");
+		assert.equal(intent.flags.from, "implement");
+	});
+
 	it("returns stats for `stats`", () => {
 		const intent = parseCli(["stats"]);
 		assert.deepEqual(intent, { kind: "stats", json: false });

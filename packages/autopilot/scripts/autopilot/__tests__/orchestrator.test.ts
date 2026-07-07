@@ -63,6 +63,52 @@ describe("runOrchestrator — resume mode", () => {
 	});
 });
 
+describe("runOrchestrator — resume --from override", () => {
+	it("override wins and short-circuits detectResumeStep", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({
+			byItem: { "TOOL-99": { completed: true, cost: 1 } },
+		});
+		let detectCalled = 0;
+		const detectResumeStep = () => {
+			detectCalled++;
+			return "ship" as const;
+		};
+		const { exitCode } = await runOrchestrator({ ...baseFlags, resume: "tool-99", from: "implement" }, { runPipeline, detectResumeStep, resolveWorktree: fakeResolveWorktree });
+		assert.equal(exitCode, 0);
+		assert.equal(calls.length, 1);
+		assert.equal(calls[0].opts.startFrom, "implement");
+		assert.equal(detectCalled, 0, "detectResumeStep must not run when --from overrides");
+	});
+
+	it("invalid --from exits 2 without invoking runPipeline", async (t) => {
+		t.mock.method(console, "error", () => {});
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({ default: { completed: true } });
+		const { exitCode } = await runOrchestrator({ ...baseFlags, resume: "X", from: "bogus" }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });
+		assert.equal(exitCode, 2);
+		assert.equal(calls.length, 0);
+	});
+
+	it("--from pick exits 2 without invoking runPipeline (pick never executes in resume mode)", async (t) => {
+		t.mock.method(console, "error", () => {});
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({ default: { completed: true } });
+		const { exitCode } = await runOrchestrator({ ...baseFlags, resume: "X", from: "pick" }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });
+		assert.equal(exitCode, 2);
+		assert.equal(calls.length, 0);
+	});
+
+	it("--from without --resume exits 2 without invoking runPipeline", async (t) => {
+		t.mock.method(console, "error", () => {});
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({ default: { completed: true } });
+		const { exitCode } = await runOrchestrator({ ...baseFlags, item: "X-1", from: "implement" }, { runPipeline });
+		assert.equal(exitCode, 2);
+		assert.equal(calls.length, 0);
+	});
+});
+
 describe("runOrchestrator — invalid target", () => {
 	it("exits 2 without invoking runPipeline", async (t) => {
 		t.mock.method(console, "error", () => {});
