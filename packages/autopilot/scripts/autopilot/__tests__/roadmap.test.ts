@@ -193,6 +193,64 @@ describe("MarkdownRoadmap.markDone", () => {
 		assert.equal(execSync("git rev-parse HEAD", { cwd: repo, encoding: "utf-8" }).trim(), before, "no new commit for an already-done item");
 	});
 
+	it("reconciles a stale task-index row even when the roadmap row is already done (issue #39)", async () => {
+		const repo = seedRepo();
+		// Roadmap row is already struck through — simulates an implement agent that
+		// pre-marked its own row in-branch — but task-index.md was never touched.
+		seedFile(repo, "docs/roadmap-core.md", ["# Core Roadmap", "", "| Item | Depends on |", "|------|-----------|", "| ~~TOOL-9. RoadmapSource abstraction~~ | **Done** |", "| TOOL-10. GitHub adapter | TOOL-9 |", ""].join("\n"));
+		seedFile(
+			repo,
+			"docs/task-index.md",
+			[
+				"# Task Index",
+				"",
+				"## Open items",
+				"",
+				"| ID | Title | Deps | Plan | Roadmap |",
+				"|----|-------|------|------|---------|",
+				"| TOOL-9 | RoadmapSource abstraction | — | — | core |",
+				"| TOOL-10 | GitHub adapter | TOOL-9 | — | core |",
+				"",
+				"## Recently completed",
+				"",
+				"- TOOL-1 ✓",
+				"",
+			].join("\n"),
+		);
+		execSync("git add -A && git commit -q -m 'seed'", { cwd: repo });
+
+		const r = new MarkdownRoadmap({ repo });
+		await r.markDone("TOOL-9"); // must NOT throw — roadmap already done, index still needs reconciling
+
+		const roadmap = readFileSync(resolve(repo, "docs/roadmap-core.md"), "utf-8");
+		assert.match(roadmap, /~~TOOL-9\. RoadmapSource abstraction~~/, "roadmap row is left untouched — already done");
+
+		const index = readFileSync(resolve(repo, "docs/task-index.md"), "utf-8");
+		assert.doesNotMatch(index, /^\| TOOL-9 \|/m, "stale open-items row for TOOL-9 is removed");
+		assert.match(index, /- TOOL-9 ✓/, "TOOL-9 lands in Recently completed");
+
+		assert.equal(execSync("git status --porcelain", { cwd: repo, encoding: "utf-8" }).trim(), "", "index reconciliation is committed");
+		const changed = execSync("git show --name-only --format= HEAD", { cwd: repo, encoding: "utf-8" });
+		assert.match(changed, /docs\/task-index\.md/);
+		assert.doesNotMatch(changed, /docs\/roadmap-core\.md/, "already-done roadmap file is not re-committed");
+	});
+
+	it("is a full no-op when roadmap AND task-index are already reconciled (issue #39 counterpart)", async () => {
+		const repo = seedRepo();
+		// Both artifacts already reflect the done state — the fully-idempotent case
+		// the per-artifact check must still short-circuit, not just the single-artifact one.
+		seedFile(repo, "docs/roadmap-core.md", ["# Core Roadmap", "", "| Item | Depends on |", "|------|-----------|", "| ~~TOOL-9. RoadmapSource abstraction~~ | **Done** |", ""].join("\n"));
+		seedFile(repo, "docs/task-index.md", ["# Task Index", "", "## Open items", "", "| ID | Title | Deps | Plan | Roadmap |", "|----|-------|------|------|---------|", "", "## Recently completed", "", "- TOOL-9 ✓", ""].join("\n"));
+		execSync("git add -A && git commit -q -m 'seed'", { cwd: repo });
+		const before = execSync("git rev-parse HEAD", { cwd: repo, encoding: "utf-8" }).trim();
+
+		const r = new MarkdownRoadmap({ repo });
+		await r.markDone("TOOL-9");
+
+		assert.equal(execSync("git status --porcelain", { cwd: repo, encoding: "utf-8" }).trim(), "", "fully-reconciled markDone leaves a clean tree");
+		assert.equal(execSync("git rev-parse HEAD", { cwd: repo, encoding: "utf-8" }).trim(), before, "no new commit when neither artifact needed a change");
+	});
+
 	it("commits only its own pathspec — an unrelated staged change is not swept in (finding #6)", async () => {
 		const repo = seedRepo();
 		seedFile(repo, "docs/roadmap-core.md", ["# Core Roadmap", "", "| Item | Depends on |", "|------|-----------|", "| TOOL-9. RoadmapSource abstraction | — |", ""].join("\n"));
