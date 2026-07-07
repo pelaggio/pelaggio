@@ -225,7 +225,7 @@ describe("runPipeline — ship target dispatch", () => {
 				// its own budget; on a verified recovery the pipeline runs the same
 				// deterministic tail the happy path runs (issue #30).
 				ship: { ok: false, subtype: "error_max_turns", text: "out of turns", sideEffect: () => mergeIntoMain() },
-				shipwreck: { ok: true },
+				shipwreck: { ok: true, text: "ship-merged: TOOL-99" },
 			},
 			parkSignal,
 		);
@@ -284,7 +284,7 @@ describe("runPipeline — ship target dispatch", () => {
 				// Merge landed but the agent flagged a genuine post-merge regression.
 				// Shipwreck assesses + re-verifies the merge; on success the tail runs.
 				ship: { ok: false, subtype: "error", text: "post-merge tests broke", sideEffect: () => mergeIntoMain() },
-				shipwreck: { ok: true },
+				shipwreck: { ok: true, text: "ship-merged: TOOL-99" },
 			},
 			parkSignal,
 		);
@@ -367,6 +367,69 @@ describe("runPipeline — ship target dispatch", () => {
 			allCommitMessages(repo).some((m) => /recover uncommitted bookkeeping \(TOOL-99\)/.test(m)),
 			`expected a recover commit; got:\n${allCommitMessages(repo).join("\n")}`,
 		);
+	});
+
+	it("direct-push: merge landed + ship ok but NO ship-merged marker → happy-path gate closed, routed to shipwreck, not silently shipped (issue #37)", async () => {
+		const { repo, worktree, mergeIntoMain } = setupShipRepo();
+		const parkSignal = makeParkSignal();
+		const bk = makeBkSpy();
+		const { runStep, calls } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				// Ship reports success and advances main, but never emits `ship-merged: <id>`
+				// — so it did NOT prove it reached the hand-off gate (ran post-merge
+				// verification). canTail must be false despite `merged && ship.ok`.
+				ship: { ok: true, text: "merged and cleaned up", sideEffect: () => mergeIntoMain() },
+				// Shipwreck also omits the marker → recovery gate closed too → not shipped.
+				shipwreck: { ok: true },
+			},
+			parkSignal,
+		);
+		const result = await runPipeline(baseOpts(worktree, "direct-push"), parkSignal, baseFlags, {
+			runStep,
+			mainRepo: repo,
+			listWorktrees: () => [],
+			appendLog: () => {},
+			runShipBookkeeping: bk.fn,
+		});
+		const stepsRun = calls.map((c) => c.step);
+		assert.ok(stepsRun.includes("shipwreck"), `marker-less merge must route to shipwreck; got ${stepsRun.join(",")}`);
+		assert.equal(bk.calls.length, 0, "the deterministic tail must not run without the ship-merged marker");
+		assert.equal(result.completed, false, "a marker-less merge must not be silently reported as shipped");
+	});
+
+	it("direct-push: recovery ok + merge landed but NO ship-merged marker → recovery gate closed, completed:false, tail gated off (issue #37)", async () => {
+		const { repo, worktree, mergeIntoMain } = setupShipRepo();
+		const parkSignal = makeParkSignal();
+		const bk = makeBkSpy();
+		const { runStep, calls } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				// Merge landed (step 4) but the agent ran out of turns → routes to shipwreck.
+				ship: { ok: false, subtype: "error_max_turns", text: "out of turns", sideEffect: () => mergeIntoMain() },
+				// Shipwreck ends its session successfully and main IS advanced, but it never
+				// emitted `ship-merged: <id>` — the exact #37 hole: session-ok recovery that
+				// advanced main yet never proved it reached the gate. recoveredMerge false.
+				shipwreck: { ok: true },
+			},
+			parkSignal,
+		);
+		const result = await runPipeline(baseOpts(worktree, "direct-push"), parkSignal, baseFlags, {
+			runStep,
+			mainRepo: repo,
+			listWorktrees: () => [],
+			appendLog: () => {},
+			runShipBookkeeping: bk.fn,
+		});
+		assert.ok(calls.map((c) => c.step).includes("shipwreck"), "shipwreck must assess the unverified merge");
+		assert.equal(bk.calls.length, 0, "the deterministic tail must not run without the recovery ship-merged marker");
+		assert.equal(result.completed, false, "a marker-less recovery must not be reported as shipped");
 	});
 
 	it("pull-request: prompt mentions gh pr create, result marks awaitingMerge + prUrl", async () => {

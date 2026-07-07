@@ -61,6 +61,22 @@ export function parsePickItem(text: string): string | null {
 	return /^[A-Z]+-?\d[\dA-Z-]*$/.test(last) ? last : null;
 }
 
+/**
+ * Parse a structured `ship-merged: <ID>` line from the /ship or /shipwreck
+ * hand-off-gate output. Last occurrence wins (the skill may restate it in a
+ * summary). The ID grammar is permissive — uppercase-prefixed markdown IDs
+ * (`COMP-11C-II`), Linear keys (`ENG-123`), AND the bare numeric IDs
+ * github-issues emits (`37`) — because the caller validates the real
+ * constraint (equality to the resolved itemId). Malformed / absent → null.
+ */
+export function parseShipMerged(text: string): string | null {
+	const re = /^[ \t]*ship-merged:[ \t]*([^\s][^\n]*?)[ \t]*$/gim;
+	let last: string | null = null;
+	for (const m of text.matchAll(re)) last = m[1];
+	if (last === null) return null;
+	return /^[A-Za-z0-9][\w-]*$/.test(last) ? last : null;
+}
+
 // ── Plan file-count helpers (dynamic implement-turn budget) ────────────
 
 function extractFilesSection(body: string): string | null {

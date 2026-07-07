@@ -22,6 +22,7 @@ import {
 	parsePickResult,
 	parseResetTime,
 	parseReviewGate,
+	parseShipMerged,
 	parseVerdict,
 	parseWaitFlag,
 	verifyShipLanded,
@@ -323,6 +324,43 @@ describe("parsePickItem", () => {
 		assert.equal(parsePickItem("pick-item: foo bar"), null);
 		assert.equal(parsePickItem("pick-item: lowercase-99"), null);
 		assert.equal(parsePickItem("pick-item: "), null);
+	});
+});
+
+describe("parseShipMerged", () => {
+	it("parses a plain markdown ID", () => {
+		assert.equal(parseShipMerged("ship-merged: TOOL-99"), "TOOL-99");
+	});
+
+	it("parses a nested/hierarchical ID", () => {
+		assert.equal(parseShipMerged("ship-merged: COMP-11C-II"), "COMP-11C-II");
+	});
+
+	it("parses a bare numeric github ID", () => {
+		assert.equal(parseShipMerged("ship-merged: 37"), "37");
+	});
+
+	it("returns null when absent", () => {
+		assert.equal(parseShipMerged("nothing to see here"), null);
+	});
+
+	it("last occurrence wins when repeated", () => {
+		const text = "ship-merged: TOOL-1\nsummary...\nship-merged: TOOL-2\n";
+		assert.equal(parseShipMerged(text), "TOOL-2");
+	});
+
+	it("rejects malformed values", () => {
+		assert.equal(parseShipMerged("ship-merged: foo bar"), null);
+		assert.equal(parseShipMerged("ship-merged: "), null);
+	});
+
+	it("tolerates surrounding whitespace and a trailing report line", () => {
+		assert.equal(parseShipMerged("   ship-merged:  TOOL-99   "), "TOOL-99");
+		assert.equal(parseShipMerged("Merged and verified.\nship-merged: TOOL-99\n"), "TOOL-99");
+	});
+
+	it("preserves case (returns the raw token, not lowercased)", () => {
+		assert.equal(parseShipMerged("ship-merged: Tool-99"), "Tool-99");
 	});
 });
 
