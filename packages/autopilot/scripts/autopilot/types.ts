@@ -37,6 +37,9 @@ export interface StepLog {
 	tokens?: TokenUsage;
 	/** 1-indexed attempt number; absent means 1. */
 	attempt?: number;
+	/** Set when this attempt re-entered the step after the prior attempt hit its turn limit
+	 *  (issue #33). Distinguishes turn-exhaustion retries from edit-loop retries in stats. */
+	retriedMaxTurns?: boolean;
 	/** Verdict from shakedown-plan only. */
 	verdict?: "APPROVE" | "REVISE" | "RETHINK";
 	toolCounts?: Record<string, number>;

@@ -31,6 +31,9 @@ export interface Stats {
 	totalTokens: TokenUsage;
 	cacheHitRatio: number;
 	avgRetriesByStep: Record<string, number>;
+	/** Count of turn-exhaustion retries (`retriedMaxTurns`) per step (issue #33) — isolates
+	 *  undersized turn limits from all retries (which `avgRetriesByStep` conflates). */
+	maxTurnsRetriesByStep: Record<string, number>;
 	rethinkRateByStep: Record<string, number>;
 	avgShakedownIterations: number;
 	costByStep: Record<string, number>;
@@ -64,6 +67,7 @@ export function reduce(entries: CycleLogEntry[]): Stats {
 	const tokensByStep: Record<string, TokenUsage> = {};
 	const retriesPerStepSum: Record<string, number> = {};
 	const retriesPerStepCount: Record<string, number> = {};
+	const maxTurnsRetriesByStep: Record<string, number> = {};
 	const rethinkTotal: Record<string, number> = {};
 	const rethinkMatch: Record<string, number> = {};
 	let shakedownIterSum = 0;
@@ -97,6 +101,8 @@ export function reduce(entries: CycleLogEntry[]): Stats {
 			const attempt = s.attempt ?? 1;
 			const prev = maxAttemptByStep.get(s.name) ?? 0;
 			if (attempt > prev) maxAttemptByStep.set(s.name, attempt);
+
+			if (s.retriedMaxTurns) maxTurnsRetriesByStep[s.name] = (maxTurnsRetriesByStep[s.name] ?? 0) + 1;
 
 			if (s.name.startsWith("shakedown")) {
 				// Count verdicts on shakedown-plan specifically
@@ -173,6 +179,7 @@ export function reduce(entries: CycleLogEntry[]): Stats {
 		totalTokens,
 		cacheHitRatio: cacheHitRatio(totalTokens),
 		avgRetriesByStep,
+		maxTurnsRetriesByStep,
 		rethinkRateByStep,
 		avgShakedownIterations: shakedownIterCount === 0 ? 0 : shakedownIterSum / shakedownIterCount,
 		costByStep,
@@ -252,6 +259,14 @@ export function renderDashboard(stats: Stats): string {
 		}
 	} else {
 		lines.push(`  ${A.dim("Retry rate")}   0 retries across all steps`);
+	}
+
+	const maxTurnsNames = sortSteps(Object.keys(stats.maxTurnsRetriesByStep).filter((n) => stats.maxTurnsRetriesByStep[n] > 0));
+	if (maxTurnsNames.length > 0) {
+		lines.push(`  ${A.dim("Turn-limit retries (undersized limits)")}`);
+		for (const n of maxTurnsNames) {
+			lines.push(`    ${n.padEnd(16)} ${stats.maxTurnsRetriesByStep[n]}`);
+		}
 	}
 
 	const rethinkNames = sortSteps(Object.keys(stats.rethinkRateByStep));
