@@ -210,7 +210,7 @@ describe("runPipeline — ship target dispatch", () => {
 		assert.match(shipCall.prompt, /direct-push/);
 	});
 
-	it("direct-push: merged but turn-exhausted (error_max_turns) is UNVERIFIED → shipwreck, tail NOT run (finding #1)", async () => {
+	it("direct-push: merged but turn-exhausted (error_max_turns) → shipwreck re-verifies → deterministic tail runs", async () => {
 		const { repo, worktree, mergeIntoMain } = setupShipRepo();
 		const parkSignal = makeParkSignal();
 		const bk = makeBkSpy();
@@ -221,8 +221,9 @@ describe("runPipeline — ship target dispatch", () => {
 				implement: { ok: true, writes: { "impl.txt": "x" } },
 				"shakedown-code": { ok: true },
 				// Merge landed (step 4) but the agent ran out of turns before completing
-				// post-merge verification (step 5) — the merge is unverified, so the
-				// deterministic tail must NOT blindly push it.
+				// post-merge verification (step 5). Shipwreck re-verifies the merge with
+				// its own budget; on a verified recovery the pipeline runs the same
+				// deterministic tail the happy path runs (issue #30).
 				ship: { ok: false, subtype: "error_max_turns", text: "out of turns", sideEffect: () => mergeIntoMain() },
 				shipwreck: { ok: true },
 			},
@@ -235,8 +236,10 @@ describe("runPipeline — ship target dispatch", () => {
 			appendLog: () => {},
 			runShipBookkeeping: bk.fn,
 		});
-		assert.equal(bk.calls.length, 0, "tail must not run on an unverified (turn-exhausted) merge");
 		assert.ok(calls.map((c) => c.step).includes("shipwreck"), "shipwreck must assess the unverified merge");
+		// Shipwreck re-verified the merge → pipeline runs the tail once with resolved ctx.
+		assert.equal(bk.calls.length, 1);
+		assert.deepEqual(bk.calls[0], { mainRepo: repo, worktree, branch: "feat/tool-99", itemId: "TOOL-99" });
 		assert.equal(result.completed, true);
 	});
 
@@ -268,7 +271,7 @@ describe("runPipeline — ship target dispatch", () => {
 		assert.ok(!calls.map((c) => c.step).includes("shipwreck"), "a push failure is surfaced, not routed to shipwreck");
 	});
 
-	it("direct-push: merged but agent hard-failed (error) → tail NOT run, shipwreck runs", async () => {
+	it("direct-push: merged but agent hard-failed (error) → shipwreck re-verifies → deterministic tail runs", async () => {
 		const { repo, worktree, mergeIntoMain } = setupShipRepo();
 		const parkSignal = makeParkSignal();
 		const bk = makeBkSpy();
@@ -279,6 +282,7 @@ describe("runPipeline — ship target dispatch", () => {
 				implement: { ok: true, writes: { "impl.txt": "x" } },
 				"shakedown-code": { ok: true },
 				// Merge landed but the agent flagged a genuine post-merge regression.
+				// Shipwreck assesses + re-verifies the merge; on success the tail runs.
 				ship: { ok: false, subtype: "error", text: "post-merge tests broke", sideEffect: () => mergeIntoMain() },
 				shipwreck: { ok: true },
 			},
@@ -291,9 +295,44 @@ describe("runPipeline — ship target dispatch", () => {
 			appendLog: () => {},
 			runShipBookkeeping: bk.fn,
 		});
-		assert.equal(bk.calls.length, 0, "blind push must be gated — tail must not run on a hard post-merge failure");
 		const stepsRun = calls.map((c) => c.step);
 		assert.ok(stepsRun.includes("shipwreck"), `shipwreck should run; got ${stepsRun.join(",")}`);
+		assert.equal(bk.calls.length, 1);
+		assert.deepEqual(bk.calls[0], { mainRepo: repo, worktree, branch: "feat/tool-99", itemId: "TOOL-99" });
+		assert.equal(result.completed, true);
+	});
+
+	it("direct-push: ghost-ship → shipwreck lands + verifies the merge → deterministic tail runs", async () => {
+		const { repo, worktree, mergeIntoMain } = setupShipRepo();
+		const parkSignal = makeParkSignal();
+		const bk = makeBkSpy();
+		const { runStep, calls } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				// Ship claims success but never advanced main (ghost-ship). Shipwreck
+				// lands the merge; the pipeline re-verifies it and runs the same tail.
+				ship: { ok: true, text: "ship-merged: TOOL-99" },
+				shipwreck: { ok: true, text: "ship-merged: TOOL-99", sideEffect: () => mergeIntoMain() },
+			},
+			parkSignal,
+		);
+		const result = await runPipeline(baseOpts(worktree, "direct-push"), parkSignal, baseFlags, {
+			runStep,
+			mainRepo: repo,
+			listWorktrees: () => [],
+			appendLog: () => {},
+			runShipBookkeeping: bk.fn,
+		});
+		const shipwreckCall = calls.find((c) => c.step === "shipwreck");
+		assert.ok(shipwreckCall, "shipwreck should run on a ghost-ship");
+		// Pipeline hands shipwreck the same direct-push signal /ship gets.
+		assert.match(shipwreckCall.prompt, /autopilot/);
+		assert.match(shipwreckCall.prompt, /--target=direct-push/);
+		assert.equal(bk.calls.length, 1);
+		assert.deepEqual(bk.calls[0], { mainRepo: repo, worktree, branch: "feat/tool-99", itemId: "TOOL-99" });
 		assert.equal(result.completed, true);
 	});
 
@@ -409,7 +448,7 @@ describe("runPipeline — shipwreck skipped for PR modes", () => {
 		assert.ok(!stepsRun.includes("shipwreck"), `shipwreck should not run; got ${stepsRun.join(",")}`);
 	});
 
-	it("direct-push: ship fails and main never advanced → shipwreck IS invoked, tail NOT run", async () => {
+	it("direct-push: ship fails and shipwreck cannot land the merge → tail gated off, not shipped", async () => {
 		const { repo, worktree } = setupShipRepo();
 		const parkSignal = makeParkSignal();
 		const bk = makeBkSpy();
@@ -419,7 +458,9 @@ describe("runPipeline — shipwreck skipped for PR modes", () => {
 				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
 				implement: { ok: true, writes: { "impl.txt": "x" } },
 				"shakedown-code": { ok: true },
-				// No sideEffect — main never advances, so the merge did not land.
+				// No sideEffect anywhere — main never advances, so even a shipwreck that
+				// reports ok did not land the merge. verifyShipLanded fails closed →
+				// recoveredMerge=false → tail gated off, cycle reported not-shipped.
 				ship: { ok: false, subtype: "error", text: "merge failed" },
 				shipwreck: { ok: true },
 			},
@@ -435,7 +476,7 @@ describe("runPipeline — shipwreck skipped for PR modes", () => {
 		const stepsRun = calls.map((c) => c.step);
 		assert.ok(stepsRun.includes("shipwreck"), `shipwreck should run; got ${stepsRun.join(",")}`);
 		assert.equal(bk.calls.length, 0);
-		assert.equal(result.completed, true);
+		assert.equal(result.completed, false, "a claimed recovery that didn't advance main is not shipped");
 	});
 });
 
