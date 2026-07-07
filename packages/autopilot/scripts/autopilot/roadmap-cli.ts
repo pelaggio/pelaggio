@@ -7,12 +7,13 @@
  * docs/task-index.md / docs/roadmap-*.md directly, so a single CLI works
  * across markdown / github-issues / linear adapters.
  *
- * Exit codes: 0 success, 2 "not found" (callers distinguish from crashes).
+ * Exit codes: 0 success, 2 "not found" (callers distinguish from crashes),
+ * 3 "already claimed" (claim lost the race — the feat/<id> branch exists).
  */
 
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import type { RoadmapSource } from "./roadmap/index.js";
+import { AlreadyClaimedError, type RoadmapSource } from "./roadmap/index.js";
 
 type Args = {
 	flags: Record<string, string | boolean>;
@@ -111,8 +112,18 @@ async function cmdClaim(args: Args): Promise<number> {
 		return 1;
 	}
 	const noWorktree = args.flags["no-worktree"] === true;
-	const { branch, worktree } = await roadmap.claimItem(id, noWorktree ? { noWorktree: true } : undefined);
-	process.stdout.write(`branch=${branch}\nworktree=${worktree}\n`);
+	try {
+		const { branch, worktree } = await roadmap.claimItem(id, noWorktree ? { noWorktree: true } : undefined);
+		process.stdout.write(`branch=${branch}\nworktree=${worktree}\n`);
+	} catch (err) {
+		if (err instanceof AlreadyClaimedError) {
+			// git's ref lock is the claim arbiter (issue #12): the loser of a pick
+			// race exits 3 so /pick maps it to `pick-result: already-claimed`.
+			process.stderr.write(`${err.message}\n`);
+			return 3;
+		}
+		throw err;
+	}
 	return 0;
 }
 

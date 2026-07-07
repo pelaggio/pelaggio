@@ -2,6 +2,7 @@ import { execSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { WORKTREE_PREFIX } from "../config.js";
+import { createClaimWorkspace } from "./git-claim.js";
 import type { CreateItemOpts, GithubRoadmapConfig, ItemStatus, MarkDoneContext, PlanLocation, RoadmapItem, RoadmapItemStatus, RoadmapSource, RoadmapSourceName } from "./types.js";
 
 const PLAN_MARKER = "<!-- autopilot-plan -->";
@@ -70,6 +71,7 @@ export class GitHubIssuesRoadmap implements RoadmapSource {
 			let status: ItemStatus = "open";
 			if ((it.state ?? "").toLowerCase() === "closed") status = "done";
 			else if (labels.includes("blocked")) status = "blocked";
+			else if (labels.includes("in-progress")) status = "in-progress";
 			const item: RoadmapItemStatus = {
 				id: String(it.number),
 				title: it.title,
@@ -89,6 +91,7 @@ export class GitHubIssuesRoadmap implements RoadmapSource {
 			let status: ItemStatus = "open";
 			if ((it.state ?? "").toLowerCase() === "closed") status = "done";
 			else if (labels.includes("blocked")) status = "blocked";
+			else if (labels.includes("in-progress")) status = "in-progress";
 			return {
 				id: String(it.number),
 				title: it.title,
@@ -158,20 +161,15 @@ export class GitHubIssuesRoadmap implements RoadmapSource {
 		const slug = kebab(title).slice(0, 40);
 		const branch = `feat/issue-${id}${slug ? `-${slug}` : ""}`;
 
-		// Best-effort label add — advisory, not critical.
+		// Best-effort label add — the server-side claim marker listItems/getItem
+		// surface as `in-progress` for other hosts (issue #12).
 		try {
 			this.runGh(["issue", "edit", id, "--repo", this.ghRepo, "--add-label", "in-progress"]);
 		} catch {
 			// swallowed — label may not exist on the repo
 		}
 
-		if (opts?.noWorktree) {
-			execSync(`git checkout -b ${branch} main`, { cwd: this.repo, stdio: "pipe" });
-			return { branch, worktree: this.repo };
-		}
-		const worktree = resolve(this.repo, "..", `${WORKTREE_PREFIX}${id.toLowerCase()}`);
-		execSync(`git worktree add -b ${branch} ${worktree} main`, { cwd: this.repo, stdio: "pipe" });
-		return { branch, worktree };
+		return createClaimWorkspace(this.repo, id, branch, { ...opts, worktreeName: `${WORKTREE_PREFIX}${id.toLowerCase()}` });
 	}
 
 	async markDone(id: string, ctx?: MarkDoneContext): Promise<void> {

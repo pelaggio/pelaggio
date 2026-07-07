@@ -2,6 +2,7 @@ import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { WORKTREE_PREFIX } from "../config.js";
+import { createClaimWorkspace } from "./git-claim.js";
 import type { CreateItemOpts, ItemStatus, LinearRoadmapConfig, MarkDoneContext, PlanLocation, RoadmapItem, RoadmapItemStatus, RoadmapSource, RoadmapSourceName } from "./types.js";
 
 const PLAN_MARKER = "<!-- autopilot-plan -->";
@@ -13,6 +14,9 @@ export interface LinearIssueListItem {
 	title: string;
 	description: string | null;
 	relations: { type: string; relatedIdentifier: string }[];
+	/** Optional claim markers (issue #12); stubs that omit them read as unclaimed. */
+	stateType?: string;
+	labels?: string[];
 }
 
 export interface LinearCommentNode {
@@ -83,7 +87,9 @@ export class LinearRoadmap implements RoadmapSource {
 		return issues.map((it) => {
 			const relations = it.relations ?? [];
 			const blocked = relations.some((r) => r.type === "blocked_by");
-			const status: ItemStatus = blocked ? "blocked" : "open";
+			// Server-side claim markers double as the cross-host claim signal (issue #12).
+			const claimed = it.stateType === "started" || (it.labels ?? []).includes(IN_PROGRESS_LABEL);
+			const status: ItemStatus = blocked ? "blocked" : claimed ? "in-progress" : "open";
 			return {
 				id: it.identifier,
 				title: it.title,
@@ -102,6 +108,7 @@ export class LinearRoadmap implements RoadmapSource {
 		let status: ItemStatus = "open";
 		if (issue.stateType === "completed" || issue.stateType === "canceled") status = "done";
 		else if (relations.some((r) => r.type === "blocked_by")) status = "blocked";
+		else if (issue.stateType === "started" || (issue.labels ?? []).includes(IN_PROGRESS_LABEL)) status = "in-progress";
 		return {
 			id: issue.identifier,
 			title: issue.title,
@@ -179,13 +186,7 @@ export class LinearRoadmap implements RoadmapSource {
 			// best-effort — label may not exist on the workspace
 		}
 
-		if (opts?.noWorktree) {
-			execSync(`git checkout -b ${branch} main`, { cwd: this.repo, stdio: "pipe" });
-			return { branch, worktree: this.repo };
-		}
-		const worktree = resolve(this.repo, "..", `${WORKTREE_PREFIX}${id.toLowerCase()}`);
-		execSync(`git worktree add -b ${branch} ${worktree} main`, { cwd: this.repo, stdio: "pipe" });
-		return { branch, worktree };
+		return createClaimWorkspace(this.repo, id, branch, { ...opts, worktreeName: `${WORKTREE_PREFIX}${id.toLowerCase()}` });
 	}
 
 	async markDone(id: string, ctx?: MarkDoneContext): Promise<void> {
@@ -346,7 +347,9 @@ async function defaultLinearApi(): Promise<LinearApi> {
 			const filter: Record<string, unknown> = {
 				team: { id: { eq: teamId } },
 			};
-			if (!includeDone) filter.state = { type: { in: ["unstarted", "backlog", "triage"] } };
+			// "started" stays in the open listing so claimed items surface as
+			// in-progress instead of silently vanishing (issue #12).
+			if (!includeDone) filter.state = { type: { in: ["unstarted", "backlog", "triage", "started"] } };
 			if (label) filter.labels = { some: { name: { eq: label } } };
 			const res = await client.issues({ filter, first: 200 });
 			const items: LinearIssueListItem[] = [];
@@ -359,7 +362,10 @@ async function defaultLinearApi(): Promise<LinearApi> {
 						if (related?.identifier) relations.push({ type: r.type, relatedIdentifier: related.identifier });
 					}
 				}
-				items.push({ id: node.id, identifier: node.identifier, title: node.title, description: node.description ?? null, relations });
+				let stateType: string | undefined;
+				if (typeof node.state === "function") stateType = (await node.state())?.type;
+				else if (node.state && typeof node.state === "object") stateType = (node.state as { type: string }).type;
+				items.push({ id: node.id, identifier: node.identifier, title: node.title, description: node.description ?? null, relations, stateType });
 			}
 			return items;
 		},

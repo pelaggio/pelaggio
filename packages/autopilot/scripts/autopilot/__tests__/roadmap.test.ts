@@ -4,7 +4,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileS
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { describe, it } from "node:test";
-import { getRoadmapSource, MarkdownRoadmap, type RoadmapSourceName } from "../roadmap/index.js";
+import { AlreadyClaimedError, getRoadmapSource, MarkdownRoadmap, type RoadmapSourceName } from "../roadmap/index.js";
 
 function seedRepo(): string {
 	const dir = mkdtempSync(join(tmpdir(), "autopilot-roadmap-test-"));
@@ -388,6 +388,43 @@ describe("MarkdownRoadmap.createItem", () => {
 		const r = new MarkdownRoadmap({ repo });
 		const created = await r.createItem({ title: "New thing", scope: "M" });
 		assert.equal(created.id, "CHARTER-2");
+	});
+});
+
+describe("MarkdownRoadmap.claimItem — git-native claims (issue #12)", () => {
+	function seedWithItem(id: string): { repo: string; r: MarkdownRoadmap } {
+		const repo = seedRepo();
+		seedFile(repo, "docs/roadmap-core.md", ["# Core", "", "| Item | Depends on |", "|------|-----------|", `| ${id}. A thing | — |`, "| TOOL-10. Another | — |", ""].join("\n"));
+		execSync("git add -A && git commit -q -m seed", { cwd: repo });
+		return { repo, r: new MarkdownRoadmap({ repo }) };
+	}
+
+	it("second claim of the same id throws AlreadyClaimedError (git ref lock is the arbiter)", async () => {
+		const { r } = seedWithItem("TOOL-9");
+		await r.claimItem("TOOL-9");
+		await assert.rejects(r.claimItem("TOOL-9"), (err: Error) => err instanceof AlreadyClaimedError && /TOOL-9/.test(err.message));
+	});
+
+	it("--no-worktree collision maps to AlreadyClaimedError too", async () => {
+		const { repo, r } = seedWithItem("TOOL-9");
+		execSync("git branch feat/tool-9", { cwd: repo });
+		await assert.rejects(r.claimItem("TOOL-9", { noWorktree: true }), (err: Error) => err instanceof AlreadyClaimedError);
+	});
+
+	it("listItems overlays in-progress for open items whose feat/<id> branch exists", async () => {
+		const { r } = seedWithItem("TOOL-9");
+		await r.claimItem("TOOL-9");
+		const items = await r.listItems();
+		assert.equal(items.find((i) => i.id === "TOOL-9")?.status, "in-progress");
+		assert.equal(items.find((i) => i.id === "TOOL-10")?.status, "open");
+	});
+
+	it("claim id matching is word-bounded — feat/tool-1 does not claim TOOL-10", async () => {
+		const { repo, r } = seedWithItem("TOOL-1");
+		execSync("git branch feat/tool-1-fix", { cwd: repo });
+		const items = await r.listItems();
+		assert.equal(items.find((i) => i.id === "TOOL-1")?.status, "in-progress");
+		assert.equal(items.find((i) => i.id === "TOOL-10")?.status, "open");
 	});
 });
 

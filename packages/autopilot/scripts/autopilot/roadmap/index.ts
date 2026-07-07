@@ -3,6 +3,7 @@ import { LinearRoadmap } from "./linear.js";
 import { MarkdownRoadmap } from "./markdown.js";
 import { type GithubRoadmapConfig, type LinearRoadmapConfig, ROADMAP_SOURCE_NAMES, type RoadmapSource, type RoadmapSourceName } from "./types.js";
 
+export { AlreadyClaimedError } from "./git-claim.js";
 export {
 	type CreateItemOpts,
 	type GithubRoadmapConfig,

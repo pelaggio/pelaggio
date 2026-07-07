@@ -1,6 +1,8 @@
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
+import { claimedIds, createClaimWorkspace } from "./git-claim.js";
+import { withMutationLock } from "./mutation-lock.js";
 import type { CreateItemOpts, ItemStatus, MarkDoneContext, RoadmapItem, RoadmapItemStatus, RoadmapSource, RoadmapSourceName } from "./types.js";
 
 export class MarkdownRoadmap implements RoadmapSource {
@@ -108,6 +110,15 @@ export class MarkdownRoadmap implements RoadmapSource {
 				out.push(item);
 			}
 		}
+		// Git-native claim overlay (issue #12): an open item whose feat/<id> branch
+		// exists is held by a cycle (or awaits /tidy) — surface it so /pick skips it.
+		const claimed = claimedIds(
+			this.repo,
+			out.filter((i) => i.status === "open").map((i) => i.id),
+		);
+		for (const it of out) {
+			if (it.status === "open" && claimed.has(it.id)) it.status = "in-progress";
+		}
 		return out;
 	}
 
@@ -132,18 +143,18 @@ export class MarkdownRoadmap implements RoadmapSource {
 	}
 
 	async claimItem(id: string, opts?: { noWorktree?: boolean }): Promise<{ branch: string; worktree: string }> {
-		const branch = `feat/${id.toLowerCase()}`;
-		if (opts?.noWorktree) {
-			execSync(`git checkout -b ${branch} main`, { cwd: this.repo, stdio: "pipe" });
-			return { branch, worktree: this.repo };
-		}
-		const prefix = process.env.CLAUDE_AUTOPILOT_WORKTREE_PREFIX ?? `${this.repo.split("/").pop()}-`;
-		const worktree = resolve(this.repo, "..", `${prefix}${id.toLowerCase()}`);
-		execSync(`git worktree add -b ${branch} ${worktree} main`, { cwd: this.repo, stdio: "pipe" });
-		return { branch, worktree };
+		// git's ref locking is the claim arbiter: a racing second pick gets
+		// AlreadyClaimedError from the shared helper (CLI exit 3).
+		return createClaimWorkspace(this.repo, id, `feat/${id.toLowerCase()}`, opts);
 	}
 
 	async markDone(id: string, ctx?: MarkDoneContext): Promise<void> {
+		// Shared-file mutation — serialized adapter-internally so every caller
+		// (CLI, ship bookkeeping tail) is covered (issue #12).
+		return withMutationLock(this.repo, () => this.markDoneUnlocked(id, ctx));
+	}
+
+	private async markDoneUnlocked(id: string, ctx?: MarkDoneContext): Promise<void> {
 		const docsDir = resolve(this.repo, "docs");
 		const roadmapPath = this.findRoadmapContainingItem(id, docsDir);
 		if (!roadmapPath) throw new Error(`markDone: item ${id} not found in any docs/roadmap-*.md`);
@@ -181,6 +192,12 @@ export class MarkdownRoadmap implements RoadmapSource {
 	}
 
 	async createItem(opts: CreateItemOpts): Promise<RoadmapItem> {
+		// Shared-file mutation + next-ID inference read — both under the lock so a
+		// concurrent markDone/createItem can't tear the read or collide the ID.
+		return withMutationLock(this.repo, () => this.createItemUnlocked(opts));
+	}
+
+	private async createItemUnlocked(opts: CreateItemOpts): Promise<RoadmapItem> {
 		const docsDir = resolve(this.repo, "docs");
 		if (!existsSync(docsDir)) throw new Error("createItem: docs/ dir missing");
 
@@ -266,6 +283,10 @@ export class MarkdownRoadmap implements RoadmapSource {
 	}
 
 	async archivePlan(id: string): Promise<void> {
+		return withMutationLock(this.repo, () => this.archivePlanUnlocked(id));
+	}
+
+	private async archivePlanUnlocked(id: string): Promise<void> {
 		const planPath = this.findPlanFile(id.toLowerCase());
 		if (!planPath) return;
 		const plansDir = resolve(this.repo, "docs", "plans");

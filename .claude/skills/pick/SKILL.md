@@ -30,9 +30,9 @@ Parse `$ARGUMENTS` (may be empty).
 - `blocked` → **stop immediately** and report "⚠ {ID} is blocked: {blockedReason or deps text}. Cannot pick a blocked item." Do not create a branch or worktree. Emit `pick-result: blocked`.
 - `open` or `in-progress` → proceed to Claim.
 
-**`/pick next`** (argument is exactly "next", no topic) — from the `roadmap list --json` output, **hard-skip any item with `status === "blocked"`**, then rank the remainder by: no unmet dependencies (empty `deps` or all deps satisfied) → calendar urgency → unblocks others → no overlap with claimed items. **Immediately auto-claim the top match — do NOT ask for confirmation, do NOT list alternatives, do NOT wait for user input.** Go straight from ranking to Claim. Do NOT filter by topic — consider all tracks. If the ranked list is empty after filtering, emit `pick-result: queue-empty`.
+**`/pick next`** (argument is exactly "next", no topic) — from the `roadmap list --json` output, **hard-skip any item with `status === "blocked"` or `status === "in-progress"`** (in-progress means a live cycle holds its `feat/<id>` branch or server-side claim marker — deterministic from the adapter, not a prose check), then rank the remainder by: no unmet dependencies (empty `deps` or all deps satisfied) → calendar urgency → unblocks others → no overlap with claimed items. **Immediately auto-claim the top match — do NOT ask for confirmation, do NOT list alternatives, do NOT wait for user input.** Go straight from ranking to Claim. Do NOT filter by topic — consider all tracks. If the ranked list is empty after filtering, emit `pick-result: queue-empty`.
 
-**`/pick next web-sync`** (argument is "next" followed by a topic) — same ranking but fuzzy-match the item's title against the topic. Same blocked exclusion. Emit `pick-result: queue-empty` if nothing matches.
+**`/pick next web-sync`** (argument is "next" followed by a topic) — same ranking but fuzzy-match the item's title against the topic. Same blocked/in-progress exclusion. Emit `pick-result: queue-empty` if nothing matches.
 
 **`/pick`** (no argument) — show all items from `roadmap list --json` grouped by source (use the `sourceRef` field). Mark blocked items but don't suggest them. Suggest a best unblocked pick. Ask user to confirm.
 
@@ -55,6 +55,11 @@ Run `npx @cdhorne/claude-autopilot roadmap claim --no-worktree <ID>` instead of 
    worktree=<absolute-path>
    ```
    Parse both. The adapter picks adapter-correct branch/worktree names (e.g. `feat/tool-16-refit-split` for markdown, `feat/issue-123-<slug>` for github-issues, `feat/acme-7-<slug>` for linear).
+
+   **If the claim exits 3** (already claimed — another pick won the race for the
+   `feat/<id>` branch between your ranking and your claim), do NOT retry the same
+   ID: emit `pick-result: already-claimed`. The pipeline treats it as recoverable
+   and the next cycle re-ranks without the now-visible in-progress item.
 
 2. Install deps: `npx @cdhorne/claude-autopilot worktree-deps "$WORKTREE"`. When the worktree's `pnpm-lock.yaml` matches the main repo's, this symlinks `node_modules` to MAIN_REPO's instead of running a fresh install — fast and avoids I/O contention between parallel worktrees. On lockfile drift or a missing main `node_modules`, it falls through to `pnpm install --frozen-lockfile --silent`. The helper prints the action taken (`link` / `noop` / `install` / `reinstall` / `relink`).
 
@@ -81,9 +86,10 @@ pick-result: <tag>
 | `unknown-id` | `/pick <ID>` for an ID the adapter reports as `unknown` (exit 2). |
 | `already-done` | `/pick <ID>` for an item whose `status` is `done`. |
 | `worktree-exists` | `/pick <ID>` where the `feat/<id-lower>-*` branch already exists. |
-| `queue-empty` | `/pick next [topic]` whose ranked list is empty after filtering blocked items. |
+| `already-claimed` | `roadmap claim` exited 3 — another pick raced you to the `feat/<id>` branch. |
+| `queue-empty` | `/pick next [topic]` whose ranked list is empty after filtering blocked and in-progress items. |
 
 The pipeline parses this line to decide whether the cycle continues (recoverable:
-`queue-empty`, `worktree-exists`, `already-done`) or halts (`blocked`,
-`unknown-id`). Restating the tag in a summary paragraph is fine — the pipeline
-uses the last occurrence.
+`queue-empty`, `worktree-exists`, `already-claimed`, `already-done`) or halts
+(`blocked`, `unknown-id`). Restating the tag in a summary paragraph is fine — the
+pipeline uses the last occurrence.
