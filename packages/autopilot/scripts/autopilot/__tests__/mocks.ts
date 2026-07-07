@@ -117,6 +117,7 @@ export function createMockRunPipeline(behavior: PipelineBehavior): MockRunPipeli
 			...(outcome.error ? { error: outcome.error } : {}),
 			...(outcome.awaitingMerge ? { awaitingMerge: outcome.awaitingMerge } : {}),
 			...(outcome.prUrl ? { prUrl: outcome.prUrl } : {}),
+			...(outcome.shipwrecked ? { shipwrecked: outcome.shipwrecked } : {}),
 		};
 	};
 	return { runPipeline: fn, calls };

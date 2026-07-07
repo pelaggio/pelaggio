@@ -421,6 +421,116 @@ describe("runOrchestrator — auto-resume config", () => {
 	});
 });
 
+describe("runOrchestrator — notifications", () => {
+	type Sent = { url: string; format: string; payload: { event: string; itemId: string | null; completed: boolean; shipwrecked: boolean } };
+	function spySend() {
+		const sent: Sent[] = [];
+		const sendNotification = async (url: string, format: "json" | "ntfy", payload: Sent["payload"]) => {
+			sent.push({ url, format, payload });
+			return true;
+		};
+		return { sent, sendNotification };
+	}
+
+	it("sends one classified notification per terminal cycle", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { sent, sendNotification } = spySend();
+		const { runPipeline } = createMockRunPipeline({
+			byItem: {
+				"A-1": { completed: true, cost: 0.1 },
+				"A-2": { completed: false, cost: 0.1, error: "plan failed" },
+			},
+		});
+		await runOrchestrator({ ...baseFlags, item: "A-1,A-2" }, { runPipeline, notifyConfig: { url: "https://hook.example" }, sendNotification });
+		assert.equal(sent.length, 2);
+		assert.equal(sent[0].url, "https://hook.example");
+		assert.equal(sent[0].payload.event, "shipped");
+		assert.equal(sent[0].payload.itemId, "A-1");
+		assert.equal(sent[1].payload.event, "failed");
+		assert.equal(sent[1].payload.itemId, "A-2");
+	});
+
+	it("classifies a PR-opened cycle from awaitingMerge", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { sent, sendNotification } = spySend();
+		const { runPipeline } = createMockRunPipeline({
+			byItem: { "A-1": { completed: true, cost: 0.1, awaitingMerge: true, prUrl: "https://github.com/x/y/pull/5" } },
+		});
+		await runOrchestrator({ ...baseFlags, item: "A-1" }, { runPipeline, notifyConfig: { url: "https://hook.example" }, sendNotification });
+		assert.equal(sent.length, 1);
+		assert.equal(sent[0].payload.event, "pr-opened");
+	});
+
+	it("does not call the transport when notify.url is unset (the default)", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { sent, sendNotification } = spySend();
+		const { runPipeline } = createMockRunPipeline({ byItem: { "A-1": { completed: true, cost: 0.1 } } });
+		await runOrchestrator({ ...baseFlags, item: "A-1" }, { runPipeline, sendNotification });
+		assert.equal(sent.length, 0);
+	});
+
+	it("does not notify in --dry-run even with a url configured", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { sent, sendNotification } = spySend();
+		const { runPipeline } = createMockRunPipeline({ byItem: { "A-1": { completed: true, cost: 0.1 } } });
+		await runOrchestrator({ ...baseFlags, item: "A-1", "dry-run": true }, { runPipeline, notifyConfig: { url: "https://hook.example" }, sendNotification });
+		assert.equal(sent.length, 0);
+	});
+
+	it("skips non-actionable outcomes (e.g. pick:queue-empty)", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { sent, sendNotification } = spySend();
+		const { runPipeline } = createMockRunPipeline({
+			byItem: {
+				"A-1": { completed: false, cost: 0, error: "pick:queue-empty" },
+				"A-2": { completed: true, cost: 0.1 },
+			},
+		});
+		await runOrchestrator({ ...baseFlags, item: "A-1,A-2" }, { runPipeline, notifyConfig: { url: "https://hook.example" }, sendNotification });
+		// A-1 skipped (recoverable), A-2 shipped.
+		assert.equal(sent.length, 1);
+		assert.equal(sent[0].payload.event, "shipped");
+		assert.equal(sent[0].payload.itemId, "A-2");
+	});
+
+	it("emits on the --resume path", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { sent, sendNotification } = spySend();
+		const { runPipeline } = createMockRunPipeline({ byItem: { "TOOL-99": { completed: true, cost: 1 } } });
+		await runOrchestrator({ ...baseFlags, resume: "tool-99" }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree, notifyConfig: { url: "https://hook.example" }, sendNotification });
+		assert.equal(sent.length, 1);
+		assert.equal(sent[0].payload.event, "shipped");
+		assert.equal(sent[0].payload.itemId, "TOOL-99");
+	});
+
+	it("emits for both the initial park and the resumed cycle", async (t) => {
+		t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
+		t.mock.method(console, "log", () => {});
+		const baseNow = 1_700_000_000_000;
+		t.mock.timers.setTime(baseNow);
+
+		const { sent, sendNotification } = spySend();
+		const { runPipeline } = createMockRunPipeline({
+			byItem: {
+				"X-1": [
+					{ completed: false, cost: 0.1, error: "parked", park: { parked: true, resetsAt: baseNow + 60_000, limitType: "5h" } },
+					{ completed: true, cost: 0.5 },
+				],
+			},
+		});
+
+		const promise = runOrchestrator({ ...baseFlags, item: "X-1" }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree, notifyConfig: { url: "https://hook.example" }, sendNotification });
+		for (let i = 0; i < 5; i++) await new Promise(setImmediate);
+		t.mock.timers.tick(60_000 + 30_000);
+		for (let i = 0; i < 5; i++) await new Promise(setImmediate);
+		await promise;
+
+		assert.equal(sent.length, 2);
+		assert.equal(sent[0].payload.event, "parked");
+		assert.equal(sent[1].payload.event, "shipped");
+	});
+});
+
 describe("runOrchestrator — budget warning", () => {
 	it("warns once threshold exceeded but keeps running all cycles", async (t) => {
 		const logs: string[] = [];
