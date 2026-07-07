@@ -12,7 +12,9 @@ const OPTIONS = {
 	verbose: { type: "boolean", default: false },
 	trace: { type: "boolean", default: false },
 	budget: { type: "string", default: "40" },
-	"max-wait": { type: "string", default: "6h" },
+	// No default: an unset flag stays `undefined` so `park.max-wait` config can take
+	// effect. Precedence (resolved in the orchestrator): CLI flag > config > "6h".
+	"max-wait": { type: "string" },
 	target: { type: "string" },
 	"dry-run": { type: "boolean", default: false },
 	"no-worktree": { type: "boolean", default: false },

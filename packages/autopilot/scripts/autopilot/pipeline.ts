@@ -34,6 +34,15 @@ import type { CycleResult, CycleStatus, Flags, ParkSignal, PipelineOpts, Step, S
 
 export type RunStepFn = typeof runStepDefault;
 
+/**
+ * Outcome of a step run through `runStepWithRetry`: either a success carrying the
+ * `StepResult` for step-specific follow-up (verdict parse, etc.), or a terminal
+ * cycle result the caller should `return` immediately (park / refusal / blocked /
+ * max-turns exhaustion / budget-gated retry skip). A discriminated union rather
+ * than a sentinel bool so "terminal vs continue" is explicit at each call site.
+ */
+type StepAttempt = { kind: "ok"; result: StepResult } | { kind: "terminal"; cycleResult: CycleResult };
+
 export interface PipelineDeps {
 	runStep?: RunStepFn;
 	listWorktrees?: () => string[];
@@ -281,6 +290,95 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		return finish({ itemId, completed: false, cost, error: "parked" });
 	}
 
+	/**
+	 * Run a step with the shared bounded max-turns retry policy (issue #33), consolidating
+	 * the four previously-inlined loops (plan / shakedown-plan / implement / shakedown-code)
+	 * into one parameterized wrapper. Behavior-preserving — see #32 plan Part A.
+	 *
+	 * Per-attempt flow: park check → run → classify. `ok` returns immediately for caller
+	 * follow-up. `error_rate_limit`/park, `blocked`, `error_refusal`, and non-max-turns
+	 * failures are terminal. `edit_loop` (implement only, `retryOnEditLoop`) retries with a
+	 * fresh-approach prompt and is NOT budget-gated. `error_max_turns` retries up to
+	 * `maxAttempts`, gated by `canRetryWithinBudget`; the final attempt yields "(max retries)".
+	 *
+	 * Owns `cost += result.cost` — callers must not double-count. `retriedMaxTurns` tracks
+	 * the prior failure (not `attempt > 1`) so an edit-loop retry is distinguished from a
+	 * turn-exhaustion retry in the step log.
+	 */
+	async function runStepWithRetry(cfg: {
+		name: Step;
+		/** `resolveStepSettings(...).budget` for the dollar gate on a max-turns retry. */
+		stepBudget: number;
+		buildPrompt: (attempt: number, ctx: { lastLoopFile: string | null }) => string;
+		logAttempt: (attempt: number) => void;
+		/** Exact per-step refusal wording (task vs review noun) — preserved for tests. */
+		refusedError: string;
+		maxAttempts?: number;
+		/** implement / shakedown-code only: checkpoint label per attempt. */
+		commitLabel?: (attempt: number) => string;
+		/** implement only: dynamic turn budget (scaled by plan file count). */
+		maxTurnsOverride?: number;
+		/** implement only: retry (un-budget-gated) with a fresh-approach prompt on edit_loop. */
+		retryOnEditLoop?: boolean;
+		/** Turn-limit log noun; defaults to `name` (shakedown-code logs "shakedown"). */
+		turnLimitNoun?: string;
+	}): Promise<StepAttempt> {
+		const maxAttempts = cfg.maxAttempts ?? 2;
+		const noun = cfg.turnLimitNoun ?? cfg.name;
+		let lastLoopFile: string | null = null;
+		// Attempt 2 can follow EITHER an edit_loop OR error_max_turns — track the prior
+		// failure so only genuine turn-exhaustion retries get marked `retriedMaxTurns`.
+		let prevMaxTurns = false;
+
+		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+			const parked = parkExit();
+			if (parked) return { kind: "terminal", cycleResult: parked };
+			cfg.logAttempt(attempt);
+			const result = await step(cfg.name, cfg.buildPrompt(attempt, { lastLoopFile }), worktree!, {
+				attempt,
+				retriedMaxTurns: prevMaxTurns,
+				...(cfg.commitLabel ? { commitLabel: cfg.commitLabel(attempt) } : {}),
+				...(cfg.maxTurnsOverride !== undefined ? { maxTurnsOverride: cfg.maxTurnsOverride } : {}),
+			});
+			cost += result.cost;
+
+			if (result.ok) return { kind: "ok", result };
+
+			if (result.subtype === "error_rate_limit" || parkSignal.parked) {
+				return { kind: "terminal", cycleResult: parkExit() ?? finish({ itemId, completed: false, cost, error: `${cfg.name} failed` }) };
+			}
+			if (result.subtype === "blocked") {
+				return { kind: "terminal", cycleResult: finish({ itemId, completed: false, cost, error: `${cfg.name} blocked: ${result.text}` }) };
+			}
+			if (result.subtype === "error_refusal") {
+				return { kind: "terminal", cycleResult: finish({ itemId, completed: false, cost, error: cfg.refusedError }) };
+			}
+			if (cfg.retryOnEditLoop && result.subtype === "edit_loop") {
+				const match = result.text.match(/Edit loop detected: (.+?) edited/);
+				lastLoopFile = match?.[1]?.replace(/^.*[/\\]/, "") ?? null;
+				prevMaxTurns = false;
+				log(`edit loop on ${lastLoopFile ?? "unknown file"} — will retry with fresh approach`);
+				continue;
+			}
+			if (result.subtype !== "error_max_turns") {
+				return { kind: "terminal", cycleResult: finish({ itemId, completed: false, cost, error: `${cfg.name} failed` }) };
+			}
+			// error_max_turns
+			prevMaxTurns = true;
+			log(`${noun} hit turn limit (attempt ${attempt}/${maxAttempts})`);
+			if (attempt === maxAttempts) {
+				return { kind: "terminal", cycleResult: finish({ itemId, completed: false, cost, error: `${cfg.name} failed (max retries)` }) };
+			}
+			if (!canRetryWithinBudget({ spent: cost, maxBudget, stepBudget: cfg.stepBudget })) {
+				return { kind: "terminal", cycleResult: finish({ itemId, completed: false, cost, error: `${cfg.name} failed (insufficient budget to retry after max turns)` }) };
+			}
+			// budget OK, more attempts remain — continue.
+		}
+		// Unreachable: the `attempt === maxAttempts` guard returns on the final iteration.
+		// Present so the function is total over StepAttempt.
+		return { kind: "terminal", cycleResult: finish({ itemId, completed: false, cost, error: `${cfg.name} failed (max retries)` }) };
+	}
+
 	// ── Plan + Shakedown-plan ──
 
 	let verdict: "APPROVE" | "REVISE" | "RETHINK" = "APPROVE";
@@ -291,64 +389,36 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		if (existingPlan) {
 			log(`plan exists at ${existingPlan} — skipping plan generation`);
 		} else {
-			const MAX_PLAN_ATTEMPTS = 2;
-			for (let attempt = 1; attempt <= MAX_PLAN_ATTEMPTS; attempt++) {
-				const parked = parkExit();
-				if (parked) return parked;
-				log(attempt === 1 ? "planning..." : "continuing plan (attempt 2)...");
-				const plan = await step("plan", expandSkill("plan"), worktree!, { attempt, retriedMaxTurns: attempt > 1 });
-				cost += plan.cost;
-				if (plan.ok) break;
-				if (plan.subtype === "error_rate_limit" || parkSignal.parked) {
-					return parkExit() ?? finish({ itemId, completed: false, cost, error: "plan failed" });
-				}
-				if (plan.subtype === "blocked") return finish({ itemId, completed: false, cost, error: `plan blocked: ${plan.text}` });
-				if (plan.subtype === "error_refusal") return finish({ itemId, completed: false, cost, error: "plan refused (model declined the task)" });
-				if (plan.subtype !== "error_max_turns") return finish({ itemId, completed: false, cost, error: "plan failed" });
-				log(`plan hit turn limit (attempt ${attempt}/${MAX_PLAN_ATTEMPTS})`);
-				if (attempt === MAX_PLAN_ATTEMPTS) return finish({ itemId, completed: false, cost, error: "plan failed (max retries)" });
-				if (!canRetryWithinBudget({ spent: cost, maxBudget, stepBudget: resolveStepSettings(CONFIG, profile, "plan").budget })) {
-					return finish({ itemId, completed: false, cost, error: "plan failed (insufficient budget to retry after max turns)" });
-				}
-			}
+			const outcome = await runStepWithRetry({
+				name: "plan",
+				stepBudget: resolveStepSettings(CONFIG, profile, "plan").budget,
+				buildPrompt: () => expandSkill("plan"),
+				logAttempt: (attempt) => log(attempt === 1 ? "planning..." : "continuing plan (attempt 2)..."),
+				refusedError: "plan refused (model declined the task)",
+			});
+			if (outcome.kind === "terminal") return outcome.cycleResult;
 		}
 		const planPath = await roadmap.getItemPlan({ worktree: worktree! });
 		if (planPath) log(`plan: file://${planPath}`);
 	}
 
 	if (shouldRun("shakedown-plan")) {
-		const MAX_SHAKEDOWN_PLAN_ATTEMPTS = 2;
-		for (let attempt = 1; attempt <= MAX_SHAKEDOWN_PLAN_ATTEMPTS; attempt++) {
-			const parked = parkExit();
-			if (parked) return parked;
-			log(attempt === 1 ? "shakedown (plan)..." : "continuing shakedown-plan (attempt 2)...");
-			const shakedown = await step("shakedown-plan", expandSkill("shakedown", "autopilot plan-review"), worktree!, { attempt, retriedMaxTurns: attempt > 1 });
-			cost += shakedown.cost;
+		const outcome = await runStepWithRetry({
+			name: "shakedown-plan",
+			stepBudget: resolveStepSettings(CONFIG, profile, "shakedown-plan").budget,
+			buildPrompt: () => expandSkill("shakedown", "autopilot plan-review"),
+			logAttempt: (attempt) => log(attempt === 1 ? "shakedown (plan)..." : "continuing shakedown-plan (attempt 2)..."),
+			refusedError: "shakedown-plan refused (model declined the review)",
+		});
+		if (outcome.kind === "terminal") return outcome.cycleResult;
 
-			if (shakedown.ok) {
-				verdict = parseVerdict(shakedown.text);
-				shakedownPlanText = shakedown.text;
-				const lastStep = steps[steps.length - 1];
-				if (lastStep && lastStep.name === "shakedown-plan") lastStep.verdict = verdict;
-				log(`verdict: ${verdict}`);
-				if (verdict === "RETHINK") return finish({ itemId, completed: false, cost, verdict, error: "plan needs rethink" });
-				break;
-			}
-
-			if (shakedown.subtype === "error_rate_limit" || parkSignal.parked) {
-				return parkExit() ?? finish({ itemId, completed: false, cost, error: "shakedown-plan failed" });
-			}
-			if (shakedown.subtype === "blocked") return finish({ itemId, completed: false, cost, error: `shakedown-plan blocked: ${shakedown.text}` });
-			if (shakedown.subtype === "error_refusal") return finish({ itemId, completed: false, cost, error: "shakedown-plan refused (model declined the review)" });
-			if (shakedown.subtype !== "error_max_turns") {
-				return finish({ itemId, completed: false, cost, error: "shakedown-plan failed" });
-			}
-			log(`shakedown-plan hit turn limit (attempt ${attempt}/${MAX_SHAKEDOWN_PLAN_ATTEMPTS})`);
-			if (attempt === MAX_SHAKEDOWN_PLAN_ATTEMPTS) return finish({ itemId, completed: false, cost, error: "shakedown-plan failed (max retries)" });
-			if (!canRetryWithinBudget({ spent: cost, maxBudget, stepBudget: resolveStepSettings(CONFIG, profile, "shakedown-plan").budget })) {
-				return finish({ itemId, completed: false, cost, error: "shakedown-plan failed (insufficient budget to retry after max turns)" });
-			}
-		}
+		const shakedown = outcome.result;
+		verdict = parseVerdict(shakedown.text);
+		shakedownPlanText = shakedown.text;
+		const lastStep = steps[steps.length - 1];
+		if (lastStep && lastStep.name === "shakedown-plan") lastStep.verdict = verdict;
+		log(`verdict: ${verdict}`);
+		if (verdict === "RETHINK") return finish({ itemId, completed: false, cost, verdict, error: "plan needs rethink" });
 	}
 
 	// ── Implement ──
@@ -417,77 +487,47 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			"5. Run all verification commands from the rubric before finishing.",
 		].join("\n");
 
-		let lastLoopFile: string | null = null;
-		const MAX_ATTEMPTS = 2;
-		let implOk = false;
-		// Attempt 2 can follow EITHER an edit_loop OR error_max_turns — track the prior
-		// failure so only genuine turn-exhaustion retries get marked `retriedMaxTurns`.
-		let prevMaxTurns = false;
-
-		for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-			log(attempt === 1 ? "implementing..." : "continuing implementation (attempt 2)...");
-			const retryPrompt = lastLoopFile
-				? [
-						continuePrompt,
-						"",
-						`## ⚠ IMPORTANT: The previous session got stuck editing \`${lastLoopFile}\` in a loop.`,
-						"Take a DIFFERENT approach to fix the type errors:",
-						"- Read the file and the actual error message carefully before editing",
-						"- Consider if the type/interface needs to change upstream instead",
-						"- If a component prop type is wrong, fix the type definition, not the call site repeatedly",
-						"- If stuck after 2 attempts on the same error, skip it and move on",
-					].join("\n")
-				: continuePrompt;
-			const cpLabel = attempt === 1 ? "implementation checkpoint" : "implementation continued";
-			const impl = await step("implement", attempt === 1 ? implementPrompt : retryPrompt, worktree!, { attempt, commitLabel: cpLabel, maxTurnsOverride: implementTurns, retriedMaxTurns: prevMaxTurns });
-			cost += impl.cost;
-
-			if (impl.ok) {
-				implOk = true;
-				break;
-			}
-
-			if (impl.subtype === "edit_loop") {
-				const match = impl.text.match(/Edit loop detected: (.+?) edited/);
-				lastLoopFile = match?.[1]?.replace(/^.*[/\\]/, "") ?? null;
-				prevMaxTurns = false;
-				log(`edit loop on ${lastLoopFile ?? "unknown file"} — will retry with fresh approach`);
-			} else if (impl.subtype === "error_rate_limit" || parkSignal.parked) {
-				return parkExit() ?? finish({ itemId, completed: false, cost, error: "implement failed" });
-			} else if (impl.subtype === "error_refusal") {
-				return finish({ itemId, completed: false, cost, error: "implement refused (model declined the task)" });
-			} else if (impl.subtype === "blocked") {
-				return finish({ itemId, completed: false, cost, error: `implement blocked: ${impl.text}` });
-			} else if (impl.subtype !== "error_max_turns") {
-				return finish({ itemId, completed: false, cost, error: "implement failed" });
-			} else {
-				log(`implement hit turn limit (attempt ${attempt}/${MAX_ATTEMPTS})`);
-				prevMaxTurns = true;
-				// Skip the budget-guarded retry only when there IS a next attempt (the final
-				// attempt exits via the post-loop `!implOk` guard, not here).
-				if (attempt < MAX_ATTEMPTS && !canRetryWithinBudget({ spent: cost, maxBudget, stepBudget: resolveStepSettings(CONFIG, profile, "implement").budget })) {
-					return finish({ itemId, completed: false, cost, error: "implement failed (insufficient budget to retry after max turns)" });
-				}
-			}
-		}
-
-		if (!implOk) return finish({ itemId, completed: false, cost, error: "implement failed (max retries)" });
+		const outcome = await runStepWithRetry({
+			name: "implement",
+			stepBudget: resolveStepSettings(CONFIG, profile, "implement").budget,
+			maxTurnsOverride: implementTurns,
+			retryOnEditLoop: true,
+			refusedError: "implement refused (model declined the task)",
+			logAttempt: (attempt) => log(attempt === 1 ? "implementing..." : "continuing implementation (attempt 2)..."),
+			commitLabel: (attempt) => (attempt === 1 ? "implementation checkpoint" : "implementation continued"),
+			buildPrompt: (attempt, { lastLoopFile }) => {
+				if (attempt === 1) return implementPrompt;
+				return lastLoopFile
+					? [
+							continuePrompt,
+							"",
+							`## ⚠ IMPORTANT: The previous session got stuck editing \`${lastLoopFile}\` in a loop.`,
+							"Take a DIFFERENT approach to fix the type errors:",
+							"- Read the file and the actual error message carefully before editing",
+							"- Consider if the type/interface needs to change upstream instead",
+							"- If a component prop type is wrong, fix the type definition, not the call site repeatedly",
+							"- If stuck after 2 attempts on the same error, skip it and move on",
+						].join("\n")
+					: continuePrompt;
+			},
+		});
+		if (outcome.kind === "terminal") return outcome.cycleResult;
 	}
 
 	// ── Shakedown-code ──
 
 	if (shouldRun("shakedown-code")) {
-		const MAX_SHAKEDOWN_ATTEMPTS = 2;
-		let shakedownOk = false;
 		const planPath = await roadmap.getItemPlan({ worktree: worktree! });
 		const shakedownPlanRef = planPath ? `Read the plan at \`${planPath}\` and the roadmap entry for ${itemId} to understand the scope.` : `Find the plan in \`${resolve(REPO, "docs", "plans")}/\` or the roadmap entry for ${itemId}.`;
 
-		for (let attempt = 1; attempt <= MAX_SHAKEDOWN_ATTEMPTS; attempt++) {
-			const parked = parkExit();
-			if (parked) return parked;
-			log(attempt === 1 ? "shakedown (code)..." : "continuing shakedown (attempt 2)...");
-
-			const shakedownPrompt =
+		const outcome = await runStepWithRetry({
+			name: "shakedown-code",
+			stepBudget: resolveStepSettings(CONFIG, profile, "shakedown-code").budget,
+			commitLabel: () => "shakedown checkpoint",
+			refusedError: "shakedown-code refused (model declined the review)",
+			turnLimitNoun: "shakedown",
+			logAttempt: (attempt) => log(attempt === 1 ? "shakedown (code)..." : "continuing shakedown (attempt 2)..."),
+			buildPrompt: (attempt) =>
 				attempt === 1
 					? expandSkill("shakedown", "autopilot code-review")
 					: [
@@ -502,37 +542,9 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 							"3. Focus on fix-now items only (type errors, test failures, lint errors, bugs).",
 							"4. Skip near-term items (missing tests, i18n gaps, refactoring) — add them as deferred to the roadmap.",
 							"5. Re-run the verification commands before finishing.",
-						].join("\n");
-
-			const shakedown = await step("shakedown-code", shakedownPrompt, worktree!, { attempt, commitLabel: "shakedown checkpoint", retriedMaxTurns: attempt > 1 });
-			cost += shakedown.cost;
-
-			if (shakedown.ok) {
-				shakedownOk = true;
-				break;
-			}
-
-			if (shakedown.subtype === "error_rate_limit" || parkSignal.parked) {
-				return parkExit() ?? finish({ itemId, completed: false, cost, error: "shakedown-code failed" });
-			}
-
-			if (shakedown.subtype === "blocked") return finish({ itemId, completed: false, cost, error: `shakedown-code blocked: ${shakedown.text}` });
-
-			if (shakedown.subtype === "error_refusal") return finish({ itemId, completed: false, cost, error: "shakedown-code refused (model declined the review)" });
-
-			if (shakedown.subtype !== "error_max_turns") {
-				return finish({ itemId, completed: false, cost, error: "shakedown-code failed" });
-			}
-
-			log(`shakedown hit turn limit (attempt ${attempt}/${MAX_SHAKEDOWN_ATTEMPTS})`);
-			// Skip the budget-guarded retry only when there IS a next attempt (the final
-			// attempt exits via the post-loop `!shakedownOk` guard, not here).
-			if (attempt < MAX_SHAKEDOWN_ATTEMPTS && !canRetryWithinBudget({ spent: cost, maxBudget, stepBudget: resolveStepSettings(CONFIG, profile, "shakedown-code").budget })) {
-				return finish({ itemId, completed: false, cost, error: "shakedown-code failed (insufficient budget to retry after max turns)" });
-			}
-		}
-
-		if (!shakedownOk) return finish({ itemId, completed: false, cost, error: "shakedown-code failed (max retries)" });
+						].join("\n"),
+		});
+		if (outcome.kind === "terminal") return outcome.cycleResult;
 	}
 
 	// ── Ship ──
@@ -685,7 +697,20 @@ export interface OrchestratorDeps {
 	runPipeline?: typeof runPipeline;
 	detectResumeStep?: typeof detectResumeStep;
 	resolveWorktree?: typeof resolveWorktree;
+	/** Override park/auto-resume policy. Partial — merged onto `CONFIG.park`. Injectable for
+	 *  tests to exercise `auto-resume: false` and config-sourced `max-wait` without an
+	 *  `.autopilot.yml` (the orchestrator otherwise reads module-level `CONFIG`). */
+	park?: Partial<{ autoResume: boolean; maxWait: string }>;
 }
+
+// Post-reset resume grace: jitter deliberately bounded inside the pre-existing 30s
+// post-reset envelope so timer-mocked orchestrator tests need no `tick()` changes.
+// delay = 15s + rand(0..15s) ∈ [15s, 30s). Widening these requires updating those tests.
+const RESUME_MIN_GRACE_MS = 15_000;
+const RESUME_JITTER_MS = 15_000;
+// Defensive bound against a pathological park→tiny-reset→park spin. Each real wait is
+// minutes+, and `maxWaitMs` already caps each round, so 12 is generous insurance.
+const MAX_RESUME_ROUNDS = 12;
 
 export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {}, statusBar: StatusBar = new StatusBar(), signal?: AbortSignal): Promise<{ exitCode: number; results: CycleResult[] }> {
 	const _runPipeline = deps.runPipeline ?? runPipeline;
@@ -895,111 +920,153 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		await Promise.all(Array.from({ length: Math.min(parallel, cycles) }, () => worker()));
 
 		// ── Park-and-resume ──
+		//
+		// Config-driven, multi-window (issue #32): after each wait+resume, if work re-parks
+		// in a *later* rate-limit window we wait again — up to MAX_RESUME_ROUNDS — so an
+		// overnight run spanning several 5h windows keeps going. `park.auto-resume: false`
+		// is the explicit off-switch (hand the prompt back immediately). CLI `--max-wait`
+		// overrides config `park.max-wait`, which overrides the built-in 6h.
 
 		if (parkSignal.parked) {
 			if (v) statusBar.teardown();
 			if (statusInterval) clearInterval(statusInterval);
 
-			const parkedItems = results.filter((r) => r.error === "parked" && r.itemId).map((r) => r.itemId!);
+			const park = { ...CONFIG.park, ...deps.park };
+			const autoResume = park.autoResume;
+			const maxWaitMs = parseWaitFlag(flags["max-wait"] ?? park.maxWait);
 
-			if (parkedItems.length === 0) {
+			const resetParkSignal = (): void => {
+				parkSignal.parked = false;
+				parkSignal.resetsAt = 0;
+				parkSignal.limitType = "";
+				parkSignal.triggerWorker = "";
+			};
+
+			// Per-item resume body — the `--resume` re-entry path in-process. Reused each
+			// round of the loop, so the resume-worktree/log/detect wiring lives in one place.
+			const resumeOne = async (id: string, i: number): Promise<CycleResult> => {
+				const wt = noWorktree ? REPO : _resolveWorktree(id);
+				const sf = _detectResumeStep(id, wt);
+				const st: CycleStatus = { itemId: id, status: "running", cost: 0 };
+				liveStatus.cycles.push(st);
+				if (v) liveStatus.render();
+				const r = await _runPipeline(
+					{
+						itemId: id,
+						worktree: wt,
+						startFrom: sf,
+						cycle: results.length + i + 1,
+						verbose: !isParallel && v,
+						shipTarget,
+						dryRun: false,
+						workerStatus: st,
+						logPath:
+							isParallel && v
+								? (() => {
+										const lp = resolve(REPO, ".dev", `autopilot-resume-${id.toLowerCase()}.log`);
+										appendFileSync(lp, `${"=".repeat(60)}\nresume ${id} — ${new Date().toISOString()}\n${"=".repeat(60)}\n`);
+										return lp;
+									})()
+								: undefined,
+						liveStatus,
+						...(noWorktree ? { noWorktree: true } : {}),
+						...(signal ? { signal } : {}),
+					},
+					parkSignal,
+					flags,
+				);
+				st.status = resultStatus(r);
+				st.cost = r.cost;
+				st.step = undefined;
+				if (v) liveStatus.render();
+				console.log(`${resultIcon(r)} resume ${id} — $${r.cost.toFixed(2)}${r.error ? `  ${A.dim(r.error)}` : ""}`);
+				return r;
+			};
+
+			let pending = results.filter((r) => r.error === "parked" && r.itemId).map((r) => r.itemId!);
+
+			if (pending.length === 0) {
 				console.log(`${A.yellow("⏸")} Rate limit hit but no items to resume.`);
 				return { exitCode: 1, results };
 			}
 
-			const maxWaitMs = parseWaitFlag(flags["max-wait"]);
-			const waitMs = parkSignal.resetsAt - Date.now();
-			const isWeekly = /week/i.test(parkSignal.limitType);
-			const resumeCmd = `pnpm autopilot --item ${parkedItems.join(",")} --verbose`;
-
-			if (waitMs <= 0 || !parkSignal.resetsAt) {
+			// Off-switch: auto-resume disabled → report parked items and hand the prompt back.
+			if (!autoResume) {
 				console.log("");
-				console.log(`${A.yellow("⏸")} ${parkSignal.limitType} limit hit — unknown reset time`);
-				console.log(`  Parked: ${parkedItems.join(", ")}`);
-				console.log(`  Resume: ${A.bold(resumeCmd)}`);
+				console.log(`${A.yellow("⏸")} ${parkSignal.limitType} limit hit — auto-resume disabled`);
+				console.log(`  Parked: ${pending.join(", ")}`);
+				console.log(`  Resume: ${A.bold(`pnpm autopilot --item ${pending.join(",")} --verbose`)}`);
 				return { exitCode: 1, results };
 			}
 
-			if (waitMs > maxWaitMs) {
-				const label = isWeekly ? "Weekly rate limit" : `${parkSignal.limitType} limit`;
-				console.log("");
-				console.log(`${A.yellow("⏸")} ${label} — wait ${fmtWait(waitMs)} exceeds --max-wait ${fmtWait(maxWaitMs)}`);
-				console.log(`  Parked: ${parkedItems.join(", ")}`);
-				console.log(`  Resume: ${A.bold(resumeCmd)}`);
-				return { exitCode: 1, results };
-			}
+			let round = 0;
+			while (parkSignal.parked && pending.length > 0 && round < MAX_RESUME_ROUNDS) {
+				round++;
+				const waitMs = parkSignal.resetsAt - Date.now();
+				const isWeekly = /week/i.test(parkSignal.limitType);
+				const resumeCmd = `pnpm autopilot --item ${pending.join(",")} --verbose`;
 
-			const eta = new Date(parkSignal.resetsAt + 30_000).toLocaleTimeString("en-CA", { hour12: false });
-			console.log("");
-			console.log(`${A.yellow("⏸")} ${A.bold("Parked")} — ${parkSignal.limitType} limit, waiting ${fmtWait(waitMs)} (ETA ${eta})`);
-			console.log(`  Items: ${parkedItems.join(", ")}`);
-
-			const countdownInterval = setInterval(() => {
-				const remaining = parkSignal.resetsAt + 30_000 - Date.now();
-				if (remaining > 0) {
-					console.log(`  ${A.dim("⏳")} ${fmtWait(remaining)} remaining...`);
+				// Unknown reset → never spin (checked every round, not just the first). `break`
+				// (not `return`) so we funnel through the shared teardown+summary below — a
+				// round-≥2 exit here would otherwise leak the status-bar scroll region set up
+				// by the prior round's `statusBar.setup()`.
+				if (!parkSignal.resetsAt || waitMs <= 0) {
+					console.log("");
+					console.log(`${A.yellow("⏸")} ${parkSignal.limitType} limit hit — unknown reset time`);
+					console.log(`  Parked: ${pending.join(", ")}`);
+					console.log(`  Resume: ${A.bold(resumeCmd)}`);
+					break;
 				}
-			}, 5 * 60_000);
 
-			await new Promise((r) => setTimeout(r, waitMs + 30_000));
-			clearInterval(countdownInterval);
+				if (waitMs > maxWaitMs) {
+					const label = isWeekly ? "Weekly rate limit" : `${parkSignal.limitType} limit`;
+					console.log("");
+					console.log(`${A.yellow("⏸")} ${label} — wait ${fmtWait(waitMs)} exceeds --max-wait ${fmtWait(maxWaitMs)}`);
+					console.log(`  Parked: ${pending.join(", ")}`);
+					console.log(`  Resume: ${A.bold(resumeCmd)}`);
+					break;
+				}
 
-			parkSignal.parked = false;
-			parkSignal.resetsAt = 0;
-			parkSignal.limitType = "";
-			parkSignal.triggerWorker = "";
-			totalSpent = 0;
+				// Jitter within the existing 30s post-reset envelope (see the constants above)
+				// so timer-mocked tests need no change: delay ∈ [15s, 30s).
+				const delay = RESUME_MIN_GRACE_MS + Math.floor(Math.random() * RESUME_JITTER_MS);
+				const resumeAt = parkSignal.resetsAt + delay;
+				const eta = new Date(resumeAt).toLocaleTimeString("en-CA", { hour12: false });
+				console.log("");
+				console.log(`${A.yellow("⏸")} ${A.bold("Parked")} — ${parkSignal.limitType} limit, waiting ${fmtWait(waitMs)} (ETA ${eta})`);
+				console.log(`  Items: ${pending.join(", ")}`);
 
-			console.log(`\n${A.green("▶")} ${A.bold("Resuming")} ${parkedItems.length} item(s)...`);
+				const countdownInterval = setInterval(() => {
+					const remaining = resumeAt - Date.now();
+					if (remaining > 0) {
+						console.log(`  ${A.dim("⏳")} ${fmtWait(remaining)} remaining...`);
+					}
+				}, 5 * 60_000);
 
-			if (v) {
-				liveStatus.cycles = [];
-				liveStatus.totalCycles = parkedItems.length;
-				statusBar.setup();
+				await new Promise((r) => setTimeout(r, resumeAt - Date.now()));
+				clearInterval(countdownInterval);
+
+				resetParkSignal();
+
+				console.log(`\n${A.green("▶")} ${A.bold("Resuming")} ${pending.length} item(s)...`);
+
+				if (v) {
+					liveStatus.cycles = [];
+					liveStatus.totalCycles = pending.length;
+					statusBar.setup();
+				}
+
+				const batch = await Promise.all(pending.map((id, i) => resumeOne(id, i)));
+				results.push(...batch);
+				pending = batch.filter((r) => r.error === "parked" && r.itemId).map((r) => r.itemId!);
 			}
 
-			const resumeResults = await Promise.all(
-				parkedItems.map(async (id, i) => {
-					const wt = noWorktree ? REPO : _resolveWorktree(id);
-					const sf = _detectResumeStep(id, wt);
-					const st: CycleStatus = { itemId: id, status: "running", cost: 0 };
-					liveStatus.cycles.push(st);
-					if (v) liveStatus.render();
-					const r = await _runPipeline(
-						{
-							itemId: id,
-							worktree: wt,
-							startFrom: sf,
-							cycle: results.length + i + 1,
-							verbose: !isParallel && v,
-							shipTarget,
-							dryRun: false,
-							workerStatus: st,
-							logPath:
-								isParallel && v
-									? (() => {
-											const lp = resolve(REPO, ".dev", `autopilot-resume-${id.toLowerCase()}.log`);
-											appendFileSync(lp, `${"=".repeat(60)}\nresume ${id} — ${new Date().toISOString()}\n${"=".repeat(60)}\n`);
-											return lp;
-										})()
-									: undefined,
-							liveStatus,
-							...(noWorktree ? { noWorktree: true } : {}),
-							...(signal ? { signal } : {}),
-						},
-						parkSignal,
-						flags,
-					);
-					st.status = resultStatus(r);
-					st.cost = r.cost;
-					st.step = undefined;
-					if (v) liveStatus.render();
-					console.log(`${resultIcon(r)} resume ${id} — $${r.cost.toFixed(2)}${r.error ? `  ${A.dim(r.error)}` : ""}`);
-					return r;
-				}),
-			);
+			if (round >= MAX_RESUME_ROUNDS && parkSignal.parked) {
+				console.log(`${A.yellow("⏸")} auto-resume round cap (${MAX_RESUME_ROUNDS}) reached — leaving remaining items parked`);
+			}
 
-			results.push(...resumeResults);
+			// `totalSpent` is authoritatively recomputed from `results` here (the resume rounds
+			// pushed their cycles), so per-round spend needs no manual bookkeeping.
 			totalSpent = results.reduce((s, r) => s + r.cost, 0);
 		}
 

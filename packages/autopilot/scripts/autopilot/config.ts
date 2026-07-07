@@ -66,6 +66,9 @@ export interface ResolvedConfig {
 	roadmapSource: RoadmapSourceName;
 	roadmapGithub: GithubRoadmapConfig;
 	roadmapLinear: LinearRoadmapConfig;
+	/** Overnight park-and-resume policy. `maxWait` is the raw wait string (parsed with
+	 *  `parseWaitFlag` at the orchestrator to avoid a config↔helpers import cycle). */
+	park: { autoResume: boolean; maxWait: string };
 }
 
 const DEFAULT_GITHUB_ROADMAP: GithubRoadmapConfig = {
@@ -112,6 +115,10 @@ export const DEFAULTS = {
 		standard: { pick: SONNET, plan: OPUS, "shakedown-plan": OPUS, implement: OPUS, "shakedown-code": OPUS, ship: OPUS, shipwreck: SONNET },
 		quick: { pick: SONNET, plan: SONNET, "shakedown-plan": SONNET, implement: SONNET, "shakedown-code": SONNET, ship: SONNET, shipwreck: SONNET },
 	} satisfies Record<string, Partial<Record<Step, string>>>,
+	// Default `autoResume: true` preserves today's waiting behavior (the pipeline already
+	// waits by default via the old `--max-wait` 6h default) — flipping it false would
+	// regress unattended overnight runs. `false` is the explicit interactive off-switch.
+	park: { autoResume: true, maxWait: "6h" },
 } as const;
 
 // ── Loader ─────────────────────────────────────────────────────────────
@@ -354,7 +361,47 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		throw new Error(`${configPath}: \`roadmap.linear.team\` is required when roadmap.source is linear`);
 	}
 
-	return { repo, worktreePrefix, budgets, turnLimits, effort, modelProfiles, profileBudgets, profileTurnLimits, profileEffort, shipTarget, roadmapSource, roadmapGithub, roadmapLinear };
+	// park.*: overnight park-and-resume policy. Type-validate only — `max-wait` uses
+	// parseWaitFlag's tolerant format (unparseable falls back to 6h at read time).
+	let parkAutoResume: boolean = DEFAULTS.park.autoResume;
+	let parkMaxWait: string = DEFAULTS.park.maxWait;
+	const parkBlock = yml.park;
+	if (parkBlock !== undefined) {
+		if (!isPlainObject(parkBlock)) {
+			throw new Error(`${configPath}: expected \`park\` to be a map`);
+		}
+		const ar = parkBlock["auto-resume"];
+		if (ar !== undefined) {
+			if (typeof ar !== "boolean") {
+				throw new Error(`${configPath}: expected \`park.auto-resume\` to be a boolean, got ${typeof ar}`);
+			}
+			parkAutoResume = ar;
+		}
+		const mw = parkBlock["max-wait"];
+		if (mw !== undefined) {
+			if (!isString(mw)) {
+				throw new Error(`${configPath}: expected \`park.max-wait\` to be a string, got ${typeof mw}`);
+			}
+			parkMaxWait = mw;
+		}
+	}
+
+	return {
+		repo,
+		worktreePrefix,
+		budgets,
+		turnLimits,
+		effort,
+		modelProfiles,
+		profileBudgets,
+		profileTurnLimits,
+		profileEffort,
+		shipTarget,
+		roadmapSource,
+		roadmapGithub,
+		roadmapLinear,
+		park: { autoResume: parkAutoResume, maxWait: parkMaxWait },
+	};
 }
 
 // ── Step-settings resolver ─────────────────────────────────────────────

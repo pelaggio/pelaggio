@@ -149,7 +149,9 @@ export interface Flags {
 	verbose: boolean;
 	trace: boolean;
 	budget: string;
-	"max-wait": string;
+	/** Optional so an unset flag (`undefined`) is distinguishable from an explicit value,
+	 *  letting `park.max-wait` config take effect. Precedence: CLI flag > config > "6h". */
+	"max-wait"?: string;
 	target?: string;
 	"dry-run": boolean;
 	"no-worktree": boolean;

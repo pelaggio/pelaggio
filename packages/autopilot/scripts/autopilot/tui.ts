@@ -147,6 +147,9 @@ export class StatusBar {
 	active = false;
 	reservedLines = 2;
 	lastLines: string[] = [];
+	// Registered once on first setup(); setup() is re-invoked per auto-resume round
+	// (pipeline park loop), so an unguarded `.on` would stack a listener per round.
+	private resizeListener: (() => void) | null = null;
 
 	constructor(opts: { plain?: boolean } = {}) {
 		this.plain = opts.plain ?? !TUI_ENABLED;
@@ -158,12 +161,15 @@ export class StatusBar {
 		this.applyScrollRegion();
 		process.stderr.write("\x1b[1;1H");
 		this.active = true;
-		process.stderr.on("resize", () => {
-			if (!this.active) return;
-			process.stderr.write("\x1b[2J\x1b[1;1H");
-			this.applyScrollRegion();
-			this.update(this.lastLines);
-		});
+		if (!this.resizeListener) {
+			this.resizeListener = () => {
+				if (!this.active) return;
+				process.stderr.write("\x1b[2J\x1b[1;1H");
+				this.applyScrollRegion();
+				this.update(this.lastLines);
+			};
+			process.stderr.on("resize", this.resizeListener);
+		}
 	}
 
 	private applyScrollRegion(): void {
