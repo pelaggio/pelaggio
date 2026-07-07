@@ -62,7 +62,7 @@ pre-existing escape hatch and still wins.
 
 See `docs/config.md` for the annotated schema. The `.autopilot.yml` file **is
 tracked** in this repo (github-issues roadmap, pull-request ship target, budget
-overrides) — it became the dogfooding config in ea6e4e6, superseding the
+overrides) — it became the dogfooding config in 8ccf760 (#2), superseding the
 original keep-it-untracked design. Defaults still live in `DEFAULTS` inside
 `config.ts` and the annotated example lives in the doc.
 
