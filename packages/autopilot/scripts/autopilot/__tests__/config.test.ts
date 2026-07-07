@@ -333,6 +333,48 @@ describe("loadConfig — roadmap.linear", () => {
 	});
 });
 
+describe("loadConfig — park", () => {
+	it("defaults to { autoResume: true, maxWait: '6h' } when unset", () => {
+		const repo = tmpRepo();
+		const cfg = loadConfig({ repo, configPath: join(repo, ".autopilot.yml") });
+		assert.deepEqual(cfg.park, { autoResume: true, maxWait: "6h" });
+	});
+
+	it("parses park.auto-resume (boolean) and park.max-wait (string)", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "park:\n  auto-resume: false\n  max-wait: 2h\n");
+		const cfg = loadConfig({ repo, configPath: path });
+		assert.equal(cfg.park.autoResume, false);
+		assert.equal(cfg.park.maxWait, "2h");
+	});
+
+	it("partial park override leaves the other key at its default", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "park:\n  auto-resume: false\n");
+		const cfg = loadConfig({ repo, configPath: path });
+		assert.equal(cfg.park.autoResume, false);
+		assert.equal(cfg.park.maxWait, "6h");
+	});
+
+	it("throws on non-boolean park.auto-resume", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "park:\n  auto-resume: yes-please\n");
+		assert.throws(() => loadConfig({ repo, configPath: path }), /park\.auto-resume.*boolean/);
+	});
+
+	it("throws on non-string park.max-wait", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "park:\n  max-wait: 360\n");
+		assert.throws(() => loadConfig({ repo, configPath: path }), /park\.max-wait.*string/);
+	});
+
+	it("throws when park is not a map", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "park: nope\n");
+		assert.throws(() => loadConfig({ repo, configPath: path }), /expected `park` to be a map/);
+	});
+});
+
 describe("resolveRepo", () => {
 	const REPO_ENV = "CLAUDE_AUTOPILOT_REPO";
 	let savedRepoEnv: string | undefined;

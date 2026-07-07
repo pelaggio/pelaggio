@@ -266,6 +266,104 @@ describe("runPipeline — plan turn-limit retry", () => {
 	});
 });
 
+describe("runPipeline — shakedown-plan turn-limit retry", () => {
+	it("retries shakedown-plan after error_max_turns and succeeds on attempt 2, marking retriedMaxTurns", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep, calls } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": [
+					{ ok: false, subtype: "error_max_turns" },
+					{ ok: true, text: "VERDICT: APPROVE" },
+				],
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				ship: {
+					ok: true,
+					sideEffect: (cwd) => {
+						execSync("git checkout -q main", { cwd });
+						execSync("git merge -q --no-ff feat/tool-99", { cwd });
+						execSync("git checkout -q feat/tool-99", { cwd });
+					},
+				},
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
+			runStep,
+			mainRepo: worktree,
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+			runShipBookkeeping: noopBookkeeping,
+		});
+
+		assert.equal(result.completed, true);
+		assert.equal(result.verdict, "APPROVE");
+		const sdpCalls = calls.filter((c) => c.step === "shakedown-plan");
+		assert.equal(sdpCalls.length, 2, `expected two shakedown-plan attempts; got ${sdpCalls.length}`);
+		assert.deepEqual(
+			sdpCalls.map((c) => c.attempt),
+			[1, 2],
+		);
+		const steps = logs[0].steps as Array<{ name: string; attempt?: number; retriedMaxTurns?: boolean }>;
+		const attempt2 = steps.filter((s) => s.name === "shakedown-plan").find((s) => s.attempt === 2);
+		assert.equal(attempt2?.retriedMaxTurns, true, `expected attempt-2 shakedown-plan entry to mark retriedMaxTurns; got ${JSON.stringify(attempt2)}`);
+	});
+});
+
+describe("runPipeline — shakedown-code turn-limit retry", () => {
+	it("retries shakedown-code after error_max_turns and succeeds on attempt 2, marking retriedMaxTurns", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep, calls } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": [{ ok: false, subtype: "error_max_turns" }, { ok: true }],
+				ship: {
+					ok: true,
+					sideEffect: (cwd) => {
+						execSync("git checkout -q main", { cwd });
+						execSync("git merge -q --no-ff feat/tool-99", { cwd });
+						execSync("git checkout -q feat/tool-99", { cwd });
+					},
+				},
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
+			runStep,
+			mainRepo: worktree,
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+			runShipBookkeeping: noopBookkeeping,
+		});
+
+		assert.equal(result.completed, true);
+		const sdcCalls = calls.filter((c) => c.step === "shakedown-code");
+		assert.equal(sdcCalls.length, 2, `expected two shakedown-code attempts; got ${sdcCalls.length}`);
+		assert.deepEqual(
+			sdcCalls.map((c) => c.attempt),
+			[1, 2],
+		);
+		const steps = logs[0].steps as Array<{ name: string; attempt?: number; retriedMaxTurns?: boolean }>;
+		const attempt2 = steps.filter((s) => s.name === "shakedown-code").find((s) => s.attempt === 2);
+		assert.equal(attempt2?.retriedMaxTurns, true, `expected attempt-2 shakedown-code entry to mark retriedMaxTurns; got ${JSON.stringify(attempt2)}`);
+		// The attempt-2 continue prompt is the bespoke "ran out of turns" text, not the code-review skill.
+		assert.match(sdcCalls[1]?.prompt ?? "", /ran out of turns/);
+	});
+});
+
 describe("runPipeline — budget guard skips turn-limit retry", () => {
 	it("skips the plan retry when remaining budget is below the step budget", async () => {
 		const worktree = makeTempGitRepo();

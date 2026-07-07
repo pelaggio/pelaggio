@@ -38,6 +38,12 @@ ship:
   target: direct-push           # default: direct-push
                                 # values: direct-push | pull-request | auto-merge-pr
 
+park:                           # overnight park-and-resume on rate-limit
+  auto-resume: true             # default: true (wait out the window and resume)
+                                # false = hand the prompt back at the first park
+  max-wait: 6h                  # default: 6h — skip resuming if the reset is farther out
+                                # ("6h", "90m", "1h30m", or a bare number = minutes)
+
 roadmap:
   source: markdown              # default: markdown
                                 # values: markdown | github-issues | linear
@@ -271,6 +277,43 @@ the most recent issue comment whose body begins with
 `<!-- autopilot-plan -->`. Comment-sourced plans materialize to
 `.dev/plans/<team>-<n>.md` in the worktree — **not** `docs/plans/`, which
 remains `/plan`'s canonical committed output.
+
+## Park & auto-resume
+
+When a run hits its rate-limit window the pipeline **parks**: it checkpoints
+each in-flight item's uncommitted work and stops that cycle with
+`error: "parked"`. In normal (`--cycles` / `--parallel`) mode the orchestrator
+then decides whether to wait out the window and pick the parked items back up.
+
+| Key                | Default | Meaning                                                                       |
+|--------------------|---------|-------------------------------------------------------------------------------|
+| `park.auto-resume` | `true`  | Wait for the limit to reset, then resume the parked items in-process.         |
+| `park.max-wait`    | `6h`    | Cap on how long to wait. If the reset is farther out, exit parked instead.    |
+
+**`auto-resume` defaults to `true`.** The pipeline already waited by default
+(the old `--max-wait` had a built-in 6h default), so this formalizes existing
+behavior into a named, disableable knob rather than introducing a wait. Set
+`auto-resume: false` for interactive use where you'd rather get your prompt back
+immediately — the run prints the parked item IDs and a ready-to-paste
+`pnpm autopilot --item … ` resume command, then exits with code 1.
+
+**Multi-window.** Resuming is looped: if the resumed work re-parks in a *later*
+rate-limit window, the orchestrator waits again and resumes again, up to an
+internal round cap (12). This is what makes a "leave it running overnight" batch
+survive several consecutive 5h windows. Each round independently re-checks the
+reset timestamp and `max-wait`, so a window whose reset is unknown (never
+reported) or farther out than `max-wait` still exits parked rather than spinning.
+
+**`max-wait` precedence:** `--max-wait` CLI flag > `park.max-wait` (yml) > `6h`.
+Because the CLI flag has no built-in default anymore, an unset flag lets
+`park.max-wait` take effect; a supervising daemon can therefore set the wait
+policy entirely from `.autopilot.yml`. Accepts the same formats as the flag:
+`6h`, `90m`, `1h30m`, or a bare number (minutes). An unparseable value falls
+back to 6h.
+
+Auto-resume applies only to the normal `--cycles` / `--parallel` driver. A
+single-item `--resume <id>` invocation that re-parks is itself re-runnable by
+the same command, so it is intentionally not looped.
 
 ## Unknown keys
 

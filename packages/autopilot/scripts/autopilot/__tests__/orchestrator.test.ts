@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { runOrchestrator } from "../pipeline.js";
+import { StatusBar } from "../tui.js";
 import type { Flags } from "../types.js";
 import { createMockRunPipeline } from "./mocks.js";
 
@@ -275,6 +276,148 @@ describe("runOrchestrator — park-and-resume", () => {
 		const { exitCode } = await runOrchestrator({ ...baseFlags, item: "X-1" }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });
 		assert.equal(exitCode, 1);
 		assert.equal(calls.length, 1);
+	});
+});
+
+describe("runOrchestrator — auto-resume config", () => {
+	it("off-switch: park.auto-resume=false reports parked items and exits 1 without resuming", async (t) => {
+		const logs: string[] = [];
+		t.mock.method(console, "log", (...args: unknown[]) => {
+			logs.push(args.join(" "));
+		});
+		const baseNow = 1_700_000_000_000;
+		const { runPipeline, calls } = createMockRunPipeline({
+			byItem: {
+				"X-1": { completed: false, cost: 0.1, error: "parked", park: { parked: true, resetsAt: baseNow + 60_000, limitType: "5h" } },
+			},
+		});
+		const { exitCode } = await runOrchestrator({ ...baseFlags, item: "X-1" }, { runPipeline, park: { autoResume: false }, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });
+		assert.equal(exitCode, 1);
+		assert.equal(calls.length, 1, `expected no resume when auto-resume disabled; got ${calls.length} calls`);
+		assert.ok(
+			logs.some((l) => l.includes("auto-resume disabled")),
+			`expected off-switch wording in logs; got:\n${logs.join("\n")}`,
+		);
+		assert.ok(
+			logs.some((l) => l.includes("Resume:")),
+			`expected a Resume: hand-back command in logs; got:\n${logs.join("\n")}`,
+		);
+	});
+
+	it("multi-window: park→park→success resumes across two windows (3 runPipeline calls)", async (t) => {
+		t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
+		t.mock.method(console, "log", () => {});
+		const baseNow = 1_700_000_000_000;
+		t.mock.timers.setTime(baseNow);
+
+		const { runPipeline, calls } = createMockRunPipeline({
+			byItem: {
+				"X-1": [
+					{ completed: false, cost: 0.1, error: "parked", park: { parked: true, resetsAt: baseNow + 60_000, limitType: "5h" } },
+					{ completed: false, cost: 0.1, error: "parked", park: { parked: true, resetsAt: baseNow + 60_000, limitType: "5h" } },
+					{ completed: true, cost: 0.5 },
+				],
+			},
+			// Trap: mocked Date.now() advances with tick(), so a static resetsAt would already
+			// be in the past by round 2 (gate would read waitMs<=0 → exit parked). Re-anchor each
+			// still-parked round's reset to now+60s so every reset is genuinely in the future.
+			onCall: (_opts, ps) => {
+				if (ps.parked) ps.resetsAt = Date.now() + 60_000;
+			},
+		});
+
+		const promise = runOrchestrator({ ...baseFlags, item: "X-1" }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });
+		// Round 1: let it reach the wait, tick past resumeAt (reset + ≤30s jitter), drain.
+		for (let i = 0; i < 5; i++) await new Promise(setImmediate);
+		t.mock.timers.tick(60_000 + 30_000);
+		for (let i = 0; i < 5; i++) await new Promise(setImmediate);
+		// Round 2: same again — this time the resume succeeds.
+		t.mock.timers.tick(60_000 + 30_000);
+		for (let i = 0; i < 5; i++) await new Promise(setImmediate);
+		const { results } = await promise;
+
+		assert.equal(calls.length, 3, `expected 3 runPipeline calls (initial park + 2 resume rounds); got ${calls.length}`);
+		assert.equal(results.at(-1)?.completed, true, "final resume should complete");
+	});
+
+	it("config park.max-wait caps the wait when --max-wait flag is unset (exits parked)", async (t) => {
+		t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
+		t.mock.method(console, "log", () => {});
+		const baseNow = 1_700_000_000_000;
+		t.mock.timers.setTime(baseNow);
+
+		const { runPipeline, calls } = createMockRunPipeline({
+			byItem: {
+				"X-1": { completed: false, cost: 0.1, error: "parked", park: { parked: true, resetsAt: baseNow + 3 * 3600_000, limitType: "5h" } },
+			},
+		});
+		// Flags without --max-wait; inject config cap 1h. A 3h reset exceeds it → exit parked.
+		const flagsNoMaxWait: Flags = { cycles: "1", parallel: "1", verbose: false, trace: false, budget: "10", "dry-run": false };
+		const { exitCode } = await runOrchestrator({ ...flagsNoMaxWait, item: "X-1" }, { runPipeline, park: { maxWait: "1h" }, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });
+		assert.equal(exitCode, 1);
+		assert.equal(calls.length, 1, `expected no resume (config max-wait exceeded); got ${calls.length}`);
+	});
+
+	it("--max-wait CLI flag overrides config park.max-wait (resume proceeds)", async (t) => {
+		t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
+		t.mock.method(console, "log", () => {});
+		const baseNow = 1_700_000_000_000;
+		t.mock.timers.setTime(baseNow);
+
+		const { runPipeline, calls } = createMockRunPipeline({
+			byItem: {
+				"X-1": [
+					{ completed: false, cost: 0.1, error: "parked", park: { parked: true, resetsAt: baseNow + 3 * 3600_000, limitType: "5h" } },
+					{ completed: true, cost: 0.5 },
+				],
+			},
+		});
+		// Config cap 1h would block a 3h reset, but CLI --max-wait 5h overrides it → resume.
+		const promise = runOrchestrator({ ...baseFlags, item: "X-1", "max-wait": "5h" }, { runPipeline, park: { maxWait: "1h" }, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });
+		for (let i = 0; i < 5; i++) await new Promise(setImmediate);
+		t.mock.timers.tick(3 * 3600_000 + 30_000);
+		for (let i = 0; i < 5; i++) await new Promise(setImmediate);
+		const { results } = await promise;
+
+		assert.equal(calls.length, 2, `expected resume to proceed (CLI cap 5h > 3h wait); got ${calls.length}`);
+		assert.equal(results.at(-1)?.completed, true);
+	});
+
+	it("multi-window then exceeds max-wait: tears down the status bar before exiting (no leaked scroll region)", async (t) => {
+		t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
+		t.mock.method(console, "log", () => {});
+		const baseNow = 1_700_000_000_000;
+		t.mock.timers.setTime(baseNow);
+
+		// setup/teardown are no-ops in plain (non-TTY) mode, so the leak is invisible to
+		// a real bar under test — spy the calls directly to assert they stay balanced.
+		const bar = new StatusBar({ plain: true });
+		const events: string[] = [];
+		t.mock.method(bar, "setup", () => events.push("setup"));
+		t.mock.method(bar, "teardown", () => events.push("teardown"));
+
+		const { runPipeline } = createMockRunPipeline({
+			byItem: {
+				// Round 1 resumes within max-wait, then re-parks with a reset 3h out that
+				// exceeds the 1h cap → the round-2 gate must break, not early-return.
+				"X-1": [
+					{ completed: false, cost: 0.1, error: "parked", park: { parked: true, resetsAt: baseNow + 60_000, limitType: "5h" } },
+					{ completed: false, cost: 0.1, error: "parked", park: { parked: true, resetsAt: baseNow + 3 * 3600_000, limitType: "5h" } },
+				],
+			},
+		});
+
+		const promise = runOrchestrator({ ...baseFlags, item: "X-1", verbose: true, "max-wait": "1h" }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree }, bar);
+		for (let i = 0; i < 5; i++) await new Promise(setImmediate);
+		t.mock.timers.tick(60_000 + 30_000);
+		for (let i = 0; i < 5; i++) await new Promise(setImmediate);
+		const { exitCode } = await promise;
+
+		assert.equal(exitCode, 1);
+		const setups = events.filter((e) => e === "setup").length;
+		const teardowns = events.filter((e) => e === "teardown").length;
+		assert.equal(setups, teardowns, `setup/teardown must stay balanced; got ${JSON.stringify(events)}`);
+		assert.equal(events.at(-1), "teardown", `the run must end on a teardown, not a leaked setup; got ${JSON.stringify(events)}`);
 	});
 });
 
