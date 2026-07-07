@@ -1,7 +1,6 @@
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { WORKTREE_PREFIX } from "../config.js";
 import { createClaimWorkspace } from "./git-claim.js";
 import type { CreateItemOpts, ItemStatus, LinearRoadmapConfig, MarkDoneContext, PlanLocation, RoadmapItem, RoadmapItemStatus, RoadmapSource, RoadmapSourceName } from "./types.js";
 
@@ -160,12 +159,17 @@ export class LinearRoadmap implements RoadmapSource {
 	async listOpenItems(): Promise<RoadmapItem[]> {
 		const api = await this.api();
 		const issues = await api.listIssues({ teamId: this.teamId, label: this.label || undefined });
-		return issues.map((it) => ({
-			id: it.identifier,
-			title: it.title,
-			deps: formatDeps(it.relations),
-			sourceRef: it.identifier,
-		}));
+		// This status-less list feeds the server /roadmap endpoint and the web
+		// StartForm — claimed (started/in-progress) issues must not look startable,
+		// preserving pre-#12 membership now that listIssues includes "started".
+		return issues
+			.filter((it) => !(it.stateType === "started" || (it.labels ?? []).includes(IN_PROGRESS_LABEL)))
+			.map((it) => ({
+				id: it.identifier,
+				title: it.title,
+				deps: formatDeps(it.relations),
+				sourceRef: it.identifier,
+			}));
 	}
 
 	async claimItem(id: string, opts?: { noWorktree?: boolean }): Promise<{ branch: string; worktree: string }> {
@@ -186,7 +190,7 @@ export class LinearRoadmap implements RoadmapSource {
 			// best-effort — label may not exist on the workspace
 		}
 
-		return createClaimWorkspace(this.repo, id, branch, { ...opts, worktreeName: `${WORKTREE_PREFIX}${id.toLowerCase()}` });
+		return createClaimWorkspace(this.repo, id, branch, opts);
 	}
 
 	async markDone(id: string, ctx?: MarkDoneContext): Promise<void> {
@@ -342,6 +346,16 @@ async function defaultLinearApi(): Promise<LinearApi> {
 		return res.nodes[0]?.id ?? null;
 	}
 
+	// SDK v82 exposes Issue.state as a GETTER returning LinearFetch (a promise) —
+	// `typeof state === "function"` is false, so probe all three shapes: method
+	// (older SDKs), promise-from-getter (v82), plain object (test stubs).
+	async function stateTypeOf(holder: { state?: unknown }): Promise<string | undefined> {
+		let s = holder.state;
+		if (typeof s === "function") s = (s as () => unknown).call(holder);
+		if (s && typeof (s as { then?: unknown }).then === "function") s = await (s as Promise<unknown>);
+		return (s as { type?: string } | undefined)?.type;
+	}
+
 	return {
 		async listIssues({ teamId, label, includeDone }) {
 			const filter: Record<string, unknown> = {
@@ -362,23 +376,14 @@ async function defaultLinearApi(): Promise<LinearApi> {
 						if (related?.identifier) relations.push({ type: r.type, relatedIdentifier: related.identifier });
 					}
 				}
-				let stateType: string | undefined;
-				if (typeof node.state === "function") stateType = (await node.state())?.type;
-				else if (node.state && typeof node.state === "object") stateType = (node.state as { type: string }).type;
-				items.push({ id: node.id, identifier: node.identifier, title: node.title, description: node.description ?? null, relations, stateType });
+				items.push({ id: node.id, identifier: node.identifier, title: node.title, description: node.description ?? null, relations, stateType: await stateTypeOf(node) });
 			}
 			return items;
 		},
 		async getIssue(identifier) {
 			const issue = await client.issue(identifier);
 			if (!issue) return null;
-			let stateType: string | undefined;
-			if (typeof issue.state === "function") {
-				const s = await issue.state();
-				stateType = s?.type;
-			} else if (issue.state && typeof issue.state === "object") {
-				stateType = (issue.state as { type: string }).type;
-			}
+			const stateType = await stateTypeOf(issue);
 			const relations: { type: string; relatedIdentifier: string }[] = [];
 			if (typeof issue.relations === "function") {
 				const rel = await issue.relations();

@@ -138,11 +138,12 @@ describe("runShipBookkeeping — never-discard", () => {
 			exec,
 			status: () => "M docs/roadmap-core.md\n?? docs/deferred.md", // dirty
 			repairMain: () => {},
+			lock: async <T>(_repo: string, fn: () => Promise<T> | T): Promise<T> => await fn(),
 		});
 
 		assert.equal(result.recovered, true);
 		assert.ok(
-			order.some((c) => /git add -A && git commit .*--no-verify/.test(c)),
+			order.some((c) => /git add -A .* && git commit .*--no-verify/.test(c)),
 			`expected a recover commit; got: ${order.join(" | ")}`,
 		);
 		assert.ok(!order.some((c) => DISCARD_RE.test(c)), `discard command leaked: ${order.join(" | ")}`);
@@ -220,11 +221,11 @@ describe("commitStrayBookkeeping — real temp repo", () => {
 		return dir;
 	}
 
-	it("dirty tree → commit created, status clean after, file content preserved (not discarded)", () => {
+	it("dirty tree → commit created, status clean after, file content preserved (not discarded)", async () => {
 		const dir = seedRepo();
 		writeFileSync(join(dir, "deferred.md"), "keep me — a deferred create-item");
 		const logs: string[] = [];
-		const recovered = commitStrayBookkeeping(dir, "TOOL-9", (m) => logs.push(m));
+		const recovered = await commitStrayBookkeeping(dir, "TOOL-9", (m) => logs.push(m));
 
 		assert.equal(recovered, true);
 		assert.equal(execSync("git status --porcelain", { cwd: dir, encoding: "utf-8" }).trim(), "", "tree must be clean after recover");
@@ -232,10 +233,10 @@ describe("commitStrayBookkeeping — real temp repo", () => {
 		assert.match(execSync("git log -1 --format=%s", { cwd: dir, encoding: "utf-8" }).trim(), /recover uncommitted bookkeeping \(TOOL-9\)/);
 	});
 
-	it("clean tree → no commit, returns false", () => {
+	it("clean tree → no commit, returns false", async () => {
 		const dir = seedRepo();
 		const before = execSync("git rev-parse HEAD", { cwd: dir, encoding: "utf-8" }).trim();
-		const recovered = commitStrayBookkeeping(dir, "TOOL-9", () => {});
+		const recovered = await commitStrayBookkeeping(dir, "TOOL-9", () => {});
 		assert.equal(recovered, false);
 		assert.equal(execSync("git rev-parse HEAD", { cwd: dir, encoding: "utf-8" }).trim(), before, "no new commit on a clean tree");
 	});

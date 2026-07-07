@@ -250,6 +250,10 @@ describe("verifyShipLanded", () => {
 });
 
 describe("parsePickResult", () => {
+	it("accepts the already-claimed tag (issue #12 race loser)", () => {
+		assert.equal(parsePickResult("pick-result: already-claimed"), "already-claimed");
+	});
+
 	it("returns null when no tag is present", () => {
 		assert.equal(parsePickResult("nothing to see here"), null);
 	});

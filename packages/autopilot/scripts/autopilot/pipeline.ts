@@ -574,7 +574,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	// (a prior cycle's deferred create-item, pending bookkeeping, etc.). Never
 	// discards — see commitStrayBookkeeping.
 	if (!opts.dryRun && target.name === "direct-push") {
-		commitStrayBookkeeping(mainRepo, itemId!, log);
+		await commitStrayBookkeeping(mainRepo, itemId!, log);
 	}
 
 	// Capture pre-ship git state for merge detection (direct-push only).

@@ -55,6 +55,8 @@ type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 export interface ResolvedConfig {
 	repo: string;
 	worktreePrefix: string;
+	/** The yml-layer prefix alone (no env/basename fallback) — adapters resolve their own repo-local default. */
+	worktreePrefixFromYml: string | undefined;
 	budgets: Record<Step, number>;
 	turnLimits: Record<Step, number>;
 	effort: Record<Step, Effort>;
@@ -389,6 +391,7 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 	return {
 		repo,
 		worktreePrefix,
+		worktreePrefixFromYml: ymlPrefix,
 		budgets,
 		turnLimits,
 		effort,

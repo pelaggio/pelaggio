@@ -1,7 +1,6 @@
 import { execSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { WORKTREE_PREFIX } from "../config.js";
 import { createClaimWorkspace } from "./git-claim.js";
 import type { CreateItemOpts, GithubRoadmapConfig, ItemStatus, MarkDoneContext, PlanLocation, RoadmapItem, RoadmapItemStatus, RoadmapSource, RoadmapSourceName } from "./types.js";
 
@@ -169,7 +168,7 @@ export class GitHubIssuesRoadmap implements RoadmapSource {
 			// swallowed — label may not exist on the repo
 		}
 
-		return createClaimWorkspace(this.repo, id, branch, { ...opts, worktreeName: `${WORKTREE_PREFIX}${id.toLowerCase()}` });
+		return createClaimWorkspace(this.repo, id, branch, opts);
 	}
 
 	async markDone(id: string, ctx?: MarkDoneContext): Promise<void> {

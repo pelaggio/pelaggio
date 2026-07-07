@@ -426,6 +426,28 @@ describe("MarkdownRoadmap.claimItem — git-native claims (issue #12)", () => {
 		assert.equal(items.find((i) => i.id === "TOOL-1")?.status, "in-progress");
 		assert.equal(items.find((i) => i.id === "TOOL-10")?.status, "open");
 	});
+
+	it("hierarchical ids attribute to the longest match — feat/comp-11-c claims COMP-11-C, not COMP-11", async () => {
+		const { claimedIds } = await import("../roadmap/git-claim.js");
+		const repo = seedRepo();
+		execSync("git branch feat/comp-11-c", { cwd: repo });
+		const claimed = claimedIds(repo, ["COMP-11", "COMP-11-C"]);
+		assert.deepEqual([...claimed], ["COMP-11-C"]);
+	});
+
+	it("an orphan worktree DIRECTORY is not 'already claimed' — legible error, no phantom branch left", async () => {
+		const { repo, r } = seedWithItem("TOOL-9");
+		// bookkeeping removed the branch but the worktree dir survived (or any
+		// same-named dir exists): git creates the branch, THEN fails on the dir.
+		const orphanDir = resolve(repo, "..", `${repo.split("/").pop()}-tool-9`);
+		mkdirSync(orphanDir, { recursive: true });
+		writeFileSync(resolve(orphanDir, "junk.txt"), "leftover");
+		await assert.rejects(r.claimItem("TOOL-9"), (err: Error) => !(err instanceof AlreadyClaimedError));
+		const branches = execSync("git branch --list feat/tool-9", { cwd: repo, encoding: "utf-8" }).trim();
+		assert.equal(branches, "", "phantom side-effect branch must be cleaned up");
+		const items = await r.listItems();
+		assert.equal(items.find((i) => i.id === "TOOL-9")?.status, "open", "item must not read as claimed-by-nobody");
+	});
 });
 
 describe("MarkdownRoadmap.archivePlan", () => {

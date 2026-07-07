@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
@@ -50,30 +50,37 @@ test("releases on throw — next holder acquires immediately", async () => {
 test("steals a stale lock (holder died without releasing)", async () => {
 	const repo = seedDir();
 	mkdirSync(resolve(repo, ".dev"), { recursive: true });
-	writeFileSync(lockPath(repo), "dead-holder-token");
-	const old = (Date.now() - 10_000) / 1000;
-	utimesSync(lockPath(repo), old, old); // 10s > 2s stale TTL
+	writeFileSync(lockPath(repo), `${Date.now() - 5_000}:dead-holder`); // expiry in the past
 	const start = Date.now();
 	await withMutationLock(repo, () => {});
 	assert.ok(Date.now() - start < 4000, "stale lock must be stolen well before the acquire timeout");
 });
 
-test("does not steal a fresh lock — times out instead", async () => {
+test("does not steal a live lock — times out instead", async () => {
 	const repo = seedDir();
 	mkdirSync(resolve(repo, ".dev"), { recursive: true });
-	const arm = () => writeFileSync(lockPath(repo), "live-holder-token");
-	arm();
-	// Keep the foreign lock fresh so the TTL never expires while we wait.
-	const keepAlive = setInterval(arm, 500);
-	try {
-		await assert.rejects(
-			withMutationLock(repo, () => {}),
-			/timed out/,
-		);
-	} finally {
-		clearInterval(keepAlive);
-	}
-	assert.equal(readFileSync(lockPath(repo), "utf-8"), "live-holder-token", "foreign lock untouched");
+	// Far-future expiry: past the waiter's hard cap, so it must give up (a lock
+	// this fresh means a live holder, not an orphan).
+	const foreign = `${Date.now() + 600_000}:live-holder`;
+	writeFileSync(lockPath(repo), foreign);
+	await assert.rejects(
+		withMutationLock(repo, () => {}),
+		/timed out|held live/,
+	);
+	assert.equal(readFileSync(lockPath(repo), "utf-8"), foreign, "foreign lock untouched");
+});
+
+test("a waiter arriving early outlives the orphan's expiry and still steals (timeout < TTL case)", async () => {
+	const repo = seedDir();
+	mkdirSync(resolve(repo, ".dev"), { recursive: true });
+	// Expires 100ms past the 8s acquire timeout — the waiter must extend to the
+	// hard cap instead of giving up at the soft deadline.
+	writeFileSync(lockPath(repo), `${Date.now() + 8_100}:soon-stale-orphan`);
+	const start = Date.now();
+	await withMutationLock(repo, () => {});
+	const waited = Date.now() - start;
+	assert.ok(waited >= 8_000, `must have waited past the soft deadline (waited ${waited}ms)`);
+	assert.ok(waited < 12_000, `must steal shortly after expiry, not at the hard cap (waited ${waited}ms)`);
 });
 
 test("release compares the token — never deletes a thief's lock (the #13 cascade)", async () => {
