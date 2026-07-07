@@ -225,7 +225,10 @@ describe("runOrchestrator — park-and-resume", () => {
 
 	it("exceeds --max-wait: exitCode 1, runPipeline not re-invoked", async (t) => {
 		t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
-		t.mock.method(console, "log", () => {});
+		const logs: string[] = [];
+		t.mock.method(console, "log", (...args: unknown[]) => {
+			logs.push(args.join(" "));
+		});
 		const baseNow = 1_700_000_000_000;
 		t.mock.timers.setTime(baseNow);
 
@@ -237,6 +240,10 @@ describe("runOrchestrator — park-and-resume", () => {
 		const { exitCode } = await runOrchestrator({ ...baseFlags, item: "X-1", "max-wait": "1h" }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });
 		assert.equal(exitCode, 1);
 		assert.equal(calls.length, 1);
+		assert.ok(
+			logs.some((l) => l.includes("Resume:") && l.includes("pnpm autopilot --resume X-1")),
+			`expected the --resume hint in logs; got:\n${logs.join("\n")}`,
+		);
 	});
 
 	it("weekly limit: uses 'Weekly rate limit' wording when exceeding max-wait", async (t) => {
@@ -264,7 +271,10 @@ describe("runOrchestrator — park-and-resume", () => {
 
 	it("unknown reset time (resetsAt=0): exitCode 1, runPipeline not re-invoked", async (t) => {
 		t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
-		t.mock.method(console, "log", () => {});
+		const logs: string[] = [];
+		t.mock.method(console, "log", (...args: unknown[]) => {
+			logs.push(args.join(" "));
+		});
 		const baseNow = 1_700_000_000_000;
 		t.mock.timers.setTime(baseNow);
 
@@ -276,6 +286,10 @@ describe("runOrchestrator — park-and-resume", () => {
 		const { exitCode } = await runOrchestrator({ ...baseFlags, item: "X-1" }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });
 		assert.equal(exitCode, 1);
 		assert.equal(calls.length, 1);
+		assert.ok(
+			logs.some((l) => l.includes("Resume:") && l.includes("pnpm autopilot --resume X-1")),
+			`expected the --resume hint in logs; got:\n${logs.join("\n")}`,
+		);
 	});
 });
 
@@ -299,9 +313,32 @@ describe("runOrchestrator — auto-resume config", () => {
 			`expected off-switch wording in logs; got:\n${logs.join("\n")}`,
 		);
 		assert.ok(
-			logs.some((l) => l.includes("Resume:")),
-			`expected a Resume: hand-back command in logs; got:\n${logs.join("\n")}`,
+			logs.some((l) => l.includes("Resume:") && l.includes("pnpm autopilot --resume X-1")),
+			`expected the --resume hint (not --item, which pick's worktree-exists guard refuses) in logs; got:\n${logs.join("\n")}`,
 		);
+	});
+
+	it("off-switch: multiple parked items each get their own --resume line (#56)", async (t) => {
+		const logs: string[] = [];
+		t.mock.method(console, "log", (...args: unknown[]) => {
+			logs.push(args.join(" "));
+		});
+		const baseNow = 1_700_000_000_000;
+		const { runPipeline } = createMockRunPipeline({
+			byItem: {
+				"X-1": { completed: false, cost: 0.1, error: "parked", park: { parked: true, resetsAt: baseNow + 60_000, limitType: "5h" } },
+				"X-2": { completed: false, cost: 0.1, error: "parked", park: { parked: true, resetsAt: baseNow + 60_000, limitType: "5h" } },
+			},
+		});
+		// parallel: "2" so both cycles are pulled by their own worker before either observes
+		// parkSignal.parked — with the default parallel: "1" the single worker's `if
+		// (parkSignal.parked) break;` (pipeline.ts) would stop after X-1 and X-2 would never run.
+		const { exitCode } = await runOrchestrator({ ...baseFlags, item: "X-1,X-2", parallel: "2" }, { runPipeline, park: { autoResume: false }, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });
+		assert.equal(exitCode, 1);
+		const resumeLine = logs.find((l) => l.includes("Resume:"));
+		assert.ok(resumeLine, `expected a Resume: line in logs; got:\n${logs.join("\n")}`);
+		assert.ok(resumeLine.includes("pnpm autopilot --resume X-1") && resumeLine.includes("pnpm autopilot --resume X-2"), `expected one --resume command per parked item; got:\n${resumeLine}`);
+		assert.ok(!resumeLine.includes("--item"), `--item is refused by pick's worktree-exists guard on an already-claimed id; got:\n${resumeLine}`);
 	});
 
 	it("multi-window: park→park→success resumes across two windows (3 runPipeline calls)", async (t) => {
@@ -418,6 +455,116 @@ describe("runOrchestrator — auto-resume config", () => {
 		const teardowns = events.filter((e) => e === "teardown").length;
 		assert.equal(setups, teardowns, `setup/teardown must stay balanced; got ${JSON.stringify(events)}`);
 		assert.equal(events.at(-1), "teardown", `the run must end on a teardown, not a leaked setup; got ${JSON.stringify(events)}`);
+	});
+});
+
+describe("runOrchestrator — notifications", () => {
+	type Sent = { url: string; format: string; payload: { event: string; itemId: string | null; completed: boolean; shipwrecked: boolean } };
+	function spySend() {
+		const sent: Sent[] = [];
+		const sendNotification = async (url: string, format: "json" | "ntfy", payload: Sent["payload"]) => {
+			sent.push({ url, format, payload });
+			return true;
+		};
+		return { sent, sendNotification };
+	}
+
+	it("sends one classified notification per terminal cycle", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { sent, sendNotification } = spySend();
+		const { runPipeline } = createMockRunPipeline({
+			byItem: {
+				"A-1": { completed: true, cost: 0.1 },
+				"A-2": { completed: false, cost: 0.1, error: "plan failed" },
+			},
+		});
+		await runOrchestrator({ ...baseFlags, item: "A-1,A-2" }, { runPipeline, notifyConfig: { url: "https://hook.example" }, sendNotification });
+		assert.equal(sent.length, 2);
+		assert.equal(sent[0].url, "https://hook.example");
+		assert.equal(sent[0].payload.event, "shipped");
+		assert.equal(sent[0].payload.itemId, "A-1");
+		assert.equal(sent[1].payload.event, "failed");
+		assert.equal(sent[1].payload.itemId, "A-2");
+	});
+
+	it("classifies a PR-opened cycle from awaitingMerge", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { sent, sendNotification } = spySend();
+		const { runPipeline } = createMockRunPipeline({
+			byItem: { "A-1": { completed: true, cost: 0.1, awaitingMerge: true, prUrl: "https://github.com/x/y/pull/5" } },
+		});
+		await runOrchestrator({ ...baseFlags, item: "A-1" }, { runPipeline, notifyConfig: { url: "https://hook.example" }, sendNotification });
+		assert.equal(sent.length, 1);
+		assert.equal(sent[0].payload.event, "pr-opened");
+	});
+
+	it("does not call the transport when notify.url is unset (the default)", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { sent, sendNotification } = spySend();
+		const { runPipeline } = createMockRunPipeline({ byItem: { "A-1": { completed: true, cost: 0.1 } } });
+		await runOrchestrator({ ...baseFlags, item: "A-1" }, { runPipeline, sendNotification });
+		assert.equal(sent.length, 0);
+	});
+
+	it("does not notify in --dry-run even with a url configured", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { sent, sendNotification } = spySend();
+		const { runPipeline } = createMockRunPipeline({ byItem: { "A-1": { completed: true, cost: 0.1 } } });
+		await runOrchestrator({ ...baseFlags, item: "A-1", "dry-run": true }, { runPipeline, notifyConfig: { url: "https://hook.example" }, sendNotification });
+		assert.equal(sent.length, 0);
+	});
+
+	it("skips non-actionable outcomes (e.g. pick:queue-empty)", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { sent, sendNotification } = spySend();
+		const { runPipeline } = createMockRunPipeline({
+			byItem: {
+				"A-1": { completed: false, cost: 0, error: "pick:queue-empty" },
+				"A-2": { completed: true, cost: 0.1 },
+			},
+		});
+		await runOrchestrator({ ...baseFlags, item: "A-1,A-2" }, { runPipeline, notifyConfig: { url: "https://hook.example" }, sendNotification });
+		// A-1 skipped (recoverable), A-2 shipped.
+		assert.equal(sent.length, 1);
+		assert.equal(sent[0].payload.event, "shipped");
+		assert.equal(sent[0].payload.itemId, "A-2");
+	});
+
+	it("emits on the --resume path", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { sent, sendNotification } = spySend();
+		const { runPipeline } = createMockRunPipeline({ byItem: { "TOOL-99": { completed: true, cost: 1 } } });
+		await runOrchestrator({ ...baseFlags, resume: "tool-99" }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree, notifyConfig: { url: "https://hook.example" }, sendNotification });
+		assert.equal(sent.length, 1);
+		assert.equal(sent[0].payload.event, "shipped");
+		assert.equal(sent[0].payload.itemId, "TOOL-99");
+	});
+
+	it("emits for both the initial park and the resumed cycle", async (t) => {
+		t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
+		t.mock.method(console, "log", () => {});
+		const baseNow = 1_700_000_000_000;
+		t.mock.timers.setTime(baseNow);
+
+		const { sent, sendNotification } = spySend();
+		const { runPipeline } = createMockRunPipeline({
+			byItem: {
+				"X-1": [
+					{ completed: false, cost: 0.1, error: "parked", park: { parked: true, resetsAt: baseNow + 60_000, limitType: "5h" } },
+					{ completed: true, cost: 0.5 },
+				],
+			},
+		});
+
+		const promise = runOrchestrator({ ...baseFlags, item: "X-1" }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree, notifyConfig: { url: "https://hook.example" }, sendNotification });
+		for (let i = 0; i < 5; i++) await new Promise(setImmediate);
+		t.mock.timers.tick(60_000 + 30_000);
+		for (let i = 0; i < 5; i++) await new Promise(setImmediate);
+		await promise;
+
+		assert.equal(sent.length, 2);
+		assert.equal(sent[0].payload.event, "parked");
+		assert.equal(sent[1].payload.event, "shipped");
 	});
 });
 

@@ -1,6 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { CONFIG, isPipelineStep, MODEL_PROFILES, REPO, ROADMAP_GITHUB, ROADMAP_LINEAR, ROADMAP_SOURCE, resolveStepSettings, SHIP_TARGET, STEPS, WORKTREE_PREFIX } from "./config.js";
+import { CONFIG, isPipelineStep, LOG_PATH, MODEL_PROFILES, REPO, ROADMAP_GITHUB, ROADMAP_LINEAR, ROADMAP_SOURCE, resolveStepSettings, SHIP_TARGET, STEPS, WORKTREE_PREFIX } from "./config.js";
 import {
 	appendLog as appendLogDefault,
 	canRetryWithinBudget,
@@ -13,6 +13,7 @@ import {
 	expandSkill,
 	filesChangedSince,
 	fmtWait,
+	formatResumeHint,
 	getHeadSha,
 	hasDeliverableCommits,
 	listWorktrees as listWorktreesDefault,
@@ -25,11 +26,12 @@ import {
 	stepIndex,
 	verifyShipLanded,
 } from "./helpers.js";
+import { type NotifyConfig, notifyCycle, sendNotification as sendNotificationDefault } from "./notify.js";
 import { getRoadmapSource, type RoadmapSource } from "./roadmap/index.js";
 import { commitStrayBookkeeping, getShipTarget, isShipTargetName, runShipBookkeeping as runShipBookkeepingDefault, SHIP_TARGET_NAMES } from "./ship/index.js";
 import { runStep as runStepDefault } from "./step-runner.js";
 import { A, createStepRenderer, fmtElapsed, LiveStatus, StatusBar, TUI_ENABLED } from "./tui.js";
-import type { CycleResult, CycleStatus, Flags, ParkSignal, PipelineOpts, Step, StepLog, StepResult } from "./types.js";
+import { type CycleResult, type CycleStatus, type Flags, type ParkSignal, type PipelineOpts, RECOVERABLE_ERRORS, type Step, type StepLog, type StepResult } from "./types.js";
 
 // ── Pipeline ───────────────────────────────────────────────────────────
 
@@ -171,6 +173,10 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		if (opts.signal?.aborted && !result.completed && result.error !== "parked") {
 			result = { ...result, error: "aborted" };
 		}
+		// Surface the local shipwreck flag on the returned result so the orchestrator can
+		// classify a `shipwrecked` notification (also brings CycleResult into parity with
+		// CycleLogEntry.shipwrecked). The JSONL log records it separately below.
+		if (shipwrecked) result = { ...result, shipwrecked: true };
 		if (!opts.dryRun) {
 			const parked = result.error === "parked";
 			appendLog({
@@ -581,6 +587,23 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	// Capture pre-ship git state for merge detection (direct-push only).
 	const preShipState = !opts.dryRun && target.name === "direct-push" ? captureShipState(mainRepo, worktree!) : null;
 
+	// Fail closed if the pre-ship capture itself failed: `preShipState === null` would
+	// otherwise skip the merge-verification block below entirely (its guard requires a
+	// truthy preShipState) and fall through to `target.interpretResult(ship)`, which for
+	// direct-push blindly returns `completed: ship.ok` with no verification, no shipwreck
+	// recovery, and no bookkeeping tail. A repo whose main repo can't answer `rev-parse` is
+	// not shippable — refuse before invoking the ship step rather than let the agent merge
+	// ungoverned.
+	if (target.name === "direct-push" && !opts.dryRun && !preShipState) {
+		return finish({
+			itemId,
+			completed: false,
+			cost,
+			verdict,
+			error: "cannot capture pre-ship git state — refusing to ship blind",
+		});
+	}
+
 	const ship = await step("ship", shipPrompt, worktree!);
 	cost += ship.cost;
 
@@ -712,6 +735,10 @@ export interface OrchestratorDeps {
 	 *  tests to exercise `auto-resume: false` and config-sourced `max-wait` without an
 	 *  `.autopilot.yml` (the orchestrator otherwise reads module-level `CONFIG`). */
 	park?: Partial<{ autoResume: boolean; maxWait: string }>;
+	/** Override notify config. Partial — merged onto `CONFIG.notify`. Mirrors `park` injection. */
+	notifyConfig?: Partial<NotifyConfig>;
+	/** Override the notification transport (defaults to `sendNotification`). Spy seam for tests. */
+	sendNotification?: typeof sendNotificationDefault;
 }
 
 // Post-reset resume grace: jitter deliberately bounded inside the pre-existing 30s
@@ -769,6 +796,27 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			return { exitCode: 2, results };
 		}
 
+		// ── Notifications (issue #34) ──
+		// One best-effort webhook per terminal cycle, emitted from deterministic orchestrator
+		// code *after* runPipeline returns — so a notification fires even when the agent step
+		// died mid-cycle. No-op when unconfigured (url unset) or in --dry-run. The title lookup
+		// builds a RoadmapSource only when notifications are enabled (zero cost when disabled).
+		const notifyCfg: NotifyConfig = { ...CONFIG.notify, ...deps.notifyConfig };
+		const send = deps.sendNotification ?? sendNotificationDefault;
+		const notifyEnabled = !!notifyCfg.url && !flags["dry-run"];
+		const notifyRoadmap = notifyEnabled ? getRoadmapSource(ROADMAP_SOURCE, { repo: REPO, github: ROADMAP_GITHUB, linear: ROADMAP_LINEAR }) : null;
+		const resolveTitle = notifyRoadmap
+			? (id: string): Promise<string | undefined> =>
+					notifyRoadmap
+						.getItem(id)
+						.then((i) => i?.title ?? undefined)
+						.catch(() => undefined)
+			: undefined;
+		const notify = async (result: CycleResult, logPath: string): Promise<void> => {
+			if (!notifyEnabled) return;
+			await notifyCycle(notifyCfg, result, logPath, { send, resolveTitle });
+		};
+
 		// Resume mode
 		if (flags.resume) {
 			const id = flags.resume.toUpperCase();
@@ -814,6 +862,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				flags,
 			);
 			results.push(result);
+			await notify(result, LOG_PATH);
 
 			status.status = resultStatus(result);
 			status.step = undefined;
@@ -862,11 +911,11 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		const pickMutex = isParallel ? createMutex() : undefined;
 		let nextCycle = 0;
 		let totalSpent = 0;
-		// `pick:unknown-id` and `pick:blocked` are intentionally fatal so typos in
-		// `--item X,Y,Z` and user-requested blocked items halt loudly instead of
-		// silently skipping. `pick:unknown` (parser fallback) stays recoverable to
-		// preserve the old lenient behaviour when the skill emits an unrecognised tag.
-		const RECOVERABLE = new Set(["plan needs rethink", "parked", "pick:queue-empty", "pick:worktree-exists", "pick:already-claimed", "pick:already-done", "pick:unknown"]);
+		// Single-sourced with `notify.ts`'s classifier via `RECOVERABLE_ERRORS` (types.ts) to
+		// prevent drift. `pick:unknown-id` and `pick:blocked` are intentionally *absent* — fatal
+		// so typos in `--item X,Y,Z` and user-requested blocked items halt loudly instead of
+		// silently skipping. `pick:unknown` (parser fallback) stays recoverable.
+		const RECOVERABLE = new Set<string>(RECOVERABLE_ERRORS);
 
 		async function worker(): Promise<void> {
 			while (true) {
@@ -911,6 +960,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 
 				totalSpent += result.cost;
 				results.push(result);
+				await notify(result, logPath ?? LOG_PATH);
 
 				status.itemId = result.itemId ?? "?";
 				status.status = resultStatus(result);
@@ -961,6 +1011,11 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				const st: CycleStatus = { itemId: id, status: "running", cost: 0 };
 				liveStatus.cycles.push(st);
 				if (v) liveStatus.render();
+				let resumeLogPath: string | undefined;
+				if (isParallel && v) {
+					resumeLogPath = resolve(REPO, ".dev", `autopilot-resume-${id.toLowerCase()}.log`);
+					appendFileSync(resumeLogPath, `${"=".repeat(60)}\nresume ${id} — ${new Date().toISOString()}\n${"=".repeat(60)}\n`);
+				}
 				const r = await _runPipeline(
 					{
 						itemId: id,
@@ -971,14 +1026,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						shipTarget,
 						dryRun: false,
 						workerStatus: st,
-						logPath:
-							isParallel && v
-								? (() => {
-										const lp = resolve(REPO, ".dev", `autopilot-resume-${id.toLowerCase()}.log`);
-										appendFileSync(lp, `${"=".repeat(60)}\nresume ${id} — ${new Date().toISOString()}\n${"=".repeat(60)}\n`);
-										return lp;
-									})()
-								: undefined,
+						logPath: resumeLogPath,
 						liveStatus,
 						...(noWorktree ? { noWorktree: true } : {}),
 						...(signal ? { signal } : {}),
@@ -986,6 +1034,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					parkSignal,
 					flags,
 				);
+				await notify(r, resumeLogPath ?? LOG_PATH);
 				st.status = resultStatus(r);
 				st.cost = r.cost;
 				st.step = undefined;
@@ -1006,7 +1055,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				console.log("");
 				console.log(`${A.yellow("⏸")} ${parkSignal.limitType} limit hit — auto-resume disabled`);
 				console.log(`  Parked: ${pending.join(", ")}`);
-				console.log(`  Resume: ${A.bold(`pnpm autopilot --item ${pending.join(",")} --verbose`)}`);
+				console.log(`  Resume: ${A.bold(formatResumeHint(pending))}`);
 				return { exitCode: 1, results };
 			}
 
@@ -1015,7 +1064,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				round++;
 				const waitMs = parkSignal.resetsAt - Date.now();
 				const isWeekly = /week/i.test(parkSignal.limitType);
-				const resumeCmd = `pnpm autopilot --item ${pending.join(",")} --verbose`;
+				const resumeCmd = formatResumeHint(pending);
 
 				// Unknown reset → never spin (checked every round, not just the first). `break`
 				// (not `return`) so we funnel through the shared teardown+summary below — a

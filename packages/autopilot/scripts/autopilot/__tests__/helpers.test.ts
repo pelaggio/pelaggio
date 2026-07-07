@@ -12,6 +12,7 @@ import {
 	countPlanFiles,
 	filesChangedSince,
 	fmtWait,
+	formatResumeHint,
 	getHeadSha,
 	hasDeliverableCommits,
 	isRefusal,
@@ -120,6 +121,16 @@ describe("fmtWait", () => {
 
 	it("formats negative as <1m", () => {
 		assert.equal(fmtWait(-1000), "<1m");
+	});
+});
+
+describe("formatResumeHint", () => {
+	it("emits --resume, not --item (#56: --item is refused by pick's worktree-exists guard)", () => {
+		assert.equal(formatResumeHint(["X-1"]), "pnpm autopilot --resume X-1");
+	});
+
+	it("emits one --resume command per id, joined for aligned multi-line display", () => {
+		assert.equal(formatResumeHint(["X-1", "X-2"]), "pnpm autopilot --resume X-1\n          pnpm autopilot --resume X-2");
 	});
 });
 

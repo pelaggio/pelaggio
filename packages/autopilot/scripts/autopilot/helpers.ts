@@ -406,7 +406,9 @@ export function hasDeliverableCommits(worktree: string): boolean {
 
 /**
  * Capture the state needed to verify a direct-push ship landed. Returns null
- * if either git command fails (e.g. no main branch in test env — skip check).
+ * if either git command fails (e.g. no main branch). The caller (pipeline.ts)
+ * fails the cycle closed on a null result for direct-push rather than shipping
+ * blind — a repo that can't answer `rev-parse` is not shippable.
  */
 export function captureShipState(mainRepo: string, worktree: string): { mainSha: string; featSha: string; branch: string } | null {
 	try {
@@ -591,6 +593,13 @@ export function fmtWait(ms: number): string {
 	if (h === 0) return `${m}m`;
 	if (m === 0) return `${h}h`;
 	return `${h}h ${m}m`;
+}
+
+// `--item` on an already-claimed id is refused by pick's worktree-exists guard (#56) — the
+// working re-entry path is `--resume <id>`, one process per id. `--resume` doesn't accept a
+// list, so multiple parked items print one hint line each.
+export function formatResumeHint(ids: string[]): string {
+	return ids.map((id) => `pnpm autopilot --resume ${id}`).join("\n          ");
 }
 
 // ── Mutex ──────────────────────────────────────────────────────────────

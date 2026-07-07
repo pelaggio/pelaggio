@@ -117,6 +117,7 @@ export function createMockRunPipeline(behavior: PipelineBehavior): MockRunPipeli
 			...(outcome.error ? { error: outcome.error } : {}),
 			...(outcome.awaitingMerge ? { awaitingMerge: outcome.awaitingMerge } : {}),
 			...(outcome.prUrl ? { prUrl: outcome.prUrl } : {}),
+			...(outcome.shipwrecked ? { shipwrecked: outcome.shipwrecked } : {}),
 		};
 	};
 	return { runPipeline: fn, calls };
@@ -139,6 +140,12 @@ export function makeTempGitRepo(): string {
 	execSync("git commit --allow-empty -q -m init", { cwd: dir });
 	execSync("git checkout -q -b feat/tool-99", { cwd: dir });
 	return dir;
+}
+
+/** Plain tmp dir with no git repo — `git rev-parse` fails inside it, so passing it as
+ *  `mainRepo` makes `captureShipState` return null (simulates an unreadable main repo). */
+export function makeNonGitDir(): string {
+	return mkdtempSync(join(tmpdir(), "autopilot-nongit-"));
 }
 
 /**

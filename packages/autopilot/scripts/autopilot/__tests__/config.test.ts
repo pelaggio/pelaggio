@@ -385,6 +385,64 @@ describe("loadConfig — park", () => {
 	});
 });
 
+describe("loadConfig — notify", () => {
+	it("defaults to { url: '', format: 'json', events: <all five> } when unset", () => {
+		const repo = tmpRepo();
+		const cfg = loadConfig({ repo, configPath: join(repo, ".autopilot.yml") });
+		assert.deepEqual(cfg.notify, {
+			url: "",
+			format: "json",
+			events: ["parked", "failed", "shipped", "pr-opened", "shipwrecked"],
+		});
+	});
+
+	it("parses url/format/events overrides", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, ["notify:", "  url: https://ntfy.sh/my-topic", "  format: ntfy", "  events:", "    - failed", "    - shipwrecked", ""].join("\n"));
+		const cfg = loadConfig({ repo, configPath: path });
+		assert.equal(cfg.notify.url, "https://ntfy.sh/my-topic");
+		assert.equal(cfg.notify.format, "ntfy");
+		assert.deepEqual(cfg.notify.events, ["failed", "shipwrecked"]);
+	});
+
+	it("respects an explicitly empty events list", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "notify:\n  url: https://hook\n  events: []\n");
+		const cfg = loadConfig({ repo, configPath: path });
+		assert.deepEqual(cfg.notify.events, []);
+	});
+
+	it("throws when notify is not a map", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "notify: nope\n");
+		assert.throws(() => loadConfig({ repo, configPath: path }), /expected `notify` to be a map/);
+	});
+
+	it("throws on a non-string notify.url", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "notify:\n  url: 12345\n");
+		assert.throws(() => loadConfig({ repo, configPath: path }), /notify\.url.*string/);
+	});
+
+	it("throws on an unknown notify.format", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "notify:\n  format: telegram\n");
+		assert.throws(() => loadConfig({ repo, configPath: path }), /notify\.format.*json\|ntfy/);
+	});
+
+	it("throws when notify.events is not an array", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "notify:\n  events: failed\n");
+		assert.throws(() => loadConfig({ repo, configPath: path }), /notify\.events.*array/);
+	});
+
+	it("throws on an unknown event string", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "notify:\n  events:\n    - failed\n    - exploded\n");
+		assert.throws(() => loadConfig({ repo, configPath: path }), /notify\.events.*parked\|failed/);
+	});
+});
+
 describe("resolveRepo", () => {
 	const REPO_ENV = "CLAUDE_AUTOPILOT_REPO";
 	let savedRepoEnv: string | undefined;
