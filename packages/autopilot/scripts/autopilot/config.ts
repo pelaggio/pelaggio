@@ -2,6 +2,7 @@ import { execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
+import { NOTIFY_EVENTS, NOTIFY_FORMATS, type NotifyConfig, type NotifyEvent, type NotifyFormat } from "./notify.js";
 import { type GithubRoadmapConfig, type LinearRoadmapConfig, PLAN_LOCATIONS, type PlanLocation, ROADMAP_SOURCE_NAMES, type RoadmapSourceName } from "./roadmap/types.js";
 import type { ShipTargetName } from "./types.js";
 
@@ -72,6 +73,8 @@ export interface ResolvedConfig {
 	/** Overnight park-and-resume policy. `maxWait` is the raw wait string (parsed with
 	 *  `parseWaitFlag` at the orchestrator to avoid a config↔helpers import cycle). */
 	park: { autoResume: boolean; maxWait: string };
+	/** Outbound run-outcome notifications. Disabled when `url` is empty (the default). */
+	notify: NotifyConfig;
 }
 
 const DEFAULT_GITHUB_ROADMAP: GithubRoadmapConfig = {
@@ -125,6 +128,11 @@ export const DEFAULTS = {
 	// waits by default via the old `--max-wait` 6h default) — flipping it false would
 	// regress unattended overnight runs. `false` is the explicit interactive off-switch.
 	park: { autoResume: true, maxWait: "6h" },
+	// Notifications off by default (empty url). Enabling only `notify.url` turns on every
+	// event with the `json` format; `format: ntfy` + a topic URL gives ntfy.sh pushes.
+	// `NOTIFY_EVENTS` is the single source of the event list (validation uses it too) —
+	// a new event added in notify.ts is subscribed-by-default and yml-valid with no edit here.
+	notify: { url: "", format: "json", events: NOTIFY_EVENTS },
 } as const;
 
 // ── Loader ─────────────────────────────────────────────────────────────
@@ -392,6 +400,40 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		}
 	}
 
+	// notify.*: outbound run-outcome webhook. Disabled by default (url: "").
+	let notifyUrl: string = DEFAULTS.notify.url;
+	let notifyFormat: NotifyFormat = DEFAULTS.notify.format;
+	let notifyEvents: NotifyEvent[] = [...DEFAULTS.notify.events];
+	const notifyBlock = yml.notify;
+	if (notifyBlock !== undefined) {
+		if (!isPlainObject(notifyBlock)) {
+			throw new Error(`${configPath}: expected \`notify\` to be a map`);
+		}
+		if (notifyBlock.url !== undefined) {
+			if (!isString(notifyBlock.url)) {
+				throw new Error(`${configPath}: expected \`notify.url\` to be a string`);
+			}
+			notifyUrl = notifyBlock.url;
+		}
+		if (notifyBlock.format !== undefined) {
+			if (!isString(notifyBlock.format) || !(NOTIFY_FORMATS as readonly string[]).includes(notifyBlock.format)) {
+				throw new Error(`${configPath}: expected \`notify.format\` to be one of ${NOTIFY_FORMATS.join("|")}, got ${JSON.stringify(notifyBlock.format)}`);
+			}
+			notifyFormat = notifyBlock.format as NotifyFormat;
+		}
+		if (notifyBlock.events !== undefined) {
+			if (!Array.isArray(notifyBlock.events)) {
+				throw new Error(`${configPath}: expected \`notify.events\` to be an array, got ${typeof notifyBlock.events}`);
+			}
+			for (const ev of notifyBlock.events) {
+				if (!isString(ev) || !(NOTIFY_EVENTS as readonly string[]).includes(ev)) {
+					throw new Error(`${configPath}: expected \`notify.events\` entries to be one of ${NOTIFY_EVENTS.join("|")}, got ${JSON.stringify(ev)}`);
+				}
+			}
+			notifyEvents = notifyBlock.events as NotifyEvent[];
+		}
+	}
+
 	return {
 		repo,
 		worktreePrefix,
@@ -408,6 +450,7 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		roadmapGithub,
 		roadmapLinear,
 		park: { autoResume: parkAutoResume, maxWait: parkMaxWait },
+		notify: { url: notifyUrl, format: notifyFormat, events: notifyEvents },
 	};
 }
 

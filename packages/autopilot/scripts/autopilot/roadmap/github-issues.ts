@@ -260,10 +260,19 @@ export class GitHubIssuesRoadmap implements RoadmapSource {
 	}
 }
 
+// `spawnSync` blocks the Node event loop for its full duration — every timer,
+// parallel worker, and TUI render in the pipeline freezes with it. Without a
+// timeout a hung `gh` (network blackhole, surprise auth prompt) stalls the whole
+// run indefinitely; no legitimate single gh call takes this long.
+const GH_TIMEOUT_MS = 30_000;
+
 function defaultGhRun(args: string[]): { stdout: string; stderr: string; status: number } {
-	const r = spawnSync("gh", args, { encoding: "utf-8" });
+	const r = spawnSync("gh", args, { encoding: "utf-8", timeout: GH_TIMEOUT_MS });
 	if (r.error && isEnoent(r.error)) {
 		throw new Error("gh CLI required — install https://cli.github.com/");
+	}
+	if (r.error && (r.error as { code?: string }).code === "ETIMEDOUT") {
+		throw new Error(`gh ${args[0] ?? ""} timed out after ${GH_TIMEOUT_MS / 1000}s`);
 	}
 	return { stdout: r.stdout ?? "", stderr: r.stderr ?? "", status: r.status ?? 1 };
 }

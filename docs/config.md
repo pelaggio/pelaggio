@@ -44,6 +44,16 @@ park:                           # overnight park-and-resume on rate-limit
   max-wait: 6h                  # default: 6h — skip resuming if the reset is farther out
                                 # ("6h", "90m", "1h30m", or a bare number = minutes)
 
+notify:                         # outbound run-outcome webhook (default: disabled)
+  url: ""                       # default: "" (disabled). Set a webhook/topic URL to enable.
+  format: json                  # default: json | ntfy
+  events:                       # default: all five below
+    - parked
+    - failed
+    - shipped
+    - pr-opened
+    - shipwrecked
+
 roadmap:
   source: markdown              # default: markdown
                                 # values: markdown | github-issues | linear
@@ -323,6 +333,72 @@ back to 6h.
 Auto-resume applies only to the normal `--cycles` / `--parallel` driver. A
 single-item `--resume <id>` invocation that re-parks is itself re-runnable by
 the same command, so it is intentionally not looped.
+
+## Notifications
+
+Unattended runs have no outbound signal by default — you learn a cycle parked,
+failed, shipped, or opened a PR only by tailing `.dev/autopilot-log.jsonl`. The
+`notify` block turns that poll into a **push**: one best-effort webhook per
+terminal cycle, sent from deterministic orchestrator code *after* the pipeline
+returns, so a notification fires even when the agent step died mid-cycle.
+
+| Key             | Default        | Meaning                                                            |
+|-----------------|----------------|--------------------------------------------------------------------|
+| `notify.url`    | `""`           | Webhook / topic URL. Empty = **disabled** (a no-op; no network).   |
+| `notify.format` | `json`         | Wire format: `json` \| `ntfy`.                                     |
+| `notify.events` | *(all five)*   | Which outcomes page you: `parked`, `failed`, `shipped`, `pr-opened`, `shipwrecked`. |
+
+### Events
+
+Each terminal cycle maps to **at most one** event, by precedence:
+
+| Outcome                                            | Event         |
+|----------------------------------------------------|---------------|
+| Rate-limit parked                                  | `parked`      |
+| Completed via a PR mode (`awaitingMerge`)          | `pr-opened`   |
+| Completed (direct-push merge)                      | `shipped`     |
+| Routed through `/shipwreck` without recovering     | `shipwrecked` |
+| Recoverable / informational (queue-empty, rethink, already-done, aborted, …) | *(skipped — never pages)* |
+| Any other non-completion                           | `failed`      |
+
+A cycle that shipwrecked **and recovered** classifies as `shipped`/`pr-opened`
+(it did land), but the payload always carries `shipwrecked: true`, so the signal
+is never lost.
+
+### Formats
+
+| Format | Body                                   | Best for                                             |
+|--------|----------------------------------------|------------------------------------------------------|
+| `json` | Full payload as `application/json`.    | Slack incoming webhooks (read `text`) + any generic POST endpoint. |
+| `ntfy` | The `text` summary as `text/plain`, with `Title`, `Tags` (per-event emoji), `Priority` (high for `failed`/`shipwrecked`), and `Click` (= `prUrl`) headers. | [ntfy.sh](https://ntfy.sh) phone pushes — renders a first-class notification, not raw JSON. |
+
+### Payload
+
+The `json` format POSTs this shape (fields present when applicable):
+
+```jsonc
+{
+  "event": "shipped",                 // parked|failed|shipped|pr-opened|shipwrecked
+  "itemId": "34",
+  "title": "Run-outcome notifications for unattended cycles", // best-effort
+  "completed": true,
+  "cost": 1.23,
+  "error": "ship blocked: dirty tree", // present when the result carried one
+  "prUrl": "https://github.com/…/pull/5", // pr-opened / when known
+  "shipwrecked": false,
+  "logPath": "/repo/.dev/autopilot-log.jsonl",
+  "ts": "2026-07-06T12:34:56.000Z",
+  "text": "autopilot: shipped 34 \"Run-outcome notifications…\" — $1.23"
+}
+```
+
+**Best-effort only.** Delivery is a single bounded (5s) POST — any failure
+(network, DNS, timeout, non-2xx) is swallowed and never fails a cycle; a failed
+delivery leaves one `⚠ notify: …` warning on stderr so a mistyped URL is
+diagnosable. There is no retry, queue, or persistence. Title is best-effort
+too: a failing roadmap lookup simply omits `title`. The lookup bound depends on
+the adapter — async adapters (linear) are raced out at ~3s; the gh CLI adapter
+runs synchronously and is bounded by its own 30s subprocess timeout instead.
 
 ## Unknown keys
 

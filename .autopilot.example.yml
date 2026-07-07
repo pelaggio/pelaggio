@@ -11,3 +11,13 @@
 #
 # ship:
 #   target: direct-push  # direct-push | pull-request | auto-merge-pr
+#
+# notify:                # outbound run-outcome webhook (default: disabled)
+#   url: https://ntfy.sh/my-autopilot-topic
+#   format: ntfy         # json (Slack/generic) | ntfy (phone push)
+#   events:              # default: all five
+#     - parked
+#     - failed
+#     - shipped
+#     - pr-opened
+#     - shipwrecked

@@ -591,6 +591,9 @@ describe("runPipeline — ghost-ship detection", () => {
 
 		assert.equal(result.completed, false);
 		assert.match(result.error ?? "", /ship claimed success but main did not advance/);
+		// The finish() spread surfaces the local shipwreck flag on the returned CycleResult so
+		// the orchestrator can classify a `shipwrecked` notification.
+		assert.equal(result.shipwrecked, true);
 		const stepsRun = calls.map((c) => c.step);
 		assert.ok(stepsRun.includes("shipwreck"), `expected shipwreck to run; got ${stepsRun.join(",")}`);
 		assert.equal(logs.length, 1);
