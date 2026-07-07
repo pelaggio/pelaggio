@@ -141,6 +141,8 @@ export interface Flags {
 	parallel: string;
 	item?: string;
 	resume?: string;
+	/** Resume-only: override the auto-detected restart step. Validated against STEPS in runOrchestrator. */
+	from?: string;
 	verbose: boolean;
 	trace: boolean;
 	budget: string;

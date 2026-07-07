@@ -8,6 +8,7 @@ const OPTIONS = {
 	parallel: { type: "string", default: "1" },
 	item: { type: "string" },
 	resume: { type: "string" },
+	from: { type: "string" },
 	verbose: { type: "boolean", default: false },
 	trace: { type: "boolean", default: false },
 	budget: { type: "string", default: "40" },
