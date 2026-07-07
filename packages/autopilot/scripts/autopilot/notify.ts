@@ -55,17 +55,20 @@ const NON_ACTIONABLE = new Set<string>([...RECOVERABLE_ERRORS, "aborted"]);
 
 /**
  * One terminal cycle → at most one event, by precedence:
- * parked > pr-opened / shipped (completed) > shipwrecked > skip (non-actionable) > failed.
+ * parked > pr-opened / shipped (completed) > skip (non-actionable) > shipwrecked > failed.
  *
  * A cycle that shipwrecked but recovered classifies as shipped/pr-opened (it did land);
  * the payload still carries `shipwrecked: true`, so no signal is lost. `parked` short-circuits
- * before the `NON_ACTIONABLE` skip even though it lives in that set.
+ * before the `NON_ACTIONABLE` skip even though it lives in that set. The skip outranks
+ * `shipwrecked`: an `aborted` error is always a deliberate interactive Ctrl-C (unattended runs
+ * have no keyboard), so paging "shipwrecked" for it would contradict the documented
+ * "aborted never pages" rule while the user is sitting at the terminal watching.
  */
 export function classifyEvent(result: CycleResult): NotifyEvent | null {
 	if (result.error === "parked") return "parked";
 	if (result.completed) return result.awaitingMerge ? "pr-opened" : "shipped";
-	if (result.shipwrecked) return "shipwrecked";
 	if (result.error && NON_ACTIONABLE.has(result.error)) return null;
+	if (result.shipwrecked) return "shipwrecked";
 	return "failed";
 }
 
@@ -80,7 +83,8 @@ export function formatText(p: Omit<NotifyPayload, "text">): string {
 	const title = p.title ? ` "${p.title}"` : "";
 	const bits: string[] = [`$${p.cost.toFixed(2)}`];
 	if (p.prUrl) bits.push(p.prUrl);
-	if (p.error && p.event !== "shipped" && p.event !== "pr-opened") bits.push(p.error);
+	// Skip the error when it just restates the event ("parked · parked").
+	if (p.error && p.error !== p.event && p.event !== "shipped" && p.event !== "pr-opened") bits.push(p.error);
 	return `${head}${title} — ${bits.join(" · ")}`;
 }
 
@@ -145,7 +149,9 @@ export async function sendNotification(url: string, format: NotifyFormat, payloa
 export interface NotifyCycleDeps {
 	/** Whole-send override (defaults to `sendNotification`). */
 	send?: SendNotification;
-	/** Best-effort title lookup; wrapped in a bounded race so a hung call can't stall the loop. */
+	/** Best-effort title lookup, raced against a timeout. Caveat: the race can only
+	 *  preempt *async* work — an adapter that blocks synchronously (the gh CLI runs
+	 *  via `spawnSync`) is bounded by its own subprocess timeout, not this one. */
 	resolveTitle?: (id: string) => Promise<string | undefined>;
 	titleTimeoutMs?: number;
 }
@@ -154,9 +160,13 @@ async function resolveTitleBounded(resolveTitle: ((id: string) => Promise<string
 	if (!resolveTitle || !id) return undefined;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	try {
-		return await Promise.race([resolveTitle(id), new Promise<undefined>((r) => (timer = setTimeout(() => r(undefined), timeoutMs)))]);
+		// The `.catch` keeps a post-timeout rejection of the abandoned racer observed —
+		// an unhandled rejection would otherwise crash the process the notification
+		// was meant to report on.
+		const lookup = resolveTitle(id).catch(() => undefined);
+		return await Promise.race([lookup, new Promise<undefined>((r) => (timer = setTimeout(() => r(undefined), timeoutMs)))]);
 	} catch {
-		return undefined;
+		return undefined; // resolveTitle threw synchronously
 	} finally {
 		if (timer) clearTimeout(timer);
 	}
@@ -189,6 +199,16 @@ export async function notifyCycle(cfg: NotifyConfig, result: CycleResult, logPat
 	} satisfies Omit<NotifyPayload, "text">;
 
 	const payload: NotifyPayload = { ...base, text: formatText(base) };
-	await send(cfg.url, cfg.format, payload);
+	let delivered = false;
+	try {
+		delivered = await send(cfg.url, cfg.format, payload);
+	} catch {
+		// The default `sendNotification` swallows, but an injected sender may throw —
+		// the "never throws" contract must hold at this seam, not just the default.
+	}
+	// One diagnostic line on failure: a typo'd webhook URL must not mean zero
+	// notifications AND zero evidence of why (the exact failure this feature exists
+	// to prevent). Deliberately not the URL itself — ntfy topics are secret-ish.
+	if (!delivered) process.stderr.write(`⚠ notify: ${event} webhook delivery failed\n`);
 	return event;
 }

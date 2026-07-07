@@ -66,6 +66,13 @@ describe("classifyEvent", () => {
 		assert.equal(classifyEvent(result({ error: "aborted" })), null);
 	});
 
+	it("null (skip) for a user-abort even when the cycle routed through shipwreck", () => {
+		// Ctrl-C during the shipwreck step: error is relabelled "aborted" AND
+		// shipwrecked=true. The skip must outrank shipwrecked — an abort is always
+		// attended, and "aborted never pages" is the documented contract.
+		assert.equal(classifyEvent(result({ error: "aborted", shipwrecked: true })), null);
+	});
+
 	it("fatal pick errors still page (not in the skip-set)", () => {
 		assert.equal(classifyEvent(result({ error: "pick blocked: waiting on X" })), "failed");
 		assert.equal(classifyEvent(result({ error: "pick:unknown-id" })), "failed");
@@ -90,6 +97,11 @@ describe("formatText", () => {
 	it("appends prUrl when present", () => {
 		const t = formatText({ event: "pr-opened", itemId: "34", completed: true, cost: 0.5, prUrl: "https://github.com/x/y/pull/5", shipwrecked: false, logPath: "/l", ts: "t" });
 		assert.match(t, /pull\/5/);
+	});
+
+	it("suppresses an error that just restates the event (no 'parked · parked')", () => {
+		const t = formatText({ event: "parked", itemId: "34", completed: false, cost: 0.12, error: "parked", shipwrecked: false, logPath: "/l", ts: "t" });
+		assert.equal(t.match(/parked/g)?.length, 1);
 	});
 
 	it("falls back to ? when itemId is null", () => {
@@ -200,6 +212,24 @@ describe("notifyCycle", () => {
 		const ev = await notifyCycle({ ...baseCfg, url: "" }, result({ completed: true }), "/l", { send });
 		assert.equal(ev, null);
 		assert.equal(sent.length, 0);
+	});
+
+	it("never throws even when the injected send throws (contract holds at the seam)", async () => {
+		const send = async () => {
+			throw new Error("transport exploded");
+		};
+		const ev = await notifyCycle(baseCfg, result({ completed: true }), "/l", { send });
+		assert.equal(ev, "shipped");
+	});
+
+	it("never throws when resolveTitle rejects after losing the race", async () => {
+		const { send } = spySend();
+		let rejectLate: (e: Error) => void = () => {};
+		const resolveTitle = () => new Promise<string | undefined>((_, rej) => (rejectLate = rej));
+		const ev = await notifyCycle(baseCfg, result({ completed: true }), "/l", { send, resolveTitle, titleTimeoutMs: 5 });
+		assert.equal(ev, "shipped");
+		rejectLate(new Error("late tracker failure")); // must be observed, not an unhandled rejection
+		await new Promise((r) => setTimeout(r, 5));
 	});
 
 	it("skips when the classified event is not subscribed", async () => {

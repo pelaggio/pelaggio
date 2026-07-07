@@ -393,9 +393,12 @@ The `json` format POSTs this shape (fields present when applicable):
 ```
 
 **Best-effort only.** Delivery is a single bounded (5s) POST — any failure
-(network, DNS, timeout, non-2xx) is swallowed and never fails a cycle. There is
-no retry, queue, or persistence. Title is best-effort too: a slow or failing
-roadmap lookup is bounded (~3s) and simply omits `title`.
+(network, DNS, timeout, non-2xx) is swallowed and never fails a cycle; a failed
+delivery leaves one `⚠ notify: …` warning on stderr so a mistyped URL is
+diagnosable. There is no retry, queue, or persistence. Title is best-effort
+too: a failing roadmap lookup simply omits `title`. The lookup bound depends on
+the adapter — async adapters (linear) are raced out at ~3s; the gh CLI adapter
+runs synchronously and is bounded by its own 30s subprocess timeout instead.
 
 ## Unknown keys
 
