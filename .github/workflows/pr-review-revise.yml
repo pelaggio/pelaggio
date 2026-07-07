@@ -1,0 +1,148 @@
+name: PR review — close the loop
+
+# Issue #60: on a red `review` gate, re-implement once from the review findings and re-push,
+# so an unsupervised run fixes-and-re-reviews itself a single time before parking for a human.
+on:
+  workflow_run:
+    workflows: ["PR review gate"]   # must match pr-review.yml's `name:`
+    types: [completed]
+
+# Serialize (never cancel) per PR branch: the first revise job adds the one-pass label before any
+# queued sibling reads it, so the `autopilot:revised` bound is effectively atomic.
+concurrency:
+  group: pr-revise-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  revise:
+    if: >
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      startsWith(github.event.workflow_run.head_branch, 'feat/issue-') &&
+      vars.AUTOPILOT_AUTO_REVISE != 'false'
+    runs-on: self-hosted
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    env:
+      # PAT — REQUIRED. The re-review depends on a `synchronize` (push) event, and commits pushed
+      # with the default GITHUB_TOKEN do NOT trigger `pull_request` workflows (GitHub's documented
+      # anti-recursion behavior). The ship step's `git push` must be PAT-authed, hence the checkout
+      # `token:` below is also the PAT. Without this the loop silently never re-reviews.
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.workflow_run.head_branch }}
+          fetch-depth: 0
+          token: ${{ secrets.GH_TOKEN }}   # PAT-authed push re-triggers pr-review (NOT GITHUB_TOKEN)
+
+      # a. Resolve the item id + open PR number from the branch (feat/issue-<n>-…). Bail (no-op,
+      #    exit 0) if either is empty, the PR is a draft, or the linked issue lacks the `autopilot`
+      #    label — this loop only touches autopilot-managed PRs.
+      - name: Resolve item + PR
+        id: resolve
+        run: |
+          ITEM_ID=$(echo "$HEAD_BRANCH" | sed -nE 's|^feat/issue-([0-9]+).*|\1|p')
+          if [ -z "$ITEM_ID" ]; then
+            echo "no issue id in branch '$HEAD_BRANCH' — nothing to revise"
+            echo "proceed=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          PR_NUMBER=$(gh pr list --head "$HEAD_BRANCH" --state open --json number,isDraft \
+            --jq '.[] | select(.isDraft == false) | .number' | head -n1)
+          if [ -z "$PR_NUMBER" ]; then
+            echo "no open non-draft PR for '$HEAD_BRANCH' — nothing to revise"
+            echo "proceed=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if ! gh issue view "$ITEM_ID" --json labels --jq '.labels[].name' | grep -qx 'autopilot'; then
+            echo "issue #$ITEM_ID lacks the 'autopilot' label — skipping auto-revision"
+            echo "proceed=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "item_id=$ITEM_ID" >> "$GITHUB_OUTPUT"
+          echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "proceed=true" >> "$GITHUB_OUTPUT"
+
+      # b. One-pass bound: if 'autopilot:revised' is already on the PR, the single auto-revision has
+      #    been spent — post an idempotent park comment and stop. Otherwise ensure the label exists
+      #    and add it BEFORE any work, so a crash/park after this point cannot trigger a second pass.
+      - name: One-pass bound (autopilot:revised label)
+        id: guard
+        if: steps.resolve.outputs.proceed == 'true'
+        env:
+          PR_NUMBER: ${{ steps.resolve.outputs.pr_number }}
+        run: |
+          PARK_MARKER='<!-- autopilot-revise-parked -->'
+          LABELS=$(gh pr view "$PR_NUMBER" --json labels --jq '.labels[].name')
+          if echo "$LABELS" | grep -qx 'autopilot:revised'; then
+            existing=$(gh pr view "$PR_NUMBER" --json comments \
+              --jq "[.comments[] | select(.body | contains(\"$PARK_MARKER\"))] | length")
+            if [ "$existing" = "0" ]; then
+              gh pr comment "$PR_NUMBER" --body "$PARK_MARKER 🛑 The \`review\` gate is still red after one automated revision pass — parking for human attention. Remove the \`autopilot:revised\` label to allow another auto-revision."
+            fi
+            echo "proceed=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          gh label create 'autopilot:revised' --color BFD4F2 \
+            --description 'Auto-revised once after a red PR review (issue #60)' 2>/dev/null || true
+          gh pr edit "$PR_NUMBER" --add-label 'autopilot:revised'
+          echo "proceed=true" >> "$GITHUB_OUTPUT"
+
+      # c. Fetch the pr-review findings (the upserted comment carrying the marker) into a gitignored
+      #    file the resume reads via --review-findings. No findings → fail-safe park + stop.
+      - name: Fetch review findings
+        id: findings
+        if: steps.guard.outputs.proceed == 'true'
+        env:
+          ITEM_ID: ${{ steps.resolve.outputs.item_id }}
+          PR_NUMBER: ${{ steps.resolve.outputs.pr_number }}
+        run: |
+          mkdir -p .dev
+          MARKER='<!-- autopilot-pr-review -->'
+          BODY=$(gh pr view "$PR_NUMBER" --json comments \
+            --jq "[.comments[] | select(.body | contains(\"$MARKER\"))] | last | .body // \"\"")
+          if [ -z "$BODY" ]; then
+            gh pr comment "$PR_NUMBER" --body "⚠️ Auto-revision found no PR-review findings comment to act on — parking for human attention."
+            echo "found=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          printf '%s\n' "$BODY" > ".dev/review-findings-$ITEM_ID.md"
+          echo "found=true" >> "$GITHUB_OUTPUT"
+
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
+        if: steps.findings.outputs.found == 'true'
+
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        if: steps.findings.outputs.found == 'true'
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - run: pnpm install --frozen-lockfile
+        if: steps.findings.outputs.found == 'true'
+
+      - name: Configure git
+        if: steps.findings.outputs.found == 'true'
+        run: |
+          git config user.name "autopilot[bot]"
+          git config user.email "autopilot[bot]@users.noreply.github.com"
+
+      - name: Revise from review findings
+        if: steps.findings.outputs.found == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ITEM_ID: ${{ steps.resolve.outputs.item_id }}
+          CI: "true"
+        run: |
+          pnpm autopilot --resume "$ITEM_ID" --from implement --no-worktree \
+            --target pull-request --review-findings ".dev/review-findings-$ITEM_ID.md" --verbose
+
+      - name: Park on failure
+        if: failure() && steps.resolve.outputs.pr_number != ''
+        env:
+          PR_NUMBER: ${{ steps.resolve.outputs.pr_number }}
+        run: |
+          gh pr comment "$PR_NUMBER" \
+            --body "❌ Auto-revision run failed — parking for human attention. Logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

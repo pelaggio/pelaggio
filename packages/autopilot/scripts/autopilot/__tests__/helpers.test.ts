@@ -26,6 +26,7 @@ import {
 	parseShipMerged,
 	parseVerdict,
 	parseWaitFlag,
+	reviewFindingsPreamble,
 	verifyShipLanded,
 } from "../helpers.js";
 
@@ -676,5 +677,27 @@ describe("checkpoint", () => {
 		assert.equal(checkpoint(dir, "test"), true);
 		const log = execSync("git log --format=%s -1", { cwd: dir, encoding: "utf-8" }).trim();
 		assert.equal(log, "wip: autopilot test");
+	});
+});
+
+describe("reviewFindingsPreamble (issue #60)", () => {
+	it('empty / whitespace input returns ""', () => {
+		assert.equal(reviewFindingsPreamble(""), "");
+		assert.equal(reviewFindingsPreamble("   \n\t "), "");
+	});
+
+	it("non-empty input returns a block with the header and the findings", () => {
+		const out = reviewFindingsPreamble("- bug: null deref at foo.ts:12");
+		assert.match(out, /A prior PR review BLOCKED this change/);
+		assert.match(out, /### Review findings/);
+		assert.match(out, /null deref at foo\.ts:12/);
+	});
+
+	it("over-cap input is truncated with an explicit marker", () => {
+		const big = "x".repeat(7000);
+		const out = reviewFindingsPreamble(big);
+		assert.match(out, /\.\.\.\(truncated\)/);
+		// under-cap input is not truncated
+		assert.doesNotMatch(reviewFindingsPreamble("x".repeat(100)), /\(truncated\)/);
 	});
 });
