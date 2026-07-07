@@ -36,13 +36,15 @@ const NPX_BARE_AUTOPILOT_RE = /\bnpx\s+(?:--\S+\s+)*claude-autopilot\b/g;
 // not a CLI dispatcher, so this shape would re-enter the pipeline.
 const PNPM_AUTOPILOT_SUBCOMMAND_RE = /\bpnpm\s+autopilot\s+(?:roadmap|worktree-deps|sync)\b/g;
 // Model IDs belong only in config.ts's MODEL_PROFILES. A skill/template body that
-// pins one (e.g. `claude-opus-4-8`) silently goes stale the next time /bump-models
-// refreshes config, and the pipeline already injects the per-step model — bodies
-// must stay model-agnostic. Family list is closed and changes ~yearly (when
-// /bump-models runs); extend it here when a new family ships. Digit-after-family
-// requirement keeps `claude-autopilot-19`-style names and prose out. The tail must
-// end on an alphanumeric so a trailing sentence period/comma isn't captured into
-// the reported ID (e.g. `…claude-opus-4-8.` reports `claude-opus-4-8`).
+// pins one (e.g. `claude-opus-<version>`) silently goes stale the next time
+// /bump-models refreshes config, and the pipeline already injects the per-step
+// model — bodies must stay model-agnostic. Family list is closed and changes
+// ~yearly (when /bump-models runs); extend it here when a new family ships.
+// Digit-after-family requirement keeps worktree/branch names (`claude-autopilot`
+// plus an issue-number suffix) and prose out. The tail must end on an alphanumeric so a trailing sentence
+// period/comma isn't captured into the reported ID. (Examples here use
+// `<version>` placeholders, not real digits: /bump-models sweeps the tree with
+// `rg 'claude-[a-z]+-[0-9]'` and this file must not trip it.)
 const MODEL_ID_RE = /\bclaude-(?:opus|sonnet|haiku|fable)-[0-9](?:[0-9a-z.-]*[0-9a-z])?/g;
 
 function lineOf(body: string, index: number): number {
