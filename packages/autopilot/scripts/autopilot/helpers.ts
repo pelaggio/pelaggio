@@ -230,6 +230,35 @@ export function parseVerdict(text: string): "APPROVE" | "REVISE" | "RETHINK" {
 	return reviewEngaged(text) ? "APPROVE" : "RETHINK";
 }
 
+// ── PR-review merge-gate parsing ───────────────────────────────────────
+
+/**
+ * Parse the `/pr-review` gate verdict for the CI merge gate. Distinct from
+ * `parseVerdict` on purpose: `parseVerdict` keeps an "engaged ⇒ APPROVE"
+ * fail-**safe** so a genuine review that omitted the keyword still ships. A
+ * *merge gate* must instead fail **closed to block** on any ambiguity — a
+ * keyword-less-but-engaged review mapping to pass would let unattended runs
+ * merge on a phantom sign-off.
+ *
+ * `ok` is the step-runner's success flag: a refusal / SDK error / max-turns /
+ * rate-limit exit (`ok:false`) blocks unconditionally. On a successful run,
+ * only an explicit `Verdict: PASS` passes; everything else (including
+ * `Verdict: BLOCK` and no verdict at all) blocks.
+ *
+ * Last occurrence wins and the match is line-anchored (mirrors
+ * `parsePickResult` / `parseBlockedReason`): the skill contract puts the
+ * verdict on the trailing line, so a review that *quotes* `Verdict: PASS`
+ * earlier in its body (e.g. when reviewing this gate's own docs) must not
+ * shadow a final `Verdict: BLOCK` — first-match-wins here is a fail-open hole.
+ */
+export function parseReviewGate(text: string, ok: boolean): "pass" | "block" {
+	if (!ok) return "block"; // refusal / SDK error / max_turns / rate-limit → fail closed
+	const matches = [...text.matchAll(/^[ \t>*-]*\*{0,2}verdict[:\s*]+\*{0,2}(PASS|BLOCK)\b/gim)];
+	const last = matches.at(-1);
+	if (last) return last[1].toLowerCase() as "pass" | "block";
+	return "block"; // no explicit `Verdict: PASS` ⇒ block (no engagement fail-safe)
+}
+
 // ── Blocked / stalled-ask parsing ──────────────────────────────────────
 
 /**

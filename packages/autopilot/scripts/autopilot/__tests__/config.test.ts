@@ -212,6 +212,16 @@ describe("resolveStepSettings — precedence & fallback", () => {
 		assert.equal(resolveStepSettings(cfg, "standard", "plan").budget, DEFAULTS.budgets.plan);
 	});
 
+	it("resolves the non-pipeline pr-review step from DEFAULTS", () => {
+		const repo = tmpRepo();
+		const cfg = loadConfig({ repo, configPath: join(repo, ".autopilot.yml") });
+		const s = resolveStepSettings(cfg, "standard", "pr-review");
+		assert.equal(s.budget, DEFAULTS.budgets["pr-review"]);
+		assert.equal(s.turns, DEFAULTS.turnLimits["pr-review"]);
+		assert.equal(s.effort, DEFAULTS.effort["pr-review"]);
+		assert.equal(s.model, DEFAULTS.modelProfiles.standard["pr-review"]);
+	});
+
 	it("applies the same precedence to turns and effort", () => {
 		const repo = tmpRepo();
 		const path = writeYml(repo, ["models:", "  profiles:", "    deep:", "      turn-limits:", "        plan: 100", "      effort:", "        plan: high", ""].join("\n"));
