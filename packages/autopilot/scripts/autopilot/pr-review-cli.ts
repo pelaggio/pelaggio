@@ -57,11 +57,15 @@ const emit: StepEmit = (event) => {
 function buildComment(gate: "pass" | "block", ok: boolean, subtype: string, reviewText: string): string {
 	const header = gate === "pass" ? "✅ **Automated review: PASS**" : "🚫 **Automated review: BLOCK**";
 	if (!ok) {
+		// A truncated run (e.g. error_max_turns) may still have found real
+		// blockers — the partial text is the expensive artifact, so keep it.
+		const partial = reviewText.trim() ? ["", "Partial review output (run did not complete — may be incomplete):", "", reviewText.trim()] : [];
 		return [
 			MARKER,
 			"🚫 **Automated review could not complete — failing closed**",
 			"",
 			`The review step exited without a clean verdict (\`${subtype}\`), so this gate blocks the merge. Re-run the workflow once the cause (rate limit, refusal, or transient SDK error) clears.`,
+			...partial,
 			"",
 			`<sub>autopilot pr-review · ${subtype}</sub>`,
 		].join("\n");
@@ -117,6 +121,12 @@ export async function main(argv: string[]): Promise<number> {
 		const result = await runStep("pr-review", prompt, { cwd: REPO, profile, trace: false, parkSignal, itemId: pr }, emit);
 
 		const gate = parseReviewGate(result.text, result.ok);
+
+		// The review text goes to stdout unconditionally so the CI log always
+		// carries the findings — a failed comment upsert (or a truncated run)
+		// must not be able to lose the only copy of a $-priced review.
+		if (result.text.trim()) process.stdout.write(`\n${result.text.trim()}\n\n`);
+
 		upsertComment(pr, buildComment(gate, result.ok, result.subtype, result.text));
 
 		process.stderr.write(`gate: ${gate.toUpperCase()} (ok=${result.ok})\n`);

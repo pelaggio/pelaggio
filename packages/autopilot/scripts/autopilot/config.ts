@@ -37,7 +37,7 @@ export type PipelineStep = (typeof STEPS)[number];
  *  (the standalone CI review gate) — both carry per-step config but are absent from `STEPS`. */
 export type Step = PipelineStep | "shipwreck" | "pr-review";
 
-/** Type guard for a valid pipeline step. Excludes `shipwreck` (not a pipeline stage) — see `--from` validation in pipeline.ts. */
+/** Type guard for a valid pipeline step. Excludes `shipwreck` and `pr-review` (not pipeline stages) — see `--from` validation in pipeline.ts. */
 export function isPipelineStep(s: string): s is PipelineStep {
 	return (STEPS as readonly string[]).includes(s);
 }

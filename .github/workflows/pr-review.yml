@@ -17,6 +17,9 @@ jobs:
   # green — gating via a job-level `if` would leave a required check stuck pending.
   review:
     runs-on: self-hosted
+    # Budget/turn caps only bind on completed turns — a hung SDK stream would
+    # otherwise hold the single self-hosted runner for GitHub's 6h default.
+    timeout-minutes: 45
     permissions:
       contents: read
       pull-requests: write
@@ -58,6 +61,12 @@ jobs:
         if: steps.gate.outputs.run == 'true'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          # Deliberately the built-in token, NOT the GH_TOKEN PAT: (a) the review
+          # agent inherits this env, and the scoped token (comment, no push/merge)
+          # bounds prompt-injection blast radius; (b) comments post as
+          # github-actions[bot], so `--edit-last` can never clobber a human
+          # comment from the PAT owner's account; (c) a PAT expiry can't turn the
+          # required check red repo-wide.
+          GH_TOKEN: ${{ github.token }}
           CI: "true"
         run: npx @cdhorne/claude-autopilot pr-review --pr "${{ github.event.pull_request.number }}"

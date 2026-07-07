@@ -526,6 +526,17 @@ describe("parseReviewGate", () => {
 		assert.equal(parseReviewGate("", true), "block");
 		assert.equal(parseReviewGate("I can't help with that.", true), "block");
 	});
+
+	it("last occurrence wins — an early quoted verdict never shadows the trailing one", () => {
+		assert.equal(parseReviewGate("The CLI exits 0 only on an explicit Verdict: PASS.\n\nVerdict: BLOCK", true), "block");
+		assert.equal(parseReviewGate("Verdict: PASS\nOn reflection that was premature.\nVerdict: BLOCK", true), "block");
+		assert.equal(parseReviewGate("A prior run said Verdict: BLOCK; the fix landed.\n\nVerdict: PASS", true), "pass");
+	});
+
+	it("mid-line prose mentioning a verdict does not match (line-anchored)", () => {
+		assert.equal(parseReviewGate("This would let the verdict pass unchallenged.", true), "block");
+		assert.equal(parseReviewGate("Nothing here would make the verdict block the merge.", true), "block");
+	});
 });
 
 describe("parseBlockedReason", () => {
