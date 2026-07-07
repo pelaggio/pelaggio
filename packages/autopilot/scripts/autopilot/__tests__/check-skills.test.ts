@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
 import { resolveArtifactRoot } from "../artifact-root.js";
-import { lintAllSkills, lintSkillFile, type Violation } from "../check-skills.js";
+import { lintAllSkills, lintSkillFile, lintTemplates, type Violation } from "../check-skills.js";
 
 const REAL_REPO_ROOT = resolveArtifactRoot(import.meta.url);
 
@@ -254,6 +254,86 @@ Parse $ARGUMENTS for flags.
 `;
 		const { repoRoot, skillFile } = makeRepoWithSkill("demo", body);
 		assert.deepEqual(lintSkillFile(skillFile, repoRoot), []);
+	});
+});
+
+describe("check-skills — model-id.hardcoded", () => {
+	it("flags a hardcoded model ID in a skill body", () => {
+		const body = `---
+name: demo
+description: d
+allowed-tools: Read
+---
+
+Use claude-opus-4-8 for planning.
+`;
+		const { repoRoot, skillFile } = makeRepoWithSkill("demo", body);
+		const v = lintSkillFile(skillFile, repoRoot);
+		assert.equal(v.length, 1);
+		assert.equal(v[0].rule, "model-id.hardcoded");
+		assert.equal(v[0].line, 7);
+		assert.match(v[0].message, /claude-opus-4-8/);
+	});
+
+	it("exempts the bump-models skill", () => {
+		const body = `---
+name: bump-models
+description: d
+allowed-tools: Read
+---
+
+The current IDs are claude-opus-4-8 and claude-sonnet-5.
+`;
+		const { repoRoot, skillFile } = makeRepoWithSkill("bump-models", body);
+		assert.deepEqual(lintSkillFile(skillFile, repoRoot), []);
+	});
+
+	it("does not flag worktree names or spaced prose", () => {
+		const body = `---
+name: demo
+description: d
+allowed-tools: Read
+---
+
+Branch claude-autopilot-19 runs on Claude Opus 4.8 by profile.
+`;
+		const { repoRoot, skillFile } = makeRepoWithSkill("demo", body);
+		assert.deepEqual(lintSkillFile(skillFile, repoRoot), []);
+	});
+});
+
+describe("check-skills — lintTemplates", () => {
+	function makeRepoWithTemplate(rel: string, content: string): string {
+		const repoRoot = mkdtempSync(join(tmpdir(), "autopilot-lint-tpl-"));
+		const full = join(repoRoot, ".claude-templates", rel);
+		mkdirSync(dirname(full), { recursive: true });
+		writeFileSync(full, content);
+		return repoRoot;
+	}
+
+	it("flags a hardcoded model ID in a template", () => {
+		const repoRoot = makeRepoWithTemplate("foo.md", "Set the model to claude-sonnet-5.\n");
+		const v = lintTemplates(repoRoot);
+		assert.equal(v.length, 1);
+		assert.equal(v[0].rule, "model-id.hardcoded");
+		assert.equal(v[0].file, ".claude-templates/foo.md");
+		// The reported ID stops at the digit — the sentence-ending period is not captured.
+		assert.ok(v[0].message.includes("`claude-sonnet-5`"), v[0].message);
+	});
+
+	it("returns [] for a clean template", () => {
+		const repoRoot = makeRepoWithTemplate("foo.md", "Models come from MODEL_PROFILES.\n");
+		assert.deepEqual(lintTemplates(repoRoot), []);
+	});
+
+	it("returns [] when .claude-templates is absent", () => {
+		const repoRoot = mkdtempSync(join(tmpdir(), "autopilot-lint-notpl-"));
+		assert.deepEqual(lintTemplates(repoRoot), []);
+	});
+
+	it("returns [] for this repo's real templates", () => {
+		const v: Violation[] = lintTemplates(REAL_REPO_ROOT);
+		assert.deepEqual(v, [], `unexpected violations:\n${v.map((x) => `  ${x.file}${x.line ? `:${x.line}` : ""} [${x.rule}] ${x.message}`).join("\n")}`);
 	});
 });
 

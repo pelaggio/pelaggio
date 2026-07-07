@@ -35,11 +35,39 @@ const NPX_BARE_AUTOPILOT_RE = /\bnpx\s+(?:--\S+\s+)*claude-autopilot\b/g;
 // when the bare-name invocation failed. `pnpm autopilot` is the pipeline entry,
 // not a CLI dispatcher, so this shape would re-enter the pipeline.
 const PNPM_AUTOPILOT_SUBCOMMAND_RE = /\bpnpm\s+autopilot\s+(?:roadmap|worktree-deps|sync)\b/g;
+// Model IDs belong only in config.ts's MODEL_PROFILES. A skill/template body that
+// pins one (e.g. `claude-opus-<version>`) silently goes stale the next time
+// /bump-models refreshes config, and the pipeline already injects the per-step
+// model — bodies must stay model-agnostic. Family list is closed and changes
+// ~yearly (when /bump-models runs); extend it here when a new family ships.
+// Digit-after-family requirement keeps worktree/branch names (`claude-autopilot`
+// plus an issue-number suffix) and prose out. The tail must end on an alphanumeric so a trailing sentence
+// period/comma isn't captured into the reported ID. (Examples here use
+// `<version>` placeholders, not real digits: /bump-models sweeps the tree with
+// `rg 'claude-[a-z]+-[0-9]'` and this file must not trip it.)
+const MODEL_ID_RE = /\bclaude-(?:opus|sonnet|haiku|fable)-[0-9](?:[0-9a-z.-]*[0-9a-z])?/g;
 
 function lineOf(body: string, index: number): number {
 	let line = 1;
 	for (let i = 0; i < index; i++) if (body.charCodeAt(i) === 10) line++;
 	return line;
+}
+
+/** Flag hardcoded Claude model IDs anywhere in `body`. `rel` is the repo-relative path for reporting. */
+function scanModelIds(body: string, rel: string): Violation[] {
+	const out: Violation[] = [];
+	MODEL_ID_RE.lastIndex = 0;
+	let hit: RegExpExecArray | null;
+	// biome-ignore lint/suspicious/noAssignInExpressions: standard regex exec loop
+	while ((hit = MODEL_ID_RE.exec(body)) !== null) {
+		out.push({
+			file: rel,
+			line: lineOf(body, hit.index),
+			rule: "model-id.hardcoded",
+			message: `hardcoded model ID \`${hit[0]}\` — model IDs live only in config.ts's MODEL_PROFILES; keep bodies model-agnostic`,
+		});
+	}
+	return out;
 }
 
 function findFieldLine(frontmatterBody: string, key: string): number | undefined {
@@ -238,6 +266,11 @@ export function lintSkillFile(absPath: string, repoRoot: string): Violation[] {
 		});
 	}
 
+	// bump-models exists to document and refresh these IDs — exempt it wholesale.
+	if (expectedName !== "bump-models") {
+		violations.push(...scanModelIds(body, rel));
+	}
+
 	return sortViolations(violations);
 }
 
@@ -268,6 +301,27 @@ export function lintAllSkills(repoRoot: string): Violation[] {
 	return sortViolations(out);
 }
 
+function walkMarkdown(dir: string): string[] {
+	const out: string[] = [];
+	for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
+		const full = resolve(dir, entry.name);
+		if (entry.isDirectory()) out.push(...walkMarkdown(full));
+		else if (entry.name.endsWith(".md")) out.push(full);
+	}
+	return out;
+}
+
+/** Lint template markdown under `.claude-templates/` for hardcoded model IDs. */
+export function lintTemplates(repoRoot: string): Violation[] {
+	const root = resolve(repoRoot, ".claude-templates");
+	if (!existsSync(root)) return [];
+	const out: Violation[] = [];
+	for (const abs of walkMarkdown(root)) {
+		out.push(...scanModelIds(readFileSync(abs, "utf-8"), relative(repoRoot, abs) || abs));
+	}
+	return sortViolations(out);
+}
+
 export function formatViolations(violations: Violation[]): string {
 	if (violations.length === 0) return "";
 	const lines = violations.map((v) => {
@@ -281,7 +335,7 @@ export function formatViolations(violations: Violation[]): string {
 }
 
 export async function main(_argv: string[]): Promise<number> {
-	const violations = lintAllSkills(REPO);
+	const violations = sortViolations([...lintAllSkills(REPO), ...lintTemplates(REPO)]);
 	if (violations.length === 0) return 0;
 	console.log(formatViolations(violations));
 	return 1;

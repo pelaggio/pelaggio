@@ -15,7 +15,7 @@ Prefer `https://api.anthropic.com/v1/models` (requires `ANTHROPIC_API_KEY`); if 
 
 ## 2. Compare and edit
 
-Read `packages/autopilot/scripts/autopilot/config.ts`. The `OPUS` and `SONNET` constants live around line 43-44. If either is behind, edit in place. If a new family is being adopted, add a parallel constant and wire it through `MODEL_PROFILES` rather than reusing `OPUS`/`SONNET`.
+Read `packages/autopilot/scripts/autopilot/config.ts`. The `OPUS` and `SONNET` constants live around line 43-44. If either is behind, edit in place. If a new family is being adopted, add a parallel constant and wire it through `MODEL_PROFILES` rather than reusing `OPUS`/`SONNET`, and extend `MODEL_ID_RE` in `packages/autopilot/scripts/autopilot/check-skills.ts` with the new family name so the skills/templates lint keeps catching pinned IDs.
 
 ## 3. Rubric guard
 
