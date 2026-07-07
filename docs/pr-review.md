@@ -88,6 +88,21 @@ models:
 
 Select the profile with `--profile <name>` (default `standard`).
 
+## Runner & secrets (repo-admin, one-time)
+
+The job runs on **GitHub-hosted `ubuntu-latest`** — deliberately not self-hosted. The
+review agent executes PR-influenced code (the CLI runs from the checked-out tree), so
+it must run on an ephemeral VM where a malicious PR's blast radius is one comment-scoped
+token plus the API key — never on a machine holding real credentials. Hosted runners
+are free on public repos.
+
+The workflow needs one secret: `ANTHROPIC_API_KEY`. Use a **dedicated, spend-capped
+key** (its own Anthropic Console workspace with a monthly budget), not a personal key —
+the cap bounds the worst case if a reviewed PR ever exfiltrates it. Set it with
+`gh secret set ANTHROPIC_API_KEY --repo <owner>/<repo>` (or an org-level secret to
+share one key across repos). Until the secret exists, the gate fails closed: every
+same-repo PR reports a red `review` check.
+
 ## Branch-protection setup (repo-admin, one-time)
 
 Configuration of branch protection is a **repo-admin action** — it is documented here,

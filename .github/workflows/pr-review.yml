@@ -16,9 +16,13 @@ jobs:
   # pending). Fork/draft PRs skip the agent *inside* the job and still report
   # green — gating via a job-level `if` would leave a required check stuck pending.
   review:
-    runs-on: self-hosted
+    # GitHub-hosted, deliberately NOT self-hosted: the review agent executes
+    # PR-influenced code (the CLI runs from the checked-out tree), so the job
+    # must run on an ephemeral VM where the blast radius is one scoped token
+    # plus a spend-capped API key — never on a dev machine. Free on public repos.
+    runs-on: ubuntu-latest
     # Budget/turn caps only bind on completed turns — a hung SDK stream would
-    # otherwise hold the single self-hosted runner for GitHub's 6h default.
+    # otherwise burn a runner for GitHub's 6h default.
     timeout-minutes: 45
     permissions:
       contents: read
