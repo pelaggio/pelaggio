@@ -347,6 +347,28 @@ describe("MarkdownRoadmap.createItem", () => {
 		assert.equal(created.id, "TOOL-2");
 		assert.equal(execSync("git status --porcelain", { cwd: repo, encoding: "utf-8" }).trim(), "", "createItem must commit despite the failing hook");
 	});
+
+	it("infers prefix from item rows only, ignoring prose tokens shaped like IDs (issue #46)", async () => {
+		const repo = seedRepo();
+		seedFile(
+			repo,
+			"docs/roadmap-core.md",
+			[
+				"# Core",
+				"",
+				"See ADR-0003 for the rationale. This also affects WSL2 setups and CFG-8 in the sibling repo.",
+				"Revisit ADR-0003 again before release; ADR-0003 is the canonical reference.",
+				"",
+				"- [ ] **INST-1. First** — First. Scope: M.",
+				"",
+			].join("\n"),
+		);
+		execSync("git add -A && git commit -q -m seed", { cwd: repo });
+
+		const r = new MarkdownRoadmap({ repo });
+		const created = await r.createItem({ title: "New thing", scope: "M" });
+		assert.equal(created.id, "INST-2");
+	});
 });
 
 describe("MarkdownRoadmap.archivePlan", () => {

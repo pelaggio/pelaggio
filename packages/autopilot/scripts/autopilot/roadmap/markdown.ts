@@ -197,11 +197,16 @@ export class MarkdownRoadmap implements RoadmapSource {
 		const targetPath = resolve(docsDir, targetFile);
 		const body = readFileSync(targetPath, "utf-8");
 
-		// Determine ID prefix by scanning existing IDs in the file.
-		const idRe = /\b([A-Z]{1,6})-?(\d+)\b/g;
+		// Determine ID prefix by scanning existing item rows only (checkbox/table),
+		// not arbitrary prose — prose tokens like "ADR-0003" or "WSL2" would
+		// otherwise pollute the count and mis-allocate the next ID (issue #46).
+		const idRe = /^([A-Z]{1,6})-?(\d+)/;
 		const prefixCounts = new Map<string, number>();
 		const maxByPrefix = new Map<string, number>();
-		for (const m of body.matchAll(idRe)) {
+		for (const row of [...parseOpenTableRows(body), ...parseCheckboxRows(body)]) {
+			const cleaned = row.item.replace(/^~~|~~$/g, "");
+			const m = cleaned.match(idRe);
+			if (!m) continue;
 			const p = m[1];
 			const n = parseInt(m[2], 10);
 			prefixCounts.set(p, (prefixCounts.get(p) ?? 0) + 1);
