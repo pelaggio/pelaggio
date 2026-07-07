@@ -21,7 +21,11 @@ jobs:
       github.event.workflow_run.head_repository.full_name == github.repository &&
       startsWith(github.event.workflow_run.head_branch, 'feat/issue-') &&
       vars.AUTOPILOT_AUTO_REVISE != 'false'
-    runs-on: self-hosted
+    # GitHub-hosted like the review gate: this job runs the implement agent on
+    # PR-influenced code, so it belongs on an ephemeral VM. Blast radius is the
+    # spend-capped API key + the GH_TOKEN PAT (see env note below) — keep that
+    # PAT fine-grained (contents + pull-requests + issues on this repo only).
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
       contents: write
