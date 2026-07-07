@@ -1,7 +1,7 @@
 import type { PersistedRun, RunStatus } from "@cdhorne/claude-autopilot-server/types";
 import { useCallback, useEffect, useState } from "react";
 import { ApiError, getRun, pauseRun, resumeRun, stopRun } from "../lib/api.js";
-import { formatDate, statusBadgeClass } from "../lib/format.js";
+import { formatDate, formatItemId, statusBadgeClass } from "../lib/format.js";
 import { LogStream } from "./LogStream.js";
 
 interface RunDetailProps {

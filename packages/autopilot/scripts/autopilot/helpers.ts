@@ -188,6 +188,20 @@ export function classifyStepError(errMsg: string, parked: boolean): string {
 	return "error_sdk";
 }
 
+// ── Retry budget decision ──────────────────────────────────────────────
+
+/**
+ * Whether a step that ended in `error_max_turns` may be re-entered once more with a
+ * fresh turn budget (issue #33). The attempt-count bound is owned by the caller's loop;
+ * this owns only the dollar gate: a retry is funded up to the step's configured budget
+ * again, so skip it when too little remains. A non-finite `maxBudget` (unset / unparseable
+ * `--budget`) disables the gate — the caller's attempt cap still bounds the retry.
+ */
+export function canRetryWithinBudget(args: { spent: number; maxBudget: number; stepBudget: number }): boolean {
+	if (!Number.isFinite(args.maxBudget)) return true;
+	return args.maxBudget - args.spent >= args.stepBudget;
+}
+
 // ── Verdict parsing ────────────────────────────────────────────────────
 
 // Vocabulary a genuine rubric review uses. Presence of any term (in a
