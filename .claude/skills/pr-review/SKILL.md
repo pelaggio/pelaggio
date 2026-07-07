@@ -47,7 +47,7 @@ if something is ambiguous, resolve it by reading the code, then decide.
 1. List every changed file. **Read each one in full at head** — not just the hunks. A
    hunk can look fine while breaking an invariant three functions away.
 2. Enumerate *candidate* findings against the rubric dimensions (Correct, Well-typed,
-   Well-tested, Well-factored, Concise, Idioms) and the invariants in `CLAUDE.md`.
+   Well-tested, Well-factored, Idiomatic, Idioms, Concise) and the invariants in `CLAUDE.md`.
    Be generous here — over-collect; Phase B is where you cut.
 
 ### Phase B — verify (adversarial)
