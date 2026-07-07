@@ -89,6 +89,39 @@ describe("reduce — retries via attempt field", () => {
 	});
 });
 
+describe("reduce — turn-exhaustion retries", () => {
+	it("counts retriedMaxTurns per step into maxTurnsRetriesByStep", () => {
+		const entry1 = mkEntry({
+			cycle: 1,
+			item: "TOOL-4",
+			completed: true,
+			steps: [mkStep({ name: "implement", attempt: 1, ok: false }), mkStep({ name: "implement", attempt: 2, retriedMaxTurns: true, ok: true }), mkStep({ name: "shakedown-code", ok: true })],
+		});
+		const entry2 = mkEntry({
+			cycle: 2,
+			item: "TOOL-5",
+			completed: true,
+			steps: [mkStep({ name: "plan", attempt: 2, retriedMaxTurns: true, ok: true }), mkStep({ name: "shakedown-code", attempt: 2, retriedMaxTurns: true, ok: true })],
+		});
+		const s = reduce([entry1, entry2]);
+		assert.equal(s.maxTurnsRetriesByStep.implement, 1);
+		assert.equal(s.maxTurnsRetriesByStep.plan, 1);
+		assert.equal(s.maxTurnsRetriesByStep["shakedown-code"], 1);
+	});
+
+	it("omits steps that never retried on turn exhaustion (edit-loop retries excluded)", () => {
+		const entry = mkEntry({
+			cycle: 1,
+			item: "TOOL-6",
+			completed: true,
+			// attempt 2 without retriedMaxTurns models an edit_loop retry — not counted.
+			steps: [mkStep({ name: "implement", attempt: 1, ok: false }), mkStep({ name: "implement", attempt: 2, ok: true })],
+		});
+		const s = reduce([entry]);
+		assert.equal(s.maxTurnsRetriesByStep.implement, undefined);
+	});
+});
+
 describe("reduce — parked cycle", () => {
 	it("counts parked and excludes non-completed from itemsDelivered", () => {
 		const entry = mkEntry({

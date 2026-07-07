@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { CONFIG, isPipelineStep, MODEL_PROFILES, REPO, ROADMAP_GITHUB, ROADMAP_LINEAR, ROADMAP_SOURCE, resolveStepSettings, SHIP_TARGET, STEPS, WORKTREE_PREFIX } from "./config.js";
 import {
 	appendLog as appendLogDefault,
+	canRetryWithinBudget,
 	captureShipState,
 	checkpoint,
 	computeImplementTurns,
@@ -55,6 +56,10 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	const _resolveWorktree = deps.resolveWorktree ?? resolveWorktree;
 	const roadmap = deps.roadmap ?? getRoadmapSource(ROADMAP_SOURCE, { repo: REPO, github: ROADMAP_GITHUB, linear: ROADMAP_LINEAR });
 	const runShipBookkeeping = deps.runShipBookkeeping ?? runShipBookkeepingDefault;
+	// The cycle's dollar ceiling. A turn-exhaustion retry (issue #33) is funded up to the
+	// step's configured budget again, so the budget guard skips a retry we can't fully fund.
+	// A non-finite value (unset / unparseable --budget) disables the dollar gate.
+	const maxBudget = Number.parseFloat(flags.budget);
 	let cost = 0;
 	let profile = "standard";
 	const steps: StepLog[] = [];
@@ -66,7 +71,12 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		console.log(`${A.dim(ts)} [${logLabel}] ${A.dim(elapsed)} ${msg}`);
 	};
 
-	async function step(name: Step, prompt: string, cwd: string, { attempt = 1, commitLabel, maxTurnsOverride }: { attempt?: number; commitLabel?: string; maxTurnsOverride?: number } = {}): Promise<StepResult> {
+	async function step(
+		name: Step,
+		prompt: string,
+		cwd: string,
+		{ attempt = 1, commitLabel, maxTurnsOverride, retriedMaxTurns = false }: { attempt?: number; commitLabel?: string; maxTurnsOverride?: number; retriedMaxTurns?: boolean } = {},
+	): Promise<StepResult> {
 		// Short-circuit before runStep when SIGINT fired between steps; also covers
 		// --dry-run so Ctrl-C during a dry run bails promptly.
 		if (opts.signal?.aborted) {
@@ -132,6 +142,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			...(!result.ok ? { subtype: result.subtype } : {}),
 			...(result.tokens ? { tokens: result.tokens } : {}),
 			...(attempt > 1 ? { attempt } : {}),
+			...(retriedMaxTurns ? { retriedMaxTurns: true } : {}),
 			...(result.toolCounts ? { toolCounts: result.toolCounts } : {}),
 			...(result.outputTail ? { outputTail: result.outputTail } : {}),
 			...(filesChanged.length > 0 ? { filesChanged } : {}),
@@ -280,16 +291,25 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		if (existingPlan) {
 			log(`plan exists at ${existingPlan} — skipping plan generation`);
 		} else {
-			const parked = parkExit();
-			if (parked) return parked;
-			log("planning...");
-			const plan = await step("plan", expandSkill("plan"), worktree!);
-			cost += plan.cost;
-			if (!plan.ok) {
+			const MAX_PLAN_ATTEMPTS = 2;
+			for (let attempt = 1; attempt <= MAX_PLAN_ATTEMPTS; attempt++) {
 				const parked = parkExit();
 				if (parked) return parked;
+				log(attempt === 1 ? "planning..." : "continuing plan (attempt 2)...");
+				const plan = await step("plan", expandSkill("plan"), worktree!, { attempt, retriedMaxTurns: attempt > 1 });
+				cost += plan.cost;
+				if (plan.ok) break;
+				if (plan.subtype === "error_rate_limit" || parkSignal.parked) {
+					return parkExit() ?? finish({ itemId, completed: false, cost, error: "plan failed" });
+				}
 				if (plan.subtype === "blocked") return finish({ itemId, completed: false, cost, error: `plan blocked: ${plan.text}` });
-				return finish({ itemId, completed: false, cost, error: "plan failed" });
+				if (plan.subtype === "error_refusal") return finish({ itemId, completed: false, cost, error: "plan refused (model declined the task)" });
+				if (plan.subtype !== "error_max_turns") return finish({ itemId, completed: false, cost, error: "plan failed" });
+				log(`plan hit turn limit (attempt ${attempt}/${MAX_PLAN_ATTEMPTS})`);
+				if (attempt === MAX_PLAN_ATTEMPTS) return finish({ itemId, completed: false, cost, error: "plan failed (max retries)" });
+				if (!canRetryWithinBudget({ spent: cost, maxBudget, stepBudget: resolveStepSettings(CONFIG, profile, "plan").budget })) {
+					return finish({ itemId, completed: false, cost, error: "plan failed (insufficient budget to retry after max turns)" });
+				}
 			}
 		}
 		const planPath = await roadmap.getItemPlan({ worktree: worktree! });
@@ -302,7 +322,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			const parked = parkExit();
 			if (parked) return parked;
 			log(attempt === 1 ? "shakedown (plan)..." : "continuing shakedown-plan (attempt 2)...");
-			const shakedown = await step("shakedown-plan", expandSkill("shakedown", "autopilot plan-review"), worktree!);
+			const shakedown = await step("shakedown-plan", expandSkill("shakedown", "autopilot plan-review"), worktree!, { attempt, retriedMaxTurns: attempt > 1 });
 			cost += shakedown.cost;
 
 			if (shakedown.ok) {
@@ -325,6 +345,9 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			}
 			log(`shakedown-plan hit turn limit (attempt ${attempt}/${MAX_SHAKEDOWN_PLAN_ATTEMPTS})`);
 			if (attempt === MAX_SHAKEDOWN_PLAN_ATTEMPTS) return finish({ itemId, completed: false, cost, error: "shakedown-plan failed (max retries)" });
+			if (!canRetryWithinBudget({ spent: cost, maxBudget, stepBudget: resolveStepSettings(CONFIG, profile, "shakedown-plan").budget })) {
+				return finish({ itemId, completed: false, cost, error: "shakedown-plan failed (insufficient budget to retry after max turns)" });
+			}
 		}
 	}
 
@@ -397,6 +420,9 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		let lastLoopFile: string | null = null;
 		const MAX_ATTEMPTS = 2;
 		let implOk = false;
+		// Attempt 2 can follow EITHER an edit_loop OR error_max_turns — track the prior
+		// failure so only genuine turn-exhaustion retries get marked `retriedMaxTurns`.
+		let prevMaxTurns = false;
 
 		for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
 			log(attempt === 1 ? "implementing..." : "continuing implementation (attempt 2)...");
@@ -413,7 +439,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 					].join("\n")
 				: continuePrompt;
 			const cpLabel = attempt === 1 ? "implementation checkpoint" : "implementation continued";
-			const impl = await step("implement", attempt === 1 ? implementPrompt : retryPrompt, worktree!, { attempt, commitLabel: cpLabel, maxTurnsOverride: implementTurns });
+			const impl = await step("implement", attempt === 1 ? implementPrompt : retryPrompt, worktree!, { attempt, commitLabel: cpLabel, maxTurnsOverride: implementTurns, retriedMaxTurns: prevMaxTurns });
 			cost += impl.cost;
 
 			if (impl.ok) {
@@ -424,6 +450,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			if (impl.subtype === "edit_loop") {
 				const match = impl.text.match(/Edit loop detected: (.+?) edited/);
 				lastLoopFile = match?.[1]?.replace(/^.*[/\\]/, "") ?? null;
+				prevMaxTurns = false;
 				log(`edit loop on ${lastLoopFile ?? "unknown file"} — will retry with fresh approach`);
 			} else if (impl.subtype === "error_rate_limit" || parkSignal.parked) {
 				return parkExit() ?? finish({ itemId, completed: false, cost, error: "implement failed" });
@@ -435,6 +462,12 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				return finish({ itemId, completed: false, cost, error: "implement failed" });
 			} else {
 				log(`implement hit turn limit (attempt ${attempt}/${MAX_ATTEMPTS})`);
+				prevMaxTurns = true;
+				// Skip the budget-guarded retry only when there IS a next attempt (the final
+				// attempt exits via the post-loop `!implOk` guard, not here).
+				if (attempt < MAX_ATTEMPTS && !canRetryWithinBudget({ spent: cost, maxBudget, stepBudget: resolveStepSettings(CONFIG, profile, "implement").budget })) {
+					return finish({ itemId, completed: false, cost, error: "implement failed (insufficient budget to retry after max turns)" });
+				}
 			}
 		}
 
@@ -471,7 +504,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 							"5. Re-run the verification commands before finishing.",
 						].join("\n");
 
-			const shakedown = await step("shakedown-code", shakedownPrompt, worktree!, { attempt, commitLabel: "shakedown checkpoint" });
+			const shakedown = await step("shakedown-code", shakedownPrompt, worktree!, { attempt, commitLabel: "shakedown checkpoint", retriedMaxTurns: attempt > 1 });
 			cost += shakedown.cost;
 
 			if (shakedown.ok) {
@@ -492,6 +525,11 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			}
 
 			log(`shakedown hit turn limit (attempt ${attempt}/${MAX_SHAKEDOWN_ATTEMPTS})`);
+			// Skip the budget-guarded retry only when there IS a next attempt (the final
+			// attempt exits via the post-loop `!shakedownOk` guard, not here).
+			if (attempt < MAX_SHAKEDOWN_ATTEMPTS && !canRetryWithinBudget({ spent: cost, maxBudget, stepBudget: resolveStepSettings(CONFIG, profile, "shakedown-code").budget })) {
+				return finish({ itemId, completed: false, cost, error: "shakedown-code failed (insufficient budget to retry after max turns)" });
+			}
 		}
 
 		if (!shakedownOk) return finish({ itemId, completed: false, cost, error: "shakedown-code failed (max retries)" });

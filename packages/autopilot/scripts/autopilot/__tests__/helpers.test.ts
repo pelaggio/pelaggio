@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { describe, it } from "node:test";
 import {
+	canRetryWithinBudget,
 	checkpoint,
 	classifyStepError,
 	computeImplementTurns,
@@ -378,6 +379,24 @@ describe("computeImplementTurns", () => {
 		const body = ["## Files", "", "| Path | Change |", "|---|---|", rows].join("\n");
 		// 2*150 + 60 = 360 → clamped to 250
 		assert.equal(computeImplementTurns(body, 200), 250);
+	});
+});
+
+describe("canRetryWithinBudget", () => {
+	it("allows the retry when remaining budget ≥ step budget", () => {
+		assert.equal(canRetryWithinBudget({ spent: 10, maxBudget: 40, stepBudget: 25 }), true);
+	});
+
+	it("skips the retry when remaining budget < step budget", () => {
+		assert.equal(canRetryWithinBudget({ spent: 20, maxBudget: 40, stepBudget: 25 }), false);
+	});
+
+	it("allows the retry at the exact boundary (remaining === step budget)", () => {
+		assert.equal(canRetryWithinBudget({ spent: 15, maxBudget: 40, stepBudget: 25 }), true);
+	});
+
+	it("disables the gate for a non-finite maxBudget (unset / unparseable --budget)", () => {
+		assert.equal(canRetryWithinBudget({ spent: 100, maxBudget: NaN, stepBudget: 25 }), true);
 	});
 });
 

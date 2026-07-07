@@ -30,7 +30,7 @@ const baseFlags: Flags = {
 	parallel: "1",
 	verbose: false,
 	trace: false,
-	budget: "10",
+	budget: "40",
 	"max-wait": "6h",
 	"dry-run": false,
 };
@@ -202,15 +202,100 @@ describe("runPipeline — implement turn-limit retry", () => {
 			`expected implementation continued commit; got:\n${msgs.join("\n")}`,
 		);
 
-		const steps = logs[0].steps as Array<{ name: string; attempt?: number }>;
+		const steps = logs[0].steps as Array<{ name: string; attempt?: number; retriedMaxTurns?: boolean }>;
 		const implEntries = steps.filter((s) => s.name === "implement");
 		assert.ok(
 			implEntries.some((s) => s.attempt === 2),
 			`expected implement entry with attempt=2; got ${JSON.stringify(implEntries)}`,
 		);
+		const attempt2 = implEntries.find((s) => s.attempt === 2);
+		assert.equal(attempt2?.retriedMaxTurns, true, `expected attempt-2 implement entry to mark retriedMaxTurns; got ${JSON.stringify(attempt2)}`);
+		const attempt1 = implEntries.find((s) => s.attempt === undefined || s.attempt === 1);
+		assert.ok(!attempt1?.retriedMaxTurns, `expected attempt-1 implement entry NOT to mark retriedMaxTurns; got ${JSON.stringify(attempt1)}`);
 
 		const continuePrompt = implementCalls[1]?.prompt ?? "";
 		assert.ok(continuePrompt.includes("project-relative") && continuePrompt.includes("use that absolute form"), `expected continuePrompt to carry worktree hint; got: ${continuePrompt.slice(0, 400)}`);
+	});
+});
+
+describe("runPipeline — plan turn-limit retry", () => {
+	it("retries plan after error_max_turns and succeeds on attempt 2, marking retriedMaxTurns", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep, calls } = createMockRunStep(
+			{
+				plan: [{ ok: false, subtype: "error_max_turns" }, { ok: true }],
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				ship: {
+					ok: true,
+					sideEffect: (cwd) => {
+						execSync("git checkout -q main", { cwd });
+						execSync("git merge -q --no-ff feat/tool-99", { cwd });
+						execSync("git checkout -q feat/tool-99", { cwd });
+					},
+				},
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
+			runStep,
+			mainRepo: worktree,
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+			runShipBookkeeping: noopBookkeeping,
+		});
+
+		assert.equal(result.completed, true);
+		const planCalls = calls.filter((c) => c.step === "plan");
+		assert.equal(planCalls.length, 2, `expected two plan attempts; got ${planCalls.length}`);
+		assert.deepEqual(
+			planCalls.map((c) => c.attempt),
+			[1, 2],
+		);
+
+		const steps = logs[0].steps as Array<{ name: string; attempt?: number; retriedMaxTurns?: boolean }>;
+		const planEntries = steps.filter((s) => s.name === "plan");
+		const attempt2 = planEntries.find((s) => s.attempt === 2);
+		assert.equal(attempt2?.retriedMaxTurns, true, `expected attempt-2 plan entry to carry retriedMaxTurns; got ${JSON.stringify(planEntries)}`);
+	});
+});
+
+describe("runPipeline — budget guard skips turn-limit retry", () => {
+	it("skips the plan retry when remaining budget is below the step budget", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		// plan step budget is $8; a --budget of $1 cannot fund a retry.
+		const lowBudget: Flags = { ...baseFlags, budget: "1" };
+		const { runStep, calls } = createMockRunStep(
+			{
+				plan: [{ ok: false, subtype: "error_max_turns" }, { ok: true }],
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline(baseOpts(worktree), parkSignal, lowBudget, {
+			runStep,
+			mainRepo: worktree,
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+		});
+
+		assert.equal(result.completed, false);
+		assert.match(result.error ?? "", /insufficient budget to retry/);
+		const planCalls = calls.filter((c) => c.step === "plan");
+		assert.equal(planCalls.length, 1, `expected exactly one plan attempt (retry skipped); got ${planCalls.length}`);
+		const stepsRun = calls.map((c) => c.step);
+		assert.ok(!stepsRun.includes("implement"), `expected no implement; got ${stepsRun.join(",")}`);
+		assert.equal(parkSignal.parked, false);
 	});
 });
 
