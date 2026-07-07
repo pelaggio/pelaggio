@@ -60,9 +60,11 @@ Precedence for worktree prefix: `CLAUDE_AUTOPILOT_WORKTREE_PREFIX` env >
 `worktree.prefix` in yml > `${basename(REPO)}-`. The env var is the
 pre-existing escape hatch and still wins.
 
-See `docs/config.md` for the annotated schema. The `.autopilot.yml` file is
-intentionally **not** checked into this repo — defaults live in `DEFAULTS`
-inside `config.ts` and the example lives in the doc.
+See `docs/config.md` for the annotated schema. The `.autopilot.yml` file **is
+tracked** in this repo (github-issues roadmap, pull-request ship target, budget
+overrides) — it became the dogfooding config in ea6e4e6, superseding the
+original keep-it-untracked design. Defaults still live in `DEFAULTS` inside
+`config.ts` and the annotated example lives in the doc.
 
 ## Review model
 
