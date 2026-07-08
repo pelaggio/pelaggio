@@ -27,3 +27,19 @@ export function getShipTarget(name: ShipTargetName): ShipTarget {
 export function isShipTargetName(v: unknown): v is ShipTargetName {
 	return typeof v === "string" && (SHIP_TARGET_NAMES as readonly string[]).includes(v);
 }
+
+// True for targets that push to the remote autonomously with no human review gate.
+// Exhaustive switch (never default) so a future 4th target must declare its classification.
+export function isAutonomousRemotePush(name: ShipTargetName): boolean {
+	switch (name) {
+		case "direct-push":
+		case "auto-merge-pr":
+			return true;
+		case "pull-request":
+			return false;
+		default: {
+			const exhaustive: never = name;
+			throw new Error(`Unknown ship target: ${JSON.stringify(exhaustive)}`);
+		}
+	}
+}

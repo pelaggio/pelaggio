@@ -188,7 +188,7 @@ Only one should be active at a time to avoid both racing for the label. On this 
 is the documented API-funded *alternative* — it is turned off (`AUTOPILOT_AUTO_REVISE=false`, no
 `GH_TOKEN` PAT) so the local sweep is the sole active reviser. A repo without a local runner enables
 the CI workflow instead (set the variable + PAT) and leaves `revise.local` moot (its markdown /
-direct-push default is a no-op anyway).
+non-PR-target case is a no-op anyway).
 
 ### Local sweep (issue #76) — active
 

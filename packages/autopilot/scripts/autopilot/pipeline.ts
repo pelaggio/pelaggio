@@ -1,6 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { CONFIG, isPipelineStep, LOG_PATH, MODEL_PROFILES, REPO, REVISE_LOCAL, ROADMAP_GITHUB, ROADMAP_LINEAR, ROADMAP_SOURCE, resolveStepSettings, SHIP_TARGET, STEPS, WORKTREE_PREFIX } from "./config.js";
+import { CONFIG, DEFAULT_SHIP_TARGET, isPipelineStep, LOG_PATH, MODEL_PROFILES, REPO, REVISE_LOCAL, ROADMAP_GITHUB, ROADMAP_LINEAR, ROADMAP_SOURCE, resolveStepSettings, SHIP_TARGET, STEPS, WORKTREE_PREFIX } from "./config.js";
 import {
 	appendLog as appendLogDefault,
 	buildPlanArgs,
@@ -34,10 +34,10 @@ import { type NotifyConfig, notifyCycle, sendNotification as sendNotificationDef
 import { claimRevision, ensureReviseWorktree, fetchReviewFindings, findRevisablePrs, isAutopilotManaged, postParkComment, reviseFindingsPath } from "./revise-sweep.js";
 import { defaultGhRun, type GhRunner } from "./roadmap/github-issues.js";
 import { getRoadmapSource, type RoadmapSource } from "./roadmap/index.js";
-import { commitStrayBookkeeping, getShipTarget, isShipTargetName, runShipBookkeeping as runShipBookkeepingDefault, SHIP_TARGET_NAMES } from "./ship/index.js";
+import { commitStrayBookkeeping, getShipTarget, isAutonomousRemotePush, isShipTargetName, runShipBookkeeping as runShipBookkeepingDefault, SHIP_TARGET_NAMES } from "./ship/index.js";
 import { runStep as runStepDefault } from "./step-runner.js";
 import { A, createStepRenderer, fmtElapsed, LiveStatus, StatusBar, TUI_ENABLED } from "./tui.js";
-import { type CycleResult, type CycleStatus, type Flags, type ParkSignal, type PipelineOpts, RECOVERABLE_ERRORS, type Step, type StepLog, type StepResult } from "./types.js";
+import { type CycleResult, type CycleStatus, type Flags, type ParkSignal, type PipelineOpts, RECOVERABLE_ERRORS, type ShipTargetName, type Step, type StepLog, type StepResult } from "./types.js";
 
 // ── Pipeline ───────────────────────────────────────────────────────────
 
@@ -816,6 +816,15 @@ const RESUME_JITTER_MS = 15_000;
 // minutes+, and `maxWaitMs` already caps each round, so 12 is generous insurance.
 const MAX_RESUME_ROUNDS = 12;
 
+// Loud one-time startup banner when an autonomous remote-push target is configured. Pure
+// (builder only) so "a banner fires for X, not for Y" is unit-testable without the orchestrator.
+// Returns null for the safe default (`pull-request`); a non-null string for the opt-in targets.
+export function remotePushWarning(name: ShipTargetName): string | null {
+	if (!isAutonomousRemotePush(name)) return null;
+	const body = name === "direct-push" ? "It will squash-merge into your local main and push to origin — no PR, no review gate." : "It will open a PR and auto-merge once CI passes — no human review gate.";
+	return [A.yellow(A.bold(`⚠  ship.target = ${name} — autonomous remote push`)), A.yellow(`   ${body}`), A.yellow(`   To keep a review gate, set  ship: { target: ${DEFAULT_SHIP_TARGET} }  in .autopilot.yml.`)].join("\n");
+}
+
 export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {}, statusBar: StatusBar = new StatusBar(), signal?: AbortSignal): Promise<{ exitCode: number; results: CycleResult[] }> {
 	const _runPipeline = deps.runPipeline ?? runPipeline;
 	const _detectResumeStep = deps.detectResumeStep ?? detectResumeStep;
@@ -843,6 +852,12 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			shipTargetName = flags.target;
 		}
 		const shipTarget = getShipTarget(shipTargetName);
+
+		// One-time startup banner (before the resume/normal branch → fires exactly once, covers
+		// both modes; mode- and dry-run-agnostic — a dry run is when an operator most wants to
+		// notice an autonomous-push target is configured).
+		const warning = remotePushWarning(shipTargetName);
+		if (warning) console.log(warning);
 
 		// Resolve no-worktree: --no-worktree flag, CI=true, or CLAUDE_AUTOPILOT_SINGLE_SHOT=1
 		const noWorktree = flags["no-worktree"] || process.env.CI === "true" || process.env.CLAUDE_AUTOPILOT_SINGLE_SHOT === "1";
@@ -967,7 +982,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		const v = flags.verbose;
 		const isParallel = parallel > 1;
 
-		const targetBanner = shipTargetName === "direct-push" ? "" : `  ${A.dim(`target=${shipTargetName}`)}`;
+		const targetBanner = shipTargetName === DEFAULT_SHIP_TARGET ? "" : `  ${A.dim(`target=${shipTargetName}`)}`;
 		console.log(`${A.bold("autopilot")}  ${cycles} cycle(s)${isParallel ? `  ${A.dim("×")}${parallel} parallel` : ""}  ${A.dim("budget")} $${maxBudget.toFixed(2)}${targetBanner}${dryRun ? `  ${A.yellow("[DRY RUN]")}` : ""}`);
 		if (isParallel && v) {
 			console.log(`${A.dim("logs")}  .dev/autopilot-{N}.log`);

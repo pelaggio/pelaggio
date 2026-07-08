@@ -35,7 +35,7 @@ worktree:
   prefix: "myproj-"            # default: `${basename(REPO)}-`
 
 ship:
-  target: direct-push           # default: direct-push
+  target: pull-request          # default: pull-request
                                 # values: direct-push | pull-request | auto-merge-pr
 
 park:                           # overnight park-and-resume on rate-limit
@@ -244,8 +244,13 @@ block are ignored.
 | `pull-request`   | Squash, push branch, `gh pr create`. Stop. No docs, no merge.    |
 | `auto-merge-pr`  | As `pull-request` + `gh pr merge --auto --squash`.               |
 
-Default: `direct-push`. Precedence: `--target` CLI flag > `ship.target` yml > default.
+Default: `pull-request`. Precedence: `--target` CLI flag > `ship.target` yml > default.
 Invalid values fail fast at startup with the list of valid names.
+
+`pull-request` is the default because it keeps a human review gate in the loop.
+`direct-push` and `auto-merge-pr` push to the remote autonomously with no review gate, so
+they are **explicit opt-ins**: whenever either is configured, autopilot emits a loud one-time
+banner at startup naming the target and how to restore the gate (`ship: { target: pull-request }`).
 
 **`direct-push` splits the work at the merge.** In pipeline runs the `ship`
 step's job ends once the branch is squashed, merged into local `main`, and
