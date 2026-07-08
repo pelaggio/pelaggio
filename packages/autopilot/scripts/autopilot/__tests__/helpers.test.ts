@@ -988,7 +988,9 @@ describe("reviewFindingsPreamble (issue #60)", () => {
 
 	it("non-empty input returns a block with the header and the findings", () => {
 		const out = reviewFindingsPreamble("- bug: null deref at foo.ts:12");
-		assert.match(out, /A prior PR review BLOCKED this change/);
+		assert.match(out, /Revision pass/);
+		assert.match(out, /primary task/);
+		assert.match(out, /approved plan is historical context only/);
 		assert.match(out, /### Review findings/);
 		assert.match(out, /null deref at foo\.ts:12/);
 	});

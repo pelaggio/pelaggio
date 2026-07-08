@@ -140,7 +140,7 @@ jobs:
           ITEM_ID: ${{ steps.resolve.outputs.item_id }}
           CI: "true"
         run: |
-          pnpm autopilot --resume "$ITEM_ID" --from implement --no-worktree \
+          pnpm autopilot --resume "$ITEM_ID" --no-worktree \
             --target pull-request --review-findings ".dev/review-findings-$ITEM_ID.md" --verbose
 
       - name: Park on failure

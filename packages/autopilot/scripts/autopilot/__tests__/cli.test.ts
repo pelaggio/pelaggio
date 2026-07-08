@@ -35,6 +35,15 @@ describe("parseCli", () => {
 		assert.equal(intent.flags["review-findings"], "p.md");
 	});
 
+	it("parses resume with review findings without requiring --from", () => {
+		const intent = parseCli(["--resume", "108", "--review-findings", "findings.md"]);
+		assert.equal(intent.kind, "run");
+		if (intent.kind !== "run") return;
+		assert.equal(intent.flags.resume, "108");
+		assert.equal(intent.flags.from, undefined);
+		assert.equal(intent.flags["review-findings"], "findings.md");
+	});
+
 	it("returns stats for `stats`", () => {
 		const intent = parseCli(["stats"]);
 		assert.deepEqual(intent, { kind: "stats", json: false });
