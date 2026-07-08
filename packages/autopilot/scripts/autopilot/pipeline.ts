@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { CONFIG, isPipelineStep, LOG_PATH, MODEL_PROFILES, REPO, REVISE_LOCAL, ROADMAP_GITHUB, ROADMAP_LINEAR, ROADMAP_SOURCE, resolveStepSettings, SHIP_TARGET, STEPS, WORKTREE_PREFIX } from "./config.js";
 import {
 	appendLog as appendLogDefault,
+	buildPlanArgs,
 	canRetryWithinBudget,
 	captureShipState,
 	checkpoint,
@@ -419,10 +420,15 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		if (existingPlan) {
 			log(`plan exists at ${existingPlan} — skipping plan generation`);
 		} else {
+			// Inject the item's requirements into the plan prompt in the harness (#103): a sandboxed
+			// model (Codex) can't run `roadmap get` / `gh issue view` (no network, and the roadmap CLI
+			// dies on tsx-IPC in the sandbox), so it would otherwise plan blind. The harness has an
+			// injected RoadmapSource with network access — fetch here and pass it in.
+			const planArgs = await buildPlanArgs(roadmap, itemId!);
 			const outcome = await runStepWithRetry({
 				name: "plan",
 				stepBudget: resolveStepSettings(CONFIG, profile, "plan").budget,
-				buildPrompt: () => expandSkill("plan", "autopilot"),
+				buildPrompt: () => expandSkill("plan", planArgs),
 				logAttempt: (attempt) => log(attempt === 1 ? "planning..." : "continuing plan (attempt 2)..."),
 				refusedError: "plan refused (model declined the task)",
 				commitLabel: () => "plan",

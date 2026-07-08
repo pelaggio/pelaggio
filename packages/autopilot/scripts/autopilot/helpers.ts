@@ -3,6 +3,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { LOG_PATH, REPO, STEPS, WORKTREE_PREFIX } from "./config.js";
 import { MarkdownRoadmap } from "./roadmap/markdown.js";
+import type { RoadmapSource } from "./roadmap/types.js";
 import type { Mutex, Step, StepResult } from "./types.js";
 
 // ── Skill loading ──────────────────────────────────────────────────────
@@ -180,6 +181,34 @@ export function reviewFindingsPreamble(findings: string): string {
 		"### Review findings",
 		clipped,
 	].join("\n");
+}
+
+/** Generous cap on the injected item body — the spec is more load-bearing than review findings
+ *  (`REVIEW_FINDINGS_MAX`), but a 65 KiB GitHub issue body shouldn't blow the plan prompt. */
+const PLAN_BODY_MAX = 16_000;
+
+/**
+ * Build the `plan` step's skill arguments (#103). Prefixed with `autopilot` (the pipeline-mode
+ * gate) plus the item's requirements fetched in-harness — so a provider whose sandbox can't fetch
+ * them (Codex: no network, roadmap CLI dies on tsx-IPC) plans against the real issue instead of
+ * running `roadmap get` / `gh issue view` itself. Runs for ALL providers (Claude also gets the
+ * block and skips its own fetch); load-bearing for sandboxed ones. Only the github-issues adapter
+ * carries a `body` today; for adapters without one (markdown), `sourceRef` names a locally-readable
+ * file the model can open. `getItem` failure degrades to the bare `autopilot` gate (the model still
+ * recovers the id from the branch name per the skill).
+ */
+export async function buildPlanArgs(roadmap: RoadmapSource, itemId: string): Promise<string> {
+	const item = await roadmap.getItem(itemId).catch(() => null);
+	const lines = ["autopilot"];
+	if (item) {
+		lines.push("", "## Roadmap item context (provided by the harness — do NOT run `roadmap get` / `gh issue view`)", `ID: ${item.id}`, `Title: ${item.title}`);
+		if (item.deps && item.deps !== "—") lines.push(`Depends on: ${item.deps}`);
+		lines.push(`sourceRef: ${item.sourceRef}`);
+		const body = item.body?.trim();
+		if (body) lines.push("", body.length > PLAN_BODY_MAX ? `${body.slice(0, PLAN_BODY_MAX)}\n…(truncated — read \`${item.sourceRef}\` for the full spec)` : body);
+		else lines.push("", "(No body from the adapter — if `sourceRef` names a local file, read it for the full spec.)");
+	}
+	return lines.join("\n");
 }
 
 // ── Refusal & error classification ─────────────────────────────────────

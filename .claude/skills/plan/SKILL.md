@@ -15,9 +15,9 @@ Run `git rev-parse --path-format=absolute --git-common-dir` — the output ends 
 
 Roadmap lookups go through `npx @cdhorne/claude-autopilot roadmap ...`; the CLI dispatches to the configured adapter (markdown / github-issues / linear).
 
-**Target item: `$ARGUMENTS`** — if a value appears above, use it as the ID. Otherwise get the branch from `git branch --show-current` (must not be `main`) and extract the item ID from the branch name.
+**Target item: `$ARGUMENTS`** — if an ID appears in your Arguments, use it. Otherwise get the branch from `git branch --show-current` (must not be `main`) and extract the item ID from the branch name.
 
-1. Run `npx @cdhorne/claude-autopilot roadmap get <ID> --json` to fetch the item. Parse `title`, `deps`, `sourceRef`, `body` (github-issues / linear include the full body/description in the JSON; markdown's `sourceRef` is the roadmap file path — read that file for the full spec).
+1. **Understand the item.** If a `## Roadmap item context` block appears in your Arguments (autopilot mode — the harness provides the item's requirements because a sandboxed provider can't fetch them itself), use THAT block as the spec and do **not** run `roadmap get` or `gh issue view`. If it names a `sourceRef` local file and you need more, read that file. Otherwise (inline / human `/plan`): run `npx @cdhorne/claude-autopilot roadmap get <ID> --json` to fetch `title`, `deps`, `sourceRef` and, for github-issues, `body`; markdown's `sourceRef` is the roadmap file path and linear's is the issue identifier — read the roadmap file / view the issue for the full spec.
 2. Read related `{MAIN_REPO}/docs/plan-*.md` and `{MAIN_REPO}/docs/design-*.md` files if referenced.
 3. Read any source files named as deliverables — confirm they exist and note their current shape.
 4. Find reference implementations for similar features already in the codebase.

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { describe, it } from "node:test";
 import {
+	buildPlanArgs,
 	canRetryWithinBudget,
 	checkpoint,
 	classifyOutcome,
@@ -33,6 +34,7 @@ import {
 	reviewFindingsPreamble,
 	verifyShipLanded,
 } from "../helpers.js";
+import type { RoadmapSource } from "../roadmap/types.js";
 
 function makeFeatRepo(): string {
 	const dir = mkdtempSync(join(tmpdir(), "autopilot-helpers-test-"));
@@ -180,6 +182,41 @@ describe("revertPlanPolish", () => {
 
 	it("returns [] when sinceSha is null", () => {
 		assert.deepEqual(revertPlanPolish(makeFeatRepo(), null), []);
+	});
+});
+
+describe("buildPlanArgs (#103)", () => {
+	const mk = (getItem: RoadmapSource["getItem"]) => ({ getItem }) as unknown as RoadmapSource;
+
+	it("injects title + body + the do-not-fetch gate for an item with a body", async () => {
+		const args = await buildPlanArgs(
+			mk(async () => ({ id: "45", title: "Do the thing", deps: "—", sourceRef: "o/r#45", status: "open", body: "## Requirements\nthe full spec" })),
+			"45",
+		);
+		assert.match(args, /^autopilot/);
+		assert.match(args, /do NOT run `roadmap get`/);
+		assert.match(args, /Title: Do the thing/);
+		assert.match(args, /the full spec/);
+		assert.match(args, /sourceRef: o\/r#45/);
+	});
+
+	it("emits a read-the-sourceRef note when the adapter gives no body (markdown)", async () => {
+		const args = await buildPlanArgs(
+			mk(async () => ({ id: "T-1", title: "x", deps: "—", sourceRef: "docs/roadmap-x.md", status: "open" })),
+			"T-1",
+		);
+		assert.match(args, /sourceRef: docs\/roadmap-x\.md/);
+		assert.match(args, /read it for the full spec/);
+	});
+
+	it("degrades to the bare `autopilot` gate when getItem throws (e.g. no network)", async () => {
+		const args = await buildPlanArgs(
+			mk(async () => {
+				throw new Error("no network");
+			}),
+			"9",
+		);
+		assert.equal(args, "autopilot");
 	});
 });
 

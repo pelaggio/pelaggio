@@ -780,6 +780,58 @@ describe("runPipeline — RoadmapSource injection", () => {
 		assert.equal(result.error, "parked");
 		assert.equal(publishCalls.length, 0, "a parked plan step must not publish (dispatch fires only on success)");
 	});
+
+	it("injects the roadmap item body into the plan prompt (#103)", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const planFile = `${worktree}/docs/plans/plan.md`;
+		let planned = false;
+		const roadmap = makeMockRoadmap({
+			async getItemPlan() {
+				return planned ? planFile : null;
+			},
+			async getItem() {
+				return { id: "TOOL-99", title: "Add the widget", deps: "—", sourceRef: "o/r#99", status: "open", body: "## Requirements\nthe real spec goes here" };
+			},
+			resolvePlanPath: () => planFile,
+			async publishPlan() {
+				planned = true;
+			},
+		});
+		const { runStep, calls } = createMockRunStep(
+			{
+				plan: { ok: true, writes: { "docs/plans/plan.md": "# Plan\nx" } },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				ship: {
+					ok: true,
+					text: "ship-merged: TOOL-99",
+					sideEffect: (cwd) => {
+						execSync("git checkout -q main", { cwd });
+						execSync("git merge -q --no-ff feat/tool-99", { cwd });
+						execSync("git checkout -q feat/tool-99", { cwd });
+					},
+				},
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
+			runStep,
+			roadmap,
+			mainRepo: worktree,
+			listWorktrees: () => [],
+			appendLog: () => {},
+			runShipBookkeeping: noopBookkeeping,
+		});
+
+		assert.equal(result.completed, true);
+		const planPrompt = calls.find((c) => c.step === "plan")?.prompt ?? "";
+		assert.match(planPrompt, /## Roadmap item context/);
+		assert.match(planPrompt, /the real spec goes here/, "the injected issue body must reach the plan prompt");
+		assert.match(planPrompt, /do NOT run `roadmap get`/);
+	});
 });
 
 describe("runPipeline — rate-limit park preserves state", () => {
