@@ -358,6 +358,80 @@ export function parseVerdict(text: string): "APPROVE" | "REVISE" | "RETHINK" {
 
 // ── PR-review merge-gate parsing ───────────────────────────────────────
 
+export interface SecurityDiffSignal {
+	triggered: boolean;
+	reasons: string[];
+}
+
+const SECURITY_REASON_LIMIT = 8;
+
+const SECURITY_PATHS: readonly RegExp[] = [
+	/^\.github\/workflows\//,
+	/^infra\//,
+	/^packages\/server\/src\/(?:auth|config|app)\.ts$/,
+	/^packages\/server\/scripts\//,
+	/^packages\/autopilot\/scripts\/autopilot\/(?:step-runner|codex-provider|helpers|config|pr-review-cli|revise-sweep|notify|worktree-deps)\.ts$/,
+	/^packages\/autopilot\/scripts\/autopilot\/(?:ship|roadmap)\//,
+	/^\.claude\/skills\/(?:pr-review|shakedown|ship|implement)\/SKILL\.md$/,
+	/^\.agents\/skills\/(?:pr-review|shakedown|ship|implement)\/SKILL\.md$/,
+];
+
+const SECURITY_KEYWORDS: readonly [string, RegExp][] = [
+	["CONTROL_PLANE_TOKEN", /\bCONTROL_PLANE_TOKEN\b/],
+	["ANTHROPIC_API_KEY", /\bANTHROPIC_API_KEY\b/],
+	["GH_TOKEN", /\bGH_TOKEN\b/],
+	["prompt injection", /\bprompt\s+injection\b/i],
+	["ignore instructions", /\bignore\s+instructions\b/i],
+	["0.0.0.0", /0\.0\.0\.0/],
+	["127.", /127\./],
+	["::1", /::1/],
+	["auth", /\bauth(?:entication|orization)?\b/i],
+	["token", /\btoken\b/i],
+	["secret", /\bsecret\b/i],
+	["permission", /\bpermissions?\b/i],
+	["host", /\bhost(?:name)?\b/i],
+	["loopback", /\bloopback\b/i],
+	["localhost", /\blocalhost\b/i],
+	["url", /\burl\b/i],
+	["fetch", /\bfetch\b/i],
+	["network", /\bnetwork\b/i],
+	["exec", /\bexec(?:FileSync|Sync)?\b/i],
+	["spawn", /\bspawn(?:Sync)?\b/i],
+	["shell", /\bshell\b/i],
+	["bash", /\bbash\b/i],
+	// No bare "git" keyword: `git diff` output embeds a `diff --git` header for
+	// every changed file, so `/\bgit\b/` would match every non-empty diff and
+	// trigger the (2×-cost) red-team pass on 100% of PRs. The `.github/workflows`
+	// path rule plus `gh`/`workflow`/`exec`/`spawn`/`shell` cover the real surface.
+	["gh", /\bgh\b/],
+	["workflow", /\bworkflow\b/i],
+];
+
+/**
+ * Deterministic switch for the extra adversarial PR-review pass. This is not a
+ * scanner; it only decides whether the diff is security-sensitive enough to
+ * spend a second model session.
+ */
+export function classifySecurityReviewDiff(files: readonly string[], diff: string): SecurityDiffSignal {
+	const reasons: string[] = [];
+	const seen = new Set<string>();
+	const addReason = (reason: string): void => {
+		if (seen.has(reason) || reasons.length >= SECURITY_REASON_LIMIT) return;
+		seen.add(reason);
+		reasons.push(reason);
+	};
+
+	for (const file of files) {
+		if (SECURITY_PATHS.some((re) => re.test(file))) addReason(`path:${file}`);
+	}
+
+	for (const [keyword, re] of SECURITY_KEYWORDS) {
+		if (re.test(diff)) addReason(`keyword:${keyword}`);
+	}
+
+	return { triggered: reasons.length > 0, reasons };
+}
+
 /**
  * Parse the `/pr-review` gate verdict for the CI merge gate. Distinct from
  * `parseVerdict` on purpose: `parseVerdict` keeps an "engaged ⇒ APPROVE"

@@ -21,14 +21,17 @@ review missed.
    report green (secrets are unavailable to forks; forks can't be autopilot PRs).
 3. For a same-repo, non-draft PR the job checks out the head SHA with full history,
    installs deps, and runs `npx @cdhorne/claude-autopilot pr-review --pr <n>`.
-4. The CLI runs one bounded, fresh-session review through the same `runStep`
-   machinery the pipeline uses (step `pr-review`: budget / turns / effort / model are
-   first-class config, see below). The agent's final message is the review; the CLI
-   posts it as a single, idempotently-upserted PR comment and sets the exit code.
+4. The CLI reads the changed file list and diff, then runs one bounded, fresh-session
+   standard review through the same `runStep` machinery the pipeline uses (step
+   `pr-review`: budget / turns / effort / model are first-class config, see below).
+   If the deterministic classifier sees security-sensitive paths or diff keywords, the
+   CLI runs a second fresh `pr-review --red-team` session before deciding the gate.
+   The CLI posts both pass outputs as one idempotently-upserted PR comment and sets the
+   exit code.
 5. **Exit code = gate = check color.** The CLI exits `0` only on an explicit
-   `Verdict: PASS` from a successful run; everything else — `Verdict: BLOCK`, a
-   missing verdict, a refusal, an SDK error, max-turns, or a rate-limit park — exits
-   `1`. The gate **fails closed**: ambiguity blocks the merge.
+   `Verdict: PASS` from every required pass; everything else — `Verdict: BLOCK`, a
+   missing verdict, a refusal, an SDK error, max-turns, a rate-limit park, or inability
+   to inspect the diff — exits `1`. The gate **fails closed**: ambiguity blocks the merge.
 
 ## The fail-closed contract
 
@@ -42,12 +45,14 @@ Two layers enforce it:
   still ships — a merge gate has no such fail-safe: a keyword-less-but-engaged review
   **blocks**.
 
-A transient failure (rate limit, flaky SDK error) therefore shows red. Re-run the
-workflow once the cause clears — the comment is upserted, not duplicated.
+A transient failure (rate limit, flaky SDK error) therefore shows red. If a security
+diff triggers the red-team pass and that pass cannot complete, the whole gate blocks
+even if the standard pass found no issues. Re-run the workflow once the cause clears —
+the comment is upserted, not duplicated.
 
 ## The review itself
 
-One fresh session, structured as three internal phases (see
+The standard review is one fresh session, structured as three internal phases (see
 `.claude/skills/pr-review/SKILL.md`):
 
 - **Find** — read the diff cold; read every changed file in full at head; over-collect
@@ -62,27 +67,32 @@ One fresh session, structured as three internal phases (see
 The review is **read-only by convention** — the CI checkout is ephemeral, so edits would
 never be pushed. The CLI, not the agent, owns comment posting.
 
-### Evidence gate — when to escalate to two-session
+### Adversarial red-team pass
 
-One session keeps the run inside a small, budget-capped envelope (default `pr-review`
-budget `$5`). Precision is the single-session tradeoff: finder and verifier share one
-context. Escalating to a two-session finder→verifier is **evidence-gated** — it is
-deferred until data shows single-session precision inadequate. This is a v1 gate, not a
-deep audit. The protocol below makes that decision *decidable* rather than a gut call.
+Security-sensitive diffs get a second independent pass. The classifier is deterministic
+and conservative: it triggers on security-adjacent paths such as `.github/workflows/**`,
+server auth/config/app files, autopilot step runners, ship/roadmap tooling, and review /
+ship / implement skills; it also triggers on diff text containing terms such as `auth`,
+`token`, `secret`, `host`, `loopback`, `127.`, `localhost`, `fetch`, `exec`, `spawn`,
+`shell`, `workflow`, `prompt injection`, `ANTHROPIC_API_KEY`, `GH_TOKEN`, or
+`CONTROL_PLANE_TOKEN`.
 
-**Default.** Single-session is the v1 gate. It stays until the trigger below fires.
+The red-team mode assumes the change is wrong and tries concrete bypasses and fail-open
+paths: hostname tricks like `127.example.com`, IPv6 loopback, wildcard binds, malformed
+URLs, empty env vars, mixed-case headers, missing tokens, shell/path/cwd injection,
+prompt-injection influence over commands, token exposure, workflow permission broadening,
+fork/draft behavior, and checks that can report green without running. It still blocks
+only on confirmed findings with `file:line` evidence; vague risk does not satisfy the
+gate.
 
-**What "noisy" means.** False-positive **precision**: a clean-run BLOCK
-(`ok=true subtype=success`) that a human then merged with no gate-driven change — i.e.
-the block was wrong. (False *negatives* are a recall problem; the finder→verifier split
-primarily buys **precision**, by giving the verifier a genuinely cold, un-anchored read
-of the candidate findings.)
+If the classifier does not trigger, the PR comment records that the red-team pass was
+not run. If it does trigger, both the standard and red-team sections appear in the single
+gate comment. Either pass can block, and both passes run even if the standard pass has
+already blocked so the revise loop receives all confirmed findings. A triggered run costs
+roughly twice a normal review because it spends a second `pr-review` session using the
+same budget / turns / model profile.
 
-**Trigger (concrete, decidable).** Over a rolling window of **≥15 clean gate runs**
-(`ok=true subtype=success`), escalate if **≥20% of BLOCK verdicts were false positives**,
-*or* if reviewers are repeatedly overriding the gate to merge. Labeling a BLOCK
-false-positive vs. true-positive is a human judgment call — the marker only makes the
-runs **enumerable**; the human labels each one.
+### Evidence marker
 
 **How to aggregate.** The gate job runs on ephemeral GitHub-hosted `ubuntu-latest` with a
 `contents: read` token — it cannot write a log file that survives the runner, and it must
@@ -107,20 +117,9 @@ gh pr list --state all --limit 50 --json number --jq '.[].number' |
   done | grep 'ok=true subtype=success'   # clean runs only — the precision-relevant set
 ```
 
-Then, for the `gate=block` rows in that clean set, label each BLOCK FP/TP by hand and
-compute the rate against the ≥15-run / ≥20% trigger.
-
-**Deferred implementation sketch (mechanical once the trigger fires).** Split the single
-review into two independent `runStep("pr-review", …)` calls in `pr-review-cli.ts`:
-
-- an independent **finder** — over-collects candidate findings and emits them structured;
-- an independent **verifier** — a fresh session that receives those candidates cold,
-  refutes each against the actual code, and whose trailing `Verdict:` is the gate.
-
-This is ~2× the cost and needs a finder→verifier hand-off in the prompt, but adds **no new
-`Step`** — it is the same `pr-review` step key invoked twice. The fail-closed contract is
-unchanged: the verifier session's `ok`/verdict feeds the existing `parseReviewGate`, so a
-crashed / refused / rate-limited verifier still blocks.
+For multi-pass runs, the marker records aggregate `gate`, aggregate `ok`, summed cost /
+turns, and a subtype that identifies the blocking pass (`standard:<subtype>`,
+`red-team:<subtype>`, `multiple`, or `success`).
 
 ## Configuration
 
@@ -250,5 +249,4 @@ second attempt.
 
 ## Follow-ups (not in this gate)
 
-- **Escalate to two-session finder→verifier** once the [Evidence gate](#evidence-gate--when-to-escalate-to-two-session) trigger fires (≥20% false-positive BLOCKs over ≥15 clean runs). The `pr-review-metrics` comment marker makes those runs enumerable; the escalation sketch there turns the flip into a mechanical change.
 - **Notifications** — surface a red gate as a park-for-attention alert (issue #34).

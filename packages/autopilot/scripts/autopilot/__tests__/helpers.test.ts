@@ -9,6 +9,7 @@ import {
 	canRetryWithinBudget,
 	checkpoint,
 	classifyOutcome,
+	classifySecurityReviewDiff,
 	classifyStepError,
 	computeImplementTurns,
 	countPlanFiles,
@@ -791,6 +792,79 @@ describe("parseReviewGate", () => {
 	it("mid-line prose mentioning a verdict does not match (line-anchored)", () => {
 		assert.equal(parseReviewGate("This would let the verdict pass unchallenged.", true), "block");
 		assert.equal(parseReviewGate("Nothing here would make the verdict block the merge.", true), "block");
+	});
+});
+
+describe("classifySecurityReviewDiff", () => {
+	it("triggers for security-sensitive server config paths", () => {
+		const signal = classifySecurityReviewDiff(["packages/server/src/config.ts"], "diff --git a/packages/server/src/config.ts b/packages/server/src/config.ts\n");
+
+		assert.equal(signal.triggered, true);
+		assert.ok(signal.reasons.includes("path:packages/server/src/config.ts"));
+	});
+
+	it("triggers for security keywords in otherwise unlisted files", () => {
+		const signal = classifySecurityReviewDiff(["docs/setup.md"], ["+CONTROL_PLANE_TOKEN is required for loopback access.", "+Reject hosts under 127.0.0.1.example.com."].join("\n"));
+
+		assert.equal(signal.triggered, true);
+		assert.ok(signal.reasons.includes("keyword:CONTROL_PLANE_TOKEN"));
+		assert.ok(signal.reasons.includes("keyword:127."));
+		assert.ok(signal.reasons.includes("keyword:loopback"));
+	});
+
+	it("triggers for the #102 hostname-prefix bypass shape", () => {
+		const signal = classifySecurityReviewDiff(["packages/server/src/config.ts"], ["+function isLoopbackHost(host: string): boolean {", '+\treturn host === "localhost" || host.startsWith("127.");', "+}"].join("\n"));
+
+		assert.equal(signal.triggered, true);
+		assert.ok(signal.reasons.includes("path:packages/server/src/config.ts"));
+		assert.ok(signal.reasons.some((reason) => reason === "keyword:host" || reason === "keyword:loopback" || reason === "keyword:127."));
+	});
+
+	it("triggers for workflow and exec/tool changes", () => {
+		const signal = classifySecurityReviewDiff([".github/workflows/pr-review.yml", "packages/autopilot/scripts/autopilot/helpers.ts"], "+execFileSync('gh', ['workflow', 'run'])\n+spawn('bash', ['-lc', command])");
+
+		assert.equal(signal.triggered, true);
+		assert.ok(signal.reasons.includes("path:.github/workflows/pr-review.yml"));
+		assert.ok(signal.reasons.includes("path:packages/autopilot/scripts/autopilot/helpers.ts"));
+		assert.ok(signal.reasons.includes("keyword:exec"));
+	});
+
+	it("does not trigger for benign docs-only diffs without security keywords", () => {
+		const signal = classifySecurityReviewDiff(["docs/readme.md"], "+Clarify installation examples.\n");
+
+		assert.deepEqual(signal, { triggered: false, reasons: [] });
+	});
+
+	it("does not trigger on the structural `diff --git` header of a benign diff", () => {
+		// The CLI feeds raw `git diff` output, which embeds a `diff --git` header
+		// per file. A bare "git" keyword would match that on every PR and make the
+		// (2×-cost) red-team pass unconditional. This locks the classifier to real
+		// content signal, not the diff format itself.
+		const realDiff = ["diff --git a/docs/readme.md b/docs/readme.md", "index 4918d8b..c560d8a 100644", "--- a/docs/readme.md", "+++ b/docs/readme.md", "@@ -1,2 +1,2 @@", "-Old copy about the product.", "+New copy about the product."].join(
+			"\n",
+		);
+		const signal = classifySecurityReviewDiff(["docs/readme.md"], realDiff);
+
+		assert.deepEqual(signal, { triggered: false, reasons: [] });
+	});
+
+	it("returns deterministic, de-duplicated, capped reasons", () => {
+		const signal = classifySecurityReviewDiff(
+			["packages/server/src/config.ts", "packages/server/src/config.ts", ".github/workflows/review.yml"],
+			["+auth token secret permission host loopback localhost 0.0.0.0 127. ::1 url fetch network exec spawn shell bash gh git workflow", "+CONTROL_PLANE_TOKEN ANTHROPIC_API_KEY GH_TOKEN prompt injection ignore instructions"].join("\n"),
+		);
+
+		assert.equal(signal.triggered, true);
+		assert.deepEqual(signal.reasons, [
+			"path:packages/server/src/config.ts",
+			"path:.github/workflows/review.yml",
+			"keyword:CONTROL_PLANE_TOKEN",
+			"keyword:ANTHROPIC_API_KEY",
+			"keyword:GH_TOKEN",
+			"keyword:prompt injection",
+			"keyword:ignore instructions",
+			"keyword:0.0.0.0",
+		]);
 	});
 });
 

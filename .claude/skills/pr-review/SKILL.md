@@ -37,6 +37,54 @@ You are checked out at the PR head with full history; `origin/main` is the merge
 
 !`cat .claude/skills/_project-context.md 2>/dev/null`
 
+## Mode selection
+
+If the `Arguments:` line contains `--red-team`, run **Red-team mode** below.
+Otherwise run **Standard mode**. In both modes, your final line must be exactly
+`Verdict: PASS` or `Verdict: BLOCK`.
+
+## Red-team mode — independent adversarial pass
+
+This mode is not a style, idiom, or general maintainability review. Assume the PR is
+wrong and actively try to break the changed behavior. The `--security-reasons` argument,
+when present, tells you why the CLI triggered this pass; treat it as a starting point,
+not a limit.
+
+Run this pass independently from any ordinary correctness review:
+
+1. List every changed file. **Read each changed file in full at head**, plus directly
+   relevant callers, tests, and docs needed to prove or refute an exploit path.
+2. Read the diff and build an attack checklist from the actual code and the supplied
+   security reasons.
+3. Try concrete bypass inputs and fail-open paths. For auth/config/network/host parsing,
+   consider DNS-looking loopback prefixes (`127.example.com`), `127.0.0.1.example.com`,
+   bare `127.`, IPv6 loopback, wildcard binds, empty env vars, mixed-case headers,
+   missing tokens, malformed URLs, localhost aliases, and default config fallbacks when
+   relevant.
+4. For exec/tooling changes, look for shell injection, unsafe cwd/path handling,
+   prompt-injection influence over commands, token exposure, and bypasses of worktree
+   isolation.
+5. For workflow/secret changes, look for permission broadening, fork/draft behavior,
+   token scope leaks, and checks that can report green without running.
+6. Report only confirmed blockers with `file:line` references. Drop vague "security
+   sensitive" speculation. If no exploit, bypass, fail-open path, or security regression
+   is confirmed, end with `Verdict: PASS`.
+
+Write the comment body:
+
+- One or two sentences summarizing the attack surface you tested and the overall call.
+- If there are confirmed blockers: list each as **`path:line`** — exploit/fail-open path
+  — the fix.
+- Optional non-blocking notes only when they are concrete and useful.
+- A trailing verdict line, exactly one of:
+  - `Verdict: PASS` — no confirmed blocker survived.
+  - `Verdict: BLOCK` — at least one confirmed security blocker; the merge must not proceed.
+
+## Standard mode
+
+The ordinary correctness-and-quality gate review. Run the three internal phases
+below in a single session; the fail-closed contract at the end applies here too.
+
 ## Review discipline — three internal phases, one session
 
 Run all three phases in this single session. Do **not** ask questions or stop early;
