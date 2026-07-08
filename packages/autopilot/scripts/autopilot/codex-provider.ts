@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CONFIG, REPO, resolveStepSettings } from "./config.js";
+import { CONFIG, REPO, resolveStepSettings, type StepSettings } from "./config.js";
 import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseWaitFlag, resolveParkReset } from "./helpers.js";
 import type { StepProvider } from "./step-runner.js";
 import { composeSystemAppend, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "./step-runner-shared.js";
@@ -33,6 +33,13 @@ const CODEX_COST_PER_OUTPUT_TOKEN = 0.000_008;
 
 export function codexTimeoutMs(turns: number): number {
 	return Math.max(10 * 60_000, Math.min(90 * 60_000, turns * 60_000));
+}
+
+// Prefer the explicit Codex layer, then the legacy model slot when it is already
+// Codex-compatible. Never forward Claude model ids to the Codex CLI.
+export function selectCodexModel(settings: Pick<StepSettings, "model" | "codexModel">): string | undefined {
+	const candidate = settings.codexModel ?? settings.model;
+	return candidate && !candidate.startsWith("claude-") ? candidate : undefined;
 }
 
 function isObject(v: unknown): v is JsonObject {
@@ -342,12 +349,10 @@ function parseJsonlChunk(buffer: string, lines: JsonObject[]): string {
 }
 
 const runStep: StepProvider["runStep"] = async (name, prompt, opts, emit) => {
-	const { budget, turns: baseTurns, model } = resolveStepSettings(CONFIG, opts.profile, name);
+	const settings = resolveStepSettings(CONFIG, opts.profile, name);
+	const { budget, turns: baseTurns } = settings;
 	const turns = opts.maxTurnsOverride ?? baseTurns;
-	// Config `MODEL_PROFILES` pin Claude model ids; Codex 400s on those ("model is not supported").
-	// Pass `-m` only for a Codex-appropriate id, else fall back to Codex's default. Per-step Codex
-	// model selection (a codex-model config layer) is a follow-on.
-	const codexModel = model && !model.startsWith("claude-") ? model : undefined;
+	const codexModel = selectCodexModel(settings);
 	const modelLabel = codexModel ?? "default";
 	emit({ type: "step_header", name, model: modelLabel, budget, maxTurns: turns, prompt: opts.trace ? prompt : undefined });
 

@@ -189,6 +189,51 @@ models:
 - The built-in `standard` and `quick` profiles carry no override blocks, so out
   of the box every profile resolves to the global/default step values.
 
+### Provider and Codex model overrides
+
+`providers` is the sibling sub-block that selects the backend for a step. By
+default every step runs on `claude`; set a step to `codex` to run that step
+through the Codex provider:
+
+```yaml
+models:
+  profiles:
+    deep:
+      providers:
+        implement: codex
+```
+
+When a step runs on Codex, an optional `codex` sub-block selects the Codex model
+for that step:
+
+```yaml
+models:
+  profiles:
+    deep:
+      providers:
+        implement: codex
+      codex:
+        implement: gpt-5-codex
+```
+
+`codex` is sparse like the other per-profile sub-blocks. It only affects steps
+whose provider resolves to `codex`; Claude-provider steps ignore it. Model
+selection for a Codex step is:
+
+1. `models.profiles.<name>.codex.<step>`
+2. `models.profiles.<name>.<step>`, but only when the value is not a
+   `claude-*` id
+3. Codex CLI default
+
+No default Codex model ids ship in this config. Absence means "let the Codex CLI
+choose." A `claude-*` id is never forwarded to Codex, even if it appears in the
+`codex` block.
+
+`codex` validates like the other sparse sub-blocks: values must be strings, a
+non-map block fails at startup, and wrong value types report the dotted key (for
+example `models.profiles.deep.codex.implement`). Unknown step keys inside the
+block are ignored.
+
 ## Ship target
 
 `ship.target` selects how `/ship` lands the branch. Three modes:

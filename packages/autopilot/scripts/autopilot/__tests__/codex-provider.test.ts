@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
-import { buildCodexStepResult, codexTimeoutMs } from "../codex-provider.js";
+import { buildCodexStepResult, codexTimeoutMs, selectCodexModel } from "../codex-provider.js";
 import { EDIT_LOOP_THRESHOLD } from "../step-runner-shared.js";
 
 function fixtureEvents(name: string): Record<string, unknown>[] {
@@ -147,6 +147,32 @@ describe("buildCodexStepResult", () => {
 		assert.equal(out.result.text, "pick-item: 80");
 		assert.match(out.result.fullText, /intermediate/);
 		assert.match(out.result.fullText, /pick-item: 80/);
+	});
+});
+
+describe("selectCodexModel", () => {
+	it("returns an explicitly configured codex model", () => {
+		assert.equal(selectCodexModel({ model: undefined, codexModel: "gpt-5-codex" }), "gpt-5-codex");
+	});
+
+	it("lets the codex layer win over a claude model slot", () => {
+		assert.equal(selectCodexModel({ model: "claude-opus-4-8", codexModel: "gpt-5-codex" }), "gpt-5-codex");
+	});
+
+	it("drops a claude model when no codex layer is configured", () => {
+		assert.equal(selectCodexModel({ model: "claude-opus-4-8", codexModel: undefined }), undefined);
+	});
+
+	it("returns undefined when neither layer is configured", () => {
+		assert.equal(selectCodexModel({ model: undefined, codexModel: undefined }), undefined);
+	});
+
+	it("preserves the legacy non-claude model fallback", () => {
+		assert.equal(selectCodexModel({ model: "gpt-5-codex", codexModel: undefined }), "gpt-5-codex");
+	});
+
+	it("drops a claude model configured in the codex layer", () => {
+		assert.equal(selectCodexModel({ model: "gpt-5-codex", codexModel: "claude-opus-4-8" }), undefined);
 	});
 });
 
