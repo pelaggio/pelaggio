@@ -742,6 +742,44 @@ describe("runPipeline — RoadmapSource injection", () => {
 		assert.equal(publishCalls.length, 1, "harness publishes the plan exactly once (not the model)");
 		assert.ok(publishCalls[0].body.includes("# Plan"), `expected the written plan body; got ${JSON.stringify(publishCalls[0])}`);
 	});
+
+	it("does NOT publish when the plan step parks (#98 dispatch gate)", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const publishCalls: Array<{ body: string; id: string }> = [];
+		const roadmap = makeMockRoadmap({
+			async getItemPlan() {
+				return null;
+			},
+			resolvePlanPath: () => `${worktree}/docs/plans/plan.md`,
+			async publishPlan(body, ctx) {
+				publishCalls.push({ body, id: ctx.id });
+			},
+		});
+		const { runStep } = createMockRunStep(
+			{
+				plan: {
+					ok: false,
+					subtype: "error_rate_limit",
+					writes: { "docs/plans/plan.md": "# Plan\npartial" },
+					park: { parked: true, limitType: "5h", resetsAt: Date.now() + 3_600_000 },
+				},
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
+			runStep,
+			roadmap,
+			mainRepo: worktree,
+			listWorktrees: () => [],
+			appendLog: () => {},
+			runShipBookkeeping: noopBookkeeping,
+		});
+
+		assert.equal(result.error, "parked");
+		assert.equal(publishCalls.length, 0, "a parked plan step must not publish (dispatch fires only on success)");
+	});
 });
 
 describe("runPipeline — rate-limit park preserves state", () => {

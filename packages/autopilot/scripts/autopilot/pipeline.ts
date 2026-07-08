@@ -431,11 +431,13 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			// Harness owns the plan's effects (#98) so `plan` runs on a provider whose sandbox can't
 			// commit or reach the network (Codex): the model wrote the plan file and we committed it
 			// via `commitLabel` above; now publish it in-process. Best-effort + idempotent
-			// (`publishPlan` upserts) — the plan is committed locally and recoverable, so a publish
-			// failure logs and continues. Reached only on a successful, non-parked step (park/fail
-			// returned terminal above).
+			// (`publishPlan` upserts). Guarded by `!dryRun` — dry-run must stay side-effect-free (the
+			// model never ran, so the file may be stale from a prior real cycle). Reached only on a
+			// successful, non-parked step (park/fail returned terminal above); on failure it logs and
+			// continues — the committed file is still resolvable via `resolvePlanPath` / the
+			// `.dev/plans/` fallback the implement prompt points at.
 			const planFile = roadmap.resolvePlanPath({ id: itemId!, worktree: worktree! });
-			if (existsSync(planFile)) {
+			if (!opts.dryRun && existsSync(planFile)) {
 				try {
 					await roadmap.publishPlan(readFileSync(planFile, "utf-8"), { id: itemId!, worktree: worktree! });
 					log("plan published");

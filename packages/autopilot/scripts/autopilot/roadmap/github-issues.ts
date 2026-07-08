@@ -128,7 +128,9 @@ export class GitHubIssuesRoadmap implements RoadmapSource {
 		const raw = this.runGh(["issue", "view", id, "--repo", this.ghRepo, "--json", "comments"]);
 		const { comments } = parseGhJson<GhIssueComments>(raw, (v) => isPlainObject(v) && Array.isArray((v as { comments?: unknown }).comments));
 		const match = [...comments].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).find((c) => c.body.startsWith(PLAN_MARKER));
-		return match?.url.match(/#issuecomment-(\d+)/)?.[1] ?? null;
+		// `?.url?.` guards a marker comment with no url; an unparseable url → null → publishPlan posts
+		// a new comment (real gh always emits a parseable `#issuecomment-<id>` url, so benign).
+		return match?.url?.match(/#issuecomment-(\d+)/)?.[1] ?? null;
 	}
 
 	async createItem(opts: CreateItemOpts): Promise<RoadmapItem> {
