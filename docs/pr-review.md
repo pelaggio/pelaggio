@@ -173,10 +173,19 @@ autonomous recipe needs.
 ## Closing the loop on BLOCK (issue #60 / #76)
 
 A red `review` gate no longer just parks forever — it triggers **one** automated revision that
-re-implements from the findings and re-pushes so the gate re-runs. There are **two** paths that do
-this, sharing the same seam (`--resume <id> --from implement --review-findings <path>`), the same
-one-pass bound (the `autopilot:revised` PR label), and the same handoff marker
-(`<!-- autopilot-revise-parked -->`):
+re-implements from the findings and re-pushes so the gate re-runs. The direct human/external entry
+point is:
+
+```bash
+pnpm autopilot --resume <id> --review-findings path/to/findings.md
+```
+
+When `--review-findings` is present, `--resume` defaults to the `implement` step so the revision
+cannot auto-detect a later restart point and skip the findings. An explicit valid `--from` still wins
+for advanced recovery.
+
+There are **two** automated paths that use this same seam, the same one-pass bound (the
+`autopilot:revised` PR label), and the same handoff marker (`<!-- autopilot-revise-parked -->`):
 
 | Path | Runs on | Funded by | Trigger | Status |
 |---|---|---|---|---|
@@ -203,10 +212,10 @@ run is `roadmap.source: github-issues` + a PR ship target + pure auto-pick mode 
   (`claimRevision`). Labeled-still-red PRs are filtered out of the candidate set and get one
   idempotent human-handoff comment instead. The label doubles as a manual kill switch and its
   absence gates the revise, exactly as in CI.
-- **Reuses the resume plumbing** — each revision runs `runPipeline` with `startFrom: "implement"`
-  and a `--review-findings` file fetched from the PR-review comment, the same in-process re-entry the
-  park/auto-resume loop uses. So parking, notifications, cost accounting, and the ship target all
-  apply for free. Revisions don't consume `--cycles` but do count toward `--budget`.
+- **Reuses the resume plumbing** — each revision runs with a `--review-findings` file fetched from
+  the PR-review comment. Findings imply `startFrom: "implement"` unless the caller explicitly passes
+  `--from`, so parking, notifications, cost accounting, and the ship target all apply for free.
+  Revisions don't consume `--cycles` but do count toward `--budget`.
 - **Findings survive a park** — the findings file is written under `.dev/` (gitignored). If a revision
   parks and later auto-resumes, `resumeOne` re-injects the on-disk findings so the resumed implement
   still fixes the specific blockers.
@@ -233,11 +242,12 @@ triggers on the review workflow's `workflow_run: completed` with `conclusion == 
   the loop repo-wide (the workflow's job `if:` checks `vars.AUTOPILOT_AUTO_REVISE != 'false'`).
 - **The revision seam** — the workflow writes the pr-review findings comment to
   `.dev/review-findings-<id>.md` and runs
-  `autopilot --resume <id> --from implement --no-worktree --target pull-request --review-findings <path>`.
+  `autopilot --resume <id> --no-worktree --target pull-request --review-findings <path>`.
   `--review-findings` is a **resume-only** flag: it reads the file best-effort and injects the findings
-  into the implement step as revision input (mirroring the plan-shakedown feedback injection). An
-  absent/unreadable file never crashes the resume. The `pull-request` ship is idempotent — it skips
-  `gh pr create` when a PR is already open and just pushes to the existing branch.
+  into the implement step as revision input. With no explicit `--from`, it routes the resume to
+  `implement`; an absent/unreadable file never crashes the resume. The `pull-request` ship is
+  idempotent — it skips `gh pr create` when a PR is already open and just pushes to the existing
+  branch.
 - **PAT push is load-bearing** — commits pushed with the default `GITHUB_TOKEN` do **not** trigger
   `pull_request` workflows (GitHub anti-recursion). The re-review depends on a `synchronize` (push)
   event, so the workflow's `actions/checkout` uses `token: ${{ secrets.GH_TOKEN }}` (a PAT). Without

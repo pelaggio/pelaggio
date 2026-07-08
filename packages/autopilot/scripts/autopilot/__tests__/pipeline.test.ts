@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, before, describe, it, mock } from "node:test";
 import { WORKTREE_PREFIX } from "../config.js";
@@ -112,6 +112,71 @@ describe("runPipeline — happy path", () => {
 		assert.ok(implementPrompt.includes(worktree), `expected implement prompt to mention worktree path ${worktree}; got: ${implementPrompt.slice(0, 400)}`);
 		assert.ok(implementPrompt.includes("project-relative"), `expected implement prompt to include resolution rule ("project-relative"); got: ${implementPrompt.slice(0, 400)}`);
 		assert.ok(implementPrompt.includes("use that absolute form"), `expected implement prompt to include "use that absolute form"; got: ${implementPrompt.slice(0, 400)}`);
+	});
+});
+
+describe("runPipeline — review findings revision prompt", () => {
+	it("treats review findings as the primary implement task", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const findingsPath = join(worktree, "findings.md");
+		writeFileSync(findingsPath, "- blocker: fix src/failing.ts before merge\n");
+		const { runStep, calls } = createMockRunStep(
+			{
+				implement: { ok: false, subtype: "blocked", text: "blocked: stop after prompt capture" },
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline(
+			{ ...baseOpts(worktree), startFrom: "implement" },
+			parkSignal,
+			{ ...baseFlags, "review-findings": findingsPath },
+			{ runStep, mainRepo: worktree, listWorktrees: () => [], appendLog: () => {}, roadmap: makeMockRoadmap() },
+		);
+
+		assert.equal(result.completed, false);
+		const implementPrompt = calls.find((c) => c.step === "implement")?.prompt ?? "";
+		assert.match(implementPrompt, /Revision pass/);
+		assert.match(implementPrompt, /primary task/);
+		assert.match(implementPrompt, /fix src\/failing\.ts/);
+		assert.match(implementPrompt, /Plan context/);
+		assert.match(implementPrompt, /historical context/);
+		assert.match(implementPrompt, /revise the already-implemented branch/);
+		assert.ok(implementPrompt.includes(worktree), `expected implement prompt to mention worktree path ${worktree}; got: ${implementPrompt.slice(0, 400)}`);
+		assert.ok(implementPrompt.includes("project-relative") && implementPrompt.includes("use that absolute form"), `expected implement prompt to carry worktree path rules; got: ${implementPrompt.slice(0, 400)}`);
+	});
+
+	it("keeps revision-first framing on an implement retry", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const findingsPath = join(worktree, "findings.md");
+		writeFileSync(findingsPath, "- blocker: retry must still fix review findings\n");
+		const { runStep, calls } = createMockRunStep(
+			{
+				implement: [
+					{ ok: false, subtype: "error_max_turns", writes: { "attempt-1.txt": "x" } },
+					{ ok: false, subtype: "blocked", text: "blocked on retry" },
+				],
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline(
+			{ ...baseOpts(worktree), startFrom: "implement" },
+			parkSignal,
+			{ ...baseFlags, "review-findings": findingsPath },
+			{ runStep, mainRepo: worktree, listWorktrees: () => [], appendLog: () => {}, roadmap: makeMockRoadmap() },
+		);
+
+		assert.equal(result.completed, false);
+		const implementCalls = calls.filter((c) => c.step === "implement");
+		assert.equal(implementCalls.length, 2);
+		const continuePrompt = implementCalls[1]?.prompt ?? "";
+		assert.match(continuePrompt, /Continue the revision/);
+		assert.match(continuePrompt, /Revision pass/);
+		assert.match(continuePrompt, /retry must still fix review findings/);
+		assert.match(continuePrompt, /historical context/);
 	});
 });
 
@@ -1331,6 +1396,46 @@ describe("runPipeline — SIGINT cancellation", () => {
 		assert.equal(result.error, "aborted");
 		assert.ok(elapsed < 2000, `expected abort to return well under the 2s grace window; got ${elapsed}ms`);
 		assert.equal(calls[0].step, "plan");
+	});
+});
+
+describe("runOrchestrator — resume review findings routing", () => {
+	it("defaults resume with review findings to implement when --from is absent", async () => {
+		const { runPipeline: mockRun, calls } = createMockRunPipeline({ default: { completed: true, cost: 0 } });
+		const worktree = "/tmp/autopilot-resume-review-findings";
+
+		const result = await runOrchestrator(
+			{ ...baseFlags, resume: "108", "review-findings": "findings.md" },
+			{
+				runPipeline: mockRun,
+				resolveWorktree: () => worktree,
+				detectResumeStep: () => "ship",
+			},
+		);
+
+		assert.equal(result.exitCode, 0);
+		assert.equal(calls.length, 1);
+		assert.equal(calls[0].opts.startFrom, "implement");
+		assert.equal(calls[0].flags["review-findings"], "findings.md");
+	});
+
+	it("honors explicit --from even when review findings are present", async () => {
+		const { runPipeline: mockRun, calls } = createMockRunPipeline({ default: { completed: true, cost: 0 } });
+		const worktree = "/tmp/autopilot-resume-review-findings";
+
+		const result = await runOrchestrator(
+			{ ...baseFlags, resume: "108", from: "shakedown-code", "review-findings": "findings.md" },
+			{
+				runPipeline: mockRun,
+				resolveWorktree: () => worktree,
+				detectResumeStep: () => "ship",
+			},
+		);
+
+		assert.equal(result.exitCode, 0);
+		assert.equal(calls.length, 1);
+		assert.equal(calls[0].opts.startFrom, "shakedown-code");
+		assert.equal(calls[0].flags["review-findings"], "findings.md");
 	});
 });
 

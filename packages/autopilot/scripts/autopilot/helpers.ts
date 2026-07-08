@@ -172,10 +172,11 @@ export function reviewFindingsPreamble(findings: string): string {
 	if (!body) return "";
 	const clipped = body.length > REVIEW_FINDINGS_MAX ? `${body.slice(0, REVIEW_FINDINGS_MAX)}\n...(truncated)` : body;
 	return [
-		"## A prior PR review BLOCKED this change — fix these findings",
-		"An automated PR-review gate blocked the merge. The plan below is ALREADY implemented on this",
-		"branch. Your job is to FIX the specific blocking issues the review found by editing the code —",
-		"not to re-implement from scratch. Address every blocking finding, then run the rubric",
+		"## Revision pass — fix the review findings",
+		"A prior PR review BLOCKED this change. Treat these findings as the primary task.",
+		"Inspect the findings first, identify the named files, and edit code/docs to resolve every",
+		"blocking issue. The approved plan is historical context only; it must not override the review",
+		"findings or turn this into a plan execution pass. After fixing the findings, run the rubric",
 		"verification before finishing.",
 		"",
 		"### Review findings",

@@ -513,50 +513,74 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			}
 		}
 
-		const implementPrompt =
-			profile === "quick"
-				? `${worktreeHint}\n\nThis is a small-scope item (bug fix or scope S). Implement it directly — no formal plan needed. Read the roadmap entry for ${itemId} to understand the requirements. Edit the target files the roadmap names; do NOT create or edit a plan file.`
-				: [
-						worktreeHint,
-						...(reviewNote ? ["", reviewNote] : []),
-						"",
-						verdict === "APPROVE" ? "Plan approved." : `Shakedown requested revisions:\n${shakedownPlanText.slice(0, 2000)}${shakedownPlanText.length > 2000 ? "\n...(truncated)" : ""}\nAddress the feedback, then implement.`,
-						"",
-						"## Plan",
-						planRef,
-						"",
-						"## CRITICAL — execute the plan, do not polish it",
-						"The plan file is your **reference only**; it is already approved and locked. Your deliverables are the **target files the plan names** (look for a `Files to change` table or file paths under headings). Do NOT edit the plan file itself to refine wording or add detail — that is not progress, it is plan-polishing and it will fail the cycle.",
-						"Before finishing, confirm `git diff --name-only main...HEAD` lists target files, not only `docs/plans/*`.",
-						"",
-						"## Strategy — work incrementally",
-						"1. Read the full plan first. Identify the target files and the implementation order.",
-						"2. Implement one logical chunk at a time (e.g., one target file, one new function, one section). For doc-only items the 'chunk' is a specific file or section edit.",
-						"3. After each chunk, run the verification commands from `.claude/skills/_rubric.md`'s Verification section. Fix errors before moving on.",
-						"4. If the same error persists after 3 fix attempts, commit what works, skip the problematic piece, and note it.",
-						"5. Run all verification commands from the rubric before finishing.",
-						"6. Do NOT implement all files first and verify at the end — that causes cascading errors.",
-					].join("\n");
+		const buildRevisionPrompt = (continued: boolean): string =>
+			[
+				worktreeHint,
+				...(continued ? ["", "The previous implementation session ran out of turns. Code has been committed to disk. Continue the revision from the current worktree state."] : []),
+				"",
+				reviewNote,
+				"",
+				"## Plan context",
+				planRef,
+				"The plan is historical context for the branch. Use it to understand intended scope, but do not let it override the review findings.",
+				"",
+				"## CRITICAL — revise the already-implemented branch",
+				"Do not no-op because the approved plan appears complete. The deliverable is a branch that resolves the review findings.",
+				"Do NOT edit the plan file itself to refine wording or add detail. Edit the target code/docs named by the findings and any directly related files needed for a correct fix.",
+				"Before finishing, confirm `git diff --name-only main...HEAD` lists target files, not only `docs/plans/*`.",
+				"",
+				"## Verification strategy",
+				"1. Read the review findings first and identify every blocking item.",
+				"2. Inspect the named files and related code before editing.",
+				"3. Implement one logical fix at a time, then run the verification commands from `.claude/skills/_rubric.md`'s Verification section.",
+				"4. If the same error persists after 3 fix attempts, commit what works, skip the problematic piece, and note it.",
+				"5. Run all verification commands from the rubric before finishing.",
+			].join("\n");
 
-		const continuePrompt = [
-			worktreeHint,
-			...(reviewNote ? ["", reviewNote] : []),
-			"",
-			"The previous implementation session ran out of turns. Code has been committed to disk.",
-			"",
-			"## Plan",
-			planRef,
-			"",
-			"## CRITICAL — execute the plan, do not polish it",
-			"The plan file is your **reference only**. Your deliverables are the **target files the plan names**. Do NOT edit the plan file itself to refine wording — that is not progress. Before finishing, confirm `git diff --name-only main...HEAD` lists target files, not only `docs/plans/*`.",
-			"",
-			"## Instructions",
-			"1. Run the verification commands from `.claude/skills/_rubric.md`'s Verification section to see the current state.",
-			"2. Read the plan and compare against what's already implemented.",
-			"3. Identify what's missing or broken and finish the remaining work.",
-			"4. Follow the same incremental strategy — one chunk at a time, verify between.",
-			"5. Run all verification commands from the rubric before finishing.",
-		].join("\n");
+		const buildPlanPrompt = (continued: boolean): string => {
+			if (profile === "quick") {
+				const quickBase = `${worktreeHint}\n\nThis is a small-scope item (bug fix or scope S). Implement it directly — no formal plan needed. Read the roadmap entry for ${itemId} to understand the requirements. Edit the target files the roadmap names; do NOT create or edit a plan file.`;
+				return continued
+					? `${worktreeHint}\n\nThe previous implementation session ran out of turns. Code has been committed to disk.\n\nContinue the small-scope implementation from the current worktree state. Do NOT create or edit a plan file. Run all verification commands from the rubric before finishing.`
+					: quickBase;
+			}
+			return [
+				worktreeHint,
+				...(continued ? ["", "The previous implementation session ran out of turns. Code has been committed to disk."] : []),
+				"",
+				continued ? "" : verdict === "APPROVE" ? "Plan approved." : `Shakedown requested revisions:\n${shakedownPlanText.slice(0, 2000)}${shakedownPlanText.length > 2000 ? "\n...(truncated)" : ""}\nAddress the feedback, then implement.`,
+				"",
+				"## Plan",
+				planRef,
+				"",
+				"## CRITICAL — execute the plan, do not polish it",
+				continued
+					? "The plan file is your **reference only**. Your deliverables are the **target files the plan names**. Do NOT edit the plan file itself to refine wording — that is not progress. Before finishing, confirm `git diff --name-only main...HEAD` lists target files, not only `docs/plans/*`."
+					: "The plan file is your **reference only**; it is already approved and locked. Your deliverables are the **target files the plan names** (look for a `Files to change` table or file paths under headings). Do NOT edit the plan file itself to refine wording or add detail — that is not progress, it is plan-polishing and it will fail the cycle.",
+				...(continued ? [] : ["Before finishing, confirm `git diff --name-only main...HEAD` lists target files, not only `docs/plans/*`."]),
+				"",
+				continued ? "## Instructions" : "## Strategy — work incrementally",
+				...(continued
+					? [
+							"1. Run the verification commands from `.claude/skills/_rubric.md`'s Verification section to see the current state.",
+							"2. Read the plan and compare against what's already implemented.",
+							"3. Identify what's missing or broken and finish the remaining work.",
+							"4. Follow the same incremental strategy — one chunk at a time, verify between.",
+							"5. Run all verification commands from the rubric before finishing.",
+						]
+					: [
+							"1. Read the full plan first. Identify the target files and the implementation order.",
+							"2. Implement one logical chunk at a time (e.g., one target file, one new function, one section). For doc-only items the 'chunk' is a specific file or section edit.",
+							"3. After each chunk, run the verification commands from `.claude/skills/_rubric.md`'s Verification section. Fix errors before moving on.",
+							"4. If the same error persists after 3 fix attempts, commit what works, skip the problematic piece, and note it.",
+							"5. Run all verification commands from the rubric before finishing.",
+							"6. Do NOT implement all files first and verify at the end — that causes cascading errors.",
+						]),
+			].join("\n");
+		};
+
+		const implementPrompt = reviewNote ? buildRevisionPrompt(false) : buildPlanPrompt(false);
+		const continuePrompt = reviewNote ? buildRevisionPrompt(true) : buildPlanPrompt(true);
 
 		const outcome = await runStepWithRetry({
 			name: "implement",
@@ -942,6 +966,9 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				}
 				startFrom = flags.from;
 				console.log(`${A.bold("resume")} ${id} from ${A.bold(startFrom)} ${A.dim("(--from override)")}`);
+			} else if (flags["review-findings"] !== undefined) {
+				startFrom = "implement";
+				console.log(`${A.bold("resume")} ${id} from ${A.bold(startFrom)} ${A.dim("(--review-findings)")}`);
 			} else {
 				startFrom = _detectResumeStep(id, worktree);
 				console.log(`${A.bold("resume")} ${id} from ${A.bold(startFrom)}`);
@@ -1192,7 +1219,6 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			// round of the loop, so the resume-worktree/log/detect wiring lives in one place.
 			const resumeOne = async (id: string, i: number): Promise<CycleResult> => {
 				const wt = noWorktree ? REPO : _resolveWorktree(id);
-				const sf = _detectResumeStep(id, wt);
 				const st: CycleStatus = { itemId: id, status: "running", cost: 0 };
 				liveStatus.cycles.push(st);
 				if (v) liveStatus.render();
@@ -1201,16 +1227,17 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					resumeLogPath = resolve(REPO, ".dev", `autopilot-resume-${id.toLowerCase()}.log`);
 					appendFileSync(resumeLogPath, `${"=".repeat(60)}\nresume ${id} — ${new Date().toISOString()}\n${"=".repeat(60)}\n`);
 				}
-				// Findings survival across park→auto-resume (issue #76): a parked *revision* loses its
-				// --review-findings flag here (resumeOne derives its step from detectResumeStep and
-				// passes the raw flags). If the sweep-written findings file still exists on disk,
-				// re-inject it so the resumed implement still fixes the specific blockers. Inert for
-				// non-revision items — no findings file is present, so `flags` passes through unchanged.
+				// Findings survival across park→auto-resume (issue #76): if the sweep-written
+				// findings file still exists on disk, re-inject it before choosing the restart step so
+				// the resumed item routes through implement and still fixes the specific blockers.
+				// Inert for non-revision items — no findings file is present, so `flags` passes
+				// through unchanged.
 				let resumeFlags = flags;
 				if (!flags["review-findings"]) {
 					const fp = reviseFindingsPath(REPO, id);
 					if (existsSync(fp)) resumeFlags = { ...flags, "review-findings": fp };
 				}
+				const sf = resumeFlags["review-findings"] ? "implement" : _detectResumeStep(id, wt);
 				const r = await _runPipeline(
 					{
 						itemId: id,
