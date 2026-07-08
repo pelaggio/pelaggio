@@ -209,7 +209,7 @@ export class GitHubIssuesRoadmap implements RoadmapSource {
 		const n = await this.resolveIssueNumber(ref);
 		if (!n) return null;
 
-		const local = this.findPlanFile(n);
+		const local = (ref.worktree ? this.findPlanFile(n, ref.worktree) : null) ?? this.findPlanFile(n, this.repo);
 		if (local) return local;
 
 		const raw = this.runGh(["issue", "view", n, "--repo", this.ghRepo, "--json", "comments"]);
@@ -245,8 +245,8 @@ export class GitHubIssuesRoadmap implements RoadmapSource {
 		return null;
 	}
 
-	private findPlanFile(n: string): string | null {
-		const dirs = [resolve(this.repo, "docs", "plans"), resolve(this.repo, ".dev", "plans")];
+	private findPlanFile(n: string, root: string): string | null {
+		const dirs = [resolve(root, "docs", "plans"), resolve(root, ".dev", "plans")];
 		const prefix = `issue-${n}-`;
 		for (const dir of dirs) {
 			const exact = resolve(dir, `${n}.md`);

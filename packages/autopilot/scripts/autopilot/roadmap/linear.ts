@@ -218,7 +218,7 @@ export class LinearRoadmap implements RoadmapSource {
 		const id = await this.resolveIdentifier(ref);
 		if (!id) return null;
 
-		const local = this.findPlanFile(id);
+		const local = (ref.worktree ? this.findPlanFile(id, ref.worktree) : null) ?? this.findPlanFile(id, this.repo);
 		if (local) return local;
 
 		const api = await this.api();
@@ -252,9 +252,9 @@ export class LinearRoadmap implements RoadmapSource {
 		return null;
 	}
 
-	private findPlanFile(id: string): string | null {
+	private findPlanFile(id: string, root: string): string | null {
 		const lower = id.toLowerCase();
-		const dirs = [resolve(this.repo, "docs", "plans"), resolve(this.repo, ".dev", "plans")];
+		const dirs = [resolve(root, "docs", "plans"), resolve(root, ".dev", "plans")];
 		const prefix = `${lower}-`;
 		for (const dir of dirs) {
 			const exact = resolve(dir, `${lower}.md`);

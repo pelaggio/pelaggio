@@ -229,6 +229,19 @@ describe("GitHubIssuesRoadmap.getItemPlan", () => {
 		assert.equal(calls.length, 0);
 	});
 
+	it("prefers the supplied worktree plan over a repo-local stale plan without any gh call", async () => {
+		const repo = seedRepo();
+		const worktree = seedRepo();
+		seedFile(repo, ".dev/plans/42.md", "OLD");
+		seedFile(worktree, ".dev/plans/42.md", "NEW");
+		const { run, calls } = makeStub({});
+		const r = mk({ repo, ghRun: run });
+		const path = await r.getItemPlan({ id: "42", worktree });
+		assert.equal(path, resolve(worktree, ".dev", "plans", "42.md"));
+		assert.equal(readFileSync(path!, "utf-8"), "NEW");
+		assert.equal(calls.length, 0);
+	});
+
 	it("reads issue comment when no local file, writes .dev/plans/<n>.md, strips marker", async () => {
 		const repo = seedRepo();
 		const planBody = "# Plan for 42\n\nSteps go here.\n";

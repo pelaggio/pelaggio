@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, before, describe, it, mock } from "node:test";
 import { WORKTREE_PREFIX } from "../config.js";
@@ -710,6 +710,100 @@ describe("runPipeline — pre-ship state capture failure", () => {
 });
 
 describe("runPipeline — RoadmapSource injection", () => {
+	it("runs plan even when getItemPlan would return a stale upstream-materialized plan", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const localPlan = join(worktree, ".dev", "plans", "TOOL-99.md");
+		const stalePlan = join(worktree, ".dev", "stale-plan.md");
+		mkdirSync(join(worktree, ".dev"), { recursive: true });
+		writeFileSync(stalePlan, "# stale\n");
+		const roadmap = makeMockRoadmap({
+			async getItemPlan() {
+				return stalePlan;
+			},
+			resolvePlanPath: () => localPlan,
+		});
+		const { runStep, calls } = createMockRunStep(
+			{
+				plan: { ok: true, writes: { ".dev/plans/TOOL-99.md": "# fresh\n" } },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				ship: {
+					ok: true,
+					text: "ship-merged: TOOL-99",
+					sideEffect: (cwd) => {
+						execSync("git checkout -q main", { cwd });
+						execSync("git merge -q --no-ff feat/tool-99", { cwd });
+						execSync("git checkout -q feat/tool-99", { cwd });
+					},
+				},
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
+			runStep,
+			roadmap,
+			mainRepo: worktree,
+			listWorktrees: () => [],
+			appendLog: () => {},
+			runShipBookkeeping: noopBookkeeping,
+		});
+
+		assert.equal(result.completed, true);
+		assert.ok(
+			calls.some((c) => c.step === "plan"),
+			`expected plan step to run; got ${calls.map((c) => c.step).join(",")}`,
+		);
+	});
+
+	it("skips plan when the current worktree already has the resolved local plan", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const localPlan = join(worktree, ".dev", "plans", "TOOL-99.md");
+		mkdirSync(join(worktree, ".dev", "plans"), { recursive: true });
+		writeFileSync(localPlan, "# existing local plan\n");
+		const roadmap = makeMockRoadmap({
+			async getItemPlan() {
+				return null;
+			},
+			resolvePlanPath: () => localPlan,
+		});
+		const { runStep, calls } = createMockRunStep(
+			{
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				ship: {
+					ok: true,
+					text: "ship-merged: TOOL-99",
+					sideEffect: (cwd) => {
+						execSync("git checkout -q main", { cwd });
+						execSync("git merge -q --no-ff feat/tool-99", { cwd });
+						execSync("git checkout -q feat/tool-99", { cwd });
+					},
+				},
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
+			runStep,
+			roadmap,
+			mainRepo: worktree,
+			listWorktrees: () => [],
+			appendLog: () => {},
+			runShipBookkeeping: noopBookkeeping,
+		});
+
+		assert.equal(result.completed, true);
+		assert.deepEqual(
+			calls.map((c) => c.step),
+			["shakedown-plan", "implement", "shakedown-code", "ship"],
+		);
+	});
+
 	it("calls the injected roadmap.getItemPlan({ worktree }) and flows its result into implement prompt", async () => {
 		const worktree = makeTempGitRepo();
 		const parkSignal = makeParkSignal();
