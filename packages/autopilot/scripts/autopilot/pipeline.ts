@@ -6,6 +6,7 @@ import {
 	canRetryWithinBudget,
 	captureShipState,
 	checkpoint,
+	classifyOutcome,
 	computeImplementTurns,
 	createMutex,
 	detectResumeStep,
@@ -38,7 +39,10 @@ import { type CycleResult, type CycleStatus, type Flags, type ParkSignal, type P
 
 // ── Pipeline ───────────────────────────────────────────────────────────
 
-export type RunStepFn = typeof runStepDefault;
+// Re-export the single-sourced runner signature (canonical in step-runner.ts) so
+// `mocks.ts`'s `import type { RunStepFn } from "../pipeline.js"` keeps resolving —
+// same public name, one definition, no pipeline↔step-runner type cycle.
+export type { RunStepFn } from "./step-runner.js";
 
 /**
  * Outcome of a step run through `runStepWithRetry`: either a success carrying the
@@ -227,7 +231,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			pickText = pick.text + "\n" + pick.fullText;
 
 			if (!pick.ok) {
-				const err = pick.subtype === "blocked" ? `pick blocked: ${pick.text}` : "pick failed";
+				const err = classifyOutcome(pick) === "blocked" ? `pick blocked: ${pick.text}` : "pick failed";
 				return finish({ itemId: null, completed: false, cost, error: err });
 			}
 
@@ -354,23 +358,24 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 
 			if (result.ok) return { kind: "ok", result };
 
-			if (result.subtype === "error_rate_limit" || parkSignal.parked) {
+			const outcome = classifyOutcome(result);
+			if (outcome === "error_rate_limit" || parkSignal.parked) {
 				return { kind: "terminal", cycleResult: parkExit() ?? finish({ itemId, completed: false, cost, error: `${cfg.name} failed` }) };
 			}
-			if (result.subtype === "blocked") {
+			if (outcome === "blocked") {
 				return { kind: "terminal", cycleResult: finish({ itemId, completed: false, cost, error: `${cfg.name} blocked: ${result.text}` }) };
 			}
-			if (result.subtype === "error_refusal") {
+			if (outcome === "error_refusal") {
 				return { kind: "terminal", cycleResult: finish({ itemId, completed: false, cost, error: cfg.refusedError }) };
 			}
-			if (cfg.retryOnEditLoop && result.subtype === "edit_loop") {
+			if (cfg.retryOnEditLoop && outcome === "edit_loop") {
 				const match = result.text.match(/Edit loop detected: (.+?) edited/);
 				lastLoopFile = match?.[1]?.replace(/^.*[/\\]/, "") ?? null;
 				prevMaxTurns = false;
 				log(`edit loop on ${lastLoopFile ?? "unknown file"} — will retry with fresh approach`);
 				continue;
 			}
-			if (result.subtype !== "error_max_turns") {
+			if (outcome !== "error_max_turns") {
 				return { kind: "terminal", cycleResult: finish({ itemId, completed: false, cost, error: `${cfg.name} failed` }) };
 			}
 			// error_max_turns
@@ -632,7 +637,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		const parked = parkExit();
 		if (parked) return parked;
 	}
-	if (ship.subtype === "blocked") return finish({ itemId, completed: false, cost, verdict, error: `ship blocked: ${ship.text}` });
+	if (classifyOutcome(ship) === "blocked") return finish({ itemId, completed: false, cost, verdict, error: `ship blocked: ${ship.text}` });
 
 	// Direct-push: the agent's job ended at the merge. Detect whether it landed
 	// on local `main`, then either run the deterministic bookkeeping tail (the
@@ -683,7 +688,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		// ran out of turns / hard-failed after merging) → /shipwreck, unless
 		// rate-limited / parked (those fall through to interpretResult, preserving
 		// today's park semantics).
-		if (ship.subtype !== "error_rate_limit" && !parkSignal.parked) {
+		if (classifyOutcome(ship) !== "error_rate_limit" && !parkSignal.parked) {
 			const reason = merged ? "merge landed but ship did not complete verification" : ship.ok ? "ghost-ship" : "ship failed";
 			log(`${reason} — attempting /shipwreck recovery...`);
 			shipwrecked = true;

@@ -5,7 +5,7 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import { CONFIG, REPO, resolveStepSettings } from "./config.js";
 import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseResetTime } from "./helpers.js";
 import { MUTATING_TOOLS, toolBrief } from "./tui.js";
-import type { ParkSignal, Step, StepEmit, StepResult, TokenUsage } from "./types.js";
+import type { ParkSignal, ProviderName, Step, StepEmit, StepResult, TokenUsage } from "./types.js";
 import { ensureWorktreeDeps } from "./worktree-deps.js";
 
 // ── Step runner ────────────────────────────────────────────────────────
@@ -23,6 +23,19 @@ export interface RunStepOpts {
 	/** SIGINT-driven cancellation. Threaded through to the SDK's `query()` call so an
 	 * in-flight fetch stream tears down when the parent controller aborts. */
 	signal?: AbortSignal;
+}
+
+/** Canonical signature of a step runner. Single-sourced here (all four types are in
+ *  scope) and re-exported from `pipeline.ts`, so `mocks.ts`'s `RunStepFn` import and
+ *  the `deps.runStep` DI seam resolve to one definition. */
+export type RunStepFn = (name: Step, prompt: string, opts: RunStepOpts, emit: StepEmit) => Promise<StepResult>;
+
+/** A step-execution backend. Today only the Claude SDK runner; #80 adds a second and
+ *  registers it in `PROVIDERS`. The exported `runStep` dispatches to `runStep` here by
+ *  the per-step resolved `provider`. */
+export interface StepProvider {
+	name: ProviderName;
+	runStep: RunStepFn;
 }
 
 const EDIT_LOOP_THRESHOLD = 22;
@@ -115,7 +128,10 @@ export function composeSystemAppend(args: { isWorktree: boolean; cwd: string; re
 	return [AUTONOMY_APPEND, worktreeAppend, planAppend].filter(Boolean).join("\n");
 }
 
-export async function runStep(name: Step, prompt: string, opts: RunStepOpts, emit: StepEmit): Promise<StepResult> {
+// The Claude SDK-driven runner — the original `runStep` body, verbatim, rebound as a
+// named const so it can be registered as the `"claude"` provider. The exported
+// `runStep` below is now the dispatcher; this is what it calls for the default provider.
+const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 	const { budget, turns: baseTurns, effort, model } = resolveStepSettings(CONFIG, opts.profile, name);
 	const turns = opts.maxTurnsOverride ?? baseTurns;
 
@@ -461,4 +477,35 @@ export async function runStep(name: Step, prompt: string, opts: RunStepOpts, emi
 		...(outputTail ? { outputTail } : {}),
 		...(stalledAsk ? { stalledAsk: true } : {}),
 	};
+};
+
+// ── Provider registry ──────────────────────────────────────────────────
+
+/** The default provider — the Claude SDK runner above. Exported so the registry
+ *  unit test can assert `getProvider("claude") === claudeProvider`. */
+export const claudeProvider: StepProvider = { name: "claude", runStep: claudeRunStep };
+
+// Keyed by `ProviderName` so the map is exhaustive over the union — #80's widening
+// surfaces a compile error here until it registers the new provider.
+const PROVIDERS: Record<ProviderName, StepProvider> = {
+	claude: claudeProvider,
+};
+
+/** Look up a registered provider. Throws on an unknown name — defense-in-depth for
+ *  #80 (a misconfigured provider fails loudly rather than silently defaulting). */
+export function getProvider(name: ProviderName): StepProvider {
+	const provider = PROVIDERS[name];
+	if (!provider) throw new Error(`unknown step provider: ${name}`);
+	return provider;
 }
+
+/**
+ * The exported step runner is a thin dispatcher: it resolves the per-step
+ * `provider` and delegates to that provider's `runStep`. Keeping the exported name
+ * `runStep` means both importers — `pipeline.ts` (the `deps.runStep` DI default) and
+ * `pr-review-cli.ts` — route through the dispatcher with no import edits. The
+ * provider's runner re-resolves `resolveStepSettings` for budget/turns/effort/model;
+ * `resolveStepSettings` is pure and cheap, so the double call keeps the runner body
+ * byte-identical at no real cost.
+ */
+export const runStep: RunStepFn = (name, prompt, opts, emit) => getProvider(resolveStepSettings(CONFIG, opts.profile, name).provider).runStep(name, prompt, opts, emit);

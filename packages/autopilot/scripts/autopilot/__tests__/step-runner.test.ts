@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { HookInput } from "@anthropic-ai/claude-agent-sdk";
-import { blockPlanPolish, blockWorktreeInstall, composeSystemAppend, isWorktreePath } from "../step-runner.js";
+import { blockPlanPolish, blockWorktreeInstall, claudeProvider, composeSystemAppend, getProvider, isWorktreePath } from "../step-runner.js";
+import type { ProviderName } from "../types.js";
 
 function bash(command: string): HookInput {
 	return { tool_name: "Bash", tool_input: { command } } as unknown as HookInput;
@@ -113,6 +114,20 @@ describe("isWorktreePath", () => {
 
 	it("returns true for distinct paths with matching prefix", () => {
 		assert.equal(isWorktreePath("/home/user/my-repo-extra", "/home/user/my-repo"), true);
+	});
+});
+
+describe("getProvider — registry + guard", () => {
+	it("returns the claude provider by name", () => {
+		assert.equal(getProvider("claude").name, "claude");
+	});
+
+	it("returns the exact registered claudeProvider instance", () => {
+		assert.equal(getProvider("claude"), claudeProvider);
+	});
+
+	it("throws on an unknown provider name (defense-in-depth for #80)", () => {
+		assert.throws(() => getProvider("bogus" as ProviderName), /unknown step provider: bogus/);
 	});
 });
 

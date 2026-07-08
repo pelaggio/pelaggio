@@ -179,6 +179,7 @@ describe("loadConfig — per-profile overrides", () => {
 		assert.deepEqual(cfg.profileBudgets, {});
 		assert.deepEqual(cfg.profileTurnLimits, {});
 		assert.deepEqual(cfg.profileEffort, {});
+		assert.deepEqual(cfg.profileProviders, {});
 	});
 
 	it("adding override blocks to a default profile leaves its models intact", () => {
@@ -248,6 +249,31 @@ describe("resolveStepSettings — precedence & fallback", () => {
 		assert.equal(s.turns, DEFAULTS.turnLimits.plan);
 		assert.equal(s.effort, DEFAULTS.effort.plan);
 		assert.equal(s.model, "claude-haiku-4-5-20251001");
+	});
+
+	it("resolves provider to the default 'claude' when no yml is present", () => {
+		const repo = tmpRepo();
+		const cfg = loadConfig({ repo, configPath: join(repo, ".autopilot.yml") });
+		assert.equal(resolveStepSettings(cfg, "standard", "implement").provider, "claude");
+	});
+
+	it("parses a sparse per-profile providers override and falls back to the default for omitted steps", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, ["models:", "  profiles:", "    deep:", "      providers:", "        implement: claude", ""].join("\n"));
+		const cfg = loadConfig({ repo, configPath: path });
+		// The override is parsed into the sparse map (distinct from the default-fallback path)...
+		assert.equal(cfg.profileProviders.deep?.implement, "claude");
+		// ...and resolves for the named step...
+		assert.equal(resolveStepSettings(cfg, "deep", "implement").provider, "claude");
+		// ...while a step the profile omits still resolves via DEFAULT_PROVIDER.
+		assert.equal(resolveStepSettings(cfg, "deep", "plan").provider, "claude");
+	});
+
+	it("throws on an invalid provider value (documents #80's two-spot widening)", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, ["models:", "  profiles:", "    deep:", "      providers:", "        implement: gpt", ""].join("\n"));
+		assert.throws(() => loadConfig({ repo, configPath: path }), /\.autopilot\.yml/);
+		assert.throws(() => loadConfig({ repo, configPath: path }), /models\.profiles\.deep\.providers\.implement/);
 	});
 });
 

@@ -7,6 +7,7 @@ import { describe, it } from "node:test";
 import {
 	canRetryWithinBudget,
 	checkpoint,
+	classifyOutcome,
 	classifyStepError,
 	computeImplementTurns,
 	countPlanFiles,
@@ -479,6 +480,26 @@ describe("classifyStepError", () => {
 
 	it("falls through to error_sdk for a generic message", () => {
 		assert.equal(classifyStepError("something else broke", false), "error_sdk");
+	});
+});
+
+describe("classifyOutcome", () => {
+	it("maps each closed subtype to itself (identity on branched values)", () => {
+		for (const s of ["success", "error_rate_limit", "error_max_turns", "error_refusal", "blocked", "edit_loop"] as const) {
+			assert.equal(classifyOutcome({ subtype: s }), s);
+		}
+	});
+
+	it("collapses the free-form error subtypes to the catch-all 'error'", () => {
+		assert.equal(classifyOutcome({ subtype: "error_sdk" }), "error");
+		assert.equal(classifyOutcome({ subtype: "error_budget" }), "error");
+		assert.equal(classifyOutcome({ subtype: "error_abort" }), "error");
+	});
+
+	it("collapses unknown / arbitrary subtype strings to 'error'", () => {
+		assert.equal(classifyOutcome({ subtype: "unknown" }), "error");
+		assert.equal(classifyOutcome({ subtype: "totally-made-up" }), "error");
+		assert.equal(classifyOutcome({ subtype: "" }), "error");
 	});
 });
 
