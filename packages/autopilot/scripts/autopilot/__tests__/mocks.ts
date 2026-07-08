@@ -142,10 +142,19 @@ export function makeTempGitRepo(): string {
 	return dir;
 }
 
-/** Plain tmp dir with no git repo — `git rev-parse` fails inside it, so passing it as
- *  `mainRepo` makes `captureShipState` return null (simulates an unreadable main repo). */
-export function makeNonGitDir(): string {
-	return mkdtempSync(join(tmpdir(), "autopilot-nongit-"));
+/** Git repo checked out on a non-`main` branch with no `main` ref: `git status` succeeds
+ *  (the worktree-confinement audit can snapshot it as a forbidden root) but `git rev-parse main`
+ *  fails, so passing it as `mainRepo` makes `captureShipState` return null (simulates a main repo
+ *  that can't answer the pre-ship rev-parse). A plain non-git dir can't be used here — the audit
+ *  fails closed on the unsnapshot-able root and aborts the first step before ship is reached. */
+export function makeGitDirWithoutMain(): string {
+	const dir = mkdtempSync(join(tmpdir(), "autopilot-nomain-"));
+	execSync("git init -q -b work", { cwd: dir });
+	execSync("git config user.name t", { cwd: dir });
+	execSync("git config user.email t@t", { cwd: dir });
+	execSync("git config commit.gpgsign false", { cwd: dir });
+	execSync("git commit --allow-empty -q -m init", { cwd: dir });
+	return dir;
 }
 
 /**

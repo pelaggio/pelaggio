@@ -665,7 +665,7 @@ describe("classifyStepError", () => {
 
 describe("classifyOutcome", () => {
 	it("maps each closed subtype to itself (identity on branched values)", () => {
-		for (const s of ["success", "error_rate_limit", "error_max_turns", "error_refusal", "blocked", "edit_loop"] as const) {
+		for (const s of ["success", "error_rate_limit", "error_max_turns", "error_refusal", "error_confinement", "blocked", "edit_loop"] as const) {
 			assert.equal(classifyOutcome({ subtype: s }), s);
 		}
 	});

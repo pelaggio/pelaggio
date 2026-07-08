@@ -11,6 +11,7 @@ import {
 	computeImplementTurns,
 	createMutex,
 	detectResumeStep,
+	diffForbiddenRootSnapshots,
 	ensureCheckpointed,
 	expandSkill,
 	filesChangedSince,
@@ -28,6 +29,7 @@ import {
 	resolveWorktree,
 	revertPlanPolish,
 	reviewFindingsPreamble,
+	snapshotForbiddenRoots,
 	stepIndex,
 	verifyShipLanded,
 } from "./helpers.js";
@@ -93,6 +95,13 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		console.log(`${A.dim(ts)} [${logLabel}] ${A.dim(elapsed)} ${msg}`);
 	};
 
+	function forbiddenRootsForStep(cwd: string): string[] {
+		const cwdAbs = resolve(cwd);
+		const mainAbs = resolve(mainRepo);
+		if (cwdAbs === mainAbs) return [];
+		return [mainRepo, ...listWorktrees()].filter((root) => resolve(root) !== cwdAbs);
+	}
+
 	async function step(
 		name: Step,
 		prompt: string,
@@ -131,8 +140,24 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		});
 
 		const preSha = getHeadSha(cwd);
+		let forbiddenRoots: string[] = [];
+		let forbiddenBefore = new Map<string, string>();
+		let confinementRoots: string[] = [];
+		try {
+			forbiddenRoots = forbiddenRootsForStep(cwd);
+		} catch (e) {
+			forbiddenRoots = [mainRepo];
+			confinementRoots = [resolve(mainRepo)];
+			log(`⚠ confinement audit failed to enumerate roots before ${name}: ${e instanceof Error ? e.message : String(e)}`);
+		}
+		try {
+			forbiddenBefore = snapshotForbiddenRoots(forbiddenRoots);
+		} catch (e) {
+			confinementRoots = forbiddenRoots.map((root) => resolve(root));
+			log(`⚠ confinement audit failed before ${name}: ${e instanceof Error ? e.message : String(e)}`);
+		}
 
-		const result = await runStep(
+		const providerResult = await runStep(
 			name,
 			prompt,
 			{
@@ -147,7 +172,30 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			emit,
 		);
 
-		if (commitLabel) {
+		if (confinementRoots.length === 0) {
+			try {
+				const forbiddenAfter = snapshotForbiddenRoots(forbiddenRoots);
+				confinementRoots = diffForbiddenRootSnapshots(forbiddenBefore, forbiddenAfter);
+			} catch (e) {
+				confinementRoots = forbiddenRoots.map((root) => resolve(root));
+				log(`⚠ confinement audit failed after ${name}: ${e instanceof Error ? e.message : String(e)}`);
+			}
+		}
+
+		let result = providerResult;
+		if (confinementRoots.length > 0) {
+			const roots = [...new Set(confinementRoots)].sort();
+			const text = `forbidden root changed during ${name}: ${roots.join(", ")}`;
+			log(`⚠ ${text}`);
+			result = {
+				...providerResult,
+				ok: false,
+				subtype: "error_confinement",
+				text,
+			};
+		}
+
+		if (commitLabel && result.subtype !== "error_confinement") {
 			const committed = checkpoint(cwd, commitLabel);
 			log(committed ? `${commitLabel} committed` : `no changes to commit (${commitLabel})`);
 			ensureCheckpointed(cwd, commitLabel, log);
@@ -156,7 +204,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		// Plan-polish backstop (#80): implement is execute-only under docs/plans/. The Claude hook
 		// blocks such writes; for providers whose sandbox can't (Codex), this deterministic revert
 		// undoes any docs/plans/ edits made this step — including committed ones — since preSha.
-		if (name === "implement") {
+		if (name === "implement" && result.subtype !== "error_confinement") {
 			const reverted = revertPlanPolish(cwd, preSha);
 			if (reverted.length > 0) log(`reverted plan-polish edits: ${reverted.join(", ")}`);
 		}
@@ -377,6 +425,9 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			if (result.ok) return { kind: "ok", result };
 
 			const outcome = classifyOutcome(result);
+			if (outcome === "error_confinement") {
+				return { kind: "terminal", cycleResult: finish({ itemId, completed: false, cost, error: `${cfg.name} failed: confinement violation` }) };
+			}
 			if (outcome === "error_rate_limit" || parkSignal.parked) {
 				return { kind: "terminal", cycleResult: parkExit() ?? finish({ itemId, completed: false, cost, error: `${cfg.name} failed` }) };
 			}
@@ -714,9 +765,14 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	const ship = await step("ship", shipPrompt, worktree!);
 	cost += ship.cost;
 
-	// Park always wins (a mid-ship rate limit must still checkpoint + resume); a
-	// self-reported `blocked` ship is terminal-with-reason before /shipwreck recovery
-	// (recovery is retry-in-spirit and would mask the actionable reason).
+	if (classifyOutcome(ship) === "error_confinement") {
+		return finish({ itemId, completed: false, cost, verdict, error: "ship failed: confinement violation" });
+	}
+
+	// Confinement outranks park: a foreign write must not be hidden by checkpoint/
+	// resume control flow. Otherwise, a mid-ship rate limit still checkpoints and
+	// resumes; a self-reported `blocked` ship is terminal-with-reason before
+	// /shipwreck recovery (recovery is retry-in-spirit and would mask the actionable reason).
 	{
 		const parked = parkExit();
 		if (parked) return parked;
