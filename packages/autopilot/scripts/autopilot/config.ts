@@ -73,6 +73,10 @@ export interface ResolvedConfig {
 	/** Overnight park-and-resume policy. `maxWait` is the raw wait string (parsed with
 	 *  `parseWaitFlag` at the orchestrator to avoid a config↔helpers import cycle). */
 	park: { autoResume: boolean; maxWait: string };
+	/** Local revise sweep (issue #76). When `local` is true (the default), an auto-pick run on a
+	 *  github-issues + PR-ship repo sweeps for red-review PRs and revises them in-process on the
+	 *  local Claude subscription. `local: false` is the documented off-switch. */
+	revise: { local: boolean };
 	/** Outbound run-outcome notifications. Disabled when `url` is empty (the default). */
 	notify: NotifyConfig;
 }
@@ -128,6 +132,11 @@ export const DEFAULTS = {
 	// waits by default via the old `--max-wait` 6h default) — flipping it false would
 	// regress unattended overnight runs. `false` is the explicit interactive off-switch.
 	park: { autoResume: true, maxWait: "6h" },
+	// Local revise sweep on by default (issue #76 frames the knob as *opt-out*). The sweep is a
+	// hard no-op unless the repo is github-issues + a PR ship target + auto-pick mode, so
+	// default-on does nothing for every markdown/direct-push consumer. `revise.local: false` is
+	// the off-switch, mirroring the CI `AUTOPILOT_AUTO_REVISE=false` off-switch.
+	revise: { local: true },
 	// Notifications off by default (empty url). Enabling only `notify.url` turns on every
 	// event with the `json` format; `format: ntfy` + a topic URL gives ntfy.sh pushes.
 	// `NOTIFY_EVENTS` is the single source of the event list (validation uses it too) —
@@ -400,6 +409,22 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		}
 	}
 
+	// revise.local: local revise sweep on/off (issue #76). Type-validate only.
+	let reviseLocal: boolean = DEFAULTS.revise.local;
+	const reviseBlock = yml.revise;
+	if (reviseBlock !== undefined) {
+		if (!isPlainObject(reviseBlock)) {
+			throw new Error(`${configPath}: expected \`revise\` to be a map`);
+		}
+		const local = reviseBlock.local;
+		if (local !== undefined) {
+			if (typeof local !== "boolean") {
+				throw new Error(`${configPath}: expected \`revise.local\` to be a boolean, got ${typeof local}`);
+			}
+			reviseLocal = local;
+		}
+	}
+
 	// notify.*: outbound run-outcome webhook. Disabled by default (url: "").
 	let notifyUrl: string = DEFAULTS.notify.url;
 	let notifyFormat: NotifyFormat = DEFAULTS.notify.format;
@@ -450,6 +475,7 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		roadmapGithub,
 		roadmapLinear,
 		park: { autoResume: parkAutoResume, maxWait: parkMaxWait },
+		revise: { local: reviseLocal },
 		notify: { url: notifyUrl, format: notifyFormat, events: notifyEvents },
 	};
 }
@@ -490,3 +516,4 @@ export const SHIP_TARGET: ShipTargetName = CONFIG.shipTarget;
 export const ROADMAP_SOURCE: RoadmapSourceName = CONFIG.roadmapSource;
 export const ROADMAP_GITHUB: GithubRoadmapConfig = CONFIG.roadmapGithub;
 export const ROADMAP_LINEAR: LinearRoadmapConfig = CONFIG.roadmapLinear;
+export const REVISE_LOCAL: boolean = CONFIG.revise.local;

@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
+import { REPO } from "../config.js";
 import { runOrchestrator } from "../pipeline.js";
+import { reviseFindingsPath } from "../revise-sweep.js";
+import type { GhRunner } from "../roadmap/github-issues.js";
 import { StatusBar } from "../tui.js";
 import type { Flags } from "../types.js";
 import { createMockRunPipeline } from "./mocks.js";
@@ -588,6 +594,92 @@ describe("runOrchestrator — notifications", () => {
 		assert.equal(sent.length, 2);
 		assert.equal(sent[0].payload.event, "parked");
 		assert.equal(sent[1].payload.event, "shipped");
+	});
+});
+
+describe("runOrchestrator — revise sweep (issue #76)", () => {
+	// One revisable PR: open, non-draft, feat/issue-76 head, unlabeled, review=FAILURE.
+	const ONE_REVISABLE = [{ number: 101, isDraft: false, headRefName: "feat/issue-76-x", labels: [], statusCheckRollup: [{ __typename: "CheckRun", name: "review", conclusion: "FAILURE" }] }];
+
+	// A gh stub that satisfies the whole sweep for `ONE_REVISABLE`: pr list → the fixture, issue
+	// view → the roadmap label, pr view → a findings comment, everything else (label create, pr
+	// edit, pr comment) → exit 0.
+	function makeGhStub(prList: unknown): GhRunner {
+		return (args) => {
+			if (args[0] === "pr" && args[1] === "list") return { stdout: JSON.stringify(prList), stderr: "", status: 0 };
+			if (args[0] === "issue" && args[1] === "view") return { stdout: JSON.stringify({ labels: [{ name: "autopilot" }] }), stderr: "", status: 0 };
+			if (args[0] === "pr" && args[1] === "view") return { stdout: JSON.stringify({ comments: [{ body: "<!-- autopilot-pr-review -->\nfix the bug", createdAt: "2026-01-01T00:00:00Z" }] }), stderr: "", status: 0 };
+			return { stdout: "", stderr: "", status: 0 };
+		};
+	}
+	const throwingGh: GhRunner = () => {
+		throw new Error("gh unavailable");
+	};
+
+	// resolveWorktree → an existing real dir so ensureReviseWorktree short-circuits (no git).
+	let wtDir: string;
+	before(() => {
+		wtDir = mkdtempSync(join(tmpdir(), "revise-sweep-orch-"));
+	});
+	after(() => {
+		rmSync(wtDir, { recursive: true, force: true });
+		// The sweep writes findings to <REPO>/.dev/ (gitignored scratch) — clean it up.
+		rmSync(reviseFindingsPath(REPO, "76"), { force: true });
+	});
+	const resolveWt = (): string => wtDir;
+
+	it("revises a red-review PR before picking new work, with startFrom=implement + findings flag", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({
+			byItem: { "76": { completed: true, cost: 0.5 } },
+			default: { completed: false, cost: 0, error: "pick:queue-empty" },
+		});
+		const { exitCode } = await runOrchestrator({ ...baseFlags, target: "pull-request", cycles: "1" }, { runPipeline, resolveWorktree: resolveWt, revise: { local: true, ghRepo: "o/r", gh: makeGhStub(ONE_REVISABLE) } });
+		assert.equal(exitCode, 1); // the auto-pick cycle hit an empty queue (recoverable)
+		// The revision runs first, then the auto-pick worker.
+		assert.equal(calls[0].opts.itemId, "76");
+		assert.equal(calls[0].opts.startFrom, "implement");
+		assert.ok(calls[0].flags["review-findings"]?.endsWith("review-findings-76.md"), `expected the findings flag on the revision call; got ${calls[0].flags["review-findings"]}`);
+		assert.equal(calls[1].opts.itemId, undefined, "second call is the auto-pick cycle (no explicit id)");
+	});
+
+	it("off-switch: revise.local:false skips the sweep and goes straight to picking", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({
+			default: { completed: false, cost: 0, error: "pick:queue-empty" },
+		});
+		await runOrchestrator({ ...baseFlags, target: "pull-request", cycles: "1" }, { runPipeline, resolveWorktree: resolveWt, revise: { local: false, ghRepo: "o/r", gh: makeGhStub(ONE_REVISABLE) } });
+		assert.equal(calls.length, 1);
+		assert.equal(calls[0].opts.itemId, undefined, "no revision call — straight to auto-pick");
+		assert.notEqual(calls[0].opts.startFrom, "implement");
+	});
+
+	it("fail-soft: a gh error in the sweep skips revision and lets picking proceed (no crash)", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({
+			default: { completed: false, cost: 0, error: "pick:queue-empty" },
+		});
+		const { exitCode } = await runOrchestrator({ ...baseFlags, target: "pull-request", cycles: "1" }, { runPipeline, resolveWorktree: resolveWt, revise: { local: true, ghRepo: "o/r", gh: throwingGh } });
+		assert.equal(exitCode, 1);
+		assert.equal(calls.length, 1, "only the auto-pick cycle — the sweep found nothing");
+		assert.equal(calls[0].opts.itemId, undefined);
+	});
+
+	it("parked revision flows into results and the worker pool is skipped", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const baseNow = 1_700_000_000_000;
+		const { runPipeline, calls } = createMockRunPipeline({
+			byItem: { "76": { completed: false, cost: 0.1, error: "parked", park: { parked: true, resetsAt: baseNow + 60_000, limitType: "5h" } } },
+			default: { completed: false, cost: 0, error: "pick:queue-empty" },
+		});
+		const { exitCode, results } = await runOrchestrator(
+			{ ...baseFlags, target: "pull-request", cycles: "1" },
+			{ runPipeline, resolveWorktree: resolveWt, park: { autoResume: false }, revise: { local: true, ghRepo: "o/r", gh: makeGhStub(ONE_REVISABLE) } },
+		);
+		assert.equal(exitCode, 1);
+		assert.equal(calls.length, 1, "the park after the revision skips the pick worker pool");
+		assert.equal(results[0].error, "parked");
+		assert.equal(results[0].itemId, "76");
 	});
 });
 

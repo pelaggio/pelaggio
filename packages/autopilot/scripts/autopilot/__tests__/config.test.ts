@@ -385,6 +385,33 @@ describe("loadConfig — park", () => {
 	});
 });
 
+describe("loadConfig — revise", () => {
+	it("defaults to { local: true } when unset", () => {
+		const repo = tmpRepo();
+		const cfg = loadConfig({ repo, configPath: join(repo, ".autopilot.yml") });
+		assert.deepEqual(cfg.revise, { local: true });
+	});
+
+	it("parses revise.local: false", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "revise:\n  local: false\n");
+		const cfg = loadConfig({ repo, configPath: path });
+		assert.equal(cfg.revise.local, false);
+	});
+
+	it("throws on a non-boolean revise.local", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "revise:\n  local: sometimes\n");
+		assert.throws(() => loadConfig({ repo, configPath: path }), /revise\.local.*boolean/);
+	});
+
+	it("throws when revise is not a map", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "revise: nope\n");
+		assert.throws(() => loadConfig({ repo, configPath: path }), /expected `revise` to be a map/);
+	});
+});
+
 describe("loadConfig — notify", () => {
 	it("defaults to { url: '', format: 'json', events: <all five> } when unset", () => {
 		const repo = tmpRepo();

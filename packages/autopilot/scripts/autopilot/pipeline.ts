@@ -1,6 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { CONFIG, isPipelineStep, LOG_PATH, MODEL_PROFILES, REPO, ROADMAP_GITHUB, ROADMAP_LINEAR, ROADMAP_SOURCE, resolveStepSettings, SHIP_TARGET, STEPS, WORKTREE_PREFIX } from "./config.js";
+import { CONFIG, isPipelineStep, LOG_PATH, MODEL_PROFILES, REPO, REVISE_LOCAL, ROADMAP_GITHUB, ROADMAP_LINEAR, ROADMAP_SOURCE, resolveStepSettings, SHIP_TARGET, STEPS, WORKTREE_PREFIX } from "./config.js";
 import {
 	appendLog as appendLogDefault,
 	canRetryWithinBudget,
@@ -28,6 +28,8 @@ import {
 	verifyShipLanded,
 } from "./helpers.js";
 import { type NotifyConfig, notifyCycle, sendNotification as sendNotificationDefault } from "./notify.js";
+import { claimRevision, ensureReviseWorktree, fetchReviewFindings, findRevisablePrs, isAutopilotManaged, postParkComment, reviseFindingsPath } from "./revise-sweep.js";
+import { defaultGhRun, type GhRunner } from "./roadmap/github-issues.js";
 import { getRoadmapSource, type RoadmapSource } from "./roadmap/index.js";
 import { commitStrayBookkeeping, getShipTarget, isShipTargetName, runShipBookkeeping as runShipBookkeepingDefault, SHIP_TARGET_NAMES } from "./ship/index.js";
 import { runStep as runStepDefault } from "./step-runner.js";
@@ -755,6 +757,10 @@ export interface OrchestratorDeps {
 	notifyConfig?: Partial<NotifyConfig>;
 	/** Override the notification transport (defaults to `sendNotification`). Spy seam for tests. */
 	sendNotification?: typeof sendNotificationDefault;
+	/** Local revise sweep config (issue #76). Partial — merged onto the resolved defaults
+	 *  (`REVISE_LOCAL`, the github-source-gated `ghRepo`, `defaultGhRun`). Injecting `ghRepo` lets
+	 *  tests force-activate the sweep with a stubbed `gh` without a real github-issues config. */
+	revise?: Partial<{ local: boolean; ghRepo: string; gh: GhRunner }>;
 }
 
 // Post-reset resume grace: jitter deliberately bounded inside the pre-existing 30s
@@ -1001,7 +1007,78 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			}
 		}
 
-		await Promise.all(Array.from({ length: Math.min(parallel, cycles) }, () => worker()));
+		// ── Revise sweep (issue #76) ──
+		//
+		// Before the pick worker pool, sweep for red-review PRs and revise each in-process on the
+		// local Claude subscription — the same in-process resume the park/auto-resume loop uses
+		// (`startFrom: "implement"` + a fetched `--review-findings` file). Auto-pick mode only
+		// (`items.length === 0`): naming `--item X,Y` means "do exactly these". A hard no-op unless
+		// the repo is github-issues + a PR ship target; any gh/git error skips fail-soft and the
+		// normal pick loop proceeds. Revisions do NOT consume `--cycles` (that sizes *new-work*
+		// throughput) but DO count toward `--budget` (a revision still spends real money), so each
+		// result is pushed into `results` and its cost added to `totalSpent`.
+		const revise = {
+			local: REVISE_LOCAL,
+			ghRepo: ROADMAP_SOURCE === "github-issues" ? ROADMAP_GITHUB.ghRepo : "",
+			gh: defaultGhRun,
+			...deps.revise,
+		};
+		const shipIsPr = shipTargetName === "pull-request" || shipTargetName === "auto-merge-pr";
+		const doSweep = revise.local && shipIsPr && !!revise.ghRepo && !noWorktree && !dryRun && items.length === 0;
+
+		if (doSweep) {
+			const { revisable, labeledStillRed } = findRevisablePrs(revise.gh, revise.ghRepo);
+			// PRs already past their one revision pass but still red → idempotent human handoff.
+			for (const pr of labeledStillRed) postParkComment(revise.gh, revise.ghRepo, pr.prNumber);
+
+			for (const pr of revisable) {
+				if (parkSignal.parked) break; // a park mid-sweep stops starting new revisions
+				if (!isAutopilotManaged(revise.gh, revise.ghRepo, pr.itemId, ROADMAP_GITHUB.label)) continue;
+				if (!claimRevision(revise.gh, revise.ghRepo, pr.prNumber)) continue; // one-pass label BEFORE any work
+				const findingsPath = reviseFindingsPath(REPO, pr.itemId);
+				if (!fetchReviewFindings(revise.gh, revise.ghRepo, pr.prNumber, findingsPath)) {
+					// labeled but no findings comment → fail-safe park + skip (mirrors CI).
+					postParkComment(revise.gh, revise.ghRepo, pr.prNumber);
+					continue;
+				}
+				const wt = ensureReviseWorktree(_resolveWorktree(pr.itemId), pr.branch, { repo: REPO });
+				if (!wt) continue;
+
+				const status: CycleStatus = { itemId: pr.itemId, status: "running", cost: 0 };
+				liveStatus.cycles.push(status);
+				if (v) liveStatus.render();
+				const r = await _runPipeline(
+					{
+						itemId: pr.itemId,
+						worktree: wt,
+						startFrom: "implement",
+						cycle: results.length + 1,
+						verbose: !isParallel && v,
+						shipTarget,
+						dryRun: false,
+						workerStatus: status,
+						liveStatus,
+						...(signal ? { signal } : {}),
+					},
+					parkSignal,
+					{ ...flags, "review-findings": findingsPath }, // per-item findings injection
+				);
+				totalSpent += r.cost;
+				results.push(r);
+				await notify(r, LOG_PATH);
+				status.status = resultStatus(r);
+				status.cost = r.cost;
+				status.step = undefined;
+				if (v) liveStatus.render();
+				console.log(`${resultIcon(r)} revise ${pr.itemId} — $${r.cost.toFixed(2)}${r.error ? `  ${A.dim(r.error)}` : ""}`);
+			}
+		}
+
+		// Skip the pick worker pool entirely if the sweep already parked — its parked revisions
+		// are in `results` (pushed above), so they flow into the park-and-resume block below.
+		if (!parkSignal.parked) {
+			await Promise.all(Array.from({ length: Math.min(parallel, cycles) }, () => worker()));
+		}
 
 		// ── Park-and-resume ──
 		//
@@ -1039,6 +1116,16 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					resumeLogPath = resolve(REPO, ".dev", `autopilot-resume-${id.toLowerCase()}.log`);
 					appendFileSync(resumeLogPath, `${"=".repeat(60)}\nresume ${id} — ${new Date().toISOString()}\n${"=".repeat(60)}\n`);
 				}
+				// Findings survival across park→auto-resume (issue #76): a parked *revision* loses its
+				// --review-findings flag here (resumeOne derives its step from detectResumeStep and
+				// passes the raw flags). If the sweep-written findings file still exists on disk,
+				// re-inject it so the resumed implement still fixes the specific blockers. Inert for
+				// non-revision items — no findings file is present, so `flags` passes through unchanged.
+				let resumeFlags = flags;
+				if (!flags["review-findings"]) {
+					const fp = reviseFindingsPath(REPO, id);
+					if (existsSync(fp)) resumeFlags = { ...flags, "review-findings": fp };
+				}
 				const r = await _runPipeline(
 					{
 						itemId: id,
@@ -1055,7 +1142,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						...(signal ? { signal } : {}),
 					},
 					parkSignal,
-					flags,
+					resumeFlags,
 				);
 				await notify(r, resumeLogPath ?? LOG_PATH);
 				st.status = resultStatus(r);

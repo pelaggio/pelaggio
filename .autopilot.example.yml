@@ -12,6 +12,10 @@
 # ship:
 #   target: direct-push  # direct-push | pull-request | auto-merge-pr
 #
+# revise:                # local revise sweep — auto-fix red-review PRs in-process (issue #76)
+#   local: true          # default: true. Opt-out switch. A hard no-op unless the repo is
+#                        # roadmap.source: github-issues AND a PR ship target AND auto-pick mode.
+#
 # notify:                # outbound run-outcome webhook (default: disabled)
 #   url: https://ntfy.sh/my-autopilot-topic
 #   format: ntfy         # json (Slack/generic) | ntfy (phone push)
