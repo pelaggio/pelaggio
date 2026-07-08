@@ -589,7 +589,9 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 
 	if (shouldRun("shakedown-code")) {
 		const planPath = await roadmap.getItemPlan({ worktree: worktree! });
-		const shakedownPlanRef = planPath ? `Read the plan at \`${planPath}\` and the roadmap entry for ${itemId} to understand the scope.` : `Find the plan in \`${resolve(REPO, "docs", "plans")}/\` or the roadmap entry for ${itemId}.`;
+		// The retry (attempt 2) points at the plan file only — NOT "the roadmap entry", which a
+		// sandboxed provider can't fetch (#103/#115); the plan already carries the scope.
+		const shakedownPlanRef = planPath ? `Read the plan at \`${planPath}\` to understand the scope.` : `Find the plan in \`${resolve(REPO, "docs", "plans")}/\`.`;
 		const shakedownCodeArgs = await buildStepArgs(roadmap, itemId!, "code-review");
 
 		const outcome = await runStepWithRetry({
@@ -612,7 +614,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 							"1. Run the verification commands from `.claude/skills/_rubric.md`'s Verification section to see the current state.",
 							"2. Check what's already been fixed vs. what remains.",
 							"3. Focus on fix-now items only (type errors, test failures, lint errors, bugs).",
-							"4. Skip near-term items (missing tests, i18n gaps, refactoring) — add them as deferred to the roadmap.",
+							'4. Skip near-term items (missing tests, i18n gaps, refactoring) — list each as a `deferred-item: {"title": "...", "scope": "..."}` marker line; the harness creates them (do not run `roadmap create-item`).',
 							"5. Re-run the verification commands before finishing.",
 						].join("\n"),
 		});

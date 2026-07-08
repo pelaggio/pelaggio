@@ -221,6 +221,7 @@ export async function buildStepArgs(roadmap: RoadmapSource, itemId: string, mode
 export function parseDeferredItems(text: string): CreateItemOpts[] {
 	const SCOPES = new Set(["XS", "S", "M", "L", "XL"]);
 	const items: CreateItemOpts[] = [];
+	const seen = new Set<string>(); // dedup by title — createItem isn't idempotent (unlike publishPlan)
 	for (const m of text.matchAll(/^[ \t]*deferred-item:[ \t]*(\{.*\})[ \t]*$/gim)) {
 		let parsed: unknown;
 		try {
@@ -231,7 +232,8 @@ export function parseDeferredItems(text: string): CreateItemOpts[] {
 		if (!parsed || typeof parsed !== "object") continue;
 		const rec = parsed as Record<string, unknown>;
 		const title = typeof rec.title === "string" ? rec.title.trim() : "";
-		if (!title) continue;
+		if (!title || seen.has(title.toLowerCase())) continue;
+		seen.add(title.toLowerCase());
 		const scopeRaw = typeof rec.scope === "string" ? rec.scope.toUpperCase() : "";
 		const scope = SCOPES.has(scopeRaw) ? (scopeRaw as CreateItemOpts["scope"]) : undefined;
 		const deps =

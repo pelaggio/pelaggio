@@ -255,6 +255,21 @@ describe("parseDeferredItems (#115)", () => {
 	it("returns [] when there are no markers", () => {
 		assert.deepEqual(parseDeferredItems("just a normal review with no deferrals"), []);
 	});
+
+	it("handles a `}` inside a string value and normalizes lowercase scope", () => {
+		const items = parseDeferredItems('deferred-item: {"title": "fix the } brace", "scope": "s"}');
+		assert.deepEqual(items, [{ title: "fix the } brace", scope: "S", deferred: true }]);
+	});
+
+	it("does not match a mid-line/prose mention of deferred-item: (line-anchored)", () => {
+		assert.deepEqual(parseDeferredItems('The reviewer said deferred-item: {"title": "X"} inline in a sentence.'), []);
+	});
+
+	it("dedups by title (createItem is not idempotent)", () => {
+		const items = parseDeferredItems(['deferred-item: {"title": "Add retries"}', 'deferred-item: {"title": "add retries", "scope": "M"}'].join("\n"));
+		assert.equal(items.length, 1, "case-insensitive title dedup keeps the first");
+		assert.equal(items[0].title, "Add retries");
+	});
 });
 
 describe("fmtWait", () => {
