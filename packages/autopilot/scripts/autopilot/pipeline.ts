@@ -101,18 +101,22 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		console.log(`${A.dim(ts)} [${logLabel}] ${A.dim(elapsed)} ${msg}`);
 	};
 
-	function forbiddenRootsForStep(cwd: string): string[] {
+	function forbiddenRootsForStep(cwd: string, ownWorktree?: string): string[] {
 		const cwdAbs = resolve(cwd);
 		const mainAbs = resolve(mainRepo);
-		if (cwdAbs === mainAbs) return [];
-		return [mainRepo, ...listWorktrees()].filter((root) => resolve(root) !== cwdAbs);
+		const exempt = new Set([cwdAbs, ...(ownWorktree ? [resolve(ownWorktree)] : [])]);
+		// Main-repo-based steps (pick, shipwreck) legitimately write inside mainRepo
+		// itself — and shipwreck legitimately finishes a squash/commit in the item's
+		// own worktree (SKILL.md states 3c/3d) — but must not touch sibling worktrees.
+		if (cwdAbs === mainAbs) return listWorktrees().filter((root) => !exempt.has(resolve(root)));
+		return [mainRepo, ...listWorktrees()].filter((root) => !exempt.has(resolve(root)));
 	}
 
 	async function step(
 		name: Step,
 		prompt: string,
 		cwd: string,
-		{ attempt = 1, commitLabel, maxTurnsOverride, retriedMaxTurns = false }: { attempt?: number; commitLabel?: string; maxTurnsOverride?: number; retriedMaxTurns?: boolean } = {},
+		{ attempt = 1, commitLabel, maxTurnsOverride, retriedMaxTurns = false, ownWorktree }: { attempt?: number; commitLabel?: string; maxTurnsOverride?: number; retriedMaxTurns?: boolean; ownWorktree?: string } = {},
 	): Promise<StepResult> {
 		// Short-circuit before runStep when SIGINT fired between steps; also covers
 		// --dry-run so Ctrl-C during a dry run bails promptly.
@@ -150,7 +154,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		let forbiddenBefore = new Map<string, string>();
 		let confinementRoots: string[] = [];
 		try {
-			forbiddenRoots = forbiddenRootsForStep(cwd);
+			forbiddenRoots = forbiddenRootsForStep(cwd, ownWorktree);
 		} catch (e) {
 			forbiddenRoots = [mainRepo];
 			confinementRoots = [resolve(mainRepo)];
@@ -853,7 +857,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			// Hand shipwreck the same autopilot/direct-push signal /ship gets so it
 			// stops at its hand-off gate (finish + verify the merge, then STOP) instead
 			// of running mark-done/archive/push/cleanup itself.
-			const wreck = await step("shipwreck", expandSkill("shipwreck", `${itemId!} autopilot --target=direct-push`), mainRepo);
+			const wreck = await step("shipwreck", expandSkill("shipwreck", `${itemId!} autopilot --target=direct-push`), mainRepo, { ownWorktree: worktree! });
 			cost += wreck.cost;
 
 			// Tail runs ONLY on a shipwreck that actually LANDED the merge — mirrors the
