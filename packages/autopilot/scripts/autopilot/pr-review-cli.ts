@@ -17,7 +17,7 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { REPO } from "./config.js";
-import { expandSkill, parseReviewGate } from "./helpers.js";
+import { expandSkill, formatReviewMetrics, parseReviewGate } from "./helpers.js";
 import { runStep } from "./step-runner.js";
 import type { ParkSignal, StepEmit } from "./types.js";
 
@@ -54,8 +54,11 @@ const emit: StepEmit = (event) => {
 /** Build the PR-comment body. On a completed review, the agent's text is the
  *  body verbatim under a status header; on a failed run we post an explicit
  *  fail-closed notice so the red check is self-explaining. */
-function buildComment(gate: "pass" | "block", ok: boolean, subtype: string, reviewText: string): string {
+function buildComment(gate: "pass" | "block", ok: boolean, subtype: string, reviewText: string, cost: number, turns: number): string {
 	const header = gate === "pass" ? "✅ **Automated review: PASS**" : "🚫 **Automated review: BLOCK**";
+	// Durable, aggregatable precision signal — appended by the CLI, never seen by
+	// `parseReviewGate` (which reads the agent's `result.text`, not this comment).
+	const metrics = formatReviewMetrics(gate, ok, subtype, cost, turns);
 	if (!ok) {
 		// A truncated run (e.g. error_max_turns) may still have found real
 		// blockers — the partial text is the expensive artifact, so keep it.
@@ -68,9 +71,10 @@ function buildComment(gate: "pass" | "block", ok: boolean, subtype: string, revi
 			...partial,
 			"",
 			`<sub>autopilot pr-review · ${subtype}</sub>`,
+			metrics,
 		].join("\n");
 	}
-	return [MARKER, header, "", reviewText.trim(), "", `<sub>autopilot pr-review · ${subtype}</sub>`].join("\n");
+	return [MARKER, header, "", reviewText.trim(), "", `<sub>autopilot pr-review · ${subtype}</sub>`, metrics].join("\n");
 }
 
 /** Upsert the single gate comment. Best-effort: a posting failure must not
@@ -127,14 +131,14 @@ export async function main(argv: string[]): Promise<number> {
 		// must not be able to lose the only copy of a $-priced review.
 		if (result.text.trim()) process.stdout.write(`\n${result.text.trim()}\n\n`);
 
-		upsertComment(pr, buildComment(gate, result.ok, result.subtype, result.text));
+		upsertComment(pr, buildComment(gate, result.ok, result.subtype, result.text, result.cost, result.turns));
 
 		process.stderr.write(`gate: ${gate.toUpperCase()} (ok=${result.ok})\n`);
 		return gate === "block" ? 1 : 0;
 	} catch (e) {
 		const msg = e instanceof Error ? e.message : String(e);
 		process.stderr.write(`pr-review crashed — failing closed: ${msg}\n`);
-		upsertComment(pr, buildComment("block", false, "error_crash", ""));
+		upsertComment(pr, buildComment("block", false, "error_crash", "", 0, 0));
 		return 1;
 	}
 }

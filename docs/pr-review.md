@@ -62,14 +62,65 @@ One fresh session, structured as three internal phases (see
 The review is **read-only by convention** — the CI checkout is ephemeral, so edits would
 never be pushed. The CLI, not the agent, owns comment posting.
 
-### Cost & precision
+### Evidence gate — when to escalate to two-session
 
 One session keeps the run inside a small, budget-capped envelope (default `pr-review`
 budget `$5`). Precision is the single-session tradeoff: finder and verifier share one
-context. If that proves noisy in practice, the escalation is two separate `runStep`
-calls (independent finder + independent verifier) — genuinely out-of-context per phase,
-but ~2× the cost and needs finding hand-off plumbing. That is deferred until single-session
-precision is shown inadequate; this is a v1 gate, not a deep audit.
+context. Escalating to a two-session finder→verifier is **evidence-gated** — it is
+deferred until data shows single-session precision inadequate. This is a v1 gate, not a
+deep audit. The protocol below makes that decision *decidable* rather than a gut call.
+
+**Default.** Single-session is the v1 gate. It stays until the trigger below fires.
+
+**What "noisy" means.** False-positive **precision**: a clean-run BLOCK
+(`ok=true subtype=success`) that a human then merged with no gate-driven change — i.e.
+the block was wrong. (False *negatives* are a recall problem; the finder→verifier split
+primarily buys **precision**, by giving the verifier a genuinely cold, un-anchored read
+of the candidate findings.)
+
+**Trigger (concrete, decidable).** Over a rolling window of **≥15 clean gate runs**
+(`ok=true subtype=success`), escalate if **≥20% of BLOCK verdicts were false positives**,
+*or* if reviewers are repeatedly overriding the gate to merge. Labeling a BLOCK
+false-positive vs. true-positive is a human judgment call — the marker only makes the
+runs **enumerable**; the human labels each one.
+
+**How to aggregate.** The gate job runs on ephemeral GitHub-hosted `ubuntu-latest` with a
+`contents: read` token — it cannot write a log file that survives the runner, and it must
+not commit. The durable, zero-write-permission sink is the **PR comment** the CLI already
+upserts: each carries a machine-readable marker as its final line —
+
+```html
+<!-- pr-review-metrics gate=block ok=true subtype=success cost=1.23 turns=42 -->
+```
+
+Recording `ok`/`subtype` is the disambiguation `gh run list` **cannot** provide: a red
+job conclusion conflates a real `Verdict: BLOCK` with a fail-closed transient (rate-limit
+/ max-turns / refusal). Precision is only about the former, so filter to
+`ok=true subtype=success` first. Enumerate the markers across recent PRs with:
+
+```bash
+# Pull the pr-review-metrics marker from every recent PR's gate comment.
+gh pr list --state all --limit 50 --json number --jq '.[].number' |
+  while read -r n; do
+    gh pr view "$n" --json comments \
+      --jq '.comments[].body | capture("(?<m><!-- pr-review-metrics [^>]*-->)").m // empty'
+  done | grep 'ok=true subtype=success'   # clean runs only — the precision-relevant set
+```
+
+Then, for the `gate=block` rows in that clean set, label each BLOCK FP/TP by hand and
+compute the rate against the ≥15-run / ≥20% trigger.
+
+**Deferred implementation sketch (mechanical once the trigger fires).** Split the single
+review into two independent `runStep("pr-review", …)` calls in `pr-review-cli.ts`:
+
+- an independent **finder** — over-collects candidate findings and emits them structured;
+- an independent **verifier** — a fresh session that receives those candidates cold,
+  refutes each against the actual code, and whose trailing `Verdict:` is the gate.
+
+This is ~2× the cost and needs a finder→verifier hand-off in the prompt, but adds **no new
+`Step`** — it is the same `pr-review` step key invoked twice. The fail-closed contract is
+unchanged: the verifier session's `ok`/verdict feeds the existing `parseReviewGate`, so a
+crashed / refused / rate-limited verifier still blocks.
 
 ## Configuration
 
@@ -153,5 +204,5 @@ second attempt.
 
 ## Follow-ups (not in this gate)
 
-- **Escalate to two-session finder→verifier** if single-session precision proves noisy.
+- **Escalate to two-session finder→verifier** once the [Evidence gate](#evidence-gate--when-to-escalate-to-two-session) trigger fires (≥20% false-positive BLOCKs over ≥15 clean runs). The `pr-review-metrics` comment marker makes those runs enumerable; the escalation sketch there turns the flip into a mechanical change.
 - **Notifications** — surface a red gate as a park-for-attention alert (issue #34).

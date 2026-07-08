@@ -302,6 +302,17 @@ export function parseReviewGate(text: string, ok: boolean): "pass" | "block" {
 	return "block"; // no explicit `Verdict: PASS` ⇒ block (no engagement fail-safe)
 }
 
+/**
+ * One-line, machine-readable marker appended to the gate comment so the durable
+ * PR-comment stream can be aggregated into a precision dataset (see
+ * docs/pr-review.md § Evidence gate). Records `ok`/`subtype` because `gh run list`
+ * conclusion alone conflates a real `Verdict: BLOCK` with a fail-closed transient —
+ * only clean (`ok=true subtype=success`) BLOCKs are precision-relevant.
+ */
+export function formatReviewMetrics(gate: "pass" | "block", ok: boolean, subtype: string, cost: number, turns: number): string {
+	return `<!-- pr-review-metrics gate=${gate} ok=${ok} subtype=${subtype} cost=${cost.toFixed(2)} turns=${turns} -->`;
+}
+
 // ── Blocked / stalled-ask parsing ──────────────────────────────────────
 
 /**

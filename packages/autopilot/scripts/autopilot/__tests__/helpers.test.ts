@@ -13,6 +13,7 @@ import {
 	filesChangedSince,
 	fmtWait,
 	formatResumeHint,
+	formatReviewMetrics,
 	getHeadSha,
 	hasDeliverableCommits,
 	isRefusal,
@@ -590,6 +591,31 @@ describe("parseReviewGate", () => {
 	it("mid-line prose mentioning a verdict does not match (line-anchored)", () => {
 		assert.equal(parseReviewGate("This would let the verdict pass unchallenged.", true), "block");
 		assert.equal(parseReviewGate("Nothing here would make the verdict block the merge.", true), "block");
+	});
+});
+
+describe("formatReviewMetrics", () => {
+	it("emits the exact marker string for a clean PASS", () => {
+		assert.equal(formatReviewMetrics("pass", true, "success", 1.234, 42), "<!-- pr-review-metrics gate=pass ok=true subtype=success cost=1.23 turns=42 -->");
+	});
+
+	it("emits the exact marker string for a clean BLOCK", () => {
+		assert.equal(formatReviewMetrics("block", true, "success", 0, 7), "<!-- pr-review-metrics gate=block ok=true subtype=success cost=0.00 turns=7 -->");
+	});
+
+	it("records ok=false and the failure subtype for a fail-closed transient", () => {
+		assert.equal(formatReviewMetrics("block", false, "error_max_turns", 4.5, 60), "<!-- pr-review-metrics gate=block ok=false subtype=error_max_turns cost=4.50 turns=60 -->");
+	});
+
+	it("rounds cost to two decimal places (1.8 → 1.80)", () => {
+		assert.match(formatReviewMetrics("pass", true, "success", 1.8, 3), /cost=1\.80 /);
+	});
+
+	it("never contains a `verdict:` substring — the marker can't be mistaken for a gate verdict", () => {
+		// Belt-and-suspenders: parseReviewGate reads result.text, not the comment,
+		// so the marker is out of its path entirely — but pin the invariant.
+		assert.doesNotMatch(formatReviewMetrics("pass", true, "success", 1, 1), /verdict:/i);
+		assert.doesNotMatch(formatReviewMetrics("block", false, "error_crash", 0, 0), /verdict:/i);
 	});
 });
 
