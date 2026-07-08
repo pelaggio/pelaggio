@@ -43,6 +43,8 @@ park:                           # overnight park-and-resume on rate-limit
                                 # false = hand the prompt back at the first park
   max-wait: 6h                  # default: 6h — skip resuming if the reset is farther out
                                 # ("6h", "90m", "1h30m", or a bare number = minutes)
+  unknown-reset-wait: 60m       # default: 60m — conservative wait when the rate-limit
+                                # event reports no reset time (same format as max-wait)
 
 revise:                         # local revise sweep — auto-fix red-review PRs (issue #76)
   local: true                   # default: true (opt-out). No-op unless roadmap.source is
@@ -312,6 +314,7 @@ then decides whether to wait out the window and pick the parked items back up.
 |--------------------|---------|-------------------------------------------------------------------------------|
 | `park.auto-resume` | `true`  | Wait for the limit to reset, then resume the parked items in-process.         |
 | `park.max-wait`    | `6h`    | Cap on how long to wait. If the reset is farther out, exit parked instead.    |
+| `park.unknown-reset-wait` | `60m` | Estimate to wait when the rate-limit event carries no reset time.        |
 
 **`auto-resume` defaults to `true`.** The pipeline already waited by default
 (the old `--max-wait` had a built-in 6h default), so this formalizes existing
@@ -324,8 +327,18 @@ immediately — the run prints the parked item IDs and a ready-to-paste
 rate-limit window, the orchestrator waits again and resumes again, up to an
 internal round cap (12). This is what makes a "leave it running overnight" batch
 survive several consecutive 5h windows. Each round independently re-checks the
-reset timestamp and `max-wait`, so a window whose reset is unknown (never
-reported) or farther out than `max-wait` still exits parked rather than spinning.
+reset timestamp and `max-wait`, so a window whose reset is farther out than
+`max-wait` still exits parked rather than spinning.
+
+**Unknown reset time.** Some rate-limit events carry no reset timestamp — every
+Codex 429 omits it, and some Claude events do too. Rather than end the run, the
+park first tries to recover a concrete reset from the limit message text; failing
+that it synthesizes `now + park.unknown-reset-wait` (default 60m, a safe
+under-estimate for 5-hourly subscription windows) so auto-resume waits out a
+window and retries. The synthesized wait is still bounded by `max-wait`, and the
+limit type is suffixed `(estimated)` in the park banner, notify event, and
+`.dev/autopilot-log.jsonl` so the wait reads honestly as a guess. A manual pause
+(SIGUSR2) still exits parked with a resume hint — it is never auto-estimated.
 
 **`max-wait` precedence:** `--max-wait` CLI flag > `park.max-wait` (yml) > `6h`.
 Because the CLI flag has no built-in default anymore, an unset flag lets

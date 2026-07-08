@@ -80,9 +80,11 @@ export interface ResolvedConfig {
 	roadmapSource: RoadmapSourceName;
 	roadmapGithub: GithubRoadmapConfig;
 	roadmapLinear: LinearRoadmapConfig;
-	/** Overnight park-and-resume policy. `maxWait` is the raw wait string (parsed with
-	 *  `parseWaitFlag` at the orchestrator to avoid a config↔helpers import cycle). */
-	park: { autoResume: boolean; maxWait: string };
+	/** Overnight park-and-resume policy. `maxWait` and `unknownResetWait` are raw wait
+	 *  strings (parsed with `parseWaitFlag` at the consumer to avoid a config↔helpers
+	 *  import cycle). `unknownResetWait` is the conservative estimate used when a rate-limit
+	 *  event carries no reset time (Codex 429s never do — issue #68). */
+	park: { autoResume: boolean; maxWait: string; unknownResetWait: string };
 	/** Local revise sweep (issue #76). When `local` is true (the default), an auto-pick run on a
 	 *  github-issues + PR-ship repo sweeps for red-review PRs and revises them in-process on the
 	 *  local Claude subscription. `local: false` is the documented off-switch. */
@@ -141,7 +143,7 @@ export const DEFAULTS = {
 	// Default `autoResume: true` preserves today's waiting behavior (the pipeline already
 	// waits by default via the old `--max-wait` 6h default) — flipping it false would
 	// regress unattended overnight runs. `false` is the explicit interactive off-switch.
-	park: { autoResume: true, maxWait: "6h" },
+	park: { autoResume: true, maxWait: "6h", unknownResetWait: "60m" },
 	// Local revise sweep on by default (issue #76 frames the knob as *opt-out*). The sweep is a
 	// hard no-op unless the repo is github-issues + a PR ship target + auto-pick mode, so
 	// default-on does nothing for every markdown/direct-push consumer. `revise.local: false` is
@@ -402,6 +404,7 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 	// parseWaitFlag's tolerant format (unparseable falls back to 6h at read time).
 	let parkAutoResume: boolean = DEFAULTS.park.autoResume;
 	let parkMaxWait: string = DEFAULTS.park.maxWait;
+	let parkUnknownResetWait: string = DEFAULTS.park.unknownResetWait;
 	const parkBlock = yml.park;
 	if (parkBlock !== undefined) {
 		if (!isPlainObject(parkBlock)) {
@@ -420,6 +423,13 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 				throw new Error(`${configPath}: expected \`park.max-wait\` to be a string, got ${typeof mw}`);
 			}
 			parkMaxWait = mw;
+		}
+		const urw = parkBlock["unknown-reset-wait"];
+		if (urw !== undefined) {
+			if (!isString(urw)) {
+				throw new Error(`${configPath}: expected \`park.unknown-reset-wait\` to be a string, got ${typeof urw}`);
+			}
+			parkUnknownResetWait = urw;
 		}
 	}
 
@@ -489,7 +499,7 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		roadmapSource,
 		roadmapGithub,
 		roadmapLinear,
-		park: { autoResume: parkAutoResume, maxWait: parkMaxWait },
+		park: { autoResume: parkAutoResume, maxWait: parkMaxWait, unknownResetWait: parkUnknownResetWait },
 		revise: { local: reviseLocal },
 		notify: { url: notifyUrl, format: notifyFormat, events: notifyEvents },
 	};

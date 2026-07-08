@@ -370,10 +370,24 @@ describe("loadConfig — roadmap.linear", () => {
 });
 
 describe("loadConfig — park", () => {
-	it("defaults to { autoResume: true, maxWait: '6h' } when unset", () => {
+	it("defaults to { autoResume: true, maxWait: '6h', unknownResetWait: '60m' } when unset", () => {
 		const repo = tmpRepo();
 		const cfg = loadConfig({ repo, configPath: join(repo, ".autopilot.yml") });
-		assert.deepEqual(cfg.park, { autoResume: true, maxWait: "6h" });
+		assert.deepEqual(cfg.park, { autoResume: true, maxWait: "6h", unknownResetWait: "60m" });
+	});
+
+	it("parses park.unknown-reset-wait (string), leaving other keys at default", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "park:\n  unknown-reset-wait: 30m\n");
+		const cfg = loadConfig({ repo, configPath: path });
+		assert.equal(cfg.park.unknownResetWait, "30m");
+		assert.equal(cfg.park.maxWait, "6h");
+	});
+
+	it("throws on non-string park.unknown-reset-wait", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "park:\n  unknown-reset-wait: 30\n");
+		assert.throws(() => loadConfig({ repo, configPath: path }), /park\.unknown-reset-wait.*string/);
 	});
 
 	it("parses park.auto-resume (boolean) and park.max-wait (string)", () => {

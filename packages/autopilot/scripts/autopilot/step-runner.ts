@@ -3,7 +3,7 @@ import { join, resolve } from "node:path";
 import type { HookInput, HookJSONOutput, SDKAssistantMessage, SDKRateLimitEvent, SDKResultMessage, SDKSystemMessage } from "@anthropic-ai/claude-agent-sdk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { CONFIG, REPO, resolveStepSettings } from "./config.js";
-import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseResetTime } from "./helpers.js";
+import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseWaitFlag, resolveParkReset } from "./helpers.js";
 import { MUTATING_TOOLS, toolBrief } from "./tui.js";
 import type { ParkSignal, ProviderName, Step, StepEmit, StepResult, TokenUsage } from "./types.js";
 import { ensureWorktreeDeps } from "./worktree-deps.js";
@@ -299,6 +299,9 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 	let ok = true;
 	let subtype = "unknown";
 	let stalledAsk = false;
+	// True only when a rate-limit event drove the park — gates the #68 estimate so a manual
+	// pause (SIGUSR2), which mutates the same parkSignal to resetsAt=0, still hands back.
+	let rateLimitPark = false;
 	let lastToolName = "";
 	let tokens: TokenUsage | undefined;
 
@@ -326,10 +329,13 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 				const info = rle.rate_limit_info;
 				const overageAvailable = info?.overageStatus === "allowed" || info?.overageStatus === "allowed_warning";
 				if (info?.status === "rejected" && !opts.parkSignal.parked && !overageAvailable) {
+					// Record the reset faithfully; the estimate for a missing reset is a last resort
+					// applied in the backfill below (#68), after the text-parse recovery gets a shot.
 					opts.parkSignal.parked = true;
 					opts.parkSignal.resetsAt = info.resetsAt ?? 0;
 					opts.parkSignal.limitType = info.rateLimitType ?? "unknown";
 					opts.parkSignal.triggerWorker = opts.itemId ?? "";
+					rateLimitPark = true;
 					emit({ type: "rate_limit", limitType: opts.parkSignal.limitType, resetsAt: opts.parkSignal.resetsAt });
 				} else if (info?.status === "rejected" && overageAvailable) {
 					emit({ type: "rate_limit", limitType: `${info.rateLimitType ?? "unknown"} (continuing on extra usage)`, resetsAt: 0 });
@@ -451,10 +457,12 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 		}
 	}
 
-	// Backfill resetsAt from error/result text when the rate_limit_event didn't provide it
-	if (opts.parkSignal.parked && !opts.parkSignal.resetsAt) {
-		const parsed = parseResetTime(text);
-		if (parsed) opts.parkSignal.resetsAt = parsed;
+	// Resolve the park reset by precedence: event reset > reset parsed from text > conservative
+	// estimate for a rate-limit park with no reset anywhere (#68). See resolveParkReset.
+	if (opts.parkSignal.parked) {
+		const resolved = resolveParkReset(opts.parkSignal.resetsAt, rateLimitPark, opts.parkSignal.limitType, text, Date.now(), parseWaitFlag(CONFIG.park.unknownResetWait));
+		opts.parkSignal.resetsAt = resolved.resetsAt;
+		opts.parkSignal.limitType = resolved.limitType;
 	}
 
 	if (onParentAbort) opts.signal?.removeEventListener("abort", onParentAbort);
