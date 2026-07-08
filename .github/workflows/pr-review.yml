@@ -11,11 +11,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Job id `review` == the required-status-check context. The job ALWAYS runs to
-  # completion so the `review` check always reports green/red (never perpetually
-  # pending). Fork/draft PRs skip the agent *inside* the job and still report
-  # green — gating via a job-level `if` would leave a required check stuck pending.
-  review:
+  # The required branch-protection context is the `review` COMMIT STATUS, posted by
+  # exactly one runner: this job in CI mode, or the local autopilot runner in local
+  # mode. This job id is deliberately NOT `review`: a *job* named `review` gated by a
+  # job-level `if` scores as SUCCESS when skipped (GitHub treats a skipped required
+  # check as passing), which in local mode would silently green the gate before the
+  # local runner posts — a fail-open. Because no check-run is ever named `review`, a
+  # skipped `pr-review-ci` job cannot satisfy the required `review` status context;
+  # fail-closed-by-absence holds until the active runner posts the status.
+  pr-review-ci:
     if: vars.AUTOPILOT_REVIEW_RUNNER != 'local'
     # GitHub-hosted, deliberately NOT self-hosted: the review agent executes
     # PR-influenced code (the CLI runs from the checked-out tree), so the job
@@ -28,6 +32,8 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+      # Post the `review` commit status (the required context) for the head SHA.
+      statuses: write
 
     steps:
       - name: Gate — same-repo, non-draft only
@@ -38,8 +44,18 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "Skipping review (fork PR or draft) — reporting green. Secrets are unavailable to forks and forks can't be autopilot PRs."
+            echo "Skipping review (fork PR or draft) — will post a green review status. Secrets are unavailable to forks and forks can't be autopilot PRs."
           fi
+
+      # Post `pending` before any work so the gate blocks by presence while the review
+      # runs; a crashed/cancelled job leaves this pending status = merge stays blocked.
+      - name: Post pending review status
+        if: steps.gate.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }}" \
+            -X POST -f state=pending -f context=review -f description="Automated review running"
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         if: steps.gate.outputs.run == 'true'
@@ -61,9 +77,13 @@ jobs:
 
       # The CLI produces the review, posts one PR comment, and exits non-zero on a
       # confirmed blocking finding (or on any refusal / SDK error — fail closed).
-      # That exit code is the job result, hence the `review` check color.
+      # `continue-on-error` keeps the job green so the FINAL step can translate the
+      # CLI outcome into the authoritative `review` commit status (the required
+      # context) rather than the job's own `pr-review-ci` check-run.
       - name: Run review gate
+        id: review
         if: steps.gate.outputs.run == 'true'
+        continue-on-error: true
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           # Deliberately the built-in token, NOT the GH_TOKEN PAT: (a) the review
@@ -75,6 +95,28 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           CI: "true"
         run: npx @cdhorne/claude-autopilot pr-review --pr "${{ github.event.pull_request.number }}"
+
+      # Translate the outcome into the required `review` status. Runs on success,
+      # failure, and cancellation so the gate is never left merely `pending` by a
+      # completed job. Fork/draft PRs (run=false) legitimately skip the agent and
+      # post green — secrets are unavailable to forks and forks can't be autopilot PRs.
+      - name: Post final review status
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ steps.gate.outputs.run }}" != "true" ]; then
+            state=success
+            desc="Skipped (fork or draft PR) — no review required"
+          elif [ "${{ steps.review.outcome }}" = "success" ]; then
+            state=success
+            desc="Automated review: PASS"
+          else
+            state=failure
+            desc="Automated review: BLOCK or did not complete (fail-closed)"
+          fi
+          gh api "repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }}" \
+            -X POST -f state="$state" -f context=review -f description="$desc"
 
   local-mode-diagnostic:
     if: vars.AUTOPILOT_REVIEW_RUNNER == 'local'
@@ -95,5 +137,5 @@ jobs:
             exit 0
           fi
           body_file="$(mktemp)"
-          printf '%s\n%s\n' "$marker" "The review gate is posted by the local autopilot runner for this repo." > "$body_file"
+          printf '%s\n%s\n' "$marker" "The required \`review\` status for this repo is posted by the local autopilot runner, not CI." > "$body_file"
           gh pr comment "$PR_NUMBER" --repo "$GH_REPO" --body-file "$body_file"
