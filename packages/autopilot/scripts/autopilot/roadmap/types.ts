@@ -6,6 +6,10 @@ export type PlanLocation = "issue-comment" | "pr-description";
 
 export const PLAN_LOCATIONS: readonly PlanLocation[] = ["issue-comment", "pr-description"];
 
+export type MarkdownRoadmapFormat = "checkbox" | "table";
+
+export const MARKDOWN_ROADMAP_FORMATS: readonly MarkdownRoadmapFormat[] = ["checkbox", "table"];
+
 export interface GithubRoadmapConfig {
 	/**
 	 * `owner/repo`. Required when roadmap.source is github-issues. Named
@@ -62,6 +66,12 @@ export interface CreateItemOpts {
 	priority?: "high" | "normal";
 	/** Shakedown-origin flag. Adapters may use it for triage labeling; markdown ignores. */
 	deferred?: boolean;
+	/** Markdown-only. Create docs/roadmap-<roadmap>.md when --to has no existing match. */
+	create?: boolean;
+	/** Markdown-only. Explicit ID prefix, e.g. INST. Bypasses prefix inference. */
+	prefix?: string;
+	/** Markdown-only. Explicit target format. Bypasses format inference. */
+	format?: MarkdownRoadmapFormat;
 }
 
 export interface MarkDoneContext {
@@ -99,4 +109,8 @@ export function isRoadmapSourceName(v: unknown): v is RoadmapSourceName {
 
 export function isPlanLocation(v: unknown): v is PlanLocation {
 	return typeof v === "string" && (PLAN_LOCATIONS as readonly string[]).includes(v);
+}
+
+export function isMarkdownRoadmapFormat(v: unknown): v is MarkdownRoadmapFormat {
+	return typeof v === "string" && (MARKDOWN_ROADMAP_FORMATS as readonly string[]).includes(v);
 }

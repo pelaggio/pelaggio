@@ -447,6 +447,135 @@ describe("MarkdownRoadmap.createItem", () => {
 		const created = await r.createItem({ title: "New thing", scope: "M" });
 		assert.equal(created.id, "CHARTER-2");
 	});
+
+	it("bootstraps a checkbox roadmap with explicit prefix and updates task-index", async () => {
+		const repo = seedRepo();
+		seedFile(repo, "docs/task-index.md", ["# Index", "", "## Open items", "", "| ID | Title | Deps | Plan | Roadmap |", "|----|-------|------|------|---------|", "", "## Recently completed", ""].join("\n"));
+		execSync("git add -A && git commit -q -m seed", { cwd: repo });
+
+		const r = new MarkdownRoadmap({ repo });
+		const created = await r.createItem({ title: "Instantiate providers", roadmap: "instantiation", create: true, prefix: "inst", format: "checkbox" });
+		assert.equal(created.id, "INST-1");
+
+		const roadmap = readFileSync(resolve(repo, "docs/roadmap-instantiation.md"), "utf-8");
+		assert.match(roadmap, /^# Instantiation$/m);
+		assert.match(roadmap, /^- \[ \] \*\*INST-1\. Instantiate providers\*\*/m);
+		const index = readFileSync(resolve(repo, "docs/task-index.md"), "utf-8");
+		assert.match(index, /\| INST-1 \| Instantiate providers \| — \| — \| instantiation \|/);
+		assert.equal(execSync("git status --porcelain", { cwd: repo, encoding: "utf-8" }).trim(), "");
+		const changed = execSync("git show --name-only --format= HEAD", { cwd: repo, encoding: "utf-8" });
+		assert.match(changed, /docs\/roadmap-instantiation\.md/);
+		assert.match(changed, /docs\/task-index\.md/);
+	});
+
+	it("bootstraps a table roadmap when --format table is explicit", async () => {
+		const repo = seedRepo();
+		mkdirSync(resolve(repo, "docs"), { recursive: true });
+
+		const r = new MarkdownRoadmap({ repo });
+		const created = await r.createItem({ title: "New track item", roadmap: "New Track", create: true, prefix: "NEW", format: "table" });
+		assert.equal(created.id, "NEW-1");
+
+		const roadmap = readFileSync(resolve(repo, "docs/roadmap-new-track.md"), "utf-8");
+		assert.match(roadmap, /^# New Track$/m);
+		assert.match(roadmap, /^\| Item \| Depends on \|$/m);
+		assert.match(roadmap, /^\| NEW-1\. New track item \| — \|$/m);
+	});
+
+	it("uses explicit prefix in prose-only files instead of falling back to ITEM", async () => {
+		const repo = seedRepo();
+		seedFile(repo, "docs/roadmap-core.md", ["# Core", "", "No item rows yet. ADR-0003 and CFG-8 are prose references.", ""].join("\n"));
+		execSync("git add -A && git commit -q -m seed", { cwd: repo });
+
+		const r = new MarkdownRoadmap({ repo });
+		const created = await r.createItem({ title: "First explicit item", prefix: "INST" });
+		assert.equal(created.id, "INST-1");
+	});
+
+	it("uses explicit prefix high-water marks from Recently completed", async () => {
+		const repo = seedRepo();
+		seedFile(repo, "docs/roadmap-tools.md", ["# Tools", "", "| Item | Depends on |", "|------|-----------|", "| OTHER-9. Different prefix | — |", "", "## Recently completed", "", "- TOOL-5 ✓", ""].join("\n"));
+		execSync("git add -A && git commit -q -m seed", { cwd: repo });
+
+		const r = new MarkdownRoadmap({ repo });
+		const created = await r.createItem({ title: "Tooling follow-up", prefix: "TOOL" });
+		assert.equal(created.id, "TOOL-6");
+	});
+
+	it("rejects a --format that conflicts with an existing file's established format (no mixed-format corruption)", async () => {
+		const repo = seedRepo();
+		seedFile(repo, "docs/roadmap-core.md", ["# Core", "", "| Item | Depends on |", "|------|-----------|", "| TOOL-1. First | — |", ""].join("\n"));
+		execSync("git add -A && git commit -q -m seed", { cwd: repo });
+
+		const r = new MarkdownRoadmap({ repo });
+		// --format checkbox on a table-formatted file would splice a checkbox row into a table →
+		// markDone can't locate it (item stuck open). Reject rather than corrupt (#45 review).
+		await assert.rejects(() => r.createItem({ title: "Checkbox override", prefix: "TOOL", format: "checkbox" }), /conflicts with the established table format/);
+		// The file is untouched and still round-trips: appending in its OWN format then marking done works.
+		const created = await r.createItem({ title: "Same format", prefix: "TOOL" });
+		assert.equal(created.id, "TOOL-2");
+		await r.markDone("TOOL-2");
+		const roadmap = readFileSync(resolve(repo, "docs/roadmap-core.md"), "utf-8");
+		assert.doesNotMatch(roadmap, /^- \[ \]/m, "no stray checkbox row spliced into the table");
+	});
+
+	it("a bootstrapped --format checkbox file round-trips through markDone", async () => {
+		const repo = seedRepo();
+		mkdirSync(resolve(repo, "docs"), { recursive: true });
+		const r = new MarkdownRoadmap({ repo });
+		const created = await r.createItem({ title: "Checkbox item", roadmap: "Cbox", create: true, prefix: "CB", format: "checkbox" });
+		assert.equal(created.id, "CB-1");
+		// The whole point of #45's format handling: a bootstrapped file's items must be markable.
+		await r.markDone("CB-1");
+		const roadmap = readFileSync(resolve(repo, "docs/roadmap-cbox.md"), "utf-8");
+		assert.match(roadmap, /CB-1/);
+		assert.doesNotMatch(roadmap, /^\| CB-1/m, "no stray table row in a checkbox file");
+	});
+
+	it("re-running --create with a display-style --to appends instead of clobbering", async () => {
+		const repo = seedRepo();
+		mkdirSync(resolve(repo, "docs"), { recursive: true });
+
+		const r = new MarkdownRoadmap({ repo });
+		const first = await r.createItem({ title: "First item", roadmap: "New Track", create: true, prefix: "NEW", format: "table" });
+		assert.equal(first.id, "NEW-1");
+		// "New Track" slugs to roadmap-new-track.md, which the raw `includes` match
+		// won't recognize on the second call — the existence guard must still catch it.
+		const second = await r.createItem({ title: "Second item", roadmap: "New Track", create: true, prefix: "NEW", format: "table" });
+		assert.equal(second.id, "NEW-2");
+
+		const roadmap = readFileSync(resolve(repo, "docs/roadmap-new-track.md"), "utf-8");
+		assert.match(roadmap, /^\| NEW-1\. First item \| — \|$/m);
+		assert.match(roadmap, /^\| NEW-2\. Second item \| — \|$/m);
+	});
+
+	it("does not create a missing roadmap unless --create is explicit", async () => {
+		const repo = seedRepo();
+		seedFile(repo, "docs/roadmap-core.md", ["# Core", "", "| Item | Depends on |", "|------|-----------|", ""].join("\n"));
+		execSync("git add -A && git commit -q -m seed", { cwd: repo });
+
+		const r = new MarkdownRoadmap({ repo });
+		await assert.rejects(() => r.createItem({ title: "Missing target", roadmap: "missing" }), /no roadmap file matches 'missing'/);
+		assert.equal(existsSync(resolve(repo, "docs/roadmap-missing.md")), false);
+	});
+
+	it("requires --to when --create is set", async () => {
+		const repo = seedRepo();
+		mkdirSync(resolve(repo, "docs"), { recursive: true });
+
+		const r = new MarkdownRoadmap({ repo });
+		await assert.rejects(() => r.createItem({ title: "No target", create: true }), /--create requires --to <name>/);
+	});
+
+	it("rejects invalid explicit prefixes before writing new files", async () => {
+		for (const prefix of ["A-1", "123", "../bad"]) {
+			const repo = seedRepo();
+			mkdirSync(resolve(repo, "docs"), { recursive: true });
+			const r = new MarkdownRoadmap({ repo });
+			await assert.rejects(() => r.createItem({ title: "Bad prefix", roadmap: "new", create: true, prefix }), /--prefix must contain letters only/);
+			assert.equal(existsSync(resolve(repo, "docs/roadmap-new.md")), false);
+		}
+	});
 });
 
 describe("MarkdownRoadmap.claimItem — git-native claims (issue #12)", () => {

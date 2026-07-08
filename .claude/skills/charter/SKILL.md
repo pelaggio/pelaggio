@@ -1,7 +1,7 @@
 ---
 name: charter
 description: Charter a new work item — define scope, dependencies, and destination roadmap
-argument-hint: "<description> [--to <roadmap>] [--scope XS|S|M|L|XL] [--after <id>] [--priority high|normal]"
+argument-hint: "<description> [--to <roadmap>] [--create] [--prefix <PFX>] [--format checkbox|table] [--scope XS|S|M|L|XL] [--after <id>] [--priority high|normal]"
 allowed-tools: Read Glob Grep Bash(npx:*)
 ---
 
@@ -15,6 +15,9 @@ All item creation goes through `npx @cdhorne/claude-autopilot roadmap create-ite
 
 Parse `$ARGUMENTS` — the full text is the item description. Extract flags if present:
 - `--to <roadmap>` — target roadmap (partial match for markdown; ignored by gh/linear).
+- `--create` — markdown-only: if `--to <roadmap>` has no existing match, create `docs/roadmap-<roadmap>.md`.
+- `--prefix <PFX>` — markdown-only: explicit item ID prefix, letters only, e.g. `INST`.
+- `--format checkbox|table` — markdown-only: explicit roadmap row format, bypassing adapter inference.
 - `--scope XS|S|M|L|XL` — estimated scope. Default: infer from description (see "Scope inference" below).
 - `--after <id>` — insert after this item ID (markdown-only; ignored elsewhere).
 - `--priority high|normal` — priority hint.
@@ -48,13 +51,16 @@ npx @cdhorne/claude-autopilot roadmap create-item \
   --title "<concise imperative title derived from the user's input>" \
   [--scope <XS|S|M|L|XL>] \
   [--to <roadmap>] \
+  [--create] \
+  [--prefix <PFX>] \
+  [--format checkbox|table] \
   [--after <id>] \
   [--priority high|normal] \
   [--deps "<csv of existing IDs>"] \
   --json
 ```
 
-The CLI prints JSON with `id`, `title`, `deps`, `sourceRef`. The `id` is adapter-assigned — markdown allocates the next prefixed ID in the chosen roadmap file, github-issues returns the new issue number, linear returns the team-prefixed identifier. All file/format detection (checkbox vs table, prefix scanning, task-index update) lives in the adapter; don't duplicate it here.
+The CLI prints JSON with `id`, `title`, `deps`, `sourceRef`. The `id` is adapter-assigned — markdown allocates the next prefixed ID in the chosen roadmap file, github-issues returns the new issue number, linear returns the team-prefixed identifier. All file/format detection (checkbox vs table, prefix scanning, task-index update) lives in the adapter; only pass `--prefix` or `--format` when the user explicitly wants to override markdown inference.
 
 ## Report
 
