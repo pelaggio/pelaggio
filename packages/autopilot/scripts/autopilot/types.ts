@@ -162,6 +162,9 @@ export interface Flags {
 	resume?: string;
 	/** Resume-only: override the auto-detected restart step. Validated against STEPS in runOrchestrator. */
 	from?: string;
+	/** Resume-only: path to a file of PR-review findings injected into the implement step as
+	 *  revision input (issue #60). Requires --resume. */
+	"review-findings"?: string;
 	verbose: boolean;
 	trace: boolean;
 	budget: string;

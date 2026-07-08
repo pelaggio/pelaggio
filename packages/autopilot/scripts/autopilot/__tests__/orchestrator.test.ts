@@ -110,6 +110,29 @@ describe("runOrchestrator — resume --from override", () => {
 	});
 });
 
+describe("runOrchestrator — CI resume + review-findings (issue #60)", () => {
+	it("--resume with no-worktree and no --item reaches runPipeline (guard relaxation)", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({
+			byItem: { "TOOL-99": { completed: true, cost: 1 } },
+		});
+		const { exitCode, results } = await runOrchestrator({ ...baseFlags, resume: "tool-99", "no-worktree": true }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });
+		assert.equal(exitCode, 0);
+		assert.equal(calls.length, 1);
+		assert.equal(calls[0].opts.itemId, "TOOL-99");
+		assert.equal(results.length, 1);
+	});
+
+	it("--review-findings without --resume exits 2 without invoking runPipeline", async (t) => {
+		t.mock.method(console, "error", () => {});
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({ default: { completed: true } });
+		const { exitCode } = await runOrchestrator({ ...baseFlags, item: "X-1", "review-findings": "p.md" }, { runPipeline });
+		assert.equal(exitCode, 2);
+		assert.equal(calls.length, 0);
+	});
+});
+
 describe("runOrchestrator — invalid target", () => {
 	it("exits 2 without invoking runPipeline", async (t) => {
 		t.mock.method(console, "error", () => {});
