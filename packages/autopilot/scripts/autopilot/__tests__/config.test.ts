@@ -36,6 +36,7 @@ describe("loadConfig — missing / empty", () => {
 		assert.deepEqual(cfg.turnLimits, DEFAULTS.turnLimits);
 		assert.deepEqual(cfg.effort, DEFAULTS.effort);
 		assert.deepEqual(cfg.modelProfiles, DEFAULTS.modelProfiles);
+		assert.deepEqual(cfg.profileCodexModels, {});
 	});
 
 	it("treats empty YAML file the same as missing", () => {
@@ -44,6 +45,7 @@ describe("loadConfig — missing / empty", () => {
 		const cfg = loadConfig({ repo, configPath: path });
 		assert.deepEqual(cfg.budgets, DEFAULTS.budgets);
 		assert.deepEqual(cfg.modelProfiles, DEFAULTS.modelProfiles);
+		assert.deepEqual(cfg.profileCodexModels, {});
 	});
 });
 
@@ -267,6 +269,36 @@ describe("resolveStepSettings — precedence & fallback", () => {
 		assert.equal(resolveStepSettings(cfg, "deep", "implement").provider, "codex");
 		// ...while a step the profile omits still resolves via DEFAULT_PROVIDER.
 		assert.equal(resolveStepSettings(cfg, "deep", "plan").provider, "claude");
+	});
+
+	it("parses a sparse per-profile codex override and resolves undefined for omitted steps", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, ["models:", "  profiles:", "    deep:", "      codex:", "        implement: gpt-5-codex", ""].join("\n"));
+		const cfg = loadConfig({ repo, configPath: path });
+		assert.equal(cfg.profileCodexModels.deep?.implement, "gpt-5-codex");
+		assert.equal(resolveStepSettings(cfg, "deep", "implement").codexModel, "gpt-5-codex");
+		assert.equal(resolveStepSettings(cfg, "deep", "plan").codexModel, undefined);
+	});
+
+	it("keeps per-profile codex maps sparse and ignores unknown steps", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, ["models:", "  profiles:", "    deep:", "      codex:", "        implement: gpt-5-codex", "        bogus: gpt-5-codex", "    shallow:", "      plan: claude-sonnet-5", ""].join("\n"));
+		const cfg = loadConfig({ repo, configPath: path });
+		assert.deepEqual(cfg.profileCodexModels, { deep: { implement: "gpt-5-codex" } });
+		assert.equal(resolveStepSettings(cfg, "shallow", "plan").codexModel, undefined);
+	});
+
+	it("throws on invalid codex model override values", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, ["models:", "  profiles:", "    deep:", "      codex:", "        implement: 123", ""].join("\n"));
+		assert.throws(() => loadConfig({ repo, configPath: path }), /\.autopilot\.yml/);
+		assert.throws(() => loadConfig({ repo, configPath: path }), /models\.profiles\.deep\.codex\.implement/);
+	});
+
+	it("throws when a codex override block is not a map", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, ["models:", "  profiles:", "    deep:", "      codex: gpt-5-codex", ""].join("\n"));
+		assert.throws(() => loadConfig({ repo, configPath: path }), /expected `models\.profiles\.deep\.codex` to be a map/);
 	});
 
 	it("throws on an invalid provider value (documents #80's two-spot widening)", () => {

@@ -72,6 +72,7 @@ export interface ResolvedConfig {
 	turnLimits: Record<Step, number>;
 	effort: Record<Step, Effort>;
 	modelProfiles: Record<string, Partial<Record<Step, string>>>;
+	profileCodexModels: Record<string, Partial<Record<Step, string>>>;
 	profileBudgets: Record<string, Partial<Record<Step, number>>>;
 	profileTurnLimits: Record<string, Partial<Record<Step, number>>>;
 	profileEffort: Record<string, Partial<Record<Step, Effort>>>;
@@ -212,6 +213,7 @@ function parseSparseStepRecord<T>(override: unknown, section: string, validate: 
 
 interface ParsedProfiles {
 	models: Record<string, Partial<Record<Step, string>>>;
+	codexModels: Record<string, Partial<Record<Step, string>>>;
 	budgets: Record<string, Partial<Record<Step, number>>>;
 	turnLimits: Record<string, Partial<Record<Step, number>>>;
 	effort: Record<string, Partial<Record<Step, Effort>>>;
@@ -222,11 +224,12 @@ function parseProfiles(defaults: Record<string, Partial<Record<Step, string>>>, 
 	const models: Record<string, Partial<Record<Step, string>>> = {};
 	for (const [name, base] of Object.entries(defaults)) models[name] = { ...base };
 	const budgets: Record<string, Partial<Record<Step, number>>> = {};
+	const codexModels: Record<string, Partial<Record<Step, string>>> = {};
 	const turnLimits: Record<string, Partial<Record<Step, number>>> = {};
 	const effort: Record<string, Partial<Record<Step, Effort>>> = {};
 	const providers: Record<string, Partial<Record<Step, ProviderName>>> = {};
 
-	if (override === undefined) return { models, budgets, turnLimits, effort, providers };
+	if (override === undefined) return { models, codexModels, budgets, turnLimits, effort, providers };
 	if (!isPlainObject(override)) {
 		throw new Error(`${configPath}: expected \`models.profiles\` to be a map, got ${Array.isArray(override) ? "array" : typeof override}`);
 	}
@@ -252,8 +255,10 @@ function parseProfiles(defaults: Record<string, Partial<Record<Step, string>>>, 
 		if (Object.keys(e).length > 0) effort[name] = e;
 		const p = parseSparseStepRecord(profile.providers, `models.profiles.${name}.providers`, isProviderName, configPath);
 		if (Object.keys(p).length > 0) providers[name] = p;
+		const cm = parseSparseStepRecord(profile.codex, `models.profiles.${name}.codex`, isString, configPath);
+		if (Object.keys(cm).length > 0) codexModels[name] = cm;
 	}
-	return { models, budgets, turnLimits, effort, providers };
+	return { models, codexModels, budgets, turnLimits, effort, providers };
 }
 
 function parseFile(configPath: string): Record<string, unknown> {
@@ -290,7 +295,14 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		}
 		profilesOverride = modelsBlock.profiles;
 	}
-	const { models: modelProfiles, budgets: profileBudgets, turnLimits: profileTurnLimits, effort: profileEffort, providers: profileProviders } = parseProfiles(DEFAULTS.modelProfiles, profilesOverride, configPath);
+	const {
+		models: modelProfiles,
+		codexModels: profileCodexModels,
+		budgets: profileBudgets,
+		turnLimits: profileTurnLimits,
+		effort: profileEffort,
+		providers: profileProviders,
+	} = parseProfiles(DEFAULTS.modelProfiles, profilesOverride, configPath);
 
 	// Worktree prefix: env > yml > basename default
 	let ymlPrefix: string | undefined;
@@ -491,6 +503,7 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		turnLimits,
 		effort,
 		modelProfiles,
+		profileCodexModels,
 		profileBudgets,
 		profileTurnLimits,
 		profileEffort,
@@ -512,6 +525,7 @@ export interface StepSettings {
 	turns: number;
 	effort: Effort;
 	model: string | undefined;
+	codexModel: string | undefined;
 	provider: ProviderName;
 }
 
@@ -520,9 +534,10 @@ export interface StepSettings {
  * Precedence: profile override > global step value (top-level yml merged onto
  * DEFAULTS). The sparse override maps hold only steps a profile explicitly sets,
  * so a missing key falls through to the always-present global — a resolution can
- * never surface `undefined` for budget/turns/effort. `model` stays
- * `string | undefined` (a profile need not name every step; the SDK defaults).
- * `provider` mirrors `model`'s per-profile lookup but falls back to
+ * never surface `undefined` for budget/turns/effort. `model` and `codexModel`
+ * stay `string | undefined` (a profile need not name every step; the SDK/CLI
+ * defaults). `codexModel` mirrors `model` as a sparse per-profile lookup with
+ * no default fill. `provider` mirrors `model`'s per-profile lookup but falls back to
  * `DEFAULT_PROVIDER` instead of `undefined`, so it never surfaces unset — every
  * present and future step resolves to a concrete backend with no exhaustive map.
  */
@@ -532,6 +547,7 @@ export function resolveStepSettings(config: ResolvedConfig, profile: string, ste
 		turns: config.profileTurnLimits[profile]?.[step] ?? config.turnLimits[step],
 		effort: config.profileEffort[profile]?.[step] ?? config.effort[step],
 		model: config.modelProfiles[profile]?.[step],
+		codexModel: config.profileCodexModels[profile]?.[step],
 		provider: config.profileProviders[profile]?.[step] ?? DEFAULT_PROVIDER,
 	};
 }
