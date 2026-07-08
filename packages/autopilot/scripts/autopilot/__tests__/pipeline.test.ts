@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { after, before, describe, it, mock } from "node:test";
 import { WORKTREE_PREFIX } from "../config.js";
 import { runOrchestrator, runPipeline } from "../pipeline.js";
+import { isQuickScope } from "../roadmap/scope.js";
 import type { ShipBookkeepingResult } from "../ship/index.js";
 import { getShipTarget } from "../ship/index.js";
 import type { Flags, ParkSignal, PipelineOpts } from "../types.js";
@@ -1163,6 +1164,75 @@ describe("runPipeline — pick step", () => {
 			msgs.some((m) => m === "wip: autopilot implementation checkpoint"),
 			`expected implementation checkpoint commit; got:\n${msgs.join("\n")}`,
 		);
+	});
+
+	it("standard item scope overrides bug/fix wording in the pick summary", async () => {
+		const { parent, repo } = makeTempRepoWithParent();
+		const worktreePath = join(parent, `${WORKTREE_PREFIX}121`);
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const planPath = join(worktreePath, ".dev", "plans", "121.md");
+		const roadmap = makeMockRoadmap({
+			async parseItemId(text) {
+				return text.includes("121") ? "121" : null;
+			},
+			async getItem(id) {
+				if (id !== "121") return null;
+				return {
+					id: "121",
+					title: "Preserve standard scope classification",
+					deps: "—",
+					sourceRef: "cdhorne/claude-autopilot#121",
+					status: "in-progress",
+					body: "Scope: M\n\nFixes a bug in quick-mode classification.",
+				};
+			},
+			resolvePlanPath: () => planPath,
+			isQuickScope,
+		});
+		const { runStep, calls } = createMockRunStep(
+			{
+				pick: {
+					ok: true,
+					text: "claimed issue 121\npick-item: 121\npick-result: claimed\nsummary: fixes a bug in quick-mode classification",
+					sideEffect: (cwd) => {
+						execSync(`git worktree add -q -b feat/issue-121 "${worktreePath}"`, { cwd });
+					},
+				},
+				plan: { ok: true, writes: { ".dev/plans/121.md": "# Plan\n" } },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				ship: {
+					ok: true,
+					text: "ship-merged: 121",
+					sideEffect: () => {
+						execSync("git merge -q --no-ff feat/issue-121", { cwd: repo });
+					},
+				},
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline(pickOpts(), parkSignal, baseFlags, {
+			runStep,
+			roadmap,
+			mainRepo: repo,
+			resolveWorktree: (id) => join(parent, `${WORKTREE_PREFIX}${id.toLowerCase()}`),
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+			runShipBookkeeping: noopBookkeeping,
+		});
+
+		assert.equal(result.completed, true);
+		assert.deepEqual(
+			calls.map((c) => c.step),
+			["pick", "plan", "shakedown-plan", "implement", "shakedown-code", "ship"],
+		);
+		assert.equal(logs.length, 1);
+		assert.equal(logs[0].quick, false);
 	});
 
 	it("pick failed — returns 'pick failed' with null itemId, no subsequent steps", async () => {

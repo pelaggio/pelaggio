@@ -17,6 +17,7 @@ export {
 	type MarkdownRoadmapFormat,
 	PLAN_LOCATIONS,
 	type PlanLocation,
+	type QuickScopeInput,
 	ROADMAP_SOURCE_NAMES,
 	type RoadmapItem,
 	type RoadmapItemStatus,

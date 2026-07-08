@@ -53,6 +53,15 @@ export interface RoadmapItemStatus extends RoadmapItem {
 	 *  and, for now, linear (its `sourceRef` is an identifier — populating linear body is a
 	 *  follow-up before linear-on-sandbox is supported). */
 	body?: string;
+	/** Item labels when the adapter carries them. Absent for sources without label metadata. */
+	labels?: string[];
+}
+
+export interface QuickScopeInput {
+	/** Item-owned metadata. Body and labels are optional because not every source carries both. */
+	item?: Pick<RoadmapItemStatus, "body" | "labels"> | null;
+	/** Pick summary text used as a fallback when item metadata has no decisive signal. */
+	summaryText?: string;
 }
 
 export interface CreateItemOpts {
@@ -100,7 +109,7 @@ export interface RoadmapSource {
 	/** True when the item exists in uncommitted working-tree state but not yet in HEAD. Gh/linear: always false. */
 	isCharterPickRace(id: string): boolean;
 	parseItemId(text: string): Promise<string | null>;
-	isQuickScope(text: string): boolean;
+	isQuickScope(input: QuickScopeInput): boolean;
 }
 
 export function isRoadmapSourceName(v: unknown): v is RoadmapSourceName {
