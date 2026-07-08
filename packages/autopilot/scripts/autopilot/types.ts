@@ -94,6 +94,14 @@ export interface CycleResult {
  */
 export const RECOVERABLE_ERRORS = ["plan needs rethink", "parked", "pick:queue-empty", "pick:worktree-exists", "pick:already-claimed", "pick:already-done", "pick:unknown"] as const;
 
+// ── Step providers ─────────────────────────────────────────────────────
+
+/** The backend that runs a step's model. Today only `"claude"` (the SDK runner);
+ *  #80 widens this union (and the `PROVIDER_NAMES` validation array in `config.ts`)
+ *  to register a second provider. The runtime names array lives in `config.ts`,
+ *  mirroring `ShipTargetName` / `SHIP_TARGET_NAMES`. */
+export type ProviderName = "claude";
+
 // ── Ship targets ───────────────────────────────────────────────────────
 
 export type ShipTargetName = "direct-push" | "pull-request" | "auto-merge-pr";

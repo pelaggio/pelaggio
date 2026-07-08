@@ -4,9 +4,18 @@ import { basename, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { NOTIFY_EVENTS, NOTIFY_FORMATS, type NotifyConfig, type NotifyEvent, type NotifyFormat } from "./notify.js";
 import { type GithubRoadmapConfig, type LinearRoadmapConfig, PLAN_LOCATIONS, type PlanLocation, ROADMAP_SOURCE_NAMES, type RoadmapSourceName } from "./roadmap/types.js";
-import type { ShipTargetName } from "./types.js";
+import type { ProviderName, ShipTargetName } from "./types.js";
 
 const SHIP_TARGET_NAMES: readonly ShipTargetName[] = ["direct-push", "pull-request", "auto-merge-pr"];
+
+// The backends a step's model can run on. Mirrors `SHIP_TARGET_NAMES`: the type
+// lives in `types.ts`, this validation array is its module-private companion. #80
+// widens both to add a second provider. `DEFAULT_PROVIDER` is the fallback every
+// step resolves to when a profile names none, so no provider string is hardcoded
+// outside this file.
+const PROVIDER_NAMES: readonly ProviderName[] = ["claude"];
+const DEFAULT_PROVIDER: ProviderName = "claude";
+const isProviderName = (v: unknown): v is ProviderName => typeof v === "string" && (PROVIDER_NAMES as readonly string[]).includes(v);
 
 // ── Paths ──────────────────────────────────────────────────────────────
 
@@ -66,6 +75,7 @@ export interface ResolvedConfig {
 	profileBudgets: Record<string, Partial<Record<Step, number>>>;
 	profileTurnLimits: Record<string, Partial<Record<Step, number>>>;
 	profileEffort: Record<string, Partial<Record<Step, Effort>>>;
+	profileProviders: Record<string, Partial<Record<Step, ProviderName>>>;
 	shipTarget: ShipTargetName;
 	roadmapSource: RoadmapSourceName;
 	roadmapGithub: GithubRoadmapConfig;
@@ -203,6 +213,7 @@ interface ParsedProfiles {
 	budgets: Record<string, Partial<Record<Step, number>>>;
 	turnLimits: Record<string, Partial<Record<Step, number>>>;
 	effort: Record<string, Partial<Record<Step, Effort>>>;
+	providers: Record<string, Partial<Record<Step, ProviderName>>>;
 }
 
 function parseProfiles(defaults: Record<string, Partial<Record<Step, string>>>, override: unknown, configPath: string): ParsedProfiles {
@@ -211,8 +222,9 @@ function parseProfiles(defaults: Record<string, Partial<Record<Step, string>>>, 
 	const budgets: Record<string, Partial<Record<Step, number>>> = {};
 	const turnLimits: Record<string, Partial<Record<Step, number>>> = {};
 	const effort: Record<string, Partial<Record<Step, Effort>>> = {};
+	const providers: Record<string, Partial<Record<Step, ProviderName>>> = {};
 
-	if (override === undefined) return { models, budgets, turnLimits, effort };
+	if (override === undefined) return { models, budgets, turnLimits, effort, providers };
 	if (!isPlainObject(override)) {
 		throw new Error(`${configPath}: expected \`models.profiles\` to be a map, got ${Array.isArray(override) ? "array" : typeof override}`);
 	}
@@ -236,8 +248,10 @@ function parseProfiles(defaults: Record<string, Partial<Record<Step, string>>>, 
 		if (Object.keys(t).length > 0) turnLimits[name] = t;
 		const e = parseSparseStepRecord(profile.effort, `models.profiles.${name}.effort`, isEffort, configPath);
 		if (Object.keys(e).length > 0) effort[name] = e;
+		const p = parseSparseStepRecord(profile.providers, `models.profiles.${name}.providers`, isProviderName, configPath);
+		if (Object.keys(p).length > 0) providers[name] = p;
 	}
-	return { models, budgets, turnLimits, effort };
+	return { models, budgets, turnLimits, effort, providers };
 }
 
 function parseFile(configPath: string): Record<string, unknown> {
@@ -274,7 +288,7 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		}
 		profilesOverride = modelsBlock.profiles;
 	}
-	const { models: modelProfiles, budgets: profileBudgets, turnLimits: profileTurnLimits, effort: profileEffort } = parseProfiles(DEFAULTS.modelProfiles, profilesOverride, configPath);
+	const { models: modelProfiles, budgets: profileBudgets, turnLimits: profileTurnLimits, effort: profileEffort, providers: profileProviders } = parseProfiles(DEFAULTS.modelProfiles, profilesOverride, configPath);
 
 	// Worktree prefix: env > yml > basename default
 	let ymlPrefix: string | undefined;
@@ -470,6 +484,7 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		profileBudgets,
 		profileTurnLimits,
 		profileEffort,
+		profileProviders,
 		shipTarget,
 		roadmapSource,
 		roadmapGithub,
@@ -487,6 +502,7 @@ export interface StepSettings {
 	turns: number;
 	effort: Effort;
 	model: string | undefined;
+	provider: ProviderName;
 }
 
 /**
@@ -496,6 +512,9 @@ export interface StepSettings {
  * so a missing key falls through to the always-present global — a resolution can
  * never surface `undefined` for budget/turns/effort. `model` stays
  * `string | undefined` (a profile need not name every step; the SDK defaults).
+ * `provider` mirrors `model`'s per-profile lookup but falls back to
+ * `DEFAULT_PROVIDER` instead of `undefined`, so it never surfaces unset — every
+ * present and future step resolves to a concrete backend with no exhaustive map.
  */
 export function resolveStepSettings(config: ResolvedConfig, profile: string, step: Step): StepSettings {
 	return {
@@ -503,6 +522,7 @@ export function resolveStepSettings(config: ResolvedConfig, profile: string, ste
 		turns: config.profileTurnLimits[profile]?.[step] ?? config.turnLimits[step],
 		effort: config.profileEffort[profile]?.[step] ?? config.effort[step],
 		model: config.modelProfiles[profile]?.[step],
+		provider: config.profileProviders[profile]?.[step] ?? DEFAULT_PROVIDER,
 	};
 }
 

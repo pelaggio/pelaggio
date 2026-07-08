@@ -3,7 +3,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { LOG_PATH, REPO, STEPS, WORKTREE_PREFIX } from "./config.js";
 import { MarkdownRoadmap } from "./roadmap/markdown.js";
-import type { Mutex, Step } from "./types.js";
+import type { Mutex, Step, StepResult } from "./types.js";
 
 // ── Skill loading ──────────────────────────────────────────────────────
 
@@ -229,6 +229,23 @@ export function classifyStepError(errMsg: string, parked: boolean): string {
 	if (/abort/i.test(errMsg)) return "error_abort";
 	if (/max.*turns|turn.?limit|maximum.*turns/i.test(errMsg)) return "error_max_turns";
 	return "error_sdk";
+}
+
+/**
+ * Closed classification of a step outcome, used ONLY at pipeline decision points
+ * (retry/park/ship branching). Distinct from the free-form `StepResult.subtype`
+ * that flows into the jsonl log / TUI / notify telemetry — those keep the raw
+ * value (e.g. `error_sdk`, `error_budget`, `error_abort`) so classifying here
+ * never flattens telemetry. Every closed member is identity on the branched
+ * subtype; everything else (SDK/budget/abort errors, `unknown`, arbitrary
+ * strings) collapses to the catch-all `"error"`.
+ */
+export type StepSubtype = "success" | "error_rate_limit" | "error_max_turns" | "error_refusal" | "blocked" | "edit_loop" | "error";
+
+const CLOSED_SUBTYPES: ReadonlySet<string> = new Set(["success", "error_rate_limit", "error_max_turns", "error_refusal", "blocked", "edit_loop"]);
+
+export function classifyOutcome(result: Pick<StepResult, "subtype">): StepSubtype {
+	return CLOSED_SUBTYPES.has(result.subtype) ? (result.subtype as StepSubtype) : "error";
 }
 
 // ── Retry budget decision ──────────────────────────────────────────────
