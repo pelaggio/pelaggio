@@ -1,6 +1,23 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { CONFIG, DEFAULT_SHIP_TARGET, isPipelineStep, LOG_PATH, MODEL_PROFILES, REPO, REVISE_LOCAL, ROADMAP_GITHUB, ROADMAP_LINEAR, ROADMAP_SOURCE, resolveStepSettings, SHIP_TARGET, STEPS, WORKTREE_PREFIX } from "./config.js";
+import {
+	CONFIG,
+	DEFAULT_SHIP_TARGET,
+	isPipelineStep,
+	LOG_PATH,
+	MODEL_PROFILES,
+	REPO,
+	REVIEW_CONFIG,
+	REVISE_LOCAL,
+	type ReviewRunner,
+	ROADMAP_GITHUB,
+	ROADMAP_LINEAR,
+	ROADMAP_SOURCE,
+	resolveStepSettings,
+	SHIP_TARGET,
+	STEPS,
+	WORKTREE_PREFIX,
+} from "./config.js";
 import {
 	appendLog as appendLogDefault,
 	buildStepArgs,
@@ -34,7 +51,9 @@ import {
 	stepIndex,
 	verifyShipLanded,
 } from "./helpers.js";
-import { type NotifyConfig, notifyCycle, sendNotification as sendNotificationDefault } from "./notify.js";
+import { type NotifyConfig, notifyCycle, notifyStrandedReview, sendNotification as sendNotificationDefault } from "./notify.js";
+import { buildFailClosedComment, runPrReviewGate } from "./pr-review-cli.js";
+import { cleanupReviewHead, findReviewCandidates, postLocalModeWorkflowComment, postReviewStatus, prepareReviewHead, upsertReviewComment } from "./review-sweep.js";
 import { claimRevision, ensureReviseWorktree, fetchReviewFindings, findRevisablePrs, isAutopilotManaged, postParkComment, reviseFindingsPath } from "./revise-sweep.js";
 import { defaultGhRun, type GhRunner } from "./roadmap/github-issues.js";
 import { getRoadmapSource, type RoadmapSource } from "./roadmap/index.js";
@@ -933,6 +952,17 @@ export interface OrchestratorDeps {
 	 *  (`REVISE_LOCAL`, the github-source-gated `ghRepo`, `defaultGhRun`). Injecting `ghRepo` lets
 	 *  tests force-activate the sweep with a stubbed `gh` without a real github-issues config. */
 	revise?: Partial<{ local: boolean; ghRepo: string; gh: GhRunner }>;
+	/** Local review sweep config (issue #84). Partial — merged onto config defaults. */
+	review?: Partial<{
+		runner: ReviewRunner;
+		ghRepo: string;
+		gh: GhRunner;
+		statuslessAfter: string;
+		runReviewGate: typeof runPrReviewGate;
+		now: () => number;
+		prepareReviewHead: typeof prepareReviewHead;
+		cleanupReviewHead: typeof cleanupReviewHead;
+	}>;
 }
 
 // Post-reset resume grace: jitter deliberately bounded inside the pre-existing 30s
@@ -1226,6 +1256,70 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			}
 		}
 
+		// ── Local review sweep (issue #84) ──
+		//
+		// In local review mode the trusted local tree owns the review CLI/skill/parser/status
+		// posting code. PR heads are only diff/file data. This sweep posts `review` commit
+		// statuses before the existing revise sweep runs, so a fresh local BLOCK is immediately
+		// visible to `findRevisablePrs` below.
+		const review = {
+			runner: REVIEW_CONFIG.runner,
+			statuslessAfter: REVIEW_CONFIG.statuslessAfter,
+			ghRepo: ROADMAP_SOURCE === "github-issues" ? ROADMAP_GITHUB.ghRepo : "",
+			gh: defaultGhRun,
+			runReviewGate: runPrReviewGate,
+			now: () => Date.now(),
+			prepareReviewHead,
+			cleanupReviewHead,
+			...deps.review,
+		};
+		const shipIsPr = shipTargetName === "pull-request" || shipTargetName === "auto-merge-pr";
+		const doReviewSweep = review.runner === "local" && shipIsPr && !!review.ghRepo && !noWorktree && !dryRun && items.length === 0;
+
+		if (doReviewSweep) {
+			const { candidates, stranded } = findReviewCandidates(review.gh, review.ghRepo, review.now(), parseWaitFlag(review.statuslessAfter));
+			for (const pr of stranded) {
+				postLocalModeWorkflowComment(review.gh, review.ghRepo, pr.prNumber);
+				if (notifyEnabled) await notifyStrandedReview(notifyCfg, { itemId: pr.itemId, prNumber: pr.prNumber, ghRepo: review.ghRepo, headSha: pr.headSha, logPath: LOG_PATH }, { send });
+			}
+
+			for (const pr of candidates) {
+				if (parkSignal.parked) break;
+				if (!isAutopilotManaged(review.gh, review.ghRepo, pr.itemId, ROADMAP_GITHUB.label)) continue;
+				if (!postReviewStatus(review.gh, review.ghRepo, pr.headSha, "pending", "local autopilot review running")) continue;
+				let body = "";
+				let finalState: "success" | "failure" = "failure";
+				let reviewCost = 0;
+				let reviewCostEstimated = false;
+				try {
+					const prepared = review.prepareReviewHead(REPO, pr);
+					if (!prepared) throw new Error("could not prepare PR head for local review");
+					const result = await review.runReviewGate({
+						pr: String(pr.prNumber),
+						profile: "standard",
+						cwd: REPO,
+						diffCwd: prepared.diffCwd,
+						diffBaseRef: prepared.baseRef,
+						diffHeadRef: prepared.headRef,
+					});
+					body = result.body;
+					finalState = result.gate === "pass" ? "success" : "failure";
+					reviewCost = result.cost;
+					reviewCostEstimated = result.costEstimated;
+				} catch (e) {
+					const msg = e instanceof Error ? e.message : String(e);
+					body = buildFailClosedComment("error_crash", `local pr-review crashed before producing a review, so this gate blocks the merge.\n\n${msg}`);
+					finalState = "failure";
+				} finally {
+					review.cleanupReviewHead(REPO, pr);
+				}
+				upsertReviewComment(review.gh, review.ghRepo, pr.prNumber, body);
+				postReviewStatus(review.gh, review.ghRepo, pr.headSha, finalState, finalState === "success" ? "local autopilot review passed" : "local autopilot review blocked");
+				totalSpent += reviewCost;
+				console.log(`review ${pr.itemId}#${pr.prNumber} — ${finalState}${reviewCost > 0 ? ` ${reviewCostEstimated ? "~" : ""}$${reviewCost.toFixed(2)}` : ""}`);
+			}
+		}
+
 		// ── Revise sweep (issue #76) ──
 		//
 		// Before the pick worker pool, sweep for red-review PRs and revise each in-process on the
@@ -1242,7 +1336,6 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			gh: defaultGhRun,
 			...deps.revise,
 		};
-		const shipIsPr = shipTargetName === "pull-request" || shipTargetName === "auto-merge-pr";
 		const doSweep = revise.local && shipIsPr && !!revise.ghRepo && !noWorktree && !dryRun && items.length === 0;
 
 		if (doSweep) {

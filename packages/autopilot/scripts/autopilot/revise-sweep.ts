@@ -32,6 +32,8 @@ interface RollupEntry {
 	__typename?: string;
 	name?: string;
 	conclusion?: string;
+	context?: string;
+	state?: string;
 }
 interface PrListEntry {
 	number: number;
@@ -75,14 +77,17 @@ export function reviseFindingsPath(repo: string, id: string): string {
 /**
  * GH Actions check runs surface in `statusCheckRollup` as
  * `{ __typename: "CheckRun", name: "review", status: "COMPLETED", conclusion: "FAILURE", ... }`.
- * The `review` job name in `pr-review.yml` IS the check-run `name`. Legacy StatusContext entries
- * carry `context`/`state` instead of `name`/`conclusion`, so keying on name+conclusion ignores
- * them for free. Matcher is defensive: case-insensitive `name`, uppercased `conclusion`. If a
- * live rollup ever keys `review` under `workflowName` instead of `name`, widen this to check both.
+ * The local review runner posts commit statuses, surfaced as `StatusContext` entries with
+ * `context: "review"` and `state: "FAILURE"`. Matcher is defensive and fail-soft: non-arrays
+ * return false, names/contexts are case-insensitive, and terminal states are uppercased.
  */
 function hasReviewFailure(rollup: RollupEntry[] | undefined): boolean {
 	if (!Array.isArray(rollup)) return false;
-	return rollup.some((e) => (e.name ?? "").toLowerCase() === REVIEW_CHECK_NAME && (e.conclusion ?? "").toUpperCase() === "FAILURE");
+	return rollup.some((e) => {
+		const checkRunFailed = (e.name ?? "").toLowerCase() === REVIEW_CHECK_NAME && (e.conclusion ?? "").toUpperCase() === "FAILURE";
+		const statusFailed = (e.context ?? "").toLowerCase() === REVIEW_CHECK_NAME && (e.state ?? "").toUpperCase() === "FAILURE";
+		return checkRunFailed || statusFailed;
+	});
 }
 
 /**

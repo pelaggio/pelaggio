@@ -2,7 +2,7 @@ import { type CycleResult, RECOVERABLE_ERRORS } from "./types.js";
 
 // ── Events & formats ───────────────────────────────────────────────────
 
-export const NOTIFY_EVENTS = ["parked", "failed", "shipped", "pr-opened", "shipwrecked"] as const;
+export const NOTIFY_EVENTS = ["parked", "failed", "shipped", "pr-opened", "shipwrecked", "review-stranded"] as const;
 export type NotifyEvent = (typeof NOTIFY_EVENTS)[number];
 
 export const NOTIFY_FORMATS = ["json", "ntfy"] as const;
@@ -98,6 +98,7 @@ const EVENT_TAGS: Record<NotifyEvent, string> = {
 	shipped: "white_check_mark",
 	"pr-opened": "arrow_heading_up",
 	shipwrecked: "boom",
+	"review-stranded": "warning",
 };
 
 const EVENT_TITLES: Record<NotifyEvent, string> = {
@@ -106,9 +107,10 @@ const EVENT_TITLES: Record<NotifyEvent, string> = {
 	shipped: "autopilot shipped",
 	"pr-opened": "autopilot PR opened",
 	shipwrecked: "autopilot shipwrecked",
+	"review-stranded": "autopilot review stranded",
 };
 
-const HIGH_PRIORITY: ReadonlySet<NotifyEvent> = new Set<NotifyEvent>(["failed", "shipwrecked"]);
+const HIGH_PRIORITY: ReadonlySet<NotifyEvent> = new Set<NotifyEvent>(["failed", "shipwrecked", "review-stranded"]);
 
 /**
  * Build the POST body + headers for a format. `json` sends the full payload (Slack reads
@@ -214,4 +216,30 @@ export async function notifyCycle(cfg: NotifyConfig, result: CycleResult, logPat
 	// to prevent). Deliberately not the URL itself — ntfy topics are secret-ish.
 	if (!delivered) process.stderr.write(`⚠ notify: ${event} webhook delivery failed\n`);
 	return event;
+}
+
+export async function notifyStrandedReview(cfg: NotifyConfig, input: { itemId: string; prNumber: number; ghRepo: string; headSha: string; logPath: string }, deps: { send?: SendNotification } = {}): Promise<boolean> {
+	const event: NotifyEvent = "review-stranded";
+	if (!cfg.url || !cfg.events.includes(event)) return false;
+	const prUrl = `https://github.com/${input.ghRepo}/pull/${input.prNumber}`;
+	const base = {
+		event,
+		itemId: input.itemId,
+		completed: false,
+		cost: 0,
+		error: `PR #${input.prNumber} has no local review status for ${input.headSha.slice(0, 12)}`,
+		prUrl,
+		shipwrecked: false,
+		logPath: input.logPath,
+		ts: new Date().toISOString(),
+	} satisfies Omit<NotifyPayload, "text">;
+	const payload: NotifyPayload = { ...base, text: formatText(base) };
+	let delivered = false;
+	try {
+		delivered = await (deps.send ?? sendNotification)(cfg.url, cfg.format, payload);
+	} catch {
+		delivered = false;
+	}
+	if (!delivered) process.stderr.write("⚠ notify: review-stranded webhook delivery failed\n");
+	return delivered;
 }

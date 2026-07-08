@@ -11,14 +11,44 @@ the pipeline's own work *in-context*, before ship. This gate is a fresh SDK sess
 that reads the PR diff cold — the same shape that has caught things the in-context
 review missed.
 
-## How it works
+## Runner modes
+
+The required `review` context is **always a commit status** — posted by exactly one
+runner. `review.runner` selects which:
+
+- `ci` (default): `.github/workflows/pr-review.yml` runs the `pr-review` CLI in
+  GitHub Actions and posts the `review` **commit status** (pending → success/failure)
+  for the PR head SHA.
+- `local`: a normal local autopilot auto-pick run sweeps open PRs before revise,
+  runs the same `pr-review` step from the trusted local tree, and posts the `review`
+  **commit status**.
+
+**Branch protection: require the `review` _status_ context, not a check named
+`review`.** No workflow job is named `review` (the CI job is `pr-review-ci`) precisely
+because GitHub scores a *skipped* required-check job as success — so a job named
+`review` gated off in local mode would silently green the gate (fail-open). Keeping
+`review` a status posted only by the active runner closes that: before the runner
+posts, the context is absent and merge is blocked (fail-closed-by-absence). Verify with
+`gh api repos/{owner}/{repo}/commits/{sha}/status` (the `review` status) and
+`.../check-runs` (should contain no check-run named `review`).
+
+Local mode is deliberately trusted-tree: the CLI, skill, parser, rubric, and status
+posting code run from local `main`; the PR head is fetched only as diff/file data.
+Set the repo variable `AUTOPILOT_REVIEW_RUNNER=local` so the CI workflow leaves only
+a diagnostic comment and does not execute review tooling from the PR branch. The
+local `gh` auth needs permission to write commit statuses (`statuses: write`) and PR
+comments.
+
+## CI runner flow
 
 1. `.github/workflows/pr-review.yml` triggers on `pull_request`
    (`opened`, `synchronize`, `reopened`, `ready_for_review`) targeting `main`.
-2. The single job's id is **`review`** — that string is the required-check context.
-   The job **always runs to completion** so the check always reports green or red,
-   never perpetual-pending. Fork or draft PRs skip the agent *inside* the job and
-   report green (secrets are unavailable to forks; forks can't be autopilot PRs).
+2. The job id is **`pr-review-ci`** (deliberately *not* `review`). It posts the
+   `review` **commit status** for the head SHA: `pending` before the agent runs, then
+   `success`/`failure` after. The required-check context is that status, so the gate
+   reports green or red and is never left perpetual-pending. Fork or draft PRs skip the
+   agent and post a green `review` status (secrets are unavailable to forks; forks
+   can't be autopilot PRs).
 3. For a same-repo, non-draft PR the job checks out the head SHA with full history,
    installs deps, and runs `npx @cdhorne/claude-autopilot pr-review --pr <n>`.
 4. The CLI reads the changed file list and diff, then runs one bounded, fresh-session
@@ -28,10 +58,13 @@ review missed.
    CLI runs a second fresh `pr-review --red-team` session before deciding the gate.
    The CLI posts both pass outputs as one idempotently-upserted PR comment and sets the
    exit code.
-5. **Exit code = gate = check color.** The CLI exits `0` only on an explicit
+5. **Exit code = gate = posted `review` status.** The CLI exits `0` only on an explicit
    `Verdict: PASS` from every required pass; everything else — `Verdict: BLOCK`, a
    missing verdict, a refusal, an SDK error, max-turns, a rate-limit park, or inability
-   to inspect the diff — exits `1`. The gate **fails closed**: ambiguity blocks the merge.
+   to inspect the diff — exits `1`. The workflow's final step translates that exit code
+   into the `review` commit status (`0` → success, else failure), and posts `failure`
+   if the job is cancelled after starting. The gate **fails closed**: ambiguity blocks
+   the merge, and a crash before the final step leaves the earlier `pending` status.
 
 ## The fail-closed contract
 
@@ -137,6 +170,26 @@ models:
 ```
 
 Select the profile with `--profile <name>` (default `standard`).
+
+For local subscription review with Codex, configure the poster and provider separately:
+
+```yaml
+review:
+  runner: local
+  statusless-after: 2h
+
+models:
+  profiles:
+    standard:
+      providers:
+        pr-review: codex
+      codex:
+        pr-review: gpt-5-codex
+```
+
+When a local-mode PR has no `review` status for longer than `statusless-after`, the
+orchestrator posts the local-mode diagnostic comment and emits the
+`review-stranded` notification event if notifications are enabled.
 
 ## Runner & secrets (repo-admin, one-time)
 

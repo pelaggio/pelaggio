@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { main, setPrReviewDepsForTests } from "../pr-review-cli.js";
+import { main, runPrReviewGate, setPrReviewDepsForTests } from "../pr-review-cli.js";
 import type { RunStepFn } from "../step-runner.js";
 import type { ParkSignal, StepEmit, StepResult } from "../types.js";
 
 interface RunCall {
 	prompt: string;
+	cwd: string;
 	parkSignal: ParkSignal;
 }
 
@@ -33,7 +34,7 @@ async function runCli(opts: { files?: string; diff?: string; results?: StepResul
 		throw new Error(`unexpected command: ${cmd} ${args.join(" ")}`);
 	}) as typeof import("node:child_process").execFileSync;
 	const runStep: RunStepFn = async (_name, prompt, stepOpts, _emit: StepEmit) => {
-		calls.push({ prompt, parkSignal: stepOpts.parkSignal });
+		calls.push({ prompt, cwd: stepOpts.cwd, parkSignal: stepOpts.parkSignal });
 		const next = queued.shift();
 		assert.ok(next, "unexpected extra runStep call");
 		return next;
@@ -154,5 +155,47 @@ describe("pr-review CLI aggregation", () => {
 		assert.notEqual(out.calls[0].parkSignal, out.calls[1].parkSignal);
 		assert.deepEqual(out.calls[0].parkSignal, { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" });
 		assert.deepEqual(out.calls[1].parkSignal, { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" });
+	});
+
+	it("library runner accepts trusted cwd with custom diff refs and does not post unless asked", async () => {
+		const calls: RunCall[] = [];
+		const gitCalls: { args: readonly string[]; cwd?: string }[] = [];
+		const execFileSync = ((cmd: string, args: readonly string[], opts?: { cwd?: string }) => {
+			assert.equal(cmd, "git");
+			gitCalls.push({ args, cwd: opts?.cwd });
+			if (args.join(" ") === "diff --name-only origin/main...refs/pull/123/head") return "packages/server/src/config.ts\n";
+			if (args.join(" ") === "diff origin/main...refs/pull/123/head") return "+CONTROL_PLANE_TOKEN\n";
+			throw new Error(`unexpected command: ${cmd} ${args.join(" ")}`);
+		}) as typeof import("node:child_process").execFileSync;
+		const runStep: RunStepFn = async (_name, prompt, stepOpts) => {
+			calls.push({ prompt, cwd: stepOpts.cwd, parkSignal: stepOpts.parkSignal });
+			return result();
+		};
+
+		const review = await runPrReviewGate({
+			pr: "123",
+			cwd: "/trusted/main",
+			diffCwd: "/tmp/pr-head",
+			diffBaseRef: "origin/main",
+			diffHeadRef: "refs/pull/123/head",
+			runStep,
+			execFileSync,
+		});
+
+		assert.equal(review.gate, "pass");
+		assert.equal(review.cost, 2);
+		assert.equal(review.turns, 4);
+		assert.equal(calls.length, 2, "security-sensitive diff should trigger standard + red-team");
+		assert.equal(calls[0].cwd, "/trusted/main");
+		assert.match(calls[0].prompt, /Trusted local review context/);
+		assert.match(calls[0].prompt, /supersedes the checkout-at-PR-head wording/);
+		assert.match(calls[0].prompt, /git -C \/tmp\/pr-head diff --name-only origin\/main\.\.\.refs\/pull\/123\/head/);
+		assert.deepEqual(
+			gitCalls.map((c) => ({ args: c.args.join(" "), cwd: c.cwd })),
+			[
+				{ args: "diff --name-only origin/main...refs/pull/123/head", cwd: "/tmp/pr-head" },
+				{ args: "diff origin/main...refs/pull/123/head", cwd: "/tmp/pr-head" },
+			],
+		);
 	});
 });

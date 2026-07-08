@@ -50,15 +50,20 @@ revise:                         # local revise sweep — auto-fix red-review PRs
   local: true                   # default: true (opt-out). No-op unless roadmap.source is
                                 # github-issues AND ship.target is a PR mode AND auto-pick mode.
 
+review:                         # PR review poster (issue #84)
+  runner: ci                    # default: ci. values: ci | local
+  statusless-after: 2h          # local-mode diagnostic threshold
+
 notify:                         # outbound run-outcome webhook (default: disabled)
   url: ""                       # default: "" (disabled). Set a webhook/topic URL to enable.
   format: json                  # default: json | ntfy
-  events:                       # default: all five below
+  events:                       # default: all events below
     - parked
     - failed
     - shipped
     - pr-opened
     - shipwrecked
+    - review-stranded
 
 roadmap:
   source: markdown              # default: markdown
@@ -401,6 +406,37 @@ Auto-resume applies only to the normal `--cycles` / `--parallel` driver. A
 single-item `--resume <id>` invocation that re-parks is itself re-runnable by
 the same command, so it is intentionally not looped.
 
+## PR review runner
+
+`review.runner` selects who owns the required `review` context:
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `review.runner` | `ci` | `ci` runs `.github/workflows/pr-review.yml`; `local` runs the review sweep from the trusted local tree. |
+| `review.statusless-after` | `2h` | In local mode, emit `review-stranded` and leave a PR diagnostic when a same-repo autopilot PR has no `review` status this long. |
+
+Local mode is only active in normal auto-pick runs for github-issues roadmaps and PR
+ship targets. Configure the model provider through the existing non-pipeline
+`pr-review` step settings:
+
+```yaml
+review:
+  runner: local
+  statusless-after: 2h
+
+models:
+  profiles:
+    standard:
+      providers:
+        pr-review: codex
+      codex:
+        pr-review: gpt-5-codex
+```
+
+When using local mode, set the repo variable `AUTOPILOT_REVIEW_RUNNER=local` so the
+CI workflow does not run review tooling from the PR branch. The local `gh` auth must
+be able to write commit statuses and PR comments.
+
 ## Local revise sweep
 
 When a PR-mode ship opens a pull request and the `review` merge gate comes back
@@ -452,7 +488,7 @@ returns, so a notification fires even when the agent step died mid-cycle.
 |-----------------|----------------|--------------------------------------------------------------------|
 | `notify.url`    | `""`           | Webhook / topic URL. Empty = **disabled** (a no-op; no network).   |
 | `notify.format` | `json`         | Wire format: `json` \| `ntfy`.                                     |
-| `notify.events` | *(all five)*   | Which outcomes page you: `parked`, `failed`, `shipped`, `pr-opened`, `shipwrecked`. |
+| `notify.events` | *(all events)* | Which outcomes page you: `parked`, `failed`, `shipped`, `pr-opened`, `shipwrecked`, `review-stranded`. |
 
 ### Events
 
