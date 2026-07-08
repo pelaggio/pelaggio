@@ -20,6 +20,11 @@ function required(name: string, value: string | undefined): string {
 	return value;
 }
 
+function isLoopbackHost(host: string): boolean {
+	// 127.0.0.0/8 is loopback in its entirety; ::1 is the sole IPv6 loopback.
+	return host === "localhost" || host === "::1" || host.startsWith("127.");
+}
+
 // Resolved relative to this file: packages/server/src/ → ../../web/dist = packages/web/dist
 const packageRelativeWebDist = fileURLToPath(new URL("../../web/dist", import.meta.url));
 
@@ -46,6 +51,13 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env, { webDist
 	const statePath = env.AUTOPILOT_SERVER_STATE_PATH ? resolve(env.AUTOPILOT_SERVER_STATE_PATH) : resolve(stateRoot, "state.json");
 	const logDir = env.AUTOPILOT_SERVER_LOG_DIR ? resolve(env.AUTOPILOT_SERVER_LOG_DIR) : resolve(stateRoot, "logs");
 	const token = env.CONTROL_PLANE_TOKEN || undefined;
+	if (token === undefined && !isLoopbackHost(host)) {
+		throw new Error(
+			`refusing to start: CONTROL_PLANE_TOKEN is unset and AUTOPILOT_SERVER_HOST=${host} is not loopback. ` +
+				`An unauthenticated control plane on a routable interface lets any reachable peer spawn autopilot runs. ` +
+				`Set CONTROL_PLANE_TOKEN, or bind to 127.0.0.1 for local-only use.`,
+		);
+	}
 	const webDistCandidate = env.AUTOPILOT_SERVER_WEB_DIST ? resolve(env.AUTOPILOT_SERVER_WEB_DIST) : webDistDefault;
 	const webDist = existsSync(webDistCandidate) ? webDistCandidate : undefined;
 	return { host, port, registryPath, token, statePath, logDir, webDist };

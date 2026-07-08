@@ -78,4 +78,26 @@ describe("loadServerConfig", () => {
 	it("rejects AUTOPILOT_SERVER_HOST=0.0.0.0", () => {
 		assert.throws(() => loadServerConfig({ AUTOPILOT_SERVER_HOST: "0.0.0.0", AUTOPILOT_SERVER_PORT: "7777" }));
 	});
+
+	it("fails closed: unset token + non-loopback host is refused", () => {
+		assert.throws(() => loadServerConfig(baseEnv({ AUTOPILOT_SERVER_HOST: "100.64.0.1" }), { webDistDefault: join(tmpdir(), "no-such-dist") }), /CONTROL_PLANE_TOKEN/);
+	});
+
+	it("token set on a non-loopback host is unchanged (does not throw; token preserved)", () => {
+		const cfg = loadServerConfig(baseEnv({ AUTOPILOT_SERVER_HOST: "100.64.0.1", CONTROL_PLANE_TOKEN: "s3cret" }), {
+			webDistDefault: join(tmpdir(), "no-such-dist"),
+		});
+		assert.equal(cfg.token, "s3cret");
+	});
+
+	it("loopback bind without a token is allowed (token undefined)", () => {
+		const cfg = loadServerConfig(baseEnv(), { webDistDefault: join(tmpdir(), "no-such-dist") });
+		assert.equal(cfg.token, undefined);
+	});
+
+	it("loopback aliases without a token are allowed (localhost, ::1)", () => {
+		for (const host of ["localhost", "::1"]) {
+			assert.doesNotThrow(() => loadServerConfig(baseEnv({ AUTOPILOT_SERVER_HOST: host }), { webDistDefault: join(tmpdir(), "no-such-dist") }));
+		}
+	});
 });
