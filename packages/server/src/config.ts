@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { isIP } from "node:net";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,6 +19,19 @@ function required(name: string, value: string | undefined): string {
 		throw new Error(`${name} is required`);
 	}
 	return value;
+}
+
+function isLoopbackHost(host: string): boolean {
+	// Classify by parsed IP literal, not string prefix. A hostname like
+	// "127.example.com" must NOT count as loopback: Node resolves hostnames before
+	// binding, so a "127."-prefixed name can map to a routable address. Loopback is
+	// a valid 127.0.0.0/8 IPv4 literal, the ::1 IPv6 literal, or the exact host
+	// "localhost".
+	if (host === "localhost") return true;
+	const kind = isIP(host);
+	if (kind === 4) return host.startsWith("127.");
+	if (kind === 6) return host === "::1";
+	return false;
 }
 
 // Resolved relative to this file: packages/server/src/ → ../../web/dist = packages/web/dist
@@ -46,6 +60,13 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env, { webDist
 	const statePath = env.AUTOPILOT_SERVER_STATE_PATH ? resolve(env.AUTOPILOT_SERVER_STATE_PATH) : resolve(stateRoot, "state.json");
 	const logDir = env.AUTOPILOT_SERVER_LOG_DIR ? resolve(env.AUTOPILOT_SERVER_LOG_DIR) : resolve(stateRoot, "logs");
 	const token = env.CONTROL_PLANE_TOKEN || undefined;
+	if (token === undefined && !isLoopbackHost(host)) {
+		throw new Error(
+			`refusing to start: CONTROL_PLANE_TOKEN is unset and AUTOPILOT_SERVER_HOST=${host} is not loopback. ` +
+				`An unauthenticated control plane on a routable interface lets any reachable peer spawn autopilot runs. ` +
+				`Set CONTROL_PLANE_TOKEN, or bind to 127.0.0.1 for local-only use.`,
+		);
+	}
 	const webDistCandidate = env.AUTOPILOT_SERVER_WEB_DIST ? resolve(env.AUTOPILOT_SERVER_WEB_DIST) : webDistDefault;
 	const webDist = existsSync(webDistCandidate) ? webDistCandidate : undefined;
 	return { host, port, registryPath, token, statePath, logDir, webDist };

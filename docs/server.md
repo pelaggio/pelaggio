@@ -24,7 +24,7 @@ Module boundaries (`packages/server/src/`):
 |---|---|
 | `scripts/server.ts` | Entry: env → registry → `createApp(deps)` → `serve(...)`. |
 | `src/app.ts` | Composition. `/healthz` is registered outside the auth chain. |
-| `src/config.ts` | Env parsing. Refuses `AUTOPILOT_SERVER_HOST=0.0.0.0`. XDG-aware defaults for registry/state/log paths. |
+| `src/config.ts` | Env parsing. Refuses `AUTOPILOT_SERVER_HOST=0.0.0.0`. Fails closed: refuses to start when `CONTROL_PLANE_TOKEN` is unset **and** the host is non-loopback. XDG-aware defaults for registry/state/log paths. |
 | `src/registry.ts` | Loads + validates `repos.yml`. `Registry.path(slug)` resolves slug → absolute repo path. |
 | `src/roadmap-cache.ts` | Lazy `Map<slug, RoadmapSource>`; first hit per slug instantiates via injected factory. |
 | `src/auth.ts` | Bearer middleware; constant-time compare via `crypto.timingSafeEqual`. No-op when token is undefined. |
@@ -177,7 +177,7 @@ LINEAR_API_KEY=lin_api_...                    # optional, only if roadmap.source
 AUTOPILOT_SERVER_HOST=100.x.x.x               # tailnet IP (NOT 0.0.0.0 — server refuses to start)
 AUTOPILOT_SERVER_PORT=7777
 # AUTOPILOT_SERVER_REGISTRY=/abs/path/repos.yml  # optional override; default $XDG_CONFIG_HOME/autopilot-server/repos.yml
-CONTROL_PLANE_TOKEN=...                       # optional; bearer-gates everything except /healthz
+CONTROL_PLANE_TOKEN=...                       # bearer-gates everything except /healthz; REQUIRED on a non-loopback (tailnet) host — server refuses to start without it
 ```
 
 The repo registry itself lives separately at
@@ -214,12 +214,16 @@ systemctl --user restart autopilot-server
 ## Bearer-token auth
 
 `bearerAuth(token)` is a no-op when `CONTROL_PLANE_TOKEN` is unset, so the
-middleware ships dormant. Live deployments bind the daemon to a tailnet-only
-interface, front it with Cloudflare Tunnel (see below), and set
-`CONTROL_PLANE_TOKEN` in the env file — everything except `/healthz` then
-requires `Authorization: Bearer <token>`. Comparison uses
-`crypto.timingSafeEqual` and rejects length mismatches before the compare so
-attackers can't probe length via timing.
+middleware ships dormant. To keep that dormant path from ever exposing the
+run-spawning endpoints on a routable interface, `loadServerConfig()` **fails
+closed**: it refuses to start when the token is unset *and* the host is
+non-loopback (anything other than `127.0.0.0/8`, `localhost`, or `::1`). The
+token-less no-op is therefore only ever reachable on a loopback bind. Live
+deployments bind the daemon to a tailnet-only interface, front it with
+Cloudflare Tunnel (see below), and set `CONTROL_PLANE_TOKEN` in the env file —
+everything except `/healthz` then requires `Authorization: Bearer <token>`.
+Comparison uses `crypto.timingSafeEqual` and rejects length mismatches before
+the compare so attackers can't probe length via timing.
 
 Rotate the token by editing `~/.config/autopilot-server.env` and running
 `systemctl --user restart autopilot-server`. SSE streams reconnect with the
@@ -230,6 +234,16 @@ new token on the next page load.
 `AUTOPILOT_SERVER_HOST=0.0.0.0` is rejected at startup. The intent is that
 deploy environments specify the tailnet interface explicitly. Local dev can
 use `127.0.0.1`.
+
+Binding a non-loopback host (a tailnet `100.x` IP, a LAN address) additionally
+**requires** `CONTROL_PLANE_TOKEN`: the daemon refuses to start token-less on
+any routable interface, because an unauthenticated control plane there lets any
+reachable peer spawn autopilot runs. Loopback binds (`127.0.0.1`, `localhost`,
+`::1`) stay allowed without a token for local dev — `scripts/server.ts` emits
+one `console.warn` at boot so the safe-but-open posture is loud rather than
+silent. There is deliberately no escape-hatch flag: loopback + no-token is
+already permitted, and non-loopback + no-token is forbidden absolutely, so a
+flag would unlock nothing.
 
 ## Serving the web UI
 

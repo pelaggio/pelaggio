@@ -10,6 +10,9 @@ import { StateStore } from "../src/state-store.js";
 import { Supervisor } from "../src/supervisor.js";
 
 const cfg = loadServerConfig();
+if (cfg.token === undefined) {
+	console.warn(`autopilot-server: CONTROL_PLANE_TOKEN is unset — running unauthenticated on loopback (${cfg.host}). Set CONTROL_PLANE_TOKEN to require bearer auth.`);
+}
 const registry = loadRegistry(cfg.registryPath);
 const roadmapCache = new RoadmapCache({
 	registry,
