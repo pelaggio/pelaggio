@@ -224,6 +224,97 @@ describe("runOrchestrator — worker continuation", () => {
 	});
 });
 
+describe("runOrchestrator — sustained transient SDK outage (#128)", () => {
+	function spySend() {
+		const sent: Array<{ payload: { event: string; itemId: string | null; error?: string } }> = [];
+		const sendNotification = async (_url: string, _format: "json" | "ntfy", payload: { event: string; itemId: string | null; error?: string }) => {
+			sent.push({ payload });
+			return true;
+		};
+		return { sent, sendNotification };
+	}
+
+	it("a lone transient sdk error stays non-paging (#127 single-blip behavior preserved)", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { sent, sendNotification } = spySend();
+		const { runPipeline, calls } = createMockRunPipeline({
+			byItem: {
+				"A-1": { completed: false, cost: 0, error: "transient sdk error" },
+				"A-2": { completed: false, cost: 0, error: "pick:queue-empty" },
+			},
+		});
+		const { exitCode } = await runOrchestrator({ ...baseFlags, item: "A-1,A-2" }, { runPipeline, notifyConfig: { url: "https://hook.example" }, sendNotification });
+		assert.equal(calls.length, 2, "worker keeps pulling past a single transient blip");
+		assert.equal(exitCode, 1); // overall still non-zero because neither cycle completed
+		assert.equal(sent.length, 0, "a lone transient blip must not page");
+	});
+
+	it("N consecutive transient sdk errors park + page instead of burning the rest of --cycles", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { sent, sendNotification } = spySend();
+		const { runPipeline, calls } = createMockRunPipeline({
+			byItem: {
+				"A-1": { completed: false, cost: 0, error: "transient sdk error" },
+				"A-2": { completed: false, cost: 0, error: "transient sdk error" },
+				"A-3": { completed: false, cost: 0, error: "transient sdk error" },
+				"A-4": { completed: true, cost: 0.1 },
+				"A-5": { completed: true, cost: 0.1 },
+			},
+		});
+		const { exitCode, results } = await runOrchestrator({ ...baseFlags, item: "A-1,A-2,A-3,A-4,A-5" }, { runPipeline, notifyConfig: { url: "https://hook.example" }, sendNotification });
+		assert.equal(calls.length, 3, "worker must stop after the 3rd consecutive transient error, never reaching A-4/A-5");
+		assert.equal(exitCode, 1);
+		assert.equal(results.at(-1)?.error, "parked", "the tripping cycle is relabeled parked so it flows through the park path");
+		assert.equal(sent.length, 1, "the sustained outage must page exactly once");
+		assert.equal(sent[0].payload.event, "parked");
+		assert.equal(sent[0].payload.itemId, "A-3");
+	});
+
+	it("a success between blips resets the streak — 2 blips + success + 2 blips never trips", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { sent, sendNotification } = spySend();
+		const { runPipeline, calls } = createMockRunPipeline({
+			byItem: {
+				"A-1": { completed: false, cost: 0, error: "transient sdk error" },
+				"A-2": { completed: false, cost: 0, error: "transient sdk error" },
+				"A-3": { completed: true, cost: 0.1 },
+				"A-4": { completed: false, cost: 0, error: "transient sdk error" },
+				"A-5": { completed: false, cost: 0, error: "transient sdk error" },
+			},
+		});
+		const { exitCode } = await runOrchestrator({ ...baseFlags, item: "A-1,A-2,A-3,A-4,A-5" }, { runPipeline, notifyConfig: { url: "https://hook.example" }, sendNotification });
+		assert.equal(calls.length, 5, "streak reset by A-3's success — the run must reach every item");
+		assert.equal(exitCode, 1);
+		assert.equal(sent.length, 1, "only A-3's shipped cycle pages; no outage page fires");
+		assert.equal(sent[0].payload.event, "shipped");
+	});
+
+	it("hands back with a clear resume hint (no known reset time for an SDK outage)", async (t) => {
+		const logs: string[] = [];
+		t.mock.method(console, "log", (...args: unknown[]) => {
+			logs.push(args.join(" "));
+		});
+		const { runPipeline, calls } = createMockRunPipeline({
+			byItem: {
+				"A-1": { completed: false, cost: 0, error: "transient sdk error" },
+				"A-2": { completed: false, cost: 0, error: "transient sdk error" },
+				"A-3": { completed: false, cost: 0, error: "transient sdk error" },
+			},
+		});
+		const { exitCode } = await runOrchestrator({ ...baseFlags, item: "A-1,A-2,A-3" }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });
+		assert.equal(calls.length, 3);
+		assert.equal(exitCode, 1);
+		assert.ok(
+			logs.some((l) => l.includes("sdk-outage") && l.includes("cannot auto-resume")),
+			`expected a "cannot auto-resume" hand-back for the sdk-outage park; got:\n${logs.join("\n")}`,
+		);
+		assert.ok(
+			logs.some((l) => l.includes("Resume:") && l.includes("pnpm autopilot --resume A-3")),
+			`expected the --resume hint for the parked item; got:\n${logs.join("\n")}`,
+		);
+	});
+});
+
 describe("runOrchestrator — park-and-resume", () => {
 	it("success: resumes after wait, uses detectResumeStep startFrom, exitCode 0", async (t) => {
 		t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
