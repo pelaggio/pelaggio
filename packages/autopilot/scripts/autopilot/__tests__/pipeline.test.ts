@@ -693,6 +693,55 @@ describe("runPipeline — RoadmapSource injection", () => {
 		const implementPrompt = calls.find((c) => c.step === "implement")?.prompt ?? "";
 		assert.ok(implementPrompt.includes("/fake/plans/tool-99.md"), `expected implement prompt to include mock plan path; got: ${implementPrompt.slice(0, 400)}`);
 	});
+
+	it("harness commits + publishes the plan after the plan step, exactly once (#98)", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const publishCalls: Array<{ body: string; id: string }> = [];
+		const planFile = `${worktree}/docs/plans/plan.md`;
+		let planned = false; // getItemPlan returns null until the harness publishes (mirrors reality)
+		const roadmap = makeMockRoadmap({
+			async getItemPlan() {
+				return planned ? planFile : null;
+			},
+			resolvePlanPath: () => planFile,
+			async publishPlan(body, ctx) {
+				publishCalls.push({ body, id: ctx.id });
+				planned = true;
+			},
+		});
+		const { runStep } = createMockRunStep(
+			{
+				plan: { ok: true, writes: { "docs/plans/plan.md": "# Plan\nplan body" } },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				ship: {
+					ok: true,
+					text: "ship-merged: TOOL-99",
+					sideEffect: (cwd) => {
+						execSync("git checkout -q main", { cwd });
+						execSync("git merge -q --no-ff feat/tool-99", { cwd });
+						execSync("git checkout -q feat/tool-99", { cwd });
+					},
+				},
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
+			runStep,
+			roadmap,
+			mainRepo: worktree,
+			listWorktrees: () => [],
+			appendLog: () => {},
+			runShipBookkeeping: noopBookkeeping,
+		});
+
+		assert.equal(result.completed, true);
+		assert.equal(publishCalls.length, 1, "harness publishes the plan exactly once (not the model)");
+		assert.ok(publishCalls[0].body.includes("# Plan"), `expected the written plan body; got ${JSON.stringify(publishCalls[0])}`);
+	});
 });
 
 describe("runPipeline — rate-limit park preserves state", () => {

@@ -24,7 +24,7 @@ interface GhIssueSummary {
 }
 
 interface GhIssueComments {
-	comments: { body: string; createdAt: string }[];
+	comments: { body: string; createdAt: string; url: string }[];
 }
 
 interface GhIssueTitle {
@@ -111,7 +111,24 @@ export class GitHubIssuesRoadmap implements RoadmapSource {
 
 	async publishPlan(body: string, ctx: { id: string; worktree: string }): Promise<void> {
 		const marked = `${PLAN_MARKER}\n${body}`;
-		this.runGh(["issue", "comment", ctx.id, "--repo", this.ghRepo, "--body", marked]);
+		// Idempotent upsert: edit the existing plan comment if present, else post a new one. A
+		// re-plan / retry / harness-owned republish must not duplicate the marked comment —
+		// retrieval takes "latest marker wins", so a duplicate could change which plan body a
+		// resume materializes.
+		const existingId = this.findPlanCommentId(ctx.id);
+		if (existingId) {
+			this.runGh(["api", `repos/${this.ghRepo}/issues/comments/${existingId}`, "-X", "PATCH", "-f", `body=${marked}`]);
+		} else {
+			this.runGh(["issue", "comment", ctx.id, "--repo", this.ghRepo, "--body", marked]);
+		}
+	}
+
+	/** REST id of the most-recent `<!-- autopilot-plan -->` comment on the issue, or null. */
+	private findPlanCommentId(id: string): string | null {
+		const raw = this.runGh(["issue", "view", id, "--repo", this.ghRepo, "--json", "comments"]);
+		const { comments } = parseGhJson<GhIssueComments>(raw, (v) => isPlainObject(v) && Array.isArray((v as { comments?: unknown }).comments));
+		const match = [...comments].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).find((c) => c.body.startsWith(PLAN_MARKER));
+		return match?.url.match(/#issuecomment-(\d+)/)?.[1] ?? null;
 	}
 
 	async createItem(opts: CreateItemOpts): Promise<RoadmapItem> {

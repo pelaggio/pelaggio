@@ -422,11 +422,27 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			const outcome = await runStepWithRetry({
 				name: "plan",
 				stepBudget: resolveStepSettings(CONFIG, profile, "plan").budget,
-				buildPrompt: () => expandSkill("plan"),
+				buildPrompt: () => expandSkill("plan", "autopilot"),
 				logAttempt: (attempt) => log(attempt === 1 ? "planning..." : "continuing plan (attempt 2)..."),
 				refusedError: "plan refused (model declined the task)",
+				commitLabel: () => "plan",
 			});
 			if (outcome.kind === "terminal") return outcome.cycleResult;
+			// Harness owns the plan's effects (#98) so `plan` runs on a provider whose sandbox can't
+			// commit or reach the network (Codex): the model wrote the plan file and we committed it
+			// via `commitLabel` above; now publish it in-process. Best-effort + idempotent
+			// (`publishPlan` upserts) — the plan is committed locally and recoverable, so a publish
+			// failure logs and continues. Reached only on a successful, non-parked step (park/fail
+			// returned terminal above).
+			const planFile = roadmap.resolvePlanPath({ id: itemId!, worktree: worktree! });
+			if (existsSync(planFile)) {
+				try {
+					await roadmap.publishPlan(readFileSync(planFile, "utf-8"), { id: itemId!, worktree: worktree! });
+					log("plan published");
+				} catch (e) {
+					log(`plan publish failed (non-fatal, committed locally): ${e instanceof Error ? e.message : String(e)}`);
+				}
+			}
 		}
 		const planPath = await roadmap.getItemPlan({ worktree: worktree! });
 		if (planPath) log(`plan: file://${planPath}`);

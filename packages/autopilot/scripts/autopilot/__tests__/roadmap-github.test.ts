@@ -317,3 +317,37 @@ describe("getRoadmapSource — github-issues factory", () => {
 		assert.throws(() => getRoadmapSource("github-issues", { repo: "/tmp" }), /roadmap\.github\.repo/);
 	});
 });
+
+describe("GitHubIssuesRoadmap.publishPlan — idempotent upsert (#98)", () => {
+	const commentsRoute = (stdout: string) => ({ match: (a: string[]) => a[0] === "issue" && a[1] === "view" && a.includes("comments"), stdout });
+
+	it("posts a new marked comment when no plan comment exists", async () => {
+		const dir = seedRepo();
+		const { run, calls } = makeStub({ routes: [commentsRoute(JSON.stringify({ comments: [] }))] });
+		await mk({ repo: dir, ghRun: run }).publishPlan("PLAN BODY", { id: "5", worktree: dir });
+		const post = calls.find((c) => c.args[0] === "issue" && c.args[1] === "comment");
+		assert.ok(post, "posts a new comment when none exists");
+		assert.ok(post?.args.includes("--body") && post.args.some((s) => s.includes("PLAN BODY")));
+		assert.ok(!calls.some((c) => c.args[0] === "api"), "no PATCH when there is nothing to edit");
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("edits the existing plan comment (by REST id) instead of duplicating", async () => {
+		const dir = seedRepo();
+		const comments = {
+			comments: [
+				// a newer NON-marker comment must not shadow the marker comment
+				{ body: "unrelated", createdAt: "2026-07-02T00:00:00Z", url: "https://github.com/acme/widgets/issues/5#issuecomment-43" },
+				{ body: "<!-- autopilot-plan -->\nold plan", createdAt: "2026-07-01T00:00:00Z", url: "https://github.com/acme/widgets/issues/5#issuecomment-42" },
+			],
+		};
+		const { run, calls } = makeStub({ routes: [commentsRoute(JSON.stringify(comments))] });
+		await mk({ repo: dir, ghRun: run }).publishPlan("NEW PLAN", { id: "5", worktree: dir });
+		const patch = calls.find((c) => c.args[0] === "api" && c.args.includes("PATCH"));
+		assert.ok(patch, "PATCHes the existing plan comment");
+		assert.ok(patch?.args.includes("repos/acme/widgets/issues/comments/42"), "targets the marker comment's REST id");
+		assert.ok(patch?.args.some((s) => s.startsWith("body=") && s.includes("NEW PLAN")));
+		assert.ok(!calls.some((c) => c.args[0] === "issue" && c.args[1] === "comment"), "does not post a duplicate");
+		rmSync(dir, { recursive: true, force: true });
+	});
+});
