@@ -1,0 +1,17 @@
+roadmap:
+  source: github-issues
+  github:
+    repo: pelaggio/pelaggio
+    label: pelaggio
+    plan-location: issue-comment
+ship:
+  target: pull-request
+revise:
+  local: true
+# Review gate runs on the local subscription (via #84), not the metered CI key.
+# CI's `pr-review-ci` job gates off when repo var AUTOPILOT_REVIEW_RUNNER=local;
+# the local pelaggio auto-pick sweep posts the `review` commit status.
+review:
+  runner: local
+budgets:
+  shakedown-plan: 8

@@ -12,7 +12,7 @@ Periodic maintenance: archive completed work, prune stale state, verify health.
 
 Run `git rev-parse --path-format=absolute --git-common-dir` — the output ends with `/.git`. Strip that suffix to get MAIN_REPO.
 
-Detect the configured roadmap source via `npx @cdhorne/claude-autopilot roadmap source` (prints e.g. `markdown`, `github-issues`, `linear`). Sections §1 and §1b below are markdown-specific — **skip them** when the source is not `markdown` (remote adapters own their own archival/indexing; there is no local roadmap file or task index to sync).
+Detect the configured roadmap source via `npx pelaggio roadmap source` (prints e.g. `markdown`, `github-issues`, `linear`). Sections §1 and §1b below are markdown-specific — **skip them** when the source is not `markdown` (remote adapters own their own archival/indexing; there is no local roadmap file or task index to sync).
 
 ## 1. Roadmap audit (markdown only)
 
@@ -55,9 +55,9 @@ Run `git branch --list 'feat/*'`. For branches not associated with a worktree:
 - If merged to main → safe to delete. Report but don't auto-delete.
 - If not merged and >14 days old → flag as potentially abandoned
 
-## 4. Autopilot log review
+## 4. Pelaggio log review
 
-If `{MAIN_REPO}/.dev/autopilot-log.jsonl` exists, read it and report:
+If `{MAIN_REPO}/.dev/pelaggio-log.jsonl` exists, read it and report:
 - Total cycles run, total cost
 - Success rate (completed / total)
 - Most common failure step
@@ -68,7 +68,7 @@ If `{MAIN_REPO}/.dev/autopilot-log.jsonl` exists, read it and report:
 
 Run from MAIN_REPO the verification commands listed in `.claude/skills/_rubric.md`'s Verification section.
 
-Report any errors. These should be zero — if not, flag as blocking for autopilot.
+Report any errors. These should be zero — if not, flag as blocking for pelaggio.
 
 ## Output
 
@@ -76,5 +76,5 @@ Summary table:
 - Roadmaps: X active, Y archived this run
 - Worktrees: X active, Y stale (flagged)
 - Branches: X active, Y merged (safe to delete)
-- Autopilot: X cycles, Y shipped, $Z spent
+- Pelaggio: X cycles, Y shipped, $Z spent
 - Health: typecheck ✅/❌, lint ✅/❌

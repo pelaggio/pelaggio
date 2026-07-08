@@ -2,7 +2,7 @@
 
 ## Canonical Tree
 
-`.claude/skills/` is currently canonical because package publishing and sync copy from that path. It lives at the repo root for dogfooding (`REPO` from `git rev-parse --show-toplevel` is the workspace root) and is copied into `packages/autopilot/.claude/skills/` by `prepack` so the published tarball includes it (see `architecture.md`).
+`.claude/skills/` is currently canonical because package publishing and sync copy from that path. It lives at the repo root for dogfooding (`REPO` from `git rev-parse --show-toplevel` is the workspace root) and is copied into `packages/pelaggio/.claude/skills/` by `prepack` so the published tarball includes it (see `architecture.md`).
 
 `.agents/skills` exposes the same tree to Codex as a symlink to `../.claude/skills`. Keep it a symlink (single-sourced, can't drift) until packaging is deliberately migrated to a neutral source tree; `check-skills` enforces that it exists, is a symlink, and points at the canonical tree.
 
@@ -29,7 +29,7 @@ When adapting skills for Codex: keep workflow instructions provider-neutral wher
 - `bump-models`: refresh Claude model IDs in config.
 - `pr-review`: fresh-session CI merge-gate review.
 
-`sync` (`npx @cdhorne/claude-autopilot sync`) diffs installed skills against the package and prompts overwrite/skip/merge per file. It is a consumer CLI, not a pipeline step.
+`sync` (`npx pelaggio sync`) diffs installed skills against the package and prompts overwrite/skip/merge per file. It is a consumer CLI, not a pipeline step.
 
 ## Frontmatter
 
@@ -47,4 +47,4 @@ Skill bodies can include shared rubric/context with shell includes:
 !`cat .claude/skills/_project-context.md 2>/dev/null`
 ```
 
-`_project-context.md` is the **consumer-side extension point** for the three review skills (`plan`, `shakedown`, `ship`). They read it opt-in, so it is deliberately absent from this repo — autopilot itself is the generic baseline, and exercising the fallback keeps the graceful include honest. Upstream `sync` never touches it (underscore-prefix skip in `planSync()` + the `ALLOWED_DEST` regex in `applyAction()`); consumers copy `_project-context.md.example` to start. `check-skills` treats the `2>/dev/null` suffix as "dangling is fine" via the second capture group on `INCLUDE_RE` (`include.dangling`).
+`_project-context.md` is the **consumer-side extension point** for the three review skills (`plan`, `shakedown`, `ship`). They read it opt-in, so it is deliberately absent from this repo — pelaggio itself is the generic baseline, and exercising the fallback keeps the graceful include honest. Upstream `sync` never touches it (underscore-prefix skip in `planSync()` + the `ALLOWED_DEST` regex in `applyAction()`); consumers copy `_project-context.md.example` to start. `check-skills` treats the `2>/dev/null` suffix as "dangling is fine" via the second capture group on `INCLUDE_RE` (`include.dangling`).

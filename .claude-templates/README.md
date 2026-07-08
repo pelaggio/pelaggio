@@ -1,6 +1,6 @@
 # Project Scaffold Templates
 
-Opinionated starting point for new Expo/TypeScript projects, extracted from Fathom. Pairs with the `.claude/skills/` + `scripts/autopilot/` stack to give a new project the same propose-then-confirm + rubric-driven workflow on day one.
+Opinionated starting point for new Expo/TypeScript projects, extracted from Fathom. Pairs with the `.claude/skills/` + `scripts/pelaggio/` stack to give a new project the same propose-then-confirm + rubric-driven workflow on day one.
 
 ## What's in here
 
@@ -14,13 +14,13 @@ Opinionated starting point for new Expo/TypeScript projects, extracted from Fath
 | `docs/conventions-ui.md` | `docs/conventions-ui.md` | Expo/RN component + styling conventions |
 | `docs/tone.md` | `docs/tone.md` | Voice for agent/app copy/error messages |
 | `docs/build.md` | `docs/build.md` | EAS + local build commands |
-| `docs/task-index.md` | `docs/task-index.md` | Cross-roadmap item index for autopilot `/pick` |
-| `docs/roadmap-example.md` | `docs/roadmap-{track}.md` | Roadmap format autopilot's parser expects (checkbox + table) |
+| `docs/task-index.md` | `docs/task-index.md` | Cross-roadmap item index for pelaggio `/pick` |
+| `docs/roadmap-example.md` | `docs/roadmap-{track}.md` | Roadmap format pelaggio's parser expects (checkbox + table) |
 | `docs/decisions.md` | `docs/decisions.md` | Open + resolved architectural decisions |
 
 ## How to use
 
-1. Clone the source project (the one with `.claude/skills/` + `scripts/autopilot/` + these templates)
+1. Clone the source project (the one with `.claude/skills/` + `scripts/pelaggio/` + these templates)
 2. Follow `migration-checklist.md` end to end — it tells you what to copy, what to rewrite, and in what order
 3. **Write `_rubric.md` before writing any code.** This is the single highest-leverage task in bootstrapping a new project
 4. First commit should land the scaffold docs + rubric + CLAUDE.md together so Claude has context from turn one

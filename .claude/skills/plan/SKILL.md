@@ -13,11 +13,11 @@ Generate an implementation plan for the current work item. Then review it yourse
 
 Run `git rev-parse --path-format=absolute --git-common-dir` — the output ends with `/.git`. Strip that suffix to get MAIN_REPO.
 
-Roadmap lookups go through `npx @cdhorne/claude-autopilot roadmap ...`; the CLI dispatches to the configured adapter (markdown / github-issues / linear).
+Roadmap lookups go through `npx pelaggio roadmap ...`; the CLI dispatches to the configured adapter (markdown / github-issues / linear).
 
 **Target item: `$ARGUMENTS`** — if an ID appears in your Arguments, use it. Otherwise get the branch from `git branch --show-current` (must not be `main`) and extract the item ID from the branch name.
 
-1. **Understand the item.** If a `## Roadmap item context` block appears in your Arguments (autopilot mode — the harness provides the item's requirements because a sandboxed provider can't fetch them itself), use THAT block as the spec and do **not** run `roadmap get` or `gh issue view`. If it names a `sourceRef` local file and you need more, read that file. Otherwise (inline / human `/plan`): run `npx @cdhorne/claude-autopilot roadmap get <ID> --json` to fetch `title`, `deps`, `sourceRef` and, for github-issues, `body`; markdown's `sourceRef` is the roadmap file path and linear's is the issue identifier — read the roadmap file / view the issue for the full spec.
+1. **Understand the item.** If a `## Roadmap item context` block appears in your Arguments (pelaggio mode — the harness provides the item's requirements because a sandboxed provider can't fetch them itself), use THAT block as the spec and do **not** run `roadmap get` or `gh issue view`. If it names a `sourceRef` local file and you need more, read that file. Otherwise (inline / human `/plan`): run `npx pelaggio roadmap get <ID> --json` to fetch `title`, `deps`, `sourceRef` and, for github-issues, `body`; markdown's `sourceRef` is the roadmap file path and linear's is the issue identifier — read the roadmap file / view the issue for the full spec.
 2. Read related `{MAIN_REPO}/docs/plan-*.md` and `{MAIN_REPO}/docs/design-*.md` files if referenced.
 3. Read any source files named as deliverables — confirm they exist and note their current shape.
 4. Find reference implementations for similar features already in the codebase.
@@ -34,14 +34,14 @@ Roadmap lookups go through `npx @cdhorne/claude-autopilot roadmap ...`; the CLI 
 Resolve the target path via the adapter (so markdown lands in `docs/plans/` while gh/linear land in `.dev/plans/`):
 
 ```bash
-npx @cdhorne/claude-autopilot roadmap plan-path --id <ID> --worktree "$PWD"
+npx pelaggio roadmap plan-path --id <ID> --worktree "$PWD"
 ```
 
 This prints one line — the absolute path where the plan should live. Exit code 0 if it already exists, 2 if not.
 
 **You MUST write the plan to that path** using the Write tool. Create parent directories if needed. Do not just output the plan as text — the file is read by `/shakedown` in a separate session.
 
-**If your Arguments include `autopilot`:** STOP after writing the file — do **not** run `git commit`
+**If your Arguments include `pelaggio`:** STOP after writing the file — do **not** run `git commit`
 or `publish-plan`. The harness commits and publishes the plan for you (it runs those effects
 in-process, so this step works on providers whose sandbox can't write git metadata or reach the
 network). Just write the file and finish.
@@ -50,8 +50,8 @@ network). Just write the file and finish.
 ```bash
 git add "<resolved-path>"
 git commit -m "docs: add implementation plan for <ID>"
-# publish via the adapter (markdown: no-op; github-issues / linear: upserts the `<!-- autopilot-plan -->` comment):
-npx @cdhorne/claude-autopilot roadmap publish-plan --id <ID> --file "<resolved-path>"
+# publish via the adapter (markdown: no-op; github-issues / linear: upserts the `<!-- pelaggio-plan -->` comment):
+npx pelaggio roadmap publish-plan --id <ID> --file "<resolved-path>"
 ```
 
 Cover in the plan: scope (what it does and doesn't touch), approach (why this over alternatives), files to change, test strategy, and a rubric self-check.

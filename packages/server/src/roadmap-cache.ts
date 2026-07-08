@@ -1,4 +1,4 @@
-import type { RoadmapSource } from "@cdhorne/claude-autopilot";
+import type { RoadmapSource } from "pelaggio";
 import type { Registry } from "./registry.js";
 
 export type RoadmapFactory = (repoPath: string) => RoadmapSource;

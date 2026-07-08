@@ -174,7 +174,7 @@ flowchart LR
 ├── packages/
 │   └── shared/                     # Shared types + utils
 ├── docs/                           # Architecture, specs, plans, design
-├── scripts/                        # autopilot, sync checks, etc.
+├── scripts/                        # pelaggio, sync checks, etc.
 └── .github/workflows/              # CI, EAS preview, production
 ```
 

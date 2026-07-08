@@ -8,10 +8,10 @@ Run all tests:
 pnpm -r test
 ```
 
-Run one autopilot test:
+Run one pelaggio test:
 
 ```bash
-npx tsx --test packages/autopilot/scripts/autopilot/__tests__/<file>.test.ts
+npx tsx --test packages/pelaggio/scripts/pelaggio/__tests__/<file>.test.ts
 ```
 
 The project uses `node:test`. Do not add Jest or Vitest.
@@ -28,7 +28,7 @@ pnpm check:publish
 
 - skill frontmatter shape (`frontmatter.*`) and `argument-hint` presence (`arguments.no-hint`);
 - skill includes resolve, treating a `2>/dev/null` suffix as "dangling is fine" (`include.dangling`);
-- no bare `claude-autopilot` npx calls or `pnpm autopilot <subcommand>` (`skill.npx-bare-autopilot`, `skill.pnpm-autopilot-subcommand`);
+- no bare `pelaggio` npx calls or `pnpm pelaggio <subcommand>` (`skill.npx-bare-pelaggio`, `skill.pnpm-pelaggio-subcommand`);
 - no pinned Claude model IDs (`model-id.hardcoded`);
 - the bilingual agent context substrate — `AGENTS.md`/`CLAUDE.md`/`docs/agent-context/`/`.agents/skills` (`agent-context.*`).
 
@@ -36,7 +36,7 @@ pnpm check:publish
 
 ## Lint And Format
 
-Biome is scoped via one root `biome.json` (`includes: ["packages/*/scripts/**/*.ts", "scripts/**/*.ts"]`); skill/template markdown is not linted. `pnpm check` lints, `pnpm format` auto-fixes. A lefthook `pre-commit` hook auto-formats staged TypeScript and re-stages it (installed by the `prepare` script on `pnpm install`); autopilot checkpoint commits bypass it via `--no-verify` in `helpers.ts`.
+Biome is scoped via one root `biome.json` (`includes: ["packages/*/scripts/**/*.ts", "scripts/**/*.ts"]`); skill/template markdown is not linted. `pnpm check` lints, `pnpm format` auto-fixes. A lefthook `pre-commit` hook auto-formats staged TypeScript and re-stages it (installed by the `prepare` script on `pnpm install`); pelaggio checkpoint commits bypass it via `--no-verify` in `helpers.ts`.
 
 ## Review Rubric
 

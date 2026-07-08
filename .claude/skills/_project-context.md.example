@@ -1,10 +1,10 @@
 <!--
-  _project-context.md — consumer-side extension point for claude-autopilot.
+  _project-context.md — consumer-side extension point for pelaggio.
 
   Copy this file to `_project-context.md` in the same directory and fill in
   the sections below. The three review-heavy skills (`plan`, `shakedown`,
   `ship`) read it via `!cat .claude/skills/_project-context.md 2>/dev/null`,
-  so an absent file is silently ignored. Upstream `claude-autopilot sync`
+  so an absent file is silently ignored. Upstream `pelaggio sync`
   never touches either `_project-context.md` or this `.example` template —
   the underscore-prefix exclusion in `planSync()` + the `ALLOWED_DEST` regex
   in `applyAction()` guarantee it.

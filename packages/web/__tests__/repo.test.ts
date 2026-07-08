@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { beforeEach, describe, it } from "node:test";
-import type { RepoEntry } from "@cdhorne/claude-autopilot-server/types";
+import type { RepoEntry } from "@pelaggio/server/types";
 import { __setFetcherForTests, __setStorageForTests, getSnapshot, init, retryInit, STORAGE_KEY, setCurrentRepo, subscribe } from "../src/lib/repo.js";
 
 class FakeStorage {

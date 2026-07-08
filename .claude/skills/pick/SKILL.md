@@ -12,11 +12,11 @@ allowed-tools: Read Glob Grep Bash(git:*) Bash(pnpm:*) Bash(npx:*)
 
 Run `git rev-parse --path-format=absolute --git-common-dir` — the output ends with `/.git`. Strip that suffix to get MAIN_REPO.
 
-All roadmap lookups go through `npx @cdhorne/claude-autopilot roadmap ...`. The CLI dispatches to the configured adapter (markdown / github-issues / linear) so this skill is source-agnostic.
+All roadmap lookups go through `npx pelaggio roadmap ...`. The CLI dispatches to the configured adapter (markdown / github-issues / linear) so this skill is source-agnostic.
 
 ## Discover items
 
-Run `npx @cdhorne/claude-autopilot roadmap list --json` to get the open set (each item has `id`, `title`, `deps`, `sourceRef`, `status`).
+Run `npx pelaggio roadmap list --json` to get the open set (each item has `id`, `title`, `deps`, `sourceRef`, `status`).
 
 Claimed items arrive pre-marked: the adapter reports them as `status === "in-progress"` (markdown: a `feat/<id>` branch exists; github/linear: the server-side claim marker). Do NOT re-derive claims from `git branch --list` prose — the adapter is the single source.
 
@@ -24,7 +24,7 @@ Claimed items arrive pre-marked: the adapter reports them as `status === "in-pro
 
 Parse `$ARGUMENTS` (may be empty).
 
-**`/pick TOOL-16`** (argument is an item ID) — run `npx @cdhorne/claude-autopilot roadmap get TOOL-16 --json`, then branch on the JSON's `status` field:
+**`/pick TOOL-16`** (argument is an item ID) — run `npx pelaggio roadmap get TOOL-16 --json`, then branch on the JSON's `status` field:
 - `unknown` (exit 2) → report which source was queried and emit `pick-result: unknown-id`.
 - `done` → report it and emit `pick-result: already-done`.
 - `blocked` → **stop immediately** and report "⚠ {ID} is blocked: {blockedReason or deps text}. Cannot pick a blocked item." Do not create a branch or worktree. Emit `pick-result: blocked`.
@@ -42,13 +42,13 @@ If the `feat/<id-lower>-*` branch already exists, report it, ask whether to reus
 ## Claim
 
 **If `$ARGUMENTS` contains `--no-worktree`** (CI / single-shot mode):
-Run `npx @cdhorne/claude-autopilot roadmap claim --no-worktree <ID>` instead of the regular claim. This creates and checks out the feature branch in-place (no sibling worktree directory is created). The returned `worktree=` value will be the main repo path itself. Skip the `worktree-deps` install step — node_modules is already present in the working directory. Proceed directly to step 3 (Report).
+Run `npx pelaggio roadmap claim --no-worktree <ID>` instead of the regular claim. This creates and checks out the feature branch in-place (no sibling worktree directory is created). The returned `worktree=` value will be the main repo path itself. Skip the `worktree-deps` install step — node_modules is already present in the working directory. Proceed directly to step 3 (Report).
 
 **Otherwise** (normal mode):
 
 1. Create branch + worktree via the adapter:
    ```bash
-   npx @cdhorne/claude-autopilot roadmap claim <ID>
+   npx pelaggio roadmap claim <ID>
    ```
    This prints two lines:
    ```
@@ -64,7 +64,7 @@ Run `npx @cdhorne/claude-autopilot roadmap claim --no-worktree <ID>` instead of 
    if the list empties). For an explicit `/pick <ID>`: emit
    `pick-result: already-claimed`. The pipeline treats it as recoverable.
 
-2. Install deps: `npx @cdhorne/claude-autopilot worktree-deps "$WORKTREE"`. When the worktree's `pnpm-lock.yaml` matches the main repo's, this symlinks `node_modules` to MAIN_REPO's instead of running a fresh install — fast and avoids I/O contention between parallel worktrees. On lockfile drift or a missing main `node_modules`, it falls through to `pnpm install --frozen-lockfile --silent`. The helper prints the action taken (`link` / `noop` / `install` / `reinstall` / `relink`).
+2. Install deps: `npx pelaggio worktree-deps "$WORKTREE"`. When the worktree's `pnpm-lock.yaml` matches the main repo's, this symlinks `node_modules` to MAIN_REPO's instead of running a fresh install — fast and avoids I/O contention between parallel worktrees. On lockfile drift or a missing main `node_modules`, it falls through to `pnpm install --frozen-lockfile --silent`. The helper prints the action taken (`link` / `noop` / `install` / `reinstall` / `relink`).
 
 3. Report: item, branch, worktree, related docs, dependencies.
    Next step: "Open a new terminal, `cd {worktree}`, run `claude`, then `/plan`."

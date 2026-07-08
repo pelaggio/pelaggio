@@ -42,7 +42,7 @@ export class RegistryError extends Error {
 	}
 }
 
-const EXAMPLE_HINT = "infra/autopilot-server/repos.yml.example";
+const EXAMPLE_HINT = "infra/pelaggio-server/repos.yml.example";
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
 	return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -101,7 +101,7 @@ function warnOnBasenameCollisions(entries: RegistryEntry[]): void {
 	}
 	for (const [base, slugs] of byBase) {
 		if (slugs.length > 1) {
-			console.warn(`autopilot-server: worktree-prefix collision on basename ${JSON.stringify(base)} for slugs ${slugs.map((s) => JSON.stringify(s)).join(", ")} — autopilot's worktree detection may misattribute branches across these repos.`);
+			console.warn(`pelaggio-server: worktree-prefix collision on basename ${JSON.stringify(base)} for slugs ${slugs.map((s) => JSON.stringify(s)).join(", ")} — pelaggio's worktree detection may misattribute branches across these repos.`);
 		}
 	}
 }

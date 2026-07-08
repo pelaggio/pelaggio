@@ -287,7 +287,7 @@ If you're not doing one of these, strike the relevant items and note why in `doc
 - **L** — 10+ files, multi-day, probably needs a plan
 - **XL** — major feature, definitely needs a plan + shakedown-plan pass
 
-Autopilot detects scope from the `scope: X` hint in the item text. XS/S items skip the planning step and go straight to implementation.
+Pelaggio detects scope from the `scope: X` hint in the item text. XS/S items skip the planning step and go straight to implementation.
 
 ---
 

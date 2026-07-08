@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { RoadmapSource } from "@cdhorne/claude-autopilot";
+import type { RoadmapSource } from "pelaggio";
 import { Registry } from "../src/registry.js";
 import { RoadmapCache } from "../src/roadmap-cache.js";
 

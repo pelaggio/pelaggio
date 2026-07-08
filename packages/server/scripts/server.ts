@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
-import { getRoadmapSource, loadConfig } from "@cdhorne/claude-autopilot";
 import { serve } from "@hono/node-server";
+import { getRoadmapSource, loadConfig } from "pelaggio";
 import { createApp } from "../src/app.js";
 import { loadServerConfig } from "../src/config.js";
 import { LogBroker } from "../src/log-broker.js";
@@ -11,7 +11,7 @@ import { Supervisor } from "../src/supervisor.js";
 
 const cfg = loadServerConfig();
 if (cfg.token === undefined) {
-	console.warn(`autopilot-server: CONTROL_PLANE_TOKEN is unset — running unauthenticated on loopback (${cfg.host}). Set CONTROL_PLANE_TOKEN to require bearer auth.`);
+	console.warn(`pelaggio-server: CONTROL_PLANE_TOKEN is unset — running unauthenticated on loopback (${cfg.host}). Set CONTROL_PLANE_TOKEN to require bearer auth.`);
 }
 const registry = loadRegistry(cfg.registryPath);
 const roadmapCache = new RoadmapCache({
@@ -40,7 +40,7 @@ const app = createApp({
 });
 
 serve({ fetch: app.fetch, hostname: cfg.host, port: cfg.port }, (info) => {
-	console.log(`autopilot-server listening on http://${info.address}:${info.port}`);
+	console.log(`pelaggio-server listening on http://${info.address}:${info.port}`);
 	console.log(`registry: ${cfg.registryPath}`);
 	for (const entry of registry.entries()) {
 		const status = existsSync(entry.path) ? "ok" : "missing";
@@ -49,6 +49,6 @@ serve({ fetch: app.fetch, hostname: cfg.host, port: cfg.port }, (info) => {
 	if (cfg.webDist !== undefined) {
 		console.log(`UI mounted from ${cfg.webDist}`);
 	} else {
-		console.log("UI not mounted (build @cdhorne/claude-autopilot-web or set AUTOPILOT_SERVER_WEB_DIST)");
+		console.log("UI not mounted (build @pelaggio/web or set AUTOPILOT_SERVER_WEB_DIST)");
 	}
 });

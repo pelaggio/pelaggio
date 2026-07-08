@@ -1,4 +1,4 @@
-import type { RunSummary } from "@cdhorne/claude-autopilot-server/types";
+import type { RunSummary } from "@pelaggio/server/types";
 import { useEffect, useState } from "react";
 import { ApiError, listRuns } from "../lib/api.js";
 import { formatDate, formatItemId, statusBadgeClass } from "../lib/format.js";

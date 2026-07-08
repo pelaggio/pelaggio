@@ -57,10 +57,10 @@ describe("formatTokens", () => {
 
 describe("formatItemId", () => {
 	it("prefixes bare-numeric ids with the repo slug", () => {
-		assert.equal(formatItemId("30", "claude-autopilot"), "claude-autopilot#30");
+		assert.equal(formatItemId("30", "pelaggio"), "pelaggio#30");
 	});
 	it("leaves ids with their own prefix alone", () => {
-		assert.equal(formatItemId("TOOL-47", "claude-autopilot"), "TOOL-47");
+		assert.equal(formatItemId("TOOL-47", "pelaggio"), "TOOL-47");
 		assert.equal(formatItemId("AGT-1", "trellis-term"), "AGT-1");
 	});
 	it("returns the id unchanged when no repo is known", () => {

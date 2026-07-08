@@ -61,14 +61,14 @@ describe("Supervisor.start", () => {
 		const run = supervisor.start({ repo: "main", item: "TOOL-1", parallel: 2, cycles: 3, shipTarget: "pull-request" });
 		assert.equal(spawned.length, 1);
 		assert.equal(spawned[0].cmd, "pnpm");
-		assert.deepEqual(spawned[0].args, ["--filter", "@cdhorne/claude-autopilot", "autopilot", "--item", "TOOL-1", "--parallel", "2", "--cycles", "3", "--target", "pull-request", "--verbose"]);
+		assert.deepEqual(spawned[0].args, ["--filter", "pelaggio", "pelaggio", "--item", "TOOL-1", "--parallel", "2", "--cycles", "3", "--target", "pull-request", "--verbose"]);
 		assert.equal(run.status, "running");
 		assert.equal(run.item, "TOOL-1");
 		assert.equal(run.repo, "main");
 		assert.equal(run.pid, 1000);
 		assert.equal(spawned[0].opts.cwd, dir);
-		assert.equal(spawned[0].opts.env.CLAUDE_AUTOPILOT_REPO, dir);
-		assert.equal(spawned[0].opts.env.CLAUDE_AUTOPILOT_PLAIN, "1");
+		assert.equal(spawned[0].opts.env.PELAGGIO_REPO, dir);
+		assert.equal(spawned[0].opts.env.PELAGGIO_PLAIN, "1");
 	});
 
 	it("throws SupervisorError(unknown-repo) when slug is not registered", () => {
@@ -125,7 +125,7 @@ describe("Supervisor.resume", () => {
 		const original = supervisor.start({ repo: "main", item: "TOOL-1", shipTarget: "auto-merge-pr" });
 		const resumed = supervisor.resume(original.id);
 		assert.equal(spawned.length, 2);
-		assert.deepEqual(spawned[1].args, ["--filter", "@cdhorne/claude-autopilot", "autopilot", "--resume", "TOOL-1", "--target", "auto-merge-pr", "--verbose"]);
+		assert.deepEqual(spawned[1].args, ["--filter", "pelaggio", "pelaggio", "--resume", "TOOL-1", "--target", "auto-merge-pr", "--verbose"]);
 		assert.equal(resumed.resumedFrom, original.id);
 		assert.notEqual(resumed.id, original.id);
 		// Re-uses original repo slug → same cwd

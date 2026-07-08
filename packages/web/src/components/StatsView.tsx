@@ -1,4 +1,4 @@
-import type { Stats } from "@cdhorne/claude-autopilot";
+import type { Stats } from "pelaggio";
 import { useEffect, useState } from "react";
 import { ApiError, getStats } from "../lib/api.js";
 import { formatItemId, formatTokens, formatUsd } from "../lib/format.js";

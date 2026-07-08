@@ -2,7 +2,7 @@
 
 ## Roadmap Sources
 
-Roadmap + task-index access goes through the `RoadmapSource` interface (`packages/autopilot/scripts/autopilot/roadmap/index.ts`).
+Roadmap + task-index access goes through the `RoadmapSource` interface (`packages/pelaggio/scripts/pelaggio/roadmap/index.ts`).
 
 Adapters today:
 
@@ -10,19 +10,19 @@ Adapters today:
 - `github-issues`: GitHub issues via `gh`.
 - `linear`: Linear issues via `@linear/sdk`.
 
-`getRoadmapSource(name, { repo })` is the factory; the resolved name comes from `roadmap.source` in `.autopilot.yml` (default `"markdown"`). Adding an adapter means a new file under `roadmap/`, widening the `RoadmapSourceName` union in `roadmap/types.ts`, and extending the factory `switch`. No skill edits are needed.
+`getRoadmapSource(name, { repo })` is the factory; the resolved name comes from `roadmap.source` in `.pelaggio.yml` (default `"markdown"`). Adding an adapter means a new file under `roadmap/`, widening the `RoadmapSourceName` union in `roadmap/types.ts`, and extending the factory `switch`. No skill edits are needed.
 
 ### Skill → adapter bridge
 
 Skill bodies never read roadmap files or issue trackers directly — they shell out to the `roadmap` CLI (`roadmap-cli.ts`), which dispatches to the configured source:
 
 ```bash
-npx @cdhorne/claude-autopilot roadmap <subcommand>
+npx pelaggio roadmap <subcommand>
 ```
 
 Subcommands: `list`, `get`, `claim`, `plan-path`, `publish-plan`, `mark-done`, `create-item`, `archive-plan`, `source`. Same idiom as `worktree-deps`. Do not duplicate adapter logic inside skills.
 
-Always use the **scoped** name `@cdhorne/claude-autopilot`, never bare `claude-autopilot`. The bare name collides with an unrelated public npm package cached under `~/.npm/_npx/`; a cached hit caused an observed pipeline recursion (TOOL-50) where the agent substituted `pnpm autopilot <subcommand>` and re-entered the pipeline. The root `package.json` carries `@cdhorne/claude-autopilot: workspace:*` so pnpm exposes it at the workspace root; `check-skills` enforces this (`skill.npx-bare-autopilot`, `skill.pnpm-autopilot-subcommand`), and the pipeline entry (`cli.ts`) rejects unknown positional args as defense in depth.
+Always use the **scoped** name `pelaggio`, never bare `pelaggio`. The bare name collides with an unrelated public npm package cached under `~/.npm/_npx/`; a cached hit caused an observed pipeline recursion (TOOL-50) where the agent substituted `pnpm pelaggio <subcommand>` and re-entered the pipeline. The root `package.json` carries `pelaggio: workspace:*` so pnpm exposes it at the workspace root; `check-skills` enforces this (`skill.npx-bare-pelaggio`, `skill.pnpm-pelaggio-subcommand`), and the pipeline entry (`cli.ts`) rejects unknown positional args as defense in depth.
 
 ## Claims
 
@@ -32,7 +32,7 @@ Shared-file writers — `markDone`/`createItem`/`archivePlan` and `commitStrayBo
 
 ## Ship Targets
 
-`ship.target` in `.autopilot.yml` selects the behavior, dispatched via adapters under `ship/`:
+`ship.target` in `.pelaggio.yml` selects the behavior, dispatched via adapters under `ship/`:
 
 - `direct-push`
 - `pull-request`
@@ -62,7 +62,7 @@ Local review mode (`review.runner: local`) runs before the local revise sweep. I
 
 ### Revise loops (one pass, label-bounded)
 
-Only local **or** CI should be active — both race for the `autopilot:revised` label, added *before* any work. CI stays disabled repo-wide (`vars.AUTOPILOT_AUTO_REVISE = false`), so the local sweep is the sole reviser.
+Only local **or** CI should be active — both race for the `pelaggio:revised` label, added *before* any work. CI stays disabled repo-wide (`vars.AUTOPILOT_AUTO_REVISE = false`), so the local sweep is the sole reviser.
 
 - **CI (#60, disabled):** `pr-review-revise.yml` fires on the review workflow's `workflow_run: failure` and, exactly once per PR, re-implements from findings and re-pushes so the gate re-runs. The seam is `--review-findings <path>`, a resume-only CLI flag read best-effort in `pipeline.ts`. **Load-bearing:** the revision push must be PAT-authed (`token: secrets.GH_TOKEN`) — commits pushed with the default `GITHUB_TOKEN` don't trigger `pull_request` workflows.
 - **Local sweep (#76, default on):** at the start of a pure auto-pick run, `runOrchestrator` sweeps red-review PRs and revises each **in-process** on the local subscription — reusing `runPipeline` with `startFrom: "implement"` + a fetched `--review-findings` file, so parking/notifications/cost/shipTarget all apply for free. Hard no-op unless `revise.local` (config, default true — opt-out) **and** `roadmap.source: github-issues` **and** a PR ship target **and** `!noWorktree && !dryRun && items.length === 0`. The git/gh primitives live in `revise-sweep.ts` (pure, fail-soft, injected `GhRunner`/exec — any error skips, never throws). No new pipeline `STEP`; revisions don't consume `--cycles` but do count toward `--budget`, pushed into `results`/`totalSpent` before the worker pool. Parking is preserved with zero new exit paths (delegates to `runPipeline`'s `parkExit()`).

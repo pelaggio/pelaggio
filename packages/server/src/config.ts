@@ -55,15 +55,15 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env, { webDist
 	if (!Number.isInteger(port) || port <= 0 || port > 65535) {
 		throw new Error(`AUTOPILOT_SERVER_PORT must be an integer 1-65535; got ${JSON.stringify(portRaw)}`);
 	}
-	const registryPath = env.AUTOPILOT_SERVER_REGISTRY ? resolve(env.AUTOPILOT_SERVER_REGISTRY) : resolve(xdgConfigHome(env), "autopilot-server", "repos.yml");
-	const stateRoot = resolve(xdgStateHome(env), "autopilot-server");
+	const registryPath = env.AUTOPILOT_SERVER_REGISTRY ? resolve(env.AUTOPILOT_SERVER_REGISTRY) : resolve(xdgConfigHome(env), "pelaggio-server", "repos.yml");
+	const stateRoot = resolve(xdgStateHome(env), "pelaggio-server");
 	const statePath = env.AUTOPILOT_SERVER_STATE_PATH ? resolve(env.AUTOPILOT_SERVER_STATE_PATH) : resolve(stateRoot, "state.json");
 	const logDir = env.AUTOPILOT_SERVER_LOG_DIR ? resolve(env.AUTOPILOT_SERVER_LOG_DIR) : resolve(stateRoot, "logs");
 	const token = env.CONTROL_PLANE_TOKEN || undefined;
 	if (token === undefined && !isLoopbackHost(host)) {
 		throw new Error(
 			`refusing to start: CONTROL_PLANE_TOKEN is unset and AUTOPILOT_SERVER_HOST=${host} is not loopback. ` +
-				`An unauthenticated control plane on a routable interface lets any reachable peer spawn autopilot runs. ` +
+				`An unauthenticated control plane on a routable interface lets any reachable peer spawn pelaggio runs. ` +
 				`Set CONTROL_PLANE_TOKEN, or bind to 127.0.0.1 for local-only use.`,
 		);
 	}

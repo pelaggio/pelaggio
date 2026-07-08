@@ -59,7 +59,7 @@ export class Supervisor {
 		const args = this.buildArgs(opts, resumedFrom);
 		const child = this.spawn("pnpm", args, {
 			cwd: repoCwd,
-			env: { ...process.env, CLAUDE_AUTOPILOT_REPO: repoCwd, CLAUDE_AUTOPILOT_PLAIN: "1" },
+			env: { ...process.env, PELAGGIO_REPO: repoCwd, PELAGGIO_PLAIN: "1" },
 			stdio: ["ignore", "pipe", "pipe"],
 		});
 		const startedAt = this.now().toISOString();
@@ -97,7 +97,7 @@ export class Supervisor {
 	}
 
 	private buildArgs(opts: StartOpts, resumedFrom: string | undefined): string[] {
-		const args = ["--filter", "@cdhorne/claude-autopilot", "autopilot"];
+		const args = ["--filter", "pelaggio", "pelaggio"];
 		if (resumedFrom) {
 			args.push("--resume", opts.item);
 		} else {

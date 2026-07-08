@@ -1,5 +1,5 @@
 [Unit]
-Description=Cloudflare Tunnel fronting autopilot control-plane
+Description=Cloudflare Tunnel fronting pelaggio control-plane
 After=network-online.target
 Wants=network-online.target
 

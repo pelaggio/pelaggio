@@ -1,187 +1,143 @@
-# claude-autopilot
+# Pelaggio
 
-Headless pipeline for running [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk) cycles on roadmap items. Solo developer's answer to "I have a list of work to do and I'd like Claude to burn through it while I do something else."
+**Extend how much one developer can ship.**
+
+Pelaggio moves every work item through the same fixed, auditable pipeline — plan, implement,
+review, ship — at whatever level of supervision you're comfortable with. Sit in a verbose
+session steering the roadmap by hand, hand off the whole project and let it run end to end,
+or dial in anywhere between. You choose the involvement and the token budget; the pipeline
+runs with the same discipline either way. Self-hosted, bring your own agent (Claude Code
+*or* Codex), every change behind a bounded blast radius.
+
+> **The name.** *Pelaggio* comes from *pelagos*, the open sea. Its agents work **pelagic** —
+> out in open water, far from the shore of direct control — while the platform carves that
+> ocean into an **archipelago** of bounded, isolated islands of work. Say it *peh-LAH-joh*.
+> The orchestrator answers to **Joe**.
+
+## Why Pelaggio
+
+Autonomous coding agents can write a lot of code. Few are built for the solo developer (or
+small team) who has to live with the result — where there's no one else to catch a bad merge
+and a runaway agent is nobody's problem but yours. Pelaggio is built to extend your reach
+without taking away your control:
+
+- **Supervision on your terms.** Watch every session and steer the roadmap by hand, run it
+  entirely unattended, or anywhere between — the same pipeline and the same guardrails at
+  whatever involvement (and token budget) you choose.
+- **Bring your own agent.** Claude Code and Codex today, driven through one provider seam —
+  it's designed for choice, not lock-in.
+- **Bounded blast radius.** Every item runs in its own git worktree, isolated from `main`
+  and from your other work. Shipping defaults to a **pull request**; autonomous direct-push
+  to `main` is an explicit, informed opt-in — never the silent default.
+- **Fail-closed, not fail-open.** The review gate merges only on an explicit PASS; a BLOCK,
+  a missing verdict, an error, or a parked run all stop the merge.
+- **Self-hosted.** Runs on your machine or your infra. No telemetry. Your code and prompts
+  don't touch our servers, because there are none.
+- **Trust is the product.** For a tool that writes to your repo, the security posture *is*
+  the feature — documented, versioned, and falsifiable. See [`docs/trust/`](./docs/trust/).
 
 ## What it does
 
-Given a roadmap of work items, runs a fixed pipeline per item:
+Given a roadmap of work items, Pelaggio runs a fixed pipeline per item:
 
 ```
 pick → plan → shakedown-plan → implement → shakedown-code → ship
 ```
 
-- **pick** — select next available item, create a feature branch + worktree
-- **plan** — generate implementation plan, write to `docs/plans/`, self-review, commit
-- **shakedown-plan** — independent review of the plan against the project rubric, return APPROVE / REVISE / RETHINK verdict
+- **pick** — select the next available item; create a feature branch + worktree
+- **plan** — generate an implementation plan, write it to `docs/plans/`, self-review, commit
+- **shakedown-plan** — independent review of the plan against *your* rubric → APPROVE / REVISE / RETHINK
 - **implement** — execute the plan incrementally, committing as it goes
-- **shakedown-code** — review the diff against the rubric, fix issues, run verification (typecheck / lint / tests), add deferred items to roadmap
-- **ship** — squash, merge to main, update docs, push, clean up worktree
+- **shakedown-code** — review the diff against your rubric, fix issues, run verification
+  (typecheck / lint / tests), file deferred work back to the roadmap
+- **ship** — open a PR (or, opt-in, merge), update docs, clean up the worktree
 
-Each step runs in its own Claude Agent SDK session (fresh context, configurable model, explicit budget + turn limit). Rate-limit rejection triggers a `wip:` checkpoint commit and parks the cycle for resume.
+Each step runs in a fresh agent session with its own context, model, budget, and turn
+limit. A rate-limit rejection triggers a `wip:` checkpoint commit and parks the cycle for
+resume — no work is lost.
 
-## Who it's for
+## Bring your own agent
 
-Solo developers who:
+Pelaggio drives the harness; you choose it. The provider seam is real, not aspirational:
 
-- Run Claude Code / Claude Agent SDK locally (not in CI)
-- Want a fixed pipeline, not an open-ended agent
-- Care about their own rubric, not a generic quality heuristic
-- Need cost visibility and explicit budgets per step
-- Want parallel worktree execution across unrelated items
+- **Claude Code** (Claude Agent SDK) — the original driver.
+- **Codex** — a first-class second driver.
 
-Not for: teams running shared PR bots, cloud-native flows, IDE-integrated pair programming, or people who want a product-ready tool. This is personal infrastructure.
+Model IDs, per-step budgets, and effort are configuration, not code — see `.pelaggio.yml`.
 
-## What's in here
+## Trust is the product
 
-```
-.claude/skills/           # the pipeline steps, each a markdown skill file
-  charter/                # /charter — add new work item
-  pick/                   # /pick — claim next item
-  plan/                   # /plan — write implementation plan
-  shakedown/              # /shakedown — review + fix (plan or code)
-  ship/                   # /ship — merge + update docs + clean up
-  shipwreck/              # /shipwreck — recovery when /ship fails
-  pickup/                 # /pickup — rebuild context on resume
-  status/                 # /status — where am I
-  tidy/                   # /tidy — clean up stale worktrees
-  _rubric.md              # this repo's own working rubric
-  _review-logic.md        # shared review dispatch + stopping rule
+Pelaggio's guarantees are documented and verifiable, not marketing:
 
-scripts/autopilot/        # TypeScript pipeline orchestrator
-  main.ts                 # CLI entry — parses flags, calls orchestrate()
-  pipeline.ts             # runPipeline() per-item + orchestrate() for parallel workers
-  step-runner.ts          # runs one step via claude-agent-sdk query()
-  helpers.ts              # pure helpers — git, fs, parsing
-  config.ts               # BUDGETS, TURN_LIMITS, EFFORT, MODEL_PROFILES, STEPS
-  types.ts                # Step union, CycleResult, Flags, StepEvent
-  tui.ts                  # live status bar + event rendering
-  __tests__/              # unit tests via node:test
+- **Worktree isolation** — each item works only inside its own git worktree.
+- **PR-gated by default** — human review is the shipped default; direct-push is opt-in.
+- **Fail-closed review gate** — a merge happens only on an explicit PASS.
+- **Authenticated control plane** — the daemon refuses to start unauthenticated on a
+  non-loopback host; no silent open port.
+- **No surprise egress** — self-hosted, no telemetry, and secrets are never interpolated
+  into prompts or logs.
 
-.claude-templates/        # templates for bootstrapping NEW projects
-  README.md               # what's here and how to use it
-  migration-checklist.md  # per-project playbook
-  CLAUDE.md               # orientation primer template
-  _rubric.md              # template rubric (six dimensions, guided blank)
-  docs/
-    philosophy.md         # the "why" template
-    architecture.md       # C4 skeleton
-    conventions-ui.md     # Expo-opinionated UI conventions
-    tone.md               # voice + copy rules template
-    build.md              # EAS + local build setup
-    task-index.md         # empty task index
-    roadmap-example.md    # roadmap format (checkbox + table)
-    roadmap-phase1-core.md # opinionated Phase-1 Expo starter roadmap
-    decisions.md          # ADR-style decision log template
-```
+The threat model and the full trust posture live under [`docs/trust/`](./docs/trust/).
 
-## Install it in another project (recommended path)
-
-Until TOOL-18 lands the public npm publish, install via git dep and pin by SHA:
+## Install
 
 ```bash
-pnpm add -D github:cdhorne/claude-autopilot#<sha>
-npx claude-autopilot init
+npx pelaggio init
 ```
 
-`init` scaffolds `.claude/skills/`, a `_rubric.md` template, `docs/task-index.md`,
-`docs/roadmap-example.md`, and an `.autopilot.yml` stub into the consuming repo, and adds
-a `"autopilot": "claude-autopilot run"` entry to `package.json` scripts. Re-running is a
-no-op unless you pass `--force`. Use `--dry-run` to preview the file plan.
+`init` scaffolds `.claude/skills/`, a `_rubric.md` template, a roadmap example, and an
+`.pelaggio.yml` stub into your repo. Invoke the pipeline with `npx pelaggio run`.
+Re-running is a no-op unless you pass `--force`; use `--dry-run` to preview the file plan.
 
-After scaffolding:
+Then:
 
-1. **Author `.claude/skills/_rubric.md` for your project** — the highest-leverage task
-2. Replace `docs/roadmap-example.md` content with your real roadmap, link it from `docs/task-index.md`
-3. Run `pnpm autopilot --cycles 1 --verbose`
+1. **Author `.claude/skills/_rubric.md` for your project** — the highest-leverage task. It's
+   how Pelaggio learns *your* definition of done.
+2. Replace the roadmap example with your real backlog.
+3. Run `pelaggio run --cycles 1 --verbose`.
 
-Pin by SHA — the package intentionally provides no semver stability guarantees yet.
+## Using it on itself
 
-**Known limitation**: `package.json#exports` points at `.ts` files. The CLI works
-everywhere because `bin/claude-autopilot.js` invokes `tsx` explicitly, but
-`import { run } from "@cdhorne/claude-autopilot"` only works under a `.ts` loader (i.e.
-consumers already running on `tsx`). Plain Node and bundlers without a TypeScript loader
-will hit import errors. TOOL-18 adds a build step.
+Pelaggio develops itself: open work lives in GitHub issues under the `pelaggio` label
+(configured via `.pelaggio.yml` → `roadmap.source`). Running it on its own backlog is where
+the guarantees get tested — if it can't ship real work unattended, it doesn't ship.
 
-## Using it in a new project — legacy path
+## Stats
 
-See `.claude-templates/migration-checklist.md` for the step-by-step manual bootstrap.
-The `init` command above is the recommended replacement; this path is kept for reference.
+`pelaggio stats` streams the append-only cycle log and prints an aggregate dashboard — token
+totals, cost per step, cache-hit ratio, retry and rethink rates, and recent items. There's
+no separate state file; the reducer runs over the log on each invocation.
 
-1. Clone this repo's `.claude/skills/` + `scripts/autopilot/` + `.claude-templates/` into your new project
-2. Sanitize: find-replace project name, worktree prefix, verification commands
-3. **Write `.claude/skills/_rubric.md` for your project before writing any code** — this is the highest-leverage task
-4. Fill in `CLAUDE.md` + `docs/philosophy.md` + the starter roadmap items
-5. Run `pnpm autopilot --cycles 1 --verbose`
+## Where it came from
 
-## Stats dashboard
+Pelaggio started as scaffolding for another project of mine. Every roadmap item ran the same
+loop — plan it, build it, review it, ship it — so I was
+copying the same prompts into parallel agent sessions by hand. They kept colliding, stepping
+on each other's files, so I isolated them into separate worktrees. I wanted to check in on
+them less, so I added remote supervision and per-step budgets. When I ran out of Claude tokens
+mid-run, I taught the pipeline to fall back to Codex — so it stopped mattering which agent was
+driving. When I moved on to the next project, I pulled that core out, generalized it, and
+shaped it into the engine you're reading about.
 
-`pnpm autopilot stats` streams `.dev/autopilot-log.jsonl` and prints an aggregate dashboard — token totals, cost per step, cache-hit ratio, retry and rethink rates, and a list of recent items. Example:
-
-```
-autopilot stats                                             14 cycles  $12.34
-
-Cost & tokens
-  Cycles       14    completed 10  failed 2  parked 1  shipwrecked 1
-  Spend        $12.34
-  Tokens       in 1.2M  out 180K  cache-write 340K  cache-read 2.1M
-  Cache-hit    63.6%
-
-  By step         cost      in    out   cache-rd   hit%
-    pick        $0.12     22K   800K        45K   65.0%
-    plan        $2.30    180K    25K       320K   64.0%
-    ...
-
-Quality
-  Retry rate (turn-exhaustion)
-    implement        0.28 per cycle
-    shakedown-code   0.14 per cycle
-  Rethink rate (plan review)
-    shakedown-plan   14.3%
-  Avg shakedown iterations  1.18
-
-Recent items (last 10)
-  2026-04-17  TOOL-12     $1.10  128K tok  0 rethinks  ✓
-  2026-04-15  TOOL-6      $0.82   92K tok  0 rethinks  ✓
-  ...
-```
-
-No separate state file — the reducer runs over the append-only log on each invocation. Legacy log lines (no token fields) are tolerated; their step tokens count as zero.
-
-## Using it on itself (meta)
-
-This repo uses its own pipeline to work on its own roadmap. Open work lives in [GitHub issues](https://github.com/cdhorne/claude-autopilot/issues?q=is%3Aopen+is%3Aissue+label%3Aautopilot) under the `autopilot` label (configured via `.autopilot.yml` → `roadmap.source: github-issues`). Run `pnpm autopilot --cycles 1` to pick one up.
-
-## Status
-
-Provenance: extracted from [Fathom](https://github.com/cdhorne/fathom) at commit `c243744` on 2026-04-11. History pre-extraction lives in Fathom's git log under `.claude/skills/` and `scripts/autopilot/` paths.
-
-**Not yet on npm.** The `@cdhorne/claude-autopilot` package is set up to publish
-— tagging a signed `v*` release triggers [`.github/workflows/publish.yml`](.github/workflows/publish.yml),
-which verifies the tag signature, runs the `check:publish` safeguards, and runs
-`npm publish --provenance --access public` — but no version has been pushed to
-the registry yet. Until a release ships, consume it by forking or cloning this
-repo (copy `.claude/skills/`, `packages/autopilot/scripts/autopilot/`, and
-optionally `.claude-templates/` into your own repo — see
-[`.claude-templates/migration-checklist.md`](.claude-templates/migration-checklist.md)).
+Every feature here is scar tissue from that: worktree isolation because sessions collided, the
+supervision and budget dials because I wanted my evenings back, bring-your-own-agent because I
+ran out of tokens and needed a substitute, the fixed pipeline because I was already running it
+by hand.
 
 ## License
 
 Copyright © 2026 Chris Horne.
 
-The entire project — the CLI and pipeline (`packages/autopilot/`,
-`.claude/skills/`), the control-plane daemon (`packages/server/`), and the web
-UI (`packages/web/`) — is licensed under the **Functional Source License,
-Version 1.1, Apache 2.0 Future License** (`FSL-1.1-ALv2`) — see
-[`LICENSE`](./LICENSE). FSL lets you use, modify, self-host, and redistribute the
-Software for any purpose that is not a **Competing Use** (offering it to others
-as a substitute product or service). Internal use, non-commercial education and
-research, and professional services are all expressly permitted. Two years after
-each release, that version converts to Apache 2.0.
+Licensed under the **Functional Source License, Version 1.1, Apache 2.0 Future License**
+(`FSL-1.1-ALv2`) — see [`LICENSE`](./LICENSE). FSL lets you use, modify, self-host, and
+redistribute the software for any purpose that is not a **Competing Use** (offering it to
+others as a substitute product or service). Internal use, non-commercial education and
+research, and professional services are all expressly permitted. Two years after each
+release, that version converts to Apache 2.0.
 
-The control-plane daemon and web UI are the substrate for a future managed /
-remote-control offering; FSL's Competing-Use clause reserves that commercial
-right while still letting you self-host the whole stack.
+The control-plane daemon and web UI are the substrate for a future managed / remote-control
+offering; FSL's Competing-Use clause reserves that commercial right while still letting you
+self-host the whole stack.
 
-Contributions are accepted under the [Developer Certificate of Origin](./DCO);
-see [`CONTRIBUTING.md`](./CONTRIBUTING.md) for the required `Signed-off-by`
-sign-off.
+Contributions are accepted under the [Developer Certificate of Origin](./DCO); see
+[`CONTRIBUTING.md`](./CONTRIBUTING.md) for the required `Signed-off-by` sign-off.

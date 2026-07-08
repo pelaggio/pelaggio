@@ -1,4 +1,4 @@
-import type { PersistedRun, RunStatus } from "@cdhorne/claude-autopilot-server/types";
+import type { PersistedRun, RunStatus } from "@pelaggio/server/types";
 import { useCallback, useEffect, useState } from "react";
 import { ApiError, getRun, pauseRun, resumeRun, stopRun } from "../lib/api.js";
 import { formatDate, formatItemId, statusBadgeClass } from "../lib/format.js";

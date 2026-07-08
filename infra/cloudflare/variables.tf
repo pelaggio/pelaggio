@@ -22,7 +22,7 @@ variable "domain" {
 variable "tunnel_name" {
   type        = string
   description = "Name for the Cloudflare Tunnel resource and the DNS hostname prefix."
-  default     = "autopilot"
+  default     = "pelaggio"
 }
 
 variable "tunnel_target" {

@@ -32,21 +32,21 @@ Add to `apps/mobile/package.json` scripts (or root package.json if not yet a mon
 "typecheck": "tsc --noEmit"
 ```
 
-## Step 3 — Copy the autopilot + skills infrastructure
+## Step 3 — Copy the pelaggio + skills infrastructure
 
 From the source project (Fathom or a prior scaffold-based project):
 
 ```bash
 # From the source project root
 cp -r .claude/skills /path/to/my-project/.claude/
-cp -r scripts/autopilot /path/to/my-project/scripts/
-cp scripts/autopilot.ts /path/to/my-project/scripts/
+cp -r scripts/pelaggio /path/to/my-project/scripts/
+cp scripts/pelaggio.ts /path/to/my-project/scripts/
 ```
 
 Add to root `package.json`:
 
 ```json
-"autopilot": "tsx scripts/autopilot.ts",
+"pelaggio": "tsx scripts/pelaggio.ts",
 "typecheck": "pnpm -r typecheck",
 "check": "pnpm -r exec biome check ./src"
 ```
@@ -64,7 +64,7 @@ Find and replace in your new repo:
 | Old | New |
 |---|---|
 | `fathom` (in strings, paths, worktree prefix) | `{{your-project-slug}}` |
-| `fathom-` (worktree prefix in `scripts/autopilot/helpers.ts:resolveWorktree`) | `{{slug}}-` |
+| `fathom-` (worktree prefix in `scripts/pelaggio/helpers.ts:resolveWorktree`) | `{{slug}}-` |
 | `apps/mobile` verification paths (if you have a different monorepo layout) | your paths |
 | Fathom-specific component names in `.claude/skills/shakedown/SKILL.md` plan-review examples | your shared components (or delete the specific examples) |
 
@@ -107,27 +107,27 @@ Copy each template from `.claude-templates/docs/` to `docs/` in the new project.
 
 ```bash
 git add .claude/ scripts/ docs/ CLAUDE.md biome.json package.json
-git commit -m "chore: scaffold project structure (autopilot + skills + docs)"
+git commit -m "chore: scaffold project structure (pelaggio + skills + docs)"
 ```
 
-## Step 8 — Verify autopilot loads
+## Step 8 — Verify pelaggio loads
 
 Smoke test without running a full cycle:
 
 ```bash
-pnpm autopilot --dry-run --cycles 1
+pnpm pelaggio --dry-run --cycles 1
 ```
 
 Should report "no items to pick" (your roadmap is empty) but load without errors. If it errors on SKILL.md parsing or script imports, fix before proceeding.
 
 ## Step 9 — Add your first real roadmap item
 
-Use `/charter` (the autopilot skill) or hand-edit `docs/roadmap-{track}.md` and `docs/task-index.md` to add one item. Pick something small (scope S or XS) for the first real cycle.
+Use `/charter` (the pelaggio skill) or hand-edit `docs/roadmap-{track}.md` and `docs/task-index.md` to add one item. Pick something small (scope S or XS) for the first real cycle.
 
 ## Step 10 — Run the first cycle
 
 ```bash
-pnpm autopilot --cycles 1 --verbose
+pnpm pelaggio --cycles 1 --verbose
 ```
 
 Watch it work through pick → plan → shakedown-plan → implement → shakedown-code → ship. First cycle will expose whatever you got wrong in the rubric or conventions — that's fine, iterate on those files rather than fighting the output.
@@ -138,9 +138,9 @@ Watch it work through pick → plan → shakedown-plan → implement → shakedo
 
 **`/shakedown` reviews the wrong thing inline.** Make sure you're on a feature branch (not main) and have either uncommitted code changes or a plan file at `docs/plans/{branch-slug}.md`. If neither exists, the skill has nothing to dispatch on.
 
-**Autopilot's `/pick` fails with "nothing to pick."** Your `docs/task-index.md` is empty or every item is blocked. Add an open item with `Deps: —`.
+**Pelaggio's `/pick` fails with "nothing to pick."** Your `docs/task-index.md` is empty or every item is blocked. Add an open item with `Deps: —`.
 
-**Typecheck fails on copied autopilot scripts.** You probably forgot to install `@anthropic-ai/claude-agent-sdk`. The pipeline imports from it directly.
+**Typecheck fails on copied pelaggio scripts.** You probably forgot to install `@anthropic-ai/claude-agent-sdk`. The pipeline imports from it directly.
 
 **Pre-commit hooks don't fire.** Fathom uses `lefthook`. If you want the same behavior, `pnpm add -D -w lefthook` and copy the `lefthook.yml` from the source project.
 

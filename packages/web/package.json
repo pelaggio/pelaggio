@@ -1,8 +1,8 @@
 {
-	"name": "@cdhorne/claude-autopilot-web",
+	"name": "@pelaggio/web",
 	"version": "0.0.0",
 	"private": true,
-	"description": "Mobile-responsive web UI (Astro 5 + React 19 + Tailwind v4) for the autopilot control-plane daemon.",
+	"description": "Mobile-responsive web UI (Astro 5 + React 19 + Tailwind v4) for the pelaggio control-plane daemon.",
 	"license": "FSL-1.1-ALv2",
 	"type": "module",
 	"scripts": {
@@ -13,8 +13,8 @@
 	},
 	"dependencies": {
 		"@astrojs/react": "^5.0.7",
-		"@cdhorne/claude-autopilot": "workspace:*",
-		"@cdhorne/claude-autopilot-server": "workspace:*",
+		"pelaggio": "workspace:*",
+		"@pelaggio/server": "workspace:*",
 		"@tailwindcss/vite": "^4.3.1",
 		"astro": "^6.4.6",
 		"react": "^19.2.7",

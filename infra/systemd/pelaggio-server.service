@@ -1,0 +1,17 @@
+[Unit]
+Description=Claude Pelaggio control-plane daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/workspace/pelaggio
+EnvironmentFile=%h/.config/pelaggio-server.env
+ExecStart=%h/workspace/pelaggio/infra/systemd/pelaggio-server-exec.sh
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

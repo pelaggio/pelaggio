@@ -14,7 +14,7 @@ Rebuild context for in-progress work so you can continue without re-reading ever
 
 Run `git rev-parse --path-format=absolute --git-common-dir` — the output ends with `/.git`. Strip that suffix to get MAIN_REPO.
 
-Roadmap lookups go through `npx @cdhorne/claude-autopilot roadmap ...`.
+Roadmap lookups go through `npx pelaggio roadmap ...`.
 
 ## Selection
 
@@ -25,8 +25,8 @@ Roadmap lookups go through `npx @cdhorne/claude-autopilot roadmap ...`.
 ## Gather
 
 1. Current branch: `git branch --show-current`
-2. Extract item ID from branch name (e.g. `feat/tool-16-refit-split` → `TOOL-16`). Run `npx @cdhorne/claude-autopilot roadmap get <ID> --json` for title, deps, sourceRef. Get worktree path from `git worktree list`.
-3. Resolve plan path: `npx @cdhorne/claude-autopilot roadmap plan-path --id <ID> --worktree "$PWD"` — exit 0 means it exists, exit 2 means it doesn't. Read it if present.
+2. Extract item ID from branch name (e.g. `feat/tool-16-refit-split` → `TOOL-16`). Run `npx pelaggio roadmap get <ID> --json` for title, deps, sourceRef. Get worktree path from `git worktree list`.
+3. Resolve plan path: `npx pelaggio roadmap plan-path --id <ID> --worktree "$PWD"` — exit 0 means it exists, exit 2 means it doesn't. Read it if present.
 4. Progress: `git log main..HEAD --oneline` (run in the item's worktree)
 5. Uncommitted work: `git status --short` (run in the item's worktree)
 6. Files changed: `git diff main...HEAD --stat` (run in the item's worktree)

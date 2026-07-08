@@ -8,7 +8,7 @@ on:
     types: [completed]
 
 # Serialize (never cancel) per PR branch: the first revise job adds the one-pass label before any
-# queued sibling reads it, so the `autopilot:revised` bound is effectively atomic.
+# queued sibling reads it, so the `pelaggio:revised` bound is effectively atomic.
 concurrency:
   group: pr-revise-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: false
@@ -47,8 +47,8 @@ jobs:
           token: ${{ secrets.GH_TOKEN }}   # PAT-authed push re-triggers pr-review (NOT GITHUB_TOKEN)
 
       # a. Resolve the item id + open PR number from the branch (feat/issue-<n>-…). Bail (no-op,
-      #    exit 0) if either is empty, the PR is a draft, or the linked issue lacks the `autopilot`
-      #    label — this loop only touches autopilot-managed PRs.
+      #    exit 0) if either is empty, the PR is a draft, or the linked issue lacks the `pelaggio`
+      #    label — this loop only touches pelaggio-managed PRs.
       - name: Resolve item + PR
         id: resolve
         run: |
@@ -63,36 +63,36 @@ jobs:
             echo "no open non-draft PR for '$HEAD_BRANCH' — nothing to revise"
             echo "proceed=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          if ! gh issue view "$ITEM_ID" --json labels --jq '.labels[].name' | grep -qx 'autopilot'; then
-            echo "issue #$ITEM_ID lacks the 'autopilot' label — skipping auto-revision"
+          if ! gh issue view "$ITEM_ID" --json labels --jq '.labels[].name' | grep -qx 'pelaggio'; then
+            echo "issue #$ITEM_ID lacks the 'pelaggio' label — skipping auto-revision"
             echo "proceed=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
           echo "item_id=$ITEM_ID" >> "$GITHUB_OUTPUT"
           echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
           echo "proceed=true" >> "$GITHUB_OUTPUT"
 
-      # b. One-pass bound: if 'autopilot:revised' is already on the PR, the single auto-revision has
+      # b. One-pass bound: if 'pelaggio:revised' is already on the PR, the single auto-revision has
       #    been spent — post an idempotent park comment and stop. Otherwise ensure the label exists
       #    and add it BEFORE any work, so a crash/park after this point cannot trigger a second pass.
-      - name: One-pass bound (autopilot:revised label)
+      - name: One-pass bound (pelaggio:revised label)
         id: guard
         if: steps.resolve.outputs.proceed == 'true'
         env:
           PR_NUMBER: ${{ steps.resolve.outputs.pr_number }}
         run: |
-          PARK_MARKER='<!-- autopilot-revise-parked -->'
+          PARK_MARKER='<!-- pelaggio-revise-parked -->'
           LABELS=$(gh pr view "$PR_NUMBER" --json labels --jq '.labels[].name')
-          if echo "$LABELS" | grep -qx 'autopilot:revised'; then
+          if echo "$LABELS" | grep -qx 'pelaggio:revised'; then
             existing=$(gh pr view "$PR_NUMBER" --json comments \
               --jq "[.comments[] | select(.body | contains(\"$PARK_MARKER\"))] | length")
             if [ "$existing" = "0" ]; then
-              gh pr comment "$PR_NUMBER" --body "$PARK_MARKER 🛑 The \`review\` gate is still red after one automated revision pass — parking for human attention. Remove the \`autopilot:revised\` label to allow another auto-revision."
+              gh pr comment "$PR_NUMBER" --body "$PARK_MARKER 🛑 The \`review\` gate is still red after one automated revision pass — parking for human attention. Remove the \`pelaggio:revised\` label to allow another auto-revision."
             fi
             echo "proceed=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          gh label create 'autopilot:revised' --color BFD4F2 \
+          gh label create 'pelaggio:revised' --color BFD4F2 \
             --description 'Auto-revised once after a red PR review (issue #60)' 2>/dev/null || true
-          gh pr edit "$PR_NUMBER" --add-label 'autopilot:revised'
+          gh pr edit "$PR_NUMBER" --add-label 'pelaggio:revised'
           echo "proceed=true" >> "$GITHUB_OUTPUT"
 
       # c. Fetch the pr-review findings (the upserted comment carrying the marker) into a gitignored
@@ -105,7 +105,7 @@ jobs:
           PR_NUMBER: ${{ steps.resolve.outputs.pr_number }}
         run: |
           mkdir -p .dev
-          MARKER='<!-- autopilot-pr-review -->'
+          MARKER='<!-- pelaggio-pr-review -->'
           BODY=$(gh pr view "$PR_NUMBER" --json comments \
             --jq "[.comments[] | select(.body | contains(\"$MARKER\"))] | last | .body // \"\"")
           if [ -z "$BODY" ]; then
@@ -130,8 +130,8 @@ jobs:
       - name: Configure git
         if: steps.findings.outputs.found == 'true'
         run: |
-          git config user.name "autopilot[bot]"
-          git config user.email "autopilot[bot]@users.noreply.github.com"
+          git config user.name "pelaggio[bot]"
+          git config user.email "pelaggio[bot]@users.noreply.github.com"
 
       - name: Revise from review findings
         if: steps.findings.outputs.found == 'true'
@@ -140,7 +140,7 @@ jobs:
           ITEM_ID: ${{ steps.resolve.outputs.item_id }}
           CI: "true"
         run: |
-          pnpm autopilot --resume "$ITEM_ID" --no-worktree \
+          pnpm pelaggio --resume "$ITEM_ID" --no-worktree \
             --target pull-request --review-findings ".dev/review-findings-$ITEM_ID.md" --verbose
 
       - name: Park on failure

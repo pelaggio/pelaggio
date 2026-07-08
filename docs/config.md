@@ -1,11 +1,11 @@
-# `.autopilot.yml` — configuration schema
+# `.pelaggio.yml` — configuration schema
 
-Place an `.autopilot.yml` at the repo root to override pipeline defaults. All
+Place an `.pelaggio.yml` at the repo root to override pipeline defaults. All
 keys are optional — omit anything you don't want to change and the default
 applies. If the file is absent or empty, behavior is identical to today.
 
 The file is read once at startup by `loadConfig()` in
-`packages/autopilot/scripts/autopilot/config.ts`. Parse errors fail loudly with the file path in
+`packages/pelaggio/scripts/pelaggio/config.ts`. Parse errors fail loudly with the file path in
 the message — delete the file to fall back to defaults.
 
 ## Precedence
@@ -13,7 +13,7 @@ the message — delete the file to fall back to defaults.
 For the worktree prefix (the one key with an env-var escape hatch):
 
 ```
-CLAUDE_AUTOPILOT_WORKTREE_PREFIX  >  worktree.prefix (yml)  >  basename(REPO) + "-"
+PELAGGIO_WORKTREE_PREFIX  >  worktree.prefix (yml)  >  basename(REPO) + "-"
 ```
 
 All other values use: `yml value` > default.
@@ -29,7 +29,7 @@ models.profiles.<name>.<section>.<step>  >  <section>.<step> (global yml)  >  de
 ## Annotated example
 
 ```yaml
-# .autopilot.yml — every key is optional
+# .pelaggio.yml — every key is optional
 
 worktree:
   prefix: "myproj-"            # default: `${basename(REPO)}-`
@@ -70,11 +70,11 @@ roadmap:
                                 # values: markdown | github-issues | linear
   # github:                     # only consulted when source is github-issues
   #   repo: acme/widgets        # required when source=github-issues (owner/repo)
-  #   label: autopilot          # default: autopilot
+  #   label: pelaggio          # default: pelaggio
   #   plan-location: issue-comment  # default: issue-comment | pr-description
   # linear:                     # only consulted when source is linear
   #   team: <team-uuid>         # required when source=linear (Linear team UUID)
-  #   label: autopilot          # default: "" (no label filter)
+  #   label: pelaggio          # default: "" (no label filter)
   #   plan-location: issue-comment  # default: issue-comment (pr-description reserved)
 
 budgets:                        # dollars per step (safety-net caps)
@@ -254,7 +254,7 @@ Invalid values fail fast at startup with the list of valid names.
 
 `pull-request` is the default because it keeps a human review gate in the loop.
 `direct-push` and `auto-merge-pr` push to the remote autonomously with no review gate, so
-they are **explicit opt-ins**: whenever either is configured, autopilot emits a loud one-time
+they are **explicit opt-ins**: whenever either is configured, pelaggio emits a loud one-time
 banner at startup naming the target and how to restore the gate (`ship: { target: pull-request }`).
 
 **`direct-push` splits the work at the merge.** In pipeline runs the `ship`
@@ -293,7 +293,7 @@ scope heuristics. Invalid values fail loudly at startup.
 
 Skill bodies (`/pick`, `/plan`, `/ship`, `/charter`, `/status`, `/pickup`,
 `/shakedown`, `/tidy`) are adapter-agnostic — all roadmap access flows through
-`npx claude-autopilot roadmap ...`, which dispatches to the configured source.
+`npx pelaggio roadmap ...`, which dispatches to the configured source.
 
 ### `github-issues`
 
@@ -304,7 +304,7 @@ Consumed only when `roadmap.source` is `github-issues`:
 | Key                           | Default          | Meaning                                                                 |
 |-------------------------------|------------------|-------------------------------------------------------------------------|
 | `roadmap.github.repo`         | *(required)*     | `owner/name` passed to `gh --repo`. Missing value fails at startup.     |
-| `roadmap.github.label`        | `autopilot`      | Label used to filter open issues for `listOpenItems`.                   |
+| `roadmap.github.label`        | `pelaggio`      | Label used to filter open issues for `listOpenItems`.                   |
 | `roadmap.github.plan-location`| `issue-comment`  | Where plan bodies live. `pr-description` is reserved; not implemented.  |
 
 `gh` availability is probed lazily on first adapter call. If `gh` is not
@@ -323,7 +323,7 @@ lookups work identically.
 Plan bodies are resolved in two stages: first a local-disk lookup mirroring
 the markdown adapter (`docs/plans/issue-<n>-*.md`, then `.dev/plans/<n>.md`),
 then the most recent issue comment whose body begins with the
-`<!-- autopilot-plan -->` marker. Comment-sourced plans are materialized to
+`<!-- pelaggio-plan -->` marker. Comment-sourced plans are materialized to
 `.dev/plans/<n>.md` (scratch, typically `.gitignore`'d), **not**
 `docs/plans/` — that directory remains `/plan`'s canonical committed output.
 
@@ -354,7 +354,7 @@ OS).
 Plan bodies resolve in two stages: a local-disk lookup
 (`docs/plans/<team>-<n>-*.md`, then `.dev/plans/<team>-<n>.md`) followed by
 the most recent issue comment whose body begins with
-`<!-- autopilot-plan -->`. Comment-sourced plans materialize to
+`<!-- pelaggio-plan -->`. Comment-sourced plans materialize to
 `.dev/plans/<team>-<n>.md` in the worktree — **not** `docs/plans/`, which
 remains `/plan`'s canonical committed output.
 
@@ -376,7 +376,7 @@ then decides whether to wait out the window and pick the parked items back up.
 behavior into a named, disableable knob rather than introducing a wait. Set
 `auto-resume: false` for interactive use where you'd rather get your prompt back
 immediately — the run prints the parked item IDs and a ready-to-paste
-`pnpm autopilot --resume <id>` command per parked item, then exits with code 1.
+`pnpm pelaggio --resume <id>` command per parked item, then exits with code 1.
 
 **Multi-window.** Resuming is looped: if the resumed work re-parks in a *later*
 rate-limit window, the orchestrator waits again and resumes again, up to an
@@ -392,13 +392,13 @@ that it synthesizes `now + park.unknown-reset-wait` (default 60m, a safe
 under-estimate for 5-hourly subscription windows) so auto-resume waits out a
 window and retries. The synthesized wait is still bounded by `max-wait`, and the
 limit type is suffixed `(estimated)` in the park banner, notify event, and
-`.dev/autopilot-log.jsonl` so the wait reads honestly as a guess. A manual pause
+`.dev/pelaggio-log.jsonl` so the wait reads honestly as a guess. A manual pause
 (SIGUSR2) still exits parked with a resume hint — it is never auto-estimated.
 
 **`max-wait` precedence:** `--max-wait` CLI flag > `park.max-wait` (yml) > `6h`.
 Because the CLI flag has no built-in default anymore, an unset flag lets
 `park.max-wait` take effect; a supervising daemon can therefore set the wait
-policy entirely from `.autopilot.yml`. Accepts the same formats as the flag:
+policy entirely from `.pelaggio.yml`. Accepts the same formats as the flag:
 `6h`, `90m`, `1h30m`, or a bare number (minutes). An unparseable value falls
 back to 6h.
 
@@ -413,7 +413,7 @@ the same command, so it is intentionally not looped.
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `review.runner` | `ci` | `ci` runs `.github/workflows/pr-review.yml`; `local` runs the review sweep from the trusted local tree. |
-| `review.statusless-after` | `2h` | In local mode, emit `review-stranded` and leave a PR diagnostic when a same-repo autopilot PR has no `review` status this long. |
+| `review.statusless-after` | `2h` | In local mode, emit `review-stranded` and leave a PR diagnostic when a same-repo pelaggio PR has no `review` status this long. |
 
 Local mode is only active in normal auto-pick runs for github-issues roadmaps and PR
 ship targets. Configure the model provider through the existing non-pipeline
@@ -469,7 +469,7 @@ false` to turn it off entirely — the documented off-switch, mirroring the CI
 loop's repo-wide `AUTOPILOT_AUTO_REVISE=false` variable.
 
 **One-pass bound.** Like the CI loop, a PR is revised at most once: the sweep
-adds an `autopilot:revised` label **before** any work, filters labeled PRs out
+adds an `pelaggio:revised` label **before** any work, filters labeled PRs out
 of the candidate set, and posts a single human-handoff comment on a labeled PR
 that is still red. Any `gh`/git error in the sweep logs and skips — it never
 throws into the run. This is the **local** counterpart to the API-funded CI
@@ -479,7 +479,7 @@ workflow (`.github/workflows/pr-review-revise.yml`); see
 ## Notifications
 
 Unattended runs have no outbound signal by default — you learn a cycle parked,
-failed, shipped, or opened a PR only by tailing `.dev/autopilot-log.jsonl`. The
+failed, shipped, or opened a PR only by tailing `.dev/pelaggio-log.jsonl`. The
 `notify` block turns that poll into a **push**: one best-effort webhook per
 terminal cycle, sent from deterministic orchestrator code *after* the pipeline
 returns, so a notification fires even when the agent step died mid-cycle.
@@ -528,9 +528,9 @@ The `json` format POSTs this shape (fields present when applicable):
   "error": "ship blocked: dirty tree", // present when the result carried one
   "prUrl": "https://github.com/…/pull/5", // pr-opened / when known
   "shipwrecked": false,
-  "logPath": "/repo/.dev/autopilot-log.jsonl",
+  "logPath": "/repo/.dev/pelaggio-log.jsonl",
   "ts": "2026-07-06T12:34:56.000Z",
-  "text": "autopilot: shipped 34 \"Run-outcome notifications…\" — $1.23"
+  "text": "pelaggio: shipped 34 \"Run-outcome notifications…\" — $1.23"
 }
 ```
 

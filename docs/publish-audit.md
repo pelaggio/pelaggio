@@ -1,7 +1,7 @@
 # Publish audit — pre-flip checklist
 
 One-shot checklist the human fills in before flipping
-`@cdhorne/claude-autopilot` from a private git-dep to a real public-npm publish.
+`pelaggio` from a private git-dep to a real public-npm publish.
 Each item below must be signed off (date + note) before the first `v*` tag is
 pushed. The `.github/workflows/publish.yml` workflow handles the repeating
 mechanics (dry-run scan, tag-signature verify, provenance); this file covers
@@ -32,7 +32,7 @@ the remote, so a CI scan fires too late to matter. This is a human one-shot.
 ## 2. npm account hardening
 
 - [ ] 2FA enabled on the npm account (authenticator, not SMS). Date confirmed:
-- [ ] Granular access token created for CI, scoped to `@cdhorne/claude-autopilot`
+- [ ] Granular access token created for CI, scoped to `pelaggio`
   publish only. Token ID / last-four:
 - [ ] Legacy / classic tokens on the account revoked. Date:
 - [ ] Token stored as `NPM_TOKEN` in the repo's GitHub Actions secrets. Date:
@@ -43,7 +43,7 @@ After the first publish succeeds, set `publish` 2FA on the package so any
 future publish requires an OTP:
 
 ```bash
-npm access 2fa-required @cdhorne/claude-autopilot
+npm access 2fa-required pelaggio
 ```
 
 - [ ] Enabled. Date:
@@ -55,7 +55,7 @@ is required and already set in `.github/workflows/publish.yml`. Verify after
 the first publish:
 
 ```bash
-npm view @cdhorne/claude-autopilot --json | jq '.dist.attestations'
+npm view pelaggio --json | jq '.dist.attestations'
 ```
 
 - [ ] Provenance attestation visible. Date:
@@ -104,14 +104,14 @@ Do these only after every item above is checked:
 - [ ] GitHub repo visibility: private → public. Date:
 - [ ] First release tag pushed: `vX.Y.Z`. Date:
 - [ ] Workflow run succeeded (green on self-hosted runner). Run URL:
-- [ ] Installed smoke test in a fresh dir: `npm i @cdhorne/claude-autopilot && npx claude-autopilot --help`. Date:
+- [ ] Installed smoke test in a fresh dir: `npm i pelaggio && npx pelaggio --help`. Date:
 
 ## Rollback
 
 If something ships that shouldn't have:
 
-- `npm deprecate @cdhorne/claude-autopilot@<version> "reason"` — immediate,
+- `npm deprecate pelaggio@<version> "reason"` — immediate,
   preserves install graphs.
-- `npm unpublish @cdhorne/claude-autopilot@<version>` — only within 72 hours
+- `npm unpublish pelaggio@<version>` — only within 72 hours
   and only if no other package depends on it. Prefer `deprecate`.
 - Rotate `NPM_TOKEN` if a leak is suspected.

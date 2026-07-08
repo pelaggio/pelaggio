@@ -14,47 +14,47 @@ function baseEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
 }
 
 describe("loadServerConfig", () => {
-	it("registryPath defaults to $XDG_CONFIG_HOME/autopilot-server/repos.yml", () => {
+	it("registryPath defaults to $XDG_CONFIG_HOME/pelaggio-server/repos.yml", () => {
 		const xdg = mkdtempSync(join(tmpdir(), "xdg-cfg-"));
 		const cfg = loadServerConfig(baseEnv({ XDG_CONFIG_HOME: xdg }), { webDistDefault: join(tmpdir(), "no-such-dist") });
-		assert.equal(cfg.registryPath, resolve(xdg, "autopilot-server", "repos.yml"));
+		assert.equal(cfg.registryPath, resolve(xdg, "pelaggio-server", "repos.yml"));
 	});
 
-	it("registryPath defaults to ~/.config/autopilot-server/repos.yml when XDG_CONFIG_HOME unset", () => {
+	it("registryPath defaults to ~/.config/pelaggio-server/repos.yml when XDG_CONFIG_HOME unset", () => {
 		const cfg = loadServerConfig(baseEnv(), { webDistDefault: join(tmpdir(), "no-such-dist") });
-		assert.equal(cfg.registryPath, resolve(homedir(), ".config", "autopilot-server", "repos.yml"));
+		assert.equal(cfg.registryPath, resolve(homedir(), ".config", "pelaggio-server", "repos.yml"));
 	});
 
 	it("AUTOPILOT_SERVER_REGISTRY overrides defaults", () => {
-		const explicit = "/etc/autopilot/repos.yml";
+		const explicit = "/etc/pelaggio/repos.yml";
 		const cfg = loadServerConfig(baseEnv({ XDG_CONFIG_HOME: "/ignored", AUTOPILOT_SERVER_REGISTRY: explicit }), {
 			webDistDefault: join(tmpdir(), "no-such-dist"),
 		});
 		assert.equal(cfg.registryPath, explicit);
 	});
 
-	it("statePath defaults to $XDG_STATE_HOME/autopilot-server/state.json", () => {
+	it("statePath defaults to $XDG_STATE_HOME/pelaggio-server/state.json", () => {
 		const xdgState = mkdtempSync(join(tmpdir(), "xdg-state-"));
 		const cfg = loadServerConfig(baseEnv({ XDG_STATE_HOME: xdgState }), { webDistDefault: join(tmpdir(), "no-such-dist") });
-		assert.equal(cfg.statePath, resolve(xdgState, "autopilot-server", "state.json"));
-		assert.equal(cfg.logDir, resolve(xdgState, "autopilot-server", "logs"));
+		assert.equal(cfg.statePath, resolve(xdgState, "pelaggio-server", "state.json"));
+		assert.equal(cfg.logDir, resolve(xdgState, "pelaggio-server", "logs"));
 	});
 
-	it("statePath defaults to ~/.local/state/autopilot-server/state.json when XDG_STATE_HOME unset", () => {
+	it("statePath defaults to ~/.local/state/pelaggio-server/state.json when XDG_STATE_HOME unset", () => {
 		const cfg = loadServerConfig(baseEnv(), { webDistDefault: join(tmpdir(), "no-such-dist") });
-		assert.equal(cfg.statePath, resolve(homedir(), ".local", "state", "autopilot-server", "state.json"));
+		assert.equal(cfg.statePath, resolve(homedir(), ".local", "state", "pelaggio-server", "state.json"));
 	});
 
 	it("AUTOPILOT_SERVER_STATE_PATH and AUTOPILOT_SERVER_LOG_DIR overrides", () => {
 		const cfg = loadServerConfig(
 			baseEnv({
-				AUTOPILOT_SERVER_STATE_PATH: "/var/lib/autopilot/state.json",
-				AUTOPILOT_SERVER_LOG_DIR: "/var/log/autopilot",
+				AUTOPILOT_SERVER_STATE_PATH: "/var/lib/pelaggio/state.json",
+				AUTOPILOT_SERVER_LOG_DIR: "/var/log/pelaggio",
 			}),
 			{ webDistDefault: join(tmpdir(), "no-such-dist") },
 		);
-		assert.equal(cfg.statePath, "/var/lib/autopilot/state.json");
-		assert.equal(cfg.logDir, "/var/log/autopilot");
+		assert.equal(cfg.statePath, "/var/lib/pelaggio/state.json");
+		assert.equal(cfg.logDir, "/var/log/pelaggio");
 	});
 
 	it("webDist is undefined when default path is missing (UI not built)", () => {

@@ -16,7 +16,7 @@ Run `git rev-parse --path-format=absolute --git-common-dir` — strip the traili
 
 ## 1. Identify
 
-The **first token** of `$ARGUMENTS` is the item ID (or empty → infer from the worktree). A trailing `autopilot --target=direct-push` is the pipeline's hand-off signal — it is **not** part of the ID; it is consumed at step 5a to decide whether to stop after the merge.
+The **first token** of `$ARGUMENTS` is the item ID (or empty → infer from the worktree). A trailing `pelaggio --target=direct-push` is the pipeline's hand-off signal — it is **not** part of the ID; it is consumed at step 5a to decide whether to stop after the merge.
 
 **`/shipwreck COMP3`** — find branch matching item ID via `git branch --list 'feat/*'`.
 
@@ -111,9 +111,9 @@ Pattern: {novel conflict pattern to add to /ship, or "none"}
 
 If Pattern is non-empty, suggest updating `/ship`'s merge-conflict list in the report.
 
-## 5a. Autopilot hand-off gate
+## 5a. Pelaggio hand-off gate
 
-**If `Arguments` contains `autopilot` and `--target=direct-push`**: you were invoked by the pipeline's ship-recovery path. The merge has landed on `main` and step 4 verification passed. **STOP here** — report `ship-merged: {ITEM_ID}` on the final line. Do **not** run step 6 (mark-done, archive, push, cleanup): the pipeline owns them deterministically once it re-verifies the merge. They are zero-turn, idempotent, best-effort code — running them yourself only burns budget the pipeline will redo. If recovery could **not** land or verify the merge, report that failure instead of `ship-merged`, so the pipeline's `verifyShipLanded` gate keeps it from pushing an unlanded merge.
+**If `Arguments` contains `pelaggio` and `--target=direct-push`**: you were invoked by the pipeline's ship-recovery path. The merge has landed on `main` and step 4 verification passed. **STOP here** — report `ship-merged: {ITEM_ID}` on the final line. Do **not** run step 6 (mark-done, archive, push, cleanup): the pipeline owns them deterministically once it re-verifies the merge. They are zero-turn, idempotent, best-effort code — running them yourself only burns budget the pipeline will redo. If recovery could **not** land or verify the merge, report that failure instead of `ship-merged`, so the pipeline's `verifyShipLanded` gate keeps it from pushing an unlanded merge.
 
 **Otherwise (inline / human-invoked)**: continue to step 6 and run the bookkeeping tail yourself.
 
@@ -123,12 +123,12 @@ Reached only from step 5a's inline branch. Mirror `/ship` steps 6–9 — mark d
 
 ```bash
 cd "{MAIN_REPO}"
-npx @cdhorne/claude-autopilot roadmap mark-done "$ITEM_ID"
-npx @cdhorne/claude-autopilot roadmap archive-plan "$ITEM_ID"
+npx pelaggio roadmap mark-done "$ITEM_ID"
+npx pelaggio roadmap archive-plan "$ITEM_ID"
 git push origin main
 # TOOL-52: repair MAIN's node_modules if a worktree-side `pnpm install`
 # re-pointed any top-level symlinks into the worktree's .pnpm store.
-npx @cdhorne/claude-autopilot worktree-deps --repair-main
+npx pelaggio worktree-deps --repair-main
 git worktree remove "$WORKTREE" --force 2>/dev/null
 git branch -d "$BRANCH" 2>/dev/null
 git push origin --delete "$BRANCH" 2>/dev/null

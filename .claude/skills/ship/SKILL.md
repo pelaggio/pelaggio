@@ -12,7 +12,7 @@ allowed-tools: Read Edit Bash(git:*) Bash(pnpm:*) Bash(npx:*) Bash(gh pr:*)
 
 Run `git rev-parse --path-format=absolute --git-common-dir` — the output ends with `/.git`. Strip that suffix to get MAIN_REPO.
 
-Roadmap lookups go through `npx @cdhorne/claude-autopilot roadmap ...`; all mark-done / archive logic dispatches to the configured adapter.
+Roadmap lookups go through `npx pelaggio roadmap ...`; all mark-done / archive logic dispatches to the configured adapter.
 
 Parse `$ARGUMENTS` for `--no-squash` and `--pr` flags.
 
@@ -24,7 +24,7 @@ Parse `$ARGUMENTS` for `--no-squash` and `--pr` flags.
 
 !`cat .claude/skills/_project-context.md 2>/dev/null`
 
-**If `Arguments:` at the bottom of this prompt contains the string `autopilot`**, you were invoked by the pipeline immediately after `/shakedown` — which just blocked on any rubric-failing state. Pre-merge re-verification is redundant: **skip to step 2**. Post-merge verification at step 5 still runs unconditionally (merging main can break things independent of this branch).
+**If `Arguments:` at the bottom of this prompt contains the string `pelaggio`**, you were invoked by the pipeline immediately after `/shakedown` — which just blocked on any rubric-failing state. Pre-merge re-verification is redundant: **skip to step 2**. Post-merge verification at step 5 still runs unconditionally (merging main can break things independent of this branch).
 
 **Otherwise (inline invocation)**, run the rubric's verification commands now. All must pass (exit 0) — stop and report if any fail.
 
@@ -34,7 +34,7 @@ Parse `$ARGUMENTS` for `--no-squash` and `--pr` flags.
 
 ## 2. Identify
 
-Get item ID from the current branch name. Run `npx @cdhorne/claude-autopilot roadmap get <ID> --json` to fetch title + description for the commit message. The `title` field is the commit subject source.
+Get item ID from the current branch name. Run `npx pelaggio roadmap get <ID> --json` to fetch title + description for the commit message. The `title` field is the commit subject source.
 
 ## 3. Squash (unless `--no-squash`)
 
@@ -104,9 +104,9 @@ If `pnpm-lock.yaml` was modified in the merge, run `pnpm install --frozen-lockfi
 
 Re-run the verification commands from `.claude/skills/_rubric.md`'s Verification section from `{MAIN_REPO}`. If any fail, **stop and fix** — do not push broken code to main. This catches regressions introduced by the merge itself.
 
-## 5a. Autopilot hand-off gate
+## 5a. Pelaggio hand-off gate
 
-**If `Arguments` contains `autopilot` and `--target=direct-push`**: you are the pipeline's ship step, and the merge has now landed on local `main`. **STOP here** — report `ship-merged: {ID}` on the final line. Do **not** run steps 6–10 (mark-done, archive, push, cleanup): the pipeline owns them deterministically once it detects the merge. They are zero-turn, idempotent, best-effort code — running them yourself only burns budget the pipeline will redo. If post-merge verification (step 5) surfaced a genuine regression you could not fix, report that as a failure instead of `ship-merged` so the pipeline routes to `/shipwreck`.
+**If `Arguments` contains `pelaggio` and `--target=direct-push`**: you are the pipeline's ship step, and the merge has now landed on local `main`. **STOP here** — report `ship-merged: {ID}` on the final line. Do **not** run steps 6–10 (mark-done, archive, push, cleanup): the pipeline owns them deterministically once it detects the merge. They are zero-turn, idempotent, best-effort code — running them yourself only burns budget the pipeline will redo. If post-merge verification (step 5) surfaced a genuine regression you could not fix, report that as a failure instead of `ship-merged` so the pipeline routes to `/shipwreck`.
 
 **Otherwise (inline `/ship`, human-invoked)**: continue to step 6 and run the flow end to end yourself.
 
@@ -115,7 +115,7 @@ Re-run the verification commands from `.claude/skills/_rubric.md`'s Verification
 From `{MAIN_REPO}`, dispatch to the adapter:
 
 ```bash
-npx @cdhorne/claude-autopilot roadmap mark-done <ID> --note "<short description>"
+npx pelaggio roadmap mark-done <ID> --note "<short description>"
 ```
 
 Markdown adapter: strikes the roadmap row, moves the task-index entry to "Recently completed", and commits internally. Github-issues: posts a comment and closes the issue. Linear: posts a comment and transitions the issue to completed. Either way, nothing further to stage on `main`.
@@ -123,7 +123,7 @@ Markdown adapter: strikes the roadmap row, moves the task-index entry to "Recent
 ## 7. Archive plan docs
 
 ```bash
-npx @cdhorne/claude-autopilot roadmap archive-plan <ID>
+npx pelaggio roadmap archive-plan <ID>
 ```
 
 Markdown: `git mv` the plan from `docs/plans/` to `docs/archived/` and commit. Gh/linear: no-op.
@@ -142,7 +142,7 @@ If `git push` fails because main moved, run `git pull --no-rebase origin main`, 
 ```bash
 # TOOL-52: repair MAIN's node_modules if a worktree-side `pnpm install`
 # re-pointed any top-level symlinks into the worktree's .pnpm store.
-npx @cdhorne/claude-autopilot worktree-deps --repair-main
+npx pelaggio worktree-deps --repair-main
 git worktree remove "$WORKTREE" --force
 git branch -d "$BRANCH"
 git push origin --delete "$BRANCH" 2>/dev/null

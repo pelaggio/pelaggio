@@ -74,7 +74,7 @@ Check this list before adding new ingestion paths, analytics queries, or automat
 | 2 | {{STATUS}} | {{CORE FEATURE FOCUS}} |
 | 3 | {{STATUS}} | {{POLISH/RELEASE FOCUS}} |
 
-Task index (for autopilot pick): [docs/task-index.md](docs/task-index.md)
+Task index (for pelaggio pick): [docs/task-index.md](docs/task-index.md)
 
 ## Bug reporter — automated fix instructions
 

@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, it } from "node:test";
-import type { RoadmapItem, RoadmapSource } from "@cdhorne/claude-autopilot";
+import type { RoadmapItem, RoadmapSource } from "pelaggio";
 import { createApp } from "../src/app.js";
 import { LogBroker } from "../src/log-broker.js";
 import { Registry } from "../src/registry.js";
@@ -237,12 +237,12 @@ describe("createApp", () => {
 
 	it("static handler serves /ui/index.html when webDist is set", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "web-dist-"));
-		writeFileSync(join(dir, "index.html"), "<!doctype html><html><body>autopilot ui</body></html>");
+		writeFileSync(join(dir, "index.html"), "<!doctype html><html><body>pelaggio ui</body></html>");
 		const { app } = setup({ webDist: dir });
 		const res = await app.request("/ui/");
 		assert.equal(res.status, 200);
 		const body = await res.text();
-		assert.match(body, /autopilot ui/);
+		assert.match(body, /pelaggio ui/);
 	});
 
 	it("API routes still return JSON when webDist is set (no /ui collision)", async () => {

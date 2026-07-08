@@ -34,7 +34,7 @@ describe("loadRegistry — parse", () => {
 		const missing = join(dir, "no-such-file.yml");
 		assert.throws(
 			() => loadRegistry(missing),
-			(err: Error) => err.message.includes(missing) && err.message.includes("infra/autopilot-server/repos.yml.example"),
+			(err: Error) => err.message.includes(missing) && err.message.includes("infra/pelaggio-server/repos.yml.example"),
 		);
 	});
 

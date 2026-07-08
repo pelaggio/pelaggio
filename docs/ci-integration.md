@@ -1,19 +1,19 @@
-# CI Integration — Autopilot Fix Workflow
+# CI Integration — Pelaggio Fix Workflow
 
-Autopilot can run headlessly in CI to automatically fix bugs filed as GitHub Issues.
-When an issue is labeled `autopilot:fix`, the workflow checks out the repo, runs the
+Pelaggio can run headlessly in CI to automatically fix bugs filed as GitHub Issues.
+When an issue is labeled `pelaggio:fix`, the workflow checks out the repo, runs the
 full pipeline in **no-worktree mode**, and opens a PR for human review.
 
 ## How it works
 
 1. Developer files a GitHub Issue describing the bug.
-2. Developer (or automation) applies the `autopilot:fix` label.
-3. `.github/workflows/autopilot-fix.yml` triggers on the `issues.labeled` event.
+2. Developer (or automation) applies the `pelaggio:fix` label.
+3. `.github/workflows/pelaggio-fix.yml` triggers on the `issues.labeled` event.
 4. The workflow runs:
    ```
-   pnpm autopilot --item <issue-number> --no-worktree --target pull-request --verbose
+   pnpm pelaggio --item <issue-number> --no-worktree --target pull-request --verbose
    ```
-5. Autopilot creates a feature branch in-place (no sibling worktree), runs the full
+5. Pelaggio creates a feature branch in-place (no sibling worktree), runs the full
    pick → plan → shakedown-plan → implement → shakedown-code → ship pipeline,
    and opens a PR via `gh pr create`.
 6. If the run fails, the workflow posts a failure comment on the issue with a link
@@ -31,7 +31,7 @@ Add these under **Settings → Secrets and variables → Actions** in your repo.
 
 ## Required label
 
-Create an `autopilot:fix` label in your repo (e.g. via `gh label create 'autopilot:fix' --color '#e4e669'`).
+Create an `pelaggio:fix` label in your repo (e.g. via `gh label create 'pelaggio:fix' --color '#e4e669'`).
 
 ## Runner requirements
 
@@ -48,19 +48,19 @@ the runner has enough time — the default 6h job timeout covers most cycles.
 ## Configuration
 
 The workflow passes `--target pull-request`, which overrides any `ship.target` in
-`.autopilot.yml` for this run. To change the target globally, edit the workflow's
+`.pelaggio.yml` for this run. To change the target globally, edit the workflow's
 `run` step.
 
 The issue number is used as the item ID. The pipeline uses the `github-issues`
 roadmap adapter to fetch the issue title and body as the work item description.
 Set `roadmap.source: github-issues` and `roadmap.github.repo: owner/repo` in
-`.autopilot.yml` for this to work correctly.
+`.pelaggio.yml` for this to work correctly.
 
 ## No-worktree mode constraints
 
 - Only valid with a single explicit item (`--item <ID>`). Auto-pick from the queue is
   not supported — the CI runner is already isolated, so fan-out happens at the workflow
-  job level, not inside a single autopilot run.
+  job level, not inside a single pelaggio run.
 - `--parallel > 1` is not supported in no-worktree mode.
 - Rate-limit park-and-resume is technically supported but not optimized for CI — the
   workflow will block waiting for the rate limit to clear. For ephemeral runners with
@@ -70,7 +70,7 @@ Set `roadmap.source: github-issues` and `roadmap.github.repo: owner/repo` in
 
 No-worktree mode also activates automatically when either of these env vars is set:
 - `CI=true` (standard in GitHub Actions and most CI providers)
-- `CLAUDE_AUTOPILOT_SINGLE_SHOT=1` (explicit opt-in for non-standard CI)
+- `PELAGGIO_SINGLE_SHOT=1` (explicit opt-in for non-standard CI)
 
 When auto-detected, `--item` is still required. The `--no-worktree` flag is not needed
 if your workflow already sets `CI=true`.

@@ -8,7 +8,7 @@ both** `permissionMode: "bypassPermissions"` and
 `allowDangerouslySkipPermissions: true`. The only way past it is a
 `canUseTool` callback that explicitly returns `behavior: "allow"`.
 
-In TOOL-3's autopilot cycle this presented as a silent failure:
+In TOOL-3's pelaggio cycle this presented as a silent failure:
 
 - `implement` step's `toolCounts` showed 5 `Edit` + 2 `Write` calls against
   `.claude/skills/charter/SKILL.md`.
@@ -45,7 +45,7 @@ blocked, confirming both layers run in series.
 
 ## Fix
 
-`scripts/autopilot/step-runner.ts` swaps `permissionMode: "bypassPermissions"`
+`scripts/pelaggio/step-runner.ts` swaps `permissionMode: "bypassPermissions"`
 for a `canUseTool` allow-all callback. The plan-polish and worktree-isolation
 PreToolUse hooks are unchanged and still the authoritative guardrails; the
 permission layer is now just "yes" for everything the hooks don't block.
@@ -61,7 +61,7 @@ happens again.
 
 ## What this means for consumer repos
 
-If a consumer wants autopilot to edit skill files (e.g. sync'd copies of
+If a consumer wants pelaggio to edit skill files (e.g. sync'd copies of
 `.claude/skills/plan/SKILL.md` during a skill-body refactor cycle), they need
 the canUseTool-based variant of `step-runner`. The fix shipped here is
 universal — every cycle's step gets the allow-all callback — so consumers

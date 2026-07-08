@@ -1,4 +1,4 @@
-import type { ShipTargetName } from "@cdhorne/claude-autopilot";
+import type { ShipTargetName } from "pelaggio";
 
 export type RunStatus = "running" | "completed" | "failed" | "parked" | "paused" | "abandoned";
 

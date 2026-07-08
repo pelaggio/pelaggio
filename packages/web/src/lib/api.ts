@@ -1,5 +1,5 @@
-import type { RoadmapItem, Stats } from "@cdhorne/claude-autopilot";
-import type { PersistedRun, RepoEntry, RunSummary, ShipTargetName } from "@cdhorne/claude-autopilot-server/types";
+import type { PersistedRun, RepoEntry, RunSummary, ShipTargetName } from "@pelaggio/server/types";
+import type { RoadmapItem, Stats } from "pelaggio";
 import { getToken, markTokenRejected, promptForToken } from "./token.js";
 
 export type { RepoEntry };

@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   # The required branch-protection context is the `review` COMMIT STATUS, posted by
-  # exactly one runner: this job in CI mode, or the local autopilot runner in local
+  # exactly one runner: this job in CI mode, or the local pelaggio runner in local
   # mode. This job id is deliberately NOT `review`: a *job* named `review` gated by a
   # job-level `if` scores as SUCCESS when skipped (GitHub treats a skipped required
   # check as passing), which in local mode would silently green the gate before the
@@ -44,7 +44,7 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "Skipping review (fork PR or draft) — will post a green review status. Secrets are unavailable to forks and forks can't be autopilot PRs."
+            echo "Skipping review (fork PR or draft) — will post a green review status. Secrets are unavailable to forks and forks can't be pelaggio PRs."
           fi
 
       # Post `pending` before any work so the gate blocks by presence while the review
@@ -94,12 +94,12 @@ jobs:
           # required check red repo-wide.
           GH_TOKEN: ${{ github.token }}
           CI: "true"
-        run: npx @cdhorne/claude-autopilot pr-review --pr "${{ github.event.pull_request.number }}"
+        run: npx pelaggio pr-review --pr "${{ github.event.pull_request.number }}"
 
       # Translate the outcome into the required `review` status. Runs on success,
       # failure, and cancellation so the gate is never left merely `pending` by a
       # completed job. Fork/draft PRs (run=false) legitimately skip the agent and
-      # post green — secrets are unavailable to forks and forks can't be autopilot PRs.
+      # post green — secrets are unavailable to forks and forks can't be pelaggio PRs.
       - name: Post final review status
         if: ${{ !cancelled() }}
         env:
@@ -131,11 +131,11 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           GH_REPO: ${{ github.repository }}
         run: |
-          marker='<!-- autopilot-pr-review-local-mode -->'
+          marker='<!-- pelaggio-pr-review-local-mode -->'
           existing="$(gh pr view "$PR_NUMBER" --repo "$GH_REPO" --json comments --jq '.comments[].body | select(contains("'"$marker"'"))' | tail -n 1)"
           if [ -n "$existing" ]; then
             exit 0
           fi
           body_file="$(mktemp)"
-          printf '%s\n%s\n' "$marker" "The required \`review\` status for this repo is posted by the local autopilot runner, not CI." > "$body_file"
+          printf '%s\n%s\n' "$marker" "The required \`review\` status for this repo is posted by the local pelaggio runner, not CI." > "$body_file"
           gh pr comment "$PR_NUMBER" --repo "$GH_REPO" --body-file "$body_file"

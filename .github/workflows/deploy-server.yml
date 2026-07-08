@@ -5,7 +5,7 @@ on:
     branches: [main]
     paths:
       - "packages/server/**"
-      - "packages/autopilot/**"
+      - "packages/pelaggio/**"
       - "packages/web/**"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   deploy:
-    runs-on: [self-hosted, autopilot]
+    runs-on: [self-hosted, pelaggio]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -27,6 +27,6 @@ jobs:
           node-version: '24'
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @cdhorne/claude-autopilot-server build
-      - run: pnpm --filter @cdhorne/claude-autopilot-web build
-      - run: systemctl --user restart autopilot-server
+      - run: pnpm --filter @pelaggio/server build
+      - run: pnpm --filter @pelaggio/web build
+      - run: systemctl --user restart pelaggio-server

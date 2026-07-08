@@ -27,7 +27,7 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r test
-      - run: pnpm --filter @cdhorne/claude-autopilot-web check:types
-      - run: pnpm --filter @cdhorne/claude-autopilot-web build
+      - run: pnpm --filter @pelaggio/web check:types
+      - run: pnpm --filter @pelaggio/web build
       - run: pnpm check
       - run: pnpm check:skills

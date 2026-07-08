@@ -7,11 +7,11 @@ allowed-tools: Read Glob Grep Bash(npx:*)
 
 # /charter — Charter a Work Item
 
-A ship's charter is its mission document — what the voyage is, what it delivers, and what it costs. `/charter` defines a new work item so `/pick` can claim it and autopilot can execute it.
+A ship's charter is its mission document — what the voyage is, what it delivers, and what it costs. `/charter` defines a new work item so `/pick` can claim it and pelaggio can execute it.
 
 ## Context
 
-All item creation goes through `npx @cdhorne/claude-autopilot roadmap create-item`. The CLI dispatches to the configured adapter (markdown writes a roadmap row + task-index entry; github-issues opens a labeled issue; linear creates a team issue).
+All item creation goes through `npx pelaggio roadmap create-item`. The CLI dispatches to the configured adapter (markdown writes a roadmap row + task-index entry; github-issues opens a labeled issue; linear creates a team issue).
 
 Parse `$ARGUMENTS` — the full text is the item description. Extract flags if present:
 - `--to <roadmap>` — target roadmap (partial match for markdown; ignored by gh/linear).
@@ -47,7 +47,7 @@ Remember the chosen scope and its rationale phrase for the Report step below.
 Build the argument list from the parsed flags and call the adapter:
 
 ```bash
-npx @cdhorne/claude-autopilot roadmap create-item \
+npx pelaggio roadmap create-item \
   --title "<concise imperative title derived from the user's input>" \
   [--scope <XS|S|M|L|XL>] \
   [--to <roadmap>] \

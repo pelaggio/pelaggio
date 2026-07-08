@@ -1,8 +1,8 @@
 {
-	"name": "@cdhorne/claude-autopilot-server",
+	"name": "@pelaggio/server",
 	"version": "0.0.0",
 	"private": true,
-	"description": "Control-plane daemon for claude-autopilot — supervises pipeline subprocesses over HTTP.",
+	"description": "Control-plane daemon for pelaggio — supervises pipeline subprocesses over HTTP.",
 	"license": "FSL-1.1-ALv2",
 	"type": "module",
 	"exports": {
@@ -18,7 +18,7 @@
 		"test": "tsx --test __tests__/*.test.ts"
 	},
 	"dependencies": {
-		"@cdhorne/claude-autopilot": "workspace:*",
+		"pelaggio": "workspace:*",
 		"@hono/node-server": "^2.0.4",
 		"hono": "^4.12.25",
 		"ulid": "^3.0.2",

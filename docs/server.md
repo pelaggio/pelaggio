@@ -1,8 +1,8 @@
-# Autopilot control-plane server
+# Pelaggio control-plane server
 
-A Hono daemon that exposes the autopilot pipeline over HTTP. Runs as a systemd
-user unit on the same box as autopilot, binds to a tailnet IP, supervises
-`pnpm autopilot` subprocesses, and survives operator disconnects.
+A Hono daemon that exposes the pelaggio pipeline over HTTP. Runs as a systemd
+user unit on the same box as pelaggio, binds to a tailnet IP, supervises
+`pnpm pelaggio` subprocesses, and survives operator disconnects.
 
 It replaces SSH-over-Tailscale kickoffs. Web UI (TOOL-42) and Cloudflare Tunnel
 + live bearer enforcement (TOOL-43) build on top of this.
@@ -10,11 +10,11 @@ It replaces SSH-over-Tailscale kickoffs. Web UI (TOOL-42) and Cloudflare Tunnel
 ## Architecture
 
 ```
-HTTP client ──► Hono routes ──► Supervisor ──► child process (`pnpm autopilot ...`)
+HTTP client ──► Hono routes ──► Supervisor ──► child process (`pnpm pelaggio ...`)
                   │                  │              │
-                  │                  ├──► StateStore ($XDG_STATE_HOME/autopilot-server/state.json)
+                  │                  ├──► StateStore ($XDG_STATE_HOME/pelaggio-server/state.json)
                   │                  └──► LogBroker (file tee + SSE fan-out)
-                  ├──► Registry  ($XDG_CONFIG_HOME/autopilot-server/repos.yml — slug → repo path)
+                  ├──► Registry  ($XDG_CONFIG_HOME/pelaggio-server/repos.yml — slug → repo path)
                   └──► RoadmapCache → RoadmapSource / computeStats (per-repo, lazy)
 ```
 
@@ -40,9 +40,9 @@ All responses JSON unless noted. Errors: `{ error: string; code: string }` with 
 ### `POST /runs`
 ```jsonc
 // body
-{ "repo": "claude-autopilot", "item": "TOOL-1", "parallel": 2, "cycles": 3, "shipTarget": "pull-request" }
+{ "repo": "pelaggio", "item": "TOOL-1", "parallel": 2, "cycles": 3, "shipTarget": "pull-request" }
 // 200
-{ "id": "01HX...", "repo": "claude-autopilot", "item": "TOOL-1", "startedAt": "2026-04-19T...", "logPath": "/.../01HX....log" }
+{ "id": "01HX...", "repo": "pelaggio", "item": "TOOL-1", "startedAt": "2026-04-19T...", "logPath": "/.../01HX....log" }
 ```
 `repo` is a slug from the registry (`GET /repos`); unknown slugs → 400.
 `shipTarget` ∈ `direct-push` | `pull-request` | `auto-merge-pr`.
@@ -62,7 +62,7 @@ Sends `SIGUSR2`. The pipeline's signal handler sets `parkSignal.parked = true; l
 409 if the run is not `running`.
 
 ### `POST /runs/:id/resume`
-Spawns a new child with `pnpm autopilot --resume <item>`. Returns the *new* run record with `resumedFrom` pointing at the prior run id.
+Spawns a new child with `pnpm pelaggio --resume <item>`. Returns the *new* run record with `resumedFrom` pointing at the prior run id.
 
 ### `POST /runs/:id/stop`
 `SIGINT` → 5s grace → `SIGKILL`. Status becomes `abandoned`. Uncommitted diffs stay in the worktree for manual `/pickup` if the operator regrets.
@@ -70,11 +70,11 @@ Spawns a new child with `pnpm autopilot --resume <item>`. Returns the *new* run 
 ### `GET /runs/:id/log`
 Server-sent events. `data: <log line>\n\n` per line. For completed runs, replays the file and closes with `event: end\ndata: {"exitCode":N}\n\n`. For live runs, replay is subscribe-first: the broker captures a watermark via `bytesWritten`, replays bytes 0..watermark, then drains a buffered queue to dedup against newly-arrived lines — no race, no dropped lines.
 
-The supervisor spawns every child with `CLAUDE_AUTOPILOT_PLAIN=1` in its env, so tee'd log files and SSE streams are ANSI-free: no spinner repaints, no scroll-region escapes, no color bytes. Auto-detection via non-TTY stderr already covers piped stdio, but the explicit env var is defensive against wrapper shims that might allocate a pty. Humans piping `pnpm autopilot` output outside the server (`pnpm autopilot … 2>&1 | tee`, `| less`, etc.) can set the same env var to opt in to plain lines.
+The supervisor spawns every child with `PELAGGIO_PLAIN=1` in its env, so tee'd log files and SSE streams are ANSI-free: no spinner repaints, no scroll-region escapes, no color bytes. Auto-detection via non-TTY stderr already covers piped stdio, but the explicit env var is defensive against wrapper shims that might allocate a pty. Humans piping `pnpm pelaggio` output outside the server (`pnpm pelaggio … 2>&1 | tee`, `| less`, etc.) can set the same env var to opt in to plain lines.
 
 ### `GET /repos`
 ```jsonc
-{ "repos": [{ "slug": "claude-autopilot", "path": "/abs/path", "exists": true }, ...] }
+{ "repos": [{ "slug": "pelaggio", "path": "/abs/path", "exists": true }, ...] }
 ```
 Lists registry entries in insertion order; `exists` reflects whether the path resolves on disk.
 
@@ -85,7 +85,7 @@ Lists registry entries in insertion order; `exists` reflects whether the path re
 Open items only. 404 on unknown slug.
 
 ### `GET /repos/:slug/stats`
-Pure `computeStats({ logPath: <repo>/.dev/autopilot-log.jsonl })` from autopilot — same shape as the CLI's `stats` subcommand. 404 on unknown slug.
+Pure `computeStats({ logPath: <repo>/.dev/pelaggio-log.jsonl })` from pelaggio — same shape as the CLI's `stats` subcommand. 404 on unknown slug.
 
 ### `GET /healthz`
 `{ "ok": true }`. Bypasses bearer auth — uptime probing.
@@ -93,23 +93,23 @@ Pure `computeStats({ logPath: <repo>/.dev/autopilot-log.jsonl })` from autopilot
 ## Repo registry
 
 The daemon is repo-agnostic; it learns about repos from a YAML file at
-`$XDG_CONFIG_HOME/autopilot-server/repos.yml` (override:
+`$XDG_CONFIG_HOME/pelaggio-server/repos.yml` (override:
 `AUTOPILOT_SERVER_REGISTRY=/abs/path`). See
-`infra/autopilot-server/repos.yml.example` for the format. Restart the daemon
+`infra/pelaggio-server/repos.yml.example` for the format. Restart the daemon
 after editing — there is no hot-reload.
 
 ```yaml
 repos:
-  claude-autopilot: /home/USER/workspace/claude-autopilot
+  pelaggio: /home/USER/workspace/pelaggio
   fathom: /home/USER/workspace/fathom
 ```
 
 Each `PersistedRun` carries its own `repo` slug; the supervisor resolves
 `start({ repo })` via the registry and uses the resolved path as the spawn
-`cwd` and `CLAUDE_AUTOPILOT_REPO`. Unknown slugs surface as
+`cwd` and `PELAGGIO_REPO`. Unknown slugs surface as
 `SupervisorError(code: "unknown-repo")` → HTTP 400.
 
-If two registry paths share the same `basename(path)`, autopilot's
+If two registry paths share the same `basename(path)`, pelaggio's
 worktree-prefix detection (`listWorktrees()` filters by basename) can
 misattribute branches across the repos. The daemon emits a single
 `console.warn` at boot and continues — operator decides whether to rename.
@@ -118,9 +118,9 @@ misattribute branches across the repos. The daemon emits a single
 
 `PersistedRun` is the canonical shape. Stored as `{ runs: PersistedRun[] }` at
 `AUTOPILOT_SERVER_STATE_PATH` (default
-`$XDG_STATE_HOME/autopilot-server/state.json`, fallback
-`~/.local/state/autopilot-server/state.json`). Per-run logs default to
-`$XDG_STATE_HOME/autopilot-server/logs/<id>.log`
+`$XDG_STATE_HOME/pelaggio-server/state.json`, fallback
+`~/.local/state/pelaggio-server/state.json`). Per-run logs default to
+`$XDG_STATE_HOME/pelaggio-server/logs/<id>.log`
 (override: `AUTOPILOT_SERVER_LOG_DIR`). The supervisor is the single writer;
 writes are atomic (temp file → `renameSync`). On startup, `bootReattach()`
 walks every `running`/`paused` entry and probes its PID with
@@ -136,55 +136,55 @@ in-memory subscriber set starts empty (clients reconnect via SSE).
   child exits with code 1 via the existing "waitMs ≤ 0" branch. The supervisor
   then sees the `failed` exit but the `paused` status is preserved as the
   in-memory record. State on disk reflects `paused` until the child exits.
-- **Resume** — `pnpm autopilot --resume <item>` in a new subprocess. New ulid;
+- **Resume** — `pnpm pelaggio --resume <item>` in a new subprocess. New ulid;
   `resumedFrom` points at the prior run.
 - **Stop** — abandons uncommitted work. `SIGINT` → 5s → `SIGKILL`. Marks
   `abandoned`. Worktree diffs survive for manual recovery.
 
 ## systemd setup
 
-Unit lives at `infra/systemd/autopilot-server.service`. Install for the
+Unit lives at `infra/systemd/pelaggio-server.service`. Install for the
 operator user:
 
 ```bash
 mkdir -p ~/.config/systemd/user
-cp infra/systemd/autopilot-server.service ~/.config/systemd/user/
+cp infra/systemd/pelaggio-server.service ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now autopilot-server
+systemctl --user enable --now pelaggio-server
 ```
 
 **Why the wrapper script?** systemd user instances boot with a minimal `PATH`
 that excludes the bin directories used by fnm / nvm / volta. The unit's
-`ExecStart=` points at `infra/systemd/autopilot-server-exec.sh`, which sources
+`ExecStart=` points at `infra/systemd/pelaggio-server-exec.sh`, which sources
 the right init hook for whichever manager is installed (falling through cleanly
-when none is) and then `exec`s `pnpm --filter @cdhorne/claude-autopilot-server
+when none is) and then `exec`s `pnpm --filter @pelaggio/server
 start`. Signal handling, journal tees, and `Restart=on-failure` are unchanged.
 If your setup isn't covered, you have two options:
 
-1. Add `PATH=/your/bin:$PATH` to `~/.config/autopilot-server.env`. systemd
+1. Add `PATH=/your/bin:$PATH` to `~/.config/pelaggio-server.env`. systemd
    reads `EnvironmentFile` before `ExecStart`, so the wrapper inherits it.
-2. Drop a `~/.config/systemd/user/autopilot-server.service.d/override.conf`
+2. Drop a `~/.config/systemd/user/pelaggio-server.service.d/override.conf`
    with a custom `ExecStart=` that points at your own launcher.
 
-`EnvironmentFile=%h/.config/autopilot-server.env` — operator-managed, **not
+`EnvironmentFile=%h/.config/pelaggio-server.env` — operator-managed, **not
 committed**:
 
 ```bash
-# ~/.config/autopilot-server.env
+# ~/.config/pelaggio-server.env
 ANTHROPIC_API_KEY=sk-ant-...
 GH_TOKEN=ghp_...
 LINEAR_API_KEY=lin_api_...                    # optional, only if roadmap.source=linear
 AUTOPILOT_SERVER_HOST=100.x.x.x               # tailnet IP (NOT 0.0.0.0 — server refuses to start)
 AUTOPILOT_SERVER_PORT=7777
-# AUTOPILOT_SERVER_REGISTRY=/abs/path/repos.yml  # optional override; default $XDG_CONFIG_HOME/autopilot-server/repos.yml
+# AUTOPILOT_SERVER_REGISTRY=/abs/path/repos.yml  # optional override; default $XDG_CONFIG_HOME/pelaggio-server/repos.yml
 CONTROL_PLANE_TOKEN=...                       # bearer-gates everything except /healthz; REQUIRED on a non-loopback (tailnet) host — server refuses to start without it
 ```
 
 The repo registry itself lives separately at
-`~/.config/autopilot-server/repos.yml` — see
-`infra/autopilot-server/repos.yml.example`.
+`~/.config/pelaggio-server/repos.yml` — see
+`infra/pelaggio-server/repos.yml.example`.
 
-`StandardOutput=journal` — tail with `journalctl --user -u autopilot-server -f`.
+`StandardOutput=journal` — tail with `journalctl --user -u pelaggio-server -f`.
 
 ### Cutover from single-repo to registry
 
@@ -195,20 +195,20 @@ migration code — perform the cutover manually:
 
 ```bash
 # 1. Drop the old single-repo env line
-sed -i '/^AUTOPILOT_REPO=/d' ~/.config/autopilot-server.env
+sed -i '/^AUTOPILOT_REPO=/d' ~/.config/pelaggio-server.env
 
 # 2. Create the registry (one-time)
-mkdir -p ~/.config/autopilot-server
-cp infra/autopilot-server/repos.yml.example ~/.config/autopilot-server/repos.yml
-$EDITOR ~/.config/autopilot-server/repos.yml
+mkdir -p ~/.config/pelaggio-server
+cp infra/pelaggio-server/repos.yml.example ~/.config/pelaggio-server/repos.yml
+$EDITOR ~/.config/pelaggio-server/repos.yml
 
 # 3. Wipe pre-cutover state (in-flight runs from the old layout cannot be
 #    resumed under the new schema — `repo` becomes a required field).
 rm -f <old_repo>/.dev/server-state.json
-rm -f ~/.local/state/autopilot-server/state.json    # in case a prior boot wrote here
+rm -f ~/.local/state/pelaggio-server/state.json    # in case a prior boot wrote here
 
 # 4. Restart
-systemctl --user restart autopilot-server
+systemctl --user restart pelaggio-server
 ```
 
 ## Bearer-token auth
@@ -225,8 +225,8 @@ everything except `/healthz` then requires `Authorization: Bearer <token>`.
 Comparison uses `crypto.timingSafeEqual` and rejects length mismatches before
 the compare so attackers can't probe length via timing.
 
-Rotate the token by editing `~/.config/autopilot-server.env` and running
-`systemctl --user restart autopilot-server`. SSE streams reconnect with the
+Rotate the token by editing `~/.config/pelaggio-server.env` and running
+`systemctl --user restart pelaggio-server`. SSE streams reconnect with the
 new token on the next page load.
 
 ## Tailnet bind
@@ -238,7 +238,7 @@ use `127.0.0.1`.
 Binding a non-loopback host (a tailnet `100.x` IP, a LAN address) additionally
 **requires** `CONTROL_PLANE_TOKEN`: the daemon refuses to start token-less on
 any routable interface, because an unauthenticated control plane there lets any
-reachable peer spawn autopilot runs. Loopback binds (`127.0.0.1`, `localhost`,
+reachable peer spawn pelaggio runs. Loopback binds (`127.0.0.1`, `localhost`,
 `::1`) stay allowed without a token for local dev — `scripts/server.ts` emits
 one `console.warn` at boot so the safe-but-open posture is loud rather than
 silent. There is deliberately no escape-hatch flag: loopback + no-token is
@@ -247,7 +247,7 @@ flag would unlock nothing.
 
 ## Serving the web UI
 
-The daemon optionally serves `@cdhorne/claude-autopilot-web` from the same
+The daemon optionally serves `@pelaggio/web` from the same
 process. `AUTOPILOT_SERVER_WEB_DIST` (default `${repo}/packages/web/dist`) names
 the build output. If the path is missing, the daemon boots without the static
 handler — pre-build deploys still come up.
@@ -265,18 +265,18 @@ option, so dev (`astro dev` proxying to the daemon) and prod (daemon serving
 `dist/`) resolve the same URLs.
 
 For dev: run the daemon on its tailnet IP, then
-`AUTOPILOT_SERVER_URL=http://127.0.0.1:7777 pnpm --filter @cdhorne/claude-autopilot-web dev`.
+`AUTOPILOT_SERVER_URL=http://127.0.0.1:7777 pnpm --filter @pelaggio/web dev`.
 Vite proxies the API paths (incl. SSE) to the daemon and serves the UI at
 `http://localhost:4321/ui/`.
 
 ## Deploy workflow
 
-`.github/workflows/deploy-server.yml` runs on `[self-hosted, autopilot]` (the
+`.github/workflows/deploy-server.yml` runs on `[self-hosted, pelaggio]` (the
 target box). Triggers on `push` to `main` touching `packages/server/**`,
-`packages/autopilot/**`, or the workspace lockfile. Steps: install →
-`pnpm --filter @cdhorne/claude-autopilot-server build` (parse-check via
+`packages/pelaggio/**`, or the workspace lockfile. Steps: install →
+`pnpm --filter @pelaggio/server build` (parse-check via
 `tsx -e "import('./src/app.ts')"` — matches repo ethos of no formal build) →
-`systemctl --user restart autopilot-server`. `concurrency` prevents
+`systemctl --user restart pelaggio-server`. `concurrency` prevents
 overlapping deploys; `timeout-minutes: 10` bounds stuck jobs.
 
 ## Cloudflare Tunnel setup
@@ -320,22 +320,22 @@ systemctl --user enable --now cloudflared
 journalctl --user -u cloudflared -f             # confirm "Connection registered"
 ```
 
-The unit mirrors `autopilot-server.service` conventions: user-level,
+The unit mirrors `pelaggio-server.service` conventions: user-level,
 `EnvironmentFile` for the token, `Restart=on-failure`, journal logging.
 Keeping cloudflared on its own unit means server redeploys
 (`.github/workflows/deploy-server.yml`) don't interrupt the tunnel.
 
 ### 3. Enable the bearer token
 
-Edit `~/.config/autopilot-server.env`:
+Edit `~/.config/pelaggio-server.env`:
 
 ```bash
 CONTROL_PLANE_TOKEN=$(openssl rand -hex 32)
 ```
 
-Then `systemctl --user restart autopilot-server`. The web UI will prompt for
+Then `systemctl --user restart pelaggio-server`. The web UI will prompt for
 the token on first load and on any 401. The token is stored in browser
-`localStorage` under the key `autopilot-token` — any XSS on the UI would
+`localStorage` under the key `pelaggio-token` — any XSS on the UI would
 expose it. Roadmap out-of-scope to harden further; if that changes, an
 httpOnly cookie + server-side session is the upgrade path.
 

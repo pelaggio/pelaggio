@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { computeStats } from "@cdhorne/claude-autopilot";
 import type { Context, Hono } from "hono";
+import { computeStats } from "pelaggio";
 import type { Registry } from "../registry.js";
 import { RegistryError } from "../registry.js";
 import type { RoadmapCache } from "../roadmap-cache.js";
@@ -47,7 +47,7 @@ export function registerReposRoutes(app: Hono, deps: ReposDeps): void {
 			if (err instanceof RegistryError) return notFound(c, slug);
 			throw err;
 		}
-		const logPath = join(repoPath, ".dev", "autopilot-log.jsonl");
+		const logPath = join(repoPath, ".dev", "pelaggio-log.jsonl");
 		return c.json(computeStats({ logPath }));
 	});
 }

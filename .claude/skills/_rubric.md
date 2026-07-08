@@ -1,8 +1,8 @@
-# Quality Rubric — claude-autopilot Tooling
+# Quality Rubric — pelaggio Tooling
 
-Six dimensions — apply when planning, reviewing, or fixing code in this repo. This rubric is for the autopilot *tooling itself*, not for downstream projects that use it.
+Six dimensions — apply when planning, reviewing, or fixing code in this repo. This rubric is for the pelaggio *tooling itself*, not for downstream projects that use it.
 
-**Scope of this repo**: TypeScript CLI pipeline built on `@anthropic-ai/claude-agent-sdk`. Files under `packages/autopilot/scripts/autopilot/`, `.claude/skills/`, and `.claude-templates/`. No UI, no user-facing surface.
+**Scope of this repo**: TypeScript CLI pipeline built on `@anthropic-ai/claude-agent-sdk`. Files under `packages/pelaggio/scripts/pelaggio/`, `.claude/skills/`, and `.claude-templates/`. No UI, no user-facing surface.
 
 ## Dimensions
 
@@ -16,7 +16,7 @@ Six dimensions — apply when planning, reviewing, or fixing code in this repo. 
 - `types.ts` — type-only. No runtime code.
 - `step-runner.ts` — owns the SDK `query()` loop, hook installation, event streaming. No business logic.
 - `pipeline.ts` — the orchestration loop. Composes everything above. No direct SDK imports (goes through `step-runner`).
-- `main.ts` / `autopilot.ts` — entry points. Arg parsing and orchestrator invocation only.
+- `main.ts` / `pelaggio.ts` — entry points. Arg parsing and orchestrator invocation only.
 - `tui.ts` — display layer. No business logic, no mutation.
 
 Skills live in `.claude/skills/` — each skill is self-contained markdown with frontmatter. Shared rubric + review logic via `!cat` includes. Skill bodies read by `expandSkill()` which strips frontmatter before passing to the SDK.
@@ -31,7 +31,7 @@ Skills live in `.claude/skills/` — each skill is self-contained markdown with 
 - **Verdict parsing default**: `parseVerdict()` **fails closed** — when no verdict keyword is present it returns `RETHINK` (which halts the cycle) *unless* the output shows the review actually engaged with the rubric, in which case it keeps the historical `APPROVE` fail-safe. A refused/empty/truncated shakedown must not read as an implicit approval and ship on a phantom sign-off. Changing this contract requires a comment explaining why.
 - **Worktree isolation**: `step-runner` installs `PreToolUse` hooks when running in a worktree to block Write/Edit/Bash calls targeting `MAIN_REPO` paths. This prevents agents from corrupting sibling worktrees. The hook must run before every mutating tool — don't add exceptions without a test.
 - **Rate-limit parking preserves work**: on rate limit rejection, `parkSignal.parked` is set, and `parkExit()` runs `checkpoint()` before returning. Any new exit path from the pipeline must call `parkExit()` first or risk losing committed-but-not-pushed work.
-- **`listWorktrees()` filters by prefix**: new worktree detection matches `WORKTREE_PREFIX` to ignore unrelated worktrees. `WORKTREE_PREFIX` is derived from `basename(REPO)` by default — tests that mock REPO need to set `CLAUDE_AUTOPILOT_WORKTREE_PREFIX` env var.
+- **`listWorktrees()` filters by prefix**: new worktree detection matches `WORKTREE_PREFIX` to ignore unrelated worktrees. `WORKTREE_PREFIX` is derived from `basename(REPO)` by default — tests that mock REPO need to set `PELAGGIO_WORKTREE_PREFIX` env var.
 - **`detectResumeStep` trusts only valid Step names**: when reading log entries from disk, it validates parsed step names against `STEPS.indexOf()`. Unknown names (from legacy logs or corruption) fall through to `"ship"` as a safe default — *not* to a random step.
 - **Phantom ship guard**: `pipeline.ts` calls `hasDeliverableCommits()` (three-dot diff against main; branches that only touch `docs/plans/` are phantoms) before invoking `/ship`, and `verifyShipLanded()` afterward to confirm `main` actually advanced. The identical checks in `/ship`'s SKILL.md are defense-in-depth for inline (non-pipeline) use. Don't bypass either layer.
 
@@ -40,11 +40,11 @@ Skills live in `.claude/skills/` — each skill is self-contained markdown with 
 ## Verification
 
 ```bash
-npx tsx --test --test-reporter=dot packages/autopilot/scripts/autopilot/__tests__/*.test.ts   # unit + pipeline tests (terse dot reporter)
+npx tsx --test --test-reporter=dot packages/pelaggio/scripts/pelaggio/__tests__/*.test.ts   # unit + pipeline tests (terse dot reporter)
 npx tsx --test --test-reporter=dot packages/server/__tests__/*.test.ts                         # server unit tests (supervisor, state-store, auth, app)
-npx tsx -e "import('./packages/autopilot/scripts/autopilot/config.ts')"                        # parse-check config
-npx tsx -e "import('./packages/autopilot/scripts/autopilot/helpers.ts')"                       # parse-check helpers
-npx tsx -e "import('./packages/autopilot/scripts/autopilot/pipeline.ts')"                      # parse-check pipeline
+npx tsx -e "import('./packages/pelaggio/scripts/pelaggio/config.ts')"                        # parse-check config
+npx tsx -e "import('./packages/pelaggio/scripts/pelaggio/helpers.ts')"                       # parse-check helpers
+npx tsx -e "import('./packages/pelaggio/scripts/pelaggio/pipeline.ts')"                      # parse-check pipeline
 npx tsx -e "import('./packages/server/src/app.ts')"                                            # parse-check server entry
 pnpm check                                                                   # biome (exit 0 on success — output is already compact)
 pnpm check:skills                                                            # lint .claude/skills/*/SKILL.md frontmatter + includes
@@ -52,6 +52,6 @@ pnpm check:skills                                                            # l
 
 All must succeed. No formal `pnpm typecheck` setup — tsx handles transpilation via swc and we rely on runtime parse-checks.
 
-**Reporter choice matters for token cost.** Inside autopilot cycles, verification stdout lands in the agent's event stream and counts as tool-result tokens. Default `node:test` spec reporter emits ~20-30 tokens per test — at 100+ tests a verification pass costs ~2k tokens; at 3500+ tests (fathom scale) it costs ~100k tokens per pass × 3 passes per cycle. **Always use a terse reporter in the rubric's verification commands.** Equivalents by framework: `node:test --test-reporter=dot`, `vitest --reporter=dot`, `jest --silent --reporters=summary`, `biome check --reporter=summary`. Verbose output is for humans debugging a failure, not for autopilot to re-confirm success.
+**Reporter choice matters for token cost.** Inside pelaggio cycles, verification stdout lands in the agent's event stream and counts as tool-result tokens. Default `node:test` spec reporter emits ~20-30 tokens per test — at 100+ tests a verification pass costs ~2k tokens; at 3500+ tests (fathom scale) it costs ~100k tokens per pass × 3 passes per cycle. **Always use a terse reporter in the rubric's verification commands.** Equivalents by framework: `node:test --test-reporter=dot`, `vitest --reporter=dot`, `jest --silent --reporters=summary`, `biome check --reporter=summary`. Verbose output is for humans debugging a failure, not for pelaggio to re-confirm success.
 
 **Biome** lints `scripts/**/*.ts` via `biome.json`; run `pnpm check` (or `pnpm format` to auto-fix). Skill and template markdown is not linted. A lefthook `pre-commit` hook auto-formats staged TS files.

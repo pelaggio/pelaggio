@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for your interest in contributing to claude-autopilot.
+Thanks for your interest in contributing to pelaggio.
 
 ## License
 

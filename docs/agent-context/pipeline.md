@@ -10,7 +10,7 @@ pick -> plan -> shakedown-plan -> implement -> shakedown-code -> ship
 
 ## Step Configuration
 
-`STEPS`, `ALL_STEPS`, defaults, model profiles, effort, turn limits, budgets, and providers are defined in `packages/autopilot/scripts/autopilot/config.ts`.
+`STEPS`, `ALL_STEPS`, defaults, model profiles, effort, turn limits, budgets, and providers are defined in `packages/pelaggio/scripts/pelaggio/config.ts`.
 
 `STEPS` is the source of truth. Adding a step requires updating every step-indexed map — `BUDGETS`, `TURN_LIMITS`, `EFFORT`, and every `MODEL_PROFILES[profile]` entry — plus the relevant tests. Missing keys crash late, so fail loudly.
 
@@ -18,14 +18,14 @@ No model strings live outside `MODEL_PROFILES`. No other file references `claude
 
 ## Step Providers
 
-`packages/autopilot/scripts/autopilot/step-runner.ts` exposes the `StepProvider` seam. The default registered provider is `claude`. Issue `#80` adds `codex`.
+`packages/pelaggio/scripts/pelaggio/step-runner.ts` exposes the `StepProvider` seam. The default registered provider is `claude`. Issue `#80` adds `codex`.
 
 Important contracts:
 
 - `runStep` is the dispatcher.
 - Providers normalize their backend into `StepResult`.
 - `StepResult.subtype` remains telemetry; pipeline control flow should use classification helpers for closed decision sets.
-- Provider selection resolves per step from `.autopilot.yml` model profiles.
+- Provider selection resolves per step from `.pelaggio.yml` model profiles.
 
 ## Worktree Isolation
 
@@ -42,7 +42,7 @@ Worktrees share `MAIN_REPO`'s `node_modules` when lockfiles match — by symlink
 - If `<worktree>/pnpm-lock.yaml` sha256 matches `<MAIN_REPO>/pnpm-lock.yaml` **and** MAIN's `node_modules` has workspace-internal entries, the worktree gets a real `node_modules/` whose entries are absolute symlinks: workspace packages → `<worktree>/<pkg>` (so cross-package source edits resolve to the worktree copy), everything else (`.pnpm/`, `.bin/`, external deps) → `<MAIN>/node_modules/...` (preserving the shared store). Same shape applies per subpackage.
 - Without workspace entries, the simpler symlink-the-whole-dir path runs (`<worktree>/node_modules → <MAIN_REPO>/node_modules`).
 - On drift or missing main `node_modules`, it falls through to `pnpm install --frozen-lockfile --silent`.
-- Materialize is idempotent. The real-dir vs symlink test is `lstatSync().isSymbolicLink()`; the pnpm-store presence test is `isRealDir(.pnpm)` (lstat-based, **not** `existsSync`, which would follow the post-materialize symlink and falsely re-flag corruption). Real, user-managed `node_modules` without autopilot's emitted shape is left alone.
+- Materialize is idempotent. The real-dir vs symlink test is `lstatSync().isSymbolicLink()`; the pnpm-store presence test is `isRealDir(.pnpm)` (lstat-based, **not** `existsSync`, which would follow the post-materialize symlink and falsely re-flag corruption). Real, user-managed `node_modules` without pelaggio's emitted shape is left alone.
 
 ## Plan-Polish Guard
 

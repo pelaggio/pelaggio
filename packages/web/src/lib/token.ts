@@ -1,4 +1,4 @@
-export const STORAGE_KEY = "autopilot-token";
+export const STORAGE_KEY = "pelaggio-token";
 
 type Resolver = (token: string) => void;
 type PromptHandler = () => void;

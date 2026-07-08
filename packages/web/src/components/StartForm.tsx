@@ -1,5 +1,5 @@
-import type { RoadmapItem } from "@cdhorne/claude-autopilot";
-import type { ShipTargetName } from "@cdhorne/claude-autopilot-server/types";
+import type { ShipTargetName } from "@pelaggio/server/types";
+import type { RoadmapItem } from "pelaggio";
 import { type SyntheticEvent, useEffect, useState } from "react";
 import { ApiError, getRoadmap, startRun } from "../lib/api.js";
 import { retryInit, useRepos } from "../lib/repo.js";

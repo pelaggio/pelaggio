@@ -1,8 +1,8 @@
-import type { RepoEntry } from "@cdhorne/claude-autopilot-server/types";
+import type { RepoEntry } from "@pelaggio/server/types";
 import { useSyncExternalStore } from "react";
 import { listRepos } from "./api.js";
 
-export const STORAGE_KEY = "autopilot-current-repo";
+export const STORAGE_KEY = "pelaggio-current-repo";
 
 export type RepoState = { status: "loading" } | { status: "error"; error: string } | { status: "empty"; repos: readonly RepoEntry[] } | { status: "ready"; repos: readonly RepoEntry[]; current: string };
 

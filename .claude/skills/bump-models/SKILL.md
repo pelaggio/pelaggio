@@ -1,13 +1,13 @@
 ---
 name: bump-models
-description: Refresh Claude model IDs in packages/autopilot/scripts/autopilot/config.ts when Anthropic ships new Opus/Sonnet/Haiku versions or new model families
+description: Refresh Claude model IDs in packages/pelaggio/scripts/pelaggio/config.ts when Anthropic ships new Opus/Sonnet/Haiku versions or new model families
 allowed-tools: Read Edit Bash(pnpm:*) Bash(git:*) Bash(rg:*) WebFetch
 consumer: false
 ---
 
 # /bump-models — Claude model ID refresh
 
-Manual, low-frequency. Anthropic doesn't ship `-latest` aliases, so the `OPUS` and `SONNET` constants in `packages/autopilot/scripts/autopilot/config.ts` must be bumped by hand. Package deps are Renovate-managed — this skill does not touch them.
+Manual, low-frequency. Anthropic doesn't ship `-latest` aliases, so the `OPUS` and `SONNET` constants in `packages/pelaggio/scripts/pelaggio/config.ts` must be bumped by hand. Package deps are Renovate-managed — this skill does not touch them.
 
 ## 1. Fetch current model IDs
 
@@ -15,11 +15,11 @@ Prefer `https://api.anthropic.com/v1/models` (requires `ANTHROPIC_API_KEY`); if 
 
 ## 2. Compare and edit
 
-Read `packages/autopilot/scripts/autopilot/config.ts`. The `OPUS` and `SONNET` constants live around line 43-44. If either is behind, edit in place. If a new family is being adopted, add a parallel constant and wire it through `MODEL_PROFILES` rather than reusing `OPUS`/`SONNET`, and extend `MODEL_ID_RE` in `packages/autopilot/scripts/autopilot/check-skills.ts` with the new family name so the skills/templates lint keeps catching pinned IDs.
+Read `packages/pelaggio/scripts/pelaggio/config.ts`. The `OPUS` and `SONNET` constants live around line 43-44. If either is behind, edit in place. If a new family is being adopted, add a parallel constant and wire it through `MODEL_PROFILES` rather than reusing `OPUS`/`SONNET`, and extend `MODEL_ID_RE` in `packages/pelaggio/scripts/pelaggio/check-skills.ts` with the new family name so the skills/templates lint keeps catching pinned IDs.
 
 ## 3. Rubric guard
 
-Run `rg 'claude-[a-z]+-[0-9]' packages/autopilot/scripts/ .claude/skills/ .claude-templates/ --glob '!**/__tests__/**' --glob '!**/bump-models/SKILL.md'` — it must match **only** `packages/autopilot/scripts/autopilot/config.ts`. The pattern catches any current or future Anthropic family ID (Opus / Sonnet / Haiku / Fable / Mythos / …); any other match means the "No hardcoded model strings" invariant is breaking — a stale model ID leaked into production source, a skill body, or a template; stop and investigate. Excluded by design: `__tests__/` fixtures legitimately pin literal IDs, and this skill's own `SKILL.md` names model-ID patterns in its instructions.
+Run `rg 'claude-[a-z]+-[0-9]' packages/pelaggio/scripts/ .claude/skills/ .claude-templates/ --glob '!**/__tests__/**' --glob '!**/bump-models/SKILL.md'` — it must match **only** `packages/pelaggio/scripts/pelaggio/config.ts`. The pattern catches any current or future Anthropic family ID (Opus / Sonnet / Haiku / Fable / Mythos / …); any other match means the "No hardcoded model strings" invariant is breaking — a stale model ID leaked into production source, a skill body, or a template; stop and investigate. Excluded by design: `__tests__/` fixtures legitimately pin literal IDs, and this skill's own `SKILL.md` names model-ID patterns in its instructions.
 
 ## 4. Verify
 
@@ -27,4 +27,4 @@ Run `pnpm test && pnpm check`. Abort on failure before committing.
 
 ## 5. Commit
 
-Stage only `packages/autopilot/scripts/autopilot/config.ts`. Commit with a **Why:** line naming the drift (e.g. "Anthropic shipped Opus 4.8; no `-latest` alias exists, so the literal must be bumped"). Both constants can share one commit.
+Stage only `packages/pelaggio/scripts/pelaggio/config.ts`. Commit with a **Why:** line naming the drift (e.g. "Anthropic shipped Opus 4.8; no `-latest` alias exists, so the literal must be bumped"). Both constants can share one commit.

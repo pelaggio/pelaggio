@@ -1,24 +1,24 @@
 {
-	"name": "claude-autopilot-workspace",
+	"name": "pelaggio-workspace",
 	"version": "0.0.0",
 	"private": true,
-	"description": "Workspace root for claude-autopilot — see packages/autopilot for the published pipeline.",
+	"description": "Workspace root for pelaggio — see packages/pelaggio for the published pipeline.",
 	"license": "FSL-1.1-ALv2",
 	"packageManager": "pnpm@10.32.1",
 	"type": "module",
 	"scripts": {
-		"autopilot": "pnpm --filter @cdhorne/claude-autopilot autopilot",
+		"pelaggio": "pnpm --filter pelaggio pelaggio",
 		"test": "pnpm -r test",
 		"check": "biome check",
-		"check:skills": "pnpm --filter @cdhorne/claude-autopilot check:skills",
-		"check:publish": "pnpm --filter @cdhorne/claude-autopilot check:publish",
+		"check:skills": "pnpm --filter pelaggio check:skills",
+		"check:publish": "pnpm --filter pelaggio check:publish",
 		"format": "biome check --write",
 		"prepare": "lefthook install"
 	},
 	"devDependencies": {
 		"@anthropic-ai/claude-code": "^2.1.177",
 		"@biomejs/biome": "^2.5.0",
-		"@cdhorne/claude-autopilot": "workspace:*",
+		"pelaggio": "workspace:*",
 		"lefthook": "^2.1.9",
 		"tsx": "^4.22.4",
 		"typescript": "^6.0.3"

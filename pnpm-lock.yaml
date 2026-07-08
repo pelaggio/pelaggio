@@ -14,12 +14,12 @@ importers:
       '@biomejs/biome':
         specifier: ^2.5.0
         version: 2.5.0
-      '@cdhorne/claude-autopilot':
-        specifier: workspace:*
-        version: link:packages/autopilot
       lefthook:
         specifier: ^2.1.9
         version: 2.1.9
+      pelaggio:
+        specifier: workspace:*
+        version: link:packages/pelaggio
       tsx:
         specifier: ^4.22.4
         version: 4.22.4
@@ -27,7 +27,7 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3
 
-  packages/autopilot:
+  packages/pelaggio:
     dependencies:
       '@anthropic-ai/claude-agent-sdk':
         specifier: ^0.3.177
@@ -47,15 +47,15 @@ importers:
 
   packages/server:
     dependencies:
-      '@cdhorne/claude-autopilot':
-        specifier: workspace:*
-        version: link:../autopilot
       '@hono/node-server':
         specifier: ^2.0.4
         version: 2.0.4(hono@4.12.25)
       hono:
         specifier: ^4.12.25
         version: 4.12.25
+      pelaggio:
+        specifier: workspace:*
+        version: link:../pelaggio
       ulid:
         specifier: ^3.0.2
         version: 3.0.2
@@ -72,10 +72,7 @@ importers:
       '@astrojs/react':
         specifier: ^5.0.7
         version: 5.0.7(@types/node@25.9.3)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(jiti@2.7.0)(lightningcss@1.32.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(tsx@4.22.4)(yaml@2.9.0)
-      '@cdhorne/claude-autopilot':
-        specifier: workspace:*
-        version: link:../autopilot
-      '@cdhorne/claude-autopilot-server':
+      '@pelaggio/server':
         specifier: workspace:*
         version: link:../server
       '@tailwindcss/vite':
@@ -84,6 +81,9 @@ importers:
       astro:
         specifier: ^6.4.6
         version: 6.4.6(@types/node@25.9.3)(jiti@2.7.0)(lightningcss@1.32.0)(rollup@4.60.2)(tsx@4.22.4)(yaml@2.9.0)
+      pelaggio:
+        specifier: workspace:*
+        version: link:../pelaggio
       react:
         specifier: ^19.2.7
         version: 19.2.7

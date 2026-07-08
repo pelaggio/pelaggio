@@ -19,7 +19,7 @@ runner. `review.runner` selects which:
 - `ci` (default): `.github/workflows/pr-review.yml` runs the `pr-review` CLI in
   GitHub Actions and posts the `review` **commit status** (pending → success/failure)
   for the PR head SHA.
-- `local`: a normal local autopilot auto-pick run sweeps open PRs before revise,
+- `local`: a normal local pelaggio auto-pick run sweeps open PRs before revise,
   runs the same `pr-review` step from the trusted local tree, and posts the `review`
   **commit status**.
 
@@ -48,9 +48,9 @@ comments.
    `success`/`failure` after. The required-check context is that status, so the gate
    reports green or red and is never left perpetual-pending. Fork or draft PRs skip the
    agent and post a green `review` status (secrets are unavailable to forks; forks
-   can't be autopilot PRs).
+   can't be pelaggio PRs).
 3. For a same-repo, non-draft PR the job checks out the head SHA with full history,
-   installs deps, and runs `npx @cdhorne/claude-autopilot pr-review --pr <n>`.
+   installs deps, and runs `npx pelaggio pr-review --pr <n>`.
 4. The CLI reads the changed file list and diff, then runs one bounded, fresh-session
    standard review through the same `runStep` machinery the pipeline uses (step
    `pr-review`: budget / turns / effort / model are first-class config, see below).
@@ -104,7 +104,7 @@ never be pushed. The CLI, not the agent, owns comment posting.
 
 Security-sensitive diffs get a second independent pass. The classifier is deterministic
 and conservative: it triggers on security-adjacent paths such as `.github/workflows/**`,
-server auth/config/app files, autopilot step runners, ship/roadmap tooling, and review /
+server auth/config/app files, pelaggio step runners, ship/roadmap tooling, and review /
 ship / implement skills; it also triggers on diff text containing terms such as `auth`,
 `token`, `secret`, `host`, `loopback`, `127.`, `localhost`, `fetch`, `exec`, `spawn`,
 `shell`, `workflow`, `prompt injection`, `ANTHROPIC_API_KEY`, `GH_TOKEN`, or
@@ -230,7 +230,7 @@ re-implements from the findings and re-pushes so the gate re-runs. The direct hu
 point is:
 
 ```bash
-pnpm autopilot --resume <id> --review-findings path/to/findings.md
+pnpm pelaggio --resume <id> --review-findings path/to/findings.md
 ```
 
 When `--review-findings` is present, `--resume` defaults to the `implement` step so the revision
@@ -238,7 +238,7 @@ cannot auto-detect a later restart point and skip the findings. An explicit vali
 for advanced recovery.
 
 There are **two** automated paths that use this same seam, the same one-pass bound (the
-`autopilot:revised` PR label), and the same handoff marker (`<!-- autopilot-revise-parked -->`):
+`pelaggio:revised` PR label), and the same handoff marker (`<!-- pelaggio-revise-parked -->`):
 
 | Path | Runs on | Funded by | Trigger | Status |
 |---|---|---|---|---|
@@ -261,7 +261,7 @@ run is `roadmap.source: github-issues` + a PR ship target + pure auto-pick mode 
 
 - **Trigger** — start of a normal `--cycles` run. One `gh pr list` finds open, non-draft,
   `feat/issue-<n>` PRs whose `review` check-run concluded `FAILURE`.
-- **One-pass bound** — the shared `autopilot:revised` label, added **before** any work
+- **One-pass bound** — the shared `pelaggio:revised` label, added **before** any work
   (`claimRevision`). Labeled-still-red PRs are filtered out of the candidate set and get one
   idempotent human-handoff comment instead. The label doubles as a manual kill switch and its
   absence gates the revise, exactly as in CI.
@@ -285,17 +285,17 @@ triggers on the review workflow's `workflow_run: completed` with `conclusion == 
 **exactly once per PR**, re-implements from the findings and re-pushes so the gate re-runs.
 
 - **Trigger** — `workflow_run` on `"PR review gate"` (the `pr-review.yml` job's `name:`), gated to
-  same-repo, non-fork, `feat/issue-*` branches whose linked issue carries the `autopilot` label.
-- **One-pass bound** — the workflow adds an `autopilot:revised` label to the PR **before** doing any
+  same-repo, non-fork, `feat/issue-*` branches whose linked issue carries the `pelaggio` label.
+- **One-pass bound** — the workflow adds an `pelaggio:revised` label to the PR **before** doing any
   work. On a second red review the label is already present, so the workflow posts a park-for-human
   comment and stops. A per-branch `concurrency` group (`cancel-in-progress: false`, which serializes
   rather than cancels) makes the label check effectively atomic. The label doubles as a **manual kill
-  switch**: pre-apply `autopilot:revised` to opt a PR out of auto-revision entirely.
+  switch**: pre-apply `pelaggio:revised` to opt a PR out of auto-revision entirely.
 - **Global off-switch** — set the repo Actions variable `AUTOPILOT_AUTO_REVISE` to `false` to disable
   the loop repo-wide (the workflow's job `if:` checks `vars.AUTOPILOT_AUTO_REVISE != 'false'`).
 - **The revision seam** — the workflow writes the pr-review findings comment to
   `.dev/review-findings-<id>.md` and runs
-  `autopilot --resume <id> --no-worktree --target pull-request --review-findings <path>`.
+  `pelaggio --resume <id> --no-worktree --target pull-request --review-findings <path>`.
   `--review-findings` is a **resume-only** flag: it reads the file best-effort and injects the findings
   into the implement step as revision input. With no explicit `--from`, it routes the resume to
   `implement`; an absent/unreadable file never crashes the resume. The `pull-request` ship is

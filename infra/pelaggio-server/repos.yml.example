@@ -1,0 +1,21 @@
+# pelaggio-server repo registry
+#
+# Default location: $XDG_CONFIG_HOME/pelaggio-server/repos.yml
+# Falls back to:    ~/.config/pelaggio-server/repos.yml
+# Override:         AUTOPILOT_SERVER_REGISTRY=/abs/path/to/repos.yml
+#
+# After editing, restart the daemon:
+#   systemctl --user restart pelaggio-server
+#
+# Each entry maps a slug (used in API paths and in `POST /runs.body.repo`) to
+# an absolute path on the daemon host. Slugs are operator-chosen — they need
+# not match the directory basename. Pick names you'll type at the API.
+#
+# If two paths share the same `basename(path)`, pelaggio's worktree-prefix
+# detection can misattribute branches across them; the daemon emits a single
+# `console.warn` at boot and continues — it's the operator's call whether to
+# rename a slug or rearrange directories.
+
+repos:
+  pelaggio: /home/USER/workspace/pelaggio
+  fathom: /home/USER/workspace/fathom
