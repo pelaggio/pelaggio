@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { HookInput } from "@anthropic-ai/claude-agent-sdk";
+import { codexProvider } from "../codex-provider.js";
 import { blockPlanPolish, blockWorktreeInstall, claudeProvider, composeSystemAppend, getProvider, isWorktreePath } from "../step-runner.js";
 import type { ProviderName } from "../types.js";
 
@@ -124,6 +125,10 @@ describe("getProvider — registry + guard", () => {
 
 	it("returns the exact registered claudeProvider instance", () => {
 		assert.equal(getProvider("claude"), claudeProvider);
+	});
+
+	it("returns the exact registered codexProvider instance", () => {
+		assert.equal(getProvider("codex"), codexProvider);
 	});
 
 	it("throws on an unknown provider name (defense-in-depth for #80)", () => {

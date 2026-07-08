@@ -13,7 +13,7 @@ const SHIP_TARGET_NAMES: readonly ShipTargetName[] = ["direct-push", "pull-reque
 // widens both to add a second provider. `DEFAULT_PROVIDER` is the fallback every
 // step resolves to when a profile names none, so no provider string is hardcoded
 // outside this file.
-const PROVIDER_NAMES: readonly ProviderName[] = ["claude"];
+const PROVIDER_NAMES: readonly ProviderName[] = ["claude", "codex"];
 const DEFAULT_PROVIDER: ProviderName = "claude";
 const isProviderName = (v: unknown): v is ProviderName => typeof v === "string" && (PROVIDER_NAMES as readonly string[]).includes(v);
 

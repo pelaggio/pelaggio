@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { describe, it } from "node:test";
@@ -29,6 +29,7 @@ import {
 	parseVerdict,
 	parseWaitFlag,
 	resolveParkReset,
+	revertPlanPolish,
 	reviewFindingsPreamble,
 	verifyShipLanded,
 } from "../helpers.js";
@@ -123,6 +124,62 @@ describe("resolveParkReset", () => {
 	it("negative reported reset falls through to the estimate", () => {
 		const r = resolveParkReset(-1, true, "weekly", "no reset here", NOW, HOUR);
 		assert.deepEqual(r, { resetsAt: NOW + HOUR, limitType: "weekly (estimated)" });
+	});
+});
+
+describe("revertPlanPolish", () => {
+	const headSha = (dir: string) => execSync("git rev-parse HEAD", { cwd: dir, encoding: "utf-8" }).trim();
+
+	it("reverts committed docs/plans edits made during implement, preserving code changes", () => {
+		const dir = makeFeatRepo();
+		commitFile(dir, "docs/plans/tool-99.md", "# Plan\noriginal\n", "plan: write plan");
+		const sinceSha = headSha(dir); // state after the plan step
+		// implement polishes the plan AND writes real code — both committed (checkpoint).
+		commitFile(dir, "docs/plans/tool-99.md", "# Plan\npolished during implement\n", "wip: implement");
+		commitFile(dir, "src/feature.ts", "export const x = 1;\n", "wip: implement code");
+
+		const reverted = revertPlanPolish(dir, sinceSha);
+
+		assert.deepEqual(reverted, ["docs/plans/tool-99.md"]);
+		assert.equal(readFileSync(resolve(dir, "docs/plans/tool-99.md"), "utf-8"), "# Plan\noriginal\n", "plan restored");
+		assert.equal(readFileSync(resolve(dir, "src/feature.ts"), "utf-8"), "export const x = 1;\n", "code change preserved");
+	});
+
+	it("is a no-op when implement touched no docs/plans files (hook-guarded Claude path)", () => {
+		const dir = makeFeatRepo();
+		commitFile(dir, "docs/plans/tool-99.md", "# Plan\n", "plan");
+		const sinceSha = headSha(dir);
+		commitFile(dir, "src/feature.ts", "export const x = 1;\n", "wip: implement");
+		assert.deepEqual(revertPlanPolish(dir, sinceSha), []);
+	});
+
+	it("removes a plan file ADDED during implement (parity with the Write-blocking hook)", () => {
+		const dir = makeFeatRepo();
+		commitFile(dir, "docs/plans/tool-99.md", "# Plan\n", "plan");
+		const sinceSha = headSha(dir);
+		commitFile(dir, "docs/plans/extra.md", "sneaky new plan doc\n", "wip: implement adds a plan file");
+
+		const reverted = revertPlanPolish(dir, sinceSha);
+
+		assert.deepEqual(reverted, ["docs/plans/extra.md"]);
+		assert.ok(!existsSync(resolve(dir, "docs/plans/extra.md")), "added plan file must be removed, not left behind");
+		assert.equal(readFileSync(resolve(dir, "docs/plans/tool-99.md"), "utf-8"), "# Plan\n", "original plan untouched");
+	});
+
+	it("restores a plan file DELETED during implement", () => {
+		const dir = makeFeatRepo();
+		commitFile(dir, "docs/plans/tool-99.md", "# Plan\nkeep me\n", "plan");
+		const sinceSha = headSha(dir);
+		execSync("git rm -q docs/plans/tool-99.md && git commit -q -m 'wip: implement deletes plan'", { cwd: dir });
+
+		const reverted = revertPlanPolish(dir, sinceSha);
+
+		assert.deepEqual(reverted, ["docs/plans/tool-99.md"]);
+		assert.equal(readFileSync(resolve(dir, "docs/plans/tool-99.md"), "utf-8"), "# Plan\nkeep me\n", "deleted plan restored");
+	});
+
+	it("returns [] when sinceSha is null", () => {
+		assert.deepEqual(revertPlanPolish(makeFeatRepo(), null), []);
 	});
 });
 

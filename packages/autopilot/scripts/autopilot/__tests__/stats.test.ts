@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { reduce, renderJson } from "../stats.js";
+import { reduce, renderDashboard, renderJson } from "../stats.js";
 import type { CycleLogEntry, StepLog } from "../types.js";
 
 function mkStep(partial: Partial<StepLog> & { name: string }): StepLog {
@@ -71,6 +71,34 @@ describe("reduce — single completed cycle", () => {
 		assert.equal(s.itemsDelivered[0].id, "TOOL-1");
 		assert.equal(s.itemsDelivered[0].rethinks, 0);
 		assert.equal(s.itemsDelivered[0].parked, false);
+	});
+});
+
+describe("reduce — estimated cost (#80)", () => {
+	it("flags estimated totals/steps and renders them with a ~ prefix", () => {
+		const estimated = mkEntry({
+			cycle: 1,
+			item: "TOOL-1",
+			completed: true,
+			total_cost: 0.5,
+			costEstimated: true,
+			steps: [mkStep({ name: "implement", cost: 0.5, costEstimated: true, tokens: { input: 10, output: 20, cacheCreation: 0, cacheRead: 5 } })],
+		});
+		const real = mkEntry({ cycle: 2, item: "TOOL-2", completed: true, total_cost: 1.0, steps: [mkStep({ name: "ship", cost: 1.0 })] });
+
+		const s = reduce([estimated, real]);
+		assert.equal(s.costEstimated, true, "any estimated cycle marks the aggregate");
+		assert.equal(s.costEstimatedByStep.implement, true);
+		assert.notEqual(s.costEstimatedByStep.ship, true, "a billed-USD step is not marked estimated");
+
+		const dash = renderDashboard(s);
+		assert.match(dash, /~\$1\.50/, "total spend rendered with ~ when it includes estimates");
+	});
+
+	it("does not mark a pure billed-USD run as estimated", () => {
+		const s = reduce([mkEntry({ cycle: 1, completed: true, total_cost: 2.0, steps: [mkStep({ name: "ship", cost: 2.0 })] })]);
+		assert.equal(s.costEstimated, false);
+		assert.doesNotMatch(renderDashboard(s), /~\$/);
 	});
 });
 

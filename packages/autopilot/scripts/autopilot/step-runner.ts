@@ -2,11 +2,15 @@ import { lstatSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { HookInput, HookJSONOutput, SDKAssistantMessage, SDKRateLimitEvent, SDKResultMessage, SDKSystemMessage } from "@anthropic-ai/claude-agent-sdk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import { codexProvider } from "./codex-provider.js";
 import { CONFIG, REPO, resolveStepSettings } from "./config.js";
 import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseWaitFlag, resolveParkReset } from "./helpers.js";
+import { composeSystemAppend, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "./step-runner-shared.js";
 import { MUTATING_TOOLS, toolBrief } from "./tui.js";
 import type { ParkSignal, ProviderName, Step, StepEmit, StepResult, TokenUsage } from "./types.js";
 import { ensureWorktreeDeps } from "./worktree-deps.js";
+
+export { composeSystemAppend, isWorktreePath } from "./step-runner-shared.js";
 
 // ── Step runner ────────────────────────────────────────────────────────
 
@@ -36,29 +40,6 @@ export type RunStepFn = (name: Step, prompt: string, opts: RunStepOpts, emit: St
 export interface StepProvider {
 	name: ProviderName;
 	runStep: RunStepFn;
-}
-
-const EDIT_LOOP_THRESHOLD = 22;
-
-// Steps whose entire job is iteratively editing the plan document. The raw-edit
-// loop guard would false-positive on legitimate refinement passes, so it is
-// skipped here. Steps editing code (`implement`, `shakedown-code`) keep it.
-const EDIT_LOOP_EXEMPT_STEPS: ReadonlySet<Step> = new Set(["plan", "shakedown-plan"]);
-
-// Autonomy framing: rides on every SDK call for every step. Opus 4.8 asks
-// clarifying questions more readily than 4.7, but here a question ends the turn
-// with unfinished work and retry logic can't tell it apart from progress. Terse
-// on purpose — this is a per-call token cost on every step.
-const AUTONOMY_APPEND = [
-	"",
-	"## Operating autonomously",
-	"You are operating autonomously inside a headless pipeline. Nobody is watching in real time and nobody can answer questions mid-step, so ending your turn with a question stalls the step. For minor choices (naming, formatting, defaults, which of two equivalent approaches), pick a reasonable option and note it in your final message. End your turn only when the step is complete or you are genuinely blocked — and if blocked, state precisely what is missing rather than asking permission to proceed.",
-	"If you genuinely cannot complete the step, make the final line of your reply exactly `BLOCKED: <one-line reason — what is missing>` with nothing after it, instead of asking a question or offering options. Completing the step normally needs no sentinel.",
-].join("\n");
-
-/** True when `cwd` is a sibling worktree, not the main repo. Exported for testing. */
-export function isWorktreePath(cwd: string, repo: string): boolean {
-	return resolve(cwd) !== resolve(repo);
 }
 
 // Worktree-side install guard: the worktree shares MAIN_REPO's `node_modules`
@@ -98,34 +79,6 @@ export function blockPlanPolish(input: HookInput, cwd: string): HookJSONOutput {
 		decision: "block" as const,
 		reason: `"${fp}" is under docs/plans/, which is READ-ONLY during implement. Execute the plan by writing code to other files — do not edit the plan itself. If the plan is genuinely wrong, stop and report the issue instead of editing around it.`,
 	};
-}
-
-/** Composes the per-step system-prompt append. The autonomy block is
- * unconditional; the worktree-isolation and plan-polish blocks layer on when
- * their conditions hold. Exported for testing. */
-export function composeSystemAppend(args: { isWorktree: boolean; cwd: string; repo: string; planBlockActive: boolean }): string {
-	const worktreeAppend = args.isWorktree
-		? [
-				"",
-				"## CRITICAL: Worktree isolation",
-				`Your working directory is a git worktree at: ${args.cwd}`,
-				`The main repository is at: ${args.repo}`,
-				"You MUST use relative paths or paths under your working directory for ALL file operations.",
-				`NEVER use absolute paths starting with ${args.repo}/ — those point to the main worktree and will corrupt another workspace.`,
-				"Use $PWD-relative paths, or resolve from your cwd. The codebase in your worktree is identical — read and write here.",
-			].join("\n")
-		: undefined;
-
-	const planAppend = args.planBlockActive
-		? [
-				"",
-				"## CRITICAL: Do not edit the plan",
-				"Files under `docs/plans/` are READ-ONLY for this step. Your job is to EXECUTE the plan by writing code to other files — not to polish, clarify, or extend the plan document itself.",
-				"Writes to `docs/plans/*` will be blocked by a hook. If you believe the plan is wrong, stop and surface the issue in your final message instead of editing around it.",
-			].join("\n")
-		: undefined;
-
-	return [AUTONOMY_APPEND, worktreeAppend, planAppend].filter(Boolean).join("\n");
 }
 
 // The Claude SDK-driven runner — the original `runStep` body, verbatim, rebound as a
@@ -497,6 +450,7 @@ export const claudeProvider: StepProvider = { name: "claude", runStep: claudeRun
 // surfaces a compile error here until it registers the new provider.
 const PROVIDERS: Record<ProviderName, StepProvider> = {
 	claude: claudeProvider,
+	codex: codexProvider,
 };
 
 /** Look up a registered provider. Throws on an unknown name — defense-in-depth for
