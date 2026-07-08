@@ -61,6 +61,11 @@ type StepAttempt = { kind: "ok"; result: StepResult } | { kind: "terminal"; cycl
 
 const TRANSIENT_MAX_ATTEMPTS = 3;
 const TRANSIENT_BACKOFF_MS = 1000;
+// Consecutive whole-cycle "transient sdk error" outcomes (issue #128) that distinguish a
+// sustained provider outage from a single blip. One transient cycle stays silently
+// recoverable (#127's behavior); this many in a row parks + pages instead of quietly
+// burning through every remaining --cycles against a dead provider.
+const CONSECUTIVE_TRANSIENT_ERROR_LIMIT = 3;
 
 export interface PipelineDeps {
 	runStep?: RunStepFn;
@@ -1124,6 +1129,10 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		const pickMutex = isParallel ? createMutex() : undefined;
 		let nextCycle = 0;
 		let totalSpent = 0;
+		// Consecutive "transient sdk error" cycle outcomes across the whole worker pool
+		// (issue #128) — reset by any other outcome. Shared across parallel workers since
+		// it tracks the campaign's overall health, not any one worker's.
+		let consecutiveTransientErrors = 0;
 		// Single-sourced with `notify.ts`'s classifier via `RECOVERABLE_ERRORS` (types.ts) to
 		// prevent drift. `pick:unknown-id` and `pick:blocked` are intentionally *absent* — fatal
 		// so typos in `--item X,Y,Z` and user-requested blocked items halt loudly instead of
@@ -1173,6 +1182,25 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					parkSignal,
 					flags,
 				);
+
+				// Sustained-outage detection (#128): a lone "transient sdk error" cycle stays
+				// recoverable (#127) so the worker keeps pulling. But N in a row — no other
+				// outcome between them — means the provider, not the item, is the problem;
+				// relabel this cycle `parked` so it pages (notify's classifier pages `parked`
+				// but not `transient sdk error`) and flows into the same park-and-resume path
+				// a rate-limit park uses, instead of quietly burning the rest of --cycles.
+				if (result.error === "transient sdk error") {
+					consecutiveTransientErrors++;
+					if (consecutiveTransientErrors >= CONSECUTIVE_TRANSIENT_ERROR_LIMIT && !parkSignal.parked) {
+						parkSignal.parked = true;
+						parkSignal.resetsAt = 0;
+						parkSignal.limitType = "sdk-outage";
+						parkSignal.triggerWorker = result.itemId ?? "";
+						result.error = "parked";
+					}
+				} else {
+					consecutiveTransientErrors = 0;
+				}
 
 				totalSpent += result.cost;
 				results.push(result);
