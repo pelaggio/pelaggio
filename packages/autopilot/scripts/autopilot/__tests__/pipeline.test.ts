@@ -693,6 +693,93 @@ describe("runPipeline — RoadmapSource injection", () => {
 		const implementPrompt = calls.find((c) => c.step === "implement")?.prompt ?? "";
 		assert.ok(implementPrompt.includes("/fake/plans/tool-99.md"), `expected implement prompt to include mock plan path; got: ${implementPrompt.slice(0, 400)}`);
 	});
+
+	it("harness commits + publishes the plan after the plan step, exactly once (#98)", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const publishCalls: Array<{ body: string; id: string }> = [];
+		const planFile = `${worktree}/docs/plans/plan.md`;
+		let planned = false; // getItemPlan returns null until the harness publishes (mirrors reality)
+		const roadmap = makeMockRoadmap({
+			async getItemPlan() {
+				return planned ? planFile : null;
+			},
+			resolvePlanPath: () => planFile,
+			async publishPlan(body, ctx) {
+				publishCalls.push({ body, id: ctx.id });
+				planned = true;
+			},
+		});
+		const { runStep } = createMockRunStep(
+			{
+				plan: { ok: true, writes: { "docs/plans/plan.md": "# Plan\nplan body" } },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				ship: {
+					ok: true,
+					text: "ship-merged: TOOL-99",
+					sideEffect: (cwd) => {
+						execSync("git checkout -q main", { cwd });
+						execSync("git merge -q --no-ff feat/tool-99", { cwd });
+						execSync("git checkout -q feat/tool-99", { cwd });
+					},
+				},
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
+			runStep,
+			roadmap,
+			mainRepo: worktree,
+			listWorktrees: () => [],
+			appendLog: () => {},
+			runShipBookkeeping: noopBookkeeping,
+		});
+
+		assert.equal(result.completed, true);
+		assert.equal(publishCalls.length, 1, "harness publishes the plan exactly once (not the model)");
+		assert.ok(publishCalls[0].body.includes("# Plan"), `expected the written plan body; got ${JSON.stringify(publishCalls[0])}`);
+	});
+
+	it("does NOT publish when the plan step parks (#98 dispatch gate)", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const publishCalls: Array<{ body: string; id: string }> = [];
+		const roadmap = makeMockRoadmap({
+			async getItemPlan() {
+				return null;
+			},
+			resolvePlanPath: () => `${worktree}/docs/plans/plan.md`,
+			async publishPlan(body, ctx) {
+				publishCalls.push({ body, id: ctx.id });
+			},
+		});
+		const { runStep } = createMockRunStep(
+			{
+				plan: {
+					ok: false,
+					subtype: "error_rate_limit",
+					writes: { "docs/plans/plan.md": "# Plan\npartial" },
+					park: { parked: true, limitType: "5h", resetsAt: Date.now() + 3_600_000 },
+				},
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
+			runStep,
+			roadmap,
+			mainRepo: worktree,
+			listWorktrees: () => [],
+			appendLog: () => {},
+			runShipBookkeeping: noopBookkeeping,
+		});
+
+		assert.equal(result.error, "parked");
+		assert.equal(publishCalls.length, 0, "a parked plan step must not publish (dispatch fires only on success)");
+	});
 });
 
 describe("runPipeline — rate-limit park preserves state", () => {

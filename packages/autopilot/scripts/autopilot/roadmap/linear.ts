@@ -126,6 +126,10 @@ export class LinearRoadmap implements RoadmapSource {
 		const issue = await api.getIssue(ctx.id);
 		if (!issue) throw new Error(`Linear issue not found: ${ctx.id}`);
 		const marked = `${PLAN_MARKER}\n${body}`;
+		// NOTE (#98): not yet idempotent — a re-publish posts a duplicate marked comment (retrieval
+		// takes "latest marker wins", so it's tolerated but noisy). The GitHub adapter upserts by
+		// editing the existing plan comment; mirroring that here needs list/update-comment methods on
+		// LinearApi. Tracked as a parity follow-up (Linear is fathom's consumer, not exercised here).
 		await api.createComment(issue.id, marked);
 	}
 

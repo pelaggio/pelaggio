@@ -41,15 +41,16 @@ This prints one line — the absolute path where the plan should live. Exit code
 
 **You MUST write the plan to that path** using the Write tool. Create parent directories if needed. Do not just output the plan as text — the file is read by `/shakedown` in a separate session.
 
-After writing, commit it:
+**If your Arguments include `autopilot`:** STOP after writing the file — do **not** run `git commit`
+or `publish-plan`. The harness commits and publishes the plan for you (it runs those effects
+in-process, so this step works on providers whose sandbox can't write git metadata or reach the
+network). Just write the file and finish.
+
+**Otherwise (inline / human `/plan`):** commit and publish it yourself:
 ```bash
 git add "<resolved-path>"
 git commit -m "docs: add implementation plan for <ID>"
-```
-
-Then publish the plan via the adapter (markdown: no-op; github-issues / linear: posts an issue comment with the `<!-- autopilot-plan -->` marker):
-
-```bash
+# publish via the adapter (markdown: no-op; github-issues / linear: upserts the `<!-- autopilot-plan -->` comment):
 npx @cdhorne/claude-autopilot roadmap publish-plan --id <ID> --file "<resolved-path>"
 ```
 
