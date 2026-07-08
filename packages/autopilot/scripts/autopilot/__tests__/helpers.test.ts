@@ -9,7 +9,9 @@ import {
 	checkpoint,
 	classifyStepError,
 	computeImplementTurns,
+	conservativeResetEstimate,
 	countPlanFiles,
+	FIVE_HOUR_MS,
 	filesChangedSince,
 	fmtWait,
 	formatResumeHint,
@@ -28,6 +30,7 @@ import {
 	parseWaitFlag,
 	reviewFindingsPreamble,
 	verifyShipLanded,
+	WEEKLY_MS,
 } from "../helpers.js";
 
 function makeFeatRepo(): string {
@@ -160,6 +163,35 @@ describe("parseResetTime", () => {
 		const result = parseResetTime(msg);
 		// Should return a valid timestamp (either today or tomorrow)
 		assert.ok(result > 0, `expected positive timestamp, got ${result}`);
+	});
+});
+
+describe("conservativeResetEstimate (issue #68)", () => {
+	const now = 1_700_000_000_000;
+
+	it("estimates a 5h wait for the 5-hour rolling window", () => {
+		assert.equal(conservativeResetEstimate("5h", now), now + FIVE_HOUR_MS);
+	});
+
+	it("estimates 5h for an unknown limit type", () => {
+		assert.equal(conservativeResetEstimate("unknown", now), now + FIVE_HOUR_MS);
+	});
+
+	it("estimates 5h for an empty limit type", () => {
+		assert.equal(conservativeResetEstimate("", now), now + FIVE_HOUR_MS);
+	});
+
+	it("estimates 5h for an arbitrary/unrecognised type", () => {
+		assert.equal(conservativeResetEstimate("daily", now), now + FIVE_HOUR_MS);
+	});
+
+	it("estimates a full week for a weekly limit", () => {
+		assert.equal(conservativeResetEstimate("weekly", now), now + WEEKLY_MS);
+	});
+
+	it("matches /week/i case-insensitively", () => {
+		assert.equal(conservativeResetEstimate("Weekly", now), now + WEEKLY_MS);
+		assert.equal(conservativeResetEstimate("weekly limit", now), now + WEEKLY_MS);
 	});
 });
 

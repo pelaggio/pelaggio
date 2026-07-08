@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
+import { FIVE_HOUR_MS } from "../helpers.js";
 import { runOrchestrator } from "../pipeline.js";
 import { StatusBar } from "../tui.js";
 import type { Flags } from "../types.js";
@@ -292,7 +293,11 @@ describe("runOrchestrator — park-and-resume", () => {
 		);
 	});
 
-	it("unknown reset time (resetsAt=0): exitCode 1, runPipeline not re-invoked", async (t) => {
+	// #68: no server-reported resetsAt + a 5h limit → synthesise a 5h estimate (under the
+	// default 6h max-wait) and auto-resume instead of surrendering. Rewrites the old test that
+	// asserted the pre-#68 "give up on resetsAt=0" behavior — that surrender is exactly what #68
+	// removes for estimable limits.
+	it("no resetsAt + 5h limit: estimates a 5h wait and auto-resumes", async (t) => {
 		t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
 		const logs: string[] = [];
 		t.mock.method(console, "log", (...args: unknown[]) => {
@@ -303,15 +308,80 @@ describe("runOrchestrator — park-and-resume", () => {
 
 		const { runPipeline, calls } = createMockRunPipeline({
 			byItem: {
-				"X-1": { completed: false, cost: 0.1, error: "parked", park: { parked: true, resetsAt: 0, limitType: "5h" } },
+				"X-1": [
+					{ completed: false, cost: 0.1, error: "parked", park: { parked: true, resetsAt: 0, limitType: "5h" } },
+					{ completed: true, cost: 0.5 },
+				],
+			},
+		});
+
+		const promise = runOrchestrator({ ...baseFlags, item: "X-1" }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });
+		for (let i = 0; i < 5; i++) await new Promise(setImmediate);
+		// The estimated 5h window plus the ≤30s jitter grace.
+		t.mock.timers.tick(FIVE_HOUR_MS + 30_000);
+		for (let i = 0; i < 5; i++) await new Promise(setImmediate);
+		const { results } = await promise;
+
+		assert.equal(calls.length, 2, "should auto-resume after the estimated wait");
+		assert.equal(results[1].completed, true);
+		assert.ok(
+			logs.some((l) => l.includes("estimated")),
+			`expected the wait to be labelled "estimated"; got:\n${logs.join("\n")}`,
+		);
+	});
+
+	// #68: no resetsAt + a weekly limit → 7d estimate, which exceeds the default 6h max-wait, so
+	// the loop correctly hands an unattended week-long wait back to a human rather than spinning.
+	it("no resetsAt + weekly limit: 7d estimate exceeds max-wait, hands back", async (t) => {
+		t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
+		const logs: string[] = [];
+		t.mock.method(console, "log", (...args: unknown[]) => {
+			logs.push(args.join(" "));
+		});
+		const baseNow = 1_700_000_000_000;
+		t.mock.timers.setTime(baseNow);
+
+		const { runPipeline, calls } = createMockRunPipeline({
+			byItem: {
+				"X-1": { completed: false, cost: 0.1, error: "parked", park: { parked: true, resetsAt: 0, limitType: "weekly" } },
+			},
+		});
+		const { exitCode } = await runOrchestrator({ ...baseFlags, item: "X-1" }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });
+		assert.equal(exitCode, 1);
+		assert.equal(calls.length, 1, "should not resume a week-long estimated wait");
+		assert.ok(
+			logs.some((l) => l.includes("Weekly rate limit")),
+			`expected "Weekly rate limit" in logs; got:\n${logs.join("\n")}`,
+		);
+		assert.ok(
+			logs.some((l) => l.includes("Resume:") && l.includes("pnpm autopilot --resume X-1")),
+			`expected the --resume hint in logs; got:\n${logs.join("\n")}`,
+		);
+	});
+
+	// #68 regression guard: a genuinely-unusable server-reported reset (in the past → waitMs ≤ 0)
+	// still hands back as "unknown reset time". The conservative estimate only kicks in when
+	// resetsAt is falsy, so a supplied-but-stale reset must not be swallowed by the fallback.
+	it("server-reported past reset (resetsAt in the past): still hands back as unknown", async (t) => {
+		t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
+		const logs: string[] = [];
+		t.mock.method(console, "log", (...args: unknown[]) => {
+			logs.push(args.join(" "));
+		});
+		const baseNow = 1_700_000_000_000;
+		t.mock.timers.setTime(baseNow);
+
+		const { runPipeline, calls } = createMockRunPipeline({
+			byItem: {
+				"X-1": { completed: false, cost: 0.1, error: "parked", park: { parked: true, resetsAt: baseNow - 60_000, limitType: "5h" } },
 			},
 		});
 		const { exitCode } = await runOrchestrator({ ...baseFlags, item: "X-1" }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });
 		assert.equal(exitCode, 1);
 		assert.equal(calls.length, 1);
 		assert.ok(
-			logs.some((l) => l.includes("Resume:") && l.includes("pnpm autopilot --resume X-1")),
-			`expected the --resume hint in logs; got:\n${logs.join("\n")}`,
+			logs.some((l) => l.includes("unknown reset time")),
+			`expected the "unknown reset time" handback; got:\n${logs.join("\n")}`,
 		);
 	});
 });

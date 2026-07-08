@@ -596,6 +596,22 @@ export function parseResetTime(msg: string): number {
 	}
 }
 
+/** Rate-limit window lengths, used only to estimate a reset when the SDK reports none (#68). */
+export const FIVE_HOUR_MS = 5 * 3_600_000;
+export const WEEKLY_MS = 7 * 24 * 3_600_000;
+
+/**
+ * Conservative reset-time estimate for a rate-limit park whose event carried no `resetsAt`
+ * and whose message text yielded none either (issue #68). Assumes the limit window *just*
+ * started — the maximum plausible wait — so an auto-resume never fires early and re-trips the
+ * same limit. Weekly limits estimate a full week (which the caller's `max-wait` cap will
+ * typically reject, correctly handing an unattended week-long wait back to a human);
+ * everything else (the 5-hour rolling window, or an unknown/absent type) estimates 5 hours.
+ */
+export function conservativeResetEstimate(limitType: string, now: number): number {
+	return now + (/week/i.test(limitType) ? WEEKLY_MS : FIVE_HOUR_MS);
+}
+
 // ── Wait-flag parsing & formatting ────────────────────────────────────
 
 /** Parse "6h", "90m", "1h30m", "360" (bare number = minutes) → milliseconds. */

@@ -7,6 +7,7 @@ import {
 	captureShipState,
 	checkpoint,
 	computeImplementTurns,
+	conservativeResetEstimate,
 	createMutex,
 	detectResumeStep,
 	ensureCheckpointed,
@@ -1085,15 +1086,25 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			let round = 0;
 			while (parkSignal.parked && pending.length > 0 && round < MAX_RESUME_ROUNDS) {
 				round++;
-				const waitMs = parkSignal.resetsAt - Date.now();
+				// Conservative fallback (#68): the SDK's rate_limit_event sometimes reports no
+				// resetsAt and the text backfill (step-runner) can also come up empty. Rather than
+				// surrender and hand the prompt back, estimate a full-window wait from now — the max
+				// plausible wait, so we never resume early and re-trip the limit. max-wait below still
+				// caps it (weekly ⇒ 7d ⇒ handback).
+				const now = Date.now();
+				const estimated = !parkSignal.resetsAt;
+				const effectiveResetsAt = parkSignal.resetsAt || conservativeResetEstimate(parkSignal.limitType, now);
+				const waitMs = effectiveResetsAt - now;
 				const isWeekly = /week/i.test(parkSignal.limitType);
 				const resumeCmd = formatResumeHint(pending);
 
-				// Unknown reset → never spin (checked every round, not just the first). `break`
-				// (not `return`) so we funnel through the shared teardown+summary below — a
-				// round-≥2 exit here would otherwise leak the status-bar scroll region set up
-				// by the prior round's `statusBar.setup()`.
-				if (!parkSignal.resetsAt || waitMs <= 0) {
+				// Only a genuinely-unusable wait (server reported a past/zero reset) still hands back
+				// here; a conservative estimate is always in the future, so estimating replaces the
+				// old blanket "unknown reset time" surrender. `break` (not `return`, checked every
+				// round) so we funnel through the shared teardown+summary below — a round-≥2 exit
+				// here would otherwise leak the status-bar scroll region set up by the prior round's
+				// `statusBar.setup()`.
+				if (waitMs <= 0) {
 					console.log("");
 					console.log(`${A.yellow("⏸")} ${parkSignal.limitType} limit hit — unknown reset time`);
 					console.log(`  Parked: ${pending.join(", ")}`);
@@ -1103,8 +1114,9 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 
 				if (waitMs > maxWaitMs) {
 					const label = isWeekly ? "Weekly rate limit" : `${parkSignal.limitType} limit`;
+					const est = estimated ? " (estimated)" : "";
 					console.log("");
-					console.log(`${A.yellow("⏸")} ${label} — wait ${fmtWait(waitMs)} exceeds --max-wait ${fmtWait(maxWaitMs)}`);
+					console.log(`${A.yellow("⏸")} ${label} — wait ${fmtWait(waitMs)}${est} exceeds --max-wait ${fmtWait(maxWaitMs)}`);
 					console.log(`  Parked: ${pending.join(", ")}`);
 					console.log(`  Resume: ${A.bold(resumeCmd)}`);
 					break;
@@ -1113,10 +1125,11 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				// Jitter within the existing 30s post-reset envelope (see the constants above)
 				// so timer-mocked tests need no change: delay ∈ [15s, 30s).
 				const delay = RESUME_MIN_GRACE_MS + Math.floor(Math.random() * RESUME_JITTER_MS);
-				const resumeAt = parkSignal.resetsAt + delay;
+				const resumeAt = effectiveResetsAt + delay;
 				const eta = new Date(resumeAt).toLocaleTimeString("en-CA", { hour12: false });
+				const est = estimated ? " (estimated)" : "";
 				console.log("");
-				console.log(`${A.yellow("⏸")} ${A.bold("Parked")} — ${parkSignal.limitType} limit, waiting ${fmtWait(waitMs)} (ETA ${eta})`);
+				console.log(`${A.yellow("⏸")} ${A.bold("Parked")} — ${parkSignal.limitType} limit, waiting ${fmtWait(waitMs)}${est} (ETA ${eta})`);
 				console.log(`  Items: ${pending.join(", ")}`);
 
 				const countdownInterval = setInterval(() => {
