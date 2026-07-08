@@ -39,9 +39,9 @@
 
 ### Format A — Checkbox list (simpler tracks)
 
-- [ ] **{{PFX-1}}** — {{One-line title}}. {{Short scope sentence.}} *(scope: S)*
-- [ ] **{{PFX-2}}** — {{Title}}. {{Scope}} *(scope: M, depends on {{PFX-1}})*
-- [x] **{{PFX-0}}** — {{Completed title}} *(2026-04-11)*
+- [ ] **{{PFX-1}}. {{One-line title}}** — {{Short scope sentence.}} *(scope: S)*
+- [ ] **{{PFX-2}}. {{Title}}** — {{Scope}} *(scope: M, depends on {{PFX-1}})*
+- [x] **{{PFX-0}}. {{Completed title}}** — Completed. *(2026-04-11)*
 
 ---
 

@@ -718,6 +718,27 @@ describe("MarkdownRoadmap — checkbox-format roadmap", () => {
 		const lastMsg = execSync("git log -1 --format=%s", { cwd: repo, encoding: "utf-8" }).trim();
 		assert.match(lastMsg, /docs: mark A-54 done — landed/);
 	});
+
+	// Regression for issue #53: roadmap-example.md's Format A checkbox rows
+	// must match parseCheckboxRows (ID + period inside the bold), or a
+	// consumer seeding a roadmap from the template gets rows /pick can't see.
+	it("listOpenItems and getItem see the roadmap-example.md Format A checkbox shape", async () => {
+		const repo = seedRepo();
+		seedFile(
+			repo,
+			"docs/roadmap-release.md",
+			["# Release", "", "- [ ] **PFX-1. One-line title** — Short scope sentence. *(scope: S)*", "- [ ] **PFX-2. Title** — Scope *(scope: M, depends on PFX-1)*", "- [x] **PFX-0. Completed title** — Completed. *(2026-04-11)*", ""].join("\n"),
+		);
+		execSync("git add -A && git commit -q -m seed", { cwd: repo });
+		const r = new MarkdownRoadmap({ repo });
+		const open = await r.listOpenItems();
+		assert.deepEqual(
+			open.map((i) => i.id),
+			["PFX-1", "PFX-2"],
+		);
+		const item = await r.getItem("PFX-1");
+		assert.equal(item?.title, "One-line title");
+	});
 });
 
 describe("MarkdownRoadmap — alt task-index filename (fathom)", () => {
