@@ -333,6 +333,16 @@ export function classifyStepError(errMsg: string, parked: boolean): string {
 	return "error_sdk";
 }
 
+const FATAL_SDK_ERROR_RE = /\b(?:invalid api key|authentication|unauthorized|forbidden|permission|bad request|40[0-9]|422)\b/i;
+const TRANSIENT_SDK_ERROR_RE = /\b(?:internal server error|overloaded|temporarily unavailable|service unavailable|ECONNRESET|ETIMEDOUT|ECONNREFUSED|socket hang up|fetch failed)\b/i;
+const TRANSIENT_SDK_STATUS_RE = /(?<!\$)\b(?:500|502|503|504)\b(?!\s*(?:files?|cost|usd|dollars?))/i;
+
+export function isTransientSdkError(result: Pick<StepResult, "subtype" | "text">): boolean {
+	if (result.subtype !== "error_sdk") return false;
+	if (FATAL_SDK_ERROR_RE.test(result.text)) return false;
+	return TRANSIENT_SDK_ERROR_RE.test(result.text) || TRANSIENT_SDK_STATUS_RE.test(result.text);
+}
+
 /**
  * Closed classification of a step outcome, used ONLY at pipeline decision points
  * (retry/park/ship branching). Distinct from the free-form `StepResult.subtype`

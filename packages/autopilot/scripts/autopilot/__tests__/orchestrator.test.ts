@@ -195,6 +195,19 @@ describe("runOrchestrator — worker continuation", () => {
 		assert.equal(exitCode, 1); // overall still non-zero because A-1 didn't complete
 	});
 
+	it("recoverable error ('transient sdk error') keeps worker pulling subsequent cycles", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({
+			byItem: {
+				"A-1": { completed: false, cost: 0, error: "transient sdk error" },
+				"A-2": { completed: true, cost: 0.1 },
+			},
+		});
+		const { exitCode } = await runOrchestrator({ ...baseFlags, item: "A-1,A-2" }, { runPipeline });
+		assert.equal(calls.length, 2);
+		assert.equal(exitCode, 1); // overall still non-zero because A-1 didn't complete
+	});
+
 	it("fatal error stops the worker and skips remaining items", async (t) => {
 		t.mock.method(console, "log", () => {});
 		const { runPipeline, calls } = createMockRunPipeline({

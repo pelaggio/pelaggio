@@ -394,6 +394,108 @@ describe("runPipeline — shakedown-plan turn-limit retry", () => {
 	});
 });
 
+describe("runPipeline — transient SDK retry", () => {
+	it("retries a transient SDK error and completes after success", async (t) => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const consoleLog = t.mock.method(console, "log", () => {});
+		const { runStep, calls } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": [
+					{ ok: false, subtype: "error_sdk", text: "Anthropic API error: 500 Internal server error" },
+					{ ok: true, text: "VERDICT: APPROVE" },
+				],
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				ship: {
+					ok: true,
+					text: "ship-merged: TOOL-99",
+					sideEffect: (cwd) => {
+						execSync("git checkout -q main", { cwd });
+						execSync("git merge -q --no-ff feat/tool-99", { cwd });
+						execSync("git checkout -q feat/tool-99", { cwd });
+					},
+				},
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
+			runStep,
+			mainRepo: worktree,
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+			runShipBookkeeping: noopBookkeeping,
+			sleep: async () => {},
+		});
+
+		assert.equal(result.completed, true);
+		assert.equal(result.verdict, "APPROVE");
+		assert.equal(calls.filter((c) => c.step === "shakedown-plan").length, 2);
+		assert.equal(
+			consoleLog.mock.calls.some((c) => String(c.arguments[0]).includes("transient SDK error in shakedown-plan")),
+			true,
+		);
+	});
+
+	it("returns a recoverable cycle error after transient SDK retries are exhausted", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const { runStep, calls } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": [
+					{ ok: false, subtype: "error_sdk", text: "service unavailable 503" },
+					{ ok: false, subtype: "error_sdk", text: "service unavailable 503" },
+					{ ok: false, subtype: "error_sdk", text: "service unavailable 503" },
+				],
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
+			runStep,
+			mainRepo: worktree,
+			listWorktrees: () => [],
+			appendLog: () => {},
+			sleep: async () => {},
+		});
+
+		assert.equal(calls.filter((c) => c.step === "shakedown-plan").length, 3);
+		assert.equal(result.completed, false);
+		assert.equal(result.error, "transient sdk error");
+		assert.equal(parkSignal.parked, false);
+	});
+
+	it("does not retry fatal SDK errors", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const { runStep, calls } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": { ok: false, subtype: "error_sdk", text: "401 invalid api key" },
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
+			runStep,
+			mainRepo: worktree,
+			listWorktrees: () => [],
+			appendLog: () => {},
+			sleep: async () => {},
+		});
+
+		assert.equal(calls.filter((c) => c.step === "shakedown-plan").length, 1);
+		assert.equal(result.completed, false);
+		assert.equal(result.error, "shakedown-plan failed");
+	});
+});
+
 describe("runPipeline — shakedown-code turn-limit retry", () => {
 	it("retries shakedown-code after error_max_turns and succeeds on attempt 2, marking retriedMaxTurns", async () => {
 		const worktree = makeTempGitRepo();
