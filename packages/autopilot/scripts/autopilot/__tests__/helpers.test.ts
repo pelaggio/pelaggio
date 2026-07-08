@@ -20,6 +20,7 @@ import {
 	getHeadSha,
 	hasDeliverableCommits,
 	isRefusal,
+	isTransientSdkError,
 	looksLikeRefusal,
 	looksLikeStalledAsk,
 	parseBlockedReason,
@@ -660,6 +661,47 @@ describe("classifyStepError", () => {
 
 	it("falls through to error_sdk for a generic message", () => {
 		assert.equal(classifyStepError("something else broke", false), "error_sdk");
+	});
+});
+
+describe("isTransientSdkError", () => {
+	it("matches transient provider and transport failures", () => {
+		for (const text of [
+			"Anthropic API error: 500 Internal server error",
+			"model overloaded, please try again",
+			"temporarily unavailable",
+			"service unavailable",
+			"read ECONNRESET",
+			"request ETIMEDOUT",
+			"connect ECONNREFUSED",
+			"socket hang up",
+			"fetch failed",
+			"upstream returned 502",
+			"status code 503",
+			"gateway timeout 504",
+		]) {
+			assert.equal(isTransientSdkError({ subtype: "error_sdk", text }), true, text);
+		}
+	});
+
+	it("does not match fatal provider/config/user failures", () => {
+		for (const text of ["invalid api key", "authentication failed", "unauthorized", "forbidden", "permission denied", "bad request", "status 400", "status 404", "unprocessable entity 422"]) {
+			assert.equal(isTransientSdkError({ subtype: "error_sdk", text }), false, text);
+		}
+	});
+
+	it("lets fatal exclusions win over transient-looking text", () => {
+		assert.equal(isTransientSdkError({ subtype: "error_sdk", text: "401 unauthorized; upstream also mentioned 500 Internal server error" }), false);
+	});
+
+	it("ignores non-sdk subtypes", () => {
+		assert.equal(isTransientSdkError({ subtype: "error_max_turns", text: "500 Internal server error" }), false);
+		assert.equal(isTransientSdkError({ subtype: "error_rate_limit", text: "service unavailable" }), false);
+	});
+
+	it("does not match arbitrary digit runs containing 500", () => {
+		assert.equal(isTransientSdkError({ subtype: "error_sdk", text: "changed 500 files successfully before crashing" }), false);
+		assert.equal(isTransientSdkError({ subtype: "error_sdk", text: "estimated $500 cost" }), false);
 	});
 });
 

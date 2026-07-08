@@ -19,6 +19,7 @@ import {
 	formatResumeHint,
 	getHeadSha,
 	hasDeliverableCommits,
+	isTransientSdkError,
 	listWorktrees as listWorktreesDefault,
 	parseDeferredItems,
 	parsePickItem,
@@ -58,10 +59,14 @@ export type { RunStepFn } from "./step-runner.js";
  */
 type StepAttempt = { kind: "ok"; result: StepResult } | { kind: "terminal"; cycleResult: CycleResult };
 
+const TRANSIENT_MAX_ATTEMPTS = 3;
+const TRANSIENT_BACKOFF_MS = 1000;
+
 export interface PipelineDeps {
 	runStep?: RunStepFn;
 	listWorktrees?: () => string[];
 	appendLog?: (entry: Record<string, unknown>) => void;
+	sleep?: (ms: number) => Promise<void>;
 	/** Override the main-repo path used for ghost-ship verification, pick cwd, and shipwreck cwd. Defaults to REPO. */
 	mainRepo?: string;
 	/** Override worktree-path derivation (mirrors OrchestratorDeps). Defaults to the helpers.ts export. */
@@ -76,6 +81,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	const runStep = deps.runStep ?? runStepDefault;
 	const listWorktrees = deps.listWorktrees ?? listWorktreesDefault;
 	const appendLog = deps.appendLog ?? appendLogDefault;
+	const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
 	const mainRepo = deps.mainRepo ?? REPO;
 	const _resolveWorktree = deps.resolveWorktree ?? resolveWorktree;
 	const roadmap = deps.roadmap ?? getRoadmapSource(ROADMAP_SOURCE, { repo: REPO, github: ROADMAP_GITHUB, linear: ROADMAP_LINEAR });
@@ -409,6 +415,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		// Attempt 2 can follow EITHER an edit_loop OR error_max_turns — track the prior
 		// failure so only genuine turn-exhaustion retries get marked `retriedMaxTurns`.
 		let prevMaxTurns = false;
+		let transientAttempts = 0;
 
 		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
 			const parked = parkExit();
@@ -442,6 +449,17 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				lastLoopFile = match?.[1]?.replace(/^.*[/\\]/, "") ?? null;
 				prevMaxTurns = false;
 				log(`edit loop on ${lastLoopFile ?? "unknown file"} — will retry with fresh approach`);
+				continue;
+			}
+			if (isTransientSdkError(result)) {
+				transientAttempts++;
+				if (transientAttempts >= TRANSIENT_MAX_ATTEMPTS) {
+					return { kind: "terminal", cycleResult: finish({ itemId, completed: false, cost, error: "transient sdk error" }) };
+				}
+				const backoffMs = TRANSIENT_BACKOFF_MS * 2 ** (transientAttempts - 1);
+				log(`transient SDK error in ${cfg.name} (attempt ${transientAttempts}/${TRANSIENT_MAX_ATTEMPTS - 1}) — retrying after ${backoffMs / 1000}s`);
+				await sleep(backoffMs);
+				attempt--;
 				continue;
 			}
 			if (outcome !== "error_max_turns") {
