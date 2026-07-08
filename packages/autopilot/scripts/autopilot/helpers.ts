@@ -3,6 +3,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { LOG_PATH, REPO, STEPS, WORKTREE_PREFIX } from "./config.js";
 import { MarkdownRoadmap } from "./roadmap/markdown.js";
+import type { RoadmapSource } from "./roadmap/types.js";
 import type { Mutex, Step, StepResult } from "./types.js";
 
 // ── Skill loading ──────────────────────────────────────────────────────
@@ -180,6 +181,25 @@ export function reviewFindingsPreamble(findings: string): string {
 		"### Review findings",
 		clipped,
 	].join("\n");
+}
+
+/**
+ * Build the `plan` step's skill arguments (#103). Prefixed with `autopilot` (the pipeline-mode
+ * gate) plus the item's requirements fetched in-harness — so a sandboxed provider (Codex: no
+ * network, roadmap CLI dies on tsx-IPC) plans against the real issue instead of running `roadmap
+ * get` / `gh issue view` itself. When the adapter carries no body (markdown), `sourceRef` names a
+ * locally-readable file the model can open. `getItem` failure degrades to the bare `autopilot` gate.
+ */
+export async function buildPlanArgs(roadmap: RoadmapSource, itemId: string): Promise<string> {
+	const item = await roadmap.getItem(itemId).catch(() => null);
+	const lines = ["autopilot"];
+	if (item) {
+		lines.push("", "## Roadmap item context (provided by the harness — do NOT run `roadmap get` / `gh issue view`)", `ID: ${item.id}`, `Title: ${item.title}`);
+		if (item.deps && item.deps !== "—") lines.push(`Depends on: ${item.deps}`);
+		lines.push(`sourceRef: ${item.sourceRef}`);
+		lines.push("", item.body?.trim() || "(No body from the adapter — if `sourceRef` names a local file, read it for the full spec.)");
+	}
+	return lines.join("\n");
 }
 
 // ── Refusal & error classification ─────────────────────────────────────

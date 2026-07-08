@@ -97,6 +97,7 @@ export class GitHubIssuesRoadmap implements RoadmapSource {
 				deps: extractDeps(it.body ?? ""),
 				sourceRef: `${this.ghRepo}#${it.number}`,
 				status,
+				body: it.body ?? "",
 			};
 		} catch (e) {
 			const msg = e instanceof Error ? e.message : String(e);
