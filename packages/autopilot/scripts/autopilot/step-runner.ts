@@ -4,13 +4,27 @@ import type { HookInput, HookJSONOutput, SDKAssistantMessage, SDKRateLimitEvent,
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { codexProvider } from "./codex-provider.js";
 import { CONFIG, REPO, resolveStepSettings } from "./config.js";
-import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseWaitFlag, resolveParkReset } from "./helpers.js";
-import { composeSystemAppend, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "./step-runner-shared.js";
+import { classifyStepError, isRefusal, listWorktrees, looksLikeStalledAsk, parseBlockedReason, parseWaitFlag, resolveParkReset } from "./helpers.js";
+import {
+	composeSystemAppend,
+	confinementViolations,
+	EDIT_LOOP_EXEMPT_STEPS,
+	EDIT_LOOP_THRESHOLD,
+	insideAny,
+	isWorktreePath,
+	mutationTargets,
+	type PathSnapshot,
+	realResolve,
+	safeRealpath,
+	snapshotPath,
+	worktreeConfinementBlock,
+} from "./step-runner-shared.js";
 import { MUTATING_TOOLS, toolBrief } from "./tui.js";
 import type { ParkSignal, ProviderName, Step, StepEmit, StepResult, TokenUsage } from "./types.js";
 import { ensureWorktreeDeps } from "./worktree-deps.js";
 
-export { composeSystemAppend, isWorktreePath } from "./step-runner-shared.js";
+export type { ConfinementCtx } from "./step-runner-shared.js";
+export { composeSystemAppend, confinementViolations, insideAny, isWorktreePath, mutationTargets, type PathSnapshot, realResolve, safeRealpath, snapshotChanged, snapshotPath, worktreeConfinementBlock } from "./step-runner-shared.js";
 
 // ── Step runner ────────────────────────────────────────────────────────
 
@@ -158,8 +172,29 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 	const planBlockActive = name === "implement";
 	const systemAppend = composeSystemAppend({ isWorktree, cwd: opts.cwd, repo: REPO, planBlockActive });
 
-	const mainAbs = resolve(REPO) + "/";
 	const worktreeCwd = resolve(opts.cwd);
+
+	// Worktree write-confinement: the set of workspaces this step must not mutate —
+	// the main repo and every sibling worktree, real-path resolved, minus this one.
+	// Computed once per step (when isWorktree); drives both the PreToolUse block below
+	// (prevention) and the post-step filesystem assertion (the hard backstop). The main
+	// repo is always included as a floor even if `git worktree list` fails.
+	const forbiddenRoots: string[] = [];
+	if (isWorktree) {
+		const worktreeReal = safeRealpath(worktreeCwd);
+		try {
+			for (const w of listWorktrees().map(safeRealpath)) {
+				if (w !== worktreeReal && !forbiddenRoots.includes(w)) forbiddenRoots.push(w);
+			}
+		} catch {}
+		const repoReal = safeRealpath(resolve(REPO));
+		if (repoReal !== worktreeReal && !forbiddenRoots.includes(repoReal)) forbiddenRoots.push(repoReal);
+	}
+	const confCtx = { worktreeCwd, forbiddenRoots };
+	// Foreign paths this step's tool calls referenced, snapshotted on first sight
+	// (before the tool runs) for the post-step confinement assertion.
+	const baselines = new Map<string, PathSnapshot>();
+
 	const hooks =
 		isWorktree || planBlockActive
 			? {
@@ -167,31 +202,12 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 						{
 							hooks: [
 								async (input: HookInput): Promise<HookJSONOutput> => {
-									const tn = "tool_name" in input ? String(input.tool_name) : "";
-									const ti = ("tool_input" in input ? input.tool_input : {}) as Record<string, unknown>;
+									if (isWorktree) {
+										const confOut = worktreeConfinementBlock(input, confCtx);
+										if (confOut.decision === "block") return confOut;
 
-									if (isWorktree && (tn === "Write" || tn === "Edit")) {
-										const fp = String(ti.file_path ?? "");
-										if (fp.startsWith(mainAbs)) {
-											const rel = fp.slice(mainAbs.length);
-											return {
-												decision: "block" as const,
-												reason: `Path "${fp}" targets main repo. Use "${resolve(worktreeCwd, rel)}" instead.`,
-											};
-										}
-									}
-
-									if (isWorktree && tn === "Bash") {
 										const installOut = blockWorktreeInstall(input);
 										if (installOut.decision === "block") return installOut;
-
-										const cmd = String(ti.command ?? "");
-										if (cmd.includes(mainAbs) && !cmd.includes(worktreeCwd)) {
-											return {
-												decision: "block" as const,
-												reason: `Command references main repo "${REPO}". Use worktree "${opts.cwd}" paths instead.`,
-											};
-										}
 									}
 
 									if (planBlockActive) {
@@ -311,6 +327,19 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 					if (block.type === "tool_use" && "name" in block) {
 						const toolName = (block as { name: string }).name;
 						const input = (block as { input: Record<string, unknown> }).input;
+
+						// Confinement backstop: snapshot any foreign path this call references,
+						// on first sight — which (by SDK ordering) is before the tool runs — so a
+						// later modification is detectable in the post-step assertion below.
+						if (isWorktree) {
+							for (const cand of mutationTargets(toolName, input)) {
+								const real = realResolve(cand, worktreeCwd);
+								if (insideAny(real, forbiddenRoots) && !baselines.has(real)) {
+									baselines.set(real, snapshotPath(real));
+								}
+							}
+						}
+
 						if (input.command) fullText += String(input.command) + "\n";
 						if (input.description) fullText += String(input.description) + "\n";
 						const brief = toolBrief(toolName, input);
@@ -391,6 +420,24 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 		ok = false;
 		subtype = "edit_loop";
 		text = `Edit loop detected: ${loopFile} edited ${editCounts.get(loopFile)} times`;
+	}
+
+	// Worktree confinement backstop — the hard, non-advisory assertion. Re-stat the
+	// foreign paths this step's tool calls referenced; any that were actually created
+	// or modified mean an escape happened (the hook's block was ineffective or a gap
+	// let it through). Gated on `!parked` so a rate-limit park still checkpoints
+	// cleanly (the park owns ok/subtype). Errs toward false negatives, not false
+	// failures of legitimate steps. `error_confinement` collapses to a terminal,
+	// non-recoverable "error" via classifyOutcome / RECOVERABLE_ERRORS — no pipeline change.
+	if (isWorktree && !opts.parkSignal.parked && baselines.size > 0) {
+		const escaped = confinementViolations(baselines);
+		if (escaped.length > 0) {
+			ok = false;
+			subtype = "error_confinement";
+			const list = escaped.join(", ");
+			text = `Worktree confinement breach: this step created or modified files outside its worktree: ${list}`;
+			emit({ type: "sdk_error", message: `worktree confinement breach — foreign paths modified: ${list}` });
+		}
 	}
 
 	// Structured stall contract (AUTONOMY_APPEND): a step that self-reports it can't
