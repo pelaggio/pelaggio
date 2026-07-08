@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { isIP } from "node:net";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,8 +22,16 @@ function required(name: string, value: string | undefined): string {
 }
 
 function isLoopbackHost(host: string): boolean {
-	// 127.0.0.0/8 is loopback in its entirety; ::1 is the sole IPv6 loopback.
-	return host === "localhost" || host === "::1" || host.startsWith("127.");
+	// Classify by parsed IP literal, not string prefix. A hostname like
+	// "127.example.com" must NOT count as loopback: Node resolves hostnames before
+	// binding, so a "127."-prefixed name can map to a routable address. Loopback is
+	// a valid 127.0.0.0/8 IPv4 literal, the ::1 IPv6 literal, or the exact host
+	// "localhost".
+	if (host === "localhost") return true;
+	const kind = isIP(host);
+	if (kind === 4) return host.startsWith("127.");
+	if (kind === 6) return host === "::1";
+	return false;
 }
 
 // Resolved relative to this file: packages/server/src/ → ../../web/dist = packages/web/dist
