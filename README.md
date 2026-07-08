@@ -168,14 +168,19 @@ optionally `.claude-templates/` into your own repo — see
 
 Copyright © 2026 Chris Horne.
 
-Licensed under the **GNU Affero General Public License v3.0**
-(`AGPL-3.0-only`) — see [`LICENSE`](./LICENSE). The AGPL's network-use clause
-requires that anyone who runs a modified version as a network service make the
-corresponding source available under the same terms.
+The entire project — the CLI and pipeline (`packages/autopilot/`,
+`.claude/skills/`), the control-plane daemon (`packages/server/`), and the web
+UI (`packages/web/`) — is licensed under the **Functional Source License,
+Version 1.1, Apache 2.0 Future License** (`FSL-1.1-ALv2`) — see
+[`LICENSE`](./LICENSE). FSL lets you use, modify, self-host, and redistribute the
+Software for any purpose that is not a **Competing Use** (offering it to others
+as a substitute product or service). Internal use, non-commercial education and
+research, and professional services are all expressly permitted. Two years after
+each release, that version converts to Apache 2.0.
 
-**Commercial licensing:** the AGPL is not the only option. A separate
-commercial license (without the AGPL's copyleft obligations) is available from
-the copyright holder on request.
+The control-plane daemon and web UI are the substrate for a future managed /
+remote-control offering; FSL's Competing-Use clause reserves that commercial
+right while still letting you self-host the whole stack.
 
 Contributions are accepted under the [Developer Certificate of Origin](./DCO);
 see [`CONTRIBUTING.md`](./CONTRIBUTING.md) for the required `Signed-off-by`
