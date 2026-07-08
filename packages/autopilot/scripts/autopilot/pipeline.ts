@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { CONFIG, DEFAULT_SHIP_TARGET, isPipelineStep, LOG_PATH, MODEL_PROFILES, REPO, REVISE_LOCAL, ROADMAP_GITHUB, ROADMAP_LINEAR, ROADMAP_SOURCE, resolveStepSettings, SHIP_TARGET, STEPS, WORKTREE_PREFIX } from "./config.js";
 import {
 	appendLog as appendLogDefault,
-	buildPlanArgs,
+	buildStepArgs,
 	canRetryWithinBudget,
 	captureShipState,
 	checkpoint,
@@ -19,6 +19,7 @@ import {
 	getHeadSha,
 	hasDeliverableCommits,
 	listWorktrees as listWorktreesDefault,
+	parseDeferredItems,
 	parsePickItem,
 	parsePickResult,
 	parseShipMerged,
@@ -424,7 +425,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			// model (Codex) can't run `roadmap get` / `gh issue view` (no network, and the roadmap CLI
 			// dies on tsx-IPC in the sandbox), so it would otherwise plan blind. The harness has an
 			// injected RoadmapSource with network access — fetch here and pass it in.
-			const planArgs = await buildPlanArgs(roadmap, itemId!);
+			const planArgs = await buildStepArgs(roadmap, itemId!);
 			const outcome = await runStepWithRetry({
 				name: "plan",
 				stepBudget: resolveStepSettings(CONFIG, profile, "plan").budget,
@@ -457,10 +458,11 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	}
 
 	if (shouldRun("shakedown-plan")) {
+		const shakedownPlanArgs = await buildStepArgs(roadmap, itemId!, "plan-review");
 		const outcome = await runStepWithRetry({
 			name: "shakedown-plan",
 			stepBudget: resolveStepSettings(CONFIG, profile, "shakedown-plan").budget,
-			buildPrompt: () => expandSkill("shakedown", "autopilot plan-review"),
+			buildPrompt: () => expandSkill("shakedown", shakedownPlanArgs),
 			logAttempt: (attempt) => log(attempt === 1 ? "shakedown (plan)..." : "continuing shakedown-plan (attempt 2)..."),
 			refusedError: "shakedown-plan refused (model declined the review)",
 		});
@@ -587,7 +589,10 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 
 	if (shouldRun("shakedown-code")) {
 		const planPath = await roadmap.getItemPlan({ worktree: worktree! });
-		const shakedownPlanRef = planPath ? `Read the plan at \`${planPath}\` and the roadmap entry for ${itemId} to understand the scope.` : `Find the plan in \`${resolve(REPO, "docs", "plans")}/\` or the roadmap entry for ${itemId}.`;
+		// The retry (attempt 2) points at the plan file only — NOT "the roadmap entry", which a
+		// sandboxed provider can't fetch (#103/#115); the plan already carries the scope.
+		const shakedownPlanRef = planPath ? `Read the plan at \`${planPath}\` to understand the scope.` : `Find the plan in \`${resolve(REPO, "docs", "plans")}/\`.`;
+		const shakedownCodeArgs = await buildStepArgs(roadmap, itemId!, "code-review");
 
 		const outcome = await runStepWithRetry({
 			name: "shakedown-code",
@@ -598,7 +603,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			logAttempt: (attempt) => log(attempt === 1 ? "shakedown (code)..." : "continuing shakedown (attempt 2)..."),
 			buildPrompt: (attempt) =>
 				attempt === 1
-					? expandSkill("shakedown", "autopilot code-review")
+					? expandSkill("shakedown", shakedownCodeArgs)
 					: [
 							"The previous shakedown session ran out of turns. Work has been committed to disk.",
 							"",
@@ -609,11 +614,26 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 							"1. Run the verification commands from `.claude/skills/_rubric.md`'s Verification section to see the current state.",
 							"2. Check what's already been fixed vs. what remains.",
 							"3. Focus on fix-now items only (type errors, test failures, lint errors, bugs).",
-							"4. Skip near-term items (missing tests, i18n gaps, refactoring) — add them as deferred to the roadmap.",
+							'4. Skip near-term items (missing tests, i18n gaps, refactoring) — list each as a `deferred-item: {"title": "...", "scope": "..."}` marker line; the harness creates them (do not run `roadmap create-item`).',
 							"5. Re-run the verification commands before finishing.",
 						].join("\n"),
 		});
 		if (outcome.kind === "terminal") return outcome.cycleResult;
+
+		// Harness owns deferred-item creation (#115): under autopilot the model lists follow-ups as
+		// `deferred-item: {json}` markers instead of running `roadmap create-item` (a sandboxed
+		// provider can't). Create them in-process, best-effort — a failure logs and continues (they're
+		// backlog niceties, not the cycle's deliverable). Skipped in dry-run (no real backlog writes).
+		if (!opts.dryRun) {
+			for (const d of parseDeferredItems(outcome.result.fullText)) {
+				try {
+					const created = await roadmap.createItem(d);
+					log(`deferred → ${created.id}: ${d.title}`);
+				} catch (e) {
+					log(`deferred-item create failed (non-fatal): ${e instanceof Error ? e.message : String(e)}`);
+				}
+			}
+		}
 	}
 
 	// ── Ship ──

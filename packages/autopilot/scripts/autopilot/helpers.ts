@@ -3,7 +3,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { LOG_PATH, REPO, STEPS, WORKTREE_PREFIX } from "./config.js";
 import { MarkdownRoadmap } from "./roadmap/markdown.js";
-import type { RoadmapSource } from "./roadmap/types.js";
+import type { CreateItemOpts, RoadmapSource } from "./roadmap/types.js";
 import type { Mutex, Step, StepResult } from "./types.js";
 
 // ── Skill loading ──────────────────────────────────────────────────────
@@ -184,31 +184,68 @@ export function reviewFindingsPreamble(findings: string): string {
 }
 
 /** Generous cap on the injected item body — the spec is more load-bearing than review findings
- *  (`REVIEW_FINDINGS_MAX`), but a 65 KiB GitHub issue body shouldn't blow the plan prompt. */
-const PLAN_BODY_MAX = 16_000;
+ *  (`REVIEW_FINDINGS_MAX`), but a 65 KiB GitHub issue body shouldn't blow the prompt. */
+const STEP_BODY_MAX = 16_000;
 
 /**
- * Build the `plan` step's skill arguments (#103). Prefixed with `autopilot` (the pipeline-mode
- * gate) plus the item's requirements fetched in-harness — so a provider whose sandbox can't fetch
- * them (Codex: no network, roadmap CLI dies on tsx-IPC) plans against the real issue instead of
- * running `roadmap get` / `gh issue view` itself. Runs for ALL providers (Claude also gets the
- * block and skips its own fetch); load-bearing for sandboxed ones. Only the github-issues adapter
- * carries a `body` today; for adapters without one (markdown), `sourceRef` names a locally-readable
- * file the model can open. `getItem` failure degrades to the bare `autopilot` gate (the model still
- * recovers the id from the branch name per the skill).
+ * Build a step's skill arguments (#103, #115). Prefixed with the `autopilot` pipeline-mode gate
+ * (plus `mode`, e.g. `plan-review` / `code-review` for shakedown) and the item's requirements
+ * fetched in-harness — so a provider whose sandbox can't fetch them (Codex: no network, roadmap CLI
+ * dies on tsx-IPC) works against the real issue instead of running `roadmap get` / `gh issue view`
+ * itself. Runs for ALL providers (Claude also gets the block and skips its own fetch); load-bearing
+ * for sandboxed ones. Only github-issues carries a `body` today; for adapters without one
+ * (markdown), `sourceRef` names a locally-readable file. `getItem` failure degrades to the bare gate
+ * (the model still recovers the id from the branch name per the skill).
  */
-export async function buildPlanArgs(roadmap: RoadmapSource, itemId: string): Promise<string> {
+export async function buildStepArgs(roadmap: RoadmapSource, itemId: string, mode?: string): Promise<string> {
 	const item = await roadmap.getItem(itemId).catch(() => null);
-	const lines = ["autopilot"];
+	const lines = [mode ? `autopilot ${mode}` : "autopilot"];
 	if (item) {
 		lines.push("", "## Roadmap item context (provided by the harness — do NOT run `roadmap get` / `gh issue view`)", `ID: ${item.id}`, `Title: ${item.title}`);
 		if (item.deps && item.deps !== "—") lines.push(`Depends on: ${item.deps}`);
 		lines.push(`sourceRef: ${item.sourceRef}`);
 		const body = item.body?.trim();
-		if (body) lines.push("", body.length > PLAN_BODY_MAX ? `${body.slice(0, PLAN_BODY_MAX)}\n…(truncated — read \`${item.sourceRef}\` for the full spec)` : body);
+		if (body) lines.push("", body.length > STEP_BODY_MAX ? `${body.slice(0, STEP_BODY_MAX)}\n…(truncated — read \`${item.sourceRef}\` for the full spec)` : body);
 		else lines.push("", "(No body from the adapter — if `sourceRef` names a local file, read it for the full spec.)");
 	}
 	return lines.join("\n");
+}
+
+/**
+ * Parse `deferred-item: {json}` markers a shakedown-code step emits (#115). Under autopilot the
+ * model lists deferred follow-ups as these markers instead of running `roadmap create-item` itself
+ * (a sandboxed provider can't); the harness creates them post-step. One JSON object per line:
+ * `{ "title": "...", "scope"?: "XS|S|M|L|XL", "deps"?: "A, B" }`. Malformed/title-less lines are
+ * skipped; every item is flagged `deferred: true`.
+ */
+export function parseDeferredItems(text: string): CreateItemOpts[] {
+	const SCOPES = new Set(["XS", "S", "M", "L", "XL"]);
+	const items: CreateItemOpts[] = [];
+	const seen = new Set<string>(); // dedup by title — createItem isn't idempotent (unlike publishPlan)
+	for (const m of text.matchAll(/^[ \t]*deferred-item:[ \t]*(\{.*\})[ \t]*$/gim)) {
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(m[1]);
+		} catch {
+			continue;
+		}
+		if (!parsed || typeof parsed !== "object") continue;
+		const rec = parsed as Record<string, unknown>;
+		const title = typeof rec.title === "string" ? rec.title.trim() : "";
+		if (!title || seen.has(title.toLowerCase())) continue;
+		seen.add(title.toLowerCase());
+		const scopeRaw = typeof rec.scope === "string" ? rec.scope.toUpperCase() : "";
+		const scope = SCOPES.has(scopeRaw) ? (scopeRaw as CreateItemOpts["scope"]) : undefined;
+		const deps =
+			typeof rec.deps === "string"
+				? rec.deps
+						.split(",")
+						.map((s) => s.trim())
+						.filter(Boolean)
+				: undefined;
+		items.push({ title, ...(scope ? { scope } : {}), ...(deps && deps.length > 0 ? { deps } : {}), deferred: true });
+	}
+	return items;
 }
 
 // ── Refusal & error classification ─────────────────────────────────────

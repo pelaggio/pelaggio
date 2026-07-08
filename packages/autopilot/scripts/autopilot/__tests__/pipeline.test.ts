@@ -832,6 +832,66 @@ describe("runPipeline — RoadmapSource injection", () => {
 		assert.match(planPrompt, /the real spec goes here/, "the injected issue body must reach the plan prompt");
 		assert.match(planPrompt, /do NOT run `roadmap get`/);
 	});
+
+	it("harness creates deferred items from shakedown-code markers (#115)", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const created: Array<{ title: string; scope?: string; deferred?: boolean }> = [];
+		const planFile = `${worktree}/docs/plans/plan.md`;
+		let planned = false;
+		const roadmap = makeMockRoadmap({
+			async getItemPlan() {
+				return planned ? planFile : null;
+			},
+			async getItem() {
+				return { id: "TOOL-99", title: "t", deps: "—", sourceRef: "o/r#99", status: "open", body: "spec" };
+			},
+			resolvePlanPath: () => planFile,
+			async publishPlan() {
+				planned = true;
+			},
+			async createItem(opts) {
+				created.push(opts);
+				return { id: `NEW-${created.length}`, title: opts.title, deps: "", sourceRef: "mock" };
+			},
+		});
+		const { runStep } = createMockRunStep(
+			{
+				plan: { ok: true, writes: { "docs/plans/plan.md": "# Plan\nx" } },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true, text: 'Review complete.\ndeferred-item: {"title": "Add retries", "scope": "S"}\ndeferred-item: {"title": "Doc the flag"}' },
+				ship: {
+					ok: true,
+					text: "ship-merged: TOOL-99",
+					sideEffect: (cwd) => {
+						execSync("git checkout -q main", { cwd });
+						execSync("git merge -q --no-ff feat/tool-99", { cwd });
+						execSync("git checkout -q feat/tool-99", { cwd });
+					},
+				},
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
+			runStep,
+			roadmap,
+			mainRepo: worktree,
+			listWorktrees: () => [],
+			appendLog: () => {},
+			runShipBookkeeping: noopBookkeeping,
+		});
+
+		assert.equal(result.completed, true);
+		assert.equal(created.length, 2, "harness creates both deferred items from the markers");
+		assert.equal(created[0].title, "Add retries");
+		assert.equal(created[0].scope, "S");
+		assert.ok(
+			created.every((c) => c.deferred === true),
+			"deferred items are flagged deferred:true",
+		);
+	});
 });
 
 describe("runPipeline — rate-limit park preserves state", () => {

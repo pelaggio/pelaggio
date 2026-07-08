@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { describe, it } from "node:test";
 import {
-	buildPlanArgs,
+	buildStepArgs,
 	canRetryWithinBudget,
 	checkpoint,
 	classifyOutcome,
@@ -22,6 +22,7 @@ import {
 	looksLikeRefusal,
 	looksLikeStalledAsk,
 	parseBlockedReason,
+	parseDeferredItems,
 	parsePickItem,
 	parsePickResult,
 	parseResetTime,
@@ -185,23 +186,33 @@ describe("revertPlanPolish", () => {
 	});
 });
 
-describe("buildPlanArgs (#103)", () => {
+describe("buildStepArgs (#103, #115)", () => {
 	const mk = (getItem: RoadmapSource["getItem"]) => ({ getItem }) as unknown as RoadmapSource;
 
 	it("injects title + body + the do-not-fetch gate for an item with a body", async () => {
-		const args = await buildPlanArgs(
+		const args = await buildStepArgs(
 			mk(async () => ({ id: "45", title: "Do the thing", deps: "—", sourceRef: "o/r#45", status: "open", body: "## Requirements\nthe full spec" })),
 			"45",
 		);
-		assert.match(args, /^autopilot/);
+		assert.match(args, /^autopilot\n/);
 		assert.match(args, /do NOT run `roadmap get`/);
 		assert.match(args, /Title: Do the thing/);
 		assert.match(args, /the full spec/);
 		assert.match(args, /sourceRef: o\/r#45/);
 	});
 
+	it("carries the mode into the gate line (shakedown code-review)", async () => {
+		const args = await buildStepArgs(
+			mk(async () => ({ id: "7", title: "t", deps: "—", sourceRef: "o/r#7", status: "open", body: "spec" })),
+			"7",
+			"code-review",
+		);
+		assert.match(args, /^autopilot code-review\n/);
+		assert.match(args, /Title: t/);
+	});
+
 	it("emits a read-the-sourceRef note when the adapter gives no body (markdown)", async () => {
-		const args = await buildPlanArgs(
+		const args = await buildStepArgs(
 			mk(async () => ({ id: "T-1", title: "x", deps: "—", sourceRef: "docs/roadmap-x.md", status: "open" })),
 			"T-1",
 		);
@@ -209,14 +220,55 @@ describe("buildPlanArgs (#103)", () => {
 		assert.match(args, /read it for the full spec/);
 	});
 
-	it("degrades to the bare `autopilot` gate when getItem throws (e.g. no network)", async () => {
-		const args = await buildPlanArgs(
+	it("degrades to the bare gate (with mode) when getItem throws (e.g. no network)", async () => {
+		const args = await buildStepArgs(
 			mk(async () => {
 				throw new Error("no network");
 			}),
 			"9",
+			"plan-review",
 		);
-		assert.equal(args, "autopilot");
+		assert.equal(args, "autopilot plan-review");
+	});
+});
+
+describe("parseDeferredItems (#115)", () => {
+	it("parses deferred-item markers into CreateItemOpts with deferred:true", () => {
+		const text = ["Some review prose.", 'deferred-item: {"title": "Add retries", "scope": "S", "deps": "T-1, T-2"}', 'deferred-item: {"title": "Doc the flag"}', "more prose"].join("\n");
+		const items = parseDeferredItems(text);
+		assert.equal(items.length, 2);
+		assert.deepEqual(items[0], { title: "Add retries", scope: "S", deps: ["T-1", "T-2"], deferred: true });
+		assert.deepEqual(items[1], { title: "Doc the flag", deferred: true });
+	});
+
+	it("skips malformed JSON, title-less, and invalid-scope entries gracefully", () => {
+		const text = [
+			"deferred-item: {not json}",
+			'deferred-item: {"scope": "M"}', // no title
+			'deferred-item: {"title": "  "}', // blank title
+			'deferred-item: {"title": "Keep", "scope": "HUGE"}', // invalid scope dropped, item kept
+		].join("\n");
+		const items = parseDeferredItems(text);
+		assert.deepEqual(items, [{ title: "Keep", deferred: true }]);
+	});
+
+	it("returns [] when there are no markers", () => {
+		assert.deepEqual(parseDeferredItems("just a normal review with no deferrals"), []);
+	});
+
+	it("handles a `}` inside a string value and normalizes lowercase scope", () => {
+		const items = parseDeferredItems('deferred-item: {"title": "fix the } brace", "scope": "s"}');
+		assert.deepEqual(items, [{ title: "fix the } brace", scope: "S", deferred: true }]);
+	});
+
+	it("does not match a mid-line/prose mention of deferred-item: (line-anchored)", () => {
+		assert.deepEqual(parseDeferredItems('The reviewer said deferred-item: {"title": "X"} inline in a sentence.'), []);
+	});
+
+	it("dedups by title (createItem is not idempotent)", () => {
+		const items = parseDeferredItems(['deferred-item: {"title": "Add retries"}', 'deferred-item: {"title": "add retries", "scope": "M"}'].join("\n"));
+		assert.equal(items.length, 1, "case-insensitive title dedup keeps the first");
+		assert.equal(items[0].title, "Add retries");
 	});
 });
 
