@@ -417,8 +417,8 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	let shakedownPlanText = "";
 
 	if (shouldRun("plan")) {
-		const existingPlan = await roadmap.getItemPlan({ worktree: worktree! });
-		if (existingPlan) {
+		const existingPlan = roadmap.resolvePlanPath({ id: itemId!, worktree: worktree! });
+		if (!opts.dryRun && existsSync(existingPlan)) {
 			log(`plan exists at ${existingPlan} — skipping plan generation`);
 		} else {
 			// Inject the item's requirements into the plan prompt in the harness (#103): a sandboxed

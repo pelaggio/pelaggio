@@ -276,6 +276,19 @@ describe("LinearRoadmap.getItemPlan", () => {
 		assert.equal(calls.getIssueComments.length, 0);
 	});
 
+	it("prefers the supplied worktree plan over a repo-local stale plan without any api comment call", async () => {
+		const repo = seedRepo();
+		const worktree = seedRepo();
+		seedFile(repo, ".dev/plans/eng-42.md", "OLD");
+		seedFile(worktree, ".dev/plans/eng-42.md", "NEW");
+		const { api, calls } = makeStub({});
+		const r = mk({ repo, api });
+		const path = await r.getItemPlan({ id: "ENG-42", worktree });
+		assert.equal(path, resolve(worktree, ".dev", "plans", "eng-42.md"));
+		assert.equal(readFileSync(path!, "utf-8"), "NEW");
+		assert.equal(calls.getIssueComments.length, 0);
+	});
+
 	it("reads issue comment when no local file, writes .dev/plans/<id>.md, strips marker", async () => {
 		const repo = seedRepo();
 		const planBody = "# Plan for ENG-42\n\nSteps go here.\n";
