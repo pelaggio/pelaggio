@@ -255,8 +255,16 @@ export class MarkdownRoadmap implements RoadmapSource {
 		const scope = opts.scope ?? "M";
 		const title = opts.title;
 
-		// Detect format: table vs checkbox.
-		const format = opts.format ?? detectFormat(body);
+		// Format: an explicit --format is honored only when the file has no ESTABLISHED format yet
+		// (a fresh bootstrap / empty / prose file). On a file that already has table or checkbox
+		// rows, that format wins — overriding it would splice in a row of the other kind, yielding a
+		// mixed-format file whose rows `markDone` can't locate (the item would be stuck open). A
+		// conflicting --format is rejected loudly rather than silently corrupting the file (#45).
+		const established = establishedFormat(body);
+		if (opts.format && established && opts.format !== established) {
+			throw new Error(`createItem: --format ${opts.format} conflicts with the established ${established} format of ${targetFile}; omit --format to append in the existing format`);
+		}
+		const format = established ?? opts.format ?? "table";
 		let updated = body;
 		if (format === "table") {
 			const row = `| ${id}. ${title} | ${deps} |`;
@@ -541,10 +549,19 @@ function moveToCompleted(body: string, id: string): string {
 	return lines.join("\n");
 }
 
-function detectFormat(body: string): "table" | "checkbox" {
+/** The format a file has ALREADY committed to (a real table header or checkbox row), or null when
+ *  none is detectable (empty / prose / a bare skeleton). Distinct from `detectFormat`'s `"table"`
+ *  fallback so create-item can tell "no established format → honor --format" from "established
+ *  table → --format must not override it" (#45 review: overriding produces a mixed-format file whose
+ *  rows `markDone` can't locate, leaving the item unmarkable). */
+function establishedFormat(body: string): "table" | "checkbox" | null {
 	if (/^\|\s*Item\s*\|\s*Depends on\s*\|/m.test(body)) return "table";
 	if (/^-\s+\[[ x]\]\s+\*\*/m.test(body)) return "checkbox";
-	return "table";
+	return null;
+}
+
+function detectFormat(body: string): "table" | "checkbox" {
+	return establishedFormat(body) ?? "table";
 }
 
 function appendOpenTableRow(body: string, row: string): string {

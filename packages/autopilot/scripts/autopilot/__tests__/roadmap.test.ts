@@ -502,16 +502,34 @@ describe("MarkdownRoadmap.createItem", () => {
 		assert.equal(created.id, "TOOL-6");
 	});
 
-	it("honors explicit format overrides on existing roadmap files", async () => {
+	it("rejects a --format that conflicts with an existing file's established format (no mixed-format corruption)", async () => {
 		const repo = seedRepo();
 		seedFile(repo, "docs/roadmap-core.md", ["# Core", "", "| Item | Depends on |", "|------|-----------|", "| TOOL-1. First | — |", ""].join("\n"));
 		execSync("git add -A && git commit -q -m seed", { cwd: repo });
 
 		const r = new MarkdownRoadmap({ repo });
-		const created = await r.createItem({ title: "Checkbox override", prefix: "TOOL", format: "checkbox" });
+		// --format checkbox on a table-formatted file would splice a checkbox row into a table →
+		// markDone can't locate it (item stuck open). Reject rather than corrupt (#45 review).
+		await assert.rejects(() => r.createItem({ title: "Checkbox override", prefix: "TOOL", format: "checkbox" }), /conflicts with the established table format/);
+		// The file is untouched and still round-trips: appending in its OWN format then marking done works.
+		const created = await r.createItem({ title: "Same format", prefix: "TOOL" });
 		assert.equal(created.id, "TOOL-2");
+		await r.markDone("TOOL-2");
 		const roadmap = readFileSync(resolve(repo, "docs/roadmap-core.md"), "utf-8");
-		assert.match(roadmap, /^- \[ \] \*\*TOOL-2\. Checkbox override\*\*/m);
+		assert.doesNotMatch(roadmap, /^- \[ \]/m, "no stray checkbox row spliced into the table");
+	});
+
+	it("a bootstrapped --format checkbox file round-trips through markDone", async () => {
+		const repo = seedRepo();
+		mkdirSync(resolve(repo, "docs"), { recursive: true });
+		const r = new MarkdownRoadmap({ repo });
+		const created = await r.createItem({ title: "Checkbox item", roadmap: "Cbox", create: true, prefix: "CB", format: "checkbox" });
+		assert.equal(created.id, "CB-1");
+		// The whole point of #45's format handling: a bootstrapped file's items must be markable.
+		await r.markDone("CB-1");
+		const roadmap = readFileSync(resolve(repo, "docs/roadmap-cbox.md"), "utf-8");
+		assert.match(roadmap, /CB-1/);
+		assert.doesNotMatch(roadmap, /^\| CB-1/m, "no stray table row in a checkbox file");
 	});
 
 	it("re-running --create with a display-style --to appends instead of clobbering", async () => {
