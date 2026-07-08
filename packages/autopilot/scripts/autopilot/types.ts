@@ -18,6 +18,8 @@ export interface StepResult {
 	/** All assistant text + tool inputs accumulated — richer than `text` for ID parsing */
 	fullText: string;
 	cost: number;
+	/** True when `cost` is a provider-side estimate rather than billed USD. */
+	costEstimated?: boolean;
 	turns: number;
 	tokens?: TokenUsage;
 	toolCounts?: Record<string, number>;
@@ -42,6 +44,9 @@ export interface StepLog {
 	retriedMaxTurns?: boolean;
 	/** Verdict from shakedown-plan only. */
 	verdict?: "APPROVE" | "REVISE" | "RETHINK";
+	/** True when `cost` is a provider-side token-price estimate, not billed USD (e.g. the Codex
+	 *  provider on a subscription). Rendered with a `~` prefix so estimates never read as real USD. */
+	costEstimated?: boolean;
 	toolCounts?: Record<string, number>;
 	outputTail?: string;
 	filesChanged?: string[];
@@ -58,6 +63,9 @@ export interface CycleLogEntry {
 	quick: boolean;
 	steps: StepLog[];
 	total_cost: number;
+	/** True when any step's cost was a provider-side estimate — so the cycle's `total_cost` is
+	 *  not pure billed USD. Kept honest across jsonl, `/stats`, and notifications. */
+	costEstimated?: boolean;
 	verdict: string | null;
 	completed: boolean;
 	error: string | null;
@@ -72,6 +80,9 @@ export interface CycleResult {
 	itemId: string | null;
 	completed: boolean;
 	cost: number;
+	/** True when `cost` includes provider-side estimates (mirrors `CycleLogEntry.costEstimated`),
+	 *  so live cost prints can flag the total with `~`. */
+	costEstimated?: boolean;
 	verdict?: string;
 	error?: string;
 	awaitingMerge?: boolean;
@@ -100,7 +111,7 @@ export const RECOVERABLE_ERRORS = ["plan needs rethink", "parked", "pick:queue-e
  *  #80 widens this union (and the `PROVIDER_NAMES` validation array in `config.ts`)
  *  to register a second provider. The runtime names array lives in `config.ts`,
  *  mirroring `ShipTargetName` / `SHIP_TARGET_NAMES`. */
-export type ProviderName = "claude";
+export type ProviderName = "claude" | "codex";
 
 // ── Ship targets ───────────────────────────────────────────────────────
 

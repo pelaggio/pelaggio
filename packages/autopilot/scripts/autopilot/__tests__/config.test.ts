@@ -259,12 +259,12 @@ describe("resolveStepSettings — precedence & fallback", () => {
 
 	it("parses a sparse per-profile providers override and falls back to the default for omitted steps", () => {
 		const repo = tmpRepo();
-		const path = writeYml(repo, ["models:", "  profiles:", "    deep:", "      providers:", "        implement: claude", ""].join("\n"));
+		const path = writeYml(repo, ["models:", "  profiles:", "    deep:", "      providers:", "        implement: codex", ""].join("\n"));
 		const cfg = loadConfig({ repo, configPath: path });
 		// The override is parsed into the sparse map (distinct from the default-fallback path)...
-		assert.equal(cfg.profileProviders.deep?.implement, "claude");
+		assert.equal(cfg.profileProviders.deep?.implement, "codex");
 		// ...and resolves for the named step...
-		assert.equal(resolveStepSettings(cfg, "deep", "implement").provider, "claude");
+		assert.equal(resolveStepSettings(cfg, "deep", "implement").provider, "codex");
 		// ...while a step the profile omits still resolves via DEFAULT_PROVIDER.
 		assert.equal(resolveStepSettings(cfg, "deep", "plan").provider, "claude");
 	});

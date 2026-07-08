@@ -25,6 +25,8 @@ export interface NotifyPayload {
 	title?: string;
 	completed: boolean;
 	cost: number;
+	/** True when `cost` includes a provider-side estimate (not billed USD) — rendered with `~`. */
+	costEstimated?: boolean;
 	/** The cycle's error string, when it carried one. */
 	error?: string;
 	prUrl?: string;
@@ -81,7 +83,7 @@ export function classifyEvent(result: CycleResult): NotifyEvent | null {
 export function formatText(p: Omit<NotifyPayload, "text">): string {
 	const head = `autopilot: ${p.event} ${p.itemId ?? "?"}`;
 	const title = p.title ? ` "${p.title}"` : "";
-	const bits: string[] = [`$${p.cost.toFixed(2)}`];
+	const bits: string[] = [`${p.costEstimated ? "~" : ""}$${p.cost.toFixed(2)}`];
 	if (p.prUrl) bits.push(p.prUrl);
 	// Skip the error when it just restates the event ("parked · parked").
 	if (p.error && p.error !== p.event && p.event !== "shipped" && p.event !== "pr-opened") bits.push(p.error);
@@ -191,6 +193,7 @@ export async function notifyCycle(cfg: NotifyConfig, result: CycleResult, logPat
 		...(title ? { title } : {}),
 		completed: result.completed,
 		cost: result.cost,
+		...(result.costEstimated ? { costEstimated: true } : {}),
 		...(result.error ? { error: result.error } : {}),
 		...(result.prUrl ? { prUrl: result.prUrl } : {}),
 		shipwrecked: result.shipwrecked ?? false,

@@ -28,6 +28,9 @@ export interface Stats {
 	parkedCycles: number;
 	shipwreckedCycles: number;
 	totalCostUsd: number;
+	/** True when any cycle's cost included a provider-side estimate — the USD figures below then
+	 *  mix estimated and billed dollars, so they render with a `~` prefix. */
+	costEstimated: boolean;
 	totalTokens: TokenUsage;
 	cacheHitRatio: number;
 	avgRetriesByStep: Record<string, number>;
@@ -37,6 +40,8 @@ export interface Stats {
 	rethinkRateByStep: Record<string, number>;
 	avgShakedownIterations: number;
 	costByStep: Record<string, number>;
+	/** Per-step flag: true when that step's cost included an estimate (renders the step's cost with `~`). */
+	costEstimatedByStep: Record<string, boolean>;
 	tokensByStep: Record<string, TokenUsage>;
 	cacheHitRatioByStep: Record<string, number>;
 	itemsDelivered: DeliveredItem[];
@@ -64,6 +69,8 @@ function cacheHitRatio(t: TokenUsage): number {
 export function reduce(entries: CycleLogEntry[]): Stats {
 	const totalTokens = emptyTokens();
 	const costByStep: Record<string, number> = {};
+	const costEstimatedByStep: Record<string, boolean> = {};
+	let anyCostEstimated = false;
 	const tokensByStep: Record<string, TokenUsage> = {};
 	const retriesPerStepSum: Record<string, number> = {};
 	const retriesPerStepCount: Record<string, number> = {};
@@ -81,6 +88,7 @@ export function reduce(entries: CycleLogEntry[]): Stats {
 
 	for (const entry of entries) {
 		totalCost += entry.total_cost ?? 0;
+		if (entry.costEstimated) anyCostEstimated = true;
 		if (entry.completed) completed++;
 		else failed++;
 		if (entry.parked) parked++;
@@ -92,6 +100,7 @@ export function reduce(entries: CycleLogEntry[]): Stats {
 		const cycleTokens = emptyTokens();
 		for (const s of entry.steps ?? []) {
 			costByStep[s.name] = (costByStep[s.name] ?? 0) + (s.cost ?? 0);
+			if (s.costEstimated) costEstimatedByStep[s.name] = true;
 			if (s.tokens) {
 				if (!tokensByStep[s.name]) tokensByStep[s.name] = emptyTokens();
 				addTokens(tokensByStep[s.name], s.tokens);
@@ -176,6 +185,7 @@ export function reduce(entries: CycleLogEntry[]): Stats {
 		parkedCycles: parked,
 		shipwreckedCycles: shipwrecked,
 		totalCostUsd: totalCost,
+		costEstimated: anyCostEstimated,
 		totalTokens,
 		cacheHitRatio: cacheHitRatio(totalTokens),
 		avgRetriesByStep,
@@ -183,6 +193,7 @@ export function reduce(entries: CycleLogEntry[]): Stats {
 		rethinkRateByStep,
 		avgShakedownIterations: shakedownIterCount === 0 ? 0 : shakedownIterSum / shakedownIterCount,
 		costByStep,
+		costEstimatedByStep,
 		tokensByStep,
 		cacheHitRatioByStep,
 		itemsDelivered,
@@ -202,8 +213,10 @@ function fmtPct(n: number): string {
 	return `${(n * 100).toFixed(1)}%`;
 }
 
-function fmtUsd(n: number): string {
-	return `$${n.toFixed(2)}`;
+function fmtUsd(n: number, estimated = false): string {
+	// `~` marks a figure that includes provider-side estimates (e.g. Codex on a subscription),
+	// so estimated dollars never read as billed USD.
+	return `${estimated ? "~" : ""}$${n.toFixed(2)}`;
 }
 
 const STEP_ORDER = ["pick", "plan", "shakedown-plan", "implement", "shakedown-code", "ship", "shipwreck"];
@@ -223,7 +236,7 @@ export function renderDashboard(stats: Stats): string {
 	const lines: string[] = [];
 
 	const header = `${A.bold("autopilot stats")}`;
-	const summary = `${stats.totalCycles} cycles  ${fmtUsd(stats.totalCostUsd)}`;
+	const summary = `${stats.totalCycles} cycles  ${fmtUsd(stats.totalCostUsd, stats.costEstimated)}`;
 	lines.push(`${header}${" ".repeat(Math.max(1, 60 - "autopilot stats".length))}${A.dim(summary)}`);
 	lines.push("");
 
@@ -232,7 +245,7 @@ export function renderDashboard(stats: Stats): string {
 	lines.push(
 		`  ${A.dim("Cycles")}       ${String(stats.totalCycles).padEnd(4)}  ${A.green(`completed ${stats.completedCycles}`)}  ${A.red(`failed ${stats.failedCycles}`)}  ${A.yellow(`parked ${stats.parkedCycles}`)}  shipwrecked ${stats.shipwreckedCycles}`,
 	);
-	lines.push(`  ${A.dim("Spend")}        ${fmtUsd(stats.totalCostUsd)}`);
+	lines.push(`  ${A.dim("Spend")}        ${fmtUsd(stats.totalCostUsd, stats.costEstimated)}${stats.costEstimated ? A.dim("  (~ = includes provider estimates)") : ""}`);
 	lines.push(`  ${A.dim("Tokens")}       in ${fmtNum(stats.totalTokens.input)}  out ${fmtNum(stats.totalTokens.output)}  cache-write ${fmtNum(stats.totalTokens.cacheCreation)}  cache-read ${fmtNum(stats.totalTokens.cacheRead)}`);
 	lines.push(`  ${A.dim("Cache-hit")}    ${fmtPct(stats.cacheHitRatio)}`);
 	lines.push("");
@@ -244,7 +257,9 @@ export function renderDashboard(stats: Stats): string {
 		for (const name of stepNames) {
 			const tok = stats.tokensByStep[name] ?? emptyTokens();
 			const hit = stats.cacheHitRatioByStep[name] ?? 0;
-			lines.push(`    ${name.padEnd(14)}  ${fmtUsd(stats.costByStep[name]).padStart(8)}  ${fmtNum(tok.input).padStart(6)}  ${fmtNum(tok.output).padStart(5)}  ${fmtNum(tok.cacheRead).padStart(9)}  ${fmtPct(hit).padStart(5)}`);
+			lines.push(
+				`    ${name.padEnd(14)}  ${fmtUsd(stats.costByStep[name], stats.costEstimatedByStep[name]).padStart(8)}  ${fmtNum(tok.input).padStart(6)}  ${fmtNum(tok.output).padStart(5)}  ${fmtNum(tok.cacheRead).padStart(9)}  ${fmtPct(hit).padStart(5)}`,
+			);
 		}
 		lines.push("");
 	}

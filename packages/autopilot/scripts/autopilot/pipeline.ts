@@ -24,6 +24,7 @@ import {
 	parseVerdict,
 	parseWaitFlag,
 	resolveWorktree,
+	revertPlanPolish,
 	reviewFindingsPreamble,
 	stepIndex,
 	verifyShipLanded,
@@ -150,6 +151,14 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			ensureCheckpointed(cwd, commitLabel, log);
 		}
 
+		// Plan-polish backstop (#80): implement is execute-only under docs/plans/. The Claude hook
+		// blocks such writes; for providers whose sandbox can't (Codex), this deterministic revert
+		// undoes any docs/plans/ edits made this step — including committed ones — since preSha.
+		if (name === "implement") {
+			const reverted = revertPlanPolish(cwd, preSha);
+			if (reverted.length > 0) log(`reverted plan-polish edits: ${reverted.join(", ")}`);
+		}
+
 		const filesChanged = filesChangedSince(cwd, preSha);
 
 		steps.push({
@@ -160,6 +169,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			ok: result.ok,
 			...(!result.ok ? { subtype: result.subtype } : {}),
 			...(result.tokens ? { tokens: result.tokens } : {}),
+			...(result.costEstimated ? { costEstimated: true } : {}),
 			...(attempt > 1 ? { attempt } : {}),
 			...(retriedMaxTurns ? { retriedMaxTurns: true } : {}),
 			...(result.toolCounts ? { toolCounts: result.toolCounts } : {}),
@@ -184,6 +194,10 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		// classify a `shipwrecked` notification (also brings CycleResult into parity with
 		// CycleLogEntry.shipwrecked). The JSONL log records it separately below.
 		if (shipwrecked) result = { ...result, shipwrecked: true };
+		// Any estimated step makes the cycle total estimated — surfaced on the result (live
+		// prints) and the jsonl (stats/notify) so a subscription-provider run never reads as USD.
+		const costEstimated = steps.some((s) => s.costEstimated);
+		if (costEstimated) result = { ...result, costEstimated: true };
 		if (!opts.dryRun) {
 			const parked = result.error === "parked";
 			appendLog({
@@ -193,6 +207,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				quick: profile === "quick",
 				steps,
 				total_cost: Number(result.cost.toFixed(4)),
+				...(costEstimated ? { costEstimated: true } : {}),
 				verdict: result.verdict ?? null,
 				completed: result.completed,
 				error: result.error ?? null,
@@ -904,7 +919,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				liveStatus.render();
 				statusBar.teardown();
 			}
-			console.log(`\n${result.completed ? A.green("✓") : A.red("✗")} ${id} — $${result.cost.toFixed(2)}`);
+			console.log(`\n${result.completed ? A.green("✓") : A.red("✗")} ${id} — ${result.costEstimated ? "~" : ""}$${result.cost.toFixed(2)}`);
 			return { exitCode: result.completed ? 0 : 1, results };
 		}
 
@@ -956,7 +971,10 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				const cycle = ++nextCycle;
 				if (cycle > cycles) return;
 				if (totalSpent >= maxBudget) {
-					console.log(`${A.yellow("⚠")} spend ($${totalSpent.toFixed(2)}) exceeds --budget threshold ($${maxBudget.toFixed(2)})`);
+					// If any spend so far was a provider-side estimate, mark the figure so it doesn't
+					// read as billed USD against the --budget threshold (#80).
+					const est = results.some((r) => r.costEstimated);
+					console.log(`${A.yellow("⚠")} spend (${est ? "~" : ""}$${totalSpent.toFixed(2)}) exceeds --budget threshold ($${maxBudget.toFixed(2)})${est ? A.dim(" — spend includes provider estimates") : ""}`);
 				}
 
 				const status: CycleStatus = {
@@ -1003,7 +1021,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				status.turns = undefined;
 
 				const logRef = logPath ? `  ${A.dim(`→ .dev/autopilot-${cycle}.log`)}` : "";
-				console.log(`${resultIcon(result)} cycle ${cycle}: ${A.bold(result.itemId ?? "?")} — $${result.cost.toFixed(2)}${result.error ? `  ${A.dim(result.error)}` : ""}${logRef}`);
+				console.log(`${resultIcon(result)} cycle ${cycle}: ${A.bold(result.itemId ?? "?")} — ${result.costEstimated ? "~" : ""}$${result.cost.toFixed(2)}${result.error ? `  ${A.dim(result.error)}` : ""}${logRef}`);
 
 				if (v) liveStatus.render();
 
@@ -1075,7 +1093,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				status.cost = r.cost;
 				status.step = undefined;
 				if (v) liveStatus.render();
-				console.log(`${resultIcon(r)} revise ${pr.itemId} — $${r.cost.toFixed(2)}${r.error ? `  ${A.dim(r.error)}` : ""}`);
+				console.log(`${resultIcon(r)} revise ${pr.itemId} — ${r.costEstimated ? "~" : ""}$${r.cost.toFixed(2)}${r.error ? `  ${A.dim(r.error)}` : ""}`);
 			}
 		}
 
@@ -1154,7 +1172,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				st.cost = r.cost;
 				st.step = undefined;
 				if (v) liveStatus.render();
-				console.log(`${resultIcon(r)} resume ${id} — $${r.cost.toFixed(2)}${r.error ? `  ${A.dim(r.error)}` : ""}`);
+				console.log(`${resultIcon(r)} resume ${id} — ${r.costEstimated ? "~" : ""}$${r.cost.toFixed(2)}${r.error ? `  ${A.dim(r.error)}` : ""}`);
 				return r;
 			};
 

@@ -429,6 +429,39 @@ export function filesChangedSince(cwd: string, preSha: string | null): string[] 
 	}
 }
 
+/**
+ * Plan-polish backstop (#80). During `implement`, `docs/plans/` is execute-only. The Claude
+ * provider enforces this with a PreToolUse hook, but a sandboxed provider (Codex) can't express
+ * path-exclusion — so this deterministic, provider-agnostic backstop reverts any `docs/plans/`
+ * edits made during the step, INCLUDING committed ones, by restoring the subtree to its pre-step
+ * (`sinceSha`) state and committing the reversion. Returns the reverted paths (empty when nothing
+ * changed — the normal case, and always so for the hook-guarded Claude path). Scope matches the
+ * issue's prescription: modify/delete of the tracked plan document (a plan is created in the `plan`
+ * step, so it exists at `sinceSha`); a brand-new file added under `docs/plans/` during implement is
+ * out of scope. Failures are surfaced loudly but never crash the pipeline.
+ */
+export function revertPlanPolish(cwd: string, sinceSha: string | null): string[] {
+	if (!sinceSha) return [];
+	let changed: string[];
+	try {
+		const out = execSync(`git diff --name-only ${sinceSha} -- docs/plans`, { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+		changed = out ? out.split("\n").filter(Boolean) : [];
+	} catch {
+		return [];
+	}
+	if (changed.length === 0) return [];
+	try {
+		execSync(`git checkout ${sinceSha} -- docs/plans`, { cwd, encoding: "utf-8", stdio: "pipe" });
+		execSync(`git add -A -- docs/plans && git commit -m "revert: plan-polish edits during implement (docs/plans is execute-only)" --no-verify`, { cwd, encoding: "utf-8", stdio: "pipe" });
+	} catch (e: unknown) {
+		const err = e as Record<string, unknown>;
+		const msg = `${err.stderr ?? ""}${err.stdout ?? ""}` || String((e as Error).message ?? "");
+		// A revert that finds nothing to commit is fine; anything else is a loud warning.
+		if (!/nothing to commit|clean/i.test(msg)) process.stderr.write(`⚠ plan-polish backstop failed: ${msg.slice(0, 200)}\n`);
+	}
+	return changed;
+}
+
 // ── Ship pre-condition ─────────────────────────────────────────────────
 
 /**
