@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
-import { buildCodexStepResult, codexTimeoutMs, selectCodexModel } from "../codex-provider.js";
+import { buildCodexStepResult, CODEX_SANDBOX_APPEND, codexTimeoutMs, selectCodexModel } from "../codex-provider.js";
 import { EDIT_LOOP_THRESHOLD } from "../step-runner-shared.js";
 
 function fixtureEvents(name: string): Record<string, unknown>[] {
@@ -14,6 +14,16 @@ function fixtureEvents(name: string): Record<string, unknown>[] {
 function countOccurrences(haystack: string, needle: string): number {
 	return haystack.split(needle).length - 1;
 }
+
+describe("CODEX_SANDBOX_APPEND (#109)", () => {
+	it("tells the model not to run stateful git or network CLIs (harness owns them)", () => {
+		assert.match(CODEX_SANDBOX_APPEND, /do NOT run stateful git/i);
+		for (const g of ["git add", "commit", "push"]) assert.ok(CODEX_SANDBOX_APPEND.includes(g), `mentions ${g}`);
+		assert.match(CODEX_SANDBOX_APPEND, /harness commits your work/i);
+		assert.match(CODEX_SANDBOX_APPEND, /gh |roadmap/i); // network CLIs also off-limits
+		assert.match(CODEX_SANDBOX_APPEND, /read-only git.*is fine/i); // reads still allowed
+	});
+});
 
 describe("buildCodexStepResult", () => {
 	it("maps a successful real Codex JSONL fixture into StepResult fields", () => {

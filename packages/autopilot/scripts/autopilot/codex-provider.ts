@@ -31,6 +31,18 @@ export interface CodexBuildResult {
 const CODEX_COST_PER_INPUT_TOKEN = 0.000_002;
 const CODEX_COST_PER_OUTPUT_TOKEN = 0.000_008;
 
+/**
+ * Codex-provider-only prompt append (#109). The `workspace-write` sandbox can't write git metadata
+ * (a worktree's `.git` points into MAIN/.git, outside the writable root) or reach the network — so
+ * the model's autonomous instinct to `git commit` its work fails and blocks the step. Tell it not
+ * to run stateful git or network CLIs; the harness owns commits + roadmap/forge effects. Kept OUT
+ * of the shared `composeSystemAppend` because the Claude provider's skills legitimately run git.
+ */
+export const CODEX_SANDBOX_APPEND = [
+	"## Sandbox: the harness owns git and network",
+	"Your sandbox cannot write git metadata or reach the network. Do NOT run stateful git commands (`git add`, `commit`, `rm`, `restore`, `checkout`, `stash`, `push`, `merge`) and do NOT run network/roadmap CLIs (`gh ...`, `npx @cdhorne/claude-autopilot roadmap ...`). Just create and edit files — the harness commits your work automatically after this step and owns all roadmap/forge effects. Read-only git (`git status`/`diff`/`log`/`show`) is fine.",
+].join("\n");
+
 export function codexTimeoutMs(turns: number): number {
 	return Math.max(10 * 60_000, Math.min(90 * 60_000, turns * 60_000));
 }
@@ -367,7 +379,7 @@ const runStep: StepProvider["runStep"] = async (name, prompt, opts, emit) => {
 	}
 
 	const systemAppend = composeSystemAppend({ isWorktree, cwd: opts.cwd, repo: REPO, planBlockActive: name === "implement" });
-	const finalPrompt = `${prompt}\n\n${systemAppend}`;
+	const finalPrompt = `${prompt}\n\n${systemAppend}\n\n${CODEX_SANDBOX_APPEND}`;
 	const tmp = mkdtempSync(join(tmpdir(), "autopilot-codex-"));
 	const outputPath = join(tmp, "last-message.txt");
 	const args = ["exec", "--json", "-C", opts.cwd, "-s", "workspace-write", "-o", outputPath, ...(codexModel ? ["-m", codexModel] : []), "-"];
