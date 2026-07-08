@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -97,5 +97,32 @@ describe("roadmap-cli", () => {
 	it("unknown subcommand returns exit 1", async () => {
 		const res = await captureStdout(() => main(["bogus"]));
 		assert.equal(res.code, 1);
+	});
+
+	it("create-item accepts markdown bootstrap flags and emits JSON", async () => {
+		const localRepo = makeRepo();
+		mkdirSync(resolve(localRepo, "docs"), { recursive: true });
+		setRoadmapFactory(() => new MarkdownRoadmap({ repo: localRepo }));
+
+		const res = await captureStdout(() => main(["create-item", "--title", "New", "--to", "new-track", "--create", "--prefix", "NEW", "--format", "checkbox", "--json"]));
+		assert.equal(res.code, 0);
+		const parsed = JSON.parse(res.stdout);
+		assert.equal(parsed.id, "NEW-1");
+		assert.equal(parsed.title, "New");
+		assert.match(parsed.sourceRef, /docs\/roadmap-new-track\.md$/);
+
+		const roadmap = readFileSync(resolve(localRepo, "docs/roadmap-new-track.md"), "utf-8");
+		assert.match(roadmap, /^- \[ \] \*\*NEW-1\. New\*\*/m);
+	});
+
+	it("create-item rejects invalid --format before writing files", async () => {
+		const localRepo = makeRepo();
+		mkdirSync(resolve(localRepo, "docs"), { recursive: true });
+		setRoadmapFactory(() => new MarkdownRoadmap({ repo: localRepo }));
+
+		const res = await captureStdout(() => main(["create-item", "--title", "New", "--to", "new-track", "--create", "--prefix", "NEW", "--format", "bogus", "--json"]));
+		assert.equal(res.code, 1);
+		assert.match(res.stderr, /--format checkbox\|table/);
+		assert.equal(existsSync(resolve(localRepo, "docs/roadmap-new-track.md")), false);
 	});
 });

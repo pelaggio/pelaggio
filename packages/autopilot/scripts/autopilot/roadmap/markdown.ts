@@ -1,9 +1,9 @@
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { relative, resolve } from "node:path";
+import { isAbsolute, relative, resolve } from "node:path";
 import { claimedIds, createClaimWorkspace } from "./git-claim.js";
 import { withMutationLock } from "./mutation-lock.js";
-import type { CreateItemOpts, ItemStatus, MarkDoneContext, RoadmapItem, RoadmapItemStatus, RoadmapSource, RoadmapSourceName } from "./types.js";
+import type { CreateItemOpts, ItemStatus, MarkDoneContext, MarkdownRoadmapFormat, RoadmapItem, RoadmapItemStatus, RoadmapSource, RoadmapSourceName } from "./types.js";
 
 export class MarkdownRoadmap implements RoadmapSource {
 	readonly name: RoadmapSourceName = "markdown";
@@ -215,18 +215,14 @@ export class MarkdownRoadmap implements RoadmapSource {
 	private async createItemUnlocked(opts: CreateItemOpts): Promise<RoadmapItem> {
 		const docsDir = resolve(this.repo, "docs");
 		if (!existsSync(docsDir)) throw new Error("createItem: docs/ dir missing");
+		const explicitPrefix = opts.prefix !== undefined ? normalizeExplicitPrefix(opts.prefix) : undefined;
 
-		// Pick target roadmap.
-		const roadmaps = listRoadmapFiles(docsDir);
-		if (roadmaps.length === 0) throw new Error("createItem: no docs/roadmap-*.md files found");
-		let targetFile: string | undefined;
-		if (opts.roadmap) {
-			targetFile = roadmaps.find((f) => f.toLowerCase().includes(opts.roadmap!.toLowerCase()));
-			if (!targetFile) throw new Error(`createItem: no roadmap file matches '${opts.roadmap}'`);
-		} else {
-			targetFile = roadmaps[0];
-		}
+		const { targetFile, created } = resolveCreateItemTarget(docsDir, opts);
 		const targetPath = resolve(docsDir, targetFile);
+		if (created) {
+			const format = opts.format ?? "table";
+			writeFileSync(targetPath, createRoadmapSkeleton(targetFile, format));
+		}
 		const body = readFileSync(targetPath, "utf-8");
 
 		// Determine ID prefix by scanning existing item rows (checkbox/table) plus
@@ -251,7 +247,7 @@ export class MarkdownRoadmap implements RoadmapSource {
 		for (const m of body.matchAll(/^-\s+([A-Z]+)-?(\d+)[\dA-Z-]*\s*✓/gmu)) {
 			count(m[1], parseInt(m[2], 10));
 		}
-		const prefix = [...prefixCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "ITEM";
+		const prefix = explicitPrefix ?? [...prefixCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "ITEM";
 		const nextN = (maxByPrefix.get(prefix) ?? 0) + 1;
 		const id = `${prefix}-${nextN}`;
 
@@ -260,7 +256,7 @@ export class MarkdownRoadmap implements RoadmapSource {
 		const title = opts.title;
 
 		// Detect format: table vs checkbox.
-		const format = detectFormat(body);
+		const format = opts.format ?? detectFormat(body);
 		let updated = body;
 		if (format === "table") {
 			const row = `| ${id}. ${title} | ${deps} |`;
@@ -422,6 +418,59 @@ function resolveTaskIndexPath(docsDir: string): string {
 // rows in the index file when readdir order surfaces it first.
 function listRoadmapFiles(docsDir: string): string[] {
 	return readdirSync(docsDir).filter((f) => f.startsWith("roadmap-") && f.endsWith(".md") && f !== "roadmap-task-index.md");
+}
+
+function resolveCreateItemTarget(docsDir: string, opts: CreateItemOpts): { targetFile: string; created: boolean } {
+	const roadmaps = listRoadmapFiles(docsDir);
+	if (opts.roadmap) {
+		const existing = roadmaps.find((f) => f.toLowerCase().includes(opts.roadmap!.toLowerCase()));
+		if (existing) return { targetFile: existing, created: false };
+		if (!opts.create) throw new Error(`createItem: no roadmap file matches '${opts.roadmap}'`);
+		const slug = normalizeRoadmapSlug(opts.roadmap);
+		if (!slug) throw new Error("createItem: --to must produce a non-empty roadmap filename");
+		const targetPath = resolve(docsDir, `roadmap-${slug}.md`);
+		const rel = relative(docsDir, targetPath);
+		if (rel.startsWith("..") || isAbsolute(rel)) throw new Error("createItem: --to must resolve inside docs/");
+		// The `includes` partial-match above runs on the raw `--to`; a display-style
+		// name like "New Track" won't match the slugged `roadmap-new-track.md`, so a
+		// re-run would re-enter this branch and clobber the file with a fresh
+		// skeleton (data loss). Treat an already-slugged file as existing → append.
+		return { targetFile: `roadmap-${slug}.md`, created: !existsSync(targetPath) };
+	}
+	if (opts.create) throw new Error("createItem: --create requires --to <name>");
+	if (roadmaps.length === 0) throw new Error("createItem: no docs/roadmap-*.md files found");
+	return { targetFile: roadmaps[0], created: false };
+}
+
+function normalizeRoadmapSlug(name: string): string {
+	return name
+		.trim()
+		.toLowerCase()
+		.replace(/^roadmap-/, "")
+		.replace(/\.md$/, "")
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/^-+|-+$/g, "");
+}
+
+function createRoadmapSkeleton(targetFile: string, format: MarkdownRoadmapFormat): string {
+	const slug = targetFile.replace(/^roadmap-/, "").replace(/\.md$/, "");
+	const title = titleCaseSlug(slug);
+	if (format === "checkbox") return `# ${title}\n\n`;
+	return `# ${title}\n\n| Item | Depends on |\n|------|-----------|\n`;
+}
+
+function titleCaseSlug(slug: string): string {
+	return slug
+		.split("-")
+		.filter(Boolean)
+		.map((part) => `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`)
+		.join(" ");
+}
+
+function normalizeExplicitPrefix(prefix: string): string {
+	const normalized = prefix.trim().toUpperCase();
+	if (!/^[A-Z]+$/.test(normalized)) throw new Error("createItem: --prefix must contain letters only (example: INST)");
+	return normalized;
 }
 
 function parseOpenTableRows(body: string): RoadmapRow[] {

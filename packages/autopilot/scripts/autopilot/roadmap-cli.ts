@@ -13,7 +13,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { AlreadyClaimedError, type RoadmapSource } from "./roadmap/index.js";
+import { AlreadyClaimedError, isMarkdownRoadmapFormat, type RoadmapSource } from "./roadmap/index.js";
 
 type Args = {
 	flags: Record<string, string | boolean>;
@@ -169,7 +169,7 @@ async function cmdCreateItem(args: Args): Promise<number> {
 	const roadmap = makeRoadmap();
 	const title = args.flags.title;
 	if (typeof title !== "string") {
-		process.stderr.write("usage: roadmap create-item --title <t> [--deps <csv>] [--scope <x>] [--to <r>] [--after <id>] [--priority high|normal] [--deferred] [--json]\n");
+		process.stderr.write("usage: roadmap create-item --title <t> [--deps <csv>] [--scope <x>] [--to <r>] [--after <id>] [--priority high|normal] [--deferred] [--create] [--prefix <PFX>] [--format checkbox|table] [--json]\n");
 		return 1;
 	}
 	const deps =
@@ -184,7 +184,15 @@ async function cmdCreateItem(args: Args): Promise<number> {
 	const after = typeof args.flags.after === "string" ? args.flags.after : undefined;
 	const priority = args.flags.priority === "high" ? "high" : args.flags.priority === "normal" ? "normal" : undefined;
 	const deferred = args.flags.deferred === true;
-	const created = await roadmap.createItem({ title, deps, scope, roadmap: roadmapArg, after, priority, deferred });
+	const create = args.flags.create === true;
+	const prefix = typeof args.flags.prefix === "string" ? args.flags.prefix : undefined;
+	const rawFormat = args.flags.format;
+	if (rawFormat !== undefined && !isMarkdownRoadmapFormat(rawFormat)) {
+		process.stderr.write("usage: roadmap create-item --format checkbox|table\n");
+		return 1;
+	}
+	const format = rawFormat;
+	const created = await roadmap.createItem({ title, deps, scope, roadmap: roadmapArg, after, priority, deferred, create, prefix, format });
 	if (args.flags.json) printJson(created);
 	else process.stdout.write(`${created.id}\t${created.title}\n`);
 	return 0;
