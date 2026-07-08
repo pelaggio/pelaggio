@@ -4,9 +4,10 @@ Thanks for your interest in contributing to claude-autopilot.
 
 ## License
 
-This project is licensed under the **GNU Affero General Public License v3.0**
-(`AGPL-3.0-only`) — see [`LICENSE`](./LICENSE). By contributing, you agree that
-your contributions are licensed under the same terms.
+This project is licensed under the **Functional Source License, Version 1.1,
+Apache 2.0 Future License** (`FSL-1.1-ALv2`) — see [`LICENSE`](./LICENSE). By
+contributing, you agree that your contributions are licensed under the same
+terms.
 
 ## Developer Certificate of Origin (DCO)
 

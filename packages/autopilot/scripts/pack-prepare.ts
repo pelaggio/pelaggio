@@ -2,8 +2,8 @@
 /**
  * Copies `.claude/skills/`, `.claude-templates/`, and the root `LICENSE` from
  * the monorepo root into this package, so they're included in the published
- * tarball (the LICENSE lives only at the repo root, but the AGPL text must ship
- * with the AGPL-licensed package). The package's
+ * tarball (the LICENSE lives only at the repo root, but the FSL text must ship
+ * with the FSL-licensed package). The package's
  * `prepack` lifecycle invokes this; `postpack` invokes the companion
  * `pack-cleanup.ts`. Both paths are listed in `packages/autopilot/.gitignore`.
  *
