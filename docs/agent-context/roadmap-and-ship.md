@@ -58,6 +58,8 @@ The boundary is the merge because the observed failure (#28) was budget exhausti
 
 Security-sensitive diffs run two independent `pr-review` sessions: the ordinary standard review and a triggered `--red-team` pass selected by deterministic path/diff signals in `classifySecurityReviewDiff()`. Either pass can block, and a triggered red-team pass that cannot complete blocks the whole required `review` check. Do not add a new pipeline `Step` for this; both sessions intentionally reuse the non-pipeline `pr-review` step key and aggregate into one PR comment / status result.
 
+Local review mode (`review.runner: local`) runs before the local revise sweep. It must execute trusted tooling from local `main` and treat the PR head only as diff/file data, then post the `review` commit status and findings comment that the existing revise sweep consumes.
+
 ### Revise loops (one pass, label-bounded)
 
 Only local **or** CI should be active — both race for the `autopilot:revised` label, added *before* any work. CI stays disabled repo-wide (`vars.AUTOPILOT_AUTO_REVISE = false`), so the local sweep is the sole reviser.

@@ -484,14 +484,54 @@ describe("loadConfig — revise", () => {
 	});
 });
 
+describe("loadConfig — review", () => {
+	it("defaults to { runner: 'ci', statuslessAfter: '2h' } when unset", () => {
+		const repo = tmpRepo();
+		const cfg = loadConfig({ repo, configPath: join(repo, ".autopilot.yml") });
+		assert.deepEqual(cfg.review, { runner: "ci", statuslessAfter: "2h" });
+	});
+
+	it("parses review.runner: local and review.statusless-after", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "review:\n  runner: local\n  statusless-after: 45m\n");
+		const cfg = loadConfig({ repo, configPath: path });
+		assert.deepEqual(cfg.review, { runner: "local", statuslessAfter: "45m" });
+	});
+
+	it("allows a partial review override", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "review:\n  statusless-after: 1h30m\n");
+		const cfg = loadConfig({ repo, configPath: path });
+		assert.deepEqual(cfg.review, { runner: "ci", statuslessAfter: "1h30m" });
+	});
+
+	it("throws on an invalid review.runner", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "review:\n  runner: self-hosted\n");
+		assert.throws(() => loadConfig({ repo, configPath: path }), /review\.runner.*ci\|local/);
+	});
+
+	it("throws on a non-string review.statusless-after", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "review:\n  statusless-after: 120\n");
+		assert.throws(() => loadConfig({ repo, configPath: path }), /review\.statusless-after.*string/);
+	});
+
+	it("throws when review is not a map", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "review: local\n");
+		assert.throws(() => loadConfig({ repo, configPath: path }), /expected `review` to be a map/);
+	});
+});
+
 describe("loadConfig — notify", () => {
-	it("defaults to { url: '', format: 'json', events: <all five> } when unset", () => {
+	it("defaults to { url: '', format: 'json', events: <all events> } when unset", () => {
 		const repo = tmpRepo();
 		const cfg = loadConfig({ repo, configPath: join(repo, ".autopilot.yml") });
 		assert.deepEqual(cfg.notify, {
 			url: "",
 			format: "json",
-			events: ["parked", "failed", "shipped", "pr-opened", "shipwrecked"],
+			events: ["parked", "failed", "shipped", "pr-opened", "shipwrecked", "review-stranded"],
 		});
 	});
 

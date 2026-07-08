@@ -735,6 +735,76 @@ describe("runOrchestrator — revise sweep (issue #76)", () => {
 	});
 	const resolveWt = (): string => wtDir;
 
+	it("runs local review before revise so a local failure is immediately revisable", async (t) => {
+		t.mock.method(console, "log", () => {});
+		let prListCalls = 0;
+		const ghCalls: string[][] = [];
+		const gh: GhRunner = (args) => {
+			ghCalls.push(args);
+			if (args[0] === "pr" && args[1] === "list") {
+				prListCalls++;
+				if (prListCalls === 1) {
+					return {
+						stdout: JSON.stringify([
+							{
+								number: 201,
+								isDraft: false,
+								headRefName: "feat/issue-84-local-review",
+								headRefOid: "abc123",
+								headRepository: { nameWithOwner: "o/r" },
+								updatedAt: "2026-07-08T12:00:00Z",
+								statusCheckRollup: [],
+							},
+						]),
+						stderr: "",
+						status: 0,
+					};
+				}
+				return {
+					stdout: JSON.stringify([{ number: 201, isDraft: false, headRefName: "feat/issue-84-local-review", labels: [], statusCheckRollup: [{ __typename: "StatusContext", context: "review", state: "FAILURE" }] }]),
+					stderr: "",
+					status: 0,
+				};
+			}
+			if (args[0] === "issue" && args[1] === "view") return { stdout: JSON.stringify({ labels: [{ name: "autopilot" }] }), stderr: "", status: 0 };
+			if (args[0] === "api" && args[1]?.includes("/comments")) return { stdout: JSON.stringify([{ id: 42, body: "<!-- autopilot-pr-review -->\nfix local blocker", created_at: "2026-07-08T12:01:00Z" }]), stderr: "", status: 0 };
+			if (args[0] === "pr" && args[1] === "view") return { stdout: JSON.stringify({ comments: [{ body: "<!-- autopilot-pr-review -->\nfix local blocker", createdAt: "2026-07-08T12:01:00Z" }] }), stderr: "", status: 0 };
+			return { stdout: "", stderr: "", status: 0 };
+		};
+		const { runPipeline, calls } = createMockRunPipeline({
+			byItem: { "84": { completed: true, cost: 0.5 } },
+			default: { completed: false, cost: 0, error: "pick:queue-empty" },
+		});
+
+		await runOrchestrator(
+			{ ...baseFlags, target: "pull-request", cycles: "1" },
+			{
+				runPipeline,
+				resolveWorktree: resolveWt,
+				review: {
+					runner: "local",
+					ghRepo: "o/r",
+					gh,
+					statuslessAfter: "2h",
+					now: () => Date.parse("2026-07-08T12:05:00Z"),
+					prepareReviewHead: () => ({ diffCwd: "/tmp/pr-head", baseRef: "origin/main", headRef: "refs/autopilot-review/pr-201" }),
+					cleanupReviewHead: () => {},
+					runReviewGate: async () => ({ gate: "block", body: "<!-- autopilot-pr-review -->\nblocker\n\nVerdict: BLOCK", cost: 0.25, costEstimated: true, turns: 3, ok: true, subtype: "success" }),
+				},
+				revise: { local: true, ghRepo: "o/r", gh },
+			},
+		);
+
+		assert.equal(calls[0].opts.itemId, "84");
+		assert.equal(calls[0].opts.startFrom, "implement");
+		const statuses = ghCalls.filter((args) => args[0] === "api" && args[1] === "repos/o/r/statuses/abc123");
+		assert.deepEqual(
+			statuses.map((args) => args.find((arg) => arg.startsWith("state="))),
+			["state=pending", "state=failure"],
+		);
+		assert.equal(prListCalls, 2, "review sweep must list before revise sweep lists");
+	});
+
 	it("revises a red-review PR before picking new work, with startFrom=implement + findings flag", async (t) => {
 		t.mock.method(console, "log", () => {});
 		const { runPipeline, calls } = createMockRunPipeline({

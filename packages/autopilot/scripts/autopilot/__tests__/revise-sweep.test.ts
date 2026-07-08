@@ -76,6 +76,13 @@ describe("findRevisablePrs", () => {
 		assert.deepEqual(revisable, [{ prNumber: 7, itemId: "7", branch: "feat/issue-7-x" }]);
 	});
 
+	it("matches a local review commit status failure (context + state)", () => {
+		const fixture = JSON.stringify([{ number: 8, isDraft: false, headRefName: "feat/issue-8-x", labels: [], statusCheckRollup: [{ __typename: "StatusContext", context: "Review", state: "failure" }] }]);
+		const { run } = stub(() => ({ stdout: fixture }));
+		const { revisable } = findRevisablePrs(run, "o/r");
+		assert.deepEqual(revisable, [{ prNumber: 8, itemId: "8", branch: "feat/issue-8-x" }]);
+	});
+
 	it("fail-soft: gh non-zero status → both lists empty", () => {
 		const { run } = stub(() => ({ status: 1, stderr: "boom" }));
 		assert.deepEqual(findRevisablePrs(run, "o/r"), { revisable: [], labeledStillRed: [] });

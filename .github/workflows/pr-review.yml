@@ -16,6 +16,7 @@ jobs:
   # pending). Fork/draft PRs skip the agent *inside* the job and still report
   # green — gating via a job-level `if` would leave a required check stuck pending.
   review:
+    if: vars.AUTOPILOT_REVIEW_RUNNER != 'local'
     # GitHub-hosted, deliberately NOT self-hosted: the review agent executes
     # PR-influenced code (the CLI runs from the checked-out tree), so the job
     # must run on an ephemeral VM where the blast radius is one scoped token
@@ -74,3 +75,25 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           CI: "true"
         run: npx @cdhorne/claude-autopilot pr-review --pr "${{ github.event.pull_request.number }}"
+
+  local-mode-diagnostic:
+    if: vars.AUTOPILOT_REVIEW_RUNNER == 'local'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Leave local-mode diagnostic
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          marker='<!-- autopilot-pr-review-local-mode -->'
+          existing="$(gh pr view "$PR_NUMBER" --repo "$GH_REPO" --json comments --jq '.comments[].body | select(contains("'"$marker"'"))' | tail -n 1)"
+          if [ -n "$existing" ]; then
+            exit 0
+          fi
+          body_file="$(mktemp)"
+          printf '%s\n%s\n' "$marker" "The review gate is posted by the local autopilot runner for this repo." > "$body_file"
+          gh pr comment "$PR_NUMBER" --repo "$GH_REPO" --body-file "$body_file"

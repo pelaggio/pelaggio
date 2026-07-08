@@ -66,6 +66,7 @@ const SONNET = "claude-sonnet-5";
 // ── Defaults ───────────────────────────────────────────────────────────
 
 type Effort = "low" | "medium" | "high" | "xhigh" | "max";
+export type ReviewRunner = "ci" | "local";
 
 export interface ResolvedConfig {
 	repo: string;
@@ -94,6 +95,9 @@ export interface ResolvedConfig {
 	 *  github-issues + PR-ship repo sweeps for red-review PRs and revises them in-process on the
 	 *  local Claude subscription. `local: false` is the documented off-switch. */
 	revise: { local: boolean };
+	/** PR review poster. `ci` preserves the GitHub Actions gate; `local` runs a trusted local sweep
+	 *  and posts commit statuses with context `review`. `statuslessAfter` is parsed by consumers. */
+	review: { runner: ReviewRunner; statuslessAfter: string };
 	/** Outbound run-outcome notifications. Disabled when `url` is empty (the default). */
 	notify: NotifyConfig;
 }
@@ -154,6 +158,7 @@ export const DEFAULTS = {
 	// default-on does nothing for every markdown/direct-push consumer. `revise.local: false` is
 	// the off-switch, mirroring the CI `AUTOPILOT_AUTO_REVISE=false` off-switch.
 	revise: { local: true },
+	review: { runner: "ci", statuslessAfter: "2h" },
 	// Notifications off by default (empty url). Enabling only `notify.url` turns on every
 	// event with the `json` format; `format: ntfy` + a topic URL gives ntfy.sh pushes.
 	// `NOTIFY_EVENTS` is the single source of the event list (validation uses it too) —
@@ -174,6 +179,7 @@ function isStep(key: string): key is Step {
 const isNumber = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 const isEffort = (v: unknown): v is Effort => v === "low" || v === "medium" || v === "high" || v === "xhigh" || v === "max";
 const isString = (v: unknown): v is string => typeof v === "string";
+const isReviewRunner = (v: unknown): v is ReviewRunner => v === "ci" || v === "local";
 
 function mergeStepRecord<T>(defaults: Record<Step, T>, override: unknown, section: string, validate: (v: unknown) => v is T, configPath: string): Record<Step, T> {
 	if (override === undefined) return { ...defaults };
@@ -465,6 +471,31 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		}
 	}
 
+	// review.*: CI vs local PR-review poster. Type-validate only; the wait string is parsed by
+	// the sweep consumer with parseWaitFlag, matching park.max-wait's tolerant parsing.
+	let reviewRunner: ReviewRunner = DEFAULTS.review.runner;
+	let reviewStatuslessAfter: string = DEFAULTS.review.statuslessAfter;
+	const reviewBlock = yml.review;
+	if (reviewBlock !== undefined) {
+		if (!isPlainObject(reviewBlock)) {
+			throw new Error(`${configPath}: expected \`review\` to be a map`);
+		}
+		const runner = reviewBlock.runner;
+		if (runner !== undefined) {
+			if (!isReviewRunner(runner)) {
+				throw new Error(`${configPath}: expected \`review.runner\` to be one of ci|local, got ${JSON.stringify(runner)}`);
+			}
+			reviewRunner = runner;
+		}
+		const statuslessAfter = reviewBlock["statusless-after"];
+		if (statuslessAfter !== undefined) {
+			if (!isString(statuslessAfter)) {
+				throw new Error(`${configPath}: expected \`review.statusless-after\` to be a string, got ${typeof statuslessAfter}`);
+			}
+			reviewStatuslessAfter = statuslessAfter;
+		}
+	}
+
 	// notify.*: outbound run-outcome webhook. Disabled by default (url: "").
 	let notifyUrl: string = DEFAULTS.notify.url;
 	let notifyFormat: NotifyFormat = DEFAULTS.notify.format;
@@ -518,6 +549,7 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		roadmapLinear,
 		park: { autoResume: parkAutoResume, maxWait: parkMaxWait, unknownResetWait: parkUnknownResetWait },
 		revise: { local: reviseLocal },
+		review: { runner: reviewRunner, statuslessAfter: reviewStatuslessAfter },
 		notify: { url: notifyUrl, format: notifyFormat, events: notifyEvents },
 	};
 }
@@ -567,3 +599,4 @@ export const ROADMAP_SOURCE: RoadmapSourceName = CONFIG.roadmapSource;
 export const ROADMAP_GITHUB: GithubRoadmapConfig = CONFIG.roadmapGithub;
 export const ROADMAP_LINEAR: LinearRoadmapConfig = CONFIG.roadmapLinear;
 export const REVISE_LOCAL: boolean = CONFIG.revise.local;
+export const REVIEW_CONFIG: { runner: ReviewRunner; statuslessAfter: string } = CONFIG.review;

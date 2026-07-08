@@ -11,7 +11,24 @@ the pipeline's own work *in-context*, before ship. This gate is a fresh SDK sess
 that reads the PR diff cold — the same shape that has caught things the in-context
 review missed.
 
-## How it works
+## Runner modes
+
+`review.runner` selects who posts the required `review` context:
+
+- `ci` (default): `.github/workflows/pr-review.yml` runs the `pr-review` CLI in
+  GitHub Actions and the job result is the `review` check.
+- `local`: a normal local autopilot auto-pick run sweeps open PRs before revise,
+  runs the same `pr-review` step from the trusted local tree, and posts commit
+  statuses with context `review`.
+
+Local mode is deliberately trusted-tree: the CLI, skill, parser, rubric, and status
+posting code run from local `main`; the PR head is fetched only as diff/file data.
+Set the repo variable `AUTOPILOT_REVIEW_RUNNER=local` so the CI workflow leaves only
+a diagnostic comment and does not execute review tooling from the PR branch. The
+local `gh` auth needs permission to write commit statuses (`statuses: write`) and PR
+comments.
+
+## CI runner flow
 
 1. `.github/workflows/pr-review.yml` triggers on `pull_request`
    (`opened`, `synchronize`, `reopened`, `ready_for_review`) targeting `main`.
@@ -137,6 +154,26 @@ models:
 ```
 
 Select the profile with `--profile <name>` (default `standard`).
+
+For local subscription review with Codex, configure the poster and provider separately:
+
+```yaml
+review:
+  runner: local
+  statusless-after: 2h
+
+models:
+  profiles:
+    standard:
+      providers:
+        pr-review: codex
+      codex:
+        pr-review: gpt-5-codex
+```
+
+When a local-mode PR has no `review` status for longer than `statusless-after`, the
+orchestrator posts the local-mode diagnostic comment and emits the
+`review-stranded` notification event if notifications are enabled.
 
 ## Runner & secrets (repo-admin, one-time)
 
