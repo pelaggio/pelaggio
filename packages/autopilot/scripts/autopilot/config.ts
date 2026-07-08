@@ -8,6 +8,10 @@ import type { ProviderName, ShipTargetName } from "./types.js";
 
 const SHIP_TARGET_NAMES: readonly ShipTargetName[] = ["direct-push", "pull-request", "auto-merge-pr"];
 
+// Security-relevant default: `pull-request` keeps a human review gate in the loop.
+// `direct-push` / `auto-merge-pr` are explicit opt-ins (they emit a loud startup banner).
+export const DEFAULT_SHIP_TARGET: ShipTargetName = "pull-request";
+
 // The backends a step's model can run on. Mirrors `SHIP_TARGET_NAMES`: the type
 // lives in `types.ts`, this validation array is its module-private companion. #80
 // widens both to add a second provider. `DEFAULT_PROVIDER` is the fallback every
@@ -321,8 +325,8 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 	}
 	const worktreePrefix = process.env.CLAUDE_AUTOPILOT_WORKTREE_PREFIX ?? ymlPrefix ?? `${basename(repo)}-`;
 
-	// ship.target: default "direct-push"; validate against SHIP_TARGET_NAMES
-	let shipTarget: ShipTargetName = "direct-push";
+	// ship.target: default DEFAULT_SHIP_TARGET ("pull-request"); validate against SHIP_TARGET_NAMES
+	let shipTarget: ShipTargetName = DEFAULT_SHIP_TARGET;
 	const shipBlock = yml.ship;
 	if (shipBlock !== undefined) {
 		if (!isPlainObject(shipBlock)) {

@@ -10,7 +10,11 @@
 #   implement: 25
 #
 # ship:
-#   target: direct-push  # direct-push | pull-request | auto-merge-pr
+#   target: pull-request # default: pull-request — keeps a human review gate in the loop.
+#                        # Opt-in autonomous alternatives (each fires a loud one-time startup
+#                        # banner — no human review gate):
+#                        #   direct-push   squash-merge into local main and push to origin
+#                        #   auto-merge-pr open a PR and auto-merge once CI passes
 #
 # revise:                # local revise sweep — auto-fix red-review PRs in-process (issue #76)
 #   local: true          # default: true. Opt-out switch. A hard no-op unless the repo is

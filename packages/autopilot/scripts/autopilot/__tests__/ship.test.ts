@@ -4,10 +4,11 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { loadConfig } from "../config.js";
-import { runPipeline } from "../pipeline.js";
+import { DEFAULT_SHIP_TARGET, loadConfig } from "../config.js";
+import { remotePushWarning, runPipeline } from "../pipeline.js";
 import type { ShipBookkeepingCtx, ShipBookkeepingResult } from "../ship/index.js";
-import { getShipTarget, isShipTargetName, SHIP_TARGET_NAMES } from "../ship/index.js";
+import { getShipTarget, isAutonomousRemotePush, isShipTargetName, SHIP_TARGET_NAMES } from "../ship/index.js";
+import { stripAnsi } from "../tui.js";
 import type { Flags, PipelineOpts, ShipTargetName, StepResult } from "../types.js";
 import { allCommitMessages, createMockRunStep, makeLiveStatus, makeParkSignal, makeTempGitRepo, makeTempRepoWithParent } from "./mocks.js";
 
@@ -553,9 +554,11 @@ describe("loadConfig — ship.target validation", () => {
 		return path;
 	}
 
-	it("defaults to direct-push when ship block absent", () => {
+	it("defaults to pull-request when ship block absent", () => {
 		const path = writeYml("");
-		assert.equal(loadConfig({ configPath: path }).shipTarget, "direct-push");
+		// Assert against the exported constant too, so test and default can't silently diverge.
+		assert.equal(DEFAULT_SHIP_TARGET, "pull-request");
+		assert.equal(loadConfig({ configPath: path }).shipTarget, DEFAULT_SHIP_TARGET);
 	});
 
 	it("accepts each valid target name", () => {
@@ -582,5 +585,43 @@ describe("loadConfig — ship.target validation", () => {
 	it("throws when ship is not a map", () => {
 		const path = writeYml("ship: nope\n");
 		assert.throws(() => loadConfig({ configPath: path }), /ship.*map/);
+	});
+});
+
+// ── Autonomous-remote-push classifier ────────────────────────────────
+
+describe("isAutonomousRemotePush", () => {
+	it("is true for the autonomous-push opt-in targets", () => {
+		assert.equal(isAutonomousRemotePush("direct-push"), true);
+		assert.equal(isAutonomousRemotePush("auto-merge-pr"), true);
+	});
+
+	it("is false for the review-gated default", () => {
+		assert.equal(isAutonomousRemotePush("pull-request"), false);
+		assert.equal(isAutonomousRemotePush(DEFAULT_SHIP_TARGET), false);
+	});
+});
+
+// ── Startup banner builder ───────────────────────────────────────────
+
+describe("remotePushWarning", () => {
+	it("returns null for the safe default (no banner)", () => {
+		assert.equal(remotePushWarning("pull-request"), null);
+	});
+
+	it("fires for direct-push, naming the target and the remediation hint", () => {
+		const banner = remotePushWarning("direct-push");
+		assert.ok(banner, "expected a non-null banner");
+		const text = stripAnsi(banner);
+		assert.match(text, /direct-push/);
+		assert.match(text, /pull-request/);
+	});
+
+	it("fires for auto-merge-pr, naming the target and the remediation hint", () => {
+		const banner = remotePushWarning("auto-merge-pr");
+		assert.ok(banner, "expected a non-null banner");
+		const text = stripAnsi(banner);
+		assert.match(text, /auto-merge-pr/);
+		assert.match(text, /pull-request/);
 	});
 });
