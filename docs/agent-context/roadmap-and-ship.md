@@ -1,0 +1,66 @@
+# Roadmap And Ship Context
+
+## Roadmap Sources
+
+Roadmap + task-index access goes through the `RoadmapSource` interface (`packages/autopilot/scripts/autopilot/roadmap/index.ts`).
+
+Adapters today:
+
+- `markdown`: parses `docs/roadmap-*.md` + `docs/task-index.md`.
+- `github-issues`: GitHub issues via `gh`.
+- `linear`: Linear issues via `@linear/sdk`.
+
+`getRoadmapSource(name, { repo })` is the factory; the resolved name comes from `roadmap.source` in `.autopilot.yml` (default `"markdown"`). Adding an adapter means a new file under `roadmap/`, widening the `RoadmapSourceName` union in `roadmap/types.ts`, and extending the factory `switch`. No skill edits are needed.
+
+### Skill → adapter bridge
+
+Skill bodies never read roadmap files or issue trackers directly — they shell out to the `roadmap` CLI (`roadmap-cli.ts`), which dispatches to the configured source:
+
+```bash
+npx @cdhorne/claude-autopilot roadmap <subcommand>
+```
+
+Subcommands: `list`, `get`, `claim`, `plan-path`, `publish-plan`, `mark-done`, `create-item`, `archive-plan`, `source`. Same idiom as `worktree-deps`. Do not duplicate adapter logic inside skills.
+
+Always use the **scoped** name `@cdhorne/claude-autopilot`, never bare `claude-autopilot`. The bare name collides with an unrelated public npm package cached under `~/.npm/_npx/`; a cached hit caused an observed pipeline recursion (TOOL-50) where the agent substituted `pnpm autopilot <subcommand>` and re-entered the pipeline. The root `package.json` carries `@cdhorne/claude-autopilot: workspace:*` so pnpm exposes it at the workspace root; `check-skills` enforces this (`skill.npx-bare-autopilot`, `skill.pnpm-autopilot-subcommand`), and the pipeline entry (`cli.ts`) rejects unknown positional args as defense in depth.
+
+## Claims
+
+Claims are git-native (#12). "Claimed" means the `feat/<id>` branch exists — git's ref locking is the arbiter (a losing `roadmap claim` exits **3**, `pick-result: already-claimed`, recoverable). There is no claims file, owner pid, or staleness lifecycle; release is branch deletion (owned by ship bookkeeping / `/tidy`). The markdown adapter surfaces claims as `in-progress` by scanning `feat/*` branches; github/linear surface server-side markers.
+
+Shared-file writers — `markDone`/`createItem`/`archivePlan` and `commitStrayBookkeeping`'s `git add -A` sweep — take `.dev/roadmap-mutation.lock` **internally** (O_EXCL token lockfile, expiry-in-content, atomic rename-verify steal/release — `roadmap/mutation-lock.ts`). Callers never manage the lock. Do not add call-site locking or a parallel claim registry. Claim worktree naming uses `WORKTREE_PREFIX` from config (env > yml > basename) in all adapters.
+
+## Ship Targets
+
+`ship.target` in `.autopilot.yml` selects the behavior, dispatched via adapters under `ship/`:
+
+- `direct-push`
+- `pull-request`
+- `auto-merge-pr`
+
+Skill bodies branch on the `--target` argument; don't hardcode merge logic in TS. `/shipwreck` recovery only runs for `direct-push` — PR modes never merge in-session, so a ship failure there is reported as-is.
+
+## Direct-Push Bookkeeping
+
+For `direct-push`, the agent-owned `ship` step ends at the merge (squash → merge into local `main` → post-merge verify → STOP, emitting `ship-merged: <id>`). Everything after — recovering stray `MAIN_REPO` changes as a commit (**never discard**), `roadmap.markDone`, `roadmap.archivePlan`, the single `git push origin main`, and worktree/branch cleanup — runs in `pipeline.ts` via `runShipBookkeeping()` (`ship/bookkeeping.ts`) as **zero-turn, idempotent, best-effort** deterministic tail work. It is not a pipeline `STEP` (no `STEPS`/`BUDGETS`/… entry — deterministic tail work like `/shipwreck` recovery).
+
+The boundary is the merge because the observed failure (#28) was budget exhaustion *after* merging; pipeline-owned tail guarantees bookkeeping even if the agent overshoots or undershoots.
+
+- The tail runs only on a **verified** merge — `merged && ship.ok && reportedShipMerged(ship)` — because `ship.ok` means post-merge verification ran and the `ship-merged: <itemId>` marker (parsed by `parseShipMerged`, matched case-insensitively) proves it reached the hand-off gate (#37).
+- A merge that landed but then hit `error_max_turns` or hard-failed is **not** blindly pushed — it routes to `/shipwreck`, which re-runs verification with its own budget and can roll the merge back. On a **verified recovery** (`wreck.ok && reportedShipMerged(wreck) && verifyShipLanded()`) the pipeline runs the same `runShipBookkeeping()` tail, so the tail is guaranteed on both paths (#30).
+- Destructive steps (worktree/branch removal) run only after mark-done, archive, and push all genuinely succeed. A real adapter failure, push failure, or `git pull` conflict (aborted via `git merge --abort`) returns `ok:false` with the branch intact (recoverable on local `main`); the cycle is reported incomplete, never "shipped".
+- `verifyShipLanded()` fails **closed** (git error → not-landed → `/shipwreck`). Pre-ship `captureShipState()` fails closed too: a `null` capture makes the pipeline refuse to invoke `/ship` at all (#36). A pre-ship `commitStrayBookkeeping()` guard commits any dirty `MAIN_REPO` tree before the merge, so the agent never has cause to discard uncommitted work. `MarkdownRoadmap.createItem`/`markDone`/`archivePlan` commit their own pathspec with `--no-verify`.
+- There is no consumer-agnostic verification command the tail can run itself; verification is agent-delegated via `_rubric.md`, so the tail delegates it to the agent path.
+
+## PR Review Loop
+
+`pr-review` is a non-pipeline step used by the CI merge gate. The gate (`.github/workflows/pr-review.yml` → `pr-review-cli.ts` → `parseReviewGate`) fails **closed**: it exits non-zero on anything that is not an explicit `Verdict: PASS` from a successful run — `Verdict: BLOCK`, a missing verdict, a refusal, an SDK error, max-turns, or a rate-limit park all block the merge. This is stricter than `parseVerdict` (which keeps an "engaged ⇒ APPROVE" fail-safe) because a merge gate must never green on a phantom sign-off.
+
+### Revise loops (one pass, label-bounded)
+
+Only local **or** CI should be active — both race for the `autopilot:revised` label, added *before* any work. CI stays disabled repo-wide (`vars.AUTOPILOT_AUTO_REVISE = false`), so the local sweep is the sole reviser.
+
+- **CI (#60, disabled):** `pr-review-revise.yml` fires on the review workflow's `workflow_run: failure` and, exactly once per PR, re-implements from findings and re-pushes so the gate re-runs. The seam is `--review-findings <path>`, a resume-only CLI flag read best-effort in `pipeline.ts`. **Load-bearing:** the revision push must be PAT-authed (`token: secrets.GH_TOKEN`) — commits pushed with the default `GITHUB_TOKEN` don't trigger `pull_request` workflows.
+- **Local sweep (#76, default on):** at the start of a pure auto-pick run, `runOrchestrator` sweeps red-review PRs and revises each **in-process** on the local subscription — reusing `runPipeline` with `startFrom: "implement"` + a fetched `--review-findings` file, so parking/notifications/cost/shipTarget all apply for free. Hard no-op unless `revise.local` (config, default true — opt-out) **and** `roadmap.source: github-issues` **and** a PR ship target **and** `!noWorktree && !dryRun && items.length === 0`. The git/gh primitives live in `revise-sweep.ts` (pure, fail-soft, injected `GhRunner`/exec — any error skips, never throws). No new pipeline `STEP`; revisions don't consume `--cycles` but do count toward `--budget`, pushed into `results`/`totalSpent` before the worker pool. Parking is preserved with zero new exit paths (delegates to `runPipeline`'s `parkExit()`).
+
+See `docs/pr-review.md` for the full loop.
