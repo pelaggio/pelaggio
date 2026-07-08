@@ -11,7 +11,6 @@ import {
 	classifyStepError,
 	computeImplementTurns,
 	countPlanFiles,
-	estimateParkReset,
 	filesChangedSince,
 	fmtWait,
 	formatResumeHint,
@@ -29,6 +28,7 @@ import {
 	parseShipMerged,
 	parseVerdict,
 	parseWaitFlag,
+	resolveParkReset,
 	reviewFindingsPreamble,
 	verifyShipLanded,
 } from "../helpers.js";
@@ -94,23 +94,35 @@ describe("parseWaitFlag", () => {
 	});
 });
 
-describe("estimateParkReset", () => {
+describe("resolveParkReset", () => {
 	const NOW = 1_700_000_000_000;
 	const HOUR = 3_600_000;
+	const resetText = "resets 4:30pm (America/Edmonton)"; // parseResetTime → a concrete future ts
 
-	it("trusts a concrete reported reset time", () => {
-		const r = estimateParkReset(NOW + 5 * HOUR, "5h", NOW, HOUR);
+	it("trusts a concrete reset already on the event", () => {
+		const r = resolveParkReset(NOW + 5 * HOUR, true, "5h", resetText, NOW, HOUR);
 		assert.deepEqual(r, { resetsAt: NOW + 5 * HOUR, limitType: "5h" });
 	});
 
-	it("synthesizes now + estimate and marks (estimated) when reset is 0", () => {
-		const r = estimateParkReset(0, "5h", NOW, HOUR);
-		assert.deepEqual(r, { resetsAt: NOW + HOUR, limitType: "5h (estimated)" });
+	it("a reset parsed from text wins over the estimate (regression: don't clobber a real reset)", () => {
+		const r = resolveParkReset(0, true, "5h", resetText, NOW, HOUR);
+		assert.equal(r.resetsAt, parseResetTime(resetText));
+		assert.equal(r.limitType, "5h"); // not marked (estimated) — it's a real reset
 	});
 
-	it("synthesizes when reset is undefined (Codex 429 shape)", () => {
-		const r = estimateParkReset(undefined, undefined, NOW, HOUR);
+	it("estimates + marks (estimated) for a rate-limit park with no reset anywhere (Codex 429)", () => {
+		const r = resolveParkReset(0, true, "unknown", "no reset here", NOW, HOUR);
 		assert.deepEqual(r, { resetsAt: NOW + HOUR, limitType: "unknown (estimated)" });
+	});
+
+	it("a manual pause (not a rate-limit park) with no reset keeps 0 → hands back", () => {
+		const r = resolveParkReset(0, false, "paused", "no reset here", NOW, HOUR);
+		assert.deepEqual(r, { resetsAt: 0, limitType: "paused" });
+	});
+
+	it("negative reported reset falls through to the estimate", () => {
+		const r = resolveParkReset(-1, true, "weekly", "no reset here", NOW, HOUR);
+		assert.deepEqual(r, { resetsAt: NOW + HOUR, limitType: "weekly (estimated)" });
 	});
 });
 

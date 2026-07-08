@@ -640,17 +640,23 @@ export function parseWaitFlag(value: string): number {
 }
 
 /**
- * Resolve the park reset time from a rate-limit event (issue #68). When the event reports a
- * concrete reset (`reportedResetsAt > 0`) we trust it. When it doesn't — Codex 429s never carry
- * one, and some Claude events omit it — synthesize `now + estimateMs` so auto-resume waits a
- * conservative window instead of hitting the "unknown reset → end run" path. The synthesized wait
- * is still bounded downstream by the orchestrator's `--max-wait` guard. The `(estimated)` suffix
- * flows into the park banner, notify event, and jsonl `parkReason` so the wait reads as a guess.
+ * Resolve a parked step's reset time by precedence (issue #68):
+ *   1. a concrete reset already on the event (`reportedResetsAt > 0`) — trust it;
+ *   2. a reset parsed from the final step text (`parseResetTime`) — the pre-existing recovery
+ *      path for Claude limits that omit the reset in the event but state it in the message;
+ *   3. for a rate-limit park with no reset anywhere (every Codex 429, some Claude events) — a
+ *      conservative `now + estimateMs`, marked `(estimated)`, so auto-resume waits a window
+ *      instead of hitting the "unknown reset → end run" path. Still bounded by the orchestrator's
+ *      `--max-wait` guard; the suffix flows into the park banner, notify event, and jsonl.
+ * A manual pause (`isRateLimitPark === false`, e.g. SIGUSR2) with no reset keeps `0`, so the
+ * orchestrator hands back rather than auto-resuming.
  */
-export function estimateParkReset(reportedResetsAt: number | undefined, rateLimitType: string | undefined, now: number, estimateMs: number): { resetsAt: number; limitType: string } {
-	const limitType = rateLimitType ?? "unknown";
-	if (reportedResetsAt && reportedResetsAt > 0) return { resetsAt: reportedResetsAt, limitType };
-	return { resetsAt: now + estimateMs, limitType: `${limitType} (estimated)` };
+export function resolveParkReset(reportedResetsAt: number, isRateLimitPark: boolean, limitType: string, text: string, now: number, estimateMs: number): { resetsAt: number; limitType: string } {
+	if (reportedResetsAt > 0) return { resetsAt: reportedResetsAt, limitType };
+	const parsed = parseResetTime(text);
+	if (parsed) return { resetsAt: parsed, limitType };
+	if (isRateLimitPark) return { resetsAt: now + estimateMs, limitType: `${limitType} (estimated)` };
+	return { resetsAt: 0, limitType };
 }
 
 /** Format milliseconds as human-readable wait time: "4h 32m", "12m", "<1m". */
