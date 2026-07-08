@@ -162,29 +162,44 @@ export class MarkdownRoadmap implements RoadmapSource {
 		const note = ctx?.note?.trim();
 		const roadmapBody = readFileSync(roadmapPath, "utf-8");
 		const updatedRoadmap = detectFormat(roadmapBody) === "checkbox" ? markCheckboxRowDone(roadmapBody, id, note) : strikethroughRoadmapRow(roadmapBody, id, note);
+		let roadmapChanged = false;
 		if (updatedRoadmap === roadmapBody) {
 			// No open row was rewritten. Distinguish the idempotent case (the item is
-			// already marked done → a safe no-op the bookkeeping tail relies on) from a
-			// real failure (the row is genuinely absent / format has drifted while the
-			// item is still open → must surface, not be swallowed as "already done").
-			if (roadmapRowState(roadmapBody, id) === "done") return;
-			throw new Error(`markDone: could not locate open row for ${id} in ${roadmapPath}`);
+			// already marked done — fall through to reconcile the OTHER artifacts, since
+			// an agent that pre-marked the roadmap row may not have touched task-index)
+			// from a real failure (the row is genuinely absent / format has drifted while
+			// the item is still open → must surface, not be swallowed as "already done").
+			if (roadmapRowState(roadmapBody, id) !== "done") {
+				throw new Error(`markDone: could not locate open row for ${id} in ${roadmapPath}`);
+			}
+		} else {
+			writeFileSync(roadmapPath, updatedRoadmap);
+			roadmapChanged = true;
 		}
-		writeFileSync(roadmapPath, updatedRoadmap);
 
 		const indexPath = resolveTaskIndexPath(docsDir);
 		const indexExists = existsSync(indexPath);
+		let indexChanged = false;
 		if (indexExists) {
 			const indexBody = readFileSync(indexPath, "utf-8");
 			const updatedIndex = moveToCompleted(indexBody, id);
-			if (updatedIndex !== indexBody) writeFileSync(indexPath, updatedIndex);
+			if (updatedIndex !== indexBody) {
+				writeFileSync(indexPath, updatedIndex);
+				indexChanged = true;
+			}
 		}
 
-		// Commit only the paths this call touched (own pathspec) with `--no-verify`,
-		// so a consumer's pre-commit hook can't break the pipeline and an unrelated
-		// staged change can't be swept into the roadmap commit.
-		const paths = [relative(this.repo, roadmapPath)];
-		if (indexExists) paths.push(relative(this.repo, indexPath));
+		// Idempotency is per-artifact, not global: only skip the commit when NEITHER
+		// artifact needed a change. A pre-marked roadmap row with a stale task-index
+		// still needs its index entry reconciled and committed (issue #39).
+		if (!roadmapChanged && !indexChanged) return;
+
+		// Commit only the paths this call actually changed (own pathspec) with
+		// `--no-verify`, so a consumer's pre-commit hook can't break the pipeline and
+		// an unrelated staged change can't be swept into the roadmap commit.
+		const paths: string[] = [];
+		if (roadmapChanged) paths.push(relative(this.repo, roadmapPath));
+		if (indexChanged) paths.push(relative(this.repo, indexPath));
 		const pathArgs = paths.map((p) => JSON.stringify(p)).join(" ");
 		execSync(`git add ${pathArgs}`, { cwd: this.repo, stdio: "pipe" });
 		const msg = note ? `docs: mark ${id} done — ${note}` : `docs: mark ${id} done`;
