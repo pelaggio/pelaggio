@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
 import { resolveArtifactRoot } from "../artifact-root.js";
-import { lintAllSkills, lintSkillFile, lintTemplates, type Violation } from "../check-skills.js";
+import { lintAgentContext, lintAllSkills, lintSkillFile, lintTemplates, type Violation } from "../check-skills.js";
 
 const REAL_REPO_ROOT = resolveArtifactRoot(import.meta.url);
 
@@ -352,5 +352,64 @@ describe("check-skills — lintAllSkills", () => {
 		mkdirSync(realDir, { recursive: true });
 		writeFileSync(join(realDir, "SKILL.md"), VALID_FRONTMATTER.replace("name: demo", "name: real"));
 		assert.deepEqual(lintAllSkills(repoRoot), []);
+	});
+});
+
+describe("check-skills — lintAgentContext", () => {
+	function makeRepoWithAgentContext(args: { claudeBody?: string; agentsBody?: string; omitAgents?: boolean; omitAgentDocs?: boolean; codexSkills?: "symlink" | "dir" | "wrong-target" | "missing" } = {}): string {
+		const repoRoot = mkdtempSync(join(tmpdir(), "autopilot-lint-agent-"));
+		mkdirSync(join(repoRoot, ".claude/skills"), { recursive: true });
+		mkdirSync(join(repoRoot, ".agents"), { recursive: true });
+		if (!args.omitAgentDocs) mkdirSync(join(repoRoot, "docs/agent-context"), { recursive: true });
+		if (!args.omitAgents) writeFileSync(join(repoRoot, "AGENTS.md"), args.agentsBody ?? "# Agents\n\nSee docs/agent-context/pipeline.md.\n");
+		writeFileSync(join(repoRoot, "CLAUDE.md"), args.claudeBody ?? "@AGENTS.md\n\n## Claude Code\n\nClaude-only notes.\n");
+		const codexSkills = join(repoRoot, ".agents/skills");
+		switch (args.codexSkills ?? "symlink") {
+			case "symlink":
+				symlinkSync("../.claude/skills", codexSkills);
+				break;
+			case "dir":
+				mkdirSync(codexSkills, { recursive: true });
+				break;
+			case "wrong-target":
+				symlinkSync("../.claude", codexSkills);
+				break;
+			case "missing":
+				break;
+		}
+		return repoRoot;
+	}
+
+	function rules(args: Parameters<typeof makeRepoWithAgentContext>[0]): string[] {
+		return lintAgentContext(makeRepoWithAgentContext(args)).map((v) => v.rule);
+	}
+
+	it("accepts the bilingual context substrate", () => {
+		assert.deepEqual(lintAgentContext(makeRepoWithAgentContext()), []);
+	});
+
+	it("requires CLAUDE.md to import AGENTS.md", () => {
+		assert.deepEqual(rules({ claudeBody: "# Claude-only duplicate\n" }), ["agent-context.no-agents-import"]);
+	});
+
+	it("flags a CLAUDE.md that outgrows a thin shim", () => {
+		const body = `@AGENTS.md\n${"x\n".repeat(90)}`;
+		assert.deepEqual(rules({ claudeBody: body }), ["agent-context.too-large"]);
+	});
+
+	it("flags AGENTS.md when it is missing or too large or does not route to detail docs", () => {
+		assert.deepEqual(rules({ omitAgents: true }), ["agent-context.missing"]);
+		assert.deepEqual(rules({ agentsBody: `docs/agent-context/x.md\n${"x\n".repeat(210)}` }), ["agent-context.too-large"]);
+		assert.deepEqual(rules({ agentsBody: "# Agents\n\nNo routing here.\n" }), ["agent-context.no-routing"]);
+	});
+
+	it("requires the progressive-disclosure detail docs directory", () => {
+		assert.deepEqual(rules({ omitAgentDocs: true }), ["agent-context.missing"]);
+	});
+
+	it("requires .agents/skills to be a symlink to the canonical skill tree", () => {
+		assert.deepEqual(rules({ codexSkills: "dir" }), ["agent-context.not-symlink"]);
+		assert.deepEqual(rules({ codexSkills: "missing" }), ["agent-context.missing"]);
+		assert.deepEqual(rules({ codexSkills: "wrong-target" }), ["agent-context.wrong-target"]);
 	});
 });

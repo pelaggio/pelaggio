@@ -7,7 +7,7 @@
  * Pure checker — no auto-fix. Exits 0 on success, 1 on any violation.
  */
 
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, statSync } from "node:fs";
 import { basename, dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
@@ -322,6 +322,65 @@ export function lintTemplates(repoRoot: string): Violation[] {
 	return sortViolations(out);
 }
 
+function lineCount(body: string): number {
+	// Count readable lines without treating the common final newline as a blank line.
+	const normalized = body.endsWith("\n") ? body.slice(0, -1) : body;
+	return normalized.length === 0 ? 0 : normalized.split(/\r?\n/).length;
+}
+
+/** Lint the shared Claude/Codex context substrate. */
+export function lintAgentContext(repoRoot: string): Violation[] {
+	const out: Violation[] = [];
+	const agents = resolve(repoRoot, "AGENTS.md");
+	const claude = resolve(repoRoot, "CLAUDE.md");
+	const agentDocs = resolve(repoRoot, "docs/agent-context");
+	const codexSkills = resolve(repoRoot, ".agents/skills");
+	const claudeSkills = resolve(repoRoot, ".claude/skills");
+
+	if (!existsSync(agents)) {
+		out.push({ file: "AGENTS.md", rule: "agent-context.missing", message: "portable root instructions must exist for Codex-compatible agents" });
+	} else {
+		const body = readFileSync(agents, "utf-8");
+		if (lineCount(body) > 200) {
+			out.push({ file: "AGENTS.md", rule: "agent-context.too-large", message: "AGENTS.md should stay under 200 lines; move detail into docs/agent-context/" });
+		}
+		if (!body.includes("docs/agent-context/")) {
+			out.push({ file: "AGENTS.md", rule: "agent-context.no-routing", message: "AGENTS.md should route detailed context to docs/agent-context/" });
+		}
+	}
+
+	if (!existsSync(claude)) {
+		out.push({ file: "CLAUDE.md", rule: "agent-context.missing", message: "Claude Code shim must exist and import AGENTS.md" });
+	} else {
+		const body = readFileSync(claude, "utf-8");
+		if (!/^@AGENTS\.md\s*$/m.test(body)) {
+			out.push({ file: "CLAUDE.md", rule: "agent-context.no-agents-import", message: "CLAUDE.md must import AGENTS.md instead of duplicating shared instructions" });
+		}
+		if (lineCount(body) > 80) {
+			out.push({ file: "CLAUDE.md", rule: "agent-context.too-large", message: "CLAUDE.md should contain only Claude-specific notes; shared guidance belongs in AGENTS.md" });
+		}
+	}
+
+	if (!existsSync(agentDocs) || !statSync(agentDocs).isDirectory()) {
+		out.push({ file: "docs/agent-context", rule: "agent-context.missing", message: "progressive-disclosure detail docs must live under docs/agent-context/" });
+	}
+
+	if (!existsSync(codexSkills)) {
+		out.push({ file: ".agents/skills", rule: "agent-context.missing", message: "Codex repo skills must expose the canonical skill tree" });
+	} else if (!lstatSync(codexSkills).isSymbolicLink()) {
+		// A symlink (not a copied mirror) is what keeps the Codex-visible tree single-sourced from the canonical one.
+		out.push({ file: ".agents/skills", rule: "agent-context.not-symlink", message: ".agents/skills must be a symlink to ../.claude/skills so the Codex-visible tree cannot drift" });
+	} else if (resolve(dirname(codexSkills), readlinkSync(codexSkills)) !== claudeSkills) {
+		out.push({ file: ".agents/skills", rule: "agent-context.wrong-target", message: ".agents/skills must point at the canonical .claude/skills tree" });
+	}
+
+	if (!existsSync(claudeSkills)) {
+		out.push({ file: ".claude/skills", rule: "agent-context.missing", message: "canonical Claude skill tree is required for package publishing" });
+	}
+
+	return sortViolations(out);
+}
+
 export function formatViolations(violations: Violation[]): string {
 	if (violations.length === 0) return "";
 	const lines = violations.map((v) => {
@@ -335,7 +394,7 @@ export function formatViolations(violations: Violation[]): string {
 }
 
 export async function main(_argv: string[]): Promise<number> {
-	const violations = sortViolations([...lintAllSkills(REPO), ...lintTemplates(REPO)]);
+	const violations = sortViolations([...lintAllSkills(REPO), ...lintTemplates(REPO), ...lintAgentContext(REPO)]);
 	if (violations.length === 0) return 0;
 	console.log(formatViolations(violations));
 	return 1;
