@@ -1027,6 +1027,132 @@ describe("runPipeline — worktree confinement audit", () => {
 		assert.equal(result.error, undefined);
 	});
 
+	it("fails when a pick step dirties a sibling worktree", async () => {
+		const { parent, repo: mainRepo } = makeTempRepoWithParent();
+		const sibling = join(parent, `${WORKTREE_PREFIX}sibling`);
+		execSync(`git worktree add -q -b feat/sibling "${sibling}"`, { cwd: mainRepo });
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep, calls } = createMockRunStep(
+			{
+				pick: {
+					ok: true,
+					text: "claimed TOOL-99\npick-item: TOOL-99\npick-result: claimed",
+					sideEffect: () => {
+						writeFileSync(join(sibling, "foreign.txt"), "x");
+					},
+				},
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline({ cycle: 1, verbose: false, shipTarget: getShipTarget("direct-push"), dryRun: false, liveStatus: makeLiveStatus() }, parkSignal, baseFlags, {
+			runStep,
+			mainRepo,
+			listWorktrees: () => [mainRepo, sibling],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+			roadmap: makeMockRoadmap(),
+		});
+
+		assert.equal(result.completed, false);
+		assert.equal(result.error, "pick failed");
+		assert.deepEqual(
+			calls.map((c) => c.step),
+			["pick"],
+		);
+		const steps = logs[0].steps as Array<{ name: string; subtype?: string; ok: boolean }>;
+		const last = steps.at(-1);
+		assert.equal(last?.name, "pick");
+		assert.equal(last?.ok, false);
+		assert.equal(last?.subtype, "error_confinement");
+	});
+
+	it("fails when a shipwreck step dirties a sibling worktree", async () => {
+		const { parent, mainRepo, worktree } = makeConfinementRepos();
+		const sibling = join(parent, `${WORKTREE_PREFIX}shipwreck-sibling`);
+		execSync(`git worktree add -q -b feat/shipwreck-sibling "${sibling}"`, { cwd: mainRepo });
+		const parkSignal = makeParkSignal();
+		const { runStep, calls } = createMockRunStep(
+			{
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				ship: { ok: false },
+				shipwreck: {
+					ok: true,
+					sideEffect: () => {
+						writeFileSync(join(sibling, "shipwreck-foreign.txt"), "x");
+					},
+				},
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("direct-push") }, parkSignal, baseFlags, {
+			runStep,
+			mainRepo,
+			listWorktrees: () => [mainRepo, worktree, sibling],
+			appendLog: () => {},
+			roadmap: makeMockRoadmap(),
+		});
+
+		assert.equal(result.completed, false);
+		assert.deepEqual(
+			calls.map((c) => c.step),
+			["implement", "shakedown-code", "ship", "shipwreck"],
+		);
+	});
+
+	it("does not flag shipwreck finishing a pre-existing squash/commit in the item's own worktree", async () => {
+		const { mainRepo, worktree } = makeConfinementRepos();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep, calls } = createMockRunStep(
+			{
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				// Simulate the "mid-squash" state /shipwreck exists to recover (SKILL.md
+				// 3c): ship's own squash left staged changes pending commit in the item's
+				// own worktree before it failed. (Staging this before implement's own
+				// checkpoint would sweep it up as an implement commit instead.)
+				ship: {
+					ok: false,
+					sideEffect: () => {
+						writeFileSync(join(worktree, "squash-pending.txt"), "x");
+						execSync("git add squash-pending.txt", { cwd: worktree });
+					},
+				},
+				shipwreck: {
+					ok: true,
+					sideEffect: () => {
+						execSync('git commit -qm "finish squash"', { cwd: worktree });
+					},
+				},
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("direct-push") }, parkSignal, baseFlags, {
+			runStep,
+			mainRepo,
+			listWorktrees: () => [mainRepo, worktree],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+			roadmap: makeMockRoadmap(),
+		});
+
+		assert.deepEqual(
+			calls.map((c) => c.step),
+			["implement", "shakedown-code", "ship", "shipwreck"],
+		);
+		const steps = logs[0].steps as Array<{ name: string; subtype?: string }>;
+		const wreckStep = steps.find((s) => s.name === "shipwreck");
+		assert.notEqual(wreckStep?.subtype, "error_confinement", `shipwreck's own-worktree squash/commit must not trip confinement; got subtype=${wreckStep?.subtype}`);
+		assert.notEqual(result.error, "shipwreck failed: confinement violation");
+	});
+
 	it("routes ship-step confinement terminal instead of invoking shipwreck or target interpretation", async () => {
 		const { parent, mainRepo, worktree } = makeConfinementRepos();
 		const sibling = join(parent, `${WORKTREE_PREFIX}ship-sibling`);
@@ -1822,6 +1948,8 @@ describe("runPipeline — pick step", () => {
 		const logs: Array<Record<string, unknown>> = [];
 		const aPath = join(parent, `${WORKTREE_PREFIX}comp-11-a`);
 		const bPath = join(parent, `${WORKTREE_PREFIX}comp-11-b`);
+		execSync(`git worktree add -q -b feat/comp-11-a "${aPath}"`, { cwd: repo });
+		execSync(`git worktree add -q -b feat/comp-11-b "${bPath}"`, { cwd: repo });
 
 		const { runStep } = createMockRunStep({ pick: { ok: true, text: "claimed COMP-11\npick-item: COMP-11\npick-result: claimed" } }, parkSignal);
 
@@ -1846,7 +1974,6 @@ describe("runPipeline — pick step", () => {
 		const fallbackPath = join(parent, `${WORKTREE_PREFIX}renamed`);
 		const parkSignal = makeParkSignal();
 		const logs: Array<Record<string, unknown>> = [];
-		let listCalls = 0;
 		const { runStep, calls } = createMockRunStep(
 			{
 				pick: {
@@ -1876,11 +2003,12 @@ describe("runPipeline — pick step", () => {
 			runStep,
 			mainRepo: repo,
 			resolveWorktree: () => resolvedPath,
-			listWorktrees: () => {
-				listCalls++;
-				// First call captures worktreesBefore (empty); second call surfaces the newly added path.
-				return listCalls === 1 ? [] : [repo, fallbackPath];
-			},
+			// fallbackPath doesn't exist until pick's sideEffect creates it (mid-step), so an
+			// existence check — rather than a call-count guess — naturally reflects "before" (not
+			// yet created, e.g. the pre-step confinement audit and worktreesBefore capture) vs
+			// "after" (the post-pick fallback lookup) regardless of how many times the confinement
+			// audit calls listWorktrees() around the step.
+			listWorktrees: () => (existsSync(fallbackPath) ? [repo, fallbackPath] : []),
 			appendLog: (e) => {
 				logs.push(e);
 			},
