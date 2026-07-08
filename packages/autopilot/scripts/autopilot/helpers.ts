@@ -431,28 +431,39 @@ export function filesChangedSince(cwd: string, preSha: string | null): string[] 
 
 /**
  * Plan-polish backstop (#80). During `implement`, `docs/plans/` is execute-only. The Claude
- * provider enforces this with a PreToolUse hook, but a sandboxed provider (Codex) can't express
- * path-exclusion — so this deterministic, provider-agnostic backstop reverts any `docs/plans/`
- * edits made during the step, INCLUDING committed ones, by restoring the subtree to its pre-step
- * (`sinceSha`) state and committing the reversion. Returns the reverted paths (empty when nothing
- * changed — the normal case, and always so for the hook-guarded Claude path). Scope matches the
- * issue's prescription: modify/delete of the tracked plan document (a plan is created in the `plan`
- * step, so it exists at `sinceSha`); a brand-new file added under `docs/plans/` during implement is
- * out of scope. Failures are surfaced loudly but never crash the pipeline.
+ * provider enforces this with a PreToolUse hook that blocks Writes there, but a sandboxed provider
+ * (Codex) can't express path-exclusion — so this deterministic, provider-agnostic backstop fully
+ * reverts the `docs/plans/` subtree to its pre-step (`sinceSha`) state, INCLUDING committed edits:
+ * `checkout` restores modified/deleted files that existed at `sinceSha`, and files ADDED during the
+ * step (not in `sinceSha`) are removed — matching the hook's coverage (which also prevents new plan
+ * files). Note: `sinceSha` is the pre-`implement` HEAD, so it only covers the CURRENT session's
+ * edits; polish committed by an earlier parked-then-resumed implement session is already in the
+ * baseline. Returns the reverted paths (empty when nothing changed — the normal case, and always so
+ * for the hook-guarded Claude path). Failures are surfaced loudly but never crash the pipeline.
  */
 export function revertPlanPolish(cwd: string, sinceSha: string | null): string[] {
 	if (!sinceSha) return [];
 	let changed: string[];
+	let added: string[];
 	try {
 		const out = execSync(`git diff --name-only ${sinceSha} -- docs/plans`, { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 		changed = out ? out.split("\n").filter(Boolean) : [];
+		const addedOut = execSync(`git diff --diff-filter=A --name-only ${sinceSha} -- docs/plans`, { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+		added = addedOut ? addedOut.split("\n").filter(Boolean) : [];
 	} catch {
 		return [];
 	}
 	if (changed.length === 0) return [];
 	try {
-		execSync(`git checkout ${sinceSha} -- docs/plans`, { cwd, encoding: "utf-8", stdio: "pipe" });
-		execSync(`git add -A -- docs/plans && git commit -m "revert: plan-polish edits during implement (docs/plans is execute-only)" --no-verify`, { cwd, encoding: "utf-8", stdio: "pipe" });
+		// Restore modified/deleted files to their sinceSha content, then delete files added during
+		// the step (checkout can't remove those — they aren't in sinceSha). Commit is path-scoped to
+		// docs/plans so it never sweeps in unrelated staged changes.
+		execSync(`git checkout ${sinceSha} -- docs/plans 2>/dev/null || true`, { cwd, encoding: "utf-8", stdio: "pipe" });
+		if (added.length > 0) {
+			const paths = added.map((p) => `'${p.replace(/'/g, "'\\''")}'`).join(" ");
+			execSync(`git rm -f --ignore-unmatch -- ${paths}`, { cwd, encoding: "utf-8", stdio: "pipe" });
+		}
+		execSync(`git commit -m "revert: plan-polish edits during implement (docs/plans is execute-only)" --no-verify -- docs/plans`, { cwd, encoding: "utf-8", stdio: "pipe" });
 	} catch (e: unknown) {
 		const err = e as Record<string, unknown>;
 		const msg = `${err.stderr ?? ""}${err.stdout ?? ""}` || String((e as Error).message ?? "");

@@ -935,6 +935,9 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		// explicitly sized for it — otherwise items beyond index `max(cycles-1,
 		// parallel-1)` would silently drop off the worker queue.
 		const cycles = Math.max(requestedCycles, parallel, items.length);
+		// Provider-estimated spend (e.g. Codex on a subscription) counts toward `--budget` the same
+		// as billed USD — deliberate: it fails safe (a subscription run still respects the cap as a
+		// token-spend proxy) and the warning below marks the figure `~` so it never reads as real USD.
 		const maxBudget = parseFloat(flags.budget);
 		const dryRun = flags["dry-run"];
 		const v = flags.verbose;
