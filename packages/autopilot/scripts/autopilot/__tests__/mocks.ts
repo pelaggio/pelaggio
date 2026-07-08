@@ -206,7 +206,7 @@ export function makeMockRoadmap(overrides: Partial<RoadmapSource> = {}): Roadmap
 			const m = text.match(/\b([A-Z]{1,4}-?\d[\dA-Z]*)\b/);
 			return m?.[1] ?? null;
 		},
-		isQuickScope() {
+		isQuickScope(_input) {
 			return false;
 		},
 	};

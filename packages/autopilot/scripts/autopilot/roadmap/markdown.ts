@@ -3,7 +3,8 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { isAbsolute, relative, resolve } from "node:path";
 import { claimedIds, createClaimWorkspace } from "./git-claim.js";
 import { withMutationLock } from "./mutation-lock.js";
-import type { CreateItemOpts, ItemStatus, MarkDoneContext, MarkdownRoadmapFormat, RoadmapItem, RoadmapItemStatus, RoadmapSource, RoadmapSourceName } from "./types.js";
+import { isQuickScope } from "./scope.js";
+import type { CreateItemOpts, ItemStatus, MarkDoneContext, MarkdownRoadmapFormat, QuickScopeInput, RoadmapItem, RoadmapItemStatus, RoadmapSource, RoadmapSourceName } from "./types.js";
 
 export class MarkdownRoadmap implements RoadmapSource {
 	readonly name: RoadmapSourceName = "markdown";
@@ -42,8 +43,8 @@ export class MarkdownRoadmap implements RoadmapSource {
 		return explicit?.[1] ?? null;
 	}
 
-	isQuickScope(text: string): boolean {
-		return /scope:\s*x?s\b/i.test(text) || /\bbug\b|\bfix:/i.test(text);
+	isQuickScope(input: QuickScopeInput): boolean {
+		return isQuickScope(input);
 	}
 
 	async getItemPlan(ref: { worktree?: string; id?: string }): Promise<string | null> {

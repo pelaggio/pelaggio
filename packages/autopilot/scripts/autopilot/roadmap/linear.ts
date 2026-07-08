@@ -2,7 +2,8 @@ import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { createClaimWorkspace } from "./git-claim.js";
-import type { CreateItemOpts, ItemStatus, LinearRoadmapConfig, MarkDoneContext, PlanLocation, RoadmapItem, RoadmapItemStatus, RoadmapSource, RoadmapSourceName } from "./types.js";
+import { isQuickScope } from "./scope.js";
+import type { CreateItemOpts, ItemStatus, LinearRoadmapConfig, MarkDoneContext, PlanLocation, QuickScopeInput, RoadmapItem, RoadmapItemStatus, RoadmapSource, RoadmapSourceName } from "./types.js";
 
 const PLAN_MARKER = "<!-- autopilot-plan -->";
 const IN_PROGRESS_LABEL = "in-progress";
@@ -76,8 +77,8 @@ export class LinearRoadmap implements RoadmapSource {
 		return null;
 	}
 
-	isQuickScope(text: string): boolean {
-		return /scope:\s*x?s\b/i.test(text) || /\bbug\b|\bfix:/i.test(text);
+	isQuickScope(input: QuickScopeInput): boolean {
+		return isQuickScope(input);
 	}
 
 	async listItems(opts?: { includeDone?: boolean }): Promise<RoadmapItemStatus[]> {
@@ -114,6 +115,7 @@ export class LinearRoadmap implements RoadmapSource {
 			deps: formatDeps(relations),
 			sourceRef: issue.identifier,
 			status,
+			labels: issue.labels ?? [],
 		};
 	}
 

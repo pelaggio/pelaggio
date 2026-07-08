@@ -2,7 +2,8 @@ import { execSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { createClaimWorkspace } from "./git-claim.js";
-import type { CreateItemOpts, GithubRoadmapConfig, ItemStatus, MarkDoneContext, PlanLocation, RoadmapItem, RoadmapItemStatus, RoadmapSource, RoadmapSourceName } from "./types.js";
+import { isQuickScope } from "./scope.js";
+import type { CreateItemOpts, GithubRoadmapConfig, ItemStatus, MarkDoneContext, PlanLocation, QuickScopeInput, RoadmapItem, RoadmapItemStatus, RoadmapSource, RoadmapSourceName } from "./types.js";
 
 const PLAN_MARKER = "<!-- autopilot-plan -->";
 
@@ -57,8 +58,8 @@ export class GitHubIssuesRoadmap implements RoadmapSource {
 		return null;
 	}
 
-	isQuickScope(text: string): boolean {
-		return /scope:\s*x?s\b/i.test(text) || /\bbug\b|\bfix:/i.test(text);
+	isQuickScope(input: QuickScopeInput): boolean {
+		return isQuickScope(input);
 	}
 
 	async listItems(opts?: { includeDone?: boolean }): Promise<RoadmapItemStatus[]> {
@@ -98,6 +99,7 @@ export class GitHubIssuesRoadmap implements RoadmapSource {
 				sourceRef: `${this.ghRepo}#${it.number}`,
 				status,
 				body: it.body ?? "",
+				labels,
 			};
 		} catch (e) {
 			const msg = e instanceof Error ? e.message : String(e);

@@ -305,7 +305,8 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 
 	// ── Detect quick mode ──
 
-	if (pickText && roadmap.isQuickScope(pickText)) {
+	const quickItem = !opts.dryRun && itemId ? await roadmap.getItem(itemId).catch(() => null) : null;
+	if (roadmap.isQuickScope({ item: quickItem, summaryText: pickText })) {
 		profile = "quick";
 		log("scope S/XS or bug — quick mode (Sonnet, skip plan+shakedown-plan)");
 		startFrom ??= "implement";

@@ -35,7 +35,7 @@ interface ApiCalls {
 
 interface StubOpts {
 	issues?: LinearIssueListItem[];
-	issuesByIdentifier?: Record<string, { id: string; identifier: string; title: string } | null>;
+	issuesByIdentifier?: Record<string, Awaited<ReturnType<LinearApi["getIssue"]>>>;
 	comments?: Record<string, LinearCommentNode[]>;
 	addLabelError?: Error;
 	removeLabelError?: Error;
@@ -118,15 +118,34 @@ describe("LinearRoadmap.parseItemId", () => {
 describe("LinearRoadmap.isQuickScope", () => {
 	const r = mk({ repo: "/tmp" });
 	it("true for scope: S / XS", () => {
-		assert.equal(r.isQuickScope("scope: S"), true);
-		assert.equal(r.isQuickScope("Scope: XS"), true);
+		assert.equal(r.isQuickScope({ summaryText: "scope: S" }), true);
+		assert.equal(r.isQuickScope({ summaryText: "Scope: XS" }), true);
 	});
 	it("true for bug / fix: markers", () => {
-		assert.equal(r.isQuickScope("bug in parser"), true);
-		assert.equal(r.isQuickScope("fix: oops"), true);
+		assert.equal(r.isQuickScope({ summaryText: "bug in parser" }), true);
+		assert.equal(r.isQuickScope({ summaryText: "fix: oops" }), true);
 	});
 	it("false for scope: M", () => {
-		assert.equal(r.isQuickScope("scope: M"), false);
+		assert.equal(r.isQuickScope({ summaryText: "scope: M" }), false);
+	});
+});
+
+describe("LinearRoadmap.getItem", () => {
+	it("exposes labels from the issue response", async () => {
+		const { api } = makeStub({
+			issuesByIdentifier: {
+				"ENG-42": {
+					id: "uuid-42",
+					identifier: "ENG-42",
+					title: "Fix widget",
+					labels: ["autopilot", "scope: L"],
+					relations: [],
+				},
+			},
+		});
+		const r = mk({ repo: "/tmp", api });
+		const item = await r.getItem("ENG-42");
+		assert.deepEqual(item?.labels, ["autopilot", "scope: L"]);
 	});
 });
 
