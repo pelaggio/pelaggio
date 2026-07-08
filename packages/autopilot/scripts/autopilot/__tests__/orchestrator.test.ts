@@ -298,7 +298,10 @@ describe("runOrchestrator — park-and-resume", () => {
 		);
 	});
 
-	it("unknown reset time (resetsAt=0): exitCode 1, runPipeline not re-invoked", async (t) => {
+	// resetsAt=0 no longer models a rate-limit park — those synthesize a conservative reset at the
+	// source (#68). It now reaches the orchestrator only via manual pause (SIGUSR2) or a stale reset,
+	// neither auto-resumable by time, so the run hands back with a resume hint.
+	it("no reset time (resetsAt=0, e.g. manual pause): exitCode 1, runPipeline not re-invoked", async (t) => {
 		t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
 		const logs: string[] = [];
 		t.mock.method(console, "log", (...args: unknown[]) => {
@@ -309,7 +312,7 @@ describe("runOrchestrator — park-and-resume", () => {
 
 		const { runPipeline, calls } = createMockRunPipeline({
 			byItem: {
-				"X-1": { completed: false, cost: 0.1, error: "parked", park: { parked: true, resetsAt: 0, limitType: "5h" } },
+				"X-1": { completed: false, cost: 0.1, error: "parked", park: { parked: true, resetsAt: 0, limitType: "paused" } },
 			},
 		});
 		const { exitCode } = await runOrchestrator({ ...baseFlags, item: "X-1" }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });

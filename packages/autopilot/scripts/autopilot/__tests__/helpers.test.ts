@@ -11,6 +11,7 @@ import {
 	classifyStepError,
 	computeImplementTurns,
 	countPlanFiles,
+	estimateParkReset,
 	filesChangedSince,
 	fmtWait,
 	formatResumeHint,
@@ -90,6 +91,26 @@ describe("parseWaitFlag", () => {
 
 	it("falls back to 6h for empty string", () => {
 		assert.equal(parseWaitFlag(""), 21_600_000);
+	});
+});
+
+describe("estimateParkReset", () => {
+	const NOW = 1_700_000_000_000;
+	const HOUR = 3_600_000;
+
+	it("trusts a concrete reported reset time", () => {
+		const r = estimateParkReset(NOW + 5 * HOUR, "5h", NOW, HOUR);
+		assert.deepEqual(r, { resetsAt: NOW + 5 * HOUR, limitType: "5h" });
+	});
+
+	it("synthesizes now + estimate and marks (estimated) when reset is 0", () => {
+		const r = estimateParkReset(0, "5h", NOW, HOUR);
+		assert.deepEqual(r, { resetsAt: NOW + HOUR, limitType: "5h (estimated)" });
+	});
+
+	it("synthesizes when reset is undefined (Codex 429 shape)", () => {
+		const r = estimateParkReset(undefined, undefined, NOW, HOUR);
+		assert.deepEqual(r, { resetsAt: NOW + HOUR, limitType: "unknown (estimated)" });
 	});
 });
 

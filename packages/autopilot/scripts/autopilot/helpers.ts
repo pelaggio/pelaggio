@@ -639,6 +639,20 @@ export function parseWaitFlag(value: string): number {
 	return 6 * 3600_000; // fallback
 }
 
+/**
+ * Resolve the park reset time from a rate-limit event (issue #68). When the event reports a
+ * concrete reset (`reportedResetsAt > 0`) we trust it. When it doesn't — Codex 429s never carry
+ * one, and some Claude events omit it — synthesize `now + estimateMs` so auto-resume waits a
+ * conservative window instead of hitting the "unknown reset → end run" path. The synthesized wait
+ * is still bounded downstream by the orchestrator's `--max-wait` guard. The `(estimated)` suffix
+ * flows into the park banner, notify event, and jsonl `parkReason` so the wait reads as a guess.
+ */
+export function estimateParkReset(reportedResetsAt: number | undefined, rateLimitType: string | undefined, now: number, estimateMs: number): { resetsAt: number; limitType: string } {
+	const limitType = rateLimitType ?? "unknown";
+	if (reportedResetsAt && reportedResetsAt > 0) return { resetsAt: reportedResetsAt, limitType };
+	return { resetsAt: now + estimateMs, limitType: `${limitType} (estimated)` };
+}
+
 /** Format milliseconds as human-readable wait time: "4h 32m", "12m", "<1m". */
 export function fmtWait(ms: number): string {
 	const totalMin = Math.ceil(ms / 60_000);

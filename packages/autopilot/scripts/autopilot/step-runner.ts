@@ -3,7 +3,7 @@ import { join, resolve } from "node:path";
 import type { HookInput, HookJSONOutput, SDKAssistantMessage, SDKRateLimitEvent, SDKResultMessage, SDKSystemMessage } from "@anthropic-ai/claude-agent-sdk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { CONFIG, REPO, resolveStepSettings } from "./config.js";
-import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseResetTime } from "./helpers.js";
+import { classifyStepError, estimateParkReset, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseResetTime, parseWaitFlag } from "./helpers.js";
 import { MUTATING_TOOLS, toolBrief } from "./tui.js";
 import type { ParkSignal, ProviderName, Step, StepEmit, StepResult, TokenUsage } from "./types.js";
 import { ensureWorktreeDeps } from "./worktree-deps.js";
@@ -326,9 +326,14 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 				const info = rle.rate_limit_info;
 				const overageAvailable = info?.overageStatus === "allowed" || info?.overageStatus === "allowed_warning";
 				if (info?.status === "rejected" && !opts.parkSignal.parked && !overageAvailable) {
+					// A rate-limit event with no reset time (Codex 429s, some Claude events) gets a
+					// conservative synthesized reset here (#68) so the orchestrator waits rather than
+					// hitting the "unknown reset → end run" branch. Manual pause (SIGUSR2) keeps
+					// resetsAt=0 — it's the only park that still reaches that branch.
+					const { resetsAt, limitType } = estimateParkReset(info.resetsAt, info.rateLimitType, Date.now(), parseWaitFlag(CONFIG.park.unknownResetWait));
 					opts.parkSignal.parked = true;
-					opts.parkSignal.resetsAt = info.resetsAt ?? 0;
-					opts.parkSignal.limitType = info.rateLimitType ?? "unknown";
+					opts.parkSignal.resetsAt = resetsAt;
+					opts.parkSignal.limitType = limitType;
 					opts.parkSignal.triggerWorker = opts.itemId ?? "";
 					emit({ type: "rate_limit", limitType: opts.parkSignal.limitType, resetsAt: opts.parkSignal.resetsAt });
 				} else if (info?.status === "rejected" && overageAvailable) {

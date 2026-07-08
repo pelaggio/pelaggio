@@ -1181,13 +1181,15 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				const isWeekly = /week/i.test(parkSignal.limitType);
 				const resumeCmd = formatResumeHint(pending);
 
-				// Unknown reset → never spin (checked every round, not just the first). `break`
-				// (not `return`) so we funnel through the shared teardown+summary below — a
-				// round-≥2 exit here would otherwise leak the status-bar scroll region set up
-				// by the prior round's `statusBar.setup()`.
+				// No reset time → never spin (checked every round, not just the first). Rate-limit
+				// parks now synthesize a conservative reset upstream (#68), so this branch is reached
+				// only by a manual pause (SIGUSR2, resetsAt=0) or a stale reset already in the past —
+				// neither is auto-resumable by time. `break` (not `return`) so we funnel through the
+				// shared teardown+summary below — a round-≥2 exit here would otherwise leak the
+				// status-bar scroll region set up by the prior round's `statusBar.setup()`.
 				if (!parkSignal.resetsAt || waitMs <= 0) {
 					console.log("");
-					console.log(`${A.yellow("⏸")} ${parkSignal.limitType} limit hit — unknown reset time`);
+					console.log(`${A.yellow("⏸")} ${parkSignal.limitType} limit hit — cannot auto-resume (no reset time)`);
 					console.log(`  Parked: ${pending.join(", ")}`);
 					console.log(`  Resume: ${A.bold(resumeCmd)}`);
 					break;
