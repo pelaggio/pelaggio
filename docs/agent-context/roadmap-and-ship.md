@@ -56,6 +56,8 @@ The boundary is the merge because the observed failure (#28) was budget exhausti
 
 `pr-review` is a non-pipeline step used by the CI merge gate. The gate (`.github/workflows/pr-review.yml` → `pr-review-cli.ts` → `parseReviewGate`) fails **closed**: it exits non-zero on anything that is not an explicit `Verdict: PASS` from a successful run — `Verdict: BLOCK`, a missing verdict, a refusal, an SDK error, max-turns, or a rate-limit park all block the merge. This is stricter than `parseVerdict` (which keeps an "engaged ⇒ APPROVE" fail-safe) because a merge gate must never green on a phantom sign-off.
 
+Security-sensitive diffs run two independent `pr-review` sessions: the ordinary standard review and a triggered `--red-team` pass selected by deterministic path/diff signals in `classifySecurityReviewDiff()`. Either pass can block, and a triggered red-team pass that cannot complete blocks the whole required `review` check. Do not add a new pipeline `Step` for this; both sessions intentionally reuse the non-pipeline `pr-review` step key and aggregate into one PR comment / status result.
+
 ### Revise loops (one pass, label-bounded)
 
 Only local **or** CI should be active — both race for the `autopilot:revised` label, added *before* any work. CI stays disabled repo-wide (`vars.AUTOPILOT_AUTO_REVISE = false`), so the local sweep is the sole reviser.
