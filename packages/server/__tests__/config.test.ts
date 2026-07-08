@@ -103,11 +103,7 @@ describe("loadServerConfig", () => {
 
 	it("fails closed: 127.*-prefixed hostnames are not loopback (Node resolves them, could bind routable)", () => {
 		for (const host of ["127.example.com", "127.0.0.1.example.com", "127."]) {
-			assert.throws(
-				() => loadServerConfig(baseEnv({ AUTOPILOT_SERVER_HOST: host }), { webDistDefault: join(tmpdir(), "no-such-dist") }),
-				/CONTROL_PLANE_TOKEN/,
-				host,
-			);
+			assert.throws(() => loadServerConfig(baseEnv({ AUTOPILOT_SERVER_HOST: host }), { webDistDefault: join(tmpdir(), "no-such-dist") }), /CONTROL_PLANE_TOKEN/, host);
 		}
 	});
 
