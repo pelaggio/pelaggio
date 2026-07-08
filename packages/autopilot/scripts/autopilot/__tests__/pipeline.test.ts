@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, before, describe, it, mock } from "node:test";
 import { WORKTREE_PREFIX } from "../config.js";
@@ -9,7 +9,7 @@ import { isQuickScope } from "../roadmap/scope.js";
 import type { ShipBookkeepingResult } from "../ship/index.js";
 import { getShipTarget } from "../ship/index.js";
 import type { Flags, ParkSignal, PipelineOpts } from "../types.js";
-import { allCommitMessages, createMockRunPipeline, createMockRunStep, makeLiveStatus, makeMockRoadmap, makeNonGitDir, makeParkSignal, makeTempGitRepo, makeTempRepoWithParent } from "./mocks.js";
+import { allCommitMessages, createMockRunPipeline, createMockRunStep, makeGitDirWithoutMain, makeLiveStatus, makeMockRoadmap, makeParkSignal, makeTempGitRepo, makeTempRepoWithParent } from "./mocks.js";
 
 // The pipeline under test streams progress through console.log (see log() in
 // pipeline.ts). Left unmuted, that high-volume output floods the node:test
@@ -46,6 +46,13 @@ function baseOpts(worktree: string): PipelineOpts {
 		dryRun: false,
 		liveStatus: makeLiveStatus(),
 	};
+}
+
+function makeConfinementRepos(): { parent: string; mainRepo: string; worktree: string; listWorktrees: () => string[] } {
+	const { parent, repo } = makeTempRepoWithParent();
+	const worktree = join(parent, `${WORKTREE_PREFIX}tool-99`);
+	execSync(`git worktree add -q -b feat/tool-99 "${worktree}"`, { cwd: repo });
+	return { parent, mainRepo: repo, worktree, listWorktrees: () => [repo, worktree] };
 }
 
 // Stub the direct-push bookkeeping tail: these pipeline tests assert on pick /
@@ -196,6 +203,7 @@ describe("runPipeline — RETHINK verdict", () => {
 
 		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
 			runStep,
+			mainRepo: worktree,
 			listWorktrees: () => [],
 			appendLog: (e) => {
 				logs.push(e);
@@ -483,6 +491,7 @@ describe("runPipeline — refusal terminates without retry or park", () => {
 
 		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
 			runStep,
+			mainRepo: worktree,
 			listWorktrees: () => [],
 			appendLog: (e) => {
 				logs.push(e);
@@ -516,6 +525,7 @@ describe("runPipeline — refusal terminates without retry or park", () => {
 
 		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
 			runStep,
+			mainRepo: worktree,
 			listWorktrees: () => [],
 			appendLog: (e) => {
 				logs.push(e);
@@ -549,6 +559,7 @@ describe("runPipeline — blocked terminates without retry or park", () => {
 
 		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
 			runStep,
+			mainRepo: worktree,
 			listWorktrees: () => [],
 			appendLog: (e) => {
 				logs.push(e);
@@ -583,6 +594,7 @@ describe("runPipeline — blocked terminates without retry or park", () => {
 
 		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
 			runStep,
+			mainRepo: worktree,
 			listWorktrees: () => [],
 			appendLog: (e) => {
 				logs.push(e);
@@ -617,6 +629,7 @@ describe("runPipeline — no deliverable commits", () => {
 
 		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
 			runStep,
+			mainRepo: worktree,
 			listWorktrees: () => [],
 			appendLog: (e) => {
 				logs.push(e);
@@ -676,7 +689,7 @@ describe("runPipeline — ghost-ship detection", () => {
 describe("runPipeline — pre-ship state capture failure", () => {
 	it("fails closed when captureShipState returns null: no blind completion, no bookkeeping tail", async () => {
 		const worktree = makeTempGitRepo();
-		const nonGitMainRepo = makeNonGitDir();
+		const noMainRepo = makeGitDirWithoutMain();
 		const parkSignal = makeParkSignal();
 		const logs: Array<Record<string, unknown>> = [];
 		const { runStep, calls } = createMockRunStep(
@@ -694,7 +707,7 @@ describe("runPipeline — pre-ship state capture failure", () => {
 
 		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
 			runStep,
-			mainRepo: nonGitMainRepo,
+			mainRepo: noMainRepo,
 			listWorktrees: () => [],
 			appendLog: (e) => {
 				logs.push(e);
@@ -707,6 +720,252 @@ describe("runPipeline — pre-ship state capture failure", () => {
 		assert.ok(!stepsRun.includes("ship"), `ship should not have been invoked; got ${stepsRun.join(",")}`);
 		assert.equal(logs.length, 1);
 		assert.equal(logs[0].completed, false);
+	});
+});
+
+describe("runPipeline — worktree confinement audit", () => {
+	it("fails when an implement step dirties the main repo through shell indirection", async () => {
+		const { mainRepo, worktree, listWorktrees } = makeConfinementRepos();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep, calls } = createMockRunStep(
+			{
+				implement: {
+					ok: true,
+					sideEffect: () => {
+						const out = join(mainRepo, "pwned.txt");
+						execSync(`OUT=${JSON.stringify(out)}; printf x > "$OUT"`);
+					},
+				},
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
+			runStep,
+			mainRepo,
+			listWorktrees,
+			appendLog: (e) => {
+				logs.push(e);
+			},
+			roadmap: makeMockRoadmap(),
+		});
+
+		assert.equal(result.completed, false);
+		assert.equal(result.error, "implement failed: confinement violation");
+		assert.deepEqual(
+			calls.map((c) => c.step),
+			["implement"],
+		);
+		const steps = logs[0].steps as Array<{ name: string; subtype?: string; ok: boolean }>;
+		const last = steps.at(-1);
+		assert.equal(last?.name, "implement");
+		assert.equal(last?.ok, false);
+		assert.equal(last?.subtype, "error_confinement");
+	});
+
+	it("reports confinement instead of parked when a rate-limit step also dirties main", async () => {
+		const { mainRepo, worktree, listWorktrees } = makeConfinementRepos();
+		const parkSignal = makeParkSignal();
+		const { runStep } = createMockRunStep(
+			{
+				implement: {
+					ok: false,
+					subtype: "error_rate_limit",
+					park: { parked: true, limitType: "5h", resetsAt: Date.now() + 3_600_000 },
+					sideEffect: () => {
+						const out = join(mainRepo, "park-pwned.txt");
+						execSync(`OUT=${JSON.stringify(out)}; printf x > "$OUT"`);
+					},
+				},
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
+			runStep,
+			mainRepo,
+			listWorktrees,
+			appendLog: () => {},
+			roadmap: makeMockRoadmap(),
+		});
+
+		assert.equal(result.completed, false);
+		assert.equal(result.error, "implement failed: confinement violation");
+		assert.equal(parkSignal.parked, true);
+	});
+
+	it("allows executing a main-repo script reached through a worktree node_modules symlink", async () => {
+		const { parent, repo: mainRepo } = makeTempRepoWithParent();
+		const toolDir = join(mainRepo, "tools");
+		mkdirSync(toolDir, { recursive: true });
+		writeFileSync(join(toolDir, "shared-tool.sh"), "printf shared-tool-read\n");
+		execSync("git add tools/shared-tool.sh && git commit -q -m 'add shared tool'", { cwd: mainRepo });
+		const worktree = join(parent, `${WORKTREE_PREFIX}tool-99`);
+		execSync(`git worktree add -q -b feat/tool-99 "${worktree}"`, { cwd: mainRepo });
+		symlinkSync(toolDir, join(worktree, "node_modules"), "dir");
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep } = createMockRunStep(
+			{
+				implement: {
+					ok: true,
+					writes: { "impl.txt": "x" },
+					sideEffect: (cwd) => {
+						execSync("sh node_modules/shared-tool.sh", { cwd });
+					},
+				},
+				"shakedown-code": { ok: true },
+				ship: { ok: true, text: "https://github.com/cdhorne/claude-autopilot/pull/99" },
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
+			runStep,
+			mainRepo,
+			listWorktrees: () => [mainRepo, worktree],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+			roadmap: makeMockRoadmap(),
+		});
+
+		assert.equal(result.completed, true);
+		assert.equal(result.error, undefined);
+		assert.equal(logs.length, 1);
+		const status = execSync("git status --porcelain=v1 --untracked-files=all", { cwd: mainRepo, encoding: "utf-8" }).trim();
+		assert.equal(status, "");
+	});
+
+	it("allows legitimate in-worktree writes while the audit is active", async () => {
+		const { mainRepo, worktree, listWorktrees } = makeConfinementRepos();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep, calls } = createMockRunStep(
+			{
+				implement: { ok: true, writes: { "src/feature.ts": "export const ok = true;\n" } },
+				"shakedown-code": { ok: true },
+				ship: { ok: true, text: "https://github.com/cdhorne/claude-autopilot/pull/99" },
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
+			runStep,
+			mainRepo,
+			listWorktrees,
+			appendLog: (e) => {
+				logs.push(e);
+			},
+			roadmap: makeMockRoadmap(),
+		});
+
+		assert.equal(result.completed, true);
+		assert.equal(result.error, undefined);
+		assert.deepEqual(
+			calls.map((c) => c.step),
+			["implement", "shakedown-code", "ship"],
+		);
+		const steps = logs[0].steps as Array<{ subtype?: string }>;
+		assert.ok(steps.every((s) => s.subtype !== "error_confinement"));
+	});
+
+	it("fails when an implement step dirties a sibling worktree", async () => {
+		const { parent, mainRepo, worktree } = makeConfinementRepos();
+		const sibling = join(parent, `${WORKTREE_PREFIX}sibling`);
+		execSync(`git worktree add -q -b feat/sibling "${sibling}"`, { cwd: mainRepo });
+		const parkSignal = makeParkSignal();
+		const { runStep } = createMockRunStep(
+			{
+				implement: {
+					ok: true,
+					sideEffect: () => {
+						writeFileSync(join(sibling, "foreign.txt"), "x");
+					},
+				},
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
+			runStep,
+			mainRepo,
+			listWorktrees: () => [mainRepo, worktree, sibling],
+			appendLog: () => {},
+			roadmap: makeMockRoadmap(),
+		});
+
+		assert.equal(result.completed, false);
+		assert.equal(result.error, "implement failed: confinement violation");
+	});
+
+	it("does not fail on pre-existing forbidden-root dirtiness when the snapshot is unchanged", async () => {
+		const { mainRepo, worktree, listWorktrees } = makeConfinementRepos();
+		writeFileSync(join(mainRepo, "already-dirty.txt"), "pre-existing\n");
+		const parkSignal = makeParkSignal();
+		const { runStep } = createMockRunStep(
+			{
+				implement: { ok: true, writes: { "src/feature.ts": "export const ok = true;\n" } },
+				"shakedown-code": { ok: true },
+				ship: { ok: true, text: "https://github.com/cdhorne/claude-autopilot/pull/99" },
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
+			runStep,
+			mainRepo,
+			listWorktrees,
+			appendLog: () => {},
+			roadmap: makeMockRoadmap(),
+		});
+
+		assert.equal(result.completed, true);
+		assert.equal(result.error, undefined);
+	});
+
+	it("routes ship-step confinement terminal instead of invoking shipwreck or target interpretation", async () => {
+		const { parent, mainRepo, worktree } = makeConfinementRepos();
+		const sibling = join(parent, `${WORKTREE_PREFIX}ship-sibling`);
+		execSync(`git worktree add -q -b feat/ship-sibling "${sibling}"`, { cwd: mainRepo });
+		let interpreted = false;
+		const shipTarget = {
+			...getShipTarget("direct-push"),
+			interpretResult() {
+				interpreted = true;
+				return { completed: true };
+			},
+		};
+		const parkSignal = makeParkSignal();
+		const { runStep, calls } = createMockRunStep(
+			{
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				ship: {
+					ok: false,
+					sideEffect: () => {
+						writeFileSync(join(sibling, "ship-foreign.txt"), "x");
+					},
+				},
+				shipwreck: { ok: true },
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget }, parkSignal, baseFlags, {
+			runStep,
+			mainRepo,
+			listWorktrees: () => [mainRepo, worktree, sibling],
+			appendLog: () => {},
+			roadmap: makeMockRoadmap(),
+			runShipBookkeeping: noopBookkeeping,
+		});
+
+		assert.equal(result.completed, false);
+		assert.equal(result.error, "ship failed: confinement violation");
+		assert.equal(interpreted, false);
+		assert.ok(!calls.map((c) => c.step).includes("shipwreck"));
 	});
 });
 
@@ -1074,6 +1333,7 @@ describe("runPipeline — rate-limit park preserves state", () => {
 
 		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
 			runStep,
+			mainRepo: worktree,
 			listWorktrees: () => [],
 			appendLog: (e) => {
 				logs.push(e);

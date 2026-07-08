@@ -30,6 +30,41 @@ export function listWorktrees(): string[] {
 		.map((l) => l.slice(9).trim());
 }
 
+export function snapshotForbiddenRoot(root: string): string {
+	try {
+		// `--no-optional-locks`: parallel cycles snapshot the *shared* main-repo index twice per
+		// step; without it `git status` opportunistically takes `index.lock` to write back its
+		// refreshed stat cache, and concurrent snapshots collide (`index.lock: File exists`), which
+		// the fail-closed audit would misread as a confinement violation. The porcelain output is
+		// identical either way — the flag only skips the index writeback.
+		return execSync("git --no-optional-locks status --porcelain=v1 --untracked-files=all", {
+			cwd: root,
+			encoding: "utf-8",
+			stdio: ["ignore", "pipe", "pipe"],
+		}).trim();
+	} catch (e: unknown) {
+		throw new Error(`failed to snapshot forbidden root ${root}: ${e instanceof Error ? e.message : String(e)}`);
+	}
+}
+
+export function snapshotForbiddenRoots(roots: readonly string[]): Map<string, string> {
+	const snapshots = new Map<string, string>();
+	for (const root of roots) {
+		const resolved = resolve(root);
+		if (snapshots.has(resolved)) continue;
+		snapshots.set(resolved, snapshotForbiddenRoot(resolved));
+	}
+	return snapshots;
+}
+
+export function diffForbiddenRootSnapshots(before: ReadonlyMap<string, string>, after: ReadonlyMap<string, string>): string[] {
+	const changed: string[] = [];
+	for (const [root, status] of before) {
+		if (after.get(root) !== status) changed.push(root);
+	}
+	return changed;
+}
+
 // ── Pick result parsing ────────────────────────────────────────────────
 
 export type PickReason = "claimed" | "blocked" | "unknown-id" | "already-done" | "worktree-exists" | "already-claimed" | "queue-empty";
@@ -307,9 +342,9 @@ export function classifyStepError(errMsg: string, parked: boolean): string {
  * subtype; everything else (SDK/budget/abort errors, `unknown`, arbitrary
  * strings) collapses to the catch-all `"error"`.
  */
-export type StepSubtype = "success" | "error_rate_limit" | "error_max_turns" | "error_refusal" | "blocked" | "edit_loop" | "error";
+export type StepSubtype = "success" | "error_rate_limit" | "error_max_turns" | "error_refusal" | "error_confinement" | "blocked" | "edit_loop" | "error";
 
-const CLOSED_SUBTYPES: ReadonlySet<string> = new Set(["success", "error_rate_limit", "error_max_turns", "error_refusal", "blocked", "edit_loop"]);
+const CLOSED_SUBTYPES: ReadonlySet<string> = new Set(["success", "error_rate_limit", "error_max_turns", "error_refusal", "error_confinement", "blocked", "edit_loop"]);
 
 export function classifyOutcome(result: Pick<StepResult, "subtype">): StepSubtype {
 	return CLOSED_SUBTYPES.has(result.subtype) ? (result.subtype as StepSubtype) : "error";
