@@ -6,5 +6,7 @@ roadmap:
     plan-location: issue-comment
 ship:
   target: pull-request
+revise:
+  local: true
 budgets:
   shakedown-plan: 8

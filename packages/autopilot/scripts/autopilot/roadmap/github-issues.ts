@@ -266,7 +266,7 @@ export class GitHubIssuesRoadmap implements RoadmapSource {
 // run indefinitely; no legitimate single gh call takes this long.
 const GH_TIMEOUT_MS = 30_000;
 
-function defaultGhRun(args: string[]): { stdout: string; stderr: string; status: number } {
+export function defaultGhRun(args: string[]): { stdout: string; stderr: string; status: number } {
 	const r = spawnSync("gh", args, { encoding: "utf-8", timeout: GH_TIMEOUT_MS });
 	if (r.error && isEnoent(r.error)) {
 		throw new Error("gh CLI required — install https://cli.github.com/");
@@ -285,7 +285,7 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 	return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-function parseGhJson<T>(stdout: string, shapeOk: (v: unknown) => boolean): T {
+export function parseGhJson<T>(stdout: string, shapeOk: (v: unknown) => boolean): T {
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(stdout);

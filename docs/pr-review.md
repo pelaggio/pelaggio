@@ -120,9 +120,55 @@ autonomous recipe needs.
 > and skips fork/draft PRs *inside* the job rather than via a job-level `if:` — either
 > would leave `review` stuck pending and block every PR forever.
 
-## Closing the loop on BLOCK (issue #60)
+## Closing the loop on BLOCK (issue #60 / #76)
 
-A red `review` gate no longer just parks forever. `.github/workflows/pr-review-revise.yml`
+A red `review` gate no longer just parks forever — it triggers **one** automated revision that
+re-implements from the findings and re-pushes so the gate re-runs. There are **two** paths that do
+this, sharing the same seam (`--resume <id> --from implement --review-findings <path>`), the same
+one-pass bound (the `autopilot:revised` PR label), and the same handoff marker
+(`<!-- autopilot-revise-parked -->`):
+
+| Path | Runs on | Funded by | Trigger | Status |
+|---|---|---|---|---|
+| **Local sweep** (issue #76) | your local runner, in-process | your Claude **subscription** | orchestrator, at the start of an auto-pick `--cycles` run | **active** (this repo) |
+| **CI workflow** (issue #60) | GitHub-hosted `ubuntu-latest` | the metered `ANTHROPIC_API_KEY` | `pr-review-revise.yml` on `workflow_run: failure` | present but **disabled** repo-wide |
+
+Only one should be active at a time to avoid both racing for the label. On this repo the CI workflow
+is the documented API-funded *alternative* — it is turned off (`AUTOPILOT_AUTO_REVISE=false`, no
+`GH_TOKEN` PAT) so the local sweep is the sole active reviser. A repo without a local runner enables
+the CI workflow instead (set the variable + PAT) and leaves `revise.local` moot (its markdown /
+direct-push default is a no-op anyway).
+
+### Local sweep (issue #76) — active
+
+Gated on `revise.local` (default `true`; see [docs/config.md](./config.md#local-revise-sweep)), the
+orchestrator sweeps for revisable red-review PRs **before** the pick worker pool and revises each one
+**in-process** on the local subscription — no metered API key, no CI VM. It is a hard no-op unless the
+run is `roadmap.source: github-issues` + a PR ship target + pure auto-pick mode (`--cycles`, no
+`--item` / `--resume` / `--no-worktree` / `--dry-run`).
+
+- **Trigger** — start of a normal `--cycles` run. One `gh pr list` finds open, non-draft,
+  `feat/issue-<n>` PRs whose `review` check-run concluded `FAILURE`.
+- **One-pass bound** — the shared `autopilot:revised` label, added **before** any work
+  (`claimRevision`). Labeled-still-red PRs are filtered out of the candidate set and get one
+  idempotent human-handoff comment instead. The label doubles as a manual kill switch and its
+  absence gates the revise, exactly as in CI.
+- **Reuses the resume plumbing** — each revision runs `runPipeline` with `startFrom: "implement"`
+  and a `--review-findings` file fetched from the PR-review comment, the same in-process re-entry the
+  park/auto-resume loop uses. So parking, notifications, cost accounting, and the ship target all
+  apply for free. Revisions don't consume `--cycles` but do count toward `--budget`.
+- **Findings survive a park** — the findings file is written under `.dev/` (gitignored). If a revision
+  parks and later auto-resumes, `resumeOne` re-injects the on-disk findings so the resumed implement
+  still fixes the specific blockers.
+- **Fail-soft** — any `gh`/git error in the sweep logs a warning and skips (that candidate or the whole
+  sweep); the normal pick loop proceeds regardless.
+- **Cross-process atomicity** (local vs a re-enabled CI) is out of scope: it is safe only because CI is
+  disabled repo-wide, so local is the sole active reviser. Re-enabling CI while the local sweep runs is
+  unsupported.
+
+### CI workflow (issue #60) — API-funded alternative
+
+A red `review` gate can instead be closed in CI: `.github/workflows/pr-review-revise.yml`
 triggers on the review workflow's `workflow_run: completed` with `conclusion == failure` and,
 **exactly once per PR**, re-implements from the findings and re-pushes so the gate re-runs.
 

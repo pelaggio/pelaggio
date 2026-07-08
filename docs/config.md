@@ -44,6 +44,10 @@ park:                           # overnight park-and-resume on rate-limit
   max-wait: 6h                  # default: 6h — skip resuming if the reset is farther out
                                 # ("6h", "90m", "1h30m", or a bare number = minutes)
 
+revise:                         # local revise sweep — auto-fix red-review PRs (issue #76)
+  local: true                   # default: true (opt-out). No-op unless roadmap.source is
+                                # github-issues AND ship.target is a PR mode AND auto-pick mode.
+
 notify:                         # outbound run-outcome webhook (default: disabled)
   url: ""                       # default: "" (disabled). Set a webhook/topic URL to enable.
   format: json                  # default: json | ntfy
@@ -333,6 +337,45 @@ back to 6h.
 Auto-resume applies only to the normal `--cycles` / `--parallel` driver. A
 single-item `--resume <id>` invocation that re-parks is itself re-runnable by
 the same command, so it is intentionally not looped.
+
+## Local revise sweep
+
+When a PR-mode ship opens a pull request and the `review` merge gate comes back
+red, the change stalls until a human intervenes — unless something reruns the
+implement step against the review's findings. `revise.local` makes the **local
+runner** do exactly that, in-process on your Claude subscription.
+
+| Key            | Default | Meaning                                                                    |
+|----------------|---------|----------------------------------------------------------------------------|
+| `revise.local` | `true`  | At the start of an auto-pick run, sweep for red-review PRs and revise each. |
+
+At the start of a normal `--cycles` run (before the pick worker pool), the
+orchestrator lists open PRs, keeps the ones whose `review` check failed on a
+`feat/issue-<n>` branch, and — **exactly once per PR** — re-runs the implement
+step from the PR-review findings and re-pushes so the gate re-runs. It reuses
+the same in-process resume the park/auto-resume loop uses (`startFrom:
+implement` + a fetched `--review-findings` file), so parking, notifications, and
+cost accounting all apply. Revisions do **not** consume `--cycles` (that sizes
+new-work throughput) but **do** count toward `--budget` (they spend real money).
+
+**Default-on is safe because the sweep is a hard no-op** unless the run is:
+
+- `roadmap.source: github-issues`, **and**
+- a PR ship target (`pull-request` or `auto-merge-pr`), **and**
+- pure auto-pick mode (`--cycles`, no `--item` / `--resume` / `--no-worktree` /
+  `--dry-run`).
+
+For every markdown / direct-push consumer it does nothing. Set `revise.local:
+false` to turn it off entirely — the documented off-switch, mirroring the CI
+loop's repo-wide `AUTOPILOT_AUTO_REVISE=false` variable.
+
+**One-pass bound.** Like the CI loop, a PR is revised at most once: the sweep
+adds an `autopilot:revised` label **before** any work, filters labeled PRs out
+of the candidate set, and posts a single human-handoff comment on a labeled PR
+that is still red. Any `gh`/git error in the sweep logs and skips — it never
+throws into the run. This is the **local** counterpart to the API-funded CI
+workflow (`.github/workflows/pr-review-revise.yml`); see
+[docs/pr-review.md](./pr-review.md) for which path is active.
 
 ## Notifications
 
