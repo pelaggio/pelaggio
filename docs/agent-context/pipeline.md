@@ -63,6 +63,16 @@ The review-time sibling of plan-polish lives in `/shakedown`'s code-review mode:
 
 `pipeline.ts` calls `hasDeliverableCommits()` before invoking `ship`. A cycle whose branch only touches `docs/plans/` (the `/plan` artifact with no implementation) is flagged `completed: false` with a "nothing to ship" error, and ship is never invoked. Doc-only work outside `docs/plans/` (rubric, skill bodies, README, roadmap edits) is still deliverable. The identical guard inside `/ship`'s SKILL.md is defense in depth for inline use.
 
+## Effects Manifests
+
+Step-boundary harness effects use `.dev/effects/<run-id>/<step>-<attempt>.json`. The manifest envelope includes `schemaVersion`, `runId`, `itemId`, `step`, `attempt`, `cwd`, `preSha`, and an ordered `effects` array. `effects.ts` validates the schema and rejects stale or foreign manifests by exact provenance match; `cwd` is compared by resolved path and `preSha` must match exactly, including `null`.
+
+Current implemented kinds are `checkpoint` and `plan.publish`. Reserved vocabulary exists for `ship.ShipDecision`, `pick.explainSelection`, and `shakedown.deferredItems`, but those kinds have no handlers yet and therefore fail closed if emitted.
+
+Timing has two tiers. Checkpoint effects preserve work on any non-confinement outcome, including `error_max_turns` and park paths, so retries continue from committed disk state. Stateful effects such as `plan.publish` dispatch only after a successful, non-parked, non-dry-run step. For migrated plan/implement behavior the harness synthesizes the manifest from declared effects, validates it, dispatches handlers in order, and deletes it after dispatch.
+
+Manifest **validation** is fail-closed: an unknown kind, a provenance/`preSha` mismatch, or a malformed manifest raises `EffectsManifestError`, surfaces as `error_effects_manifest`, and leaves the manifest on disk for diagnosis — never a silent skip. An individual **handler**, by contrast, owns its own failure policy. `plan.publish` is best-effort (#98 parity): the plan is already committed locally and the implement prompt reads it from disk, so a missing file or a transient roadmap/API error is logged and the step still succeeds. An *unexpected* exception from any handler still fails closed (`error_effects_manifest`, manifest retained).
+
 ## Parking
 
 Every pipeline exit path must call `parkExit()` (which checkpoints uncommitted work) before returning on rate-limit rejection, so work is checkpointed before the process exits or waits. This matters for subscription-backed providers whose retry windows are outside the pipeline's control.

@@ -47,8 +47,9 @@ export function createMockRunStep(behavior: MockBehavior, parkSignal: ParkSignal
 		if (outcome.awaitAbort && opts.signal) {
 			await new Promise<void>((resolve) => opts.signal?.addEventListener("abort", () => resolve(), { once: true }));
 		}
-		if (outcome.writes) {
-			for (const [rel, content] of Object.entries(outcome.writes)) {
+		const writes = name === "plan" && (outcome.ok ?? true) && !outcome.writes ? { [`docs/plans/${(opts.itemId ?? "plan").toLowerCase()}.md`]: "# Plan\nmock plan" } : outcome.writes;
+		if (writes) {
+			for (const [rel, content] of Object.entries(writes)) {
 				const full = resolve(opts.cwd, rel);
 				mkdirSync(dirname(full), { recursive: true });
 				writeFileSync(full, content);
