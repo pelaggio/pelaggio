@@ -13,7 +13,7 @@ last_reviewed: 2026-07-08
 | Capability | Default | Scope / approval | Notes | Claim(s) |
 |---|---|---|---|---|
 | `repo.read` | Allowed | Local repo/config/roadmap read | Repo/issue/PR/tool-output text is untrusted input. | `TC-015` |
-| `repo.write.worktree` | Allowed | Item worktree by convention/hooks | Post-step hard confinement is planned; not an OS sandbox. | `TC-011`, `TC-015` |
+| `repo.write.worktree` | Allowed | Item worktree by convention/hooks | Post-step confinement audit fails the step on any change to the main checkout or a sibling worktree; not an OS sandbox, so writes outside any tracked git root are bounded by tool/egress scoping. | `TC-011`, `TC-015` |
 | `shell.exec.worktree` | Allowed | Item worktree, budget/turn bounded | High-trust capability; child env allowlist is planned. | `TC-011`, `TC-014`, `TC-015` |
 | `pr.open` | Allowed | Ship default | Opens PR in `pull-request` mode. | `TC-003`, `TC-012` |
 | `git.push.default_branch` | Denied by default | Explicit `ship.target=direct-push` | Emits a warning banner when configured. | `TC-012` |
