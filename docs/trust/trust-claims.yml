@@ -206,6 +206,12 @@ manifest:
     telemetry: off
     control_plane_auth: required_or_loopback_only
   capabilities:
+    - id: repo.read
+      description: "Read repository files, local configuration, and roadmap context needed to plan or verify work."
+      default: allowed
+      scope: local_repo_only
+      approval: not_required
+      evidence: [TC-015]
     - id: repo.write.worktree
       description: "Create/edit files while working an item."
       default: allowed

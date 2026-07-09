@@ -3,8 +3,8 @@ import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const require = createRequire(import.meta.url);
-const { parse } = require(resolve(repoRoot(), "packages/pelaggio/node_modules/yaml")) as { parse: (input: string) => unknown };
+const requireFromPelaggio = createRequire(resolve(repoRoot(), "packages/pelaggio/package.json"));
+const { parse } = requireFromPelaggio("yaml") as { parse: (input: string) => unknown };
 
 export type ClaimStatus = "guarantee" | "default" | "best_effort" | "planned" | "not_supported";
 
@@ -84,6 +84,14 @@ export function buildManifest(registry: TrustRegistry, opts: { repoRoot?: string
 		return { statement, evidence };
 	});
 	const permissionTiers = entries("manifest.permission_tiers", registry.manifest.permission_tiers);
+	const capabilityIds = new Set(capabilities.map((capability) => capability.id).filter((id): id is string => typeof id === "string"));
+	for (const [tierIndex, tier] of permissionTiers.entries()) {
+		if (!Array.isArray(tier.capabilities)) throw new Error(`manifest.permission_tiers[${tierIndex}].capabilities: capabilities must be an array`);
+		for (const [capabilityIndex, capabilityId] of tier.capabilities.entries()) {
+			if (typeof capabilityId !== "string") throw new Error(`manifest.permission_tiers[${tierIndex}].capabilities[${capabilityIndex}]: invalid capability id ${JSON.stringify(capabilityId)}`);
+			if (!capabilityIds.has(capabilityId)) throw new Error(`manifest.permission_tiers[${tierIndex}].capabilities[${capabilityIndex}]: unknown capability ${capabilityId}`);
+		}
+	}
 	const sandboxScope = registry.manifest.sandbox_scope === undefined ? undefined : { ...registry.manifest.sandbox_scope, evidence: requireEvidence("manifest.sandbox_scope", registry.manifest.sandbox_scope.evidence) };
 	const provenance = registry.manifest.provenance === undefined ? undefined : { ...registry.manifest.provenance, evidence: requireEvidence("manifest.provenance", registry.manifest.provenance.evidence) };
 	const posture = [...linkedClaims].some((id) => registry.claims.find((claim) => claim.id === id)?.status === "planned") ? "intent" : "shipped";
