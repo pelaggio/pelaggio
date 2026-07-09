@@ -57,6 +57,15 @@ describe("loadServerConfig", () => {
 		assert.equal(cfg.logDir, "/var/log/pelaggio");
 	});
 
+	it("trust manifest path defaults to docs/trust and can be overridden", () => {
+		const fallback = loadServerConfig(baseEnv(), { webDistDefault: join(tmpdir(), "no-such-dist") });
+		assert.equal(fallback.trustManifestPath, resolve(process.cwd(), "docs/trust/pelaggio.trust.json"));
+		const explicit = loadServerConfig(baseEnv({ AUTOPILOT_SERVER_TRUST_MANIFEST: "/var/lib/pelaggio/trust.json" }), {
+			webDistDefault: join(tmpdir(), "no-such-dist"),
+		});
+		assert.equal(explicit.trustManifestPath, "/var/lib/pelaggio/trust.json");
+	});
+
 	it("webDist is undefined when default path is missing (UI not built)", () => {
 		const cfg = loadServerConfig(baseEnv(), { webDistDefault: join(tmpdir(), "no-such-dist") });
 		assert.equal(cfg.webDist, undefined);

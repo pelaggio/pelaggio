@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
 import { bearerAuth } from "./auth.js";
@@ -14,6 +15,7 @@ export interface AppDeps {
 	roadmapCache: RoadmapCache;
 	token: string | undefined;
 	webDist: string | undefined;
+	trustManifestPath?: string;
 }
 
 export function createApp(deps: AppDeps): Hono {
@@ -21,6 +23,18 @@ export function createApp(deps: AppDeps): Hono {
 
 	// Health bypasses auth.
 	registerHealthRoutes(app);
+	app.get("/.well-known/pelaggio.trust.json", (c) => {
+		if (deps.trustManifestPath === undefined) {
+			return c.json({ code: "not-found", error: "trust manifest is not configured" }, 404);
+		}
+		try {
+			const body = readFileSync(deps.trustManifestPath, "utf8");
+			return c.body(body, 200, { "content-type": "application/json; charset=utf-8" });
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code === "ENOENT" ? 404 : 500;
+			return c.json({ code: code === 404 ? "not-found" : "read-error", error: "trust manifest is unavailable" }, code);
+		}
+	});
 
 	const guarded = new Hono();
 	guarded.use("*", bearerAuth(deps.token));

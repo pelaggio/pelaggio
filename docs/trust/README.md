@@ -10,6 +10,8 @@ This directory is Pelaggio's trust surface: what the orchestrator can touch, wha
 - [`trust-claims.yml`](./trust-claims.yml) — the claim registry and source of truth; every doc, manifest entry, and CI check is generated from it.
 - [`pelaggio.trust.json`](./pelaggio.trust.json) — the machine-readable manifest of capabilities, egress, and hard *nevers*, with its [schema](./pelaggio.trust.schema.json).
 
-Run the falsifiability gate with `pnpm check:trust` (or `node ci/verify-claims.mjs`): it executes each `guarantee` claim's evidence command and fails on regression.
+Regenerate the machine manifest with `pnpm trust:generate`. The checked-in JSON must match the projection from `trust-claims.yml`; `pnpm check:trust` fails on drift and prints `run pnpm trust:generate`.
 
-The manifest is intended to also be served at `/.well-known/pelaggio.trust.json` so another agent can read our posture before running us; that endpoint is finalized in a follow-up issue.
+Run the falsifiability gate with `pnpm check:trust`: it validates the registry and schema, runs every `guarantee` claim's local evidence command, and fails on missing, placeholder-like, or failing guarantee evidence. `last_verified` must be present and well-formed; dates older than 180 days are reported as warnings because CI re-runs the evidence live.
+
+The control-plane daemon serves the checked-in generated manifest publicly at `/.well-known/pelaggio.trust.json`, before bearer auth. Override the file path with `AUTOPILOT_SERVER_TRUST_MANIFEST` when serving a packaged or relocated copy.

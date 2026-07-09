@@ -37,6 +37,7 @@ const app = createApp({
 	roadmapCache,
 	token: cfg.token,
 	webDist: cfg.webDist,
+	trustManifestPath: cfg.trustManifestPath,
 });
 
 serve({ fetch: app.fetch, hostname: cfg.host, port: cfg.port }, (info) => {

@@ -1,7 +1,7 @@
 {
   "schema_version": "0.1.0",
   "product": "pelaggio",
-  "release": "0.0.0-unreleased",
+  "release": "0.1.0",
   "posture": "intent",
   "generated_from": "trust-claims.yml",
   "threat_model_ref": "./threat-model.md",
@@ -17,7 +17,10 @@
       "default": "allowed",
       "scope": "item_worktree_only",
       "approval": "not_required",
-      "evidence": ["TC-011", "TC-015"]
+      "evidence": [
+        "TC-011",
+        "TC-015"
+      ]
     },
     {
       "id": "shell.exec.worktree",
@@ -25,28 +28,38 @@
       "default": "allowed",
       "scope": "item_worktree_only",
       "approval": "not_required",
-      "evidence": ["TC-011", "TC-015"]
+      "evidence": [
+        "TC-011",
+        "TC-015"
+      ]
     },
     {
       "id": "pr.open",
       "description": "Open a pull request with the item's work.",
       "default": "allowed",
       "approval": "not_required",
-      "evidence": ["TC-003"]
+      "evidence": [
+        "TC-003",
+        "TC-012"
+      ]
     },
     {
       "id": "git.push.default_branch",
       "description": "Push directly to the repo's default branch.",
       "default": "denied",
       "approval": "explicit_config_required",
-      "evidence": ["TC-012"]
+      "evidence": [
+        "TC-012"
+      ]
     },
     {
       "id": "pr.automerge",
       "description": "Auto-merge a PR once checks pass.",
       "default": "denied",
       "approval": "explicit_config_required",
-      "evidence": ["TC-013"]
+      "evidence": [
+        "TC-013"
+      ]
     },
     {
       "id": "control_plane.spawn_run",
@@ -54,62 +67,181 @@
       "default": "denied",
       "scope": "authenticated_or_loopback_only",
       "approval": "explicit_config_required",
-      "evidence": ["TC-010"]
+      "evidence": [
+        "TC-010"
+      ]
     }
   ],
   "egress": [
     {
       "destination": "anthropic",
-      "data_categories": ["prompts", "repo_paths", "source_context", "diffs", "issue_text"],
+      "data_categories": [
+        "prompts",
+        "repo_paths",
+        "source_context",
+        "diffs",
+        "issue_text"
+      ],
       "required": true,
       "retention": "governed by the provider's policy",
-      "opt_out": "configure a different model provider",
-      "role": "sub_processor"
+      "opt_out": "configure a different model provider when one is supported",
+      "role": "sub_processor",
+      "evidence": [
+        "TC-006"
+      ]
     },
     {
       "destination": "github",
-      "data_categories": ["issues", "pull_requests", "plan_bodies", "diffs", "comments"],
+      "data_categories": [
+        "issues",
+        "pull_requests",
+        "plan_bodies",
+        "diffs",
+        "comments"
+      ],
       "required": false,
       "retention": "your GitHub",
       "opt_out": "use a different roadmap adapter",
-      "role": "user_controlled_endpoint"
+      "role": "user_controlled_endpoint",
+      "evidence": [
+        "TC-006",
+        "TC-003"
+      ]
     },
     {
       "destination": "linear",
-      "data_categories": ["issues", "comments", "state"],
+      "data_categories": [
+        "issues",
+        "comments",
+        "state"
+      ],
       "required": false,
       "retention": "your Linear workspace",
       "opt_out": "use a different roadmap adapter",
-      "role": "user_controlled_endpoint"
+      "role": "user_controlled_endpoint",
+      "evidence": [
+        "TC-006"
+      ]
     },
     {
       "destination": "git_remote",
-      "data_categories": ["commits", "branches"],
+      "data_categories": [
+        "commits",
+        "branches"
+      ],
       "required": false,
       "retention": "your remote",
-      "opt_out": "n/a — your own remote",
-      "role": "user_controlled_endpoint"
+      "opt_out": "n/a - your own remote",
+      "role": "user_controlled_endpoint",
+      "evidence": [
+        "TC-006",
+        "TC-012"
+      ]
     },
     {
       "destination": "notify_webhook",
-      "data_categories": ["outcome_metadata"],
+      "data_categories": [
+        "outcome_metadata"
+      ],
       "required": false,
       "retention": "your endpoint",
-      "opt_out": "leave notify.url unset (default)",
-      "role": "user_controlled_endpoint"
+      "opt_out": "leave notify.url unset",
+      "role": "user_controlled_endpoint",
+      "evidence": [
+        "TC-006"
+      ]
     }
   ],
   "never": [
-    "push to your default branch by default",
-    "send telemetry or analytics",
-    "read known secret files (.env, credentials) without explicit configuration",
-    "run install scripts from our published package",
-    "merge a pull request the review gate did not pass (in pull-request mode)"
+    {
+      "statement": "push to your default branch by default",
+      "evidence": [
+        "TC-012"
+      ]
+    },
+    {
+      "statement": "send telemetry or analytics",
+      "evidence": [
+        "TC-002"
+      ]
+    },
+    {
+      "statement": "interpolate known secret environment variables into prompts or structured run logs",
+      "evidence": [
+        "TC-001"
+      ]
+    },
+    {
+      "statement": "run install scripts from our published package",
+      "evidence": [
+        "TC-004"
+      ]
+    },
+    {
+      "statement": "merge a pull request the review gate did not pass in pull-request mode",
+      "evidence": [
+        "TC-003",
+        "TC-013"
+      ]
+    }
   ],
   "provenance": {
     "npm_provenance": true,
     "signed_tag": true,
-    "sigstore_bundle": "planned"
+    "sigstore_bundle": "planned",
+    "evidence": [
+      "TC-005"
+    ]
   },
-  "claims_ref": "./claims.json"
+  "permission_tiers": [
+    {
+      "id": "local_read",
+      "description": "Read repository files and local configuration needed to plan or verify work.",
+      "default": true,
+      "capabilities": [
+        "repo.read"
+      ],
+      "evidence": [
+        "TC-015"
+      ]
+    },
+    {
+      "id": "worktree_write",
+      "description": "Write files and run commands inside the claimed worktree.",
+      "default": true,
+      "capabilities": [
+        "repo.write.worktree",
+        "shell.exec.worktree"
+      ],
+      "evidence": [
+        "TC-011",
+        "TC-015"
+      ]
+    },
+    {
+      "id": "remote_mutation",
+      "description": "Open PRs by default; direct push and auto-merge require explicit ship.target opt-in.",
+      "default": false,
+      "capabilities": [
+        "pr.open",
+        "git.push.default_branch",
+        "pr.automerge"
+      ],
+      "evidence": [
+        "TC-003",
+        "TC-012",
+        "TC-013"
+      ]
+    }
+  ],
+  "sandbox_scope": {
+    "worktree_scope": "item worktree by convention and hooks; post-step hard confinement is planned",
+    "main_repo_protection": "worktree isolation hooks block direct writes to the main repository path during mutating tool calls",
+    "planned_hardening": "post-step tree diff assertion covering sibling worktrees, relative paths, shell escapes, and symlink escapes",
+    "evidence": [
+      "TC-011",
+      "TC-015"
+    ]
+  },
+  "claims_ref": "./trust-claims.yml"
 }

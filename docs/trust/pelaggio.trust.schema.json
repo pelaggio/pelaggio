@@ -4,7 +4,7 @@
   "title": "Pelaggio Trust Manifest",
   "description": "Machine-readable trust/capability/egress/permission manifest for an autonomous dev orchestrator. Designed as a namespaced extension to the A2A Agent Card (/.well-known/agent-card.json). Generated from trust-claims.yml; every capability/egress/never entry links back to a claim id, so a consuming agent can follow the evidence.",
   "type": "object",
-  "required": ["schema_version", "product", "release", "posture", "defaults", "capabilities", "egress", "never", "claims_ref"],
+  "required": ["schema_version", "product", "release", "posture", "defaults", "capabilities", "egress", "never", "claims_ref", "generated_from"],
   "additionalProperties": false,
   "properties": {
     "schema_version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
@@ -50,7 +50,7 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["destination", "data_categories", "required"],
+        "required": ["destination", "data_categories", "required", "evidence"],
         "additionalProperties": false,
         "properties": {
           "destination": { "type": "string" },
@@ -58,13 +58,28 @@
           "required": { "type": "boolean" },
           "retention": { "type": "string" },
           "opt_out": { "type": "string" },
-          "role": { "enum": ["sub_processor", "user_controlled_endpoint"], "description": "GDPR framing: sub_processor = we route data there; user_controlled_endpoint = your own remote/integration." }
+          "role": { "enum": ["sub_processor", "user_controlled_endpoint"], "description": "GDPR framing: sub_processor = we route data there; user_controlled_endpoint = your own remote/integration." },
+          "evidence": {
+            "type": "array",
+            "items": { "type": "string", "pattern": "^TC-\\d{3}$" }
+          }
         }
       }
     },
     "never": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "object",
+        "required": ["statement", "evidence"],
+        "additionalProperties": false,
+        "properties": {
+          "statement": { "type": "string" },
+          "evidence": {
+            "type": "array",
+            "items": { "type": "string", "pattern": "^TC-\\d{3}$" }
+          }
+        }
+      },
       "description": "Hard 'will not do' list — each phrased as a testable invariant."
     },
     "provenance": {
@@ -73,7 +88,43 @@
       "properties": {
         "npm_provenance": { "type": "boolean" },
         "signed_tag": { "type": "boolean" },
-        "sigstore_bundle": { "enum": ["present", "planned", "none"] }
+        "sigstore_bundle": { "enum": ["present", "planned", "none"] },
+        "evidence": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^TC-\\d{3}$" }
+        }
+      }
+    },
+    "permission_tiers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "description", "default", "capabilities", "evidence"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "description": { "type": "string" },
+          "default": { "type": "boolean" },
+          "capabilities": { "type": "array", "items": { "type": "string" } },
+          "evidence": {
+            "type": "array",
+            "items": { "type": "string", "pattern": "^TC-\\d{3}$" }
+          }
+        }
+      }
+    },
+    "sandbox_scope": {
+      "type": "object",
+      "required": ["worktree_scope", "main_repo_protection", "planned_hardening", "evidence"],
+      "additionalProperties": false,
+      "properties": {
+        "worktree_scope": { "type": "string" },
+        "main_repo_protection": { "type": "string" },
+        "planned_hardening": { "type": "string" },
+        "evidence": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^TC-\\d{3}$" }
+        }
       }
     },
     "claims_ref": { "type": "string", "format": "uri-reference", "description": "URL/path to the machine-readable claims (generated from trust-claims.yml)." },
