@@ -21,7 +21,7 @@ By default, no. `ship.target` resolves to `pull-request`, so the shipped default
 
 ### 2. What can it write?
 
-Pelaggio is designed around item worktrees, and mutating steps receive hooks/conventions that steer writes into the claimed worktree (`TC-011`, [sandboxing](./sandboxing.md), [`ADR-0001`](../decisions/0001-worktree-write-confinement.md)). This is not an OS/container sandbox and not yet the hard post-step confinement guarantee described by the planned claim: sibling worktrees, relative or `$HOME` shell escapes, and symlink paths are named gaps today (`TC-011`, `TC-015`).
+Pelaggio is designed around item worktrees, and mutating steps receive hooks/conventions that steer writes into the claimed worktree; a shipped post-step confinement audit then fails the step if any change lands in the main checkout or a sibling worktree, so committed and uncommitted sibling/relative/`$HOME`/`cd`/symlink Bash escapes are caught (`TC-011`, [sandboxing](./sandboxing.md), [`ADR-0001`](../decisions/0001-worktree-write-confinement.md)). This is still not an OS/container sandbox: writes to paths outside any tracked git root (e.g. `$HOME`, `/tmp`, arbitrary absolute paths) are not caught by this audit and remain bounded by tool/egress scoping (`TC-011`, `TC-015`).
 
 ### 3. What leaves my machine?
 
@@ -37,7 +37,7 @@ Pelaggio's own published package and workspace manifests do not use `preinstall`
 
 ## What Is Still Open
 
-The defining threat is prompt injection through attacker-reachable repo, issue, PR, dependency, and tool-output text (`TC-015`, [threat model](./threat-model.md), [`ADR-0002`](../decisions/0002-untrusted-input-and-tool-scope.md)). Current bounds are worktree conventions/hooks, PR gating, budget/turn caps, and explicit egress surfaces (`TC-003`, `TC-006`, `TC-011`, `TC-012`, `TC-015`). A designed injection defense with least-privilege tools, provenance-aware input handling, and harder output controls is not claimed yet (`TC-015`).
+The defining threat is prompt injection through attacker-reachable repo, issue, PR, dependency, and tool-output text (`TC-015`, [threat model](./threat-model.md), [`ADR-0002`](../decisions/0002-untrusted-input-and-tool-scope.md)). Current bounds are worktree conventions/hooks with a shipped post-step confinement audit, PR gating, budget/turn caps, and explicit egress surfaces (`TC-003`, `TC-006`, `TC-011`, `TC-012`, `TC-015`). A designed injection defense with least-privilege tools, provenance-aware input handling, and harder output controls is not claimed yet (`TC-015`).
 
 ## Verify
 

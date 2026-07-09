@@ -121,14 +121,14 @@ claims:
     last_verified: "2026-07-08"
 
   - id: TC-011
-    claim: "Writes are hard-confined to the work item's own worktree. Reaching outside it fails the step — it doesn't slip through."
-    status: planned            # TODAY (S1): advisory string-prefix, untested, siblings unguarded
-    applies_to: "planned"
-    mechanism: "INTENDED: post-step working-tree assertion (hard gate) that the step touched only its worktree; covers sibling worktrees + relative/$HOME/cd/symlink escapes."
-    evidence_command: "grep -En 'PreToolUse|MAIN_REPO|WORKTREE_PREFIX|worktree' packages/pelaggio/scripts/pelaggio/step-runner.ts packages/pelaggio/scripts/pelaggio/config.ts"
-    test_file: "planned"
-    failure_mode: "fail the step, loudly"
-    known_limits: "TODAY the boundary is best-effort string-matching on Write/Edit/Bash only; sibling-worktree writes and relative/symlink Bash escapes are unguarded, and the block branches are untested."
+    claim: "Writes are confined to the work item's own worktree: any change to the main checkout or a sibling worktree fails the step — one lane can't corrupt another."
+    status: guarantee          # shipped: pipeline.ts post-step confinement audit (#105/#111/#125), tested
+    applies_to: ">=0.1.0"
+    mechanism: "Post-step hard gate (pipeline.ts): forbiddenRootsForStep enumerates the main checkout + sibling worktrees (minus the item's own worktree); snapshotForbiddenRoots hashes their git state before the step and diffForbiddenRootSnapshots re-checks after. Any changed forbidden root sets subtype 'error_confinement' and fails the step. Because it diffs git state (committed + uncommitted), it catches the sibling/relative/$HOME/cd/symlink Bash escapes a PreToolUse string-check missed."
+    evidence_command: "grep -q 'snapshotForbiddenRoots' packages/pelaggio/scripts/pelaggio/pipeline.ts && grep -q 'diffForbiddenRootSnapshots' packages/pelaggio/scripts/pelaggio/pipeline.ts && grep -q 'error_confinement' packages/pelaggio/scripts/pelaggio/pipeline.ts && node --import tsx --test --test-name-pattern='confinement' packages/pelaggio/scripts/pelaggio/__tests__/pipeline.test.ts >/dev/null 2>&1"
+    test_file: "packages/pelaggio/scripts/pelaggio/__tests__/pipeline.test.ts (worktree confinement audit: sibling-worktree, dirty-main, and shipwreck own-worktree-exemption cases)"
+    failure_mode: "fail the step, loudly (subtype error_confinement)"
+    known_limits: "The audit is git-state-based over the main checkout and sibling worktrees. Writes to paths outside any tracked git root (e.g. $HOME, /tmp) are not caught here; that residual is bounded by tool/egress scoping, tracked under TC-015."
     standards: ["OWASP-LLM06", "OWASP-LLM05"]
     adr: "ADR-1, ADR-2"
     last_verified: "2026-07-07"
@@ -308,7 +308,7 @@ manifest:
       capabilities: [pr.open, git.push.default_branch, pr.automerge]
       evidence: [TC-003, TC-012, TC-013]
   sandbox_scope:
-    worktree_scope: "item worktree by convention and hooks; post-step hard confinement is planned"
-    main_repo_protection: "worktree isolation hooks block direct writes to the main repository path during mutating tool calls"
-    planned_hardening: "post-step tree diff assertion covering sibling worktrees, relative paths, shell escapes, and symlink escapes"
+    worktree_scope: "item worktree by convention and hooks, backed by a shipped post-step confinement audit: any change to the main checkout or a sibling worktree during a step fails the step"
+    main_repo_protection: "post-step git-state diff over the main checkout and sibling worktrees fails the step on any committed or uncommitted change, covering sibling/relative/$HOME/cd/symlink Bash escapes"
+    planned_hardening: "not an OS/container sandbox: writes to paths outside any tracked git root (e.g. $HOME, /tmp, arbitrary absolute paths) are not caught by this audit and remain bounded by tool/egress scoping (TC-015)"
     evidence: [TC-011, TC-015]
