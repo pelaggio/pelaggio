@@ -1,7 +1,7 @@
 ---
 title: Trust overview
-description: What Pelaggio can touch, what leaves your machine, and how to verify every word of it.
-status: draft            # mirrors trust-claims.yml; every `planned` claim must be `guarantee` before this ships
+description: Five evaluator questions about Pelaggio's current guarantees, defaults, and limits.
+status: draft
 diataxis: explanation
 sidebar:
   order: 1
@@ -9,42 +9,43 @@ last_reviewed: 2026-07-08
 threat_model_ref: ./threat-model.md
 ---
 
-# Trust, in one page
+# Trust Overview
 
-Pelaggio writes code and opens pull requests in your repositories — largely unattended. That only works if you can see exactly what it's allowed to do. So here's the whole story, and at the bottom, the commands to check that we're telling the truth.
+Pelaggio is an autonomous development orchestrator: it reads repo, issue, PR, and tool-output text, runs model-backed steps, writes code, and ships branches. The trust docs are a human projection of the [claim registry](./trust-claims.yml); every guarantee/default/limit below is scoped to claim IDs, and the machine projection lives in [`pelaggio.trust.json`](./pelaggio.trust.json).
 
-Everything on this page is generated from a [claim registry](./trust-claims.yml) where each promise carries the test that proves it. If the code stops matching a claim, CI fails. We can't quietly drift.
+## Five Questions
 
-## Five questions, five answers
+### 1. Can it push to my default branch?
 
-**1. Can it push to my main branch?**
-No — not unless you explicitly turn that on. Out of the box Pelaggio opens a pull request and stops there. Direct-push is an opt-in you have to reach for. *(→ `TC-012`, [permission model](./permission-model.md))*
+By default, no. `ship.target` resolves to `pull-request`, so the shipped default opens a PR instead of pushing to the default branch (`TC-012`, [permission model](./permission-model.md), [`ADR-0003`](../decisions/0003-pr-gated-by-default.md)). `direct-push` and `auto-merge-pr` are explicit, warned opt-ins (`TC-012`). Auto-merge safety still depends on external branch protection today; in-code verification that the required review gate is enforceable is planned, not current (`TC-013`, [uninstall and rollback](./uninstall-and-rollback.md)).
 
-**2. What can it write, and where?**
-Only inside a throwaway worktree for the item it's working on. It can't reach back into your main checkout — a write outside its lane fails the step rather than slipping through. *(→ `TC-011`, [write boundary](./write-boundary.md))*
+### 2. What can it write?
 
-**3. What leaves my machine, and to whom?**
-Your code goes to the model provider you configure, and to the roadmap/notify integrations you switch on — nowhere else. There's no telemetry: nothing phones home, because there's nothing to phone home with. Self-hosted, it all stays on your infra. *(→ `TC-002`, `TC-006`, [data & egress](./data-egress.md))*
+Pelaggio is designed around item worktrees, and mutating steps receive hooks/conventions that steer writes into the claimed worktree (`TC-011`, [sandboxing](./sandboxing.md), [`ADR-0001`](../decisions/0001-worktree-write-confinement.md)). This is not an OS/container sandbox and not yet the hard post-step confinement guarantee described by the planned claim: sibling worktrees, relative or `$HOME` shell escapes, and symlink paths are named gaps today (`TC-011`, `TC-015`).
 
-**4. What if it goes wrong — how do I stop and undo it?**
-Every run is a branch, and risky work parks itself as a `wip:` commit rather than vanishing. Nothing merges without passing the review gate, which fails *closed* — silence or an error blocks, it never green-lights on a shrug. *(→ `TC-003`, [uninstall & rollback](../guides/uninstall-and-rollback.md))*
+### 3. What leaves my machine?
 
-**5. Can I trust the binary itself?**
-Releases ship from a signed tag with npm provenance, so you can verify a build came from our source, untampered — and the published package runs no install scripts, so `npm install` never executes our code on your machine. *(→ `TC-004`, `TC-005`, [supply chain](../security/supply-chain.md))*
+There is no analytics or telemetry channel at all (`TC-002`). Operational egress is limited by configuration to the model provider, enabled roadmap adapter, git remote, and optional notify webhook (`TC-006`, [egress matrix](./egress.md)). Prompts/structured run logs do not interpolate known secret environment variables (`TC-001`), but child processes currently inherit the parent environment and raw verbose logs are not scrubbed; env allowlisting and log redaction are planned (`TC-014`, [artifacts and state](./reference/artifacts-and-state.md)).
 
-## What we haven't proven yet
+### 4. What blocks an unsafe merge?
 
-We'd rather tell you than let you find out. The honest weak point is the one every autonomous code tool shares and few name: Pelaggio is *designed* to read and act on your repo files, issues, and PR text — which means the instructions it follows can come from places an attacker can reach. Today that blast radius is bounded by the worktree and the gates above, not by a purpose-built injection defense. That work is the roadmap headline. *(→ `TC-015`, [threat model](./threat-model.md))*
+In pull-request mode, the review gate fails closed: only an explicit `Verdict: PASS` from a successful review passes; silence, refusal, SDK failure, max-turns, rate-limit park, or `Verdict: BLOCK` blocks (`TC-003`, [errors reference](./reference/errors.md), [PR review docs](../pr-review.md)). The default PR target keeps a human gate in the loop (`TC-012`). For `auto-merge-pr`, enforcement depends on branch protection requiring the `review` status today; in-code branch-protection verification is planned (`TC-013`).
 
-You'll also find claims marked **`planned`** in the registry. Those are guarantees we're building, not ones we're claiming. We won't move a claim to `guarantee` — or ship this page — until its test passes.
+### 5. Can I trust the package/install path?
 
-## Don't take our word for it
+Pelaggio's own published package and workspace manifests do not use `preinstall`, `install`, or `postinstall` lifecycle scripts, and the release gate checks that (`TC-004`, [reproducible install](./reproducible-install.md)). Signed tags plus npm provenance harden releases, but live downstream attestation verification is not a local guarantee (`TC-005`). Normal installs can still execute transitive dependency lifecycle scripts; that is documented rather than hidden (`TC-016`). The repo license is FSL-1.1-ALv2 with a two-year Apache-2.0 future grant, and it is not OSI-approved today ([license](./license.md)).
 
-Every claim ships with a command that proves it:
+## What Is Still Open
 
-```sh
-pelaggio trust verify        # runs each guarantee's evidence check, fails on regression
-cat pelaggio.trust.json      # the machine-readable version, for your own tooling
+The defining threat is prompt injection through attacker-reachable repo, issue, PR, dependency, and tool-output text (`TC-015`, [threat model](./threat-model.md), [`ADR-0002`](../decisions/0002-untrusted-input-and-tool-scope.md)). Current bounds are worktree conventions/hooks, PR gating, budget/turn caps, and explicit egress surfaces (`TC-003`, `TC-006`, `TC-011`, `TC-012`, `TC-015`). A designed injection defense with least-privilege tools, provenance-aware input handling, and harder output controls is not claimed yet (`TC-015`).
+
+## Verify
+
+Use the registry and manifest as the auditable surface (`TC-001` through `TC-016`):
+
+```bash
+pnpm check:trust
+pnpm trust:generate
 ```
 
-The trust surface is machine-readable too: [`/.well-known/pelaggio.trust.json`](./pelaggio.trust.json) declares Pelaggio's capabilities, egress, and hard *nevers* in a form another agent or orchestrator can read before it ever runs us.
+The daemon also serves the machine manifest at `/.well-known/pelaggio.trust.json` when configured (`TC-010`). See [self-host](./self-host.md) for the hosting posture and [README](./README.md) for the full doc map.

@@ -1,6 +1,6 @@
 ---
 title: Threat model
-description: The one threat that defines this product — and how the boundaries answer it.
+description: Prompt injection first, then STRIDE/LINDDUN over Pelaggio's trust and egress boundaries.
 status: draft
 diataxis: explanation
 sidebar:
@@ -8,61 +8,51 @@ sidebar:
 last_reviewed: 2026-07-08
 ---
 
-# Threat model
+# Threat Model
 
-Most tools model a trusted operator using a tool against the outside world. An autonomous code orchestrator inverts that: **the instructions it acts on arrive from surfaces an attacker can reach** — repository files, issue bodies, PR descriptions, dependency metadata, tool output. So we lead with that, not with a generic checklist.
+Pelaggio's defining threat is prompt injection through untrusted input (`TC-015`). The product is built to read repository files, issue bodies, PR text, dependency metadata, logs, and tool output, then act. Those strings may be attacker-controlled, so the main question is not whether the agent is trusted; it is what damage an injected instruction can cause after it reaches the agent (`TC-015`, [`ADR-0002`](../decisions/0002-untrusted-input-and-tool-scope.md)).
 
-## The defining threat: prompt injection via untrusted input
+This maps directly to OWASP LLM01 Prompt Injection, OWASP LLM06 Excessive Agency, and the OWASP Top-10 for Agentic Applications 2025 through `TC-015`. Current controls bound blast radius; they are not yet a designed injection defense (`TC-015`).
 
-Pelaggio is *built* to read your repo, issues, and PRs and take action on them. That is the feature and the risk. A malicious `README`, a poisoned issue, or a crafted test output can try to steer the agent into running a command or writing a file it shouldn't.
+## Trust Boundaries
 
-The wrong mental model is "keep the trusted agent contained." The right one is: **treat every repo/issue/PR string as attacker-controllable, and bound what the agent can do regardless of what it's told.**
-
-Maps to **OWASP LLM01 (Prompt Injection)**, **LLM06 (Excessive Agency — functionality / permissions / autonomy)**, and the **OWASP Top-10 for Agentic Applications (2025)**. Governed by [`ADR-0002`](../decisions/0002-untrusted-input-and-tool-scope.md); tracked as claim `TC-015`.
-
-### How the boundaries answer it
-
-| Attack | Bound | Claim / ADR |
-|---|---|---|
-| "Edit files in the real repo / another branch" | Writes confined to the item's worktree; violations fail the step | `TC-011` / `ADR-0001` |
-| "Push straight to main" | Denied by default; direct-push is explicit opt-in | `TC-012` / `ADR-0003` |
-| "Get this merged" | Review gate fails closed — only an explicit PASS merges | `TC-003` / `ADR-0004` |
-| "Exfiltrate a secret" | Secrets never enter prompts/logs; egress is an allowlist | `TC-001`, `TC-006` |
-| "Run forever / rack up cost" | Per-step budget + turn caps; rate-limit parking | `TC-015` |
-
-**Honest residual:** within its worktree the agent still runs allow-all tools, so injection *inside the sandbox* is bounded by the sandbox, not detected. Least-privilege tool scoping and human gates on risky file classes are the roadmap (`ADR-0002`).
-
-## Trust boundaries
-
-```
-  untrusted input                 Pelaggio                    your world
- ┌──────────────┐        ┌───────────────────────┐        ┌──────────────┐
- │ repo files   │──────► │  agent (allow-all      │──────► │ item worktree│  (write-confined, TC-011)
- │ issues / PRs │        │  tools, budget-capped) │        ├──────────────┤
- │ tool output  │        │  ─ worktree hooks      │──────► │ PR (gated)   │  (fail-closed, TC-003)
- │ deps         │        │  ─ egress allowlist    │──────► │ main branch  │  (opt-in only, TC-012)
- └──────────────┘        └───────────┬───────────┘        └──────────────┘
-                                     │ egress (sub-processor: model provider)
-                                     ▼  prompts, source, diffs, issue text  (TC-006)
-```
-
-## STRIDE (security)
-
-| | Threat | Control | Claim/ADR |
+| Boundary | Trust level | Current control | Claim(s) |
 |---|---|---|---|
-| **S**poofing | Unauth control-plane peer spawns a run | Fail-closed auth / loopback-only | `TC-010` / `ADR-0008` |
-| **T**ampering | Agent corrupts main or a sibling worktree | Worktree write confinement | `TC-011` / `ADR-0001` |
-| **R**epudiation | "What did it do?" | Git-native trail + audit log; provenance | `TC-005` |
-| **I**nfo disclosure | Secret leaks via prompt/log | No secrets in prompts/logs; child-env allowlist | `TC-001`, `TC-014` |
-| **D**enial | Runaway cost/loops | Budget + turn caps; parking | `TC-015` |
-| **E**levation | Injected instruction gains autonomy | PR-gated default; no direct-push | `TC-012` / `ADR-0003` |
+| Repo files, issues, PRs, dependency metadata, tool output | Untrusted input | Treat as attacker-reachable; bound actions with worktree conventions, budgets, and gates. | `TC-015`, `TC-011`, `TC-003`, `TC-012` |
+| Pelaggio pipeline and skills | Trusted orchestrator code, but model-visible prompts can include untrusted text | Step budgets/turn limits, fail-closed review parser, configured provider/profile. | `TC-003`, `TC-015` |
+| Item worktree | Mutating workspace | Write/edit hooks and worktree dependency guard today; post-step hard confinement planned. | `TC-011`, `TC-015` |
+| PR/default branch | Shared remote state | PR default; direct push and auto-merge are explicit opt-ins. | `TC-012`, `TC-013` |
+| Model provider | External sub-processor | Configured model endpoint receives prompts/source context/diffs/issue text. | `TC-006`, `TC-014` |
+| Roadmap adapter | User-controlled integration | GitHub/Linear only when configured as the roadmap source. | `TC-006` |
+| Git remote | User-controlled endpoint | Branch/commit push during ship modes; default branch push denied by default. | `TC-006`, `TC-012` |
+| Notify webhook | User-controlled endpoint | Disabled until `notify.url` is set; sends outcome metadata. | `TC-002`, `TC-006` |
+| Control-plane HTTP API | Operator surface | Non-loopback binds require `CONTROL_PLANE_TOKEN`; loopback without token is allowed with warning. | `TC-010` |
 
-## LINDDUN (privacy)
+## STRIDE
 
-The one privacy question that matters for an LLM tool is *what leaves the machine*. We frame the egress list as a **sub-processor list** (see `pelaggio.trust.json`): self-hosted, the operator is the controller and Pelaggio ships **no** processor relationship of its own. **L**inkability / **I**dentifiability: source and diffs sent to the model provider may contain author identities — documented, provider-retained, opt-out by choosing a different provider (`TC-006`). **U**nawareness: countered by this page + the machine manifest. **N**on-compliance: no telemetry by default (`TC-002`).
+| Category | Threat | Current posture | Claim(s) |
+|---|---|---|---|
+| Spoofing | A reachable peer starts or controls runs through the daemon. | Non-loopback startup fails without `CONTROL_PLANE_TOKEN`; bearer auth guards everything except `/healthz` and the public trust manifest. | `TC-010` |
+| Tampering | Injected instructions write outside the item worktree or corrupt the main checkout. | Worktree hooks block direct main-repo write/edit paths and install guard blocks worktree-side package installs; sibling/relative/symlink shell escapes remain planned hardening gaps. | `TC-011`, `TC-015` |
+| Repudiation | Operators cannot tell what ran, what shipped, or why a gate blocked. | `.dev/pelaggio-log.jsonl`, branches, PR comments, review metrics, and server state/logs preserve operational evidence; verbose raw logs have scrubbing limits. | `TC-001`, `TC-003`, `TC-014`, `TC-015` |
+| Information disclosure | Secrets or private source leave through prompts, child env, logs, provider calls, or webhooks. | Known secret env vars are not interpolated into prompts/structured run logs; no telemetry exists; configured provider/integration egress is documented. Full child env inheritance and unsanitized verbose logs are planned hardening work. | `TC-001`, `TC-002`, `TC-006`, `TC-014` |
+| Denial of service | Injection burns model budget/turns or leaves work half-finished. | Step budgets, turn caps, abort handling, rate-limit parking, and retry bounds limit unattended cost and preserve work at park paths. | `TC-015`, `TC-014` |
+| Elevation of privilege | Injected text causes autonomous merge or direct default-branch mutation. | PR mode is default and the review gate fails closed; direct push/auto-merge require explicit `ship.target`. Auto-merge branch-protection verification is planned, not current. | `TC-003`, `TC-012`, `TC-013`, `TC-015` |
 
-## What we do not defend against (yet)
+## LINDDUN Over Egress
 
-- A compromised **model provider** (you trust whoever you configure).
-- A malicious **operator** (Pelaggio runs with your credentials, by design).
-- Injection *within* the worktree sandbox beyond the blast-radius bounds above.
+| Category | Egress/privacy risk | Current posture | Claim(s) |
+|---|---|---|---|
+| Linkability | Provider/adapter data can link issue, diff, branch, and repo context. | Egress destinations and data classes are explicit in the manifest and [egress matrix](./egress.md). | `TC-006` |
+| Identifiability | Source, diffs, PR text, logs, and comments may contain names, emails, tokens, or customer data. | No telemetry channel exists; provider/adapter retention is owned by the configured endpoint. Child env/log scrubbing remains planned. | `TC-002`, `TC-006`, `TC-014` |
+| Non-repudiation | PR comments, git branches, and server state can identify operator activity. | These artifacts are intentionally retained as audit/recovery surfaces; cleanup is operator-run. | `TC-003`, `TC-012`, `TC-015` |
+| Detectability | External providers learn that a repo/run exists when configured calls happen. | Self-hosting keeps the controller local, but model/adapter/git/notify egress still occurs when configured or required. | `TC-006`, `TC-010` |
+| Disclosure | Prompt/source/diff data leaves to the model provider and roadmap data leaves to GitHub/Linear when enabled. | The manifest names each destination, opt-out, and role; no hidden analytics path is present. | `TC-002`, `TC-006` |
+| Unawareness | Operators may not know which destinations process run data. | The trust manifest, this doc set, and public `/.well-known/pelaggio.trust.json` endpoint expose the posture. | `TC-006`, `TC-010` |
+| Non-compliance | Provider or integration retention may conflict with local policy. | Pelaggio does not override external retention; choose endpoints/adapters/providers that match policy. | `TC-006`, `TC-014` |
+
+## Residual Risk
+
+Pelaggio currently bounds prompt-injection blast radius but does not detect or neutralize injection as a first-class defense (`TC-015`). The agent can still run broad tools inside the worktree, and the worktree boundary is not yet enforced by a post-step hard confinement assertion (`TC-011`). A compromised or unsuitable model provider remains in the operator's trust base (`TC-006`). Child processes inherit the parent environment, and verbose logs are not scrubbed today (`TC-014`). Auto-merge relies on external branch protection rather than in-code verification (`TC-013`).
+
+The intended end state is stronger least-privilege tool scoping, provenance-aware prompt handling, env allowlisting, log redaction, and branch-protection verification. Until those claims move out of `planned`, the docs keep naming them as residual risk (`TC-011`, `TC-013`, `TC-014`, `TC-015`).
