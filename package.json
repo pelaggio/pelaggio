@@ -12,6 +12,7 @@
 		"check": "biome check",
 		"check:skills": "pnpm --filter pelaggio check:skills",
 		"check:publish": "pnpm --filter pelaggio check:publish",
+		"check:trust": "node ci/verify-claims.mjs",
 		"format": "biome check --write",
 		"prepare": "lefthook install"
 	},

@@ -1,0 +1,201 @@
+# Pelaggio Trust Claim Registry — SINGLE SOURCE OF TRUTH
+#
+# The human trust docs, the machine-readable manifest (pelaggio.trust.json), and the
+# CI verification job are all GENERATED from this file. Honest by construction: a
+# claim's `status` must match what the code does TODAY — never what we wish it did.
+#
+# Status vocabulary (normative — use these words, nothing softer):
+#   guarantee     — hard: a mechanism FAILS the operation if violated; proven by a test
+#   default       — true out of the box, but the operator can change it
+#   best_effort   — advisory/partial; not a hard gate
+#   planned       — the endpoint intent; NOT yet true in shipped code
+#   not_supported — explicitly out of scope
+#
+# Voice: "Fathom, lightened" — precise, grounded, a little air; never hype.
+
+meta:
+  schema_version: "0.1.0"
+  source_audit: "internal (unpublished)"
+  endpoint_intent: "internal (unpublished)"
+  defining_threat: >
+    Prompt-injection via untrusted input. Pelaggio is BUILT to read and act on
+    repository files, issues, and PR text — surfaces an attacker can control. The
+    core question isn't "is the agent contained?" but that the instructions
+    themselves arrive from attacker-reachable places. Every capability is scoped on
+    that assumption. (OWASP LLM01 Prompt Injection + LLM06 Excessive Agency +
+    OWASP Top-10 for Agentic Applications, 2025.)
+
+claims:
+  # ---- What is already true (the good bones) --------------------------------
+  - id: TC-001
+    claim: "Your secrets never ride along in prompts or run logs."
+    status: guarantee
+    applies_to: ">=0.1.0"
+    mechanism: "Prompts are built from skill bodies + args (expandSkill/buildPrompt); no code path interpolates env secrets. The .jsonl log stores only cycle metadata + a 200-char outputTail."
+    evidence_command: "grep -En 'process\\.env\\.(ANTHROPIC_API_KEY|LINEAR_API_KEY|GH_TOKEN|CONTROL_PLANE_TOKEN)' packages/pelaggio/scripts/pelaggio/helpers.ts packages/pelaggio/scripts/pelaggio/pipeline.ts # expect: none"
+    test_file: "packages/pelaggio/scripts/pelaggio/__tests__/check-publish.test.ts"
+    failure_mode: "n/a — secrets are never read into these paths"
+    known_limits: "Verbose (--verbose) transcripts in .dev/*.log (gitignored) capture raw child stdout; a secret the model echoes could land there. See TC-014."
+    standards: ["OWASP-LLM02", "ASVS-V6"]
+    adr: null
+    last_verified: "2026-07-07"
+
+  - id: TC-002
+    claim: "No telemetry. Nothing phones home — there's no analytics to turn off because there's none to begin with."
+    status: guarantee
+    applies_to: ">=0.1.0"
+    mechanism: "No analytics/telemetry SDK in dependencies; the word 'telemetry' appears only in code comments."
+    evidence_command: "grep -rEin --include='*.ts' 'sentry|posthog|mixpanel|amplitude|segment/analytics|datadog|honeycomb' packages # expect: none"
+    test_file: "GAP: add a dependency-denylist test"
+    failure_mode: "n/a"
+    known_limits: "The optional notify webhook sends outcome metadata only, and only if you set notify.url."
+    standards: ["GDPR-Art5"]
+    adr: null
+    last_verified: "2026-07-07"
+
+  - id: TC-003
+    claim: "The merge gate fails closed. A pull request merges only on an explicit 'Verdict: PASS' — silence, errors, or a refusal all block."
+    status: guarantee
+    applies_to: ">=0.1.0"
+    condition: "ship.target = pull-request"
+    mechanism: "parseReviewGate passes only on an explicit PASS from a successful run; BLOCK/missing/refusal/SDK-error/max-turns/park all block (helpers.ts:314-320). CI runs on an ephemeral VM with a comment-only token."
+    evidence_command: "grep -c 'parseReviewGate' packages/pelaggio/scripts/pelaggio/helpers.ts"
+    test_file: "GAP: add a parseReviewGate unit test covering each block path"
+    failure_mode: "blocks the merge, loudly"
+    known_limits: "This is the review gate, distinct from the fail-safe shakedown parser. See TC-013 for auto-merge."
+    standards: ["OWASP-LLM06", "ASVS-V4"]
+    adr: "ADR-4"
+    last_verified: "2026-07-07"
+
+  - id: TC-004
+    claim: "The published package runs no install scripts. Installing Pelaggio never executes code on your machine."
+    status: guarantee
+    applies_to: ">=0.1.0"
+    mechanism: "checkPackageScripts rejects preinstall/install/postinstall; npm pack --ignore-scripts confirms the packed tree against an allowlist (check-publish.ts)."
+    evidence_command: "node -e \"const s=(require('./packages/pelaggio/package.json').scripts)||{};process.exit(['preinstall','install','postinstall'].some(k=>k in s)?1:0)\""
+    test_file: "packages/pelaggio/scripts/pelaggio/__tests__/check-publish.test.ts"
+    failure_mode: "publish is blocked pre-release, loudly"
+    known_limits: "Governs OUR manifest only; transitive dependencies can still run lifecycle scripts on a non---ignore-scripts install. See TC-016."
+    standards: ["SLSA-BuildL3", "OWASP-LLM03"]
+    adr: "ADR-6"
+    last_verified: "2026-07-07"
+
+  - id: TC-005
+    claim: "Releases are signed and provenanced — you can verify a build came from our source, untampered."
+    status: guarantee
+    applies_to: ">=0.1.0"
+    mechanism: "publish.yml verifies an SSH-signed tag (git tag -v against allowed_signers), then npm publish --provenance (id-token: write)."
+    evidence_command: "npm view <pkg> --json | jq '.dist.attestations' # after first publish"
+    test_file: "n/a — CI workflow gate"
+    failure_mode: "publish aborts if the tag signature fails"
+    known_limits: "Self-hosted publish runner + automation token are the trust anchors (no interactive 2FA). Sigstore bundle: planned."
+    standards: ["SLSA-BuildL3", "OWASP-LLM03"]
+    adr: "ADR-7"
+    last_verified: "2026-07-07"
+
+  - id: TC-006
+    claim: "Your code goes only where you point it: the model provider you configure, and the roadmap/notify integrations you enable. Nowhere else."
+    status: default
+    applies_to: ">=0.1.0"
+    mechanism: "Egress is limited to the configured provider (today: Anthropic), the roadmap adapter (GitHub/Linear), git push to your remote, and an optional notify webhook. See the egress matrix in pelaggio.trust.json."
+    evidence_command: "GAP: needs a precise, executable evidence command"
+    test_file: "GAP: add an egress-allowlist assertion"
+    failure_mode: "n/a"
+    known_limits: "Self-hosted keeps everything on your infra; the model provider's retention is governed by their policy."
+    standards: ["GDPR-Art28", "OWASP-LLM02"]
+    adr: null
+    last_verified: "2026-07-07"
+
+  # ---- The endpoint intent (planned — NOT yet true; honest labels) ----------
+  - id: TC-010
+    claim: "On a routable interface the control plane never runs unauthenticated: with no token set it refuses to start. (Loopback stays allowed for local dev, with a boot warning.)"
+    status: guarantee          # closed by #102 (F1), merged 2026-07-08
+    applies_to: ">=0.1.0"
+    mechanism: "loadServerConfig() throws when CONTROL_PLANE_TOKEN is unset AND the host is non-loopback; loopback is classified by parsed IP literal (node:net isIP): a valid 127.0.0.0/8 IPv4 literal, ::1, or the exact host 'localhost' (packages/server/src/config.ts)."
+    evidence_command: "grep -q 'isIP' packages/server/src/config.ts && grep -q 'CONTROL_PLANE_TOKEN is unset' packages/server/src/config.ts && (cd packages/server && npx tsx --test __tests__/config.test.ts >/dev/null 2>&1)"
+    test_file: "packages/server/__tests__/config.test.ts (fail-closed + adversarial 127.*-hostname cases)"
+    failure_mode: "refuse to start, loudly (throws an actionable error)"
+    known_limits: "Loopback-without-token is intentionally allowed for local dev (a boot warn fires). Conservative: IPv4-mapped loopback (::ffff:127.0.0.1) is refused rather than parsed."
+    standards: ["ASVS-V2", "OWASP-LLM06"]
+    adr: "ADR-8"
+    last_verified: "2026-07-08"
+
+  - id: TC-011
+    claim: "Writes are hard-confined to the work item's own worktree. Reaching outside it fails the step — it doesn't slip through."
+    status: planned            # TODAY (S1): advisory string-prefix, untested, siblings unguarded
+    applies_to: "planned"
+    mechanism: "INTENDED: post-step working-tree assertion (hard gate) that the step touched only its worktree; covers sibling worktrees + relative/$HOME/cd/symlink escapes."
+    evidence_command: "planned — add tests exercising the block branches + a post-step tree diff assertion"
+    test_file: "planned"
+    failure_mode: "fail the step, loudly"
+    known_limits: "TODAY the boundary is best-effort string-matching on Write/Edit/Bash only; sibling-worktree writes and relative/symlink Bash escapes are unguarded, and the block branches are untested."
+    standards: ["OWASP-LLM06", "OWASP-LLM05"]
+    adr: "ADR-1, ADR-2"
+    last_verified: "2026-07-07"
+
+  - id: TC-012
+    claim: "Human-gated by default. Out of the box it opens a pull request — it never pushes to your main branch unless you explicitly opt in."
+    status: guarantee          # closed by #114 (S2), merged 2026-07-08
+    applies_to: ">=0.1.0"
+    mechanism: "ship.target resolves to DEFAULT_SHIP_TARGET = 'pull-request' when unset; direct-push/auto-merge-pr are explicit opt-ins that fire a loud one-time startup banner (config.ts, pipeline.ts)."
+    evidence_command: "grep -q 'DEFAULT_SHIP_TARGET' packages/pelaggio/scripts/pelaggio/config.ts && grep -q 'pull-request' packages/pelaggio/scripts/pelaggio/config.ts && (cd packages/pelaggio && npx tsx --test scripts/pelaggio/__tests__/ship.test.ts >/dev/null 2>&1)"
+    test_file: "packages/pelaggio/scripts/pelaggio/__tests__/ship.test.ts (default target + autonomous-push warning)"
+    failure_mode: "n/a (safe default; autonomous push is an explicit, warned opt-in)"
+    known_limits: "direct-push and auto-merge-pr remain available as explicit, warned opt-ins."
+    standards: ["OWASP-LLM06"]
+    adr: "ADR-3"
+    last_verified: "2026-07-08"
+
+  - id: TC-013
+    claim: "Auto-merge only ever merges after the required review gate passes."
+    status: planned            # TODAY (S3): relies on unverified branch protection
+    applies_to: "planned"
+    mechanism: "INTENDED: verify branch-protection / required 'review' check at auto-merge setup; refuse or warn if unprotected."
+    evidence_command: "planned — probe the GitHub branch-protection API at setup"
+    test_file: "planned"
+    failure_mode: "warn/refuse if the gate isn't enforceable"
+    known_limits: "TODAY safety is delegated to GitHub branch-protection settings that live outside the repo and are not verified in-code."
+    standards: ["OWASP-LLM06", "ASVS-V4"]
+    adr: "ADR-5"
+    last_verified: "2026-07-07"
+
+  - id: TC-014
+    claim: "Child processes get only the secrets they need, and logs are scrubbed of anything that looks like a credential."
+    status: planned            # TODAY (S4): full process.env inherited; no redaction
+    applies_to: "planned"
+    mechanism: "INTENDED: minimal env allowlist to spawned children; redact known secret patterns from log streams."
+    evidence_command: "planned — assert the child env allowlist; add a log-redaction test"
+    test_file: "planned"
+    failure_mode: "redacted before write"
+    known_limits: "TODAY the full parent env is inherited by spawned children and no log stream is scrubbed."
+    standards: ["OWASP-LLM02", "12FACTOR-Config"]
+    adr: "ADR-10"
+    last_verified: "2026-07-07"
+
+  # ---- The defining threat, as a first-class claim --------------------------
+  - id: TC-015
+    claim: "Pelaggio treats everything in your repo, issues, and PRs as untrusted input — text that could be trying to steer the agent — and bounds what it can do accordingly."
+    status: best_effort        # partially: worktree hooks + gates; not yet a designed injection defense
+    applies_to: ">=0.1.0 (best_effort); hardening planned"
+    mechanism: "Today: worktree hooks (TC-011), fail-closed review gate (TC-003), and budget/turn caps bound blast radius. Not yet: a designed prompt-injection defense (input provenance, tool-scoping by trust level, output handling)."
+    evidence_command: "GAP: needs a precise, executable evidence command"
+    test_file: "planned — injection corpus / red-team fixtures"
+    failure_mode: "bounded by the gates above, not by injection-specific detection"
+    known_limits: "This is the DEFINING threat and the honest weak point: the agent runs allow-all tools over attacker-reachable content. Hardening (least-privilege tools, human gates on risky file classes) is the roadmap headline."
+    standards: ["OWASP-LLM01", "OWASP-LLM05", "OWASP-Agentic-2025"]
+    adr: "ADR-2"
+    last_verified: "2026-07-07"
+
+  # ---- Supply-chain honesty -------------------------------------------------
+  - id: TC-016
+    claim: "We tell you the truth about the dependency tree: our package ships no install scripts, but transitive dependencies can, on a normal install."
+    status: best_effort
+    applies_to: ">=0.1.0"
+    mechanism: "TC-004 governs our manifest; consumer/CI installs run without --ignore-scripts except pr-review.yml, so transitive lifecycle scripts still execute."
+    evidence_command: "rg -n 'ignore-scripts' .github/workflows"
+    test_file: "n/a"
+    failure_mode: "documented, not gated"
+    known_limits: "Also: LINEAR_API_KEY has no standard prefix and isn't in the tarball secret scan (M1)."
+    standards: ["SLSA-BuildL3", "OWASP-LLM03"]
+    adr: "ADR-6"
+    last_verified: "2026-07-07"

@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pelaggio.dev/.well-known/pelaggio.trust.schema.json",
+  "title": "Pelaggio Trust Manifest",
+  "description": "Machine-readable trust/capability/egress/permission manifest for an autonomous dev orchestrator. Designed as a namespaced extension to the A2A Agent Card (/.well-known/agent-card.json). Generated from trust-claims.yml; every capability/egress/never entry links back to a claim id, so a consuming agent can follow the evidence.",
+  "type": "object",
+  "required": ["schema_version", "product", "release", "posture", "defaults", "capabilities", "egress", "never", "claims_ref"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+    "product": { "const": "pelaggio" },
+    "release": { "type": "string", "description": "Semver of the release this manifest describes, or a -dev/-unreleased suffix." },
+    "posture": {
+      "enum": ["shipped", "intent"],
+      "description": "'shipped' = describes actual behavior of `release`. 'intent' = describes the endpoint we are building toward; per-item truth lives in the linked claims' status."
+    },
+    "generated_from": { "const": "trust-claims.yml" },
+    "threat_model_ref": { "type": "string", "format": "uri-reference" },
+    "defaults": {
+      "type": "object",
+      "required": ["ship_target", "telemetry", "control_plane_auth"],
+      "additionalProperties": false,
+      "properties": {
+        "ship_target": { "enum": ["pull-request", "direct-push"] },
+        "telemetry": { "enum": ["off", "on"] },
+        "control_plane_auth": { "enum": ["required_or_loopback_only", "optional"] }
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "default", "approval", "evidence"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "description": "Stable capability id, e.g. repo.write.worktree" },
+          "description": { "type": "string" },
+          "default": { "enum": ["allowed", "denied"] },
+          "scope": { "type": "string", "description": "e.g. item_worktree_only" },
+          "approval": { "enum": ["not_required", "explicit_config_required", "human_per_action"] },
+          "evidence": {
+            "type": "array",
+            "items": { "type": "string", "pattern": "^TC-\\d{3}$" },
+            "description": "Trust-claim ids that substantiate this capability. Follow them to trust-claims.yml for status + proof."
+          }
+        }
+      }
+    },
+    "egress": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["destination", "data_categories", "required"],
+        "additionalProperties": false,
+        "properties": {
+          "destination": { "type": "string" },
+          "data_categories": { "type": "array", "items": { "type": "string" } },
+          "required": { "type": "boolean" },
+          "retention": { "type": "string" },
+          "opt_out": { "type": "string" },
+          "role": { "enum": ["sub_processor", "user_controlled_endpoint"], "description": "GDPR framing: sub_processor = we route data there; user_controlled_endpoint = your own remote/integration." }
+        }
+      }
+    },
+    "never": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Hard 'will not do' list — each phrased as a testable invariant."
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "npm_provenance": { "type": "boolean" },
+        "signed_tag": { "type": "boolean" },
+        "sigstore_bundle": { "enum": ["present", "planned", "none"] }
+      }
+    },
+    "claims_ref": { "type": "string", "format": "uri-reference", "description": "URL/path to the machine-readable claims (generated from trust-claims.yml)." },
+    "signature": { "type": "string", "description": "Detached signature over the canonicalized manifest, so a consumer can pin + verify. Planned." }
+  }
+}
