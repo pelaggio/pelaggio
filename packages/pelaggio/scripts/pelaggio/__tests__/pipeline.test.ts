@@ -920,7 +920,7 @@ describe("runPipeline — worktree confinement audit", () => {
 					},
 				},
 				"shakedown-code": { ok: true },
-				ship: { ok: true, text: "https://github.com/cdhorne/pelaggio/pull/99" },
+				ship: { ok: true, text: `SHIP_DECISION\n{"target":"pull-request","headBranch":"feat/tool-99","prTitle":"Ship","prBody":"Body"}\nEND_SHIP_DECISION` },
 			},
 			parkSignal,
 		);
@@ -933,6 +933,7 @@ describe("runPipeline — worktree confinement audit", () => {
 				logs.push(e);
 			},
 			roadmap: makeMockRoadmap(),
+			dispatchStepEffects: async () => ({ appendText: "https://github.com/cdhorne/pelaggio/pull/99" }),
 		});
 
 		assert.equal(result.completed, true);
@@ -950,7 +951,7 @@ describe("runPipeline — worktree confinement audit", () => {
 			{
 				implement: { ok: true, writes: { "src/feature.ts": "export const ok = true;\n" } },
 				"shakedown-code": { ok: true },
-				ship: { ok: true, text: "https://github.com/cdhorne/pelaggio/pull/99" },
+				ship: { ok: true, text: `SHIP_DECISION\n{"target":"pull-request","headBranch":"feat/tool-99","prTitle":"Ship","prBody":"Body"}\nEND_SHIP_DECISION` },
 			},
 			parkSignal,
 		);
@@ -963,6 +964,7 @@ describe("runPipeline — worktree confinement audit", () => {
 				logs.push(e);
 			},
 			roadmap: makeMockRoadmap(),
+			dispatchStepEffects: async () => ({ appendText: "https://github.com/cdhorne/pelaggio/pull/99" }),
 		});
 
 		assert.equal(result.completed, true);
@@ -1012,7 +1014,7 @@ describe("runPipeline — worktree confinement audit", () => {
 			{
 				implement: { ok: true, writes: { "src/feature.ts": "export const ok = true;\n" } },
 				"shakedown-code": { ok: true },
-				ship: { ok: true, text: "https://github.com/cdhorne/pelaggio/pull/99" },
+				ship: { ok: true, text: `SHIP_DECISION\n{"target":"pull-request","headBranch":"feat/tool-99","prTitle":"Ship","prBody":"Body"}\nEND_SHIP_DECISION` },
 			},
 			parkSignal,
 		);
@@ -1023,6 +1025,7 @@ describe("runPipeline — worktree confinement audit", () => {
 			listWorktrees,
 			appendLog: () => {},
 			roadmap: makeMockRoadmap(),
+			dispatchStepEffects: async () => ({ appendText: "https://github.com/cdhorne/pelaggio/pull/99" }),
 		});
 
 		assert.equal(result.completed, true);

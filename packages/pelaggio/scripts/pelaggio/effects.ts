@@ -2,13 +2,24 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { dirname, join, resolve } from "node:path";
 import { checkpoint, ensureCheckpointed } from "./helpers.js";
 import type { RoadmapSource } from "./roadmap/index.js";
+import { SHIP_TARGET_NAMES } from "./ship/index.js";
+import { runShipPrEffects } from "./ship/pr-effects.js";
 import type { Step } from "./types.js";
 
 export const EFFECTS_SCHEMA_VERSION = 1;
 
-export type ImplementedEffect = { kind: "checkpoint"; label: string } | { kind: "plan.publish"; planPath?: string };
+export interface ShipDecisionEffect {
+	kind: "ship.ShipDecision";
+	target: "pull-request" | "auto-merge-pr" | "direct-push";
+	itemId: string;
+	headBranch: string;
+	prTitle: string;
+	prBody: string;
+}
 
-export type ReservedEffect = ({ kind: "ship.ShipDecision" } & Record<string, unknown>) | ({ kind: "pick.explainSelection" } & Record<string, unknown>) | ({ kind: "shakedown.deferredItems" } & Record<string, unknown>);
+export type ImplementedEffect = { kind: "checkpoint"; label: string } | { kind: "plan.publish"; planPath?: string } | ShipDecisionEffect;
+
+export type ReservedEffect = ({ kind: "pick.explainSelection" } & Record<string, unknown>) | ({ kind: "shakedown.deferredItems" } & Record<string, unknown>);
 
 export type Effect = ImplementedEffect | ReservedEffect;
 
@@ -37,6 +48,10 @@ export interface EffectsDispatchContext extends EffectsContext {
 	log: (msg: string) => void;
 }
 
+export interface EffectsDispatchResult {
+	appendText?: string;
+}
+
 export class EffectsManifestError extends Error {
 	constructor(
 		readonly code: "missing_manifest" | "invalid_manifest" | "provenance_mismatch" | "unknown_effect_kind" | "effect_failed",
@@ -48,9 +63,9 @@ export class EffectsManifestError extends Error {
 	}
 }
 
-type EffectHandler = (effect: ImplementedEffect, ctx: EffectsDispatchContext) => Promise<void> | void;
+type EffectHandler<K extends ImplementedEffect["kind"]> = (effect: Extract<ImplementedEffect, { kind: K }>, ctx: EffectsDispatchContext) => Promise<EffectsDispatchResult | undefined> | EffectsDispatchResult | undefined;
 
-const EFFECT_HANDLERS: Record<ImplementedEffect["kind"], EffectHandler> = {
+const EFFECT_HANDLERS: { [K in ImplementedEffect["kind"]]: EffectHandler<K> } = {
 	checkpoint(effect, ctx) {
 		const committed = checkpoint(ctx.cwd, effect.label);
 		ctx.log(committed ? `${effect.label} committed` : `no changes to commit (${effect.label})`);
@@ -72,6 +87,12 @@ const EFFECT_HANDLERS: Record<ImplementedEffect["kind"], EffectHandler> = {
 		} catch (e) {
 			ctx.log(`plan publish failed (non-fatal, committed locally): ${e instanceof Error ? e.message : String(e)}`);
 		}
+	},
+	async "ship.ShipDecision"(effect, ctx) {
+		if (effect.target === "direct-push") throw new EffectsManifestError("unknown_effect_kind", "ship.ShipDecision is not implemented for direct-push");
+		if (effect.itemId !== ctx.itemId) throw new EffectsManifestError("provenance_mismatch", `ship decision itemId ${effect.itemId} does not match ${ctx.itemId}`);
+		const result = await runShipPrEffects({ cwd: ctx.cwd, itemId: ctx.itemId, decision: effect }, { log: ctx.log });
+		return { appendText: result.prUrl };
 	},
 };
 
@@ -129,22 +150,30 @@ export function loadAndValidateEffectsManifest(ctx: EffectsContext): EffectsMani
 	};
 }
 
-export async function dispatchStepEffects(ctx: EffectsDispatchContext): Promise<void> {
+export async function dispatchStepEffects(ctx: EffectsDispatchContext): Promise<EffectsDispatchResult> {
 	const path = effectManifestPath(ctx);
 	const manifest = loadAndValidateEffectsManifest(ctx);
+	const appendText: string[] = [];
 	try {
 		for (const effect of manifest.effects) {
-			if (effect.kind === "checkpoint" || effect.kind === "plan.publish") {
-				await EFFECT_HANDLERS[effect.kind](effect, ctx);
-				continue;
+			switch (effect.kind) {
+				case "checkpoint":
+				case "plan.publish":
+				case "ship.ShipDecision": {
+					const result = await EFFECT_HANDLERS[effect.kind](effect, ctx);
+					if (result?.appendText) appendText.push(result.appendText);
+					break;
+				}
+				default:
+					throw new EffectsManifestError("unknown_effect_kind", `effect kind is not implemented: ${effect.kind}`);
 			}
-			throw new EffectsManifestError("unknown_effect_kind", `effect kind is not implemented: ${effect.kind}`);
 		}
 	} catch (e) {
 		if (e instanceof EffectsManifestError) throw e;
 		throw new EffectsManifestError("effect_failed", e instanceof Error ? e.message : String(e), { cause: e });
 	}
 	rmSync(path);
+	return appendText.length > 0 ? { appendText: appendText.join("\n") } : {};
 }
 
 function validateEffect(effect: unknown): Effect {
@@ -157,12 +186,33 @@ function validateEffect(effect: unknown): Effect {
 			if (effect.planPath !== undefined && typeof effect.planPath !== "string") throw new EffectsManifestError("invalid_manifest", "plan.publish planPath must be a string when present");
 			return effect.planPath === undefined ? { kind: "plan.publish" } : { kind: "plan.publish", planPath: effect.planPath };
 		case "ship.ShipDecision":
+			return validateShipDecisionEffect(effect);
 		case "pick.explainSelection":
 		case "shakedown.deferredItems":
 			return { ...effect, kind: effect.kind };
 		default:
 			throw new EffectsManifestError("unknown_effect_kind", `unknown effect kind: ${effect.kind}`);
 	}
+}
+
+function validateShipDecisionEffect(effect: Record<string, unknown>): ShipDecisionEffect {
+	if (!SHIP_TARGET_NAMES.includes(effect.target as ShipDecisionEffect["target"])) throw new EffectsManifestError("invalid_manifest", "ship.ShipDecision target must be a valid ship target");
+	if (!isNonEmptyString(effect.itemId)) throw new EffectsManifestError("invalid_manifest", "ship.ShipDecision itemId must be a non-empty string");
+	if (!isNonEmptyString(effect.headBranch)) throw new EffectsManifestError("invalid_manifest", "ship.ShipDecision headBranch must be a non-empty string");
+	if (!isNonEmptyString(effect.prTitle)) throw new EffectsManifestError("invalid_manifest", "ship.ShipDecision prTitle must be a non-empty string");
+	if (!isNonEmptyString(effect.prBody)) throw new EffectsManifestError("invalid_manifest", "ship.ShipDecision prBody must be a non-empty string");
+	return {
+		kind: "ship.ShipDecision",
+		target: effect.target as ShipDecisionEffect["target"],
+		itemId: effect.itemId,
+		headBranch: effect.headBranch,
+		prTitle: effect.prTitle,
+		prBody: effect.prBody,
+	};
+}
+
+function isNonEmptyString(value: unknown): value is string {
+	return typeof value === "string" && value.trim() !== "";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

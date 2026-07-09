@@ -58,6 +58,7 @@ import { cleanupReviewHead, findReviewCandidates, postLocalModeWorkflowComment, 
 import { claimRevision, ensureReviseWorktree, fetchReviewFindings, findRevisablePrs, isAutopilotManaged, postParkComment, reviseFindingsPath } from "./revise-sweep.js";
 import { defaultGhRun, type GhRunner } from "./roadmap/github-issues.js";
 import { getRoadmapSource, type RoadmapSource } from "./roadmap/index.js";
+import { parseShipDecisionEffect } from "./ship/decision.js";
 import { commitStrayBookkeeping, getShipTarget, isAutonomousRemotePush, isShipTargetName, runShipBookkeeping as runShipBookkeepingDefault, SHIP_TARGET_NAMES } from "./ship/index.js";
 import { runStep as runStepDefault } from "./step-runner.js";
 import { A, createStepRenderer, fmtElapsed, LiveStatus, StatusBar, TUI_ENABLED } from "./tui.js";
@@ -78,6 +79,12 @@ export type { RunStepFn } from "./step-runner.js";
  * than a sentinel bool so "terminal vs continue" is explicit at each call site.
  */
 type StepAttempt = { kind: "ok"; result: StepResult } | { kind: "terminal"; cycleResult: CycleResult };
+type StepEffects = Effect[] | ((result: StepResult) => Effect[]);
+
+function appendResultText(text: string, appendText: string): string {
+	if (text.trim() === "") return appendText;
+	return `${text}\n${appendText}`;
+}
 
 const TRANSIENT_MAX_ATTEMPTS = 3;
 const TRANSIENT_BACKOFF_MS = 1000;
@@ -155,7 +162,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			maxTurnsOverride,
 			retriedMaxTurns = false,
 			ownWorktree,
-		}: { attempt?: number; commitLabel?: string; effects?: Effect[]; maxTurnsOverride?: number; retriedMaxTurns?: boolean; ownWorktree?: string } = {},
+		}: { attempt?: number; commitLabel?: string; effects?: StepEffects; maxTurnsOverride?: number; retriedMaxTurns?: boolean; ownWorktree?: string } = {},
 	): Promise<StepResult> {
 		// Short-circuit before runStep when SIGINT fired between steps; also covers
 		// --dry-run so Ctrl-C during a dry run bails promptly.
@@ -249,8 +256,9 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			log(committed ? `${commitLabel} committed` : `no changes to commit (${commitLabel})`);
 			ensureCheckpointed(cwd, commitLabel, log);
 		}
-		if (effects && effects.length > 0 && result.subtype !== "error_confinement") {
-			const checkpointEffect = effects.find((effect): effect is Extract<Effect, { kind: "checkpoint" }> => effect.kind === "checkpoint");
+		if (effects && result.subtype !== "error_confinement") {
+			const staticEffects = Array.isArray(effects) ? effects : [];
+			const checkpointEffect = staticEffects.find((effect): effect is Extract<Effect, { kind: "checkpoint" }> => effect.kind === "checkpoint");
 			if (result.ok && !parkSignal.parked && !opts.dryRun) {
 				const ctx = {
 					runId: `${runIdBase}-${itemId ?? "unclaimed"}`,
@@ -261,8 +269,18 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 					preSha,
 				};
 				try {
-					writeEffectsManifest(ctx, effects);
-					await dispatchStepEffects({ ...ctx, roadmap, log });
+					const resolvedEffects = typeof effects === "function" ? effects(result) : effects;
+					if (resolvedEffects.length > 0) {
+						writeEffectsManifest(ctx, resolvedEffects);
+						const effectsResult = await dispatchStepEffects({ ...ctx, roadmap, log });
+						if (effectsResult.appendText) {
+							result = {
+								...result,
+								text: appendResultText(result.text, effectsResult.appendText),
+								fullText: appendResultText(result.fullText, effectsResult.appendText),
+							};
+						}
+					}
 				} catch (e) {
 					const code = e instanceof EffectsManifestError ? e.code : "effect_failed";
 					const message = e instanceof Error ? e.message : String(e);
@@ -842,7 +860,9 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		});
 	}
 
-	const ship = await step("ship", shipPrompt, worktree!);
+	const ship = await step("ship", shipPrompt, worktree!, {
+		...(target.name === "direct-push" ? {} : { effects: (result) => [parseShipDecisionEffect(result, { itemId: itemId!, target: target.name })] }),
+	});
 	cost += ship.cost;
 
 	if (classifyOutcome(ship) === "error_confinement") {

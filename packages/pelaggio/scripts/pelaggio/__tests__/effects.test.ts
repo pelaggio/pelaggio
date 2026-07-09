@@ -74,9 +74,48 @@ describe("effects manifest validation", () => {
 		);
 	});
 
-	it("declares reserved kinds but fails closed when dispatched", async () => {
+	it("validates ship decisions but rejects direct-push dispatch through the effect path", async () => {
 		const ctx = baseContext();
-		writeEffectsManifest(ctx, [{ kind: "ship.ShipDecision", decision: "merge" }]);
+		writeEffectsManifest(ctx, [
+			{
+				kind: "ship.ShipDecision",
+				target: "direct-push",
+				itemId: "TOOL-99",
+				headBranch: "feat/tool-99",
+				prTitle: "Ship TOOL-99",
+				prBody: "Body",
+			},
+		]);
+
+		await assert.rejects(
+			() => dispatchStepEffects(ctx),
+			(err) => err instanceof EffectsManifestError && err.code === "unknown_effect_kind",
+		);
+		assert.equal(existsSync(effectManifestPath(ctx)), true);
+	});
+
+	it("rejects malformed ship decisions during manifest validation", () => {
+		const ctx = baseContext();
+		writeEffectsManifest(ctx, [
+			{
+				kind: "ship.ShipDecision",
+				target: "pull-request",
+				itemId: "TOOL-99",
+				headBranch: "",
+				prTitle: "Ship TOOL-99",
+				prBody: "Body",
+			},
+		]);
+
+		assert.throws(
+			() => loadAndValidateEffectsManifest(ctx),
+			(err) => err instanceof EffectsManifestError && err.code === "invalid_manifest",
+		);
+	});
+
+	it("keeps reserved kinds fail-closed when dispatched", async () => {
+		const ctx = baseContext();
+		writeEffectsManifest(ctx, [{ kind: "pick.explainSelection", reason: "x" }]);
 
 		await assert.rejects(
 			() => dispatchStepEffects(ctx),
@@ -135,6 +174,27 @@ describe("effects dispatch", () => {
 			},
 		});
 		writeEffectsManifest(ctx, [{ kind: "plan.publish" }]);
+
+		await assert.rejects(
+			() => dispatchStepEffects(ctx),
+			(err) => err instanceof EffectsManifestError && err.code === "effect_failed",
+		);
+		assert.equal(existsSync(effectManifestPath(ctx)), true);
+	});
+
+	it("wraps PR ship handler failures and retains the manifest", async () => {
+		const ctx = baseContext();
+		ctx.step = "ship";
+		writeEffectsManifest(ctx, [
+			{
+				kind: "ship.ShipDecision",
+				target: "pull-request",
+				itemId: "TOOL-99",
+				headBranch: "feat/tool-99",
+				prTitle: "Ship TOOL-99",
+				prBody: "Body",
+			},
+		]);
 
 		await assert.rejects(
 			() => dispatchStepEffects(ctx),

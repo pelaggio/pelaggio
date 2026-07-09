@@ -1,9 +1,9 @@
 ---
 name: ship
-description: Finalize, commit, push, and clean up a completed work item
+description: Finalize a completed work item
 argument-hint: "[--no-squash] [--pr]"
 disable-model-invocation: true
-allowed-tools: Read Edit Bash(git:*) Bash(pnpm:*) Bash(npx:*) Bash(gh pr:*)
+allowed-tools: Read Edit Bash(git:*) Bash(pnpm:*) Bash(npx:*)
 ---
 
 # /ship — Finalize and Ship
@@ -14,7 +14,7 @@ Run `git rev-parse --path-format=absolute --git-common-dir` — the output ends 
 
 Roadmap lookups go through `npx pelaggio roadmap ...`; all mark-done / archive logic dispatches to the configured adapter.
 
-Parse `$ARGUMENTS` for `--no-squash` and `--pr` flags.
+Parse `$ARGUMENTS` for `--no-squash`, `--pr`, and `--target=<name>` flags.
 
 **CWD rule**: run steps 1-3 from your current working directory (the worktree). `HEAD` here is your feature branch. After the merge (step 4), all remaining steps run in `{MAIN_REPO}` on `main`.
 
@@ -34,9 +34,15 @@ Parse `$ARGUMENTS` for `--no-squash` and `--pr` flags.
 
 ## 2. Identify
 
-Get item ID from the current branch name. Run `npx pelaggio roadmap get <ID> --json` to fetch title + description for the commit message. The `title` field is the commit subject source.
+Get item ID from the current branch name.
 
-## 3. Squash (unless `--no-squash`)
+For PR targets (`--pr`, `--target=pull-request`, or `--target=auto-merge-pr`), do not run roadmap commands. Derive the PR title/body from the branch name, existing commits, and diff summary.
+
+For direct-push, run `npx pelaggio roadmap get <ID> --json` to fetch title + description for the commit message. The `title` field is the commit subject source.
+
+## 3. Squash (direct-push only, unless `--no-squash`)
+
+For PR targets (`--pr`, `--target=pull-request`, or `--target=auto-merge-pr`), skip this step. The harness owns the squash/commit after it validates `SHIP_DECISION`.
 
 Verify clean working tree (`git status --porcelain` must be empty — stop if not).
 
@@ -67,18 +73,17 @@ If the output is empty (only the `/plan` artifact changed), **abort immediately*
 
 **Never discard MAIN_REPO changes.** If the merge target (`{MAIN_REPO}` on `main`) has uncommitted changes — e.g. a prior cycle's deferred `create-item` or pending bookkeeping — **commit them** (`git add -A && git commit -m "chore: recover uncommitted bookkeeping" --no-verify`); do **not** `git checkout`/`reset --hard`/`stash drop`/`git clean` them away to get a clean tree. Destroying a sibling cycle's work to make your merge tidy is never acceptable.
 
-**If `--pr`**: skip merge, push the branch, and create a PR **only if one is not already open** — a re-ship (e.g. issue #60's revision pass) pushes new commits to a branch whose PR is still open, and `gh pr create` errors on a duplicate. The push already updated the open PR; creation is idempotent:
+**If `--pr` or `--target=pull-request` or `--target=auto-merge-pr`**: skip merge and emit a harness decision. The pipeline owns squash, commit, push, PR create/update, optional auto-merge, mark-done, archive, cleanup, and every network/roadmap effect for PR targets.
 
-```bash
-git push -u origin HEAD
-if url=$(gh pr view --json url --jq .url 2>/dev/null); then
-  echo "PR already open: $url"   # report this exact URL on the final line
-else
-  gh pr create --fill            # or a title/body derived from the squashed commit
-fi
+For PR targets, do not run `git reset`, `git commit`, `git push`, `gh`, `npx pelaggio roadmap`, mark-done, archive, or cleanup. Inspect with read-only commands as needed, then report exactly one block:
+
+```text
+SHIP_DECISION
+{ "target": "pull-request", "itemId": "{ID}", "headBranch": "{BRANCH}", "prTitle": "{title}", "prBody": "{body}" }
+END_SHIP_DECISION
 ```
 
-Then skip to step 8 (Report) — docs updates will happen when the PR is merged. **The final line must carry the PR URL whether the PR was just created or already existed** (the pipeline's `extractPrUrl` scans for it), so echo the pre-existing URL when creation is skipped.
+Use `"target": "auto-merge-pr"` when arguments contain `--target=auto-merge-pr`. Then stop — the harness will report the PR URL after effects run.
 
 **Otherwise** (direct merge):
 

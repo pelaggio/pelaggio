@@ -10,13 +10,15 @@ export function extractPrUrl(step: StepResult): string | undefined {
 
 export const pullRequest: ShipTarget = {
 	name: "pull-request",
-	buildPrompt(_ctx: ShipContext): string {
+	buildPrompt(ctx: ShipContext): string {
 		return [
 			"Mode: pull-request.",
-			"Squash the branch. Push it to origin. Create a PR via `gh pr create` with a title and body",
-			"derived from the squashed commit message. Do NOT merge into main. Do NOT update docs,",
-			"task-index, or archive the plan — a PR merge happens externally and those updates land later.",
-			"Do NOT clean up the worktree or branch. Report the PR URL on the final line.",
+			"The harness owns squash, push, PR upsert, and all forge effects. Inspect the branch as needed,",
+			"but do not mutate git state and do not run network or roadmap commands. Do NOT merge into main.",
+			"Emit exactly one marked decision block for the harness:",
+			"SHIP_DECISION",
+			`{"target":"pull-request","itemId":"${ctx.itemId}","headBranch":"<current-branch>","prTitle":"<title>","prBody":"<body>"}`,
+			"END_SHIP_DECISION",
 		].join(" ");
 	},
 	interpretResult(step): ShipResult {

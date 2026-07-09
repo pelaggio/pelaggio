@@ -3,14 +3,15 @@ import { extractPrUrl } from "./pull-request.js";
 
 export const autoMergePr: ShipTarget = {
 	name: "auto-merge-pr",
-	buildPrompt(_ctx: ShipContext): string {
+	buildPrompt(ctx: ShipContext): string {
 		return [
 			"Mode: auto-merge-pr.",
-			"Squash the branch. Push it to origin. Create a PR via `gh pr create` with a title and body",
-			"derived from the squashed commit message. After creating the PR, enable auto-merge:",
-			"`gh pr merge --auto --squash <pr-number>`. Do NOT merge manually. Do NOT update docs,",
-			"task-index, or archive the plan — those land when the PR auto-merges externally.",
-			"Do NOT clean up the worktree or branch. Report the PR URL on the final line.",
+			"The harness owns squash, push, PR upsert, and enabling auto-merge. Inspect the branch as needed,",
+			"but do not mutate git state and do not run network or roadmap commands. Do NOT merge manually.",
+			"Emit exactly one marked decision block for the harness:",
+			"SHIP_DECISION",
+			`{"target":"auto-merge-pr","itemId":"${ctx.itemId}","headBranch":"<current-branch>","prTitle":"<title>","prBody":"<body>"}`,
+			"END_SHIP_DECISION",
 		].join(" ");
 	},
 	interpretResult(step): ShipResult {
