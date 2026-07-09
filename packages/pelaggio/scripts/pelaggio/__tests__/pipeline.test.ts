@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it, mock } from "node:test";
 import { WORKTREE_PREFIX } from "../config.js";
@@ -2019,6 +2020,67 @@ describe("runPipeline — pick step", () => {
 		assert.equal(result.itemId, "TOOL-99");
 		assert.ok(!existsSync(resolvedPath), "resolved path should never have been created");
 		assert.ok(existsSync(fallbackPath), "fallback path should have been created by sideEffect");
+		assert.deepEqual(
+			calls.map((c) => c.step),
+			["pick", "plan", "shakedown-plan", "implement", "shakedown-code", "ship"],
+		);
+	});
+
+	it("worktree-prefix fallback — ignores the main repo when its path contains the prefix but its basename does not", async () => {
+		// Faithful reproduction of the rename regression: WORKTREE_PREFIX sits in a PARENT path
+		// component of the main repo, whose own basename ("repo") does not start with it. The old
+		// `p.includes(WORKTREE_PREFIX)` substring test selected the main repo as the "new" worktree,
+		// so the implement write never landed on feat/tool-99 and the phantom-ship guard fired.
+		// Basename-prefix matching skips it and correctly picks the real sibling worktree.
+		const base = mkdtempSync(join(tmpdir(), "wt-prefix-"));
+		const parent = join(base, `${WORKTREE_PREFIX}grp`); // prefix lives in a path component, not the basename
+		const repo = join(parent, "repo");
+		mkdirSync(repo, { recursive: true });
+		execSync("git init -q -b main", { cwd: repo });
+		execSync("git config user.name t", { cwd: repo });
+		execSync("git config user.email t@t", { cwd: repo });
+		execSync("git config commit.gpgsign false", { cwd: repo });
+		execSync("git commit --allow-empty -q -m init", { cwd: repo });
+		const resolvedPath = join(parent, "nonexistent-tool-99");
+		const fallbackPath = join(parent, `${WORKTREE_PREFIX}renamed`);
+		const parkSignal = makeParkSignal();
+		const { runStep, calls } = createMockRunStep(
+			{
+				pick: {
+					ok: true,
+					text: "claimed TOOL-99\npick-item: TOOL-99\npick-result: claimed",
+					sideEffect: (cwd) => {
+						execSync(`git worktree add -q -b feat/tool-99 "${fallbackPath}"`, { cwd });
+					},
+				},
+				plan: { ok: true },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				ship: {
+					ok: true,
+					text: "ship-merged: TOOL-99",
+					sideEffect: () => {
+						execSync("git merge -q --no-ff feat/tool-99", { cwd: repo });
+					},
+				},
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline(pickOpts(), parkSignal, baseFlags, {
+			runStep,
+			mainRepo: repo,
+			resolveWorktree: () => resolvedPath,
+			// Main repo listed first: its path contains the prefix, so only basename-prefix matching
+			// skips it in favour of fallbackPath. Under the old substring rule the main repo wins.
+			listWorktrees: () => (existsSync(fallbackPath) ? [repo, fallbackPath] : []),
+			appendLog: () => {},
+			runShipBookkeeping: noopBookkeeping,
+		});
+
+		assert.equal(result.completed, true, `expected main-repo path to be ignored and pipeline to complete; got error=${result.error}`);
+		assert.equal(result.itemId, "TOOL-99");
 		assert.deepEqual(
 			calls.map((c) => c.step),
 			["pick", "plan", "shakedown-plan", "implement", "shakedown-code", "ship"],

@@ -350,7 +350,10 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			} else {
 				worktree = _resolveWorktree(itemId);
 				if (!opts.dryRun && (!existsSync(worktree) || worktreesBefore.has(worktree))) {
-					const newWt = listWorktrees().find((p) => !worktreesBefore.has(p) && p.includes(WORKTREE_PREFIX));
+					// Match on the basename prefix, not a path substring: a parent/main-repo path can
+					// contain WORKTREE_PREFIX (e.g. a checkout whose dir basename is the prefix root) and
+					// must not be mistaken for the freshly-created sibling worktree.
+					const newWt = listWorktrees().find((p) => !worktreesBefore.has(p) && (p.split(/[/\\]/).pop() ?? "").startsWith(WORKTREE_PREFIX));
 					if (newWt) worktree = newWt;
 					else if (!existsSync(worktree)) {
 						const idLower = itemId.toLowerCase();
