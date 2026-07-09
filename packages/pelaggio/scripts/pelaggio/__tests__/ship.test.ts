@@ -124,10 +124,13 @@ describe("direct-push adapter", () => {
 describe("pull-request adapter", () => {
 	const a = getShipTarget("pull-request");
 
-	it("buildPrompt includes gh pr create and 'do NOT merge'", () => {
+	it("buildPrompt requires a decision block and no harness-owned git/gh effects", () => {
 		const prompt = a.buildPrompt({ itemId: "TOOL-99", worktree: "/tmp/wt" });
-		assert.match(prompt, /gh pr create/);
+		assert.match(prompt, /SHIP_DECISION/);
+		assert.match(prompt, /pull-request/);
 		assert.match(prompt, /NOT merge/);
+		assert.doesNotMatch(prompt, /gh pr create/);
+		assert.doesNotMatch(prompt, /git push/);
 	});
 
 	it("interpretResult extracts PR URL from text", () => {
@@ -160,10 +163,13 @@ describe("pull-request adapter", () => {
 describe("auto-merge-pr adapter", () => {
 	const a = getShipTarget("auto-merge-pr");
 
-	it("buildPrompt includes both gh pr create and gh pr merge --auto", () => {
+	it("buildPrompt requires a decision block and no harness-owned git/gh effects", () => {
 		const prompt = a.buildPrompt({ itemId: "TOOL-99", worktree: "/tmp/wt" });
-		assert.match(prompt, /gh pr create/);
-		assert.match(prompt, /gh pr merge --auto/);
+		assert.match(prompt, /SHIP_DECISION/);
+		assert.match(prompt, /auto-merge-pr/);
+		assert.doesNotMatch(prompt, /gh pr create/);
+		assert.doesNotMatch(prompt, /git push/);
+		assert.doesNotMatch(prompt, /gh pr merge --auto/);
 	});
 
 	it("interpretResult extracts PR URL and marks awaitingMerge", () => {
@@ -433,7 +439,7 @@ describe("runPipeline — ship target dispatch", () => {
 		assert.equal(result.completed, false, "a marker-less recovery must not be reported as shipped");
 	});
 
-	it("pull-request: prompt mentions gh pr create, result marks awaitingMerge + prUrl", async () => {
+	it("pull-request: decision effect appends PR URL, result marks awaitingMerge + prUrl", async () => {
 		const worktree = makeTempGitRepo();
 		const parkSignal = makeParkSignal();
 		const { runStep, calls } = createMockRunStep(
@@ -442,7 +448,7 @@ describe("runPipeline — ship target dispatch", () => {
 				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
 				implement: { ok: true, writes: { "impl.txt": "x" } },
 				"shakedown-code": { ok: true },
-				ship: { ok: true, text: `PR opened: ${PR_URL}` },
+				ship: { ok: true, text: `SHIP_DECISION\n{"target":"pull-request","headBranch":"feat/tool-99","prTitle":"Ship TOOL-99","prBody":"Body"}\nEND_SHIP_DECISION` },
 			},
 			parkSignal,
 		);
@@ -450,17 +456,18 @@ describe("runPipeline — ship target dispatch", () => {
 			runStep,
 			listWorktrees: () => [],
 			appendLog: () => {},
+			dispatchStepEffects: async () => ({ appendText: PR_URL }),
 		});
 		assert.equal(result.completed, true);
 		assert.equal(result.awaitingMerge, true);
 		assert.equal(result.prUrl, PR_URL);
 		const shipCall = calls.find((c) => c.step === "ship");
 		assert.ok(shipCall);
-		assert.match(shipCall.prompt, /gh pr create/);
+		assert.match(shipCall.prompt, /SHIP_DECISION/);
 		assert.match(shipCall.prompt, /pull-request/);
 	});
 
-	it("auto-merge-pr: prompt includes gh pr merge --auto", async () => {
+	it("auto-merge-pr: decision effect appends PR URL", async () => {
 		const worktree = makeTempGitRepo();
 		const parkSignal = makeParkSignal();
 		const { runStep, calls } = createMockRunStep(
@@ -469,7 +476,7 @@ describe("runPipeline — ship target dispatch", () => {
 				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
 				implement: { ok: true, writes: { "impl.txt": "x" } },
 				"shakedown-code": { ok: true },
-				ship: { ok: true, text: `auto-merge on ${PR_URL}` },
+				ship: { ok: true, text: `SHIP_DECISION\n{"target":"auto-merge-pr","headBranch":"feat/tool-99","prTitle":"Ship TOOL-99","prBody":"Body"}\nEND_SHIP_DECISION` },
 			},
 			parkSignal,
 		);
@@ -477,13 +484,15 @@ describe("runPipeline — ship target dispatch", () => {
 			runStep,
 			listWorktrees: () => [],
 			appendLog: () => {},
+			dispatchStepEffects: async () => ({ appendText: PR_URL }),
 		});
 		assert.equal(result.completed, true);
 		assert.equal(result.awaitingMerge, true);
 		assert.equal(result.prUrl, PR_URL);
 		const shipCall = calls.find((c) => c.step === "ship");
 		assert.ok(shipCall);
-		assert.match(shipCall.prompt, /gh pr merge --auto/);
+		assert.match(shipCall.prompt, /SHIP_DECISION/);
+		assert.match(shipCall.prompt, /auto-merge-pr/);
 	});
 });
 
