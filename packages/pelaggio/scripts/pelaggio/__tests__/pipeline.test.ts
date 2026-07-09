@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it, mock } from "node:test";
 import { WORKTREE_PREFIX } from "../config.js";
+import { EffectsManifestError } from "../effects.js";
 import { runOrchestrator, runPipeline } from "../pipeline.js";
 import { isQuickScope } from "../roadmap/scope.js";
 import type { ShipBookkeepingResult } from "../ship/index.js";
@@ -1427,6 +1428,44 @@ describe("runPipeline — RoadmapSource injection", () => {
 
 		assert.equal(result.error, "parked");
 		assert.equal(publishCalls.length, 0, "a parked plan step must not publish (dispatch fires only on success)");
+	});
+
+	it("fails closed when plan effect dispatch fails", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const roadmap = makeMockRoadmap({
+			resolvePlanPath: () => `${worktree}/docs/plans/plan.md`,
+		});
+		const { runStep } = createMockRunStep(
+			{
+				plan: { ok: true, writes: { "docs/plans/plan.md": "# Plan\nx" } },
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
+			runStep,
+			roadmap,
+			mainRepo: worktree,
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+			dispatchStepEffects: async () => {
+				throw new EffectsManifestError("provenance_mismatch", "test mismatch");
+			},
+		});
+
+		assert.equal(result.completed, false);
+		assert.equal(result.error, "plan failed");
+		const steps = logs[0].steps as Array<{ name: string; ok: boolean; subtype?: string; outputTail?: string }>;
+		assert.deepEqual(
+			steps.map((s) => s.name),
+			["plan"],
+		);
+		assert.equal(steps[0].ok, false);
+		assert.equal(steps[0].subtype, "error_effects_manifest");
 	});
 
 	it("injects the roadmap item body into the plan prompt (#103)", async () => {

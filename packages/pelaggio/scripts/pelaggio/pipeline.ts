@@ -1,5 +1,5 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { basename, extname, resolve } from "node:path";
 import {
 	CONFIG,
 	DEFAULT_SHIP_TARGET,
@@ -18,6 +18,7 @@ import {
 	STEPS,
 	WORKTREE_PREFIX,
 } from "./config.js";
+import { dispatchStepEffects as dispatchStepEffectsDefault, type Effect, EffectsManifestError, writeEffectsManifest as writeEffectsManifestDefault } from "./effects.js";
 import {
 	appendLog as appendLogDefault,
 	buildStepArgs,
@@ -99,6 +100,10 @@ export interface PipelineDeps {
 	roadmap?: RoadmapSource;
 	/** Deterministic direct-push bookkeeping tail. Injectable for testing the merged-path branch with a spy. */
 	runShipBookkeeping?: typeof runShipBookkeepingDefault;
+	/** Effects-manifest writer. Defaults to the production JSON writer; injectable for fail-closed tests. */
+	writeEffectsManifest?: typeof writeEffectsManifestDefault;
+	/** Effects-manifest dispatcher. Defaults to the production registry dispatcher; injectable for fail-closed tests. */
+	dispatchStepEffects?: typeof dispatchStepEffectsDefault;
 }
 
 export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, flags: Flags, deps: PipelineDeps = {}): Promise<CycleResult> {
@@ -110,6 +115,8 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	const _resolveWorktree = deps.resolveWorktree ?? resolveWorktree;
 	const roadmap = deps.roadmap ?? getRoadmapSource(ROADMAP_SOURCE, { repo: REPO, github: ROADMAP_GITHUB, linear: ROADMAP_LINEAR });
 	const runShipBookkeeping = deps.runShipBookkeeping ?? runShipBookkeepingDefault;
+	const writeEffectsManifest = deps.writeEffectsManifest ?? writeEffectsManifestDefault;
+	const dispatchStepEffects = deps.dispatchStepEffects ?? dispatchStepEffectsDefault;
 	// The cycle's dollar ceiling. A turn-exhaustion retry (issue #33) is funded up to the
 	// step's configured budget again, so the budget guard skips a retry we can't fully fund.
 	// A non-finite value (unset / unparseable --budget) disables the dollar gate.
@@ -118,6 +125,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	let profile = "standard";
 	const steps: StepLog[] = [];
 	const pipelineT0 = Date.now();
+	const runIdBase = opts.logPath ? basename(opts.logPath, extname(opts.logPath)) : `cycle-${opts.cycle}`;
 	let logLabel = `cycle ${opts.cycle}`;
 	const log = (msg: string): void => {
 		const elapsed = fmtElapsed(Date.now() - pipelineT0);
@@ -140,7 +148,14 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		name: Step,
 		prompt: string,
 		cwd: string,
-		{ attempt = 1, commitLabel, maxTurnsOverride, retriedMaxTurns = false, ownWorktree }: { attempt?: number; commitLabel?: string; maxTurnsOverride?: number; retriedMaxTurns?: boolean; ownWorktree?: string } = {},
+		{
+			attempt = 1,
+			commitLabel,
+			effects,
+			maxTurnsOverride,
+			retriedMaxTurns = false,
+			ownWorktree,
+		}: { attempt?: number; commitLabel?: string; effects?: Effect[]; maxTurnsOverride?: number; retriedMaxTurns?: boolean; ownWorktree?: string } = {},
 	): Promise<StepResult> {
 		// Short-circuit before runStep when SIGINT fired between steps; also covers
 		// --dry-run so Ctrl-C during a dry run bails promptly.
@@ -233,6 +248,36 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			const committed = checkpoint(cwd, commitLabel);
 			log(committed ? `${commitLabel} committed` : `no changes to commit (${commitLabel})`);
 			ensureCheckpointed(cwd, commitLabel, log);
+		}
+		if (effects && effects.length > 0 && result.subtype !== "error_confinement") {
+			const checkpointEffect = effects.find((effect): effect is Extract<Effect, { kind: "checkpoint" }> => effect.kind === "checkpoint");
+			if (result.ok && !parkSignal.parked && !opts.dryRun) {
+				const ctx = {
+					runId: `${runIdBase}-${itemId ?? "unclaimed"}`,
+					itemId: itemId ?? "",
+					step: name,
+					attempt,
+					cwd,
+					preSha,
+				};
+				try {
+					writeEffectsManifest(ctx, effects);
+					await dispatchStepEffects({ ...ctx, roadmap, log });
+				} catch (e) {
+					const code = e instanceof EffectsManifestError ? e.code : "effect_failed";
+					const message = e instanceof Error ? e.message : String(e);
+					result = {
+						...result,
+						ok: false,
+						subtype: "error_effects_manifest",
+						text: `${code}: ${message}`,
+					};
+				}
+			} else if (checkpointEffect) {
+				const committed = checkpoint(cwd, checkpointEffect.label);
+				log(committed ? `${checkpointEffect.label} committed` : `no changes to commit (${checkpointEffect.label})`);
+				ensureCheckpointed(cwd, checkpointEffect.label, log);
+			}
 		}
 
 		// Plan-polish backstop (#80): implement is execute-only under docs/plans/. The Claude hook
@@ -433,6 +478,8 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		maxAttempts?: number;
 		/** implement / shakedown-code only: checkpoint label per attempt. */
 		commitLabel?: (attempt: number) => string;
+		/** Success-dispatched effects; checkpoint effects also preserve work on non-confinement failures. */
+		effects?: (attempt: number) => Effect[];
 		/** implement only: dynamic turn budget (scaled by plan file count). */
 		maxTurnsOverride?: number;
 		/** implement only: retry (un-budget-gated) with a fresh-approach prompt on edit_loop. */
@@ -456,6 +503,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				attempt,
 				retriedMaxTurns: prevMaxTurns,
 				...(cfg.commitLabel ? { commitLabel: cfg.commitLabel(attempt) } : {}),
+				...(cfg.effects ? { effects: cfg.effects(attempt) } : {}),
 				...(cfg.maxTurnsOverride !== undefined ? { maxTurnsOverride: cfg.maxTurnsOverride } : {}),
 			});
 			cost += result.cost;
@@ -533,26 +581,9 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				buildPrompt: () => expandSkill("plan", planArgs),
 				logAttempt: (attempt) => log(attempt === 1 ? "planning..." : "continuing plan (attempt 2)..."),
 				refusedError: "plan refused (model declined the task)",
-				commitLabel: () => "plan",
+				effects: () => [{ kind: "checkpoint", label: "plan" }, { kind: "plan.publish" }],
 			});
 			if (outcome.kind === "terminal") return outcome.cycleResult;
-			// Harness owns the plan's effects (#98) so `plan` runs on a provider whose sandbox can't
-			// commit or reach the network (Codex): the model wrote the plan file and we committed it
-			// via `commitLabel` above; now publish it in-process. Best-effort + idempotent
-			// (`publishPlan` upserts). Guarded by `!dryRun` — dry-run must stay side-effect-free (the
-			// model never ran, so the file may be stale from a prior real cycle). Reached only on a
-			// successful, non-parked step (park/fail returned terminal above); on failure it logs and
-			// continues — the committed file is still resolvable via `resolvePlanPath` / the
-			// `.dev/plans/` fallback the implement prompt points at.
-			const planFile = roadmap.resolvePlanPath({ id: itemId!, worktree: worktree! });
-			if (!opts.dryRun && existsSync(planFile)) {
-				try {
-					await roadmap.publishPlan(readFileSync(planFile, "utf-8"), { id: itemId!, worktree: worktree! });
-					log("plan published");
-				} catch (e) {
-					log(`plan publish failed (non-fatal, committed locally): ${e instanceof Error ? e.message : String(e)}`);
-				}
-			}
 		}
 		const planPath = await roadmap.getItemPlan({ worktree: worktree! });
 		if (planPath) log(`plan: file://${planPath}`);
@@ -690,7 +721,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			retryOnEditLoop: true,
 			refusedError: "implement refused (model declined the task)",
 			logAttempt: (attempt) => log(attempt === 1 ? "implementing..." : "continuing implementation (attempt 2)..."),
-			commitLabel: (attempt) => (attempt === 1 ? "implementation checkpoint" : "implementation continued"),
+			effects: (attempt) => [{ kind: "checkpoint", label: attempt === 1 ? "implementation checkpoint" : "implementation continued" }],
 			buildPrompt: (attempt, { lastLoopFile }) => {
 				if (attempt === 1) return implementPrompt;
 				return lastLoopFile
