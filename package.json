@@ -9,10 +9,12 @@
 	"scripts": {
 		"pelaggio": "pnpm --filter pelaggio pelaggio",
 		"test": "pnpm -r test",
+		"test:ci": "node --import tsx --test --test-reporter=dot ci/__tests__/*.test.ts",
 		"check": "biome check",
 		"check:skills": "pnpm --filter pelaggio check:skills",
 		"check:publish": "pnpm --filter pelaggio check:publish",
-		"check:trust": "node ci/verify-claims.mjs",
+		"check:trust": "node --import tsx ci/verify-claims.ts",
+		"trust:generate": "node --import tsx ci/trust-manifest.ts --write",
 		"format": "biome check --write",
 		"prepare": "lefthook install"
 	},

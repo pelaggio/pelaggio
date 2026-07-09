@@ -44,7 +44,7 @@ function makeRoadmap(items: RoadmapItem[]): RoadmapSource {
 	} satisfies RoadmapSource;
 }
 
-function setup(opts: { token?: string; webDist?: string; repos?: Record<string, string> } = {}) {
+function setup(opts: { token?: string; webDist?: string; trustManifestPath?: string; repos?: Record<string, string> } = {}) {
 	const dir = mkdtempSync(join(tmpdir(), "app-test-"));
 	const repos = opts.repos ?? { main: dir };
 	const registry = new Registry(Object.entries(repos).map(([slug, path]) => ({ slug, path })));
@@ -60,7 +60,7 @@ function setup(opts: { token?: string; webDist?: string; repos?: Record<string, 
 		spawn: fakeSpawn(),
 		now: () => new Date("2026-04-19T00:00:00.000Z"),
 	});
-	const app = createApp({ supervisor, registry, roadmapCache, token: opts.token, webDist: opts.webDist });
+	const app = createApp({ supervisor, registry, roadmapCache, token: opts.token, webDist: opts.webDist, trustManifestPath: opts.trustManifestPath });
 	return { app, supervisor, store, dir, registry };
 }
 
@@ -69,6 +69,26 @@ describe("createApp", () => {
 		const { app } = setup({ token: "secret" });
 		const res = await app.request("/healthz");
 		assert.equal(res.status, 200);
+	});
+
+	it("GET /.well-known/pelaggio.trust.json bypasses bearer auth and returns JSON", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "trust-manifest-"));
+		const path = join(dir, "pelaggio.trust.json");
+		writeFileSync(path, JSON.stringify({ product: "pelaggio" }));
+		const { app } = setup({ token: "secret", trustManifestPath: path });
+		const res = await app.request("/.well-known/pelaggio.trust.json");
+		assert.equal(res.status, 200);
+		assert.match(res.headers.get("content-type") ?? "", /application\/json/);
+		assert.deepEqual(await res.json(), { product: "pelaggio" });
+	});
+
+	it("GET /.well-known/pelaggio.trust.json returns JSON 404 when missing", async () => {
+		const { app } = setup({ trustManifestPath: join(tmpdir(), "missing-pelaggio-trust.json") });
+		const res = await app.request("/.well-known/pelaggio.trust.json");
+		assert.equal(res.status, 404);
+		assert.match(res.headers.get("content-type") ?? "", /application\/json/);
+		const body = (await res.json()) as { code: string };
+		assert.equal(body.code, "not-found");
 	});
 
 	it("GET /repos lists registry entries with exists flag", async () => {
@@ -227,6 +247,7 @@ describe("createApp", () => {
 		assert.equal((await app.request("/repos/main/stats")).status, 401);
 		assert.equal((await app.request("/runs")).status, 401);
 		assert.equal((await app.request("/healthz")).status, 200);
+		assert.equal((await app.request("/.well-known/pelaggio.trust.json")).status, 404);
 	});
 
 	it("bearer gate: correct token → 200", async () => {

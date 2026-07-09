@@ -12,6 +12,7 @@ export interface ServerConfig {
 	statePath: string;
 	logDir: string;
 	webDist: string | undefined;
+	trustManifestPath: string;
 }
 
 function required(name: string, value: string | undefined): string {
@@ -59,6 +60,7 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env, { webDist
 	const stateRoot = resolve(xdgStateHome(env), "pelaggio-server");
 	const statePath = env.AUTOPILOT_SERVER_STATE_PATH ? resolve(env.AUTOPILOT_SERVER_STATE_PATH) : resolve(stateRoot, "state.json");
 	const logDir = env.AUTOPILOT_SERVER_LOG_DIR ? resolve(env.AUTOPILOT_SERVER_LOG_DIR) : resolve(stateRoot, "logs");
+	const trustManifestPath = env.AUTOPILOT_SERVER_TRUST_MANIFEST ? resolve(env.AUTOPILOT_SERVER_TRUST_MANIFEST) : resolve(process.cwd(), "docs/trust/pelaggio.trust.json");
 	const token = env.CONTROL_PLANE_TOKEN || undefined;
 	if (token === undefined && !isLoopbackHost(host)) {
 		throw new Error(
@@ -69,5 +71,5 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env, { webDist
 	}
 	const webDistCandidate = env.AUTOPILOT_SERVER_WEB_DIST ? resolve(env.AUTOPILOT_SERVER_WEB_DIST) : webDistDefault;
 	const webDist = existsSync(webDistCandidate) ? webDistCandidate : undefined;
-	return { host, port, registryPath, token, statePath, logDir, webDist };
+	return { host, port, registryPath, token, statePath, logDir, webDist, trustManifestPath };
 }
