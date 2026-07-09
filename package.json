@@ -14,6 +14,7 @@
 		"check:skills": "pnpm --filter pelaggio check:skills",
 		"check:publish": "pnpm --filter pelaggio check:publish",
 		"check:trust": "node --import tsx ci/verify-claims.ts",
+		"check:links": "node --import tsx ci/verify-links.ts",
 		"trust:generate": "node --import tsx ci/trust-manifest.ts --write",
 		"format": "biome check --write",
 		"prepare": "lefthook install"
