@@ -98,7 +98,7 @@ Then:
 
 ## Using it on itself
 
-Pelaggio develops itself: open work lives in GitHub issues under the `pelaggio` label
+Pelaggio develops itself: open work lives in GitHub issues under the `autopilot` label
 (configured via `.pelaggio.yml` → `roadmap.source`). Running it on its own backlog is where
 the guarantees get tested — if it can't ship real work unattended, it doesn't ship.
 

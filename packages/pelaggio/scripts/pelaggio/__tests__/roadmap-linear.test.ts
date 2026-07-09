@@ -138,14 +138,14 @@ describe("LinearRoadmap.getItem", () => {
 					id: "uuid-42",
 					identifier: "ENG-42",
 					title: "Fix widget",
-					labels: ["pelaggio", "scope: L"],
+					labels: ["autopilot", "scope: L"],
 					relations: [],
 				},
 			},
 		});
 		const r = mk({ repo: "/tmp", api });
 		const item = await r.getItem("ENG-42");
-		assert.deepEqual(item?.labels, ["pelaggio", "scope: L"]);
+		assert.deepEqual(item?.labels, ["autopilot", "scope: L"]);
 	});
 });
 

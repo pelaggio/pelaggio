@@ -2,7 +2,8 @@ roadmap:
   source: github-issues
   github:
     repo: pelaggio/pelaggio
-    label: pelaggio
+    # Roadmap/pickup label = the autonomous MODE ("autopilot"), not the product — kept deliberately.
+    label: autopilot
     plan-location: issue-comment
 ship:
   target: pull-request

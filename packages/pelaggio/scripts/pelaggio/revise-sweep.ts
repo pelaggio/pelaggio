@@ -7,13 +7,13 @@ import { type GhRunner, parseGhJson } from "./roadmap/github-issues.js";
 //
 // Cohesive GitHub/git primitives for the orchestrator's revise sweep: find red-review PRs
 // that are eligible for one automated revision, claim them atomically via the shared
-// `pelaggio:revised` label, fetch the PR-review findings, recreate a missing worktree, and
+// `autopilot:revised` label, fetch the PR-review findings, recreate a missing worktree, and
 // post the human-handoff comment. Each primitive is FAIL-SOFT — any gh/git error degrades to
 // a skip (null / false / no-op), never a throw into the run (issue #76 decision 6). The
 // orchestration loop lives in `pipeline.ts`; this module has no `runPipeline` coupling.
 
 /** Shared one-pass bound label — identical to the one `.github/workflows/pr-review-revise.yml` uses. */
-const REVISED_LABEL = "pelaggio:revised";
+const REVISED_LABEL = "autopilot:revised";
 /** The `review` job name in `pr-review.yml` surfaces as the check-run `name` in statusCheckRollup. */
 const REVIEW_CHECK_NAME = "review";
 /** Marker the pr-review CLI upserts on its findings comment (`pr-review-cli.ts`). */
@@ -122,7 +122,7 @@ export function findRevisablePrs(gh: GhRunner, ghRepo: string): { revisable: Rev
 }
 
 /**
- * Confirm the linked issue carries the roadmap label (mirrors CI's `pelaggio`-label guard —
+ * Confirm the linked issue carries the roadmap label (mirrors CI's `autopilot`-label guard —
  * the sweep only touches pelaggio-managed PRs). Conservative skip (`false`) on any lookup error.
  * Cheap: only runs for the rare red candidate.
  */
@@ -138,7 +138,7 @@ export function isAutopilotManaged(gh: GhRunner, ghRepo: string, itemId: string,
 }
 
 /**
- * One-pass bound: ensure the `pelaggio:revised` label exists (best-effort — an existing label
+ * One-pass bound: ensure the `autopilot:revised` label exists (best-effort — an existing label
  * makes `gh label create` fail, harmlessly), then add it to the PR. Returns true if the label
  * add succeeded (claimed), false on any gh error (skip → fail-soft). Called BEFORE any revision
  * work so a crash/park after this point cannot trigger a second pass.

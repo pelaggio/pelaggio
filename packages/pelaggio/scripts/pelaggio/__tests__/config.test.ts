@@ -331,11 +331,11 @@ describe("loadConfig — roadmap.source", () => {
 });
 
 describe("loadConfig — roadmap.github", () => {
-	it("defaults github block to {ghRepo:'', label:'pelaggio', planLocation:'issue-comment'}", () => {
+	it("defaults github block to {ghRepo:'', label:'autopilot', planLocation:'issue-comment'}", () => {
 		const repo = tmpRepo();
 		const cfg = loadConfig({ repo, configPath: join(repo, ".pelaggio.yml") });
 		assert.equal(cfg.roadmapGithub.ghRepo, "");
-		assert.equal(cfg.roadmapGithub.label, "pelaggio");
+		assert.equal(cfg.roadmapGithub.label, "autopilot");
 		assert.equal(cfg.roadmapGithub.planLocation, "issue-comment");
 	});
 

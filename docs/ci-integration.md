@@ -1,13 +1,13 @@
 # CI Integration — Pelaggio Fix Workflow
 
 Pelaggio can run headlessly in CI to automatically fix bugs filed as GitHub Issues.
-When an issue is labeled `pelaggio:fix`, the workflow checks out the repo, runs the
+When an issue is labeled `autopilot:fix`, the workflow checks out the repo, runs the
 full pipeline in **no-worktree mode**, and opens a PR for human review.
 
 ## How it works
 
 1. Developer files a GitHub Issue describing the bug.
-2. Developer (or automation) applies the `pelaggio:fix` label.
+2. Developer (or automation) applies the `autopilot:fix` label.
 3. `.github/workflows/pelaggio-fix.yml` triggers on the `issues.labeled` event.
 4. The workflow runs:
    ```
@@ -31,7 +31,7 @@ Add these under **Settings → Secrets and variables → Actions** in your repo.
 
 ## Required label
 
-Create an `pelaggio:fix` label in your repo (e.g. via `gh label create 'pelaggio:fix' --color '#e4e669'`).
+Create an `autopilot:fix` label in your repo (e.g. via `gh label create 'autopilot:fix' --color '#e4e669'`).
 
 ## Runner requirements
 

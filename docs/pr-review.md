@@ -238,7 +238,7 @@ cannot auto-detect a later restart point and skip the findings. An explicit vali
 for advanced recovery.
 
 There are **two** automated paths that use this same seam, the same one-pass bound (the
-`pelaggio:revised` PR label), and the same handoff marker (`<!-- pelaggio-revise-parked -->`):
+`autopilot:revised` PR label), and the same handoff marker (`<!-- pelaggio-revise-parked -->`):
 
 | Path | Runs on | Funded by | Trigger | Status |
 |---|---|---|---|---|
@@ -261,7 +261,7 @@ run is `roadmap.source: github-issues` + a PR ship target + pure auto-pick mode 
 
 - **Trigger** — start of a normal `--cycles` run. One `gh pr list` finds open, non-draft,
   `feat/issue-<n>` PRs whose `review` check-run concluded `FAILURE`.
-- **One-pass bound** — the shared `pelaggio:revised` label, added **before** any work
+- **One-pass bound** — the shared `autopilot:revised` label, added **before** any work
   (`claimRevision`). Labeled-still-red PRs are filtered out of the candidate set and get one
   idempotent human-handoff comment instead. The label doubles as a manual kill switch and its
   absence gates the revise, exactly as in CI.
@@ -285,12 +285,12 @@ triggers on the review workflow's `workflow_run: completed` with `conclusion == 
 **exactly once per PR**, re-implements from the findings and re-pushes so the gate re-runs.
 
 - **Trigger** — `workflow_run` on `"PR review gate"` (the `pr-review.yml` job's `name:`), gated to
-  same-repo, non-fork, `feat/issue-*` branches whose linked issue carries the `pelaggio` label.
-- **One-pass bound** — the workflow adds an `pelaggio:revised` label to the PR **before** doing any
+  same-repo, non-fork, `feat/issue-*` branches whose linked issue carries the `autopilot` label.
+- **One-pass bound** — the workflow adds an `autopilot:revised` label to the PR **before** doing any
   work. On a second red review the label is already present, so the workflow posts a park-for-human
   comment and stops. A per-branch `concurrency` group (`cancel-in-progress: false`, which serializes
   rather than cancels) makes the label check effectively atomic. The label doubles as a **manual kill
-  switch**: pre-apply `pelaggio:revised` to opt a PR out of auto-revision entirely.
+  switch**: pre-apply `autopilot:revised` to opt a PR out of auto-revision entirely.
 - **Global off-switch** — set the repo Actions variable `AUTOPILOT_AUTO_REVISE` to `false` to disable
   the loop repo-wide (the workflow's job `if:` checks `vars.AUTOPILOT_AUTO_REVISE != 'false'`).
 - **The revision seam** — the workflow writes the pr-review findings comment to

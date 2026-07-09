@@ -8,7 +8,7 @@ on:
     types: [completed]
 
 # Serialize (never cancel) per PR branch: the first revise job adds the one-pass label before any
-# queued sibling reads it, so the `pelaggio:revised` bound is effectively atomic.
+# queued sibling reads it, so the `autopilot:revised` bound is effectively atomic.
 concurrency:
   group: pr-revise-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: false
@@ -63,18 +63,18 @@ jobs:
             echo "no open non-draft PR for '$HEAD_BRANCH' — nothing to revise"
             echo "proceed=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          if ! gh issue view "$ITEM_ID" --json labels --jq '.labels[].name' | grep -qx 'pelaggio'; then
-            echo "issue #$ITEM_ID lacks the 'pelaggio' label — skipping auto-revision"
+          if ! gh issue view "$ITEM_ID" --json labels --jq '.labels[].name' | grep -qx 'autopilot'; then
+            echo "issue #$ITEM_ID lacks the 'autopilot' label — skipping auto-revision"
             echo "proceed=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
           echo "item_id=$ITEM_ID" >> "$GITHUB_OUTPUT"
           echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
           echo "proceed=true" >> "$GITHUB_OUTPUT"
 
-      # b. One-pass bound: if 'pelaggio:revised' is already on the PR, the single auto-revision has
+      # b. One-pass bound: if 'autopilot:revised' is already on the PR, the single auto-revision has
       #    been spent — post an idempotent park comment and stop. Otherwise ensure the label exists
       #    and add it BEFORE any work, so a crash/park after this point cannot trigger a second pass.
-      - name: One-pass bound (pelaggio:revised label)
+      - name: One-pass bound (autopilot:revised label)
         id: guard
         if: steps.resolve.outputs.proceed == 'true'
         env:
@@ -82,17 +82,17 @@ jobs:
         run: |
           PARK_MARKER='<!-- pelaggio-revise-parked -->'
           LABELS=$(gh pr view "$PR_NUMBER" --json labels --jq '.labels[].name')
-          if echo "$LABELS" | grep -qx 'pelaggio:revised'; then
+          if echo "$LABELS" | grep -qx 'autopilot:revised'; then
             existing=$(gh pr view "$PR_NUMBER" --json comments \
               --jq "[.comments[] | select(.body | contains(\"$PARK_MARKER\"))] | length")
             if [ "$existing" = "0" ]; then
-              gh pr comment "$PR_NUMBER" --body "$PARK_MARKER 🛑 The \`review\` gate is still red after one automated revision pass — parking for human attention. Remove the \`pelaggio:revised\` label to allow another auto-revision."
+              gh pr comment "$PR_NUMBER" --body "$PARK_MARKER 🛑 The \`review\` gate is still red after one automated revision pass — parking for human attention. Remove the \`autopilot:revised\` label to allow another auto-revision."
             fi
             echo "proceed=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          gh label create 'pelaggio:revised' --color BFD4F2 \
+          gh label create 'autopilot:revised' --color BFD4F2 \
             --description 'Auto-revised once after a red PR review (issue #60)' 2>/dev/null || true
-          gh pr edit "$PR_NUMBER" --add-label 'pelaggio:revised'
+          gh pr edit "$PR_NUMBER" --add-label 'autopilot:revised'
           echo "proceed=true" >> "$GITHUB_OUTPUT"
 
       # c. Fetch the pr-review findings (the upserted comment carrying the marker) into a gitignored

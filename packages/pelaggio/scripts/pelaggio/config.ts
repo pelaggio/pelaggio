@@ -104,7 +104,7 @@ export interface ResolvedConfig {
 
 const DEFAULT_GITHUB_ROADMAP: GithubRoadmapConfig = {
 	ghRepo: "",
-	label: "pelaggio",
+	label: "autopilot",
 	planLocation: "issue-comment",
 };
 

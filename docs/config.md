@@ -70,7 +70,7 @@ roadmap:
                                 # values: markdown | github-issues | linear
   # github:                     # only consulted when source is github-issues
   #   repo: acme/widgets        # required when source=github-issues (owner/repo)
-  #   label: pelaggio          # default: pelaggio
+  #   label: autopilot          # default: autopilot
   #   plan-location: issue-comment  # default: issue-comment | pr-description
   # linear:                     # only consulted when source is linear
   #   team: <team-uuid>         # required when source=linear (Linear team UUID)
@@ -304,7 +304,7 @@ Consumed only when `roadmap.source` is `github-issues`:
 | Key                           | Default          | Meaning                                                                 |
 |-------------------------------|------------------|-------------------------------------------------------------------------|
 | `roadmap.github.repo`         | *(required)*     | `owner/name` passed to `gh --repo`. Missing value fails at startup.     |
-| `roadmap.github.label`        | `pelaggio`      | Label used to filter open issues for `listOpenItems`.                   |
+| `roadmap.github.label`        | `autopilot`      | Label used to filter open issues for `listOpenItems`.                   |
 | `roadmap.github.plan-location`| `issue-comment`  | Where plan bodies live. `pr-description` is reserved; not implemented.  |
 
 `gh` availability is probed lazily on first adapter call. If `gh` is not
@@ -469,7 +469,7 @@ false` to turn it off entirely — the documented off-switch, mirroring the CI
 loop's repo-wide `AUTOPILOT_AUTO_REVISE=false` variable.
 
 **One-pass bound.** Like the CI loop, a PR is revised at most once: the sweep
-adds an `pelaggio:revised` label **before** any work, filters labeled PRs out
+adds an `autopilot:revised` label **before** any work, filters labeled PRs out
 of the candidate set, and posts a single human-handoff comment on a labeled PR
 that is still red. Any `gh`/git error in the sweep logs and skips — it never
 throws into the run. This is the **local** counterpart to the API-funded CI

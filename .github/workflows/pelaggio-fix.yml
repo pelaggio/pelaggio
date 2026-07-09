@@ -6,7 +6,7 @@ on:
 
 jobs:
   fix:
-    if: github.event.label.name == 'pelaggio:fix'
+    if: github.event.label.name == 'autopilot:fix'
     runs-on: self-hosted
     permissions:
       contents: write

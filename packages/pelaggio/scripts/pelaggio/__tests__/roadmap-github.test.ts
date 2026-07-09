@@ -50,7 +50,7 @@ function mk(opts: Partial<ConstructorParameters<typeof GitHubIssuesRoadmap>[0]> 
 	return new GitHubIssuesRoadmap({
 		repo: opts.repo,
 		ghRepo: opts.ghRepo ?? "acme/widgets",
-		label: opts.label ?? "pelaggio",
+		label: opts.label ?? "autopilot",
 		planLocation: opts.planLocation ?? "issue-comment",
 		ghRun: opts.ghRun,
 	});
@@ -139,7 +139,7 @@ describe("GitHubIssuesRoadmap.listOpenItems", () => {
 		assert.equal(items[0].deps, "#2, #3");
 		assert.equal(items[1].deps, "");
 		assert.equal(items[0].sourceRef, "acme/widgets#1");
-		assert.deepEqual(calls[0].args.slice(0, 8), ["issue", "list", "--repo", "acme/widgets", "--label", "pelaggio", "--state", "open"]);
+		assert.deepEqual(calls[0].args.slice(0, 8), ["issue", "list", "--repo", "acme/widgets", "--label", "autopilot", "--state", "open"]);
 	});
 
 	it("returns [] on empty array", async () => {
@@ -163,14 +163,14 @@ describe("GitHubIssuesRoadmap.getItem", () => {
 			title: "Fix the widget",
 			body: "Scope: M",
 			state: "OPEN",
-			labels: [{ name: "pelaggio" }, { name: "scope: M" }],
+			labels: [{ name: "autopilot" }, { name: "scope: M" }],
 		};
 		const { run } = makeStub({
 			routes: [{ match: (a) => a[0] === "issue" && a[1] === "view", stdout: JSON.stringify(issue) }],
 		});
 		const r = mk({ repo: "/tmp", ghRun: run });
 		const item = await r.getItem("42");
-		assert.deepEqual(item?.labels, ["pelaggio", "scope: M"]);
+		assert.deepEqual(item?.labels, ["autopilot", "scope: M"]);
 		assert.equal(item?.body, "Scope: M");
 	});
 });
@@ -365,14 +365,14 @@ describe("getRoadmapSource — github-issues factory", () => {
 	it("constructs GitHubIssuesRoadmap when github config is supplied", () => {
 		const src = getRoadmapSource("github-issues", {
 			repo: "/tmp",
-			github: { ghRepo: "acme/widgets", label: "pelaggio", planLocation: "issue-comment" },
+			github: { ghRepo: "acme/widgets", label: "autopilot", planLocation: "issue-comment" },
 		});
 		assert.ok(src instanceof GitHubIssuesRoadmap);
 		assert.equal(src.name, "github-issues");
 	});
 
 	it("throws when github.ghRepo is missing/empty", () => {
-		assert.throws(() => getRoadmapSource("github-issues", { repo: "/tmp", github: { ghRepo: "", label: "pelaggio", planLocation: "issue-comment" } }), /roadmap\.github\.repo/);
+		assert.throws(() => getRoadmapSource("github-issues", { repo: "/tmp", github: { ghRepo: "", label: "autopilot", planLocation: "issue-comment" } }), /roadmap\.github\.repo/);
 		assert.throws(() => getRoadmapSource("github-issues", { repo: "/tmp" }), /roadmap\.github\.repo/);
 	});
 });

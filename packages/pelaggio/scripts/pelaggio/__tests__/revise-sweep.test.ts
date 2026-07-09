@@ -27,7 +27,7 @@ const PR_LIST_FIXTURE = JSON.stringify([
 		number: 101,
 		isDraft: false,
 		headRefName: "feat/issue-76-thing",
-		labels: [{ name: "pelaggio" }],
+		labels: [{ name: "autopilot" }],
 		statusCheckRollup: [
 			{ __typename: "CheckRun", name: "review", conclusion: "FAILURE" },
 			{ __typename: "CheckRun", name: "ci", conclusion: "SUCCESS" },
@@ -40,7 +40,7 @@ const PR_LIST_FIXTURE = JSON.stringify([
 	// excluded: review passed
 	{ number: 104, isDraft: false, headRefName: "feat/issue-78-ok", labels: [], statusCheckRollup: [{ __typename: "CheckRun", name: "review", conclusion: "SUCCESS" }] },
 	// labeledStillRed: already spent its one pass but still red
-	{ number: 105, isDraft: false, headRefName: "feat/issue-79-spent", labels: [{ name: "pelaggio:revised" }], statusCheckRollup: [{ __typename: "CheckRun", name: "review", conclusion: "FAILURE" }] },
+	{ number: 105, isDraft: false, headRefName: "feat/issue-79-spent", labels: [{ name: "autopilot:revised" }], statusCheckRollup: [{ __typename: "CheckRun", name: "review", conclusion: "FAILURE" }] },
 	// excluded: a different check failed, review is green
 	{
 		number: 106,
@@ -102,19 +102,19 @@ describe("isAutopilotManaged", () => {
 	const labelsJson = (names: string[]) => JSON.stringify({ labels: names.map((name) => ({ name })) });
 
 	it("true when the issue carries the roadmap label", () => {
-		const { run } = stub(() => ({ stdout: labelsJson(["pelaggio", "bug"]) }));
-		assert.equal(isAutopilotManaged(run, "o/r", "76", "pelaggio"), true);
+		const { run } = stub(() => ({ stdout: labelsJson(["autopilot", "bug"]) }));
+		assert.equal(isAutopilotManaged(run, "o/r", "76", "autopilot"), true);
 	});
 
 	it("false when the label is absent", () => {
 		const { run } = stub(() => ({ stdout: labelsJson(["bug"]) }));
-		assert.equal(isAutopilotManaged(run, "o/r", "76", "pelaggio"), false);
+		assert.equal(isAutopilotManaged(run, "o/r", "76", "autopilot"), false);
 	});
 
 	it("false (conservative skip) on a lookup error", () => {
 		const { run } = stub(() => ({ status: 1, stderr: "not found" }));
-		assert.equal(isAutopilotManaged(run, "o/r", "76", "pelaggio"), false);
-		assert.equal(isAutopilotManaged(throwingGh, "o/r", "76", "pelaggio"), false);
+		assert.equal(isAutopilotManaged(run, "o/r", "76", "autopilot"), false);
+		assert.equal(isAutopilotManaged(throwingGh, "o/r", "76", "autopilot"), false);
 	});
 });
 
@@ -124,10 +124,10 @@ describe("claimRevision", () => {
 		assert.equal(claimRevision(run, "o/r", 101), true);
 		assert.equal(calls[0][0], "label");
 		assert.equal(calls[0][1], "create");
-		assert.ok(calls[0].includes("pelaggio:revised"));
+		assert.ok(calls[0].includes("autopilot:revised"));
 		const edit = calls.find((c) => c[0] === "pr" && c[1] === "edit");
 		assert.ok(edit, "expected a `pr edit` call");
-		assert.ok(edit.includes("--add-label") && edit.includes("pelaggio:revised"));
+		assert.ok(edit.includes("--add-label") && edit.includes("autopilot:revised"));
 	});
 
 	it("returns true even when `label create` fails (label already exists)", () => {
