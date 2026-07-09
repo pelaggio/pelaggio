@@ -77,6 +77,17 @@ describe("trust manifest generator", () => {
 		);
 	});
 
+	it("rejects permission tiers linked to unknown capabilities", () => {
+		assert.throws(
+			() =>
+				buildManifest({
+					...registry,
+					manifest: { ...registry.manifest, permission_tiers: [{ id: "local_read", description: "Local reads", default: true, capabilities: ["repo.read"], evidence: ["TC-002"] }] },
+				}),
+			/unknown capability repo\.read/,
+		);
+	});
+
 	it("validates the local schema subset", () => {
 		assert.deepEqual(validateManifest({ schema_version: "0.1.0", product: "pelaggio", posture: "intent", claims_ref: "./trust-claims.yml" }, schema), []);
 		const errors = validateManifest({ schema_version: "bad", product: "other", posture: "maybe", claims_ref: "./trust-claims.yml", extra: true }, schema);
