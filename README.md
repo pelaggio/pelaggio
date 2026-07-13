@@ -96,6 +96,16 @@ Then:
 2. Replace the roadmap example with your real backlog.
 3. Run `pelaggio run --cycles 1 --verbose`.
 
+### Platform support
+
+Pelaggio runs on macOS, Linux, and **Windows via [WSL](https://learn.microsoft.com/windows/wsl/)**. The
+pipeline leans on POSIX filesystem semantics — worktrees share `node_modules`
+through symlinks, and skill bodies run as `bash` — so on Windows, run the
+pipeline (`pelaggio run`) inside a WSL distribution rather than native
+PowerShell/cmd, where directory symlinks require elevation and bash is absent.
+The read-only CLI surface (`pelaggio roadmap …`, `stats`, `init`, `sync`) works
+natively on Windows.
+
 ## Using it on itself
 
 Pelaggio develops itself: open work lives in GitHub issues under the `autopilot` label
