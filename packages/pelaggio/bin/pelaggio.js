@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -38,10 +37,21 @@ if (!sub || sub === "--help" || sub === "-h" || !routes[sub]) {
 }
 
 const [script, ...prefix] = routes[sub];
-const localTsx = resolve(pkgRoot, "node_modules/.bin/tsx");
-const tsx = existsSync(localTsx) ? localTsx : "tsx";
 
-spawn(tsx, [resolve(pkgRoot, script), ...prefix, ...rest], {
+// Run the target script through tsx by loading tsx as a Node import hook via
+// `node --import`, rather than spawning the `node_modules/.bin/tsx` shim. On
+// Windows that shim is `tsx.CMD`, and post-CVE-2024-27980 Node refuses to spawn
+// a `.cmd` without `shell: true` — and a shell would then mangle passthrough
+// args that contain spaces (e.g. `--title "Flow 1: …"`). Driving tsx through
+// the real `node` binary keeps the arg array intact on every platform.
+let tsxImport;
+try {
+	tsxImport = import.meta.resolve("tsx");
+} catch {
+	tsxImport = "tsx"; // fall back to a bare specifier resolved from cwd
+}
+
+spawn(process.execPath, ["--import", tsxImport, resolve(pkgRoot, script), ...prefix, ...rest], {
 	stdio: "inherit",
 	env: process.env,
 }).on("exit", (code) => process.exit(code ?? 1));
