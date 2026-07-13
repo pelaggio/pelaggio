@@ -3,7 +3,7 @@
 	"version": "0.0.0",
 	"private": true,
 	"description": "Control-plane daemon for pelaggio — supervises pipeline subprocesses over HTTP.",
-	"license": "FSL-1.1-ALv2",
+	"license": "AGPL-3.0-or-later",
 	"type": "module",
 	"exports": {
 		"./types": {

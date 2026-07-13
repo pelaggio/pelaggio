@@ -128,16 +128,13 @@ by hand.
 
 Copyright © 2026 Chris Horne.
 
-Licensed under the **Functional Source License, Version 1.1, Apache 2.0 Future License**
-(`FSL-1.1-ALv2`) — see [`LICENSE`](./LICENSE). FSL lets you use, modify, self-host, and
-redistribute the software for any purpose that is not a **Competing Use** (offering it to
-others as a substitute product or service). Internal use, non-commercial education and
-research, and professional services are all expressly permitted. Two years after each
-release, that version converts to Apache 2.0.
-
-The control-plane daemon and web UI are the substrate for a future managed / remote-control
-offering; FSL's Competing-Use clause reserves that commercial right while still letting you
-self-host the whole stack.
+Licensed under the **GNU Affero General Public License, version 3 or later**
+(`AGPL-3.0-or-later`) — see [`LICENSE`](./LICENSE). You may use, modify, self-host, and
+redistribute Pelaggio under the AGPL's terms — there is no field-of-use or competing-use
+restriction. Because Pelaggio includes a network-facing control plane, the AGPL's section 13
+applies: if you run a modified version and let others interact with it over a network, you
+must offer those users the corresponding source of your modified version. Pelaggio is
+genuinely open source (OSI-approved).
 
 Contributions are accepted under the [Developer Certificate of Origin](./DCO); see
 [`CONTRIBUTING.md`](./CONTRIBUTING.md) for the required `Signed-off-by` sign-off.

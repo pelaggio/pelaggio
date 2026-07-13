@@ -2,7 +2,7 @@
 	"name": "pelaggio",
 	"version": "0.1.0",
 	"description": "Headless pipeline for running Claude Agent SDK cycles per roadmap item",
-	"license": "FSL-1.1-ALv2",
+	"license": "AGPL-3.0-or-later",
 	"packageManager": "pnpm@10.32.1",
 	"type": "module",
 	"bin": {

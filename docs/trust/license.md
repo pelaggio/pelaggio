@@ -1,29 +1,25 @@
 ---
 title: License
-description: Plain-English explanation of Pelaggio's FSL-1.1-ALv2 license.
+description: Plain-English explanation of Pelaggio's AGPL-3.0-or-later license.
 status: draft
 diataxis: explanation
 sidebar:
   order: 10
-last_reviewed: 2026-07-08
+last_reviewed: 2026-07-12
 ---
 
 # License
 
-Pelaggio is licensed under the Functional Source License, Version 1.1, ALv2 Future License (`FSL-1.1-ALv2`). This is not OSI-approved open source at the time a version is first released. The future license grant converts that version to Apache License 2.0 on the second anniversary of the date the software version was made available (`TC-005`, `TC-016`).
+Pelaggio is licensed under the GNU Affero General Public License, version 3 or later (`AGPL-3.0-or-later`). This is OSI-approved, FSF-published free and open source software.
 
-## What the Current License Allows
+## What the License Allows
 
-For permitted purposes, the license allows use, copying, modification, derivative works, public performance/display, and redistribution. Permitted purposes include internal use, non-commercial education, non-commercial research, and professional services for a licensee using the software under the terms (`TC-016`).
+You may use, run, study, modify, and redistribute Pelaggio — including self-hosting the entire stack for any purpose, commercial or not. There is no field-of-use or competing-use restriction.
 
-## What It Restricts
+## What It Requires
 
-The license excludes a "Competing Use": making Pelaggio available to others in a commercial product or service that substitutes for Pelaggio, substitutes for another product/service offered using Pelaggio at release time, or offers the same or substantially similar functionality. Redistribution must keep the license terms/copyright notices (`TC-016`).
-
-## Future Apache Grant
-
-Each version receives an irrevocable Apache-2.0 license grant effective two years after that version is made available. Until that future date, the FSL terms govern that version (`TC-005`, `TC-016`).
+AGPL is a strong copyleft license. If you distribute Pelaggio or a modified version, you must make the corresponding source available under the same license. Because Pelaggio includes a network-facing control plane, section 13 extends this to network interaction: if you run a modified version and let others interact with it over a network, you must offer those users the corresponding source of your modified version. Redistribution must keep the license and copyright notices.
 
 ## Contributions
 
-Contributions should be made with the understanding that the project uses this license model and release hardening posture (`TC-005`, `TC-016`). Contributions use the Developer Certificate of Origin sign-off flow documented in the repo's contribution path, so commits should carry the required `Signed-off-by` line. The repo's supply-chain claims cover Pelaggio's package scripts and release provenance; they do not turn the dependency tree or license into an OSI-approved package at initial release (`TC-004`, `TC-005`, `TC-016`).
+Contributions are made under the same AGPL-3.0-or-later terms (inbound = outbound) using the Developer Certificate of Origin sign-off, so commits carry the required `Signed-off-by` line. The repo's supply-chain claims cover Pelaggio's package scripts and release provenance (`TC-005`, `TC-016`); they are independent of the license grant.

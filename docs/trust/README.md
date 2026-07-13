@@ -15,7 +15,7 @@ This directory is Pelaggio's trust surface: what the orchestrator can touch, wha
 | [`self-host.md`](./self-host.md) | Control-plane hosting, bearer auth, and manifest serving. | `TC-010`, `TC-006` |
 | [`reproducible-install.md`](./reproducible-install.md) | Pinned installs, release hardening, and dependency honesty. | `TC-004`, `TC-005`, `TC-016` |
 | [`uninstall-and-rollback.md`](./uninstall-and-rollback.md) | Stop runs, remove generated files, clean branches/worktrees, rollback pushes. | `TC-003`, `TC-012`, `TC-013` |
-| [`license.md`](./license.md) | Plain-English FSL-1.1-ALv2 terms. | `TC-005`, `TC-016` |
+| [`license.md`](./license.md) | Plain-English AGPL-3.0-or-later terms. | `TC-005`, `TC-016` |
 
 ## Reference
 
