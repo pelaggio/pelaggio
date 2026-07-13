@@ -3,7 +3,7 @@
 	"version": "0.0.0",
 	"private": true,
 	"description": "Mobile-responsive web UI (Astro 5 + React 19 + Tailwind v4) for the pelaggio control-plane daemon.",
-	"license": "FSL-1.1-ALv2",
+	"license": "AGPL-3.0-or-later",
 	"type": "module",
 	"scripts": {
 		"dev": "astro dev",
