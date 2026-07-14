@@ -35,7 +35,7 @@ worktree:
   prefix: "myproj-"            # default: `${basename(REPO)}-`
 
 confinement:
-  allow-dirty-main: false       # default: false. true disables main-checkout auditing
+  allow-dirty-main: false       # default: false. true uses provider-specific main protection
                                 # for worktree steps; sibling worktrees remain hard-gated.
 
 ship:
@@ -145,7 +145,7 @@ models:
     #     plan: 120
 ```
 
-`confinement.allow-dirty-main: true` is an explicit reduction in protection for operators who edit the main checkout while Pelaggio runs. Pelaggio will not detect provider writes into that checkout, although it continues to fail closed on sibling-worktree changes and audit errors. Use a separate clone for Pelaggio when concurrent editing and full main-checkout enforcement are both required.
+`confinement.allow-dirty-main: true` tolerates main-checkout dirtiness that is unchanged across provider tool windows. Claude snapshots main immediately before and after every mutating tool and fails closed on a delta or attribution error; Codex excludes main through its workspace-write boundary. Sibling worktrees remain whole-step audited. A simultaneous operator edit inside a Claude tool window is conservatively attributed to that tool, while detached writes after the post hook and paths outside audited Git roots remain out of scope. Future providers that can reach main must use the same observer before this mode can claim attribution coverage.
 
 ## Merge semantics
 

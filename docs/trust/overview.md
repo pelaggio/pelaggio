@@ -21,7 +21,7 @@ By default, no. `ship.target` resolves to `pull-request`, so the shipped default
 
 ### 2. What can it write?
 
-Pelaggio is designed around item worktrees, and mutating steps receive hooks/conventions that steer writes into the claimed worktree; by default, a shipped post-step confinement audit then fails the step if any change lands in the main checkout or a sibling worktree, so committed and uncommitted sibling/relative/`$HOME`/`cd`/symlink Bash escapes are caught (`TC-011`, [sandboxing](./sandboxing.md), [`ADR-0001`](../decisions/0001-worktree-write-confinement.md)). The explicit `confinement.allow-dirty-main` opt-out excludes main-checkout detection but retains sibling enforcement. This is still not an OS/container sandbox: writes to paths outside any audited git root are not caught and remain bounded by tool/egress scoping (`TC-011`, `TC-015`).
+Pelaggio is designed around item worktrees, and mutating steps receive hooks/conventions that steer writes into the claimed worktree; by default, a shipped post-step confinement audit then fails the step if any change lands in the main checkout or a sibling worktree (`TC-011`, [sandboxing](./sandboxing.md), [`ADR-0001`](../decisions/0001-worktree-write-confinement.md)). With `confinement.allow-dirty-main`, Claude attributes main Git-state deltas across mutating-tool windows, Codex excludes main through its workspace boundary, and siblings remain whole-step audited. This is still not an OS/container sandbox or process-lifetime provenance: non-Git paths and detached writes after a tool's post hook remain out of scope (`TC-011`, `TC-015`).
 
 ### 3. What leaves my machine?
 

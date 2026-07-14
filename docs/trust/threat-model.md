@@ -20,7 +20,7 @@ This maps directly to OWASP LLM01 Prompt Injection, OWASP LLM06 Excessive Agency
 |---|---|---|---|
 | Repo files, issues, PRs, dependency metadata, tool output | Untrusted input | Treat as attacker-reachable; bound actions with worktree conventions, budgets, and gates. | `TC-015`, `TC-011`, `TC-003`, `TC-012` |
 | Pelaggio pipeline and skills | Trusted orchestrator code, but model-visible prompts can include untrusted text | Step budgets/turn limits, fail-closed review parser, configured provider/profile. | `TC-003`, `TC-015` |
-| Item worktree | Mutating workspace | Hooks, dependency guard, and a default audit of main plus siblings; the explicit dirty-main mode retains sibling auditing only. Not an OS sandbox. | `TC-011`, `TC-015` |
+| Item worktree | Mutating workspace | Hooks, dependency guard, and a default audit of main plus siblings; dirty-main mode retains siblings and uses provider-specific main protection. Not an OS sandbox. | `TC-011`, `TC-015` |
 | PR/default branch | Shared remote state | PR default; direct push and auto-merge are explicit opt-ins. | `TC-012`, `TC-013` |
 | Model provider | External sub-processor | Configured model endpoint receives prompts/source context/diffs/issue text. | `TC-006`, `TC-014` |
 | Roadmap adapter | User-controlled integration | GitHub/Linear only when configured as the roadmap source. | `TC-006` |
@@ -33,7 +33,7 @@ This maps directly to OWASP LLM01 Prompt Injection, OWASP LLM06 Excessive Agency
 | Category | Threat | Current posture | Claim(s) |
 |---|---|---|---|
 | Spoofing | A reachable peer starts or controls runs through the daemon. | Non-loopback startup fails without `CONTROL_PLANE_TOKEN`; bearer auth guards everything except `/healthz` and the public trust manifest. | `TC-010` |
-| Tampering | Injected instructions write outside the item worktree or corrupt the main checkout. | Hooks and the install guard reduce exposure. By default the audit catches main and sibling changes; dirty-main mode deliberately gives up main detection but retains siblings. Other paths remain outside this non-OS boundary. | `TC-011`, `TC-015` |
+| Tampering | Injected instructions write outside the item worktree or corrupt the main checkout. | Hooks and the install guard reduce exposure. By default the audit catches main and sibling changes; dirty-main mode uses Claude tool-window deltas or Codex workspace exclusion for main and retains siblings. Other paths remain outside this non-OS boundary. | `TC-011`, `TC-015` |
 | Repudiation | Operators cannot tell what ran, what shipped, or why a gate blocked. | `.dev/pelaggio-log.jsonl`, branches, PR comments, review metrics, and server state/logs preserve operational evidence; verbose raw logs have scrubbing limits. | `TC-001`, `TC-003`, `TC-014`, `TC-015` |
 | Information disclosure | Secrets or private source leave through prompts, child env, logs, provider calls, or webhooks. | Known secret env vars are not interpolated into prompts/structured run logs; no telemetry exists; configured provider/integration egress is documented. Full child env inheritance and unsanitized verbose logs are planned hardening work. | `TC-001`, `TC-002`, `TC-006`, `TC-014` |
 | Denial of service | Injection burns model budget/turns or leaves work half-finished. | Step budgets, turn caps, abort handling, rate-limit parking, and retry bounds limit unattended cost and preserve work at park paths. | `TC-015`, `TC-014` |
@@ -53,6 +53,6 @@ This maps directly to OWASP LLM01 Prompt Injection, OWASP LLM06 Excessive Agency
 
 ## Residual Risk
 
-Pelaggio currently bounds prompt-injection blast radius but does not neutralize injection (`TC-015`). The default audit gates main and sibling worktrees; the explicit dirty-main mode gates siblings only (`TC-011`). Neither is an OS sandbox. A compromised provider remains in the trust base (`TC-006`), child processes inherit the parent environment (`TC-014`), and auto-merge relies on external branch protection (`TC-013`).
+Pelaggio currently bounds prompt-injection blast radius but does not neutralize injection (`TC-015`). The default audit gates main and sibling worktrees; dirty-main mode gates siblings plus provider-specific main protection (`TC-011`). Neither is an OS sandbox or process-lifetime provenance. A compromised provider remains in the trust base (`TC-006`), child processes inherit the parent environment (`TC-014`), and auto-merge relies on external branch protection (`TC-013`).
 
 The intended end state is stronger least-privilege tool scoping, provenance-aware prompt handling, env allowlisting, log redaction, and branch-protection verification. Until those claims move out of `planned`, the docs keep naming them as residual risk (`TC-013`, `TC-014`, `TC-015`).

@@ -13,6 +13,7 @@ import {
 	classifyStepError,
 	computeImplementTurns,
 	countPlanFiles,
+	createMainCheckoutDeltaObserver,
 	filesChangedSince,
 	fmtWait,
 	formatResumeHint,
@@ -57,6 +58,56 @@ function commitFile(dir: string, rel: string, content: string, msg: string): voi
 	execSync("git add -A", { cwd: dir });
 	execSync(`git commit -q -m "${msg}"`, { cwd: dir });
 }
+
+describe("createMainCheckoutDeltaObserver", () => {
+	it("tolerates unchanged clean and pre-existing dirty baselines", () => {
+		const dir = makeFeatRepo();
+		writeFileSync(join(dir, "operator.txt"), "existing");
+		const observer = createMainCheckoutDeltaObserver(dir);
+		assert.deepEqual(observer.beforeTool("one"), { kind: "clean" });
+		assert.deepEqual(observer.afterTool("one"), { kind: "clean" });
+		assert.deepEqual(observer.finish(), { kind: "clean" });
+	});
+
+	it("retains a main delta after a later clean tool window", () => {
+		const dir = makeFeatRepo();
+		const observer = createMainCheckoutDeltaObserver(dir);
+		observer.beforeTool("write");
+		writeFileSync(join(dir, "escaped.txt"), "x");
+		assert.deepEqual(observer.afterTool("write"), { kind: "violation", roots: [resolve(dir)] });
+		observer.beforeTool("clean");
+		observer.afterTool("clean");
+		assert.deepEqual(observer.finish(), { kind: "violation", roots: [resolve(dir)] });
+	});
+
+	it("supports overlapping invocation baselines", () => {
+		const dir = makeFeatRepo();
+		const observer = createMainCheckoutDeltaObserver(dir);
+		observer.beforeTool("a");
+		observer.beforeTool("b");
+		writeFileSync(join(dir, "escaped.txt"), "x");
+		observer.afterTool("b");
+		observer.afterTool("a");
+		assert.equal(observer.finish().kind, "violation");
+	});
+
+	it("fails closed for duplicate, missing, open, and unsnapshotable invocations", () => {
+		const duplicate = createMainCheckoutDeltaObserver(makeFeatRepo());
+		duplicate.beforeTool("same");
+		assert.deepEqual(duplicate.beforeTool("same").kind, "error");
+
+		const missing = createMainCheckoutDeltaObserver(makeFeatRepo());
+		assert.equal(missing.afterTool("absent").kind, "error");
+
+		const open = createMainCheckoutDeltaObserver(makeFeatRepo());
+		open.beforeTool("open");
+		assert.match(open.finish().kind === "error" ? open.finish().message : "", /unclosed/);
+
+		const broken = createMainCheckoutDeltaObserver(join(tmpdir(), "does-not-exist-pelaggio"));
+		assert.equal(broken.beforeTool("x").kind, "error");
+		assert.deepEqual(broken.finish(), broken.finish(), "finish is idempotent");
+	});
+});
 
 describe("parseWaitFlag", () => {
 	it("parses hours", () => {

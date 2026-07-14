@@ -4,7 +4,7 @@ import type { HookInput, HookJSONOutput, SDKAssistantMessage, SDKRateLimitEvent,
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { codexProvider } from "./codex-provider.js";
 import { CONFIG, REPO, resolveStepSettings } from "./config.js";
-import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseWaitFlag, resolveParkReset } from "./helpers.js";
+import { classifyStepError, isRefusal, looksLikeStalledAsk, type MainCheckoutDeltaObserver, parseBlockedReason, parseWaitFlag, resolveParkReset } from "./helpers.js";
 import { composeSystemAppend, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "./step-runner-shared.js";
 import { MUTATING_TOOLS, toolBrief } from "./tui.js";
 import type { ParkSignal, ProviderName, Step, StepEmit, StepResult, TokenUsage } from "./types.js";
@@ -27,6 +27,8 @@ export interface RunStepOpts {
 	/** SIGINT-driven cancellation. Threaded through to the SDK's `query()` call so an
 	 * in-flight fetch stream tears down when the parent controller aborts. */
 	signal?: AbortSignal;
+	/** Brackets mutating provider tools for dirty-main delta attribution. */
+	mainCheckoutObserver?: MainCheckoutDeltaObserver;
 }
 
 /** Canonical signature of a step runner. Single-sourced here (all four types are in
@@ -79,6 +81,19 @@ export function blockPlanPolish(input: HookInput, cwd: string): HookJSONOutput {
 		decision: "block" as const,
 		reason: `"${fp}" is under docs/plans/, which is READ-ONLY during implement. Execute the plan by writing code to other files — do not edit the plan itself. If the plan is genuinely wrong, stop and report the issue instead of editing around it.`,
 	};
+}
+
+export function beginMainCheckoutAttribution(input: HookInput, toolUseId: string | undefined, observer?: MainCheckoutDeltaObserver): HookJSONOutput {
+	const toolName = "tool_name" in input ? String(input.tool_name) : "";
+	if (!observer || !MUTATING_TOOLS.has(toolName)) return {};
+	const outcome = observer.beforeTool(toolUseId ?? "");
+	return outcome.kind === "error" ? { decision: "block" as const, reason: `Confinement attribution failed: ${outcome.message}` } : {};
+}
+
+export function endMainCheckoutAttribution(input: HookInput, toolUseId: string | undefined, observer?: MainCheckoutDeltaObserver): HookJSONOutput {
+	const toolName = "tool_name" in input ? String(input.tool_name) : "";
+	if (observer && MUTATING_TOOLS.has(toolName)) observer.afterTool(toolUseId ?? "");
+	return {};
 }
 
 // The Claude SDK-driven runner — the original `runStep` body, verbatim, rebound as a
@@ -160,13 +175,16 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 
 	const mainAbs = resolve(REPO) + "/";
 	const worktreeCwd = resolve(opts.cwd);
+	const closeAttributedTool = async (input: HookInput, toolUseId: string | undefined): Promise<HookJSONOutput> => {
+		return endMainCheckoutAttribution(input, toolUseId, opts.mainCheckoutObserver);
+	};
 	const hooks =
-		isWorktree || planBlockActive
+		isWorktree || planBlockActive || opts.mainCheckoutObserver
 			? {
 					PreToolUse: [
 						{
 							hooks: [
-								async (input: HookInput): Promise<HookJSONOutput> => {
+								async (input: HookInput, toolUseId: string | undefined): Promise<HookJSONOutput> => {
 									const tn = "tool_name" in input ? String(input.tool_name) : "";
 									const ti = ("tool_input" in input ? input.tool_input : {}) as Record<string, unknown>;
 
@@ -199,11 +217,16 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 										if (out.decision === "block") return out;
 									}
 
+									const attribution = beginMainCheckoutAttribution(input, toolUseId, opts.mainCheckoutObserver);
+									if (attribution.decision === "block") return attribution;
+
 									return {};
 								},
 							],
 						},
 					],
+					PostToolUse: [{ hooks: [closeAttributedTool] }],
+					PostToolUseFailure: [{ hooks: [closeAttributedTool] }],
 				}
 			: undefined;
 
