@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -129,23 +129,25 @@ describe("runShipBookkeeping — real adapter failures block branch destruction 
 });
 
 describe("runShipBookkeeping — never-discard", () => {
-	it("dirty MAIN_REPO → a `git add -A && git commit … --no-verify` is issued, no discard command ever emitted", async () => {
+	it("dirty MAIN_REPO → `git add -A && git reset -- .dev` then a `git commit … --no-verify` is issued, no discard command ever emitted", async () => {
 		const { order, exec } = makeExecSpy();
 		const { roadmap } = makeRoadmapSpy();
 		const result = await runShipBookkeeping(CTX, {
 			roadmap,
 			log: () => {},
-			exec,
+			exec: (cmd, cwd) => (cmd === "git diff --cached --name-only" ? "docs/deferred.md" : exec(cmd, cwd)),
 			status: () => "M docs/roadmap-core.md\n?? docs/deferred.md", // dirty
 			repairMain: () => {},
 			lock: async <T>(_repo: string, fn: () => Promise<T> | T): Promise<T> => await fn(),
 		});
 
 		assert.equal(result.recovered, true);
+		assert.ok(order.includes("git add -A && git reset -- .dev"), `expected 'git add -A && git reset -- .dev'; got: ${order.join(" | ")}`);
 		assert.ok(
-			order.some((c) => /git add -A .* && git commit .*--no-verify/.test(c)),
+			order.some((c) => /^git commit -m .*--no-verify$/.test(c)),
 			`expected a recover commit; got: ${order.join(" | ")}`,
 		);
+		assert.ok(!order.some((c) => /:\(exclude\)/.test(c)), `pathspec exclude must not be used; got: ${order.join(" | ")}`);
 		assert.ok(!order.some((c) => DISCARD_RE.test(c)), `discard command leaked: ${order.join(" | ")}`);
 	});
 });
@@ -239,5 +241,52 @@ describe("commitStrayBookkeeping — real temp repo", () => {
 		const recovered = await commitStrayBookkeeping(dir, "TOOL-9", () => {});
 		assert.equal(recovered, false);
 		assert.equal(execSync("git rev-parse HEAD", { cwd: dir, encoding: "utf-8" }).trim(), before, "no new commit on a clean tree");
+	});
+
+	// Regression for #185: `git add -A -- . ':(exclude).dev'` aborted with
+	// "paths are ignored by one of your .gitignore files" whenever a gitignored
+	// dir/file (e.g. `.dev`, a stray ignored file) was present alongside a real
+	// change — the whole recover-commit was skipped and the real change stayed
+	// staged-but-uncommitted.
+	it("gitignored dir + stray untracked ignored file present alongside a real change → commit created, ignored paths never staged (#185)", async () => {
+		const dir = seedRepo();
+		writeFileSync(join(dir, ".gitignore"), ".dev/\nh\n");
+		execSync("git add .gitignore && git commit -q -m gitignore", { cwd: dir });
+		mkdirSync(join(dir, ".dev"));
+		writeFileSync(join(dir, ".dev", "cache.json"), "cached state");
+		writeFileSync(join(dir, "h"), "stray ignored file");
+		writeFileSync(join(dir, "deferred.md"), "keep me — a deferred create-item");
+		const logs: string[] = [];
+
+		const recovered = await commitStrayBookkeeping(dir, "TOOL-9", (m) => logs.push(m));
+
+		assert.equal(recovered, true, `expected a recover commit; logs: ${logs.join(" | ")}`);
+		assert.equal(readFileSync(join(dir, "deferred.md"), "utf-8"), "keep me — a deferred create-item");
+		const committed = execSync("git show --stat --format= HEAD", { cwd: dir, encoding: "utf-8" });
+		assert.match(committed, /deferred\.md/);
+		assert.ok(!committed.includes(".dev"), `ignored dir must not be committed; got: ${committed}`);
+		assert.ok(!/(^|\s)h(\s|$)/.test(committed), `ignored file must not be committed; got: ${committed}`);
+		// Ignored paths remain on disk, untouched — still there, still ignored.
+		assert.equal(readFileSync(join(dir, ".dev", "cache.json"), "utf-8"), "cached state");
+		assert.equal(readFileSync(join(dir, "h"), "utf-8"), "stray ignored file");
+	});
+
+	it("only gitignored paths dirty (no real change) → skips cleanly, returns false, no error, ignored paths untouched", async () => {
+		const dir = seedRepo();
+		writeFileSync(join(dir, ".gitignore"), ".dev/\nh\n");
+		execSync("git add .gitignore && git commit -q -m gitignore", { cwd: dir });
+		mkdirSync(join(dir, ".dev"));
+		writeFileSync(join(dir, ".dev", "cache.json"), "cached state");
+		writeFileSync(join(dir, "h"), "stray ignored file");
+		const before = execSync("git rev-parse HEAD", { cwd: dir, encoding: "utf-8" }).trim();
+		const logs: string[] = [];
+
+		const recovered = await commitStrayBookkeeping(dir, "TOOL-9", (m) => logs.push(m));
+
+		assert.equal(recovered, false);
+		assert.equal(execSync("git rev-parse HEAD", { cwd: dir, encoding: "utf-8" }).trim(), before, "no new commit when only ignored paths are dirty");
+		assert.ok(!logs.some((m) => /failed/i.test(m)), `must skip cleanly, not error; logs: ${logs.join(" | ")}`);
+		assert.equal(readFileSync(join(dir, ".dev", "cache.json"), "utf-8"), "cached state");
+		assert.equal(readFileSync(join(dir, "h"), "utf-8"), "stray ignored file");
 	});
 });

@@ -110,8 +110,34 @@ export async function commitStrayBookkeeping(mainRepo: string, itemId: string, l
 			}
 			if (!dirty) return false;
 			log(`recovering ${dirty.split("\n").length} stray MAIN_REPO change(s) as a commit (never discarded)`);
+			// Stage everything, then unstage .dev (pelaggio's own runtime bookkeeping —
+			// e.g. the mutation lock this very call holds — must never land in a "stray
+			// user changes" commit). `git add -A -- . ':(exclude).dev'` used to do this
+			// in one shot, but git treats *naming* an already-gitignored path via
+			// pathspec exclude magic as an error ("paths are ignored by one of your
+			// .gitignore files"), which aborted the whole recover-commit whenever .dev
+			// (or any other ignored path) was present. `git reset -- .dev` has no such
+			// failure mode: it's a harmless no-op whether .dev was staged, untouched, or
+			// absent.
 			try {
-				exec(`git add -A -- . ':(exclude).dev' && git commit -m ${JSON.stringify(`chore: recover uncommitted bookkeeping (${itemId})`)} --no-verify`, mainRepo);
+				exec("git add -A && git reset -- .dev", mainRepo);
+			} catch (e) {
+				log(`⚠ recover-commit failed: ${short(e)}`);
+				return false;
+			}
+			// Guard against "nothing to commit": if everything dirty turned out to be
+			// gitignored, `git add -A` stages nothing and a plain `git commit` would
+			// error. Skip cleanly instead of surfacing that as a failure.
+			let staged: string;
+			try {
+				staged = exec("git diff --cached --name-only", mainRepo);
+			} catch (e) {
+				log(`⚠ recover-commit failed: ${short(e)}`);
+				return false;
+			}
+			if (!staged) return false;
+			try {
+				exec(`git commit -m ${JSON.stringify(`chore: recover uncommitted bookkeeping (${itemId})`)} --no-verify`, mainRepo);
 				return true;
 			} catch (e) {
 				log(`⚠ recover-commit failed: ${short(e)}`);

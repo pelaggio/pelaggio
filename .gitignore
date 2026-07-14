@@ -10,6 +10,7 @@ packages/*/node_modules/
 # them into the branch, then chokes the ship step. Ignore so cycles stay clean.
 report.*.json
 .DS_Store
+report.*.json
 lefthook-local.yml
 packages/web/dist/
 packages/web/.astro/
