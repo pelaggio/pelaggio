@@ -36,7 +36,7 @@ Pelaggio's permission model is a manifest-backed description of current capabili
 
 | Action | Main capability | Claim(s) |
 |---|---|---|
-| `pr-review` | Fresh, out-of-context PR review that exits non-zero unless every required pass returns explicit `Verdict: PASS`. | `TC-003`, `TC-015` |
+| `pr-review` | Fresh, out-of-context PR review that validates severity-tagged reports; `must-fix` or transport/validation failure exits non-zero through the `review` status. | `TC-003`, `TC-015` |
 | `shipwreck` | Recovery path after ship failure; may inspect and repair local ship state. | `TC-011`, `TC-012`, `TC-015` |
 | `roadmap` CLI | Adapter-backed list/get/claim/plan/mark-done/archive commands used by skills and harness. | `TC-006`, `TC-015` |
 | `worktree-deps` | Symlink/install dependencies for a worktree and repair shared dependency layout. | `TC-011`, `TC-016` |

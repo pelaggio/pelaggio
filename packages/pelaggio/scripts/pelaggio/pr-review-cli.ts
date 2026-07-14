@@ -4,8 +4,8 @@
  * `pelaggio pr-review --pr <n>` — the CI merge-gate entry point.
  *
  * Runs a fresh-session, out-of-context agentic review of a PR diff through the
- * same `runStep` machinery the pipeline uses, parses the fail-closed gate
- * verdict, upserts a single PR comment with the findings, and sets the process
+ * same `runStep` machinery the pipeline uses, validates the fail-closed findings
+ * report, upserts a single PR comment with the findings, and sets the process
  * exit code so the `review` status check goes green (pass) or red (block).
  *
  * The **agent** produces the review; the **CLI** owns comment posting + the exit
@@ -17,7 +17,8 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { REPO } from "./config.js";
-import { classifySecurityReviewDiff, expandSkill, formatReviewMetrics, parseReviewGate, type SecurityDiffSignal } from "./helpers.js";
+import { classifySecurityReviewDiff, expandSkill, formatReviewMetrics, type SecurityDiffSignal } from "./helpers.js";
+import { parseReviewFindings, type ReviewFindingsReport, reviewFindingsGate } from "./review/findings.js";
 import type { RunStepFn } from "./step-runner.js";
 import { runStep } from "./step-runner.js";
 import type { ParkSignal, StepEmit, StepResult } from "./types.js";
@@ -29,6 +30,9 @@ interface ReviewPass {
 	label: ReviewLabel;
 	result: StepResult;
 	gate: "pass" | "block";
+	report?: ReviewFindingsReport;
+	diagnostic?: string;
+	failureSubtype?: string;
 }
 
 interface PrReviewDeps {
@@ -102,38 +106,52 @@ const emit: StepEmit = (event) => {
 };
 
 function aggregateSubtype(passes: readonly ReviewPass[]): string {
-	const failed = passes.filter((pass) => pass.gate === "block" || !pass.result.ok);
+	const failed = passes.filter((pass) => pass.gate === "block" || !pass.result.ok || pass.diagnostic);
 	if (failed.length === 0) return "success";
-	if (failed.length === 1) return `${failed[0].label}:${failed[0].result.subtype}`;
+	if (failed.length === 1) return `${failed[0].label}:${failed[0].failureSubtype ?? failed[0].result.subtype}`;
 	return "multiple";
 }
 
 function renderPass(pass: ReviewPass): string {
 	const title = pass.label === "standard" ? "Standard Review" : "Adversarial Red-Team Review";
+	if (pass.report) {
+		const findings = pass.report.findings.map((finding) => {
+			const location = finding.path ? ` (\`${escapeMarkdown(finding.path)}${finding.line ? `:${finding.line}` : ""}\`)` : "";
+			return `- **${finding.severity}**${location}: ${escapeMarkdown(finding.message)}`;
+		});
+		return [`## ${title}`, "", escapeMarkdown(pass.report.summary), "", ...(findings.length > 0 ? findings : ["No findings."])].join("\n");
+	}
 	const text = pass.result.text.trim();
-	if (pass.result.ok) return [`## ${title}`, "", text || "(No review text returned.)"].join("\n");
-	const partial = text ? ["", "Partial review output (run did not complete — may be incomplete):", "", text] : [];
-	return [`## ${title}`, "", `Run did not complete cleanly (\`${pass.result.subtype}\`) — failing this pass closed.`, ...partial].join("\n");
+	const partial = text ? ["", "Partial review output (untrusted and possibly incomplete):", "", `<pre>${escapeHtml(text)}</pre>`] : [];
+	return [`## ${title}`, "", `${escapeMarkdown(pass.diagnostic ?? `Run did not complete cleanly (${pass.result.subtype}).`)} Failing this pass closed.`, ...partial].join("\n");
+}
+
+function escapeHtml(value: string): string {
+	return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
+function escapeMarkdown(value: string): string {
+	return escapeHtml(value).replace(/([\\`*_[\]{}()#+.!|>-])/g, "\\$1");
 }
 
 /** Build the PR-comment body. The agent text is preserved under per-pass
  *  sections; aggregate status and metrics live in the CLI-owned wrapper. */
 export function buildComment(gate: "pass" | "block", passes: readonly ReviewPass[], securitySignal: SecurityDiffSignal): string {
 	const header = gate === "pass" ? "✅ **Automated review: PASS**" : "🚫 **Automated review: BLOCK**";
-	const ok = passes.every((pass) => pass.result.ok);
+	const ok = passes.every((pass) => pass.result.ok && pass.report !== undefined);
 	const subtype = aggregateSubtype(passes);
 	const cost = passes.reduce((sum, pass) => sum + pass.result.cost, 0);
 	const turns = passes.reduce((sum, pass) => sum + pass.result.turns, 0);
 	// Durable, aggregatable precision signal — appended by the CLI, never seen by
-	// `parseReviewGate` (which reads the agent's `result.text`, not this comment).
+	// the report parser (which reads the agent's `result.text`, not this comment).
 	const metrics = formatReviewMetrics(gate, ok, subtype, cost, turns);
-	const redTeamLine = securitySignal.triggered ? `Triggered: ${securitySignal.reasons.join(", ")}` : "Adversarial red-team pass: not triggered (no security-sensitive paths or diff signals).";
+	const redTeamLine = securitySignal.triggered ? `Triggered: ${securitySignal.reasons.map(escapeMarkdown).join(", ")}` : "Adversarial red-team pass: not triggered (no security-sensitive paths or diff signals).";
 	return [PR_REVIEW_MARKER, header, "", ...passes.map(renderPass), "", redTeamLine, "", `<sub>pelaggio pr-review · ${subtype}</sub>`, metrics].join("\n");
 }
 
 export function buildFailClosedComment(subtype: string, message: string): string {
 	const result: StepResult = { ok: false, subtype, text: message, fullText: message, cost: 0, turns: 0 };
-	const pass: ReviewPass = { label: "standard", result, gate: "block" };
+	const pass: ReviewPass = { label: "standard", result, gate: "block", diagnostic: `Review infrastructure failed (${subtype}).`, failureSubtype: subtype };
 	return buildComment("block", [pass], { triggered: false, reasons: [] });
 }
 
@@ -195,7 +213,14 @@ async function runReviewPass(label: ReviewLabel, args: string, profile: string, 
 	process.stderr.write(`▶ pr-review ${label}\n`);
 	const prompt = `${expandSkill("pr-review", args)}${opts.localContext}`;
 	const result = await opts.runStep("pr-review", prompt, { cwd: opts.cwd, profile, trace: false, parkSignal: emptyParkSignal(), itemId: pr }, emit);
-	return { label, result, gate: parseReviewGate(result.text, result.ok) };
+	if (!result.ok) return { label, result, gate: "block", diagnostic: `Run did not complete cleanly (${result.subtype}).` };
+	try {
+		const report = parseReviewFindings(result.text);
+		return { label, result, report, gate: reviewFindingsGate(report) };
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		return { label, result, gate: "block", diagnostic: `Invalid review findings report: ${message}.`, failureSubtype: "error_invalid_output" };
+	}
 }
 
 export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<PrReviewGateResult> {
@@ -227,7 +252,7 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 	}
 
 	const gate = passes.some((pass) => pass.gate === "block") ? "block" : "pass";
-	const ok = passes.every((pass) => pass.result.ok);
+	const ok = passes.every((pass) => pass.result.ok && pass.report !== undefined);
 	const cost = passes.reduce((sum, pass) => sum + pass.result.cost, 0);
 	const costEstimated = passes.some((pass) => pass.result.costEstimated);
 	const turns = passes.reduce((sum, pass) => sum + pass.result.turns, 0);

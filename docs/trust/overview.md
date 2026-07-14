@@ -29,7 +29,7 @@ There is no analytics or telemetry channel at all (`TC-002`). Operational egress
 
 ### 4. What blocks an unsafe merge?
 
-In pull-request mode, the review gate fails closed: only an explicit `Verdict: PASS` from a successful review passes; silence, refusal, SDK failure, max-turns, rate-limit park, or `Verdict: BLOCK` blocks (`TC-003`, [errors reference](./reference/errors.md), [PR review docs](../pr-review.md)). The default PR target keeps a human gate in the loop (`TC-012`). For `auto-merge-pr`, enforcement depends on branch protection requiring the `review` status today; in-code branch-protection verification is planned (`TC-013`).
+In pull-request mode, the review gate fails closed: each successful review must emit a validated severity-tagged report, and any `must-fix` blocks. `nice` and `note` do not block; silence, malformed output, refusal, SDK failure, max-turns, or rate-limit park does (`TC-003`, [errors reference](./reference/errors.md), [PR review docs](../pr-review.md)). The compatibility gate remains the `review` commit status. The default PR target keeps a human gate in the loop (`TC-012`). For `auto-merge-pr`, enforcement depends on branch protection requiring that status today; in-code branch-protection verification is planned (`TC-013`).
 
 ### 5. Can I trust the package/install path?
 

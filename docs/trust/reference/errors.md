@@ -26,7 +26,7 @@ last_reviewed: 2026-07-08
 
 | Subtype | Meaning | Remediation | Claim(s) |
 |---|---|---|---|
-| `success` | Step completed. | Continue; for PR review, success still needs explicit `Verdict: PASS`. | `TC-003` |
+| `success` | Step completed. | Continue; for PR review, success still needs a valid report without `must-fix` findings. | `TC-003` |
 | `error_rate_limit` | Provider/rate/usage/quota limit or parked signal. | Let `parkExit()` checkpoint and resume after reset/window. | `TC-015` |
 | `error_max_turns` | Step hit turn cap. | Pipeline may retry selected steps once within budget; otherwise raise budget/turns or narrow scope. | `TC-015` |
 | `error_refusal` | Model refused/declined. | Treat as terminal for the step; revise input/task. | `TC-003`, `TC-015` |
@@ -38,4 +38,4 @@ last_reviewed: 2026-07-08
 | `edit_loop` | Provider detected repeated edits to the same file. | Pipeline may retry implement with a fresh approach; otherwise simplify scope. | `TC-015` |
 | `error` | Catch-all classification for other raw subtypes. | Inspect step text/logs; verbose logs are not scrubbed. | `TC-014`, `TC-015` |
 
-For pull-request review, every non-explicit pass blocks the gate: missing verdict, refusal, SDK failure, max-turns, rate-limit park, and blocking findings all fail closed (`TC-003`).
+For pull-request review, a `must-fix` or any missing/invalid report, refusal, SDK failure, max-turns, or rate-limit park blocks the compatibility `review` gate (`TC-003`).

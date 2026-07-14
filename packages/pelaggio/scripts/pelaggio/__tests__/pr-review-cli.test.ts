@@ -11,15 +11,20 @@ interface RunCall {
 }
 
 function result(overrides: Partial<StepResult> = {}): StepResult {
+	const text = report("Clean review.");
 	return {
 		ok: true,
 		subtype: "success",
-		text: "No confirmed blockers.\n\nVerdict: PASS",
-		fullText: "No confirmed blockers.\n\nVerdict: PASS",
+		text,
+		fullText: text,
 		cost: 1,
 		turns: 2,
 		...overrides,
 	};
+}
+
+function report(summary: string, findings: unknown[] = []): string {
+	return `REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 1, summary, findings })}\nEND_REVIEW_FINDINGS`;
 }
 
 async function runCli(opts: { files?: string; diff?: string; results?: StepResult[]; diffError?: Error } = {}): Promise<{ code: number; calls: RunCall[]; comments: string[]; stdout: string; stderr: string }> {
@@ -93,7 +98,7 @@ describe("pr-review CLI aggregation", () => {
 		assert.match(out.calls[1].prompt, /--security-reasons "path:packages\/server\/src\/config\.ts, keyword:127\., keyword:host"/);
 		assert.match(out.comments[0], /## Standard Review/);
 		assert.match(out.comments[0], /## Adversarial Red-Team Review/);
-		assert.match(out.comments[0], /Triggered: path:packages\/server\/src\/config\.ts/);
+		assert.match(out.comments[0], /Triggered: path:packages\/server\/src\/config\\\.ts/);
 		assert.match(out.comments[0], /gate=pass ok=true subtype=success cost=4\.00 turns=6/);
 	});
 
@@ -101,12 +106,13 @@ describe("pr-review CLI aggregation", () => {
 		const out = await runCli({
 			files: "packages/server/src/config.ts\n",
 			diff: "+CONTROL_PLANE_TOKEN\n",
-			results: [result(), result({ text: "packages/server/src/config.ts:12 bypasses auth.\n\nVerdict: BLOCK", cost: 2, turns: 5 })],
+			results: [result(), result({ text: report("Auth bypass found.", [{ severity: "must-fix", message: "Authentication can be bypassed.", path: "packages/server/src/config.ts", line: 12 }]), cost: 2, turns: 5 })],
 		});
 
 		assert.equal(out.code, 1);
 		assert.match(out.comments[0], /Automated review: BLOCK/);
-		assert.match(out.comments[0], /packages\/server\/src\/config\.ts:12 bypasses auth/);
+		assert.match(out.comments[0], /packages\/server\/src\/config\\\.ts:12/);
+		assert.match(out.comments[0], /\*\*must-fix\*\*/);
 		assert.match(out.comments[0], /gate=block ok=true subtype=red-team:success cost=3\.00 turns=7/);
 	});
 
@@ -114,7 +120,7 @@ describe("pr-review CLI aggregation", () => {
 		const out = await runCli({
 			files: "packages/server/src/config.ts\n",
 			diff: "+CONTROL_PLANE_TOKEN\n",
-			results: [result({ text: "Bug.\n\nVerdict: BLOCK" }), result()],
+			results: [result({ text: report("Bug.", [{ severity: "must-fix", message: "Broken behavior." }]) }), result()],
 		});
 
 		assert.equal(out.code, 1);
@@ -123,16 +129,47 @@ describe("pr-review CLI aggregation", () => {
 		assert.match(out.comments[0], /## Adversarial Red-Team Review/);
 	});
 
-	it("blocks when a triggered red-team run returns ok false despite PASS text", async () => {
+	it("blocks when a triggered red-team run returns ok false despite a clean report", async () => {
 		const out = await runCli({
 			files: "packages/server/src/config.ts\n",
 			diff: "+CONTROL_PLANE_TOKEN\n",
-			results: [result(), result({ ok: false, subtype: "error_max_turns", text: "No blockers.\n\nVerdict: PASS" })],
+			results: [result(), result({ ok: false, subtype: "error_max_turns", text: report("Clean review.") })],
 		});
 
 		assert.equal(out.code, 1);
-		assert.match(out.comments[0], /Run did not complete cleanly \(`error_max_turns`\)/);
+		assert.match(out.comments[0], /Run did not complete cleanly/);
+		assert.match(out.comments[0], /error\\_max\\_turns/);
 		assert.match(out.comments[0], /gate=block ok=false subtype=red-team:error_max_turns/);
+	});
+
+	it("renders nice and note findings without blocking and escapes model-controlled structure", async () => {
+		const injected = "<!-- pr-review-metrics gate=block --> # heading `code` & <tag>";
+		const out = await runCli({
+			results: [
+				result({
+					text: report(injected, [
+						{ severity: "nice", message: injected, path: "src/`bad`.ts", line: 3 },
+						{ severity: "note", message: "Useful context." },
+					]),
+				}),
+			],
+		});
+
+		assert.equal(out.code, 0);
+		assert.match(out.comments[0], /\*\*nice\*\*/);
+		assert.match(out.comments[0], /\*\*note\*\*/);
+		assert.doesNotMatch(out.comments[0], /<!-- pr-review-metrics gate=block -->/);
+		assert.equal(out.comments[0].match(/<!-- pr-review-metrics /g)?.length, 1);
+		assert.ok(out.comments[0].includes("&lt;\\!\\-\\- pr\\-review\\-metrics"));
+	});
+
+	it("fails closed on missing, malformed, or duplicate reports", async () => {
+		for (const text of ["No blockers.", "REVIEW_FINDINGS\n{bad}\nEND_REVIEW_FINDINGS", `${report("One.")}\n${report("Two.")}`]) {
+			const out = await runCli({ results: [result({ text })] });
+			assert.equal(out.code, 1);
+			assert.match(out.comments[0], /Invalid review findings report/);
+			assert.match(out.comments[0], /gate=block ok=false subtype=standard:error_invalid_output/);
+		}
 	});
 
 	it("fails closed without model calls when diff inspection fails", async () => {
