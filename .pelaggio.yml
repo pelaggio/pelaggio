@@ -16,3 +16,15 @@ review:
   runner: local
 budgets:
   shakedown-plan: 8
+# Offload the token-heavy authoring steps to Codex (aggressive split). pick + ship
+# stay on Claude: they are the prose-scrape coordination steps (parsePickResult /
+# parseShipMerged) that are calibrated to Claude's prose — see coordination-spine.md.
+# shakedown-code stays on Claude so the final code review is cross-model (Claude
+# reviewing Codex's implementation). Codex model is left unset → Codex CLI default.
+models:
+  profiles:
+    standard:
+      providers:
+        plan: codex
+        shakedown-plan: codex
+        implement: codex
