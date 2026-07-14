@@ -49,7 +49,8 @@ Run targeted tests with `npx tsx --test <test-file>`. Tests use `node:test`, not
 - (flow, planned) An initiative is a projected swimlane/`group`, never a pelaggio-owned object.
 - (flow, planned) Write-back is typed and item-scoped; agents never issue free-form tracker mutations, and it runs off the hot path.
 - (flow, planned) Declared write-sets are enforced by the worktree write-guard; the scheduler will not co-schedule intersecting write-sets.
-- (flow, planned) The landing queue is target-agnostic and defers to the provider's merge queue in PR mode; pelaggio owns integration ordering only for `direct-push`.
+- (flow, planned) The landing queue is target-agnostic and defers to the provider's merge queue in PR mode; pelaggio owns integration ordering only for `direct-push`. On the Beads substrate it rides `bd merge-slot` (direct-push) / `bd gate` (PR mode); Beads owns the primitive, pelaggio owns ordering + waiter-hygiene + dead-holder reconcile; the slot lives in one shared `MAIN_REPO/.beads`.
+- (flow, planned) Beads (`bd`) is the chosen work-store + landing substrate (see `coordination-spine.md`, #181): adopt it as a `RoadmapSource` and ride its `ready`/`merge-slot`/`gate` primitives. The `feat/<id>` git branch stays the authoritative claim token — `bd` status is write-back, never the claims registry.
 
 Each invariant above is a one-line index; the full rationale lives in the routed detail docs below. Invariants tagged `(flow, planned)` are target-state — see `docs/agent-context/flow.md`; the tag drops when the implementing item ships.
 
@@ -61,6 +62,7 @@ Read only the detail docs needed for the task:
 - `docs/agent-context/pipeline.md`: pipeline steps, step-provider seam, worktree isolation + dep sharing, plan-polish and self-referential roadmap guards, hook reachability, phantom-ship guard, rate-limit parking.
 - `docs/agent-context/roadmap-and-ship.md`: roadmap adapters + CLI bridge, claims, ship targets, direct-push bookkeeping, PR review and revise loops.
 - `docs/agent-context/flow.md`: (design) flow-policy seam, projection + memory hierarchy, write-back, declared write-sets + landing queue, concurrency model.
+- `docs/agent-context/coordination-spine.md`: (design) typed coordination-spine seam (agent-as-caller vs prose-scrape); the Beads-substrate decision — `bd` as work store + `merge-slot`/`gate` landing primitive; narrowed differentiator; MCP-deferred rationale.
 - `docs/agent-context/skills.md`: skill layout, canonical tree, bilingual substrate, frontmatter, includes, project-context extension point.
 - `docs/agent-context/testing-and-quality.md`: test commands, lint rules, rubric, review-shape rationale.
 - `docs/config.md`: `.pelaggio.yml` schema.
