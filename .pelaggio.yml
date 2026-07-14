@@ -28,3 +28,10 @@ models:
         plan: codex
         shakedown-plan: codex
         implement: codex
+    # Quick mode (S/XS/bug) skips plan+shakedown-plan and runs implement-only under
+    # this profile. Offload that implement to Codex too so small bugs also lean on
+    # Codex; the model stays Sonnet-priced in config but a claude-* id is never
+    # forwarded, so Codex uses its CLI default.
+    quick:
+      providers:
+        implement: codex
