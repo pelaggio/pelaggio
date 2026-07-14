@@ -41,6 +41,11 @@ Two seams, deliberately separated:
 
 - **`RoadmapSource` = storage.** Provider-native. Leverage what Linear / GitHub /
   markdown already give you. Keep it the thin lowest-common-denominator it is.
+  (Exception worth naming: **Beads** — see `coordination-spine.md`, #181 — is a
+  first-class source that provides *more* than the LCD: a deterministic ready-set
+  (`bd ready`) and a landing primitive (`bd merge-slot`). Policy still consumes
+  the snapshot, not the store; but where Beads offers a sound primitive, flow
+  *rides* it rather than reimplementing — the "best foundation, not novel" call.)
 - **`FlowPolicy` = policy (planned).** pelaggio-owned, provider-neutral,
   pluggable. It decides readiness, class of service, swimlane, and pull order.
 
@@ -233,6 +238,34 @@ landing queue — speculative verified landing already exists; do not rebuild it
 pelaggio owns a landing queue only for `direct-push`. The queue sits *above* the
 `ship.target` seam. Same leverage principle as storage and initiatives.
 
+**Substrate (Beads, decided — see `coordination-spine.md`, #174).** For
+`direct-push`, the exclusive-access primitive is **not** built from scratch: it
+rides **`bd merge-slot`** — an atomic exclusive slot (spike-proven: exactly one
+winner under an 8-way simultaneous acquire) with a typed contract (`exit 1` +
+`{"acquired":false,"holder":…}`) and a waiter list. PR-mode deferral is
+**`bd gate`** (`--type=gh:pr` waits for PR merge, `--type=gh:run` for CI) — the
+provider-merge-queue deferral above, expressed as a Beads primitive. This is the
+storage-vs-policy line one layer up: Beads owns the *mechanism*; pelaggio owns the
+*policy Beads deliberately omits* — fair ordering (release does not hand off; the
+orchestrator polls `check`, picks the next waiter, re-acquires), waiter-list
+hygiene (re-acquire does not self-remove), and dead-holder reconcile (no native
+lease — compose a `timer` gate or reconcile-on-startup, ground truth wins).
+**Load-bearing constraint:** the slot must live in one shared `MAIN_REPO/.beads`
+(ship already `cd`s there); per-worktree `.beads` copies are eventual-consistent
+via `refs/dolt/data` and cannot back the slot. Markdown/gh sources without `bd`
+fall back to today's serialized ship-into-local-main.
+
+**Prior art / reference design.** Gastown (`gt`), the sibling orchestrator on the
+`bd` substrate, already ships this as its **Refinery**: a Bors-style
+batch-then-bisect merge queue that rebases each MR onto latest main, runs
+validation, merges when clear, and re-implements on conflict. pelaggio builds its
+own on `bd merge-slot` rather than adopting `gt` (an all-or-nothing town), but the
+Refinery + `gt done` (submit → notify → sync) + `gt mq` (ordered queue, `next` =
+highest priority) are the design to mirror. Note the divergence that is *ours*:
+Gastown handles conflicts **reactively** (Refinery re-implements); pelaggio adds
+Tier-1 **prevention** via declared write-sets (#173) so intersecting work is never
+co-scheduled. See `coordination-spine.md` (*Gastown: the sibling orchestrator*).
+
 **Shared-by-construction files need an escape hatch.** This is a pnpm monorepo,
 so `pnpm-lock.yaml` and generated/formatted files are touched by genuinely
 disjoint feature cycles. They cannot be feature-owned in a write-set: give them a
@@ -299,4 +332,7 @@ here so they do not have to be re-litigated.
 - Declared write-sets are enforced by the worktree write-guard; the scheduler
   will not co-schedule intersecting write-sets.
 - The landing queue is target-agnostic and defers to the provider's merge queue
-  in PR mode; pelaggio owns integration ordering only for `direct-push`.
+  in PR mode; pelaggio owns integration ordering only for `direct-push`. On the
+  Beads substrate it rides `bd merge-slot` (direct-push) / `bd gate` (PR mode);
+  Beads owns the primitive, pelaggio owns ordering + waiter-hygiene + dead-holder
+  reconcile, and the slot lives in one shared `MAIN_REPO/.beads`.
