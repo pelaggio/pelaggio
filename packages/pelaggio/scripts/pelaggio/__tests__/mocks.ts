@@ -18,6 +18,8 @@ export interface StepOutcome extends Partial<StepResult> {
 	writes?: Record<string, string>;
 	/** Called after writes — use to simulate git side-effects (e.g. advancing main). */
 	sideEffect?: (cwd: string) => void;
+	/** Side effect explicitly bracketed as a mutating provider-tool invocation. */
+	attributedSideEffect?: (cwd: string) => void;
 	/** If true, the mock awaits `opts.signal`'s abort event before applying the rest of
 	 * the outcome. Lets tests simulate a step that's in-flight when SIGINT fires. */
 	awaitAbort?: boolean;
@@ -54,6 +56,11 @@ export function createMockRunStep(behavior: MockBehavior, parkSignal: ParkSignal
 				mkdirSync(dirname(full), { recursive: true });
 				writeFileSync(full, content);
 			}
+		}
+		if (outcome.attributedSideEffect) {
+			opts.mainCheckoutObserver?.beforeTool(`mock-${name}-${attempt}`);
+			outcome.attributedSideEffect(opts.cwd);
+			opts.mainCheckoutObserver?.afterTool(`mock-${name}-${attempt}`);
 		}
 		outcome.sideEffect?.(opts.cwd);
 		if (outcome.park) Object.assign(parkSignal, outcome.park);

@@ -246,7 +246,7 @@
   ],
   "sandbox_scope": {
     "worktree_scope": "item worktree by convention and hooks; the post-step audit always gates siblings and gates main by default",
-    "main_repo_protection": "default post-step git-state diff fails on main changes; confinement.allow-dirty-main explicitly disables main detection while retaining sibling enforcement",
+    "main_repo_protection": "default post-step Git-state diff fails on main changes; dirty-main mode uses Claude mutating-tool delta attribution or Codex workspace exclusion while retaining sibling enforcement",
     "planned_hardening": "not an OS/container sandbox: writes to paths outside any tracked git root (e.g. $HOME, /tmp, arbitrary absolute paths) are not caught by this audit and remain bounded by tool/egress scoping (TC-015)",
     "evidence": [
       "TC-011",

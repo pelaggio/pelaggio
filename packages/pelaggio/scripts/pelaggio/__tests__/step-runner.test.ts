@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { HookInput } from "@anthropic-ai/claude-agent-sdk";
 import { codexProvider } from "../codex-provider.js";
-import { blockPlanPolish, blockWorktreeInstall, claudeProvider, composeSystemAppend, getProvider, isWorktreePath } from "../step-runner.js";
+import type { MainCheckoutDeltaObserver, MainCheckoutDeltaResult } from "../helpers.js";
+import { beginMainCheckoutAttribution, blockPlanPolish, blockWorktreeInstall, claudeProvider, composeSystemAppend, endMainCheckoutAttribution, getProvider, isWorktreePath } from "../step-runner.js";
 import type { ProviderName } from "../types.js";
 
 function bash(command: string): HookInput {
@@ -16,6 +17,41 @@ function write(fp: string): HookInput {
 function edit(fp: string): HookInput {
 	return { tool_name: "Edit", tool_input: { file_path: fp } } as unknown as HookInput;
 }
+
+describe("main-checkout tool attribution hooks", () => {
+	it("brackets every mutating tool and ignores Read", () => {
+		const calls: string[] = [];
+		const clean: MainCheckoutDeltaResult = { kind: "clean" };
+		const observer: MainCheckoutDeltaObserver = {
+			beforeTool: (id) => {
+				calls.push(`before:${id}`);
+				return clean;
+			},
+			afterTool: (id) => {
+				calls.push(`after:${id}`);
+				return clean;
+			},
+			finish: () => clean,
+		};
+		for (const [index, toolName] of ["Write", "Edit", "Bash", "Agent"].entries()) {
+			const input = { tool_name: toolName, tool_input: {} } as unknown as HookInput;
+			beginMainCheckoutAttribution(input, String(index), observer);
+			endMainCheckoutAttribution(input, String(index), observer);
+		}
+		const read = { tool_name: "Read", tool_input: {} } as unknown as HookInput;
+		beginMainCheckoutAttribution(read, "read", observer);
+		endMainCheckoutAttribution(read, "read", observer);
+		assert.deepEqual(calls, ["before:0", "after:0", "before:1", "after:1", "before:2", "after:2", "before:3", "after:3"]);
+	});
+
+	it("blocks a mutating tool when its baseline cannot be established", () => {
+		const error: MainCheckoutDeltaResult = { kind: "error", message: "snapshot failed" };
+		const observer: MainCheckoutDeltaObserver = { beforeTool: () => error, afterTool: () => error, finish: () => error };
+		const out = beginMainCheckoutAttribution(write("x"), "id", observer);
+		assert.equal(out.decision, "block");
+		assert.match(out.reason ?? "", /snapshot failed/);
+	});
+});
 
 describe("blockPlanPolish", () => {
 	const cwd = "/tmp/wt";

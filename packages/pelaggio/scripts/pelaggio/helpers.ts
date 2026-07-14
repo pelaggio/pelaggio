@@ -65,6 +65,64 @@ export function diffForbiddenRootSnapshots(before: ReadonlyMap<string, string>, 
 	return changed;
 }
 
+export type MainCheckoutDeltaResult = { kind: "clean" } | { kind: "violation"; roots: readonly string[] } | { kind: "error"; message: string };
+
+export interface MainCheckoutDeltaObserver {
+	beforeTool(invocationId: string): MainCheckoutDeltaResult;
+	afterTool(invocationId: string): MainCheckoutDeltaResult;
+	finish(): MainCheckoutDeltaResult;
+}
+
+/** Attribute main-checkout Git-state deltas to individual mutating tool windows. */
+export function createMainCheckoutDeltaObserver(root: string): MainCheckoutDeltaObserver {
+	const mainRoot = resolve(root);
+	const baselines = new Map<string, string>();
+	let terminal: MainCheckoutDeltaResult | undefined;
+	let accumulated: MainCheckoutDeltaResult = { kind: "clean" };
+
+	const fail = (message: string): MainCheckoutDeltaResult => {
+		if (accumulated.kind !== "error") accumulated = { kind: "error", message };
+		return accumulated;
+	};
+	const snapshot = (): string | MainCheckoutDeltaResult => {
+		try {
+			return snapshotForbiddenRoot(mainRoot);
+		} catch (error) {
+			return fail(error instanceof Error ? error.message : String(error));
+		}
+	};
+
+	return {
+		beforeTool(invocationId) {
+			if (terminal) return terminal;
+			if (!invocationId) return fail("confinement attribution received a mutating tool without an invocation id");
+			if (baselines.has(invocationId)) return fail(`duplicate confinement attribution invocation id: ${invocationId}`);
+			const baseline = snapshot();
+			if (typeof baseline !== "string") return baseline;
+			baselines.set(invocationId, baseline);
+			return accumulated;
+		},
+		afterTool(invocationId) {
+			if (terminal) return terminal;
+			const baseline = baselines.get(invocationId);
+			if (baseline === undefined) return fail(`missing confinement attribution baseline for invocation id: ${invocationId || "<missing>"}`);
+			baselines.delete(invocationId);
+			const after = snapshot();
+			if (typeof after !== "string") return after;
+			if (after !== baseline && accumulated.kind !== "error") accumulated = { kind: "violation", roots: [mainRoot] };
+			return accumulated;
+		},
+		finish() {
+			if (terminal) return terminal;
+			if (baselines.size > 0 && accumulated.kind !== "error") {
+				accumulated = { kind: "error", message: `unclosed confinement attribution invocation ids: ${[...baselines.keys()].sort().join(", ")}` };
+			}
+			terminal = accumulated;
+			return terminal;
+		},
+	};
+}
+
 // ── Pick result parsing ────────────────────────────────────────────────
 
 export type PickReason = "claimed" | "blocked" | "unknown-id" | "already-done" | "worktree-exists" | "already-claimed" | "queue-empty";

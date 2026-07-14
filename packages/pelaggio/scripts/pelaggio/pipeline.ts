@@ -29,6 +29,7 @@ import {
 	checkpoint,
 	classifyOutcome,
 	computeImplementTurns,
+	createMainCheckoutDeltaObserver,
 	createMutex,
 	detectResumeStep,
 	diffForbiddenRootSnapshots,
@@ -148,7 +149,9 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		console.log(`${A.dim(ts)} [${logLabel}] ${A.dim(elapsed)} ${msg}`);
 	};
 	if (allowDirtyMain) {
-		log("⚠ confinement.allow-dirty-main is active: main-checkout writes are not audited; sibling worktrees remain audited");
+		log(
+			"⚠ confinement.allow-dirty-main is active: operator main-checkout changes between tool windows are tolerated; Claude mutating-tool deltas and sibling changes remain audited, while Codex excludes main through its workspace boundary; simultaneous changes inside a tool window fail closed",
+		);
 	}
 
 	function forbiddenRootsForStep(cwd: string, ownWorktree?: string): string[] {
@@ -222,6 +225,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		let forbiddenBefore = new Map<string, string>();
 		let confinementRoots: string[] = [];
 		let confinementAuditError: string | undefined;
+		const mainCheckoutObserver = allowDirtyMain && itemId !== null && resolve(cwd) !== resolve(mainRepo) ? createMainCheckoutDeltaObserver(mainRepo) : undefined;
 		try {
 			forbiddenRoots = forbiddenRootsForStep(cwd, ownWorktree);
 		} catch (e) {
@@ -246,6 +250,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				parkSignal,
 				...(maxTurnsOverride !== undefined ? { maxTurnsOverride } : {}),
 				...(opts.signal ? { signal: opts.signal } : {}),
+				...(mainCheckoutObserver ? { mainCheckoutObserver } : {}),
 			},
 			emit,
 		);
@@ -253,18 +258,25 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		if (confinementRoots.length === 0 && confinementAuditError === undefined) {
 			try {
 				const forbiddenAfter = snapshotForbiddenRoots(forbiddenRoots);
-				confinementRoots = diffForbiddenRootSnapshots(forbiddenBefore, forbiddenAfter);
+				confinementRoots.push(...diffForbiddenRootSnapshots(forbiddenBefore, forbiddenAfter));
 			} catch (e) {
 				confinementRoots = forbiddenRoots.map((root) => resolve(root));
 				log(`⚠ confinement audit failed after ${name}: ${e instanceof Error ? e.message : String(e)}`);
 			}
 		}
 
+		const attributedMain = mainCheckoutObserver?.finish();
+		if (attributedMain?.kind === "error") {
+			confinementAuditError = `confinement attribution failed during ${name}: ${attributedMain.message}`;
+		} else if (attributedMain?.kind === "violation") {
+			confinementRoots.push(...attributedMain.roots);
+		}
+
 		let result = providerResult;
 		if (confinementAuditError !== undefined) {
 			result = { ...providerResult, ok: false, subtype: "error_confinement", text: confinementAuditError };
 		} else if (confinementRoots.length > 0) {
-			const roots = [...new Set(confinementRoots)].sort();
+			const roots = [...new Set(confinementRoots.map((root) => resolve(root)))].sort();
 			const text = `forbidden root changed during ${name}: ${roots.join(", ")}`;
 			log(`⚠ ${text}`);
 			result = {

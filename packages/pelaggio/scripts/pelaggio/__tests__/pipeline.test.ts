@@ -869,14 +869,12 @@ describe("runPipeline — worktree confinement audit", () => {
 		assert.equal(last?.subtype, "error_confinement");
 	});
 
-	it("allows concurrent main-checkout edits when explicitly configured", async () => {
+	it("fails on attributed main-checkout edits when explicitly configured", async () => {
 		const { mainRepo, worktree, listWorktrees } = makeConfinementRepos();
 		const parkSignal = makeParkSignal();
 		const { runStep } = createMockRunStep(
 			{
-				implement: { ok: true, writes: { "impl.txt": "x" }, sideEffect: () => writeFileSync(join(mainRepo, "operator.txt"), "x") },
-				"shakedown-code": { ok: true },
-				ship: { ok: true, text: `SHIP_DECISION\n{"target":"pull-request","headBranch":"feat/tool-99","prTitle":"Ship","prBody":"Body"}\nEND_SHIP_DECISION` },
+				implement: { ok: true, writes: { "impl.txt": "x" }, attributedSideEffect: () => writeFileSync(join(mainRepo, "escaped.txt"), "x") },
 			},
 			parkSignal,
 		);
@@ -891,8 +889,24 @@ describe("runPipeline — worktree confinement audit", () => {
 			dispatchStepEffects: async () => ({ appendText: "https://github.com/cdhorne/pelaggio/pull/99" }),
 		});
 
-		assert.equal(result.completed, true);
-		assert.equal(result.error, undefined);
+		assert.equal(result.completed, false);
+		assert.equal(result.error, "implement failed: confinement violation");
+	});
+
+	it("tolerates unchanged operator dirtiness outside mutating-tool windows", async () => {
+		const { mainRepo, worktree, listWorktrees } = makeConfinementRepos();
+		writeFileSync(join(mainRepo, "operator.txt"), "existing");
+		const parkSignal = makeParkSignal();
+		const { runStep } = createMockRunStep({ implement: { ok: false, subtype: "error_refusal", sideEffect: () => writeFileSync(join(mainRepo, "operator.txt"), "existing") } }, parkSignal);
+		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
+			runStep,
+			mainRepo,
+			listWorktrees,
+			allowDirtyMain: true,
+			appendLog: () => {},
+			roadmap: makeMockRoadmap(),
+		});
+		assert.equal(result.error, "implement refused (model declined the task)");
 	});
 
 	it("still fails on sibling writes when main auditing is disabled", async () => {
@@ -936,7 +950,7 @@ describe("runPipeline — worktree confinement audit", () => {
 		assert.equal(steps.at(-1)?.subtype, "error_confinement");
 	});
 
-	it("warns once per pipeline run when main auditing is disabled", async () => {
+	it("warns once per pipeline run with the refined dirty-main posture", async () => {
 		const worktree = makeTempGitRepo();
 		const parkSignal = makeParkSignal();
 		const messages: string[] = [];
@@ -948,7 +962,10 @@ describe("runPipeline — worktree confinement audit", () => {
 			mock.method(console, "log", () => {});
 			mock.method(console, "error", () => {});
 		}
-		assert.equal(messages.filter((message) => message.includes("main-checkout writes are not audited")).length, 1);
+		const warnings = messages.filter((message) => message.includes("allow-dirty-main"));
+		assert.equal(warnings.length, 1);
+		assert.match(warnings[0], /mutating-tool deltas/);
+		assert.match(warnings[0], /simultaneous/);
 	});
 
 	it("reports confinement instead of parked when a rate-limit step also dirties main", async () => {
@@ -960,7 +977,7 @@ describe("runPipeline — worktree confinement audit", () => {
 					ok: false,
 					subtype: "error_rate_limit",
 					park: { parked: true, limitType: "5h", resetsAt: Date.now() + 3_600_000 },
-					sideEffect: () => {
+					attributedSideEffect: () => {
 						const out = join(mainRepo, "park-pwned.txt");
 						execSync(`OUT=${JSON.stringify(out)}; printf x > "$OUT"`);
 					},
@@ -973,6 +990,7 @@ describe("runPipeline — worktree confinement audit", () => {
 			runStep,
 			mainRepo,
 			listWorktrees,
+			allowDirtyMain: true,
 			appendLog: () => {},
 			roadmap: makeMockRoadmap(),
 		});
