@@ -6,6 +6,7 @@ packages/*/node_modules/
 .claude/shipwreck.log
 *.log
 .DS_Store
+report.*.json
 lefthook-local.yml
 packages/web/dist/
 packages/web/.astro/
