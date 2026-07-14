@@ -1,6 +1,6 @@
 # Flow Event Catalog (#170)
 
-**Status: design record / target-state (planned).** This is the precise `#170` spec that the
+**Status: #170 substrate implemented; #177 emission and #178 subscription remain planned.** This is the precise `#170` spec that the
 `## Signals and the projection` section of [`flow.md`](./flow.md) points at. Where the two
 disagree, this file wins for the event catalog; `flow.md` remains the home for the wider flow
 rationale (policy seam, write-back, concurrency). Written before the first implement cycle so the
@@ -11,6 +11,24 @@ This spec is the product of an adversarial review pass (four independent reviewe
 supersedes three earlier assumptions that the review falsified: that the projection folds "the
 event log pelaggio already writes" (it writes a *cycle-outcome summary*, not an event log), that
 events should be *thin* by default, and that a single `seq` could be globally monotonic.
+
+### Implemented substrate API (#170)
+
+`packages/pelaggio/scripts/pelaggio/flow-events.ts` now publishes the closed
+`PELAGGIO_EVENT_TYPES` registry, `createEventWriter()`, `readEventLog()`, `foldEvents()`, and
+`projectEvents()` through the package entry point. Each writer owns one immutable
+`.dev/flow-events/<streamId>.jsonl` segment and rejects records above
+`MAX_FLOW_EVENT_BYTES` (64 KiB, including the newline). Diagnostics retain bounded structured
+details (`MAX_EVENT_DIAGNOSTIC_DETAILS`) alongside unbounded counts.
+
+Legacy cycle records are normalized in memory without changing their source bytes. Their stable,
+ULID-shaped compatibility IDs are domain-separated SHA-256/Crockford encodings of the canonical
+absolute source path, source line, and exact record bytes; the legacy stream identity is derived
+separately from the source path. The `legacy: true` discriminator prevents these compatibility IDs
+from being mistaken for timestamp-bearing ULIDs. Combined output is presentation-sorted by
+`(ts, streamId, seq, eventId)` and does not establish cross-stream causality. The initial projection
+contains historical accepted-event totals/by-type and diagnostics only; it intentionally exposes no
+readiness or live-WIP fields.
 
 ## The reframe: two field populations, opposite storage rules
 

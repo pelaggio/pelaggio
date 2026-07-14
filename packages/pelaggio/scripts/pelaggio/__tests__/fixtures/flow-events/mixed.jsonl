@@ -1,0 +1,2 @@
+{"v":1,"type":"pelaggio.claimed","eventId":"01J00000000000000000000001","streamId":"01J00000000000000000000002","seq":1,"ts":"2026-07-13T12:00:01.000Z","itemId":"170","claimId":null,"readinessEpisodeId":null,"executionId":"01J00000000000000000000004","causationId":null}
+{"ts":"2026-07-13T12:00:00.000Z","cycle":1,"item":"170","quick":false,"steps":[],"total_cost":1.5,"verdict":"APPROVE","completed":true,"error":null}
