@@ -56,3 +56,19 @@ The metaphor is an **explanatory model, not a vocabulary substitution system.**
   understand than plain language would.** Sequence/cadence language (from arpeggio)
   is the most natural fit for the pipeline; use it there, sparingly, and drop it as
   risk rises.
+
+## The harmonic reading is deliberately unclaimed
+
+The arpeggio has a second, vertical property — the notes belong to one chord, they
+*resolve.* Pelaggio claims only the horizontal one: **sequence makes autonomous work
+inspectable and interruptible.** The harmony is left on the table on purpose. It
+declares that the steps cohere without explaining why they do, and — worse for the
+trust thesis — it implies the parts are guaranteed to agree and resolve, when
+independent review earns its trust precisely by its capacity *not* to. Do not reach for
+"resolve," "in concert," "in tune," "harmonious," or "concord" around the pipeline,
+review, or receipts.
+
+The one sanctioned exception is **Joe.** "Keeping the pelagic in concordance" is his
+character/brand-layer job, not a property of the pipeline — see
+[`04-voice.md`](./04-voice.md) and [`../docs/brand/`](../docs/brand/). Concord belongs
+to the character, never to a status label, a verdict, or an evidence view.

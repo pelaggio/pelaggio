@@ -24,7 +24,8 @@ copy. Markers: **[A]** agent-verifiable · **[O]** owner-approval required.
    and `audit/surface-and-speaker-inventory.md`, every conclusion with a repo
    pointer. **[A]** discovered surfaces classified by speaker + presence; **[O]**
    any terminology change that renames a user-visible concept.
-2. **Strategy docs** — `00`–`05` (drafted). **[O]** final canonical terms
+2. **Strategy docs** — `00`–`02`, `04`–`05` (drafted; `03` reserved for the
+   product-language glossary). **[O]** final canonical terms
    (roadmap? run/cycle collapse? shakedown product-facing?); exposing "receipt".
 3. **Patterns** — the five pattern files, each demonstrated against ≥3 real
    current-copy entries. **[A]**
