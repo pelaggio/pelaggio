@@ -81,26 +81,6 @@ describe("MarkdownRoadmap.parseItemId", () => {
 	});
 });
 
-describe("MarkdownRoadmap.isQuickScope", () => {
-	const r = new MarkdownRoadmap({ repo: "/tmp" });
-
-	it("true for scope: S / XS", () => {
-		assert.equal(r.isQuickScope({ summaryText: "scope: S" }), true);
-		assert.equal(r.isQuickScope({ summaryText: "Scope: XS" }), true);
-	});
-
-	it("true for bug / fix: markers", () => {
-		assert.equal(r.isQuickScope({ summaryText: "bug in the parser" }), true);
-		assert.equal(r.isQuickScope({ summaryText: "fix: null pointer" }), true);
-	});
-
-	it("false for normal scope", () => {
-		assert.equal(r.isQuickScope({ summaryText: "scope: M" }), false);
-		assert.equal(r.isQuickScope({ summaryText: "scope: L" }), false);
-		assert.equal(r.isQuickScope({ summaryText: "a regular feature" }), false);
-	});
-});
-
 describe("MarkdownRoadmap.getItemPlan", () => {
 	it("returns plan path when plan file exists for worktree's branch", async () => {
 		const repo = seedRepo();

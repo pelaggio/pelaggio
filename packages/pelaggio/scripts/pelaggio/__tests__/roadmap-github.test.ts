@@ -6,7 +6,6 @@ import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { type GhRunner, GitHubIssuesRoadmap } from "../roadmap/github-issues.js";
 import { getRoadmapSource } from "../roadmap/index.js";
-import { isQuickScope } from "../roadmap/scope.js";
 
 function seedRepo(): string {
 	const dir = mkdtempSync(join(tmpdir(), "pelaggio-gh-roadmap-test-"));
@@ -77,47 +76,6 @@ describe("GitHubIssuesRoadmap.parseItemId", () => {
 
 	it("returns null when no match", async () => {
 		assert.equal(await r.parseItemId("nothing in here"), null);
-	});
-});
-
-describe("GitHubIssuesRoadmap.isQuickScope", () => {
-	const r = mk({ repo: "/tmp" });
-	it("true for scope: S / XS", () => {
-		assert.equal(r.isQuickScope({ summaryText: "scope: S" }), true);
-		assert.equal(r.isQuickScope({ summaryText: "Scope: XS" }), true);
-	});
-	it("true for bug / fix: markers", () => {
-		assert.equal(r.isQuickScope({ summaryText: "bug in parser" }), true);
-		assert.equal(r.isQuickScope({ summaryText: "fix: oops" }), true);
-	});
-	it("false for scope: M", () => {
-		assert.equal(r.isQuickScope({ summaryText: "scope: M" }), false);
-	});
-});
-
-describe("isQuickScope", () => {
-	it("lets explicit standard body scope override bug/fix text", () => {
-		assert.equal(isQuickScope({ item: { body: "Scope: M\n\nfix: bug" }, summaryText: "fixes a bug" }), false);
-	});
-
-	it("lets explicit standard scope label override bug labels and summary", () => {
-		assert.equal(isQuickScope({ item: { labels: ["scope: M", "bug"] }, summaryText: "fix: parser bug" }), false);
-	});
-
-	it("treats explicit quick scope labels as quick", () => {
-		assert.equal(isQuickScope({ item: { labels: ["scope: S"] } }), true);
-	});
-
-	it("falls back to summary text when item metadata has no decisive signal", () => {
-		assert.equal(isQuickScope({ item: { body: "Refactor the module" }, summaryText: "bug in flow" }), true);
-	});
-
-	it("uses standard body scope even with an empty summary", () => {
-		assert.equal(isQuickScope({ item: { body: "Scope: L\n\ndetails" }, summaryText: "" }), false);
-	});
-
-	it("keeps summary-only fix detection when no item is available", () => {
-		assert.equal(isQuickScope({ summaryText: "fix: small parser issue" }), true);
 	});
 });
 

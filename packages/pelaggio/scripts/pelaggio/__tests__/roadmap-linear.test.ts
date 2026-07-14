@@ -115,21 +115,6 @@ describe("LinearRoadmap.parseItemId", () => {
 	});
 });
 
-describe("LinearRoadmap.isQuickScope", () => {
-	const r = mk({ repo: "/tmp" });
-	it("true for scope: S / XS", () => {
-		assert.equal(r.isQuickScope({ summaryText: "scope: S" }), true);
-		assert.equal(r.isQuickScope({ summaryText: "Scope: XS" }), true);
-	});
-	it("true for bug / fix: markers", () => {
-		assert.equal(r.isQuickScope({ summaryText: "bug in parser" }), true);
-		assert.equal(r.isQuickScope({ summaryText: "fix: oops" }), true);
-	});
-	it("false for scope: M", () => {
-		assert.equal(r.isQuickScope({ summaryText: "scope: M" }), false);
-	});
-});
-
 describe("LinearRoadmap.getItem", () => {
 	it("exposes labels from the issue response", async () => {
 		const { api } = makeStub({

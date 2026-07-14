@@ -6,8 +6,8 @@ import { join } from "node:path";
 import { after, before, describe, it, mock } from "node:test";
 import { WORKTREE_PREFIX } from "../config.js";
 import { EffectsManifestError } from "../effects.js";
+import { FifoPolicy } from "../flow-policy.js";
 import { runOrchestrator, runPipeline } from "../pipeline.js";
-import { isQuickScope } from "../roadmap/scope.js";
 import type { ShipBookkeepingResult } from "../ship/index.js";
 import { getShipTarget } from "../ship/index.js";
 import type { Flags, ParkSignal, PipelineOpts } from "../types.js";
@@ -1803,8 +1803,9 @@ describe("runPipeline — pick step", () => {
 				};
 			},
 			resolvePlanPath: () => planPath,
-			isQuickScope,
 		});
+		const fifoPolicy = new FifoPolicy();
+		let quickScopeCalls = 0;
 		const { runStep, calls } = createMockRunStep(
 			{
 				pick: {
@@ -1832,6 +1833,13 @@ describe("runPipeline — pick step", () => {
 		const result = await runPipeline(pickOpts(), parkSignal, baseFlags, {
 			runStep,
 			roadmap,
+			flowPolicy: {
+				evaluate: (snapshot) => fifoPolicy.evaluate(snapshot),
+				isQuickScope: (input) => {
+					quickScopeCalls++;
+					return fifoPolicy.isQuickScope(input);
+				},
+			},
 			mainRepo: repo,
 			resolveWorktree: (id) => join(parent, `${WORKTREE_PREFIX}${id.toLowerCase()}`),
 			listWorktrees: () => [],
@@ -1840,6 +1848,7 @@ describe("runPipeline — pick step", () => {
 			},
 			runShipBookkeeping: noopBookkeeping,
 		});
+		assert.equal(quickScopeCalls, 1);
 
 		assert.equal(result.completed, true);
 		assert.deepEqual(
