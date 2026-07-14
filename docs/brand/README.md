@@ -74,6 +74,10 @@ you can check. When they collide with convenience, they win.
 | **Evidence** | Where can I check? | commits, diff, passing tests — inspectable, not asserted |
 | **Control** | When do I step in? | you always know when the call is yours |
 
+This posture wasn't reverse-engineered to fit the metaphor. The
+pick → plan → implement → review → ship cycle and its propose-then-confirm discipline
+came out of Fathom, the app Pelaggio split from; the control model predates the name.
+
 ## 5. Voice (summary)
 
 Full guide: [`../../voice/04-voice.md`](../../voice/04-voice.md). The short form:
@@ -90,9 +94,12 @@ Full guide: [`../../voice/04-voice.md`](../../voice/04-voice.md). The short form
 ## 6. Joe
 
 Joe is Pelaggio's **guide at the boundary of supervision** — the pelican who
-stands where onshore meets offshore. His character is in **conduct, not
-performance**: warm, dry, composed under failure; the colleague who already
-handled it. Little-Mermaid-critter warmth, none of the flailing.
+stands where onshore meets offshore, keeping the pelagic in concordance. His
+character is in **conduct, not performance**: an excitable little seabird, curious
+and big-hearted, doing his best — the honest shape of an autonomous agent, with the
+arpeggio as the rail that keeps him honest. When something breaks, his eyes go white
+and he recites the recovery manual, then he's back to himself; the composure is a mode
+he drops into, not his temperament.
 
 - **Presence is rationed.** Silent marker most of the time; he speaks only at
   orientation, handoff, and recovery. The default state is Joe quiet.
@@ -158,9 +165,10 @@ past the ceiling of hand-drawn SVG while staying on-model.
 **Mascot — Joe character sheet:**
 
 > Character sheet for "Joe", the mascot of Pelaggio (a control plane for coding
-> agents). Joe is a pelican — warm, dry-witted, competent; the colleague who
-> already handled it. Little-Mermaid-sea-critter warmth, but composed, never
-> bumbling or panicked. Flat geometric vector, clean rounded shapes, one
+> agents). Joe is a pelican — an excitable, curious, big-hearted little seabird,
+> warm and eager rather than slick, doing his best; bright-eyed enthusiasm by
+> default, with calm competence surfacing only under pressure. Flat geometric
+> vector, clean rounded shapes, one
 > continuous beak, NO gradients / gloss / feather detail. Foam-white body
 > `#FBF9F2`, amber beak and pouch `#E7862A`, calm dark eye, subtle unbothered
 > brow. Three poses on one sheet: (1) heading out, leaning toward open water;

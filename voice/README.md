@@ -64,6 +64,7 @@ voice/
 ├── 00-strategy.md        # posture, promise, trust model          (done)
 ├── 01-metaphor.md        # arpeggio (spine) + pelagos (character) (done)
 ├── 02-speakers.md        # System · Harness · Review · Joe · source (done)
+├── 03-product-language.md # glossary, hierarchy, state labels      (reserved)
 ├── 04-voice.md           # attributes, hard rules, the tells       (done)
 ├── 05-tone-and-risk.md   # register shifts by risk                 (done)
 ├── SPEC.md               # condensed plan of record                (done)
