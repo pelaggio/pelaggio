@@ -36,6 +36,7 @@ describe("loadConfig — missing / empty", () => {
 		assert.deepEqual(cfg.turnLimits, DEFAULTS.turnLimits);
 		assert.deepEqual(cfg.effort, DEFAULTS.effort);
 		assert.deepEqual(cfg.modelProfiles, DEFAULTS.modelProfiles);
+		assert.equal(cfg.confinement.allowDirtyMain, false);
 		assert.deepEqual(cfg.profileCodexModels, {});
 	});
 
@@ -46,6 +47,26 @@ describe("loadConfig — missing / empty", () => {
 		assert.deepEqual(cfg.budgets, DEFAULTS.budgets);
 		assert.deepEqual(cfg.modelProfiles, DEFAULTS.modelProfiles);
 		assert.deepEqual(cfg.profileCodexModels, {});
+	});
+});
+
+describe("loadConfig — confinement", () => {
+	it("accepts explicit boolean values", () => {
+		for (const value of [true, false]) {
+			const repo = mkdtempSync(join(tmpdir(), "pelaggio-config-"));
+			const path = join(repo, ".pelaggio.yml");
+			writeFileSync(path, `confinement:\n  allow-dirty-main: ${value}\n`);
+			assert.equal(loadConfig({ repo, configPath: path }).confinement.allowDirtyMain, value);
+		}
+	});
+
+	it("rejects non-boolean values", () => {
+		for (const value of ['"true"', "1", "{}"]) {
+			const repo = mkdtempSync(join(tmpdir(), "pelaggio-config-"));
+			const path = join(repo, ".pelaggio.yml");
+			writeFileSync(path, `confinement:\n  allow-dirty-main: ${value}\n`);
+			assert.throws(() => loadConfig({ repo, configPath: path }), /confinement\.allow-dirty-main.*boolean/);
+		}
 	});
 });
 

@@ -98,6 +98,8 @@ export interface ResolvedConfig {
 	/** PR review poster. `ci` preserves the GitHub Actions gate; `local` runs a trusted local sweep
 	 *  and posts commit statuses with context `review`. `statuslessAfter` is parsed by consumers. */
 	review: { runner: ReviewRunner; statuslessAfter: string };
+	/** Worktree confinement policy. Allowing a dirty main checkout disables only main-root auditing. */
+	confinement: { allowDirtyMain: boolean };
 	/** Outbound run-outcome notifications. Disabled when `url` is empty (the default). */
 	notify: NotifyConfig;
 }
@@ -159,6 +161,7 @@ export const DEFAULTS = {
 	// the off-switch, mirroring the CI `AUTOPILOT_AUTO_REVISE=false` off-switch.
 	revise: { local: true },
 	review: { runner: "ci", statuslessAfter: "2h" },
+	confinement: { allowDirtyMain: false },
 	// Notifications off by default (empty url). Enabling only `notify.url` turns on every
 	// event with the `json` format; `format: ntfy` + a topic URL gives ntfy.sh pushes.
 	// `NOTIFY_EVENTS` is the single source of the event list (validation uses it too) —
@@ -496,6 +499,21 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		}
 	}
 
+	let confinementAllowDirtyMain: boolean = DEFAULTS.confinement.allowDirtyMain;
+	const confinementBlock = yml.confinement;
+	if (confinementBlock !== undefined) {
+		if (!isPlainObject(confinementBlock)) {
+			throw new Error(`${configPath}: expected \`confinement\` to be a map`);
+		}
+		const allowDirtyMain = confinementBlock["allow-dirty-main"];
+		if (allowDirtyMain !== undefined) {
+			if (typeof allowDirtyMain !== "boolean") {
+				throw new Error(`${configPath}: expected \`confinement.allow-dirty-main\` to be a boolean, got ${typeof allowDirtyMain}`);
+			}
+			confinementAllowDirtyMain = allowDirtyMain;
+		}
+	}
+
 	// notify.*: outbound run-outcome webhook. Disabled by default (url: "").
 	let notifyUrl: string = DEFAULTS.notify.url;
 	let notifyFormat: NotifyFormat = DEFAULTS.notify.format;
@@ -550,6 +568,7 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		park: { autoResume: parkAutoResume, maxWait: parkMaxWait, unknownResetWait: parkUnknownResetWait },
 		revise: { local: reviseLocal },
 		review: { runner: reviewRunner, statuslessAfter: reviewStatuslessAfter },
+		confinement: { allowDirtyMain: confinementAllowDirtyMain },
 		notify: { url: notifyUrl, format: notifyFormat, events: notifyEvents },
 	};
 }
@@ -600,3 +619,4 @@ export const ROADMAP_GITHUB: GithubRoadmapConfig = CONFIG.roadmapGithub;
 export const ROADMAP_LINEAR: LinearRoadmapConfig = CONFIG.roadmapLinear;
 export const REVISE_LOCAL: boolean = CONFIG.revise.local;
 export const REVIEW_CONFIG: { runner: ReviewRunner; statuslessAfter: string } = CONFIG.review;
+export const CONFINEMENT_CONFIG: { allowDirtyMain: boolean } = CONFIG.confinement;

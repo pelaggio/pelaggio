@@ -2,6 +2,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { basename, extname, resolve } from "node:path";
 import {
 	CONFIG,
+	CONFINEMENT_CONFIG,
 	DEFAULT_SHIP_TARGET,
 	isPipelineStep,
 	LOG_PATH,
@@ -111,6 +112,8 @@ export interface PipelineDeps {
 	writeEffectsManifest?: typeof writeEffectsManifestDefault;
 	/** Effects-manifest dispatcher. Defaults to the production registry dispatcher; injectable for fail-closed tests. */
 	dispatchStepEffects?: typeof dispatchStepEffectsDefault;
+	/** Override the configured main-checkout confinement exception. */
+	allowDirtyMain?: boolean;
 }
 
 export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, flags: Flags, deps: PipelineDeps = {}): Promise<CycleResult> {
@@ -124,6 +127,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	const runShipBookkeeping = deps.runShipBookkeeping ?? runShipBookkeepingDefault;
 	const writeEffectsManifest = deps.writeEffectsManifest ?? writeEffectsManifestDefault;
 	const dispatchStepEffects = deps.dispatchStepEffects ?? dispatchStepEffectsDefault;
+	const allowDirtyMain = deps.allowDirtyMain ?? CONFINEMENT_CONFIG.allowDirtyMain;
 	// The cycle's dollar ceiling. A turn-exhaustion retry (issue #33) is funded up to the
 	// step's configured budget again, so the budget guard skips a retry we can't fully fund.
 	// A non-finite value (unset / unparseable --budget) disables the dollar gate.
@@ -139,6 +143,9 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		const ts = new Date().toLocaleTimeString("en-CA", { hour12: false });
 		console.log(`${A.dim(ts)} [${logLabel}] ${A.dim(elapsed)} ${msg}`);
 	};
+	if (allowDirtyMain) {
+		log("⚠ confinement.allow-dirty-main is active: main-checkout writes are not audited; sibling worktrees remain audited");
+	}
 
 	function forbiddenRootsForStep(cwd: string, ownWorktree?: string): string[] {
 		const cwdAbs = resolve(cwd);
@@ -147,8 +154,19 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		// Main-repo-based steps (pick, shipwreck) legitimately write inside mainRepo
 		// itself — and shipwreck legitimately finishes a squash/commit in the item's
 		// own worktree (SKILL.md states 3c/3d) — but must not touch sibling worktrees.
-		if (cwdAbs === mainAbs) return listWorktrees().filter((root) => !exempt.has(resolve(root)));
-		return [mainRepo, ...listWorktrees()].filter((root) => !exempt.has(resolve(root)));
+		// `listWorktrees()` already includes mainRepo, so prepend it only when it must be
+		// audited and dedup by resolved path. `allowDirtyMain` drops mainRepo from the set.
+		const candidates = cwdAbs === mainAbs ? listWorktrees() : [mainRepo, ...listWorktrees()];
+		const seen = new Set<string>();
+		const roots: string[] = [];
+		for (const root of candidates) {
+			const abs = resolve(root);
+			if (seen.has(abs) || exempt.has(abs)) continue;
+			if (allowDirtyMain && abs === mainAbs) continue;
+			seen.add(abs);
+			roots.push(root);
+		}
+		return roots;
 	}
 
 	async function step(
@@ -199,12 +217,12 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		let forbiddenRoots: string[] = [];
 		let forbiddenBefore = new Map<string, string>();
 		let confinementRoots: string[] = [];
+		let confinementAuditError: string | undefined;
 		try {
 			forbiddenRoots = forbiddenRootsForStep(cwd, ownWorktree);
 		} catch (e) {
-			forbiddenRoots = [mainRepo];
-			confinementRoots = [resolve(mainRepo)];
-			log(`⚠ confinement audit failed to enumerate roots before ${name}: ${e instanceof Error ? e.message : String(e)}`);
+			confinementAuditError = `confinement audit failed to enumerate roots before ${name}: ${e instanceof Error ? e.message : String(e)}`;
+			log(`⚠ ${confinementAuditError}`);
 		}
 		try {
 			forbiddenBefore = snapshotForbiddenRoots(forbiddenRoots);
@@ -228,7 +246,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			emit,
 		);
 
-		if (confinementRoots.length === 0) {
+		if (confinementRoots.length === 0 && confinementAuditError === undefined) {
 			try {
 				const forbiddenAfter = snapshotForbiddenRoots(forbiddenRoots);
 				confinementRoots = diffForbiddenRootSnapshots(forbiddenBefore, forbiddenAfter);
@@ -239,7 +257,9 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		}
 
 		let result = providerResult;
-		if (confinementRoots.length > 0) {
+		if (confinementAuditError !== undefined) {
+			result = { ...providerResult, ok: false, subtype: "error_confinement", text: confinementAuditError };
+		} else if (confinementRoots.length > 0) {
 			const roots = [...new Set(confinementRoots)].sort();
 			const text = `forbidden root changed during ${name}: ${roots.join(", ")}`;
 			log(`⚠ ${text}`);
