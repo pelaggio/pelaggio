@@ -84,14 +84,29 @@ thrashes), the **dependency graph** (edges are upstream free-text `deps`; the
 local value is the reasoning — unblocking-value, critical path, cycle
 detection), and an **aging clock**.
 
-These are not a new store. They are a **projection** over the event log
-pelaggio already writes. The memory hierarchy:
+These are not a new store. The projection folds a **purpose-built flow-event
+log** (`#170`). pelaggio today writes only a *cycle-outcome summary*
+(`.dev/pelaggio-log.jsonl`, one terminal line per cycle), **not** the transition
+log this needs; #170 adds `.dev/flow-events/` (one append-only segment file per
+writer process) as *separate* storage sharing one envelope and one reader library
+with the summary log. The memory hierarchy:
 
 ```
 L1  in-memory projection      this process's read-model, folded on startup
-L2  .dev/pelaggio-log.jsonl   this machine's history — ephemeral, rebuildable
+L2  .dev/flow-events/         this machine's transition history (per-writer segments)
+    .dev/pelaggio-log.jsonl   the cycle-log; gitignored, ephemeral, local-only
 L3  the ticket system         durable, portable, shared — via write-back
 ```
+
+**Two populations, opposite storage rules** (full #170 spec:
+[`flow-event-catalog.md`](./flow-event-catalog.md)): *current-state* fields
+(readiness, live WIP, `lifecycleState`) are non-authoritative and reconciled from
+git/provider on read — much of it derivable today with no events at all;
+*historical/time-series* fields (lead/cycle time, flow efficiency, aging) are
+authoritative in the append-log and must be carried by **fat, self-contained**
+events, because the transition being measured mutates or deletes its own join
+target (ship deletes the `feat/<id>` branch, so "claimed-at" is unrecoverable
+later).
 
 There is **no persisted L1.5 ledger file.** Building one re-imports every
 problem the append-only log does not have (cache invalidation, drift, and — in a
@@ -101,11 +116,13 @@ telemetry** — telemetry-out and write-back are one mechanism seen from both en
 
 Correctness rules for the projection:
 
-- **Non-authoritative.** git (branch exists ⇒ in-progress) and the provider
-  (closed ⇒ done) are ground truth for claim/done. The projection is
-  authoritative only for *derived metrics*. This keeps it from becoming the
-  git-native claims registry the invariants forbid — it is a cache, rebuildable
-  from log + git + provider at any time.
+- **Non-authoritative for current state.** git (branch exists ⇒ in-progress) and
+  the provider (closed ⇒ done) are ground truth for claim/done; the projection's
+  *current-state* fields are a cache, rebuildable from git + provider at any time.
+  Its *historical metrics* are the opposite — authoritative in the append-log and
+  NOT rebuildable by join (the measured transition deletes its own join target),
+  so those events must be fat and self-contained. Either way the projection is
+  never the git-native claims registry the invariants forbid.
 - **Reconcile on startup.** A cycle that dies mid-transition leaves a dangling
   state; reconcile against ground truth, ground truth wins. Never diverge
   silently.
@@ -120,15 +137,26 @@ Correctness rules for the projection:
   cost grows with it. Snapshot the projection periodically as a pure cache
   (rebuild from snapshot + tail) or rotate — the snapshot is an optimization,
   never truth.
-- **Versioned events.** Type the events and version them from day one (tolerant
-  reader) so old logs fold under new code.
+- **Versioned envelope, tolerant reader.** One envelope version now; per-event-
+  type `schemaVersion` is deferred until an event actually diverges (the tolerant
+  reader makes that non-breaking). The reader skips unknown types *with a
+  diagnostic* — never silently — and back-compatibly reads untyped legacy cycle
+  records so existing `/stats` history never vanishes.
+- **Identity, not a global clock.** Events carry a unique `eventId` and a
+  writer-local `(streamId, seq)`; `seq` is never globally monotonic (the server
+  spawns one process per run against one repo log). `claimId` is delivery
+  identity; `executionId` is per-process. See the catalog for the full contract.
 
 Starting taxonomy for the first item to refine (not a frozen API): events
 `became-ready`, `claimed`, `plan-published`, `plan-rejected`, `shakedown-fail`,
-`parked`, `in-review`, `blocked-discovered`, `shipped`. Per-item projection
-record: `lifecycleState`, `firstReadyAt` (logical), `agingTicks`, outcome counts
+`suspended`/`resumed` (paired, with a typed reason), `in-review`,
+`blocked-discovered`, `claim-released`, `shipped`. Per-item projection record:
+`lifecycleState`, `firstReadyAt` (logical), `agingTicks`, outcome counts
 (`parks`, `shakedownFails`, `planRejections`), and `jobSize` (sticky, plan-time).
-Every event carries `schemaVersion` for the tolerant reader.
+The envelope, identity/ordering contract, fat-vs-derive split, emission model,
+and extension seam are the load-bearing #170 spec in
+[`flow-event-catalog.md`](./flow-event-catalog.md); this is only its starting
+event list.
 
 The single-orchestrator model makes projection reads in-process and serialized —
 no distributed-consistency problem. If `packages/server` ever fans out multiple
@@ -247,8 +275,22 @@ here so they do not have to be re-litigated.
 
 ## Invariants (mirror to AGENTS.md)
 
-- Flow projection is a non-authoritative read-model; git + provider are ground
-  truth for claim/done. It is rebuildable, never a claims registry.
+- Flow projection is a non-authoritative read-model for *current state* (git +
+  provider are ground truth for claim/done, rebuildable, never a claims registry);
+  its *historical metrics* are authoritative in the append-log and carried by fat,
+  self-contained events — never re-derived by joining mutable git/provider.
+- Flow-event identity is a unique `eventId` plus writer-local `(streamId, seq)`;
+  `seq` is never globally monotonic. `claimId` is delivery identity,
+  `readinessEpisodeId` correlates the pre-claim readiness window, `executionId` is
+  per-process. Events emit harness-side by three producers — effect-confirmed
+  (manifest-sourced), git-mutation (intent/confirmation bracket), and derived
+  (readiness-diff) — never from "the step completed."
+- Flow events live under `.dev/flow-events/` as one segment per writer process
+  (single-writer-per-file, no shared-file concurrent append), separate from the
+  cycle-log, sharing one envelope + reader library; they are local-only telemetry;
+  `type` is namespaced (`pelaggio.*` closed/core-validated, consumer events
+  vendor-prefixed and schema-registered), and the reader is tolerant-with-diagnostic,
+  never silent. Full spec: `docs/agent-context/flow-event-catalog.md`.
 - `FlowPolicy` is provider-neutral: strategies see a snapshot, not storage.
   Storage leverages the provider; policy is pelaggio's.
 - An initiative is a projected swimlane/`group`, never a pelaggio-owned object.

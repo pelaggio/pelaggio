@@ -44,7 +44,9 @@ Run targeted tests with `npx tsx --test <test-file>`. Tests use `node:test`, not
 - Access the roadmap via `npx pelaggio roadmap ...`; skills never read roadmap storage or issue trackers directly.
 - `.agents/skills` must stay a symlink to the canonical `.claude/skills` tree so Codex sees the same skills without drift.
 - No `preinstall`, `install`, or `postinstall` scripts in package manifests.
-- (flow, planned) Flow projection is a non-authoritative read-model; git + provider are ground truth for claim/done. Rebuildable, never a claims registry.
+- (flow, planned) Flow projection is non-authoritative for current state (git + provider are ground truth for claim/done, never a claims registry); historical metrics are authoritative in the append-log via fat, self-contained events — never re-derived by joining mutable git/provider.
+- (flow, planned) Flow-event identity is a unique `eventId` + writer-local `(streamId, seq)`; `seq` is never globally monotonic. Events emit harness-side by three producers — effect-confirmed (manifest-sourced), git-mutation (intent/confirmation bracket), and derived (readiness-diff) — never from "the step completed".
+- (flow, planned) Flow events live under `.dev/flow-events/` as one append-only segment per writer process (single-writer-per-file, no shared-file concurrent append; separate from the cycle-log, shared envelope + reader); event `type` is namespaced (`pelaggio.*` closed/core-validated, consumer events vendor-prefixed + schema-registered); the reader is tolerant-with-diagnostic and back-compatibly reads untyped legacy cycle records.
 - (flow, planned) `FlowPolicy` is provider-neutral — strategies see a snapshot, not storage. Storage leverages the provider; policy is pelaggio's.
 - (flow, planned) An initiative is a projected swimlane/`group`, never a pelaggio-owned object.
 - (flow, planned) Write-back is typed and item-scoped; agents never issue free-form tracker mutations, and it runs off the hot path.
@@ -61,6 +63,7 @@ Read only the detail docs needed for the task:
 - `docs/agent-context/pipeline.md`: pipeline steps, step-provider seam, worktree isolation + dep sharing, plan-polish and self-referential roadmap guards, hook reachability, phantom-ship guard, rate-limit parking.
 - `docs/agent-context/roadmap-and-ship.md`: roadmap adapters + CLI bridge, claims, ship targets, direct-push bookkeeping, PR review and revise loops.
 - `docs/agent-context/flow.md`: (design) flow-policy seam, projection + memory hierarchy, write-back, declared write-sets + landing queue, concurrency model.
+- `docs/agent-context/flow-event-catalog.md`: (design) the `#170` spec — event envelope + identity/ordering contract, the fat-historical vs. derive-on-read split, separate-file storage + dual-format reader, effects-sourced emission, and the consumer extension seam.
 - `docs/agent-context/skills.md`: skill layout, canonical tree, bilingual substrate, frontmatter, includes, project-context extension point.
 - `docs/agent-context/testing-and-quality.md`: test commands, lint rules, rubric, review-shape rationale.
 - `docs/config.md`: `.pelaggio.yml` schema.
