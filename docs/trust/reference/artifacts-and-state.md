@@ -16,7 +16,7 @@ last_reviewed: 2026-07-08
 | Verbose raw logs | `.dev/*.log` when verbose/trace paths are used | Raw child stdout/stderr/transcripts. | Gitignored/local; not scrubbed today. | `TC-001`, `TC-014` |
 | Plans for GitHub/Linear materialization | `.dev/plans/<id>.md` | Adapter-fetched or written plan bodies. | Local working state; implement treats approved plans as read-only. | `TC-011`, `TC-015` |
 | Markdown-roadmap plans | `docs/plans/` | Tracked plan files for markdown roadmap mode. | Implement must not polish these; ship/bookkeeping owns lifecycle. | `TC-011`, `TC-015` |
-| Worktrees | Sibling worktree paths chosen by roadmap adapter/prefix | Item branch checkout, edits, test output, local diffs. | Remove after preserving needed work. A post-step confinement audit fails the step on any change to the main checkout or a sibling worktree. | `TC-011`, `TC-015` |
+| Worktrees | Sibling worktree paths chosen by roadmap adapter/prefix | Item branch checkout, edits, test output, local diffs. | Remove after preserving needed work. The audit always gates siblings and, by default, main; `confinement.allow-dirty-main` explicitly excludes main. | `TC-011`, `TC-015` |
 | Feature branches | `feat/<id...>` | Item commits and pushed PR branch. | Delete after merge/close per repo policy. | `TC-012`, `TC-015` |
 | PR comments/status | GitHub PR | Review gate output, metrics marker, plan/comment updates. | Retained by GitHub; used for audit and gate state. | `TC-003`, `TC-006`, `TC-013` |
 | Roadmap adapter state | GitHub issues, Linear, or markdown files | Claims, item state, plan publication, done/archive operations. | Owned by configured adapter/source. | `TC-006`, `TC-015` |

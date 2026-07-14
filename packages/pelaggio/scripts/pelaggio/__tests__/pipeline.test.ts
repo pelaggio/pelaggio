@@ -853,6 +853,7 @@ describe("runPipeline — worktree confinement audit", () => {
 				logs.push(e);
 			},
 			roadmap: makeMockRoadmap(),
+			allowDirtyMain: false,
 		});
 
 		assert.equal(result.completed, false);
@@ -866,6 +867,88 @@ describe("runPipeline — worktree confinement audit", () => {
 		assert.equal(last?.name, "implement");
 		assert.equal(last?.ok, false);
 		assert.equal(last?.subtype, "error_confinement");
+	});
+
+	it("allows concurrent main-checkout edits when explicitly configured", async () => {
+		const { mainRepo, worktree, listWorktrees } = makeConfinementRepos();
+		const parkSignal = makeParkSignal();
+		const { runStep } = createMockRunStep(
+			{
+				implement: { ok: true, writes: { "impl.txt": "x" }, sideEffect: () => writeFileSync(join(mainRepo, "operator.txt"), "x") },
+				"shakedown-code": { ok: true },
+				ship: { ok: true, text: `SHIP_DECISION\n{"target":"pull-request","headBranch":"feat/tool-99","prTitle":"Ship","prBody":"Body"}\nEND_SHIP_DECISION` },
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
+			runStep,
+			mainRepo,
+			listWorktrees,
+			allowDirtyMain: true,
+			appendLog: () => {},
+			roadmap: makeMockRoadmap(),
+			dispatchStepEffects: async () => ({ appendText: "https://github.com/cdhorne/pelaggio/pull/99" }),
+		});
+
+		assert.equal(result.completed, true);
+		assert.equal(result.error, undefined);
+	});
+
+	it("still fails on sibling writes when main auditing is disabled", async () => {
+		const { parent, mainRepo, worktree } = makeConfinementRepos();
+		const sibling = join(parent, `${WORKTREE_PREFIX}sibling-opt-out`);
+		execSync(`git worktree add -q -b feat/sibling-opt-out "${sibling}"`, { cwd: mainRepo });
+		const parkSignal = makeParkSignal();
+		const { runStep } = createMockRunStep({ implement: { ok: true, sideEffect: () => writeFileSync(join(sibling, "foreign.txt"), "x") } }, parkSignal);
+		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
+			runStep,
+			mainRepo,
+			listWorktrees: () => [mainRepo, worktree, sibling],
+			allowDirtyMain: true,
+			appendLog: () => {},
+			roadmap: makeMockRoadmap(),
+		});
+		assert.equal(result.error, "implement failed: confinement violation");
+	});
+
+	it("fails closed when sibling worktrees cannot be enumerated under the opt-out", async () => {
+		const { mainRepo, worktree } = makeConfinementRepos();
+		const parkSignal = makeParkSignal();
+		const { runStep, calls } = createMockRunStep({ implement: { ok: true } }, parkSignal);
+		const logs: Array<Record<string, unknown>> = [];
+		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
+			runStep,
+			mainRepo,
+			listWorktrees: () => {
+				throw new Error("inventory unavailable");
+			},
+			allowDirtyMain: true,
+			appendLog: (entry) => logs.push(entry),
+			roadmap: makeMockRoadmap(),
+		});
+		assert.deepEqual(
+			calls.map((call) => call.step),
+			["implement"],
+		);
+		assert.equal(result.error, "implement failed: confinement violation");
+		const steps = logs[0].steps as Array<{ subtype?: string; text?: string }>;
+		assert.equal(steps.at(-1)?.subtype, "error_confinement");
+	});
+
+	it("warns once per pipeline run when main auditing is disabled", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const messages: string[] = [];
+		mock.method(console, "log", (message: string) => messages.push(message));
+		try {
+			await runPipeline({ ...baseOpts(worktree), dryRun: true }, parkSignal, { ...baseFlags, "dry-run": true }, { mainRepo: worktree, listWorktrees: () => [], allowDirtyMain: true, roadmap: makeMockRoadmap() });
+		} finally {
+			mock.restoreAll();
+			mock.method(console, "log", () => {});
+			mock.method(console, "error", () => {});
+		}
+		assert.equal(messages.filter((message) => message.includes("main-checkout writes are not audited")).length, 1);
 	});
 
 	it("reports confinement instead of parked when a rate-limit step also dirties main", async () => {
@@ -1055,6 +1138,7 @@ describe("runPipeline — worktree confinement audit", () => {
 			runStep,
 			mainRepo,
 			listWorktrees: () => [mainRepo, sibling],
+			allowDirtyMain: true,
 			appendLog: (e) => {
 				logs.push(e);
 			},

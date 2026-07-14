@@ -34,6 +34,10 @@ models.profiles.<name>.<section>.<step>  >  <section>.<step> (global yml)  >  de
 worktree:
   prefix: "myproj-"            # default: `${basename(REPO)}-`
 
+confinement:
+  allow-dirty-main: false       # default: false. true disables main-checkout auditing
+                                # for worktree steps; sibling worktrees remain hard-gated.
+
 ship:
   target: pull-request          # default: pull-request
                                 # values: direct-push | pull-request | auto-merge-pr
@@ -140,6 +144,8 @@ models:
     #   turn-limits:
     #     plan: 120
 ```
+
+`confinement.allow-dirty-main: true` is an explicit reduction in protection for operators who edit the main checkout while Pelaggio runs. Pelaggio will not detect provider writes into that checkout, although it continues to fail closed on sibling-worktree changes and audit errors. Use a separate clone for Pelaggio when concurrent editing and full main-checkout enforcement are both required.
 
 ## Merge semantics
 

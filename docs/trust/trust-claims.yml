@@ -121,14 +121,14 @@ claims:
     last_verified: "2026-07-08"
 
   - id: TC-011
-    claim: "Writes are confined to the work item's own worktree: any change to the main checkout or a sibling worktree fails the step — one lane can't corrupt another."
+    claim: "By default, writes are confined to the work item's own worktree: main-checkout or sibling changes fail the step. The explicit dirty-main opt-out retains sibling enforcement."
     status: guarantee          # shipped: pipeline.ts post-step confinement audit (#105/#111/#125), tested
     applies_to: ">=0.1.0"
-    mechanism: "Post-step hard gate (pipeline.ts): forbiddenRootsForStep enumerates the main checkout + sibling worktrees (minus the item's own worktree); snapshotForbiddenRoots hashes their git state before the step and diffForbiddenRootSnapshots re-checks after. Any changed forbidden root sets subtype 'error_confinement' and fails the step. Because it diffs git state (committed + uncommitted), it catches the sibling/relative/$HOME/cd/symlink Bash escapes a PreToolUse string-check missed."
+    mechanism: "Post-step hard gate (pipeline.ts): forbiddenRootsForStep enumerates the main checkout + sibling worktrees (minus the item's own worktree); snapshotForbiddenRoots hashes their git state before the step and diffForbiddenRootSnapshots re-checks after. confinement.allow-dirty-main explicitly removes only main for item-worktree steps, warns once, and leaves sibling enumeration/snapshots fail-closed."
     evidence_command: "grep -q 'snapshotForbiddenRoots' packages/pelaggio/scripts/pelaggio/pipeline.ts && grep -q 'diffForbiddenRootSnapshots' packages/pelaggio/scripts/pelaggio/pipeline.ts && grep -q 'error_confinement' packages/pelaggio/scripts/pelaggio/pipeline.ts && node --import tsx --test --test-name-pattern='confinement' packages/pelaggio/scripts/pelaggio/__tests__/pipeline.test.ts >/dev/null 2>&1"
-    test_file: "packages/pelaggio/scripts/pelaggio/__tests__/pipeline.test.ts (worktree confinement audit: sibling-worktree, dirty-main, and shipwreck own-worktree-exemption cases)"
+    test_file: "packages/pelaggio/scripts/pelaggio/__tests__/pipeline.test.ts (default dirty-main failure; opt-in concurrent-main success; sibling and enumeration failures under opt-in)"
     failure_mode: "fail the step, loudly (subtype error_confinement)"
-    known_limits: "The audit is git-state-based over the main checkout and sibling worktrees. Writes to paths outside any tracked git root (e.g. $HOME, /tmp) are not caught here; that residual is bounded by tool/egress scoping, tracked under TC-015."
+    known_limits: "Git state has no writer provenance. With confinement.allow-dirty-main enabled, neither operator nor provider writes to main are detected; use a separate clone for concurrent editing with full enforcement. Paths outside tracked roots are never caught here."
     standards: ["OWASP-LLM06", "OWASP-LLM05"]
     adr: "ADR-1, ADR-2"
     last_verified: "2026-07-07"
@@ -314,7 +314,7 @@ manifest:
       capabilities: [pr.open, git.push.default_branch, pr.automerge]
       evidence: [TC-003, TC-012, TC-013]
   sandbox_scope:
-    worktree_scope: "item worktree by convention and hooks, backed by a shipped post-step confinement audit: any change to the main checkout or a sibling worktree during a step fails the step"
-    main_repo_protection: "post-step git-state diff over the main checkout and sibling worktrees fails the step on any committed or uncommitted change, covering sibling/relative/$HOME/cd/symlink Bash escapes"
+    worktree_scope: "item worktree by convention and hooks; the post-step audit always gates siblings and gates main by default"
+    main_repo_protection: "default post-step git-state diff fails on main changes; confinement.allow-dirty-main explicitly disables main detection while retaining sibling enforcement"
     planned_hardening: "not an OS/container sandbox: writes to paths outside any tracked git root (e.g. $HOME, /tmp, arbitrary absolute paths) are not caught by this audit and remain bounded by tool/egress scoping (TC-015)"
     evidence: [TC-011, TC-015]

@@ -20,3 +20,7 @@ Make confinement a **hard gate**: after each step, assert the working tree touch
 ## Consequences
 - (+) Turns the audit's "load-bearing but advisory" boundary into a verifiable guarantee (`TC-011` → `guarantee`).
 - (−) A post-step assertion adds a check per step; escapes must be enumerated and tested.
+
+## Amendment: concurrent operator edits
+
+Git snapshots identify changed state, not the writer, so an operator editing the main checkout during a step is indistinguishable from an escaped agent write. The default therefore remains a fail-closed audit of main plus sibling worktrees. Operators may explicitly set `confinement.allow-dirty-main: true`; for item-worktree steps this removes only the main checkout from the audit, keeps sibling worktrees hard-gated, warns once per run, and still fails closed if sibling roots cannot be enumerated. This mode is a reduced boundary, not equivalent security. A separate clone is the recommended setup when concurrent main-checkout editing and full confinement are both required.
