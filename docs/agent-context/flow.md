@@ -87,13 +87,14 @@ detection), and an **aging clock**.
 These are not a new store. The projection folds a **purpose-built flow-event
 log** (`#170`). pelaggio today writes only a *cycle-outcome summary*
 (`.dev/pelaggio-log.jsonl`, one terminal line per cycle), **not** the transition
-log this needs; #170 adds `.dev/flow-events.jsonl` as a *separate* file sharing
-one envelope and one reader library with the summary log. The memory hierarchy:
+log this needs; #170 adds `.dev/flow-events/` (one append-only segment file per
+writer process) as *separate* storage sharing one envelope and one reader library
+with the summary log. The memory hierarchy:
 
 ```
 L1  in-memory projection      this process's read-model, folded on startup
-L2  .dev/flow-events.jsonl    this machine's transition history (+ the cycle-log)
-    .dev/pelaggio-log.jsonl   gitignored, ephemeral, local-only
+L2  .dev/flow-events/         this machine's transition history (per-writer segments)
+    .dev/pelaggio-log.jsonl   the cycle-log; gitignored, ephemeral, local-only
 L3  the ticket system         durable, portable, shared — via write-back
 ```
 
@@ -284,11 +285,12 @@ here so they do not have to be re-litigated.
   per-process. Events emit harness-side by three producers — effect-confirmed
   (manifest-sourced), git-mutation (intent/confirmation bracket), and derived
   (readiness-diff) — never from "the step completed."
-- Flow events live in `.dev/flow-events.jsonl` (separate from the cycle-log),
-  share one envelope + reader library, and are local-only telemetry; `type` is
-  namespaced (`pelaggio.*` closed/core-validated, consumer events vendor-prefixed
-  and schema-registered), and the reader is tolerant-with-diagnostic, never
-  silent. Full spec: `docs/agent-context/flow-event-catalog.md`.
+- Flow events live under `.dev/flow-events/` as one segment per writer process
+  (single-writer-per-file, no shared-file concurrent append), separate from the
+  cycle-log, sharing one envelope + reader library; they are local-only telemetry;
+  `type` is namespaced (`pelaggio.*` closed/core-validated, consumer events
+  vendor-prefixed and schema-registered), and the reader is tolerant-with-diagnostic,
+  never silent. Full spec: `docs/agent-context/flow-event-catalog.md`.
 - `FlowPolicy` is provider-neutral: strategies see a snapshot, not storage.
   Storage leverages the provider; policy is pelaggio's.
 - An initiative is a projected swimlane/`group`, never a pelaggio-owned object.

@@ -65,10 +65,10 @@ cycle-log, carries:
 
 - **Ordering key is `(streamId, seq)`.** `seq` resets per writer process. Cross-stream order is
   best-effort `(ts, streamId, seq)` and is explicitly **not** a total order. The server spawns an
-  independent child process per run (`packages/server/src/supervisor.ts`) against one repo-local
-  log, so a global counter is unachievable without a broker/transactional store — which is the
-  deferred multi-orchestrator upgrade, not a #170 concern. Do not ship a `seq` you would call
-  repo-global.
+  independent child process per run (`packages/server/src/supervisor.ts`) against the same repo's
+  flow storage (each writing its own segment), so a global counter is unachievable without a
+  broker/transactional store — the deferred multi-orchestrator upgrade, not a #170 concern. Do not
+  ship a `seq` you would call repo-global.
 - **Unique key is `eventId`.** Cursors, snapshot watermarks, and dedup key on `eventId`, never `seq`.
 - **Correlation:** `claimId` groups one delivery across resumes/retries; `readinessEpisodeId`
   groups the *pre-claim* readiness window with the delivery it leads to (lead time spans the
@@ -78,35 +78,52 @@ cycle-log, carries:
   prior attempt and would otherwise merge their timings); ready→shipped lead time keys on
   `readinessEpisodeId` carried forward into `claimed`/`shipped`.
 
-## Storage: a separate file sharing one envelope + one reader
+## Storage: per-writer segment files, separate from the cycle-log
 
-Flow events live in **`.dev/flow-events.jsonl`**, *not* interleaved into `.dev/pelaggio-log.jsonl`.
+Flow events live under **`.dev/flow-events/`** as **one append-only segment file per writer
+process** (`<streamId>.jsonl`), *not* interleaved into `.dev/pelaggio-log.jsonl`. The logical "flow
+log" is the set of segments; the reader globs and folds them. The common CLI run is a single writer
+= a single segment.
 
-- **Why separate, not unified.** `computeStats` (`packages/pelaggio/scripts/pelaggio/stats.ts`) is a
-  *published cross-package API* — `packages/server` serves it at `/repos/:slug/stats`. Rewriting it
-  to dispatch on `type` is a change to a shipped contract, keeps the legacy duck-type forever as a
-  shim anyway, and couples a 1-per-cycle cadence with an N-per-cycle cadence in one file. A separate
-  file is `rm`-able if the flow experiment is revised, and leaves the stats contract untouched.
+- **Why separate from the cycle-log.** `computeStats` (`packages/pelaggio/scripts/pelaggio/stats.ts`)
+  is a *published cross-package API* — `packages/server` serves it at `/repos/:slug/stats`. Rewriting
+  it to dispatch on `type` is a change to a shipped contract, keeps the legacy duck-type forever as a
+  shim anyway, and couples a 1-per-cycle cadence with an N-per-cycle cadence in one file. Separate
+  storage is `rm`-able if the flow experiment is revised, and leaves the stats contract untouched.
 - **Shared envelope + a shared reader library, not a shared file.** A new `readEventLog()` /
-  `foldEvents()` library reads both files under one envelope and can present the cycle-log as a
-  stream of `pelaggio.cycle-completed` events (an in-memory reframing — the cycle-log bytes are
-  never rewritten). `computeStats` keeps its own inline parser for now; migrating it onto the
-  shared decoder is optional cleanup, so "stats is a projection too" is a *reader-layer*
+  `foldEvents()` library reads the segments and the cycle-log under one envelope, and can present the
+  cycle-log as a stream of `pelaggio.cycle-completed` events (an in-memory reframing — the cycle-log
+  bytes are never rewritten). `computeStats` keeps its own inline parser for now; migrating it onto
+  the shared decoder is optional cleanup, so "stats is a projection too" is a *reader-layer*
   aspiration, not a claim that the two readers are already one.
-- **Append integrity + stream allocation.** Each writer *process* mints exactly one `streamId` and
-  owns an atomic per-process `seq` allocator (in-process `--parallel` workers share it via the
-  single event loop; separate processes never share one). Each event is written as **one bounded
-  write syscall per record**, with the encoded size capped below the platform's atomic-append
-  bound (`O_APPEND` is atomic only up to `PIPE_BUF`, ~4 KiB on Linux) so concurrent processes can
-  never interleave a partial line; an over-size record is rejected at emit, not truncated. A repo
-  that must run concurrent writer processes *and* needs a total order upgrades to a repo-local
-  append lock or broker (deferred, a `packages/server` concern) — the core primitive never assumes
-  one.
-- **Local-only, single-machine, current-window.** `.dev/` is gitignored, so the log is invisible to
-  the git-state confinement audit (harness-side appends never trip TC-011) and is per-machine. It is
-  **not** durable or portable observability — durable memory is write-back (#172). #170's charter
+- **Append integrity by single-writer-per-file — no shared-file concurrent append.** Each writer
+  *process* mints one `streamId` and appends only to **its own** segment (`<streamId>.jsonl`), with a
+  per-process atomic `seq` allocator (in-process `--parallel` workers share it via the single event
+  loop). Because no two processes ever write the same file, there is no cross-process interleaving to
+  prove and **no reliance on `PIPE_BUF`** (a pipe/FIFO guarantee that does not hold for `O_APPEND` on
+  a regular file, and does not apply on Windows at all). A per-record size cap still applies so a
+  crash mid-write truncates at most the tail record (the reader drops a malformed trailing line with
+  a diagnostic). `streamId` is the segment identity the #178 cursor resumes on; a total cross-writer
+  order is explicitly never claimed. Multi-writer coordination (a broker / SQLite) stays a deferred
+  `packages/server` concern and never drives the core primitive.
+- **Local-only, single-machine, current-window.** `.dev/` is gitignored, so segments are invisible to
+  the git-state confinement audit (harness-side appends never trip TC-011) and are per-machine. This
+  is **not** durable or portable observability — durable memory is write-back (#172). #170's charter
   delivers single-machine, current-window metrics only; do not review it as if it ships durable
   history.
+
+### Minimal vocabulary (the closed `pelaggio.*` set #170 ships)
+
+#170 ships the registry and these core type constants (a closed set; growth beyond it is deferred
+and non-breaking under the tolerant reader). Emission of most of them is wired in #177 — #170 only
+needs the registry, the `cycle-completed` legacy bridge, and enough of the set to exercise the
+reader/projection:
+
+`pelaggio.cycle-completed` (legacy-bridge, emitted by the decoder), `pelaggio.became-ready`,
+`pelaggio.claimed`, `pelaggio.plan-published`, `pelaggio.plan-rejected`, `pelaggio.shakedown-fail`,
+`pelaggio.suspended`, `pelaggio.resumed`, `pelaggio.in-review`, `pelaggio.blocked-discovered`,
+`pelaggio.claim-released`, `pelaggio.shipped`, plus the observation types `pelaggio.effect-failed`,
+`pelaggio.state-observed`, and `pelaggio.state-corrected`.
 
 ## The reader: a dual-format decoder (prevents silent history erasure)
 
@@ -311,6 +328,7 @@ into the substrate item.**
 - `type` is namespaced: `pelaggio.*` is closed/core-validated; consumer events carry a vendor prefix
   and register a schema. The reader is tolerant-with-diagnostic, never silent, and back-compatibly
   reads untyped legacy cycle records.
-- Flow events live in `.dev/flow-events.jsonl` (separate from the cycle-log), share one envelope +
-  reader library, and are local-only telemetry; durable/portable memory is write-back (#172), and
-  raw events are never fanned into the tracker.
+- Flow events live under `.dev/flow-events/` as one append-only segment per writer process
+  (`<streamId>.jsonl`, single-writer-per-file — no shared-file concurrent append), separate from the
+  cycle-log, sharing one envelope + reader library; they are local-only telemetry; durable/portable
+  memory is write-back (#172), and raw events are never fanned into the tracker.
