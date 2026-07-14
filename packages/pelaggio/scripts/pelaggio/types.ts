@@ -74,6 +74,82 @@ export interface CycleLogEntry {
 	shipwrecked?: boolean;
 }
 
+// ── Flow events ───────────────────────────────────────────────────────
+
+export type PelaggioEventType =
+	| "pelaggio.cycle-completed"
+	| "pelaggio.became-ready"
+	| "pelaggio.claimed"
+	| "pelaggio.plan-published"
+	| "pelaggio.plan-rejected"
+	| "pelaggio.shakedown-fail"
+	| "pelaggio.suspended"
+	| "pelaggio.resumed"
+	| "pelaggio.in-review"
+	| "pelaggio.blocked-discovered"
+	| "pelaggio.claim-released"
+	| "pelaggio.shipped"
+	| "pelaggio.effect-failed"
+	| "pelaggio.state-observed"
+	| "pelaggio.state-corrected";
+
+export interface FlowEventEnvelope {
+	v: 1;
+	type: PelaggioEventType;
+	eventId: string;
+	streamId: string;
+	seq: number;
+	ts: string;
+	itemId: string | null;
+	claimId: string | null;
+	readinessEpisodeId: string | null;
+	executionId: string;
+	causationId: string | null;
+	attempt?: number;
+}
+
+export type CycleCompletedEvent = FlowEventEnvelope & CycleLogEntry & { type: "pelaggio.cycle-completed"; legacy?: false };
+export type LegacyCycleCompletedEvent = FlowEventEnvelope & CycleLogEntry & { type: "pelaggio.cycle-completed"; legacy: true };
+export type CoreFlowEvent = FlowEventEnvelope & { type: Exclude<PelaggioEventType, "pelaggio.cycle-completed">; [key: string]: unknown };
+export type FlowEvent = CycleCompletedEvent | LegacyCycleCompletedEvent | CoreFlowEvent;
+
+export type EventLogDiagnosticKind = "malformed" | "truncatedTail" | "unknownType" | "duplicateEventId" | "duplicateSequence" | "regressingSequence" | "sequenceGap";
+
+export interface EventLogDiagnostic {
+	kind: EventLogDiagnosticKind;
+	source: string;
+	line?: number;
+	message: string;
+	observedType?: string;
+}
+
+export interface EventLogDiagnostics {
+	counts: Record<EventLogDiagnosticKind, number>;
+	details: EventLogDiagnostic[];
+}
+
+export interface ReadEventLogResult {
+	events: FlowEvent[];
+	diagnostics: EventLogDiagnostics;
+}
+
+type FlowEventCorrelations = Partial<Pick<FlowEventEnvelope, "itemId" | "claimId" | "readinessEpisodeId" | "causationId" | "attempt">>;
+export type FlowEventInput = FlowEventCorrelations &
+	(({ type: "pelaggio.cycle-completed"; ts?: string } & Omit<CycleLogEntry, "ts">) | ({ type: Exclude<PelaggioEventType, "pelaggio.cycle-completed">; ts?: string } & Record<string, unknown>));
+
+export interface EventWriter {
+	readonly streamId: string;
+	readonly executionId: string;
+	append(input: FlowEventInput): FlowEvent;
+}
+
+export interface FlowEventProjection {
+	totalEvents: number;
+	deduplicatedEvents: number;
+	byType: Record<PelaggioEventType, number>;
+	diagnostics: EventLogDiagnostics;
+}
+
 // ── Cycle / pipeline ───────────────────────────────────────────────────
 
 export interface CycleResult {
