@@ -20,6 +20,7 @@ import {
 	WORKTREE_PREFIX,
 } from "./config.js";
 import { dispatchStepEffects as dispatchStepEffectsDefault, type Effect, EffectsManifestError, writeEffectsManifest as writeEffectsManifestDefault } from "./effects.js";
+import { DEFAULT_FLOW_POLICY, type FlowPolicy } from "./flow-policy.js";
 import {
 	appendLog as appendLogDefault,
 	buildStepArgs,
@@ -106,6 +107,8 @@ export interface PipelineDeps {
 	resolveWorktree?: typeof resolveWorktree;
 	/** Roadmap source adapter. Defaults to one constructed from `ROADMAP_SOURCE` + `REPO`. */
 	roadmap?: RoadmapSource;
+	/** Scheduling and quick-scope policy. Defaults to the provider-neutral FIFO policy. */
+	flowPolicy?: FlowPolicy;
 	/** Deterministic direct-push bookkeeping tail. Injectable for testing the merged-path branch with a spy. */
 	runShipBookkeeping?: typeof runShipBookkeepingDefault;
 	/** Effects-manifest writer. Defaults to the production JSON writer; injectable for fail-closed tests. */
@@ -124,6 +127,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	const mainRepo = deps.mainRepo ?? REPO;
 	const _resolveWorktree = deps.resolveWorktree ?? resolveWorktree;
 	const roadmap = deps.roadmap ?? getRoadmapSource(ROADMAP_SOURCE, { repo: REPO, github: ROADMAP_GITHUB, linear: ROADMAP_LINEAR });
+	const flowPolicy = deps.flowPolicy ?? DEFAULT_FLOW_POLICY;
 	const runShipBookkeeping = deps.runShipBookkeeping ?? runShipBookkeepingDefault;
 	const writeEffectsManifest = deps.writeEffectsManifest ?? writeEffectsManifestDefault;
 	const dispatchStepEffects = deps.dispatchStepEffects ?? dispatchStepEffectsDefault;
@@ -474,7 +478,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	// ── Detect quick mode ──
 
 	const quickItem = !opts.dryRun && itemId ? await roadmap.getItem(itemId).catch(() => null) : null;
-	if (roadmap.isQuickScope({ item: quickItem, summaryText: pickText })) {
+	if (flowPolicy.isQuickScope({ item: quickItem, summaryText: pickText })) {
 		profile = "quick";
 		log("scope S/XS or bug — quick mode (Sonnet, skip plan+shakedown-plan)");
 		startFrom ??= "implement";

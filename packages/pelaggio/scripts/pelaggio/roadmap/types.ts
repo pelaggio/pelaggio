@@ -57,13 +57,6 @@ export interface RoadmapItemStatus extends RoadmapItem {
 	labels?: string[];
 }
 
-export interface QuickScopeInput {
-	/** Item-owned metadata. Body and labels are optional because not every source carries both. */
-	item?: Pick<RoadmapItemStatus, "body" | "labels"> | null;
-	/** Pick summary text used as a fallback when item metadata has no decisive signal. */
-	summaryText?: string;
-}
-
 export interface CreateItemOpts {
 	title: string;
 	deps?: string[];
@@ -109,7 +102,6 @@ export interface RoadmapSource {
 	/** True when the item exists in uncommitted working-tree state but not yet in HEAD. Gh/linear: always false. */
 	isCharterPickRace(id: string): boolean;
 	parseItemId(text: string): Promise<string | null>;
-	isQuickScope(input: QuickScopeInput): boolean;
 }
 
 export function isRoadmapSourceName(v: unknown): v is RoadmapSourceName {

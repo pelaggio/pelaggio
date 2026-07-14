@@ -13,7 +13,9 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { DEFAULT_FLOW_POLICY, type FlowSnapshot } from "./flow-policy.js";
 import { AlreadyClaimedError, isMarkdownRoadmapFormat, type RoadmapSource } from "./roadmap/index.js";
+import type { RoadmapItemStatus } from "./roadmap/types.js";
 
 type Args = {
 	flags: Record<string, string | boolean>;
@@ -79,6 +81,49 @@ async function cmdList(args: Args): Promise<number> {
 	}
 	for (const it of items) {
 		process.stdout.write(`${it.id}\t${it.status}\t${it.title}\t${it.deps}\n`);
+	}
+	return 0;
+}
+
+function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function buildFlowSnapshot(items: readonly RoadmapItemStatus[], topic?: string): FlowSnapshot {
+	const known = [...items].sort((a, b) => b.id.length - a.id.length);
+	const candidates = items.map((item, fifoOrdinal) => {
+		let remainder = item.deps.trim();
+		const dependencies: Array<{ reference: string; satisfied: boolean }> = [];
+		for (const dependency of known) {
+			const pattern = new RegExp(`(?<![A-Za-z0-9])${escapeRegExp(dependency.id)}(?![A-Za-z0-9])`, "gi");
+			if (!pattern.test(remainder)) continue;
+			dependencies.push({ reference: dependency.id, satisfied: dependency.status === "done" });
+			remainder = remainder.replace(pattern, " ");
+		}
+		const unresolved = remainder.replace(/[\s,;|()[\]]+/g, " ").trim();
+		const unresolvedDependencies = unresolved === "" || unresolved === "—" || /^(?:none|n\/a|-)$/.test(unresolved.toLowerCase()) ? [] : [unresolved];
+		const priority = (item as RoadmapItemStatus & { priority?: unknown }).priority;
+		return {
+			item,
+			dependencies,
+			unresolvedDependencies,
+			fifoOrdinal,
+			...(typeof priority === "number" && Number.isFinite(priority) ? { priority } : {}),
+		};
+	});
+	return { candidates, readiness: { kind: "derived" }, ...(topic ? { topic } : {}) };
+}
+
+async function cmdNext(args: Args): Promise<number> {
+	const roadmap = makeRoadmap();
+	const items = await roadmap.listItems({ includeDone: true });
+	const topic = typeof args.flags.topic === "string" ? args.flags.topic : undefined;
+	const result = DEFAULT_FLOW_POLICY.evaluate(buildFlowSnapshot(items, topic));
+	if (args.flags.json) {
+		printJson(result);
+	} else if (result.candidates[0]) {
+		const { item } = result.candidates[0];
+		process.stdout.write(`${item.id}\t${item.status}\t${item.title}\t${item.deps}\n`);
 	}
 	return 0;
 }
@@ -218,6 +263,7 @@ async function cmdSource(args: Args): Promise<number> {
 
 const HANDLERS: Record<string, (args: Args) => Promise<number>> = {
 	list: cmdList,
+	next: cmdNext,
 	get: cmdGet,
 	claim: cmdClaim,
 	"plan-path": cmdPlanPath,

@@ -31,9 +31,9 @@ Parse `$ARGUMENTS` (may be empty).
 - `open` → proceed to Claim.
 - `in-progress` → a cycle (or stale branch) holds the claim: report it and go to the reuse flow below (ask whether to reuse the existing worktree or pick a different item; emit `pick-result: worktree-exists`). Never attempt a fresh claim on an in-progress item — it deterministically exits 3.
 
-**`/pick next`** (argument is exactly "next", no topic) — from the `roadmap list --json` output, **hard-skip any item with `status === "blocked"` or `status === "in-progress"`** (in-progress means a live cycle holds its `feat/<id>` branch or server-side claim marker — deterministic from the adapter, not a prose check), then rank the remainder by: no unmet dependencies (empty `deps` or all deps satisfied) → calendar urgency → unblocks others → no overlap with claimed items. **Immediately auto-claim the top match — do NOT ask for confirmation, do NOT list alternatives, do NOT wait for user input.** Go straight from ranking to Claim. Do NOT filter by topic — consider all tracks. If the ranked list is empty after filtering, emit `pick-result: queue-empty`.
+**`/pick next`** (argument is exactly "next", no topic) — run `npx pelaggio roadmap next --json`. Parse the `{ candidates: [{ item, verdict }], verdicts: [...] }` envelope and claim candidates in their returned order. **Immediately auto-claim the first candidate — do NOT ask for confirmation, do NOT list alternatives, do NOT wait for user input.** If `candidates` is empty, emit `pick-result: queue-empty`.
 
-**`/pick next web-sync`** (argument is "next" followed by a topic) — same ranking but fuzzy-match the item's title against the topic. Same blocked/in-progress exclusion. Emit `pick-result: queue-empty` if nothing matches.
+**`/pick next web-sync`** (argument is "next" followed by a topic) — run `npx pelaggio roadmap next --topic "web-sync" --json` and consume the same ordered envelope. Emit `pick-result: queue-empty` if `candidates` is empty.
 
 **`/pick`** (no argument) — show all items from `roadmap list --json` grouped by source (use the `sourceRef` field). Mark blocked items but don't suggest them. Suggest a best unblocked pick. Ask user to confirm.
 
@@ -59,8 +59,8 @@ Run `npx pelaggio roadmap claim --no-worktree <ID>` instead of the regular claim
 
    **If the claim exits 3** (already claimed — another pick won the race for the
    `feat/<id>` branch, or the claim's server-side marker never surfaced), do NOT
-   retry the same ID. In `/pick next` mode: exclude that ID from your ranked list
-   and claim the next candidate (repeat as needed; emit `pick-result: queue-empty`
+		 retry the same ID. In `/pick next` mode: continue to the next candidate in the
+		 returned policy envelope (repeat as needed; emit `pick-result: queue-empty`
    if the list empties). For an explicit `/pick <ID>`: emit
    `pick-result: already-claimed`. The pipeline treats it as recoverable.
 

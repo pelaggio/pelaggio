@@ -58,9 +58,9 @@ what Linear/GitHub already model natively. An initiative is therefore a
 native container: Linear initiative/project, GitHub milestone/label, markdown
 roadmap file), never a pelaggio-owned object.
 
-`isQuickScope()` currently lives on `RoadmapSource` — a policy decision on the
-storage interface. That is the seam leaking; extracting it is a free cleanup the
-`FlowPolicy` work pays for.
+`isQuickScope()` used to live on `RoadmapSource` — a policy decision on the
+storage interface, the seam leaking. `#171` extracted it onto `FlowPolicy`
+(`FifoPolicy.isQuickScope`) as a free cleanup the policy work paid for.
 
 ## FlowPolicy (planned)
 

@@ -2,8 +2,7 @@ import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { createClaimWorkspace } from "./git-claim.js";
-import { isQuickScope } from "./scope.js";
-import type { CreateItemOpts, ItemStatus, LinearRoadmapConfig, MarkDoneContext, PlanLocation, QuickScopeInput, RoadmapItem, RoadmapItemStatus, RoadmapSource, RoadmapSourceName } from "./types.js";
+import type { CreateItemOpts, ItemStatus, LinearRoadmapConfig, MarkDoneContext, PlanLocation, RoadmapItem, RoadmapItemStatus, RoadmapSource, RoadmapSourceName } from "./types.js";
 
 const PLAN_MARKER = "<!-- pelaggio-plan -->";
 const IN_PROGRESS_LABEL = "in-progress";
@@ -75,10 +74,6 @@ export class LinearRoadmap implements RoadmapSource {
 		const bare = text.match(/\b([A-Za-z][A-Za-z0-9]*-\d+)\b/);
 		if (bare) return bare[1].toUpperCase();
 		return null;
-	}
-
-	isQuickScope(input: QuickScopeInput): boolean {
-		return isQuickScope(input);
 	}
 
 	async listItems(opts?: { includeDone?: boolean }): Promise<RoadmapItemStatus[]> {

@@ -3,8 +3,8 @@ import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { after, before, describe, it } from "node:test";
-import { MarkdownRoadmap } from "../roadmap/index.js";
+import { after, afterEach, before, describe, it } from "node:test";
+import { MarkdownRoadmap, type RoadmapSource } from "../roadmap/index.js";
 import { main, setRoadmapFactory } from "../roadmap-cli.js";
 
 function makeRepo(): string {
@@ -44,6 +44,45 @@ function captureStdout<T>(run: () => Promise<T>): Promise<{ code: T; stdout: str
 		});
 }
 
+function stubRoadmap(items: Awaited<ReturnType<RoadmapSource["listItems"]>>, calls: { list: number; claim: number }): RoadmapSource {
+	return {
+		name: "markdown",
+		async listOpenItems() {
+			return items.filter((item) => item.status === "open");
+		},
+		async listItems(opts) {
+			assert.deepEqual(opts, { includeDone: true });
+			calls.list++;
+			return items;
+		},
+		async getItem() {
+			return null;
+		},
+		async claimItem() {
+			calls.claim++;
+			return { branch: "unused", worktree: "unused" };
+		},
+		async markDone() {},
+		async getItemPlan() {
+			return null;
+		},
+		resolvePlanPath() {
+			return "unused";
+		},
+		async publishPlan() {},
+		async createItem({ title }) {
+			return { id: "NEW-1", title, deps: "—", sourceRef: "unused" };
+		},
+		async archivePlan() {},
+		isCharterPickRace() {
+			return false;
+		},
+		async parseItemId() {
+			return null;
+		},
+	};
+}
+
 describe("roadmap-cli", () => {
 	let repo: string;
 
@@ -57,6 +96,12 @@ describe("roadmap-cli", () => {
 
 	after(() => {
 		// no-op
+	});
+
+	// Tests that install a stub factory (next, create-item) must not leak it into
+	// the tests that follow — restore the seeded markdown factory after each.
+	afterEach(() => {
+		setRoadmapFactory(() => new MarkdownRoadmap({ repo }));
 	});
 
 	it("source prints configured name", async () => {
@@ -74,6 +119,38 @@ describe("roadmap-cli", () => {
 		assert.equal(tool1.status, "open");
 		const tool2 = parsed.find((p: { id: string }) => p.id === "TOOL-2");
 		assert.equal(tool2.status, "blocked");
+	});
+
+	it("next emits one ordered policy envelope without mutating the roadmap", async () => {
+		const calls = { list: 0, claim: 0 };
+		setRoadmapFactory(() =>
+			stubRoadmap(
+				[
+					{ id: "TOOL-2", title: "Second", deps: "TOOL-1", sourceRef: "core", status: "open" },
+					{ id: "TOOL-1", title: "First", deps: "—", sourceRef: "core", status: "done" },
+					{ id: "TOOL-3", title: "Third", deps: "—", sourceRef: "core", status: "open" },
+				],
+				calls,
+			),
+		);
+		const res = await captureStdout(() => main(["next", "--json"]));
+		assert.equal(res.code, 0);
+		const parsed = JSON.parse(res.stdout);
+		assert.deepEqual(
+			parsed.candidates.map(({ item }: { item: { id: string } }) => item.id),
+			["TOOL-2", "TOOL-3"],
+		);
+		assert.equal(parsed.verdicts.length, 3);
+		assert.deepEqual(calls, { list: 1, claim: 0 });
+	});
+
+	it("next returns an empty successful envelope", async () => {
+		const calls = { list: 0, claim: 0 };
+		setRoadmapFactory(() => stubRoadmap([{ id: "TOOL-1", title: "Done", deps: "—", sourceRef: "core", status: "done" }], calls));
+		const res = await captureStdout(() => main(["next", "--topic", "missing", "--json"]));
+		assert.equal(res.code, 0);
+		assert.deepEqual(JSON.parse(res.stdout).candidates, []);
+		assert.deepEqual(calls, { list: 1, claim: 0 });
 	});
 
 	it("get returns exit 2 for unknown id", async () => {
