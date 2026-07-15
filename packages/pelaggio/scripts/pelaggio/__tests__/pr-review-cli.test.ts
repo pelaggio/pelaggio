@@ -5,9 +5,15 @@ import type { RunStepFn } from "../step-runner.js";
 import type { ParkSignal, StepEmit, StepResult } from "../types.js";
 
 interface RunCall {
+	name: string;
 	prompt: string;
 	cwd: string;
 	parkSignal: ParkSignal;
+}
+
+function verification(decisions: unknown[], overrides: Partial<StepResult> = {}): StepResult {
+	const text = `REVIEW_VERIFICATION\n${JSON.stringify({ schemaVersion: 1, decisions })}\nEND_REVIEW_VERIFICATION`;
+	return result({ text, fullText: text, ...overrides });
 }
 
 function result(overrides: Partial<StepResult> = {}): StepResult {
@@ -27,7 +33,7 @@ function report(summary: string, findings: unknown[] = []): string {
 	return `REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 1, summary, findings })}\nEND_REVIEW_FINDINGS`;
 }
 
-async function runCli(opts: { files?: string; diff?: string; results?: StepResult[]; diffError?: Error } = {}): Promise<{ code: number; calls: RunCall[]; comments: string[]; stdout: string; stderr: string }> {
+async function runCli(opts: { files?: string; diff?: string; results?: Array<StepResult | Error>; diffError?: Error } = {}): Promise<{ code: number; calls: RunCall[]; comments: string[]; stdout: string; stderr: string }> {
 	const calls: RunCall[] = [];
 	const comments: string[] = [];
 	const queued = [...(opts.results ?? [result()])];
@@ -38,10 +44,11 @@ async function runCli(opts: { files?: string; diff?: string; results?: StepResul
 		if (args.join(" ") === "diff origin/main...HEAD") return opts.diff ?? "+Clarify docs.\n";
 		throw new Error(`unexpected command: ${cmd} ${args.join(" ")}`);
 	}) as typeof import("node:child_process").execFileSync;
-	const runStep: RunStepFn = async (_name, prompt, stepOpts, _emit: StepEmit) => {
-		calls.push({ prompt, cwd: stepOpts.cwd, parkSignal: stepOpts.parkSignal });
+	const runStep: RunStepFn = async (name, prompt, stepOpts, _emit: StepEmit) => {
+		calls.push({ name, prompt, cwd: stepOpts.cwd, parkSignal: stepOpts.parkSignal });
 		const next = queued.shift();
 		assert.ok(next, "unexpected extra runStep call");
+		if (next instanceof Error) throw next;
 		return next;
 	};
 	const restoreDeps = setPrReviewDepsForTests({
@@ -106,25 +113,30 @@ describe("pr-review CLI aggregation", () => {
 		const out = await runCli({
 			files: "packages/server/src/config.ts\n",
 			diff: "+CONTROL_PLANE_TOKEN\n",
-			results: [result(), result({ text: report("Auth bypass found.", [{ severity: "must-fix", message: "Authentication can be bypassed.", path: "packages/server/src/config.ts", line: 12 }]), cost: 2, turns: 5 })],
+			results: [
+				result(),
+				result({ text: report("Auth bypass found.", [{ severity: "must-fix", message: "Authentication can be bypassed.", path: "packages/server/src/config.ts", line: 12 }]), cost: 2, turns: 5 }),
+				verification([{ candidateId: "C1", decision: "survives", rationale: "The bypass is reachable." }], { cost: 4, turns: 6 }),
+			],
 		});
 
 		assert.equal(out.code, 1);
 		assert.match(out.comments[0], /Automated review: BLOCK/);
 		assert.match(out.comments[0], /packages\/server\/src\/config\\\.ts:12/);
 		assert.match(out.comments[0], /\*\*must-fix\*\*/);
-		assert.match(out.comments[0], /gate=block ok=true subtype=red-team:success cost=3\.00 turns=7/);
+		assert.match(out.comments[0], /isolated verification: \*\*survives\*\*/);
+		assert.match(out.comments[0], /gate=block ok=true subtype=red-team:success cost=7\.00 turns=13/);
 	});
 
 	it("still runs red-team when the standard pass blocks", async () => {
 		const out = await runCli({
 			files: "packages/server/src/config.ts\n",
 			diff: "+CONTROL_PLANE_TOKEN\n",
-			results: [result({ text: report("Bug.", [{ severity: "must-fix", message: "Broken behavior." }]) }), result()],
+			results: [result({ text: report("Bug.", [{ severity: "must-fix", message: "Broken behavior." }]) }), result(), verification([{ candidateId: "C1", decision: "survives", rationale: "Confirmed." }])],
 		});
 
 		assert.equal(out.code, 1);
-		assert.equal(out.calls.length, 2);
+		assert.equal(out.calls.length, 3);
 		assert.match(out.comments[0], /## Standard Review/);
 		assert.match(out.comments[0], /## Adversarial Red-Team Review/);
 	});
@@ -204,8 +216,8 @@ describe("pr-review CLI aggregation", () => {
 			if (args.join(" ") === "diff origin/main...refs/pull/123/head") return "+CONTROL_PLANE_TOKEN\n";
 			throw new Error(`unexpected command: ${cmd} ${args.join(" ")}`);
 		}) as typeof import("node:child_process").execFileSync;
-		const runStep: RunStepFn = async (_name, prompt, stepOpts) => {
-			calls.push({ prompt, cwd: stepOpts.cwd, parkSignal: stepOpts.parkSignal });
+		const runStep: RunStepFn = async (name, prompt, stepOpts) => {
+			calls.push({ name, prompt, cwd: stepOpts.cwd, parkSignal: stepOpts.parkSignal });
 			return result();
 		};
 
@@ -234,5 +246,53 @@ describe("pr-review CLI aggregation", () => {
 				{ args: "diff origin/main...refs/pull/123/head", cwd: "/tmp/pr-head" },
 			],
 		);
+	});
+
+	it("refutes blockers in a separate fresh verifier call and preserves original findings", async () => {
+		const out = await runCli({
+			results: [
+				result({ text: report("Candidate.", [{ severity: "must-fix", message: "Original message.", path: "src/a.ts", line: 7 }]), cost: 2, turns: 3 }),
+				verification([{ candidateId: "C1", decision: "refuted", rationale: "A guard rejects the input." }], { cost: 4, turns: 5, costEstimated: true }),
+			],
+		});
+		assert.equal(out.code, 0);
+		assert.deepEqual(
+			out.calls.map((call) => call.name),
+			["pr-review", "pr-verify"],
+		);
+		assert.notEqual(out.calls[0].parkSignal, out.calls[1].parkSignal);
+		assert.match(out.calls[1].prompt, /VERIFICATION_CANDIDATES/);
+		assert.match(out.calls[1].prompt, /"candidateId":"C1"/);
+		assert.match(out.calls[1].prompt, /Original message/);
+		assert.match(out.comments[0], /Original message/);
+		assert.match(out.comments[0], /isolated verification: \*\*refuted\*\*/);
+		assert.match(out.comments[0], /cost=6\.00 turns=8/);
+	});
+
+	it("does not verify nice or note findings", async () => {
+		const out = await runCli({
+			results: [
+				result({
+					text: report("Observations.", [
+						{ severity: "nice", message: "Improve this." },
+						{ severity: "note", message: "Context." },
+					]),
+				}),
+			],
+		});
+		assert.equal(out.code, 0);
+		assert.deepEqual(
+			out.calls.map((call) => call.name),
+			["pr-review"],
+		);
+	});
+
+	it("fails closed and retains candidates for invalid or failed verification", async () => {
+		for (const verifier of [result({ text: "malformed" }), verification([], { ok: false, subtype: "error_rate_limit" }), new Error("provider crashed")]) {
+			const out = await runCli({ results: [result({ text: report("Candidate.", [{ severity: "must-fix", message: "Retained blocker." }]) }), verifier] });
+			assert.equal(out.code, 1);
+			assert.match(out.comments[0], /Retained blocker/);
+			assert.match(out.comments[0], /isolated verification failed; blocker retained/);
+		}
 	});
 });

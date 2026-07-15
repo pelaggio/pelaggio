@@ -883,6 +883,14 @@ describe("classifySecurityReviewDiff", () => {
 		assert.ok(signal.reasons.includes("keyword:exec"));
 	});
 
+	it("triggers for the verification contract and skill paths", () => {
+		for (const path of ["packages/pelaggio/scripts/pelaggio/review/findings.ts", ".claude/skills/pr-verify/SKILL.md"]) {
+			const signal = classifySecurityReviewDiff([path], "+benign text\n");
+			assert.equal(signal.triggered, true);
+			assert.ok(signal.reasons.includes(`path:${path}`));
+		}
+	});
+
 	it("does not trigger for benign docs-only diffs without security keywords", () => {
 		const signal = classifySecurityReviewDiff(["docs/readme.md"], "+Clarify installation examples.\n");
 

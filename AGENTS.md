@@ -40,6 +40,7 @@ Run targeted tests with `npx tsx --test <test-file>`. Tests use `node:test`, not
 - During `implement`, plan documents under `docs/plans/` are read-only. The implement step executes the plan; it does not polish the plan.
 - Rate-limit paths must park through `parkExit()` so uncommitted work is checkpointed.
 - `ship.target` owns direct-push vs PR behavior. Do not hardcode merge behavior in TypeScript or skills.
+- PR candidate blockers may be removed only by a complete, valid isolated verification report; verifier failure retains them.
 - Claims are git-native (`feat/<id>` branch); roadmap mutations self-serialize on `.dev/roadmap-mutation.lock`. Don't add call-site locking or a claims registry.
 - Access the roadmap via `npx pelaggio roadmap ...`; skills never read roadmap storage or issue trackers directly.
 - `.agents/skills` must stay a symlink to the canonical `.claude/skills` tree so Codex sees the same skills without drift.

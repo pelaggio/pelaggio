@@ -55,12 +55,15 @@ comments.
    standard review through the same `runStep` machinery the pipeline uses (step
    `pr-review`: budget / turns / effort / model are first-class config, see below).
    If the deterministic classifier sees security-sensitive paths or diff keywords, the
-   CLI runs a second fresh `pr-review --red-team` session before deciding the gate.
-   The CLI posts both pass outputs as one idempotently-upserted PR comment and sets the
-   exit code.
+   CLI runs a second fresh `pr-review --red-team` discovery session. After discovery,
+   every successful pass with `must-fix` candidates gets its own fresh `pr-verify`
+   session. The verifier tries to refute each candidate against the repository and
+   cannot introduce or rewrite blockers. The CLI posts all dispositions as one
+   idempotently-upserted PR comment and sets the exit code.
 5. **Exit code = gate = posted `review` status.** The CLI exits `0` only when every
-   required pass emits a valid versioned findings report with no `must-fix` finding.
-   A `must-fix`, missing or malformed report, refusal, SDK error, max-turns, rate-limit
+   required pass emits a valid versioned findings report and every candidate blocker
+   is refuted by a complete, valid isolated verification report.
+   A surviving `must-fix`, missing or malformed report, refusal, SDK error, max-turns, rate-limit
    park, or inability to inspect the diff exits `1`. The workflow translates that exit code
    into the `review` commit status (`0` → success, else failure), and posts `failure`
    if the job is cancelled after starting. The gate **fails closed**: ambiguity blocks
@@ -76,11 +79,22 @@ Two layers enforce it:
   model-output boundary. Unknown versions, keys, severities, or malformed fields are
   rejected. A valid report blocks only when it contains a `must-fix`; `nice` and `note`
   remain visible but non-blocking. `ok: false` and parser failures block separately.
+- `parseReviewVerification(text)` and reconciliation require exactly one decision for
+  every orchestration-owned candidate ID. Only a complete valid report can remove a
+  candidate; all verifier failures retain it.
 
 A transient failure (rate limit, flaky SDK error) therefore shows red. If a security
 diff triggers the red-team pass and that pass cannot complete, the whole gate blocks
 even if the standard pass found no issues. Re-run the workflow once the cause clears —
 the comment is upserted, not duplicated.
+
+Candidate IDs are assigned by orchestration and verification returns only an ID,
+`refuted`/`survives`, and a rationale. Surviving findings are reconstructed from the
+original validated discovery report, preserving their message and location. Missing,
+duplicate, unknown, or malformed decisions, refusal, truncation, rate limiting,
+max-turns, or verifier execution failure retain every candidate and block. Verification
+is a refutation filter, not a vote or a second finding pass; a clean or non-blocking-only
+discovery report does not spend a verifier session.
 
 ## The review itself
 
@@ -122,8 +136,9 @@ If the classifier does not trigger, the PR comment records that the red-team pas
 not run. If it does trigger, both the standard and red-team sections appear in the single
 gate comment. Either pass can block, and both passes run even if the standard pass has
 already blocked so the revise loop receives all confirmed findings. A triggered run costs
-roughly twice a normal review because it spends a second `pr-review` session using the
-same budget / turns / model profile.
+roughly twice a normal review for discovery. Each discovery pass that produces blockers
+adds one `pr-verify` session, so total cost and turns vary with the number of
+blocker-bearing passes. The comment metrics sum discovery and verification calls.
 
 ### Evidence marker
 
@@ -156,8 +171,8 @@ turns, and a subtype that identifies the blocking pass (`standard:<subtype>`,
 
 ## Configuration
 
-`pr-review` is a first-class (non-pipeline) step, so its budget / turns / effort / model
-are set the same way as any step (see [`config.md`](./config.md)):
+`pr-review` and `pr-verify` are first-class non-pipeline steps, so their budget / turns /
+effort / model are set the same way as any step (see [`config.md`](./config.md)):
 
 ```yaml
 budgets:      { pr-review: 5 }        # dollars (default 5)
@@ -168,6 +183,12 @@ models:
     standard: { pr-review: claude-opus-4-8 }
     quick:    { pr-review: claude-sonnet-5 }
 ```
+
+The verifier has independent global defaults (`pr-verify`: $5, 60 turns, `xhigh`).
+When its profile slots are unset, its model, Codex model, and provider inherit the
+resolved `pr-review` slots, yielding a fresh same-provider session. Override
+`pr-verify` in the profile to use the other registered provider for cross-provider
+verification; see [`config.md`](./config.md#pr-review-runner).
 
 Select the profile with `--profile <name>` (default `standard`).
 
