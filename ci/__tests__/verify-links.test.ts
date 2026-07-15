@@ -35,6 +35,22 @@ describe("markdown link gate", () => {
 		assert.equal(runLinkGate(root), 0);
 	});
 
+	it("resolves a leading-slash link against the repo root, not the filesystem root", () => {
+		const root = writeDocs({
+			"README.md": "See [target](/sub/target.md).",
+			"sub/target.md": "target",
+		});
+		assert.deepEqual(checkFile(join(root, "README.md"), root), []);
+	});
+
+	it("fails a leading-slash link whose repo-root-relative target is missing", () => {
+		const root = writeDocs({
+			"README.md": "See [missing](/sub/missing.md).",
+		});
+		const [broken] = checkFile(join(root, "README.md"), root);
+		assert.equal(broken.target, "/sub/missing.md");
+	});
+
 	it("reports the file and line number of a broken link", () => {
 		const root = writeDocs({
 			"README.md": "intro\n\nSee [missing](./missing.md).\n",

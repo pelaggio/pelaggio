@@ -21,7 +21,7 @@ export function findMarkdownFiles(dir: string): string[] {
 		.map((entry) => resolve(dir, entry));
 }
 
-export function checkFile(file: string): BrokenLink[] {
+export function checkFile(file: string, root = repoRoot()): BrokenLink[] {
 	const broken: BrokenLink[] = [];
 	const lines = readFileSync(file, "utf8").split("\n");
 	lines.forEach((line, index) => {
@@ -29,7 +29,9 @@ export function checkFile(file: string): BrokenLink[] {
 			const target = match[1].trim();
 			if (target === "" || EXTERNAL.test(target)) continue;
 			const path = target.split("#")[0];
-			if (!existsSync(resolve(dirname(file), path))) {
+			// A leading slash means repo-root-relative (GitHub's Markdown convention), not filesystem-absolute.
+			const resolved = path.startsWith("/") ? resolve(root, path.slice(1)) : resolve(dirname(file), path);
+			if (!existsSync(resolved)) {
 				broken.push({ file, line: index + 1, target });
 			}
 		}
@@ -41,7 +43,7 @@ export function runLinkGate(dir = resolve(repoRoot(), "docs/trust")): number {
 	const root = repoRoot();
 	const broken = findMarkdownFiles(dir)
 		.sort()
-		.flatMap((file) => checkFile(file));
+		.flatMap((file) => checkFile(file, root));
 
 	console.log(`\n  Pelaggio markdown link gate\n  ${"-".repeat(70)}`);
 	if (broken.length === 0) {
