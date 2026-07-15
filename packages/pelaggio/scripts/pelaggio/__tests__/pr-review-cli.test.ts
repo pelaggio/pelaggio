@@ -93,7 +93,9 @@ describe("pr-review CLI aggregation", () => {
 	it("runs a red-team pass for security-sensitive diffs with classifier reasons", async () => {
 		const out = await runCli({
 			files: "packages/server/src/config.ts\n",
-			diff: '+return host.startsWith("127.");\n',
+			diff: ["diff --git a/packages/server/src/config.ts b/packages/server/src/config.ts", "--- a/packages/server/src/config.ts", "+++ b/packages/server/src/config.ts", "@@ -1 +1 @@", "-return false;", '+return host.startsWith("127.");'].join(
+				"\n",
+			),
 			results: [result({ cost: 1, turns: 2 }), result({ cost: 3, turns: 4 })],
 		});
 
