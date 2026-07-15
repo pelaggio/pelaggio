@@ -1052,6 +1052,7 @@ export interface OrchestratorDeps {
 	/** Local review sweep config (issue #84). Partial — merged onto config defaults. */
 	review?: Partial<{
 		runner: ReviewRunner;
+		policy: typeof REVIEW_CONFIG;
 		ghRepo: string;
 		gh: GhRunner;
 		statuslessAfter: string;
@@ -1362,6 +1363,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		// visible to `findRevisablePrs` below.
 		const review = {
 			runner: REVIEW_CONFIG.runner,
+			policy: REVIEW_CONFIG,
 			statuslessAfter: REVIEW_CONFIG.statuslessAfter,
 			ghRepo: ROADMAP_SOURCE === "github-issues" ? ROADMAP_GITHUB.ghRepo : "",
 			gh: defaultGhRun,
@@ -1399,6 +1401,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						diffCwd: prepared.diffCwd,
 						diffBaseRef: prepared.baseRef,
 						diffHeadRef: prepared.headRef,
+						policy: review.policy,
 					});
 					body = result.body;
 					finalState = result.gate === "pass" ? "success" : "failure";

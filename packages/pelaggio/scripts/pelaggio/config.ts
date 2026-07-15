@@ -96,11 +96,20 @@ export interface ResolvedConfig {
 	revise: { local: boolean };
 	/** PR review poster. `ci` preserves the GitHub Actions gate; `local` runs a trusted local sweep
 	 *  and posts commit statuses with context `review`. `statuslessAfter` is parsed by consumers. */
-	review: { runner: ReviewRunner; statuslessAfter: string };
+	review: ReviewConfig;
 	/** Worktree confinement policy. Allowing a dirty main checkout disables only main-root auditing. */
 	confinement: { allowDirtyMain: boolean };
 	/** Outbound run-outcome notifications. Disabled when `url` is empty (the default). */
 	notify: NotifyConfig;
+}
+
+export type ProviderDiversityPolicy = "off" | "prefer" | "require";
+export interface ReviewConfig {
+	runner: ReviewRunner;
+	statuslessAfter: string;
+	maxPasses: number;
+	budgetCap: number;
+	providerDiversity: ProviderDiversityPolicy;
 }
 
 const DEFAULT_GITHUB_ROADMAP: GithubRoadmapConfig = {
@@ -164,7 +173,7 @@ export const DEFAULTS = {
 	// default-on does nothing for every markdown/direct-push consumer. `revise.local: false` is
 	// the off-switch, mirroring the CI `AUTOPILOT_AUTO_REVISE=false` off-switch.
 	revise: { local: true },
-	review: { runner: "ci", statuslessAfter: "2h" },
+	review: { runner: "ci", statuslessAfter: "2h", maxPasses: 1, budgetCap: 20, providerDiversity: "off" },
 	confinement: { allowDirtyMain: false },
 	// Notifications off by default (empty url). Enabling only `notify.url` turns on every
 	// event with the `json` format; `format: ntfy` + a topic URL gives ntfy.sh pushes.
@@ -482,6 +491,9 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 	// the sweep consumer with parseWaitFlag, matching park.max-wait's tolerant parsing.
 	let reviewRunner: ReviewRunner = DEFAULTS.review.runner;
 	let reviewStatuslessAfter: string = DEFAULTS.review.statuslessAfter;
+	let reviewMaxPasses: number = DEFAULTS.review.maxPasses;
+	let reviewBudgetCap: number = DEFAULTS.review.budgetCap;
+	let reviewProviderDiversity: ProviderDiversityPolicy = DEFAULTS.review.providerDiversity;
 	const reviewBlock = yml.review;
 	if (reviewBlock !== undefined) {
 		if (!isPlainObject(reviewBlock)) {
@@ -500,6 +512,22 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 				throw new Error(`${configPath}: expected \`review.statusless-after\` to be a string, got ${typeof statuslessAfter}`);
 			}
 			reviewStatuslessAfter = statuslessAfter;
+		}
+		const maxPasses = reviewBlock["max-passes"];
+		if (maxPasses !== undefined) {
+			if (!Number.isInteger(maxPasses) || (maxPasses as number) < 1 || (maxPasses as number) > 3) throw new Error(`${configPath}: expected \`review.max-passes\` to be an integer from 1 to 3, got ${JSON.stringify(maxPasses)}`);
+			reviewMaxPasses = maxPasses as number;
+		}
+		const budgetCap = reviewBlock["budget-cap"];
+		if (budgetCap !== undefined) {
+			if (typeof budgetCap !== "number" || !Number.isFinite(budgetCap) || budgetCap <= 0) throw new Error(`${configPath}: expected \`review.budget-cap\` to be a finite positive number, got ${JSON.stringify(budgetCap)}`);
+			reviewBudgetCap = budgetCap;
+		}
+		const providerDiversity = reviewBlock["provider-diversity"];
+		if (providerDiversity !== undefined) {
+			if (providerDiversity !== "off" && providerDiversity !== "prefer" && providerDiversity !== "require")
+				throw new Error(`${configPath}: expected \`review.provider-diversity\` to be one of off|prefer|require, got ${JSON.stringify(providerDiversity)}`);
+			reviewProviderDiversity = providerDiversity;
 		}
 	}
 
@@ -571,7 +599,7 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		roadmapLinear,
 		park: { autoResume: parkAutoResume, maxWait: parkMaxWait, unknownResetWait: parkUnknownResetWait },
 		revise: { local: reviseLocal },
-		review: { runner: reviewRunner, statuslessAfter: reviewStatuslessAfter },
+		review: { runner: reviewRunner, statuslessAfter: reviewStatuslessAfter, maxPasses: reviewMaxPasses, budgetCap: reviewBudgetCap, providerDiversity: reviewProviderDiversity },
 		confinement: { allowDirtyMain: confinementAllowDirtyMain },
 		notify: { url: notifyUrl, format: notifyFormat, events: notifyEvents },
 	};
@@ -623,5 +651,5 @@ export const ROADMAP_SOURCE: RoadmapSourceName = CONFIG.roadmapSource;
 export const ROADMAP_GITHUB: GithubRoadmapConfig = CONFIG.roadmapGithub;
 export const ROADMAP_LINEAR: LinearRoadmapConfig = CONFIG.roadmapLinear;
 export const REVISE_LOCAL: boolean = CONFIG.revise.local;
-export const REVIEW_CONFIG: { runner: ReviewRunner; statuslessAfter: string } = CONFIG.review;
+export const REVIEW_CONFIG: ReviewConfig = CONFIG.review;
 export const CONFINEMENT_CONFIG: { allowDirtyMain: boolean } = CONFIG.confinement;

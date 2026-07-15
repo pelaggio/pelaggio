@@ -426,6 +426,9 @@ the same command, so it is intentionally not looped.
 |-----|---------|---------|
 | `review.runner` | `ci` | `ci` runs `.github/workflows/pr-review.yml`; `local` runs the review sweep from the trusted local tree. |
 | `review.statusless-after` | `2h` | In local mode, emit `review-stranded` and leave a PR diagnostic when a same-repo pelaggio PR has no `review` status this long. |
+| `review.max-passes` | `1` | Independent review iterations, integer `1..3`. One preserves the safe rollout/current behavior. |
+| `review.budget-cap` | `20` | Positive finite aggregate dollar cap. A full required iteration is reserved before it starts. |
+| `review.provider-diversity` | `off` | `off`, `prefer`, or `require`; `require` blocks before agent work unless review and verifier providers differ. |
 
 Local mode is only active in normal auto-pick runs for github-issues roadmaps and PR
 ship targets. Configure the model provider through the existing non-pipeline
@@ -437,6 +440,9 @@ configurable global budget, turn limit, and effort:
 review:
   runner: local
   statusless-after: 2h
+  max-passes: 2
+  budget-cap: 40
+  provider-diversity: require
 
 models:
   profiles:

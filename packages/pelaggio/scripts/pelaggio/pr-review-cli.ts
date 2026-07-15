@@ -16,9 +16,21 @@
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { REPO } from "./config.js";
+import { CONFIG, REPO, type ReviewConfig, resolveStepSettings } from "./config.js";
 import { classifySecurityReviewDiff, expandSkill, formatReviewMetrics, type SecurityDiffSignal } from "./helpers.js";
-import { parseReviewFindings, parseReviewVerification, type ReviewFindingsReport, reconcileReviewVerification, reviewFindingsGate, type VerificationCandidate, type VerificationDisposition } from "./review/findings.js";
+import {
+	evaluateReviewConvergence,
+	parseReviewFindings,
+	parseReviewVerification,
+	type ReviewExhaustionReason,
+	type ReviewFinding,
+	type ReviewFindingsReport,
+	reconcileReviewVerification,
+	reviewFindingFingerprint,
+	reviewFindingsGate,
+	type VerificationCandidate,
+	type VerificationDisposition,
+} from "./review/findings.js";
 import type { RunStepFn } from "./step-runner.js";
 import { runStep } from "./step-runner.js";
 import type { ParkSignal, StepEmit, StepResult } from "./types.js";
@@ -27,6 +39,7 @@ export const PR_REVIEW_MARKER = "<!-- pelaggio-pr-review -->";
 type ReviewLabel = "standard" | "red-team";
 
 interface ReviewPass {
+	iteration: number;
 	label: ReviewLabel;
 	result: StepResult;
 	gate: "pass" | "block";
@@ -54,6 +67,7 @@ export interface RunPrReviewGateOptions {
 	runStep?: RunStepFn;
 	execFileSync?: typeof execFileSync;
 	upsertComment?: (pr: string, body: string) => void;
+	policy?: ReviewConfig;
 }
 
 export interface PrReviewGateResult {
@@ -64,6 +78,9 @@ export interface PrReviewGateResult {
 	turns: number;
 	ok: boolean;
 	subtype: string;
+	breakerReason?: ReviewExhaustionReason;
+	iterations?: number;
+	survivorCount?: number;
 }
 
 let deps: PrReviewDeps = {
@@ -133,11 +150,11 @@ function renderPass(pass: ReviewPass): string {
 			const retained = finding.severity === "must-fix" && pass.verificationDiagnostic ? ` — isolated verification failed; blocker retained (${escapeMarkdown(pass.verificationDiagnostic)})` : "";
 			return `- **${finding.severity}**${location}: ${escapeMarkdown(finding.message)}${verification}${retained}`;
 		});
-		return [`## ${title}`, "", escapeMarkdown(pass.report.summary), "", ...(findings.length > 0 ? findings : ["No findings."])].join("\n");
+		return [`## ${title} (Iteration ${pass.iteration})`, "", escapeMarkdown(pass.report.summary), "", ...(findings.length > 0 ? findings : ["No findings."])].join("\n");
 	}
 	const text = pass.result.text.trim();
 	const partial = text ? ["", "Partial review output (untrusted and possibly incomplete):", "", `<pre>${escapeHtml(text)}</pre>`] : [];
-	return [`## ${title}`, "", `${escapeMarkdown(pass.diagnostic ?? `Run did not complete cleanly (${pass.result.subtype}).`)} Failing this pass closed.`, ...partial].join("\n");
+	return [`## ${title} (Iteration ${pass.iteration})`, "", `${escapeMarkdown(pass.diagnostic ?? `Run did not complete cleanly (${pass.result.subtype}).`)} Failing this pass closed.`, ...partial].join("\n");
 }
 
 function escapeHtml(value: string): string {
@@ -150,23 +167,30 @@ function escapeMarkdown(value: string): string {
 
 /** Build the PR-comment body. The agent text is preserved under per-pass
  *  sections; aggregate status and metrics live in the CLI-owned wrapper. */
-export function buildComment(gate: "pass" | "block", passes: readonly ReviewPass[], securitySignal: SecurityDiffSignal): string {
+export function buildComment(
+	gate: "pass" | "block",
+	passes: readonly ReviewPass[],
+	securitySignal: SecurityDiffSignal,
+	summary?: string,
+	convergence?: { iterations: number; survivors: number; breaker?: ReviewExhaustionReason; providers: string },
+): string {
 	const header = gate === "pass" ? "✅ **Automated review: PASS**" : "🚫 **Automated review: BLOCK**";
 	const ok = passes.every(passOk);
-	const subtype = aggregateSubtype(passes);
+	const subtype = gate === "pass" ? "success" : aggregateSubtype(passes);
 	const results = passes.flatMap(passResults);
 	const cost = results.reduce((sum, result) => sum + result.cost, 0);
 	const turns = results.reduce((sum, result) => sum + result.turns, 0);
 	// Durable, aggregatable precision signal — appended by the CLI, never seen by
 	// the report parser (which reads the agent's `result.text`, not this comment).
-	const metrics = formatReviewMetrics(gate, ok, subtype, cost, turns);
+	const baseMetrics = formatReviewMetrics(gate, ok, subtype, cost, turns);
+	const metrics = convergence ? baseMetrics.replace(" -->", ` iterations=${convergence.iterations} survivors=${convergence.survivors} breaker=${convergence.breaker ?? "none"} providers=${convergence.providers} -->`) : baseMetrics;
 	const redTeamLine = securitySignal.triggered ? `Triggered: ${securitySignal.reasons.map(escapeMarkdown).join(", ")}` : "Adversarial red-team pass: not triggered (no security-sensitive paths or diff signals).";
-	return [PR_REVIEW_MARKER, header, "", ...passes.map(renderPass), "", redTeamLine, "", `<sub>pelaggio pr-review · ${subtype}</sub>`, metrics].join("\n");
+	return [PR_REVIEW_MARKER, header, ...(summary ? ["", summary] : []), "", ...passes.map(renderPass), "", redTeamLine, "", `<sub>pelaggio pr-review · ${subtype}</sub>`, metrics].join("\n");
 }
 
 export function buildFailClosedComment(subtype: string, message: string): string {
 	const result: StepResult = { ok: false, subtype, text: message, fullText: message, cost: 0, turns: 0 };
-	const pass: ReviewPass = { label: "standard", result, gate: "block", diagnostic: `Review infrastructure failed (${subtype}).`, failureSubtype: subtype };
+	const pass: ReviewPass = { iteration: 1, label: "standard", result, gate: "block", diagnostic: `Review infrastructure failed (${subtype}).`, failureSubtype: subtype };
 	return buildComment("block", [pass], { triggered: false, reasons: [] });
 }
 
@@ -224,17 +248,17 @@ function trustedLocalContext(opts: { diffCwd: string; diffBaseRef: string; diffH
 	].join("\n");
 }
 
-async function runReviewPass(label: ReviewLabel, args: string, profile: string, pr: string, opts: { cwd: string; runStep: RunStepFn; localContext: string }): Promise<ReviewPass> {
+async function runReviewPass(iteration: number, label: ReviewLabel, args: string, profile: string, pr: string, opts: { cwd: string; runStep: RunStepFn; localContext: string }): Promise<ReviewPass> {
 	process.stderr.write(`▶ pr-review ${label}\n`);
 	const prompt = `${expandSkill("pr-review", args)}${opts.localContext}`;
 	const result = await opts.runStep("pr-review", prompt, { cwd: opts.cwd, profile, trace: false, parkSignal: emptyParkSignal(), itemId: pr }, emit);
-	if (!result.ok) return { label, result, gate: "block", diagnostic: `Run did not complete cleanly (${result.subtype}).` };
+	if (!result.ok) return { iteration, label, result, gate: "block", diagnostic: `Run did not complete cleanly (${result.subtype}).` };
 	try {
 		const report = parseReviewFindings(result.text);
-		return { label, result, report, gate: reviewFindingsGate(report) };
+		return { iteration, label, result, report, gate: reviewFindingsGate(report) };
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		return { label, result, gate: "block", diagnostic: `Invalid review findings report: ${message}.`, failureSubtype: "error_invalid_output" };
+		return { iteration, label, result, gate: "block", diagnostic: `Invalid review findings report: ${message}.`, failureSubtype: "error_invalid_output" };
 	}
 }
 
@@ -251,9 +275,11 @@ function verificationPrompt(candidates: readonly VerificationCandidate[], localC
 	].join("\n");
 }
 
-async function runVerificationPass(pass: ReviewPass, profile: string, pr: string, opts: { cwd: string; runStep: RunStepFn; localContext: string }): Promise<void> {
+async function runVerificationPass(pass: ReviewPass, carried: ReadonlyMap<string, ReviewFinding>, profile: string, pr: string, opts: { cwd: string; runStep: RunStepFn; localContext: string }): Promise<void> {
 	if (!pass.report) return;
-	const candidates = pass.report.findings.filter((finding) => finding.severity === "must-fix").map((finding, index) => ({ id: `C${index + 1}`, finding }));
+	const unique = new Map(carried);
+	for (const finding of pass.report.findings.filter((finding) => finding.severity === "must-fix")) unique.set(reviewFindingFingerprint(finding), finding);
+	const candidates = [...unique.values()].map((finding, index) => ({ id: `C${index + 1}`, finding }));
 	if (candidates.length === 0) return;
 	process.stderr.write(`▶ pr-verify ${pass.label}\n`);
 	let result: StepResult;
@@ -291,6 +317,9 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 	const runStepImpl = options.runStep ?? deps.runStep;
 	const execFileSyncImpl = options.execFileSync ?? deps.execFileSync;
 	const localContext = diffCwd === cwd && diffBaseRef === "origin/main" && diffHeadRef === "HEAD" ? "" : trustedLocalContext({ diffCwd, diffBaseRef, diffHeadRef });
+	const policy = options.policy ?? CONFIG.review;
+	const reviewSettings = resolveStepSettings(CONFIG, profile, "pr-review");
+	const verifySettings = resolveStepSettings(CONFIG, profile, "pr-verify");
 
 	let securitySignal: SecurityDiffSignal;
 	try {
@@ -303,24 +332,78 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 		return { gate: "block", body, cost: 0, costEstimated: false, turns: 0, ok: false, subtype: "standard:error_diff" };
 	}
 
-	const passes: ReviewPass[] = [];
-	passes.push(await runReviewPass("standard", `--pr ${options.pr}`, profile, options.pr, { cwd, runStep: runStepImpl, localContext }));
-	if (securitySignal.triggered) {
-		const reasonsArg = JSON.stringify(securitySignal.reasons.join(", "));
-		passes.push(await runReviewPass("red-team", `--pr ${options.pr} --red-team --security-reasons ${reasonsArg}`, profile, options.pr, { cwd, runStep: runStepImpl, localContext }));
+	const labels: ReviewLabel[] = securitySignal.triggered ? ["standard", "red-team"] : ["standard"];
+	const reservation = labels.length * (reviewSettings.budget + verifySettings.budget);
+	if (policy.providerDiversity === "require" && reviewSettings.provider === verifySettings.provider) {
+		const body = buildFailClosedComment("provider-diversity", `review.provider-diversity=require but pr-review and pr-verify both resolve to ${reviewSettings.provider}.`);
+		options.upsertComment?.(options.pr, body);
+		return { gate: "block", body, cost: 0, costEstimated: false, turns: 0, ok: false, subtype: "provider-diversity", breakerReason: "provider-diversity" };
 	}
-	for (const pass of passes) await runVerificationPass(pass, profile, options.pr, { cwd, runStep: runStepImpl, localContext });
+	if (reservation > policy.budgetCap) {
+		const body = buildFailClosedComment("budget", `A complete required review iteration reserves $${reservation}, exceeding review.budget-cap $${policy.budgetCap}.`);
+		options.upsertComment?.(options.pr, body);
+		return { gate: "block", body, cost: 0, costEstimated: false, turns: 0, ok: false, subtype: "budget", breakerReason: "budget" };
+	}
 
-	const gate = passes.some((pass) => pass.gate === "block") ? "block" : "pass";
+	const passes: ReviewPass[] = [];
+	let carried = new Map<string, ReviewFinding>();
+	let previousSurvivorCount: number | undefined;
+	let breakerReason: ReviewExhaustionReason | undefined;
+	let gate: "pass" | "block" = "block";
+	for (let iteration = 1; iteration <= policy.maxPasses; iteration++) {
+		const iterationPasses: ReviewPass[] = [];
+		for (const label of labels) {
+			const args = label === "standard" ? `--pr ${options.pr}` : `--pr ${options.pr} --red-team --security-reasons ${JSON.stringify(securitySignal.reasons.join(", "))}`;
+			try {
+				const pass = await runReviewPass(iteration, label, args, profile, options.pr, { cwd, runStep: runStepImpl, localContext });
+				iterationPasses.push(pass);
+				passes.push(pass);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				const result: StepResult = { ok: false, subtype: "error_crash", text: message, fullText: message, cost: 0, turns: 0 };
+				const pass: ReviewPass = { iteration, label, result, gate: "block", diagnostic: `Review execution threw: ${message}.`, failureSubtype: "error_crash" };
+				iterationPasses.push(pass);
+				passes.push(pass);
+			}
+		}
+		for (const pass of iterationPasses) await runVerificationPass(pass, carried, profile, options.pr, { cwd, runStep: runStepImpl, localContext });
+		const resultsSoFar = passes.flatMap(passResults);
+		const actualCost = resultsSoFar.reduce((sum, result) => sum + result.cost, 0);
+		const valid = iterationPasses.length === labels.length && iterationPasses.every(passOk);
+		const dispositions = iterationPasses.flatMap((pass) => {
+			if (pass.dispositions) return pass.dispositions;
+			return (pass.report?.findings ?? [])
+				.filter((finding) => finding.severity === "must-fix")
+				.map((finding, index) => ({ id: `C${index + 1}`, finding, decision: "survives" as const, rationale: "Retained because the required pass was incomplete." }));
+		});
+		const hasNextPass = iteration < policy.maxPasses;
+		const decision = evaluateReviewConvergence({
+			carried,
+			summary: { valid: valid && actualCost <= policy.budgetCap, dispositions, cost: actualCost },
+			previousSurvivorCount,
+			hasNextPass,
+			nextPassAffordable: actualCost + reservation <= policy.budgetCap,
+		});
+		carried = new Map(decision.survivors);
+		if (actualCost > policy.budgetCap) breakerReason = "budget";
+		else if (decision.state === "converged") {
+			gate = "pass";
+			break;
+		} else if (decision.state === "exhausted") breakerReason = decision.reason;
+		if (decision.state !== "continue") break;
+		previousSurvivorCount = carried.size;
+	}
 	const ok = passes.every(passOk);
 	const results = passes.flatMap(passResults);
 	const cost = results.reduce((sum, result) => sum + result.cost, 0);
 	const costEstimated = results.some((result) => result.costEstimated);
 	const turns = results.reduce((sum, result) => sum + result.turns, 0);
-	const subtype = aggregateSubtype(passes);
-	const body = buildComment(gate, passes, securitySignal);
+	const subtype = gate === "pass" ? "success" : (breakerReason ?? aggregateSubtype(passes));
+	const pairing = `${reviewSettings.provider}/${verifySettings.provider}`;
+	const summary = `Convergence: ${gate === "pass" ? "converged" : `exhausted (${breakerReason ?? "invalid-pass"})`} · iterations=${passes.at(-1)?.iteration ?? 0} · survivors=${carried.size} · providers=${pairing} · aggregate cost=$${cost.toFixed(2)}`;
+	const body = buildComment(gate, passes, securitySignal, summary, { iterations: passes.at(-1)?.iteration ?? 0, survivors: carried.size, breaker: breakerReason, providers: pairing });
 	options.upsertComment?.(options.pr, body);
-	return { gate, body, cost, costEstimated, turns, ok, subtype };
+	return { gate, body, cost, costEstimated, turns, ok, subtype, breakerReason, iterations: passes.at(-1)?.iteration ?? 0, survivorCount: carried.size };
 }
 
 export async function main(argv: string[]): Promise<number> {
@@ -350,7 +433,7 @@ export async function main(argv: string[]): Promise<number> {
 	// crash silently. The gate's whole value is that a crashed agent never reads
 	// as a merge-clear sign-off.
 	try {
-		const review = await runPrReviewGate({ pr, profile, cwd: REPO, diffCwd: REPO, runStep: deps.runStep, execFileSync: deps.execFileSync });
+		const review = await runPrReviewGate({ pr, profile, cwd: REPO, diffCwd: REPO, runStep: deps.runStep, execFileSync: deps.execFileSync, policy: CONFIG.review });
 
 		// The review text goes to stdout unconditionally so the CI log always
 		// carries the findings — a failed comment upsert (or a truncated run)

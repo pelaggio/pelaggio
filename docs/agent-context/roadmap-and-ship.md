@@ -60,7 +60,7 @@ Security-sensitive diffs run two independent `pr-review` sessions: the ordinary 
 
 Local review mode (`review.runner: local`) runs before the local revise sweep. It must execute trusted tooling from local `main` and treat the PR head only as diff/file data, then post the `review` commit status and findings comment that the existing revise sweep consumes.
 
-Typed findings are the judgment transport for this pass only. Repeated review/revise convergence and arbitration remain planned in the subsequent #191 slices.
+Convergence is deterministic and bounded. Validated blocker fingerprints survive across independent iterations until a complete verifier explicitly refutes them; omission is never refutation. PASS requires a complete valid iteration with an empty carried-survivor set. Max-pass, aggregate-budget, diminishing-return, invalid-pass, and provider-diversity breakers all stay red. That red gate feeds the existing label-bounded revise/human handoff; the read-only review CLI does not call `parkExit()`. Rate-limit work preservation remains owned by the separate revision pipeline and its existing `parkExit()` path.
 
 ### Revise loops (one pass, label-bounded)
 

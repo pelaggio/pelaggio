@@ -34,6 +34,59 @@ export interface VerificationDisposition extends VerificationCandidate {
 	rationale: string;
 }
 
+export type ReviewExhaustionReason = "max-passes" | "budget" | "diminishing-returns" | "invalid-pass" | "provider-diversity";
+
+export interface ReviewPassSummary {
+	valid: boolean;
+	dispositions: readonly VerificationDisposition[];
+	cost: number;
+	diagnostic?: string;
+}
+
+export type ReviewConvergenceResult =
+	| { state: "converged"; survivors: ReadonlyMap<string, ReviewFinding> }
+	| { state: "continue"; survivors: ReadonlyMap<string, ReviewFinding> }
+	| { state: "exhausted"; reason: ReviewExhaustionReason; survivors: ReadonlyMap<string, ReviewFinding> };
+
+/** Identity owned by deterministic orchestration, not the per-pass candidate ID. */
+export function reviewFindingFingerprint(finding: ReviewFinding): string {
+	return JSON.stringify([finding.message.trim().replace(/\s+/g, " "), finding.path?.trim() ?? "", finding.line ?? 0]);
+}
+
+/** Apply a complete verifier report to carried blockers. Omission never refutes. */
+export function applyReviewPass(carried: ReadonlyMap<string, ReviewFinding>, summary: ReviewPassSummary): ReadonlyMap<string, ReviewFinding> {
+	const next = new Map(carried);
+	if (!summary.valid) return next;
+	const decisions = new Map<string, VerificationDisposition[]>();
+	for (const disposition of summary.dispositions) {
+		const fingerprint = reviewFindingFingerprint(disposition.finding);
+		const grouped = decisions.get(fingerprint) ?? [];
+		grouped.push(disposition);
+		decisions.set(fingerprint, grouped);
+	}
+	for (const [fingerprint, grouped] of decisions) {
+		const surviving = grouped.find((item) => item.decision === "survives");
+		if (surviving) next.set(fingerprint, surviving.finding);
+		else next.delete(fingerprint);
+	}
+	return next;
+}
+
+export function evaluateReviewConvergence(options: { carried: ReadonlyMap<string, ReviewFinding>; summary: ReviewPassSummary; previousSurvivorCount?: number; hasNextPass: boolean; nextPassAffordable: boolean }): ReviewConvergenceResult {
+	const survivors = new Map(applyReviewPass(options.carried, options.summary));
+	if (!options.summary.valid) {
+		for (const disposition of options.summary.dispositions) survivors.set(reviewFindingFingerprint(disposition.finding), disposition.finding);
+		return { state: "exhausted", reason: "invalid-pass", survivors };
+	}
+	if (survivors.size === 0) return { state: "converged", survivors };
+	if (!options.hasNextPass) return { state: "exhausted", reason: "max-passes", survivors };
+	if (!options.nextPassAffordable) return { state: "exhausted", reason: "budget", survivors };
+	if (options.previousSurvivorCount !== undefined && survivors.size >= options.previousSurvivorCount) {
+		return { state: "exhausted", reason: "diminishing-returns", survivors };
+	}
+	return { state: "continue", survivors };
+}
+
 export class ReviewFindingsParseError extends Error {
 	constructor(message: string, options?: ErrorOptions) {
 		super(message, options);

@@ -551,24 +551,47 @@ describe("loadConfig — revise", () => {
 });
 
 describe("loadConfig — review", () => {
-	it("defaults to { runner: 'ci', statuslessAfter: '2h' } when unset", () => {
+	it("defaults to the safe one-pass review policy when unset", () => {
 		const repo = tmpRepo();
 		const cfg = loadConfig({ repo, configPath: join(repo, ".pelaggio.yml") });
-		assert.deepEqual(cfg.review, { runner: "ci", statuslessAfter: "2h" });
+		assert.deepEqual(cfg.review, { runner: "ci", statuslessAfter: "2h", maxPasses: 1, budgetCap: 20, providerDiversity: "off" });
 	});
 
 	it("parses review.runner: local and review.statusless-after", () => {
 		const repo = tmpRepo();
 		const path = writeYml(repo, "review:\n  runner: local\n  statusless-after: 45m\n");
 		const cfg = loadConfig({ repo, configPath: path });
-		assert.deepEqual(cfg.review, { runner: "local", statuslessAfter: "45m" });
+		assert.deepEqual(cfg.review, { runner: "local", statuslessAfter: "45m", maxPasses: 1, budgetCap: 20, providerDiversity: "off" });
 	});
 
 	it("allows a partial review override", () => {
 		const repo = tmpRepo();
 		const path = writeYml(repo, "review:\n  statusless-after: 1h30m\n");
 		const cfg = loadConfig({ repo, configPath: path });
-		assert.deepEqual(cfg.review, { runner: "ci", statuslessAfter: "1h30m" });
+		assert.deepEqual(cfg.review, { runner: "ci", statuslessAfter: "1h30m", maxPasses: 1, budgetCap: 20, providerDiversity: "off" });
+	});
+
+	it("parses bounded convergence policy", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "review:\n  max-passes: 3\n  budget-cap: 40.5\n  provider-diversity: require\n");
+		assert.deepEqual(loadConfig({ repo, configPath: path }).review, { runner: "ci", statuslessAfter: "2h", maxPasses: 3, budgetCap: 40.5, providerDiversity: "require" });
+	});
+
+	it("rejects every convergence policy boundary", () => {
+		for (const [yaml, pattern] of [
+			["max-passes: 0", /review\.max-passes/],
+			["max-passes: 4", /review\.max-passes/],
+			["max-passes: 1.5", /review\.max-passes/],
+			["max-passes: '2'", /review\.max-passes/],
+			["budget-cap: 0", /review\.budget-cap/],
+			["budget-cap: -1", /review\.budget-cap/],
+			["budget-cap: nope", /review\.budget-cap/],
+			["provider-diversity: preferred", /review\.provider-diversity/],
+		] as const) {
+			const repo = tmpRepo();
+			const path = writeYml(repo, `review:\n  ${yaml}\n`);
+			assert.throws(() => loadConfig({ repo, configPath: path }), pattern);
+		}
 	});
 
 	it("throws on an invalid review.runner", () => {

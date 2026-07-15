@@ -14,6 +14,11 @@ revise:
 # the local pelaggio auto-pick sweep posts the `review` commit status.
 review:
   runner: local
+  # Safe rollout default is one pass. Opt in with max-passes: 2 after setting a
+  # cap that can reserve every required discovery+verification call.
+  max-passes: 1
+  budget-cap: 20
+  provider-diversity: off
 budgets:
   shakedown-plan: 8
 # Offload the token-heavy authoring steps to Codex (aggressive split). pick + ship

@@ -51,10 +51,10 @@ comments.
    can't be pelaggio PRs).
 3. For a same-repo, non-draft PR the job checks out the head SHA with full history,
    installs deps, and runs `npx pelaggio pr-review --pr <n>`.
-4. The CLI reads the changed file list and diff, then runs one bounded, fresh-session
+4. The CLI reads the changed file list and diff, then runs one or more bounded, fresh-session
    standard review through the same `runStep` machinery the pipeline uses (step
    `pr-review`: budget / turns / effort / model are first-class config, see below).
-   If the deterministic classifier sees security-sensitive paths or diff keywords, the
+   The safe default is one iteration; `review.max-passes` opts into at most three. If the deterministic classifier sees security-sensitive paths or diff keywords, the
    CLI runs a second fresh `pr-review --red-team` discovery session. After discovery,
    every successful pass with `must-fix` candidates gets its own fresh `pr-verify`
    session. The verifier tries to refute each candidate against the repository and
@@ -95,6 +95,24 @@ duplicate, unknown, or malformed decisions, refusal, truncation, rate limiting,
 max-turns, or verifier execution failure retain every candidate and block. Verification
 is a refutation filter, not a vote or a second finding pass; a clean or non-blocking-only
 discovery report does not spend a verifier session.
+
+Across iterations, orchestration fingerprints validated blockers by normalized message,
+path, and line. Surviving fingerprints are carried forward and included in later
+verification input even when discovery omits them; only an explicit complete `refuted`
+decision removes one. The first blocking iteration establishes a baseline. A later
+iteration continues only when the carried count strictly falls; an unchanged/larger
+count or same-size replacement trips `diminishing-returns`. `max-passes`, `budget`,
+`invalid-pass`, and `provider-diversity` are the other breaker reasons. No breaker can
+yield PASS.
+
+Before each iteration the CLI reserves the resolved discovery and verifier caps for
+every required label (standard, plus red-team when triggered), so it never starts a
+partial iteration. Actual costs from every attempted call are aggregated, and an actual
+overshoot remains red. `provider-diversity: prefer` uses independently configured
+providers when they differ and otherwise retains the ordinary same-provider fallback;
+`require` blocks before agent work when they resolve alike. The read-only gate escalates
+by leaving the status red; it does not call pipeline-private `parkExit()`. The separate
+revision pipeline retains rate-limit checkpointing and the label-bounded human handoff.
 
 ## The review itself
 
