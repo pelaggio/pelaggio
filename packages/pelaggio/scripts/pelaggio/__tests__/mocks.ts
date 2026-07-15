@@ -126,6 +126,7 @@ export function createMockRunPipeline(behavior: PipelineBehavior): MockRunPipeli
 			...(outcome.awaitingMerge ? { awaitingMerge: outcome.awaitingMerge } : {}),
 			...(outcome.prUrl ? { prUrl: outcome.prUrl } : {}),
 			...(outcome.shipwrecked ? { shipwrecked: outcome.shipwrecked } : {}),
+			...(outcome.bookkeepingWarnings?.length ? { bookkeepingWarnings: outcome.bookkeepingWarnings } : {}),
 		};
 	};
 	return { runPipeline: fn, calls };

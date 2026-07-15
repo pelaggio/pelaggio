@@ -71,11 +71,13 @@ export interface ShipBookkeepingResult {
 	pushed: boolean;
 	/** Worktree/branch cleanup succeeded (reflects actual worktree + branch removal, not merely "attempted"). */
 	cleanedUp: boolean;
+	/** Non-blocking roadmap mutations that remain to be completed manually. */
+	warnings: string[];
 	/**
 	 * Overall success. False when a blocking failure prevented safe completion —
-	 * a real (non-idempotent) mark-done/archive error, a push failure, or a pull
-	 * conflict. On `ok:false` the feature branch is left intact and the merge is
-	 * recoverable on local `main`; the pipeline surfaces the cycle as incomplete.
+	 * a push failure or pull conflict. Roadmap mutation failures are warnings once
+	 * the verified merge exists. On `ok:false` the feature branch is left intact
+	 * and the merge is recoverable on local `main`.
 	 */
 	ok: boolean;
 	/** Legible reason when `ok` is false. */
@@ -205,14 +207,10 @@ function pushMain(mainRepo: string, exec: ExecFn, log: (msg: string) => void, ve
  * on local `main`. Ordered: recover stray dirt → mark-done → archive-plan →
  * push → cleanup.
  *
- * The tail never throws, but it is **not** unconditionally best-effort: the
- * point past which the feature branch is destroyed is a point of no return, so
- * the *destructive* steps (worktree/branch removal) run only after mark-done,
- * archive, and push have all genuinely succeeded. A real adapter failure (the
- * markdown adapter no-ops an already-done item, so any throw is a genuine
- * failure — format drift, gh/linear auth/network), a push failure, or a pull
- * conflict returns `ok:false` with the branch left intact so the work stays
- * recoverable on local `main` and the pipeline surfaces the cycle as incomplete.
+ * Roadmap mutations are independent and best-effort after the verified merge.
+ * Push is the completion boundary: only a push/integration failure returns
+ * `ok:false` and preserves the feature branch for recovery. Once origin contains
+ * the merge, cleanup proceeds even when roadmap metadata needs manual repair.
  */
 export async function runShipBookkeeping(ctx: ShipBookkeepingCtx, deps: ShipBookkeepingDeps): Promise<ShipBookkeepingResult> {
 	const { mainRepo, worktree, branch, itemId } = ctx;
@@ -221,30 +219,32 @@ export async function runShipBookkeeping(ctx: ShipBookkeepingCtx, deps: ShipBook
 	const status = deps.status ?? defaultStatus;
 	const repairMain = deps.repairMain ?? repairMainNodeModules;
 	const inWorktree = worktree !== mainRepo;
+	const warnings: string[] = [];
+	let markedDone = false;
+	let archived = false;
 
 	// 1. Recover stray MAIN_REPO changes (never discard).
 	const recovered = await commitStrayBookkeeping(mainRepo, itemId, log, { exec, status, ...(deps.lock ? { lock: deps.lock } : {}) });
 
-	// 2. Mark done. The markdown adapter no-ops an already-done item (idempotent),
-	//    so a throw here is a REAL failure (format drift with the item still open,
-	//    gh/linear auth/network) — surface it and stop BEFORE cleanup so the branch
-	//    is not destroyed and the item is not orphaned open forever.
+	// 2. Mark done. A failure leaves metadata incomplete but must not suppress the
+	//    verified feature push. The idempotent command can be rerun after repair.
 	try {
 		await roadmap.markDone(itemId);
+		markedDone = true;
 	} catch (e) {
-		const error = `mark-done failed (${short(e)}) — leaving feature branch intact for recovery`;
-		log(`⚠ ${error}`);
-		return { recovered, markedDone: false, archived: false, pushed: false, cleanedUp: false, ok: false, error };
+		const warning = `mark-done failed (${short(e)}); fix roadmap permissions and rerun 'npx pelaggio roadmap mark-done ${itemId}' from the repository root`;
+		warnings.push(warning);
+		log(`⚠ ${warning}`);
 	}
 
-	// 3. Archive plan — adapter no-ops when the plan is absent, so a throw is a
-	//    real failure. Same block-before-cleanup semantics.
+	// 3. Archive independently, even when mark-done failed.
 	try {
 		await roadmap.archivePlan(itemId);
+		archived = true;
 	} catch (e) {
-		const error = `archive-plan failed (${short(e)}) — leaving feature branch intact for recovery`;
-		log(`⚠ ${error}`);
-		return { recovered, markedDone: true, archived: false, pushed: false, cleanedUp: false, ok: false, error };
+		const warning = `archive-plan failed (${short(e)}); fix roadmap permissions and rerun 'npx pelaggio roadmap archive-plan ${itemId}' from the repository root`;
+		warnings.push(warning);
+		log(`⚠ ${warning}`);
 	}
 
 	// 4. Push merge + bookkeeping together. A push failure or pull conflict is
@@ -252,11 +252,11 @@ export async function runShipBookkeeping(ctx: ShipBookkeepingCtx, deps: ShipBook
 	//    cycle shipped nor destroy the branch.
 	const push = pushMain(mainRepo, exec, log, deps.verify);
 	if (!push.ok) {
-		return { recovered, markedDone: true, archived: true, pushed: false, cleanedUp: false, ok: false, error: push.error };
+		return { recovered, markedDone, archived, pushed: false, cleanedUp: false, warnings, ok: false, error: push.error };
 	}
 
-	// 5. Cleanup — now that mark-done, archive, and push all succeeded it is safe
-	//    to destroy the feature branch/worktree. Repair MAIN's node_modules BEFORE
+	// 5. Cleanup — now that push succeeded it is safe to destroy the feature
+	//    branch/worktree. Repair MAIN's node_modules BEFORE
 	//    removing the worktree (else symlinks pointing into it break). Each step is
 	//    best-effort: a gone worktree / already-deleted branch is a no-op, and
 	//    `cleanedUp` reflects what actually happened rather than a hardcoded true.
@@ -288,6 +288,6 @@ export async function runShipBookkeeping(ctx: ShipBookkeepingCtx, deps: ShipBook
 	}
 
 	const cleanedUp = (!inWorktree || worktreeRemoved) && branchDeleted;
-	log(`bookkeeping tail: recovered=${recovered} markedDone=true archived=true pushed=true cleanedUp=${cleanedUp}`);
-	return { recovered, markedDone: true, archived: true, pushed: true, cleanedUp, ok: true };
+	log(`bookkeeping tail: recovered=${recovered} markedDone=${markedDone} archived=${archived} pushed=true cleanedUp=${cleanedUp} warnings=${warnings.length}`);
+	return { recovered, markedDone, archived, pushed: true, cleanedUp, warnings, ok: true };
 }

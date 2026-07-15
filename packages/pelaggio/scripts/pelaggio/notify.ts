@@ -29,6 +29,7 @@ export interface NotifyPayload {
 	costEstimated?: boolean;
 	/** The cycle's error string, when it carried one. */
 	error?: string;
+	bookkeepingWarnings?: string[];
 	prUrl?: string;
 	shipwrecked: boolean;
 	logPath: string;
@@ -85,6 +86,7 @@ export function formatText(p: Omit<NotifyPayload, "text">): string {
 	const title = p.title ? ` "${p.title}"` : "";
 	const bits: string[] = [`${p.costEstimated ? "~" : ""}$${p.cost.toFixed(2)}`];
 	if (p.prUrl) bits.push(p.prUrl);
+	if (p.event === "shipped" && p.bookkeepingWarnings?.length) bits.push(`bookkeeping incomplete: ${p.bookkeepingWarnings.join("; ")}`);
 	// Skip the error when it just restates the event ("parked · parked").
 	if (p.error && p.error !== p.event && p.event !== "shipped" && p.event !== "pr-opened") bits.push(p.error);
 	return `${head}${title} — ${bits.join(" · ")}`;
@@ -197,6 +199,7 @@ export async function notifyCycle(cfg: NotifyConfig, result: CycleResult, logPat
 		cost: result.cost,
 		...(result.costEstimated ? { costEstimated: true } : {}),
 		...(result.error ? { error: result.error } : {}),
+		...(result.bookkeepingWarnings?.length ? { bookkeepingWarnings: result.bookkeepingWarnings } : {}),
 		...(result.prUrl ? { prUrl: result.prUrl } : {}),
 		shipwrecked: result.shipwrecked ?? false,
 		logPath,

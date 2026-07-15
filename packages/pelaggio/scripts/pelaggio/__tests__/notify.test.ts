@@ -34,6 +34,10 @@ describe("classifyEvent", () => {
 		assert.equal(classifyEvent(result({ completed: true })), "shipped");
 	});
 
+	it("completed with bookkeeping warnings ⇒ shipped", () => {
+		assert.equal(classifyEvent(result({ completed: true, bookkeepingWarnings: ["mark-done failed"] })), "shipped");
+	});
+
 	it("not completed + shipwrecked ⇒ shipwrecked", () => {
 		assert.equal(classifyEvent(result({ shipwrecked: true, error: "ship failed (recovery also failed)" })), "shipwrecked");
 	});
@@ -92,6 +96,14 @@ describe("formatText", () => {
 		assert.match(failed, /plan failed/);
 		const shipped = formatText({ event: "shipped", itemId: "34", completed: true, cost: 0.5, error: "leftover", shipwrecked: false, logPath: "/l", ts: "t" });
 		assert.doesNotMatch(shipped, /leftover/);
+	});
+
+	it("includes webhook-safe bookkeeping warnings for shipped events", () => {
+		const warning = "mark-done failed (EACCES); rerun npx pelaggio roadmap mark-done 34";
+		const t = formatText({ event: "shipped", itemId: "34", completed: true, cost: 0.5, bookkeepingWarnings: [warning], shipwrecked: false, logPath: "/l", ts: "t" });
+		assert.match(t, /bookkeeping incomplete/);
+		assert.match(t, /mark-done failed/);
+		assert.ok(!t.includes(`${String.fromCharCode(27)}[`));
 	});
 
 	it("appends prUrl when present", () => {
@@ -212,6 +224,16 @@ describe("notifyCycle", () => {
 		const ev = await notifyCycle({ ...baseCfg, url: "" }, result({ completed: true }), "/l", { send });
 		assert.equal(ev, null);
 		assert.equal(sent.length, 0);
+	});
+
+	it("threads shipped bookkeeping warnings into structured payload and text", async () => {
+		const { send, sent } = spySend();
+		const warning = "mark-done failed (EACCES); rerun mark-done";
+		const ev = await notifyCycle(baseCfg, result({ completed: true, bookkeepingWarnings: [warning] }), "/l", { send });
+
+		assert.equal(ev, "shipped");
+		assert.deepEqual(sent[0].payload.bookkeepingWarnings, [warning]);
+		assert.match(sent[0].payload.text, /bookkeeping incomplete.*mark-done failed/);
 	});
 
 	it("never throws even when the injected send throws (contract holds at the seam)", async () => {

@@ -72,6 +72,7 @@ export interface CycleLogEntry {
 	parked?: boolean;
 	parkReason?: string | null;
 	shipwrecked?: boolean;
+	bookkeepingWarnings?: string[];
 }
 
 // ── Flow events ───────────────────────────────────────────────────────
@@ -167,6 +168,8 @@ export interface CycleResult {
 	 *  `runPipeline`'s `finish()` spreads its local `shipwrecked` flag onto the result so the
 	 *  orchestrator can classify a `shipwrecked` notification. Mirrors `CycleLogEntry.shipwrecked`. */
 	shipwrecked?: boolean;
+	/** Non-blocking roadmap mutations left after a successful feature push. */
+	bookkeepingWarnings?: string[];
 }
 
 /**
@@ -213,7 +216,7 @@ export interface ShipTarget {
 
 export interface CycleStatus {
 	itemId: string;
-	status: "done" | "running" | "failed" | "skipped" | "parked";
+	status: "done" | "warning" | "running" | "failed" | "skipped" | "parked";
 	cost: number;
 	step?: string;
 	turns?: number;

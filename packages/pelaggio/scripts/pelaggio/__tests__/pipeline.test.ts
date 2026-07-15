@@ -67,6 +67,7 @@ const noopBookkeeping = async (): Promise<ShipBookkeepingResult> => ({
 	archived: true,
 	pushed: true,
 	cleanedUp: true,
+	warnings: [],
 	ok: true,
 });
 
