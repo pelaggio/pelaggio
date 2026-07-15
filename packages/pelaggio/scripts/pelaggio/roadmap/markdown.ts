@@ -225,25 +225,32 @@ export class MarkdownRoadmap implements RoadmapSource {
 		// "Recently completed" list lines (`- ID ✓`, the shape getItem honors and
 		// /tidy produces) — not arbitrary prose. Prose tokens like "ADR-0003" or
 		// "WSL2" would otherwise pollute the count and mis-allocate the next ID
-		// (issue #46). Completed lines must count or the ID high-water mark is lost
-		// when rows are pruned, re-minting a shipped item's ID. The prefix grammar
-		// is [A-Z]+ (unbounded, like the row parsers') so any row they accept counts.
+		// (issue #46). Completed lines must count toward maxByPrefix or the ID
+		// high-water mark is lost when rows are pruned, re-minting a shipped item's
+		// ID. But for prefix *voting*, row counts are authoritative whenever any row
+		// exists — an archived prefix that outnumbers the one active row would
+		// otherwise win the vote and mis-mint under the wrong track. Freeform counts
+		// only decide the vote when the roadmap has zero item rows at all, e.g. a
+		// fully-archived roadmap whose IDs live solely in "Recently completed"
+		// (issue #48). The prefix grammar is [A-Z]+ (unbounded, like the row
+		// parsers') so any row they accept counts.
 		const idRe = /^([A-Z]+)-?(\d+)/;
-		const prefixCounts = new Map<string, number>();
+		const rowPrefixCounts = new Map<string, number>();
+		const freeformPrefixCounts = new Map<string, number>();
 		const maxByPrefix = new Map<string, number>();
-		const count = (p: string, n: number) => {
-			prefixCounts.set(p, (prefixCounts.get(p) ?? 0) + 1);
+		const count = (counts: Map<string, number>, p: string, n: number) => {
+			counts.set(p, (counts.get(p) ?? 0) + 1);
 			maxByPrefix.set(p, Math.max(maxByPrefix.get(p) ?? 0, n));
 		};
 		for (const row of [...parseOpenTableRows(body), ...parseCheckboxRows(body)]) {
 			const m = row.item.replace(/^~~\s*|\s*~~$/g, "").match(idRe);
 			if (!m) continue;
-			count(m[1], parseInt(m[2], 10));
+			count(rowPrefixCounts, m[1], parseInt(m[2], 10));
 		}
 		for (const m of body.matchAll(/^-\s+([A-Z]+)-?(\d+)[\dA-Z-]*\s*✓/gmu)) {
-			count(m[1], parseInt(m[2], 10));
+			count(freeformPrefixCounts, m[1], parseInt(m[2], 10));
 		}
-		const prefix = explicitPrefix ?? [...prefixCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "ITEM";
+		const prefix = explicitPrefix ?? inferPrefix(rowPrefixCounts.size > 0 ? rowPrefixCounts : freeformPrefixCounts);
 		const nextN = (maxByPrefix.get(prefix) ?? 0) + 1;
 		const id = `${prefix}-${nextN}`;
 
@@ -475,6 +482,20 @@ function normalizeExplicitPrefix(prefix: string): string {
 	const normalized = prefix.trim().toUpperCase();
 	if (!/^[A-Z]+$/.test(normalized)) throw new Error("createItem: --prefix must contain letters only (example: INST)");
 	return normalized;
+}
+
+function inferPrefix(prefixCounts: Map<string, number>): string {
+	const ranked = [...prefixCounts.entries()].sort((a, b) => b[1] - a[1]);
+	if (ranked.length === 0) return "ITEM";
+	if (ranked[1]?.[1] === ranked[0][1]) {
+		const tied = ranked
+			.filter(([, count]) => count === ranked[0][1])
+			.map(([prefix]) => prefix)
+			.sort()
+			.join(", ");
+		throw new Error(`createItem: cannot infer ID prefix; equally common prefixes: ${tied}. Pass --prefix explicitly`);
+	}
+	return ranked[0][0];
 }
 
 function parseOpenTableRows(body: string): RoadmapRow[] {

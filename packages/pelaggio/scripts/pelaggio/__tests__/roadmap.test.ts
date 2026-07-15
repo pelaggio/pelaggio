@@ -404,6 +404,19 @@ describe("MarkdownRoadmap.createItem", () => {
 		assert.match(body, /COMP-2\. New other/);
 	});
 
+	it("rejects ambiguous prefix inference instead of depending on row order (issue #48)", async () => {
+		const repo = seedRepo();
+		seedFile(repo, "docs/roadmap-core.md", ["# Core", "", "| Item | Depends on |", "|---|---|", "| ZOO-1. First zoo | — |", "| AGT-4. Fourth agent | — |", ""].join("\n"));
+		execSync("git add -A && git commit -q -m seed", { cwd: repo });
+
+		const r = new MarkdownRoadmap({ repo });
+		await assert.rejects(() => r.createItem({ title: "Ambiguous item", scope: "S" }), /cannot infer ID prefix; equally common prefixes: AGT, ZOO\. Pass --prefix explicitly/);
+
+		const body = readFileSync(resolve(repo, "docs/roadmap-core.md"), "utf-8");
+		assert.doesNotMatch(body, /Ambiguous item/);
+		assert.equal(execSync("git status --porcelain", { cwd: repo, encoding: "utf-8" }).trim(), "");
+	});
+
 	it("commits its edits immediately, leaving a clean tree (bug #28 — deferred items must not linger unstaged)", async () => {
 		const repo = seedRepo();
 		seedFile(repo, "docs/roadmap-core.md", ["# Core", "", "| Item | Depends on |", "|---|---|", "| TOOL-1. First | — |", ""].join("\n"));
@@ -463,6 +476,26 @@ describe("MarkdownRoadmap.createItem", () => {
 	it("counts 'Recently completed' list IDs so pruned rows keep the high-water mark (issue #46 follow-up)", async () => {
 		const repo = seedRepo();
 		seedFile(repo, "docs/roadmap-core.md", ["# Core", "", "| Item | Depends on |", "|------|------------|", "| TOOL-2. Open thing | — |", "", "## Recently completed", "", "- TOOL-5 ✓", "- TOOL-3 ✓", ""].join("\n"));
+		execSync("git add -A && git commit -q -m seed", { cwd: repo });
+
+		const r = new MarkdownRoadmap({ repo });
+		const created = await r.createItem({ title: "New thing", scope: "M" });
+		assert.equal(created.id, "TOOL-6");
+	});
+
+	it("prefers the open row's prefix over a more numerous archived prefix (rows authoritative, issue #48)", async () => {
+		const repo = seedRepo();
+		seedFile(repo, "docs/roadmap-core.md", ["# Core", "", "| Item | Depends on |", "|------|------------|", "| AGT-1. Current active item | — |", "", "## Recently completed", "", "- ZOO-1 ✓", "- ZOO-2 ✓", "- ZOO-3 ✓", ""].join("\n"));
+		execSync("git add -A && git commit -q -m seed", { cwd: repo });
+
+		const r = new MarkdownRoadmap({ repo });
+		const created = await r.createItem({ title: "New thing", scope: "M" });
+		assert.equal(created.id, "AGT-2");
+	});
+
+	it("falls back to 'Recently completed' IDs when no item rows exist (all-archived roadmap, issue #48)", async () => {
+		const repo = seedRepo();
+		seedFile(repo, "docs/roadmap-core.md", ["# Core", "", "## Recently completed", "", "- TOOL-3 ✓", "- TOOL-5 ✓", ""].join("\n"));
 		execSync("git add -A && git commit -q -m seed", { cwd: repo });
 
 		const r = new MarkdownRoadmap({ repo });
