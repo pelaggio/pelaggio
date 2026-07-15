@@ -7,12 +7,18 @@ import type { CreateItemOpts, ItemStatus, LinearRoadmapConfig, MarkDoneContext, 
 const PLAN_MARKER = "<!-- pelaggio-plan -->";
 const IN_PROGRESS_LABEL = "in-progress";
 
+interface LinearIssueRelation {
+	type: string;
+	relatedIdentifier: string;
+}
+
 export interface LinearIssueListItem {
 	id: string;
 	identifier: string;
 	title: string;
 	description: string | null;
-	relations: { type: string; relatedIdentifier: string }[];
+	relations: LinearIssueRelation[];
+	inverseRelations?: LinearIssueRelation[];
 	/** Optional claim markers (issue #12); stubs that omit them read as unclaimed. */
 	stateType?: string;
 	labels?: string[];
@@ -29,7 +35,9 @@ export interface LinearCommentNode {
  */
 export interface LinearApi {
 	listIssues(opts: { teamId: string; label?: string; includeDone?: boolean }): Promise<LinearIssueListItem[]>;
-	getIssue(identifier: string): Promise<{ id: string; identifier: string; title: string; description?: string | null; stateType?: string; labels?: string[]; relations?: { type: string; relatedIdentifier: string }[] } | null>;
+	getIssue(
+		identifier: string,
+	): Promise<{ id: string; identifier: string; title: string; description?: string | null; stateType?: string; labels?: string[]; relations?: LinearIssueRelation[]; inverseRelations?: LinearIssueRelation[] } | null>;
 	createComment(issueId: string, body: string): Promise<void>;
 	transitionIssue(issueId: string, teamId: string, stateType: "started" | "completed"): Promise<void>;
 	addLabel(issueId: string, labelName: string): Promise<void>;
@@ -80,15 +88,15 @@ export class LinearRoadmap implements RoadmapSource {
 		const api = await this.api();
 		const issues = await api.listIssues({ teamId: this.teamId, label: this.label || undefined, includeDone: opts?.includeDone });
 		return issues.map((it) => {
-			const relations = it.relations ?? [];
-			const blocked = relations.some((r) => r.type === "blocked_by");
+			const inverseRelations = it.inverseRelations ?? [];
+			const blocked = hasBlocker(inverseRelations);
 			// Server-side claim markers double as the cross-host claim signal (issue #12).
 			const claimed = it.stateType === "started" || (it.labels ?? []).includes(IN_PROGRESS_LABEL);
 			const status: ItemStatus = blocked ? "blocked" : claimed ? "in-progress" : "open";
 			return {
 				id: it.identifier,
 				title: it.title,
-				deps: formatDeps(relations),
+				deps: formatBlockers(inverseRelations),
 				sourceRef: it.identifier,
 				status,
 			};
@@ -99,15 +107,15 @@ export class LinearRoadmap implements RoadmapSource {
 		const api = await this.api();
 		const issue = await api.getIssue(id);
 		if (!issue) return null;
-		const relations = issue.relations ?? [];
+		const inverseRelations = issue.inverseRelations ?? [];
 		let status: ItemStatus = "open";
 		if (issue.stateType === "completed" || issue.stateType === "canceled") status = "done";
-		else if (relations.some((r) => r.type === "blocked_by")) status = "blocked";
+		else if (hasBlocker(inverseRelations)) status = "blocked";
 		else if (issue.stateType === "started" || (issue.labels ?? []).includes(IN_PROGRESS_LABEL)) status = "in-progress";
 		return {
 			id: issue.identifier,
 			title: issue.title,
-			deps: formatDeps(relations),
+			deps: formatBlockers(inverseRelations),
 			sourceRef: issue.identifier,
 			status,
 			labels: issue.labels ?? [],
@@ -168,7 +176,7 @@ export class LinearRoadmap implements RoadmapSource {
 			.map((it) => ({
 				id: it.identifier,
 				title: it.title,
-				deps: formatDeps(it.relations),
+				deps: formatBlockers(it.inverseRelations ?? []),
 				sourceRef: it.identifier,
 			}));
 	}
@@ -264,8 +272,12 @@ export class LinearRoadmap implements RoadmapSource {
 	}
 }
 
-function formatDeps(relations: { type: string; relatedIdentifier: string }[]): string {
-	const blockers = relations.filter((r) => r.type === "blocked_by" || r.type === "blocks").map((r) => r.relatedIdentifier);
+function hasBlocker(inverseRelations: LinearIssueRelation[]): boolean {
+	return inverseRelations.some((relation) => relation.type === "blocks");
+}
+
+function formatBlockers(inverseRelations: LinearIssueRelation[]): string {
+	const blockers = inverseRelations.filter((relation) => relation.type === "blocks").map((relation) => relation.relatedIdentifier);
 	return blockers.join(", ");
 }
 
@@ -295,13 +307,15 @@ interface LinearSdkIssue {
 	labelIds?: string[];
 	state?: { type: string } | (() => Promise<{ type: string } | null>);
 	relations?: () => Promise<{ nodes: LinearSdkRelation[] }>;
+	inverseRelations?: () => Promise<{ nodes: LinearSdkRelation[] }>;
 	comments?: () => Promise<{ nodes: LinearSdkComment[] }>;
 	labels?: () => Promise<{ nodes: { name: string }[] }>;
 }
 
 interface LinearSdkRelation {
 	type: string;
-	relatedIssue?: () => Promise<{ identifier: string } | null>;
+	relatedIssue?: Promise<{ identifier: string } | null>;
+	issue?: Promise<{ identifier: string } | null>;
 }
 
 interface LinearSdkComment {
@@ -369,15 +383,23 @@ async function defaultLinearApi(): Promise<LinearApi> {
 			const res = await client.issues({ filter, first: 200 });
 			const items: LinearIssueListItem[] = [];
 			for (const node of res.nodes) {
-				const relations: { type: string; relatedIdentifier: string }[] = [];
+				const relations: LinearIssueRelation[] = [];
 				const rel = typeof node.relations === "function" ? await node.relations() : null;
 				if (rel) {
 					for (const r of rel.nodes) {
-						const related = typeof r.relatedIssue === "function" ? await r.relatedIssue() : null;
+						const related = await r.relatedIssue;
 						if (related?.identifier) relations.push({ type: r.type, relatedIdentifier: related.identifier });
 					}
 				}
-				items.push({ id: node.id, identifier: node.identifier, title: node.title, description: node.description ?? null, relations, stateType: await stateTypeOf(node) });
+				const inverseRelations: LinearIssueRelation[] = [];
+				const inverseRel = typeof node.inverseRelations === "function" ? await node.inverseRelations() : null;
+				if (inverseRel) {
+					for (const r of inverseRel.nodes) {
+						const related = await r.issue;
+						if (related?.identifier) inverseRelations.push({ type: r.type, relatedIdentifier: related.identifier });
+					}
+				}
+				items.push({ id: node.id, identifier: node.identifier, title: node.title, description: node.description ?? null, relations, inverseRelations, stateType: await stateTypeOf(node) });
 			}
 			return items;
 		},
@@ -385,12 +407,20 @@ async function defaultLinearApi(): Promise<LinearApi> {
 			const issue = await client.issue(identifier);
 			if (!issue) return null;
 			const stateType = await stateTypeOf(issue);
-			const relations: { type: string; relatedIdentifier: string }[] = [];
+			const relations: LinearIssueRelation[] = [];
 			if (typeof issue.relations === "function") {
 				const rel = await issue.relations();
 				for (const r of rel.nodes) {
-					const related = typeof r.relatedIssue === "function" ? await r.relatedIssue() : null;
+					const related = await r.relatedIssue;
 					if (related?.identifier) relations.push({ type: r.type, relatedIdentifier: related.identifier });
+				}
+			}
+			const inverseRelations: LinearIssueRelation[] = [];
+			if (typeof issue.inverseRelations === "function") {
+				const rel = await issue.inverseRelations();
+				for (const r of rel.nodes) {
+					const related = await r.issue;
+					if (related?.identifier) inverseRelations.push({ type: r.type, relatedIdentifier: related.identifier });
 				}
 			}
 			let labels: string[] | undefined;
@@ -398,7 +428,7 @@ async function defaultLinearApi(): Promise<LinearApi> {
 				const l = await issue.labels();
 				labels = l.nodes.map((n) => n.name);
 			}
-			return { id: issue.id, identifier: issue.identifier, title: issue.title, description: issue.description ?? null, stateType, labels, relations };
+			return { id: issue.id, identifier: issue.identifier, title: issue.title, description: issue.description ?? null, stateType, labels, relations, inverseRelations };
 		},
 		async createComment(issueId, body) {
 			await client.createComment({ issueId, body });
