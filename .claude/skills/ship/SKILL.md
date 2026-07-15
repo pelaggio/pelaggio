@@ -90,6 +90,7 @@ Use `"target": "auto-merge-pr"` when arguments contain `--target=auto-merge-pr`.
 **If in worktree** (worktree path != MAIN_REPO):
 ```bash
 cd "{MAIN_REPO}"
+git checkout main
 git pull --no-rebase origin main
 git merge "$BRANCH" --no-edit
 ```

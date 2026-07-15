@@ -34,6 +34,7 @@ import {
 	detectResumeStep,
 	diffForbiddenRootSnapshots,
 	ensureCheckpointed,
+	ensureMainCheckoutOnBranch,
 	expandSkill,
 	filesChangedSince,
 	fmtWait,
@@ -418,6 +419,15 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		if (mutex) await mutex.acquire();
 		try {
 			if (parkSignal.parked) return finish({ itemId: null, completed: false, cost, error: "parked" });
+
+			// Worktree-isolated claims branch off the literal `main` ref (git-claim.ts), so a
+			// detached/off-branch mainRepo can't corrupt a *new* claim — but it does break an
+			// operator's between-cycle `git merge --ff-only origin/main` and misleads `git log
+			// -1` there (issue #216). --no-worktree mode legitimately leaves mainRepo on the
+			// prior claim's feature branch (or a CI-provided checkout), so it's exempt.
+			if (!opts.dryRun && !opts.noWorktree && !ensureMainCheckoutOnBranch(mainRepo, "main", log)) {
+				return finish({ itemId: null, completed: false, cost, error: "main checkout is not on main and could not be reattached" });
+			}
 			const worktreesBefore = new Set(opts.dryRun ? [] : listWorktrees());
 
 			if (!opts.dryRun && itemId && roadmap.isCharterPickRace(itemId)) {
