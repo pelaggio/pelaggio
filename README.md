@@ -29,8 +29,8 @@ without taking away your control:
 - **Bounded blast radius.** Every item runs in its own git worktree, isolated from `main`
   and from your other work. Shipping defaults to a **pull request**; autonomous direct-push
   to `main` is an explicit, informed opt-in — never the silent default.
-- **Fail-closed, not fail-open.** The review gate merges only on an explicit PASS; a BLOCK,
-  a missing verdict, an error, or a parked run all stop the merge.
+- **Fail-closed, not fail-open.** The review gate validates severity-tagged findings and
+  blocks on any `must-fix`, malformed report, error, or parked run.
 - **Self-hosted.** Runs on your machine or your infra. No telemetry. Your code and prompts
   don't touch our servers, because there are none.
 - **Trust is the product.** For a tool that writes to your repo, the security posture *is*
@@ -71,7 +71,7 @@ Pelaggio's guarantees are documented and verifiable, not marketing:
 
 - **Worktree isolation** — each item works only inside its own git worktree.
 - **PR-gated by default** — human review is the shipped default; direct-push is opt-in.
-- **Fail-closed review gate** — a merge happens only on an explicit PASS.
+- **Fail-closed review gate** — only a valid report without `must-fix` findings passes.
 - **Authenticated control plane** — the daemon refuses to start unauthenticated on a
   non-loopback host; no silent open port.
 - **No surprise egress** — self-hosted, no telemetry, and secrets are never interpolated

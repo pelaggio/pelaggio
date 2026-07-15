@@ -54,11 +54,13 @@ The boundary is the merge because the observed failure (#28) was budget exhausti
 
 ## PR Review Loop
 
-`pr-review` is a non-pipeline step used by the CI merge gate. The gate (`.github/workflows/pr-review.yml` → `pr-review-cli.ts` → `parseReviewGate`) fails **closed**: it exits non-zero on anything that is not an explicit `Verdict: PASS` from a successful run — `Verdict: BLOCK`, a missing verdict, a refusal, an SDK error, max-turns, or a rate-limit park all block the merge. This is stricter than `parseVerdict` (which keeps an "engaged ⇒ APPROVE" fail-safe) because a merge gate must never green on a phantom sign-off.
+`pr-review` is a non-pipeline step used by the CI merge gate. The gate (`.github/workflows/pr-review.yml` → `pr-review-cli.ts` → `parseReviewFindings`) fails **closed**: each successful pass must emit a valid versioned, severity-tagged report. A `must-fix` finding blocks; `nice` and `note` do not. A missing or malformed report, refusal, SDK error, max-turns, or rate-limit park also blocks. The aggregate still posts the compatibility `review` commit status, so existing branch protection and local review callers are unchanged.
 
 Security-sensitive diffs run two independent `pr-review` sessions: the ordinary standard review and a triggered `--red-team` pass selected by deterministic path/diff signals in `classifySecurityReviewDiff()`. Either pass can block, and a triggered red-team pass that cannot complete blocks the whole required `review` check. Do not add a new pipeline `Step` for this; both sessions intentionally reuse the non-pipeline `pr-review` step key and aggregate into one PR comment / status result.
 
 Local review mode (`review.runner: local`) runs before the local revise sweep. It must execute trusted tooling from local `main` and treat the PR head only as diff/file data, then post the `review` commit status and findings comment that the existing revise sweep consumes.
+
+Typed findings are the judgment transport for this pass only. Repeated review/revise convergence and arbitration remain planned in the subsequent #191 slices.
 
 ### Revise loops (one pass, label-bounded)
 

@@ -54,13 +54,13 @@ claims:
     last_verified: "2026-07-07"
 
   - id: TC-003
-    claim: "The merge gate fails closed. A pull request merges only on an explicit 'Verdict: PASS' — silence, errors, or a refusal all block."
+    claim: "The merge gate fails closed. Only validated review reports without 'must-fix' findings pass; malformed output, errors, or refusal block."
     status: guarantee
     applies_to: ">=0.1.0"
     condition: "ship.target = pull-request"
-    mechanism: "parseReviewGate passes only on an explicit PASS from a successful run; BLOCK/missing/refusal/SDK-error/max-turns/park all block (helpers.ts:314-320). CI runs on an ephemeral VM with a comment-only token."
-    evidence_command: "PELAGGIO_REPO=$PWD node --import tsx -e \"const h=await import('./packages/pelaggio/scripts/pelaggio/helpers.ts'); if(h.parseReviewGate('Verdict: PASS', true)!=='pass') process.exit(1); for (const [text, ok] of [['Verdict: PASS', false], ['Verdict: BLOCK', true], ['', true], ['Earlier\\\\nVerdict: PASS\\\\nLater\\\\nVerdict: BLOCK', true]]) if(h.parseReviewGate(text, ok)!=='block') process.exit(1)\""
-    test_file: "packages/pelaggio/scripts/pelaggio/__tests__/helpers.test.ts"
+    mechanism: "parseReviewFindings validates the versioned closed schema; reviewFindingsGate blocks only must-fix while step and parse failures block in pr-review-cli.ts. CI publishes the compatibility review status."
+    evidence_command: "PELAGGIO_REPO=$PWD node --import tsx -e \"const f=await import('./packages/pelaggio/scripts/pelaggio/review/findings.ts'); const block=(findings)=>'REVIEW_FINDINGS\\\\n'+JSON.stringify({schemaVersion:1,summary:'Reviewed.',findings})+'\\\\nEND_REVIEW_FINDINGS'; for (const findings of [[],[{severity:'nice',message:'Improve.'}],[{severity:'note',message:'Context.'}]]) if(f.reviewFindingsGate(f.parseReviewFindings(block(findings)))!=='pass') process.exit(1); if(f.reviewFindingsGate(f.parseReviewFindings(block([{severity:'must-fix',message:'Bug.'}])))!=='block') process.exit(1); try { f.parseReviewFindings('malformed'); process.exit(1) } catch {}\""
+    test_file: "packages/pelaggio/scripts/pelaggio/__tests__/review-findings.test.ts"
     failure_mode: "blocks the merge, loudly"
     known_limits: "This is the review gate, distinct from the fail-safe shakedown parser. See TC-013 for auto-merge."
     standards: ["OWASP-LLM06", "ASVS-V4"]
@@ -178,7 +178,7 @@ claims:
     status: best_effort        # partially: worktree hooks + gates; not yet a designed injection defense
     applies_to: ">=0.1.0 (best_effort); hardening planned"
     mechanism: "Today: worktree hooks (TC-011), fail-closed review gate (TC-003), and budget/turn caps bound blast radius. Not yet: a designed prompt-injection defense (input provenance, tool-scoping by trust level, output handling)."
-    evidence_command: "grep -rEn 'PreToolUse|parseReviewGate|TURN_LIMITS|BUDGETS|SECURITY_PATHS|prompt injection' packages/pelaggio/scripts/pelaggio docs/trust"
+    evidence_command: "grep -rEn 'PreToolUse|parseReviewFindings|TURN_LIMITS|BUDGETS|SECURITY_PATHS|prompt injection' packages/pelaggio/scripts/pelaggio docs/trust"
     test_file: "planned — injection corpus / red-team fixtures"
     failure_mode: "bounded by the gates above, not by injection-specific detection"
     known_limits: "This is the DEFINING threat and the honest weak point: the agent runs allow-all tools over attacker-reachable content. Hardening (least-privilege tools, human gates on risky file classes) is the roadmap headline."

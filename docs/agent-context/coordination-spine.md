@@ -211,8 +211,9 @@ the outbound side already has.
    `parseBlockedReason`) retire, and the `ship` sequence's pipeline-mode
    detection (`if Arguments contains "pelaggio"`) becomes a caller distinction,
    not a prose branch.
-4. **Keep judgment in prose.** Plan authoring, shakedown, PR-review verdict, and
-   semantic merge resolution stay as they are. The spine is glue between
+4. **Keep judgment with the model.** Plan authoring, shakedown, PR-review reasoning, and
+   semantic merge resolution stay model-owned; PR-review transports its judgment as a
+   validated severity-tagged report rather than a prose verdict. The spine is glue between
    judgments, not a replacement for them.
 
 ### MCP is deferred, not designed-in (planned, low priority)
@@ -274,8 +275,9 @@ spine is the floor they stand on.
 - Coordination decisions (pick ranking, routing, deliverability, ship sequence,
   write-set disjointness) are typed CLI calls with classed exit codes and
   structured returns — never prose the harness regex-scrapes.
-- Judgment steps (plan, shakedown, PR verdict, semantic merge) stay prose; the
-  spine is glue between judgments, not a replacement for them.
+- Judgment steps (plan, shakedown, PR review, semantic merge) stay model-owned; typed
+  judgment outputs such as PR review findings prevent control flow from scraping prose.
+  Convergence and arbitration remain planned rather than part of this seam.
 - The CLI is one caller among several (pipeline, human, Codex); coordination
   logic never assumes the Claude Code harness.
 - MCP is a deferred thin transport over the spine, added only when a concrete

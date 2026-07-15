@@ -1,6 +1,6 @@
 ---
 name: pr-review
-description: "Fresh-session, out-of-context review of a pull request diff for the CI merge gate — emits Verdict PASS or BLOCK"
+description: "Fresh-session, out-of-context review of a pull request diff for the CI merge gate — emits typed findings"
 context: fork
 agent: general-purpose
 effort: max
@@ -15,9 +15,8 @@ this code and have no memory of the authoring session — that cold-read stance 
 the entire point of this gate. Your job is to decide **one thing**: does this diff
 carry a **confirmed, blocking** problem that must stop the merge?
 
-Your final assistant message **is the PR-comment body** that gets posted verbatim,
-so write it for a human reviewer. End it with a single trailing verdict line —
-`Verdict: PASS` or `Verdict: BLOCK` — parsed by the gate. Nothing after it.
+Your final assistant message must end with the structured findings block defined below.
+The CLI validates it and renders the human PR comment. Nothing may follow the block.
 
 This review is **read-only**. Do not edit, stage, or commit anything — the CI
 checkout is ephemeral and any edit is thrown away. Inspect only.
@@ -40,8 +39,7 @@ You are checked out at the PR head with full history; `origin/main` is the merge
 ## Mode selection
 
 If the `Arguments:` line contains `--red-team`, run **Red-team mode** below.
-Otherwise run **Standard mode**. In both modes, your final line must be exactly
-`Verdict: PASS` or `Verdict: BLOCK`.
+Otherwise run **Standard mode**. Both modes emit the same versioned report.
 
 ## Red-team mode — independent adversarial pass
 
@@ -66,19 +64,11 @@ Run this pass independently from any ordinary correctness review:
    isolation.
 5. For workflow/secret changes, look for permission broadening, fork/draft behavior,
    token scope leaks, and checks that can report green without running.
-6. Report only confirmed blockers with `file:line` references. Drop vague "security
-   sensitive" speculation. If no exploit, bypass, fail-open path, or security regression
-   is confirmed, end with `Verdict: PASS`.
+6. Report confirmed findings with concrete locations where applicable. Drop vague
+   "security sensitive" speculation.
 
-Write the comment body:
-
-- One or two sentences summarizing the attack surface you tested and the overall call.
-- If there are confirmed blockers: list each as **`path:line`** — exploit/fail-open path
-  — the fix.
-- Optional non-blocking notes only when they are concrete and useful.
-- A trailing verdict line, exactly one of:
-  - `Verdict: PASS` — no confirmed blocker survived.
-  - `Verdict: BLOCK` — at least one confirmed security blocker; the merge must not proceed.
+Write a concise summary of the attack surface tested and emit every confirmed candidate
+as a separate finding using the reporting contract below.
 
 ## Standard mode
 
@@ -116,19 +106,29 @@ instead).
 
 ### Phase C — report
 
-Write the comment body:
+Write a concise summary of what the PR does and emit every confirmed candidate as a
+separate finding using the reporting contract below.
 
-- One or two sentences of summary — what the PR does and the overall call.
-- If there are confirmed blockers: a list, each as **`path:line`** — what's wrong — the fix.
-- Optionally, a short "Non-blocking notes" list for things worth mentioning that do **not**
-  gate the merge. Keep it brief; this is a gate, not a deep audit.
-- A trailing verdict line, exactly one of:
-  - `Verdict: PASS` — no confirmed blocking finding survived Phase B.
-  - `Verdict: BLOCK` — at least one confirmed blocker; the merge must not proceed.
+## Reporting contract
 
-## Fail-closed contract
+End the final response with exactly one block in this form and nothing after it:
 
-The gate treats **anything that is not an explicit `Verdict: PASS` as a block**. If you
-genuinely cannot complete the review, do not guess a PASS — state what stopped you and end
-with `Verdict: BLOCK`. An unattended run relies on this: silence, ambiguity, or an aborted
-review must never read as approval.
+```text
+REVIEW_FINDINGS
+{"schemaVersion":1,"summary":"Concise single-line summary.","findings":[{"severity":"must-fix","message":"Concise single-line finding.","path":"src/file.ts","line":12}]}
+END_REVIEW_FINDINGS
+```
+
+The JSON object has exactly `schemaVersion`, `summary`, and `findings`. Each finding has
+exactly `severity`, `message`, and optional `path` and `line`; `line` requires `path` and
+is a positive integer. All strings are non-empty and single-line. Use these severities:
+
+- `must-fix`: a confirmed bug, broken required check, security exploit or fail-open path,
+  or load-bearing invariant violation. This is the only severity that blocks merge.
+- `nice`: a concrete improvement worth acting on that is not merge-blocking.
+- `note`: useful observation or context that needs no action.
+
+Use an empty `findings` array for a clean review. Do not duplicate a PASS/BLOCK verdict in
+prose. If you genuinely cannot complete the review, do not emit a clean report: explain
+the failure as a `must-fix` finding. Missing, malformed, ambiguous, or aborted output is
+rejected and blocks by default.

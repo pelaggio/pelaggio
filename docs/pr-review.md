@@ -58,10 +58,10 @@ comments.
    CLI runs a second fresh `pr-review --red-team` session before deciding the gate.
    The CLI posts both pass outputs as one idempotently-upserted PR comment and sets the
    exit code.
-5. **Exit code = gate = posted `review` status.** The CLI exits `0` only on an explicit
-   `Verdict: PASS` from every required pass; everything else — `Verdict: BLOCK`, a
-   missing verdict, a refusal, an SDK error, max-turns, a rate-limit park, or inability
-   to inspect the diff — exits `1`. The workflow's final step translates that exit code
+5. **Exit code = gate = posted `review` status.** The CLI exits `0` only when every
+   required pass emits a valid versioned findings report with no `must-fix` finding.
+   A `must-fix`, missing or malformed report, refusal, SDK error, max-turns, rate-limit
+   park, or inability to inspect the diff exits `1`. The workflow translates that exit code
    into the `review` commit status (`0` → success, else failure), and posts `failure`
    if the job is cancelled after starting. The gate **fails closed**: ambiguity blocks
    the merge, and a crash before the final step leaves the earlier `pending` status.
@@ -72,11 +72,10 @@ The load-bearing invariant is that the gate can never go green on a phantom sign
 Two layers enforce it:
 
 - `runStep` downgrades a refusal / decline to `ok: false`.
-- `parseReviewGate(text, ok)` (in `helpers.ts`) returns `block` on `!ok` and on any
-  text that is not an explicit `Verdict: PASS`. Unlike `parseVerdict` — which keeps an
-  "engaged review ⇒ APPROVE" fail-*safe* so a genuine review that omits the keyword
-  still ships — a merge gate has no such fail-safe: a keyword-less-but-engaged review
-  **blocks**.
+- `parseReviewFindings(text)` validates the delimited JSON report at the untrusted
+  model-output boundary. Unknown versions, keys, severities, or malformed fields are
+  rejected. A valid report blocks only when it contains a `must-fix`; `nice` and `note`
+  remain visible but non-blocking. `ok: false` and parser failures block separately.
 
 A transient failure (rate limit, flaky SDK error) therefore shows red. If a security
 diff triggers the red-team pass and that pass cannot complete, the whole gate blocks
@@ -94,8 +93,9 @@ The standard review is one fresh session, structured as three internal phases (s
   against the actual code; keep only findings that are both **real** and **blocking**
   (ships a bug, breaks a load-bearing invariant, or merges broken code). Style nits and
   speculation are dropped.
-- **Report** — the final message is the comment body: short summary, confirmed blockers
-  (`file:line` + why + fix), then `Verdict: PASS` or `Verdict: BLOCK`.
+- **Report** — the final message ends in one versioned, delimited JSON report containing
+  a summary and separate `must-fix`, `nice`, or `note` findings with optional locations.
+  The CLI validates it and renders the human comment.
 
 The review is **read-only by convention** — the CI checkout is ephemeral, so edits would
 never be pushed. The CLI, not the agent, owns comment posting.
@@ -137,7 +137,7 @@ upserts: each carries a machine-readable marker as its final line —
 ```
 
 Recording `ok`/`subtype` is the disambiguation `gh run list` **cannot** provide: a red
-job conclusion conflates a real `Verdict: BLOCK` with a fail-closed transient (rate-limit
+job conclusion conflates a real `must-fix` report with a fail-closed transient (rate-limit
 / max-turns / refusal). Precision is only about the former, so filter to
 `ok=true subtype=success` first. Enumerate the markers across recent PRs with:
 

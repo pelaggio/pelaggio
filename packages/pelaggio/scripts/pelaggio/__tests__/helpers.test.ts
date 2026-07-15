@@ -29,7 +29,6 @@ import {
 	parsePickItem,
 	parsePickResult,
 	parseResetTime,
-	parseReviewGate,
 	parseShipMerged,
 	parseVerdict,
 	parseWaitFlag,
@@ -850,44 +849,6 @@ describe("parseVerdict", () => {
 	});
 });
 
-describe("parseReviewGate", () => {
-	it("passes only on an explicit Verdict: PASS from a successful run", () => {
-		assert.equal(parseReviewGate("Summary…\n\nVerdict: PASS", true), "pass");
-		assert.equal(parseReviewGate("verdict: pass", true), "pass");
-		assert.equal(parseReviewGate("**Verdict:** PASS", true), "pass");
-	});
-
-	it("blocks on an explicit Verdict: BLOCK", () => {
-		assert.equal(parseReviewGate("Found a bug.\n\nVerdict: BLOCK", true), "block");
-		assert.equal(parseReviewGate("**Verdict:** BLOCK", true), "block");
-	});
-
-	it("blocks when ok is false even if the text says PASS (ok-gate precedence)", () => {
-		assert.equal(parseReviewGate("Verdict: PASS", false), "block");
-	});
-
-	it("blocks an engaged review that omitted the verdict keyword (no engagement fail-safe — diverges from parseVerdict)", () => {
-		const review = `This review checks the diff against the rubric. The Correct dimension holds: ${"the change is sound and ".repeat(8)}no blocker found.`;
-		assert.equal(parseReviewGate(review, true), "block");
-	});
-
-	it("blocks empty or refusal-shaped output", () => {
-		assert.equal(parseReviewGate("", true), "block");
-		assert.equal(parseReviewGate("I can't help with that.", true), "block");
-	});
-
-	it("last occurrence wins — an early quoted verdict never shadows the trailing one", () => {
-		assert.equal(parseReviewGate("The CLI exits 0 only on an explicit Verdict: PASS.\n\nVerdict: BLOCK", true), "block");
-		assert.equal(parseReviewGate("Verdict: PASS\nOn reflection that was premature.\nVerdict: BLOCK", true), "block");
-		assert.equal(parseReviewGate("A prior run said Verdict: BLOCK; the fix landed.\n\nVerdict: PASS", true), "pass");
-	});
-
-	it("mid-line prose mentioning a verdict does not match (line-anchored)", () => {
-		assert.equal(parseReviewGate("This would let the verdict pass unchallenged.", true), "block");
-		assert.equal(parseReviewGate("Nothing here would make the verdict block the merge.", true), "block");
-	});
-});
-
 describe("classifySecurityReviewDiff", () => {
 	it("triggers for security-sensitive server config paths", () => {
 		const signal = classifySecurityReviewDiff(["packages/server/src/config.ts"], "diff --git a/packages/server/src/config.ts b/packages/server/src/config.ts\n");
@@ -979,7 +940,7 @@ describe("formatReviewMetrics", () => {
 	});
 
 	it("never contains a `verdict:` substring — the marker can't be mistaken for a gate verdict", () => {
-		// Belt-and-suspenders: parseReviewGate reads result.text, not the comment,
+		// Belt-and-suspenders: the findings parser reads result.text, not the comment,
 		// so the marker is out of its path entirely — but pin the invariant.
 		assert.doesNotMatch(formatReviewMetrics("pass", true, "success", 1, 1), /verdict:/i);
 		assert.doesNotMatch(formatReviewMetrics("block", false, "error_crash", 0, 0), /verdict:/i);
