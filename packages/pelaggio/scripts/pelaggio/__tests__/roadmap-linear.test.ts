@@ -132,19 +132,87 @@ describe("LinearRoadmap.getItem", () => {
 		const item = await r.getItem("ENG-42");
 		assert.deepEqual(item?.labels, ["autopilot", "scope: L"]);
 	});
+
+	it("derives blockers from incoming blocks relations and preserves done precedence", async () => {
+		const { api } = makeStub({
+			issuesByIdentifier: {
+				"ENG-2": {
+					id: "uuid-2",
+					identifier: "ENG-2",
+					title: "Blocked issue",
+					stateType: "started",
+					relations: [],
+					inverseRelations: [
+						{ type: "blocks", relatedIdentifier: "ENG-1" },
+						{ type: "related", relatedIdentifier: "ENG-3" },
+					],
+				},
+				"ENG-4": {
+					id: "uuid-4",
+					identifier: "ENG-4",
+					title: "Completed blocked issue",
+					stateType: "completed",
+					inverseRelations: [{ type: "blocks", relatedIdentifier: "ENG-1" }],
+				},
+			},
+		});
+		const r = mk({ repo: "/tmp", api });
+
+		const blocked = await r.getItem("ENG-2");
+		assert.equal(blocked?.deps, "ENG-1");
+		assert.equal(blocked?.status, "blocked");
+		assert.equal((await r.getItem("ENG-4"))?.status, "done");
+	});
+});
+
+describe("LinearRoadmap.listItems", () => {
+	it("models both sides of A blocks B with the correct dependency direction", async () => {
+		const { api } = makeStub({
+			issues: [
+				{
+					id: "u1",
+					identifier: "ENG-1",
+					title: "Blocker",
+					description: null,
+					relations: [{ type: "blocks", relatedIdentifier: "ENG-2" }],
+				},
+				{
+					id: "u2",
+					identifier: "ENG-2",
+					title: "Blocked",
+					description: null,
+					relations: [],
+					inverseRelations: [
+						{ type: "blocks", relatedIdentifier: "ENG-1" },
+						{ type: "related", relatedIdentifier: "ENG-3" },
+					],
+				},
+			],
+		});
+		const items = await mk({ repo: "/tmp", api }).listItems();
+
+		assert.deepEqual(
+			items.map(({ id, deps, status }) => ({ id, deps, status })),
+			[
+				{ id: "ENG-1", deps: "", status: "open" },
+				{ id: "ENG-2", deps: "ENG-1", status: "blocked" },
+			],
+		);
+	});
 });
 
 describe("LinearRoadmap.listOpenItems", () => {
-	it("maps a 3-issue response, extracts deps from relations", async () => {
+	it("extracts deps only from incoming blocks relations", async () => {
 		const issues: LinearIssueListItem[] = [
 			{
 				id: "u1",
 				identifier: "ENG-1",
 				title: "First",
 				description: null,
-				relations: [
-					{ type: "blocked_by", relatedIdentifier: "ENG-2" },
-					{ type: "blocks", relatedIdentifier: "ENG-3" },
+				relations: [{ type: "blocks", relatedIdentifier: "ENG-3" }],
+				inverseRelations: [
+					{ type: "blocks", relatedIdentifier: "ENG-2" },
+					{ type: "related", relatedIdentifier: "ENG-4" },
 				],
 			},
 			{ id: "u2", identifier: "ENG-2", title: "Second", description: null, relations: [] },
@@ -156,7 +224,7 @@ describe("LinearRoadmap.listOpenItems", () => {
 		assert.equal(items.length, 3);
 		assert.equal(items[0].id, "ENG-1");
 		assert.equal(items[0].title, "First");
-		assert.equal(items[0].deps, "ENG-2, ENG-3");
+		assert.equal(items[0].deps, "ENG-2");
 		assert.equal(items[1].deps, "");
 		assert.equal(items[0].sourceRef, "ENG-1");
 		assert.equal(calls.listIssues[0].teamId, "team-x");
