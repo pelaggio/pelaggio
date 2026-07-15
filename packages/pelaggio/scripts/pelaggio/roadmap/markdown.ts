@@ -264,7 +264,7 @@ export class MarkdownRoadmap implements RoadmapSource {
 		let updated = body;
 		if (format === "table") {
 			const row = `| ${id}. ${title} | ${deps} |`;
-			updated = appendOpenTableRow(body, row);
+			updated = appendOpenTableRow(body, row, "roadmap");
 		} else {
 			const line = `- [ ] **${id}. ${title}** — ${title}. Scope: ${scope}.${opts.deps && opts.deps.length > 0 ? ` Depends on ${deps}.` : ""}`;
 			updated = `${body.replace(/\n*$/, "")}\n${line}\n`;
@@ -278,7 +278,7 @@ export class MarkdownRoadmap implements RoadmapSource {
 			const indexBody = readFileSync(indexPath, "utf-8");
 			const roadmapSlug = targetFile.replace(/^roadmap-/, "").replace(/\.md$/, "");
 			const row = `| ${id} | ${title} | ${deps} | — | ${roadmapSlug} |`;
-			const updatedIndex = appendOpenTableRow(indexBody, row);
+			const updatedIndex = appendOpenTableRow(indexBody, row, "task-index");
 			if (updatedIndex !== indexBody) writeFileSync(indexPath, updatedIndex);
 		}
 
@@ -560,13 +560,12 @@ function detectFormat(body: string): "table" | "checkbox" {
 	return establishedFormat(body) ?? "table";
 }
 
-function appendOpenTableRow(body: string, row: string): string {
+function appendOpenTableRow(body: string, row: string, table: "roadmap" | "task-index"): string {
 	const lines = body.split("\n");
-	// Roadmap files use `| Item | Depends on |`; task-index uses `| ID | Title | ...`.
-	// Accept either as the open-items header.
+	const header = table === "roadmap" ? /^\|\s*Item\s*\|\s*Depends on\s*\|/ : /^\|\s*ID\s*\|\s*Title\s*\|\s*Deps\s*\|\s*Plan\s*\|\s*Roadmap\s*\|/;
 	let headerIdx = -1;
 	for (let i = 0; i < lines.length; i++) {
-		if (/^\|\s*(Item|ID)\s*\|/.test(lines[i])) {
+		if (header.test(lines[i])) {
 			headerIdx = i;
 			break;
 		}
@@ -578,10 +577,33 @@ function appendOpenTableRow(body: string, row: string): string {
 	// Skip header + separator.
 	let j = headerIdx + 1;
 	if (j < lines.length && /^\|[-\s|]+\|$/.test(lines[j])) j++;
-	// Advance through body rows.
-	while (j < lines.length && lines[j].startsWith("|")) j++;
-	lines.splice(j, 0, row);
+	// Insert in prefix-alpha, then-numeric order among existing rows — the ordering convention
+	// task-index.md's footer declares (#47) — instead of always at the physical end, which drifts
+	// the table out of order the moment an item with a lexically earlier prefix is appended after
+	// one with a later prefix. Rows that don't parse as an ID (hand-edited/legacy) are un-orderable
+	// and simply get walked past, same as the old append-only behavior.
+	const newId = parseTableRowId(row);
+	let insertAt = j;
+	while (insertAt < lines.length && lines[insertAt].startsWith("|")) {
+		const existingId = parseTableRowId(lines[insertAt]);
+		if (newId && existingId && idSortsBefore(newId, existingId)) break;
+		insertAt++;
+	}
+	lines.splice(insertAt, 0, row);
 	return lines.join("\n");
+}
+
+/** Extracts the leading `PREFIX-N` id from a table row (`| ID. Title | Deps |` or
+ *  `| ID | Title | ... |`), tolerating the `~~`-wrapped strikethrough of a done roadmap row. */
+function parseTableRowId(row: string): { prefix: string; num: number } | null {
+	const m = row.match(/^\|\s*~{0,2}([A-Z]+)-?(\d+)/);
+	if (!m) return null;
+	return { prefix: m[1], num: Number(m[2]) };
+}
+
+function idSortsBefore(a: { prefix: string; num: number }, b: { prefix: string; num: number }): boolean {
+	if (a.prefix !== b.prefix) return a.prefix < b.prefix;
+	return a.num < b.num;
 }
 
 function escapeRegex(s: string): string {
