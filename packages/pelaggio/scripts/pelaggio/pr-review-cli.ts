@@ -56,7 +56,7 @@ interface PrReviewDeps {
 	runStep: RunStepFn;
 	execFileSync: typeof execFileSync;
 	upsertComment: (pr: string, body: string) => void;
-	postStatus: (pr: string, gate: "pass" | "block") => boolean;
+	postStatus: (gate: "pass" | "block", sha: string) => boolean;
 }
 
 export interface RunPrReviewGateOptions {
@@ -218,12 +218,20 @@ function upsertCommentDefault(pr: string, body: string): void {
 	}
 }
 
-function postStatusDefault(pr: string, gate: "pass" | "block"): boolean {
+/** Resolve the SHA the review actually inspected: the local checked-out HEAD
+ *  that the diff (origin/main...HEAD) was computed against. This must be pinned
+ *  and passed to postStatus — re-querying the live PR head would let a push that
+ *  lands during the review green an unreviewed commit (fail-open). */
+function resolveReviewedSha(exec: typeof execFileSync): string {
+	const raw = exec("git", ["rev-parse", "HEAD"], { cwd: REPO, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+	const sha = String(raw).trim();
+	if (!/^[0-9a-f]{7,64}$/.test(sha)) throw new Error(`could not resolve reviewed HEAD sha (got ${JSON.stringify(sha)})`);
+	return sha;
+}
+
+function postStatusDefault(gate: "pass" | "block", sha: string): boolean {
 	try {
 		const repo = ROADMAP_GITHUB.ghRepo;
-		const raw = execFileSync("gh", ["pr", "view", pr, "--repo", repo, "--json", "headRefOid"], { cwd: REPO, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
-		const sha = (JSON.parse(raw) as { headRefOid?: string }).headRefOid;
-		if (!sha) throw new Error("PR head SHA was absent from gh pr view output");
 		const state = gate === "pass" ? "success" : "failure";
 		execFileSync("gh", ["api", `repos/${repo}/statuses/${sha}`, "-f", `state=${state}`, "-f", "context=review", "-f", `description=pelaggio review ${gate}`], {
 			cwd: REPO,
@@ -460,7 +468,14 @@ export async function main(argv: string[]): Promise<number> {
 	// error), we still post a self-explaining red comment and exit 1 rather than
 	// crash silently. The gate's whole value is that a crashed agent never reads
 	// as a merge-clear sign-off.
+	// Pin the reviewed SHA before the review runs so both the success and the
+	// fail-closed paths post the required status to the exact commit inspected,
+	// never to a live remote head that may have advanced during the review. If
+	// even this resolution fails we post no status at all — an absent required
+	// status leaves the PR blocked, which is the safe (fail-closed) outcome.
+	let reviewedSha: string | undefined;
 	try {
+		reviewedSha = resolveReviewedSha(deps.execFileSync);
 		const review = await runPrReviewGate({ pr, profile, cwd: REPO, diffCwd: REPO, runStep: deps.runStep, execFileSync: deps.execFileSync, policy: CONFIG.review });
 
 		// The review text goes to stdout unconditionally so the CI log always
@@ -468,7 +483,7 @@ export async function main(argv: string[]): Promise<number> {
 		// must not be able to lose the only copy of a $-priced review.
 		process.stdout.write(`${review.body}\n`);
 
-		const statusPosted = deps.postStatus(pr, review.gate);
+		const statusPosted = deps.postStatus(review.gate, reviewedSha);
 		deps.upsertComment(pr, review.body);
 
 		process.stderr.write(`gate: ${review.gate.toUpperCase()} (ok=${review.ok})\n`);
@@ -476,7 +491,8 @@ export async function main(argv: string[]): Promise<number> {
 	} catch (e) {
 		const msg = e instanceof Error ? e.message : String(e);
 		process.stderr.write(`pr-review crashed — failing closed: ${msg}\n`);
-		deps.postStatus(pr, "block");
+		if (reviewedSha) deps.postStatus("block", reviewedSha);
+		else process.stderr.write("✗ reviewed SHA unavailable; posting no status (absent required status keeps the PR blocked)\n");
 		deps.upsertComment(pr, buildFailClosedComment("error_crash", `pr-review crashed before producing a review, so this gate blocks the merge.\n\n${msg}`));
 		return 1;
 	}

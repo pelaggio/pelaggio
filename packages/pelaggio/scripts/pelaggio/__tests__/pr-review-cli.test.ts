@@ -33,16 +33,22 @@ function report(summary: string, findings: unknown[] = []): string {
 	return `REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 1, summary, findings })}\nEND_REVIEW_FINDINGS`;
 }
 
+const REVIEWED_SHA = "a".repeat(40);
+
 async function runCli(
 	opts: { files?: string; diff?: string; results?: Array<StepResult | Error>; diffError?: Error; statusPosted?: boolean } = {},
-): Promise<{ code: number; calls: RunCall[]; comments: string[]; statuses: string[]; stdout: string; stderr: string }> {
+): Promise<{ code: number; calls: RunCall[]; comments: string[]; statuses: string[]; statusShas: string[]; stdout: string; stderr: string }> {
 	const calls: RunCall[] = [];
 	const comments: string[] = [];
 	const statuses: string[] = [];
+	const statusShas: string[] = [];
 	const queued = [...(opts.results ?? [result()])];
 	const execFileSync = ((cmd: string, args: readonly string[]) => {
-		if (opts.diffError) throw opts.diffError;
 		assert.equal(cmd, "git");
+		// rev-parse HEAD (reviewed-SHA pin) is independent of the diff and must
+		// resolve even when the diff inspection is being made to fail.
+		if (args.join(" ") === "rev-parse HEAD") return `${REVIEWED_SHA}\n`;
+		if (opts.diffError) throw opts.diffError;
 		if (args.join(" ") === "diff --name-only origin/main...HEAD") return opts.files ?? "docs/readme.md\n";
 		if (args.join(" ") === "diff origin/main...HEAD") return opts.diff ?? "+Clarify docs.\n";
 		throw new Error(`unexpected command: ${cmd} ${args.join(" ")}`);
@@ -58,8 +64,9 @@ async function runCli(
 		execFileSync,
 		runStep,
 		upsertComment: (_pr, body) => comments.push(body),
-		postStatus: (_pr, gate) => {
+		postStatus: (gate, sha) => {
 			statuses.push(gate);
+			statusShas.push(sha);
 			return opts.statusPosted ?? true;
 		},
 	});
@@ -77,7 +84,7 @@ async function runCli(
 	}) as typeof process.stderr.write;
 	try {
 		const code = await main(["--pr", "123"]);
-		return { code, calls, comments, statuses, stdout, stderr };
+		return { code, calls, comments, statuses, statusShas, stdout, stderr };
 	} finally {
 		process.stdout.write = originalStdout;
 		process.stderr.write = originalStderr;
@@ -96,6 +103,9 @@ describe("pr-review CLI aggregation", () => {
 		assert.match(out.comments[0], /Adversarial red-team pass: not triggered/);
 		assert.match(out.comments[0], /gate=pass ok=true subtype=success cost=1\.00 turns=2/);
 		assert.deepEqual(out.statuses, ["pass"]);
+		// The required status is pinned to the reviewed (local HEAD) SHA, not a
+		// live remote head that a push could advance mid-review.
+		assert.deepEqual(out.statusShas, [REVIEWED_SHA]);
 	});
 
 	it("fails loudly when the required review status cannot be posted", async () => {
