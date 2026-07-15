@@ -339,6 +339,58 @@ describe("MarkdownRoadmap.createItem", () => {
 		assert.ok(newRowIdx < completedIdx, "new row should land inside Open items, not after Recently completed");
 	});
 
+	it("ignores unrelated ID tables before the task-index Open items table", async () => {
+		const repo = seedRepo();
+		seedFile(repo, "docs/roadmap-core.md", ["# Core", "", "| Item | Depends on |", "|---|---|", "| TOOL-1. First | — |", ""].join("\n"));
+		seedFile(
+			repo,
+			"docs/task-index.md",
+			["# Index", "", "| ID | Owner |", "|----|-------|", "| team-a | Alice |", "", "## Open items", "", "| ID | Title | Deps | Plan | Roadmap |", "|----|-------|------|------|---------|", "| TOOL-1 | First | — | — | core |", ""].join("\n"),
+		);
+		execSync("git add -A && git commit -q -m seed", { cwd: repo });
+
+		const r = new MarkdownRoadmap({ repo });
+		await r.createItem({ title: "New thing", scope: "S" });
+
+		const index = readFileSync(resolve(repo, "docs/task-index.md"), "utf-8");
+		assert.match(index, /\| team-a \| Alice \|\n\n## Open items/);
+		assert.match(index, /\| TOOL-1 \| First .*\n\| TOOL-2 \| New thing \|/);
+	});
+
+	it("inserts a new row in prefix-alphabetical position instead of always at the end (issue #47)", async () => {
+		const repo = seedRepo();
+		seedFile(repo, "docs/roadmap-core.md", ["# Core", "", "| Item | Depends on |", "|---|---|", "| AGT-4. Fourth agent | — |", "| ZOO-1. First zoo | — |", ""].join("\n"));
+		seedFile(
+			repo,
+			"docs/task-index.md",
+			[
+				"# Index",
+				"",
+				"## Open items",
+				"",
+				"| ID | Title | Deps | Plan | Roadmap |",
+				"|----|-------|------|------|---------|",
+				"| AGT-4 | Fourth agent | — | — | core |",
+				"| ZOO-1 | First zoo | — | — | core |",
+				"",
+				"## Recently completed",
+				"",
+			].join("\n"),
+		);
+		execSync("git add -A && git commit -q -m seed", { cwd: repo });
+
+		const r = new MarkdownRoadmap({ repo });
+		const created = await r.createItem({ title: "New instantiation thing", scope: "S", prefix: "INST" });
+		assert.equal(created.id, "INST-1");
+
+		// "INST" sorts alphabetically between "AGT" and "ZOO" — the new row must land there,
+		// not after ZOO-1 at the physical end of the table.
+		const roadmap = readFileSync(resolve(repo, "docs/roadmap-core.md"), "utf-8");
+		assert.match(roadmap, /AGT-4\. Fourth agent.*\n\| INST-1\. New instantiation thing \| — \|\n\| ZOO-1/s);
+		const index = readFileSync(resolve(repo, "docs/task-index.md"), "utf-8");
+		assert.match(index, /AGT-4 \| Fourth agent.*\n\| INST-1 \| New instantiation thing.*\n\| ZOO-1/s);
+	});
+
 	it("appends to the configured target roadmap file", async () => {
 		const repo = seedRepo();
 		seedFile(repo, "docs/roadmap-core.md", ["# Core", "", "| Item | Depends on |", "|---|---|", "| TOOL-1. First | — |", ""].join("\n"));
