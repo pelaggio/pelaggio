@@ -58,16 +58,20 @@ comments.
    CLI runs a second fresh `pr-review --red-team` discovery session. After discovery,
    every successful pass with `must-fix` candidates gets its own fresh `pr-verify`
    session. The verifier tries to refute each candidate against the repository and
-   cannot introduce or rewrite blockers. The CLI posts all dispositions as one
-   idempotently-upserted PR comment and sets the exit code.
+   cannot introduce or rewrite blockers. The CLI posts the `review` commit status for
+   the head SHA and all dispositions as one idempotently-upserted PR comment —
+   independently, so a failure posting one does not drop the other — then sets the
+   exit code.
 5. **Exit code = gate = posted `review` status.** The CLI exits `0` only when every
-   required pass emits a valid versioned findings report and every candidate blocker
-   is refuted by a complete, valid isolated verification report.
-   A surviving `must-fix`, missing or malformed report, refusal, SDK error, max-turns, rate-limit
-   park, or inability to inspect the diff exits `1`. The workflow translates that exit code
-   into the `review` commit status (`0` → success, else failure), and posts `failure`
-   if the job is cancelled after starting. The gate **fails closed**: ambiguity blocks
-   the merge, and a crash before the final step leaves the earlier `pending` status.
+   required pass emits a valid versioned findings report, every candidate blocker
+   is refuted by a complete, valid isolated verification report, and its own `review`
+   commit status post succeeded. A surviving `must-fix`, missing or malformed report,
+   refusal, SDK error, max-turns, rate-limit park, inability to inspect the diff, or a
+   failed status post exits `1`. The workflow also translates the CLI's exit code
+   into the `review` commit status (`0` → success, else failure) as a second,
+   independent poster, and posts `failure` if the job is cancelled after starting.
+   The gate **fails closed**: ambiguity blocks the merge, and a crash before the
+   final step leaves the earlier `pending` status.
 
 ## The fail-closed contract
 

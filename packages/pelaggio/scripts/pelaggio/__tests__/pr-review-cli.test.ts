@@ -33,9 +33,12 @@ function report(summary: string, findings: unknown[] = []): string {
 	return `REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 1, summary, findings })}\nEND_REVIEW_FINDINGS`;
 }
 
-async function runCli(opts: { files?: string; diff?: string; results?: Array<StepResult | Error>; diffError?: Error } = {}): Promise<{ code: number; calls: RunCall[]; comments: string[]; stdout: string; stderr: string }> {
+async function runCli(
+	opts: { files?: string; diff?: string; results?: Array<StepResult | Error>; diffError?: Error; statusPosted?: boolean } = {},
+): Promise<{ code: number; calls: RunCall[]; comments: string[]; statuses: string[]; stdout: string; stderr: string }> {
 	const calls: RunCall[] = [];
 	const comments: string[] = [];
+	const statuses: string[] = [];
 	const queued = [...(opts.results ?? [result()])];
 	const execFileSync = ((cmd: string, args: readonly string[]) => {
 		if (opts.diffError) throw opts.diffError;
@@ -55,6 +58,10 @@ async function runCli(opts: { files?: string; diff?: string; results?: Array<Ste
 		execFileSync,
 		runStep,
 		upsertComment: (_pr, body) => comments.push(body),
+		postStatus: (_pr, gate) => {
+			statuses.push(gate);
+			return opts.statusPosted ?? true;
+		},
 	});
 	const originalStdout = process.stdout.write;
 	const originalStderr = process.stderr.write;
@@ -70,7 +77,7 @@ async function runCli(opts: { files?: string; diff?: string; results?: Array<Ste
 	}) as typeof process.stderr.write;
 	try {
 		const code = await main(["--pr", "123"]);
-		return { code, calls, comments, stdout, stderr };
+		return { code, calls, comments, statuses, stdout, stderr };
 	} finally {
 		process.stdout.write = originalStdout;
 		process.stderr.write = originalStderr;
@@ -88,6 +95,15 @@ describe("pr-review CLI aggregation", () => {
 		assert.doesNotMatch(out.calls[0].prompt, /Arguments: .*--red-team/);
 		assert.match(out.comments[0], /Adversarial red-team pass: not triggered/);
 		assert.match(out.comments[0], /gate=pass ok=true subtype=success cost=1\.00 turns=2/);
+		assert.deepEqual(out.statuses, ["pass"]);
+	});
+
+	it("fails loudly when the required review status cannot be posted", async () => {
+		const out = await runCli({ statusPosted: false });
+
+		assert.equal(out.code, 1);
+		assert.deepEqual(out.statuses, ["pass"]);
+		assert.equal(out.comments.length, 1, "comment posting remains independent");
 	});
 
 	it("runs a red-team pass for security-sensitive diffs with classifier reasons", async () => {
