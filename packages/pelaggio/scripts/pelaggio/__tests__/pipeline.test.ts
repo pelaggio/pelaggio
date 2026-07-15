@@ -2240,6 +2240,76 @@ describe("runPipeline — pick step", () => {
 			["pick", "plan", "shakedown-plan", "implement", "shakedown-code", "ship"],
 		);
 	});
+
+	it("main checkout guard (#216) — a detached mainRepo is reattached to main before pick claims", async () => {
+		const { parent, repo } = makeTempRepoWithParent();
+		const sha = execSync("git rev-parse HEAD", { cwd: repo, encoding: "utf-8" }).trim();
+		execSync(`git checkout -q ${sha}`, { cwd: repo }); // detach HEAD, simulating issue #216
+		assert.equal(execSync("git branch --show-current", { cwd: repo, encoding: "utf-8" }).trim(), "");
+		const worktreePath = join(parent, `${WORKTREE_PREFIX}tool-99`);
+		const parkSignal = makeParkSignal();
+		const { runStep, calls } = createMockRunStep(
+			{
+				pick: {
+					ok: true,
+					text: "claimed TOOL-99\npick-item: TOOL-99\npick-result: claimed",
+					sideEffect: (cwd) => {
+						execSync(`git worktree add -q -b feat/tool-99 "${worktreePath}"`, { cwd });
+					},
+				},
+				plan: { ok: true },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				ship: {
+					ok: true,
+					text: "ship-merged: TOOL-99",
+					sideEffect: () => {
+						execSync("git merge -q --no-ff feat/tool-99", { cwd: repo });
+					},
+				},
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline(pickOpts(), parkSignal, baseFlags, {
+			runStep,
+			mainRepo: repo,
+			resolveWorktree: (id) => join(parent, `${WORKTREE_PREFIX}${id.toLowerCase()}`),
+			listWorktrees: () => [],
+			appendLog: () => {},
+			runShipBookkeeping: noopBookkeeping,
+		});
+
+		assert.equal(execSync("git branch --show-current", { cwd: repo, encoding: "utf-8" }).trim(), "main", "guard should reattach mainRepo to main before pick runs");
+		assert.equal(result.completed, true, `expected the guard to self-heal and the cycle to proceed; got error=${result.error}`);
+		assert.deepEqual(
+			calls.map((c) => c.step),
+			["pick", "plan", "shakedown-plan", "implement", "shakedown-code", "ship"],
+		);
+	});
+
+	it("main checkout guard (#216) — aborts before claiming when mainRepo has no main branch to reattach to", async () => {
+		const noMainRepo = makeGitDirWithoutMain();
+		const parkSignal = makeParkSignal();
+		const { runStep, calls } = createMockRunStep({ pick: { ok: true, text: "claimed TOOL-99\npick-item: TOOL-99\npick-result: claimed" } }, parkSignal);
+
+		const result = await runPipeline(pickOpts(), parkSignal, baseFlags, {
+			runStep,
+			mainRepo: noMainRepo,
+			listWorktrees: () => [],
+			appendLog: () => {},
+		});
+
+		assert.equal(result.completed, false);
+		assert.equal(result.error, "main checkout is not on main and could not be reattached");
+		assert.equal(result.itemId, null);
+		assert.deepEqual(
+			calls.map((c) => c.step),
+			[],
+			"pick must not run against an unreattachable main checkout",
+		);
+	});
 });
 
 describe("runPipeline — SIGINT cancellation", () => {

@@ -14,6 +14,7 @@ import {
 	computeImplementTurns,
 	countPlanFiles,
 	createMainCheckoutDeltaObserver,
+	ensureMainCheckoutOnBranch,
 	filesChangedSince,
 	fmtWait,
 	formatResumeHint,
@@ -493,6 +494,51 @@ describe("verifyShipLanded", () => {
 
 	it("fails closed: a git error during verification returns false (routes to /shipwreck, not a blind push)", () => {
 		assert.equal(verifyShipLanded("/nonexistent/path/does/not/exist", "deadbeef", "cafebabe"), false);
+	});
+});
+
+describe("ensureMainCheckoutOnBranch", () => {
+	it("returns true and does nothing when already on the target branch", () => {
+		const dir = makeFeatRepo();
+		execSync("git checkout -q main", { cwd: dir });
+		assert.equal(
+			ensureMainCheckoutOnBranch(dir, "main", () => assert.fail("should not log")),
+			true,
+		);
+		assert.equal(execSync("git branch --show-current", { cwd: dir, encoding: "utf-8" }).trim(), "main");
+	});
+
+	it("reattaches and returns true when on a different branch", () => {
+		const dir = makeFeatRepo(); // checked out on feat/tool-99
+		const messages: string[] = [];
+		assert.equal(
+			ensureMainCheckoutOnBranch(dir, "main", (m) => messages.push(m)),
+			true,
+		);
+		assert.equal(execSync("git branch --show-current", { cwd: dir, encoding: "utf-8" }).trim(), "main");
+		assert.match(messages[0], /feat\/tool-99/);
+	});
+
+	it("reattaches and returns true when HEAD is detached", () => {
+		const dir = makeFeatRepo();
+		execSync("git checkout -q main", { cwd: dir });
+		const sha = execSync("git rev-parse HEAD", { cwd: dir, encoding: "utf-8" }).trim();
+		execSync(`git checkout -q ${sha}`, { cwd: dir });
+		assert.equal(execSync("git branch --show-current", { cwd: dir, encoding: "utf-8" }).trim(), "");
+		const messages: string[] = [];
+		assert.equal(
+			ensureMainCheckoutOnBranch(dir, "main", (m) => messages.push(m)),
+			true,
+		);
+		assert.equal(execSync("git branch --show-current", { cwd: dir, encoding: "utf-8" }).trim(), "main");
+		assert.match(messages[0], /detached HEAD/);
+	});
+
+	it("fails closed: a nonexistent repo returns false", () => {
+		assert.equal(
+			ensureMainCheckoutOnBranch("/nonexistent/path/does/not/exist", "main", () => {}),
+			false,
+		);
 	});
 });
 

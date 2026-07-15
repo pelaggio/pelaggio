@@ -99,11 +99,16 @@ describe("getShipTarget — factory", () => {
 
 describe("direct-push adapter", () => {
 	const a = getShipTarget("direct-push");
+	const shipSkill = readFileSync(join(import.meta.dirname, "../../../../../.claude/skills/ship/SKILL.md"), "utf-8");
 
 	it("buildPrompt mentions direct-push mode", () => {
 		const prompt = a.buildPrompt({ itemId: "TOOL-99", worktree: "/tmp/wt" });
 		assert.match(prompt, /direct-push/);
 		assert.match(prompt, /merge/i);
+	});
+
+	it("reattaches the main checkout before pulling from a sibling worktree", () => {
+		assert.match(shipSkill, /cd "\{MAIN_REPO\}"\ngit checkout main\ngit pull --no-rebase origin main/);
 	});
 
 	it("interpretResult: success", () => {

@@ -776,6 +776,35 @@ export function verifyShipLanded(mainRepo: string, mainShaBefore: string, featSh
 	}
 }
 
+// ── Main-checkout guard (issue #216) ────────────────────────────────────
+
+/**
+ * Guard against a detached (or off-branch) main checkout silently becoming
+ * the base for the next cycle. `createClaimWorkspace` always branches off the
+ * literal `main` ref, not HEAD, so a detached checkout can't corrupt a *new*
+ * claim — but it does break an operator's between-cycle `git merge --ff-only
+ * origin/main` and makes `git log -1` in the main checkout misleading.
+ * Self-heals with a plain `git checkout <branch>` (never `-f`, so it can't
+ * discard uncommitted work); returns false only if that checkout itself
+ * fails, in which case the caller should stop rather than claim blind.
+ */
+export function ensureMainCheckoutOnBranch(mainRepo: string, branch: string, log?: (msg: string) => void): boolean {
+	let current: string;
+	try {
+		current = execSync("git branch --show-current", { cwd: mainRepo, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+	} catch {
+		return false;
+	}
+	if (current === branch) return true;
+	log?.(`⚠ main checkout was on ${current || "detached HEAD"}, not ${branch} — reattaching`);
+	try {
+		execSync(`git checkout ${branch}`, { cwd: mainRepo, stdio: "pipe" });
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 // ── Resume detection ───────────────────────────────────────────────────
 
 export function detectResumeStep(itemId: string, worktree: string): Step {
