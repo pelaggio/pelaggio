@@ -137,7 +137,8 @@ never be pushed. The CLI, not the agent, owns comment posting.
 Security-sensitive diffs get a second independent pass. The classifier is deterministic
 and conservative: it triggers on security-adjacent paths such as `.github/workflows/**`,
 server auth/config/app files, pelaggio step runners, ship/roadmap tooling, and review /
-ship / implement skills; it also triggers on diff text containing terms such as `auth`,
+ship / implement skills; it also triggers when added or removed diff lines (not context
+lines or diff metadata) contain terms such as `auth`,
 `token`, `secret`, `host`, `loopback`, `127.`, `localhost`, `fetch`, `exec`, `spawn`,
 `shell`, `workflow`, `prompt injection`, `ANTHROPIC_API_KEY`, `GH_TOKEN`, or
 `CONTROL_PLANE_TOKEN`.

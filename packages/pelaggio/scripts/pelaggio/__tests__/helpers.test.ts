@@ -850,6 +850,8 @@ describe("parseVerdict", () => {
 });
 
 describe("classifySecurityReviewDiff", () => {
+	const hunk = (...lines: string[]): string => ["diff --git a/docs/setup.md b/docs/setup.md", "--- a/docs/setup.md", "+++ b/docs/setup.md", "@@ -1 +1 @@", ...lines].join("\n");
+
 	it("triggers for security-sensitive server config paths", () => {
 		const signal = classifySecurityReviewDiff(["packages/server/src/config.ts"], "diff --git a/packages/server/src/config.ts b/packages/server/src/config.ts\n");
 
@@ -857,8 +859,8 @@ describe("classifySecurityReviewDiff", () => {
 		assert.ok(signal.reasons.includes("path:packages/server/src/config.ts"));
 	});
 
-	it("triggers for security keywords in otherwise unlisted files", () => {
-		const signal = classifySecurityReviewDiff(["docs/setup.md"], ["+CONTROL_PLANE_TOKEN is required for loopback access.", "+Reject hosts under 127.0.0.1.example.com."].join("\n"));
+	it("triggers for security keywords on added and removed hunk lines", () => {
+		const signal = classifySecurityReviewDiff(["docs/setup.md"], hunk("-CONTROL_PLANE_TOKEN allowed loopback access.", "+Reject hosts under 127.0.0.1.example.com."));
 
 		assert.equal(signal.triggered, true);
 		assert.ok(signal.reasons.includes("keyword:CONTROL_PLANE_TOKEN"));
@@ -867,7 +869,7 @@ describe("classifySecurityReviewDiff", () => {
 	});
 
 	it("triggers for the #102 hostname-prefix bypass shape", () => {
-		const signal = classifySecurityReviewDiff(["packages/server/src/config.ts"], ["+function isLoopbackHost(host: string): boolean {", '+\treturn host === "localhost" || host.startsWith("127.");', "+}"].join("\n"));
+		const signal = classifySecurityReviewDiff(["packages/server/src/config.ts"], hunk("+function isLoopbackHost(host: string): boolean {", '+\treturn host === "localhost" || host.startsWith("127.");', "+}"));
 
 		assert.equal(signal.triggered, true);
 		assert.ok(signal.reasons.includes("path:packages/server/src/config.ts"));
@@ -875,7 +877,7 @@ describe("classifySecurityReviewDiff", () => {
 	});
 
 	it("triggers for workflow and exec/tool changes", () => {
-		const signal = classifySecurityReviewDiff([".github/workflows/pr-review.yml", "packages/pelaggio/scripts/pelaggio/helpers.ts"], "+execFileSync('gh', ['workflow', 'run'])\n+spawn('bash', ['-lc', command])");
+		const signal = classifySecurityReviewDiff([".github/workflows/pr-review.yml", "packages/pelaggio/scripts/pelaggio/helpers.ts"], hunk("+execFileSync('gh', ['workflow', 'run'])", "+spawn('bash', ['-lc', command])"));
 
 		assert.equal(signal.triggered, true);
 		assert.ok(signal.reasons.includes("path:.github/workflows/pr-review.yml"));
@@ -885,35 +887,50 @@ describe("classifySecurityReviewDiff", () => {
 
 	it("triggers for the verification contract and skill paths", () => {
 		for (const path of ["packages/pelaggio/scripts/pelaggio/review/findings.ts", ".claude/skills/pr-verify/SKILL.md"]) {
-			const signal = classifySecurityReviewDiff([path], "+benign text\n");
+			const signal = classifySecurityReviewDiff([path], hunk("+benign text"));
 			assert.equal(signal.triggered, true);
 			assert.ok(signal.reasons.includes(`path:${path}`));
 		}
 	});
 
 	it("does not trigger for benign docs-only diffs without security keywords", () => {
-		const signal = classifySecurityReviewDiff(["docs/readme.md"], "+Clarify installation examples.\n");
+		const signal = classifySecurityReviewDiff(["docs/readme.md"], hunk("+Clarify installation examples."));
 
 		assert.deepEqual(signal, { triggered: false, reasons: [] });
 	});
 
-	it("does not trigger on the structural `diff --git` header of a benign diff", () => {
-		// The CLI feeds raw `git diff` output, which embeds a `diff --git` header
-		// per file. A bare "git" keyword would match that on every PR and make the
-		// (2×-cost) red-team pass unconditional. This locks the classifier to real
-		// content signal, not the diff format itself.
-		const realDiff = ["diff --git a/docs/readme.md b/docs/readme.md", "index 4918d8b..c560d8a 100644", "--- a/docs/readme.md", "+++ b/docs/readme.md", "@@ -1,2 +1,2 @@", "-Old copy about the product.", "+New copy about the product."].join(
-			"\n",
-		);
-		const signal = classifySecurityReviewDiff(["docs/readme.md"], realDiff);
+	it("ignores security keywords on unchanged context lines", () => {
+		const signal = classifySecurityReviewDiff(["docs/readme.md"], hunk(" CONTROL_PLANE_TOKEN grants authentication permission.", "-Old copy.", "+New copy."));
 
 		assert.deepEqual(signal, { triggered: false, reasons: [] });
+	});
+
+	it("ignores diff metadata and security-looking path headers", () => {
+		const metadataOnly = ["diff --git a/docs/auth-token.md b/docs/auth-token.md", "similarity index 100%", "rename from docs/auth-token.md", "rename to docs/secret-url.md", "--- a/docs/auth-token.md", "+++ b/docs/secret-url.md"].join("\n");
+		const signal = classifySecurityReviewDiff(["docs/secret-url.md"], metadataOnly);
+
+		assert.deepEqual(signal, { triggered: false, reasons: [] });
+	});
+
+	it("does not trigger for routine changed-line mentions of git, gh, and url", () => {
+		const signal = classifySecurityReviewDiff(["docs/readme.md"], hunk("-Use git and gh to inspect the old url.", "+Use the git CLI and gh command with this url variable."));
+
+		assert.deepEqual(signal, { triggered: false, reasons: [] });
+	});
+
+	it("retains specific GH_TOKEN and other credential signals", () => {
+		const signal = classifySecurityReviewDiff(["docs/setup.md"], hunk("+Set GH_TOKEN as the authentication secret."));
+
+		assert.equal(signal.triggered, true);
+		assert.ok(signal.reasons.includes("keyword:GH_TOKEN"));
+		assert.ok(signal.reasons.includes("keyword:auth"));
+		assert.ok(signal.reasons.includes("keyword:secret"));
 	});
 
 	it("returns deterministic, de-duplicated, capped reasons", () => {
 		const signal = classifySecurityReviewDiff(
 			["packages/server/src/config.ts", "packages/server/src/config.ts", ".github/workflows/review.yml"],
-			["+auth token secret permission host loopback localhost 0.0.0.0 127. ::1 url fetch network exec spawn shell bash gh git workflow", "+CONTROL_PLANE_TOKEN ANTHROPIC_API_KEY GH_TOKEN prompt injection ignore instructions"].join("\n"),
+			hunk("+auth token secret permission host loopback localhost 0.0.0.0 127. ::1 fetch network exec spawn shell bash workflow", "+CONTROL_PLANE_TOKEN ANTHROPIC_API_KEY GH_TOKEN prompt injection ignore instructions"),
 		);
 
 		assert.equal(signal.triggered, true);

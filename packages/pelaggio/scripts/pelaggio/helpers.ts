@@ -497,18 +497,14 @@ const SECURITY_KEYWORDS: readonly [string, RegExp][] = [
 	["host", /\bhost(?:name)?\b/i],
 	["loopback", /\bloopback\b/i],
 	["localhost", /\blocalhost\b/i],
-	["url", /\burl\b/i],
 	["fetch", /\bfetch\b/i],
 	["network", /\bnetwork\b/i],
 	["exec", /\bexec(?:FileSync|Sync)?\b/i],
 	["spawn", /\bspawn(?:Sync)?\b/i],
 	["shell", /\bshell\b/i],
 	["bash", /\bbash\b/i],
-	// No bare "git" keyword: `git diff` output embeds a `diff --git` header for
-	// every changed file, so `/\bgit\b/` would match every non-empty diff and
-	// trigger the (2×-cost) red-team pass on 100% of PRs. The `.github/workflows`
-	// path rule plus `gh`/`workflow`/`exec`/`spawn`/`shell` cover the real surface.
-	["gh", /\bgh\b/],
+	// Generic tool and identifier tokens (`git`, `gh`, `url`) are too common to
+	// signal security sensitivity; specific credentials and operations remain.
 	["workflow", /\bworkflow\b/i],
 ];
 
@@ -530,8 +526,23 @@ export function classifySecurityReviewDiff(files: readonly string[], diff: strin
 		if (SECURITY_PATHS.some((re) => re.test(file))) addReason(`path:${file}`);
 	}
 
+	const changedLines: string[] = [];
+	let inHunk = false;
+	for (const line of diff.split("\n")) {
+		if (line.startsWith("diff --git ")) {
+			inHunk = false;
+			continue;
+		}
+		if (line.startsWith("@@")) {
+			inHunk = true;
+			continue;
+		}
+		if (inHunk && (line.startsWith("+") || line.startsWith("-"))) changedLines.push(line);
+	}
+	const keywordInput = changedLines.join("\n");
+
 	for (const [keyword, re] of SECURITY_KEYWORDS) {
-		if (re.test(diff)) addReason(`keyword:${keyword}`);
+		if (re.test(keywordInput)) addReason(`keyword:${keyword}`);
 	}
 
 	return { triggered: reasons.length > 0, reasons };
