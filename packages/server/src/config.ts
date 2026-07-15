@@ -48,8 +48,8 @@ function xdgStateHome(env: NodeJS.ProcessEnv): string {
 
 export function loadServerConfig(env: NodeJS.ProcessEnv = process.env, { webDistDefault = packageRelativeWebDist }: { webDistDefault?: string } = {}): ServerConfig {
 	const host = required("AUTOPILOT_SERVER_HOST", env.AUTOPILOT_SERVER_HOST);
-	if (host === "0.0.0.0") {
-		throw new Error("AUTOPILOT_SERVER_HOST must be a specific interface (e.g. tailnet IP), not 0.0.0.0");
+	if (host === "0.0.0.0" || host === "::") {
+		throw new Error(`AUTOPILOT_SERVER_HOST must be a specific interface (e.g. tailnet IP), not ${host}`);
 	}
 	const portRaw = required("AUTOPILOT_SERVER_PORT", env.AUTOPILOT_SERVER_PORT);
 	const port = Number(portRaw);

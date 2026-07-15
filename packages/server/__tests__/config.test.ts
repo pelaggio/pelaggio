@@ -84,8 +84,10 @@ describe("loadServerConfig", () => {
 		assert.equal(cfg.webDist, dist);
 	});
 
-	it("rejects AUTOPILOT_SERVER_HOST=0.0.0.0", () => {
-		assert.throws(() => loadServerConfig({ AUTOPILOT_SERVER_HOST: "0.0.0.0", AUTOPILOT_SERVER_PORT: "7777" }));
+	it("rejects wildcard bind hosts", () => {
+		for (const host of ["0.0.0.0", "::"]) {
+			assert.throws(() => loadServerConfig({ AUTOPILOT_SERVER_HOST: host, AUTOPILOT_SERVER_PORT: "7777" }), /specific interface.*not/, host);
+		}
 	});
 
 	it("fails closed: unset token + non-loopback host is refused", () => {
