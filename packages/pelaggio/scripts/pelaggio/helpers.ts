@@ -475,9 +475,10 @@ const SECURITY_PATHS: readonly RegExp[] = [
 	/^packages\/server\/src\/(?:auth|config|app)\.ts$/,
 	/^packages\/server\/scripts\//,
 	/^packages\/pelaggio\/scripts\/pelaggio\/(?:step-runner|codex-provider|helpers|config|pr-review-cli|revise-sweep|notify|worktree-deps)\.ts$/,
+	/^packages\/pelaggio\/scripts\/pelaggio\/review\/findings\.ts$/,
 	/^packages\/pelaggio\/scripts\/pelaggio\/(?:ship|roadmap)\//,
-	/^\.claude\/skills\/(?:pr-review|shakedown|ship|implement)\/SKILL\.md$/,
-	/^\.agents\/skills\/(?:pr-review|shakedown|ship|implement)\/SKILL\.md$/,
+	/^\.claude\/skills\/(?:pr-review|pr-verify|shakedown|ship|implement)\/SKILL\.md$/,
+	/^\.agents\/skills\/(?:pr-review|pr-verify|shakedown|ship|implement)\/SKILL\.md$/,
 ];
 
 const SECURITY_KEYWORDS: readonly [string, RegExp][] = [

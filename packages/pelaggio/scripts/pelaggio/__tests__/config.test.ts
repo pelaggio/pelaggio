@@ -246,6 +246,51 @@ describe("resolveStepSettings — precedence & fallback", () => {
 		assert.equal(s.model, DEFAULTS.modelProfiles.standard["pr-review"]);
 	});
 
+	it("resolves pr-verify defaults independently while inheriting pr-review model settings", () => {
+		const repo = tmpRepo();
+		const cfg = loadConfig({ repo, configPath: join(repo, ".pelaggio.yml") });
+		const s = resolveStepSettings(cfg, "standard", "pr-verify");
+		assert.equal(s.budget, DEFAULTS.budgets["pr-verify"]);
+		assert.equal(s.turns, DEFAULTS.turnLimits["pr-verify"]);
+		assert.equal(s.effort, DEFAULTS.effort["pr-verify"]);
+		assert.equal(s.model, DEFAULTS.modelProfiles.standard["pr-review"]);
+		assert.equal(s.provider, "claude");
+	});
+
+	it("inherits consumer pr-review model, codex model, and provider overrides", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, ["models:", "  profiles:", "    mixed:", "      pr-review: reviewer", "      codex:", "        pr-review: gpt-reviewer", "      providers:", "        pr-review: codex", ""].join("\n"));
+		const s = resolveStepSettings(loadConfig({ repo, configPath: path }), "mixed", "pr-verify");
+		assert.equal(s.model, "reviewer");
+		assert.equal(s.codexModel, "gpt-reviewer");
+		assert.equal(s.provider, "codex");
+	});
+
+	it("explicit pr-verify model, codex model, and provider overrides win", () => {
+		const repo = tmpRepo();
+		const path = writeYml(
+			repo,
+			[
+				"models:",
+				"  profiles:",
+				"    mixed:",
+				"      pr-review: reviewer",
+				"      pr-verify: verifier",
+				"      codex:",
+				"        pr-review: gpt-reviewer",
+				"        pr-verify: gpt-verifier",
+				"      providers:",
+				"        pr-review: claude",
+				"        pr-verify: codex",
+				"",
+			].join("\n"),
+		);
+		const s = resolveStepSettings(loadConfig({ repo, configPath: path }), "mixed", "pr-verify");
+		assert.equal(s.model, "verifier");
+		assert.equal(s.codexModel, "gpt-verifier");
+		assert.equal(s.provider, "codex");
+	});
+
 	it("applies the same precedence to turns and effort", () => {
 		const repo = tmpRepo();
 		const path = writeYml(repo, ["models:", "  profiles:", "    deep:", "      turn-limits:", "        plan: 100", "      effort:", "        plan: high", ""].join("\n"));

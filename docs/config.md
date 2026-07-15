@@ -90,6 +90,7 @@ budgets:                        # dollars per step (safety-net caps)
   ship: 3
   shipwreck: 3
   pr-review: 5                  # CI merge-gate review (non-pipeline step; see docs/pr-review.md)
+  pr-verify: 5                  # isolated candidate-blocker verification (non-pipeline)
 
 turn-limits:                    # SDK turn cap per step
   pick: 30
@@ -100,6 +101,7 @@ turn-limits:                    # SDK turn cap per step
   ship: 60
   shipwreck: 40
   pr-review: 60
+  pr-verify: 60
 
 effort:                         # "low" | "medium" | "high" | "xhigh" | "max"
   pick: medium                  # xhigh needs Opus 4.7/4.8 or Sonnet 5; falls back to high on models without it.
@@ -110,6 +112,7 @@ effort:                         # "low" | "medium" | "high" | "xhigh" | "max"
   ship: medium
   shipwreck: medium
   pr-review: xhigh
+  pr-verify: xhigh
 
 models:
   profiles:
@@ -159,10 +162,11 @@ models:
 - Section keys use kebab-case (`turn-limits`), matching YAML convention. Step
   names (`pick`, `plan`, `shakedown-plan`, etc.) are literal keys whose
   internal hyphens are part of the step identifier.
-- `shipwreck` and `pr-review` are **non-pipeline** steps: they carry the same
+- `shipwreck`, `pr-review`, and `pr-verify` are **non-pipeline** steps: they carry the same
   per-step config as pipeline stages but never run as part of a `/pick → … →
   /ship` cycle. `shipwreck` is ship-failure recovery; `pr-review` is the
-  standalone CI merge gate (see [docs/pr-review.md](./pr-review.md)).
+  standalone CI merge gate; `pr-verify` is its isolated blocker-verification
+  session (see [docs/pr-review.md](./pr-review.md)).
 
 ## Per-profile step overrides
 
@@ -425,7 +429,9 @@ the same command, so it is intentionally not looped.
 
 Local mode is only active in normal auto-pick runs for github-issues roadmaps and PR
 ship targets. Configure the model provider through the existing non-pipeline
-`pr-review` step settings:
+`pr-review` step settings. By default, `pr-verify` inherits the resolved
+`pr-review` model, Codex model, and provider while retaining its independently
+configurable global budget, turn limit, and effort:
 
 ```yaml
 review:
@@ -439,6 +445,20 @@ models:
         pr-review: codex
       codex:
         pr-review: gpt-5-codex
+```
+
+For cross-provider verification, override the verifier slots explicitly:
+
+```yaml
+models:
+  profiles:
+    standard:
+      pr-review: claude-opus-4-8
+      providers:
+        pr-review: claude
+        pr-verify: codex
+      codex:
+        pr-verify: gpt-5-codex
 ```
 
 When using local mode, set the repo variable `AUTOPILOT_REVIEW_RUNNER=local` so the

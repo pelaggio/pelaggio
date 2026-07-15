@@ -47,16 +47,15 @@ export const LOG_PATH = resolve(REPO, ".dev", "pelaggio-log.jsonl");
 
 export const STEPS = ["pick", "plan", "shakedown-plan", "implement", "shakedown-code", "ship"] as const;
 export type PipelineStep = (typeof STEPS)[number];
-/** Pipeline steps + non-pipeline actions: `shipwreck` (runs after ship failure) and `pr-review`
- *  (the standalone CI review gate) — both carry per-step config but are absent from `STEPS`. */
-export type Step = PipelineStep | "shipwreck" | "pr-review";
+/** Pipeline steps + non-pipeline actions. These carry per-step config but are absent from `STEPS`. */
+export type Step = PipelineStep | "shipwreck" | "pr-review" | "pr-verify";
 
-/** Type guard for a valid pipeline step. Excludes `shipwreck` and `pr-review` (not pipeline stages) — see `--from` validation in pipeline.ts. */
+/** Type guard for a valid pipeline step. Excludes all non-pipeline actions — see `--from` validation in pipeline.ts. */
 export function isPipelineStep(s: string): s is PipelineStep {
 	return (STEPS as readonly string[]).includes(s);
 }
 
-const ALL_STEPS: readonly Step[] = [...STEPS, "shipwreck", "pr-review"];
+const ALL_STEPS: readonly Step[] = [...STEPS, "shipwreck", "pr-review", "pr-verify"];
 
 // ── Model literals ─────────────────────────────────────────────────────
 
@@ -126,6 +125,7 @@ export const DEFAULTS = {
 		ship: 3,
 		shipwreck: 3,
 		"pr-review": 5,
+		"pr-verify": 5,
 	} satisfies Record<Step, number>,
 	turnLimits: {
 		pick: 30,
@@ -136,6 +136,7 @@ export const DEFAULTS = {
 		ship: 60,
 		shipwreck: 40,
 		"pr-review": 60,
+		"pr-verify": 60,
 	} satisfies Record<Step, number>,
 	effort: {
 		pick: "medium",
@@ -146,7 +147,10 @@ export const DEFAULTS = {
 		ship: "medium",
 		shipwreck: "medium",
 		"pr-review": "xhigh",
+		"pr-verify": "xhigh",
 	} satisfies Record<Step, Effort>,
+	// `pr-verify` deliberately stays sparse: its model/provider settings inherit
+	// the resolved `pr-review` settings unless a consumer supplies an override.
 	modelProfiles: {
 		standard: { pick: SONNET, plan: OPUS, "shakedown-plan": OPUS, implement: OPUS, "shakedown-code": OPUS, ship: OPUS, shipwreck: SONNET, "pr-review": OPUS },
 		quick: { pick: SONNET, plan: SONNET, "shakedown-plan": SONNET, implement: SONNET, "shakedown-code": SONNET, ship: SONNET, shipwreck: SONNET, "pr-review": SONNET },
@@ -597,13 +601,14 @@ export interface StepSettings {
  * present and future step resolves to a concrete backend with no exhaustive map.
  */
 export function resolveStepSettings(config: ResolvedConfig, profile: string, step: Step): StepSettings {
+	const inheritedStep = step === "pr-verify" ? "pr-review" : step;
 	return {
 		budget: config.profileBudgets[profile]?.[step] ?? config.budgets[step],
 		turns: config.profileTurnLimits[profile]?.[step] ?? config.turnLimits[step],
 		effort: config.profileEffort[profile]?.[step] ?? config.effort[step],
-		model: config.modelProfiles[profile]?.[step],
-		codexModel: config.profileCodexModels[profile]?.[step],
-		provider: config.profileProviders[profile]?.[step] ?? DEFAULT_PROVIDER,
+		model: config.modelProfiles[profile]?.[step] ?? config.modelProfiles[profile]?.[inheritedStep],
+		codexModel: config.profileCodexModels[profile]?.[step] ?? config.profileCodexModels[profile]?.[inheritedStep],
+		provider: config.profileProviders[profile]?.[step] ?? config.profileProviders[profile]?.[inheritedStep] ?? DEFAULT_PROVIDER,
 	};
 }
 
