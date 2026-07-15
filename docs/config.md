@@ -275,11 +275,13 @@ after merging, and can't destroy a sibling cycle's uncommitted work. The tail
 runs only on a **verified** merge (the ship step reported success, i.e. it
 completed post-merge verification): a merge that lands but is unverified (the
 step ran out of turns) or fails post-merge verification routes to `/shipwreck`
-instead of a blind push. The tail's destructive steps (worktree/branch removal)
-are gated on mark-done + archive + push all succeeding — a real mark-done/archive
-error, a push failure, or a `git pull` conflict leaves the branch intact
-(recoverable on local `main`) and reports the cycle incomplete rather than
-shipped. Inline (human-typed) `/ship` still runs the full flow itself.
+instead of a blind push. Mark-done and archive-plan are independent best-effort
+mutations: either failure is reported as a shipped-bookkeeping warning with a
+manual remediation command, but the verified feature push is still attempted.
+Push/integration failure remains fatal and leaves the branch intact (recoverable
+on local `main`). A successful push permits worktree/branch cleanup even when
+roadmap metadata is incomplete. Inline (human-typed) `/ship` still runs the full
+flow itself.
 
 In PR modes the worktree, local branch, and post-merge doc updates
 (task-index, roadmap "Recently completed", plan archive) are intentionally

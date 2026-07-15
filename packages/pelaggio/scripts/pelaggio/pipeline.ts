@@ -397,6 +397,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				parked,
 				parkReason: parked ? parkSignal.limitType || null : null,
 				shipwrecked,
+				...(result.bookkeepingWarnings?.length ? { bookkeepingWarnings: result.bookkeepingWarnings } : {}),
 			});
 		}
 		return result;
@@ -948,14 +949,13 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			log(intro);
 			const bk = await runShipBookkeeping({ mainRepo, worktree: worktree!, branch: preShipState.branch, itemId: itemId! }, { roadmap, log });
 			if (!bk.ok) {
-				// A blocking bookkeeping failure (real mark-done/archive error, push
-				// failure, or pull conflict): local main holds the merge + bookkeeping
+				// A blocking push/integration failure: local main holds the merge + bookkeeping
 				// (recoverable) and the feature branch was left intact. Surface as an
 				// incomplete cycle so origin-never-got-it is visible, not reported shipped.
 				log(`⚠ bookkeeping incomplete: ${bk.error}`);
-				return finish({ itemId, completed: false, cost, verdict, error: bk.error ?? "ship bookkeeping failed" });
+				return finish({ itemId, completed: false, cost, verdict, error: bk.error ?? "ship bookkeeping failed", ...(bk.warnings.length ? { bookkeepingWarnings: bk.warnings } : {}) });
 			}
-			return finish({ itemId, completed: true, cost, verdict });
+			return finish({ itemId, completed: true, cost, verdict, ...(bk.warnings.length ? { bookkeepingWarnings: bk.warnings } : {}) });
 		};
 
 		const canTail = merged && ship.ok && reportedShipMerged(ship);
@@ -1013,17 +1013,24 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 // ── Orchestrator ───────────────────────────────────────────────────────
 
 function resultIcon(r: CycleResult): string {
+	if (r.completed && r.bookkeepingWarnings?.length) return A.yellow("⚠");
 	if (r.completed) return A.green("✓");
 	if (r.error === "parked") return A.yellow("⏸");
 	if (r.error === "plan needs rethink") return A.yellow("↻");
 	return A.red("✗");
 }
 
-function resultStatus(r: CycleResult): "done" | "skipped" | "failed" | "parked" {
+function resultStatus(r: CycleResult): "done" | "warning" | "skipped" | "failed" | "parked" {
+	if (r.completed && r.bookkeepingWarnings?.length) return "warning";
 	if (r.completed) return "done";
 	if (r.error === "parked") return "parked";
 	if (r.error === "plan needs rethink") return "skipped";
 	return "failed";
+}
+
+function resultDetail(r: CycleResult): string {
+	if (r.completed && r.bookkeepingWarnings?.length) return `shipped — bookkeeping incomplete: ${r.bookkeepingWarnings.join("; ")}`;
+	return r.error ?? "";
 }
 
 export interface OrchestratorDeps {
@@ -1337,7 +1344,8 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				status.turns = undefined;
 
 				const logRef = logPath ? `  ${A.dim(`→ .dev/pelaggio-${cycle}.log`)}` : "";
-				console.log(`${resultIcon(result)} cycle ${cycle}: ${A.bold(result.itemId ?? "?")} — ${result.costEstimated ? "~" : ""}$${result.cost.toFixed(2)}${result.error ? `  ${A.dim(result.error)}` : ""}${logRef}`);
+				const detail = resultDetail(result);
+				console.log(`${resultIcon(result)} cycle ${cycle}: ${A.bold(result.itemId ?? "?")} — ${result.costEstimated ? "~" : ""}$${result.cost.toFixed(2)}${detail ? `  ${A.dim(detail)}` : ""}${logRef}`);
 
 				if (v) liveStatus.render();
 
@@ -1472,7 +1480,8 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				status.cost = r.cost;
 				status.step = undefined;
 				if (v) liveStatus.render();
-				console.log(`${resultIcon(r)} revise ${pr.itemId} — ${r.costEstimated ? "~" : ""}$${r.cost.toFixed(2)}${r.error ? `  ${A.dim(r.error)}` : ""}`);
+				const detail = resultDetail(r);
+				console.log(`${resultIcon(r)} revise ${pr.itemId} — ${r.costEstimated ? "~" : ""}$${r.cost.toFixed(2)}${detail ? `  ${A.dim(detail)}` : ""}`);
 			}
 		}
 
@@ -1551,7 +1560,8 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				st.cost = r.cost;
 				st.step = undefined;
 				if (v) liveStatus.render();
-				console.log(`${resultIcon(r)} resume ${id} — ${r.costEstimated ? "~" : ""}$${r.cost.toFixed(2)}${r.error ? `  ${A.dim(r.error)}` : ""}`);
+				const detail = resultDetail(r);
+				console.log(`${resultIcon(r)} resume ${id} — ${r.costEstimated ? "~" : ""}$${r.cost.toFixed(2)}${detail ? `  ${A.dim(detail)}` : ""}`);
 				return r;
 			};
 
@@ -1652,6 +1662,8 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			let label: string;
 			if (r.completed && r.awaitingMerge) {
 				label = `${A.green("↗ PR opened")}${r.prUrl ? ` ${A.dim(r.prUrl)}` : ""}`;
+			} else if (r.completed && r.bookkeepingWarnings?.length) {
+				label = A.yellow(resultDetail(r));
 			} else if (r.completed) {
 				label = A.green("shipped");
 			} else {

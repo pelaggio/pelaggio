@@ -234,10 +234,12 @@ export class LiveStatus {
 				lines.push(truncate(`${A.cyan("◆")} ${A.bold(s.itemId)} ${step}${turns}${activity}`, cols - 1));
 			}
 			const done = this.cycles.filter((c) => c.status === "done").length;
+			const warnings = this.cycles.filter((c) => c.status === "warning").length;
 			const failed = this.cycles.filter((c) => c.status === "failed").length;
 			const remaining = this.totalCycles - this.cycles.length;
 			let summary = A.dim("──");
 			if (done) summary += `  ${A.green(`${done}✓`)}`;
+			if (warnings) summary += `  ${A.yellow(`${warnings}⚠`)}`;
 			if (failed) summary += `  ${A.red(`${failed}✗`)}`;
 			if (remaining > 0) summary += `  ${A.dim(`+${remaining}`)}`;
 			summary += `  ${A.dim("$")}${cost.toFixed(2)}`;
@@ -246,7 +248,7 @@ export class LiveStatus {
 			this.statusBar.update(lines);
 		} else {
 			const items = this.cycles.map((s) => {
-				const icon = s.status === "done" ? A.green("✓") : s.status === "running" ? A.cyan("◆") : s.status === "failed" ? A.red("✗") : A.dim("○");
+				const icon = s.status === "done" ? A.green("✓") : s.status === "warning" ? A.yellow("⚠") : s.status === "running" ? A.cyan("◆") : s.status === "failed" ? A.red("✗") : A.dim("○");
 				let label = `${icon} ${s.itemId}`;
 				if (s.status === "running") {
 					if (s.step) {

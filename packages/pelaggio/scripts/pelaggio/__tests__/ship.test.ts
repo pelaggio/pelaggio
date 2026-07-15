@@ -32,7 +32,7 @@ function makeBkSpy(over: Partial<ShipBookkeepingResult> = {}): { fn: NonNullable
 	const calls: ShipBookkeepingCtx[] = [];
 	const fn = async (ctx: ShipBookkeepingCtx): Promise<ShipBookkeepingResult> => {
 		calls.push(ctx);
-		return { recovered: false, markedDone: true, archived: true, pushed: true, cleanedUp: true, ok: true, ...over };
+		return { recovered: false, markedDone: true, archived: true, pushed: true, cleanedUp: true, warnings: [], ok: true, ...over };
 	};
 	return { fn, calls };
 }
@@ -254,7 +254,8 @@ describe("runPipeline — ship target dispatch", () => {
 		const { repo, worktree, mergeIntoMain } = setupShipRepo();
 		const parkSignal = makeParkSignal();
 		// Tail ran but the push failed — local main holds the merge, origin did not.
-		const bk = makeBkSpy({ ok: false, pushed: false, cleanedUp: false, error: "push failed after pull + retry — merge is on local main" });
+		const warning = "mark-done failed (EACCES); rerun mark-done";
+		const bk = makeBkSpy({ ok: false, pushed: false, cleanedUp: false, warnings: [warning], error: "push failed after pull + retry — merge is on local main" });
 		const { runStep, calls } = createMockRunStep(
 			{
 				plan: { ok: true },
@@ -275,13 +276,43 @@ describe("runPipeline — ship target dispatch", () => {
 		assert.equal(bk.calls.length, 1);
 		assert.equal(result.completed, false, "a failed push must not report the cycle as shipped");
 		assert.match(result.error ?? "", /push failed/);
+		assert.deepEqual(result.bookkeepingWarnings, [warning]);
 		assert.ok(!calls.map((c) => c.step).includes("shipwreck"), "a push failure is surfaced, not routed to shipwreck");
+	});
+
+	it("direct-push: verified merge with bookkeeping warnings → completed:true with warnings", async () => {
+		const { repo, worktree, mergeIntoMain } = setupShipRepo();
+		const parkSignal = makeParkSignal();
+		const warning = "mark-done failed (EACCES); rerun mark-done";
+		const bk = makeBkSpy({ markedDone: false, warnings: [warning] });
+		const { runStep, calls } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				ship: { ok: true, text: "ship-merged: TOOL-99", sideEffect: () => mergeIntoMain() },
+			},
+			parkSignal,
+		);
+		const result = await runPipeline(baseOpts(worktree, "direct-push"), parkSignal, baseFlags, {
+			runStep,
+			mainRepo: repo,
+			listWorktrees: () => [],
+			appendLog: () => {},
+			runShipBookkeeping: bk.fn,
+		});
+
+		assert.equal(result.completed, true);
+		assert.deepEqual(result.bookkeepingWarnings, [warning]);
+		assert.ok(!calls.map((c) => c.step).includes("shipwreck"));
 	});
 
 	it("direct-push: merged but agent hard-failed (error) → shipwreck re-verifies → deterministic tail runs", async () => {
 		const { repo, worktree, mergeIntoMain } = setupShipRepo();
 		const parkSignal = makeParkSignal();
-		const bk = makeBkSpy();
+		const warning = "archive-plan failed (EACCES); rerun archive-plan";
+		const bk = makeBkSpy({ archived: false, warnings: [warning] });
 		const { runStep, calls } = createMockRunStep(
 			{
 				plan: { ok: true },
@@ -307,6 +338,7 @@ describe("runPipeline — ship target dispatch", () => {
 		assert.equal(bk.calls.length, 1);
 		assert.deepEqual(bk.calls[0], { mainRepo: repo, worktree, branch: "feat/tool-99", itemId: "TOOL-99" });
 		assert.equal(result.completed, true);
+		assert.deepEqual(result.bookkeepingWarnings, [warning]);
 	});
 
 	it("direct-push: ghost-ship → shipwreck lands + verifies the merge → deterministic tail runs", async () => {

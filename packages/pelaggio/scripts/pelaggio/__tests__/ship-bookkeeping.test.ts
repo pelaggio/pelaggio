@@ -53,7 +53,7 @@ describe("runShipBookkeeping — happy path", () => {
 			},
 		});
 
-		assert.deepEqual(result, { recovered: false, markedDone: true, archived: true, pushed: true, cleanedUp: true, ok: true });
+		assert.deepEqual(result, { recovered: false, markedDone: true, archived: true, pushed: true, cleanedUp: true, warnings: [], ok: true });
 		assert.deepEqual(calls.markDone, ["TOOL-9"]);
 		assert.deepEqual(calls.archivePlan, ["TOOL-9"]);
 
@@ -91,40 +91,49 @@ describe("runShipBookkeeping — happy path", () => {
 	});
 });
 
-describe("runShipBookkeeping — real adapter failures block branch destruction (finding #4)", () => {
-	// The markdown adapter now no-ops an already-done item, so a markDone/archive
-	// THROW is a genuine failure (format drift, gh/linear auth/network). It must
-	// surface (`ok:false`) and stop before cleanup so the branch is not destroyed
-	// and the item is not orphaned open forever — NOT swallowed as "already done".
-	it("markDone throwing → ok:false, push + cleanup NOT run, branch left intact, no discard", async () => {
+describe("runShipBookkeeping — roadmap failures warn but do not strand the ship", () => {
+	it("markDone throwing → archive, push, and cleanup still run with remediation warning", async () => {
 		const { order, exec } = makeExecSpy();
 		const { roadmap, calls } = makeRoadmapSpy({ markDoneThrows: "could not locate open row for TOOL-9" });
 		const result = await runShipBookkeeping(CTX, { roadmap, log: () => {}, exec, status: () => "", repairMain: () => {} });
 
-		assert.equal(result.ok, false);
+		assert.equal(result.ok, true);
 		assert.equal(result.markedDone, false);
-		assert.equal(result.archived, false);
-		assert.equal(result.pushed, false);
-		assert.equal(result.cleanedUp, false);
-		assert.match(result.error ?? "", /mark-done failed/);
-		assert.deepEqual(calls.archivePlan, [], "archive must not run once markDone fails");
-		assert.ok(!order.some((c) => c === "git push origin main"), "must not push after a real markDone failure");
-		assert.ok(!order.some((c) => /git worktree remove|git branch -d/.test(c)), "must NOT destroy the branch");
+		assert.equal(result.archived, true);
+		assert.equal(result.pushed, true);
+		assert.equal(result.cleanedUp, true);
+		assert.deepEqual(calls.archivePlan, ["TOOL-9"]);
+		assert.match(result.warnings[0] ?? "", /mark-done failed.*npx pelaggio roadmap mark-done TOOL-9/);
+		assert.equal(order.filter((c) => c === "git push origin main").length, 1);
+		assert.ok(order.some((c) => /git worktree remove/.test(c)));
 		assert.ok(!order.some((c) => DISCARD_RE.test(c)), `discard command leaked: ${order.join(" | ")}`);
 	});
 
-	it("archivePlan throwing → ok:false (markedDone already committed), push + cleanup NOT run", async () => {
+	it("archivePlan throwing → push and cleanup still run with remediation warning", async () => {
 		const { order, exec } = makeExecSpy();
 		const { roadmap } = makeRoadmapSpy({ archivePlanThrows: "git mv failed: dest exists" });
 		const result = await runShipBookkeeping(CTX, { roadmap, log: () => {}, exec, status: () => "", repairMain: () => {} });
 
-		assert.equal(result.ok, false);
+		assert.equal(result.ok, true);
 		assert.equal(result.markedDone, true);
 		assert.equal(result.archived, false);
-		assert.equal(result.pushed, false);
-		assert.equal(result.cleanedUp, false);
-		assert.match(result.error ?? "", /archive-plan failed/);
-		assert.ok(!order.some((c) => /git worktree remove|git branch -d/.test(c)), "must NOT destroy the branch");
+		assert.equal(result.pushed, true);
+		assert.equal(result.cleanedUp, true);
+		assert.match(result.warnings[0] ?? "", /archive-plan failed.*npx pelaggio roadmap archive-plan TOOL-9/);
+		assert.ok(order.some((c) => /git worktree remove/.test(c)));
+	});
+
+	it("both mutations throwing retains both warnings and pushes exactly once", async () => {
+		const { order, exec } = makeExecSpy();
+		const { roadmap, calls } = makeRoadmapSpy({ markDoneThrows: "EACCES mark", archivePlanThrows: "EACCES archive" });
+		const result = await runShipBookkeeping(CTX, { roadmap, log: () => {}, exec, status: () => "", repairMain: () => {} });
+
+		assert.equal(result.ok, true);
+		assert.equal(result.markedDone, false);
+		assert.equal(result.archived, false);
+		assert.equal(result.warnings.length, 2);
+		assert.deepEqual(calls, { markDone: ["TOOL-9"], archivePlan: ["TOOL-9"] });
+		assert.equal(order.filter((c) => c === "git push origin main").length, 1);
 	});
 });
 
@@ -153,6 +162,17 @@ describe("runShipBookkeeping — never-discard", () => {
 });
 
 describe("runShipBookkeeping — push failure blocks cleanup (finding #3)", () => {
+	it("roadmap warning is retained when push also fails", async () => {
+		const { order, exec } = makeExecSpy({ throwOn: (c) => c === "git push origin main" });
+		const { roadmap } = makeRoadmapSpy({ markDoneThrows: "EACCES" });
+		const result = await runShipBookkeeping(CTX, { roadmap, log: () => {}, exec, status: () => "", repairMain: () => {} });
+
+		assert.equal(result.ok, false);
+		assert.match(result.error ?? "", /push failed/);
+		assert.match(result.warnings[0] ?? "", /mark-done failed/);
+		assert.ok(!order.some((c) => /git worktree remove|git branch -d/.test(c)));
+	});
+
 	it("push rejected → pull + one retry; persistent failure → pushed:false, ok:false, branch NOT destroyed", async () => {
 		const { order, exec } = makeExecSpy({ throwOn: (c) => c === "git push origin main" });
 		const { roadmap } = makeRoadmapSpy();

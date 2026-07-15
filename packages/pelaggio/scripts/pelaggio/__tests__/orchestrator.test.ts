@@ -7,7 +7,7 @@ import { REPO } from "../config.js";
 import { runOrchestrator } from "../pipeline.js";
 import { reviseFindingsPath } from "../revise-sweep.js";
 import type { GhRunner } from "../roadmap/github-issues.js";
-import { StatusBar } from "../tui.js";
+import { LiveStatus, StatusBar } from "../tui.js";
 import type { Flags } from "../types.js";
 import { createMockRunPipeline } from "./mocks.js";
 
@@ -181,6 +181,24 @@ describe("runOrchestrator — parallel workers share mutex", () => {
 });
 
 describe("runOrchestrator — worker continuation", () => {
+	it("bookkeeping warning exits zero, renders distinctly, and keeps pulling", async (t) => {
+		const output: string[] = [];
+		t.mock.method(console, "log", (...args: unknown[]) => output.push(args.join(" ")));
+		const warning = "mark-done failed (EACCES); rerun mark-done";
+		const { runPipeline, calls } = createMockRunPipeline({
+			byItem: {
+				"A-1": { completed: true, cost: 0.1, bookkeepingWarnings: [warning] },
+				"A-2": { completed: true, cost: 0.1 },
+			},
+		});
+		const { exitCode } = await runOrchestrator({ ...baseFlags, item: "A-1,A-2" }, { runPipeline });
+
+		assert.equal(exitCode, 0);
+		assert.equal(calls.length, 2);
+		assert.match(output.join("\n"), /shipped — bookkeeping incomplete: mark-done failed/);
+		assert.match(output.join("\n"), /⚠/);
+	});
+
 	it("recoverable error ('pick:queue-empty') keeps worker pulling subsequent cycles", async (t) => {
 		t.mock.method(console, "log", () => {});
 		const { runPipeline, calls } = createMockRunPipeline({
@@ -221,6 +239,25 @@ describe("runOrchestrator — worker continuation", () => {
 		assert.equal(calls.length, 1);
 		assert.equal(calls[0].opts.itemId, "A-1");
 		assert.equal(exitCode, 1);
+	});
+});
+
+describe("LiveStatus — bookkeeping warning", () => {
+	it("renders and counts warning workers separately", (t) => {
+		const statusBar = new StatusBar();
+		const updates: string[][] = [];
+		t.mock.method(statusBar, "update", (lines: string[]) => updates.push(lines));
+		const live = new LiveStatus(statusBar);
+		live.totalCycles = 2;
+		live.multiline = true;
+		live.cycles = [
+			{ itemId: "A-1", status: "warning", cost: 0.1 },
+			{ itemId: "A-2", status: "done", cost: 0.1 },
+		];
+		live.render();
+
+		assert.match(updates.at(-1)?.join("\n") ?? "", /1⚠/);
+		assert.match(updates.at(-1)?.join("\n") ?? "", /1✓/);
 	});
 });
 
