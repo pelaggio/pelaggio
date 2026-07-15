@@ -25,7 +25,7 @@ Unknown slugs are rejected by the API instead of spawning a process in an arbitr
 
 ## Auth and Bind Rules
 
-`AUTOPILOT_SERVER_HOST=0.0.0.0` is rejected. If the configured host is non-loopback, startup fails unless `CONTROL_PLANE_TOKEN` is set (`TC-010`). Loopback binds (`127.0.0.1`, `localhost`, `::1`) can run tokenless for local development and emit a warning (`TC-010`). With a token set, all run/repo routes require `Authorization: Bearer <token>`; `/healthz` and `/.well-known/pelaggio.trust.json` are intentionally outside the bearer chain (`TC-010`).
+`AUTOPILOT_SERVER_HOST=0.0.0.0` (and its IPv6 wildcard equivalent `::`) is rejected. If the configured host is non-loopback, startup fails unless `CONTROL_PLANE_TOKEN` is set (`TC-010`). Loopback binds (`127.0.0.1`, `localhost`, `::1`) can run tokenless for local development and emit a warning (`TC-010`). With a token set, all run/repo routes require `Authorization: Bearer <token>`; `/healthz` and `/.well-known/pelaggio.trust.json` are intentionally outside the bearer chain (`TC-010`).
 
 ## Trust Manifest Endpoint
 

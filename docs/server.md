@@ -174,7 +174,7 @@ committed**:
 ANTHROPIC_API_KEY=sk-ant-...
 GH_TOKEN=ghp_...
 LINEAR_API_KEY=lin_api_...                    # optional, only if roadmap.source=linear
-AUTOPILOT_SERVER_HOST=100.x.x.x               # tailnet IP (NOT 0.0.0.0 — server refuses to start)
+AUTOPILOT_SERVER_HOST=100.x.x.x               # tailnet IP (NOT 0.0.0.0 or :: — server refuses to start)
 AUTOPILOT_SERVER_PORT=7777
 # AUTOPILOT_SERVER_REGISTRY=/abs/path/repos.yml  # optional override; default $XDG_CONFIG_HOME/pelaggio-server/repos.yml
 CONTROL_PLANE_TOKEN=...                       # bearer-gates everything except /healthz; REQUIRED on a non-loopback (tailnet) host — server refuses to start without it
@@ -231,9 +231,9 @@ new token on the next page load.
 
 ## Tailnet bind
 
-`AUTOPILOT_SERVER_HOST=0.0.0.0` is rejected at startup. The intent is that
-deploy environments specify the tailnet interface explicitly. Local dev can
-use `127.0.0.1`.
+`AUTOPILOT_SERVER_HOST=0.0.0.0` (and its IPv6 wildcard equivalent `::`) is
+rejected at startup. The intent is that deploy environments specify the
+tailnet interface explicitly. Local dev can use `127.0.0.1`.
 
 Binding a non-loopback host (a tailnet `100.x` IP, a LAN address) additionally
 **requires** `CONTROL_PLANE_TOKEN`: the daemon refuses to start token-less on
