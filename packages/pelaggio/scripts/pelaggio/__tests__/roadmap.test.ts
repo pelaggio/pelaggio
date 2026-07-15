@@ -4,6 +4,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileS
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { describe, it } from "node:test";
+import { FifoPolicy } from "../flow-policy.js";
 import { AlreadyClaimedError, getRoadmapSource, MarkdownRoadmap, type RoadmapSourceName } from "../roadmap/index.js";
 
 function seedRepo(): string {
@@ -304,6 +305,18 @@ describe("MarkdownRoadmap.listItems / getItem", () => {
 		const repo = seedStandard();
 		const r = new MarkdownRoadmap({ repo });
 		assert.equal(await r.getItem("TOOL-999"), null);
+	});
+
+	it("preserves table item scope for quick-mode classification", async () => {
+		const repo = seedRepo();
+		seedFile(repo, "docs/roadmap-core.md", ["| Item | Depends on |", "|---|---|", "| TOOL-1. Fix parser bug. Scope: M. | — |", "| TOOL-2. Small cleanup. Scope: S. | TOOL-1 |"].join("\n"));
+		const r = new MarkdownRoadmap({ repo });
+		const policy = new FifoPolicy();
+		const standard = await r.getItem("TOOL-1");
+		const quick = await r.getItem("TOOL-2");
+		assert.equal(standard?.body, "TOOL-1. Fix parser bug. Scope: M.");
+		assert.equal(policy.isQuickScope({ item: standard, summaryText: "fix parser bug" }), false);
+		assert.equal(policy.isQuickScope({ item: quick, summaryText: "large feature" }), true);
 	});
 });
 
@@ -762,6 +775,18 @@ describe("MarkdownRoadmap — checkbox-format roadmap", () => {
 		assert.equal(item?.id, "A-54");
 		assert.equal(item?.title, "First open");
 		assert.equal(item?.status, "open");
+	});
+
+	it("preserves checkbox prose for scope authority and summary fallback", async () => {
+		const repo = seedRepo();
+		seedFile(repo, "docs/roadmap-release.md", ["- [ ] **A-1. Parser repair** — Fix parser bug. Scope: M.", "- [ ] **A-2. Legacy repair** — Fix parser bug."].join("\n"));
+		const r = new MarkdownRoadmap({ repo });
+		const policy = new FifoPolicy();
+		const standard = await r.getItem("A-1");
+		const fallback = await r.getItem("A-2");
+		assert.equal(standard?.body, "- [ ] **A-1. Parser repair** — Fix parser bug. Scope: M.");
+		assert.equal(policy.isQuickScope({ item: standard, summaryText: "fix parser bug" }), false);
+		assert.equal(policy.isQuickScope({ item: fallback, summaryText: "fix parser bug" }), true);
 	});
 
 	it("listOpenItems filters out [x] rows", async () => {

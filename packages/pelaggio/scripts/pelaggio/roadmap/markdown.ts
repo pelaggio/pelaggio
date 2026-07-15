@@ -101,7 +101,7 @@ export class MarkdownRoadmap implements RoadmapSource {
 					status = "blocked";
 					blockedReason = row.deps.replace(/^blocked:\s*/i, "").trim();
 				}
-				const item: RoadmapItemStatus = { id, title, deps: row.deps, sourceRef: path, status };
+				const item: RoadmapItemStatus = { id, title, deps: row.deps, sourceRef: path, status, body: row.body };
 				if (blockedReason) item.blockedReason = blockedReason;
 				out.push(item);
 			}
@@ -394,6 +394,7 @@ export class MarkdownRoadmap implements RoadmapSource {
 interface RoadmapRow {
 	item: string;
 	deps: string;
+	body: string;
 }
 
 function parseCheckboxRows(body: string): RoadmapRow[] {
@@ -405,7 +406,7 @@ function parseCheckboxRows(body: string): RoadmapRow[] {
 		// status detection (`row.item.startsWith("~~")`) continues to work
 		// without a second code path.
 		const item = mark === "x" ? `~~${id}. ${title.trim()}~~` : `${id}. ${title.trim()}`;
-		rows.push({ item, deps: (deps ?? "—").trim() });
+		rows.push({ item, deps: (deps ?? "—").trim(), body: m[0] });
 	}
 	return rows;
 }
@@ -518,7 +519,7 @@ function parseOpenTableRows(body: string): RoadmapRow[] {
 				.slice(1, -1)
 				.map((s) => s.trim());
 			if (cells.length < 2) continue;
-			rows.push({ item: cells[0], deps: cells[1] });
+			rows.push({ item: cells[0], deps: cells[1], body: cells[0] });
 		}
 	}
 	return rows;
