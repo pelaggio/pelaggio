@@ -295,4 +295,69 @@ describe("pr-review CLI aggregation", () => {
 			assert.match(out.comments[0], /isolated verification failed; blocker retained/);
 		}
 	});
+
+	it("two-pass policy converges only after explicit carried refutation", async () => {
+		const finding = { severity: "must-fix", message: "Broken.", path: "src/a.ts", line: 1 };
+		const queued = [
+			result({ text: report("Found.", [finding]) }),
+			verification([{ candidateId: "C1", decision: "survives", rationale: "Confirmed." }]),
+			result({ text: report("No rediscovery.") }),
+			verification([{ candidateId: "C1", decision: "refuted", rationale: "Fixed evidence." }]),
+		];
+		const calls: string[] = [];
+		const review = await runPrReviewGate({
+			pr: "1",
+			policy: { runner: "ci", statuslessAfter: "2h", maxPasses: 2, budgetCap: 20, providerDiversity: "off" },
+			execFileSync: ((_: string, args: readonly string[]) => (args.includes("--name-only") ? "docs/a.md\n" : "+docs")) as typeof import("node:child_process").execFileSync,
+			runStep: async (name) => {
+				calls.push(name);
+				const next = queued.shift();
+				assert.ok(next);
+				return next;
+			},
+		});
+		assert.equal(review.gate, "pass");
+		assert.equal(review.iterations, 2);
+		assert.deepEqual(calls, ["pr-review", "pr-verify", "pr-review", "pr-verify"]);
+	});
+
+	it("omission cannot pass and unchanged survivors trip diminishing returns", async () => {
+		const finding = { severity: "must-fix", message: "Broken." };
+		const queued = [
+			result({ text: report("Found.", [finding]) }),
+			verification([{ candidateId: "C1", decision: "survives", rationale: "Confirmed." }]),
+			result({ text: report("Omitted.") }),
+			verification([{ candidateId: "C1", decision: "survives", rationale: "Still confirmed." }]),
+		];
+		const review = await runPrReviewGate({
+			pr: "1",
+			policy: { runner: "ci", statuslessAfter: "2h", maxPasses: 3, budgetCap: 30, providerDiversity: "off" },
+			execFileSync: ((_: string, args: readonly string[]) => (args.includes("--name-only") ? "docs/a.md\n" : "+docs")) as typeof import("node:child_process").execFileSync,
+			runStep: async () => {
+				const next = queued.shift();
+				assert.ok(next);
+				return next;
+			},
+		});
+		assert.equal(review.gate, "block");
+		assert.equal(review.breakerReason, "diminishing-returns");
+		assert.equal(review.survivorCount, 1);
+	});
+
+	it("provider requirement and budget preflight block before agent work", async () => {
+		let calls = 0;
+		const common = {
+			pr: "1",
+			execFileSync: ((_: string, args: readonly string[]) => (args.includes("--name-only") ? "docs/a.md\n" : "+docs")) as typeof import("node:child_process").execFileSync,
+			runStep: async () => {
+				calls++;
+				return result();
+			},
+		};
+		const diversity = await runPrReviewGate({ ...common, policy: { runner: "ci", statuslessAfter: "2h", maxPasses: 1, budgetCap: 20, providerDiversity: "require" } });
+		assert.equal(diversity.breakerReason, "provider-diversity");
+		const budget = await runPrReviewGate({ ...common, policy: { runner: "ci", statuslessAfter: "2h", maxPasses: 1, budgetCap: 9, providerDiversity: "off" } });
+		assert.equal(budget.breakerReason, "budget");
+		assert.equal(calls, 0);
+	});
 });

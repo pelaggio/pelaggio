@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { parseReviewFindings, parseReviewVerification, ReviewFindingsParseError, reconcileReviewVerification, reviewFindingsGate } from "../review/findings.js";
+import { applyReviewPass, evaluateReviewConvergence, parseReviewFindings, parseReviewVerification, ReviewFindingsParseError, reconcileReviewVerification, reviewFindingFingerprint, reviewFindingsGate } from "../review/findings.js";
 
 function block(value: unknown): string {
 	return `Review complete.\nREVIEW_FINDINGS\n${JSON.stringify(value)}\nEND_REVIEW_FINDINGS`;
@@ -57,6 +57,38 @@ describe("parseReviewFindings", () => {
 		];
 		for (const finding of invalid) assert.throws(() => parseReviewFindings(block({ schemaVersion: 1, summary: "Ok.", findings: [finding] })), ReviewFindingsParseError);
 		for (const summary of ["", "two\nlines"]) assert.throws(() => parseReviewFindings(block({ schemaVersion: 1, summary, findings: [] })), ReviewFindingsParseError);
+	});
+});
+
+describe("review convergence", () => {
+	const first = { severity: "must-fix" as const, message: "  Broken   path ", path: "src/a.ts", line: 2 };
+	const disposition = (finding = first, decision: "survives" | "refuted" = "survives") => ({ id: "C1", finding, decision, rationale: "Checked." });
+
+	it("uses a stable normalized fingerprint independent of candidate IDs", () => {
+		assert.equal(reviewFindingFingerprint(first), reviewFindingFingerprint({ ...first, message: "Broken path" }));
+	});
+
+	it("carries omissions and removes only explicit refutations", () => {
+		const carried = applyReviewPass(new Map(), { valid: true, dispositions: [disposition()], cost: 1 });
+		assert.equal(applyReviewPass(carried, { valid: true, dispositions: [], cost: 1 }).size, 1);
+		assert.equal(applyReviewPass(carried, { valid: true, dispositions: [disposition(first, "refuted")], cost: 1 }).size, 0);
+		assert.equal(applyReviewPass(carried, { valid: false, dispositions: [disposition(first, "refuted")], cost: 1 }).size, 1);
+	});
+
+	it("converges cleanly and types every breaker", () => {
+		const empty = new Map();
+		assert.equal(evaluateReviewConvergence({ carried: empty, summary: { valid: true, dispositions: [], cost: 0 }, hasNextPass: false, nextPassAffordable: true }).state, "converged");
+		assert.deepEqual(evaluateReviewConvergence({ carried: empty, summary: { valid: false, dispositions: [], cost: 0 }, hasNextPass: true, nextPassAffordable: true }).state, "exhausted");
+		const baseline = applyReviewPass(empty, { valid: true, dispositions: [disposition()], cost: 1 });
+		for (const [hasNextPass, affordable, previous, reason] of [
+			[false, true, undefined, "max-passes"],
+			[true, false, undefined, "budget"],
+			[true, true, 1, "diminishing-returns"],
+		] as const) {
+			const result = evaluateReviewConvergence({ carried: baseline, summary: { valid: true, dispositions: [], cost: 1 }, previousSurvivorCount: previous, hasNextPass, nextPassAffordable: affordable });
+			assert.equal(result.state, "exhausted");
+			if (result.state === "exhausted") assert.equal(result.reason, reason);
+		}
 	});
 });
 
