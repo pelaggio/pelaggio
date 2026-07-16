@@ -124,7 +124,6 @@ describe("LinearRoadmap.getItem", () => {
 					identifier: "ENG-42",
 					title: "Fix widget",
 					labels: ["autopilot", "scope: L"],
-					relations: [],
 				},
 			},
 		});
@@ -141,7 +140,6 @@ describe("LinearRoadmap.getItem", () => {
 					identifier: "ENG-2",
 					title: "Blocked issue",
 					stateType: "started",
-					relations: [],
 					inverseRelations: [
 						{ type: "blocks", relatedIdentifier: "ENG-1" },
 						{ type: "related", relatedIdentifier: "ENG-3" },
@@ -174,14 +172,12 @@ describe("LinearRoadmap.listItems", () => {
 					identifier: "ENG-1",
 					title: "Blocker",
 					description: null,
-					relations: [{ type: "blocks", relatedIdentifier: "ENG-2" }],
 				},
 				{
 					id: "u2",
 					identifier: "ENG-2",
 					title: "Blocked",
 					description: null,
-					relations: [],
 					inverseRelations: [
 						{ type: "blocks", relatedIdentifier: "ENG-1" },
 						{ type: "related", relatedIdentifier: "ENG-3" },
@@ -209,14 +205,13 @@ describe("LinearRoadmap.listOpenItems", () => {
 				identifier: "ENG-1",
 				title: "First",
 				description: null,
-				relations: [{ type: "blocks", relatedIdentifier: "ENG-3" }],
 				inverseRelations: [
 					{ type: "blocks", relatedIdentifier: "ENG-2" },
 					{ type: "related", relatedIdentifier: "ENG-4" },
 				],
 			},
-			{ id: "u2", identifier: "ENG-2", title: "Second", description: null, relations: [] },
-			{ id: "u3", identifier: "ENG-3", title: "Third", description: "body", relations: [] },
+			{ id: "u2", identifier: "ENG-2", title: "Second", description: null },
+			{ id: "u3", identifier: "ENG-3", title: "Third", description: "body" },
 		];
 		const { api, calls } = makeStub({ issues });
 		const r = mk({ repo: "/tmp", teamId: "team-x", api });
