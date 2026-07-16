@@ -17,6 +17,7 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { CONFIG, REPO, type ReviewConfig, ROADMAP_GITHUB, resolveStepSettings } from "./config.js";
+import { postCommitStatus, upsertMarkerComment } from "./github-posting.js";
 import { classifySecurityReviewDiff, expandSkill, formatReviewMetrics, type SecurityDiffSignal } from "./helpers.js";
 import {
 	evaluateReviewConvergence,
@@ -31,7 +32,7 @@ import {
 	type VerificationCandidate,
 	type VerificationDisposition,
 } from "./review/findings.js";
-import { parseGhJson } from "./roadmap/github-issues.js";
+import type { GhRunner } from "./roadmap/github-issues.js";
 import type { RunStepFn } from "./step-runner.js";
 import { runStep } from "./step-runner.js";
 import type { ParkSignal, StepEmit, StepResult } from "./types.js";
@@ -197,25 +198,10 @@ export function buildFailClosedComment(subtype: string, message: string): string
 	return buildComment("block", [pass], { triggered: false, reasons: [] });
 }
 
-interface GhComment {
-	id: number;
-	body: string;
-}
-
 /** Upsert the single gate comment. Best-effort: a posting failure must not
  *  change the exit code (the commit status is the required durable signal). */
 function upsertCommentDefault(pr: string, body: string): void {
-	try {
-		const repo = ROADMAP_GITHUB.ghRepo;
-		const raw = execFileSync("gh", ["api", `repos/${repo}/issues/${pr}/comments`, "--paginate"], { cwd: REPO, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
-		const comments = parseGhJson<GhComment[]>(raw, (v) => Array.isArray(v));
-		const existing = [...comments].reverse().find((comment) => comment.body.includes(PR_REVIEW_MARKER));
-		const args = existing ? ["api", "--method", "PATCH", `repos/${repo}/issues/comments/${existing.id}`, "-f", `body=${body}`] : ["api", "--method", "POST", `repos/${repo}/issues/${pr}/comments`, "-f", `body=${body}`];
-		execFileSync("gh", args, { cwd: REPO, stdio: ["ignore", "ignore", "pipe"] });
-	} catch (e) {
-		const msg = e instanceof Error ? e.message : String(e);
-		process.stderr.write(`⚠ failed to upsert PR comment: ${msg}\n`);
-	}
+	if (!upsertMarkerComment(defaultGhRunner, ROADMAP_GITHUB.ghRepo, pr, PR_REVIEW_MARKER, body)) process.stderr.write("⚠ failed to upsert PR comment\n");
 }
 
 /** Resolve the SHA the review actually inspected: the local checked-out HEAD
@@ -230,20 +216,18 @@ function resolveReviewedSha(exec: typeof execFileSync): string {
 }
 
 function postStatusDefault(gate: "pass" | "block", sha: string): boolean {
-	try {
-		const repo = ROADMAP_GITHUB.ghRepo;
-		const state = gate === "pass" ? "success" : "failure";
-		execFileSync("gh", ["api", `repos/${repo}/statuses/${sha}`, "-f", `state=${state}`, "-f", "context=review", "-f", `description=pelaggio review ${gate}`], {
-			cwd: REPO,
-			stdio: ["ignore", "ignore", "pipe"],
-		});
-		return true;
-	} catch (e) {
-		const msg = e instanceof Error ? e.message : String(e);
-		process.stderr.write(`✗ failed to post required review status: ${msg}\n`);
-		return false;
-	}
+	const posted = postCommitStatus(defaultGhRunner, ROADMAP_GITHUB.ghRepo, sha, gate === "pass" ? "success" : "failure", "review", `pelaggio review ${gate}`);
+	if (!posted) process.stderr.write("✗ failed to post required review status\n");
+	return posted;
 }
+
+const defaultGhRunner: GhRunner = (args) => {
+	try {
+		return { stdout: execFileSync("gh", args, { cwd: REPO, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }), stderr: "", status: 0 };
+	} catch (error) {
+		return { stdout: "", stderr: error instanceof Error ? error.message : String(error), status: 1 };
+	}
+};
 
 function emptyParkSignal(): ParkSignal {
 	return { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" };
