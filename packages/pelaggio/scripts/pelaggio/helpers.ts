@@ -287,9 +287,10 @@ const STEP_BODY_MAX = 16_000;
  * fetched in-harness — so a provider whose sandbox can't fetch them (Codex: no network, roadmap CLI
  * dies on tsx-IPC) works against the real issue instead of running `roadmap get` / `gh issue view`
  * itself. Runs for ALL providers (Claude also gets the block and skips its own fetch); load-bearing
- * for sandboxed ones. Only github-issues carries a `body` today; for adapters without one
- * (markdown), `sourceRef` names a locally-readable file. `getItem` failure degrades to the bare gate
- * (the model still recovers the id from the branch name per the skill).
+ * for sandboxed ones. github-issues carries the full issue `body`; markdown carries its one-line item
+ * row (and `sourceRef` still names the locally-readable roadmap file); adapters without either fall
+ * back to reading `sourceRef`. `getItem` failure degrades to the bare gate (the model still recovers
+ * the id from the branch name per the skill).
  */
 export async function buildStepArgs(roadmap: RoadmapSource, itemId: string, mode?: string): Promise<string> {
 	const item = await roadmap.getItem(itemId).catch(() => null);
