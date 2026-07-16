@@ -17,7 +17,6 @@ export interface LinearIssueListItem {
 	identifier: string;
 	title: string;
 	description: string | null;
-	relations: LinearIssueRelation[];
 	inverseRelations?: LinearIssueRelation[];
 	/** Optional claim markers (issue #12); stubs that omit them read as unclaimed. */
 	stateType?: string;
@@ -35,9 +34,7 @@ export interface LinearCommentNode {
  */
 export interface LinearApi {
 	listIssues(opts: { teamId: string; label?: string; includeDone?: boolean }): Promise<LinearIssueListItem[]>;
-	getIssue(
-		identifier: string,
-	): Promise<{ id: string; identifier: string; title: string; description?: string | null; stateType?: string; labels?: string[]; relations?: LinearIssueRelation[]; inverseRelations?: LinearIssueRelation[] } | null>;
+	getIssue(identifier: string): Promise<{ id: string; identifier: string; title: string; description?: string | null; stateType?: string; labels?: string[]; inverseRelations?: LinearIssueRelation[] } | null>;
 	createComment(issueId: string, body: string): Promise<void>;
 	transitionIssue(issueId: string, teamId: string, stateType: "started" | "completed"): Promise<void>;
 	addLabel(issueId: string, labelName: string): Promise<void>;
@@ -306,7 +303,6 @@ interface LinearSdkIssue {
 	description: string | null;
 	labelIds?: string[];
 	state?: { type: string } | (() => Promise<{ type: string } | null>);
-	relations?: () => Promise<{ nodes: LinearSdkRelation[] }>;
 	inverseRelations?: () => Promise<{ nodes: LinearSdkRelation[] }>;
 	comments?: () => Promise<{ nodes: LinearSdkComment[] }>;
 	labels?: () => Promise<{ nodes: { name: string }[] }>;
@@ -314,7 +310,6 @@ interface LinearSdkIssue {
 
 interface LinearSdkRelation {
 	type: string;
-	relatedIssue?: Promise<{ identifier: string } | null>;
 	issue?: Promise<{ identifier: string } | null>;
 }
 
@@ -383,14 +378,6 @@ async function defaultLinearApi(): Promise<LinearApi> {
 			const res = await client.issues({ filter, first: 200 });
 			const items: LinearIssueListItem[] = [];
 			for (const node of res.nodes) {
-				const relations: LinearIssueRelation[] = [];
-				const rel = typeof node.relations === "function" ? await node.relations() : null;
-				if (rel) {
-					for (const r of rel.nodes) {
-						const related = await r.relatedIssue;
-						if (related?.identifier) relations.push({ type: r.type, relatedIdentifier: related.identifier });
-					}
-				}
 				const inverseRelations: LinearIssueRelation[] = [];
 				const inverseRel = typeof node.inverseRelations === "function" ? await node.inverseRelations() : null;
 				if (inverseRel) {
@@ -399,7 +386,7 @@ async function defaultLinearApi(): Promise<LinearApi> {
 						if (related?.identifier) inverseRelations.push({ type: r.type, relatedIdentifier: related.identifier });
 					}
 				}
-				items.push({ id: node.id, identifier: node.identifier, title: node.title, description: node.description ?? null, relations, inverseRelations, stateType: await stateTypeOf(node) });
+				items.push({ id: node.id, identifier: node.identifier, title: node.title, description: node.description ?? null, inverseRelations, stateType: await stateTypeOf(node) });
 			}
 			return items;
 		},
@@ -407,14 +394,6 @@ async function defaultLinearApi(): Promise<LinearApi> {
 			const issue = await client.issue(identifier);
 			if (!issue) return null;
 			const stateType = await stateTypeOf(issue);
-			const relations: LinearIssueRelation[] = [];
-			if (typeof issue.relations === "function") {
-				const rel = await issue.relations();
-				for (const r of rel.nodes) {
-					const related = await r.relatedIssue;
-					if (related?.identifier) relations.push({ type: r.type, relatedIdentifier: related.identifier });
-				}
-			}
 			const inverseRelations: LinearIssueRelation[] = [];
 			if (typeof issue.inverseRelations === "function") {
 				const rel = await issue.inverseRelations();
@@ -428,7 +407,7 @@ async function defaultLinearApi(): Promise<LinearApi> {
 				const l = await issue.labels();
 				labels = l.nodes.map((n) => n.name);
 			}
-			return { id: issue.id, identifier: issue.identifier, title: issue.title, description: issue.description ?? null, stateType, labels, relations, inverseRelations };
+			return { id: issue.id, identifier: issue.identifier, title: issue.title, description: issue.description ?? null, stateType, labels, inverseRelations };
 		},
 		async createComment(issueId, body) {
 			await client.createComment({ issueId, body });
