@@ -16,7 +16,7 @@
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { CONFIG, REPO, type ReviewConfig, resolveStepSettings } from "./config.js";
+import { CONFIG, REPO, type ReviewConfig, ROADMAP_GITHUB, resolveStepSettings } from "./config.js";
 import { classifySecurityReviewDiff, expandSkill, formatReviewMetrics, type SecurityDiffSignal } from "./helpers.js";
 import {
 	evaluateReviewConvergence,
@@ -31,6 +31,7 @@ import {
 	type VerificationCandidate,
 	type VerificationDisposition,
 } from "./review/findings.js";
+import { parseGhJson } from "./roadmap/github-issues.js";
 import type { RunStepFn } from "./step-runner.js";
 import { runStep } from "./step-runner.js";
 import type { ParkSignal, StepEmit, StepResult } from "./types.js";
@@ -55,6 +56,7 @@ interface PrReviewDeps {
 	runStep: RunStepFn;
 	execFileSync: typeof execFileSync;
 	upsertComment: (pr: string, body: string) => void;
+	postStatus: (gate: "pass" | "block", sha: string) => boolean;
 }
 
 export interface RunPrReviewGateOptions {
@@ -87,6 +89,7 @@ let deps: PrReviewDeps = {
 	runStep,
 	execFileSync,
 	upsertComment: upsertCommentDefault,
+	postStatus: postStatusDefault,
 };
 
 export function setPrReviewDepsForTests(overrides: Partial<PrReviewDeps>): () => void {
@@ -194,18 +197,51 @@ export function buildFailClosedComment(subtype: string, message: string): string
 	return buildComment("block", [pass], { triggered: false, reasons: [] });
 }
 
+interface GhComment {
+	id: number;
+	body: string;
+}
+
 /** Upsert the single gate comment. Best-effort: a posting failure must not
- *  change the exit code (the gate color must still reflect the verdict). */
+ *  change the exit code (the commit status is the required durable signal). */
 function upsertCommentDefault(pr: string, body: string): void {
 	try {
-		execFileSync("gh", ["pr", "comment", pr, "--edit-last", "--create-if-none", "--body-file", "-"], {
-			cwd: REPO,
-			input: body,
-			stdio: ["pipe", "ignore", "pipe"],
-		});
+		const repo = ROADMAP_GITHUB.ghRepo;
+		const raw = execFileSync("gh", ["api", `repos/${repo}/issues/${pr}/comments`, "--paginate"], { cwd: REPO, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+		const comments = parseGhJson<GhComment[]>(raw, (v) => Array.isArray(v));
+		const existing = [...comments].reverse().find((comment) => comment.body.includes(PR_REVIEW_MARKER));
+		const args = existing ? ["api", "--method", "PATCH", `repos/${repo}/issues/comments/${existing.id}`, "-f", `body=${body}`] : ["api", "--method", "POST", `repos/${repo}/issues/${pr}/comments`, "-f", `body=${body}`];
+		execFileSync("gh", args, { cwd: REPO, stdio: ["ignore", "ignore", "pipe"] });
 	} catch (e) {
 		const msg = e instanceof Error ? e.message : String(e);
 		process.stderr.write(`⚠ failed to upsert PR comment: ${msg}\n`);
+	}
+}
+
+/** Resolve the SHA the review actually inspected: the local checked-out HEAD
+ *  that the diff (origin/main...HEAD) was computed against. This must be pinned
+ *  and passed to postStatus — re-querying the live PR head would let a push that
+ *  lands during the review green an unreviewed commit (fail-open). */
+function resolveReviewedSha(exec: typeof execFileSync): string {
+	const raw = exec("git", ["rev-parse", "HEAD"], { cwd: REPO, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+	const sha = String(raw).trim();
+	if (!/^[0-9a-f]{7,64}$/.test(sha)) throw new Error(`could not resolve reviewed HEAD sha (got ${JSON.stringify(sha)})`);
+	return sha;
+}
+
+function postStatusDefault(gate: "pass" | "block", sha: string): boolean {
+	try {
+		const repo = ROADMAP_GITHUB.ghRepo;
+		const state = gate === "pass" ? "success" : "failure";
+		execFileSync("gh", ["api", `repos/${repo}/statuses/${sha}`, "-f", `state=${state}`, "-f", "context=review", "-f", `description=pelaggio review ${gate}`], {
+			cwd: REPO,
+			stdio: ["ignore", "ignore", "pipe"],
+		});
+		return true;
+	} catch (e) {
+		const msg = e instanceof Error ? e.message : String(e);
+		process.stderr.write(`✗ failed to post required review status: ${msg}\n`);
+		return false;
 	}
 }
 
@@ -432,7 +468,14 @@ export async function main(argv: string[]): Promise<number> {
 	// error), we still post a self-explaining red comment and exit 1 rather than
 	// crash silently. The gate's whole value is that a crashed agent never reads
 	// as a merge-clear sign-off.
+	// Pin the reviewed SHA before the review runs so both the success and the
+	// fail-closed paths post the required status to the exact commit inspected,
+	// never to a live remote head that may have advanced during the review. If
+	// even this resolution fails we post no status at all — an absent required
+	// status leaves the PR blocked, which is the safe (fail-closed) outcome.
+	let reviewedSha: string | undefined;
 	try {
+		reviewedSha = resolveReviewedSha(deps.execFileSync);
 		const review = await runPrReviewGate({ pr, profile, cwd: REPO, diffCwd: REPO, runStep: deps.runStep, execFileSync: deps.execFileSync, policy: CONFIG.review });
 
 		// The review text goes to stdout unconditionally so the CI log always
@@ -440,13 +483,16 @@ export async function main(argv: string[]): Promise<number> {
 		// must not be able to lose the only copy of a $-priced review.
 		process.stdout.write(`${review.body}\n`);
 
+		const statusPosted = deps.postStatus(review.gate, reviewedSha);
 		deps.upsertComment(pr, review.body);
 
 		process.stderr.write(`gate: ${review.gate.toUpperCase()} (ok=${review.ok})\n`);
-		return review.gate === "block" ? 1 : 0;
+		return review.gate === "block" || !statusPosted ? 1 : 0;
 	} catch (e) {
 		const msg = e instanceof Error ? e.message : String(e);
 		process.stderr.write(`pr-review crashed — failing closed: ${msg}\n`);
+		if (reviewedSha) deps.postStatus("block", reviewedSha);
+		else process.stderr.write("✗ reviewed SHA unavailable; posting no status (absent required status keeps the PR blocked)\n");
 		deps.upsertComment(pr, buildFailClosedComment("error_crash", `pr-review crashed before producing a review, so this gate blocks the merge.\n\n${msg}`));
 		return 1;
 	}
