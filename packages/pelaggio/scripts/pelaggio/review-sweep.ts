@@ -1,6 +1,7 @@
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
+import { hasMarkerComment, postCommitStatus, runGhSoft, upsertMarkerComment } from "./github-posting.js";
 import { PR_REVIEW_MARKER } from "./pr-review-cli.js";
 import { type GhRunner, parseGhJson } from "./roadmap/github-issues.js";
 
@@ -34,22 +35,6 @@ interface PrListEntry {
 	headRepositoryOwner?: { login?: string } | null;
 	statusCheckRollup?: RollupEntry[];
 	updatedAt?: string;
-}
-
-interface CommentEntry {
-	id: number;
-	body: string;
-	created_at?: string;
-	createdAt?: string;
-}
-
-function runGhSoft(gh: GhRunner, args: string[]): string | null {
-	try {
-		const r = gh(args);
-		return r.status === 0 ? r.stdout : null;
-	} catch {
-		return null;
-	}
 }
 
 function sameRepo(pr: PrListEntry, ghRepo: string): boolean {
@@ -109,41 +94,17 @@ export function findReviewCandidates(gh: GhRunner, ghRepo: string, now: number, 
 }
 
 export function postReviewStatus(gh: GhRunner, ghRepo: string, sha: string, state: "pending" | "success" | "failure", description: string, targetUrl?: string): boolean {
-	const args = ["api", `repos/${ghRepo}/statuses/${sha}`, "-f", `state=${state}`, "-f", `context=${REVIEW_CONTEXT}`, "-f", `description=${description}`];
-	if (targetUrl) args.push("-f", `target_url=${targetUrl}`);
-	return runGhSoft(gh, args) !== null;
-}
-
-function latestMarkerComment(comments: readonly CommentEntry[], marker: string): CommentEntry | null {
-	const matches = comments.filter((c) => c.body.includes(marker));
-	if (matches.length === 0) return null;
-	return matches.reduce((a, b) => ((b.created_at ?? b.createdAt ?? "").localeCompare(a.created_at ?? a.createdAt ?? "") > 0 ? b : a));
+	return postCommitStatus(gh, ghRepo, sha, state, REVIEW_CONTEXT, description, targetUrl);
 }
 
 export function upsertReviewComment(gh: GhRunner, ghRepo: string, prNumber: number, body: string): boolean {
-	const out = runGhSoft(gh, ["api", `repos/${ghRepo}/issues/${prNumber}/comments`, "--paginate"]);
-	if (out === null) return false;
-	let comments: CommentEntry[];
-	try {
-		comments = parseGhJson<CommentEntry[]>(out, (v) => Array.isArray(v));
-	} catch {
-		return false;
-	}
-	const existing = latestMarkerComment(comments, PR_REVIEW_MARKER);
-	const args = existing ? ["api", "--method", "PATCH", `repos/${ghRepo}/issues/comments/${existing.id}`, "-f", `body=${body}`] : ["api", "--method", "POST", `repos/${ghRepo}/issues/${prNumber}/comments`, "-f", `body=${body}`];
-	return runGhSoft(gh, args) !== null;
+	return upsertMarkerComment(gh, ghRepo, prNumber, PR_REVIEW_MARKER, body);
 }
 
 export function postLocalModeWorkflowComment(gh: GhRunner, ghRepo: string, prNumber: number): boolean {
-	const out = runGhSoft(gh, ["api", `repos/${ghRepo}/issues/${prNumber}/comments`, "--paginate"]);
-	if (out === null) return false;
-	let comments: CommentEntry[];
-	try {
-		comments = parseGhJson<CommentEntry[]>(out, (v) => Array.isArray(v));
-	} catch {
-		return false;
-	}
-	if (latestMarkerComment(comments, LOCAL_MODE_MARKER)) return true;
+	const exists = hasMarkerComment(gh, ghRepo, prNumber, LOCAL_MODE_MARKER);
+	if (exists === null) return false;
+	if (exists) return true;
 	const body = `${LOCAL_MODE_MARKER}\nThe \`review\` gate is posted by the local pelaggio runner for this repo. If this PR stays without a \`review\` status, start a normal local pelaggio run or switch \`review.runner\` back to \`ci\`.`;
 	return runGhSoft(gh, ["api", "--method", "POST", `repos/${ghRepo}/issues/${prNumber}/comments`, "-f", `body=${body}`]) !== null;
 }
