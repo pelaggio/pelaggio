@@ -42,7 +42,7 @@ Worktrees share `MAIN_REPO`'s `node_modules` when lockfiles match — by symlink
 - If `<worktree>/pnpm-lock.yaml` sha256 matches `<MAIN_REPO>/pnpm-lock.yaml` **and** MAIN's `node_modules` has workspace-internal entries, the worktree gets a real `node_modules/` whose entries are absolute symlinks: workspace packages → `<worktree>/<pkg>` (so cross-package source edits resolve to the worktree copy), everything else (`.pnpm/`, `.bin/`, external deps) → `<MAIN>/node_modules/...` (preserving the shared store). Same shape applies per subpackage.
 - Without workspace entries, the simpler symlink-the-whole-dir path runs (`<worktree>/node_modules → <MAIN_REPO>/node_modules`).
 - On drift or missing main `node_modules`, it falls through to `pnpm install --frozen-lockfile --silent`.
-- Materialize is idempotent. The real-dir vs symlink test is `lstatSync().isSymbolicLink()`; the pnpm-store presence test is `isRealDir(.pnpm)` (lstat-based, **not** `existsSync`, which would follow the post-materialize symlink and falsely re-flag corruption). Real, user-managed `node_modules` without pelaggio's emitted shape is left alone.
+- Materialize is idempotent, including rematerializing a pelaggio-owned layer when MAIN gains entries after the worktree snapshot. The real-dir vs symlink test is `lstatSync().isSymbolicLink()`; the pnpm-store presence test is `isRealDir(.pnpm)` (lstat-based, **not** `existsSync`, which would follow the post-materialize symlink and falsely re-flag corruption). Real, user-managed `node_modules` without pelaggio's emitted shape is left alone.
 
 ## Plan-Polish Guard
 
