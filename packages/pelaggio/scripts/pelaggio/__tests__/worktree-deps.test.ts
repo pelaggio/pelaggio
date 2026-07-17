@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync, realpathSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, it } from "node:test";
@@ -1019,34 +1019,62 @@ describe("findOutboundMainSymlinks", () => {
 });
 
 describe("repairMainNodeModules", () => {
-	it("returns { ranInstall: false, repaired: [] } when main is clean", () => {
+	it("returns { ranInstall: false, repaired: [] } when main is clean", async () => {
 		const main = makeMain();
 		const calls: Array<{ cmd: string; cwd: string }> = [];
 		const runner = { run: (cmd: string, cwd: string) => calls.push({ cmd, cwd }) };
-		const report = repairMainNodeModules(main, runner);
+		const report = await repairMainNodeModules(main, runner);
 		assert.equal(report.ranInstall, false);
 		assert.deepEqual(report.repaired, []);
 		assert.deepEqual(calls, []);
 	});
 
-	it("invokes the runner with `pnpm install --frozen-lockfile` and the main repo cwd when corruption is detected", () => {
+	it("invokes a lifecycle-script-free frozen install in the main repo when corruption is detected", async () => {
 		const main = makeMain();
 		symlinkSync("../../sibling/node_modules/.pnpm/tsx@4.21.0/node_modules/tsx", join(main, "node_modules", "tsx"), "dir");
 		const calls: Array<{ cmd: string; cwd: string }> = [];
 		const runner = { run: (cmd: string, cwd: string) => calls.push({ cmd, cwd }) };
-		const report = repairMainNodeModules(main, runner);
+		const report = await repairMainNodeModules(main, runner);
 		assert.equal(report.ranInstall, true);
-		assert.deepEqual(calls, [{ cmd: "pnpm install --frozen-lockfile", cwd: main }]);
+		assert.deepEqual(calls, [{ cmd: "pnpm install --frozen-lockfile --ignore-scripts", cwd: main }]);
 	});
 
-	it("reports the outbound entries it observed in the repaired list", () => {
+	it("reports the outbound entries it observed in the repaired list", async () => {
 		const main = makeMain();
 		symlinkSync("../../sibling/node_modules/.pnpm/tsx@4.21.0/node_modules/tsx", join(main, "node_modules", "tsx"), "dir");
 		symlinkSync("../../sibling/node_modules/.pnpm/typescript@6.0.3/node_modules/typescript", join(main, "node_modules", "typescript"), "dir");
 		const runner = { run: () => {} };
-		const report = repairMainNodeModules(main, runner);
+		const report = await repairMainNodeModules(main, runner);
 		assert.equal(report.repaired.length, 2);
 		const names = report.repaired.map((r) => r.name).sort();
 		assert.deepEqual(names, ["tsx", "typescript"]);
+	});
+
+	it("guards the install through the injected lock, keyed on mainRepo's .dev directory", async () => {
+		const main = makeMain();
+		symlinkSync("../../sibling/node_modules/.pnpm/tsx@4.21.0/node_modules/tsx", join(main, "node_modules", "tsx"), "dir");
+		const lockPaths: string[] = [];
+		const lock = async <T>(path: string, fn: () => Promise<T> | T) => {
+			lockPaths.push(path);
+			return fn();
+		};
+		const runner = { run: () => {} };
+		const report = await repairMainNodeModules(main, runner, lock);
+		assert.equal(report.ranInstall, true);
+		assert.deepEqual(lockPaths, [resolve(main, ".dev", "node-modules-repair.lock")]);
+	});
+
+	it("re-checks for outbound symlinks once the lock is held, skipping a redundant install if another holder already repaired", async () => {
+		const main = makeMain();
+		symlinkSync("../../sibling/node_modules/.pnpm/tsx@4.21.0/node_modules/tsx", join(main, "node_modules", "tsx"), "dir");
+		const calls: Array<{ cmd: string; cwd: string }> = [];
+		const runner = { run: (cmd: string, cwd: string) => calls.push({ cmd, cwd }) };
+		const lock = async <T>(_path: string, fn: () => Promise<T> | T) => {
+			unlinkSync(join(main, "node_modules", "tsx")); // simulate another holder's repair completing first
+			return fn();
+		};
+		const report = await repairMainNodeModules(main, runner, lock);
+		assert.equal(report.ranInstall, false);
+		assert.deepEqual(calls, []);
 	});
 });
