@@ -512,6 +512,32 @@ function plantNmEntries(nmDir: string, mainRepo: string, links?: Array<{ name: s
 	}
 }
 
+function plantMaterializedEntries(nmDir: string, mainNm: string, worktree: string, links?: Array<{ name: string; targetPkg: string }>): void {
+	const workspaceMap = new Map((links ?? []).map((link) => [link.name, link.targetPkg] as const));
+	mkdirSync(nmDir);
+	for (const entry of readdirSync(mainNm)) {
+		const dest = join(nmDir, entry);
+		if (entry.startsWith("@")) {
+			let scopeEntries: string[];
+			try {
+				scopeEntries = readdirSync(join(mainNm, entry));
+			} catch {
+				symlinkSync(join(mainNm, entry), dest, "dir");
+				continue;
+			}
+			mkdirSync(dest);
+			for (const sub of scopeEntries) {
+				const name = `${entry}/${sub}`;
+				const targetPkg = workspaceMap.get(name);
+				symlinkSync(targetPkg === undefined ? join(mainNm, name) : resolve(worktree, targetPkg), join(dest, sub), "dir");
+			}
+			continue;
+		}
+		const targetPkg = workspaceMap.get(entry);
+		symlinkSync(targetPkg === undefined ? join(mainNm, entry) : resolve(worktree, targetPkg), dest, "dir");
+	}
+}
+
 function makeMaterializeSetup(opts: MaterializeOpts): MaterializeSetup {
 	const root = mkdtempSync(join(tmpdir(), "worktree-materialize-test-"));
 	const main = resolve(root, "main");
@@ -558,17 +584,7 @@ function makeMaterializeSetup(opts: MaterializeOpts): MaterializeSetup {
 		mkdirSync(worktreeNm, { recursive: true });
 		mkdirSync(join(worktreeNm, ".pnpm"));
 	} else if (wState === "real-correctly-materialized") {
-		// Mirror what applyAction(materialize) would build: real dir, .pnpm
-		// is a symlink to MAIN's .pnpm, workspace entries are absolute symlinks
-		// into the worktree.
-		mkdirSync(worktreeNm);
-		// .pnpm as symlink (so the lstat-based corruption check passes).
-		if (opts.rootMainNm?.pnpmInfra) {
-			symlinkSync(resolve(main, "node_modules", ".pnpm"), join(worktreeNm, ".pnpm"), "dir");
-		}
-		for (const link of opts.rootMainNm?.workspaceLinks ?? []) {
-			plantSymlink(worktreeNm, link.name, resolve(worktree, link.targetPkg));
-		}
+		plantMaterializedEntries(worktreeNm, resolve(main, "node_modules"), worktree, opts.rootMainNm?.workspaceLinks);
 	} else if (wState === "real-incorrectly-materialized") {
 		// Real dir but the workspace entries point at MAIN instead of worktree.
 		mkdirSync(worktreeNm);
@@ -587,10 +603,7 @@ function makeMaterializeSetup(opts: MaterializeOpts): MaterializeSetup {
 		if (sState === "symlink-to-main-sub") {
 			symlinkSync(resolve(main, sp.pkg, "node_modules"), wsubNm, "dir");
 		} else if (sState === "real-correctly-materialized") {
-			mkdirSync(wsubNm);
-			for (const link of sp.mainNm?.workspaceLinks ?? []) {
-				plantSymlink(wsubNm, link.name, resolve(worktree, link.targetPkg));
-			}
+			plantMaterializedEntries(wsubNm, resolve(main, sp.pkg, "node_modules"), worktree, sp.mainNm?.workspaceLinks);
 		} else if (sState === "real-incorrectly-materialized") {
 			mkdirSync(wsubNm);
 			for (const link of sp.mainNm?.workspaceLinks ?? []) {
@@ -762,6 +775,36 @@ describe("decideDepsAction (materialize)", () => {
 		assert.ok(existsSync(wtPnpm));
 		assert.equal(decideDepsAction(worktree, main).type, "noop");
 	});
+
+	it("materializes when MAIN gains an unscoped external entry", () => {
+		const { main, worktree } = makeMaterializeSetup({
+			workspaces: [{ pkg: "packages/a", name: "@scope/a" }],
+			rootMainNm: { workspaceLinks: [{ name: "@scope/a", targetPkg: "packages/a" }], externals: ["tsx"] },
+			worktreeNm: { kind: "real-correctly-materialized" },
+		});
+		mkdirSync(resolve(main, "node_modules/react"));
+		assert.equal(decideDepsAction(worktree, main).type, "materialize");
+	});
+
+	it("materializes when MAIN gains a child beneath an existing scope", () => {
+		const { main, worktree } = makeMaterializeSetup({
+			workspaces: [{ pkg: "packages/a", name: "@scope/a" }],
+			rootMainNm: { workspaceLinks: [{ name: "@scope/a", targetPkg: "packages/a" }], externals: ["@scope/external"] },
+			worktreeNm: { kind: "real-correctly-materialized" },
+		});
+		mkdirSync(resolve(main, "node_modules/@scope/new-dependency"));
+		assert.equal(decideDepsAction(worktree, main).type, "materialize");
+	});
+
+	it("leaves a user-managed real directory alone when it lacks MAIN entries", () => {
+		const { main, worktree } = makeMaterializeSetup({
+			workspaces: [{ pkg: "packages/a", name: "@scope/a" }],
+			rootMainNm: { workspaceLinks: [{ name: "@scope/a", targetPkg: "packages/a" }], externals: ["tsx"] },
+			worktreeNm: { kind: "absent" },
+		});
+		mkdirSync(resolve(worktree, "node_modules"));
+		assert.equal(decideDepsAction(worktree, main).type, "noop");
+	});
 });
 
 describe("decideSubpackageAction (materialize)", () => {
@@ -811,6 +854,24 @@ describe("decideSubpackageAction (materialize)", () => {
 			],
 			subpackages: [{ pkg: "packages/web", mainNm: { workspaceLinks: [{ name: "@scope/server", targetPkg: "packages/server" }] }, worktreeNm: { kind: "real-incorrectly-materialized" } }],
 		});
+		assert.equal(decideSubpackageAction(worktree, main, "packages/web", false).type, "materialize");
+	});
+
+	it("materializes when a MAIN subpackage gains an external entry", () => {
+		const { main, worktree } = makeMaterializeSetup({
+			workspaces: [
+				{ pkg: "packages/web", name: "@scope/web" },
+				{ pkg: "packages/server", name: "@scope/server" },
+			],
+			subpackages: [
+				{
+					pkg: "packages/web",
+					mainNm: { workspaceLinks: [{ name: "@scope/server", targetPkg: "packages/server" }], externals: ["react"] },
+					worktreeNm: { kind: "real-correctly-materialized" },
+				},
+			],
+		});
+		mkdirSync(resolve(main, "packages/web/node_modules/zod"));
 		assert.equal(decideSubpackageAction(worktree, main, "packages/web", false).type, "materialize");
 	});
 });
@@ -873,6 +934,25 @@ describe("ensureWorktreeDeps (materialize)", () => {
 		assert.equal(second.root.type, "noop");
 		// Layout still correct after the no-op pass.
 		assert.equal(realpathSync(resolve(worktree, "node_modules/@scope/a")), realpathSync(resolve(worktree, "packages/a")));
+	});
+
+	it("refreshes a materialized snapshot when MAIN gains an entry, then returns to noop", () => {
+		const { main, worktree } = makeMaterializeSetup({
+			workspaces: [{ pkg: "packages/a", name: "@scope/a" }],
+			rootMainNm: { workspaceLinks: [{ name: "@scope/a", targetPkg: "packages/a" }], externals: ["tsx"] },
+			worktreeNm: { kind: "absent" },
+		});
+		assert.equal(ensureWorktreeDeps(worktree, main).root.type, "materialize");
+
+		const mainReact = resolve(main, "node_modules/react");
+		mkdirSync(mainReact);
+		const refresh = ensureWorktreeDeps(worktree, main);
+		assert.equal(refresh.root.type, "materialize");
+		const worktreeReact = resolve(worktree, "node_modules/react");
+		assert.ok(lstatSync(worktreeReact).isSymbolicLink());
+		assert.equal(readlinkSync(worktreeReact), mainReact);
+
+		assert.equal(ensureWorktreeDeps(worktree, main).root.type, "noop");
 	});
 
 	it("does not modify MAIN's node_modules during materialize", () => {

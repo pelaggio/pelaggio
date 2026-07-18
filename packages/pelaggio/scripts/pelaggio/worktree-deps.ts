@@ -152,14 +152,16 @@ export function findWorkspaceEntriesIn(nmDir: string, workspacePackages: Map<str
 type MaterializedShape = "correctly-materialized" | "incorrectly-materialized" | "user-managed";
 
 /**
- * Classify a real worktree node_modules dir by the resolved targets of its
- * workspace-name symlinks. `correctly-materialized` → all workspace entries
- * resolve into `worktreeRoot` (pelaggio-emitted, current). `incorrectly-
- * materialized` → at least one resolves outside (pelaggio-emitted but stale,
- * e.g. inherited from MAIN's pnpm layout via the parent symlink). `user-
- * managed` → no workspace symlinks present at all.
+ * Classify a real worktree node_modules dir. `correctly-materialized` → all
+ * workspace entries resolve into `worktreeRoot` (pelaggio-emitted, current)
+ * *and* every top-level entry MAIN carries is mirrored (so a dependency added
+ * to MAIN after the snapshot doesn't stay silently missing). `incorrectly-
+ * materialized` → at least one workspace entry resolves outside `worktreeRoot`
+ * (pelaggio-emitted but stale, e.g. inherited from MAIN's pnpm layout via the
+ * parent symlink), or MAIN gained an entry the mirror lacks. `user-managed` →
+ * no workspace symlinks present at all.
  */
-function inspectMaterializedShape(nmDir: string, worktreeRoot: string, workspaceEntries: WorkspaceEntry[]): MaterializedShape {
+function inspectMaterializedShape(nmDir: string, mainNm: string, worktreeRoot: string, workspaceEntries: WorkspaceEntry[]): MaterializedShape {
 	let resolvedRoot: string;
 	try {
 		resolvedRoot = realpathSync(worktreeRoot);
@@ -184,7 +186,38 @@ function inspectMaterializedShape(nmDir: string, worktreeRoot: string, workspace
 		}
 	}
 	if (!saw) return "user-managed";
-	return bad ? "incorrectly-materialized" : "correctly-materialized";
+	if (bad) return "incorrectly-materialized";
+
+	let mainEntries: string[];
+	try {
+		mainEntries = readdirSync(mainNm);
+	} catch {
+		return "correctly-materialized";
+	}
+	for (const entry of mainEntries) {
+		const worktreeEntry = join(nmDir, entry);
+		try {
+			lstatSync(worktreeEntry);
+		} catch {
+			return "incorrectly-materialized";
+		}
+		if (!entry.startsWith("@")) continue;
+
+		let scopeEntries: string[];
+		try {
+			scopeEntries = readdirSync(join(mainNm, entry));
+		} catch {
+			continue;
+		}
+		for (const sub of scopeEntries) {
+			try {
+				lstatSync(join(worktreeEntry, sub));
+			} catch {
+				return "incorrectly-materialized";
+			}
+		}
+	}
+	return "correctly-materialized";
 }
 
 /**
@@ -218,7 +251,7 @@ export function decideDepsAction(worktree: string, mainRepo: string, workspacePa
 	if (isRealDir(worktreeNm)) {
 		const hasPnpmStore = isRealDir(join(worktreeNm, ".pnpm"));
 		if (hasWorkspaceEntries && lockfilesMatch && mainNmReady) {
-			const shape = inspectMaterializedShape(worktreeNm, worktree, workspaceEntries);
+			const shape = inspectMaterializedShape(worktreeNm, mainNm, worktree, workspaceEntries);
 			if (shape === "correctly-materialized") return { type: "noop" };
 			if (shape === "incorrectly-materialized" || hasPnpmStore) {
 				return { type: "materialize", mainNm, workspaceEntries };
@@ -312,7 +345,7 @@ export function decideSubpackageAction(worktree: string, mainRepo: string, pkg: 
 
 	if (isRealDir(worktreeNm)) {
 		if (hasWorkspaceEntries && lockfilesMatch && mainNmReady) {
-			const shape = inspectMaterializedShape(worktreeNm, worktree, workspaceEntries);
+			const shape = inspectMaterializedShape(worktreeNm, mainNm, worktree, workspaceEntries);
 			if (shape === "correctly-materialized") return { type: "noop" };
 			if (shape === "incorrectly-materialized" || rootWillRestore) {
 				return { type: "materialize", mainNm, workspaceEntries };
