@@ -441,10 +441,16 @@ function applyAction(worktreeNm: string, action: DepsAction, worktreeCwd: string
  * Apply the decided actions: root first, then each workspace subpackage.
  * Returns the report of all actions taken so callers can log.
  *
+ * MAIN is repaired before any of its dependency entries are shared with the
+ * worktree, preventing an earlier worktree-side install from propagating
+ * outbound symlinks into a fresh or resumed worktree.
+ *
  * When the root decision is `install` or `reinstall`, subpackages are skipped
  * — the install will provision every subpackage in one pass.
  */
-export function ensureWorktreeDeps(worktree: string, mainRepo: string = REPO): DepsReport {
+export function ensureWorktreeDeps(worktree: string, mainRepo: string = REPO, runner: Runner = defaultRunner): DepsReport {
+	repairMainNodeModules(mainRepo, runner);
+
 	const workspacePackages = listWorkspacePackageMap(mainRepo);
 	const root = decideDepsAction(worktree, mainRepo, workspacePackages);
 	const worktreeRootNm = resolve(worktree, "node_modules");

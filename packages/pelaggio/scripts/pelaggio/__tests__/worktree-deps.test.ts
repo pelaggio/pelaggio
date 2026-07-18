@@ -1050,3 +1050,17 @@ describe("repairMainNodeModules", () => {
 		assert.deepEqual(names, ["tsx", "typescript"]);
 	});
 });
+
+describe("ensureWorktreeDeps main repair", () => {
+	it("repairs outbound main symlinks before sharing main node_modules", () => {
+		const root = makeSetup({ mainLock: "A", worktreeLock: "A", mainNm: "dir", worktreeNm: null });
+		const siblingTarget = "../../sibling/node_modules/.pnpm/tsx@4.21.0/node_modules/tsx";
+		symlinkSync(siblingTarget, resolve(root.main, "node_modules", "tsx"), "dir");
+		const calls: Array<{ cmd: string; cwd: string }> = [];
+		const runner = { run: (cmd: string, cwd: string) => calls.push({ cmd, cwd }) };
+
+		ensureWorktreeDeps(root.worktree, root.main, runner);
+
+		assert.deepEqual(calls, [{ cmd: "pnpm install --frozen-lockfile", cwd: root.main }]);
+	});
+});
