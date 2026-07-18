@@ -16,6 +16,7 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { REPO } from "./config.js";
+import { withFileLock } from "./file-lock.js";
 
 export interface WorkspaceEntry {
 	name: string;
@@ -50,6 +51,9 @@ export interface RepairReport {
 export interface Runner {
 	run: (cmd: string, cwd: string) => void;
 }
+
+/** Cross-process lock seam — injectable so tests don't wait on real lock timing. */
+export type LockFn = <T>(path: string, fn: () => Promise<T> | T) => Promise<T>;
 
 const defaultRunner: Runner = {
 	run: (cmd, cwd) => {
@@ -563,18 +567,38 @@ export function findOutboundMainSymlinks(mainRepo: string): OutboundSymlink[] {
 	return out;
 }
 
+// `--parallel` workers each finish their own ship in a separate worktree but
+// share one MAIN_REPO, so this repair can be entered concurrently. A cold
+// pnpm store install runs far longer than a roadmap file edit, hence the
+// wider envelope than roadmap/mutation-lock.ts's. Env overrides for tests.
+const REPAIR_LOCK_STALE_MS = Number(process.env.PELAGGIO_NODE_MODULES_LOCK_STALE_MS) || 300_000;
+const REPAIR_LOCK_TIMEOUT_MS = Number(process.env.PELAGGIO_NODE_MODULES_LOCK_TIMEOUT_MS) || 60_000;
+
+const defaultLock: LockFn = (path, fn) => withFileLock(path, fn, { label: "node_modules repair lock", staleMs: REPAIR_LOCK_STALE_MS, acquireTimeoutMs: REPAIR_LOCK_TIMEOUT_MS });
+
 /**
  * Detect-and-repair: if `findOutboundMainSymlinks` reports any entries, run
- * `pnpm install --frozen-lockfile` in `mainRepo` to re-stitch the layout from
- * the lockfile (the same recovery a user would run manually). No-op when clean.
+ * `pnpm install --frozen-lockfile --ignore-scripts` in `mainRepo` to re-stitch
+ * the layout from the lockfile without running lifecycle scripts. No-op when
+ * clean.
  *
- * The `runner` seam keeps tests from spawning a real pnpm.
+ * Guarded by a cross-process lock (`file-lock.ts`) keyed on `mainRepo`:
+ * concurrent `--parallel` workers otherwise race `pnpm install` against the
+ * one shared `node_modules`. The outbound-symlink check is re-run after the
+ * lock is acquired so a worker that waited behind another's repair sees the
+ * now-clean tree and skips a redundant install.
+ *
+ * The `runner` and `lock` seams keep tests from spawning a real pnpm or
+ * waiting on real lock timing.
  */
-export function repairMainNodeModules(mainRepo: string, runner: Runner = defaultRunner): RepairReport {
-	const outbound = findOutboundMainSymlinks(mainRepo);
-	if (outbound.length === 0) return { ranInstall: false, repaired: [] };
-	runner.run("pnpm install --frozen-lockfile", mainRepo);
-	return { ranInstall: true, repaired: outbound };
+export async function repairMainNodeModules(mainRepo: string, runner: Runner = defaultRunner, lock: LockFn = defaultLock): Promise<RepairReport> {
+	if (findOutboundMainSymlinks(mainRepo).length === 0) return { ranInstall: false, repaired: [] };
+	return lock(resolve(mainRepo, ".dev", "node-modules-repair.lock"), () => {
+		const outbound = findOutboundMainSymlinks(mainRepo);
+		if (outbound.length === 0) return { ranInstall: false, repaired: [] };
+		runner.run("pnpm install --frozen-lockfile --ignore-scripts", mainRepo);
+		return { ranInstall: true, repaired: outbound };
+	});
 }
 
 const isDirectInvocation = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
@@ -598,7 +622,7 @@ if (isDirectInvocation) {
 
 	if (arg === "--repair-main") {
 		try {
-			const report = repairMainNodeModules(REPO);
+			const report = await repairMainNodeModules(REPO);
 			if (!report.ranInstall) {
 				console.log(`clean: no outbound symlinks found in ${join(REPO, "node_modules")}`);
 				process.exit(0);
