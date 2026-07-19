@@ -1,5 +1,5 @@
 import type { AuthoringReviewConfig, ReviewSlot } from "../config.js";
-import type { ParkSignal, ProviderName, ShipTargetName, StepResult } from "../types.js";
+import type { ParkSignal, ProviderName, StepResult } from "../types.js";
 import { type AuthoringReviewFinding, type JudgeReport, type JudgeRuling, parseAuthoringReviewFindings, parseJudgeReport, type ReviewFindingClass, reviewFindingFingerprint } from "./findings.js";
 
 export type ReviewOutcome = "converged-clean" | "converged-with-notes" | "ceiling" | "dissent" | "hard-block" | "budget";
@@ -44,7 +44,6 @@ export type RunSeatFn = (request: SeatRequest) => Promise<StepResult>;
 export interface ReviewLoopOptions {
 	policy: AuthoringReviewConfig;
 	author: { provider: ProviderName; model?: string };
-	shipTarget: ShipTargetName;
 	parkSignal: ParkSignal;
 	runSeat: RunSeatFn;
 	prompts: { review(pass: number): string; judge(candidates: readonly ReviewCandidate[], pass: number): string; revise(survivors: readonly ReviewCandidate[]): string };
@@ -53,6 +52,7 @@ export interface ReviewLoopOptions {
 
 const SAFETY_CLASSES: readonly ReviewFindingClass[] = ["security", "data-loss", "correctness-regression"];
 const classRank = (value: ReviewFindingClass): number => (SAFETY_CLASSES.includes(value) ? 1 : 0);
+const blockingRank = (finding: AuthoringReviewFinding): number => (finding.severity === "must-fix" ? 2 : 0) + classRank(finding.class);
 const identity = (role: DriverIdentity["role"], slot: ReviewSlot, pass: number): DriverIdentity => ({
 	role,
 	seatId: slot.id,
@@ -70,7 +70,9 @@ export function deduplicateCandidates(findings: readonly { finding: AuthoringRev
 		if (!current) byFingerprint.set(fingerprint, { candidateId: "", fingerprint, finding: item.finding, sources: [item.source] });
 		else {
 			current.sources.push(item.source);
-			if (classRank(item.finding.class) > classRank(current.finding.class)) current.finding = item.finding;
+			// Keep the most-blocking finding: must-fix severity dominates class rank, so a same-fingerprint
+			// note/nice can never downgrade (and drop) a carried must-fix blocker.
+			if (blockingRank(item.finding) > blockingRank(current.finding)) current.finding = item.finding;
 		}
 	}
 	return [...byFingerprint.values()].sort((a, b) => a.fingerprint.localeCompare(b.fingerprint)).map((candidate, index) => ({ ...candidate, candidateId: `C${index + 1}` }));
@@ -136,8 +138,13 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 		let diagnostic: string | undefined;
 		try {
 			report = parseJudgeReport(judgeResult.fullText ?? judgeResult.text);
-			if (new Set(report.decisions.map((d) => d.candidateId)).size !== candidates.length || report.decisions.some((d) => !candidates.some((c) => c.candidateId === d.candidateId)))
-				throw new Error("Judge decisions are incomplete or contain unknown candidates");
+			// Fail-closed completeness: exactly one decision per candidate, no duplicates, no unknowns.
+			// The distinct-count check alone accepts a duplicate that still covers every id (e.g.
+			// [{C1,refuted},{C1,survives}] for two candidates); the survivor filter's `.find` would then
+			// silently take the first (refuted) decision and drop a real blocker — the duplicate fail-open
+			// that reconcileReviewVerification already rejects.
+			if (report.decisions.length !== candidates.length || new Set(report.decisions.map((d) => d.candidateId)).size !== candidates.length || report.decisions.some((d) => !candidates.some((c) => c.candidateId === d.candidateId)))
+				throw new Error("Judge decisions are incomplete, duplicated, or contain unknown candidates");
 		} catch (error) {
 			// Completeness/parse failure must invalidate the whole pass (fail-closed):
 			// `report` may already hold the parsed-but-incomplete value, so clear it or

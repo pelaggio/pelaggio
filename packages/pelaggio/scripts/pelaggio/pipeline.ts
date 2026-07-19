@@ -844,7 +844,6 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			const loop = await runReviewLoop({
 				policy,
 				author: { provider: authorSettings.provider, ...(authorSettings.provider === "codex" ? (authorSettings.codexModel ? { model: authorSettings.codexModel } : {}) : authorSettings.model ? { model: authorSettings.model } : {}) },
-				shipTarget: opts.shipTarget.name,
 				parkSignal,
 				runSeat: ({ role, slot, pass, prompt, parkSignal: child }) =>
 					step(role === "reviewer" ? "pr-review" : role === "judge" ? "pr-verify" : "shakedown-code", prompt, worktree!, {

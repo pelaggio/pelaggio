@@ -51,7 +51,6 @@ describe("authoring review loop controller", () => {
 		runReviewLoop({
 			policy: basePolicy,
 			author: { provider: "codex" },
-			shipTarget: "pull-request",
 			parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" },
 			runSeat: async (req) => ok(req.role === "reviewer" ? reviewerText : req.role === "judge" ? judgeText : ""),
 			prompts: { review: () => "r", judge: () => "j", revise: () => "rev" },
@@ -60,6 +59,32 @@ describe("authoring review loop controller", () => {
 	it("ships when the Judge cleanly refutes the sole blocker", async () => {
 		const result = await run(reviewerFindings("judgment"), judgeReport([{ candidateId: "C1", decision: "refuted", rationale: "r", class: "judgment" }]));
 		assert.equal(result.outcome, "converged-clean");
+	});
+
+	it("fails closed when the Judge duplicates a decision for the sole blocker (does not ship)", async () => {
+		// Duplicate decisions for C1 still cover every id, so the distinct-count check alone passes and
+		// the survivor filter's first-match would silently drop the blocker (refuted-first → converged-clean).
+		// The length check must invalidate the pass instead.
+		const result = await run(
+			reviewerFindings("judgment"),
+			judgeReport([
+				{ candidateId: "C1", decision: "refuted", rationale: "r", class: "judgment" },
+				{ candidateId: "C1", decision: "survives", rationale: "r", class: "judgment" },
+			]),
+		);
+		assert.equal(result.outcome, "hard-block");
+		assert.equal(result.passes.at(-1)?.judge.valid, false);
+	});
+
+	it("keeps a same-fingerprint must-fix from being downgraded to a note by a higher-class nice", () => {
+		// classRank alone would let the second (nice/security) finding replace the first (must-fix/judgment),
+		// dropping it from carried blockers; blockingRank must keep the most-blocking severity.
+		const findings = deduplicateCandidates([
+			{ source: "a", finding: { severity: "must-fix", class: "judgment", message: "same" } },
+			{ source: "b", finding: { severity: "nice", class: "security", message: "same" } },
+		]);
+		assert.equal(findings.length, 1);
+		assert.equal(findings[0].finding.severity, "must-fix");
 	});
 
 	it("fails closed when the Judge report references an unknown candidate (does not ship)", async () => {
