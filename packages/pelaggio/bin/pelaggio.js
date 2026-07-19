@@ -17,6 +17,7 @@ Commands:
   roadmap Adapter-backed queries (list / get / claim / plan-path / publish-plan / mark-done / create-item / archive-plan / source). Used by skill bodies.
   pr-review  Run the CI merge-gate review of a PR (--pr <n>); posts a comment and exits non-zero on a blocking finding.
   worktree-deps  Symlink/install node_modules for a worktree (called by /pick).
+  run-contained  Run one command in the Linux contained-execution jail, or verify it with --self-test.
 
 See README for full options.
 `.trim();
@@ -29,6 +30,7 @@ const routes = {
 	roadmap: ["scripts/pelaggio/roadmap-cli.ts"],
 	"pr-review": ["scripts/pelaggio/pr-review-cli.ts"],
 	"worktree-deps": ["scripts/pelaggio/worktree-deps.ts"],
+	"run-contained": ["scripts/pelaggio/run-contained-cli.ts"],
 };
 
 if (!sub || sub === "--help" || sub === "-h" || !routes[sub]) {
