@@ -249,6 +249,37 @@ non-map block fails at startup, and wrong value types report the dotted key (for
 example `models.profiles.deep.codex.implement`). Unknown step keys inside the
 block are ignored.
 
+## Provider binaries
+
+The top-level `providers` block (distinct from the per-profile `providers`
+sub-block above, which selects a step's backend) pins the **executable** a
+subprocess-backed provider spawns. Without it, each provider resolves its
+default binary through `PATH` (`codex` runs `codex`):
+
+```yaml
+providers:
+  codex:
+    bin: /opt/codex/bin/codex   # absolute path
+  # A leading ~/ expands to the home directory — pins an off-PATH driver:
+  # grok:
+  #   bin: ~/.grok/bin/grok
+```
+
+Keys are validated against the registered provider names, so an entry for a
+provider that is not yet wired in fails loudly at startup rather than silently
+doing nothing. `bin` must be a non-empty string. The `claude` provider runs
+in-process (no subprocess), so a `bin` override for it has no effect.
+
+## Pinning a profile per run
+
+`--profile <name>` pins the model/provider profile for the entire run, where
+`<name>` is any profile under `models.profiles` (`standard`, `quick`, or a
+custom one). A pinned profile **suppresses the automatic quick-mode downgrade**,
+so the step set and backend stay identical across runs — useful for a
+capability bake-off (e.g. `pelaggio run --parallel 1 --profile <driver>` per
+driver in separate sessions). Invalid names fail fast at startup with the list
+of valid profiles.
+
 ## Ship target
 
 `ship.target` selects how `/ship` lands the branch. Three modes:

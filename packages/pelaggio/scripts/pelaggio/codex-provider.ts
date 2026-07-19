@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CONFIG, REPO, resolveStepSettings, type StepSettings } from "./config.js";
+import { CONFIG, REPO, resolveProviderBin, resolveStepSettings, type StepSettings } from "./config.js";
 import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseWaitFlag, resolveParkReset } from "./helpers.js";
 import type { StepProvider } from "./step-runner.js";
 import { composeSystemAppend, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "./step-runner-shared.js";
@@ -383,7 +383,7 @@ const runStep: StepProvider["runStep"] = async (name, prompt, opts, emit) => {
 	const tmp = mkdtempSync(join(tmpdir(), "pelaggio-codex-"));
 	const outputPath = join(tmp, "last-message.txt");
 	const args = ["exec", "--json", "-C", opts.cwd, "-s", "workspace-write", "-o", outputPath, ...(codexModel ? ["-m", codexModel] : []), "-"];
-	const child = spawn("codex", args, { cwd: opts.cwd, stdio: ["pipe", "pipe", "pipe"] });
+	const child = spawn(resolveProviderBin(CONFIG, "codex", "codex"), args, { cwd: opts.cwd, stdio: ["pipe", "pipe", "pipe"] });
 
 	try {
 		const events: JsonObject[] = [];

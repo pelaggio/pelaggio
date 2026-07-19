@@ -139,7 +139,9 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	// A non-finite value (unset / unparseable --budget) disables the dollar gate.
 	const maxBudget = Number.parseFloat(flags.budget);
 	let cost = 0;
-	let profile = "standard";
+	// A pinned --profile (issue #247) takes control of the whole run; otherwise default to
+	// "standard" and let quick-scope detection downgrade to "quick" below.
+	let profile = flags.profile ?? "standard";
 	const steps: StepLog[] = [];
 	const pipelineT0 = Date.now();
 	const runIdBase = opts.logPath ? basename(opts.logPath, extname(opts.logPath)) : `cycle-${opts.cycle}`;
@@ -499,12 +501,16 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	if (opts.workerStatus) opts.workerStatus.itemId = itemId!;
 
 	// ── Detect quick mode ──
+	// A pinned --profile (issue #247) suppresses the automatic downgrade: the operator has taken
+	// explicit control of the profile, so keep the step set and backend identical to the pin.
 
-	const quickItem = !opts.dryRun && itemId ? await roadmap.getItem(itemId).catch(() => null) : null;
-	if (flowPolicy.isQuickScope({ item: quickItem, summaryText: pickText })) {
-		profile = "quick";
-		log("scope S/XS or bug — quick mode (Sonnet, skip plan+shakedown-plan)");
-		startFrom ??= "implement";
+	if (!flags.profile) {
+		const quickItem = !opts.dryRun && itemId ? await roadmap.getItem(itemId).catch(() => null) : null;
+		if (flowPolicy.isQuickScope({ item: quickItem, summaryText: pickText })) {
+			profile = "quick";
+			log("scope S/XS or bug — quick mode (Sonnet, skip plan+shakedown-plan)");
+			startFrom ??= "implement";
+		}
 	}
 	startFrom ??= "plan";
 
@@ -1118,6 +1124,14 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			shipTargetName = flags.target;
 		}
 		const shipTarget = getShipTarget(shipTargetName);
+
+		// --profile pins the model/provider profile for the whole run (issue #247); it overrides
+		// the automatic quick-mode downgrade so the step set and backend stay identical across
+		// runs (e.g. a Claude-vs-Codex capability bake-off). Validate against known profiles.
+		if (flags.profile !== undefined && !Object.hasOwn(CONFIG.modelProfiles, flags.profile)) {
+			console.error(`invalid --profile ${JSON.stringify(flags.profile)}; valid: ${Object.keys(CONFIG.modelProfiles).join(", ")}`);
+			return { exitCode: 2, results };
+		}
 
 		// One-time startup banner (before the resume/normal branch → fires exactly once, covers
 		// both modes; mode- and dry-run-agnostic — a dry run is when an operator most wants to

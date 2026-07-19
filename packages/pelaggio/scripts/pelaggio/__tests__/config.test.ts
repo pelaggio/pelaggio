@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { DEFAULTS, loadConfig, resolveRepo, resolveStepSettings } from "../config.js";
+import { DEFAULTS, loadConfig, resolveProviderBin, resolveRepo, resolveStepSettings } from "../config.js";
 
 function tmpRepo(): string {
 	return mkdtempSync(join(tmpdir(), "pelaggio-config-test-"));
@@ -705,6 +705,57 @@ describe("resolveRepo", () => {
 		const notARepo = mkdtempSync(join(tmpdir(), "pelaggio-no-git-"));
 		process.chdir(notARepo);
 		assert.throws(() => resolveRepo(), /git repository/);
+	});
+});
+
+describe("loadConfig — providers.<name>.bin (#241)", () => {
+	it("defaults to an empty map when no providers block is present", () => {
+		const repo = tmpRepo();
+		const cfg = loadConfig({ repo, configPath: join(repo, ".pelaggio.yml") });
+		assert.deepEqual(cfg.providerBins, {});
+	});
+
+	it("parses a per-provider bin override", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "providers:\n  codex:\n    bin: /opt/codex/bin/codex\n");
+		const cfg = loadConfig({ repo, configPath: path });
+		assert.equal(cfg.providerBins.codex, "/opt/codex/bin/codex");
+	});
+
+	it("rejects an unknown provider name", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "providers:\n  grok:\n    bin: ~/.grok/bin/grok\n");
+		assert.throws(() => loadConfig({ repo, configPath: path }), /unknown provider `providers\.grok`/);
+	});
+
+	it("rejects a non-map providers block", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "providers: nope\n");
+		assert.throws(() => loadConfig({ repo, configPath: path }), /expected `providers` to be a map/);
+	});
+
+	it("rejects an empty bin string", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "providers:\n  codex:\n    bin: ''\n");
+		assert.throws(() => loadConfig({ repo, configPath: path }), /providers\.codex\.bin` to be a non-empty string/);
+	});
+});
+
+describe("resolveProviderBin (#241)", () => {
+	const base = loadConfig({ repo: tmpRepo(), configPath: join(tmpRepo(), ".pelaggio.yml") });
+
+	it("returns the fallback when no override is set", () => {
+		assert.equal(resolveProviderBin(base, "codex", "codex"), "codex");
+	});
+
+	it("returns an absolute override verbatim", () => {
+		const cfg = { ...base, providerBins: { codex: "/opt/codex" } };
+		assert.equal(resolveProviderBin(cfg, "codex", "codex"), "/opt/codex");
+	});
+
+	it("expands a leading ~/ to the home directory", () => {
+		const cfg = { ...base, providerBins: { codex: "~/.grok/bin/grok" } };
+		assert.equal(resolveProviderBin(cfg, "codex", "codex"), join(homedir(), ".grok/bin/grok"));
 	});
 });
 

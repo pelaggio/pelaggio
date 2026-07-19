@@ -1,5 +1,6 @@
 import { execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { basename, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { NOTIFY_EVENTS, NOTIFY_FORMATS, type NotifyConfig, type NotifyEvent, type NotifyFormat } from "./notify.js";
@@ -81,6 +82,10 @@ export interface ResolvedConfig {
 	profileTurnLimits: Record<string, Partial<Record<Step, number>>>;
 	profileEffort: Record<string, Partial<Record<Step, Effort>>>;
 	profileProviders: Record<string, Partial<Record<Step, ProviderName>>>;
+	/** Per-provider driver executable override (issue #241). Keyed by provider name; a missing
+	 *  entry falls back to the provider's default binary (resolved via PATH). Lets an off-PATH
+	 *  driver (e.g. `~/.grok/bin/grok`) be pinned without editing PATH. */
+	providerBins: Partial<Record<ProviderName, string>>;
 	shipTarget: ShipTargetName;
 	roadmapSource: RoadmapSourceName;
 	roadmapGithub: GithubRoadmapConfig;
@@ -580,6 +585,33 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		}
 	}
 
+	// providers.<name>.bin: per-provider driver executable override (issue #241). Lets an
+	// off-PATH driver be pinned without editing PATH; a leading `~/` expands at resolve time.
+	// Validated against PROVIDER_NAMES — an entry for a not-yet-registered provider (e.g. grok
+	// before #136) fails loudly rather than silently no-op'ing.
+	const providerBins: Partial<Record<ProviderName, string>> = {};
+	const providersBlock = yml.providers;
+	if (providersBlock !== undefined) {
+		if (!isPlainObject(providersBlock)) {
+			throw new Error(`${configPath}: expected \`providers\` to be a map`);
+		}
+		for (const [name, entry] of Object.entries(providersBlock)) {
+			if (!isProviderName(name)) {
+				throw new Error(`${configPath}: unknown provider \`providers.${name}\`; expected one of ${PROVIDER_NAMES.join("|")}`);
+			}
+			if (!isPlainObject(entry)) {
+				throw new Error(`${configPath}: expected \`providers.${name}\` to be a map`);
+			}
+			const bin = entry.bin;
+			if (bin !== undefined) {
+				if (!isString(bin) || bin.trim() === "") {
+					throw new Error(`${configPath}: expected \`providers.${name}.bin\` to be a non-empty string`);
+				}
+				providerBins[name] = bin;
+			}
+		}
+	}
+
 	return {
 		repo,
 		worktreePrefix,
@@ -593,6 +625,7 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		profileTurnLimits,
 		profileEffort,
 		profileProviders,
+		providerBins,
 		shipTarget,
 		roadmapSource,
 		roadmapGithub,
@@ -638,6 +671,17 @@ export function resolveStepSettings(config: ResolvedConfig, profile: string, ste
 		codexModel: config.profileCodexModels[profile]?.[step] ?? config.profileCodexModels[profile]?.[inheritedStep],
 		provider: config.profileProviders[profile]?.[step] ?? config.profileProviders[profile]?.[inheritedStep] ?? DEFAULT_PROVIDER,
 	};
+}
+
+/**
+ * Resolve the executable a subprocess-backed provider should spawn (issue #241).
+ * Returns the `providers.<provider>.bin` override when set, else `fallback` (the
+ * provider's default binary name, resolved via PATH). A leading `~/` expands to the
+ * home directory so an off-PATH driver (e.g. `~/.grok/bin/grok`) can be pinned in yml.
+ */
+export function resolveProviderBin(config: ResolvedConfig, provider: ProviderName, fallback: string): string {
+	const raw = config.providerBins[provider] ?? fallback;
+	return raw.startsWith("~/") ? resolve(homedir(), raw.slice(2)) : raw;
 }
 
 // ── Resolved exports (populated at import time) ────────────────────────

@@ -35,6 +35,20 @@ describe("parseCli", () => {
 		assert.equal(intent.flags["review-findings"], "p.md");
 	});
 
+	it("parses `--profile <name>` (issue #247)", () => {
+		const intent = parseCli(["--profile", "quick"]);
+		assert.equal(intent.kind, "run");
+		if (intent.kind !== "run") return;
+		assert.equal(intent.flags.profile, "quick");
+	});
+
+	it("leaves profile undefined when --profile is absent", () => {
+		const intent = parseCli(["--cycles", "1"]);
+		assert.equal(intent.kind, "run");
+		if (intent.kind !== "run") return;
+		assert.equal(intent.flags.profile, undefined);
+	});
+
 	it("parses resume with review findings without requiring --from", () => {
 		const intent = parseCli(["--resume", "108", "--review-findings", "findings.md"]);
 		assert.equal(intent.kind, "run");
