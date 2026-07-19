@@ -35,7 +35,7 @@ claims:
     evidence_command: "grep -En 'ANTHROPIC_API_KEY|LINEAR_API_KEY|GH_TOKEN|CONTROL_PLANE_TOKEN' packages/pelaggio/scripts/pelaggio/step-runner.ts packages/pelaggio/scripts/pelaggio/codex-provider.ts packages/pelaggio/scripts/pelaggio/pipeline.ts # expect: none"
     test_file: "packages/pelaggio/scripts/pelaggio/__tests__/helpers.test.ts"
     failure_mode: "n/a — secrets are never read into these paths"
-    known_limits: "Verbose (--verbose) transcripts in .dev/*.log (gitignored) capture raw child stdout; a secret the model echoes could land there. See TC-014."
+    known_limits: "Verbose (--verbose) transcripts in .dev/*.log (gitignored) capture raw child stdout; as of TC-014 that sink is secret-scrubbed before write, but a novel credential format the scrubber does not recognize could still land there."
     standards: ["OWASP-LLM02", "ASVS-V6"]
     adr: null
     last_verified: "2026-07-07"
@@ -161,16 +161,16 @@ claims:
 
   - id: TC-014
     claim: "Child processes get only the secrets they need, and logs are scrubbed of anything that looks like a credential."
-    status: planned            # TODAY (S4): full process.env inherited; no redaction
-    applies_to: "planned"
-    mechanism: "INTENDED: minimal env allowlist to spawned children; redact known secret patterns from log streams."
-    evidence_command: "grep -rEn 'process\\.env|spawn\\(|execFileSync|outputTail|redact|scrub' packages/pelaggio/scripts/pelaggio"
-    test_file: "planned"
-    failure_mode: "redacted before write"
-    known_limits: "TODAY the full parent env is inherited by spawned children and no log stream is scrubbed."
+    status: guarantee
+    applies_to: ">=0.1.0"
+    mechanism: "Spawned driver subprocesses receive a deny-by-default allowlisted env (buildAgentEnv in secret-hygiene.ts) — PATH/HOME plus explicitly configured vars only, never the full parent process.env. Captured stderr and the verbose file transcript are secret-scrubbed before write (scrubSecrets/makeSecretScrubber): credential-shaped patterns (JWT, provider API keys, bearer/PAT tokens) and the literal values of secret-named env vars are replaced with [REDACTED]."
+    evidence_command: "node --import tsx --test packages/pelaggio/scripts/pelaggio/__tests__/secret-hygiene.test.ts"
+    test_file: "packages/pelaggio/scripts/pelaggio/__tests__/secret-hygiene.test.ts"
+    failure_mode: "deny-by-default env; redacted before write"
+    known_limits: "The env allowlist covers spawned driver subprocesses (codex today, grok via the ACP client); pelaggio's own git/gh helper commands still use the repo env by design. Scrubbing is pattern- and configured-value-based — a novel credential format that matches no pattern and is not a known secret env value could still reach a log. Not the full #176 out-of-process credential broker."
     standards: ["OWASP-LLM02", "12FACTOR-Config"]
     adr: "ADR-10"
-    last_verified: "2026-07-07"
+    last_verified: "2026-07-18"
 
   # ---- The defining threat, as a first-class claim --------------------------
   - id: TC-015

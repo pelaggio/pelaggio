@@ -99,6 +99,10 @@ export interface ResolvedConfig {
 	review: ReviewConfig;
 	/** Worktree confinement policy. Allowing a dirty main checkout disables only main-root auditing. */
 	confinement: { allowDirtyMain: boolean };
+	/** Secret hygiene for spawned driver subprocesses (issue #237 / TC-014). `envAllowlist` names
+	 *  extra env vars forwarded to a child beyond the deny-by-default allowlist — e.g. a driver's
+	 *  auth var when using key auth. Empty by default. */
+	security: { envAllowlist: string[] };
 	/** Outbound run-outcome notifications. Disabled when `url` is empty (the default). */
 	notify: NotifyConfig;
 }
@@ -580,6 +584,23 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		}
 	}
 
+	// security.env-allowlist: extra env var names forwarded to spawned driver subprocesses beyond
+	// the deny-by-default allowlist (issue #237 / TC-014). Type-validate as a string array.
+	let securityEnvAllowlist: string[] = [];
+	const securityBlock = yml.security;
+	if (securityBlock !== undefined) {
+		if (!isPlainObject(securityBlock)) {
+			throw new Error(`${configPath}: expected \`security\` to be a map`);
+		}
+		const allow = securityBlock["env-allowlist"];
+		if (allow !== undefined) {
+			if (!Array.isArray(allow) || !allow.every((v) => isString(v))) {
+				throw new Error(`${configPath}: expected \`security.env-allowlist\` to be an array of strings`);
+			}
+			securityEnvAllowlist = allow as string[];
+		}
+	}
+
 	return {
 		repo,
 		worktreePrefix,
@@ -601,6 +622,7 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		revise: { local: reviseLocal },
 		review: { runner: reviewRunner, statuslessAfter: reviewStatuslessAfter, maxPasses: reviewMaxPasses, budgetCap: reviewBudgetCap, providerDiversity: reviewProviderDiversity },
 		confinement: { allowDirtyMain: confinementAllowDirtyMain },
+		security: { envAllowlist: securityEnvAllowlist },
 		notify: { url: notifyUrl, format: notifyFormat, events: notifyEvents },
 	};
 }
