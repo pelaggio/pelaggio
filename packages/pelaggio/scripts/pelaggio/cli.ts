@@ -19,6 +19,9 @@ const OPTIONS = {
 	// effect. Precedence (resolved in the orchestrator): CLI flag > config > "6h".
 	"max-wait": { type: "string" },
 	target: { type: "string" },
+	// Pin a model/provider profile for the whole run (issue #247), overriding the automatic
+	// quick-mode downgrade. No default → unset stays `undefined`; validated in runOrchestrator.
+	profile: { type: "string" },
 	"dry-run": { type: "boolean", default: false },
 	"no-worktree": { type: "boolean", default: false },
 	json: { type: "boolean", default: false },

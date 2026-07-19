@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CONFIG, REPO, resolveStepSettings, type StepSettings } from "./config.js";
+import { CONFIG, REPO, resolveProviderBin, resolveStepSettings, type StepSettings } from "./config.js";
 import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseWaitFlag, resolveParkReset } from "./helpers.js";
 import { buildAgentEnv, makeSecretScrubber } from "./secret-hygiene.js";
 import type { StepProvider } from "./step-runner.js";
@@ -387,7 +387,7 @@ const runStep: StepProvider["runStep"] = async (name, prompt, opts, emit) => {
 	// Deny-by-default env: the child gets only the allowlisted vars, never the full parent env, so
 	// a prompt-injected step cannot read/echo credentials it was never given (#237 / TC-014).
 	const scrub = makeSecretScrubber();
-	const child = spawn("codex", args, { cwd: opts.cwd, stdio: ["pipe", "pipe", "pipe"], env: buildAgentEnv({ allow: CONFIG.security.envAllowlist }) });
+	const child = spawn(resolveProviderBin(CONFIG, "codex", "codex"), args, { cwd: opts.cwd, stdio: ["pipe", "pipe", "pipe"], env: buildAgentEnv({ allow: CONFIG.security.envAllowlist }) });
 
 	try {
 		const events: JsonObject[] = [];
