@@ -67,6 +67,7 @@ Read only the detail docs needed for the task:
 - `docs/agent-context/flow.md`: (design) flow-policy seam, projection + memory hierarchy, write-back, declared write-sets + landing queue, concurrency model.
 - `docs/agent-context/coordination-spine.md`: (design) typed coordination-spine seam (agent-as-caller vs prose-scrape); the Beads-substrate decision — `bd` as work store + `merge-slot`/`gate` landing primitive; narrowed differentiator; MCP-deferred rationale.
 - `docs/agent-context/flow-event-catalog.md`: (design) the `#170` spec — event envelope + identity/ordering contract, the fat-historical vs. derive-on-read split, separate-file storage + dual-format reader, effects-sourced emission, and the consumer extension seam.
+- `docs/agent-context/acp-grok-protocol.md`: (design) ACP-over-stdio wire-protocol reference for `grok agent stdio` (grok 0.2.103 conformance target) — framing, lifecycle, `session/update` shapes, usage/cost, permissions; feeds the #239 client + #136 grok-provider.
 - `docs/agent-context/skills.md`: skill layout, canonical tree, bilingual substrate, frontmatter, includes, project-context extension point.
 - `docs/agent-context/testing-and-quality.md`: test commands, lint rules, rubric, review-shape rationale.
 - `docs/config.md`: `.pelaggio.yml` schema.
