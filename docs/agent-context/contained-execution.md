@@ -51,13 +51,24 @@ Getting a native branch-protection `review` status and using subscription (non-m
 | Path | Mechanism |
 |---|---|
 | **CI / review** | Spend-capped, scoped **API key** (metered), exactly as `pr-review.yml` uses `ANTHROPIC_API_KEY` today. No subscription token on a runner. |
-| **Local authoring (subscription pool)** | The host **broker** holds the refresh token and mints short-lived access tokens; the container reaches providers only through the broker, which injects auth. If a provider CLI insists on reading an on-disk token, mount a **filtered, minimal, short-TTL copy** into tmpfs (never a rw bind of the live `~/.claude` profile — OAuth refresh writes would fail against a ro mount or vanish with `--rm`), and the broker re-mints/restarts on `401`. |
+| **Local authoring (subscription pool)** | The host **broker** holds the refresh token and injects auth on outbound provider calls; the container reaches providers *only* through the broker and holds **no** bearer token. Mounting even a short-TTL token copy into the container is a **last resort** that reopens the exact hole this fixes (a readable bearer is exfil material and a second auth path) — prefer forcing the SDK/ACP shape or a re-originating proxy so the CLI never needs an on-disk token. |
+
+**Broker contract (the crown jewel — a compromised container *will* drive it).** The broker is a
+**constrained provider-API gateway, not a transparent auth-injecting forwarder**. It must: pin an
+allowlist of provider **path(s)/method(s)/model IDs** (deny account/usage/settings APIs, arbitrary
+URL fetch, and tool/MCP/plugin traffic on the same host); enforce **hard rate, tokens-per-call,
+body-size, and total-spend caps** with a kill (bounds financial-DoS and body-channel exfil); and
+guarantee **response-side token non-leakage** — strip `Authorization`/`Set-Cookie`/sensitive headers
+from responses, never follow cross-origin redirects, never let a bearer appear in any
+container-visible byte. "Fails closed if it dies" is availability, not authorization. The
+**auth-termination mechanism is an explicit spike-1 choice** — MITM with an injected CA + header
+rewrite, a local re-originating "fake provider" endpoint, or forcing SDK/ACP — proven end-to-end
+against a real CLI (which expects end-to-end TLS / OAuth refresh / HTTP2 / SSE), not asserted.
 
 Never mount a home directory wholesale — `~/.claude|.codex|.grok` also hold MCP configs, cached
-transcripts, and other tools' tokens. Mount only the specific auth file(s), by explicit allowlist.
-Confirm each provider CLI's auth-file format and refresh path in the spike. ToS: use per-environment
-accounts, not the human's primary; get legal sign-off before any CI-on-subscription; drop the
-"same activity relocated" framing.
+transcripts, and other tools' tokens. Confirm each provider CLI's auth path in the spike. ToS: use
+per-environment accounts, not the human's primary; get legal sign-off before any CI-on-subscription;
+drop the "same activity relocated" framing.
 
 ### Network — one fail-closed host proxy, not a hostname allowlist
 
@@ -78,10 +89,13 @@ enumerated empirically in the spike; an incomplete list must fail closed, never 
   `MAIN_REPO` — it exposes `.git`, `.env*`, `.dev/`, credentials, and other tokens.
 - **Git stays host-side.** A linked worktree's `.git` is a *file* → `MAIN_REPO/.git/worktrees/<name>/`;
   commits write there and to `MAIN_REPO/.git/objects/`. The container gets **no `git` remote creds,
-  no `gh`, and ideally no writable `.git`** (agent writes working-tree files only). The **host is the
-  sole committer**, post-container-exit, over a **declared write-set** that respects `.gitignore`
-  (so in-container build/test caches are never blindly `git add -A`ed). "Harness owns git" is enforced
-  by capability denial, not by a prompt append.
+  no `gh`, and no writable `.git`** (agent writes working-tree files only); the agent's read-only git
+  needs (`status`/`diff`/`log`) are served host-side or via a read-only view that exposes no MAIN
+  secret. The **host is the sole committer**, post-container-exit, over a write-set the **host itself
+  computes** by diffing the worktree against a pre-run snapshot — paths bounded to the worktree root,
+  symlinks/hardlinks rejected or resolved-and-bounded, `.gitignore` respected — **never** a set the
+  in-container agent declares (a hostile declaration must not commit a `.git`-adjacent or escape path).
+  "Harness owns git" is enforced by capability denial, not by a prompt append.
 - **node_modules sharing is a spike risk, not a footnote.** `worktree-deps.ts` materializes
   **absolute** symlinks into `MAIN_REPO/node_modules` (and possibly `~/.local/share/pnpm/store`).
   Inside the container those targets dangle unless the worktree and store are mounted at their
@@ -92,13 +106,21 @@ enumerated empirically in the spike; an incomplete list must fail closed, never 
 - **`--ignore-scripts` everywhere.** Any in-tree `pnpm install` fallback must use it (today only the
   repair path does; the worktree-deps install fallback does not — fix that regardless).
 
-### Execution profiles — split the LLM turn from command execution
+### Execution profiles — split the LLM turn from command execution (with a caveat)
 
 The "agent turn" and "the commands the agent runs" have different needs:
 
 - **LLM API turn:** reaches the broker (auth), no repo command execution.
 - **Test/build/verify:** runs untrusted, injection-reachable code — needs **no credential and no
   network at all**. Run these in a stricter, network-`none`, credential-free profile.
+
+**Reality caveat (prove, don't assume):** codex/grok run as a *single* process that interleaves model
+calls and the shell it spawns, so the harness cannot put "the model call" and "its `bash`" in two
+network profiles without decomposing the CLI's own loop (which it doesn't control). Realistically the
+whole agent turn — including mid-turn shell — sits in the broker-reachable profile; the strict
+network-`none`, credential-free profile applies to **harness-orchestrated** verification (pelaggio's
+own build/test invocation *between* turns), not to shell the agent runs mid-turn. Do not over-claim
+that hostile mid-turn shell has no network; the spike confirms the achievable split per provider.
 
 ### Trusted boundary code — the PR tree is data, never the executor
 
@@ -124,6 +146,8 @@ accounting and `parkExit()` still fire when a turn is killed mid-stream.
   plan-polish hooks, *not* a CLI spawn. Containerizing it forces a CLI/ACP shape and moves those
   hooks. **Containerize the CLI providers (codex, grok) first**; Claude either stays host-side
   initially or its hooks re-home to host-observed FS policy. Do not assume `spawn(cli)` covers Claude.
+  Sequencing caveat: if Claude is the primary authoring driver, the *largest* authoring exposure stays
+  outside the boundary until its hooks re-home — an explicit, temporary gap to track, not ignore.
 - **Keep per-provider sandboxes (`codex -s workspace-write`, grok `--sandbox`) as defense-in-depth**
   until the container contract is proven under adversarial tests — do not retire them early.
 
@@ -149,7 +173,12 @@ accounting and `parkExit()` still fire when a turn is killed mid-stream.
 
 1. **Broker + egress proxy + cred mechanics** on a throwaway/disposable env with an **API key** — the
    load-bearing spike. Prove: container reaches *only* the proxy; hostile in-container binaries cannot
-   exfil via raw TCP/UDP/DNS/CONNECT; the agent never reads a reusable token; the proxy fails closed.
+   exfil via raw TCP/UDP/DNS/CONNECT; the agent never reads a reusable token; the proxy fails closed;
+   the broker enforces a **request-shape policy** (provider path/method/model allowlist + hard
+   rate/token/body-size/spend caps) and **response-side token non-leakage** (strips
+   `Authorization`/`Set-Cookie`, no cross-origin redirect); and **one concrete auth-termination
+   mechanism** (MITM+CA / re-originating endpoint / forced SDK-ACP) works end-to-end against a real
+   provider CLI.
 2. **Authoring `implement`** with **file-only mounts** + the **trusted-binary** launch; resolve the
    worktree-`.git` write path and the absolute-symlink/path-remap node_modules reality; host-side
    commit of a declared write-set; framed protocol + park-on-SIGKILL.
@@ -166,6 +195,9 @@ accounting and `parkExit()` still fire when a turn is killed mid-stream.
 
 - The agent **never holds a reusable credential**: the broker injects ephemeral tokens; CI uses
   spend-capped API keys. (advances #176)
+- The **broker is a constrained provider-API gateway** — request-shape policy + spend caps +
+  response-side token non-leakage — not a transparent forwarder; a compromised container cannot drive
+  it beyond a small, capped provider surface.
 - The only network the container can reach is the **fail-closed host proxy**; `gh`/GitHub egress is
   host-side only.
 - The **boundary code + image are trusted** (installed `pelaggio`/`main` + pinned digest), never the
