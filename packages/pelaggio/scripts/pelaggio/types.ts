@@ -270,6 +270,9 @@ export interface Flags {
 	 *  letting `park.max-wait` config take effect. Precedence: CLI flag > config > "6h". */
 	"max-wait"?: string;
 	target?: string;
+	/** Pin the model/provider profile for the whole run (issue #247), overriding the automatic
+	 *  quick-mode downgrade. Validated against CONFIG.modelProfiles in runOrchestrator. */
+	profile?: string;
 	"dry-run": boolean;
 	"no-worktree": boolean;
 }
