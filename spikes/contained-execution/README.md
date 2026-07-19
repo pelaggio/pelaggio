@@ -41,10 +41,44 @@ starts a fake upstream + the broker on the host, then runs the hostile probe (`t
    (the session scratchpad path alone exceeds it and yields a bogus `EADDRINUSE`). Operational
    constraint for the real `run-contained`.
 
-## Deferred (the credential / real-CLI leg — "cred later")
+## Subscription-CLI leg — PROVEN end-to-end (no API key)
 
-The probe uses a Node HTTP-over-unix-socket client. Real provider CLIs speak **TCP/HTTPS**, so the
-unix-socket boundary needs a bridge — the design's **auth-termination mechanism choice**: (a) a
-localhost re-originating endpoint the CLI is pointed at via `HTTPS_PROXY`, (b) MITM with an injected
-CA + header rewrite, or (c) forcing SDK/ACP. Proving one end-to-end against a real CLI (with a
-spend-capped API key) is the remaining spike-1 work.
+Second half of spike 1: a **real subscription grok**, in a `--network=none` container, making a
+**real model call** through a host re-originating gateway. Per the product thesis (avoid API keys,
+prefer subscription-backed), this uses grok's own subscription auth — no key, no MITM.
+
+Files: `grok-broker.mjs` (host gateway → real `cli-chat-proxy.grok.com/v1`, path-allowlist +
+`/responses` spend cap), `grok-e2e.mjs` (orchestrator), `grok-image/Containerfile` (alpine + `socat`
++ the static grok binary), `capture.mjs` / `grok-capture-acp.mjs` (request-shape probes).
+
+Setup (one-time): build the image (`cp ~/.grok/bin/grok grok-image/grok && podman build -t
+pelaggio-grok grok-image`), then authorize a **per-env** login into an isolated volume —
+`podman volume create grok-auth && podman run --rm -v grok-auth:/root/.grok pelaggio-grok grok login
+--device-auth` (device-code; auth lands in the volume, never `~/.grok`). Run: `npx tsx grok-e2e.mjs`.
+
+Result: **PASS** — `stopReason: end_turn`, `answer: "PONG"`. Gateway log shows `ALLOW GET /models
+→200`, `/settings→200`, `POST /responses→200` (the real model call) and **`DENY`** for grok's
+non-allowlisted paths (`/mcp/tools/list`, `/sessions/*/signals`, `/sessions/*/turn-deltas`) — the
+policy actively restricts what the contained CLI can reach on the provider.
+
+### Findings
+
+4. **grok accepts a plain-`http://` base URL** via `grok agent --cli-chat-proxy-base-url <url>` (the
+   flag is on `grok agent`, *before* the `stdio` subcommand; top-level `grok -p` doesn't take it) —
+   so the gateway needs **no TLS/MITM**. Env `GROK_CLI_CHAT_PROXY_BASE_URL` is the alternative.
+5. **The real default base is `https://cli-chat-proxy.grok.com/v1`** — the override drops the `/v1`,
+   so the gateway re-adds it when forwarding. grok's request shape: bootstrap `GET /models`,
+   `/settings`, … then the model call is `POST /responses`.
+6. **Subscription auth reconciles with the security review under `--network=none`.** grok holds its
+   own token and sends it to the gateway; the gateway forwards to the real provider under a
+   path-allowlist + caps. Because the container has no other egress, the token can reach *nothing*
+   but the real provider — so a readable token is not exfil-able, and abuse is bounded by policy.
+   API keys were the reviewers' shortcut; network isolation gets the same safety *with* subscription.
+7. **The grok binary is a 147 MB fully-static ELF** → runs on any base (alpine used); the host drives
+   grok's ACP over `podman -i` stdio, so no runtime is needed *inside* the container beyond `socat`.
+
+### Remaining hardening (not spike blockers)
+Tighten the gateway's provider-path allowlist (allow the telemetry/session paths grok actually needs
+vs. deny by default); wire the gateway + `run-contained` into the real step-provider seam; per-env
+subscription accounts; response-body redaction of any harness-injected secret (n/a here since grok
+holds its own token).
