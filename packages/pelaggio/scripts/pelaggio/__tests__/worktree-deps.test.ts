@@ -1169,6 +1169,6 @@ describe("ensureWorktreeDeps main repair", () => {
 
 		ensureWorktreeDeps(root.worktree, root.main, runner);
 
-		assert.deepEqual(calls, [{ cmd: "pnpm install --frozen-lockfile", cwd: root.main }]);
+		assert.deepEqual(calls, [{ cmd: "pnpm install --frozen-lockfile --ignore-scripts", cwd: root.main }]);
 	});
 });
