@@ -362,7 +362,8 @@ function parseJsonlChunk(buffer: string, lines: JsonObject[]): string {
 }
 
 const runStep: StepProvider["runStep"] = async (name, prompt, opts, emit) => {
-	const settings = resolveStepSettings(CONFIG, opts.profile, name);
+	const resolved = resolveStepSettings(CONFIG, opts.profile, name);
+	const settings = { ...resolved, model: opts.executionOverride?.model ?? resolved.model, codexModel: opts.executionOverride?.codexModel ?? resolved.codexModel };
 	const { budget, turns: baseTurns } = settings;
 	const turns = opts.maxTurnsOverride ?? baseTurns;
 	const codexModel = selectCodexModel(settings);

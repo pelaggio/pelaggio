@@ -14,6 +14,7 @@ import {
 	ROADMAP_GITHUB,
 	ROADMAP_LINEAR,
 	ROADMAP_SOURCE,
+	resolveAuthoringReviewConfig,
 	resolveStepSettings,
 	SHIP_TARGET,
 	STEPS,
@@ -58,6 +59,8 @@ import {
 } from "./helpers.js";
 import { type NotifyConfig, notifyCycle, notifyStrandedReview, sendNotification as sendNotificationDefault } from "./notify.js";
 import { buildFailClosedComment, runPrReviewGate } from "./pr-review-cli.js";
+import { runReviewLoop } from "./review/loop.js";
+import { type ReviewRecord, renderReviewRecord, writeReviewRecord } from "./review/record.js";
 import { cleanupReviewHead, findReviewCandidates, postLocalModeWorkflowComment, postReviewStatus, prepareReviewHead, upsertReviewComment } from "./review-sweep.js";
 import { claimRevision, ensureReviseWorktree, fetchReviewFindings, findRevisablePrs, isAutopilotManaged, postParkComment, reviseFindingsPath } from "./revise-sweep.js";
 import { defaultGhRun, type GhRunner } from "./roadmap/github-issues.js";
@@ -190,7 +193,18 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			maxTurnsOverride,
 			retriedMaxTurns = false,
 			ownWorktree,
-		}: { attempt?: number; commitLabel?: string; effects?: StepEffects; maxTurnsOverride?: number; retriedMaxTurns?: boolean; ownWorktree?: string } = {},
+			executionOverride,
+			parkSignalOverride,
+		}: {
+			attempt?: number;
+			commitLabel?: string;
+			effects?: StepEffects;
+			maxTurnsOverride?: number;
+			retriedMaxTurns?: boolean;
+			ownWorktree?: string;
+			executionOverride?: { provider: import("./types.js").ProviderName; model?: string; codexModel?: string };
+			parkSignalOverride?: ParkSignal;
+		} = {},
 	): Promise<StepResult> {
 		// Short-circuit before runStep when SIGINT fired between steps; also covers
 		// --dry-run so Ctrl-C during a dry run bails promptly.
@@ -250,7 +264,8 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				profile,
 				trace: flags.trace,
 				itemId: itemId ?? undefined,
-				parkSignal,
+				parkSignal: parkSignalOverride ?? parkSignal,
+				...(executionOverride ? { executionOverride } : {}),
 				...(maxTurnsOverride !== undefined ? { maxTurnsOverride } : {}),
 				...(opts.signal ? { signal: opts.signal } : {}),
 				...(mainCheckoutObserver ? { mainCheckoutObserver } : {}),
@@ -516,10 +531,10 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 
 	const shouldRun = (s: Step): boolean => stepIndex(startFrom!) <= stepIndex(s);
 
-	function parkExit(): CycleResult | null {
-		if (!parkSignal.parked) return null;
-		if (worktree) checkpoint(worktree, "rate-limit park");
-		log(`⏸ parked (${parkSignal.limitType})`);
+	function parkExit(reason?: string): CycleResult | null {
+		if (!parkSignal.parked && !reason) return null;
+		if (worktree) checkpoint(worktree, reason ? "review-loop park" : "rate-limit park");
+		log(`⏸ parked (${reason ?? parkSignal.limitType})`);
 		return finish({ itemId, completed: false, cost, error: "parked" });
 	}
 
@@ -813,6 +828,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	}
 
 	// ── Shakedown-code ──
+	let reviewRecordMarkdown: string | undefined;
 
 	if (shouldRun("shakedown-code")) {
 		const planPath = await roadmap.getItemPlan({ worktree: worktree! });
@@ -821,38 +837,69 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		const shakedownPlanRef = planPath ? `Read the plan at \`${planPath}\` to understand the scope.` : `Find the plan in \`${resolve(REPO, "docs", "plans")}/\`.`;
 		const shakedownCodeArgs = await buildStepArgs(roadmap, itemId!, "code-review");
 
-		const outcome = await runStepWithRetry({
-			name: "shakedown-code",
-			stepBudget: resolveStepSettings(CONFIG, profile, "shakedown-code").budget,
-			commitLabel: () => "shakedown checkpoint",
-			refusedError: "shakedown-code refused (model declined the review)",
-			turnLimitNoun: "shakedown",
-			logAttempt: (attempt) => log(attempt === 1 ? "shakedown (code)..." : "continuing shakedown (attempt 2)..."),
-			buildPrompt: (attempt) =>
-				attempt === 1
-					? expandSkill("shakedown", shakedownCodeArgs)
-					: [
-							"The previous shakedown session ran out of turns. Work has been committed to disk.",
-							"",
-							"## Context",
-							shakedownPlanRef,
-							"",
-							"## Instructions",
-							"1. Run the verification commands from `.claude/skills/_rubric.md`'s Verification section to see the current state.",
-							"2. Check what's already been fixed vs. what remains.",
-							"3. Focus on fix-now items only (type errors, test failures, lint errors, bugs).",
-							'4. Skip near-term items (missing tests, i18n gaps, refactoring) — list each as a `deferred-item: {"title": "...", "scope": "..."}` marker line; the harness creates them (do not run `roadmap create-item`).',
-							"5. Re-run the verification commands before finishing.",
-						].join("\n"),
-		});
-		if (outcome.kind === "terminal") return outcome.cycleResult;
+		let shakedownResult: StepResult;
+		if (REVIEW_CONFIG.authoring.enabled) {
+			const policy = resolveAuthoringReviewConfig(CONFIG, profile);
+			const authorSettings = resolveStepSettings(CONFIG, profile, "implement");
+			const loop = await runReviewLoop({
+				policy,
+				author: { provider: authorSettings.provider, ...(authorSettings.provider === "codex" ? (authorSettings.codexModel ? { model: authorSettings.codexModel } : {}) : authorSettings.model ? { model: authorSettings.model } : {}) },
+				parkSignal,
+				runSeat: ({ role, slot, pass, prompt, parkSignal: child }) =>
+					step(role === "reviewer" ? "pr-review" : role === "judge" ? "pr-verify" : "shakedown-code", prompt, worktree!, {
+						attempt: pass,
+						parkSignalOverride: child,
+						executionOverride: { provider: slot.provider, ...(slot.provider === "codex" ? (slot.codexModel ? { codexModel: slot.codexModel } : {}) : slot.model ? { model: slot.model } : {}) },
+						...(role === "author" ? { commitLabel: "adversarial review revision" } : {}),
+					}),
+				prompts: {
+					review: () => expandSkill("pr-review", "--authoring-loop"),
+					judge: (candidates) => `${expandSkill("pr-verify", "--authoring-loop-judge")}\n\nTRUSTED_CANDIDATE_DATA\n${JSON.stringify(candidates)}\nEND_TRUSTED_CANDIDATE_DATA`,
+					revise: (survivors) => `${expandSkill("shakedown", shakedownCodeArgs)}\n\nThe Judge retained these blockers:\n${JSON.stringify(survivors)}`,
+				},
+			});
+			cost += loop.cost;
+			const record: ReviewRecord = { schemaVersion: 1, runId: `${runIdBase}-${itemId}`, itemId: itemId!, createdAt: new Date().toISOString(), blockingBar: "must-fix", result: loop };
+			const recordPath = writeReviewRecord(worktree!, record);
+			reviewRecordMarkdown = renderReviewRecord(record);
+			log(`review record → ${recordPath}`);
+			if (loop.outcome === "budget" || loop.outcome === "hard-block" || (loop.outcome === "dissent" && opts.shipTarget.name === "direct-push")) return parkExit(`adversarial review ${loop.outcome}`)!;
+			shakedownResult = { ok: true, subtype: "success", text: loop.outcome, fullText: loop.outcome, cost: 0, turns: 0 };
+		} else {
+			const outcome = await runStepWithRetry({
+				name: "shakedown-code",
+				stepBudget: resolveStepSettings(CONFIG, profile, "shakedown-code").budget,
+				commitLabel: () => "shakedown checkpoint",
+				refusedError: "shakedown-code refused (model declined the review)",
+				turnLimitNoun: "shakedown",
+				logAttempt: (attempt) => log(attempt === 1 ? "shakedown (code)..." : "continuing shakedown (attempt 2)..."),
+				buildPrompt: (attempt) =>
+					attempt === 1
+						? expandSkill("shakedown", shakedownCodeArgs)
+						: [
+								"The previous shakedown session ran out of turns. Work has been committed to disk.",
+								"",
+								"## Context",
+								shakedownPlanRef,
+								"",
+								"## Instructions",
+								"1. Run the verification commands from `.claude/skills/_rubric.md`'s Verification section to see the current state.",
+								"2. Check what's already been fixed vs. what remains.",
+								"3. Focus on fix-now items only (type errors, test failures, lint errors, bugs).",
+								'4. Skip near-term items (missing tests, i18n gaps, refactoring) — list each as a `deferred-item: {"title": "...", "scope": "..."}` marker line; the harness creates them (do not run `roadmap create-item`).',
+								"5. Re-run the verification commands before finishing.",
+							].join("\n"),
+			});
+			if (outcome.kind === "terminal") return outcome.cycleResult;
+			shakedownResult = outcome.result;
+		}
 
 		// Harness owns deferred-item creation (#115): under pelaggio the model lists follow-ups as
 		// `deferred-item: {json}` markers instead of running `roadmap create-item` (a sandboxed
 		// provider can't). Create them in-process, best-effort — a failure logs and continues (they're
 		// backlog niceties, not the cycle's deliverable). Skipped in dry-run (no real backlog writes).
 		if (!opts.dryRun) {
-			for (const d of parseDeferredItems(outcome.result.fullText)) {
+			for (const d of parseDeferredItems(shakedownResult.fullText)) {
 				try {
 					const created = await roadmap.createItem(d);
 					log(`deferred → ${created.id}: ${d.title}`);
@@ -914,7 +961,14 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	}
 
 	const ship = await step("ship", shipPrompt, worktree!, {
-		...(target.name === "direct-push" ? {} : { effects: (result) => [parseShipDecisionEffect(result, { itemId: itemId!, target: target.name })] }),
+		...(target.name === "direct-push"
+			? {}
+			: {
+					effects: (result) => {
+						const decision = parseShipDecisionEffect(result, { itemId: itemId!, target: target.name });
+						return [{ ...decision, ...(reviewRecordMarkdown ? { prBody: `${decision.prBody}\n\n${reviewRecordMarkdown}` } : {}) }];
+					},
+				}),
 	});
 	cost += ship.cost;
 

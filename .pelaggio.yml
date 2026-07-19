@@ -21,6 +21,9 @@ revise:
 # docs/pr-review.md#activating-native-ci-key-review-repo-admin.
 review:
   runner: local
+  # Opt-in; unattended authoring loops require key authentication.
+  authoring:
+    enabled: false
   # Safe rollout default is one pass. Opt in with max-passes: 2 after setting a
   # cap that can reserve every required discovery+verification call.
   max-passes: 1

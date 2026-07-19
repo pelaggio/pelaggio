@@ -1,6 +1,17 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { applyReviewPass, evaluateReviewConvergence, parseReviewFindings, parseReviewVerification, ReviewFindingsParseError, reconcileReviewVerification, reviewFindingFingerprint, reviewFindingsGate } from "../review/findings.js";
+import {
+	applyReviewPass,
+	evaluateReviewConvergence,
+	parseAuthoringReviewFindings,
+	parseJudgeReport,
+	parseReviewFindings,
+	parseReviewVerification,
+	ReviewFindingsParseError,
+	reconcileReviewVerification,
+	reviewFindingFingerprint,
+	reviewFindingsGate,
+} from "../review/findings.js";
 
 function block(value: unknown): string {
 	return `Review complete.\nREVIEW_FINDINGS\n${JSON.stringify(value)}\nEND_REVIEW_FINDINGS`;
@@ -8,6 +19,14 @@ function block(value: unknown): string {
 
 function verificationBlock(value: unknown): string {
 	return `Verification complete.\nREVIEW_VERIFICATION\n${JSON.stringify(value)}\nEND_REVIEW_VERIFICATION`;
+}
+
+function authoringBlock(value: unknown): string {
+	return `Review complete.\nAUTHORING_REVIEW_FINDINGS\n${JSON.stringify(value)}\nEND_AUTHORING_REVIEW_FINDINGS`;
+}
+
+function judgeBlock(value: unknown): string {
+	return `Ruling complete.\nAUTHORING_REVIEW_JUDGE\n${JSON.stringify(value)}\nEND_AUTHORING_REVIEW_JUDGE`;
 }
 
 describe("parseReviewFindings", () => {
@@ -57,6 +76,40 @@ describe("parseReviewFindings", () => {
 		];
 		for (const finding of invalid) assert.throws(() => parseReviewFindings(block({ schemaVersion: 1, summary: "Ok.", findings: [finding] })), ReviewFindingsParseError);
 		for (const summary of ["", "two\nlines"]) assert.throws(() => parseReviewFindings(block({ schemaVersion: 1, summary, findings: [] })), ReviewFindingsParseError);
+	});
+});
+
+describe("parseAuthoringReviewFindings", () => {
+	it("parses a v2 class-tagged report", () => {
+		const report = parseAuthoringReviewFindings(authoringBlock({ schemaVersion: 2, summary: "Reviewed.", findings: [{ severity: "must-fix", class: "security", message: "Leak.", path: "a.ts", line: 3 }] }));
+		assert.equal(report.schemaVersion, 2);
+		assert.equal(report.findings[0].class, "security");
+		assert.equal(report.findings[0].line, 3);
+	});
+
+	it("rejects the wrong schemaVersion and an invalid/absent finding class", () => {
+		assert.throws(() => parseAuthoringReviewFindings(authoringBlock({ schemaVersion: 1, summary: "Ok.", findings: [] })), ReviewFindingsParseError);
+		for (const cls of [undefined, "style", ""]) assert.throws(() => parseAuthoringReviewFindings(authoringBlock({ schemaVersion: 2, summary: "Ok.", findings: [{ severity: "must-fix", class: cls, message: "x" }] })), ReviewFindingsParseError);
+	});
+});
+
+describe("parseJudgeReport", () => {
+	it("parses refuted and surviving decisions with rulings", () => {
+		const report = parseJudgeReport(
+			judgeBlock({
+				schemaVersion: 1,
+				decisions: [
+					{ candidateId: "C1", decision: "refuted", rationale: "Not reachable.", class: "security" },
+					{ candidateId: "C2", decision: "survives", rationale: "Reproduced.", class: "correctness-regression", ruling: "fixable-blocker" },
+				],
+			}),
+		);
+		assert.equal(report.decisions[1].ruling, "fixable-blocker");
+	});
+
+	it("fails closed on a surviving decision without a ruling and on mismatched dissent class", () => {
+		assert.throws(() => parseJudgeReport(judgeBlock({ schemaVersion: 1, decisions: [{ candidateId: "C1", decision: "survives", rationale: "r", class: "judgment" }] })), ReviewFindingsParseError);
+		assert.throws(() => parseJudgeReport(judgeBlock({ schemaVersion: 1, decisions: [{ candidateId: "C1", decision: "survives", rationale: "r", class: "security", ruling: "judgment-dissent" }] })), ReviewFindingsParseError);
 	});
 });
 

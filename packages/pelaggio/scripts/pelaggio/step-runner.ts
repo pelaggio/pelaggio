@@ -30,6 +30,8 @@ export interface RunStepOpts {
 	signal?: AbortSignal;
 	/** Brackets mutating provider tools for dirty-main delta attribution. */
 	mainCheckoutObserver?: MainCheckoutDeltaObserver;
+	/** Select a provider/model for this invocation without changing profile configuration. */
+	executionOverride?: { provider: ProviderName; model?: string; codexModel?: string };
 }
 
 /** Canonical signature of a step runner. Single-sourced here (all four types are in
@@ -101,7 +103,9 @@ export function endMainCheckoutAttribution(input: HookInput, toolUseId: string |
 // named const so it can be registered as the `"claude"` provider. The exported
 // `runStep` below is now the dispatcher; this is what it calls for the default provider.
 const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
-	const { budget, turns: baseTurns, effort, model } = resolveStepSettings(CONFIG, opts.profile, name);
+	const resolved = resolveStepSettings(CONFIG, opts.profile, name);
+	const { budget, turns: baseTurns, effort } = resolved;
+	const model = opts.executionOverride?.model ?? resolved.model;
 	const turns = opts.maxTurnsOverride ?? baseTurns;
 
 	const modelLabel = model ? model.replace("claude-", "") : "default";
@@ -478,6 +482,8 @@ const PROVIDERS: Record<ProviderName, StepProvider> = {
 	grok: grokProvider,
 };
 
+export const REGISTERED_PROVIDERS: readonly ProviderName[] = Object.freeze(Object.keys(PROVIDERS) as ProviderName[]);
+
 /** Look up a registered provider. Throws on an unknown name — defense-in-depth for
  *  #80 (a misconfigured provider fails loudly rather than silently defaulting). */
 export function getProvider(name: ProviderName): StepProvider {
@@ -495,4 +501,4 @@ export function getProvider(name: ProviderName): StepProvider {
  * `resolveStepSettings` is pure and cheap, so the double call keeps the runner body
  * byte-identical at no real cost.
  */
-export const runStep: RunStepFn = (name, prompt, opts, emit) => getProvider(resolveStepSettings(CONFIG, opts.profile, name).provider).runStep(name, prompt, opts, emit);
+export const runStep: RunStepFn = (name, prompt, opts, emit) => getProvider(opts.executionOverride?.provider ?? resolveStepSettings(CONFIG, opts.profile, name).provider).runStep(name, prompt, opts, emit);
