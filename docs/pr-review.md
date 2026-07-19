@@ -267,6 +267,18 @@ autonomous recipe needs.
 > and skips fork/draft PRs *inside* the job rather than via a job-level `if:` — either
 > would leave `review` stuck pending and block every PR forever.
 
+## Activating native CI-key review (repo-admin)
+
+By default this repo posts `review` from the **local subscription sweep** (`AUTOPILOT_REVIEW_RUNNER=local`, `.pelaggio.yml review.runner: local`). Switching to the **native CI-key** posture — the `#214`/`#258` realization where GitHub Actions posts `review` on a metered key so `auto-merge-pr` can gate on an app-authored status — is a deliberate **repo-admin ops step, not a committed-config flip**.
+
+**Three things must move together, or the gate breaks.** The GitHub job gates on the repo *variable* `AUTOPILOT_REVIEW_RUNNER` (`.github/workflows/pr-review.yml`, `if: vars.AUTOPILOT_REVIEW_RUNNER != 'local'`); `.pelaggio.yml review.runner` only controls whether the *local* sweep posts. So flipping `review.runner: ci` in committed config **alone** stops the local sweep posting while CI stays gated off (variable still `local`) → `review` is **never posted** → every same-repo PR blocks forever. Do all of these in one change window:
+
+1. **Secret:** `gh secret set ANTHROPIC_API_KEY --repo <owner>/<repo>` with a dedicated, spend-capped key (see *Runner & secrets* above). Until it exists the CI gate fails closed (red `review` on every PR).
+2. **Variable:** `gh variable set AUTOPILOT_REVIEW_RUNNER --repo <owner>/<repo> --body ci` (any value ≠ `local`). This is what actually moves posting from the local sweep to the CI job.
+3. **Committed config:** set `.pelaggio.yml` `review.runner: ci` so the local sweep stops posting (avoids two runners racing the same status).
+
+Verify with `gh api repos/{owner}/{repo}/commits/{sha}/status` after the next push — `review` must appear, posted by the GitHub Actions app, before enabling `auto-merge-pr`. To **restore** local posting, reverse the switch (set the variable back to `AUTOPILOT_REVIEW_RUNNER=local` — *not* unset it, since an unset variable satisfies `!= 'local'` and reintroduces the double-runner race; `review.runner: local`; the secret may stay). Auto-merge is an independent, later switch (`ship.target: auto-merge-pr`) — enable it only once native `review` is confirmed posting and required in branch protection.
+
 ## Closing the loop on BLOCK (issue #60 / #76)
 
 A red `review` gate no longer just parks forever — it triggers **one** automated revision that
