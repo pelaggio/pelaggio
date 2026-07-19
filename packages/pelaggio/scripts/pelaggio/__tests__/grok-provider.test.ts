@@ -88,6 +88,13 @@ describe("buildGrokStepResult — failure modes", () => {
 		assert.ok(built.events.some((e) => e.type === "rate_limit"));
 	});
 
+	it("does NOT park a clean end_turn step whose stderr happens to mention a limit (#136 review finding)", () => {
+		const built = buildGrokStepResult("implement", [msg("all good"), turnCompleted("end_turn", USAGE)], { stopReason: "end_turn", stderr: "warning: approaching context limit; 429 seen earlier" });
+		assert.equal(built.result.ok, true);
+		assert.equal(built.result.subtype, "success");
+		assert.equal(built.parkUpdate, undefined);
+	});
+
 	it("is not ok when the turn completes with a non-end_turn stop reason", () => {
 		const built = buildGrokStepResult("implement", [msg("truncated"), turnCompleted("max_tokens", USAGE)], { stopReason: "max_tokens" });
 		assert.equal(built.result.ok, false);

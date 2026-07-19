@@ -239,7 +239,7 @@ export function buildGrokStepResult(name: Step, updates: JsonObject[], exitInfo:
 		ok = false;
 		subtype = "error_max_turns";
 		text = text || `Grok step timed out after ${turns} turns`;
-	} else if ((driveMsg || stopReason === undefined) && rateLimitText(driveMsg)) {
+	} else if (!completedCleanly && rateLimitText(driveMsg)) {
 		ok = false;
 		subtype = "error_rate_limit";
 		text = driveMsg || "Grok rate limit";
