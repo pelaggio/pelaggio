@@ -722,10 +722,17 @@ describe("loadConfig — providers.<name>.bin (#241)", () => {
 		assert.equal(cfg.providerBins.codex, "/opt/codex/bin/codex");
 	});
 
-	it("rejects an unknown provider name", () => {
+	it("accepts a bin override for grok (registered since #136)", () => {
 		const repo = tmpRepo();
 		const path = writeYml(repo, "providers:\n  grok:\n    bin: ~/.grok/bin/grok\n");
-		assert.throws(() => loadConfig({ repo, configPath: path }), /unknown provider `providers\.grok`/);
+		const cfg = loadConfig({ repo, configPath: path });
+		assert.equal(cfg.providerBins.grok, "~/.grok/bin/grok");
+	});
+
+	it("rejects an unknown provider name", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "providers:\n  gemini:\n    bin: /opt/gemini\n");
+		assert.throws(() => loadConfig({ repo, configPath: path }), /unknown provider `providers\.gemini`/);
 	});
 
 	it("rejects a non-map providers block", () => {

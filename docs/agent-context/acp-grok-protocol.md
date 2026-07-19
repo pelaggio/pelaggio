@@ -54,7 +54,8 @@ flattened stream omits tool-call/file-change events (#238 finding).
 
 - Authoritative completion is the **`session/prompt` response**: `stopReason` +
   `_meta.usage` (`inputTokens`, `outputTokens`, `cachedReadTokens`, `reasoningTokens`,
-  `costUsd`, `modelCalls`, `apiDurationMs`). Prefer this over scraping the stream.
+  `costUsdTicks` — cost in nano-USD, so USD = `costUsdTicks / 1e9`, `modelCalls`,
+  `apiDurationMs`). Prefer this over scraping the stream.
 - A per-turn `turn_completed` (via `_x.ai/session_notification`) and
   `_x.ai/session/prompt_complete` also carry `stop_reason`/`usage` — redundant with the
   response; use them only for live progress.

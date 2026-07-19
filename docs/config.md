@@ -206,9 +206,9 @@ models:
 
 ### Provider and Codex model overrides
 
-`providers` is the sibling sub-block that selects the backend for a step. By
-default every step runs on `claude`; set a step to `codex` to run that step
-through the Codex provider:
+`providers` is the sibling sub-block that selects the backend for a step. The
+registered backends are `claude` (default), `codex`, and `grok`. Set a step to
+another provider to route it there:
 
 ```yaml
 models:
@@ -216,7 +216,14 @@ models:
     deep:
       providers:
         implement: codex
+        shakedown-code: grok
 ```
+
+The `grok` provider drives `grok agent stdio` over ACP (issue #136); it needs the
+grok CLI installed and authed (`grok login`, SuperGrok / X Premium+), and its
+off-PATH binary pinned via `providers.grok.bin` (see [Provider binaries](#provider-binaries)).
+A `grok` model id can be pinned in that profile's `<step>` slot (a `claude-*` id is
+never forwarded); otherwise the grok CLI default applies.
 
 When a step runs on Codex, an optional `codex` sub-block selects the Codex model
 for that step:
