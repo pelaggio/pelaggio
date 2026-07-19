@@ -12,6 +12,13 @@ revise:
 # Review gate runs on the local subscription (via #84), not the metered CI key.
 # CI's `pr-review-ci` job gates off when repo var AUTOPILOT_REVIEW_RUNNER=local;
 # the local pelaggio auto-pick sweep posts the `review` commit status.
+#
+# Native CI-key review + auto-merge (#258/#214) is BUILT and documented but NOT
+# activated here: it is a repo-admin ops step, not a committed-config flip. The
+# three moving parts must change TOGETHER — flipping `review.runner: ci` alone
+# stops the local sweep posting while CI stays gated off (var still `local`), so
+# `review` is never posted and every PR blocks. See the activation checklist:
+# docs/pr-review.md#activating-native-ci-key-review-repo-admin.
 review:
   runner: local
   # Safe rollout default is one pass. Opt in with max-passes: 2 after setting a
