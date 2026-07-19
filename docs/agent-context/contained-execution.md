@@ -72,7 +72,21 @@ wedged pin parks *every* cycle, an outage cost, not an edge case.)
 - **Env/creds:** deny-by-default env (#237); secrets via `podman --secret` / tmpfs / short-TTL, never
   a long-lived agent-writable auth volume.
 
-## Auth posture — the provider matrix
+## Auth posture — the local/unattended boundary
+
+The dividing line is **execution context**, and it is load-bearing (the review loop
+(`adversarial-review-loop.md`) inherits this exact posture, so it lives here as the single source):
+
+- **Local single-developer (subscription allowed, opt-in):** operator's own machine, operator's own
+  seats, **operator-initiated or operator-supervised**, **single-tenant**. This is ordinary use
+  orchestrated by pelaggio. Transparent isolation only (CLI owns its OAuth; no dummy `auth.json`, no
+  header injection). "Local" does **not** stretch to a packaged, always-on, multi-seat daemon.
+- **Keys required (no subscription):** CI, multi-user or shared runners, headless/at-scale
+  unattended, and anything packaged to "run unattended against consumer subs." This is the
+  `#214`-style path — metered/org keys, spend-capped.
+
+Subscription economics are therefore a **local-mode cost property, not a product-default** — do not
+build defaults, cost models, or a differentiator on multi-seat unattended subscription automation.
 
 The three-way tension is unavoidable: **subscription economics · strongest security (termination) ·
 ToS-clean — pick two.** Classify per provider before implementing:
