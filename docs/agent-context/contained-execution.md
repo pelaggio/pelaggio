@@ -1,108 +1,177 @@
 # Contained execution (design)
 
-(design) A single, provider-agnostic **containerized execution boundary** for every pelaggio
-step that runs agent-authored, injection-reachable code — both **authoring** cycles and the
-**review** gate. The container is the blast-radius boundary: agent code runs inside it with
-scoped credentials, a worktree-only filesystem, and an egress allowlist; it can never reach the
-host's other secrets, files, or network. This is target-state; the tag drops when it ships.
+(design) Confine every pelaggio step that runs agent-authored, injection-reachable code. The
+boundary is **two cooperating primitives**, not one container:
 
-## Why
+1. **A host-side auth-terminating egress broker** — the agent never holds a reusable credential;
+   the only network the container can reach is a fail-closed local proxy that injects auth
+   outside the container and enforces a destination policy. This is the load-bearing piece and the
+   concrete realization of #176.
+2. **An FS/exec confinement container** (rootless Podman) — worktree-only filesystem, minimal
+   explicit mounts, hardened (dropped caps / seccomp / read-only rootfs / resource limits).
 
-Today an agent step executes on the bare host with the operator's full environment and
-subscription credentials:
+**The container alone does not stop credential exfil** — a readable token plus an egress allowlist
+that includes the token's own provider endpoint provides zero protection. The broker is what makes
+the boundary real. This doc was rewritten after a three-driver adversarial review (Claude/Codex/
+Grok) that converged on that flaw; the review notes live in the PR thread. Target-state; the tag
+drops when it ships.
 
-- **Authoring is the larger exposure.** During `implement`, the agent both *writes*
-  injection-reachable code (from untrusted issue/PR text — TC-015) *and executes its own
-  test/build/verify commands* directly on the host. A prompt-injected step can run arbitrary
-  code with the operator's `~/.claude|.codex|.grok` creds and full filesystem.
-- **Review is the smaller-but-real half.** `pelaggio pr-review` runs the CLI *from the checked-out
-  PR tree*, and pelaggio's PRs modify pelaggio's own code — so a malicious PR can execute during
-  its own review. `pr-review.yml` keeps this on an ephemeral GitHub VM precisely for that reason;
-  `review.runner: local` gives that up, which is why the local `review` status can't natively
-  clear branch protection (#214).
+## Threat model — what the boundary does and does not do
 
-Current isolation is a patchwork: per-provider flags (`codex -s workspace-write`, grok
-`--sandbox` #240), Claude in-process worktree hooks, and prompt appends ("the harness owns git and
-network"). It is inconsistent across providers and isolates neither credentials, host filesystem,
-nor network egress. One container boundary replaces the patchwork uniformly.
+- **Does:** bound host filesystem and environment reach; prevent provider-account compromise via a
+  *readable, reusable* subscription token (there is none in the container); force all agent egress
+  through a policy proxy; make the host the sole committer / effects owner via capability denial.
+- **Does NOT (residual, must be stated, not hidden):** it is not a hard kernel boundary — a
+  rootless-Podman/userns/kernel escape yields the *runner user* (not root, not other users). It
+  does not stop same-host exfil purely by hostname filtering (a legitimate provider request body
+  can carry data) — that is bounded by the broker terminating creds + response/prompt redaction +
+  spend caps, not by the allowlist. "Can never reach" is replaced everywhere by precise, testable
+  claims.
 
-## Decision
+## Decouple the two goals #214 conflated
 
-Run each agent step (and the review) inside an **ephemeral rootless container** with a fixed
-contract. The harness stays on the host and owns everything the agent must not: git mutations,
-roadmap/forge effects, worktree lifecycle, cost/park accounting. The container runs only the
-agent turn.
+Getting a native branch-protection `review` status and using subscription (non-metered) auth are
+**orthogonal**:
 
-### The contract
+- **(A) Native `review` status** is *already solved*: `pr-review.yml` runs on `ubuntu-latest` and
+  posts `review` as GitHub Actions (`app_id 15368`). It is merely **gated off** by
+  `AUTOPILOT_REVIEW_RUNNER=local`. Flipping that back on gives native, non-`--admin` merges today —
+  at the cost of a **metered API key**. Containers and self-hosted runners are not required for (A).
+- **(B) Subscription-cost review with a native status** is the actually-hard problem, and it is
+  **not** where containment should debut. Putting review — which executes PR-influenced code — on a
+  self-hosted host that also holds `MAIN`, `gh` auth, and live subscription profiles *regresses*
+  today's model (`pr-review.yml`: "GitHub-hosted, deliberately NOT self-hosted … never on a dev
+  machine"). **Review stays on ephemeral GHA with a spend-capped key.** Containment debuts on
+  **authoring**, which starts from the trusted harness + issue text and is the larger exposure.
 
-| Axis | Policy |
+## The contract
+
+### Credentials — the agent never reads a reusable credential
+
+| Path | Mechanism |
 |---|---|
-| **Filesystem** | The active worktree mounted `rw` at a fixed path; `MAIN_REPO` mounted `ro` (so the shared `node_modules` symlink resolves — see the worktree-deps sharing model). Nothing else. Writes are confined to the worktree (subsumes TC-011). |
-| **Network** | Default-deny egress; allowlist only provider endpoints (`api.anthropic.com`, `cli-chat-proxy.grok.com`, the codex backend) and — for the harness, not the agent — `api.github.com`. Subsumes #240's net-allowlist; relates TC-006. |
-| **Credentials** | `~/.claude`, `~/.codex`, `~/.grok` mounted **read-only into the container only**. The agent reads its own auth but cannot reach any other host secret. Advances #176 (credentials scoped to the execution boundary, not the bare process). |
-| **Environment** | Deny-by-default minimal env — the same allowlist contract as `buildAgentEnv` (#237 / TC-014), enforced at the container boundary. |
-| **Lifecycle** | Ephemeral (`--rm`), SIGTERM→SIGKILL on abort/timeout, wall-clock cap — mirrors `codex-provider.ts` / `grok-provider.ts`. |
+| **CI / review** | Spend-capped, scoped **API key** (metered), exactly as `pr-review.yml` uses `ANTHROPIC_API_KEY` today. No subscription token on a runner. |
+| **Local authoring (subscription pool)** | The host **broker** holds the refresh token and mints short-lived access tokens; the container reaches providers only through the broker, which injects auth. If a provider CLI insists on reading an on-disk token, mount a **filtered, minimal, short-TTL copy** into tmpfs (never a rw bind of the live `~/.claude` profile — OAuth refresh writes would fail against a ro mount or vanish with `--rm`), and the broker re-mints/restarts on `401`. |
 
-### Runtime
+Never mount a home directory wholesale — `~/.claude|.codex|.grok` also hold MCP configs, cached
+transcripts, and other tools' tokens. Mount only the specific auth file(s), by explicit allowlist.
+Confirm each provider CLI's auth-file format and refresh path in the spike. ToS: use per-environment
+accounts, not the human's primary; get legal sign-off before any CI-on-subscription; drop the
+"same activity relocated" framing.
 
-Rootless **Podman** (`podman run`), not Docker: no root daemon, no Docker-socket=root exposure;
-the runner user launches the container directly. A bare self-hosted Actions runner (or the local
-sweep) invokes `podman run`; agent/PR code executes only inside the container. Linux operators
-first; document the macOS path later.
+### Network — one fail-closed host proxy, not a hostname allowlist
 
-## Consumers (how the chartered items fold in)
+The container gets **no direct egress**. Its only route is the host broker/proxy (e.g. container
+`--network=none` plus a mounted UNIX socket, or a dedicated netns whose sole gateway is the proxy).
+The proxy is protocol-aware (HTTPS to known provider API hosts only; block `CONNECT` tunnels to
+arbitrary hosts; block arbitrary DNS/DoH/IPv6), **fails closed** if it dies, and is enforced
+*outside* the container's user namespace (rootless `pasta`/`slirp4netns` give no hostname allowlist
+on their own — an IP allowlist leaks on CDN churn/rebinding). **`api.github.com` is host-side only
+and is NOT in the container's reachable set** — the harness's `gh` effects run on the host. The exact
+provider domain set (incl. token-refresh, telemetry, model-download hosts each CLI may hit) is
+enumerated empirically in the spike; an incomplete list must fail closed, never auto-open.
 
-- **#214 (review → native merges):** the `pr-review.yml` job runs `run-contained pelaggio
-  pr-review` on a self-hosted `pelaggio` runner. Because it is a genuine Actions job, the `review`
-  status posts as `app_id 15368` and natively satisfies branch protection — no `--admin`, real
-  author/reviewer separation. Review is read-mostly, so it is the easiest first consumer to
-  validate the cred + network mechanics.
-- **Authoring (contained autopilot):** each agent step in a cycle runs inside the primitive. The
-  step-provider seam is the natural injection point — a provider (or a wrapper around the existing
-  ones) runs its CLI via `run-contained` instead of a bare `spawn`. The harness's pick/ship/git
-  and roadmap effects stay on the host, matching the existing "harness owns git and network"
-  model.
-- **#240 (grok sandbox):** folded in — the container *is* the sandbox, provider-agnostic. Grok
-  runs plain inside it; per-provider `--sandbox` / `-s workspace-write` become redundant where the
-  container covers them (keep them as defense-in-depth or retire per provider).
-- **#176 (creds outside the agent process):** advanced — creds live in the container, mounted
-  read-only, never in the bare agent env.
-- **#237 (env allowlist):** the same deny-by-default contract, now at the container boundary.
+### Filesystem — minimal explicit mounts; the host is the sole committer
 
-## Open questions (spike-first)
+- **Mounts are the real TCB — minimal and explicit.** The active **worktree** rw; the specific
+  **pnpm store** paths the deps resolve to, ro (see below); nothing else. Do **not** bind whole
+  `MAIN_REPO` — it exposes `.git`, `.env*`, `.dev/`, credentials, and other tokens.
+- **Git stays host-side.** A linked worktree's `.git` is a *file* → `MAIN_REPO/.git/worktrees/<name>/`;
+  commits write there and to `MAIN_REPO/.git/objects/`. The container gets **no `git` remote creds,
+  no `gh`, and ideally no writable `.git`** (agent writes working-tree files only). The **host is the
+  sole committer**, post-container-exit, over a **declared write-set** that respects `.gitignore`
+  (so in-container build/test caches are never blindly `git add -A`ed). "Harness owns git" is enforced
+  by capability denial, not by a prompt append.
+- **node_modules sharing is a spike risk, not a footnote.** `worktree-deps.ts` materializes
+  **absolute** symlinks into `MAIN_REPO/node_modules` (and possibly `~/.local/share/pnpm/store`).
+  Inside the container those targets dangle unless the worktree and store are mounted at their
+  **identical host paths** (`-v /same:/same`) — which constrains "a fixed path" — or the materialized
+  links are made **relative**. `readlink -f` on `.pnpm`/`.bin` must be audited; native modules are
+  host-ABI-sensitive. Resolve this concretely before depending on shared deps.
+- Worktrees must be **siblings outside `MAIN`** (never nested) so a rw worktree mount can't reach MAIN.
+- **`--ignore-scripts` everywhere.** Any in-tree `pnpm install` fallback must use it (today only the
+  repair path does; the worktree-deps install fallback does not — fix that regardless).
 
-1. **Credential mechanics + ToS.** Confirm injecting `~/.claude|.codex|.grok` (read-only) into the
-   container authenticates the official CLIs, and that OAuth-token refresh survives a long step.
-   Sanity-check the Feb-2026 ToS posture — the container runs the *official* CLIs, so this is the
-   same activity as today's local runs, relocated; confirm it's no worse (this is the #214 note).
-2. **Network enforcement.** The mechanism for the egress allowlist under rootless Podman
-   (`slirp4netns`/`pasta` + firewall, an egress proxy, or a restricted network) — and how the
-   harness's `gh` effects reach GitHub while the agent cannot.
-3. **node_modules sharing.** The worktree shares `MAIN_REPO`'s `node_modules` via symlink; the
-   mount set must include `MAIN_REPO` (ro) so the symlink resolves inside the container without a
-   per-step `pnpm install`.
-4. **Overhead.** Per-step container start cost (target: sub-second) and image caching across steps
-   in a cycle.
-5. **Effects boundary.** Precisely which operations stay host-side (git commit, `gh`, roadmap
-   mutations, worktree create/remove) vs. in-container (the agent turn only), reusing the existing
-   provider "no stateful git / no network CLI" append as the in-container instruction.
+### Execution profiles — split the LLM turn from command execution
 
-## Staging
+The "agent turn" and "the commands the agent runs" have different needs:
 
-1. Build the primitive: the `pelaggio-runner` image + a `run-contained` wrapper implementing the
-   contract. Spike the cred + network mechanics.
-2. Apply to **review (#214)** first — validate a native, non-`--admin` merge end-to-end.
-3. Extend to **authoring** — wire the step-provider seam to `run-contained`; validate a full cycle
-   with the implement step contained.
-4. Fold in **#240**; retire redundant per-provider sandbox flags where the container supersedes
-   them.
+- **LLM API turn:** reaches the broker (auth), no repo command execution.
+- **Test/build/verify:** runs untrusted, injection-reachable code — needs **no credential and no
+  network at all**. Run these in a stricter, network-`none`, credential-free profile.
 
-## Invariants (target-state)
+### Trusted boundary code — the PR tree is data, never the executor
 
-- The container is the blast-radius boundary: agent code never runs on the bare host with host
-  credentials or filesystem. The harness owns git + roadmap/forge effects host-side; the container
-  runs only the agent turn.
-- One provider-agnostic contract (FS / network / creds / env / lifecycle) — not per-provider
-  sandbox flags. Providers see a uniform contained execution.
-- Credentials are mounted read-only into the execution boundary, never inherited by the bare agent
-  process (advances #176; composes with #237).
+The wrapper, the container **image (pinned by digest)**, the review entrypoint, and the provider CLI
+come from a **trusted source — installed `pelaggio` / `main`**, never the checked-out PR tree. A PR
+must not be able to rewrite its own container invocation (drop mounts, add `--privileged`, change the
+proxy). For the review gate specifically: **never `npx pelaggio` from the PR's `node_modules`**; run
+the pinned harness with a **sanitized `PATH`** and project-local hooks/config/`core.hooksPath`
+disabled; the PR tree is mounted ro as data. The review *workflow itself* must be un-modifiable by the
+PR (run from the base ref, pin actions by SHA).
+
+### Container hardening & lifecycle
+
+`--userns`, **drop all caps**, `no-new-privileges`, pinned seccomp/AppArmor, **read-only rootfs** +
+tmpfs scratch, `--pids-limit` + memory/CPU/disk/log-size caps (a hostile test can fork-bomb / fill
+disk), **no Podman socket**, no host `HOME`, explicit `--env` list (never `--env-host`). Ephemeral
+(`--rm`); SIGTERM→SIGKILL on abort/timeout; a **framed stdout protocol + host watchdog** so cost/park
+accounting and `parkExit()` still fire when a turn is killed mid-stream.
+
+## Provider specifics
+
+- **Claude is in-process today** — `step-runner.ts` runs the Agent SDK in-process with `PreToolUse`/
+  plan-polish hooks, *not* a CLI spawn. Containerizing it forces a CLI/ACP shape and moves those
+  hooks. **Containerize the CLI providers (codex, grok) first**; Claude either stays host-side
+  initially or its hooks re-home to host-observed FS policy. Do not assume `spawn(cli)` covers Claude.
+- **Keep per-provider sandboxes (`codex -s workspace-write`, grok `--sandbox`) as defense-in-depth**
+  until the container contract is proven under adversarial tests — do not retire them early.
+
+## Runner posture
+
+- **Review: ephemeral GitHub-hosted (or an explicitly disposable VM) + metered key.** Not a
+  self-hosted box with real creds.
+- **Authoring / self-hosted:** if used, require **ephemeral runners** (or per-job VM reset), image
+  **digest pinning** + build-in-CI + cosign/attest (never `:latest` on the runner), cache separation,
+  and cleanup verification — a persistent runner can be poisoned (images/caches/volumes/systemd-user).
+
+## Consumers
+
+- **#214:** decoupled. Native status is available now by re-enabling the GHA review job (metered);
+  the subscription-cost contained review is a later, separate step gated on the trusted-binary split
+  and the broker.
+- **#176 (creds outside the process):** the broker **is** this — elevated from open question to the
+  primitive.
+- **#240 (grok sandbox):** folds in eventually, but grok's `--sandbox` stays as defense-in-depth.
+- **#237 (env allowlist):** enforced as the explicit `--env` list at the boundary.
+
+## Open questions → spike order (reordered: hardest/riskiest first)
+
+1. **Broker + egress proxy + cred mechanics** on a throwaway/disposable env with an **API key** — the
+   load-bearing spike. Prove: container reaches *only* the proxy; hostile in-container binaries cannot
+   exfil via raw TCP/UDP/DNS/CONNECT; the agent never reads a reusable token; the proxy fails closed.
+2. **Authoring `implement`** with **file-only mounts** + the **trusted-binary** launch; resolve the
+   worktree-`.git` write path and the absolute-symlink/path-remap node_modules reality; host-side
+   commit of a declared write-set; framed protocol + park-on-SIGKILL.
+3. **Review contained** — only after the trusted-binary split and broker are proven; and only if the
+   subscription-cost benefit justifies leaving ephemeral GHA.
+4. Performance: measure p50/p95 cold/warm start with the real mount set; decide **per-cycle** container
+   (`podman exec` per turn, with proven state reset) vs per-step `run`. Drop "sub-second" as a gate.
+5. Ergonomics: support matrix (**Linux native | macOS `podman machine` VM — different mount/net/UID,
+   design explicitly | unsupported**); `run-contained --self-test` (fail closed on a failed contract
+   probe) and `--debug` (retain container, print the exact `podman run` line); **no silent host
+   fallback** in production modes.
+
+## Invariants (target-state — precise and testable)
+
+- The agent **never holds a reusable credential**: the broker injects ephemeral tokens; CI uses
+  spend-capped API keys. (advances #176)
+- The only network the container can reach is the **fail-closed host proxy**; `gh`/GitHub egress is
+  host-side only.
+- The **boundary code + image are trusted** (installed `pelaggio`/`main` + pinned digest), never the
+  PR tree; the review workflow is un-modifiable by the PR.
+- The **host is the sole committer and effects owner**, enforced by capability denial (no git-remote
+  creds / no `gh` / declared write-set), not by a prompt.
+- **Mounts are the TCB:** minimal, explicit, host secrets excluded; worktrees are siblings outside MAIN.
+- The container bounds **host FS/env and account-via-readable-token**, **not** container escape
+  (residual: escape → runner user, paired with spend caps so an escape yields little).
