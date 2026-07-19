@@ -1,5 +1,11 @@
 import { appendFileSync } from "node:fs";
+import { makeSecretScrubber } from "./secret-hygiene.js";
 import type { CycleStatus, StepEmit, StepEvent } from "./types.js";
+
+// Redact credential-shaped strings and secret env-var values from the verbose file transcript
+// before it lands on disk (#237 / TC-014). This is the sink where raw agent stdout is captured
+// (see TC-001 known_limits), so scrub-before-write here covers every driver's emitted output.
+const scrubTranscript = makeSecretScrubber();
 
 // ── TUI-enabled detection ──────────────────────────────────────────────
 
@@ -299,7 +305,7 @@ export function createStepRenderer(opts: StepRendererOpts): StepEmit {
 			}
 		: fileVerbose && logPath
 			? (s): void => {
-					appendFileSync(logPath, stripAnsi(s));
+					appendFileSync(logPath, scrubTranscript(stripAnsi(s)));
 				}
 			: (_s): void => {};
 

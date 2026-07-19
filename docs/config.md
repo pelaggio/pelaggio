@@ -541,6 +541,28 @@ throws into the run. This is the **local** counterpart to the API-funded CI
 workflow (`.github/workflows/pr-review-revise.yml`); see
 [docs/pr-review.md](./pr-review.md) for which path is active.
 
+## Spawned-agent env allowlist
+
+Driver subprocesses (codex today, grok next) run work influenced by untrusted
+repo/issue/PR text. To stop a prompt-injected step from reading credentials, they
+are spawned with a **deny-by-default environment**: only a fixed allowlist
+(`PATH`, `HOME`, locale/cert vars) plus any names you add here is forwarded — the
+child never inherits the full parent environment (issue #237, TC-014).
+
+Subscription auth keeps working out of the box because codex/grok read their
+tokens from files under `HOME`. Add a var only when a driver needs it in the
+environment — e.g. an API key for key-based auth:
+
+```yaml
+security:
+  env-allowlist: [OPENAI_API_KEY, XAI_API_KEY]
+```
+
+`security.env-allowlist` must be an array of strings. Independently, captured
+driver stderr and the verbose `.dev/*.log` transcript are **secret-scrubbed
+before write**: credential-shaped strings (JWTs, provider keys, tokens) and the
+values of secret-named env vars are replaced with `[REDACTED]`.
+
 ## Notifications
 
 Unattended runs have no outbound signal by default — you learn a cycle parked,

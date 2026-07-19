@@ -22,6 +22,6 @@ Numbered from the security audit's implicit-decision candidates.
 | 0007 | Publish = signed tag + provenance on self-hosted runner | accepted | `TC-005` |
 | [0008](./0008-control-plane-fail-closed.md) | Control plane fails closed (auth required / loopback-only) | proposed | `TC-010` |
 | 0009 | Claims are git branches; no registry | accepted | — |
-| 0010 | Secrets protected by convention + gitignore; minimal child env | proposed (hardening) | `TC-001`, `TC-014` |
+| [0010](./0010-agent-env-allowlist-and-log-scrub.md) | Deny-by-default child env allowlist + secret-scrubbed logs | accepted | `TC-001`, `TC-014` |
 
 *Status vocabulary:* `proposed` (decided, not yet implemented) · `accepted` (implemented) · `superseded`.

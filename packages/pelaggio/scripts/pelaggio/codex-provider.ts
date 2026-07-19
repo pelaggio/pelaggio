@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CONFIG, REPO, resolveProviderBin, resolveStepSettings, type StepSettings } from "./config.js";
 import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseWaitFlag, resolveParkReset } from "./helpers.js";
+import { buildAgentEnv, makeSecretScrubber } from "./secret-hygiene.js";
 import type { StepProvider } from "./step-runner.js";
 import { composeSystemAppend, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "./step-runner-shared.js";
 import { MUTATING_TOOLS, toolBrief } from "./tui.js";
@@ -383,7 +384,10 @@ const runStep: StepProvider["runStep"] = async (name, prompt, opts, emit) => {
 	const tmp = mkdtempSync(join(tmpdir(), "pelaggio-codex-"));
 	const outputPath = join(tmp, "last-message.txt");
 	const args = ["exec", "--json", "-C", opts.cwd, "-s", "workspace-write", "-o", outputPath, ...(codexModel ? ["-m", codexModel] : []), "-"];
-	const child = spawn(resolveProviderBin(CONFIG, "codex", "codex"), args, { cwd: opts.cwd, stdio: ["pipe", "pipe", "pipe"] });
+	// Deny-by-default env: the child gets only the allowlisted vars, never the full parent env, so
+	// a prompt-injected step cannot read/echo credentials it was never given (#237 / TC-014).
+	const scrub = makeSecretScrubber();
+	const child = spawn(resolveProviderBin(CONFIG, "codex", "codex"), args, { cwd: opts.cwd, stdio: ["pipe", "pipe", "pipe"], env: buildAgentEnv({ allow: CONFIG.security.envAllowlist }) });
 
 	try {
 		const events: JsonObject[] = [];
@@ -446,7 +450,7 @@ const runStep: StepProvider["runStep"] = async (name, prompt, opts, emit) => {
 		const built = buildCodexStepResult(name, events, {
 			exitCode: spawnError && exit.code === 0 ? 1 : exit.code,
 			signal: exit.signal,
-			stderr: spawnError?.message || stderr,
+			stderr: scrub(spawnError?.message || stderr),
 			timedOut,
 			outputLastMessage,
 			now: Date.now(),
