@@ -190,7 +190,7 @@ export const RECOVERABLE_ERRORS = ["plan needs rethink", "parked", "transient sd
  *  #80 widens this union (and the `PROVIDER_NAMES` validation array in `config.ts`)
  *  to register a second provider. The runtime names array lives in `config.ts`,
  *  mirroring `ShipTargetName` / `SHIP_TARGET_NAMES`. */
-export type ProviderName = "claude" | "codex";
+export type ProviderName = "claude" | "codex" | "grok";
 
 // ── Ship targets ───────────────────────────────────────────────────────
 

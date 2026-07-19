@@ -4,6 +4,7 @@ import type { HookInput, HookJSONOutput, SDKAssistantMessage, SDKRateLimitEvent,
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { codexProvider } from "./codex-provider.js";
 import { CONFIG, REPO, resolveStepSettings } from "./config.js";
+import { grokProvider } from "./grok-provider.js";
 import { classifyStepError, isRefusal, looksLikeStalledAsk, type MainCheckoutDeltaObserver, parseBlockedReason, parseWaitFlag, resolveParkReset } from "./helpers.js";
 import { composeSystemAppend, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "./step-runner-shared.js";
 import { MUTATING_TOOLS, toolBrief } from "./tui.js";
@@ -474,6 +475,7 @@ export const claudeProvider: StepProvider = { name: "claude", runStep: claudeRun
 const PROVIDERS: Record<ProviderName, StepProvider> = {
 	claude: claudeProvider,
 	codex: codexProvider,
+	grok: grokProvider,
 };
 
 /** Look up a registered provider. Throws on an unknown name — defense-in-depth for
