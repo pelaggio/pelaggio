@@ -113,12 +113,26 @@ export interface ResolvedConfig {
 }
 
 export type ProviderDiversityPolicy = "off" | "prefer" | "require";
+export type AuthoringFindingClass = "security" | "data-loss" | "correctness-regression" | "judgment";
+export type AuthoringBlockingBar = "must-fix";
+export type ReviewSlot = { id: string; provider: "claude" | "grok"; model?: string } | { id: string; provider: "codex"; codexModel?: string };
+export interface AuthoringReviewConfig {
+	enabled: boolean;
+	reviewers: ReviewSlot[];
+	judge: ReviewSlot;
+	blockingBar: AuthoringBlockingBar;
+	maxPasses: 2;
+	maxRevisions: 1;
+	budgetCap: number;
+	providerDiversity: "prefer";
+}
 export interface ReviewConfig {
 	runner: ReviewRunner;
 	statuslessAfter: string;
 	maxPasses: number;
 	budgetCap: number;
 	providerDiversity: ProviderDiversityPolicy;
+	authoring: AuthoringReviewConfig;
 }
 
 const DEFAULT_GITHUB_ROADMAP: GithubRoadmapConfig = {
@@ -182,7 +196,27 @@ export const DEFAULTS = {
 	// default-on does nothing for every markdown/direct-push consumer. `revise.local: false` is
 	// the off-switch, mirroring the CI `AUTOPILOT_AUTO_REVISE=false` off-switch.
 	revise: { local: true },
-	review: { runner: "ci", statuslessAfter: "2h", maxPasses: 1, budgetCap: 20, providerDiversity: "off" },
+	review: {
+		runner: "ci",
+		statuslessAfter: "2h",
+		maxPasses: 1,
+		budgetCap: 20,
+		providerDiversity: "off",
+		authoring: {
+			enabled: false,
+			reviewers: [
+				{ id: "claude", provider: "claude" },
+				{ id: "codex", provider: "codex" },
+				{ id: "grok", provider: "grok" },
+			],
+			judge: { id: "judge", provider: "claude" },
+			blockingBar: "must-fix",
+			maxPasses: 2,
+			maxRevisions: 1,
+			budgetCap: 75,
+			providerDiversity: "prefer",
+		},
+	},
 	confinement: { allowDirtyMain: false },
 	// Notifications off by default (empty url). Enabling only `notify.url` turns on every
 	// event with the `json` format; `format: ntfy` + a topic URL gives ntfy.sh pushes.
@@ -205,6 +239,23 @@ const isNumber = (v: unknown): v is number => typeof v === "number" && Number.is
 const isEffort = (v: unknown): v is Effort => v === "low" || v === "medium" || v === "high" || v === "xhigh" || v === "max";
 const isString = (v: unknown): v is string => typeof v === "string";
 const isReviewRunner = (v: unknown): v is ReviewRunner => v === "ci" || v === "local";
+
+function parseReviewSlot(value: unknown, label: string, configPath: string, fallbackId?: string): ReviewSlot {
+	if (!isPlainObject(value)) throw new Error(`${configPath}: expected \`${label}\` to be a map`);
+	const id = value.id ?? fallbackId;
+	if (!isString(id) || id.trim() === "") throw new Error(`${configPath}: expected \`${label}.id\` to be a non-empty string`);
+	if (!isProviderName(value.provider)) throw new Error(`${configPath}: expected \`${label}.provider\` to be one of ${PROVIDER_NAMES.join("|")}`);
+	if (value.provider === "codex") {
+		if (value.model !== undefined) throw new Error(`${configPath}: \`${label}.model\` cannot be used with codex; use codex-model`);
+		const codexModel = value["codex-model"];
+		if (codexModel !== undefined && (!isString(codexModel) || codexModel.trim() === "")) throw new Error(`${configPath}: expected \`${label}.codex-model\` to be a non-empty string`);
+		return { id, provider: "codex", ...(codexModel ? { codexModel } : {}) };
+	}
+	if (value["codex-model"] !== undefined) throw new Error(`${configPath}: \`${label}.codex-model\` is only valid for codex`);
+	const model = value.model;
+	if (model !== undefined && (!isString(model) || model.trim() === "")) throw new Error(`${configPath}: expected \`${label}.model\` to be a non-empty string`);
+	return { id, provider: value.provider, ...(model ? { model } : {}) };
+}
 
 function mergeStepRecord<T>(defaults: Record<Step, T>, override: unknown, section: string, validate: (v: unknown) => v is T, configPath: string): Record<Step, T> {
 	if (override === undefined) return { ...defaults };
@@ -503,6 +554,11 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 	let reviewMaxPasses: number = DEFAULTS.review.maxPasses;
 	let reviewBudgetCap: number = DEFAULTS.review.budgetCap;
 	let reviewProviderDiversity: ProviderDiversityPolicy = DEFAULTS.review.providerDiversity;
+	let reviewAuthoring: AuthoringReviewConfig = {
+		...DEFAULTS.review.authoring,
+		reviewers: DEFAULTS.review.authoring.reviewers.map((slot) => ({ ...slot })),
+		judge: { ...DEFAULTS.review.authoring.judge },
+	};
 	const reviewBlock = yml.review;
 	if (reviewBlock !== undefined) {
 		if (!isPlainObject(reviewBlock)) {
@@ -537,6 +593,25 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 			if (providerDiversity !== "off" && providerDiversity !== "prefer" && providerDiversity !== "require")
 				throw new Error(`${configPath}: expected \`review.provider-diversity\` to be one of off|prefer|require, got ${JSON.stringify(providerDiversity)}`);
 			reviewProviderDiversity = providerDiversity;
+		}
+		const authoring = reviewBlock.authoring;
+		if (authoring !== undefined) {
+			if (!isPlainObject(authoring)) throw new Error(`${configPath}: expected \`review.authoring\` to be a map`);
+			if (authoring.enabled !== undefined && typeof authoring.enabled !== "boolean") throw new Error(`${configPath}: expected \`review.authoring.enabled\` to be a boolean`);
+			if (authoring["max-passes"] !== undefined && authoring["max-passes"] !== 2) throw new Error(`${configPath}: \`review.authoring.max-passes\` must be 2`);
+			if (authoring["max-revisions"] !== undefined && authoring["max-revisions"] !== 1) throw new Error(`${configPath}: \`review.authoring.max-revisions\` must be 1`);
+			if (authoring["blocking-bar"] !== undefined && authoring["blocking-bar"] !== "must-fix") throw new Error(`${configPath}: \`review.authoring.blocking-bar\` must be must-fix`);
+			if (authoring["provider-diversity"] !== undefined && authoring["provider-diversity"] !== "prefer") throw new Error(`${configPath}: \`review.authoring.provider-diversity\` must be prefer`);
+			const cap = authoring["budget-cap"] ?? reviewAuthoring.budgetCap;
+			if (typeof cap !== "number" || !Number.isFinite(cap) || cap <= 0) throw new Error(`${configPath}: expected \`review.authoring.budget-cap\` to be a finite positive number`);
+			let reviewers = reviewAuthoring.reviewers;
+			if (authoring.reviewers !== undefined) {
+				if (!Array.isArray(authoring.reviewers) || authoring.reviewers.length === 0) throw new Error(`${configPath}: expected \`review.authoring.reviewers\` to be a non-empty array`);
+				reviewers = authoring.reviewers.map((slot, index) => parseReviewSlot(slot, `review.authoring.reviewers[${index}]`, configPath, `reviewer-${index + 1}`));
+				if (new Set(reviewers.map((slot) => slot.id)).size !== reviewers.length) throw new Error(`${configPath}: review.authoring reviewer ids must be unique`);
+			}
+			const judge = authoring.judge === undefined ? reviewAuthoring.judge : parseReviewSlot(authoring.judge, "review.authoring.judge", configPath, "judge");
+			reviewAuthoring = { enabled: (authoring.enabled as boolean | undefined) ?? reviewAuthoring.enabled, reviewers, judge, blockingBar: "must-fix", maxPasses: 2, maxRevisions: 1, budgetCap: cap, providerDiversity: "prefer" };
 		}
 	}
 
@@ -653,7 +728,7 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		roadmapLinear,
 		park: { autoResume: parkAutoResume, maxWait: parkMaxWait, unknownResetWait: parkUnknownResetWait },
 		revise: { local: reviseLocal },
-		review: { runner: reviewRunner, statuslessAfter: reviewStatuslessAfter, maxPasses: reviewMaxPasses, budgetCap: reviewBudgetCap, providerDiversity: reviewProviderDiversity },
+		review: { runner: reviewRunner, statuslessAfter: reviewStatuslessAfter, maxPasses: reviewMaxPasses, budgetCap: reviewBudgetCap, providerDiversity: reviewProviderDiversity, authoring: reviewAuthoring },
 		confinement: { allowDirtyMain: confinementAllowDirtyMain },
 		security: { envAllowlist: securityEnvAllowlist },
 		notify: { url: notifyUrl, format: notifyFormat, events: notifyEvents },
@@ -693,6 +768,18 @@ export function resolveStepSettings(config: ResolvedConfig, profile: string, ste
 		codexModel: config.profileCodexModels[profile]?.[step] ?? config.profileCodexModels[profile]?.[inheritedStep],
 		provider: config.profileProviders[profile]?.[step] ?? config.profileProviders[profile]?.[inheritedStep] ?? DEFAULT_PROVIDER,
 	};
+}
+
+/** Resolve authoring seats without mutating the selected profile or global step maps. */
+export function resolveAuthoringReviewConfig(config: ResolvedConfig, profile: string): AuthoringReviewConfig {
+	const policy = config.review.authoring;
+	const reviewerDefaults = resolveStepSettings(config, profile, "pr-review");
+	const judgeDefaults = resolveStepSettings(config, profile, "shakedown-code");
+	const fill = (slot: ReviewSlot, defaults: StepSettings): ReviewSlot => {
+		if (slot.provider === "codex") return { ...slot, ...((slot.codexModel ?? defaults.codexModel) ? { codexModel: slot.codexModel ?? defaults.codexModel } : {}) };
+		return { ...slot, ...((slot.model ?? defaults.model) ? { model: slot.model ?? defaults.model } : {}) };
+	};
+	return { ...policy, reviewers: policy.reviewers.map((slot) => fill(slot, reviewerDefaults)), judge: fill(policy.judge, judgeDefaults) };
 }
 
 /**

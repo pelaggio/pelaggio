@@ -38,8 +38,27 @@ You are checked out at the PR head with full history; `origin/main` is the merge
 
 ## Mode selection
 
-If the `Arguments:` line contains `--red-team`, run **Red-team mode** below.
+If the `Arguments:` line contains `--authoring-loop`, run **Authoring-loop mode** below.
+If it contains `--red-team`, run **Red-team mode** below.
 Otherwise run **Standard mode**. Both modes emit the same versioned report.
+
+## Authoring-loop mode
+
+This is a fresh read-only review of the current authoring worktree. Inspect
+`git diff main...HEAD` and the changed files in full. Each finding must claim one class:
+`security`, `data-loss`, `correctness-regression`, or `judgment`. Use a safety class
+whenever the claimed failure can compromise security, lose data, or regress correctness;
+the Judge may not silently downgrade it. End with exactly this v2 block and nothing after it:
+
+```text
+AUTHORING_REVIEW_FINDINGS
+{"schemaVersion":2,"summary":"Concise single-line summary.","findings":[{"severity":"must-fix","class":"correctness-regression","message":"Concrete single-line finding.","path":"src/file.ts","line":1}]}
+END_AUTHORING_REVIEW_FINDINGS
+```
+
+The JSON has exactly `schemaVersion`, `summary`, and `findings`; each finding has
+exactly `severity`, `class`, `message`, and optional `path`/`line`. This mode does
+not use the CI v1 block below.
 
 ## Red-team mode — independent adversarial pass
 

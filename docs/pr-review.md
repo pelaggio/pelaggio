@@ -11,6 +11,25 @@ the pipeline's own work *in-context*, before ship. This gate is a fresh SDK sess
 that reads the PR diff cold — the same shape that has caught things the in-context
 review missed.
 
+## Authoring-time adversarial loop
+
+`review.authoring.enabled: true` replaces the single `shakedown-code` session with
+two bounded cold-review/Judge passes and at most one author revision. Omission never
+clears a carried fingerprint; malformed or incomplete Judge output fails closed.
+Safety-class survivors always hard-block. Judgment dissent may continue only for PR
+ship targets; direct-push parks.
+
+The `prefer` diversity policy records the run as softened whenever the author,
+reviewers, and Judge span fewer than three distinct providers (a same-provider
+degrade). It reflects the configured seats, not a runtime credential probe. Each run
+writes an atomic, unbound `.dev/review-records/<run-id>.json`; PR targets append the
+same deterministic record to the PR body. This is a review record, not an
+identity-bound attestation.
+
+Local interactive execution may use official CLI subscription authentication or API
+keys. Unattended, CI, and shared execution require keys. Configuration does not probe
+credentials in advance.
+
 ## Runner modes
 
 The required `review` context is **always a commit status** — posted by exactly one

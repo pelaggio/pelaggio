@@ -318,7 +318,8 @@ export function grokServerRequestResponse(req: AcpIncomingRequest): unknown {
 }
 
 const runStep: StepProvider["runStep"] = async (name, prompt, opts, emit) => {
-	const settings = resolveStepSettings(CONFIG, opts.profile, name);
+	const resolved = resolveStepSettings(CONFIG, opts.profile, name);
+	const settings = { ...resolved, model: opts.executionOverride?.model ?? resolved.model, codexModel: opts.executionOverride?.codexModel ?? resolved.codexModel };
 	const { budget, turns: baseTurns, effort } = settings;
 	const turns = opts.maxTurnsOverride ?? baseTurns;
 	const model = selectGrokModel(settings);

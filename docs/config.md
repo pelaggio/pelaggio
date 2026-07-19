@@ -57,6 +57,18 @@ revise:                         # local revise sweep — auto-fix red-review PRs
 review:                         # PR review poster (issue #84)
   runner: ci                    # default: ci. values: ci | local
   statusless-after: 2h          # local-mode diagnostic threshold
+  authoring:                    # opt-in pre-ship adversarial loop
+    enabled: false
+    provider-diversity: prefer
+    blocking-bar: must-fix
+    max-passes: 2
+    max-revisions: 1
+    budget-cap: 75
+    reviewers:
+      - { id: claude, provider: claude }
+      - { id: codex, provider: codex, codex-model: gpt-5-codex }
+      - { id: grok, provider: grok }
+    judge: { provider: claude, model: claude-opus-4-8 }
 
 notify:                         # outbound run-outcome webhook (default: disabled)
   url: ""                       # default: "" (disabled). Set a webhook/topic URL to enable.

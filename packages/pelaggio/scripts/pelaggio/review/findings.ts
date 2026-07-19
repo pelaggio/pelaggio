@@ -13,6 +13,21 @@ export interface ReviewFindingsReport {
 	findings: ReviewFinding[];
 }
 
+export type ReviewFindingClass = "security" | "data-loss" | "correctness-regression" | "judgment";
+export interface AuthoringReviewFinding extends ReviewFinding {
+	class: ReviewFindingClass;
+}
+export interface AuthoringReviewReport {
+	schemaVersion: 2;
+	summary: string;
+	findings: AuthoringReviewFinding[];
+}
+export type JudgeRuling = "fixable-blocker" | "unfixable-blocker" | "judgment-dissent";
+export interface JudgeReport {
+	schemaVersion: 1;
+	decisions: Array<{ candidateId: string; decision: ReviewVerificationDecision; rationale: string; class: ReviewFindingClass; ruling?: JudgeRuling }>;
+}
+
 export type ReviewVerificationDecision = "refuted" | "survives";
 
 export interface ReviewVerificationReport {
@@ -96,9 +111,63 @@ export class ReviewFindingsParseError extends Error {
 
 const REPORT_RE = /(?:^|\n)REVIEW_FINDINGS[ \t]*\n([\s\S]*?)\nEND_REVIEW_FINDINGS(?=\n|$)/g;
 const VERIFICATION_RE = /(?:^|\n)REVIEW_VERIFICATION[ \t]*\n([\s\S]*?)\nEND_REVIEW_VERIFICATION(?=\n|$)/g;
+const AUTHORING_RE = /(?:^|\n)AUTHORING_REVIEW_FINDINGS[ \t]*\n([\s\S]*?)\nEND_AUTHORING_REVIEW_FINDINGS(?=\n|$)/g;
+const JUDGE_RE = /(?:^|\n)AUTHORING_REVIEW_JUDGE[ \t]*\n([\s\S]*?)\nEND_AUTHORING_REVIEW_JUDGE(?=\n|$)/g;
 const SEVERITIES: readonly ReviewFindingSeverity[] = ["must-fix", "nice", "note"];
 const VERIFICATION_DECISIONS: readonly ReviewVerificationDecision[] = ["refuted", "survives"];
 const CANDIDATE_ID_RE = /^C[1-9]\d*$/;
+const FINDING_CLASSES: readonly ReviewFindingClass[] = ["security", "data-loss", "correctness-regression", "judgment"];
+const JUDGE_RULINGS: readonly JudgeRuling[] = ["fixable-blocker", "unfixable-blocker", "judgment-dissent"];
+
+function parseDelimited(text: string, regex: RegExp, label: string): Record<string, unknown> {
+	const matches = [...text.matchAll(regex)];
+	if (matches.length !== 1) throw new ReviewFindingsParseError(matches.length === 0 ? `${label} block not found` : `multiple ${label} blocks found`);
+	try {
+		const value: unknown = JSON.parse(matches[0][1]);
+		if (!isRecord(value)) throw new ReviewFindingsParseError(`${label} must be a JSON object`);
+		return value;
+	} catch (error) {
+		if (error instanceof ReviewFindingsParseError) throw error;
+		throw new ReviewFindingsParseError(`${label} block is not valid JSON`, { cause: error });
+	}
+}
+
+export function parseAuthoringReviewFindings(text: string): AuthoringReviewReport {
+	const parsed = parseDelimited(text, AUTHORING_RE, "authoring review findings");
+	assertKeys(parsed, ["schemaVersion", "summary", "findings"], ["schemaVersion", "summary", "findings"], "authoring review findings");
+	if (parsed.schemaVersion !== 2) throw new ReviewFindingsParseError("unsupported authoring review schemaVersion");
+	if (!Array.isArray(parsed.findings)) throw new ReviewFindingsParseError("authoring review findings must be an array");
+	return {
+		schemaVersion: 2,
+		summary: parseSingleLine(parsed.summary, "summary"),
+		findings: parsed.findings.map((value, index) => {
+			if (!isRecord(value) || !FINDING_CLASSES.includes(value.class as ReviewFindingClass)) throw new ReviewFindingsParseError(`review finding ${index + 1} has an invalid class`);
+			const { class: _class, ...v1 } = value;
+			const finding = parseFinding(v1, index);
+			return { ...finding, class: value.class as ReviewFindingClass };
+		}),
+	};
+}
+
+export function parseJudgeReport(text: string): JudgeReport {
+	const parsed = parseDelimited(text, JUDGE_RE, "authoring review Judge");
+	assertKeys(parsed, ["schemaVersion", "decisions"], ["schemaVersion", "decisions"], "authoring review Judge report");
+	if (parsed.schemaVersion !== 1 || !Array.isArray(parsed.decisions)) throw new ReviewFindingsParseError("invalid authoring review Judge schema");
+	return {
+		schemaVersion: 1,
+		decisions: parsed.decisions.map((value, index) => {
+			if (!isRecord(value)) throw new ReviewFindingsParseError(`Judge decision ${index + 1} must be an object`);
+			assertKeys(value, ["candidateId", "decision", "rationale", "class", "ruling"], ["candidateId", "decision", "rationale", "class"], `Judge decision ${index + 1}`);
+			const { class: _class, ruling: _ruling, ...verification } = value;
+			const base = parseVerificationDecision(verification, index);
+			if (!FINDING_CLASSES.includes(value.class as ReviewFindingClass)) throw new ReviewFindingsParseError(`Judge decision ${index + 1} has an invalid class`);
+			if (value.ruling !== undefined && !JUDGE_RULINGS.includes(value.ruling as JudgeRuling)) throw new ReviewFindingsParseError(`Judge decision ${index + 1} has an invalid ruling`);
+			if (value.ruling === "judgment-dissent" && value.class !== "judgment") throw new ReviewFindingsParseError("judgment-dissent is only valid for judgment findings");
+			if (base.decision === "survives" && value.ruling === undefined) throw new ReviewFindingsParseError(`surviving Judge decision ${base.candidateId} requires a ruling`);
+			return { ...base, class: value.class as ReviewFindingClass, ...(value.ruling ? { ruling: value.ruling as JudgeRuling } : {}) };
+		}),
+	};
+}
 
 export function parseReviewFindings(text: string): ReviewFindingsReport {
 	const matches = [...text.matchAll(REPORT_RE)];

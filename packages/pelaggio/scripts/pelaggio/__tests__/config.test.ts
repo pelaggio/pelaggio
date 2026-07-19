@@ -554,27 +554,48 @@ describe("loadConfig — review", () => {
 	it("defaults to the safe one-pass review policy when unset", () => {
 		const repo = tmpRepo();
 		const cfg = loadConfig({ repo, configPath: join(repo, ".pelaggio.yml") });
-		assert.deepEqual(cfg.review, { runner: "ci", statuslessAfter: "2h", maxPasses: 1, budgetCap: 20, providerDiversity: "off" });
+		assert.deepEqual(cfg.review, DEFAULTS.review);
 	});
 
 	it("parses review.runner: local and review.statusless-after", () => {
 		const repo = tmpRepo();
 		const path = writeYml(repo, "review:\n  runner: local\n  statusless-after: 45m\n");
 		const cfg = loadConfig({ repo, configPath: path });
-		assert.deepEqual(cfg.review, { runner: "local", statuslessAfter: "45m", maxPasses: 1, budgetCap: 20, providerDiversity: "off" });
+		assert.deepEqual(cfg.review, { ...DEFAULTS.review, runner: "local", statuslessAfter: "45m" });
 	});
 
 	it("allows a partial review override", () => {
 		const repo = tmpRepo();
 		const path = writeYml(repo, "review:\n  statusless-after: 1h30m\n");
 		const cfg = loadConfig({ repo, configPath: path });
-		assert.deepEqual(cfg.review, { runner: "ci", statuslessAfter: "1h30m", maxPasses: 1, budgetCap: 20, providerDiversity: "off" });
+		assert.deepEqual(cfg.review, { ...DEFAULTS.review, statuslessAfter: "1h30m" });
 	});
 
 	it("parses bounded convergence policy", () => {
 		const repo = tmpRepo();
 		const path = writeYml(repo, "review:\n  max-passes: 3\n  budget-cap: 40.5\n  provider-diversity: require\n");
-		assert.deepEqual(loadConfig({ repo, configPath: path }).review, { runner: "ci", statuslessAfter: "2h", maxPasses: 3, budgetCap: 40.5, providerDiversity: "require" });
+		assert.deepEqual(loadConfig({ repo, configPath: path }).review, { ...DEFAULTS.review, maxPasses: 3, budgetCap: 40.5, providerDiversity: "require" });
+	});
+
+	it("parses the bounded authoring policy and provider-specific models", () => {
+		const repo = tmpRepo();
+		const path = writeYml(
+			repo,
+			"review:\n  authoring:\n    enabled: true\n    budget-cap: 30\n    reviewers:\n      - id: cdx\n        provider: codex\n        codex-model: gpt-review\n      - id: grk\n        provider: grok\n        model: grok-review\n    judge:\n      provider: claude\n      model: claude-judge\n",
+		);
+		assert.deepEqual(loadConfig({ repo, configPath: path }).review.authoring, {
+			enabled: true,
+			reviewers: [
+				{ id: "cdx", provider: "codex", codexModel: "gpt-review" },
+				{ id: "grk", provider: "grok", model: "grok-review" },
+			],
+			judge: { id: "judge", provider: "claude", model: "claude-judge" },
+			blockingBar: "must-fix",
+			maxPasses: 2,
+			maxRevisions: 1,
+			budgetCap: 30,
+			providerDiversity: "prefer",
+		});
 	});
 
 	it("rejects every convergence policy boundary", () => {
