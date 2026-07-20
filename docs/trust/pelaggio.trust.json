@@ -117,6 +117,22 @@
       ]
     },
     {
+      "destination": "cli-chat-proxy.grok.com",
+      "data_categories": [
+        "prompts",
+        "source_context",
+        "read_file_context"
+      ],
+      "required": false,
+      "retention": "governed by the provider's policy",
+      "opt_out": "configure a different model provider for the step",
+      "role": "sub_processor",
+      "evidence": [
+        "TC-006",
+        "TC-014"
+      ]
+    },
+    {
       "destination": "github",
       "data_categories": [
         "issues",

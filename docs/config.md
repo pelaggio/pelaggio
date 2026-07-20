@@ -231,9 +231,10 @@ models:
         shakedown-code: grok
 ```
 
-The `grok` provider drives `grok agent stdio` over ACP (issue #136); it needs the
-grok CLI installed and authed (`grok login`, SuperGrok / X Premium+), and its
-off-PATH binary pinned via `providers.grok.bin` (see [Provider binaries](#provider-binaries)).
+The `grok` provider drives `grok agent stdio` over ACP (issue #136). Follow the
+[Grok operator guide](./grok.md) for the pinned install, authentication,
+Landlock preflight, metering, and trust limits. Its off-PATH binary must be
+pinned via `providers.grok.bin` (see [Provider binaries](#provider-binaries)).
 A `grok` model id can be pinned in that profile's `<step>` slot (a `claude-*` id is
 never forwarded); otherwise the grok CLI default applies.
 
@@ -291,6 +292,9 @@ doing nothing. `bin` must be a non-empty string. The `claude` provider runs
 in-process (no subprocess), so a `bin` override for it has no effect.
 
 ### Grok sandbox
+
+The end-to-end setup and supervised fallback procedure live in the
+[Grok operator guide](./grok.md); this section is the configuration reference.
 
 On Linux, Grok's custom sandbox requires both `bubblewrap` and kernel Landlock support (Landlock
 must appear in `/sys/kernel/security/lsm`). Every Grok step normally installs and explicitly
