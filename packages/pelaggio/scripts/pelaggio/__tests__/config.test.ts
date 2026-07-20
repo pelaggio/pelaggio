@@ -641,7 +641,7 @@ describe("loadConfig — notify", () => {
 		assert.deepEqual(cfg.notify, {
 			url: "",
 			format: "json",
-			events: ["parked", "failed", "shipped", "pr-opened", "shipwrecked", "review-stranded"],
+			events: ["parked", "failed", "shipped", "pr-opened", "shipwrecked", "review-stranded", "decision"],
 		});
 	});
 
