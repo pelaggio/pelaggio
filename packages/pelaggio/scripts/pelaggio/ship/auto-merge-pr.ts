@@ -8,9 +8,11 @@ export const autoMergePr: ShipTarget = {
 			"Mode: auto-merge-pr.",
 			"The harness owns squash, push, PR upsert, and enabling auto-merge. Inspect the branch as needed,",
 			"but do not mutate git state and do not run network or roadmap commands. Do NOT merge manually.",
-			"Emit exactly one marked decision block for the harness:",
+			`Write the PR body (markdown, any length) to the file \`.dev/ship/pr-body-${ctx.itemId}.md\` inside the worktree`,
+			"(create the directory if needed), then emit exactly one marked decision block that references it by",
+			"worktree-relative path. Keep the JSON to short scalar fields only — do NOT inline the body:",
 			"SHIP_DECISION",
-			`{"target":"auto-merge-pr","itemId":"${ctx.itemId}","headBranch":"<current-branch>","prTitle":"<title>","prBody":"<body>"}`,
+			`{"target":"auto-merge-pr","itemId":"${ctx.itemId}","headBranch":"<current-branch>","prTitle":"<title>","prBodyFile":".dev/ship/pr-body-${ctx.itemId}.md"}`,
 			"END_SHIP_DECISION",
 		].join(" ");
 	},

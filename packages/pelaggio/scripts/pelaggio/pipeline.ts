@@ -1135,7 +1135,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			? {}
 			: {
 					effects: (result) => {
-						const decision = parseShipDecisionEffect(result, { itemId: itemId!, target: target.name });
+						const decision = parseShipDecisionEffect(result, { itemId: itemId!, target: target.name, worktree: worktree! });
 						return [{ ...decision, ...(reviewRecordMarkdown ? { prBody: `${decision.prBody}\n\n${reviewRecordMarkdown}` } : {}) }];
 					},
 				}),
