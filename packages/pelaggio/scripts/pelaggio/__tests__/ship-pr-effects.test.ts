@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 import type { ShipDecisionEffect } from "../effects.js";
 import type { GhRunner } from "../roadmap/github-issues.js";
@@ -59,24 +62,47 @@ function makeGh(responses: Array<{ match: string[]; stdout?: string; stderr?: st
 }
 
 describe("parseShipDecisionEffect", () => {
-	it("parses a valid marked JSON block", () => {
-		const parsed = parseShipDecisionEffect(step(`SHIP_DECISION\n{"target":"pull-request","headBranch":"feat/tool-99","prTitle":"Ship TOOL-99","prBody":"Body"}\nEND_SHIP_DECISION`), { itemId: "TOOL-99", target: "pull-request" });
+	const wt = mkdtempSync(join(tmpdir(), "pelaggio-ship-decision-"));
 
+	it("parses a valid marked JSON block (inline prBody fallback)", () => {
+		const parsed = parseShipDecisionEffect(step(`SHIP_DECISION\n{"target":"pull-request","headBranch":"feat/tool-99","prTitle":"Ship TOOL-99","prBody":"Body"}\nEND_SHIP_DECISION`), { itemId: "TOOL-99", target: "pull-request", worktree: wt });
 		assert.deepEqual(parsed, decision());
 	});
 
-	it("rejects missing block, bad JSON, item mismatch, and target mismatch", () => {
-		assert.throws(() => parseShipDecisionEffect(step("done"), { itemId: "TOOL-99", target: "pull-request" }), /not found/);
-		assert.throws(() => parseShipDecisionEffect(step("SHIP_DECISION\nnope\nEND_SHIP_DECISION"), { itemId: "TOOL-99", target: "pull-request" }), /not valid JSON/);
-		assert.throws(
-			() =>
-				parseShipDecisionEffect(step(`SHIP_DECISION\n{"target":"pull-request","itemId":"TOOL-1","headBranch":"feat/tool-99","prTitle":"Ship","prBody":"Body"}\nEND_SHIP_DECISION`), {
-					itemId: "TOOL-99",
-					target: "pull-request",
-				}),
-			/itemId/,
-		);
-		assert.throws(() => parseShipDecisionEffect(step(`SHIP_DECISION\n{"target":"auto-merge-pr","headBranch":"feat/tool-99","prTitle":"Ship","prBody":"Body"}\nEND_SHIP_DECISION`), { itemId: "TOOL-99", target: "pull-request" }), /target/);
+	it("reads the PR body from a worktree-relative prBodyFile (the #303 large-body path)", () => {
+		mkdirSync(join(wt, ".dev", "ship"), { recursive: true });
+		const body = 'Big body with "quotes", newlines\nand `backticks` — the JSON-breaking case.';
+		writeFileSync(join(wt, ".dev", "ship", "pr-body-TOOL-99.md"), body);
+		const parsed = parseShipDecisionEffect(step(`SHIP_DECISION\n{"target":"pull-request","headBranch":"feat/tool-99","prTitle":"Ship TOOL-99","prBodyFile":".dev/ship/pr-body-TOOL-99.md"}\nEND_SHIP_DECISION`), {
+			itemId: "TOOL-99",
+			target: "pull-request",
+			worktree: wt,
+		});
+		assert.equal(parsed.prBody, body);
+	});
+
+	it("fails closed on a prBodyFile that escapes the worktree, is absolute, is missing, or is a symlink", () => {
+		const dec = (file: string) => `SHIP_DECISION\n{"target":"pull-request","headBranch":"feat/tool-99","prTitle":"Ship","prBodyFile":${JSON.stringify(file)}}\nEND_SHIP_DECISION`;
+		const exp = { itemId: "TOOL-99", target: "pull-request" as const, worktree: wt };
+		assert.throws(() => parseShipDecisionEffect(step(dec("../escape.md")), exp), /escapes the worktree/);
+		assert.throws(() => parseShipDecisionEffect(step(dec("/etc/passwd")), exp), /absolute/);
+		assert.throws(() => parseShipDecisionEffect(step(dec("nope.md")), exp), /not found/);
+		const link = join(wt, "link.md");
+		try {
+			symlinkSync("/etc/hostname", link);
+		} catch {
+			// symlink creation may be denied on some hosts; the assertion below is then skipped.
+		}
+		if (existsSync(link)) assert.throws(() => parseShipDecisionEffect(step(dec("link.md")), exp), /regular file/);
+	});
+
+	it("rejects missing block, bad JSON, item mismatch, target mismatch, and no body", () => {
+		const exp = { itemId: "TOOL-99", target: "pull-request" as const, worktree: wt };
+		assert.throws(() => parseShipDecisionEffect(step("done"), exp), /not found/);
+		assert.throws(() => parseShipDecisionEffect(step("SHIP_DECISION\nnope\nEND_SHIP_DECISION"), exp), /not valid JSON/);
+		assert.throws(() => parseShipDecisionEffect(step(`SHIP_DECISION\n{"target":"pull-request","itemId":"TOOL-1","headBranch":"feat/tool-99","prTitle":"Ship","prBody":"Body"}\nEND_SHIP_DECISION`), exp), /itemId/);
+		assert.throws(() => parseShipDecisionEffect(step(`SHIP_DECISION\n{"target":"auto-merge-pr","headBranch":"feat/tool-99","prTitle":"Ship","prBody":"Body"}\nEND_SHIP_DECISION`), exp), /target/);
+		assert.throws(() => parseShipDecisionEffect(step(`SHIP_DECISION\n{"target":"pull-request","headBranch":"feat/tool-99","prTitle":"Ship"}\nEND_SHIP_DECISION`), exp), /prBodyFile.*or an inline prBody/);
 	});
 });
 
