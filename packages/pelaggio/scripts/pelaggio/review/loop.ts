@@ -170,9 +170,10 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 					const decision = report?.decisions.find((item) => item.candidateId === candidate.candidateId);
 					if (!decision) return true;
 					if (decision.ruling) rulings.set(candidate.candidateId, decision.ruling);
-					// #272: a single Judge must not be able to refute away a safety-class must-fix. It only
-					// leaves `carried` via a fix reviewers stop rediscovering, or an explicit unfixable-blocker
-					// ruling (still hard-blocks) — never a bare "refuted" decision.
+					// #272: a single Judge must not be able to refute away a safety-class must-fix. Once raised
+					// it is retained every pass (carried is re-seeded above, so reviewer omission can't drop it
+					// either) and the run parks for a human — a lone Judge's `refuted`/reclassify decision never
+					// clears it; the loop does not self-clear a safety must-fix.
 					if (candidate.finding.severity === "must-fix" && SAFETY_CLASSES.includes(candidate.finding.class)) return true;
 					return decision.decision === "survives";
 				})

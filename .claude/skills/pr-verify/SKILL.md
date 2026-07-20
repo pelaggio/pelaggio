@@ -21,9 +21,10 @@ only for class `judgment`. You may elevate or omit a class, but never downgrade 
 reviewer-claimed safety class, and never refute one: a reviewer-claimed **safety class
 (security / data-loss / correctness-regression) must-fix cannot be cleared by refutation
 or reclassification** — the orchestrator retains it regardless of a `refuted` decision.
-Mark it `survives` with `fixable-blocker` (the author can resolve it) or
-`unfixable-blocker` (it can't); it only clears once a later pass's reviewers stop finding
-it. End with exactly:
+Mark it `survives` with `fixable-blocker` (the author should resolve it in revision) or
+`unfixable-blocker` (it can't be). Either way the orchestrator keeps it as a blocker and
+the run parks for a human to confirm the fix — the loop never self-clears a safety
+must-fix. End with exactly:
 
 ```text
 AUTHORING_REVIEW_JUDGE

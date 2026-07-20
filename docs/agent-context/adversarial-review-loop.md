@@ -99,8 +99,10 @@ gate on the blocking set. Non-convergent exits (ceiling / dissent / hard-block) 
 1. **Safety floor (never ships on dissent).** Any finding in the **security / data-loss /
    correctness-regression** class that a reviewer raised is **Hard-block → park**, *not* Dissent, until
    fixed — a single Judge's `refuted` decision does not clear it (omission ≠ refutation — the
-   `pr-review` invariant — **and neither is a lone Judge's say-so**, #272); it clears only once a later
-   pass's reviewers stop rediscovering it. Ship-on-dissent is permitted for judgment-band findings
+   `pr-review` invariant — **and neither is a lone Judge's say-so**, #272). Once raised it is retained
+   every pass (carried blockers are re-seeded, so reviewer omission cannot drop it either) and the run
+   **parks for human adjudication** — the loop never self-clears a safety must-fix, even after the
+   author's revision addresses it. Ship-on-dissent is permitted for judgment-band findings
    **only**. A single-model judge must not be able to reclassify a real safety finding as "dissent" and
    ship it.
 2. **Condition Dissent on `ship.target`.** For **`direct-push`**, dissent defaults to **park/block**
