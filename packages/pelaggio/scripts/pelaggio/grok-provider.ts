@@ -6,12 +6,13 @@
 // stdio), NOT a one-shot JSON stream, because the `-p` surface omits tool-call/file-change events
 // (#238); the ACP `session/update` stream carries them. See docs/agent-context/acp-grok-protocol.md.
 //
-// Confinement note: this drives grok in its worktree cwd with permission auto-allow and a
-// worktree/no-git-network prompt append. Hard filesystem/network sandboxing is #240; until then a
-// grok step is opt-in (no default profile routes a step to grok).
+// Confinement note: every run explicitly requests Pelaggio's fail-closed custom Grok profile.
+// Grok's strict base confines project access to cwd; child networking and built-in web tools are
+// disabled. Permission prompts remain auto-allowed because the profile is the security boundary.
 
 import { type AcpIncomingRequest, AcpRpcError, spawnAcpAgent } from "./acp-client.js";
 import { CONFIG, REPO, resolveProviderBin, resolveStepSettings, type StepSettings } from "./config.js";
+import { buildGrokArgs, installGrokSandboxProfile } from "./grok-sandbox.js";
 import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseWaitFlag, resolveParkReset } from "./helpers.js";
 import { buildAgentEnv, makeSecretScrubber } from "./secret-hygiene.js";
 import type { StepProvider } from "./step-runner.js";
@@ -22,14 +23,14 @@ import { ensureWorktreeDeps } from "./worktree-deps.js";
 
 type JsonObject = Record<string, unknown>;
 
-/** grok's egress endpoint (SuperGrok/X Premium+ subscription proxy) — the network-allowlist target
- *  for the managed sandbox profile (#240). Documented here so the confinement work has one anchor. */
+/** The sole in-process operational destination observed in the Grok 0.2.103 live capture. Grok's
+ * custom profile cannot express an L7 allowlist; release conformance locks this assumption. */
 export const GROK_EGRESS_ENDPOINT = "cli-chat-proxy.grok.com";
 
 /**
  * Grok-provider-only prompt append. Like codex, the harness owns git + the roadmap/forge effects
  * and commits the step's work afterward; grok must stay inside its worktree and not run stateful
- * git or network CLIs. (Until #240's enforced sandbox, this instruction is the confinement.)
+ * git or network CLIs. The managed Grok profile enforces the filesystem/child-network boundary.
  */
 export const GROK_SANDBOX_APPEND = [
 	"## Sandbox: stay in the worktree; the harness owns git and network",
@@ -317,7 +318,7 @@ export function grokServerRequestResponse(req: AcpIncomingRequest): unknown {
 	return { outcome: { outcome: "selected", optionId } };
 }
 
-const runStep: StepProvider["runStep"] = async (name, prompt, opts, emit) => {
+export const runStep: StepProvider["runStep"] = async (name, prompt, opts, emit) => {
 	const resolved = resolveStepSettings(CONFIG, opts.profile, name);
 	const settings = { ...resolved, model: opts.executionOverride?.model ?? resolved.model, codexModel: opts.executionOverride?.codexModel ?? resolved.codexModel };
 	const { budget, turns: baseTurns, effort } = settings;
@@ -338,12 +339,21 @@ const runStep: StepProvider["runStep"] = async (name, prompt, opts, emit) => {
 	const systemAppend = composeSystemAppend({ isWorktree, cwd: opts.cwd, repo: REPO, planBlockActive: name === "implement" });
 	const finalPrompt = `${prompt}\n\n${systemAppend}\n\n${GROK_SANDBOX_APPEND}`;
 	const scrub = makeSecretScrubber();
-	const args = ["agent", ...(model ? ["-m", model] : []), "--reasoning-effort", grokEffort(effort), "stdio"];
+	const agentEnv = buildAgentEnv({ allow: CONFIG.security.envAllowlist });
+	try {
+		await installGrokSandboxProfile({ home: agentEnv.HOME });
+	} catch (error) {
+		const message = `Grok sandbox profile preparation failed: ${error instanceof Error ? error.message : String(error)}`;
+		emit({ type: "sdk_error", message });
+		emit({ type: "done", ok: false, subtype: "error_confinement", cost: 0, turns: 0, elapsed: Date.now() - t0 });
+		return { ok: false, subtype: "error_confinement", text: message, fullText: "", cost: 0, costEstimated: true, turns: 0 };
+	}
+	const args = buildGrokArgs({ ...(model ? { model } : {}), reasoningEffort: grokEffort(effort) });
 	const { conn, done, kill } = spawnAcpAgent({
 		bin: resolveProviderBin(CONFIG, "grok", "grok"),
 		args,
 		cwd: opts.cwd,
-		env: buildAgentEnv({ allow: CONFIG.security.envAllowlist }),
+		env: agentEnv,
 		timeoutMs: grokTimeoutMs(turns),
 		...(opts.signal ? { signal: opts.signal } : {}),
 	});

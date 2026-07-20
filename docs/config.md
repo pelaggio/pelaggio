@@ -289,6 +289,40 @@ provider that is not yet wired in fails loudly at startup rather than silently
 doing nothing. `bin` must be a non-empty string. The `claude` provider runs
 in-process (no subprocess), so a `bin` override for it has no effect.
 
+### Grok sandbox
+
+Every Grok step installs and explicitly selects the namespaced
+`pelaggio-worktree-v1` custom profile in `~/.grok/sandbox.toml`; unrelated user
+profiles and file permissions are preserved. There is no off switch. Profile
+installation or application failure refuses the step instead of retrying
+without a sandbox.
+
+The profile extends Grok's `strict` policy, so project/source access is limited
+to the invocation CWD. Grok still needs its executable, system libraries and
+certificates, and its own authentication/session/sandbox-event state under
+`~/.grok`. Linux read-deny needs `bubblewrap`; macOS uses Seatbelt. Grok
+0.2.103 only enforces `restrict_network` for child commands on Linux.
+
+Pelaggio also passes `--disable-web-search`, disabling Grok's built-in web
+search/fetch. Grok 0.2.103 has no hostname-firewall setting for its in-process
+model client: `cli-chat-proxy.grok.com` is the sole destination observed and
+locked by release conformance, not an OS-enforced allowlist.
+
+After a Grok upgrade, capture DNS names and/or TLS SNI for the same probe run
+with a privileged tool such as `tcpdump`, normalized without paths, payloads,
+queries, or authentication. Then run:
+
+```bash
+PELAGGIO_GROK_LIVE_CONFORMANCE=1 \
+PELAGGIO_GROK_NETWORK_CAPTURE=/path/to/normalized-capture.txt \
+npx tsx --test --test-name-pattern='live Grok' \
+  packages/pelaggio/scripts/pelaggio/__tests__/grok-sandbox.test.ts
+```
+
+This release gate requires Linux, Grok 0.2.103, `bubblewrap`, valid Grok auth,
+network access, and packet-capture privileges. A destination change requires a
+security review; do not update the fixture as a routine snapshot refresh.
+
 ## Pinning a profile per run
 
 `--profile <name>` pins the model/provider profile for the entire run, where
