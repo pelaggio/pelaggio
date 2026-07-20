@@ -1,4 +1,5 @@
 import type { ShipContext, ShipResult, ShipTarget } from "../types.js";
+import { shipBodyFile } from "./decision.js";
 import { extractPrUrl } from "./pull-request.js";
 
 export const autoMergePr: ShipTarget = {
@@ -8,11 +9,12 @@ export const autoMergePr: ShipTarget = {
 			"Mode: auto-merge-pr.",
 			"The harness owns squash, push, PR upsert, and enabling auto-merge. Inspect the branch as needed,",
 			"but do not mutate git state and do not run network or roadmap commands. Do NOT merge manually.",
-			`Write the PR body (markdown, any length) to the file \`.dev/ship/pr-body-${ctx.itemId}.md\` inside the worktree`,
-			"(create the directory if needed), then emit exactly one marked decision block that references it by",
-			"worktree-relative path. Keep the JSON to short scalar fields only — do NOT inline the body:",
+			`Write the PR body (markdown, up to 512 KiB) to exactly \`${shipBodyFile(ctx.itemId)}\` inside the worktree`,
+			"(create the directory if needed; it must be a plain file at that exact path, not a symlink), then emit",
+			"exactly one marked decision block referencing it. Keep the JSON to short scalar fields only — do NOT",
+			"inline the body:",
 			"SHIP_DECISION",
-			`{"target":"auto-merge-pr","itemId":"${ctx.itemId}","headBranch":"<current-branch>","prTitle":"<title>","prBodyFile":".dev/ship/pr-body-${ctx.itemId}.md"}`,
+			`{"target":"auto-merge-pr","itemId":"${ctx.itemId}","headBranch":"<current-branch>","prTitle":"<title>","prBodyFile":"${shipBodyFile(ctx.itemId)}"}`,
 			"END_SHIP_DECISION",
 		].join(" ");
 	},

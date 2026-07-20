@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -81,19 +81,40 @@ describe("parseShipDecisionEffect", () => {
 		assert.equal(parsed.prBody, body);
 	});
 
-	it("fails closed on a prBodyFile that escapes the worktree, is absolute, is missing, or is a symlink", () => {
+	it("rejects any prBodyFile that is not the exact item-scoped path (no arbitrary-file read, #312)", () => {
 		const dec = (file: string) => `SHIP_DECISION\n{"target":"pull-request","headBranch":"feat/tool-99","prTitle":"Ship","prBodyFile":${JSON.stringify(file)}}\nEND_SHIP_DECISION`;
 		const exp = { itemId: "TOOL-99", target: "pull-request" as const, worktree: wt };
-		assert.throws(() => parseShipDecisionEffect(step(dec("../escape.md")), exp), /escapes the worktree/);
-		assert.throws(() => parseShipDecisionEffect(step(dec("/etc/passwd")), exp), /absolute/);
-		assert.throws(() => parseShipDecisionEffect(step(dec("nope.md")), exp), /not found/);
-		const link = join(wt, "link.md");
-		try {
-			symlinkSync("/etc/hostname", link);
-		} catch {
-			// symlink creation may be denied on some hosts; the assertion below is then skipped.
+		for (const bad of ["../escape.md", "/etc/passwd", ".env", ".dev/ship/other.md", ".dev/ship/pr-body-OTHER.md"]) {
+			assert.throws(() => parseShipDecisionEffect(step(dec(bad)), exp), /must be exactly/, `expected reject for ${bad}`);
 		}
-		if (existsSync(link)) assert.throws(() => parseShipDecisionEffect(step(dec("link.md")), exp), /regular file/);
+	});
+
+	it("fails closed on a symlinked path, a missing file, or an oversize body (#312)", () => {
+		const dec = `SHIP_DECISION\n{"target":"pull-request","headBranch":"feat/tool-99","prTitle":"Ship","prBodyFile":".dev/ship/pr-body-TOOL-99.md"}\nEND_SHIP_DECISION`;
+		const exp = (worktree: string) => ({ itemId: "TOOL-99", target: "pull-request" as const, worktree });
+
+		// Missing body file.
+		assert.throws(() => parseShipDecisionEffect(step(dec), exp(mkdtempSync(join(tmpdir(), "pelaggio-ship-missing-")))), /not found/);
+
+		// Ancestor-symlink escape: `.dev/ship` is a symlink to a directory outside the worktree, so the
+		// canonical path diverges from the lexical one even though the emitted path is the exact one.
+		const wtSym = mkdtempSync(join(tmpdir(), "pelaggio-ship-sym-"));
+		const outside = mkdtempSync(join(tmpdir(), "pelaggio-ship-outside-"));
+		writeFileSync(join(outside, "pr-body-TOOL-99.md"), "host secret");
+		mkdirSync(join(wtSym, ".dev"), { recursive: true });
+		let symlinked = true;
+		try {
+			symlinkSync(outside, join(wtSym, ".dev", "ship"));
+		} catch {
+			symlinked = false; // symlink creation may be denied on some hosts
+		}
+		if (symlinked) assert.throws(() => parseShipDecisionEffect(step(dec), exp(wtSym)), /symlink/);
+
+		// Oversize body (> 512 KiB).
+		const wtBig = mkdtempSync(join(tmpdir(), "pelaggio-ship-big-"));
+		mkdirSync(join(wtBig, ".dev", "ship"), { recursive: true });
+		writeFileSync(join(wtBig, ".dev", "ship", "pr-body-TOOL-99.md"), Buffer.alloc(512 * 1024 + 1, 0x61));
+		assert.throws(() => parseShipDecisionEffect(step(dec), exp(wtBig)), /exceeds/);
 	});
 
 	it("rejects missing block, bad JSON, item mismatch, target mismatch, and no body", () => {

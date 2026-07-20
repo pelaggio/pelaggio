@@ -1,5 +1,5 @@
-import { lstatSync, readFileSync, type Stats } from "node:fs";
-import { isAbsolute, relative, resolve } from "node:path";
+import { closeSync, fstatSync, openSync, readFileSync, realpathSync } from "node:fs";
+import { resolve } from "node:path";
 import { EffectsManifestError, type ShipDecisionEffect } from "../effects.js";
 import type { ShipTargetName, StepResult } from "../types.js";
 import { SHIP_TARGET_NAMES } from "./index.js";
@@ -8,6 +8,11 @@ const SHIP_DECISION_RE = /SHIP_DECISION\s*([\s\S]*?)\s*END_SHIP_DECISION/;
 // A PR body far past any real deliverable + appended review record. Bounds the file read.
 const MAX_PR_BODY_BYTES = 512 * 1024;
 
+/** The fixed, harness-owned location the ship worker writes the PR body to, relative to the worktree. */
+export function shipBodyFile(itemId: string): string {
+	return `.dev/ship/pr-body-${itemId}.md`;
+}
+
 export function parseShipDecisionEffect(step: StepResult, expected: { itemId: string; target: ShipTargetName; worktree: string }): ShipDecisionEffect {
 	const haystack = `${step.text}\n${step.fullText}`;
 	const match = haystack.match(SHIP_DECISION_RE);
@@ -15,7 +20,7 @@ export function parseShipDecisionEffect(step: StepResult, expected: { itemId: st
 
 	let parsed: unknown;
 	try {
-		parsed = JSON.parse(match[1]);
+		parsed = JSON.parse(match[1] ?? "");
 	} catch (e) {
 		throw new EffectsManifestError("invalid_manifest", "ship decision block is not valid JSON", { cause: e });
 	}
@@ -26,12 +31,20 @@ export function parseShipDecisionEffect(step: StepResult, expected: { itemId: st
 	if (!isNonEmptyString(parsed.headBranch)) throw new EffectsManifestError("invalid_manifest", "ship decision headBranch must be a non-empty string");
 	if (!isNonEmptyString(parsed.prTitle)) throw new EffectsManifestError("invalid_manifest", "ship decision prTitle must be a non-empty string");
 
-	// The PR body travels as a file inside the worktree (`prBodyFile`) so a large, quote/newline-heavy
-	// body never has to survive hand-escaped JSON emitted in prose (#303). A legacy inline `prBody` is
-	// still accepted as a fallback for small bodies / older skill prompts.
-	const prBody = isNonEmptyString(parsed.prBodyFile) ? readPrBodyFile(expected.worktree, parsed.prBodyFile) : isNonEmptyString(parsed.prBody) ? parsed.prBody : undefined;
+	// The PR body travels as a file at a fixed, harness-owned location inside the worktree so a large,
+	// quote/newline-heavy body never has to survive hand-escaped JSON in prose (#303). Constrained to
+	// that exact path — never an arbitrary worktree file — and read symlink-safe (#312). A legacy inline
+	// `prBody` is still accepted as a small-body fallback.
+	const expectedBodyFile = shipBodyFile(expected.itemId);
+	let prBody: string | undefined;
+	if (isNonEmptyString(parsed.prBodyFile)) {
+		if (parsed.prBodyFile !== expectedBodyFile) throw new EffectsManifestError("invalid_manifest", `ship decision prBodyFile must be exactly ${expectedBodyFile}, got ${String(parsed.prBodyFile)}`);
+		prBody = readPrBodyFile(expected.worktree, expectedBodyFile);
+	} else if (isNonEmptyString(parsed.prBody)) {
+		prBody = parsed.prBody;
+	}
 	if (prBody === undefined || prBody.trim() === "") {
-		throw new EffectsManifestError("invalid_manifest", "ship decision must provide a non-empty prBodyFile (worktree-relative path to the PR body) or an inline prBody");
+		throw new EffectsManifestError("invalid_manifest", `ship decision must provide a non-empty prBodyFile (exactly ${expectedBodyFile}) or an inline prBody`);
 	}
 
 	return {
@@ -44,23 +57,33 @@ export function parseShipDecisionEffect(step: StepResult, expected: { itemId: st
 	};
 }
 
-/** Read the PR body from a worktree-relative file, fail-closed on any path that escapes the worktree,
- *  is not a regular file (lstat rejects symlinks), or exceeds the size bound. */
+/** Read the PR body from the fixed worktree-owned scratch file, fail-closed on any symlink in the path
+ *  (the canonicalized path is compared to the lexical one, so an ancestor symlink can neither escape the
+ *  worktree nor redirect the read at host/secret files), a non-regular file, or one over the size bound.
+ *  Validation and consumption go through a single descriptor (open → fstat → read) so they refer to the
+ *  same object with no swap window (#312). */
 function readPrBodyFile(worktree: string, relPath: string): string {
-	if (isAbsolute(relPath)) throw new EffectsManifestError("invalid_manifest", `ship decision prBodyFile must be worktree-relative, not absolute: ${relPath}`);
-	const worktreeAbs = resolve(worktree);
-	const abs = resolve(worktreeAbs, relPath);
-	const rel = relative(worktreeAbs, abs);
-	if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) throw new EffectsManifestError("invalid_manifest", `ship decision prBodyFile escapes the worktree: ${relPath}`);
-	let stat: Stats;
+	const worktreeReal = realpathSync(worktree);
+	const lexical = resolve(worktreeReal, relPath);
+	let real: string;
 	try {
-		stat = lstatSync(abs);
+		real = realpathSync(lexical);
 	} catch {
 		throw new EffectsManifestError("invalid_manifest", `ship decision prBodyFile not found: ${relPath}`);
 	}
-	if (!stat.isFile()) throw new EffectsManifestError("invalid_manifest", `ship decision prBodyFile is not a regular file (symlinks are rejected): ${relPath}`);
-	if (stat.size > MAX_PR_BODY_BYTES) throw new EffectsManifestError("invalid_manifest", `ship decision prBodyFile exceeds ${MAX_PR_BODY_BYTES} bytes: ${relPath}`);
-	return readFileSync(abs, "utf-8");
+	// A symlink anywhere in the path makes the canonical path differ from the lexical one. The worker
+	// must write a plain regular file at the exact location; a symlink is how a compromised worker would
+	// escape confinement or point the read at host/secret files.
+	if (real !== lexical) throw new EffectsManifestError("invalid_manifest", `ship decision prBodyFile path must not contain a symlink: ${relPath}`);
+	const fd = openSync(real, "r");
+	try {
+		const stat = fstatSync(fd);
+		if (!stat.isFile()) throw new EffectsManifestError("invalid_manifest", `ship decision prBodyFile is not a regular file: ${relPath}`);
+		if (stat.size > MAX_PR_BODY_BYTES) throw new EffectsManifestError("invalid_manifest", `ship decision prBodyFile exceeds ${MAX_PR_BODY_BYTES} bytes: ${relPath}`);
+		return readFileSync(fd, "utf-8");
+	} finally {
+		closeSync(fd);
+	}
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
