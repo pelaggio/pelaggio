@@ -117,7 +117,7 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 	let carried: ReviewCandidate[] = [];
 	let notes: ReviewCandidate[] = [];
 	const passes: ReviewPassRecord[] = [];
-	if (configuredReviewers.length !== policy.reviewers.length || new Set(configuredReviewers.map((slot) => slot.provider)).size !== configuredReviewers.length) {
+	if (new Set(configuredReviewers.map((slot) => slot.provider)).size !== configuredReviewers.length) {
 		return { outcome: "hard-block", diversity: { state: "softened", explanation: "review seats must be distinct and must exclude the artifact author" }, passes, survivors: carried, notes, cost };
 	}
 	const distinctProviders = new Set([options.author.provider, policy.judge.provider, ...configuredReviewers.map((slot) => slot.provider)]);

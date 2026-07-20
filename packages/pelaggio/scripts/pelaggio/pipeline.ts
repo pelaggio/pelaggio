@@ -1,5 +1,5 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
-import { basename, extname, resolve } from "node:path";
+import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { basename, delimiter, extname, isAbsolute, join, resolve } from "node:path";
 import {
 	CONFIG,
 	CONFINEMENT_CONFIG,
@@ -15,6 +15,7 @@ import {
 	ROADMAP_SOURCE,
 	resolveAuthoringReviewConfig,
 	resolveDriverCandidates,
+	resolveProviderBin,
 	resolveStepSettings,
 	SHIP_TARGET,
 	STEPS,
@@ -697,16 +698,39 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		resolveDriverCandidates(CONFIG, profile, name).map((candidate) =>
 			candidate.provider === "codex" ? { provider: "codex", ...(candidate.codexModel ? { codexModel: candidate.codexModel } : {}) } : { provider: candidate.provider, ...(candidate.model ? { model: candidate.model } : {}) },
 		);
-	const available = (_candidate: DriverIdentity): boolean => true;
+	const available = (candidate: DriverIdentity): boolean => {
+		if (candidate.provider === "claude") return true;
+		const executable = resolveProviderBin(CONFIG, candidate.provider, candidate.provider);
+		const paths =
+			isAbsolute(executable) || executable.includes("/")
+				? [executable]
+				: (process.env.PATH ?? "")
+						.split(delimiter)
+						.filter(Boolean)
+						.map((directory) => join(directory, executable));
+		return paths.some((path) => {
+			try {
+				accessSync(path, constants.X_OK);
+				return true;
+			} catch {
+				return false;
+			}
+		});
+	};
 
 	let verdict: "APPROVE" | "REVISE" | "RETHINK" = "APPROVE";
 	let shakedownPlanText = "";
+
+	if (!assignment.authors.plan && shouldRun("shakedown-plan") && !shouldRun("plan")) {
+		const author = findLoggedArtifactAuthor(itemId!, "plan", opts.logPath ?? LOG_PATH);
+		if (author) recordArtifactAuthor(assignment, "plan", author);
+	}
 
 	if (shouldRun("plan")) {
 		const existingPlan = roadmap.resolvePlanPath({ id: itemId!, worktree: worktree! });
 		if (!opts.dryRun && existsSync(existingPlan)) {
 			log(`plan exists at ${existingPlan} — skipping plan generation`);
-			const author = findLoggedArtifactAuthor(itemId!, "plan");
+			const author = findLoggedArtifactAuthor(itemId!, "plan", opts.logPath ?? LOG_PATH);
 			if (author) recordArtifactAuthor(assignment, "plan", author);
 		} else {
 			const selected = selectAuthor(assignment, driverCandidates("plan"), available);
@@ -760,7 +784,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 
 	// ── Implement ──
 	if (!assignment.authors.implementation && shouldRun("shakedown-code") && !shouldRun("implement")) {
-		const author = findLoggedArtifactAuthor(itemId!, "implement");
+		const author = findLoggedArtifactAuthor(itemId!, "implement", opts.logPath ?? LOG_PATH);
 		if (author) recordArtifactAuthor(assignment, "implementation", author);
 	}
 
