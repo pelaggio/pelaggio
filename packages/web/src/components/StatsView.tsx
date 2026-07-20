@@ -50,7 +50,7 @@ export function StatsView() {
 	if (error) return <p className="text-red-700">Error loading stats: {error}</p>;
 	if (!stats) return <p className="text-slate-500">Loading…</p>;
 
-	const stepKeys = Array.from(new Set([...Object.keys(stats.costByStep), ...Object.keys(stats.avgRetriesByStep), ...Object.keys(stats.rethinkRateByStep)])).sort();
+	const stepKeys = Array.from(new Set([...Object.keys(stats.costByStep), ...Object.keys(stats.avgRetriesByStep), ...Object.keys(stats.maxTurnsRetriesByStep), ...Object.keys(stats.rethinkRateByStep)])).sort();
 	const totalTokens = stats.totalTokens.input + stats.totalTokens.output + stats.totalTokens.cacheRead + stats.totalTokens.cacheCreation;
 
 	return (
@@ -75,6 +75,7 @@ export function StatsView() {
 						<tr>
 							<th>Step</th>
 							<th>Avg retries</th>
+							<th>Turn-limit retries</th>
 							<th>Rethink rate</th>
 							<th>Cost</th>
 						</tr>
@@ -84,6 +85,7 @@ export function StatsView() {
 							<tr key={k}>
 								<td>{k}</td>
 								<td>{(stats.avgRetriesByStep[k] ?? 0).toFixed(2)}</td>
+								<td>{stats.maxTurnsRetriesByStep[k] ?? 0}</td>
 								<td>{((stats.rethinkRateByStep[k] ?? 0) * 100).toFixed(1)}%</td>
 								<td>{formatUsd(stats.costByStep[k] ?? 0)}</td>
 							</tr>
