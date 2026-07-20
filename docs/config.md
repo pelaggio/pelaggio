@@ -80,6 +80,7 @@ notify:                         # outbound run-outcome webhook (default: disable
     - pr-opened
     - shipwrecked
     - review-stranded
+    - decision
 
 roadmap:
   source: markdown              # default: markdown
@@ -636,11 +637,25 @@ failed, shipped, or opened a PR only by tailing `.dev/pelaggio-log.jsonl`. The
 terminal cycle, sent from deterministic orchestrator code *after* the pipeline
 returns, so a notification fires even when the agent step died mid-cycle.
 
+`decision` is separate from terminal-event precedence: every assistant `DECISION:`
+sentinel produces its own notification when the step ends. It is subscribed by
+default. Its payload carries the decision, item, step, durable source, log path,
+and timestamp; it does not synthesize cycle cost or completion fields.
+
+The canonical durable register is `docs/decisions.md`, distinct from the
+`docs/decisions/` ADR directory. Active and Resolved tables share the columns
+`Decision | Status | Chosen/leaning | Alternatives | Source | Date`. Sentinel
+rows start as `default-taken`; lifecycle tooling changes them to `resolved` or
+`resolved→ADR-nnnn`. Source is the best durable item, PR, or review-note
+reference. `npx pelaggio decisions archive-resolved --older-than 30d` moves
+resolved rows older than 30 days to `docs/archived/decisions.md` under the
+mutation lock.
+
 | Key             | Default        | Meaning                                                            |
 |-----------------|----------------|--------------------------------------------------------------------|
 | `notify.url`    | `""`           | Webhook / topic URL. Empty = **disabled** (a no-op; no network).   |
 | `notify.format` | `json`         | Wire format: `json` \| `ntfy`.                                     |
-| `notify.events` | *(all events)* | Which outcomes page you: `parked`, `failed`, `shipped`, `pr-opened`, `shipwrecked`, `review-stranded`. |
+| `notify.events` | *(all events)* | Which events page you: `parked`, `failed`, `shipped`, `pr-opened`, `shipwrecked`, `review-stranded`, `decision`. |
 
 ### Events
 

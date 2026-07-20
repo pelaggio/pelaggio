@@ -20,6 +20,7 @@ import {
 	STEPS,
 	WORKTREE_PREFIX,
 } from "./config.js";
+import { appendDecisions as appendDecisionsDefault } from "./decisions.js";
 import { dispatchStepEffects as dispatchStepEffectsDefault, type Effect, EffectsManifestError, writeEffectsManifest as writeEffectsManifestDefault } from "./effects.js";
 import { DEFAULT_FLOW_POLICY, type FlowPolicy } from "./flow-policy.js";
 import {
@@ -57,7 +58,7 @@ import {
 	stepIndex,
 	verifyShipLanded,
 } from "./helpers.js";
-import { type NotifyConfig, notifyCycle, notifyStrandedReview, sendNotification as sendNotificationDefault } from "./notify.js";
+import { type NotifyConfig, notifyCycle, notifyDecision as notifyDecisionEvent, notifyStrandedReview, sendNotification as sendNotificationDefault } from "./notify.js";
 import { buildFailClosedComment, runPrReviewGate } from "./pr-review-cli.js";
 import { runReviewLoop } from "./review/loop.js";
 import { type ReviewRecord, renderReviewRecord, writeReviewRecord } from "./review/record.js";
@@ -67,6 +68,7 @@ import { defaultGhRun, type GhRunner } from "./roadmap/github-issues.js";
 import { getRoadmapSource, type RoadmapSource } from "./roadmap/index.js";
 import { parseShipDecisionEffect } from "./ship/decision.js";
 import { commitStrayBookkeeping, getShipTarget, isAutonomousRemotePush, isShipTargetName, runShipBookkeeping as runShipBookkeepingDefault, SHIP_TARGET_NAMES } from "./ship/index.js";
+import { extractPrUrl } from "./ship/pull-request.js";
 import { runStep as runStepDefault } from "./step-runner.js";
 import { A, createStepRenderer, fmtElapsed, LiveStatus, StatusBar, TUI_ENABLED } from "./tui.js";
 import { type CycleResult, type CycleStatus, type Flags, type ParkSignal, type PipelineOpts, RECOVERABLE_ERRORS, type ShipTargetName, type Step, type StepLog, type StepResult } from "./types.js";
@@ -122,6 +124,7 @@ export interface PipelineDeps {
 	dispatchStepEffects?: typeof dispatchStepEffectsDefault;
 	/** Override the configured main-checkout confinement exception. */
 	allowDirtyMain?: boolean;
+	appendDecisions?: typeof appendDecisionsDefault;
 }
 
 export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, flags: Flags, deps: PipelineDeps = {}): Promise<CycleResult> {
@@ -137,6 +140,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	const writeEffectsManifest = deps.writeEffectsManifest ?? writeEffectsManifestDefault;
 	const dispatchStepEffects = deps.dispatchStepEffects ?? dispatchStepEffectsDefault;
 	const allowDirtyMain = deps.allowDirtyMain ?? CONFINEMENT_CONFIG.allowDirtyMain;
+	const appendDecisions = deps.appendDecisions ?? appendDecisionsDefault;
 	// The cycle's dollar ceiling. A turn-exhaustion retry (issue #33) is funded up to the
 	// step's configured budget again, so the budget guard skips a retry we can't fully fund.
 	// A non-finite value (unset / unparseable --budget) disables the dollar gate.
@@ -360,6 +364,30 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			if (reverted.length > 0) log(`reverted plan-polish edits: ${reverted.join(", ")}`);
 		}
 
+		if (result.decisions?.length) {
+			const prUrl = name === "ship" || name === "shipwreck" ? extractPrUrl(result) : undefined;
+			const source = prUrl ?? (itemId ? (ROADMAP_SOURCE === "github-issues" && ROADMAP_GITHUB.ghRepo ? `https://github.com/${ROADMAP_GITHUB.ghRepo}/issues/${itemId.replace(/^\D+/, "")}` : itemId) : `unclaimed:${runIdBase}`);
+			try {
+				await appendDecisions(mainRepo, {
+					...(itemId ? { itemId } : {}),
+					runId: runIdBase,
+					step: name,
+					attempt,
+					decisions: result.decisions.map((decision, occurrence) => ({ decision, occurrence })),
+					source,
+				});
+			} catch (error) {
+				log(`⚠ decisions: ${error instanceof Error ? error.message : String(error)}`);
+			}
+			for (const decision of result.decisions) {
+				try {
+					await opts.notifyDecision?.({ itemId, decision, step: name, source, logPath: opts.logPath ?? LOG_PATH });
+				} catch (error) {
+					log(`⚠ decision notification: ${error instanceof Error ? error.message : String(error)}`);
+				}
+			}
+		}
+
 		const filesChanged = filesChangedSince(cwd, preSha);
 
 		steps.push({
@@ -377,6 +405,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			...(result.outputTail ? { outputTail: result.outputTail } : {}),
 			...(filesChanged.length > 0 ? { filesChanged } : {}),
 			...(result.stalledAsk ? { stalledAsk: true } : {}),
+			...(result.decisions?.length ? { decisions: result.decisions } : {}),
 		});
 		if (opts.workerStatus) opts.workerStatus.cost += result.cost;
 		return result;
@@ -1238,6 +1267,11 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			if (!notifyEnabled) return;
 			await notifyCycle(notifyCfg, result, logPath, { send, resolveTitle });
 		};
+		const decisionNotifier: PipelineOpts["notifyDecision"] = notifyEnabled
+			? async (input) => {
+					await notifyDecisionEvent(notifyCfg, input, { send });
+				}
+			: undefined;
 
 		// Resume mode
 		if (flags.resume) {
@@ -1280,6 +1314,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					dryRun: false,
 					workerStatus: status,
 					liveStatus,
+					...(decisionNotifier ? { notifyDecision: decisionNotifier } : {}),
 					...(noWorktree ? { noWorktree: true } : {}),
 					...(signal ? { signal } : {}),
 				},
@@ -1386,6 +1421,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						workerStatus: status,
 						logPath,
 						liveStatus,
+						...(decisionNotifier ? { notifyDecision: decisionNotifier } : {}),
 						...(noWorktree ? { noWorktree: true } : {}),
 						...(signal ? { signal } : {}),
 					},
@@ -1549,6 +1585,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						dryRun: false,
 						workerStatus: status,
 						liveStatus,
+						...(decisionNotifier ? { notifyDecision: decisionNotifier } : {}),
 						...(signal ? { signal } : {}),
 					},
 					parkSignal,
@@ -1630,6 +1667,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						workerStatus: st,
 						logPath: resumeLogPath,
 						liveStatus,
+						...(decisionNotifier ? { notifyDecision: decisionNotifier } : {}),
 						...(noWorktree ? { noWorktree: true } : {}),
 						...(signal ? { signal } : {}),
 					},

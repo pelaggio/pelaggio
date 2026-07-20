@@ -55,7 +55,11 @@ Run `git branch --list 'feat/*'`. For branches not associated with a worktree:
 - If merged to main → safe to delete. Report but don't auto-delete.
 - If not merged and >14 days old → flag as potentially abandoned
 
-## 4. Pelaggio log review
+## 4. Decision register hygiene
+
+From `MAIN_REPO`, run `npx pelaggio decisions archive-resolved --older-than 30d`. Report the moved count. The deterministic locked command archives only resolved rows; leave unresolved and `default-taken` rows untouched and do not edit the Markdown register manually.
+
+## 5. Pelaggio log review
 
 If `{MAIN_REPO}/.dev/pelaggio-log.jsonl` exists, read it and report:
 - Total cycles run, total cost
@@ -73,7 +77,7 @@ Report any errors. These should be zero — if not, flag as blocking for pelaggi
 ## Output
 
 Summary table:
-- Roadmaps: X active, Y archived this run
+- Roadmaps: X active, Y archived this run; decisions: Z resolved rows archived
 - Worktrees: X active, Y stale (flagged)
 - Branches: X active, Y merged (safe to delete)
 - Pelaggio: X cycles, Y shipped, $Z spent

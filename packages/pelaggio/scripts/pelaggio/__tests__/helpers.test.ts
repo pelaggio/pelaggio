@@ -26,6 +26,7 @@ import {
 	looksLikeRefusal,
 	looksLikeStalledAsk,
 	parseBlockedReason,
+	parseDecisions,
 	parseDeferredItems,
 	parsePickItem,
 	parsePickResult,
@@ -38,6 +39,20 @@ import {
 	reviewFindingsPreamble,
 	verifyShipLanded,
 } from "../helpers.js";
+
+describe("parseDecisions", () => {
+	it("retains tolerant, ordered sentinels and parses canonical segments", () => {
+		assert.deepEqual(parseDecisions("tool DECISION: ignored\n  DECISION: storage fork | chose: files | alternatives: sqlite | remote\nDECISION:\n decision: lower"), [
+			{ fork: "storage fork", chosen: "files", alternatives: "sqlite | remote" },
+			{ fork: "(unspecified decision)" },
+		]);
+	});
+
+	it("keeps partial and non-final sentinels", () => {
+		assert.deepEqual(parseDecisions("DECISION: first | chose: yes\nmore text\nDECISION: malformed | pipe"), [{ fork: "first", chosen: "yes" }, { fork: "malformed | pipe" }]);
+	});
+});
+
 import type { RoadmapSource } from "../roadmap/types.js";
 
 function makeFeatRepo(): string {

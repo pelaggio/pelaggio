@@ -443,6 +443,17 @@ export function createStepRenderer(opts: StepRendererOpts): StepEmit {
 				break;
 			}
 
+			case "decision": {
+				spinner?.stop();
+				const fork = event.decision.fork.slice(0, 160);
+				if (ttyVerbose) ln(`${A.yellow("⚑")} ${fork}`);
+				// The flag is always human-visible, independent of verbose/trace, and is
+				// still copied to a configured transcript.
+				if (!ttyVerbose) process.stderr.write(`⚑ ${fork}\n`);
+				if (!ttyVerbose && fileVerbose && logPath) appendFileSync(logPath, `⚑ ${fork}\n`);
+				break;
+			}
+
 			case "done": {
 				spinner?.stop();
 				if (ttyVerbose) {

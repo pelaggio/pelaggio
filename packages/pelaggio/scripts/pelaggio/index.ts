@@ -6,6 +6,8 @@
  */
 
 export { loadConfig } from "./config.js";
+export type { AppendDecisionsInput, DecisionAppendInput, DecisionWriteResult } from "./decisions.js";
+export { appendDecisions, archiveResolvedDecisions, resolveDecision } from "./decisions.js";
 export type { CreateEventWriterOptions, ReadEventLogOptions } from "./flow-events.js";
 export { createEventWriter, foldEvents, MAX_EVENT_DIAGNOSTIC_DETAILS, MAX_FLOW_EVENT_BYTES, PELAGGIO_EVENT_TYPE_SET, PELAGGIO_EVENT_TYPES, projectEvents, readEventLog } from "./flow-events.js";
 export type { FlowCandidate, FlowDependency, FlowEligibleCandidate, FlowEvaluation, FlowItemVerdict, FlowPolicy, FlowReadiness, FlowSnapshot, FlowVerdictReason, QuickScopeInput } from "./flow-policy.js";
@@ -19,6 +21,7 @@ export type {
 	CoreFlowEvent,
 	CycleCompletedEvent,
 	CycleResult,
+	Decision,
 	EventLogDiagnostic,
 	EventLogDiagnosticKind,
 	EventLogDiagnostics,

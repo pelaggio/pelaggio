@@ -4,7 +4,33 @@ import { resolve } from "node:path";
 import { LOG_PATH, REPO, STEPS, WORKTREE_PREFIX } from "./config.js";
 import { MarkdownRoadmap } from "./roadmap/markdown.js";
 import type { CreateItemOpts, RoadmapSource } from "./roadmap/types.js";
-import type { Mutex, Step, StepResult } from "./types.js";
+import type { Decision, Mutex, Step, StepResult } from "./types.js";
+
+export function parseDecisions(text: string): Decision[] {
+	const decisions: Decision[] = [];
+	for (const line of text.split(/\r?\n/)) {
+		const match = line.match(/^\s*DECISION:(.*)$/);
+		if (!match) continue;
+		const raw = match[1].trim();
+		const choseAt = raw.indexOf("| chose:");
+		if (choseAt < 0) {
+			decisions.push({ fork: raw || "(unspecified decision)" });
+			continue;
+		}
+		const fork = raw.slice(0, choseAt).trim() || "(unspecified decision)";
+		const afterChose = raw.slice(choseAt + "| chose:".length);
+		const alternativesAt = afterChose.indexOf("| alternatives:");
+		if (alternativesAt < 0) {
+			const chosen = afterChose.trim();
+			decisions.push({ fork, ...(chosen ? { chosen } : {}) });
+			continue;
+		}
+		const chosen = afterChose.slice(0, alternativesAt).trim();
+		const alternatives = afterChose.slice(alternativesAt + "| alternatives:".length).trim();
+		decisions.push({ fork, ...(chosen ? { chosen } : {}), ...(alternatives ? { alternatives } : {}) });
+	}
+	return decisions;
+}
 
 // ── Skill loading ──────────────────────────────────────────────────────
 
