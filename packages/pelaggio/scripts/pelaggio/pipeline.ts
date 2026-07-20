@@ -132,6 +132,16 @@ export interface PipelineDeps {
 	lookupReviewEscalation?: typeof lookupReviewEscalationDefault;
 }
 
+// Test seam (#304): the pipeline flow tests stub provider availability so they do
+// not depend on the codex/grok driver binaries being installed on the runner.
+// Production always uses the real binary-presence check below; only pipeline.test.ts
+// sets this (in its `before`, restored in `after`). Without it, on a claude-only host
+// (e.g. CI) the reviewer-not-author selection fails closed and every flow test parks.
+let providerAvailableForTests: ((candidate: DriverIdentity) => boolean) | undefined;
+export function __setProviderAvailableForTests(fn: ((candidate: DriverIdentity) => boolean) | undefined): void {
+	providerAvailableForTests = fn;
+}
+
 export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, flags: Flags, deps: PipelineDeps = {}): Promise<CycleResult> {
 	const runStep = deps.runStep ?? runStepDefault;
 	const listWorktrees = deps.listWorktrees ?? listWorktreesDefault;
@@ -698,25 +708,27 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		resolveDriverCandidates(CONFIG, profile, name).map((candidate) =>
 			candidate.provider === "codex" ? { provider: "codex", ...(candidate.codexModel ? { codexModel: candidate.codexModel } : {}) } : { provider: candidate.provider, ...(candidate.model ? { model: candidate.model } : {}) },
 		);
-	const available = (candidate: DriverIdentity): boolean => {
-		if (candidate.provider === "claude") return true;
-		const executable = resolveProviderBin(CONFIG, candidate.provider, candidate.provider);
-		const paths =
-			isAbsolute(executable) || executable.includes("/")
-				? [executable]
-				: (process.env.PATH ?? "")
-						.split(delimiter)
-						.filter(Boolean)
-						.map((directory) => join(directory, executable));
-		return paths.some((path) => {
-			try {
-				accessSync(path, constants.X_OK);
-				return true;
-			} catch {
-				return false;
-			}
+	const available: (candidate: DriverIdentity) => boolean =
+		providerAvailableForTests ??
+		((candidate: DriverIdentity): boolean => {
+			if (candidate.provider === "claude") return true;
+			const executable = resolveProviderBin(CONFIG, candidate.provider, candidate.provider);
+			const paths =
+				isAbsolute(executable) || executable.includes("/")
+					? [executable]
+					: (process.env.PATH ?? "")
+							.split(delimiter)
+							.filter(Boolean)
+							.map((directory) => join(directory, executable));
+			return paths.some((path) => {
+				try {
+					accessSync(path, constants.X_OK);
+					return true;
+				} catch {
+					return false;
+				}
+			});
 		});
-	};
 
 	// Reconstruct an already-produced artifact's author when its step isn't running
 	// this process (resume, or plan-exists-on-disk skip). Attribution comes from the
