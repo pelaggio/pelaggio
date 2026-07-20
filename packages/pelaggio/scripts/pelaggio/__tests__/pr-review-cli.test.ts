@@ -44,14 +44,19 @@ async function runCli(
 	const statusShas: string[] = [];
 	const queued = [...(opts.results ?? [result()])];
 	const execFileSync = ((cmd: string, args: readonly string[]) => {
+		const a = args.join(" ");
+		// resolveReviewedSha pins the PR head sha via gh, then fetches it — independent of the
+		// diff, so it must resolve even when the diff inspection is being made to fail.
+		if (cmd === "gh") {
+			assert.equal(a, "api repos/pelaggio/pelaggio/pulls/123 --jq .head.sha");
+			return `${REVIEWED_SHA}\n`;
+		}
 		assert.equal(cmd, "git");
-		// rev-parse HEAD (reviewed-SHA pin) is independent of the diff and must
-		// resolve even when the diff inspection is being made to fail.
-		if (args.join(" ") === "rev-parse HEAD") return `${REVIEWED_SHA}\n`;
+		if (a === "fetch --quiet origin main pull/123/head") return "";
 		if (opts.diffError) throw opts.diffError;
-		if (args.join(" ") === "diff --name-only origin/main...HEAD") return opts.files ?? "docs/readme.md\n";
-		if (args.join(" ") === "diff origin/main...HEAD") return opts.diff ?? "+Clarify docs.\n";
-		throw new Error(`unexpected command: ${cmd} ${args.join(" ")}`);
+		if (a === `diff --name-only origin/main...${REVIEWED_SHA}`) return opts.files ?? "docs/readme.md\n";
+		if (a === `diff origin/main...${REVIEWED_SHA}`) return opts.diff ?? "+Clarify docs.\n";
+		throw new Error(`unexpected command: ${cmd} ${a}`);
 	}) as typeof import("node:child_process").execFileSync;
 	const runStep: RunStepFn = async (name, prompt, stepOpts, _emit: StepEmit) => {
 		calls.push({ name, prompt, cwd: stepOpts.cwd, parkSignal: stepOpts.parkSignal });
@@ -98,13 +103,15 @@ describe("pr-review CLI aggregation", () => {
 
 		assert.equal(out.code, 0);
 		assert.equal(out.calls.length, 1);
-		assert.match(out.calls[0].prompt, /Arguments: --pr 123$/);
+		assert.match(out.calls[0].prompt, /Arguments: --pr 123/);
+		// The pinned PR-head sha is threaded into the review as trusted local context.
+		assert.match(out.calls[0].prompt, new RegExp(`Head ref: ${REVIEWED_SHA}`));
 		assert.doesNotMatch(out.calls[0].prompt, /Arguments: .*--red-team/);
 		assert.match(out.comments[0], /Adversarial red-team pass: not triggered/);
 		assert.match(out.comments[0], /gate=pass ok=true subtype=success cost=1\.00 turns=2/);
 		assert.deepEqual(out.statuses, ["pass"]);
-		// The required status is pinned to the reviewed (local HEAD) SHA, not a
-		// live remote head that a push could advance mid-review.
+		// The required status is pinned to the PR *head* sha, resolved once before the
+		// review — not the local checkout's HEAD, and not re-queried after (no fail-open).
 		assert.deepEqual(out.statusShas, [REVIEWED_SHA]);
 	});
 
@@ -127,7 +134,9 @@ describe("pr-review CLI aggregation", () => {
 
 		assert.equal(out.code, 0);
 		assert.equal(out.calls.length, 2);
-		assert.match(out.calls[0].prompt, /Arguments: --pr 123$/);
+		assert.match(out.calls[0].prompt, /Arguments: --pr 123/);
+		// The pinned PR-head sha is threaded into the review as trusted local context.
+		assert.match(out.calls[0].prompt, new RegExp(`Head ref: ${REVIEWED_SHA}`));
 		assert.doesNotMatch(out.calls[0].prompt, /Arguments: .*--red-team/);
 		assert.match(out.calls[1].prompt, /Arguments: .*--red-team/);
 		assert.match(out.calls[1].prompt, /--security-reasons "path:packages\/server\/src\/config\.ts, keyword:127\., keyword:host"/);
