@@ -118,7 +118,10 @@ const emit: StepEmit = (event) => {
 			process.stderr.write(`  ⏸ rate limit (${event.limitType})\n`);
 			break;
 		case "sdk_error":
-			process.stderr.write(`  ⚠ ${event.message}\n`);
+			process.stderr.write(`  ✗ SDK error: ${event.message}\n`);
+			break;
+		case "sdk_warning":
+			process.stderr.write(`  ⚠ SDK warning: ${event.message}\n`);
 			break;
 		case "blocked":
 			process.stderr.write(`  ⛔ blocked: ${event.reason}\n`);

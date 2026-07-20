@@ -326,6 +326,7 @@ export type StepEvent =
 	| { type: "tool_error"; name: string; brief: string; error: string }
 	| { type: "text"; content: string }
 	| { type: "edit_loop"; file: string; count: number }
+	| { type: "sdk_warning"; message: string }
 	| { type: "sdk_error"; message: string }
 	| { type: "blocked"; reason: string }
 	| { type: "stalled_ask"; tail: string }
