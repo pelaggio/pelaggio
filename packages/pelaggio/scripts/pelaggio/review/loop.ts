@@ -143,8 +143,20 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 			// [{C1,refuted},{C1,survives}] for two candidates); the survivor filter's `.find` would then
 			// silently take the first (refuted) decision and drop a real blocker — the duplicate fail-open
 			// that reconcileReviewVerification already rejects.
-			if (report.decisions.length !== candidates.length || new Set(report.decisions.map((d) => d.candidateId)).size !== candidates.length || report.decisions.some((d) => !candidates.some((c) => c.candidateId === d.candidateId)))
-				throw new Error("Judge decisions are incomplete, duplicated, or contain unknown candidates");
+			if (
+				report.decisions.length !== candidates.length ||
+				new Set(report.decisions.map((d) => d.candidateId)).size !== candidates.length ||
+				report.decisions.some((decision) => {
+					const candidate = candidates.find((item) => item.candidateId === decision.candidateId);
+					if (!candidate) return true;
+					// #280: `class` is optional and inherits the candidate's class when omitted — a redundant
+					// echo the Judge shouldn't have to restate. #272: but the Judge must not DOWNGRADE a
+					// reviewer's safety-class candidate to a non-safety class (a reclassify-to-ship evasion);
+					// restating the same class or elevating a non-safety candidate stays allowed.
+					return decision.class !== undefined && SAFETY_CLASSES.includes(candidate.finding.class) && !SAFETY_CLASSES.includes(decision.class);
+				})
+			)
+				throw new Error("Judge decisions are incomplete, duplicated, downgrade a safety class, or contain unknown candidates");
 		} catch (error) {
 			// Completeness/parse failure must invalidate the whole pass (fail-closed):
 			// `report` may already hold the parsed-but-incomplete value, so clear it or
@@ -158,6 +170,11 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 					const decision = report?.decisions.find((item) => item.candidateId === candidate.candidateId);
 					if (!decision) return true;
 					if (decision.ruling) rulings.set(candidate.candidateId, decision.ruling);
+					// #272: a single Judge must not be able to refute away a safety-class must-fix. Once raised
+					// it is retained every pass (carried is re-seeded above, so reviewer omission can't drop it
+					// either) and the run parks for a human — a lone Judge's `refuted`/reclassify decision never
+					// clears it; the loop does not self-clear a safety must-fix.
+					if (candidate.finding.severity === "must-fix" && SAFETY_CLASSES.includes(candidate.finding.class)) return true;
 					return decision.decision === "survives";
 				})
 			: candidates;
