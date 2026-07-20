@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 import { CONFIG, resolveProviderBin } from "../config.js";
 import { GROK_EGRESS_ENDPOINT, runStep } from "../grok-provider.js";
-import { buildGrokArgs, GROK_SANDBOX_BEGIN, GROK_SANDBOX_BLOCK, GROK_SANDBOX_END, GROK_SANDBOX_PROFILE, installGrokSandboxProfile } from "../grok-sandbox.js";
+import { buildGrokArgs, detectLandlock, GROK_SANDBOX_BEGIN, GROK_SANDBOX_BLOCK, GROK_SANDBOX_END, GROK_SANDBOX_PROFILE, installGrokSandboxProfile } from "../grok-sandbox.js";
 
 async function temporaryHome(): Promise<string> {
 	return mkdtemp(join(tmpdir(), "pelaggio-grok-sandbox-"));
@@ -97,15 +97,43 @@ describe("buildGrokArgs", () => {
 		assert.deepEqual(buildGrokArgs({ model: "grok-4", reasoningEffort: "high" }), ["--sandbox", GROK_SANDBOX_PROFILE, "--disable-web-search", "-m", "grok-4", "--reasoning-effort", "high", "agent", "stdio"]);
 		assert.equal(buildGrokArgs({ reasoningEffort: "low" }).includes("-m"), false);
 	});
+
+	it("omits only the sandbox selection for an explicitly unsandboxed fallback", () => {
+		assert.deepEqual(buildGrokArgs({ reasoningEffort: "medium", sandbox: false }), ["--disable-web-search", "--reasoning-effort", "medium", "agent", "stdio"]);
+	});
+});
+
+describe("detectLandlock", () => {
+	it("detects Landlock in the Linux LSM list", async () => {
+		const root = await temporaryHome();
+		const path = join(root, "lsm");
+		await writeFile(path, "lockdown,capability,landlock,yama\n");
+		assert.equal(await detectLandlock({ platform: "linux", lsmPath: path }), true);
+	});
+
+	it("reports unavailable when Linux does not expose Landlock", async () => {
+		const root = await temporaryHome();
+		const path = join(root, "lsm");
+		await writeFile(path, "capability,yama\n");
+		assert.equal(await detectLandlock({ platform: "linux", lsmPath: path }), false);
+		assert.equal(await detectLandlock({ platform: "linux", lsmPath: join(root, "missing") }), false);
+	});
+
+	it("does not apply the Linux Landlock prerequisite on macOS", async () => {
+		assert.equal(await detectLandlock({ platform: "darwin", lsmPath: "/missing" }), true);
+	});
 });
 
 describe("live Grok 0.2.103 confinement", () => {
-	it("denies outside-worktree access and child egress while locking in-process destinations", { skip: process.env.PELAGGIO_GROK_LIVE_CONFORMANCE !== "1" }, async () => {
+	it("starts in the resolved sandbox mode and verifies enforced confinement", { skip: process.env.PELAGGIO_GROK_LIVE_CONFORMANCE !== "1" }, async () => {
 		const capturePath = process.env.PELAGGIO_GROK_NETWORK_CAPTURE;
 		assert.ok(capturePath, "PELAGGIO_GROK_NETWORK_CAPTURE must name the operator-produced capture artifact from this run");
 		const home = process.env.HOME;
 		assert.ok(home, "HOME is required");
 		await access(join(home, ".grok", "auth.json"));
+		const landlock = await detectLandlock();
+		assert.ok(landlock || CONFIG.grokAllowUnsandboxedFallback, "Landlock is unavailable; enable providers.grok.allow-unsandboxed-fallback to exercise the resolved fallback mode");
+		if (landlock) execFileSync("bwrap", ["--version"], { stdio: "ignore" });
 		const version = execFileSync(resolveProviderBin(CONFIG, "grok", "grok"), ["--version"], { encoding: "utf8" });
 		assert.match(version, /\b0\.2\.103\b/, `live confinement is pinned to Grok 0.2.103, got: ${version.trim()}`);
 		const root = await temporaryHome();
@@ -125,7 +153,8 @@ describe("live Grok 0.2.103 confinement", () => {
 			{ cwd: worktree, profile: "standard", trace: false, parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" } },
 			(event) => events.push(event),
 		);
-		assert.equal(result.ok, true, JSON.stringify(events));
+		assert.equal(result.ok, true, `Grok did not start successfully with sandbox=${landlock}: ${JSON.stringify(events)}`);
+		if (!landlock) return;
 		assert.equal(await readFile(canary, "utf8"), "TOP-SECRET-CANARY");
 		await assert.rejects(access(outsideWrite));
 		const fixture = JSON.parse(await readFile(new URL("./fixtures/grok-egress-v1.json", import.meta.url), "utf8")) as { destinations: string[] };

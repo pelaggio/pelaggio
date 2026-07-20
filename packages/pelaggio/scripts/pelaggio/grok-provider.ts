@@ -6,13 +6,13 @@
 // stdio), NOT a one-shot JSON stream, because the `-p` surface omits tool-call/file-change events
 // (#238); the ACP `session/update` stream carries them. See docs/agent-context/acp-grok-protocol.md.
 //
-// Confinement note: every run explicitly requests Pelaggio's fail-closed custom Grok profile.
-// Grok's strict base confines project access to cwd; child networking and built-in web tools are
-// disabled. Permission prompts remain auto-allowed because the profile is the security boundary.
+// Confinement note: every run explicitly requests Pelaggio's fail-closed custom Grok profile when
+// Landlock is available. A config-gated fallback exists for externally contained, supervised runs
+// on Landlock-less hosts. Permission prompts remain auto-allowed because confinement is external.
 
 import { type AcpIncomingRequest, AcpRpcError, spawnAcpAgent } from "./acp-client.js";
 import { CONFIG, REPO, resolveProviderBin, resolveStepSettings, type StepSettings } from "./config.js";
-import { buildGrokArgs, installGrokSandboxProfile } from "./grok-sandbox.js";
+import { buildGrokArgs, detectLandlock, installGrokSandboxProfile } from "./grok-sandbox.js";
 import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseWaitFlag, resolveParkReset } from "./helpers.js";
 import { buildAgentEnv, makeSecretScrubber } from "./secret-hygiene.js";
 import type { StepProvider } from "./step-runner.js";
@@ -340,15 +340,30 @@ export const runStep: StepProvider["runStep"] = async (name, prompt, opts, emit)
 	const finalPrompt = `${prompt}\n\n${systemAppend}\n\n${GROK_SANDBOX_APPEND}`;
 	const scrub = makeSecretScrubber();
 	const agentEnv = buildAgentEnv({ allow: CONFIG.security.envAllowlist });
-	try {
-		await installGrokSandboxProfile({ home: agentEnv.HOME });
-	} catch (error) {
-		const message = `Grok sandbox profile preparation failed: ${error instanceof Error ? error.message : String(error)}`;
+	const sandbox = await detectLandlock();
+	if (!sandbox && !CONFIG.grokAllowUnsandboxedFallback) {
+		const message = "Grok sandbox requires Landlock, but this Linux kernel does not expose it; set providers.grok.allow-unsandboxed-fallback: true only for a supervised run with an external containment boundary";
 		emit({ type: "sdk_error", message });
 		emit({ type: "done", ok: false, subtype: "error_confinement", cost: 0, turns: 0, elapsed: Date.now() - t0 });
 		return { ok: false, subtype: "error_confinement", text: message, fullText: "", cost: 0, costEstimated: true, turns: 0 };
 	}
-	const args = buildGrokArgs({ ...(model ? { model } : {}), reasoningEffort: grokEffort(effort) });
+	if (sandbox) {
+		try {
+			await installGrokSandboxProfile({ home: agentEnv.HOME });
+		} catch (error) {
+			const message = `Grok sandbox profile preparation failed: ${error instanceof Error ? error.message : String(error)}`;
+			emit({ type: "sdk_error", message });
+			emit({ type: "done", ok: false, subtype: "error_confinement", cost: 0, turns: 0, elapsed: Date.now() - t0 });
+			return { ok: false, subtype: "error_confinement", text: message, fullText: "", cost: 0, costEstimated: true, turns: 0 };
+		}
+	} else {
+		emit({
+			type: "sdk_error",
+			message:
+				"WARNING: Landlock is unavailable; providers.grok.allow-unsandboxed-fallback is enabled, so Grok is starting without its CLI sandbox. Only deny-env and cwd guidance protect this supervised run until Pelaggio's host-side jail is wired.",
+		});
+	}
+	const args = buildGrokArgs({ ...(model ? { model } : {}), reasoningEffort: grokEffort(effort), sandbox });
 	const { conn, done, kill } = spawnAcpAgent({
 		bin: resolveProviderBin(CONFIG, "grok", "grok"),
 		args,

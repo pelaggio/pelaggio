@@ -734,6 +734,7 @@ describe("loadConfig — providers.<name>.bin (#241)", () => {
 		const repo = tmpRepo();
 		const cfg = loadConfig({ repo, configPath: join(repo, ".pelaggio.yml") });
 		assert.deepEqual(cfg.providerBins, {});
+		assert.equal(cfg.grokAllowUnsandboxedFallback, false);
 	});
 
 	it("parses a per-provider bin override", () => {
@@ -748,6 +749,20 @@ describe("loadConfig — providers.<name>.bin (#241)", () => {
 		const path = writeYml(repo, "providers:\n  grok:\n    bin: ~/.grok/bin/grok\n");
 		const cfg = loadConfig({ repo, configPath: path });
 		assert.equal(cfg.providerBins.grok, "~/.grok/bin/grok");
+	});
+
+	it("parses the Grok-only unsandboxed fallback escape hatch", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "providers:\n  grok:\n    allow-unsandboxed-fallback: true\n");
+		assert.equal(loadConfig({ repo, configPath: path }).grokAllowUnsandboxedFallback, true);
+	});
+
+	it("rejects invalid or non-Grok unsandboxed fallback settings", () => {
+		const repo = tmpRepo();
+		const invalid = writeYml(repo, "providers:\n  grok:\n    allow-unsandboxed-fallback: yes\n");
+		assert.throws(() => loadConfig({ repo, configPath: invalid }), /providers\.grok\.allow-unsandboxed-fallback.*boolean/);
+		const unsupported = writeYml(repo, "providers:\n  codex:\n    allow-unsandboxed-fallback: true\n");
+		assert.throws(() => loadConfig({ repo, configPath: unsupported }), /only supported for grok/);
 	});
 
 	it("rejects an unknown provider name", () => {

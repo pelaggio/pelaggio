@@ -86,6 +86,8 @@ export interface ResolvedConfig {
 	 *  entry falls back to the provider's default binary (resolved via PATH). Lets an off-PATH
 	 *  driver (e.g. `~/.grok/bin/grok`) be pinned without editing PATH. */
 	providerBins: Partial<Record<ProviderName, string>>;
+	/** Explicit escape hatch for Linux hosts whose kernel does not expose Landlock. */
+	grokAllowUnsandboxedFallback: boolean;
 	shipTarget: ShipTargetName;
 	roadmapSource: RoadmapSourceName;
 	roadmapGithub: GithubRoadmapConfig;
@@ -669,6 +671,7 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 	// Validated against PROVIDER_NAMES — an entry for a not-yet-registered provider (e.g. grok
 	// before #136) fails loudly rather than silently no-op'ing.
 	const providerBins: Partial<Record<ProviderName, string>> = {};
+	let grokAllowUnsandboxedFallback = false;
 	const providersBlock = yml.providers;
 	if (providersBlock !== undefined) {
 		if (!isPlainObject(providersBlock)) {
@@ -687,6 +690,14 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 					throw new Error(`${configPath}: expected \`providers.${name}.bin\` to be a non-empty string`);
 				}
 				providerBins[name] = bin;
+			}
+			const allowUnsandboxedFallback = entry["allow-unsandboxed-fallback"];
+			if (allowUnsandboxedFallback !== undefined) {
+				if (name !== "grok") throw new Error(`${configPath}: \`providers.${name}.allow-unsandboxed-fallback\` is only supported for grok`);
+				if (typeof allowUnsandboxedFallback !== "boolean") {
+					throw new Error(`${configPath}: expected \`providers.grok.allow-unsandboxed-fallback\` to be a boolean, got ${typeof allowUnsandboxedFallback}`);
+				}
+				grokAllowUnsandboxedFallback = allowUnsandboxedFallback;
 			}
 		}
 	}
@@ -722,6 +733,7 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		profileEffort,
 		profileProviders,
 		providerBins,
+		grokAllowUnsandboxedFallback,
 		shipTarget,
 		roadmapSource,
 		roadmapGithub,
