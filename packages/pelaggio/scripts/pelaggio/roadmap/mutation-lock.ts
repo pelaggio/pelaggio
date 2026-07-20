@@ -2,10 +2,11 @@ import { resolve } from "node:path";
 import { withFileLock } from "../file-lock.js";
 
 /**
- * Serializes mutations of shared roadmap files (docs/roadmap-*.md, task-index.md)
+ * Serializes mutations of shared roadmap and decision-register files
  * across processes on one host. Taken INTERNALLY by MarkdownRoadmap.markDone /
  * createItem / archivePlan and by commitStrayBookkeeping — callers never manage
- * it, so every shared-file write path is covered by construction.
+ * it, so every shared-file write path is covered by construction. Decision
+ * register lifecycle operations use this same lock for cross-feature ordering.
  *
  * Claims are deliberately NOT tracked here (issue #12): "claimed" is git-native —
  * the feat/<id> branch exists — so there is no claims file, no owner pids, and no

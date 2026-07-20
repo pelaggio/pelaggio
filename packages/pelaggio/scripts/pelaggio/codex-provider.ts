@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CONFIG, REPO, resolveProviderBin, resolveStepSettings, type StepSettings } from "./config.js";
-import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseWaitFlag, resolveParkReset } from "./helpers.js";
+import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseDecisions, parseWaitFlag, resolveParkReset } from "./helpers.js";
 import { buildAgentEnv, makeSecretScrubber } from "./secret-hygiene.js";
 import type { StepProvider } from "./step-runner.js";
 import { composeSystemAppend, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "./step-runner-shared.js";
@@ -203,6 +203,7 @@ export function buildCodexStepResult(name: Step, events: JsonObject[], exitInfo:
 	const emitted: StepEvent[] = [];
 	let text = "";
 	let fullText = "";
+	let assistantText = "";
 	let turns = 0;
 	let completed = false;
 	let failed = false;
@@ -264,14 +265,17 @@ export function buildCodexStepResult(name: Step, events: JsonObject[], exitInfo:
 		const msg = agentMessageText(ev);
 		if (msg) {
 			text = msg;
+			assistantText += `${msg}\n`;
 			fullText += `${msg}\n`;
 			emitted.push({ type: "text", content: msg });
 		}
 	}
 
+	const streamedFinalText = text;
 	if (exitInfo.outputLastMessage?.trim()) {
 		text = exitInfo.outputLastMessage;
 		fullText += `${exitInfo.outputLastMessage}\n`;
+		if (exitInfo.outputLastMessage.trim() !== streamedFinalText.trim()) assistantText += `${exitInfo.outputLastMessage}\n`;
 	}
 	const cost = estimateCodexCost(tokens);
 	let ok = completed && !failed && exitInfo.exitCode === 0 && !exitInfo.timedOut;
@@ -325,6 +329,8 @@ export function buildCodexStepResult(name: Step, events: JsonObject[], exitInfo:
 	}
 
 	const outputTail = text ? text.replace(/\x1b\[[0-9;]*m/g, "").slice(-200) : undefined;
+	const decisions = parseDecisions(assistantText);
+	for (const decision of decisions) emitted.push({ type: "decision", decision });
 	const toolCountsObj = toolCounts.size > 0 ? Object.fromEntries(toolCounts) : undefined;
 	return {
 		result: {
@@ -339,6 +345,7 @@ export function buildCodexStepResult(name: Step, events: JsonObject[], exitInfo:
 			...(toolCountsObj ? { toolCounts: toolCountsObj } : {}),
 			...(outputTail ? { outputTail } : {}),
 			...(stalledAsk ? { stalledAsk: true } : {}),
+			...(decisions.length ? { decisions } : {}),
 		},
 		...(parkUpdate ? { parkUpdate } : {}),
 		events: emitted,

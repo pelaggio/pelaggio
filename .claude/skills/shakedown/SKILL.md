@@ -53,6 +53,8 @@ Target: a `.md` plan file (usually `docs/plans/{branch-slug}.md`).
 9. **If the plan has a fundamental design flaw** that in-place editing cannot fix (wrong data model, wrong architectural layer, contradicts a core invariant the whole approach depends on) — emit `Verdict: RETHINK` and stop. Do not paper over structural problems.
 10. Output the summary and verdict per the review logic above.
 
+For reviewer-vetoable forks affecting invariants, security, cost, public API surface, or scope beyond M, emit `DECISION: <fork> | chose: <default> | alternatives: <other options>` and continue the review. It is non-halting, may appear multiple times, and is not for routine choices. Preserve these lines in the review summary.
+
 ### Code review mode
 
 Target: the diff — union of unstaged, staged, and `git diff main...HEAD`.
@@ -67,6 +69,8 @@ Target: the diff — union of unstaged, staged, and `git diff main...HEAD`.
 5. **Fix every fix-now and near-term item.** Edit files directly, commit nothing (the pipeline checkpoints).
 6. Re-run the verifications until all pass. Fix any regressions your changes introduced.
 7. Output the summary and verdict.
+
+Apply the same `DECISION:` threshold and format from plan review mode to code-review findings and summary.
 
 ## Pelaggio extensions
 

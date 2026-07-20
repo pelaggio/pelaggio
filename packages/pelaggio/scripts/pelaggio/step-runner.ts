@@ -5,7 +5,7 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import { codexProvider } from "./codex-provider.js";
 import { CONFIG, REPO, resolveStepSettings } from "./config.js";
 import { grokProvider } from "./grok-provider.js";
-import { classifyStepError, isRefusal, looksLikeStalledAsk, type MainCheckoutDeltaObserver, parseBlockedReason, parseWaitFlag, resolveParkReset } from "./helpers.js";
+import { classifyStepError, isRefusal, looksLikeStalledAsk, type MainCheckoutDeltaObserver, parseBlockedReason, parseDecisions, parseWaitFlag, resolveParkReset } from "./helpers.js";
 import { composeSystemAppend, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "./step-runner-shared.js";
 import { MUTATING_TOOLS, toolBrief } from "./tui.js";
 import type { ParkSignal, ProviderName, Step, StepEmit, StepResult, TokenUsage } from "./types.js";
@@ -275,6 +275,7 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 
 	let text = "";
 	let fullText = "";
+	let assistantText = "";
 	let cost = 0;
 	let resultTurns = 0;
 	let ok = true;
@@ -332,6 +333,7 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 					if (block.type === "text" && "text" in block) {
 						const blockText = (block as { text: string }).text;
 						fullText += blockText + "\n";
+						assistantText += blockText + "\n";
 						if (blockText.trim()) {
 							emit({ type: "text", content: blockText });
 						}
@@ -448,6 +450,8 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 
 	if (onParentAbort) opts.signal?.removeEventListener("abort", onParentAbort);
 
+	const decisions = parseDecisions(assistantText);
+	for (const decision of decisions) emit({ type: "decision", decision });
 	const elapsed = Date.now() - t0;
 	emit({ type: "done", ok, subtype, cost, turns: resultTurns, elapsed });
 
@@ -465,6 +469,7 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 		...(toolCountsObj ? { toolCounts: toolCountsObj } : {}),
 		...(outputTail ? { outputTail } : {}),
 		...(stalledAsk ? { stalledAsk: true } : {}),
+		...(decisions.length ? { decisions } : {}),
 	};
 };
 

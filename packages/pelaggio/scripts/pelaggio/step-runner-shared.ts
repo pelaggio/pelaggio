@@ -15,6 +15,7 @@ const AUTONOMY_APPEND = [
 	"## Operating autonomously",
 	"You are operating autonomously inside a headless pipeline. Nobody is watching in real time and nobody can answer questions mid-step, so ending your turn with a question stalls the step. For minor choices (naming, formatting, defaults, which of two equivalent approaches), pick a reasonable option and note it in your final message. End your turn only when the step is complete or you are genuinely blocked — and if blocked, state precisely what is missing rather than asking permission to proceed.",
 	"If you genuinely cannot complete the step, make the final line of your reply exactly `BLOCKED: <one-line reason — what is missing>` with nothing after it, instead of asking a question or offering options. Completing the step normally needs no sentinel.",
+	"When a fork affects an invariant, security, cost, public API surface, or scope beyond M and a reviewer could reasonably veto it, emit `DECISION: <fork> | chose: <default> | alternatives: <other options>` and proceed with that default. `DECISION:` is non-halting and may appear multiple times. Do not flag routine implementation choices.",
 ].join("\n");
 
 /** True when `cwd` is a sibling worktree, not the main repo. Exported for testing. */

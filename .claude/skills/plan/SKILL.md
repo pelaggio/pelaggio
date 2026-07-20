@@ -61,6 +61,8 @@ Cover in the plan: scope (what it does and doesn't touch), approach (why this ov
 This is the **in-context pass** — the same session wrote the plan, so you see the reasoning trail. That makes you strong at catching project invariants (the Correct dimension: step exhaustiveness, frontmatter stripping, worktree isolation, rate-limit parking, phantom ship guard, etc.) and weak at catching Idioms drift (out-of-context `/shakedown` owns that — fresh eyes are the right tool for convention enforcement).
 
 Re-read the plan as a critical reviewer:
+
+Flag reviewer-vetoable forks affecting invariants, security, cost, public API surface, or scope beyond M with `DECISION: <fork> | chose: <default> | alternatives: <other options>` and proceed with the default. The sentinel is non-halting, may appear multiple times, and is not for routine choices. Include any such forks in the self-review output.
 - Score each rubric dimension. Are there blockers or concerns on Correct, Well-typed, Well-factored, Well-tested, or Concise?
 - Skip Idioms — defer to `/shakedown`.
 - If you find issues, **revise the plan inline** and note what changed.

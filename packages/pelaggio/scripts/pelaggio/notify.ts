@@ -1,8 +1,8 @@
-import { type CycleResult, RECOVERABLE_ERRORS } from "./types.js";
+import { type CycleResult, type Decision, RECOVERABLE_ERRORS, type Step } from "./types.js";
 
 // ── Events & formats ───────────────────────────────────────────────────
 
-export const NOTIFY_EVENTS = ["parked", "failed", "shipped", "pr-opened", "shipwrecked", "review-stranded"] as const;
+export const NOTIFY_EVENTS = ["parked", "failed", "shipped", "pr-opened", "shipwrecked", "review-stranded", "decision"] as const;
 export type NotifyEvent = (typeof NOTIFY_EVENTS)[number];
 
 export const NOTIFY_FORMATS = ["json", "ntfy"] as const;
@@ -18,11 +18,18 @@ export interface NotifyConfig {
 
 // ── Payload & wire request ─────────────────────────────────────────────
 
-export interface NotifyPayload {
+interface NotifyPayloadBase {
 	event: NotifyEvent;
 	itemId: string | null;
 	/** Best-effort roadmap title; omitted when the lookup fails / times out. */
 	title?: string;
+	logPath: string;
+	ts: string;
+	text: string;
+}
+
+export interface CycleNotifyPayload extends NotifyPayloadBase {
+	event: Exclude<NotifyEvent, "decision">;
 	completed: boolean;
 	cost: number;
 	/** True when `cost` includes a provider-side estimate (not billed USD) — rendered with `~`. */
@@ -32,11 +39,16 @@ export interface NotifyPayload {
 	bookkeepingWarnings?: string[];
 	prUrl?: string;
 	shipwrecked: boolean;
-	logPath: string;
-	ts: string;
-	/** One-line human summary. A Slack incoming webhook reads this; ntfy sends it as the body. */
-	text: string;
 }
+
+export interface DecisionNotifyPayload extends NotifyPayloadBase {
+	event: "decision";
+	decision: Decision;
+	step: Step;
+	source: string;
+}
+
+export type NotifyPayload = CycleNotifyPayload | DecisionNotifyPayload;
 
 export interface NotifyRequest {
 	body: string;
@@ -67,7 +79,7 @@ const NON_ACTIONABLE = new Set<string>([...RECOVERABLE_ERRORS, "aborted"]);
  * have no keyboard), so paging "shipwrecked" for it would contradict the documented
  * "aborted never pages" rule while the user is sitting at the terminal watching.
  */
-export function classifyEvent(result: CycleResult): NotifyEvent | null {
+export function classifyEvent(result: CycleResult): Exclude<NotifyEvent, "decision"> | null {
 	if (result.error === "parked") return "parked";
 	if (result.completed) return result.awaitingMerge ? "pr-opened" : "shipped";
 	if (result.error && NON_ACTIONABLE.has(result.error)) return null;
@@ -81,7 +93,7 @@ export function classifyEvent(result: CycleResult): NotifyEvent | null {
  * A one-line, webhook-safe summary (no ANSI escapes). Includes itemId, title, cost, and —
  * for non-happy events — the error; prUrl is appended when present.
  */
-export function formatText(p: Omit<NotifyPayload, "text">): string {
+export function formatText(p: Omit<CycleNotifyPayload, "text">): string {
 	const head = `pelaggio: ${p.event} ${p.itemId ?? "?"}`;
 	const title = p.title ? ` "${p.title}"` : "";
 	const bits: string[] = [`${p.costEstimated ? "~" : ""}$${p.cost.toFixed(2)}`];
@@ -101,6 +113,7 @@ const EVENT_TAGS: Record<NotifyEvent, string> = {
 	"pr-opened": "arrow_heading_up",
 	shipwrecked: "boom",
 	"review-stranded": "warning",
+	decision: "triangular_flag_on_post",
 };
 
 const EVENT_TITLES: Record<NotifyEvent, string> = {
@@ -110,6 +123,7 @@ const EVENT_TITLES: Record<NotifyEvent, string> = {
 	"pr-opened": "pelaggio PR opened",
 	shipwrecked: "pelaggio shipwrecked",
 	"review-stranded": "pelaggio review stranded",
+	decision: "pelaggio decision",
 };
 
 const HIGH_PRIORITY: ReadonlySet<NotifyEvent> = new Set<NotifyEvent>(["failed", "shipwrecked", "review-stranded"]);
@@ -127,7 +141,7 @@ export function buildRequest(format: NotifyFormat, payload: NotifyPayload): Noti
 			Tags: EVENT_TAGS[payload.event],
 			Priority: HIGH_PRIORITY.has(payload.event) ? "high" : "default",
 		};
-		if (payload.prUrl) headers.Click = payload.prUrl;
+		if ("prUrl" in payload && payload.prUrl) headers.Click = payload.prUrl;
 		return { body: payload.text, headers };
 	}
 	return { body: JSON.stringify(payload), headers: { "content-type": "application/json" } };
@@ -204,9 +218,9 @@ export async function notifyCycle(cfg: NotifyConfig, result: CycleResult, logPat
 		shipwrecked: result.shipwrecked ?? false,
 		logPath,
 		ts: new Date().toISOString(),
-	} satisfies Omit<NotifyPayload, "text">;
+	} satisfies Omit<CycleNotifyPayload, "text">;
 
-	const payload: NotifyPayload = { ...base, text: formatText(base) };
+	const payload: CycleNotifyPayload = { ...base, text: formatText(base) };
 	let delivered = false;
 	try {
 		delivered = await send(cfg.url, cfg.format, payload);
@@ -235,8 +249,8 @@ export async function notifyStrandedReview(cfg: NotifyConfig, input: { itemId: s
 		shipwrecked: false,
 		logPath: input.logPath,
 		ts: new Date().toISOString(),
-	} satisfies Omit<NotifyPayload, "text">;
-	const payload: NotifyPayload = { ...base, text: formatText(base) };
+	} satisfies Omit<CycleNotifyPayload, "text">;
+	const payload: CycleNotifyPayload = { ...base, text: formatText(base) };
 	let delivered = false;
 	try {
 		delivered = await (deps.send ?? sendNotification)(cfg.url, cfg.format, payload);
@@ -245,4 +259,26 @@ export async function notifyStrandedReview(cfg: NotifyConfig, input: { itemId: s
 	}
 	if (!delivered) process.stderr.write("⚠ notify: review-stranded webhook delivery failed\n");
 	return delivered;
+}
+
+export async function notifyDecision(cfg: NotifyConfig, input: { itemId: string | null; decision: Decision; step: Step; source: string; logPath: string }, deps: { send?: SendNotification; now?: Date } = {}): Promise<boolean> {
+	if (!cfg.url || !cfg.events.includes("decision")) return false;
+	const payload: DecisionNotifyPayload = {
+		event: "decision",
+		itemId: input.itemId,
+		decision: input.decision,
+		step: input.step,
+		source: input.source,
+		logPath: input.logPath,
+		ts: (deps.now ?? new Date()).toISOString(),
+		text: `pelaggio: decision ${input.itemId ?? "?"} ${input.step} — ${input.decision.fork}`.replace(/\s+/g, " "),
+	};
+	try {
+		const delivered = await (deps.send ?? sendNotification)(cfg.url, cfg.format, payload);
+		if (!delivered) process.stderr.write("⚠ notify: decision webhook delivery failed\n");
+		return delivered;
+	} catch {
+		process.stderr.write("⚠ notify: decision webhook delivery failed\n");
+		return false;
+	}
 }
