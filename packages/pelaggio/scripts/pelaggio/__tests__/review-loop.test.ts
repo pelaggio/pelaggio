@@ -61,6 +61,13 @@ describe("authoring review loop controller", () => {
 		assert.equal(result.outcome, "converged-clean");
 	});
 
+	it("does not honor a single Judge's refutation of a safety-class must-fix (#272)", async () => {
+		const result = await run(reviewerFindings("security"), judgeReport([{ candidateId: "C1", decision: "refuted", rationale: "r", class: "security" }]));
+		assert.equal(result.outcome, "hard-block");
+		assert.equal(result.passes.at(-1)?.judge.valid, true);
+		assert.equal(result.survivors[0]?.finding.class, "security");
+	});
+
 	it("fails closed when the Judge duplicates a decision for the sole blocker (does not ship)", async () => {
 		// Duplicate decisions for C1 still cover every id, so the distinct-count check alone passes and
 		// the survivor filter's first-match would silently drop the blocker (refuted-first → converged-clean).
@@ -98,5 +105,12 @@ describe("authoring review loop controller", () => {
 		);
 		assert.equal(result.outcome, "hard-block");
 		assert.equal(result.passes.at(-1)?.judge.valid, false);
+	});
+
+	it("fails closed when the Judge reclassifies a safety candidate as judgment dissent", async () => {
+		const result = await run(reviewerFindings("security"), judgeReport([{ candidateId: "C1", decision: "survives", rationale: "r", class: "judgment", ruling: "judgment-dissent" }]));
+		assert.equal(result.outcome, "hard-block");
+		assert.equal(result.passes.at(-1)?.judge.valid, false);
+		assert.equal(result.survivors[0]?.finding.class, "security");
 	});
 });

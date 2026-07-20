@@ -143,8 +143,15 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 			// [{C1,refuted},{C1,survives}] for two candidates); the survivor filter's `.find` would then
 			// silently take the first (refuted) decision and drop a real blocker — the duplicate fail-open
 			// that reconcileReviewVerification already rejects.
-			if (report.decisions.length !== candidates.length || new Set(report.decisions.map((d) => d.candidateId)).size !== candidates.length || report.decisions.some((d) => !candidates.some((c) => c.candidateId === d.candidateId)))
-				throw new Error("Judge decisions are incomplete, duplicated, or contain unknown candidates");
+			if (
+				report.decisions.length !== candidates.length ||
+				new Set(report.decisions.map((d) => d.candidateId)).size !== candidates.length ||
+				report.decisions.some((decision) => {
+					const candidate = candidates.find((item) => item.candidateId === decision.candidateId);
+					return !candidate || decision.class !== candidate.finding.class;
+				})
+			)
+				throw new Error("Judge decisions are incomplete, duplicated, reclassified, or contain unknown candidates");
 		} catch (error) {
 			// Completeness/parse failure must invalidate the whole pass (fail-closed):
 			// `report` may already hold the parsed-but-incomplete value, so clear it or
@@ -158,6 +165,10 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 					const decision = report?.decisions.find((item) => item.candidateId === candidate.candidateId);
 					if (!decision) return true;
 					if (decision.ruling) rulings.set(candidate.candidateId, decision.ruling);
+					// #272: a single Judge must not be able to refute away a safety-class must-fix. It only
+					// leaves `carried` via a fix reviewers stop rediscovering, or an explicit unfixable-blocker
+					// ruling (still hard-blocks) — never a bare "refuted" decision.
+					if (candidate.finding.severity === "must-fix" && SAFETY_CLASSES.includes(candidate.finding.class)) return true;
 					return decision.decision === "survives";
 				})
 			: candidates;

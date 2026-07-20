@@ -97,10 +97,12 @@ gate on the blocking set. Non-convergent exits (ceiling / dissent / hard-block) 
 **Two teeth make "ship-not-unanimity" safe rather than merely efficient:**
 
 1. **Safety floor (never ships on dissent).** Any finding in the **security / data-loss /
-   correctness-regression** class that a reviewer raised and the loop could **not refute** (omission ≠
-   refutation — the `pr-review` invariant) is **Hard-block → park**, *not* Dissent. Ship-on-dissent is
-   permitted for judgment-band findings **only**. A single-model judge must not be able to reclassify
-   a real safety finding as "dissent" and ship it.
+   correctness-regression** class that a reviewer raised is **Hard-block → park**, *not* Dissent, until
+   fixed — a single Judge's `refuted` decision does not clear it (omission ≠ refutation — the
+   `pr-review` invariant — **and neither is a lone Judge's say-so**, #272); it clears only once a later
+   pass's reviewers stop rediscovering it. Ship-on-dissent is permitted for judgment-band findings
+   **only**. A single-model judge must not be able to reclassify a real safety finding as "dissent" and
+   ship it.
 2. **Condition Dissent on `ship.target`.** For **`direct-push`**, dissent defaults to **park/block**
    (post-hoc human adjudication after a merge is not a control). For **`pull-request` / `auto-merge-pr`**,
    dissent may push the branch + record + notify — GitHub's required checks and the human merge still
