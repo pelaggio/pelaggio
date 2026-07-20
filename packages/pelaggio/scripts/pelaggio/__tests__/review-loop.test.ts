@@ -86,6 +86,38 @@ describe("authoring review loop controller", () => {
 		assert.match(result.disagreement?.evidenceFingerprint ?? "", /^[a-f0-9]{64}$/);
 	});
 
+	it("retains a prior-pass safety blocker in a later pass/block escalation", async () => {
+		const policy = {
+			...basePolicy,
+			reviewers: [
+				{ id: "grok-a", provider: "grok" as const },
+				{ id: "grok-b", provider: "grok" as const },
+			],
+		};
+		const safetyBlock = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 2, summary: "security regression", findings: [{ severity: "must-fix", class: "security", message: "unsafe" }] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
+		const pass = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 2, summary: "looks good", findings: [] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
+		const judgmentBlock = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 2, summary: "behavior is debatable", findings: [{ severity: "must-fix", class: "judgment", message: "debatable" }] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
+		const result = await runReviewLoop({
+			policy,
+			author: { provider: "codex" },
+			parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" },
+			runSeat: async (request) => {
+				if (request.role === "judge") return ok(judgeReport([{ candidateId: "C1", decision: "survives", rationale: "revise", class: "security", ruling: "fixable-blocker" }]));
+				if (request.role === "author") return ok("");
+				if (request.pass === 1) return ok(safetyBlock);
+				return ok(request.slot.id === "grok-a" ? pass : judgmentBlock);
+			},
+			prompts: { review: () => "r", judge: () => "j", revise: () => "rev" },
+		});
+		assert.equal(result.outcome, "hard-block");
+		assert.equal(result.disagreement?.pass, 2);
+		assert.equal(result.disagreement?.hasSafetyBlocker, true);
+		assert.equal(
+			result.survivors.some((item) => item.finding.class === "security"),
+			true,
+		);
+	});
+
 	it("ships when the Judge cleanly refutes the sole blocker", async () => {
 		const result = await run(reviewerFindings("judgment"), judgeReport([{ candidateId: "C1", decision: "refuted", rationale: "r", class: "judgment" }]));
 		assert.equal(result.outcome, "converged-clean");

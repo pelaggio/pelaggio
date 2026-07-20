@@ -71,7 +71,7 @@ const identity = (role: DriverIdentity["role"], slot: ReviewSlot, pass: number):
 });
 const childSignal = (): ParkSignal => ({ parked: false, resetsAt: 0, limitType: "", triggerWorker: "" });
 
-export function classifyReviewDisagreement(pass: number, records: ReviewPassRecord["reviewers"], reports: ReadonlyMap<string, readonly AuthoringReviewFinding[]>): ReviewDisagreement | undefined {
+export function classifyReviewDisagreement(pass: number, records: ReviewPassRecord["reviewers"], candidates: readonly ReviewCandidate[]): ReviewDisagreement | undefined {
 	const drivers = records
 		.filter((record): record is typeof record & { verdict: DriverReviewVerdict } => record.ok && record.verdict !== undefined)
 		.map((record) => ({ identity: record.identity, ...record.verdict }))
@@ -81,7 +81,7 @@ export function classifyReviewDisagreement(pass: number, records: ReviewPassReco
 	return {
 		pass,
 		drivers,
-		hasSafetyBlocker: drivers.some((driver) => driver.verdict === "block" && (reports.get(driver.identity.seatId) ?? []).some((finding) => finding.severity === "must-fix" && SAFETY_CLASSES.includes(finding.class))),
+		hasSafetyBlocker: candidates.some((candidate) => candidate.finding.severity === "must-fix" && SAFETY_CLASSES.includes(candidate.finding.class)),
 		evidenceFingerprint: createHash("sha256").update(JSON.stringify(normalized)).digest("hex"),
 	};
 }
@@ -131,7 +131,6 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 		const settled = await Promise.allSettled(configuredReviewers.map((slot, index) => options.runSeat({ role: "reviewer", slot, pass, prompt: options.prompts.review(pass), parkSignal: children[index] })));
 		for (const child of children) if (child.parked) Object.assign(options.parkSignal, child);
 		const reviewerRecords: ReviewPassRecord["reviewers"] = [];
-		const reviewerFindings = new Map<string, readonly AuthoringReviewFinding[]>();
 		const discovered: Array<{ finding: AuthoringReviewFinding; source: string }> = carried.map((candidate) => ({ finding: candidate.finding, source: "carried" }));
 		settled.forEach((result, index) => {
 			const slot = configuredReviewers[index];
@@ -144,7 +143,6 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 				const report = parseAuthoringReviewFindings(result.value.fullText ?? result.value.text);
 				if (result.value.ok) {
 					for (const finding of report.findings) discovered.push({ finding, source: slot.id });
-					reviewerFindings.set(slot.id, report.findings);
 				}
 				reviewerRecords.push({
 					identity: identity("reviewer", slot, pass),
@@ -159,7 +157,7 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 		});
 		if (!reviewerRecords.some((record) => record.ok)) return { outcome: options.parkSignal.parked ? "budget" : "hard-block", diversity, passes, survivors: carried, notes, cost };
 		const candidates = deduplicateCandidates(discovered);
-		const disagreement = classifyReviewDisagreement(pass, reviewerRecords, reviewerFindings);
+		const disagreement = classifyReviewDisagreement(pass, reviewerRecords, candidates);
 		if (disagreement) {
 			passes.push({
 				pass,
