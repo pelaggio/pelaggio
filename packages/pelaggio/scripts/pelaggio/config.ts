@@ -86,7 +86,7 @@ export interface ResolvedConfig {
 	 *  entry falls back to the provider's default binary (resolved via PATH). Lets an off-PATH
 	 *  driver (e.g. `~/.grok/bin/grok`) be pinned without editing PATH. */
 	providerBins: Partial<Record<ProviderName, string>>;
-	/** Explicit escape hatch for hosts where Grok's managed sandbox cannot be prepared. */
+	/** Explicit escape hatch for Linux hosts whose kernel does not expose Landlock. */
 	grokAllowUnsandboxedFallback: boolean;
 	shipTarget: ShipTargetName;
 	roadmapSource: RoadmapSourceName;

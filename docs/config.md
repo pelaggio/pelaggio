@@ -292,13 +292,18 @@ in-process (no subprocess), so a `bin` override for it has no effect.
 
 ### Grok sandbox
 
-Every Grok step installs and explicitly selects the namespaced
-`pelaggio-worktree-v1` custom profile in `~/.grok/sandbox.toml`; unrelated user
-profiles and file permissions are preserved. Profile installation failure refuses the step by
-default. Operators who already provide an equivalent external containment boundary may set
-`providers.grok.allow-unsandboxed-fallback: true`; only then does Pelaggio invoke Grok without
-the `--sandbox` selection. Built-in web search remains disabled. This weakens Pelaggio's
-worktree confinement and should not be enabled on an otherwise uncontained host.
+On Linux, Grok's custom sandbox requires both `bubblewrap` and kernel Landlock support (Landlock
+must appear in `/sys/kernel/security/lsm`). Every Grok step normally installs and explicitly
+selects the namespaced `pelaggio-worktree-v1` profile in `~/.grok/sandbox.toml`; unrelated user
+profiles and file permissions are preserved. Missing Landlock or profile installation failure
+refuses the step by default.
+
+On a Landlock-less Linux host such as a default WSL2 kernel, operators may explicitly set
+`providers.grok.allow-unsandboxed-fallback: true`. Pelaggio then starts Grok without `--sandbox`
+and prints a loud warning. Until the Pelaggio host-side jail is wired, only environment-secret
+denial and CWD guidance remain; this is acceptable for local supervised dogfooding, not unattended
+operation. The option does not bypass malformed or unwritable profile configuration when Landlock
+is available. Built-in web search remains disabled in either mode.
 
 The profile extends Grok's `strict` policy, so project/source access is limited
 to the invocation CWD. Grok still needs its executable, system libraries and
