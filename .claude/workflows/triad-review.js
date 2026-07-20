@@ -117,7 +117,7 @@ log(`Triad reviewing: ${TITLE}`)
 const reviews = (
   await parallel(
     LENSES.map((l) => () =>
-      robustAgent(`You are a reviewer. ${l.prompt}\n\n=== UNDER REVIEW: ${TITLE} ===\n${ARTIFACT}\n\n${GROUNDING}\n\nReturn structured findings; be specific and adversarial. A stub/placeholder is rejected.`, {
+      robustAgent(`You are a reviewer. ${l.prompt}\n\n=== UNDER REVIEW: ${TITLE} ===\n${ARTIFACT}\n\n${GROUNDING}\n\nYour subject is the artifact above — review IT. Read the repo only to verify the artifact's claims; do NOT substitute an unrelated repo change (e.g. an unrelated uncommitted edit) as your subject. Return structured findings; be specific and adversarial. A stub/placeholder is rejected.`, {
         label: `review:${l.key}`,
         phase: 'Review',
         schema: FINDINGS_SCHEMA,
