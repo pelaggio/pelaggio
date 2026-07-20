@@ -15,6 +15,8 @@ Degrade gracefully **on rigor** — fewer reviewers, same-provider with a visibl
 
 Specific resolution of the wedged-pin case: falling back to the **last verified pin** is permitted — it is still inside the deterministic gate (it *was* verified), so this is a staleness/rigor degradation, recorded and `ship.target`-gated. An **uncontained or unverified** fallback is never permitted, even at total availability loss. The dividing line is safety-class vs. judgment-band — the same line the review loop already draws.
 
+The fallback is **bounded, not indefinite**: it carries a **staleness ceiling** (a maximum age / cycle count on the stale pin) and a **re-verification trigger** — a rolling re-verify of the current pin runs continuously, the fleet returns to the current pin the moment it re-verifies, and if the stale pin exceeds the ceiling first, the fleet **parks** rather than run indefinitely on an old surface. Silent, unbounded pinning to a stale surface is exactly the failure this carve-out must not become.
+
 ## Alternatives not taken
 - Fail-closed with no degradation — one upstream CLI/image bump parks the whole fleet.
 - Uncontained fallback for availability — breaches the deterministic security gate the autonomy model depends on.
