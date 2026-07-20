@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 import type { ShipDecisionEffect } from "../effects.js";
 import type { GhRunner } from "../roadmap/github-issues.js";
-import { parseShipDecisionEffect } from "../ship/decision.js";
+import { parseShipDecisionEffect, shipBodyFile } from "../ship/decision.js";
 import { runShipPrEffects } from "../ship/pr-effects.js";
 import type { StepResult } from "../types.js";
 
@@ -115,6 +115,15 @@ describe("parseShipDecisionEffect", () => {
 		mkdirSync(join(wtBig, ".dev", "ship"), { recursive: true });
 		writeFileSync(join(wtBig, ".dev", "ship", "pr-body-TOOL-99.md"), Buffer.alloc(512 * 1024 + 1, 0x61));
 		assert.throws(() => parseShipDecisionEffect(step(dec), exp(wtBig)), /exceeds/);
+	});
+
+	it("rejects an itemId whose interpolated path escapes the worktree (#312)", () => {
+		// itemId is harness-controlled today, but the reader must not depend on that: a crafted id that
+		// resolves outside the worktree is rejected by the lexical containment check before any open.
+		const evilId = "x/../../../../../../../../etc/evil";
+		const bodyFile = shipBodyFile(evilId);
+		const dec = `SHIP_DECISION\n{"target":"pull-request","itemId":${JSON.stringify(evilId)},"headBranch":"feat/x","prTitle":"Ship","prBodyFile":${JSON.stringify(bodyFile)}}\nEND_SHIP_DECISION`;
+		assert.throws(() => parseShipDecisionEffect(step(dec), { itemId: evilId, target: "pull-request", worktree: wt }), /escapes the worktree/);
 	});
 
 	it("rejects missing block, bad JSON, item mismatch, target mismatch, and no body", () => {

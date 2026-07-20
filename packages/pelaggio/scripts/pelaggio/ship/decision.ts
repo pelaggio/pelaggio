@@ -1,5 +1,5 @@
-import { closeSync, fstatSync, openSync, readFileSync, realpathSync } from "node:fs";
-import { resolve } from "node:path";
+import { closeSync, constants, fstatSync, openSync, readSync, realpathSync } from "node:fs";
+import { isAbsolute, relative, resolve } from "node:path";
 import { EffectsManifestError, type ShipDecisionEffect } from "../effects.js";
 import type { ShipTargetName, StepResult } from "../types.js";
 import { SHIP_TARGET_NAMES } from "./index.js";
@@ -57,30 +57,56 @@ export function parseShipDecisionEffect(step: StepResult, expected: { itemId: st
 	};
 }
 
-/** Read the PR body from the fixed worktree-owned scratch file, fail-closed on any symlink in the path
- *  (the canonicalized path is compared to the lexical one, so an ancestor symlink can neither escape the
- *  worktree nor redirect the read at host/secret files), a non-regular file, or one over the size bound.
- *  Validation and consumption go through a single descriptor (open → fstat → read) so they refer to the
- *  same object with no swap window (#312). */
+/** Read the PR body from the fixed worktree-owned scratch file, fail-closed on any symlink in the path,
+ *  any escape of the worktree, a non-regular file, or a body over the size bound. All validation runs
+ *  through a single descriptor that is *opened first*, then checked — so there is no canonicalize→open
+ *  swap window: `O_NOFOLLOW` rejects a symlinked leaf at open time, and the descriptor's own real path
+ *  (via `/proc/self/fd`) is what gets containment-checked, catching an ancestor symlink as resolved at
+ *  open on the pinned inode. The size bound is enforced while reading (a concurrent writer can grow the
+ *  file after `fstat`), not from a stale stat snapshot (#312). Note: the `canonical === lexical` check is
+ *  byte-exact, so a case-insensitive/normalizing filesystem could false-reject — acceptable here because
+ *  the path is a fully harness-owned literal on the Linux run host and the direction is fail-closed. */
 function readPrBodyFile(worktree: string, relPath: string): string {
 	const worktreeReal = realpathSync(worktree);
 	const lexical = resolve(worktreeReal, relPath);
-	let real: string;
-	try {
-		real = realpathSync(lexical);
-	} catch {
-		throw new EffectsManifestError("invalid_manifest", `ship decision prBodyFile not found: ${relPath}`);
+	// Lexical containment: `relPath` embeds the harness-controlled itemId, but never let a crafted id
+	// resolve to a `..`/absolute segment outside the worktree (defence-in-depth; itemId is constrained today).
+	const within = relative(worktreeReal, lexical);
+	if (within === "" || within.startsWith("..") || isAbsolute(within)) {
+		throw new EffectsManifestError("invalid_manifest", `ship decision prBodyFile escapes the worktree: ${relPath}`);
 	}
-	// A symlink anywhere in the path makes the canonical path differ from the lexical one. The worker
-	// must write a plain regular file at the exact location; a symlink is how a compromised worker would
-	// escape confinement or point the read at host/secret files.
-	if (real !== lexical) throw new EffectsManifestError("invalid_manifest", `ship decision prBodyFile path must not contain a symlink: ${relPath}`);
-	const fd = openSync(real, "r");
+	let fd: number;
 	try {
+		// O_NOFOLLOW: a symlinked leaf fails to open here rather than being silently followed.
+		fd = openSync(lexical, constants.O_RDONLY | constants.O_NOFOLLOW);
+	} catch {
+		throw new EffectsManifestError("invalid_manifest", `ship decision prBodyFile not found or not a plain file: ${relPath}`);
+	}
+	try {
+		// Where the pinned descriptor actually points, with ancestor symlinks resolved as at open time.
+		// Comparing this to the lexical path rejects any symlink in the chain and any escape, TOCTOU-free.
+		let canonical: string;
+		try {
+			canonical = realpathSync(`/proc/self/fd/${fd}`);
+		} catch {
+			canonical = realpathSync(lexical); // non-Linux fallback: best-effort, narrower window
+		}
+		if (canonical !== lexical) {
+			throw new EffectsManifestError("invalid_manifest", `ship decision prBodyFile path must not contain a symlink: ${relPath}`);
+		}
 		const stat = fstatSync(fd);
 		if (!stat.isFile()) throw new EffectsManifestError("invalid_manifest", `ship decision prBodyFile is not a regular file: ${relPath}`);
-		if (stat.size > MAX_PR_BODY_BYTES) throw new EffectsManifestError("invalid_manifest", `ship decision prBodyFile exceeds ${MAX_PR_BODY_BYTES} bytes: ${relPath}`);
-		return readFileSync(fd, "utf-8");
+		// Read up to MAX+1 bytes off the descriptor and reject if it overflows — enforcing the bound during
+		// the read, so a writer that grows the file after fstat cannot slip a larger body past the check.
+		const buf = Buffer.allocUnsafe(MAX_PR_BODY_BYTES + 1);
+		let total = 0;
+		let n: number;
+		do {
+			n = readSync(fd, buf, total, buf.length - total, null);
+			total += n;
+		} while (n > 0 && total <= MAX_PR_BODY_BYTES);
+		if (total > MAX_PR_BODY_BYTES) throw new EffectsManifestError("invalid_manifest", `ship decision prBodyFile exceeds ${MAX_PR_BODY_BYTES} bytes: ${relPath}`);
+		return buf.subarray(0, total).toString("utf-8");
 	} finally {
 		closeSync(fd);
 	}
