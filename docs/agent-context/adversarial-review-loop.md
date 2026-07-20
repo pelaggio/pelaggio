@@ -43,7 +43,9 @@ integration + provenance.
   thinking longer sometimes beats N reviewers. → **Benchmark the loop against a single-strong-agent
   baseline**; only pay for the fleet where diversity demonstrably helps.
 - **The aggregator/judge is the selection bottleneck.** → Invest in the Judge; it's the
-  highest-leverage component.
+  highest-leverage component. This is `flow.md`'s **unsound validator** from the other side: a local
+  maximum is usually a *measurement* failure, so the leverage is a sounder objective (Judge / rubric /
+  `verify`), not a cleverer search.
 
 ## Roles
 
@@ -79,6 +81,13 @@ tests green + the judge's re-check of the prior ≥-bar set). Statistical stabil
 (KS/adaptive) is a **deferred, optional lever for the below-bar *note* distribution only** — never the
 gate on the blocking set. Non-convergent exits (ceiling / dissent / hard-block) are terminal
 *outcomes*, not convergence.
+
+**Exploration temperature vs. acceptance (hill-climbing posture).** Non-regressing promotion is a
+deliberately *greedy* acceptance gate — the same fail-closed guarantee `ship` enforces — and greedy
+acceptance is exactly what strands a local search on a local maximum. So the escape lives one layer
+in: the **authoring/revise loop may traverse a worse *intermediate* diff** to reach a better basin
+(exploration carries the temperature); **acceptance never does** — only a non-regressing revision is
+promoted. That split escapes local maxima without weakening the merge invariant.
 
 ## Outcome levers
 
