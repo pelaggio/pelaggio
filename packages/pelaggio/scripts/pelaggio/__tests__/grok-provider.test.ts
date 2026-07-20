@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 import { CONFIG, REPO } from "../config.js";
 import { buildGrokStepResult, grokEffort, grokServerRequestResponse, grokTimeoutMs, runStep, selectGrokModel } from "../grok-provider.js";
+import { detectLandlock } from "../grok-sandbox.js";
 import type { StepEvent } from "../types.js";
 
 type JsonObject = Record<string, unknown>;
@@ -161,7 +162,16 @@ describe("grok helpers", () => {
 });
 
 describe("Grok provider confinement setup", () => {
-	it("returns error_confinement without spawning when HOME is absent", async () => {
+	it("returns error_confinement without spawning when HOME is absent", async (t) => {
+		// The HOME-absent refusal lives inside the `if (sandbox)` branch, which only
+		// runs when Landlock is active. On a Landlock-less host the path is unreachable:
+		// with the fallback off Grok refuses for Landlock first, and with it on Grok
+		// starts unconfined and spawns — neither is the behavior under test. Skip rather
+		// than assert a host-inappropriate diagnostic.
+		if (!(await detectLandlock())) {
+			t.skip("HOME-absent confinement refusal is Landlock-gated; this kernel lacks Landlock");
+			return;
+		}
 		const root = await mkdtemp(join(tmpdir(), "pelaggio-grok-provider-"));
 		const sentinel = join(root, "spawned");
 		const executable = join(root, "grok-sentinel");
