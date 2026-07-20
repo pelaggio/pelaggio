@@ -16,6 +16,7 @@ Pelaggio has no analytics or telemetry channel at all (`TC-002`). Operational eg
 |---|---|---|---|---|---|---|
 | `anthropic` | Required for Claude-provider runs today | Prompts, repo paths, source context, diffs, issue text | Model provider policy | Configure a different model provider when one is supported for the step | Sub-processor | `TC-006`, `TC-014` |
 | `openai` | Optional for contained Codex key-mode runs | Request bodies/prompts and provider usage | Model provider policy | Omit the `--egress` selection | Sub-processor | `TC-006`, `TC-017` |
+| `cli-chat-proxy.grok.com` | Required for Grok-provider runs | Prompts, repo context, diffs, issue text | Model provider policy | Configure another provider for the step | Sub-processor | `TC-006`, `TC-014` |
 | `github` | Optional, when roadmap/ship/review uses GitHub | Issues, pull requests, plan bodies, diffs, comments | Your GitHub organization/repo | Use another roadmap source or avoid PR/review modes that call GitHub | User-controlled endpoint | `TC-006`, `TC-003`, `TC-012`, `TC-013` |
 | `linear` | Optional, when roadmap source is Linear | Issues, comments, state | Your Linear workspace | Use another roadmap source | User-controlled endpoint | `TC-006` |
 | `git_remote` | Optional by ship mode | Commits, branches | Your git remote | Default PR mode still pushes feature branches; direct default-branch push requires explicit opt-in | User-controlled endpoint | `TC-006`, `TC-012` |
@@ -38,3 +39,8 @@ traffic may contain worktree data. Unattended, CI, and shared execution require 
 Transparent subscription auth is reserved for a future verified official transport seam and local,
 single-developer opt-in; there are no dummy auth files, refresh-token handling, or direct-network
 fallback. Containment also does not establish contractual permission to use a provider service.
+
+Grok steps disable built-in web search/fetch and block networking from child
+commands. Grok 0.2.103 exempts its in-process model client from that child
+network control and exposes no hostname allowlist; the destination above is
+observed and release-conformance-locked rather than kernel-enforced.

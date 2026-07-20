@@ -28,10 +28,10 @@ Pelaggio's current isolation is worktree-oriented process discipline, not an OS/
 
 | Limit | Why it matters | Claim(s) |
 |---|---|---|
-| No OS/container boundary | A shell command runs with the operator's local privileges and environment, subject to the process sandbox/harness in use. | `TC-011`, `TC-014`, `TC-015` |
+| Provider-dependent OS boundary | Claude remains worktree-discipline based; Codex uses its workspace boundary; Grok explicitly selects a custom profile extending `strict` (Linux `bubblewrap`, macOS Seatbelt). Grok child-network restriction is Linux-only. | `TC-011`, `TC-014`, `TC-015` |
 | Attribution is windowed and Git-scoped | Paths outside audited Git roots and detached/background writes after a tool post hook are not caught. Simultaneous changes inside a Claude tool window are conservatively attributed. | `TC-011`, `TC-015` |
-| Child env allowlist is not shipped | Spawned children inherit the parent environment today. | `TC-014` |
-| Verbose raw logs are not scrubbed | `--verbose` transcripts in `.dev/*.log` can capture raw stdout/stderr. | `TC-001`, `TC-014` |
+| OS sandbox exceptions remain | Grok needs system runtime paths and its own auth/session/sandbox-event state under `~/.grok`; `strict` confines project access to CWD, not every runtime read/write literally. | `TC-011`, `TC-014`, `TC-015` |
+| In-process Grok model egress is not hostname-filtered | Grok 0.2.103 blocks child networking and Pelaggio disables web tools, but the model client is exempt and the CLI exposes no hostname allowlist. | `TC-006`, `TC-014` |
 | Prompt injection is bounded, not solved | The agent still consumes attacker-reachable text and runs broad tools inside the worktree. | `TC-015` |
 
 ## Practical Reading

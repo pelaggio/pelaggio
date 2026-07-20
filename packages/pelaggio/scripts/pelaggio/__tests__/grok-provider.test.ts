@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
+import { access, chmod, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
-import { buildGrokStepResult, grokEffort, grokServerRequestResponse, grokTimeoutMs, selectGrokModel } from "../grok-provider.js";
+import { CONFIG, REPO } from "../config.js";
+import { buildGrokStepResult, grokEffort, grokServerRequestResponse, grokTimeoutMs, runStep, selectGrokModel } from "../grok-provider.js";
+import type { StepEvent } from "../types.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -152,5 +157,36 @@ describe("grok helpers", () => {
 
 	it("grokServerRequestResponse returns an empty result for non-permission requests", () => {
 		assert.deepEqual(grokServerRequestResponse({ id: 7, method: "fs/read_text_file", params: {} }), {});
+	});
+});
+
+describe("Grok provider confinement setup", () => {
+	it("returns error_confinement without spawning when HOME is absent", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pelaggio-grok-provider-"));
+		const sentinel = join(root, "spawned");
+		const executable = join(root, "grok-sentinel");
+		await writeFile(executable, `#!/bin/sh\ntouch "${sentinel}"\n`);
+		await chmod(executable, 0o700);
+		const previousHome = process.env.HOME;
+		const previousBin = CONFIG.providerBins.grok;
+		delete process.env.HOME;
+		CONFIG.providerBins.grok = executable;
+		const events: StepEvent[] = [];
+		try {
+			const result = await runStep("implement", "test", { cwd: REPO, profile: "standard", trace: false, parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" } }, (event) => events.push(event));
+			assert.equal(result.ok, false);
+			assert.equal(result.subtype, "error_confinement");
+			assert.equal(
+				events.some((event) => event.type === "sdk_error" && event.message.includes("HOME")),
+				true,
+			);
+			assert.equal(events.at(-1)?.type, "done");
+			await assert.rejects(access(sentinel));
+		} finally {
+			if (previousHome === undefined) delete process.env.HOME;
+			else process.env.HOME = previousHome;
+			if (previousBin === undefined) delete CONFIG.providerBins.grok;
+			else CONFIG.providerBins.grok = previousBin;
+		}
 	});
 });
