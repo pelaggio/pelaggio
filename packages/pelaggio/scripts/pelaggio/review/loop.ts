@@ -1,6 +1,7 @@
+import { createHash } from "node:crypto";
 import type { AuthoringReviewConfig, ReviewSlot } from "../config.js";
 import type { ParkSignal, ProviderName, StepResult } from "../types.js";
-import { type AuthoringReviewFinding, type JudgeReport, type JudgeRuling, parseAuthoringReviewFindings, parseJudgeReport, type ReviewFindingClass, reviewFindingFingerprint } from "./findings.js";
+import { type AuthoringReviewFinding, type JudgeReport, type JudgeRuling, parseAuthoringReviewFindings, parseJudgeReport, type ReviewFindingClass, reviewFindingFingerprint, reviewFindingsGate } from "./findings.js";
 
 export type ReviewOutcome = "converged-clean" | "converged-with-notes" | "ceiling" | "dissent" | "hard-block" | "budget";
 export type DiversityStatus = { state: "met" } | { state: "softened"; explanation: string };
@@ -19,10 +20,17 @@ export interface ReviewCandidate {
 }
 export interface ReviewPassRecord {
 	pass: number;
-	reviewers: Array<{ identity: DriverIdentity; ok: boolean; cost: number; turns: number; diagnostic?: string }>;
+	reviewers: Array<{ identity: DriverIdentity; ok: boolean; cost: number; turns: number; verdict?: DriverReviewVerdict; diagnostic?: string }>;
 	judge: { identity: DriverIdentity; valid: boolean; cost: number; turns: number; diagnostic?: string };
 	carriedBefore: string[];
 	carriedAfter: string[];
+}
+export type DriverReviewVerdict = { verdict: "pass" | "block"; rationale: string };
+export interface ReviewDisagreement {
+	pass: number;
+	drivers: Array<{ identity: DriverIdentity; verdict: "pass" | "block"; rationale: string }>;
+	hasSafetyBlocker: boolean;
+	evidenceFingerprint: string;
 }
 export interface ReviewLoopResult {
 	outcome: ReviewOutcome;
@@ -32,6 +40,7 @@ export interface ReviewLoopResult {
 	notes: ReviewCandidate[];
 	cost: number;
 	dissent?: { finding: ReviewCandidate; ruling: "judgment-dissent"; attemptedResolution: string; notificationTarget: string };
+	disagreement?: ReviewDisagreement;
 }
 export interface SeatRequest {
 	role: "reviewer" | "judge" | "author";
@@ -61,6 +70,21 @@ const identity = (role: DriverIdentity["role"], slot: ReviewSlot, pass: number):
 	sessionId: `${role}-${slot.id}-p${pass}`,
 });
 const childSignal = (): ParkSignal => ({ parked: false, resetsAt: 0, limitType: "", triggerWorker: "" });
+
+export function classifyReviewDisagreement(pass: number, records: ReviewPassRecord["reviewers"], candidates: readonly ReviewCandidate[]): ReviewDisagreement | undefined {
+	const drivers = records
+		.filter((record): record is typeof record & { verdict: DriverReviewVerdict } => record.ok && record.verdict !== undefined)
+		.map((record) => ({ identity: record.identity, ...record.verdict }))
+		.sort((a, b) => JSON.stringify(a.identity).localeCompare(JSON.stringify(b.identity)));
+	if (drivers.length < 2 || !drivers.some((driver) => driver.verdict === "pass") || !drivers.some((driver) => driver.verdict === "block")) return undefined;
+	const normalized = drivers.map((driver) => [driver.identity.role, driver.identity.seatId, driver.identity.provider, driver.identity.model ?? "", driver.verdict, driver.rationale.trim().replace(/\s+/g, " ")]);
+	return {
+		pass,
+		drivers,
+		hasSafetyBlocker: candidates.some((candidate) => candidate.finding.severity === "must-fix" && SAFETY_CLASSES.includes(candidate.finding.class)),
+		evidenceFingerprint: createHash("sha256").update(JSON.stringify(normalized)).digest("hex"),
+	};
+}
 
 export function deduplicateCandidates(findings: readonly { finding: AuthoringReviewFinding; source: string }[]): ReviewCandidate[] {
 	const byFingerprint = new Map<string, ReviewCandidate>();
@@ -117,14 +141,43 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 			cost += result.value.cost;
 			try {
 				const report = parseAuthoringReviewFindings(result.value.fullText ?? result.value.text);
+				// Always ingest parseable findings — including from a non-ok seat (max-turns/errored):
+				// dropping them is a fail-open (a security must-fix from an incomplete seat must still
+				// block, and must feed hasSafetyBlocker). Only the pass/block VERDICT is ok-gated below,
+				// since an incomplete seat has no trustworthy overall verdict for disagreement.
 				for (const finding of report.findings) discovered.push({ finding, source: slot.id });
-				reviewerRecords.push({ identity: identity("reviewer", slot, pass), ok: result.value.ok, cost: result.value.cost, turns: result.value.turns });
+				reviewerRecords.push({
+					identity: identity("reviewer", slot, pass),
+					ok: result.value.ok,
+					cost: result.value.cost,
+					turns: result.value.turns,
+					...(result.value.ok ? { verdict: { verdict: reviewFindingsGate(report), rationale: report.summary } } : {}),
+				});
 			} catch (error) {
 				reviewerRecords.push({ identity: identity("reviewer", slot, pass), ok: false, cost: result.value.cost, turns: result.value.turns, diagnostic: error instanceof Error ? error.message : String(error) });
 			}
 		});
 		if (!reviewerRecords.some((record) => record.ok)) return { outcome: options.parkSignal.parked ? "budget" : "hard-block", diversity, passes, survivors: carried, notes, cost };
 		const candidates = deduplicateCandidates(discovered);
+		const disagreement = classifyReviewDisagreement(pass, reviewerRecords, candidates);
+		if (disagreement) {
+			passes.push({
+				pass,
+				reviewers: reviewerRecords,
+				judge: { identity: identity("judge", policy.judge, pass), valid: false, cost: 0, turns: 0, diagnostic: "skipped: human adjudication required" },
+				carriedBefore: discovered.filter((item) => item.source === "carried").map((item) => reviewFindingFingerprint(item.finding)),
+				carriedAfter: candidates.filter((candidate) => candidate.finding.severity === "must-fix").map((candidate) => candidate.fingerprint),
+			});
+			return {
+				outcome: disagreement.hasSafetyBlocker ? "hard-block" : "dissent",
+				diversity,
+				passes,
+				survivors: candidates.filter((candidate) => candidate.finding.severity === "must-fix"),
+				notes: candidates.filter((candidate) => candidate.finding.severity !== "must-fix"),
+				cost,
+				disagreement,
+			};
+		}
 		const judgeSignal = childSignal();
 		let judgeResult: StepResult;
 		try {

@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import { withMutationLock } from "./roadmap/mutation-lock.js";
-import type { Decision, Step } from "./types.js";
+import type { Decision, ReviewEscalation, ReviewResolution, Step } from "./types.js";
 
 export const DECISIONS_HEADER = "| Decision | Status | Chosen/leaning | Alternatives | Source | Date |";
 const RULE = "| --- | --- | --- | --- | --- | --- |";
@@ -25,6 +25,11 @@ export interface AppendDecisionsInput {
 }
 
 export type DecisionWriteResult = { status: "written"; ids: string[] } | { status: "duplicate"; ids: string[] } | { status: "failed"; error: string; ids: [] };
+export type ReviewEscalationLookup =
+	| { state: "missing" }
+	| { state: "invalid"; error: string }
+	| { state: "active"; id: string; escalation: ReviewEscalation }
+	| { state: "resolved-proceed" | "resolved-block"; id: string; escalation: ReviewEscalation; resolution: ReviewResolution };
 
 function cell(value: string | undefined): string {
 	return (value ?? "").replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\r?\n/g, " ").trim();
@@ -44,6 +49,59 @@ export function decisionId(input: Omit<AppendDecisionsInput, "decisions" | "now"
 
 function marker(id: string): string {
 	return `<!-- decision:${id} -->`;
+}
+
+const escalationMarker = (value: { escalation: ReviewEscalation; resolution?: ReviewResolution }): string => `<!-- review-escalation:${Buffer.from(JSON.stringify(value)).toString("base64url")} -->`;
+
+export function reviewEscalationId(input: ReviewEscalation): string {
+	return createHash("sha256").update([input.itemId, input.step, input.reviewedSha, input.evidenceFingerprint].join("\0")).digest("hex").slice(0, 16);
+}
+
+export async function appendReviewEscalation(repo: string, escalation: ReviewEscalation, now = new Date()): Promise<DecisionWriteResult> {
+	const id = reviewEscalationId(escalation);
+	try {
+		return await withMutationLock(repo, () => {
+			const path = resolve(repo, "docs", "decisions.md");
+			let body = existsSync(path) ? readFileSync(path, "utf8").replace(/\r\n/g, "\n") : DECISIONS_SKELETON;
+			if (body.includes(marker(id))) return { status: "duplicate" as const, ids: [id] };
+			const row = `| Cross-model review split for ${cell(escalation.itemId)} | default-taken | Human adjudication required | proceed or block | ${cell(escalation.reviewRecordSource)} | ${now.toISOString().slice(0, 10)} |\n${marker(id)}\n${escalationMarker({ escalation })}\n`;
+			body = insertRows(body, "Active", row);
+			mkdirSync(dirname(path), { recursive: true });
+			writeFileSync(path, body.endsWith("\n") ? body : `${body}\n`);
+			commit(repo, [path], `docs: record review escalation ${id}`);
+			return { status: "written" as const, ids: [id] };
+		});
+	} catch (error) {
+		return { status: "failed", error: error instanceof Error ? error.message : String(error), ids: [] };
+	}
+}
+
+function parseEscalationMetadata(block: string): { escalation: ReviewEscalation; resolution?: ReviewResolution } {
+	const matches = [...block.matchAll(/<!-- review-escalation:([A-Za-z0-9_-]+) -->/g)];
+	if (matches.length !== 1) throw new Error("review escalation metadata must occur exactly once");
+	const value: unknown = JSON.parse(Buffer.from(matches[0][1], "base64url").toString("utf8"));
+	if (!value || typeof value !== "object" || !("escalation" in value)) throw new Error("malformed review escalation metadata");
+	return value as { escalation: ReviewEscalation; resolution?: ReviewResolution };
+}
+
+export function lookupReviewEscalation(repo: string, itemId: string, reviewedSha: string): ReviewEscalationLookup {
+	const path = resolve(repo, "docs", "decisions.md");
+	if (!existsSync(path)) return { state: "missing" };
+	try {
+		const body = readFileSync(path, "utf8").replace(/\r\n/g, "\n");
+		const entries = [...body.matchAll(/<!-- decision:([a-f0-9]+) -->\n<!-- review-escalation:[A-Za-z0-9_-]+ -->/g)]
+			.map((match) => ({ id: match[1], metadata: parseEscalationMetadata(match[0]), resolved: (match.index ?? 0) > body.indexOf("## Resolved") }))
+			.filter(({ metadata }) => metadata.escalation.itemId === itemId && metadata.escalation.reviewedSha === reviewedSha);
+		if (entries.length === 0) return { state: "missing" };
+		if (entries.length !== 1) return { state: "invalid", error: "multiple review escalations match item and SHA" };
+		const [{ id, metadata, resolved }] = entries;
+		if (reviewEscalationId(metadata.escalation) !== id) return { state: "invalid", error: "review escalation ID does not match its evidence" };
+		if (!resolved) return { state: "active", id, escalation: metadata.escalation };
+		if (!metadata.resolution?.actor.trim() || !metadata.resolution.rationale.trim()) return { state: "invalid", error: "review resolution audit is incomplete" };
+		return { state: metadata.resolution.disposition === "proceed" ? "resolved-proceed" : "resolved-block", id, escalation: metadata.escalation, resolution: metadata.resolution };
+	} catch (error) {
+		return { state: "invalid", error: error instanceof Error ? error.message : String(error) };
+	}
 }
 
 function insertRows(body: string, heading: "Active" | "Resolved", rows: string): string {
@@ -89,14 +147,15 @@ export async function appendDecisions(repo: string, input: AppendDecisionsInput)
 	}
 }
 
-function rowBlock(body: string, id: string): { start: number; end: number; row: string } {
+function rowBlock(body: string, id: string): { start: number; end: number; row: string; block: string } {
 	const needle = marker(id);
 	const markerAt = body.indexOf(needle);
 	if (markerAt < 0 || body.indexOf(needle, markerAt + 1) >= 0) throw new Error(`decision ID must select exactly one row: ${id}`);
 	const rowStart = body.lastIndexOf("\n|", markerAt) + 1;
-	const end = body.indexOf("\n", markerAt) + 1;
+	let end = body.indexOf("\n", markerAt) + 1;
+	if (body.slice(end).startsWith("<!-- review-escalation:")) end = body.indexOf("\n", end) + 1;
 	if (rowStart <= 0 || end <= 0 || body.slice(rowStart, markerAt).includes("## ")) throw new Error(`invalid decision row for ID: ${id}`);
-	return { start: rowStart, end, row: body.slice(rowStart, body.indexOf("\n", rowStart)) };
+	return { start: rowStart, end, row: body.slice(rowStart, body.indexOf("\n", rowStart)), block: body.slice(rowStart, end) };
 }
 
 function splitRow(row: string): string[] {
@@ -106,7 +165,7 @@ function splitRow(row: string): string[] {
 		.map((part) => part.trim());
 }
 
-export async function resolveDecision(repo: string, id: string, options: { adr?: string; now?: Date } = {}): Promise<void> {
+export async function resolveDecision(repo: string, id: string, options: { adr?: string; now?: Date; disposition?: "proceed" | "block"; actor?: string; rationale?: string } = {}): Promise<void> {
 	if (options.adr && !/^ADR-\d{4}$/i.test(options.adr)) throw new Error("--adr must match ADR-nnnn");
 	await withMutationLock(repo, () => {
 		const path = resolve(repo, "docs", "decisions.md");
@@ -115,9 +174,15 @@ export async function resolveDecision(repo: string, id: string, options: { adr?:
 		const activeEnd = body.indexOf("## Resolved");
 		if (block.start >= activeEnd) throw new Error(`decision is not active: ${id}`);
 		const cells = splitRow(block.row);
+		const isEscalation = block.block.includes("<!-- review-escalation:");
+		if (isEscalation && (!options.disposition || !options.actor?.trim() || !options.rationale?.trim())) throw new Error("review escalation resolution requires disposition, actor, and rationale");
 		cells[1] = options.adr ? `resolved→${options.adr.toUpperCase()}` : "resolved";
 		cells[5] = (options.now ?? new Date()).toISOString().slice(0, 10);
-		const moved = `| ${cells.join(" | ")} |\n${marker(id)}\n`;
+		let moved = `| ${cells.join(" | ")} |\n${marker(id)}\n`;
+		if (isEscalation) {
+			const metadata = parseEscalationMetadata(block.block);
+			moved += `${escalationMarker({ escalation: metadata.escalation, resolution: { disposition: options.disposition!, actor: options.actor!.trim(), rationale: options.rationale!.trim(), timestamp: (options.now ?? new Date()).toISOString(), ...(options.adr ? { adr: options.adr.toUpperCase() } : {}) } })}\n`;
+		}
 		const without = body.slice(0, block.start) + body.slice(block.end);
 		writeFileSync(path, insertRows(without, "Resolved", moved));
 		commit(repo, [path], `docs: resolve decision ${id}`);
@@ -132,7 +197,7 @@ export async function archiveResolvedDecisions(repo: string, cutoff: Date): Prom
 		if (!existsSync(path)) return 0;
 		let body = readFileSync(path, "utf8").replace(/\r\n/g, "\n");
 		const resolvedAt = body.indexOf("## Resolved");
-		const matches = [...body.slice(resolvedAt).matchAll(/^\| .*\|\n<!-- decision:([a-f0-9]+) -->\n/gm)];
+		const matches = [...body.slice(resolvedAt).matchAll(/^\| .*\|\n<!-- decision:([a-f0-9]+) -->\n(?:<!-- review-escalation:[A-Za-z0-9_-]+ -->\n)?/gm)];
 		const selected = matches.filter((match) => {
 			const cells = splitRow(match[0].split("\n")[0]);
 			return new Date(`${cells[5]}T00:00:00Z`) < cutoff;

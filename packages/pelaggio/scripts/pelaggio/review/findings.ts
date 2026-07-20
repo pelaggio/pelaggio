@@ -251,7 +251,7 @@ export function reconcileReviewVerification(candidates: readonly VerificationCan
 	});
 }
 
-export function reviewFindingsGate(report: ReviewFindingsReport): "pass" | "block" {
+export function reviewFindingsGate(report: Pick<ReviewFindingsReport, "findings">): "pass" | "block" {
 	return report.findings.some((finding) => finding.severity === "must-fix") ? "block" : "pass";
 }
 

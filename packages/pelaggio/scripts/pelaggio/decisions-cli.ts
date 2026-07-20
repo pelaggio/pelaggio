@@ -7,13 +7,24 @@ export async function decisionsCliMain(args = process.argv.slice(2), repo = REPO
 	const [command, ...rest] = args;
 	if (command === "resolve") {
 		const id = rest[0];
-		if (!id) throw new Error("usage: pelaggio decisions resolve <row-id> [--adr ADR-nnnn]");
-		const adrAt = rest.indexOf("--adr");
-		if (rest.length > 1 && adrAt < 0) throw new Error("unknown resolve arguments");
-		const adr = adrAt >= 0 ? rest[adrAt + 1] : undefined;
-		if (adrAt >= 0 && !adr) throw new Error("--adr requires an ADR-nnnn value");
-		await resolveDecision(repo, id, { ...(adr ? { adr } : {}), now });
-		console.log(`Resolved decision ${id}`);
+		if (!id) throw new Error("usage: pelaggio decisions resolve <row-id> [--disposition proceed|block --by <actor> --reason <text>] [--adr ADR-nnnn]");
+		const values = new Map<string, string>();
+		for (let index = 1; index < rest.length; index += 2) {
+			const flag = rest[index];
+			const value = rest[index + 1];
+			if (!["--adr", "--disposition", "--by", "--reason"].includes(flag) || values.has(flag) || !value?.trim()) throw new Error("invalid, duplicate, or incomplete resolve arguments");
+			values.set(flag, value);
+		}
+		const disposition = values.get("--disposition");
+		if (disposition !== undefined && disposition !== "proceed" && disposition !== "block") throw new Error("--disposition must be proceed or block");
+		await resolveDecision(repo, id, {
+			...(values.get("--adr") ? { adr: values.get("--adr") } : {}),
+			...(disposition ? { disposition } : {}),
+			...(values.get("--by") ? { actor: values.get("--by") } : {}),
+			...(values.get("--reason") ? { rationale: values.get("--reason") } : {}),
+			now,
+		});
+		console.log(`Resolved decision ${id}${disposition ? `: ${disposition}` : ""}`);
 		return 0;
 	}
 	if (command === "archive-resolved") {

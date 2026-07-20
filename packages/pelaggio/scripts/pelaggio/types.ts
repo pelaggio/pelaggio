@@ -17,6 +17,31 @@ export interface Decision {
 	alternatives?: string;
 }
 
+export interface ReviewEscalationDriver {
+	identity: { role: "reviewer"; seatId: string; provider: ProviderName; model?: string; sessionId: string };
+	verdict: "pass" | "block";
+	rationale: string;
+}
+
+export interface ReviewEscalation {
+	kind: "review-escalation";
+	itemId: string;
+	step: "shakedown-code";
+	reviewedSha: string;
+	evidenceFingerprint: string;
+	reviewRecordSource: string;
+	hasSafetyBlocker: boolean;
+	drivers: ReviewEscalationDriver[];
+}
+
+export interface ReviewResolution {
+	disposition: "proceed" | "block";
+	actor: string;
+	rationale: string;
+	timestamp: string;
+	adr?: string;
+}
+
 export interface StepResult {
 	ok: boolean;
 	subtype: string;
@@ -249,7 +274,7 @@ export interface PipelineOpts {
 	/** CI/single-shot mode: use REPO as worktree, skip sibling-path creation. */
 	noWorktree?: boolean;
 	/** Independently gated, fail-soft per-decision delivery. */
-	notifyDecision?: (input: { itemId: string | null; decision: Decision; step: Step; source: string; logPath: string }) => Promise<void>;
+	notifyDecision?: (input: { itemId: string | null; decision: Decision; step: Step; source: string; logPath: string; escalation?: ReviewEscalation & { id: string } }) => Promise<void>;
 }
 
 // ── Shared mutable state ───────────────────────────────────────────────
