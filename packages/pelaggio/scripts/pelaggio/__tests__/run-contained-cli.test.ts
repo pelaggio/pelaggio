@@ -13,6 +13,19 @@ describe("run-contained CLI", () => {
 		assert.throws(() => parseRunContainedArgs(["--debug"]), /requires --/);
 		assert.throws(() => parseRunContainedArgs(["--self-test", "--", "node"]), /cannot be combined/);
 		assert.throws(() => parseRunContainedArgs(["--"]), /missing command/);
+		assert.throws(() => parseRunContainedArgs(["--egress", "codex", "--", "node"]), /selected together/);
+		assert.throws(() => parseRunContainedArgs(["--egress", "codex", "--egress-model", "gpt-5.2-codex", "--egress-auth", "transparent", "--", "node"]), /conformance/);
+		assert.throws(() => parseRunContainedArgs(["--key-env", "literal-secret!", "--", "node"]), /environment variable name/);
+	});
+
+	it("parses key command and transparent conformance selections", () => {
+		process.env.TEST_EGRESS_KEY = "secret";
+		const command = parseRunContainedArgs(["--egress", "codex", "--egress-model", "gpt-5.2-codex", "--egress-auth", "key", "--key-env", "TEST_EGRESS_KEY", "--", "node"]);
+		assert.deepEqual(command.egress, { provider: "codex", model: "gpt-5.2-codex", auth: { kind: "key", env: "TEST_EGRESS_KEY", header: "authorization", scheme: "Bearer" } });
+		const conformance = parseRunContainedArgs(["--egress-conformance", "codex", "--egress-model", "gpt-5.2-codex", "--egress-auth", "transparent"]);
+		assert.equal(conformance.mode.kind, "self-test");
+		assert.deepEqual(conformance.egress?.auth, { kind: "transparent" });
+		delete process.env.TEST_EGRESS_KEY;
 	});
 
 	it("prints JSON and propagates command/self-test status", async () => {

@@ -4,6 +4,8 @@ import { constants } from "node:fs";
 import { chmod, cp, lstat, mkdir, mkdtemp, open, readFile, readlink, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { type EgressAuth, type EgressBrokerHandle, type EgressRequester, startEgressBroker } from "./egress-broker.js";
+import { resolveEgressPolicy } from "./egress-policies.js";
 import { buildAgentEnv, makeSecretScrubber } from "./secret-hygiene.js";
 
 export type ContainedRunMode = { kind: "command"; argv: readonly [string, ...string[]] } | { kind: "self-test" };
@@ -15,6 +17,7 @@ export interface ContainedRunOptions {
 	mode: ContainedRunMode;
 	debug?: boolean;
 	timeoutSeconds?: number;
+	egress?: { provider: string; model: string; auth: EgressAuth };
 }
 
 export interface ContainedRunResult {
@@ -70,6 +73,9 @@ export interface ContainedDependencies {
 	preflight?: (invocation: ContainedInvocation) => Promise<void>;
 	privateRoot?: string;
 	afterPostSnapshot?: () => Promise<void>;
+	startBroker?: typeof startEgressBroker;
+	brokerRequester?: EgressRequester;
+	runKill?: typeof spawnProcess;
 }
 
 const RUNTIME_ROOTS = ["/usr", "/bin", "/sbin", "/lib", "/lib64"] as const;
@@ -182,7 +188,7 @@ export async function computeWriteSet(before: WriteSnapshot, worktree: string, d
 }
 
 export function buildContainedInvocation(
-	options: ContainedRunOptions & { command: readonly [string, ...string[]]; privateDir: string; gitMask: string; dependencyTargets?: readonly string[] },
+	options: ContainedRunOptions & { command: readonly [string, ...string[]]; privateDir: string; gitMask: string; dependencyTargets?: readonly string[]; egressSocket?: string },
 	capabilities: ContainedCapabilities,
 ): ContainedInvocation {
 	if (capabilities.platform !== "linux") throw new Error("contained execution requires Linux");
@@ -224,6 +230,10 @@ export function buildContainedInvocation(
 		options.gitMask,
 		join(options.worktree, ".git"),
 	);
+	if (options.egressSocket) {
+		bwrap.push("--ro-bind", options.egressSocket, "/run/pelaggio/egress.sock");
+		env.PELAGGIO_EGRESS_SOCKET = "/run/pelaggio/egress.sock";
+	}
 	for (const target of options.dependencyTargets ?? []) bwrap.push("--ro-bind", target, target);
 	for (const [key, value] of Object.entries(env)) if (value !== undefined) bwrap.push("--setenv", key, value);
 	bwrap.push("--chdir", options.worktree, "--", ...options.command);
@@ -313,6 +323,9 @@ export function renderInvocation(invocation: ContainedInvocation): string {
 
 export async function runContained(options: ContainedRunOptions, deps: ContainedDependencies = {}): Promise<ContainedRunResult> {
 	if (options.mode.kind !== "command") throw new Error("runContained requires command mode");
+	const egressPolicy = options.egress ? resolveEgressPolicy(options.egress.provider, options.egress.model) : undefined;
+	const egressKey = options.egress?.auth.kind === "key" ? process.env[options.egress.auth.env] : undefined;
+	if (options.egress?.auth.kind === "key" && !egressKey) throw new Error(`missing key from ${options.egress.auth.env}`);
 	const worktree = await realpath(options.worktree);
 	const privateDir = await mkdtemp(join(deps.privateRoot ?? tmpdir(), "pelaggio-contained-"));
 	const gitMask = join(privateDir, "git-mask");
@@ -322,14 +335,41 @@ export async function runContained(options: ContainedRunOptions, deps: Contained
 	await (await open(gitMask, "w", 0o000)).close();
 	await chmod(gitMask, 0o000);
 	let artifactDir: string | undefined;
+	let broker: EgressBrokerHandle | undefined;
 	try {
 		const capabilities = await (deps.discoverCapabilities ?? defaultCapabilities)();
 		const command = await findCommand(options.mode.argv[0], process.env.PATH);
-		const invocation = buildContainedInvocation({ ...options, worktree, command: [command, ...options.mode.argv.slice(1)], privateDir, gitMask }, capabilities);
+		const egressSocket = egressPolicy ? join(privateDir, "egress.sock") : undefined;
+		if (egressPolicy && options.egress) {
+			broker = await (deps.startBroker ?? startEgressBroker)(
+				{ socketPath: egressSocket as string, policy: egressPolicy, auth: options.egress.auth, ...(egressKey ? { key: egressKey } : {}) },
+				{ ...(deps.brokerRequester ? { request: deps.brokerRequester } : {}) },
+			);
+			await broker.ready;
+		}
+		const invocation = buildContainedInvocation({ ...options, worktree, command: [command, ...options.mode.argv.slice(1)], privateDir, gitMask, ...(egressSocket ? { egressSocket } : {}) }, capabilities);
 		await (deps.preflight ?? defaultPreflight)(invocation);
 		const before = await captureWriteSnapshot(worktree, deps);
 		const runner = deps.spawn ?? spawnProcess;
-		const execution = await runner(invocation.executable, invocation.argv, { cwd: invocation.cwd, env: invocation.env, timeoutMs: (options.timeoutSeconds ?? 1800) * 1000 });
+		let launchSettled = false;
+		const launch = runner(invocation.executable, invocation.argv, { cwd: invocation.cwd, env: invocation.env, timeoutMs: (options.timeoutSeconds ?? 1800) * 1000 }).finally(() => {
+			launchSettled = true;
+		});
+		let brokerFailure: Error | undefined;
+		const watcher = broker
+			? broker.fatal.then(async (error) => {
+					brokerFailure = error;
+					const kill = deps.runKill ?? spawnProcess;
+					for (let attempt = 0; attempt < 3 && !launchSettled; attempt += 1) {
+						const result = await kill(invocation.kill.executable, invocation.kill.argv, { cwd: invocation.cwd, env: invocation.env, timeoutMs: 5_000 });
+						if (result.status === 0 || !/not found|not loaded/i.test(result.stderr)) break;
+						await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
+					}
+				})
+			: undefined;
+		const execution = await launch;
+		if (brokerFailure) throw brokerFailure;
+		void watcher?.catch(() => undefined);
 		if (execution.signal) throw new Error(`contained launcher terminated by ${execution.signal}`);
 		const writeSet = await computeWriteSet(before, worktree, deps);
 		if (options.debug) {
@@ -342,6 +382,7 @@ export async function runContained(options: ContainedRunOptions, deps: Contained
 		}
 		return { status: execution.status, signal: null, writeSet, ...(artifactDir ? { artifactDir } : {}) };
 	} finally {
+		await broker?.close().catch(() => undefined);
 		await chmod(gitMask, 0o600).catch(() => undefined);
 		await rm(privateDir, { recursive: true, force: true });
 	}
@@ -364,6 +405,17 @@ export async function runContainedSelfTest(options: Omit<ContainedRunOptions, "m
 		// `--share-net` regression with no timers.
 		{ name: "network", script: "const ext=Object.values(require('os').networkInterfaces()).flat().filter((n)=>n&&!n.internal);process.exit(ext.length?2:0)", expect: 0 },
 	];
+	if (options.egress) {
+		cases.push({
+			name: "egress-conformance",
+			script: `const http=require("http");const body=JSON.stringify({model:${JSON.stringify(options.egress.model)},max_output_tokens:8,stream:false});const r=http.request({socketPath:process.env.PELAGGIO_EGRESS_SOCKET,path:"/v1/responses?redacted=1",method:"POST",headers:{"content-type":"application/json","content-length":Buffer.byteLength(body)}},x=>{x.resume();x.on("end",()=>process.exit(x.statusCode===200?0:2))});r.on("error",()=>process.exit(3));r.end(body)`,
+			expect: 0,
+		});
+		deps = {
+			...deps,
+			brokerRequester: deps.brokerRequester ?? (async () => ({ status: 200, headers: { "content-type": "application/json" }, body: Buffer.from('{"usage":{"input_tokens":1,"output_tokens":1}}') })),
+		};
+	}
 	for (const probe of cases) {
 		try {
 			const result = await runContained({ ...options, mode: { kind: "command", argv: [process.execPath, "-e", probe.script] } }, deps);
