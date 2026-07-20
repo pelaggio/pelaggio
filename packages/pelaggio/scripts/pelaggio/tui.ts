@@ -430,6 +430,13 @@ export function createStepRenderer(opts: StepRendererOpts): StepEmit {
 				break;
 			}
 
+			case "sdk_warning": {
+				spinner?.stop();
+				if (ttyVerbose) ln(`${A.yellow("⚠")} SDK warning: ${A.dim(event.message.slice(0, 120))}`);
+				plainLine(`   ⚠ SDK warning: ${event.message.slice(0, 200)}\n`);
+				break;
+			}
+
 			case "blocked": {
 				spinner?.stop();
 				if (ttyVerbose) ln(`${A.red("⚠")} blocked: ${A.dim(event.reason.slice(0, 120))}`);

@@ -361,9 +361,8 @@ export const runStep: StepProvider["runStep"] = async (name, prompt, opts, emit)
 		}
 	} else {
 		emit({
-			type: "sdk_error",
-			message:
-				"WARNING: Landlock is unavailable; providers.grok.allow-unsandboxed-fallback is enabled, so Grok is starting without its CLI sandbox. Only deny-env and cwd guidance protect this supervised run until Pelaggio's host-side jail is wired.",
+			type: "sdk_warning",
+			message: "Landlock is unavailable; providers.grok.allow-unsandboxed-fallback is enabled, so Grok is starting without its CLI sandbox. Only deny-env and cwd guidance protect this supervised run until Pelaggio's host-side jail is wired.",
 		});
 	}
 	const args = buildGrokArgs({ ...(model ? { model } : {}), reasoningEffort: grokEffort(effort), sandbox });
