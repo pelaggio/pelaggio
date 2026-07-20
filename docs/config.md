@@ -282,6 +282,7 @@ providers:
   # A leading ~/ expands to the home directory — pins an off-PATH driver:
   # grok:
   #   bin: ~/.grok/bin/grok
+  #   allow-unsandboxed-fallback: false
 ```
 
 Keys are validated against the registered provider names, so an entry for a
@@ -293,9 +294,11 @@ in-process (no subprocess), so a `bin` override for it has no effect.
 
 Every Grok step installs and explicitly selects the namespaced
 `pelaggio-worktree-v1` custom profile in `~/.grok/sandbox.toml`; unrelated user
-profiles and file permissions are preserved. There is no off switch. Profile
-installation or application failure refuses the step instead of retrying
-without a sandbox.
+profiles and file permissions are preserved. Profile installation failure refuses the step by
+default. Operators who already provide an equivalent external containment boundary may set
+`providers.grok.allow-unsandboxed-fallback: true`; only then does Pelaggio invoke Grok without
+the `--sandbox` selection. Built-in web search remains disabled. This weakens Pelaggio's
+worktree confinement and should not be enabled on an otherwise uncontained host.
 
 The profile extends Grok's `strict` policy, so project/source access is limited
 to the invocation CWD. Grok still needs its executable, system libraries and

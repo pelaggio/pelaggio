@@ -340,15 +340,20 @@ export const runStep: StepProvider["runStep"] = async (name, prompt, opts, emit)
 	const finalPrompt = `${prompt}\n\n${systemAppend}\n\n${GROK_SANDBOX_APPEND}`;
 	const scrub = makeSecretScrubber();
 	const agentEnv = buildAgentEnv({ allow: CONFIG.security.envAllowlist });
+	let sandbox = true;
 	try {
 		await installGrokSandboxProfile({ home: agentEnv.HOME });
 	} catch (error) {
 		const message = `Grok sandbox profile preparation failed: ${error instanceof Error ? error.message : String(error)}`;
-		emit({ type: "sdk_error", message });
-		emit({ type: "done", ok: false, subtype: "error_confinement", cost: 0, turns: 0, elapsed: Date.now() - t0 });
-		return { ok: false, subtype: "error_confinement", text: message, fullText: "", cost: 0, costEstimated: true, turns: 0 };
+		if (!CONFIG.grokAllowUnsandboxedFallback) {
+			emit({ type: "sdk_error", message });
+			emit({ type: "done", ok: false, subtype: "error_confinement", cost: 0, turns: 0, elapsed: Date.now() - t0 });
+			return { ok: false, subtype: "error_confinement", text: message, fullText: "", cost: 0, costEstimated: true, turns: 0 };
+		}
+		sandbox = false;
+		emit({ type: "sdk_error", message: `${message}; continuing without Grok's CLI sandbox because providers.grok.allow-unsandboxed-fallback is enabled` });
 	}
-	const args = buildGrokArgs({ ...(model ? { model } : {}), reasoningEffort: grokEffort(effort) });
+	const args = buildGrokArgs({ ...(model ? { model } : {}), reasoningEffort: grokEffort(effort), sandbox });
 	const { conn, done, kill } = spawnAcpAgent({
 		bin: resolveProviderBin(CONFIG, "grok", "grok"),
 		args,

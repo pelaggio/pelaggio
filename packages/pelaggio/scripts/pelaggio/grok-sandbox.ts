@@ -18,10 +18,11 @@ export interface InstallGrokSandboxProfileOptions {
 export interface BuildGrokArgsOptions {
 	model?: string;
 	reasoningEffort: "low" | "medium" | "high";
+	sandbox?: boolean;
 }
 
 export function buildGrokArgs(options: BuildGrokArgsOptions): string[] {
-	return ["--sandbox", GROK_SANDBOX_PROFILE, "--disable-web-search", ...(options.model ? ["-m", options.model] : []), "--reasoning-effort", options.reasoningEffort, "agent", "stdio"];
+	return [...(options.sandbox === false ? [] : ["--sandbox", GROK_SANDBOX_PROFILE]), "--disable-web-search", ...(options.model ? ["-m", options.model] : []), "--reasoning-effort", options.reasoningEffort, "agent", "stdio"];
 }
 
 function markerCount(content: string, marker: string): number {

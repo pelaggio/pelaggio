@@ -97,6 +97,10 @@ describe("buildGrokArgs", () => {
 		assert.deepEqual(buildGrokArgs({ model: "grok-4", reasoningEffort: "high" }), ["--sandbox", GROK_SANDBOX_PROFILE, "--disable-web-search", "-m", "grok-4", "--reasoning-effort", "high", "agent", "stdio"]);
 		assert.equal(buildGrokArgs({ reasoningEffort: "low" }).includes("-m"), false);
 	});
+
+	it("omits only the sandbox selection for an explicitly unsandboxed fallback", () => {
+		assert.deepEqual(buildGrokArgs({ reasoningEffort: "medium", sandbox: false }), ["--disable-web-search", "--reasoning-effort", "medium", "agent", "stdio"]);
+	});
 });
 
 describe("live Grok 0.2.103 confinement", () => {
