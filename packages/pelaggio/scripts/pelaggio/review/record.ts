@@ -9,6 +9,7 @@ export interface ReviewRecord {
 	createdAt: string;
 	blockingBar: "must-fix";
 	result: ReviewLoopResult;
+	escalation?: { id: string; status: "active" | "resolved-proceed" | "resolved-block"; actor?: string; rationale?: string };
 }
 
 export function validateReviewRecord(value: ReviewRecord): ReviewRecord {
@@ -30,5 +31,11 @@ export function writeReviewRecord(root: string, record: ReviewRecord): string {
 export function renderReviewRecord(record: ReviewRecord): string {
 	const valid = validateReviewRecord(record);
 	const rows = valid.result.passes.map((pass) => `| ${pass.pass} | ${pass.reviewers.filter((seat) => seat.ok).length}/${pass.reviewers.length} | ${pass.judge.valid ? "valid" : "invalid"} | ${pass.carriedAfter.length} |`).join("\n");
-	return `## Adversarial review record\n\nThis is an unbound review record, not a cryptographic attestation.\n\n- Outcome: **${valid.result.outcome}**\n- Diversity: **${valid.result.diversity.state}**${valid.result.diversity.state === "softened" ? ` — ${valid.result.diversity.explanation}` : ""}\n- Cost: $${valid.result.cost.toFixed(2)}\n\n| Pass | Reviewers | Judge | Carried blockers |\n| --- | --- | --- | --- |\n${rows || "| — | — | — | — |"}${valid.result.dissent ? `\n\nDissent: ${valid.result.dissent.finding.finding.message}\n\nJudge ruling: ${valid.result.dissent.ruling}. Attempted resolution: ${valid.result.dissent.attemptedResolution}. Notification target: ${valid.result.dissent.notificationTarget}.` : ""}`;
+	const disagreement = valid.result.disagreement
+		? `\n\nCross-model split (evidence \`${valid.result.disagreement.evidenceFingerprint}\`):\n\n${valid.result.disagreement.drivers.map((driver) => `- ${driver.identity.provider}/${driver.identity.seatId}: **${driver.verdict}** — ${driver.rationale}`).join("\n")}`
+		: "";
+	const escalation = valid.escalation
+		? `\n\nDecision **${valid.escalation.id}**: **${valid.escalation.status}**${valid.escalation.actor ? ` by ${valid.escalation.actor}` : ""}${valid.escalation.rationale ? ` — ${valid.escalation.rationale}` : ""}.`
+		: "";
+	return `## Adversarial review record\n\nThis is an unbound review record, not a cryptographic attestation.\n\n- Outcome: **${valid.result.outcome}**\n- Diversity: **${valid.result.diversity.state}**${valid.result.diversity.state === "softened" ? ` — ${valid.result.diversity.explanation}` : ""}\n- Cost: $${valid.result.cost.toFixed(2)}\n\n| Pass | Reviewers | Judge | Carried blockers |\n| --- | --- | --- | --- |\n${rows || "| — | — | — | — |"}${valid.result.dissent ? `\n\nDissent: ${valid.result.dissent.finding.finding.message}\n\nJudge ruling: ${valid.result.dissent.ruling}. Attempted resolution: ${valid.result.dissent.attemptedResolution}. Notification target: ${valid.result.dissent.notificationTarget}.` : ""}${disagreement}${escalation}`;
 }

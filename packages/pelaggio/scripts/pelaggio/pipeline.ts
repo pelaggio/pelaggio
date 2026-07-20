@@ -20,7 +20,7 @@ import {
 	STEPS,
 	WORKTREE_PREFIX,
 } from "./config.js";
-import { appendDecisions as appendDecisionsDefault } from "./decisions.js";
+import { appendDecisions as appendDecisionsDefault, appendReviewEscalation as appendReviewEscalationDefault, lookupReviewEscalation as lookupReviewEscalationDefault } from "./decisions.js";
 import { dispatchStepEffects as dispatchStepEffectsDefault, type Effect, EffectsManifestError, writeEffectsManifest as writeEffectsManifestDefault } from "./effects.js";
 import { DEFAULT_FLOW_POLICY, type FlowPolicy } from "./flow-policy.js";
 import {
@@ -125,6 +125,8 @@ export interface PipelineDeps {
 	/** Override the configured main-checkout confinement exception. */
 	allowDirtyMain?: boolean;
 	appendDecisions?: typeof appendDecisionsDefault;
+	appendReviewEscalation?: typeof appendReviewEscalationDefault;
+	lookupReviewEscalation?: typeof lookupReviewEscalationDefault;
 }
 
 export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, flags: Flags, deps: PipelineDeps = {}): Promise<CycleResult> {
@@ -141,6 +143,8 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	const dispatchStepEffects = deps.dispatchStepEffects ?? dispatchStepEffectsDefault;
 	const allowDirtyMain = deps.allowDirtyMain ?? CONFINEMENT_CONFIG.allowDirtyMain;
 	const appendDecisions = deps.appendDecisions ?? appendDecisionsDefault;
+	const appendReviewEscalation = deps.appendReviewEscalation ?? appendReviewEscalationDefault;
+	const lookupReviewEscalation = deps.lookupReviewEscalation ?? lookupReviewEscalationDefault;
 	// The cycle's dollar ceiling. A turn-exhaustion retry (issue #33) is funded up to the
 	// step's configured budget again, so the budget guard skips a retry we can't fully fund.
 	// A non-finite value (unset / unparseable --budget) disables the dollar gate.
@@ -868,32 +872,69 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 
 		let shakedownResult: StepResult;
 		if (REVIEW_CONFIG.authoring.enabled) {
+			const reviewedSha = getHeadSha(worktree!);
+			if (!reviewedSha) return parkExit("adversarial review could not bind current HEAD")!;
+			const existingEscalation = lookupReviewEscalation(mainRepo, itemId!, reviewedSha);
+			if (existingEscalation.state === "active" || existingEscalation.state === "resolved-block" || existingEscalation.state === "invalid") return parkExit(`adversarial review escalation ${existingEscalation.state}`)!;
+			if (existingEscalation.state === "resolved-proceed" && existingEscalation.escalation.hasSafetyBlocker) return parkExit("adversarial review safety blocker")!;
 			const policy = resolveAuthoringReviewConfig(CONFIG, profile);
 			const authorSettings = resolveStepSettings(CONFIG, profile, "implement");
-			const loop = await runReviewLoop({
-				policy,
-				author: { provider: authorSettings.provider, ...(authorSettings.provider === "codex" ? (authorSettings.codexModel ? { model: authorSettings.codexModel } : {}) : authorSettings.model ? { model: authorSettings.model } : {}) },
-				parkSignal,
-				runSeat: ({ role, slot, pass, prompt, parkSignal: child }) =>
-					step(role === "reviewer" ? "pr-review" : role === "judge" ? "pr-verify" : "shakedown-code", prompt, worktree!, {
-						attempt: pass,
-						parkSignalOverride: child,
-						executionOverride: { provider: slot.provider, ...(slot.provider === "codex" ? (slot.codexModel ? { codexModel: slot.codexModel } : {}) : slot.model ? { model: slot.model } : {}) },
-						...(role === "author" ? { commitLabel: "adversarial review revision" } : {}),
-					}),
-				prompts: {
-					review: () => expandSkill("pr-review", "--authoring-loop"),
-					judge: (candidates) => `${expandSkill("pr-verify", "--authoring-loop-judge")}\n\nTRUSTED_CANDIDATE_DATA\n${JSON.stringify(candidates)}\nEND_TRUSTED_CANDIDATE_DATA`,
-					revise: (survivors) => `${expandSkill("shakedown", shakedownCodeArgs)}\n\nThe Judge retained these blockers:\n${JSON.stringify(survivors)}`,
-				},
-			});
-			cost += loop.cost;
-			const record: ReviewRecord = { schemaVersion: 1, runId: `${runIdBase}-${itemId}`, itemId: itemId!, createdAt: new Date().toISOString(), blockingBar: "must-fix", result: loop };
-			const recordPath = writeReviewRecord(worktree!, record);
-			reviewRecordMarkdown = renderReviewRecord(record);
-			log(`review record → ${recordPath}`);
-			if (loop.outcome === "budget" || loop.outcome === "hard-block" || (loop.outcome === "dissent" && opts.shipTarget.name === "direct-push")) return parkExit(`adversarial review ${loop.outcome}`)!;
-			shakedownResult = { ok: true, subtype: "success", text: loop.outcome, fullText: loop.outcome, cost: 0, turns: 0 };
+			const loop =
+				existingEscalation.state === "resolved-proceed"
+					? undefined
+					: await runReviewLoop({
+							policy,
+							author: { provider: authorSettings.provider, ...(authorSettings.provider === "codex" ? (authorSettings.codexModel ? { model: authorSettings.codexModel } : {}) : authorSettings.model ? { model: authorSettings.model } : {}) },
+							parkSignal,
+							runSeat: ({ role, slot, pass, prompt, parkSignal: child }) =>
+								step(role === "reviewer" ? "pr-review" : role === "judge" ? "pr-verify" : "shakedown-code", prompt, worktree!, {
+									attempt: pass,
+									parkSignalOverride: child,
+									executionOverride: { provider: slot.provider, ...(slot.provider === "codex" ? (slot.codexModel ? { codexModel: slot.codexModel } : {}) : slot.model ? { model: slot.model } : {}) },
+									...(role === "author" ? { commitLabel: "adversarial review revision" } : {}),
+								}),
+							prompts: {
+								review: () => expandSkill("pr-review", "--authoring-loop"),
+								judge: (candidates) => `${expandSkill("pr-verify", "--authoring-loop-judge")}\n\nTRUSTED_CANDIDATE_DATA\n${JSON.stringify(candidates)}\nEND_TRUSTED_CANDIDATE_DATA`,
+								revise: (survivors) => `${expandSkill("shakedown", shakedownCodeArgs)}\n\nThe Judge retained these blockers:\n${JSON.stringify(survivors)}`,
+							},
+						});
+			if (!loop) {
+				reviewRecordMarkdown = `## Adversarial review escalation\n\nDecision **${existingEscalation.id}** was resolved **proceed** by ${existingEscalation.resolution.actor}.\n\nRationale: ${existingEscalation.resolution.rationale}\n\nReviewed commit: \`${reviewedSha}\`. Evidence fingerprint: \`${existingEscalation.escalation.evidenceFingerprint}\`.`;
+				shakedownResult = { ok: true, subtype: "success", text: "resolved-proceed", fullText: "resolved-proceed", cost: 0, turns: 0 };
+			} else {
+				cost += loop.cost;
+				const record: ReviewRecord = { schemaVersion: 1, runId: `${runIdBase}-${itemId}`, itemId: itemId!, createdAt: new Date().toISOString(), blockingBar: "must-fix", result: loop };
+				const recordPath = writeReviewRecord(worktree!, record);
+				reviewRecordMarkdown = renderReviewRecord(record);
+				log(`review record → ${recordPath}`);
+				if (loop.disagreement) {
+					const escalation = {
+						kind: "review-escalation" as const,
+						itemId: itemId!,
+						step: "shakedown-code" as const,
+						reviewedSha,
+						evidenceFingerprint: loop.disagreement.evidenceFingerprint,
+						reviewRecordSource: `.dev/review-records/${record.runId}.json`,
+						hasSafetyBlocker: loop.disagreement.hasSafetyBlocker,
+						drivers: loop.disagreement.drivers.map((driver) => ({ ...driver, identity: { ...driver.identity, role: "reviewer" as const } })),
+					};
+					const written = await appendReviewEscalation(mainRepo, escalation);
+					if (written.status !== "failed")
+						await opts.notifyDecision?.({
+							itemId,
+							decision: { fork: `Cross-model review split (${written.ids[0]})`, chosen: "human adjudication required", alternatives: "proceed or block" },
+							step: "shakedown-code",
+							source: escalation.reviewRecordSource,
+							logPath: opts.logPath ?? LOG_PATH,
+							escalation: { ...escalation, id: written.ids[0] },
+						});
+					const state = lookupReviewEscalation(mainRepo, itemId!, reviewedSha);
+					if (written.status === "failed" || state.state !== "resolved-proceed" || escalation.hasSafetyBlocker) return parkExit(`adversarial review escalation ${written.status === "failed" ? "write-failed" : state.state}`)!;
+				}
+				if (loop.outcome === "budget" || loop.outcome === "hard-block" || loop.outcome === "dissent") return parkExit(`adversarial review ${loop.outcome}`)!;
+				shakedownResult = { ok: true, subtype: "success", text: loop.outcome, fullText: loop.outcome, cost: 0, turns: 0 };
+			}
 		} else {
 			const outcome = await runStepWithRetry({
 				name: "shakedown-code",

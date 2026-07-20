@@ -56,6 +56,36 @@ describe("authoring review loop controller", () => {
 			prompts: { review: () => "r", judge: () => "j", revise: () => "rev" },
 		});
 
+	it("escalates a stable pass/block split before invoking the Judge", async () => {
+		let judgeCalls = 0;
+		const policy = {
+			...basePolicy,
+			reviewers: [
+				{ id: "grok-a", provider: "grok" as const },
+				{ id: "grok-b", provider: "grok" as const },
+			],
+		};
+		const pass = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 2, summary: "looks good", findings: [] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
+		const block = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 2, summary: "behavior is wrong", findings: [{ severity: "must-fix", class: "judgment", message: "boom" }] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
+		const result = await runReviewLoop({
+			policy,
+			author: { provider: "codex" },
+			parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" },
+			runSeat: async (request) => {
+				if (request.role === "judge") judgeCalls++;
+				return ok(request.slot.id === "grok-a" ? pass : block);
+			},
+			prompts: { review: () => "r", judge: () => "j", revise: () => "rev" },
+		});
+		assert.equal(result.outcome, "dissent");
+		assert.equal(judgeCalls, 0);
+		assert.deepEqual(
+			result.disagreement?.drivers.map(({ verdict }) => verdict),
+			["pass", "block"],
+		);
+		assert.match(result.disagreement?.evidenceFingerprint ?? "", /^[a-f0-9]{64}$/);
+	});
+
 	it("ships when the Judge cleanly refutes the sole blocker", async () => {
 		const result = await run(reviewerFindings("judgment"), judgeReport([{ candidateId: "C1", decision: "refuted", rationale: "r", class: "judgment" }]));
 		assert.equal(result.outcome, "converged-clean");

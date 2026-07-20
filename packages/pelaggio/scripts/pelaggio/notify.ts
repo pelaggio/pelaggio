@@ -1,4 +1,4 @@
-import { type CycleResult, type Decision, RECOVERABLE_ERRORS, type Step } from "./types.js";
+import { type CycleResult, type Decision, RECOVERABLE_ERRORS, type ReviewEscalation, type Step } from "./types.js";
 
 // ── Events & formats ───────────────────────────────────────────────────
 
@@ -46,6 +46,7 @@ export interface DecisionNotifyPayload extends NotifyPayloadBase {
 	decision: Decision;
 	step: Step;
 	source: string;
+	escalation?: ReviewEscalation & { id: string };
 }
 
 export type NotifyPayload = CycleNotifyPayload | DecisionNotifyPayload;
@@ -261,7 +262,11 @@ export async function notifyStrandedReview(cfg: NotifyConfig, input: { itemId: s
 	return delivered;
 }
 
-export async function notifyDecision(cfg: NotifyConfig, input: { itemId: string | null; decision: Decision; step: Step; source: string; logPath: string }, deps: { send?: SendNotification; now?: Date } = {}): Promise<boolean> {
+export async function notifyDecision(
+	cfg: NotifyConfig,
+	input: { itemId: string | null; decision: Decision; step: Step; source: string; logPath: string; escalation?: ReviewEscalation & { id: string } },
+	deps: { send?: SendNotification; now?: Date } = {},
+): Promise<boolean> {
 	if (!cfg.url || !cfg.events.includes("decision")) return false;
 	const payload: DecisionNotifyPayload = {
 		event: "decision",
@@ -269,9 +274,10 @@ export async function notifyDecision(cfg: NotifyConfig, input: { itemId: string 
 		decision: input.decision,
 		step: input.step,
 		source: input.source,
+		...(input.escalation ? { escalation: input.escalation } : {}),
 		logPath: input.logPath,
 		ts: (deps.now ?? new Date()).toISOString(),
-		text: `pelaggio: decision ${input.itemId ?? "?"} ${input.step} — ${input.decision.fork}`.replace(/\s+/g, " "),
+		text: `pelaggio: decision ${input.itemId ?? "?"} ${input.step} — ${input.escalation ? `review split ${input.escalation.id}` : input.decision.fork}`.replace(/\s+/g, " ").slice(0, 240),
 	};
 	try {
 		const delivered = await (deps.send ?? sendNotification)(cfg.url, cfg.format, payload);

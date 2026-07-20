@@ -722,3 +722,15 @@ section (e.g. `budgets.bogus: 5`) are also ignored.
 - Runtime reload — load-once at startup.
 - Schema validation beyond shape checks — add `zod` if/when warranted.
 - Secret handling — store secrets in the environment, not here.
+# Human resolution of cross-model review splits
+
+When successfully parsed authoring reviewers disagree (at least one pass and one block), Pelaggio records the commit-bound evidence in `docs/decisions.md`, sends the existing `decision` notification when subscribed, and parks for every ship target. Notification delivery is best-effort and never changes the gate.
+
+Resolve the recorded decision explicitly, then resume the item:
+
+```bash
+npx pelaggio decisions resolve <decision-id> --disposition proceed --by <actor> --reason "<rationale>"
+npx pelaggio --resume <item-id>
+```
+
+Use `--disposition block` to retain the block. A `proceed` resolution applies only to the unchanged reviewed commit and exact recorded evidence. Missing, malformed, ambiguous, stale, or safety-class evidence fails closed and parks; changing the code requires a fresh review.

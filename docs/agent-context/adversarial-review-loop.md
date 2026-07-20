@@ -221,3 +221,6 @@ GHA-key path** — re-enable the ephemeral GitHub-hosted review job on a metered
 runner, no subscription). **This local pre-commit loop is the *authoring-time* realization** (operator
 machine, operator seats). They share the convergence + provenance contracts; they differ only in
 funding (key vs local-pool) per the inherited auth posture.
+## Human escalation for reviewer splits
+
+A genuine split between successfully parsed reviewer verdicts is a deterministic, fail-closed gate for direct-push and pull-request shipping. The harness records every participating verdict and rationale in the decision register, binds it to the reviewed commit and an evidence fingerprint, emits the existing best-effort `decision` notification, and parks before invoking the Judge. A matching human `proceed` resolution can release judgment-only disagreement on resume; `block`, stale or malformed evidence, and safety-class blockers remain parked. Notification failure never changes this gate.
