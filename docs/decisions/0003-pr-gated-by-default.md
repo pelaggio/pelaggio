@@ -20,3 +20,6 @@ Flip the shipped default to **`pull-request`**. `direct-push` becomes an explici
 ## Consequences
 - (+) `TC-012` becomes a shipped `default` guarantee; matches Fathom's propose-then-confirm ethos.
 - (−) One extra step (open a PR) for users who genuinely want autonomous push; mitigated by the opt-in.
+
+## Relation to ADR-0015
+[ADR-0015](./0015-autonomy-by-default-configurable-tolerance.md) **generalizes** this decision: it makes `ship.target` a first-class *tolerance dial* and defines what autonomy is permitted to be when an operator dials it up (autonomous merge behind the deterministic floor + attestation). It does **not** change the shipped default set here — `pull-request` remains the safe-by-default `ship.target` for consumers. Read the two together: 0003 fixes the *shipped default*; 0015 fixes the *ceiling and the gate model* for those who raise it.
