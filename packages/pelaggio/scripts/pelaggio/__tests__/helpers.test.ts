@@ -16,6 +16,7 @@ import {
 	createMainCheckoutDeltaObserver,
 	ensureMainCheckoutOnBranch,
 	filesChangedSince,
+	findLoggedArtifactAuthor,
 	fmtWait,
 	formatResumeHint,
 	formatReviewMetrics,
@@ -39,6 +40,16 @@ import {
 	reviewFindingsPreamble,
 	verifyShipLanded,
 } from "../helpers.js";
+
+describe("findLoggedArtifactAuthor", () => {
+	it("scans across entries and validates realized attribution", () => {
+		const dir = mkdtempSync(join(tmpdir(), "pelaggio-author-log-"));
+		const path = join(dir, "log.jsonl");
+		writeFileSync(path, `${JSON.stringify({ item: "245", steps: [{ name: "plan", ok: true }] })}\n${JSON.stringify({ item: "245", steps: [{ name: "implement", ok: true, provider: "codex", model: "gpt-5" }] })}\n`);
+		assert.deepEqual(findLoggedArtifactAuthor("245", "implement", path), { provider: "codex", codexModel: "gpt-5" });
+		assert.equal(findLoggedArtifactAuthor("245", "plan", path), undefined);
+	});
+});
 
 describe("parseDecisions", () => {
 	it("retains tolerant, ordered sentinels and parses canonical segments", () => {

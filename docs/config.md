@@ -230,6 +230,34 @@ models:
       providers:
         implement: codex
         shakedown-code: grok
+
+The authoring and ordinary review steps (`plan`, `implement`, `shakedown-plan`,
+and `shakedown-code`) also accept an ordered, non-empty list:
+
+```yaml
+models:
+  profiles:
+    standard:
+      providers:
+        plan: [claude, codex, grok]
+        implement: [claude, codex, grok]
+        shakedown-plan: [claude, codex, grok]
+        shakedown-code: [claude, codex, grok]
+```
+
+List order is significant. Pelaggio rotates author selection deterministically
+from the cycle number and authoring-step ordinal, after filtering drivers that
+are not ready before execution. Review selection excludes the realized author
+of the artifact and an N-seat request requires distinct providers; insufficient
+eligible seats fails closed. Scalars and one-element lists remain static pins.
+Provider lists are rejected for coordination, recovery, adversarial-loop, and
+other unsupported steps.
+
+Readiness is a pre-execution capability check. Once a driver begins an artifact,
+a launch, transport, or rate-limit failure parks and checkpoints the cycle; it
+does not switch drivers mid-artifact. The policy has no persisted quota,
+credential-seat, cooldown, or cross-worker fairness state; those scheduling
+concerns are outside this cycle-local policy.
 ```
 
 The `grok` provider drives `grok agent stdio` over ACP (issue #136). Follow the

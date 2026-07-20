@@ -112,16 +112,14 @@ export function classifyReviewOutcome(survivors: readonly ReviewCandidate[], not
 
 export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewLoopResult> {
 	const { policy } = options;
-	const configuredReviewers = policy.reviewers.filter((slot) => {
-		const collidesWithAuthor = slot.provider === options.author.provider;
-		const collidesWithJudge = slot.provider === policy.judge.provider;
-		if (!collidesWithAuthor && !collidesWithJudge) return true;
-		return !policy.reviewers.some((alternative) => alternative.id !== slot.id && alternative.provider !== options.author.provider && alternative.provider !== policy.judge.provider);
-	});
+	const configuredReviewers = policy.reviewers.filter((slot) => slot.provider !== options.author.provider);
 	let cost = 0;
 	let carried: ReviewCandidate[] = [];
 	let notes: ReviewCandidate[] = [];
 	const passes: ReviewPassRecord[] = [];
+	if (new Set(configuredReviewers.map((slot) => slot.provider)).size !== configuredReviewers.length) {
+		return { outcome: "hard-block", diversity: { state: "softened", explanation: "review seats must be distinct and must exclude the artifact author" }, passes, survivors: carried, notes, cost };
+	}
 	const distinctProviders = new Set([options.author.provider, policy.judge.provider, ...configuredReviewers.map((slot) => slot.provider)]);
 	const diversity: DiversityStatus = distinctProviders.size >= 3 ? { state: "met" } : { state: "softened", explanation: "configured seats do not provide three distinct providers" };
 	for (let pass = 1; pass <= policy.maxPasses; pass++) {

@@ -900,6 +900,34 @@ export function detectResumeStep(itemId: string, worktree: string): Step {
 	return "shakedown-code";
 }
 
+export type LoggedDriverIdentity = { provider: "codex"; codexModel?: string } | { provider: "claude" | "grok"; model?: string };
+
+/** Find the latest successful realized author across all cycle entries for an item. */
+export function findLoggedArtifactAuthor(itemId: string, step: "plan" | "implement", logPath = LOG_PATH): LoggedDriverIdentity | undefined {
+	if (!existsSync(logPath)) return undefined;
+	try {
+		const lines = readFileSync(logPath, "utf-8").trim().split("\n").filter(Boolean);
+		for (let lineIndex = lines.length - 1; lineIndex >= 0; lineIndex--) {
+			const entry: unknown = JSON.parse(lines[lineIndex]);
+			if (!entry || typeof entry !== "object") continue;
+			const record = entry as Record<string, unknown>;
+			if (typeof record.item !== "string" || record.item.toUpperCase() !== itemId.toUpperCase() || !Array.isArray(record.steps)) continue;
+			for (let index = record.steps.length - 1; index >= 0; index--) {
+				const value: unknown = record.steps[index];
+				if (!value || typeof value !== "object") continue;
+				const logged = value as Record<string, unknown>;
+				if (logged.name !== step || logged.ok !== true) continue;
+				if (logged.provider === "codex") return typeof logged.model === "string" && logged.model !== "default" ? { provider: "codex", codexModel: logged.model } : { provider: "codex" };
+				if (logged.provider === "claude" || logged.provider === "grok") return typeof logged.model === "string" && logged.model !== "default" ? { provider: logged.provider, model: logged.model } : { provider: logged.provider };
+				return undefined;
+			}
+		}
+	} catch {
+		return undefined;
+	}
+	return undefined;
+}
+
 // ── Logging ────────────────────────────────────────────────────────────
 
 export function appendLog(entry: Record<string, unknown>): void {
