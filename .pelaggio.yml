@@ -31,22 +31,28 @@ review:
   provider-diversity: off
 budgets:
   shakedown-plan: 8
-# Offload the token-heavy authoring steps to Codex (aggressive split). pick + ship
-# stay on Claude: they are the prose-scrape coordination steps (parsePickResult /
-# parseShipMerged) that are calibrated to Claude's prose — see coordination-spine.md.
-# shakedown-code stays on Claude so the final code review is cross-model (Claude
-# reviewing Codex's implementation). Codex model is left unset → Codex CLI default.
+# Authoring rotates cycle-locally across the configured pool. Review pools use
+# the same drivers but deterministically exclude the realized artifact author.
+# Coordination/recovery steps remain explicit static Claude pins.
 models:
   profiles:
     standard:
       providers:
-        plan: codex
-        shakedown-plan: codex
-        implement: codex
+        pick: claude
+        plan: [claude, codex, grok]
+        shakedown-plan: [claude, codex, grok]
+        implement: [claude, codex, grok]
+        shakedown-code: [claude, codex, grok]
+        ship: claude
+        shipwreck: claude
     # Quick mode (S/XS/bug) skips plan+shakedown-plan and runs implement-only under
     # this profile. Offload that implement to Codex too so small bugs also lean on
     # Codex; the model stays Sonnet-priced in config but a claude-* id is never
     # forwarded, so Codex uses its CLI default.
     quick:
       providers:
-        implement: codex
+        pick: claude
+        implement: [claude, codex, grok]
+        shakedown-code: [claude, codex, grok]
+        ship: claude
+        shipwreck: claude

@@ -6,7 +6,6 @@ import {
 	DEFAULT_SHIP_TARGET,
 	isPipelineStep,
 	LOG_PATH,
-	MODEL_PROFILES,
 	REPO,
 	REVIEW_CONFIG,
 	REVISE_LOCAL,
@@ -15,12 +14,14 @@ import {
 	ROADMAP_LINEAR,
 	ROADMAP_SOURCE,
 	resolveAuthoringReviewConfig,
+	resolveDriverCandidates,
 	resolveStepSettings,
 	SHIP_TARGET,
 	STEPS,
 	WORKTREE_PREFIX,
 } from "./config.js";
 import { appendDecisions as appendDecisionsDefault, appendReviewEscalation as appendReviewEscalationDefault, lookupReviewEscalation as lookupReviewEscalationDefault } from "./decisions.js";
+import { createDriverAssignmentState, type DriverIdentity, recordArtifactAuthor, selectAuthor, selectReviewers } from "./driver-assignment.js";
 import { dispatchStepEffects as dispatchStepEffectsDefault, type Effect, EffectsManifestError, writeEffectsManifest as writeEffectsManifestDefault } from "./effects.js";
 import { DEFAULT_FLOW_POLICY, type FlowPolicy } from "./flow-policy.js";
 import {
@@ -39,6 +40,7 @@ import {
 	ensureMainCheckoutOnBranch,
 	expandSkill,
 	filesChangedSince,
+	findLoggedArtifactAuthor,
 	fmtWait,
 	formatResumeHint,
 	getHeadSha,
@@ -154,6 +156,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	// "standard" and let quick-scope detection downgrade to "quick" below.
 	let profile = flags.profile ?? "standard";
 	const steps: StepLog[] = [];
+	const assignment = createDriverAssignmentState(opts.cycle);
 	const pipelineT0 = Date.now();
 	const runIdBase = opts.logPath ? basename(opts.logPath, extname(opts.logPath)) : `cycle-${opts.cycle}`;
 	let logLabel = `cycle ${opts.cycle}`;
@@ -214,6 +217,14 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			parkSignalOverride?: ParkSignal;
 		} = {},
 	): Promise<StepResult> {
+		const settings = resolveStepSettings(CONFIG, profile, name);
+		const realized = executionOverride ?? settings;
+		const stepLog = (entry: Omit<StepLog, "name" | "provider" | "model">): StepLog => ({
+			name,
+			provider: realized.provider,
+			model: realized.provider === "codex" ? (realized.codexModel ?? "default") : (realized.model ?? "default"),
+			...entry,
+		});
 		// Short-circuit before runStep when SIGINT fired between steps; also covers
 		// --dry-run so Ctrl-C during a dry run bails promptly.
 		if (opts.signal?.aborted) {
@@ -226,13 +237,13 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				workerStatus: opts.workerStatus,
 			});
 			emitAbort({ type: "done", ok: false, subtype: "error_abort", cost: 0, turns: 0, elapsed: 0 });
-			steps.push({ name, model: MODEL_PROFILES[profile]?.[name] ?? "default", cost: 0, turns: 0, ok: false, ...(attempt > 1 ? { attempt } : {}) });
+			steps.push(stepLog({ cost: 0, turns: 0, ok: false, ...(attempt > 1 ? { attempt } : {}) }));
 			return { ok: false, subtype: "error_abort", text: "aborted", fullText: "", cost: 0, turns: 0 };
 		}
 
 		if (opts.dryRun) {
 			log(`[dry-run] ${name}: "${prompt.slice(0, 60)}" in ${cwd}`);
-			steps.push({ name, model: MODEL_PROFILES[profile]?.[name] ?? "default", cost: 0, turns: 0, ok: true, ...(attempt > 1 ? { attempt } : {}) });
+			steps.push(stepLog({ cost: 0, turns: 0, ok: true, ...(attempt > 1 ? { attempt } : {}) }));
 			return { ok: true, subtype: "success", text: `[dry-run] ${name}`, fullText: `[dry-run] ${name}`, cost: 0, turns: 0 };
 		}
 
@@ -394,23 +405,23 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 
 		const filesChanged = filesChangedSince(cwd, preSha);
 
-		steps.push({
-			name,
-			model: MODEL_PROFILES[profile]?.[name] ?? "default",
-			cost: result.cost,
-			turns: result.turns,
-			ok: result.ok,
-			...(!result.ok ? { subtype: result.subtype } : {}),
-			...(result.tokens ? { tokens: result.tokens } : {}),
-			...(result.costEstimated ? { costEstimated: true } : {}),
-			...(attempt > 1 ? { attempt } : {}),
-			...(retriedMaxTurns ? { retriedMaxTurns: true } : {}),
-			...(result.toolCounts ? { toolCounts: result.toolCounts } : {}),
-			...(result.outputTail ? { outputTail: result.outputTail } : {}),
-			...(filesChanged.length > 0 ? { filesChanged } : {}),
-			...(result.stalledAsk ? { stalledAsk: true } : {}),
-			...(result.decisions?.length ? { decisions: result.decisions } : {}),
-		});
+		steps.push(
+			stepLog({
+				cost: result.cost,
+				turns: result.turns,
+				ok: result.ok,
+				...(!result.ok ? { subtype: result.subtype } : {}),
+				...(result.tokens ? { tokens: result.tokens } : {}),
+				...(result.costEstimated ? { costEstimated: true } : {}),
+				...(attempt > 1 ? { attempt } : {}),
+				...(retriedMaxTurns ? { retriedMaxTurns: true } : {}),
+				...(result.toolCounts ? { toolCounts: result.toolCounts } : {}),
+				...(result.outputTail ? { outputTail: result.outputTail } : {}),
+				...(filesChanged.length > 0 ? { filesChanged } : {}),
+				...(result.stalledAsk ? { stalledAsk: true } : {}),
+				...(result.decisions?.length ? { decisions: result.decisions } : {}),
+			}),
+		);
 		if (opts.workerStatus) opts.workerStatus.cost += result.cost;
 		return result;
 	}
@@ -605,6 +616,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		retryOnEditLoop?: boolean;
 		/** Turn-limit log noun; defaults to `name` (shakedown-code logs "shakedown"). */
 		turnLimitNoun?: string;
+		executionOverride?: DriverIdentity;
 	}): Promise<StepAttempt> {
 		const maxAttempts = cfg.maxAttempts ?? 2;
 		const noun = cfg.turnLimitNoun ?? cfg.name;
@@ -624,6 +636,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				...(cfg.commitLabel ? { commitLabel: cfg.commitLabel(attempt) } : {}),
 				...(cfg.effects ? { effects: cfg.effects(attempt) } : {}),
 				...(cfg.maxTurnsOverride !== undefined ? { maxTurnsOverride: cfg.maxTurnsOverride } : {}),
+				...(cfg.executionOverride ? { executionOverride: cfg.executionOverride } : {}),
 			});
 			cost += result.cost;
 
@@ -680,6 +693,11 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	}
 
 	// ── Plan + Shakedown-plan ──
+	const driverCandidates = (name: Step): DriverIdentity[] =>
+		resolveDriverCandidates(CONFIG, profile, name).map((candidate) =>
+			candidate.provider === "codex" ? { provider: "codex", ...(candidate.codexModel ? { codexModel: candidate.codexModel } : {}) } : { provider: candidate.provider, ...(candidate.model ? { model: candidate.model } : {}) },
+		);
+	const available = (_candidate: DriverIdentity): boolean => true;
 
 	let verdict: "APPROVE" | "REVISE" | "RETHINK" = "APPROVE";
 	let shakedownPlanText = "";
@@ -688,7 +706,12 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		const existingPlan = roadmap.resolvePlanPath({ id: itemId!, worktree: worktree! });
 		if (!opts.dryRun && existsSync(existingPlan)) {
 			log(`plan exists at ${existingPlan} — skipping plan generation`);
+			const author = findLoggedArtifactAuthor(itemId!, "plan");
+			if (author) recordArtifactAuthor(assignment, "plan", author);
 		} else {
+			const selected = selectAuthor(assignment, driverCandidates("plan"), available);
+			if (!selected.ok) return finish({ itemId, completed: false, cost, error: `plan assignment failed: ${selected.reason}` });
+			const planAuthor = selected.drivers[0];
 			// Inject the item's requirements into the plan prompt in the harness (#103): a sandboxed
 			// model (Codex) can't run `roadmap get` / `gh issue view` (no network, and the roadmap CLI
 			// dies on tsx-IPC in the sandbox), so it would otherwise plan blind. The harness has an
@@ -701,14 +724,20 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				logAttempt: (attempt) => log(attempt === 1 ? "planning..." : "continuing plan (attempt 2)..."),
 				refusedError: "plan refused (model declined the task)",
 				effects: () => [{ kind: "checkpoint", label: "plan" }, { kind: "plan.publish" }],
+				executionOverride: planAuthor,
 			});
 			if (outcome.kind === "terminal") return outcome.cycleResult;
+			recordArtifactAuthor(assignment, "plan", planAuthor);
 		}
 		const planPath = await roadmap.getItemPlan({ worktree: worktree! });
 		if (planPath) log(`plan: file://${planPath}`);
 	}
 
 	if (shouldRun("shakedown-plan")) {
+		const planAuthor = assignment.authors.plan;
+		if (!planAuthor) return finish({ itemId, completed: false, cost, error: "shakedown-plan assignment failed: plan author attribution is unavailable" });
+		const selected = selectReviewers(assignment, driverCandidates("shakedown-plan"), planAuthor, 1, available);
+		if (!selected.ok) return finish({ itemId, completed: false, cost, error: `shakedown-plan assignment failed: ${selected.reason}` });
 		const shakedownPlanArgs = await buildStepArgs(roadmap, itemId!, "plan-review");
 		const outcome = await runStepWithRetry({
 			name: "shakedown-plan",
@@ -716,6 +745,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			buildPrompt: () => expandSkill("shakedown", shakedownPlanArgs),
 			logAttempt: (attempt) => log(attempt === 1 ? "shakedown (plan)..." : "continuing shakedown-plan (attempt 2)..."),
 			refusedError: "shakedown-plan refused (model declined the review)",
+			executionOverride: selected.drivers[0],
 		});
 		if (outcome.kind === "terminal") return outcome.cycleResult;
 
@@ -729,8 +759,15 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	}
 
 	// ── Implement ──
+	if (!assignment.authors.implementation && shouldRun("shakedown-code") && !shouldRun("implement")) {
+		const author = findLoggedArtifactAuthor(itemId!, "implement");
+		if (author) recordArtifactAuthor(assignment, "implementation", author);
+	}
 
 	if (shouldRun("implement")) {
+		const selected = selectAuthor(assignment, driverCandidates("implement"), available);
+		if (!selected.ok) return finish({ itemId, completed: false, cost, error: `implement assignment failed: ${selected.reason}` });
+		const implementationAuthor = selected.drivers[0];
 		const parked = parkExit();
 		if (parked) return parked;
 		const planPath = await roadmap.getItemPlan({ worktree: worktree! });
@@ -856,14 +893,18 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 						].join("\n")
 					: continuePrompt;
 			},
+			executionOverride: implementationAuthor,
 		});
 		if (outcome.kind === "terminal") return outcome.cycleResult;
+		recordArtifactAuthor(assignment, "implementation", implementationAuthor);
 	}
 
 	// ── Shakedown-code ──
 	let reviewRecordMarkdown: string | undefined;
 
 	if (shouldRun("shakedown-code")) {
+		const implementationAuthor = assignment.authors.implementation;
+		if (!implementationAuthor) return finish({ itemId, completed: false, cost, error: "shakedown-code assignment failed: implementation author attribution is unavailable" });
 		const planPath = await roadmap.getItemPlan({ worktree: worktree! });
 		// The retry (attempt 2) points at the plan file only — NOT "the roadmap entry", which a
 		// sandboxed provider can't fetch (#103/#115); the plan already carries the scope.
@@ -878,7 +919,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			if (existingEscalation.state === "active" || existingEscalation.state === "resolved-block" || existingEscalation.state === "invalid") return parkExit(`adversarial review escalation ${existingEscalation.state}`)!;
 			if (existingEscalation.state === "resolved-proceed" && existingEscalation.escalation.hasSafetyBlocker) return parkExit("adversarial review safety blocker")!;
 			const policy = resolveAuthoringReviewConfig(CONFIG, profile);
-			const authorSettings = resolveStepSettings(CONFIG, profile, "implement");
+			const authorSettings = implementationAuthor;
 			const loop =
 				existingEscalation.state === "resolved-proceed"
 					? undefined
@@ -939,12 +980,15 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				shakedownResult = { ok: true, subtype: "success", text: loop.outcome, fullText: loop.outcome, cost: 0, turns: 0 };
 			}
 		} else {
+			const selected = selectReviewers(assignment, driverCandidates("shakedown-code"), implementationAuthor, 1, available);
+			if (!selected.ok) return finish({ itemId, completed: false, cost, error: `shakedown-code assignment failed: ${selected.reason}` });
 			const outcome = await runStepWithRetry({
 				name: "shakedown-code",
 				stepBudget: resolveStepSettings(CONFIG, profile, "shakedown-code").budget,
 				commitLabel: () => "shakedown checkpoint",
 				refusedError: "shakedown-code refused (model declined the review)",
 				turnLimitNoun: "shakedown",
+				executionOverride: selected.drivers[0],
 				logAttempt: (attempt) => log(attempt === 1 ? "shakedown (code)..." : "continuing shakedown (attempt 2)..."),
 				buildPrompt: (attempt) =>
 					attempt === 1

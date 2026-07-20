@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { DEFAULTS, loadConfig, resolveProviderBin, resolveRepo, resolveStepSettings } from "../config.js";
+import { DEFAULTS, loadConfig, resolveDriverCandidates, resolveProviderBin, resolveRepo, resolveStepSettings } from "../config.js";
 
 function tmpRepo(): string {
 	return mkdtempSync(join(tmpdir(), "pelaggio-config-test-"));
@@ -372,6 +372,28 @@ describe("resolveStepSettings — precedence & fallback", () => {
 		const path = writeYml(repo, ["models:", "  profiles:", "    deep:", "      providers:", "        implement: gpt", ""].join("\n"));
 		assert.throws(() => loadConfig({ repo, configPath: path }), /\.pelaggio\.yml/);
 		assert.throws(() => loadConfig({ repo, configPath: path }), /models\.profiles\.deep\.providers\.implement/);
+	});
+});
+
+describe("provider pools", () => {
+	it("parses ordered policy-step pools while scalar resolution remains compatible", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "models:\n  profiles:\n    mixed:\n      providers:\n        plan: [claude, codex, grok]\n");
+		const cfg = loadConfig({ repo, configPath: path });
+		assert.deepEqual(cfg.profileProviders.mixed?.plan, ["claude", "codex", "grok"]);
+		assert.equal(resolveStepSettings(cfg, "mixed", "plan").provider, "claude");
+		assert.deepEqual(
+			resolveDriverCandidates(cfg, "mixed", "plan").map((candidate) => candidate.provider),
+			["claude", "codex", "grok"],
+		);
+	});
+
+	it("rejects empty, duplicate, unknown, and unsupported pools", () => {
+		for (const providers of ["plan: []", "plan: [claude, claude]", "plan: [claude, nope]", "ship: [claude, codex]"]) {
+			const repo = tmpRepo();
+			const path = writeYml(repo, `models:\n  profiles:\n    bad:\n      providers:\n        ${providers}\n`);
+			assert.throws(() => loadConfig({ repo, configPath: path }), /models\.profiles\.bad\.providers\.(plan|ship)/);
+		}
 	});
 });
 

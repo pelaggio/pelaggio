@@ -62,6 +62,8 @@ export interface StepResult {
 
 export interface StepLog {
 	name: string;
+	/** Realized execution backend. Optional only for legacy log compatibility. */
+	provider?: ProviderName;
 	model: string;
 	cost: number;
 	turns: number;
