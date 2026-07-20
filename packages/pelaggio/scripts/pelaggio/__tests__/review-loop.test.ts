@@ -56,6 +56,33 @@ describe("authoring review loop controller", () => {
 			prompts: { review: () => "r", judge: () => "j", revise: () => "rev" },
 		});
 
+	it("ingests a security must-fix from a NON-ok reviewer seat (no fail-open)", async () => {
+		// #244 regression: findings were dropped from a non-ok seat, so an ok empty seat could ship a
+		// security must-fix. author=judge=claude lets both grok+codex reviewer seats survive the filter.
+		const empty = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 2, summary: "clean", findings: [] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
+		const result = await runReviewLoop({
+			policy: {
+				...basePolicy,
+				maxPasses: 1,
+				reviewers: [
+					{ id: "grok", provider: "grok" },
+					{ id: "codex", provider: "codex" },
+				],
+			},
+			author: { provider: "claude" },
+			parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" },
+			runSeat: async (req) => {
+				if (req.role === "judge") return ok(judgeReport([{ candidateId: "C1", decision: "refuted", rationale: "r", class: "security" }]));
+				if (req.slot.provider === "grok") return ok(empty);
+				// non-ok seat (max-turns) that still parsed a security must-fix
+				return { ok: false, subtype: "error_max_turns", text: reviewerFindings("security"), fullText: reviewerFindings("security"), cost: 0, turns: 0 };
+			},
+			prompts: { review: () => "r", judge: () => "j", revise: () => "rev" },
+		});
+		assert.notEqual(result.outcome, "converged-clean");
+		assert.ok(result.survivors.some((survivor) => survivor.finding.class === "security"));
+	});
+
 	it("escalates a stable pass/block split before invoking the Judge", async () => {
 		let judgeCalls = 0;
 		const policy = {

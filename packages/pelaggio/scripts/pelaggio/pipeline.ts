@@ -932,7 +932,10 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 					const state = lookupReviewEscalation(mainRepo, itemId!, reviewedSha);
 					if (written.status === "failed" || state.state !== "resolved-proceed" || escalation.hasSafetyBlocker) return parkExit(`adversarial review escalation ${written.status === "failed" ? "write-failed" : state.state}`)!;
 				}
-				if (loop.outcome === "budget" || loop.outcome === "hard-block" || loop.outcome === "dissent") return parkExit(`adversarial review ${loop.outcome}`)!;
+				// A reviewer-split `dissent` already escalated + parked in the `loop.disagreement` block above.
+				// A Judge-ruled judgment-dissent (no disagreement, non-safety) keeps its pre-#244 posture:
+				// park only for direct-push; in PR mode ship with the dissent recorded (the PR is the veto).
+				if (loop.outcome === "budget" || loop.outcome === "hard-block" || (loop.outcome === "dissent" && opts.shipTarget.name === "direct-push")) return parkExit(`adversarial review ${loop.outcome}`)!;
 				shakedownResult = { ok: true, subtype: "success", text: loop.outcome, fullText: loop.outcome, cost: 0, turns: 0 };
 			}
 		} else {

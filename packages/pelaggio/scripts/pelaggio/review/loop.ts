@@ -141,9 +141,11 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 			cost += result.value.cost;
 			try {
 				const report = parseAuthoringReviewFindings(result.value.fullText ?? result.value.text);
-				if (result.value.ok) {
-					for (const finding of report.findings) discovered.push({ finding, source: slot.id });
-				}
+				// Always ingest parseable findings — including from a non-ok seat (max-turns/errored):
+				// dropping them is a fail-open (a security must-fix from an incomplete seat must still
+				// block, and must feed hasSafetyBlocker). Only the pass/block VERDICT is ok-gated below,
+				// since an incomplete seat has no trustworthy overall verdict for disagreement.
+				for (const finding of report.findings) discovered.push({ finding, source: slot.id });
 				reviewerRecords.push({
 					identity: identity("reviewer", slot, pass),
 					ok: result.value.ok,
