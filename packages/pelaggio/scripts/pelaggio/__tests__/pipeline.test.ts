@@ -4,42 +4,34 @@ import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it, mock } from "node:test";
-import { REVIEW_CONFIG, WORKTREE_PREFIX } from "../config.js";
+import { WORKTREE_PREFIX } from "../config.js";
 import { EffectsManifestError } from "../effects.js";
 import { FifoPolicy } from "../flow-policy.js";
-import { __setProviderAvailableForTests, runOrchestrator, runPipeline } from "../pipeline.js";
+import { runOrchestrator, runPipeline } from "../pipeline.js";
 import type { ShipBookkeepingResult } from "../ship/index.js";
 import { getShipTarget } from "../ship/index.js";
 import type { Flags, ParkSignal, PipelineOpts } from "../types.js";
-import { allCommitMessages, createMockRunPipeline, createMockRunStep, makeGitDirWithoutMain, makeLiveStatus, makeMockRoadmap, makeParkSignal, makeTempGitRepo, makeTempRepoWithParent } from "./mocks.js";
+import {
+	allCommitMessages,
+	createMockRunPipeline,
+	createMockRunStep,
+	makeGitDirWithoutMain,
+	makeLiveStatus,
+	makeMockRoadmap,
+	makeParkSignal,
+	makeTempGitRepo,
+	makeTempRepoWithParent,
+	setupHermeticPipelineEnv,
+	teardownHermeticPipelineEnv,
+} from "./mocks.js";
 
-// The pipeline under test streams progress through console.log (see log() in
-// pipeline.ts). Left unmuted, that high-volume output floods the node:test
-// runner's parent<->subprocess stdout IPC and, on CI's constrained runners,
-// deterministically triggers "Unable to deserialize cloned data due to invalid
-// or unsupported version" as the parent mis-parses the buffer. Mute console
-// output for the whole file; the one test that asserts on log content re-mocks
-// console.log locally, which still captures its own calls.
-// These flow tests exercise pick/plan/implement/ship control flow, not the driver-
-// assignment or authoring-review internals (covered in driver-assignment.test.ts /
-// review-loop.test.ts). Make them hermetic against ambient env so they don't flip
-// with the runner's installed binaries or the repo's `.pelaggio.yml` (#304): stub
-// every configured provider as available (else reviewer-not-author fails closed on a
-// claude-only host like CI), and pin the authoring loop off (else the adversarial
-// path parks on unmocked review steps when `.pelaggio.yml` has it enabled).
-let savedAuthoringEnabled = false;
-before(() => {
-	mock.method(console, "log", () => {});
-	mock.method(console, "error", () => {});
-	savedAuthoringEnabled = REVIEW_CONFIG.authoring.enabled;
-	REVIEW_CONFIG.authoring.enabled = false;
-	__setProviderAvailableForTests(() => true);
-});
-after(() => {
-	mock.restoreAll();
-	REVIEW_CONFIG.authoring.enabled = savedAuthoringEnabled;
-	__setProviderAvailableForTests(undefined);
-});
+// Mute console output (the pipeline's high-volume log() floods node:test IPC on CI),
+// stub provider availability, and pin the authoring loop off so these flow tests stay
+// hermetic against the runner's binaries and the repo's `.pelaggio.yml` (#304). See
+// setupHermeticPipelineEnv in mocks.ts. The one test that asserts on log content
+// re-mocks console.log locally, which still captures its own calls.
+before(setupHermeticPipelineEnv);
+after(teardownHermeticPipelineEnv);
 
 const baseFlags: Flags = {
 	cycles: "1",
