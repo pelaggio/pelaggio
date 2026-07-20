@@ -127,6 +127,9 @@ export async function resolveDecision(repo: string, id: string, options: { adr?:
 export async function archiveResolvedDecisions(repo: string, cutoff: Date): Promise<number> {
 	return withMutationLock(repo, () => {
 		const path = resolve(repo, "docs", "decisions.md");
+		// No register yet (fresh repo / no decisions recorded) → nothing to archive. Guard like
+		// appendDecisions so `decisions archive-resolved` (invoked routinely by /tidy) never ENOENTs.
+		if (!existsSync(path)) return 0;
 		let body = readFileSync(path, "utf8").replace(/\r\n/g, "\n");
 		const resolvedAt = body.indexOf("## Resolved");
 		const matches = [...body.slice(resolvedAt).matchAll(/^\| .*\|\n<!-- decision:([a-f0-9]+) -->\n/gm)];

@@ -37,6 +37,12 @@ describe("decision register", () => {
 		assert.match(readFileSync(resolve(path, "docs/archived/decisions.md"), "utf8"), /decision:[a-f0-9]{16}/);
 	});
 
+	it("archive-resolved is a no-op (not an ENOENT) when no register exists", async () => {
+		// /tidy invokes archive-resolved routinely; a fresh repo with no docs/decisions.md must
+		// return 0, not throw ENOENT (regression for the unguarded readFileSync).
+		assert.equal(await archiveResolvedDecisions(repo(), new Date("2026-03-15T00:00:00Z")), 0);
+	});
+
 	it("keeps identical occurrences distinct", async () => {
 		const path = repo();
 		const result = await appendDecisions(path, {

@@ -10,7 +10,9 @@ export async function decisionsCliMain(args = process.argv.slice(2), repo = REPO
 		if (!id) throw new Error("usage: pelaggio decisions resolve <row-id> [--adr ADR-nnnn]");
 		const adrAt = rest.indexOf("--adr");
 		if (rest.length > 1 && adrAt < 0) throw new Error("unknown resolve arguments");
-		await resolveDecision(repo, id, { ...(adrAt >= 0 ? { adr: rest[adrAt + 1] } : {}), now });
+		const adr = adrAt >= 0 ? rest[adrAt + 1] : undefined;
+		if (adrAt >= 0 && !adr) throw new Error("--adr requires an ADR-nnnn value");
+		await resolveDecision(repo, id, { ...(adr ? { adr } : {}), now });
 		console.log(`Resolved decision ${id}`);
 		return 0;
 	}
