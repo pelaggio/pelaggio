@@ -113,4 +113,22 @@ describe("authoring review loop controller", () => {
 		assert.equal(result.passes.at(-1)?.judge.valid, false);
 		assert.equal(result.survivors[0]?.finding.class, "security");
 	});
+
+	it("honors a Judge decision that omits the optional class and refutes a non-safety finding (#280)", async () => {
+		const result = await run(reviewerFindings("judgment"), judgeReport([{ candidateId: "C1", decision: "refuted", rationale: "r" }]));
+		assert.equal(result.outcome, "converged-clean");
+		assert.equal(result.passes.at(-1)?.judge.valid, true);
+	});
+
+	it("inherits the candidate's safety class for a class-less refutation, still retaining it (#280 + #272)", async () => {
+		const result = await run(reviewerFindings("security"), judgeReport([{ candidateId: "C1", decision: "refuted", rationale: "r" }]));
+		assert.equal(result.outcome, "hard-block");
+		assert.equal(result.passes.at(-1)?.judge.valid, true);
+		assert.equal(result.survivors[0]?.finding.class, "security");
+	});
+
+	it("accepts a Judge elevating a non-safety candidate's class (elevation is not a downgrade)", async () => {
+		const result = await run(reviewerFindings("judgment"), judgeReport([{ candidateId: "C1", decision: "survives", rationale: "r", class: "security", ruling: "fixable-blocker" }]));
+		assert.equal(result.passes.at(-1)?.judge.valid, true);
+	});
 });

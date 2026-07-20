@@ -148,10 +148,15 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 				new Set(report.decisions.map((d) => d.candidateId)).size !== candidates.length ||
 				report.decisions.some((decision) => {
 					const candidate = candidates.find((item) => item.candidateId === decision.candidateId);
-					return !candidate || decision.class !== candidate.finding.class;
+					if (!candidate) return true;
+					// #280: `class` is optional and inherits the candidate's class when omitted — a redundant
+					// echo the Judge shouldn't have to restate. #272: but the Judge must not DOWNGRADE a
+					// reviewer's safety-class candidate to a non-safety class (a reclassify-to-ship evasion);
+					// restating the same class or elevating a non-safety candidate stays allowed.
+					return decision.class !== undefined && SAFETY_CLASSES.includes(candidate.finding.class) && !SAFETY_CLASSES.includes(decision.class);
 				})
 			)
-				throw new Error("Judge decisions are incomplete, duplicated, reclassified, or contain unknown candidates");
+				throw new Error("Judge decisions are incomplete, duplicated, downgrade a safety class, or contain unknown candidates");
 		} catch (error) {
 			// Completeness/parse failure must invalidate the whole pass (fail-closed):
 			// `report` may already hold the parsed-but-incomplete value, so clear it or

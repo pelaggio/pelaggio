@@ -109,6 +109,15 @@ gate on the blocking set. Non-convergent exits (ceiling / dissent / hard-block) 
    gate. Dissent must record: the minority finding, the judge's ruling, attempts made, and the notify
    target.
 
+**Parse tolerance vs. genuine fail-closed (#280).** The teeth above must fire on *real* disagreement,
+not on output-format flakes that would fail-close good code. Two redundancies are tolerated: a reviewer
+emitting more than one `AUTHORING_REVIEW_FINDINGS` block (all blocks are parsed and their findings
+unioned — codex reliably emits several), and a Judge decision omitting the redundant `class` (it is
+inherited from the candidate the Judge is already adjudicating by ID). The load-bearing fail-closed
+guards are unchanged: duplicate / unknown / missing decisions still invalidate the pass (#259), and a
+Judge may not **downgrade** a reviewer's safety class to a non-safety one (only restate or elevate),
+so reclassification cannot route a safety finding around the floor (#272).
+
 **Steering knobs** (all nested config — see below): `reviewers` (N + lenses), `passes` (M ceiling,
 generous, converge-early), `judge` (identity, rotation), `blocking-bar` (which severities must resolve
 to ship — the primary cost/rigor dial), `convergence` (stability definition), `resolve` (auto-revise

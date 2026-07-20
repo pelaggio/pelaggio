@@ -91,6 +91,19 @@ describe("parseAuthoringReviewFindings", () => {
 		assert.throws(() => parseAuthoringReviewFindings(authoringBlock({ schemaVersion: 1, summary: "Ok.", findings: [] })), ReviewFindingsParseError);
 		for (const cls of [undefined, "style", ""]) assert.throws(() => parseAuthoringReviewFindings(authoringBlock({ schemaVersion: 2, summary: "Ok.", findings: [{ severity: "must-fix", class: cls, message: "x" }] })), ReviewFindingsParseError);
 	});
+
+	it("unions findings across multiple blocks instead of dropping the seat (#280)", () => {
+		const two = `${authoringBlock({ schemaVersion: 2, summary: "First.", findings: [{ severity: "must-fix", class: "security", message: "Leak." }] })}\n${authoringBlock({ schemaVersion: 2, summary: "Second.", findings: [{ severity: "note", class: "judgment", message: "Style." }] })}`;
+		const report = parseAuthoringReviewFindings(two);
+		assert.equal(report.findings.length, 2);
+		assert.deepEqual(report.findings.map((f) => f.class).sort(), ["judgment", "security"]);
+		assert.equal(report.summary, "First.");
+	});
+
+	it("still fails closed when one of several blocks is malformed (#280)", () => {
+		const good = authoringBlock({ schemaVersion: 2, summary: "Ok.", findings: [{ severity: "must-fix", class: "security", message: "Leak." }] });
+		assert.throws(() => parseAuthoringReviewFindings(`${good}\nAUTHORING_REVIEW_FINDINGS\n{nope}\nEND_AUTHORING_REVIEW_FINDINGS`), ReviewFindingsParseError);
+	});
 });
 
 describe("parseJudgeReport", () => {
@@ -110,6 +123,14 @@ describe("parseJudgeReport", () => {
 	it("fails closed on a surviving decision without a ruling and on mismatched dissent class", () => {
 		assert.throws(() => parseJudgeReport(judgeBlock({ schemaVersion: 1, decisions: [{ candidateId: "C1", decision: "survives", rationale: "r", class: "judgment" }] })), ReviewFindingsParseError);
 		assert.throws(() => parseJudgeReport(judgeBlock({ schemaVersion: 1, decisions: [{ candidateId: "C1", decision: "survives", rationale: "r", class: "security", ruling: "judgment-dissent" }] })), ReviewFindingsParseError);
+	});
+
+	it("treats decision class as optional, inherited from the candidate (#280)", () => {
+		const refuted = parseJudgeReport(judgeBlock({ schemaVersion: 1, decisions: [{ candidateId: "C1", decision: "refuted", rationale: "Not reachable." }] }));
+		assert.equal(refuted.decisions[0].class, undefined);
+		const surviving = parseJudgeReport(judgeBlock({ schemaVersion: 1, decisions: [{ candidateId: "C1", decision: "survives", rationale: "Reproduced.", ruling: "fixable-blocker" }] }));
+		assert.equal(surviving.decisions[0].class, undefined);
+		assert.equal(surviving.decisions[0].ruling, "fixable-blocker");
 	});
 });
 
