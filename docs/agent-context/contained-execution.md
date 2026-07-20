@@ -61,7 +61,9 @@ Not one stack — two separable boundaries you compose per step:
 
 `--network=none` is the load-bearing backstop: any unanticipated CLI change fails toward **broken
 (blocked, visible)**, never leaky. (Caveat: fail-closed protects *safety, not availability* — a
-wedged pin parks *every* cycle, an outage cost, not an edge case.)
+wedged pin parks *every* cycle, an outage cost, not an edge case. The bounded remedy — fall back to
+the *last verified* pin (recorded, `ship.target`-gated), but never to an uncontained run — is
+[ADR-0017](../decisions/0017-graceful-degradation-rigor-only.md).)
 
 ## The contract (for what we do build)
 

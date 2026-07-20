@@ -78,7 +78,10 @@ at the weakest adapter's fidelity, discards the agent-computed job-size estimate
 (pelaggio's edge over a human PM staring at a backlog), forecloses portfolio-
 level sequencing the ticket system cannot express, and — worst under autonomy —
 depends on human backlog grooming that no one is doing overnight. Offload the
-data; keep the verdict.
+data; keep the verdict. Readiness is therefore a *computed* FlowPolicy verdict, not a
+human-groomed Definition-of-Ready gate, and spec defects are caught at runtime by
+produce-or-escalate (Andon) rather than an upstream gate — see
+[ADR-0011](../decisions/0011-andon-not-dor.md) and [ADR-0012](../decisions/0012-readiness-computed-not-groomed.md).
 
 ## Signals and the projection (planned)
 

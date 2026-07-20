@@ -32,6 +32,8 @@ Run targeted tests with `npx tsx --test <test-file>`. Tests use `node:test`, not
 
 ## Project Invariants
 
+The invariants below share one spine: **determinism lives in the harness (mechanism), judgment lives in the worker (the LLM), and they meet only at a typed, fail-closed, capability-denied seam** — the blocking gate is always deterministic; the model is a policy input, never the gate (see `docs/decisions/0014-mechanism-policy-separation-spine.md`).
+
 - `STEPS` in `packages/pelaggio/scripts/pelaggio/config.ts` is the source of truth for pipeline steps. Adding a step requires updating every step-indexed config map.
 - `expandSkill()` strips skill frontmatter before sending skill bodies to the SDK. Do not rely on frontmatter inside pipeline prompts.
 - Skill bodies must call `npx pelaggio ...`, never `pnpm pelaggio <subcommand>` (which re-enters the pipeline).
@@ -70,6 +72,7 @@ Read only the detail docs needed for the task:
 - `docs/agent-context/adversarial-review-loop.md`: (design) pre-commit multi-driver adversarial convergence loop (N reviewers + a config-set Judge + M passes) that resolves-to-convergence and ships PRs as auditable provenance; outcome levers, prefer-diversity, cost via the subscription pool; precedent (Sakana Fugu / FuguNano / debate / MoA) + the single-agent caution.
 - `docs/agent-context/flow-event-catalog.md`: (design) the `#170` spec — event envelope + identity/ordering contract, the fat-historical vs. derive-on-read split, separate-file storage + dual-format reader, effects-sourced emission, and the consumer extension seam.
 - `docs/agent-context/acp-grok-protocol.md`: (design) ACP-over-stdio wire-protocol reference for `grok agent stdio` (grok 0.2.103 conformance target) — framing, lifecycle, `session/update` shapes, usage/cost, permissions; feeds the #239 client + #136 grok-provider.
+- `docs/agent-context/supervised-run.md`: operator runbook for supervising an end-to-end run out-of-band (start → watch → review-from-worktree → admin-land → mark-done → cleanup) + the escalation-adjudication defaults; distinct from the in-cycle pipeline skills.
 - `docs/agent-context/skills.md`: skill layout, canonical tree, bilingual substrate, frontmatter, includes, project-context extension point.
 - `docs/agent-context/testing-and-quality.md`: test commands, lint rules, rubric, review-shape rationale.
 - `docs/config.md`: `.pelaggio.yml` schema.

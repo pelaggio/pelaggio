@@ -109,7 +109,10 @@ gate on the blocking set. Non-convergent exits (ceiling / dissent / hard-block) 
    (post-hoc human adjudication after a merge is not a control). For **`pull-request` / `auto-merge-pr`**,
    dissent may push the branch + record + notify — GitHub's required checks and the human merge still
    gate. Dissent must record: the minority finding, the judge's ruling, attempts made, and the notify
-   target.
+   target. This ship.target conditioning is the seed of the general **tolerance policy**
+   ([ADR-0015](../decisions/0015-autonomy-by-default-configurable-tolerance.md)): the *judgment band* is
+   tolerance-configurable (flag vs. move), while the *safety class* is never — it always fails closed,
+   per the taxonomy and its owner in [ADR-0016](../decisions/0016-severity-taxonomy-and-owner.md).
 
 **Parse tolerance vs. genuine fail-closed (#280).** The teeth above must fire on *real* disagreement,
 not on output-format flakes that would fail-close good code. Two redundancies are tolerated: a reviewer
