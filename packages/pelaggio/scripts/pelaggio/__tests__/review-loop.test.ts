@@ -56,6 +56,23 @@ describe("authoring review loop controller", () => {
 			prompts: { review: () => "r", judge: () => "j", revise: () => "rev" },
 		});
 
+	it("excludes the artifact author from configured review seats", async () => {
+		const invoked: string[] = [];
+		const clean = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 2, summary: "clean", findings: [] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
+		const result = await runReviewLoop({
+			policy: { ...basePolicy, reviewers: [{ id: "author-seat", provider: "codex" }, ...basePolicy.reviewers] },
+			author: { provider: "codex" },
+			parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" },
+			runSeat: async (request) => {
+				invoked.push(request.slot.id);
+				return ok(request.role === "judge" ? judgeReport([]) : clean);
+			},
+			prompts: { review: () => "r", judge: () => "j", revise: () => "rev" },
+		});
+		assert.equal(result.outcome, "converged-clean");
+		assert.deepEqual(invoked, ["grok", "judge"]);
+	});
+
 	it("ingests a security must-fix from a NON-ok reviewer seat (no fail-open)", async () => {
 		// #244 regression: findings were dropped from a non-ok seat, so an ok empty seat could ship a
 		// security must-fix. author=judge=claude lets both grok+codex reviewer seats survive the filter.
@@ -88,8 +105,8 @@ describe("authoring review loop controller", () => {
 		const policy = {
 			...basePolicy,
 			reviewers: [
-				{ id: "grok-a", provider: "grok" as const },
-				{ id: "grok-b", provider: "grok" as const },
+				{ id: "reviewer-a", provider: "grok" as const },
+				{ id: "reviewer-b", provider: "claude" as const },
 			],
 		};
 		const pass = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 2, summary: "looks good", findings: [] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
@@ -100,7 +117,7 @@ describe("authoring review loop controller", () => {
 			parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" },
 			runSeat: async (request) => {
 				if (request.role === "judge") judgeCalls++;
-				return ok(request.slot.id === "grok-a" ? pass : block);
+				return ok(request.slot.id === "reviewer-a" ? pass : block);
 			},
 			prompts: { review: () => "r", judge: () => "j", revise: () => "rev" },
 		});
@@ -117,8 +134,8 @@ describe("authoring review loop controller", () => {
 		const policy = {
 			...basePolicy,
 			reviewers: [
-				{ id: "grok-a", provider: "grok" as const },
-				{ id: "grok-b", provider: "grok" as const },
+				{ id: "reviewer-a", provider: "grok" as const },
+				{ id: "reviewer-b", provider: "claude" as const },
 			],
 		};
 		const safetyBlock = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 2, summary: "security regression", findings: [{ severity: "must-fix", class: "security", message: "unsafe" }] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
@@ -132,7 +149,7 @@ describe("authoring review loop controller", () => {
 				if (request.role === "judge") return ok(judgeReport([{ candidateId: "C1", decision: "survives", rationale: "revise", class: "security", ruling: "fixable-blocker" }]));
 				if (request.role === "author") return ok("");
 				if (request.pass === 1) return ok(safetyBlock);
-				return ok(request.slot.id === "grok-a" ? pass : judgmentBlock);
+				return ok(request.slot.id === "reviewer-a" ? pass : judgmentBlock);
 			},
 			prompts: { review: () => "r", judge: () => "j", revise: () => "rev" },
 		});

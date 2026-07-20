@@ -81,7 +81,7 @@ export interface ResolvedConfig {
 	profileBudgets: Record<string, Partial<Record<Step, number>>>;
 	profileTurnLimits: Record<string, Partial<Record<Step, number>>>;
 	profileEffort: Record<string, Partial<Record<Step, Effort>>>;
-	profileProviders: Record<string, Partial<Record<Step, ProviderName>>>;
+	profileProviders: Record<string, Partial<Record<Step, ProviderSelection>>>;
 	/** Per-provider driver executable override (issue #241). Keyed by provider name; a missing
 	 *  entry falls back to the provider's default binary (resolved via PATH). Lets an off-PATH
 	 *  driver (e.g. `~/.grok/bin/grok`) be pinned without editing PATH. */
@@ -113,6 +113,9 @@ export interface ResolvedConfig {
 	/** Outbound run-outcome notifications. Disabled when `url` is empty (the default). */
 	notify: NotifyConfig;
 }
+
+export type ProviderPool = readonly [ProviderName, ...ProviderName[]];
+export type ProviderSelection = ProviderName | ProviderPool;
 
 export type ProviderDiversityPolicy = "off" | "prefer" | "require";
 export type AuthoringFindingClass = "security" | "data-loss" | "correctness-regression" | "judgment";
@@ -305,7 +308,29 @@ interface ParsedProfiles {
 	budgets: Record<string, Partial<Record<Step, number>>>;
 	turnLimits: Record<string, Partial<Record<Step, number>>>;
 	effort: Record<string, Partial<Record<Step, Effort>>>;
-	providers: Record<string, Partial<Record<Step, ProviderName>>>;
+	providers: Record<string, Partial<Record<Step, ProviderSelection>>>;
+}
+
+const POOLED_STEPS: readonly Step[] = ["plan", "implement", "shakedown-plan", "shakedown-code"];
+
+function parseProviderSelections(override: unknown, section: string, configPath: string): Partial<Record<Step, ProviderSelection>> {
+	if (override === undefined) return {};
+	if (!isPlainObject(override)) throw new Error(`${configPath}: expected \`${section}\` to be a map, got ${Array.isArray(override) ? "array" : typeof override}`);
+	const out: Partial<Record<Step, ProviderSelection>> = {};
+	for (const [key, value] of Object.entries(override)) {
+		if (!isStep(key)) continue;
+		if (!Array.isArray(value)) {
+			if (!isProviderName(value)) throw new Error(`${configPath}: invalid value at \`${section}.${key}\``);
+			out[key] = value;
+			continue;
+		}
+		if (!(POOLED_STEPS as readonly string[]).includes(key)) throw new Error(`${configPath}: provider lists are not supported at \`${section}.${key}\``);
+		if (value.length === 0) throw new Error(`${configPath}: expected \`${section}.${key}\` to be a non-empty provider list`);
+		if (!value.every(isProviderName)) throw new Error(`${configPath}: invalid provider in \`${section}.${key}\``);
+		if (new Set(value).size !== value.length) throw new Error(`${configPath}: duplicate provider in \`${section}.${key}\``);
+		out[key] = value as ProviderPool;
+	}
+	return out;
 }
 
 function parseProfiles(defaults: Record<string, Partial<Record<Step, string>>>, override: unknown, configPath: string): ParsedProfiles {
@@ -315,7 +340,7 @@ function parseProfiles(defaults: Record<string, Partial<Record<Step, string>>>, 
 	const codexModels: Record<string, Partial<Record<Step, string>>> = {};
 	const turnLimits: Record<string, Partial<Record<Step, number>>> = {};
 	const effort: Record<string, Partial<Record<Step, Effort>>> = {};
-	const providers: Record<string, Partial<Record<Step, ProviderName>>> = {};
+	const providers: Record<string, Partial<Record<Step, ProviderSelection>>> = {};
 
 	if (override === undefined) return { models, codexModels, budgets, turnLimits, effort, providers };
 	if (!isPlainObject(override)) {
@@ -341,7 +366,7 @@ function parseProfiles(defaults: Record<string, Partial<Record<Step, string>>>, 
 		if (Object.keys(t).length > 0) turnLimits[name] = t;
 		const e = parseSparseStepRecord(profile.effort, `models.profiles.${name}.effort`, isEffort, configPath);
 		if (Object.keys(e).length > 0) effort[name] = e;
-		const p = parseSparseStepRecord(profile.providers, `models.profiles.${name}.providers`, isProviderName, configPath);
+		const p = parseProviderSelections(profile.providers, `models.profiles.${name}.providers`, configPath);
 		if (Object.keys(p).length > 0) providers[name] = p;
 		const cm = parseSparseStepRecord(profile.codex, `models.profiles.${name}.codex`, isString, configPath);
 		if (Object.keys(cm).length > 0) codexModels[name] = cm;
@@ -611,6 +636,7 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 				if (!Array.isArray(authoring.reviewers) || authoring.reviewers.length === 0) throw new Error(`${configPath}: expected \`review.authoring.reviewers\` to be a non-empty array`);
 				reviewers = authoring.reviewers.map((slot, index) => parseReviewSlot(slot, `review.authoring.reviewers[${index}]`, configPath, `reviewer-${index + 1}`));
 				if (new Set(reviewers.map((slot) => slot.id)).size !== reviewers.length) throw new Error(`${configPath}: review.authoring reviewer ids must be unique`);
+				if (new Set(reviewers.map((slot) => slot.provider)).size !== reviewers.length) throw new Error(`${configPath}: review.authoring reviewer providers must be unique`);
 			}
 			const judge = authoring.judge === undefined ? reviewAuthoring.judge : parseReviewSlot(authoring.judge, "review.authoring.judge", configPath, "judge");
 			reviewAuthoring = { enabled: (authoring.enabled as boolean | undefined) ?? reviewAuthoring.enabled, reviewers, judge, blockingBar: "must-fix", maxPasses: 2, maxRevisions: 1, budgetCap: cap, providerDiversity: "prefer" };
@@ -772,14 +798,23 @@ export interface StepSettings {
  */
 export function resolveStepSettings(config: ResolvedConfig, profile: string, step: Step): StepSettings {
 	const inheritedStep = step === "pr-verify" ? "pr-review" : step;
+	const selection = config.profileProviders[profile]?.[step] ?? config.profileProviders[profile]?.[inheritedStep] ?? DEFAULT_PROVIDER;
 	return {
 		budget: config.profileBudgets[profile]?.[step] ?? config.budgets[step],
 		turns: config.profileTurnLimits[profile]?.[step] ?? config.turnLimits[step],
 		effort: config.profileEffort[profile]?.[step] ?? config.effort[step],
 		model: config.modelProfiles[profile]?.[step] ?? config.modelProfiles[profile]?.[inheritedStep],
 		codexModel: config.profileCodexModels[profile]?.[step] ?? config.profileCodexModels[profile]?.[inheritedStep],
-		provider: config.profileProviders[profile]?.[step] ?? config.profileProviders[profile]?.[inheritedStep] ?? DEFAULT_PROVIDER,
+		provider: Array.isArray(selection) ? selection[0] : selection,
 	};
+}
+
+/** Resolve the ordered execution candidates for a policy-managed step. */
+export function resolveDriverCandidates(config: ResolvedConfig, profile: string, step: Step): StepSettings[] {
+	const base = resolveStepSettings(config, profile, step);
+	const selection = config.profileProviders[profile]?.[step] ?? base.provider;
+	const providers: readonly ProviderName[] = Array.isArray(selection) ? selection : [selection];
+	return providers.map((provider) => ({ ...base, provider }));
 }
 
 /** Resolve authoring seats without mutating the selected profile or global step maps. */

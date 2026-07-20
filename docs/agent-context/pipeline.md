@@ -79,6 +79,16 @@ Manifest **validation** is fail-closed: an unknown kind, a provenance/`preSha` m
 
 Every pipeline exit path must call `parkExit()` (which checkpoints uncommitted work) before returning on rate-limit rejection, so work is checkpointed before the process exits or waits. This matters for subscription-backed providers whose retry windows are outside the pipeline's control.
 
+Driver assignment is decided in the harness before `plan`, `implement`, and
+their ordinary shakedown reviews execute. Ordered pools rotate deterministically
+within a cycle; readiness is preflight-only, and an in-flight failure still uses
+the normal checkpoint-and-park path rather than failing over. Every new step log
+records the realized provider and effective provider-specific model. Downstream
+reviews exclude the recorded artifact author; resumed reviews reconstruct that
+identity from successful item log entries and fail closed when legacy logs do
+not contain attribution. The adversarial authoring loop keeps its separate
+role-bearing reviewer and Judge configuration.
+
 Issue `#80` relies on conservative rate-limit waits when Codex does not report an exact reset time.
 
 **Sustained SDK outage (#128)**: a single `"transient sdk error"` cycle (retries exhausted, see #127) stays recoverable so the worker keeps pulling — a blip shouldn't stall a run. `runOrchestrator` tracks consecutive `"transient sdk error"` cycle outcomes (reset by any other outcome); at `CONSECUTIVE_TRANSIENT_ERROR_LIMIT` in a row it relabels the tripping cycle's error to `"parked"` (`limitType: "sdk-outage"`, `resetsAt: 0`) so it pages and flows through the same park-and-resume path as a rate-limit park. `resetsAt: 0` means it can't auto-resume by time — like a manual `SIGUSR2` pause, it hands back with a `--resume` hint instead of waiting.

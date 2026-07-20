@@ -11,22 +11,27 @@ import { runOrchestrator, runPipeline } from "../pipeline.js";
 import type { ShipBookkeepingResult } from "../ship/index.js";
 import { getShipTarget } from "../ship/index.js";
 import type { Flags, ParkSignal, PipelineOpts } from "../types.js";
-import { allCommitMessages, createMockRunPipeline, createMockRunStep, makeGitDirWithoutMain, makeLiveStatus, makeMockRoadmap, makeParkSignal, makeTempGitRepo, makeTempRepoWithParent } from "./mocks.js";
+import {
+	allCommitMessages,
+	createMockRunPipeline,
+	createMockRunStep,
+	makeGitDirWithoutMain,
+	makeLiveStatus,
+	makeMockRoadmap,
+	makeParkSignal,
+	makeTempGitRepo,
+	makeTempRepoWithParent,
+	setupHermeticPipelineEnv,
+	teardownHermeticPipelineEnv,
+} from "./mocks.js";
 
-// The pipeline under test streams progress through console.log (see log() in
-// pipeline.ts). Left unmuted, that high-volume output floods the node:test
-// runner's parent<->subprocess stdout IPC and, on CI's constrained runners,
-// deterministically triggers "Unable to deserialize cloned data due to invalid
-// or unsupported version" as the parent mis-parses the buffer. Mute console
-// output for the whole file; the one test that asserts on log content re-mocks
-// console.log locally, which still captures its own calls.
-before(() => {
-	mock.method(console, "log", () => {});
-	mock.method(console, "error", () => {});
-});
-after(() => {
-	mock.restoreAll();
-});
+// Mute console output (the pipeline's high-volume log() floods node:test IPC on CI),
+// stub provider availability, and pin the authoring loop off so these flow tests stay
+// hermetic against the runner's binaries and the repo's `.pelaggio.yml` (#304). See
+// setupHermeticPipelineEnv in mocks.ts. The one test that asserts on log content
+// re-mocks console.log locally, which still captures its own calls.
+before(setupHermeticPipelineEnv);
+after(teardownHermeticPipelineEnv);
 
 const baseFlags: Flags = {
 	cycles: "1",

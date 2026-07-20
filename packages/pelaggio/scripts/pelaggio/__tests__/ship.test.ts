@@ -3,14 +3,20 @@ import { execSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, it } from "node:test";
+import { after, before, describe, it } from "node:test";
 import { DEFAULT_SHIP_TARGET, loadConfig } from "../config.js";
 import { remotePushWarning, runPipeline } from "../pipeline.js";
 import type { ShipBookkeepingCtx, ShipBookkeepingResult } from "../ship/index.js";
 import { getShipTarget, isAutonomousRemotePush, isShipTargetName, SHIP_TARGET_NAMES } from "../ship/index.js";
 import { stripAnsi } from "../tui.js";
 import type { Flags, PipelineOpts, ShipTargetName, StepResult } from "../types.js";
-import { allCommitMessages, createMockRunStep, makeLiveStatus, makeParkSignal, makeTempGitRepo, makeTempRepoWithParent } from "./mocks.js";
+import { allCommitMessages, createMockRunStep, makeLiveStatus, makeParkSignal, makeTempGitRepo, makeTempRepoWithParent, setupHermeticPipelineEnv, teardownHermeticPipelineEnv } from "./mocks.js";
+
+// ship.test.ts drives the real runPipeline through shakedown → ship, so it needs the
+// same hermetic env as pipeline.test.ts (provider availability + authoring off) or the
+// reviewer-not-author selection fails closed on a claude-only CI host (#304).
+before(setupHermeticPipelineEnv);
+after(teardownHermeticPipelineEnv);
 
 // A real mainRepo + sibling worktree on `feat/tool-99`, mirroring production layout.
 // Direct-push integration tests MUST inject this as `mainRepo` — the pipeline's
