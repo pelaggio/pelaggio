@@ -200,6 +200,20 @@ claims:
     adr: "ADR-6"
     last_verified: "2026-07-07"
 
+  - id: TC-017
+    claim: "Opt-in contained egress reaches only a reviewed provider route through a host-held, capped broker; the jail receives no provider key or upstream URL."
+    status: guarantee
+    applies_to: ">=0.1.0"
+    condition: "run-contained with --egress"
+    mechanism: "bubblewrap retains --unshare-all and mounts only a Unix HTTP socket. The host broker enforces an HTTPS origin, exact method/path/model policy, bounded buffered bodies, integer token/spend reservations, redirect refusal, response-header filtering, and one-shot scope termination on hard-cap or accounting failure."
+    evidence_command: "node --import tsx --test --test-reporter=dot packages/pelaggio/scripts/pelaggio/__tests__/egress-broker.test.ts packages/pelaggio/scripts/pelaggio/__tests__/contained-execution.test.ts"
+    test_file: "packages/pelaggio/scripts/pelaggio/__tests__/{egress-broker,contained-execution,run-contained-cli}.test.ts"
+    failure_mode: "deny the request, or seal the broker and kill the contained scope when accounting cannot remain safe"
+    known_limits: "The provider is an allowed sink, so prompt/body exfiltration to it remains possible. Codex key mode is the only advertised production policy; transparent auth is conformance-only pending a verified official transport seam."
+    standards: ["OWASP-LLM06", "ASVS-V4"]
+    adr: null
+    last_verified: "2026-07-19"
+
 manifest:
   defaults:
     ship_target: pull-request
@@ -253,6 +267,13 @@ manifest:
       opt_out: "configure a different model provider when one is supported"
       role: sub_processor
       evidence: [TC-006]
+    - destination: openai
+      data_categories: [prompts, request_bodies, provider_usage]
+      required: false
+      retention: "governed by the provider's policy"
+      opt_out: "omit the run-contained egress selection"
+      role: sub_processor
+      evidence: [TC-006, TC-017]
     - destination: github
       data_categories: [issues, pull_requests, plan_bodies, diffs, comments]
       required: false

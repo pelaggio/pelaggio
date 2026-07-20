@@ -101,6 +101,22 @@
       ]
     },
     {
+      "destination": "openai",
+      "data_categories": [
+        "prompts",
+        "request_bodies",
+        "provider_usage"
+      ],
+      "required": false,
+      "retention": "governed by the provider's policy",
+      "opt_out": "omit the run-contained egress selection",
+      "role": "sub_processor",
+      "evidence": [
+        "TC-006",
+        "TC-017"
+      ]
+    },
+    {
       "destination": "github",
       "data_categories": [
         "issues",

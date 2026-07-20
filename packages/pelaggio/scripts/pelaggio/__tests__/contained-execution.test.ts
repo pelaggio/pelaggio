@@ -132,6 +132,65 @@ describe("contained invocation", () => {
 		assert.match(await readFile(join(result.artifactDir, "invocation.txt"), "utf8"), /diagnostic/);
 	});
 
+	it("mounts only the broker socket and exposes only its locator", async () => {
+		const root = await fixture();
+		const invocation = buildContainedInvocation(
+			{ worktree: root, mode: { kind: "command", argv: ["/usr/bin/node"] }, command: ["/usr/bin/node"], privateDir: "/tmp/private", gitMask: join(root, ".git"), egressSocket: "/tmp/private/egress.sock" },
+			{ platform: "linux", bwrap: "/usr/bin/bwrap", systemdRun: "/usr/bin/systemd-run", systemctl: "/usr/bin/systemctl", runtimeRoots: ["/usr"] },
+		);
+		const rendered = renderInvocation(invocation);
+		assert.match(rendered, /egress\.sock/);
+		assert.match(rendered, /PELAGGIO_EGRESS_SOCKET/);
+		assert.equal(rendered.includes("api.openai.com"), false);
+	});
+
+	it("kills the contained scope and fails closed when the broker seals", async () => {
+		const root = await fixture();
+		const privateRoot = await mkdtemp(join(tmpdir(), "contained-broker-test-"));
+		roots.push(privateRoot);
+		let fatalResolve!: (error: Error) => void;
+		const fatal = new Promise<Error>((resolve) => {
+			fatalResolve = resolve;
+		});
+		let releaseLaunch!: () => void;
+		const launched = new Promise<void>((resolve) => {
+			releaseLaunch = resolve;
+		});
+		let killArgv: readonly string[] = [];
+		let closed = false;
+		const run = runContained(
+			{ worktree: root, mode: { kind: "command", argv: [process.execPath] }, egress: { provider: "codex", model: "gpt-5.2-codex", auth: { kind: "transparent" } } },
+			{
+				privateRoot,
+				listGitFiles: async () => [],
+				discoverCapabilities: async () => ({ platform: "linux", bwrap: "/usr/bin/bwrap", systemdRun: "/usr/bin/systemd-run", systemctl: "/usr/bin/systemctl", runtimeRoots: [dirname(process.execPath)] }),
+				preflight: async () => undefined,
+				startBroker: async () => ({
+					ready: Promise.resolve(),
+					decisions: [],
+					fatal,
+					close: async () => {
+						closed = true;
+					},
+				}),
+				spawn: async () => {
+					await launched;
+					return { status: 0, signal: null, stdout: "", stderr: "" };
+				},
+				runKill: async (_executable, argv) => {
+					killArgv = argv;
+					releaseLaunch();
+					return { status: 0, signal: null, stdout: "", stderr: "" };
+				},
+			},
+		);
+		fatalResolve(new Error("egress hard cap exceeded"));
+		await assert.rejects(run, /egress hard cap exceeded/);
+		assert.deepEqual(killArgv.slice(0, 3), ["--user", "kill", "--kill-whom=all"]);
+		assert.match(killArgv[3] ?? "", /^pelaggio-contained-.*\.scope$/);
+		assert.ok(closed);
+	});
+
 	it("self-test fails closed when the jail cannot be established", async () => {
 		const root = await fixture();
 		const result = await runContainedSelfTest(

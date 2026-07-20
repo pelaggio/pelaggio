@@ -1,4 +1,21 @@
-# Contained execution (design)
+# Contained execution
+
+The execution jail and optional constrained egress broker are implemented for raw `run-contained`.
+The reviewed production policy is Codex key mode: `POST /v1/responses`, model
+`gpt-5.2-codex`, through `https://api.openai.com`. Provider step runners are not yet wired to this
+transport; until an official Unix/base-URL or host-stdio seam is verified, egress remains opt-in.
+
+Select it with `--egress codex --egress-model gpt-5.2-codex --egress-auth key --key-env NAME`.
+The named variable must exist in the host environment; its value is never accepted in argv or passed
+to the jail. `--egress-conformance codex` accepts key or transparent auth for transport testing.
+Transparent auth is deliberately unavailable in command mode.
+
+Defaults are 1 MiB request bodies, 8 MiB responses, 60 requests/minute, 500 requests/run,
+10 million conservatively reserved input tokens, 1 million output tokens, and 100 USD in integer
+micro-USD accounting. A hard cap, response overflow, or unaccountable successful response seals the
+broker and kills the systemd scope. Decisions retain method, path without query, rule/outcome,
+status, byte/token/cost counters, and timestamps only. Policy or request-shape changes require an
+intentional update to the versioned fixture under `__tests__/fixtures/egress/`.
 
 (design) Confine agent-authored, injection-reachable code that pelaggio runs autonomously. This doc
 was re-scoped after three rounds of adversarial multi-driver review (Claude/Codex/Grok) that
@@ -9,8 +26,8 @@ converged on a hard truth:
 > token being unexfiltratable says nothing about whether you are *allowed* to make the calls, or who
 > owns the liability when you do.
 
-So the posture is deliberately **scoped and light**, not a bespoke security product. Target-state; the
-tag drops as pieces ship.
+So the posture is deliberately **scoped and light**, not a bespoke security product. Remaining
+provider-runner integration is target-state.
 
 ## Posture (what we build, and the defaults)
 
