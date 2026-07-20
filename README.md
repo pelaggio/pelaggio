@@ -6,8 +6,8 @@ Pelaggio moves every work item through the same fixed, auditable pipeline — pl
 review, ship — at whatever level of supervision you're comfortable with. Sit in a verbose
 session steering the roadmap by hand, hand off the whole project and let it run end to end,
 or dial in anywhere between. You choose the involvement and the token budget; the pipeline
-runs with the same discipline either way. Self-hosted, bring your own agent (Claude Code
-*or* Codex), every change behind a bounded blast radius.
+runs with the same discipline either way. Self-hosted, bring your own agent (Claude Code,
+Codex, or Grok Build), every change behind a bounded blast radius.
 
 > **The name.** *Pelaggio* comes from *pelagos*, the open sea. Its agents work **pelagic** —
 > out in open water, far from the shore of direct control — while the platform carves that
@@ -24,7 +24,7 @@ without taking away your control:
 - **Supervision on your terms.** Watch every session and steer the roadmap by hand, run it
   entirely unattended, or anywhere between — the same pipeline and the same guardrails at
   whatever involvement (and token budget) you choose.
-- **Bring your own agent.** Claude Code and Codex today, driven through one provider seam —
+- **Bring your own agent.** Claude Code, Codex, and Grok Build, driven through one provider seam —
   it's designed for choice, not lock-in.
 - **Bounded blast radius.** Every item runs in its own git worktree, isolated from `main`
   and from your other work. Shipping defaults to a **pull request**; autonomous direct-push
@@ -62,6 +62,8 @@ Pelaggio drives the harness; you choose it. The provider seam is real, not aspir
 
 - **Claude Code** (Claude Agent SDK) — the original driver.
 - **Codex** — a first-class second driver.
+- **Grok Build** — an ACP driver with a pinned, managed sandbox setup; see the
+  [Grok operator guide](./docs/grok.md).
 
 Model IDs, per-step budgets, and effort are configuration, not code — see `.pelaggio.yml`.
 

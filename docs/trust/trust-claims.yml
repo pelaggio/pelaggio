@@ -97,11 +97,11 @@ claims:
     claim: "Your code goes only where you point it: the model provider you configure, and the roadmap/notify integrations you enable. Nowhere else."
     status: default
     applies_to: ">=0.1.0"
-    mechanism: "Egress is limited to the configured provider (today: Anthropic), the roadmap adapter (GitHub/Linear), git push to your remote, and an optional notify webhook. See the egress matrix in pelaggio.trust.json."
+    mechanism: "Egress is limited to the configured model provider (Claude/Anthropic, Codex/OpenAI, or Grok/the operator-configured compatible endpoint), the roadmap adapter (GitHub/Linear), git push to your remote, and an optional notify webhook. Grok's managed profile and --disable-web-search restrict child/tool traffic, but its in-process model client remains provider egress. See the egress matrix in pelaggio.trust.json."
     evidence_command: "grep -rEn '@anthropic-ai/claude-agent-sdk|LinearClient|gh |git push origin|notify\\.url|fetch\\(' packages/pelaggio/scripts/pelaggio .github/workflows"
     test_file: "docs/trust/trust-claims.yml"
     failure_mode: "n/a"
-    known_limits: "Self-hosted keeps everything on your infra; the model provider's retention is governed by their policy."
+    known_limits: "Self-hosted means Pelaggio adds no hosted control plane, but the selected model provider still receives legitimate prompt and read-file/source context under its retention policy. For Grok 0.2.103, cli-chat-proxy.grok.com is observed and release-conformance-locked, not kernel- or L7-allowlisted; #279/#260 own constrained-broker routing. The unsandboxed Grok fallback is local-supervised only and makes no unattended containment claim."
     standards: ["GDPR-Art28", "OWASP-LLM02"]
     adr: null
     last_verified: "2026-07-07"
@@ -274,6 +274,13 @@ manifest:
       opt_out: "omit the run-contained egress selection"
       role: sub_processor
       evidence: [TC-006, TC-017]
+    - destination: cli-chat-proxy.grok.com
+      data_categories: [prompts, source_context, read_file_context]
+      required: false
+      retention: "governed by the provider's policy"
+      opt_out: "configure a different model provider for the step"
+      role: sub_processor
+      evidence: [TC-006, TC-014]
     - destination: github
       data_categories: [issues, pull_requests, plan_bodies, diffs, comments]
       required: false

@@ -56,6 +56,14 @@ const schema = {
 };
 
 describe("trust manifest generator", () => {
+	it("discloses Grok prompt and read-file egress in the real registry", () => {
+		const manifest = buildManifest(loadClaims(process.cwd()));
+		const grok = manifest.egress.find((entry) => entry.destination === "cli-chat-proxy.grok.com");
+		assert.ok(grok, "real registry must disclose the Grok service destination");
+		assert.deepEqual(grok.data_categories, ["prompts", "source_context", "read_file_context"]);
+		assert.deepEqual(grok.evidence, ["TC-006", "TC-014"]);
+	});
+
 	it("generates stable manifest bytes with required scalars and a real claims_ref", () => {
 		const manifest = buildManifest(registry, { release: "1.2.3" });
 		assert.equal(manifest.product, "pelaggio");

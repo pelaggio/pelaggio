@@ -5,7 +5,7 @@ status: draft
 diataxis: explanation
 sidebar:
   order: 1
-last_reviewed: 2026-07-08
+last_reviewed: 2026-07-19
 threat_model_ref: ./threat-model.md
 ---
 
@@ -25,7 +25,7 @@ Pelaggio is designed around item worktrees, and mutating steps receive hooks/con
 
 ### 3. What leaves my machine?
 
-There is no analytics or telemetry channel at all (`TC-002`). Operational egress is limited by configuration to the model provider, enabled roadmap adapter, git remote, and optional notify webhook (`TC-006`, [egress matrix](./egress.md)). Prompts/structured run logs do not interpolate known secret environment variables (`TC-001`), but child processes currently inherit the parent environment and raw verbose logs are not scrubbed; env allowlisting and log redaction are planned (`TC-014`, [artifacts and state](./reference/artifacts-and-state.md)).
+There is no analytics or telemetry channel at all (`TC-002`). Operational egress is limited by configuration to the selected model provider, enabled roadmap adapter, git remote, and optional notify webhook (`TC-006`, [egress matrix](./egress.md)). Selecting a provider sends it legitimate prompt and repository/read-file context under its retention policy. Driver children receive a deny-by-default environment and captured logs are credential-scrubbed (`TC-014`), but those controls do not hide task context from the selected provider. Grok's managed sandbox confines filesystem and child-network behavior where Linux Landlock is available; its observed in-process service hostname is a release-conformance lock, not an OS allowlist, and its unsandboxed fallback is supervised-only ([Grok setup](../grok.md), [sandboxing](./sandboxing.md)).
 
 ### 4. What blocks an unsafe merge?
 
