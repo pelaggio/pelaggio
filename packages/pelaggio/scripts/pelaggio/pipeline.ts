@@ -22,7 +22,7 @@ import {
 	WORKTREE_PREFIX,
 } from "./config.js";
 import { appendDecisions as appendDecisionsDefault, appendReviewEscalation as appendReviewEscalationDefault, lookupReviewEscalation as lookupReviewEscalationDefault } from "./decisions.js";
-import { createDriverAssignmentState, type DriverIdentity, recordArtifactAuthor, selectAuthor, selectReviewers } from "./driver-assignment.js";
+import { createDriverAssignmentState, type DriverIdentity, recordArtifactAuthor, resolveStaticAuthor, selectAuthor, selectReviewers } from "./driver-assignment.js";
 import { dispatchStepEffects as dispatchStepEffectsDefault, type Effect, EffectsManifestError, writeEffectsManifest as writeEffectsManifestDefault } from "./effects.js";
 import { DEFAULT_FLOW_POLICY, type FlowPolicy } from "./flow-policy.js";
 import {
@@ -718,20 +718,38 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		});
 	};
 
+	// Reconstruct an already-produced artifact's author when its step isn't running
+	// this process (resume, or plan-exists-on-disk skip). Attribution comes from the
+	// structured step records in LOG_PATH (pelaggio-log.jsonl), never opts.logPath —
+	// that is the human verbose/parallel transcript and holds no JSON step records, so
+	// parsing it returns undefined and the assignment fails closed into a false park
+	// (#245). When the log genuinely lacks attribution (legacy log, out-of-band plan),
+	// fall back to the statically-resolved author and warn that reviewer separation is
+	// then best-effort, not proven — rather than falsely claiming a guarantee or parking.
+	const reconstructAuthor = (artifact: "plan" | "implementation", step: "plan" | "implement"): void => {
+		const logged = findLoggedArtifactAuthor(itemId!, step, LOG_PATH);
+		if (logged) {
+			recordArtifactAuthor(assignment, artifact, logged);
+			return;
+		}
+		const fallback = resolveStaticAuthor(driverCandidates(step), available);
+		if (!fallback) return;
+		log(`⚠ ${artifact} attribution absent from log; using statically-resolved author (${fallback.provider}) — reviewer separation is best-effort, not proven (#245)`);
+		recordArtifactAuthor(assignment, artifact, fallback);
+	};
+
 	let verdict: "APPROVE" | "REVISE" | "RETHINK" = "APPROVE";
 	let shakedownPlanText = "";
 
 	if (!assignment.authors.plan && shouldRun("shakedown-plan") && !shouldRun("plan")) {
-		const author = findLoggedArtifactAuthor(itemId!, "plan", opts.logPath ?? LOG_PATH);
-		if (author) recordArtifactAuthor(assignment, "plan", author);
+		reconstructAuthor("plan", "plan");
 	}
 
 	if (shouldRun("plan")) {
 		const existingPlan = roadmap.resolvePlanPath({ id: itemId!, worktree: worktree! });
 		if (!opts.dryRun && existsSync(existingPlan)) {
 			log(`plan exists at ${existingPlan} — skipping plan generation`);
-			const author = findLoggedArtifactAuthor(itemId!, "plan", opts.logPath ?? LOG_PATH);
-			if (author) recordArtifactAuthor(assignment, "plan", author);
+			reconstructAuthor("plan", "plan");
 		} else {
 			const selected = selectAuthor(assignment, driverCandidates("plan"), available);
 			if (!selected.ok) return finish({ itemId, completed: false, cost, error: `plan assignment failed: ${selected.reason}` });
@@ -784,8 +802,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 
 	// ── Implement ──
 	if (!assignment.authors.implementation && shouldRun("shakedown-code") && !shouldRun("implement")) {
-		const author = findLoggedArtifactAuthor(itemId!, "implement", opts.logPath ?? LOG_PATH);
-		if (author) recordArtifactAuthor(assignment, "implementation", author);
+		reconstructAuthor("implementation", "implement");
 	}
 
 	if (shouldRun("implement")) {

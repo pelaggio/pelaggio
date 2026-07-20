@@ -41,3 +41,14 @@ export function selectReviewers(state: DriverAssignmentState, candidates: readon
 export function recordArtifactAuthor(state: DriverAssignmentState, artifact: "plan" | "implementation", author: DriverIdentity): void {
 	state.authors[artifact] = author;
 }
+
+/**
+ * Deterministic first-available author in configured order, WITHOUT consuming a
+ * rotation ordinal (unlike selectAuthor). Used as the fail-open fallback when an
+ * artifact exists but carries no logged attribution — a legacy log or an
+ * out-of-band plan. The reviewer split is then best-effort, not proven, so
+ * callers must emit a visible diagnostic rather than claim a guarantee (#245).
+ */
+export function resolveStaticAuthor(candidates: readonly DriverIdentity[], isAvailable: (candidate: DriverIdentity) => boolean): DriverIdentity | undefined {
+	return candidates.find(isAvailable);
+}
