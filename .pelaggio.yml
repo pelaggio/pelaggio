@@ -21,9 +21,20 @@ revise:
 # docs/pr-review.md#activating-native-ci-key-review-repo-admin.
 review:
   runner: local
-  # Opt-in; unattended authoring loops require key authentication.
+  # Local/supervised subscription runs use the panel+Judge authoring loop (#259).
+  # Proper execution-context-aware enablement is tracked in #276; this is the local
+  # dogfooding flip. grok is now a validated, format-reliable reviewer (single clean
+  # block, caught a planted must-fix). With author=codex + judge=claude the role-
+  # separation filter resolves the reviewer to grok — 3 distinct providers, and grok's
+  # clean output sidesteps codex's #280 multi-block flake. If grok is unavailable the
+  # filter falls back to codex/claude.
   authoring:
-    enabled: false
+    enabled: true
+    reviewers:
+      - { id: claude, provider: claude }
+      - { id: codex, provider: codex }
+      - { id: grok, provider: grok }
+    judge: { id: judge, provider: claude }
   # Safe rollout default is one pass. Opt in with max-passes: 2 after setting a
   # cap that can reserve every required discovery+verification call.
   max-passes: 1
@@ -31,6 +42,14 @@ review:
   provider-diversity: off
 budgets:
   shakedown-plan: 8
+# Pin grok's off-PATH driver binary (#241) so grok steps/reviewer seats resolve it.
+# allow-unsandboxed-fallback (#283): this host is WSL2 with no Landlock, so grok's own
+# --sandbox can't apply; run it in the pelaggio jail (deny-env + cwd) for LOCAL SUPERVISED
+# dogfooding only. Do NOT set this on unattended hosts.
+providers:
+  grok:
+    bin: ~/.grok/bin/grok
+    allow-unsandboxed-fallback: true
 # Offload the token-heavy authoring steps to Codex (aggressive split). pick + ship
 # stay on Claude: they are the prose-scrape coordination steps (parsePickResult /
 # parseShipMerged) that are calibrated to Claude's prose — see coordination-spine.md.
