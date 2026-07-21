@@ -61,9 +61,9 @@ review:                         # PR review poster (issue #84)
     enabled: false
     provider-diversity: prefer
     blocking-bar: must-fix
-    max-passes: 2
-    max-revisions: 1
-    budget-cap: 75
+    max-passes: 5              # iterate to convergence (integer 1..5) before raising to a human
+    max-revisions: 4           # author revisions (integer 0..max-passes-1); 0 = review but never auto-revise
+    budget-cap: 180            # aggregate $ cap; sized for a full 5-pass convergence
     reviewers:
       - { id: claude, provider: claude }
       - { id: codex, provider: codex, codex-model: gpt-5-codex }
