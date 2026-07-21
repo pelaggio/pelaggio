@@ -270,71 +270,82 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		});
 
 		const preSha = getHeadSha(cwd);
-		let forbiddenRoots: string[] = [];
-		let forbiddenBefore = new Map<string, string>();
-		let confinementRoots: string[] = [];
-		let confinementAuditError: string | undefined;
+		// Observer construction may stay outside; finish() must be inside the critical section.
 		const mainCheckoutObserver = allowDirtyMain && itemId !== null && resolve(cwd) !== resolve(mainRepo) ? createMainCheckoutDeltaObserver(mainRepo) : undefined;
-		try {
-			forbiddenRoots = forbiddenRootsForStep(cwd, ownWorktree);
-		} catch (e) {
-			confinementAuditError = `confinement audit failed to enumerate roots before ${name}: ${e instanceof Error ? e.message : String(e)}`;
-			log(`⚠ ${confinementAuditError}`);
-		}
-		try {
-			forbiddenBefore = snapshotForbiddenRoots(forbiddenRoots);
-		} catch (e) {
-			confinementRoots = forbiddenRoots.map((root) => resolve(root));
-			log(`⚠ confinement audit failed before ${name}: ${e instanceof Error ? e.message : String(e)}`);
-		}
 
-		const providerResult = await runStep(
-			name,
-			prompt,
-			{
-				cwd,
-				profile,
-				trace: flags.trace,
-				itemId: itemId ?? undefined,
-				parkSignal: parkSignalOverride ?? parkSignal,
-				...(executionOverride ? { executionOverride } : {}),
-				...(maxTurnsOverride !== undefined ? { maxTurnsOverride } : {}),
-				...(opts.signal ? { signal: opts.signal } : {}),
-				...(mainCheckoutObserver ? { mainCheckoutObserver } : {}),
-			},
-			emit,
-		);
-
-		if (confinementRoots.length === 0 && confinementAuditError === undefined) {
+		// Serialize the full confinement transaction under `--parallel` so concurrent
+		// cycles cannot attribute one another's own-worktree writes as sibling violations.
+		const confinementMutex = opts.confinementMutex;
+		if (confinementMutex) await confinementMutex.acquire();
+		let result: StepResult;
+		try {
+			let forbiddenRoots: string[] = [];
+			let forbiddenBefore = new Map<string, string>();
+			let confinementRoots: string[] = [];
+			let confinementAuditError: string | undefined;
 			try {
-				const forbiddenAfter = snapshotForbiddenRoots(forbiddenRoots);
-				confinementRoots.push(...diffForbiddenRootSnapshots(forbiddenBefore, forbiddenAfter));
+				forbiddenRoots = forbiddenRootsForStep(cwd, ownWorktree);
+			} catch (e) {
+				confinementAuditError = `confinement audit failed to enumerate roots before ${name}: ${e instanceof Error ? e.message : String(e)}`;
+				log(`⚠ ${confinementAuditError}`);
+			}
+			try {
+				forbiddenBefore = snapshotForbiddenRoots(forbiddenRoots);
 			} catch (e) {
 				confinementRoots = forbiddenRoots.map((root) => resolve(root));
-				log(`⚠ confinement audit failed after ${name}: ${e instanceof Error ? e.message : String(e)}`);
+				log(`⚠ confinement audit failed before ${name}: ${e instanceof Error ? e.message : String(e)}`);
 			}
-		}
 
-		const attributedMain = mainCheckoutObserver?.finish();
-		if (attributedMain?.kind === "error") {
-			confinementAuditError = `confinement attribution failed during ${name}: ${attributedMain.message}`;
-		} else if (attributedMain?.kind === "violation") {
-			confinementRoots.push(...attributedMain.roots);
-		}
+			const providerResult = await runStep(
+				name,
+				prompt,
+				{
+					cwd,
+					profile,
+					trace: flags.trace,
+					itemId: itemId ?? undefined,
+					parkSignal: parkSignalOverride ?? parkSignal,
+					...(executionOverride ? { executionOverride } : {}),
+					...(maxTurnsOverride !== undefined ? { maxTurnsOverride } : {}),
+					...(opts.signal ? { signal: opts.signal } : {}),
+					...(mainCheckoutObserver ? { mainCheckoutObserver } : {}),
+				},
+				emit,
+			);
 
-		let result = providerResult;
-		if (confinementAuditError !== undefined) {
-			result = { ...providerResult, ok: false, subtype: "error_confinement", text: confinementAuditError };
-		} else if (confinementRoots.length > 0) {
-			const roots = [...new Set(confinementRoots.map((root) => resolve(root)))].sort();
-			const text = `forbidden root changed during ${name}: ${roots.join(", ")}`;
-			log(`⚠ ${text}`);
-			result = {
-				...providerResult,
-				ok: false,
-				subtype: "error_confinement",
-				text,
-			};
+			if (confinementRoots.length === 0 && confinementAuditError === undefined) {
+				try {
+					const forbiddenAfter = snapshotForbiddenRoots(forbiddenRoots);
+					confinementRoots.push(...diffForbiddenRootSnapshots(forbiddenBefore, forbiddenAfter));
+				} catch (e) {
+					confinementRoots = forbiddenRoots.map((root) => resolve(root));
+					log(`⚠ confinement audit failed after ${name}: ${e instanceof Error ? e.message : String(e)}`);
+				}
+			}
+
+			const attributedMain = mainCheckoutObserver?.finish();
+			if (attributedMain?.kind === "error") {
+				confinementAuditError = `confinement attribution failed during ${name}: ${attributedMain.message}`;
+			} else if (attributedMain?.kind === "violation") {
+				confinementRoots.push(...attributedMain.roots);
+			}
+
+			result = providerResult;
+			if (confinementAuditError !== undefined) {
+				result = { ...providerResult, ok: false, subtype: "error_confinement", text: confinementAuditError };
+			} else if (confinementRoots.length > 0) {
+				const roots = [...new Set(confinementRoots.map((root) => resolve(root)))].sort();
+				const text = `forbidden root changed during ${name}: ${roots.join(", ")}`;
+				log(`⚠ ${text}`);
+				result = {
+					...providerResult,
+					ok: false,
+					subtype: "error_confinement",
+					text,
+				};
+			}
+		} finally {
+			confinementMutex?.release();
 		}
 
 		if (commitLabel && result.subtype !== "error_confinement") {
@@ -1521,6 +1532,9 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		const statusInterval = isParallel && v && TUI_ENABLED ? setInterval(() => liveStatus.render(), 200) : null;
 
 		const pickMutex = isParallel ? createMutex() : undefined;
+		// Distinct from pickMutex: serializes audited provider-step windows so concurrent
+		// cycles do not false-positive on one another's legitimate own-worktree writes.
+		const confinementMutex = isParallel ? createMutex() : undefined;
 		let nextCycle = 0;
 		let totalSpent = 0;
 		// Consecutive "transient sdk error" cycle outcomes across the whole worker pool
@@ -1567,6 +1581,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						shipTarget,
 						dryRun,
 						pickMutex,
+						confinementMutex,
 						workerStatus: status,
 						logPath,
 						liveStatus,
@@ -1813,6 +1828,8 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						verbose: !isParallel && v,
 						shipTarget,
 						dryRun: false,
+						// Resume skips pick (no pickMutex) but still opens audited provider steps.
+						confinementMutex,
 						workerStatus: st,
 						logPath: resumeLogPath,
 						liveStatus,

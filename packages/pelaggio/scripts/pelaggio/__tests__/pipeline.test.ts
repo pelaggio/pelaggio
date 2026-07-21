@@ -7,7 +7,8 @@ import { after, before, describe, it, mock } from "node:test";
 import { WORKTREE_PREFIX } from "../config.js";
 import { EffectsManifestError } from "../effects.js";
 import { FifoPolicy } from "../flow-policy.js";
-import { runOrchestrator, runPipeline } from "../pipeline.js";
+import { createMutex } from "../helpers.js";
+import { type RunStepFn, runOrchestrator, runPipeline } from "../pipeline.js";
 import type { ShipBookkeepingResult } from "../ship/index.js";
 import { getShipTarget } from "../ship/index.js";
 import type { Flags, ParkSignal, PipelineOpts } from "../types.js";
@@ -1111,6 +1112,119 @@ describe("runPipeline — worktree confinement audit", () => {
 
 		assert.equal(result.completed, false);
 		assert.equal(result.error, "implement failed: confinement violation");
+	});
+
+	it("serializes concurrent audited steps under a shared confinementMutex", async () => {
+		// Two sibling worktrees; each pipeline writes only in its own cwd. Without the
+		// mutex both runStep windows would overlap and each would false-positive the
+		// other's legitimate write as a sibling confinement violation.
+		const { parent, repo } = makeTempRepoWithParent();
+		const wtA = join(parent, `${WORKTREE_PREFIX}tool-a`);
+		const wtB = join(parent, `${WORKTREE_PREFIX}tool-b`);
+		execSync(`git worktree add -q -b feat/tool-a "${wtA}"`, { cwd: repo });
+		execSync(`git worktree add -q -b feat/tool-b "${wtB}"`, { cwd: repo });
+		const listWorktrees = () => [repo, wtA, wtB];
+		const confinementMutex = createMutex();
+
+		let active = 0;
+		let maxActive = 0;
+		let enterCount = 0;
+		const firstEntered = Promise.withResolvers<void>();
+		const firstMayExit = Promise.withResolvers<void>();
+
+		const runStep: RunStepFn = async (_name, _prompt, opts, emit) => {
+			active++;
+			maxActive = Math.max(maxActive, active);
+			enterCount++;
+			const n = enterCount;
+			// Own-worktree write only — legitimate under confinement, false-positive without the lock.
+			writeFileSync(join(opts.cwd, `own-${opts.itemId ?? "x"}.txt`), "ok\n");
+			if (n === 1) {
+				firstEntered.resolve();
+				await firstMayExit.promise;
+			}
+			active--;
+			emit({ type: "done", ok: false, subtype: "error_refusal", cost: 0.01, turns: 1, elapsed: 0 });
+			return { ok: false, subtype: "error_refusal", text: "stop after implement", fullText: "stop after implement", cost: 0.01, turns: 1 };
+		};
+
+		const deps = {
+			runStep,
+			mainRepo: repo,
+			listWorktrees,
+			appendLog: () => {},
+			roadmap: makeMockRoadmap(),
+		};
+		const pA = runPipeline({ ...baseOpts(wtA), itemId: "TOOL-A", startFrom: "implement", shipTarget: getShipTarget("pull-request"), confinementMutex }, makeParkSignal(), baseFlags, deps);
+		const pB = runPipeline({ ...baseOpts(wtB), itemId: "TOOL-B", startFrom: "implement", shipTarget: getShipTarget("pull-request"), confinementMutex }, makeParkSignal(), baseFlags, deps);
+
+		await firstEntered.promise;
+		// First step holds the audit window; second must be blocked on acquire, not in runStep.
+		assert.equal(active, 1);
+		assert.equal(maxActive, 1);
+		firstMayExit.resolve();
+
+		const [rA, rB] = await Promise.all([pA, pB]);
+		assert.equal(maxActive, 1, "audited provider windows must not overlap under the shared mutex");
+		assert.equal(enterCount, 2);
+		assert.notEqual(rA.error, "implement failed: confinement violation");
+		assert.notEqual(rB.error, "implement failed: confinement violation");
+		// Both should surface the intentional refusal, not a race false-positive.
+		assert.match(rA.error ?? "", /refused/);
+		assert.match(rB.error ?? "", /refused/);
+	});
+
+	it("releases confinementMutex when runStep throws so a queued step can enter", async () => {
+		const { parent, repo } = makeTempRepoWithParent();
+		const wtA = join(parent, `${WORKTREE_PREFIX}throw-a`);
+		const wtB = join(parent, `${WORKTREE_PREFIX}throw-b`);
+		execSync(`git worktree add -q -b feat/throw-a "${wtA}"`, { cwd: repo });
+		execSync(`git worktree add -q -b feat/throw-b "${wtB}"`, { cwd: repo });
+		const listWorktrees = () => [repo, wtA, wtB];
+		const confinementMutex = createMutex();
+
+		const firstEntered = Promise.withResolvers<void>();
+		const firstMayThrow = Promise.withResolvers<void>();
+		const entered: string[] = [];
+
+		const runStep: RunStepFn = async (_name, _prompt, opts, emit) => {
+			const id = opts.itemId ?? "?";
+			entered.push(id);
+			writeFileSync(join(opts.cwd, "own.txt"), "ok\n");
+			if (id === "THROW-A") {
+				firstEntered.resolve();
+				await firstMayThrow.promise;
+				throw new Error("provider boom");
+			}
+			emit({ type: "done", ok: false, subtype: "error_refusal", cost: 0.01, turns: 1, elapsed: 0 });
+			return { ok: false, subtype: "error_refusal", text: "stop", fullText: "stop", cost: 0.01, turns: 1 };
+		};
+
+		const deps = {
+			runStep,
+			mainRepo: repo,
+			listWorktrees,
+			appendLog: () => {},
+			roadmap: makeMockRoadmap(),
+		};
+		// Start A first so it holds the audit lock before B queues.
+		const pA = runPipeline({ ...baseOpts(wtA), itemId: "THROW-A", startFrom: "implement", shipTarget: getShipTarget("pull-request"), confinementMutex }, makeParkSignal(), baseFlags, deps).then(
+			(r) => ({ kind: "ok" as const, r }),
+			(e: unknown) => ({ kind: "throw" as const, message: e instanceof Error ? e.message : String(e) }),
+		);
+		await firstEntered.promise;
+		assert.deepEqual(entered, ["THROW-A"]);
+		const pB = runPipeline({ ...baseOpts(wtB), itemId: "THROW-B", startFrom: "implement", shipTarget: getShipTarget("pull-request"), confinementMutex }, makeParkSignal(), baseFlags, deps);
+		// B is blocked on acquire until A's finally releases after the throw.
+		firstMayThrow.resolve();
+
+		const [outA, rB] = await Promise.all([pA, pB]);
+		assert.equal(outA.kind, "throw");
+		if (outA.kind === "throw") assert.match(outA.message, /provider boom/);
+		// Second step must have obtained the lock after the first's finally released it.
+		assert.ok(entered.includes("THROW-B"), `expected THROW-B to enter after release; got ${entered.join(",")}`);
+		assert.notEqual(rB.error, "implement failed: confinement violation");
+		assert.match(rB.error ?? "", /refused/);
 	});
 
 	it("does not fail on pre-existing forbidden-root dirtiness when the snapshot is unchanged", async () => {

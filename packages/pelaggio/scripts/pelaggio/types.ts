@@ -267,6 +267,12 @@ export interface PipelineOpts {
 	shipTarget: ShipTarget;
 	dryRun: boolean;
 	pickMutex?: Mutex;
+	/**
+	 * Run-scoped mutex serializing confinement-audited provider step windows under
+	 * `--parallel`. Distinct from `pickMutex` (claim/worktree creation). Absent for
+	 * serial runs and direct `runPipeline()` callers — those need no lock.
+	 */
+	confinementMutex?: Mutex;
 	workerStatus?: CycleStatus;
 	logPath?: string;
 	/** Required for creating step renderers — injected by orchestrate() */
