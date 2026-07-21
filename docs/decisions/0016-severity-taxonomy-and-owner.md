@@ -28,7 +28,7 @@ The taxonomy has a **named owner** (the operator / CTO). This ADR fixes its *str
 | `containment-escape` | breaks the exec jail / egress broker, exfiltrates, exceeds the declared write-set | the autonomy model rests on this boundary |
 | `irreversible-git / unsafe-landing` | force-push, history rewrite, deleting others' branches, merging past a red gate | hard to undo; blast-radius across the fleet |
 
-*(The first three are today's `SAFETY_CLASSES` in `review/loop.ts`; the last three are the extension.)* Two owner calls: a **measured** performance regression is `correctness-regression` (SAFETY); **missing tests on safety-relevant new code** is SAFETY.
+*(All six are `SAFETY_CLASSES` in `review/findings.ts`, applied at emission by the pure classifier in that module — #293.)* Two owner calls: a **measured** performance regression is `correctness-regression` (SAFETY); **missing tests on safety-relevant new code** is SAFETY.
 
 **JUDGMENT tier** — tolerance-configurable (`note` ↔ `dissent-ship` ↔ `park`); **default posture: PERMISSIVE** (ship-and-record). Classes: `spec-fit/scope-drift`, `maintainability/design`, `performance` (non-regression), `test-coverage` (non-safety), `style`, `documentation`.
 

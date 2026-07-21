@@ -19,6 +19,20 @@ clears a carried fingerprint; malformed or incomplete Judge output fails closed.
 Safety-class survivors always hard-block. Judgment dissent may continue only for PR
 ship targets; direct-push parks.
 
+### Report contract (schema v3) and fail-closed classification
+
+Authoring reviewers emit `AUTHORING_REVIEW_FINDINGS` with `schemaVersion: 3`. Each
+finding carries `severity`, `message`, optional `path`/`line`, and optional structured
+evidence (`ruleId`, `cwe`, `classHint`). Wire fields `class` and `fingerprint` are
+rejected. The harness classifies each finding before ingestion (fingerprint / CWE /
+exact rule-id / path-signal rules; safety-dominant; unmatched →
+`correctness-regression` + `default-safety`). Effective class — not the reviewer's
+hint — is what the loop, Judge anti-downgrade, and dissent routing consume. Mixed or
+legacy (v2) schemas fail the seat closed. Optional Judge `class` remains an elevation
+request only; it does not mutate the harness-owned candidate class. Full taxonomy:
+[ADR-0016](./decisions/0016-severity-taxonomy-and-owner.md); design residuals:
+[adversarial-review-loop.md](./agent-context/adversarial-review-loop.md).
+
 The `prefer` diversity policy records the run as softened whenever the author,
 reviewers, and Judge span fewer than three distinct providers (a same-provider
 degrade). It reflects the configured seats, not a runtime credential probe. Each run

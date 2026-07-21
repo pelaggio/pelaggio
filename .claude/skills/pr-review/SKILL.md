@@ -63,21 +63,29 @@ example block below — it is a format illustration, never a finding.
    and emit the report. If you have not yet run the commands above, keep working — do not
    emit findings.
 
-Each finding must claim one class: `security`, `data-loss`, `correctness-regression`, or
-`judgment`. Use a safety class whenever the claimed failure can compromise security, lose
-data, or regress correctness; the Judge may not silently downgrade it. End with exactly
-this v2 block and nothing after it (substitute your real summary and findings — never the
-placeholder strings):
+**The harness owns effective class.** Emit structured evidence only — do **not** author
+an authoritative `class` (or `fingerprint`). Optional evidence fields (`ruleId`, `cwe`,
+`classHint`) help deterministic rules; omit them when unknown. Unknown or ambiguous
+evidence defaults to a safety class (`correctness-regression` + `default-safety`) — never
+omit a real finding because a signal is missing. `classHint` is framing only and cannot
+force judgment by itself.
+
+End with exactly this v3 block and nothing after it (substitute your real summary and
+findings — never the placeholder strings):
 
 ```text
 AUTHORING_REVIEW_FINDINGS
-{"schemaVersion":2,"summary":"Concise single-line summary.","findings":[{"severity":"must-fix","class":"correctness-regression","message":"Concrete single-line finding.","path":"src/file.ts","line":1}]}
+{"schemaVersion":3,"summary":"Concise single-line summary.","findings":[{"severity":"must-fix","message":"Concrete single-line finding.","path":"src/file.ts","line":1,"ruleId":"pelaggio/security/secret-leak","cwe":"CWE-798","classHint":"security-and-secrets"}]}
 END_AUTHORING_REVIEW_FINDINGS
 ```
 
-The JSON has exactly `schemaVersion`, `summary`, and `findings`; each finding has
-exactly `severity`, `class`, `message`, and optional `path`/`line`. This mode does
-not use the CI v1 block below.
+The JSON has exactly `schemaVersion`, `summary`, and `findings`. Each finding has
+exactly `severity`, `message`, optional `path`/`line`, and optional evidence
+`ruleId` / `cwe` / `classHint` (valid classHint tokens:
+`security-and-secrets`, `data-loss/destructive-ops`, `correctness-regression`,
+`supply-chain/integrity`, `containment-escape`, `irreversible-git/unsafe-landing`,
+`judgment`). Wire must not include `class` or `fingerprint`. This mode does not use
+the CI v1 block below.
 
 ## Red-team mode — independent adversarial pass
 

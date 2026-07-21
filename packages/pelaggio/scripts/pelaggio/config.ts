@@ -118,7 +118,8 @@ export type ProviderPool = readonly [ProviderName, ...ProviderName[]];
 export type ProviderSelection = ProviderName | ProviderPool;
 
 export type ProviderDiversityPolicy = "off" | "prefer" | "require";
-export type AuthoringFindingClass = "security" | "data-loss" | "correctness-regression" | "judgment";
+/** @deprecated Prefer `ReviewFindingClass` from `./review/findings.js` — single source of truth. */
+export type { ReviewFindingClass as AuthoringFindingClass } from "./review/findings.js";
 export type AuthoringBlockingBar = "must-fix";
 export type ReviewSlot = { id: string; provider: "claude" | "grok"; model?: string } | { id: string; provider: "codex"; codexModel?: string };
 export interface AuthoringReviewConfig {
