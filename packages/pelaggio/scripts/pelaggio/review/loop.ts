@@ -239,7 +239,13 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 			carriedAfter: carried.map((item) => item.fingerprint),
 		});
 		const outcome = classifyReviewOutcome(carried, notes, rulings, Boolean(report), pass);
-		if (outcome !== "hard-block" || pass === policy.maxPasses || !report) {
+		// Escalate-early: only a *fixable* must-fix survivor is worth another revise->re-review pass.
+		// A survivor is unfixable-by-the-loop when it is safety-class (retained every pass by #272, a
+		// lone Judge can never clear it) or the Judge ruled it `unfixable-blocker`. If the hard-block is
+		// caused SOLELY by such survivors, revising + re-reviewing can never clear them, so raise to a
+		// human now instead of burning revision passes. (Cross-model disagreement already returns above.)
+		const hasFixableSurvivor = carried.some((candidate) => !SAFETY_CLASSES.includes(candidate.finding.class) && rulings.get(candidate.candidateId) !== "unfixable-blocker");
+		if (outcome !== "hard-block" || pass === policy.maxPasses || !report || !hasFixableSurvivor) {
 			const dissentCandidate = carried.find((candidate) => rulings.get(candidate.candidateId) === "judgment-dissent");
 			return {
 				outcome,

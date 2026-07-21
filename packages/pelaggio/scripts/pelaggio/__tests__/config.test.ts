@@ -613,11 +613,44 @@ describe("loadConfig — review", () => {
 			],
 			judge: { id: "judge", provider: "claude", model: "claude-judge" },
 			blockingBar: "must-fix",
-			maxPasses: 2,
-			maxRevisions: 1,
+			maxPasses: 5,
+			maxRevisions: 4,
 			budgetCap: 30,
 			providerDiversity: "prefer",
 		});
+	});
+
+	it("parses a bounded authoring convergence policy (max-passes / max-revisions)", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "review:\n  authoring:\n    max-passes: 3\n    max-revisions: 2\n");
+		const authoring = loadConfig({ repo, configPath: path }).review.authoring;
+		assert.equal(authoring.maxPasses, 3);
+		assert.equal(authoring.maxRevisions, 2);
+	});
+
+	it("clamps default max-revisions when only max-passes is lowered", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "review:\n  authoring:\n    max-passes: 2\n");
+		const authoring = loadConfig({ repo, configPath: path }).review.authoring;
+		assert.equal(authoring.maxPasses, 2);
+		assert.equal(authoring.maxRevisions, 1);
+	});
+
+	it("rejects authoring convergence boundaries", () => {
+		for (const [yaml, pattern] of [
+			["max-passes: 0", /review\.authoring\.max-passes/],
+			["max-passes: 6", /review\.authoring\.max-passes/],
+			["max-passes: 2.5", /review\.authoring\.max-passes/],
+			["max-revisions: -1", /review\.authoring\.max-revisions/],
+			["max-passes: 3\n    max-revisions: 3", /review\.authoring\.max-revisions/],
+			["max-revisions: 5", /review\.authoring\.max-revisions/],
+			["blocking-bar: nice", /review\.authoring\.blocking-bar/],
+			["provider-diversity: require", /review\.authoring\.provider-diversity/],
+		] as const) {
+			const repo = tmpRepo();
+			const path = writeYml(repo, `review:\n  authoring:\n    ${yaml}\n`);
+			assert.throws(() => loadConfig({ repo, configPath: path }), pattern);
+		}
 	});
 
 	it("rejects every convergence policy boundary", () => {
