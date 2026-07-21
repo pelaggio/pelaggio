@@ -496,6 +496,19 @@ describe("buildReviewDiffBlock (authoring-loop reviewer diff injection)", () => 
 		assert.match(reviewerPrompt, /CHANGES UNDER REVIEW/);
 		assert.match(reviewerPrompt, /export const answer = 42;/); // the actual changed hunk
 	});
+
+	it("the authoring-loop reviewer skill compels multi-turn inspection before findings", () => {
+		// Parity fix: a single-turn seat (codex) treated the advisory 'Inspect...' line as a one-shot
+		// prompt and answered immediately. The mode now carries an imperative inspection protocol so the
+		// seat runs git + reads files + runs checks across turns before emitting the report.
+		const body = expandSkill("pr-review", "--authoring-loop");
+		assert.match(body, /Mandatory inspection protocol/);
+		assert.match(body, /not\W+a\s+one-shot answer/i);
+		assert.match(body, /git diff main\.\.\.HEAD/);
+		assert.match(body, /read each changed file in\s+full/);
+		assert.match(body, /pnpm check/);
+		assert.match(body, /do not emit findings|keep working/i);
+	});
 });
 
 describe("hasDeliverableCommits", () => {
