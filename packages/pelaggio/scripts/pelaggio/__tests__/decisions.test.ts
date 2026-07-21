@@ -9,7 +9,7 @@ import type { ReviewEscalation } from "../types.js";
 
 function repo(): string {
 	const path = mkdtempSync(resolve(tmpdir(), "pelaggio-decisions-"));
-	execFileSync("git", ["init", "-q"], { cwd: path });
+	execFileSync("git", ["init", "-q", "-b", "main"], { cwd: path });
 	execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: path });
 	execFileSync("git", ["config", "user.name", "Test"], { cwd: path });
 	return path;
@@ -55,6 +55,50 @@ describe("decision register", () => {
 		});
 		assert.equal(result.status, "written");
 		assert.notEqual(result.ids[0], result.ids[1]);
+	});
+
+	it("writes and commits on local main when called from a feature worktree", async () => {
+		const main = repo();
+		writeFileSync(resolve(main, "seed"), "seed\n");
+		execFileSync("git", ["add", "seed"], { cwd: main });
+		execFileSync("git", ["commit", "-q", "-m", "seed"], { cwd: main });
+		const feature = mkdtempSync(resolve(tmpdir(), "pelaggio-decisions-worktree-"));
+		execFileSync("git", ["worktree", "add", "-q", "-b", "feature", feature], { cwd: main });
+		const featureHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: feature, encoding: "utf8" }).trim();
+
+		const result = await appendDecisions(feature, {
+			itemId: "301",
+			runId: "cycle-301",
+			step: "implement",
+			attempt: 1,
+			source: "301",
+			decisions: [{ occurrence: 0, decision: { fork: "where to commit", chosen: "local main" } }],
+		});
+
+		assert.equal(result.status, "written");
+		assert.equal(execFileSync("git", ["rev-parse", "HEAD"], { cwd: feature, encoding: "utf8" }).trim(), featureHead);
+		assert.notEqual(execFileSync("git", ["rev-parse", "main"], { cwd: feature, encoding: "utf8" }).trim(), featureHead);
+		assert.match(readFileSync(resolve(main, "docs/decisions.md"), "utf8"), /where to commit/);
+	});
+
+	it("falls back to the caller's repo when no worktree holds main (--no-worktree/CI)", async () => {
+		// Claim in --no-worktree/CI mode leaves only the feature branch checked out, so no worktree
+		// holds refs/heads/main. mainWorktree() must fall back to the repo rather than throw (#301 finding).
+		const path = repo();
+		writeFileSync(resolve(path, "seed"), "seed\n");
+		execFileSync("git", ["add", "seed"], { cwd: path });
+		execFileSync("git", ["commit", "-q", "-m", "seed"], { cwd: path });
+		execFileSync("git", ["checkout", "-q", "-b", "feature"], { cwd: path });
+		const result = await appendDecisions(path, {
+			itemId: "301",
+			runId: "cycle-301",
+			step: "implement",
+			attempt: 1,
+			source: "301",
+			decisions: [{ occurrence: 0, decision: { fork: "no main worktree", chosen: "fall back to repo" } }],
+		});
+		assert.equal(result.status, "written");
+		assert.match(readFileSync(resolve(path, "docs/decisions.md"), "utf8"), /no main worktree/);
 	});
 });
 

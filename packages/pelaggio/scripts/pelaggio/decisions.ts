@@ -53,6 +53,23 @@ function marker(id: string): string {
 
 const escalationMarker = (value: { escalation: ReviewEscalation; resolution?: ReviewResolution }): string => `<!-- review-escalation:${Buffer.from(JSON.stringify(value)).toString("base64url")} -->`;
 
+function mainWorktree(repo: string): string {
+	try {
+		const output = execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: repo, encoding: "utf8" });
+		for (const block of output.trim().split(/\n\n+/)) {
+			const lines = block.split("\n");
+			if (lines.includes("branch refs/heads/main")) return lines[0].slice("worktree ".length);
+		}
+	} catch {
+		// `git worktree list` unavailable (non-worktree layout / no git) — fall back to the caller's repo.
+	}
+	// `--no-worktree` / CI: claim leaves only the feature branch checked out, so no worktree holds
+	// `refs/heads/main`. Fall back to the caller's repo — decisions land there and there is no sibling
+	// main to diverge from in that mode. When a main worktree exists (local supervised runs), the loop
+	// above redirects writes to it instead. Never throw: a missing main must not fail decision writes.
+	return repo;
+}
+
 export function reviewEscalationId(input: ReviewEscalation): string {
 	return createHash("sha256")
 		.update([input.itemId, input.step, input.reviewedSha, input.evidenceFingerprint, String(input.hasSafetyBlocker)].join("\0"))
@@ -63,6 +80,7 @@ export function reviewEscalationId(input: ReviewEscalation): string {
 export async function appendReviewEscalation(repo: string, escalation: ReviewEscalation, now = new Date()): Promise<DecisionWriteResult> {
 	const id = reviewEscalationId(escalation);
 	try {
+		repo = mainWorktree(repo);
 		return await withMutationLock(repo, () => {
 			const path = resolve(repo, "docs", "decisions.md");
 			let body = existsSync(path) ? readFileSync(path, "utf8").replace(/\r\n/g, "\n") : DECISIONS_SKELETON;
@@ -88,6 +106,7 @@ function parseEscalationMetadata(block: string): { escalation: ReviewEscalation;
 }
 
 export function lookupReviewEscalation(repo: string, itemId: string, reviewedSha: string): ReviewEscalationLookup {
+	repo = mainWorktree(repo);
 	const path = resolve(repo, "docs", "decisions.md");
 	if (!existsSync(path)) return { state: "missing" };
 	try {
@@ -124,6 +143,7 @@ function commit(repo: string, paths: string[], message: string): void {
 
 export async function appendDecisions(repo: string, input: AppendDecisionsInput): Promise<DecisionWriteResult> {
 	try {
+		repo = mainWorktree(repo);
 		return await withMutationLock(repo, () => {
 			const path = resolve(repo, "docs", "decisions.md");
 			let body = existsSync(path) ? readFileSync(path, "utf8").replace(/\r\n/g, "\n") : DECISIONS_SKELETON;
@@ -170,6 +190,7 @@ function splitRow(row: string): string[] {
 
 export async function resolveDecision(repo: string, id: string, options: { adr?: string; now?: Date; disposition?: "proceed" | "block"; actor?: string; rationale?: string } = {}): Promise<void> {
 	if (options.adr && !/^ADR-\d{4}$/i.test(options.adr)) throw new Error("--adr must match ADR-nnnn");
+	repo = mainWorktree(repo);
 	await withMutationLock(repo, () => {
 		const path = resolve(repo, "docs", "decisions.md");
 		const body = readFileSync(path, "utf8").replace(/\r\n/g, "\n");
@@ -193,6 +214,7 @@ export async function resolveDecision(repo: string, id: string, options: { adr?:
 }
 
 export async function archiveResolvedDecisions(repo: string, cutoff: Date): Promise<number> {
+	repo = mainWorktree(repo);
 	return withMutationLock(repo, () => {
 		const path = resolve(repo, "docs", "decisions.md");
 		// No register yet (fresh repo / no decisions recorded) → nothing to archive. Guard like
