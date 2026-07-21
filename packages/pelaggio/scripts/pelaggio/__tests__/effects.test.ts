@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -201,5 +202,65 @@ describe("effects dispatch", () => {
 			(err) => err instanceof EffectsManifestError && err.code === "effect_failed",
 		);
 		assert.equal(existsSync(effectManifestPath(ctx)), true);
+	});
+
+	it("rejects a ship decision whose effect-level itemId does not match dispatch provenance, retaining the manifest", async () => {
+		const ctx = baseContext();
+		ctx.step = "ship";
+		writeEffectsManifest(ctx, [
+			{
+				kind: "ship.ShipDecision",
+				target: "pull-request",
+				itemId: "OTHER-1",
+				headBranch: "feat/other-1",
+				prTitle: "Ship OTHER-1",
+				prBody: "Body",
+			},
+		]);
+
+		await assert.rejects(
+			() => dispatchStepEffects(ctx),
+			(err) => err instanceof EffectsManifestError && err.code === "provenance_mismatch" && /itemId/.test(err.message),
+		);
+		assert.equal(existsSync(effectManifestPath(ctx)), true);
+	});
+
+	it("maps a successful ship dispatch's prUrl onto the dispatch result's appendText", async () => {
+		const cwd = makeTempGitRepo();
+		const remote = mkdtempSync(join(tmpdir(), "pelaggio-effects-remote-"));
+		execSync("git init -q --bare", { cwd: remote });
+		execSync(`git remote add origin ${remote}`, { cwd });
+		writeFileSync(join(cwd, "src.txt"), "hello");
+		// The effects manifest itself lands under `.dev/effects/` inside cwd (a real worktree's
+		// checked-in .gitignore excludes it; this scratch repo needs its own for a clean `git status`).
+		writeFileSync(join(cwd, ".gitignore"), ".dev/\n");
+		execSync("git add -A && git commit -q -m work", { cwd });
+
+		const prUrl = "https://github.com/acme/widget/pull/42";
+		const bin = mkdtempSync(join(tmpdir(), "pelaggio-effects-fakebin-"));
+		writeFileSync(join(bin, "gh"), `#!/bin/sh\ncase "$1 $2" in\n"pr list") echo '[]' ;;\n"pr create") echo '${prUrl}' ;;\n*) echo "unexpected gh call: $*" >&2; exit 1 ;;\nesac\n`, { mode: 0o755 });
+		const savedPath = process.env.PATH;
+		process.env.PATH = `${bin}:${savedPath}`;
+		try {
+			const ctx = baseContext(cwd);
+			ctx.step = "ship";
+			writeEffectsManifest(ctx, [
+				{
+					kind: "ship.ShipDecision",
+					target: "pull-request",
+					itemId: ctx.itemId,
+					headBranch: "feat/tool-99",
+					prTitle: "Ship TOOL-99",
+					prBody: "Body",
+				},
+			]);
+
+			const result = await dispatchStepEffects(ctx);
+
+			assert.equal(result.appendText, prUrl);
+			assert.equal(existsSync(effectManifestPath(ctx)), false);
+		} finally {
+			process.env.PATH = savedPath;
+		}
 	});
 });

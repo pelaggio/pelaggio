@@ -71,7 +71,10 @@ function mainWorktree(repo: string): string {
 }
 
 export function reviewEscalationId(input: ReviewEscalation): string {
-	return createHash("sha256").update([input.itemId, input.step, input.reviewedSha, input.evidenceFingerprint].join("\0")).digest("hex").slice(0, 16);
+	return createHash("sha256")
+		.update([input.itemId, input.step, input.reviewedSha, input.evidenceFingerprint, String(input.hasSafetyBlocker)].join("\0"))
+		.digest("hex")
+		.slice(0, 16);
 }
 
 export async function appendReviewEscalation(repo: string, escalation: ReviewEscalation, now = new Date()): Promise<DecisionWriteResult> {
