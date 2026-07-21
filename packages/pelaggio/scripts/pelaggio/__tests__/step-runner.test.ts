@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import type { HookInput } from "@anthropic-ai/claude-agent-sdk";
 import { codexProvider } from "../codex-provider.js";
 import type { MainCheckoutDeltaObserver, MainCheckoutDeltaResult } from "../helpers.js";
-import { beginMainCheckoutAttribution, blockPlanPolish, blockWorktreeInstall, claudeProvider, composeSystemAppend, endMainCheckoutAttribution, getProvider, isWorktreePath } from "../step-runner.js";
+import { beginMainCheckoutAttribution, blockMainRepoWrite, blockPlanPolish, blockWorktreeInstall, claudeProvider, composeSystemAppend, endMainCheckoutAttribution, getProvider, isWorktreePath } from "../step-runner.js";
 import type { ProviderName } from "../types.js";
 
 function bash(command: string): HookInput {
@@ -151,6 +151,37 @@ describe("isWorktreePath", () => {
 
 	it("returns true for distinct paths with matching prefix", () => {
 		assert.equal(isWorktreePath("/home/user/my-repo-extra", "/home/user/my-repo"), true);
+	});
+});
+
+describe("blockMainRepoWrite (#269 nested seats)", () => {
+	const main = "/home/user/my-repo";
+	const sibling = "/home/user/my-repo-269";
+	const seat = "/home/user/my-repo/.dev/authoring-review-seats/abc/grok-p1";
+
+	it("allows writes inside a sibling worktree", () => {
+		assert.deepEqual(blockMainRepoWrite(write(`${sibling}/src/a.ts`), sibling, main), {});
+		assert.deepEqual(blockMainRepoWrite(write("src/a.ts"), sibling, main), {});
+	});
+
+	it("blocks writes that target the main checkout from a sibling worktree", () => {
+		const out = blockMainRepoWrite(write(`${main}/packages/pelaggio/x.ts`), sibling, main);
+		assert.equal(out.decision, "block");
+	});
+
+	it("allows absolute writes inside a nested seat under MAIN_REPO/.dev/", () => {
+		assert.deepEqual(blockMainRepoWrite(write(`${seat}/notes.md`), seat, main), {});
+		assert.deepEqual(blockMainRepoWrite(write("notes.md"), seat, main), {});
+	});
+
+	it("blocks writes from a nested seat into the main tree outside the seat", () => {
+		const out = blockMainRepoWrite(write(`${main}/packages/pelaggio/x.ts`), seat, main);
+		assert.equal(out.decision, "block");
+		assert.match(String(out.reason), /targets main repo/);
+	});
+
+	it("ignores non-Write/Edit tools", () => {
+		assert.deepEqual(blockMainRepoWrite(bash(`echo ${main}/x`), seat, main), {});
 	});
 });
 
