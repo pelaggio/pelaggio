@@ -6,6 +6,10 @@ Status values are `default-taken`, `resolved`, or `resolved→ADR-nnnn`. Source 
 
 | Decision | Status | Chosen/leaning | Alternatives | Source | Date |
 | --- | --- | --- | --- | --- | --- |
+| How to prevent a shipped-but-open item from being claimed again after `markDone` fails | default-taken | retain the existing git-native feature branch claim (locally and remotely) while cleaning only the worktree | make tracker failure fatal and withhold the verified merge push; infer shipped state from commit history in every roadmap adapter; introduce a separate tombstone/claims registry | https://github.com/pelaggio/pelaggio/issues/205 | 2026-07-21 |
+<!-- decision:5f152192226652a6 -->
+| Whether the inline `/ship` skill cleanup must match the bookkeeping gate | default-taken | yes — gate branch delete on mark-done success in `.claude/skills/ship/SKILL.md` step 9 | leave skill divergent (pipeline-only fix); document skill as intentionally out of scope | https://github.com/pelaggio/pelaggio/issues/205 | 2026-07-21 |
+<!-- decision:28eb13daf55f317a -->
 | How to prevent a shipped-but-open item from being claimed again after `markDone` fails | default-taken | retain the existing git-native feature branch claim locally and remotely while cleaning only the worktree | withhold the verified merge push; infer shipped state from history in every adapter; introduce a tombstone/claims registry | https://github.com/pelaggio/pelaggio/issues/205 | 2026-07-21 |
 <!-- decision:bd869aa49224375f -->
 | configuration surface for pooled assignment | default-taken | allow models.profiles.<name>.providers.<authoring-or-review-step> to be either the existing provider scalar or an ordered, non-empty provider list | add a separate top-level assignment block; replace scalar provider settings outright | https://github.com/pelaggio/pelaggio/issues/245 | 2026-07-20 |
