@@ -6,6 +6,8 @@ Status values are `default-taken`, `resolved`, or `resolved→ADR-nnnn`. Source 
 
 | Decision | Status | Chosen/leaning | Alternatives | Source | Date |
 | --- | --- | --- | --- | --- | --- |
+| dispose C1/C2 judgment nits | default-taken | refuted (accurate but non-blocking) | survives+judgment-dissent | https://github.com/pelaggio/pelaggio/issues/293 | 2026-07-21 |
+<!-- decision:eadc28531173f205 -->
 | Cross-model review split for 292 | default-taken | Human adjudication required | proceed or block | .dev/review-records/cycle-9-292.json | 2026-07-21 |
 <!-- decision:8216677d43403d52 -->
 <!-- review-escalation:eyJlc2NhbGF0aW9uIjp7ImtpbmQiOiJyZXZpZXctZXNjYWxhdGlvbiIsIml0ZW1JZCI6IjI5MiIsInN0ZXAiOiJzaGFrZWRvd24tY29kZSIsInJldmlld2VkU2hhIjoiYTg5NDBjOTc5ZDViODQ0YjgzZWVjMjkyODhhNGQ5ZjNjMGJhNjIzOCIsImV2aWRlbmNlRmluZ2VycHJpbnQiOiI5OTNmZjRiYmNiMDFjZmI1YWNlMzk5NTBkNmU5ZWQ5NTNkZWRjYTRhNTZlMGU4MTZkMzdkMDJlNDNmOGEzOTIzIiwicmV2aWV3UmVjb3JkU291cmNlIjoiLmRldi9yZXZpZXctcmVjb3Jkcy9jeWNsZS05LTI5Mi5qc29uIiwiaGFzU2FmZXR5QmxvY2tlciI6dHJ1ZSwiZHJpdmVycyI6W3siaWRlbnRpdHkiOnsicm9sZSI6InJldmlld2VyIiwic2VhdElkIjoiY29kZXgiLCJwcm92aWRlciI6ImNvZGV4Iiwic2Vzc2lvbklkIjoicmV2aWV3ZXItY29kZXgtcDEifSwidmVyZGljdCI6ImJsb2NrIiwicmF0aW9uYWxlIjoiQ29uY2lzZSBzaW5nbGUtbGluZSBzdW1tYXJ5LiJ9LHsiaWRlbnRpdHkiOnsicm9sZSI6InJldmlld2VyIiwic2VhdElkIjoiZ3JvayIsInByb3ZpZGVyIjoiZ3JvayIsIm1vZGVsIjoiY2xhdWRlLXNvbm5ldC01Iiwic2Vzc2lvbklkIjoicmV2aWV3ZXItZ3Jvay1wMSJ9LCJ2ZXJkaWN0IjoicGFzcyIsInJhdGlvbmFsZSI6IkRldGVybWluaXN0aWMgcmVkLW1lcmdlIGd1YXJkICgjMjkyKSBpcyBjb3JyZWN0bHkgZmFpbC1jbG9zZWQgb24gdGhlIGFkbWluIGxhbmQgcGF0aCBhbmQgaW50ZW50aW9uYWxseSBub3RSZWQtb25seSBvbiBhdXRvLW1lcmdlOyB0ZXN0cyBwYXNzIHdpdGggbm8gY29uZmlybWVkIGJsb2NrZXJzLiJ9XX19 -->
