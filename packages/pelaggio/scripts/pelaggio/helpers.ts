@@ -685,6 +685,45 @@ export function filesChangedSince(cwd: string, preSha: string | null): string[] 
 	}
 }
 
+// ── Authoring-loop reviewer diff injection ─────────────────────────────
+// The authoring-loop reviewer seats are told to inspect `git diff main...HEAD`, but a weak
+// single-turn seat (observed: codex runs one turn with no tool calls) never fetches it and, with no
+// code in front of it, parrots the SKILL.md example. Hand every reviewer seat the actual branch diff
+// as a floor so it always has real code to review; capable seats (claude/grok) stay free to explore
+// further — the injected diff supplements, it does not replace, their multi-turn inspection.
+
+/** ~256 KiB cap on the injected diff; a huge diff would blow the seat's context, and the seat can
+ * always run `git diff main...HEAD` itself for the remainder. */
+export const REVIEW_DIFF_MAX_BYTES = 256 * 1024;
+
+/** Format the CHANGES UNDER REVIEW block. Pure/testable: no git access. Empty diff or a failed read
+ * yields a note (never crashes the loop); a truncated diff appends the run-it-yourself pointer. */
+export function formatChangesUnderReview(diff: string, state: "ok" | "empty" | "unavailable" | "truncated"): string {
+	const header = "## CHANGES UNDER REVIEW (git diff main...HEAD)";
+	if (state === "empty") return `${header}\n\nThe branch diff against \`main\` is empty. Confirm with \`git diff main...HEAD\` and review accordingly.`;
+	if (state === "unavailable") return `${header}\n\nThe harness could not compute the branch diff. Run \`git diff main...HEAD\` yourself to obtain the changes under review.`;
+	const trailer = state === "truncated" ? "\n\n[diff truncated at the injection cap — run `git diff main...HEAD` for the remainder]" : "";
+	return `${header}\n\nThis is the authoritative diff. Inspect it in full; explore further (\`git show\`, read files, run tests) as needed.\n\n\`\`\`diff\n${diff}\n\`\`\`${trailer}`;
+}
+
+/** Read the branch diff from a worktree and format it for injection. Fail-graceful: any git error
+ * returns the "unavailable" note rather than throwing. Byte-bounded to REVIEW_DIFF_MAX_BYTES. */
+export function buildReviewDiffBlock(worktree: string): string {
+	let raw: string;
+	try {
+		raw = execSync("git diff main...HEAD", { cwd: worktree, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
+	} catch {
+		return formatChangesUnderReview("", "unavailable");
+	}
+	if (raw.trim() === "") return formatChangesUnderReview("", "empty");
+	const bytes = Buffer.from(raw, "utf-8");
+	if (bytes.byteLength <= REVIEW_DIFF_MAX_BYTES) return formatChangesUnderReview(raw, "ok");
+	// Truncate on a byte boundary, then trim any partial trailing line so the fenced block stays clean.
+	const sliced = bytes.subarray(0, REVIEW_DIFF_MAX_BYTES).toString("utf-8");
+	const trimmed = sliced.slice(0, Math.max(0, sliced.lastIndexOf("\n")));
+	return formatChangesUnderReview(trimmed, "truncated");
+}
+
 /**
  * Plan-polish backstop (#80). During `implement`, `docs/plans/` is execute-only. The Claude
  * provider enforces this with a PreToolUse hook that blocks Writes there, but a sandboxed provider

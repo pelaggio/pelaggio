@@ -98,6 +98,13 @@ Then:
 2. Replace the roadmap example with your real backlog.
 3. Run `pelaggio run --cycles 1 --verbose`.
 
+`pelaggio pr-review --pr <number>` is the automated PR merge-gate entry point,
+not a general-purpose interactive review command. It inspects the named pull request,
+upserts the gate comment, posts the `review` commit status on the PR head, and returns
+a non-zero exit code when the gate blocks. The default CI runner invokes it from
+`.github/workflows/pr-review.yml`; see the [PR review gate guide](./docs/pr-review.md)
+for runner setup and required credentials.
+
 ### Platform support
 
 Pelaggio runs on macOS, Linux, and **Windows via [WSL](https://learn.microsoft.com/windows/wsl/)**. The

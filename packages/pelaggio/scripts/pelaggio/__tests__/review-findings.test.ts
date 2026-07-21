@@ -104,6 +104,34 @@ describe("parseAuthoringReviewFindings", () => {
 		const good = authoringBlock({ schemaVersion: 2, summary: "Ok.", findings: [{ severity: "must-fix", class: "security", message: "Leak." }] });
 		assert.throws(() => parseAuthoringReviewFindings(`${good}\nAUTHORING_REVIEW_FINDINGS\n{nope}\nEND_AUTHORING_REVIEW_FINDINGS`), ReviewFindingsParseError);
 	});
+
+	it("rejects the SKILL.md schema example echoed verbatim instead of a real review", () => {
+		// The exact placeholder from `.claude/skills/pr-review/SKILL.md`'s AUTHORING_REVIEW_FINDINGS
+		// example. Observed from the codex reviewer seat parroting the example (1 turn, no diff read),
+		// which manufactured a fake must-fix / correctness-regression at src/file.ts:1 and a spurious
+		// cross-model split. Fail closed so the seat reads as incomplete, not as a real blocker.
+		const echoed = authoringBlock({
+			schemaVersion: 2,
+			summary: "Concise single-line summary.",
+			findings: [{ severity: "must-fix", class: "correctness-regression", message: "Concrete single-line finding.", path: "src/file.ts", line: 1 }],
+		});
+		assert.throws(() => parseAuthoringReviewFindings(echoed), ReviewFindingsParseError);
+		// A fake-clean echo (example summary, no findings) is rejected too.
+		assert.throws(() => parseAuthoringReviewFindings(authoringBlock({ schemaVersion: 2, summary: "Concise single-line summary.", findings: [] })), ReviewFindingsParseError);
+		// The example finding smuggled under a real summary is still rejected.
+		assert.throws(
+			() =>
+				parseAuthoringReviewFindings(
+					authoringBlock({ schemaVersion: 2, summary: "Reviewed the claim-branch delete gating.", findings: [{ severity: "must-fix", class: "correctness-regression", message: "Concrete single-line finding.", path: "src/file.ts", line: 1 }] }),
+				),
+			ReviewFindingsParseError,
+		);
+		// A genuine review that merely mentions the example path in a real message is NOT rejected.
+		const real = parseAuthoringReviewFindings(
+			authoringBlock({ schemaVersion: 2, summary: "Real review.", findings: [{ severity: "must-fix", class: "security", message: "Token leaked in src/file.ts logging.", path: "src/file.ts", line: 42 }] }),
+		);
+		assert.equal(real.findings.length, 1);
+	});
 });
 
 describe("parseJudgeReport", () => {
