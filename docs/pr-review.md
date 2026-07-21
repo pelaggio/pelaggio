@@ -11,6 +11,25 @@ the pipeline's own work *in-context*, before ship. This gate is a fresh SDK sess
 that reads the PR diff cold — the same shape that has caught things the in-context
 review missed.
 
+## Authoring-time adversarial loop
+
+`review.authoring.enabled: true` replaces the single `shakedown-code` session with
+two bounded cold-review/Judge passes and at most one author revision. Omission never
+clears a carried fingerprint; malformed or incomplete Judge output fails closed.
+Safety-class survivors always hard-block. Judgment dissent may continue only for PR
+ship targets; direct-push parks.
+
+The `prefer` diversity policy records the run as softened whenever the author,
+reviewers, and Judge span fewer than three distinct providers (a same-provider
+degrade). It reflects the configured seats, not a runtime credential probe. Each run
+writes an atomic, unbound `.dev/review-records/<run-id>.json`; PR targets append the
+same deterministic record to the PR body. This is a review record, not an
+identity-bound attestation.
+
+Local interactive execution may use official CLI subscription authentication or API
+keys. Unattended, CI, and shared execution require keys. Configuration does not probe
+credentials in advance.
+
 ## Runner modes
 
 The required `review` context is **always a commit status** — posted by exactly one
@@ -40,6 +59,16 @@ local `gh` auth needs permission to write commit statuses (`statuses: write`) an
 comments.
 
 ## CI runner flow
+
+The `pr-review` subcommand is the CI/local-runner implementation of this gate. It is
+not a read-only review preview: invoking `npx pelaggio pr-review --pr <n>` reads the
+PR through `gh`, upserts the Pelaggio review comment, posts the `review` commit status
+to the PR's head SHA, and exits non-zero when the gate blocks or the `review` status
+write fails (the review-comment upsert is best-effort and does not affect the exit code).
+Run it only where `gh` is authenticated for the repository with permission to read
+the PR and write issue comments and commit statuses. In the normal `ci` configuration,
+the workflow below owns the invocation; developers do not need to run it as part of
+the ordinary `pelaggio run` pipeline.
 
 1. `.github/workflows/pr-review.yml` triggers on `pull_request`
    (`opened`, `synchronize`, `reopened`, `ready_for_review`) targeting `main`.
@@ -266,6 +295,18 @@ autonomous recipe needs.
 > A required check must always report. That is why the workflow has **no path filter**
 > and skips fork/draft PRs *inside* the job rather than via a job-level `if:` — either
 > would leave `review` stuck pending and block every PR forever.
+
+## Activating native CI-key review (repo-admin)
+
+By default this repo posts `review` from the **local subscription sweep** (`AUTOPILOT_REVIEW_RUNNER=local`, `.pelaggio.yml review.runner: local`). Switching to the **native CI-key** posture — the `#214`/`#258` realization where GitHub Actions posts `review` on a metered key so `auto-merge-pr` can gate on an app-authored status — is a deliberate **repo-admin ops step, not a committed-config flip**.
+
+**Three things must move together, or the gate breaks.** The GitHub job gates on the repo *variable* `AUTOPILOT_REVIEW_RUNNER` (`.github/workflows/pr-review.yml`, `if: vars.AUTOPILOT_REVIEW_RUNNER != 'local'`); `.pelaggio.yml review.runner` only controls whether the *local* sweep posts. So flipping `review.runner: ci` in committed config **alone** stops the local sweep posting while CI stays gated off (variable still `local`) → `review` is **never posted** → every same-repo PR blocks forever. Do all of these in one change window:
+
+1. **Secret:** `gh secret set ANTHROPIC_API_KEY --repo <owner>/<repo>` with a dedicated, spend-capped key (see *Runner & secrets* above). Until it exists the CI gate fails closed (red `review` on every PR).
+2. **Variable:** `gh variable set AUTOPILOT_REVIEW_RUNNER --repo <owner>/<repo> --body ci` (any value ≠ `local`). This is what actually moves posting from the local sweep to the CI job.
+3. **Committed config:** set `.pelaggio.yml` `review.runner: ci` so the local sweep stops posting (avoids two runners racing the same status).
+
+Verify with `gh api repos/{owner}/{repo}/commits/{sha}/status` after the next push — `review` must appear, posted by the GitHub Actions app, before enabling `auto-merge-pr`. To **restore** local posting, reverse the switch (set the variable back to `AUTOPILOT_REVIEW_RUNNER=local` — *not* unset it, since an unset variable satisfies `!= 'local'` and reintroduces the double-runner race; `review.runner: local`; the secret may stay). Auto-merge is an independent, later switch (`ship.target: auto-merge-pr`) — enable it only once native `review` is confirmed posting and required in branch protection.
 
 ## Closing the loop on BLOCK (issue #60 / #76)
 

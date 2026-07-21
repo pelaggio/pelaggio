@@ -17,7 +17,7 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { CONFIG, REPO, type ReviewConfig, ROADMAP_GITHUB, resolveStepSettings } from "./config.js";
-import { postCommitStatus, upsertMarkerComment } from "./github-posting.js";
+import { upsertMarkerComment } from "./github-posting.js";
 import { classifySecurityReviewDiff, expandSkill, formatReviewMetrics, type SecurityDiffSignal } from "./helpers.js";
 import {
 	evaluateReviewConvergence,
@@ -118,7 +118,10 @@ const emit: StepEmit = (event) => {
 			process.stderr.write(`  ⏸ rate limit (${event.limitType})\n`);
 			break;
 		case "sdk_error":
-			process.stderr.write(`  ⚠ ${event.message}\n`);
+			process.stderr.write(`  ✗ SDK error: ${event.message}\n`);
+			break;
+		case "sdk_warning":
+			process.stderr.write(`  ⚠ SDK warning: ${event.message}\n`);
 			break;
 		case "blocked":
 			process.stderr.write(`  ⛔ blocked: ${event.reason}\n`);
@@ -204,21 +207,33 @@ function upsertCommentDefault(pr: string, body: string): void {
 	if (!upsertMarkerComment(defaultGhRunner, ROADMAP_GITHUB.ghRepo, pr, PR_REVIEW_MARKER, body)) process.stderr.write("⚠ failed to upsert PR comment\n");
 }
 
-/** Resolve the SHA the review actually inspected: the local checked-out HEAD
- *  that the diff (origin/main...HEAD) was computed against. This must be pinned
- *  and passed to postStatus — re-querying the live PR head would let a push that
- *  lands during the review green an unreviewed commit (fail-open). */
-function resolveReviewedSha(exec: typeof execFileSync): string {
-	const raw = exec("git", ["rev-parse", "HEAD"], { cwd: REPO, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
-	const sha = String(raw).trim();
-	if (!/^[0-9a-f]{7,64}$/.test(sha)) throw new Error(`could not resolve reviewed HEAD sha (got ${JSON.stringify(sha)})`);
+/** Resolve and pin the SHA to review + post to: the PR's *head* commit, fetched
+ *  locally so the diff (origin/main...<sha>) is computed against it. Pinned once here,
+ *  before the review, and used for BOTH the diff head and the posted status — so a push
+ *  that lands mid-review is neither reviewed nor greened (no fail-open). Reviewing the
+ *  local checkout's HEAD instead posts to whatever happens to be checked out, greening
+ *  the wrong commit while the PR head stays blocked (#282/#307). */
+function resolveReviewedSha(exec: typeof execFileSync, pr: string, ghRepo: string): string {
+	const git = (args: string[]): string => String(exec("git", args, { cwd: REPO, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] })).trim();
+	const sha = String(exec("gh", ["api", `repos/${ghRepo}/pulls/${pr}`, "--jq", ".head.sha"], { cwd: REPO, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] })).trim();
+	if (!/^[0-9a-f]{7,64}$/.test(sha)) throw new Error(`could not resolve PR #${pr} head sha (got ${JSON.stringify(sha)})`);
+	// Make origin/main and the pinned PR head reachable locally for the diff. `pull/<n>/head`
+	// always resolves for a GitHub PR (unlike a bare sha, which the server may refuse to serve).
+	git(["fetch", "--quiet", "origin", "main", `pull/${pr}/head`]);
 	return sha;
 }
 
 function postStatusDefault(gate: "pass" | "block", sha: string): boolean {
-	const posted = postCommitStatus(defaultGhRunner, ROADMAP_GITHUB.ghRepo, sha, gate === "pass" ? "success" : "failure", "review", `pelaggio review ${gate}`);
-	if (!posted) process.stderr.write("✗ failed to post required review status\n");
-	return posted;
+	// Post directly (not via postCommitStatus) so the gh failure cause is surfaced rather
+	// than swallowed — an absent required status is otherwise indistinguishable from an
+	// auth/branch-protection/mismatched-context problem (#282).
+	const state = gate === "pass" ? "success" : "failure";
+	const res = defaultGhRunner(["api", `repos/${ROADMAP_GITHUB.ghRepo}/statuses/${sha}`, "-f", `state=${state}`, "-f", "context=review", "-f", `description=pelaggio review ${gate}`]);
+	if (res.status !== 0) {
+		process.stderr.write(`✗ failed to post required review status to ${sha.slice(0, 8)}: ${res.stderr.trim() || "gh returned non-zero"}\n`);
+		return false;
+	}
+	return true;
 }
 
 const defaultGhRunner: GhRunner = (args) => {
@@ -459,8 +474,8 @@ export async function main(argv: string[]): Promise<number> {
 	// status leaves the PR blocked, which is the safe (fail-closed) outcome.
 	let reviewedSha: string | undefined;
 	try {
-		reviewedSha = resolveReviewedSha(deps.execFileSync);
-		const review = await runPrReviewGate({ pr, profile, cwd: REPO, diffCwd: REPO, runStep: deps.runStep, execFileSync: deps.execFileSync, policy: CONFIG.review });
+		reviewedSha = resolveReviewedSha(deps.execFileSync, pr, ROADMAP_GITHUB.ghRepo);
+		const review = await runPrReviewGate({ pr, profile, cwd: REPO, diffCwd: REPO, diffHeadRef: reviewedSha, runStep: deps.runStep, execFileSync: deps.execFileSync, policy: CONFIG.review });
 
 		// The review text goes to stdout unconditionally so the CI log always
 		// carries the findings — a failed comment upsert (or a truncated run)

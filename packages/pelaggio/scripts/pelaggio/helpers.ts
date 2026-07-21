@@ -4,7 +4,33 @@ import { resolve } from "node:path";
 import { LOG_PATH, REPO, STEPS, WORKTREE_PREFIX } from "./config.js";
 import { MarkdownRoadmap } from "./roadmap/markdown.js";
 import type { CreateItemOpts, RoadmapSource } from "./roadmap/types.js";
-import type { Mutex, Step, StepResult } from "./types.js";
+import type { Decision, Mutex, Step, StepResult } from "./types.js";
+
+export function parseDecisions(text: string): Decision[] {
+	const decisions: Decision[] = [];
+	for (const line of text.split(/\r?\n/)) {
+		const match = line.match(/^\s*DECISION:(.*)$/);
+		if (!match) continue;
+		const raw = match[1].trim();
+		const choseAt = raw.indexOf("| chose:");
+		if (choseAt < 0) {
+			decisions.push({ fork: raw || "(unspecified decision)" });
+			continue;
+		}
+		const fork = raw.slice(0, choseAt).trim() || "(unspecified decision)";
+		const afterChose = raw.slice(choseAt + "| chose:".length);
+		const alternativesAt = afterChose.indexOf("| alternatives:");
+		if (alternativesAt < 0) {
+			const chosen = afterChose.trim();
+			decisions.push({ fork, ...(chosen ? { chosen } : {}) });
+			continue;
+		}
+		const chosen = afterChose.slice(0, alternativesAt).trim();
+		const alternatives = afterChose.slice(alternativesAt + "| alternatives:".length).trim();
+		decisions.push({ fork, ...(chosen ? { chosen } : {}), ...(alternatives ? { alternatives } : {}) });
+	}
+	return decisions;
+}
 
 // ── Skill loading ──────────────────────────────────────────────────────
 
@@ -659,6 +685,45 @@ export function filesChangedSince(cwd: string, preSha: string | null): string[] 
 	}
 }
 
+// ── Authoring-loop reviewer diff injection ─────────────────────────────
+// The authoring-loop reviewer seats are told to inspect `git diff main...HEAD`, but a weak
+// single-turn seat (observed: codex runs one turn with no tool calls) never fetches it and, with no
+// code in front of it, parrots the SKILL.md example. Hand every reviewer seat the actual branch diff
+// as a floor so it always has real code to review; capable seats (claude/grok) stay free to explore
+// further — the injected diff supplements, it does not replace, their multi-turn inspection.
+
+/** ~256 KiB cap on the injected diff; a huge diff would blow the seat's context, and the seat can
+ * always run `git diff main...HEAD` itself for the remainder. */
+export const REVIEW_DIFF_MAX_BYTES = 256 * 1024;
+
+/** Format the CHANGES UNDER REVIEW block. Pure/testable: no git access. Empty diff or a failed read
+ * yields a note (never crashes the loop); a truncated diff appends the run-it-yourself pointer. */
+export function formatChangesUnderReview(diff: string, state: "ok" | "empty" | "unavailable" | "truncated"): string {
+	const header = "## CHANGES UNDER REVIEW (git diff main...HEAD)";
+	if (state === "empty") return `${header}\n\nThe branch diff against \`main\` is empty. Confirm with \`git diff main...HEAD\` and review accordingly.`;
+	if (state === "unavailable") return `${header}\n\nThe harness could not compute the branch diff. Run \`git diff main...HEAD\` yourself to obtain the changes under review.`;
+	const trailer = state === "truncated" ? "\n\n[diff truncated at the injection cap — run `git diff main...HEAD` for the remainder]" : "";
+	return `${header}\n\nThis is the authoritative diff. Inspect it in full; explore further (\`git show\`, read files, run tests) as needed.\n\n\`\`\`diff\n${diff}\n\`\`\`${trailer}`;
+}
+
+/** Read the branch diff from a worktree and format it for injection. Fail-graceful: any git error
+ * returns the "unavailable" note rather than throwing. Byte-bounded to REVIEW_DIFF_MAX_BYTES. */
+export function buildReviewDiffBlock(worktree: string): string {
+	let raw: string;
+	try {
+		raw = execSync("git diff main...HEAD", { cwd: worktree, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
+	} catch {
+		return formatChangesUnderReview("", "unavailable");
+	}
+	if (raw.trim() === "") return formatChangesUnderReview("", "empty");
+	const bytes = Buffer.from(raw, "utf-8");
+	if (bytes.byteLength <= REVIEW_DIFF_MAX_BYTES) return formatChangesUnderReview(raw, "ok");
+	// Truncate on a byte boundary, then trim any partial trailing line so the fenced block stays clean.
+	const sliced = bytes.subarray(0, REVIEW_DIFF_MAX_BYTES).toString("utf-8");
+	const trimmed = sliced.slice(0, Math.max(0, sliced.lastIndexOf("\n")));
+	return formatChangesUnderReview(trimmed, "truncated");
+}
+
 /**
  * Plan-polish backstop (#80). During `implement`, `docs/plans/` is execute-only. The Claude
  * provider enforces this with a PreToolUse hook that blocks Writes there, but a sandboxed provider
@@ -872,6 +937,34 @@ export function detectResumeStep(itemId: string, worktree: string): Step {
 	}
 
 	return "shakedown-code";
+}
+
+export type LoggedDriverIdentity = { provider: "codex"; codexModel?: string } | { provider: "claude" | "grok"; model?: string };
+
+/** Find the latest successful realized author across all cycle entries for an item. */
+export function findLoggedArtifactAuthor(itemId: string, step: "plan" | "implement", logPath = LOG_PATH): LoggedDriverIdentity | undefined {
+	if (!existsSync(logPath)) return undefined;
+	try {
+		const lines = readFileSync(logPath, "utf-8").trim().split("\n").filter(Boolean);
+		for (let lineIndex = lines.length - 1; lineIndex >= 0; lineIndex--) {
+			const entry: unknown = JSON.parse(lines[lineIndex]);
+			if (!entry || typeof entry !== "object") continue;
+			const record = entry as Record<string, unknown>;
+			if (typeof record.item !== "string" || record.item.toUpperCase() !== itemId.toUpperCase() || !Array.isArray(record.steps)) continue;
+			for (let index = record.steps.length - 1; index >= 0; index--) {
+				const value: unknown = record.steps[index];
+				if (!value || typeof value !== "object") continue;
+				const logged = value as Record<string, unknown>;
+				if (logged.name !== step || logged.ok !== true) continue;
+				if (logged.provider === "codex") return typeof logged.model === "string" && logged.model !== "default" ? { provider: "codex", codexModel: logged.model } : { provider: "codex" };
+				if (logged.provider === "claude" || logged.provider === "grok") return typeof logged.model === "string" && logged.model !== "default" ? { provider: logged.provider, model: logged.model } : { provider: logged.provider };
+				return undefined;
+			}
+		}
+	} catch {
+		return undefined;
+	}
+	return undefined;
 }
 
 // ── Logging ────────────────────────────────────────────────────────────

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync, realpathSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, it } from "node:test";
@@ -536,6 +536,32 @@ function plantNmEntries(nmDir: string, mainRepo: string, links?: Array<{ name: s
 	}
 }
 
+function plantMaterializedEntries(nmDir: string, mainNm: string, worktree: string, links?: Array<{ name: string; targetPkg: string }>): void {
+	const workspaceMap = new Map((links ?? []).map((link) => [link.name, link.targetPkg] as const));
+	mkdirSync(nmDir);
+	for (const entry of readdirSync(mainNm)) {
+		const dest = join(nmDir, entry);
+		if (entry.startsWith("@")) {
+			let scopeEntries: string[];
+			try {
+				scopeEntries = readdirSync(join(mainNm, entry));
+			} catch {
+				symlinkSync(join(mainNm, entry), dest, "dir");
+				continue;
+			}
+			mkdirSync(dest);
+			for (const sub of scopeEntries) {
+				const name = `${entry}/${sub}`;
+				const targetPkg = workspaceMap.get(name);
+				symlinkSync(targetPkg === undefined ? join(mainNm, name) : resolve(worktree, targetPkg), join(dest, sub), "dir");
+			}
+			continue;
+		}
+		const targetPkg = workspaceMap.get(entry);
+		symlinkSync(targetPkg === undefined ? join(mainNm, entry) : resolve(worktree, targetPkg), dest, "dir");
+	}
+}
+
 function makeMaterializeSetup(opts: MaterializeOpts): MaterializeSetup {
 	const root = mkdtempSync(join(tmpdir(), "worktree-materialize-test-"));
 	const main = resolve(root, "main");
@@ -582,17 +608,7 @@ function makeMaterializeSetup(opts: MaterializeOpts): MaterializeSetup {
 		mkdirSync(worktreeNm, { recursive: true });
 		mkdirSync(join(worktreeNm, ".pnpm"));
 	} else if (wState === "real-correctly-materialized") {
-		// Mirror what applyAction(materialize) would build: real dir, .pnpm
-		// is a symlink to MAIN's .pnpm, workspace entries are absolute symlinks
-		// into the worktree.
-		mkdirSync(worktreeNm);
-		// .pnpm as symlink (so the lstat-based corruption check passes).
-		if (opts.rootMainNm?.pnpmInfra) {
-			symlinkSync(resolve(main, "node_modules", ".pnpm"), join(worktreeNm, ".pnpm"), "dir");
-		}
-		for (const link of opts.rootMainNm?.workspaceLinks ?? []) {
-			plantSymlink(worktreeNm, link.name, resolve(worktree, link.targetPkg));
-		}
+		plantMaterializedEntries(worktreeNm, resolve(main, "node_modules"), worktree, opts.rootMainNm?.workspaceLinks);
 	} else if (wState === "real-incorrectly-materialized") {
 		// Real dir but the workspace entries point at MAIN instead of worktree.
 		mkdirSync(worktreeNm);
@@ -611,10 +627,7 @@ function makeMaterializeSetup(opts: MaterializeOpts): MaterializeSetup {
 		if (sState === "symlink-to-main-sub") {
 			symlinkSync(resolve(main, sp.pkg, "node_modules"), wsubNm, "dir");
 		} else if (sState === "real-correctly-materialized") {
-			mkdirSync(wsubNm);
-			for (const link of sp.mainNm?.workspaceLinks ?? []) {
-				plantSymlink(wsubNm, link.name, resolve(worktree, link.targetPkg));
-			}
+			plantMaterializedEntries(wsubNm, resolve(main, sp.pkg, "node_modules"), worktree, sp.mainNm?.workspaceLinks);
 		} else if (sState === "real-incorrectly-materialized") {
 			mkdirSync(wsubNm);
 			for (const link of sp.mainNm?.workspaceLinks ?? []) {
@@ -786,6 +799,36 @@ describe("decideDepsAction (materialize)", () => {
 		assert.ok(existsSync(wtPnpm));
 		assert.equal(decideDepsAction(worktree, main).type, "noop");
 	});
+
+	it("materializes when MAIN gains an unscoped external entry", () => {
+		const { main, worktree } = makeMaterializeSetup({
+			workspaces: [{ pkg: "packages/a", name: "@scope/a" }],
+			rootMainNm: { workspaceLinks: [{ name: "@scope/a", targetPkg: "packages/a" }], externals: ["tsx"] },
+			worktreeNm: { kind: "real-correctly-materialized" },
+		});
+		mkdirSync(resolve(main, "node_modules/react"));
+		assert.equal(decideDepsAction(worktree, main).type, "materialize");
+	});
+
+	it("materializes when MAIN gains a child beneath an existing scope", () => {
+		const { main, worktree } = makeMaterializeSetup({
+			workspaces: [{ pkg: "packages/a", name: "@scope/a" }],
+			rootMainNm: { workspaceLinks: [{ name: "@scope/a", targetPkg: "packages/a" }], externals: ["@scope/external"] },
+			worktreeNm: { kind: "real-correctly-materialized" },
+		});
+		mkdirSync(resolve(main, "node_modules/@scope/new-dependency"));
+		assert.equal(decideDepsAction(worktree, main).type, "materialize");
+	});
+
+	it("leaves a user-managed real directory alone when it lacks MAIN entries", () => {
+		const { main, worktree } = makeMaterializeSetup({
+			workspaces: [{ pkg: "packages/a", name: "@scope/a" }],
+			rootMainNm: { workspaceLinks: [{ name: "@scope/a", targetPkg: "packages/a" }], externals: ["tsx"] },
+			worktreeNm: { kind: "absent" },
+		});
+		mkdirSync(resolve(worktree, "node_modules"));
+		assert.equal(decideDepsAction(worktree, main).type, "noop");
+	});
 });
 
 describe("decideSubpackageAction (materialize)", () => {
@@ -835,6 +878,24 @@ describe("decideSubpackageAction (materialize)", () => {
 			],
 			subpackages: [{ pkg: "packages/web", mainNm: { workspaceLinks: [{ name: "@scope/server", targetPkg: "packages/server" }] }, worktreeNm: { kind: "real-incorrectly-materialized" } }],
 		});
+		assert.equal(decideSubpackageAction(worktree, main, "packages/web", false).type, "materialize");
+	});
+
+	it("materializes when a MAIN subpackage gains an external entry", () => {
+		const { main, worktree } = makeMaterializeSetup({
+			workspaces: [
+				{ pkg: "packages/web", name: "@scope/web" },
+				{ pkg: "packages/server", name: "@scope/server" },
+			],
+			subpackages: [
+				{
+					pkg: "packages/web",
+					mainNm: { workspaceLinks: [{ name: "@scope/server", targetPkg: "packages/server" }], externals: ["react"] },
+					worktreeNm: { kind: "real-correctly-materialized" },
+				},
+			],
+		});
+		mkdirSync(resolve(main, "packages/web/node_modules/zod"));
 		assert.equal(decideSubpackageAction(worktree, main, "packages/web", false).type, "materialize");
 	});
 });
@@ -897,6 +958,25 @@ describe("ensureWorktreeDeps (materialize)", () => {
 		assert.equal(second.root.type, "noop");
 		// Layout still correct after the no-op pass.
 		assert.equal(realpathSync(resolve(worktree, "node_modules/@scope/a")), realpathSync(resolve(worktree, "packages/a")));
+	});
+
+	it("refreshes a materialized snapshot when MAIN gains an entry, then returns to noop", () => {
+		const { main, worktree } = makeMaterializeSetup({
+			workspaces: [{ pkg: "packages/a", name: "@scope/a" }],
+			rootMainNm: { workspaceLinks: [{ name: "@scope/a", targetPkg: "packages/a" }], externals: ["tsx"] },
+			worktreeNm: { kind: "absent" },
+		});
+		assert.equal(ensureWorktreeDeps(worktree, main).root.type, "materialize");
+
+		const mainReact = resolve(main, "node_modules/react");
+		mkdirSync(mainReact);
+		const refresh = ensureWorktreeDeps(worktree, main);
+		assert.equal(refresh.root.type, "materialize");
+		const worktreeReact = resolve(worktree, "node_modules/react");
+		assert.ok(lstatSync(worktreeReact).isSymbolicLink());
+		assert.equal(readlinkSync(worktreeReact), mainReact);
+
+		assert.equal(ensureWorktreeDeps(worktree, main).root.type, "noop");
 	});
 
 	it("does not modify MAIN's node_modules during materialize", () => {
@@ -1043,34 +1123,76 @@ describe("findOutboundMainSymlinks", () => {
 });
 
 describe("repairMainNodeModules", () => {
-	it("returns { ranInstall: false, repaired: [] } when main is clean", () => {
+	it("returns { ranInstall: false, repaired: [] } when main is clean", async () => {
 		const main = makeMain();
 		const calls: Array<{ cmd: string; cwd: string }> = [];
 		const runner = { run: (cmd: string, cwd: string) => calls.push({ cmd, cwd }) };
-		const report = repairMainNodeModules(main, runner);
+		const report = await repairMainNodeModules(main, runner);
 		assert.equal(report.ranInstall, false);
 		assert.deepEqual(report.repaired, []);
 		assert.deepEqual(calls, []);
 	});
 
-	it("invokes the runner with `pnpm install --frozen-lockfile` and the main repo cwd when corruption is detected", () => {
+	it("invokes a lifecycle-script-free frozen install in the main repo when corruption is detected", async () => {
 		const main = makeMain();
 		symlinkSync("../../sibling/node_modules/.pnpm/tsx@4.21.0/node_modules/tsx", join(main, "node_modules", "tsx"), "dir");
 		const calls: Array<{ cmd: string; cwd: string }> = [];
 		const runner = { run: (cmd: string, cwd: string) => calls.push({ cmd, cwd }) };
-		const report = repairMainNodeModules(main, runner);
+		const report = await repairMainNodeModules(main, runner);
 		assert.equal(report.ranInstall, true);
-		assert.deepEqual(calls, [{ cmd: "pnpm install --frozen-lockfile", cwd: main }]);
+		assert.deepEqual(calls, [{ cmd: "pnpm install --frozen-lockfile --ignore-scripts", cwd: main }]);
 	});
 
-	it("reports the outbound entries it observed in the repaired list", () => {
+	it("reports the outbound entries it observed in the repaired list", async () => {
 		const main = makeMain();
 		symlinkSync("../../sibling/node_modules/.pnpm/tsx@4.21.0/node_modules/tsx", join(main, "node_modules", "tsx"), "dir");
 		symlinkSync("../../sibling/node_modules/.pnpm/typescript@6.0.3/node_modules/typescript", join(main, "node_modules", "typescript"), "dir");
 		const runner = { run: () => {} };
-		const report = repairMainNodeModules(main, runner);
+		const report = await repairMainNodeModules(main, runner);
 		assert.equal(report.repaired.length, 2);
 		const names = report.repaired.map((r) => r.name).sort();
 		assert.deepEqual(names, ["tsx", "typescript"]);
+	});
+
+	it("guards the install through the injected lock, keyed on mainRepo's .dev directory", async () => {
+		const main = makeMain();
+		symlinkSync("../../sibling/node_modules/.pnpm/tsx@4.21.0/node_modules/tsx", join(main, "node_modules", "tsx"), "dir");
+		const lockPaths: string[] = [];
+		const lock = async <T>(path: string, fn: () => Promise<T> | T) => {
+			lockPaths.push(path);
+			return fn();
+		};
+		const runner = { run: () => {} };
+		const report = await repairMainNodeModules(main, runner, lock);
+		assert.equal(report.ranInstall, true);
+		assert.deepEqual(lockPaths, [resolve(main, ".dev", "node-modules-repair.lock")]);
+	});
+
+	it("re-checks for outbound symlinks once the lock is held, skipping a redundant install if another holder already repaired", async () => {
+		const main = makeMain();
+		symlinkSync("../../sibling/node_modules/.pnpm/tsx@4.21.0/node_modules/tsx", join(main, "node_modules", "tsx"), "dir");
+		const calls: Array<{ cmd: string; cwd: string }> = [];
+		const runner = { run: (cmd: string, cwd: string) => calls.push({ cmd, cwd }) };
+		const lock = async <T>(_path: string, fn: () => Promise<T> | T) => {
+			unlinkSync(join(main, "node_modules", "tsx")); // simulate another holder's repair completing first
+			return fn();
+		};
+		const report = await repairMainNodeModules(main, runner, lock);
+		assert.equal(report.ranInstall, false);
+		assert.deepEqual(calls, []);
+	});
+});
+
+describe("ensureWorktreeDeps main repair", () => {
+	it("repairs outbound main symlinks before sharing main node_modules", () => {
+		const root = makeSetup({ mainLock: "A", worktreeLock: "A", mainNm: "dir", worktreeNm: null });
+		const siblingTarget = "../../sibling/node_modules/.pnpm/tsx@4.21.0/node_modules/tsx";
+		symlinkSync(siblingTarget, resolve(root.main, "node_modules", "tsx"), "dir");
+		const calls: Array<{ cmd: string; cwd: string }> = [];
+		const runner = { run: (cmd: string, cwd: string) => calls.push({ cmd, cwd }) };
+
+		ensureWorktreeDeps(root.worktree, root.main, runner);
+
+		assert.deepEqual(calls, [{ cmd: "pnpm install --frozen-lockfile --ignore-scripts", cwd: root.main }]);
 	});
 });

@@ -13,6 +13,21 @@ export interface ReviewFindingsReport {
 	findings: ReviewFinding[];
 }
 
+export type ReviewFindingClass = "security" | "data-loss" | "correctness-regression" | "judgment";
+export interface AuthoringReviewFinding extends ReviewFinding {
+	class: ReviewFindingClass;
+}
+export interface AuthoringReviewReport {
+	schemaVersion: 2;
+	summary: string;
+	findings: AuthoringReviewFinding[];
+}
+export type JudgeRuling = "fixable-blocker" | "unfixable-blocker" | "judgment-dissent";
+export interface JudgeReport {
+	schemaVersion: 1;
+	decisions: Array<{ candidateId: string; decision: ReviewVerificationDecision; rationale: string; class?: ReviewFindingClass; ruling?: JudgeRuling }>;
+}
+
 export type ReviewVerificationDecision = "refuted" | "survives";
 
 export interface ReviewVerificationReport {
@@ -96,9 +111,103 @@ export class ReviewFindingsParseError extends Error {
 
 const REPORT_RE = /(?:^|\n)REVIEW_FINDINGS[ \t]*\n([\s\S]*?)\nEND_REVIEW_FINDINGS(?=\n|$)/g;
 const VERIFICATION_RE = /(?:^|\n)REVIEW_VERIFICATION[ \t]*\n([\s\S]*?)\nEND_REVIEW_VERIFICATION(?=\n|$)/g;
+const AUTHORING_RE = /(?:^|\n)AUTHORING_REVIEW_FINDINGS[ \t]*\n([\s\S]*?)\nEND_AUTHORING_REVIEW_FINDINGS(?=\n|$)/g;
+const JUDGE_RE = /(?:^|\n)AUTHORING_REVIEW_JUDGE[ \t]*\n([\s\S]*?)\nEND_AUTHORING_REVIEW_JUDGE(?=\n|$)/g;
 const SEVERITIES: readonly ReviewFindingSeverity[] = ["must-fix", "nice", "note"];
 const VERIFICATION_DECISIONS: readonly ReviewVerificationDecision[] = ["refuted", "survives"];
 const CANDIDATE_ID_RE = /^C[1-9]\d*$/;
+const FINDING_CLASSES: readonly ReviewFindingClass[] = ["security", "data-loss", "correctness-regression", "judgment"];
+const JUDGE_RULINGS: readonly JudgeRuling[] = ["fixable-blocker", "unfixable-blocker", "judgment-dissent"];
+
+// The verbatim schema-example placeholder printed in `.claude/skills/pr-review/SKILL.md`
+// (the `AUTHORING_REVIEW_FINDINGS` example block). A weaker instruction-follower — observed
+// with the codex reviewer seat, which runs a single turn and does no diff inspection — echoes
+// this example instead of reviewing. Because it is schema-valid it would sail through as a real
+// `must-fix / correctness-regression` at `src/file.ts:1`, manufacturing a cross-model split and a
+// spurious escalation/park. Reject it fail-closed so the seat is recorded as not-completed rather
+// than as a fabricated blocker. Provider-agnostic: any seat that parrots the example is rejected.
+const EXAMPLE_SUMMARY = "Concise single-line summary.";
+const EXAMPLE_FINDING_MESSAGE = "Concrete single-line finding.";
+const EXAMPLE_FINDING_PATH = "src/file.ts";
+
+function isSchemaExampleFinding(finding: AuthoringReviewFinding): boolean {
+	return finding.message === EXAMPLE_FINDING_MESSAGE && finding.path === EXAMPLE_FINDING_PATH && finding.line === 1;
+}
+
+function parseDelimited(text: string, regex: RegExp, label: string): Record<string, unknown> {
+	const matches = [...text.matchAll(regex)];
+	if (matches.length !== 1) throw new ReviewFindingsParseError(matches.length === 0 ? `${label} block not found` : `multiple ${label} blocks found`);
+	try {
+		const value: unknown = JSON.parse(matches[0][1]);
+		if (!isRecord(value)) throw new ReviewFindingsParseError(`${label} must be a JSON object`);
+		return value;
+	} catch (error) {
+		if (error instanceof ReviewFindingsParseError) throw error;
+		throw new ReviewFindingsParseError(`${label} block is not valid JSON`, { cause: error });
+	}
+}
+
+export function parseAuthoringReviewFindings(text: string): AuthoringReviewReport {
+	// #280: codex reliably emits more than one AUTHORING_REVIEW_FINDINGS block; union every block's
+	// findings rather than dropping the whole seat on the >1-block flake. Each block must still be
+	// individually valid (fail-closed on malformed JSON/schema); duplicates across blocks are harmless
+	// because the loop dedups candidates by fingerprint.
+	const matches = [...text.matchAll(AUTHORING_RE)];
+	if (matches.length === 0) throw new ReviewFindingsParseError("authoring review findings block not found");
+	let summary: string | undefined;
+	const findings: AuthoringReviewFinding[] = [];
+	matches.forEach((match, block) => {
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(match[1]);
+		} catch (error) {
+			throw new ReviewFindingsParseError(`authoring review findings block ${block + 1} is not valid JSON`, { cause: error });
+		}
+		if (!isRecord(parsed)) throw new ReviewFindingsParseError(`authoring review findings block ${block + 1} must be a JSON object`);
+		assertKeys(parsed, ["schemaVersion", "summary", "findings"], ["schemaVersion", "summary", "findings"], "authoring review findings");
+		if (parsed.schemaVersion !== 2) throw new ReviewFindingsParseError("unsupported authoring review schemaVersion");
+		if (!Array.isArray(parsed.findings)) throw new ReviewFindingsParseError("authoring review findings must be an array");
+		if (summary === undefined) summary = parseSingleLine(parsed.summary, "summary");
+		for (const [index, value] of parsed.findings.entries()) {
+			if (!isRecord(value) || !FINDING_CLASSES.includes(value.class as ReviewFindingClass)) throw new ReviewFindingsParseError(`review finding ${index + 1} has an invalid class`);
+			const { class: _class, ...v1 } = value;
+			const finding = parseFinding(v1, index);
+			findings.push({ ...finding, class: value.class as ReviewFindingClass });
+		}
+	});
+	// Fail closed on the parroted schema example (see EXAMPLE_* above). The seat did not review;
+	// treat it as an incomplete seat, not a real blocker. Trip on either the example summary or any
+	// example finding — a real review never emits these exact placeholder strings, so this cannot
+	// false-positive, and it also catches a fake-clean echo (example summary, empty findings).
+	if (summary?.trim() === EXAMPLE_SUMMARY || findings.some(isSchemaExampleFinding)) {
+		throw new ReviewFindingsParseError("authoring review findings echo the schema example verbatim (the seat did not review the diff)");
+	}
+	return { schemaVersion: 2, summary: summary ?? "", findings };
+}
+
+export function parseJudgeReport(text: string): JudgeReport {
+	const parsed = parseDelimited(text, JUDGE_RE, "authoring review Judge");
+	assertKeys(parsed, ["schemaVersion", "decisions"], ["schemaVersion", "decisions"], "authoring review Judge report");
+	if (parsed.schemaVersion !== 1 || !Array.isArray(parsed.decisions)) throw new ReviewFindingsParseError("invalid authoring review Judge schema");
+	return {
+		schemaVersion: 1,
+		decisions: parsed.decisions.map((value, index) => {
+			if (!isRecord(value)) throw new ReviewFindingsParseError(`Judge decision ${index + 1} must be an object`);
+			// #280: `class` is optional — the candidate already carries its reviewer-assigned class and the
+			// Judge adjudicates a known candidateId, so a restated class is redundant. When present it is
+			// validated and used (loop.ts inherits the candidate's class when absent, and blocks a
+			// safety→non-safety downgrade).
+			assertKeys(value, ["candidateId", "decision", "rationale", "class", "ruling"], ["candidateId", "decision", "rationale"], `Judge decision ${index + 1}`);
+			const { class: _class, ruling: _ruling, ...verification } = value;
+			const base = parseVerificationDecision(verification, index);
+			if (value.class !== undefined && !FINDING_CLASSES.includes(value.class as ReviewFindingClass)) throw new ReviewFindingsParseError(`Judge decision ${index + 1} has an invalid class`);
+			if (value.ruling !== undefined && !JUDGE_RULINGS.includes(value.ruling as JudgeRuling)) throw new ReviewFindingsParseError(`Judge decision ${index + 1} has an invalid ruling`);
+			if (value.ruling === "judgment-dissent" && value.class !== undefined && value.class !== "judgment") throw new ReviewFindingsParseError("judgment-dissent is only valid for judgment findings");
+			if (base.decision === "survives" && value.ruling === undefined) throw new ReviewFindingsParseError(`surviving Judge decision ${base.candidateId} requires a ruling`);
+			return { ...base, ...(value.class !== undefined ? { class: value.class as ReviewFindingClass } : {}), ...(value.ruling ? { ruling: value.ruling as JudgeRuling } : {}) };
+		}),
+	};
+}
 
 export function parseReviewFindings(text: string): ReviewFindingsReport {
 	const matches = [...text.matchAll(REPORT_RE)];
@@ -164,7 +273,7 @@ export function reconcileReviewVerification(candidates: readonly VerificationCan
 	});
 }
 
-export function reviewFindingsGate(report: ReviewFindingsReport): "pass" | "block" {
+export function reviewFindingsGate(report: Pick<ReviewFindingsReport, "findings">): "pass" | "block" {
 	return report.findings.some((finding) => finding.severity === "must-fix") ? "block" : "pass";
 }
 

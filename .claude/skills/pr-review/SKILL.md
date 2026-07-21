@@ -38,8 +38,46 @@ You are checked out at the PR head with full history; `origin/main` is the merge
 
 ## Mode selection
 
-If the `Arguments:` line contains `--red-team`, run **Red-team mode** below.
+If the `Arguments:` line contains `--authoring-loop`, run **Authoring-loop mode** below.
+If it contains `--red-team`, run **Red-team mode** below.
 Otherwise run **Standard mode**. Both modes emit the same versioned report.
+
+## Authoring-loop mode
+
+This is a fresh read-only review of the current authoring worktree. It is **not** a
+one-shot answer: you must inspect the actual change with tools across multiple turns
+**before** you emit any findings. Do not answer in a single turn, and do not copy the
+example block below — it is a format illustration, never a finding.
+
+**Mandatory inspection protocol — complete every step before emitting the report:**
+
+1. Run `git diff main...HEAD` and read the full diff. A `CHANGES UNDER REVIEW` block may
+   be appended to this prompt as a convenience floor; it does **not** replace this step —
+   run the command yourself so you also see context the block may have truncated.
+2. Run `git diff --name-only main...HEAD`, then **open and read each changed file in
+   full at head** — not just the hunks. A hunk can look fine while breaking an invariant
+   or a caller two files away; find those callers and read them.
+3. Run the repo's checks (`pnpm check`, and `pnpm -r test` when the change is non-trivial).
+   A failing check or test is a `correctness-regression` must-fix that a diff alone hides.
+4. Only after 1–3, enumerate candidates, refute the weak ones against the code you read,
+   and emit the report. If you have not yet run the commands above, keep working — do not
+   emit findings.
+
+Each finding must claim one class: `security`, `data-loss`, `correctness-regression`, or
+`judgment`. Use a safety class whenever the claimed failure can compromise security, lose
+data, or regress correctness; the Judge may not silently downgrade it. End with exactly
+this v2 block and nothing after it (substitute your real summary and findings — never the
+placeholder strings):
+
+```text
+AUTHORING_REVIEW_FINDINGS
+{"schemaVersion":2,"summary":"Concise single-line summary.","findings":[{"severity":"must-fix","class":"correctness-regression","message":"Concrete single-line finding.","path":"src/file.ts","line":1}]}
+END_AUTHORING_REVIEW_FINDINGS
+```
+
+The JSON has exactly `schemaVersion`, `summary`, and `findings`; each finding has
+exactly `severity`, `class`, `message`, and optional `path`/`line`. This mode does
+not use the CI v1 block below.
 
 ## Red-team mode — independent adversarial pass
 

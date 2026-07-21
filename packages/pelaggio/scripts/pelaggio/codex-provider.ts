@@ -2,8 +2,9 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CONFIG, REPO, resolveStepSettings, type StepSettings } from "./config.js";
-import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseWaitFlag, resolveParkReset } from "./helpers.js";
+import { CONFIG, REPO, resolveProviderBin, resolveStepSettings, type StepSettings } from "./config.js";
+import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseDecisions, parseWaitFlag, resolveParkReset } from "./helpers.js";
+import { buildAgentEnv, makeSecretScrubber } from "./secret-hygiene.js";
 import type { StepProvider } from "./step-runner.js";
 import { composeSystemAppend, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "./step-runner-shared.js";
 import { MUTATING_TOOLS, toolBrief } from "./tui.js";
@@ -202,6 +203,7 @@ export function buildCodexStepResult(name: Step, events: JsonObject[], exitInfo:
 	const emitted: StepEvent[] = [];
 	let text = "";
 	let fullText = "";
+	let assistantText = "";
 	let turns = 0;
 	let completed = false;
 	let failed = false;
@@ -263,14 +265,17 @@ export function buildCodexStepResult(name: Step, events: JsonObject[], exitInfo:
 		const msg = agentMessageText(ev);
 		if (msg) {
 			text = msg;
+			assistantText += `${msg}\n`;
 			fullText += `${msg}\n`;
 			emitted.push({ type: "text", content: msg });
 		}
 	}
 
+	const streamedFinalText = text;
 	if (exitInfo.outputLastMessage?.trim()) {
 		text = exitInfo.outputLastMessage;
 		fullText += `${exitInfo.outputLastMessage}\n`;
+		if (exitInfo.outputLastMessage.trim() !== streamedFinalText.trim()) assistantText += `${exitInfo.outputLastMessage}\n`;
 	}
 	const cost = estimateCodexCost(tokens);
 	let ok = completed && !failed && exitInfo.exitCode === 0 && !exitInfo.timedOut;
@@ -324,6 +329,8 @@ export function buildCodexStepResult(name: Step, events: JsonObject[], exitInfo:
 	}
 
 	const outputTail = text ? text.replace(/\x1b\[[0-9;]*m/g, "").slice(-200) : undefined;
+	const decisions = parseDecisions(assistantText);
+	for (const decision of decisions) emitted.push({ type: "decision", decision });
 	const toolCountsObj = toolCounts.size > 0 ? Object.fromEntries(toolCounts) : undefined;
 	return {
 		result: {
@@ -338,6 +345,7 @@ export function buildCodexStepResult(name: Step, events: JsonObject[], exitInfo:
 			...(toolCountsObj ? { toolCounts: toolCountsObj } : {}),
 			...(outputTail ? { outputTail } : {}),
 			...(stalledAsk ? { stalledAsk: true } : {}),
+			...(decisions.length ? { decisions } : {}),
 		},
 		...(parkUpdate ? { parkUpdate } : {}),
 		events: emitted,
@@ -361,7 +369,8 @@ function parseJsonlChunk(buffer: string, lines: JsonObject[]): string {
 }
 
 const runStep: StepProvider["runStep"] = async (name, prompt, opts, emit) => {
-	const settings = resolveStepSettings(CONFIG, opts.profile, name);
+	const resolved = resolveStepSettings(CONFIG, opts.profile, name);
+	const settings = { ...resolved, model: opts.executionOverride?.model ?? resolved.model, codexModel: opts.executionOverride?.codexModel ?? resolved.codexModel };
 	const { budget, turns: baseTurns } = settings;
 	const turns = opts.maxTurnsOverride ?? baseTurns;
 	const codexModel = selectCodexModel(settings);
@@ -383,7 +392,10 @@ const runStep: StepProvider["runStep"] = async (name, prompt, opts, emit) => {
 	const tmp = mkdtempSync(join(tmpdir(), "pelaggio-codex-"));
 	const outputPath = join(tmp, "last-message.txt");
 	const args = ["exec", "--json", "-C", opts.cwd, "-s", "workspace-write", "-o", outputPath, ...(codexModel ? ["-m", codexModel] : []), "-"];
-	const child = spawn("codex", args, { cwd: opts.cwd, stdio: ["pipe", "pipe", "pipe"] });
+	// Deny-by-default env: the child gets only the allowlisted vars, never the full parent env, so
+	// a prompt-injected step cannot read/echo credentials it was never given (#237 / TC-014).
+	const scrub = makeSecretScrubber();
+	const child = spawn(resolveProviderBin(CONFIG, "codex", "codex"), args, { cwd: opts.cwd, stdio: ["pipe", "pipe", "pipe"], env: buildAgentEnv({ allow: CONFIG.security.envAllowlist }) });
 
 	try {
 		const events: JsonObject[] = [];
@@ -446,7 +458,7 @@ const runStep: StepProvider["runStep"] = async (name, prompt, opts, emit) => {
 		const built = buildCodexStepResult(name, events, {
 			exitCode: spawnError && exit.code === 0 ? 1 : exit.code,
 			signal: exit.signal,
-			stderr: spawnError?.message || stderr,
+			stderr: scrub(spawnError?.message || stderr),
 			timedOut,
 			outputLastMessage,
 			now: Date.now(),

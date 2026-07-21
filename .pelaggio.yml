@@ -12,8 +12,18 @@ revise:
 # Review gate runs on the local subscription (via #84), not the metered CI key.
 # CI's `pr-review-ci` job gates off when repo var AUTOPILOT_REVIEW_RUNNER=local;
 # the local pelaggio auto-pick sweep posts the `review` commit status.
+#
+# Native CI-key review + auto-merge (#258/#214) is BUILT and documented but NOT
+# activated here: it is a repo-admin ops step, not a committed-config flip. The
+# three moving parts must change TOGETHER — flipping `review.runner: ci` alone
+# stops the local sweep posting while CI stays gated off (var still `local`), so
+# `review` is never posted and every PR blocks. See the activation checklist:
+# docs/pr-review.md#activating-native-ci-key-review-repo-admin.
 review:
   runner: local
+  # Opt-in; unattended authoring loops require key authentication.
+  authoring:
+    enabled: true
   # Safe rollout default is one pass. Opt in with max-passes: 2 after setting a
   # cap that can reserve every required discovery+verification call.
   max-passes: 1
@@ -21,22 +31,28 @@ review:
   provider-diversity: off
 budgets:
   shakedown-plan: 8
-# Offload the token-heavy authoring steps to Codex (aggressive split). pick + ship
-# stay on Claude: they are the prose-scrape coordination steps (parsePickResult /
-# parseShipMerged) that are calibrated to Claude's prose — see coordination-spine.md.
-# shakedown-code stays on Claude so the final code review is cross-model (Claude
-# reviewing Codex's implementation). Codex model is left unset → Codex CLI default.
+# Authoring rotates cycle-locally across the configured pool. Review pools use
+# the same drivers but deterministically exclude the realized artifact author.
+# Coordination/recovery steps remain explicit static Claude pins.
 models:
   profiles:
     standard:
       providers:
-        plan: codex
-        shakedown-plan: codex
-        implement: codex
+        pick: claude
+        plan: [claude, codex, grok]
+        shakedown-plan: [claude, codex, grok]
+        implement: [claude, codex, grok]
+        shakedown-code: [claude, codex, grok]
+        ship: claude
+        shipwreck: claude
     # Quick mode (S/XS/bug) skips plan+shakedown-plan and runs implement-only under
     # this profile. Offload that implement to Codex too so small bugs also lean on
     # Codex; the model stays Sonnet-priced in config but a claude-* id is never
     # forwarded, so Codex uses its CLI default.
     quick:
       providers:
-        implement: codex
+        pick: claude
+        implement: [claude, codex, grok]
+        shakedown-code: [claude, codex, grok]
+        ship: claude
+        shipwreck: claude

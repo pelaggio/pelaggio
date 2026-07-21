@@ -1,5 +1,11 @@
 import { appendFileSync } from "node:fs";
+import { makeSecretScrubber } from "./secret-hygiene.js";
 import type { CycleStatus, StepEmit, StepEvent } from "./types.js";
+
+// Redact credential-shaped strings and secret env-var values from the verbose file transcript
+// before it lands on disk (#237 / TC-014). This is the sink where raw agent stdout is captured
+// (see TC-001 known_limits), so scrub-before-write here covers every driver's emitted output.
+const scrubTranscript = makeSecretScrubber();
 
 // ── TUI-enabled detection ──────────────────────────────────────────────
 
@@ -299,7 +305,7 @@ export function createStepRenderer(opts: StepRendererOpts): StepEmit {
 			}
 		: fileVerbose && logPath
 			? (s): void => {
-					appendFileSync(logPath, stripAnsi(s));
+					appendFileSync(logPath, scrubTranscript(stripAnsi(s)));
 				}
 			: (_s): void => {};
 
@@ -424,6 +430,13 @@ export function createStepRenderer(opts: StepRendererOpts): StepEmit {
 				break;
 			}
 
+			case "sdk_warning": {
+				spinner?.stop();
+				if (ttyVerbose) ln(`${A.yellow("⚠")} SDK warning: ${A.dim(event.message.slice(0, 120))}`);
+				plainLine(`   ⚠ SDK warning: ${event.message.slice(0, 200)}\n`);
+				break;
+			}
+
 			case "blocked": {
 				spinner?.stop();
 				if (ttyVerbose) ln(`${A.red("⚠")} blocked: ${A.dim(event.reason.slice(0, 120))}`);
@@ -434,6 +447,17 @@ export function createStepRenderer(opts: StepRendererOpts): StepEmit {
 			case "stalled_ask": {
 				if (ttyVerbose) ln(A.dim(`… stalled-ask (observe-only): ${event.tail.slice(0, 100)}`));
 				plainLine(`   … stalled-ask (observe-only): ${event.tail.slice(0, 120)}\n`);
+				break;
+			}
+
+			case "decision": {
+				spinner?.stop();
+				const fork = event.decision.fork.slice(0, 160);
+				if (ttyVerbose) ln(`${A.yellow("⚑")} ${fork}`);
+				// The flag is always human-visible, independent of verbose/trace, and is
+				// still copied to a configured transcript.
+				if (!ttyVerbose) process.stderr.write(`⚑ ${fork}\n`);
+				if (!ttyVerbose && fileVerbose && logPath) appendFileSync(logPath, `⚑ ${fork}\n`);
 				break;
 			}
 

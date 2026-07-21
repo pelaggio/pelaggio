@@ -2,10 +2,35 @@ import { execSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import type { RunStepFn, runPipeline } from "../pipeline.js";
+import { mock } from "node:test";
+import { REVIEW_CONFIG } from "../config.js";
+import { __setProviderAvailableForTests, type RunStepFn, type runPipeline } from "../pipeline.js";
 import type { RoadmapSource } from "../roadmap/index.js";
 import { LiveStatus, StatusBar } from "../tui.js";
 import type { CycleResult, Flags, ParkSignal, PipelineOpts, Step, StepResult } from "../types.js";
+
+// Shared hermetic setup for test files that drive the real runPipeline (pipeline.test.ts,
+// ship.test.ts). These flow tests exercise pick/plan/implement/ship control flow, not the
+// driver-assignment or authoring-review internals (covered in driver-assignment.test.ts /
+// review-loop.test.ts), so they must not flip with the runner's installed binaries or the
+// repo's `.pelaggio.yml` (#304): mute the pipeline's high-volume console output (which floods
+// node:test IPC on constrained CI runners), stub every configured provider as available (else
+// reviewer-not-author fails closed on a claude-only host like CI and the cycle parks), and pin
+// the authoring loop off (else the adversarial path parks on unmocked review steps). Call
+// setupHermeticPipelineEnv from `before` and teardownHermeticPipelineEnv from `after`.
+let savedAuthoringEnabled = false;
+export function setupHermeticPipelineEnv(): void {
+	mock.method(console, "log", () => {});
+	mock.method(console, "error", () => {});
+	savedAuthoringEnabled = REVIEW_CONFIG.authoring.enabled;
+	REVIEW_CONFIG.authoring.enabled = false;
+	__setProviderAvailableForTests(() => true);
+}
+export function teardownHermeticPipelineEnv(): void {
+	mock.restoreAll();
+	REVIEW_CONFIG.authoring.enabled = savedAuthoringEnabled;
+	__setProviderAvailableForTests(undefined);
+}
 
 export interface StepOutcome extends Partial<StepResult> {
 	/** If set, merged into parkSignal before the mock returns. */

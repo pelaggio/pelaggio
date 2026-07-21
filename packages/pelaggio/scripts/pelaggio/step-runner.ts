@@ -4,7 +4,8 @@ import type { HookInput, HookJSONOutput, SDKAssistantMessage, SDKRateLimitEvent,
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { codexProvider } from "./codex-provider.js";
 import { CONFIG, REPO, resolveStepSettings } from "./config.js";
-import { classifyStepError, isRefusal, looksLikeStalledAsk, type MainCheckoutDeltaObserver, parseBlockedReason, parseWaitFlag, resolveParkReset } from "./helpers.js";
+import { grokProvider } from "./grok-provider.js";
+import { classifyStepError, isRefusal, looksLikeStalledAsk, type MainCheckoutDeltaObserver, parseBlockedReason, parseDecisions, parseWaitFlag, resolveParkReset } from "./helpers.js";
 import { composeSystemAppend, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "./step-runner-shared.js";
 import { MUTATING_TOOLS, toolBrief } from "./tui.js";
 import type { ParkSignal, ProviderName, Step, StepEmit, StepResult, TokenUsage } from "./types.js";
@@ -29,6 +30,8 @@ export interface RunStepOpts {
 	signal?: AbortSignal;
 	/** Brackets mutating provider tools for dirty-main delta attribution. */
 	mainCheckoutObserver?: MainCheckoutDeltaObserver;
+	/** Select a provider/model for this invocation without changing profile configuration. */
+	executionOverride?: { provider: ProviderName; model?: string; codexModel?: string };
 }
 
 /** Canonical signature of a step runner. Single-sourced here (all four types are in
@@ -100,7 +103,9 @@ export function endMainCheckoutAttribution(input: HookInput, toolUseId: string |
 // named const so it can be registered as the `"claude"` provider. The exported
 // `runStep` below is now the dispatcher; this is what it calls for the default provider.
 const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
-	const { budget, turns: baseTurns, effort, model } = resolveStepSettings(CONFIG, opts.profile, name);
+	const resolved = resolveStepSettings(CONFIG, opts.profile, name);
+	const { budget, turns: baseTurns, effort } = resolved;
+	const model = opts.executionOverride?.model ?? resolved.model;
 	const turns = opts.maxTurnsOverride ?? baseTurns;
 
 	const modelLabel = model ? model.replace("claude-", "") : "default";
@@ -270,6 +275,7 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 
 	let text = "";
 	let fullText = "";
+	let assistantText = "";
 	let cost = 0;
 	let resultTurns = 0;
 	let ok = true;
@@ -327,6 +333,7 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 					if (block.type === "text" && "text" in block) {
 						const blockText = (block as { text: string }).text;
 						fullText += blockText + "\n";
+						assistantText += blockText + "\n";
 						if (blockText.trim()) {
 							emit({ type: "text", content: blockText });
 						}
@@ -443,6 +450,8 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 
 	if (onParentAbort) opts.signal?.removeEventListener("abort", onParentAbort);
 
+	const decisions = parseDecisions(assistantText);
+	for (const decision of decisions) emit({ type: "decision", decision });
 	const elapsed = Date.now() - t0;
 	emit({ type: "done", ok, subtype, cost, turns: resultTurns, elapsed });
 
@@ -460,6 +469,7 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 		...(toolCountsObj ? { toolCounts: toolCountsObj } : {}),
 		...(outputTail ? { outputTail } : {}),
 		...(stalledAsk ? { stalledAsk: true } : {}),
+		...(decisions.length ? { decisions } : {}),
 	};
 };
 
@@ -474,7 +484,10 @@ export const claudeProvider: StepProvider = { name: "claude", runStep: claudeRun
 const PROVIDERS: Record<ProviderName, StepProvider> = {
 	claude: claudeProvider,
 	codex: codexProvider,
+	grok: grokProvider,
 };
+
+export const REGISTERED_PROVIDERS: readonly ProviderName[] = Object.freeze(Object.keys(PROVIDERS) as ProviderName[]);
 
 /** Look up a registered provider. Throws on an unknown name — defense-in-depth for
  *  #80 (a misconfigured provider fails loudly rather than silently defaulting). */
@@ -493,4 +506,4 @@ export function getProvider(name: ProviderName): StepProvider {
  * `resolveStepSettings` is pure and cheap, so the double call keeps the runner body
  * byte-identical at no real cost.
  */
-export const runStep: RunStepFn = (name, prompt, opts, emit) => getProvider(resolveStepSettings(CONFIG, opts.profile, name).provider).runStep(name, prompt, opts, emit);
+export const runStep: RunStepFn = (name, prompt, opts, emit) => getProvider(opts.executionOverride?.provider ?? resolveStepSettings(CONFIG, opts.profile, name).provider).runStep(name, prompt, opts, emit);

@@ -1,12 +1,11 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
-import { basename, extname, resolve } from "node:path";
+import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { basename, delimiter, extname, isAbsolute, join, resolve } from "node:path";
 import {
 	CONFIG,
 	CONFINEMENT_CONFIG,
 	DEFAULT_SHIP_TARGET,
 	isPipelineStep,
 	LOG_PATH,
-	MODEL_PROFILES,
 	REPO,
 	REVIEW_CONFIG,
 	REVISE_LOCAL,
@@ -14,15 +13,21 @@ import {
 	ROADMAP_GITHUB,
 	ROADMAP_LINEAR,
 	ROADMAP_SOURCE,
+	resolveAuthoringReviewConfig,
+	resolveDriverCandidates,
+	resolveProviderBin,
 	resolveStepSettings,
 	SHIP_TARGET,
 	STEPS,
 	WORKTREE_PREFIX,
 } from "./config.js";
+import { appendDecisions as appendDecisionsDefault, appendReviewEscalation as appendReviewEscalationDefault, lookupReviewEscalation as lookupReviewEscalationDefault } from "./decisions.js";
+import { createDriverAssignmentState, type DriverIdentity, recordArtifactAuthor, resolveStaticAuthor, selectAuthor, selectReviewers } from "./driver-assignment.js";
 import { dispatchStepEffects as dispatchStepEffectsDefault, type Effect, EffectsManifestError, writeEffectsManifest as writeEffectsManifestDefault } from "./effects.js";
 import { DEFAULT_FLOW_POLICY, type FlowPolicy } from "./flow-policy.js";
 import {
 	appendLog as appendLogDefault,
+	buildReviewDiffBlock,
 	buildStepArgs,
 	canRetryWithinBudget,
 	captureShipState,
@@ -37,6 +42,7 @@ import {
 	ensureMainCheckoutOnBranch,
 	expandSkill,
 	filesChangedSince,
+	findLoggedArtifactAuthor,
 	fmtWait,
 	formatResumeHint,
 	getHeadSha,
@@ -56,14 +62,17 @@ import {
 	stepIndex,
 	verifyShipLanded,
 } from "./helpers.js";
-import { type NotifyConfig, notifyCycle, notifyStrandedReview, sendNotification as sendNotificationDefault } from "./notify.js";
+import { type NotifyConfig, notifyCycle, notifyDecision as notifyDecisionEvent, notifyStrandedReview, sendNotification as sendNotificationDefault } from "./notify.js";
 import { buildFailClosedComment, runPrReviewGate } from "./pr-review-cli.js";
+import { runReviewLoop } from "./review/loop.js";
+import { type ReviewRecord, renderReviewRecord, writeReviewRecord } from "./review/record.js";
 import { cleanupReviewHead, findReviewCandidates, postLocalModeWorkflowComment, postReviewStatus, prepareReviewHead, upsertReviewComment } from "./review-sweep.js";
 import { claimRevision, ensureReviseWorktree, fetchReviewFindings, findRevisablePrs, isAutopilotManaged, postParkComment, reviseFindingsPath } from "./revise-sweep.js";
 import { defaultGhRun, type GhRunner } from "./roadmap/github-issues.js";
 import { getRoadmapSource, type RoadmapSource } from "./roadmap/index.js";
 import { parseShipDecisionEffect } from "./ship/decision.js";
 import { commitStrayBookkeeping, getShipTarget, isAutonomousRemotePush, isShipTargetName, runShipBookkeeping as runShipBookkeepingDefault, SHIP_TARGET_NAMES } from "./ship/index.js";
+import { extractPrUrl } from "./ship/pull-request.js";
 import { runStep as runStepDefault } from "./step-runner.js";
 import { A, createStepRenderer, fmtElapsed, LiveStatus, StatusBar, TUI_ENABLED } from "./tui.js";
 import { type CycleResult, type CycleStatus, type Flags, type ParkSignal, type PipelineOpts, RECOVERABLE_ERRORS, type ShipTargetName, type Step, type StepLog, type StepResult } from "./types.js";
@@ -119,6 +128,19 @@ export interface PipelineDeps {
 	dispatchStepEffects?: typeof dispatchStepEffectsDefault;
 	/** Override the configured main-checkout confinement exception. */
 	allowDirtyMain?: boolean;
+	appendDecisions?: typeof appendDecisionsDefault;
+	appendReviewEscalation?: typeof appendReviewEscalationDefault;
+	lookupReviewEscalation?: typeof lookupReviewEscalationDefault;
+}
+
+// Test seam (#304): the pipeline flow tests stub provider availability so they do
+// not depend on the codex/grok driver binaries being installed on the runner.
+// Production always uses the real binary-presence check below; only pipeline.test.ts
+// sets this (in its `before`, restored in `after`). Without it, on a claude-only host
+// (e.g. CI) the reviewer-not-author selection fails closed and every flow test parks.
+let providerAvailableForTests: ((candidate: DriverIdentity) => boolean) | undefined;
+export function __setProviderAvailableForTests(fn: ((candidate: DriverIdentity) => boolean) | undefined): void {
+	providerAvailableForTests = fn;
 }
 
 export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, flags: Flags, deps: PipelineDeps = {}): Promise<CycleResult> {
@@ -134,13 +156,19 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	const writeEffectsManifest = deps.writeEffectsManifest ?? writeEffectsManifestDefault;
 	const dispatchStepEffects = deps.dispatchStepEffects ?? dispatchStepEffectsDefault;
 	const allowDirtyMain = deps.allowDirtyMain ?? CONFINEMENT_CONFIG.allowDirtyMain;
+	const appendDecisions = deps.appendDecisions ?? appendDecisionsDefault;
+	const appendReviewEscalation = deps.appendReviewEscalation ?? appendReviewEscalationDefault;
+	const lookupReviewEscalation = deps.lookupReviewEscalation ?? lookupReviewEscalationDefault;
 	// The cycle's dollar ceiling. A turn-exhaustion retry (issue #33) is funded up to the
 	// step's configured budget again, so the budget guard skips a retry we can't fully fund.
 	// A non-finite value (unset / unparseable --budget) disables the dollar gate.
 	const maxBudget = Number.parseFloat(flags.budget);
 	let cost = 0;
-	let profile = "standard";
+	// A pinned --profile (issue #247) takes control of the whole run; otherwise default to
+	// "standard" and let quick-scope detection downgrade to "quick" below.
+	let profile = flags.profile ?? "standard";
 	const steps: StepLog[] = [];
+	const assignment = createDriverAssignmentState(opts.cycle);
 	const pipelineT0 = Date.now();
 	const runIdBase = opts.logPath ? basename(opts.logPath, extname(opts.logPath)) : `cycle-${opts.cycle}`;
 	let logLabel = `cycle ${opts.cycle}`;
@@ -188,8 +216,27 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			maxTurnsOverride,
 			retriedMaxTurns = false,
 			ownWorktree,
-		}: { attempt?: number; commitLabel?: string; effects?: StepEffects; maxTurnsOverride?: number; retriedMaxTurns?: boolean; ownWorktree?: string } = {},
+			executionOverride,
+			parkSignalOverride,
+		}: {
+			attempt?: number;
+			commitLabel?: string;
+			effects?: StepEffects;
+			maxTurnsOverride?: number;
+			retriedMaxTurns?: boolean;
+			ownWorktree?: string;
+			executionOverride?: { provider: import("./types.js").ProviderName; model?: string; codexModel?: string };
+			parkSignalOverride?: ParkSignal;
+		} = {},
 	): Promise<StepResult> {
+		const settings = resolveStepSettings(CONFIG, profile, name);
+		const realized = executionOverride ?? settings;
+		const stepLog = (entry: Omit<StepLog, "name" | "provider" | "model">): StepLog => ({
+			name,
+			provider: realized.provider,
+			model: realized.provider === "codex" ? (realized.codexModel ?? "default") : (realized.model ?? "default"),
+			...entry,
+		});
 		// Short-circuit before runStep when SIGINT fired between steps; also covers
 		// --dry-run so Ctrl-C during a dry run bails promptly.
 		if (opts.signal?.aborted) {
@@ -202,13 +249,13 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				workerStatus: opts.workerStatus,
 			});
 			emitAbort({ type: "done", ok: false, subtype: "error_abort", cost: 0, turns: 0, elapsed: 0 });
-			steps.push({ name, model: MODEL_PROFILES[profile]?.[name] ?? "default", cost: 0, turns: 0, ok: false, ...(attempt > 1 ? { attempt } : {}) });
+			steps.push(stepLog({ cost: 0, turns: 0, ok: false, ...(attempt > 1 ? { attempt } : {}) }));
 			return { ok: false, subtype: "error_abort", text: "aborted", fullText: "", cost: 0, turns: 0 };
 		}
 
 		if (opts.dryRun) {
 			log(`[dry-run] ${name}: "${prompt.slice(0, 60)}" in ${cwd}`);
-			steps.push({ name, model: MODEL_PROFILES[profile]?.[name] ?? "default", cost: 0, turns: 0, ok: true, ...(attempt > 1 ? { attempt } : {}) });
+			steps.push(stepLog({ cost: 0, turns: 0, ok: true, ...(attempt > 1 ? { attempt } : {}) }));
 			return { ok: true, subtype: "success", text: `[dry-run] ${name}`, fullText: `[dry-run] ${name}`, cost: 0, turns: 0 };
 		}
 
@@ -248,7 +295,8 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				profile,
 				trace: flags.trace,
 				itemId: itemId ?? undefined,
-				parkSignal,
+				parkSignal: parkSignalOverride ?? parkSignal,
+				...(executionOverride ? { executionOverride } : {}),
 				...(maxTurnsOverride !== undefined ? { maxTurnsOverride } : {}),
 				...(opts.signal ? { signal: opts.signal } : {}),
 				...(mainCheckoutObserver ? { mainCheckoutObserver } : {}),
@@ -343,24 +391,49 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			if (reverted.length > 0) log(`reverted plan-polish edits: ${reverted.join(", ")}`);
 		}
 
+		if (result.decisions?.length) {
+			const prUrl = name === "ship" || name === "shipwreck" ? extractPrUrl(result) : undefined;
+			const source = prUrl ?? (itemId ? (ROADMAP_SOURCE === "github-issues" && ROADMAP_GITHUB.ghRepo ? `https://github.com/${ROADMAP_GITHUB.ghRepo}/issues/${itemId.replace(/^\D+/, "")}` : itemId) : `unclaimed:${runIdBase}`);
+			try {
+				await appendDecisions(mainRepo, {
+					...(itemId ? { itemId } : {}),
+					runId: runIdBase,
+					step: name,
+					attempt,
+					decisions: result.decisions.map((decision, occurrence) => ({ decision, occurrence })),
+					source,
+				});
+			} catch (error) {
+				log(`⚠ decisions: ${error instanceof Error ? error.message : String(error)}`);
+			}
+			for (const decision of result.decisions) {
+				try {
+					await opts.notifyDecision?.({ itemId, decision, step: name, source, logPath: opts.logPath ?? LOG_PATH });
+				} catch (error) {
+					log(`⚠ decision notification: ${error instanceof Error ? error.message : String(error)}`);
+				}
+			}
+		}
+
 		const filesChanged = filesChangedSince(cwd, preSha);
 
-		steps.push({
-			name,
-			model: MODEL_PROFILES[profile]?.[name] ?? "default",
-			cost: result.cost,
-			turns: result.turns,
-			ok: result.ok,
-			...(!result.ok ? { subtype: result.subtype } : {}),
-			...(result.tokens ? { tokens: result.tokens } : {}),
-			...(result.costEstimated ? { costEstimated: true } : {}),
-			...(attempt > 1 ? { attempt } : {}),
-			...(retriedMaxTurns ? { retriedMaxTurns: true } : {}),
-			...(result.toolCounts ? { toolCounts: result.toolCounts } : {}),
-			...(result.outputTail ? { outputTail: result.outputTail } : {}),
-			...(filesChanged.length > 0 ? { filesChanged } : {}),
-			...(result.stalledAsk ? { stalledAsk: true } : {}),
-		});
+		steps.push(
+			stepLog({
+				cost: result.cost,
+				turns: result.turns,
+				ok: result.ok,
+				...(!result.ok ? { subtype: result.subtype } : {}),
+				...(result.tokens ? { tokens: result.tokens } : {}),
+				...(result.costEstimated ? { costEstimated: true } : {}),
+				...(attempt > 1 ? { attempt } : {}),
+				...(retriedMaxTurns ? { retriedMaxTurns: true } : {}),
+				...(result.toolCounts ? { toolCounts: result.toolCounts } : {}),
+				...(result.outputTail ? { outputTail: result.outputTail } : {}),
+				...(filesChanged.length > 0 ? { filesChanged } : {}),
+				...(result.stalledAsk ? { stalledAsk: true } : {}),
+				...(result.decisions?.length ? { decisions: result.decisions } : {}),
+			}),
+		);
 		if (opts.workerStatus) opts.workerStatus.cost += result.cost;
 		return result;
 	}
@@ -499,21 +572,25 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	if (opts.workerStatus) opts.workerStatus.itemId = itemId!;
 
 	// ── Detect quick mode ──
+	// A pinned --profile (issue #247) suppresses the automatic downgrade: the operator has taken
+	// explicit control of the profile, so keep the step set and backend identical to the pin.
 
-	const quickItem = !opts.dryRun && itemId ? await roadmap.getItem(itemId).catch(() => null) : null;
-	if (flowPolicy.isQuickScope({ item: quickItem, summaryText: pickText })) {
-		profile = "quick";
-		log("scope S/XS or bug — quick mode (Sonnet, skip plan+shakedown-plan)");
-		startFrom ??= "implement";
+	if (!flags.profile) {
+		const quickItem = !opts.dryRun && itemId ? await roadmap.getItem(itemId).catch(() => null) : null;
+		if (flowPolicy.isQuickScope({ item: quickItem, summaryText: pickText })) {
+			profile = "quick";
+			log("scope S/XS or bug — quick mode (Sonnet, skip plan+shakedown-plan)");
+			startFrom ??= "implement";
+		}
 	}
 	startFrom ??= "plan";
 
 	const shouldRun = (s: Step): boolean => stepIndex(startFrom!) <= stepIndex(s);
 
-	function parkExit(): CycleResult | null {
-		if (!parkSignal.parked) return null;
-		if (worktree) checkpoint(worktree, "rate-limit park");
-		log(`⏸ parked (${parkSignal.limitType})`);
+	function parkExit(reason?: string): CycleResult | null {
+		if (!parkSignal.parked && !reason) return null;
+		if (worktree) checkpoint(worktree, reason ? "review-loop park" : "rate-limit park");
+		log(`⏸ parked (${reason ?? parkSignal.limitType})`);
 		return finish({ itemId, completed: false, cost, error: "parked" });
 	}
 
@@ -551,6 +628,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		retryOnEditLoop?: boolean;
 		/** Turn-limit log noun; defaults to `name` (shakedown-code logs "shakedown"). */
 		turnLimitNoun?: string;
+		executionOverride?: DriverIdentity;
 	}): Promise<StepAttempt> {
 		const maxAttempts = cfg.maxAttempts ?? 2;
 		const noun = cfg.turnLimitNoun ?? cfg.name;
@@ -570,6 +648,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				...(cfg.commitLabel ? { commitLabel: cfg.commitLabel(attempt) } : {}),
 				...(cfg.effects ? { effects: cfg.effects(attempt) } : {}),
 				...(cfg.maxTurnsOverride !== undefined ? { maxTurnsOverride: cfg.maxTurnsOverride } : {}),
+				...(cfg.executionOverride ? { executionOverride: cfg.executionOverride } : {}),
 			});
 			cost += result.cost;
 
@@ -626,15 +705,68 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	}
 
 	// ── Plan + Shakedown-plan ──
+	const driverCandidates = (name: Step): DriverIdentity[] =>
+		resolveDriverCandidates(CONFIG, profile, name).map((candidate) =>
+			candidate.provider === "codex" ? { provider: "codex", ...(candidate.codexModel ? { codexModel: candidate.codexModel } : {}) } : { provider: candidate.provider, ...(candidate.model ? { model: candidate.model } : {}) },
+		);
+	const available: (candidate: DriverIdentity) => boolean =
+		providerAvailableForTests ??
+		((candidate: DriverIdentity): boolean => {
+			if (candidate.provider === "claude") return true;
+			const executable = resolveProviderBin(CONFIG, candidate.provider, candidate.provider);
+			const paths =
+				isAbsolute(executable) || executable.includes("/")
+					? [executable]
+					: (process.env.PATH ?? "")
+							.split(delimiter)
+							.filter(Boolean)
+							.map((directory) => join(directory, executable));
+			return paths.some((path) => {
+				try {
+					accessSync(path, constants.X_OK);
+					return true;
+				} catch {
+					return false;
+				}
+			});
+		});
+
+	// Reconstruct an already-produced artifact's author when its step isn't running
+	// this process (resume, or plan-exists-on-disk skip). Attribution comes from the
+	// structured step records in LOG_PATH (pelaggio-log.jsonl), never opts.logPath —
+	// that is the human verbose/parallel transcript and holds no JSON step records, so
+	// parsing it returns undefined and the assignment fails closed into a false park
+	// (#245). When the log genuinely lacks attribution (legacy log, out-of-band plan),
+	// fall back to the statically-resolved author and warn that reviewer separation is
+	// then best-effort, not proven — rather than falsely claiming a guarantee or parking.
+	const reconstructAuthor = (artifact: "plan" | "implementation", step: "plan" | "implement"): void => {
+		const logged = findLoggedArtifactAuthor(itemId!, step, LOG_PATH);
+		if (logged) {
+			recordArtifactAuthor(assignment, artifact, logged);
+			return;
+		}
+		const fallback = resolveStaticAuthor(driverCandidates(step), available);
+		if (!fallback) return;
+		log(`⚠ ${artifact} attribution absent from log; using statically-resolved author (${fallback.provider}) — reviewer separation is best-effort, not proven (#245)`);
+		recordArtifactAuthor(assignment, artifact, fallback);
+	};
 
 	let verdict: "APPROVE" | "REVISE" | "RETHINK" = "APPROVE";
 	let shakedownPlanText = "";
+
+	if (!assignment.authors.plan && shouldRun("shakedown-plan") && !shouldRun("plan")) {
+		reconstructAuthor("plan", "plan");
+	}
 
 	if (shouldRun("plan")) {
 		const existingPlan = roadmap.resolvePlanPath({ id: itemId!, worktree: worktree! });
 		if (!opts.dryRun && existsSync(existingPlan)) {
 			log(`plan exists at ${existingPlan} — skipping plan generation`);
+			reconstructAuthor("plan", "plan");
 		} else {
+			const selected = selectAuthor(assignment, driverCandidates("plan"), available);
+			if (!selected.ok) return finish({ itemId, completed: false, cost, error: `plan assignment failed: ${selected.reason}` });
+			const planAuthor = selected.drivers[0];
 			// Inject the item's requirements into the plan prompt in the harness (#103): a sandboxed
 			// model (Codex) can't run `roadmap get` / `gh issue view` (no network, and the roadmap CLI
 			// dies on tsx-IPC in the sandbox), so it would otherwise plan blind. The harness has an
@@ -647,14 +779,20 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				logAttempt: (attempt) => log(attempt === 1 ? "planning..." : "continuing plan (attempt 2)..."),
 				refusedError: "plan refused (model declined the task)",
 				effects: () => [{ kind: "checkpoint", label: "plan" }, { kind: "plan.publish" }],
+				executionOverride: planAuthor,
 			});
 			if (outcome.kind === "terminal") return outcome.cycleResult;
+			recordArtifactAuthor(assignment, "plan", planAuthor);
 		}
 		const planPath = await roadmap.getItemPlan({ worktree: worktree! });
 		if (planPath) log(`plan: file://${planPath}`);
 	}
 
 	if (shouldRun("shakedown-plan")) {
+		const planAuthor = assignment.authors.plan;
+		if (!planAuthor) return finish({ itemId, completed: false, cost, error: "shakedown-plan assignment failed: plan author attribution is unavailable" });
+		const selected = selectReviewers(assignment, driverCandidates("shakedown-plan"), planAuthor, 1, available);
+		if (!selected.ok) return finish({ itemId, completed: false, cost, error: `shakedown-plan assignment failed: ${selected.reason}` });
 		const shakedownPlanArgs = await buildStepArgs(roadmap, itemId!, "plan-review");
 		const outcome = await runStepWithRetry({
 			name: "shakedown-plan",
@@ -662,6 +800,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			buildPrompt: () => expandSkill("shakedown", shakedownPlanArgs),
 			logAttempt: (attempt) => log(attempt === 1 ? "shakedown (plan)..." : "continuing shakedown-plan (attempt 2)..."),
 			refusedError: "shakedown-plan refused (model declined the review)",
+			executionOverride: selected.drivers[0],
 		});
 		if (outcome.kind === "terminal") return outcome.cycleResult;
 
@@ -675,8 +814,14 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	}
 
 	// ── Implement ──
+	if (!assignment.authors.implementation && shouldRun("shakedown-code") && !shouldRun("implement")) {
+		reconstructAuthor("implementation", "implement");
+	}
 
 	if (shouldRun("implement")) {
+		const selected = selectAuthor(assignment, driverCandidates("implement"), available);
+		if (!selected.ok) return finish({ itemId, completed: false, cost, error: `implement assignment failed: ${selected.reason}` });
+		const implementationAuthor = selected.drivers[0];
 		const parked = parkExit();
 		if (parked) return parked;
 		const planPath = await roadmap.getItemPlan({ worktree: worktree! });
@@ -802,51 +947,134 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 						].join("\n")
 					: continuePrompt;
 			},
+			executionOverride: implementationAuthor,
 		});
 		if (outcome.kind === "terminal") return outcome.cycleResult;
+		recordArtifactAuthor(assignment, "implementation", implementationAuthor);
 	}
 
 	// ── Shakedown-code ──
+	let reviewRecordMarkdown: string | undefined;
 
 	if (shouldRun("shakedown-code")) {
+		const implementationAuthor = assignment.authors.implementation;
+		if (!implementationAuthor) return finish({ itemId, completed: false, cost, error: "shakedown-code assignment failed: implementation author attribution is unavailable" });
 		const planPath = await roadmap.getItemPlan({ worktree: worktree! });
 		// The retry (attempt 2) points at the plan file only — NOT "the roadmap entry", which a
 		// sandboxed provider can't fetch (#103/#115); the plan already carries the scope.
 		const shakedownPlanRef = planPath ? `Read the plan at \`${planPath}\` to understand the scope.` : `Find the plan in \`${resolve(REPO, "docs", "plans")}/\`.`;
 		const shakedownCodeArgs = await buildStepArgs(roadmap, itemId!, "code-review");
 
-		const outcome = await runStepWithRetry({
-			name: "shakedown-code",
-			stepBudget: resolveStepSettings(CONFIG, profile, "shakedown-code").budget,
-			commitLabel: () => "shakedown checkpoint",
-			refusedError: "shakedown-code refused (model declined the review)",
-			turnLimitNoun: "shakedown",
-			logAttempt: (attempt) => log(attempt === 1 ? "shakedown (code)..." : "continuing shakedown (attempt 2)..."),
-			buildPrompt: (attempt) =>
-				attempt === 1
-					? expandSkill("shakedown", shakedownCodeArgs)
-					: [
-							"The previous shakedown session ran out of turns. Work has been committed to disk.",
-							"",
-							"## Context",
-							shakedownPlanRef,
-							"",
-							"## Instructions",
-							"1. Run the verification commands from `.claude/skills/_rubric.md`'s Verification section to see the current state.",
-							"2. Check what's already been fixed vs. what remains.",
-							"3. Focus on fix-now items only (type errors, test failures, lint errors, bugs).",
-							'4. Skip near-term items (missing tests, i18n gaps, refactoring) — list each as a `deferred-item: {"title": "...", "scope": "..."}` marker line; the harness creates them (do not run `roadmap create-item`).',
-							"5. Re-run the verification commands before finishing.",
-						].join("\n"),
-		});
-		if (outcome.kind === "terminal") return outcome.cycleResult;
+		let shakedownResult: StepResult;
+		if (REVIEW_CONFIG.authoring.enabled) {
+			const reviewedSha = getHeadSha(worktree!);
+			if (!reviewedSha) return parkExit("adversarial review could not bind current HEAD")!;
+			const existingEscalation = lookupReviewEscalation(mainRepo, itemId!, reviewedSha);
+			if (existingEscalation.state === "active" || existingEscalation.state === "resolved-block" || existingEscalation.state === "invalid") return parkExit(`adversarial review escalation ${existingEscalation.state}`)!;
+			if (existingEscalation.state === "resolved-proceed" && existingEscalation.escalation.hasSafetyBlocker) return parkExit("adversarial review safety blocker")!;
+			const policy = resolveAuthoringReviewConfig(CONFIG, profile);
+			const authorSettings = implementationAuthor;
+			// Hand every reviewer seat the actual branch diff so a single-turn seat that never runs
+			// `git diff` (codex) still reviews real code instead of parroting the skill example.
+			// Recomputed per pass inside the `review` prompt: the author revision seat advances HEAD
+			// between passes, so a once-computed block would show pass 2+ reviewers pre-revision code.
+			const loop =
+				existingEscalation.state === "resolved-proceed"
+					? undefined
+					: await runReviewLoop({
+							policy,
+							author: { provider: authorSettings.provider, ...(authorSettings.provider === "codex" ? (authorSettings.codexModel ? { model: authorSettings.codexModel } : {}) : authorSettings.model ? { model: authorSettings.model } : {}) },
+							parkSignal,
+							runSeat: ({ role, slot, pass, prompt, parkSignal: child }) =>
+								step(role === "reviewer" ? "pr-review" : role === "judge" ? "pr-verify" : "shakedown-code", prompt, worktree!, {
+									attempt: pass,
+									parkSignalOverride: child,
+									executionOverride: { provider: slot.provider, ...(slot.provider === "codex" ? (slot.codexModel ? { codexModel: slot.codexModel } : {}) : slot.model ? { model: slot.model } : {}) },
+									...(role === "author" ? { commitLabel: "adversarial review revision" } : {}),
+								}),
+							prompts: {
+								review: () => `${expandSkill("pr-review", "--authoring-loop")}\n\n${buildReviewDiffBlock(worktree!)}`,
+								judge: (candidates) => `${expandSkill("pr-verify", "--authoring-loop-judge")}\n\nTRUSTED_CANDIDATE_DATA\n${JSON.stringify(candidates)}\nEND_TRUSTED_CANDIDATE_DATA`,
+								revise: (survivors) => `${expandSkill("shakedown", shakedownCodeArgs)}\n\nThe Judge retained these blockers:\n${JSON.stringify(survivors)}`,
+							},
+						});
+			if (!loop) {
+				reviewRecordMarkdown = `## Adversarial review escalation\n\nDecision **${existingEscalation.id}** was resolved **proceed** by ${existingEscalation.resolution.actor}.\n\nRationale: ${existingEscalation.resolution.rationale}\n\nReviewed commit: \`${reviewedSha}\`. Evidence fingerprint: \`${existingEscalation.escalation.evidenceFingerprint}\`.`;
+				shakedownResult = { ok: true, subtype: "success", text: "resolved-proceed", fullText: "resolved-proceed", cost: 0, turns: 0 };
+			} else {
+				cost += loop.cost;
+				const record: ReviewRecord = { schemaVersion: 1, runId: `${runIdBase}-${itemId}`, itemId: itemId!, createdAt: new Date().toISOString(), blockingBar: "must-fix", result: loop };
+				const recordPath = writeReviewRecord(worktree!, record);
+				reviewRecordMarkdown = renderReviewRecord(record);
+				log(`review record → ${recordPath}`);
+				if (loop.disagreement) {
+					const escalation = {
+						kind: "review-escalation" as const,
+						itemId: itemId!,
+						step: "shakedown-code" as const,
+						reviewedSha,
+						evidenceFingerprint: loop.disagreement.evidenceFingerprint,
+						reviewRecordSource: `.dev/review-records/${record.runId}.json`,
+						hasSafetyBlocker: loop.disagreement.hasSafetyBlocker,
+						drivers: loop.disagreement.drivers.map((driver) => ({ ...driver, identity: { ...driver.identity, role: "reviewer" as const } })),
+					};
+					const written = await appendReviewEscalation(mainRepo, escalation);
+					if (written.status !== "failed")
+						await opts.notifyDecision?.({
+							itemId,
+							decision: { fork: `Cross-model review split (${written.ids[0]})`, chosen: "human adjudication required", alternatives: "proceed or block" },
+							step: "shakedown-code",
+							source: escalation.reviewRecordSource,
+							logPath: opts.logPath ?? LOG_PATH,
+							escalation: { ...escalation, id: written.ids[0] },
+						});
+					const state = lookupReviewEscalation(mainRepo, itemId!, reviewedSha);
+					if (written.status === "failed" || state.state !== "resolved-proceed" || escalation.hasSafetyBlocker) return parkExit(`adversarial review escalation ${written.status === "failed" ? "write-failed" : state.state}`)!;
+				}
+				// A reviewer-split `dissent` already escalated + parked in the `loop.disagreement` block above.
+				// A Judge-ruled judgment-dissent (no disagreement, non-safety) keeps its pre-#244 posture:
+				// park only for direct-push; in PR mode ship with the dissent recorded (the PR is the veto).
+				if (loop.outcome === "budget" || loop.outcome === "hard-block" || (loop.outcome === "dissent" && opts.shipTarget.name === "direct-push")) return parkExit(`adversarial review ${loop.outcome}`)!;
+				shakedownResult = { ok: true, subtype: "success", text: loop.outcome, fullText: loop.outcome, cost: 0, turns: 0 };
+			}
+		} else {
+			const selected = selectReviewers(assignment, driverCandidates("shakedown-code"), implementationAuthor, 1, available);
+			if (!selected.ok) return finish({ itemId, completed: false, cost, error: `shakedown-code assignment failed: ${selected.reason}` });
+			const outcome = await runStepWithRetry({
+				name: "shakedown-code",
+				stepBudget: resolveStepSettings(CONFIG, profile, "shakedown-code").budget,
+				commitLabel: () => "shakedown checkpoint",
+				refusedError: "shakedown-code refused (model declined the review)",
+				turnLimitNoun: "shakedown",
+				executionOverride: selected.drivers[0],
+				logAttempt: (attempt) => log(attempt === 1 ? "shakedown (code)..." : "continuing shakedown (attempt 2)..."),
+				buildPrompt: (attempt) =>
+					attempt === 1
+						? expandSkill("shakedown", shakedownCodeArgs)
+						: [
+								"The previous shakedown session ran out of turns. Work has been committed to disk.",
+								"",
+								"## Context",
+								shakedownPlanRef,
+								"",
+								"## Instructions",
+								"1. Run the verification commands from `.claude/skills/_rubric.md`'s Verification section to see the current state.",
+								"2. Check what's already been fixed vs. what remains.",
+								"3. Focus on fix-now items only (type errors, test failures, lint errors, bugs).",
+								'4. Skip near-term items (missing tests, i18n gaps, refactoring) — list each as a `deferred-item: {"title": "...", "scope": "..."}` marker line; the harness creates them (do not run `roadmap create-item`).',
+								"5. Re-run the verification commands before finishing.",
+							].join("\n"),
+			});
+			if (outcome.kind === "terminal") return outcome.cycleResult;
+			shakedownResult = outcome.result;
+		}
 
 		// Harness owns deferred-item creation (#115): under pelaggio the model lists follow-ups as
 		// `deferred-item: {json}` markers instead of running `roadmap create-item` (a sandboxed
 		// provider can't). Create them in-process, best-effort — a failure logs and continues (they're
 		// backlog niceties, not the cycle's deliverable). Skipped in dry-run (no real backlog writes).
 		if (!opts.dryRun) {
-			for (const d of parseDeferredItems(outcome.result.fullText)) {
+			for (const d of parseDeferredItems(shakedownResult.fullText)) {
 				try {
 					const created = await roadmap.createItem(d);
 					log(`deferred → ${created.id}: ${d.title}`);
@@ -908,7 +1136,14 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	}
 
 	const ship = await step("ship", shipPrompt, worktree!, {
-		...(target.name === "direct-push" ? {} : { effects: (result) => [parseShipDecisionEffect(result, { itemId: itemId!, target: target.name })] }),
+		...(target.name === "direct-push"
+			? {}
+			: {
+					effects: (result) => {
+						const decision = parseShipDecisionEffect(result, { itemId: itemId!, target: target.name, worktree: worktree! });
+						return [{ ...decision, ...(reviewRecordMarkdown ? { prBody: `${decision.prBody}\n\n${reviewRecordMarkdown}` } : {}) }];
+					},
+				}),
 	});
 	cost += ship.cost;
 
@@ -1119,6 +1354,14 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		}
 		const shipTarget = getShipTarget(shipTargetName);
 
+		// --profile pins the model/provider profile for the whole run (issue #247); it overrides
+		// the automatic quick-mode downgrade so the step set and backend stay identical across
+		// runs (e.g. a Claude-vs-Codex capability bake-off). Validate against known profiles.
+		if (flags.profile !== undefined && !Object.hasOwn(CONFIG.modelProfiles, flags.profile)) {
+			console.error(`invalid --profile ${JSON.stringify(flags.profile)}; valid: ${Object.keys(CONFIG.modelProfiles).join(", ")}`);
+			return { exitCode: 2, results };
+		}
+
 		// One-time startup banner (before the resume/normal branch → fires exactly once, covers
 		// both modes; mode- and dry-run-agnostic — a dry run is when an operator most wants to
 		// notice an autonomous-push target is configured).
@@ -1170,6 +1413,11 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			if (!notifyEnabled) return;
 			await notifyCycle(notifyCfg, result, logPath, { send, resolveTitle });
 		};
+		const decisionNotifier: PipelineOpts["notifyDecision"] = notifyEnabled
+			? async (input) => {
+					await notifyDecisionEvent(notifyCfg, input, { send });
+				}
+			: undefined;
 
 		// Resume mode
 		if (flags.resume) {
@@ -1212,6 +1460,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					dryRun: false,
 					workerStatus: status,
 					liveStatus,
+					...(decisionNotifier ? { notifyDecision: decisionNotifier } : {}),
 					...(noWorktree ? { noWorktree: true } : {}),
 					...(signal ? { signal } : {}),
 				},
@@ -1318,6 +1567,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						workerStatus: status,
 						logPath,
 						liveStatus,
+						...(decisionNotifier ? { notifyDecision: decisionNotifier } : {}),
 						...(noWorktree ? { noWorktree: true } : {}),
 						...(signal ? { signal } : {}),
 					},
@@ -1481,6 +1731,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						dryRun: false,
 						workerStatus: status,
 						liveStatus,
+						...(decisionNotifier ? { notifyDecision: decisionNotifier } : {}),
 						...(signal ? { signal } : {}),
 					},
 					parkSignal,
@@ -1562,6 +1813,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						workerStatus: st,
 						logPath: resumeLogPath,
 						liveStatus,
+						...(decisionNotifier ? { notifyDecision: decisionNotifier } : {}),
 						...(noWorktree ? { noWorktree: true } : {}),
 						...(signal ? { signal } : {}),
 					},

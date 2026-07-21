@@ -1,0 +1,15 @@
+[
+	{
+		"policy": "codex-v1",
+		"method": "POST",
+		"path": "/v1/responses",
+		"models": ["gpt-5.2-codex"],
+		"modelField": "model",
+		"maxOutputTokensField": "max_output_tokens",
+		"inputUsageField": ["usage", "input_tokens"],
+		"outputUsageField": ["usage", "output_tokens"],
+		"authHeader": "authorization",
+		"authScheme": "Bearer",
+		"streaming": false
+	}
+]

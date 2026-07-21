@@ -35,7 +35,7 @@ claims:
     evidence_command: "grep -En 'ANTHROPIC_API_KEY|LINEAR_API_KEY|GH_TOKEN|CONTROL_PLANE_TOKEN' packages/pelaggio/scripts/pelaggio/step-runner.ts packages/pelaggio/scripts/pelaggio/codex-provider.ts packages/pelaggio/scripts/pelaggio/pipeline.ts # expect: none"
     test_file: "packages/pelaggio/scripts/pelaggio/__tests__/helpers.test.ts"
     failure_mode: "n/a — secrets are never read into these paths"
-    known_limits: "Verbose (--verbose) transcripts in .dev/*.log (gitignored) capture raw child stdout; a secret the model echoes could land there. See TC-014."
+    known_limits: "Verbose (--verbose) transcripts in .dev/*.log (gitignored) capture raw child stdout; as of TC-014 that sink is secret-scrubbed before write, but a novel credential format the scrubber does not recognize could still land there."
     standards: ["OWASP-LLM02", "ASVS-V6"]
     adr: null
     last_verified: "2026-07-07"
@@ -97,11 +97,11 @@ claims:
     claim: "Your code goes only where you point it: the model provider you configure, and the roadmap/notify integrations you enable. Nowhere else."
     status: default
     applies_to: ">=0.1.0"
-    mechanism: "Egress is limited to the configured provider (today: Anthropic), the roadmap adapter (GitHub/Linear), git push to your remote, and an optional notify webhook. See the egress matrix in pelaggio.trust.json."
+    mechanism: "Egress is limited to the configured model provider (Claude/Anthropic, Codex/OpenAI, or Grok/the operator-configured compatible endpoint), the roadmap adapter (GitHub/Linear), git push to your remote, and an optional notify webhook. Grok's managed profile and --disable-web-search restrict child/tool traffic, but its in-process model client remains provider egress. See the egress matrix in pelaggio.trust.json."
     evidence_command: "grep -rEn '@anthropic-ai/claude-agent-sdk|LinearClient|gh |git push origin|notify\\.url|fetch\\(' packages/pelaggio/scripts/pelaggio .github/workflows"
     test_file: "docs/trust/trust-claims.yml"
     failure_mode: "n/a"
-    known_limits: "Self-hosted keeps everything on your infra; the model provider's retention is governed by their policy."
+    known_limits: "Self-hosted means Pelaggio adds no hosted control plane, but the selected model provider still receives legitimate prompt and read-file/source context under its retention policy. For Grok 0.2.103, cli-chat-proxy.grok.com is observed and release-conformance-locked, not kernel- or L7-allowlisted; #279/#260 own constrained-broker routing. The unsandboxed Grok fallback is local-supervised only and makes no unattended containment claim."
     standards: ["GDPR-Art28", "OWASP-LLM02"]
     adr: null
     last_verified: "2026-07-07"
@@ -161,16 +161,16 @@ claims:
 
   - id: TC-014
     claim: "Child processes get only the secrets they need, and logs are scrubbed of anything that looks like a credential."
-    status: planned            # TODAY (S4): full process.env inherited; no redaction
-    applies_to: "planned"
-    mechanism: "INTENDED: minimal env allowlist to spawned children; redact known secret patterns from log streams."
-    evidence_command: "grep -rEn 'process\\.env|spawn\\(|execFileSync|outputTail|redact|scrub' packages/pelaggio/scripts/pelaggio"
-    test_file: "planned"
-    failure_mode: "redacted before write"
-    known_limits: "TODAY the full parent env is inherited by spawned children and no log stream is scrubbed."
+    status: guarantee
+    applies_to: ">=0.1.0"
+    mechanism: "Spawned driver subprocesses receive a deny-by-default allowlisted env (buildAgentEnv in secret-hygiene.ts) — PATH/HOME plus explicitly configured vars only, never the full parent process.env. Captured stderr and the verbose file transcript are secret-scrubbed before write (scrubSecrets/makeSecretScrubber): credential-shaped patterns (JWT, provider API keys, bearer/PAT tokens) and the literal values of secret-named env vars are replaced with [REDACTED]."
+    evidence_command: "node --import tsx --test packages/pelaggio/scripts/pelaggio/__tests__/secret-hygiene.test.ts"
+    test_file: "packages/pelaggio/scripts/pelaggio/__tests__/secret-hygiene.test.ts"
+    failure_mode: "deny-by-default env; redacted before write"
+    known_limits: "The env allowlist covers spawned driver subprocesses (codex today, grok via the ACP client); pelaggio's own git/gh helper commands still use the repo env by design. Scrubbing is pattern- and configured-value-based — a novel credential format that matches no pattern and is not a known secret env value could still reach a log. Not the full #176 out-of-process credential broker."
     standards: ["OWASP-LLM02", "12FACTOR-Config"]
     adr: "ADR-10"
-    last_verified: "2026-07-07"
+    last_verified: "2026-07-18"
 
   # ---- The defining threat, as a first-class claim --------------------------
   - id: TC-015
@@ -199,6 +199,20 @@ claims:
     standards: ["SLSA-BuildL3", "OWASP-LLM03"]
     adr: "ADR-6"
     last_verified: "2026-07-07"
+
+  - id: TC-017
+    claim: "Opt-in contained egress reaches only a reviewed provider route through a host-held, capped broker; the jail receives no provider key or upstream URL."
+    status: guarantee
+    applies_to: ">=0.1.0"
+    condition: "run-contained with --egress"
+    mechanism: "bubblewrap retains --unshare-all and mounts only a Unix HTTP socket. The host broker enforces an HTTPS origin, exact method/path/model policy, bounded buffered bodies, integer token/spend reservations, redirect refusal, response-header filtering, and one-shot scope termination on hard-cap or accounting failure."
+    evidence_command: "node --import tsx --test --test-reporter=dot packages/pelaggio/scripts/pelaggio/__tests__/egress-broker.test.ts packages/pelaggio/scripts/pelaggio/__tests__/contained-execution.test.ts"
+    test_file: "packages/pelaggio/scripts/pelaggio/__tests__/{egress-broker,contained-execution,run-contained-cli}.test.ts"
+    failure_mode: "deny the request, or seal the broker and kill the contained scope when accounting cannot remain safe"
+    known_limits: "The provider is an allowed sink, so prompt/body exfiltration to it remains possible. Codex key mode is the only advertised production policy; transparent auth is conformance-only pending a verified official transport seam."
+    standards: ["OWASP-LLM06", "ASVS-V4"]
+    adr: null
+    last_verified: "2026-07-19"
 
 manifest:
   defaults:
@@ -253,6 +267,20 @@ manifest:
       opt_out: "configure a different model provider when one is supported"
       role: sub_processor
       evidence: [TC-006]
+    - destination: openai
+      data_categories: [prompts, request_bodies, provider_usage]
+      required: false
+      retention: "governed by the provider's policy"
+      opt_out: "omit the run-contained egress selection"
+      role: sub_processor
+      evidence: [TC-006, TC-017]
+    - destination: cli-chat-proxy.grok.com
+      data_categories: [prompts, source_context, read_file_context]
+      required: false
+      retention: "governed by the provider's policy"
+      opt_out: "configure a different model provider for the step"
+      role: sub_processor
+      evidence: [TC-006, TC-014]
     - destination: github
       data_categories: [issues, pull_requests, plan_bodies, diffs, comments]
       required: false

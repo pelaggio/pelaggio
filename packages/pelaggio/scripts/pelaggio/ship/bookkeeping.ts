@@ -48,7 +48,7 @@ export interface ShipBookkeepingDeps {
 	status?: StatusFn;
 	lock?: LockFn;
 	/** Repair MAIN's `node_modules` symlinks after worktree removal. Injectable for tests. */
-	repairMain?: (mainRepo: string) => void;
+	repairMain?: (mainRepo: string) => void | Promise<void>;
 	/**
 	 * Optional post-merge verification of MAIN_REPO, re-run only after a push
 	 * rejection forces `git pull` to integrate diverged origin commits. Returns
@@ -217,7 +217,7 @@ export async function runShipBookkeeping(ctx: ShipBookkeepingCtx, deps: ShipBook
 	const { roadmap, log } = deps;
 	const exec = deps.exec ?? defaultExec;
 	const status = deps.status ?? defaultStatus;
-	const repairMain = deps.repairMain ?? repairMainNodeModules;
+	const repairMain = deps.repairMain ?? ((repo: string) => repairMainNodeModules(repo).then(() => undefined));
 	const inWorktree = worktree !== mainRepo;
 	const warnings: string[] = [];
 	let markedDone = false;
@@ -263,7 +263,7 @@ export async function runShipBookkeeping(ctx: ShipBookkeepingCtx, deps: ShipBook
 	let worktreeRemoved = false;
 	if (inWorktree) {
 		try {
-			repairMain(mainRepo);
+			await repairMain(mainRepo);
 		} catch (e) {
 			log(`repair-main skipped (${short(e)})`);
 		}

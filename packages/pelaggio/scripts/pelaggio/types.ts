@@ -11,6 +11,37 @@ export interface TokenUsage {
 	cacheRead: number;
 }
 
+export interface Decision {
+	fork: string;
+	chosen?: string;
+	alternatives?: string;
+}
+
+export interface ReviewEscalationDriver {
+	identity: { role: "reviewer"; seatId: string; provider: ProviderName; model?: string; sessionId: string };
+	verdict: "pass" | "block";
+	rationale: string;
+}
+
+export interface ReviewEscalation {
+	kind: "review-escalation";
+	itemId: string;
+	step: "shakedown-code";
+	reviewedSha: string;
+	evidenceFingerprint: string;
+	reviewRecordSource: string;
+	hasSafetyBlocker: boolean;
+	drivers: ReviewEscalationDriver[];
+}
+
+export interface ReviewResolution {
+	disposition: "proceed" | "block";
+	actor: string;
+	rationale: string;
+	timestamp: string;
+	adr?: string;
+}
+
 export interface StepResult {
 	ok: boolean;
 	subtype: string;
@@ -26,10 +57,13 @@ export interface StepResult {
 	outputTail?: string;
 	/** Observe-only stall heuristic: the final message ended in a question / offer-to-continue (no `BLOCKED:` sentinel). Never fails a step. */
 	stalledAsk?: boolean;
+	decisions?: Decision[];
 }
 
 export interface StepLog {
 	name: string;
+	/** Realized execution backend. Optional only for legacy log compatibility. */
+	provider?: ProviderName;
 	model: string;
 	cost: number;
 	turns: number;
@@ -52,6 +86,7 @@ export interface StepLog {
 	filesChanged?: string[];
 	/** Observe-only stall heuristic — the step ended in a question / offer-to-continue. Telemetry only; never fails the step. */
 	stalledAsk?: boolean;
+	decisions?: Decision[];
 }
 
 // ── Log entries (read from .dev/pelaggio-log.jsonl) ───────────────────
@@ -190,7 +225,7 @@ export const RECOVERABLE_ERRORS = ["plan needs rethink", "parked", "transient sd
  *  #80 widens this union (and the `PROVIDER_NAMES` validation array in `config.ts`)
  *  to register a second provider. The runtime names array lives in `config.ts`,
  *  mirroring `ShipTargetName` / `SHIP_TARGET_NAMES`. */
-export type ProviderName = "claude" | "codex";
+export type ProviderName = "claude" | "codex" | "grok";
 
 // ── Ship targets ───────────────────────────────────────────────────────
 
@@ -240,6 +275,8 @@ export interface PipelineOpts {
 	signal?: AbortSignal;
 	/** CI/single-shot mode: use REPO as worktree, skip sibling-path creation. */
 	noWorktree?: boolean;
+	/** Independently gated, fail-soft per-decision delivery. */
+	notifyDecision?: (input: { itemId: string | null; decision: Decision; step: Step; source: string; logPath: string; escalation?: ReviewEscalation & { id: string } }) => Promise<void>;
 }
 
 // ── Shared mutable state ───────────────────────────────────────────────
@@ -270,6 +307,9 @@ export interface Flags {
 	 *  letting `park.max-wait` config take effect. Precedence: CLI flag > config > "6h". */
 	"max-wait"?: string;
 	target?: string;
+	/** Pin the model/provider profile for the whole run (issue #247), overriding the automatic
+	 *  quick-mode downgrade. Validated against CONFIG.modelProfiles in runOrchestrator. */
+	profile?: string;
 	"dry-run": boolean;
 	"no-worktree": boolean;
 }
@@ -286,9 +326,11 @@ export type StepEvent =
 	| { type: "tool_error"; name: string; brief: string; error: string }
 	| { type: "text"; content: string }
 	| { type: "edit_loop"; file: string; count: number }
+	| { type: "sdk_warning"; message: string }
 	| { type: "sdk_error"; message: string }
 	| { type: "blocked"; reason: string }
 	| { type: "stalled_ask"; tail: string }
+	| { type: "decision"; decision: Decision }
 	| { type: "done"; ok: boolean; subtype: string; cost: number; turns: number; elapsed: number };
 
 export type StepEmit = (event: StepEvent) => void;

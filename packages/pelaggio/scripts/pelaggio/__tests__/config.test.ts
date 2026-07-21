@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { DEFAULTS, loadConfig, resolveRepo, resolveStepSettings } from "../config.js";
+import { DEFAULTS, loadConfig, resolveDriverCandidates, resolveProviderBin, resolveRepo, resolveStepSettings } from "../config.js";
 
 function tmpRepo(): string {
 	return mkdtempSync(join(tmpdir(), "pelaggio-config-test-"));
@@ -375,6 +375,28 @@ describe("resolveStepSettings — precedence & fallback", () => {
 	});
 });
 
+describe("provider pools", () => {
+	it("parses ordered policy-step pools while scalar resolution remains compatible", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "models:\n  profiles:\n    mixed:\n      providers:\n        plan: [claude, codex, grok]\n");
+		const cfg = loadConfig({ repo, configPath: path });
+		assert.deepEqual(cfg.profileProviders.mixed?.plan, ["claude", "codex", "grok"]);
+		assert.equal(resolveStepSettings(cfg, "mixed", "plan").provider, "claude");
+		assert.deepEqual(
+			resolveDriverCandidates(cfg, "mixed", "plan").map((candidate) => candidate.provider),
+			["claude", "codex", "grok"],
+		);
+	});
+
+	it("rejects empty, duplicate, unknown, and unsupported pools", () => {
+		for (const providers of ["plan: []", "plan: [claude, claude]", "plan: [claude, nope]", "ship: [claude, codex]"]) {
+			const repo = tmpRepo();
+			const path = writeYml(repo, `models:\n  profiles:\n    bad:\n      providers:\n        ${providers}\n`);
+			assert.throws(() => loadConfig({ repo, configPath: path }), /models\.profiles\.bad\.providers\.(plan|ship)/);
+		}
+	});
+});
+
 describe("loadConfig — roadmap.source", () => {
 	it("defaults to 'markdown' when unset", () => {
 		const repo = tmpRepo();
@@ -554,27 +576,48 @@ describe("loadConfig — review", () => {
 	it("defaults to the safe one-pass review policy when unset", () => {
 		const repo = tmpRepo();
 		const cfg = loadConfig({ repo, configPath: join(repo, ".pelaggio.yml") });
-		assert.deepEqual(cfg.review, { runner: "ci", statuslessAfter: "2h", maxPasses: 1, budgetCap: 20, providerDiversity: "off" });
+		assert.deepEqual(cfg.review, DEFAULTS.review);
 	});
 
 	it("parses review.runner: local and review.statusless-after", () => {
 		const repo = tmpRepo();
 		const path = writeYml(repo, "review:\n  runner: local\n  statusless-after: 45m\n");
 		const cfg = loadConfig({ repo, configPath: path });
-		assert.deepEqual(cfg.review, { runner: "local", statuslessAfter: "45m", maxPasses: 1, budgetCap: 20, providerDiversity: "off" });
+		assert.deepEqual(cfg.review, { ...DEFAULTS.review, runner: "local", statuslessAfter: "45m" });
 	});
 
 	it("allows a partial review override", () => {
 		const repo = tmpRepo();
 		const path = writeYml(repo, "review:\n  statusless-after: 1h30m\n");
 		const cfg = loadConfig({ repo, configPath: path });
-		assert.deepEqual(cfg.review, { runner: "ci", statuslessAfter: "1h30m", maxPasses: 1, budgetCap: 20, providerDiversity: "off" });
+		assert.deepEqual(cfg.review, { ...DEFAULTS.review, statuslessAfter: "1h30m" });
 	});
 
 	it("parses bounded convergence policy", () => {
 		const repo = tmpRepo();
 		const path = writeYml(repo, "review:\n  max-passes: 3\n  budget-cap: 40.5\n  provider-diversity: require\n");
-		assert.deepEqual(loadConfig({ repo, configPath: path }).review, { runner: "ci", statuslessAfter: "2h", maxPasses: 3, budgetCap: 40.5, providerDiversity: "require" });
+		assert.deepEqual(loadConfig({ repo, configPath: path }).review, { ...DEFAULTS.review, maxPasses: 3, budgetCap: 40.5, providerDiversity: "require" });
+	});
+
+	it("parses the bounded authoring policy and provider-specific models", () => {
+		const repo = tmpRepo();
+		const path = writeYml(
+			repo,
+			"review:\n  authoring:\n    enabled: true\n    budget-cap: 30\n    reviewers:\n      - id: cdx\n        provider: codex\n        codex-model: gpt-review\n      - id: grk\n        provider: grok\n        model: grok-review\n    judge:\n      provider: claude\n      model: claude-judge\n",
+		);
+		assert.deepEqual(loadConfig({ repo, configPath: path }).review.authoring, {
+			enabled: true,
+			reviewers: [
+				{ id: "cdx", provider: "codex", codexModel: "gpt-review" },
+				{ id: "grk", provider: "grok", model: "grok-review" },
+			],
+			judge: { id: "judge", provider: "claude", model: "claude-judge" },
+			blockingBar: "must-fix",
+			maxPasses: 2,
+			maxRevisions: 1,
+			budgetCap: 30,
+			providerDiversity: "prefer",
+		});
 	});
 
 	it("rejects every convergence policy boundary", () => {
@@ -620,7 +663,7 @@ describe("loadConfig — notify", () => {
 		assert.deepEqual(cfg.notify, {
 			url: "",
 			format: "json",
-			events: ["parked", "failed", "shipped", "pr-opened", "shipwrecked", "review-stranded"],
+			events: ["parked", "failed", "shipped", "pr-opened", "shipwrecked", "review-stranded", "decision"],
 		});
 	});
 
@@ -705,6 +748,79 @@ describe("resolveRepo", () => {
 		const notARepo = mkdtempSync(join(tmpdir(), "pelaggio-no-git-"));
 		process.chdir(notARepo);
 		assert.throws(() => resolveRepo(), /git repository/);
+	});
+});
+
+describe("loadConfig — providers.<name>.bin (#241)", () => {
+	it("defaults to an empty map when no providers block is present", () => {
+		const repo = tmpRepo();
+		const cfg = loadConfig({ repo, configPath: join(repo, ".pelaggio.yml") });
+		assert.deepEqual(cfg.providerBins, {});
+		assert.equal(cfg.grokAllowUnsandboxedFallback, false);
+	});
+
+	it("parses a per-provider bin override", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "providers:\n  codex:\n    bin: /opt/codex/bin/codex\n");
+		const cfg = loadConfig({ repo, configPath: path });
+		assert.equal(cfg.providerBins.codex, "/opt/codex/bin/codex");
+	});
+
+	it("accepts a bin override for grok (registered since #136)", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "providers:\n  grok:\n    bin: ~/.grok/bin/grok\n");
+		const cfg = loadConfig({ repo, configPath: path });
+		assert.equal(cfg.providerBins.grok, "~/.grok/bin/grok");
+	});
+
+	it("parses the Grok-only unsandboxed fallback escape hatch", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "providers:\n  grok:\n    allow-unsandboxed-fallback: true\n");
+		assert.equal(loadConfig({ repo, configPath: path }).grokAllowUnsandboxedFallback, true);
+	});
+
+	it("rejects invalid or non-Grok unsandboxed fallback settings", () => {
+		const repo = tmpRepo();
+		const invalid = writeYml(repo, "providers:\n  grok:\n    allow-unsandboxed-fallback: yes\n");
+		assert.throws(() => loadConfig({ repo, configPath: invalid }), /providers\.grok\.allow-unsandboxed-fallback.*boolean/);
+		const unsupported = writeYml(repo, "providers:\n  codex:\n    allow-unsandboxed-fallback: true\n");
+		assert.throws(() => loadConfig({ repo, configPath: unsupported }), /only supported for grok/);
+	});
+
+	it("rejects an unknown provider name", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "providers:\n  gemini:\n    bin: /opt/gemini\n");
+		assert.throws(() => loadConfig({ repo, configPath: path }), /unknown provider `providers\.gemini`/);
+	});
+
+	it("rejects a non-map providers block", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "providers: nope\n");
+		assert.throws(() => loadConfig({ repo, configPath: path }), /expected `providers` to be a map/);
+	});
+
+	it("rejects an empty bin string", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "providers:\n  codex:\n    bin: ''\n");
+		assert.throws(() => loadConfig({ repo, configPath: path }), /providers\.codex\.bin` to be a non-empty string/);
+	});
+});
+
+describe("resolveProviderBin (#241)", () => {
+	const base = loadConfig({ repo: tmpRepo(), configPath: join(tmpRepo(), ".pelaggio.yml") });
+
+	it("returns the fallback when no override is set", () => {
+		assert.equal(resolveProviderBin(base, "codex", "codex"), "codex");
+	});
+
+	it("returns an absolute override verbatim", () => {
+		const cfg = { ...base, providerBins: { codex: "/opt/codex" } };
+		assert.equal(resolveProviderBin(cfg, "codex", "codex"), "/opt/codex");
+	});
+
+	it("expands a leading ~/ to the home directory", () => {
+		const cfg = { ...base, providerBins: { codex: "~/.grok/bin/grok" } };
+		assert.equal(resolveProviderBin(cfg, "codex", "codex"), join(homedir(), ".grok/bin/grok"));
 	});
 });
 

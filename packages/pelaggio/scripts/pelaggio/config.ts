@@ -1,5 +1,6 @@
 import { execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { basename, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { NOTIFY_EVENTS, NOTIFY_FORMATS, type NotifyConfig, type NotifyEvent, type NotifyFormat } from "./notify.js";
@@ -17,7 +18,7 @@ export const DEFAULT_SHIP_TARGET: ShipTargetName = "pull-request";
 // widens both to add a second provider. `DEFAULT_PROVIDER` is the fallback every
 // step resolves to when a profile names none, so no provider string is hardcoded
 // outside this file.
-const PROVIDER_NAMES: readonly ProviderName[] = ["claude", "codex"];
+const PROVIDER_NAMES: readonly ProviderName[] = ["claude", "codex", "grok"];
 const DEFAULT_PROVIDER: ProviderName = "claude";
 const isProviderName = (v: unknown): v is ProviderName => typeof v === "string" && (PROVIDER_NAMES as readonly string[]).includes(v);
 
@@ -80,7 +81,13 @@ export interface ResolvedConfig {
 	profileBudgets: Record<string, Partial<Record<Step, number>>>;
 	profileTurnLimits: Record<string, Partial<Record<Step, number>>>;
 	profileEffort: Record<string, Partial<Record<Step, Effort>>>;
-	profileProviders: Record<string, Partial<Record<Step, ProviderName>>>;
+	profileProviders: Record<string, Partial<Record<Step, ProviderSelection>>>;
+	/** Per-provider driver executable override (issue #241). Keyed by provider name; a missing
+	 *  entry falls back to the provider's default binary (resolved via PATH). Lets an off-PATH
+	 *  driver (e.g. `~/.grok/bin/grok`) be pinned without editing PATH. */
+	providerBins: Partial<Record<ProviderName, string>>;
+	/** Explicit escape hatch for Linux hosts whose kernel does not expose Landlock. */
+	grokAllowUnsandboxedFallback: boolean;
 	shipTarget: ShipTargetName;
 	roadmapSource: RoadmapSourceName;
 	roadmapGithub: GithubRoadmapConfig;
@@ -99,17 +106,38 @@ export interface ResolvedConfig {
 	review: ReviewConfig;
 	/** Worktree confinement policy. Allowing a dirty main checkout disables only main-root auditing. */
 	confinement: { allowDirtyMain: boolean };
+	/** Secret hygiene for spawned driver subprocesses (issue #237 / TC-014). `envAllowlist` names
+	 *  extra env vars forwarded to a child beyond the deny-by-default allowlist — e.g. a driver's
+	 *  auth var when using key auth. Empty by default. */
+	security: { envAllowlist: string[] };
 	/** Outbound run-outcome notifications. Disabled when `url` is empty (the default). */
 	notify: NotifyConfig;
 }
 
+export type ProviderPool = readonly [ProviderName, ...ProviderName[]];
+export type ProviderSelection = ProviderName | ProviderPool;
+
 export type ProviderDiversityPolicy = "off" | "prefer" | "require";
+export type AuthoringFindingClass = "security" | "data-loss" | "correctness-regression" | "judgment";
+export type AuthoringBlockingBar = "must-fix";
+export type ReviewSlot = { id: string; provider: "claude" | "grok"; model?: string } | { id: string; provider: "codex"; codexModel?: string };
+export interface AuthoringReviewConfig {
+	enabled: boolean;
+	reviewers: ReviewSlot[];
+	judge: ReviewSlot;
+	blockingBar: AuthoringBlockingBar;
+	maxPasses: 2;
+	maxRevisions: 1;
+	budgetCap: number;
+	providerDiversity: "prefer";
+}
 export interface ReviewConfig {
 	runner: ReviewRunner;
 	statuslessAfter: string;
 	maxPasses: number;
 	budgetCap: number;
 	providerDiversity: ProviderDiversityPolicy;
+	authoring: AuthoringReviewConfig;
 }
 
 const DEFAULT_GITHUB_ROADMAP: GithubRoadmapConfig = {
@@ -173,7 +201,27 @@ export const DEFAULTS = {
 	// default-on does nothing for every markdown/direct-push consumer. `revise.local: false` is
 	// the off-switch, mirroring the CI `AUTOPILOT_AUTO_REVISE=false` off-switch.
 	revise: { local: true },
-	review: { runner: "ci", statuslessAfter: "2h", maxPasses: 1, budgetCap: 20, providerDiversity: "off" },
+	review: {
+		runner: "ci",
+		statuslessAfter: "2h",
+		maxPasses: 1,
+		budgetCap: 20,
+		providerDiversity: "off",
+		authoring: {
+			enabled: false,
+			reviewers: [
+				{ id: "claude", provider: "claude" },
+				{ id: "codex", provider: "codex" },
+				{ id: "grok", provider: "grok" },
+			],
+			judge: { id: "judge", provider: "claude" },
+			blockingBar: "must-fix",
+			maxPasses: 2,
+			maxRevisions: 1,
+			budgetCap: 75,
+			providerDiversity: "prefer",
+		},
+	},
 	confinement: { allowDirtyMain: false },
 	// Notifications off by default (empty url). Enabling only `notify.url` turns on every
 	// event with the `json` format; `format: ntfy` + a topic URL gives ntfy.sh pushes.
@@ -196,6 +244,23 @@ const isNumber = (v: unknown): v is number => typeof v === "number" && Number.is
 const isEffort = (v: unknown): v is Effort => v === "low" || v === "medium" || v === "high" || v === "xhigh" || v === "max";
 const isString = (v: unknown): v is string => typeof v === "string";
 const isReviewRunner = (v: unknown): v is ReviewRunner => v === "ci" || v === "local";
+
+function parseReviewSlot(value: unknown, label: string, configPath: string, fallbackId?: string): ReviewSlot {
+	if (!isPlainObject(value)) throw new Error(`${configPath}: expected \`${label}\` to be a map`);
+	const id = value.id ?? fallbackId;
+	if (!isString(id) || id.trim() === "") throw new Error(`${configPath}: expected \`${label}.id\` to be a non-empty string`);
+	if (!isProviderName(value.provider)) throw new Error(`${configPath}: expected \`${label}.provider\` to be one of ${PROVIDER_NAMES.join("|")}`);
+	if (value.provider === "codex") {
+		if (value.model !== undefined) throw new Error(`${configPath}: \`${label}.model\` cannot be used with codex; use codex-model`);
+		const codexModel = value["codex-model"];
+		if (codexModel !== undefined && (!isString(codexModel) || codexModel.trim() === "")) throw new Error(`${configPath}: expected \`${label}.codex-model\` to be a non-empty string`);
+		return { id, provider: "codex", ...(codexModel ? { codexModel } : {}) };
+	}
+	if (value["codex-model"] !== undefined) throw new Error(`${configPath}: \`${label}.codex-model\` is only valid for codex`);
+	const model = value.model;
+	if (model !== undefined && (!isString(model) || model.trim() === "")) throw new Error(`${configPath}: expected \`${label}.model\` to be a non-empty string`);
+	return { id, provider: value.provider, ...(model ? { model } : {}) };
+}
 
 function mergeStepRecord<T>(defaults: Record<Step, T>, override: unknown, section: string, validate: (v: unknown) => v is T, configPath: string): Record<Step, T> {
 	if (override === undefined) return { ...defaults };
@@ -243,7 +308,29 @@ interface ParsedProfiles {
 	budgets: Record<string, Partial<Record<Step, number>>>;
 	turnLimits: Record<string, Partial<Record<Step, number>>>;
 	effort: Record<string, Partial<Record<Step, Effort>>>;
-	providers: Record<string, Partial<Record<Step, ProviderName>>>;
+	providers: Record<string, Partial<Record<Step, ProviderSelection>>>;
+}
+
+const POOLED_STEPS: readonly Step[] = ["plan", "implement", "shakedown-plan", "shakedown-code"];
+
+function parseProviderSelections(override: unknown, section: string, configPath: string): Partial<Record<Step, ProviderSelection>> {
+	if (override === undefined) return {};
+	if (!isPlainObject(override)) throw new Error(`${configPath}: expected \`${section}\` to be a map, got ${Array.isArray(override) ? "array" : typeof override}`);
+	const out: Partial<Record<Step, ProviderSelection>> = {};
+	for (const [key, value] of Object.entries(override)) {
+		if (!isStep(key)) continue;
+		if (!Array.isArray(value)) {
+			if (!isProviderName(value)) throw new Error(`${configPath}: invalid value at \`${section}.${key}\``);
+			out[key] = value;
+			continue;
+		}
+		if (!(POOLED_STEPS as readonly string[]).includes(key)) throw new Error(`${configPath}: provider lists are not supported at \`${section}.${key}\``);
+		if (value.length === 0) throw new Error(`${configPath}: expected \`${section}.${key}\` to be a non-empty provider list`);
+		if (!value.every(isProviderName)) throw new Error(`${configPath}: invalid provider in \`${section}.${key}\``);
+		if (new Set(value).size !== value.length) throw new Error(`${configPath}: duplicate provider in \`${section}.${key}\``);
+		out[key] = value as ProviderPool;
+	}
+	return out;
 }
 
 function parseProfiles(defaults: Record<string, Partial<Record<Step, string>>>, override: unknown, configPath: string): ParsedProfiles {
@@ -253,7 +340,7 @@ function parseProfiles(defaults: Record<string, Partial<Record<Step, string>>>, 
 	const codexModels: Record<string, Partial<Record<Step, string>>> = {};
 	const turnLimits: Record<string, Partial<Record<Step, number>>> = {};
 	const effort: Record<string, Partial<Record<Step, Effort>>> = {};
-	const providers: Record<string, Partial<Record<Step, ProviderName>>> = {};
+	const providers: Record<string, Partial<Record<Step, ProviderSelection>>> = {};
 
 	if (override === undefined) return { models, codexModels, budgets, turnLimits, effort, providers };
 	if (!isPlainObject(override)) {
@@ -279,7 +366,7 @@ function parseProfiles(defaults: Record<string, Partial<Record<Step, string>>>, 
 		if (Object.keys(t).length > 0) turnLimits[name] = t;
 		const e = parseSparseStepRecord(profile.effort, `models.profiles.${name}.effort`, isEffort, configPath);
 		if (Object.keys(e).length > 0) effort[name] = e;
-		const p = parseSparseStepRecord(profile.providers, `models.profiles.${name}.providers`, isProviderName, configPath);
+		const p = parseProviderSelections(profile.providers, `models.profiles.${name}.providers`, configPath);
 		if (Object.keys(p).length > 0) providers[name] = p;
 		const cm = parseSparseStepRecord(profile.codex, `models.profiles.${name}.codex`, isString, configPath);
 		if (Object.keys(cm).length > 0) codexModels[name] = cm;
@@ -494,6 +581,11 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 	let reviewMaxPasses: number = DEFAULTS.review.maxPasses;
 	let reviewBudgetCap: number = DEFAULTS.review.budgetCap;
 	let reviewProviderDiversity: ProviderDiversityPolicy = DEFAULTS.review.providerDiversity;
+	let reviewAuthoring: AuthoringReviewConfig = {
+		...DEFAULTS.review.authoring,
+		reviewers: DEFAULTS.review.authoring.reviewers.map((slot) => ({ ...slot })),
+		judge: { ...DEFAULTS.review.authoring.judge },
+	};
 	const reviewBlock = yml.review;
 	if (reviewBlock !== undefined) {
 		if (!isPlainObject(reviewBlock)) {
@@ -528,6 +620,26 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 			if (providerDiversity !== "off" && providerDiversity !== "prefer" && providerDiversity !== "require")
 				throw new Error(`${configPath}: expected \`review.provider-diversity\` to be one of off|prefer|require, got ${JSON.stringify(providerDiversity)}`);
 			reviewProviderDiversity = providerDiversity;
+		}
+		const authoring = reviewBlock.authoring;
+		if (authoring !== undefined) {
+			if (!isPlainObject(authoring)) throw new Error(`${configPath}: expected \`review.authoring\` to be a map`);
+			if (authoring.enabled !== undefined && typeof authoring.enabled !== "boolean") throw new Error(`${configPath}: expected \`review.authoring.enabled\` to be a boolean`);
+			if (authoring["max-passes"] !== undefined && authoring["max-passes"] !== 2) throw new Error(`${configPath}: \`review.authoring.max-passes\` must be 2`);
+			if (authoring["max-revisions"] !== undefined && authoring["max-revisions"] !== 1) throw new Error(`${configPath}: \`review.authoring.max-revisions\` must be 1`);
+			if (authoring["blocking-bar"] !== undefined && authoring["blocking-bar"] !== "must-fix") throw new Error(`${configPath}: \`review.authoring.blocking-bar\` must be must-fix`);
+			if (authoring["provider-diversity"] !== undefined && authoring["provider-diversity"] !== "prefer") throw new Error(`${configPath}: \`review.authoring.provider-diversity\` must be prefer`);
+			const cap = authoring["budget-cap"] ?? reviewAuthoring.budgetCap;
+			if (typeof cap !== "number" || !Number.isFinite(cap) || cap <= 0) throw new Error(`${configPath}: expected \`review.authoring.budget-cap\` to be a finite positive number`);
+			let reviewers = reviewAuthoring.reviewers;
+			if (authoring.reviewers !== undefined) {
+				if (!Array.isArray(authoring.reviewers) || authoring.reviewers.length === 0) throw new Error(`${configPath}: expected \`review.authoring.reviewers\` to be a non-empty array`);
+				reviewers = authoring.reviewers.map((slot, index) => parseReviewSlot(slot, `review.authoring.reviewers[${index}]`, configPath, `reviewer-${index + 1}`));
+				if (new Set(reviewers.map((slot) => slot.id)).size !== reviewers.length) throw new Error(`${configPath}: review.authoring reviewer ids must be unique`);
+				if (new Set(reviewers.map((slot) => slot.provider)).size !== reviewers.length) throw new Error(`${configPath}: review.authoring reviewer providers must be unique`);
+			}
+			const judge = authoring.judge === undefined ? reviewAuthoring.judge : parseReviewSlot(authoring.judge, "review.authoring.judge", configPath, "judge");
+			reviewAuthoring = { enabled: (authoring.enabled as boolean | undefined) ?? reviewAuthoring.enabled, reviewers, judge, blockingBar: "must-fix", maxPasses: 2, maxRevisions: 1, budgetCap: cap, providerDiversity: "prefer" };
 		}
 	}
 
@@ -580,6 +692,59 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		}
 	}
 
+	// providers.<name>.bin: per-provider driver executable override (issue #241). Lets an
+	// off-PATH driver be pinned without editing PATH; a leading `~/` expands at resolve time.
+	// Validated against PROVIDER_NAMES — an entry for a not-yet-registered provider (e.g. grok
+	// before #136) fails loudly rather than silently no-op'ing.
+	const providerBins: Partial<Record<ProviderName, string>> = {};
+	let grokAllowUnsandboxedFallback = false;
+	const providersBlock = yml.providers;
+	if (providersBlock !== undefined) {
+		if (!isPlainObject(providersBlock)) {
+			throw new Error(`${configPath}: expected \`providers\` to be a map`);
+		}
+		for (const [name, entry] of Object.entries(providersBlock)) {
+			if (!isProviderName(name)) {
+				throw new Error(`${configPath}: unknown provider \`providers.${name}\`; expected one of ${PROVIDER_NAMES.join("|")}`);
+			}
+			if (!isPlainObject(entry)) {
+				throw new Error(`${configPath}: expected \`providers.${name}\` to be a map`);
+			}
+			const bin = entry.bin;
+			if (bin !== undefined) {
+				if (!isString(bin) || bin.trim() === "") {
+					throw new Error(`${configPath}: expected \`providers.${name}.bin\` to be a non-empty string`);
+				}
+				providerBins[name] = bin;
+			}
+			const allowUnsandboxedFallback = entry["allow-unsandboxed-fallback"];
+			if (allowUnsandboxedFallback !== undefined) {
+				if (name !== "grok") throw new Error(`${configPath}: \`providers.${name}.allow-unsandboxed-fallback\` is only supported for grok`);
+				if (typeof allowUnsandboxedFallback !== "boolean") {
+					throw new Error(`${configPath}: expected \`providers.grok.allow-unsandboxed-fallback\` to be a boolean, got ${typeof allowUnsandboxedFallback}`);
+				}
+				grokAllowUnsandboxedFallback = allowUnsandboxedFallback;
+			}
+		}
+	}
+
+	// security.env-allowlist: extra env var names forwarded to spawned driver subprocesses beyond
+	// the deny-by-default allowlist (issue #237 / TC-014). Type-validate as a string array.
+	let securityEnvAllowlist: string[] = [];
+	const securityBlock = yml.security;
+	if (securityBlock !== undefined) {
+		if (!isPlainObject(securityBlock)) {
+			throw new Error(`${configPath}: expected \`security\` to be a map`);
+		}
+		const allow = securityBlock["env-allowlist"];
+		if (allow !== undefined) {
+			if (!Array.isArray(allow) || !allow.every((v) => isString(v))) {
+				throw new Error(`${configPath}: expected \`security.env-allowlist\` to be an array of strings`);
+			}
+			securityEnvAllowlist = allow as string[];
+		}
+	}
+
 	return {
 		repo,
 		worktreePrefix,
@@ -593,14 +758,17 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		profileTurnLimits,
 		profileEffort,
 		profileProviders,
+		providerBins,
+		grokAllowUnsandboxedFallback,
 		shipTarget,
 		roadmapSource,
 		roadmapGithub,
 		roadmapLinear,
 		park: { autoResume: parkAutoResume, maxWait: parkMaxWait, unknownResetWait: parkUnknownResetWait },
 		revise: { local: reviseLocal },
-		review: { runner: reviewRunner, statuslessAfter: reviewStatuslessAfter, maxPasses: reviewMaxPasses, budgetCap: reviewBudgetCap, providerDiversity: reviewProviderDiversity },
+		review: { runner: reviewRunner, statuslessAfter: reviewStatuslessAfter, maxPasses: reviewMaxPasses, budgetCap: reviewBudgetCap, providerDiversity: reviewProviderDiversity, authoring: reviewAuthoring },
 		confinement: { allowDirtyMain: confinementAllowDirtyMain },
+		security: { envAllowlist: securityEnvAllowlist },
 		notify: { url: notifyUrl, format: notifyFormat, events: notifyEvents },
 	};
 }
@@ -630,14 +798,46 @@ export interface StepSettings {
  */
 export function resolveStepSettings(config: ResolvedConfig, profile: string, step: Step): StepSettings {
 	const inheritedStep = step === "pr-verify" ? "pr-review" : step;
+	const selection = config.profileProviders[profile]?.[step] ?? config.profileProviders[profile]?.[inheritedStep] ?? DEFAULT_PROVIDER;
 	return {
 		budget: config.profileBudgets[profile]?.[step] ?? config.budgets[step],
 		turns: config.profileTurnLimits[profile]?.[step] ?? config.turnLimits[step],
 		effort: config.profileEffort[profile]?.[step] ?? config.effort[step],
 		model: config.modelProfiles[profile]?.[step] ?? config.modelProfiles[profile]?.[inheritedStep],
 		codexModel: config.profileCodexModels[profile]?.[step] ?? config.profileCodexModels[profile]?.[inheritedStep],
-		provider: config.profileProviders[profile]?.[step] ?? config.profileProviders[profile]?.[inheritedStep] ?? DEFAULT_PROVIDER,
+		provider: Array.isArray(selection) ? selection[0] : selection,
 	};
+}
+
+/** Resolve the ordered execution candidates for a policy-managed step. */
+export function resolveDriverCandidates(config: ResolvedConfig, profile: string, step: Step): StepSettings[] {
+	const base = resolveStepSettings(config, profile, step);
+	const selection = config.profileProviders[profile]?.[step] ?? base.provider;
+	const providers: readonly ProviderName[] = Array.isArray(selection) ? selection : [selection];
+	return providers.map((provider) => ({ ...base, provider }));
+}
+
+/** Resolve authoring seats without mutating the selected profile or global step maps. */
+export function resolveAuthoringReviewConfig(config: ResolvedConfig, profile: string): AuthoringReviewConfig {
+	const policy = config.review.authoring;
+	const reviewerDefaults = resolveStepSettings(config, profile, "pr-review");
+	const judgeDefaults = resolveStepSettings(config, profile, "shakedown-code");
+	const fill = (slot: ReviewSlot, defaults: StepSettings): ReviewSlot => {
+		if (slot.provider === "codex") return { ...slot, ...((slot.codexModel ?? defaults.codexModel) ? { codexModel: slot.codexModel ?? defaults.codexModel } : {}) };
+		return { ...slot, ...((slot.model ?? defaults.model) ? { model: slot.model ?? defaults.model } : {}) };
+	};
+	return { ...policy, reviewers: policy.reviewers.map((slot) => fill(slot, reviewerDefaults)), judge: fill(policy.judge, judgeDefaults) };
+}
+
+/**
+ * Resolve the executable a subprocess-backed provider should spawn (issue #241).
+ * Returns the `providers.<provider>.bin` override when set, else `fallback` (the
+ * provider's default binary name, resolved via PATH). A leading `~/` expands to the
+ * home directory so an off-PATH driver (e.g. `~/.grok/bin/grok`) can be pinned in yml.
+ */
+export function resolveProviderBin(config: ResolvedConfig, provider: ProviderName, fallback: string): string {
+	const raw = config.providerBins[provider] ?? fallback;
+	return raw.startsWith("~/") ? resolve(homedir(), raw.slice(2)) : raw;
 }
 
 // ── Resolved exports (populated at import time) ────────────────────────

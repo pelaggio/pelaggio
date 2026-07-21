@@ -76,6 +76,25 @@ describe("Spinner plain mode", () => {
 });
 
 describe("createStepRenderer plain mode", () => {
+	it("renders SDK warnings without a false error marker", () => {
+		const { chunks, restore } = captureStderr();
+		try {
+			const emit = createStepRenderer({
+				verbose: true,
+				trace: false,
+				toFile: false,
+				plain: true,
+				liveStatus: new LiveStatus(new StatusBar({ plain: true })),
+			});
+
+			emit({ type: "sdk_warning", message: "sandbox fallback enabled" });
+
+			assert.equal(chunks.join(""), "   ⚠ SDK warning: sandbox fallback enabled\n");
+		} finally {
+			restore();
+		}
+	});
+
 	it("emits ANSI-stripped single-line events to stderr matching the file-log shape", () => {
 		const { chunks, restore } = captureStderr();
 		try {

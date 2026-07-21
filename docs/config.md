@@ -57,6 +57,18 @@ revise:                         # local revise sweep — auto-fix red-review PRs
 review:                         # PR review poster (issue #84)
   runner: ci                    # default: ci. values: ci | local
   statusless-after: 2h          # local-mode diagnostic threshold
+  authoring:                    # opt-in pre-ship adversarial loop
+    enabled: false
+    provider-diversity: prefer
+    blocking-bar: must-fix
+    max-passes: 2
+    max-revisions: 1
+    budget-cap: 75
+    reviewers:
+      - { id: claude, provider: claude }
+      - { id: codex, provider: codex, codex-model: gpt-5-codex }
+      - { id: grok, provider: grok }
+    judge: { provider: claude, model: claude-opus-4-8 }
 
 notify:                         # outbound run-outcome webhook (default: disabled)
   url: ""                       # default: "" (disabled). Set a webhook/topic URL to enable.
@@ -68,6 +80,7 @@ notify:                         # outbound run-outcome webhook (default: disable
     - pr-opened
     - shipwrecked
     - review-stranded
+    - decision
 
 roadmap:
   source: markdown              # default: markdown
@@ -206,9 +219,9 @@ models:
 
 ### Provider and Codex model overrides
 
-`providers` is the sibling sub-block that selects the backend for a step. By
-default every step runs on `claude`; set a step to `codex` to run that step
-through the Codex provider:
+`providers` is the sibling sub-block that selects the backend for a step. The
+registered backends are `claude` (default), `codex`, and `grok`. Set a step to
+another provider to route it there:
 
 ```yaml
 models:
@@ -216,7 +229,43 @@ models:
     deep:
       providers:
         implement: codex
+        shakedown-code: grok
+
+The authoring and ordinary review steps (`plan`, `implement`, `shakedown-plan`,
+and `shakedown-code`) also accept an ordered, non-empty list:
+
+```yaml
+models:
+  profiles:
+    standard:
+      providers:
+        plan: [claude, codex, grok]
+        implement: [claude, codex, grok]
+        shakedown-plan: [claude, codex, grok]
+        shakedown-code: [claude, codex, grok]
 ```
+
+List order is significant. Pelaggio rotates author selection deterministically
+from the cycle number and authoring-step ordinal, after filtering drivers that
+are not ready before execution. Review selection excludes the realized author
+of the artifact and an N-seat request requires distinct providers; insufficient
+eligible seats fails closed. Scalars and one-element lists remain static pins.
+Provider lists are rejected for coordination, recovery, adversarial-loop, and
+other unsupported steps.
+
+Readiness is a pre-execution capability check. Once a driver begins an artifact,
+a launch, transport, or rate-limit failure parks and checkpoints the cycle; it
+does not switch drivers mid-artifact. The policy has no persisted quota,
+credential-seat, cooldown, or cross-worker fairness state; those scheduling
+concerns are outside this cycle-local policy.
+```
+
+The `grok` provider drives `grok agent stdio` over ACP (issue #136). Follow the
+[Grok operator guide](./grok.md) for the pinned install, authentication,
+Landlock preflight, metering, and trust limits. Its off-PATH binary must be
+pinned via `providers.grok.bin` (see [Provider binaries](#provider-binaries)).
+A `grok` model id can be pinned in that profile's `<step>` slot (a `claude-*` id is
+never forwarded); otherwise the grok CLI default applies.
 
 When a step runs on Codex, an optional `codex` sub-block selects the Codex model
 for that step:
@@ -248,6 +297,82 @@ choose." A `claude-*` id is never forwarded to Codex, even if it appears in the
 non-map block fails at startup, and wrong value types report the dotted key (for
 example `models.profiles.deep.codex.implement`). Unknown step keys inside the
 block are ignored.
+
+## Provider binaries
+
+The top-level `providers` block (distinct from the per-profile `providers`
+sub-block above, which selects a step's backend) pins the **executable** a
+subprocess-backed provider spawns. Without it, each provider resolves its
+default binary through `PATH` (`codex` runs `codex`):
+
+```yaml
+providers:
+  codex:
+    bin: /opt/codex/bin/codex   # absolute path
+  # A leading ~/ expands to the home directory — pins an off-PATH driver:
+  # grok:
+  #   bin: ~/.grok/bin/grok
+  #   allow-unsandboxed-fallback: false
+```
+
+Keys are validated against the registered provider names, so an entry for a
+provider that is not yet wired in fails loudly at startup rather than silently
+doing nothing. `bin` must be a non-empty string. The `claude` provider runs
+in-process (no subprocess), so a `bin` override for it has no effect.
+
+### Grok sandbox
+
+The end-to-end setup and supervised fallback procedure live in the
+[Grok operator guide](./grok.md); this section is the configuration reference.
+
+On Linux, Grok's custom sandbox requires both `bubblewrap` and kernel Landlock support (Landlock
+must appear in `/sys/kernel/security/lsm`). Every Grok step normally installs and explicitly
+selects the namespaced `pelaggio-worktree-v1` profile in `~/.grok/sandbox.toml`; unrelated user
+profiles and file permissions are preserved. Missing Landlock or profile installation failure
+refuses the step by default.
+
+On a Landlock-less Linux host such as a default WSL2 kernel, operators may explicitly set
+`providers.grok.allow-unsandboxed-fallback: true`. Pelaggio then starts Grok without `--sandbox`
+and prints a loud warning. Until the Pelaggio host-side jail is wired, only environment-secret
+denial and CWD guidance remain; this is acceptable for local supervised dogfooding, not unattended
+operation. The option does not bypass malformed or unwritable profile configuration when Landlock
+is available. Built-in web search remains disabled in either mode.
+
+The profile extends Grok's `strict` policy, so project/source access is limited
+to the invocation CWD. Grok still needs its executable, system libraries and
+certificates, and its own authentication/session/sandbox-event state under
+`~/.grok`. Linux read-deny needs `bubblewrap`; macOS uses Seatbelt. Grok
+0.2.103 only enforces `restrict_network` for child commands on Linux.
+
+Pelaggio also passes `--disable-web-search`, disabling Grok's built-in web
+search/fetch. Grok 0.2.103 has no hostname-firewall setting for its in-process
+model client: `cli-chat-proxy.grok.com` is the sole destination observed and
+locked by release conformance, not an OS-enforced allowlist.
+
+After a Grok upgrade, capture DNS names and/or TLS SNI for the same probe run
+with a privileged tool such as `tcpdump`, normalized without paths, payloads,
+queries, or authentication. Then run:
+
+```bash
+PELAGGIO_GROK_LIVE_CONFORMANCE=1 \
+PELAGGIO_GROK_NETWORK_CAPTURE=/path/to/normalized-capture.txt \
+npx tsx --test --test-name-pattern='live Grok' \
+  packages/pelaggio/scripts/pelaggio/__tests__/grok-sandbox.test.ts
+```
+
+This release gate requires Linux, Grok 0.2.103, `bubblewrap`, valid Grok auth,
+network access, and packet-capture privileges. A destination change requires a
+security review; do not update the fixture as a routine snapshot refresh.
+
+## Pinning a profile per run
+
+`--profile <name>` pins the model/provider profile for the entire run, where
+`<name>` is any profile under `models.profiles` (`standard`, `quick`, or a
+custom one). A pinned profile **suppresses the automatic quick-mode downgrade**,
+so the step set and backend stay identical across runs — useful for a
+capability bake-off (e.g. `pelaggio run --parallel 1 --profile <driver>` per
+driver in separate sessions). Invalid names fail fast at startup with the list
+of valid profiles.
 
 ## Ship target
 
@@ -510,6 +635,28 @@ throws into the run. This is the **local** counterpart to the API-funded CI
 workflow (`.github/workflows/pr-review-revise.yml`); see
 [docs/pr-review.md](./pr-review.md) for which path is active.
 
+## Spawned-agent env allowlist
+
+Driver subprocesses (codex today, grok next) run work influenced by untrusted
+repo/issue/PR text. To stop a prompt-injected step from reading credentials, they
+are spawned with a **deny-by-default environment**: only a fixed allowlist
+(`PATH`, `HOME`, locale/cert vars) plus any names you add here is forwarded — the
+child never inherits the full parent environment (issue #237, TC-014).
+
+Subscription auth keeps working out of the box because codex/grok read their
+tokens from files under `HOME`. Add a var only when a driver needs it in the
+environment — e.g. an API key for key-based auth:
+
+```yaml
+security:
+  env-allowlist: [OPENAI_API_KEY, XAI_API_KEY]
+```
+
+`security.env-allowlist` must be an array of strings. Independently, captured
+driver stderr and the verbose `.dev/*.log` transcript are **secret-scrubbed
+before write**: credential-shaped strings (JWTs, provider keys, tokens) and the
+values of secret-named env vars are replaced with `[REDACTED]`.
+
 ## Notifications
 
 Unattended runs have no outbound signal by default — you learn a cycle parked,
@@ -518,11 +665,25 @@ failed, shipped, or opened a PR only by tailing `.dev/pelaggio-log.jsonl`. The
 terminal cycle, sent from deterministic orchestrator code *after* the pipeline
 returns, so a notification fires even when the agent step died mid-cycle.
 
+`decision` is separate from terminal-event precedence: every assistant `DECISION:`
+sentinel produces its own notification when the step ends. It is subscribed by
+default. Its payload carries the decision, item, step, durable source, log path,
+and timestamp; it does not synthesize cycle cost or completion fields.
+
+The canonical durable register is `docs/decisions.md`, distinct from the
+`docs/decisions/` ADR directory. Active and Resolved tables share the columns
+`Decision | Status | Chosen/leaning | Alternatives | Source | Date`. Sentinel
+rows start as `default-taken`; lifecycle tooling changes them to `resolved` or
+`resolved→ADR-nnnn`. Source is the best durable item, PR, or review-note
+reference. `npx pelaggio decisions archive-resolved --older-than 30d` moves
+resolved rows older than 30 days to `docs/archived/decisions.md` under the
+mutation lock.
+
 | Key             | Default        | Meaning                                                            |
 |-----------------|----------------|--------------------------------------------------------------------|
 | `notify.url`    | `""`           | Webhook / topic URL. Empty = **disabled** (a no-op; no network).   |
 | `notify.format` | `json`         | Wire format: `json` \| `ntfy`.                                     |
-| `notify.events` | *(all events)* | Which outcomes page you: `parked`, `failed`, `shipped`, `pr-opened`, `shipwrecked`, `review-stranded`. |
+| `notify.events` | *(all events)* | Which events page you: `parked`, `failed`, `shipped`, `pr-opened`, `shipwrecked`, `review-stranded`, `decision`. |
 
 ### Events
 
@@ -589,3 +750,15 @@ section (e.g. `budgets.bogus: 5`) are also ignored.
 - Runtime reload — load-once at startup.
 - Schema validation beyond shape checks — add `zod` if/when warranted.
 - Secret handling — store secrets in the environment, not here.
+# Human resolution of cross-model review splits
+
+When successfully parsed authoring reviewers disagree (at least one pass and one block), Pelaggio records the commit-bound evidence in `docs/decisions.md`, sends the existing `decision` notification when subscribed, and parks for every ship target. Notification delivery is best-effort and never changes the gate.
+
+Resolve the recorded decision explicitly, then resume the item:
+
+```bash
+npx pelaggio decisions resolve <decision-id> --disposition proceed --by <actor> --reason "<rationale>"
+npx pelaggio --resume <item-id>
+```
+
+Use `--disposition block` to retain the block. A `proceed` resolution applies only to the unchanged reviewed commit and exact recorded evidence. Missing, malformed, ambiguous, stale, or safety-class evidence fails closed and parks; changing the code requires a fresh review.

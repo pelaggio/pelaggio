@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { describe, it } from "node:test";
 import {
+	buildReviewDiffBlock,
 	buildStepArgs,
 	canRetryWithinBudget,
 	checkpoint,
@@ -15,8 +16,11 @@ import {
 	countPlanFiles,
 	createMainCheckoutDeltaObserver,
 	ensureMainCheckoutOnBranch,
+	expandSkill,
 	filesChangedSince,
+	findLoggedArtifactAuthor,
 	fmtWait,
+	formatChangesUnderReview,
 	formatResumeHint,
 	formatReviewMetrics,
 	getHeadSha,
@@ -26,6 +30,7 @@ import {
 	looksLikeRefusal,
 	looksLikeStalledAsk,
 	parseBlockedReason,
+	parseDecisions,
 	parseDeferredItems,
 	parsePickItem,
 	parsePickResult,
@@ -33,11 +38,36 @@ import {
 	parseShipMerged,
 	parseVerdict,
 	parseWaitFlag,
+	REVIEW_DIFF_MAX_BYTES,
 	resolveParkReset,
 	revertPlanPolish,
 	reviewFindingsPreamble,
 	verifyShipLanded,
 } from "../helpers.js";
+
+describe("findLoggedArtifactAuthor", () => {
+	it("scans across entries and validates realized attribution", () => {
+		const dir = mkdtempSync(join(tmpdir(), "pelaggio-author-log-"));
+		const path = join(dir, "log.jsonl");
+		writeFileSync(path, `${JSON.stringify({ item: "245", steps: [{ name: "plan", ok: true }] })}\n${JSON.stringify({ item: "245", steps: [{ name: "implement", ok: true, provider: "codex", model: "gpt-5" }] })}\n`);
+		assert.deepEqual(findLoggedArtifactAuthor("245", "implement", path), { provider: "codex", codexModel: "gpt-5" });
+		assert.equal(findLoggedArtifactAuthor("245", "plan", path), undefined);
+	});
+});
+
+describe("parseDecisions", () => {
+	it("retains tolerant, ordered sentinels and parses canonical segments", () => {
+		assert.deepEqual(parseDecisions("tool DECISION: ignored\n  DECISION: storage fork | chose: files | alternatives: sqlite | remote\nDECISION:\n decision: lower"), [
+			{ fork: "storage fork", chosen: "files", alternatives: "sqlite | remote" },
+			{ fork: "(unspecified decision)" },
+		]);
+	});
+
+	it("keeps partial and non-final sentinels", () => {
+		assert.deepEqual(parseDecisions("DECISION: first | chose: yes\nmore text\nDECISION: malformed | pipe"), [{ fork: "first", chosen: "yes" }, { fork: "malformed | pipe" }]);
+	});
+});
+
 import type { RoadmapSource } from "../roadmap/types.js";
 
 function makeFeatRepo(): string {
@@ -407,6 +437,77 @@ describe("filesChangedSince", () => {
 		const head = getHeadSha(dir);
 		assert.ok(head);
 		assert.deepEqual(filesChangedSince(dir, head), []);
+	});
+});
+
+describe("buildReviewDiffBlock (authoring-loop reviewer diff injection)", () => {
+	it("injects the actual branch diff so a single-turn seat has real code to review", () => {
+		const dir = makeFeatRepo();
+		commitFile(dir, "src/thing.ts", "export const answer = 42;\n", "feat: add thing");
+		const block = buildReviewDiffBlock(dir);
+		assert.match(block, /CHANGES UNDER REVIEW/);
+		// The changed hunk is present in the reviewer's prompt without the seat running git itself.
+		assert.match(block, /export const answer = 42;/);
+		assert.match(block, /src\/thing\.ts/);
+		assert.match(block, /```diff/);
+	});
+
+	it("emits an empty-diff note (never crashes) when the branch matches main", () => {
+		const dir = makeFeatRepo();
+		const block = buildReviewDiffBlock(dir);
+		assert.match(block, /CHANGES UNDER REVIEW/);
+		assert.match(block, /diff against `main` is empty/);
+	});
+
+	it("emits an unavailable note when git cannot compute the diff", () => {
+		const block = buildReviewDiffBlock("/does/not/exist");
+		assert.match(block, /could not compute the branch diff/);
+		assert.match(block, /Run `git diff main\.\.\.HEAD`/);
+	});
+
+	it("bounds the injected diff and points the seat at the remainder", () => {
+		const dir = makeFeatRepo();
+		// One large file well over the injection cap.
+		const big = `${"export const x = 1;\n".repeat(Math.ceil(REVIEW_DIFF_MAX_BYTES / 10))}`;
+		commitFile(dir, "src/big.ts", big, "feat: big file");
+		const block = buildReviewDiffBlock(dir);
+		assert.match(block, /diff truncated at the injection cap/);
+		assert.ok(Buffer.byteLength(block, "utf-8") < REVIEW_DIFF_MAX_BYTES + 2048, "injected block stays near the cap");
+	});
+
+	it("formatChangesUnderReview is pure and covers every state", () => {
+		assert.match(formatChangesUnderReview("", "empty"), /empty/);
+		assert.match(formatChangesUnderReview("", "unavailable"), /could not compute/);
+		assert.match(formatChangesUnderReview("+a", "ok"), /```diff\n\+a\n```/);
+		assert.match(formatChangesUnderReview("+a", "truncated"), /truncated at the injection cap/);
+		// A real review that echoes the schema example would be caught downstream; here we just confirm
+		// injected content lands verbatim inside the fence.
+		assert.match(formatChangesUnderReview("- old\n+ new", "ok"), /- old\n\+ new/);
+	});
+
+	it("the composed authoring-loop reviewer prompt carries both the review contract and the diff", () => {
+		// Mirrors pipeline.ts: `${expandSkill("pr-review","--authoring-loop")}\n\n${reviewDiffBlock}`.
+		// A single-turn codex seat that never runs git now sees the changed hunk directly in-prompt.
+		const dir = makeFeatRepo();
+		commitFile(dir, "src/thing.ts", "export const answer = 42;\n", "feat: add thing");
+		const skillBody = expandSkill("pr-review", "--authoring-loop");
+		const reviewerPrompt = `${skillBody}\n\n${buildReviewDiffBlock(dir)}`;
+		assert.match(reviewerPrompt, /AUTHORING_REVIEW_FINDINGS/); // the review reporting contract
+		assert.match(reviewerPrompt, /CHANGES UNDER REVIEW/);
+		assert.match(reviewerPrompt, /export const answer = 42;/); // the actual changed hunk
+	});
+
+	it("the authoring-loop reviewer skill compels multi-turn inspection before findings", () => {
+		// Parity fix: a single-turn seat (codex) treated the advisory 'Inspect...' line as a one-shot
+		// prompt and answered immediately. The mode now carries an imperative inspection protocol so the
+		// seat runs git + reads files + runs checks across turns before emitting the report.
+		const body = expandSkill("pr-review", "--authoring-loop");
+		assert.match(body, /Mandatory inspection protocol/);
+		assert.match(body, /not\W+a\s+one-shot answer/i);
+		assert.match(body, /git diff main\.\.\.HEAD/);
+		assert.match(body, /read each changed file in\s+full/);
+		assert.match(body, /pnpm check/);
+		assert.match(body, /do not emit findings|keep working/i);
 	});
 });
 

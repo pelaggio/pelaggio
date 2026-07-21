@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { buildRequest, classifyEvent, formatText, NOTIFY_EVENTS, type NotifyConfig, type NotifyFormat, type NotifyPayload, notifyCycle, sendNotification } from "../notify.js";
+import { buildRequest, classifyEvent, formatText, NOTIFY_EVENTS, type NotifyConfig, type NotifyFormat, type NotifyPayload, notifyCycle, notifyDecision, sendNotification } from "../notify.js";
 import { type CycleResult, RECOVERABLE_ERRORS } from "../types.js";
 
 function result(overrides: Partial<CycleResult> = {}): CycleResult {
@@ -307,5 +307,39 @@ describe("notifyCycle", () => {
 		const { send, sent } = spySend();
 		await notifyCycle({ ...baseCfg, events: [] }, result({ completed: true }), "/l", { send });
 		assert.equal(sent.length, 0);
+	});
+});
+
+describe("notifyDecision", () => {
+	const cfg: NotifyConfig = { url: "https://hook.example/x", format: "json", events: ["decision"] };
+
+	it("delivers one structured event and respects event gating", async () => {
+		const sent: NotifyPayload[] = [];
+		const send = async (_url: string, _format: NotifyFormat, payload: NotifyPayload) => {
+			sent.push(payload);
+			return true;
+		};
+		const input = { itemId: "85", decision: { fork: "storage", chosen: "markdown", alternatives: "sqlite" }, step: "implement" as const, source: "85", logPath: "/l" };
+
+		assert.equal(await notifyDecision(cfg, input, { send, now: new Date("2026-07-19T12:00:00Z") }), true);
+		assert.deepEqual(sent[0], {
+			event: "decision",
+			itemId: "85",
+			decision: input.decision,
+			step: "implement",
+			source: "85",
+			logPath: "/l",
+			ts: "2026-07-19T12:00:00.000Z",
+			text: "pelaggio: decision 85 implement — storage",
+		});
+		assert.equal(await notifyDecision({ ...cfg, events: [] }, input, { send }), false);
+		assert.equal(sent.length, 1);
+	});
+
+	it("is fail-soft when delivery throws", async () => {
+		const send = async () => {
+			throw new Error("transport exploded");
+		};
+		assert.equal(await notifyDecision(cfg, { itemId: null, decision: { fork: "fork" }, step: "plan", source: "unclaimed:r", logPath: "/l" }, { send }), false);
 	});
 });
