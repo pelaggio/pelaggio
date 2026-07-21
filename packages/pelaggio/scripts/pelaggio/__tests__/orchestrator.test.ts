@@ -179,25 +179,24 @@ describe("runOrchestrator — parallel workers share mutex", () => {
 		for (const c of calls) assert.strictEqual(c.opts.pickMutex, mutex);
 	});
 
-	it("every worker cycle receives the same confinementMutex, distinct from pickMutex", async (t) => {
+	it("every worker cycle receives the same activeWorktrees registry, distinct from pickMutex", async (t) => {
 		t.mock.method(console, "log", () => {});
 		const { runPipeline, calls } = createMockRunPipeline({
 			default: { completed: true, cost: 0.1 },
 		});
 		await runOrchestrator({ ...baseFlags, item: "A-1,A-2,A-3", parallel: "2" }, { runPipeline });
 		assert.equal(calls.length, 3);
-		const confinement = calls[0].opts.confinementMutex;
+		const registry = calls[0].opts.activeWorktrees;
 		const pick = calls[0].opts.pickMutex;
-		assert.ok(confinement, "confinementMutex should be defined when parallel > 1");
+		assert.ok(registry instanceof Set, "activeWorktrees should be a Set when parallel > 1");
 		assert.ok(pick, "pickMutex should be defined when parallel > 1");
-		assert.notStrictEqual(confinement, pick, "confinement and pick mutexes must be distinct");
 		for (const c of calls) {
-			assert.strictEqual(c.opts.confinementMutex, confinement);
+			assert.strictEqual(c.opts.activeWorktrees, registry, "all workers share one registry");
 			assert.strictEqual(c.opts.pickMutex, pick);
 		}
 	});
 
-	it("serial orchestration does not manufacture pickMutex or confinementMutex", async (t) => {
+	it("serial orchestration does not manufacture pickMutex or activeWorktrees", async (t) => {
 		t.mock.method(console, "log", () => {});
 		const { runPipeline, calls } = createMockRunPipeline({
 			default: { completed: true, cost: 0.1 },
@@ -206,7 +205,7 @@ describe("runOrchestrator — parallel workers share mutex", () => {
 		assert.equal(calls.length, 2);
 		for (const c of calls) {
 			assert.equal(c.opts.pickMutex, undefined);
-			assert.equal(c.opts.confinementMutex, undefined);
+			assert.equal(c.opts.activeWorktrees, undefined);
 		}
 	});
 });

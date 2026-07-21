@@ -268,11 +268,14 @@ export interface PipelineOpts {
 	dryRun: boolean;
 	pickMutex?: Mutex;
 	/**
-	 * Run-scoped mutex serializing confinement-audited provider step windows under
-	 * `--parallel`. Distinct from `pickMutex` (claim/worktree creation). Absent for
-	 * serial runs and direct `runPipeline()` callers — those need no lock.
+	 * Run-scoped registry of currently-active peer worktrees under `--parallel`. Each
+	 * cycle adds its resolved worktree path on entry and removes it on finish, so a
+	 * sibling's legitimate self-write is never audited as another cycle's confinement
+	 * violation — without serializing any step. Absent for serial runs and direct
+	 * `runPipeline()` callers (they have no peers to exempt). `mainRepo` is never a member
+	 * and stays hard-gated by the snapshot.
 	 */
-	confinementMutex?: Mutex;
+	activeWorktrees?: Set<string>;
 	workerStatus?: CycleStatus;
 	logPath?: string;
 	/** Required for creating step renderers — injected by orchestrate() */

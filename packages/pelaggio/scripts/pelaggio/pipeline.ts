@@ -187,7 +187,12 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	function forbiddenRootsForStep(cwd: string, ownWorktree?: string): string[] {
 		const cwdAbs = resolve(cwd);
 		const mainAbs = resolve(mainRepo);
-		const exempt = new Set([cwdAbs, ...(ownWorktree ? [resolve(ownWorktree)] : [])]);
+		// Exempt this step's cwd, its own worktree, and — under `--parallel` — every peer
+		// worktree currently running a cycle. An active sibling's legitimate self-write must
+		// not trip this cycle's whole-tree snapshot; cross-tree corruption is caught by the
+		// capability/write-set boundary, not this snapshot. `mainRepo` is never in the
+		// registry, so it stays hard-gated below (subject only to `allowDirtyMain`).
+		const exempt = new Set([cwdAbs, ...(ownWorktree ? [resolve(ownWorktree)] : []), ...(opts.activeWorktrees ?? [])]);
 		// Main-repo-based steps (pick, shipwreck) legitimately write inside mainRepo
 		// itself — and shipwreck legitimately finishes a squash/commit in the item's
 		// own worktree (SKILL.md states 3c/3d) — but must not touch sibling worktrees.
@@ -273,12 +278,12 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		// Observer construction may stay outside; finish() must be inside the critical section.
 		const mainCheckoutObserver = allowDirtyMain && itemId !== null && resolve(cwd) !== resolve(mainRepo) ? createMainCheckoutDeltaObserver(mainRepo) : undefined;
 
-		// Serialize the full confinement transaction under `--parallel` so concurrent
-		// cycles cannot attribute one another's own-worktree writes as sibling violations.
-		const confinementMutex = opts.confinementMutex;
-		if (confinementMutex) await confinementMutex.acquire();
+		// Concurrent cycles never attribute one another's legitimate own-worktree writes as
+		// sibling violations because `forbiddenRootsForStep` exempts every active peer
+		// worktree (see `activeWorktrees`). No serialization is needed or wanted here — steps
+		// run fully in parallel; only `mainRepo` and inactive/stale siblings stay audited.
 		let result: StepResult;
-		try {
+		{
 			let forbiddenRoots: string[] = [];
 			let forbiddenBefore = new Map<string, string>();
 			let confinementRoots: string[] = [];
@@ -344,8 +349,6 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 					text,
 				};
 			}
-		} finally {
-			confinementMutex?.release();
 		}
 
 		if (commitLabel && result.subtype !== "error_confinement") {
@@ -453,6 +456,11 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	let shipwrecked = false;
 
 	function finish(result: CycleResult): CycleResult {
+		// Deregister this cycle's worktree from the active-peer registry on every exit path
+		// (success, park, abort, error). Once inactive, a sibling worktree is audited again
+		// by peers — a stale/abandoned tree must not be silently writable. Deleting an absent
+		// member (early pick-fail exits, before registration) is a harmless no-op.
+		if (worktree && worktree !== mainRepo) opts.activeWorktrees?.delete(resolve(worktree));
 		// Park wins over abort (it's a preserve-work path; abort is discard-work).
 		// Don't relabel successful cycles — SIGINT during the 2s grace after ship
 		// completed shouldn't turn a real success into a phantom abort.
@@ -580,6 +588,13 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 
 	logLabel = itemId!;
 	log(`→ ${worktree}`);
+
+	// Register this cycle's worktree as an active peer so concurrent siblings exempt it
+	// from their whole-tree confinement snapshot (see `forbiddenRootsForStep`). Resolved to
+	// match the audit's absolute-path comparison. `finish()` removes it on every exit path.
+	// `--no-worktree` cycles run in mainRepo (never registered — main stays hard-gated) and
+	// `--parallel > 1` is disallowed there, so there is no peer to exempt.
+	if (worktree && worktree !== mainRepo) opts.activeWorktrees?.add(resolve(worktree));
 
 	if (opts.workerStatus) opts.workerStatus.itemId = itemId!;
 
@@ -1532,9 +1547,11 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		const statusInterval = isParallel && v && TUI_ENABLED ? setInterval(() => liveStatus.render(), 200) : null;
 
 		const pickMutex = isParallel ? createMutex() : undefined;
-		// Distinct from pickMutex: serializes audited provider-step windows so concurrent
-		// cycles do not false-positive on one another's legitimate own-worktree writes.
-		const confinementMutex = isParallel ? createMutex() : undefined;
+		// Run-scoped registry of live peer worktrees. Each cycle registers its worktree on
+		// entry and deregisters on finish; peers exempt registered worktrees from their
+		// confinement snapshot so a sibling's own-worktree write never false-positives —
+		// without serializing any step. Serial runs need no registry (no peers).
+		const activeWorktrees = isParallel ? new Set<string>() : undefined;
 		let nextCycle = 0;
 		let totalSpent = 0;
 		// Consecutive "transient sdk error" cycle outcomes across the whole worker pool
@@ -1581,7 +1598,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						shipTarget,
 						dryRun,
 						pickMutex,
-						confinementMutex,
+						activeWorktrees,
 						workerStatus: status,
 						logPath,
 						liveStatus,
@@ -1828,8 +1845,9 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						verbose: !isParallel && v,
 						shipTarget,
 						dryRun: false,
-						// Resume skips pick (no pickMutex) but still opens audited provider steps.
-						confinementMutex,
+						// Resume skips pick (no pickMutex) but still opens audited provider steps;
+						// register its (already-existing) worktree so peers exempt it.
+						activeWorktrees,
 						workerStatus: st,
 						logPath: resumeLogPath,
 						liveStatus,
