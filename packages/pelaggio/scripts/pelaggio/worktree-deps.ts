@@ -9,7 +9,7 @@
  * at the top of each worktree-cwd step (mid-cycle drift guard).
  */
 
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
@@ -601,6 +601,12 @@ export async function repairMainNodeModules(mainRepo: string, runner: Runner = d
 	});
 }
 
+/** Resolve the primary checkout that owns a repo's shared Git directory. */
+export function resolveMainRepo(cwd: string = REPO, resolveCommonDir: (cwd: string) => string = (repo) => execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: repo, encoding: "utf8" })): string {
+	const commonDir = resolveCommonDir(cwd).trim();
+	return dirname(commonDir);
+}
+
 const isDirectInvocation = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isDirectInvocation) {
 	const arg = process.argv[2];
@@ -608,11 +614,12 @@ if (isDirectInvocation) {
 		console.error("usage: worktree-deps.ts <worktree-path> | --check-main | --repair-main");
 		process.exit(2);
 	}
+	const mainRepo = resolveMainRepo();
 
 	if (arg === "--check-main") {
-		const outbound = findOutboundMainSymlinks(REPO);
+		const outbound = findOutboundMainSymlinks(mainRepo);
 		if (outbound.length === 0) {
-			console.log(`clean: no outbound symlinks found in ${join(REPO, "node_modules")}`);
+			console.log(`clean: no outbound symlinks found in ${join(mainRepo, "node_modules")}`);
 			process.exit(0);
 		}
 		console.log(`corruption detected: ${outbound.length} outbound symlinks`);
@@ -622,9 +629,9 @@ if (isDirectInvocation) {
 
 	if (arg === "--repair-main") {
 		try {
-			const report = await repairMainNodeModules(REPO);
+			const report = await repairMainNodeModules(mainRepo);
 			if (!report.ranInstall) {
-				console.log(`clean: no outbound symlinks found in ${join(REPO, "node_modules")}`);
+				console.log(`clean: no outbound symlinks found in ${join(mainRepo, "node_modules")}`);
 				process.exit(0);
 			}
 			console.log(`corruption detected: ${report.repaired.length} outbound symlinks`);
@@ -638,7 +645,7 @@ if (isDirectInvocation) {
 	}
 
 	try {
-		const report = ensureWorktreeDeps(resolve(arg), REPO);
+		const report = ensureWorktreeDeps(resolve(arg), mainRepo);
 		console.log(report.root.type);
 		for (const { pkg, action } of report.subpackages) {
 			if (action.type !== "noop") console.log(`  ${pkg}: ${action.type}`);

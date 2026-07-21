@@ -136,6 +136,7 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 	let cost = 0;
 	let carried: ReviewCandidate[] = [];
 	let notes: ReviewCandidate[] = [];
+	let revisionsUsed = 0;
 	const passes: ReviewPassRecord[] = [];
 	if (new Set(configuredReviewers.map((slot) => slot.provider)).size !== configuredReviewers.length) {
 		return { outcome: "hard-block", diversity: { state: "softened", explanation: "review seats must be distinct and must exclude the artifact author" }, passes, survivors: carried, notes, cost };
@@ -263,7 +264,15 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 			carriedAfter: carried.map((item) => item.fingerprint),
 		});
 		const outcome = classifyReviewOutcome(carried, notes, rulings, Boolean(report), pass);
-		if (outcome !== "hard-block" || pass === policy.maxPasses || !report) {
+		// Escalate-early: revise->re-review only when the carried set can actually converge — i.e. EVERY
+		// surviving must-fix is fixable-by-the-loop. A survivor is unclearable when it is safety-class
+		// (retained every pass by #272, a lone Judge can never clear it) or the Judge ruled it
+		// `unfixable-blocker`. If ANY survivor is unclearable, the set can never converge no matter how many
+		// fixable ones the author clears — so a mixed fixable+unclearable set must NOT keep iterating; raise
+		// to a human now instead of burning revision passes. Also stop once the configured `maxRevisions`
+		// budget is spent (0 → no author revision at all). (Cross-model disagreement already returns above.)
+		const hasUnclearableSurvivor = carried.some((candidate) => SAFETY_CLASSES.includes(candidate.finding.class) || rulings.get(candidate.candidateId) === "unfixable-blocker");
+		if (outcome !== "hard-block" || pass === policy.maxPasses || !report || hasUnclearableSurvivor || revisionsUsed >= policy.maxRevisions) {
 			const dissentCandidate = carried.find((candidate) => rulings.get(candidate.candidateId) === "judgment-dissent");
 			return {
 				outcome,
@@ -286,6 +295,7 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 		if (revisionSignal.parked) Object.assign(options.parkSignal, revisionSignal);
 		cost += revision.cost;
 		if (!revision.ok || cost > policy.budgetCap) return { outcome: options.parkSignal.parked || cost > policy.budgetCap ? "budget" : "hard-block", diversity, passes, survivors: carried, notes, cost };
+		revisionsUsed++;
 	}
 	return { outcome: "hard-block", diversity, passes, survivors: carried, notes, cost };
 }

@@ -74,6 +74,16 @@ comments.
 
 ## CI runner flow
 
+The `pr-review` subcommand is the CI/local-runner implementation of this gate. It is
+not a read-only review preview: invoking `npx pelaggio pr-review --pr <n>` reads the
+PR through `gh`, upserts the Pelaggio review comment, posts the `review` commit status
+to the PR's head SHA, and exits non-zero when the gate blocks or the `review` status
+write fails (the review-comment upsert is best-effort and does not affect the exit code).
+Run it only where `gh` is authenticated for the repository with permission to read
+the PR and write issue comments and commit statuses. In the normal `ci` configuration,
+the workflow below owns the invocation; developers do not need to run it as part of
+the ordinary `pelaggio run` pipeline.
+
 1. `.github/workflows/pr-review.yml` triggers on `pull_request`
    (`opened`, `synchronize`, `reopened`, `ready_for_review`) targeting `main`.
 2. The job id is **`pr-review-ci`** (deliberately *not* `review`). It posts the

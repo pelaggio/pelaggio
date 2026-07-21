@@ -127,8 +127,8 @@ export interface AuthoringReviewConfig {
 	reviewers: ReviewSlot[];
 	judge: ReviewSlot;
 	blockingBar: AuthoringBlockingBar;
-	maxPasses: 2;
-	maxRevisions: 1;
+	maxPasses: number;
+	maxRevisions: number;
 	budgetCap: number;
 	providerDiversity: "prefer";
 }
@@ -217,9 +217,9 @@ export const DEFAULTS = {
 			],
 			judge: { id: "judge", provider: "claude" },
 			blockingBar: "must-fix",
-			maxPasses: 2,
-			maxRevisions: 1,
-			budgetCap: 75,
+			maxPasses: 5,
+			maxRevisions: 4,
+			budgetCap: 180,
 			providerDiversity: "prefer",
 		},
 	},
@@ -626,8 +626,19 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		if (authoring !== undefined) {
 			if (!isPlainObject(authoring)) throw new Error(`${configPath}: expected \`review.authoring\` to be a map`);
 			if (authoring.enabled !== undefined && typeof authoring.enabled !== "boolean") throw new Error(`${configPath}: expected \`review.authoring.enabled\` to be a boolean`);
-			if (authoring["max-passes"] !== undefined && authoring["max-passes"] !== 2) throw new Error(`${configPath}: \`review.authoring.max-passes\` must be 2`);
-			if (authoring["max-revisions"] !== undefined && authoring["max-revisions"] !== 1) throw new Error(`${configPath}: \`review.authoring.max-revisions\` must be 1`);
+			let authoringMaxPasses = reviewAuthoring.maxPasses;
+			if (authoring["max-passes"] !== undefined) {
+				const mp = authoring["max-passes"];
+				if (!Number.isInteger(mp) || (mp as number) < 1 || (mp as number) > 5) throw new Error(`${configPath}: \`review.authoring.max-passes\` must be an integer from 1 to 5, got ${JSON.stringify(mp)}`);
+				authoringMaxPasses = mp as number;
+			}
+			let authoringMaxRevisions = Math.min(reviewAuthoring.maxRevisions, authoringMaxPasses - 1);
+			if (authoring["max-revisions"] !== undefined) {
+				const mr = authoring["max-revisions"];
+				if (!Number.isInteger(mr) || (mr as number) < 0 || (mr as number) > authoringMaxPasses - 1)
+					throw new Error(`${configPath}: \`review.authoring.max-revisions\` must be an integer from 0 to ${authoringMaxPasses - 1} (max-passes − 1), got ${JSON.stringify(mr)}`);
+				authoringMaxRevisions = mr as number;
+			}
 			if (authoring["blocking-bar"] !== undefined && authoring["blocking-bar"] !== "must-fix") throw new Error(`${configPath}: \`review.authoring.blocking-bar\` must be must-fix`);
 			if (authoring["provider-diversity"] !== undefined && authoring["provider-diversity"] !== "prefer") throw new Error(`${configPath}: \`review.authoring.provider-diversity\` must be prefer`);
 			const cap = authoring["budget-cap"] ?? reviewAuthoring.budgetCap;
@@ -640,7 +651,16 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 				if (new Set(reviewers.map((slot) => slot.provider)).size !== reviewers.length) throw new Error(`${configPath}: review.authoring reviewer providers must be unique`);
 			}
 			const judge = authoring.judge === undefined ? reviewAuthoring.judge : parseReviewSlot(authoring.judge, "review.authoring.judge", configPath, "judge");
-			reviewAuthoring = { enabled: (authoring.enabled as boolean | undefined) ?? reviewAuthoring.enabled, reviewers, judge, blockingBar: "must-fix", maxPasses: 2, maxRevisions: 1, budgetCap: cap, providerDiversity: "prefer" };
+			reviewAuthoring = {
+				enabled: (authoring.enabled as boolean | undefined) ?? reviewAuthoring.enabled,
+				reviewers,
+				judge,
+				blockingBar: "must-fix",
+				maxPasses: authoringMaxPasses,
+				maxRevisions: authoringMaxRevisions,
+				budgetCap: cap,
+				providerDiversity: "prefer",
+			};
 		}
 	}
 

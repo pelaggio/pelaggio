@@ -61,9 +61,9 @@ review:                         # PR review poster (issue #84)
     enabled: false
     provider-diversity: prefer
     blocking-bar: must-fix
-    max-passes: 2
-    max-revisions: 1
-    budget-cap: 75
+    max-passes: 5              # iterate to convergence (integer 1..5) before raising to a human
+    max-revisions: 4           # author revisions (integer 0..max-passes-1); 0 = review but never auto-revise
+    budget-cap: 180            # aggregate $ cap; sized for a full 5-pass convergence
     reviewers:
       - { id: claude, provider: claude }
       - { id: codex, provider: codex, codex-model: gpt-5-codex }
@@ -396,21 +396,23 @@ banner at startup naming the target and how to restore the gate (`ship: { target
 step's job ends once the branch is squashed, merged into local `main`, and
 post-merge verification passes — it then stops (`ship-merged: <ID>`). Everything
 past the merge — recovering any stray `MAIN_REPO` changes as a commit (never
-discarded), mark-done, archive-plan, the single `git push`, and worktree/branch
-cleanup — is run by the **pipeline itself** as deterministic, zero-turn,
-idempotent code (`ship/bookkeeping.ts`), not by the budget-capped agent. This
-guarantees bookkeeping can't be dropped when the ship step runs out of turns
-after merging, and can't destroy a sibling cycle's uncommitted work. The tail
-runs only on a **verified** merge (the ship step reported success, i.e. it
-completed post-merge verification): a merge that lands but is unverified (the
-step ran out of turns) or fails post-merge verification routes to `/shipwreck`
-instead of a blind push. Mark-done and archive-plan are independent best-effort
-mutations: either failure is reported as a shipped-bookkeeping warning with a
-manual remediation command, but the verified feature push is still attempted.
-Push/integration failure remains fatal and leaves the branch intact (recoverable
-on local `main`). A successful push permits worktree/branch cleanup even when
-roadmap metadata is incomplete. Inline (human-typed) `/ship` still runs the full
-flow itself.
+discarded), mark-done, archive-plan, the single `git push`, worktree cleanup,
+and claim-branch delete — is run by the **pipeline itself** as deterministic,
+zero-turn, idempotent code (`ship/bookkeeping.ts`), not by the budget-capped
+agent. This guarantees bookkeeping can't be dropped when the ship step runs out
+of turns after merging, and can't destroy a sibling cycle's uncommitted work.
+The tail runs only on a **verified** merge (the ship step reported success,
+i.e. it completed post-merge verification): a merge that lands but is unverified
+(the step ran out of turns) or fails post-merge verification routes to
+`/shipwreck` instead of a blind push. Mark-done and archive-plan are independent
+best-effort mutations: either failure is reported as a shipped-bookkeeping
+warning with a manual remediation command, but the verified feature push is
+still attempted. Push/integration failure remains fatal and leaves the branch
+intact (recoverable on local `main`). A successful push permits **worktree**
+cleanup even when roadmap metadata is incomplete; **claim-branch delete is
+gated on mark-done success** so a still-open tracker item cannot be re-picked
+until the operator reconciles mark-done and releases the claim (#205). Inline
+(human-typed) `/ship` still runs the full flow itself under the same gate.
 
 In PR modes the worktree, local branch, and post-merge doc updates
 (task-index, roadmap "Recently completed", plan archive) are intentionally

@@ -67,9 +67,9 @@ describe("authoring review loop controller", () => {
 		reviewers: [{ id: "grok", provider: "grok" }],
 		judge: { id: "judge", provider: "claude" },
 		blockingBar: "must-fix",
-		maxPasses: 2,
-		maxRevisions: 1,
-		budgetCap: 100,
+		maxPasses: 5,
+		maxRevisions: 4,
+		budgetCap: 1000,
 		providerDiversity: "prefer",
 	};
 	const ok = (fullText: string): StepResult => ({ ok: true, subtype: "success", text: fullText, fullText, cost: 0, turns: 0 });
@@ -170,7 +170,47 @@ describe("authoring review loop controller", () => {
 		assert.match(result.disagreement?.evidenceFingerprint ?? "", /^[a-f0-9]{64}$/);
 	});
 
-	it("retains a prior-pass safety blocker in a later pass/block escalation", async () => {
+	it("does not manufacture a split when a reviewer echoes the SKILL.md schema example", async () => {
+		// Reproduces the observed codex-seat failure (item #205 review-records): one reviewer echoed the
+		// pr-review SKILL.md AUTHORING_REVIEW_FINDINGS example verbatim (fake must-fix at src/file.ts:1),
+		// while the other genuinely passed. Before the fail-closed guard this schema-valid echo produced a
+		// cross-model pass/block split, a safety-classed disagreement, and a spurious escalation/park. Now
+		// the echoing seat is rejected fail-closed (recorded ok:false w/ diagnostic), so the clean seat
+		// carries the pass with no disagreement.
+		const policy = {
+			...basePolicy,
+			maxPasses: 1,
+			reviewers: [
+				{ id: "claude", provider: "claude" as const },
+				{ id: "codex", provider: "codex" as const },
+			],
+		};
+		const clean = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 3, summary: "looks good", findings: [] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
+		const exampleEcho = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 3, summary: "Concise single-line summary.", findings: [{ severity: "must-fix", message: "Concrete single-line finding.", path: "src/file.ts", line: 1 }] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
+		const result = await runReviewLoop({
+			policy,
+			author: { provider: "grok" },
+			parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" },
+			classificationContext: emptyClassification,
+			runSeat: async (request) => {
+				if (request.role === "judge") return ok(judgeReport([]));
+				return ok(request.slot.id === "codex" ? exampleEcho : clean);
+			},
+			prompts: { review: () => "r", judge: () => "j", revise: () => "rev" },
+		});
+		assert.equal(result.outcome, "converged-clean");
+		assert.equal(result.disagreement, undefined);
+		assert.equal(result.survivors.length, 0);
+		const codexRecord = result.passes[0].reviewers.find((r) => r.identity.seatId === "codex");
+		assert.equal(codexRecord?.ok, false);
+		assert.match(codexRecord?.diagnostic ?? "", /schema example/);
+	});
+
+	it("escalates a safety-class must-fix on pass 1 with no author revision (escalate-early)", async () => {
+		// A safety-class must-fix is retained every pass (#272) and can never self-clear, so revising +
+		// re-reviewing is wasted work: raise to a human on first detection. Even a Judge `survives` +
+		// `fixable-blocker` ruling cannot make it fixable — the safety class dominates. Assert the author
+		// revise seat was never invoked and the loop ran exactly one pass.
 		const policy = {
 			...basePolicy,
 			reviewers: [
@@ -178,29 +218,208 @@ describe("authoring review loop controller", () => {
 				{ id: "reviewer-b", provider: "claude" as const },
 			],
 		};
+		const roles: string[] = [];
 		const safetyBlock = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 3, summary: "security regression", findings: [{ severity: "must-fix", message: "unsafe", ruleId: "pelaggio/security/secret-leak" }] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
-		const pass = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 3, summary: "looks good", findings: [] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
-		const judgmentBlock = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 3, summary: "behavior is debatable", findings: [{ severity: "must-fix", message: "debatable", ruleId: "pelaggio/judgment/style" }] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
 		const result = await runReviewLoop({
 			policy,
 			author: { provider: "codex" },
 			parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" },
 			classificationContext: emptyClassification,
 			runSeat: async (request) => {
+				roles.push(request.role);
 				if (request.role === "judge") return ok(judgeReport([{ candidateId: "C1", decision: "survives", rationale: "revise", class: "security-and-secrets", ruling: "fixable-blocker" }]));
-				if (request.role === "author") return ok("");
-				if (request.pass === 1) return ok(safetyBlock);
-				return ok(request.slot.id === "reviewer-a" ? pass : judgmentBlock);
+				return ok(safetyBlock);
 			},
 			prompts: { review: () => "r", judge: () => "j", revise: () => "rev" },
 		});
 		assert.equal(result.outcome, "hard-block");
-		assert.equal(result.disagreement?.pass, 2);
-		assert.equal(result.disagreement?.hasSafetyBlocker, true);
+		assert.equal(result.passes.length, 1);
+		assert.equal(
+			roles.some((role) => role === "author"),
+			false,
+		);
 		assert.equal(
 			result.survivors.some((item) => item.finding.class === "security-and-secrets"),
 			true,
 		);
+	});
+
+	it("escalates an `unfixable-blocker` non-safety survivor on pass 1 with no author revision (escalate-early)", async () => {
+		const roles: string[] = [];
+		const result = await runReviewLoop({
+			policy: { ...basePolicy },
+			author: { provider: "codex" },
+			parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" },
+			classificationContext: emptyClassification,
+			runSeat: async (request) => {
+				roles.push(request.role);
+				if (request.role === "judge") return ok(judgeReport([{ candidateId: "C1", decision: "survives", rationale: "cannot be fixed here", class: "judgment", ruling: "unfixable-blocker" }]));
+				return ok(reviewerFindings("judgment"));
+			},
+			prompts: { review: () => "r", judge: () => "j", revise: () => "rev" },
+		});
+		assert.equal(result.outcome, "hard-block");
+		assert.equal(result.passes.length, 1);
+		assert.equal(
+			roles.some((role) => role === "author"),
+			false,
+		);
+	});
+
+	it("escalates a mixed fixable+safety survivor set immediately without revising (escalate-early)", async () => {
+		// A pass carrying BOTH a fixable non-safety must-fix AND a safety-class must-fix can never converge:
+		// the safety survivor is retained forever (#272). The guard must raise on ANY unclearable survivor,
+		// not only when none is fixable — otherwise `.some(fixable)` burns all 5 passes on a hopeless set.
+		const roles: string[] = [];
+		// C1 fixable judgment (ruleId), C2 safety (harness-classified security-and-secrets via ruleId).
+		const mixed = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({
+			schemaVersion: 3,
+			summary: "mixed",
+			findings: [
+				{ severity: "must-fix", message: "fixable", ruleId: "pelaggio/judgment/style" },
+				{ severity: "must-fix", message: "unsafe", ruleId: "pelaggio/security/secret-leak" },
+			],
+		})}\nEND_AUTHORING_REVIEW_FINDINGS`;
+		const result = await runReviewLoop({
+			policy: { ...basePolicy },
+			author: { provider: "codex" },
+			parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" },
+			classificationContext: emptyClassification,
+			runSeat: async (request) => {
+				roles.push(request.role);
+				if (request.role === "judge")
+					return ok(
+						judgeReport([
+							{ candidateId: "C1", decision: "survives", rationale: "revise", ruling: "fixable-blocker" },
+							{ candidateId: "C2", decision: "survives", rationale: "unsafe", ruling: "fixable-blocker" },
+						]),
+					);
+				return ok(mixed);
+			},
+			prompts: { review: () => "r", judge: () => "j", revise: () => "rev" },
+		});
+		assert.equal(result.outcome, "hard-block");
+		assert.equal(result.passes.length, 1);
+		assert.equal(
+			roles.some((role) => role === "author"),
+			false,
+		);
+	});
+
+	it("honors maxRevisions: 0 by escalating a fixable survivor with no author revision", async () => {
+		// max-revisions:0 means review-but-never-auto-revise. A fixable must-fix must hard-block on pass 1;
+		// the loop must consume policy.maxRevisions, not bound revisions only by maxPasses.
+		const roles: string[] = [];
+		const result = await runReviewLoop({
+			policy: { ...basePolicy, maxRevisions: 0 },
+			author: { provider: "codex" },
+			parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" },
+			classificationContext: emptyClassification,
+			runSeat: async (request) => {
+				roles.push(request.role);
+				if (request.role === "judge") return ok(judgeReport([{ candidateId: "C1", decision: "survives", rationale: "revise", ruling: "fixable-blocker" }]));
+				return ok(reviewerFindings("judgment"));
+			},
+			prompts: { review: () => "r", judge: () => "j", revise: () => "rev" },
+		});
+		assert.equal(result.outcome, "hard-block");
+		assert.equal(result.passes.length, 1);
+		assert.equal(
+			roles.some((role) => role === "author"),
+			false,
+		);
+	});
+
+	it("iterates a fixable must-fix to convergence before the pass ceiling", async () => {
+		// A non-safety must-fix the Judge rules `survives`/`fixable-blocker` for two passes (author revises
+		// between them), then the fix lands: on pass 3 the reviewer stops raising it and the Judge refutes
+		// the carried candidate, so it leaves `carried` and the pass converges clean — well before maxPasses
+		// (5). The author revise seat ran exactly twice (once after each of the two unresolved passes).
+		let reviewPass = 0;
+		let authorCalls = 0;
+		const block = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 3, summary: "fix me", findings: [{ severity: "must-fix", message: "boom", ruleId: "pelaggio/judgment/style" }] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
+		const clean = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 3, summary: "clean", findings: [] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
+		const result = await runReviewLoop({
+			policy: { ...basePolicy },
+			author: { provider: "codex" },
+			parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" },
+			classificationContext: emptyClassification,
+			runSeat: async (request) => {
+				if (request.role === "author") {
+					authorCalls++;
+					return ok("");
+				}
+				if (request.role === "reviewer") {
+					reviewPass++;
+					// Reviewer blocks on passes 1 and 2, then passes on pass 3 (revision landed).
+					return ok(reviewPass >= 3 ? clean : block);
+				}
+				// Judge: the carried must-fix survives while the reviewer still raises it (passes 1-2); once
+				// the fix lands (pass 3) the reviewer drops it but it is re-seeded as carried, and the Judge
+				// now refutes it — the only way a fixable candidate clears `carried`.
+				const survives = reviewPass < 3;
+				return ok(judgeReport([{ candidateId: "C1", decision: survives ? "survives" : "refuted", rationale: "r", class: "judgment", ...(survives ? { ruling: "fixable-blocker" as const } : {}) }]));
+			},
+			prompts: { review: () => "r", judge: () => "j", revise: () => "rev" },
+		});
+		assert.equal(result.outcome, "converged-clean");
+		assert.equal(result.passes.length, 3);
+		assert.equal(authorCalls, 2);
+	});
+
+	it("hard-blocks when a fixable must-fix survives all 5 passes", async () => {
+		let authorCalls = 0;
+		const block = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 3, summary: "fix me", findings: [{ severity: "must-fix", message: "boom", ruleId: "pelaggio/judgment/style" }] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
+		const result = await runReviewLoop({
+			policy: { ...basePolicy },
+			author: { provider: "codex" },
+			parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" },
+			classificationContext: emptyClassification,
+			runSeat: async (request) => {
+				if (request.role === "author") {
+					authorCalls++;
+					return ok("");
+				}
+				if (request.role === "judge") return ok(judgeReport([{ candidateId: "C1", decision: "survives", rationale: "still broken", class: "judgment", ruling: "fixable-blocker" }]));
+				return ok(block);
+			},
+			prompts: { review: () => "r", judge: () => "j", revise: () => "rev" },
+		});
+		assert.equal(result.outcome, "hard-block");
+		assert.equal(result.passes.length, 5);
+		// One revise seat between each of the first four passes; none after the terminal pass.
+		assert.equal(authorCalls, 4);
+		assert.equal(result.survivors.length, 1);
+	});
+
+	it("escalates a cross-model disagreement immediately regardless of the raised pass ceiling", async () => {
+		let judgeCalls = 0;
+		let authorCalls = 0;
+		const policy = {
+			...basePolicy,
+			reviewers: [
+				{ id: "reviewer-a", provider: "grok" as const },
+				{ id: "reviewer-b", provider: "claude" as const },
+			],
+		};
+		const pass = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 3, summary: "looks good", findings: [] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
+		const block = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 3, summary: "behavior is wrong", findings: [{ severity: "must-fix", message: "boom", ruleId: "pelaggio/judgment/style" }] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
+		const result = await runReviewLoop({
+			policy,
+			author: { provider: "codex" },
+			parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" },
+			classificationContext: emptyClassification,
+			runSeat: async (request) => {
+				if (request.role === "judge") judgeCalls++;
+				if (request.role === "author") authorCalls++;
+				return ok(request.slot.id === "reviewer-a" ? pass : block);
+			},
+			prompts: { review: () => "r", judge: () => "j", revise: () => "rev" },
+		});
+		assert.equal(result.outcome, "dissent");
+		assert.equal(result.passes.length, 1);
+		assert.equal(judgeCalls, 0);
+		assert.equal(authorCalls, 0);
 	});
 
 	it("ships when the Judge cleanly refutes a judgment-allowlist must-fix", async () => {

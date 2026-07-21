@@ -27,6 +27,7 @@ import { dispatchStepEffects as dispatchStepEffectsDefault, type Effect, Effects
 import { DEFAULT_FLOW_POLICY, type FlowPolicy } from "./flow-policy.js";
 import {
 	appendLog as appendLogDefault,
+	buildReviewDiffBlock,
 	buildStepArgs,
 	canRetryWithinBudget,
 	captureShipState,
@@ -974,6 +975,10 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			if (existingEscalation.state === "resolved-proceed" && existingEscalation.escalation.hasSafetyBlocker) return parkExit("adversarial review safety blocker")!;
 			const policy = resolveAuthoringReviewConfig(CONFIG, profile);
 			const authorSettings = implementationAuthor;
+			// Hand every reviewer seat the actual branch diff so a single-turn seat that never runs
+			// `git diff` (codex) still reviews real code instead of parroting the skill example.
+			// Recomputed per pass inside the `review` prompt: the author revision seat advances HEAD
+			// between passes, so a once-computed block would show pass 2+ reviewers pre-revision code.
 			const loop =
 				existingEscalation.state === "resolved-proceed"
 					? undefined
@@ -991,7 +996,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 									...(role === "author" ? { commitLabel: "adversarial review revision" } : {}),
 								}),
 							prompts: {
-								review: () => expandSkill("pr-review", "--authoring-loop"),
+								review: () => `${expandSkill("pr-review", "--authoring-loop")}\n\n${buildReviewDiffBlock(worktree!)}`,
 								judge: (candidates) => `${expandSkill("pr-verify", "--authoring-loop-judge")}\n\nTRUSTED_CANDIDATE_DATA\n${JSON.stringify(candidates)}\nEND_TRUSTED_CANDIDATE_DATA`,
 								revise: (survivors) => `${expandSkill("shakedown", shakedownCodeArgs)}\n\nThe Judge retained these blockers:\n${JSON.stringify(survivors)}`,
 							},
