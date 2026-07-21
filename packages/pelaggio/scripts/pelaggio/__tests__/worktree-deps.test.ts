@@ -3,7 +3,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readlinkSyn
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, it } from "node:test";
-import { decideDepsAction, decideSubpackageAction, ensureWorktreeDeps, findOutboundMainSymlinks, findWorkspaceEntriesIn, listWorkspacePackageMap, listWorkspaceSubpackages, repairMainNodeModules } from "../worktree-deps.js";
+import { decideDepsAction, decideSubpackageAction, ensureWorktreeDeps, findOutboundMainSymlinks, findWorkspaceEntriesIn, listWorkspacePackageMap, listWorkspaceSubpackages, repairMainNodeModules, resolveMainRepo } from "../worktree-deps.js";
 
 interface Setup {
 	main: string;
@@ -15,6 +15,30 @@ interface SubpackageSpec {
 	mainNm?: "dir" | null;
 	worktreeNm?: "dir" | "symlink-to-main-sub" | "symlink-to-wrong" | null;
 }
+
+describe("resolveMainRepo", () => {
+	it("returns the primary checkout when invoked from a linked worktree", () => {
+		const worktree = "/repos/project-230";
+		assert.equal(
+			resolveMainRepo(worktree, (cwd) => {
+				assert.equal(cwd, worktree);
+				return "/repos/project/.git\n";
+			}),
+			"/repos/project",
+		);
+	});
+
+	it("returns the same checkout when invoked from the primary repo itself", () => {
+		const main = "/repos/project";
+		assert.equal(
+			resolveMainRepo(main, (cwd) => {
+				assert.equal(cwd, main);
+				return "/repos/project/.git\n";
+			}),
+			"/repos/project",
+		);
+	});
+});
 
 function buildLock(body: string | null | undefined, subpackages: SubpackageSpec[] | undefined): string | null | undefined {
 	if (body === null || body === undefined) return body;

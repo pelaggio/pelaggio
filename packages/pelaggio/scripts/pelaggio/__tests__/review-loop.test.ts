@@ -130,6 +130,41 @@ describe("authoring review loop controller", () => {
 		assert.match(result.disagreement?.evidenceFingerprint ?? "", /^[a-f0-9]{64}$/);
 	});
 
+	it("does not manufacture a split when a reviewer echoes the SKILL.md schema example", async () => {
+		// Reproduces the observed codex-seat failure (item #205 review-records): one reviewer echoed the
+		// pr-review SKILL.md AUTHORING_REVIEW_FINDINGS example verbatim (fake must-fix at src/file.ts:1),
+		// while the other genuinely passed. Before the fail-closed guard this schema-valid echo produced a
+		// cross-model pass/block split, a safety-classed disagreement, and a spurious escalation/park. Now
+		// the echoing seat is rejected fail-closed (recorded ok:false w/ diagnostic), so the clean seat
+		// carries the pass with no disagreement.
+		const policy = {
+			...basePolicy,
+			maxPasses: 1,
+			reviewers: [
+				{ id: "claude", provider: "claude" as const },
+				{ id: "codex", provider: "codex" as const },
+			],
+		};
+		const clean = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 2, summary: "looks good", findings: [] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
+		const exampleEcho = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 2, summary: "Concise single-line summary.", findings: [{ severity: "must-fix", class: "correctness-regression", message: "Concrete single-line finding.", path: "src/file.ts", line: 1 }] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
+		const result = await runReviewLoop({
+			policy,
+			author: { provider: "grok" },
+			parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" },
+			runSeat: async (request) => {
+				if (request.role === "judge") return ok(judgeReport([]));
+				return ok(request.slot.id === "codex" ? exampleEcho : clean);
+			},
+			prompts: { review: () => "r", judge: () => "j", revise: () => "rev" },
+		});
+		assert.equal(result.outcome, "converged-clean");
+		assert.equal(result.disagreement, undefined);
+		assert.equal(result.survivors.length, 0);
+		const codexRecord = result.passes[0].reviewers.find((r) => r.identity.seatId === "codex");
+		assert.equal(codexRecord?.ok, false);
+		assert.match(codexRecord?.diagnostic ?? "", /schema example/);
+	});
+
 	it("retains a prior-pass safety blocker in a later pass/block escalation", async () => {
 		const policy = {
 			...basePolicy,

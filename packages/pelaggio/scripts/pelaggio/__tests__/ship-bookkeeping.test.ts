@@ -92,7 +92,7 @@ describe("runShipBookkeeping — happy path", () => {
 });
 
 describe("runShipBookkeeping — roadmap failures warn but do not strand the ship", () => {
-	it("markDone throwing → archive, push, and cleanup still run with remediation warning", async () => {
+	it("markDone throwing → archive + push + worktree remove; claim branch retained to prevent re-pick (#205)", async () => {
 		const { order, exec } = makeExecSpy();
 		const { roadmap, calls } = makeRoadmapSpy({ markDoneThrows: "could not locate open row for TOOL-9" });
 		const result = await runShipBookkeeping(CTX, { roadmap, log: () => {}, exec, status: () => "", repairMain: () => {} });
@@ -101,15 +101,21 @@ describe("runShipBookkeeping — roadmap failures warn but do not strand the shi
 		assert.equal(result.markedDone, false);
 		assert.equal(result.archived, true);
 		assert.equal(result.pushed, true);
-		assert.equal(result.cleanedUp, true);
+		assert.equal(result.cleanedUp, false, "claim branch retained → cleanedUp must be false");
 		assert.deepEqual(calls.archivePlan, ["TOOL-9"]);
 		assert.match(result.warnings[0] ?? "", /mark-done failed.*npx pelaggio roadmap mark-done TOOL-9/);
+		assert.match(result.warnings[0] ?? "", /retained.*prevent re-pick|claim branch.*retained/i);
 		assert.equal(order.filter((c) => c === "git push origin main").length, 1);
-		assert.ok(order.some((c) => /git worktree remove/.test(c)));
+		assert.ok(
+			order.some((c) => /git worktree remove/.test(c)),
+			"worktree cleanup still runs after push",
+		);
+		assert.ok(!order.some((c) => /git branch -d/.test(c)), "local claim branch must not be deleted when mark-done failed");
+		assert.ok(!order.some((c) => /git push origin --delete/.test(c)), "remote claim branch must not be deleted when mark-done failed");
 		assert.ok(!order.some((c) => DISCARD_RE.test(c)), `discard command leaked: ${order.join(" | ")}`);
 	});
 
-	it("archivePlan throwing → push and cleanup still run with remediation warning", async () => {
+	it("archivePlan throwing → push and full cleanup still run (archive is orthogonal to re-pick)", async () => {
 		const { order, exec } = makeExecSpy();
 		const { roadmap } = makeRoadmapSpy({ archivePlanThrows: "git mv failed: dest exists" });
 		const result = await runShipBookkeeping(CTX, { roadmap, log: () => {}, exec, status: () => "", repairMain: () => {} });
@@ -121,9 +127,14 @@ describe("runShipBookkeeping — roadmap failures warn but do not strand the shi
 		assert.equal(result.cleanedUp, true);
 		assert.match(result.warnings[0] ?? "", /archive-plan failed.*npx pelaggio roadmap archive-plan TOOL-9/);
 		assert.ok(order.some((c) => /git worktree remove/.test(c)));
+		assert.ok(
+			order.some((c) => /git branch -d/.test(c)),
+			"mark-done succeeded → claim branch is deleted",
+		);
+		assert.ok(order.some((c) => /git push origin --delete/.test(c)));
 	});
 
-	it("both mutations throwing retains both warnings and pushes exactly once", async () => {
+	it("both mutations throwing → both warnings, push once, worktree cleaned, claim branch retained", async () => {
 		const { order, exec } = makeExecSpy();
 		const { roadmap, calls } = makeRoadmapSpy({ markDoneThrows: "EACCES mark", archivePlanThrows: "EACCES archive" });
 		const result = await runShipBookkeeping(CTX, { roadmap, log: () => {}, exec, status: () => "", repairMain: () => {} });
@@ -131,9 +142,13 @@ describe("runShipBookkeeping — roadmap failures warn but do not strand the shi
 		assert.equal(result.ok, true);
 		assert.equal(result.markedDone, false);
 		assert.equal(result.archived, false);
+		assert.equal(result.cleanedUp, false);
 		assert.equal(result.warnings.length, 2);
 		assert.deepEqual(calls, { markDone: ["TOOL-9"], archivePlan: ["TOOL-9"] });
 		assert.equal(order.filter((c) => c === "git push origin main").length, 1);
+		assert.ok(order.some((c) => /git worktree remove/.test(c)));
+		assert.ok(!order.some((c) => /git branch -d/.test(c)));
+		assert.ok(!order.some((c) => /git push origin --delete/.test(c)));
 	});
 });
 
