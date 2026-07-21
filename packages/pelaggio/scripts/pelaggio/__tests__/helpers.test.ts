@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { describe, it } from "node:test";
 import {
+	buildReviewDiffBlock,
 	buildStepArgs,
 	canRetryWithinBudget,
 	checkpoint,
@@ -15,9 +16,11 @@ import {
 	countPlanFiles,
 	createMainCheckoutDeltaObserver,
 	ensureMainCheckoutOnBranch,
+	expandSkill,
 	filesChangedSince,
 	findLoggedArtifactAuthor,
 	fmtWait,
+	formatChangesUnderReview,
 	formatResumeHint,
 	formatReviewMetrics,
 	getHeadSha,
@@ -35,6 +38,7 @@ import {
 	parseShipMerged,
 	parseVerdict,
 	parseWaitFlag,
+	REVIEW_DIFF_MAX_BYTES,
 	resolveParkReset,
 	revertPlanPolish,
 	reviewFindingsPreamble,
@@ -433,6 +437,64 @@ describe("filesChangedSince", () => {
 		const head = getHeadSha(dir);
 		assert.ok(head);
 		assert.deepEqual(filesChangedSince(dir, head), []);
+	});
+});
+
+describe("buildReviewDiffBlock (authoring-loop reviewer diff injection)", () => {
+	it("injects the actual branch diff so a single-turn seat has real code to review", () => {
+		const dir = makeFeatRepo();
+		commitFile(dir, "src/thing.ts", "export const answer = 42;\n", "feat: add thing");
+		const block = buildReviewDiffBlock(dir);
+		assert.match(block, /CHANGES UNDER REVIEW/);
+		// The changed hunk is present in the reviewer's prompt without the seat running git itself.
+		assert.match(block, /export const answer = 42;/);
+		assert.match(block, /src\/thing\.ts/);
+		assert.match(block, /```diff/);
+	});
+
+	it("emits an empty-diff note (never crashes) when the branch matches main", () => {
+		const dir = makeFeatRepo();
+		const block = buildReviewDiffBlock(dir);
+		assert.match(block, /CHANGES UNDER REVIEW/);
+		assert.match(block, /diff against `main` is empty/);
+	});
+
+	it("emits an unavailable note when git cannot compute the diff", () => {
+		const block = buildReviewDiffBlock("/does/not/exist");
+		assert.match(block, /could not compute the branch diff/);
+		assert.match(block, /Run `git diff main\.\.\.HEAD`/);
+	});
+
+	it("bounds the injected diff and points the seat at the remainder", () => {
+		const dir = makeFeatRepo();
+		// One large file well over the injection cap.
+		const big = `${"export const x = 1;\n".repeat(Math.ceil(REVIEW_DIFF_MAX_BYTES / 10))}`;
+		commitFile(dir, "src/big.ts", big, "feat: big file");
+		const block = buildReviewDiffBlock(dir);
+		assert.match(block, /diff truncated at the injection cap/);
+		assert.ok(Buffer.byteLength(block, "utf-8") < REVIEW_DIFF_MAX_BYTES + 2048, "injected block stays near the cap");
+	});
+
+	it("formatChangesUnderReview is pure and covers every state", () => {
+		assert.match(formatChangesUnderReview("", "empty"), /empty/);
+		assert.match(formatChangesUnderReview("", "unavailable"), /could not compute/);
+		assert.match(formatChangesUnderReview("+a", "ok"), /```diff\n\+a\n```/);
+		assert.match(formatChangesUnderReview("+a", "truncated"), /truncated at the injection cap/);
+		// A real review that echoes the schema example would be caught downstream; here we just confirm
+		// injected content lands verbatim inside the fence.
+		assert.match(formatChangesUnderReview("- old\n+ new", "ok"), /- old\n\+ new/);
+	});
+
+	it("the composed authoring-loop reviewer prompt carries both the review contract and the diff", () => {
+		// Mirrors pipeline.ts: `${expandSkill("pr-review","--authoring-loop")}\n\n${reviewDiffBlock}`.
+		// A single-turn codex seat that never runs git now sees the changed hunk directly in-prompt.
+		const dir = makeFeatRepo();
+		commitFile(dir, "src/thing.ts", "export const answer = 42;\n", "feat: add thing");
+		const skillBody = expandSkill("pr-review", "--authoring-loop");
+		const reviewerPrompt = `${skillBody}\n\n${buildReviewDiffBlock(dir)}`;
+		assert.match(reviewerPrompt, /AUTHORING_REVIEW_FINDINGS/); // the review reporting contract
+		assert.match(reviewerPrompt, /CHANGES UNDER REVIEW/);
+		assert.match(reviewerPrompt, /export const answer = 42;/); // the actual changed hunk
 	});
 });
 
