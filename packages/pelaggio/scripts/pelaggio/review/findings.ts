@@ -119,6 +119,21 @@ const CANDIDATE_ID_RE = /^C[1-9]\d*$/;
 const FINDING_CLASSES: readonly ReviewFindingClass[] = ["security", "data-loss", "correctness-regression", "judgment"];
 const JUDGE_RULINGS: readonly JudgeRuling[] = ["fixable-blocker", "unfixable-blocker", "judgment-dissent"];
 
+// The verbatim schema-example placeholder printed in `.claude/skills/pr-review/SKILL.md`
+// (the `AUTHORING_REVIEW_FINDINGS` example block). A weaker instruction-follower — observed
+// with the codex reviewer seat, which runs a single turn and does no diff inspection — echoes
+// this example instead of reviewing. Because it is schema-valid it would sail through as a real
+// `must-fix / correctness-regression` at `src/file.ts:1`, manufacturing a cross-model split and a
+// spurious escalation/park. Reject it fail-closed so the seat is recorded as not-completed rather
+// than as a fabricated blocker. Provider-agnostic: any seat that parrots the example is rejected.
+const EXAMPLE_SUMMARY = "Concise single-line summary.";
+const EXAMPLE_FINDING_MESSAGE = "Concrete single-line finding.";
+const EXAMPLE_FINDING_PATH = "src/file.ts";
+
+function isSchemaExampleFinding(finding: AuthoringReviewFinding): boolean {
+	return finding.message === EXAMPLE_FINDING_MESSAGE && finding.path === EXAMPLE_FINDING_PATH && finding.line === 1;
+}
+
 function parseDelimited(text: string, regex: RegExp, label: string): Record<string, unknown> {
 	const matches = [...text.matchAll(regex)];
 	if (matches.length !== 1) throw new ReviewFindingsParseError(matches.length === 0 ? `${label} block not found` : `multiple ${label} blocks found`);
@@ -160,6 +175,13 @@ export function parseAuthoringReviewFindings(text: string): AuthoringReviewRepor
 			findings.push({ ...finding, class: value.class as ReviewFindingClass });
 		}
 	});
+	// Fail closed on the parroted schema example (see EXAMPLE_* above). The seat did not review;
+	// treat it as an incomplete seat, not a real blocker. Trip on either the example summary or any
+	// example finding — a real review never emits these exact placeholder strings, so this cannot
+	// false-positive, and it also catches a fake-clean echo (example summary, empty findings).
+	if (summary?.trim() === EXAMPLE_SUMMARY || findings.some(isSchemaExampleFinding)) {
+		throw new ReviewFindingsParseError("authoring review findings echo the schema example verbatim (the seat did not review the diff)");
+	}
 	return { schemaVersion: 2, summary: summary ?? "", findings };
 }
 

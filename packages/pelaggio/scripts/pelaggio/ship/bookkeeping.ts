@@ -8,8 +8,9 @@ import { repairMainNodeModules } from "../worktree-deps.js";
 // For the `direct-push` ship target the agent's job ends at the merge: squash
 // → merge into local `main` → post-merge verification → STOP. Everything past
 // the merge — recovering stray MAIN_REPO dirt, mark-done, archive-plan, the
-// single push, and worktree/branch cleanup — is discretionary tail work that a
-// budget/turn-capped `ship` step kept dropping while still reporting success.
+// single push, worktree cleanup, and claim-branch delete (only after successful
+// mark-done) — is discretionary tail work that a budget/turn-capped `ship` step
+// kept dropping while still reporting success.
 //
 // This module lifts that tail out of the model and into deterministic,
 // **zero-turn, idempotent, best-effort** code that runs once the merge has
@@ -69,7 +70,12 @@ export interface ShipBookkeepingResult {
 	archived: boolean;
 	/** `git push origin main` ultimately succeeded. */
 	pushed: boolean;
-	/** Worktree/branch cleanup succeeded (reflects actual worktree + branch removal, not merely "attempted"). */
+	/**
+	 * Worktree + claim-branch cleanup succeeded. Worktree is always removed after
+	 * a successful push (when present); the claim branch is deleted only when
+	 * mark-done also succeeded. When the branch is intentionally retained,
+	 * `cleanedUp` is false and warnings explain why.
+	 */
 	cleanedUp: boolean;
 	/** Non-blocking roadmap mutations that remain to be completed manually. */
 	warnings: string[];
@@ -205,12 +211,14 @@ function pushMain(mainRepo: string, exec: ExecFn, log: (msg: string) => void, ve
 /**
  * Run the deterministic bookkeeping tail after a `direct-push` merge has landed
  * on local `main`. Ordered: recover stray dirt → mark-done → archive-plan →
- * push → cleanup.
+ * push → worktree cleanup → claim-branch delete (only when mark-done succeeded).
  *
  * Roadmap mutations are independent and best-effort after the verified merge.
  * Push is the completion boundary: only a push/integration failure returns
  * `ok:false` and preserves the feature branch for recovery. Once origin contains
- * the merge, cleanup proceeds even when roadmap metadata needs manual repair.
+ * the merge, worktree cleanup proceeds even when roadmap metadata needs manual
+ * repair; the claim branch is retained until mark-done succeeds so a still-open
+ * tracker item cannot be re-picked (#205).
  */
 export async function runShipBookkeeping(ctx: ShipBookkeepingCtx, deps: ShipBookkeepingDeps): Promise<ShipBookkeepingResult> {
 	const { mainRepo, worktree, branch, itemId } = ctx;
@@ -227,12 +235,14 @@ export async function runShipBookkeeping(ctx: ShipBookkeepingCtx, deps: ShipBook
 	const recovered = await commitStrayBookkeeping(mainRepo, itemId, log, { exec, status, ...(deps.lock ? { lock: deps.lock } : {}) });
 
 	// 2. Mark done. A failure leaves metadata incomplete but must not suppress the
-	//    verified feature push. The idempotent command can be rerun after repair.
+	//    verified feature push. The claim branch is retained so the still-open
+	//    tracker item cannot be re-picked until mark-done succeeds (#205).
+	//    The idempotent command can be rerun after repair.
 	try {
 		await roadmap.markDone(itemId);
 		markedDone = true;
 	} catch (e) {
-		const warning = `mark-done failed (${short(e)}); fix roadmap permissions and rerun 'npx pelaggio roadmap mark-done ${itemId}' from the repository root`;
+		const warning = `mark-done failed (${short(e)}); fix roadmap permissions and rerun 'npx pelaggio roadmap mark-done ${itemId}' from the repository root — claim branch '${branch}' retained (local + remote) to prevent re-pick until mark-done succeeds, then delete it or run /tidy`;
 		warnings.push(warning);
 		log(`⚠ ${warning}`);
 	}
@@ -255,11 +265,14 @@ export async function runShipBookkeeping(ctx: ShipBookkeepingCtx, deps: ShipBook
 		return { recovered, markedDone, archived, pushed: false, cleanedUp: false, warnings, ok: false, error: push.error };
 	}
 
-	// 5. Cleanup — now that push succeeded it is safe to destroy the feature
-	//    branch/worktree. Repair MAIN's node_modules BEFORE
-	//    removing the worktree (else symlinks pointing into it break). Each step is
-	//    best-effort: a gone worktree / already-deleted branch is a no-op, and
-	//    `cleanedUp` reflects what actually happened rather than a hardcoded true.
+	// 5. Cleanup — now that push succeeded it is safe to remove the worktree.
+	//    Repair MAIN's node_modules BEFORE removing the worktree (else symlinks
+	//    pointing into it break). Claim-branch delete (local + remote) runs only
+	//    when mark-done succeeded: a retained `feat/<id>` claim keeps the item
+	//    ineligible for re-pick until the tracker is reconciled (#205).
+	//    Each step is best-effort: a gone worktree / already-deleted branch is a
+	//    no-op, and `cleanedUp` reflects what actually happened (worktree gone
+	//    AND branch deleted) rather than a hardcoded true.
 	let worktreeRemoved = false;
 	if (inWorktree) {
 		try {
@@ -275,16 +288,20 @@ export async function runShipBookkeeping(ctx: ShipBookkeepingCtx, deps: ShipBook
 		}
 	}
 	let branchDeleted = false;
-	try {
-		exec(`git branch -d ${JSON.stringify(branch)}`, mainRepo);
-		branchDeleted = true;
-	} catch (e) {
-		log(`branch delete skipped (${short(e)})`);
-	}
-	try {
-		exec(`git push origin --delete ${JSON.stringify(branch)}`, mainRepo);
-	} catch {
-		// Remote branch may not exist / no remote — silent, matches SKILL.md's `2>/dev/null`.
+	if (markedDone) {
+		try {
+			exec(`git branch -d ${JSON.stringify(branch)}`, mainRepo);
+			branchDeleted = true;
+		} catch (e) {
+			log(`branch delete skipped (${short(e)})`);
+		}
+		try {
+			exec(`git push origin --delete ${JSON.stringify(branch)}`, mainRepo);
+		} catch {
+			// Remote branch may not exist / no remote — silent, matches SKILL.md's `2>/dev/null`.
+		}
+	} else {
+		log(`claim branch retained (mark-done incomplete): ${branch}`);
 	}
 
 	const cleanedUp = (!inWorktree || worktreeRemoved) && branchDeleted;
