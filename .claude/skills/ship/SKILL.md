@@ -144,21 +144,23 @@ If `git push` fails because main moved, run `git pull --no-rebase origin main`, 
 
 ## 9. Clean up
 
+Worktree remove + `--repair-main` always run after a successful push. **Claim-branch delete (local + remote) runs only if mark-done (step 6) succeeded** — a retained `feat/<id>` claim keeps the still-open tracker item ineligible for re-pick until the operator reconciles mark-done and then deletes the branch (or runs `/tidy`). Matches the pipeline's deterministic tail (`runShipBookkeeping`).
+
 **If in worktree**:
 ```bash
 # TOOL-52: repair MAIN's node_modules if a worktree-side `pnpm install`
 # re-pointed any top-level symlinks into the worktree's .pnpm store.
 npx pelaggio worktree-deps --repair-main
 git worktree remove "$WORKTREE" --force
-git branch -d "$BRANCH"
-git push origin --delete "$BRANCH" 2>/dev/null
 ```
 
-**If not in worktree**:
+**If mark-done succeeded** (step 6 exited 0), also delete the claim branch:
 ```bash
 git branch -d "$BRANCH"
 git push origin --delete "$BRANCH" 2>/dev/null
 ```
+
+**If mark-done failed**: leave `$BRANCH` intact locally and on origin. Report that the claim was retained to prevent re-pick, and that the operator should rerun `npx pelaggio roadmap mark-done <ID>` then delete the branch (or `/tidy`).
 
 If `git worktree remove` fails because of files the consuming project left behind (e.g. `node_modules` on Windows), clean those first from the worktree path, then retry.
 
