@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { describe, it } from "node:test";
-import { appendDecisions, archiveResolvedDecisions, resolveDecision } from "../decisions.js";
+import { appendDecisions, appendReviewEscalation, archiveResolvedDecisions, lookupReviewEscalation, resolveDecision, reviewEscalationId } from "../decisions.js";
+import type { ReviewEscalation } from "../types.js";
 
 function repo(): string {
 	const path = mkdtempSync(resolve(tmpdir(), "pelaggio-decisions-"));
@@ -54,5 +55,55 @@ describe("decision register", () => {
 		});
 		assert.equal(result.status, "written");
 		assert.notEqual(result.ids[0], result.ids[1]);
+	});
+});
+
+function escalation(overrides: Partial<ReviewEscalation> = {}): ReviewEscalation {
+	return {
+		kind: "review-escalation",
+		itemId: "300",
+		step: "shakedown-code",
+		reviewedSha: "a".repeat(40),
+		evidenceFingerprint: "b".repeat(64),
+		reviewRecordSource: ".dev/review-records/cycle-1-300.json",
+		hasSafetyBlocker: false,
+		drivers: [],
+		...overrides,
+	};
+}
+
+describe("review escalation tamper-evidence", () => {
+	it("folds hasSafetyBlocker into the escalation ID so flipping it changes the ID", () => {
+		const withoutBlocker = reviewEscalationId(escalation({ hasSafetyBlocker: false }));
+		const withBlocker = reviewEscalationId(escalation({ hasSafetyBlocker: true }));
+		assert.notEqual(withoutBlocker, withBlocker);
+	});
+
+	it("round-trips an active escalation through append and lookup", async () => {
+		const path = repo();
+		const written = await appendReviewEscalation(path, escalation({ hasSafetyBlocker: true }));
+		assert.equal(written.status, "written");
+		const found = lookupReviewEscalation(path, "300", "a".repeat(40));
+		assert.equal(found.state, "active");
+		if (found.state === "active") {
+			assert.equal(found.id, written.ids[0]);
+			assert.equal(found.escalation.hasSafetyBlocker, true);
+		}
+	});
+
+	it("treats a hand-edited hasSafetyBlocker as tamper (invalid), not a silent flip to proceed", async () => {
+		const path = repo();
+		await appendReviewEscalation(path, escalation({ hasSafetyBlocker: true }));
+		const decisionsPath = resolve(path, "docs", "decisions.md");
+		const body = readFileSync(decisionsPath, "utf8");
+		const match = body.match(/<!-- review-escalation:([A-Za-z0-9_-]+) -->/);
+		assert.ok(match, "expected a review-escalation metadata marker");
+		const payload = JSON.parse(Buffer.from(match![1], "base64url").toString("utf8"));
+		assert.equal(payload.escalation.hasSafetyBlocker, true);
+		payload.escalation.hasSafetyBlocker = false;
+		const tamperedMarker = `<!-- review-escalation:${Buffer.from(JSON.stringify(payload)).toString("base64url")} -->`;
+		writeFileSync(decisionsPath, body.replace(match![0], tamperedMarker));
+		const found = lookupReviewEscalation(path, "300", "a".repeat(40));
+		assert.equal(found.state, "invalid");
 	});
 });
