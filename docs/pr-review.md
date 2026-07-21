@@ -19,6 +19,12 @@ clears a carried fingerprint; malformed or incomplete Judge output fails closed.
 Safety-class survivors always hard-block. Judgment dissent may continue only for PR
 ship targets; direct-push parks.
 
+Concurrent reviewer (and Judge) seats each run in a throwaway detached worktree under
+`.dev/authoring-review-seats/<reviewed-sha>/` pinned to the reviewed commit, so
+independent agents do not contend on the artifact worktree's git index (#269). Author
+revisions still run on the real item worktree (they must commit). Seats are cleaned up
+after the loop.
+
 ### Report contract (schema v3) and fail-closed classification
 
 Authoring reviewers emit `AUTHORING_REVIEW_FINDINGS` with `schemaVersion: 3`. Each

@@ -21,6 +21,7 @@ import {
 	STEPS,
 	WORKTREE_PREFIX,
 } from "./config.js";
+import { forbiddenRootsForConfinement } from "./confinement/roots.js";
 import { appendDecisions as appendDecisionsDefault, appendReviewEscalation as appendReviewEscalationDefault, lookupReviewEscalation as lookupReviewEscalationDefault } from "./decisions.js";
 import { createDriverAssignmentState, type DriverIdentity, recordArtifactAuthor, resolveStaticAuthor, selectAuthor, selectReviewers } from "./driver-assignment.js";
 import { dispatchStepEffects as dispatchStepEffectsDefault, type Effect, EffectsManifestError, writeEffectsManifest as writeEffectsManifestDefault } from "./effects.js";
@@ -67,6 +68,7 @@ import { type NotifyConfig, notifyCycle, notifyDecision as notifyDecisionEvent, 
 import { buildFailClosedComment, runPrReviewGate } from "./pr-review-cli.js";
 import { runReviewLoop } from "./review/loop.js";
 import { type ReviewRecord, renderReviewRecord, writeReviewRecord } from "./review/record.js";
+import { cleanupAuthoringReviewSeatsForSha, isAuthoringReviewSeatPath, prepareAuthoringReviewSeat } from "./review/seats.js";
 import { cleanupReviewHead, findReviewCandidates, postLocalModeWorkflowComment, postReviewStatus, prepareReviewHead, upsertReviewComment } from "./review-sweep.js";
 import { claimRevision, ensureReviseWorktree, fetchReviewFindings, findRevisablePrs, isAutopilotManaged, postParkComment, reviseFindingsPath } from "./revise-sweep.js";
 import { defaultGhRun, type GhRunner } from "./roadmap/github-issues.js";
@@ -187,28 +189,24 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	function forbiddenRootsForStep(cwd: string, ownWorktree?: string): string[] {
 		const cwdAbs = resolve(cwd);
 		const mainAbs = resolve(mainRepo);
-		// Exempt this step's cwd, its own worktree, and — under `--parallel` — every peer
-		// worktree currently running a cycle. An active sibling's legitimate self-write must
-		// not trip this cycle's whole-tree snapshot; cross-tree corruption is caught by the
-		// capability/write-set boundary, not this snapshot. `mainRepo` is never in the
-		// registry, so it stays hard-gated below (subject only to `allowDirtyMain`).
-		const exempt = new Set([cwdAbs, ...(ownWorktree ? [resolve(ownWorktree)] : []), ...(opts.activeWorktrees ?? [])]);
 		// Main-repo-based steps (pick, shipwreck) legitimately write inside mainRepo
 		// itself — and shipwreck legitimately finishes a squash/commit in the item's
 		// own worktree (SKILL.md states 3c/3d) — but must not touch sibling worktrees.
 		// `listWorktrees()` already includes mainRepo, so prepend it only when it must be
 		// audited and dedup by resolved path. `allowDirtyMain` drops mainRepo from the set.
+		// Authoring-review seats (#269) are throwaway per-seat checkouts under
+		// `.dev/authoring-review-seats/`; concurrent peer seats may hold session files
+		// and must not trip confinement.
 		const candidates = cwdAbs === mainAbs ? listWorktrees() : [mainRepo, ...listWorktrees()];
-		const seen = new Set<string>();
-		const roots: string[] = [];
-		for (const root of candidates) {
-			const abs = resolve(root);
-			if (seen.has(abs) || exempt.has(abs)) continue;
-			if (allowDirtyMain && abs === mainAbs) continue;
-			seen.add(abs);
-			roots.push(root);
-		}
-		return roots;
+		return forbiddenRootsForConfinement({
+			cwd,
+			mainRepo,
+			worktrees: candidates,
+			ownWorktree,
+			allowDirtyMain,
+			isAuthoringReviewSeatPath: (root) => isAuthoringReviewSeatPath(root, mainRepo),
+			activeWorktrees: opts.activeWorktrees,
+		});
 	}
 
 	async function step(
@@ -1005,28 +1003,73 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			// `git diff` (codex) still reviews real code instead of parroting the skill example.
 			// Recomputed per pass inside the `review` prompt: the author revision seat advances HEAD
 			// between passes, so a once-computed block would show pass 2+ reviewers pre-revision code.
-			const loop =
-				existingEscalation.state === "resolved-proceed"
-					? undefined
-					: await runReviewLoop({
-							policy,
-							author: { provider: authorSettings.provider, ...(authorSettings.provider === "codex" ? (authorSettings.codexModel ? { model: authorSettings.codexModel } : {}) : authorSettings.model ? { model: authorSettings.model } : {}) },
-							parkSignal,
-							// Plain changed-file list for emission-time classification; path signals are derived pure-side.
-							classificationContext: { changedFiles: gitDiffNameOnly(worktree!) },
-							runSeat: ({ role, slot, pass, prompt, parkSignal: child }) =>
-								step(role === "reviewer" ? "pr-review" : role === "judge" ? "pr-verify" : "shakedown-code", prompt, worktree!, {
+			// Concurrent reviewer seats get isolated detached checkouts so they no longer race on
+			// the shared artifact worktree's index.lock (#269). Author revisions stay on the real
+			// worktree (they must commit). Seat SHAs are re-read from the artifact HEAD so a
+			// post-revision pass reviews the new commit, not the pre-revision tree. Seats are
+			// torn down after the loop. `git worktree add` is serialized (shared main-repo lock)
+			// while the seat agents still fan out via Promise.allSettled once checkouts exist.
+			let loop: Awaited<ReturnType<typeof runReviewLoop>> | undefined;
+			if (existingEscalation.state === "resolved-proceed") {
+				loop = undefined;
+			} else {
+				let seatPrepareChain: Promise<void> = Promise.resolve();
+				const preparedSeatShas = new Set<string>([reviewedSha]);
+				try {
+					loop = await runReviewLoop({
+						policy,
+						author: { provider: authorSettings.provider, ...(authorSettings.provider === "codex" ? (authorSettings.codexModel ? { model: authorSettings.codexModel } : {}) : authorSettings.model ? { model: authorSettings.model } : {}) },
+						parkSignal,
+						// Plain changed-file list for emission-time classification; path signals are derived pure-side.
+						classificationContext: { changedFiles: gitDiffNameOnly(worktree!) },
+						runSeat: async ({ role, slot, pass, prompt, parkSignal: child }) => {
+							const executionOverride = { provider: slot.provider, ...(slot.provider === "codex" ? (slot.codexModel ? { codexModel: slot.codexModel } : {}) : slot.model ? { model: slot.model } : {}) };
+							if (role === "author") {
+								return step("shakedown-code", prompt, worktree!, {
 									attempt: pass,
 									parkSignalOverride: child,
-									executionOverride: { provider: slot.provider, ...(slot.provider === "codex" ? (slot.codexModel ? { codexModel: slot.codexModel } : {}) : slot.model ? { model: slot.model } : {}) },
-									...(role === "author" ? { commitLabel: "adversarial review revision" } : {}),
-								}),
-							prompts: {
-								review: () => `${expandSkill("pr-review", "--authoring-loop")}\n\n${buildReviewDiffBlock(worktree!)}`,
-								judge: (candidates) => `${expandSkill("pr-verify", "--authoring-loop-judge")}\n\nTRUSTED_CANDIDATE_DATA\n${JSON.stringify(candidates)}\nEND_TRUSTED_CANDIDATE_DATA`,
-								revise: (survivors) => `${expandSkill("shakedown", shakedownCodeArgs)}\n\nThe Judge retained these blockers:\n${JSON.stringify(survivors)}`,
-							},
-						});
+									executionOverride,
+									commitLabel: "adversarial review revision",
+								});
+							}
+							// Reviewer + Judge: cold seats pinned to the artifact HEAD at seat start
+							// (post-revision pass 2 must not re-review the pre-revision tree).
+							// Do NOT pass ownWorktree: artifact — confinement is change-based;
+							// exempting the artifact would let a seat mutate it unaudited. Peer
+							// seats are skipped via isAuthoringReviewSeatPath in forbiddenRootsForStep.
+							const prepare = seatPrepareChain.then(() => {
+								const seatSha = getHeadSha(worktree!) ?? reviewedSha;
+								preparedSeatShas.add(seatSha);
+								return prepareAuthoringReviewSeat(mainRepo, { sha: seatSha, seatId: slot.id, pass });
+							});
+							seatPrepareChain = prepare.then(
+								() => undefined,
+								() => undefined,
+							);
+							let seatCwd: string;
+							try {
+								seatCwd = await prepare;
+							} catch (e) {
+								const message = e instanceof Error ? e.message : String(e);
+								log(`⚠ authoring review seat prepare failed (${slot.id} p${pass}): ${message}`);
+								return { ok: false, subtype: "error", text: `authoring review seat prepare failed: ${message}`, fullText: `authoring review seat prepare failed: ${message}`, cost: 0, turns: 0 };
+							}
+							return step(role === "reviewer" ? "pr-review" : "pr-verify", prompt, seatCwd, {
+								attempt: pass,
+								parkSignalOverride: child,
+								executionOverride,
+							});
+						},
+						prompts: {
+							review: () => `${expandSkill("pr-review", "--authoring-loop")}\n\n${buildReviewDiffBlock(worktree!)}`,
+							judge: (candidates) => `${expandSkill("pr-verify", "--authoring-loop-judge")}\n\nTRUSTED_CANDIDATE_DATA\n${JSON.stringify(candidates)}\nEND_TRUSTED_CANDIDATE_DATA`,
+							revise: (survivors) => `${expandSkill("shakedown", shakedownCodeArgs)}\n\nThe Judge retained these blockers:\n${JSON.stringify(survivors)}`,
+						},
+					});
+				} finally {
+					for (const sha of preparedSeatShas) cleanupAuthoringReviewSeatsForSha(mainRepo, sha);
+				}
+			}
 			if (!loop) {
 				reviewRecordMarkdown = `## Adversarial review escalation\n\nDecision **${existingEscalation.id}** was resolved **proceed** by ${existingEscalation.resolution.actor}.\n\nRationale: ${existingEscalation.resolution.rationale}\n\nReviewed commit: \`${reviewedSha}\`. Evidence fingerprint: \`${existingEscalation.escalation.evidenceFingerprint}\`.`;
 				shakedownResult = { ok: true, subtype: "success", text: "resolved-proceed", fullText: "resolved-proceed", cost: 0, turns: 0 };

@@ -86,6 +86,33 @@ export function blockPlanPolish(input: HookInput, cwd: string): HookJSONOutput {
 	};
 }
 
+/**
+ * Block Write/Edit into the main checkout from a worktree step, while still
+ * allowing writes inside the step cwd — including nested authoring-review seats
+ * under `MAIN_REPO/.dev/authoring-review-seats/` (#269). The old prefix check
+ * (`fp.startsWith(mainAbs)`) blocked legitimate absolute paths inside nested seats.
+ */
+export function blockMainRepoWrite(input: HookInput, worktreeCwd: string, repo: string): HookJSONOutput {
+	const tn = "tool_name" in input ? String(input.tool_name) : "";
+	if (tn !== "Write" && tn !== "Edit") return {};
+	const ti = ("tool_input" in input ? input.tool_input : {}) as Record<string, unknown>;
+	const fp = String(ti.file_path ?? "");
+	if (!fp) return {};
+	const cwdAbs = resolve(worktreeCwd);
+	const abs = fp.startsWith("/") ? resolve(fp) : resolve(cwdAbs, fp);
+	// Always allow writes inside the step cwd (sibling worktree or nested seat).
+	if (abs === cwdAbs || abs.startsWith(`${cwdAbs}/`)) return {};
+	const mainAbs = resolve(repo);
+	if (abs === mainAbs || abs.startsWith(`${mainAbs}/`)) {
+		const rel = abs.slice(mainAbs.length + (abs === mainAbs ? 0 : 1));
+		return {
+			decision: "block" as const,
+			reason: `Path "${fp}" targets main repo. Use "${resolve(cwdAbs, rel)}" instead.`,
+		};
+	}
+	return {};
+}
+
 export function beginMainCheckoutAttribution(input: HookInput, toolUseId: string | undefined, observer?: MainCheckoutDeltaObserver): HookJSONOutput {
 	const toolName = "tool_name" in input ? String(input.tool_name) : "";
 	if (!observer || !MUTATING_TOOLS.has(toolName)) return {};
@@ -193,15 +220,9 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 									const tn = "tool_name" in input ? String(input.tool_name) : "";
 									const ti = ("tool_input" in input ? input.tool_input : {}) as Record<string, unknown>;
 
-									if (isWorktree && (tn === "Write" || tn === "Edit")) {
-										const fp = String(ti.file_path ?? "");
-										if (fp.startsWith(mainAbs)) {
-											const rel = fp.slice(mainAbs.length);
-											return {
-												decision: "block" as const,
-												reason: `Path "${fp}" targets main repo. Use "${resolve(worktreeCwd, rel)}" instead.`,
-											};
-										}
+									if (isWorktree) {
+										const mainWriteOut = blockMainRepoWrite(input, worktreeCwd, REPO);
+										if (mainWriteOut.decision === "block") return mainWriteOut;
 									}
 
 									if (isWorktree && tn === "Bash") {
