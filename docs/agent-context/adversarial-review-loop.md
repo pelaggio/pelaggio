@@ -105,15 +105,31 @@ promoted. That split escapes local maxima without weakening the merge invariant.
 
 **Two teeth make "ship-not-unanimity" safe rather than merely efficient:**
 
-1. **Safety floor (never ships on dissent).** Any finding in the **security / data-loss /
-   correctness-regression** class that a reviewer raised is **Hard-block → park**, *not* Dissent, until
-   fixed — a single Judge's `refuted` decision does not clear it (omission ≠ refutation — the
-   `pr-review` invariant — **and neither is a lone Judge's say-so**, #272). Once raised it is retained
-   every pass (carried blockers are re-seeded, so reviewer omission cannot drop it either) and the run
-   **parks for human adjudication** — the loop never self-clears a safety must-fix, even after the
-   author's revision addresses it. Ship-on-dissent is permitted for judgment-band findings
-   **only**. A single-model judge must not be able to reclassify a real safety finding as "dissent" and
-   ship it.
+1. **Safety floor (never ships on dissent).** Any finding whose harness-owned effective class is one of
+   the six ADR-0016 safety tokens (`security-and-secrets`, `data-loss/destructive-ops`,
+   `correctness-regression`, `supply-chain/integrity`, `containment-escape`,
+   `irreversible-git/unsafe-landing`) is **Hard-block → park**, *not* Dissent, until fixed — a single
+   Judge's `refuted` decision does not clear it (omission ≠ refutation — the `pr-review` invariant —
+   **and neither is a lone Judge's say-so**, #272). Once raised it is retained every pass (carried
+   blockers are re-seeded, so reviewer omission cannot drop it either) and the run **parks for human
+   adjudication** — the loop never self-clears a safety must-fix, even after the author's revision
+   addresses it. Ship-on-dissent is permitted for judgment-band findings **only**. A single-model judge
+   must not be able to reclassify a real safety finding as "dissent" and ship it.
+
+**Emission-time classification (#293).** Reviewers emit schema-v3 *evidence* (`severity`, `message`,
+optional `path`/`line`, optional `ruleId`/`cwe`/`classHint`) — not an authoritative `class`. The
+harness runs a pure rule table (fingerprint → CWE → exact `ruleId` → path/diff-shape signals) before
+dedup, Judge, and dissent routing. Safety matches dominate judgment; conflicting safety classes stay
+safety with a deterministic winner by `SAFETY_CLASSES` precedence; unmatched or ambiguous evidence
+maps to `correctness-regression` with reason `default-safety`. `classHint` alone never yields
+`judgment` or a specific non-default safety class. Judgment remains reachable only via a narrow
+positive exact-`ruleId` allowlist. Residuals that this does **not** close: (1) **missing-finding** — a
+real defect no reviewer raises is never classified (mitigated by decorrelated diversity + post-merge
+verification); (2) **finding-description framing** — model wording and selected evidence can still
+influence which rule matches; default-to-safety narrows that discretion but does not remove it or fully
+satisfy [ADR-0014](../decisions/0014-mechanism-policy-separation-spine.md). See
+[ADR-0016](../decisions/0016-severity-taxonomy-and-owner.md) for the taxonomy and
+`packages/pelaggio/scripts/pelaggio/review/findings.ts` for the seam.
 2. **Condition Dissent on `ship.target`.** For **`direct-push`**, dissent defaults to **park/block**
    (post-hoc human adjudication after a merge is not a control). For **`pull-request` / `auto-merge-pr`**,
    dissent may push the branch + record + notify — GitHub's required checks and the human merge still

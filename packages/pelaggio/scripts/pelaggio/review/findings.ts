@@ -13,15 +13,103 @@ export interface ReviewFindingsReport {
 	findings: ReviewFinding[];
 }
 
-export type ReviewFindingClass = "security" | "data-loss" | "correctness-regression" | "judgment";
+/** ADR-0016 machine tokens (no spaces around `/`). Six safety + judgment. */
+export type ReviewFindingClass = "security-and-secrets" | "data-loss/destructive-ops" | "correctness-regression" | "supply-chain/integrity" | "containment-escape" | "irreversible-git/unsafe-landing" | "judgment";
+
+/** Safety floor in fixed precedence order (all park equally; order is for determinism only). */
+export const SAFETY_CLASSES: readonly ReviewFindingClass[] = ["security-and-secrets", "data-loss/destructive-ops", "supply-chain/integrity", "containment-escape", "irreversible-git/unsafe-landing", "correctness-regression"];
+
+export function isSafetyClass(value: string): value is ReviewFindingClass {
+	return (SAFETY_CLASSES as readonly string[]).includes(value);
+}
+
+/** Wire evidence (schema v3) — no harness-owned `class` or `fingerprint`. */
+export interface RawAuthoringReviewFinding extends ReviewFinding {
+	ruleId?: string;
+	cwe?: string;
+	classHint?: ReviewFindingClass;
+}
+
+export type DiffPathSignal = "lifecycle-manifest" | "workflow" | "confinement-surface" | "ship-landing" | "dependency-lock" | "secrets-adjacent";
+
+export type ClassificationSignalKind = "fingerprint" | "cwe" | "ruleId" | "path" | "classHint-elevation";
+
+export type ClassificationResult =
+	| {
+			kind: "matched";
+			class: ReviewFindingClass;
+			signal: ClassificationSignalKind;
+			ruleId: string;
+			conflict?: { winner: ReviewFindingClass; losers: readonly ReviewFindingClass[] };
+	  }
+	| {
+			kind: "default-safety";
+			class: "correctness-regression";
+	  };
+
+/** Effective finding after harness classification. */
 export interface AuthoringReviewFinding extends ReviewFinding {
 	class: ReviewFindingClass;
+	classification: ClassificationResult;
+	ruleId?: string;
+	cwe?: string;
+	classHint?: ReviewFindingClass;
 }
+
 export interface AuthoringReviewReport {
-	schemaVersion: 2;
+	schemaVersion: 3;
 	summary: string;
-	findings: AuthoringReviewFinding[];
+	findings: RawAuthoringReviewFinding[];
 }
+
+export type ClassificationContext = {
+	fingerprint: string;
+	changedFiles: readonly string[];
+	pathSignals: readonly DiffPathSignal[];
+};
+
+export type ClassificationContextBase = {
+	changedFiles: readonly string[];
+};
+
+export type ClassificationRule =
+	| { id: string; signal: "fingerprint"; match: string; class: ReviewFindingClass }
+	| { id: string; signal: "cwe"; match: string; class: ReviewFindingClass }
+	| { id: string; signal: "ruleId"; match: string; class: ReviewFindingClass }
+	| { id: string; signal: "path"; match: DiffPathSignal; class: ReviewFindingClass };
+
+/** Built-in owner-authored rules. #294 may replace this data source without changing the algorithm. */
+export const CLASSIFICATION_RULES: readonly ClassificationRule[] = [
+	// fingerprint inventory intentionally empty — extension point for stable message fingerprints
+	// CWE → security-and-secrets
+	{ id: "cwe-78", signal: "cwe", match: "CWE-78", class: "security-and-secrets" },
+	{ id: "cwe-79", signal: "cwe", match: "CWE-79", class: "security-and-secrets" },
+	{ id: "cwe-89", signal: "cwe", match: "CWE-89", class: "security-and-secrets" },
+	{ id: "cwe-22", signal: "cwe", match: "CWE-22", class: "security-and-secrets" },
+	{ id: "cwe-798", signal: "cwe", match: "CWE-798", class: "security-and-secrets" },
+	{ id: "cwe-502", signal: "cwe", match: "CWE-502", class: "security-and-secrets" },
+	{ id: "cwe-918", signal: "cwe", match: "CWE-918", class: "security-and-secrets" },
+	// CWE → data-loss/destructive-ops
+	{ id: "cwe-404", signal: "cwe", match: "CWE-404", class: "data-loss/destructive-ops" },
+	{ id: "cwe-459", signal: "cwe", match: "CWE-459", class: "data-loss/destructive-ops" },
+	// exact ruleId → safety
+	{ id: "rule-secret-leak", signal: "ruleId", match: "pelaggio/security/secret-leak", class: "security-and-secrets" },
+	{ id: "rule-lifecycle-script", signal: "ruleId", match: "pelaggio/supply-chain/lifecycle-script", class: "supply-chain/integrity" },
+	{ id: "rule-write-guard", signal: "ruleId", match: "pelaggio/containment/write-guard", class: "containment-escape" },
+	{ id: "rule-force-push", signal: "ruleId", match: "pelaggio/git/force-push", class: "irreversible-git/unsafe-landing" },
+	// exact ruleId → judgment allowlist (narrow; classHint alone never yields judgment)
+	{ id: "rule-judgment-style", signal: "ruleId", match: "pelaggio/judgment/style", class: "judgment" },
+	{ id: "rule-judgment-docs", signal: "ruleId", match: "pelaggio/judgment/docs", class: "judgment" },
+	{ id: "rule-judgment-maintainability", signal: "ruleId", match: "pelaggio/judgment/maintainability", class: "judgment" },
+	// path/diff-shape signals
+	{ id: "path-workflow", signal: "path", match: "workflow", class: "security-and-secrets" },
+	{ id: "path-lifecycle", signal: "path", match: "lifecycle-manifest", class: "supply-chain/integrity" },
+	{ id: "path-dependency-lock", signal: "path", match: "dependency-lock", class: "supply-chain/integrity" },
+	{ id: "path-confinement", signal: "path", match: "confinement-surface", class: "containment-escape" },
+	{ id: "path-ship-landing", signal: "path", match: "ship-landing", class: "irreversible-git/unsafe-landing" },
+	{ id: "path-secrets", signal: "path", match: "secrets-adjacent", class: "security-and-secrets" },
+];
+
 export type JudgeRuling = "fixable-blocker" | "unfixable-blocker" | "judgment-dissent";
 export interface JudgeReport {
 	schemaVersion: 1;
@@ -66,6 +154,122 @@ export type ReviewConvergenceResult =
 /** Identity owned by deterministic orchestration, not the per-pass candidate ID. */
 export function reviewFindingFingerprint(finding: ReviewFinding): string {
 	return JSON.stringify([finding.message.trim().replace(/\s+/g, " "), finding.path?.trim() ?? "", finding.line ?? 0]);
+}
+
+/**
+ * Pure path → DiffPathSignal extractor for emission-time classification.
+ * Path patterns only; does not scan message prose or full unified diffs.
+ */
+export function extractDiffPathSignals(path: string | undefined): DiffPathSignal[] {
+	if (!path || path.trim() === "") return [];
+	const p = path.trim().replace(/^\.\//, "");
+	const signals: DiffPathSignal[] = [];
+	if (/^\.github\/workflows\//.test(p)) signals.push("workflow");
+	if (/(^|\/)package\.json$/.test(p)) signals.push("lifecycle-manifest");
+	if (/(^|\/)(?:pnpm-lock\.yaml|package-lock\.json|yarn\.lock)$/.test(p)) signals.push("dependency-lock");
+	if (
+		/(?:^|\/)(?:step-runner|secret-hygiene|worktree-deps)\.ts$/.test(p) ||
+		/packages\/pelaggio\/scripts\/pelaggio\/(?:step-runner|helpers|secret-hygiene|codex-provider)\.ts$/.test(p) ||
+		/packages\/pelaggio\/scripts\/pelaggio\/review\/findings\.ts$/.test(p) ||
+		/(?:write-guard|egress|confinement|sandbox)/i.test(p)
+	) {
+		signals.push("confinement-surface");
+	}
+	if (/packages\/pelaggio\/scripts\/pelaggio\/ship\//.test(p) || /(?:^|\/)ship\//.test(p)) {
+		signals.push("ship-landing");
+	}
+	if (/packages\/server\/src\/(?:auth|config|app)\.ts$/.test(p) || /(^|\/)\.env(?:\.|$)/.test(p)) {
+		signals.push("secrets-adjacent");
+	}
+	return signals;
+}
+
+/**
+ * Deterministic emission-time classifier. Safety dominates judgment; unmatched/ambiguous
+ * → correctness-regression + default-safety. classHint alone never yields judgment or a
+ * specific non-default safety class.
+ */
+export function classifyAuthoringReviewFinding(raw: RawAuthoringReviewFinding, context: ClassificationContext): ClassificationResult {
+	const matches: Array<{ rule: ClassificationRule; class: ReviewFindingClass }> = [];
+
+	for (const rule of CLASSIFICATION_RULES) {
+		if (rule.signal === "fingerprint" && context.fingerprint === rule.match) {
+			matches.push({ rule, class: rule.class });
+		} else if (rule.signal === "cwe" && raw.cwe !== undefined && raw.cwe === rule.match) {
+			matches.push({ rule, class: rule.class });
+		} else if (rule.signal === "ruleId" && raw.ruleId !== undefined && raw.ruleId === rule.match) {
+			matches.push({ rule, class: rule.class });
+		} else if (rule.signal === "path" && context.pathSignals.includes(rule.match)) {
+			matches.push({ rule, class: rule.class });
+		}
+	}
+
+	const safetyMatches = matches.filter((m) => isSafetyClass(m.class));
+	const judgmentMatches = matches.filter((m) => m.class === "judgment");
+
+	if (safetyMatches.length > 0) {
+		const classes = [...new Set(safetyMatches.map((m) => m.class))];
+		const winner = pickSafetyByPrecedence(classes);
+		const winning = safetyMatches.find((m) => m.class === winner) ?? safetyMatches[0];
+		const losers = classes.filter((c) => c !== winner);
+		return {
+			kind: "matched",
+			class: winner,
+			signal: winning.rule.signal,
+			ruleId: winning.rule.id,
+			...(losers.length > 0 ? { conflict: { winner, losers } } : {}),
+		};
+	}
+
+	if (judgmentMatches.length === 1 || (judgmentMatches.length > 1 && judgmentMatches.every((m) => m.class === "judgment"))) {
+		// Only judgment rules matched. classHint as a safety class elevates (safety dominates).
+		if (raw.classHint !== undefined && isSafetyClass(raw.classHint)) {
+			return {
+				kind: "matched",
+				class: raw.classHint,
+				signal: "classHint-elevation",
+				ruleId: judgmentMatches[0].rule.id,
+			};
+		}
+		return {
+			kind: "matched",
+			class: "judgment",
+			signal: "ruleId",
+			ruleId: judgmentMatches[0].rule.id,
+		};
+	}
+
+	// No unambiguous match (including unknown CWE/ruleId, classHint-only, or empty evidence).
+	return { kind: "default-safety", class: "correctness-regression" };
+}
+
+/** Materialize a raw finding into an effective harness-owned finding. */
+export function materializeAuthoringFinding(raw: RawAuthoringReviewFinding, base: ClassificationContextBase): AuthoringReviewFinding {
+	const fingerprint = reviewFindingFingerprint(raw);
+	const pathSignals = extractDiffPathSignals(raw.path);
+	const classification = classifyAuthoringReviewFinding(raw, {
+		fingerprint,
+		changedFiles: base.changedFiles,
+		pathSignals,
+	});
+	return {
+		severity: raw.severity,
+		message: raw.message,
+		...(raw.path !== undefined ? { path: raw.path } : {}),
+		...(raw.line !== undefined ? { line: raw.line } : {}),
+		...(raw.ruleId !== undefined ? { ruleId: raw.ruleId } : {}),
+		...(raw.cwe !== undefined ? { cwe: raw.cwe } : {}),
+		...(raw.classHint !== undefined ? { classHint: raw.classHint } : {}),
+		class: classification.class,
+		classification,
+	};
+}
+
+function pickSafetyByPrecedence(classes: readonly ReviewFindingClass[]): ReviewFindingClass {
+	for (const preferred of SAFETY_CLASSES) {
+		if (classes.includes(preferred)) return preferred;
+	}
+	return "correctness-regression";
 }
 
 /** Apply a complete verifier report to carried blockers. Omission never refutes. */
@@ -116,8 +320,9 @@ const JUDGE_RE = /(?:^|\n)AUTHORING_REVIEW_JUDGE[ \t]*\n([\s\S]*?)\nEND_AUTHORIN
 const SEVERITIES: readonly ReviewFindingSeverity[] = ["must-fix", "nice", "note"];
 const VERIFICATION_DECISIONS: readonly ReviewVerificationDecision[] = ["refuted", "survives"];
 const CANDIDATE_ID_RE = /^C[1-9]\d*$/;
-const FINDING_CLASSES: readonly ReviewFindingClass[] = ["security", "data-loss", "correctness-regression", "judgment"];
+const FINDING_CLASSES: readonly ReviewFindingClass[] = ["security-and-secrets", "data-loss/destructive-ops", "correctness-regression", "supply-chain/integrity", "containment-escape", "irreversible-git/unsafe-landing", "judgment"];
 const JUDGE_RULINGS: readonly JudgeRuling[] = ["fixable-blocker", "unfixable-blocker", "judgment-dissent"];
+const CWE_RE = /^CWE-\d{1,5}$/i;
 
 function parseDelimited(text: string, regex: RegExp, label: string): Record<string, unknown> {
 	const matches = [...text.matchAll(regex)];
@@ -132,15 +337,56 @@ function parseDelimited(text: string, regex: RegExp, label: string): Record<stri
 	}
 }
 
+/** Normalize CWE identifiers: `cwe-079` / `CWE-79` → `CWE-79` (strip leading zeros). */
+export function normalizeCwe(value: string): string | null {
+	const trimmed = value.trim();
+	const match = trimmed.match(/^CWE-0*(\d{1,5})$/i);
+	if (!match) return null;
+	const numeric = String(Number(match[1]));
+	if (numeric === "NaN" || match[1] === "") return null;
+	return `CWE-${numeric}`;
+}
+
+function parseRawAuthoringFinding(value: unknown, index: number): RawAuthoringReviewFinding {
+	if (!isRecord(value)) throw new ReviewFindingsParseError(`review finding ${index + 1} must be a JSON object`);
+	// Wire contract: no `class` or `fingerprint` — harness owns both.
+	assertKeys(value, ["severity", "message", "path", "line", "ruleId", "cwe", "classHint"], ["severity", "message"], `review finding ${index + 1}`);
+	const finding = parseFindingFields(value, index);
+	const raw: RawAuthoringReviewFinding = { ...finding };
+	if (value.ruleId !== undefined) {
+		if (typeof value.ruleId !== "string") throw new ReviewFindingsParseError(`review finding ${index + 1} ruleId must be a string`);
+		const ruleId = value.ruleId.trim();
+		if (ruleId === "" || /[\r\n]/.test(value.ruleId)) throw new ReviewFindingsParseError(`review finding ${index + 1} ruleId must be a non-empty single-line string`);
+		raw.ruleId = ruleId;
+	}
+	if (value.cwe !== undefined) {
+		if (typeof value.cwe !== "string") throw new ReviewFindingsParseError(`review finding ${index + 1} cwe must be a string`);
+		if (!CWE_RE.test(value.cwe.trim()) && normalizeCwe(value.cwe) === null) {
+			throw new ReviewFindingsParseError(`review finding ${index + 1} cwe must match CWE-<digits>`);
+		}
+		const normalized = normalizeCwe(value.cwe);
+		if (normalized === null) throw new ReviewFindingsParseError(`review finding ${index + 1} cwe must match CWE-<digits>`);
+		raw.cwe = normalized;
+	}
+	if (value.classHint !== undefined) {
+		if (typeof value.classHint !== "string" || !FINDING_CLASSES.includes(value.classHint as ReviewFindingClass)) {
+			throw new ReviewFindingsParseError(`review finding ${index + 1} has an invalid classHint`);
+		}
+		raw.classHint = value.classHint as ReviewFindingClass;
+	}
+	return raw;
+}
+
+/**
+ * Parse schema-v3 authoring review findings. Returns raw evidence only — the harness
+ * assigns effective class via {@link classifyAuthoringReviewFinding} / {@link materializeAuthoringFinding}.
+ * Multiple blocks are unioned (#280); mixed/old schemas fail closed.
+ */
 export function parseAuthoringReviewFindings(text: string): AuthoringReviewReport {
-	// #280: codex reliably emits more than one AUTHORING_REVIEW_FINDINGS block; union every block's
-	// findings rather than dropping the whole seat on the >1-block flake. Each block must still be
-	// individually valid (fail-closed on malformed JSON/schema); duplicates across blocks are harmless
-	// because the loop dedups candidates by fingerprint.
 	const matches = [...text.matchAll(AUTHORING_RE)];
 	if (matches.length === 0) throw new ReviewFindingsParseError("authoring review findings block not found");
 	let summary: string | undefined;
-	const findings: AuthoringReviewFinding[] = [];
+	const findings: RawAuthoringReviewFinding[] = [];
 	matches.forEach((match, block) => {
 		let parsed: unknown;
 		try {
@@ -150,17 +396,14 @@ export function parseAuthoringReviewFindings(text: string): AuthoringReviewRepor
 		}
 		if (!isRecord(parsed)) throw new ReviewFindingsParseError(`authoring review findings block ${block + 1} must be a JSON object`);
 		assertKeys(parsed, ["schemaVersion", "summary", "findings"], ["schemaVersion", "summary", "findings"], "authoring review findings");
-		if (parsed.schemaVersion !== 2) throw new ReviewFindingsParseError("unsupported authoring review schemaVersion");
+		if (parsed.schemaVersion !== 3) throw new ReviewFindingsParseError("unsupported authoring review schemaVersion");
 		if (!Array.isArray(parsed.findings)) throw new ReviewFindingsParseError("authoring review findings must be an array");
 		if (summary === undefined) summary = parseSingleLine(parsed.summary, "summary");
 		for (const [index, value] of parsed.findings.entries()) {
-			if (!isRecord(value) || !FINDING_CLASSES.includes(value.class as ReviewFindingClass)) throw new ReviewFindingsParseError(`review finding ${index + 1} has an invalid class`);
-			const { class: _class, ...v1 } = value;
-			const finding = parseFinding(v1, index);
-			findings.push({ ...finding, class: value.class as ReviewFindingClass });
+			findings.push(parseRawAuthoringFinding(value, index));
 		}
 	});
-	return { schemaVersion: 2, summary: summary ?? "", findings };
+	return { schemaVersion: 3, summary: summary ?? "", findings };
 }
 
 export function parseJudgeReport(text: string): JudgeReport {
@@ -171,10 +414,8 @@ export function parseJudgeReport(text: string): JudgeReport {
 		schemaVersion: 1,
 		decisions: parsed.decisions.map((value, index) => {
 			if (!isRecord(value)) throw new ReviewFindingsParseError(`Judge decision ${index + 1} must be an object`);
-			// #280: `class` is optional — the candidate already carries its reviewer-assigned class and the
-			// Judge adjudicates a known candidateId, so a restated class is redundant. When present it is
-			// validated and used (loop.ts inherits the candidate's class when absent, and blocks a
-			// safety→non-safety downgrade).
+			// #280: `class` is optional — candidate already carries harness-owned effective class.
+			// When present it is validated; loop.ts blocks a safety→non-safety downgrade (#272).
 			assertKeys(value, ["candidateId", "decision", "rationale", "class", "ruling"], ["candidateId", "decision", "rationale"], `Judge decision ${index + 1}`);
 			const { class: _class, ruling: _ruling, ...verification } = value;
 			const base = parseVerificationDecision(verification, index);
@@ -255,9 +496,7 @@ export function reviewFindingsGate(report: Pick<ReviewFindingsReport, "findings"
 	return report.findings.some((finding) => finding.severity === "must-fix") ? "block" : "pass";
 }
 
-function parseFinding(value: unknown, index: number): ReviewFinding {
-	if (!isRecord(value)) throw new ReviewFindingsParseError(`review finding ${index + 1} must be a JSON object`);
-	assertKeys(value, ["severity", "message", "path", "line"], ["severity", "message"], `review finding ${index + 1}`);
+function parseFindingFields(value: Record<string, unknown>, index: number): ReviewFinding {
 	if (!SEVERITIES.includes(value.severity as ReviewFindingSeverity)) throw new ReviewFindingsParseError(`review finding ${index + 1} has an invalid severity`);
 	const finding: ReviewFinding = {
 		severity: value.severity as ReviewFindingSeverity,
@@ -270,6 +509,12 @@ function parseFinding(value: unknown, index: number): ReviewFinding {
 		finding.line = value.line as number;
 	}
 	return finding;
+}
+
+function parseFinding(value: unknown, index: number): ReviewFinding {
+	if (!isRecord(value)) throw new ReviewFindingsParseError(`review finding ${index + 1} must be a JSON object`);
+	assertKeys(value, ["severity", "message", "path", "line"], ["severity", "message"], `review finding ${index + 1}`);
+	return parseFindingFields(value, index);
 }
 
 function parseVerificationDecision(value: unknown, index: number): ReviewVerificationReport["decisions"][number] {

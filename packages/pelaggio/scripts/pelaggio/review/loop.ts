@@ -1,7 +1,20 @@
 import { createHash } from "node:crypto";
 import type { AuthoringReviewConfig, ReviewSlot } from "../config.js";
 import type { ParkSignal, ProviderName, StepResult } from "../types.js";
-import { type AuthoringReviewFinding, type JudgeReport, type JudgeRuling, parseAuthoringReviewFindings, parseJudgeReport, type ReviewFindingClass, reviewFindingFingerprint, reviewFindingsGate } from "./findings.js";
+import {
+	type AuthoringReviewFinding,
+	type ClassificationContextBase,
+	isSafetyClass,
+	type JudgeReport,
+	type JudgeRuling,
+	materializeAuthoringFinding,
+	parseAuthoringReviewFindings,
+	parseJudgeReport,
+	type ReviewFindingClass,
+	reviewFindingFingerprint,
+	reviewFindingsGate,
+	SAFETY_CLASSES,
+} from "./findings.js";
 
 export type ReviewOutcome = "converged-clean" | "converged-with-notes" | "ceiling" | "dissent" | "hard-block" | "budget";
 export type DiversityStatus = { state: "met" } | { state: "softened"; explanation: string };
@@ -57,11 +70,17 @@ export interface ReviewLoopOptions {
 	runSeat: RunSeatFn;
 	prompts: { review(pass: number): string; judge(candidates: readonly ReviewCandidate[], pass: number): string; revise(survivors: readonly ReviewCandidate[]): string };
 	notificationTarget?: string;
+	/** Diff context for emission-time classification (plain data; no shell). */
+	classificationContext: ClassificationContextBase;
 }
 
-const SAFETY_CLASSES: readonly ReviewFindingClass[] = ["security", "data-loss", "correctness-regression"];
-const classRank = (value: ReviewFindingClass): number => (SAFETY_CLASSES.includes(value) ? 1 : 0);
-const blockingRank = (finding: AuthoringReviewFinding): number => (finding.severity === "must-fix" ? 2 : 0) + classRank(finding.class);
+// classRank: safety > judgment; among safety classes earlier SAFETY_CLASSES entries rank higher.
+const classRank = (value: ReviewFindingClass): number => {
+	if (!isSafetyClass(value)) return 0;
+	const idx = SAFETY_CLASSES.indexOf(value);
+	return idx >= 0 ? SAFETY_CLASSES.length - idx : 1;
+};
+const blockingRank = (finding: AuthoringReviewFinding): number => (finding.severity === "must-fix" ? 2 * (SAFETY_CLASSES.length + 1) : 0) + classRank(finding.class);
 const identity = (role: DriverIdentity["role"], slot: ReviewSlot, pass: number): DriverIdentity => ({
 	role,
 	seatId: slot.id,
@@ -81,7 +100,7 @@ export function classifyReviewDisagreement(pass: number, records: ReviewPassReco
 	return {
 		pass,
 		drivers,
-		hasSafetyBlocker: candidates.some((candidate) => candidate.finding.severity === "must-fix" && SAFETY_CLASSES.includes(candidate.finding.class)),
+		hasSafetyBlocker: candidates.some((candidate) => candidate.finding.severity === "must-fix" && isSafetyClass(candidate.finding.class)),
 		evidenceFingerprint: createHash("sha256").update(JSON.stringify(normalized)).digest("hex"),
 	};
 }
@@ -95,7 +114,8 @@ export function deduplicateCandidates(findings: readonly { finding: AuthoringRev
 		else {
 			current.sources.push(item.source);
 			// Keep the most-blocking finding: must-fix severity dominates class rank, so a same-fingerprint
-			// note/nice can never downgrade (and drop) a carried must-fix blocker.
+			// note/nice can never downgrade (and drop) a carried must-fix blocker. Winner keeps its
+			// classification reason intact.
 			if (blockingRank(item.finding) > blockingRank(current.finding)) current.finding = item.finding;
 		}
 	}
@@ -103,7 +123,7 @@ export function deduplicateCandidates(findings: readonly { finding: AuthoringRev
 }
 
 export function classifyReviewOutcome(survivors: readonly ReviewCandidate[], notes: readonly ReviewCandidate[], rulings: ReadonlyMap<string, JudgeRuling>, judgeValid: boolean, pass: number): ReviewOutcome {
-	if (!judgeValid || survivors.some((candidate) => SAFETY_CLASSES.includes(candidate.finding.class) || rulings.get(candidate.candidateId) === "unfixable-blocker")) return "hard-block";
+	if (!judgeValid || survivors.some((candidate) => isSafetyClass(candidate.finding.class) || rulings.get(candidate.candidateId) === "unfixable-blocker")) return "hard-block";
 	if (survivors.some((candidate) => rulings.get(candidate.candidateId) === "judgment-dissent")) return "dissent";
 	if (survivors.length > 0) return "hard-block";
 	if (notes.length === 0) return "converged-clean";
@@ -111,7 +131,7 @@ export function classifyReviewOutcome(survivors: readonly ReviewCandidate[], not
 }
 
 export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewLoopResult> {
-	const { policy } = options;
+	const { policy, classificationContext } = options;
 	const configuredReviewers = policy.reviewers.filter((slot) => slot.provider !== options.author.provider);
 	let cost = 0;
 	let carried: ReviewCandidate[] = [];
@@ -129,6 +149,7 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 		const settled = await Promise.allSettled(configuredReviewers.map((slot, index) => options.runSeat({ role: "reviewer", slot, pass, prompt: options.prompts.review(pass), parkSignal: children[index] })));
 		for (const child of children) if (child.parked) Object.assign(options.parkSignal, child);
 		const reviewerRecords: ReviewPassRecord["reviewers"] = [];
+		// Carried candidates already have harness-owned class + classification reason.
 		const discovered: Array<{ finding: AuthoringReviewFinding; source: string }> = carried.map((candidate) => ({ finding: candidate.finding, source: "carried" }));
 		settled.forEach((result, index) => {
 			const slot = configuredReviewers[index];
@@ -143,7 +164,10 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 				// dropping them is a fail-open (a security must-fix from an incomplete seat must still
 				// block, and must feed hasSafetyBlocker). Only the pass/block VERDICT is ok-gated below,
 				// since an incomplete seat has no trustworthy overall verdict for disagreement.
-				for (const finding of report.findings) discovered.push({ finding, source: slot.id });
+				// Classify at the emission boundary before dedup/ingestion (#293).
+				for (const raw of report.findings) {
+					discovered.push({ finding: materializeAuthoringFinding(raw, classificationContext), source: slot.id });
+				}
 				reviewerRecords.push({
 					identity: identity("reviewer", slot, pass),
 					ok: result.value.ok,
@@ -202,9 +226,9 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 					if (!candidate) return true;
 					// #280: `class` is optional and inherits the candidate's class when omitted — a redundant
 					// echo the Judge shouldn't have to restate. #272: but the Judge must not DOWNGRADE a
-					// reviewer's safety-class candidate to a non-safety class (a reclassify-to-ship evasion);
+					// harness safety-class candidate to a non-safety class (a reclassify-to-ship evasion);
 					// restating the same class or elevating a non-safety candidate stays allowed.
-					return decision.class !== undefined && SAFETY_CLASSES.includes(candidate.finding.class) && !SAFETY_CLASSES.includes(decision.class);
+					return decision.class !== undefined && isSafetyClass(candidate.finding.class) && !isSafetyClass(decision.class);
 				})
 			)
 				throw new Error("Judge decisions are incomplete, duplicated, downgrade a safety class, or contain unknown candidates");
@@ -225,7 +249,7 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 					// it is retained every pass (carried is re-seeded above, so reviewer omission can't drop it
 					// either) and the run parks for a human — a lone Judge's `refuted`/reclassify decision never
 					// clears it; the loop does not self-clear a safety must-fix.
-					if (candidate.finding.severity === "must-fix" && SAFETY_CLASSES.includes(candidate.finding.class)) return true;
+					if (candidate.finding.severity === "must-fix" && isSafetyClass(candidate.finding.class)) return true;
 					return decision.decision === "survives";
 				})
 			: candidates;

@@ -670,6 +670,39 @@ export function getHeadSha(cwd: string): string | null {
 	}
 }
 
+/**
+ * Thin git wrapper: changed file names for a three-dot (or other) range.
+ * Taxonomy policy lives in review/findings.ts — this only returns strings.
+ */
+export function gitDiffNameOnly(cwd: string, range = "main...HEAD"): string[] {
+	try {
+		const out = execSync(`git diff --name-only ${range}`, {
+			cwd,
+			encoding: "utf-8",
+			stdio: ["ignore", "pipe", "pipe"],
+		}).trim();
+		return out ? out.split("\n").filter(Boolean) : [];
+	} catch {
+		return [];
+	}
+}
+
+/**
+ * Thin git wrapper: unified diff text for a range. Fail-soft empty string on error.
+ * Used only as data for pure path/diff extractors — no classification here.
+ */
+export function gitDiffUnified(cwd: string, range = "main...HEAD"): string {
+	try {
+		return execSync(`git diff ${range}`, {
+			cwd,
+			encoding: "utf-8",
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+	} catch {
+		return "";
+	}
+}
+
 export function filesChangedSince(cwd: string, preSha: string | null): string[] {
 	if (!preSha) return [];
 	try {
