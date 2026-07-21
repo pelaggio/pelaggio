@@ -223,6 +223,58 @@ describe("authoring review loop controller", () => {
 		);
 	});
 
+	it("escalates a mixed fixable+safety survivor set immediately without revising (escalate-early)", async () => {
+		// A pass carrying BOTH a fixable non-safety must-fix AND a safety-class must-fix can never converge:
+		// the safety survivor is retained forever (#272). The guard must raise on ANY unclearable survivor,
+		// not only when none is fixable — otherwise `.some(fixable)` burns all 5 passes on a hopeless set.
+		const roles: string[] = [];
+		const mixed = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 2, summary: "mixed", findings: [{ severity: "must-fix", class: "judgment", message: "fixable" }, { severity: "must-fix", class: "security", message: "unsafe" }] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
+		const result = await runReviewLoop({
+			policy: { ...basePolicy },
+			author: { provider: "codex" },
+			parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" },
+			runSeat: async (request) => {
+				roles.push(request.role);
+				if (request.role === "judge")
+					return ok(judgeReport([
+						{ candidateId: "C1", decision: "survives", rationale: "revise", ruling: "fixable-blocker" },
+						{ candidateId: "C2", decision: "survives", rationale: "unsafe", ruling: "fixable-blocker" },
+					]));
+				return ok(mixed);
+			},
+			prompts: { review: () => "r", judge: () => "j", revise: () => "rev" },
+		});
+		assert.equal(result.outcome, "hard-block");
+		assert.equal(result.passes.length, 1);
+		assert.equal(
+			roles.some((role) => role === "author"),
+			false,
+		);
+	});
+
+	it("honors maxRevisions: 0 by escalating a fixable survivor with no author revision", async () => {
+		// max-revisions:0 means review-but-never-auto-revise. A fixable must-fix must hard-block on pass 1;
+		// the loop must consume policy.maxRevisions, not bound revisions only by maxPasses.
+		const roles: string[] = [];
+		const result = await runReviewLoop({
+			policy: { ...basePolicy, maxRevisions: 0 },
+			author: { provider: "codex" },
+			parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" },
+			runSeat: async (request) => {
+				roles.push(request.role);
+				if (request.role === "judge") return ok(judgeReport([{ candidateId: "C1", decision: "survives", rationale: "revise", ruling: "fixable-blocker" }]));
+				return ok(reviewerFindings("judgment"));
+			},
+			prompts: { review: () => "r", judge: () => "j", revise: () => "rev" },
+		});
+		assert.equal(result.outcome, "hard-block");
+		assert.equal(result.passes.length, 1);
+		assert.equal(
+			roles.some((role) => role === "author"),
+			false,
+		);
+	});
+
 	it("iterates a fixable must-fix to convergence before the pass ceiling", async () => {
 		// A non-safety must-fix the Judge rules `survives`/`fixable-blocker` for two passes (author revises
 		// between them), then the fix lands: on pass 3 the reviewer stops raising it and the Judge refutes
