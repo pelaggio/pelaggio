@@ -179,7 +179,7 @@ export function parseAuthoringReviewFindings(text: string): AuthoringReviewRepor
 	// treat it as an incomplete seat, not a real blocker. Trip on either the example summary or any
 	// example finding — a real review never emits these exact placeholder strings, so this cannot
 	// false-positive, and it also catches a fake-clean echo (example summary, empty findings).
-	if (summary === EXAMPLE_SUMMARY || findings.some(isSchemaExampleFinding)) {
+	if (summary?.trim() === EXAMPLE_SUMMARY || findings.some(isSchemaExampleFinding)) {
 		throw new ReviewFindingsParseError("authoring review findings echo the schema example verbatim (the seat did not review the diff)");
 	}
 	return { schemaVersion: 2, summary: summary ?? "", findings };

@@ -975,9 +975,9 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			const policy = resolveAuthoringReviewConfig(CONFIG, profile);
 			const authorSettings = implementationAuthor;
 			// Hand every reviewer seat the actual branch diff so a single-turn seat that never runs
-			// `git diff` (codex) still reviews real code instead of parroting the skill example. Computed
-			// once — the worktree HEAD is fixed for the duration of the review loop.
-			const reviewDiffBlock = buildReviewDiffBlock(worktree!);
+			// `git diff` (codex) still reviews real code instead of parroting the skill example.
+			// Recomputed per pass inside the `review` prompt: the author revision seat advances HEAD
+			// between passes, so a once-computed block would show pass 2+ reviewers pre-revision code.
 			const loop =
 				existingEscalation.state === "resolved-proceed"
 					? undefined
@@ -993,7 +993,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 									...(role === "author" ? { commitLabel: "adversarial review revision" } : {}),
 								}),
 							prompts: {
-								review: () => `${expandSkill("pr-review", "--authoring-loop")}\n\n${reviewDiffBlock}`,
+								review: () => `${expandSkill("pr-review", "--authoring-loop")}\n\n${buildReviewDiffBlock(worktree!)}`,
 								judge: (candidates) => `${expandSkill("pr-verify", "--authoring-loop-judge")}\n\nTRUSTED_CANDIDATE_DATA\n${JSON.stringify(candidates)}\nEND_TRUSTED_CANDIDATE_DATA`,
 								revise: (survivors) => `${expandSkill("shakedown", shakedownCodeArgs)}\n\nThe Judge retained these blockers:\n${JSON.stringify(survivors)}`,
 							},
