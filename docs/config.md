@@ -58,7 +58,8 @@ review:                         # PR review poster (issue #84)
   runner: ci                    # default: ci. values: ci | local
   statusless-after: 2h          # local-mode diagnostic threshold
   authoring:                    # opt-in pre-ship adversarial loop
-    enabled: false
+    enabled: false              # concurrent reviewer/Judge seats use detached
+                                # checkouts under .dev/authoring-review-seats/ (#269)
     provider-diversity: prefer
     blocking-bar: must-fix
     max-passes: 5              # iterate to convergence (integer 1..5) before raising to a human
