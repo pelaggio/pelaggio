@@ -54,7 +54,10 @@ function marker(id: string): string {
 const escalationMarker = (value: { escalation: ReviewEscalation; resolution?: ReviewResolution }): string => `<!-- review-escalation:${Buffer.from(JSON.stringify(value)).toString("base64url")} -->`;
 
 export function reviewEscalationId(input: ReviewEscalation): string {
-	return createHash("sha256").update([input.itemId, input.step, input.reviewedSha, input.evidenceFingerprint].join("\0")).digest("hex").slice(0, 16);
+	return createHash("sha256")
+		.update([input.itemId, input.step, input.reviewedSha, input.evidenceFingerprint, String(input.hasSafetyBlocker)].join("\0"))
+		.digest("hex")
+		.slice(0, 16);
 }
 
 export async function appendReviewEscalation(repo: string, escalation: ReviewEscalation, now = new Date()): Promise<DecisionWriteResult> {
