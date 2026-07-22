@@ -6,6 +6,8 @@ Status values are `default-taken`, `resolved`, or `resolved→ADR-nnnn`. Source 
 
 | Decision | Status | Chosen/leaning | Alternatives | Source | Date |
 | --- | --- | --- | --- | --- | --- |
+| classification boundary for a present directory shell | default-taken | map to existing GONE only when Git's explicit `fatal: not a git repository` diagnostic is conjoined with confirmed absence of `<root>/.git` (via the injectable `exists` seam) | diagnostic-only match (fails open on permission-denied `.git`); preflight `.git` alone without Git diagnostic; extra `rev-parse` probe; broader Git-failure tolerance; second sentinel | https://github.com/pelaggio/pelaggio/issues/339 | 2026-07-22 |
+<!-- decision:ea1f225df817cbf9 -->
 | classification boundary for a present directory shell | default-taken | match Git’s explicit `fatal: not a git repository` diagnostic and map it to the existing GONE sentinel | preflight `<root>/.git`, run an additional `rev-parse`, or tolerate broader Git failures | https://github.com/pelaggio/pelaggio/issues/339 | 2026-07-22 |
 <!-- decision:57d2021b481b81d4 -->
 | expose roadmap.beads.db/prefix | default-taken | no | required/optional db path or prefix | https://github.com/pelaggio/pelaggio/issues/181 | 2026-07-22 |
