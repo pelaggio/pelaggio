@@ -60,12 +60,22 @@ export function listWorktrees(): string[] {
 export const FORBIDDEN_ROOT_SNAPSHOT_ATTEMPTS = 3;
 /** Sync delay between failed snapshot attempts (ms). */
 export const FORBIDDEN_ROOT_SNAPSHOT_RETRY_DELAY_MS = 25;
+/**
+ * Typed sentinel for a forbidden root that is absent at snapshot time — a registered-but-gone
+ * worktree (orphaned `.dev/review-heads/<sha>` from a crashed cycle, or a peer worktree removed
+ * mid-step). Distinct from any `git status --porcelain` output (which is either "" or newline-
+ * separated entries, never NUL-prefixed), so the diff can treat it as no-violation without
+ * colliding with a real clean/dirty observation. Never use `""` — that collides with a clean tree.
+ */
+export const FORBIDDEN_ROOT_GONE = "\0gone";
 
 export interface SnapshotForbiddenRootOptions {
 	/** Test seam: replace the real Git runner. Defaults to `git --no-optional-locks status …`. */
 	run?: (root: string) => string;
 	/** Test seam: replace the sync sleeper between failed attempts. */
 	sleepSync?: (ms: number) => void;
+	/** Test seam: replace the absence check. Defaults to `existsSync`. */
+	exists?: (root: string) => boolean;
 	/** Override production attempt budget (tests only). */
 	attempts?: number;
 	/** Override production retry delay (tests only). */
@@ -112,6 +122,14 @@ export function snapshotForbiddenRoot(root: string, opts?: SnapshotForbiddenRoot
 	const retryDelayMs = opts?.retryDelayMs ?? FORBIDDEN_ROOT_SNAPSHOT_RETRY_DELAY_MS;
 	const run = opts?.run ?? runForbiddenRootSnapshot;
 	const sleepSync = opts?.sleepSync ?? sleepSyncDefault;
+	const exists = opts?.exists ?? ((p: string) => existsSync(p));
+
+	// A registered-but-gone root cannot have been mutated by this step, so it is not a violation.
+	// Return the typed GONE sentinel instead of letting the retry loop burn attempts on a permanent
+	// ENOENT/`/bin/sh`-missing failure and then fail closed. Keyed strictly on *absence* (`!exists`),
+	// never on catching an ENOENT-class error: a missing `git`/`sh` binary on an existing root is a
+	// real failure that must still fail closed. (#308 follow-up)
+	if (!exists(root)) return FORBIDDEN_ROOT_GONE;
 
 	let lastError: unknown;
 	for (let attempt = 1; attempt <= attempts; attempt++) {
@@ -119,6 +137,10 @@ export function snapshotForbiddenRoot(root: string, opts?: SnapshotForbiddenRoot
 			return run(root);
 		} catch (e: unknown) {
 			lastError = e;
+			// Re-check absence after a failed exec: the root may have been removed *during* the step
+			// (TOCTOU) — a permanent condition the retry loop cannot clear. Only confirmed absence maps
+			// to GONE; a real error on a still-present root keeps failing closed through the throw below.
+			if (!exists(root)) return FORBIDDEN_ROOT_GONE;
 			if (attempt < attempts) sleepSync(retryDelayMs);
 		}
 	}
@@ -138,7 +160,12 @@ export function snapshotForbiddenRoots(roots: readonly string[]): Map<string, st
 export function diffForbiddenRootSnapshots(before: ReadonlyMap<string, string>, after: ReadonlyMap<string, string>): string[] {
 	const changed: string[] = [];
 	for (const [root, status] of before) {
-		if (after.get(root) !== status) changed.push(root);
+		const next = after.get(root);
+		// A root that is GONE at *either* endpoint was already absent or was removed mid-step; it
+		// cannot have been mutated-and-observed by this step, so it is never a violation. Only a
+		// present→present pair with differing porcelain output is a real confinement breach. (#308)
+		if (status === FORBIDDEN_ROOT_GONE || next === FORBIDDEN_ROOT_GONE) continue;
+		if (next !== status) changed.push(root);
 	}
 	return changed;
 }
@@ -164,7 +191,11 @@ export function createMainCheckoutDeltaObserver(root: string): MainCheckoutDelta
 	};
 	const snapshot = (): string | MainCheckoutDeltaResult => {
 		try {
-			return snapshotForbiddenRoot(mainRoot);
+			const status = snapshotForbiddenRoot(mainRoot);
+			// mainRepo is never GONE-tolerated: cwd lives inside it and it is hard-gated. If it ever
+			// snapshots absent, fail closed rather than silently skipping the delta. (#308)
+			if (status === FORBIDDEN_ROOT_GONE) return fail(`main checkout root vanished: ${mainRoot}`);
+			return status;
 		} catch (error) {
 			return fail(error instanceof Error ? error.message : String(error));
 		}

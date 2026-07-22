@@ -18,8 +18,11 @@ export function forbiddenRootsForConfinement(args: {
 	ownWorktree?: string;
 	/** When true, drop mainRepo from the set (operator main-checkout tolerated). */
 	allowDirtyMain?: boolean;
-	/** Predicate: is this root a harness-managed authoring-review seat? */
-	isAuthoringReviewSeatPath: (root: string) => boolean;
+	/** Predicate: is this root a harness-managed ephemeral review worktree — an authoring-review
+	 *  seat (`.dev/authoring-review-seats/`, #269) or a PR-head review worktree
+	 *  (`.dev/review-heads/`, #308)? Both are throwaway, gitignored, and must be exempt so a
+	 *  concurrent step's whole-tree snapshot doesn't trip on a peer's dirty/orphaned checkout. */
+	isEphemeralReviewWorktree: (root: string) => boolean;
 	/** #131: under `--parallel`, the worktrees of peer cycles currently running. A peer's
 	 *  legitimate self-write must not trip this cycle's whole-tree snapshot; cross-tree
 	 *  corruption is caught by the capability/write-set boundary, not this snapshot.
@@ -35,9 +38,9 @@ export function forbiddenRootsForConfinement(args: {
 		const abs = resolve(root);
 		if (seen.has(abs) || exempt.has(abs)) continue;
 		if (args.allowDirtyMain && abs === mainAbs) continue;
-		// #269: peer authoring-review seats are throwaway per-seat checkouts; a
-		// dirty peer seat must not trip a concurrent reviewer's confinement audit.
-		if (args.isAuthoringReviewSeatPath(abs)) continue;
+		// #269/#308: peer authoring-review seats and PR-head review worktrees are throwaway
+		// harness checkouts; a dirty/orphaned peer one must not trip a concurrent step's audit.
+		if (args.isEphemeralReviewWorktree(abs)) continue;
 		seen.add(abs);
 		roots.push(root);
 	}

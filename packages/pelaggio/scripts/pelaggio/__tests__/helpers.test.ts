@@ -15,8 +15,10 @@ import {
 	computeImplementTurns,
 	countPlanFiles,
 	createMainCheckoutDeltaObserver,
+	diffForbiddenRootSnapshots,
 	ensureMainCheckoutOnBranch,
 	expandSkill,
+	FORBIDDEN_ROOT_GONE,
 	FORBIDDEN_ROOT_SNAPSHOT_ATTEMPTS,
 	filesChangedSince,
 	findLoggedArtifactAuthor,
@@ -99,6 +101,7 @@ describe("snapshotForbiddenRoot", () => {
 		const result = snapshotForbiddenRoot("/tmp/forbidden-root", {
 			attempts: 3,
 			retryDelayMs: 25,
+			exists: () => true,
 			sleepSync: (ms) => {
 				sleeps.push(ms);
 			},
@@ -121,6 +124,7 @@ describe("snapshotForbiddenRoot", () => {
 				snapshotForbiddenRoot("/tmp/broken-root", {
 					attempts: FORBIDDEN_ROOT_SNAPSHOT_ATTEMPTS,
 					retryDelayMs: 10,
+					exists: () => true,
 					sleepSync: (ms) => {
 						sleeps.push(ms);
 					},
@@ -149,6 +153,7 @@ describe("snapshotForbiddenRoot", () => {
 		const result = snapshotForbiddenRoot("/tmp/dirty-root", {
 			attempts: 3,
 			retryDelayMs: 25,
+			exists: () => true,
 			sleepSync: (ms) => {
 				sleeps.push(ms);
 			},
@@ -160,6 +165,76 @@ describe("snapshotForbiddenRoot", () => {
 		assert.equal(result, dirty);
 		assert.equal(calls, 1);
 		assert.deepEqual(sleeps, []);
+	});
+
+	it("returns the GONE sentinel for an already-absent root without spawning git (#308)", () => {
+		let calls = 0;
+		const result = snapshotForbiddenRoot("/tmp/orphaned-review-head", {
+			exists: () => false,
+			run: () => {
+				calls++;
+				return "";
+			},
+		});
+		assert.equal(result, FORBIDDEN_ROOT_GONE);
+		assert.equal(calls, 0, "must not run git status on a known-gone root");
+	});
+
+	it("returns GONE when the root disappears mid-step (run fails, absence then confirmed) (#308 TOCTOU)", () => {
+		let calls = 0;
+		let existsChecks = 0;
+		const result = snapshotForbiddenRoot("/tmp/removed-mid-step", {
+			attempts: 3,
+			exists: () => existsChecks++ === 0, // present at the pre-check, gone once the run has failed
+			sleepSync: () => {},
+			run: () => {
+				calls++;
+				throw new Error("spawnSync /bin/sh ENOENT");
+			},
+		});
+		assert.equal(result, FORBIDDEN_ROOT_GONE);
+		assert.equal(calls, 1, "confirmed absence short-circuits the retry loop");
+	});
+
+	it("fails closed on a real error while the root still exists (missing git, not absence) (#308)", () => {
+		let calls = 0;
+		assert.throws(
+			() =>
+				snapshotForbiddenRoot("/tmp/present-but-broken", {
+					attempts: 2,
+					exists: () => true, // root is present the whole time — a real failure, not GONE
+					sleepSync: () => {},
+					run: () => {
+						calls++;
+						throw new Error("spawnSync git ENOENT");
+					},
+				}),
+			/failed to snapshot forbidden root \/tmp\/present-but-broken/,
+		);
+		assert.equal(calls, 2, "a present root exhausts the retry budget then throws");
+	});
+});
+
+describe("diffForbiddenRootSnapshots (#308 GONE-aware)", () => {
+	const gone = FORBIDDEN_ROOT_GONE;
+	it("flags a present→present root whose porcelain changed (clean→dirty)", () => {
+		const before = new Map([["/wt", ""]]);
+		const after = new Map([["/wt", "?? leaked.txt"]]);
+		assert.deepEqual(diffForbiddenRootSnapshots(before, after), ["/wt"]);
+	});
+	it("does not flag an unchanged present→present root (dirty→dirty)", () => {
+		const before = new Map([["/wt", " M x"]]);
+		const after = new Map([["/wt", " M x"]]);
+		assert.deepEqual(diffForbiddenRootSnapshots(before, after), []);
+	});
+	it("passes GONE→GONE (already-gone orphan — the live review-head case)", () => {
+		assert.deepEqual(diffForbiddenRootSnapshots(new Map([["/wt", gone]]), new Map([["/wt", gone]])), []);
+	});
+	it("passes present→GONE without a false positive (removed mid-step, incl. dirty→gone)", () => {
+		assert.deepEqual(diffForbiddenRootSnapshots(new Map([["/wt", " M x"]]), new Map([["/wt", gone]])), []);
+	});
+	it("passes GONE→present (root appeared mid-step — cannot be this step's mutation)", () => {
+		assert.deepEqual(diffForbiddenRootSnapshots(new Map([["/wt", gone]]), new Map([["/wt", ""]])), []);
 	});
 });
 
