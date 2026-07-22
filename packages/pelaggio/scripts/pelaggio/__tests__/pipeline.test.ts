@@ -114,6 +114,25 @@ describe("runPipeline — pick divergence gate (#332)", () => {
 		assert.equal(calls.filter((c) => c.step === "implement").length, 0, "must not implement the diverted item");
 	});
 
+	it("fails closed (pick:unparsed-marker) when a pinned pick claims but emits no authoritative marker — free text can't mask a divert", async () => {
+		// The pick reports `claimed` and narrates the requested id, but emits NO valid `pick-item:`
+		// marker. A pinned pick must resolve from the marker only — falling back to free-text
+		// parseItemId here is exactly how a divert could hide behind "Requested issue 286".
+		const mainRepo = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const { runStep, calls } = createMockRunStep({ pick: { ok: true, text: "Requested issue 286.\nClaimed a ready item.\npick-result: claimed" }, plan: { ok: true } }, parkSignal);
+		const result = await runPipeline({ itemId: "286", cycle: 1, verbose: false, shipTarget: getShipTarget("pull-request"), dryRun: false, liveStatus: makeLiveStatus() }, parkSignal, baseFlags, {
+			runStep,
+			mainRepo,
+			listWorktrees: () => [mainRepo],
+			appendLog: () => {},
+			roadmap: makeMockRoadmap(),
+		});
+		assert.equal(result.completed, false);
+		assert.equal(result.error, "pick:unparsed-marker");
+		assert.equal(calls.filter((c) => c.step === "plan").length, 0, "must not proceed without an authoritative marker");
+	});
+
 	it("does NOT fire the gate when the pick claims exactly the pinned item (no false divergence)", async () => {
 		// The pick marker matches the pin, so the gate must not short-circuit with pick:diverted.
 		// (We assert only that the gate did not fire — the downstream claim/worktree creation is a
