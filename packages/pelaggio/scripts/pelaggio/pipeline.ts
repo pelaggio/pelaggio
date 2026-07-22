@@ -13,7 +13,6 @@ import {
 	ROADMAP_GITHUB,
 	ROADMAP_LINEAR,
 	ROADMAP_SOURCE,
-	resolveAuthoringReviewConfig,
 	resolveDriverCandidates,
 	resolveProviderBin,
 	resolveStepSettings,
@@ -24,7 +23,16 @@ import {
 import { forbiddenRootsForConfinement } from "./confinement/roots.js";
 import { appendDecisions as appendDecisionsDefault, appendReviewEscalation as appendReviewEscalationDefault, lookupReviewEscalation as lookupReviewEscalationDefault } from "./decisions.js";
 import { createDriverAssignmentState, type DriverIdentity, recordArtifactAuthor, resolveStaticAuthor, selectAuthor, selectReviewers } from "./driver-assignment.js";
-import { dispatchStepEffects as dispatchStepEffectsDefault, type Effect, EffectsManifestError, writeEffectsManifest as writeEffectsManifestDefault } from "./effects.js";
+import {
+	dispatchStepEffects as dispatchStepEffectsDefault,
+	type Effect,
+	type EffectsContext,
+	EffectsManifestError,
+	type ReviewEscalationEffect,
+	type ReviewSeatIdentity,
+	type ReviewVerdictEffect,
+	writeEffectsManifest as writeEffectsManifestDefault,
+} from "./effects.js";
 import { DEFAULT_FLOW_POLICY, type FlowPolicy } from "./flow-policy.js";
 import {
 	appendLog as appendLogDefault,
@@ -70,6 +78,7 @@ import {
 } from "./helpers.js";
 import { type NotifyConfig, notifyCycle, notifyDecision as notifyDecisionEvent, notifyStrandedReview, sendNotification as sendNotificationDefault } from "./notify.js";
 import { buildFailClosedComment, runPrReviewGate } from "./pr-review-cli.js";
+import { capabilityMapFrom, resolveAuthoringReviewConfig } from "./provider-routing.js";
 import { runReviewLoop } from "./review/loop.js";
 import { type ReviewRecord, renderReviewRecord, writeReviewRecord } from "./review/record.js";
 import { cleanupAuthoringReviewSeatsForSha, isAuthoringReviewSeatPath, prepareAuthoringReviewSeat } from "./review/seats.js";
@@ -80,7 +89,7 @@ import { getRoadmapSource, type RoadmapSource } from "./roadmap/index.js";
 import { cleanupShipBodyFile, parseShipDecisionEffect, shipBodyFile } from "./ship/decision.js";
 import { commitStrayBookkeeping, getShipTarget, isAutonomousRemotePush, isShipTargetName, runShipBookkeeping as runShipBookkeepingDefault, SHIP_TARGET_NAMES } from "./ship/index.js";
 import { extractPrUrl } from "./ship/pull-request.js";
-import { runStep as runStepDefault } from "./step-runner.js";
+import { getProvider, REGISTERED_PROVIDERS, runStep as runStepDefault } from "./step-runner.js";
 import { A, createStepRenderer, fmtElapsed, LiveStatus, StatusBar, TUI_ENABLED } from "./tui.js";
 import {
 	type CycleGitBinding,
@@ -90,6 +99,7 @@ import {
 	type Flags,
 	type ParkSignal,
 	type PipelineOpts,
+	type ProviderName,
 	RECOVERABLE_ERRORS,
 	type ShipTargetName,
 	type Step,
@@ -1158,8 +1168,21 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			const existingEscalation = lookupReviewEscalation(mainRepo, itemId!, reviewedSha);
 			if (existingEscalation.state === "active" || existingEscalation.state === "resolved-block" || existingEscalation.state === "invalid") return parkExit(`adversarial review escalation ${existingEscalation.state}`)!;
 			if (existingEscalation.state === "resolved-proceed" && existingEscalation.escalation.hasSafetyBlocker) return parkExit("adversarial review safety blocker")!;
-			const policy = resolveAuthoringReviewConfig(CONFIG, profile);
+			// Capability-aware fixed-seat resolution (#337): fill configured seats via settings
+			// inheritance + capability matcher; fail before seat worktrees when ineligible.
 			const authorSettings = implementationAuthor;
+			const authorIdentity = {
+				provider: authorSettings.provider,
+				...(authorSettings.provider === "codex" ? (authorSettings.codexModel ? { model: authorSettings.codexModel } : {}) : authorSettings.model ? { model: authorSettings.model } : {}),
+			};
+			const seating = resolveAuthoringReviewConfig({
+				config: CONFIG,
+				profile,
+				author: authorIdentity,
+				capabilities: capabilityMapFrom(getProvider, REGISTERED_PROVIDERS),
+			});
+			if (!seating.ok) return finish({ itemId, completed: false, cost, error: `shakedown-code assignment failed: ${seating.reason}` });
+			const policy = seating.policy;
 			// Hand every reviewer seat the actual branch diff so a single-turn seat that never runs
 			// `git diff` (codex) still reviews real code instead of parroting the skill example.
 			// Recomputed per pass inside the `review` prompt: the author revision seat advances HEAD
@@ -1179,7 +1202,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				try {
 					loop = await runReviewLoop({
 						policy,
-						author: { provider: authorSettings.provider, ...(authorSettings.provider === "codex" ? (authorSettings.codexModel ? { model: authorSettings.codexModel } : {}) : authorSettings.model ? { model: authorSettings.model } : {}) },
+						author: authorIdentity,
 						parkSignal,
 						// Plain changed-file list for emission-time classification; path signals are derived pure-side.
 						classificationContext: { changedFiles: gitDiffNameOnly(worktree!) },
@@ -1238,10 +1261,73 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				shakedownResult = { ok: true, subtype: "success", text: "resolved-proceed", fullText: "resolved-proceed", cost: 0, turns: 0 };
 			} else {
 				cost += loop.cost;
-				const record: ReviewRecord = { schemaVersion: 1, runId: `${runIdBase}-${itemId}`, itemId: itemId!, createdAt: new Date().toISOString(), blockingBar: "must-fix", result: loop };
+				const reviewRunId = `${runIdBase}-${itemId}`;
+				const record: ReviewRecord = { schemaVersion: 1, runId: reviewRunId, itemId: itemId!, createdAt: new Date().toISOString(), blockingBar: "must-fix", result: loop };
 				const recordPath = writeReviewRecord(worktree!, record);
 				reviewRecordMarkdown = renderReviewRecord(record);
 				log(`review record → ${recordPath}`);
+				const reviewRecordSource = `.dev/review-records/${record.runId}.json`;
+				// Aggregate authoring-review provenance at reserved attempt 0 (seat step() calls
+				// use 1-indexed pass as attempt; effectManifestPath is `${step}-${attempt}.json`).
+				const seats: ReviewSeatIdentity[] = [
+					{ role: "author", seatId: "author", provider: authorIdentity.provider as ProviderName, ...(authorIdentity.model ? { model: authorIdentity.model } : {}) },
+					...policy.reviewers.map((slot) => ({
+						role: "reviewer" as const,
+						seatId: slot.id,
+						provider: slot.provider,
+						...(slot.provider === "codex" ? (slot.codexModel ? { model: slot.codexModel } : {}) : slot.model ? { model: slot.model } : {}),
+					})),
+					{
+						role: "judge",
+						seatId: policy.judge.id,
+						provider: policy.judge.provider,
+						...(policy.judge.provider === "codex" ? (policy.judge.codexModel ? { model: policy.judge.codexModel } : {}) : policy.judge.model ? { model: policy.judge.model } : {}),
+					},
+				];
+				const verdictEffect: ReviewVerdictEffect = {
+					kind: "review.Verdict",
+					itemId: itemId!,
+					reviewedSha,
+					reviewRecordSource,
+					outcome: loop.outcome,
+					seats,
+				};
+				const reviewEffects: Effect[] = [verdictEffect];
+				if (loop.disagreement) {
+					const escalationEffect: ReviewEscalationEffect = {
+						kind: "review.Escalation",
+						itemId: itemId!,
+						reviewedSha,
+						reviewRecordSource,
+						evidenceFingerprint: loop.disagreement.evidenceFingerprint,
+						hasSafetyBlocker: loop.disagreement.hasSafetyBlocker,
+					};
+					reviewEffects.push(escalationEffect);
+				}
+				const effectsCtx: EffectsContext = {
+					runId: reviewRunId,
+					itemId: itemId!,
+					step: "shakedown-code",
+					attempt: 0,
+					cwd: worktree!,
+					preSha: reviewedSha,
+				};
+				if (!opts.dryRun) {
+					try {
+						writeEffectsManifest(effectsCtx, reviewEffects);
+						await dispatchStepEffects({ ...effectsCtx, roadmap, log });
+					} catch (e) {
+						const code = e instanceof EffectsManifestError ? e.code : "effect_failed";
+						const message = e instanceof Error ? e.message : String(e);
+						const text = `${code}: ${message}`;
+						return finish({
+							itemId,
+							completed: false,
+							cost,
+							error: `shakedown-code effects failed: ${text}`,
+						});
+					}
+				}
 				if (loop.disagreement) {
 					const escalation = {
 						kind: "review-escalation" as const,
@@ -1249,7 +1335,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 						step: "shakedown-code" as const,
 						reviewedSha,
 						evidenceFingerprint: loop.disagreement.evidenceFingerprint,
-						reviewRecordSource: `.dev/review-records/${record.runId}.json`,
+						reviewRecordSource,
 						hasSafetyBlocker: loop.disagreement.hasSafetyBlocker,
 						drivers: loop.disagreement.drivers.map((driver) => ({ ...driver, identity: { ...driver.identity, role: "reviewer" as const } })),
 					};

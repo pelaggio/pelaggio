@@ -4,8 +4,8 @@ import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it, mock } from "node:test";
-import { WORKTREE_PREFIX } from "../config.js";
-import { EffectsManifestError } from "../effects.js";
+import { REVIEW_CONFIG, WORKTREE_PREFIX } from "../config.js";
+import { dispatchStepEffects, EffectsManifestError, writeEffectsManifest } from "../effects.js";
 import { FifoPolicy } from "../flow-policy.js";
 import { type RunStepFn, runOrchestrator, runPipeline } from "../pipeline.js";
 import { shipBodyFile } from "../ship/decision.js";
@@ -2821,5 +2821,169 @@ describe("runOrchestrator — SIGUSR2 pause handler", () => {
 		await runOrchestrator({ ...baseFlags, item: "A-1" }, { runPipeline });
 		const after = process.listenerCount("SIGUSR2");
 		assert.equal(after, before, `SIGUSR2 listener leak: before=${before} after=${after}`);
+	});
+});
+
+describe("runPipeline — authoring review capability seating + effects (#337)", () => {
+	const cleanFindings = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 3, summary: "clean review", findings: [] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
+	const cleanJudge = `AUTHORING_REVIEW_JUDGE\n${JSON.stringify({ schemaVersion: 1, decisions: [] })}\nEND_AUTHORING_REVIEW_JUDGE`;
+
+	it("emits aggregate review.Verdict at shakedown-code attempt 0 when authoring converges", async () => {
+		const saved = {
+			enabled: REVIEW_CONFIG.authoring.enabled,
+			reviewers: REVIEW_CONFIG.authoring.reviewers.map((s) => ({ ...s })),
+			judge: { ...REVIEW_CONFIG.authoring.judge },
+		};
+		// Two non-author reviewers so author (claude, default implement) is excluded cleanly.
+		REVIEW_CONFIG.authoring.enabled = true;
+		REVIEW_CONFIG.authoring.reviewers = [
+			{ id: "codex", provider: "codex" },
+			{ id: "grok", provider: "grok" },
+		];
+		REVIEW_CONFIG.authoring.judge = { id: "judge", provider: "claude" };
+
+		const worktree = makeTempGitRepo();
+		// Seed a real commit so getHeadSha binds and seats can pin.
+		writeFileSync(join(worktree, "seed.txt"), "seed");
+		execSync("git add -A && git commit -q -m seed", { cwd: worktree });
+
+		const parkSignal = makeParkSignal();
+		const manifests: Array<{ attempt: number; step: string; effects: unknown[] }> = [];
+		const dispatches: Array<{ attempt: number; step: string }> = [];
+		const { runStep, calls } = createMockRunStep(
+			{
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"pr-review": { ok: true, text: cleanFindings, fullText: cleanFindings },
+				"pr-verify": { ok: true, text: cleanJudge, fullText: cleanJudge },
+				ship: {
+					ok: true,
+					text: "ship-merged: TOOL-99",
+					sideEffect: (cwd) => {
+						execSync("git checkout -q main", { cwd });
+						execSync("git merge -q --no-ff feat/tool-99", { cwd });
+						execSync("git checkout -q feat/tool-99", { cwd });
+					},
+				},
+			},
+			parkSignal,
+		);
+
+		try {
+			const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement" }, parkSignal, baseFlags, {
+				runStep,
+				mainRepo: worktree,
+				listWorktrees: () => [worktree],
+				appendLog: () => {},
+				runShipBookkeeping: noopBookkeeping,
+				writeEffectsManifest: (ctx, effects) => {
+					manifests.push({ attempt: ctx.attempt, step: ctx.step, effects: [...effects] });
+					writeEffectsManifest(ctx, effects);
+				},
+				dispatchStepEffects: async (ctx) => {
+					dispatches.push({ attempt: ctx.attempt, step: ctx.step });
+					return dispatchStepEffects(ctx);
+				},
+			});
+
+			assert.equal(result.completed, true, `expected completed cycle; error=${result.error}`);
+			// Reviewer seats run as pr-review; judge as pr-verify; no ordinary shakedown-code step() for review.
+			assert.ok(
+				calls.some((c) => c.step === "pr-review"),
+				"expected pr-review seat calls",
+			);
+			assert.ok(
+				calls.some((c) => c.step === "pr-verify"),
+				"expected pr-verify judge call",
+			);
+			const aggregate = manifests.find((m) => m.step === "shakedown-code" && m.attempt === 0);
+			assert.ok(aggregate, `expected shakedown-code attempt 0 manifest; got ${JSON.stringify(manifests)}`);
+			assert.equal(aggregate.effects[0] && (aggregate.effects[0] as { kind: string }).kind, "review.Verdict");
+			assert.ok(dispatches.some((d) => d.step === "shakedown-code" && d.attempt === 0));
+		} finally {
+			REVIEW_CONFIG.authoring.enabled = saved.enabled;
+			REVIEW_CONFIG.authoring.reviewers = saved.reviewers;
+			REVIEW_CONFIG.authoring.judge = saved.judge;
+		}
+	});
+
+	it("fails before seat setup when authoring seating is ineligible", async () => {
+		const saved = {
+			enabled: REVIEW_CONFIG.authoring.enabled,
+			reviewers: REVIEW_CONFIG.authoring.reviewers.map((s) => ({ ...s })),
+		};
+		// cycle=1 + implement-only rotates implement author to codex (pool [claude,codex,grok]).
+		// A sole codex reviewer is then excluded → seating fails before any seat step runs.
+		REVIEW_CONFIG.authoring.enabled = true;
+		REVIEW_CONFIG.authoring.reviewers = [{ id: "only-codex", provider: "codex" }];
+
+		const worktree = makeTempGitRepo();
+		writeFileSync(join(worktree, "seed.txt"), "seed");
+		execSync("git add -A && git commit -q -m seed", { cwd: worktree });
+		const parkSignal = makeParkSignal();
+		const { runStep, calls } = createMockRunStep(
+			{
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"pr-review": { ok: true, text: cleanFindings, fullText: cleanFindings },
+				"pr-verify": { ok: true, text: cleanJudge, fullText: cleanJudge },
+			},
+			parkSignal,
+		);
+
+		try {
+			const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement" }, parkSignal, baseFlags, {
+				runStep,
+				mainRepo: worktree,
+				listWorktrees: () => [worktree],
+				appendLog: () => {},
+				runShipBookkeeping: noopBookkeeping,
+			});
+
+			assert.equal(result.completed, false);
+			assert.match(result.error ?? "", /shakedown-code assignment failed/);
+			assert.ok(!calls.some((c) => c.step === "pr-review"), "must not invoke review seats when seating fails");
+			assert.ok(!calls.some((c) => c.step === "pr-verify"), "must not invoke judge when seating fails");
+		} finally {
+			REVIEW_CONFIG.authoring.enabled = saved.enabled;
+			REVIEW_CONFIG.authoring.reviewers = saved.reviewers;
+		}
+	});
+
+	it("does not emit review effects when authoring review is disabled", async () => {
+		// Hermetic setup already pins authoring off; assert the ordinary path never writes attempt 0.
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const manifests: Array<{ attempt: number; step: string }> = [];
+		const { runStep } = createMockRunStep(
+			{
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				ship: {
+					ok: true,
+					text: "ship-merged: TOOL-99",
+					sideEffect: (cwd) => {
+						execSync("git checkout -q main", { cwd });
+						execSync("git merge -q --no-ff feat/tool-99", { cwd });
+						execSync("git checkout -q feat/tool-99", { cwd });
+					},
+				},
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement" }, parkSignal, baseFlags, {
+			runStep,
+			mainRepo: worktree,
+			listWorktrees: () => [],
+			appendLog: () => {},
+			runShipBookkeeping: noopBookkeeping,
+			writeEffectsManifest: (ctx, effects) => {
+				manifests.push({ attempt: ctx.attempt, step: ctx.step });
+				// Forward to the real writer so implement checkpoint dispatch still succeeds.
+				writeEffectsManifest(ctx, effects);
+			},
+		});
+
+		assert.equal(result.completed, true, `expected completed cycle; error=${result.error}`);
+		assert.ok(!manifests.some((m) => m.step === "shakedown-code" && m.attempt === 0));
 	});
 });

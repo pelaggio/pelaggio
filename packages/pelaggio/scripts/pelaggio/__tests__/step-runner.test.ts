@@ -203,6 +203,72 @@ describe("getProvider — registry + guard", () => {
 	});
 });
 
+describe("provider capability matrix (#337)", () => {
+	it("exposes a complete descriptor on every registered provider", () => {
+		for (const name of ["claude", "codex", "grok"] as const) {
+			const caps = getProvider(name).capabilities;
+			assert.equal(typeof caps.semanticDeny, "boolean");
+			assert.ok(Array.isArray(caps.isolation));
+			assert.ok(caps.costMeter && typeof caps.costMeter.kind === "string");
+			assert.equal(typeof caps.cacheReporting, "boolean");
+			assert.equal(typeof caps.outputTransport, "string");
+			assert.equal(typeof caps.sessionResume, "boolean");
+		}
+	});
+
+	it("encodes the verified Claude/Codex/Grok factual rows", () => {
+		assert.deepEqual(getProvider("claude").capabilities, {
+			semanticDeny: true,
+			isolation: [],
+			costMeter: { kind: "usd-billed" },
+			cacheReporting: true,
+			outputTransport: "stream",
+			sessionResume: false,
+		});
+		assert.deepEqual(getProvider("codex").capabilities, {
+			semanticDeny: false,
+			isolation: ["workspace-write"],
+			costMeter: { kind: "usd-estimated" },
+			cacheReporting: true,
+			outputTransport: "stream-plus-final",
+			sessionResume: false,
+		});
+		assert.deepEqual(getProvider("grok").capabilities, {
+			semanticDeny: false,
+			isolation: ["landlock"],
+			costMeter: { kind: "pool-quota", estimateFallback: "degraded" },
+			cacheReporting: true,
+			outputTransport: "stream",
+			sessionResume: false,
+		});
+	});
+
+	it("claims semanticDeny only for Claude (not OS isolation)", () => {
+		assert.equal(getProvider("claude").capabilities.semanticDeny, true);
+		assert.equal(getProvider("codex").capabilities.semanticDeny, false);
+		assert.equal(getProvider("grok").capabilities.semanticDeny, false);
+		// Isolation membership is independent of semantic deny.
+		assert.ok(getProvider("codex").capabilities.isolation.includes("workspace-write"));
+		assert.ok(getProvider("grok").capabilities.isolation.includes("landlock"));
+		assert.equal(getProvider("claude").capabilities.isolation.length, 0);
+	});
+
+	it("reports cache counters on all three providers (corrected matrix)", () => {
+		assert.equal(getProvider("claude").capabilities.cacheReporting, true);
+		assert.equal(getProvider("codex").capabilities.cacheReporting, true);
+		assert.equal(getProvider("grok").capabilities.cacheReporting, true);
+	});
+
+	it("does not claim typed structured output or session resume on any driver", () => {
+		for (const name of ["claude", "codex", "grok"] as const) {
+			const caps = getProvider(name).capabilities;
+			assert.equal(caps.sessionResume, false);
+			// No typed-output axis on the descriptor at all (#306 owns that future claim).
+			assert.equal("typedOutput" in caps, false);
+		}
+	});
+});
+
 describe("composeSystemAppend", () => {
 	const base = { cwd: "/tmp/wt", repo: "/home/user/repo" };
 

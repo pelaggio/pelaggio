@@ -18,8 +18,21 @@ import { buildAgentEnv, makeSecretScrubber } from "./secret-hygiene.js";
 import type { StepProvider } from "./step-runner.js";
 import { composeSystemAppend, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "./step-runner-shared.js";
 import { MUTATING_TOOLS, toolBrief } from "./tui.js";
-import type { ParkSignal, Step, StepEvent, StepResult, TokenUsage } from "./types.js";
+import type { ParkSignal, ProviderCapabilities, Step, StepEvent, StepResult, TokenUsage } from "./types.js";
 import { ensureWorktreeDeps } from "./worktree-deps.js";
+
+/**
+ * Grok: Landlock isolation when declared native, pool-quota ticks (token-price fallback
+ * degraded), cache counters, ACP stream. No semantic deny; no session resume.
+ */
+export const GROK_CAPABILITIES: ProviderCapabilities = {
+	semanticDeny: false,
+	isolation: ["landlock"],
+	costMeter: { kind: "pool-quota", estimateFallback: "degraded" },
+	cacheReporting: true,
+	outputTransport: "stream",
+	sessionResume: false,
+};
 
 type JsonObject = Record<string, unknown>;
 
@@ -423,4 +436,4 @@ export const runStep: StepProvider["runStep"] = async (name, prompt, opts, emit)
 	return built.result;
 };
 
-export const grokProvider: StepProvider = { name: "grok", runStep };
+export const grokProvider: StepProvider = { name: "grok", capabilities: GROK_CAPABILITIES, runStep };

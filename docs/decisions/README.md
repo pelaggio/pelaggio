@@ -32,9 +32,9 @@ Numbered from the security audit's implicit-decision candidates.
 | [0017](./0017-graceful-degradation-rigor-only.md) | Degrade on rigor only; last-verified-pin ok, uncontained never | proposed | `TC-001`, `TC-010` |
 | [0018](./0018-in-toto-attestation-envelope.md) | Attestations (#186–189) carry machine-checkable gate assertions in the in-toto / ITE-6 envelope | proposed | `TC-005` |
 | [0019](./0019-checkpoint-restart-not-replay.md) | Checkpoint-restart durability, not deterministic replay | accepted | — |
-| [0020](./0020-multi-driver-provider-seam-and-capability-model.md) | Multi-driver provider seam + data-only capability model; native-prefer routing, fail-closed, no polyfill emulation | proposed | — |
+| [0020](./0020-multi-driver-provider-seam-and-capability-model.md) | Multi-driver provider seam + data-only capability model; native-prefer routing, fail-closed, no polyfill emulation | accepted | — |
 | [0021](./0021-capability-enforcement-and-placement.md) | Enforcement = ocap tool-mediation; placement = effects-as-handlers; agentic-loop vs deterministic only | proposed | — |
-| [0022](./0022-pipeline-shape-and-review-orchestrators.md) | Fixed 6 steps; policy-triggered review; distinct cold CI + authoring orchestrators (rejects uniform Node) | proposed | — |
+| [0022](./0022-pipeline-shape-and-review-orchestrators.md) | Fixed 6 steps; policy-triggered review; distinct cold CI + authoring orchestrators (rejects uniform Node) | accepted | — |
 | [0023](./0023-contained-execution-boundary.md) | Contained-execution: `network=none` jail + fail-closed egress broker; keys unattended, subscription local-only; containment ≠ permission | proposed | — |
 | [0024](./0024-adversarial-authoring-review-loop.md) | Review moves upstream: multi-driver panel + Judge, deterministic convergence, park-on-safety, provenance record | accepted | — |
 
