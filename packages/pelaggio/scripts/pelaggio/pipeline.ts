@@ -54,6 +54,7 @@ import {
 	parseDeferredItems,
 	parsePickItem,
 	parsePickResult,
+	pickDivergedFromPin,
 	parseShipMerged,
 	parseVerdict,
 	parseWaitFlag,
@@ -667,6 +668,17 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 
 			itemId = opts.dryRun ? (itemId ?? "DRY") : (parsePickItem(pickText) ?? (await roadmap.parseItemId(pick.text)) ?? (await roadmap.parseItemId(pick.fullText)));
 			if (!itemId) return finish({ itemId: null, completed: false, cost, error: "no item ID parsed" });
+
+			// #332: an explicit `--item <N>` pin is a DETERMINISTIC gate, not a hint. The /pick skill's
+			// contract is to claim exactly the requested id (or report `already-done`/`blocked`) — never
+			// substitute a different ready item. `itemId` above is parsed from pick's OUTPUT, so a skill
+			// that diverts silently redirects the whole cycle. Fail closed on a mismatch rather than spend
+			// plan/implement/review on the wrong item. `pick:diverted` is fatal (not in RECOVERABLE_ERRORS)
+			// — it halts and pages, since a divert is a real pick-step bug that needs a human.
+			if (!opts.dryRun && opts.itemId && (await pickDivergedFromPin(opts.itemId, itemId, (text) => roadmap.parseItemId(text)))) {
+				log(`⚠ pick diverted: requested ${opts.itemId} but /pick claimed ${itemId} — refusing (a pinned --item must resolve exactly; the stray claim needs cleanup)`);
+				return finish({ itemId, completed: false, cost, error: "pick:diverted" });
+			}
 
 			if (opts.noWorktree) {
 				// In no-worktree mode, the feature branch was checked out in-place.

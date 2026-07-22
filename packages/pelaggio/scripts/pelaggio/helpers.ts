@@ -266,6 +266,21 @@ export function parsePickItem(text: string): string | null {
 }
 
 /**
+ * #332: decide whether the item a /pick step actually resolved diverged from an explicit
+ * `--item` pin. An explicit pin is a deterministic gate — the pick skill's contract is to claim
+ * exactly that id (or report done/blocked), never substitute a different ready item — but the
+ * resolved id is parsed from pick's OUTPUT, so a diverting skill would silently redirect the whole
+ * cycle. Both ids are normalized through the adapter's `parseItemId` (so `#286` / `issue-286` /
+ * `feat/issue-286` all reduce to `286`) before comparison; a normalizer returning null falls back
+ * to the raw string. Returns true when the resolved id is not the pinned one.
+ */
+export async function pickDivergedFromPin(pin: string, resolved: string, parseItemId: (text: string) => Promise<string | null>): Promise<boolean> {
+	const requested = (await parseItemId(pin)) ?? pin;
+	const got = (await parseItemId(resolved)) ?? resolved;
+	return requested !== got;
+}
+
+/**
  * Parse a structured `ship-merged: <ID>` line from the /ship or /shipwreck
  * hand-off-gate output. Last occurrence wins (the skill may restate it in a
  * summary). The ID grammar is permissive — uppercase-prefixed markdown IDs
