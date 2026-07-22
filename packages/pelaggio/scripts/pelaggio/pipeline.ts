@@ -131,6 +131,10 @@ export interface PipelineDeps {
 	dispatchStepEffects?: typeof dispatchStepEffectsDefault;
 	/** Override the configured main-checkout confinement exception. */
 	allowDirtyMain?: boolean;
+	/** Test seam: replace whole-step forbidden-root snapshot collection. */
+	snapshotForbiddenRoots?: typeof snapshotForbiddenRoots;
+	/** Test seam: replace forbidden-root snapshot comparison. */
+	diffForbiddenRootSnapshots?: typeof diffForbiddenRootSnapshots;
 	appendDecisions?: typeof appendDecisionsDefault;
 	appendReviewEscalation?: typeof appendReviewEscalationDefault;
 	lookupReviewEscalation?: typeof lookupReviewEscalationDefault;
@@ -159,6 +163,8 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	const writeEffectsManifest = deps.writeEffectsManifest ?? writeEffectsManifestDefault;
 	const dispatchStepEffects = deps.dispatchStepEffects ?? dispatchStepEffectsDefault;
 	const allowDirtyMain = deps.allowDirtyMain ?? CONFINEMENT_CONFIG.allowDirtyMain;
+	const snapshotForbiddenRootsFn = deps.snapshotForbiddenRoots ?? snapshotForbiddenRoots;
+	const diffForbiddenRootSnapshotsFn = deps.diffForbiddenRootSnapshots ?? diffForbiddenRootSnapshots;
 	const appendDecisions = deps.appendDecisions ?? appendDecisionsDefault;
 	const appendReviewEscalation = deps.appendReviewEscalation ?? appendReviewEscalationDefault;
 	const lookupReviewEscalation = deps.lookupReviewEscalation ?? lookupReviewEscalationDefault;
@@ -284,7 +290,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		{
 			let forbiddenRoots: string[] = [];
 			let forbiddenBefore = new Map<string, string>();
-			let confinementRoots: string[] = [];
+			const confinementRoots: string[] = [];
 			let confinementAuditError: string | undefined;
 			try {
 				forbiddenRoots = forbiddenRootsForStep(cwd, ownWorktree);
@@ -293,10 +299,12 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				log(`⚠ ${confinementAuditError}`);
 			}
 			try {
-				forbiddenBefore = snapshotForbiddenRoots(forbiddenRoots);
+				forbiddenBefore = snapshotForbiddenRootsFn(forbiddenRoots);
 			} catch (e) {
-				confinementRoots = forbiddenRoots.map((root) => resolve(root));
-				log(`⚠ confinement audit failed before ${name}: ${e instanceof Error ? e.message : String(e)}`);
+				// Snapshot *execution* failed — not a proven root mutation. Preserve the Git
+				// diagnostic as an audit error so classification does not misreport "changed".
+				confinementAuditError = `confinement audit failed before ${name}: ${e instanceof Error ? e.message : String(e)}`;
+				log(`⚠ ${confinementAuditError}`);
 			}
 
 			const providerResult = await runStep(
@@ -318,11 +326,11 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 
 			if (confinementRoots.length === 0 && confinementAuditError === undefined) {
 				try {
-					const forbiddenAfter = snapshotForbiddenRoots(forbiddenRoots);
-					confinementRoots.push(...diffForbiddenRootSnapshots(forbiddenBefore, forbiddenAfter));
+					const forbiddenAfter = snapshotForbiddenRootsFn(forbiddenRoots);
+					confinementRoots.push(...diffForbiddenRootSnapshotsFn(forbiddenBefore, forbiddenAfter));
 				} catch (e) {
-					confinementRoots = forbiddenRoots.map((root) => resolve(root));
-					log(`⚠ confinement audit failed after ${name}: ${e instanceof Error ? e.message : String(e)}`);
+					confinementAuditError = `confinement audit failed after ${name}: ${e instanceof Error ? e.message : String(e)}`;
+					log(`⚠ ${confinementAuditError}`);
 				}
 			}
 
@@ -334,8 +342,19 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			}
 
 			result = providerResult;
+			// Pipeline-owned diagnosis: replace the provider's text/fullText/outputTail so
+			// finish() detail and JSONL recent-failures show the confinement cause, not a
+			// stale provider success/review tail. outputTail takes the *first* 200 chars
+			// (diagnosis leads with phase/root; provider tails care about the end).
 			if (confinementAuditError !== undefined) {
-				result = { ...providerResult, ok: false, subtype: "error_confinement", text: confinementAuditError };
+				result = {
+					...providerResult,
+					ok: false,
+					subtype: "error_confinement",
+					text: confinementAuditError,
+					fullText: confinementAuditError,
+					outputTail: confinementAuditError.slice(0, 200),
+				};
 			} else if (confinementRoots.length > 0) {
 				const roots = [...new Set(confinementRoots.map((root) => resolve(root)))].sort();
 				const text = `forbidden root changed during ${name}: ${roots.join(", ")}`;
@@ -345,6 +364,8 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 					ok: false,
 					subtype: "error_confinement",
 					text,
+					fullText: text,
+					outputTail: text.slice(0, 200),
 				};
 			}
 		}
@@ -430,6 +451,10 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 
 		const filesChanged = filesChangedSince(cwd, preSha);
 
+		// Persist the full confinement diagnosis on the step log (unbounded) when the
+		// pipeline overrode the provider result — outputTail alone is capped at 200.
+		const confinementErrorDetail = result.subtype === "error_confinement" ? result.text : undefined;
+
 		steps.push(
 			stepLog({
 				cost: result.cost,
@@ -442,6 +467,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				...(retriedMaxTurns ? { retriedMaxTurns: true } : {}),
 				...(result.toolCounts ? { toolCounts: result.toolCounts } : {}),
 				...(result.outputTail ? { outputTail: result.outputTail } : {}),
+				...(confinementErrorDetail !== undefined ? { errorDetail: confinementErrorDetail } : {}),
 				...(filesChanged.length > 0 ? { filesChanged } : {}),
 				...(result.stalledAsk ? { stalledAsk: true } : {}),
 				...(result.decisions?.length ? { decisions: result.decisions } : {}),

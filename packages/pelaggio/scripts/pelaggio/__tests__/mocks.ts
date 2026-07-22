@@ -97,6 +97,7 @@ export function createMockRunStep(behavior: MockBehavior, parkSignal: ParkSignal
 			cost: outcome.cost ?? 0.01,
 			turns: outcome.turns ?? 1,
 			...(outcome.tokens ? { tokens: outcome.tokens } : {}),
+			...(outcome.outputTail ? { outputTail: outcome.outputTail } : {}),
 		};
 		emit({ type: "done", ok: result.ok, subtype: result.subtype, cost: result.cost, turns: result.turns, elapsed: 0 });
 		return result;

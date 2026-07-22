@@ -24,3 +24,7 @@ Make confinement a **hard gate**: after each step, assert the working tree touch
 ## Amendment: concurrent operator edits
 
 The default remains a fail-closed whole-step audit of main plus sibling worktrees. With `confinement.allow-dirty-main: true`, sibling worktrees remain hard-gated, while main uses provider-specific protection for item-worktree steps: Claude compares Git state immediately before and after each mutating tool, and Codex excludes main through its workspace boundary. Unchanged pre-tool dirtiness is operator-owned; a delta or attribution failure is `error_confinement`. A simultaneous operator change inside a tool window is conservatively attributed to the tool. Detached/background changes after the post hook, non-Git paths, and main-cwd steps are outside this attribution mechanism, so it is not process-lifetime provenance or an OS sandbox.
+
+## Amendment: bounded snapshot-execution retries
+
+Snapshot **execution** failures (Git throws, e.g. shared `index.lock` under parallel cycles) may be retried a small fixed number of times inside the snapshot helper before the audit fails closed. This is a mechanism-level confirmation of transient interference, not a policy change to the hard gate: a successful dirty porcelain is never rechecked away, and exhausted attempts still terminate the step as `error_confinement` with the last concrete Git diagnostic. The retry is provider-neutral and shared by the whole-step audit and the main-checkout tool-window observer.
