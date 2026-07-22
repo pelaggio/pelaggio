@@ -6,6 +6,12 @@ Status values are `default-taken`, `resolved`, or `resolved→ADR-nnnn`. Source 
 
 | Decision | Status | Chosen/leaning | Alternatives | Source | Date |
 | --- | --- | --- | --- | --- | --- |
+| compatibility for inline `prBody` decisions | default-taken | remove the fallback and require `prBodyFile` | retain a version/config-gated legacy path | https://github.com/pelaggio/pelaggio/issues/303 | 2026-07-22 |
+<!-- decision:a84a8a816cfdab8e -->
+| retry boundary for ship manifest failures | default-taken | tag the effects failure phase and retry only `invalid_manifest` raised while resolving the dynamic decision, before manifest write/dispatch | use the generic authoring retry wrapper; retry every manifest failure; parse outside `step()` | https://github.com/pelaggio/pelaggio/issues/303 | 2026-07-22 |
+<!-- decision:65252b86ddc1c705 -->
+| body-file location and cleanup | default-taken | retain the fixed harness-owned relative path and delete only after successful dispatch | accept arbitrary relative paths; delete immediately after parsing; retain until worktree teardown | https://github.com/pelaggio/pelaggio/issues/303 | 2026-07-22 |
+<!-- decision:0cff3224d8bc595f -->
 | compatibility for inline `prBody` decisions | default-taken | remove the fallback and require `prBodyFile` for PR targets | retain a versioned or time-limited compatibility gate | https://github.com/pelaggio/pelaggio/issues/303 | 2026-07-22 |
 <!-- decision:42ac5f13c7dafb86 -->
 | retry boundary for `error_effects_manifest` | default-taken | retry only decision resolution/validation failures proven to occur before manifest write or effect dispatch | retry every manifest/effect failure; add a second bespoke ship loop outside the shared runner | https://github.com/pelaggio/pelaggio/issues/303 | 2026-07-22 |
