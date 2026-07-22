@@ -384,6 +384,17 @@ describe("createMainCheckoutDeltaObserver", () => {
 		assert.equal(broken.beforeTool("x").kind, "error");
 		assert.deepEqual(broken.finish(), broken.finish(), "finish is idempotent");
 	});
+
+	it("fails closed when the main checkout is PRESENT but not a git repository (#339 security guarantee)", () => {
+		// A main checkout that exists yet has no `.git` (corrupt/half-removed main) must NEVER be
+		// GONE-tolerated the way a peer worktree shell is: it routes through the observer as a
+		// fail-closed error. mainRepo is never accepted as FORBIDDEN_ROOT_GONE.
+		const notARepo = mkdtempSync(join(tmpdir(), "pelaggio-main-notrepo-"));
+		const observer = createMainCheckoutDeltaObserver(notARepo);
+		const result = observer.beforeTool("x");
+		assert.equal(result.kind, "error");
+		assert.match(result.kind === "error" ? result.message : "", /main checkout root vanished/);
+	});
 });
 
 describe("pickDivergedFromPin (#332)", () => {
