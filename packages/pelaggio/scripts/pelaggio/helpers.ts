@@ -2,6 +2,7 @@ import { execFileSync, execSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { basename, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveArtifactRoot } from "./artifact-root.js";
 import { CONFIG, LOG_PATH, REPO, resolveProviderBin, STEPS, WORKTREE_PREFIX } from "./config.js";
 import { MarkdownRoadmap } from "./roadmap/markdown.js";
 import type { CreateItemOpts, RoadmapSource } from "./roadmap/types.js";
@@ -36,8 +37,19 @@ export function parseDecisions(text: string): Decision[] {
 // ── Skill loading ──────────────────────────────────────────────────────
 
 export function expandSkill(name: string, skillArgs?: string): string {
-	const upper = resolve(REPO, ".claude", "skills", name, "SKILL.md");
-	const lower = resolve(REPO, ".claude", "skills", name, "skill.md");
+	return expandSkillFrom(REPO, name, skillArgs);
+}
+
+/** Load the package-owned copy of a skill. Merge-gate protocols must not depend
+ *  on a consumer having run `pelaggio sync`: a missing or stale consumer copy
+ *  must not crash the gate or weaken its current output contract. */
+export function expandPackagedSkill(name: string, skillArgs?: string): string {
+	return expandSkillFrom(resolveArtifactRoot(import.meta.url), name, skillArgs);
+}
+
+function expandSkillFrom(root: string, name: string, skillArgs?: string): string {
+	const upper = resolve(root, ".claude", "skills", name, "SKILL.md");
+	const lower = resolve(root, ".claude", "skills", name, "skill.md");
 	const body = readFileSync(existsSync(upper) ? upper : lower, "utf-8")
 		.replace(/^---[\s\S]*?---\n*/, "")
 		.trim();
