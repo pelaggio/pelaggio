@@ -17,6 +17,7 @@ import {
 	createMainCheckoutDeltaObserver,
 	ensureMainCheckoutOnBranch,
 	expandSkill,
+	FORBIDDEN_ROOT_SNAPSHOT_ATTEMPTS,
 	filesChangedSince,
 	findLoggedArtifactAuthor,
 	fmtWait,
@@ -42,6 +43,7 @@ import {
 	resolveParkReset,
 	revertPlanPolish,
 	reviewFindingsPreamble,
+	snapshotForbiddenRoot,
 	verifyShipLanded,
 } from "../helpers.js";
 
@@ -88,6 +90,78 @@ function commitFile(dir: string, rel: string, content: string, msg: string): voi
 	execSync("git add -A", { cwd: dir });
 	execSync(`git commit -q -m "${msg}"`, { cwd: dir });
 }
+
+describe("snapshotForbiddenRoot", () => {
+	it("returns the first successful porcelain after transient execution failures", () => {
+		const sleeps: number[] = [];
+		let calls = 0;
+		const status = "?? leaked.txt";
+		const result = snapshotForbiddenRoot("/tmp/forbidden-root", {
+			attempts: 3,
+			retryDelayMs: 25,
+			sleepSync: (ms) => {
+				sleeps.push(ms);
+			},
+			run: () => {
+				calls++;
+				if (calls < 3) throw new Error("index.lock: File exists");
+				return status;
+			},
+		});
+		assert.equal(result, status);
+		assert.equal(calls, 3);
+		assert.deepEqual(sleeps, [25, 25]);
+	});
+
+	it("throws with root and underlying message after exhausting attempts", () => {
+		const sleeps: number[] = [];
+		let calls = 0;
+		assert.throws(
+			() =>
+				snapshotForbiddenRoot("/tmp/broken-root", {
+					attempts: FORBIDDEN_ROOT_SNAPSHOT_ATTEMPTS,
+					retryDelayMs: 10,
+					sleepSync: (ms) => {
+						sleeps.push(ms);
+					},
+					run: () => {
+						calls++;
+						const err = new Error("Command failed: git status");
+						(err as Error & { stderr: string }).stderr = "fatal: Unable to create '.git/index.lock': File exists";
+						throw err;
+					},
+				}),
+			(e: unknown) => {
+				assert.ok(e instanceof Error);
+				assert.match(e.message, /failed to snapshot forbidden root \/tmp\/broken-root:/);
+				assert.match(e.message, /index\.lock/);
+				return true;
+			},
+		);
+		assert.equal(calls, FORBIDDEN_ROOT_SNAPSHOT_ATTEMPTS);
+		assert.equal(sleeps.length, FORBIDDEN_ROOT_SNAPSHOT_ATTEMPTS - 1);
+	});
+
+	it("does not retry a successful dirty porcelain observation", () => {
+		const sleeps: number[] = [];
+		let calls = 0;
+		const dirty = " M packages/pelaggio/scripts/pelaggio/helpers.ts";
+		const result = snapshotForbiddenRoot("/tmp/dirty-root", {
+			attempts: 3,
+			retryDelayMs: 25,
+			sleepSync: (ms) => {
+				sleeps.push(ms);
+			},
+			run: () => {
+				calls++;
+				return dirty;
+			},
+		});
+		assert.equal(result, dirty);
+		assert.equal(calls, 1);
+		assert.deepEqual(sleeps, []);
+	});
+});
 
 describe("createMainCheckoutDeltaObserver", () => {
 	it("tolerates unchanged clean and pre-existing dirty baselines", () => {

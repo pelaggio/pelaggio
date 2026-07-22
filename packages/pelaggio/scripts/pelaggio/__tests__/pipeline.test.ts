@@ -1253,6 +1253,141 @@ describe("runPipeline — worktree confinement audit", () => {
 		assert.equal(result.error, undefined);
 	});
 
+	it("reports pre-snapshot audit failure as error_confinement with phase diagnostics", async () => {
+		const { mainRepo, worktree, listWorktrees } = makeConfinementRepos();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const providerTail = "VERDICT: APPROVE — review looks fine end-of-output";
+		const { runStep, calls } = createMockRunStep(
+			{
+				implement: {
+					ok: true,
+					text: providerTail,
+					outputTail: providerTail.slice(-40),
+					writes: { "impl.txt": "x" },
+				},
+			},
+			parkSignal,
+		);
+		const gitDiag = "failed to snapshot forbidden root /tmp/main: fatal: Unable to create '.git/index.lock': File exists";
+
+		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
+			runStep,
+			mainRepo,
+			listWorktrees,
+			appendLog: (e) => {
+				logs.push(e);
+			},
+			roadmap: makeMockRoadmap(),
+			allowDirtyMain: false,
+			snapshotForbiddenRoots: () => {
+				throw new Error(gitDiag);
+			},
+			dispatchStepEffects: async () => {
+				throw new Error("effects must not dispatch on confinement");
+			},
+		});
+
+		assert.equal(result.completed, false);
+		assert.equal(result.error, "implement failed: confinement violation");
+		assert.deepEqual(
+			calls.map((c) => c.step),
+			["implement"],
+			"provider still runs when pre-snapshot fails (intentional YAGNI)",
+		);
+		const step = (logs[0].steps as Array<{ name: string; ok: boolean; subtype?: string; outputTail?: string; errorDetail?: string }>).at(-1);
+		assert.equal(step?.ok, false);
+		assert.equal(step?.subtype, "error_confinement");
+		assert.match(step?.errorDetail ?? "", /before implement/);
+		assert.match(step?.errorDetail ?? "", /index\.lock/);
+		assert.match(step?.outputTail ?? "", /before implement/);
+		assert.ok(!(step?.outputTail ?? "").includes("VERDICT"), "must not retain provider success tail");
+		assert.ok(!(step?.errorDetail ?? "").includes("VERDICT"));
+		assert.ok(!result.detail?.includes("VERDICT"));
+	});
+
+	it("reports post-snapshot audit failure as error_confinement with after-phase diagnostics", async () => {
+		const { mainRepo, worktree, listWorktrees } = makeConfinementRepos();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const providerTail = "implementation complete — all checks green at the end";
+		const { runStep } = createMockRunStep(
+			{
+				implement: { ok: true, text: providerTail, outputTail: providerTail.slice(-40), writes: { "impl.txt": "x" } },
+			},
+			parkSignal,
+		);
+		let calls = 0;
+		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
+			runStep,
+			mainRepo,
+			listWorktrees,
+			appendLog: (e) => {
+				logs.push(e);
+			},
+			roadmap: makeMockRoadmap(),
+			allowDirtyMain: false,
+			snapshotForbiddenRoots: (roots) => {
+				calls++;
+				if (calls === 1) {
+					// Pre-step: healthy empty snapshots
+					return new Map(roots.map((root) => [root, ""] as const));
+				}
+				throw new Error("failed to snapshot forbidden root /tmp/main: index.lock: File exists");
+			},
+		});
+
+		assert.equal(result.completed, false);
+		assert.equal(result.error, "implement failed: confinement violation");
+		const step = (logs[0].steps as Array<{ subtype?: string; outputTail?: string; errorDetail?: string }>).at(-1);
+		assert.equal(step?.subtype, "error_confinement");
+		assert.match(step?.errorDetail ?? "", /after implement/);
+		assert.match(step?.errorDetail ?? "", /index\.lock/);
+		assert.match(step?.outputTail ?? "", /after implement/);
+		assert.ok(!(step?.outputTail ?? "").includes("checks green"));
+	});
+
+	it("logs sorted changed roots (not audit-failed wording) with confinement diagnostics", async () => {
+		const { mainRepo, worktree, listWorktrees } = makeConfinementRepos();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const providerTail = "provider success tail that must not leak into confinement diagnosis";
+		const { runStep } = createMockRunStep(
+			{
+				implement: {
+					ok: true,
+					text: providerTail,
+					outputTail: providerTail.slice(-50),
+					sideEffect: () => {
+						writeFileSync(join(mainRepo, "pwned-delta.txt"), "x");
+					},
+				},
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
+			runStep,
+			mainRepo,
+			listWorktrees,
+			appendLog: (e) => {
+				logs.push(e);
+			},
+			roadmap: makeMockRoadmap(),
+			allowDirtyMain: false,
+		});
+
+		assert.equal(result.completed, false);
+		assert.equal(result.error, "implement failed: confinement violation");
+		const step = (logs[0].steps as Array<{ subtype?: string; outputTail?: string; errorDetail?: string }>).at(-1);
+		assert.equal(step?.subtype, "error_confinement");
+		assert.match(step?.errorDetail ?? "", /forbidden root changed during implement:/);
+		assert.match(step?.errorDetail ?? "", new RegExp(mainRepo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+		assert.ok(!(step?.errorDetail ?? "").includes("confinement audit failed"));
+		assert.match(step?.outputTail ?? "", /forbidden root changed/);
+		assert.ok(!(step?.outputTail ?? "").includes("must not leak"));
+	});
+
 	it("fails when a pick step dirties a sibling worktree", async () => {
 		const { parent, repo: mainRepo } = makeTempRepoWithParent();
 		const sibling = join(parent, `${WORKTREE_PREFIX}sibling`);

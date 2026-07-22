@@ -83,6 +83,13 @@ export interface StepLog {
 	costEstimated?: boolean;
 	toolCounts?: Record<string, number>;
 	outputTail?: string;
+	/**
+	 * Full pipeline-owned failure diagnosis (e.g. confinement audit / changed roots).
+	 * Optional for legacy log compatibility; present only when the pipeline overrides the
+	 * provider result with its own diagnosis. Unbounded so JSONL retains complete root lists
+	 * and Git stderr while `outputTail` stays the bounded display field.
+	 */
+	errorDetail?: string;
 	filesChanged?: string[];
 	/** Observe-only stall heuristic — the step ended in a question / offer-to-continue. Telemetry only; never fails the step. */
 	stalledAsk?: boolean;

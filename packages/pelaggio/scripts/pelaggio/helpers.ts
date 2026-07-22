@@ -56,21 +56,73 @@ export function listWorktrees(): string[] {
 		.map((l) => l.slice(9).trim());
 }
 
-export function snapshotForbiddenRoot(root: string): string {
-	try {
-		// `--no-optional-locks`: parallel cycles snapshot the *shared* main-repo index twice per
-		// step; without it `git status` opportunistically takes `index.lock` to write back its
-		// refreshed stat cache, and concurrent snapshots collide (`index.lock: File exists`), which
-		// the fail-closed audit would misread as a confinement violation. The porcelain output is
-		// identical either way — the flag only skips the index writeback.
-		return execSync("git --no-optional-locks status --porcelain=v1 --untracked-files=all", {
-			cwd: root,
-			encoding: "utf-8",
-			stdio: ["ignore", "pipe", "pipe"],
-		}).trim();
-	} catch (e: unknown) {
-		throw new Error(`failed to snapshot forbidden root ${root}: ${e instanceof Error ? e.message : String(e)}`);
+/** Fixed confirmation budget for transient Git snapshot interference (not config). */
+export const FORBIDDEN_ROOT_SNAPSHOT_ATTEMPTS = 3;
+/** Sync delay between failed snapshot attempts (ms). */
+export const FORBIDDEN_ROOT_SNAPSHOT_RETRY_DELAY_MS = 25;
+
+export interface SnapshotForbiddenRootOptions {
+	/** Test seam: replace the real Git runner. Defaults to `git --no-optional-locks status …`. */
+	run?: (root: string) => string;
+	/** Test seam: replace the sync sleeper between failed attempts. */
+	sleepSync?: (ms: number) => void;
+	/** Override production attempt budget (tests only). */
+	attempts?: number;
+	/** Override production retry delay (tests only). */
+	retryDelayMs?: number;
+}
+
+function sleepSyncDefault(ms: number): void {
+	if (ms <= 0) return;
+	// Zero-dependency synchronous delay — PreToolUse hooks must stay sync.
+	const lock = new Int32Array(new SharedArrayBuffer(4));
+	Atomics.wait(lock, 0, 0, ms);
+}
+
+function formatSnapshotExecError(error: unknown): string {
+	if (error && typeof error === "object") {
+		const e = error as { stderr?: unknown; message?: unknown };
+		const stderr = typeof e.stderr === "string" ? e.stderr.trim() : Buffer.isBuffer(e.stderr) ? e.stderr.toString("utf-8").trim() : "";
+		if (stderr) return stderr;
+		if (typeof e.message === "string" && e.message) return e.message;
 	}
+	return error instanceof Error ? error.message : String(error);
+}
+
+function runForbiddenRootSnapshot(root: string): string {
+	// `--no-optional-locks`: parallel cycles snapshot the *shared* main-repo index twice per
+	// step; without it `git status` opportunistically takes `index.lock` to write back its
+	// refreshed stat cache, and concurrent snapshots collide (`index.lock: File exists`), which
+	// the fail-closed audit would misread as a confinement violation. The porcelain output is
+	// identical either way — the flag only skips the index writeback.
+	return execSync("git --no-optional-locks status --porcelain=v1 --untracked-files=all", {
+		cwd: root,
+		encoding: "utf-8",
+		stdio: ["ignore", "pipe", "pipe"],
+	}).trim();
+}
+
+/**
+ * Snapshot a forbidden Git root's porcelain status. Retries **execution failures only**
+ * (throws from the runner) a fixed number of times; a successful dirty/clean observation
+ * is returned immediately and never re-polled.
+ */
+export function snapshotForbiddenRoot(root: string, opts?: SnapshotForbiddenRootOptions): string {
+	const attempts = opts?.attempts ?? FORBIDDEN_ROOT_SNAPSHOT_ATTEMPTS;
+	const retryDelayMs = opts?.retryDelayMs ?? FORBIDDEN_ROOT_SNAPSHOT_RETRY_DELAY_MS;
+	const run = opts?.run ?? runForbiddenRootSnapshot;
+	const sleepSync = opts?.sleepSync ?? sleepSyncDefault;
+
+	let lastError: unknown;
+	for (let attempt = 1; attempt <= attempts; attempt++) {
+		try {
+			return run(root);
+		} catch (e: unknown) {
+			lastError = e;
+			if (attempt < attempts) sleepSync(retryDelayMs);
+		}
+	}
+	throw new Error(`failed to snapshot forbidden root ${root}: ${formatSnapshotExecError(lastError)}`);
 }
 
 export function snapshotForbiddenRoots(roots: readonly string[]): Map<string, string> {
