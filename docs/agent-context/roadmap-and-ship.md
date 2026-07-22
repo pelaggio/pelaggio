@@ -9,6 +9,7 @@ Adapters today:
 - `markdown`: parses `docs/roadmap-*.md` + `docs/task-index.md`.
 - `github-issues`: GitHub issues via `gh`.
 - `linear`: Linear issues via `@linear/sdk`.
+- `beads`: Beads issues via the `bd --json` CLI (Beads 1.1.x). Authoritative store is `MAIN_REPO/.beads/`; `bd` always runs with that main-worktree cwd. IDs are source-assigned lowercase `bd-<hash>` (e.g. `bd-a1b2`), optionally db-prefixed (`bd-main-a1b2c3`) and/or hierarchical for epics (`bd-a3f8.1.1`). Plans stay committed under `docs/plans/` and are linked with `bd update --spec-id`. The git `feat/<id>` branch is the **authoritative claim**; `bd update --claim` is best-effort write-back. Because bd `--claim` sets `in_progress` (which drops the item from `bd ready`), availability is computed from `bd ready` ∪ bd-`in_progress` and claimed-status is derived **only** from live `feat/<id>` branches (`claimedIds`) — so a bd `in_progress` item whose branch is gone re-enters availability (dead-holder reconcile), never letting bd status become the claims registry. Claim branches are slug-free (`feat/<id>`) because bd ids contain hyphens/dots. No Beads-specific `.pelaggio.yml` keys — `roadmap: { source: beads }` is enough.
 
 `getRoadmapSource(name, { repo })` is the factory; the resolved name comes from `roadmap.source` in `.pelaggio.yml` (default `"markdown"`). Adding an adapter means a new file under `roadmap/`, widening the `RoadmapSourceName` union in `roadmap/types.ts`, and extending the factory `switch`. No skill edits are needed.
 
@@ -26,7 +27,7 @@ Always use the **scoped** name `pelaggio`, never bare `pelaggio`. The bare name 
 
 ## Claims
 
-Claims are git-native (#12). "Claimed" means the `feat/<id>` branch exists — git's ref locking is the arbiter (a losing `roadmap claim` exits **3**, `pick-result: already-claimed`, recoverable). There is no claims file, owner pid, or staleness lifecycle; release is branch deletion (owned by ship bookkeeping / `/tidy`). The markdown adapter surfaces claims as `in-progress` by scanning `feat/*` branches; github/linear surface server-side markers.
+Claims are git-native (#12). "Claimed" means the `feat/<id>` branch exists — git's ref locking is the arbiter (a losing `roadmap claim` exits **3**, `pick-result: already-claimed`, recoverable). There is no claims file, owner pid, or staleness lifecycle; release is branch deletion (owned by ship bookkeeping / `/tidy`). The markdown and beads adapters surface claims as `in-progress` by scanning `feat/*` branches (`claimedIds`); github/linear surface server-side markers (beads also best-effort writes `bd update --claim` after a successful git claim).
 
 Shared-file writers — `markDone`/`createItem`/`archivePlan` and `commitStrayBookkeeping`'s `git add -A` sweep — take `.dev/roadmap-mutation.lock` **internally** (O_EXCL token lockfile, expiry-in-content, atomic rename-verify steal/release — `roadmap/mutation-lock.ts`). Callers never manage the lock. Do not add call-site locking or a parallel claim registry. Claim worktree naming uses `WORKTREE_PREFIX` from config (env > yml > basename) in all adapters.
 

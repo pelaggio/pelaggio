@@ -30,6 +30,13 @@ describe("getRoadmapSource — factory", () => {
 		assert.equal(src.name, "markdown");
 	});
 
+	it("returns BeadsRoadmap for 'beads'", async () => {
+		const { BeadsRoadmap } = await import("../roadmap/beads.js");
+		const src = getRoadmapSource("beads", { repo: "/tmp" });
+		assert.ok(src instanceof BeadsRoadmap);
+		assert.equal(src.name, "beads");
+	});
+
 	it("throws on unknown name", () => {
 		const bogus = "jira" as unknown as RoadmapSourceName;
 		assert.throws(() => getRoadmapSource(bogus, { repo: "/tmp" }), /Unknown roadmap source/);

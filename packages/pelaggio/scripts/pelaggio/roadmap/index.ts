@@ -1,8 +1,10 @@
+import { BeadsRoadmap } from "./beads.js";
 import { GitHubIssuesRoadmap } from "./github-issues.js";
 import { LinearRoadmap } from "./linear.js";
 import { MarkdownRoadmap } from "./markdown.js";
 import { type GithubRoadmapConfig, type LinearRoadmapConfig, ROADMAP_SOURCE_NAMES, type RoadmapSource, type RoadmapSourceName } from "./types.js";
 
+export { BD_PRIORITY_HIGH, BD_PRIORITY_NORMAL, BD_TIMEOUT_MS, type BdRunner, BeadsRoadmap, defaultBdRun, isBeadsItemId, parseBdJson, resolveBeadsStoreRoot } from "./beads.js";
 export { AlreadyClaimedError } from "./git-claim.js";
 export {
 	type CreateItemOpts,
@@ -49,6 +51,9 @@ export function getRoadmapSource(name: RoadmapSourceName, opts: { repo: string; 
 				label: opts.linear.label,
 				planLocation: opts.linear.planLocation,
 			});
+		case "beads":
+			// No config-time `bd` probe — dry-runs/tests construct without the binary.
+			return new BeadsRoadmap({ repo: opts.repo });
 		default: {
 			const exhaustive: never = name;
 			throw new Error(`Unknown roadmap source: ${JSON.stringify(exhaustive)}. Valid: ${ROADMAP_SOURCE_NAMES.join(", ")}`);

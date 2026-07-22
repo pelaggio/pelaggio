@@ -91,7 +91,7 @@ notify:                         # outbound run-outcome webhook (default: disable
 
 roadmap:
   source: markdown              # default: markdown
-                                # values: markdown | github-issues | linear
+                                # values: markdown | github-issues | linear | beads
   # github:                     # only consulted when source is github-issues
   #   repo: acme/widgets        # required when source=github-issues (owner/repo)
   #   label: autopilot          # default: autopilot
@@ -100,6 +100,7 @@ roadmap:
   #   team: <team-uuid>         # required when source=linear (Linear team UUID)
   #   label: pelaggio          # default: "" (no label filter)
   #   plan-location: issue-comment  # default: issue-comment (pr-description reserved)
+  # beads needs no extra keys — `bd` discovers MAIN_REPO/.beads
 
 budgets:                        # dollars per step (safety-net caps)
   pick: 2
@@ -436,6 +437,7 @@ scope heuristics. Invalid values fail loudly at startup.
 | `markdown`      | ready  | `docs/roadmap-*.md` + `docs/task-index.md`         |
 | `github-issues` | ready  | GitHub Issues via the `gh` CLI                     |
 | `linear`        | ready  | Linear via `@linear/sdk`                           |
+| `beads`         | ready  | Beads issues via the `bd --json` CLI               |
 
 Skill bodies (`/pick`, `/plan`, `/ship`, `/charter`, `/status`, `/pickup`,
 `/shakedown`, `/tidy`) are adapter-agnostic — all roadmap access flows through
@@ -503,6 +505,43 @@ the most recent issue comment whose body begins with
 `<!-- pelaggio-plan -->`. Comment-sourced plans materialize to
 `.dev/plans/<team>-<n>.md` in the worktree — **not** `docs/plans/`, which
 remains `/plan`'s canonical committed output.
+
+### `beads`
+
+```yaml
+roadmap:
+  source: beads
+```
+
+No Beads-specific config keys. Consumers must install a compatible `bd`
+binary (Beads 1.1.x); Beads carries/uses embedded Dolt — pelaggio does not
+install either component. Initialize Beads in the consumer repository so
+its authoritative store is `MAIN_REPO/.beads/`.
+
+The adapter always invokes `bd` with `cwd` = the git main worktree
+(`dirname(git rev-parse --git-common-dir)`), so list/claim/close/create hit
+one shared store even when the CLI runs from a feature worktree.
+Per-worktree `.beads` copies may exist for Beads' own sync model; pelaggio
+never targets them. Synchronization travels through `refs/dolt/data`, not
+markdown-style plain Git JSONL.
+
+`bd` availability is probed lazily on first adapter call. Missing binary
+surfaces `bd CLI required — install Beads ...`. No config-time probe — tests
+and dry-runs construct the adapter with a stub runner without `bd` on
+`PATH`.
+
+| Concern | Behavior |
+|---------|----------|
+| IDs | Source-assigned lowercase Beads IDs — `bd-<hash>` (e.g. `bd-a1b2`), optionally with a db prefix (`bd-main-a1b2c3`) and/or a hierarchical suffix for epics/sub-tasks (`bd-a3f8.1.1`) |
+| Status / ready | Availability from Beads work-readiness (`bd ready` ∪ `in_progress`), never bd claim status; `closed`→done, deps-unmet→`blocked`. **Claimed/in-progress is derived from the live `feat/<id>` git branch only** — a bd `in_progress` item with no branch re-enters availability (dead-holder reconcile) |
+| Priority | Beads numeric priority attached as a duck-typed field for flow ranking; pelaggio `high`→1, `normal`→2 on create |
+| Dependencies | Structured Beads deps → comma-separated `deps` string |
+| Claims | Git `feat/<id>` (slug-free — bd ids contain hyphens/dots) is authoritative. `bd update --claim` is best-effort write-back only. Availability + claimed-status overlay live `feat/*` branches via `claimedIds`, so a failed write-back or a released-branch dead-holder never lets bd status gate pickability |
+| Plans | Committed under `docs/plans/<id>.md`; linked with `bd update --spec-id docs/plans/<id>.md` |
+
+Future merge-slot/gate work (#174) must likewise contend against the one
+shared `MAIN_REPO/.beads`; this adapter does not implement that landing
+primitive.
 
 ## Park & auto-resume
 
