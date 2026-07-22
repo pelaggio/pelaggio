@@ -4,6 +4,7 @@ import type { AuthoringReviewConfig } from "../config.js";
 import { type AuthoringReviewFinding, isSafetyClass, materializeAuthoringFinding, type ReviewFindingClass, SAFETY_CLASSES } from "../review/findings.js";
 import { classifyReviewOutcome, deduplicateCandidates, type ReviewCandidate, runReviewLoop } from "../review/loop.js";
 import { renderReviewRecord } from "../review/record.js";
+import { BASELINE_TAXONOMY, resolveTaxonomy } from "../review/taxonomy.js";
 import type { StepResult } from "../types.js";
 
 const emptyClassification = { changedFiles: [] as string[] };
@@ -60,6 +61,17 @@ describe("authoring review outcome", () => {
 			assert.ok(isSafetyClass(cls));
 		}
 	});
+
+	it("hard-blocks a survivor whose class is a taxonomy-extended safety class (#294)", () => {
+		const taxonomy = resolveTaxonomy({ classes: { "experimental-lint": "safety" } });
+		// Judgment rule + safety-tier classHint elevates the finding to the extended safety class.
+		const finding = materializeAuthoringFinding({ severity: "must-fix", message: "extended", ruleId: "pelaggio/judgment/style", classHint: "experimental-lint" }, emptyClassification, taxonomy);
+		const extended: ReviewCandidate = { candidateId: "C1", fingerprint: "fp", sources: ["reviewer"], finding };
+		assert.equal(finding.class, "experimental-lint");
+		assert.equal(classifyReviewOutcome([extended], [], new Map([["C1", "fixable-blocker"]]), true, 1, taxonomy), "hard-block");
+		// Under the baseline taxonomy the same token is still safety (unknown ⇒ safety), so it also blocks.
+		assert.equal(classifyReviewOutcome([extended], [], new Map([["C1", "fixable-blocker"]]), true, 1), "hard-block");
+	});
 });
 
 describe("authoring review loop controller", () => {
@@ -93,6 +105,7 @@ describe("authoring review loop controller", () => {
 			author: { provider: "codex" },
 			parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" },
 			classificationContext: emptyClassification,
+			taxonomy: BASELINE_TAXONOMY,
 			runSeat: async (req) => ok(req.role === "reviewer" ? reviewerText : req.role === "judge" ? judgeText : ""),
 			prompts: { review: () => "r", judge: () => "j", revise: () => "rev" },
 		});
@@ -105,6 +118,7 @@ describe("authoring review loop controller", () => {
 			author: { provider: "codex" },
 			parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" },
 			classificationContext: emptyClassification,
+			taxonomy: BASELINE_TAXONOMY,
 			runSeat: async (request) => {
 				invoked.push(request.slot.id);
 				return ok(request.role === "judge" ? judgeReport([]) : clean);
@@ -129,6 +143,7 @@ describe("authoring review loop controller", () => {
 			author: { provider: "claude" },
 			parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" },
 			classificationContext: emptyClassification,
+			taxonomy: BASELINE_TAXONOMY,
 			runSeat: async (req) => {
 				if (req.role === "judge") return ok(judgeReport([{ candidateId: "C1", decision: "refuted", rationale: "r", class: "security-and-secrets" }]));
 				if (req.slot.provider === "grok") return ok(empty);
@@ -156,6 +171,7 @@ describe("authoring review loop controller", () => {
 			author: { provider: "codex" },
 			parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" },
 			classificationContext: emptyClassification,
+			taxonomy: BASELINE_TAXONOMY,
 			runSeat: async (request) => {
 				if (request.role === "judge") judgeCalls++;
 				return ok(request.slot.id === "reviewer-a" ? pass : block);
@@ -193,6 +209,7 @@ describe("authoring review loop controller", () => {
 			author: { provider: "grok" },
 			parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" },
 			classificationContext: emptyClassification,
+			taxonomy: BASELINE_TAXONOMY,
 			runSeat: async (request) => {
 				if (request.role === "judge") return ok(judgeReport([]));
 				return ok(request.slot.id === "codex" ? exampleEcho : clean);
@@ -226,6 +243,7 @@ describe("authoring review loop controller", () => {
 			author: { provider: "codex" },
 			parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" },
 			classificationContext: emptyClassification,
+			taxonomy: BASELINE_TAXONOMY,
 			runSeat: async (request) => {
 				roles.push(request.role);
 				if (request.role === "judge") return ok(judgeReport([{ candidateId: "C1", decision: "survives", rationale: "revise", class: "security-and-secrets", ruling: "fixable-blocker" }]));
@@ -252,6 +270,7 @@ describe("authoring review loop controller", () => {
 			author: { provider: "codex" },
 			parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" },
 			classificationContext: emptyClassification,
+			taxonomy: BASELINE_TAXONOMY,
 			runSeat: async (request) => {
 				roles.push(request.role);
 				if (request.role === "judge") return ok(judgeReport([{ candidateId: "C1", decision: "survives", rationale: "cannot be fixed here", class: "judgment", ruling: "unfixable-blocker" }]));
@@ -286,6 +305,7 @@ describe("authoring review loop controller", () => {
 			author: { provider: "codex" },
 			parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" },
 			classificationContext: emptyClassification,
+			taxonomy: BASELINE_TAXONOMY,
 			runSeat: async (request) => {
 				roles.push(request.role);
 				if (request.role === "judge")
@@ -316,6 +336,7 @@ describe("authoring review loop controller", () => {
 			author: { provider: "codex" },
 			parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" },
 			classificationContext: emptyClassification,
+			taxonomy: BASELINE_TAXONOMY,
 			runSeat: async (request) => {
 				roles.push(request.role);
 				if (request.role === "judge") return ok(judgeReport([{ candidateId: "C1", decision: "survives", rationale: "revise", ruling: "fixable-blocker" }]));
@@ -340,6 +361,7 @@ describe("authoring review loop controller", () => {
 			author: { provider: "codex" },
 			parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" },
 			classificationContext: emptyClassification,
+			taxonomy: BASELINE_TAXONOMY,
 			runSeat: async (request) => {
 				if (request.role === "reviewer") throw new Error("provider crashed: ECONNRESET");
 				return ok("");
@@ -370,6 +392,7 @@ describe("authoring review loop controller", () => {
 			author: { provider: "codex" },
 			parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" },
 			classificationContext: emptyClassification,
+			taxonomy: BASELINE_TAXONOMY,
 			runSeat: async (request) => {
 				if (request.role === "author") {
 					authorCalls++;
@@ -401,6 +424,7 @@ describe("authoring review loop controller", () => {
 			author: { provider: "codex" },
 			parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" },
 			classificationContext: emptyClassification,
+			taxonomy: BASELINE_TAXONOMY,
 			runSeat: async (request) => {
 				if (request.role === "author") {
 					authorCalls++;
@@ -435,6 +459,7 @@ describe("authoring review loop controller", () => {
 			author: { provider: "codex" },
 			parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" },
 			classificationContext: emptyClassification,
+			taxonomy: BASELINE_TAXONOMY,
 			runSeat: async (request) => {
 				if (request.role === "judge") judgeCalls++;
 				if (request.role === "author") authorCalls++;
@@ -545,6 +570,7 @@ describe("authoring review loop controller", () => {
 			author: { provider: "codex" },
 			parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" },
 			classificationContext: emptyClassification,
+			taxonomy: BASELINE_TAXONOMY,
 			runSeat: async (request) => {
 				if (request.role === "judge") {
 					return ok(judgeReport([{ candidateId: "C1", decision: "survives", rationale: "keep", class: "security-and-secrets", ruling: "fixable-blocker" }]));

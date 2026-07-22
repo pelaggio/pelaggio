@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { basename, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { NOTIFY_EVENTS, NOTIFY_FORMATS, type NotifyConfig, type NotifyEvent, type NotifyFormat } from "./notify.js";
+import { type RawTaxonomyInput, resolveTaxonomy, type TaxonomyConfig } from "./review/taxonomy.js";
 import { type GithubRoadmapConfig, type LinearRoadmapConfig, PLAN_LOCATIONS, type PlanLocation, ROADMAP_SOURCE_NAMES, type RoadmapSourceName } from "./roadmap/types.js";
 import type { ProviderName, ShipTargetName } from "./types.js";
 
@@ -142,6 +143,8 @@ export interface ReviewConfig {
 	budgetCap: number;
 	providerDiversity: ProviderDiversityPolicy;
 	authoring: AuthoringReviewConfig;
+	/** ADR-0016 safety/judgment taxonomy (baseline ADR table; owner-signed to contract the floor). */
+	taxonomy: TaxonomyConfig;
 }
 
 const DEFAULT_GITHUB_ROADMAP: GithubRoadmapConfig = {
@@ -211,6 +214,7 @@ export const DEFAULTS = {
 		maxPasses: 1,
 		budgetCap: 20,
 		providerDiversity: "off",
+		taxonomy: resolveTaxonomy({}),
 		authoring: {
 			enabled: false,
 			reviewers: [
@@ -264,6 +268,71 @@ function parseReviewSlot(value: unknown, label: string, configPath: string, fall
 	const model = value.model;
 	if (model !== undefined && (!isString(model) || model.trim() === "")) throw new Error(`${configPath}: expected \`${label}.model\` to be a non-empty string`);
 	return { id, provider: value.provider, ...(model ? { model } : {}) };
+}
+
+/**
+ * Structurally validate `review.taxonomy` into a `RawTaxonomyInput` (fail-closed). Strictly rejects unknown
+ * keys here and under `classes` / `contract` (the surrounding `review` block is not strict-keyed). Does NOT
+ * apply the signed-contraction gate — that is `resolveTaxonomy`'s job (class-id grammar, tier values, sig).
+ */
+function readRawTaxonomy(value: unknown, configPath: string): RawTaxonomyInput {
+	if (!isPlainObject(value)) throw new Error(`${configPath}: expected \`review.taxonomy\` to be a map`);
+	const allowed = ["owner", "judgment-default", "classes", "contract"];
+	const unknownKey = Object.keys(value).find((k) => !allowed.includes(k));
+	if (unknownKey) throw new Error(`${configPath}: unknown key \`review.taxonomy.${unknownKey}\``);
+	const raw: RawTaxonomyInput = {};
+	if (value.owner !== undefined) {
+		if (!isString(value.owner) || value.owner.trim() === "") throw new Error(`${configPath}: expected \`review.taxonomy.owner\` to be a non-empty string`);
+		raw.owner = value.owner;
+	}
+	const judgmentDefault = value["judgment-default"];
+	if (judgmentDefault !== undefined) {
+		if (judgmentDefault !== "permissive" && judgmentDefault !== "park") throw new Error(`${configPath}: expected \`review.taxonomy.judgment-default\` to be permissive|park, got ${JSON.stringify(judgmentDefault)}`);
+		raw.judgmentDefault = judgmentDefault;
+	}
+	if (value.classes !== undefined) {
+		if (!isPlainObject(value.classes)) throw new Error(`${configPath}: expected \`review.taxonomy.classes\` to be a map`);
+		const classes: Record<string, string> = {};
+		for (const [id, tier] of Object.entries(value.classes)) {
+			if (tier !== "safety" && tier !== "judgment") throw new Error(`${configPath}: expected \`review.taxonomy.classes.${id}\` to be safety|judgment, got ${JSON.stringify(tier)}`);
+			classes[id] = tier;
+		}
+		raw.classes = classes;
+	}
+	if (value.contract !== undefined) {
+		if (!isPlainObject(value.contract)) throw new Error(`${configPath}: expected \`review.taxonomy.contract\` to be a map`);
+		const unknownContractKey = Object.keys(value.contract).find((k) => k !== "signature-b64");
+		if (unknownContractKey) throw new Error(`${configPath}: unknown key \`review.taxonomy.contract.${unknownContractKey}\``);
+		const sig = value.contract["signature-b64"];
+		if (!isString(sig) || sig.trim() === "") throw new Error(`${configPath}: expected \`review.taxonomy.contract.signature-b64\` to be a non-empty string`);
+		raw.contract = { signatureB64: sig };
+	}
+	return raw;
+}
+
+/** Parse + gate `review.taxonomy` into a resolved `TaxonomyConfig`, throwing with config-path context. */
+function parseTaxonomyBlock(value: unknown, configPath: string): TaxonomyConfig {
+	const raw = readRawTaxonomy(value, configPath);
+	try {
+		return resolveTaxonomy(raw);
+	} catch (error) {
+		throw new Error(`${configPath}: ${error instanceof Error ? error.message : String(error)}`);
+	}
+}
+
+/**
+ * Read `review.taxonomy` into a validated `RawTaxonomyInput` WITHOUT the signed-contraction gate. The
+ * operator `taxonomy sign` / `canonical` paths need the pre-gate overlay: a contracted config is unsigned at
+ * sign time, so the full `loadConfig` would reject it before the owner can produce the signature.
+ */
+export function readTaxonomyOverlay(opts: { repo?: string; configPath?: string } = {}): RawTaxonomyInput {
+	const repo = opts.repo ?? REPO;
+	const configPath = opts.configPath ?? resolve(repo, ".pelaggio.yml");
+	const reviewBlock = parseFile(configPath).review;
+	if (reviewBlock === undefined) return {};
+	if (!isPlainObject(reviewBlock)) throw new Error(`${configPath}: expected \`review\` to be a map`);
+	if (reviewBlock.taxonomy === undefined) return {};
+	return readRawTaxonomy(reviewBlock.taxonomy, configPath);
 }
 
 function mergeStepRecord<T>(defaults: Record<Step, T>, override: unknown, section: string, validate: (v: unknown) => v is T, configPath: string): Record<Step, T> {
@@ -602,6 +671,8 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		reviewers: DEFAULTS.review.authoring.reviewers.map((slot) => ({ ...slot })),
 		judge: { ...DEFAULTS.review.authoring.judge },
 	};
+	// Default to the baseline ADR taxonomy (empty overlay ⇒ no contraction ⇒ no signature required).
+	let reviewTaxonomy: TaxonomyConfig = DEFAULTS.review.taxonomy;
 	const reviewBlock = yml.review;
 	if (reviewBlock !== undefined) {
 		if (!isPlainObject(reviewBlock)) {
@@ -677,6 +748,7 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 				providerDiversity: "prefer",
 			};
 		}
+		if (reviewBlock.taxonomy !== undefined) reviewTaxonomy = parseTaxonomyBlock(reviewBlock.taxonomy, configPath);
 	}
 
 	let confinementAllowDirtyMain: boolean = DEFAULTS.confinement.allowDirtyMain;
@@ -803,7 +875,7 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		roadmapLinear,
 		park: { autoResume: parkAutoResume, maxWait: parkMaxWait, unknownResetWait: parkUnknownResetWait },
 		revise: { local: reviseLocal },
-		review: { runner: reviewRunner, statuslessAfter: reviewStatuslessAfter, maxPasses: reviewMaxPasses, budgetCap: reviewBudgetCap, providerDiversity: reviewProviderDiversity, authoring: reviewAuthoring },
+		review: { runner: reviewRunner, statuslessAfter: reviewStatuslessAfter, maxPasses: reviewMaxPasses, budgetCap: reviewBudgetCap, providerDiversity: reviewProviderDiversity, authoring: reviewAuthoring, taxonomy: reviewTaxonomy },
 		confinement: { allowDirtyMain: confinementAllowDirtyMain },
 		security: { envAllowlist: securityEnvAllowlist },
 		notify: { url: notifyUrl, format: notifyFormat, events: notifyEvents },

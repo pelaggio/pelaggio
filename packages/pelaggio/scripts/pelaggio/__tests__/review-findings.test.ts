@@ -21,6 +21,7 @@ import {
 	reviewFindingsGate,
 	SAFETY_CLASSES,
 } from "../review/findings.js";
+import { resolveTaxonomy } from "../review/taxonomy.js";
 
 function block(value: unknown): string {
 	return `Review complete.\nREVIEW_FINDINGS\n${JSON.stringify(value)}\nEND_REVIEW_FINDINGS`;
@@ -120,11 +121,21 @@ describe("parseAuthoringReviewFindings (schema v3)", () => {
 			{ severity: "must-fix", message: "x", cwe: "not-a-cwe" },
 			{ severity: "must-fix", message: "x", ruleId: "" },
 			{ severity: "must-fix", message: "x", ruleId: "a\nb" },
-			{ severity: "must-fix", message: "x", classHint: "style" },
-			{ severity: "must-fix", message: "x", classHint: "security" },
+			// #294: classHint grammar is validated (kebab tokens), not a closed list.
+			{ severity: "must-fix", message: "x", classHint: "Style" },
+			{ severity: "must-fix", message: "x", classHint: "bad hint" },
 		]) {
 			assert.throws(() => parseAuthoringReviewFindings(authoringBlock({ schemaVersion: 3, summary: "Ok.", findings: [finding] })), ReviewFindingsParseError);
 		}
+	});
+
+	it("accepts a well-formed unknown classHint on the wire (#294 open grammar)", () => {
+		const report = parseAuthoringReviewFindings(authoringBlock({ schemaVersion: 3, summary: "Ok.", findings: [{ severity: "must-fix", message: "x", classHint: "experimental-lint" }] }));
+		assert.equal(report.findings[0].classHint, "experimental-lint");
+		// Unmatched by any emission rule ⇒ still default-safety (classHint alone never classifies).
+		const materialized = materializeAuthoringFinding(report.findings[0], { changedFiles: [] });
+		assert.equal(materialized.classification.kind, "default-safety");
+		assert.equal(materialized.class, "correctness-regression");
 	});
 
 	it("rejects v2, mixed schemas, and unsupported versions", () => {
@@ -277,6 +288,17 @@ describe("classifyAuthoringReviewFinding", () => {
 		assert.equal(finding.classification.kind, "matched");
 	});
 
+	it("elevates a judgment-rule match to a taxonomy-extended safety class (#294)", () => {
+		const taxonomy = resolveTaxonomy({ classes: { "experimental-lint": "safety" } });
+		const raw: RawAuthoringReviewFinding = { severity: "must-fix", message: "elevated", ruleId: "pelaggio/judgment/style", classHint: "experimental-lint" };
+		// Baseline taxonomy: experimental-lint is unknown ⇒ safety, so it already elevates; the point is the
+		// finding resolves to safety and materialize threads the taxonomy through to the same class.
+		const result = classifyAuthoringReviewFinding(raw, { ...emptyCtx, fingerprint: reviewFindingFingerprint(raw) }, taxonomy);
+		assert.equal(result.class, "experimental-lint");
+		assert.equal(isSafetyClass("experimental-lint", taxonomy), true);
+		assert.equal(materializeAuthoringFinding(raw, { changedFiles: [] }, taxonomy).class, "experimental-lint");
+	});
+
 	it("exposes a non-empty rule table and closed safety set", () => {
 		assert.ok(CLASSIFICATION_RULES.length > 0);
 		assert.equal(SAFETY_CLASSES.length, 6);
@@ -318,8 +340,9 @@ describe("parseJudgeReport", () => {
 	it("fails closed on a surviving decision without a ruling and on mismatched dissent class", () => {
 		assert.throws(() => parseJudgeReport(judgeBlock({ schemaVersion: 1, decisions: [{ candidateId: "C1", decision: "survives", rationale: "r", class: "judgment" }] })), ReviewFindingsParseError);
 		assert.throws(() => parseJudgeReport(judgeBlock({ schemaVersion: 1, decisions: [{ candidateId: "C1", decision: "survives", rationale: "r", class: "security-and-secrets", ruling: "judgment-dissent" }] })), ReviewFindingsParseError);
-		// Legacy tokens rejected
-		assert.throws(() => parseJudgeReport(judgeBlock({ schemaVersion: 1, decisions: [{ candidateId: "C1", decision: "refuted", rationale: "r", class: "security" }] })), ReviewFindingsParseError);
+		// #294: malformed (non-kebab) class tokens rejected; a well-formed unknown token now parses.
+		assert.throws(() => parseJudgeReport(judgeBlock({ schemaVersion: 1, decisions: [{ candidateId: "C1", decision: "refuted", rationale: "r", class: "Security" }] })), ReviewFindingsParseError);
+		assert.equal(parseJudgeReport(judgeBlock({ schemaVersion: 1, decisions: [{ candidateId: "C1", decision: "refuted", rationale: "r", class: "experimental-lint" }] })).decisions[0].class, "experimental-lint");
 	});
 
 	it("treats decision class as optional, inherited from the candidate (#280)", () => {

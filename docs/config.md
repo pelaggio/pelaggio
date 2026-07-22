@@ -76,6 +76,13 @@ review:                         # PR review poster (issue #84)
       - { id: codex, provider: codex, codex-model: gpt-5-codex }
       - { id: grok, provider: grok }
     judge: { provider: claude, model: claude-opus-4-8 }
+  taxonomy:                     # ADR-0016 safety floor; omit for the built-in owner table
+    owner: operator             # forensic label only; not a cryptographic identity
+    judgment-default: permissive # permissive | park; seeded for the #297 tolerance dial
+    classes:                    # overlay: omitted baseline entries remain in force
+      my-new-risk: safety       # extension/elevation is signature-free
+    # contract:                 # required for any contraction
+    #   signature-b64: "<Ed25519 signature>"
 
 notify:                         # outbound run-outcome webhook (default: disabled)
   url: ""                       # default: "" (disabled). Set a webhook/topic URL to enable.
@@ -643,6 +650,32 @@ models:
 When using local mode, set the repo variable `AUTOPILOT_REVIEW_RUNNER=local` so the
 CI workflow does not run review tooling from the PR branch. The local `gh` auth must
 be able to write commit statuses and PR comments.
+
+## Safety taxonomy
+
+`review.taxonomy` overlays the ADR-0016 class-to-tier table. Class IDs are lowercase kebab-case
+tokens with at most one slash; values are exactly `safety` or `judgment`. Unknown finding classes
+default to `safety`. Adding a safety class, or elevating a baseline judgment class to safety, needs
+no signature. Moving a baseline safety class to judgment or introducing a new judgment class is a
+contraction and fails config loading unless its contract signature verifies.
+
+The verification key is `OWNER_TAXONOMY_PUBKEY_PEM` in
+`packages/pelaggio/scripts/pelaggio/review/taxonomy.ts`; it is deliberately not configurable through
+YAML or the environment. Replace that source-pinned public key with the operator's Ed25519 public key
+before authorizing contractions. Keep the private key outside the repository and pipeline.
+
+Use the operator CLI to inspect and authorize a contraction:
+
+```bash
+npx pelaggio taxonomy canonical --config .pelaggio.yml
+npx pelaggio taxonomy sign --private-key /secure/operator-ed25519.pem --config .pelaggio.yml
+# Paste the emitted signature-b64 under review.taxonomy.contract, then:
+npx pelaggio taxonomy verify --config .pelaggio.yml
+```
+
+The signed bytes are the canonical, sorted contraction set only. Safety extensions are excluded, so
+adding one does not invalidate an existing authorized contraction. The taxonomy parser rejects unknown
+keys and malformed values rather than silently ignoring them.
 
 ## Local revise sweep
 
