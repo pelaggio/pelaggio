@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import type { AuthoringReviewConfig } from "../config.js";
 import { type AuthoringReviewFinding, isSafetyClass, materializeAuthoringFinding, type ReviewFindingClass, SAFETY_CLASSES } from "../review/findings.js";
 import { classifyReviewOutcome, deduplicateCandidates, type ReviewCandidate, runReviewLoop } from "../review/loop.js";
+import { renderReviewRecord } from "../review/record.js";
 import type { StepResult } from "../types.js";
 
 const emptyClassification = { changedFiles: [] as string[] };
@@ -328,6 +329,31 @@ describe("authoring review loop controller", () => {
 			roles.some((role) => role === "author"),
 			false,
 		);
+	});
+
+	it("persists the failed pass + per-seat diagnostics when no reviewer seat completes, and renders them (#268 legibility)", async () => {
+		// A 0-reviewer-seats-ok hard-block used to return passes:[] — dropping the per-seat diagnostics
+		// just built — so the operator had no idea WHY the review failed. Now the pass is persisted and
+		// each seat's reason survives in the review record.
+		const result = await runReviewLoop({
+			policy: { ...basePolicy },
+			author: { provider: "codex" },
+			parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" },
+			classificationContext: emptyClassification,
+			runSeat: async (request) => {
+				if (request.role === "reviewer") throw new Error("provider crashed: ECONNRESET");
+				return ok("");
+			},
+			prompts: { review: () => "r", judge: () => "j", revise: () => "rev" },
+		});
+		assert.equal(result.outcome, "hard-block");
+		assert.equal(result.passes.length, 1);
+		assert.ok(result.passes[0].reviewers.length > 0);
+		assert.ok(result.passes[0].reviewers.every((seat) => seat.diagnostic?.includes("ECONNRESET")));
+		assert.equal(result.passes[0].judge.diagnostic, "skipped: no reviewer seat completed");
+		const md = renderReviewRecord({ schemaVersion: 1, runId: "cycle-1-legibility", itemId: "L", createdAt: new Date("2026-01-01T00:00:00Z").toISOString(), blockingBar: "must-fix", result });
+		assert.match(md, /Seat diagnostics/);
+		assert.match(md, /ECONNRESET/);
 	});
 
 	it("iterates a fixable must-fix to convergence before the pass ceiling", async () => {

@@ -473,6 +473,14 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		// prints) and the jsonl (stats/notify) so a subscription-provider run never reads as USD.
 		const costEstimated = steps.some((s) => s.costEstimated);
 		if (costEstimated) result = { ...result, costEstimated: true };
+		// Compose a legible failure one-liner (#268): keep `error` as the classification string, but
+		// attach the last failing step's subtype + bounded output tail so a non-verbose failure explains
+		// itself in the console instead of a bare "parked"/"<step> failed".
+		if (!result.completed && result.error && !result.detail) {
+			const failed = [...steps].reverse().find((s) => !s.ok);
+			const bits = failed ? [failed.subtype, failed.outputTail].filter(Boolean).join(": ") : "";
+			if (bits) result = { ...result, detail: `${result.error} — ${failed?.name}: ${bits}`.slice(0, 200) };
+		}
 		if (!opts.dryRun) {
 			const parked = result.error === "parked";
 			appendLog({
@@ -1347,7 +1355,7 @@ function resultStatus(r: CycleResult): "done" | "warning" | "skipped" | "failed"
 
 function resultDetail(r: CycleResult): string {
 	if (r.completed && r.bookkeepingWarnings?.length) return `shipped — bookkeeping incomplete: ${r.bookkeepingWarnings.join("; ")}`;
-	return r.error ?? "";
+	return r.detail ?? r.error ?? "";
 }
 
 export interface OrchestratorDeps {
