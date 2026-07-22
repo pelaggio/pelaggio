@@ -61,18 +61,24 @@ export function parseLandArgs(argv: string[]): ParsedLandArgs {
 }
 
 /**
- * Runs the guard, then the merge. `assertCiGreen` is fail-closed (see
- * ci-guard.ts): an empty rollup, a still-pending check, a red check, or a
- * gh/parse error all refuse the merge rather than let it through.
+ * Runs the guard, then the merge. `assertCiGreen` is fail-closed (see ci-guard.ts): a missing
+ * required check, a still-pending required check, any red check, an unresolvable head oid, or a
+ * gh/parse error all refuse the merge. (With an explicit empty `requiredChecks` escape hatch,
+ * only a red check refuses.) On success the verified head oid pins the merge via
+ * `--match-head-commit`, so a race that advanced the head aborts the merge rather than landing it.
  */
 export function runLand(options: LandOptions, deps: LandDeps): number {
+	let verifiedHead: string;
 	try {
-		assertCiGreen(deps.gh, options.pr, options.requiredChecks, options.ghRepo);
+		verifiedHead = assertCiGreen(deps.gh, options.pr, options.requiredChecks, options.ghRepo);
 	} catch (e) {
 		deps.log(e instanceof Error ? e.message : String(e));
 		return 1;
 	}
-	const args = ["pr", "merge", String(options.pr), "--repo", options.ghRepo, "--squash", "--delete-branch", ...(options.admin ? ["--admin"] : [])];
+	// Pin the merge to the exact commit the guard verified green: `--match-head-commit` makes gh
+	// refuse (rather than merge) if a push advanced the head after the check — closes the TOCTOU
+	// window between reading CI status and merging (#292).
+	const args = ["pr", "merge", String(options.pr), "--repo", options.ghRepo, "--squash", "--delete-branch", "--match-head-commit", verifiedHead, ...(options.admin ? ["--admin"] : [])];
 	const result = deps.gh(args);
 	if (result.status !== 0) {
 		deps.log(`merge failed: ${result.stderr.trim() || result.stdout.trim() || `status ${result.status}`}`);

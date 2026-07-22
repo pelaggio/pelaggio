@@ -15,9 +15,10 @@ function makeGh(responses: Array<{ match: string[]; stdout?: string; stderr?: st
 	return { gh, calls };
 }
 
-const GREEN = JSON.stringify({ statusCheckRollup: [{ __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }] });
-const RED = JSON.stringify({ statusCheckRollup: [{ __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "FAILURE" }] });
-const PENDING = JSON.stringify({ statusCheckRollup: [{ __typename: "CheckRun", name: "ci", status: "IN_PROGRESS" }] });
+const HEAD = "abc123headoid";
+const GREEN = JSON.stringify({ statusCheckRollup: [{ __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }], headRefOid: HEAD });
+const RED = JSON.stringify({ statusCheckRollup: [{ __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "FAILURE" }], headRefOid: HEAD });
+const PENDING = JSON.stringify({ statusCheckRollup: [{ __typename: "CheckRun", name: "ci", status: "IN_PROGRESS" }], headRefOid: HEAD });
 
 describe("parseLandArgs", () => {
 	it("parses --pr, --admin, --repo", () => {
@@ -47,7 +48,7 @@ describe("runLand", () => {
 		const log: string[] = [];
 		const code = runLand({ pr: 42, admin: false, ghRepo: "acme/widget", requiredChecks: ["ci"] }, { gh, log: (m) => log.push(m) });
 		assert.equal(code, 0);
-		assert.deepEqual(calls[1], ["pr", "merge", "42", "--repo", "acme/widget", "--squash", "--delete-branch"]);
+		assert.deepEqual(calls[1], ["pr", "merge", "42", "--repo", "acme/widget", "--squash", "--delete-branch", "--match-head-commit", HEAD]);
 		assert.match(log.join("\n"), /merged PR #42/);
 	});
 
@@ -58,7 +59,7 @@ describe("runLand", () => {
 		]);
 		const code = runLand({ pr: 42, admin: true, ghRepo: "acme/widget", requiredChecks: ["ci"] }, { gh, log: () => {} });
 		assert.equal(code, 0);
-		assert.deepEqual(calls[1], ["pr", "merge", "42", "--repo", "acme/widget", "--squash", "--delete-branch", "--admin"]);
+		assert.deepEqual(calls[1], ["pr", "merge", "42", "--repo", "acme/widget", "--squash", "--delete-branch", "--match-head-commit", HEAD, "--admin"]);
 	});
 
 	it("refuses to merge a red PR even with --admin (#292)", () => {
@@ -79,7 +80,7 @@ describe("runLand", () => {
 	});
 
 	it("refuses when the required `ci` check has not reported, even though `review` is green (#292 fail-open on --admin)", () => {
-		const REVIEW_ONLY = JSON.stringify({ statusCheckRollup: [{ __typename: "StatusContext", context: "review", state: "SUCCESS" }] });
+		const REVIEW_ONLY = JSON.stringify({ statusCheckRollup: [{ __typename: "StatusContext", context: "review", state: "SUCCESS" }], headRefOid: HEAD });
 		const { gh, calls } = makeGh([{ match: ["pr", "view"], stdout: REVIEW_ONLY }]);
 		const log: string[] = [];
 		const code = runLand({ pr: 42, admin: true, ghRepo: "acme/widget", requiredChecks: ["ci"] }, { gh, log: (m) => log.push(m) });
@@ -90,7 +91,7 @@ describe("runLand", () => {
 
 	it("escape hatch: an empty required set lets a no-CI repo land (green-less rollup)", () => {
 		const { gh, calls } = makeGh([
-			{ match: ["pr", "view"], stdout: JSON.stringify({ statusCheckRollup: [] }) },
+			{ match: ["pr", "view"], stdout: JSON.stringify({ statusCheckRollup: [], headRefOid: HEAD }) },
 			{ match: ["pr", "merge"], stdout: "" },
 		]);
 		const code = runLand({ pr: 42, admin: true, ghRepo: "acme/widget", requiredChecks: [] }, { gh, log: () => {} });
@@ -132,6 +133,6 @@ describe("main", () => {
 		]);
 		const code = main(["--pr", "7", "--repo", "acme/widget"], { gh, log: () => {} });
 		assert.equal(code, 0);
-		assert.deepEqual(calls[0], ["pr", "view", "7", "--repo", "acme/widget", "--json", "statusCheckRollup"]);
+		assert.deepEqual(calls[0], ["pr", "view", "7", "--repo", "acme/widget", "--json", "statusCheckRollup,headRefOid"]);
 	});
 });

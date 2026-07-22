@@ -12,16 +12,18 @@ function makeGh(response: { stdout?: string; stderr?: string; status?: number })
 	return { gh, calls };
 }
 
-const GREEN_ROLLUP = JSON.stringify({
-	statusCheckRollup: [
-		{ __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS" },
-		{ __typename: "StatusContext", context: "review", state: "SUCCESS" },
-	],
-});
-const RED_CHECK_RUN = JSON.stringify({ statusCheckRollup: [{ __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "FAILURE" }] });
-const RED_STATUS_CONTEXT = JSON.stringify({ statusCheckRollup: [{ __typename: "StatusContext", context: "review", state: "FAILURE" }] });
-const PENDING_ROLLUP = JSON.stringify({ statusCheckRollup: [{ __typename: "CheckRun", name: "ci", status: "IN_PROGRESS" }] });
-const NEUTRAL_ROLLUP = JSON.stringify({ statusCheckRollup: [{ __typename: "CheckRun", name: "lint", status: "COMPLETED", conclusion: "NEUTRAL" }] });
+const HEAD = "abc123headoid";
+// A PR-view JSON with a resolvable head oid (required for assertCiGreen to pin the merge).
+const pr = (entries: unknown[], headRefOid: string | undefined = HEAD) => JSON.stringify({ statusCheckRollup: entries, headRefOid });
+
+const GREEN_ROLLUP = pr([
+	{ __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS" },
+	{ __typename: "StatusContext", context: "review", state: "SUCCESS" },
+]);
+const RED_CHECK_RUN = pr([{ __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "FAILURE" }]);
+const RED_STATUS_CONTEXT = pr([{ __typename: "StatusContext", context: "review", state: "FAILURE" }]);
+const PENDING_ROLLUP = pr([{ __typename: "CheckRun", name: "ci", status: "IN_PROGRESS" }]);
+const NEUTRAL_ROLLUP = pr([{ __typename: "CheckRun", name: "lint", status: "COMPLETED", conclusion: "NEUTRAL" }]);
 
 describe("assertCiNotRed — pipeline auto-merge-pr guard", () => {
 	it("passes on an all-green rollup", () => {
@@ -55,13 +57,13 @@ describe("assertCiNotRed — pipeline auto-merge-pr guard", () => {
 	it("passes the PR number and optional repo through to gh", () => {
 		const { gh, calls } = makeGh({ stdout: GREEN_ROLLUP });
 		assertCiNotRed(gh, 42, "acme/widget");
-		assert.deepEqual(calls[0], ["pr", "view", "42", "--repo", "acme/widget", "--json", "statusCheckRollup"]);
+		assert.deepEqual(calls[0], ["pr", "view", "42", "--repo", "acme/widget", "--json", "statusCheckRollup,headRefOid"]);
 	});
 });
 
 describe("assertCiGreen — immediate/--admin merge guard", () => {
-	it("passes when the required check is present + green", () => {
-		assert.doesNotThrow(() => assertCiGreen(makeGh({ stdout: GREEN_ROLLUP }).gh, 42, ["ci"]));
+	it("passes when the required check is present + green, and returns the verified head oid to pin the merge", () => {
+		assert.equal(assertCiGreen(makeGh({ stdout: GREEN_ROLLUP }).gh, 42, ["ci"]), HEAD);
 	});
 
 	it("passes on a neutral/skipped conclusion for a required check", () => {
@@ -70,7 +72,7 @@ describe("assertCiGreen — immediate/--admin merge guard", () => {
 	});
 
 	it("refuses when a REQUIRED check is absent from the rollup (#292 fail-open) — e.g. only `review` reported, `ci` not yet created", () => {
-		const REVIEW_ONLY = JSON.stringify({ statusCheckRollup: [{ __typename: "StatusContext", context: "review", state: "SUCCESS" }] });
+		const REVIEW_ONLY = pr([{ __typename: "StatusContext", context: "review", state: "SUCCESS" }]);
 		assert.throws(() => assertCiGreen(makeGh({ stdout: REVIEW_ONLY }).gh, 42, ["ci"]), /red-merge guard.*have not reported.*ci/);
 	});
 
@@ -79,15 +81,19 @@ describe("assertCiGreen — immediate/--admin merge guard", () => {
 	});
 
 	it("refuses on an empty rollup — the required check is missing, never fails open", () => {
-		assert.throws(() => assertCiGreen(makeGh({ stdout: JSON.stringify({ statusCheckRollup: [] }) }).gh, 42, ["ci"]), /red-merge guard.*have not reported.*ci/);
+		assert.throws(() => assertCiGreen(makeGh({ stdout: pr([]) }).gh, 42, ["ci"]), /red-merge guard.*have not reported.*ci/);
 	});
 
-	it("refuses on a red CheckRun conclusion (red blocks even a non-required check)", () => {
-		assert.throws(() => assertCiGreen(makeGh({ stdout: RED_CHECK_RUN }).gh, 42, ["ci"]), /red-merge guard.*CI is red/);
+	it("refuses on a red NON-required check (red blocks any merge, required or not)", () => {
+		const RED_NON_REQUIRED = pr([
+			{ __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS" },
+			{ __typename: "CheckRun", name: "lint", status: "COMPLETED", conclusion: "FAILURE" },
+		]);
+		assert.throws(() => assertCiGreen(makeGh({ stdout: RED_NON_REQUIRED }).gh, 42, ["ci"]), /red-merge guard.*CI is red.*lint/);
 	});
 
 	it("escape hatch: an empty required set tolerates an empty rollup (no gating CI)", () => {
-		assert.doesNotThrow(() => assertCiGreen(makeGh({ stdout: JSON.stringify({ statusCheckRollup: [] }) }).gh, 42, []));
+		assert.equal(assertCiGreen(makeGh({ stdout: pr([]) }).gh, 42, []), HEAD);
 	});
 
 	it("escape hatch still refuses a reported-red check", () => {
@@ -95,13 +101,17 @@ describe("assertCiGreen — immediate/--admin merge guard", () => {
 	});
 
 	it("requires ALL instances of a required check to be green (one pending re-run refuses)", () => {
-		const SPLIT = JSON.stringify({
-			statusCheckRollup: [
-				{ __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS" },
-				{ __typename: "CheckRun", name: "ci", status: "IN_PROGRESS" },
-			],
-		});
+		const SPLIT = pr([
+			{ __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS" },
+			{ __typename: "CheckRun", name: "ci", status: "IN_PROGRESS" },
+		]);
 		assert.throws(() => assertCiGreen(makeGh({ stdout: SPLIT }).gh, 42, ["ci"]), /red-merge guard.*not yet green.*ci/);
+	});
+
+	it("fails closed when the PR head oid cannot be resolved (cannot pin the merge)", () => {
+		// Construct directly (not via `pr`, whose default would re-inject a head oid) so headRefOid is absent.
+		const NO_HEAD = JSON.stringify({ statusCheckRollup: [{ __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }] });
+		assert.throws(() => assertCiGreen(makeGh({ stdout: NO_HEAD }).gh, 42, ["ci"]), /red-merge guard.*could not resolve the PR head/);
 	});
 
 	it("fails closed on a gh error", () => {

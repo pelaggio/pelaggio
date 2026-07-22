@@ -29,6 +29,13 @@ interface RollupEntry {
 
 interface PrView {
 	statusCheckRollup?: RollupEntry[];
+	/** The commit the reviewed status belongs to — used to pin `--admin` merges (see below). */
+	headRefOid?: string;
+}
+
+interface PrStatus {
+	rollup: RollupEntry[];
+	headOid: string;
 }
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -59,8 +66,8 @@ function isGreen(e: RollupEntry): boolean {
 	return (e.state ?? "").toUpperCase() === "SUCCESS";
 }
 
-function fetchRollup(gh: GhRunner, prNumber: number, ghRepo?: string): RollupEntry[] {
-	const args = ["pr", "view", String(prNumber), ...(ghRepo ? ["--repo", ghRepo] : []), "--json", "statusCheckRollup"];
+function fetchPrStatus(gh: GhRunner, prNumber: number, ghRepo?: string): PrStatus {
+	const args = ["pr", "view", String(prNumber), ...(ghRepo ? ["--repo", ghRepo] : []), "--json", "statusCheckRollup,headRefOid"];
 	const result = gh(args);
 	if (result.status !== 0) {
 		const detail = result.stderr.trim() || result.stdout.trim() || `status ${result.status}`;
@@ -73,7 +80,10 @@ function fetchRollup(gh: GhRunner, prNumber: number, ghRepo?: string): RollupEnt
 		const detail = e instanceof Error ? e.message : String(e);
 		throw new Error(`red-merge guard: could not parse CI status for PR #${prNumber} (${detail}) — refusing to merge`);
 	}
-	return Array.isArray(parsed.statusCheckRollup) ? parsed.statusCheckRollup : [];
+	return {
+		rollup: Array.isArray(parsed.statusCheckRollup) ? parsed.statusCheckRollup : [],
+		headOid: typeof parsed.headRefOid === "string" ? parsed.headRefOid : "",
+	};
 }
 
 /**
@@ -84,7 +94,7 @@ function fetchRollup(gh: GhRunner, prNumber: number, ghRepo?: string): RollupEnt
  * auto-merge onto a PR that is already known-broken.
  */
 export function assertCiNotRed(gh: GhRunner, prNumber: number, ghRepo?: string): void {
-	const red = fetchRollup(gh, prNumber, ghRepo).filter(isRed).map(checkLabel);
+	const red = fetchPrStatus(gh, prNumber, ghRepo).rollup.filter(isRed).map(checkLabel);
 	if (red.length > 0) throw new Error(`red-merge guard: refusing to queue auto-merge for PR #${prNumber} — CI is red: ${red.join(", ")}`);
 }
 
@@ -104,16 +114,22 @@ export function assertCiNotRed(gh: GhRunner, prNumber: number, ghRepo?: string):
  * refuses regardless of whether it is required — never merge onto a visibly-red PR. An
  * explicitly empty `requiredChecks` is the operator escape hatch ("this repo has no gating
  * CI"): red still refuses, but an empty/pending rollup is then tolerated. A gh/parse error
- * always refuses (fetchRollup throws) — never fails open.
+ * always refuses (fetchPrStatus throws) — never fails open.
+ *
+ * Returns the `headRefOid` the green status was observed on. The caller MUST pass it to
+ * `gh pr merge --match-head-commit <oid>`: without pinning, a push landing between this read
+ * and the merge could swap the verified-green head for an untested commit that `--admin` then
+ * merges (a TOCTOU fail-open). A missing head oid fails closed — we cannot pin, so we refuse.
  */
-export function assertCiGreen(gh: GhRunner, prNumber: number, requiredChecks: readonly string[], ghRepo?: string): void {
-	const rollup = fetchRollup(gh, prNumber, ghRepo);
+export function assertCiGreen(gh: GhRunner, prNumber: number, requiredChecks: readonly string[], ghRepo?: string): string {
+	const { rollup, headOid } = fetchPrStatus(gh, prNumber, ghRepo);
+	if (!headOid) throw new Error(`red-merge guard: refusing to merge PR #${prNumber} — could not resolve the PR head commit to pin the merge`);
 	// A reported-red check blocks any merge, required or not — never land onto visible red.
 	const red = rollup.filter(isRed).map(checkLabel);
 	if (red.length > 0) throw new Error(`red-merge guard: refusing to merge PR #${prNumber} — CI is red: ${red.join(", ")}`);
 	// Escape hatch: an explicitly empty required set asserts "no CI gates admin-land here".
 	// Red was already refused above; with no required checks a pending/empty rollup is tolerated.
-	if (requiredChecks.length === 0) return;
+	if (requiredChecks.length === 0) return headOid;
 	// Every required check must be PRESENT and green. A required check absent from the rollup
 	// (Actions has not created its CheckRun yet) or with any non-green instance refuses — this
 	// is the fail-closed-on-missing that a "green if all present checks are green" test misses.
@@ -126,4 +142,5 @@ export function assertCiGreen(gh: GhRunner, prNumber: number, requiredChecks: re
 	}
 	if (missing.length > 0) throw new Error(`red-merge guard: refusing to merge PR #${prNumber} — required check(s) have not reported: ${missing.join(", ")} (required: ${requiredChecks.join(", ")})`);
 	if (notGreen.length > 0) throw new Error(`red-merge guard: refusing to merge PR #${prNumber} — required check(s) not yet green: ${notGreen.join(", ")}`);
+	return headOid;
 }
