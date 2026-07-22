@@ -319,7 +319,7 @@ function parseProviderSelections(override: unknown, section: string, configPath:
 	if (!isPlainObject(override)) throw new Error(`${configPath}: expected \`${section}\` to be a map, got ${Array.isArray(override) ? "array" : typeof override}`);
 	const out: Partial<Record<Step, ProviderSelection>> = {};
 	for (const [key, value] of Object.entries(override)) {
-		if (!isStep(key)) continue;
+		if (!isStep(key)) throw new Error(`${configPath}: unknown step at \`${section}.${key}\``);
 		if (!Array.isArray(value)) {
 			if (!isProviderName(value)) throw new Error(`${configPath}: invalid value at \`${section}.${key}\``);
 			out[key] = value;
