@@ -87,6 +87,70 @@ const noopBookkeeping = async (): Promise<ShipBookkeepingResult> => ({
 	ok: true,
 });
 
+describe("runPipeline — pick divergence gate (#332)", () => {
+	it("fails closed with pick:diverted when /pick claims a different item than the --item pin, before any plan/implement", async () => {
+		const mainRepo = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const { runStep, calls } = createMockRunStep(
+			{
+				// Pinned --item 286, but /pick's authoritative marker claims 337 (the live divert),
+				// with free text narrating the requested 286 — the exact ambiguity the marker resolves.
+				pick: { ok: true, text: "Requested issue 286.\nClaiming the next ready item.\npick-item: 337\npick-result: claimed" },
+				plan: { ok: true },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+			},
+			parkSignal,
+		);
+		const result = await runPipeline({ itemId: "286", cycle: 1, verbose: false, shipTarget: getShipTarget("pull-request"), dryRun: false, liveStatus: makeLiveStatus() }, parkSignal, baseFlags, {
+			runStep,
+			mainRepo,
+			listWorktrees: () => [mainRepo],
+			appendLog: () => {},
+			roadmap: makeMockRoadmap(),
+		});
+		assert.equal(result.completed, false);
+		assert.equal(result.error, "pick:diverted");
+		assert.equal(calls.filter((c) => c.step === "plan").length, 0, "must not plan the diverted item");
+		assert.equal(calls.filter((c) => c.step === "implement").length, 0, "must not implement the diverted item");
+	});
+
+	it("fails closed (pick:unparsed-marker) when a pinned pick claims but emits no authoritative marker — free text can't mask a divert", async () => {
+		// The pick reports `claimed` and narrates the requested id, but emits NO valid `pick-item:`
+		// marker. A pinned pick must resolve from the marker only — falling back to free-text
+		// parseItemId here is exactly how a divert could hide behind "Requested issue 286".
+		const mainRepo = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const { runStep, calls } = createMockRunStep({ pick: { ok: true, text: "Requested issue 286.\nClaimed a ready item.\npick-result: claimed" }, plan: { ok: true } }, parkSignal);
+		const result = await runPipeline({ itemId: "286", cycle: 1, verbose: false, shipTarget: getShipTarget("pull-request"), dryRun: false, liveStatus: makeLiveStatus() }, parkSignal, baseFlags, {
+			runStep,
+			mainRepo,
+			listWorktrees: () => [mainRepo],
+			appendLog: () => {},
+			roadmap: makeMockRoadmap(),
+		});
+		assert.equal(result.completed, false);
+		assert.equal(result.error, "pick:unparsed-marker");
+		assert.equal(calls.filter((c) => c.step === "plan").length, 0, "must not proceed without an authoritative marker");
+	});
+
+	it("does NOT fire the gate when the pick claims exactly the pinned item (no false divergence)", async () => {
+		// The pick marker matches the pin, so the gate must not short-circuit with pick:diverted.
+		// (We assert only that the gate did not fire — the downstream claim/worktree creation is a
+		// real /pick side effect out of scope for this unit; covered by the happy-path tests.)
+		const mainRepo = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const { runStep } = createMockRunStep({ pick: { ok: true, text: "pick-item: 286\npick-result: claimed" }, plan: { ok: true } }, parkSignal);
+		const result = await runPipeline({ itemId: "286", cycle: 1, verbose: false, shipTarget: getShipTarget("pull-request"), dryRun: false, liveStatus: makeLiveStatus() }, parkSignal, baseFlags, {
+			runStep,
+			mainRepo,
+			listWorktrees: () => [mainRepo],
+			appendLog: () => {},
+			roadmap: makeMockRoadmap(),
+		});
+		assert.notEqual(result.error, "pick:diverted", "a matching pin must not trip the divergence gate");
+	});
+});
+
 describe("runPipeline — happy path", () => {
 	it("runs plan → shakedown-plan → implement → shakedown-code → ship with APPROVE verdict", async () => {
 		const worktree = makeTempGitRepo();

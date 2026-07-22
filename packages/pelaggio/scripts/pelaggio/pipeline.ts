@@ -57,6 +57,7 @@ import {
 	parseShipMerged,
 	parseVerdict,
 	parseWaitFlag,
+	pickDivergedFromPin,
 	readGitBinding,
 	readRuntimeVersions,
 	resolveWorktree,
@@ -665,8 +666,26 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				}
 			}
 
-			itemId = opts.dryRun ? (itemId ?? "DRY") : (parsePickItem(pickText) ?? (await roadmap.parseItemId(pick.text)) ?? (await roadmap.parseItemId(pick.fullText)));
-			if (!itemId) return finish({ itemId: null, completed: false, cost, error: "no item ID parsed" });
+			// #332: an explicit `--item <N>` pin is a DETERMINISTIC gate, not a hint. The /pick skill's
+			// contract is to claim exactly the requested id (or report `already-done`/`blocked`) — never
+			// substitute a different ready item. For a PINNED claimed pick, resolve the id ONLY from the
+			// authoritative `pick-item:` marker (SKILL.md declares it authoritative precisely to avoid
+			// ambiguous free-text) — never fall back to `parseItemId(pick.text)`, or free text narrating
+			// the requested id could mask an actual divert. A missing/malformed marker on a claimed pin is
+			// itself a contract violation → fail closed. Auto-pick (no pin) keeps the free-text fallback.
+			if (opts.dryRun) {
+				itemId = itemId ?? "DRY";
+			} else if (opts.itemId) {
+				itemId = parsePickItem(pickText);
+				if (!itemId) return finish({ itemId: null, completed: false, cost, error: "pick:unparsed-marker" });
+				if (await pickDivergedFromPin(opts.itemId, itemId, (text) => roadmap.parseItemId(text))) {
+					log(`⚠ pick diverted: requested ${opts.itemId} but /pick claimed ${itemId} — refusing (a pinned --item must resolve exactly; the stray claim needs cleanup)`);
+					return finish({ itemId, completed: false, cost, error: "pick:diverted" });
+				}
+			} else {
+				itemId = parsePickItem(pickText) ?? (await roadmap.parseItemId(pick.text)) ?? (await roadmap.parseItemId(pick.fullText));
+				if (!itemId) return finish({ itemId: null, completed: false, cost, error: "no item ID parsed" });
+			}
 
 			if (opts.noWorktree) {
 				// In no-worktree mode, the feature branch was checked out in-place.
