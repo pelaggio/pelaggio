@@ -16,7 +16,7 @@
  */
 
 import { fileURLToPath } from "node:url";
-import { ROADMAP_GITHUB } from "./config.js";
+import { ROADMAP_GITHUB, SHIP_REQUIRED_CHECKS } from "./config.js";
 import { defaultGhRun, type GhRunner } from "./roadmap/github-issues.js";
 import { assertCiGreen } from "./ship/ci-guard.js";
 
@@ -24,6 +24,9 @@ export interface LandOptions {
 	pr: number;
 	admin: boolean;
 	ghRepo: string;
+	/** Checks that must be present + green before merging (#292). Defaults to config's
+	 *  `ship.requiredChecks` at the `main()` entry point; passed explicitly in tests. */
+	requiredChecks: readonly string[];
 }
 
 export interface LandDeps {
@@ -64,7 +67,7 @@ export function parseLandArgs(argv: string[]): ParsedLandArgs {
  */
 export function runLand(options: LandOptions, deps: LandDeps): number {
 	try {
-		assertCiGreen(deps.gh, options.pr, options.ghRepo);
+		assertCiGreen(deps.gh, options.pr, options.requiredChecks, options.ghRepo);
 	} catch (e) {
 		deps.log(e instanceof Error ? e.message : String(e));
 		return 1;
@@ -90,7 +93,7 @@ export function main(argv: string[], deps: LandDeps = { gh: defaultGhRun, log: (
 		deps.log("no GitHub repo configured — pass --repo <owner/repo> or set roadmap.github.repo in .pelaggio.yml");
 		return 2;
 	}
-	return runLand({ pr: parsed.pr, admin: parsed.admin, ghRepo }, deps);
+	return runLand({ pr: parsed.pr, admin: parsed.admin, ghRepo, requiredChecks: SHIP_REQUIRED_CHECKS }, deps);
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {

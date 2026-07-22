@@ -90,16 +90,40 @@ export function assertCiNotRed(gh: GhRunner, prNumber: number, ghRepo?: string):
 
 /**
  * Immediate, unconditional merges (the out-of-band `--admin` land path) happen NOW, not
- * deferred — so "pending" cannot be treated as "will become green later" the way `--auto`
- * can. Requires every reported check to have completed with a passing conclusion, and fails
- * closed (refuses) on an empty rollup, a still-running check, a red check, or a gh/parse
- * error — never fails open.
+ * deferred — and `--admin` bypasses branch protection, so the harness is the ONLY gate. It
+ * must therefore be fail-closed against a *missing* required check, not just a reported-red
+ * one: checking only "every check present in the rollup is green" reads a partial rollup —
+ * e.g. a local `review=SUCCESS` posted before GitHub Actions has even created the `ci`
+ * CheckRun — as green, and admin-merges with the required CI never having run (issue #292).
+ *
+ * `requiredChecks` is pelaggio's own contract for what must be green on this path, NOT
+ * branch protection's required set — deliberately, because `--admin` bypasses the review-pin
+ * that branch protection *would* require, so the two sets differ (here: `[ci]`, not
+ * `[ci, review]`). Every required check must be PRESENT in the rollup and green; a required
+ * check that has not reported is treated as not-green and refuses. A reported-red check
+ * refuses regardless of whether it is required — never merge onto a visibly-red PR. An
+ * explicitly empty `requiredChecks` is the operator escape hatch ("this repo has no gating
+ * CI"): red still refuses, but an empty/pending rollup is then tolerated. A gh/parse error
+ * always refuses (fetchRollup throws) — never fails open.
  */
-export function assertCiGreen(gh: GhRunner, prNumber: number, ghRepo?: string): void {
+export function assertCiGreen(gh: GhRunner, prNumber: number, requiredChecks: readonly string[], ghRepo?: string): void {
 	const rollup = fetchRollup(gh, prNumber, ghRepo);
-	if (rollup.length === 0) throw new Error(`red-merge guard: refusing to merge PR #${prNumber} — no CI status found (cannot confirm green)`);
+	// A reported-red check blocks any merge, required or not — never land onto visible red.
 	const red = rollup.filter(isRed).map(checkLabel);
 	if (red.length > 0) throw new Error(`red-merge guard: refusing to merge PR #${prNumber} — CI is red: ${red.join(", ")}`);
-	const notGreen = rollup.filter((e) => !isGreen(e)).map(checkLabel);
-	if (notGreen.length > 0) throw new Error(`red-merge guard: refusing to merge PR #${prNumber} — CI is not yet green (pending): ${notGreen.join(", ")}`);
+	// Escape hatch: an explicitly empty required set asserts "no CI gates admin-land here".
+	// Red was already refused above; with no required checks a pending/empty rollup is tolerated.
+	if (requiredChecks.length === 0) return;
+	// Every required check must be PRESENT and green. A required check absent from the rollup
+	// (Actions has not created its CheckRun yet) or with any non-green instance refuses — this
+	// is the fail-closed-on-missing that a "green if all present checks are green" test misses.
+	const missing: string[] = [];
+	const notGreen: string[] = [];
+	for (const name of requiredChecks) {
+		const instances = rollup.filter((e) => checkLabel(e) === name);
+		if (instances.length === 0) missing.push(name);
+		else if (!instances.every(isGreen)) notGreen.push(name);
+	}
+	if (missing.length > 0) throw new Error(`red-merge guard: refusing to merge PR #${prNumber} — required check(s) have not reported: ${missing.join(", ")} (required: ${requiredChecks.join(", ")})`);
+	if (notGreen.length > 0) throw new Error(`red-merge guard: refusing to merge PR #${prNumber} — required check(s) not yet green: ${notGreen.join(", ")}`);
 }

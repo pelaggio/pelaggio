@@ -45,7 +45,7 @@ describe("runLand", () => {
 			{ match: ["pr", "merge"], stdout: "" },
 		]);
 		const log: string[] = [];
-		const code = runLand({ pr: 42, admin: false, ghRepo: "acme/widget" }, { gh, log: (m) => log.push(m) });
+		const code = runLand({ pr: 42, admin: false, ghRepo: "acme/widget", requiredChecks: ["ci"] }, { gh, log: (m) => log.push(m) });
 		assert.equal(code, 0);
 		assert.deepEqual(calls[1], ["pr", "merge", "42", "--repo", "acme/widget", "--squash", "--delete-branch"]);
 		assert.match(log.join("\n"), /merged PR #42/);
@@ -56,7 +56,7 @@ describe("runLand", () => {
 			{ match: ["pr", "view"], stdout: GREEN },
 			{ match: ["pr", "merge"], stdout: "" },
 		]);
-		const code = runLand({ pr: 42, admin: true, ghRepo: "acme/widget" }, { gh, log: () => {} });
+		const code = runLand({ pr: 42, admin: true, ghRepo: "acme/widget", requiredChecks: ["ci"] }, { gh, log: () => {} });
 		assert.equal(code, 0);
 		assert.deepEqual(calls[1], ["pr", "merge", "42", "--repo", "acme/widget", "--squash", "--delete-branch", "--admin"]);
 	});
@@ -64,7 +64,7 @@ describe("runLand", () => {
 	it("refuses to merge a red PR even with --admin (#292)", () => {
 		const { gh, calls } = makeGh([{ match: ["pr", "view"], stdout: RED }]);
 		const log: string[] = [];
-		const code = runLand({ pr: 42, admin: true, ghRepo: "acme/widget" }, { gh, log: (m) => log.push(m) });
+		const code = runLand({ pr: 42, admin: true, ghRepo: "acme/widget", requiredChecks: ["ci"] }, { gh, log: (m) => log.push(m) });
 		assert.equal(code, 1);
 		assert.match(log.join("\n"), /red-merge guard.*CI is red/);
 		assert.ok(!calls.some((c) => c[0] === "pr" && c[1] === "merge"), "must never call gh pr merge on a red PR");
@@ -73,9 +73,32 @@ describe("runLand", () => {
 	it("refuses to merge on a still-pending PR — the --admin path requires terminal green", () => {
 		const { gh } = makeGh([{ match: ["pr", "view"], stdout: PENDING }]);
 		const log: string[] = [];
-		const code = runLand({ pr: 42, admin: true, ghRepo: "acme/widget" }, { gh, log: (m) => log.push(m) });
+		const code = runLand({ pr: 42, admin: true, ghRepo: "acme/widget", requiredChecks: ["ci"] }, { gh, log: (m) => log.push(m) });
 		assert.equal(code, 1);
 		assert.match(log.join("\n"), /not yet green/);
+	});
+
+	it("refuses when the required `ci` check has not reported, even though `review` is green (#292 fail-open on --admin)", () => {
+		const REVIEW_ONLY = JSON.stringify({ statusCheckRollup: [{ __typename: "StatusContext", context: "review", state: "SUCCESS" }] });
+		const { gh, calls } = makeGh([{ match: ["pr", "view"], stdout: REVIEW_ONLY }]);
+		const log: string[] = [];
+		const code = runLand({ pr: 42, admin: true, ghRepo: "acme/widget", requiredChecks: ["ci"] }, { gh, log: (m) => log.push(m) });
+		assert.equal(code, 1);
+		assert.match(log.join("\n"), /have not reported.*ci/);
+		assert.ok(!calls.some((c) => c[0] === "pr" && c[1] === "merge"), "must never admin-merge with the required check unreported");
+	});
+
+	it("escape hatch: an empty required set lets a no-CI repo land (green-less rollup)", () => {
+		const { gh, calls } = makeGh([
+			{ match: ["pr", "view"], stdout: JSON.stringify({ statusCheckRollup: [] }) },
+			{ match: ["pr", "merge"], stdout: "" },
+		]);
+		const code = runLand({ pr: 42, admin: true, ghRepo: "acme/widget", requiredChecks: [] }, { gh, log: () => {} });
+		assert.equal(code, 0);
+		assert.ok(
+			calls.some((c) => c[0] === "pr" && c[1] === "merge"),
+			"empty required set is the opt-out escape hatch",
+		);
 	});
 
 	it("surfaces a gh merge failure as exit 1", () => {
@@ -84,7 +107,7 @@ describe("runLand", () => {
 			{ match: ["pr", "merge"], stderr: "branch protection: required review missing", status: 1 },
 		]);
 		const log: string[] = [];
-		const code = runLand({ pr: 42, admin: false, ghRepo: "acme/widget" }, { gh, log: (m) => log.push(m) });
+		const code = runLand({ pr: 42, admin: false, ghRepo: "acme/widget", requiredChecks: ["ci"] }, { gh, log: (m) => log.push(m) });
 		assert.equal(code, 1);
 		assert.match(log.join("\n"), /merge failed.*required review missing/);
 	});

@@ -70,6 +70,34 @@ describe("loadConfig — confinement", () => {
 	});
 });
 
+describe("loadConfig — ship.required-checks (#292)", () => {
+	it("defaults to [ci] when unset", () => {
+		const repo = tmpRepo();
+		const cfg = loadConfig({ repo, configPath: join(repo, ".pelaggio.yml") });
+		assert.deepEqual(cfg.shipRequiredChecks, ["ci"]);
+	});
+
+	it("accepts an explicit list", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "ship:\n  required-checks: [ci, review]\n");
+		assert.deepEqual(loadConfig({ repo, configPath: path }).shipRequiredChecks, ["ci", "review"]);
+	});
+
+	it("accepts an explicit empty list (escape hatch)", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "ship:\n  required-checks: []\n");
+		assert.deepEqual(loadConfig({ repo, configPath: path }).shipRequiredChecks, []);
+	});
+
+	it("rejects a non-list or non-string entries", () => {
+		for (const value of ['"ci"', "true", "[ci, 3]"]) {
+			const repo = tmpRepo();
+			const path = writeYml(repo, `ship:\n  required-checks: ${value}\n`);
+			assert.throws(() => loadConfig({ repo, configPath: path }), /ship\.required-checks.*list of check-name strings/);
+		}
+	});
+});
+
 describe("loadConfig — overrides", () => {
 	it("applies worktree.prefix override", () => {
 		const repo = tmpRepo();

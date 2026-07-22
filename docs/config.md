@@ -41,6 +41,12 @@ confinement:
 ship:
   target: pull-request          # default: pull-request
                                 # values: direct-push | pull-request | auto-merge-pr
+  required-checks: [ci]         # default: [ci] — checks that must be PRESENT and green for
+                                # the `pelaggio land --admin` red-merge guard (issue #292).
+                                # `--admin` bypasses branch protection, so this is pelaggio's
+                                # own gate: a required check that has not reported (e.g. Actions
+                                # hasn't created `ci` yet) refuses the merge, not just a red one.
+                                # An explicit `[]` is the escape hatch for a repo with no gating CI.
 
 park:                           # overnight park-and-resume on rate-limit
   auto-resume: true             # default: true (wait out the window and resume)
