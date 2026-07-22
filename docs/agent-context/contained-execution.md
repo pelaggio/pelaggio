@@ -1,5 +1,7 @@
 # Contained execution
 
+> **Decision recorded in [ADR-0023](../decisions/0023-contained-execution-boundary.md)** — this doc is the detailed design + how-to; the ADR records the settled *why*.
+
 The execution jail and optional constrained egress broker are implemented for raw `run-contained`.
 The reviewed production policy is Codex key mode: `POST /v1/responses`, model
 `gpt-5.2-codex`, through `https://api.openai.com`. Provider step runners are not yet wired to this

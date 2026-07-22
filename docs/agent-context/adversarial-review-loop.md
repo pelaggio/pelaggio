@@ -1,5 +1,7 @@
 # Adversarial review loop (design)
 
+> **Decision recorded in [ADR-0024](../decisions/0024-adversarial-authoring-review-loop.md)** — this doc is the detailed design + how-to; the ADR records the settled *why*.
+
 (design) Move review **upstream, into the authoring cycle**: an internal multi-driver adversarial
 loop that **resolves** findings as it goes, converges, and ships a PR that is **already reviewed and
 clean**, with the converged review record attached as **provenance**. The human audits an
