@@ -1,3 +1,8 @@
+import { BASELINE_TAXONOMY, DEFAULT_SAFETY_PRECEDENCE, DEFAULT_SAFETY_SINK_CLASS, type FindingClassId, isSafetyClass, isWellFormedClassId, safetyClasses, type TaxonomyConfig } from "./taxonomy.js";
+
+export type { FindingClassId, TaxonomyConfig } from "./taxonomy.js";
+export { isSafetyClass, safetyClasses, tierOf } from "./taxonomy.js";
+
 export type ReviewFindingSeverity = "must-fix" | "nice" | "note";
 
 export interface ReviewFinding {
@@ -13,15 +18,20 @@ export interface ReviewFindingsReport {
 	findings: ReviewFinding[];
 }
 
-/** ADR-0016 machine tokens (no spaces around `/`). Six safety + judgment. */
-export type ReviewFindingClass = "security-and-secrets" | "data-loss/destructive-ops" | "correctness-regression" | "supply-chain/integrity" | "containment-escape" | "irreversible-git/unsafe-landing" | "judgment";
+/**
+ * Well-formed class token (#294: was a closed six-safety + judgment union; now an open, grammar-validated
+ * string whose tier is resolved from the taxonomy at use sites — default safety). The ADR baseline seats
+ * the six safety + named judgment tokens; config may extend the safety floor freely and shrink it only
+ * with an owner signature.
+ */
+export type ReviewFindingClass = FindingClassId;
 
-/** Safety floor in fixed precedence order (all park equally; order is for determinism only). */
-export const SAFETY_CLASSES: readonly ReviewFindingClass[] = ["security-and-secrets", "data-loss/destructive-ops", "supply-chain/integrity", "containment-escape", "irreversible-git/unsafe-landing", "correctness-regression"];
-
-export function isSafetyClass(value: string): value is ReviewFindingClass {
-	return (SAFETY_CLASSES as readonly string[]).includes(value);
-}
+/**
+ * @deprecated Prefer `safetyClasses(taxonomy)`. Kept as the baseline (ADR) safety list in precedence order
+ * so tests and importers that iterate the six baseline tokens keep working; the runtime floor consults the
+ * resolved taxonomy via `isSafetyClass(id, taxonomy)`.
+ */
+export const SAFETY_CLASSES: readonly FindingClassId[] = DEFAULT_SAFETY_PRECEDENCE;
 
 /** Wire evidence (schema v3) — no harness-owned `class` or `fingerprint`. */
 export interface RawAuthoringReviewFinding extends ReviewFinding {
@@ -44,7 +54,7 @@ export type ClassificationResult =
 	  }
 	| {
 			kind: "default-safety";
-			class: "correctness-regression";
+			class: typeof DEFAULT_SAFETY_SINK_CLASS;
 	  };
 
 /** Effective finding after harness classification. */
@@ -170,7 +180,7 @@ export function extractDiffPathSignals(path: string | undefined): DiffPathSignal
 	if (
 		/(?:^|\/)(?:step-runner|secret-hygiene|worktree-deps)\.ts$/.test(p) ||
 		/packages\/pelaggio\/scripts\/pelaggio\/(?:step-runner|helpers|secret-hygiene|codex-provider)\.ts$/.test(p) ||
-		/packages\/pelaggio\/scripts\/pelaggio\/review\/findings\.ts$/.test(p) ||
+		/packages\/pelaggio\/scripts\/pelaggio\/review\/(?:findings|taxonomy)\.ts$/.test(p) ||
 		/(?:write-guard|egress|confinement|sandbox)/i.test(p)
 	) {
 		signals.push("confinement-surface");
@@ -189,7 +199,7 @@ export function extractDiffPathSignals(path: string | undefined): DiffPathSignal
  * → correctness-regression + default-safety. classHint alone never yields judgment or a
  * specific non-default safety class.
  */
-export function classifyAuthoringReviewFinding(raw: RawAuthoringReviewFinding, context: ClassificationContext): ClassificationResult {
+export function classifyAuthoringReviewFinding(raw: RawAuthoringReviewFinding, context: ClassificationContext, taxonomy: TaxonomyConfig = BASELINE_TAXONOMY): ClassificationResult {
 	const matches: Array<{ rule: ClassificationRule; class: ReviewFindingClass }> = [];
 
 	for (const rule of CLASSIFICATION_RULES) {
@@ -204,12 +214,14 @@ export function classifyAuthoringReviewFinding(raw: RawAuthoringReviewFinding, c
 		}
 	}
 
-	const safetyMatches = matches.filter((m) => isSafetyClass(m.class));
-	const judgmentMatches = matches.filter((m) => m.class === "judgment");
+	// Tier is resolved from the taxonomy (safety dominates) — not a hard-coded set, so a signed
+	// contraction / owner extension shifts these buckets without an algorithm change.
+	const safetyMatches = matches.filter((m) => isSafetyClass(m.class, taxonomy));
+	const judgmentMatches = matches.filter((m) => !isSafetyClass(m.class, taxonomy));
 
 	if (safetyMatches.length > 0) {
 		const classes = [...new Set(safetyMatches.map((m) => m.class))];
-		const winner = pickSafetyByPrecedence(classes);
+		const winner = pickSafetyByPrecedence(classes, taxonomy);
 		const winning = safetyMatches.find((m) => m.class === winner) ?? safetyMatches[0];
 		const losers = classes.filter((c) => c !== winner);
 		return {
@@ -221,9 +233,9 @@ export function classifyAuthoringReviewFinding(raw: RawAuthoringReviewFinding, c
 		};
 	}
 
-	if (judgmentMatches.length === 1 || (judgmentMatches.length > 1 && judgmentMatches.every((m) => m.class === "judgment"))) {
-		// Only judgment rules matched. classHint as a safety class elevates (safety dominates).
-		if (raw.classHint !== undefined && isSafetyClass(raw.classHint)) {
+	if (judgmentMatches.length > 0) {
+		// Only judgment-tier rules matched. classHint as a safety class elevates (safety dominates).
+		if (raw.classHint !== undefined && isSafetyClass(raw.classHint, taxonomy)) {
 			return {
 				kind: "matched",
 				class: raw.classHint,
@@ -240,18 +252,23 @@ export function classifyAuthoringReviewFinding(raw: RawAuthoringReviewFinding, c
 	}
 
 	// No unambiguous match (including unknown CWE/ruleId, classHint-only, or empty evidence).
-	return { kind: "default-safety", class: "correctness-regression" };
+	// The sink class is non-contractible (see NON_CONTRACTIBLE_SINK_CLASSES) so this always resolves safety.
+	return { kind: "default-safety", class: DEFAULT_SAFETY_SINK_CLASS };
 }
 
 /** Materialize a raw finding into an effective harness-owned finding. */
-export function materializeAuthoringFinding(raw: RawAuthoringReviewFinding, base: ClassificationContextBase): AuthoringReviewFinding {
+export function materializeAuthoringFinding(raw: RawAuthoringReviewFinding, base: ClassificationContextBase, taxonomy: TaxonomyConfig = BASELINE_TAXONOMY): AuthoringReviewFinding {
 	const fingerprint = reviewFindingFingerprint(raw);
 	const pathSignals = extractDiffPathSignals(raw.path);
-	const classification = classifyAuthoringReviewFinding(raw, {
-		fingerprint,
-		changedFiles: base.changedFiles,
-		pathSignals,
-	});
+	const classification = classifyAuthoringReviewFinding(
+		raw,
+		{
+			fingerprint,
+			changedFiles: base.changedFiles,
+			pathSignals,
+		},
+		taxonomy,
+	);
 	return {
 		severity: raw.severity,
 		message: raw.message,
@@ -265,11 +282,11 @@ export function materializeAuthoringFinding(raw: RawAuthoringReviewFinding, base
 	};
 }
 
-function pickSafetyByPrecedence(classes: readonly ReviewFindingClass[]): ReviewFindingClass {
-	for (const preferred of SAFETY_CLASSES) {
+function pickSafetyByPrecedence(classes: readonly ReviewFindingClass[], taxonomy: TaxonomyConfig = BASELINE_TAXONOMY): ReviewFindingClass {
+	for (const preferred of safetyClasses(taxonomy)) {
 		if (classes.includes(preferred)) return preferred;
 	}
-	return "correctness-regression";
+	return DEFAULT_SAFETY_SINK_CLASS;
 }
 
 /** Apply a complete verifier report to carried blockers. Omission never refutes. */
@@ -320,7 +337,6 @@ const JUDGE_RE = /(?:^|\n)AUTHORING_REVIEW_JUDGE[ \t]*\n([\s\S]*?)\nEND_AUTHORIN
 const SEVERITIES: readonly ReviewFindingSeverity[] = ["must-fix", "nice", "note"];
 const VERIFICATION_DECISIONS: readonly ReviewVerificationDecision[] = ["refuted", "survives"];
 const CANDIDATE_ID_RE = /^C[1-9]\d*$/;
-const FINDING_CLASSES: readonly ReviewFindingClass[] = ["security-and-secrets", "data-loss/destructive-ops", "correctness-regression", "supply-chain/integrity", "containment-escape", "irreversible-git/unsafe-landing", "judgment"];
 const JUDGE_RULINGS: readonly JudgeRuling[] = ["fixable-blocker", "unfixable-blocker", "judgment-dissent"];
 const CWE_RE = /^CWE-\d{1,5}$/i;
 
@@ -384,10 +400,13 @@ function parseRawAuthoringFinding(value: unknown, index: number): RawAuthoringRe
 		raw.cwe = normalized;
 	}
 	if (value.classHint !== undefined) {
-		if (typeof value.classHint !== "string" || !FINDING_CLASSES.includes(value.classHint as ReviewFindingClass)) {
+		// #294: open the wire to any well-formed class id (unknown ids resolve to safety at use sites).
+		// A free-form judgment hint still never yields judgment tier — #293 emission rules require a
+		// positive allowlist match, unchanged.
+		if (typeof value.classHint !== "string" || !isWellFormedClassId(value.classHint)) {
 			throw new ReviewFindingsParseError(`review finding ${index + 1} has an invalid classHint`);
 		}
-		raw.classHint = value.classHint as ReviewFindingClass;
+		raw.classHint = value.classHint;
 	}
 	return raw;
 }
@@ -442,7 +461,7 @@ export function parseJudgeReport(text: string): JudgeReport {
 			assertKeys(value, ["candidateId", "decision", "rationale", "class", "ruling"], ["candidateId", "decision", "rationale"], `Judge decision ${index + 1}`);
 			const { class: _class, ruling: _ruling, ...verification } = value;
 			const base = parseVerificationDecision(verification, index);
-			if (value.class !== undefined && !FINDING_CLASSES.includes(value.class as ReviewFindingClass)) throw new ReviewFindingsParseError(`Judge decision ${index + 1} has an invalid class`);
+			if (value.class !== undefined && (typeof value.class !== "string" || !isWellFormedClassId(value.class))) throw new ReviewFindingsParseError(`Judge decision ${index + 1} has an invalid class`);
 			if (value.ruling !== undefined && !JUDGE_RULINGS.includes(value.ruling as JudgeRuling)) throw new ReviewFindingsParseError(`Judge decision ${index + 1} has an invalid ruling`);
 			if (value.ruling === "judgment-dissent" && value.class !== undefined && value.class !== "judgment") throw new ReviewFindingsParseError("judgment-dissent is only valid for judgment findings");
 			if (base.decision === "survives" && value.ruling === undefined) throw new ReviewFindingsParseError(`surviving Judge decision ${base.candidateId} requires a ruling`);

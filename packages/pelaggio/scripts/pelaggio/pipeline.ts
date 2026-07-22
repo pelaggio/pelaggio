@@ -1183,6 +1183,8 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 						parkSignal,
 						// Plain changed-file list for emission-time classification; path signals are derived pure-side.
 						classificationContext: { changedFiles: gitDiffNameOnly(worktree!) },
+						// Resolved ADR-0016 taxonomy: the deterministic safety floor consulted by the loop.
+						taxonomy: REVIEW_CONFIG.taxonomy,
 						runSeat: async ({ role, slot, pass, prompt, parkSignal: child }) => {
 							const executionOverride = { provider: slot.provider, ...(slot.provider === "codex" ? (slot.codexModel ? { codexModel: slot.codexModel } : {}) : slot.model ? { model: slot.model } : {}) };
 							if (role === "author") {

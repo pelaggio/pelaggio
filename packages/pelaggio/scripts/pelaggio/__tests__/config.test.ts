@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { generateKeyPairSync } from "node:crypto";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { DEFAULTS, loadConfig, resolveDriverCandidates, resolveProviderBin, resolveRepo, resolveStepSettings } from "../config.js";
+import { BASELINE_TAXONOMY_CLASSES, canonicalizeContractionPayload, isSafetyClass, mergeTaxonomyClasses, signContractionPayload } from "../review/taxonomy.js";
 
 function tmpRepo(): string {
 	return mkdtempSync(join(tmpdir(), "pelaggio-config-test-"));
@@ -621,6 +623,8 @@ describe("loadConfig — review", () => {
 		const repo = tmpRepo();
 		const cfg = loadConfig({ repo, configPath: join(repo, ".pelaggio.yml") });
 		assert.deepEqual(cfg.review, DEFAULTS.review);
+		assert.deepEqual(Object.fromEntries(cfg.review.taxonomy.classes), BASELINE_TAXONOMY_CLASSES);
+		assert.equal(cfg.review.taxonomy.judgmentDefault, "permissive");
 	});
 
 	it("parses review.runner: local and review.statusless-after", () => {
@@ -641,6 +645,80 @@ describe("loadConfig — review", () => {
 		const repo = tmpRepo();
 		const path = writeYml(repo, "review:\n  max-passes: 3\n  budget-cap: 40.5\n  provider-diversity: require\n");
 		assert.deepEqual(loadConfig({ repo, configPath: path }).review, { ...DEFAULTS.review, maxPasses: 3, budgetCap: 40.5, providerDiversity: "require" });
+	});
+
+	it("loads free safety extensions and elevations", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "review:\n  taxonomy:\n    judgment-default: park\n    classes:\n      my-extra: safety\n      style: safety\n");
+		const taxonomy = loadConfig({ repo, configPath: path }).review.taxonomy;
+		assert.equal(taxonomy.judgmentDefault, "park");
+		assert.equal(isSafetyClass("my-extra", taxonomy), true);
+		assert.equal(isSafetyClass("style", taxonomy), true);
+	});
+
+	it("rejects a contraction when no owner trust anchor is configured (#352 — env unset)", () => {
+		// With PELAGGIO_TAXONOMY_PUBKEY unset (the default), ANY contraction fails closed on the
+		// missing out-of-band anchor. The anchor lives in the operator's environment, not in the
+		// agent-writable source/config, so a worker cannot seat its own key and self-sign.
+		const prev = process.env.PELAGGIO_TAXONOMY_PUBKEY;
+		delete process.env.PELAGGIO_TAXONOMY_PUBKEY;
+		try {
+			for (const contract of ["", "    contract:\n      signature-b64: ZmFrZQ==\n"]) {
+				const repo = tmpRepo();
+				const path = writeYml(repo, `review:\n  taxonomy:\n    classes:\n      security-and-secrets: judgment\n${contract}`);
+				assert.throws(() => loadConfig({ repo, configPath: path }), /security-and-secrets.*no owner trust anchor/);
+			}
+		} finally {
+			if (prev !== undefined) process.env.PELAGGIO_TAXONOMY_PUBKEY = prev;
+		}
+	});
+
+	it("loads a validly-signed contraction end-to-end through loadConfig when the anchor is set (#352 review)", () => {
+		const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+		const pem = publicKey.export({ type: "spki", format: "pem" }).toString();
+		const privPem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+		// Sign the canonical payload for contracting `security-and-secrets` (a contractible safety class).
+		const payload = canonicalizeContractionPayload(mergeTaxonomyClasses({ classes: { "security-and-secrets": "judgment" } }));
+		const sig = signContractionPayload(payload, privPem);
+		const prev = process.env.PELAGGIO_TAXONOMY_PUBKEY;
+		process.env.PELAGGIO_TAXONOMY_PUBKEY = pem;
+		try {
+			const repo = tmpRepo();
+			const path = writeYml(repo, `review:\n  taxonomy:\n    classes:\n      security-and-secrets: judgment\n    contract:\n      signature-b64: "${sig}"\n`);
+			const taxonomy = loadConfig({ repo, configPath: path }).review.taxonomy;
+			assert.equal(isSafetyClass("security-and-secrets", taxonomy), false);
+		} finally {
+			if (prev === undefined) delete process.env.PELAGGIO_TAXONOMY_PUBKEY;
+			else process.env.PELAGGIO_TAXONOMY_PUBKEY = prev;
+		}
+	});
+
+	it("rejects unsigned or incorrectly signed contractions when the anchor IS set", () => {
+		const { publicKey } = generateKeyPairSync("ed25519");
+		const pem = publicKey.export({ type: "spki", format: "pem" }).toString();
+		const prev = process.env.PELAGGIO_TAXONOMY_PUBKEY;
+		process.env.PELAGGIO_TAXONOMY_PUBKEY = pem;
+		try {
+			for (const contract of ["", "    contract:\n      signature-b64: ZmFrZQ==\n"]) {
+				const repo = tmpRepo();
+				const path = writeYml(repo, `review:\n  taxonomy:\n    classes:\n      security-and-secrets: judgment\n${contract}`);
+				assert.throws(() => loadConfig({ repo, configPath: path }), /security-and-secrets.*(?:unsigned|signature)/);
+			}
+			const repo = tmpRepo();
+			const path = writeYml(repo, "review:\n  taxonomy:\n    classes:\n      my-lint: judgment\n");
+			assert.throws(() => loadConfig({ repo, configPath: path }), /my-lint.*unsigned/);
+		} finally {
+			if (prev === undefined) delete process.env.PELAGGIO_TAXONOMY_PUBKEY;
+			else process.env.PELAGGIO_TAXONOMY_PUBKEY = prev;
+		}
+	});
+
+	it("strictly rejects malformed taxonomy subkeys", () => {
+		for (const body of ["mystery: true", "contract:\n      public-key-pem: nope", "judgment-default: loose", "classes:\n      bad_class: safety"]) {
+			const repo = tmpRepo();
+			const path = writeYml(repo, `review:\n  taxonomy:\n    ${body}\n`);
+			assert.throws(() => loadConfig({ repo, configPath: path }), /taxonomy/);
+		}
 	});
 
 	it("parses the bounded authoring policy and provider-specific models", () => {

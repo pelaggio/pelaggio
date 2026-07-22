@@ -76,6 +76,13 @@ review:                         # PR review poster (issue #84)
       - { id: codex, provider: codex, codex-model: gpt-5-codex }
       - { id: grok, provider: grok }
     judge: { provider: claude, model: claude-opus-4-8 }
+  taxonomy:                     # ADR-0016 safety floor; omit for the built-in owner table
+    owner: operator             # forensic label only; not a cryptographic identity
+    judgment-default: permissive # permissive | park; seeded for the #297 tolerance dial
+    classes:                    # overlay: omitted baseline entries remain in force
+      my-new-risk: safety       # extension/elevation is signature-free
+    # contract:                 # required for any contraction
+    #   signature-b64: "<Ed25519 signature>"
 
 notify:                         # outbound run-outcome webhook (default: disabled)
   url: ""                       # default: "" (disabled). Set a webhook/topic URL to enable.
@@ -643,6 +650,59 @@ models:
 When using local mode, set the repo variable `AUTOPILOT_REVIEW_RUNNER=local` so the
 CI workflow does not run review tooling from the PR branch. The local `gh` auth must
 be able to write commit statuses and PR comments.
+
+## Safety taxonomy
+
+`review.taxonomy` overlays the ADR-0016 class-to-tier table. Class IDs are lowercase kebab-case
+tokens with at most one slash; values are exactly `safety` or `judgment`. Unknown finding classes
+default to `safety`. Adding a safety class, or elevating a baseline judgment class to safety, needs
+no signature. Moving a baseline safety class to judgment or introducing a new judgment class is a
+contraction and fails config loading unless its contract signature verifies.
+
+The verification key is the operator's Ed25519 public-key PEM, supplied out-of-band through the
+`PELAGGIO_TAXONOMY_PUBKEY` environment variable — never through YAML or repo source. This keeps the
+trust anchor outside the agent's write surface: a worker cannot seat its own key and self-sign a
+contraction, because the key it would have to overwrite does not live in any file it can edit. If the
+variable is unset, contractions fail closed with a "no owner trust anchor is configured" error, while
+safety extensions (which need no signature) continue to load. Keep the matching private key outside the
+repository and pipeline, and set `PELAGGIO_TAXONOMY_PUBKEY` in the operator environment that runs
+pelaggio.
+
+Use the operator CLI to inspect and authorize a contraction:
+
+```bash
+npx pelaggio taxonomy canonical --config .pelaggio.yml
+npx pelaggio taxonomy sign --private-key /secure/operator-ed25519.pem --config .pelaggio.yml
+# Paste the emitted signature-b64 under review.taxonomy.contract, then:
+npx pelaggio taxonomy verify --config .pelaggio.yml
+```
+
+The signed bytes are a domain-separated, versioned envelope over the canonical, code-unit-sorted
+contraction set only (`{"domain":"pelaggio.taxonomy.contraction.v1","contractions":[...]}`). Safety
+extensions are excluded, so adding one does not invalidate an existing authorized contraction. The
+domain tag prevents a signature made with the same owner key for another protocol from being replayed
+onto a contraction. The taxonomy parser rejects unknown keys and malformed values rather than silently
+ignoring them.
+
+**The ambiguity sink is non-contractible.** The class the emission classifier assigns to an *ambiguous*
+finding (`correctness-regression`) cannot be contracted even with a valid owner signature — the
+"ambiguous ⇒ safety" rule (ADR-0014) is load-bearing, so demoting the sink would silently gut the floor
+for every unclassified finding. Attempting to contract it fails config loading before the signature is
+even checked.
+
+**Scope of the signed gate.** This gate closes the *config-only* floor shrink. It does **not** close the
+*source-integrity* surface: the classifier, the verifier, the baseline table, and the blocking
+predicates all live in the repo, so a code change to any of them could neutralize the gate. That is out
+of scope by construction — the gate is deterministic only when pelaggio runs from a pinned/installed
+package outside the candidate checkout (its actual execution model; hardened further by the confinement
+work), never from the PR branch under review. Treat the taxonomy code path as a code-review +
+confinement integrity surface.
+
+**Replay residual (documented, intentional).** A signature authorizes that exact contraction set
+indefinitely; there is no nonce or expiry, so an owner-signed demotion can be re-applied later without a
+fresh ritual, and revocation is by key rotation or removing the `contract` block. If the same owner key
+is reused across repositories, a signature valid in one repo verifies in another with the same contracted
+class set — use a distinct anchor key per repo where cross-repo replay matters.
 
 ## Local revise sweep
 

@@ -4,7 +4,6 @@ import type { ParkSignal, ProviderName, StepResult } from "../types.js";
 import {
 	type AuthoringReviewFinding,
 	type ClassificationContextBase,
-	isSafetyClass,
 	type JudgeReport,
 	type JudgeRuling,
 	materializeAuthoringFinding,
@@ -13,8 +12,8 @@ import {
 	type ReviewFindingClass,
 	reviewFindingFingerprint,
 	reviewFindingsGate,
-	SAFETY_CLASSES,
 } from "./findings.js";
+import { BASELINE_TAXONOMY, isSafetyClass, safetyClasses, type TaxonomyConfig } from "./taxonomy.js";
 
 export type ReviewOutcome = "converged-clean" | "converged-with-notes" | "ceiling" | "dissent" | "hard-block" | "budget";
 export type DiversityStatus = { state: "met" } | { state: "softened"; explanation: string };
@@ -72,15 +71,17 @@ export interface ReviewLoopOptions {
 	notificationTarget?: string;
 	/** Diff context for emission-time classification (plain data; no shell). */
 	classificationContext: ClassificationContextBase;
+	/** Resolved safety/judgment taxonomy (baseline ADR table unless the owner extended/contracted it). */
+	taxonomy: TaxonomyConfig;
 }
 
-// classRank: safety > judgment; among safety classes earlier SAFETY_CLASSES entries rank higher.
-const classRank = (value: ReviewFindingClass): number => {
-	if (!isSafetyClass(value)) return 0;
-	const idx = SAFETY_CLASSES.indexOf(value);
-	return idx >= 0 ? SAFETY_CLASSES.length - idx : 1;
+// classRank: safety > judgment; among safety classes earlier taxonomy precedence entries rank higher.
+const classRank = (value: ReviewFindingClass, taxonomy: TaxonomyConfig): number => {
+	const order = safetyClasses(taxonomy);
+	const idx = order.indexOf(value);
+	return idx >= 0 ? order.length - idx : isSafetyClass(value, taxonomy) ? 1 : 0;
 };
-const blockingRank = (finding: AuthoringReviewFinding): number => (finding.severity === "must-fix" ? 2 * (SAFETY_CLASSES.length + 1) : 0) + classRank(finding.class);
+const blockingRank = (finding: AuthoringReviewFinding, taxonomy: TaxonomyConfig): number => (finding.severity === "must-fix" ? 2 * (safetyClasses(taxonomy).length + 1) : 0) + classRank(finding.class, taxonomy);
 const identity = (role: DriverIdentity["role"], slot: ReviewSlot, pass: number): DriverIdentity => ({
 	role,
 	seatId: slot.id,
@@ -90,7 +91,7 @@ const identity = (role: DriverIdentity["role"], slot: ReviewSlot, pass: number):
 });
 const childSignal = (): ParkSignal => ({ parked: false, resetsAt: 0, limitType: "", triggerWorker: "" });
 
-export function classifyReviewDisagreement(pass: number, records: ReviewPassRecord["reviewers"], candidates: readonly ReviewCandidate[]): ReviewDisagreement | undefined {
+export function classifyReviewDisagreement(pass: number, records: ReviewPassRecord["reviewers"], candidates: readonly ReviewCandidate[], taxonomy: TaxonomyConfig = BASELINE_TAXONOMY): ReviewDisagreement | undefined {
 	const drivers = records
 		.filter((record): record is typeof record & { verdict: DriverReviewVerdict } => record.ok && record.verdict !== undefined)
 		.map((record) => ({ identity: record.identity, ...record.verdict }))
@@ -100,12 +101,12 @@ export function classifyReviewDisagreement(pass: number, records: ReviewPassReco
 	return {
 		pass,
 		drivers,
-		hasSafetyBlocker: candidates.some((candidate) => candidate.finding.severity === "must-fix" && isSafetyClass(candidate.finding.class)),
+		hasSafetyBlocker: candidates.some((candidate) => candidate.finding.severity === "must-fix" && isSafetyClass(candidate.finding.class, taxonomy)),
 		evidenceFingerprint: createHash("sha256").update(JSON.stringify(normalized)).digest("hex"),
 	};
 }
 
-export function deduplicateCandidates(findings: readonly { finding: AuthoringReviewFinding; source: string }[]): ReviewCandidate[] {
+export function deduplicateCandidates(findings: readonly { finding: AuthoringReviewFinding; source: string }[], taxonomy: TaxonomyConfig = BASELINE_TAXONOMY): ReviewCandidate[] {
 	const byFingerprint = new Map<string, ReviewCandidate>();
 	for (const item of findings) {
 		const fingerprint = reviewFindingFingerprint(item.finding);
@@ -116,14 +117,21 @@ export function deduplicateCandidates(findings: readonly { finding: AuthoringRev
 			// Keep the most-blocking finding: must-fix severity dominates class rank, so a same-fingerprint
 			// note/nice can never downgrade (and drop) a carried must-fix blocker. Winner keeps its
 			// classification reason intact.
-			if (blockingRank(item.finding) > blockingRank(current.finding)) current.finding = item.finding;
+			if (blockingRank(item.finding, taxonomy) > blockingRank(current.finding, taxonomy)) current.finding = item.finding;
 		}
 	}
 	return [...byFingerprint.values()].sort((a, b) => a.fingerprint.localeCompare(b.fingerprint)).map((candidate, index) => ({ ...candidate, candidateId: `C${index + 1}` }));
 }
 
-export function classifyReviewOutcome(survivors: readonly ReviewCandidate[], notes: readonly ReviewCandidate[], rulings: ReadonlyMap<string, JudgeRuling>, judgeValid: boolean, pass: number): ReviewOutcome {
-	if (!judgeValid || survivors.some((candidate) => isSafetyClass(candidate.finding.class) || rulings.get(candidate.candidateId) === "unfixable-blocker")) return "hard-block";
+export function classifyReviewOutcome(
+	survivors: readonly ReviewCandidate[],
+	notes: readonly ReviewCandidate[],
+	rulings: ReadonlyMap<string, JudgeRuling>,
+	judgeValid: boolean,
+	pass: number,
+	taxonomy: TaxonomyConfig = BASELINE_TAXONOMY,
+): ReviewOutcome {
+	if (!judgeValid || survivors.some((candidate) => isSafetyClass(candidate.finding.class, taxonomy) || rulings.get(candidate.candidateId) === "unfixable-blocker")) return "hard-block";
 	if (survivors.some((candidate) => rulings.get(candidate.candidateId) === "judgment-dissent")) return "dissent";
 	if (survivors.length > 0) return "hard-block";
 	if (notes.length === 0) return "converged-clean";
@@ -131,7 +139,7 @@ export function classifyReviewOutcome(survivors: readonly ReviewCandidate[], not
 }
 
 export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewLoopResult> {
-	const { policy, classificationContext } = options;
+	const { policy, classificationContext, taxonomy } = options;
 	const configuredReviewers = policy.reviewers.filter((slot) => slot.provider !== options.author.provider);
 	let cost = 0;
 	let carried: ReviewCandidate[] = [];
@@ -167,7 +175,7 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 				// since an incomplete seat has no trustworthy overall verdict for disagreement.
 				// Classify at the emission boundary before dedup/ingestion (#293).
 				for (const raw of report.findings) {
-					discovered.push({ finding: materializeAuthoringFinding(raw, classificationContext), source: slot.id });
+					discovered.push({ finding: materializeAuthoringFinding(raw, classificationContext, taxonomy), source: slot.id });
 				}
 				reviewerRecords.push({
 					identity: identity("reviewer", slot, pass),
@@ -196,8 +204,8 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 			});
 			return { outcome: options.parkSignal.parked ? "budget" : "hard-block", diversity, passes, survivors: carried, notes, cost };
 		}
-		const candidates = deduplicateCandidates(discovered);
-		const disagreement = classifyReviewDisagreement(pass, reviewerRecords, candidates);
+		const candidates = deduplicateCandidates(discovered, taxonomy);
+		const disagreement = classifyReviewDisagreement(pass, reviewerRecords, candidates, taxonomy);
 		if (disagreement) {
 			passes.push({
 				pass,
@@ -244,7 +252,7 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 					// echo the Judge shouldn't have to restate. #272: but the Judge must not DOWNGRADE a
 					// harness safety-class candidate to a non-safety class (a reclassify-to-ship evasion);
 					// restating the same class or elevating a non-safety candidate stays allowed.
-					return decision.class !== undefined && isSafetyClass(candidate.finding.class) && !isSafetyClass(decision.class);
+					return decision.class !== undefined && isSafetyClass(candidate.finding.class, taxonomy) && !isSafetyClass(decision.class, taxonomy);
 				})
 			)
 				throw new Error("Judge decisions are incomplete, duplicated, downgrade a safety class, or contain unknown candidates");
@@ -265,7 +273,7 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 					// it is retained every pass (carried is re-seeded above, so reviewer omission can't drop it
 					// either) and the run parks for a human — a lone Judge's `refuted`/reclassify decision never
 					// clears it; the loop does not self-clear a safety must-fix.
-					if (candidate.finding.severity === "must-fix" && isSafetyClass(candidate.finding.class)) return true;
+					if (candidate.finding.severity === "must-fix" && isSafetyClass(candidate.finding.class, taxonomy)) return true;
 					return decision.decision === "survives";
 				})
 			: candidates;
@@ -278,7 +286,7 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 			carriedBefore: discovered.filter((item) => item.source === "carried").map((item) => reviewFindingFingerprint(item.finding)),
 			carriedAfter: carried.map((item) => item.fingerprint),
 		});
-		const outcome = classifyReviewOutcome(carried, notes, rulings, Boolean(report), pass);
+		const outcome = classifyReviewOutcome(carried, notes, rulings, Boolean(report), pass, taxonomy);
 		// Escalate-early: revise->re-review only when the carried set can actually converge — i.e. EVERY
 		// surviving must-fix is fixable-by-the-loop. A survivor is unclearable when it is safety-class
 		// (retained every pass by #272, a lone Judge can never clear it) or the Judge ruled it
@@ -286,7 +294,7 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 		// fixable ones the author clears — so a mixed fixable+unclearable set must NOT keep iterating; raise
 		// to a human now instead of burning revision passes. Also stop once the configured `maxRevisions`
 		// budget is spent (0 → no author revision at all). (Cross-model disagreement already returns above.)
-		const hasUnclearableSurvivor = carried.some((candidate) => SAFETY_CLASSES.includes(candidate.finding.class) || rulings.get(candidate.candidateId) === "unfixable-blocker");
+		const hasUnclearableSurvivor = carried.some((candidate) => isSafetyClass(candidate.finding.class, taxonomy) || rulings.get(candidate.candidateId) === "unfixable-blocker");
 		if (outcome !== "hard-block" || pass === policy.maxPasses || !report || hasUnclearableSurvivor || revisionsUsed >= policy.maxRevisions) {
 			const dissentCandidate = carried.find((candidate) => rulings.get(candidate.candidateId) === "judgment-dissent");
 			return {
