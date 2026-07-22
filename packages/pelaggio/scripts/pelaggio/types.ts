@@ -197,6 +197,10 @@ export interface CycleResult {
 	costEstimated?: boolean;
 	verdict?: string;
 	error?: string;
+	/** Display-only legible one-liner for a failure: the machine `error` plus the failing step's
+	 *  subtype + bounded output tail. `error` stays the classification string (RECOVERABLE_ERRORS,
+	 *  "parked", "aborted"); `detail` is what the console prints so a failure explains itself (#268). */
+	detail?: string;
 	awaitingMerge?: boolean;
 	prUrl?: string;
 	/** Set when the cycle routed through `/shipwreck` recovery (whether or not it recovered).

@@ -174,13 +174,28 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 					ok: result.value.ok,
 					cost: result.value.cost,
 					turns: result.value.turns,
-					...(result.value.ok ? { verdict: { verdict: reviewFindingsGate(report), rationale: report.summary } } : {}),
+					// A parseable but non-ok seat (max-turns / provider-reported failure) has no trustworthy
+					// verdict — record WHY (subtype + turns) so it isn't a reasonless `ok:false` (#268 legibility).
+					...(result.value.ok ? { verdict: { verdict: reviewFindingsGate(report), rationale: report.summary } } : { diagnostic: `seat did not complete: ${result.value.subtype} (${result.value.turns} turns)` }),
 				});
 			} catch (error) {
 				reviewerRecords.push({ identity: identity("reviewer", slot, pass), ok: false, cost: result.value.cost, turns: result.value.turns, diagnostic: error instanceof Error ? error.message : String(error) });
 			}
 		});
-		if (!reviewerRecords.some((record) => record.ok)) return { outcome: options.parkSignal.parked ? "budget" : "hard-block", diversity, passes, survivors: carried, notes, cost };
+		if (!reviewerRecords.some((record) => record.ok)) {
+			// No reviewer seat completed. Persist the pass so each seat's `diagnostic` (WHY it failed —
+			// parse error, provider crash, max-turns) survives in the review record, instead of returning
+			// `passes:[]` with no reason (the #268/#269 diagnosis black hole). Judge is skipped; carried
+			// must-fixes pass through unchanged.
+			passes.push({
+				pass,
+				reviewers: reviewerRecords,
+				judge: { identity: identity("judge", policy.judge, pass), valid: false, cost: 0, turns: 0, diagnostic: "skipped: no reviewer seat completed" },
+				carriedBefore: discovered.filter((item) => item.source === "carried").map((item) => reviewFindingFingerprint(item.finding)),
+				carriedAfter: carried.filter((candidate) => candidate.finding.severity === "must-fix").map((candidate) => candidate.fingerprint),
+			});
+			return { outcome: options.parkSignal.parked ? "budget" : "hard-block", diversity, passes, survivors: carried, notes, cost };
+		}
 		const candidates = deduplicateCandidates(discovered);
 		const disagreement = classifyReviewDisagreement(pass, reviewerRecords, candidates);
 		if (disagreement) {
