@@ -151,6 +151,57 @@ describe("runPipeline — pick divergence gate (#332)", () => {
 	});
 });
 
+describe("runPipeline — plan-time decomposition (#294 follow-up)", () => {
+	it("creates deferred-items the plan emits, before implement", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const created: Array<{ title: string; deps: string }> = [];
+		const { runStep } = createMockRunStep(
+			{
+				plan: {
+					ok: true,
+					text: 'Scoped to slice A.\ndeferred-item: {"title": "slice B: second capability", "scope": "M", "deps": ["TOOL-99"]}\ndeferred-item: {"title": "slice C: cleanup"}',
+				},
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				ship: {
+					ok: true,
+					text: "ship-merged: TOOL-99",
+					sideEffect: (cwd) => {
+						execSync("git checkout -q main", { cwd });
+						execSync("git merge -q --no-ff feat/tool-99", { cwd });
+						execSync("git checkout -q feat/tool-99", { cwd });
+					},
+				},
+			},
+			parkSignal,
+		);
+		const roadmap = makeMockRoadmap({
+			async createItem(o) {
+				created.push({ title: o.title, deps: (o.deps ?? []).join(", ") });
+				return { id: `MOCK-${created.length}`, title: o.title, deps: (o.deps ?? []).join(", "), sourceRef: "mock" };
+			},
+		});
+		await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
+			runStep,
+			mainRepo: worktree,
+			listWorktrees: () => [],
+			appendLog: () => {},
+			roadmap,
+			runShipBookkeeping: noopBookkeeping,
+		});
+		assert.deepEqual(
+			created.map((c) => c.title),
+			["slice B: second capability", "slice C: cleanup"],
+			"plan-emitted deferred slices become follow-up items",
+		);
+		// The parent-dep (JSON array form) must survive to the created item — decomposition's whole point
+		// is that follow-up slices are blocked on the parent, not immediately pickable. (#353 review)
+		assert.equal(created[0].deps, "TOOL-99", "deps array is preserved (not silently dropped)");
+	});
+});
+
 describe("runPipeline — happy path", () => {
 	it("runs plan → shakedown-plan → implement → shakedown-code → ship with APPROVE verdict", async () => {
 		const worktree = makeTempGitRepo();

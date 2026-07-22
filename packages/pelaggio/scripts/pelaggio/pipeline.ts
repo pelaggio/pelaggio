@@ -920,6 +920,9 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 
 	let verdict: "APPROVE" | "REVISE" | "RETHINK" = "APPROVE";
 	let shakedownPlanText = "";
+	// Shared across the plan-time and shakedown-code deferred-item parses so a marker echoed in both
+	// (createItem is not idempotent) creates the follow-up only once. (#353 review)
+	const deferredItemTitles = new Set<string>();
 
 	if (!assignment.authors.plan && shouldRun("shakedown-plan") && !shouldRun("plan")) {
 		reconstructAuthor("plan", "plan");
@@ -950,6 +953,22 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			});
 			if (outcome.kind === "terminal") return outcome.cycleResult;
 			recordArtifactAuthor(assignment, "plan", planAuthor);
+
+			// Plan-time decomposition: a plan that judges the item too large for one cycle emits
+			// `deferred-item: {json}` markers for the slices it splits off, and scopes THIS cycle to a
+			// coherent first slice instead of starving at the implement turn wall. Decomposition is the
+			// preferred path for large items; the raised implement turn ceiling is the escape hatch for
+			// changes that don't decompose cleanly. Best-effort, mirrors the shakedown-code deferral (#115).
+			if (!opts.dryRun) {
+				for (const d of parseDeferredItems(outcome.result.fullText, deferredItemTitles)) {
+					try {
+						const created = await roadmap.createItem(d);
+						log(`plan deferred → ${created.id}: ${d.title}`);
+					} catch (e) {
+						log(`deferred-item create failed (non-fatal): ${e instanceof Error ? e.message : String(e)}`);
+					}
+				}
+			}
 		}
 		const planPath = await roadmap.getItemPlan({ worktree: worktree! });
 		if (planPath) log(`plan: file://${planPath}`);
@@ -1288,7 +1307,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		// provider can't). Create them in-process, best-effort — a failure logs and continues (they're
 		// backlog niceties, not the cycle's deliverable). Skipped in dry-run (no real backlog writes).
 		if (!opts.dryRun) {
-			for (const d of parseDeferredItems(shakedownResult.fullText)) {
+			for (const d of parseDeferredItems(shakedownResult.fullText, deferredItemTitles)) {
 				try {
 					const created = await roadmap.createItem(d);
 					log(`deferred → ${created.id}: ${d.title}`);

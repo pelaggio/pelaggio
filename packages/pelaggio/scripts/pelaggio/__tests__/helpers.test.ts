@@ -654,6 +654,26 @@ describe("parseDeferredItems (#115)", () => {
 		assert.equal(items.length, 1, "case-insensitive title dedup keeps the first");
 		assert.equal(items[0].title, "Add retries");
 	});
+
+	it("accepts deps as a JSON array (not just a CSV string) (#353)", () => {
+		const arr = parseDeferredItems('deferred-item: {"title": "Slice B", "deps": ["TOOL-99", " TOOL-100 ", ""]}');
+		assert.deepEqual(arr, [{ title: "Slice B", deps: ["TOOL-99", "TOOL-100"], deferred: true }]);
+		const csv = parseDeferredItems('deferred-item: {"title": "Slice C", "deps": "A, B"}');
+		assert.deepEqual(csv[0].deps, ["A", "B"]);
+	});
+
+	it("dedups across call sites via a shared seen set (plan + shakedown both parse) (#353)", () => {
+		const seen = new Set<string>();
+		const plan = parseDeferredItems('deferred-item: {"title": "Shared slice", "scope": "M"}', seen);
+		assert.equal(plan.length, 1, "first (plan) parse creates it");
+		// The same marker echoed in the shakedown text must NOT create a second item.
+		const shakedown = parseDeferredItems('deferred-item: {"title": "shared slice"}\ndeferred-item: {"title": "New one"}', seen);
+		assert.deepEqual(
+			shakedown.map((i) => i.title),
+			["New one"],
+			"already-seen title is skipped; only the genuinely-new one is created",
+		);
+	});
 });
 
 describe("fmtWait", () => {
@@ -1110,24 +1130,24 @@ describe("computeImplementTurns", () => {
 		assert.equal(computeImplementTurns("# Plan with no paths\nJust prose.\n", 200), 200);
 	});
 
-	it("clamps small file counts up to 100", () => {
+	it("clamps small file counts up to the 150 floor", () => {
 		const body = ["## Files", "", "| Path | Change |", "|---|---|", "| `a.ts` | x |"].join("\n");
-		// 2*1 + 60 = 62 → clamped to 100
-		assert.equal(computeImplementTurns(body, 200), 100);
+		// 2*1 + 100 = 102 → clamped to 150 floor
+		assert.equal(computeImplementTurns(body, 200), 150);
 	});
 
 	it("scales linearly in the middle band", () => {
-		const rows = Array.from({ length: 30 }, (_, i) => `| \`file${i}.ts\` | x |`).join("\n");
+		const rows = Array.from({ length: 40 }, (_, i) => `| \`file${i}.ts\` | x |`).join("\n");
 		const body = ["## Files", "", "| Path | Change |", "|---|---|", rows].join("\n");
-		// 2*30 + 60 = 120
-		assert.equal(computeImplementTurns(body, 200), 120);
+		// 2*40 + 100 = 180
+		assert.equal(computeImplementTurns(body, 200), 180);
 	});
 
-	it("clamps large file counts to 250", () => {
+	it("clamps large file counts to the 400 ceiling (escape hatch for atomic large work)", () => {
 		const rows = Array.from({ length: 150 }, (_, i) => `| \`file${i}.ts\` | x |`).join("\n");
 		const body = ["## Files", "", "| Path | Change |", "|---|---|", rows].join("\n");
-		// 2*150 + 60 = 360 → clamped to 250
-		assert.equal(computeImplementTurns(body, 200), 250);
+		// 2*150 + 100 = 400 → at the ceiling
+		assert.equal(computeImplementTurns(body, 200), 400);
 	});
 });
 
