@@ -6,6 +6,14 @@ Status values are `default-taken`, `resolved`, or `resolved→ADR-nnnn`. Source 
 
 | Decision | Status | Chosen/leaning | Alternatives | Source | Date |
 | --- | --- | --- | --- | --- | --- |
+| compatibility for inline `prBody` decisions | default-taken | remove the fallback and require `prBodyFile` for PR targets | retain a version/config-gated legacy inline-body path | https://github.com/pelaggio/pelaggio/issues/303 | 2026-07-22 |
+<!-- decision:060d26092f140890 -->
+| retry boundary for ship manifest failures | default-taken | tag the effects failure phase and retry only `invalid_manifest` raised while resolving the dynamic ship decision, before manifest write/dispatch | route ship through the generic authoring retry wrapper; retry every `error_effects_manifest`; add a bespoke parser outside `step()` | https://github.com/pelaggio/pelaggio/issues/303 | 2026-07-22 |
+<!-- decision:99379961dc73315a -->
+| body-file location and cleanup | default-taken | keep the fixed harness-owned relative path and delete only after successful dispatch | accept arbitrary worktree-relative paths; delete immediately after parsing; retain on success until worktree teardown | https://github.com/pelaggio/pelaggio/issues/303 | 2026-07-22 |
+<!-- decision:ba532952a6aa8740 -->
+| dollar gate on the decision-resolution retry | default-taken | attempt-cap only (no `canRetryWithinBudget`) | require a full ship step budget remaining before attempt 2 | https://github.com/pelaggio/pelaggio/issues/303 | 2026-07-22 |
+<!-- decision:3bdfb72777cd1f55 -->
 | compatibility for inline `prBody` decisions | default-taken | remove the fallback and require `prBodyFile` | retain a version/config-gated legacy path | https://github.com/pelaggio/pelaggio/issues/303 | 2026-07-22 |
 <!-- decision:a84a8a816cfdab8e -->
 | retry boundary for ship manifest failures | default-taken | tag the effects failure phase and retry only `invalid_manifest` raised while resolving the dynamic decision, before manifest write/dispatch | use the generic authoring retry wrapper; retry every manifest failure; parse outside `step()` | https://github.com/pelaggio/pelaggio/issues/303 | 2026-07-22 |
