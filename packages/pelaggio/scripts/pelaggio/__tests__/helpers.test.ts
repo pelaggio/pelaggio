@@ -322,6 +322,17 @@ describe("pickDivergedFromPin (#332)", () => {
 		assert.equal(await pickDivergedFromPin("TOOL-16", "TOOL-16", mdParse), false);
 		assert.equal(await pickDivergedFromPin("TOOL-16", "TOOL-17", mdParse), true);
 	});
+
+	it("does not falsely diverge on a mixed-case markdown pin (getItem is case-insensitive)", async () => {
+		// The markdown parser only recognizes UPPERCASE ids → a lowercase pin falls back to its raw
+		// string ("tool-16") while the resolved canonical id is "TOOL-16". Case-insensitive compare
+		// keeps them equal (they are the same item). (codex #344 review)
+		const mdParse = async (t: string): Promise<string | null> => (/^[A-Z]+-?\d[\dA-Z-]*$/.test(t) ? t : null);
+		assert.equal(await pickDivergedFromPin("tool-16", "TOOL-16", mdParse), false);
+		assert.equal(await pickDivergedFromPin("Tool-16", "TOOL-16", mdParse), false);
+		// A genuinely different item still diverges regardless of case.
+		assert.equal(await pickDivergedFromPin("tool-16", "TOOL-17", mdParse), true);
+	});
 });
 
 describe("parseWaitFlag", () => {
@@ -886,6 +897,11 @@ describe("parsePickItem", () => {
 
 	it("parses a nested/hierarchical ID", () => {
 		assert.equal(parsePickItem("pick-item: COMP-11C-II"), "COMP-11C-II");
+	});
+
+	it("parses a bare-numeric github issue ID — the authoritative marker must win over free text (#332)", () => {
+		assert.equal(parsePickItem("Requested issue 286.\npick-item: 337\npick-result: claimed"), "337");
+		assert.equal(parsePickItem("pick-item: 286"), "286");
 	});
 
 	it("returns null when absent", () => {
