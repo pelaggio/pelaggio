@@ -17,6 +17,7 @@ import {
 	createMainCheckoutDeltaObserver,
 	diffForbiddenRootSnapshots,
 	ensureMainCheckoutOnBranch,
+	expandPackagedSkill,
 	expandSkill,
 	FORBIDDEN_ROOT_GONE,
 	FORBIDDEN_ROOT_SNAPSHOT_ATTEMPTS,
@@ -704,6 +705,14 @@ describe("buildReviewDiffBlock (authoring-loop reviewer diff injection)", () => 
 		assert.match(body, /read each changed file in\s+full/);
 		assert.match(body, /pnpm check/);
 		assert.match(body, /do not emit findings|keep working/i);
+	});
+
+	it("loads merge-gate protocols from the packaged skill tree", () => {
+		const review = expandPackagedSkill("pr-review", "--pr 286");
+		const verify = expandPackagedSkill("pr-verify");
+		assert.match(review, /REVIEW_FINDINGS/);
+		assert.match(review, /Arguments: --pr 286$/);
+		assert.match(verify, /REVIEW_VERIFICATION/);
 	});
 });
 
