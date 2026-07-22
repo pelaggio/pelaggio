@@ -1350,43 +1350,53 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		// resume/re-run the model must write a FRESH body this run. Without this, `parseShipDecisionEffect`
 		// only checks the file exists — so a resumed cycle could open/update a PR with the stale body
 		// from the failed run. Removing it first makes the transport fail closed: no fresh write → parse
-		// fails (file missing). Within-run retry (attempt 2) still overwrites as needed. (#303 review)
-		if (!opts.dryRun) {
+		// fails (file missing). Within-run retry (attempt 2) still overwrites as needed.
+		// FAIL CLOSED if the stale file cannot actually be removed (e.g. unlink EPERM): a body we
+		// can't clear would be silently reused, so refuse the ship rather than proceed. (#303 review)
+		const staleBody = resolve(worktree!, shipBodyFile(itemId!));
+		if (!opts.dryRun && existsSync(staleBody)) {
 			try {
 				cleanupShipBodyFile(worktree!, itemId!);
-			} catch (e) {
-				log(`⚠ pre-ship body cleanup failed: ${e instanceof Error ? e.message : String(e)}`);
+			} catch {
+				// The existence recheck below is the fail-closed gate — a swallowed unlink error
+				// still leaves the file present and is caught there.
 			}
 		}
-		// Attempt-cap only (no budget gate) — one acceptance-required recovery for a
-		// malformed decision / missing body file before any manifest is written.
-		ship = await step("ship", shipPrompt, worktree!, { attempt: 1, effects: shipEffects });
-		cost += ship.cost;
-		const canRetryShip = !ship.ok && ship.subtype === "error_effects_manifest" && ship.effectsError?.code === "invalid_manifest" && ship.effectsError?.phase === "resolve";
-		if (canRetryShip) {
-			const parkedBeforeRetry = parkExit();
-			if (parkedBeforeRetry) return parkedBeforeRetry;
-			const prior = ship.effectsError!;
-			const retryPrompt = [
-				`Previous ship decision failed (${prior.code}: ${prior.message}).`,
-				`Write the PR body (markdown, ≤512 KiB) to exactly \`${shipBodyFile(itemId!)}\` inside the worktree`,
-				"(overwrite if present; plain file at that exact path, not a symlink).",
-				"Re-emit exactly one SHIP_DECISION block with short scalar JSON fields only — use prBodyFile,",
-				"never an inline prBody.",
-				"",
-				shipPrompt,
-			].join("\n");
-			log("ship decision invalid — retrying once...");
-			ship = await step("ship", retryPrompt, worktree!, { attempt: 2, effects: shipEffects });
+		const staleBlock = !opts.dryRun && existsSync(staleBody) ? `stale ship body file could not be cleared before attempt 1: ${shipBodyFile(itemId!)}` : undefined;
+		if (staleBlock) {
+			log(`⚠ ${staleBlock} — refusing to ship`);
+			ship = { ok: false, subtype: "error_effects_manifest", text: staleBlock, fullText: staleBlock, cost: 0, turns: 0, outputTail: staleBlock.slice(0, 200), effectsError: { code: "invalid_manifest", message: staleBlock, phase: "resolve" } };
+		} else {
+			// Attempt-cap only (no budget gate) — one acceptance-required recovery for a
+			// malformed decision / missing body file before any manifest is written.
+			ship = await step("ship", shipPrompt, worktree!, { attempt: 1, effects: shipEffects });
 			cost += ship.cost;
-		}
-		// Scratch lifecycle: delete the body file only after a successful PR dispatch.
-		// Retain it on terminal failure for diagnosis / second-attempt input.
-		if (ship.ok && !opts.dryRun) {
-			try {
-				cleanupShipBodyFile(worktree!, itemId!);
-			} catch (e) {
-				log(`⚠ ship body cleanup failed: ${e instanceof Error ? e.message : String(e)}`);
+			const canRetryShip = !ship.ok && ship.subtype === "error_effects_manifest" && ship.effectsError?.code === "invalid_manifest" && ship.effectsError?.phase === "resolve";
+			if (canRetryShip) {
+				const parkedBeforeRetry = parkExit();
+				if (parkedBeforeRetry) return parkedBeforeRetry;
+				const prior = ship.effectsError!;
+				const retryPrompt = [
+					`Previous ship decision failed (${prior.code}: ${prior.message}).`,
+					`Write the PR body (markdown, ≤512 KiB) to exactly \`${shipBodyFile(itemId!)}\` inside the worktree`,
+					"(overwrite if present; plain file at that exact path, not a symlink).",
+					"Re-emit exactly one SHIP_DECISION block with short scalar JSON fields only — use prBodyFile,",
+					"never an inline prBody.",
+					"",
+					shipPrompt,
+				].join("\n");
+				log("ship decision invalid — retrying once...");
+				ship = await step("ship", retryPrompt, worktree!, { attempt: 2, effects: shipEffects });
+				cost += ship.cost;
+			}
+			// Scratch lifecycle: delete the body file only after a successful PR dispatch.
+			// Retain it on terminal failure for diagnosis / second-attempt input.
+			if (ship.ok && !opts.dryRun) {
+				try {
+					cleanupShipBodyFile(worktree!, itemId!);
+				} catch (e) {
+					log(`⚠ ship body cleanup failed: ${e instanceof Error ? e.message : String(e)}`);
+				}
 			}
 		}
 	}

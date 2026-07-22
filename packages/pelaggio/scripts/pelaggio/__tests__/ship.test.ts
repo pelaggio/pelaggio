@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -737,6 +737,43 @@ describe("runPipeline — ship target dispatch", () => {
 		assert.equal(result.completed, false, "must not complete a ship that would reuse a stale body");
 		assert.equal(shipDispatchCount, 0, "no PR dispatched from a stale body file");
 		assert.equal(existsSync(bodyPath), false, "stale body file was cleared before attempt 1 and never rewritten");
+	});
+
+	it("pull-request: fails closed if a stale body file cannot be cleared before attempt 1 — no ship attempt, no dispatch (#303 review)", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const bodyPath = join(worktree, shipBodyFile("TOOL-99"));
+		mkdirSync(dirname(bodyPath), { recursive: true });
+		// A symlink at the body path persists through cleanupShipBodyFile (which no-ops on symlinks),
+		// simulating a stale body that cannot be removed (e.g. unlink EPERM). The fail-closed gate must
+		// refuse the ship BEFORE attempt 1 rather than let the stale body be read and dispatched.
+		const target = join(worktree, "real-body.md");
+		writeFileSync(target, "stale content reachable via symlink");
+		symlinkSync(target, bodyPath);
+		let shipDispatchCount = 0;
+		const decision = { ok: true, text: `SHIP_DECISION\n{"target":"pull-request","headBranch":"feat/tool-99","prTitle":"Ship TOOL-99","prBodyFile":"${shipBodyFile("TOOL-99")}"}\nEND_SHIP_DECISION` };
+		const { runStep, calls } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				ship: [decision, decision],
+			},
+			parkSignal,
+		);
+		const result = await runPipeline(baseOpts(worktree, "pull-request"), parkSignal, baseFlags, {
+			runStep,
+			listWorktrees: () => [],
+			appendLog: () => {},
+			dispatchStepEffects: async (ctx) => {
+				if (ctx.step === "ship") shipDispatchCount += 1;
+				return {};
+			},
+		});
+		assert.equal(result.completed, false, "must refuse to ship when the stale body cannot be cleared");
+		assert.equal(calls.filter((c) => c.step === "ship").length, 0, "ship step must not run — fail closed before attempt 1");
+		assert.equal(shipDispatchCount, 0, "no dispatch");
 	});
 
 	it("pull-request: provenance_mismatch and dispatch failures are not retried", async () => {
