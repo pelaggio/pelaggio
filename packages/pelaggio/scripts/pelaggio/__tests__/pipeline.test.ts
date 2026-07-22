@@ -155,7 +155,7 @@ describe("runPipeline — plan-time decomposition (#294 follow-up)", () => {
 	it("creates deferred-items the plan emits, before implement", async () => {
 		const worktree = makeTempGitRepo();
 		const parkSignal = makeParkSignal();
-		const created: string[] = [];
+		const created: Array<{ title: string; deps: string }> = [];
 		const { runStep } = createMockRunStep(
 			{
 				plan: {
@@ -179,7 +179,7 @@ describe("runPipeline — plan-time decomposition (#294 follow-up)", () => {
 		);
 		const roadmap = makeMockRoadmap({
 			async createItem(o) {
-				created.push(o.title);
+				created.push({ title: o.title, deps: (o.deps ?? []).join(", ") });
 				return { id: `MOCK-${created.length}`, title: o.title, deps: (o.deps ?? []).join(", "), sourceRef: "mock" };
 			},
 		});
@@ -191,7 +191,14 @@ describe("runPipeline — plan-time decomposition (#294 follow-up)", () => {
 			roadmap,
 			runShipBookkeeping: noopBookkeeping,
 		});
-		assert.deepEqual(created, ["slice B: second capability", "slice C: cleanup"], "plan-emitted deferred slices become follow-up items");
+		assert.deepEqual(
+			created.map((c) => c.title),
+			["slice B: second capability", "slice C: cleanup"],
+			"plan-emitted deferred slices become follow-up items",
+		);
+		// The parent-dep (JSON array form) must survive to the created item — decomposition's whole point
+		// is that follow-up slices are blocked on the parent, not immediately pickable. (#353 review)
+		assert.equal(created[0].deps, "TOOL-99", "deps array is preserved (not silently dropped)");
 	});
 });
 

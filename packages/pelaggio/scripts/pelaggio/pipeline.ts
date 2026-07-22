@@ -920,6 +920,9 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 
 	let verdict: "APPROVE" | "REVISE" | "RETHINK" = "APPROVE";
 	let shakedownPlanText = "";
+	// Shared across the plan-time and shakedown-code deferred-item parses so a marker echoed in both
+	// (createItem is not idempotent) creates the follow-up only once. (#353 review)
+	const deferredItemTitles = new Set<string>();
 
 	if (!assignment.authors.plan && shouldRun("shakedown-plan") && !shouldRun("plan")) {
 		reconstructAuthor("plan", "plan");
@@ -957,7 +960,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			// preferred path for large items; the raised implement turn ceiling is the escape hatch for
 			// changes that don't decompose cleanly. Best-effort, mirrors the shakedown-code deferral (#115).
 			if (!opts.dryRun) {
-				for (const d of parseDeferredItems(outcome.result.fullText)) {
+				for (const d of parseDeferredItems(outcome.result.fullText, deferredItemTitles)) {
 					try {
 						const created = await roadmap.createItem(d);
 						log(`plan deferred → ${created.id}: ${d.title}`);
@@ -1304,7 +1307,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		// provider can't). Create them in-process, best-effort — a failure logs and continues (they're
 		// backlog niceties, not the cycle's deliverable). Skipped in dry-run (no real backlog writes).
 		if (!opts.dryRun) {
-			for (const d of parseDeferredItems(shakedownResult.fullText)) {
+			for (const d of parseDeferredItems(shakedownResult.fullText, deferredItemTitles)) {
 				try {
 					const created = await roadmap.createItem(d);
 					log(`deferred → ${created.id}: ${d.title}`);

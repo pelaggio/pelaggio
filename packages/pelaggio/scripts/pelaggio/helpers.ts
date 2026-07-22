@@ -477,12 +477,14 @@ export async function buildStepArgs(roadmap: RoadmapSource, itemId: string, mode
  * model lists deferred follow-ups as these markers instead of running `roadmap create-item` itself
  * (a sandboxed provider can't); the harness creates them post-step. One JSON object per line:
  * `{ "title": "...", "scope"?: "XS|S|M|L|XL", "deps"?: "A, B" }`. Malformed/title-less lines are
- * skipped; every item is flagged `deferred: true`.
+ * skipped; every item is flagged `deferred: true`. `deps` accepts a JSON array
+ * (`["A","B"]`) or a comma-separated string (`"A, B"`). Pass a shared `seen` set to
+ * dedup across multiple call sites (e.g. plan + shakedown-code both parse markers —
+ * `createItem` is not idempotent, so a marker echoed in both must create only once).
  */
-export function parseDeferredItems(text: string): CreateItemOpts[] {
+export function parseDeferredItems(text: string, seen: Set<string> = new Set<string>()): CreateItemOpts[] {
 	const SCOPES = new Set(["XS", "S", "M", "L", "XL"]);
 	const items: CreateItemOpts[] = [];
-	const seen = new Set<string>(); // dedup by title — createItem isn't idempotent (unlike publishPlan)
 	for (const m of text.matchAll(/^[ \t]*deferred-item:[ \t]*(\{.*\})[ \t]*$/gim)) {
 		let parsed: unknown;
 		try {
@@ -497,8 +499,9 @@ export function parseDeferredItems(text: string): CreateItemOpts[] {
 		seen.add(title.toLowerCase());
 		const scopeRaw = typeof rec.scope === "string" ? rec.scope.toUpperCase() : "";
 		const scope = SCOPES.has(scopeRaw) ? (scopeRaw as CreateItemOpts["scope"]) : undefined;
-		const deps =
-			typeof rec.deps === "string"
+		const deps = Array.isArray(rec.deps)
+			? rec.deps.filter((d): d is string => typeof d === "string" && d.trim() !== "").map((d) => d.trim())
+			: typeof rec.deps === "string"
 				? rec.deps
 						.split(",")
 						.map((s) => s.trim())
