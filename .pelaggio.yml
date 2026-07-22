@@ -31,6 +31,10 @@ review:
   provider-diversity: off
 budgets:
   shakedown-plan: 8
+providers:
+  grok:
+    bin: ~/.grok/bin/grok
+    allow-unsandboxed-fallback: true
 # Authoring rotates cycle-locally across the configured pool. Review pools use
 # the same drivers but deterministically exclude the realized artifact author.
 # Coordination/recovery steps remain explicit static Claude pins.

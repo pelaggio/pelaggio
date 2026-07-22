@@ -176,9 +176,7 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 					turns: result.value.turns,
 					// A parseable but non-ok seat (max-turns / provider-reported failure) has no trustworthy
 					// verdict — record WHY (subtype + turns) so it isn't a reasonless `ok:false` (#268 legibility).
-					...(result.value.ok
-						? { verdict: { verdict: reviewFindingsGate(report), rationale: report.summary } }
-						: { diagnostic: `seat did not complete: ${result.value.subtype} (${result.value.turns} turns)` }),
+					...(result.value.ok ? { verdict: { verdict: reviewFindingsGate(report), rationale: report.summary } } : { diagnostic: `seat did not complete: ${result.value.subtype} (${result.value.turns} turns)` }),
 				});
 			} catch (error) {
 				reviewerRecords.push({ identity: identity("reviewer", slot, pass), ok: false, cost: result.value.cost, turns: result.value.turns, diagnostic: error instanceof Error ? error.message : String(error) });
