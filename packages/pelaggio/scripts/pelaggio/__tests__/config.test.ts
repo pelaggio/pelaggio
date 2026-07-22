@@ -373,6 +373,12 @@ describe("resolveStepSettings — precedence & fallback", () => {
 		assert.throws(() => loadConfig({ repo, configPath: path }), /\.pelaggio\.yml/);
 		assert.throws(() => loadConfig({ repo, configPath: path }), /models\.profiles\.deep\.providers\.implement/);
 	});
+
+	it("throws on an unknown step in a provider mapping", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, ["models:", "  profiles:", "    deep:", "      providers:", "        implment: codex", ""].join("\n"));
+		assert.throws(() => loadConfig({ repo, configPath: path }), /unknown step at `models\.profiles\.deep\.providers\.implment`/);
+	});
 });
 
 describe("provider pools", () => {
