@@ -1,10 +1,11 @@
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { LOG_PATH, REPO, STEPS, WORKTREE_PREFIX } from "./config.js";
+import { basename, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { CONFIG, LOG_PATH, REPO, resolveProviderBin, STEPS, WORKTREE_PREFIX } from "./config.js";
 import { MarkdownRoadmap } from "./roadmap/markdown.js";
 import type { CreateItemOpts, RoadmapSource } from "./roadmap/types.js";
-import type { Decision, Mutex, Step, StepResult } from "./types.js";
+import type { CycleDriverProvenance, CycleGitBinding, CycleVersionProvenance, Decision, Mutex, ProviderName, Step, StepLog, StepResult } from "./types.js";
 
 export function parseDecisions(text: string): Decision[] {
 	const decisions: Decision[] = [];
@@ -720,6 +721,77 @@ export function getHeadSha(cwd: string): string | null {
 	} catch {
 		return null;
 	}
+}
+
+export function uniqueDriverProvenance(steps: StepLog[]): CycleDriverProvenance[] {
+	const seen = new Set<string>();
+	const drivers: CycleDriverProvenance[] = [];
+	for (const step of steps) {
+		if (!step.provider) continue;
+		const key = `${step.provider}\0${step.model}`;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		drivers.push({ provider: step.provider, model: step.model });
+	}
+	return drivers;
+}
+
+type GitProbe = (command: string, cwd: string) => string;
+
+export function readGitBinding(cwd: string | null, mainRepo: string, previous?: CycleGitBinding, run?: GitProbe): CycleGitBinding {
+	const probe = run ?? ((command: string, root: string) => execSync(command, { cwd: root, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }));
+	const read = (command: string, root: string): string | null => {
+		try {
+			return probe(command, root).trim() || null;
+		} catch {
+			return null;
+		}
+	};
+	const relativeWorktree = cwd ? relative(mainRepo, cwd) : "";
+	const worktree = cwd ? (relativeWorktree && !relativeWorktree.startsWith("..") ? relativeWorktree : basename(cwd)) : null;
+	return {
+		branch: cwd ? (read("git branch --show-current", cwd) ?? previous?.branch ?? null) : (previous?.branch ?? null),
+		worktree: worktree ?? previous?.worktree ?? null,
+		mainShaAtStart: previous?.mainShaAtStart ?? read("git rev-parse main", mainRepo),
+		headSha: (cwd ? read("git rev-parse HEAD", cwd) : null) ?? previous?.headSha ?? null,
+	};
+}
+
+export interface RuntimeVersionResult {
+	versions: CycleVersionProvenance;
+	unavailable: string[];
+}
+
+export interface RuntimeVersionDeps {
+	run?: (executable: string, args: string[]) => string;
+	readManifest?: (path: string) => string;
+}
+
+export function readRuntimeVersions(providers: ProviderName[], deps: RuntimeVersionDeps = {}): RuntimeVersionResult {
+	const readManifest = deps.readManifest ?? ((path: string) => readFileSync(path, "utf-8"));
+	const packagePath = resolve(fileURLToPath(new URL(".", import.meta.url)), "../../package.json");
+	const pelaggio = (JSON.parse(readManifest(packagePath)) as { version: string }).version;
+	const versions: CycleVersionProvenance = { pelaggio, node: process.version, drivers: {} };
+	const unavailable: string[] = [];
+	const run = deps.run ?? ((executable: string, args: string[]) => execFileSync(executable, args, { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }));
+	for (const provider of new Set(providers)) {
+		try {
+			if (provider === "claude") {
+				const sdkPath = resolve(fileURLToPath(new URL(".", import.meta.url)), "../../node_modules/@anthropic-ai/claude-agent-sdk/package.json");
+				versions.drivers.claude = (JSON.parse(readManifest(sdkPath)) as { version: string }).version;
+			} else {
+				const output = run(resolveProviderBin(CONFIG, provider, provider), ["--version"])
+					.replace(/[\r\n]+/g, " ")
+					.trim()
+					.slice(0, 160);
+				if (!output) throw new Error("empty version");
+				versions.drivers[provider] = output;
+			}
+		} catch {
+			unavailable.push(`version.${provider}`);
+		}
+	}
+	return { versions, unavailable };
 }
 
 /**

@@ -57,11 +57,14 @@ import {
 	parseShipMerged,
 	parseVerdict,
 	parseWaitFlag,
+	readGitBinding,
+	readRuntimeVersions,
 	resolveWorktree,
 	revertPlanPolish,
 	reviewFindingsPreamble,
 	snapshotForbiddenRoots,
 	stepIndex,
+	uniqueDriverProvenance,
 	verifyShipLanded,
 } from "./helpers.js";
 import { type NotifyConfig, notifyCycle, notifyDecision as notifyDecisionEvent, notifyStrandedReview, sendNotification as sendNotificationDefault } from "./notify.js";
@@ -78,7 +81,20 @@ import { commitStrayBookkeeping, getShipTarget, isAutonomousRemotePush, isShipTa
 import { extractPrUrl } from "./ship/pull-request.js";
 import { runStep as runStepDefault } from "./step-runner.js";
 import { A, createStepRenderer, fmtElapsed, LiveStatus, StatusBar, TUI_ENABLED } from "./tui.js";
-import { type CycleResult, type CycleStatus, type Flags, type ParkSignal, type PipelineOpts, RECOVERABLE_ERRORS, type ShipTargetName, type Step, type StepLog, type StepResult } from "./types.js";
+import {
+	type CycleGitBinding,
+	type CycleResult,
+	type CycleStatus,
+	type CycleVersionProvenance,
+	type Flags,
+	type ParkSignal,
+	type PipelineOpts,
+	RECOVERABLE_ERRORS,
+	type ShipTargetName,
+	type Step,
+	type StepLog,
+	type StepResult,
+} from "./types.js";
 
 // ── Pipeline ───────────────────────────────────────────────────────────
 
@@ -138,6 +154,9 @@ export interface PipelineDeps {
 	appendDecisions?: typeof appendDecisionsDefault;
 	appendReviewEscalation?: typeof appendReviewEscalationDefault;
 	lookupReviewEscalation?: typeof lookupReviewEscalationDefault;
+	now?: () => number;
+	readGitBinding?: typeof readGitBinding;
+	readRuntimeVersions?: typeof readRuntimeVersions;
 }
 
 // Test seam (#304): the pipeline flow tests stub provider availability so they do
@@ -168,6 +187,9 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	const appendDecisions = deps.appendDecisions ?? appendDecisionsDefault;
 	const appendReviewEscalation = deps.appendReviewEscalation ?? appendReviewEscalationDefault;
 	const lookupReviewEscalation = deps.lookupReviewEscalation ?? lookupReviewEscalationDefault;
+	const now = deps.now ?? Date.now;
+	const readGitBindingFn = deps.readGitBinding ?? readGitBinding;
+	const readRuntimeVersionsFn = deps.readRuntimeVersions ?? readRuntimeVersions;
 	// The cycle's dollar ceiling. A turn-exhaustion retry (issue #33) is funded up to the
 	// step's configured budget again, so the budget guard skips a retry we can't fully fund.
 	// A non-finite value (unset / unparseable --budget) disables the dollar gate.
@@ -177,12 +199,13 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	// "standard" and let quick-scope detection downgrade to "quick" below.
 	let profile = flags.profile ?? "standard";
 	const steps: StepLog[] = [];
+	const provenanceUnavailable: string[] = [];
 	const assignment = createDriverAssignmentState(opts.cycle);
-	const pipelineT0 = Date.now();
+	const pipelineT0 = now();
 	const runIdBase = opts.logPath ? basename(opts.logPath, extname(opts.logPath)) : `cycle-${opts.cycle}`;
 	let logLabel = `cycle ${opts.cycle}`;
 	const log = (msg: string): void => {
-		const elapsed = fmtElapsed(Date.now() - pipelineT0);
+		const elapsed = fmtElapsed(now() - pipelineT0);
 		const ts = new Date().toLocaleTimeString("en-CA", { hour12: false });
 		console.log(`${A.dim(ts)} [${logLabel}] ${A.dim(elapsed)} ${msg}`);
 	};
@@ -473,6 +496,14 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				...(result.decisions?.length ? { decisions: result.decisions } : {}),
 			}),
 		);
+		if (worktree && resolve(cwd) === resolve(worktree)) {
+			try {
+				gitBinding = readGitBindingFn(worktree, mainRepo, gitBinding);
+			} catch {
+				// Provenance is observational and must never change the step outcome.
+				provenanceUnavailable.push("git");
+			}
+		}
 		if (opts.workerStatus) opts.workerStatus.cost += result.cost;
 		return result;
 	}
@@ -509,6 +540,21 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		}
 		if (!opts.dryRun) {
 			const parked = result.error === "parked";
+			const drivers = uniqueDriverProvenance(steps);
+			const unavailable: string[] = [...provenanceUnavailable];
+			let versions: CycleVersionProvenance = { pelaggio: "unknown", node: process.version, drivers: {} };
+			try {
+				const observed = readRuntimeVersionsFn(drivers.map((driver) => driver.provider));
+				versions = observed.versions;
+				unavailable.push(...observed.unavailable);
+			} catch {
+				unavailable.push("versions");
+			}
+			try {
+				gitBinding = readGitBindingFn(worktree, mainRepo, gitBinding);
+			} catch {
+				unavailable.push("git");
+			}
 			appendLog({
 				ts: new Date().toISOString(),
 				cycle: opts.cycle,
@@ -524,6 +570,15 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				parkReason: parked ? parkSignal.limitType || null : null,
 				shipwrecked,
 				...(result.bookkeepingWarnings?.length ? { bookkeepingWarnings: result.bookkeepingWarnings } : {}),
+				provenance: {
+					runId: runIdBase,
+					durationMs: Math.max(0, Math.trunc(now() - pipelineT0)),
+					drivers,
+					git: gitBinding,
+					versions,
+					...(result.prUrl ? { prUrl: result.prUrl } : {}),
+					...(unavailable.length ? { unavailable: [...new Set(unavailable)] } : {}),
+				},
 			});
 		}
 		return result;
@@ -533,6 +588,13 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 
 	let itemId = opts.itemId ?? null;
 	let worktree = opts.worktree ?? null;
+	let gitBinding: CycleGitBinding;
+	try {
+		gitBinding = readGitBindingFn(worktree, mainRepo);
+	} catch {
+		gitBinding = { branch: null, worktree: worktree ? basename(worktree) : null, mainShaAtStart: null, headSha: null };
+		provenanceUnavailable.push("git");
+	}
 	let pickText = "";
 	let startFrom = opts.startFrom;
 	if (itemId) logLabel = itemId;

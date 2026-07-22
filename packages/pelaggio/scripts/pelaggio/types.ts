@@ -96,6 +96,34 @@ export interface StepLog {
 	decisions?: Decision[];
 }
 
+export interface CycleDriverProvenance {
+	provider: ProviderName;
+	model: string;
+}
+
+export interface CycleGitBinding {
+	branch: string | null;
+	worktree: string | null;
+	mainShaAtStart: string | null;
+	headSha: string | null;
+}
+
+export interface CycleVersionProvenance {
+	pelaggio: string;
+	node: string;
+	drivers: Partial<Record<ProviderName, string>>;
+}
+
+export interface CycleProvenance {
+	runId: string;
+	durationMs: number;
+	drivers: CycleDriverProvenance[];
+	git: CycleGitBinding;
+	versions: CycleVersionProvenance;
+	prUrl?: string;
+	unavailable?: string[];
+}
+
 // ── Log entries (read from .dev/pelaggio-log.jsonl) ───────────────────
 
 export interface CycleLogEntry {
@@ -115,6 +143,8 @@ export interface CycleLogEntry {
 	parkReason?: string | null;
 	shipwrecked?: boolean;
 	bookkeepingWarnings?: string[];
+	/** Additive execution receipt. Optional only for legacy log compatibility. */
+	provenance?: CycleProvenance;
 }
 
 // ── Flow events ───────────────────────────────────────────────────────

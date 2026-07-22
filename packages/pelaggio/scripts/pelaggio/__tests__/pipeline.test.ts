@@ -2138,6 +2138,8 @@ describe("runPipeline — pick step", () => {
 		const logs: Array<Record<string, unknown>> = [];
 		const { runStep, calls } = createMockRunStep({ pick: { ok: false, subtype: "error_max_turns" } }, parkSignal);
 
+		const times = [1000, 1042];
+		const git = { branch: null, worktree: null, mainShaAtStart: "a".repeat(40), headSha: null };
 		const result = await runPipeline(pickOpts(), parkSignal, baseFlags, {
 			runStep,
 			mainRepo: repo,
@@ -2146,6 +2148,9 @@ describe("runPipeline — pick step", () => {
 			appendLog: (e) => {
 				logs.push(e);
 			},
+			now: () => times.shift() ?? 1042,
+			readGitBinding: () => git,
+			readRuntimeVersions: () => ({ versions: { pelaggio: "0.1.0", node: "v22", drivers: { claude: "sdk 1" } }, unavailable: [] }),
 		});
 
 		assert.equal(result.completed, false);
@@ -2156,6 +2161,12 @@ describe("runPipeline — pick step", () => {
 			["pick"],
 		);
 		assert.equal(logs[0].completed, false);
+		const provenance = logs[0].provenance as Record<string, unknown>;
+		assert.equal(provenance.runId, "cycle-1");
+		assert.equal(provenance.durationMs, 42);
+		assert.deepEqual(provenance.git, git);
+		assert.deepEqual(provenance.versions, { pelaggio: "0.1.0", node: "v22", drivers: { claude: "sdk 1" } });
+		assert.equal((provenance.drivers as Array<{ provider: string }>)[0].provider, "claude");
 	});
 
 	it("queue empty — maps pick-result: queue-empty to error 'pick:queue-empty' (recoverable)", async () => {
