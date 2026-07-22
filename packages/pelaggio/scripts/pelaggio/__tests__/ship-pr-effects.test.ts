@@ -194,12 +194,25 @@ describe("runShipPrEffects", () => {
 		const gh = makeGh([
 			{ match: ["pr", "list"], stdout: JSON.stringify([{ number: 42, url: PR_URL }]) },
 			{ match: ["pr", "edit"], stdout: "" },
+			{ match: ["pr", "view"], stdout: JSON.stringify({ statusCheckRollup: [] }) },
 			{ match: ["pr", "merge"], stdout: "" },
 		]);
 
 		await runShipPrEffects({ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision({ target: "auto-merge-pr" }) }, { exec: ex.exec, gh: gh.gh, log: () => {} });
 
 		assert.deepEqual(gh.calls.at(-1), ["pr", "merge", "--auto", "--squash", "42"]);
+	});
+
+	it("refuses to enable auto-merge when a check has already reported red (#292)", async () => {
+		const ex = makeExec();
+		const gh = makeGh([
+			{ match: ["pr", "list"], stdout: JSON.stringify([{ number: 42, url: PR_URL }]) },
+			{ match: ["pr", "edit"], stdout: "" },
+			{ match: ["pr", "view"], stdout: JSON.stringify({ statusCheckRollup: [{ __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "FAILURE" }] }) },
+		]);
+
+		await assert.rejects(() => runShipPrEffects({ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision({ target: "auto-merge-pr" }) }, { exec: ex.exec, gh: gh.gh, log: () => {} }), /red-merge guard.*CI is red/);
+		assert.ok(!gh.calls.some((args) => args[0] === "pr" && args[1] === "merge"), "must not enable auto-merge on a red PR");
 	});
 
 	it("rejects dirty worktrees, branch mismatches, empty deliverable diffs, gh failures, and auto-merge failures", async () => {
@@ -227,6 +240,7 @@ describe("runShipPrEffects", () => {
 						gh: makeGh([
 							{ match: ["pr", "list"], stdout: JSON.stringify([{ number: 42, url: PR_URL }]) },
 							{ match: ["pr", "edit"], stdout: "" },
+							{ match: ["pr", "view"], stdout: JSON.stringify({ statusCheckRollup: [] }) },
 							{ match: ["pr", "merge"], stderr: "merge disabled", status: 1 },
 						]).gh,
 						log: () => {},

@@ -2,6 +2,7 @@ import { execSync } from "node:child_process";
 import type { ShipDecisionEffect } from "../effects.js";
 import { defaultGhRun, type GhRunner, parseGhJson } from "../roadmap/github-issues.js";
 import type { ExecFn } from "./bookkeeping.js";
+import { assertCiNotRed } from "./ci-guard.js";
 
 export interface ShipPrEffectsDeps {
 	exec?: ExecFn;
@@ -57,6 +58,10 @@ export async function runShipPrEffects(
 	const upserted = upsertPr(gh, decision);
 	if (decision.target === "auto-merge-pr") {
 		if (upserted.number === null) throw new Error("cannot enable auto-merge without a PR number");
+		// Deterministic red-merge guard (#292): refuse to queue auto-merge onto a PR that
+		// already has a confirmed-red check, independent of how branch protection is (or
+		// isn't) configured. Pending checks are fine — `--auto` itself defers the merge.
+		assertCiNotRed(gh, upserted.number);
 		runGh(gh, ["pr", "merge", "--auto", "--squash", String(upserted.number)]);
 		deps.log(`auto-merge enabled for ${upserted.url}`);
 	}
