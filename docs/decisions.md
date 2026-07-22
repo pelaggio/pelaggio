@@ -6,6 +6,26 @@ Status values are `default-taken`, `resolved`, or `resolved→ADR-nnnn`. Source 
 
 | Decision | Status | Chosen/leaning | Alternatives | Source | Date |
 | --- | --- | --- | --- | --- | --- |
+| compatibility for inline `prBody` decisions | default-taken | remove the fallback and require `prBodyFile` for PR targets | retain a version/config-gated legacy inline-body path | https://github.com/pelaggio/pelaggio/issues/303 | 2026-07-22 |
+<!-- decision:060d26092f140890 -->
+| retry boundary for ship manifest failures | default-taken | tag the effects failure phase and retry only `invalid_manifest` raised while resolving the dynamic ship decision, before manifest write/dispatch | route ship through the generic authoring retry wrapper; retry every `error_effects_manifest`; add a bespoke parser outside `step()` | https://github.com/pelaggio/pelaggio/issues/303 | 2026-07-22 |
+<!-- decision:99379961dc73315a -->
+| body-file location and cleanup | default-taken | keep the fixed harness-owned relative path and delete only after successful dispatch | accept arbitrary worktree-relative paths; delete immediately after parsing; retain on success until worktree teardown | https://github.com/pelaggio/pelaggio/issues/303 | 2026-07-22 |
+<!-- decision:ba532952a6aa8740 -->
+| dollar gate on the decision-resolution retry | default-taken | attempt-cap only (no `canRetryWithinBudget`) | require a full ship step budget remaining before attempt 2 | https://github.com/pelaggio/pelaggio/issues/303 | 2026-07-22 |
+<!-- decision:3bdfb72777cd1f55 -->
+| compatibility for inline `prBody` decisions | default-taken | remove the fallback and require `prBodyFile` | retain a version/config-gated legacy path | https://github.com/pelaggio/pelaggio/issues/303 | 2026-07-22 |
+<!-- decision:a84a8a816cfdab8e -->
+| retry boundary for ship manifest failures | default-taken | tag the effects failure phase and retry only `invalid_manifest` raised while resolving the dynamic decision, before manifest write/dispatch | use the generic authoring retry wrapper; retry every manifest failure; parse outside `step()` | https://github.com/pelaggio/pelaggio/issues/303 | 2026-07-22 |
+<!-- decision:65252b86ddc1c705 -->
+| body-file location and cleanup | default-taken | retain the fixed harness-owned relative path and delete only after successful dispatch | accept arbitrary relative paths; delete immediately after parsing; retain until worktree teardown | https://github.com/pelaggio/pelaggio/issues/303 | 2026-07-22 |
+<!-- decision:0cff3224d8bc595f -->
+| compatibility for inline `prBody` decisions | default-taken | remove the fallback and require `prBodyFile` for PR targets | retain a versioned or time-limited compatibility gate | https://github.com/pelaggio/pelaggio/issues/303 | 2026-07-22 |
+<!-- decision:42ac5f13c7dafb86 -->
+| retry boundary for `error_effects_manifest` | default-taken | retry only decision resolution/validation failures proven to occur before manifest write or effect dispatch | retry every manifest/effect failure; add a second bespoke ship loop outside the shared runner | https://github.com/pelaggio/pelaggio/issues/303 | 2026-07-22 |
+<!-- decision:224cf56091d6857b -->
+| dollar gate on the decision-resolution retry | default-taken | attempt-cap only (no `canRetryWithinBudget` gate), matching `retryOnEditLoop` | require a full ship step budget remaining before the second attempt | https://github.com/pelaggio/pelaggio/issues/303 | 2026-07-22 |
+<!-- decision:e5957c275d81bf55 -->
 | per-run scope-ceiling override (new public surface) | default-taken | config-only; targeted `--item` remains the sole operator override | add `roadmap next --max-scope` | https://github.com/pelaggio/pelaggio/issues/201 | 2026-07-21 |
 <!-- decision:8148df85c074226b -->
 | Cross-model review split for 164 | default-taken | Human adjudication required | proceed or block | .dev/review-records/cycle-11-164.json | 2026-07-21 |
