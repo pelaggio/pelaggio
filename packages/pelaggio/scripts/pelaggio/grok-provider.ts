@@ -25,14 +25,20 @@ import { ensureWorktreeDeps } from "./worktree-deps.js";
  * Grok: Landlock isolation when declared native, pool-quota ticks (token-price fallback
  * degraded), cache counters, ACP stream. No semantic deny; no session resume.
  */
-export const GROK_CAPABILITIES: ProviderCapabilities = {
-	semanticDeny: false,
-	isolation: ["landlock"],
-	costMeter: { kind: "pool-quota", estimateFallback: "degraded" },
-	cacheReporting: true,
-	outputTransport: "stream",
-	sessionResume: false,
-};
+export function grokCapabilities(allowUnsandboxedFallback: boolean): ProviderCapabilities {
+	return {
+		semanticDeny: false,
+		// Enabling fallback means a run may be unsandboxed, so it cannot honestly satisfy
+		// a hard Landlock route. With fallback disabled, missing Landlock fails execution closed.
+		isolation: allowUnsandboxedFallback ? [] : ["landlock"],
+		costMeter: { kind: "pool-quota", estimateFallback: "degraded" },
+		cacheReporting: true,
+		outputTransport: "stream",
+		sessionResume: false,
+	};
+}
+
+export const GROK_CAPABILITIES = grokCapabilities(CONFIG.grokAllowUnsandboxedFallback);
 
 type JsonObject = Record<string, unknown>;
 

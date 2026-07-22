@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { HookInput } from "@anthropic-ai/claude-agent-sdk";
 import { codexProvider } from "../codex-provider.js";
+import { CONFIG } from "../config.js";
+import { grokCapabilities } from "../grok-provider.js";
 import type { MainCheckoutDeltaObserver, MainCheckoutDeltaResult } from "../helpers.js";
 import { beginMainCheckoutAttribution, blockMainRepoWrite, blockPlanPolish, blockWorktreeInstall, claudeProvider, composeSystemAppend, endMainCheckoutAttribution, getProvider, isWorktreePath } from "../step-runner.js";
 import type { ProviderName } from "../types.js";
@@ -235,7 +237,7 @@ describe("provider capability matrix (#337)", () => {
 		});
 		assert.deepEqual(getProvider("grok").capabilities, {
 			semanticDeny: false,
-			isolation: ["landlock"],
+			isolation: grokCapabilities(CONFIG.grokAllowUnsandboxedFallback).isolation,
 			costMeter: { kind: "pool-quota", estimateFallback: "degraded" },
 			cacheReporting: true,
 			outputTransport: "stream",
@@ -249,8 +251,13 @@ describe("provider capability matrix (#337)", () => {
 		assert.equal(getProvider("grok").capabilities.semanticDeny, false);
 		// Isolation membership is independent of semantic deny.
 		assert.ok(getProvider("codex").capabilities.isolation.includes("workspace-write"));
-		assert.ok(getProvider("grok").capabilities.isolation.includes("landlock"));
+		assert.equal(getProvider("grok").capabilities.isolation.includes("landlock"), !CONFIG.grokAllowUnsandboxedFallback);
 		assert.equal(getProvider("claude").capabilities.isolation.length, 0);
+	});
+
+	it("does not advertise Landlock when unsandboxed Grok fallback is enabled", () => {
+		assert.deepEqual(grokCapabilities(false).isolation, ["landlock"]);
+		assert.deepEqual(grokCapabilities(true).isolation, []);
 	});
 
 	it("reports cache counters on all three providers (corrected matrix)", () => {

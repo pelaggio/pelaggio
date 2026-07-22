@@ -331,20 +331,15 @@ export interface ProviderCapabilities {
 	sessionResume: boolean;
 }
 
-/** Per-axis predicate used by hard filters and soft native preferences. */
-export interface CapabilityPredicate {
-	semanticDeny?: boolean;
-	/** Require every listed mechanism (set membership). */
-	isolation?: readonly IsolationMechanism[];
-	/** Match by kind (pool-quota matches regardless of estimateFallback detail). */
-	costMeter?: CostMeter["kind"];
-	cacheReporting?: boolean;
-	outputTransport?: OutputTransport;
-	sessionResume?: boolean;
-}
-
 /** Axis names that can appear on a degraded realization. */
-export type CapabilityAxis = "semanticDeny" | "isolation" | "costMeter" | "cacheReporting" | "outputTransport" | "sessionResume";
+export type CapabilityAxis = keyof ProviderCapabilities;
+
+type CapabilityRequirement<Axis extends CapabilityAxis> = Axis extends "costMeter" ? CostMeter["kind"] : ProviderCapabilities[Axis];
+
+/** Per-axis predicate used by hard filters and soft native preferences. */
+export type CapabilityPredicate = {
+	readonly [Axis in CapabilityAxis]?: CapabilityRequirement<Axis>;
+};
 
 /** How a candidate satisfied the requested soft preferences. */
 export type CapabilityRealizationMode = "native" | "degraded";

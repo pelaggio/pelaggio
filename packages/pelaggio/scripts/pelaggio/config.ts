@@ -927,22 +927,6 @@ export function resolveDriverCandidates(config: ResolvedConfig, profile: string,
 }
 
 /**
- * Settings-only model fill for fixed authoring seats (no capability matching).
- * Capability-aware seating lives in `provider-routing.resolveAuthoringReviewConfig`
- * (author exclusion, hard/soft predicates, judge defaults from `pr-verify`).
- * Kept for call sites that only need model inheritance without the full overlay.
- */
-export function fillAuthoringReviewModels(config: ResolvedConfig, profile: string, policy: AuthoringReviewConfig = config.review.authoring): AuthoringReviewConfig {
-	const reviewerDefaults = resolveStepSettings(config, profile, "pr-review");
-	const judgeDefaults = resolveStepSettings(config, profile, "pr-verify");
-	const fill = (slot: ReviewSlot, defaults: StepSettings): ReviewSlot => {
-		if (slot.provider === "codex") return { ...slot, ...((slot.codexModel ?? defaults.codexModel) ? { codexModel: slot.codexModel ?? defaults.codexModel } : {}) };
-		return { ...slot, ...((slot.model ?? defaults.model) ? { model: slot.model ?? defaults.model } : {}) };
-	};
-	return { ...policy, reviewers: policy.reviewers.map((slot) => fill(slot, reviewerDefaults)), judge: fill(policy.judge, judgeDefaults) };
-}
-
-/**
  * Resolve the executable a subprocess-backed provider should spawn (issue #241).
  * Returns the `providers.<provider>.bin` override when set, else `fallback` (the
  * provider's default binary name, resolved via PATH). A leading `~/` expands to the

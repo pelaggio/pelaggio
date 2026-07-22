@@ -99,7 +99,6 @@ import {
 	type Flags,
 	type ParkSignal,
 	type PipelineOpts,
-	type ProviderName,
 	RECOVERABLE_ERRORS,
 	type ShipTargetName,
 	type Step,
@@ -1183,6 +1182,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			});
 			if (!seating.ok) return finish({ itemId, completed: false, cost, error: `shakedown-code assignment failed: ${seating.reason}` });
 			const policy = seating.policy;
+			log(`authoring review capability realizations: ${JSON.stringify(seating.realizations)}`);
 			// Hand every reviewer seat the actual branch diff so a single-turn seat that never runs
 			// `git diff` (codex) still reviews real code instead of parroting the skill example.
 			// Recomputed per pass inside the `review` prompt: the author revision seat advances HEAD
@@ -1261,6 +1261,8 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				shakedownResult = { ok: true, subtype: "success", text: "resolved-proceed", fullText: "resolved-proceed", cost: 0, turns: 0 };
 			} else {
 				cost += loop.cost;
+				const finalReviewedSha = getHeadSha(worktree!);
+				if (!finalReviewedSha) return parkExit("adversarial review could not bind final reviewed HEAD")!;
 				const reviewRunId = `${runIdBase}-${itemId}`;
 				const record: ReviewRecord = { schemaVersion: 1, runId: reviewRunId, itemId: itemId!, createdAt: new Date().toISOString(), blockingBar: "must-fix", result: loop };
 				const recordPath = writeReviewRecord(worktree!, record);
@@ -1270,7 +1272,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				// Aggregate authoring-review provenance at reserved attempt 0 (seat step() calls
 				// use 1-indexed pass as attempt; effectManifestPath is `${step}-${attempt}.json`).
 				const seats: ReviewSeatIdentity[] = [
-					{ role: "author", seatId: "author", provider: authorIdentity.provider as ProviderName, ...(authorIdentity.model ? { model: authorIdentity.model } : {}) },
+					{ role: "author", seatId: "author", provider: authorIdentity.provider, ...(authorIdentity.model ? { model: authorIdentity.model } : {}) },
 					...policy.reviewers.map((slot) => ({
 						role: "reviewer" as const,
 						seatId: slot.id,
@@ -1287,7 +1289,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				const verdictEffect: ReviewVerdictEffect = {
 					kind: "review.Verdict",
 					itemId: itemId!,
-					reviewedSha,
+					reviewedSha: finalReviewedSha,
 					reviewRecordSource,
 					outcome: loop.outcome,
 					seats,
@@ -1297,7 +1299,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 					const escalationEffect: ReviewEscalationEffect = {
 						kind: "review.Escalation",
 						itemId: itemId!,
-						reviewedSha,
+						reviewedSha: finalReviewedSha,
 						reviewRecordSource,
 						evidenceFingerprint: loop.disagreement.evidenceFingerprint,
 						hasSafetyBlocker: loop.disagreement.hasSafetyBlocker,
@@ -1310,8 +1312,40 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 					step: "shakedown-code",
 					attempt: 0,
 					cwd: worktree!,
-					preSha: reviewedSha,
+					preSha: finalReviewedSha,
 				};
+				let escalationParkReason: string | undefined;
+				if (loop.disagreement) {
+					const escalation = {
+						kind: "review-escalation" as const,
+						itemId: itemId!,
+						step: "shakedown-code" as const,
+						reviewedSha: finalReviewedSha,
+						evidenceFingerprint: loop.disagreement.evidenceFingerprint,
+						reviewRecordSource,
+						hasSafetyBlocker: loop.disagreement.hasSafetyBlocker,
+						drivers: loop.disagreement.drivers.map((driver) => ({ ...driver, identity: { ...driver.identity, role: "reviewer" as const } })),
+					};
+					try {
+						// The durable safety action precedes effect attestation. A manifest write or
+						// dispatch failure below must never swallow the escalation or skip parking.
+						const written = await appendReviewEscalation(mainRepo, escalation);
+						if (written.status !== "failed")
+							await opts.notifyDecision?.({
+								itemId,
+								decision: { fork: `Cross-model review split (${written.ids[0]})`, chosen: "human adjudication required", alternatives: "proceed or block" },
+								step: "shakedown-code",
+								source: escalation.reviewRecordSource,
+								logPath: opts.logPath ?? LOG_PATH,
+								escalation: { ...escalation, id: written.ids[0] },
+							});
+						const state = lookupReviewEscalation(mainRepo, itemId!, finalReviewedSha);
+						if (written.status === "failed" || state.state !== "resolved-proceed" || escalation.hasSafetyBlocker) escalationParkReason = `adversarial review escalation ${written.status === "failed" ? "write-failed" : state.state}`;
+					} catch (error) {
+						log(`⚠ adversarial review escalation write failed: ${error instanceof Error ? error.message : String(error)}`);
+						return parkExit("adversarial review escalation write-failed")!;
+					}
+				}
 				if (!opts.dryRun) {
 					try {
 						writeEffectsManifest(effectsCtx, reviewEffects);
@@ -1320,38 +1354,11 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 						const code = e instanceof EffectsManifestError ? e.code : "effect_failed";
 						const message = e instanceof Error ? e.message : String(e);
 						const text = `${code}: ${message}`;
-						return finish({
-							itemId,
-							completed: false,
-							cost,
-							error: `shakedown-code effects failed: ${text}`,
-						});
+						if (loop.disagreement) return parkExit(`shakedown-code effects failed after escalation: ${text}`)!;
+						return finish({ itemId, completed: false, cost, error: `shakedown-code effects failed: ${text}` });
 					}
 				}
-				if (loop.disagreement) {
-					const escalation = {
-						kind: "review-escalation" as const,
-						itemId: itemId!,
-						step: "shakedown-code" as const,
-						reviewedSha,
-						evidenceFingerprint: loop.disagreement.evidenceFingerprint,
-						reviewRecordSource,
-						hasSafetyBlocker: loop.disagreement.hasSafetyBlocker,
-						drivers: loop.disagreement.drivers.map((driver) => ({ ...driver, identity: { ...driver.identity, role: "reviewer" as const } })),
-					};
-					const written = await appendReviewEscalation(mainRepo, escalation);
-					if (written.status !== "failed")
-						await opts.notifyDecision?.({
-							itemId,
-							decision: { fork: `Cross-model review split (${written.ids[0]})`, chosen: "human adjudication required", alternatives: "proceed or block" },
-							step: "shakedown-code",
-							source: escalation.reviewRecordSource,
-							logPath: opts.logPath ?? LOG_PATH,
-							escalation: { ...escalation, id: written.ids[0] },
-						});
-					const state = lookupReviewEscalation(mainRepo, itemId!, reviewedSha);
-					if (written.status === "failed" || state.state !== "resolved-proceed" || escalation.hasSafetyBlocker) return parkExit(`adversarial review escalation ${written.status === "failed" ? "write-failed" : state.state}`)!;
-				}
+				if (escalationParkReason) return parkExit(escalationParkReason)!;
 				// A reviewer-split `dissent` already escalated + parked in the `loop.disagreement` block above.
 				// A Judge-ruled judgment-dissent (no disagreement, non-safety) keeps its pre-#244 posture:
 				// park only for direct-push; in PR mode ship with the dissent recorded (the PR is the veto).

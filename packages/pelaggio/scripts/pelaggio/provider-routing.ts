@@ -14,32 +14,36 @@ import type { CapabilityAxis, CapabilityCandidate, CapabilityPredicate, Capabili
 
 // ── Per-axis matching ──────────────────────────────────────────────────
 
-function hasIsolation(caps: ProviderCapabilities, required: readonly string[]): boolean {
-	return required.every((mech) => (caps.isolation as readonly string[]).includes(mech));
+type AxisMatcher = (caps: ProviderCapabilities, predicate: CapabilityPredicate) => boolean | undefined;
+
+const AXIS_MATCHERS = {
+	semanticDeny: (caps, predicate) => (predicate.semanticDeny === undefined ? undefined : caps.semanticDeny === predicate.semanticDeny),
+	isolation: (caps, predicate) => (predicate.isolation === undefined ? undefined : predicate.isolation.every((mechanism) => caps.isolation.includes(mechanism))),
+	costMeter: (caps, predicate) => (predicate.costMeter === undefined ? undefined : caps.costMeter.kind === predicate.costMeter),
+	cacheReporting: (caps, predicate) => (predicate.cacheReporting === undefined ? undefined : caps.cacheReporting === predicate.cacheReporting),
+	outputTransport: (caps, predicate) => (predicate.outputTransport === undefined ? undefined : caps.outputTransport === predicate.outputTransport),
+	sessionResume: (caps, predicate) => (predicate.sessionResume === undefined ? undefined : caps.sessionResume === predicate.sessionResume),
+} satisfies Record<CapabilityAxis, AxisMatcher>;
+
+const CAPABILITY_AXES = Object.keys(AXIS_MATCHERS) as CapabilityAxis[];
+const CAPABILITY_AXIS_SET = new Set<string>(CAPABILITY_AXES);
+
+function unknownPredicateAxis(predicate: CapabilityPredicate): string | undefined {
+	return Object.keys(predicate).find((axis) => !CAPABILITY_AXIS_SET.has(axis));
 }
 
 /** True when the candidate fully satisfies the predicate (hard or soft native match). */
 export function matchesCapabilityPredicate(caps: ProviderCapabilities, predicate: CapabilityPredicate): boolean {
-	if (predicate.semanticDeny !== undefined && caps.semanticDeny !== predicate.semanticDeny) return false;
-	if (predicate.isolation !== undefined && !hasIsolation(caps, predicate.isolation)) return false;
-	if (predicate.costMeter !== undefined && caps.costMeter.kind !== predicate.costMeter) return false;
-	if (predicate.cacheReporting !== undefined && caps.cacheReporting !== predicate.cacheReporting) return false;
-	if (predicate.outputTransport !== undefined && caps.outputTransport !== predicate.outputTransport) return false;
-	if (predicate.sessionResume !== undefined && caps.sessionResume !== predicate.sessionResume) return false;
-	return true;
+	if (unknownPredicateAxis(predicate)) return false;
+	return CAPABILITY_AXES.every((axis) => AXIS_MATCHERS[axis](caps, predicate) !== false);
 }
 
 /** Soft axes the candidate fails to satisfy natively (empty = fully native for the soft set). */
 export function softDegradedAxes(caps: ProviderCapabilities, soft: CapabilityPredicate | undefined): CapabilityAxis[] {
 	if (!soft) return [];
-	const degraded: CapabilityAxis[] = [];
-	if (soft.semanticDeny !== undefined && caps.semanticDeny !== soft.semanticDeny) degraded.push("semanticDeny");
-	if (soft.isolation !== undefined && !hasIsolation(caps, soft.isolation)) degraded.push("isolation");
-	if (soft.costMeter !== undefined && caps.costMeter.kind !== soft.costMeter) degraded.push("costMeter");
-	if (soft.cacheReporting !== undefined && caps.cacheReporting !== soft.cacheReporting) degraded.push("cacheReporting");
-	if (soft.outputTransport !== undefined && caps.outputTransport !== soft.outputTransport) degraded.push("outputTransport");
-	if (soft.sessionResume !== undefined && caps.sessionResume !== soft.sessionResume) degraded.push("sessionResume");
-	return degraded;
+	const unknownAxis = unknownPredicateAxis(soft);
+	if (unknownAxis) throw new Error(`unknown capability axis: ${unknownAxis}`);
+	return CAPABILITY_AXES.filter((axis) => AXIS_MATCHERS[axis](caps, soft) === false);
 }
 
 export interface MatchEligibleOptions<T> {
@@ -60,6 +64,8 @@ export interface MatchEligibleOptions<T> {
 export function matchEligibleProviders<T>(options: MatchEligibleOptions<T>): CapabilityRouteResult<T> {
 	const hard = options.hard ?? {};
 	const soft = options.soft;
+	const unknownAxis = unknownPredicateAxis(hard) ?? (soft ? unknownPredicateAxis(soft) : undefined);
+	if (unknownAxis) return { ok: false, reason: `unknown capability axis: ${unknownAxis}` };
 	const retained: Array<{ candidate: CapabilityCandidate<T>; realization: CapabilityRealization }> = [];
 
 	for (const candidate of options.candidates) {

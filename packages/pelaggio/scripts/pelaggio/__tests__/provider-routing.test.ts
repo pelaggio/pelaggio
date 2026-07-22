@@ -5,15 +5,17 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 import { CODEX_CAPABILITIES } from "../codex-provider.js";
 import { DEFAULTS, loadConfig, type ResolvedConfig } from "../config.js";
-import { GROK_CAPABILITIES } from "../grok-provider.js";
-import { matchEligibleProviders, resolveAuthoringReviewConfig } from "../provider-routing.js";
+import { grokCapabilities } from "../grok-provider.js";
+import { matchEligibleProviders, matchesCapabilityPredicate, resolveAuthoringReviewConfig, softDegradedAxes } from "../provider-routing.js";
 import { CLAUDE_CAPABILITIES } from "../step-runner.js";
 import type { ProviderCapabilities, ProviderName } from "../types.js";
 
 const ALL_CAPS: Record<ProviderName, ProviderCapabilities> = {
 	claude: CLAUDE_CAPABILITIES,
 	codex: CODEX_CAPABILITIES,
-	grok: GROK_CAPABILITIES,
+	// Routing matrix tests exercise the fail-closed configuration where Landlock
+	// is required; fallback-mode descriptor honesty is covered in step-runner tests.
+	grok: grokCapabilities(false),
 };
 
 function baseConfig(over: Partial<ResolvedConfig["review"]["authoring"]> = {}): ResolvedConfig {
@@ -38,6 +40,15 @@ function baseConfig(over: Partial<ResolvedConfig["review"]["authoring"]> = {}): 
 }
 
 describe("matchEligibleProviders — pure capability resolver", () => {
+	it("rejects unknown hard and soft predicate axes at runtime", () => {
+		const unknown = { futureAxis: true } as unknown as import("../types.js").CapabilityPredicate;
+		assert.equal(matchesCapabilityPredicate(ALL_CAPS.claude, unknown), false);
+		assert.throws(() => softDegradedAxes(ALL_CAPS.claude, unknown), /unknown capability axis: futureAxis/);
+		const hard = matchEligibleProviders({ candidates: [{ provider: "claude", payload: 1 }], capabilities: ALL_CAPS, hard: unknown });
+		assert.deepEqual(hard, { ok: false, reason: "unknown capability axis: futureAxis" });
+		const soft = matchEligibleProviders({ candidates: [{ provider: "claude", payload: 1 }], capabilities: ALL_CAPS, soft: unknown });
+		assert.deepEqual(soft, { ok: false, reason: "unknown capability axis: futureAxis" });
+	});
 	it("hard semanticDeny over only Codex/Grok is ineligible; adding Claude admits it", () => {
 		const noClaude = matchEligibleProviders({
 			candidates: [
