@@ -74,11 +74,13 @@ export const FORBIDDEN_ROOT_SNAPSHOT_ATTEMPTS = 3;
 /** Sync delay between failed snapshot attempts (ms). */
 export const FORBIDDEN_ROOT_SNAPSHOT_RETRY_DELAY_MS = 25;
 /**
- * Typed sentinel for a forbidden root that is absent at snapshot time — a registered-but-gone
- * worktree (orphaned `.dev/review-heads/<sha>` from a crashed cycle, or a peer worktree removed
- * mid-step). Distinct from any `git status --porcelain` output (which is either "" or newline-
- * separated entries, never NUL-prefixed), so the diff can treat it as no-violation without
- * colliding with a real clean/dirty observation. Never use `""` — that collides with a clean tree.
+ * Typed sentinel for a forbidden root unavailable at snapshot time: fully absent (#330), or a
+ * residual present directory shell that is not a Git repository (Git's explicit
+ * `fatal: not a git repository` diagnostic conjoined with confirmed absence of `<root>/.git` —
+ * #339; e.g. `worktree remove` left an empty path). Distinct from any `git status --porcelain`
+ * output (which is either "" or newline-separated entries, never NUL-prefixed), so the diff can
+ * treat it as no-violation without colliding with a real clean/dirty observation. Never use `""`
+ * — that collides with a clean tree.
  */
 export const FORBIDDEN_ROOT_GONE = "\0gone";
 
@@ -110,6 +112,11 @@ function formatSnapshotExecError(error: unknown): string {
 		if (typeof e.message === "string" && e.message) return e.message;
 	}
 	return error instanceof Error ? error.message : String(error);
+}
+
+/** Git's canonical non-repository fatal prefix (plain shell and broken-gitdir forms share it). */
+function isNotAGitRepositoryDiagnostic(error: unknown): boolean {
+	return formatSnapshotExecError(error).includes("fatal: not a git repository");
 }
 
 function runForbiddenRootSnapshot(root: string): string {
@@ -154,6 +161,13 @@ export function snapshotForbiddenRoot(root: string, opts?: SnapshotForbiddenRoot
 			// (TOCTOU) — a permanent condition the retry loop cannot clear. Only confirmed absence maps
 			// to GONE; a real error on a still-present root keeps failing closed through the throw below.
 			if (!exists(root)) return FORBIDDEN_ROOT_GONE;
+			// Present directory shell that is not a repository (e.g. worktree remove left an empty
+			// path): same GONE semantics as full absence. Require BOTH Git's explicit non-repo
+			// diagnostic and confirmed absence of `<root>/.git` — the diagnostic alone collides with
+			// unreadable-but-present `.git` (`chmod 000`), which must stay fail-closed (#339).
+			if (isNotAGitRepositoryDiagnostic(e) && !exists(resolve(root, ".git"))) {
+				return FORBIDDEN_ROOT_GONE;
+			}
 			if (attempt < attempts) sleepSync(retryDelayMs);
 		}
 	}

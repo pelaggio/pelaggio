@@ -218,6 +218,99 @@ describe("snapshotForbiddenRoot", () => {
 		);
 		assert.equal(calls, 2, "a present root exhausts the retry budget then throws");
 	});
+
+	it("returns GONE for a present non-Git directory shell (diagnostic ∧ no .git) without retry (#339)", () => {
+		const root = "/tmp/directory-shell-root";
+		const sleeps: number[] = [];
+		let calls = 0;
+		const result = snapshotForbiddenRoot(root, {
+			attempts: 3,
+			retryDelayMs: 25,
+			exists: (p) => p === root, // root present; <root>/.git absent
+			sleepSync: (ms) => {
+				sleeps.push(ms);
+			},
+			run: () => {
+				calls++;
+				const err = new Error("Command failed: git status");
+				(err as Error & { stderr: string }).stderr = "fatal: not a git repository (or any of the parent directories): .git";
+				throw err;
+			},
+		});
+		assert.equal(result, FORBIDDEN_ROOT_GONE);
+		assert.equal(calls, 1, "directory shell short-circuits without retry");
+		assert.deepEqual(sleeps, []);
+	});
+
+	it("returns GONE for a real plain directory via the default Git runner (#339)", () => {
+		const dir = mkdtempSync(join(tmpdir(), "pelaggio-non-git-shell-"));
+		// Plain directory, no .git — production-shaped residual worktree shell.
+		assert.equal(existsSync(join(dir, ".git")), false);
+		const result = snapshotForbiddenRoot(dir);
+		assert.equal(result, FORBIDDEN_ROOT_GONE);
+	});
+
+	it("fails closed when the non-repo diagnostic matches but .git is still present (#339 permission collision)", () => {
+		const root = "/tmp/unreadable-git-root";
+		const sleeps: number[] = [];
+		let calls = 0;
+		assert.throws(
+			() =>
+				snapshotForbiddenRoot(root, {
+					attempts: FORBIDDEN_ROOT_SNAPSHOT_ATTEMPTS,
+					retryDelayMs: 10,
+					// Root and .git both present — unreadable .git still existsSync as true.
+					exists: () => true,
+					sleepSync: (ms) => {
+						sleeps.push(ms);
+					},
+					run: () => {
+						calls++;
+						const err = new Error("Command failed: git status");
+						(err as Error & { stderr: string }).stderr = "fatal: not a git repository (or any of the parent directories): .git";
+						throw err;
+					},
+				}),
+			(e: unknown) => {
+				assert.ok(e instanceof Error);
+				assert.match(e.message, /failed to snapshot forbidden root \/tmp\/unreadable-git-root:/);
+				assert.match(e.message, /fatal: not a git repository/);
+				return true;
+			},
+		);
+		assert.equal(calls, FORBIDDEN_ROOT_SNAPSHOT_ATTEMPTS);
+		assert.equal(sleeps.length, FORBIDDEN_ROOT_SNAPSHOT_ATTEMPTS - 1);
+	});
+
+	it("fails closed on a nonmatching Git fatal while the root is present (#339)", () => {
+		let calls = 0;
+		const sleeps: number[] = [];
+		assert.throws(
+			() =>
+				snapshotForbiddenRoot("/tmp/corrupt-index-root", {
+					attempts: 2,
+					retryDelayMs: 10,
+					exists: () => true,
+					sleepSync: (ms) => {
+						sleeps.push(ms);
+					},
+					run: () => {
+						calls++;
+						const err = new Error("Command failed: git status");
+						(err as Error & { stderr: string }).stderr = "fatal: .git/index: index file smaller than expected";
+						throw err;
+					},
+				}),
+			(e: unknown) => {
+				assert.ok(e instanceof Error);
+				assert.match(e.message, /failed to snapshot forbidden root \/tmp\/corrupt-index-root:/);
+				assert.match(e.message, /index file smaller than expected/);
+				return true;
+			},
+		);
+		assert.equal(calls, 2);
+		assert.equal(sleeps.length, 1);
+	});
 });
 
 describe("diffForbiddenRootSnapshots (#308 GONE-aware)", () => {
@@ -290,6 +383,17 @@ describe("createMainCheckoutDeltaObserver", () => {
 		const broken = createMainCheckoutDeltaObserver(join(tmpdir(), "does-not-exist-pelaggio"));
 		assert.equal(broken.beforeTool("x").kind, "error");
 		assert.deepEqual(broken.finish(), broken.finish(), "finish is idempotent");
+	});
+
+	it("fails closed when the main checkout is PRESENT but not a git repository (#339 security guarantee)", () => {
+		// A main checkout that exists yet has no `.git` (corrupt/half-removed main) must NEVER be
+		// GONE-tolerated the way a peer worktree shell is: it routes through the observer as a
+		// fail-closed error. mainRepo is never accepted as FORBIDDEN_ROOT_GONE.
+		const notARepo = mkdtempSync(join(tmpdir(), "pelaggio-main-notrepo-"));
+		const observer = createMainCheckoutDeltaObserver(notARepo);
+		const result = observer.beforeTool("x");
+		assert.equal(result.kind, "error");
+		assert.match(result.kind === "error" ? result.message : "", /main checkout root vanished/);
 	});
 });
 
