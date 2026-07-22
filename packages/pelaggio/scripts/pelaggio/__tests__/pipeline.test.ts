@@ -8,6 +8,7 @@ import { WORKTREE_PREFIX } from "../config.js";
 import { EffectsManifestError } from "../effects.js";
 import { FifoPolicy } from "../flow-policy.js";
 import { type RunStepFn, runOrchestrator, runPipeline } from "../pipeline.js";
+import { shipBodyFile } from "../ship/decision.js";
 import type { ShipBookkeepingResult } from "../ship/index.js";
 import { getShipTarget } from "../ship/index.js";
 import type { Flags, ParkSignal, PipelineOpts } from "../types.js";
@@ -24,6 +25,16 @@ import {
 	setupHermeticPipelineEnv,
 	teardownHermeticPipelineEnv,
 } from "./mocks.js";
+
+/** PR-mode ship fixture using the fixed body-file transport (inline prBody removed in #303). */
+function prShipDecision(body = "Body"): { ok: true; writes: Record<string, string>; text: string } {
+	const file = shipBodyFile("TOOL-99");
+	return {
+		ok: true,
+		writes: { [file]: body },
+		text: `SHIP_DECISION\n{"target":"pull-request","headBranch":"feat/tool-99","prTitle":"Ship","prBodyFile":"${file}"}\nEND_SHIP_DECISION`,
+	};
+}
 
 // Mute console output (the pipeline's high-volume log() floods node:test IPC on CI),
 // stub provider availability, and pin the authoring loop off so these flow tests stay
@@ -1027,7 +1038,7 @@ describe("runPipeline — worktree confinement audit", () => {
 					},
 				},
 				"shakedown-code": { ok: true },
-				ship: { ok: true, text: `SHIP_DECISION\n{"target":"pull-request","headBranch":"feat/tool-99","prTitle":"Ship","prBody":"Body"}\nEND_SHIP_DECISION` },
+				ship: prShipDecision(),
 			},
 			parkSignal,
 		);
@@ -1058,7 +1069,7 @@ describe("runPipeline — worktree confinement audit", () => {
 			{
 				implement: { ok: true, writes: { "src/feature.ts": "export const ok = true;\n" } },
 				"shakedown-code": { ok: true },
-				ship: { ok: true, text: `SHIP_DECISION\n{"target":"pull-request","headBranch":"feat/tool-99","prTitle":"Ship","prBody":"Body"}\nEND_SHIP_DECISION` },
+				ship: prShipDecision(),
 			},
 			parkSignal,
 		);
@@ -1235,7 +1246,7 @@ describe("runPipeline — worktree confinement audit", () => {
 			{
 				implement: { ok: true, writes: { "src/feature.ts": "export const ok = true;\n" } },
 				"shakedown-code": { ok: true },
-				ship: { ok: true, text: `SHIP_DECISION\n{"target":"pull-request","headBranch":"feat/tool-99","prTitle":"Ship","prBody":"Body"}\nEND_SHIP_DECISION` },
+				ship: prShipDecision(),
 			},
 			parkSignal,
 		);
@@ -1819,13 +1830,21 @@ describe("runPipeline — RoadmapSource injection", () => {
 
 		assert.equal(result.completed, false);
 		assert.equal(result.error, "plan failed");
-		const steps = logs[0].steps as Array<{ name: string; ok: boolean; subtype?: string; outputTail?: string }>;
+		const steps = logs[0].steps as Array<{
+			name: string;
+			ok: boolean;
+			subtype?: string;
+			outputTail?: string;
+			effectsError?: { code: string; message: string };
+		}>;
 		assert.deepEqual(
 			steps.map((s) => s.name),
 			["plan"],
 		);
 		assert.equal(steps[0].ok, false);
 		assert.equal(steps[0].subtype, "error_effects_manifest");
+		assert.deepEqual(steps[0].effectsError, { code: "provenance_mismatch", message: "test mismatch" });
+		assert.match(steps[0].outputTail ?? "", /provenance_mismatch/);
 	});
 
 	it("injects the roadmap item body into the plan prompt (#103)", async () => {

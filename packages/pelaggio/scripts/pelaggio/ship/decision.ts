@@ -1,4 +1,4 @@
-import { closeSync, constants, fstatSync, openSync, readSync, realpathSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync, unlinkSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import { EffectsManifestError, type ShipDecisionEffect } from "../effects.js";
 import type { ShipTargetName, StepResult } from "../types.js";
@@ -11,6 +11,25 @@ const MAX_PR_BODY_BYTES = 512 * 1024;
 /** The fixed, harness-owned location the ship worker writes the PR body to, relative to the worktree. */
 export function shipBodyFile(itemId: string): string {
 	return `.dev/ship/pr-body-${itemId}.md`;
+}
+
+/**
+ * Remove the harness-owned PR body scratch file after a successful PR-mode ship dispatch.
+ * Resolves only `shipBodyFile(itemId)` under `worktree`; removes a regular file, no-ops if
+ * absent, and leaves symlinks / non-files untouched (does not follow). Mutation-free relative
+ * to the parser so a failed resolve can still retry against the retained file.
+ */
+export function cleanupShipBodyFile(worktree: string, itemId: string): void {
+	const path = resolve(worktree, shipBodyFile(itemId));
+	try {
+		const st = lstatSync(path);
+		// lstat: leave symlinks and non-regular nodes; only unlink a plain file.
+		if (!st.isFile()) return;
+		unlinkSync(path);
+	} catch (e) {
+		if ((e as NodeJS.ErrnoException).code === "ENOENT") return;
+		throw e;
+	}
 }
 
 export function parseShipDecisionEffect(step: StepResult, expected: { itemId: string; target: ShipTargetName; worktree: string }): ShipDecisionEffect {
@@ -31,20 +50,21 @@ export function parseShipDecisionEffect(step: StepResult, expected: { itemId: st
 	if (!isNonEmptyString(parsed.headBranch)) throw new EffectsManifestError("invalid_manifest", "ship decision headBranch must be a non-empty string");
 	if (!isNonEmptyString(parsed.prTitle)) throw new EffectsManifestError("invalid_manifest", "ship decision prTitle must be a non-empty string");
 
-	// The PR body travels as a file at a fixed, harness-owned location inside the worktree so a large,
-	// quote/newline-heavy body never has to survive hand-escaped JSON in prose (#303). Constrained to
-	// that exact path — never an arbitrary worktree file — and read symlink-safe (#312). A legacy inline
-	// `prBody` is still accepted as a small-body fallback.
+	// The PR body travels only as a file at a fixed, harness-owned location inside the worktree so a
+	// large, quote/newline-heavy body never has to survive hand-escaped JSON in prose (#303).
+	// Constrained to that exact path — never an arbitrary worktree file — and read symlink-safe
+	// (#312). Inline `prBody` is no longer accepted; if both keys are present the file wins and the
+	// leftover scalar is ignored (no dual-source merge).
 	const expectedBodyFile = shipBodyFile(expected.itemId);
-	let prBody: string | undefined;
-	if (isNonEmptyString(parsed.prBodyFile)) {
-		if (parsed.prBodyFile !== expectedBodyFile) throw new EffectsManifestError("invalid_manifest", `ship decision prBodyFile must be exactly ${expectedBodyFile}, got ${String(parsed.prBodyFile)}`);
-		prBody = readPrBodyFile(expected.worktree, expectedBodyFile);
-	} else if (isNonEmptyString(parsed.prBody)) {
-		prBody = parsed.prBody;
+	if (!isNonEmptyString(parsed.prBodyFile)) {
+		throw new EffectsManifestError("invalid_manifest", `ship decision must provide a non-empty prBodyFile (exactly ${expectedBodyFile})`);
 	}
-	if (prBody === undefined || prBody.trim() === "") {
-		throw new EffectsManifestError("invalid_manifest", `ship decision must provide a non-empty prBodyFile (exactly ${expectedBodyFile}) or an inline prBody`);
+	if (parsed.prBodyFile !== expectedBodyFile) {
+		throw new EffectsManifestError("invalid_manifest", `ship decision prBodyFile must be exactly ${expectedBodyFile}, got ${String(parsed.prBodyFile)}`);
+	}
+	const prBody = readPrBodyFile(expected.worktree, expectedBodyFile);
+	if (prBody.trim() === "") {
+		throw new EffectsManifestError("invalid_manifest", `ship decision prBodyFile is empty: ${expectedBodyFile}`);
 	}
 
 	return {

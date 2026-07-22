@@ -76,7 +76,7 @@ import { cleanupReviewHead, findReviewCandidates, isReviewHeadPath, postLocalMod
 import { claimRevision, ensureReviseWorktree, fetchReviewFindings, findRevisablePrs, isAutopilotManaged, postParkComment, reviseFindingsPath } from "./revise-sweep.js";
 import { defaultGhRun, type GhRunner } from "./roadmap/github-issues.js";
 import { getRoadmapSource, type RoadmapSource } from "./roadmap/index.js";
-import { parseShipDecisionEffect } from "./ship/decision.js";
+import { cleanupShipBodyFile, parseShipDecisionEffect, shipBodyFile } from "./ship/decision.js";
 import { commitStrayBookkeeping, getShipTarget, isAutonomousRemotePush, isShipTargetName, runShipBookkeeping as runShipBookkeepingDefault, SHIP_TARGET_NAMES } from "./ship/index.js";
 import { extractPrUrl } from "./ship/pull-request.js";
 import { runStep as runStepDefault } from "./step-runner.js";
@@ -410,28 +410,51 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 					cwd,
 					preSha,
 				};
-				try {
-					const resolvedEffects = typeof effects === "function" ? effects(result) : effects;
-					if (resolvedEffects.length > 0) {
-						writeEffectsManifest(ctx, resolvedEffects);
-						const effectsResult = await dispatchStepEffects({ ...ctx, roadmap, log });
-						if (effectsResult.appendText) {
-							result = {
-								...result,
-								text: appendResultText(result.text, effectsResult.appendText),
-								fullText: appendResultText(result.fullText, effectsResult.appendText),
-							};
-						}
-					}
-				} catch (e) {
+				// Phase-split so retry policy can tell resolve-time invalid decisions
+				// (no forge side-effect yet) from write/dispatch failures (terminal).
+				const failEffects = (e: unknown, phase: "resolve" | "write" | "dispatch"): void => {
 					const code = e instanceof EffectsManifestError ? e.code : "effect_failed";
 					const message = e instanceof Error ? e.message : String(e);
+					const text = `${code}: ${message}`;
+					// Prefer diagnosis over a valid-looking decision tail for TUI / recent-failures
+					// (same pattern as confinement's pipeline-owned override).
 					result = {
 						...result,
 						ok: false,
 						subtype: "error_effects_manifest",
-						text: `${code}: ${message}`,
+						text,
+						fullText: text,
+						outputTail: text.slice(0, 200),
+						effectsError: { code, message, phase },
 					};
+				};
+				let resolvedEffects: Effect[] | undefined;
+				try {
+					resolvedEffects = typeof effects === "function" ? effects(result) : effects;
+				} catch (e) {
+					failEffects(e, "resolve");
+				}
+				if (resolvedEffects !== undefined && resolvedEffects.length > 0) {
+					try {
+						writeEffectsManifest(ctx, resolvedEffects);
+					} catch (e) {
+						failEffects(e, "write");
+						resolvedEffects = undefined;
+					}
+					if (resolvedEffects !== undefined) {
+						try {
+							const effectsResult = await dispatchStepEffects({ ...ctx, roadmap, log });
+							if (effectsResult.appendText) {
+								result = {
+									...result,
+									text: appendResultText(result.text, effectsResult.appendText),
+									fullText: appendResultText(result.fullText, effectsResult.appendText),
+								};
+							}
+						} catch (e) {
+							failEffects(e, "dispatch");
+						}
+					}
 				}
 			} else if (checkpointEffect) {
 				const committed = checkpoint(cwd, checkpointEffect.label);
@@ -477,6 +500,9 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		// Persist the full confinement diagnosis on the step log (unbounded) when the
 		// pipeline overrode the provider result — outputTail alone is capped at 200.
 		const confinementErrorDetail = result.subtype === "error_confinement" ? result.text : undefined;
+		// Effects failures get a structured { code, message } pair for log-only repro
+		// (phase stays in-memory only — retry policy is not operator-facing).
+		const effectsErrorLog = result.effectsError ? { code: result.effectsError.code, message: result.effectsError.message } : undefined;
 
 		steps.push(
 			stepLog({
@@ -491,6 +517,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				...(result.toolCounts ? { toolCounts: result.toolCounts } : {}),
 				...(result.outputTail ? { outputTail: result.outputTail } : {}),
 				...(confinementErrorDetail !== undefined ? { errorDetail: confinementErrorDetail } : {}),
+				...(effectsErrorLog ? { effectsError: effectsErrorLog } : {}),
 				...(filesChanged.length > 0 ? { filesChanged } : {}),
 				...(result.stalledAsk ? { stalledAsk: true } : {}),
 				...(result.decisions?.length ? { decisions: result.decisions } : {}),
@@ -1303,17 +1330,53 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		});
 	}
 
-	const ship = await step("ship", shipPrompt, worktree!, {
-		...(target.name === "direct-push"
-			? {}
-			: {
-					effects: (result) => {
-						const decision = parseShipDecisionEffect(result, { itemId: itemId!, target: target.name, worktree: worktree! });
-						return [{ ...decision, ...(reviewRecordMarkdown ? { prBody: `${decision.prBody}\n\n${reviewRecordMarkdown}` } : {}) }];
-					},
-				}),
-	});
-	cost += ship.cost;
+	// PR modes resolve a dynamic ship decision from the step output; direct-push has no
+	// effects. Retry only resolve-phase invalid_manifest (before any forge write/dispatch).
+	const shipEffects =
+		target.name === "direct-push"
+			? undefined
+			: (result: StepResult) => {
+					const decision = parseShipDecisionEffect(result, { itemId: itemId!, target: target.name, worktree: worktree! });
+					return [{ ...decision, ...(reviewRecordMarkdown ? { prBody: `${decision.prBody}\n\n${reviewRecordMarkdown}` } : {}) }];
+				};
+
+	let ship: StepResult;
+	if (target.name === "direct-push") {
+		ship = await step("ship", shipPrompt, worktree!);
+		cost += ship.cost;
+	} else {
+		// Attempt-cap only (no budget gate) — one acceptance-required recovery for a
+		// malformed decision / missing body file before any manifest is written.
+		ship = await step("ship", shipPrompt, worktree!, { attempt: 1, effects: shipEffects });
+		cost += ship.cost;
+		const canRetryShip = !ship.ok && ship.subtype === "error_effects_manifest" && ship.effectsError?.code === "invalid_manifest" && ship.effectsError?.phase === "resolve";
+		if (canRetryShip) {
+			const parkedBeforeRetry = parkExit();
+			if (parkedBeforeRetry) return parkedBeforeRetry;
+			const prior = ship.effectsError!;
+			const retryPrompt = [
+				`Previous ship decision failed (${prior.code}: ${prior.message}).`,
+				`Write the PR body (markdown, ≤512 KiB) to exactly \`${shipBodyFile(itemId!)}\` inside the worktree`,
+				"(overwrite if present; plain file at that exact path, not a symlink).",
+				"Re-emit exactly one SHIP_DECISION block with short scalar JSON fields only — use prBodyFile,",
+				"never an inline prBody.",
+				"",
+				shipPrompt,
+			].join("\n");
+			log("ship decision invalid — retrying once...");
+			ship = await step("ship", retryPrompt, worktree!, { attempt: 2, effects: shipEffects });
+			cost += ship.cost;
+		}
+		// Scratch lifecycle: delete the body file only after a successful PR dispatch.
+		// Retain it on terminal failure for diagnosis / second-attempt input.
+		if (ship.ok && !opts.dryRun) {
+			try {
+				cleanupShipBodyFile(worktree!, itemId!);
+			} catch (e) {
+				log(`⚠ ship body cleanup failed: ${e instanceof Error ? e.message : String(e)}`);
+			}
+		}
+	}
 
 	if (classifyOutcome(ship) === "error_confinement") {
 		return finish({ itemId, completed: false, cost, verdict, error: "ship failed: confinement violation" });

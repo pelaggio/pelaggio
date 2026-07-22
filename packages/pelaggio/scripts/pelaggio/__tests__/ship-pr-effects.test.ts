@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import type { ShipDecisionEffect } from "../effects.js";
 import type { GhRunner } from "../roadmap/github-issues.js";
-import { parseShipDecisionEffect, shipBodyFile } from "../ship/decision.js";
+import { cleanupShipBodyFile, parseShipDecisionEffect, shipBodyFile } from "../ship/decision.js";
 import { runShipPrEffects } from "../ship/pr-effects.js";
 import type { StepResult } from "../types.js";
 
@@ -64,21 +64,56 @@ function makeGh(responses: Array<{ match: string[]; stdout?: string; stderr?: st
 describe("parseShipDecisionEffect", () => {
 	const wt = mkdtempSync(join(tmpdir(), "pelaggio-ship-decision-"));
 
-	it("parses a valid marked JSON block (inline prBody fallback)", () => {
-		const parsed = parseShipDecisionEffect(step(`SHIP_DECISION\n{"target":"pull-request","headBranch":"feat/tool-99","prTitle":"Ship TOOL-99","prBody":"Body"}\nEND_SHIP_DECISION`), { itemId: "TOOL-99", target: "pull-request", worktree: wt });
-		assert.deepEqual(parsed, decision());
+	function writeBody(worktree: string, body: string, itemId = "TOOL-99"): void {
+		mkdirSync(join(worktree, ".dev", "ship"), { recursive: true });
+		writeFileSync(join(worktree, ".dev", "ship", `pr-body-${itemId}.md`), body);
+	}
+
+	it("rejects legacy inline prBody (file-only transport)", () => {
+		assert.throws(
+			() =>
+				parseShipDecisionEffect(step(`SHIP_DECISION\n{"target":"pull-request","headBranch":"feat/tool-99","prTitle":"Ship TOOL-99","prBody":"Body"}\nEND_SHIP_DECISION`), {
+					itemId: "TOOL-99",
+					target: "pull-request",
+					worktree: wt,
+				}),
+			/must provide a non-empty prBodyFile/,
+		);
 	});
 
 	it("reads the PR body from a worktree-relative prBodyFile (the #303 large-body path)", () => {
-		mkdirSync(join(wt, ".dev", "ship"), { recursive: true });
 		const body = 'Big body with "quotes", newlines\nand `backticks` — the JSON-breaking case.';
-		writeFileSync(join(wt, ".dev", "ship", "pr-body-TOOL-99.md"), body);
+		writeBody(wt, body);
 		const parsed = parseShipDecisionEffect(step(`SHIP_DECISION\n{"target":"pull-request","headBranch":"feat/tool-99","prTitle":"Ship TOOL-99","prBodyFile":".dev/ship/pr-body-TOOL-99.md"}\nEND_SHIP_DECISION`), {
 			itemId: "TOOL-99",
 			target: "pull-request",
 			worktree: wt,
 		});
 		assert.equal(parsed.prBody, body);
+		assert.deepEqual(parsed, decision({ prBody: body }));
+	});
+
+	it("prefers prBodyFile over a leftover inline prBody when both keys are present", () => {
+		writeBody(wt, "from-file");
+		const parsed = parseShipDecisionEffect(step(`SHIP_DECISION\n{"target":"pull-request","headBranch":"feat/tool-99","prTitle":"Ship TOOL-99","prBodyFile":".dev/ship/pr-body-TOOL-99.md","prBody":"from-inline"}\nEND_SHIP_DECISION`), {
+			itemId: "TOOL-99",
+			target: "pull-request",
+			worktree: wt,
+		});
+		assert.equal(parsed.prBody, "from-file");
+	});
+
+	it("rejects an empty body file", () => {
+		writeBody(wt, "   \n");
+		assert.throws(
+			() =>
+				parseShipDecisionEffect(step(`SHIP_DECISION\n{"target":"pull-request","headBranch":"feat/tool-99","prTitle":"Ship","prBodyFile":".dev/ship/pr-body-TOOL-99.md"}\nEND_SHIP_DECISION`), {
+					itemId: "TOOL-99",
+					target: "pull-request",
+					worktree: wt,
+				}),
+			/empty/,
+		);
 	});
 
 	it("rejects any prBodyFile that is not the exact item-scoped path (no arbitrary-file read, #312)", () => {
@@ -95,6 +130,19 @@ describe("parseShipDecisionEffect", () => {
 
 		// Missing body file.
 		assert.throws(() => parseShipDecisionEffect(step(dec), exp(mkdtempSync(join(tmpdir(), "pelaggio-ship-missing-")))), /not found/);
+
+		// Leaf symlink: the path is exact but O_NOFOLLOW refuses to open it.
+		const wtLeaf = mkdtempSync(join(tmpdir(), "pelaggio-ship-leaf-"));
+		const outsideLeaf = mkdtempSync(join(tmpdir(), "pelaggio-ship-leaf-out-"));
+		writeFileSync(join(outsideLeaf, "secret.md"), "host secret");
+		mkdirSync(join(wtLeaf, ".dev", "ship"), { recursive: true });
+		let leafLinked = true;
+		try {
+			symlinkSync(join(outsideLeaf, "secret.md"), join(wtLeaf, ".dev", "ship", "pr-body-TOOL-99.md"));
+		} catch {
+			leafLinked = false;
+		}
+		if (leafLinked) assert.throws(() => parseShipDecisionEffect(step(dec), exp(wtLeaf)), /not found|not a plain file|symlink/);
 
 		// Ancestor-symlink escape: `.dev/ship` is a symlink to a directory outside the worktree, so the
 		// canonical path diverges from the lexical one even though the emitted path is the exact one.
@@ -126,13 +174,43 @@ describe("parseShipDecisionEffect", () => {
 		assert.throws(() => parseShipDecisionEffect(step(dec), { itemId: evilId, target: "pull-request", worktree: wt }), /escapes the worktree/);
 	});
 
-	it("rejects missing block, bad JSON, item mismatch, target mismatch, and no body", () => {
+	it("rejects missing block, bad JSON, item mismatch, target mismatch, and missing prBodyFile", () => {
 		const exp = { itemId: "TOOL-99", target: "pull-request" as const, worktree: wt };
 		assert.throws(() => parseShipDecisionEffect(step("done"), exp), /not found/);
 		assert.throws(() => parseShipDecisionEffect(step("SHIP_DECISION\nnope\nEND_SHIP_DECISION"), exp), /not valid JSON/);
-		assert.throws(() => parseShipDecisionEffect(step(`SHIP_DECISION\n{"target":"pull-request","itemId":"TOOL-1","headBranch":"feat/tool-99","prTitle":"Ship","prBody":"Body"}\nEND_SHIP_DECISION`), exp), /itemId/);
-		assert.throws(() => parseShipDecisionEffect(step(`SHIP_DECISION\n{"target":"auto-merge-pr","headBranch":"feat/tool-99","prTitle":"Ship","prBody":"Body"}\nEND_SHIP_DECISION`), exp), /target/);
-		assert.throws(() => parseShipDecisionEffect(step(`SHIP_DECISION\n{"target":"pull-request","headBranch":"feat/tool-99","prTitle":"Ship"}\nEND_SHIP_DECISION`), exp), /prBodyFile.*or an inline prBody/);
+		assert.throws(() => parseShipDecisionEffect(step(`SHIP_DECISION\n{"target":"pull-request","itemId":"TOOL-1","headBranch":"feat/tool-99","prTitle":"Ship","prBodyFile":".dev/ship/pr-body-TOOL-99.md"}\nEND_SHIP_DECISION`), exp), /itemId/);
+		assert.throws(() => parseShipDecisionEffect(step(`SHIP_DECISION\n{"target":"auto-merge-pr","headBranch":"feat/tool-99","prTitle":"Ship","prBodyFile":".dev/ship/pr-body-TOOL-99.md"}\nEND_SHIP_DECISION`), exp), /target/);
+		assert.throws(() => parseShipDecisionEffect(step(`SHIP_DECISION\n{"target":"pull-request","headBranch":"feat/tool-99","prTitle":"Ship"}\nEND_SHIP_DECISION`), exp), /must provide a non-empty prBodyFile/);
+	});
+});
+
+describe("cleanupShipBodyFile", () => {
+	it("removes a regular body file and no-ops when absent", () => {
+		const wt = mkdtempSync(join(tmpdir(), "pelaggio-ship-cleanup-"));
+		const path = join(wt, ".dev", "ship", "pr-body-TOOL-99.md");
+		mkdirSync(join(wt, ".dev", "ship"), { recursive: true });
+		writeFileSync(path, "body");
+		cleanupShipBodyFile(wt, "TOOL-99");
+		assert.equal(existsSync(path), false);
+		// Absent is a no-op.
+		cleanupShipBodyFile(wt, "TOOL-99");
+	});
+
+	it("leaves a symlinked leaf untouched", () => {
+		const wt = mkdtempSync(join(tmpdir(), "pelaggio-ship-cleanup-sym-"));
+		const outside = mkdtempSync(join(tmpdir(), "pelaggio-ship-cleanup-out-"));
+		const target = join(outside, "secret.md");
+		writeFileSync(target, "host secret");
+		mkdirSync(join(wt, ".dev", "ship"), { recursive: true });
+		const leaf = join(wt, ".dev", "ship", "pr-body-TOOL-99.md");
+		try {
+			symlinkSync(target, leaf);
+		} catch {
+			return; // symlink may be denied
+		}
+		cleanupShipBodyFile(wt, "TOOL-99");
+		assert.equal(existsSync(leaf), true, "symlink leaf must be retained");
+		assert.equal(existsSync(target), true, "must not follow and delete the target");
 	});
 });
 

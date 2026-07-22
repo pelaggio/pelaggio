@@ -5,12 +5,34 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { DEFAULT_SHIP_TARGET, loadConfig } from "../config.js";
+import { type Effect, EffectsManifestError } from "../effects.js";
+import { expandSkill } from "../helpers.js";
 import { remotePushWarning, runPipeline } from "../pipeline.js";
+import { shipBodyFile } from "../ship/decision.js";
 import type { ShipBookkeepingCtx, ShipBookkeepingResult } from "../ship/index.js";
 import { getShipTarget, isAutonomousRemotePush, isShipTargetName, SHIP_TARGET_NAMES } from "../ship/index.js";
 import { stripAnsi } from "../tui.js";
 import type { Flags, PipelineOpts, ShipTargetName, StepResult } from "../types.js";
 import { allCommitMessages, createMockRunStep, makeLiveStatus, makeParkSignal, makeTempGitRepo, makeTempRepoWithParent, setupHermeticPipelineEnv, teardownHermeticPipelineEnv } from "./mocks.js";
+
+/** PR-mode ship fixture: body via fixed file path (inline prBody is no longer accepted). */
+function prShipDecision(
+	target: "pull-request" | "auto-merge-pr",
+	itemId = "TOOL-99",
+	body = "Body",
+): {
+	ok: true;
+	writes: Record<string, string>;
+	text: string;
+	cost?: number;
+} {
+	const file = shipBodyFile(itemId);
+	return {
+		ok: true,
+		writes: { [file]: body },
+		text: `SHIP_DECISION\n{"target":"${target}","headBranch":"feat/tool-99","prTitle":"Ship ${itemId}","prBodyFile":"${file}"}\nEND_SHIP_DECISION`,
+	};
+}
 
 // ship.test.ts drives the real runPipeline through shakedown → ship, so it needs the
 // same hermetic env as pipeline.test.ts (provider availability + authoring off) or the
@@ -140,6 +162,9 @@ describe("pull-request adapter", () => {
 		assert.match(prompt, /SHIP_DECISION/);
 		assert.match(prompt, /pull-request/);
 		assert.match(prompt, /NOT merge/);
+		assert.match(prompt, /prBodyFile/);
+		assert.match(prompt, /\.dev\/ship\/pr-body-TOOL-99\.md/);
+		assert.doesNotMatch(prompt, /"prBody"/);
 		assert.doesNotMatch(prompt, /gh pr create/);
 		assert.doesNotMatch(prompt, /git push/);
 	});
@@ -178,6 +203,9 @@ describe("auto-merge-pr adapter", () => {
 		const prompt = a.buildPrompt({ itemId: "TOOL-99", worktree: "/tmp/wt" });
 		assert.match(prompt, /SHIP_DECISION/);
 		assert.match(prompt, /auto-merge-pr/);
+		assert.match(prompt, /prBodyFile/);
+		assert.match(prompt, /\.dev\/ship\/pr-body-TOOL-99\.md/);
+		assert.doesNotMatch(prompt, /"prBody"/);
 		assert.doesNotMatch(prompt, /gh pr create/);
 		assert.doesNotMatch(prompt, /git push/);
 		assert.doesNotMatch(prompt, /gh pr merge --auto/);
@@ -491,7 +519,7 @@ describe("runPipeline — ship target dispatch", () => {
 				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
 				implement: { ok: true, writes: { "impl.txt": "x" } },
 				"shakedown-code": { ok: true },
-				ship: { ok: true, text: `SHIP_DECISION\n{"target":"pull-request","headBranch":"feat/tool-99","prTitle":"Ship TOOL-99","prBody":"Body"}\nEND_SHIP_DECISION` },
+				ship: prShipDecision("pull-request"),
 			},
 			parkSignal,
 		);
@@ -508,6 +536,8 @@ describe("runPipeline — ship target dispatch", () => {
 		assert.ok(shipCall);
 		assert.match(shipCall.prompt, /SHIP_DECISION/);
 		assert.match(shipCall.prompt, /pull-request/);
+		// Successful PR ship cleans up the scratch body file.
+		assert.equal(existsSync(join(worktree, shipBodyFile("TOOL-99"))), false);
 	});
 
 	it("auto-merge-pr: decision effect appends PR URL", async () => {
@@ -519,7 +549,7 @@ describe("runPipeline — ship target dispatch", () => {
 				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
 				implement: { ok: true, writes: { "impl.txt": "x" } },
 				"shakedown-code": { ok: true },
-				ship: { ok: true, text: `SHIP_DECISION\n{"target":"auto-merge-pr","headBranch":"feat/tool-99","prTitle":"Ship TOOL-99","prBody":"Body"}\nEND_SHIP_DECISION` },
+				ship: prShipDecision("auto-merge-pr"),
 			},
 			parkSignal,
 		);
@@ -536,6 +566,192 @@ describe("runPipeline — ship target dispatch", () => {
 		assert.ok(shipCall);
 		assert.match(shipCall.prompt, /SHIP_DECISION/);
 		assert.match(shipCall.prompt, /auto-merge-pr/);
+	});
+
+	it("pull-request: rich markdown body is byte-identical in the written effects manifest", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const richBody = 'Title with "quotes"\n\n```ts\nconst x = 1;\n```\n\nand `backticks`.';
+		const capturedShip: Effect[] = [];
+		const { runStep } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				ship: prShipDecision("pull-request", "TOOL-99", richBody),
+			},
+			parkSignal,
+		);
+		const result = await runPipeline(baseOpts(worktree, "pull-request"), parkSignal, baseFlags, {
+			runStep,
+			listWorktrees: () => [],
+			appendLog: () => {},
+			writeEffectsManifest: (ctx, effects) => {
+				if (ctx.step === "ship") capturedShip.push(...effects);
+			},
+			dispatchStepEffects: async (ctx) => (ctx.step === "ship" ? { appendText: PR_URL } : {}),
+		});
+		assert.equal(result.completed, true);
+		assert.equal(capturedShip.length, 1);
+		const effect = capturedShip[0];
+		assert.equal(effect.kind, "ship.ShipDecision");
+		if (effect.kind === "ship.ShipDecision") assert.equal(effect.prBody, richBody);
+	});
+
+	it("pull-request: invalid decision retries once; attempt 2 succeeds and cleans up", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const shipDispatchCalls: number[] = [];
+		const { runStep, calls } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				// Attempt 1: missing body file / no prBodyFile → resolve-phase invalid_manifest.
+				// Attempt 2: valid file transport.
+				ship: [
+					{ ok: true, text: "SHIP_DECISION\nnot-json\nEND_SHIP_DECISION", cost: 0.02 },
+					{ ...prShipDecision("pull-request"), cost: 0.03 },
+				],
+			},
+			parkSignal,
+		);
+		const result = await runPipeline(baseOpts(worktree, "pull-request"), parkSignal, baseFlags, {
+			runStep,
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+			dispatchStepEffects: async (ctx) => {
+				if (ctx.step === "ship") shipDispatchCalls.push(1);
+				return ctx.step === "ship" ? { appendText: PR_URL } : {};
+			},
+		});
+		assert.equal(result.completed, true);
+		assert.equal(result.prUrl, PR_URL);
+		const shipCalls = calls.filter((c) => c.step === "ship");
+		assert.equal(shipCalls.length, 2);
+		assert.match(shipCalls[1].prompt, /Previous ship decision failed/);
+		assert.match(shipCalls[1].prompt, /prBodyFile/);
+		assert.equal(shipDispatchCalls.length, 1, "dispatch only after valid decision");
+		assert.equal(existsSync(join(worktree, shipBodyFile("TOOL-99"))), false, "cleanup after success");
+		const steps = logs[0].steps as Array<{ name: string; attempt?: number; ok: boolean; effectsError?: { code: string } }>;
+		const shipSteps = steps.filter((s) => s.name === "ship");
+		assert.equal(shipSteps.length, 2);
+		assert.equal(shipSteps[0].ok, false);
+		assert.equal(shipSteps[0].effectsError?.code, "invalid_manifest");
+		assert.equal(shipSteps[1].ok, true);
+		assert.equal(shipSteps[1].attempt, 2);
+		// Costs accumulate across attempts (0.01 defaults + 0.02 + 0.03 for ship).
+		assert.ok((result.cost as number) >= 0.05);
+	});
+
+	it("pull-request: both attempts invalid → terminal, scratch retained, no dispatch", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		let shipDispatchCount = 0;
+		let shipWriteCount = 0;
+		const bodyPath = join(worktree, shipBodyFile("TOOL-99"));
+		const { runStep, calls } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				// Both attempts: bad JSON → resolve-phase invalid_manifest. Attempt 1 still
+				// writes a scratch body so we can assert retention on terminal failure.
+				ship: [
+					{
+						ok: true,
+						writes: { [shipBodyFile("TOOL-99")]: "retained-for-diagnosis" },
+						text: "SHIP_DECISION\nnot-json\nEND_SHIP_DECISION",
+					},
+					{ ok: true, text: "SHIP_DECISION\nstill-bad\nEND_SHIP_DECISION" },
+				],
+			},
+			parkSignal,
+		);
+		const result = await runPipeline(baseOpts(worktree, "pull-request"), parkSignal, baseFlags, {
+			runStep,
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+			writeEffectsManifest: (ctx) => {
+				if (ctx.step === "ship") shipWriteCount += 1;
+			},
+			dispatchStepEffects: async (ctx) => {
+				if (ctx.step === "ship") shipDispatchCount += 1;
+				return {};
+			},
+		});
+		assert.equal(result.completed, false);
+		assert.equal(calls.filter((c) => c.step === "ship").length, 2);
+		assert.equal(shipWriteCount, 0);
+		assert.equal(shipDispatchCount, 0);
+		assert.equal(existsSync(bodyPath), true, "scratch retained after terminal failure");
+		assert.equal(readFileSync(bodyPath, "utf-8"), "retained-for-diagnosis");
+		const steps = logs[0].steps as Array<{ name: string; ok: boolean; effectsError?: { code: string; message: string } }>;
+		const shipSteps = steps.filter((s) => s.name === "ship");
+		assert.equal(shipSteps.length, 2);
+		assert.equal(shipSteps[1].ok, false);
+		assert.equal(shipSteps[1].effectsError?.code, "invalid_manifest");
+		assert.ok(shipSteps[1].effectsError?.message);
+	});
+
+	it("pull-request: provenance_mismatch and dispatch failures are not retried", async () => {
+		for (const fail of [
+			() => {
+				throw new EffectsManifestError("provenance_mismatch", "sha mismatch");
+			},
+			async () => {
+				throw new EffectsManifestError("effect_failed", "gh push failed");
+			},
+		] as const) {
+			const worktree = makeTempGitRepo();
+			const parkSignal = makeParkSignal();
+			const { runStep, calls } = createMockRunStep(
+				{
+					plan: { ok: true },
+					"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+					implement: { ok: true, writes: { "impl.txt": "x" } },
+					"shakedown-code": { ok: true },
+					ship: prShipDecision("pull-request"),
+				},
+				parkSignal,
+			);
+			const result = await runPipeline(baseOpts(worktree, "pull-request"), parkSignal, baseFlags, {
+				runStep,
+				listWorktrees: () => [],
+				appendLog: () => {},
+				// Only fail ship dispatch — plan/shakedown still need a no-op success path.
+				dispatchStepEffects: async (ctx) => {
+					if (ctx.step === "ship") return fail();
+					return {};
+				},
+			});
+			assert.equal(result.completed, false);
+			assert.equal(calls.filter((c) => c.step === "ship").length, 1, "single attempt only");
+			// Scratch retained on terminal failure.
+			assert.equal(existsSync(join(worktree, shipBodyFile("TOOL-99"))), true);
+		}
+	});
+
+	it("skill body and both buildPrompts require prBodyFile and forbid advertising inline prBody", () => {
+		const skill = expandSkill("ship", "pelaggio --target=pull-request");
+		assert.match(skill, /prBodyFile/);
+		assert.match(skill, /\.dev\/ship\/pr-body-\{ID\}\.md/);
+		assert.doesNotMatch(skill, /"prBody":\s*"\{body\}"/);
+		for (const name of ["pull-request", "auto-merge-pr"] as const) {
+			const prompt = getShipTarget(name).buildPrompt({ itemId: "TOOL-99", worktree: "/tmp/wt" });
+			assert.match(prompt, /prBodyFile/);
+			// Must not instruct the worker to emit an inline prBody field (file transport only).
+			assert.doesNotMatch(prompt, /"prBody"/);
+		}
 	});
 });
 
