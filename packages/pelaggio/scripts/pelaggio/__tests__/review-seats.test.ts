@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 import { forbiddenRootsForConfinement } from "../confinement/roots.js";
 import { authoringReviewSeatPath, authoringReviewSeatsRoot, authoringReviewSeatToken, cleanupAuthoringReviewSeat, cleanupAuthoringReviewSeatsForSha, isAuthoringReviewSeatPath, prepareAuthoringReviewSeat } from "../review/seats.js";
+import { isReviewHeadPath } from "../review-sweep.js";
 
 describe("authoring review seats (#269)", () => {
 	it("derives a deterministic path under .dev/authoring-review-seats/<sha>/", () => {
@@ -38,25 +39,37 @@ describe("authoring review seats (#269)", () => {
 	// NOT enter the forbidden-root set, or a concurrent reviewer trips
 	// error_confinement. A refactor of forbiddenRoots* that drops the
 	// isAuthoringReviewSeatPath exemption must fail here.
-	it("EXCLUDES peer authoring-review seats from the confinement forbidden-root set", () => {
+	it("EXCLUDES peer authoring-review seats AND review-head worktrees from the confinement forbidden-root set (#269/#308)", () => {
 		const repo = "/tmp/main-repo";
 		const mySeat = authoringReviewSeatPath(repo, { sha: "abc1234", seatId: "grok", pass: 1 });
 		const peerSeat = authoringReviewSeatPath(repo, { sha: "abc1234", seatId: "codex", pass: 1 });
+		const reviewHead = join(repo, ".dev", "review-heads", "deadbeefcafe");
 		const siblingWorktree = "/tmp/claude-autopilot-99";
-		// Candidate roots the audit would enumerate: mainRepo, a real sibling
-		// worktree, and both seats (mine as cwd, the peer as a dirty concurrent seat).
+		// Candidate roots the audit would enumerate: mainRepo, a real sibling worktree, both seats
+		// (mine as cwd, the peer as a dirty concurrent seat), and a throwaway PR-head review worktree.
 		const roots = forbiddenRootsForConfinement({
 			cwd: mySeat,
 			mainRepo: repo,
-			worktrees: [repo, siblingWorktree, mySeat, peerSeat],
-			isAuthoringReviewSeatPath: (root) => isAuthoringReviewSeatPath(root, repo),
+			worktrees: [repo, siblingWorktree, mySeat, peerSeat, reviewHead],
+			isEphemeralReviewWorktree: (root) => isAuthoringReviewSeatPath(root, repo) || isReviewHeadPath(root, repo),
 		});
 		// The peer seat is NOT forbidden — a dirty peer seat cannot cause error_confinement.
 		assert.ok(!roots.includes(peerSeat), "peer seat must be exempt from confinement");
 		// My own seat (cwd) is also not forbidden (exempt as cwd).
 		assert.ok(!roots.includes(mySeat), "own seat cwd must be exempt");
-		// A genuine sibling worktree IS still forbidden — the exemption is scoped to seats.
+		// #308: a review-head worktree is a throwaway harness checkout — exempt like a seat.
+		assert.ok(!roots.includes(reviewHead), "review-head worktree must be exempt from confinement");
+		// A genuine sibling worktree IS still forbidden — the exemption is scoped to harness checkouts.
 		assert.ok(roots.includes(siblingWorktree), "real sibling worktree stays forbidden");
+	});
+
+	it("isReviewHeadPath recognizes .dev/review-heads/ paths but not real worktrees (#308)", () => {
+		const repo = "/tmp/main-repo";
+		assert.equal(isReviewHeadPath(join(repo, ".dev", "review-heads", "abc123"), repo), true);
+		assert.equal(isReviewHeadPath(join(repo, ".dev", "review-heads", "abc123", "src"), repo), true);
+		assert.equal(isReviewHeadPath(join(repo, ".dev", "review-heads"), repo), true);
+		assert.equal(isReviewHeadPath(join(repo, "packages", "pelaggio"), repo), false);
+		assert.equal(isReviewHeadPath(authoringReviewSeatPath(repo, { sha: "abc", seatId: "x", pass: 1 }), repo), false);
 	});
 
 	it("prepare creates a detached worktree once and validates before reuse", () => {

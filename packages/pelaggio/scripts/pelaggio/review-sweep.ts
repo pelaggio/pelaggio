@@ -109,6 +109,17 @@ export function postLocalModeWorkflowComment(gh: GhRunner, ghRepo: string, prNum
 	return runGhSoft(gh, ["api", "--method", "POST", `repos/${ghRepo}/issues/${prNumber}/comments`, "-f", `body=${body}`]) !== null;
 }
 
+/** True when `root` is a throwaway PR-head review worktree (or under one). These detached,
+ *  SHA-keyed checkouts under `.dev/review-heads/` are the same shape as authoring-review seats:
+ *  harness-managed, gitignored, never the item's tracked work. Like seats, they must be exempt
+ *  from a concurrent step's confinement audit — and an orphaned (crashed-cleanup) one that stays
+ *  registered in `git worktree list` must not trip the snapshot. (#308) */
+export function isReviewHeadPath(root: string, repo: string): boolean {
+	const headsRoot = resolve(repo, ".dev", "review-heads");
+	const abs = resolve(root);
+	return abs === headsRoot || abs.startsWith(`${headsRoot}/`);
+}
+
 export function prepareReviewHead(repo: string, candidate: ReviewCandidate, exec?: (cmd: string, cwd: string) => string): { diffCwd: string; baseRef: string; headRef: string } | null {
 	const run = exec ?? ((cmd, cwd) => execSync(cmd, { cwd, encoding: "utf-8" }));
 	const headRef = `refs/pelaggio-review/pr-${candidate.prNumber}`;

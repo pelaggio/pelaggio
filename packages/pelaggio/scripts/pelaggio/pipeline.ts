@@ -69,7 +69,7 @@ import { buildFailClosedComment, runPrReviewGate } from "./pr-review-cli.js";
 import { runReviewLoop } from "./review/loop.js";
 import { type ReviewRecord, renderReviewRecord, writeReviewRecord } from "./review/record.js";
 import { cleanupAuthoringReviewSeatsForSha, isAuthoringReviewSeatPath, prepareAuthoringReviewSeat } from "./review/seats.js";
-import { cleanupReviewHead, findReviewCandidates, postLocalModeWorkflowComment, postReviewStatus, prepareReviewHead, upsertReviewComment } from "./review-sweep.js";
+import { cleanupReviewHead, findReviewCandidates, isReviewHeadPath, postLocalModeWorkflowComment, postReviewStatus, prepareReviewHead, upsertReviewComment } from "./review-sweep.js";
 import { claimRevision, ensureReviseWorktree, fetchReviewFindings, findRevisablePrs, isAutopilotManaged, postParkComment, reviseFindingsPath } from "./revise-sweep.js";
 import { defaultGhRun, type GhRunner } from "./roadmap/github-issues.js";
 import { getRoadmapSource, type RoadmapSource } from "./roadmap/index.js";
@@ -210,7 +210,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			worktrees: candidates,
 			ownWorktree,
 			allowDirtyMain,
-			isAuthoringReviewSeatPath: (root) => isAuthoringReviewSeatPath(root, mainRepo),
+			isEphemeralReviewWorktree: (root) => isAuthoringReviewSeatPath(root, mainRepo) || isReviewHeadPath(root, mainRepo),
 			activeWorktrees: opts.activeWorktrees,
 		});
 	}
@@ -1070,7 +1070,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 							// (post-revision pass 2 must not re-review the pre-revision tree).
 							// Do NOT pass ownWorktree: artifact — confinement is change-based;
 							// exempting the artifact would let a seat mutate it unaudited. Peer
-							// seats are skipped via isAuthoringReviewSeatPath in forbiddenRootsForStep.
+							// seats are skipped via isEphemeralReviewWorktree in forbiddenRootsForStep.
 							const prepare = seatPrepareChain.then(() => {
 								const seatSha = getHeadSha(worktree!) ?? reviewedSha;
 								preparedSeatShas.add(seatSha);
