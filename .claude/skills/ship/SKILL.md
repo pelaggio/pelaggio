@@ -75,15 +75,18 @@ If the output is empty (only the `/plan` artifact changed), **abort immediately*
 
 **If `--pr` or `--target=pull-request` or `--target=auto-merge-pr`**: skip merge and emit a harness decision. The pipeline owns squash, commit, push, PR create/update, optional auto-merge, mark-done, archive, cleanup, and every network/roadmap effect for PR targets.
 
-For PR targets, do not run `git reset`, `git commit`, `git push`, `gh`, `npx pelaggio roadmap`, mark-done, archive, or cleanup. Inspect with read-only commands as needed, then report exactly one block:
+For PR targets, do not run `git reset`, `git commit`, `git push`, `gh`, `npx pelaggio roadmap`, mark-done, archive, or cleanup. Inspect with read-only commands as needed, then:
+
+1. Write the PR body (markdown, up to 512 KiB) to exactly `.dev/ship/pr-body-{ID}.md` inside the worktree. Create `.dev/ship/` if needed. The path must be a plain file (not a symlink); overwrite if present. Do **not** put the body inline in JSON.
+2. Emit exactly one marked decision block with short scalar fields only, referencing that file via `prBodyFile`:
 
 ```text
 SHIP_DECISION
-{ "target": "pull-request", "itemId": "{ID}", "headBranch": "{BRANCH}", "prTitle": "{title}", "prBody": "{body}" }
+{"target":"pull-request","itemId":"{ID}","headBranch":"{BRANCH}","prTitle":"{title}","prBodyFile":".dev/ship/pr-body-{ID}.md"}
 END_SHIP_DECISION
 ```
 
-Use `"target": "auto-merge-pr"` when arguments contain `--target=auto-merge-pr`. Then stop — the harness will report the PR URL after effects run.
+Use `"target": "auto-merge-pr"` when arguments contain `--target=auto-merge-pr`. Do not include an inline `prBody` field — the harness reads the body only from the fixed file path. Then stop — the harness will report the PR URL after effects run.
 
 **Otherwise** (direct merge):
 

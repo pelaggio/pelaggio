@@ -42,6 +42,12 @@ export interface ReviewResolution {
 	adr?: string;
 }
 
+/**
+ * Structured effects-manifest failure codes. Inlined (not imported from effects.ts) so
+ * types.ts stays type-only and free of a cycle with effects.ts → Step.
+ */
+export type EffectsErrorCode = "missing_manifest" | "invalid_manifest" | "provenance_mismatch" | "unknown_effect_kind" | "effect_failed";
+
 export interface StepResult {
 	ok: boolean;
 	subtype: string;
@@ -55,6 +61,17 @@ export interface StepResult {
 	tokens?: TokenUsage;
 	toolCounts?: Record<string, number>;
 	outputTail?: string;
+	/**
+	 * Structured effects-manifest failure (in-memory). Carries a phase discriminant so
+	 * ship orchestration can retry only resolve-phase `invalid_manifest` before any
+	 * forge write/dispatch. Not a substitute for confinement's string `errorDetail`.
+	 */
+	effectsError?: {
+		code: EffectsErrorCode;
+		message: string;
+		/** Where the throw happened. Retry policy uses this; omitted from StepLog by default. */
+		phase: "resolve" | "write" | "dispatch";
+	};
 	/** Observe-only stall heuristic: the final message ended in a question / offer-to-continue (no `BLOCKED:` sentinel). Never fails a step. */
 	stalledAsk?: boolean;
 	decisions?: Decision[];
@@ -90,6 +107,14 @@ export interface StepLog {
 	 * and Git stderr while `outputTail` stays the bounded display field.
 	 */
 	errorDetail?: string;
+	/**
+	 * Structured effects-manifest failure pair for log-only repro. Phase is intentionally
+	 * omitted — it is retry policy only and lives on the in-memory StepResult.
+	 */
+	effectsError?: {
+		code: EffectsErrorCode;
+		message: string;
+	};
 	filesChanged?: string[];
 	/** Observe-only stall heuristic — the step ended in a question / offer-to-continue. Telemetry only; never fails the step. */
 	stalledAsk?: boolean;
