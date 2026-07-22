@@ -1,4 +1,4 @@
-import { BASELINE_TAXONOMY, DEFAULT_SAFETY_PRECEDENCE, type FindingClassId, isSafetyClass, isWellFormedClassId, safetyClasses, type TaxonomyConfig } from "./taxonomy.js";
+import { BASELINE_TAXONOMY, DEFAULT_SAFETY_PRECEDENCE, DEFAULT_SAFETY_SINK_CLASS, type FindingClassId, isSafetyClass, isWellFormedClassId, safetyClasses, type TaxonomyConfig } from "./taxonomy.js";
 
 export type { FindingClassId, TaxonomyConfig } from "./taxonomy.js";
 export { isSafetyClass, safetyClasses, tierOf } from "./taxonomy.js";
@@ -54,7 +54,7 @@ export type ClassificationResult =
 	  }
 	| {
 			kind: "default-safety";
-			class: "correctness-regression";
+			class: typeof DEFAULT_SAFETY_SINK_CLASS;
 	  };
 
 /** Effective finding after harness classification. */
@@ -252,7 +252,8 @@ export function classifyAuthoringReviewFinding(raw: RawAuthoringReviewFinding, c
 	}
 
 	// No unambiguous match (including unknown CWE/ruleId, classHint-only, or empty evidence).
-	return { kind: "default-safety", class: "correctness-regression" };
+	// The sink class is non-contractible (see NON_CONTRACTIBLE_SINK_CLASSES) so this always resolves safety.
+	return { kind: "default-safety", class: DEFAULT_SAFETY_SINK_CLASS };
 }
 
 /** Materialize a raw finding into an effective harness-owned finding. */
@@ -285,7 +286,7 @@ function pickSafetyByPrecedence(classes: readonly ReviewFindingClass[], taxonomy
 	for (const preferred of safetyClasses(taxonomy)) {
 		if (classes.includes(preferred)) return preferred;
 	}
-	return "correctness-regression";
+	return DEFAULT_SAFETY_SINK_CLASS;
 }
 
 /** Apply a complete verifier report to carried blockers. Omission never refutes. */

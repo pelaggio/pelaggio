@@ -677,9 +677,32 @@ npx pelaggio taxonomy sign --private-key /secure/operator-ed25519.pem --config .
 npx pelaggio taxonomy verify --config .pelaggio.yml
 ```
 
-The signed bytes are the canonical, sorted contraction set only. Safety extensions are excluded, so
-adding one does not invalidate an existing authorized contraction. The taxonomy parser rejects unknown
-keys and malformed values rather than silently ignoring them.
+The signed bytes are a domain-separated, versioned envelope over the canonical, code-unit-sorted
+contraction set only (`{"domain":"pelaggio.taxonomy.contraction.v1","contractions":[...]}`). Safety
+extensions are excluded, so adding one does not invalidate an existing authorized contraction. The
+domain tag prevents a signature made with the same owner key for another protocol from being replayed
+onto a contraction. The taxonomy parser rejects unknown keys and malformed values rather than silently
+ignoring them.
+
+**The ambiguity sink is non-contractible.** The class the emission classifier assigns to an *ambiguous*
+finding (`correctness-regression`) cannot be contracted even with a valid owner signature — the
+"ambiguous ⇒ safety" rule (ADR-0014) is load-bearing, so demoting the sink would silently gut the floor
+for every unclassified finding. Attempting to contract it fails config loading before the signature is
+even checked.
+
+**Scope of the signed gate.** This gate closes the *config-only* floor shrink. It does **not** close the
+*source-integrity* surface: the classifier, the verifier, the baseline table, and the blocking
+predicates all live in the repo, so a code change to any of them could neutralize the gate. That is out
+of scope by construction — the gate is deterministic only when pelaggio runs from a pinned/installed
+package outside the candidate checkout (its actual execution model; hardened further by the confinement
+work), never from the PR branch under review. Treat the taxonomy code path as a code-review +
+confinement integrity surface.
+
+**Replay residual (documented, intentional).** A signature authorizes that exact contraction set
+indefinitely; there is no nonce or expiry, so an owner-signed demotion can be re-applied later without a
+fresh ritual, and revocation is by key rotation or removing the `contract` block. If the same owner key
+is reused across repositories, a signature valid in one repo verifies in another with the same contracted
+class set — use a distinct anchor key per repo where cross-repo replay matters.
 
 ## Local revise sweep
 

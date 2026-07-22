@@ -12,11 +12,13 @@ import {
 	isContraction,
 	isSafetyClass,
 	isWellFormedClassId,
+	NON_CONTRACTIBLE_SINK_CLASSES,
 	type RawTaxonomyInput,
 	resolveOwnerTaxonomyPubKey,
 	resolveTaxonomy,
 	safetyClasses,
 	signContractionPayload,
+	TAXONOMY_CONTRACTION_DOMAIN,
 	TAXONOMY_PUBKEY_ENV,
 	TaxonomyResolveError,
 	tierOf,
@@ -132,6 +134,36 @@ describe("taxonomy — resolveTaxonomy gate", () => {
 		assert.throws(() => resolveTaxonomy({ classes: { UPPER: "safety" } }), TaxonomyResolveError);
 		assert.throws(() => resolveTaxonomy({ judgmentDefault: "loose" as never }), TaxonomyResolveError);
 	});
+
+	it("refuses to contract the non-contractible ambiguity sink even with a valid signature (#352 review)", () => {
+		const { publicKeyPem, privateKeyPem } = keypair();
+		for (const sink of NON_CONTRACTIBLE_SINK_CLASSES) {
+			// A correctly-signed contraction of the sink class must still be refused — before the sig is checked.
+			const payload = canonicalizeContractionPayload(classesOf({ [sink]: "judgment" }));
+			const raw: RawTaxonomyInput = { classes: { [sink]: "judgment" }, contract: { signatureB64: signContractionPayload(payload, privateKeyPem) } };
+			assert.throws(() => resolveTaxonomy(raw, undefined, publicKeyPem), /ambiguity-sink/);
+		}
+	});
+});
+
+describe("taxonomy — signed-payload hardening (#352 review)", () => {
+	it("domain-separates and versions the canonical bytes", () => {
+		const bytes = canonicalizeContractionPayload(classesOf({ "security-and-secrets": "judgment" }));
+		const parsed = JSON.parse(bytes);
+		assert.equal(parsed.domain, TAXONOMY_CONTRACTION_DOMAIN);
+		assert.deepEqual(parsed.contractions, [["security-and-secrets", "judgment"]]);
+	});
+
+	it("sorts the contraction set by code unit (locale-independent), stable across input order", () => {
+		const a = canonicalizeContractionPayload(classesOf({ "supply-chain/integrity": "judgment", "containment-escape": "judgment", "security-and-secrets": "judgment" }));
+		const b = canonicalizeContractionPayload(classesOf({ "security-and-secrets": "judgment", "supply-chain/integrity": "judgment", "containment-escape": "judgment" }));
+		assert.equal(a, b);
+		const ids = JSON.parse(a).contractions.map((entry: [string, string]) => entry[0]);
+		assert.deepEqual(
+			ids,
+			[...ids].sort((x, y) => (x < y ? -1 : x > y ? 1 : 0)),
+		);
+	});
 });
 
 describe("taxonomy — canonical payload stability", () => {
@@ -143,14 +175,15 @@ describe("taxonomy — canonical payload stability", () => {
 
 	it("extend-after-contract: adding a safety class does not change a signed contraction's bytes", () => {
 		const { publicKeyPem, privateKeyPem } = keypair();
-		const contractedOnly = canonicalizeContractionPayload(classesOf({ "correctness-regression": "judgment" }));
+		// `security-and-secrets` is a contractible baseline-safety class (not the non-contractible ambiguity sink).
+		const contractedOnly = canonicalizeContractionPayload(classesOf({ "security-and-secrets": "judgment" }));
 		const sig = signContractionPayload(contractedOnly, privateKeyPem);
 		// Same signature must still verify after an autonomous extension is added alongside the contraction.
-		const withExtension = canonicalizeContractionPayload(classesOf({ "correctness-regression": "judgment", "y-new": "safety" }));
+		const withExtension = canonicalizeContractionPayload(classesOf({ "security-and-secrets": "judgment", "y-new": "safety" }));
 		assert.equal(withExtension, contractedOnly);
 		assert.equal(verifyContractSignature(withExtension, publicKeyPem, sig), true);
-		const t = resolveTaxonomy({ classes: { "correctness-regression": "judgment", "y-new": "safety" }, contract: { signatureB64: sig } }, undefined, publicKeyPem);
-		assert.equal(tierOf("correctness-regression", t), "judgment");
+		const t = resolveTaxonomy({ classes: { "security-and-secrets": "judgment", "y-new": "safety" }, contract: { signatureB64: sig } }, undefined, publicKeyPem);
+		assert.equal(tierOf("security-and-secrets", t), "judgment");
 		assert.equal(isSafetyClass("y-new", t), true);
 	});
 });

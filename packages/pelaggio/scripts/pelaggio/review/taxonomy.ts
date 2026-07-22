@@ -48,16 +48,25 @@ export interface RawTaxonomyInput {
  * operator/CI, not sourced from a committed file — else it re-enters the write surface.)
  *
  * Unset ⇒ NO trust anchor ⇒ any taxonomy CONTRACTION is refused (fail-closed). The baseline safety
- * floor and free EXTENSIONS need no key. A residual remains — an agent can still edit
- * `BASELINE_TAXONOMY_CLASSES` directly in source to lower a floor; that source-integrity vector is the
- * code-review + confinement layer's responsibility (a broader concern than this gate).
+ * floor and free EXTENSIONS need no key.
+ *
+ * SCOPE — what this gate does and does NOT close. It closes the *config-only* floor shrink: an agent
+ * cannot demote a safety class via `.pelaggio.yml` without an owner signature. It does NOT close the
+ * *source-integrity* surface: the entire classification + gate implementation — `verifyContractSignature`,
+ * `resolveTaxonomy`, `BASELINE_TAXONOMY_CLASSES`, the `CLASSIFICATION_RULES` in `findings.ts`, `isSafetyClass`,
+ * and the `loop.ts` blocking predicates — all live in the repo, so a patch to any of them could make the gate
+ * theater. That vector is out of scope here by construction: the gate is deterministic only when pelaggio
+ * runs from a PINNED/INSTALLED package OUTSIDE the candidate checkout (its actual execution model; the
+ * confinement epic #254 hardens it), never from PR HEAD. Treat the code path as a code-review + confinement
+ * integrity surface; this signed gate is only the config-shrink lock, not the whole floor.
  */
 export const TAXONOMY_PUBKEY_ENV = "PELAGGIO_TAXONOMY_PUBKEY";
 
 /** Resolve the owner verification key from the process environment (out-of-band, not a repo file). */
 export function resolveOwnerTaxonomyPubKey(env: NodeJS.ProcessEnv = process.env): string | undefined {
 	const value = env[TAXONOMY_PUBKEY_ENV];
-	return typeof value === "string" && value.trim() !== "" ? value : undefined;
+	const trimmed = typeof value === "string" ? value.trim() : "";
+	return trimmed !== "" ? trimmed : undefined;
 }
 
 /** ADR-0016 owner table: six safety classes + the named judgment tokens (umbrella `judgment` for #293 rules). */
@@ -81,6 +90,18 @@ export const BASELINE_TAXONOMY_CLASSES: Readonly<Record<FindingClassId, FindingT
 
 /** Baseline safety precedence (ADR order; deterministic tie-break only — all safety classes park equally). */
 export const DEFAULT_SAFETY_PRECEDENCE: readonly FindingClassId[] = ["security-and-secrets", "data-loss/destructive-ops", "supply-chain/integrity", "containment-escape", "irreversible-git/unsafe-landing", "correctness-regression"];
+
+/**
+ * The class the emission-time classifier assigns to an AMBIGUOUS finding (the `default-safety` sink in
+ * `review/findings.ts`). "Ambiguous ⇒ safety" (ADR-0014) is load-bearing: it is what makes a
+ * misclassification fail *toward* the floor. So this class is **non-contractible** — {@link resolveTaxonomy}
+ * refuses to demote it even with a valid owner signature (see {@link NON_CONTRACTIBLE_SINK_CLASSES}), or
+ * the signed gate could be used to silently turn the catch-all into a judgment-band finding a Judge can clear.
+ */
+export const DEFAULT_SAFETY_SINK_CLASS = "correctness-regression" as const;
+
+/** Sink classes that stay safety-tier regardless of the config overlay — extend-only, never contractible. */
+export const NON_CONTRACTIBLE_SINK_CLASSES: readonly FindingClassId[] = [DEFAULT_SAFETY_SINK_CLASS];
 
 /** Class-id grammar: lowercase kebab segments with an optional single `/`. Rejects whitespace / forged junk. */
 export const CLASS_ID_RE = /^[a-z][a-z0-9-]*(\/[a-z][a-z0-9-]*)?$/;
@@ -126,7 +147,9 @@ export function contractionSet(resolvedClasses: ReadonlyMap<FindingClassId, Find
 		// baseline-safety-now-judgment, OR a new class (absent from baseline) seated as judgment.
 		if (baselineTier === "safety" || baselineTier === undefined) contracted.push(id);
 	}
-	return contracted.sort((a, b) => a.localeCompare(b)).map((id) => [id, "judgment"]);
+	// Code-unit (not localeCompare) sort: the canonical signed bytes must be locale/ICU-independent so a
+	// signature produced on one host verifies on another. Class IDs are ASCII by grammar, so `<` suffices.
+	return contracted.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).map((id) => [id, "judgment"]);
 }
 
 /** True when the resolved classes shrink the baseline safety floor. */
@@ -134,9 +157,19 @@ export function isContraction(resolvedClasses: ReadonlyMap<FindingClassId, Findi
 	return contractionSet(resolvedClasses, baseline).length > 0;
 }
 
-/** Stable JSON of the contraction set — the exact signed bytes. Order-independent by construction. */
+/**
+ * Domain-separation tag baked into the signed bytes. Prevents an owner Ed25519 key reused for another
+ * protocol from having a signature cross-replayed onto a taxonomy contraction (and vice versa). The `.v1`
+ * suffix versions the payload envelope; bump it if the signed shape ever changes.
+ */
+export const TAXONOMY_CONTRACTION_DOMAIN = "pelaggio.taxonomy.contraction.v1";
+
+/**
+ * Stable JSON of the contraction set — the exact signed bytes. Order-independent by construction (code-unit
+ * sorted) and domain-separated by a versioned tag so the signature cannot be replayed across protocols.
+ */
 export function canonicalizeContractionPayload(resolvedClasses: ReadonlyMap<FindingClassId, FindingTier>, baseline: Readonly<Record<FindingClassId, FindingTier>> = BASELINE_TAXONOMY_CLASSES): string {
-	return JSON.stringify(contractionSet(resolvedClasses, baseline));
+	return JSON.stringify({ domain: TAXONOMY_CONTRACTION_DOMAIN, contractions: contractionSet(resolvedClasses, baseline) });
 }
 
 /** Ed25519 verify (fail-closed: any crypto/format error ⇒ false). */
@@ -194,6 +227,13 @@ export function resolveTaxonomy(raw: RawTaxonomyInput = {}, baseline: Readonly<R
 	const contractions = contractionSet(classes, baseline);
 	if (contractions.length > 0) {
 		const contracted = contractions.map(([id]) => id).join(", ");
+		// The ambiguity sink is non-contractible even by a valid owner signature: "ambiguous ⇒ safety"
+		// (ADR-0014) is load-bearing, and demoting the sink would silently gut the floor for every
+		// unclassified finding. Refuse before the signature check so no ritual can authorize it. (#352 review)
+		const sinkContracted = contractions.filter(([id]) => NON_CONTRACTIBLE_SINK_CLASSES.includes(id)).map(([id]) => id);
+		if (sinkContracted.length > 0) {
+			throw new TaxonomyResolveError(`taxonomy cannot contract the ambiguity-sink class(es) ${sinkContracted.join(", ")}: the "ambiguous ⇒ safety" default (ADR-0014) stays safety-tier even under a signed contraction`);
+		}
 		// Fail closed when no out-of-band trust anchor is configured — a contraction cannot be
 		// authorized without the owner's env-provided verification key. (#352 review)
 		if (!ownerPubKeyPem) {

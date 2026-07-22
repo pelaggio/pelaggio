@@ -5,7 +5,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { DEFAULTS, loadConfig, resolveDriverCandidates, resolveProviderBin, resolveRepo, resolveStepSettings } from "../config.js";
-import { BASELINE_TAXONOMY_CLASSES, isSafetyClass } from "../review/taxonomy.js";
+import { BASELINE_TAXONOMY_CLASSES, canonicalizeContractionPayload, isSafetyClass, mergeTaxonomyClasses, signContractionPayload } from "../review/taxonomy.js";
 
 function tmpRepo(): string {
 	return mkdtempSync(join(tmpdir(), "pelaggio-config-test-"));
@@ -670,6 +670,26 @@ describe("loadConfig — review", () => {
 			}
 		} finally {
 			if (prev !== undefined) process.env.PELAGGIO_TAXONOMY_PUBKEY = prev;
+		}
+	});
+
+	it("loads a validly-signed contraction end-to-end through loadConfig when the anchor is set (#352 review)", () => {
+		const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+		const pem = publicKey.export({ type: "spki", format: "pem" }).toString();
+		const privPem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+		// Sign the canonical payload for contracting `security-and-secrets` (a contractible safety class).
+		const payload = canonicalizeContractionPayload(mergeTaxonomyClasses({ classes: { "security-and-secrets": "judgment" } }));
+		const sig = signContractionPayload(payload, privPem);
+		const prev = process.env.PELAGGIO_TAXONOMY_PUBKEY;
+		process.env.PELAGGIO_TAXONOMY_PUBKEY = pem;
+		try {
+			const repo = tmpRepo();
+			const path = writeYml(repo, `review:\n  taxonomy:\n    classes:\n      security-and-secrets: judgment\n    contract:\n      signature-b64: "${sig}"\n`);
+			const taxonomy = loadConfig({ repo, configPath: path }).review.taxonomy;
+			assert.equal(isSafetyClass("security-and-secrets", taxonomy), false);
+		} finally {
+			if (prev === undefined) delete process.env.PELAGGIO_TAXONOMY_PUBKEY;
+			else process.env.PELAGGIO_TAXONOMY_PUBKEY = prev;
 		}
 	});
 
