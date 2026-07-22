@@ -22,8 +22,8 @@ export interface TaxonomyConfig {
 	safetyPrecedence: readonly FindingClassId[];
 	/**
 	 * Contraction signature (required when the contraction set is non-empty). No public key here:
-	 * verification uses the source-pinned {@link OWNER_TAXONOMY_PUBKEY_PEM}, so the agent-writable
-	 * config cannot supply its own verification key.
+	 * verification uses the out-of-band {@link TAXONOMY_PUBKEY_ENV} owner key, so the agent-writable
+	 * config (and source tree) cannot supply its own verification key.
 	 */
 	contract?: { signatureB64: string };
 }
@@ -37,15 +37,28 @@ export interface RawTaxonomyInput {
 }
 
 /**
- * Source-pinned trust anchor for contraction signatures. This is a **public** key only; the owner's
- * private key never lives in the repo, yml, env, or the pipeline. Changing this constant is a TS edit
- * gated by the review floor + the `review/taxonomy.ts` path signal (see `extractDiffPathSignals`) — not
- * a config act. A yml/env-supplied verification key would let an agent seat its own keypair and self-sign
- * a contraction, defeating the gate. The shipped key has no published private half: out of the box a
- * config-only contraction cannot be signed at all (fail-closed). An owner enables signed contractions by
- * replacing this constant with their own public key (see `npx pelaggio taxonomy sign`).
+ * Trust anchor for contraction signatures. The owner's Ed25519 **public** key (verify-only) is read
+ * from the `PELAGGIO_TAXONOMY_PUBKEY` process env var, set OUT-OF-BAND by the operator/CI — never from
+ * a repo file. This is the fix for the original source-pinned constant (#352 review): a constant in
+ * `review/taxonomy.ts` sits in the *autonomous agent's own write surface*, so an agent could replace
+ * the key and self-sign a contraction — reducing the "signed, non-autonomous ritual" guarantee to "the
+ * code-review must notice the source edit" (a policy signal, not a deterministic capability denial).
+ * Reading `process.env` directly keeps the anchor outside that surface: an agent's worktree edits
+ * cannot change the harness process's environment. (The env value must be a literal PEM set by the
+ * operator/CI, not sourced from a committed file — else it re-enters the write surface.)
+ *
+ * Unset ⇒ NO trust anchor ⇒ any taxonomy CONTRACTION is refused (fail-closed). The baseline safety
+ * floor and free EXTENSIONS need no key. A residual remains — an agent can still edit
+ * `BASELINE_TAXONOMY_CLASSES` directly in source to lower a floor; that source-integrity vector is the
+ * code-review + confinement layer's responsibility (a broader concern than this gate).
  */
-export const OWNER_TAXONOMY_PUBKEY_PEM = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAbiap//cIq+dVoygOmPd5HE/BkVM1aHUko0TmEAHXEBE=\n-----END PUBLIC KEY-----\n";
+export const TAXONOMY_PUBKEY_ENV = "PELAGGIO_TAXONOMY_PUBKEY";
+
+/** Resolve the owner verification key from the process environment (out-of-band, not a repo file). */
+export function resolveOwnerTaxonomyPubKey(env: NodeJS.ProcessEnv = process.env): string | undefined {
+	const value = env[TAXONOMY_PUBKEY_ENV];
+	return typeof value === "string" && value.trim() !== "" ? value : undefined;
+}
 
 /** ADR-0016 owner table: six safety classes + the named judgment tokens (umbrella `judgment` for #293 rules). */
 export const BASELINE_TAXONOMY_CLASSES: Readonly<Record<FindingClassId, FindingTier>> = {
@@ -167,10 +180,11 @@ export function mergeTaxonomyClasses(raw: RawTaxonomyInput = {}, baseline: Reado
 
 /**
  * Overlay-merge config classes onto the baseline, validate, then gate: a non-empty contraction set requires
- * a verified Ed25519 signature over the canonical payload against the source-pinned owner key. Fail-closed —
- * throws when a contraction lacks a valid signature.
+ * a verified Ed25519 signature over the canonical payload against the out-of-band owner key (default:
+ * {@link resolveOwnerTaxonomyPubKey} from {@link TAXONOMY_PUBKEY_ENV}). Fail-closed — throws when a
+ * contraction lacks a valid signature, or when no owner trust anchor is configured at all.
  */
-export function resolveTaxonomy(raw: RawTaxonomyInput = {}, baseline: Readonly<Record<FindingClassId, FindingTier>> = BASELINE_TAXONOMY_CLASSES, ownerPubKeyPem: string = OWNER_TAXONOMY_PUBKEY_PEM): TaxonomyConfig {
+export function resolveTaxonomy(raw: RawTaxonomyInput = {}, baseline: Readonly<Record<FindingClassId, FindingTier>> = BASELINE_TAXONOMY_CLASSES, ownerPubKeyPem: string | undefined = resolveOwnerTaxonomyPubKey()): TaxonomyConfig {
 	const owner = raw.owner ?? "operator";
 	if (typeof owner !== "string" || owner.trim() === "") throw new TaxonomyResolveError("taxonomy owner must be a non-empty string");
 	const judgmentDefault = raw.judgmentDefault ?? "permissive";
@@ -180,12 +194,17 @@ export function resolveTaxonomy(raw: RawTaxonomyInput = {}, baseline: Readonly<R
 	const contractions = contractionSet(classes, baseline);
 	if (contractions.length > 0) {
 		const contracted = contractions.map(([id]) => id).join(", ");
+		// Fail closed when no out-of-band trust anchor is configured — a contraction cannot be
+		// authorized without the owner's env-provided verification key. (#352 review)
+		if (!ownerPubKeyPem) {
+			throw new TaxonomyResolveError(`taxonomy contracts the safety floor (${contracted}) but no owner trust anchor is configured; set ${TAXONOMY_PUBKEY_ENV} (the owner's Ed25519 public-key PEM, out-of-band) to enable signed contractions`);
+		}
 		const signatureB64 = raw.contract?.signatureB64;
 		if (typeof signatureB64 !== "string" || signatureB64.trim() === "") {
 			throw new TaxonomyResolveError(`taxonomy contracts the safety floor (${contracted}) but is unsigned; run \`npx pelaggio taxonomy sign\` with the owner private key and paste the signature into \`review.taxonomy.contract.signature-b64\``);
 		}
 		if (!verifyContractSignature(canonicalizeContractionPayload(classes, baseline), ownerPubKeyPem, signatureB64)) {
-			throw new TaxonomyResolveError(`taxonomy contracts the safety floor (${contracted}) but the signature does not verify against the owner key; re-sign with \`npx pelaggio taxonomy sign\``);
+			throw new TaxonomyResolveError(`taxonomy contracts the safety floor (${contracted}) but the signature does not verify against the ${TAXONOMY_PUBKEY_ENV} owner key; re-sign with \`npx pelaggio taxonomy sign\``);
 		}
 	}
 

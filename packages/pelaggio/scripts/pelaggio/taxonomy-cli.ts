@@ -7,9 +7,11 @@
  *
  * The signed gate closes the *config-only* shrink: an agent may enlarge the safety floor via
  * `.pelaggio.yml` without a signature, but shrinking it (or seating a new class as judgment) requires a
- * verified Ed25519 signature over the canonical contraction payload against the source-pinned owner key.
+ * verified Ed25519 signature over the canonical contraction payload against the operator's owner key,
+ * supplied out-of-band via the `PELAGGIO_TAXONOMY_PUBKEY` env var (never repo source, so it is outside
+ * the agent's write surface).
  *
- *   verify    [--config path]                    loadConfig (verifies against the pinned owner key);
+ *   verify    [--config path]                    loadConfig (verifies against the PELAGGIO_TAXONOMY_PUBKEY key);
  *                                                print the tier table + "ok", or exit 1 on failure.
  *   sign      --private-key <pem> [--config path]  sign the canonical contraction payload; print the
  *                                                signature-b64 to paste into `review.taxonomy.contract`.

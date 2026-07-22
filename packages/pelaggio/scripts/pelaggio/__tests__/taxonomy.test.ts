@@ -13,9 +13,11 @@ import {
 	isSafetyClass,
 	isWellFormedClassId,
 	type RawTaxonomyInput,
+	resolveOwnerTaxonomyPubKey,
 	resolveTaxonomy,
 	safetyClasses,
 	signContractionPayload,
+	TAXONOMY_PUBKEY_ENV,
 	TaxonomyResolveError,
 	tierOf,
 	verifyContractSignature,
@@ -157,5 +159,55 @@ describe("taxonomy — class id grammar", () => {
 	it("accepts ADR tokens and rejects junk", () => {
 		for (const id of Object.keys(BASELINE_TAXONOMY_CLASSES)) assert.equal(isWellFormedClassId(id), true, id);
 		for (const id of ["Bad", "with space", "a//b", "/leading", "trailing/", "a_b", ""]) assert.equal(isWellFormedClassId(id), false, id);
+	});
+});
+
+describe("taxonomy — owner trust anchor from the environment (#352)", () => {
+	// The anchor lives in the operator's process environment, never in the agent-writable
+	// source or repo config, so a worker cannot seat its own key and self-sign a contraction.
+	function withEnv<T>(value: string | undefined, fn: () => T): T {
+		const prev = process.env[TAXONOMY_PUBKEY_ENV];
+		if (value === undefined) delete process.env[TAXONOMY_PUBKEY_ENV];
+		else process.env[TAXONOMY_PUBKEY_ENV] = value;
+		try {
+			return fn();
+		} finally {
+			if (prev === undefined) delete process.env[TAXONOMY_PUBKEY_ENV];
+			else process.env[TAXONOMY_PUBKEY_ENV] = prev;
+		}
+	}
+
+	it("resolveOwnerTaxonomyPubKey reads the env, treating blank/whitespace as unset", () => {
+		assert.equal(resolveOwnerTaxonomyPubKey({ [TAXONOMY_PUBKEY_ENV]: "some-pem" }), "some-pem");
+		assert.equal(resolveOwnerTaxonomyPubKey({ [TAXONOMY_PUBKEY_ENV]: "   " }), undefined);
+		assert.equal(resolveOwnerTaxonomyPubKey({ [TAXONOMY_PUBKEY_ENV]: "" }), undefined);
+		assert.equal(resolveOwnerTaxonomyPubKey({}), undefined);
+	});
+
+	it("fails closed on a contraction when the env anchor is unset", () => {
+		withEnv(undefined, () => {
+			assert.throws(() => resolveTaxonomy({ classes: { "security-and-secrets": "judgment" } }), /no owner trust anchor/);
+		});
+	});
+
+	it("verifies a valid contraction against the env-resolved anchor (no key passed)", () => {
+		const { publicKeyPem, privateKeyPem } = keypair();
+		withEnv(publicKeyPem, () => {
+			const payload = canonicalizeContractionPayload(classesOf({ "security-and-secrets": "judgment" }));
+			const raw: RawTaxonomyInput = { classes: { "security-and-secrets": "judgment" }, contract: { signatureB64: signContractionPayload(payload, privateKeyPem) } };
+			const t = resolveTaxonomy(raw);
+			assert.equal(tierOf("security-and-secrets", t), "judgment");
+		});
+	});
+
+	it("key-substitution attack fails: a self-signed contraction does not verify against the env anchor", () => {
+		const owner = keypair();
+		const attacker = keypair();
+		withEnv(owner.publicKeyPem, () => {
+			const payload = canonicalizeContractionPayload(classesOf({ "security-and-secrets": "judgment" }));
+			// Agent signs with its OWN key — the env anchor is the owner's, so verification must fail.
+			const raw: RawTaxonomyInput = { classes: { "security-and-secrets": "judgment" }, contract: { signatureB64: signContractionPayload(payload, attacker.privateKeyPem) } };
+			assert.throws(() => resolveTaxonomy(raw), TaxonomyResolveError);
+		});
 	});
 });

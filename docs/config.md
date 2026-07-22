@@ -659,10 +659,14 @@ default to `safety`. Adding a safety class, or elevating a baseline judgment cla
 no signature. Moving a baseline safety class to judgment or introducing a new judgment class is a
 contraction and fails config loading unless its contract signature verifies.
 
-The verification key is `OWNER_TAXONOMY_PUBKEY_PEM` in
-`packages/pelaggio/scripts/pelaggio/review/taxonomy.ts`; it is deliberately not configurable through
-YAML or the environment. Replace that source-pinned public key with the operator's Ed25519 public key
-before authorizing contractions. Keep the private key outside the repository and pipeline.
+The verification key is the operator's Ed25519 public-key PEM, supplied out-of-band through the
+`PELAGGIO_TAXONOMY_PUBKEY` environment variable — never through YAML or repo source. This keeps the
+trust anchor outside the agent's write surface: a worker cannot seat its own key and self-sign a
+contraction, because the key it would have to overwrite does not live in any file it can edit. If the
+variable is unset, contractions fail closed with a "no owner trust anchor is configured" error, while
+safety extensions (which need no signature) continue to load. Keep the matching private key outside the
+repository and pipeline, and set `PELAGGIO_TAXONOMY_PUBKEY` in the operator environment that runs
+pelaggio.
 
 Use the operator CLI to inspect and authorize a contraction:
 

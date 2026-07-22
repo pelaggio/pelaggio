@@ -36,8 +36,10 @@ The machine-readable config, its emission-time classifier, and its signed change
 
 **Implemented by #294.** `review.taxonomy` in `.pelaggio.yml` overlays the built-in ADR table through
 `review/taxonomy.ts`. Extensions and elevations are free; contractions require an Ed25519 signature over
-the canonical contraction set, verified against the source-pinned owner public key. Unclassified tokens
-remain safety by default.
+the canonical contraction set, verified against the owner public key supplied out-of-band via the
+`PELAGGIO_TAXONOMY_PUBKEY` environment variable — never a repo file, so the trust anchor sits outside the
+agent's write surface and a worker cannot seat its own key. With the anchor unset, contractions fail
+closed. Unclassified tokens remain safety by default.
 
 **Emission, not just reclassification.** The anti-downgrade rule guards *reclassification*, but the load-bearing risk is the *entry* classifier — which findings are assigned to the safety class at emission. Per [ADR-0014](./0014-mechanism-policy-separation-spine.md), that mapping cannot rest on model discretion: it must be **rule-based where possible** (fingerprint / CWE / rule-id / diff-shape) and **default-to-safety-on-ambiguity** — a finding whose class is uncertain is treated as safety-class, so a misclassification fails *toward* the floor. This does not close the *missing-finding* residual (a real defect no reviewer raises at all); that residual is carried by decorrelated reviewer diversity and post-merge verification — the taxonomy must not be read as closing it. A second residual sits at the *finding-description* step: whether a finding matches a safety rule can still hinge on how the model frames it. Default-to-safety and decorrelated diversity make that residual *safe*, not *absent* — this narrows model discretion to "ambiguous ⇒ safety" rather than eliminating it, and should not be read as fully satisfying [ADR-0014](./0014-mechanism-policy-separation-spine.md).
 

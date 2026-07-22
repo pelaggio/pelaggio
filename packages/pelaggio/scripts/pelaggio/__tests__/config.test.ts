@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { generateKeyPairSync } from "node:crypto";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -655,15 +656,41 @@ describe("loadConfig — review", () => {
 		assert.equal(isSafetyClass("style", taxonomy), true);
 	});
 
-	it("rejects unsigned or incorrectly signed contractions", () => {
-		for (const contract of ["", "    contract:\n      signature-b64: ZmFrZQ==\n"]) {
-			const repo = tmpRepo();
-			const path = writeYml(repo, `review:\n  taxonomy:\n    classes:\n      security-and-secrets: judgment\n${contract}`);
-			assert.throws(() => loadConfig({ repo, configPath: path }), /security-and-secrets.*(?:unsigned|signature)/);
+	it("rejects a contraction when no owner trust anchor is configured (#352 — env unset)", () => {
+		// With PELAGGIO_TAXONOMY_PUBKEY unset (the default), ANY contraction fails closed on the
+		// missing out-of-band anchor. The anchor lives in the operator's environment, not in the
+		// agent-writable source/config, so a worker cannot seat its own key and self-sign.
+		const prev = process.env.PELAGGIO_TAXONOMY_PUBKEY;
+		delete process.env.PELAGGIO_TAXONOMY_PUBKEY;
+		try {
+			for (const contract of ["", "    contract:\n      signature-b64: ZmFrZQ==\n"]) {
+				const repo = tmpRepo();
+				const path = writeYml(repo, `review:\n  taxonomy:\n    classes:\n      security-and-secrets: judgment\n${contract}`);
+				assert.throws(() => loadConfig({ repo, configPath: path }), /security-and-secrets.*no owner trust anchor/);
+			}
+		} finally {
+			if (prev !== undefined) process.env.PELAGGIO_TAXONOMY_PUBKEY = prev;
 		}
-		const repo = tmpRepo();
-		const path = writeYml(repo, "review:\n  taxonomy:\n    classes:\n      my-lint: judgment\n");
-		assert.throws(() => loadConfig({ repo, configPath: path }), /my-lint.*unsigned/);
+	});
+
+	it("rejects unsigned or incorrectly signed contractions when the anchor IS set", () => {
+		const { publicKey } = generateKeyPairSync("ed25519");
+		const pem = publicKey.export({ type: "spki", format: "pem" }).toString();
+		const prev = process.env.PELAGGIO_TAXONOMY_PUBKEY;
+		process.env.PELAGGIO_TAXONOMY_PUBKEY = pem;
+		try {
+			for (const contract of ["", "    contract:\n      signature-b64: ZmFrZQ==\n"]) {
+				const repo = tmpRepo();
+				const path = writeYml(repo, `review:\n  taxonomy:\n    classes:\n      security-and-secrets: judgment\n${contract}`);
+				assert.throws(() => loadConfig({ repo, configPath: path }), /security-and-secrets.*(?:unsigned|signature)/);
+			}
+			const repo = tmpRepo();
+			const path = writeYml(repo, "review:\n  taxonomy:\n    classes:\n      my-lint: judgment\n");
+			assert.throws(() => loadConfig({ repo, configPath: path }), /my-lint.*unsigned/);
+		} finally {
+			if (prev === undefined) delete process.env.PELAGGIO_TAXONOMY_PUBKEY;
+			else process.env.PELAGGIO_TAXONOMY_PUBKEY = prev;
+		}
 	});
 
 	it("strictly rejects malformed taxonomy subkeys", () => {
