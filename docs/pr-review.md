@@ -310,7 +310,10 @@ not automated. To make the gate enforced on `main`:
 
 With `review` required, `gh pr merge --auto` (the `auto-merge-pr` ship target) waits for
 both `ci` and `review` to pass before merging — the enforced out-of-context gate the
-autonomous recipe needs.
+autonomous recipe needs. This still depends on branch protection being configured; the
+harness additionally refuses to *queue* `--auto` at all when a check has already reported
+red (`ship/ci-guard.ts`, issue #292) — independent, in-code defense-in-depth that does not
+assume branch protection is set up correctly.
 
 > A required check must always report. That is why the workflow has **no path filter**
 > and skips fork/draft PRs *inside* the job rather than via a job-level `if:` — either

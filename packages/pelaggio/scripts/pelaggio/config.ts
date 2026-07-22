@@ -89,6 +89,9 @@ export interface ResolvedConfig {
 	/** Explicit escape hatch for Linux hosts whose kernel does not expose Landlock. */
 	grokAllowUnsandboxedFallback: boolean;
 	shipTarget: ShipTargetName;
+	/** Checks that must be present + green for the `--admin` red-merge guard (#292). Default
+	 *  `["ci"]`; an explicit `[]` is the "no gating CI" escape hatch. */
+	shipRequiredChecks: string[];
 	roadmapSource: RoadmapSourceName;
 	roadmapGithub: GithubRoadmapConfig;
 	roadmapLinear: LinearRoadmapConfig;
@@ -437,6 +440,11 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 
 	// ship.target: default DEFAULT_SHIP_TARGET ("pull-request"); validate against SHIP_TARGET_NAMES
 	let shipTarget: ShipTargetName = DEFAULT_SHIP_TARGET;
+	// ship.requiredChecks: the checks that must be present + green for the deterministic `--admin`
+	// red-merge guard (issue #292). Default `["ci"]` — the near-universal gating check — so admin
+	// land is fail-closed on a missing/pending/red `ci` out of the box. An explicit list overrides;
+	// an explicit `[]` is the escape hatch for a repo with no gating CI (see `assertCiGreen`).
+	let shipRequiredChecks: string[] = ["ci"];
 	const shipBlock = yml.ship;
 	if (shipBlock !== undefined) {
 		if (!isPlainObject(shipBlock)) {
@@ -448,6 +456,13 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 				throw new Error(`${configPath}: expected \`ship.target\` to be one of ${SHIP_TARGET_NAMES.join("|")}, got ${JSON.stringify(t)}`);
 			}
 			shipTarget = t as ShipTargetName;
+		}
+		const rc = shipBlock["required-checks"];
+		if (rc !== undefined) {
+			if (!Array.isArray(rc) || !rc.every(isString)) {
+				throw new Error(`${configPath}: expected \`ship.required-checks\` to be a list of check-name strings (use \`[]\` to assert no gating CI)`);
+			}
+			shipRequiredChecks = rc as string[];
 		}
 	}
 
@@ -782,6 +797,7 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		providerBins,
 		grokAllowUnsandboxedFallback,
 		shipTarget,
+		shipRequiredChecks,
 		roadmapSource,
 		roadmapGithub,
 		roadmapLinear,
@@ -868,6 +884,7 @@ export const CONFIG = loadConfig();
 export const WORKTREE_PREFIX = CONFIG.worktreePrefix;
 export const MODEL_PROFILES: Record<string, Partial<Record<Step, string>>> = CONFIG.modelProfiles;
 export const SHIP_TARGET: ShipTargetName = CONFIG.shipTarget;
+export const SHIP_REQUIRED_CHECKS: readonly string[] = CONFIG.shipRequiredChecks;
 export const ROADMAP_SOURCE: RoadmapSourceName = CONFIG.roadmapSource;
 export const ROADMAP_GITHUB: GithubRoadmapConfig = CONFIG.roadmapGithub;
 export const ROADMAP_LINEAR: LinearRoadmapConfig = CONFIG.roadmapLinear;
