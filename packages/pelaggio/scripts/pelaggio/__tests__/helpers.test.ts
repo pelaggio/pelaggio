@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { describe, it } from "node:test";
+import { pathToFileURL } from "node:url";
 import {
 	buildReviewDiffBlock,
 	buildStepArgs,
@@ -46,6 +47,7 @@ import {
 	REVIEW_DIFF_MAX_BYTES,
 	readGitBinding,
 	readRuntimeVersions,
+	resolveClaudeSdkManifestPath,
 	resolveParkReset,
 	revertPlanPolish,
 	reviewFindingsPreamble,
@@ -1606,11 +1608,69 @@ describe("cycle provenance helpers", () => {
 		assert.deepEqual(result.unavailable, ["version.grok"]);
 	});
 
-	it("resolves the real installed claude SDK version (no manifest mock)", () => {
-		// Exercises the actual node_modules path resolution — the mocked-manifest tests above
-		// accept any path, so only this catches a wrong relative depth to the SDK package.json.
+	it("resolves the real installed claude SDK version via module resolution (no path mock)", () => {
+		// createRequire + walk-up — not a hard-coded ../../node_modules path (#333).
+		// Catches hoisted/published layouts and ERR_PACKAGE_PATH_NOT_EXPORTED for package.json.
+		const manifestPath = resolveClaudeSdkManifestPath();
+		assert.match(manifestPath, /claude-agent-sdk[/\\]package\.json$/);
+		const pkg = JSON.parse(readFileSync(manifestPath, "utf-8")) as { name: string; version: string };
+		assert.equal(pkg.name, "@anthropic-ai/claude-agent-sdk");
 		const result = readRuntimeVersions(["claude"]);
+		assert.equal(result.versions.drivers.claude, pkg.version);
 		assert.match(result.versions.drivers.claude ?? "", /^\d+\.\d+\.\d+/);
 		assert.ok(!result.unavailable.includes("version.claude"));
+	});
+
+	it("records version.claude when SDK manifest resolution fails (fail-open)", () => {
+		const result = readRuntimeVersions(["claude"], {
+			resolveClaudeSdkManifest: () => {
+				throw new Error("not installed");
+			},
+		});
+		assert.equal(result.versions.drivers.claude, undefined);
+		assert.deepEqual(result.unavailable, ["version.claude"]);
+	});
+
+	it("uses an injectable Claude SDK manifest path (hoisted-layout stand-in)", () => {
+		const root = mkdtempSync(join(tmpdir(), "pelaggio-sdk-hoist-"));
+		// Mimic a hoisted install: package lives outside packages/pelaggio/node_modules.
+		const sdkDir = join(root, "node_modules", "@anthropic-ai", "claude-agent-sdk");
+		mkdirSync(sdkDir, { recursive: true });
+		const manifestPath = join(sdkDir, "package.json");
+		writeFileSync(manifestPath, JSON.stringify({ name: "@anthropic-ai/claude-agent-sdk", version: "9.9.9-hoisted" }));
+		const result = readRuntimeVersions(["claude"], {
+			readManifest: (path) => {
+				if (path === manifestPath) return readFileSync(path, "utf-8");
+				return JSON.stringify({ version: "0.1.0" });
+			},
+			resolveClaudeSdkManifest: () => manifestPath,
+		});
+		assert.equal(result.versions.drivers.claude, "9.9.9-hoisted");
+		assert.ok(!result.unavailable.includes("version.claude"));
+	});
+
+	it("walks up from a nested package entry to the matching package.json", () => {
+		// Real SDK exports hide ./package.json (ERR_PACKAGE_PATH_NOT_EXPORTED). Simulate a
+		// published layout where require.resolve lands on dist/entry.js and the walk finds the
+		// parent manifest — also proves we ignore intermediate package.json with the wrong name.
+		const root = mkdtempSync(join(tmpdir(), "pelaggio-sdk-walk-"));
+		const sdkDir = join(root, "node_modules", "@anthropic-ai", "claude-agent-sdk");
+		const distDir = join(sdkDir, "dist");
+		mkdirSync(distDir, { recursive: true });
+		writeFileSync(join(distDir, "package.json"), JSON.stringify({ name: "not-the-sdk", version: "0.0.0" }));
+		writeFileSync(join(distDir, "entry.js"), "export default {};\n");
+		const manifestPath = join(sdkDir, "package.json");
+		writeFileSync(
+			manifestPath,
+			JSON.stringify({
+				name: "@anthropic-ai/claude-agent-sdk",
+				version: "1.2.3-nested",
+				exports: { ".": "./dist/entry.js" },
+			}),
+		);
+		const caller = join(root, "caller.mjs");
+		writeFileSync(caller, "export {};\n");
+		const found = resolveClaudeSdkManifestPath(pathToFileURL(caller).href);
+		assert.equal(found, manifestPath);
 	});
 });

@@ -1,6 +1,7 @@
 import { execFileSync, execSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
-import { basename, relative, resolve } from "node:path";
+import { createRequire } from "node:module";
+import { basename, dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveArtifactRoot } from "./artifact-root.js";
 import { CONFIG, LOG_PATH, REPO, resolveProviderBin, STEPS, WORKTREE_PREFIX } from "./config.js";
@@ -855,6 +856,34 @@ export interface RuntimeVersionResult {
 export interface RuntimeVersionDeps {
 	run?: (executable: string, args: string[]) => string;
 	readManifest?: (path: string) => string;
+	/** Override Claude SDK manifest discovery (tests). Default uses Node module resolution. */
+	resolveClaudeSdkManifest?: () => string;
+}
+
+/**
+ * Locate the installed `@anthropic-ai/claude-agent-sdk` package.json via Node module
+ * resolution from this module. Hard-coded `../../node_modules/...` paths break under
+ * hoisted / published installs (#333); `exports` also hides `./package.json`, so resolve
+ * the package entry and walk up for a manifest whose `name` matches.
+ */
+export function resolveClaudeSdkManifestPath(fromModuleUrl: string = import.meta.url): string {
+	const require = createRequire(fromModuleUrl);
+	let dir = dirname(require.resolve("@anthropic-ai/claude-agent-sdk"));
+	for (let i = 0; i < 12; i++) {
+		const pkgPath = resolve(dir, "package.json");
+		if (existsSync(pkgPath)) {
+			try {
+				const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as { name?: unknown };
+				if (pkg.name === "@anthropic-ai/claude-agent-sdk") return pkgPath;
+			} catch {
+				// keep walking past unreadable / non-JSON parents
+			}
+		}
+		const parent = dirname(dir);
+		if (parent === dir) break;
+		dir = parent;
+	}
+	throw new Error("claude-agent-sdk package.json not found via module resolution");
 }
 
 export function readRuntimeVersions(providers: ProviderName[], deps: RuntimeVersionDeps = {}): RuntimeVersionResult {
@@ -864,11 +893,14 @@ export function readRuntimeVersions(providers: ProviderName[], deps: RuntimeVers
 	const versions: CycleVersionProvenance = { pelaggio, node: process.version, drivers: {} };
 	const unavailable: string[] = [];
 	const run = deps.run ?? ((executable: string, args: string[]) => execFileSync(executable, args, { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }));
+	const resolveClaudeSdk = deps.resolveClaudeSdkManifest ?? (() => resolveClaudeSdkManifestPath());
 	for (const provider of new Set(providers)) {
 		try {
 			if (provider === "claude") {
-				const sdkPath = resolve(fileURLToPath(new URL(".", import.meta.url)), "../../node_modules/@anthropic-ai/claude-agent-sdk/package.json");
-				versions.drivers.claude = (JSON.parse(readManifest(sdkPath)) as { version: string }).version;
+				const sdkPath = resolveClaudeSdk();
+				const version = (JSON.parse(readManifest(sdkPath)) as { version?: unknown }).version;
+				if (typeof version !== "string" || !version) throw new Error("missing version");
+				versions.drivers.claude = version;
 			} else {
 				const output = run(resolveProviderBin(CONFIG, provider, provider), ["--version"])
 					.replace(/[\r\n]+/g, " ")
