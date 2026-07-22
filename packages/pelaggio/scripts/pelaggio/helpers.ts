@@ -398,15 +398,21 @@ export function countPlanFiles(body: string): number {
 
 /**
  * Derive a per-cycle implement turn budget from the plan's file count:
- *   `clamp(2 × files + 60, 100, 250)`.
+ *   `clamp(2 × files + 100, 150, 400)`.
  * Falls back to the static `fallback` when the plan is absent or parses to zero
  * files (e.g. a `--resume` that starts at `implement` with no plan on disk).
+ *
+ * The ceiling (400) and floor (150) are the escape hatch for a genuinely-large
+ * ATOMIC item a single implement cycle must carry. Decomposition into deferred
+ * sub-items (emitted at plan time) is the preferred path, but not every large
+ * change decomposes cleanly — sized after repeated 100-turn-wall failures on
+ * complex-but-few-files items (e.g. #294's taxonomy engine hit the old 100 floor).
  */
 export function computeImplementTurns(planBody: string | null, fallback: number): number {
 	if (!planBody) return fallback;
 	const files = countPlanFiles(planBody);
 	if (files === 0) return fallback;
-	return Math.max(100, Math.min(250, 2 * files + 60));
+	return Math.max(150, Math.min(400, 2 * files + 100));
 }
 
 // ── PR-review revision injection (issue #60) ───────────────────────────

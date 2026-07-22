@@ -950,6 +950,22 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			});
 			if (outcome.kind === "terminal") return outcome.cycleResult;
 			recordArtifactAuthor(assignment, "plan", planAuthor);
+
+			// Plan-time decomposition: a plan that judges the item too large for one cycle emits
+			// `deferred-item: {json}` markers for the slices it splits off, and scopes THIS cycle to a
+			// coherent first slice instead of starving at the implement turn wall. Decomposition is the
+			// preferred path for large items; the raised implement turn ceiling is the escape hatch for
+			// changes that don't decompose cleanly. Best-effort, mirrors the shakedown-code deferral (#115).
+			if (!opts.dryRun) {
+				for (const d of parseDeferredItems(outcome.result.fullText)) {
+					try {
+						const created = await roadmap.createItem(d);
+						log(`plan deferred → ${created.id}: ${d.title}`);
+					} catch (e) {
+						log(`deferred-item create failed (non-fatal): ${e instanceof Error ? e.message : String(e)}`);
+					}
+				}
+			}
 		}
 		const planPath = await roadmap.getItemPlan({ worktree: worktree! });
 		if (planPath) log(`plan: file://${planPath}`);

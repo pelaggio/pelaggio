@@ -56,6 +56,16 @@ npx pelaggio roadmap publish-plan --id <ID> --file "<resolved-path>"
 
 Cover in the plan: scope (what it does and doesn't touch), approach (why this over alternatives), files to change, test strategy, and a rubric self-check.
 
+## Decompose large items (prefer this over a monolith)
+
+One cycle implements one coherent, shippable slice. If delivering this item fully would sprawl — many independent files/subsystems, or several separable capabilities — **decompose it** rather than plan a monolith that risks running out of implement turns:
+
+- Scope THIS plan to the **first coherent, independently-shippable slice** (a vertical slice that lands real value + tests on its own).
+- List each remaining slice as a `deferred-item: {"title": "...", "scope": "S|M|L", "deps": ["<this-id>"]}` marker line on its own line. The harness creates them as follow-up roadmap items (do **not** run `roadmap create-item`). Keep titles specific and self-contained.
+- State in the plan's scope section what this cycle delivers and what was deferred, so the shipped PR is honestly scoped to the slice.
+
+Decomposition is the default for genuinely large work. Only carry a large item whole when it does not separate cleanly (a single tightly-coupled change) — the implement step has headroom for that case, but a monolith that could have been sliced is a planning smell.
+
 ## Self-review
 
 This is the **in-context pass** — the same session wrote the plan, so you see the reasoning trail. That makes you strong at catching project invariants (the Correct dimension: step exhaustiveness, frontmatter stripping, worktree isolation, rate-limit parking, phantom ship guard, etc.) and weak at catching Idioms drift (out-of-context `/shakedown` owns that — fresh eyes are the right tool for convention enforcement).
