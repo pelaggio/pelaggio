@@ -532,8 +532,8 @@ and dry-runs construct the adapter with a stub runner without `bd` on
 
 | Concern | Behavior |
 |---------|----------|
-| IDs | Source-assigned lowercase Beads IDs (`bd-<db>-<hash>`) |
-| Status / ready | Beads status + `bd ready` projection: open ∉ ready → `blocked`; explicit `in_progress` / `closed` override ready |
+| IDs | Source-assigned lowercase Beads IDs — `bd-<hash>` (e.g. `bd-a1b2`), optionally with a db prefix (`bd-main-a1b2c3`) and/or a hierarchical suffix for epics/sub-tasks (`bd-a3f8.1.1`) |
+| Status / ready | Availability from Beads work-readiness (`bd ready` ∪ `in_progress`), never bd claim status; `closed`→done, deps-unmet→`blocked`. **Claimed/in-progress is derived from the live `feat/<id>` git branch only** — a bd `in_progress` item with no branch re-enters availability (dead-holder reconcile) |
 | Priority | Beads numeric priority attached as a duck-typed field for flow ranking; pelaggio `high`→1, `normal`→2 on create |
 | Dependencies | Structured Beads deps → comma-separated `deps` string |
 | Claims | Git `feat/<id>[-slug]` is authoritative. `bd update --claim` is best-effort write-back only. Status listing also overlays live `feat/*` branches via `claimedIds` so a failed write-back still de-surfaces the item |

@@ -96,14 +96,18 @@ describe("parseBdJson", () => {
 });
 
 describe("isBeadsItemId", () => {
-	it("accepts bd-<db>-<hash>", () => {
-		assert.equal(isBeadsItemId("bd-main-a1b2c3"), true);
-		assert.equal(isBeadsItemId("BD-Main-A1B2C3"), true);
+	it("accepts real bd 1.1.x ids: bd-<hash>, bd-<prefix>-<hash>, and hierarchical", () => {
+		assert.equal(isBeadsItemId("bd-a1b2"), true); // no db prefix (README default shape)
+		assert.equal(isBeadsItemId("bd-main-a1b2c3"), true); // with a db prefix
+		assert.equal(isBeadsItemId("bd-probe-l5g"), true); // real probed id
+		assert.equal(isBeadsItemId("bd-a3f8.1"), true); // hierarchical task
+		assert.equal(isBeadsItemId("bd-main-a1b2c3.1.2"), true); // prefixed hierarchical sub-task
+		assert.equal(isBeadsItemId("BD-Main-A1B2C3"), true); // case-insensitive
 	});
 
-	it("rejects partial/unrelated tokens", () => {
-		assert.equal(isBeadsItemId("bd-main"), false);
-		assert.equal(isBeadsItemId("main-a1b2c3"), false);
+	it("rejects non-bd / malformed tokens", () => {
+		assert.equal(isBeadsItemId("main-a1b2c3"), false); // no bd- prefix
+		assert.equal(isBeadsItemId("bd-"), false); // no segment after bd-
 		assert.equal(isBeadsItemId("TOOL-9"), false);
 		assert.equal(isBeadsItemId("42"), false);
 	});
@@ -114,16 +118,16 @@ describe("isBeadsItemId", () => {
 describe("BeadsRoadmap.parseItemId", () => {
 	const r = mk({ repo: "/tmp" });
 
-	it("extracts bare and branch-form ids, normalizes to lowercase", async () => {
+	it("extracts bare, hierarchical, and slug-free branch ids, normalizes to lowercase", async () => {
 		assert.equal(await r.parseItemId(ID_A), ID_A);
 		assert.equal(await r.parseItemId("BD-MAIN-A1B2C3"), ID_A);
-		assert.equal(await r.parseItemId(`feat/${ID_A}`), ID_A);
-		assert.equal(await r.parseItemId(`feat/${ID_A}-fix-the-thing`), ID_A);
-		assert.equal(await r.parseItemId(`checked out feat/${ID_A}-slug`), ID_A);
+		assert.equal(await r.parseItemId("bd-a1b2"), "bd-a1b2"); // single-segment id
+		assert.equal(await r.parseItemId(`${ID_A}.1`), `${ID_A}.1`); // hierarchical sub-task
+		assert.equal(await r.parseItemId(`feat/${ID_A}`), ID_A); // exact slug-free branch (claimItem format)
+		assert.equal(await r.parseItemId(`checked out feat/${ID_A} now`), ID_A); // branch mentioned in prose
 	});
 
-	it("rejects partial and unrelated tokens", async () => {
-		assert.equal(await r.parseItemId("bd-main"), null);
+	it("rejects non-bd and unrelated tokens", async () => {
 		assert.equal(await r.parseItemId("nothing here"), null);
 		assert.equal(await r.parseItemId("feat/issue-42"), null);
 		assert.equal(await r.parseItemId("TOOL-9"), null);
@@ -138,7 +142,7 @@ describe("BeadsRoadmap.listItems — readiness + claim overlay", () => {
 		while (claimedWorktrees.length) rmSync(claimedWorktrees.pop() as string, { recursive: true, force: true });
 	});
 
-	it("maps open ∈ ready → open; open ∉ ready → blocked; in_progress/closed override ready", async () => {
+	it("maps open ∈ ready → open; open ∉ ready → blocked; done from bd; bd in_progress w/o branch → open (git-authoritative)", async () => {
 		const list = [
 			issue({ id: ID_A, title: "Ready open", status: "open", priority: 1 }),
 			issue({ id: ID_B, title: "Blocked open", status: "open", depends_on: [ID_A], blocked_reason: "waiting on dep" }),
@@ -161,7 +165,9 @@ describe("BeadsRoadmap.listItems — readiness + claim overlay", () => {
 		assert.equal(byId[ID_B].status, "blocked");
 		assert.equal(byId[ID_B].blockedReason, "waiting on dep");
 		assert.equal(byId[ID_B].deps, ID_A);
-		assert.equal(byId[ID_C].status, "in-progress");
+		// #347: ID_C is bd `in_progress` but has NO live feat/<id> branch → bd status is not
+		// authoritative, so it surfaces as available ("open"), not stuck "in-progress" (dead-holder).
+		assert.equal(byId[ID_C].status, "open");
 		assert.equal(byId[ID_D].status, "done");
 		assert.equal((byId[ID_A] as { priority?: number }).priority, 1);
 		assert.equal(byId[ID_A].sourceRef, ID_A);
@@ -183,6 +189,42 @@ describe("BeadsRoadmap.listItems — readiness + claim overlay", () => {
 		const r = mk({ repo, bdRun: run });
 		const items = await r.listItems();
 		assert.equal(items[0].status, "in-progress");
+	});
+
+	it("#347 dead-holder: bd in_progress with NO live branch → open and pickable via listOpenItems", async () => {
+		const repo = seedRepo(); // no feat/<id> branch — the authoritative claim is absent
+		const inProg = issue({ id: ID_C, title: "Stale bd claim", status: "in_progress" });
+		const { run } = makeStub({
+			routes: [
+				{ match: (a) => a[0] === "list", stdout: JSON.stringify([inProg]) },
+				{ match: (a) => a[0] === "ready", stdout: "[]" }, // bd excludes in_progress from `ready`
+			],
+		});
+		const r = mk({ repo, bdRun: run });
+		// Without the fix this item is permanently unpickable (bd status acting as the registry).
+		const items = await r.listItems();
+		assert.equal(items[0].status, "open");
+		const open = await r.listOpenItems();
+		assert.deepEqual(
+			open.map((i) => i.id),
+			[ID_C],
+			"a bd in_progress item whose git branch is gone must re-enter availability",
+		);
+	});
+
+	it("#347 bd in_progress WITH a live branch → in-progress and not offered (git-authoritative)", async () => {
+		const repo = seedRepo();
+		execSync(`git branch feat/${ID_C}`, { cwd: repo });
+		const inProg = issue({ id: ID_C, title: "Actively claimed", status: "in_progress" });
+		const { run } = makeStub({
+			routes: [
+				{ match: (a) => a[0] === "list", stdout: JSON.stringify([inProg]) },
+				{ match: (a) => a[0] === "ready", stdout: "[]" },
+			],
+		});
+		const r = mk({ repo, bdRun: run });
+		assert.equal((await r.listItems())[0].status, "in-progress");
+		assert.equal((await r.listOpenItems()).length, 0);
 	});
 
 	it("includeDone=false omits --all flag", async () => {
@@ -274,7 +316,7 @@ describe("BeadsRoadmap.claimItem", () => {
 		while (claimedWorktrees.length) rmSync(claimedWorktrees.pop() as string, { recursive: true, force: true });
 	});
 
-	it("creates git claim before bd update --claim; branch is feat/<id>[-slug]", async () => {
+	it("creates git claim before bd update --claim; branch is slug-free feat/<id>", async () => {
 		const repo = seedRepo();
 		const shown = issue({ id: ID_A, title: "Fix the Thing: Make it Better!" });
 		const { run, calls } = makeStub({
@@ -287,8 +329,9 @@ describe("BeadsRoadmap.claimItem", () => {
 		const { branch, worktree } = await r.claimItem(ID_A);
 		claimedWorktrees.push(worktree);
 
-		assert.match(branch, new RegExp(`^feat/${ID_A}-fix-the-thing`));
-		assert.ok(branch.length <= `feat/${ID_A}-`.length + 40);
+		// #347: bd ids contain hyphens/dots, so the claim branch is exactly `feat/<id>` (no `-slug`),
+		// keeping id-in-branch parsing unambiguous. The worktree name still derives from the id.
+		assert.equal(branch, `feat/${ID_A}`);
 		assert.ok(worktree.endsWith(`-${ID_A}`), `worktree should end with -${ID_A}, got ${worktree}`);
 
 		const showIdx = calls.findIndex((c) => c.args[0] === "show");
@@ -304,9 +347,8 @@ describe("BeadsRoadmap.claimItem", () => {
 	it("pre-existing branch raises AlreadyClaimedError without bd update --claim", async () => {
 		const repo = seedRepo();
 		const shown = issue({ id: ID_A, title: "Short" });
-		// Create a branch that matches the slugged claim branch.
-		const slugBranch = `feat/${ID_A}-short`;
-		execSync(`git branch ${slugBranch}`, { cwd: repo });
+		// The slug-free claim branch already exists → a new claim must fail closed.
+		execSync(`git branch feat/${ID_A}`, { cwd: repo });
 		const { run, calls } = makeStub({
 			routes: [
 				{ match: (a) => a[0] === "show", stdout: JSON.stringify(shown) },

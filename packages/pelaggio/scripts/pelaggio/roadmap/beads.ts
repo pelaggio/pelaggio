@@ -40,11 +40,17 @@ export interface BeadsRoadmapOpts {
 
 // ─── Beads 1.1.x JSON boundary ───────────────────────────────────────────────
 
-/** Canonical Beads id: `bd-<db>-<hash>` (lowercase). */
-const BD_ID_CORE = "bd-[a-z0-9]+-[a-z0-9]+";
+// Canonical Beads id. Verified against bd 1.1.x: a `bd-` prefix, then one or more
+// hyphen-joined alphanumeric segments (`bd-a1b2` with no db prefix, or `bd-probe-l5g`
+// with one), then an optional dotted hierarchy for epics/sub-tasks (`bd-probe-l5g.1`,
+// `bd-a3f8.1.1`). The greedy multi-segment core makes id-in-branch parsing ambiguous
+// against a `-slug`, so bd claim branches are slug-free (`feat/<id>` — see claimItem)
+// and the branch regex is anchored; claim *detection* is separately robust via
+// `claimedIds` (known-id prefix match). (#181 review: #347)
+const BD_ID_CORE = "bd-[a-z0-9]+(?:-[a-z0-9]+)*(?:\\.\\d+)*";
 const BD_ID_EXACT_RE = new RegExp(`^${BD_ID_CORE}$`, "i");
-const BD_ID_IN_TEXT_RE = new RegExp(`\\b(${BD_ID_CORE})\\b`, "i");
-const BD_ID_IN_BRANCH_RE = new RegExp(`feat\\/(${BD_ID_CORE})(?:-|$)`, "i");
+const BD_ID_IN_TEXT_RE = new RegExp(`\\b(${BD_ID_CORE})`, "i");
+const BD_ID_IN_BRANCH_RE = new RegExp(`^feat\\/(${BD_ID_CORE})$`, "i");
 
 interface BdDependency {
 	depends_on_id?: string;
@@ -185,13 +191,6 @@ function formatDeps(issue: BdIssue): string {
 	return extractDepIds(issue).join(", ");
 }
 
-function kebab(s: string): string {
-	return s
-		.toLowerCase()
-		.replace(/[^\da-z]+/g, "-")
-		.replace(/^-+|-+$/g, "");
-}
-
 function attachPriority(item: RoadmapItemStatus, priority: unknown): RoadmapItemStatus {
 	if (typeof priority === "number" && Number.isFinite(priority)) {
 		return Object.assign(item, { priority });
@@ -228,18 +227,19 @@ export class BeadsRoadmap implements RoadmapSource {
 	}
 
 	async listOpenItems(): Promise<RoadmapItem[]> {
+		// Availability derives from bd WORK-readiness (deps met), never from bd claim status. `bd ready`
+		// lists deps-met items bd doesn't consider claimed; bd excludes `in_progress` items from it, but
+		// those were ready when claimed, so a dead-holder (bd `in_progress` whose authoritative feat/<id>
+		// branch is gone) must re-enter availability — otherwise bd status would act as the claims
+		// registry, violating the git-native invariant. Claimed = live git branch only. (#347 review)
 		const ready = this.fetchReadySet();
-		const readyIds = [...ready.keys()];
-		const claimed = claimedIds(this.repo, readyIds);
+		const inProgress = this.fetchInProgressSet();
+		const byId = new Map<string, BdIssue>([...inProgress, ...ready]); // ready wins on overlap
+		const claimed = claimedIds(this.repo, [...byId.keys()]);
 		const out: RoadmapItem[] = [];
-		for (const [id, issue] of ready) {
+		for (const [id, issue] of byId) {
 			if (claimed.has(id)) continue;
-			out.push({
-				id,
-				title: issue.title,
-				deps: formatDeps(issue),
-				sourceRef: id,
-			});
+			out.push({ id, title: issue.title, deps: formatDeps(issue), sourceRef: id });
 		}
 		return out;
 	}
@@ -248,8 +248,10 @@ export class BeadsRoadmap implements RoadmapSource {
 		const args = opts?.includeDone ? ["list", "--all", "--json"] : ["list", "--json"];
 		const raw = this.runBd(args);
 		const issues = parseBdJson<BdIssue[]>(raw, isBdIssueArray);
-		const ready = this.fetchReadySet();
-		const items = issues.map((it) => this.toStatus(it, ready));
+		// Work-ready = deps-met (`bd ready`) ∪ bd-in_progress (already fetched in `issues`). bd claim
+		// status is not authoritative; applyClaimOverlay marks in-progress from live git branches. (#347)
+		const workReady = new Set([...this.fetchReadySet().keys(), ...issues.filter((it) => mapBdStatus(it.status) === "in-progress").map((it) => it.id.toLowerCase())]);
+		const items = issues.map((it) => this.toStatus(it, workReady));
 		return this.applyClaimOverlay(items);
 	}
 
@@ -261,8 +263,9 @@ export class BeadsRoadmap implements RoadmapSource {
 			const parsed = parseBdJson<BdIssue | BdIssue[]>(raw, (v) => isBdIssue(v) || isBdIssueArray(v));
 			const issue = Array.isArray(parsed) ? parsed[0] : parsed;
 			if (!issue) return null;
-			const ready = this.fetchReadySet();
-			const item = this.toStatus(issue, ready, { includeBody: true });
+			// bd-in_progress is a work item (deps were met at claim); git decides claimed. (#347)
+			const workReady = new Set([...this.fetchReadySet().keys(), ...(mapBdStatus(issue.status) === "in-progress" ? [issue.id.toLowerCase()] : [])]);
+			const item = this.toStatus(issue, workReady, { includeBody: true });
 			const [overlaid] = this.applyClaimOverlay([item]);
 			return overlaid;
 		} catch (e) {
@@ -278,8 +281,11 @@ export class BeadsRoadmap implements RoadmapSource {
 		const parsed = parseBdJson<BdIssue | BdIssue[]>(raw, (v) => isBdIssue(v) || isBdIssueArray(v));
 		const issue = Array.isArray(parsed) ? parsed[0] : parsed;
 		if (!issue) throw new Error(`Beads issue not found: ${canonical}`);
-		const slug = kebab(issue.title).slice(0, 40);
-		const branch = `feat/${canonical}${slug ? `-${slug}` : ""}`;
+		// Slug-free branch: bd ids contain hyphens (and dots), so a `-slug` suffix would make
+		// id-in-branch parsing ambiguous. The worktree name derives from the id (not the branch),
+		// so dropping the slug costs only branch cosmetics and buys an unambiguous `feat/<id>`. Claim
+		// detection stays robust either way via `claimedIds` (known-id prefix match). (#347 review)
+		const branch = `feat/${canonical}`;
 
 		// Authoritative git claim first — AlreadyClaimedError before any Beads write-back.
 		const claim = createClaimWorkspace(this.repo, canonical, branch, opts);
@@ -382,19 +388,27 @@ export class BeadsRoadmap implements RoadmapSource {
 
 	// ─── internals ───────────────────────────────────────────────────────────
 
-	private toStatus(issue: BdIssue, ready: Map<string, BdIssue>, opts?: { includeBody?: boolean }): RoadmapItemStatus {
+	private toStatus(issue: BdIssue, workReady: Set<string>, opts?: { includeBody?: boolean }): RoadmapItemStatus {
 		const id = issue.id.toLowerCase();
-		let status = mapBdStatus(issue.status);
+		const raw = mapBdStatus(issue.status);
+		let status: ItemStatus;
 		let blockedReason: string | undefined;
+		const reason = typeof issue.blocked_reason === "string" ? issue.blocked_reason.trim() : "";
 
-		// Ready-set projection: open items not in ready → blocked.
-		// Explicit in_progress / closed override ready membership.
-		if (status === "open") {
-			if (!ready.has(id)) {
-				status = "blocked";
-				const reason = typeof issue.blocked_reason === "string" ? issue.blocked_reason.trim() : "";
-				if (reason) blockedReason = reason;
-			}
+		// #347: bd `in_progress` is NOT authoritative for "claimed" — the git `feat/<id>` branch is
+		// (applied in applyClaimOverlay). So a non-done bd item is "open" (available) when its deps are
+		// met (workReady = `bd ready` ∪ bd-in_progress), else "blocked". A dead-holder (bd in_progress
+		// with no branch) therefore surfaces as open and re-enters availability instead of being stuck.
+		if (raw === "done") {
+			status = "done";
+		} else if (raw === "blocked") {
+			status = "blocked";
+			if (reason) blockedReason = reason;
+		} else if (workReady.has(id)) {
+			status = "open";
+		} else {
+			status = "blocked";
+			if (reason) blockedReason = reason;
 		}
 
 		const item: RoadmapItemStatus = {
@@ -429,6 +443,18 @@ export class BeadsRoadmap implements RoadmapSource {
 		const issues = parseBdJson<BdIssue[]>(raw, isBdIssueArray);
 		const map = new Map<string, BdIssue>();
 		for (const it of issues) map.set(it.id.toLowerCase(), it);
+		return map;
+	}
+
+	/** bd `in_progress` issues keyed by lowercase id (from `bd list`). `bd ready` excludes them, but
+	 *  they were deps-ready when claimed; a dead-holder among them (no live git branch) must re-enter
+	 *  availability — the git branch is the authoritative claim, not bd status. (#347) */
+	private fetchInProgressSet(): Map<string, BdIssue> {
+		const raw = this.runBd(["list", "--json"]);
+		if (!raw.trim()) return new Map();
+		const issues = parseBdJson<BdIssue[]>(raw, isBdIssueArray);
+		const map = new Map<string, BdIssue>();
+		for (const it of issues) if (mapBdStatus(it.status) === "in-progress") map.set(it.id.toLowerCase(), it);
 		return map;
 	}
 
