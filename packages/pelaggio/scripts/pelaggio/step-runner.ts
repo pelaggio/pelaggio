@@ -8,7 +8,7 @@ import { grokProvider } from "./grok-provider.js";
 import { classifyStepError, isRefusal, looksLikeStalledAsk, type MainCheckoutDeltaObserver, parseBlockedReason, parseDecisions, parseWaitFlag, resolveParkReset } from "./helpers.js";
 import { composeSystemAppend, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "./step-runner-shared.js";
 import { MUTATING_TOOLS, toolBrief } from "./tui.js";
-import type { ParkSignal, ProviderName, Step, StepEmit, StepResult, TokenUsage } from "./types.js";
+import type { ParkSignal, ProviderCapabilities, ProviderName, Step, StepEmit, StepResult, TokenUsage } from "./types.js";
 import { ensureWorktreeDeps } from "./worktree-deps.js";
 
 export { composeSystemAppend, isWorktreePath } from "./step-runner-shared.js";
@@ -39,13 +39,25 @@ export interface RunStepOpts {
  *  the `deps.runStep` DI seam resolve to one definition. */
 export type RunStepFn = (name: Step, prompt: string, opts: RunStepOpts, emit: StepEmit) => Promise<StepResult>;
 
-/** A step-execution backend. Today only the Claude SDK runner; #80 adds a second and
- *  registers it in `PROVIDERS`. The exported `runStep` dispatches to `runStep` here by
- *  the per-step resolved `provider`. */
+/** A step-execution backend. Every registered provider declares a complete static
+ *  capability descriptor beside `runStep` (ADR-0020 / #337). The exported `runStep`
+ *  dispatches by the per-step resolved `provider` and gains no adaptation registry. */
 export interface StepProvider {
 	name: ProviderName;
+	/** Data-only native capability row. Orthogonal predicates; never ranked by strength. */
+	capabilities: ProviderCapabilities;
 	runStep: RunStepFn;
 }
+
+/** Claude: native semantic deny via PreToolUse hooks; billed USD; cache counters; stream events. */
+export const CLAUDE_CAPABILITIES: ProviderCapabilities = {
+	semanticDeny: true,
+	isolation: [],
+	costMeter: { kind: "usd-billed" },
+	cacheReporting: true,
+	outputTransport: "stream",
+	sessionResume: false,
+};
 
 // Worktree-side install guard: the worktree shares MAIN_REPO's `node_modules`
 // via symlink, so any in-worktree `pnpm install` (or equivalent) re-points the
@@ -498,7 +510,7 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 
 /** The default provider — the Claude SDK runner above. Exported so the registry
  *  unit test can assert `getProvider("claude") === claudeProvider`. */
-export const claudeProvider: StepProvider = { name: "claude", runStep: claudeRunStep };
+export const claudeProvider: StepProvider = { name: "claude", capabilities: CLAUDE_CAPABILITIES, runStep: claudeRunStep };
 
 // Keyed by `ProviderName` so the map is exhaustive over the union — #80's widening
 // surfaces a compile error here until it registers the new provider.

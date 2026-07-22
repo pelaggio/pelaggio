@@ -8,8 +8,18 @@ import { buildAgentEnv, makeSecretScrubber } from "./secret-hygiene.js";
 import type { StepProvider } from "./step-runner.js";
 import { composeSystemAppend, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "./step-runner-shared.js";
 import { MUTATING_TOOLS, toolBrief } from "./tui.js";
-import type { ParkSignal, Step, StepEvent, StepResult, TokenUsage } from "./types.js";
+import type { ParkSignal, ProviderCapabilities, Step, StepEvent, StepResult, TokenUsage } from "./types.js";
 import { ensureWorktreeDeps } from "./worktree-deps.js";
+
+/** Codex: workspace-write sandbox, estimated cost, cache counters, JSONL + final-message output. */
+export const CODEX_CAPABILITIES: ProviderCapabilities = {
+	semanticDeny: false,
+	isolation: ["workspace-write"],
+	costMeter: { kind: "usd-estimated" },
+	cacheReporting: true,
+	outputTransport: "stream-plus-final",
+	sessionResume: false,
+};
 
 type JsonObject = Record<string, unknown>;
 
@@ -479,4 +489,4 @@ const runStep: StepProvider["runStep"] = async (name, prompt, opts, emit) => {
 	}
 };
 
-export const codexProvider: StepProvider = { name: "codex", runStep };
+export const codexProvider: StepProvider = { name: "codex", capabilities: CODEX_CAPABILITIES, runStep };

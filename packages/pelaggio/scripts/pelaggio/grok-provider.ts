@@ -18,8 +18,27 @@ import { buildAgentEnv, makeSecretScrubber } from "./secret-hygiene.js";
 import type { StepProvider } from "./step-runner.js";
 import { composeSystemAppend, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "./step-runner-shared.js";
 import { MUTATING_TOOLS, toolBrief } from "./tui.js";
-import type { ParkSignal, Step, StepEvent, StepResult, TokenUsage } from "./types.js";
+import type { ParkSignal, ProviderCapabilities, Step, StepEvent, StepResult, TokenUsage } from "./types.js";
 import { ensureWorktreeDeps } from "./worktree-deps.js";
+
+/**
+ * Grok: Landlock isolation when declared native, pool-quota ticks (token-price fallback
+ * degraded), cache counters, ACP stream. No semantic deny; no session resume.
+ */
+export function grokCapabilities(allowUnsandboxedFallback: boolean): ProviderCapabilities {
+	return {
+		semanticDeny: false,
+		// Enabling fallback means a run may be unsandboxed, so it cannot honestly satisfy
+		// a hard Landlock route. With fallback disabled, missing Landlock fails execution closed.
+		isolation: allowUnsandboxedFallback ? [] : ["landlock"],
+		costMeter: { kind: "pool-quota", estimateFallback: "degraded" },
+		cacheReporting: true,
+		outputTransport: "stream",
+		sessionResume: false,
+	};
+}
+
+export const GROK_CAPABILITIES = grokCapabilities(CONFIG.grokAllowUnsandboxedFallback);
 
 type JsonObject = Record<string, unknown>;
 
@@ -423,4 +442,4 @@ export const runStep: StepProvider["runStep"] = async (name, prompt, opts, emit)
 	return built.result;
 };
 
-export const grokProvider: StepProvider = { name: "grok", runStep };
+export const grokProvider: StepProvider = { name: "grok", capabilities: GROK_CAPABILITIES, runStep };

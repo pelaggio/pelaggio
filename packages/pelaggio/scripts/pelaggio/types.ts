@@ -293,6 +293,76 @@ export const RECOVERABLE_ERRORS = ["plan needs rethink", "parked", "transient sd
  *  mirroring `ShipTargetName` / `SHIP_TARGET_NAMES`. */
 export type ProviderName = "claude" | "codex" | "grok";
 
+// ── Provider capability descriptors (ADR-0020 / #337) ──────────────────
+// Data-only facts about what a driver does natively. Axes are orthogonal
+// predicates — never ranked by strength. No provider imports or runtime
+// registry live here (types.ts stays type-only).
+
+/** OS-isolation mechanisms. Membership-based; never compared by "strength". */
+export type IsolationMechanism = "workspace-write" | "landlock";
+
+/**
+ * How a provider meters cost.
+ * - `usd-billed`: provider-reported billed USD (Claude SDK `total_cost_usd`)
+ * - `usd-estimated`: token-price estimate (Codex `estimateCodexCost`)
+ * - `pool-quota`: subscription pool ticks (Grok `costUsdTicks`); the token-price
+ *   fallback path is declared degraded, not native-equivalent
+ */
+export type CostMeter = { kind: "usd-billed" } | { kind: "usd-estimated" } | { kind: "pool-quota"; estimateFallback: "degraded" };
+
+/** How the provider delivers model output to the harness. */
+export type OutputTransport = "stream" | "final" | "stream-plus-final";
+
+/**
+ * Static, complete capability row for a registered provider. Every axis is a
+ * closed fact; an unmet hard requirement yields a typed ineligible result rather
+ * than silent degradation or polyfill.
+ */
+export interface ProviderCapabilities {
+	/** Per-call tool-policy denial (Claude `PreToolUse` hooks). Distinct from OS isolation. */
+	semanticDeny: boolean;
+	/** Independent native isolation mechanisms present on this provider. */
+	isolation: readonly IsolationMechanism[];
+	costMeter: CostMeter;
+	/** Provider already parses cache counters into `TokenUsage.cacheRead` / `cacheCreation`. */
+	cacheReporting: boolean;
+	outputTransport: OutputTransport;
+	/** Session/resume id path — unevidenced (false) for every current provider. */
+	sessionResume: boolean;
+}
+
+/** Axis names that can appear on a degraded realization. */
+export type CapabilityAxis = keyof ProviderCapabilities;
+
+type CapabilityRequirement<Axis extends CapabilityAxis> = Axis extends "costMeter" ? CostMeter["kind"] : ProviderCapabilities[Axis];
+
+/** Per-axis predicate used by hard filters and soft native preferences. */
+export type CapabilityPredicate = {
+	readonly [Axis in CapabilityAxis]?: CapabilityRequirement<Axis>;
+};
+
+/** How a candidate satisfied the requested soft preferences. */
+export type CapabilityRealizationMode = "native" | "degraded";
+
+export interface CapabilityRealization {
+	provider: ProviderName;
+	mode: CapabilityRealizationMode;
+	/** Soft axes the candidate did not satisfy natively (empty when `mode` is native). */
+	degradedAxes: readonly CapabilityAxis[];
+}
+
+/** Ordered candidate input for the pure capability resolver. */
+export interface CapabilityCandidate<T = unknown> {
+	provider: ProviderName;
+	/** Opaque seat/settings payload preserved through ranking. */
+	payload: T;
+}
+
+export type CapabilityRouteResult<T = unknown> = { ok: true; candidates: CapabilityCandidate<T>[]; realizations: CapabilityRealization[] } | { ok: false; reason: string };
+
+/** Closed outcome vocabulary shared by the authoring review loop and `review.Verdict` effects. */
+export type ReviewOutcome = "converged-clean" | "converged-with-notes" | "ceiling" | "dissent" | "hard-block" | "budget";
+
 // ── Ship targets ───────────────────────────────────────────────────────
 
 export type ShipTargetName = "direct-push" | "pull-request" | "auto-merge-pr";

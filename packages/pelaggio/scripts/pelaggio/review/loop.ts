@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { AuthoringReviewConfig, ReviewSlot } from "../config.js";
-import type { ParkSignal, ProviderName, StepResult } from "../types.js";
+import type { ParkSignal, ProviderName, ReviewOutcome, StepResult } from "../types.js";
 import {
 	type AuthoringReviewFinding,
 	type ClassificationContextBase,
@@ -15,7 +15,7 @@ import {
 } from "./findings.js";
 import { BASELINE_TAXONOMY, isSafetyClass, safetyClasses, type TaxonomyConfig } from "./taxonomy.js";
 
-export type ReviewOutcome = "converged-clean" | "converged-with-notes" | "ceiling" | "dissent" | "hard-block" | "budget";
+export type { ReviewOutcome };
 export type DiversityStatus = { state: "met" } | { state: "softened"; explanation: string };
 export interface DriverIdentity {
 	role: "author" | "reviewer" | "judge";

@@ -126,6 +126,129 @@ describe("effects manifest validation", () => {
 	});
 });
 
+const SHA = "abcdef0123456789abcdef0123456789abcdef01";
+const FINGERPRINT = "a".repeat(64);
+const verdictEffect = {
+	kind: "review.Verdict" as const,
+	itemId: "TOOL-99",
+	reviewedSha: SHA,
+	reviewRecordSource: ".dev/review-records/cycle-1-TOOL-99.json",
+	outcome: "converged-clean" as const,
+	seats: [
+		{ role: "author" as const, seatId: "author", provider: "claude" as const, model: "m" },
+		{ role: "reviewer" as const, seatId: "codex", provider: "codex" as const },
+		{ role: "judge" as const, seatId: "judge", provider: "claude" as const },
+	],
+};
+const escalationEffect = {
+	kind: "review.Escalation" as const,
+	itemId: "TOOL-99",
+	reviewedSha: SHA,
+	reviewRecordSource: ".dev/review-records/cycle-1-TOOL-99.json",
+	evidenceFingerprint: FINGERPRINT,
+	hasSafetyBlocker: false,
+};
+
+describe("review.Verdict / review.Escalation effects (#337)", () => {
+	it("accepts a valid verdict + escalation manifest and dispatches (validate-and-log)", async () => {
+		const ctx = baseContext();
+		ctx.step = "shakedown-code";
+		ctx.attempt = 0;
+		ctx.preSha = SHA;
+		const logs: string[] = [];
+		ctx.log = (msg) => logs.push(msg);
+		writeEffectsManifest(ctx, [verdictEffect, escalationEffect]);
+
+		const manifest = loadAndValidateEffectsManifest(ctx);
+		assert.equal(manifest.effects.length, 2);
+		assert.equal(manifest.effects[0]?.kind, "review.Verdict");
+		assert.equal(manifest.effects[1]?.kind, "review.Escalation");
+
+		await dispatchStepEffects(ctx);
+		assert.equal(existsSync(effectManifestPath(ctx)), false);
+		assert.ok(logs.some((l) => l.includes("review.Verdict")));
+		assert.ok(logs.some((l) => l.includes("review.Escalation")));
+	});
+
+	it("rejects malformed verdict payloads", () => {
+		const ctx = baseContext();
+		ctx.step = "shakedown-code";
+		ctx.attempt = 0;
+		ctx.preSha = SHA;
+
+		writeEffectsManifest(ctx, [{ ...verdictEffect, outcome: "not-a-real-outcome" as "converged-clean" }]);
+		assert.throws(
+			() => loadAndValidateEffectsManifest(ctx),
+			(err) => err instanceof EffectsManifestError && err.code === "invalid_manifest" && /outcome/.test(err.message),
+		);
+
+		writeEffectsManifest(ctx, [{ ...verdictEffect, reviewedSha: "nope" }]);
+		assert.throws(
+			() => loadAndValidateEffectsManifest(ctx),
+			(err) => err instanceof EffectsManifestError && err.code === "invalid_manifest" && /reviewedSha/.test(err.message),
+		);
+
+		writeEffectsManifest(ctx, [{ ...verdictEffect, seats: [] }]);
+		assert.throws(
+			() => loadAndValidateEffectsManifest(ctx),
+			(err) => err instanceof EffectsManifestError && err.code === "invalid_manifest" && /seats/.test(err.message),
+		);
+	});
+
+	it("rejects malformed escalation fingerprints and SHAs", () => {
+		const ctx = baseContext();
+		ctx.step = "shakedown-code";
+		ctx.attempt = 0;
+		ctx.preSha = SHA;
+
+		writeEffectsManifest(ctx, [{ ...escalationEffect, evidenceFingerprint: "short" }]);
+		assert.throws(
+			() => loadAndValidateEffectsManifest(ctx),
+			(err) => err instanceof EffectsManifestError && err.code === "invalid_manifest" && /evidenceFingerprint/.test(err.message),
+		);
+
+		writeEffectsManifest(ctx, [{ ...escalationEffect, hasSafetyBlocker: "yes" as unknown as boolean }]);
+		assert.throws(
+			() => loadAndValidateEffectsManifest(ctx),
+			(err) => err instanceof EffectsManifestError && err.code === "invalid_manifest" && /hasSafetyBlocker/.test(err.message),
+		);
+	});
+
+	it("rejects provenance mismatch on itemId and reviewedSha vs preSha", async () => {
+		const ctx = baseContext();
+		ctx.step = "shakedown-code";
+		ctx.attempt = 0;
+		ctx.preSha = SHA;
+
+		// Effect reviewedSha ≠ preSha (manifest preSha still matches ctx so load succeeds).
+		const otherSha = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+		writeEffectsManifest(ctx, [{ ...verdictEffect, reviewedSha: otherSha }]);
+		await assert.rejects(
+			() => dispatchStepEffects(ctx),
+			(err) => err instanceof EffectsManifestError && err.code === "provenance_mismatch" && /reviewedSha/.test(err.message),
+		);
+		assert.equal(existsSync(effectManifestPath(ctx)), true);
+
+		// Effect itemId ≠ ctx.itemId (handler checks).
+		writeEffectsManifest(ctx, [{ ...verdictEffect, itemId: "OTHER" }]);
+		await assert.rejects(
+			() => dispatchStepEffects(ctx),
+			(err) => err instanceof EffectsManifestError && err.code === "provenance_mismatch" && /itemId/.test(err.message),
+		);
+		assert.equal(existsSync(effectManifestPath(ctx)), true);
+	});
+
+	it("retains the manifest when review effect dispatch fails", async () => {
+		const ctx = baseContext();
+		ctx.step = "shakedown-code";
+		ctx.attempt = 0;
+		ctx.preSha = SHA;
+		writeEffectsManifest(ctx, [{ ...escalationEffect, itemId: "WRONG" }]);
+		await assert.rejects(() => dispatchStepEffects(ctx));
+		assert.equal(existsSync(effectManifestPath(ctx)), true);
+	});
+});
+
 describe("effects dispatch", () => {
 	it("dispatches checkpoint and plan.publish, then deletes the manifest", async () => {
 		const ctx = baseContext(makeTempGitRepo());
