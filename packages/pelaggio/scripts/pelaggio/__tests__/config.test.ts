@@ -450,6 +450,16 @@ describe("loadConfig — roadmap.source", () => {
 		const path = writeYml(repo, "roadmap:\n  source: gh-issues\n");
 		assert.throws(() => loadConfig({ repo, configPath: path }), /roadmap\.source.*markdown/);
 	});
+
+	it("accepts roadmap.source: beads without github/linear fields", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "roadmap:\n  source: beads\n");
+		const cfg = loadConfig({ repo, configPath: path });
+		assert.equal(cfg.roadmapSource, "beads");
+		// No Beads-specific config object; github/linear blocks remain defaults and unused.
+		assert.equal(cfg.roadmapGithub.ghRepo, "");
+		assert.equal(cfg.roadmapLinear.teamId, "");
+	});
 });
 
 describe("loadConfig — roadmap.github", () => {

@@ -1,6 +1,6 @@
-export type RoadmapSourceName = "markdown" | "github-issues" | "linear";
+export type RoadmapSourceName = "markdown" | "github-issues" | "linear" | "beads";
 
-export const ROADMAP_SOURCE_NAMES: readonly RoadmapSourceName[] = ["markdown", "github-issues", "linear"];
+export const ROADMAP_SOURCE_NAMES: readonly RoadmapSourceName[] = ["markdown", "github-issues", "linear", "beads"];
 
 export type PlanLocation = "issue-comment" | "pr-description";
 
