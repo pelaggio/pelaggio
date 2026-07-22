@@ -1345,6 +1345,19 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		ship = await step("ship", shipPrompt, worktree!);
 		cost += ship.cost;
 	} else {
+		// Clear any stale body file BEFORE the first attempt. A prior failed run retains
+		// `.dev/ship/pr-body-{ID}.md` (gitignored, persists in the worktree) for diagnosis; on a
+		// resume/re-run the model must write a FRESH body this run. Without this, `parseShipDecisionEffect`
+		// only checks the file exists — so a resumed cycle could open/update a PR with the stale body
+		// from the failed run. Removing it first makes the transport fail closed: no fresh write → parse
+		// fails (file missing). Within-run retry (attempt 2) still overwrites as needed. (#303 review)
+		if (!opts.dryRun) {
+			try {
+				cleanupShipBodyFile(worktree!, itemId!);
+			} catch (e) {
+				log(`⚠ pre-ship body cleanup failed: ${e instanceof Error ? e.message : String(e)}`);
+			}
+		}
 		// Attempt-cap only (no budget gate) — one acceptance-required recovery for a
 		// malformed decision / missing body file before any manifest is written.
 		ship = await step("ship", shipPrompt, worktree!, { attempt: 1, effects: shipEffects });

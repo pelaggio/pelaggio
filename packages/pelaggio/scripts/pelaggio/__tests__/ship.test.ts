@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { DEFAULT_SHIP_TARGET, loadConfig } from "../config.js";
 import { type Effect, EffectsManifestError } from "../effects.js";
@@ -701,6 +701,42 @@ describe("runPipeline — ship target dispatch", () => {
 		assert.equal(shipSteps[1].ok, false);
 		assert.equal(shipSteps[1].effectsError?.code, "invalid_manifest");
 		assert.ok(shipSteps[1].effectsError?.message);
+	});
+
+	it("pull-request: a stale body file from a prior run is cleared before attempt 1 — never opens a PR with stale content (#303 review)", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const bodyPath = join(worktree, shipBodyFile("TOOL-99"));
+		// Simulate a resume after a prior FAILED ship run: a stale body file persists in the worktree.
+		mkdirSync(dirname(bodyPath), { recursive: true });
+		writeFileSync(bodyPath, "STALE BODY from a prior failed run — must not be shipped");
+		let shipDispatchCount = 0;
+		// The model emits a VALID decision that references prBodyFile but does NOT (re)write the body
+		// file this run — it would rely on the stale file. Pre-attempt cleanup removes the stale file,
+		// so both attempts fail closed (file missing) rather than dispatching the stale content.
+		const decisionNoWrite = { ok: true, text: `SHIP_DECISION\n{"target":"pull-request","headBranch":"feat/tool-99","prTitle":"Ship TOOL-99","prBodyFile":"${shipBodyFile("TOOL-99")}"}\nEND_SHIP_DECISION` };
+		const { runStep } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				ship: [decisionNoWrite, decisionNoWrite],
+			},
+			parkSignal,
+		);
+		const result = await runPipeline(baseOpts(worktree, "pull-request"), parkSignal, baseFlags, {
+			runStep,
+			listWorktrees: () => [],
+			appendLog: () => {},
+			dispatchStepEffects: async (ctx) => {
+				if (ctx.step === "ship") shipDispatchCount += 1;
+				return {};
+			},
+		});
+		assert.equal(result.completed, false, "must not complete a ship that would reuse a stale body");
+		assert.equal(shipDispatchCount, 0, "no PR dispatched from a stale body file");
+		assert.equal(existsSync(bodyPath), false, "stale body file was cleared before attempt 1 and never rewritten");
 	});
 
 	it("pull-request: provenance_mismatch and dispatch failures are not retried", async () => {
