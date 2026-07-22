@@ -42,10 +42,13 @@ import {
 	parseVerdict,
 	parseWaitFlag,
 	REVIEW_DIFF_MAX_BYTES,
+	readGitBinding,
+	readRuntimeVersions,
 	resolveParkReset,
 	revertPlanPolish,
 	reviewFindingsPreamble,
 	snapshotForbiddenRoot,
+	uniqueDriverProvenance,
 	verifyShipLanded,
 } from "../helpers.js";
 
@@ -1376,5 +1379,56 @@ describe("reviewFindingsPreamble (issue #60)", () => {
 		assert.match(out, /\.\.\.\(truncated\)/);
 		// under-cap input is not truncated
 		assert.doesNotMatch(reviewFindingsPreamble("x".repeat(100)), /\(truncated\)/);
+	});
+});
+
+describe("cycle provenance helpers", () => {
+	it("deduplicates realized driver/model pairs in first-seen order", () => {
+		const step = (provider: "claude" | "codex" | undefined, model: string) => ({ name: "implement", provider, model, cost: 0, turns: 1, ok: true });
+		assert.deepEqual(uniqueDriverProvenance([step("codex", "gpt-5"), step("claude", "sonnet"), step("codex", "gpt-5"), step("codex", "gpt-5-mini"), step(undefined, "legacy")]), [
+			{ provider: "codex", model: "gpt-5" },
+			{ provider: "claude", model: "sonnet" },
+			{ provider: "codex", model: "gpt-5-mini" },
+		]);
+	});
+
+	it("preserves Git observations and stores a portable worktree label", () => {
+		const commands = new Map([
+			["git branch --show-current", "feat/327\n"],
+			["git rev-parse main", "a".repeat(40)],
+			["git rev-parse HEAD", "b".repeat(40)],
+		]);
+		const first = readGitBinding("/repo/.dev/worktrees/327", "/repo", undefined, (command) => commands.get(command) ?? "");
+		assert.deepEqual(first, { branch: "feat/327", worktree: ".dev/worktrees/327", mainShaAtStart: "a".repeat(40), headSha: "b".repeat(40) });
+		const preserved = readGitBinding("/gone/327", "/repo", first, () => {
+			throw new Error("gone");
+		});
+		assert.equal(preserved.headSha, "b".repeat(40));
+		assert.equal(preserved.mainShaAtStart, "a".repeat(40));
+		assert.equal(preserved.worktree, "327");
+	});
+
+	it("bounds driver versions and reports failed probes without stderr", () => {
+		let calls = 0;
+		const result = readRuntimeVersions(["codex", "codex", "grok"], {
+			readManifest: () => JSON.stringify({ version: "0.1.0" }),
+			run: (_executable, _args) => {
+				calls++;
+				if (calls === 2) throw new Error("secret stderr");
+				return `codex 1.2.3\r\n${"x".repeat(300)}`;
+			},
+		});
+		assert.equal(calls, 2);
+		assert.equal(result.versions.drivers.codex?.includes("\n"), false);
+		assert.ok((result.versions.drivers.codex?.length ?? 0) <= 160);
+		assert.deepEqual(result.unavailable, ["version.grok"]);
+	});
+
+	it("resolves the real installed claude SDK version (no manifest mock)", () => {
+		// Exercises the actual node_modules path resolution — the mocked-manifest tests above
+		// accept any path, so only this catches a wrong relative depth to the SDK package.json.
+		const result = readRuntimeVersions(["claude"]);
+		assert.match(result.versions.drivers.claude ?? "", /^\d+\.\d+\.\d+/);
+		assert.ok(!result.unavailable.includes("version.claude"));
 	});
 });

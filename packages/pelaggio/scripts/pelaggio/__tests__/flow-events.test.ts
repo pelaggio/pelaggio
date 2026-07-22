@@ -118,6 +118,22 @@ describe("dual-format reader", () => {
 		assert.match(event.eventId, /^[0-9A-HJKMNP-TV-Z]{26}$/);
 	});
 
+	it("preserves additive provenance on normalized legacy cycle records", () => {
+		const root = tempRoot();
+		const cycleLogPath = join(root, ".dev", "pelaggio-log.jsonl");
+		mkdirSync(dirname(cycleLogPath), { recursive: true });
+		const provenance = {
+			runId: "cycle-7",
+			durationMs: 42,
+			drivers: [{ provider: "codex", model: "gpt-5" }],
+			git: { branch: "feat/327", worktree: "pelaggio-327", mainShaAtStart: "a".repeat(40), headSha: "b".repeat(40) },
+			versions: { pelaggio: "0.1.0", node: "v22.0.0", drivers: { codex: "codex 1.0" } },
+		};
+		writeFileSync(cycleLogPath, `${JSON.stringify({ ts: "2026-01-01T00:00:00.000Z", cycle: 7, item: "327", quick: false, steps: [], total_cost: 0, verdict: null, completed: true, error: null, provenance })}\n`);
+		const event = readEventLog({ root }).events[0];
+		assert.deepEqual("provenance" in event ? event.provenance : undefined, provenance);
+	});
+
 	it("accepts every closed core type", () => {
 		const root = tempRoot();
 		const path = join(root, ".dev", "flow-events", "all.jsonl");

@@ -30,6 +30,19 @@ from being mistaken for timestamp-bearing ULIDs. Combined output is presentation
 contains historical accepted-event totals/by-type and diagnostics only; it intentionally exposes no
 readiness or live-WIP fields.
 
+### Cycle-log provenance receipt
+
+New non-dry-run `.dev/pelaggio-log.jsonl` records include an additive `provenance` object. It records
+the cycle `runId`, integer wall-clock `durationMs`, stable first-seen realized `drivers` (provider and
+resolved model), a Git binding (`branch`, portable `worktree` label, `mainShaAtStart`, and last valid
+feature `headSha`), Pelaggio/Node/realized-driver `versions`, and the ship target's optional `prUrl`.
+Best-effort probe failures leave nullable observations or stable keys in `unavailable`; they never
+change the cycle outcome.
+
+The receipt is local forensic telemetry, not a signed attestation. Legacy records without it remain
+valid, and the dual-format reader preserves the object when projecting an untyped cycle-log line to
+`pelaggio.cycle-completed`; stats continue to use the legacy outcome and step fields.
+
 ## The reframe: two field populations, opposite storage rules
 
 The projection has two kinds of field, and conflating them is the design's central hazard:
