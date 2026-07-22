@@ -1,0 +1,51 @@
+{
+  "_type": "https://in-toto.io/Statement/v1",
+  "subject": [{ "name": "pelaggio-change-186", "digest": { "sha256": "35e28d270b34814d7d1d57df5ef337c332ae398691bd46bb43942a2ccf3b00d8" } }],
+  "predicateType": "https://pelaggio.dev/ai-delivery/v0.1",
+  "predicate": {
+    "deliveryDefinition": {
+      "change": { "itemId": "186", "roadmapUrl": "https://github.com/pelaggio/pelaggio/issues/186" },
+      "policy": { "id": "pelaggio/default", "version": "0.1", "configDigest": { "sha256": "7c222fb2927d828af22f592134e8932480637c0d44b7a036a69f139037ae2c87" } },
+      "standards": {
+        "inTotoStatement": "v1", "slsaProvenance": "v1.0", "otelGenAI": "1.37.0",
+        "owaspAISVS": { "version": "1.0.0", "controlIds": ["AC.9.1", "AC.9.2", "AC.9.3", "AC.10.1", "AC.10.2", "AC.10.3"] }
+      }
+    },
+    "runDetails": {
+      "authorship": [{
+        "step": "implement", "attempt": 1,
+        "identity": { "provider": "claude", "model": "claude-sonnet-4-6" },
+        "gen_ai.system": "anthropic", "gen_ai.request.model": "claude-sonnet-4-6",
+        "usage": { "gen_ai.usage.input_tokens": 8421, "gen_ai.usage.output_tokens": 3190, "pelaggio.usage.cache_read_tokens": 1200 },
+        "costUsd": 0.09, "costEstimated": false, "turns": 14, "status": "succeeded",
+        "filesChanged": ["docs/ai-delivery/v0.1/predicate.schema.json"]
+      }],
+      "review": [{
+        "role": "reviewer", "identity": { "provider": "codex", "model": "gpt-5.2-codex", "sessionId": "reviewer-codex-p1", "seatId": "codex" },
+        "reviewedDigest": { "sha256": "70955e6f92a4156f767b064f030447909548831b4276bcf0f8ed1cae5265a727" },
+        "independence": { "provider": "independent", "model": "independent", "session": "unknown", "requirement": "met" },
+        "verdict": "pass", "blockingThreshold": "must-fix", "findingRefs": ["review-record"]
+      }],
+      "policy": { "assertions": [
+        { "name": "safety_survivors", "result": "unavailable", "evidenceRefs": [], "reasonCode": "not-collected" },
+        { "name": "ci", "result": "pass", "evidenceRefs": ["test-report"] },
+        { "name": "containment", "result": "unavailable", "evidenceRefs": [], "reasonCode": "not-implemented" }
+      ] },
+      "evidence": [
+        { "id": "test-report", "kind": "test", "digest": { "sha256": "1b76b1a36d7f8a739b5f88588c44626d848da8767a5c61f326ecfdf22e5acfd7" } },
+        { "id": "review-record", "kind": "review-record", "digest": { "sha256": "70955e6f92a4156f767b064f030447909548831b4276bcf0f8ed1cae5265a727" }, "uri": "https://example.invalid/.dev/review-records/example-run.json" }
+      ],
+      "outcome": { "state": "completed", "gateSummary": "passed" },
+      "metadata": {
+        "runId": "cycle-186", "cycle": 1,
+        "startedAt": "2026-07-21T18:00:00Z", "finishedAt": "2026-07-21T18:12:00Z",
+        "versions": { "pelaggio": "0.0.0", "node": "22.22.0", "drivers": { "claude": "0.3.177" } },
+        "unavailable": ["landed-subject-digest", "provider-request-identity", "per-step-duration"]
+      }
+    },
+    "trustModel": {
+      "independence": "self-reported", "reviewVerdict": "self-reported",
+      "authorshipStatus": "self-reported", "outcome": "derived"
+    }
+  }
+}
