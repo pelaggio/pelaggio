@@ -132,6 +132,14 @@ describe("BeadsRoadmap.parseItemId", () => {
 		assert.equal(await r.parseItemId("feat/issue-42"), null);
 		assert.equal(await r.parseItemId("TOOL-9"), null);
 	});
+
+	it("terminates at non-id boundaries in prose (word-bounded)", async () => {
+		assert.equal(await r.parseItemId("see bd-a1b2, then stop"), "bd-a1b2"); // comma boundary
+		assert.equal(await r.parseItemId("(bd-main-a1b2c3)"), ID_A); // paren boundary
+		assert.equal(await r.parseItemId("xbd-a1b2"), null); // not a token start — no false partial
+		// Inherent: a hyphen-joined trailing word is indistinguishable from a real multi-segment id.
+		assert.equal(await r.parseItemId("bd-a1b2-and-more"), "bd-a1b2-and-more");
+	});
 });
 
 // ─── listItems / readiness / claim overlay ───────────────────────────────────
@@ -194,7 +202,7 @@ describe("BeadsRoadmap.listItems — readiness + claim overlay", () => {
 	it("#347 dead-holder: bd in_progress with NO live branch → open and pickable via listOpenItems", async () => {
 		const repo = seedRepo(); // no feat/<id> branch — the authoritative claim is absent
 		const inProg = issue({ id: ID_C, title: "Stale bd claim", status: "in_progress" });
-		const { run } = makeStub({
+		const { run, calls } = makeStub({
 			routes: [
 				{ match: (a) => a[0] === "list", stdout: JSON.stringify([inProg]) },
 				{ match: (a) => a[0] === "ready", stdout: "[]" }, // bd excludes in_progress from `ready`
@@ -210,6 +218,12 @@ describe("BeadsRoadmap.listItems — readiness + claim overlay", () => {
 			[ID_C],
 			"a bd in_progress item whose git branch is gone must re-enter availability",
 		);
+		// The dead-holder query must be UNLIMITED + status-scoped — bd `list`/`ready` default to a
+		// window (50/100), which would silently drop stale holders past it. (#347 re-review)
+		const readyCall = calls.find((c) => c.args[0] === "ready");
+		const inProgCall = calls.find((c) => c.args[0] === "list" && c.args.includes("--status"));
+		assert.ok(readyCall?.args.join(" ").includes("--limit 0"), "bd ready must be unlimited");
+		assert.ok(inProgCall && inProgCall.args.includes("in_progress") && inProgCall.args.join(" ").includes("--limit 0"), "in_progress reconcile must be status-scoped + unlimited");
 	});
 
 	it("#347 bd in_progress WITH a live branch → in-progress and not offered (git-authoritative)", async () => {

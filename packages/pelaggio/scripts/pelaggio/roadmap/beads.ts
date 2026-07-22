@@ -49,7 +49,11 @@ export interface BeadsRoadmapOpts {
 // `claimedIds` (known-id prefix match). (#181 review: #347)
 const BD_ID_CORE = "bd-[a-z0-9]+(?:-[a-z0-9]+)*(?:\\.\\d+)*";
 const BD_ID_EXACT_RE = new RegExp(`^${BD_ID_CORE}$`, "i");
-const BD_ID_IN_TEXT_RE = new RegExp(`\\b(${BD_ID_CORE})`, "i");
+// Word-bounded on both ends so a bare id is a complete token, not a partial of a longer word.
+// A hyphen-joined trailing word in prose (`bd-a1b2-and-more`) is still swallowed — that is
+// inherent to real multi-segment ids and is a free-text-only concern: pinned picks resolve via
+// the authoritative `pick-item:` marker (#332), and claims match exact `feat/<id>` + claimedIds.
+const BD_ID_IN_TEXT_RE = new RegExp(`\\b(${BD_ID_CORE})\\b`, "i");
 const BD_ID_IN_BRANCH_RE = new RegExp(`^feat\\/(${BD_ID_CORE})$`, "i");
 
 interface BdDependency {
@@ -245,7 +249,8 @@ export class BeadsRoadmap implements RoadmapSource {
 	}
 
 	async listItems(opts?: { includeDone?: boolean }): Promise<RoadmapItemStatus[]> {
-		const args = opts?.includeDone ? ["list", "--all", "--json"] : ["list", "--json"];
+		// `--limit 0`: bd `list` defaults to 50; unlimited so the roadmap listing isn't truncated. (#347)
+		const args = opts?.includeDone ? ["list", "--all", "--limit", "0", "--json"] : ["list", "--limit", "0", "--json"];
 		const raw = this.runBd(args);
 		const issues = parseBdJson<BdIssue[]>(raw, isBdIssueArray);
 		// Work-ready = deps-met (`bd ready`) ∪ bd-in_progress (already fetched in `issues`). bd claim
@@ -437,7 +442,8 @@ export class BeadsRoadmap implements RoadmapSource {
 
 	/** Ready issues keyed by lowercase id. */
 	private fetchReadySet(): Map<string, BdIssue> {
-		const raw = this.runBd(["ready", "--json"]);
+		// `--limit 0`: bd `ready` defaults to 100; unlimited so a large ready set isn't truncated. (#347)
+		const raw = this.runBd(["ready", "--limit", "0", "--json"]);
 		// Empty ready set may be `[]` or blank — treat blank as empty.
 		if (!raw.trim()) return new Map();
 		const issues = parseBdJson<BdIssue[]>(raw, isBdIssueArray);
@@ -450,7 +456,10 @@ export class BeadsRoadmap implements RoadmapSource {
 	 *  they were deps-ready when claimed; a dead-holder among them (no live git branch) must re-enter
 	 *  availability — the git branch is the authoritative claim, not bd status. (#347) */
 	private fetchInProgressSet(): Map<string, BdIssue> {
-		const raw = this.runBd(["list", "--json"]);
+		// `--limit 0`: bd defaults to 50 for `list`, which would silently drop stale in_progress
+		// holders past the window and leave them permanently unpickable. `--status in_progress`
+		// scopes the query so the reconcile stays cheap. (#347 re-review)
+		const raw = this.runBd(["list", "--status", "in_progress", "--limit", "0", "--json"]);
 		if (!raw.trim()) return new Map();
 		const issues = parseBdJson<BdIssue[]>(raw, isBdIssueArray);
 		const map = new Map<string, BdIssue>();
