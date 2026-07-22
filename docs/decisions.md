@@ -6,6 +6,14 @@ Status values are `default-taken`, `resolved`, or `resolved→ADR-nnnn`. Source 
 
 | Decision | Status | Chosen/leaning | Alternatives | Source | Date |
 | --- | --- | --- | --- | --- | --- |
+| expose roadmap.beads.db/prefix | default-taken | no | required/optional db path or prefix | https://github.com/pelaggio/pelaggio/issues/181 | 2026-07-22 |
+<!-- decision:03e4b89cd9023043 -->
+| claim/write-back ordering | default-taken | git claim first, then best-effort bd --claim | beads-first; fail claim on write-back error | https://github.com/pelaggio/pelaggio/issues/181 | 2026-07-22 |
+<!-- decision:8e30e3fd8372bf4b -->
+| where bd runs (store root) | default-taken | MAIN_REPO via git-common-dir | show-toplevel/worktree cwd; roadmap.beads.db | https://github.com/pelaggio/pelaggio/issues/181 | 2026-07-22 |
+<!-- decision:040c091e132f1545 -->
+| claim status projection | default-taken | claimedIds overlay after ready mapping | beads-only status; branch scan only in listOpenItems | https://github.com/pelaggio/pelaggio/issues/181 | 2026-07-22 |
+<!-- decision:71d79d5b1fc0c359 -->
 | compatibility for inline `prBody` decisions | default-taken | remove the fallback and require `prBodyFile` for PR targets | retain a version/config-gated legacy inline-body path | https://github.com/pelaggio/pelaggio/issues/303 | 2026-07-22 |
 <!-- decision:060d26092f140890 -->
 | retry boundary for ship manifest failures | default-taken | tag the effects failure phase and retry only `invalid_manifest` raised while resolving the dynamic ship decision, before manifest write/dispatch | route ship through the generic authoring retry wrapper; retry every `error_effects_manifest`; add a bespoke parser outside `step()` | https://github.com/pelaggio/pelaggio/issues/303 | 2026-07-22 |
