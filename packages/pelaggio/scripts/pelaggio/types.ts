@@ -98,6 +98,30 @@ export interface StepLog {
 
 // ── Log entries (read from .dev/pelaggio-log.jsonl) ───────────────────
 
+/** Git snapshot at finish time. All keys present; values null when unresolvable. */
+export interface CycleLogGitBinding {
+	/** Feature / cycle HEAD (`git rev-parse HEAD` in worktree, else mainRepo). */
+	headSha: string | null;
+	/** `main` tip in mainRepo (`git rev-parse main`). */
+	mainSha: string | null;
+	/** `git branch --show-current` in the cycle worktree ("" if detached → store null). */
+	branch: string | null;
+	/** Absolute worktree path, or null when the cycle exited before one was bound. */
+	worktree: string | null;
+}
+
+/** Tool versions that produced this cycle line. */
+export interface CycleLogVersions {
+	/** `packages/pelaggio/package.json` `version` (published package identity); null when the
+	 *  packaged manifest is unreadable — fail-soft like the git binding, so provenance assembly
+	 *  in `finish()` never throws and never fails a cycle. */
+	pelaggio: string | null;
+	/** `process.version` (e.g. `v22.22.2`). Always present — `process.version` never throws. */
+	node: string;
+	/** Installed `@anthropic-ai/claude-agent-sdk` version when resolvable; omitted if not. */
+	claudeAgentSdk?: string;
+}
+
 export interface CycleLogEntry {
 	ts: string;
 	cycle: number;
@@ -115,6 +139,24 @@ export interface CycleLogEntry {
 	parkReason?: string | null;
 	shipwrecked?: boolean;
 	bookkeepingWarnings?: string[];
+	// ── Per-cycle provenance (#327) — additive, optional, legacy-safe ──
+	/** Correlation id shared with effects/review paths (`runIdBase`). */
+	runId?: string;
+	/** Wall-clock ms from `runPipeline` entry to `finish()`. */
+	durationMs?: number;
+	/** Model profile used for the cycle (`standard` / `quick` / CLI pin). */
+	profile?: string;
+	/**
+	 * First realized provider among authoring steps (`plan`, `implement`), else first
+	 * step with a provider. Diagnostic summary — full per-step detail stays on `steps[]`.
+	 */
+	provider?: ProviderName;
+	/** Resolved model string paired with `provider` (codex may be `"default"`). */
+	model?: string;
+	/** Opened PR URL when ship/shipwreck produced one. */
+	prUrl?: string;
+	git?: CycleLogGitBinding;
+	versions?: CycleLogVersions;
 }
 
 // ── Flow events ───────────────────────────────────────────────────────

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { after, before, describe, it, mock } from "node:test";
 import { WORKTREE_PREFIX } from "../config.js";
 import { EffectsManifestError } from "../effects.js";
@@ -124,10 +124,98 @@ describe("runPipeline — happy path", () => {
 		assert.equal(steps.length, 5);
 		assert.ok(Math.abs(result.cost - 0.05) < 1e-9, `expected cost ≈ 0.05, got ${result.cost}`);
 
+		// Per-cycle provenance (#327): self-contained correlation on the log line.
+		assert.equal(entry.runId, "cycle-1"); // no logPath override → `cycle-${n}`
+		assert.equal(typeof entry.durationMs, "number");
+		assert.ok((entry.durationMs as number) >= 0, `durationMs should be ≥ 0, got ${entry.durationMs}`);
+		assert.equal(entry.profile, "standard");
+		const versions = entry.versions as { pelaggio: string | null; node: string; claudeAgentSdk?: string };
+		assert.match(versions.pelaggio ?? "", /^\d+\.\d+\.\d+/);
+		assert.equal(versions.node, process.version);
+		const git = entry.git as { headSha: string | null; mainSha: string | null; branch: string | null; worktree: string | null };
+		assert.ok(git && typeof git === "object", "expected a git binding object");
+		assert.equal(git.worktree, resolve(worktree)); // worktree bound → absolute path recorded
+		// direct-push ship produces no PR URL, so the field is omitted (not `undefined`-valued).
+		assert.ok(!("prUrl" in entry), "direct-push cycle should not log a prUrl");
+
 		const implementPrompt = calls.find((c) => c.step === "implement")?.prompt ?? "";
 		assert.ok(implementPrompt.includes(worktree), `expected implement prompt to mention worktree path ${worktree}; got: ${implementPrompt.slice(0, 400)}`);
 		assert.ok(implementPrompt.includes("project-relative"), `expected implement prompt to include resolution rule ("project-relative"); got: ${implementPrompt.slice(0, 400)}`);
 		assert.ok(implementPrompt.includes("use that absolute form"), `expected implement prompt to include "use that absolute form"; got: ${implementPrompt.slice(0, 400)}`);
+	});
+});
+
+describe("runPipeline — cycle provenance (#327)", () => {
+	it("logs prUrl on a PR-mode ship success and derives runId from the logPath basename", async () => {
+		const { mainRepo, worktree, listWorktrees } = makeConfinementRepos();
+		const parkSignal = makeParkSignal();
+		const logDir = mkdtempSync(join(tmpdir(), "pelaggio-provenance-log-"));
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep } = createMockRunStep(
+			{
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				ship: { ok: true, text: `SHIP_DECISION\n{"target":"pull-request","headBranch":"feat/tool-99","prTitle":"Ship","prBody":"Body"}\nEND_SHIP_DECISION` },
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request"), logPath: join(logDir, "run-42.jsonl") }, parkSignal, baseFlags, {
+			runStep,
+			mainRepo,
+			listWorktrees,
+			appendLog: (e) => {
+				logs.push(e);
+			},
+			roadmap: makeMockRoadmap(),
+			dispatchStepEffects: async () => ({ appendText: "https://github.com/cdhorne/pelaggio/pull/99" }),
+		});
+
+		assert.equal(result.completed, true);
+		assert.equal(logs.length, 1);
+		const entry = logs[0];
+		assert.equal(entry.prUrl, "https://github.com/cdhorne/pelaggio/pull/99");
+		assert.equal(entry.runId, "run-42"); // logPath basename with the extension stripped
+		assert.ok(Number.isFinite(entry.durationMs as number));
+		const git = entry.git as { worktree: string | null; branch: string | null };
+		assert.equal(git.worktree, resolve(worktree));
+		assert.equal(git.branch, "feat/tool-99");
+	});
+
+	it("early pick-fail (queue-empty) still logs runId/durationMs/versions with a null git worktree", async () => {
+		const { repo: mainRepo } = makeTempRepoWithParent();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep, calls } = createMockRunStep({ pick: { ok: true, text: "no ready items\npick-result: queue-empty" } }, parkSignal);
+
+		const result = await runPipeline({ cycle: 1, verbose: false, shipTarget: getShipTarget("direct-push"), dryRun: false, liveStatus: makeLiveStatus() }, parkSignal, baseFlags, {
+			runStep,
+			mainRepo,
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+			roadmap: makeMockRoadmap(),
+		});
+
+		assert.equal(result.completed, false);
+		assert.equal(result.error, "pick:queue-empty");
+		assert.deepEqual(
+			calls.map((c) => c.step),
+			["pick"],
+		);
+		assert.equal(logs.length, 1);
+		const entry = logs[0];
+		assert.equal(entry.runId, "cycle-1");
+		assert.equal(typeof entry.durationMs, "number");
+		assert.ok((entry.durationMs as number) >= 0);
+		const versions = entry.versions as { pelaggio: string | null; node: string };
+		assert.match(versions.pelaggio ?? "", /^\d+\.\d+\.\d+/);
+		assert.equal(versions.node, process.version);
+		const git = entry.git as { worktree: string | null; branch: string | null; mainSha: string | null };
+		assert.equal(git.worktree, null); // no worktree bound before the queue-empty exit
+		assert.equal(git.branch, null);
+		assert.match(git.mainSha ?? "", /^[0-9a-f]{40}$/); // mainSha still read from mainRepo
 	});
 });
 

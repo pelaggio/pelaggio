@@ -8,6 +8,7 @@ import {
 	buildReviewDiffBlock,
 	buildStepArgs,
 	canRetryWithinBudget,
+	captureCycleGitBinding,
 	checkpoint,
 	classifyOutcome,
 	classifySecurityReviewDiff,
@@ -42,12 +43,15 @@ import {
 	parseVerdict,
 	parseWaitFlag,
 	REVIEW_DIFF_MAX_BYTES,
+	readRuntimeVersions,
 	resolveParkReset,
 	revertPlanPolish,
 	reviewFindingsPreamble,
 	snapshotForbiddenRoot,
+	summarizeCycleDriver,
 	verifyShipLanded,
 } from "../helpers.js";
+import type { ProviderName, StepLog } from "../types.js";
 
 describe("findLoggedArtifactAuthor", () => {
 	it("scans across entries and validates realized attribution", () => {
@@ -1376,5 +1380,78 @@ describe("reviewFindingsPreamble (issue #60)", () => {
 		assert.match(out, /\.\.\.\(truncated\)/);
 		// under-cap input is not truncated
 		assert.doesNotMatch(reviewFindingsPreamble("x".repeat(100)), /\(truncated\)/);
+	});
+});
+
+describe("summarizeCycleDriver (#327)", () => {
+	const mkStep = (name: string, provider?: ProviderName, model = "m"): StepLog => ({ name, ...(provider ? { provider } : {}), model, cost: 0, turns: 1, ok: true });
+
+	it("returns {} for empty steps (pick-fail before any step ran)", () => {
+		assert.deepEqual(summarizeCycleDriver([]), {});
+	});
+
+	it("prefers the plan/implement authoring step over later steps in a multi-driver cycle", () => {
+		const steps = [mkStep("pick", "claude", "haiku"), mkStep("plan", "claude", "opus"), mkStep("implement", "codex", "gpt-5"), mkStep("ship", "grok", "grok-4")];
+		assert.deepEqual(summarizeCycleDriver(steps), { provider: "claude", model: "opus" });
+	});
+
+	it("uses the first implement step when plan carries no provider", () => {
+		const steps = [mkStep("plan"), mkStep("implement", "codex", "default")];
+		assert.deepEqual(summarizeCycleDriver(steps), { provider: "codex", model: "default" });
+	});
+
+	it("falls back to the first provider-bearing step when no plan/implement authored", () => {
+		const steps = [mkStep("pick"), mkStep("ship", "grok", "grok-4")];
+		assert.deepEqual(summarizeCycleDriver(steps), { provider: "grok", model: "grok-4" });
+	});
+
+	it("returns {} when no step carries a provider (legacy log shape)", () => {
+		assert.deepEqual(summarizeCycleDriver([mkStep("pick"), mkStep("plan")]), {});
+	});
+});
+
+describe("captureCycleGitBinding (#327)", () => {
+	it("captures head/main shas and branch from a live worktree", () => {
+		const dir = makeFeatRepo(); // checked out on feat/tool-99
+		commitFile(dir, "src/foo.ts", "export const x = 1;\n", "feat code");
+		const binding = captureCycleGitBinding({ mainRepo: dir, worktree: dir });
+		const headSha = execSync("git rev-parse HEAD", { cwd: dir, encoding: "utf-8" }).trim();
+		const mainSha = execSync("git rev-parse main", { cwd: dir, encoding: "utf-8" }).trim();
+		assert.equal(binding.headSha, headSha);
+		assert.equal(binding.mainSha, mainSha);
+		assert.notEqual(binding.headSha, binding.mainSha); // feat advanced one commit past main
+		assert.equal(binding.branch, "feat/tool-99");
+		assert.equal(binding.worktree, resolve(dir));
+	});
+
+	it("fail-soft with no bound worktree: worktree/branch null, mainSha still read from mainRepo", () => {
+		const dir = makeFeatRepo();
+		const binding = captureCycleGitBinding({ mainRepo: dir, worktree: null });
+		assert.equal(binding.worktree, null);
+		assert.equal(binding.branch, null);
+		assert.match(binding.mainSha ?? "", /^[0-9a-f]{40}$/);
+		// headSha falls back to mainRepo's HEAD when no worktree is bound.
+		assert.equal(binding.headSha, execSync("git rev-parse HEAD", { cwd: dir, encoding: "utf-8" }).trim());
+	});
+
+	it("never throws on an unresolvable repo — all fields null", () => {
+		assert.deepEqual(captureCycleGitBinding({ mainRepo: "/nonexistent/path/does/not/exist", worktree: null }), { headSha: null, mainSha: null, branch: null, worktree: null });
+	});
+});
+
+describe("readRuntimeVersions (#327)", () => {
+	it("reports the packaged pelaggio version, process node, and an optional sdk semver", () => {
+		const versions = readRuntimeVersions();
+		const pkg = JSON.parse(readFileSync(new URL("../../../package.json", import.meta.url), "utf-8")) as { version: string };
+		assert.equal(versions.pelaggio, pkg.version);
+		assert.match(versions.pelaggio ?? "", /^\d+\.\d+\.\d+/);
+		assert.equal(versions.node, process.version);
+		// claudeAgentSdk is best-effort: a semver string when resolvable, key entirely absent
+		// otherwise — never an `undefined`-valued key (fail-soft omission).
+		if ("claudeAgentSdk" in versions) assert.match(String(versions.claudeAgentSdk), /^\d+\.\d+\.\d+/);
+	});
+
+	it("caches: repeated calls return the identical object (no re-read)", () => {
+		assert.strictEqual(readRuntimeVersions(), readRuntimeVersions());
 	});
 });

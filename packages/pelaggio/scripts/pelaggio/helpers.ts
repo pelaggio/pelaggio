@@ -1,10 +1,11 @@
 import { execSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { createRequire } from "node:module";
+import { dirname, resolve } from "node:path";
 import { LOG_PATH, REPO, STEPS, WORKTREE_PREFIX } from "./config.js";
 import { MarkdownRoadmap } from "./roadmap/markdown.js";
 import type { CreateItemOpts, RoadmapSource } from "./roadmap/types.js";
-import type { Decision, Mutex, Step, StepResult } from "./types.js";
+import type { CycleLogGitBinding, CycleLogVersions, Decision, Mutex, ProviderName, Step, StepLog, StepResult } from "./types.js";
 
 export function parseDecisions(text: string): Decision[] {
 	const decisions: Decision[] = [];
@@ -956,6 +957,97 @@ export function verifyShipLanded(mainRepo: string, mainShaBefore: string, featSh
 	} catch {
 		return false;
 	}
+}
+
+// ── Cycle provenance (#327) ─────────────────────────────────────────────
+
+/**
+ * Fail-soft git snapshot for the cycle log's provenance binding. Unlike `captureShipState`
+ * (which requires a live feature branch and returns null-on-any-failure), every field here
+ * degrades to null independently so an early-exit cycle (pick-fail, park before a worktree is
+ * bound) still records whatever git state exists. Never throws; never fails the cycle.
+ */
+export function captureCycleGitBinding(opts: { mainRepo: string; worktree: string | null }): CycleLogGitBinding {
+	const { mainRepo, worktree } = opts;
+	const headSha = getHeadSha(worktree ?? mainRepo);
+	let mainSha: string | null = null;
+	try {
+		mainSha = execSync("git rev-parse main", { cwd: mainRepo, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }).trim() || null;
+	} catch {
+		mainSha = null;
+	}
+	let branch: string | null = null;
+	if (worktree) {
+		try {
+			// `--show-current` is empty on a detached HEAD → store null, not "".
+			branch = execSync("git branch --show-current", { cwd: worktree, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }).trim() || null;
+		} catch {
+			branch = null;
+		}
+	}
+	return { headSha, mainSha, branch, worktree: worktree ? resolve(worktree) : null };
+}
+
+let cachedRuntimeVersions: CycleLogVersions | undefined;
+
+/**
+ * Tool versions for the cycle log, resolved once and cached (parallel cycles share one read).
+ * Fail-soft: `pelaggio` degrades to null and `claudeAgentSdk` is omitted rather than thrown, so a
+ * bad packaged layout never fails the universal `finish()` log write. `node` is always present.
+ */
+export function readRuntimeVersions(): CycleLogVersions {
+	if (cachedRuntimeVersions) return cachedRuntimeVersions;
+	let pelaggio: string | null = null;
+	try {
+		// Resolve relative to THIS module, not cwd/REPO: `../../package.json` is the published
+		// `pelaggio` manifest in both the dogfood source tree and an installed `node_modules/pelaggio/`.
+		// `resolveArtifactRoot` would report the monorepo workspace `0.0.0` when dogfooding.
+		const raw = readFileSync(new URL("../../package.json", import.meta.url), "utf-8");
+		const version = (JSON.parse(raw) as { version?: unknown }).version;
+		pelaggio = typeof version === "string" ? version : null;
+	} catch {
+		pelaggio = null;
+	}
+	const versions: CycleLogVersions = { pelaggio, node: process.version };
+	const sdk = resolveClaudeAgentSdkVersion();
+	if (sdk) versions.claudeAgentSdk = sdk;
+	cachedRuntimeVersions = versions;
+	return versions;
+}
+
+/** Best-effort installed `@anthropic-ai/claude-agent-sdk` version. The package `exports` block
+ *  hides `./package.json`, so resolve the entry then walk up for the manifest with a matching name.
+ *  Returns undefined on any failure so the caller omits the key. */
+function resolveClaudeAgentSdkVersion(): string | undefined {
+	try {
+		const require = createRequire(import.meta.url);
+		let dir = dirname(require.resolve("@anthropic-ai/claude-agent-sdk"));
+		for (let i = 0; i < 12; i++) {
+			const pkgPath = resolve(dir, "package.json");
+			if (existsSync(pkgPath)) {
+				const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as { name?: unknown; version?: unknown };
+				if (pkg.name === "@anthropic-ai/claude-agent-sdk" && typeof pkg.version === "string") return pkg.version;
+			}
+			const parent = dirname(dir);
+			if (parent === dir) break;
+			dir = parent;
+		}
+	} catch {
+		return undefined;
+	}
+	return undefined;
+}
+
+/**
+ * Cycle-level authoring summary for the log: the first `plan`/`implement` step carrying a
+ * provider, else the first step with any provider, else `{}` (pick-fail before any step ran).
+ * A summary, not a claim of exclusivity — `steps[]` stays authoritative for multi-driver cycles.
+ */
+export function summarizeCycleDriver(steps: StepLog[]): { provider?: ProviderName; model?: string } {
+	const authoring = steps.find((s) => (s.name === "plan" || s.name === "implement") && s.provider);
+	const chosen = authoring ?? steps.find((s) => s.provider);
+	if (!chosen?.provider) return {};
+	return { provider: chosen.provider, model: chosen.model };
 }
 
 // ── Main-checkout guard (issue #216) ────────────────────────────────────

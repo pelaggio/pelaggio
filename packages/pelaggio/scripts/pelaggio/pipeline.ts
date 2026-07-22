@@ -31,6 +31,7 @@ import {
 	buildReviewDiffBlock,
 	buildStepArgs,
 	canRetryWithinBudget,
+	captureCycleGitBinding,
 	captureShipState,
 	checkpoint,
 	classifyOutcome,
@@ -57,11 +58,13 @@ import {
 	parseShipMerged,
 	parseVerdict,
 	parseWaitFlag,
+	readRuntimeVersions,
 	resolveWorktree,
 	revertPlanPolish,
 	reviewFindingsPreamble,
 	snapshotForbiddenRoots,
 	stepIndex,
+	summarizeCycleDriver,
 	verifyShipLanded,
 } from "./helpers.js";
 import { type NotifyConfig, notifyCycle, notifyDecision as notifyDecisionEvent, notifyStrandedReview, sendNotification as sendNotificationDefault } from "./notify.js";
@@ -509,6 +512,11 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		}
 		if (!opts.dryRun) {
 			const parked = result.error === "parked";
+			// Per-cycle provenance (#327) — self-contained so a single JSONL line answers
+			// which run / git state / drivers / duration / PR / tool versions. Every helper is
+			// fail-soft (null on unresolvable), so assembly never throws inside this universal sink.
+			const durationMs = Math.max(0, Date.now() - pipelineT0);
+			const driver = summarizeCycleDriver(steps);
 			appendLog({
 				ts: new Date().toISOString(),
 				cycle: opts.cycle,
@@ -524,6 +532,14 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				parkReason: parked ? parkSignal.limitType || null : null,
 				shipwrecked,
 				...(result.bookkeepingWarnings?.length ? { bookkeepingWarnings: result.bookkeepingWarnings } : {}),
+				// provenance (#327)
+				runId: runIdBase,
+				durationMs,
+				profile,
+				...(driver.provider ? { provider: driver.provider, model: driver.model } : {}),
+				...(result.prUrl ? { prUrl: result.prUrl } : {}),
+				git: captureCycleGitBinding({ mainRepo, worktree }),
+				versions: readRuntimeVersions(),
 			});
 		}
 		return result;
