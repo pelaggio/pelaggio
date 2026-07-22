@@ -20,10 +20,15 @@ export function forbiddenRootsForConfinement(args: {
 	allowDirtyMain?: boolean;
 	/** Predicate: is this root a harness-managed authoring-review seat? */
 	isAuthoringReviewSeatPath: (root: string) => boolean;
+	/** #131: under `--parallel`, the worktrees of peer cycles currently running. A peer's
+	 *  legitimate self-write must not trip this cycle's whole-tree snapshot; cross-tree
+	 *  corruption is caught by the capability/write-set boundary, not this snapshot.
+	 *  `mainRepo` is never a member, so it stays hard-gated below. */
+	activeWorktrees?: Iterable<string>;
 }): string[] {
 	const cwdAbs = resolve(args.cwd);
 	const mainAbs = resolve(args.mainRepo);
-	const exempt = new Set([cwdAbs, ...(args.ownWorktree ? [resolve(args.ownWorktree)] : [])]);
+	const exempt = new Set([cwdAbs, ...(args.ownWorktree ? [resolve(args.ownWorktree)] : []), ...[...(args.activeWorktrees ?? [])].map((w) => resolve(w))]);
 	const seen = new Set<string>();
 	const roots: string[] = [];
 	for (const root of args.worktrees) {

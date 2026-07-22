@@ -205,6 +205,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			ownWorktree,
 			allowDirtyMain,
 			isAuthoringReviewSeatPath: (root) => isAuthoringReviewSeatPath(root, mainRepo),
+			activeWorktrees: opts.activeWorktrees,
 		});
 	}
 
@@ -272,71 +273,80 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		});
 
 		const preSha = getHeadSha(cwd);
-		let forbiddenRoots: string[] = [];
-		let forbiddenBefore = new Map<string, string>();
-		let confinementRoots: string[] = [];
-		let confinementAuditError: string | undefined;
+		// Observer construction may stay outside; finish() must be inside the critical section.
 		const mainCheckoutObserver = allowDirtyMain && itemId !== null && resolve(cwd) !== resolve(mainRepo) ? createMainCheckoutDeltaObserver(mainRepo) : undefined;
-		try {
-			forbiddenRoots = forbiddenRootsForStep(cwd, ownWorktree);
-		} catch (e) {
-			confinementAuditError = `confinement audit failed to enumerate roots before ${name}: ${e instanceof Error ? e.message : String(e)}`;
-			log(`⚠ ${confinementAuditError}`);
-		}
-		try {
-			forbiddenBefore = snapshotForbiddenRoots(forbiddenRoots);
-		} catch (e) {
-			confinementRoots = forbiddenRoots.map((root) => resolve(root));
-			log(`⚠ confinement audit failed before ${name}: ${e instanceof Error ? e.message : String(e)}`);
-		}
 
-		const providerResult = await runStep(
-			name,
-			prompt,
-			{
-				cwd,
-				profile,
-				trace: flags.trace,
-				itemId: itemId ?? undefined,
-				parkSignal: parkSignalOverride ?? parkSignal,
-				...(executionOverride ? { executionOverride } : {}),
-				...(maxTurnsOverride !== undefined ? { maxTurnsOverride } : {}),
-				...(opts.signal ? { signal: opts.signal } : {}),
-				...(mainCheckoutObserver ? { mainCheckoutObserver } : {}),
-			},
-			emit,
-		);
-
-		if (confinementRoots.length === 0 && confinementAuditError === undefined) {
+		// Concurrent cycles never attribute one another's legitimate own-worktree writes as
+		// sibling violations because `forbiddenRootsForStep` exempts every active peer
+		// worktree (see `activeWorktrees`). No serialization is needed or wanted here — steps
+		// run fully in parallel; only `mainRepo` and inactive/stale siblings stay audited.
+		let result: StepResult;
+		{
+			let forbiddenRoots: string[] = [];
+			let forbiddenBefore = new Map<string, string>();
+			let confinementRoots: string[] = [];
+			let confinementAuditError: string | undefined;
 			try {
-				const forbiddenAfter = snapshotForbiddenRoots(forbiddenRoots);
-				confinementRoots.push(...diffForbiddenRootSnapshots(forbiddenBefore, forbiddenAfter));
+				forbiddenRoots = forbiddenRootsForStep(cwd, ownWorktree);
+			} catch (e) {
+				confinementAuditError = `confinement audit failed to enumerate roots before ${name}: ${e instanceof Error ? e.message : String(e)}`;
+				log(`⚠ ${confinementAuditError}`);
+			}
+			try {
+				forbiddenBefore = snapshotForbiddenRoots(forbiddenRoots);
 			} catch (e) {
 				confinementRoots = forbiddenRoots.map((root) => resolve(root));
-				log(`⚠ confinement audit failed after ${name}: ${e instanceof Error ? e.message : String(e)}`);
+				log(`⚠ confinement audit failed before ${name}: ${e instanceof Error ? e.message : String(e)}`);
 			}
-		}
 
-		const attributedMain = mainCheckoutObserver?.finish();
-		if (attributedMain?.kind === "error") {
-			confinementAuditError = `confinement attribution failed during ${name}: ${attributedMain.message}`;
-		} else if (attributedMain?.kind === "violation") {
-			confinementRoots.push(...attributedMain.roots);
-		}
+			const providerResult = await runStep(
+				name,
+				prompt,
+				{
+					cwd,
+					profile,
+					trace: flags.trace,
+					itemId: itemId ?? undefined,
+					parkSignal: parkSignalOverride ?? parkSignal,
+					...(executionOverride ? { executionOverride } : {}),
+					...(maxTurnsOverride !== undefined ? { maxTurnsOverride } : {}),
+					...(opts.signal ? { signal: opts.signal } : {}),
+					...(mainCheckoutObserver ? { mainCheckoutObserver } : {}),
+				},
+				emit,
+			);
 
-		let result = providerResult;
-		if (confinementAuditError !== undefined) {
-			result = { ...providerResult, ok: false, subtype: "error_confinement", text: confinementAuditError };
-		} else if (confinementRoots.length > 0) {
-			const roots = [...new Set(confinementRoots.map((root) => resolve(root)))].sort();
-			const text = `forbidden root changed during ${name}: ${roots.join(", ")}`;
-			log(`⚠ ${text}`);
-			result = {
-				...providerResult,
-				ok: false,
-				subtype: "error_confinement",
-				text,
-			};
+			if (confinementRoots.length === 0 && confinementAuditError === undefined) {
+				try {
+					const forbiddenAfter = snapshotForbiddenRoots(forbiddenRoots);
+					confinementRoots.push(...diffForbiddenRootSnapshots(forbiddenBefore, forbiddenAfter));
+				} catch (e) {
+					confinementRoots = forbiddenRoots.map((root) => resolve(root));
+					log(`⚠ confinement audit failed after ${name}: ${e instanceof Error ? e.message : String(e)}`);
+				}
+			}
+
+			const attributedMain = mainCheckoutObserver?.finish();
+			if (attributedMain?.kind === "error") {
+				confinementAuditError = `confinement attribution failed during ${name}: ${attributedMain.message}`;
+			} else if (attributedMain?.kind === "violation") {
+				confinementRoots.push(...attributedMain.roots);
+			}
+
+			result = providerResult;
+			if (confinementAuditError !== undefined) {
+				result = { ...providerResult, ok: false, subtype: "error_confinement", text: confinementAuditError };
+			} else if (confinementRoots.length > 0) {
+				const roots = [...new Set(confinementRoots.map((root) => resolve(root)))].sort();
+				const text = `forbidden root changed during ${name}: ${roots.join(", ")}`;
+				log(`⚠ ${text}`);
+				result = {
+					...providerResult,
+					ok: false,
+					subtype: "error_confinement",
+					text,
+				};
+			}
 		}
 
 		if (commitLabel && result.subtype !== "error_confinement") {
@@ -444,6 +454,11 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	let shipwrecked = false;
 
 	function finish(result: CycleResult): CycleResult {
+		// Deregister this cycle's worktree from the active-peer registry on every exit path
+		// (success, park, abort, error). Once inactive, a sibling worktree is audited again
+		// by peers — a stale/abandoned tree must not be silently writable. Deleting an absent
+		// member (early pick-fail exits, before registration) is a harmless no-op.
+		if (worktree && worktree !== mainRepo) opts.activeWorktrees?.delete(resolve(worktree));
 		// Park wins over abort (it's a preserve-work path; abort is discard-work).
 		// Don't relabel successful cycles — SIGINT during the 2s grace after ship
 		// completed shouldn't turn a real success into a phantom abort.
@@ -571,6 +586,13 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 
 	logLabel = itemId!;
 	log(`→ ${worktree}`);
+
+	// Register this cycle's worktree as an active peer so concurrent siblings exempt it
+	// from their whole-tree confinement snapshot (see `forbiddenRootsForStep`). Resolved to
+	// match the audit's absolute-path comparison. `finish()` removes it on every exit path.
+	// `--no-worktree` cycles run in mainRepo (never registered — main stays hard-gated) and
+	// `--parallel > 1` is disallowed there, so there is no peer to exempt.
+	if (worktree && worktree !== mainRepo) opts.activeWorktrees?.add(resolve(worktree));
 
 	if (opts.workerStatus) opts.workerStatus.itemId = itemId!;
 
@@ -1568,6 +1590,11 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		const statusInterval = isParallel && v && TUI_ENABLED ? setInterval(() => liveStatus.render(), 200) : null;
 
 		const pickMutex = isParallel ? createMutex() : undefined;
+		// Run-scoped registry of live peer worktrees. Each cycle registers its worktree on
+		// entry and deregisters on finish; peers exempt registered worktrees from their
+		// confinement snapshot so a sibling's own-worktree write never false-positives —
+		// without serializing any step. Serial runs need no registry (no peers).
+		const activeWorktrees = isParallel ? new Set<string>() : undefined;
 		let nextCycle = 0;
 		let totalSpent = 0;
 		// Consecutive "transient sdk error" cycle outcomes across the whole worker pool
@@ -1614,6 +1641,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						shipTarget,
 						dryRun,
 						pickMutex,
+						activeWorktrees,
 						workerStatus: status,
 						logPath,
 						liveStatus,
@@ -1860,6 +1888,9 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						verbose: !isParallel && v,
 						shipTarget,
 						dryRun: false,
+						// Resume skips pick (no pickMutex) but still opens audited provider steps;
+						// register its (already-existing) worktree so peers exempt it.
+						activeWorktrees,
 						workerStatus: st,
 						logPath: resumeLogPath,
 						liveStatus,

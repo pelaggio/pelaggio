@@ -7,7 +7,7 @@ import { after, before, describe, it, mock } from "node:test";
 import { WORKTREE_PREFIX } from "../config.js";
 import { EffectsManifestError } from "../effects.js";
 import { FifoPolicy } from "../flow-policy.js";
-import { runOrchestrator, runPipeline } from "../pipeline.js";
+import { type RunStepFn, runOrchestrator, runPipeline } from "../pipeline.js";
 import type { ShipBookkeepingResult } from "../ship/index.js";
 import { getShipTarget } from "../ship/index.js";
 import type { Flags, ParkSignal, PipelineOpts } from "../types.js";
@@ -1105,6 +1105,120 @@ describe("runPipeline — worktree confinement audit", () => {
 			runStep,
 			mainRepo,
 			listWorktrees: () => [mainRepo, worktree, sibling],
+			appendLog: () => {},
+			roadmap: makeMockRoadmap(),
+		});
+
+		assert.equal(result.completed, false);
+		assert.equal(result.error, "implement failed: confinement violation");
+	});
+
+	it("overlapping audited steps writing only their own worktree do not false-positive, and genuinely run in parallel", async () => {
+		// Two sibling worktrees sharing one active-worktree registry; each pipeline writes
+		// only in its own cwd. Their runStep windows are forced to overlap. The registry
+		// exempts each peer's active worktree from the other's snapshot, so neither
+		// false-positives — and nothing serializes them (maxActive reaches 2).
+		const { parent, repo } = makeTempRepoWithParent();
+		const wtA = join(parent, `${WORKTREE_PREFIX}tool-a`);
+		const wtB = join(parent, `${WORKTREE_PREFIX}tool-b`);
+		execSync(`git worktree add -q -b feat/tool-a "${wtA}"`, { cwd: repo });
+		execSync(`git worktree add -q -b feat/tool-b "${wtB}"`, { cwd: repo });
+		const listWorktrees = () => [repo, wtA, wtB];
+		const activeWorktrees = new Set<string>();
+
+		let active = 0;
+		let maxActive = 0;
+		let entered = 0;
+		const bothEntered = Promise.withResolvers<void>();
+
+		const runStep: RunStepFn = async (_name, _prompt, opts, emit) => {
+			active++;
+			maxActive = Math.max(maxActive, active);
+			// Own-worktree write only — legitimate; a peer must not audit it.
+			writeFileSync(join(opts.cwd, `own-${opts.itemId ?? "x"}.txt`), "ok\n");
+			// Rendezvous: don't leave the audit window until BOTH steps are inside it, so the
+			// windows provably overlap. Without real parallelism this would deadlock.
+			if (++entered === 2) bothEntered.resolve();
+			await bothEntered.promise;
+			active--;
+			emit({ type: "done", ok: false, subtype: "error_refusal", cost: 0.01, turns: 1, elapsed: 0 });
+			return { ok: false, subtype: "error_refusal", text: "stop after implement", fullText: "stop after implement", cost: 0.01, turns: 1 };
+		};
+
+		const deps = {
+			runStep,
+			mainRepo: repo,
+			listWorktrees,
+			appendLog: () => {},
+			roadmap: makeMockRoadmap(),
+		};
+		const pA = runPipeline({ ...baseOpts(wtA), itemId: "TOOL-A", startFrom: "implement", shipTarget: getShipTarget("pull-request"), activeWorktrees }, makeParkSignal(), baseFlags, deps);
+		const pB = runPipeline({ ...baseOpts(wtB), itemId: "TOOL-B", startFrom: "implement", shipTarget: getShipTarget("pull-request"), activeWorktrees }, makeParkSignal(), baseFlags, deps);
+
+		const [rA, rB] = await Promise.all([pA, pB]);
+		assert.equal(maxActive, 2, "audited provider windows must overlap — no serialization");
+		assert.notEqual(rA.error, "implement failed: confinement violation");
+		assert.notEqual(rB.error, "implement failed: confinement violation");
+		// Both should surface the intentional refusal, not a race false-positive.
+		assert.match(rA.error ?? "", /refused/);
+		assert.match(rB.error ?? "", /refused/);
+		// Registry drains on finish.
+		assert.equal(activeWorktrees.size, 0, "worktrees deregister on finish");
+	});
+
+	it("a write to mainRepo during a step still fails closed even under an active registry", async () => {
+		// main is never a registry member, so it stays hard-gated by the snapshot.
+		const { mainRepo, worktree } = makeConfinementRepos();
+		const activeWorktrees = new Set<string>();
+		const parkSignal = makeParkSignal();
+		const { runStep } = createMockRunStep(
+			{
+				implement: {
+					ok: true,
+					sideEffect: () => {
+						writeFileSync(join(mainRepo, "leaked-into-main.txt"), "x");
+					},
+				},
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request"), activeWorktrees }, parkSignal, baseFlags, {
+			runStep,
+			mainRepo,
+			listWorktrees: () => [mainRepo, worktree],
+			appendLog: () => {},
+			roadmap: makeMockRoadmap(),
+		});
+
+		assert.equal(result.completed, false);
+		assert.equal(result.error, "implement failed: confinement violation");
+	});
+
+	it("a write to an INACTIVE sibling worktree (not in the registry) still fails closed", async () => {
+		// A sibling that exists on disk but is NOT registered as active is still audited —
+		// a stale/abandoned tree must not become silently writable.
+		const { parent, mainRepo, worktree } = makeConfinementRepos();
+		const inactive = join(parent, `${WORKTREE_PREFIX}inactive`);
+		execSync(`git worktree add -q -b feat/inactive "${inactive}"`, { cwd: mainRepo });
+		const activeWorktrees = new Set<string>(); // inactive sibling deliberately absent
+		const parkSignal = makeParkSignal();
+		const { runStep } = createMockRunStep(
+			{
+				implement: {
+					ok: true,
+					sideEffect: () => {
+						writeFileSync(join(inactive, "foreign.txt"), "x");
+					},
+				},
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request"), activeWorktrees }, parkSignal, baseFlags, {
+			runStep,
+			mainRepo,
+			listWorktrees: () => [mainRepo, worktree, inactive],
 			appendLog: () => {},
 			roadmap: makeMockRoadmap(),
 		});
