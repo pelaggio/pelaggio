@@ -6,6 +6,12 @@ Status values are `default-taken`, `resolved`, or `resolved→ADR-nnnn`. Source 
 
 | Decision | Status | Chosen/leaning | Alternatives | Source | Date |
 | --- | --- | --- | --- | --- | --- |
+| compatibility for inline `prBody` decisions | default-taken | remove the fallback and require `prBodyFile` for PR targets | retain a versioned or time-limited compatibility gate | https://github.com/pelaggio/pelaggio/issues/303 | 2026-07-22 |
+<!-- decision:42ac5f13c7dafb86 -->
+| retry boundary for `error_effects_manifest` | default-taken | retry only decision resolution/validation failures proven to occur before manifest write or effect dispatch | retry every manifest/effect failure; add a second bespoke ship loop outside the shared runner | https://github.com/pelaggio/pelaggio/issues/303 | 2026-07-22 |
+<!-- decision:224cf56091d6857b -->
+| dollar gate on the decision-resolution retry | default-taken | attempt-cap only (no `canRetryWithinBudget` gate), matching `retryOnEditLoop` | require a full ship step budget remaining before the second attempt | https://github.com/pelaggio/pelaggio/issues/303 | 2026-07-22 |
+<!-- decision:e5957c275d81bf55 -->
 | per-run scope-ceiling override (new public surface) | default-taken | config-only; targeted `--item` remains the sole operator override | add `roadmap next --max-scope` | https://github.com/pelaggio/pelaggio/issues/201 | 2026-07-21 |
 <!-- decision:8148df85c074226b -->
 | Cross-model review split for 164 | default-taken | Human adjudication required | proceed or block | .dev/review-records/cycle-11-164.json | 2026-07-21 |
