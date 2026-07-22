@@ -16,12 +16,12 @@ Numbered from the security audit's implicit-decision candidates.
 | [0001](./0001-worktree-write-confinement.md) | Writes confined to the item's worktree | proposed (hardening) | `TC-011` |
 | [0002](./0002-untrusted-input-and-tool-scope.md) | Treat repo/issue/PR as untrusted; scope tools accordingly | accepted (with known gap) | `TC-015` |
 | [0003](./0003-pr-gated-by-default.md) | Default *shipped* ship target = pull-request (amended by 0015) | proposed | `TC-012` |
-| 0004 | Review gate fails closed; shakedown fails safe (two parsers) | accepted | `TC-003` |
-| 0005 | Auto-merge safety delegated to branch protection | accepted (to verify) | `TC-013` |
-| 0006 | No install/lifecycle scripts in published manifests | accepted | `TC-004`, `TC-016` |
-| 0007 | Publish = signed tag + provenance on self-hosted runner | accepted | `TC-005` |
+| [0004](./0004-review-gate-fails-closed-shakedown-fails-safe.md) | Review gate fails closed; shakedown fails safe (two parsers) | accepted | `TC-003` |
+| [0005](./0005-auto-merge-safety-via-branch-protection.md) | Auto-merge safety delegated to branch protection | accepted (to verify) | `TC-013` |
+| [0006](./0006-no-lifecycle-scripts-in-published-manifests.md) | No install/lifecycle scripts in published manifests | accepted | `TC-004`, `TC-016` |
+| [0007](./0007-signed-tag-provenance-publish.md) | Publish = signed tag + provenance on self-hosted runner | accepted | `TC-005` |
 | [0008](./0008-control-plane-fail-closed.md) | Control plane fails closed (auth required / loopback-only) | proposed | `TC-010` |
-| 0009 | Claims are git branches; no registry | accepted | — |
+| [0009](./0009-claims-are-git-branches.md) | Claims are git branches; no registry | accepted | — |
 | [0010](./0010-agent-env-allowlist-and-log-scrub.md) | Deny-by-default child env allowlist + secret-scrubbed logs | accepted | `TC-001`, `TC-014` |
 | [0011](./0011-andon-not-dor.md) | Spec quality is runtime Andon, not upstream Definition-of-Ready | proposed | — |
 | [0012](./0012-readiness-computed-not-groomed.md) | Readiness is a computed FlowPolicy verdict, not human grooming | proposed | — |
@@ -35,6 +35,8 @@ Numbered from the security audit's implicit-decision candidates.
 | [0020](./0020-multi-driver-provider-seam-and-capability-model.md) | Multi-driver provider seam + data-only capability model; native-prefer routing, fail-closed, no polyfill emulation | proposed | — |
 | [0021](./0021-capability-enforcement-and-placement.md) | Enforcement = ocap tool-mediation; placement = effects-as-handlers; agentic-loop vs deterministic only | proposed | — |
 | [0022](./0022-pipeline-shape-and-review-orchestrators.md) | Fixed 6 steps; policy-triggered review; distinct cold CI + authoring orchestrators (rejects uniform Node) | proposed | — |
+| [0023](./0023-contained-execution-boundary.md) | Contained-execution: `network=none` jail + fail-closed egress broker; keys unattended, subscription local-only; containment ≠ permission | proposed | — |
+| [0024](./0024-adversarial-authoring-review-loop.md) | Review moves upstream: multi-driver panel + Judge, deterministic convergence, park-on-safety, provenance record | accepted | — |
 
 *Status vocabulary:* `proposed` (decided, not yet implemented) · `accepted` (implemented) · `superseded`.
 
