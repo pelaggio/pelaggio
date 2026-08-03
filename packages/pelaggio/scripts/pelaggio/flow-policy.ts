@@ -1,4 +1,4 @@
-import type { RoadmapItemStatus } from "./roadmap/types.js";
+import { type RoadmapItemStatus, SCOPE_NAMES, type Scope } from "./roadmap/types.js";
 
 export interface QuickScopeInput {
 	readonly item?: Pick<RoadmapItemStatus, "body" | "labels"> | null;
@@ -24,9 +24,10 @@ export interface FlowSnapshot {
 	readonly candidates: readonly FlowCandidate[];
 	readonly readiness: FlowReadiness;
 	readonly topic?: string;
+	readonly maxScope?: Scope;
 }
 
-export type FlowVerdictReason = "eligible" | "status" | "deferred" | "not-native-ready" | "dependency" | "unresolved-dependency" | "topic";
+export type FlowVerdictReason = "eligible" | "status" | "deferred" | "over-scope" | "not-native-ready" | "dependency" | "unresolved-dependency" | "topic";
 
 export interface FlowItemVerdict {
 	readonly id: string;
@@ -72,6 +73,9 @@ function verdict(candidate: FlowCandidate, snapshot: FlowSnapshot, nativeReadyId
 	// in-progress deferred items still surface as `status` for explicit-pick display.
 	if (candidate.item.deferred === true) {
 		return { id: candidate.item.id, eligible: false, reason: "deferred", blockers: [] };
+	}
+	if (snapshot.maxScope && candidate.item.scope && SCOPE_NAMES.indexOf(candidate.item.scope) > SCOPE_NAMES.indexOf(snapshot.maxScope)) {
+		return { id: candidate.item.id, eligible: false, reason: "over-scope", blockers: [candidate.item.scope] };
 	}
 	if (snapshot.readiness.kind === "native" && !nativeReadyIds.has(normalize(candidate.item.id))) {
 		return { id: candidate.item.id, eligible: false, reason: "not-native-ready", blockers: [] };
