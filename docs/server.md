@@ -29,6 +29,7 @@ Module boundaries (`packages/server/src/`):
 | `src/roadmap-cache.ts` | Lazy `Map<slug, RoadmapSource>`; first hit per slug instantiates via injected factory. |
 | `src/auth.ts` | Bearer middleware; constant-time compare via `crypto.timingSafeEqual`. No-op when token is undefined. |
 | `src/state-store.ts` | Flat-JSON persistence. Atomic writes (temp file → `renameSync`). |
+| `src/state-path-lock.ts` | Exclusive PID lock on `${statePath}.lock` at boot. Daemon-lifetime liveness only — not the expiring roadmap mutation lock. |
 | `src/supervisor.ts` | `start` / `pause` / `resume` / `stop` / `bootReattach`. Resolves `start({ repo })` via registry. Spawn is DI for tests. |
 | `src/log-broker.ts` | Per-run pubsub; tees child stdout/stderr to `${logDir}/${id}.log` and to live SSE subscribers. |
 | `src/routes/*.ts` | Thin HTTP shells. No business logic. |
@@ -127,6 +128,16 @@ walks every `running`/`paused` entry and probes its PID with
 `process.kill(pid, 0)`. Dead PIDs are marked `abandoned` with
 `error: "daemon restart lost stream"`. Live PIDs keep their metadata; the
 in-memory subscriber set starts empty (clients reconnect via SSE).
+
+**State-path exclusivity.** Before constructing the store, the daemon claims
+`${statePath}.lock` (e.g. `…/state.json.lock`) with an `O_EXCL` write of
+`${pid}:${token}`. A second live instance exits at startup with an error that
+names the holding PID and the state path. Dead-PID residue (and residue that
+names this process's PID after a crash + PID recycle) is reclaimed
+automatically. Unreadable or malformed lock content fails closed — the
+operator must inspect or remove the file. This is a daemon-lifetime
+PID-liveness lock, **not** the expiring `.dev/roadmap-mutation.lock` used for
+short roadmap critical sections; the two policies must not be merged.
 
 ## Pause / resume / stop semantics
 

@@ -14,6 +14,7 @@ export {
 	isMarkdownRoadmapFormat,
 	isPlanLocation,
 	isRoadmapSourceName,
+	isScope,
 	type LinearRoadmapConfig,
 	MARKDOWN_ROADMAP_FORMATS,
 	type MarkDoneContext,
@@ -26,6 +27,8 @@ export {
 	type RoadmapItemStatus,
 	type RoadmapSource,
 	type RoadmapSourceName,
+	SCOPE_NAMES,
+	type Scope,
 } from "./types.js";
 export { LinearRoadmap, MarkdownRoadmap };
 

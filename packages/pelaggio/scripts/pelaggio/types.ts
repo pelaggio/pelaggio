@@ -283,7 +283,7 @@ export interface CycleResult {
  * errors (`pick:unknown-id`, `pick:blocked`) are intentionally absent: a typo'd `--item`
  * or a user-requested blocked item should halt loudly and page.
  */
-export const RECOVERABLE_ERRORS = ["plan needs rethink", "parked", "transient sdk error", "pick:queue-empty", "pick:worktree-exists", "pick:already-claimed", "pick:already-done", "pick:unknown"] as const;
+export const RECOVERABLE_ERRORS = ["plan needs rethink", "parked", "transient sdk error", "pick:queue-empty", "pick:worktree-exists", "pick:already-claimed", "pick:already-done", "pick:stale-quarantined", "pick:unknown"] as const;
 
 // ── Step providers ─────────────────────────────────────────────────────
 
@@ -412,6 +412,14 @@ export interface PipelineOpts {
 	 * and stays hard-gated by the snapshot.
 	 */
 	activeWorktrees?: Set<string>;
+	/**
+	 * #369: immutable cross-process session evaluator context (run-start inventory +
+	 * boot-relative starttime watermark). When absent, `runPipeline` captures it once
+	 * at entry so direct callers and tests still get inventory-based peer exemption.
+	 * The orchestrator may pre-capture once per process and thread the same object
+	 * into every worker. Typed object — not a boolean flag.
+	 */
+	sessionEvaluator?: import("./confinement/sessions.js").SessionEvaluatorContext;
 	workerStatus?: CycleStatus;
 	logPath?: string;
 	/** Required for creating step renderers — injected by orchestrate() */

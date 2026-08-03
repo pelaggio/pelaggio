@@ -1,6 +1,6 @@
 ---
 title: "ADR-0001: Writes confined to the item's worktree"
-status: proposed
+status: accepted
 date: 2026-07-08
 claims: [TC-011]
 ---
@@ -8,18 +8,27 @@ claims: [TC-011]
 # ADR-0001 — Writes confined to the item's worktree
 
 ## Context
-Runs are unattended and the agent has allow-all tools. It must not corrupt the main checkout or a sibling worktree — and, under injection (`ADR-0002`), a "write to `../main`" instruction must not succeed. Today the boundary is an advisory `PreToolUse` string-prefix check on `Write/Edit/Bash` (best-effort, untested; sibling writes and `cd ../`/`$HOME`/symlink Bash escapes slip through — audit S1).
+
+Runs are unattended and the agent has allow-all tools. It must not corrupt the main checkout or a sibling worktree — and, under injection (`ADR-0002`), a "write to `../main`" instruction must not succeed.
+
+**Before the gate:** confinement was only an advisory `PreToolUse` string-prefix check on `Write`/`Edit`/`Bash` (best-effort, untested). Sibling writes and `cd ../` / `$HOME` / symlink Bash escapes could slip through. That layer remains as an early diagnostic block in `step-runner.ts`; it is not the hard gate.
 
 ## Decision
-Make confinement a **hard gate**: after each step, assert the working tree touched only the item's own worktree, and **fail the step** on violation. Cover sibling worktrees and relative/symlink escapes. Add tests exercising the block branches (currently none).
+
+Make confinement a **hard gate**: after each step, assert the working tree touched only the item's own worktree, and **fail the step** on violation. Cover sibling worktrees and relative/symlink escapes. Boundary strength is **before/after Git porcelain deltas for enumerated main and sibling worktrees** — not an OS sandbox, command allowlist, or process-lifetime provenance.
 
 ## Alternatives not taken
+
 - OS sandbox / containers per step — stronger, but heavy and less portable across harnesses.
 - Tool allowlist — doesn't stop in-worktree Bash reaching out.
+- Path extraction from tool args as the hard gate (failed PR #112 approach) — bypassable via shell indirection (`OUT=…; printf x > "$OUT"`). Independence from tool-input path parsing is the load-bearing property.
 
 ## Consequences
+
 - (+) Turns the audit's "load-bearing but advisory" boundary into a verifiable guarantee (`TC-011` → `guarantee`).
 - (−) A post-step assertion adds a check per step; escapes must be enumerated and tested.
+
+**Implemented as:** the hard gate is the pipeline whole-step Git porcelain audit in `pipeline.ts` (`snapshotForbiddenRoots` / `diffForbiddenRootSnapshots` → `error_confinement`; `#105`, with #111's independence-from-path-parsing intent satisfied by the same mechanism). The advisory PreToolUse path blocks remain an early diagnostic layer only.
 
 ## Amendment: concurrent operator edits
 

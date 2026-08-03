@@ -103,12 +103,83 @@ describe("FifoPolicy.evaluate", () => {
 		);
 	});
 
+	it("excludes stale-quarantined ids with reason stale-quarantined", () => {
+		const candidates = [candidate("ready", { fifoOrdinal: 0 }), candidate("stale", { fifoOrdinal: 1 })];
+		const result = evaluate(candidates, { staleQuarantinedIds: new Set(["stale"]) });
+		assert.deepEqual(
+			result.candidates.map(({ item }) => item.id),
+			["ready"],
+		);
+		const staleVerdict = result.verdicts.find((v) => v.id === "stale");
+		assert.equal(staleVerdict?.reason, "stale-quarantined");
+		assert.equal(staleVerdict?.eligible, false);
+	});
+
+	it("status beats stale-quarantined for a done item", () => {
+		const done = candidate("done-stale", { item: { ...candidate("done-stale").item, status: "done" } });
+		const result = evaluate([done], { staleQuarantinedIds: new Set(["done-stale"]) });
+		assert.deepEqual(result.candidates, []);
+		assert.equal(result.verdicts[0]?.reason, "status");
+	});
+
+	it("stale-quarantined takes precedence over deferred", () => {
+		const both = candidate("both", { item: { ...candidate("both").item, deferred: true } });
+		const result = evaluate([both], { staleQuarantinedIds: new Set(["both"]) });
+		assert.equal(result.verdicts[0]?.reason, "stale-quarantined");
+	});
+
+	it("an id absent from the quarantine set (e.g. sticky keep) stays eligible", () => {
+		const candidates = [candidate("kept", { fifoOrdinal: 0 })];
+		const result = evaluate(candidates, { staleQuarantinedIds: new Set<string>() });
+		assert.deepEqual(
+			result.candidates.map(({ item }) => item.id),
+			["kept"],
+		);
+	});
+
 	it("all-deferred snapshot evaluates successfully with empty candidates", () => {
 		const candidates = [candidate("a", { item: { ...candidate("a").item, deferred: true } }), candidate("b", { item: { ...candidate("b").item, deferred: true } })];
 		const result = evaluate(candidates);
 		assert.deepEqual(result.candidates, []);
 		assert.equal(result.verdicts.length, 2);
 		assert.ok(result.verdicts.every((v) => v.reason === "deferred" && !v.eligible));
+	});
+
+	it("excludes only declared scopes above the active threshold", () => {
+		const scopes = ["XS", "S", "M", "L", "XL"] as const;
+		const result = evaluate(
+			scopes.map((scope, fifoOrdinal) => candidate(scope, { item: { ...candidate(scope).item, scope }, fifoOrdinal })),
+			{ maxScope: "M" },
+		);
+		assert.deepEqual(
+			result.candidates.map(({ item }) => item.id),
+			["XS", "S", "M"],
+		);
+		assert.deepEqual(
+			result.verdicts.slice(3).map(({ reason, blockers }) => ({ reason, blockers })),
+			[
+				{ reason: "over-scope", blockers: ["L"] },
+				{ reason: "over-scope", blockers: ["XL"] },
+			],
+		);
+	});
+
+	it("fails open for undeclared scope, absent threshold, and the XL escape hatch", () => {
+		const undeclared = candidate("undeclared");
+		const large = candidate("large", { item: { ...candidate("large").item, scope: "L" }, fifoOrdinal: 0 });
+		const extraLarge = candidate("extra-large", { item: { ...candidate("extra-large").item, scope: "XL" }, fifoOrdinal: 1 });
+		assert.deepEqual(
+			evaluate([undeclared, large], { maxScope: "M" }).candidates.map(({ item }) => item.id),
+			["undeclared"],
+		);
+		assert.deepEqual(
+			evaluate([large]).candidates.map(({ item }) => item.id),
+			["large"],
+		);
+		assert.deepEqual(
+			evaluate([large, extraLarge], { maxScope: "XL" }).candidates.map(({ item }) => item.id),
+			["large", "extra-large"],
+		);
 	});
 });
 

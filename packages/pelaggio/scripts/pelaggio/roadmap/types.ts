@@ -2,6 +2,10 @@ export type RoadmapSourceName = "markdown" | "github-issues" | "linear" | "beads
 
 export const ROADMAP_SOURCE_NAMES: readonly RoadmapSourceName[] = ["markdown", "github-issues", "linear", "beads"];
 
+export type Scope = "XS" | "S" | "M" | "L" | "XL";
+
+export const SCOPE_NAMES: readonly Scope[] = ["XS", "S", "M", "L", "XL"];
+
 export type PlanLocation = "issue-comment" | "pr-description";
 
 export const PLAN_LOCATIONS: readonly PlanLocation[] = ["issue-comment", "pr-description"];
@@ -47,10 +51,9 @@ export interface RoadmapItemStatus extends RoadmapItem {
 	status: ItemStatus;
 	/** Parsed "blocked: waiting on X" reason; present only when status is blocked */
 	blockedReason?: string;
-	/** Item body/spec text when the adapter carries it — currently a GitHub issue body or markdown item row.
-	 *  Lets the harness inject requirements into the plan prompt for a sandboxed model that can't
-	 *  fetch it itself (#103). Absent, for now, for linear (its `sourceRef` is an identifier — populating linear body is a
-	 *  follow-up before linear-on-sandbox is supported). */
+	/** Item body/spec text when the adapter carries it — GitHub issue body, markdown item row,
+	 *  Beads description, or Linear description. Lets the harness inject requirements into the
+	 *  plan prompt for a sandboxed model that can't fetch it itself (#103). */
 	body?: string;
 	/** Item labels when the adapter carries them. Absent for sources without label metadata. */
 	labels?: string[];
@@ -59,6 +62,11 @@ export interface RoadmapItemStatus extends RoadmapItem {
 	 * contract — markdown/Linear omit it; GitHub and Beads always materialize a tier.
 	 */
 	priority?: number;
+	/**
+	 * Declared T-shirt size, extracted from the item body like `deps`. Adapters populate
+	 * this best-effort; an omitted value is never gated by automatic selection.
+	 */
+	scope?: Scope;
 	/**
 	 * When true, automatic `roadmap next` excludes the item (reason `deferred`). Explicit
 	 * `/pick <id>` / `--item <id>` still claim it. Omitted or false means not deferred.
@@ -77,7 +85,7 @@ export interface PriorityLabelBackfillResult {
 export interface CreateItemOpts {
 	title: string;
 	deps?: string[];
-	scope?: "XS" | "S" | "M" | "L" | "XL";
+	scope?: Scope;
 	/** Markdown: target roadmap file (partial match). Gh/Linear: no-op (issue goes to configured repo/team). */
 	roadmap?: string;
 	/** Markdown-only. Gh/Linear ignore. */
@@ -128,6 +136,10 @@ export interface RoadmapSource {
 
 export function isRoadmapSourceName(v: unknown): v is RoadmapSourceName {
 	return typeof v === "string" && (ROADMAP_SOURCE_NAMES as readonly string[]).includes(v);
+}
+
+export function isScope(v: unknown): v is Scope {
+	return typeof v === "string" && (SCOPE_NAMES as readonly string[]).includes(v);
 }
 
 export function isPlanLocation(v: unknown): v is PlanLocation {

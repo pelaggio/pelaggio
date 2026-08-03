@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { basename, delimiter, extname, isAbsolute, join, resolve } from "node:path";
 import {
@@ -22,6 +23,7 @@ import {
 	WORKTREE_PREFIX,
 } from "./config.js";
 import { forbiddenRootsForConfinement } from "./confinement/roots.js";
+import { type AcceptedSession, captureEvaluatorContext, createSessionController, firstDiffPathsByRoot, resolveEligibleSessions, revalidateChangedRoot, type SessionController, type SessionEvaluatorContext } from "./confinement/sessions.js";
 import { appendDecisions as appendDecisionsDefault, appendReviewEscalation as appendReviewEscalationDefault, lookupReviewEscalation as lookupReviewEscalationDefault } from "./decisions.js";
 import { createDriverAssignmentState, type DriverIdentity, recordArtifactAuthor, resolveStaticAuthor, selectAuthor, selectReviewers } from "./driver-assignment.js";
 import {
@@ -160,6 +162,14 @@ export interface PipelineDeps {
 	snapshotForbiddenRoots?: typeof snapshotForbiddenRoots;
 	/** Test seam: replace forbidden-root snapshot comparison. */
 	diffForbiddenRootSnapshots?: typeof diffForbiddenRootSnapshots;
+	/** Test seam: replace session-record eligibility resolution (#369). */
+	resolveEligibleSessions?: typeof resolveEligibleSessions;
+	/** Test seam: replace diff-time session revalidation (#369). */
+	revalidateChangedRoot?: typeof revalidateChangedRoot;
+	/** Test seam: replace evaluator-context capture (#369). */
+	captureEvaluatorContext?: typeof captureEvaluatorContext;
+	/** Test seam: replace session-controller factory (#369). */
+	createSessionController?: typeof createSessionController;
 	appendDecisions?: typeof appendDecisionsDefault;
 	appendReviewEscalation?: typeof appendReviewEscalationDefault;
 	lookupReviewEscalation?: typeof lookupReviewEscalationDefault;
@@ -193,12 +203,23 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	const allowDirtyMain = deps.allowDirtyMain ?? CONFINEMENT_CONFIG.allowDirtyMain;
 	const snapshotForbiddenRootsFn = deps.snapshotForbiddenRoots ?? snapshotForbiddenRoots;
 	const diffForbiddenRootSnapshotsFn = deps.diffForbiddenRootSnapshots ?? diffForbiddenRootSnapshots;
+	const resolveEligibleSessionsFn = deps.resolveEligibleSessions ?? resolveEligibleSessions;
+	const revalidateChangedRootFn = deps.revalidateChangedRoot ?? revalidateChangedRoot;
+	const captureEvaluatorContextFn = deps.captureEvaluatorContext ?? captureEvaluatorContext;
+	const createSessionControllerFn = deps.createSessionController ?? createSessionController;
 	const appendDecisions = deps.appendDecisions ?? appendDecisionsDefault;
 	const appendReviewEscalation = deps.appendReviewEscalation ?? appendReviewEscalationDefault;
 	const lookupReviewEscalation = deps.lookupReviewEscalation ?? lookupReviewEscalationDefault;
 	const now = deps.now ?? Date.now;
 	const readGitBindingFn = deps.readGitBinding ?? readGitBinding;
 	const readRuntimeVersionsFn = deps.readRuntimeVersions ?? readRuntimeVersions;
+
+	// #369: capture immutable evaluator context once per cycle when the caller
+	// (orchestrator or test) did not pre-supply it. Direct runPipeline() callers
+	// and tests must not skip inventory.
+	const sessionEvaluator: SessionEvaluatorContext = opts.sessionEvaluator ?? captureEvaluatorContextFn(mainRepo);
+	/** Live session controller for this cycle's own record; disposed in finish(). */
+	let sessionController: SessionController | undefined;
 	// The cycle's dollar ceiling. A turn-exhaustion retry (issue #33) is funded up to the
 	// step's configured budget again, so the budget guard skips a retry we can't fully fund.
 	// A non-finite value (unset / unparseable --budget) disables the dollar gate.
@@ -224,7 +245,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		);
 	}
 
-	function forbiddenRootsForStep(cwd: string, ownWorktree?: string): string[] {
+	function forbiddenRootsForStep(cwd: string, ownWorktree?: string): { roots: string[]; excludedSessions: AcceptedSession[] } {
 		const cwdAbs = resolve(cwd);
 		const mainAbs = resolve(mainRepo);
 		// Main-repo-based steps (pick, shipwreck) legitimately write inside mainRepo
@@ -236,15 +257,23 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		// `.dev/authoring-review-seats/`; concurrent peer seats may hold session files
 		// and must not trip confinement.
 		const candidates = cwdAbs === mainAbs ? listWorktrees() : [mainRepo, ...listWorktrees()];
-		return forbiddenRootsForConfinement({
-			cwd,
-			mainRepo,
-			worktrees: candidates,
-			ownWorktree,
-			allowDirtyMain,
-			isEphemeralReviewWorktree: (root) => isAuthoringReviewSeatPath(root, mainRepo) || isReviewHeadPath(root, mainRepo),
-			activeWorktrees: opts.activeWorktrees,
-		});
+		// #369: cross-process peers proven by the eligibility predicate. Kept distinct
+		// from in-memory activeWorktrees so the trust boundary stays visible.
+		const excludedSessions = resolveEligibleSessionsFn(sessionEvaluator);
+		const sessionWorktrees = excludedSessions.map((s) => s.worktreePath);
+		return {
+			roots: forbiddenRootsForConfinement({
+				cwd,
+				mainRepo,
+				worktrees: candidates,
+				ownWorktree,
+				allowDirtyMain,
+				isEphemeralReviewWorktree: (root) => isAuthoringReviewSeatPath(root, mainRepo) || isReviewHeadPath(root, mainRepo),
+				activeWorktrees: opts.activeWorktrees,
+				sessionWorktrees,
+			}),
+			excludedSessions,
+		};
 	}
 
 	async function step(
@@ -316,16 +345,22 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 
 		// Concurrent cycles never attribute one another's legitimate own-worktree writes as
 		// sibling violations because `forbiddenRootsForStep` exempts every active peer
-		// worktree (see `activeWorktrees`). No serialization is needed or wanted here — steps
-		// run fully in parallel; only `mainRepo` and inactive/stale siblings stay audited.
+		// worktree (see `activeWorktrees` + #369 session records). No serialization is
+		// needed or wanted here — steps run fully in parallel; only `mainRepo` and
+		// inactive/stale siblings stay audited.
 		let result: StepResult;
 		{
 			let forbiddenRoots: string[] = [];
 			let forbiddenBefore = new Map<string, string>();
+			let forbiddenAfter = new Map<string, string>();
 			const confinementRoots: string[] = [];
 			let confinementAuditError: string | undefined;
+			let stepExcludedSessions: AcceptedSession[] = [];
+			const revalidationWarnings: string[] = [];
 			try {
-				forbiddenRoots = forbiddenRootsForStep(cwd, ownWorktree);
+				const enumResult = forbiddenRootsForStep(cwd, ownWorktree);
+				forbiddenRoots = enumResult.roots;
+				stepExcludedSessions = enumResult.excludedSessions;
 			} catch (e) {
 				confinementAuditError = `confinement audit failed to enumerate roots before ${name}: ${e instanceof Error ? e.message : String(e)}`;
 				log(`⚠ ${confinementAuditError}`);
@@ -338,6 +373,26 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				confinementAuditError = `confinement audit failed before ${name}: ${e instanceof Error ? e.message : String(e)}`;
 				log(`⚠ ${confinementAuditError}`);
 			}
+
+			// #369: foreign-root Write/Edit denial + sessions-dir protection for Claude steps,
+			// including shipwreck (main cwd + ownWorktree). Registered roots from listWorktrees.
+			const registeredWorktrees = (() => {
+				try {
+					return listWorktrees();
+				} catch {
+					return [mainRepo];
+				}
+			})();
+			const foreignRootDenial = {
+				mainRepo,
+				registeredWorktrees,
+				...(ownWorktree || (worktree && worktree !== mainRepo) ? { ownWorktree: ownWorktree ?? worktree ?? undefined } : {}),
+			};
+			const onChildSpawn = sessionController
+				? (info: { pid: number; cwd: string }) => {
+						sessionController?.updateChild(info.pid);
+					}
+				: undefined;
 
 			const providerResult = await runStep(
 				name,
@@ -352,14 +407,38 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 					...(maxTurnsOverride !== undefined ? { maxTurnsOverride } : {}),
 					...(opts.signal ? { signal: opts.signal } : {}),
 					...(mainCheckoutObserver ? { mainCheckoutObserver } : {}),
+					foreignRootDenial,
+					...(onChildSpawn ? { onChildSpawn } : {}),
 				},
 				emit,
 			);
 
 			if (confinementRoots.length === 0 && confinementAuditError === undefined) {
 				try {
-					const forbiddenAfter = snapshotForbiddenRootsFn(forbiddenRoots);
-					confinementRoots.push(...diffForbiddenRootSnapshotsFn(forbiddenBefore, forbiddenAfter));
+					forbiddenAfter = snapshotForbiddenRootsFn(forbiddenRoots);
+					const rawChanged = diffForbiddenRootSnapshotsFn(forbiddenBefore, forbiddenAfter);
+					// #369: revalidate each changed sibling with the same eligibility predicate.
+					// Still-live peers warn + suppress; main / expired / identity-mutated park.
+					for (const root of rawChanged) {
+						const abs = resolve(root);
+						if (abs === resolve(mainRepo)) {
+							confinementRoots.push(root);
+							continue;
+						}
+						const stillLive = revalidateChangedRootFn(sessionEvaluator, abs);
+						if (stillLive) {
+							const paths = firstDiffPathsByRoot(forbiddenBefore, forbiddenAfter, [abs]).get(abs) ?? [];
+							const warn = `confinement: excluded live session ${stillLive.identity.sessionId} (${stillLive.identity.claimedItem} @ ${abs}${paths.length ? `; paths: ${paths.join(", ")}` : ""})`;
+							revalidationWarnings.push(warn);
+							log(`⚠ ${warn}`);
+							// Keep evidence in stepExcludedSessions for park diagnostics if other roots fail.
+							if (!stepExcludedSessions.some((s) => s.worktreePath === abs)) {
+								stepExcludedSessions = [...stepExcludedSessions, stillLive];
+							}
+							continue;
+						}
+						confinementRoots.push(root);
+					}
 				} catch (e) {
 					confinementAuditError = `confinement audit failed after ${name}: ${e instanceof Error ? e.message : String(e)}`;
 					log(`⚠ ${confinementAuditError}`);
@@ -389,7 +468,15 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				};
 			} else if (confinementRoots.length > 0) {
 				const roots = [...new Set(confinementRoots.map((root) => resolve(root)))].sort();
-				const text = `forbidden root changed during ${name}: ${roots.join(", ")}`;
+				const pathMap = firstDiffPathsByRoot(forbiddenBefore, forbiddenAfter, roots);
+				const pathBits = roots
+					.map((r) => {
+						const ps = pathMap.get(r) ?? [];
+						return ps.length ? `${r} [${ps.join(", ")}]` : r;
+					})
+					.join(", ");
+				const excludedBits = stepExcludedSessions.length > 0 ? `; excluded sessions: ${stepExcludedSessions.map((s) => `${s.identity.sessionId}@${s.worktreePath}(${s.leg})`).join(", ")}` : "";
+				const text = `forbidden root changed during ${name}: ${pathBits}${excludedBits}`;
 				log(`⚠ ${text}`);
 				result = {
 					...providerResult,
@@ -399,6 +486,8 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 					fullText: text,
 					outputTail: text.slice(0, 200),
 				};
+			} else if (revalidationWarnings.length > 0) {
+				// No violation retained — warnings already logged. Leave provider result as-is.
 			}
 		}
 
@@ -552,6 +641,14 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		// by peers — a stale/abandoned tree must not be silently writable. Deleting an absent
 		// member (early pick-fail exits, before registration) is a harmless no-op.
 		if (worktree && worktree !== mainRepo) opts.activeWorktrees?.delete(resolve(worktree));
+		// #369: stop heartbeat and remove the owned session record (idempotent).
+		// Covers success, ordinary failure, parkExit, and abort paths that call finish().
+		try {
+			sessionController?.dispose();
+		} catch {
+			// Teardown must not change the cycle outcome.
+		}
+		sessionController = undefined;
 		// Park wins over abort (it's a preserve-work path; abort is discard-work).
 		// Don't relabel successful cycles — SIGINT during the 2s grace after ship
 		// completed shouldn't turn a real success into a phantom abort.
@@ -743,6 +840,60 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	// `--no-worktree` cycles run in mainRepo (never registered — main stays hard-gated) and
 	// `--parallel > 1` is disallowed there, so there is no peer to exempt.
 	if (worktree && worktree !== mainRepo) opts.activeWorktrees?.add(resolve(worktree));
+
+	// #369: publish a cross-process session record once the item worktree + claim are known
+	// (same window as activeWorktrees). Claude steps later refresh the binding pid; Codex/Grok
+	// still register so inventory fallback works for earlier evaluators. finish() disposes.
+	if (!opts.dryRun && worktree && worktree !== mainRepo && itemId) {
+		let claimBranch = "";
+		try {
+			claimBranch = execSync("git branch --show-current", { cwd: worktree, encoding: "utf-8" }).trim();
+		} catch {
+			claimBranch = "";
+		}
+		if (claimBranch.startsWith("feat/")) {
+			const sessionId = `${runIdBase}-${itemId}`;
+			try {
+				sessionController = createSessionControllerFn({
+					mainRepo,
+					sessionId,
+					claimedItem: itemId,
+					claimBranch,
+					worktreePath: resolve(worktree),
+				});
+				// Best-effort process-level cleanup for the window before finish() returns
+				// (SIGINT between steps). finish() is also idempotent; drop listeners on dispose.
+				const disposeOnce = (): void => {
+					process.removeListener("SIGINT", disposeOnce);
+					if (opts.signal) opts.signal.removeEventListener("abort", disposeOnce);
+					try {
+						sessionController?.dispose();
+					} catch {
+						// ignore
+					}
+				};
+				process.once("SIGINT", disposeOnce);
+				if (opts.signal) {
+					if (opts.signal.aborted) disposeOnce();
+					else opts.signal.addEventListener("abort", disposeOnce, { once: true });
+				}
+				// Wrap controller dispose so normal finish() also drops the SIGINT listener.
+				const inner = sessionController;
+				sessionController = {
+					sessionId: inner.sessionId,
+					identity: inner.identity,
+					updateChild: (pid) => inner.updateChild(pid),
+					dispose: () => {
+						process.removeListener("SIGINT", disposeOnce);
+						if (opts.signal) opts.signal.removeEventListener("abort", disposeOnce);
+						inner.dispose();
+					},
+				};
+			} catch (e) {
+				log(`⚠ session record registration failed: ${e instanceof Error ? e.message : String(e)}`);
+			}
+		}
+	}
 
 	if (opts.workerStatus) opts.workerStatus.itemId = itemId!;
 
@@ -1705,6 +1856,61 @@ const RESUME_JITTER_MS = 15_000;
 // minutes+, and `maxWaitMs` already caps each round, so 12 is generous insurance.
 const MAX_RESUME_ROUNDS = 12;
 
+/**
+ * Wait out the current park's reset window, or report that we can't. The timing/jitter/max-wait
+ * semantics live here in exactly one place so both the item park-and-resume loop and the local
+ * review-retry sweep (#134) share one implementation — copy-pasting the wait block would let
+ * timing/jitter/max-wait drift, and the timer-mocked tests assume a single code path. On "resumed"
+ * the park signal is cleared and the caller may re-run its work; on "handback" the signal stays
+ * parked and the caller prints its own pending/resume hint. `itemsLabel`, when given, lists the
+ * parked items under the wait banner (the item loop; the review sweep omits it).
+ */
+async function awaitParkReset(parkSignal: ParkSignal, opts: { maxWaitMs: number; itemsLabel?: string }): Promise<"resumed" | "handback"> {
+	const waitMs = parkSignal.resetsAt - Date.now();
+	const isWeekly = /week/i.test(parkSignal.limitType);
+
+	// No reset time → never spin (checked every round). Rate-limit parks synthesize a conservative
+	// reset upstream (#68), so this is reached only by a manual pause (SIGUSR2, resetsAt=0) or a
+	// stale reset already in the past — neither is auto-resumable by time.
+	if (!parkSignal.resetsAt || waitMs <= 0) {
+		console.log("");
+		console.log(`${A.yellow("⏸")} ${parkSignal.limitType} limit hit — cannot auto-resume (no reset time)`);
+		return "handback";
+	}
+
+	if (waitMs > opts.maxWaitMs) {
+		const label = isWeekly ? "Weekly rate limit" : `${parkSignal.limitType} limit`;
+		console.log("");
+		console.log(`${A.yellow("⏸")} ${label} — wait ${fmtWait(waitMs)} exceeds --max-wait ${fmtWait(opts.maxWaitMs)}`);
+		return "handback";
+	}
+
+	// Jitter within the existing 30s post-reset envelope (see the constants above) so timer-mocked
+	// tests need no change: delay ∈ [15s, 30s).
+	const delay = RESUME_MIN_GRACE_MS + Math.floor(Math.random() * RESUME_JITTER_MS);
+	const resumeAt = parkSignal.resetsAt + delay;
+	const eta = new Date(resumeAt).toLocaleTimeString("en-CA", { hour12: false });
+	console.log("");
+	console.log(`${A.yellow("⏸")} ${A.bold("Parked")} — ${parkSignal.limitType} limit, waiting ${fmtWait(waitMs)} (ETA ${eta})`);
+	if (opts.itemsLabel) console.log(`  Items: ${opts.itemsLabel}`);
+
+	const countdownInterval = setInterval(() => {
+		const remaining = resumeAt - Date.now();
+		if (remaining > 0) {
+			console.log(`  ${A.dim("⏳")} ${fmtWait(remaining)} remaining...`);
+		}
+	}, 5 * 60_000);
+
+	await new Promise((r) => setTimeout(r, resumeAt - Date.now()));
+	clearInterval(countdownInterval);
+
+	parkSignal.parked = false;
+	parkSignal.resetsAt = 0;
+	parkSignal.limitType = "";
+	parkSignal.triggerWorker = "";
+	return "resumed";
+}
+
 // Loud one-time startup banner when an autonomous remote-push target is configured. Pure
 // (builder only) so "a banner fires for X, not for Y" is unit-testable without the orchestrator.
 // Returns null for the safe default (`pull-request`); a non-null string for the opt-in targets.
@@ -1949,6 +2155,9 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					appendFileSync(logPath, `${"=".repeat(60)}\nautopilot cycle ${cycle} — ${new Date().toISOString()}\n${"=".repeat(60)}\n`);
 				}
 
+				// #369: each cycle captures its own evaluator inventory + starttime inside
+				// runPipeline when sessionEvaluator is omitted — so later cycles still see
+				// peers that registered after process start. (Orchestrator does not pre-capture.)
 				const result = await _runPipeline(
 					{
 						itemId: items[cycle - 1],
@@ -2009,6 +2218,13 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			}
 		}
 
+		// Park/auto-resume policy — hoisted above the review sweep so the review-retry loop (which
+		// runs before the item park-and-resume block) can wait out a rate-limit park with the same
+		// `autoResume`/`maxWaitMs` semantics. The item loop below reuses these same values.
+		const park = { ...CONFIG.park, ...deps.park };
+		const autoResume = park.autoResume;
+		const maxWaitMs = parseWaitFlag(flags["max-wait"] ?? park.maxWait);
+
 		// ── Local review sweep (issue #84) ──
 		//
 		// In local review mode the trusted local tree owns the review CLI/skill/parser/status
@@ -2031,47 +2247,76 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		const doReviewSweep = review.runner === "local" && shipIsPr && !!review.ghRepo && !noWorktree && !dryRun && items.length === 0;
 
 		if (doReviewSweep) {
-			const { candidates, stranded } = findReviewCandidates(review.gh, review.ghRepo, review.now(), parseWaitFlag(review.statuslessAfter));
-			for (const pr of stranded) {
-				postLocalModeWorkflowComment(review.gh, review.ghRepo, pr.prNumber);
-				if (notifyEnabled) await notifyStrandedReview(notifyCfg, { itemId: pr.itemId, prNumber: pr.prNumber, ghRepo: review.ghRepo, headSha: pr.headSha, logPath: LOG_PATH }, { send });
-			}
-
-			for (const pr of candidates) {
-				if (parkSignal.parked) break;
-				if (!isAutopilotManaged(review.gh, review.ghRepo, pr.itemId, ROADMAP_GITHUB.label)) continue;
-				if (!postReviewStatus(review.gh, review.ghRepo, pr.headSha, "pending", "local pelaggio review running")) continue;
-				let body = "";
-				let finalState: "success" | "failure" = "failure";
-				let reviewCost = 0;
-				let reviewCostEstimated = false;
-				try {
-					const prepared = review.prepareReviewHead(REPO, pr);
-					if (!prepared) throw new Error("could not prepare PR head for local review");
-					const result = await review.runReviewGate({
-						pr: String(pr.prNumber),
-						profile: "standard",
-						cwd: REPO,
-						diffCwd: prepared.diffCwd,
-						diffBaseRef: prepared.baseRef,
-						diffHeadRef: prepared.headRef,
-						policy: review.policy,
-					});
-					body = result.body;
-					finalState = result.gate === "pass" ? "success" : "failure";
-					reviewCost = result.cost;
-					reviewCostEstimated = result.costEstimated;
-				} catch (e) {
-					const msg = e instanceof Error ? e.message : String(e);
-					body = buildFailClosedComment("error_crash", `local pr-review crashed before producing a review, so this gate blocks the merge.\n\n${msg}`);
-					finalState = "failure";
-				} finally {
-					review.cleanupReviewHead(REPO, pr);
+			// A rate-limit park during pr-review/pr-verify is transient, not a BLOCK: the gate returns
+			// `park`, the sweep leaves the `review` status *pending* (never red, never a revisable
+			// findings comment), stops starting more reviews, and — under the same auto-resume /
+			// --max-wait / reset-time policy as the item park-and-resume loop — waits and retries the
+			// sweep in-process. Pending PRs stay eligible in `findReviewCandidates`, so a resumed round
+			// re-lists and re-reviews them; a hand-back leaves the PR pending for the next run.
+			let reviewRound = 0;
+			while (reviewRound < MAX_RESUME_ROUNDS) {
+				reviewRound++;
+				const { candidates, stranded } = findReviewCandidates(review.gh, review.ghRepo, review.now(), parseWaitFlag(review.statuslessAfter));
+				// Stranded handling is a one-time nudge (idempotent comment + a notification) — only on
+				// the first round, so a resumed retry does not re-notify the same stranded PRs.
+				if (reviewRound === 1) {
+					for (const pr of stranded) {
+						postLocalModeWorkflowComment(review.gh, review.ghRepo, pr.prNumber);
+						if (notifyEnabled) await notifyStrandedReview(notifyCfg, { itemId: pr.itemId, prNumber: pr.prNumber, ghRepo: review.ghRepo, headSha: pr.headSha, logPath: LOG_PATH }, { send });
+					}
 				}
-				upsertReviewComment(review.gh, review.ghRepo, pr.prNumber, body);
-				postReviewStatus(review.gh, review.ghRepo, pr.headSha, finalState, finalState === "success" ? "local pelaggio review passed" : "local pelaggio review blocked");
-				totalSpent += reviewCost;
-				console.log(`review ${pr.itemId}#${pr.prNumber} — ${finalState}${reviewCost > 0 ? ` ${reviewCostEstimated ? "~" : ""}$${reviewCost.toFixed(2)}` : ""}`);
+
+				for (const pr of candidates) {
+					if (parkSignal.parked) break;
+					if (!isAutopilotManaged(review.gh, review.ghRepo, pr.itemId, ROADMAP_GITHUB.label)) continue;
+					if (!postReviewStatus(review.gh, review.ghRepo, pr.headSha, "pending", "local pelaggio review running")) continue;
+					let body = "";
+					let finalState: "success" | "failure" = "failure";
+					let reviewCost = 0;
+					let reviewCostEstimated = false;
+					try {
+						const prepared = review.prepareReviewHead(REPO, pr);
+						if (!prepared) throw new Error("could not prepare PR head for local review");
+						const result = await review.runReviewGate({
+							pr: String(pr.prNumber),
+							profile: "standard",
+							cwd: REPO,
+							diffCwd: prepared.diffCwd,
+							diffBaseRef: prepared.baseRef,
+							diffHeadRef: prepared.headRef,
+							policy: review.policy,
+							parkSignal, // shared: a rate-limit park sets this and flows into the wait+retry below
+						});
+						if (result.gate === "park") {
+							// Transient: leave the pending status as-is (do NOT upsert findings or post
+							// failure), charge the partial cost, and stop starting new reviews this round.
+							// `finally` still cleans the review head; the shared `parkSignal` is already parked.
+							totalSpent += result.cost;
+							console.log(`review ${pr.itemId}#${pr.prNumber} — parked (${result.park?.limitType ?? parkSignal.limitType})`);
+							break;
+						}
+						body = result.body;
+						finalState = result.gate === "pass" ? "success" : "failure";
+						reviewCost = result.cost;
+						reviewCostEstimated = result.costEstimated;
+					} catch (e) {
+						const msg = e instanceof Error ? e.message : String(e);
+						body = buildFailClosedComment("error_crash", `local pr-review crashed before producing a review, so this gate blocks the merge.\n\n${msg}`);
+						finalState = "failure";
+					} finally {
+						review.cleanupReviewHead(REPO, pr);
+					}
+					upsertReviewComment(review.gh, review.ghRepo, pr.prNumber, body);
+					postReviewStatus(review.gh, review.ghRepo, pr.headSha, finalState, finalState === "success" ? "local pelaggio review passed" : "local pelaggio review blocked");
+					totalSpent += reviewCost;
+					console.log(`review ${pr.itemId}#${pr.prNumber} — ${finalState}${reviewCost > 0 ? ` ${reviewCostEstimated ? "~" : ""}$${reviewCost.toFixed(2)}` : ""}`);
+				}
+
+				if (!parkSignal.parked) break; // no rate-limit park this round → sweep is done
+				if (!autoResume) break; // off-switch → leave pending, hand back (park block reports it)
+				const outcome = await awaitParkReset(parkSignal, { maxWaitMs });
+				if (outcome === "handback") break; // no reset / exceeds --max-wait → leave pending
+				// resumed: parkSignal cleared → re-list candidates (pending PRs remain) and retry.
 			}
 		}
 
@@ -2161,16 +2406,8 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			if (v) statusBar.teardown();
 			if (statusInterval) clearInterval(statusInterval);
 
-			const park = { ...CONFIG.park, ...deps.park };
-			const autoResume = park.autoResume;
-			const maxWaitMs = parseWaitFlag(flags["max-wait"] ?? park.maxWait);
-
-			const resetParkSignal = (): void => {
-				parkSignal.parked = false;
-				parkSignal.resetsAt = 0;
-				parkSignal.limitType = "";
-				parkSignal.triggerWorker = "";
-			};
+			// `park`/`autoResume`/`maxWaitMs` are hoisted above the review sweep (shared with its
+			// retry loop). The park signal is reset by `awaitParkReset` on a successful wait.
 
 			// Per-item resume body — the `--resume` re-entry path in-process. Reused each
 			// round of the loop, so the resume-worktree/log/detect wiring lives in one place.
@@ -2230,7 +2467,10 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			let pending = results.filter((r) => r.error === "parked" && r.itemId).map((r) => r.itemId!);
 
 			if (pending.length === 0) {
-				console.log(`${A.yellow("⏸")} Rate limit hit but no items to resume.`);
+				// Reached when a rate-limit park has no parked *pipeline* item to resume — e.g. the local
+				// review sweep parked and handed back (its pending PRs retry on the next run), or a manual
+				// pause fired before any work started.
+				console.log(`${A.yellow("⏸")} Rate limit hit but no items to resume (any pending local review retries on the next run).`);
 				return { exitCode: 1, results };
 			}
 
@@ -2246,53 +2486,16 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			let round = 0;
 			while (parkSignal.parked && pending.length > 0 && round < MAX_RESUME_ROUNDS) {
 				round++;
-				const waitMs = parkSignal.resetsAt - Date.now();
-				const isWeekly = /week/i.test(parkSignal.limitType);
-				const resumeCmd = formatResumeHint(pending);
-
-				// No reset time → never spin (checked every round, not just the first). Rate-limit
-				// parks now synthesize a conservative reset upstream (#68), so this branch is reached
-				// only by a manual pause (SIGUSR2, resetsAt=0) or a stale reset already in the past —
-				// neither is auto-resumable by time. `break` (not `return`) so we funnel through the
-				// shared teardown+summary below — a round-≥2 exit here would otherwise leak the
-				// status-bar scroll region set up by the prior round's `statusBar.setup()`.
-				if (!parkSignal.resetsAt || waitMs <= 0) {
-					console.log("");
-					console.log(`${A.yellow("⏸")} ${parkSignal.limitType} limit hit — cannot auto-resume (no reset time)`);
+				// Shared wait: identical timing/jitter/max-wait semantics as the review-retry sweep.
+				// `break` (not `return`) on hand-back so we funnel through the shared teardown+summary
+				// below — a round-≥2 exit here would otherwise leak the status-bar scroll region set up
+				// by the prior round's `statusBar.setup()`.
+				const outcome = await awaitParkReset(parkSignal, { maxWaitMs, itemsLabel: pending.join(", ") });
+				if (outcome === "handback") {
 					console.log(`  Parked: ${pending.join(", ")}`);
-					console.log(`  Resume: ${A.bold(resumeCmd)}`);
+					console.log(`  Resume: ${A.bold(formatResumeHint(pending))}`);
 					break;
 				}
-
-				if (waitMs > maxWaitMs) {
-					const label = isWeekly ? "Weekly rate limit" : `${parkSignal.limitType} limit`;
-					console.log("");
-					console.log(`${A.yellow("⏸")} ${label} — wait ${fmtWait(waitMs)} exceeds --max-wait ${fmtWait(maxWaitMs)}`);
-					console.log(`  Parked: ${pending.join(", ")}`);
-					console.log(`  Resume: ${A.bold(resumeCmd)}`);
-					break;
-				}
-
-				// Jitter within the existing 30s post-reset envelope (see the constants above)
-				// so timer-mocked tests need no change: delay ∈ [15s, 30s).
-				const delay = RESUME_MIN_GRACE_MS + Math.floor(Math.random() * RESUME_JITTER_MS);
-				const resumeAt = parkSignal.resetsAt + delay;
-				const eta = new Date(resumeAt).toLocaleTimeString("en-CA", { hour12: false });
-				console.log("");
-				console.log(`${A.yellow("⏸")} ${A.bold("Parked")} — ${parkSignal.limitType} limit, waiting ${fmtWait(waitMs)} (ETA ${eta})`);
-				console.log(`  Items: ${pending.join(", ")}`);
-
-				const countdownInterval = setInterval(() => {
-					const remaining = resumeAt - Date.now();
-					if (remaining > 0) {
-						console.log(`  ${A.dim("⏳")} ${fmtWait(remaining)} remaining...`);
-					}
-				}, 5 * 60_000);
-
-				await new Promise((r) => setTimeout(r, resumeAt - Date.now()));
-				clearInterval(countdownInterval);
-
-				resetParkSignal();
 
 				console.log(`\n${A.green("▶")} ${A.bold("Resuming")} ${pending.length} item(s)...`);
 

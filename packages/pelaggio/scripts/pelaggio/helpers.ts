@@ -262,9 +262,9 @@ export function createMainCheckoutDeltaObserver(root: string): MainCheckoutDelta
 
 // ── Pick result parsing ────────────────────────────────────────────────
 
-export type PickReason = "claimed" | "blocked" | "unknown-id" | "already-done" | "worktree-exists" | "already-claimed" | "queue-empty";
+export type PickReason = "claimed" | "blocked" | "unknown-id" | "already-done" | "worktree-exists" | "already-claimed" | "queue-empty" | "stale-quarantined";
 
-const PICK_REASONS: ReadonlySet<PickReason> = new Set(["claimed", "blocked", "unknown-id", "already-done", "worktree-exists", "already-claimed", "queue-empty"]);
+const PICK_REASONS: ReadonlySet<PickReason> = new Set(["claimed", "blocked", "unknown-id", "already-done", "worktree-exists", "already-claimed", "queue-empty", "stale-quarantined"]);
 
 /**
  * Parse a structured `pick-result: <tag>` trailing line from the /pick skill output.

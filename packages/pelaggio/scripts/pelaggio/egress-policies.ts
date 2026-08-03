@@ -6,6 +6,7 @@ export const DEFAULT_EGRESS_LIMITS = Object.freeze({
 	responseBodyBytes: 8_388_608,
 	requestsPerWindow: 60,
 	windowMs: 60_000,
+	rateLimitRetryBudget: 20,
 	requestsPerRun: 500,
 	inputTokens: 10_000_000,
 	outputTokens: 1_000_000,

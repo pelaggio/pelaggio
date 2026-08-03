@@ -457,9 +457,17 @@ scope heuristics. Invalid values fail loudly at startup.
 | `linear`        | ready  | Linear via `@linear/sdk`                           |
 | `beads`         | ready  | Beads issues via the `bd --json` CLI               |
 
-Skill bodies (`/pick`, `/plan`, `/ship`, `/charter`, `/status`, `/pickup`,
-`/shakedown`, `/tidy`) are adapter-agnostic — all roadmap access flows through
-`npx pelaggio roadmap ...`, which dispatches to the configured source.
+Skill bodies (`/pick`, `/plan`, `/ship`, `/charter`, `/decompose`, `/status`,
+`/pickup`, `/shakedown`, `/tidy`) are adapter-agnostic — all roadmap access flows
+through `npx pelaggio roadmap ...`, which dispatches to the configured source.
+
+### `pick.max-scope`
+
+The automatic `roadmap next` readiness gate admits declared scopes up to
+`pick.max-scope` (default `M`). Items declaring `L` or `XL` are therefore
+excluded by default until decomposed. Explicit `--item <id>` and `/pick <id>`
+runs bypass this gate as an operator override. Set the threshold to `XL` to
+disable scope filtering; items without a declared scope are never gated.
 
 ### `github-issues`
 
@@ -495,8 +503,8 @@ then the most recent issue comment whose body begins with the
 
 #### Curation labels
 
-Projection and automatic selection use **labels as the sole runtime source of
-truth** (body text is not consulted at read time):
+Priority and deferred projection use **labels as the sole runtime source of
+truth** (body text is not consulted for those fields at read time):
 
 | Label             | Effect |
 |-------------------|--------|
