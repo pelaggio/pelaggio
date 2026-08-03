@@ -647,6 +647,35 @@ policy entirely from `.pelaggio.yml`. Accepts the same formats as the flag:
 `6h`, `90m`, `1h30m`, or a bare number (minutes). An unparseable value falls
 back to 6h.
 
+## Continuous mode (issue #82)
+
+Long-running **auto-pick** sessions use drain/watch presets so the operator can
+leave a campaign running past a fixed `--cycles` count without burning paid
+pick steps on an empty queue.
+
+| Flag | Meaning |
+|------|---------|
+| `--continuous` | Enable continuous mode (default preset: `drain`). |
+| `--preset drain\|watch` | Preset alone also enables continuous. **drain** exits when the free queue probe is empty; **watch** sleeps `--probe-interval` (default `5m`) and re-probes without a pick agent. |
+| `--day-budget <usd>` | Hard stop when calendar-day spend reaches this amount (local timezone). Counts pick cycles, revise sweeps, and local review sweeps. |
+| `--probe-interval <dur>` | Watch-mode free-probe sleep (`5m`, `1h`, bare minutes). |
+| `--cycles N` | In continuous mode, default `1` means *no fixed cap*; `N > 1` is a safety ceiling. |
+
+Constraints: auto-pick only (no `--item` / `--resume` / `--no-worktree`); no
+`--parallel > 1` (free probe + per-iteration revise are serial). Continuous
+mode re-runs the local revise sweep **before each pick iteration** so newly-red
+PRs are revised between items, not only at campaign start.
+
+```bash
+# Drain the ready queue once, free-probing emptiness
+pnpm pelaggio --continuous --preset drain --verbose
+
+# Watch overnight with a $25/day hard cap
+pnpm pelaggio --preset watch --day-budget 25 --probe-interval 10m --verbose
+```
+
+Server/UI surface for the same presets is issue #83.
+
 Auto-resume applies only to the normal `--cycles` / `--parallel` driver. A
 single-item `--resume <id>` invocation that re-parks is itself re-runnable by
 the same command, so it is intentionally not looped.

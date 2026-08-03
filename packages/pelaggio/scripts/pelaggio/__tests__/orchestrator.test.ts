@@ -1069,3 +1069,193 @@ describe("runOrchestrator — budget warning", () => {
 		);
 	});
 });
+
+describe("runOrchestrator — continuous mode (issue #82)", () => {
+	it("rejects --continuous with --item", async (t) => {
+		t.mock.method(console, "error", () => {});
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({ default: { completed: true } });
+		const { exitCode } = await runOrchestrator({ ...baseFlags, continuous: true, item: "82" }, { runPipeline });
+		assert.equal(exitCode, 2);
+		assert.equal(calls.length, 0);
+	});
+
+	it("rejects --continuous with --parallel > 1", async (t) => {
+		t.mock.method(console, "error", () => {});
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({ default: { completed: true } });
+		const { exitCode } = await runOrchestrator({ ...baseFlags, continuous: true, parallel: "2" }, { runPipeline });
+		assert.equal(exitCode, 2);
+		assert.equal(calls.length, 0);
+	});
+
+	it("drain: free probe empty → stop without pick agent", async (t) => {
+		const logs: string[] = [];
+		t.mock.method(console, "log", (...args: unknown[]) => {
+			logs.push(args.join(" "));
+		});
+		const { runPipeline, calls } = createMockRunPipeline({
+			default: { completed: true, cost: 1 },
+		});
+		let probes = 0;
+		const { exitCode } = await runOrchestrator(
+			{ ...baseFlags, continuous: true, preset: "drain" },
+			{
+				runPipeline,
+				queueProbe: async () => {
+					probes++;
+					return { empty: true, readyCount: 0 };
+				},
+			},
+		);
+		assert.equal(exitCode, 0);
+		assert.equal(calls.length, 0, "empty free probe must not spawn a pick cycle");
+		assert.equal(probes, 1);
+		assert.ok(
+			logs.some((l) => l.includes("drain complete")),
+			`expected drain-complete log; got:\n${logs.join("\n")}`,
+		);
+	});
+
+	it("drain: empty queue still runs the per-iteration revise sweep", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const continuousWt = mkdtempSync(join(tmpdir(), "continuous-revise-orch-"));
+		t.after(() => {
+			rmSync(continuousWt, { recursive: true, force: true });
+			rmSync(reviseFindingsPath(REPO, "76"), { force: true });
+		});
+		const revisable = [{ number: 101, isDraft: false, headRefName: "feat/issue-76-x", labels: [], statusCheckRollup: [{ __typename: "CheckRun", name: "review", conclusion: "FAILURE" }] }];
+		const gh: GhRunner = (args) => {
+			if (args[0] === "pr" && args[1] === "list") return { stdout: JSON.stringify(revisable), stderr: "", status: 0 };
+			if (args[0] === "issue" && args[1] === "view") return { stdout: JSON.stringify({ labels: [{ name: "autopilot" }] }), stderr: "", status: 0 };
+			if (args[0] === "pr" && args[1] === "view") return { stdout: JSON.stringify({ comments: [{ body: "<!-- pelaggio-pr-review -->\nfix the bug", createdAt: "2026-01-01T00:00:00Z" }] }), stderr: "", status: 0 };
+			return { stdout: "", stderr: "", status: 0 };
+		};
+		const { runPipeline, calls } = createMockRunPipeline({ byItem: { "76": { completed: true, cost: 0.5 } } });
+		const { exitCode } = await runOrchestrator(
+			{ ...baseFlags, continuous: true, preset: "drain", target: "pull-request" },
+			{ runPipeline, queueProbe: async () => ({ empty: true, readyCount: 0 }), resolveWorktree: () => continuousWt, revise: { local: true, ghRepo: "o/r", gh } },
+		);
+		assert.equal(exitCode, 0);
+		assert.equal(calls.length, 1);
+		assert.equal(calls[0].opts.itemId, "76");
+		assert.equal(calls[0].opts.startFrom, "implement");
+	});
+
+	it("watch: probe failure sleeps and retries without starting a paid pick", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({ default: { completed: true, cost: 0.2 } });
+		let probes = 0;
+		const sleeps: number[] = [];
+		const { exitCode } = await runOrchestrator(
+			{ ...baseFlags, continuous: true, preset: "watch", "probe-interval": "1m", cycles: "2" },
+			{
+				runPipeline,
+				queueProbe: async () => {
+					probes++;
+					if (probes === 1) throw new Error("roadmap unavailable");
+					return { empty: false, readyCount: 1 };
+				},
+				sleep: async (ms) => {
+					sleeps.push(ms);
+				},
+			},
+		);
+		assert.equal(exitCode, 0);
+		assert.equal(calls.length, 2);
+		assert.deepEqual(sleeps, [60_000]);
+	});
+
+	it("drain: probe ready → one cycle then empty stops", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({
+			default: { completed: true, cost: 0.5 },
+		});
+		let probes = 0;
+		const { exitCode } = await runOrchestrator(
+			{ ...baseFlags, continuous: true, preset: "drain" },
+			{
+				runPipeline,
+				queueProbe: async () => {
+					probes++;
+					// first probe: work available; second: drained
+					return probes === 1 ? { empty: false, readyCount: 1 } : { empty: true, readyCount: 0 };
+				},
+			},
+		);
+		assert.equal(exitCode, 0);
+		assert.equal(calls.length, 1);
+		assert.equal(probes, 2);
+	});
+
+	it("watch: empty free probe sleeps then picks when work appears", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({
+			default: { completed: true, cost: 0.2 },
+		});
+		let probes = 0;
+		const sleeps: number[] = [];
+		const { exitCode } = await runOrchestrator(
+			// cycles: "2" is a safety max (continuous treats cycles>1 as a ceiling)
+			{ ...baseFlags, continuous: true, preset: "watch", "probe-interval": "1m", cycles: "2" },
+			{
+				runPipeline,
+				queueProbe: async () => {
+					probes++;
+					// 1st: empty → sleep; 2nd: work → pick; 3rd: empty → sleep; then cycle cap ends after 2 picks
+					if (probes === 1) return { empty: true, readyCount: 0 };
+					if (probes === 2) return { empty: false, readyCount: 1 };
+					if (probes === 3) return { empty: false, readyCount: 1 };
+					return { empty: true, readyCount: 0 };
+				},
+				sleep: async (ms) => {
+					sleeps.push(ms);
+				},
+			},
+		);
+		assert.equal(exitCode, 0);
+		assert.equal(calls.length, 2, "two work cycles under --cycles 2 ceiling");
+		assert.ok(sleeps.length >= 1, "watch must sleep on empty free probe");
+		assert.equal(sleeps[0], 60_000);
+	});
+
+	it("watch: day-budget stops after spend", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({
+			default: { completed: true, cost: 3 },
+		});
+		let probes = 0;
+		const { exitCode } = await runOrchestrator(
+			{ ...baseFlags, continuous: true, preset: "watch", "day-budget": "5", "probe-interval": "1m" },
+			{
+				runPipeline,
+				queueProbe: async () => {
+					probes++;
+					return { empty: false, readyCount: 1 };
+				},
+				sleep: async () => {},
+			},
+		);
+		// After cycle 1: spent=3 < 5 → continue. Cycle 2: spent=6 ≥ 5 → stop before cycle 3.
+		assert.equal(calls.length, 2);
+		assert.equal(exitCode, 0);
+		assert.ok(probes >= 2);
+	});
+
+	it("drain: pick:queue-empty race also stops", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({
+			default: { completed: false, cost: 0.1, error: "pick:queue-empty" },
+		});
+		const { exitCode } = await runOrchestrator(
+			{ ...baseFlags, continuous: true, preset: "drain" },
+			{
+				runPipeline,
+				// Probe always says work exists — pick discovers empty (race).
+				queueProbe: async () => ({ empty: false, readyCount: 1 }),
+			},
+		);
+		assert.equal(calls.length, 1);
+		assert.equal(exitCode, 1);
+	});
+});

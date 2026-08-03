@@ -30,6 +30,7 @@ function parseArgs(argv: string[]): Args {
 	const positional: string[] = [];
 	for (let i = 0; i < argv.length; i++) {
 		const a = argv[i];
+		if (a === undefined) continue;
 		if (a.startsWith("--")) {
 			const key = a.slice(2);
 			const next = argv[i + 1];

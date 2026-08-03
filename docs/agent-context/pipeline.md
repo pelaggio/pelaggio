@@ -98,3 +98,7 @@ role-bearing reviewer and Judge configuration.
 Issue `#80` relies on conservative rate-limit waits when Codex does not report an exact reset time.
 
 **Sustained SDK outage (#128)**: a single `"transient sdk error"` cycle (retries exhausted, see #127) stays recoverable so the worker keeps pulling — a blip shouldn't stall a run. `runOrchestrator` tracks consecutive `"transient sdk error"` cycle outcomes (reset by any other outcome); at `CONSECUTIVE_TRANSIENT_ERROR_LIMIT` in a row it relabels the tripping cycle's error to `"parked"` (`limitType: "sdk-outage"`, `resetsAt: 0`) so it pages and flows through the same park-and-resume path as a rate-limit park. `resetsAt: 0` means it can't auto-resume by time — like a manual `SIGUSR2` pause, it hands back with a `--resume` hint instead of waiting.
+
+## Continuous mode (#82)
+
+Auto-pick campaigns can run past a fixed `--cycles` count via drain/watch presets (`--continuous` / `--preset drain|watch`). Before each pick the orchestrator **free-probes** the ready queue (`listItems` + FlowPolicy — no pick agent): **drain** exits on empty; **watch** sleeps `--probe-interval` and re-probes. A `--day-budget` hard-stops calendar-day spend. Continuous mode re-runs the local revise sweep **per iteration** (not only at campaign start). Serial auto-pick only (no `--item` / `--resume` / `--parallel > 1`). Server/UI surface is #83. See `docs/config.md` § Continuous mode.

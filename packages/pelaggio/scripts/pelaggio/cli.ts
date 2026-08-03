@@ -24,6 +24,16 @@ const OPTIONS = {
 	profile: { type: "string" },
 	"dry-run": { type: "boolean", default: false },
 	"no-worktree": { type: "boolean", default: false },
+	// Continuous mode (issue #82). No default → unset stays `undefined` so resolveContinuousConfig
+	// can distinguish "off" from an explicit `--continuous`.
+	continuous: { type: "boolean" },
+	// drain | watch. Setting --preset alone enables continuous (default drain when --continuous
+	// is set without --preset). Validated in resolveContinuousConfig.
+	preset: { type: "string" },
+	// Per-calendar-day USD hard cap. No default → unset stays `undefined` (no day cap).
+	"day-budget": { type: "string" },
+	// Watch-mode free-probe sleep. No default → resolveContinuousConfig uses "5m".
+	"probe-interval": { type: "string" },
 	json: { type: "boolean", default: false },
 } as const;
 

@@ -49,6 +49,26 @@ describe("parseCli", () => {
 		assert.equal(intent.flags.profile, undefined);
 	});
 
+	it("parses continuous-mode flags (issue #82)", () => {
+		const intent = parseCli(["--continuous", "--preset", "watch", "--day-budget", "20", "--probe-interval", "2m"]);
+		assert.equal(intent.kind, "run");
+		if (intent.kind !== "run") return;
+		assert.equal(intent.flags.continuous, true);
+		assert.equal(intent.flags.preset, "watch");
+		assert.equal(intent.flags["day-budget"], "20");
+		assert.equal(intent.flags["probe-interval"], "2m");
+	});
+
+	it("leaves continuous flags undefined when absent", () => {
+		const intent = parseCli(["--cycles", "1"]);
+		assert.equal(intent.kind, "run");
+		if (intent.kind !== "run") return;
+		assert.equal(intent.flags.continuous, undefined);
+		assert.equal(intent.flags.preset, undefined);
+		assert.equal(intent.flags["day-budget"], undefined);
+		assert.equal(intent.flags["probe-interval"], undefined);
+	});
+
 	it("parses resume with review findings without requiring --from", () => {
 		const intent = parseCli(["--resume", "108", "--review-findings", "findings.md"]);
 		assert.equal(intent.kind, "run");
