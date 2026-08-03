@@ -511,6 +511,38 @@ Every failure branch terminates: if the revision run itself crashes/parks before
 re-review fires, the label is already set, and the `if: failure()` step posts a park comment — no
 second attempt.
 
+## Document review — `pelaggio doc-review <path>` (#384)
+
+```bash
+npx pelaggio doc-review docs/plans/384.md [--profile <name>] [--json] [--out <report.json>]
+```
+
+A read-only, provider-diverse review of an **arbitrary document** (a design/plan/spec) — the same
+Claude/Codex/Grok panel the authoring loop uses, aimed at prose instead of a branch diff. It reuses
+`runReviewLoop` in its typed `mode: "no-revise"`: there is no author revision seat, no claim branch,
+no feature worktree, no `Step` lifecycle, and no park/resume. The revision branch is unreachable **by
+construction** (the no-revise options union has no `revise` prompt), not merely disabled at runtime.
+
+- **Document snapshot contract.** The file is read once, its raw bytes hashed (sha256), and the
+  identical content injected into every seat prompt under `## DOCUMENT UNDER REVIEW`. The digest is
+  re-verified before the report is written; a file that goes missing or changes mid-review fails
+  closed (exit 1, no success report). Missing / non-file / non-UTF-8 input is rejected (exit 2).
+- **No safety floor.** The code-diff path-signal taxonomy is the wrong floor for bare prose (every
+  unmatched finding would sink to the non-contractible `correctness-regression` class and become an
+  un-refutable hard-block — park theater for a doc nit). So the run declares `safetyFloor: "disabled"`
+  honestly on the result and report; the Judge's ruling governs. Emission-time classification still
+  runs on the real taxonomy for the forensic `classification` on each finding. A signed
+  document-domain taxonomy is deferred.
+- **Report.** A path+digest-bound `DocReviewRecord` (never the roadmap-shaped `ReviewRecord.itemId`)
+  is written to `.dev/doc-review-records/<runId>.json` under the cwd, with the document binding,
+  diversity status, `safetyFloor: disabled`, and the loop outcome. Human markdown goes to stdout by
+  default; `--json` prints the JSON record; `--out <file>` also writes it.
+- **Exit codes.** `0` = `converged-clean` / `converged-with-notes` / `ceiling`; `1` = `hard-block` /
+  `dissent` / `budget` (rate-limit park) / crash / digest-changed; `2` = usage / missing path.
+
+The reviewer seats run the `pr-review` skill in `--document` mode; the Judge runs `pr-verify`
+`--authoring-loop-judge` (same wire format as the authoring loop).
+
 ## Follow-ups (not in this gate)
 
 - **Notifications** — surface a red gate as a park-for-attention alert (issue #34).
