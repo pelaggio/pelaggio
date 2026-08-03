@@ -4,7 +4,7 @@
 	"private": true,
 	"description": "Workspace root for pelaggio — see packages/pelaggio for the published pipeline.",
 	"license": "AGPL-3.0-or-later",
-	"packageManager": "pnpm@10.32.1",
+	"packageManager": "pnpm@11.18.0+sha512.33d83c77da82f49fba836925c6f1b841181ec3132b670639bd012f7075f5c7cf634c5f870147c19aae7478fac01df09d8892e880454896edd23ee9b33757563c",
 	"type": "module",
 	"scripts": {
 		"pelaggio": "pnpm --filter pelaggio pelaggio",
@@ -21,13 +21,13 @@
 		"prepare": "lefthook install"
 	},
 	"devDependencies": {
-		"@anthropic-ai/claude-code": "^2.1.177",
-		"@biomejs/biome": "^2.5.0",
+		"@anthropic-ai/claude-code": "^2.1.220",
+		"@biomejs/biome": "^2.5.6",
 		"ajv": "8.20.0",
 		"ajv-formats": "3.0.1",
+		"lefthook": "^2.1.10",
 		"pelaggio": "workspace:*",
-		"lefthook": "^2.1.9",
-		"tsx": "^4.22.4",
+		"tsx": "^4.23.1",
 		"typescript": "^6.0.3"
 	}
 }
