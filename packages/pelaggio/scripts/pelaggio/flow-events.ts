@@ -21,6 +21,10 @@ export const PELAGGIO_EVENT_TYPES = [
 	"pelaggio.effect-failed",
 	"pelaggio.state-observed",
 	"pelaggio.state-corrected",
+	"pelaggio.watch-idle",
+	"pelaggio.watch-wake",
+	"pelaggio.budget-idle",
+	"pelaggio.budget-wake",
 ] as const satisfies readonly PelaggioEventType[];
 
 const EVENT_TYPE_COVERAGE: Record<PelaggioEventType, true> = Object.fromEntries(PELAGGIO_EVENT_TYPES.map((type) => [type, true])) as Record<PelaggioEventType, true>;
@@ -86,6 +90,8 @@ function decodeV1(value: unknown): FlowEvent | undefined {
 export interface CreateEventWriterOptions {
 	root?: string;
 	executionId?: string;
+	/** Pin the segment filename (`.dev/flow-events/<streamId>.jsonl`). Must be ULID-shaped. */
+	streamId?: string;
 	now?: () => Date;
 	idFactory?: () => string;
 }
@@ -94,7 +100,7 @@ export function createEventWriter(options: CreateEventWriterOptions = {}): Event
 	const root = options.root ?? REPO;
 	const idFactory = options.idFactory ?? ulid;
 	const now = options.now ?? (() => new Date());
-	const streamId = idFactory();
+	const streamId = options.streamId ?? idFactory();
 	const executionId = options.executionId ?? idFactory();
 	if (!isUlid(streamId) || !isUlid(executionId)) throw new Error("Flow writer IDs must be ULID-shaped");
 	const segmentPath = join(root, ".dev", "flow-events", `${streamId}.jsonl`);

@@ -633,6 +633,46 @@ describe("loadConfig — park", () => {
 	});
 });
 
+describe("loadConfig — watch", () => {
+	it("defaults to empty watch (unlimited) when unset", () => {
+		const repo = tmpRepo();
+		const cfg = loadConfig({ repo, configPath: join(repo, ".pelaggio.yml") });
+		assert.deepEqual(cfg.watch, {});
+		assert.equal(cfg.watch.dailyBudget, undefined);
+	});
+
+	it("parses watch.daily-budget as a positive number", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "watch:\n  daily-budget: 25.5\n");
+		const cfg = loadConfig({ repo, configPath: path });
+		assert.equal(cfg.watch.dailyBudget, 25.5);
+	});
+
+	it("throws on zero watch.daily-budget", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "watch:\n  daily-budget: 0\n");
+		assert.throws(() => loadConfig({ repo, configPath: path }), /watch\.daily-budget/);
+	});
+
+	it("throws on negative watch.daily-budget", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "watch:\n  daily-budget: -1\n");
+		assert.throws(() => loadConfig({ repo, configPath: path }), /watch\.daily-budget/);
+	});
+
+	it("throws on non-number watch.daily-budget", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "watch:\n  daily-budget: twenty\n");
+		assert.throws(() => loadConfig({ repo, configPath: path }), /watch\.daily-budget/);
+	});
+
+	it("throws when watch is not a map", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "watch: nope\n");
+		assert.throws(() => loadConfig({ repo, configPath: path }), /expected `watch` to be a map/);
+	});
+});
+
 describe("loadConfig — revise", () => {
 	it("defaults to { local: true } when unset", () => {
 		const repo = tmpRepo();
