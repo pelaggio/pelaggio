@@ -6,6 +6,10 @@ Status values are `default-taken`, `resolved`, or `resolved→ADR-nnnn`. Source 
 
 | Decision | Status | Chosen/leaning | Alternatives | Source | Date |
 | --- | --- | --- | --- | --- | --- |
+| portable parent representation after successful decomposition | default-taken | close/complete the parent with a note listing every child ID via existing `mark-done` | provider-specific epic relationships; leave the parent open with an epic label; add a cross-adapter decomposition API | https://github.com/pelaggio/pelaggio/issues/202 | 2026-08-03 |
+<!-- decision:a183fd9a929fecc4 -->
+| partial remote mutation handling | default-taken | fail closed, retain the open parent, and report exact reconciliation state | destructive rollback; continue after failure; add transactional orchestration | https://github.com/pelaggio/pelaggio/issues/202 | 2026-08-03 |
+<!-- decision:9b9cdf093b33c916 -->
 | default value of `pick.max-scope` | default-taken | `M` | opt-in/off, default `L` | https://github.com/pelaggio/pelaggio/issues/201 | 2026-08-03 |
 <!-- decision:82c982035314b449 -->
 | YAML key spelling | default-taken | `pick.max-scope` | `pick.maxScope` | https://github.com/pelaggio/pelaggio/issues/201 | 2026-08-03 |

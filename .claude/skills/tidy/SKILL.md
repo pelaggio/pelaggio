@@ -59,6 +59,17 @@ Run `git branch --list 'feat/*'`. For branches not associated with a worktree:
 
 From `MAIN_REPO`, run `npx pelaggio decisions archive-resolved --older-than 30d`. Report the moved count. The deterministic locked command archives only resolved rows; leave unresolved and `default-taken` rows untouched and do not edit the Markdown register manually.
 
+## 4b. Staleness quarantine sweep (#217)
+
+From `MAIN_REPO`, run `npx pelaggio roadmap stale-scan --write`.
+
+This runs deterministic, high-precision heuristics over the **open** set — `shipped-by-commit` (a `git log main` subject completes the id), `superseded-marker` (the body says it was done by a done sibling), `title-match-done` (title equals a done item's title) — and upserts active hits into `MAIN_REPO/.dev/stale-quarantine.json` (fingerprint-bound, gitignored). It also prunes entries whose ids are no longer open. Quarantined items are then excluded from `roadmap next` and refused by `roadmap claim` (**exit 4**) until an operator resolves them, so a stale item never silently burns a cycle.
+
+Report the table it prints (`id`, `reason`, `evidence`). Review existing entries with `npx pelaggio roadmap stale-list`. **Do not auto-resolve** — human confirmation is required. For each quarantined item, an operator runs one of:
+
+- `npx pelaggio roadmap stale-resolve <id> --as done [--note "…"]` — confirm it is already implemented/obsolete: closes it (`markDone`) and clears the entry.
+- `npx pelaggio roadmap stale-resolve <id> --as keep` — a false positive or still-real work: a sticky `keep` suppresses re-quarantine until the item's title/body/deps change.
+
 ## 5. Pelaggio log review
 
 If `{MAIN_REPO}/.dev/pelaggio-log.jsonl` exists, read it and report:
@@ -77,7 +88,7 @@ Report any errors. These should be zero — if not, flag as blocking for pelaggi
 ## Output
 
 Summary table:
-- Roadmaps: X active, Y archived this run; decisions: Z resolved rows archived
+- Roadmaps: X active, Y archived this run; decisions: Z resolved rows archived; stale: Q items quarantined (awaiting resolve)
 - Worktrees: X active, Y stale (flagged)
 - Branches: X active, Y merged (safe to delete)
 - Pelaggio: X cycles, Y shipped, $Z spent

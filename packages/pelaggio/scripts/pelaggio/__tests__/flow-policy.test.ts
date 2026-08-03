@@ -103,6 +103,40 @@ describe("FifoPolicy.evaluate", () => {
 		);
 	});
 
+	it("excludes stale-quarantined ids with reason stale-quarantined", () => {
+		const candidates = [candidate("ready", { fifoOrdinal: 0 }), candidate("stale", { fifoOrdinal: 1 })];
+		const result = evaluate(candidates, { staleQuarantinedIds: new Set(["stale"]) });
+		assert.deepEqual(
+			result.candidates.map(({ item }) => item.id),
+			["ready"],
+		);
+		const staleVerdict = result.verdicts.find((v) => v.id === "stale");
+		assert.equal(staleVerdict?.reason, "stale-quarantined");
+		assert.equal(staleVerdict?.eligible, false);
+	});
+
+	it("status beats stale-quarantined for a done item", () => {
+		const done = candidate("done-stale", { item: { ...candidate("done-stale").item, status: "done" } });
+		const result = evaluate([done], { staleQuarantinedIds: new Set(["done-stale"]) });
+		assert.deepEqual(result.candidates, []);
+		assert.equal(result.verdicts[0]?.reason, "status");
+	});
+
+	it("stale-quarantined takes precedence over deferred", () => {
+		const both = candidate("both", { item: { ...candidate("both").item, deferred: true } });
+		const result = evaluate([both], { staleQuarantinedIds: new Set(["both"]) });
+		assert.equal(result.verdicts[0]?.reason, "stale-quarantined");
+	});
+
+	it("an id absent from the quarantine set (e.g. sticky keep) stays eligible", () => {
+		const candidates = [candidate("kept", { fifoOrdinal: 0 })];
+		const result = evaluate(candidates, { staleQuarantinedIds: new Set<string>() });
+		assert.deepEqual(
+			result.candidates.map(({ item }) => item.id),
+			["kept"],
+		);
+	});
+
 	it("all-deferred snapshot evaluates successfully with empty candidates", () => {
 		const candidates = [candidate("a", { item: { ...candidate("a").item, deferred: true } }), candidate("b", { item: { ...candidate("b").item, deferred: true } })];
 		const result = evaluate(candidates);

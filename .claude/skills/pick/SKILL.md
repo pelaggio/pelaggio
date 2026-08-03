@@ -64,6 +64,14 @@ Run `npx pelaggio roadmap claim --no-worktree <ID>` instead of the regular claim
    if the list empties). For an explicit `/pick <ID>`: emit
    `pick-result: already-claimed`. The pipeline treats it as recoverable.
 
+   **If the claim exits 4** (stale-quarantined — the staleness sweep (#217) flagged the
+   item as suspected already-implemented or obsolete and quarantined it locally), do NOT
+   retry and do NOT divert to another item. This is not expected in `/pick next` mode (the
+   policy envelope already excludes quarantined ids); for an explicit `/pick <ID>` emit
+   `pick-result: stale-quarantined` and stop. The stderr names the reason, the evidence, and
+   the `npx pelaggio roadmap stale-resolve <ID> --as done|keep` command an operator runs to
+   clear it. The pipeline treats it as recoverable.
+
 2. Install deps: `npx pelaggio worktree-deps "$WORKTREE"`. When the worktree's `pnpm-lock.yaml` matches the main repo's, this symlinks `node_modules` to MAIN_REPO's instead of running a fresh install — fast and avoids I/O contention between parallel worktrees. On lockfile drift or a missing main `node_modules`, it falls through to `pnpm install --frozen-lockfile --silent`. The helper prints the action taken (`link` / `noop` / `install` / `reinstall` / `relink`).
 
 3. Report: item, branch, worktree, related docs, dependencies.
@@ -91,8 +99,9 @@ pick-result: <tag>
 | `worktree-exists` | `/pick <ID>` where the `feat/<id-lower>-*` branch already exists. |
 | `already-claimed` | `roadmap claim` exited 3 — another pick raced you to the `feat/<id>` branch. |
 | `queue-empty` | `/pick next [topic]` whose ranked list is empty after filtering blocked and in-progress items. |
+| `stale-quarantined` | `roadmap claim` exited 4 — the item is staleness-quarantined (#217) and needs `stale-resolve` before it can be picked. |
 
 The pipeline parses this line to decide whether the cycle continues (recoverable:
-`queue-empty`, `worktree-exists`, `already-claimed`, `already-done`) or halts
-(`blocked`, `unknown-id`). Restating the tag in a summary paragraph is fine — the
+`queue-empty`, `worktree-exists`, `already-claimed`, `already-done`, `stale-quarantined`)
+or halts (`blocked`, `unknown-id`). Restating the tag in a summary paragraph is fine — the
 pipeline uses the last occurrence.
