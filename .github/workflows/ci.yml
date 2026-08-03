@@ -17,6 +17,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
 
@@ -28,7 +30,11 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r test
       - run: pnpm test:ci
-      - run: pnpm --filter @pelaggio/web check:types
+      - run: pnpm typecheck
+      - run: pnpm typecheck:ratchet -- --base-ref origin/${{ github.base_ref }}
+        if: github.event_name == 'pull_request'
+      - run: pnpm typecheck:ratchet
+        if: github.event_name != 'pull_request'
       - run: pnpm --filter @pelaggio/web build
       - run: pnpm check
       - run: pnpm check:skills

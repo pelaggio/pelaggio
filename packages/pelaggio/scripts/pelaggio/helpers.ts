@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import { basename, dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveArtifactRoot } from "./artifact-root.js";
-import { CONFIG, LOG_PATH, REPO, resolveProviderBin, STEPS, WORKTREE_PREFIX } from "./config.js";
+import { CONFIG, isPipelineStep, LOG_PATH, type PipelineStep, REPO, resolveProviderBin, STEPS, WORKTREE_PREFIX } from "./config.js";
 import { MarkdownRoadmap } from "./roadmap/markdown.js";
 import type { CreateItemOpts, RoadmapSource } from "./roadmap/types.js";
 import type { CycleDriverProvenance, CycleGitBinding, CycleVersionProvenance, Decision, Mutex, ProviderName, Step, StepLog, StepResult } from "./types.js";
@@ -262,9 +262,9 @@ export function createMainCheckoutDeltaObserver(root: string): MainCheckoutDelta
 
 // ── Pick result parsing ────────────────────────────────────────────────
 
-export type PickReason = "claimed" | "blocked" | "unknown-id" | "already-done" | "worktree-exists" | "already-claimed" | "queue-empty";
+export type PickReason = "claimed" | "blocked" | "unknown-id" | "already-done" | "worktree-exists" | "already-claimed" | "queue-empty" | "stale-quarantined";
 
-const PICK_REASONS: ReadonlySet<PickReason> = new Set(["claimed", "blocked", "unknown-id", "already-done", "worktree-exists", "already-claimed", "queue-empty"]);
+const PICK_REASONS: ReadonlySet<PickReason> = new Set(["claimed", "blocked", "unknown-id", "already-done", "worktree-exists", "already-claimed", "queue-empty", "stale-quarantined"]);
 
 /**
  * Parse a structured `pick-result: <tag>` trailing line from the /pick skill output.
@@ -1184,9 +1184,12 @@ export function detectResumeStep(itemId: string, worktree: string): Step {
 					if (!lastStep.ok && lastStep.name === "implement") return "implement";
 					if (lastStep.name === "shakedown-plan" && lastStep.verdict === "RETHINK") return "plan";
 					if (lastOk >= 0) {
-						const okStepName = steps[lastOk].name as Step;
-						const idx = STEPS.indexOf(okStepName);
-						if (idx >= 0 && idx < STEPS.length - 1) return STEPS[idx + 1];
+						const okStepName = steps[lastOk].name;
+						if (typeof okStepName === "string" && isPipelineStep(okStepName)) {
+							const idx = STEPS.indexOf(okStepName);
+							if (idx >= 0 && idx < STEPS.length - 1) return STEPS[idx + 1];
+							return "ship";
+						}
 						return "ship";
 					}
 				}
@@ -1218,7 +1221,7 @@ export function detectResumeStep(itemId: string, worktree: string): Step {
 	return "shakedown-code";
 }
 
-export type LoggedDriverIdentity = { provider: "codex"; codexModel?: string } | { provider: "claude" | "grok"; model?: string };
+export type LoggedDriverIdentity = { provider: "codex"; codexModel?: string } | { provider: "claude" | "grok" | "opencode"; model?: string };
 
 /** Find the latest successful realized author across all cycle entries for an item. */
 export function findLoggedArtifactAuthor(itemId: string, step: "plan" | "implement", logPath = LOG_PATH): LoggedDriverIdentity | undefined {
@@ -1236,7 +1239,8 @@ export function findLoggedArtifactAuthor(itemId: string, step: "plan" | "impleme
 				const logged = value as Record<string, unknown>;
 				if (logged.name !== step || logged.ok !== true) continue;
 				if (logged.provider === "codex") return typeof logged.model === "string" && logged.model !== "default" ? { provider: "codex", codexModel: logged.model } : { provider: "codex" };
-				if (logged.provider === "claude" || logged.provider === "grok") return typeof logged.model === "string" && logged.model !== "default" ? { provider: logged.provider, model: logged.model } : { provider: logged.provider };
+				if (logged.provider === "claude" || logged.provider === "grok" || logged.provider === "opencode")
+					return typeof logged.model === "string" && logged.model !== "default" ? { provider: logged.provider, model: logged.model } : { provider: logged.provider };
 				return undefined;
 			}
 		}
@@ -1255,7 +1259,7 @@ export function appendLog(entry: Record<string, unknown>): void {
 
 // ── Step index ─────────────────────────────────────────────────────────
 
-export function stepIndex(s: Step): number {
+export function stepIndex(s: PipelineStep): number {
 	return STEPS.indexOf(s);
 }
 

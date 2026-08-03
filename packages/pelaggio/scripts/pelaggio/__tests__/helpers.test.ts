@@ -380,7 +380,8 @@ describe("createMainCheckoutDeltaObserver", () => {
 
 		const open = createMainCheckoutDeltaObserver(makeFeatRepo());
 		open.beforeTool("open");
-		assert.match(open.finish().kind === "error" ? open.finish().message : "", /unclosed/);
+		const openFinish = open.finish();
+		assert.match(openFinish.kind === "error" ? openFinish.message : "", /unclosed/);
 
 		const broken = createMainCheckoutDeltaObserver(join(tmpdir(), "does-not-exist-pelaggio"));
 		assert.equal(broken.beforeTool("x").kind, "error");
@@ -1005,6 +1006,10 @@ describe("parsePickResult", () => {
 
 	it("parses queue-empty", () => {
 		assert.equal(parsePickResult("pick-result: queue-empty"), "queue-empty");
+	});
+
+	it("parses stale-quarantined (#217)", () => {
+		assert.equal(parsePickResult("pick-result: stale-quarantined"), "stale-quarantined");
 	});
 
 	it("last occurrence wins", () => {

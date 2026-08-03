@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pelaggio.dev/ai-delivery/v0.1/execution-receipt.schema.json",
+  "title": "Pelaggio effects-manifest execution receipt v1",
+  "description": "Harness-issued, content-addressed receipt for a successfully dispatched effects manifest. Proves what the local Pelaggio harness accepted and dispatched at the effects seam after every handler succeeded and before the successful manifest was deleted. It does not prove that a model performed opaque tool work, that a provider identity is cryptographically authenticated, that CI ran on a trusted runner, or that the host is uncompromised.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "kind",
+    "challengeDigest",
+    "itemId",
+    "runId",
+    "step",
+    "attempt",
+    "worktree",
+    "preGit",
+    "postGit",
+    "provider",
+    "model",
+    "issuedAt",
+    "completedAt",
+    "manifestDigest",
+    "dispatch"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "kind": { "const": "effects-manifest" },
+    "challengeDigest": {
+      "$ref": "#/$defs/sha256",
+      "description": "Domain-separated SHA-256 of the per-cycle challenge held only in process memory. Never the raw challenge bytes."
+    },
+    "itemId": { "type": "string" },
+    "runId": { "type": "string", "minLength": 1 },
+    "step": { "type": "string", "minLength": 1 },
+    "attempt": { "type": "integer", "minimum": 0 },
+    "worktree": {
+      "type": ["string", "null"],
+      "description": "Normalized worktree identity (relative-to-main or basename), same rules as CycleGitBinding.worktree."
+    },
+    "preGit": {
+      "$ref": "#/$defs/gitRevisionBinding",
+      "description": "Git object-ID binding at step start (preGit.headSha is the step's preSha). Never an in-toto subject SHA-256."
+    },
+    "postGit": {
+      "$ref": "#/$defs/gitRevisionBinding",
+      "description": "Git object-ID binding observed after handlers complete."
+    },
+    "provider": { "enum": ["claude", "codex", "grok"] },
+    "model": { "type": "string", "minLength": 1 },
+    "issuedAt": { "type": "string", "format": "date-time" },
+    "completedAt": { "type": "string", "format": "date-time" },
+    "manifestDigest": {
+      "$ref": "#/$defs/sha256",
+      "description": "Domain-separated SHA-256 of the exact pre-delete effects-manifest file bytes (UTF-8)."
+    },
+    "dispatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["outcome", "effectKinds"],
+      "properties": {
+        "outcome": { "const": "completed" },
+        "effectKinds": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Ordered effect kinds from the validated manifest."
+        }
+      }
+    },
+    "appendTextDigest": {
+      "$ref": "#/$defs/sha256",
+      "description": "Optional domain-separated SHA-256 of concatenated handler appendText when present."
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "maxLength": 64, "pattern": "^[0-9a-f]{64}$" },
+    "gitRevisionBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["headSha", "branch"],
+      "properties": {
+        "headSha": { "type": ["string", "null"] },
+        "branch": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

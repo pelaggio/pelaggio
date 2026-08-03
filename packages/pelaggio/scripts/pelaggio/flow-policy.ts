@@ -1,4 +1,4 @@
-import type { RoadmapItemStatus } from "./roadmap/types.js";
+import { type RoadmapItemStatus, SCOPE_NAMES, type Scope } from "./roadmap/types.js";
 
 export interface QuickScopeInput {
 	readonly item?: Pick<RoadmapItemStatus, "body" | "labels"> | null;
@@ -24,9 +24,13 @@ export interface FlowSnapshot {
 	readonly candidates: readonly FlowCandidate[];
 	readonly readiness: FlowReadiness;
 	readonly topic?: string;
+	/** Active staleness-quarantine ids (fingerprint-validated by the caller, #217). Harness-local
+	 *  policy input — never a storage/adapter field. Excluded items surface reason `stale-quarantined`. */
+	readonly staleQuarantinedIds?: ReadonlySet<string>;
+	readonly maxScope?: Scope;
 }
 
-export type FlowVerdictReason = "eligible" | "status" | "deferred" | "not-native-ready" | "dependency" | "unresolved-dependency" | "topic";
+export type FlowVerdictReason = "eligible" | "status" | "stale-quarantined" | "deferred" | "over-scope" | "not-native-ready" | "dependency" | "unresolved-dependency" | "topic";
 
 export interface FlowItemVerdict {
 	readonly id: string;
@@ -68,10 +72,19 @@ function verdict(candidate: FlowCandidate, snapshot: FlowSnapshot, nativeReadyId
 	if (excludedStatus(candidate.item.status)) {
 		return { id: candidate.item.id, eligible: false, reason: "status", blockers: [candidate.item.status] };
 	}
+	// Staleness quarantine (#217): suspected already-done/obsolete open items. After status (so
+	// done/blocked never read as "stale") but before deferred — a quarantined item's actionable
+	// reason is the staleness resolve, not its curation flag.
+	if (snapshot.staleQuarantinedIds?.has(candidate.item.id)) {
+		return { id: candidate.item.id, eligible: false, reason: "stale-quarantined", blockers: [] };
+	}
 	// Deferred is curated backlog (not dependency failure). After status so done/blocked/
 	// in-progress deferred items still surface as `status` for explicit-pick display.
 	if (candidate.item.deferred === true) {
 		return { id: candidate.item.id, eligible: false, reason: "deferred", blockers: [] };
+	}
+	if (snapshot.maxScope && candidate.item.scope && SCOPE_NAMES.indexOf(candidate.item.scope) > SCOPE_NAMES.indexOf(snapshot.maxScope)) {
+		return { id: candidate.item.id, eligible: false, reason: "over-scope", blockers: [candidate.item.scope] };
 	}
 	if (snapshot.readiness.kind === "native" && !nativeReadyIds.has(normalize(candidate.item.id))) {
 		return { id: candidate.item.id, eligible: false, reason: "not-native-ready", blockers: [] };

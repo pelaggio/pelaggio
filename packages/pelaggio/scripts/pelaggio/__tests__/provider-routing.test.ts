@@ -6,6 +6,7 @@ import { describe, it } from "node:test";
 import { CODEX_CAPABILITIES } from "../codex-provider.js";
 import { DEFAULTS, loadConfig, type ResolvedConfig } from "../config.js";
 import { grokCapabilities } from "../grok-provider.js";
+import { OPENCODE_CAPABILITIES } from "../opencode-provider.js";
 import { matchEligibleProviders, matchesCapabilityPredicate, resolveAuthoringReviewConfig, softDegradedAxes } from "../provider-routing.js";
 import { CLAUDE_CAPABILITIES } from "../step-runner.js";
 import type { ProviderCapabilities, ProviderName } from "../types.js";
@@ -16,6 +17,7 @@ const ALL_CAPS: Record<ProviderName, ProviderCapabilities> = {
 	// Routing matrix tests exercise the fail-closed configuration where Landlock
 	// is required; fallback-mode descriptor honesty is covered in step-runner tests.
 	grok: grokCapabilities(false),
+	opencode: OPENCODE_CAPABILITIES,
 };
 
 function baseConfig(over: Partial<ResolvedConfig["review"]["authoring"]> = {}): ResolvedConfig {
@@ -235,7 +237,9 @@ describe("resolveAuthoringReviewConfig — fixed-seat overlay", () => {
 				{ id: "grk", provider: "grok" },
 			],
 		);
-		assert.equal(result.policy.judge.model, "claude-judge");
+		const judge = result.policy.judge;
+		assert.ok(judge.provider !== "codex");
+		assert.equal(judge.model, "claude-judge");
 		const cdx = result.policy.reviewers.find((r) => r.provider === "codex");
 		assert.ok(cdx && cdx.provider === "codex" && cdx.codexModel === "gpt-review");
 	});

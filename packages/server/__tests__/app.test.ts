@@ -39,8 +39,11 @@ function makeRoadmap(items: RoadmapItem[]): RoadmapSource {
 		markDone: async () => {},
 		archivePlan: async () => {},
 		createItem: async () => items[0]!,
-		planPath: async () => "x.md",
+		getItemPlan: async () => null,
+		resolvePlanPath: () => "x.md",
 		publishPlan: async () => {},
+		isCharterPickRace: () => false,
+		parseItemId: async () => null,
 	} satisfies RoadmapSource;
 }
 

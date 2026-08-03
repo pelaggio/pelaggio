@@ -235,8 +235,8 @@ models:
 ### Provider and Codex model overrides
 
 `providers` is the sibling sub-block that selects the backend for a step. The
-registered backends are `claude` (default), `codex`, and `grok`. Set a step to
-another provider to route it there:
+registered backends are `claude` (default), `codex`, `grok`, and `opencode`. Set
+a step to another provider to route it there:
 
 ```yaml
 models:
@@ -281,6 +281,17 @@ Landlock preflight, metering, and trust limits. Its off-PATH binary must be
 pinned via `providers.grok.bin` (see [Provider binaries](#provider-binaries)).
 A `grok` model id can be pinned in that profile's `<step>` slot (a `claude-*` id is
 never forwarded); otherwise the grok CLI default applies.
+
+The `opencode` provider drives `opencode run --format json` as a headless
+subprocess (issue #137), fronting OpenCode's 75+ model backends on the same seam.
+Follow the [OpenCode operator guide](./opencode.md) for install, authentication,
+the autonomous-permission env, and trust limits. Its off-PATH binary can be
+pinned via `providers.opencode.bin`. Address a backend model in that profile's
+`<step>` slot using OpenCode's `provider/model` form (for example
+`anthropic/claude-sonnet-4-5` or `openai/gpt-5`); a bare `claude-*` id is never
+forwarded, so the OpenCode CLI default applies when only such an id is present.
+Unlike Codex, OpenCode uses the shared `model` slot — there is no `opencode`
+model sub-block. OpenCode is not a default authoring reviewer; opt in per profile.
 
 When a step runs on Codex, an optional `codex` sub-block selects the Codex model
 for that step:
@@ -446,9 +457,17 @@ scope heuristics. Invalid values fail loudly at startup.
 | `linear`        | ready  | Linear via `@linear/sdk`                           |
 | `beads`         | ready  | Beads issues via the `bd --json` CLI               |
 
-Skill bodies (`/pick`, `/plan`, `/ship`, `/charter`, `/status`, `/pickup`,
-`/shakedown`, `/tidy`) are adapter-agnostic — all roadmap access flows through
-`npx pelaggio roadmap ...`, which dispatches to the configured source.
+Skill bodies (`/pick`, `/plan`, `/ship`, `/charter`, `/decompose`, `/status`,
+`/pickup`, `/shakedown`, `/tidy`) are adapter-agnostic — all roadmap access flows
+through `npx pelaggio roadmap ...`, which dispatches to the configured source.
+
+### `pick.max-scope`
+
+The automatic `roadmap next` readiness gate admits declared scopes up to
+`pick.max-scope` (default `M`). Items declaring `L` or `XL` are therefore
+excluded by default until decomposed. Explicit `--item <id>` and `/pick <id>`
+runs bypass this gate as an operator override. Set the threshold to `XL` to
+disable scope filtering; items without a declared scope are never gated.
 
 ### `github-issues`
 
@@ -484,8 +503,8 @@ then the most recent issue comment whose body begins with the
 
 #### Curation labels
 
-Projection and automatic selection use **labels as the sole runtime source of
-truth** (body text is not consulted at read time):
+Priority and deferred projection use **labels as the sole runtime source of
+truth** (body text is not consulted for those fields at read time):
 
 | Label             | Effect |
 |-------------------|--------|

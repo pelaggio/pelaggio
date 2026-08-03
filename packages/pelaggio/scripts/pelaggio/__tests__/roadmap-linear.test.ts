@@ -81,6 +81,9 @@ function makeStub(opts: StubOpts = {}): { api: LinearApi; calls: ApiCalls } {
 			calls.getIssueComments.push(identifier);
 			return opts.comments?.[identifier] ?? [];
 		},
+		async createIssue(input) {
+			return { id: "uuid-new", identifier: "ENG-99", title: input.title };
+		},
 	};
 	return { api, calls };
 }
@@ -130,6 +133,28 @@ describe("LinearRoadmap.getItem", () => {
 		const r = mk({ repo: "/tmp", api });
 		const item = await r.getItem("ENG-42");
 		assert.deepEqual(item?.labels, ["autopilot", "scope: L"]);
+	});
+
+	it("projects description into body (null becomes empty string)", async () => {
+		const { api } = makeStub({
+			issuesByIdentifier: {
+				"ENG-10": {
+					id: "uuid-10",
+					identifier: "ENG-10",
+					title: "With body",
+					description: "Scope: L\n\nDeliver the full workflow.",
+				},
+				"ENG-11": {
+					id: "uuid-11",
+					identifier: "ENG-11",
+					title: "Null description",
+					description: null,
+				},
+			},
+		});
+		const r = mk({ repo: "/tmp", api });
+		assert.equal((await r.getItem("ENG-10"))?.body, "Scope: L\n\nDeliver the full workflow.");
+		assert.equal((await r.getItem("ENG-11"))?.body, "");
 	});
 
 	it("derives blockers from incoming blocks relations and preserves done precedence", async () => {

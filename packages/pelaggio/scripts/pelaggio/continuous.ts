@@ -176,7 +176,10 @@ export interface QueueProbeResult {
  */
 export async function freeQueueProbe(roadmap: RoadmapSource, flowPolicy: FlowPolicy, topic?: string): Promise<QueueProbeResult> {
 	const items = await roadmap.listItems({ includeDone: true });
-	const evaluation = flowPolicy.evaluate(buildFlowSnapshot(items, topic));
+	// Match the pick agent's #201 over-scope gate so the probe's readiness count
+	// agrees with what a pick would actually claim.
+	const { CONFIG } = await import("./config.js");
+	const evaluation = flowPolicy.evaluate(buildFlowSnapshot(items, { topic, maxScope: CONFIG.pick.maxScope }));
 	const readyCount = evaluation.candidates.length;
 	return { empty: readyCount === 0, readyCount };
 }

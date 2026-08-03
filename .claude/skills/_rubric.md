@@ -46,11 +46,13 @@ npx tsx -e "import('./packages/pelaggio/scripts/pelaggio/config.ts')"           
 npx tsx -e "import('./packages/pelaggio/scripts/pelaggio/helpers.ts')"                       # parse-check helpers
 npx tsx -e "import('./packages/pelaggio/scripts/pelaggio/pipeline.ts')"                      # parse-check pipeline
 npx tsx -e "import('./packages/server/src/app.ts')"                                            # parse-check server entry
+pnpm typecheck                                                               # ordinary gate: pelaggio+server tsc --noEmit (relaxed noUncheckedIndexedAccess) + web astro check
+pnpm typecheck:ratchet                                                       # strict non-web debt: diagnostic count may only fall (except governed root-TS bump)
 pnpm check                                                                   # biome (exit 0 on success — output is already compact)
 pnpm check:skills                                                            # lint .claude/skills/*/SKILL.md frontmatter + includes
 ```
 
-All must succeed. No formal `pnpm typecheck` setup — tsx handles transpilation via swc and we rely on runtime parse-checks.
+All must succeed. `pnpm typecheck` is the ordinary compiler gate (package configs temporarily set `noUncheckedIndexedAccess: false`; base stays true; web stays full-strict under `astro check`). `pnpm typecheck:ratchet` measures shadow strict configs and fails if either non-web package exceeds `ci/typecheck-baseline.json` (counts may only decrease, except a root lockfile TypeScript bump authorized by an exact PR-body delta marker). ADR-0025 will later consolidate this interim policy.
 
 **Reporter choice matters for token cost.** Inside pelaggio cycles, verification stdout lands in the agent's event stream and counts as tool-result tokens. Default `node:test` spec reporter emits ~20-30 tokens per test — at 100+ tests a verification pass costs ~2k tokens; at 3500+ tests (fathom scale) it costs ~100k tokens per pass × 3 passes per cycle. **Always use a terse reporter in the rubric's verification commands.** Equivalents by framework: `node:test --test-reporter=dot`, `vitest --reporter=dot`, `jest --silent --reporters=summary`, `biome check --reporter=summary`. Verbose output is for humans debugging a failure, not for pelaggio to re-confirm success.
 

@@ -1,5 +1,5 @@
 import { chmod, rm } from "node:fs/promises";
-import { createServer, type IncomingHttpHeaders, type IncomingMessage, type RequestOptions, type ServerResponse } from "node:http";
+import { createServer, type IncomingHttpHeaders, type IncomingMessage, type OutgoingHttpHeaders, type RequestOptions, type ServerResponse } from "node:http";
 import { request as httpsRequest } from "node:https";
 
 export type EgressAuth = { kind: "key"; env: string; header: "authorization" | "x-api-key"; scheme?: "Bearer" } | { kind: "transparent" };
@@ -23,6 +23,9 @@ export interface EgressLimits {
 	responseBodyBytes: number;
 	requestsPerWindow: number;
 	windowMs: number;
+	// Consecutive rate-limit (requestsPerWindow) breaches tolerated before the soft throttle
+	// escalates to a hard seal+kill — bounds a client that ignores Retry-After forever.
+	rateLimitRetryBudget: number;
 	requestsPerRun: number;
 	inputTokens: number;
 	outputTokens: number;
@@ -132,8 +135,8 @@ async function defaultRequester(options: RequestOptions, body: Buffer, limit: nu
 	});
 }
 
-function genericError(response: ServerResponse, status: number): void {
-	response.writeHead(status, { "content-type": "application/json" });
+function genericError(response: ServerResponse, status: number, headers: OutgoingHttpHeaders = {}): void {
+	response.writeHead(status, { "content-type": "application/json", ...headers });
 	response.end('{"error":"egress request denied"}');
 }
 
@@ -150,6 +153,7 @@ export async function startEgressBroker(options: StartEgressBrokerOptions, deps:
 	let reservedOutput = 0;
 	let reservedSpend = 0;
 	let windowStarts: number[] = [];
+	let rateLimitStrikes = 0;
 	let fatalResolve!: (error: Error) => void;
 	const fatal = new Promise<Error>((resolve) => {
 		fatalResolve = resolve;
@@ -207,17 +211,29 @@ export async function startEgressBroker(options: StartEgressBrokerOptions, deps:
 			const spend = input * route.inputMicroUsdPerToken[model] + output * route.outputMicroUsdPerToken[model];
 			const time = now();
 			windowStarts = windowStarts.filter((stamp) => time - stamp < options.policy.limits.windowMs);
-			const cap =
+			const hardCapExceeded =
 				requests + 1 > options.policy.limits.requestsPerRun ||
-				windowStarts.length + 1 > options.policy.limits.requestsPerWindow ||
 				reservedInput + input > options.policy.limits.inputTokens ||
 				reservedOutput + output > options.policy.limits.outputTokens ||
 				reservedSpend + spend > options.policy.limits.spendMicroUsd;
-			if (cap) {
+			if (hardCapExceeded) {
 				record(request, path, "fatal", 429, { rule: route.id, requestBytes: bodyBytes, inputTokens: input, outputTokens: output, spendMicroUsd: spend });
 				signalFatal(new Error("egress hard cap exceeded"));
 				return genericError(response, 429);
 			}
+			if (windowStarts.length + 1 > options.policy.limits.requestsPerWindow) {
+				rateLimitStrikes += 1;
+				const oldestStart = windowStarts[0] ?? time;
+				const retryAfterSeconds = Math.max(1, Math.ceil((oldestStart + options.policy.limits.windowMs - time) / 1000));
+				if (rateLimitStrikes > options.policy.limits.rateLimitRetryBudget) {
+					record(request, path, "fatal", 429, { rule: route.id, requestBytes: bodyBytes, inputTokens: input, outputTokens: output, spendMicroUsd: spend });
+					signalFatal(new Error("egress rate limit retry budget exceeded"));
+					return genericError(response, 429);
+				}
+				record(request, path, "denied", 429, { rule: route.id, requestBytes: bodyBytes });
+				return genericError(response, 429, { "retry-after": String(retryAfterSeconds) });
+			}
+			rateLimitStrikes = 0;
 			requests += 1;
 			windowStarts.push(time);
 			reservedInput += input;
@@ -248,9 +264,8 @@ export async function startEgressBroker(options: StartEgressBrokerOptions, deps:
 				(!Number.isSafeInteger(actualInput) || !Number.isSafeInteger(actualOutput) || (actualInput as number) < 0 || (actualOutput as number) < 0 || (actualInput as number) > input || (actualOutput as number) > output)
 			)
 				throw new Error("unaccountable upstream usage");
-			const safeHeaders: Record<string, string | readonly string[]> = {};
-			for (const [name, value] of Object.entries(result.headers)) if (!HOP_HEADERS.has(name) && !SENSITIVE_RESPONSE_HEADERS.has(name) && value !== undefined) safeHeaders[name] = value;
-			response.writeHead(result.status, safeHeaders);
+			response.statusCode = result.status;
+			for (const [name, value] of Object.entries(result.headers)) if (!HOP_HEADERS.has(name) && !SENSITIVE_RESPONSE_HEADERS.has(name) && name !== "content-length" && value !== undefined) response.setHeader(name, value);
 			response.end(result.body);
 			record(request, path, "allowed", result.status, { rule: route.id, requestBytes: bodyBytes, responseBytes: result.body.length, inputTokens: Number(actualInput) || 0, outputTokens: Number(actualOutput) || 0, spendMicroUsd: spend });
 		} catch {
