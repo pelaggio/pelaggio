@@ -608,20 +608,26 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			const prUrl = name === "ship" || name === "shipwreck" ? extractPrUrl(result) : undefined;
 			const source = prUrl ?? (itemId ? (ROADMAP_SOURCE === "github-issues" && ROADMAP_GITHUB.ghRepo ? `https://github.com/${ROADMAP_GITHUB.ghRepo}/issues/${itemId.replace(/^\D+/, "")}` : itemId) : `unclaimed:${runIdBase}`);
 			try {
-				await appendDecisions(mainRepo, {
+				// Write into the step worktree (per-item authority); never redirect to main.
+				await appendDecisions(cwd, {
 					...(itemId ? { itemId } : {}),
 					runId: runIdBase,
 					step: name,
 					attempt,
-					decisions: result.decisions.map((decision, occurrence) => ({ decision, occurrence })),
+					decisions: result.decisions.map((emitted, occurrence) => ({
+						id: emitted.id,
+						contentFingerprint: emitted.contentFingerprint,
+						decision: emitted.decision,
+						occurrence,
+					})),
 					source,
 				});
 			} catch (error) {
 				log(`⚠ decisions: ${error instanceof Error ? error.message : String(error)}`);
 			}
-			for (const decision of result.decisions) {
+			for (const emitted of result.decisions) {
 				try {
-					await opts.notifyDecision?.({ itemId, decision, step: name, source, logPath: opts.logPath ?? LOG_PATH });
+					await opts.notifyDecision?.({ itemId, decision: emitted.decision, step: name, source, logPath: opts.logPath ?? LOG_PATH });
 				} catch (error) {
 					log(`⚠ decision notification: ${error instanceof Error ? error.message : String(error)}`);
 				}
@@ -1352,7 +1358,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		if (REVIEW_CONFIG.authoring.enabled) {
 			const reviewedSha = getHeadSha(worktree!);
 			if (!reviewedSha) return parkExit("adversarial review could not bind current HEAD")!;
-			const existingEscalation = lookupReviewEscalation(mainRepo, itemId!, reviewedSha);
+			const existingEscalation = lookupReviewEscalation(worktree!, itemId!, reviewedSha);
 			if (existingEscalation.state === "active" || existingEscalation.state === "resolved-block" || existingEscalation.state === "invalid") return parkExit(`adversarial review escalation ${existingEscalation.state}`)!;
 			if (existingEscalation.state === "resolved-proceed" && existingEscalation.escalation.hasSafetyBlocker) return parkExit("adversarial review safety blocker")!;
 			// Capability-aware fixed-seat resolution (#337): fill configured seats via settings
@@ -1519,7 +1525,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 					try {
 						// The durable safety action precedes effect attestation. A manifest write or
 						// dispatch failure below must never swallow the escalation or skip parking.
-						const written = await appendReviewEscalation(mainRepo, escalation);
+						const written = await appendReviewEscalation(worktree!, escalation);
 						if (written.status !== "failed")
 							await opts.notifyDecision?.({
 								itemId,
@@ -1529,7 +1535,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 								logPath: opts.logPath ?? LOG_PATH,
 								escalation: { ...escalation, id: written.ids[0] },
 							});
-						const state = lookupReviewEscalation(mainRepo, itemId!, finalReviewedSha);
+						const state = lookupReviewEscalation(worktree!, itemId!, finalReviewedSha);
 						if (written.status === "failed" || state.state !== "resolved-proceed" || escalation.hasSafetyBlocker) escalationParkReason = `adversarial review escalation ${written.status === "failed" ? "write-failed" : state.state}`;
 					} catch (error) {
 						log(`⚠ adversarial review escalation write failed: ${error instanceof Error ? error.message : String(error)}`);

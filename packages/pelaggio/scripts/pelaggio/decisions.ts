@@ -1,15 +1,23 @@
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
+import { listWorktreesIn, parseDecisions } from "./helpers.js";
 import { withMutationLock } from "./roadmap/mutation-lock.js";
-import type { Decision, ReviewEscalation, ReviewResolution, Step } from "./types.js";
+import type { Decision, EmittedDecision, ReviewEscalation, ReviewResolution, Step } from "./types.js";
 
 export const DECISIONS_HEADER = "| Decision | Status | Chosen/leaning | Alternatives | Source | Date |";
 const RULE = "| --- | --- | --- | --- | --- | --- |";
+const DECISION_ID_RE = /^(?:[a-f0-9]{16}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+const OWNER_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const LEGACY_UNATTRIBUTED = "legacy-unattributed";
+const DECISION_LOG_DIR = "decision-log";
+
 export const DECISIONS_SKELETON = `# Decisions\n\nStatus values are \`default-taken\`, \`resolved\`, or \`resolved→ADR-nnnn\`. Source is an item, pull request, or review-note reference.\n\n## Active\n\n${DECISIONS_HEADER}\n${RULE}\n\n## Resolved\n\n${DECISIONS_HEADER}\n${RULE}\n`;
 
 export interface DecisionAppendInput {
+	id: string;
+	contentFingerprint: string;
 	decision: Decision;
 	occurrence: number;
 }
@@ -31,6 +39,47 @@ export type ReviewEscalationLookup =
 	| { state: "active"; id: string; escalation: ReviewEscalation }
 	| { state: "resolved-proceed" | "resolved-block"; id: string; escalation: ReviewEscalation; resolution: ReviewResolution };
 
+export interface MigrateDecisionsResult {
+	status: "written" | "noop";
+	owners: string[];
+	rows: number;
+	reconciled: number;
+	unattributed: number;
+}
+
+export interface RebuildIndexResult {
+	status: "written" | "noop";
+	rows: number;
+}
+
+interface DedupeCoords {
+	runId: string;
+	step: string;
+	occurrence: number;
+}
+
+interface DecisionMeta {
+	aliases: string[];
+	contentFingerprint?: string;
+	dedupe?: DedupeCoords;
+}
+
+interface StoredDecision {
+	id: string;
+	section: "Active" | "Resolved";
+	cells: string[];
+	meta: DecisionMeta;
+	escalation?: { escalation: ReviewEscalation; resolution?: ReviewResolution };
+	/** Source order within the parsed file (stable for migration/reconcile). */
+	order: number;
+}
+
+interface AuthorityFile {
+	owner: string;
+	active: StoredDecision[];
+	resolved: StoredDecision[];
+}
+
 function cell(value: string | undefined): string {
 	return (value ?? "").replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\r?\n/g, " ").trim();
 }
@@ -39,35 +88,24 @@ function normalize(value: string): string {
 	return value.trim().replace(/\s+/g, " ");
 }
 
-export function decisionId(input: Omit<AppendDecisionsInput, "decisions" | "now" | "source">, row: DecisionAppendInput): string {
-	const d = row.decision;
+function unescapeCell(value: string): string {
+	return value.replace(/\\\|/g, "|").replace(/\\\\/g, "\\");
+}
+
+/** Semantic content fingerprint (full SHA-256 hex). Does not include run/step/attempt/item. */
+export function contentFingerprint(decision: Decision): string {
 	return createHash("sha256")
-		.update([input.itemId ?? input.runId, input.step, input.attempt, row.occurrence, normalize(d.fork), normalize(d.chosen ?? ""), normalize(d.alternatives ?? "")].join("\0"))
-		.digest("hex")
-		.slice(0, 16);
+		.update([normalize(decision.fork), normalize(decision.chosen ?? ""), normalize(decision.alternatives ?? "")].join("\0"))
+		.digest("hex");
 }
 
-function marker(id: string): string {
-	return `<!-- decision:${id} -->`;
-}
-
-const escalationMarker = (value: { escalation: ReviewEscalation; resolution?: ReviewResolution }): string => `<!-- review-escalation:${Buffer.from(JSON.stringify(value)).toString("base64url")} -->`;
-
-export function mainWorktree(repo: string): string {
-	try {
-		const output = execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: repo, encoding: "utf8" });
-		for (const block of output.trim().split(/\n\n+/)) {
-			const lines = block.split("\n");
-			if (lines.includes("branch refs/heads/main")) return lines[0].slice("worktree ".length);
-		}
-	} catch {
-		// `git worktree list` unavailable (non-worktree layout / no git) — fall back to the caller's repo.
-	}
-	// `--no-worktree` / CI: claim leaves only the feature branch checked out, so no worktree holds
-	// `refs/heads/main`. Fall back to the caller's repo — decisions land there and there is no sibling
-	// main to diverge from in that mode. When a main worktree exists (local supervised runs), the loop
-	// above redirects writes to it instead. Never throw: a missing main must not fail decision writes.
-	return repo;
+/** Parse DECISION: sentinels and assign opaque emission IDs + fingerprints. */
+export function emitDecisionsFromText(text: string, createId: () => string = randomUUID): EmittedDecision[] {
+	return parseDecisions(text).map((decision) => ({
+		id: createId(),
+		contentFingerprint: contentFingerprint(decision),
+		decision,
+	}));
 }
 
 export function reviewEscalationId(input: ReviewEscalation): string {
@@ -77,108 +115,49 @@ export function reviewEscalationId(input: ReviewEscalation): string {
 		.slice(0, 16);
 }
 
-export async function appendReviewEscalation(repo: string, escalation: ReviewEscalation, now = new Date()): Promise<DecisionWriteResult> {
-	const id = reviewEscalationId(escalation);
-	try {
-		repo = mainWorktree(repo);
-		return await withMutationLock(repo, () => {
-			const path = resolve(repo, "docs", "decisions.md");
-			let body = existsSync(path) ? readFileSync(path, "utf8").replace(/\r\n/g, "\n") : DECISIONS_SKELETON;
-			if (body.includes(marker(id))) return { status: "duplicate" as const, ids: [id] };
-			const row = `| Cross-model review split for ${cell(escalation.itemId)} | default-taken | Human adjudication required | proceed or block | ${cell(escalation.reviewRecordSource)} | ${now.toISOString().slice(0, 10)} |\n${marker(id)}\n${escalationMarker({ escalation })}\n`;
-			body = insertRows(body, "Active", row);
-			mkdirSync(dirname(path), { recursive: true });
-			writeFileSync(path, body.endsWith("\n") ? body : `${body}\n`);
-			commit(repo, [path], `docs: record review escalation ${id}`);
-			return { status: "written" as const, ids: [id] };
-		});
-	} catch (error) {
-		return { status: "failed", error: error instanceof Error ? error.message : String(error), ids: [] };
+export function validateOwner(owner: string): string {
+	if (!owner || owner !== owner.trim()) throw new Error(`unsafe decision-log owner: ${JSON.stringify(owner)}`);
+	if (owner.includes("/") || owner.includes("\\") || owner.includes("\0") || owner.includes("..") || owner.startsWith(".")) {
+		throw new Error(`unsafe decision-log owner: ${JSON.stringify(owner)}`);
 	}
+	if (!OWNER_RE.test(owner)) throw new Error(`unsafe decision-log owner: ${JSON.stringify(owner)}`);
+	return owner;
 }
 
-function parseEscalationMetadata(block: string): { escalation: ReviewEscalation; resolution?: ReviewResolution } {
-	const matches = [...block.matchAll(/<!-- review-escalation:([A-Za-z0-9_-]+) -->/g)];
-	if (matches.length !== 1) throw new Error("review escalation metadata must occur exactly once");
-	const value: unknown = JSON.parse(Buffer.from(matches[0][1], "base64url").toString("utf8"));
-	if (!value || typeof value !== "object" || !("escalation" in value)) throw new Error("malformed review escalation metadata");
-	return value as { escalation: ReviewEscalation; resolution?: ReviewResolution };
+export function ownerForEmission(input: { itemId?: string; runId: string }): string {
+	if (input.itemId !== undefined && input.itemId !== "") return validateOwner(input.itemId);
+	return validateOwner(`run-${input.runId}`);
 }
 
-export function lookupReviewEscalation(repo: string, itemId: string, reviewedSha: string): ReviewEscalationLookup {
-	repo = mainWorktree(repo);
-	const path = resolve(repo, "docs", "decisions.md");
-	if (!existsSync(path)) return { state: "missing" };
-	try {
-		const body = readFileSync(path, "utf8").replace(/\r\n/g, "\n");
-		const entries = [...body.matchAll(/<!-- decision:([a-f0-9]+) -->\n<!-- review-escalation:[A-Za-z0-9_-]+ -->/g)]
-			.map((match) => ({ id: match[1], metadata: parseEscalationMetadata(match[0]), resolved: (match.index ?? 0) > body.indexOf("## Resolved") }))
-			.filter(({ metadata }) => metadata.escalation.itemId === itemId && metadata.escalation.reviewedSha === reviewedSha);
-		if (entries.length === 0) return { state: "missing" };
-		if (entries.length !== 1) return { state: "invalid", error: "multiple review escalations match item and SHA" };
-		const [{ id, metadata, resolved }] = entries;
-		if (reviewEscalationId(metadata.escalation) !== id) return { state: "invalid", error: "review escalation ID does not match its evidence" };
-		if (!resolved) return { state: "active", id, escalation: metadata.escalation };
-		if (!metadata.resolution?.actor.trim() || !metadata.resolution.rationale.trim()) return { state: "invalid", error: "review resolution audit is incomplete" };
-		return { state: metadata.resolution.disposition === "proceed" ? "resolved-proceed" : "resolved-block", id, escalation: metadata.escalation, resolution: metadata.resolution };
-	} catch (error) {
-		return { state: "invalid", error: error instanceof Error ? error.message : String(error) };
-	}
+function validateDecisionId(id: string): string {
+	if (!DECISION_ID_RE.test(id)) throw new Error(`invalid decision ID: ${id}`);
+	return id;
 }
 
-function insertRows(body: string, heading: "Active" | "Resolved", rows: string): string {
-	const start = body.indexOf(`## ${heading}`);
-	if (start < 0) throw new Error(`decisions register missing ${heading} section`);
-	const rule = body.indexOf(RULE, start);
-	if (rule < 0) throw new Error(`decisions register missing ${heading} table`);
-	const at = body.indexOf("\n", rule) + 1;
-	return `${body.slice(0, at)}${rows}${body.slice(at)}`;
+function marker(id: string): string {
+	return `<!-- decision:${id} -->`;
 }
 
-function commit(repo: string, paths: string[], message: string): void {
-	const rel = paths.map((path) => relative(repo, path));
-	execFileSync("git", ["add", "--", ...rel], { cwd: repo, stdio: "pipe" });
-	execFileSync("git", ["commit", "--no-verify", "-m", message, "--", ...rel], { cwd: repo, stdio: "pipe" });
+function metaMarker(meta: DecisionMeta): string {
+	const payload: Record<string, unknown> = {};
+	if (meta.aliases.length) payload.aliases = meta.aliases;
+	if (meta.contentFingerprint) payload.contentFingerprint = meta.contentFingerprint;
+	if (meta.dedupe) payload.dedupe = meta.dedupe;
+	return `<!-- decision-meta:${Buffer.from(JSON.stringify(payload)).toString("base64url")} -->`;
 }
 
-export async function appendDecisions(repo: string, input: AppendDecisionsInput): Promise<DecisionWriteResult> {
-	try {
-		repo = mainWorktree(repo);
-		return await withMutationLock(repo, () => {
-			const path = resolve(repo, "docs", "decisions.md");
-			let body = existsSync(path) ? readFileSync(path, "utf8").replace(/\r\n/g, "\n") : DECISIONS_SKELETON;
-			const ids = input.decisions.map((row) => decisionId(input, row));
-			const fresh = input.decisions.filter((_, index) => !body.includes(marker(ids[index])));
-			if (!fresh.length) return { status: "duplicate" as const, ids };
-			const date = (input.now ?? new Date()).toISOString().slice(0, 10);
-			const rows = fresh
-				.map((row) => {
-					const id = decisionId(input, row);
-					return `| ${cell(row.decision.fork)} | default-taken | ${cell(row.decision.chosen)} | ${cell(row.decision.alternatives)} | ${cell(input.source)} | ${date} |\n${marker(id)}\n`;
-				})
-				.join("");
-			body = insertRows(body, "Active", rows);
-			mkdirSync(dirname(path), { recursive: true });
-			writeFileSync(path, body.endsWith("\n") ? body : `${body}\n`);
-			commit(repo, [path], `docs: record ${fresh.length} decision${fresh.length === 1 ? "" : "s"}`);
-			return { status: "written" as const, ids };
-		});
-	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
-		process.stderr.write(`⚠ decisions: ${message}\n`);
-		return { status: "failed", error: message, ids: [] };
-	}
+const escalationMarker = (value: { escalation: ReviewEscalation; resolution?: ReviewResolution }): string => `<!-- review-escalation:${Buffer.from(JSON.stringify(value)).toString("base64url")} -->`;
+
+function decisionLogDir(repo: string): string {
+	return resolve(repo, "docs", DECISION_LOG_DIR);
 }
 
-function rowBlock(body: string, id: string): { start: number; end: number; row: string; block: string } {
-	const needle = marker(id);
-	const markerAt = body.indexOf(needle);
-	if (markerAt < 0 || body.indexOf(needle, markerAt + 1) >= 0) throw new Error(`decision ID must select exactly one row: ${id}`);
-	const rowStart = body.lastIndexOf("\n|", markerAt) + 1;
-	let end = body.indexOf("\n", markerAt) + 1;
-	if (body.slice(end).startsWith("<!-- review-escalation:")) end = body.indexOf("\n", end) + 1;
-	if (rowStart <= 0 || end <= 0 || body.slice(rowStart, markerAt).includes("## ")) throw new Error(`invalid decision row for ID: ${id}`);
-	return { start: rowStart, end, row: body.slice(rowStart, body.indexOf("\n", rowStart)), block: body.slice(rowStart, end) };
+function authorityPath(repo: string, owner: string): string {
+	return resolve(decisionLogDir(repo), `${validateOwner(owner)}.md`);
+}
+
+function archivePath(repo: string, owner: string): string {
+	return resolve(decisionLogDir(repo), "archive", `${validateOwner(owner)}.md`);
 }
 
 function splitRow(row: string): string[] {
@@ -188,58 +167,721 @@ function splitRow(row: string): string[] {
 		.map((part) => part.trim());
 }
 
-export async function resolveDecision(repo: string, id: string, options: { adr?: string; now?: Date; disposition?: "proceed" | "block"; actor?: string; rationale?: string } = {}): Promise<void> {
+function requireMatchGroup(match: RegExpMatchArray, index: number, label: string): string {
+	const value = match[index];
+	if (value === undefined) throw new Error(`missing ${label}`);
+	return value;
+}
+
+function cellAt(cells: string[], index: number): string {
+	return cells[index] ?? "";
+}
+
+function parseMetaPayload(raw: string): DecisionMeta {
+	const value: unknown = JSON.parse(Buffer.from(raw, "base64url").toString("utf8"));
+	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("malformed decision metadata");
+	const obj = value as Record<string, unknown>;
+	const aliases: string[] = [];
+	if (obj.aliases !== undefined) {
+		if (!Array.isArray(obj.aliases) || !obj.aliases.every((a) => typeof a === "string" && DECISION_ID_RE.test(a))) {
+			throw new Error("malformed decision metadata aliases");
+		}
+		aliases.push(...(obj.aliases as string[]));
+	}
+	let contentFingerprint: string | undefined;
+	if (obj.contentFingerprint !== undefined) {
+		if (typeof obj.contentFingerprint !== "string" || !/^[a-f0-9]{64}$/i.test(obj.contentFingerprint)) {
+			throw new Error("malformed decision content fingerprint");
+		}
+		contentFingerprint = obj.contentFingerprint.toLowerCase();
+	}
+	let dedupe: DedupeCoords | undefined;
+	if (obj.dedupe !== undefined) {
+		if (!obj.dedupe || typeof obj.dedupe !== "object" || Array.isArray(obj.dedupe)) throw new Error("malformed decision dedupe coords");
+		const d = obj.dedupe as Record<string, unknown>;
+		if (typeof d.runId !== "string" || typeof d.step !== "string" || typeof d.occurrence !== "number" || !Number.isInteger(d.occurrence) || d.occurrence < 0) {
+			throw new Error("malformed decision dedupe coords");
+		}
+		dedupe = { runId: d.runId, step: d.step, occurrence: d.occurrence };
+	}
+	return { aliases, ...(contentFingerprint ? { contentFingerprint } : {}), ...(dedupe ? { dedupe } : {}) };
+}
+
+function parseEscalationMetadata(encoded: string): { escalation: ReviewEscalation; resolution?: ReviewResolution } {
+	const value: unknown = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+	if (!value || typeof value !== "object" || !("escalation" in value)) throw new Error("malformed review escalation metadata");
+	const obj = value as { escalation: unknown; resolution?: unknown };
+	if (!obj.escalation || typeof obj.escalation !== "object") throw new Error("malformed review escalation metadata");
+	const esc = obj.escalation as Record<string, unknown>;
+	if (esc.kind !== "review-escalation" || typeof esc.itemId !== "string" || typeof esc.reviewedSha !== "string") {
+		throw new Error("malformed review escalation metadata");
+	}
+	return value as { escalation: ReviewEscalation; resolution?: ReviewResolution };
+}
+
+function parseAuthorityBody(body: string, owner: string): AuthorityFile {
+	const normalized = body.replace(/\r\n/g, "\n");
+	const activeAt = normalized.indexOf("## Active");
+	const resolvedAt = normalized.indexOf("## Resolved");
+	if (activeAt < 0 || resolvedAt < 0 || resolvedAt < activeAt) throw new Error(`decision log missing Active/Resolved sections: ${owner}`);
+
+	const entries: StoredDecision[] = [];
+	const rowRe = /^\| (.+) \|\n<!-- decision:([^\s]+) -->\n(?:<!-- decision-meta:([A-Za-z0-9_-]+) -->\n)?(?:<!-- review-escalation:([A-Za-z0-9_-]+) -->\n)?/gm;
+	let order = 0;
+	for (const match of normalized.matchAll(rowRe)) {
+		const full = match[0];
+		const id = validateDecisionId(requireMatchGroup(match, 2, "decision id"));
+		const rowLine = full.split("\n")[0] ?? "";
+		const cells = splitRow(rowLine);
+		if (cells.length !== 6) throw new Error(`decision row must have 6 cells: ${id}`);
+		const metaRaw = match[3];
+		const escRaw = match[4];
+		const meta = metaRaw ? parseMetaPayload(metaRaw) : { aliases: [] as string[] };
+		const escalation = escRaw ? parseEscalationMetadata(escRaw) : undefined;
+		const at = match.index ?? 0;
+		const section: "Active" | "Resolved" = at < resolvedAt ? "Active" : "Resolved";
+		if (escalation && reviewEscalationId(escalation.escalation) !== id) {
+			// Validation deferred to lookup for fail-closed invalid; still store for render fidelity.
+		}
+		entries.push({ id, section, cells, meta, ...(escalation ? { escalation } : {}), order: order++ });
+	}
+
+	// Fail closed on duplicate IDs/aliases within the file.
+	const seen = new Map<string, string>();
+	for (const entry of entries) {
+		const ids = [entry.id, ...entry.meta.aliases];
+		for (const id of ids) {
+			const prev = seen.get(id);
+			if (prev && prev !== entry.id) throw new Error(`duplicate decision ID/alias ${id} in ${owner}`);
+			seen.set(id, entry.id);
+		}
+	}
+
+	return {
+		owner,
+		active: entries.filter((e) => e.section === "Active"),
+		resolved: entries.filter((e) => e.section === "Resolved"),
+	};
+}
+
+function readAuthorityFile(path: string, owner: string): AuthorityFile {
+	if (!existsSync(path)) return { owner, active: [], resolved: [] };
+	return parseAuthorityBody(readFileSync(path, "utf8"), owner);
+}
+
+function renderEntry(entry: StoredDecision): string {
+	const row = `| ${entry.cells.join(" | ")} |\n${marker(entry.id)}\n${metaMarker(entry.meta)}\n`;
+	return entry.escalation ? `${row}${escalationMarker(entry.escalation)}\n` : row;
+}
+
+function renderAuthority(file: AuthorityFile): string {
+	const header = `# Decision log — ${file.owner}\n\nStatus values are \`default-taken\`, \`resolved\`, or \`resolved→ADR-nnnn\`. Source is an item, pull request, or review-note reference.\n\n`;
+	const active = `## Active\n\n${DECISIONS_HEADER}\n${RULE}\n${file.active.map(renderEntry).join("")}`;
+	const resolved = `## Resolved\n\n${DECISIONS_HEADER}\n${RULE}\n${file.resolved.map(renderEntry).join("")}`;
+	const body = `${header}${active}\n${resolved}`;
+	return body.endsWith("\n") ? body : `${body}\n`;
+}
+
+function writeAuthority(repo: string, file: AuthorityFile): string {
+	const path = authorityPath(repo, file.owner);
+	mkdirSync(dirname(path), { recursive: true });
+	writeFileSync(path, renderAuthority(file));
+	return path;
+}
+
+function commit(repo: string, paths: string[], message: string): void {
+	const rel = paths.map((path) => relative(repo, path));
+	execFileSync("git", ["add", "--", ...rel], { cwd: repo, stdio: "pipe" });
+	execFileSync("git", ["commit", "--no-verify", "-m", message, "--", ...rel], { cwd: repo, stdio: "pipe" });
+}
+
+function listOwnerFiles(repo: string): string[] {
+	const dir = decisionLogDir(repo);
+	if (!existsSync(dir)) return [];
+	return readdirSync(dir)
+		.filter((name) => name.endsWith(".md") && name !== "README.md")
+		.map((name) => name.slice(0, -3))
+		.filter((owner) => {
+			try {
+				validateOwner(owner);
+				return true;
+			} catch {
+				return false;
+			}
+		})
+		.sort();
+}
+
+function allEntries(file: AuthorityFile): StoredDecision[] {
+	return [...file.active, ...file.resolved];
+}
+
+function findByIdOrAlias(file: AuthorityFile, id: string): StoredDecision | undefined {
+	return allEntries(file).find((e) => e.id === id || e.meta.aliases.includes(id));
+}
+
+function semanticEqual(a: StoredDecision, b: StoredDecision): boolean {
+	const cellsEqual = a.cells.every((c, i) => normalize(unescapeCell(c)) === normalize(unescapeCell(cellAt(b.cells, i))));
+	if (!cellsEqual) return false;
+	if (Boolean(a.escalation) !== Boolean(b.escalation)) return false;
+	if (a.escalation && b.escalation) {
+		return JSON.stringify(a.escalation) === JSON.stringify(b.escalation);
+	}
+	const fa =
+		a.meta.contentFingerprint ??
+		contentFingerprint({
+			fork: unescapeCell(cellAt(a.cells, 0)),
+			chosen: unescapeCell(cellAt(a.cells, 2)) || undefined,
+			alternatives: unescapeCell(cellAt(a.cells, 3)) || undefined,
+		});
+	const fb =
+		b.meta.contentFingerprint ??
+		contentFingerprint({
+			fork: unescapeCell(cellAt(b.cells, 0)),
+			chosen: unescapeCell(cellAt(b.cells, 2)) || undefined,
+			alternatives: unescapeCell(cellAt(b.cells, 3)) || undefined,
+		});
+	return fa === fb;
+}
+
+function decisionFromCells(cells: string[]): Decision {
+	const fork = unescapeCell(cellAt(cells, 0));
+	const chosen = unescapeCell(cellAt(cells, 2));
+	const alternatives = unescapeCell(cellAt(cells, 3));
+	return { fork, ...(chosen ? { chosen } : {}), ...(alternatives ? { alternatives } : {}) };
+}
+
+function dedupeKey(runId: string, step: string, occurrence: number, fingerprint: string): string {
+	return [runId, step, String(occurrence), fingerprint].join("\0");
+}
+
+function scanRepoForId(repo: string, id: string): Array<{ repo: string; owner: string; entry: StoredDecision; file: AuthorityFile }> {
+	const hits: Array<{ repo: string; owner: string; entry: StoredDecision; file: AuthorityFile }> = [];
+	for (const owner of listOwnerFiles(repo)) {
+		const file = readAuthorityFile(authorityPath(repo, owner), owner);
+		const entry = findByIdOrAlias(file, id);
+		if (entry) hits.push({ repo, owner, entry, file });
+	}
+	return hits;
+}
+
+function isMainCheckout(repo: string): boolean {
+	try {
+		return execFileSync("git", ["symbolic-ref", "--quiet", "--short", "HEAD"], { cwd: repo, encoding: "utf8" }).trim() === "main";
+	} catch {
+		return false;
+	}
+}
+
+export async function appendDecisions(repo: string, input: AppendDecisionsInput): Promise<DecisionWriteResult> {
+	try {
+		const owner = ownerForEmission(input);
+		return (() => {
+			const path = authorityPath(repo, owner);
+			const file = existsSync(path) ? readAuthorityFile(path, owner) : { owner, active: [], resolved: [] };
+			const ids: string[] = [];
+			const fresh: StoredDecision[] = [];
+			const date = (input.now ?? new Date()).toISOString().slice(0, 10);
+
+			for (const row of input.decisions) {
+				const id = validateDecisionId(row.id);
+				const expectedFp = contentFingerprint(row.decision);
+				if (row.contentFingerprint.toLowerCase() !== expectedFp) {
+					throw new Error(`content fingerprint mismatch for decision ${id}`);
+				}
+				const fingerprint = expectedFp;
+
+				// ID / alias collision with unequal content → fail closed
+				const byId = findByIdOrAlias(file, id);
+				if (byId) {
+					const existingFp = byId.meta.contentFingerprint ?? contentFingerprint(decisionFromCells(byId.cells));
+					if (existingFp !== fingerprint || byId.escalation) {
+						throw new Error(`decision ID collision with unequal content: ${id}`);
+					}
+					ids.push(byId.id);
+					continue;
+				}
+
+				// Retry dedupe: same run + step + occurrence + fingerprint (attempt ignored)
+				const key = dedupeKey(input.runId, input.step, row.occurrence, fingerprint);
+				const byDedupe = allEntries(file).find((e) => e.meta.dedupe && dedupeKey(e.meta.dedupe.runId, e.meta.dedupe.step, e.meta.dedupe.occurrence, e.meta.contentFingerprint ?? "") === key);
+				if (byDedupe) {
+					if ((byDedupe.meta.contentFingerprint ?? "") !== fingerprint) {
+						throw new Error(`dedupe key collision with unequal fingerprint: ${id}`);
+					}
+					ids.push(byDedupe.id);
+					continue;
+				}
+
+				// Dedupe-key collision across different fingerprints already handled; also reject
+				// same coords with different fingerprint when coords match without fingerprint.
+				const coordClash = allEntries(file).find((e) => e.meta.dedupe && e.meta.dedupe.runId === input.runId && e.meta.dedupe.step === input.step && e.meta.dedupe.occurrence === row.occurrence && e.meta.contentFingerprint !== fingerprint);
+				if (coordClash) throw new Error(`dedupe key collision with unequal fingerprint: ${id}`);
+
+				ids.push(id);
+				fresh.push({
+					id,
+					section: "Active",
+					cells: [cell(row.decision.fork), "default-taken", cell(row.decision.chosen), cell(row.decision.alternatives), cell(input.source), date],
+					meta: {
+						aliases: [],
+						contentFingerprint: fingerprint,
+						dedupe: { runId: input.runId, step: input.step, occurrence: row.occurrence },
+					},
+					order: allEntries(file).length + fresh.length,
+				});
+			}
+
+			if (!fresh.length) return { status: "duplicate" as const, ids };
+			file.active.push(...fresh);
+			writeAuthority(repo, file);
+			commit(repo, [path], `docs: record ${fresh.length} decision${fresh.length === 1 ? "" : "s"}`);
+			return { status: "written" as const, ids };
+		})();
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		process.stderr.write(`⚠ decisions: ${message}\n`);
+		return { status: "failed", error: message, ids: [] };
+	}
+}
+
+export async function appendReviewEscalation(repo: string, escalation: ReviewEscalation, now = new Date()): Promise<DecisionWriteResult> {
+	const id = reviewEscalationId(escalation);
+	try {
+		const owner = validateOwner(escalation.itemId);
+		return (() => {
+			const path = authorityPath(repo, owner);
+			const file = existsSync(path) ? readAuthorityFile(path, owner) : { owner, active: [], resolved: [] };
+			const existing = findByIdOrAlias(file, id);
+			if (existing) {
+				if (!existing.escalation || reviewEscalationId(existing.escalation.escalation) !== id) {
+					throw new Error(`decision ID collision with unequal content: ${id}`);
+				}
+				return { status: "duplicate" as const, ids: [id] };
+			}
+			file.active.push({
+				id,
+				section: "Active",
+				cells: [cell(`Cross-model review split for ${escalation.itemId}`), "default-taken", "Human adjudication required", "proceed or block", cell(escalation.reviewRecordSource), now.toISOString().slice(0, 10)],
+				meta: { aliases: [] },
+				escalation: { escalation },
+				order: allEntries(file).length,
+			});
+			writeAuthority(repo, file);
+			commit(repo, [path], `docs: record review escalation ${id}`);
+			return { status: "written" as const, ids: [id] };
+		})();
+	} catch (error) {
+		return { status: "failed", error: error instanceof Error ? error.message : String(error), ids: [] };
+	}
+}
+
+function lookupEscalationInFile(file: AuthorityFile, itemId: string, reviewedSha: string): ReviewEscalationLookup {
+	const matches = allEntries(file).filter((e) => e.escalation && e.escalation.escalation.itemId === itemId && e.escalation.escalation.reviewedSha === reviewedSha);
+	if (matches.length === 0) return { state: "missing" };
+	if (matches.length !== 1) return { state: "invalid", error: "multiple review escalations match item and SHA" };
+	const entry = matches[0];
+	if (!entry?.escalation) return { state: "invalid", error: "review escalation metadata missing" };
+	const metadata = entry.escalation;
+	if (reviewEscalationId(metadata.escalation) !== entry.id) return { state: "invalid", error: "review escalation ID does not match its evidence" };
+	if (entry.section === "Active") return { state: "active", id: entry.id, escalation: metadata.escalation };
+	if (!metadata.resolution?.actor.trim() || !metadata.resolution.rationale.trim()) return { state: "invalid", error: "review resolution audit is incomplete" };
+	return {
+		state: metadata.resolution.disposition === "proceed" ? "resolved-proceed" : "resolved-block",
+		id: entry.id,
+		escalation: metadata.escalation,
+		resolution: metadata.resolution,
+	};
+}
+
+export function lookupReviewEscalation(repo: string, itemId: string, reviewedSha: string): ReviewEscalationLookup {
+	try {
+		const ownerPath = authorityPath(repo, itemId);
+		if (existsSync(ownerPath)) {
+			const file = readAuthorityFile(ownerPath, itemId);
+			const hit = lookupEscalationInFile(file, itemId, reviewedSha);
+			if (hit.state !== "missing") return hit;
+		}
+		// Fallback: scan authority files (alias / mis-owned edge cases).
+		let found: ReviewEscalationLookup | undefined;
+		for (const owner of listOwnerFiles(repo)) {
+			const hit = lookupEscalationInFile(readAuthorityFile(authorityPath(repo, owner), owner), itemId, reviewedSha);
+			if (hit.state === "missing") continue;
+			if (found) return { state: "invalid", error: "multiple review escalations match item and SHA" };
+			found = hit;
+		}
+		return found ?? { state: "missing" };
+	} catch (error) {
+		return { state: "invalid", error: error instanceof Error ? error.message : String(error) };
+	}
+}
+
+function locateDecision(repo: string, id: string): { repo: string; owner: string; entry: StoredDecision; file: AuthorityFile } {
+	validateDecisionId(id);
+	const local = scanRepoForId(repo, id);
+	if (local.length === 1) {
+		const hit = local[0];
+		if (!hit) throw new Error(`decision not found: ${id}`);
+		return hit;
+	}
+	if (local.length > 1) throw new Error(`decision ID matches multiple rows: ${id}`);
+
+	if (isMainCheckout(repo)) {
+		const siblings = listWorktreesIn(repo).filter((wt) => resolve(wt) !== resolve(repo));
+		const hits: Array<{ repo: string; owner: string; entry: StoredDecision; file: AuthorityFile }> = [];
+		for (const wt of siblings) {
+			hits.push(...scanRepoForId(wt, id));
+		}
+		if (hits.length === 1) {
+			const hit = hits[0];
+			if (!hit) throw new Error(`decision not found: ${id}`);
+			return hit;
+		}
+		if (hits.length > 1) throw new Error(`decision ID matches multiple worktrees: ${id}`);
+	}
+	throw new Error(`decision not found: ${id}`);
+}
+
+export async function resolveDecision(repo: string, id: string, options: { adr?: string; now?: Date; disposition?: "proceed" | "block"; actor?: string; rationale?: string } = {}): Promise<string> {
 	if (options.adr && !/^ADR-\d{4}$/i.test(options.adr)) throw new Error("--adr must match ADR-nnnn");
-	repo = mainWorktree(repo);
-	await withMutationLock(repo, () => {
-		const path = resolve(repo, "docs", "decisions.md");
-		const body = readFileSync(path, "utf8").replace(/\r\n/g, "\n");
-		const block = rowBlock(body, id);
-		const activeEnd = body.indexOf("## Resolved");
-		if (block.start >= activeEnd) throw new Error(`decision is not active: ${id}`);
-		const cells = splitRow(block.row);
-		const isEscalation = block.block.includes("<!-- review-escalation:");
-		if (isEscalation && (!options.disposition || !options.actor?.trim() || !options.rationale?.trim())) throw new Error("review escalation resolution requires disposition, actor, and rationale");
+	const located = locateDecision(repo, id);
+	const mutationRepo = located.repo;
+	return withMutationLock(mutationRepo, () => {
+		// Re-read under lock.
+		const file = readAuthorityFile(authorityPath(mutationRepo, located.owner), located.owner);
+		const entry = findByIdOrAlias(file, id);
+		if (!entry) throw new Error(`decision not found: ${id}`);
+		if (entry.section !== "Active") throw new Error(`decision is not active: ${entry.id}`);
+		const isEscalation = Boolean(entry.escalation);
+		if (isEscalation && (!options.disposition || !options.actor?.trim() || !options.rationale?.trim())) {
+			throw new Error("review escalation resolution requires disposition, actor, and rationale");
+		}
+		const cells = [...entry.cells];
 		cells[1] = options.adr ? `resolved→${options.adr.toUpperCase()}` : "resolved";
 		cells[5] = (options.now ?? new Date()).toISOString().slice(0, 10);
-		let moved = `| ${cells.join(" | ")} |\n${marker(id)}\n`;
-		if (isEscalation) {
-			const metadata = parseEscalationMetadata(block.block);
-			moved += `${escalationMarker({ escalation: metadata.escalation, resolution: { disposition: options.disposition!, actor: options.actor!.trim(), rationale: options.rationale!.trim(), timestamp: (options.now ?? new Date()).toISOString(), ...(options.adr ? { adr: options.adr.toUpperCase() } : {}) } })}\n`;
-		}
-		const without = body.slice(0, block.start) + body.slice(block.end);
-		writeFileSync(path, insertRows(without, "Resolved", moved));
-		commit(repo, [path], `docs: resolve decision ${id}`);
+		const moved: StoredDecision = {
+			...entry,
+			section: "Resolved",
+			cells,
+			...(isEscalation
+				? {
+						escalation: {
+							escalation: entry.escalation!.escalation,
+							resolution: {
+								disposition: options.disposition!,
+								actor: options.actor!.trim(),
+								rationale: options.rationale!.trim(),
+								timestamp: (options.now ?? new Date()).toISOString(),
+								...(options.adr ? { adr: options.adr.toUpperCase() } : {}),
+							},
+						},
+					}
+				: {}),
+		};
+		file.active = file.active.filter((e) => e.id !== entry.id);
+		file.resolved = [moved, ...file.resolved];
+		const path = writeAuthority(mutationRepo, file);
+		commit(mutationRepo, [path], `docs: resolve decision ${entry.id}`);
+		return entry.id;
 	});
 }
 
 export async function archiveResolvedDecisions(repo: string, cutoff: Date): Promise<number> {
-	repo = mainWorktree(repo);
 	return withMutationLock(repo, () => {
-		const path = resolve(repo, "docs", "decisions.md");
-		// No register yet (fresh repo / no decisions recorded) → nothing to archive. Guard like
-		// appendDecisions so `decisions archive-resolved` (invoked routinely by /tidy) never ENOENTs.
-		if (!existsSync(path)) return 0;
-		let body = readFileSync(path, "utf8").replace(/\r\n/g, "\n");
-		const resolvedAt = body.indexOf("## Resolved");
-		const matches = [...body.slice(resolvedAt).matchAll(/^\| .*\|\n<!-- decision:([a-f0-9]+) -->\n(?:<!-- review-escalation:[A-Za-z0-9_-]+ -->\n)?/gm)];
-		const selected = matches.filter((match) => {
-			const cells = splitRow(match[0].split("\n")[0]);
-			return new Date(`${cells[5]}T00:00:00Z`) < cutoff;
-		});
-		if (!selected.length) return 0;
-		const rows = selected.map((match) => match[0]).join("");
-		for (const match of [...selected].reverse()) {
-			const start = resolvedAt + (match.index ?? 0);
-			body = body.slice(0, start) + body.slice(start + match[0].length);
+		const owners = listOwnerFiles(repo);
+		if (!owners.length) return 0;
+		const changed: string[] = [];
+		let total = 0;
+		for (const owner of owners) {
+			const path = authorityPath(repo, owner);
+			const file = readAuthorityFile(path, owner);
+			const keep: StoredDecision[] = [];
+			const archive: StoredDecision[] = [];
+			for (const entry of file.resolved) {
+				const date = entry.cells[5];
+				if (new Date(`${date}T00:00:00Z`) < cutoff) archive.push(entry);
+				else keep.push(entry);
+			}
+			if (!archive.length) continue;
+			file.resolved = keep;
+			writeAuthority(repo, file);
+			changed.push(path);
+			const aPath = archivePath(repo, owner);
+			const existing = existsSync(aPath) ? readAuthorityFile(aPath, owner) : { owner, active: [], resolved: [] };
+			existing.resolved = [...archive, ...existing.resolved];
+			mkdirSync(dirname(aPath), { recursive: true });
+			writeFileSync(aPath, renderAuthority(existing));
+			changed.push(aPath);
+			total += archive.length;
 		}
-		const archive = resolve(repo, "docs", "archived", "decisions.md");
-		let archived = existsSync(archive) ? readFileSync(archive, "utf8").replace(/\r\n/g, "\n") : DECISIONS_SKELETON;
-		archived = insertRows(archived, "Resolved", rows);
-		mkdirSync(dirname(archive), { recursive: true });
-		writeFileSync(path, body);
-		writeFileSync(archive, archived);
-		commit(repo, [path, archive], `docs: archive ${selected.length} resolved decision${selected.length === 1 ? "" : "s"}`);
-		return selected.length;
+		if (!total) return 0;
+		commit(repo, changed, `docs: archive ${total} resolved decision${total === 1 ? "" : "s"}`);
+		return total;
+	});
+}
+
+function ownerFromSource(source: string, escalationItemId?: string): string {
+	if (escalationItemId) {
+		try {
+			return validateOwner(escalationItemId);
+		} catch {
+			// fall through
+		}
+	}
+	const issue = source.match(/github\.com\/[^/]+\/[^/]+\/issues\/(\d+)/i);
+	if (issue?.[1]) return validateOwner(issue[1]);
+	const review = source.match(/\.dev\/review-records\/[^/]*-(\d+)\.json$/);
+	if (review?.[1]) return validateOwner(review[1]);
+	if (/^\d+$/.test(source.trim())) return validateOwner(source.trim());
+	const bare = source.match(/^#?(\d+)$/);
+	if (bare?.[1]) return validateOwner(bare[1]);
+	return LEGACY_UNATTRIBUTED;
+}
+
+function parseLegacyRegister(body: string): Array<StoredDecision & { owner: string }> {
+	const normalized = body.replace(/\r\n/g, "\n");
+	const resolvedAt = normalized.indexOf("## Resolved");
+	if (normalized.indexOf("## Active") < 0 || resolvedAt < 0) throw new Error("legacy decisions register missing Active/Resolved sections");
+
+	const rowRe = /^\| (.+) \|\n<!-- decision:([a-f0-9]+) -->\n(?:<!-- review-escalation:([A-Za-z0-9_-]+) -->\n)?/gm;
+	const rows: Array<StoredDecision & { owner: string }> = [];
+	let order = 0;
+	for (const match of normalized.matchAll(rowRe)) {
+		const id = requireMatchGroup(match, 2, "legacy decision id");
+		const rowLine = match[0].split("\n")[0] ?? "";
+		const cells = splitRow(rowLine);
+		if (cells.length !== 6) throw new Error(`legacy decision row must have 6 cells: ${id}`);
+		const escRaw = match[3];
+		const escalation = escRaw ? parseEscalationMetadata(escRaw) : undefined;
+		const section: "Active" | "Resolved" = (match.index ?? 0) < resolvedAt ? "Active" : "Resolved";
+		const decision = decisionFromCells(cells);
+		const fingerprint = escalation ? undefined : contentFingerprint(decision);
+		const owner = ownerFromSource(unescapeCell(cellAt(cells, 4)), escalation?.escalation.itemId);
+		rows.push({
+			id,
+			section,
+			cells,
+			meta: {
+				aliases: [],
+				...(fingerprint ? { contentFingerprint: fingerprint } : {}),
+				...(!escalation
+					? {
+							dedupe: { runId: "legacy", step: "migrated", occurrence: order },
+						}
+					: {}),
+			},
+			...(escalation ? { escalation } : {}),
+			order: order++,
+			owner,
+		});
+	}
+	return rows;
+}
+
+function reconcileOwnerRows(rows: StoredDecision[]): { kept: StoredDecision[]; reconciled: number } {
+	const bySection = new Map<string, StoredDecision[]>();
+	for (const row of rows) {
+		const key = `${row.section}\0${row.cells[4]}`;
+		const list = bySection.get(key) ?? [];
+		list.push(row);
+		bySection.set(key, list);
+	}
+	const kept: StoredDecision[] = [];
+	let reconciled = 0;
+	const idOwners = new Map<string, StoredDecision>();
+
+	for (const group of bySection.values()) {
+		group.sort((a, b) => a.order - b.order);
+		const canonicals: StoredDecision[] = [];
+		for (const row of group) {
+			const dup = canonicals.find((c) => semanticEqual(c, row));
+			if (dup) {
+				if (dup.id !== row.id) {
+					// Same content, different ID → alias
+					if (!dup.meta.aliases.includes(row.id) && dup.id !== row.id) dup.meta.aliases.push(row.id);
+					for (const alias of row.meta.aliases) {
+						if (alias !== dup.id && !dup.meta.aliases.includes(alias)) dup.meta.aliases.push(alias);
+					}
+					reconciled += 1;
+				}
+				continue;
+			}
+			// ID collision with unequal content across any kept row → fail later via idOwners
+			canonicals.push({ ...row, meta: { ...row.meta, aliases: [...row.meta.aliases] } });
+		}
+		kept.push(...canonicals);
+	}
+
+	// Global ID uniqueness with unequal content
+	for (const row of kept) {
+		for (const id of [row.id, ...row.meta.aliases]) {
+			const prev = idOwners.get(id);
+			if (prev && prev !== row && !semanticEqual(prev, row)) {
+				throw new Error(`migration aborted: ID collision with unequal content: ${id}`);
+			}
+			idOwners.set(id, row);
+		}
+	}
+	kept.sort((a, b) => a.order - b.order);
+	return { kept, reconciled };
+}
+
+export async function migrateDecisions(repo: string): Promise<MigrateDecisionsResult> {
+	return withMutationLock(repo, () => {
+		const legacyPath = resolve(repo, "docs", "decisions.md");
+		if (!existsSync(legacyPath)) {
+			return { status: "noop", owners: [], rows: 0, reconciled: 0, unattributed: 0 };
+		}
+		const body = readFileSync(legacyPath, "utf8");
+		// Generated index is not a migration source — authority already lives under decision-log/.
+		if (body.includes("docs/decision-log/") && body.includes("rebuild-index")) {
+			return { status: "noop", owners: listOwnerFiles(repo), rows: 0, reconciled: 0, unattributed: 0 };
+		}
+		const legacyRows = (() => {
+			try {
+				return parseLegacyRegister(body);
+			} catch {
+				// Empty skeleton or unrecognized shape — nothing to migrate.
+				return [] as Array<StoredDecision & { owner: string }>;
+			}
+		})();
+
+		if (!legacyRows.length) {
+			return { status: "noop", owners: listOwnerFiles(repo), rows: 0, reconciled: 0, unattributed: 0 };
+		}
+
+		const byOwner = new Map<string, StoredDecision[]>();
+		for (const row of legacyRows) {
+			const list = byOwner.get(row.owner) ?? [];
+			list.push(row);
+			byOwner.set(row.owner, list);
+		}
+
+		const planned = new Map<string, string>();
+		let reconciled = 0;
+		let unattributed = 0;
+		const ownerNames: string[] = [];
+
+		for (const [owner, rows] of [...byOwner.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+			ownerNames.push(owner);
+			if (owner === LEGACY_UNATTRIBUTED) unattributed += rows.length;
+			const { kept, reconciled: r } = reconcileOwnerRows(rows);
+			reconciled += r;
+			const file: AuthorityFile = {
+				owner,
+				active: kept.filter((e) => e.section === "Active"),
+				resolved: kept.filter((e) => e.section === "Resolved"),
+			};
+			planned.set(owner, renderAuthority(file));
+		}
+
+		// Fail closed if existing authority disagrees
+		for (const [owner, rendered] of planned) {
+			const path = authorityPath(repo, owner);
+			if (existsSync(path)) {
+				const existing = readFileSync(path, "utf8").replace(/\r\n/g, "\n");
+				if (existing !== rendered) {
+					// Idempotent only when byte-identical; otherwise refuse overwrite.
+					const existingFile = readAuthorityFile(path, owner);
+					const plannedFile = parseAuthorityBody(rendered, owner);
+					const existingIds = new Set(allEntries(existingFile).flatMap((e) => [e.id, ...e.meta.aliases]));
+					const plannedEntries = allEntries(plannedFile);
+					for (const entry of plannedEntries) {
+						const hit = findByIdOrAlias(existingFile, entry.id);
+						if (hit && !semanticEqual(hit, entry)) {
+							throw new Error(`migration aborted: existing authority disagrees for ${entry.id} in ${owner}`);
+						}
+						for (const alias of entry.meta.aliases) {
+							if (existingIds.has(alias)) {
+								const h = findByIdOrAlias(existingFile, alias);
+								if (h && !semanticEqual(h, entry)) {
+									throw new Error(`migration aborted: existing authority disagrees for alias ${alias} in ${owner}`);
+								}
+							}
+						}
+					}
+					// Merge: if existing is a superset or equal semantically for shared IDs, keep existing when identical render after merge is hard —
+					// plan: re-running against identical outputs is no-op; disagreement fails closed.
+					// If files differ but shared IDs agree, still fail closed rather than silently merge.
+					throw new Error(`migration aborted: existing authority for ${owner} differs from migration output`);
+				}
+			}
+		}
+
+		// If all planned files already exist and match, no-op
+		const allMatch = [...planned.entries()].every(([owner, rendered]) => {
+			const path = authorityPath(repo, owner);
+			return existsSync(path) && readFileSync(path, "utf8").replace(/\r\n/g, "\n") === rendered;
+		});
+		if (allMatch) {
+			return { status: "noop", owners: ownerNames, rows: legacyRows.length, reconciled, unattributed };
+		}
+
+		const paths: string[] = [];
+		for (const [owner, rendered] of planned) {
+			const path = authorityPath(repo, owner);
+			mkdirSync(dirname(path), { recursive: true });
+			writeFileSync(path, rendered);
+			paths.push(path);
+		}
+		commit(repo, paths, `docs: migrate decision log to per-item authority (${paths.length} owners)`);
+		return { status: "written", owners: ownerNames, rows: legacyRows.length, reconciled, unattributed };
+	});
+}
+
+function indexBanner(): string {
+	return `# Decisions (generated index)
+
+> **Do not edit.** This file is a deterministic projection of \`docs/decision-log/\`.
+> Authoritative records live in \`docs/decision-log/<owner>.md\`.
+> Regenerate with \`npx pelaggio decisions rebuild-index\`.
+
+Status values are \`default-taken\`, \`resolved\`, or \`resolved→ADR-nnnn\`. Source is an item, pull request, or review-note reference.
+
+`;
+}
+
+function sortEntries(entries: Array<StoredDecision & { owner: string }>): Array<StoredDecision & { owner: string }> {
+	return [...entries].sort((a, b) => {
+		const dateCmp = (a.cells[5] ?? "").localeCompare(b.cells[5] ?? "");
+		if (dateCmp !== 0) return dateCmp;
+		const ownerCmp = a.owner.localeCompare(b.owner);
+		if (ownerCmp !== 0) return ownerCmp;
+		return a.id.localeCompare(b.id);
+	});
+}
+
+function renderIndexEntry(entry: StoredDecision): string {
+	// Projection includes markers for operator discoverability; aliases stay metadata-only (not second rows).
+	const row = `| ${entry.cells.join(" | ")} |\n${marker(entry.id)}\n`;
+	if (entry.meta.aliases.length || entry.meta.contentFingerprint || entry.meta.dedupe) {
+		// Keep meta for round-trip operator tooling reading the index; not authoritative.
+	}
+	return entry.escalation ? `${row}${escalationMarker(entry.escalation)}\n` : row;
+}
+
+export async function rebuildDecisionIndex(repo: string): Promise<RebuildIndexResult> {
+	return withMutationLock(repo, () => {
+		const owners = listOwnerFiles(repo);
+		const active: Array<StoredDecision & { owner: string }> = [];
+		const resolved: Array<StoredDecision & { owner: string }> = [];
+		for (const owner of owners) {
+			const file = readAuthorityFile(authorityPath(repo, owner), owner);
+			// Validate by re-parse round-trip
+			for (const e of file.active) active.push({ ...e, owner });
+			for (const e of file.resolved) resolved.push({ ...e, owner });
+		}
+		const sortedActive = sortEntries(active);
+		const sortedResolved = sortEntries(resolved);
+		const body = `${indexBanner()}` + `## Active\n\n${DECISIONS_HEADER}\n${RULE}\n${sortedActive.map(renderIndexEntry).join("")}\n` + `## Resolved\n\n${DECISIONS_HEADER}\n${RULE}\n${sortedResolved.map(renderIndexEntry).join("")}`;
+		const rendered = body.endsWith("\n") ? body : `${body}\n`;
+		const path = resolve(repo, "docs", "decisions.md");
+		if (existsSync(path) && readFileSync(path, "utf8").replace(/\r\n/g, "\n") === rendered) {
+			return { status: "noop", rows: sortedActive.length + sortedResolved.length };
+		}
+		mkdirSync(dirname(path), { recursive: true });
+		writeFileSync(path, rendered);
+		commit(repo, [path], "docs: rebuild decision index from decision-log");
+		return { status: "written", rows: sortedActive.length + sortedResolved.length };
 	});
 }

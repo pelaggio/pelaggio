@@ -6,8 +6,9 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import { codexProvider } from "./codex-provider.js";
 import { CONFIG, REPO, resolveStepSettings } from "./config.js";
 import { sessionsDir } from "./confinement/sessions.js";
+import { emitDecisionsFromText } from "./decisions.js";
 import { grokProvider } from "./grok-provider.js";
-import { classifyStepError, isRefusal, looksLikeStalledAsk, type MainCheckoutDeltaObserver, parseBlockedReason, parseDecisions, parseWaitFlag, resolveParkReset } from "./helpers.js";
+import { classifyStepError, isRefusal, looksLikeStalledAsk, type MainCheckoutDeltaObserver, parseBlockedReason, parseWaitFlag, resolveParkReset } from "./helpers.js";
 import { opencodeProvider } from "./opencode-provider.js";
 import { composeSystemAppend, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "./step-runner-shared.js";
 import { MUTATING_TOOLS, toolBrief } from "./tui.js";
@@ -572,8 +573,8 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 
 	if (onParentAbort) opts.signal?.removeEventListener("abort", onParentAbort);
 
-	const decisions = parseDecisions(assistantText);
-	for (const decision of decisions) emit({ type: "decision", decision });
+	const decisions = emitDecisionsFromText(assistantText);
+	for (const emitted of decisions) emit({ type: "decision", decision: emitted.decision });
 	const elapsed = Date.now() - t0;
 	emit({ type: "done", ok, subtype, cost, turns: resultTurns, elapsed });
 

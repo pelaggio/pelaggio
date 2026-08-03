@@ -907,14 +907,37 @@ sentinel produces its own notification when the step ends. It is subscribed by
 default. Its payload carries the decision, item, step, durable source, log path,
 and timestamp; it does not synthesize cycle cost or completion fields.
 
-The canonical durable register is `docs/decisions.md`, distinct from the
-`docs/decisions/` ADR directory. Active and Resolved tables share the columns
+The canonical durable authority is **per-item** under
+`docs/decision-log/<owner>.md` (item ID, or `run-<runId>` for unclaimed
+emissions), distinct from the `docs/decisions/` ADR directory.
+`docs/decisions.md` is a **generated index only** — regenerate with
+`npx pelaggio decisions rebuild-index`; the pipeline never writes it.
+
+Active and Resolved tables share the columns
 `Decision | Status | Chosen/leaning | Alternatives | Source | Date`. Sentinel
 rows start as `default-taken`; lifecycle tooling changes them to `resolved` or
 `resolved→ADR-nnnn`. Source is the best durable item, PR, or review-note
-reference. `npx pelaggio decisions archive-resolved --older-than 30d` moves
-resolved rows older than 30 days to `docs/archived/decisions.md` under the
-mutation lock.
+reference.
+
+Lifecycle and projection commands:
+
+| Command | Purpose |
+|---------|---------|
+| `npx pelaggio decisions resolve <id> …` | Move an Active row to Resolved in its owner file (or, from main, the unique sibling worktree that owns the ID) |
+| `npx pelaggio decisions archive-resolved --older-than 30d` | Move eligible Resolved rows into `docs/decision-log/archive/<owner>.md` |
+| `npx pelaggio decisions migrate` | One-time legacy migration from a shared `docs/decisions.md` register into per-owner authority |
+| `npx pelaggio decisions rebuild-index` | Cold-path projection of all non-archive authority files into `docs/decisions.md` |
+
+Ordinary emissions use an opaque UUID lifecycle ID plus a separate content
+fingerprint; retries with the same run/step/occurrence/fingerprint are
+idempotent (attempt is ignored). ID or fingerprint collisions with unequal
+content fail closed. Review escalations keep evidence-bound
+`reviewEscalationId` hashes.
+
+**Parked items after migration ships:** worktrees that predate the merged
+cutover must merge/rebase main (or re-run `decisions migrate` in that worktree)
+so `docs/decision-log/<item>.md` exists before `--resume`; otherwise lookup
+returns `missing` and review re-runs rather than honoring a prior resolution.
 
 | Key             | Default        | Meaning                                                            |
 |-----------------|----------------|--------------------------------------------------------------------|
@@ -989,7 +1012,7 @@ section (e.g. `budgets.bogus: 5`) are also ignored.
 - Secret handling — store secrets in the environment, not here.
 # Human resolution of cross-model review splits
 
-When successfully parsed authoring reviewers disagree (at least one pass and one block), Pelaggio records the commit-bound evidence in `docs/decisions.md`, sends the existing `decision` notification when subscribed, and parks for every ship target. Notification delivery is best-effort and never changes the gate.
+When successfully parsed authoring reviewers disagree (at least one pass and one block), Pelaggio records the commit-bound evidence in `docs/decision-log/<itemId>.md`, sends the existing `decision` notification when subscribed, and parks for every ship target. Notification delivery is best-effort and never changes the gate.
 
 Resolve the recorded decision explicitly, then resume the item:
 
@@ -998,4 +1021,4 @@ npx pelaggio decisions resolve <decision-id> --disposition proceed --by <actor> 
 npx pelaggio --resume <item-id>
 ```
 
-Use `--disposition block` to retain the block. A `proceed` resolution applies only to the unchanged reviewed commit and exact recorded evidence. Missing, malformed, ambiguous, stale, or safety-class evidence fails closed and parks; changing the code requires a fresh review.
+Run `resolve` from the item worktree, or from the main checkout when the ID is unique across sibling worktrees (0 or >1 matches fail closed). Flag syntax is unchanged. Use `--disposition block` to retain the block. A `proceed` resolution applies only to the unchanged reviewed commit and exact recorded evidence. Missing, malformed, ambiguous, stale, or safety-class evidence fails closed and parks; changing the code requires a fresh review.

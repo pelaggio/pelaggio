@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { REPO } from "./config.js";
-import { archiveResolvedDecisions, resolveDecision } from "./decisions.js";
+import { archiveResolvedDecisions, migrateDecisions, rebuildDecisionIndex, resolveDecision } from "./decisions.js";
 
 export async function decisionsCliMain(args = process.argv.slice(2), repo = REPO, now = new Date()): Promise<number> {
 	const [command, ...rest] = args;
@@ -17,14 +17,14 @@ export async function decisionsCliMain(args = process.argv.slice(2), repo = REPO
 		}
 		const disposition = values.get("--disposition");
 		if (disposition !== undefined && disposition !== "proceed" && disposition !== "block") throw new Error("--disposition must be proceed or block");
-		await resolveDecision(repo, id, {
+		const canonicalId = await resolveDecision(repo, id, {
 			...(values.get("--adr") ? { adr: values.get("--adr") } : {}),
 			...(disposition ? { disposition } : {}),
 			...(values.get("--by") ? { actor: values.get("--by") } : {}),
 			...(values.get("--reason") ? { rationale: values.get("--reason") } : {}),
 			now,
 		});
-		console.log(`Resolved decision ${id}${disposition ? `: ${disposition}` : ""}`);
+		console.log(`Resolved decision ${canonicalId}${canonicalId !== id ? ` (alias ${id})` : ""}${disposition ? `: ${disposition}` : ""}`);
 		return 0;
 	}
 	if (command === "archive-resolved") {
@@ -35,7 +35,25 @@ export async function decisionsCliMain(args = process.argv.slice(2), repo = REPO
 		console.log(`Archived ${count} resolved decision${count === 1 ? "" : "s"}`);
 		return 0;
 	}
-	throw new Error("usage: pelaggio decisions <resolve|archive-resolved>");
+	if (command === "migrate") {
+		if (rest.length) throw new Error("usage: pelaggio decisions migrate");
+		const result = await migrateDecisions(repo);
+		if (result.status === "noop") {
+			console.log(`Decision log migration: no-op (${result.owners.length} owners present)`);
+		} else {
+			console.log(
+				`Decision log migration: wrote ${result.owners.length} owners, ${result.rows} rows` + (result.reconciled ? `, reconciled ${result.reconciled} duplicates` : "") + (result.unattributed ? `, ${result.unattributed} unattributed` : ""),
+			);
+		}
+		return 0;
+	}
+	if (command === "rebuild-index") {
+		if (rest.length) throw new Error("usage: pelaggio decisions rebuild-index");
+		const result = await rebuildDecisionIndex(repo);
+		console.log(result.status === "noop" ? `Decision index rebuild: no-op (${result.rows} rows)` : `Decision index rebuild: wrote ${result.rows} rows`);
+		return 0;
+	}
+	throw new Error("usage: pelaggio decisions <resolve|archive-resolved|migrate|rebuild-index>");
 }
 
 if (import.meta.url === pathToFileURL(resolve(process.argv[1] ?? "")).href) {
