@@ -452,7 +452,9 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 					}
 					if (resolvedEffects !== undefined) {
 						try {
-							const effectsResult = await dispatchStepEffects({ ...ctx, roadmap, log });
+							const authorshipSteps = new Set(["plan", "implement", "shakedown-plan", "shakedown-code", "ship"]);
+							const assistedByProviders = [...steps.filter((entry) => entry.ok && authorshipSteps.has(entry.name) && entry.provider).map((entry) => entry.provider!), ...(authorshipSteps.has(name) ? [realized.provider] : [])];
+							const effectsResult = await dispatchStepEffects({ ...ctx, roadmap, log, assistedByProviders });
 							if (effectsResult.appendText) {
 								result = {
 									...result,

@@ -54,12 +54,14 @@ git commit -m "$(cat <<'EOF'
 - {bullet 1}
 - {bullet 2}
 
-Co-Authored-By: Claude <noreply@anthropic.com>
+Assisted-by: Claude <noreply@anthropic.com>
 EOF
 )"
 ```
 
 Types: `feat`, `fix`, `refactor`, `docs`. Imperative mood, lowercase, no period.
+
+**Assisted-by trailer (#189):** always stamp at least one `Assisted-by: <Name> <email>` line for the AI provider(s) that authored the change (Claude / Codex / Grok). Prefer `Assisted-by` over `Co-Authored-By` — the model assists; DCO `Signed-off-by` remains the human author. On PR targets the harness stamps this on the squash commit; the skill template above covers direct-push.
 
 If the commit fails after reset, all changes are still staged — just re-run the commit command.
 

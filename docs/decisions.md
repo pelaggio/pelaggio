@@ -6,6 +6,53 @@ Status values are `default-taken`, `resolved`, or `resolved→ADR-nnnn`. Source 
 
 | Decision | Status | Chosen/leaning | Alternatives | Source | Date |
 | --- | --- | --- | --- | --- | --- |
+| replay boundary for locally issued evidence | default-taken | verifier-supplied/expected per-cycle challenge semantics with explicit compromised-host residual risk | claim a generated nonce is standalone replay protection; require a TEE/provider-issued nonce now | https://github.com/pelaggio/pelaggio/issues/188 | 2026-08-03 |
+<!-- decision:c5edec2c10e06b90 -->
+| #187 delivery scope | default-taken | require signing, Rekor proof, durable git-authoritative predicate persistence, and effects-manifest capture in this item | formally re-charter #187 as unsigned-format dogfooding and create separate signing/transport items | https://github.com/pelaggio/pelaggio/issues/187 | 2026-08-03 |
+<!-- decision:608e638096add659 -->
+| review evidence binding | default-taken | preserve and hash the effects-manifest `reviewedSha` evidence before successful dispatch deletes it | approximate the reviewed revision from shipping HEAD | https://github.com/pelaggio/pelaggio/issues/187 | 2026-08-03 |
+<!-- decision:700d33d59f09e7f2 -->
+| headless transport | default-taken | opencode run --format json | opencode acp (deferred), interactive --prompt path | https://github.com/pelaggio/pelaggio/issues/137 | 2026-08-03 |
+<!-- decision:fa39d3166646a124 -->
+| isolation claim | default-taken | empty isolation array | claim workspace-write without evidence | https://github.com/pelaggio/pelaggio/issues/137 | 2026-08-03 |
+<!-- decision:eda67e0faafea80c -->
+| OPENCODE_PERMISSION scope | default-taken | allow-all via child-only buildAgentEnv extra | narrower map, unset | https://github.com/pelaggio/pelaggio/issues/137 | 2026-08-03 |
+<!-- decision:7ad3a1001f95caf6 -->
+| default authoring seats | default-taken | do not auto-add opencode | fourth default reviewer | https://github.com/pelaggio/pelaggio/issues/137 | 2026-08-03 |
+<!-- decision:087b11c8d1d32ca2 -->
+| Deliver the tactical registry, diff-time revalidation, compensating semantic hook, lifecycle, and tidy sweep in one cycle | default-taken | one cohesive security slice | split cleanup/diagnostics or hook hardening into follow-ups, temporarily shipping an incomplete threat-model boundary | https://github.com/pelaggio/pelaggio/issues/369 | 2026-08-03 |
+<!-- decision:dfa4f740d1df65a1 -->
+| Observe the SDK child PID through the SDK's documented custom spawn seam | default-taken | a behavior-preserving local spawn adapter plus typed callback; capture pid from ChildProcess (not SpawnedProcess) | record the harness PID (cannot satisfy cwd binding), scrape the process table, or omit Linux binding | https://github.com/pelaggio/pelaggio/issues/369 | 2026-08-03 |
+<!-- decision:15a2e91a0ec83281 -->
+| Keep record-derived exemptions distinct from the trusted in-process `activeWorktrees` input | default-taken | separate parameter with an internal main-root filter | merge both sources into one undifferentiated iterable before `forbiddenRootsForConfinement` | https://github.com/pelaggio/pelaggio/issues/369 | 2026-08-03 |
+<!-- decision:971c5ae0e2836f23 -->
+| Multi-step peer survival | default-taken | pid is mutable binding evidence; immutable inventory identity is sessionId+claimedItem+claimBranch+worktreePath only | treat pid as identity (breaks every peer step boundary for earlier evaluators — reintroduces the incident class) | https://github.com/pelaggio/pelaggio/issues/369 | 2026-08-03 |
+<!-- decision:9240b9b2a3760141 -->
+| Claim branch validation | default-taken | store exact claimBranch + attribute to claimedItem via claimedIds-style prefix rules (adapter-aware) | require exact `feat/<claimedItem>` (false-negatives on github-issues `feat/issue-N-slug` branches) | https://github.com/pelaggio/pelaggio/issues/369 | 2026-08-03 |
+<!-- decision:cfa22c078604fa87 -->
+| portable parent representation after successful decomposition | default-taken | close/complete the parent with a note listing every child ID via existing `mark-done` | provider-specific epic relationships; leave the parent open with an epic label; add a cross-adapter decomposition API | https://github.com/pelaggio/pelaggio/issues/202 | 2026-08-03 |
+<!-- decision:a183fd9a929fecc4 -->
+| partial remote mutation handling | default-taken | fail closed, retain the open parent, and report exact reconciliation state | destructive rollback; continue after failure; add transactional orchestration | https://github.com/pelaggio/pelaggio/issues/202 | 2026-08-03 |
+<!-- decision:9b9cdf093b33c916 -->
+| default value of `pick.max-scope` | default-taken | `M` | opt-in/off, default `L` | https://github.com/pelaggio/pelaggio/issues/201 | 2026-08-03 |
+<!-- decision:82c982035314b449 -->
+| YAML key spelling | default-taken | `pick.max-scope` | `pick.maxScope` | https://github.com/pelaggio/pelaggio/issues/201 | 2026-08-03 |
+<!-- decision:21f8af4bdbd8f61a -->
+| additive public scope type | default-taken | re-export canonical `Scope` beside public `RoadmapItem` | expose it only transitively | https://github.com/pelaggio/pelaggio/issues/201 | 2026-08-03 |
+<!-- decision:2e1f2368b5a45fd8 -->
+| review-retry wait mechanics | default-taken | extract a shared awaitParkReset helper used by both the review retry loop and the item park-and-resume loop | inline-duplicate the ~50-line wait block for reviews; fold review re-invocation into the existing park-and-resume loop (couples the item-resume block to the review sweep the plan deliberately keeps separate) | https://github.com/pelaggio/pelaggio/issues/134 | 2026-08-03 |
+<!-- decision:1fe7d6c0f2973f53 -->
+| residual work for an already-shipped security item | default-taken | verification + documentation hygiene only; do not reimplement the gate | abort cycle / close issue with zero commits (phantom-ship risk); greenfield rewrite of helpers+pipeline (rejected — regression risk) | https://github.com/pelaggio/pelaggio/issues/111 | 2026-08-03 |
+<!-- decision:66fd486fc38edca4 -->
+| model event-backed liveness separately from process lifecycle | default-taken | keep existing RunStatus for control legality and add typed activity projection with optional until | expand RunStatus with idle/parked variants; compute display-only without persistence | https://github.com/pelaggio/pelaggio/issues/83 | 2026-08-03 |
+<!-- decision:478fafd4fd1298a0 -->
+| expose repo-derived watch defaults through a narrow authenticated API | default-taken | add repo-scoped defaults route beside roadmap/stats | duplicate YAML in browser; no prefill; expose full config | https://github.com/pelaggio/pelaggio/issues/83 | 2026-08-03 |
+<!-- decision:aebfefc6aeca7950 -->
+| continuous starts may omit item | default-taken | optional item — omit from argv for CLI auto-pick | keep item required with first-row preselect; require item only outside watch mode | https://github.com/pelaggio/pelaggio/issues/83 | 2026-08-03 |
+<!-- decision:5f1f852acf08e4a7 -->
+| Cross-model review split for 82 | default-taken | Human adjudication required | proceed or block | .dev/review-records/cycle-1-82.json | 2026-08-03 |
+<!-- decision:44b7c449ab1e6d8b -->
+<!-- review-escalation:eyJlc2NhbGF0aW9uIjp7ImtpbmQiOiJyZXZpZXctZXNjYWxhdGlvbiIsIml0ZW1JZCI6IjgyIiwic3RlcCI6InNoYWtlZG93bi1jb2RlIiwicmV2aWV3ZWRTaGEiOiJlZWQ0YjYzNjgyYmEzNjJjODI0NDYzZTY0MGVlOTMxZDQyMzM3YTI5IiwiZXZpZGVuY2VGaW5nZXJwcmludCI6ImI5ODkxMGE2MTc5YzE4YzdlYzdjZGJjZjk5NGU5NTQ4Y2RjZjgxZGU5YTBhYzlmMDQ1MTI1MDU2ODBhMDlkMWMiLCJyZXZpZXdSZWNvcmRTb3VyY2UiOiIuZGV2L3Jldmlldy1yZWNvcmRzL2N5Y2xlLTEtODIuanNvbiIsImhhc1NhZmV0eUJsb2NrZXIiOnRydWUsImRyaXZlcnMiOlt7ImlkZW50aXR5Ijp7InJvbGUiOiJyZXZpZXdlciIsInNlYXRJZCI6ImNsYXVkZSIsInByb3ZpZGVyIjoiY2xhdWRlIiwibW9kZWwiOiJjbGF1ZGUtc29ubmV0LTUiLCJzZXNzaW9uSWQiOiJyZXZpZXdlci1jbGF1ZGUtcDEifSwidmVyZGljdCI6ImJsb2NrIiwicmF0aW9uYWxlIjoiQ29udGludW91cy1tb2RlIChkcmFpbi93YXRjaCkgaW1wbGVtZW50YXRpb24gaXMgY29ycmVjdCBhbmQgd2VsbC10ZXN0ZWQsIGJ1dCB0aGUgYnJhbmNoIGFsc28gY2FycmllcyBkZWNpc2lvbi1sb2cgZW50cmllcyBtaXNhdHRyaWJ1dGVkIHRvIHVucmVsYXRlZCBpc3N1ZSAjNDMsIGluY2x1ZGluZyBhbiBleGFjdCBkdXBsaWNhdGUgcm93LiJ9LHsiaWRlbnRpdHkiOnsicm9sZSI6InJldmlld2VyIiwic2VhdElkIjoiZ3JvayIsInByb3ZpZGVyIjoiZ3JvayIsIm1vZGVsIjoiY2xhdWRlLXNvbm5ldC01Iiwic2Vzc2lvbklkIjoicmV2aWV3ZXItZ3Jvay1wMSJ9LCJ2ZXJkaWN0IjoicGFzcyIsInJhdGlvbmFsZSI6IkNvbnRpbnVvdXMtbW9kZSAoIzgyKSBkcmFpbi93YXRjaCwgZnJlZSBwcm9iZSwgYW5kIGRheS1idWRnZXQgbGFuZCBjbGVhbmx5OyBjaGVja3MgYW5kIHRlc3RzIHBhc3Mgd2l0aCBubyBtZXJnZS1ibG9ja2luZyBkZWZlY3QuIn1dfX0 -->
 | behavior for malformed or unreadable state lock content | default-taken | fail closed with an actionable error | delete it as stale; add a force-start option | https://github.com/pelaggio/pelaggio/issues/43 | 2026-08-03 |
 <!-- decision:66edfdd237bbb068 -->
 | residue lock whose PID equals process.pid | default-taken | reclaim as stale (classic PID-file self-match) | treat as live and refuse start; require operator delete | https://github.com/pelaggio/pelaggio/issues/43 | 2026-08-03 |

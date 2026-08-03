@@ -1,6 +1,7 @@
 import { execSync } from "node:child_process";
 import type { ShipDecisionEffect } from "../effects.js";
 import { defaultGhRun, type GhRunner, parseGhJson } from "../roadmap/github-issues.js";
+import { collectLoggedAssistedByIdentities, identitiesForProviders, withAssistedBy } from "./assisted-by.js";
 import type { ExecFn } from "./bookkeeping.js";
 import { assertCiNotRed } from "./ci-guard.js";
 
@@ -8,6 +9,7 @@ export interface ShipPrEffectsDeps {
 	exec?: ExecFn;
 	gh?: GhRunner;
 	log: (msg: string) => void;
+	assistedByProviders?: import("../types.js").ProviderName[];
 }
 
 export interface ShipPrEffectsResult {
@@ -46,7 +48,10 @@ export async function runShipPrEffects(
 	const mergeBase = exec("git merge-base main HEAD", cwd).trim();
 	if (!mergeBase) throw new Error("cannot determine merge-base with main");
 	exec(`git reset --soft ${shellQuote(mergeBase)}`, cwd);
-	exec(`git commit -m ${shellQuote(decision.prTitle)} -m ${shellQuote(withCoauthor(decision.prBody))}`, cwd);
+	// Always-on Assisted-by trailers (#189): stamp realized cycle providers from the
+	// cycle log when present; withAssistedBy falls back to the default identity.
+	const assistedBody = withAssistedBy(decision.prBody, [...collectLoggedAssistedByIdentities(ctx.itemId), ...identitiesForProviders(deps.assistedByProviders ?? [])]);
+	exec(`git commit -m ${shellQuote(decision.prTitle)} -m ${shellQuote(assistedBody)}`, cwd);
 
 	const changed = exec("git diff --name-only main...HEAD", cwd)
 		.split("\n")
@@ -107,11 +112,6 @@ function isExistingPrList(value: unknown): value is ExistingPr[] {
 function parsePrNumber(url: string): number | null {
 	const match = url.match(/\/pull\/(\d+)(?:\D*)?$/);
 	return match ? Number.parseInt(match[1], 10) : null;
-}
-
-function withCoauthor(body: string): string {
-	if (/^Co-Authored-By:/im.test(body)) return body;
-	return `${body.trim()}\n\nCo-Authored-By: Claude <noreply@anthropic.com>`;
 }
 
 function shellQuote(value: string): string {
