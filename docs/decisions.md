@@ -6,6 +6,8 @@ Status values are `default-taken`, `resolved`, or `resolved→ADR-nnnn`. Source 
 
 | Decision | Status | Chosen/leaning | Alternatives | Source | Date |
 | --- | --- | --- | --- | --- | --- |
+| review-retry wait mechanics | default-taken | extract a shared awaitParkReset helper used by both the review retry loop and the item park-and-resume loop | inline-duplicate the ~50-line wait block for reviews; fold review re-invocation into the existing park-and-resume loop (couples the item-resume block to the review sweep the plan deliberately keeps separate) | https://github.com/pelaggio/pelaggio/issues/134 | 2026-08-03 |
+<!-- decision:1fe7d6c0f2973f53 -->
 | residual work for an already-shipped security item | default-taken | verification + documentation hygiene only; do not reimplement the gate | abort cycle / close issue with zero commits (phantom-ship risk); greenfield rewrite of helpers+pipeline (rejected — regression risk) | https://github.com/pelaggio/pelaggio/issues/111 | 2026-08-03 |
 <!-- decision:66fd486fc38edca4 -->
 | model event-backed liveness separately from process lifecycle | default-taken | keep existing RunStatus for control legality and add typed activity projection with optional until | expand RunStatus with idle/parked variants; compute display-only without persistence | https://github.com/pelaggio/pelaggio/issues/83 | 2026-08-03 |

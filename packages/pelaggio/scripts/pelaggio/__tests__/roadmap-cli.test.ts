@@ -153,6 +153,29 @@ describe("roadmap-cli", () => {
 		assert.deepEqual(calls, { list: 1, claim: 0 });
 	});
 
+	it("next excludes declared over-scope items", async () => {
+		const calls = { list: 0, claim: 0 };
+		setRoadmapFactory(() =>
+			stubRoadmap(
+				[
+					{ id: "small", title: "Small", deps: "—", sourceRef: "core", status: "open", scope: "S" },
+					{ id: "large", title: "Large", deps: "—", sourceRef: "core", status: "open", scope: "L" },
+				],
+				calls,
+			),
+		);
+		const res = await captureStdout(() => main(["next", "--json"]));
+		const parsed = JSON.parse(res.stdout);
+		assert.deepEqual(
+			parsed.candidates.map(({ item }: { item: { id: string } }) => item.id),
+			["small"],
+		);
+		assert.deepEqual(
+			parsed.verdicts.find(({ id }: { id: string }) => id === "large"),
+			{ id: "large", eligible: false, reason: "over-scope", blockers: ["L"] },
+		);
+	});
+
 	it("get returns exit 2 for unknown id", async () => {
 		const res = await captureStdout(() => main(["get", "ZZZ-999"]));
 		assert.equal(res.code, 2);
