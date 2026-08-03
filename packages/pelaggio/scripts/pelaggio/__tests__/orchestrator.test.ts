@@ -1284,6 +1284,99 @@ describe("runOrchestrator — continuous mode (issue #82)", () => {
 		assert.equal(exitCode, 0);
 	});
 
+	// #397: local-review park path charged totalSpent but skipped DayBudgetTracker.add
+	// (the post-try success/failure path is skipped on break). After auto-resume the
+	// retry's cost was counted, but the partial park spend leaked — continuous drain
+	// could still pick under a day-budget that should already be exhausted.
+	it("day-budget accounts for local review park cost (#397)", async (t) => {
+		t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
+		t.mock.method(console, "log", () => {});
+		const baseNow = 1_700_000_000_000;
+		t.mock.timers.setTime(baseNow);
+
+		const pendingPr = [
+			{
+				number: 201,
+				isDraft: false,
+				headRefName: "feat/issue-397-day-budget",
+				headRefOid: "abc123",
+				headRepository: { nameWithOwner: "o/r" },
+				updatedAt: "2026-07-08T12:00:00Z",
+				statusCheckRollup: [{ __typename: "StatusContext", context: "review", state: "PENDING", startedAt: "2026-07-08T12:00:00Z" }],
+			},
+		];
+		const gh: GhRunner = (args) => {
+			if (args[0] === "pr" && args[1] === "list") return { stdout: JSON.stringify(pendingPr), stderr: "", status: 0 };
+			if (args[0] === "issue" && args[1] === "view") return { stdout: JSON.stringify({ labels: [{ name: "autopilot" }] }), stderr: "", status: 0 };
+			if (args[0] === "api" && args[1]?.includes("/comments")) return { stdout: JSON.stringify([]), stderr: "", status: 0 };
+			return { stdout: "", stderr: "", status: 0 };
+		};
+		const { runPipeline, calls } = createMockRunPipeline({
+			default: { completed: true, cost: 0.1 },
+		});
+
+		let gateCall = 0;
+		const promise = runOrchestrator(
+			{ ...baseFlags, continuous: true, preset: "drain", "day-budget": "5", target: "pull-request" },
+			{
+				runPipeline,
+				queueProbe: async () => ({ empty: false, readyCount: 1 }),
+				sleep: async () => {},
+				review: {
+					runner: "local",
+					ghRepo: "o/r",
+					gh,
+					statuslessAfter: "2h",
+					now: () => Date.now(),
+					prepareReviewHead: () => ({ diffCwd: "/tmp/pr-head", baseRef: "origin/main", headRef: "refs/pelaggio-review/pr-201" }),
+					cleanupReviewHead: () => {},
+					runReviewGate: async (opts) => {
+						gateCall++;
+						if (gateCall === 1) {
+							if (opts.parkSignal) {
+								opts.parkSignal.parked = true;
+								opts.parkSignal.resetsAt = Date.now() + 60_000;
+								opts.parkSignal.limitType = "5h";
+							}
+							// Partial park spend. Without the #397 fix this is omitted from the day budget.
+							return {
+								gate: "park",
+								body: "parked",
+								cost: 4,
+								costEstimated: false,
+								turns: 0,
+								ok: false,
+								subtype: "error_rate_limit",
+								park: { resetsAt: Date.now() + 60_000, limitType: "5h" },
+							};
+						}
+						// Retry completes with $1.5 → day total $5.5 ≥ $5 → drain must not pick.
+						return {
+							gate: "pass",
+							body: "<!-- pelaggio-pr-review -->\nclean\n\nVerdict: PASS",
+							cost: 1.5,
+							costEstimated: false,
+							turns: 3,
+							ok: true,
+							subtype: "success",
+						};
+					},
+				},
+				// Keep revise off so only local-review spend hits the day budget.
+				revise: { local: false, ghRepo: "o/r", gh },
+			},
+		);
+
+		for (let i = 0; i < 5; i++) await new Promise(setImmediate);
+		t.mock.timers.tick(60_000 + 30_000);
+		for (let i = 0; i < 10; i++) await new Promise(setImmediate);
+		const { exitCode } = await promise;
+
+		assert.equal(gateCall, 2, "review sweep retried after park wait");
+		assert.equal(calls.length, 0, "day budget must include park cost so drain does not start paid picks");
+		assert.equal(exitCode, 0);
+	});
+
 	it("drain ×2: two concurrent paid cycles when probe has work", async (t) => {
 		t.mock.method(console, "log", () => {});
 		let inFlight = 0;
