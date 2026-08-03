@@ -27,6 +27,7 @@ const PROVIDER_IDENTITY: Record<ProviderName, AssistedByIdentity> = {
 	claude: { name: "Claude", email: "noreply@anthropic.com" },
 	codex: { name: "Codex", email: "noreply@openai.com" },
 	grok: { name: "Grok", email: "noreply@x.ai" },
+	opencode: { name: "OpenCode", email: "noreply@opencode.ai" },
 };
 
 /** Fallback when the cycle log has no realized authorship providers for the item. */

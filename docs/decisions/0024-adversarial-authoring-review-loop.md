@@ -34,6 +34,6 @@ Review was historically a post-hoc gate on a raw first draft. The decision is to
 - (+) Mostly composition of existing seams (`shakedown-code` controller, per-step budget/turn caps, the `pr-review` convergence contract, ADR-0016 taxonomy, ADR-0015 tolerance, the #186–189 attestation charters); the genuinely new parts are the **Judge role** and the **convergence-loop controller + terminal-outcome taxonomy**.
 - (−) The fleet is not a free lunch; its value must be benchmarked, not assumed.
 - (−) Degraded same-provider mode **voids the blind-spot guarantee** — integrity then rests on the Judge + reviewer independence, both degrading toward zero; it must emit a weaker attestation, never the same badge.
-- (−) Provenance is a *record*, not an attestation, until #188 binds it to SHA/config/identity — do not let it become the "laundering" it warns against.
+- (−) Provenance is a *record*, not a full attestation: #188 shipped effects-boundary receipts, but gate-assertion binding + trusted-runner identity remain residual — do not let the record become the "laundering" it warns against.
 
 Imports the taxonomy + safety floor from ADR-0016; conditions Dissent on the ADR-0015 tolerance policy; provenance rides the ADR-0018 / #186–189 attestation charters; review orchestration boundary is ADR-0022's; no model may launder uncertainty into a landed change per ADR-0014.

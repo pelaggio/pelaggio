@@ -46,7 +46,19 @@ export interface ReviewResolution {
  * Structured effects-manifest failure codes. Inlined (not imported from effects.ts) so
  * types.ts stays type-only and free of a cycle with effects.ts → Step.
  */
-export type EffectsErrorCode = "missing_manifest" | "invalid_manifest" | "provenance_mismatch" | "unknown_effect_kind" | "effect_failed";
+export type EffectsErrorCode = "missing_manifest" | "invalid_manifest" | "provenance_mismatch" | "unknown_effect_kind" | "effect_failed" | "receipt_failed";
+
+/**
+ * Descriptor for a harness-issued execution receipt written under
+ * `.dev/execution-receipts/`. Path is worktree-relative; sha256 digests the
+ * exact on-disk receipt file bytes (evidence-registry identity for
+ * `effects-manifest` entries).
+ */
+export interface ExecutionReceiptDescriptor {
+	/** Worktree-relative path, e.g. `.dev/execution-receipts/{runId}/{step}-{attempt}.json` */
+	path: string;
+	sha256: string;
+}
 
 export interface StepResult {
 	ok: boolean;
@@ -119,6 +131,11 @@ export interface StepLog {
 	/** Observe-only stall heuristic — the step ended in a question / offer-to-continue. Telemetry only; never fails the step. */
 	stalledAsk?: boolean;
 	decisions?: Decision[];
+	/**
+	 * Descriptor for the execution receipt written after successful effects
+	 * dispatch (#188). Optional for legacy log compatibility.
+	 */
+	executionReceipt?: ExecutionReceiptDescriptor;
 }
 
 export interface CycleDriverProvenance {
@@ -147,6 +164,17 @@ export interface CycleProvenance {
 	versions: CycleVersionProvenance;
 	prUrl?: string;
 	unavailable?: string[];
+	/**
+	 * Domain-separated digest of the per-cycle challenge held in process memory
+	 * only (#188). Never the raw challenge bytes. Optional for legacy logs.
+	 */
+	challengeDigest?: string;
+	/**
+	 * Descriptors for every execution receipt written during this cycle
+	 * (ordinary steps + aggregate authoring-review attempt 0). Optional for
+	 * legacy log compatibility.
+	 */
+	executionReceipts?: ExecutionReceiptDescriptor[];
 }
 
 // ── Log entries (read from .dev/pelaggio-log.jsonl) ───────────────────
@@ -168,7 +196,7 @@ export interface CycleLogEntry {
 	parkReason?: string | null;
 	shipwrecked?: boolean;
 	bookkeepingWarnings?: string[];
-	/** Additive execution receipt. Optional only for legacy log compatibility. */
+	/** Additive cycle provenance. Optional only for legacy log compatibility. */
 	provenance?: CycleProvenance;
 }
 
@@ -283,15 +311,15 @@ export interface CycleResult {
  * errors (`pick:unknown-id`, `pick:blocked`) are intentionally absent: a typo'd `--item`
  * or a user-requested blocked item should halt loudly and page.
  */
-export const RECOVERABLE_ERRORS = ["plan needs rethink", "parked", "transient sdk error", "pick:queue-empty", "pick:worktree-exists", "pick:already-claimed", "pick:already-done", "pick:unknown"] as const;
+export const RECOVERABLE_ERRORS = ["plan needs rethink", "parked", "transient sdk error", "pick:queue-empty", "pick:worktree-exists", "pick:already-claimed", "pick:already-done", "pick:stale-quarantined", "pick:unknown"] as const;
 
 // ── Step providers ─────────────────────────────────────────────────────
 
-/** The backend that runs a step's model. Today only `"claude"` (the SDK runner);
- *  #80 widens this union (and the `PROVIDER_NAMES` validation array in `config.ts`)
- *  to register a second provider. The runtime names array lives in `config.ts`,
+/** The backend that runs a step's model. Started as only `"claude"` (the SDK runner);
+ *  #80 opened the union for a second provider and #137 adds `"opencode"` (75+ model
+ *  backends behind one headless CLI). The runtime names array lives in `config.ts`,
  *  mirroring `ShipTargetName` / `SHIP_TARGET_NAMES`. */
-export type ProviderName = "claude" | "codex" | "grok";
+export type ProviderName = "claude" | "codex" | "grok" | "opencode";
 
 // ── Provider capability descriptors (ADR-0020 / #337) ──────────────────
 // Data-only facts about what a driver does natively. Axes are orthogonal
@@ -412,6 +440,14 @@ export interface PipelineOpts {
 	 * and stays hard-gated by the snapshot.
 	 */
 	activeWorktrees?: Set<string>;
+	/**
+	 * #369: immutable cross-process session evaluator context (run-start inventory +
+	 * boot-relative starttime watermark). When absent, `runPipeline` captures it once
+	 * at entry so direct callers and tests still get inventory-based peer exemption.
+	 * The orchestrator may pre-capture once per process and thread the same object
+	 * into every worker. Typed object — not a boolean flag.
+	 */
+	sessionEvaluator?: import("./confinement/sessions.js").SessionEvaluatorContext;
 	workerStatus?: CycleStatus;
 	logPath?: string;
 	/** Required for creating step renderers — injected by orchestrate() */

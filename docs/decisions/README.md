@@ -13,7 +13,7 @@ Numbered from the security audit's implicit-decision candidates.
 
 | ADR | Decision | Status | Claim(s) |
 |---|---|---|---|
-| [0001](./0001-worktree-write-confinement.md) | Writes confined to the item's worktree | proposed (hardening) | `TC-011` |
+| [0001](./0001-worktree-write-confinement.md) | Writes confined to the item's worktree | accepted | `TC-011` |
 | [0002](./0002-untrusted-input-and-tool-scope.md) | Treat repo/issue/PR as untrusted; scope tools accordingly | accepted (with known gap) | `TC-015` |
 | [0003](./0003-pr-gated-by-default.md) | Default *shipped* ship target = pull-request (amended by 0015) | proposed | `TC-012` |
 | [0004](./0004-review-gate-fails-closed-shakedown-fails-safe.md) | Review gate fails closed; shakedown fails safe (two parsers) | accepted | `TC-003` |

@@ -6,6 +6,10 @@ Status values are `default-taken`, `resolved`, or `resolved→ADR-nnnn`. Source 
 
 | Decision | Status | Chosen/leaning | Alternatives | Source | Date |
 | --- | --- | --- | --- | --- | --- |
+| #243 literally names "shakedown-code + the pr-review CI gate" | default-taken | implement the CI-gate surface only because `runReviewLoop` already supplies multi-driver authoring review | duplicate or rebuild the authoring path. | https://github.com/pelaggio/pelaggio/issues/243 | 2026-08-03 |
+<!-- decision:e609c28201cd54e0 -->
+| default review-driver set | default-taken | preserve scalar single-driver behavior and opt into fan-out through `models.profiles.*.providers.pr-review` | enable duplication by default across authenticated drivers. | https://github.com/pelaggio/pelaggio/issues/243 | 2026-08-03 |
+<!-- decision:e11b8dba730429f4 -->
 | replay boundary for locally issued evidence | default-taken | verifier-supplied/expected per-cycle challenge semantics with explicit compromised-host residual risk | claim a generated nonce is standalone replay protection; require a TEE/provider-issued nonce now | https://github.com/pelaggio/pelaggio/issues/188 | 2026-08-03 |
 <!-- decision:c5edec2c10e06b90 -->
 | #187 delivery scope | default-taken | require signing, Rekor proof, durable git-authoritative predicate persistence, and effects-manifest capture in this item | formally re-charter #187 as unsigned-format dogfooding and create separate signing/transport items | https://github.com/pelaggio/pelaggio/issues/187 | 2026-08-03 |

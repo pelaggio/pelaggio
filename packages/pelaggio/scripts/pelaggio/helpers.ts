@@ -262,9 +262,9 @@ export function createMainCheckoutDeltaObserver(root: string): MainCheckoutDelta
 
 // ── Pick result parsing ────────────────────────────────────────────────
 
-export type PickReason = "claimed" | "blocked" | "unknown-id" | "already-done" | "worktree-exists" | "already-claimed" | "queue-empty";
+export type PickReason = "claimed" | "blocked" | "unknown-id" | "already-done" | "worktree-exists" | "already-claimed" | "queue-empty" | "stale-quarantined";
 
-const PICK_REASONS: ReadonlySet<PickReason> = new Set(["claimed", "blocked", "unknown-id", "already-done", "worktree-exists", "already-claimed", "queue-empty"]);
+const PICK_REASONS: ReadonlySet<PickReason> = new Set(["claimed", "blocked", "unknown-id", "already-done", "worktree-exists", "already-claimed", "queue-empty", "stale-quarantined"]);
 
 /**
  * Parse a structured `pick-result: <tag>` trailing line from the /pick skill output.
@@ -1221,7 +1221,7 @@ export function detectResumeStep(itemId: string, worktree: string): Step {
 	return "shakedown-code";
 }
 
-export type LoggedDriverIdentity = { provider: "codex"; codexModel?: string } | { provider: "claude" | "grok"; model?: string };
+export type LoggedDriverIdentity = { provider: "codex"; codexModel?: string } | { provider: "claude" | "grok" | "opencode"; model?: string };
 
 /** Find the latest successful realized author across all cycle entries for an item. */
 export function findLoggedArtifactAuthor(itemId: string, step: "plan" | "implement", logPath = LOG_PATH): LoggedDriverIdentity | undefined {
@@ -1239,7 +1239,8 @@ export function findLoggedArtifactAuthor(itemId: string, step: "plan" | "impleme
 				const logged = value as Record<string, unknown>;
 				if (logged.name !== step || logged.ok !== true) continue;
 				if (logged.provider === "codex") return typeof logged.model === "string" && logged.model !== "default" ? { provider: "codex", codexModel: logged.model } : { provider: "codex" };
-				if (logged.provider === "claude" || logged.provider === "grok") return typeof logged.model === "string" && logged.model !== "default" ? { provider: logged.provider, model: logged.model } : { provider: logged.provider };
+				if (logged.provider === "claude" || logged.provider === "grok" || logged.provider === "opencode")
+					return typeof logged.model === "string" && logged.model !== "default" ? { provider: logged.provider, model: logged.model } : { provider: logged.provider };
 				return undefined;
 			}
 		}

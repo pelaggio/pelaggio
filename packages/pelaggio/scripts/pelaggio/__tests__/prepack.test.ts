@@ -21,6 +21,7 @@ describe("pack-prepare", () => {
 		target = mkdtempSync(join(tmpdir(), "pelaggio-prepack-"));
 		copySkillsIn(target, REPO_ROOT);
 		assert.ok(existsSync(resolve(target, ".claude/skills/_rubric.md")), "skills copied");
+		assert.ok(existsSync(resolve(target, ".claude/skills/decompose/SKILL.md")), "decompose skill packed");
 		assert.ok(existsSync(resolve(target, ".claude-templates")), ".claude-templates copied");
 
 		cleanSkillsOut(target);

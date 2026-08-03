@@ -53,7 +53,7 @@ function marker(id: string): string {
 
 const escalationMarker = (value: { escalation: ReviewEscalation; resolution?: ReviewResolution }): string => `<!-- review-escalation:${Buffer.from(JSON.stringify(value)).toString("base64url")} -->`;
 
-function mainWorktree(repo: string): string {
+export function mainWorktree(repo: string): string {
 	try {
 		const output = execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: repo, encoding: "utf8" });
 		for (const block of output.trim().split(/\n\n+/)) {

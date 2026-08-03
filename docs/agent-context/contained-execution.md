@@ -14,10 +14,14 @@ Transparent auth is deliberately unavailable in command mode.
 
 Defaults are 1 MiB request bodies, 8 MiB responses, 60 requests/minute, 500 requests/run,
 10 million conservatively reserved input tokens, 1 million output tokens, and 100 USD in integer
-micro-USD accounting. A hard cap, response overflow, or unaccountable successful response seals the
-broker and kills the systemd scope. Decisions retain method, path without query, rule/outcome,
-status, byte/token/cost counters, and timestamps only. Policy or request-shape changes require an
-intentional update to the versioned fixture under `__tests__/fixtures/egress/`.
+micro-USD accounting. Spend, token, and requests-per-run breaches are absolute ceilings: a breach
+seals the broker and kills the systemd scope immediately, as does a response overflow or an
+unaccountable successful response. The requests/minute rate limit is transient, not absolute: a
+breach returns a soft `429` with `Retry-After` and lets the caller back off, sealing only once a
+client ignores backoff past a bounded retry budget (default 20 consecutive breaches). Decisions
+retain method, path without query, rule/outcome, status, byte/token/cost counters, and timestamps
+only. Policy or request-shape changes require an intentional update to the versioned fixture under
+`__tests__/fixtures/egress/`.
 
 (design) Confine agent-authored, injection-reachable code that pelaggio runs autonomously. This doc
 was re-scoped after three rounds of adversarial multi-driver review (Claude/Codex/Grok) that

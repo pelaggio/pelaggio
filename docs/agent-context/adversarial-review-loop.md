@@ -198,9 +198,10 @@ The loop emits a **structured review record**: which drivers reviewed, each pass
 convergence delta, which driver caught what, the blocking-bar, the **diversity-guarantee status
 (met | softened)**, the terminal outcome, and any recorded dissent. It becomes an **attestation** only
 when a separate layer binds it to the reviewed **commit SHA + config + tool results + trusted harness
-identity** — that binding is #188's job (#186 predicate / #187 emit / #189 assisted-by): the loop is a
-**producer/consumer of those charters, not a reinvention of them** — it must not invent its own
-crypto/predicate binding.
+identity**. #188 shipped the effects-boundary **execution-receipt** producer (manifest + dispatch
+binding); gate-assertion binding, merge enforcement, and trusted-runner identity remain follow-ups
+(#186 predicate / #187 emit / #189 assisted-by). The loop is a **producer/consumer of those charters,
+not a reinvention of them** — it must not invent its own crypto/predicate binding.
 
 **Residual honesty (the doc-1 discipline, applied here).** The headline "reviewed by K models" must
 **not** imply "K independent chances to catch the bug":
@@ -228,7 +229,7 @@ and the **convergence-loop controller + terminal-outcome taxonomy**.
   vault, no multi-seat unattended subscription automation. Subscription-pool economics are a local-mode
   property, never the differentiator.
 - Review is **pre-commit and resolving**, not a post-hoc comment gate; the PR arrives converged + a
-  structured review **record** (an attestation only once #188 binds it to SHA/config/identity).
+  structured review **record** (an attestation only once gate-assertion binding + trusted identity complete the #188 residual follow-ups).
 - `author ≠ reviewer ≠ judge` (role separation); diversity **preferred, gracefully degraded, always
   recorded** — a same-provider run emits a visibly weaker record.
 - **No model, especially the Judge, may launder unresolved material uncertainty into a landed change**

@@ -1,0 +1,7 @@
+{"type":"session","sessionID":"ses_tools","model":"anthropic/claude-sonnet-4-5"}
+{"type":"step-start"}
+{"type":"tool","tool":"edit","state":{"status":"completed","input":{"filePath":"src/note.ts"}}}
+{"type":"tool","tool":"bash","state":{"status":"completed","input":{"command":"echo done"},"output":"done"}}
+{"type":"text","text":"OK"}
+{"type":"step-finish","usage":{"input":35000,"output":151,"cache":{"read":28800}}}
+{"type":"finish","reason":"stop"}
