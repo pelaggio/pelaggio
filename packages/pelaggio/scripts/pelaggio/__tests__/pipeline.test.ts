@@ -1686,6 +1686,261 @@ describe("runPipeline — worktree confinement audit", () => {
 	});
 });
 
+describe("runPipeline — cross-process session records (#369)", () => {
+	it("exempts a sibling proven by resolveEligibleSessions at step start without false-positive", async () => {
+		const { parent, mainRepo, worktree } = makeConfinementRepos();
+		const peer = join(parent, `${WORKTREE_PREFIX}peer`);
+		execSync(`git worktree add -q -b feat/peer "${peer}"`, { cwd: mainRepo });
+		const parkSignal = makeParkSignal();
+		const { runStep } = createMockRunStep(
+			{
+				implement: {
+					ok: true,
+					sideEffect: () => {
+						writeFileSync(join(peer, "peer-only.txt"), "ok");
+					},
+				},
+				"shakedown-code": { ok: true },
+				ship: prShipDecision(),
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
+			runStep,
+			mainRepo,
+			listWorktrees: () => [mainRepo, worktree, peer],
+			appendLog: () => {},
+			roadmap: makeMockRoadmap(),
+			dispatchStepEffects: async () => ({ appendText: "https://github.com/cdhorne/pelaggio/pull/99" }),
+			resolveEligibleSessions: () => [
+				{
+					identity: { sessionId: "peer-sess", claimedItem: "peer", claimBranch: "feat/peer", worktreePath: peer },
+					worktreePath: peer,
+					leg: "fallback",
+					pid: 0,
+				},
+			],
+		});
+
+		assert.equal(result.completed, true, `expected success; error=${result.error}`);
+	});
+
+	it("revalidates a changed sibling at diff time: still-eligible warns instead of parking", async () => {
+		const { parent, mainRepo, worktree } = makeConfinementRepos();
+		const peer = join(parent, `${WORKTREE_PREFIX}peer-rv`);
+		execSync(`git worktree add -q -b feat/peer-rv "${peer}"`, { cwd: mainRepo });
+		const parkSignal = makeParkSignal();
+		const warnings: string[] = [];
+		const origLog = console.log;
+		console.log = (...args: unknown[]) => {
+			warnings.push(args.map(String).join(" "));
+		};
+		try {
+			const { runStep } = createMockRunStep(
+				{
+					implement: {
+						ok: true,
+						sideEffect: () => {
+							writeFileSync(join(peer, "during.txt"), "x");
+						},
+					},
+					"shakedown-code": { ok: true },
+					ship: prShipDecision(),
+				},
+				parkSignal,
+			);
+
+			const accepted = {
+				identity: { sessionId: "rv-peer", claimedItem: "peer-rv", claimBranch: "feat/peer-rv", worktreePath: peer },
+				worktreePath: peer,
+				leg: "binding" as const,
+				pid: 1,
+			};
+			const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
+				runStep,
+				mainRepo,
+				listWorktrees: () => [mainRepo, worktree, peer],
+				appendLog: () => {},
+				roadmap: makeMockRoadmap(),
+				dispatchStepEffects: async () => ({ appendText: "https://github.com/cdhorne/pelaggio/pull/99" }),
+				// Not exempt at step start — peer dirty shows up in the diff — then revalidation saves it.
+				resolveEligibleSessions: () => [],
+				revalidateChangedRoot: (_ctx, root) => (root === peer || root.endsWith("peer-rv") ? accepted : undefined),
+			});
+
+			assert.equal(result.completed, true, `expected revalidation suppress; error=${result.error}`);
+			assert.ok(
+				warnings.some((w) => /excluded live session/.test(w)),
+				`expected revalidation warning; got: ${warnings.join(" | ")}`,
+			);
+		} finally {
+			console.log = origLog;
+		}
+	});
+
+	it("parks when a changed sibling fails revalidation (identity/expired/missing)", async () => {
+		const { parent, mainRepo, worktree } = makeConfinementRepos();
+		const peer = join(parent, `${WORKTREE_PREFIX}peer-dead`);
+		execSync(`git worktree add -q -b feat/peer-dead "${peer}"`, { cwd: mainRepo });
+		const parkSignal = makeParkSignal();
+		const { runStep } = createMockRunStep(
+			{
+				implement: {
+					ok: true,
+					sideEffect: () => {
+						writeFileSync(join(peer, "foreign.txt"), "x");
+					},
+				},
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
+			runStep,
+			mainRepo,
+			listWorktrees: () => [mainRepo, worktree, peer],
+			appendLog: () => {},
+			roadmap: makeMockRoadmap(),
+			resolveEligibleSessions: () => [],
+			revalidateChangedRoot: () => undefined,
+		});
+
+		assert.equal(result.completed, false);
+		assert.equal(result.error, "implement failed: confinement violation");
+	});
+
+	it("registers and disposes a session controller around the cycle lifecycle", async () => {
+		const { mainRepo, worktree } = makeConfinementRepos();
+		const parkSignal = makeParkSignal();
+		const events: string[] = [];
+		let disposed = false;
+		const { runStep } = createMockRunStep(
+			{
+				implement: { ok: false, text: "stop" },
+			},
+			parkSignal,
+		);
+
+		await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
+			runStep,
+			mainRepo,
+			listWorktrees: () => [mainRepo, worktree],
+			appendLog: () => {},
+			roadmap: makeMockRoadmap(),
+			captureEvaluatorContext: (repo) => ({ inventory: { identities: [] }, mainRepo: repo }),
+			createSessionController: (args) => {
+				events.push(`create:${args.claimedItem}:${args.claimBranch}`);
+				return {
+					sessionId: args.sessionId,
+					identity: {
+						sessionId: args.sessionId,
+						claimedItem: args.claimedItem,
+						claimBranch: args.claimBranch,
+						worktreePath: args.worktreePath,
+					},
+					updateChild: (pid) => {
+						events.push(`pid:${pid}`);
+					},
+					dispose: () => {
+						disposed = true;
+						events.push("dispose");
+					},
+				};
+			},
+		});
+
+		assert.ok(
+			events.some((e) => e.startsWith("create:TOOL-99:feat/tool-99")),
+			`expected create; got ${events.join(",")}`,
+		);
+		assert.equal(disposed, true);
+		assert.ok(events.includes("dispose"));
+	});
+
+	it("includes excluded-session diagnostics in confinement park evidence", async () => {
+		const { parent, mainRepo, worktree } = makeConfinementRepos();
+		const peer = join(parent, `${WORKTREE_PREFIX}diag`);
+		const inactive = join(parent, `${WORKTREE_PREFIX}inactive-diag`);
+		execSync(`git worktree add -q -b feat/diag "${peer}"`, { cwd: mainRepo });
+		execSync(`git worktree add -q -b feat/inactive-diag "${inactive}"`, { cwd: mainRepo });
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep } = createMockRunStep(
+			{
+				implement: {
+					ok: true,
+					sideEffect: () => {
+						writeFileSync(join(inactive, "leaked.txt"), "x");
+					},
+				},
+			},
+			parkSignal,
+		);
+
+		await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
+			runStep,
+			mainRepo,
+			listWorktrees: () => [mainRepo, worktree, peer, inactive],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+			roadmap: makeMockRoadmap(),
+			resolveEligibleSessions: () => [
+				{
+					identity: { sessionId: "ex-1", claimedItem: "diag", claimBranch: "feat/diag", worktreePath: peer },
+					worktreePath: peer,
+					leg: "fallback",
+					pid: 0,
+				},
+			],
+			revalidateChangedRoot: () => undefined,
+		});
+
+		const steps = logs[0]?.steps as Array<{ subtype?: string; errorDetail?: string; outputTail?: string }>;
+		const conf = steps?.find((s) => s.subtype === "error_confinement");
+		assert.ok(conf, "expected confinement step");
+		assert.match(String(conf.errorDetail ?? conf.outputTail ?? ""), /excluded sessions|ex-1|inactive-diag|leaked/);
+	});
+
+	it("threads foreignRootDenial into runStep for Claude hooks including ownWorktree", async () => {
+		const { mainRepo, worktree } = makeConfinementRepos();
+		const parkSignal = makeParkSignal();
+		const seen: Array<{ foreign?: unknown; child?: unknown }> = [];
+		const runStep: RunStepFn = async (_name, _prompt, opts, emit) => {
+			seen.push({ foreign: opts.foreignRootDenial, child: typeof opts.onChildSpawn });
+			emit({ type: "done", ok: false, subtype: "error_refusal", cost: 0.01, turns: 1, elapsed: 0 });
+			return { ok: false, subtype: "error_refusal", text: "stop", fullText: "stop", cost: 0.01, turns: 1 };
+		};
+
+		await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
+			runStep,
+			mainRepo,
+			listWorktrees: () => [mainRepo, worktree],
+			appendLog: () => {},
+			roadmap: makeMockRoadmap(),
+			createSessionController: (args) => ({
+				sessionId: args.sessionId,
+				identity: {
+					sessionId: args.sessionId,
+					claimedItem: args.claimedItem,
+					claimBranch: args.claimBranch,
+					worktreePath: args.worktreePath,
+				},
+				updateChild: () => {},
+				dispose: () => {},
+			}),
+		});
+
+		assert.ok(seen.length > 0);
+		const first = seen[0]!;
+		const fr = first.foreign as { mainRepo: string; ownWorktree?: string; registeredWorktrees: string[] };
+		assert.equal(fr.mainRepo, mainRepo);
+		assert.ok(fr.registeredWorktrees.includes(worktree) || fr.registeredWorktrees.includes(mainRepo));
+		assert.equal(first.child, "function");
+	});
+});
+
 describe("runPipeline — RoadmapSource injection", () => {
 	it("runs plan even when getItemPlan would return a stale upstream-materialized plan", async () => {
 		const worktree = makeTempGitRepo();

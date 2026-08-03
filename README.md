@@ -24,8 +24,8 @@ without taking away your control:
 - **Supervision on your terms.** Watch every session and steer the roadmap by hand, run it
   entirely unattended, or anywhere between — the same pipeline and the same guardrails at
   whatever involvement (and token budget) you choose.
-- **Bring your own agent.** Claude Code, Codex, and Grok Build, driven through one provider seam —
-  it's designed for choice, not lock-in.
+- **Bring your own agent.** Claude Code, Codex, Grok Build, and OpenCode, driven through one
+  provider seam — it's designed for choice, not lock-in.
 - **Bounded blast radius.** Every item runs in its own git worktree, isolated from `main`
   and from your other work. Shipping defaults to a **pull request**; autonomous direct-push
   to `main` is an explicit, informed opt-in — never the silent default.
@@ -64,6 +64,8 @@ Pelaggio drives the harness; you choose it. The provider seam is real, not aspir
 - **Codex** — a first-class second driver.
 - **Grok Build** — an ACP driver with a pinned, managed sandbox setup; see the
   [Grok operator guide](./docs/grok.md).
+- **OpenCode** — a headless driver fronting 75+ model backends through one CLI; see the
+  [OpenCode operator guide](./docs/opencode.md).
 
 Model IDs, per-step budgets, and effort are configuration, not code — see `.pelaggio.yml`.
 

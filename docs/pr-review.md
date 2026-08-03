@@ -141,6 +141,19 @@ diff triggers the red-team pass and that pass cannot complete, the whole gate bl
 even if the standard pass found no issues. Re-run the workflow once the cause clears —
 the comment is upserted, not duplicated.
 
+**Rate-limit is the one exception, and only in the local runner (#134).** A rate limit
+during `pr-review`/`pr-verify` is transient, not a real BLOCK, so the gate reports a
+third outcome — `park` — carrying the reset time. In the **CI runner** there is no wait
+loop on a one-shot GitHub Actions job, so `park` maps to the same red `review` status and
+exit 1 as a block (fail-closed, unchanged). In the **local runner** the sweep instead
+leaves the `review` status **pending** (never red, never a revisable findings comment),
+parks the run with the reset, and retries the review sweep in-process under the same
+`park.auto-resume` / `--max-wait` / reset-time policy as item park-and-resume — or hands
+back cleanly, leaving the PR pending for the next run. Pending PRs stay eligible for the
+sweep, so nothing is lost. Real BLOCKs (must-fix survivors, invalid report, refusal,
+max-turns, crash, diff-inspection failure) still post red and stay revisable in both
+runners.
+
 Candidate IDs are assigned by orchestration and verification returns only an ID,
 `refuted`/`survives`, and a rationale. Surviving findings are reconstructed from the
 original validated discovery report, preserving their message and location. Missing,

@@ -311,15 +311,15 @@ export interface CycleResult {
  * errors (`pick:unknown-id`, `pick:blocked`) are intentionally absent: a typo'd `--item`
  * or a user-requested blocked item should halt loudly and page.
  */
-export const RECOVERABLE_ERRORS = ["plan needs rethink", "parked", "transient sdk error", "pick:queue-empty", "pick:worktree-exists", "pick:already-claimed", "pick:already-done", "pick:unknown"] as const;
+export const RECOVERABLE_ERRORS = ["plan needs rethink", "parked", "transient sdk error", "pick:queue-empty", "pick:worktree-exists", "pick:already-claimed", "pick:already-done", "pick:stale-quarantined", "pick:unknown"] as const;
 
 // ── Step providers ─────────────────────────────────────────────────────
 
-/** The backend that runs a step's model. Today only `"claude"` (the SDK runner);
- *  #80 widens this union (and the `PROVIDER_NAMES` validation array in `config.ts`)
- *  to register a second provider. The runtime names array lives in `config.ts`,
+/** The backend that runs a step's model. Started as only `"claude"` (the SDK runner);
+ *  #80 opened the union for a second provider and #137 adds `"opencode"` (75+ model
+ *  backends behind one headless CLI). The runtime names array lives in `config.ts`,
  *  mirroring `ShipTargetName` / `SHIP_TARGET_NAMES`. */
-export type ProviderName = "claude" | "codex" | "grok";
+export type ProviderName = "claude" | "codex" | "grok" | "opencode";
 
 // ── Provider capability descriptors (ADR-0020 / #337) ──────────────────
 // Data-only facts about what a driver does natively. Axes are orthogonal
@@ -440,6 +440,14 @@ export interface PipelineOpts {
 	 * and stays hard-gated by the snapshot.
 	 */
 	activeWorktrees?: Set<string>;
+	/**
+	 * #369: immutable cross-process session evaluator context (run-start inventory +
+	 * boot-relative starttime watermark). When absent, `runPipeline` captures it once
+	 * at entry so direct callers and tests still get inventory-based peer exemption.
+	 * The orchestrator may pre-capture once per process and thread the same object
+	 * into every worker. Typed object — not a boolean flag.
+	 */
+	sessionEvaluator?: import("./confinement/sessions.js").SessionEvaluatorContext;
 	workerStatus?: CycleStatus;
 	logPath?: string;
 	/** Required for creating step renderers — injected by orchestrate() */

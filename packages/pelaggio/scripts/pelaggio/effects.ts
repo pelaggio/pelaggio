@@ -349,7 +349,7 @@ function issueEffectsManifestReceipt(ctx: EffectsDispatchContext, input: { rawTe
 	}
 }
 
-const PROVIDER_NAMES: readonly ProviderName[] = ["claude", "codex", "grok"];
+const PROVIDER_NAMES: readonly ProviderName[] = ["claude", "codex", "grok", "opencode"];
 const SEAT_ROLES = ["author", "reviewer", "judge"] as const;
 const SHA_RE = /^[0-9a-f]{7,40}$/i;
 const FINGERPRINT_RE = /^[0-9a-f]{64}$/i;

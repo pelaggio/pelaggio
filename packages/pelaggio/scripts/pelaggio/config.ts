@@ -5,7 +5,7 @@ import { basename, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { NOTIFY_EVENTS, NOTIFY_FORMATS, type NotifyConfig, type NotifyEvent, type NotifyFormat } from "./notify.js";
 import { type RawTaxonomyInput, resolveTaxonomy, type TaxonomyConfig } from "./review/taxonomy.js";
-import { type GithubRoadmapConfig, type LinearRoadmapConfig, PLAN_LOCATIONS, type PlanLocation, ROADMAP_SOURCE_NAMES, type RoadmapSourceName } from "./roadmap/types.js";
+import { type GithubRoadmapConfig, isScope, type LinearRoadmapConfig, PLAN_LOCATIONS, type PlanLocation, ROADMAP_SOURCE_NAMES, type RoadmapSourceName, type Scope } from "./roadmap/types.js";
 import type { ProviderName, ShipTargetName } from "./types.js";
 
 const SHIP_TARGET_NAMES: readonly ShipTargetName[] = ["direct-push", "pull-request", "auto-merge-pr"];
@@ -16,10 +16,10 @@ export const DEFAULT_SHIP_TARGET: ShipTargetName = "pull-request";
 
 // The backends a step's model can run on. Mirrors `SHIP_TARGET_NAMES`: the type
 // lives in `types.ts`, this validation array is its module-private companion. #80
-// widens both to add a second provider. `DEFAULT_PROVIDER` is the fallback every
-// step resolves to when a profile names none, so no provider string is hardcoded
-// outside this file.
-const PROVIDER_NAMES: readonly ProviderName[] = ["claude", "codex", "grok"];
+// opened both for a second provider; codex/grok/opencode (#137) now register here.
+// `DEFAULT_PROVIDER` is the fallback every step resolves to when a profile names
+// none, so no provider string is hardcoded outside this file.
+const PROVIDER_NAMES: readonly ProviderName[] = ["claude", "codex", "grok", "opencode"];
 const DEFAULT_PROVIDER: ProviderName = "claude";
 const isProviderName = (v: unknown): v is ProviderName => typeof v === "string" && (PROVIDER_NAMES as readonly string[]).includes(v);
 
@@ -96,6 +96,8 @@ export interface ResolvedConfig {
 	roadmapSource: RoadmapSourceName;
 	roadmapGithub: GithubRoadmapConfig;
 	roadmapLinear: LinearRoadmapConfig;
+	/** Auto-pick readiness gate (#201). Explicit `--item` bypasses it; `XL` disables it. */
+	pick: { maxScope: Scope };
 	/** Overnight park-and-resume policy. `maxWait` and `unknownResetWait` are raw wait
 	 *  strings (parsed with `parseWaitFlag` at the consumer to avoid a config↔helpers
 	 *  import cycle). `unknownResetWait` is the conservative estimate used when a rate-limit
@@ -125,7 +127,7 @@ export type ProviderDiversityPolicy = "off" | "prefer" | "require";
 /** @deprecated Prefer `ReviewFindingClass` from `./review/findings.js` — single source of truth. */
 export type { ReviewFindingClass as AuthoringFindingClass } from "./review/findings.js";
 export type AuthoringBlockingBar = "must-fix";
-export type ReviewSlot = { id: string; provider: "claude" | "grok"; model?: string } | { id: string; provider: "codex"; codexModel?: string };
+export type ReviewSlot = { id: string; provider: "claude" | "grok" | "opencode"; model?: string } | { id: string; provider: "codex"; codexModel?: string };
 export interface AuthoringReviewConfig {
 	enabled: boolean;
 	reviewers: ReviewSlot[];
@@ -160,6 +162,7 @@ const DEFAULT_LINEAR_ROADMAP: LinearRoadmapConfig = {
 };
 
 export const DEFAULTS = {
+	pick: { maxScope: "M" } satisfies { maxScope: Scope },
 	budgets: {
 		pick: 2,
 		plan: 8,
@@ -478,6 +481,20 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 	const budgets = mergeStepRecord(DEFAULTS.budgets, yml.budgets, "budgets", isNumber, configPath);
 	const turnLimits = mergeStepRecord(DEFAULTS.turnLimits, yml["turn-limits"], "turn-limits", isNumber, configPath);
 	const effort = mergeStepRecord(DEFAULTS.effort, yml.effort, "effort", isEffort, configPath);
+
+	let pickMaxScope: Scope = DEFAULTS.pick.maxScope;
+	const pickBlock = yml.pick;
+	if (pickBlock !== undefined) {
+		if (!isPlainObject(pickBlock)) {
+			throw new Error(`${configPath}: expected \`pick\` to be a map`);
+		}
+		const value = pickBlock["max-scope"];
+		const normalized = typeof value === "string" ? value.toUpperCase() : undefined;
+		if (value !== undefined && !isScope(normalized)) {
+			throw new Error(`${configPath}: expected \`pick.max-scope\` to be one of XS|S|M|L|XL, got ${JSON.stringify(value)}`);
+		}
+		if (isScope(normalized)) pickMaxScope = normalized;
+	}
 
 	const modelsBlock = yml.models;
 	let profilesOverride: unknown;
@@ -879,6 +896,7 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		roadmapSource,
 		roadmapGithub,
 		roadmapLinear,
+		pick: { maxScope: pickMaxScope },
 		park: { autoResume: parkAutoResume, maxWait: parkMaxWait, unknownResetWait: parkUnknownResetWait },
 		revise: { local: reviseLocal },
 		review: { runner: reviewRunner, statuslessAfter: reviewStatuslessAfter, maxPasses: reviewMaxPasses, budgetCap: reviewBudgetCap, providerDiversity: reviewProviderDiversity, authoring: reviewAuthoring, taxonomy: reviewTaxonomy },

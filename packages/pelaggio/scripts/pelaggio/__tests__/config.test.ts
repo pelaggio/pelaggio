@@ -40,6 +40,7 @@ describe("loadConfig — missing / empty", () => {
 		assert.deepEqual(cfg.modelProfiles, DEFAULTS.modelProfiles);
 		assert.equal(cfg.confinement.allowDirtyMain, false);
 		assert.deepEqual(cfg.profileCodexModels, {});
+		assert.equal(cfg.pick.maxScope, "M");
 	});
 
 	it("treats empty YAML file the same as missing", () => {
@@ -49,6 +50,27 @@ describe("loadConfig — missing / empty", () => {
 		assert.deepEqual(cfg.budgets, DEFAULTS.budgets);
 		assert.deepEqual(cfg.modelProfiles, DEFAULTS.modelProfiles);
 		assert.deepEqual(cfg.profileCodexModels, {});
+	});
+});
+
+describe("loadConfig — pick.max-scope", () => {
+	it("parses and normalizes valid thresholds", () => {
+		for (const [input, expected] of [
+			["L", "L"],
+			["s", "S"],
+		] as const) {
+			const repo = tmpRepo();
+			const path = writeYml(repo, `pick:\n  max-scope: ${input}\n`);
+			assert.equal(loadConfig({ repo, configPath: path }).pick.maxScope, expected);
+		}
+	});
+
+	it("rejects invalid strings and non-strings with the config path diagnostic", () => {
+		for (const value of ["XXL", "3", "{}"] as const) {
+			const repo = tmpRepo();
+			const path = writeYml(repo, `pick:\n  max-scope: ${value}\n`);
+			assert.throws(() => loadConfig({ repo, configPath: path }), /expected `pick\.max-scope` to be one of XS\|S\|M\|L\|XL/);
+		}
 	});
 });
 
@@ -926,6 +948,13 @@ describe("loadConfig — providers.<name>.bin (#241)", () => {
 		const path = writeYml(repo, "providers:\n  grok:\n    bin: ~/.grok/bin/grok\n");
 		const cfg = loadConfig({ repo, configPath: path });
 		assert.equal(cfg.providerBins.grok, "~/.grok/bin/grok");
+	});
+
+	it("accepts a bin override for opencode (registered since #137)", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "providers:\n  opencode:\n    bin: ~/.opencode/bin/opencode\n");
+		const cfg = loadConfig({ repo, configPath: path });
+		assert.equal(cfg.providerBins.opencode, "~/.opencode/bin/opencode");
 	});
 
 	it("parses the Grok-only unsandboxed fallback escape hatch", () => {

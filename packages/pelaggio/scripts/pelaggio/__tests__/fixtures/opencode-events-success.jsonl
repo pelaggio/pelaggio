@@ -1,0 +1,5 @@
+{"type":"session","sessionID":"ses_success","model":"anthropic/claude-sonnet-4-5"}
+{"type":"step-start"}
+{"type":"text","text":"hello"}
+{"type":"step-finish","usage":{"input":12000,"output":8,"cache":{"read":9600,"write":0}},"cost":0.0021}
+{"type":"finish","reason":"stop"}
