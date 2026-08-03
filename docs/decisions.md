@@ -6,6 +6,16 @@ Status values are `default-taken`, `resolved`, or `resolved→ADR-nnnn`. Source 
 
 | Decision | Status | Chosen/leaning | Alternatives | Source | Date |
 | --- | --- | --- | --- | --- | --- |
+| Deliver the tactical registry, diff-time revalidation, compensating semantic hook, lifecycle, and tidy sweep in one cycle | default-taken | one cohesive security slice | split cleanup/diagnostics or hook hardening into follow-ups, temporarily shipping an incomplete threat-model boundary | https://github.com/pelaggio/pelaggio/issues/369 | 2026-08-03 |
+<!-- decision:dfa4f740d1df65a1 -->
+| Observe the SDK child PID through the SDK's documented custom spawn seam | default-taken | a behavior-preserving local spawn adapter plus typed callback; capture pid from ChildProcess (not SpawnedProcess) | record the harness PID (cannot satisfy cwd binding), scrape the process table, or omit Linux binding | https://github.com/pelaggio/pelaggio/issues/369 | 2026-08-03 |
+<!-- decision:15a2e91a0ec83281 -->
+| Keep record-derived exemptions distinct from the trusted in-process `activeWorktrees` input | default-taken | separate parameter with an internal main-root filter | merge both sources into one undifferentiated iterable before `forbiddenRootsForConfinement` | https://github.com/pelaggio/pelaggio/issues/369 | 2026-08-03 |
+<!-- decision:971c5ae0e2836f23 -->
+| Multi-step peer survival | default-taken | pid is mutable binding evidence; immutable inventory identity is sessionId+claimedItem+claimBranch+worktreePath only | treat pid as identity (breaks every peer step boundary for earlier evaluators — reintroduces the incident class) | https://github.com/pelaggio/pelaggio/issues/369 | 2026-08-03 |
+<!-- decision:9240b9b2a3760141 -->
+| Claim branch validation | default-taken | store exact claimBranch + attribute to claimedItem via claimedIds-style prefix rules (adapter-aware) | require exact `feat/<claimedItem>` (false-negatives on github-issues `feat/issue-N-slug` branches) | https://github.com/pelaggio/pelaggio/issues/369 | 2026-08-03 |
+<!-- decision:cfa22c078604fa87 -->
 | portable parent representation after successful decomposition | default-taken | close/complete the parent with a note listing every child ID via existing `mark-done` | provider-specific epic relationships; leave the parent open with an epic label; add a cross-adapter decomposition API | https://github.com/pelaggio/pelaggio/issues/202 | 2026-08-03 |
 <!-- decision:a183fd9a929fecc4 -->
 | partial remote mutation handling | default-taken | fail closed, retain the open parent, and report exact reconciliation state | destructive rollback; continue after failure; add transactional orchestration | https://github.com/pelaggio/pelaggio/issues/202 | 2026-08-03 |
