@@ -6,6 +6,8 @@ Status values are `default-taken`, `resolved`, or `resolved→ADR-nnnn`. Source 
 
 | Decision | Status | Chosen/leaning | Alternatives | Source | Date |
 | --- | --- | --- | --- | --- | --- |
+| residual work for an already-shipped security item | default-taken | verification + documentation hygiene only; do not reimplement the gate | abort cycle / close issue with zero commits (phantom-ship risk); greenfield rewrite of helpers+pipeline (rejected — regression risk) | https://github.com/pelaggio/pelaggio/issues/111 | 2026-08-03 |
+<!-- decision:66fd486fc38edca4 -->
 | model event-backed liveness separately from process lifecycle | default-taken | keep existing RunStatus for control legality and add typed activity projection with optional until | expand RunStatus with idle/parked variants; compute display-only without persistence | https://github.com/pelaggio/pelaggio/issues/83 | 2026-08-03 |
 <!-- decision:478fafd4fd1298a0 -->
 | expose repo-derived watch defaults through a narrow authenticated API | default-taken | add repo-scoped defaults route beside roadmap/stats | duplicate YAML in browser; no prefill; expose full config | https://github.com/pelaggio/pelaggio/issues/83 | 2026-08-03 |
