@@ -246,8 +246,17 @@ models:
         implement: codex
         shakedown-code: grok
 
-The authoring and ordinary review steps (`plan`, `implement`, `shakedown-plan`,
-and `shakedown-code`) also accept an ordered, non-empty list:
+The authoring steps (`plan`, `implement`, `shakedown-plan`, and `shakedown-code`)
+and the non-pipeline CI gate step `pr-review` also accept an ordered, non-empty
+list. **Semantics differ by step:**
+
+| Step(s) | Pool meaning |
+|---------|----------------|
+| `plan` / `implement` / `shakedown-*` | *Selection set* — the pipeline picks one eligible driver from the list. |
+| `pr-review` | *Fan-out set* — every resolved candidate runs the same discovery prompt concurrently; the gate passes only when every required driver/label pass completes and passes (all-pass / veto). |
+
+There is no second config key for this distinction; the step name selects the
+behavior.
 
 ```yaml
 models:
@@ -258,15 +267,21 @@ models:
         implement: [claude, codex, grok]
         shakedown-plan: [claude, codex, grok]
         shakedown-code: [claude, codex, grok]
+        # CI merge-gate fan-out (not author rotation):
+        pr-review: [claude, codex]
 ```
 
-List order is significant. Pelaggio rotates author selection deterministically
-from the cycle number and authoring-step ordinal, after filtering drivers that
-are not ready before execution. Review selection excludes the realized author
-of the artifact and an N-seat request requires distinct providers; insufficient
-eligible seats fails closed. Scalars and one-element lists remain static pins.
-Provider lists are rejected for coordination, recovery, adversarial-loop, and
-other unsupported steps.
+List order is significant. For authoring selection sets, Pelaggio rotates author
+selection deterministically from the cycle number and authoring-step ordinal,
+after filtering drivers that are not ready before execution. Review selection
+excludes the realized author of the artifact and an N-seat request requires
+distinct providers; insufficient eligible seats fails closed. For `pr-review`,
+order is the deterministic render/aggregation order of driver passes (and the
+order used when merging concurrent park metadata). Scalars and one-element lists
+remain static pins (single-driver / no fan-out). Provider lists are rejected for
+`pr-verify`, `ship`, coordination, recovery, and other unsupported steps —
+verification stays one independently configurable scalar driver per discovery
+result.
 
 Readiness is a pre-execution capability check. Once a driver begins an artifact,
 a launch, transport, or rate-limit failure parks and checkpoints the cycle; it
@@ -690,32 +705,64 @@ the same command, so it is intentionally not looped.
 | `review.statusless-after` | `2h` | In local mode, emit `review-stranded` and leave a PR diagnostic when a same-repo pelaggio PR has no `review` status this long. |
 | `review.max-passes` | `1` | Independent review iterations, integer `1..3`. One preserves the safe rollout/current behavior. |
 | `review.budget-cap` | `20` | Positive finite aggregate dollar cap. A full required iteration is reserved before it starts. |
-| `review.provider-diversity` | `off` | `off`, `prefer`, or `require`; `require` blocks before agent work unless review and verifier providers differ. |
+| `review.provider-diversity` | `off` | `off`, `prefer`, or `require`; `require` blocks before agent work unless **at least one** review driver differs from the scalar verifier provider. |
 
 Local mode is only active in normal auto-pick runs for github-issues roadmaps and PR
 ship targets. Configure the model provider through the existing non-pipeline
 `pr-review` step settings. By default, `pr-verify` inherits the resolved
-`pr-review` model, Codex model, and provider while retaining its independently
-configurable global budget, turn limit, and effort:
+`pr-review` model, Codex model, and provider (the pool's **first** entry when
+`pr-review` is a list) while retaining its independently configurable global
+budget, turn limit, and effort.
+
+### Multi-driver `pr-review` fan-out
+
+A provider pool on `pr-review` is a **fan-out set**: every candidate runs the
+same standard (and, when triggered, red-team) discovery prompt concurrently.
+`pr-verify` stays scalar — one isolated verification session per blocker-bearing
+driver report. The gate is all-pass / fail-closed: every required
+`(driver × label)` cell must complete with a valid effective PASS. A mix of
+valid PASS and findings-BLOCK is recorded as typed `agreement: disagreement`
+(still BLOCK; human escalation is #244). Infrastructure failure is
+`agreement: invalid`, never mislabeled as model dissent.
+
+**Budget-cap multiplication (operators size the cap; pelaggio does not auto-raise it):**
+
+```
+reservation = labels × drivers × (pr-review budget + pr-verify budget)
+```
+
+Defaults are `$5` + `$5` per cell and `review.budget-cap: 20`. A 2-driver pool
+with only the standard label reserves `$20` (fits). The same pool with a
+security-triggered red-team label reserves `$40` and fails preflight under
+defaults. Enabling a multi-driver pool almost always requires raising
+`review.budget-cap`; red-team multiplies again.
 
 ```yaml
 review:
   runner: local
   statusless-after: 2h
   max-passes: 2
-  budget-cap: 40
+  budget-cap: 40   # size for labels × drivers × (review+verify)
   provider-diversity: require
 
 models:
   profiles:
     standard:
       providers:
-        pr-review: codex
+        pr-review: [claude, codex]   # fan-out; order is render/aggregation order
+        pr-verify: codex             # scalar verifier (independent of the pool)
       codex:
         pr-review: gpt-5-codex
+        pr-verify: gpt-5-codex
 ```
 
-For cross-provider verification, override the verifier slots explicitly:
+Scalar `pr-review: codex` remains a one-driver pool (current single-driver
+behavior). `provider-diversity: require` accepts a pool when **at least one**
+review driver differs from the verifier (rejects only when *every* review
+driver equals the verifier). Metrics render the pairing as
+`claude+codex/codex`, not a single `review/verify` string.
+
+For a single-driver cross-provider setup without fan-out:
 
 ```yaml
 models:
