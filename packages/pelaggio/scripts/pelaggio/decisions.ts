@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import { listWorktreesIn, parseDecisions } from "./helpers.js";
 import { withMutationLock } from "./roadmap/mutation-lock.js";
@@ -153,11 +153,26 @@ function decisionLogDir(repo: string): string {
 }
 
 function authorityPath(repo: string, owner: string): string {
-	return resolve(decisionLogDir(repo), `${validateOwner(owner)}.md`);
+	const path = resolve(decisionLogDir(repo), `${validateOwner(owner)}.md`);
+	// A worker could pre-plant this path as a symlink; the harness-privileged
+	// append must never follow it out of the decision-log directory. Fail closed
+	// on any non-regular file (the caller surfaces the error).
+	try {
+		if (lstatSync(path).isSymbolicLink()) throw new Error(`decision-log authority is a symlink, refusing: ${path}`);
+	} catch (e) {
+		if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+	}
+	return path;
 }
 
 function archivePath(repo: string, owner: string): string {
-	return resolve(decisionLogDir(repo), "archive", `${validateOwner(owner)}.md`);
+	const path = resolve(decisionLogDir(repo), "archive", `${validateOwner(owner)}.md`);
+	try {
+		if (lstatSync(path).isSymbolicLink()) throw new Error(`decision-log archive is a symlink, refusing: ${path}`);
+	} catch (e) {
+		if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+	}
+	return path;
 }
 
 function splitRow(row: string): string[] {

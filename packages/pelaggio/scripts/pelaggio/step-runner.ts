@@ -156,6 +156,16 @@ export function blockForeignRootWrite(input: HookInput, cwd: string, mainRepo: s
 		};
 	}
 
+	// Decision-log denial is likewise absolute (#386): docs/decision-log/ holds
+	// harness-recorded operational decisions and review-escalation adjudications.
+	// Agents emit DECISION: lines; only the harness writes the register.
+	if (/(^|\/)docs\/decision-log(\/|$)/.test(abs)) {
+		return {
+			decision: "block" as const,
+			reason: `Path "${fp}" targets the decision-log register, which is harness-owned. Emit a "DECISION:" line in your step output instead of editing docs/decision-log/ directly.`,
+		};
+	}
+
 	// Always allow writes inside the step cwd (sibling worktree or nested seat).
 	if (pathUnderRoot(abs, cwdAbs)) return {};
 	// Explicit own item worktree (shipwreck from main cwd).
