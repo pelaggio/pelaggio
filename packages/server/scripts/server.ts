@@ -6,6 +6,7 @@ import { loadServerConfig } from "../src/config.js";
 import { LogBroker } from "../src/log-broker.js";
 import { loadRegistry } from "../src/registry.js";
 import { RoadmapCache } from "../src/roadmap-cache.js";
+import { acquireStatePathLock } from "../src/state-path-lock.js";
 import { StateStore } from "../src/state-store.js";
 import { Supervisor } from "../src/supervisor.js";
 
@@ -13,6 +14,13 @@ const cfg = loadServerConfig();
 if (cfg.token === undefined) {
 	console.warn(`pelaggio-server: CONTROL_PLANE_TOKEN is unset — running unauthenticated on loopback (${cfg.host}). Set CONTROL_PLANE_TOKEN to require bearer auth.`);
 }
+// Exclusive ownership of the state path before any registry/store work so a
+// duplicate instance fails before touching other files. Release on exit so
+// orderly shutdown does not leave residue; crash residue is reclaimed on the
+// next boot after the recorded PID is confirmed dead (or is this process).
+const stateLock = acquireStatePathLock(cfg.statePath);
+process.once("exit", () => stateLock.release());
+
 const registry = loadRegistry(cfg.registryPath);
 const roadmapCache = new RoadmapCache({
 	registry,

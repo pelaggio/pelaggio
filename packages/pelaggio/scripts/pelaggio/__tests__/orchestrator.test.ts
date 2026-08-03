@@ -874,6 +874,128 @@ describe("runOrchestrator — revise sweep (issue #76)", () => {
 		assert.equal(prListCalls, 2, "review sweep must list before revise sweep lists");
 	});
 
+	// A pending PR fixture whose `review` status is PENDING → always a candidate (never "done",
+	// never "stranded"), so it stays eligible for the local review sweep across retry rounds (#134).
+	function pendingReviewPr(): unknown {
+		return [
+			{
+				number: 201,
+				isDraft: false,
+				headRefName: "feat/issue-84-local-review",
+				headRefOid: "abc123",
+				headRepository: { nameWithOwner: "o/r" },
+				updatedAt: "2026-07-08T12:00:00Z",
+				statusCheckRollup: [{ __typename: "StatusContext", context: "review", state: "PENDING", startedAt: "2026-07-08T12:00:00Z" }],
+			},
+		];
+	}
+
+	it("local review rate-limit leaves the status pending — never failure, never a findings comment (#134)", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const baseNow = 1_700_000_000_000;
+		const ghCalls: string[][] = [];
+		const gh: GhRunner = (args) => {
+			ghCalls.push(args);
+			if (args[0] === "pr" && args[1] === "list") return { stdout: JSON.stringify(pendingReviewPr()), stderr: "", status: 0 };
+			if (args[0] === "issue" && args[1] === "view") return { stdout: JSON.stringify({ labels: [{ name: "autopilot" }] }), stderr: "", status: 0 };
+			if (args[0] === "api" && args[1]?.includes("/comments")) return { stdout: JSON.stringify([]), stderr: "", status: 0 };
+			return { stdout: "", stderr: "", status: 0 };
+		};
+		const { runPipeline, calls } = createMockRunPipeline({ default: { completed: false, cost: 0, error: "pick:queue-empty" } });
+
+		const { exitCode } = await runOrchestrator(
+			{ ...baseFlags, target: "pull-request", cycles: "1" },
+			{
+				runPipeline,
+				resolveWorktree: resolveWt,
+				park: { autoResume: false }, // hand back immediately — no wait needed for the "never red" assertion
+				review: {
+					runner: "local",
+					ghRepo: "o/r",
+					gh,
+					statuslessAfter: "2h",
+					now: () => Date.parse("2026-07-08T12:05:00Z"),
+					prepareReviewHead: () => ({ diffCwd: "/tmp/pr-head", baseRef: "origin/main", headRef: "refs/pelaggio-review/pr-201" }),
+					cleanupReviewHead: () => {},
+					runReviewGate: async (opts) => {
+						if (opts.parkSignal) {
+							opts.parkSignal.parked = true;
+							opts.parkSignal.resetsAt = baseNow + 60_000;
+							opts.parkSignal.limitType = "5h";
+						}
+						return { gate: "park", body: "should-not-be-posted", cost: 0.1, costEstimated: false, turns: 0, ok: false, subtype: "error_rate_limit", park: { resetsAt: baseNow + 60_000, limitType: "5h" } };
+					},
+				},
+				revise: { local: true, ghRepo: "o/r", gh },
+			},
+		);
+
+		assert.equal(exitCode, 1);
+		const statusStates = ghCalls.filter((a) => a[0] === "api" && a[1] === "repos/o/r/statuses/abc123").map((a) => a.find((arg) => arg.startsWith("state=")));
+		assert.deepEqual(statusStates, ["state=pending"], "only a pending status — never failure — on a rate-limit park");
+		const commentUpserts = ghCalls.filter((a) => a.some((arg) => arg.startsWith("body=")));
+		assert.equal(commentUpserts.length, 0, "no findings (or any) comment upserted on a park");
+		assert.equal(calls.length, 0, "revise sweep and the pick pool are skipped while parked (revise never claimed)");
+	});
+
+	it("local review rate-limit waits, retries the sweep, and posts success on the second pass (#134)", async (t) => {
+		t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
+		t.mock.method(console, "log", () => {});
+		const baseNow = 1_700_000_000_000;
+		t.mock.timers.setTime(baseNow);
+
+		const ghCalls: string[][] = [];
+		const gh: GhRunner = (args) => {
+			ghCalls.push(args);
+			if (args[0] === "pr" && args[1] === "list") return { stdout: JSON.stringify(pendingReviewPr()), stderr: "", status: 0 };
+			if (args[0] === "issue" && args[1] === "view") return { stdout: JSON.stringify({ labels: [{ name: "autopilot" }] }), stderr: "", status: 0 };
+			if (args[0] === "api" && args[1]?.includes("/comments")) return { stdout: JSON.stringify([]), stderr: "", status: 0 };
+			return { stdout: "", stderr: "", status: 0 };
+		};
+		const { runPipeline } = createMockRunPipeline({ default: { completed: false, cost: 0, error: "pick:queue-empty" } });
+
+		let gateCall = 0;
+		const promise = runOrchestrator(
+			{ ...baseFlags, target: "pull-request", cycles: "1" },
+			{
+				runPipeline,
+				resolveWorktree: resolveWt,
+				review: {
+					runner: "local",
+					ghRepo: "o/r",
+					gh,
+					statuslessAfter: "2h",
+					now: () => Date.now(),
+					prepareReviewHead: () => ({ diffCwd: "/tmp/pr-head", baseRef: "origin/main", headRef: "refs/pelaggio-review/pr-201" }),
+					cleanupReviewHead: () => {},
+					runReviewGate: async (opts) => {
+						gateCall++;
+						if (gateCall === 1) {
+							if (opts.parkSignal) {
+								opts.parkSignal.parked = true;
+								opts.parkSignal.resetsAt = Date.now() + 60_000;
+								opts.parkSignal.limitType = "5h";
+							}
+							return { gate: "park", body: "parked", cost: 0.1, costEstimated: false, turns: 0, ok: false, subtype: "error_rate_limit", park: { resetsAt: Date.now() + 60_000, limitType: "5h" } };
+						}
+						return { gate: "pass", body: "<!-- pelaggio-pr-review -->\nclean\n\nVerdict: PASS", cost: 0.2, costEstimated: false, turns: 3, ok: true, subtype: "success" };
+					},
+				},
+				revise: { local: true, ghRepo: "o/r", gh },
+			},
+		);
+
+		for (let i = 0; i < 5; i++) await new Promise(setImmediate);
+		t.mock.timers.tick(60_000 + 30_000);
+		for (let i = 0; i < 10; i++) await new Promise(setImmediate);
+		await promise;
+
+		assert.equal(gateCall, 2, "the review sweep retried after the wait window");
+		const statusStates = ghCalls.filter((a) => a[0] === "api" && a[1] === "repos/o/r/statuses/abc123").map((a) => a.find((arg) => arg.startsWith("state=")));
+		assert.ok(statusStates.includes("state=success"), `expected a success status after retry; got ${statusStates.join(", ")}`);
+		assert.ok(!statusStates.includes("state=failure"), "never posts failure on a rate-limit park");
+	});
+
 	it("revises a red-review PR before picking new work, with startFrom=implement + findings flag", async (t) => {
 		t.mock.method(console, "log", () => {});
 		const { runPipeline, calls } = createMockRunPipeline({
