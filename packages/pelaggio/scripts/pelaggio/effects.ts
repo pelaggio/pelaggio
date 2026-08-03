@@ -1,10 +1,11 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { buildEffectsManifestReceipt, ExecutionReceiptError, type GitRevisionBinding, writeExecutionReceipt } from "./execution-receipt.js";
 import { checkpoint, ensureCheckpointed } from "./helpers.js";
 import type { RoadmapSource } from "./roadmap/index.js";
 import { SHIP_TARGET_NAMES } from "./ship/index.js";
 import { runShipPrEffects } from "./ship/pr-effects.js";
-import type { ProviderName, ReviewOutcome, Step } from "./types.js";
+import type { ExecutionReceiptDescriptor, ProviderName, ReviewOutcome, Step } from "./types.js";
 
 export const EFFECTS_SCHEMA_VERSION = 1;
 
@@ -80,18 +81,38 @@ export interface EffectsContext {
 	preSha: string | null;
 }
 
+export type EffectsManifestErrorCode = "missing_manifest" | "invalid_manifest" | "provenance_mismatch" | "unknown_effect_kind" | "effect_failed" | "receipt_failed";
+
 export interface EffectsDispatchContext extends EffectsContext {
 	roadmap: RoadmapSource;
 	log: (msg: string) => void;
+	/** 32-byte challenge for this cycle; required for receipt production. */
+	challenge: Uint8Array;
+	provider: ProviderName;
+	model: string;
+	/**
+	 * Post-dispatch Git observation. Default supplied by pipeline.
+	 * `worktree` is the normalized identity (relative-to-main or basename).
+	 */
+	observeGit: () => { worktree: string | null; headSha: string | null; branch: string | null };
+	/** ISO timestamp clock; tests inject a fixed clock. Defaults to `new Date().toISOString()`. */
+	now?: () => string;
 }
 
 export interface EffectsDispatchResult {
 	appendText?: string;
+	receipt?: ExecutionReceiptDescriptor;
+}
+
+export interface LoadedEffectsManifest {
+	manifest: EffectsManifest;
+	/** Exact UTF-8 source-file bytes used for `manifestDigest` (never re-serialized). */
+	rawText: string;
 }
 
 export class EffectsManifestError extends Error {
 	constructor(
-		readonly code: "missing_manifest" | "invalid_manifest" | "provenance_mismatch" | "unknown_effect_kind" | "effect_failed",
+		readonly code: EffectsManifestErrorCode,
 		message: string,
 		options?: { cause?: unknown },
 	) {
@@ -170,13 +191,20 @@ export function writeEffectsManifest(ctx: EffectsContext, effects: readonly Effe
 	writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
-export function loadAndValidateEffectsManifest(ctx: EffectsContext): EffectsManifest {
+export function loadAndValidateEffectsManifest(ctx: EffectsContext): LoadedEffectsManifest {
 	const path = effectManifestPath(ctx);
 	if (!existsSync(path)) throw new EffectsManifestError("missing_manifest", `effects manifest not found: ${path}`);
 
+	let rawText: string;
+	try {
+		rawText = readFileSync(path, "utf-8");
+	} catch (e) {
+		throw new EffectsManifestError("invalid_manifest", `effects manifest is not readable: ${path}`, { cause: e });
+	}
+
 	let parsed: unknown;
 	try {
-		parsed = JSON.parse(readFileSync(path, "utf-8"));
+		parsed = JSON.parse(rawText);
 	} catch (e) {
 		throw new EffectsManifestError("invalid_manifest", `effects manifest is not valid JSON: ${path}`, { cause: e });
 	}
@@ -195,20 +223,23 @@ export function loadAndValidateEffectsManifest(ctx: EffectsContext): EffectsMani
 	// Provenance fields were checked equal to ctx above; use ctx's typed values so the
 	// return is well-typed without re-validating JSON-parsed unknowns.
 	return {
-		schemaVersion: EFFECTS_SCHEMA_VERSION,
-		runId: ctx.runId,
-		itemId: ctx.itemId,
-		step: ctx.step,
-		attempt: ctx.attempt,
-		cwd: ctx.cwd,
-		preSha: ctx.preSha,
-		effects,
+		manifest: {
+			schemaVersion: EFFECTS_SCHEMA_VERSION,
+			runId: ctx.runId,
+			itemId: ctx.itemId,
+			step: ctx.step,
+			attempt: ctx.attempt,
+			cwd: ctx.cwd,
+			preSha: ctx.preSha,
+			effects,
+		},
+		rawText,
 	};
 }
 
 export async function dispatchStepEffects(ctx: EffectsDispatchContext): Promise<EffectsDispatchResult> {
 	const path = effectManifestPath(ctx);
-	const manifest = loadAndValidateEffectsManifest(ctx);
+	const { manifest, rawText } = loadAndValidateEffectsManifest(ctx);
 	const appendText: string[] = [];
 	try {
 		for (const effect of manifest.effects) {
@@ -240,8 +271,82 @@ export async function dispatchStepEffects(ctx: EffectsDispatchContext): Promise<
 		if (e instanceof EffectsManifestError) throw e;
 		throw new EffectsManifestError("effect_failed", e instanceof Error ? e.message : String(e), { cause: e });
 	}
+
+	// Receipt-before-delete: bind exact pre-delete manifest bytes + post-dispatch
+	// Git observation. Fail closed and retain the manifest if receipt write fails.
+	const joinedAppend = appendText.length > 0 ? appendText.join("\n") : undefined;
+	const receipt = issueEffectsManifestReceipt(ctx, {
+		rawText,
+		effectKinds: manifest.effects.map((e) => e.kind),
+		appendText: joinedAppend,
+	});
 	rmSync(path);
-	return appendText.length > 0 ? { appendText: appendText.join("\n") } : {};
+	return {
+		...(joinedAppend !== undefined ? { appendText: joinedAppend } : {}),
+		receipt,
+	};
+}
+
+/**
+ * Build + atomically write the execution receipt after handlers succeed.
+ * Maps ExecutionReceiptError → EffectsManifestError (receipt_failed or
+ * provenance_mismatch) so the pipeline's existing dispatch-error path fires.
+ */
+function issueEffectsManifestReceipt(ctx: EffectsDispatchContext, input: { rawText: string; effectKinds: Effect["kind"][]; appendText?: string }): ExecutionReceiptDescriptor {
+	if (!(ctx.challenge instanceof Uint8Array) || ctx.challenge.byteLength !== 32) {
+		throw new EffectsManifestError("receipt_failed", "dispatch context requires a 32-byte challenge for receipt production");
+	}
+	if (typeof ctx.provider !== "string" || ctx.provider.trim() === "") {
+		throw new EffectsManifestError("receipt_failed", "dispatch context requires a provider for receipt production");
+	}
+	if (typeof ctx.model !== "string" || ctx.model.trim() === "") {
+		throw new EffectsManifestError("receipt_failed", "dispatch context requires a model for receipt production");
+	}
+	if (typeof ctx.observeGit !== "function") {
+		throw new EffectsManifestError("receipt_failed", "dispatch context requires observeGit for receipt production");
+	}
+
+	const now = ctx.now ?? (() => new Date().toISOString());
+	const issuedAt = now();
+	let postObservation: { worktree: string | null; headSha: string | null; branch: string | null };
+	try {
+		postObservation = ctx.observeGit();
+	} catch (e) {
+		throw new EffectsManifestError("receipt_failed", `observeGit failed: ${e instanceof Error ? e.message : String(e)}`, { cause: e });
+	}
+	const completedAt = now();
+
+	const preGit: GitRevisionBinding = { headSha: ctx.preSha, branch: postObservation.branch };
+	const postGit: GitRevisionBinding = { headSha: postObservation.headSha, branch: postObservation.branch };
+
+	try {
+		const receipt = buildEffectsManifestReceipt({
+			challenge: ctx.challenge,
+			itemId: ctx.itemId,
+			runId: ctx.runId,
+			step: ctx.step,
+			attempt: ctx.attempt,
+			worktree: postObservation.worktree,
+			preGit,
+			postGit,
+			provider: ctx.provider,
+			model: ctx.model,
+			manifestRawText: input.rawText,
+			effectKinds: input.effectKinds,
+			appendText: input.appendText,
+			issuedAt,
+			completedAt,
+		});
+		return writeExecutionReceipt(ctx.cwd, receipt);
+	} catch (e) {
+		if (e instanceof ExecutionReceiptError) {
+			if (e.code === "provenance_mismatch" || e.code === "challenge_mismatch") {
+				throw new EffectsManifestError("provenance_mismatch", e.message, { cause: e });
+			}
+			throw new EffectsManifestError("receipt_failed", e.message, { cause: e });
+		}
+		throw new EffectsManifestError("receipt_failed", e instanceof Error ? e.message : String(e), { cause: e });
+	}
 }
 
 const PROVIDER_NAMES: readonly ProviderName[] = ["claude", "codex", "grok"];

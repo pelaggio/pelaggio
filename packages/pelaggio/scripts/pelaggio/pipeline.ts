@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { basename, delimiter, extname, isAbsolute, join, resolve } from "node:path";
 import {
@@ -34,6 +35,7 @@ import {
 	type ReviewVerdictEffect,
 	writeEffectsManifest as writeEffectsManifestDefault,
 } from "./effects.js";
+import { digestChallenge } from "./execution-receipt.js";
 import { DEFAULT_FLOW_POLICY, type FlowPolicy } from "./flow-policy.js";
 import {
 	appendLog as appendLogDefault,
@@ -97,6 +99,7 @@ import {
 	type CycleResult,
 	type CycleStatus,
 	type CycleVersionProvenance,
+	type ExecutionReceiptDescriptor,
 	type Flags,
 	type ParkSignal,
 	type PipelineOpts,
@@ -199,6 +202,10 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	const now = deps.now ?? Date.now;
 	const readGitBindingFn = deps.readGitBinding ?? readGitBinding;
 	const readRuntimeVersionsFn = deps.readRuntimeVersions ?? readRuntimeVersions;
+	// Per-cycle challenge for execution receipts (#188). Held in process memory only;
+	// only challengeDigest is persisted on receipts / cycle provenance.
+	const cycleChallenge = randomBytes(32);
+	const cycleChallengeDigest = digestChallenge(cycleChallenge);
 	// The cycle's dollar ceiling. A turn-exhaustion retry (issue #33) is funded up to the
 	// step's configured budget again, so the budget guard skips a retry we can't fully fund.
 	// A non-finite value (unset / unparseable --budget) disables the dollar gate.
@@ -209,6 +216,8 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	let profile = flags.profile ?? "standard";
 	const steps: StepLog[] = [];
 	const provenanceUnavailable: string[] = [];
+	/** Descriptors for every execution receipt written this cycle (steps + aggregate review). */
+	const executionReceipts: ExecutionReceiptDescriptor[] = [];
 	const assignment = createDriverAssignmentState(opts.cycle);
 	const pipelineT0 = now();
 	const runIdBase = opts.logPath ? basename(opts.logPath, extname(opts.logPath)) : `cycle-${opts.cycle}`;
@@ -217,6 +226,12 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		const elapsed = fmtElapsed(now() - pipelineT0);
 		const ts = new Date().toLocaleTimeString("en-CA", { hour12: false });
 		console.log(`${A.dim(ts)} [${logLabel}] ${A.dim(elapsed)} ${msg}`);
+	};
+
+	/** Shared observeGit for effects dispatch: post-dispatch binding from readGitBinding. */
+	const observeGitForReceipt = (cwd: string): { worktree: string | null; headSha: string | null; branch: string | null } => {
+		const binding = readGitBindingFn(cwd, mainRepo);
+		return { worktree: binding.worktree, headSha: binding.headSha, branch: binding.branch };
 	};
 	if (allowDirtyMain) {
 		log(
@@ -407,6 +422,8 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			log(committed ? `${commitLabel} committed` : `no changes to commit (${commitLabel})`);
 			ensureCheckpointed(cwd, commitLabel, log);
 		}
+		// Captured when effects dispatch succeeds so the step log can record the receipt.
+		let stepExecutionReceipt: ExecutionReceiptDescriptor | undefined;
 		if (effects && result.subtype !== "error_confinement") {
 			const staticEffects = Array.isArray(effects) ? effects : [];
 			const checkpointEffect = staticEffects.find((effect): effect is Extract<Effect, { kind: "checkpoint" }> => effect.kind === "checkpoint");
@@ -452,13 +469,27 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 					}
 					if (resolvedEffects !== undefined) {
 						try {
-							const effectsResult = await dispatchStepEffects({ ...ctx, roadmap, log });
+							const realizedProvider = realized.provider;
+							const realizedModel = realized.provider === "codex" ? (realized.codexModel ?? "default") : (realized.model ?? "default");
+							const effectsResult = await dispatchStepEffects({
+								...ctx,
+								roadmap,
+								log,
+								challenge: cycleChallenge,
+								provider: realizedProvider,
+								model: realizedModel,
+								observeGit: () => observeGitForReceipt(cwd),
+							});
 							if (effectsResult.appendText) {
 								result = {
 									...result,
 									text: appendResultText(result.text, effectsResult.appendText),
 									fullText: appendResultText(result.fullText, effectsResult.appendText),
 								};
+							}
+							if (effectsResult.receipt) {
+								stepExecutionReceipt = effectsResult.receipt;
+								executionReceipts.push(effectsResult.receipt);
 							}
 						} catch (e) {
 							failEffects(e, "dispatch");
@@ -530,6 +561,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				...(filesChanged.length > 0 ? { filesChanged } : {}),
 				...(result.stalledAsk ? { stalledAsk: true } : {}),
 				...(result.decisions?.length ? { decisions: result.decisions } : {}),
+				...(stepExecutionReceipt ? { executionReceipt: stepExecutionReceipt } : {}),
 			}),
 		);
 		if (worktree && resolve(cwd) === resolve(worktree)) {
@@ -614,6 +646,8 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 					versions,
 					...(result.prUrl ? { prUrl: result.prUrl } : {}),
 					...(unavailable.length ? { unavailable: [...new Set(unavailable)] } : {}),
+					challengeDigest: cycleChallengeDigest,
+					...(executionReceipts.length > 0 ? { executionReceipts: [...executionReceipts] } : {}),
 				},
 			});
 		}
@@ -1350,7 +1384,21 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				if (!opts.dryRun) {
 					try {
 						writeEffectsManifest(effectsCtx, reviewEffects);
-						await dispatchStepEffects({ ...effectsCtx, roadmap, log });
+						// Aggregate authoring-review uses reserved attempt 0; provider/model from the
+						// configured judge seat when present, else the shakedown-code step settings.
+						const reviewSettings = resolveStepSettings(CONFIG, profile, "shakedown-code");
+						const reviewProvider = policy.judge.provider;
+						const reviewModel = policy.judge.provider === "codex" ? (policy.judge.codexModel ?? "default") : (policy.judge.model ?? reviewSettings.model ?? "default");
+						const reviewEffectsResult = await dispatchStepEffects({
+							...effectsCtx,
+							roadmap,
+							log,
+							challenge: cycleChallenge,
+							provider: reviewProvider,
+							model: reviewModel,
+							observeGit: () => observeGitForReceipt(worktree!),
+						});
+						if (reviewEffectsResult.receipt) executionReceipts.push(reviewEffectsResult.receipt);
 					} catch (e) {
 						const code = e instanceof EffectsManifestError ? e.code : "effect_failed";
 						const message = e instanceof Error ? e.message : String(e);

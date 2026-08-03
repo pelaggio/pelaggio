@@ -172,7 +172,10 @@ export function makeTempGitRepo(): string {
 	execSync("git config user.name t", { cwd: dir });
 	execSync("git config user.email t@t", { cwd: dir });
 	execSync("git config commit.gpgsign false", { cwd: dir });
-	execSync("git commit --allow-empty -q -m init", { cwd: dir });
+	// Mirror production: harness artifacts under `.dev/` (effects manifests, execution
+	// receipts, review records) must not enter the branch and defeat phantom-ship.
+	writeFileSync(join(dir, ".gitignore"), ".dev/\n");
+	execSync("git add -A && git commit -q -m init", { cwd: dir });
 	execSync("git checkout -q -b feat/tool-99", { cwd: dir });
 	return dir;
 }

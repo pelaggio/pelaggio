@@ -348,7 +348,8 @@ EOF
 The trade-off is status-poster integrity: any credential with `statuses: write` on
 the repo can post a green `review`. That is acceptable on a solo repo where the only
 such credential is the operator's own `gh` auth; the identity-bound fix is the
-ADR-0018 attestation (#188), which restores a verifiable pin and retires this
+ADR-0018 attestation path (effects receipts under #188; gate-assertion binding and
+merge enforcement still residual), which restores a verifiable pin and retires this
 posture. Human supervision under this mode is retrospective (review merged PRs), per
 ADR-0015.
 
