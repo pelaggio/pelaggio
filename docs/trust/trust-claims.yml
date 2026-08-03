@@ -131,7 +131,7 @@ claims:
     known_limits: "Tool-window deltas are conservative attribution, not writer or process-lifetime provenance: simultaneous operator changes inside a window fail closed, detached/background writes after its post hook are outside the window, and paths outside audited Git roots are never caught. Future providers that can reach main must bracket mutations through the observer."
     standards: ["OWASP-LLM06", "OWASP-LLM05"]
     adr: "ADR-1, ADR-2"
-    last_verified: "2026-07-07"
+    last_verified: "2026-08-03"
 
   - id: TC-012
     claim: "Human-gated by default. Out of the box it opens a pull request — it never pushes to your main branch unless you explicitly opt in."
