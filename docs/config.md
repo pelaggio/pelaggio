@@ -446,9 +446,9 @@ scope heuristics. Invalid values fail loudly at startup.
 | `linear`        | ready  | Linear via `@linear/sdk`                           |
 | `beads`         | ready  | Beads issues via the `bd --json` CLI               |
 
-Skill bodies (`/pick`, `/plan`, `/ship`, `/charter`, `/status`, `/pickup`,
-`/shakedown`, `/tidy`) are adapter-agnostic — all roadmap access flows through
-`npx pelaggio roadmap ...`, which dispatches to the configured source.
+Skill bodies (`/pick`, `/plan`, `/ship`, `/charter`, `/decompose`, `/status`,
+`/pickup`, `/shakedown`, `/tidy`) are adapter-agnostic — all roadmap access flows
+through `npx pelaggio roadmap ...`, which dispatches to the configured source.
 
 ### `pick.max-scope`
 

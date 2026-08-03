@@ -6,6 +6,12 @@ Status values are `default-taken`, `resolved`, or `resolved→ADR-nnnn`. Source 
 
 | Decision | Status | Chosen/leaning | Alternatives | Source | Date |
 | --- | --- | --- | --- | --- | --- |
+| default value of `pick.max-scope` | default-taken | `M` | opt-in/off, default `L` | https://github.com/pelaggio/pelaggio/issues/201 | 2026-08-03 |
+<!-- decision:82c982035314b449 -->
+| YAML key spelling | default-taken | `pick.max-scope` | `pick.maxScope` | https://github.com/pelaggio/pelaggio/issues/201 | 2026-08-03 |
+<!-- decision:21f8af4bdbd8f61a -->
+| additive public scope type | default-taken | re-export canonical `Scope` beside public `RoadmapItem` | expose it only transitively | https://github.com/pelaggio/pelaggio/issues/201 | 2026-08-03 |
+<!-- decision:2e1f2368b5a45fd8 -->
 | review-retry wait mechanics | default-taken | extract a shared awaitParkReset helper used by both the review retry loop and the item park-and-resume loop | inline-duplicate the ~50-line wait block for reviews; fold review re-invocation into the existing park-and-resume loop (couples the item-resume block to the review sweep the plan deliberately keeps separate) | https://github.com/pelaggio/pelaggio/issues/134 | 2026-08-03 |
 <!-- decision:1fe7d6c0f2973f53 -->
 | residual work for an already-shipped security item | default-taken | verification + documentation hygiene only; do not reimplement the gate | abort cycle / close issue with zero commits (phantom-ship risk); greenfield rewrite of helpers+pipeline (rejected — regression risk) | https://github.com/pelaggio/pelaggio/issues/111 | 2026-08-03 |

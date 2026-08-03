@@ -21,6 +21,7 @@ When adapting skills for Codex: keep workflow instructions provider-neutral wher
 - `plan`: write and publish an implementation plan.
 - `shakedown`: review plans or code and fix issues.
 - `charter`: create a new work item.
+- `decompose`: propose a human-approved split of an oversized (L/XL) parent into S/M children and close the parent after create (charter creates one item; decompose splits one).
 - `ship`: finalize, push, and clean up completed work.
 - `shipwreck`: recover a failed direct-push ship attempt.
 - `pickup`: rebuild context for in-progress work.

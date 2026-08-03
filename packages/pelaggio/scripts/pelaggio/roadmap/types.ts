@@ -51,10 +51,9 @@ export interface RoadmapItemStatus extends RoadmapItem {
 	status: ItemStatus;
 	/** Parsed "blocked: waiting on X" reason; present only when status is blocked */
 	blockedReason?: string;
-	/** Item body/spec text when the adapter carries it — currently a GitHub issue body or markdown item row.
-	 *  Lets the harness inject requirements into the plan prompt for a sandboxed model that can't
-	 *  fetch it itself (#103). Absent, for now, for linear (its `sourceRef` is an identifier — populating linear body is a
-	 *  follow-up before linear-on-sandbox is supported). */
+	/** Item body/spec text when the adapter carries it — GitHub issue body, markdown item row,
+	 *  Beads description, or Linear description. Lets the harness inject requirements into the
+	 *  plan prompt for a sandboxed model that can't fetch it itself (#103). */
 	body?: string;
 	/** Item labels when the adapter carries them. Absent for sources without label metadata. */
 	labels?: string[];
