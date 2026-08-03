@@ -6,6 +6,8 @@ Status values are `default-taken`, `resolved`, or `resolved→ADR-nnnn`. Source 
 
 | Decision | Status | Chosen/leaning | Alternatives | Source | Date |
 | --- | --- | --- | --- | --- | --- |
+| expose the one-time priority migration as an idempotent roadmap CLI capability | default-taken | add a GitHub-backed `backfill-priority-labels` command with a typed optional adapter capability | mutate during reads; use an ad-hoc shell script; retain body markers as runtime truth | https://github.com/pelaggio/pelaggio/issues/362 | 2026-08-03 |
+<!-- decision:bc8fbfb7e06d6ec7 -->
 | persistence and gating of suspected-stale items | default-taken | local fingerprint-bound quarantine consumed by roadmap next and claim | report-only `/tidy` findings; provider-specific blocked labels; automatic closure | https://github.com/pelaggio/pelaggio/issues/217 | 2026-07-22 |
 <!-- decision:5074841c9271f394 -->
 | classification boundary for a present directory shell | default-taken | map to existing GONE only when Git's explicit `fatal: not a git repository` diagnostic is conjoined with confirmed absence of `<root>/.git` (via the injectable `exists` seam) | diagnostic-only match (fails open on permission-denied `.git`); preflight `.git` alone without Git diagnostic; extra `rev-parse` probe; broader Git-failure tolerance; second sentinel | https://github.com/pelaggio/pelaggio/issues/339 | 2026-07-22 |
