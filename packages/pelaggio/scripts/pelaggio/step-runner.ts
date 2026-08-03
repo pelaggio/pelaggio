@@ -6,6 +6,7 @@ import { codexProvider } from "./codex-provider.js";
 import { CONFIG, REPO, resolveStepSettings } from "./config.js";
 import { grokProvider } from "./grok-provider.js";
 import { classifyStepError, isRefusal, looksLikeStalledAsk, type MainCheckoutDeltaObserver, parseBlockedReason, parseDecisions, parseWaitFlag, resolveParkReset } from "./helpers.js";
+import { opencodeProvider } from "./opencode-provider.js";
 import { composeSystemAppend, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "./step-runner-shared.js";
 import { MUTATING_TOOLS, toolBrief } from "./tui.js";
 import type { ParkSignal, ProviderCapabilities, ProviderName, Step, StepEmit, StepResult, TokenUsage } from "./types.js";
@@ -521,6 +522,7 @@ const PROVIDERS: Record<ProviderName, StepProvider> = {
 	claude: claudeProvider,
 	codex: codexProvider,
 	grok: grokProvider,
+	opencode: opencodeProvider,
 };
 
 export const REGISTERED_PROVIDERS: readonly ProviderName[] = Object.freeze(Object.keys(PROVIDERS) as ProviderName[]);

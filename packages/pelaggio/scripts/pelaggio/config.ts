@@ -16,10 +16,10 @@ export const DEFAULT_SHIP_TARGET: ShipTargetName = "pull-request";
 
 // The backends a step's model can run on. Mirrors `SHIP_TARGET_NAMES`: the type
 // lives in `types.ts`, this validation array is its module-private companion. #80
-// widens both to add a second provider. `DEFAULT_PROVIDER` is the fallback every
-// step resolves to when a profile names none, so no provider string is hardcoded
-// outside this file.
-const PROVIDER_NAMES: readonly ProviderName[] = ["claude", "codex", "grok"];
+// opened both for a second provider; codex/grok/opencode (#137) now register here.
+// `DEFAULT_PROVIDER` is the fallback every step resolves to when a profile names
+// none, so no provider string is hardcoded outside this file.
+const PROVIDER_NAMES: readonly ProviderName[] = ["claude", "codex", "grok", "opencode"];
 const DEFAULT_PROVIDER: ProviderName = "claude";
 const isProviderName = (v: unknown): v is ProviderName => typeof v === "string" && (PROVIDER_NAMES as readonly string[]).includes(v);
 
@@ -125,7 +125,7 @@ export type ProviderDiversityPolicy = "off" | "prefer" | "require";
 /** @deprecated Prefer `ReviewFindingClass` from `./review/findings.js` — single source of truth. */
 export type { ReviewFindingClass as AuthoringFindingClass } from "./review/findings.js";
 export type AuthoringBlockingBar = "must-fix";
-export type ReviewSlot = { id: string; provider: "claude" | "grok"; model?: string } | { id: string; provider: "codex"; codexModel?: string };
+export type ReviewSlot = { id: string; provider: "claude" | "grok" | "opencode"; model?: string } | { id: string; provider: "codex"; codexModel?: string };
 export interface AuthoringReviewConfig {
 	enabled: boolean;
 	reviewers: ReviewSlot[];
