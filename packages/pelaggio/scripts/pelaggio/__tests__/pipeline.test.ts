@@ -1076,11 +1076,13 @@ describe("runPipeline — worktree confinement audit", () => {
 		});
 		assert.deepEqual(
 			calls.map((call) => call.step),
-			["implement"],
+			[],
+			"#388: a before-phase enumeration failure fails closed before any provider spend",
 		);
 		assert.equal(result.error, "implement failed: confinement violation");
-		const steps = logs[0].steps as Array<{ subtype?: string; text?: string }>;
+		const steps = logs[0].steps as Array<{ subtype?: string; text?: string; cost?: number }>;
 		assert.equal(steps.at(-1)?.subtype, "error_confinement");
+		assert.equal(steps.at(-1)?.cost, 0);
 	});
 
 	it("warns once per pipeline run with the refined dirty-main posture", async () => {
@@ -1419,12 +1421,14 @@ describe("runPipeline — worktree confinement audit", () => {
 		assert.equal(result.error, "implement failed: confinement violation");
 		assert.deepEqual(
 			calls.map((c) => c.step),
-			["implement"],
-			"provider still runs when pre-snapshot fails (intentional YAGNI)",
+			[],
+			"#388: provider must not run when pre-snapshot fails — fail closed before any spend",
 		);
-		const step = (logs[0].steps as Array<{ name: string; ok: boolean; subtype?: string; outputTail?: string; errorDetail?: string }>).at(-1);
+		const step = (logs[0].steps as Array<{ name: string; ok: boolean; subtype?: string; outputTail?: string; errorDetail?: string; cost?: number; turns?: number }>).at(-1);
 		assert.equal(step?.ok, false);
 		assert.equal(step?.subtype, "error_confinement");
+		assert.equal(step?.cost, 0);
+		assert.equal(step?.turns, 0);
 		assert.match(step?.errorDetail ?? "", /before implement/);
 		assert.match(step?.errorDetail ?? "", /index\.lock/);
 		assert.match(step?.outputTail ?? "", /before implement/);
@@ -1472,6 +1476,80 @@ describe("runPipeline — worktree confinement audit", () => {
 		assert.match(step?.errorDetail ?? "", /index\.lock/);
 		assert.match(step?.outputTail ?? "", /after implement/);
 		assert.ok(!(step?.outputTail ?? "").includes("checks green"));
+	});
+
+	it("mid-step probe cancels the in-flight provider and classifies error_confinement well before the step's natural end (#388)", async () => {
+		const { mainRepo, worktree, listWorktrees } = makeConfinementRepos();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		// awaitAbort means this mock never resolves on its own — only a real abort (SIGINT or,
+		// here, the mid-step confinement prober) can unblock it, proving the prober actually
+		// drove cancellation through the same signal/driver boundary rather than the step just
+		// happening to end on its own.
+		const { runStep, calls } = createMockRunStep({ implement: { awaitAbort: true, ok: false, subtype: "error_abort", text: "aborted" } }, parkSignal);
+		const tamperAt = setTimeout(() => writeFileSync(join(mainRepo, "tampered.txt"), "x"), 20);
+		const t0 = Date.now();
+		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
+			runStep,
+			mainRepo,
+			listWorktrees,
+			appendLog: (e) => {
+				logs.push(e);
+			},
+			roadmap: makeMockRoadmap(),
+			confinementProbeIntervalMs: 10,
+		});
+		const elapsed = Date.now() - t0;
+		clearTimeout(tamperAt);
+
+		assert.equal(result.completed, false);
+		assert.equal(result.error, "implement failed: confinement violation");
+		assert.ok(elapsed < 2000, `expected the mid-step probe to trip well under 2s; got ${elapsed}ms`);
+		assert.equal(calls[0]?.step, "implement");
+		const step = (logs[0].steps as Array<{ subtype?: string; errorDetail?: string; cost?: number }>).at(-1);
+		assert.equal(step?.subtype, "error_confinement");
+		assert.match(step?.errorDetail ?? "", /forbidden root changed during implement/);
+		assert.match(step?.errorDetail ?? "", /tampered\.txt/);
+	});
+
+	it("mid-step probe warns but does not abort on a live #369 session peer's write, and the step still completes", async () => {
+		const { parent, mainRepo, worktree } = makeConfinementRepos();
+		const peer = join(parent, `${WORKTREE_PREFIX}peer-midstep`);
+		execSync(`git worktree add -q -b feat/peer-midstep "${peer}"`, { cwd: mainRepo });
+		const parkSignal = makeParkSignal();
+		const { runStep } = createMockRunStep(
+			{
+				// delayMs (not awaitAbort) so the step still resolves naturally if the prober
+				// never trips — proving a live peer's mid-step write is excluded, not just slow.
+				implement: { delayMs: 40, ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				ship: prShipDecision(),
+			},
+			parkSignal,
+		);
+		const accepted = {
+			identity: { sessionId: "midstep-peer", claimedItem: "peer-midstep", claimBranch: "feat/peer-midstep", worktreePath: peer },
+			worktreePath: peer,
+			leg: "binding" as const,
+			pid: 1,
+		};
+		const peerWriteAt = setTimeout(() => writeFileSync(join(peer, "during.txt"), "x"), 10);
+		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
+			runStep,
+			mainRepo,
+			listWorktrees: () => [mainRepo, worktree, peer],
+			appendLog: () => {},
+			roadmap: makeMockRoadmap(),
+			dispatchStepEffects: async () => ({ appendText: "https://github.com/cdhorne/pelaggio/pull/99" }),
+			confinementProbeIntervalMs: 10,
+			// Not exempt at step start — the peer write lands mid-step, after the before-snapshot.
+			resolveEligibleSessions: () => [],
+			revalidateChangedRoot: (_ctx, root) => (root === peer || root.endsWith("peer-midstep") ? accepted : undefined),
+		});
+		clearTimeout(peerWriteAt);
+
+		assert.equal(result.completed, true);
+		assert.equal(result.error, undefined);
 	});
 
 	it("logs sorted changed roots (not audit-failed wording) with confinement diagnostics", async () => {
