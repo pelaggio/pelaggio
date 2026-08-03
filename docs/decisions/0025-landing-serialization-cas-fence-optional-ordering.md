@@ -1,0 +1,43 @@
+---
+title: "ADR-0025: Landing serialization — CAS fence, optional ordering"
+status: proposed
+date: 2026-08-03
+claims: ["TC-013"]
+---
+
+# ADR-0025 — Landing serialization: CAS fence, optional ordering
+
+## Context
+
+[`flow.md`](../agent-context/flow.md) says sources without `bd` "fall back to today's serialized ship-into-local-main." **That premise is false.** Verified at `61e10aa`: there is no harness land mutex; the trunk mutation is performed by the *model* (`ship/direct-push.ts:8`) inside the one shared `MAIN_REPO` checkout all worktrees are cut from (`roadmap/git-claim.ts:73`); the post-pull `verify` hook is unset at its sole production call site (`pipeline.ts:1786`); and `verifyShipLanded` (`helpers.ts:1109-1112`) passes whenever `main` merely advanced, so a sibling's merge satisfies another worker's phantom-ship gate. Direct-push landing is neither serialized nor reliably verified, and that gate is unsound under concurrency.
+
+Contention is a hot path — at `--parallel 3` roughly **28%** of landings lose a race — but serialized landing consumes under half of one lane and saturates only near N=6–7. Ordering is affordable; retry policy is what matters. `bd` cannot carry the fence: `@beads/bd@1.1.2` ships its binary via `postinstall` and that binary is absent here. ADR-0006 exempts transitive lifecycle scripts (TC-016), so this is not a violation — but making landing *safety* depend on a postinstall fetch imports the vector ADR-0006 closes. Measurements, arithmetic and mechanism detail: `flow.md`.
+
+## Decision
+
+1. **Three layers, distinct jobs.** (i) **Git ref compare-and-swap is the correctness fence** — mandatory on every direct push, fail-closed, verification bound to the exact candidate SHA and pushed with an explicit `--force-with-lease=main:<observed-sha>`. (ii) A local file lock is an optional **contention reducer**, sized beyond a worst-case attempt; a stale escape consumes a ladder attempt rather than being free, and where a landing changes dependency state the reducer is **fail-closed**, because layer (i) protects the ref but not the integrity of the verification environment. (iii) **`bd merge-slot` is optional cross-process ordering** — what #174 is about. Layer (i) is never replaced by layer (iii).
+2. **The seam is an executor, not a lock:** `land(attempt) → Landed | Contended`. CAS is optimistic (the fence is the rejected push at the end, so `acquire()` is unimplementable); `merge-slot` is pessimistic. They satisfy different contracts — CAS gives lost-update safety, the slot adds ordering.
+3. **Retry ladder.** Before each attempt, re-read the remote: if the receipt's candidate SHA is already an ancestor of remote `main`, return `Landed` and run the idempotent write-back — an ambiguous push outcome must never be re-merged onto a base containing its own merge. Otherwise re-merge onto the observed base; clean merge **and** passing verification retries the push, bounded at 3 attempts (`0.285³ ≈ 2%`, a floor rather than an estimate since a loser re-enters synchronised with the winner's release). Merge conflict **or** verification failure terminates as `Contended` with the typed diagnosis, retaining the `feat/<id>` claim. Judgment routing uses the existing `shipwreck`-style action, so **`STEPS` stays the fixed six and ADR-0022 is not amended.**
+4. **Integration never happens in the shared checkout** — each attempt merges and verifies in a dedicated detached-HEAD worktree cut from the observed remote SHA. After a confirmed push, `MAIN_REPO`'s `main` is fast-forwarded to the landed SHA (`--ff-only`, idempotent, under the reducer); failure there warns rather than contending. Ownership of that ref cannot be implicit: claims are cut from it and a stale checkout misleads the operator (`pipeline.ts:783-787`).
+5. **Landing admission is run-scoped**, resolved before workers start, reusing `ship/ci-guard.ts`'s fail-closed forge-read helpers rather than living inside that per-PR guard.
+6. **Admission lattice:** trigger (`pelaggio | provider | human | no-forge`) × ordering (`queue | latest-base | pelaggio-serial | unordered`), resolved against evidence (`readable | unreadable | unsupported`). `latest-base` is admitted only where up-to-date is enforced server-side at merge time **and no bypass is in use**; it serializes *successful* merges, not ordering. A successful read showing enforcement off is `unordered`, not `unreadable`. Lattice resolution is run-scoped; the `provider`+`unordered` cap is evaluated per enqueue against a harness-held in-flight count, never a forge poll.
+7. **`no-forge` requires positive evidence and is coherent only for `direct-push`**; for PR targets it is rejected at resolution with evidence `unsupported`, since pelaggio never merges there. It is never inferred from `roadmap.source` or "non-GitHub" — storage is orthogonal to landing policy. Layer-(iii) availability is likewise a positive typed-output probe, never exit status.
+8. **Land, then write back.** A receipt `(item, attempt, observedBase, candidateSha)` is persisted before the push and confirmed with `landedSha` on success. Write-back, archival, worktree removal and branch deletion all follow confirmed landing, and the claim is retained until both landing and `markDone` succeed. Where a `RoadmapSource` produces commits they ride the verified candidate — there is no unverified second push.
+
+This **amends [ADR-0005](./0005-auto-merge-safety-via-branch-protection.md)**, whose stated gap ("correctness depends on branch protection being configured as expected") now has an owner, and **demotes the landing half of the Beads-substrate decision from mechanism to optimization** — a reversal of the substrate clause in `flow.md`, the always-loaded invariant at `AGENTS.md:57`, and `coordination-spine.md`'s adopt-for-landing decision and invariant. The work-store half (#181) is untouched.
+
+## Alternatives not taken
+
+- **A time-leased lock as the fence.** `withFileLock` is fail-open by construction (`file-lock.ts:22-24`) — sound as a reducer, never as the fence. Extending `withMutationLock` also self-contends until timeout: it is the non-reentrant roadmap lock, taken internally by `markDone`/`archivePlan`.
+- **`bd merge-slot` as the sole primitive.** Absent in practice, postinstall-dependent, and it orders pelaggio's own workers without fencing external writers.
+- **Agentic retry on every CAS loss.** ~28% of landings would incur agent spend for a mechanical re-merge, and the longer attempt is likelier to lose again.
+- **Terminating every CAS loss as `Contended`.** Adds up to a full cycle of latency to ~28% of work to avoid one re-verify.
+- **Hosting admission on `ShipTarget`, the provider-capability registry, or `effects.ts`'s `ship.ShipDecision`.** Category errors: a prompt/parse seam with no I/O, a driver-fact registry, and a post-LLM item-scoped effect that rejects `direct-push` outright.
+- **Deriving forge absence from configuration.** Fail-open; `roadmap.source` says nothing about who may merge.
+
+## Consequences
+
+- (+) `direct-push` gains a real fence; `provider`+`unordered` becomes diagnosable instead of silently merging stale bases.
+- (−) This repo's posture (`ship.target: auto-merge-pr`, no merge queue, up-to-date not enforced) resolves to `provider`+`unordered`, so **at most one auto-merging PR may be in flight and further enqueue refuses.** Remediation is a branch-protection change (require up-to-date, audit bypasses) or a merge queue.
+- (−) Adds a `verify` config surface with fail-closed absent-behavior — there is no consumer-agnostic verification command (`ship/bookkeeping.ts:56-58`).
+- (−) `latest-base` trades throughput for correctness, and under `review.runner: ci` each base update re-triggers a metered review, amplifying currently-unaccounted spend.

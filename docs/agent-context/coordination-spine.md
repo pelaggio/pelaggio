@@ -115,14 +115,22 @@ primitives-vs-policy boundary holds: `bd` = substrate + primitives, `gt` = the
 orchestrator. That makes pelaggio a **sibling orchestrator to Gastown on the
 shared `bd` substrate** — see *Gastown: the sibling orchestrator* below.
 
-**Decision (adopt Beads as substrate).** Rather than build the store and the
-landing primitive, pelaggio adopts Beads as a first-class `RoadmapSource` (#181)
-and rides `bd merge-slot`/`gate` for the landing queue (#174). This is the "best
-foundation, not novel" call: the typed store, `bd ready` as the pick candidate
-set, and the merge-slot landing primitive move from *build* to *adopt*.
+**Decision (adopt Beads as substrate).** Rather than build the store, pelaggio
+adopts Beads as a first-class `RoadmapSource` (#181) and `bd ready` as the pick
+candidate set. This is the "best foundation, not novel" call for the *store*.
 
-**The differentiator narrows — and sharpens — accordingly.** Beads owns the store,
-the ready-set, and the landing *primitive*. What stays distinctly pelaggio's is
+**Amended by [ADR-0025](../decisions/0025-landing-serialization-cas-fence-optional-ordering.md):
+the landing half is demoted from *adopt* to *optional optimization*.** `bd
+merge-slot` cannot be the fence — it orders pelaggio's own workers without fencing
+an external pusher, its binary ships via `postinstall` and is absent in practice,
+and making landing *safety* depend on that fetch imports the vector ADR-0006
+closes. The `direct-push` primitive is therefore **git ref compare-and-swap** built
+in the harness, with `merge-slot` available as an optional ordering layer above it
+(#174). The store half of this decision is untouched.
+
+**The differentiator narrows — and sharpens — accordingly.** Beads owns the store
+and the ready-set (and, optionally, landing *ordering*). What stays distinctly
+pelaggio's is
 exactly what flow.md calls policy:
 
 - the **provider-neutral pick→plan→implement→review→ship cycle** and the
@@ -282,8 +290,11 @@ spine is the floor they stand on.
   logic never assumes the Claude Code harness.
 - MCP is a deferred thin transport over the spine, added only when a concrete
   external-agent consumer exists — not designed-in.
-- Beads (`bd`) is the chosen work-store + landing substrate: adopt it as a
-  `RoadmapSource` and ride `bd merge-slot`/`gate` for landing. The `feat/<id>` git
-  branch stays the authoritative claim token (bd status is write-back, never the
-  claims registry); the merge slot lives in one shared `MAIN_REPO/.beads`. Beads
-  owns the primitive; ordering/waiter-hygiene/dead-holder reconcile stay pelaggio's.
+- Beads (`bd`) is the chosen **work-store** substrate: adopt it as a
+  `RoadmapSource`. The `feat/<id>` git branch stays the authoritative claim token
+  (bd status is write-back, never the claims registry). For **landing**, ADR-0025
+  demotes Beads from mechanism to optional optimization: the `direct-push` fence is
+  git ref compare-and-swap in the harness, with `bd merge-slot` available as an
+  ordering layer above it (gated on a positive typed-output probe; when used the slot
+  lives in one shared `MAIN_REPO/.beads`, and ordering/waiter-hygiene/dead-holder
+  reconcile stay pelaggio's).

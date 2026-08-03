@@ -17,7 +17,7 @@ Numbered from the security audit's implicit-decision candidates.
 | [0002](./0002-untrusted-input-and-tool-scope.md) | Treat repo/issue/PR as untrusted; scope tools accordingly | accepted (with known gap) | `TC-015` |
 | [0003](./0003-pr-gated-by-default.md) | Default *shipped* ship target = pull-request (amended by 0015) | proposed | `TC-012` |
 | [0004](./0004-review-gate-fails-closed-shakedown-fails-safe.md) | Review gate fails closed; shakedown fails safe (two parsers) | accepted | `TC-003` |
-| [0005](./0005-auto-merge-safety-via-branch-protection.md) | Auto-merge safety delegated to branch protection | accepted (to verify) | `TC-013` |
+| [0005](./0005-auto-merge-safety-via-branch-protection.md) | Auto-merge safety delegated to branch protection (amended by 0025) | accepted (to verify) | `TC-013` |
 | [0006](./0006-no-lifecycle-scripts-in-published-manifests.md) | No install/lifecycle scripts in published manifests | accepted | `TC-004`, `TC-016` |
 | [0007](./0007-signed-tag-provenance-publish.md) | Publish = signed tag + provenance on self-hosted runner | accepted | `TC-005` |
 | [0008](./0008-control-plane-fail-closed.md) | Control plane fails closed (auth required / loopback-only) | proposed | `TC-010` |
@@ -37,6 +37,7 @@ Numbered from the security audit's implicit-decision candidates.
 | [0022](./0022-pipeline-shape-and-review-orchestrators.md) | Fixed 6 steps; policy-triggered review; distinct cold CI + authoring orchestrators (rejects uniform Node) | accepted | — |
 | [0023](./0023-contained-execution-boundary.md) | Contained-execution: `network=none` jail + fail-closed egress broker; keys unattended, subscription local-only; containment ≠ permission | proposed | — |
 | [0024](./0024-adversarial-authoring-review-loop.md) | Review moves upstream: multi-driver panel + Judge, deterministic convergence, park-on-safety, provenance record | accepted | — |
+| [0025](./0025-landing-serialization-cas-fence-optional-ordering.md) | Landing serialization: CAS fence, optional ordering (amends 0005) | proposed | `TC-013` |
 
 *Status vocabulary:* `proposed` (decided, not yet implemented) · `accepted` (implemented) · `superseded`.
 
