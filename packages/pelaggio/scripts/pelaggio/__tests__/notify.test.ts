@@ -54,6 +54,10 @@ describe("classifyEvent", () => {
 		assert.equal(classifyEvent(result({ error: "plan failed" })), "failed");
 	});
 
+	it("blocked Andons still page as failed", () => {
+		assert.equal(classifyEvent(result({ error: "implement blocked: x" })), "failed");
+	});
+
 	it("failure with no error string ⇒ failed", () => {
 		assert.equal(classifyEvent(result({})), "failed");
 	});
@@ -64,6 +68,10 @@ describe("classifyEvent", () => {
 			const expected = err === "parked" ? "parked" : null;
 			assert.equal(classifyEvent(result({ error: err })), expected, `error=${err}`);
 		}
+	});
+
+	it("keeps blocked diagnoses out of RECOVERABLE_ERRORS", () => {
+		assert.ok(RECOVERABLE_ERRORS.every((error) => !error.includes("blocked")));
 	});
 
 	it("null (skip) for a user-abort", () => {

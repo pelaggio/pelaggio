@@ -384,6 +384,76 @@ describe("runOrchestrator — sustained transient SDK outage (#128)", () => {
 	});
 });
 
+describe("runOrchestrator — cycle disposition", () => {
+	const quarantine = { completed: false, cost: 0, error: "implement blocked: x", disposition: "quarantine-and-continue" as const };
+	function spySend() {
+		const sent: Array<{ payload: { event: string; itemId: string | null } }> = [];
+		const sendNotification = async (_url: string, _format: "json" | "ntfy", payload: { event: string; itemId: string | null }) => {
+			sent.push({ payload });
+			return true;
+		};
+		return { sent, sendNotification };
+	}
+
+	it("quarantine keeps pulling and pages the blocked item", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { sent, sendNotification } = spySend();
+		const { runPipeline, calls } = createMockRunPipeline({ byItem: { "A-1": quarantine, "A-2": { completed: true, cost: 0 } } });
+		await runOrchestrator({ ...baseFlags, item: "A-1,A-2" }, { runPipeline, notifyConfig: { url: "https://hook.example" }, sendNotification });
+		assert.equal(calls.length, 2);
+		assert.equal(sent.filter((entry) => entry.payload.itemId === "A-1" && entry.payload.event === "failed").length, 1);
+	});
+
+	it("unknown safety-class failures halt the queue tail", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({ byItem: { "A-1": { completed: false, cost: 0, error: "implement failed: confinement violation" }, "A-2": { completed: true, cost: 0 } } });
+		await runOrchestrator({ ...baseFlags, item: "A-1,A-2" }, { runPipeline });
+		assert.equal(calls.length, 1);
+	});
+
+	it("halts on the fifth consecutive quarantine without relabeling its diagnosis", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const byItem = Object.fromEntries([1, 2, 3, 4, 5].map((n) => [`A-${n}`, { ...quarantine }]));
+		const { runPipeline, calls } = createMockRunPipeline({ byItem: { ...byItem, "A-6": { completed: true, cost: 0 } } });
+		const { results } = await runOrchestrator({ ...baseFlags, item: "A-1,A-2,A-3,A-4,A-5,A-6" }, { runPipeline });
+		assert.equal(calls.length, 5);
+		assert.equal(results.at(-1)?.error, "implement blocked: x");
+		assert.equal(results.at(-1)?.disposition, "halt-campaign");
+	});
+
+	it("a success resets the quarantine streak", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({
+			byItem: { "A-1": { ...quarantine }, "A-2": { ...quarantine }, "A-3": { completed: true, cost: 0 }, "A-4": { ...quarantine }, "A-5": { ...quarantine } },
+		});
+		await runOrchestrator({ ...baseFlags, item: "A-1,A-2,A-3,A-4,A-5" }, { runPipeline });
+		assert.equal(calls.length, 5);
+	});
+
+	it("parallel campaign halt prevents a third allocation while an existing cycle finishes", async (t) => {
+		t.mock.method(console, "log", () => {});
+		let release!: () => void;
+		const held = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const calls: string[] = [];
+		const runPipeline = async (opts: { itemId?: string }) => {
+			calls.push(opts.itemId ?? "");
+			if (opts.itemId === "A-1") {
+				await held;
+				return { itemId: "A-1", completed: true, cost: 0 };
+			}
+			return { itemId: opts.itemId ?? null, completed: false, cost: 0, error: "implement failed: confinement violation" };
+		};
+		const pending = runOrchestrator({ ...baseFlags, parallel: "2", item: "A-1,A-2,A-3" }, { runPipeline });
+		while (calls.length < 2) await new Promise(setImmediate);
+		await new Promise(setImmediate);
+		release();
+		await pending;
+		assert.deepEqual(calls.sort(), ["A-1", "A-2"]);
+	});
+});
+
 describe("runOrchestrator — park-and-resume", () => {
 	it("success: resumes after wait, uses detectResumeStep startFrom, exitCode 0", async (t) => {
 		t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });

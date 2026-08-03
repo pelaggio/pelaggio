@@ -278,6 +278,8 @@ export interface FlowEventProjection {
 
 // ── Cycle / pipeline ───────────────────────────────────────────────────
 
+export type CycleDisposition = "continue" | "quarantine-and-continue" | "halt-campaign";
+
 export interface CycleResult {
 	itemId: string | null;
 	completed: boolean;
@@ -287,6 +289,7 @@ export interface CycleResult {
 	costEstimated?: boolean;
 	verdict?: string;
 	error?: string;
+	disposition?: CycleDisposition;
 	/** Display-only legible one-liner for a failure: the machine `error` plus the failing step's
 	 *  subtype + bounded output tail. `error` stays the classification string (RECOVERABLE_ERRORS,
 	 *  "parked", "aborted"); `detail` is what the console prints so a failure explains itself (#268). */
@@ -415,7 +418,7 @@ export interface ShipTarget {
 
 export interface CycleStatus {
 	itemId: string;
-	status: "done" | "warning" | "running" | "failed" | "skipped" | "parked";
+	status: "done" | "warning" | "running" | "failed" | "skipped" | "parked" | "quarantined";
 	cost: number;
 	step?: string;
 	turns?: number;
