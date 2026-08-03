@@ -21,6 +21,7 @@ import {
 	WORKTREE_PREFIX,
 } from "./config.js";
 import { forbiddenRootsForConfinement } from "./confinement/roots.js";
+import { continuousCycleCap, DayBudgetTracker, freeQueueProbe, resolveContinuousConfig } from "./continuous.js";
 import { appendDecisions as appendDecisionsDefault, appendReviewEscalation as appendReviewEscalationDefault, lookupReviewEscalation as lookupReviewEscalationDefault } from "./decisions.js";
 import { createDriverAssignmentState, type DriverIdentity, recordArtifactAuthor, resolveStaticAuthor, selectAuthor, selectReviewers } from "./driver-assignment.js";
 import {
@@ -1693,6 +1694,19 @@ export interface OrchestratorDeps {
 		prepareReviewHead: typeof prepareReviewHead;
 		cleanupReviewHead: typeof cleanupReviewHead;
 	}>;
+	/**
+	 * Continuous-mode free queue probe (issue #82). Defaults to `listItems` + FlowPolicy
+	 * evaluation — no pick agent. Injectable for tests so drain/watch stop conditions
+	 * need no real roadmap.
+	 */
+	queueProbe?: () => Promise<{ empty: boolean; readyCount: number }>;
+	/** Sleep seam for watch-mode free-probe waits (and pipeline rate-limit backoff). */
+	sleep?: (ms: number) => Promise<void>;
+	/** Clock for day-budget accounting (defaults to `Date.now`). */
+	now?: () => number;
+	/** Roadmap + flow policy used by the default free queue probe. */
+	roadmap?: RoadmapSource;
+	flowPolicy?: FlowPolicy;
 }
 
 // Post-reset resume grace: jitter deliberately bounded inside the pre-existing 30s
@@ -1777,6 +1791,22 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		// it is meaningless without a resume (a fresh --item run implements from the plan, not findings).
 		if (flags["review-findings"] !== undefined && !flags.resume) {
 			console.error("--review-findings <path> requires --resume <id> (it feeds the implement step revision input)");
+			return { exitCode: 2, results };
+		}
+
+		// Continuous mode (issue #82): drain/watch presets with free queue probe + day budget.
+		const continuousResolved = resolveContinuousConfig(flags);
+		if (!continuousResolved.ok) {
+			console.error(continuousResolved.message);
+			return { exitCode: 2, results };
+		}
+		const continuous = continuousResolved.config;
+		if (continuous && noWorktree) {
+			console.error("--continuous / --preset is not supported with --no-worktree / CI mode");
+			return { exitCode: 2, results };
+		}
+		if (continuous && Number(flags.parallel) > 1) {
+			console.error("--continuous / --preset does not support --parallel > 1 (free probe + per-iteration revise are serial)");
 			return { exitCode: 2, results };
 		}
 
@@ -1868,7 +1898,6 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		}
 
 		// Normal mode
-		const requestedCycles = parseInt(flags.cycles, 10);
 		const parallel = parseInt(flags.parallel, 10);
 		const items =
 			flags.item
@@ -1878,7 +1907,9 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		// Auto-derive cycles to cover the full item list when --cycles isn't
 		// explicitly sized for it — otherwise items beyond index `max(cycles-1,
 		// parallel-1)` would silently drop off the worker queue.
-		const cycles = Math.max(requestedCycles, parallel, items.length);
+		// Continuous mode (issue #82): default `--cycles 1` means unlimited; explicit
+		// `--cycles N` (N>1) is a safety ceiling. See `continuousCycleCap`.
+		const cycles = continuousCycleCap(flags, continuous);
 		// Provider-estimated spend (e.g. Codex on a subscription) counts toward `--budget` the same
 		// as billed USD — deliberate: it fails safe (a subscription run still respects the cap as a
 		// token-spend proxy) and the warning below marks the figure `~` so it never reads as real USD.
@@ -1886,15 +1917,25 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		const dryRun = flags["dry-run"];
 		const v = flags.verbose;
 		const isParallel = parallel > 1;
+		const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+		const now = deps.now ?? Date.now;
+		const dayBudgetTracker = new DayBudgetTracker(continuous?.dayBudget, now);
+		const roadmapForProbe = deps.roadmap ?? getRoadmapSource(ROADMAP_SOURCE, { repo: REPO, github: ROADMAP_GITHUB, linear: ROADMAP_LINEAR });
+		const flowPolicyForProbe = deps.flowPolicy ?? DEFAULT_FLOW_POLICY;
+		const queueProbe = deps.queueProbe ?? (() => freeQueueProbe(roadmapForProbe, flowPolicyForProbe));
 
 		const targetBanner = shipTargetName === DEFAULT_SHIP_TARGET ? "" : `  ${A.dim(`target=${shipTargetName}`)}`;
-		console.log(`${A.bold("pelaggio")}  ${cycles} cycle(s)${isParallel ? `  ${A.dim("×")}${parallel} parallel` : ""}  ${A.dim("budget")} $${maxBudget.toFixed(2)}${targetBanner}${dryRun ? `  ${A.yellow("[DRY RUN]")}` : ""}`);
+		const continuousBanner = continuous ? `  ${A.dim(`continuous=${continuous.preset}`)}${continuous.dayBudget != null ? `  ${A.dim(`day-budget=$${continuous.dayBudget.toFixed(2)}`)}` : ""}` : "";
+		const cyclesLabel = continuous && cycles === Number.MAX_SAFE_INTEGER ? "∞" : String(cycles);
+		console.log(
+			`${A.bold("pelaggio")}  ${cyclesLabel} cycle(s)${isParallel ? `  ${A.dim("×")}${parallel} parallel` : ""}  ${A.dim("budget")} $${maxBudget.toFixed(2)}${continuousBanner}${targetBanner}${dryRun ? `  ${A.yellow("[DRY RUN]")}` : ""}`,
+		);
 		if (isParallel && v) {
 			console.log(`${A.dim("logs")}  .dev/pelaggio-{N}.log`);
 		}
 		console.log("");
 
-		liveStatus.totalCycles = cycles;
+		liveStatus.totalCycles = cycles === Number.MAX_SAFE_INTEGER ? 0 : cycles;
 		liveStatus.multiline = isParallel;
 		if (v) {
 			const rows = process.stderr.rows || 24;
@@ -1924,6 +1965,58 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 
 		async function worker(): Promise<void> {
 			while (true) {
+				// Continuous-mode pre-cycle gates (issue #82): day budget, per-iteration
+				// revise, and free queue probe. Free probe skips the pick agent on an empty queue
+				// so drain/watch don't burn paid cycles discovering emptiness.
+				//
+				// Park check is continuous-only here: a global early park return would race
+				// parallel non-continuous workers (one parks → siblings skip their first pull).
+				if (continuous) {
+					if (parkSignal.parked) return;
+					if (dayBudgetTracker.exceeded()) {
+						console.log(`${A.yellow("⚠")} day budget ($${continuous.dayBudget!.toFixed(2)}) exhausted (spent $${dayBudgetTracker.daySpent.toFixed(2)} today) — stopping continuous run`);
+						return;
+					}
+					// Run even when the pick queue is empty: red PRs are independent work and
+					// watch sessions must keep discovering them between queue probes.
+					await runReviseSweepOnce();
+					if (parkSignal.parked) return;
+					if (dayBudgetTracker.exceeded()) {
+						console.log(`${A.yellow("⚠")} day budget ($${continuous.dayBudget!.toFixed(2)}) exhausted after revise — stopping continuous run`);
+						return;
+					}
+					if (items.length === 0) {
+						let probe: { empty: boolean; readyCount: number };
+						try {
+							probe = await queueProbe();
+						} catch (e) {
+							const msg = e instanceof Error ? e.message : String(e);
+							console.log(`${A.yellow("⚠")} queue probe failed: ${msg}`);
+							// Fail closed: a broken free probe must never turn into an unbounded paid
+							// pick loop. Drain stops; watch waits and retries without consuming a cycle.
+							if (continuous.preset === "drain") return;
+							await sleep(continuous.probeIntervalMs);
+							continue;
+						}
+						if (probe.empty) {
+							if (continuous.preset === "drain") {
+								console.log(`${A.green("✓")} queue empty — drain complete`);
+								return;
+							}
+							// Watch with an explicit --cycles N>1 ceiling: stop once we've already
+							// run N pick cycles rather than sleeping forever on an empty queue.
+							if (nextCycle >= cycles) {
+								console.log(`${A.dim("queue empty — cycle ceiling reached, stopping watch")}`);
+								return;
+							}
+							// watch: free wait (no cycle consumed, no pick agent)
+							console.log(`${A.dim("queue empty — watching")} ${A.dim(`(probe in ${fmtWait(continuous.probeIntervalMs)})`)}`);
+							await sleep(continuous.probeIntervalMs);
+							continue;
+						}
+					}
+				}
+
 				const cycle = ++nextCycle;
 				if (cycle > cycles) return;
 				if (totalSpent >= maxBudget) {
@@ -1988,6 +2081,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				}
 
 				totalSpent += result.cost;
+				dayBudgetTracker.add(result.cost);
 				results.push(result);
 				await notify(result, logPath ?? LOG_PATH);
 
@@ -2005,6 +2099,12 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 
 				if (parkSignal.parked) break;
 				if (!result.completed && !RECOVERABLE.has(result.error ?? "")) return;
+				// Continuous drain: a race can leave pick:queue-empty after the free probe
+				// saw work (another process claimed it). Stop rather than spinning paid picks.
+				if (continuous?.preset === "drain" && result.error === "pick:queue-empty") {
+					console.log(`${A.green("✓")} queue empty — drain complete`);
+					return;
+				}
 			}
 		}
 
@@ -2070,20 +2170,24 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				upsertReviewComment(review.gh, review.ghRepo, pr.prNumber, body);
 				postReviewStatus(review.gh, review.ghRepo, pr.headSha, finalState, finalState === "success" ? "local pelaggio review passed" : "local pelaggio review blocked");
 				totalSpent += reviewCost;
+				dayBudgetTracker.add(reviewCost);
 				console.log(`review ${pr.itemId}#${pr.prNumber} — ${finalState}${reviewCost > 0 ? ` ${reviewCostEstimated ? "~" : ""}$${reviewCost.toFixed(2)}` : ""}`);
 			}
 		}
 
-		// ── Revise sweep (issue #76) ──
+		// ── Revise sweep (issue #76, continuous per-iteration in #82) ──
 		//
-		// Before the pick worker pool, sweep for red-review PRs and revise each in-process on the
-		// local Claude subscription — the same in-process resume the park/auto-resume loop uses
-		// (`startFrom: "implement"` + a fetched `--review-findings` file). Auto-pick mode only
-		// (`items.length === 0`): naming `--item X,Y` means "do exactly these". A hard no-op unless
-		// the repo is github-issues + a PR ship target; any gh/git error skips fail-soft and the
-		// normal pick loop proceeds. Revisions do NOT consume `--cycles` (that sizes *new-work*
-		// throughput) but DO count toward `--budget` (a revision still spends real money), so each
-		// result is pushed into `results` and its cost added to `totalSpent`.
+		// Sweep for red-review PRs and revise each in-process on the local subscription —
+		// the same in-process resume the park/auto-resume loop uses (`startFrom: "implement"`
+		// + a fetched `--review-findings` file). Auto-pick mode only (`items.length === 0`):
+		// naming `--item X,Y` means "do exactly these". A hard no-op unless the repo is
+		// github-issues + a PR ship target; any gh/git error skips fail-soft and the normal
+		// pick loop proceeds. Revisions do NOT consume `--cycles` (that sizes *new-work*
+		// throughput) but DO count toward `--budget` / day-budget.
+		//
+		// Non-continuous: run once before the pick worker pool.
+		// Continuous (#82): run at the start of every iteration so newly-red PRs are revised
+		// between picks rather than only at campaign start.
 		const revise = {
 			local: REVISE_LOCAL,
 			ghRepo: ROADMAP_SOURCE === "github-issues" ? ROADMAP_GITHUB.ghRepo : "",
@@ -2092,7 +2196,8 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		};
 		const doSweep = revise.local && shipIsPr && !!revise.ghRepo && !noWorktree && !dryRun && items.length === 0;
 
-		if (doSweep) {
+		async function runReviseSweepOnce(): Promise<void> {
+			if (!doSweep) return;
 			const { revisable, labeledStillRed } = findRevisablePrs(revise.gh, revise.ghRepo);
 			// PRs already past their one revision pass but still red → idempotent human handoff.
 			for (const pr of labeledStillRed) postParkComment(revise.gh, revise.ghRepo, pr.prNumber);
@@ -2131,6 +2236,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					{ ...flags, "review-findings": findingsPath }, // per-item findings injection
 				);
 				totalSpent += r.cost;
+				dayBudgetTracker.add(r.cost);
 				results.push(r);
 				await notify(r, LOG_PATH);
 				status.status = resultStatus(r);
@@ -2142,10 +2248,17 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			}
 		}
 
+		// One-shot pre-pool revise for non-continuous runs. Continuous mode runs the sweep
+		// per-iteration inside the worker (below) so each pick is preceded by a revise pass.
+		if (!continuous) {
+			await runReviseSweepOnce();
+		}
+
 		// Skip the pick worker pool entirely if the sweep already parked — its parked revisions
 		// are in `results` (pushed above), so they flow into the park-and-resume block below.
 		if (!parkSignal.parked) {
-			await Promise.all(Array.from({ length: Math.min(parallel, cycles) }, () => worker()));
+			// Continuous: serial workers only (validated above); Math.min with MAX_SAFE_INTEGER is fine.
+			await Promise.all(Array.from({ length: Math.min(parallel, cycles === Number.MAX_SAFE_INTEGER ? parallel : cycles) }, () => worker()));
 		}
 
 		// ── Park-and-resume ──

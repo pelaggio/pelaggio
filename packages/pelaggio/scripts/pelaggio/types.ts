@@ -457,6 +457,18 @@ export interface Flags {
 	profile?: string;
 	"dry-run": boolean;
 	"no-worktree": boolean;
+	/**
+	 * Continuous auto-pick mode (issue #82). When true (or when `--preset` is set), the
+	 * orchestrator loops past a fixed `--cycles` default: drain exits on empty queue;
+	 * watch free-probes and waits. Auto-pick only (no `--item` / `--resume`).
+	 */
+	continuous?: boolean;
+	/** Continuous preset: `drain` (stop on empty) or `watch` (sleep + free probe on empty). */
+	preset?: string;
+	/** Per-calendar-day USD spend hard cap for continuous mode (issue #82). */
+	"day-budget"?: string;
+	/** Watch-mode free-probe sleep interval (e.g. `5m`, `1h`). Default `5m`. */
+	"probe-interval"?: string;
 }
 
 // ── Observer: step events ──────────────────────────────────────────────
