@@ -48,6 +48,10 @@ export interface StepOutcome extends Partial<StepResult> {
 	/** If true, the mock awaits `opts.signal`'s abort event before applying the rest of
 	 * the outcome. Lets tests simulate a step that's in-flight when SIGINT fires. */
 	awaitAbort?: boolean;
+	/** Await a real timer of this many ms before applying the rest of the outcome. Lets
+	 * tests give a concurrent mid-step confinement prober (#388) a chance to tick — and,
+	 * unlike `awaitAbort`, still resolve naturally when nothing trips it. */
+	delayMs?: number;
 }
 
 /** Per-step behavior. Array = sequential attempts; single = every call. */
@@ -73,6 +77,9 @@ export function createMockRunStep(behavior: MockBehavior, parkSignal: ParkSignal
 		}
 		if (outcome.awaitAbort && opts.signal) {
 			await new Promise<void>((resolve) => opts.signal?.addEventListener("abort", () => resolve(), { once: true }));
+		}
+		if (outcome.delayMs) {
+			await new Promise<void>((resolve) => setTimeout(resolve, outcome.delayMs));
 		}
 		const writes = name === "plan" && (outcome.ok ?? true) && !outcome.writes ? { [`docs/plans/${(opts.itemId ?? "plan").toLowerCase()}.md`]: "# Plan\nmock plan" } : outcome.writes;
 		if (writes) {

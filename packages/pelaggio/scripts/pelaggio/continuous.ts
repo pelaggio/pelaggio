@@ -47,8 +47,13 @@ function parsePositiveDuration(value: string): number | null {
  * Resolve continuous-mode CLI flags. Returns `config: null` when continuous is
  * off. Returns an error envelope for invalid combinations so the orchestrator
  * can exit 2 without throwing.
+ *
+ * Day-budget precedence (issue #83):
+ *   1. CLI `--day-budget` when present and valid
+ *   2. else `defaults.dayBudget` (from `CONFIG.watch.dailyBudget`)
+ *   3. else unlimited (`undefined`)
  */
-export function resolveContinuousConfig(flags: Flags): ContinuousResolveError {
+export function resolveContinuousConfig(flags: Flags, defaults?: { dayBudget?: number }): ContinuousResolveError {
 	const continuousFlag = flags.continuous === true;
 	const presetRaw = flags.preset;
 	const enabled = continuousFlag || presetRaw !== undefined;
@@ -76,6 +81,8 @@ export function resolveContinuousConfig(flags: Flags): ContinuousResolveError {
 			return { ok: false, message: `--day-budget must be a positive number (got ${JSON.stringify(flags["day-budget"])})` };
 		}
 		dayBudget = n;
+	} else if (defaults?.dayBudget !== undefined) {
+		dayBudget = defaults.dayBudget;
 	}
 
 	const probeIntervalMs = parsePositiveDuration(flags["probe-interval"] ?? "5m");
@@ -122,6 +129,13 @@ export function dayKey(nowMs: number = Date.now()): string {
 	const m = String(d.getMonth() + 1).padStart(2, "0");
 	const day = String(d.getDate()).padStart(2, "0");
 	return `${y}-${m}-${day}`;
+}
+
+/** Epoch ms of the next local midnight after `nowMs` (watch budget rollover). */
+export function nextLocalMidnightMs(nowMs: number = Date.now()): number {
+	const d = new Date(nowMs);
+	d.setHours(24, 0, 0, 0);
+	return d.getTime();
 }
 
 /**

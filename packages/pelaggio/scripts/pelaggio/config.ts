@@ -103,6 +103,9 @@ export interface ResolvedConfig {
 	 *  import cycle). `unknownResetWait` is the conservative estimate used when a rate-limit
 	 *  event carries no reset time (Codex 429s never do — issue #68). */
 	park: { autoResume: boolean; maxWait: string; unknownResetWait: string };
+	/** Continuous watch day-budget default (issue #83). Undefined = unlimited. CLI
+	 *  `--day-budget` overrides this when present; server StartForm prefill surfaces it. */
+	watch: { dailyBudget?: number };
 	/** Local revise sweep (issue #76). When `local` is true (the default), an auto-pick run on a
 	 *  github-issues + PR-ship repo sweeps for red-review PRs and revises them in-process on the
 	 *  local Claude subscription. `local: false` is the documented off-switch. */
@@ -206,6 +209,8 @@ export const DEFAULTS = {
 	// waits by default via the old `--max-wait` 6h default) — flipping it false would
 	// regress unattended overnight runs. `false` is the explicit interactive off-switch.
 	park: { autoResume: true, maxWait: "6h", unknownResetWait: "60m" },
+	// Continuous watch day-budget: absent / undefined means unlimited (issue #83).
+	watch: {} as { dailyBudget?: number },
 	// Local revise sweep on by default (issue #76 frames the knob as *opt-out*). The sweep is a
 	// hard no-op unless the repo is github-issues + a PR ship target + auto-pick mode, so
 	// default-on does nothing for every markdown/direct-push consumer. `revise.local: false` is
@@ -668,6 +673,22 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		}
 	}
 
+	// watch.daily-budget: continuous watch day-budget default (issue #83). Absent = unlimited.
+	let watchDailyBudget: number | undefined;
+	const watchBlock = yml.watch;
+	if (watchBlock !== undefined) {
+		if (!isPlainObject(watchBlock)) {
+			throw new Error(`${configPath}: expected \`watch\` to be a map`);
+		}
+		const dailyBudget = watchBlock["daily-budget"];
+		if (dailyBudget !== undefined) {
+			if (typeof dailyBudget !== "number" || !Number.isFinite(dailyBudget) || dailyBudget <= 0) {
+				throw new Error(`${configPath}: expected \`watch.daily-budget\` to be a finite positive number, got ${JSON.stringify(dailyBudget)}`);
+			}
+			watchDailyBudget = dailyBudget;
+		}
+	}
+
 	// revise.local: local revise sweep on/off (issue #76). Type-validate only.
 	let reviseLocal: boolean = DEFAULTS.revise.local;
 	const reviseBlock = yml.revise;
@@ -900,6 +921,7 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		roadmapLinear,
 		pick: { maxScope: pickMaxScope },
 		park: { autoResume: parkAutoResume, maxWait: parkMaxWait, unknownResetWait: parkUnknownResetWait },
+		watch: { ...(watchDailyBudget !== undefined ? { dailyBudget: watchDailyBudget } : {}) },
 		revise: { local: reviseLocal },
 		review: { runner: reviewRunner, statuslessAfter: reviewStatuslessAfter, maxPasses: reviewMaxPasses, budgetCap: reviewBudgetCap, providerDiversity: reviewProviderDiversity, authoring: reviewAuthoring, taxonomy: reviewTaxonomy },
 		confinement: { allowDirtyMain: confinementAllowDirtyMain },

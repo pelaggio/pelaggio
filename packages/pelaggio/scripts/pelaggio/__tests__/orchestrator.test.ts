@@ -1150,13 +1150,24 @@ describe("runOrchestrator — continuous mode (issue #82)", () => {
 		assert.equal(calls.length, 0);
 	});
 
-	it("rejects --continuous with --parallel > 1", async (t) => {
-		t.mock.method(console, "error", () => {});
+	it("drain ×2: empty free probe stops without pick agent", async (t) => {
 		t.mock.method(console, "log", () => {});
 		const { runPipeline, calls } = createMockRunPipeline({ default: { completed: true } });
-		const { exitCode } = await runOrchestrator({ ...baseFlags, continuous: true, parallel: "2" }, { runPipeline });
-		assert.equal(exitCode, 2);
+		let probes = 0;
+		const { exitCode } = await runOrchestrator(
+			{ ...baseFlags, continuous: true, preset: "drain", parallel: "2" },
+			{
+				runPipeline,
+				queueProbe: async () => {
+					probes++;
+					return { empty: true, readyCount: 0 };
+				},
+			},
+		);
+		assert.equal(exitCode, 0);
 		assert.equal(calls.length, 0);
+		// Continuous gate serializes probe: exactly one empty probe, not one per worker.
+		assert.equal(probes, 1);
 	});
 
 	it("drain: free probe empty → stop without pick agent", async (t) => {
@@ -1289,27 +1300,88 @@ describe("runOrchestrator — continuous mode (issue #82)", () => {
 		assert.equal(sleeps[0], 60_000);
 	});
 
-	it("watch: day-budget stops after spend", async (t) => {
+	it("watch: day-budget idles to local midnight then probes again", async (t) => {
 		t.mock.method(console, "log", () => {});
 		const { runPipeline, calls } = createMockRunPipeline({
 			default: { completed: true, cost: 3 },
 		});
+		// Start mid-day so nextLocalMidnightMs is in the future.
+		let nowMs = new Date(2026, 7, 2, 12, 0, 0).getTime();
+		const sleeps: number[] = [];
 		let probes = 0;
 		const { exitCode } = await runOrchestrator(
-			{ ...baseFlags, continuous: true, preset: "watch", "day-budget": "5", "probe-interval": "1m" },
+			{ ...baseFlags, continuous: true, preset: "watch", "day-budget": "5", "probe-interval": "1m", cycles: "3" },
 			{
 				runPipeline,
 				queueProbe: async () => {
 					probes++;
 					return { empty: false, readyCount: 1 };
 				},
+				sleep: async (ms) => {
+					sleeps.push(ms);
+					// Advance clock past the sleep so DayBudgetTracker rolls.
+					nowMs += ms + 1;
+				},
+				now: () => nowMs,
+			},
+		);
+		// After cycle 1: spent=3 < 5 → continue. Cycle 2: spent=6 ≥ 5 → budget-idle sleep.
+		// After wake, cycle 3 runs under --cycles 3 ceiling.
+		assert.equal(calls.length, 3);
+		assert.equal(exitCode, 0);
+		assert.ok(
+			sleeps.some((ms) => ms > 60_000),
+			`expected a long budget-idle sleep, got ${JSON.stringify(sleeps)}`,
+		);
+		assert.ok(probes >= 3);
+	});
+
+	it("drain: day-budget exhaustion stops (no rollover)", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({
+			default: { completed: true, cost: 3 },
+		});
+		const { exitCode } = await runOrchestrator(
+			{ ...baseFlags, continuous: true, preset: "drain", "day-budget": "5" },
+			{
+				runPipeline,
+				queueProbe: async () => ({ empty: false, readyCount: 1 }),
 				sleep: async () => {},
 			},
 		);
-		// After cycle 1: spent=3 < 5 → continue. Cycle 2: spent=6 ≥ 5 → stop before cycle 3.
+		// Cycle 1 + 2 then budget stop (drain does not rollover-idle).
 		assert.equal(calls.length, 2);
 		assert.equal(exitCode, 0);
-		assert.ok(probes >= 2);
+	});
+
+	it("drain ×2: two concurrent paid cycles when probe has work", async (t) => {
+		t.mock.method(console, "log", () => {});
+		let inFlight = 0;
+		let maxInFlight = 0;
+		let calls = 0;
+		const runPipeline = async () => {
+			calls++;
+			inFlight++;
+			maxInFlight = Math.max(maxInFlight, inFlight);
+			await new Promise<void>((r) => setTimeout(r, 30));
+			inFlight--;
+			return { itemId: `item-${calls}`, completed: true, cost: 0.1 };
+		};
+		let probes = 0;
+		const { exitCode } = await runOrchestrator(
+			{ ...baseFlags, continuous: true, preset: "drain", parallel: "2", cycles: "2" },
+			{
+				runPipeline: runPipeline as never,
+				queueProbe: async () => {
+					probes++;
+					// Keep reporting work until both cycles claimed.
+					return probes <= 2 ? { empty: false, readyCount: 2 } : { empty: true, readyCount: 0 };
+				},
+			},
+		);
+		assert.equal(exitCode, 0);
+		assert.equal(calls, 2);
+		assert.ok(maxInFlight >= 2, `expected concurrent pipelines, maxInFlight=${maxInFlight}`);
 	});
 
 	it("drain: pick:queue-empty race also stops", async (t) => {

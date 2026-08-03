@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
@@ -98,6 +98,55 @@ describe("flow event writer", () => {
 		assert.equal(event.streamId, writer.streamId);
 		assert.equal(event.seq, 1);
 		assert.equal(event.executionId, writer.executionId);
+	});
+
+	it("pins streamId and executionId when supplied as ULID-shaped options", () => {
+		const root = tempRoot();
+		let index = 10;
+		const writer = createEventWriter({
+			root,
+			streamId: IDS[0],
+			executionId: IDS[1],
+			idFactory: () => IDS[index++],
+			now: () => new Date("2026-07-13T12:00:00.000Z"),
+		});
+		assert.equal(writer.streamId, IDS[0]);
+		assert.equal(writer.executionId, IDS[1]);
+		const event = writer.append({ type: "pelaggio.watch-idle", probeAt: "2026-07-13T12:05:00.000Z" });
+		assert.equal(event.streamId, IDS[0]);
+		assert.equal(event.executionId, IDS[1]);
+		assert.equal(event.type, "pelaggio.watch-idle");
+		assert.ok(existsSync(join(root, ".dev", "flow-events", `${IDS[0]}.jsonl`)));
+	});
+
+	it("rejects non-ULID streamId / executionId options", () => {
+		const root = tempRoot();
+		assert.throws(() => createEventWriter({ root, streamId: "not-a-ulid" }), /ULID/);
+		assert.throws(() => createEventWriter({ root, executionId: "also-bad" }), /ULID/);
+	});
+
+	it("round-trips process-level continuous lifecycle types", () => {
+		const root = tempRoot();
+		let index = 0;
+		const writer = createEventWriter({ root, idFactory: () => IDS[index++], now: () => new Date("2026-07-13T12:00:00.000Z") });
+		const types = ["pelaggio.watch-idle", "pelaggio.watch-wake", "pelaggio.budget-idle", "pelaggio.budget-wake", "pelaggio.suspended", "pelaggio.resumed"] as const;
+		for (const type of types) {
+			const payload =
+				type === "pelaggio.watch-idle"
+					? { type, probeAt: "2026-07-13T12:05:00.000Z" }
+					: type === "pelaggio.budget-idle"
+						? { type, resumeAt: "2026-07-14T00:00:00.000Z", budget: 10, spent: 10 }
+						: type === "pelaggio.suspended"
+							? { type, reason: "rate-limit", resumeAt: "2026-07-13T18:00:00.000Z" }
+							: { type };
+			const event = writer.append(payload as FlowEventInput);
+			assert.equal(event.type, type);
+		}
+		const read = readEventLog({ root, cycleLogPath: null });
+		assert.deepEqual(
+			read.events.map((e) => e.type),
+			[...types],
+		);
 	});
 });
 

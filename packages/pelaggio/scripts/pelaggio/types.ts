@@ -217,7 +217,12 @@ export type PelaggioEventType =
 	| "pelaggio.shipped"
 	| "pelaggio.effect-failed"
 	| "pelaggio.state-observed"
-	| "pelaggio.state-corrected";
+	| "pelaggio.state-corrected"
+	// Process-level continuous-mode lifecycle (issue #83) — not item-flow suspensions.
+	| "pelaggio.watch-idle"
+	| "pelaggio.watch-wake"
+	| "pelaggio.budget-idle"
+	| "pelaggio.budget-wake";
 
 export interface FlowEventEnvelope {
 	v: 1;

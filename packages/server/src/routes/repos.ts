@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Context, Hono } from "hono";
-import { computeStats } from "pelaggio";
+import { computeStats, loadConfig } from "pelaggio";
 import type { Registry } from "../registry.js";
 import { RegistryError } from "../registry.js";
 import type { RoadmapCache } from "../roadmap-cache.js";
@@ -49,5 +49,26 @@ export function registerReposRoutes(app: Hono, deps: ReposDeps): void {
 		}
 		const logPath = join(repoPath, ".dev", "pelaggio-log.jsonl");
 		return c.json(computeStats({ logPath }));
+	});
+
+	/** Narrow config projection for StartForm prefill (issue #83). No full ResolvedConfig. */
+	app.get("/repos/:slug/config", (c) => {
+		const slug = c.req.param("slug");
+		let repoPath: string;
+		try {
+			repoPath = deps.registry.path(slug);
+		} catch (err) {
+			if (err instanceof RegistryError) return notFound(c, slug);
+			throw err;
+		}
+		try {
+			const cfg = loadConfig({ repo: repoPath });
+			return c.json({
+				watchDailyBudget: cfg.watch.dailyBudget ?? null,
+			});
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			return c.json({ error: message, code: "config-error" }, 500);
+		}
 	});
 }

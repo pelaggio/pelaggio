@@ -1,7 +1,7 @@
 import type { RunSummary } from "@pelaggio/server/types";
 import { useEffect, useState } from "react";
 import { ApiError, listRuns } from "../lib/api.js";
-import { formatDate, formatItemId, statusBadgeClass } from "../lib/format.js";
+import { formatDate, formatRunState, formatRunTitle, runStateBadgeClass } from "../lib/format.js";
 import { retryInit, useRepos } from "../lib/repo.js";
 
 const POLL_MS = 5_000;
@@ -147,16 +147,17 @@ function GroupedTable({ runs, repoOrder }: { runs: RunSummary[]; repoOrder: stri
 }
 
 function RunRow({ r }: { r: RunSummary }) {
+	const stateLabel = formatRunState(r.status, r.activity);
 	return (
 		<tr>
 			<td>
 				<a href={`/ui/runs/?id=${encodeURIComponent(r.id)}`} className="block min-h-[44px] py-2">
-					{formatItemId(r.item, r.repo)}
+					{formatRunTitle(r)}
 				</a>
 			</td>
 			<td>{r.lastStep ?? "—"}</td>
 			<td>
-				<span className={statusBadgeClass(r.status)}>{r.status}</span>
+				<span className={runStateBadgeClass(r.status, r.activity)}>{stateLabel}</span>
 			</td>
 			<td className="text-sm text-slate-600">{formatDate(r.startedAt)}</td>
 			<td className="text-sm text-slate-600">{formatDate(r.endedAt)}</td>

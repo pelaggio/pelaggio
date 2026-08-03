@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { ApiError, getRoadmap, getRun, getStats, listRepos, listRuns, pauseRun, startRun, stopRun } from "../src/lib/api.js";
+import { ApiError, buildStartBody, getRepoConfig, getRoadmap, getRun, getStats, listRepos, listRuns, pauseRun, startRun, stopRun } from "../src/lib/api.js";
 import { __setStorageForTests, registerPromptHandler, setToken } from "../src/lib/token.js";
 
 class FakeStorage {
@@ -71,6 +71,13 @@ describe("api client", () => {
 		const headers = new Headers(calls[0]?.init?.headers);
 		assert.equal(headers.get("content-type"), "application/json");
 		assert.equal(calls[0]?.init?.body, JSON.stringify({ repo: "main", item: "TOOL-1", parallel: 2 }));
+	});
+
+	it("getRepoConfig hits GET /repos/:slug/config", async () => {
+		const calls = installFetch(() => jsonResponse({ watchDailyBudget: 25 }));
+		const res = await getRepoConfig("main");
+		assert.deepEqual(res, { watchDailyBudget: 25 });
+		assert.equal(calls[0]?.url, "/repos/main/config");
 	});
 
 	it("pauseRun POSTs to /runs/:id/pause", async () => {
@@ -182,5 +189,68 @@ describe("api client", () => {
 			() => listRuns(),
 			(err: unknown) => err instanceof ApiError && err.status === 401,
 		);
+	});
+});
+
+describe("buildStartBody", () => {
+	const base = {
+		repo: "main",
+		mode: "off" as const,
+		item: "TOOL-1",
+		parallel: "",
+		cycles: "",
+		shipTarget: "",
+		watchDailyBudget: "",
+		verbose: false,
+	};
+
+	it("Drain ×1 preset", () => {
+		assert.deepEqual(buildStartBody({ ...base, mode: "drain", parallel: "1", item: "" }), {
+			repo: "main",
+			mode: "drain",
+			parallel: 1,
+		});
+	});
+
+	it("Drain ×2 preset", () => {
+		assert.deepEqual(buildStartBody({ ...base, mode: "drain", parallel: "2", item: "" }), {
+			repo: "main",
+			mode: "drain",
+			parallel: 2,
+		});
+	});
+
+	it("Watch ×2 omits budget when empty", () => {
+		assert.deepEqual(buildStartBody({ ...base, mode: "watch", parallel: "2", item: "", watchDailyBudget: "" }), {
+			repo: "main",
+			mode: "watch",
+			parallel: 2,
+		});
+	});
+
+	it("Watch with advanced budget includes watchDailyBudget", () => {
+		assert.deepEqual(buildStartBody({ ...base, mode: "watch", parallel: "2", watchDailyBudget: "25" }), {
+			repo: "main",
+			mode: "watch",
+			parallel: 2,
+			watchDailyBudget: 25,
+		});
+	});
+
+	it("ordinary item run requires item; omits mode and verbose:false", () => {
+		assert.deepEqual(buildStartBody({ ...base, mode: "off", item: "TOOL-1", verbose: false }), {
+			repo: "main",
+			item: "TOOL-1",
+		});
+	});
+
+	it("verbose true is included; false is omitted", () => {
+		assert.equal(buildStartBody({ ...base, verbose: true }).verbose, true);
+		assert.equal(buildStartBody({ ...base, verbose: false }).verbose, undefined);
+	});
+
+	it("budget omitted when mode is not watch", () => {
+		const body = buildStartBody({ ...base, mode: "drain", watchDailyBudget: "10" });
+		assert.equal(body.watchDailyBudget, undefined);
 	});
 });

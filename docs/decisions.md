@@ -6,6 +6,18 @@ Status values are `default-taken`, `resolved`, or `resolved→ADR-nnnn`. Source 
 
 | Decision | Status | Chosen/leaning | Alternatives | Source | Date |
 | --- | --- | --- | --- | --- | --- |
+| mid-step probe cadence | default-taken | hardcoded 15s constant (`CONFINEMENT_PROBE_INTERVAL_MS`), test-overridable via `PipelineDeps.confinementProbeIntervalMs` | expose via `.pelaggio.yml` `confinement:` block for operator tuning | https://github.com/pelaggio/pelaggio/issues/388 | 2026-08-03 |
+<!-- decision:85da42538da34afb -->
+| cancellation signal composition | default-taken | a new per-step `AbortController` whose signal is passed to `runStep`, forwarding `opts.signal`'s abort into it (rather than passing `opts.signal` straight through) | reuse `opts.signal` directly and add a second SIGINT-vs-confinement discriminant elsewhere | https://github.com/pelaggio/pelaggio/issues/388 | 2026-08-03 |
+<!-- decision:b8c315ceba0bf22b -->
+| probe-tick snapshot exec failure | default-taken | treat as fail-closed (abort immediately, classify `error_confinement`) | swallow and retry next tick indefinitely (rejected — inconsistent with the codebase's existing fail-closed treatment of before/after snapshot exec failures) | https://github.com/pelaggio/pelaggio/issues/388 | 2026-08-03 |
+<!-- decision:a63ce07f7166d189 -->
+| halt-campaign mechanism | default-taken | run-scoped halt flag; alternatives: per-worker return / park signal / abort in-flight workers. |  | https://github.com/pelaggio/pelaggio/issues/385 | 2026-08-03 |
+<!-- decision:3c562b46fe317c7a -->
+| confinement continuation | default-taken | halt by default with no configuration knob; alternatives: configurable opt-in. |  | https://github.com/pelaggio/pelaggio/issues/385 | 2026-08-03 |
+<!-- decision:a4b0997948e094d2 -->
+| quarantine limit | default-taken | five consecutive quarantines escalating to typed campaign halt; alternatives: lower limit / per-worker counter / parking. |  | https://github.com/pelaggio/pelaggio/issues/385 | 2026-08-03 |
+<!-- decision:66c62192358f56e1 -->
 | no-revise API shape | default-taken | discriminated union `mode: "no-revise"` with optional author and no revise prompt | `maxRevisions:0` + dummies (not seam-enforced); separate orchestrator (dual maintenance) | https://github.com/pelaggio/pelaggio/issues/384 | 2026-08-03 |
 <!-- decision:60ce8533a10c2ded -->
 | safetyFloorNote source | default-taken | added optional `safetyFloorNote` to `ReviewLoopBase` options so the loop can stamp the plan-specified result field (loop stays domain-neutral) | hardcode doc wording in the loop (wrong layer); omit from result (plan lists it) | https://github.com/pelaggio/pelaggio/issues/384 | 2026-08-03 |

@@ -2,6 +2,7 @@ import { execSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { basename, delimiter, extname, isAbsolute, join, resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import {
 	CONFIG,
 	CONFINEMENT_CONFIG,
@@ -25,7 +26,7 @@ import {
 } from "./config.js";
 import { forbiddenRootsForConfinement } from "./confinement/roots.js";
 import { type AcceptedSession, captureEvaluatorContext, createSessionController, firstDiffPathsByRoot, resolveEligibleSessions, revalidateChangedRoot, type SessionController, type SessionEvaluatorContext } from "./confinement/sessions.js";
-import { continuousCycleCap, DayBudgetTracker, freeQueueProbe, resolveContinuousConfig } from "./continuous.js";
+import { continuousCycleCap, DayBudgetTracker, freeQueueProbe, nextLocalMidnightMs, resolveContinuousConfig } from "./continuous.js";
 import { appendDecisions as appendDecisionsDefault, appendReviewEscalation as appendReviewEscalationDefault, lookupReviewEscalation as lookupReviewEscalationDefault } from "./decisions.js";
 import { createDriverAssignmentState, type DriverIdentity, recordArtifactAuthor, resolveStaticAuthor, selectAuthor, selectReviewers } from "./driver-assignment.js";
 import {
@@ -39,6 +40,7 @@ import {
 	writeEffectsManifest as writeEffectsManifestDefault,
 } from "./effects.js";
 import { digestChallenge } from "./execution-receipt.js";
+import { createEventWriter } from "./flow-events.js";
 import { DEFAULT_FLOW_POLICY, type FlowPolicy } from "./flow-policy.js";
 import {
 	appendLog as appendLogDefault,
@@ -146,6 +148,11 @@ const CONSECUTIVE_TRANSIENT_ERROR_LIMIT = 3;
 // Shared across workers and reset by any non-quarantine outcome, so this only trips
 // on an unbroken no-ship streak. Five tolerates a few independent blocked items.
 const CONSECUTIVE_QUARANTINE_LIMIT = 5;
+// #388: cadence for the mid-step forbidden-root prober that runs concurrently with an
+// in-flight provider call. Bounds a mid-step confinement violation's cost to roughly one
+// interval instead of the whole step, without polling git status so often it competes with
+// the step's own work. Overridable in tests via PipelineDeps.confinementProbeIntervalMs.
+const CONFINEMENT_PROBE_INTERVAL_MS = 15_000;
 
 export interface PipelineDeps {
 	runStep?: RunStepFn;
@@ -176,6 +183,8 @@ export interface PipelineDeps {
 	resolveEligibleSessions?: typeof resolveEligibleSessions;
 	/** Test seam: replace diff-time session revalidation (#369). */
 	revalidateChangedRoot?: typeof revalidateChangedRoot;
+	/** Test seam: override the mid-step confinement prober's polling interval (#388). */
+	confinementProbeIntervalMs?: number;
 	/** Test seam: replace evaluator-context capture (#369). */
 	captureEvaluatorContext?: typeof captureEvaluatorContext;
 	/** Test seam: replace session-controller factory (#369). */
@@ -215,6 +224,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	const diffForbiddenRootSnapshotsFn = deps.diffForbiddenRootSnapshots ?? diffForbiddenRootSnapshots;
 	const resolveEligibleSessionsFn = deps.resolveEligibleSessions ?? resolveEligibleSessions;
 	const revalidateChangedRootFn = deps.revalidateChangedRoot ?? revalidateChangedRoot;
+	const confinementProbeIntervalMs = deps.confinementProbeIntervalMs ?? CONFINEMENT_PROBE_INTERVAL_MS;
 	const captureEvaluatorContextFn = deps.captureEvaluatorContext ?? captureEvaluatorContext;
 	const createSessionControllerFn = deps.createSessionController ?? createSessionController;
 	const appendDecisions = deps.appendDecisions ?? appendDecisionsDefault;
@@ -396,6 +406,41 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				log(`⚠ ${confinementAuditError}`);
 			}
 
+			// #369-eligibility classification of a raw before/after diff, shared by the
+			// mid-step prober and the natural end-of-step diff (#388) so a probe never trips
+			// on a legitimate concurrent peer write that the end-of-step diff would have
+			// excluded anyway — both apply the identical revalidation discipline.
+			const classifyForbiddenRootChanges = (before: ReadonlyMap<string, string>, after: ReadonlyMap<string, string>): { violated: string[]; excludedSessions: AcceptedSession[]; warnings: string[] } => {
+				const violated: string[] = [];
+				const excludedSessions: AcceptedSession[] = [];
+				const warnings: string[] = [];
+				for (const root of diffForbiddenRootSnapshotsFn(before, after)) {
+					const abs = resolve(root);
+					if (abs === resolve(mainRepo)) {
+						violated.push(root);
+						continue;
+					}
+					const stillLive = revalidateChangedRootFn(sessionEvaluator, abs);
+					if (stillLive) {
+						const paths = firstDiffPathsByRoot(before, after, [abs]).get(abs) ?? [];
+						const warn = `confinement: excluded live session ${stillLive.identity.sessionId} (${stillLive.identity.claimedItem} @ ${abs}${paths.length ? `; paths: ${paths.join(", ")}` : ""})`;
+						warnings.push(warn);
+						log(`⚠ ${warn}`);
+						excludedSessions.push(stillLive);
+						continue;
+					}
+					violated.push(root);
+				}
+				return { violated, excludedSessions, warnings };
+			};
+			const mergeExcludedSessions = (found: AcceptedSession[]): void => {
+				for (const s of found) {
+					if (!stepExcludedSessions.some((es) => es.worktreePath === s.worktreePath)) {
+						stepExcludedSessions = [...stepExcludedSessions, s];
+					}
+				}
+			};
+
 			// #369: foreign-root Write/Edit denial + sessions-dir protection for Claude steps,
 			// including shipwreck (main cwd + ownWorktree). Registered roots from listWorktrees.
 			const registeredWorktrees = (() => {
@@ -416,51 +461,94 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 					}
 				: undefined;
 
-			const providerResult = await runStep(
-				name,
-				prompt,
-				{
-					cwd,
-					profile,
-					trace: flags.trace,
-					itemId: itemId ?? undefined,
-					parkSignal: parkSignalOverride ?? parkSignal,
-					...(executionOverride ? { executionOverride } : {}),
-					...(maxTurnsOverride !== undefined ? { maxTurnsOverride } : {}),
-					...(opts.signal ? { signal: opts.signal } : {}),
-					...(mainCheckoutObserver ? { mainCheckoutObserver } : {}),
-					foreignRootDenial,
-					...(onChildSpawn ? { onChildSpawn } : {}),
-				},
-				emit,
-			);
+			let providerResult: StepResult;
+			if (confinementAuditError !== undefined) {
+				// #388: fail closed before any provider spend. A before-phase audit problem
+				// (root enumeration or snapshot execution failure) already means the tree
+				// cannot be trusted as a clean baseline for this step — continuing on to spend
+				// the full step cost only to override the result afterward (the prior
+				// behavior) burns real money on a step already known to be error_confinement.
+				providerResult = { ok: false, subtype: "error_confinement", text: confinementAuditError, fullText: confinementAuditError, cost: 0, turns: 0 };
+			} else {
+				// A step-scoped controller composes the external (SIGINT) signal with an
+				// internal one the periodic prober below can trip independently, so a
+				// mid-step forbidden-root mutation cancels the in-flight provider call through
+				// the same signal/driver boundary SIGINT already uses (#388) — and confirmed
+				// child termination is awaited (the `await runStep` below) before this step
+				// classifies anything. Deliberately never touches `opts.signal` itself: `finish()`
+				// labels a cycle "aborted" only when `opts.signal.aborted`, and a confinement
+				// trip must classify as error_confinement, not a SIGINT abort.
+				const stepAbort = new AbortController();
+				if (opts.signal) {
+					if (opts.signal.aborted) stepAbort.abort();
+					else opts.signal.addEventListener("abort", () => stepAbort.abort(), { once: true });
+				}
+				// Woken early (not just on its own interval) once the provider call settles, so a
+				// normal/fast step never waits out a stale probe tick before returning (#388).
+				let midStepSettled = false;
+				const settledController = new AbortController();
+				const probeLoop = (async () => {
+					while (!midStepSettled) {
+						try {
+							await delay(confinementProbeIntervalMs, undefined, { signal: settledController.signal });
+						} catch {
+							return; // settledController fired — the step already settled.
+						}
+						if (midStepSettled) return;
+						try {
+							const probeSnapshot = snapshotForbiddenRootsFn(forbiddenRoots);
+							const probeEval = classifyForbiddenRootChanges(forbiddenBefore, probeSnapshot);
+							if (probeEval.violated.length > 0) {
+								forbiddenAfter = probeSnapshot;
+								confinementRoots.push(...probeEval.violated);
+								revalidationWarnings.push(...probeEval.warnings);
+								mergeExcludedSessions(probeEval.excludedSessions);
+								log(`⚠ confinement: mid-step forbidden root change detected during ${name}: ${probeEval.violated.join(", ")} — aborting`);
+								stepAbort.abort();
+								return;
+							}
+						} catch (e) {
+							// A probe-tick snapshot execution failure is the same fail-closed audit
+							// problem as a before/after snapshot failure — abort rather than silently
+							// retrying indefinitely against a root we can no longer verify.
+							confinementAuditError = `confinement audit failed during ${name} (mid-step probe): ${e instanceof Error ? e.message : String(e)}`;
+							log(`⚠ ${confinementAuditError}`);
+							stepAbort.abort();
+							return;
+						}
+					}
+				})();
+
+				providerResult = await runStep(
+					name,
+					prompt,
+					{
+						cwd,
+						profile,
+						trace: flags.trace,
+						itemId: itemId ?? undefined,
+						parkSignal: parkSignalOverride ?? parkSignal,
+						...(executionOverride ? { executionOverride } : {}),
+						...(maxTurnsOverride !== undefined ? { maxTurnsOverride } : {}),
+						signal: stepAbort.signal,
+						...(mainCheckoutObserver ? { mainCheckoutObserver } : {}),
+						foreignRootDenial,
+						...(onChildSpawn ? { onChildSpawn } : {}),
+					},
+					emit,
+				);
+				midStepSettled = true;
+				settledController.abort();
+				await probeLoop;
+			}
 
 			if (confinementRoots.length === 0 && confinementAuditError === undefined) {
 				try {
 					forbiddenAfter = snapshotForbiddenRootsFn(forbiddenRoots);
-					const rawChanged = diffForbiddenRootSnapshotsFn(forbiddenBefore, forbiddenAfter);
-					// #369: revalidate each changed sibling with the same eligibility predicate.
-					// Still-live peers warn + suppress; main / expired / identity-mutated park.
-					for (const root of rawChanged) {
-						const abs = resolve(root);
-						if (abs === resolve(mainRepo)) {
-							confinementRoots.push(root);
-							continue;
-						}
-						const stillLive = revalidateChangedRootFn(sessionEvaluator, abs);
-						if (stillLive) {
-							const paths = firstDiffPathsByRoot(forbiddenBefore, forbiddenAfter, [abs]).get(abs) ?? [];
-							const warn = `confinement: excluded live session ${stillLive.identity.sessionId} (${stillLive.identity.claimedItem} @ ${abs}${paths.length ? `; paths: ${paths.join(", ")}` : ""})`;
-							revalidationWarnings.push(warn);
-							log(`⚠ ${warn}`);
-							// Keep evidence in stepExcludedSessions for park diagnostics if other roots fail.
-							if (!stepExcludedSessions.some((s) => s.worktreePath === abs)) {
-								stepExcludedSessions = [...stepExcludedSessions, stillLive];
-							}
-							continue;
-						}
-						confinementRoots.push(root);
-					}
+					const finalEval = classifyForbiddenRootChanges(forbiddenBefore, forbiddenAfter);
+					confinementRoots.push(...finalEval.violated);
+					revalidationWarnings.push(...finalEval.warnings);
+					mergeExcludedSessions(finalEval.excludedSessions);
 				} catch (e) {
 					confinementAuditError = `confinement audit failed after ${name}: ${e instanceof Error ? e.message : String(e)}`;
 					log(`⚠ ${confinementAuditError}`);
@@ -1946,6 +2034,13 @@ const MAX_RESUME_ROUNDS = 12;
  * parked and the caller prints its own pending/resume hint. `itemsLabel`, when given, lists the
  * parked items under the wait banner (the item loop; the review sweep omits it).
  */
+const ULID_ENV_PATTERN = /^[0-9A-HJKMNP-TV-Z]{26}$/;
+
+/** True when `value` is a ULID-shaped string (flow writer correlation env). */
+function isUlidEnv(value: string | undefined): value is string {
+	return typeof value === "string" && ULID_ENV_PATTERN.test(value);
+}
+
 async function awaitParkReset(parkSignal: ParkSignal, opts: { maxWaitMs: number; itemsLabel?: string }): Promise<"resumed" | "handback"> {
 	const waitMs = parkSignal.resetsAt - Date.now();
 	const isWeekly = /week/i.test(parkSignal.limitType);
@@ -2068,8 +2163,9 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			return { exitCode: 2, results };
 		}
 
-		// Continuous mode (issue #82): drain/watch presets with free queue probe + day budget.
-		const continuousResolved = resolveContinuousConfig(flags);
+		// Continuous mode (issue #82/#83): drain/watch presets with free queue probe + day budget.
+		// Day-budget precedence: CLI `--day-budget` > CONFIG.watch.dailyBudget > unlimited.
+		const continuousResolved = resolveContinuousConfig(flags, { dayBudget: CONFIG.watch.dailyBudget });
 		if (!continuousResolved.ok) {
 			console.error(continuousResolved.message);
 			return { exitCode: 2, results };
@@ -2077,10 +2173,6 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		const continuous = continuousResolved.config;
 		if (continuous && noWorktree) {
 			console.error("--continuous / --preset is not supported with --no-worktree / CI mode");
-			return { exitCode: 2, results };
-		}
-		if (continuous && Number(flags.parallel) > 1) {
-			console.error("--continuous / --preset does not support --parallel > 1 (free probe + per-iteration revise are serial)");
 			return { exitCode: 2, results };
 		}
 
@@ -2220,6 +2312,10 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		const statusInterval = isParallel && v && TUI_ENABLED ? setInterval(() => liveStatus.render(), 200) : null;
 
 		const pickMutex = isParallel ? createMutex() : undefined;
+		// Continuous gate (issue #83): one serialized critical section for budget check,
+		// revise, free probe, idle/budget sleep, and lifecycle event emission. Released
+		// before paid `runPipeline` work so ×N workers can claim independently.
+		const continuousGate = continuous ? createMutex() : undefined;
 		// Run-scoped registry of live peer worktrees. Each cycle registers its worktree on
 		// entry and deregisters on finish; peers exempt registered worktrees from their
 		// confinement snapshot so a sibling's own-worktree write never false-positives —
@@ -2227,6 +2323,50 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		const activeWorktrees = isParallel ? new Set<string>() : undefined;
 		let nextCycle = 0;
 		let totalSpent = 0;
+		// Drain-complete flag so waiting peers stop once the gate holder sees emptiness.
+		let drainComplete = false;
+		// Transition-only idle tracking: re-emitting watch-idle/budget-idle is forbidden.
+		let continuousIdle: "none" | "watch-idle" | "budget-idle" = "none";
+		// Emit at most one suspended per park interval (peers may all observe park).
+		let continuousSuspendedEmitted = false;
+		// Correlate supervised continuous runs with `.dev/flow-events/<streamId>.jsonl`.
+		const continuousWriter = continuous
+			? createEventWriter({
+					...(isUlidEnv(process.env.PELAGGIO_EVENT_STREAM_ID) ? { streamId: process.env.PELAGGIO_EVENT_STREAM_ID } : {}),
+					...(isUlidEnv(process.env.PELAGGIO_EXECUTION_ID) ? { executionId: process.env.PELAGGIO_EXECUTION_ID } : {}),
+				})
+			: undefined;
+		const emitContinuous = (input: Parameters<NonNullable<typeof continuousWriter>["append"]>[0]): void => {
+			try {
+				continuousWriter?.append(input);
+			} catch (e) {
+				const msg = e instanceof Error ? e.message : String(e);
+				console.log(`${A.dim(`flow-event emit failed: ${msg}`)}`);
+			}
+		};
+		const suspensionReason = (): string => {
+			const lt = parkSignal.limitType;
+			if (lt === "paused") return "operator-pause";
+			if (lt === "sdk-outage") return "sdk-outage";
+			return "rate-limit";
+		};
+		const emitSuspendedIfParked = (): void => {
+			if (!continuous || !parkSignal.parked || continuousSuspendedEmitted) return;
+			continuousSuspendedEmitted = true;
+			const reason = suspensionReason();
+			const resumeAt = parkSignal.resetsAt > 0 ? new Date(parkSignal.resetsAt).toISOString() : undefined;
+			emitContinuous({
+				type: "pelaggio.suspended",
+				itemId: null,
+				reason,
+				...(resumeAt ? { resumeAt } : {}),
+			});
+		};
+		const emitResumed = (): void => {
+			if (!continuous) return;
+			continuousSuspendedEmitted = false;
+			emitContinuous({ type: "pelaggio.resumed", itemId: null });
+		};
 		// Consecutive "transient sdk error" cycle outcomes across the whole worker pool
 		// (issue #128) — reset by any other outcome. Shared across parallel workers since
 		// it tracks the campaign's overall health, not any one worker's.
@@ -2242,56 +2382,121 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		async function worker(): Promise<void> {
 			if (campaignHalted) return;
 			while (true) {
-				// Continuous-mode pre-cycle gates (issue #82): day budget, per-iteration
-				// revise, and free queue probe. Free probe skips the pick agent on an empty queue
-				// so drain/watch don't burn paid cycles discovering emptiness.
+				// Continuous-mode pre-cycle gates (issue #82/#83): day budget, per-iteration
+				// revise, and free queue probe — under one continuous gate so ×N workers do
+				// not double-probe or double-sleep. Gate released before paid work.
 				//
 				// Park check is continuous-only here: a global early park return would race
 				// parallel non-continuous workers (one parks → siblings skip their first pull).
-				if (continuous) {
-					if (parkSignal.parked) return;
-					if (dayBudgetTracker.exceeded()) {
-						console.log(`${A.yellow("⚠")} day budget ($${continuous.dayBudget!.toFixed(2)}) exhausted (spent $${dayBudgetTracker.daySpent.toFixed(2)} today) — stopping continuous run`);
-						return;
-					}
-					// Run even when the pick queue is empty: red PRs are independent work and
-					// watch sessions must keep discovering them between queue probes.
-					await runReviseSweepOnce();
-					if (parkSignal.parked) return;
-					if (dayBudgetTracker.exceeded()) {
-						console.log(`${A.yellow("⚠")} day budget ($${continuous.dayBudget!.toFixed(2)}) exhausted after revise — stopping continuous run`);
-						return;
-					}
-					if (items.length === 0) {
-						let probe: { empty: boolean; readyCount: number };
-						try {
-							probe = await queueProbe();
-						} catch (e) {
-							const msg = e instanceof Error ? e.message : String(e);
-							console.log(`${A.yellow("⚠")} queue probe failed: ${msg}`);
-							// Fail closed: a broken free probe must never turn into an unbounded paid
-							// pick loop. Drain stops; watch waits and retries without consuming a cycle.
-							if (continuous.preset === "drain") return;
-							await sleep(continuous.probeIntervalMs);
-							continue;
-						}
-						if (probe.empty) {
+				if (continuous && continuousGate) {
+					let exitWorker = false;
+					let retryGate = false;
+					await continuousGate.acquire();
+					try {
+						if (parkSignal.parked || drainComplete) {
+							if (parkSignal.parked) emitSuspendedIfParked();
+							exitWorker = true;
+						} else if (dayBudgetTracker.exceeded()) {
 							if (continuous.preset === "drain") {
-								console.log(`${A.green("✓")} queue empty — drain complete`);
-								return;
+								console.log(`${A.yellow("⚠")} day budget ($${continuous.dayBudget!.toFixed(2)}) exhausted (spent $${dayBudgetTracker.daySpent.toFixed(2)} today) — stopping continuous run`);
+								exitWorker = true;
+							} else {
+								// Watch: idle until local-day rollover, then probe again (no paid work).
+								const resumeAtMs = nextLocalMidnightMs(now());
+								const resumeAt = new Date(resumeAtMs).toISOString();
+								const spent = dayBudgetTracker.daySpent;
+								if (continuousIdle !== "budget-idle") {
+									emitContinuous({
+										type: "pelaggio.budget-idle",
+										itemId: null,
+										resumeAt,
+										budget: continuous.dayBudget!,
+										spent,
+									});
+									continuousIdle = "budget-idle";
+									console.log(`${A.yellow("⚠")} day budget ($${continuous.dayBudget!.toFixed(2)}) exhausted (spent $${spent.toFixed(2)}) — budget-idle until ${resumeAt}`);
+								}
+								const sleepMs = Math.max(0, resumeAtMs - now());
+								await sleep(sleepMs);
+								if (parkSignal.parked) {
+									emitSuspendedIfParked();
+									exitWorker = true;
+								} else {
+									if (continuousIdle === "budget-idle") {
+										emitContinuous({ type: "pelaggio.budget-wake", itemId: null });
+										continuousIdle = "none";
+										console.log(`${A.dim("budget-wake — day rolled, resuming watch")}`);
+									}
+									retryGate = true;
+								}
 							}
-							// Watch with an explicit --cycles N>1 ceiling: stop once we've already
-							// run N pick cycles rather than sleeping forever on an empty queue.
-							if (nextCycle >= cycles) {
-								console.log(`${A.dim("queue empty — cycle ceiling reached, stopping watch")}`);
-								return;
+						} else {
+							// Run even when the pick queue is empty: red PRs are independent work and
+							// watch sessions must keep discovering them between queue probes.
+							await runReviseSweepOnce();
+							if (parkSignal.parked) {
+								emitSuspendedIfParked();
+								exitWorker = true;
+							} else if (dayBudgetTracker.exceeded()) {
+								// After revise spend — re-enter gate loop for drain-stop or watch rollover.
+								retryGate = true;
+							} else if (items.length === 0) {
+								let probe: { empty: boolean; readyCount: number } | null = null;
+								try {
+									probe = await queueProbe();
+								} catch (e) {
+									const msg = e instanceof Error ? e.message : String(e);
+									console.log(`${A.yellow("⚠")} queue probe failed: ${msg}`);
+									// Fail closed: a broken free probe must never turn into an unbounded paid
+									// pick loop. Drain stops; watch waits and retries without consuming a cycle.
+									if (continuous.preset === "drain") {
+										exitWorker = true;
+									} else {
+										await sleep(continuous.probeIntervalMs);
+										retryGate = true;
+									}
+								}
+								if (!exitWorker && !retryGate && probe) {
+									if (probe.empty) {
+										if (continuous.preset === "drain") {
+											console.log(`${A.green("✓")} queue empty — drain complete`);
+											drainComplete = true;
+											exitWorker = true;
+										} else if (nextCycle >= cycles) {
+											// Watch with an explicit --cycles N>1 ceiling.
+											console.log(`${A.dim("queue empty — cycle ceiling reached, stopping watch")}`);
+											exitWorker = true;
+										} else {
+											// watch: free wait (no cycle consumed, no pick agent)
+											const probeAt = new Date(now() + continuous.probeIntervalMs).toISOString();
+											if (continuousIdle !== "watch-idle") {
+												emitContinuous({ type: "pelaggio.watch-idle", itemId: null, probeAt });
+												continuousIdle = "watch-idle";
+											}
+											console.log(`${A.dim("queue empty — watching")} ${A.dim(`(probe in ${fmtWait(continuous.probeIntervalMs)})`)}`);
+											await sleep(continuous.probeIntervalMs);
+											if (parkSignal.parked) {
+												emitSuspendedIfParked();
+												exitWorker = true;
+											} else {
+												retryGate = true;
+											}
+										}
+									} else if (continuousIdle === "watch-idle") {
+										// Work available — wake from watch-idle, then release for paid work.
+										emitContinuous({ type: "pelaggio.watch-wake", itemId: null });
+										continuousIdle = "none";
+										console.log(`${A.dim("watch-wake — work available")}`);
+									}
+								}
 							}
-							// watch: free wait (no cycle consumed, no pick agent)
-							console.log(`${A.dim("queue empty — watching")} ${A.dim(`(probe in ${fmtWait(continuous.probeIntervalMs)})`)}`);
-							await sleep(continuous.probeIntervalMs);
-							continue;
 						}
+					} finally {
+						continuousGate.release();
 					}
+					if (exitWorker) return;
+					if (retryGate) continue;
+					// Fall through to paid work with gate released.
 				}
 
 				if (campaignHalted) return;
@@ -2384,7 +2589,13 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 
 				if (v) liveStatus.render();
 
-				if (parkSignal.parked) break;
+				if (parkSignal.parked) {
+					if (continuous) emitSuspendedIfParked();
+					break;
+				}
+				// #385's typed disposition replaces the raw RECOVERABLE membership check:
+				// continue / quarantine-and-continue keep the worker pulling; only
+				// halt-campaign (confinement/safety polarity) stops new cycle launches.
 				if (classifyCycleDisposition(result, RECOVERABLE) === "halt-campaign") {
 					campaignHalted = true;
 					return;
@@ -2393,6 +2604,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				// saw work (another process claimed it). Stop rather than spinning paid picks.
 				if (continuous?.preset === "drain" && result.error === "pick:queue-empty") {
 					console.log(`${A.green("✓")} queue empty — drain complete`);
+					drainComplete = true;
 					return;
 				}
 			}
@@ -2583,7 +2795,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		// Skip the pick worker pool entirely if the sweep already parked — its parked revisions
 		// are in `results` (pushed above), so they flow into the park-and-resume block below.
 		if (!parkSignal.parked) {
-			// Continuous: serial workers only (validated above); Math.min with MAX_SAFE_INTEGER is fine.
+			// Continuous gate serializes probe/idle; paid cycles may run up to `parallel` workers.
 			await Promise.all(Array.from({ length: Math.min(parallel, cycles === Number.MAX_SAFE_INTEGER ? parallel : cycles) }, () => worker()));
 		}
 
@@ -2689,6 +2901,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					console.log(`  Resume: ${A.bold(formatResumeHint(pending))}`);
 					break;
 				}
+				emitResumed();
 
 				console.log(`\n${A.green("▶")} ${A.bold("Resuming")} ${pending.length} item(s)...`);
 
