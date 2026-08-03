@@ -51,7 +51,7 @@ describe("egress broker", () => {
 		assert.equal(allowed.status, 200);
 		assert.equal(allowed.headers.authorization, undefined);
 		assert.equal(allowed.headers["set-cookie"], undefined);
-		assert.equal((captured?.headers as Record<string, string>).authorization, "Bearer secret-canary");
+		assert.equal((captured?.headers as Record<string, string> | undefined)?.authorization, "Bearer secret-canary");
 		assert.equal((await exchange(socketPath, "/v1/other", body)).status, 400);
 		const serialized = JSON.stringify(handle.decisions);
 		for (const secret of ["secret-canary", "client-leak", "secret-query", "api.openai.com", body]) assert.equal(serialized.includes(secret), false);

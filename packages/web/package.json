@@ -12,22 +12,22 @@
 		"test": "tsx --test __tests__/*.test.ts"
 	},
 	"dependencies": {
-		"@astrojs/react": "^5.0.7",
-		"pelaggio": "workspace:*",
+		"@astrojs/react": "^6.0.2",
 		"@pelaggio/server": "workspace:*",
-		"@tailwindcss/vite": "^4.3.1",
-		"astro": "^6.4.6",
-		"react": "^19.2.7",
-		"react-dom": "^19.2.7",
-		"tailwindcss": "^4.3.1"
+		"@tailwindcss/vite": "^4.3.3",
+		"astro": "^7.1.6",
+		"pelaggio": "workspace:*",
+		"react": "^19.2.8",
+		"react-dom": "^19.2.8",
+		"tailwindcss": "^4.3.3"
 	},
 	"devDependencies": {
-		"@astrojs/check": "^0.9.9",
+		"@astrojs/check": "^0.9.10",
 		"@resvg/resvg-js": "^2.6.2",
-		"@types/node": "^25.9.3",
-		"@types/react": "^19.2.17",
-		"@types/react-dom": "^19.2.3",
-		"tsx": "^4.22.4",
+		"@types/node": "^24.13.3",
+		"@types/react": "^19.2.18",
+		"@types/react-dom": "^19.2.4",
+		"tsx": "^4.23.1",
 		"typescript": "^6.0.3"
 	}
 }

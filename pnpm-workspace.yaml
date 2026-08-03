@@ -1,2 +1,18 @@
 packages:
   - packages/*
+# Dependency build scripts stay denied: these were already ignored under pnpm 10 with
+# the full gate green. lefthook's hooks are installed explicitly by the root `prepare`
+# script, and esbuild resolves its platform binary via optionalDependencies.
+allowBuilds:
+  '@anthropic-ai/claude-code': false
+  esbuild: false
+  lefthook: false
+# Supply-chain cooldown: reject dependency versions published within the last 24h — the
+# same posture as the no-install-scripts invariant. 1440 minutes is also pnpm 11's own
+# default, but it is pinned explicitly so the guard does not silently rest on an implicit
+# default that a future pnpm release could change. `strict` makes a blocked resolution
+# fail closed (ERR_PNPM_NO_MATURE_MATCHING_VERSION) instead of pnpm's default behaviour of
+# appending the blocked versions to a `minimumReleaseAgeExclude` list — a silent committed
+# bypass of exactly the packages the guard caught would defeat it.
+minimumReleaseAge: 1440
+minimumReleaseAgeStrict: true

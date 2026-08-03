@@ -223,7 +223,7 @@ describe("BeadsRoadmap.listItems — readiness + claim overlay", () => {
 		const readyCall = calls.find((c) => c.args[0] === "ready");
 		const inProgCall = calls.find((c) => c.args[0] === "list" && c.args.includes("--status"));
 		assert.ok(readyCall?.args.join(" ").includes("--limit 0"), "bd ready must be unlimited");
-		assert.ok(inProgCall && inProgCall.args.includes("in_progress") && inProgCall.args.join(" ").includes("--limit 0"), "in_progress reconcile must be status-scoped + unlimited");
+		assert.ok(inProgCall?.args.includes("in_progress") && inProgCall.args.join(" ").includes("--limit 0"), "in_progress reconcile must be status-scoped + unlimited");
 	});
 
 	it("#347 bd in_progress WITH a live branch → in-progress and not offered (git-authoritative)", async () => {
