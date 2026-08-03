@@ -6,6 +6,10 @@ Status values are `default-taken`, `resolved`, or `resolved→ADR-nnnn`. Source 
 
 | Decision | Status | Chosen/leaning | Alternatives | Source | Date |
 | --- | --- | --- | --- | --- | --- |
+| #187 delivery scope | default-taken | require signing, Rekor proof, durable git-authoritative predicate persistence, and effects-manifest capture in this item | formally re-charter #187 as unsigned-format dogfooding and create separate signing/transport items | https://github.com/pelaggio/pelaggio/issues/187 | 2026-08-03 |
+<!-- decision:608e638096add659 -->
+| review evidence binding | default-taken | preserve and hash the effects-manifest `reviewedSha` evidence before successful dispatch deletes it | approximate the reviewed revision from shipping HEAD | https://github.com/pelaggio/pelaggio/issues/187 | 2026-08-03 |
+<!-- decision:700d33d59f09e7f2 -->
 | headless transport | default-taken | opencode run --format json | opencode acp (deferred), interactive --prompt path | https://github.com/pelaggio/pelaggio/issues/137 | 2026-08-03 |
 <!-- decision:fa39d3166646a124 -->
 | isolation claim | default-taken | empty isolation array | claim workspace-write without evidence | https://github.com/pelaggio/pelaggio/issues/137 | 2026-08-03 |
