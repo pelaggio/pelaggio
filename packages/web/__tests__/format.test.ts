@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { formatDate, formatDuration, formatItemId, formatTokens, formatUsd, statusBadgeClass } from "../src/lib/format.js";
+import { formatDate, formatDuration, formatItemId, formatRunState, formatRunTitle, formatTokens, formatUsd, runStateBadgeClass, statusBadgeClass } from "../src/lib/format.js";
 
 describe("formatDate", () => {
 	it("returns em-dash on undefined", () => {
@@ -74,5 +74,45 @@ describe("statusBadgeClass", () => {
 		for (const s of ["running", "completed", "failed", "parked", "paused", "abandoned"] as const) {
 			assert.match(statusBadgeClass(s), /rounded/);
 		}
+	});
+});
+
+describe("formatRunTitle", () => {
+	it("uses formatItemId when item is present", () => {
+		assert.equal(formatRunTitle({ item: "30", repo: "pelaggio" }), "pelaggio#30");
+	});
+	it("renders continuous labels without item", () => {
+		assert.equal(formatRunTitle({ mode: "drain", parallel: 2, repo: "pelaggio" }), "drain ×2");
+		assert.equal(formatRunTitle({ mode: "watch", parallel: 2, repo: "pelaggio" }), "watch ×2");
+		assert.equal(formatRunTitle({ mode: "drain", parallel: 1, repo: "pelaggio" }), "drain");
+		assert.equal(formatRunTitle({ mode: "drain", repo: "pelaggio" }), "drain");
+	});
+});
+
+describe("formatRunState", () => {
+	it("process status wins when not running", () => {
+		assert.equal(formatRunState("paused", { kind: "watch-idle", probeAt: "x" }), "paused");
+		assert.equal(formatRunState("completed", { kind: "active" }), "completed");
+		assert.equal(formatRunState("parked"), "parked");
+	});
+	it("decorates running with activity", () => {
+		assert.equal(formatRunState("running"), "running");
+		assert.equal(formatRunState("running", { kind: "active" }), "running");
+		assert.equal(formatRunState("running", { kind: "watch-idle", probeAt: "x" }), "idle (watching)");
+		assert.equal(formatRunState("running", { kind: "budget-idle", resumeAt: "x", budget: 1, spent: 1 }), "budget-idled");
+		assert.equal(formatRunState("running", { kind: "parked" }), "parked");
+	});
+	it("formats parked until HH:MM from local ISO", () => {
+		const d = new Date(2026, 7, 2, 14, 5, 0);
+		const label = formatRunState("running", { kind: "parked", resumeAt: d.toISOString() });
+		assert.equal(label, "parked until 14:05");
+	});
+});
+
+describe("runStateBadgeClass", () => {
+	it("returns activity-aware class for running decorations", () => {
+		assert.match(runStateBadgeClass("running", { kind: "parked" }), /amber/);
+		assert.match(runStateBadgeClass("running", { kind: "watch-idle", probeAt: "x" }), /slate/);
+		assert.match(runStateBadgeClass("completed"), /green/);
 	});
 });

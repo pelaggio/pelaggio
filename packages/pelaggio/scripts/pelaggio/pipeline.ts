@@ -25,7 +25,7 @@ import {
 } from "./config.js";
 import { forbiddenRootsForConfinement } from "./confinement/roots.js";
 import { type AcceptedSession, captureEvaluatorContext, createSessionController, firstDiffPathsByRoot, resolveEligibleSessions, revalidateChangedRoot, type SessionController, type SessionEvaluatorContext } from "./confinement/sessions.js";
-import { continuousCycleCap, DayBudgetTracker, freeQueueProbe, resolveContinuousConfig } from "./continuous.js";
+import { continuousCycleCap, DayBudgetTracker, freeQueueProbe, nextLocalMidnightMs, resolveContinuousConfig } from "./continuous.js";
 import { appendDecisions as appendDecisionsDefault, appendReviewEscalation as appendReviewEscalationDefault, lookupReviewEscalation as lookupReviewEscalationDefault } from "./decisions.js";
 import { createDriverAssignmentState, type DriverIdentity, recordArtifactAuthor, resolveStaticAuthor, selectAuthor, selectReviewers } from "./driver-assignment.js";
 import {
@@ -39,6 +39,7 @@ import {
 	writeEffectsManifest as writeEffectsManifestDefault,
 } from "./effects.js";
 import { digestChallenge } from "./execution-receipt.js";
+import { createEventWriter } from "./flow-events.js";
 import { DEFAULT_FLOW_POLICY, type FlowPolicy } from "./flow-policy.js";
 import {
 	appendLog as appendLogDefault,
@@ -1930,6 +1931,13 @@ const MAX_RESUME_ROUNDS = 12;
  * parked and the caller prints its own pending/resume hint. `itemsLabel`, when given, lists the
  * parked items under the wait banner (the item loop; the review sweep omits it).
  */
+const ULID_ENV_PATTERN = /^[0-9A-HJKMNP-TV-Z]{26}$/;
+
+/** True when `value` is a ULID-shaped string (flow writer correlation env). */
+function isUlidEnv(value: string | undefined): value is string {
+	return typeof value === "string" && ULID_ENV_PATTERN.test(value);
+}
+
 async function awaitParkReset(parkSignal: ParkSignal, opts: { maxWaitMs: number; itemsLabel?: string }): Promise<"resumed" | "handback"> {
 	const waitMs = parkSignal.resetsAt - Date.now();
 	const isWeekly = /week/i.test(parkSignal.limitType);
@@ -2052,8 +2060,9 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			return { exitCode: 2, results };
 		}
 
-		// Continuous mode (issue #82): drain/watch presets with free queue probe + day budget.
-		const continuousResolved = resolveContinuousConfig(flags);
+		// Continuous mode (issue #82/#83): drain/watch presets with free queue probe + day budget.
+		// Day-budget precedence: CLI `--day-budget` > CONFIG.watch.dailyBudget > unlimited.
+		const continuousResolved = resolveContinuousConfig(flags, { dayBudget: CONFIG.watch.dailyBudget });
 		if (!continuousResolved.ok) {
 			console.error(continuousResolved.message);
 			return { exitCode: 2, results };
@@ -2061,10 +2070,6 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		const continuous = continuousResolved.config;
 		if (continuous && noWorktree) {
 			console.error("--continuous / --preset is not supported with --no-worktree / CI mode");
-			return { exitCode: 2, results };
-		}
-		if (continuous && Number(flags.parallel) > 1) {
-			console.error("--continuous / --preset does not support --parallel > 1 (free probe + per-iteration revise are serial)");
 			return { exitCode: 2, results };
 		}
 
@@ -2204,6 +2209,10 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		const statusInterval = isParallel && v && TUI_ENABLED ? setInterval(() => liveStatus.render(), 200) : null;
 
 		const pickMutex = isParallel ? createMutex() : undefined;
+		// Continuous gate (issue #83): one serialized critical section for budget check,
+		// revise, free probe, idle/budget sleep, and lifecycle event emission. Released
+		// before paid `runPipeline` work so ×N workers can claim independently.
+		const continuousGate = continuous ? createMutex() : undefined;
 		// Run-scoped registry of live peer worktrees. Each cycle registers its worktree on
 		// entry and deregisters on finish; peers exempt registered worktrees from their
 		// confinement snapshot so a sibling's own-worktree write never false-positives —
@@ -2211,6 +2220,50 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		const activeWorktrees = isParallel ? new Set<string>() : undefined;
 		let nextCycle = 0;
 		let totalSpent = 0;
+		// Drain-complete flag so waiting peers stop once the gate holder sees emptiness.
+		let drainComplete = false;
+		// Transition-only idle tracking: re-emitting watch-idle/budget-idle is forbidden.
+		let continuousIdle: "none" | "watch-idle" | "budget-idle" = "none";
+		// Emit at most one suspended per park interval (peers may all observe park).
+		let continuousSuspendedEmitted = false;
+		// Correlate supervised continuous runs with `.dev/flow-events/<streamId>.jsonl`.
+		const continuousWriter = continuous
+			? createEventWriter({
+					...(isUlidEnv(process.env.PELAGGIO_EVENT_STREAM_ID) ? { streamId: process.env.PELAGGIO_EVENT_STREAM_ID } : {}),
+					...(isUlidEnv(process.env.PELAGGIO_EXECUTION_ID) ? { executionId: process.env.PELAGGIO_EXECUTION_ID } : {}),
+				})
+			: undefined;
+		const emitContinuous = (input: Parameters<NonNullable<typeof continuousWriter>["append"]>[0]): void => {
+			try {
+				continuousWriter?.append(input);
+			} catch (e) {
+				const msg = e instanceof Error ? e.message : String(e);
+				console.log(`${A.dim(`flow-event emit failed: ${msg}`)}`);
+			}
+		};
+		const suspensionReason = (): string => {
+			const lt = parkSignal.limitType;
+			if (lt === "paused") return "operator-pause";
+			if (lt === "sdk-outage") return "sdk-outage";
+			return "rate-limit";
+		};
+		const emitSuspendedIfParked = (): void => {
+			if (!continuous || !parkSignal.parked || continuousSuspendedEmitted) return;
+			continuousSuspendedEmitted = true;
+			const reason = suspensionReason();
+			const resumeAt = parkSignal.resetsAt > 0 ? new Date(parkSignal.resetsAt).toISOString() : undefined;
+			emitContinuous({
+				type: "pelaggio.suspended",
+				itemId: null,
+				reason,
+				...(resumeAt ? { resumeAt } : {}),
+			});
+		};
+		const emitResumed = (): void => {
+			if (!continuous) return;
+			continuousSuspendedEmitted = false;
+			emitContinuous({ type: "pelaggio.resumed", itemId: null });
+		};
 		// Consecutive "transient sdk error" cycle outcomes across the whole worker pool
 		// (issue #128) — reset by any other outcome. Shared across parallel workers since
 		// it tracks the campaign's overall health, not any one worker's.
@@ -2223,56 +2276,121 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 
 		async function worker(): Promise<void> {
 			while (true) {
-				// Continuous-mode pre-cycle gates (issue #82): day budget, per-iteration
-				// revise, and free queue probe. Free probe skips the pick agent on an empty queue
-				// so drain/watch don't burn paid cycles discovering emptiness.
+				// Continuous-mode pre-cycle gates (issue #82/#83): day budget, per-iteration
+				// revise, and free queue probe — under one continuous gate so ×N workers do
+				// not double-probe or double-sleep. Gate released before paid work.
 				//
 				// Park check is continuous-only here: a global early park return would race
 				// parallel non-continuous workers (one parks → siblings skip their first pull).
-				if (continuous) {
-					if (parkSignal.parked) return;
-					if (dayBudgetTracker.exceeded()) {
-						console.log(`${A.yellow("⚠")} day budget ($${continuous.dayBudget!.toFixed(2)}) exhausted (spent $${dayBudgetTracker.daySpent.toFixed(2)} today) — stopping continuous run`);
-						return;
-					}
-					// Run even when the pick queue is empty: red PRs are independent work and
-					// watch sessions must keep discovering them between queue probes.
-					await runReviseSweepOnce();
-					if (parkSignal.parked) return;
-					if (dayBudgetTracker.exceeded()) {
-						console.log(`${A.yellow("⚠")} day budget ($${continuous.dayBudget!.toFixed(2)}) exhausted after revise — stopping continuous run`);
-						return;
-					}
-					if (items.length === 0) {
-						let probe: { empty: boolean; readyCount: number };
-						try {
-							probe = await queueProbe();
-						} catch (e) {
-							const msg = e instanceof Error ? e.message : String(e);
-							console.log(`${A.yellow("⚠")} queue probe failed: ${msg}`);
-							// Fail closed: a broken free probe must never turn into an unbounded paid
-							// pick loop. Drain stops; watch waits and retries without consuming a cycle.
-							if (continuous.preset === "drain") return;
-							await sleep(continuous.probeIntervalMs);
-							continue;
-						}
-						if (probe.empty) {
+				if (continuous && continuousGate) {
+					let exitWorker = false;
+					let retryGate = false;
+					await continuousGate.acquire();
+					try {
+						if (parkSignal.parked || drainComplete) {
+							if (parkSignal.parked) emitSuspendedIfParked();
+							exitWorker = true;
+						} else if (dayBudgetTracker.exceeded()) {
 							if (continuous.preset === "drain") {
-								console.log(`${A.green("✓")} queue empty — drain complete`);
-								return;
+								console.log(`${A.yellow("⚠")} day budget ($${continuous.dayBudget!.toFixed(2)}) exhausted (spent $${dayBudgetTracker.daySpent.toFixed(2)} today) — stopping continuous run`);
+								exitWorker = true;
+							} else {
+								// Watch: idle until local-day rollover, then probe again (no paid work).
+								const resumeAtMs = nextLocalMidnightMs(now());
+								const resumeAt = new Date(resumeAtMs).toISOString();
+								const spent = dayBudgetTracker.daySpent;
+								if (continuousIdle !== "budget-idle") {
+									emitContinuous({
+										type: "pelaggio.budget-idle",
+										itemId: null,
+										resumeAt,
+										budget: continuous.dayBudget!,
+										spent,
+									});
+									continuousIdle = "budget-idle";
+									console.log(`${A.yellow("⚠")} day budget ($${continuous.dayBudget!.toFixed(2)}) exhausted (spent $${spent.toFixed(2)}) — budget-idle until ${resumeAt}`);
+								}
+								const sleepMs = Math.max(0, resumeAtMs - now());
+								await sleep(sleepMs);
+								if (parkSignal.parked) {
+									emitSuspendedIfParked();
+									exitWorker = true;
+								} else {
+									if (continuousIdle === "budget-idle") {
+										emitContinuous({ type: "pelaggio.budget-wake", itemId: null });
+										continuousIdle = "none";
+										console.log(`${A.dim("budget-wake — day rolled, resuming watch")}`);
+									}
+									retryGate = true;
+								}
 							}
-							// Watch with an explicit --cycles N>1 ceiling: stop once we've already
-							// run N pick cycles rather than sleeping forever on an empty queue.
-							if (nextCycle >= cycles) {
-								console.log(`${A.dim("queue empty — cycle ceiling reached, stopping watch")}`);
-								return;
+						} else {
+							// Run even when the pick queue is empty: red PRs are independent work and
+							// watch sessions must keep discovering them between queue probes.
+							await runReviseSweepOnce();
+							if (parkSignal.parked) {
+								emitSuspendedIfParked();
+								exitWorker = true;
+							} else if (dayBudgetTracker.exceeded()) {
+								// After revise spend — re-enter gate loop for drain-stop or watch rollover.
+								retryGate = true;
+							} else if (items.length === 0) {
+								let probe: { empty: boolean; readyCount: number } | null = null;
+								try {
+									probe = await queueProbe();
+								} catch (e) {
+									const msg = e instanceof Error ? e.message : String(e);
+									console.log(`${A.yellow("⚠")} queue probe failed: ${msg}`);
+									// Fail closed: a broken free probe must never turn into an unbounded paid
+									// pick loop. Drain stops; watch waits and retries without consuming a cycle.
+									if (continuous.preset === "drain") {
+										exitWorker = true;
+									} else {
+										await sleep(continuous.probeIntervalMs);
+										retryGate = true;
+									}
+								}
+								if (!exitWorker && !retryGate && probe) {
+									if (probe.empty) {
+										if (continuous.preset === "drain") {
+											console.log(`${A.green("✓")} queue empty — drain complete`);
+											drainComplete = true;
+											exitWorker = true;
+										} else if (nextCycle >= cycles) {
+											// Watch with an explicit --cycles N>1 ceiling.
+											console.log(`${A.dim("queue empty — cycle ceiling reached, stopping watch")}`);
+											exitWorker = true;
+										} else {
+											// watch: free wait (no cycle consumed, no pick agent)
+											const probeAt = new Date(now() + continuous.probeIntervalMs).toISOString();
+											if (continuousIdle !== "watch-idle") {
+												emitContinuous({ type: "pelaggio.watch-idle", itemId: null, probeAt });
+												continuousIdle = "watch-idle";
+											}
+											console.log(`${A.dim("queue empty — watching")} ${A.dim(`(probe in ${fmtWait(continuous.probeIntervalMs)})`)}`);
+											await sleep(continuous.probeIntervalMs);
+											if (parkSignal.parked) {
+												emitSuspendedIfParked();
+												exitWorker = true;
+											} else {
+												retryGate = true;
+											}
+										}
+									} else if (continuousIdle === "watch-idle") {
+										// Work available — wake from watch-idle, then release for paid work.
+										emitContinuous({ type: "pelaggio.watch-wake", itemId: null });
+										continuousIdle = "none";
+										console.log(`${A.dim("watch-wake — work available")}`);
+									}
+								}
 							}
-							// watch: free wait (no cycle consumed, no pick agent)
-							console.log(`${A.dim("queue empty — watching")} ${A.dim(`(probe in ${fmtWait(continuous.probeIntervalMs)})`)}`);
-							await sleep(continuous.probeIntervalMs);
-							continue;
 						}
+					} finally {
+						continuousGate.release();
 					}
+					if (exitWorker) return;
+					if (retryGate) continue;
+					// Fall through to paid work with gate released.
 				}
 
 				const cycle = ++nextCycle;
@@ -2358,12 +2476,16 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 
 				if (v) liveStatus.render();
 
-				if (parkSignal.parked) break;
+				if (parkSignal.parked) {
+					if (continuous) emitSuspendedIfParked();
+					break;
+				}
 				if (!result.completed && !RECOVERABLE.has(result.error ?? "")) return;
 				// Continuous drain: a race can leave pick:queue-empty after the free probe
 				// saw work (another process claimed it). Stop rather than spinning paid picks.
 				if (continuous?.preset === "drain" && result.error === "pick:queue-empty") {
 					console.log(`${A.green("✓")} queue empty — drain complete`);
+					drainComplete = true;
 					return;
 				}
 			}
@@ -2554,7 +2676,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		// Skip the pick worker pool entirely if the sweep already parked — its parked revisions
 		// are in `results` (pushed above), so they flow into the park-and-resume block below.
 		if (!parkSignal.parked) {
-			// Continuous: serial workers only (validated above); Math.min with MAX_SAFE_INTEGER is fine.
+			// Continuous gate serializes probe/idle; paid cycles may run up to `parallel` workers.
 			await Promise.all(Array.from({ length: Math.min(parallel, cycles === Number.MAX_SAFE_INTEGER ? parallel : cycles) }, () => worker()));
 		}
 
@@ -2660,6 +2782,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					console.log(`  Resume: ${A.bold(formatResumeHint(pending))}`);
 					break;
 				}
+				emitResumed();
 
 				console.log(`\n${A.green("▶")} ${A.bold("Resuming")} ${pending.length} item(s)...`);
 

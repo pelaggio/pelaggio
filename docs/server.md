@@ -40,36 +40,57 @@ All responses JSON unless noted. Errors: `{ error: string; code: string }` with 
 
 ### `POST /runs`
 ```jsonc
-// body
-{ "repo": "pelaggio", "item": "TOOL-1", "parallel": 2, "cycles": 3, "shipTarget": "pull-request" }
+// ordinary
+{ "repo": "pelaggio", "item": "TOOL-1", "parallel": 2, "cycles": 3, "shipTarget": "pull-request", "verbose": true }
+// continuous (issue #83) — omit item; mode is required
+{ "repo": "pelaggio", "mode": "watch", "parallel": 2, "watchDailyBudget": 25 }
 // 200
-{ "id": "01HX...", "repo": "pelaggio", "item": "TOOL-1", "startedAt": "2026-04-19T...", "logPath": "/.../01HX....log" }
+{ "id": "01HX...", "repo": "pelaggio", "item"?: "...", "mode"?: "drain"|"watch", "startedAt": "...", "logPath": "..." }
 ```
 `repo` is a slug from the registry (`GET /repos`); unknown slugs → 400.
 `shipTarget` ∈ `direct-push` | `pull-request` | `auto-merge-pr`.
+`mode` ∈ `drain` | `watch` when present (omit for ordinary item runs). Continuous
+forbids `item`; ordinary requires it. `watchDailyBudget` is a positive finite
+number and only valid with `mode: "watch"`. `verbose` defaults off — omit or
+`false` leaves argv without `--verbose`.
+
+Supervisor argv:
+- Ordinary: `--item <id>` (or `--resume` on pause-resume successor)
+- Continuous: `--preset <mode>`; optional `--day-budget`, `--parallel`, `--cycles`, `--target`; never `--item`/`--resume`
+- Correlation env on every spawn: `PELAGGIO_EXECUTION_ID` and `PELAGGIO_EVENT_STREAM_ID` = run ULID
 
 ### `GET /runs`
 ```jsonc
-{ "runs": [{ "id", "repo", "item", "status", "startedAt", "endedAt"? }] }
+{ "runs": [{ "id", "repo", "item"?, "status", "startedAt", "endedAt"?, "mode"?, "activity"? }] }
 ```
 `?repo=<slug>` filters to runs from that registry entry. Unknown slug returns `{ "runs": [] }`.
 
 ### `GET /runs/:id`
-Full `PersistedRun` (see `src/types.ts`). 404 if unknown.
+Full `PersistedRun` (see `src/types.ts`). Includes optional `mode`, `watchDailyBudget`,
+`verbose`, and live `activity` (`active` | `watch-idle` | `budget-idle` | `parked`).
+Activity is projected from `.dev/flow-events/<run.id>.jsonl` by the flow-event
+tailer; terminal statuses clear it. 404 if unknown.
 
 ### `POST /runs/:id/pause`
 Sends `SIGUSR2`. The pipeline's signal handler sets `parkSignal.parked = true; limitType = "paused"; resetsAt = 0` so the existing `parkExit()` checkpoint path runs at the next step boundary. 200 returns immediately; status update is async — poll the detail endpoint or watch SSE.
 
-409 if the run is not `running`.
+409 if the run is not `running`. Enabled for any live activity state (including watch-idle / budget-idle). When the child exits after pause, status stays `paused` (not overwritten to failed/completed).
 
 ### `POST /runs/:id/resume`
-Spawns a new child with `pnpm pelaggio --resume <item>`. Returns the *new* run record with `resumedFrom` pointing at the prior run id.
+Spawns a new child reconstructing the **full original launch policy** (`mode`,
+budget, parallel, cycles, shipTarget, verbose). Continuous resumes use
+`--preset …` again — not `--resume` (no item claim). Ordinary resumes use
+`--resume <item>`. Returns the *new* run record with `resumedFrom` pointing at
+the prior run id.
 
 ### `POST /runs/:id/stop`
-`SIGINT` → 5s grace → `SIGKILL`. Status becomes `abandoned`. Uncommitted diffs stay in the worktree for manual `/pickup` if the operator regrets.
+`SIGINT` → 5s grace → `SIGKILL`. Status becomes `abandoned`. Uncommitted diffs stay in the worktree for manual `/pickup` if the operator regrets. Stop is valid for `running` or `paused`.
 
 ### `GET /runs/:id/log`
 Server-sent events. `data: <log line>\n\n` per line. For completed runs, replays the file and closes with `event: end\ndata: {"exitCode":N}\n\n`. For live runs, replay is subscribe-first: the broker captures a watermark via `bytesWritten`, replays bytes 0..watermark, then drains a buffered queue to dedup against newly-arrived lines — no race, no dropped lines.
+
+SSE is an optional verbose diagnostic; **live idle/park state comes from activity
+polling** (RunList/RunDetail 5s `getRun`), not log markers.
 
 The supervisor spawns every child with `PELAGGIO_PLAIN=1` in its env, so tee'd log files and SSE streams are ANSI-free: no spinner repaints, no scroll-region escapes, no color bytes. Auto-detection via non-TTY stderr already covers piped stdio, but the explicit env var is defensive against wrapper shims that might allocate a pty. Humans piping `pnpm pelaggio` output outside the server (`pnpm pelaggio … 2>&1 | tee`, `| less`, etc.) can set the same env var to opt in to plain lines.
 
@@ -84,6 +105,14 @@ Lists registry entries in insertion order; `exists` reflects whether the path re
 { "source": "markdown" | "github-issues" | "linear", "items": RoadmapItem[] }
 ```
 Open items only. 404 on unknown slug.
+
+### `GET /repos/:slug/config`
+```jsonc
+{ "watchDailyBudget": 25 | null }
+```
+Narrow projection of `watch.daily-budget` from the repo's `.pelaggio.yml` for
+StartForm prefill. `null` means unlimited / unset. 404 on unknown slug; 500 when
+the YAML fails to load (fail visible — do not pretend unlimited).
 
 ### `GET /repos/:slug/stats`
 Pure `computeStats({ logPath: <repo>/.dev/pelaggio-log.jsonl })` from pelaggio — same shape as the CLI's `stats` subcommand. 404 on unknown slug.
