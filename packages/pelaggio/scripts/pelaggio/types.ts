@@ -283,7 +283,7 @@ export interface CycleResult {
  * errors (`pick:unknown-id`, `pick:blocked`) are intentionally absent: a typo'd `--item`
  * or a user-requested blocked item should halt loudly and page.
  */
-export const RECOVERABLE_ERRORS = ["plan needs rethink", "parked", "transient sdk error", "pick:queue-empty", "pick:worktree-exists", "pick:already-claimed", "pick:already-done", "pick:unknown"] as const;
+export const RECOVERABLE_ERRORS = ["plan needs rethink", "parked", "transient sdk error", "pick:queue-empty", "pick:worktree-exists", "pick:already-claimed", "pick:already-done", "pick:stale-quarantined", "pick:unknown"] as const;
 
 // ── Step providers ─────────────────────────────────────────────────────
 

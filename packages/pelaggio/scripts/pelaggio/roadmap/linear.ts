@@ -115,6 +115,7 @@ export class LinearRoadmap implements RoadmapSource {
 			deps: formatBlockers(inverseRelations),
 			sourceRef: issue.identifier,
 			status,
+			body: issue.description ?? "",
 			labels: issue.labels ?? [],
 		};
 	}

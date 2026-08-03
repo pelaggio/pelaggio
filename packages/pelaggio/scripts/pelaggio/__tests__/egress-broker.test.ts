@@ -87,6 +87,85 @@ describe("egress broker", () => {
 		await handle.close();
 	});
 
+	it("soft-throttles rate-limit breaches with Retry-After and recovers once the caller backs off", async (context) => {
+		const root = await mkdtemp(join(tmpdir(), "egress-test-"));
+		roots.push(root);
+		const socketPath = join(root, "broker.sock");
+		let clock = 0;
+		const basePolicy = resolveEgressPolicy("codex", "gpt-5.2-codex");
+		const policy: EgressPolicy = { ...basePolicy, limits: { ...basePolicy.limits, requestsPerWindow: 1, windowMs: 1000, rateLimitRetryBudget: 5 } };
+		let handle: EgressBrokerHandle;
+		try {
+			handle = await startEgressBroker({ socketPath, policy, auth: { kind: "transparent" } }, { request: async () => ({ status: 200, headers: {}, body: Buffer.from('{"usage":{"input_tokens":1,"output_tokens":1}}') }), now: () => clock });
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "EPERM") return context.skip("sandbox forbids Unix listeners");
+			throw error;
+		}
+		const body = '{"model":"gpt-5.2-codex","max_output_tokens":8,"stream":false}';
+		const headers = { authorization: "Bearer x" };
+		const first = await exchange(socketPath, "/v1/responses", body, headers);
+		assert.equal(first.status, 200);
+		const throttled = await exchange(socketPath, "/v1/responses", body, headers);
+		assert.equal(throttled.status, 429);
+		assert.equal(throttled.headers["retry-after"], "1");
+		assert.equal(
+			handle.decisions.some((decision) => decision.outcome === "fatal"),
+			false,
+		);
+		clock = 1000;
+		const recovered = await exchange(socketPath, "/v1/responses", body, headers);
+		assert.equal(recovered.status, 200);
+		assert.equal(
+			handle.decisions.some((decision) => decision.outcome === "fatal"),
+			false,
+		);
+		await handle.close();
+	});
+
+	it("seals the broker once a client ignores backoff past the rate-limit retry budget", async (context) => {
+		const root = await mkdtemp(join(tmpdir(), "egress-test-"));
+		roots.push(root);
+		const socketPath = join(root, "broker.sock");
+		const basePolicy = resolveEgressPolicy("codex", "gpt-5.2-codex");
+		const policy: EgressPolicy = { ...basePolicy, limits: { ...basePolicy.limits, requestsPerWindow: 1, windowMs: 1000, rateLimitRetryBudget: 1 } };
+		let handle: EgressBrokerHandle;
+		try {
+			handle = await startEgressBroker({ socketPath, policy, auth: { kind: "transparent" } }, { request: async () => ({ status: 200, headers: {}, body: Buffer.from('{"usage":{"input_tokens":1,"output_tokens":1}}') }), now: () => 0 });
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "EPERM") return context.skip("sandbox forbids Unix listeners");
+			throw error;
+		}
+		const body = '{"model":"gpt-5.2-codex","max_output_tokens":8,"stream":false}';
+		const headers = { authorization: "Bearer x" };
+		assert.equal((await exchange(socketPath, "/v1/responses", body, headers)).status, 200);
+		assert.equal((await exchange(socketPath, "/v1/responses", body, headers)).status, 429);
+		assert.equal((await exchange(socketPath, "/v1/responses", body, headers)).status, 429);
+		assert.match((await handle.fatal).message, /retry budget/);
+		assert.equal((await exchange(socketPath, "/v1/responses", body, headers)).status, 503);
+		await handle.close();
+	});
+
+	it("recomputes content-length from the body instead of trusting the upstream header", async (context) => {
+		const root = await mkdtemp(join(tmpdir(), "egress-test-"));
+		roots.push(root);
+		const socketPath = join(root, "broker.sock");
+		let handle: EgressBrokerHandle;
+		try {
+			handle = await startEgressBroker(
+				{ socketPath, policy: resolveEgressPolicy("codex", "gpt-5.2-codex"), auth: { kind: "transparent" } },
+				{ request: async () => ({ status: 200, headers: { "content-type": "application/json", "content-length": "999999" }, body: Buffer.from('{"usage":{"input_tokens":1,"output_tokens":1}}') }) },
+			);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "EPERM") return context.skip("sandbox forbids Unix listeners");
+			throw error;
+		}
+		const body = '{"model":"gpt-5.2-codex","max_output_tokens":8,"stream":false}';
+		const response = await exchange(socketPath, "/v1/responses", body, { authorization: "Bearer x" });
+		assert.equal(response.status, 200);
+		assert.equal(response.headers["content-length"], String(Buffer.byteLength(response.body)));
+		await handle.close();
+	});
+
 	it("pins the complete built-in request shape", async () => {
 		const fixture = JSON.parse(await readFile(new URL("./fixtures/egress/codex-v1.json", import.meta.url), "utf8"));
 		const policy: EgressPolicy = resolveEgressPolicy("codex", "gpt-5.2-codex");

@@ -40,6 +40,7 @@ describe("loadConfig — missing / empty", () => {
 		assert.deepEqual(cfg.modelProfiles, DEFAULTS.modelProfiles);
 		assert.equal(cfg.confinement.allowDirtyMain, false);
 		assert.deepEqual(cfg.profileCodexModels, {});
+		assert.equal(cfg.pick.maxScope, "M");
 	});
 
 	it("treats empty YAML file the same as missing", () => {
@@ -49,6 +50,27 @@ describe("loadConfig — missing / empty", () => {
 		assert.deepEqual(cfg.budgets, DEFAULTS.budgets);
 		assert.deepEqual(cfg.modelProfiles, DEFAULTS.modelProfiles);
 		assert.deepEqual(cfg.profileCodexModels, {});
+	});
+});
+
+describe("loadConfig — pick.max-scope", () => {
+	it("parses and normalizes valid thresholds", () => {
+		for (const [input, expected] of [
+			["L", "L"],
+			["s", "S"],
+		] as const) {
+			const repo = tmpRepo();
+			const path = writeYml(repo, `pick:\n  max-scope: ${input}\n`);
+			assert.equal(loadConfig({ repo, configPath: path }).pick.maxScope, expected);
+		}
+	});
+
+	it("rejects invalid strings and non-strings with the config path diagnostic", () => {
+		for (const value of ["XXL", "3", "{}"] as const) {
+			const repo = tmpRepo();
+			const path = writeYml(repo, `pick:\n  max-scope: ${value}\n`);
+			assert.throws(() => loadConfig({ repo, configPath: path }), /expected `pick\.max-scope` to be one of XS\|S\|M\|L\|XL/);
+		}
 	});
 });
 

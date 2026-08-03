@@ -1856,6 +1856,61 @@ const RESUME_JITTER_MS = 15_000;
 // minutes+, and `maxWaitMs` already caps each round, so 12 is generous insurance.
 const MAX_RESUME_ROUNDS = 12;
 
+/**
+ * Wait out the current park's reset window, or report that we can't. The timing/jitter/max-wait
+ * semantics live here in exactly one place so both the item park-and-resume loop and the local
+ * review-retry sweep (#134) share one implementation — copy-pasting the wait block would let
+ * timing/jitter/max-wait drift, and the timer-mocked tests assume a single code path. On "resumed"
+ * the park signal is cleared and the caller may re-run its work; on "handback" the signal stays
+ * parked and the caller prints its own pending/resume hint. `itemsLabel`, when given, lists the
+ * parked items under the wait banner (the item loop; the review sweep omits it).
+ */
+async function awaitParkReset(parkSignal: ParkSignal, opts: { maxWaitMs: number; itemsLabel?: string }): Promise<"resumed" | "handback"> {
+	const waitMs = parkSignal.resetsAt - Date.now();
+	const isWeekly = /week/i.test(parkSignal.limitType);
+
+	// No reset time → never spin (checked every round). Rate-limit parks synthesize a conservative
+	// reset upstream (#68), so this is reached only by a manual pause (SIGUSR2, resetsAt=0) or a
+	// stale reset already in the past — neither is auto-resumable by time.
+	if (!parkSignal.resetsAt || waitMs <= 0) {
+		console.log("");
+		console.log(`${A.yellow("⏸")} ${parkSignal.limitType} limit hit — cannot auto-resume (no reset time)`);
+		return "handback";
+	}
+
+	if (waitMs > opts.maxWaitMs) {
+		const label = isWeekly ? "Weekly rate limit" : `${parkSignal.limitType} limit`;
+		console.log("");
+		console.log(`${A.yellow("⏸")} ${label} — wait ${fmtWait(waitMs)} exceeds --max-wait ${fmtWait(opts.maxWaitMs)}`);
+		return "handback";
+	}
+
+	// Jitter within the existing 30s post-reset envelope (see the constants above) so timer-mocked
+	// tests need no change: delay ∈ [15s, 30s).
+	const delay = RESUME_MIN_GRACE_MS + Math.floor(Math.random() * RESUME_JITTER_MS);
+	const resumeAt = parkSignal.resetsAt + delay;
+	const eta = new Date(resumeAt).toLocaleTimeString("en-CA", { hour12: false });
+	console.log("");
+	console.log(`${A.yellow("⏸")} ${A.bold("Parked")} — ${parkSignal.limitType} limit, waiting ${fmtWait(waitMs)} (ETA ${eta})`);
+	if (opts.itemsLabel) console.log(`  Items: ${opts.itemsLabel}`);
+
+	const countdownInterval = setInterval(() => {
+		const remaining = resumeAt - Date.now();
+		if (remaining > 0) {
+			console.log(`  ${A.dim("⏳")} ${fmtWait(remaining)} remaining...`);
+		}
+	}, 5 * 60_000);
+
+	await new Promise((r) => setTimeout(r, resumeAt - Date.now()));
+	clearInterval(countdownInterval);
+
+	parkSignal.parked = false;
+	parkSignal.resetsAt = 0;
+	parkSignal.limitType = "";
+	parkSignal.triggerWorker = "";
+	return "resumed";
+}
+
 // Loud one-time startup banner when an autonomous remote-push target is configured. Pure
 // (builder only) so "a banner fires for X, not for Y" is unit-testable without the orchestrator.
 // Returns null for the safe default (`pull-request`); a non-null string for the opt-in targets.
@@ -2163,6 +2218,13 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			}
 		}
 
+		// Park/auto-resume policy — hoisted above the review sweep so the review-retry loop (which
+		// runs before the item park-and-resume block) can wait out a rate-limit park with the same
+		// `autoResume`/`maxWaitMs` semantics. The item loop below reuses these same values.
+		const park = { ...CONFIG.park, ...deps.park };
+		const autoResume = park.autoResume;
+		const maxWaitMs = parseWaitFlag(flags["max-wait"] ?? park.maxWait);
+
 		// ── Local review sweep (issue #84) ──
 		//
 		// In local review mode the trusted local tree owns the review CLI/skill/parser/status
@@ -2185,47 +2247,76 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		const doReviewSweep = review.runner === "local" && shipIsPr && !!review.ghRepo && !noWorktree && !dryRun && items.length === 0;
 
 		if (doReviewSweep) {
-			const { candidates, stranded } = findReviewCandidates(review.gh, review.ghRepo, review.now(), parseWaitFlag(review.statuslessAfter));
-			for (const pr of stranded) {
-				postLocalModeWorkflowComment(review.gh, review.ghRepo, pr.prNumber);
-				if (notifyEnabled) await notifyStrandedReview(notifyCfg, { itemId: pr.itemId, prNumber: pr.prNumber, ghRepo: review.ghRepo, headSha: pr.headSha, logPath: LOG_PATH }, { send });
-			}
-
-			for (const pr of candidates) {
-				if (parkSignal.parked) break;
-				if (!isAutopilotManaged(review.gh, review.ghRepo, pr.itemId, ROADMAP_GITHUB.label)) continue;
-				if (!postReviewStatus(review.gh, review.ghRepo, pr.headSha, "pending", "local pelaggio review running")) continue;
-				let body = "";
-				let finalState: "success" | "failure" = "failure";
-				let reviewCost = 0;
-				let reviewCostEstimated = false;
-				try {
-					const prepared = review.prepareReviewHead(REPO, pr);
-					if (!prepared) throw new Error("could not prepare PR head for local review");
-					const result = await review.runReviewGate({
-						pr: String(pr.prNumber),
-						profile: "standard",
-						cwd: REPO,
-						diffCwd: prepared.diffCwd,
-						diffBaseRef: prepared.baseRef,
-						diffHeadRef: prepared.headRef,
-						policy: review.policy,
-					});
-					body = result.body;
-					finalState = result.gate === "pass" ? "success" : "failure";
-					reviewCost = result.cost;
-					reviewCostEstimated = result.costEstimated;
-				} catch (e) {
-					const msg = e instanceof Error ? e.message : String(e);
-					body = buildFailClosedComment("error_crash", `local pr-review crashed before producing a review, so this gate blocks the merge.\n\n${msg}`);
-					finalState = "failure";
-				} finally {
-					review.cleanupReviewHead(REPO, pr);
+			// A rate-limit park during pr-review/pr-verify is transient, not a BLOCK: the gate returns
+			// `park`, the sweep leaves the `review` status *pending* (never red, never a revisable
+			// findings comment), stops starting more reviews, and — under the same auto-resume /
+			// --max-wait / reset-time policy as the item park-and-resume loop — waits and retries the
+			// sweep in-process. Pending PRs stay eligible in `findReviewCandidates`, so a resumed round
+			// re-lists and re-reviews them; a hand-back leaves the PR pending for the next run.
+			let reviewRound = 0;
+			while (reviewRound < MAX_RESUME_ROUNDS) {
+				reviewRound++;
+				const { candidates, stranded } = findReviewCandidates(review.gh, review.ghRepo, review.now(), parseWaitFlag(review.statuslessAfter));
+				// Stranded handling is a one-time nudge (idempotent comment + a notification) — only on
+				// the first round, so a resumed retry does not re-notify the same stranded PRs.
+				if (reviewRound === 1) {
+					for (const pr of stranded) {
+						postLocalModeWorkflowComment(review.gh, review.ghRepo, pr.prNumber);
+						if (notifyEnabled) await notifyStrandedReview(notifyCfg, { itemId: pr.itemId, prNumber: pr.prNumber, ghRepo: review.ghRepo, headSha: pr.headSha, logPath: LOG_PATH }, { send });
+					}
 				}
-				upsertReviewComment(review.gh, review.ghRepo, pr.prNumber, body);
-				postReviewStatus(review.gh, review.ghRepo, pr.headSha, finalState, finalState === "success" ? "local pelaggio review passed" : "local pelaggio review blocked");
-				totalSpent += reviewCost;
-				console.log(`review ${pr.itemId}#${pr.prNumber} — ${finalState}${reviewCost > 0 ? ` ${reviewCostEstimated ? "~" : ""}$${reviewCost.toFixed(2)}` : ""}`);
+
+				for (const pr of candidates) {
+					if (parkSignal.parked) break;
+					if (!isAutopilotManaged(review.gh, review.ghRepo, pr.itemId, ROADMAP_GITHUB.label)) continue;
+					if (!postReviewStatus(review.gh, review.ghRepo, pr.headSha, "pending", "local pelaggio review running")) continue;
+					let body = "";
+					let finalState: "success" | "failure" = "failure";
+					let reviewCost = 0;
+					let reviewCostEstimated = false;
+					try {
+						const prepared = review.prepareReviewHead(REPO, pr);
+						if (!prepared) throw new Error("could not prepare PR head for local review");
+						const result = await review.runReviewGate({
+							pr: String(pr.prNumber),
+							profile: "standard",
+							cwd: REPO,
+							diffCwd: prepared.diffCwd,
+							diffBaseRef: prepared.baseRef,
+							diffHeadRef: prepared.headRef,
+							policy: review.policy,
+							parkSignal, // shared: a rate-limit park sets this and flows into the wait+retry below
+						});
+						if (result.gate === "park") {
+							// Transient: leave the pending status as-is (do NOT upsert findings or post
+							// failure), charge the partial cost, and stop starting new reviews this round.
+							// `finally` still cleans the review head; the shared `parkSignal` is already parked.
+							totalSpent += result.cost;
+							console.log(`review ${pr.itemId}#${pr.prNumber} — parked (${result.park?.limitType ?? parkSignal.limitType})`);
+							break;
+						}
+						body = result.body;
+						finalState = result.gate === "pass" ? "success" : "failure";
+						reviewCost = result.cost;
+						reviewCostEstimated = result.costEstimated;
+					} catch (e) {
+						const msg = e instanceof Error ? e.message : String(e);
+						body = buildFailClosedComment("error_crash", `local pr-review crashed before producing a review, so this gate blocks the merge.\n\n${msg}`);
+						finalState = "failure";
+					} finally {
+						review.cleanupReviewHead(REPO, pr);
+					}
+					upsertReviewComment(review.gh, review.ghRepo, pr.prNumber, body);
+					postReviewStatus(review.gh, review.ghRepo, pr.headSha, finalState, finalState === "success" ? "local pelaggio review passed" : "local pelaggio review blocked");
+					totalSpent += reviewCost;
+					console.log(`review ${pr.itemId}#${pr.prNumber} — ${finalState}${reviewCost > 0 ? ` ${reviewCostEstimated ? "~" : ""}$${reviewCost.toFixed(2)}` : ""}`);
+				}
+
+				if (!parkSignal.parked) break; // no rate-limit park this round → sweep is done
+				if (!autoResume) break; // off-switch → leave pending, hand back (park block reports it)
+				const outcome = await awaitParkReset(parkSignal, { maxWaitMs });
+				if (outcome === "handback") break; // no reset / exceeds --max-wait → leave pending
+				// resumed: parkSignal cleared → re-list candidates (pending PRs remain) and retry.
 			}
 		}
 
@@ -2315,16 +2406,8 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			if (v) statusBar.teardown();
 			if (statusInterval) clearInterval(statusInterval);
 
-			const park = { ...CONFIG.park, ...deps.park };
-			const autoResume = park.autoResume;
-			const maxWaitMs = parseWaitFlag(flags["max-wait"] ?? park.maxWait);
-
-			const resetParkSignal = (): void => {
-				parkSignal.parked = false;
-				parkSignal.resetsAt = 0;
-				parkSignal.limitType = "";
-				parkSignal.triggerWorker = "";
-			};
+			// `park`/`autoResume`/`maxWaitMs` are hoisted above the review sweep (shared with its
+			// retry loop). The park signal is reset by `awaitParkReset` on a successful wait.
 
 			// Per-item resume body — the `--resume` re-entry path in-process. Reused each
 			// round of the loop, so the resume-worktree/log/detect wiring lives in one place.
@@ -2384,7 +2467,10 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			let pending = results.filter((r) => r.error === "parked" && r.itemId).map((r) => r.itemId!);
 
 			if (pending.length === 0) {
-				console.log(`${A.yellow("⏸")} Rate limit hit but no items to resume.`);
+				// Reached when a rate-limit park has no parked *pipeline* item to resume — e.g. the local
+				// review sweep parked and handed back (its pending PRs retry on the next run), or a manual
+				// pause fired before any work started.
+				console.log(`${A.yellow("⏸")} Rate limit hit but no items to resume (any pending local review retries on the next run).`);
 				return { exitCode: 1, results };
 			}
 
@@ -2400,53 +2486,16 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			let round = 0;
 			while (parkSignal.parked && pending.length > 0 && round < MAX_RESUME_ROUNDS) {
 				round++;
-				const waitMs = parkSignal.resetsAt - Date.now();
-				const isWeekly = /week/i.test(parkSignal.limitType);
-				const resumeCmd = formatResumeHint(pending);
-
-				// No reset time → never spin (checked every round, not just the first). Rate-limit
-				// parks now synthesize a conservative reset upstream (#68), so this branch is reached
-				// only by a manual pause (SIGUSR2, resetsAt=0) or a stale reset already in the past —
-				// neither is auto-resumable by time. `break` (not `return`) so we funnel through the
-				// shared teardown+summary below — a round-≥2 exit here would otherwise leak the
-				// status-bar scroll region set up by the prior round's `statusBar.setup()`.
-				if (!parkSignal.resetsAt || waitMs <= 0) {
-					console.log("");
-					console.log(`${A.yellow("⏸")} ${parkSignal.limitType} limit hit — cannot auto-resume (no reset time)`);
+				// Shared wait: identical timing/jitter/max-wait semantics as the review-retry sweep.
+				// `break` (not `return`) on hand-back so we funnel through the shared teardown+summary
+				// below — a round-≥2 exit here would otherwise leak the status-bar scroll region set up
+				// by the prior round's `statusBar.setup()`.
+				const outcome = await awaitParkReset(parkSignal, { maxWaitMs, itemsLabel: pending.join(", ") });
+				if (outcome === "handback") {
 					console.log(`  Parked: ${pending.join(", ")}`);
-					console.log(`  Resume: ${A.bold(resumeCmd)}`);
+					console.log(`  Resume: ${A.bold(formatResumeHint(pending))}`);
 					break;
 				}
-
-				if (waitMs > maxWaitMs) {
-					const label = isWeekly ? "Weekly rate limit" : `${parkSignal.limitType} limit`;
-					console.log("");
-					console.log(`${A.yellow("⏸")} ${label} — wait ${fmtWait(waitMs)} exceeds --max-wait ${fmtWait(maxWaitMs)}`);
-					console.log(`  Parked: ${pending.join(", ")}`);
-					console.log(`  Resume: ${A.bold(resumeCmd)}`);
-					break;
-				}
-
-				// Jitter within the existing 30s post-reset envelope (see the constants above)
-				// so timer-mocked tests need no change: delay ∈ [15s, 30s).
-				const delay = RESUME_MIN_GRACE_MS + Math.floor(Math.random() * RESUME_JITTER_MS);
-				const resumeAt = parkSignal.resetsAt + delay;
-				const eta = new Date(resumeAt).toLocaleTimeString("en-CA", { hour12: false });
-				console.log("");
-				console.log(`${A.yellow("⏸")} ${A.bold("Parked")} — ${parkSignal.limitType} limit, waiting ${fmtWait(waitMs)} (ETA ${eta})`);
-				console.log(`  Items: ${pending.join(", ")}`);
-
-				const countdownInterval = setInterval(() => {
-					const remaining = resumeAt - Date.now();
-					if (remaining > 0) {
-						console.log(`  ${A.dim("⏳")} ${fmtWait(remaining)} remaining...`);
-					}
-				}, 5 * 60_000);
-
-				await new Promise((r) => setTimeout(r, resumeAt - Date.now()));
-				clearInterval(countdownInterval);
-
-				resetParkSignal();
 
 				console.log(`\n${A.green("▶")} ${A.bold("Resuming")} ${pending.length} item(s)...`);
 
