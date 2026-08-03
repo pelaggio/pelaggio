@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { basename, delimiter, extname, isAbsolute, join, resolve } from "node:path";
 import {
@@ -22,6 +23,7 @@ import {
 	WORKTREE_PREFIX,
 } from "./config.js";
 import { forbiddenRootsForConfinement } from "./confinement/roots.js";
+import { type AcceptedSession, captureEvaluatorContext, createSessionController, firstDiffPathsByRoot, resolveEligibleSessions, revalidateChangedRoot, type SessionController, type SessionEvaluatorContext } from "./confinement/sessions.js";
 import { appendDecisions as appendDecisionsDefault, appendReviewEscalation as appendReviewEscalationDefault, lookupReviewEscalation as lookupReviewEscalationDefault } from "./decisions.js";
 import { createDriverAssignmentState, type DriverIdentity, recordArtifactAuthor, resolveStaticAuthor, selectAuthor, selectReviewers } from "./driver-assignment.js";
 import {
@@ -160,6 +162,14 @@ export interface PipelineDeps {
 	snapshotForbiddenRoots?: typeof snapshotForbiddenRoots;
 	/** Test seam: replace forbidden-root snapshot comparison. */
 	diffForbiddenRootSnapshots?: typeof diffForbiddenRootSnapshots;
+	/** Test seam: replace session-record eligibility resolution (#369). */
+	resolveEligibleSessions?: typeof resolveEligibleSessions;
+	/** Test seam: replace diff-time session revalidation (#369). */
+	revalidateChangedRoot?: typeof revalidateChangedRoot;
+	/** Test seam: replace evaluator-context capture (#369). */
+	captureEvaluatorContext?: typeof captureEvaluatorContext;
+	/** Test seam: replace session-controller factory (#369). */
+	createSessionController?: typeof createSessionController;
 	appendDecisions?: typeof appendDecisionsDefault;
 	appendReviewEscalation?: typeof appendReviewEscalationDefault;
 	lookupReviewEscalation?: typeof lookupReviewEscalationDefault;
@@ -193,12 +203,23 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	const allowDirtyMain = deps.allowDirtyMain ?? CONFINEMENT_CONFIG.allowDirtyMain;
 	const snapshotForbiddenRootsFn = deps.snapshotForbiddenRoots ?? snapshotForbiddenRoots;
 	const diffForbiddenRootSnapshotsFn = deps.diffForbiddenRootSnapshots ?? diffForbiddenRootSnapshots;
+	const resolveEligibleSessionsFn = deps.resolveEligibleSessions ?? resolveEligibleSessions;
+	const revalidateChangedRootFn = deps.revalidateChangedRoot ?? revalidateChangedRoot;
+	const captureEvaluatorContextFn = deps.captureEvaluatorContext ?? captureEvaluatorContext;
+	const createSessionControllerFn = deps.createSessionController ?? createSessionController;
 	const appendDecisions = deps.appendDecisions ?? appendDecisionsDefault;
 	const appendReviewEscalation = deps.appendReviewEscalation ?? appendReviewEscalationDefault;
 	const lookupReviewEscalation = deps.lookupReviewEscalation ?? lookupReviewEscalationDefault;
 	const now = deps.now ?? Date.now;
 	const readGitBindingFn = deps.readGitBinding ?? readGitBinding;
 	const readRuntimeVersionsFn = deps.readRuntimeVersions ?? readRuntimeVersions;
+
+	// #369: capture immutable evaluator context once per cycle when the caller
+	// (orchestrator or test) did not pre-supply it. Direct runPipeline() callers
+	// and tests must not skip inventory.
+	const sessionEvaluator: SessionEvaluatorContext = opts.sessionEvaluator ?? captureEvaluatorContextFn(mainRepo);
+	/** Live session controller for this cycle's own record; disposed in finish(). */
+	let sessionController: SessionController | undefined;
 	// The cycle's dollar ceiling. A turn-exhaustion retry (issue #33) is funded up to the
 	// step's configured budget again, so the budget guard skips a retry we can't fully fund.
 	// A non-finite value (unset / unparseable --budget) disables the dollar gate.
@@ -224,7 +245,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		);
 	}
 
-	function forbiddenRootsForStep(cwd: string, ownWorktree?: string): string[] {
+	function forbiddenRootsForStep(cwd: string, ownWorktree?: string): { roots: string[]; excludedSessions: AcceptedSession[] } {
 		const cwdAbs = resolve(cwd);
 		const mainAbs = resolve(mainRepo);
 		// Main-repo-based steps (pick, shipwreck) legitimately write inside mainRepo
@@ -236,15 +257,23 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		// `.dev/authoring-review-seats/`; concurrent peer seats may hold session files
 		// and must not trip confinement.
 		const candidates = cwdAbs === mainAbs ? listWorktrees() : [mainRepo, ...listWorktrees()];
-		return forbiddenRootsForConfinement({
-			cwd,
-			mainRepo,
-			worktrees: candidates,
-			ownWorktree,
-			allowDirtyMain,
-			isEphemeralReviewWorktree: (root) => isAuthoringReviewSeatPath(root, mainRepo) || isReviewHeadPath(root, mainRepo),
-			activeWorktrees: opts.activeWorktrees,
-		});
+		// #369: cross-process peers proven by the eligibility predicate. Kept distinct
+		// from in-memory activeWorktrees so the trust boundary stays visible.
+		const excludedSessions = resolveEligibleSessionsFn(sessionEvaluator);
+		const sessionWorktrees = excludedSessions.map((s) => s.worktreePath);
+		return {
+			roots: forbiddenRootsForConfinement({
+				cwd,
+				mainRepo,
+				worktrees: candidates,
+				ownWorktree,
+				allowDirtyMain,
+				isEphemeralReviewWorktree: (root) => isAuthoringReviewSeatPath(root, mainRepo) || isReviewHeadPath(root, mainRepo),
+				activeWorktrees: opts.activeWorktrees,
+				sessionWorktrees,
+			}),
+			excludedSessions,
+		};
 	}
 
 	async function step(
@@ -316,16 +345,22 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 
 		// Concurrent cycles never attribute one another's legitimate own-worktree writes as
 		// sibling violations because `forbiddenRootsForStep` exempts every active peer
-		// worktree (see `activeWorktrees`). No serialization is needed or wanted here — steps
-		// run fully in parallel; only `mainRepo` and inactive/stale siblings stay audited.
+		// worktree (see `activeWorktrees` + #369 session records). No serialization is
+		// needed or wanted here — steps run fully in parallel; only `mainRepo` and
+		// inactive/stale siblings stay audited.
 		let result: StepResult;
 		{
 			let forbiddenRoots: string[] = [];
 			let forbiddenBefore = new Map<string, string>();
+			let forbiddenAfter = new Map<string, string>();
 			const confinementRoots: string[] = [];
 			let confinementAuditError: string | undefined;
+			let stepExcludedSessions: AcceptedSession[] = [];
+			const revalidationWarnings: string[] = [];
 			try {
-				forbiddenRoots = forbiddenRootsForStep(cwd, ownWorktree);
+				const enumResult = forbiddenRootsForStep(cwd, ownWorktree);
+				forbiddenRoots = enumResult.roots;
+				stepExcludedSessions = enumResult.excludedSessions;
 			} catch (e) {
 				confinementAuditError = `confinement audit failed to enumerate roots before ${name}: ${e instanceof Error ? e.message : String(e)}`;
 				log(`⚠ ${confinementAuditError}`);
@@ -338,6 +373,26 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				confinementAuditError = `confinement audit failed before ${name}: ${e instanceof Error ? e.message : String(e)}`;
 				log(`⚠ ${confinementAuditError}`);
 			}
+
+			// #369: foreign-root Write/Edit denial + sessions-dir protection for Claude steps,
+			// including shipwreck (main cwd + ownWorktree). Registered roots from listWorktrees.
+			const registeredWorktrees = (() => {
+				try {
+					return listWorktrees();
+				} catch {
+					return [mainRepo];
+				}
+			})();
+			const foreignRootDenial = {
+				mainRepo,
+				registeredWorktrees,
+				...(ownWorktree || (worktree && worktree !== mainRepo) ? { ownWorktree: ownWorktree ?? worktree ?? undefined } : {}),
+			};
+			const onChildSpawn = sessionController
+				? (info: { pid: number; cwd: string }) => {
+						sessionController?.updateChild(info.pid);
+					}
+				: undefined;
 
 			const providerResult = await runStep(
 				name,
@@ -352,14 +407,38 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 					...(maxTurnsOverride !== undefined ? { maxTurnsOverride } : {}),
 					...(opts.signal ? { signal: opts.signal } : {}),
 					...(mainCheckoutObserver ? { mainCheckoutObserver } : {}),
+					foreignRootDenial,
+					...(onChildSpawn ? { onChildSpawn } : {}),
 				},
 				emit,
 			);
 
 			if (confinementRoots.length === 0 && confinementAuditError === undefined) {
 				try {
-					const forbiddenAfter = snapshotForbiddenRootsFn(forbiddenRoots);
-					confinementRoots.push(...diffForbiddenRootSnapshotsFn(forbiddenBefore, forbiddenAfter));
+					forbiddenAfter = snapshotForbiddenRootsFn(forbiddenRoots);
+					const rawChanged = diffForbiddenRootSnapshotsFn(forbiddenBefore, forbiddenAfter);
+					// #369: revalidate each changed sibling with the same eligibility predicate.
+					// Still-live peers warn + suppress; main / expired / identity-mutated park.
+					for (const root of rawChanged) {
+						const abs = resolve(root);
+						if (abs === resolve(mainRepo)) {
+							confinementRoots.push(root);
+							continue;
+						}
+						const stillLive = revalidateChangedRootFn(sessionEvaluator, abs);
+						if (stillLive) {
+							const paths = firstDiffPathsByRoot(forbiddenBefore, forbiddenAfter, [abs]).get(abs) ?? [];
+							const warn = `confinement: excluded live session ${stillLive.identity.sessionId} (${stillLive.identity.claimedItem} @ ${abs}${paths.length ? `; paths: ${paths.join(", ")}` : ""})`;
+							revalidationWarnings.push(warn);
+							log(`⚠ ${warn}`);
+							// Keep evidence in stepExcludedSessions for park diagnostics if other roots fail.
+							if (!stepExcludedSessions.some((s) => s.worktreePath === abs)) {
+								stepExcludedSessions = [...stepExcludedSessions, stillLive];
+							}
+							continue;
+						}
+						confinementRoots.push(root);
+					}
 				} catch (e) {
 					confinementAuditError = `confinement audit failed after ${name}: ${e instanceof Error ? e.message : String(e)}`;
 					log(`⚠ ${confinementAuditError}`);
@@ -389,7 +468,15 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				};
 			} else if (confinementRoots.length > 0) {
 				const roots = [...new Set(confinementRoots.map((root) => resolve(root)))].sort();
-				const text = `forbidden root changed during ${name}: ${roots.join(", ")}`;
+				const pathMap = firstDiffPathsByRoot(forbiddenBefore, forbiddenAfter, roots);
+				const pathBits = roots
+					.map((r) => {
+						const ps = pathMap.get(r) ?? [];
+						return ps.length ? `${r} [${ps.join(", ")}]` : r;
+					})
+					.join(", ");
+				const excludedBits = stepExcludedSessions.length > 0 ? `; excluded sessions: ${stepExcludedSessions.map((s) => `${s.identity.sessionId}@${s.worktreePath}(${s.leg})`).join(", ")}` : "";
+				const text = `forbidden root changed during ${name}: ${pathBits}${excludedBits}`;
 				log(`⚠ ${text}`);
 				result = {
 					...providerResult,
@@ -399,6 +486,8 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 					fullText: text,
 					outputTail: text.slice(0, 200),
 				};
+			} else if (revalidationWarnings.length > 0) {
+				// No violation retained — warnings already logged. Leave provider result as-is.
 			}
 		}
 
@@ -552,6 +641,14 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		// by peers — a stale/abandoned tree must not be silently writable. Deleting an absent
 		// member (early pick-fail exits, before registration) is a harmless no-op.
 		if (worktree && worktree !== mainRepo) opts.activeWorktrees?.delete(resolve(worktree));
+		// #369: stop heartbeat and remove the owned session record (idempotent).
+		// Covers success, ordinary failure, parkExit, and abort paths that call finish().
+		try {
+			sessionController?.dispose();
+		} catch {
+			// Teardown must not change the cycle outcome.
+		}
+		sessionController = undefined;
 		// Park wins over abort (it's a preserve-work path; abort is discard-work).
 		// Don't relabel successful cycles — SIGINT during the 2s grace after ship
 		// completed shouldn't turn a real success into a phantom abort.
@@ -743,6 +840,60 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	// `--no-worktree` cycles run in mainRepo (never registered — main stays hard-gated) and
 	// `--parallel > 1` is disallowed there, so there is no peer to exempt.
 	if (worktree && worktree !== mainRepo) opts.activeWorktrees?.add(resolve(worktree));
+
+	// #369: publish a cross-process session record once the item worktree + claim are known
+	// (same window as activeWorktrees). Claude steps later refresh the binding pid; Codex/Grok
+	// still register so inventory fallback works for earlier evaluators. finish() disposes.
+	if (!opts.dryRun && worktree && worktree !== mainRepo && itemId) {
+		let claimBranch = "";
+		try {
+			claimBranch = execSync("git branch --show-current", { cwd: worktree, encoding: "utf-8" }).trim();
+		} catch {
+			claimBranch = "";
+		}
+		if (claimBranch.startsWith("feat/")) {
+			const sessionId = `${runIdBase}-${itemId}`;
+			try {
+				sessionController = createSessionControllerFn({
+					mainRepo,
+					sessionId,
+					claimedItem: itemId,
+					claimBranch,
+					worktreePath: resolve(worktree),
+				});
+				// Best-effort process-level cleanup for the window before finish() returns
+				// (SIGINT between steps). finish() is also idempotent; drop listeners on dispose.
+				const disposeOnce = (): void => {
+					process.removeListener("SIGINT", disposeOnce);
+					if (opts.signal) opts.signal.removeEventListener("abort", disposeOnce);
+					try {
+						sessionController?.dispose();
+					} catch {
+						// ignore
+					}
+				};
+				process.once("SIGINT", disposeOnce);
+				if (opts.signal) {
+					if (opts.signal.aborted) disposeOnce();
+					else opts.signal.addEventListener("abort", disposeOnce, { once: true });
+				}
+				// Wrap controller dispose so normal finish() also drops the SIGINT listener.
+				const inner = sessionController;
+				sessionController = {
+					sessionId: inner.sessionId,
+					identity: inner.identity,
+					updateChild: (pid) => inner.updateChild(pid),
+					dispose: () => {
+						process.removeListener("SIGINT", disposeOnce);
+						if (opts.signal) opts.signal.removeEventListener("abort", disposeOnce);
+						inner.dispose();
+					},
+				};
+			} catch (e) {
+				log(`⚠ session record registration failed: ${e instanceof Error ? e.message : String(e)}`);
+			}
+		}
+	}
 
 	if (opts.workerStatus) opts.workerStatus.itemId = itemId!;
 
@@ -1949,6 +2100,9 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					appendFileSync(logPath, `${"=".repeat(60)}\nautopilot cycle ${cycle} — ${new Date().toISOString()}\n${"=".repeat(60)}\n`);
 				}
 
+				// #369: each cycle captures its own evaluator inventory + starttime inside
+				// runPipeline when sessionEvaluator is omitted — so later cycles still see
+				// peers that registered after process start. (Orchestrator does not pre-capture.)
 				const result = await _runPipeline(
 					{
 						itemId: items[cycle - 1],

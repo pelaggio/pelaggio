@@ -63,6 +63,36 @@ describe("authoring review seats (#269)", () => {
 		assert.ok(roots.includes(siblingWorktree), "real sibling worktree stays forbidden");
 	});
 
+	// #369: record-derived exemptions are a separate input from activeWorktrees; main is
+	// filtered from sessionWorktrees only (defense in depth); allowDirtyMain unchanged.
+	it("sessionWorktrees exempt peers but never main; allowDirtyMain still independent (#369)", () => {
+		const repo = "/tmp/main-repo";
+		const peer = "/tmp/claude-autopilot-peer";
+		const other = "/tmp/claude-autopilot-other";
+		const roots = forbiddenRootsForConfinement({
+			cwd: "/tmp/me",
+			mainRepo: repo,
+			worktrees: [repo, peer, other],
+			isEphemeralReviewWorktree: () => false,
+			sessionWorktrees: [peer, repo], // smuggle main
+		});
+		assert.ok(!roots.includes(peer), "session-derived peer exempt");
+		assert.ok(roots.includes(repo), "main stays forbidden despite sessionWorktrees");
+		assert.ok(roots.includes(other), "non-exempt sibling stays forbidden");
+
+		const dirtyMain = forbiddenRootsForConfinement({
+			cwd: "/tmp/me",
+			mainRepo: repo,
+			worktrees: [repo, other],
+			allowDirtyMain: true,
+			isEphemeralReviewWorktree: () => false,
+			activeWorktrees: [],
+			sessionWorktrees: [],
+		});
+		assert.ok(!dirtyMain.includes(repo), "allowDirtyMain still drops main");
+		assert.ok(dirtyMain.includes(other));
+	});
+
 	it("isReviewHeadPath recognizes .dev/review-heads/ paths but not real worktrees (#308)", () => {
 		const repo = "/tmp/main-repo";
 		assert.equal(isReviewHeadPath(join(repo, ".dev", "review-heads", "abc123"), repo), true);

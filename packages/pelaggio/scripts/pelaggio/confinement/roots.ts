@@ -28,10 +28,22 @@ export function forbiddenRootsForConfinement(args: {
 	 *  corruption is caught by the capability/write-set boundary, not this snapshot.
 	 *  `mainRepo` is never a member, so it stays hard-gated below. */
 	activeWorktrees?: Iterable<string>;
+	/**
+	 * #369: cross-process session-record exemptions — worktrees of concurrent pelaggio
+	 * invocations proven live by the eligibility predicate (Git claim + Linux binding or
+	 * run-start inventory). Kept separate from trusted in-process `activeWorktrees` so the
+	 * trust boundary is visible. `mainRepo` is filtered out of this source only (defense in
+	 * depth; sessions.ts also rejects main) — `allowDirtyMain` and the in-memory registry
+	 * are untouched. Own-run worktrees continue to use the in-memory #131 seam only.
+	 */
+	sessionWorktrees?: Iterable<string>;
 }): string[] {
 	const cwdAbs = resolve(args.cwd);
 	const mainAbs = resolve(args.mainRepo);
-	const exempt = new Set([cwdAbs, ...(args.ownWorktree ? [resolve(args.ownWorktree)] : []), ...[...(args.activeWorktrees ?? [])].map((w) => resolve(w))]);
+	// Record-derived exemptions: independently drop mainAbs (sessions.ts already filters;
+	// this is defense in depth and must not touch allowDirtyMain / activeWorktrees).
+	const sessionExempt = [...(args.sessionWorktrees ?? [])].map((w) => resolve(w)).filter((w) => w !== mainAbs);
+	const exempt = new Set([cwdAbs, ...(args.ownWorktree ? [resolve(args.ownWorktree)] : []), ...[...(args.activeWorktrees ?? [])].map((w) => resolve(w)), ...sessionExempt]);
 	const seen = new Set<string>();
 	const roots: string[] = [];
 	for (const root of args.worktrees) {

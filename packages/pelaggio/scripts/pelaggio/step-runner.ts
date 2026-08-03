@@ -1,9 +1,11 @@
+import { type ChildProcess, spawn } from "node:child_process";
 import { lstatSync } from "node:fs";
 import { join, resolve } from "node:path";
-import type { HookInput, HookJSONOutput, SDKAssistantMessage, SDKRateLimitEvent, SDKResultMessage, SDKSystemMessage, SyncHookJSONOutput } from "@anthropic-ai/claude-agent-sdk";
+import type { HookInput, HookJSONOutput, SDKAssistantMessage, SDKRateLimitEvent, SDKResultMessage, SDKSystemMessage, SpawnedProcess, SpawnOptions, SyncHookJSONOutput } from "@anthropic-ai/claude-agent-sdk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { codexProvider } from "./codex-provider.js";
 import { CONFIG, REPO, resolveStepSettings } from "./config.js";
+import { sessionsDir } from "./confinement/sessions.js";
 import { grokProvider } from "./grok-provider.js";
 import { classifyStepError, isRefusal, looksLikeStalledAsk, type MainCheckoutDeltaObserver, parseBlockedReason, parseDecisions, parseWaitFlag, resolveParkReset } from "./helpers.js";
 import { composeSystemAppend, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "./step-runner-shared.js";
@@ -14,6 +16,14 @@ import { ensureWorktreeDeps } from "./worktree-deps.js";
 export { composeSystemAppend, isWorktreePath } from "./step-runner-shared.js";
 
 // ── Step runner ────────────────────────────────────────────────────────
+
+export interface ForeignRootDenial {
+	mainRepo: string;
+	/** Known Git worktree roots (main + siblings); foreign roots are denied. */
+	registeredWorktrees: readonly string[];
+	/** Explicit own item worktree (e.g. shipwreck from main cwd). */
+	ownWorktree?: string;
+}
 
 export interface RunStepOpts {
 	cwd: string;
@@ -32,6 +42,19 @@ export interface RunStepOpts {
 	mainCheckoutObserver?: MainCheckoutDeltaObserver;
 	/** Select a provider/model for this invocation without changing profile configuration. */
 	executionOverride?: { provider: ProviderName; model?: string; codexModel?: string };
+	/**
+	 * #369: register the Claude SDK child PID once spawned so the session record
+	 * can bind Linux /proc evidence to the worktree-resident child. Invoked from
+	 * a custom `spawnClaudeCodeProcess` adapter; pid is captured from ChildProcess
+	 * (SpawnedProcess does not declare pid).
+	 */
+	onChildSpawn?: (info: { pid: number; cwd: string }) => void;
+	/**
+	 * #369: deny Write/Edit into main and every registered foreign worktree root.
+	 * When present, hooks install even for main-cwd steps (shipwreck) so foreign-root
+	 * + `.dev/sessions/` denial actually run.
+	 */
+	foreignRootDenial?: ForeignRootDenial;
 }
 
 /** Canonical signature of a step runner. Single-sourced here (all four types are in
@@ -98,29 +121,61 @@ export function blockPlanPolish(input: HookInput, cwd: string): SyncHookJSONOutp
 	};
 }
 
+function pathUnderRoot(abs: string, root: string): boolean {
+	const a = resolve(abs);
+	const r = resolve(root);
+	return a === r || a.startsWith(`${r}/`);
+}
+
 /**
- * Block Write/Edit into the main checkout from a worktree step, while still
- * allowing writes inside the step cwd — including nested authoring-review seats
- * under `MAIN_REPO/.dev/authoring-review-seats/` (#269). The old prefix check
- * (`fp.startsWith(mainAbs)`) blocked legitimate absolute paths inside nested seats.
+ * #369: Block Write/Edit into main and every known foreign Git worktree root,
+ * while allowing the step cwd and an explicitly threaded own item worktree.
+ * Nested authoring-review seats under `MAIN_REPO/.dev/authoring-review-seats/`
+ * remain allowed as cwd (#269). Separately denies Write/Edit into
+ * `MAIN_REPO/.dev/sessions/` so agents cannot forge session evidence.
+ * Bash is not covered — residual matches the prior main-repo string guard only.
  */
-export function blockMainRepoWrite(input: HookInput, worktreeCwd: string, repo: string): SyncHookJSONOutput {
+export function blockForeignRootWrite(input: HookInput, cwd: string, mainRepo: string, registeredWorktrees: readonly string[], ownWorktree?: string): SyncHookJSONOutput {
 	const tn = "tool_name" in input ? String(input.tool_name) : "";
 	if (tn !== "Write" && tn !== "Edit") return {};
 	const ti = ("tool_input" in input ? input.tool_input : {}) as Record<string, unknown>;
 	const fp = String(ti.file_path ?? "");
 	if (!fp) return {};
-	const cwdAbs = resolve(worktreeCwd);
+	const cwdAbs = resolve(cwd);
+	const mainAbs = resolve(mainRepo);
 	const abs = fp.startsWith("/") ? resolve(fp) : resolve(cwdAbs, fp);
-	// Always allow writes inside the step cwd (sibling worktree or nested seat).
-	if (abs === cwdAbs || abs.startsWith(`${cwdAbs}/`)) return {};
-	const mainAbs = resolve(repo);
-	if (abs === mainAbs || abs.startsWith(`${mainAbs}/`)) {
-		const rel = abs.slice(mainAbs.length + (abs === mainAbs ? 0 : 1));
+
+	// Sessions-dir denial is absolute — even when cwd/own would otherwise allow.
+	const sessionsAbs = sessionsDir(mainAbs);
+	if (pathUnderRoot(abs, sessionsAbs)) {
 		return {
 			decision: "block" as const,
-			reason: `Path "${fp}" targets main repo. Use "${resolve(cwdAbs, rel)}" instead.`,
+			reason: `Path "${fp}" targets the session-record directory (${sessionsAbs}), which is harness-owned evidence. Do not write session records from agent tools.`,
 		};
+	}
+
+	// Always allow writes inside the step cwd (sibling worktree or nested seat).
+	if (pathUnderRoot(abs, cwdAbs)) return {};
+	// Explicit own item worktree (shipwreck from main cwd).
+	if (ownWorktree && pathUnderRoot(abs, ownWorktree)) return {};
+
+	const foreignRoots = new Set<string>();
+	foreignRoots.add(mainAbs);
+	for (const wt of registeredWorktrees) foreignRoots.add(resolve(wt));
+	if (ownWorktree) foreignRoots.delete(resolve(ownWorktree));
+	foreignRoots.delete(cwdAbs);
+
+	for (const root of foreignRoots) {
+		if (pathUnderRoot(abs, root)) {
+			const ownHint = ownWorktree ? resolve(ownWorktree) : cwdAbs;
+			const rel = abs.slice(root.length + (abs === root ? 0 : 1));
+			const safe = resolve(ownHint, rel);
+			const label = root === mainAbs ? "main repo" : `foreign worktree ${root}`;
+			return {
+				decision: "block" as const,
+				reason: `Path "${fp}" targets ${label}. Use "${safe}" (own worktree) instead.`,
+			};
+		}
 	}
 	return {};
 }
@@ -219,54 +274,62 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 
 	const mainAbs = resolve(REPO) + "/";
 	const worktreeCwd = resolve(opts.cwd);
+	const foreignDenial = opts.foreignRootDenial;
+	// #369: install hooks for main-cwd steps that supply foreign-root denial (shipwreck)
+	// or sessions-dir protection — not only when isWorktree.
+	const installHooks = isWorktree || planBlockActive || !!opts.mainCheckoutObserver || !!foreignDenial;
 	const closeAttributedTool = async (input: HookInput, toolUseId: string | undefined): Promise<HookJSONOutput> => {
 		return endMainCheckoutAttribution(input, toolUseId, opts.mainCheckoutObserver);
 	};
-	const hooks =
-		isWorktree || planBlockActive || opts.mainCheckoutObserver
-			? {
-					PreToolUse: [
-						{
-							hooks: [
-								async (input: HookInput, toolUseId: string | undefined): Promise<HookJSONOutput> => {
-									const tn = "tool_name" in input ? String(input.tool_name) : "";
-									const ti = ("tool_input" in input ? input.tool_input : {}) as Record<string, unknown>;
+	const hooks = installHooks
+		? {
+				PreToolUse: [
+					{
+						hooks: [
+							async (input: HookInput, toolUseId: string | undefined): Promise<HookJSONOutput> => {
+								const tn = "tool_name" in input ? String(input.tool_name) : "";
+								const ti = ("tool_input" in input ? input.tool_input : {}) as Record<string, unknown>;
 
-									if (isWorktree) {
-										const mainWriteOut = blockMainRepoWrite(input, worktreeCwd, REPO);
-										if (mainWriteOut.decision === "block") return mainWriteOut;
+								if (foreignDenial) {
+									const foreignOut = blockForeignRootWrite(input, worktreeCwd, foreignDenial.mainRepo, foreignDenial.registeredWorktrees, foreignDenial.ownWorktree);
+									if (foreignOut.decision === "block") return foreignOut;
+								} else if (isWorktree) {
+									// Fallback when pipeline did not thread foreignRootDenial (tests /
+									// direct callers): still protect main via the generalized helper.
+									const foreignOut = blockForeignRootWrite(input, worktreeCwd, REPO, [REPO], worktreeCwd);
+									if (foreignOut.decision === "block") return foreignOut;
+								}
+
+								if (isWorktree && tn === "Bash") {
+									const installOut = blockWorktreeInstall(input);
+									if (installOut.decision === "block") return installOut;
+
+									const cmd = String(ti.command ?? "");
+									if (cmd.includes(mainAbs) && !cmd.includes(worktreeCwd)) {
+										return {
+											decision: "block" as const,
+											reason: `Command references main repo "${REPO}". Use worktree "${opts.cwd}" paths instead.`,
+										};
 									}
+								}
 
-									if (isWorktree && tn === "Bash") {
-										const installOut = blockWorktreeInstall(input);
-										if (installOut.decision === "block") return installOut;
+								if (planBlockActive) {
+									const out = blockPlanPolish(input, worktreeCwd);
+									if (out.decision === "block") return out;
+								}
 
-										const cmd = String(ti.command ?? "");
-										if (cmd.includes(mainAbs) && !cmd.includes(worktreeCwd)) {
-											return {
-												decision: "block" as const,
-												reason: `Command references main repo "${REPO}". Use worktree "${opts.cwd}" paths instead.`,
-											};
-										}
-									}
+								const attribution = beginMainCheckoutAttribution(input, toolUseId, opts.mainCheckoutObserver);
+								if (attribution.decision === "block") return attribution;
 
-									if (planBlockActive) {
-										const out = blockPlanPolish(input, worktreeCwd);
-										if (out.decision === "block") return out;
-									}
-
-									const attribution = beginMainCheckoutAttribution(input, toolUseId, opts.mainCheckoutObserver);
-									if (attribution.decision === "block") return attribution;
-
-									return {};
-								},
-							],
-						},
-					],
-					PostToolUse: [{ hooks: [closeAttributedTool] }],
-					PostToolUseFailure: [{ hooks: [closeAttributedTool] }],
-				}
-			: undefined;
+								return {};
+							},
+						],
+					},
+				],
+				PostToolUse: [{ hooks: [closeAttributedTool] }],
+				PostToolUseFailure: [{ hooks: [closeAttributedTool] }],
+			}
+		: undefined;
 
 	// Adapt the parent AbortSignal into a child controller for the SDK: `query()`
 	// wants an AbortController, but the public type chain carries a signal so
@@ -282,6 +345,27 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 			opts.signal.addEventListener("abort", onParentAbort, { once: true });
 		}
 	}
+
+	// #369: observe the Claude SDK child PID via the documented custom-spawn seam.
+	// SpawnedProcess does not declare `pid` — capture it from the local ChildProcess
+	// before returning. Pass the SDK's forwarded `signal` so force-kill stays after
+	// the stdin-EOF + grace window.
+	const spawnClaudeCodeProcess = opts.onChildSpawn
+		? (spawnOpts: SpawnOptions): SpawnedProcess => {
+				const child: ChildProcess = spawn(spawnOpts.command, spawnOpts.args, {
+					cwd: spawnOpts.cwd,
+					env: spawnOpts.env as NodeJS.ProcessEnv,
+					stdio: ["pipe", "pipe", "pipe"],
+					signal: spawnOpts.signal,
+				});
+				const pid = child.pid;
+				if (typeof pid === "number" && pid > 0) {
+					opts.onChildSpawn?.({ pid, cwd: spawnOpts.cwd ?? opts.cwd });
+				}
+				// ChildProcess already satisfies SpawnedProcess (stdin/stdout/killed/exitCode/kill/on/once/off).
+				return child as unknown as SpawnedProcess;
+			}
+		: undefined;
 
 	const gen = query({
 		prompt,
@@ -303,6 +387,7 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 				append: systemAppend,
 			},
 			...(hooks ? { hooks } : {}),
+			...(spawnClaudeCodeProcess ? { spawnClaudeCodeProcess } : {}),
 		},
 	});
 
