@@ -412,6 +412,17 @@ describe("resolveStepSettings — precedence & fallback", () => {
 });
 
 describe("provider pools", () => {
+	it("parses ordered pr-review pools while scalar resolution remains compatible", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "models:\n  profiles:\n    mixed:\n      providers:\n        pr-review: [claude, codex]\n");
+		const cfg = loadConfig({ repo, configPath: path });
+		assert.equal(resolveStepSettings(cfg, "mixed", "pr-review").provider, "claude");
+		assert.deepEqual(
+			resolveDriverCandidates(cfg, "mixed", "pr-review").map(({ provider }) => provider),
+			["claude", "codex"],
+		);
+	});
+
 	it("parses ordered policy-step pools while scalar resolution remains compatible", () => {
 		const repo = tmpRepo();
 		const path = writeYml(repo, "models:\n  profiles:\n    mixed:\n      providers:\n        plan: [claude, codex, grok]\n");
@@ -425,10 +436,10 @@ describe("provider pools", () => {
 	});
 
 	it("rejects empty, duplicate, unknown, and unsupported pools", () => {
-		for (const providers of ["plan: []", "plan: [claude, claude]", "plan: [claude, nope]", "ship: [claude, codex]"]) {
+		for (const providers of ["plan: []", "plan: [claude, claude]", "plan: [claude, nope]", "pr-review: []", "pr-review: [claude, claude]", "pr-review: [claude, nope]", "ship: [claude, codex]"]) {
 			const repo = tmpRepo();
 			const path = writeYml(repo, `models:\n  profiles:\n    bad:\n      providers:\n        ${providers}\n`);
-			assert.throws(() => loadConfig({ repo, configPath: path }), /models\.profiles\.bad\.providers\.(plan|ship)/);
+			assert.throws(() => loadConfig({ repo, configPath: path }), /models\.profiles\.bad\.providers\.(plan|pr-review|ship)/);
 		}
 	});
 });

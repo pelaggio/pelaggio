@@ -650,6 +650,11 @@ ship targets. Configure the model provider through the existing non-pipeline
 `pr-review` model, Codex model, and provider while retaining its independently
 configurable global budget, turn limit, and effort:
 
+`models.profiles.<profile>.providers.pr-review` may also be an ordered,
+non-empty provider list. The CI gate runs the same review concurrently on every
+listed provider and passes only when all drivers pass. A split fails closed as a
+disagreement; a scalar retains the single-driver behavior.
+
 ```yaml
 review:
   runner: local
@@ -665,6 +670,16 @@ models:
         pr-review: codex
       codex:
         pr-review: gpt-5-codex
+```
+
+For duplicated review, use the existing provider-list syntax:
+
+```yaml
+models:
+  profiles:
+    standard:
+      providers:
+        pr-review: [claude, codex]
 ```
 
 For cross-provider verification, override the verifier slots explicitly:

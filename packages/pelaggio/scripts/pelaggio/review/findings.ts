@@ -147,7 +147,43 @@ export interface VerificationDisposition extends VerificationCandidate {
 	rationale: string;
 }
 
-export type ReviewExhaustionReason = "max-passes" | "budget" | "diminishing-returns" | "invalid-pass" | "provider-diversity";
+export type ReviewExhaustionReason = "max-passes" | "budget" | "diminishing-returns" | "invalid-pass" | "provider-diversity" | "disagreement";
+
+export interface ReviewDriverVerdictInput {
+	driver: string;
+	gate: "pass" | "block";
+	findings?: readonly ReviewFinding[];
+	diagnostic?: string;
+}
+
+export interface ReviewDriverVerdict {
+	driver: string;
+	gate: "pass" | "block";
+	diagnostic?: string;
+}
+
+export interface AggregatedReviewDrivers {
+	combinedGate: "pass" | "block";
+	disagreement: boolean;
+	unionFindings: ReviewFinding[];
+	driverVerdicts: ReviewDriverVerdict[];
+}
+
+/** Veto-aggregate independent review drivers while retaining per-driver provenance. */
+export function aggregateReviewDrivers(perDriver: readonly ReviewDriverVerdictInput[]): AggregatedReviewDrivers {
+	const driverVerdicts = perDriver.map(({ driver, gate, diagnostic }) => ({ driver, gate, ...(diagnostic !== undefined ? { diagnostic } : {}) }));
+	const passCount = perDriver.filter(({ gate }) => gate === "pass").length;
+	const union = new Map<string, ReviewFinding>();
+	for (const { findings = [] } of perDriver) {
+		for (const finding of findings.filter(({ severity }) => severity === "must-fix")) union.set(reviewFindingFingerprint(finding), finding);
+	}
+	return {
+		combinedGate: perDriver.length > 0 && passCount === perDriver.length ? "pass" : "block",
+		disagreement: passCount > 0 && passCount < perDriver.length,
+		unionFindings: [...union.values()],
+		driverVerdicts,
+	};
+}
 
 export interface ReviewPassSummary {
 	valid: boolean;

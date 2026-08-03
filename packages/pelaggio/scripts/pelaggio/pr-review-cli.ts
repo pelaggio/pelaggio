@@ -16,10 +16,11 @@
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { CONFIG, REPO, type ReviewConfig, ROADMAP_GITHUB, resolveStepSettings } from "./config.js";
+import { CONFIG, REPO, type ReviewConfig, ROADMAP_GITHUB, resolveDriverCandidates, resolveStepSettings, type StepSettings } from "./config.js";
 import { upsertMarkerComment } from "./github-posting.js";
 import { classifySecurityReviewDiff, expandPackagedSkill, formatReviewMetrics, type SecurityDiffSignal } from "./helpers.js";
 import {
+	aggregateReviewDrivers,
 	evaluateReviewConvergence,
 	parseReviewFindings,
 	parseReviewVerification,
@@ -49,6 +50,17 @@ interface ReviewPass {
 	verificationResult?: StepResult;
 	dispositions?: VerificationDisposition[];
 	verificationDiagnostic?: string;
+	diagnostic?: string;
+	failureSubtype?: string;
+	driverRuns?: ReviewDriverRun[];
+	driverVerdicts?: Array<{ driver: string; gate: "pass" | "block"; diagnostic?: string }>;
+}
+
+interface ReviewDriverRun {
+	driver: string;
+	result: StepResult;
+	gate: "pass" | "block";
+	report?: ReviewFindingsReport;
 	diagnostic?: string;
 	failureSubtype?: string;
 }
@@ -140,15 +152,19 @@ function aggregateSubtype(passes: readonly ReviewPass[]): string {
 }
 
 function passResults(pass: ReviewPass): StepResult[] {
-	return pass.verificationResult ? [pass.result, pass.verificationResult] : [pass.result];
+	const reviews = pass.driverRuns?.map(({ result }) => result) ?? [pass.result];
+	return pass.verificationResult ? [...reviews, pass.verificationResult] : reviews;
 }
 
 function passOk(pass: ReviewPass): boolean {
-	return pass.result.ok && pass.report !== undefined && !pass.verificationDiagnostic && (!pass.verificationResult || pass.verificationResult.ok);
+	return (pass.driverRuns?.every(({ result, report }) => result.ok && report !== undefined) ?? (pass.result.ok && pass.report !== undefined)) && !pass.verificationDiagnostic && (!pass.verificationResult || pass.verificationResult.ok);
 }
 
 function renderPass(pass: ReviewPass): string {
 	const title = pass.label === "standard" ? "Standard Review" : "Adversarial Red-Team Review";
+	const verdicts = pass.driverVerdicts?.map(({ driver, gate, diagnostic }) => `- \`${escapeMarkdown(driver)}\`: **${gate.toUpperCase()}**${diagnostic ? ` — ${escapeMarkdown(diagnostic)}` : ""}`) ?? [];
+	const provenance =
+		verdicts.length > 0 ? ["", "### Driver verdicts", "", ...verdicts, ...(pass.failureSubtype === "disagreement" ? ["", "**DISAGREEMENT:** review drivers split; verification was skipped and the gate failed closed."] : [])] : [];
 	if (pass.report) {
 		const findings = pass.report.findings.map((finding) => {
 			const location = finding.path ? ` (\`${escapeMarkdown(finding.path)}${finding.line ? `:${finding.line}` : ""}\`)` : "";
@@ -157,11 +173,11 @@ function renderPass(pass: ReviewPass): string {
 			const retained = finding.severity === "must-fix" && pass.verificationDiagnostic ? ` — isolated verification failed; blocker retained (${escapeMarkdown(pass.verificationDiagnostic)})` : "";
 			return `- **${finding.severity}**${location}: ${escapeMarkdown(finding.message)}${verification}${retained}`;
 		});
-		return [`## ${title} (Iteration ${pass.iteration})`, "", escapeMarkdown(pass.report.summary), "", ...(findings.length > 0 ? findings : ["No findings."])].join("\n");
+		return [`## ${title} (Iteration ${pass.iteration})`, "", escapeMarkdown(pass.report.summary), "", ...(findings.length > 0 ? findings : ["No findings."]), ...provenance].join("\n");
 	}
 	const text = pass.result.text.trim();
 	const partial = text ? ["", "Partial review output (untrusted and possibly incomplete):", "", `<pre>${escapeHtml(text)}</pre>`] : [];
-	return [`## ${title} (Iteration ${pass.iteration})`, "", `${escapeMarkdown(pass.diagnostic ?? `Run did not complete cleanly (${pass.result.subtype}).`)} Failing this pass closed.`, ...partial].join("\n");
+	return [`## ${title} (Iteration ${pass.iteration})`, "", `${escapeMarkdown(pass.diagnostic ?? `Run did not complete cleanly (${pass.result.subtype}).`)} Failing this pass closed.`, ...partial, ...provenance].join("\n");
 }
 
 function escapeHtml(value: string): string {
@@ -283,17 +299,18 @@ function trustedLocalContext(opts: { diffCwd: string; diffBaseRef: string; diffH
 	].join("\n");
 }
 
-async function runReviewPass(iteration: number, label: ReviewLabel, args: string, profile: string, pr: string, opts: { cwd: string; runStep: RunStepFn; localContext: string }): Promise<ReviewPass> {
+async function runReviewPassForDriver(label: ReviewLabel, args: string, profile: string, pr: string, candidate: StepSettings, opts: { cwd: string; runStep: RunStepFn; localContext: string }): Promise<ReviewDriverRun> {
 	process.stderr.write(`▶ pr-review ${label}\n`);
 	const prompt = `${expandPackagedSkill("pr-review", args)}${opts.localContext}`;
-	const result = await opts.runStep("pr-review", prompt, { cwd: opts.cwd, profile, trace: false, parkSignal: emptyParkSignal(), itemId: pr }, emit);
-	if (!result.ok) return { iteration, label, result, gate: "block", diagnostic: `Run did not complete cleanly (${result.subtype}).` };
+	const executionOverride = { provider: candidate.provider, ...(candidate.model ? { model: candidate.model } : {}), ...(candidate.codexModel ? { codexModel: candidate.codexModel } : {}) };
+	const result = await opts.runStep("pr-review", prompt, { cwd: opts.cwd, profile, trace: false, parkSignal: emptyParkSignal(), itemId: pr, executionOverride }, emit);
+	if (!result.ok) return { driver: candidate.provider, result, gate: "block", diagnostic: `Run did not complete cleanly (${result.subtype}).`, failureSubtype: result.subtype };
 	try {
 		const report = parseReviewFindings(result.text);
-		return { iteration, label, result, report, gate: reviewFindingsGate(report) };
+		return { driver: candidate.provider, result, report, gate: reviewFindingsGate(report) };
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		return { iteration, label, result, gate: "block", diagnostic: `Invalid review findings report: ${message}.`, failureSubtype: "error_invalid_output" };
+		return { driver: candidate.provider, result, gate: "block", diagnostic: `Invalid review findings report: ${message}.`, failureSubtype: "error_invalid_output" };
 	}
 }
 
@@ -354,6 +371,7 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 	const localContext = diffCwd === cwd && diffBaseRef === "origin/main" && diffHeadRef === "HEAD" ? "" : trustedLocalContext({ diffCwd, diffBaseRef, diffHeadRef });
 	const policy = options.policy ?? CONFIG.review;
 	const reviewSettings = resolveStepSettings(CONFIG, profile, "pr-review");
+	const reviewCandidates = resolveDriverCandidates(CONFIG, profile, "pr-review");
 	const verifySettings = resolveStepSettings(CONFIG, profile, "pr-verify");
 
 	let securitySignal: SecurityDiffSignal;
@@ -368,9 +386,9 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 	}
 
 	const labels: ReviewLabel[] = securitySignal.triggered ? ["standard", "red-team"] : ["standard"];
-	const reservation = labels.length * (reviewSettings.budget + verifySettings.budget);
-	if (policy.providerDiversity === "require" && reviewSettings.provider === verifySettings.provider) {
-		const body = buildFailClosedComment("provider-diversity", `review.provider-diversity=require but pr-review and pr-verify both resolve to ${reviewSettings.provider}.`);
+	const reservation = labels.length * (reviewCandidates.length * reviewSettings.budget + verifySettings.budget);
+	if (policy.providerDiversity === "require" && reviewCandidates.every(({ provider }) => provider === verifySettings.provider)) {
+		const body = buildFailClosedComment("provider-diversity", `review.provider-diversity=require but no pr-review driver differs from pr-verify (${verifySettings.provider}).`);
 		options.upsertComment?.(options.pr, body);
 		return { gate: "block", body, cost: 0, costEstimated: false, turns: 0, ok: false, subtype: "provider-diversity", breakerReason: "provider-diversity" };
 	}
@@ -389,17 +407,49 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 		const iterationPasses: ReviewPass[] = [];
 		for (const label of labels) {
 			const args = label === "standard" ? `--pr ${options.pr}` : `--pr ${options.pr} --red-team --security-reasons ${JSON.stringify(securitySignal.reasons.join(", "))}`;
-			try {
-				const pass = await runReviewPass(iteration, label, args, profile, options.pr, { cwd, runStep: runStepImpl, localContext });
-				iterationPasses.push(pass);
-				passes.push(pass);
-			} catch (error) {
-				const message = error instanceof Error ? error.message : String(error);
-				const result: StepResult = { ok: false, subtype: "error_crash", text: message, fullText: message, cost: 0, turns: 0 };
-				const pass: ReviewPass = { iteration, label, result, gate: "block", diagnostic: `Review execution threw: ${message}.`, failureSubtype: "error_crash" };
-				iterationPasses.push(pass);
-				passes.push(pass);
+			const settled = await Promise.allSettled(reviewCandidates.map((candidate) => runReviewPassForDriver(label, args, profile, options.pr, candidate, { cwd, runStep: runStepImpl, localContext })));
+			const driverRuns = settled.map((outcome, index): ReviewDriverRun => {
+				if (outcome.status === "fulfilled") return outcome.value;
+				const message = outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason);
+				return {
+					driver: reviewCandidates[index]?.provider ?? "unknown",
+					result: { ok: false, subtype: "error_crash", text: message, fullText: message, cost: 0, turns: 0 },
+					gate: "block",
+					diagnostic: `Review execution threw: ${message}.`,
+					failureSubtype: "error_crash",
+				};
+			});
+			const aggregated = aggregateReviewDrivers(driverRuns.map(({ driver, gate, report, diagnostic }) => ({ driver, gate, findings: report?.findings, ...(diagnostic ? { diagnostic } : {}) })));
+			const first = driverRuns[0];
+			if (!first) throw new Error("pr-review resolved no drivers");
+			const renderedFindings = new Map<string, ReviewFinding>();
+			for (const { report: driverReport } of driverRuns) {
+				for (const finding of driverReport?.findings ?? []) {
+					const fingerprint = reviewFindingFingerprint(finding);
+					const existing = renderedFindings.get(fingerprint);
+					if (existing === undefined || finding.severity === "must-fix") renderedFindings.set(fingerprint, finding);
+				}
 			}
+			const report: ReviewFindingsReport | undefined = driverRuns.some(({ report }) => report !== undefined)
+				? { schemaVersion: 1, summary: driverRuns.map(({ driver, report: item }) => `${driver}: ${item?.summary ?? "invalid/incomplete"}`).join(" · "), findings: [...renderedFindings.values()] }
+				: undefined;
+			const pass: ReviewPass = { iteration, label, result: first.result, gate: aggregated.combinedGate, ...(report ? { report } : {}), driverRuns, driverVerdicts: aggregated.driverVerdicts };
+			if (aggregated.disagreement) pass.failureSubtype = "disagreement";
+			else if (!report) {
+				pass.diagnostic =
+					driverRuns
+						.map(({ diagnostic }) => diagnostic)
+						.filter(Boolean)
+						.join(" ") || "No driver produced a complete valid review report.";
+				pass.failureSubtype = driverRuns[0]?.failureSubtype ?? "error_invalid_output";
+			}
+			iterationPasses.push(pass);
+			passes.push(pass);
+			if (aggregated.disagreement) break;
+		}
+		if (iterationPasses.some(({ failureSubtype }) => failureSubtype === "disagreement")) {
+			breakerReason = "disagreement";
+			break;
 		}
 		for (const pass of iterationPasses) await runVerificationPass(pass, carried, profile, options.pr, { cwd, runStep: runStepImpl, localContext });
 		const resultsSoFar = passes.flatMap(passResults);
@@ -434,7 +484,7 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 	const costEstimated = results.some((result) => result.costEstimated);
 	const turns = results.reduce((sum, result) => sum + result.turns, 0);
 	const subtype = gate === "pass" ? "success" : (breakerReason ?? aggregateSubtype(passes));
-	const pairing = `${reviewSettings.provider}/${verifySettings.provider}`;
+	const pairing = `${reviewCandidates.map(({ provider }) => provider).join("+")}/${verifySettings.provider}`;
 	const summary = `Convergence: ${gate === "pass" ? "converged" : `exhausted (${breakerReason ?? "invalid-pass"})`} · iterations=${passes.at(-1)?.iteration ?? 0} · survivors=${carried.size} · providers=${pairing} · aggregate cost=$${cost.toFixed(2)}`;
 	const body = buildComment(gate, passes, securitySignal, summary, { iterations: passes.at(-1)?.iteration ?? 0, survivors: carried.size, breaker: breakerReason, providers: pairing });
 	options.upsertComment?.(options.pr, body);

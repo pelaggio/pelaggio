@@ -384,7 +384,7 @@ interface ParsedProfiles {
 	providers: Record<string, Partial<Record<Step, ProviderSelection>>>;
 }
 
-const POOLED_STEPS: readonly Step[] = ["plan", "implement", "shakedown-plan", "shakedown-code"];
+const POOLED_STEPS: readonly Step[] = ["plan", "implement", "shakedown-plan", "shakedown-code", "pr-review"];
 
 function parseProviderSelections(override: unknown, section: string, configPath: string): Partial<Record<Step, ProviderSelection>> {
 	if (override === undefined) return {};

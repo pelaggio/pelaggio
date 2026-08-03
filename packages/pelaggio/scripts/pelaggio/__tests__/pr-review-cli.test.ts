@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { DEFAULTS, type ReviewConfig } from "../config.js";
+import { CONFIG, DEFAULTS, type ReviewConfig } from "../config.js";
 import { main, runPrReviewGate, setPrReviewDepsForTests } from "../pr-review-cli.js";
 import type { RunStepFn } from "../step-runner.js";
 import type { ParkSignal, StepEmit, StepResult } from "../types.js";
@@ -27,6 +27,7 @@ interface RunCall {
 	prompt: string;
 	cwd: string;
 	parkSignal: ParkSignal;
+	provider?: string;
 }
 
 function verification(decisions: unknown[], overrides: Partial<StepResult> = {}): StepResult {
@@ -77,7 +78,7 @@ async function runCli(
 		throw new Error(`unexpected command: ${cmd} ${a}`);
 	}) as typeof import("node:child_process").execFileSync;
 	const runStep: RunStepFn = async (name, prompt, stepOpts, _emit: StepEmit) => {
-		calls.push({ name, prompt, cwd: stepOpts.cwd, parkSignal: stepOpts.parkSignal });
+		calls.push({ name, prompt, cwd: stepOpts.cwd, parkSignal: stepOpts.parkSignal, provider: stepOpts.executionOverride?.provider });
 		const next = queued.shift();
 		assert.ok(next, "unexpected extra runStep call");
 		if (next instanceof Error) throw next;
@@ -116,6 +117,37 @@ async function runCli(
 }
 
 describe("pr-review CLI aggregation", () => {
+	it("fans out configured review drivers and fails a split without verification", async () => {
+		if (CONFIG.profileProviders.standard === undefined) CONFIG.profileProviders.standard = {};
+		const providers = CONFIG.profileProviders.standard;
+		const previous = providers["pr-review"];
+		providers["pr-review"] = ["claude", "codex"];
+		const calls: Array<{ name: string; provider?: string }> = [];
+		try {
+			const review = await runPrReviewGate({
+				pr: "1",
+				policy: reviewPolicy({ providerDiversity: "off" }),
+				execFileSync: ((_: string, args: readonly string[]) => (args.includes("--name-only") ? "docs/a.md\n" : "+docs")) as typeof import("node:child_process").execFileSync,
+				runStep: async (name, _prompt, opts) => {
+					calls.push({ name, provider: opts.executionOverride?.provider });
+					return opts.executionOverride?.provider === "claude" ? result() : result({ text: report("Blocked.", [{ severity: "must-fix", message: "Bug." }]) });
+				},
+			});
+			assert.equal(review.gate, "block");
+			assert.equal(review.subtype, "disagreement");
+			assert.deepEqual(calls, [
+				{ name: "pr-review", provider: "claude" },
+				{ name: "pr-review", provider: "codex" },
+			]);
+			assert.match(review.body, /DISAGREEMENT/);
+			assert.match(review.body, /`claude`: \*\*PASS\*\*/);
+			assert.match(review.body, /`codex`: \*\*BLOCK\*\*/);
+		} finally {
+			if (previous === undefined) delete providers["pr-review"];
+			else providers["pr-review"] = previous;
+		}
+	});
+
 	it("runs only the standard pass for non-security diffs", async () => {
 		const out = await runCli();
 

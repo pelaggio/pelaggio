@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+	aggregateReviewDrivers,
 	applyReviewPass,
 	CLASSIFICATION_RULES,
 	classifyAuthoringReviewFinding,
@@ -38,6 +39,43 @@ function authoringBlock(value: unknown): string {
 function judgeBlock(value: unknown): string {
 	return `Ruling complete.\nAUTHORING_REVIEW_JUDGE\n${JSON.stringify(value)}\nEND_AUTHORING_REVIEW_JUDGE`;
 }
+
+describe("aggregateReviewDrivers", () => {
+	const blocker = { severity: "must-fix" as const, message: "Broken.", path: "src/a.ts", line: 1 };
+
+	it("vetoes blocks, identifies raw splits, and preserves a scalar pass", () => {
+		assert.deepEqual(aggregateReviewDrivers([{ driver: "claude", gate: "pass" }]), {
+			combinedGate: "pass",
+			disagreement: false,
+			unionFindings: [],
+			driverVerdicts: [{ driver: "claude", gate: "pass" }],
+		});
+		assert.equal(
+			aggregateReviewDrivers([
+				{ driver: "claude", gate: "pass" },
+				{ driver: "codex", gate: "block", diagnostic: "invalid" },
+			]).disagreement,
+			true,
+		);
+		assert.equal(
+			aggregateReviewDrivers([
+				{ driver: "claude", gate: "block" },
+				{ driver: "codex", gate: "block" },
+			]).combinedGate,
+			"block",
+		);
+		assert.equal(aggregateReviewDrivers([]).combinedGate, "block");
+	});
+
+	it("unions distinct must-fixes and de-duplicates fingerprints", () => {
+		const other = { severity: "must-fix" as const, message: "Other." };
+		const result = aggregateReviewDrivers([
+			{ driver: "claude", gate: "block", findings: [blocker, { severity: "nice", message: "Polish." }] },
+			{ driver: "codex", gate: "block", findings: [{ ...blocker }, other] },
+		]);
+		assert.deepEqual(result.unionFindings, [blocker, other]);
+	});
+});
 
 const emptyCtx = { fingerprint: '["x","",0]', changedFiles: [] as string[], pathSignals: [] as const };
 
