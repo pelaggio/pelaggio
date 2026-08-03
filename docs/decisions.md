@@ -6,6 +6,14 @@ Status values are `default-taken`, `resolved`, or `resolved→ADR-nnnn`. Source 
 
 | Decision | Status | Chosen/leaning | Alternatives | Source | Date |
 | --- | --- | --- | --- | --- | --- |
+| Scope crosses pelaggio orchestration, server, and web (larger than M) | default-taken | carry the complete vertical slice because every layer is required for a truthful Watch ×2 control-plane action and the changes share one typed launch/state contract | defer parallel continuous mode or state projection, which would ship a preset that fails at launch or an idle UI with no authoritative liveness | https://github.com/pelaggio/pelaggio/issues/83 | 2026-08-03 |
+<!-- decision:44d4657742c6461e -->
+| Run-state representation | default-taken | keep terminal/process `RunStatus` and add an orthogonal discriminated `RunActivity` (`active`, `watch-idle`, `budget-idle`, `parked`) with event-specific metadata | overload `RunStatus` with transient states, which makes live-process actions and exit transitions ambiguous | https://github.com/pelaggio/pelaggio/issues/83 | 2026-08-03 |
+<!-- decision:ef2b14f4de64e6d0 -->
+| Structured liveness contract | default-taken | add namespaced core flow events and correlate each supervised run through an explicit ULID execution/stream id supplied by the server | parse stdout or write a second status file (both rejected by the roadmap audit), or scan unrelated event streams heuristically (unsafe with concurrent runs) | https://github.com/pelaggio/pelaggio/issues/83 | 2026-08-03 |
+<!-- decision:0950b9a04f6b082a -->
+| Park event vocabulary | default-taken | reuse catalog `pelaggio.suspended` / `pelaggio.resumed` (reason + optional `resumeAt`) for rate-limit / operator / sdk-outage parks; add only process-level continuous types `pelaggio.watch-idle\|watch-wake` and `pelaggio.budget-idle\|budget-wake` | invent `pelaggio.parked` / `pelaggio.park-resumed` (forks the closed catalog for the same pause interval concept) | https://github.com/pelaggio/pelaggio/issues/83 | 2026-08-03 |
+<!-- decision:cb2a8a5234ca421c -->
 | #243 literally names "shakedown-code + the pr-review CI gate" | default-taken | implement the CI-gate surface only because `runReviewLoop` already supplies multi-driver authoring review | duplicate or rebuild the authoring path. | https://github.com/pelaggio/pelaggio/issues/243 | 2026-08-03 |
 <!-- decision:e609c28201cd54e0 -->
 | default review-driver set | default-taken | preserve scalar single-driver behavior and opt into fan-out through `models.profiles.*.providers.pr-review` | enable duplication by default across authenticated drivers. | https://github.com/pelaggio/pelaggio/issues/243 | 2026-08-03 |
