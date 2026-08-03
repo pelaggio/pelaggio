@@ -2,9 +2,10 @@ import type { Context, Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import type { Supervisor } from "../supervisor.js";
 import { SupervisorError } from "../supervisor.js";
-import type { PersistedRun, RunSummary, ShipTargetName } from "../types.js";
+import type { ContinuousMode, PersistedRun, RunSummary, ShipTargetName } from "../types.js";
 
 const SHIP_TARGETS: readonly ShipTargetName[] = ["direct-push", "pull-request", "auto-merge-pr"];
+const CONTINUOUS_MODES: readonly ContinuousMode[] = ["drain", "watch"];
 
 interface StartBody {
 	repo?: unknown;
@@ -12,6 +13,9 @@ interface StartBody {
 	parallel?: unknown;
 	cycles?: unknown;
 	shipTarget?: unknown;
+	mode?: unknown;
+	watchDailyBudget?: unknown;
+	verbose?: unknown;
 }
 
 function badRequest(c: Context, message: string): Response {
@@ -22,10 +26,12 @@ function summarize(run: PersistedRun): RunSummary {
 	return {
 		id: run.id,
 		repo: run.repo,
-		item: run.item,
+		...(run.item !== undefined ? { item: run.item } : {}),
 		status: run.status,
 		startedAt: run.startedAt,
 		...(run.endedAt ? { endedAt: run.endedAt } : {}),
+		...(run.mode ? { mode: run.mode } : {}),
+		...(run.activity ? { activity: run.activity } : {}),
 	};
 }
 
@@ -40,9 +46,25 @@ export function registerRunRoutes(app: Hono, supervisor: Supervisor): void {
 		if (typeof body.repo !== "string" || body.repo.trim() === "") {
 			return badRequest(c, "field `repo` is required (string)");
 		}
-		if (typeof body.item !== "string" || body.item.trim() === "") {
-			return badRequest(c, "field `item` is required (string)");
+
+		let mode: ContinuousMode | undefined;
+		if (body.mode !== undefined) {
+			if (typeof body.mode !== "string" || !CONTINUOUS_MODES.includes(body.mode as ContinuousMode)) {
+				return badRequest(c, `\`mode\` must be one of ${CONTINUOUS_MODES.join(", ")}`);
+			}
+			mode = body.mode as ContinuousMode;
 		}
+
+		if (mode) {
+			if (body.item !== undefined && body.item !== null && body.item !== "") {
+				return badRequest(c, "continuous mode forbids `item` (omit for auto-pick)");
+			}
+		} else {
+			if (typeof body.item !== "string" || body.item.trim() === "") {
+				return badRequest(c, "field `item` is required (string) for ordinary runs");
+			}
+		}
+
 		if (body.parallel !== undefined && (typeof body.parallel !== "number" || !Number.isInteger(body.parallel) || body.parallel < 1)) {
 			return badRequest(c, "`parallel` must be a positive integer");
 		}
@@ -52,14 +74,31 @@ export function registerRunRoutes(app: Hono, supervisor: Supervisor): void {
 		if (body.shipTarget !== undefined && !SHIP_TARGETS.includes(body.shipTarget as ShipTargetName)) {
 			return badRequest(c, `\`shipTarget\` must be one of ${SHIP_TARGETS.join(", ")}`);
 		}
+		if (body.verbose !== undefined && typeof body.verbose !== "boolean") {
+			return badRequest(c, "`verbose` must be a boolean");
+		}
+
+		let watchDailyBudget: number | undefined;
+		if (body.watchDailyBudget !== undefined) {
+			if (typeof body.watchDailyBudget !== "number" || !Number.isFinite(body.watchDailyBudget) || body.watchDailyBudget <= 0) {
+				return badRequest(c, "`watchDailyBudget` must be a positive finite number");
+			}
+			if (mode !== "watch") {
+				return badRequest(c, '`watchDailyBudget` requires `mode: "watch"`');
+			}
+			watchDailyBudget = body.watchDailyBudget;
+		}
+
 		let run: PersistedRun;
 		try {
 			run = supervisor.start({
 				repo: body.repo.trim(),
-				item: body.item.trim(),
+				...(mode ? { mode } : { item: (body.item as string).trim() }),
 				...(typeof body.parallel === "number" ? { parallel: body.parallel } : {}),
 				...(typeof body.cycles === "number" ? { cycles: body.cycles } : {}),
 				...(body.shipTarget ? { shipTarget: body.shipTarget as ShipTargetName } : {}),
+				...(watchDailyBudget !== undefined ? { watchDailyBudget } : {}),
+				...(body.verbose === true ? { verbose: true } : {}),
 			});
 		} catch (err) {
 			if (err instanceof SupervisorError && err.code === "unknown-repo") {
@@ -67,7 +106,14 @@ export function registerRunRoutes(app: Hono, supervisor: Supervisor): void {
 			}
 			throw err;
 		}
-		return c.json({ id: run.id, repo: run.repo, item: run.item, startedAt: run.startedAt, logPath: run.logPath });
+		return c.json({
+			id: run.id,
+			repo: run.repo,
+			...(run.item !== undefined ? { item: run.item } : {}),
+			...(run.mode ? { mode: run.mode } : {}),
+			startedAt: run.startedAt,
+			logPath: run.logPath,
+		});
 	});
 
 	app.get("/runs", (c) => {
@@ -95,7 +141,14 @@ export function registerRunRoutes(app: Hono, supervisor: Supervisor): void {
 	app.post("/runs/:id/resume", (c) => {
 		try {
 			const run = supervisor.resume(c.req.param("id"));
-			return c.json({ id: run.id, repo: run.repo, item: run.item, status: run.status, resumedFrom: run.resumedFrom });
+			return c.json({
+				id: run.id,
+				repo: run.repo,
+				...(run.item !== undefined ? { item: run.item } : {}),
+				...(run.mode ? { mode: run.mode } : {}),
+				status: run.status,
+				resumedFrom: run.resumedFrom,
+			});
 		} catch (err) {
 			return supervisorError(c, err);
 		}

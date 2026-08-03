@@ -205,6 +205,76 @@ describe("createApp", () => {
 		assert.equal(persisted?.repo, "main");
 	});
 
+	it("POST /runs continuous omits item → 200", async () => {
+		const { app, supervisor } = setup();
+		const res = await app.request("/runs", {
+			method: "POST",
+			body: JSON.stringify({ repo: "main", mode: "watch", parallel: 2 }),
+			headers: { "content-type": "application/json" },
+		});
+		assert.equal(res.status, 200);
+		const body = (await res.json()) as { id: string; mode?: string; item?: string };
+		assert.equal(body.mode, "watch");
+		assert.equal(body.item, undefined);
+		assert.equal(supervisor.get(body.id)?.mode, "watch");
+	});
+
+	it("POST /runs continuous with item → 400", async () => {
+		const { app } = setup();
+		const res = await app.request("/runs", {
+			method: "POST",
+			body: JSON.stringify({ repo: "main", mode: "drain", item: "TOOL-1" }),
+			headers: { "content-type": "application/json" },
+		});
+		assert.equal(res.status, 400);
+	});
+
+	it("POST /runs missing item without mode → 400", async () => {
+		const { app } = setup();
+		const res = await app.request("/runs", {
+			method: "POST",
+			body: JSON.stringify({ repo: "main" }),
+			headers: { "content-type": "application/json" },
+		});
+		assert.equal(res.status, 400);
+	});
+
+	it("POST /runs watchDailyBudget without watch mode → 400", async () => {
+		const { app } = setup();
+		const res = await app.request("/runs", {
+			method: "POST",
+			body: JSON.stringify({ repo: "main", mode: "drain", watchDailyBudget: 10 }),
+			headers: { "content-type": "application/json" },
+		});
+		assert.equal(res.status, 400);
+	});
+
+	it("POST /runs invalid mode → 400", async () => {
+		const { app } = setup();
+		const res = await app.request("/runs", {
+			method: "POST",
+			body: JSON.stringify({ repo: "main", mode: "forever" }),
+			headers: { "content-type": "application/json" },
+		});
+		assert.equal(res.status, 400);
+	});
+
+	it("GET /repos/:slug/config returns watchDailyBudget null when unset", async () => {
+		const { app, dir } = setup();
+		// loadConfig reads .pelaggio.yml from the registry path (dir)
+		const res = await app.request("/repos/main/config");
+		assert.equal(res.status, 200);
+		const body = (await res.json()) as { watchDailyBudget: number | null };
+		assert.equal(body.watchDailyBudget, null);
+		void dir;
+	});
+
+	it("GET /repos/:slug/config 404 for unknown slug", async () => {
+		const { app } = setup();
+		const res = await app.request("/repos/missing/config");
+		assert.equal(res.status, 404);
+	});
+
 	it("GET /runs/:id 404 for unknown id", async () => {
 		const { app } = setup();
 		const res = await app.request("/runs/missing");

@@ -73,6 +73,13 @@ interface PrReviewDeps {
 	execFileSync: typeof execFileSync;
 	upsertComment: (pr: string, body: string) => void;
 	postStatus: (gate: "pass" | "block", sha: string) => boolean;
+	/** Pool + verifier for runs that reach the gate through `main()` rather than a direct
+	 *  call. Unset in production (resolve from CONFIG); tests pin them so gate behavior is
+	 *  not a function of the host repo's own .pelaggio.yml. */
+	reviewDrivers?: StepSettings[];
+	verifySettings?: StepSettings;
+	/** Same rationale as above for the review policy (pass count, cap, diversity mode). */
+	policy?: ReviewConfig;
 }
 
 export interface RunPrReviewGateOptions {
@@ -91,6 +98,8 @@ export interface RunPrReviewGateOptions {
 	parkSignal?: ParkSignal;
 	/** Ordered review drivers for this run. Defaults to resolveDriverCandidates(CONFIG, profile, "pr-review"). */
 	reviewDrivers?: StepSettings[];
+	/** Scalar verifier for this run. Defaults to resolveStepSettings(CONFIG, profile, "pr-verify"). */
+	verifySettings?: StepSettings;
 }
 
 export interface PrReviewGateResult {
@@ -521,10 +530,13 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 	// earliest park metadata here; sequential verify shares this parent.
 	const signal = options.parkSignal ?? emptyParkSignal();
 	const localContext = diffCwd === cwd && diffBaseRef === "origin/main" && diffHeadRef === "HEAD" ? "" : trustedLocalContext({ diffCwd, diffBaseRef, diffHeadRef });
-	const policy = options.policy ?? CONFIG.review;
-	const reviewDrivers = options.reviewDrivers ?? resolveDriverCandidates(CONFIG, profile, "pr-review");
+	const policy = options.policy ?? deps.policy ?? CONFIG.review;
+	const reviewDrivers = options.reviewDrivers ?? deps.reviewDrivers ?? resolveDriverCandidates(CONFIG, profile, "pr-review");
 	const reviewSettings = reviewDrivers[0] ?? resolveStepSettings(CONFIG, profile, "pr-review");
-	const verifySettings = resolveStepSettings(CONFIG, profile, "pr-verify");
+	// Injectable alongside `reviewDrivers`: the diversity check compares the pool against
+	// this, so a caller that pins the pool must be able to pin the verifier too — otherwise
+	// it silently reads the host repo's own .pelaggio.yml and passes or fails by accident.
+	const verifySettings = options.verifySettings ?? deps.verifySettings ?? resolveStepSettings(CONFIG, profile, "pr-verify");
 
 	let securitySignal: SecurityDiffSignal;
 	try {
@@ -718,7 +730,9 @@ export async function main(argv: string[]): Promise<number> {
 	let reviewedSha: string | undefined;
 	try {
 		reviewedSha = resolveReviewedSha(deps.execFileSync, pr, ROADMAP_GITHUB.ghRepo);
-		const review = await runPrReviewGate({ pr, profile, cwd: REPO, diffCwd: REPO, diffHeadRef: reviewedSha, runStep: deps.runStep, execFileSync: deps.execFileSync, policy: CONFIG.review });
+		// Policy/pool are intentionally not passed: runPrReviewGate resolves them through
+		// options → deps → CONFIG, so the same defaults apply and tests can pin the seam.
+		const review = await runPrReviewGate({ pr, profile, cwd: REPO, diffCwd: REPO, diffHeadRef: reviewedSha, runStep: deps.runStep, execFileSync: deps.execFileSync });
 
 		// The review text goes to stdout unconditionally so the CI log always
 		// carries the findings — a failed comment upsert (or a truncated run)
