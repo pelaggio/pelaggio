@@ -101,26 +101,32 @@ the ordinary `pelaggio run` pipeline.
 3. For a same-repo, non-draft PR the job checks out the head SHA with full history,
    installs deps, and runs `npx pelaggio pr-review --pr <n>`.
 4. The CLI reads the changed file list and diff, then runs one or more bounded, fresh-session
-   standard review through the same `runStep` machinery the pipeline uses (step
+   discovery reviews through the same `runStep` machinery the pipeline uses (step
    `pr-review`: budget / turns / effort / model are first-class config, see below).
-   The safe default is one iteration; `review.max-passes` opts into at most three. If the deterministic classifier sees security-sensitive paths or diff keywords, the
-   CLI runs a second fresh `pr-review --red-team` discovery session. After discovery,
-   every successful pass with `must-fix` candidates gets its own fresh `pr-verify`
-   session. The verifier tries to refute each candidate against the repository and
-   cannot introduce or rewrite blockers. The CLI posts the `review` commit status for
-   the head SHA and all dispositions as one idempotently-upserted PR comment —
-   independently, so a failure posting one does not drop the other — then sets the
-   exit code.
+   The safe default is one iteration and one review driver; `review.max-passes` opts
+   into at most three iterations, and `models.profiles.*.providers.pr-review: […]`
+   opts into multi-driver **fan-out** (every listed driver runs the same discovery
+   prompt concurrently — not author rotation). If the deterministic classifier sees
+   security-sensitive paths or diff keywords, the CLI runs a second fresh
+   `pr-review --red-team` discovery label and fans that label across the same
+   drivers. After discovery, every driver pass with `must-fix` candidates gets its
+   own sequential fresh `pr-verify` session (verifier stays scalar). The verifier
+   tries to refute each candidate against the repository and cannot introduce or
+   rewrite blockers. The CLI posts the `review` commit status for the head SHA and
+   all dispositions as one idempotently-upserted PR comment — independently, so a
+   failure posting one does not drop the other — then sets the exit code.
 5. **Exit code = gate = posted `review` status.** The CLI exits `0` only when every
-   required pass emits a valid versioned findings report, every candidate blocker
-   is refuted by a complete, valid isolated verification report, and its own `review`
-   commit status post succeeded. A surviving `must-fix`, missing or malformed report,
-   refusal, SDK error, max-turns, rate-limit park, inability to inspect the diff, or a
-   failed status post exits `1`. The workflow also translates the CLI's exit code
-   into the `review` commit status (`0` → success, else failure) as a second,
-   independent poster, and posts `failure` if the job is cancelled after starting.
-   The gate **fails closed**: ambiguity blocks the merge, and a crash before the
-   final step leaves the earlier `pending` status.
+   required `(driver × label)` cell emits a valid versioned findings report, every
+   candidate blocker is refuted by a complete, valid isolated verification report
+   (`agreement: consensus-pass`), and its own `review` commit status post succeeded.
+   A surviving `must-fix`, multi-driver veto (`disagreement` or `consensus-block`),
+   infrastructure-invalid cell (`invalid`), missing or malformed report, refusal,
+   SDK error, max-turns, rate-limit park, inability to inspect the diff, or a failed
+   status post exits `1`. The workflow also translates the CLI's exit code into the
+   `review` commit status (`0` → success, else failure) as a second, independent
+   poster, and posts `failure` if the job is cancelled after starting. The gate
+   **fails closed**: ambiguity blocks the merge, and a crash before the final step
+   leaves the earlier `pending` status.
 
 ## The fail-closed contract
 
@@ -172,13 +178,42 @@ count or same-size replacement trips `diminishing-returns`. `max-passes`, `budge
 yield PASS.
 
 Before each iteration the CLI reserves the resolved discovery and verifier caps for
-every required label (standard, plus red-team when triggered), so it never starts a
-partial iteration. Actual costs from every attempted call are aggregated, and an actual
-overshoot remains red. `provider-diversity: prefer` uses independently configured
-providers when they differ and otherwise retains the ordinary same-provider fallback;
-`require` blocks before agent work when they resolve alike. The read-only gate escalates
-by leaving the status red; it does not call pipeline-private `parkExit()`. The separate
-revision pipeline retains rate-limit checkpointing and the label-bounded human handoff.
+every required `(driver × label)` cell (standard, plus red-team when triggered), so
+it never starts a partial fleet:
+
+```
+reservation = labels × drivers × (pr-review budget + pr-verify budget)
+```
+
+Actual costs and turns from every attempted discovery and verification call are
+aggregated, and an actual overshoot remains red. Enabling a multi-driver pool
+almost always requires raising `review.budget-cap` (defaults fit a 2-driver standard
+pass but not red-team × multi-driver). `provider-diversity: prefer` uses independently
+configured providers when they differ and otherwise retains the ordinary same-provider
+fallback; `require` blocks before agent work only when **every** review driver equals
+the scalar verifier provider (a mixed pool with at least one independent reviewer is
+accepted). Metrics record the pairing as `claude+codex/codex`. The read-only gate
+escalates by leaving the status red; it does not call pipeline-private `parkExit()`.
+The separate revision pipeline retains rate-limit checkpointing and the label-bounded
+human handoff.
+
+### Multi-driver agreement (CI gate)
+
+When `providers.pr-review` is a list, discovery fans out concurrently (private
+per-driver park signals; earliest positive `resetsAt` wins on merge). After sequential
+per-driver verification, the gate computes a closed `agreement` field on the result
+(and in the metrics marker) without scraping comment prose:
+
+| Condition (first match wins) | `agreement` | Gate |
+| --- | --- | --- |
+| Any required cell is infrastructure-invalid (throw, non-ok, malformed, incomplete verify) | `invalid` | BLOCK |
+| Every required cell has a valid effective PASS | `consensus-pass` | may PASS |
+| ≥1 valid PASS and ≥1 valid findings-BLOCK (no infra) | `disagreement` | BLOCK (distinct; #244 later) |
+| Every required cell is a valid findings-BLOCK | `consensus-block` | BLOCK |
+
+Only `consensus-pass` may green the required `review` status. Scalar configuration
+(`pr-review: claude`) is a one-element pool — behavior is unchanged aside from the
+typed `agreement` field. `pr-verify` is never fanned out by the review pool.
 
 ## The review itself
 
@@ -251,8 +286,11 @@ gh pr list --state all --limit 50 --json number --jq '.[].number' |
 ```
 
 For multi-pass runs, the marker records aggregate `gate`, aggregate `ok`, summed cost /
-turns, and a subtype that identifies the blocking pass (`standard:<subtype>`,
-`red-team:<subtype>`, `multiple`, or `success`).
+turns, a subtype that identifies the blocking pass (`standard:<subtype>`,
+`red-team:<subtype>`, `multiple`, or `success`), plus `agreement=…`, `providers=…`
+(reviewer-set/verifier pairing), and convergence counters when multi-pass is active.
+The comment body labels each section with its driver and lists per-driver effective
+verdicts so duplicate standard/red-team sections stay attributable.
 
 ## Configuration
 
@@ -271,13 +309,33 @@ models:
 
 The verifier has independent global defaults (`pr-verify`: $5, 60 turns, `xhigh`).
 When its profile slots are unset, its model, Codex model, and provider inherit the
-resolved `pr-review` slots, yielding a fresh same-provider session. Override
-`pr-verify` in the profile to use the other registered provider for cross-provider
-verification; see [`config.md`](./config.md#pr-review-runner).
+resolved `pr-review` slots (the pool's first entry when `pr-review` is a list),
+yielding a fresh same-provider session. Override `pr-verify` in the profile to use
+another registered provider for cross-provider verification; see
+[`config.md`](./config.md#pr-review-runner). `pr-verify` does **not** accept a provider
+list.
 
 Select the profile with `--profile <name>` (default `standard`).
 
-For local subscription review with Codex, configure the poster and provider separately:
+For multi-driver CI discovery (fan-out, all-pass gate):
+
+```yaml
+review:
+  budget-cap: 40   # labels × drivers × (review+verify); raise further if red-team triggers
+
+models:
+  profiles:
+    standard:
+      providers:
+        pr-review: [claude, codex]
+        pr-verify: codex
+      codex:
+        pr-review: gpt-5-codex
+        pr-verify: gpt-5-codex
+```
+
+For local subscription review with a single Codex driver, configure the poster and
+provider separately:
 
 ```yaml
 review:

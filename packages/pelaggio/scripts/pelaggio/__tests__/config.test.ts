@@ -446,11 +446,31 @@ describe("provider pools", () => {
 		);
 	});
 
+	it("accepts pr-review as an ordered fan-out pool while scalar pr-review still works", () => {
+		const repo = tmpRepo();
+		const poolPath = writeYml(repo, "models:\n  profiles:\n    mixed:\n      providers:\n        pr-review: [claude, codex]\n");
+		const poolCfg = loadConfig({ repo, configPath: poolPath });
+		assert.deepEqual(poolCfg.profileProviders.mixed?.["pr-review"], ["claude", "codex"]);
+		assert.equal(resolveStepSettings(poolCfg, "mixed", "pr-review").provider, "claude");
+		assert.deepEqual(
+			resolveDriverCandidates(poolCfg, "mixed", "pr-review").map((candidate) => candidate.provider),
+			["claude", "codex"],
+		);
+
+		const scalarPath = writeYml(repo, "models:\n  profiles:\n    mixed:\n      providers:\n        pr-review: codex\n");
+		const scalarCfg = loadConfig({ repo, configPath: scalarPath });
+		assert.equal(resolveStepSettings(scalarCfg, "mixed", "pr-review").provider, "codex");
+		assert.deepEqual(
+			resolveDriverCandidates(scalarCfg, "mixed", "pr-review").map((candidate) => candidate.provider),
+			["codex"],
+		);
+	});
+
 	it("rejects empty, duplicate, unknown, and unsupported pools", () => {
-		for (const providers of ["plan: []", "plan: [claude, claude]", "plan: [claude, nope]", "ship: [claude, codex]"]) {
+		for (const providers of ["plan: []", "plan: [claude, claude]", "plan: [claude, nope]", "ship: [claude, codex]", "pr-verify: [claude, codex]"]) {
 			const repo = tmpRepo();
 			const path = writeYml(repo, `models:\n  profiles:\n    bad:\n      providers:\n        ${providers}\n`);
-			assert.throws(() => loadConfig({ repo, configPath: path }), /models\.profiles\.bad\.providers\.(plan|ship)/);
+			assert.throws(() => loadConfig({ repo, configPath: path }), /models\.profiles\.bad\.providers\.(plan|ship|pr-verify)/);
 		}
 	});
 });
