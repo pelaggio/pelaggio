@@ -482,6 +482,40 @@ then the most recent issue comment whose body begins with the
 `.dev/plans/<n>.md` (scratch, typically `.gitignore`'d), **not**
 `docs/plans/` — that directory remains `/plan`'s canonical committed output.
 
+#### Curation labels
+
+Projection and automatic selection use **labels as the sole runtime source of
+truth** (body text is not consulted at read time):
+
+| Label             | Effect |
+|-------------------|--------|
+| `deferred`        | Item stays visible in `list` / `get` with `deferred: true`, but is ineligible for automatic `roadmap next`. Explicit `/pick <id>` / `--item <id>` still claim it. |
+| `priority:high`   | Projects as numeric priority `1` (most urgent). |
+| `priority:normal` | Projects as numeric priority `2`. If both high and normal are present, high wins. |
+
+Every projected GitHub item materializes priority `1` or `2` (unlabeled → `2`).
+`create-item --priority high|normal` adds the matching label (and keeps the
+human-readable body marker). Omitted priority adds neither label.
+
+**FIFO within the newest-200 window:** `gh issue list --limit 200` returns the
+newest ≤200 matching issues; the adapter then sorts that window by ascending
+issue number so equal-priority ties drain oldest-first. This does **not** fetch
+the 200 oldest open issues — a backlog larger than 200 still starves issues
+outside the newest window until the window slides. Pagination / oldest-window
+search is out of scope.
+
+**One-time migration:** older issues may carry only a body line `Priority: high`
+without the label. After deploying this projection, run once against the
+configured repo:
+
+```bash
+npx pelaggio roadmap backfill-priority-labels
+```
+
+(or `--json` for machine-readable counts). The command is fail-closed and
+idempotent: body-high issues that already have `priority:normal` are reported
+as conflicts with zero edits; a clean re-run after convergence labels nothing.
+
 ### `linear`
 
 ### `roadmap.linear.*`

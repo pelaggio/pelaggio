@@ -54,6 +54,24 @@ export interface RoadmapItemStatus extends RoadmapItem {
 	body?: string;
 	/** Item labels when the adapter carries them. Absent for sources without label metadata. */
 	labels?: string[];
+	/**
+	 * Numeric priority for flow ranking (lower = more urgent). Optional at the cross-adapter
+	 * contract — markdown/Linear omit it; GitHub and Beads always materialize a tier.
+	 */
+	priority?: number;
+	/**
+	 * When true, automatic `roadmap next` excludes the item (reason `deferred`). Explicit
+	 * `/pick <id>` / `--item <id>` still claim it. Omitted or false means not deferred.
+	 */
+	deferred?: boolean;
+}
+
+/** Result of an idempotent body→label priority migration (`backfillPriorityLabels`). */
+export interface PriorityLabelBackfillResult {
+	readonly scanned: number;
+	readonly labeled: number;
+	/** Issue ids that already carry `priority:normal` while the body says high — fail-closed. */
+	readonly conflicts: readonly string[];
 }
 
 export interface CreateItemOpts {
@@ -101,6 +119,11 @@ export interface RoadmapSource {
 	/** True when the item exists in uncommitted working-tree state but not yet in HEAD. Gh/linear: always false. */
 	isCharterPickRace(id: string): boolean;
 	parseItemId(text: string): Promise<string | null>;
+	/**
+	 * Optional one-time migration: apply `priority:high` labels to issues whose body
+	 * carries `Priority: high` but lack the label. GitHub-only today; CLI capability-checks.
+	 */
+	backfillPriorityLabels?(): Promise<PriorityLabelBackfillResult>;
 }
 
 export function isRoadmapSourceName(v: unknown): v is RoadmapSourceName {

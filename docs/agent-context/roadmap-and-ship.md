@@ -21,7 +21,7 @@ Skill bodies never read roadmap files or issue trackers directly — they shell 
 npx pelaggio roadmap <subcommand>
 ```
 
-Subcommands: `list`, `get`, `claim`, `plan-path`, `publish-plan`, `mark-done`, `create-item`, `archive-plan`, `source`. Same idiom as `worktree-deps`. Do not duplicate adapter logic inside skills.
+Subcommands: `list`, `next`, `get`, `claim`, `plan-path`, `publish-plan`, `mark-done`, `create-item`, `archive-plan`, `backfill-priority-labels`, `source`. Same idiom as `worktree-deps`. Do not duplicate adapter logic inside skills.
 
 Always use the **scoped** name `pelaggio`, never bare `pelaggio`. The bare name collides with an unrelated public npm package cached under `~/.npm/_npx/`; a cached hit caused an observed pipeline recursion (TOOL-50) where the agent substituted `pnpm pelaggio <subcommand>` and re-entered the pipeline. The root `package.json` carries `pelaggio: workspace:*` so pnpm exposes it at the workspace root; `check-skills` enforces this (`skill.npx-bare-pelaggio`, `skill.pnpm-pelaggio-subcommand`), and the pipeline entry (`cli.ts`) rejects unknown positional args as defense in depth.
 

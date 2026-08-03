@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { type GhRunner, GitHubIssuesRoadmap } from "../roadmap/github-issues.js";
+import { GH_PRIORITY_HIGH, GH_PRIORITY_NORMAL, type GhRunner, GitHubIssuesRoadmap, projectGhIssue } from "../roadmap/github-issues.js";
 import { getRoadmapSource } from "../roadmap/index.js";
 
 function seedRepo(): string {
@@ -130,6 +130,202 @@ describe("GitHubIssuesRoadmap.getItem", () => {
 		const item = await r.getItem("42");
 		assert.deepEqual(item?.labels, ["autopilot", "scope: M"]);
 		assert.equal(item?.body, "Scope: M");
+		assert.equal(item?.priority, GH_PRIORITY_NORMAL);
+	});
+});
+
+describe("projectGhIssue", () => {
+	const repo = "acme/widgets";
+
+	it("maps status precedence: closed > blocked > in-progress > open", () => {
+		assert.equal(projectGhIssue({ number: 1, title: "c", state: "CLOSED", labels: [{ name: "blocked" }] }, repo).status, "done");
+		assert.equal(projectGhIssue({ number: 2, title: "b", state: "OPEN", labels: [{ name: "blocked" }] }, repo).status, "blocked");
+		assert.equal(projectGhIssue({ number: 3, title: "i", state: "OPEN", labels: [{ name: "in-progress" }] }, repo).status, "in-progress");
+		assert.equal(projectGhIssue({ number: 4, title: "o", state: "OPEN", labels: [] }, repo).status, "open");
+	});
+
+	it("sets deferred only for the exact deferred label", () => {
+		assert.equal(projectGhIssue({ number: 1, title: "d", labels: [{ name: "deferred" }] }, repo).deferred, true);
+		assert.equal(projectGhIssue({ number: 2, title: "n", labels: [{ name: "Deferred" }] }, repo).deferred, undefined);
+		assert.equal(projectGhIssue({ number: 3, title: "n", labels: [] }, repo).deferred, undefined);
+	});
+
+	it("derives priority from labels only; high wins dual labels; never omits priority", () => {
+		assert.equal(projectGhIssue({ number: 1, title: "h", labels: [{ name: "priority:high" }] }, repo).priority, GH_PRIORITY_HIGH);
+		assert.equal(projectGhIssue({ number: 2, title: "n", labels: [{ name: "priority:normal" }] }, repo).priority, GH_PRIORITY_NORMAL);
+		assert.equal(projectGhIssue({ number: 3, title: "both", labels: [{ name: "priority:normal" }, { name: "priority:high" }] }, repo).priority, GH_PRIORITY_HIGH);
+		const unlabeled = projectGhIssue({ number: 4, title: "u", body: "Priority: high\n", labels: [] }, repo);
+		assert.equal(unlabeled.priority, GH_PRIORITY_NORMAL);
+		assert.equal(unlabeled.priority, 2);
+	});
+
+	it("body text alone never yields priority high", () => {
+		const item = projectGhIssue({ number: 9, title: "body-only", body: "Priority: high\n\nDetails", labels: [] }, repo);
+		assert.equal(item.priority, GH_PRIORITY_NORMAL);
+	});
+
+	it("includeBodyLabels controls body/labels surface", () => {
+		const lean = projectGhIssue({ number: 1, title: "t", body: "x", labels: [{ name: "autopilot" }] }, repo);
+		assert.equal(lean.body, undefined);
+		assert.equal(lean.labels, undefined);
+		const rich = projectGhIssue({ number: 1, title: "t", body: "x", labels: [{ name: "autopilot" }] }, repo, { includeBodyLabels: true });
+		assert.equal(rich.body, "x");
+		assert.deepEqual(rich.labels, ["autopilot"]);
+	});
+});
+
+describe("GitHubIssuesRoadmap.listItems — curation projection", () => {
+	const newestFirst = [
+		{ number: 30, title: "New unlabeled", body: "Priority: high\n", state: "OPEN", labels: [{ name: "autopilot" }] },
+		{ number: 20, title: "High prio", body: "", state: "OPEN", labels: [{ name: "autopilot" }, { name: "priority:high" }] },
+		{ number: 15, title: "Deferred high", body: "", state: "OPEN", labels: [{ name: "autopilot" }, { name: "deferred" }, { name: "priority:high" }] },
+		{ number: 10, title: "Normal label", body: "", state: "OPEN", labels: [{ name: "autopilot" }, { name: "priority:normal" }] },
+		{ number: 5, title: "Done", body: "", state: "CLOSED", labels: [{ name: "autopilot" }] },
+		{ number: 4, title: "Blocked", body: "", state: "OPEN", labels: [{ name: "autopilot" }, { name: "blocked" }] },
+		{ number: 3, title: "In progress", body: "", state: "OPEN", labels: [{ name: "autopilot" }, { name: "in-progress" }] },
+	];
+
+	it("sorts ascending by issue number and materializes priority/deferred on every item", async () => {
+		const { run } = makeStub({
+			routes: [{ match: (a) => a[0] === "issue" && a[1] === "list", stdout: JSON.stringify(newestFirst) }],
+		});
+		const r = mk({ repo: "/tmp", ghRun: run });
+		const items = await r.listItems({ includeDone: true });
+		assert.deepEqual(
+			items.map((i) => i.id),
+			["3", "4", "5", "10", "15", "20", "30"],
+		);
+		for (const it of items) {
+			assert.ok(it.priority === GH_PRIORITY_HIGH || it.priority === GH_PRIORITY_NORMAL, `item ${it.id} missing tier priority`);
+			assert.equal(it.body, undefined, "listItems stays lean (no body)");
+			assert.equal(it.labels, undefined, "listItems stays lean (no labels)");
+		}
+		assert.equal(items.find((i) => i.id === "20")?.priority, GH_PRIORITY_HIGH);
+		assert.equal(items.find((i) => i.id === "30")?.priority, GH_PRIORITY_NORMAL, "body-only high stays normal without label");
+		assert.equal(items.find((i) => i.id === "15")?.deferred, true);
+		assert.equal(items.find((i) => i.id === "5")?.status, "done");
+		assert.equal(items.find((i) => i.id === "4")?.status, "blocked");
+		assert.equal(items.find((i) => i.id === "3")?.status, "in-progress");
+	});
+
+	it("listItems and getItem share id/status/deps/priority/deferred for the same issue", async () => {
+		const issue = {
+			number: 42,
+			title: "Shared",
+			body: "Depends on: #1\nPriority: high\n",
+			state: "OPEN",
+			labels: [{ name: "autopilot" }, { name: "deferred" }, { name: "priority:high" }],
+		};
+		const { run } = makeStub({
+			routes: [
+				{ match: (a) => a[0] === "issue" && a[1] === "list", stdout: JSON.stringify([issue]) },
+				{ match: (a) => a[0] === "issue" && a[1] === "view", stdout: JSON.stringify(issue) },
+			],
+		});
+		const r = mk({ repo: "/tmp", ghRun: run });
+		const listed = (await r.listItems())[0];
+		const got = await r.getItem("42");
+		assert.ok(got);
+		assert.equal(listed.id, got.id);
+		assert.equal(listed.status, got.status);
+		assert.equal(listed.deps, got.deps);
+		assert.equal(listed.priority, got.priority);
+		assert.equal(listed.deferred, got.deferred);
+		assert.equal(got.body, issue.body);
+		assert.ok(got.labels?.includes("deferred"));
+	});
+});
+
+describe("GitHubIssuesRoadmap.createItem — priority labels", () => {
+	it("adds priority:high with deferred and body marker", async () => {
+		const { run, calls } = makeStub({
+			routes: [{ match: (a) => a[0] === "issue" && a[1] === "create", stdout: "https://github.com/acme/widgets/issues/99\n" }],
+		});
+		const r = mk({ repo: "/tmp", ghRun: run });
+		const created = await r.createItem({ title: "Hi", priority: "high", deferred: true, deps: ["#1"] });
+		assert.equal(created.id, "99");
+		const args = calls[0].args;
+		assert.ok(args.includes("priority:high"));
+		assert.ok(args.includes("deferred"));
+		assert.ok(args.includes("autopilot"));
+		const bodyIdx = args.indexOf("--body");
+		assert.match(args[bodyIdx + 1], /Priority: high/);
+		assert.match(args[bodyIdx + 1], /Depends on: #1/);
+	});
+
+	it("adds priority:normal when requested", async () => {
+		const { run, calls } = makeStub({
+			routes: [{ match: (a) => a[1] === "create", stdout: "https://github.com/acme/widgets/issues/7\n" }],
+		});
+		const r = mk({ repo: "/tmp", ghRun: run });
+		await r.createItem({ title: "N", priority: "normal" });
+		const args = calls[0].args;
+		assert.ok(args.includes("priority:normal"));
+		assert.ok(!args.includes("priority:high"));
+		const bodyIdx = args.indexOf("--body");
+		assert.match(args[bodyIdx + 1], /Priority: normal/);
+	});
+
+	it("omits both priority labels when priority is omitted", async () => {
+		const { run, calls } = makeStub({
+			routes: [{ match: (a) => a[1] === "create", stdout: "https://github.com/acme/widgets/issues/8\n" }],
+		});
+		const r = mk({ repo: "/tmp", ghRun: run });
+		await r.createItem({ title: "Plain" });
+		const args = calls[0].args;
+		assert.ok(!args.includes("priority:high"));
+		assert.ok(!args.includes("priority:normal"));
+		const bodyIdx = args.indexOf("--body");
+		assert.ok(!/Priority:/.test(args[bodyIdx + 1]));
+	});
+});
+
+describe("GitHubIssuesRoadmap.backfillPriorityLabels", () => {
+	it("labels only body-high issues that lack priority:high", async () => {
+		const issues = [
+			{ number: 1, title: "already high", body: "Priority: high\n", state: "OPEN", labels: [{ name: "autopilot" }, { name: "priority:high" }] },
+			{ number: 2, title: "needs label", body: "Priority: high\n", state: "OPEN", labels: [{ name: "autopilot" }] },
+			{ number: 3, title: "closed needs", body: "  Priority: HIGH  \n", state: "CLOSED", labels: [{ name: "autopilot" }] },
+			{ number: 4, title: "no marker", body: "Priority: normal\n", state: "OPEN", labels: [{ name: "autopilot" }] },
+		];
+		const { run, calls } = makeStub({
+			routes: [{ match: (a) => a[0] === "issue" && a[1] === "list", stdout: JSON.stringify(issues) }],
+		});
+		const r = mk({ repo: "/tmp", ghRun: run });
+		const result = await r.backfillPriorityLabels();
+		assert.deepEqual(result, { scanned: 4, labeled: 2, conflicts: [] });
+		const edits = calls.filter((c) => c.args[1] === "edit");
+		assert.equal(edits.length, 2);
+		assert.ok(edits.some((c) => c.args.includes("2") && c.args.includes("priority:high")));
+		assert.ok(edits.some((c) => c.args.includes("3") && c.args.includes("priority:high")));
+		const listArgs = calls.find((c) => c.args[1] === "list")!.args;
+		assert.ok(listArgs.includes("--state") && listArgs[listArgs.indexOf("--state") + 1] === "all");
+		assert.ok(listArgs.includes("--limit") && listArgs[listArgs.indexOf("--limit") + 1] === "200");
+	});
+
+	it("fail-closed on priority:normal conflicts — zero edits, conflict ids", async () => {
+		const issues = [
+			{ number: 10, title: "conflict", body: "Priority: high\n", state: "OPEN", labels: [{ name: "autopilot" }, { name: "priority:normal" }] },
+			{ number: 11, title: "would label", body: "Priority: high\n", state: "OPEN", labels: [{ name: "autopilot" }] },
+		];
+		const { run, calls } = makeStub({
+			routes: [{ match: (a) => a[1] === "list", stdout: JSON.stringify(issues) }],
+		});
+		const r = mk({ repo: "/tmp", ghRun: run });
+		const result = await r.backfillPriorityLabels();
+		assert.deepEqual(result, { scanned: 2, labeled: 0, conflicts: ["10"] });
+		assert.equal(calls.filter((c) => c.args[1] === "edit").length, 0);
+	});
+
+	it("second converged run performs no edits", async () => {
+		const issues = [{ number: 2, title: "done", body: "Priority: high\n", state: "OPEN", labels: [{ name: "autopilot" }, { name: "priority:high" }] }];
+		const { run, calls } = makeStub({
+			routes: [{ match: (a) => a[1] === "list", stdout: JSON.stringify(issues) }],
+		});
+		const r = mk({ repo: "/tmp", ghRun: run });
+		const result = await r.backfillPriorityLabels();
+		assert.deepEqual(result, { scanned: 1, labeled: 0, conflicts: [] });
+		assert.equal(calls.filter((c) => c.args[1] === "edit").length, 0);
 	});
 });
 

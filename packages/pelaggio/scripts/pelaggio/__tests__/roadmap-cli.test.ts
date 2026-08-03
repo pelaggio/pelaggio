@@ -202,4 +202,79 @@ describe("roadmap-cli", () => {
 		assert.match(res.stderr, /--format checkbox\|table/);
 		assert.equal(existsSync(resolve(localRepo, "docs/roadmap-new-track.md")), false);
 	});
+
+	it("next ranks by priority then FIFO and excludes deferred", async () => {
+		const calls = { list: 0, claim: 0 };
+		// list order becomes fifoOrdinal; mirrors GitHub ascending issue numbers after sort.
+		setRoadmapFactory(() =>
+			stubRoadmap(
+				[
+					{ id: "10", title: "Older normal", deps: "—", sourceRef: "acme#10", status: "open", priority: 2 },
+					{ id: "15", title: "Deferred high", deps: "—", sourceRef: "acme#15", status: "open", priority: 1, deferred: true },
+					{ id: "20", title: "Eligible high", deps: "—", sourceRef: "acme#20", status: "open", priority: 1 },
+					{ id: "30", title: "Unlabeled normal", deps: "—", sourceRef: "acme#30", status: "open", priority: 2 },
+				],
+				calls,
+			),
+		);
+		const res = await captureStdout(() => main(["next", "--json"]));
+		assert.equal(res.code, 0);
+		const parsed = JSON.parse(res.stdout);
+		assert.deepEqual(
+			parsed.candidates.map(({ item }: { item: { id: string } }) => item.id),
+			["20", "10", "30"],
+		);
+		assert.equal(parsed.candidates[0].item.priority, 1);
+		assert.equal(parsed.candidates[2].item.priority, 2);
+		const deferredVerdict = parsed.verdicts.find((v: { id: string }) => v.id === "15");
+		assert.equal(deferredVerdict.reason, "deferred");
+		assert.equal(deferredVerdict.eligible, false);
+		assert.equal(parsed.verdicts.length, 4);
+		assert.deepEqual(calls, { list: 1, claim: 0 });
+	});
+
+	it("backfill-priority-labels rejects unsupported sources", async () => {
+		const res = await captureStdout(() => main(["backfill-priority-labels"]));
+		assert.equal(res.code, 1);
+		assert.match(res.stderr, /not supported.*markdown/i);
+	});
+
+	it("backfill-priority-labels dispatches supported source and exits 0 on success", async () => {
+		const base = stubRoadmap([], { list: 0, claim: 0 });
+		const backfillCalls: number[] = [];
+		setRoadmapFactory(() => ({
+			...base,
+			name: "github-issues",
+			async backfillPriorityLabels() {
+				backfillCalls.push(1);
+				return { scanned: 5, labeled: 2, conflicts: [] };
+			},
+		}));
+		const res = await captureStdout(() => main(["backfill-priority-labels", "--json"]));
+		assert.equal(res.code, 0);
+		assert.deepEqual(JSON.parse(res.stdout), { scanned: 5, labeled: 2, conflicts: [] });
+		assert.equal(backfillCalls.length, 1);
+	});
+
+	it("backfill-priority-labels exits 1 on conflicts with JSON payload", async () => {
+		const base = stubRoadmap([], { list: 0, claim: 0 });
+		setRoadmapFactory(() => ({
+			...base,
+			name: "github-issues",
+			async backfillPriorityLabels() {
+				return { scanned: 3, labeled: 0, conflicts: ["10", "12"] };
+			},
+		}));
+		const res = await captureStdout(() => main(["backfill-priority-labels", "--json"]));
+		assert.equal(res.code, 1);
+		const parsed = JSON.parse(res.stdout);
+		assert.deepEqual(parsed.conflicts, ["10", "12"]);
+		assert.equal(parsed.labeled, 0);
+	});
+
+	it("help lists backfill-priority-labels", async () => {
+		const res = await captureStdout(() => main(["--help"]));
+		assert.equal(res.code, 0);
+		assert.match(res.stdout, /backfill-priority-labels/);
+	});
 });

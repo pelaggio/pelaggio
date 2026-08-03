@@ -16,7 +16,7 @@ All roadmap lookups go through `npx pelaggio roadmap ...`. The CLI dispatches to
 
 ## Discover items
 
-Run `npx pelaggio roadmap list --json` to get the open set (each item has `id`, `title`, `deps`, `sourceRef`, `status`).
+Run `npx pelaggio roadmap list --json` to get the open set (each item has `id`, `title`, `deps`, `sourceRef`, `status`, and optionally typed curation fields such as `priority` and `deferred`).
 
 Claimed items arrive pre-marked: the adapter reports them as `status === "in-progress"` (markdown: a `feat/<id>` branch exists; github/linear: the server-side claim marker). Do NOT re-derive claims from `git branch --list` prose — the adapter is the single source.
 
@@ -28,14 +28,14 @@ Parse `$ARGUMENTS` (may be empty).
 - `unknown` (exit 2) → report which source was queried and emit `pick-result: unknown-id`.
 - `done` → report it and emit `pick-result: already-done`.
 - `blocked` → **stop immediately** and report "⚠ {ID} is blocked: {blockedReason or deps text}. Cannot pick a blocked item." Do not create a branch or worktree. Emit `pick-result: blocked`.
-- `open` → proceed to Claim.
+- `open` → proceed to Claim. An open item with `deferred: true` is still claimable on this explicit-ID path (operator override of automatic curation).
 - `in-progress` → a cycle (or stale branch) holds the claim: report it and go to the reuse flow below (ask whether to reuse the existing worktree or pick a different item; emit `pick-result: worktree-exists`). Never attempt a fresh claim on an in-progress item — it deterministically exits 3.
 
-**`/pick next`** (argument is exactly "next", no topic) — run `npx pelaggio roadmap next --json`. Parse the `{ candidates: [{ item, verdict }], verdicts: [...] }` envelope and claim candidates in their returned order. **Immediately auto-claim the first candidate — do NOT ask for confirmation, do NOT list alternatives, do NOT wait for user input.** If `candidates` is empty, emit `pick-result: queue-empty`.
+**`/pick next`** (argument is exactly "next", no topic) — run `npx pelaggio roadmap next --json`. Parse the `{ candidates: [{ item, verdict }], verdicts: [...] }` envelope and claim candidates in their returned order. Deferred items appear only as non-eligible verdicts (`reason: "deferred"`) and never in `candidates`. **Immediately auto-claim the first candidate — do NOT ask for confirmation, do NOT list alternatives, do NOT wait for user input.** If `candidates` is empty (including an all-deferred set), emit `pick-result: queue-empty`.
 
 **`/pick next web-sync`** (argument is "next" followed by a topic) — run `npx pelaggio roadmap next --topic "web-sync" --json` and consume the same ordered envelope. Emit `pick-result: queue-empty` if `candidates` is empty.
 
-**`/pick`** (no argument) — show all items from `roadmap list --json` grouped by source (use the `sourceRef` field). Mark blocked items but don't suggest them. Suggest a best unblocked pick. Ask user to confirm.
+**`/pick`** (no argument) — show all items from `roadmap list --json` grouped by source (use the `sourceRef` field). Mark blocked items and items with `deferred: true` but do not recommend them. Suggest a best unblocked, non-deferred pick. Ask user to confirm.
 
 If the `feat/<id-lower>-*` branch already exists, report it, ask whether to reuse or pick a different item, and emit `pick-result: worktree-exists`.
 

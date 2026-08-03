@@ -6,6 +6,7 @@ import { type GithubRoadmapConfig, type LinearRoadmapConfig, ROADMAP_SOURCE_NAME
 
 export { BD_PRIORITY_HIGH, BD_PRIORITY_NORMAL, BD_TIMEOUT_MS, type BdRunner, BeadsRoadmap, defaultBdRun, isBeadsItemId, parseBdJson, resolveBeadsStoreRoot } from "./beads.js";
 export { AlreadyClaimedError } from "./git-claim.js";
+export { defaultGhRun, GH_PRIORITY_HIGH, GH_PRIORITY_NORMAL, type GhRunner, GitHubIssuesRoadmap, parseGhJson, projectGhIssue } from "./github-issues.js";
 export {
 	type CreateItemOpts,
 	type GithubRoadmapConfig,
@@ -19,13 +20,14 @@ export {
 	type MarkdownRoadmapFormat,
 	PLAN_LOCATIONS,
 	type PlanLocation,
+	type PriorityLabelBackfillResult,
 	ROADMAP_SOURCE_NAMES,
 	type RoadmapItem,
 	type RoadmapItemStatus,
 	type RoadmapSource,
 	type RoadmapSourceName,
 } from "./types.js";
-export { GitHubIssuesRoadmap, LinearRoadmap, MarkdownRoadmap };
+export { LinearRoadmap, MarkdownRoadmap };
 
 export function getRoadmapSource(name: RoadmapSourceName, opts: { repo: string; github?: GithubRoadmapConfig; linear?: LinearRoadmapConfig }): RoadmapSource {
 	switch (name) {
