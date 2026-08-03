@@ -102,7 +102,9 @@ export function collectLoggedAssistedByIdentities(itemId: string, logPath = LOG_
 	try {
 		const lines = readFileSync(logPath, "utf-8").trim().split("\n").filter(Boolean);
 		for (let lineIndex = lines.length - 1; lineIndex >= 0; lineIndex--) {
-			const entry: unknown = JSON.parse(lines[lineIndex]);
+			const line = lines[lineIndex];
+			if (line === undefined) continue;
+			const entry: unknown = JSON.parse(line);
 			if (!entry || typeof entry !== "object") continue;
 			const record = entry as Record<string, unknown>;
 			if (typeof record.item !== "string" || record.item.toUpperCase() !== itemId.toUpperCase()) continue;
@@ -144,12 +146,12 @@ function dedupeIdentities(identities: readonly AssistedByIdentity[]): AssistedBy
 
 function parseAssistedByLine(line: string): AssistedByIdentity | null {
 	const m = line.match(/^\s*Assisted-by:\s*(.+?)\s*<([^>]+)>\s*$/i);
-	if (!m) return null;
+	if (!m?.[1] || !m[2]) return null;
 	return { name: m[1].trim(), email: m[2].trim() };
 }
 
 function parseCoAuthoredByLine(line: string): AssistedByIdentity | null {
 	const m = line.match(/^\s*Co-Authored-By:\s*(.+?)\s*<([^>]+)>\s*$/i);
-	if (!m) return null;
+	if (!m?.[1] || !m[2]) return null;
 	return { name: m[1].trim(), email: m[2].trim() };
 }
