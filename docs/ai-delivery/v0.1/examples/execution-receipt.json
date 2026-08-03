@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "kind": "effects-manifest",
+  "challengeDigest": "3f2e1d0c9b8a7968574635241302f1e0d9c8b7a6958473625140f3e2d1c0b9a8",
+  "itemId": "188",
+  "runId": "cycle-1-188",
+  "step": "plan",
+  "attempt": 1,
+  "worktree": "feat/issue-188",
+  "preGit": {
+    "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "branch": "feat/issue-188"
+  },
+  "postGit": {
+    "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "branch": "feat/issue-188"
+  },
+  "provider": "claude",
+  "model": "claude-sonnet-4-6",
+  "issuedAt": "2026-08-03T12:00:00.000Z",
+  "completedAt": "2026-08-03T12:00:01.000Z",
+  "manifestDigest": "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809",
+  "dispatch": {
+    "outcome": "completed",
+    "effectKinds": ["checkpoint", "plan.publish"]
+  }
+}

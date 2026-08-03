@@ -6,6 +6,18 @@ Status values are `default-taken`, `resolved`, or `resolved→ADR-nnnn`. Source 
 
 | Decision | Status | Chosen/leaning | Alternatives | Source | Date |
 | --- | --- | --- | --- | --- | --- |
+| #187 delivery scope | default-taken | require signing, Rekor proof, durable git-authoritative predicate persistence, and effects-manifest capture in this item | formally re-charter #187 as unsigned-format dogfooding and create separate signing/transport items | https://github.com/pelaggio/pelaggio/issues/187 | 2026-08-03 |
+<!-- decision:608e638096add659 -->
+| review evidence binding | default-taken | preserve and hash the effects-manifest `reviewedSha` evidence before successful dispatch deletes it | approximate the reviewed revision from shipping HEAD | https://github.com/pelaggio/pelaggio/issues/187 | 2026-08-03 |
+<!-- decision:700d33d59f09e7f2 -->
+| headless transport | default-taken | opencode run --format json | opencode acp (deferred), interactive --prompt path | https://github.com/pelaggio/pelaggio/issues/137 | 2026-08-03 |
+<!-- decision:fa39d3166646a124 -->
+| isolation claim | default-taken | empty isolation array | claim workspace-write without evidence | https://github.com/pelaggio/pelaggio/issues/137 | 2026-08-03 |
+<!-- decision:eda67e0faafea80c -->
+| OPENCODE_PERMISSION scope | default-taken | allow-all via child-only buildAgentEnv extra | narrower map, unset | https://github.com/pelaggio/pelaggio/issues/137 | 2026-08-03 |
+<!-- decision:7ad3a1001f95caf6 -->
+| default authoring seats | default-taken | do not auto-add opencode | fourth default reviewer | https://github.com/pelaggio/pelaggio/issues/137 | 2026-08-03 |
+<!-- decision:087b11c8d1d32ca2 -->
 | Deliver the tactical registry, diff-time revalidation, compensating semantic hook, lifecycle, and tidy sweep in one cycle | default-taken | one cohesive security slice | split cleanup/diagnostics or hook hardening into follow-ups, temporarily shipping an incomplete threat-model boundary | https://github.com/pelaggio/pelaggio/issues/369 | 2026-08-03 |
 <!-- decision:dfa4f740d1df65a1 -->
 | Observe the SDK child PID through the SDK's documented custom spawn seam | default-taken | a behavior-preserving local spawn adapter plus typed callback; capture pid from ChildProcess (not SpawnedProcess) | record the harness PID (cannot satisfy cwd binding), scrape the process table, or omit Linux binding | https://github.com/pelaggio/pelaggio/issues/369 | 2026-08-03 |

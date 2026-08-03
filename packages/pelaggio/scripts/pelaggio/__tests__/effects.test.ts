@@ -5,7 +5,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
 import { dispatchStepEffects, type EffectsDispatchContext, EffectsManifestError, effectManifestPath, loadAndValidateEffectsManifest, writeEffectsManifest } from "../effects.js";
+import { digestManifestBytes, executionReceiptPath } from "../execution-receipt.js";
 import { allCommitMessages, makeMockRoadmap, makeTempGitRepo } from "./mocks.js";
+
+const FIXED_CHALLENGE = new Uint8Array(32).fill(7);
 
 function baseContext(cwd = mkdtempSync(join(tmpdir(), "pelaggio-effects-test-"))): EffectsDispatchContext {
 	return {
@@ -17,6 +20,11 @@ function baseContext(cwd = mkdtempSync(join(tmpdir(), "pelaggio-effects-test-"))
 		preSha: null,
 		roadmap: makeMockRoadmap(),
 		log: () => {},
+		challenge: FIXED_CHALLENGE,
+		provider: "claude",
+		model: "test-model",
+		observeGit: () => ({ worktree: "test-wt", headSha: "abc123", branch: "feat/test" }),
+		now: () => "2026-08-03T12:00:00.000Z",
 	};
 }
 
@@ -25,12 +33,14 @@ describe("effects manifest validation", () => {
 		const ctx = baseContext();
 		writeEffectsManifest(ctx, [{ kind: "checkpoint", label: "plan" }, { kind: "plan.publish" }]);
 
-		const manifest = loadAndValidateEffectsManifest(ctx);
+		const { manifest, rawText } = loadAndValidateEffectsManifest(ctx);
 
 		assert.equal(manifest.runId, ctx.runId);
 		assert.equal(manifest.itemId, ctx.itemId);
 		assert.equal(manifest.step, "plan");
 		assert.deepEqual(manifest.effects, [{ kind: "checkpoint", label: "plan" }, { kind: "plan.publish" }]);
+		assert.equal(typeof rawText, "string");
+		assert.ok(rawText.includes('"schemaVersion": 1'));
 	});
 
 	it("rejects mismatched provenance", () => {
@@ -159,13 +169,14 @@ describe("review.Verdict / review.Escalation effects (#337)", () => {
 		ctx.log = (msg) => logs.push(msg);
 		writeEffectsManifest(ctx, [verdictEffect, escalationEffect]);
 
-		const manifest = loadAndValidateEffectsManifest(ctx);
+		const { manifest } = loadAndValidateEffectsManifest(ctx);
 		assert.equal(manifest.effects.length, 2);
 		assert.equal(manifest.effects[0]?.kind, "review.Verdict");
 		assert.equal(manifest.effects[1]?.kind, "review.Escalation");
 
-		await dispatchStepEffects(ctx);
+		const result = await dispatchStepEffects(ctx);
 		assert.equal(existsSync(effectManifestPath(ctx)), false);
+		assert.ok(result.receipt);
 		assert.ok(logs.some((l) => l.includes("review.Verdict")));
 		assert.ok(logs.some((l) => l.includes("review.Escalation")));
 	});
@@ -265,11 +276,13 @@ describe("effects dispatch", () => {
 		});
 		writeEffectsManifest(ctx, [{ kind: "checkpoint", label: "plan" }, { kind: "plan.publish" }]);
 
-		await dispatchStepEffects(ctx);
+		const result = await dispatchStepEffects(ctx);
 
 		assert.equal(existsSync(effectManifestPath(ctx)), false);
 		assert.deepEqual(publishCalls, [{ body: "# Plan\nbody", id: "TOOL-99", worktree: ctx.cwd }]);
 		assert.ok(allCommitMessages(ctx.cwd).includes("wip: pelaggio plan"));
+		assert.ok(result.receipt);
+		assert.ok(existsSync(join(ctx.cwd, result.receipt!.path)));
 	});
 
 	it("treats a plan.publish failure as best-effort (#98 parity), deleting the manifest", async () => {
@@ -382,8 +395,89 @@ describe("effects dispatch", () => {
 
 			assert.equal(result.appendText, prUrl);
 			assert.equal(existsSync(effectManifestPath(ctx)), false);
+			assert.ok(result.receipt);
 		} finally {
 			process.env.PATH = savedPath;
 		}
+	});
+});
+
+describe("effects execution receipt (#188)", () => {
+	it("writes the receipt before deleting the manifest and digests exact source bytes", async () => {
+		const ctx = baseContext(makeTempGitRepo());
+		writeFileSync(join(ctx.cwd, ".gitignore"), ".dev/\n");
+		writeEffectsManifest(ctx, [{ kind: "checkpoint", label: "plan" }]);
+		const rawBefore = readFileSync(effectManifestPath(ctx), "utf-8");
+		const expectedDigest = digestManifestBytes(rawBefore);
+
+		const result = await dispatchStepEffects(ctx);
+
+		assert.ok(result.receipt);
+		assert.equal(existsSync(effectManifestPath(ctx)), false);
+		const receiptAbs = join(ctx.cwd, result.receipt!.path);
+		assert.ok(existsSync(receiptAbs));
+		const receipt = JSON.parse(readFileSync(receiptAbs, "utf-8")) as {
+			manifestDigest: string;
+			dispatch: { outcome: string; effectKinds: string[] };
+			provider: string;
+			model: string;
+			preGit: { headSha: string | null };
+			postGit: { headSha: string | null };
+		};
+		assert.equal(receipt.manifestDigest, expectedDigest);
+		assert.deepEqual(receipt.dispatch, { outcome: "completed", effectKinds: ["checkpoint"] });
+		assert.equal(receipt.provider, "claude");
+		assert.equal(receipt.model, "test-model");
+		assert.equal(receipt.preGit.headSha, null);
+		assert.equal(receipt.postGit.headSha, "abc123");
+	});
+
+	it("retains the manifest when receipt production fails", async () => {
+		// plan.publish is best-effort (no plan file → no throw); receipt fails on short challenge.
+		const ctx = baseContext();
+		ctx.challenge = new Uint8Array(16); // wrong length → receipt_failed
+		writeEffectsManifest(ctx, [{ kind: "plan.publish" }]);
+
+		await assert.rejects(
+			() => dispatchStepEffects(ctx),
+			(err) => err instanceof EffectsManifestError && err.code === "receipt_failed",
+		);
+		assert.equal(existsSync(effectManifestPath(ctx)), true);
+		assert.equal(existsSync(executionReceiptPath(ctx.cwd, ctx.runId, ctx.step, ctx.attempt)), false);
+	});
+
+	it("retains the manifest and writes no receipt when a handler fails", async () => {
+		const ctx = baseContext();
+		ctx.roadmap = makeMockRoadmap({
+			resolvePlanPath: () => {
+				throw new Error("boom");
+			},
+		});
+		writeEffectsManifest(ctx, [{ kind: "plan.publish" }]);
+
+		await assert.rejects(
+			() => dispatchStepEffects(ctx),
+			(err) => err instanceof EffectsManifestError && err.code === "effect_failed",
+		);
+		assert.equal(existsSync(effectManifestPath(ctx)), true);
+		assert.equal(existsSync(executionReceiptPath(ctx.cwd, ctx.runId, ctx.step, ctx.attempt)), false);
+	});
+
+	it("records ordered effectKinds from the validated manifest", async () => {
+		const ctx = baseContext(makeTempGitRepo());
+		const planPath = `${ctx.cwd}/docs/plans/tool-99.md`;
+		mkdirSync(dirname(planPath), { recursive: true });
+		writeFileSync(planPath, "# Plan\n");
+		ctx.roadmap = makeMockRoadmap({
+			resolvePlanPath: () => planPath,
+			async publishPlan() {},
+		});
+		writeEffectsManifest(ctx, [{ kind: "checkpoint", label: "plan" }, { kind: "plan.publish" }]);
+
+		const result = await dispatchStepEffects(ctx);
+		const receipt = JSON.parse(readFileSync(join(ctx.cwd, result.receipt!.path), "utf-8")) as {
+			dispatch: { effectKinds: string[] };
+		};
+		assert.deepEqual(receipt.dispatch.effectKinds, ["checkpoint", "plan.publish"]);
 	});
 });

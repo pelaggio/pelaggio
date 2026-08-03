@@ -44,7 +44,19 @@ Schema conformance proves only that fields have this shape. It does not prove th
 
 Producers MUST minimize data and MUST NOT embed prompts, model outputs, secrets, credentials, unrestricted logs, or personal seat labels. They SHOULD prefer digests and access-controlled locators. Provider session identifiers SHOULD be omitted unless their disclosure is necessary and approved.
 
-Once correctly signed, this object is an attributable, tamper-evident claim about supplied content. A signature alone does not prove an AI call occurred, reviewers were independent, tests ran, policy was correct, evidence is fresh, or replay is impossible. [ADR-0018](../../decisions/0018-in-toto-attestation-envelope.md) describes target-state deterministic gate assertions. This issue ships their format only; evidence binding and enforcement remain future work.
+Once correctly signed, this object is an attributable, tamper-evident claim about supplied content. A signature alone does not prove an AI call occurred, reviewers were independent, tests ran, policy was correct, evidence is fresh, or replay is impossible. [ADR-0018](../../decisions/0018-in-toto-attestation-envelope.md) describes target-state deterministic gate assertions. The v0.1 predicate format is shipped; signing, upload, and merge-gate enforcement remain separate work.
+
+### Effects-manifest evidence and execution receipts
+
+An `effects-manifest` evidence entry **MAY** reference a harness-issued [execution receipt](./execution-receipt.schema.json) produced after successful effects dispatch (#188):
+
+- Evidence `digest.sha256` MUST be the SHA-256 of the **execution receipt file bytes** (the durable artifact a consumer opens).
+- The receipt embeds `manifestDigest`: the domain-separated SHA-256 of the **pre-delete effects-manifest file bytes**.
+- Evidence `uri` MAY be a worktree-relative or access-controlled locator of the receipt (for example `.dev/execution-receipts/{runId}/{step}-{attempt}.json`).
+
+An execution receipt proves what the local Pelaggio harness accepted and dispatched at one typed boundary (handlers completed inside the process; exact manifest bytes and Git revision bindings at dispatch time). It does **not** prove that a model performed opaque tool work, that a provider identity is cryptographically authenticated, that CI ran on a trusted runner, that tests were relevant, or that the host is uncompromised. A per-cycle challenge prevents accidental cross-run substitution and lets an online verifier reject a receipt that does not answer its expected challenge; by itself a self-issued nonce is **not** global replay protection. Without provider-issued evidence, durable verifier state, or a TEE, a compromised host can forge or replay the entire record.
+
+Gate-assertion binding, one-time challenge enforcement at merge, and trusted-runner identity remain target-state follow-ups. Do not treat the receipt producer as shipping autonomous-merge condition (2) of ADR-0015.
 
 Signing, transparency logging, and forge upload are transport choices outside v0.1. Consumers MUST verify signature, identity, subject, predicate type, evidence, and freshness for their context.
 

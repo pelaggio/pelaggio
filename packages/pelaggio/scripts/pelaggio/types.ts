@@ -46,7 +46,19 @@ export interface ReviewResolution {
  * Structured effects-manifest failure codes. Inlined (not imported from effects.ts) so
  * types.ts stays type-only and free of a cycle with effects.ts → Step.
  */
-export type EffectsErrorCode = "missing_manifest" | "invalid_manifest" | "provenance_mismatch" | "unknown_effect_kind" | "effect_failed";
+export type EffectsErrorCode = "missing_manifest" | "invalid_manifest" | "provenance_mismatch" | "unknown_effect_kind" | "effect_failed" | "receipt_failed";
+
+/**
+ * Descriptor for a harness-issued execution receipt written under
+ * `.dev/execution-receipts/`. Path is worktree-relative; sha256 digests the
+ * exact on-disk receipt file bytes (evidence-registry identity for
+ * `effects-manifest` entries).
+ */
+export interface ExecutionReceiptDescriptor {
+	/** Worktree-relative path, e.g. `.dev/execution-receipts/{runId}/{step}-{attempt}.json` */
+	path: string;
+	sha256: string;
+}
 
 export interface StepResult {
 	ok: boolean;
@@ -119,6 +131,11 @@ export interface StepLog {
 	/** Observe-only stall heuristic — the step ended in a question / offer-to-continue. Telemetry only; never fails the step. */
 	stalledAsk?: boolean;
 	decisions?: Decision[];
+	/**
+	 * Descriptor for the execution receipt written after successful effects
+	 * dispatch (#188). Optional for legacy log compatibility.
+	 */
+	executionReceipt?: ExecutionReceiptDescriptor;
 }
 
 export interface CycleDriverProvenance {
@@ -147,6 +164,17 @@ export interface CycleProvenance {
 	versions: CycleVersionProvenance;
 	prUrl?: string;
 	unavailable?: string[];
+	/**
+	 * Domain-separated digest of the per-cycle challenge held in process memory
+	 * only (#188). Never the raw challenge bytes. Optional for legacy logs.
+	 */
+	challengeDigest?: string;
+	/**
+	 * Descriptors for every execution receipt written during this cycle
+	 * (ordinary steps + aggregate authoring-review attempt 0). Optional for
+	 * legacy log compatibility.
+	 */
+	executionReceipts?: ExecutionReceiptDescriptor[];
 }
 
 // ── Log entries (read from .dev/pelaggio-log.jsonl) ───────────────────
@@ -168,7 +196,7 @@ export interface CycleLogEntry {
 	parkReason?: string | null;
 	shipwrecked?: boolean;
 	bookkeepingWarnings?: string[];
-	/** Additive execution receipt. Optional only for legacy log compatibility. */
+	/** Additive cycle provenance. Optional only for legacy log compatibility. */
 	provenance?: CycleProvenance;
 }
 
