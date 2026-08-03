@@ -1008,6 +1008,10 @@ describe("parsePickResult", () => {
 		assert.equal(parsePickResult("pick-result: queue-empty"), "queue-empty");
 	});
 
+	it("parses stale-quarantined (#217)", () => {
+		assert.equal(parsePickResult("pick-result: stale-quarantined"), "stale-quarantined");
+	});
+
 	it("last occurrence wins", () => {
 		const text = "pick-result: queue-empty\nsome summary...\npick-result: claimed\n";
 		assert.equal(parsePickResult(text), "claimed");

@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { createClaimWorkspace } from "./git-claim.js";
 import type { CreateItemOpts, GithubRoadmapConfig, ItemStatus, MarkDoneContext, PlanLocation, PriorityLabelBackfillResult, RoadmapItem, RoadmapItemStatus, RoadmapSource, RoadmapSourceName } from "./types.js";
+import { isScope, type Scope } from "./types.js";
 
 const PLAN_MARKER = "<!-- pelaggio-plan -->";
 
@@ -65,6 +66,7 @@ export function projectGhIssue(
 	else if (labels.includes("in-progress")) status = "in-progress";
 
 	const priority = labels.includes(LABEL_PRIORITY_HIGH) ? GH_PRIORITY_HIGH : GH_PRIORITY_NORMAL;
+	const scope = extractScope(it.body ?? "", labels);
 	const item: RoadmapItemStatus = {
 		id: String(it.number),
 		title: it.title,
@@ -72,6 +74,7 @@ export function projectGhIssue(
 		sourceRef: `${ghRepo}#${it.number}`,
 		status,
 		priority,
+		...(scope ? { scope } : {}),
 	};
 	if (labels.includes(LABEL_DEFERRED)) item.deferred = true;
 	if (opts?.includeBodyLabels) {
@@ -383,6 +386,15 @@ export function parseGhJson<T>(stdout: string, shapeOk: (v: unknown) => boolean)
 function extractDeps(body: string): string {
 	const m = body.match(/^\s*Depends on:\s*(.+)$/m);
 	return m ? m[1].trim() : "";
+}
+
+function extractScope(body: string, labels: readonly string[]): Scope | undefined {
+	for (const label of labels) {
+		const value = label.match(/^scope[\s:/-]*(xs|s|m|l|xl)$/i)?.[1]?.toUpperCase();
+		if (isScope(value)) return value;
+	}
+	const value = body.match(/^\s*Scope:\s*(XS|S|M|L|XL)\b/im)?.[1]?.toUpperCase();
+	return isScope(value) ? value : undefined;
 }
 
 function kebab(s: string): string {
