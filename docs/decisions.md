@@ -7,6 +7,10 @@ Status values are `default-taken`, `resolved`, or `resolved→ADR-nnnn`. Source 
 | Decision | Status | Chosen/leaning | Alternatives | Source | Date |
 | --- | --- | --- | --- | --- | --- |
 | behavior for malformed or unreadable state lock content | default-taken | fail closed with an actionable error | delete it as stale; add a force-start option | https://github.com/pelaggio/pelaggio/issues/43 | 2026-08-03 |
+<!-- decision:66edfdd237bbb068 -->
+| residue lock whose PID equals process.pid | default-taken | reclaim as stale (classic PID-file self-match) | treat as live and refuse start; require operator delete | https://github.com/pelaggio/pelaggio/issues/43 | 2026-08-03 |
+<!-- decision:bea896c0611b3a4b -->
+| behavior for malformed or unreadable state lock content | default-taken | fail closed with an actionable error | delete it as stale; add a force-start option | https://github.com/pelaggio/pelaggio/issues/43 | 2026-08-03 |
 <!-- decision:e4fe006eadd9945f -->
 | expose the one-time priority migration as an idempotent roadmap CLI capability | default-taken | add a GitHub-backed `backfill-priority-labels` command with a typed optional adapter capability | mutate during reads; use an ad-hoc shell script; retain body markers as runtime truth | https://github.com/pelaggio/pelaggio/issues/362 | 2026-08-03 |
 <!-- decision:bc8fbfb7e06d6ec7 -->
