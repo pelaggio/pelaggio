@@ -5,8 +5,11 @@ roadmap:
     # Roadmap/pickup label = the autonomous MODE ("autopilot"), not the product — kept deliberately.
     label: autopilot
     plan-location: issue-comment
+# auto-merge-pr queues `gh pr merge --auto`; branch protection requires `ci`
+# (pinned to Actions) + `review` (unpinned, posted by the local subscription
+# sweep). Supervision is retrospective — no admin bypass. See docs/pr-review.md.
 ship:
-  target: pull-request
+  target: auto-merge-pr
 revise:
   local: true
 # Review gate runs on the local subscription (via #84), not the metered CI key.
