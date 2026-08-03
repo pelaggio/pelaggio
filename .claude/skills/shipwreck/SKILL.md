@@ -79,7 +79,7 @@ Staged changes from `git reset --soft` need a commit:
 git commit -m "$(cat <<'EOF'
 {type}: {description} ({ITEM_ID})
 
-Co-Authored-By: Claude <noreply@anthropic.com>
+Assisted-by: Claude <noreply@anthropic.com>
 EOF
 )"
 ```

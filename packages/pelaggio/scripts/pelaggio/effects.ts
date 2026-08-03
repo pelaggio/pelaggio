@@ -86,6 +86,7 @@ export type EffectsManifestErrorCode = "missing_manifest" | "invalid_manifest" |
 export interface EffectsDispatchContext extends EffectsContext {
 	roadmap: RoadmapSource;
 	log: (msg: string) => void;
+	assistedByProviders?: ProviderName[];
 	/** 32-byte challenge for this cycle; required for receipt production. */
 	challenge: Uint8Array;
 	provider: ProviderName;
@@ -149,7 +150,7 @@ const EFFECT_HANDLERS: { [K in ImplementedEffect["kind"]]: EffectHandler<K> } = 
 	async "ship.ShipDecision"(effect, ctx) {
 		if (effect.target === "direct-push") throw new EffectsManifestError("unknown_effect_kind", "ship.ShipDecision is not implemented for direct-push");
 		if (effect.itemId !== ctx.itemId) throw new EffectsManifestError("provenance_mismatch", `ship decision itemId ${effect.itemId} does not match ${ctx.itemId}`);
-		const result = await runShipPrEffects({ cwd: ctx.cwd, itemId: ctx.itemId, decision: effect }, { log: ctx.log });
+		const result = await runShipPrEffects({ cwd: ctx.cwd, itemId: ctx.itemId, decision: effect }, { log: ctx.log, assistedByProviders: ctx.assistedByProviders });
 		return { appendText: result.prUrl };
 	},
 	// Validate-and-log attestation only: durable review records / escalations stay on the

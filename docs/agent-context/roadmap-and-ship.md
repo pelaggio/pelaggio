@@ -50,6 +50,14 @@ Open items that are already implemented or obsolete used to sit in the pickable 
 
 Skill bodies branch on the `--target` argument; don't hardcode merge logic in TS. `/shipwreck` recovery only runs for `direct-push` — PR modes never merge in-session, so a ship failure there is reported as-is.
 
+### Assisted-by trailers (lightweight provenance, #189)
+
+Every landed ship commit carries an always-on `Assisted-by: <Name> <email>` trailer for the AI provider(s) that authored the change. This is the lightweight, git-native provenance tier — forensic and always present, not a signed attestation and not a merge gate (those are #186–188).
+
+- **PR / auto-merge-pr:** `ship/pr-effects.ts` stamps trailers on the harness squash commit. Realized providers are collected from successful authorship steps in `.dev/pelaggio-log.jsonl` for the item; when the log has none, the default is Claude (`noreply@anthropic.com`). AI-shaped `Co-Authored-By` lines for the same noreply identities are stripped so the commit does not double-claim.
+- **direct-push:** the `/ship` skill body stamps the trailer on the agent-owned squash (same format).
+- Prefer `Assisted-by` over `Co-Authored-By`: the model assists; DCO `Signed-off-by` remains the human author identity.
+
 ## Direct-Push Bookkeeping
 
 For `direct-push`, the agent-owned `ship` step ends at the merge (squash → merge into local `main` → post-merge verify → STOP, emitting `ship-merged: <id>`). Everything after — recovering stray `MAIN_REPO` changes as a commit (**never discard**), `roadmap.markDone`, `roadmap.archivePlan`, the single `git push origin main`, worktree cleanup, and claim-branch delete — runs in `pipeline.ts` via `runShipBookkeeping()` (`ship/bookkeeping.ts`) as **zero-turn, idempotent, best-effort** deterministic tail work. It is not a pipeline `STEP` (no `STEPS`/`BUDGETS`/… entry — deterministic tail work like `/shipwreck` recovery).

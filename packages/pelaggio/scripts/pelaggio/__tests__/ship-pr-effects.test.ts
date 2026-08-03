@@ -226,6 +226,11 @@ describe("runShipPrEffects", () => {
 
 		assert.equal(result.prUrl, PR_URL);
 		assert.ok(ex.calls.includes("git push -u origin HEAD"));
+		// Always-on Assisted-by trailer (#189) on the harness squash commit.
+		const commit = ex.calls.find((c) => c.startsWith("git commit "));
+		assert.ok(commit, "expected a git commit call");
+		assert.match(commit, /Assisted-by: Claude <noreply@anthropic\.com>/);
+		assert.ok(!/Co-Authored-By:/i.test(commit), "must not stamp AI Co-Authored-By");
 		assert.deepEqual(
 			gh.calls.map((args) => args.slice(0, 2)),
 			[
@@ -233,6 +238,21 @@ describe("runShipPrEffects", () => {
 				["pr", "create"],
 			],
 		);
+	});
+
+	it("stamps the providers realized in the current cycle before it is logged", async () => {
+		const ex = makeExec();
+		const gh = makeGh([
+			{ match: ["pr", "list"], stdout: "[]" },
+			{ match: ["pr", "create"], stdout: `${PR_URL}\n` },
+		]);
+
+		await runShipPrEffects({ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision() }, { exec: ex.exec, gh: gh.gh, log: () => {}, assistedByProviders: ["codex", "grok"] });
+
+		const commit = ex.calls.find((call) => call.startsWith("git commit ")) ?? "";
+		assert.match(commit, /Assisted-by: Codex <noreply@openai\.com>/);
+		assert.match(commit, /Assisted-by: Grok <noreply@x\.ai>/);
+		assert.ok(!commit.includes("Assisted-by: Claude"));
 	});
 
 	it("updates and reuses an existing PR by head branch", async () => {

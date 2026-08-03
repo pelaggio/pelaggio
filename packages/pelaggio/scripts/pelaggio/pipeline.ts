@@ -559,12 +559,15 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 					}
 					if (resolvedEffects !== undefined) {
 						try {
+							const authorshipSteps = new Set(["plan", "implement", "shakedown-plan", "shakedown-code", "ship"]);
+							const assistedByProviders = [...steps.filter((entry) => entry.ok && authorshipSteps.has(entry.name) && entry.provider).map((entry) => entry.provider!), ...(authorshipSteps.has(name) ? [realized.provider] : [])];
 							const realizedProvider = realized.provider;
 							const realizedModel = realized.provider === "codex" ? (realized.codexModel ?? "default") : (realized.model ?? "default");
 							const effectsResult = await dispatchStepEffects({
 								...ctx,
 								roadmap,
 								log,
+								assistedByProviders,
 								challenge: cycleChallenge,
 								provider: realizedProvider,
 								model: realizedModel,
