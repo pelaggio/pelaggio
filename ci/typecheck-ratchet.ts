@@ -307,6 +307,8 @@ export function parseArgs(argv: string[]): { baseRef?: string; help?: boolean } 
 	const out: { baseRef?: string; help?: boolean } = {};
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
+		// pnpm forwards the literal `--` separator (`pnpm typecheck:ratchet -- --base-ref ...`).
+		if (arg === "--") continue;
 		if (arg === "--help" || arg === "-h") {
 			out.help = true;
 			continue;
