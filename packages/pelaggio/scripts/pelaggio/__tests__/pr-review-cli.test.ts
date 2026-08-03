@@ -106,6 +106,12 @@ async function runCli(
 		return next;
 	};
 	const restoreDeps = setPrReviewDepsForTests({
+		// Hermetic pool: a single claude reviewer + claude verifier. Without this the gate
+		// resolves drivers from the host repo's .pelaggio.yml, so editing pelaggio's own
+		// review config silently changes fan-out width and breaks every queued-result test.
+		reviewDrivers: [driver("claude")],
+		verifySettings: driver("claude"),
+		policy: reviewPolicy(),
 		execFileSync,
 		runStep,
 		upsertComment: (_pr, body) => comments.push(body),
@@ -298,6 +304,9 @@ describe("pr-review CLI aggregation", () => {
 			return result();
 		};
 		const review = await runPrReviewGate({
+			// Hermetic pool — see the runCli deps pin.
+			reviewDrivers: [driver("claude")],
+			verifySettings: driver("claude"),
 			pr: "1",
 			parkSignal,
 			policy: reviewPolicy({ maxPasses: 1, budgetCap: 40, providerDiversity: "off" }),
@@ -331,6 +340,10 @@ describe("pr-review CLI aggregation", () => {
 		};
 
 		const review = await runPrReviewGate({
+			// Hermetic pool — see the runCli deps pin.
+			reviewDrivers: [driver("claude")],
+			verifySettings: driver("claude"),
+			policy: reviewPolicy(),
 			pr: "123",
 			cwd: "/trusted/main",
 			diffCwd: "/tmp/pr-head",
@@ -415,6 +428,9 @@ describe("pr-review CLI aggregation", () => {
 			result(), // must NOT be consumed — the park short-circuits the convergence loop
 		];
 		const review = await runPrReviewGate({
+			// Hermetic pool — see the runCli deps pin.
+			reviewDrivers: [driver("claude")],
+			verifySettings: driver("claude"),
 			pr: "1",
 			policy: reviewPolicy({ maxPasses: 3, budgetCap: 30, providerDiversity: "off" }),
 			execFileSync: ((_: string, args: readonly string[]) => (args.includes("--name-only") ? "docs/a.md\n" : "+docs")) as typeof import("node:child_process").execFileSync,
@@ -440,6 +456,9 @@ describe("pr-review CLI aggregation", () => {
 			result(), // must NOT be consumed
 		];
 		const review = await runPrReviewGate({
+			// Hermetic pool — see the runCli deps pin.
+			reviewDrivers: [driver("claude")],
+			verifySettings: driver("claude"),
 			pr: "1",
 			policy: reviewPolicy({ maxPasses: 2, budgetCap: 30, providerDiversity: "off" }),
 			execFileSync: ((_: string, args: readonly string[]) => (args.includes("--name-only") ? "docs/a.md\n" : "+docs")) as typeof import("node:child_process").execFileSync,
@@ -475,6 +494,9 @@ describe("pr-review CLI aggregation", () => {
 		];
 		const calls: string[] = [];
 		const review = await runPrReviewGate({
+			// Hermetic pool — see the runCli deps pin.
+			reviewDrivers: [driver("claude")],
+			verifySettings: driver("claude"),
 			pr: "1",
 			policy: reviewPolicy({ maxPasses: 2, budgetCap: 20, providerDiversity: "off" }),
 			execFileSync: ((_: string, args: readonly string[]) => (args.includes("--name-only") ? "docs/a.md\n" : "+docs")) as typeof import("node:child_process").execFileSync,
@@ -499,6 +521,9 @@ describe("pr-review CLI aggregation", () => {
 			verification([{ candidateId: "C1", decision: "survives", rationale: "Still confirmed." }]),
 		];
 		const review = await runPrReviewGate({
+			// Hermetic pool — see the runCli deps pin.
+			reviewDrivers: [driver("claude")],
+			verifySettings: driver("claude"),
 			pr: "1",
 			policy: reviewPolicy({ maxPasses: 3, budgetCap: 30, providerDiversity: "off" }),
 			execFileSync: ((_: string, args: readonly string[]) => (args.includes("--name-only") ? "docs/a.md\n" : "+docs")) as typeof import("node:child_process").execFileSync,
@@ -515,16 +540,22 @@ describe("pr-review CLI aggregation", () => {
 
 	it("provider requirement and budget preflight block before agent work", async () => {
 		let calls = 0;
+		// Pool and verifier are pinned: both preflight checks are properties of the gate,
+		// not of whatever .pelaggio.yml the host repo happens to ship.
 		const common = {
 			pr: "1",
+			reviewDrivers: [driver("claude")],
+			verifySettings: driver("claude"),
 			execFileSync: plainDiffExec(),
 			runStep: async () => {
 				calls++;
 				return result();
 			},
 		};
+		// Sole review driver equals the verifier → reject before any agent work.
 		const diversity = await runPrReviewGate({ ...common, policy: reviewPolicy({ maxPasses: 1, budgetCap: 20, providerDiversity: "require" }) });
 		assert.equal(diversity.breakerReason, "provider-diversity");
+		// 1 label × 1 driver × ($5 review + $5 verify) = $10 reserved, over a $9 cap.
 		const budget = await runPrReviewGate({ ...common, policy: reviewPolicy({ maxPasses: 1, budgetCap: 9, providerDiversity: "off" }) });
 		assert.equal(budget.breakerReason, "budget");
 		assert.equal(calls, 0);
@@ -789,7 +820,8 @@ describe("pr-review CLI aggregation", () => {
 		};
 		const mixed = await runPrReviewGate({
 			pr: "1",
-			reviewDrivers: twoDrivers, // claude+codex; default verify is claude — at least one differs
+			reviewDrivers: twoDrivers, // claude+codex vs a claude verifier — at least one differs
+			verifySettings: driver("claude"),
 			policy: reviewPolicy({ maxPasses: 1, budgetCap: 40, providerDiversity: "require" }),
 			execFileSync: plainDiffExec(),
 			runStep,
@@ -802,11 +834,12 @@ describe("pr-review CLI aggregation", () => {
 			pr: "1",
 			reviewDrivers: [driver("claude"), driver("claude", { model: "claude-sonnet-5" })],
 			// Note: config rejects duplicate providers in pools; the DI seam can still pass same-provider rows.
+			verifySettings: driver("claude"),
 			policy: reviewPolicy({ maxPasses: 1, budgetCap: 40, providerDiversity: "require" }),
 			execFileSync: plainDiffExec(),
 			runStep,
 		});
-		// Default pr-verify inherits claude — every review driver equals verifier → reject.
+		// Every review driver equals the pinned verifier → reject.
 		assert.equal(same.breakerReason, "provider-diversity");
 		assert.equal(same.agreement, "invalid");
 		assert.equal(calls, 0);
