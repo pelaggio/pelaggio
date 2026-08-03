@@ -2,9 +2,19 @@ import { execSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { createClaimWorkspace } from "./git-claim.js";
-import type { CreateItemOpts, GithubRoadmapConfig, ItemStatus, MarkDoneContext, PlanLocation, RoadmapItem, RoadmapItemStatus, RoadmapSource, RoadmapSourceName } from "./types.js";
+import type { CreateItemOpts, GithubRoadmapConfig, ItemStatus, MarkDoneContext, PlanLocation, PriorityLabelBackfillResult, RoadmapItem, RoadmapItemStatus, RoadmapSource, RoadmapSourceName } from "./types.js";
 
 const PLAN_MARKER = "<!-- pelaggio-plan -->";
+
+/** GitHub numeric priority tiers (lower = more urgent). Match BD_PRIORITY_* so FIFO policy ranks consistently. */
+export const GH_PRIORITY_HIGH = 1;
+export const GH_PRIORITY_NORMAL = 2;
+
+const LABEL_PRIORITY_HIGH = "priority:high";
+const LABEL_PRIORITY_NORMAL = "priority:normal";
+const LABEL_DEFERRED = "deferred";
+/** Line-level, case-insensitive body marker used only by the priority-label migration. */
+const BODY_PRIORITY_HIGH_RE = /^\s*Priority:\s*high\s*$/im;
 
 export type GhRunner = (args: string[]) => { stdout: string; stderr: string; status: number };
 
@@ -29,6 +39,46 @@ interface GhIssueComments {
 
 interface GhIssueTitle {
 	title: string;
+}
+
+/**
+ * Pure projector from a GitHub issue payload to `RoadmapItemStatus`.
+ * Labels are the sole runtime source of truth for priority and deferred;
+ * body text is never consulted here (migration is the only body→label path).
+ * Every projected item materializes `priority` as 1 or 2 so DEFAULT_PRIORITY=0 cannot invert ranking.
+ */
+export function projectGhIssue(
+	it: {
+		number: number;
+		title: string;
+		body?: string;
+		state?: string;
+		labels?: { name: string }[];
+	},
+	ghRepo: string,
+	opts?: { includeBodyLabels?: boolean },
+): RoadmapItemStatus {
+	const labels = (it.labels ?? []).map((l) => l.name);
+	let status: ItemStatus = "open";
+	if ((it.state ?? "").toLowerCase() === "closed") status = "done";
+	else if (labels.includes("blocked")) status = "blocked";
+	else if (labels.includes("in-progress")) status = "in-progress";
+
+	const priority = labels.includes(LABEL_PRIORITY_HIGH) ? GH_PRIORITY_HIGH : GH_PRIORITY_NORMAL;
+	const item: RoadmapItemStatus = {
+		id: String(it.number),
+		title: it.title,
+		deps: extractDeps(it.body ?? ""),
+		sourceRef: `${ghRepo}#${it.number}`,
+		status,
+		priority,
+	};
+	if (labels.includes(LABEL_DEFERRED)) item.deferred = true;
+	if (opts?.includeBodyLabels) {
+		item.body = it.body ?? "";
+		item.labels = labels;
+	}
+	return item;
 }
 
 export class GitHubIssuesRoadmap implements RoadmapSource {
@@ -61,41 +111,17 @@ export class GitHubIssuesRoadmap implements RoadmapSource {
 		const state = opts?.includeDone ? "all" : "open";
 		const raw = this.runGh(["issue", "list", "--repo", this.ghRepo, "--label", this.label, "--state", state, "--json", "number,title,body,labels,state", "--limit", "200"]);
 		const issues = parseGhJson<GhIssueSummary[]>(raw, (v) => Array.isArray(v));
-		return issues.map((it) => {
-			const labels = (it.labels ?? []).map((l) => l.name);
-			let status: ItemStatus = "open";
-			if ((it.state ?? "").toLowerCase() === "closed") status = "done";
-			else if (labels.includes("blocked")) status = "blocked";
-			else if (labels.includes("in-progress")) status = "in-progress";
-			const item: RoadmapItemStatus = {
-				id: String(it.number),
-				title: it.title,
-				deps: extractDeps(it.body ?? ""),
-				sourceRef: `${this.ghRepo}#${it.number}`,
-				status,
-			};
-			return item;
-		});
+		// FIFO within the newest-200 fetch window: ascending issue number so equal-priority
+		// ties drain oldest-first. Does not convert the window into the 200 oldest open issues.
+		const sorted = [...issues].sort((a, b) => a.number - b.number);
+		return sorted.map((it) => projectGhIssue(it, this.ghRepo));
 	}
 
 	async getItem(id: string): Promise<RoadmapItemStatus | null> {
 		try {
 			const raw = this.runGh(["issue", "view", id, "--repo", this.ghRepo, "--json", "number,title,body,labels,state"]);
 			const it = parseGhJson<GhIssueSummary>(raw, (v) => isPlainObject(v) && typeof (v as { number?: unknown }).number === "number");
-			const labels = (it.labels ?? []).map((l) => l.name);
-			let status: ItemStatus = "open";
-			if ((it.state ?? "").toLowerCase() === "closed") status = "done";
-			else if (labels.includes("blocked")) status = "blocked";
-			else if (labels.includes("in-progress")) status = "in-progress";
-			return {
-				id: String(it.number),
-				title: it.title,
-				deps: extractDeps(it.body ?? ""),
-				sourceRef: `${this.ghRepo}#${it.number}`,
-				status,
-				body: it.body ?? "",
-				labels,
-			};
+			return projectGhIssue(it, this.ghRepo, { includeBodyLabels: true });
 		} catch (e) {
 			const msg = e instanceof Error ? e.message : String(e);
 			if (/not found|could not resolve/i.test(msg)) return null;
@@ -139,7 +165,10 @@ export class GitHubIssuesRoadmap implements RoadmapSource {
 		if (opts.priority) bodyParts.push(`Priority: ${opts.priority}`);
 		const body = bodyParts.join("\n");
 		const args = ["issue", "create", "--repo", this.ghRepo, "--title", opts.title, "--label", this.label, "--body", body];
-		if (opts.deferred) args.push("--label", "deferred");
+		if (opts.deferred) args.push("--label", LABEL_DEFERRED);
+		// Labels are the runtime SoT for priority; body marker stays as human-readable prose.
+		if (opts.priority === "high") args.push("--label", LABEL_PRIORITY_HIGH);
+		else if (opts.priority === "normal") args.push("--label", LABEL_PRIORITY_NORMAL);
 		const rawUrl = this.runGh(args).trim();
 		// `gh issue create` prints the URL on stdout.
 		const m = rawUrl.match(/\/issues\/(\d+)/);
@@ -150,6 +179,41 @@ export class GitHubIssuesRoadmap implements RoadmapSource {
 			deps: deps.join(", "),
 			sourceRef: `${this.ghRepo}#${number}`,
 		};
+	}
+
+	/**
+	 * Idempotent migration: issues whose body has a line-level `Priority: high` marker
+	 * but lack the `priority:high` label get that label. Fail-closed on conflicts
+	 * (body-high + already `priority:normal`) — no partial edits.
+	 */
+	async backfillPriorityLabels(): Promise<PriorityLabelBackfillResult> {
+		const raw = this.runGh(["issue", "list", "--repo", this.ghRepo, "--label", this.label, "--state", "all", "--json", "number,title,body,labels,state", "--limit", "200"]);
+		const issues = parseGhJson<GhIssueSummary[]>(raw, (v) => Array.isArray(v));
+		const scanned = issues.length;
+		const toLabel: number[] = [];
+		const conflicts: string[] = [];
+
+		for (const it of issues) {
+			const body = it.body ?? "";
+			if (!BODY_PRIORITY_HIGH_RE.test(body)) continue;
+			const labels = (it.labels ?? []).map((l) => l.name);
+			if (labels.includes(LABEL_PRIORITY_HIGH)) continue;
+			if (labels.includes(LABEL_PRIORITY_NORMAL)) {
+				conflicts.push(String(it.number));
+				continue;
+			}
+			toLabel.push(it.number);
+		}
+
+		// Fail-closed: any conflict aborts the whole migration with zero edits.
+		if (conflicts.length > 0) {
+			return { scanned, labeled: 0, conflicts };
+		}
+
+		for (const n of toLabel) {
+			this.runGh(["issue", "edit", String(n), "--repo", this.ghRepo, "--add-label", LABEL_PRIORITY_HIGH]);
+		}
+		return { scanned, labeled: toLabel.length, conflicts: [] };
 	}
 
 	async archivePlan(_id: string): Promise<void> {

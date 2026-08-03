@@ -102,7 +102,7 @@ export function buildFlowSnapshot(items: readonly RoadmapItemStatus[], topic?: s
 		}
 		const unresolved = remainder.replace(/[\s,;|()[\]]+/g, " ").trim();
 		const unresolvedDependencies = unresolved === "" || unresolved === "—" || /^(?:none|n\/a|-)$/.test(unresolved.toLowerCase()) ? [] : [unresolved];
-		const priority = (item as RoadmapItemStatus & { priority?: unknown }).priority;
+		const priority = item.priority;
 		return {
 			item,
 			dependencies,
@@ -261,6 +261,24 @@ async function cmdSource(args: Args): Promise<number> {
 	return 0;
 }
 
+async function cmdBackfillPriorityLabels(args: Args): Promise<number> {
+	const roadmap = makeRoadmap();
+	if (typeof roadmap.backfillPriorityLabels !== "function") {
+		process.stderr.write(`backfill-priority-labels is not supported by the "${roadmap.name}" roadmap source\n`);
+		return 1;
+	}
+	const result = await roadmap.backfillPriorityLabels();
+	if (args.flags.json) {
+		printJson(result);
+	} else if (result.conflicts.length > 0) {
+		process.stderr.write(`conflicts (body Priority: high + label priority:normal): ${result.conflicts.join(", ")}\n`);
+		process.stderr.write(`scanned=${result.scanned} labeled=0 — resolve conflicts, then re-run\n`);
+	} else {
+		process.stdout.write(`scanned=${result.scanned} labeled=${result.labeled}\n`);
+	}
+	return result.conflicts.length > 0 ? 1 : 0;
+}
+
 const HANDLERS: Record<string, (args: Args) => Promise<number>> = {
 	list: cmdList,
 	next: cmdNext,
@@ -271,6 +289,7 @@ const HANDLERS: Record<string, (args: Args) => Promise<number>> = {
 	"mark-done": cmdMarkDone,
 	"create-item": cmdCreateItem,
 	"archive-plan": cmdArchivePlan,
+	"backfill-priority-labels": cmdBackfillPriorityLabels,
 	source: cmdSource,
 };
 

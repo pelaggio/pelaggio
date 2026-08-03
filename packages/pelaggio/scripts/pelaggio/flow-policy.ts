@@ -26,7 +26,7 @@ export interface FlowSnapshot {
 	readonly topic?: string;
 }
 
-export type FlowVerdictReason = "eligible" | "status" | "not-native-ready" | "dependency" | "unresolved-dependency" | "topic";
+export type FlowVerdictReason = "eligible" | "status" | "deferred" | "not-native-ready" | "dependency" | "unresolved-dependency" | "topic";
 
 export interface FlowItemVerdict {
 	readonly id: string;
@@ -67,6 +67,11 @@ function excludedStatus(status: RoadmapItemStatus["status"]): boolean {
 function verdict(candidate: FlowCandidate, snapshot: FlowSnapshot, nativeReadyIds: ReadonlySet<string>): FlowItemVerdict {
 	if (excludedStatus(candidate.item.status)) {
 		return { id: candidate.item.id, eligible: false, reason: "status", blockers: [candidate.item.status] };
+	}
+	// Deferred is curated backlog (not dependency failure). After status so done/blocked/
+	// in-progress deferred items still surface as `status` for explicit-pick display.
+	if (candidate.item.deferred === true) {
+		return { id: candidate.item.id, eligible: false, reason: "deferred", blockers: [] };
 	}
 	if (snapshot.readiness.kind === "native" && !nativeReadyIds.has(normalize(candidate.item.id))) {
 		return { id: candidate.item.id, eligible: false, reason: "not-native-ready", blockers: [] };

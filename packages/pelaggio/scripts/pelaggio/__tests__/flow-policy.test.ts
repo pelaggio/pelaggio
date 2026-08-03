@@ -79,6 +79,37 @@ describe("FifoPolicy.evaluate", () => {
 		);
 		assert.deepEqual(evaluate(candidates, { topic: "missing" }).candidates, []);
 	});
+
+	it("excludes deferred items from candidates with reason deferred", () => {
+		const candidates = [candidate("ready", { fifoOrdinal: 0 }), candidate("later", { item: { ...candidate("later").item, deferred: true }, fifoOrdinal: 1 })];
+		const result = evaluate(candidates);
+		assert.deepEqual(
+			result.candidates.map(({ item }) => item.id),
+			["ready"],
+		);
+		assert.equal(result.verdicts.find((v) => v.id === "later")?.reason, "deferred");
+		assert.equal(result.verdicts.find((v) => v.id === "later")?.eligible, false);
+		// Deferred items remain in verdicts for display / envelope completeness.
+		assert.equal(result.verdicts.length, 2);
+	});
+
+	it("status beats deferred for done/blocked/in-progress deferred items", () => {
+		const candidates = [candidate("done-def", { item: { ...candidate("done-def").item, status: "done", deferred: true } }), candidate("block-def", { item: { ...candidate("block-def").item, status: "blocked", deferred: true } })];
+		const result = evaluate(candidates);
+		assert.deepEqual(result.candidates, []);
+		assert.deepEqual(
+			result.verdicts.map(({ reason }) => reason),
+			["status", "status"],
+		);
+	});
+
+	it("all-deferred snapshot evaluates successfully with empty candidates", () => {
+		const candidates = [candidate("a", { item: { ...candidate("a").item, deferred: true } }), candidate("b", { item: { ...candidate("b").item, deferred: true } })];
+		const result = evaluate(candidates);
+		assert.deepEqual(result.candidates, []);
+		assert.equal(result.verdicts.length, 2);
+		assert.ok(result.verdicts.every((v) => v.reason === "deferred" && !v.eligible));
+	});
 });
 
 describe("FifoPolicy.isQuickScope", () => {
