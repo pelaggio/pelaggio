@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { REPO } from "../config.js";
+import type { NotifyPayload } from "../notify.js";
 import { runOrchestrator } from "../pipeline.js";
 import { reviseFindingsPath } from "../revise-sweep.js";
 import type { GhRunner } from "../roadmap/github-issues.js";
@@ -39,6 +40,7 @@ const baseFlags: Flags = {
 	budget: "10",
 	"max-wait": "6h",
 	"dry-run": false,
+	"no-worktree": false,
 };
 
 const fakeResolveWorktree = (id: string): string => `/fake/wt-${id.toLowerCase()}`;
@@ -592,7 +594,7 @@ describe("runOrchestrator — auto-resume config", () => {
 			},
 		});
 		// Flags without --max-wait; inject config cap 1h. A 3h reset exceeds it → exit parked.
-		const flagsNoMaxWait: Flags = { cycles: "1", parallel: "1", verbose: false, trace: false, budget: "10", "dry-run": false };
+		const flagsNoMaxWait: Flags = { cycles: "1", parallel: "1", verbose: false, trace: false, budget: "10", "dry-run": false, "no-worktree": false };
 		const { exitCode } = await runOrchestrator({ ...flagsNoMaxWait, item: "X-1" }, { runPipeline, park: { maxWait: "1h" }, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });
 		assert.equal(exitCode, 1);
 		assert.equal(calls.length, 1, `expected no resume (config max-wait exceeded); got ${calls.length}`);
@@ -662,10 +664,10 @@ describe("runOrchestrator — auto-resume config", () => {
 });
 
 describe("runOrchestrator — notifications", () => {
-	type Sent = { url: string; format: string; payload: { event: string; itemId: string | null; completed: boolean; shipwrecked: boolean } };
+	type Sent = { url: string; format: string; payload: NotifyPayload };
 	function spySend() {
 		const sent: Sent[] = [];
-		const sendNotification = async (url: string, format: "json" | "ntfy", payload: Sent["payload"]) => {
+		const sendNotification = async (url: string, format: "json" | "ntfy", payload: NotifyPayload) => {
 			sent.push({ url, format, payload });
 			return true;
 		};

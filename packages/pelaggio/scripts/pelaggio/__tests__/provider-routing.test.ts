@@ -235,7 +235,9 @@ describe("resolveAuthoringReviewConfig — fixed-seat overlay", () => {
 				{ id: "grk", provider: "grok" },
 			],
 		);
-		assert.equal(result.policy.judge.model, "claude-judge");
+		const judge = result.policy.judge;
+		assert.ok(judge.provider !== "codex");
+		assert.equal(judge.model, "claude-judge");
 		const cdx = result.policy.reviewers.find((r) => r.provider === "codex");
 		assert.ok(cdx && cdx.provider === "codex" && cdx.codexModel === "gpt-review");
 	});

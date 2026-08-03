@@ -351,7 +351,8 @@ const EXAMPLE_SUMMARY = "Concise single-line summary.";
 const EXAMPLE_FINDING_MESSAGE = "Concrete single-line finding.";
 const EXAMPLE_FINDING_PATH = "src/file.ts";
 
-function isSchemaExampleFinding(finding: AuthoringReviewFinding): boolean {
+/** Works on raw or classified findings — only message/path/line are compared. */
+function isSchemaExampleFinding(finding: Pick<ReviewFinding, "message" | "path" | "line">): boolean {
 	return finding.message === EXAMPLE_FINDING_MESSAGE && finding.path === EXAMPLE_FINDING_PATH && finding.line === 1;
 }
 

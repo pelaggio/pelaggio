@@ -1,0 +1,7 @@
+{
+	"typescript": "6.0.3",
+	"packages": {
+		"pelaggio": 495,
+		"server": 125
+	}
+}

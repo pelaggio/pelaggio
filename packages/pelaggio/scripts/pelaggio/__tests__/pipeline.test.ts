@@ -52,6 +52,7 @@ const baseFlags: Flags = {
 	budget: "40",
 	"max-wait": "6h",
 	"dry-run": false,
+	"no-worktree": false,
 };
 
 function baseOpts(worktree: string): PipelineOpts {
@@ -2332,7 +2333,7 @@ describe("runPipeline — pick step", () => {
 		const { parent, repo } = makeTempRepoWithParent();
 		const parkSignal = makeParkSignal();
 		const logs: Array<Record<string, unknown>> = [];
-		const roadmap = makeMockRoadmap({ parseItemId: () => null });
+		const roadmap = makeMockRoadmap({ parseItemId: async () => null });
 		const { runStep, calls } = createMockRunStep({ pick: { ok: true, text: "claimed something\npick-result: claimed" } }, parkSignal);
 
 		const result = await runPipeline(pickOpts(), parkSignal, baseFlags, {

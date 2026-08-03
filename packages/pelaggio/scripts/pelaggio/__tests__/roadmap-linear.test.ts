@@ -81,6 +81,9 @@ function makeStub(opts: StubOpts = {}): { api: LinearApi; calls: ApiCalls } {
 			calls.getIssueComments.push(identifier);
 			return opts.comments?.[identifier] ?? [];
 		},
+		async createIssue(input) {
+			return { id: "uuid-new", identifier: "ENG-99", title: input.title };
+		},
 	};
 	return { api, calls };
 }

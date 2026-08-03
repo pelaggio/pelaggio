@@ -1,5 +1,5 @@
 import { chmod, rm } from "node:fs/promises";
-import { createServer, type IncomingHttpHeaders, type IncomingMessage, type RequestOptions, type ServerResponse } from "node:http";
+import { createServer, type IncomingHttpHeaders, type IncomingMessage, type OutgoingHttpHeaders, type RequestOptions, type ServerResponse } from "node:http";
 import { request as httpsRequest } from "node:https";
 
 export type EgressAuth = { kind: "key"; env: string; header: "authorization" | "x-api-key"; scheme?: "Bearer" } | { kind: "transparent" };
@@ -248,7 +248,7 @@ export async function startEgressBroker(options: StartEgressBrokerOptions, deps:
 				(!Number.isSafeInteger(actualInput) || !Number.isSafeInteger(actualOutput) || (actualInput as number) < 0 || (actualOutput as number) < 0 || (actualInput as number) > input || (actualOutput as number) > output)
 			)
 				throw new Error("unaccountable upstream usage");
-			const safeHeaders: Record<string, string | readonly string[]> = {};
+			const safeHeaders: OutgoingHttpHeaders = {};
 			for (const [name, value] of Object.entries(result.headers)) if (!HOP_HEADERS.has(name) && !SENSITIVE_RESPONSE_HEADERS.has(name) && value !== undefined) safeHeaders[name] = value;
 			response.writeHead(result.status, safeHeaders);
 			response.end(result.body);

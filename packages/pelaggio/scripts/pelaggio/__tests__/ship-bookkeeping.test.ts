@@ -74,7 +74,18 @@ describe("runShipBookkeeping — happy path", () => {
 		const { order, exec } = makeExecSpy();
 		const { roadmap } = makeRoadmapSpy();
 		let repairCalled = false;
-		const result = await runShipBookkeeping({ ...CTX, worktree: "/main" }, { roadmap, log: () => {}, exec, status: () => "", repairMain: () => (repairCalled = true) });
+		const result = await runShipBookkeeping(
+			{ ...CTX, worktree: "/main" },
+			{
+				roadmap,
+				log: () => {},
+				exec,
+				status: () => "",
+				repairMain: () => {
+					repairCalled = true;
+				},
+			},
+		);
 		assert.equal(repairCalled, false);
 		assert.ok(!order.some((c) => /git worktree remove/.test(c)));
 		assert.ok(order.some((c) => /git branch -d/.test(c)));

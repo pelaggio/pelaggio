@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { buildRequest, classifyEvent, formatText, NOTIFY_EVENTS, type NotifyConfig, type NotifyFormat, type NotifyPayload, notifyCycle, notifyDecision, sendNotification } from "../notify.js";
+import { buildRequest, type CycleNotifyPayload, classifyEvent, formatText, NOTIFY_EVENTS, type NotifyConfig, type NotifyFormat, type NotifyPayload, notifyCycle, notifyDecision, sendNotification } from "../notify.js";
 import { type CycleResult, RECOVERABLE_ERRORS } from "../types.js";
 
 function result(overrides: Partial<CycleResult> = {}): CycleResult {
 	return { itemId: "34", completed: false, cost: 0, ...overrides };
 }
 
-function payload(overrides: Partial<NotifyPayload> = {}): NotifyPayload {
-	const base: Omit<NotifyPayload, "text"> = {
+function payload(overrides: Partial<CycleNotifyPayload> = {}): CycleNotifyPayload {
+	const base: Omit<CycleNotifyPayload, "text"> = {
 		event: "shipped",
 		itemId: "34",
 		completed: true,
@@ -232,8 +232,10 @@ describe("notifyCycle", () => {
 		const ev = await notifyCycle(baseCfg, result({ completed: true, bookkeepingWarnings: [warning] }), "/l", { send });
 
 		assert.equal(ev, "shipped");
-		assert.deepEqual(sent[0].payload.bookkeepingWarnings, [warning]);
-		assert.match(sent[0].payload.text, /bookkeeping incomplete.*mark-done failed/);
+		const shipped = sent[0].payload;
+		assert.ok(shipped.event !== "decision");
+		assert.deepEqual(shipped.bookkeepingWarnings, [warning]);
+		assert.match(shipped.text, /bookkeeping incomplete.*mark-done failed/);
 	});
 
 	it("never throws even when the injected send throws (contract holds at the seam)", async () => {
