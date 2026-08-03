@@ -38,9 +38,32 @@ You are checked out at the PR head with full history; `origin/main` is the merge
 
 ## Mode selection
 
-If the `Arguments:` line contains `--authoring-loop`, run **Authoring-loop mode** below.
+If the `Arguments:` line contains `--document`, run **Document mode** below.
+If it contains `--authoring-loop`, run **Authoring-loop mode** below.
 If it contains `--red-team`, run **Red-team mode** below.
 Otherwise run **Standard mode**. Both modes emit the same versioned report.
+
+## Document mode
+
+This is a fresh, read-only review of a **document** (a design/plan/spec), not a branch diff. There is
+no PR, no `git diff`, and no code to run. The document is appended verbatim to this prompt under a
+`## DOCUMENT UNDER REVIEW` heading, with its `path` and `sha256`; that block is the authoritative
+artifact. You may also `Read` the path on disk and open any ADRs/docs it references, but the review is
+bound to the injected bytes — do not review a different version.
+
+Do **not** run the branch-diff inspection protocol. Instead:
+
+1. Read the full `## DOCUMENT UNDER REVIEW` block. If it is marked truncated, open the path for the
+   remainder.
+2. Read the docs, ADRs, and invariants the document depends on (e.g. `CLAUDE.md`/`AGENTS.md` and any
+   `docs/` it cites) so you can judge it against the project's actual constraints, not in a vacuum.
+3. Enumerate candidates — internal contradictions, unmet dependencies, spine/invariant violations,
+   unsupported claims, ambiguity that would mislead an implementer — then refute the weak ones against
+   what you read. Keep only what you can point at concretely in the document.
+
+Emit the same schema-v3 `AUTHORING_REVIEW_FINDINGS` block as Authoring-loop mode (evidence only; the
+harness owns effective class). A finding's `path` should be the document path when it localizes to a
+place in the document. Do not emit the CI v1 block.
 
 ## Authoring-loop mode
 

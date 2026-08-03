@@ -1,7 +1,7 @@
 import type { PersistedRun, RunStatus } from "@pelaggio/server/types";
 import { useCallback, useEffect, useState } from "react";
 import { ApiError, getRun, pauseRun, resumeRun, stopRun } from "../lib/api.js";
-import { formatDate, formatItemId, statusBadgeClass } from "../lib/format.js";
+import { formatDate, formatRunState, formatRunTitle, runStateBadgeClass } from "../lib/format.js";
 import { LogStream } from "./LogStream.js";
 
 interface RunDetailProps {
@@ -11,6 +11,8 @@ interface RunDetailProps {
 const PAUSEABLE: RunStatus[] = ["running"];
 const RESUMEABLE: RunStatus[] = ["paused", "parked"];
 const STOPPABLE: RunStatus[] = ["running", "paused"];
+const LIVE: RunStatus[] = ["running", "paused"];
+const POLL_MS = 5_000;
 
 export function RunDetail({ id }: RunDetailProps) {
 	const [run, setRun] = useState<PersistedRun | undefined>(undefined);
@@ -30,6 +32,16 @@ export function RunDetail({ id }: RunDetailProps) {
 		void refresh();
 	}, [refresh]);
 
+	// Poll while live so idle/park transitions appear without relying on sparse SSE.
+	const liveStatus = run?.status;
+	useEffect(() => {
+		if (!liveStatus || !LIVE.includes(liveStatus)) return;
+		const timer = setInterval(() => {
+			void refresh();
+		}, POLL_MS);
+		return () => clearInterval(timer);
+	}, [liveStatus, refresh]);
+
 	const act = async (label: string, fn: () => Promise<PersistedRun>) => {
 		if (!window.confirm(`${label} run ${id}?`)) return;
 		setBusy(true);
@@ -47,18 +59,23 @@ export function RunDetail({ id }: RunDetailProps) {
 	if (error && !run) return <p className="text-red-700">Error: {error}</p>;
 	if (!run) return <p className="text-slate-500">Loading…</p>;
 
+	const stateLabel = formatRunState(run.status, run.activity);
+
 	return (
 		<div className="space-y-6">
 			<header className="space-y-2">
-				<h1 className="text-2xl font-semibold">{formatItemId(run.item, run.repo)}</h1>
+				<h1 className="text-2xl font-semibold">{formatRunTitle(run)}</h1>
 				<div className="flex flex-wrap items-center gap-3 text-sm">
-					<span className={statusBadgeClass(run.status)}>{run.status}</span>
+					<span className={runStateBadgeClass(run.status, run.activity)}>{stateLabel}</span>
 					<span className="text-slate-600">
 						id: <code>{run.id}</code>
 					</span>
 					<span className="text-slate-600">
 						repo: <code>{run.repo}</code>
 					</span>
+					{run.mode && <span className="text-slate-600">mode: {run.mode}</span>}
+					{run.watchDailyBudget != null && <span className="text-slate-600">day-budget: ${run.watchDailyBudget}</span>}
+					{run.verbose === true && <span className="text-slate-600">verbose</span>}
 					{run.shipTarget && <span className="text-slate-600">ship: {run.shipTarget}</span>}
 					{run.parallel != null && <span className="text-slate-600">parallel: {run.parallel}</span>}
 					{run.cycles != null && <span className="text-slate-600">cycles: {run.cycles}</span>}

@@ -2,10 +2,16 @@ import type { ShipTargetName } from "pelaggio";
 
 export type RunStatus = "running" | "completed" | "failed" | "parked" | "paused" | "abandoned";
 
+export type ContinuousMode = "drain" | "watch";
+
+/** Live activity orthogonal to terminal process `RunStatus` (issue #83). */
+export type RunActivity = { kind: "active" } | { kind: "watch-idle"; probeAt: string } | { kind: "budget-idle"; resumeAt: string; budget: number; spent: number } | { kind: "parked"; resumeAt?: string; reason?: string };
+
 export interface PersistedRun {
 	id: string;
 	repo: string;
-	item: string;
+	/** Required for ordinary runs; omitted for continuous (drain/watch). */
+	item?: string;
 	status: RunStatus;
 	pid: number | null;
 	startedAt: string;
@@ -15,6 +21,13 @@ export interface PersistedRun {
 	shipTarget?: ShipTargetName;
 	parallel?: number;
 	cycles?: number;
+	/** Continuous launch policy — resume reconstructs argv from these fields. */
+	mode?: ContinuousMode;
+	watchDailyBudget?: number;
+	/** Opt-in; default non-verbose (omit `--verbose`). */
+	verbose?: boolean;
+	/** Live activity from flow-event tailing; cleared on terminal status. */
+	activity?: RunActivity;
 	logPath: string;
 	cwd: string;
 	resumedFrom?: string;
@@ -23,12 +36,14 @@ export interface PersistedRun {
 export interface RunSummary {
 	id: string;
 	repo: string;
-	item: string;
+	item?: string;
 	status: RunStatus;
 	startedAt: string;
 	endedAt?: string;
 	lastStep?: string;
 	lastCost?: number;
+	mode?: ContinuousMode;
+	activity?: RunActivity;
 }
 
 export interface RepoEntry {

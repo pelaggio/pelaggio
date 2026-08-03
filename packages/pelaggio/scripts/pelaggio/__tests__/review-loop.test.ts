@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { AuthoringReviewConfig } from "../config.js";
-import { type AuthoringReviewFinding, isSafetyClass, materializeAuthoringFinding, type ReviewFindingClass, SAFETY_CLASSES } from "../review/findings.js";
-import { classifyReviewOutcome, deduplicateCandidates, type ReviewCandidate, runReviewLoop } from "../review/loop.js";
+import { type AuthoringReviewFinding, isSafetyClass, type JudgeRuling, materializeAuthoringFinding, type ReviewFindingClass, SAFETY_CLASSES } from "../review/findings.js";
+import { classifyReviewDisagreement, classifyReviewOutcome, type DriverIdentity, deduplicateCandidates, type ReviewCandidate, type ReviewPassRecord, runReviewLoop } from "../review/loop.js";
 import { renderReviewRecord } from "../review/record.js";
 import { BASELINE_TAXONOMY, resolveTaxonomy } from "../review/taxonomy.js";
 import type { StepResult } from "../types.js";
@@ -606,5 +606,163 @@ describe("authoring review loop controller", () => {
 			assert.equal(result.survivors[0]?.finding.class, cls, cls);
 			assert.ok(isSafetyClass(result.survivors[0]!.finding.class));
 		}
+	});
+});
+
+describe("authoring review loop — no-revise + safety floor (#384)", () => {
+	const ok = (fullText: string): StepResult => ({ ok: true, subtype: "success", text: fullText, fullText, cost: 0, turns: 0 });
+	const findings = (raw: unknown[]) => `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 3, summary: "s", findings: raw })}\nEND_AUTHORING_REVIEW_FINDINGS`;
+	const clean = findings([]);
+	const judgeReport = (decisions: unknown[]) => `AUTHORING_REVIEW_JUDGE\n${JSON.stringify({ schemaVersion: 1, decisions })}\nEND_AUTHORING_REVIEW_JUDGE`;
+	const parkSignal = () => ({ parked: false, resetsAt: 0, limitType: "", triggerWorker: "" });
+	const noRevisePolicy: AuthoringReviewConfig = {
+		enabled: true,
+		reviewers: [{ id: "grok", provider: "grok" }],
+		judge: { id: "judge", provider: "claude" },
+		blockingBar: "must-fix",
+		maxPasses: 3,
+		maxRevisions: 4,
+		budgetCap: 1000,
+		providerDiversity: "prefer",
+	};
+
+	it("never requests an author seat — a fixable survivor hard-blocks on pass 1 (revision branch unreachable)", async () => {
+		const roles: string[] = [];
+		const result = await runReviewLoop({
+			policy: noRevisePolicy,
+			parkSignal: parkSignal(),
+			classificationContext: emptyClassification,
+			taxonomy: BASELINE_TAXONOMY,
+			mode: "no-revise",
+			// `prompts` intentionally has no `revise` key — the no-revise branch type-checks without it.
+			prompts: { review: () => "r", judge: () => "j" },
+			runSeat: async (request) => {
+				roles.push(request.role);
+				if (request.role === "judge") return ok(judgeReport([{ candidateId: "C1", decision: "survives", rationale: "revise", ruling: "fixable-blocker" }]));
+				return ok(findings([{ severity: "must-fix", message: "boom", ruleId: "pelaggio/judgment/style" }]));
+			},
+		});
+		assert.equal(result.outcome, "hard-block");
+		assert.equal(result.passes.length, 1);
+		assert.equal(roles.includes("author"), false);
+		assert.equal(result.safetyFloor, "enabled");
+	});
+
+	it("safetyFloor disabled lets the Judge refute a default-safety must-fix (no #272 retention)", async () => {
+		const result = await runReviewLoop({
+			policy: noRevisePolicy,
+			parkSignal: parkSignal(),
+			classificationContext: emptyClassification,
+			taxonomy: BASELINE_TAXONOMY,
+			mode: "no-revise",
+			safetyFloor: "disabled",
+			safetyFloorNote: "document review: code-diff path-signal floor not applied",
+			prompts: { review: () => "r", judge: () => "j" },
+			// Unmatched evidence → correctness-regression via default-safety; under the enabled floor this
+			// is retained forever, but with the floor disabled the Judge's refutation clears it.
+			runSeat: async (request) => ok(request.role === "judge" ? judgeReport([{ candidateId: "C1", decision: "refuted", rationale: "not a real blocker" }]) : findings([{ severity: "must-fix", message: "boom" }])),
+		});
+		assert.equal(result.outcome, "converged-clean");
+		assert.equal(result.survivors.length, 0);
+		assert.equal(result.safetyFloor, "disabled");
+		assert.equal(result.safetyFloorNote, "document review: code-diff path-signal floor not applied");
+		assert.equal(result.passes.at(-1)?.judge.valid, true);
+	});
+
+	it("safetyFloor disabled lets the Judge refute a security-class must-fix", async () => {
+		const result = await runReviewLoop({
+			policy: noRevisePolicy,
+			parkSignal: parkSignal(),
+			classificationContext: emptyClassification,
+			taxonomy: BASELINE_TAXONOMY,
+			mode: "no-revise",
+			safetyFloor: "disabled",
+			prompts: { review: () => "r", judge: () => "j" },
+			runSeat: async (request) =>
+				ok(
+					request.role === "judge"
+						? judgeReport([{ candidateId: "C1", decision: "refuted", rationale: "not exploitable here", class: "security-and-secrets" }])
+						: findings([{ severity: "must-fix", message: "boom", ruleId: "pelaggio/security/secret-leak" }]),
+				),
+		});
+		assert.equal(result.outcome, "converged-clean");
+		assert.equal(result.survivors.length, 0);
+	});
+
+	it("safetyFloor disabled: a Judge reclassifying a default-safety finding does not fail-close the pass (downgrade guard respects the floor)", async () => {
+		const seats = (request: { role: string }) => ok(request.role === "judge" ? judgeReport([{ candidateId: "C1", decision: "refuted", rationale: "just a doc nit", class: "judgment" }]) : findings([{ severity: "must-fix", message: "boom" }]));
+		const disabled = await runReviewLoop({
+			policy: noRevisePolicy,
+			parkSignal: parkSignal(),
+			classificationContext: emptyClassification,
+			taxonomy: BASELINE_TAXONOMY,
+			mode: "no-revise",
+			safetyFloor: "disabled",
+			prompts: { review: () => "r", judge: () => "j" },
+			runSeat: async (request) => seats(request),
+		});
+		assert.equal(disabled.passes.at(-1)?.judge.valid, true);
+		assert.equal(disabled.outcome, "converged-clean");
+		// Control: with the floor ENABLED the same safety→judgment reclassification fails closed (a
+		// harness safety class cannot be downgraded), so the Judge report is invalidated and the pass blocks.
+		const enabled = await runReviewLoop({
+			policy: noRevisePolicy,
+			parkSignal: parkSignal(),
+			classificationContext: emptyClassification,
+			taxonomy: BASELINE_TAXONOMY,
+			mode: "no-revise",
+			prompts: { review: () => "r", judge: () => "j" },
+			runSeat: async (request) => seats(request),
+		});
+		assert.equal(enabled.passes.at(-1)?.judge.valid, false);
+		assert.equal(enabled.outcome, "hard-block");
+	});
+
+	it("classifyReviewOutcome honors the safety-floor param (dissent ruling on a safety survivor)", () => {
+		const survivor = candidate("security-and-secrets");
+		const rulings = new Map<string, JudgeRuling>([["C1", "judgment-dissent"]]);
+		assert.equal(classifyReviewOutcome([survivor], [], rulings, true, 2, BASELINE_TAXONOMY, "enabled"), "hard-block");
+		assert.equal(classifyReviewOutcome([survivor], [], rulings, true, 2, BASELINE_TAXONOMY, "disabled"), "dissent");
+	});
+
+	it("classifyReviewDisagreement drops hasSafetyBlocker when the floor is disabled", () => {
+		const mkIdentity = (seatId: string, provider: DriverIdentity["provider"]): DriverIdentity => ({ role: "reviewer", seatId, provider, sessionId: `s-${seatId}` });
+		const records: ReviewPassRecord["reviewers"] = [
+			{ identity: mkIdentity("a", "grok"), ok: true, cost: 0, turns: 0, verdict: { verdict: "pass", rationale: "ok" } },
+			{ identity: mkIdentity("b", "claude"), ok: true, cost: 0, turns: 0, verdict: { verdict: "block", rationale: "no" } },
+		];
+		const cands = [candidate("correctness-regression")];
+		assert.equal(classifyReviewDisagreement(1, records, cands, BASELINE_TAXONOMY, "enabled")?.hasSafetyBlocker, true);
+		assert.equal(classifyReviewDisagreement(1, records, cands, BASELINE_TAXONOMY, "disabled")?.hasSafetyBlocker, false);
+	});
+
+	it("records diversity from reviewers + judge with no author present", async () => {
+		const met = await runReviewLoop({
+			policy: {
+				...noRevisePolicy,
+				reviewers: [
+					{ id: "grok", provider: "grok" },
+					{ id: "codex", provider: "codex" },
+					{ id: "claude", provider: "claude" },
+				],
+			},
+			parkSignal: parkSignal(),
+			classificationContext: emptyClassification,
+			taxonomy: BASELINE_TAXONOMY,
+			mode: "no-revise",
+			prompts: { review: () => "r", judge: () => "j" },
+			runSeat: async (request) => ok(request.role === "judge" ? judgeReport([]) : clean),
+		});
+		assert.deepEqual(met.diversity, { state: "met" });
+		const softened = await runReviewLoop({
+			policy: { ...noRevisePolicy, reviewers: [{ id: "grok", provider: "grok" }], judge: { id: "judge", provider: "grok" } },
+			parkSignal: parkSignal(),
+			classificationContext: emptyClassification,
+			taxonomy: BASELINE_TAXONOMY,
+			mode: "no-revise",
+			prompts: { review: () => "r", judge: () => "j" },
+			runSeat: async (request) => ok(request.role === "judge" ? judgeReport([]) : clean),
+		});
+		assert.equal(softened.diversity.state, "softened");
 	});
 });

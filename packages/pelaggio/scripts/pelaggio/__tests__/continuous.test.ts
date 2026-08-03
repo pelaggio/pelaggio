@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { continuousCycleCap, DayBudgetTracker, dayKey, freeQueueProbe, isContinuousPreset, resolveContinuousConfig } from "../continuous.js";
+import { continuousCycleCap, DayBudgetTracker, dayKey, freeQueueProbe, isContinuousPreset, nextLocalMidnightMs, resolveContinuousConfig } from "../continuous.js";
 import { DEFAULT_FLOW_POLICY } from "../flow-policy.js";
 import type { RoadmapItemStatus } from "../roadmap/types.js";
 import type { Flags } from "../types.js";
@@ -107,6 +107,27 @@ describe("resolveContinuousConfig", () => {
 			assert.match(r.message, /probe-interval/);
 		}
 	});
+
+	it("CLI --day-budget overrides defaults.dayBudget", () => {
+		const r = resolveContinuousConfig({ ...baseFlags, continuous: true, "day-budget": "9" }, { dayBudget: 25 });
+		assert.equal(r.ok, true);
+		if (!r.ok) return;
+		assert.equal(r.config?.dayBudget, 9);
+	});
+
+	it("falls back to defaults.dayBudget when CLI omits --day-budget", () => {
+		const r = resolveContinuousConfig({ ...baseFlags, continuous: true }, { dayBudget: 25 });
+		assert.equal(r.ok, true);
+		if (!r.ok) return;
+		assert.equal(r.config?.dayBudget, 25);
+	});
+
+	it("unlimited when neither CLI nor defaults set day budget", () => {
+		const r = resolveContinuousConfig({ ...baseFlags, continuous: true });
+		assert.equal(r.ok, true);
+		if (!r.ok) return;
+		assert.equal(r.config?.dayBudget, undefined);
+	});
 });
 
 describe("continuousCycleCap", () => {
@@ -157,6 +178,20 @@ describe("dayKey", () => {
 		// Use local noon to avoid timezone edge cases around midnight.
 		const d = new Date(2026, 7, 2, 12, 0, 0); // month is 0-indexed
 		assert.equal(dayKey(d.getTime()), "2026-08-02");
+	});
+});
+
+describe("nextLocalMidnightMs", () => {
+	it("returns the next local midnight after the given instant", () => {
+		const now = new Date(2026, 7, 2, 15, 30, 0).getTime();
+		const midnight = nextLocalMidnightMs(now);
+		const d = new Date(midnight);
+		assert.equal(d.getFullYear(), 2026);
+		assert.equal(d.getMonth(), 7);
+		assert.equal(d.getDate(), 3);
+		assert.equal(d.getHours(), 0);
+		assert.equal(d.getMinutes(), 0);
+		assert.ok(midnight > now);
 	});
 });
 

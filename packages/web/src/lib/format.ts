@@ -1,4 +1,4 @@
-import type { RunStatus } from "@pelaggio/server/types";
+import type { ContinuousMode, RunActivity, RunStatus } from "@pelaggio/server/types";
 
 export function formatDate(iso: string | undefined): string {
 	if (!iso) return "—";
@@ -38,6 +38,37 @@ export function formatItemId(id: string, repo: string | null | undefined): strin
 	return `${repo}#${id}`;
 }
 
+/** Title for list/detail: item id when present, else continuous mode × parallel. */
+export function formatRunTitle(run: { item?: string; mode?: ContinuousMode; parallel?: number; repo: string }): string {
+	if (run.item) return formatItemId(run.item, run.repo);
+	const mode = run.mode ?? "drain";
+	const p = run.parallel;
+	if (p != null && p > 1) return `${mode} ×${p}`;
+	return mode;
+}
+
+/**
+ * Process status wins when not `running`. Only when status is `running` decorate with activity.
+ */
+export function formatRunState(status: RunStatus, activity?: RunActivity): string {
+	if (status !== "running") return status;
+	if (!activity || activity.kind === "active") return "running";
+	if (activity.kind === "watch-idle") return "idle (watching)";
+	if (activity.kind === "budget-idle") return "budget-idled";
+	if (activity.kind === "parked") {
+		if (activity.resumeAt) {
+			const d = new Date(activity.resumeAt);
+			if (!Number.isNaN(d.getTime())) {
+				const hh = String(d.getHours()).padStart(2, "0");
+				const mm = String(d.getMinutes()).padStart(2, "0");
+				return `parked until ${hh}:${mm}`;
+			}
+		}
+		return "parked";
+	}
+	return "running";
+}
+
 const STATUS_CLASSES: Record<RunStatus, string> = {
 	running: "bg-blue-100 text-blue-800",
 	completed: "bg-green-100 text-green-800",
@@ -47,6 +78,21 @@ const STATUS_CLASSES: Record<RunStatus, string> = {
 	abandoned: "bg-zinc-200 text-zinc-700",
 };
 
+const ACTIVITY_RUNNING_CLASSES: Record<string, string> = {
+	active: STATUS_CLASSES.running,
+	"watch-idle": "bg-slate-100 text-slate-700",
+	"budget-idle": "bg-amber-100 text-amber-800",
+	parked: "bg-amber-100 text-amber-800",
+};
+
 export function statusBadgeClass(status: RunStatus): string {
 	return `inline-block rounded px-2 py-0.5 text-xs font-medium ${STATUS_CLASSES[status]}`;
+}
+
+/** Activity-aware badge class; non-running statuses keep the status map. */
+export function runStateBadgeClass(status: RunStatus, activity?: RunActivity): string {
+	if (status !== "running") return statusBadgeClass(status);
+	const kind = activity?.kind ?? "active";
+	const color = ACTIVITY_RUNNING_CLASSES[kind] ?? STATUS_CLASSES.running;
+	return `inline-block rounded px-2 py-0.5 text-xs font-medium ${color}`;
 }
