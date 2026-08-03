@@ -331,6 +331,27 @@ By default this repo posts `review` from the **local subscription sweep** (`AUTO
 
 Verify with `gh api repos/{owner}/{repo}/commits/{sha}/status` after the next push — `review` must appear, posted by the GitHub Actions app, before enabling `auto-merge-pr`. To **restore** local posting, reverse the switch (set the variable back to `AUTOPILOT_REVIEW_RUNNER=local` — *not* unset it, since an unset variable satisfies `!= 'local'` and reintroduces the double-runner race; `review.runner: local`; the secret may stay). Auto-merge is an independent, later switch (`ship.target: auto-merge-pr`) — enable it only once native `review` is confirmed posting and required in branch protection.
 
+### Alternative: local-review auto-merge (unpinned `review`)
+
+`auto-merge-pr` also works **without** the CI-key switch: keep `review.runner: local`
+and remove the *app pin* on the required `review` context (keep `ci` pinned to the
+Actions app), so the local subscription sweep's status satisfies branch protection
+directly and no `--admin` landing is ever needed:
+
+```bash
+gh api -X PATCH repos/{owner}/{repo}/branches/main/protection/required_status_checks \
+  --input - <<'EOF'
+{"strict": false, "checks": [{"context": "ci", "app_id": 15368}, {"context": "review", "app_id": -1}]}
+EOF
+```
+
+The trade-off is status-poster integrity: any credential with `statuses: write` on
+the repo can post a green `review`. That is acceptable on a solo repo where the only
+such credential is the operator's own `gh` auth; the identity-bound fix is the
+ADR-0018 attestation (#188), which restores a verifiable pin and retires this
+posture. Human supervision under this mode is retrospective (review merged PRs), per
+ADR-0015.
+
 ## Closing the loop on BLOCK (issue #60 / #76)
 
 A red `review` gate no longer just parks forever — it triggers **one** automated revision that
