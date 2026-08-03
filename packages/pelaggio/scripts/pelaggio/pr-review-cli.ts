@@ -18,7 +18,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { CONFIG, REPO, type ReviewConfig, ROADMAP_GITHUB, resolveStepSettings } from "./config.js";
 import { upsertMarkerComment } from "./github-posting.js";
-import { classifySecurityReviewDiff, expandPackagedSkill, formatReviewMetrics, type SecurityDiffSignal } from "./helpers.js";
+import { classifySecurityReviewDiff, expandPackagedSkill, formatReviewMetrics, parseWaitFlag, resolveParkReset, type SecurityDiffSignal } from "./helpers.js";
 import {
 	evaluateReviewConvergence,
 	parseReviewFindings,
@@ -71,16 +71,22 @@ export interface RunPrReviewGateOptions {
 	execFileSync?: typeof execFileSync;
 	upsertComment?: (pr: string, body: string) => void;
 	policy?: ReviewConfig;
+	/** Shared across every discovery/verify `runStep` in this gate run so a rate-limit park
+	 *  (reset time + limit type) reaches the caller. The local orchestrator passes its own signal
+	 *  so a park leaves the run parked+retryable; CI `main()` omits it (fresh private signal). */
+	parkSignal?: ParkSignal;
 }
 
 export interface PrReviewGateResult {
-	gate: "pass" | "block";
+	gate: "pass" | "block" | "park";
 	body: string;
 	cost: number;
 	costEstimated: boolean;
 	turns: number;
 	ok: boolean;
 	subtype: string;
+	/** Present iff `gate === "park"`. Reset / limit mirrored from the shared step park signal. */
+	park?: { resetsAt: number; limitType: string };
 	breakerReason?: ReviewExhaustionReason;
 	iterations?: number;
 	survivorCount?: number;
@@ -248,6 +254,30 @@ function emptyParkSignal(): ParkSignal {
 	return { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" };
 }
 
+/** A rate-limit park short-circuits the gate: the review never finished, so the gate is neither
+ *  pass nor block — it is `park` (transient), and the caller (local orchestrator) leaves the
+ *  `review` status pending and retries. Detect via the shared signal (structured rate-limit event)
+ *  or `subtype === "error_rate_limit"` (text-classified limits that never set the flag); backfill
+ *  a conservative reset (#68) for the latter so auto-resume always has a window. Returns the park
+ *  gate result, or null when this step is a real completion (pass/block). */
+function parkGateResult(signal: ParkSignal, result: StepResult, passes: readonly ReviewPass[]): PrReviewGateResult | null {
+	if (!signal.parked && result.subtype !== "error_rate_limit") return null;
+	if (!signal.parked) {
+		const resolved = resolveParkReset(0, true, "rate_limit", result.text, Date.now(), parseWaitFlag(CONFIG.park.unknownResetWait));
+		signal.parked = true;
+		signal.resetsAt = resolved.resetsAt;
+		signal.limitType = resolved.limitType;
+	}
+	const results = passes.flatMap(passResults);
+	const cost = results.reduce((sum, r) => sum + r.cost, 0);
+	const costEstimated = results.some((r) => r.costEstimated);
+	const turns = results.reduce((sum, r) => sum + r.turns, 0);
+	// Keep a fail-closed body available (CI `main()` still posts a red explanation); the local
+	// sweep discards it and leaves the pending status untouched.
+	const body = buildFailClosedComment("error_rate_limit", "Review hit a rate limit before completing, so the gate is parked for retry rather than blocking the merge.");
+	return { gate: "park", body, cost, costEstimated, turns, ok: false, subtype: "error_rate_limit", park: { resetsAt: signal.resetsAt, limitType: signal.limitType } };
+}
+
 function readSecuritySignal(opts: { execFileSync: typeof execFileSync; diffCwd: string; diffBaseRef: string; diffHeadRef: string }): SecurityDiffSignal {
 	const range = `${opts.diffBaseRef}...${opts.diffHeadRef}`;
 	const files = opts
@@ -283,10 +313,10 @@ function trustedLocalContext(opts: { diffCwd: string; diffBaseRef: string; diffH
 	].join("\n");
 }
 
-async function runReviewPass(iteration: number, label: ReviewLabel, args: string, profile: string, pr: string, opts: { cwd: string; runStep: RunStepFn; localContext: string }): Promise<ReviewPass> {
+async function runReviewPass(iteration: number, label: ReviewLabel, args: string, profile: string, pr: string, opts: { cwd: string; runStep: RunStepFn; localContext: string; parkSignal: ParkSignal }): Promise<ReviewPass> {
 	process.stderr.write(`▶ pr-review ${label}\n`);
 	const prompt = `${expandPackagedSkill("pr-review", args)}${opts.localContext}`;
-	const result = await opts.runStep("pr-review", prompt, { cwd: opts.cwd, profile, trace: false, parkSignal: emptyParkSignal(), itemId: pr }, emit);
+	const result = await opts.runStep("pr-review", prompt, { cwd: opts.cwd, profile, trace: false, parkSignal: opts.parkSignal, itemId: pr }, emit);
 	if (!result.ok) return { iteration, label, result, gate: "block", diagnostic: `Run did not complete cleanly (${result.subtype}).` };
 	try {
 		const report = parseReviewFindings(result.text);
@@ -310,7 +340,7 @@ function verificationPrompt(candidates: readonly VerificationCandidate[], localC
 	].join("\n");
 }
 
-async function runVerificationPass(pass: ReviewPass, carried: ReadonlyMap<string, ReviewFinding>, profile: string, pr: string, opts: { cwd: string; runStep: RunStepFn; localContext: string }): Promise<void> {
+async function runVerificationPass(pass: ReviewPass, carried: ReadonlyMap<string, ReviewFinding>, profile: string, pr: string, opts: { cwd: string; runStep: RunStepFn; localContext: string; parkSignal: ParkSignal }): Promise<void> {
 	if (!pass.report) return;
 	const unique = new Map(carried);
 	for (const finding of pass.report.findings.filter((finding) => finding.severity === "must-fix")) unique.set(reviewFindingFingerprint(finding), finding);
@@ -319,7 +349,7 @@ async function runVerificationPass(pass: ReviewPass, carried: ReadonlyMap<string
 	process.stderr.write(`▶ pr-verify ${pass.label}\n`);
 	let result: StepResult;
 	try {
-		result = await opts.runStep("pr-verify", verificationPrompt(candidates, opts.localContext), { cwd: opts.cwd, profile, trace: false, parkSignal: emptyParkSignal(), itemId: pr }, emit);
+		result = await opts.runStep("pr-verify", verificationPrompt(candidates, opts.localContext), { cwd: opts.cwd, profile, trace: false, parkSignal: opts.parkSignal, itemId: pr }, emit);
 	} catch (error) {
 		pass.verificationDiagnostic = `Verifier execution threw: ${error instanceof Error ? error.message : String(error)}.`;
 		pass.failureSubtype = "error_verification";
@@ -351,6 +381,9 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 	const diffHeadRef = options.diffHeadRef ?? "HEAD";
 	const runStepImpl = options.runStep ?? deps.runStep;
 	const execFileSyncImpl = options.execFileSync ?? deps.execFileSync;
+	// One signal shared across every discovery/verify step this run, so a rate-limit park (reset
+	// time + limit type) survives to the caller instead of dying in a throwaway per-pass object.
+	const signal = options.parkSignal ?? emptyParkSignal();
 	const localContext = diffCwd === cwd && diffBaseRef === "origin/main" && diffHeadRef === "HEAD" ? "" : trustedLocalContext({ diffCwd, diffBaseRef, diffHeadRef });
 	const policy = options.policy ?? CONFIG.review;
 	const reviewSettings = resolveStepSettings(CONFIG, profile, "pr-review");
@@ -389,19 +422,27 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 		const iterationPasses: ReviewPass[] = [];
 		for (const label of labels) {
 			const args = label === "standard" ? `--pr ${options.pr}` : `--pr ${options.pr} --red-team --security-reasons ${JSON.stringify(securitySignal.reasons.join(", "))}`;
+			let pass: ReviewPass;
 			try {
-				const pass = await runReviewPass(iteration, label, args, profile, options.pr, { cwd, runStep: runStepImpl, localContext });
-				iterationPasses.push(pass);
-				passes.push(pass);
+				pass = await runReviewPass(iteration, label, args, profile, options.pr, { cwd, runStep: runStepImpl, localContext, parkSignal: signal });
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				const result: StepResult = { ok: false, subtype: "error_crash", text: message, fullText: message, cost: 0, turns: 0 };
-				const pass: ReviewPass = { iteration, label, result, gate: "block", diagnostic: `Review execution threw: ${message}.`, failureSubtype: "error_crash" };
-				iterationPasses.push(pass);
-				passes.push(pass);
+				pass = { iteration, label, result, gate: "block", diagnostic: `Review execution threw: ${message}.`, failureSubtype: "error_crash" };
 			}
+			iterationPasses.push(pass);
+			passes.push(pass);
+			// A rate-limit park short-circuits the whole convergence loop (no more labels/iterations):
+			// the review is transient-incomplete, not a BLOCK. Checked after the try/catch so a park
+			// flag set on a step that then threw is still honored.
+			const parked = parkGateResult(signal, pass.result, passes);
+			if (parked) return parked;
 		}
-		for (const pass of iterationPasses) await runVerificationPass(pass, carried, profile, options.pr, { cwd, runStep: runStepImpl, localContext });
+		for (const pass of iterationPasses) {
+			await runVerificationPass(pass, carried, profile, options.pr, { cwd, runStep: runStepImpl, localContext, parkSignal: signal });
+			const parked = parkGateResult(signal, pass.verificationResult ?? pass.result, passes);
+			if (parked) return parked;
+		}
 		const resultsSoFar = passes.flatMap(passResults);
 		const actualCost = resultsSoFar.reduce((sum, result) => sum + result.cost, 0);
 		const valid = iterationPasses.length === labels.length && iterationPasses.every(passOk);
@@ -482,11 +523,15 @@ export async function main(argv: string[]): Promise<number> {
 		// must not be able to lose the only copy of a $-priced review.
 		process.stdout.write(`${review.body}\n`);
 
-		const statusPosted = deps.postStatus(review.gate, reviewedSha);
+		// CI stays fail-closed: a rate-limit park has no park loop on a one-shot GH Actions job, so
+		// it posts red and exits 1 exactly as a block does. Only the local orchestrator sweep treats
+		// `park` specially (leaves the status pending and retries).
+		const statusGate: "pass" | "block" = review.gate === "pass" ? "pass" : "block";
+		const statusPosted = deps.postStatus(statusGate, reviewedSha);
 		deps.upsertComment(pr, review.body);
 
 		process.stderr.write(`gate: ${review.gate.toUpperCase()} (ok=${review.ok})\n`);
-		return review.gate === "block" || !statusPosted ? 1 : 0;
+		return review.gate === "pass" && statusPosted ? 0 : 1;
 	} catch (e) {
 		const msg = e instanceof Error ? e.message : String(e);
 		process.stderr.write(`pr-review crashed — failing closed: ${msg}\n`);

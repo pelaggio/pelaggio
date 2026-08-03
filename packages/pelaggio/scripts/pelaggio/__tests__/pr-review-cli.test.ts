@@ -248,7 +248,7 @@ describe("pr-review CLI aggregation", () => {
 		assert.match(out.comments[0], /gate=block ok=false subtype=standard:error_diff cost=0\.00 turns=0/);
 	});
 
-	it("uses a fresh park signal for each pass", async () => {
+	it("threads one shared park signal through every pass", async () => {
 		const out = await runCli({
 			files: "packages/server/src/config.ts\n",
 			diff: "+CONTROL_PLANE_TOKEN\n",
@@ -256,9 +256,31 @@ describe("pr-review CLI aggregation", () => {
 		});
 
 		assert.equal(out.calls.length, 2);
-		assert.notEqual(out.calls[0].parkSignal, out.calls[1].parkSignal);
-		assert.deepEqual(out.calls[0].parkSignal, { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" });
-		assert.deepEqual(out.calls[1].parkSignal, { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" });
+		// One signal per gate run (not per pass), so a rate-limit park on any pass survives to the
+		// caller instead of dying in a throwaway per-pass object.
+		assert.equal(new Set(out.calls.map((call) => call.parkSignal)).size, 1, "all passes share one signal object");
+		for (const call of out.calls) assert.deepEqual(call.parkSignal, { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" });
+	});
+
+	it("threads the caller-supplied park signal, unchanged, through every pass", async () => {
+		const calls: RunCall[] = [];
+		const parkSignal: ParkSignal = { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" };
+		const runStep: RunStepFn = async (name, prompt, stepOpts) => {
+			calls.push({ name, prompt, cwd: stepOpts.cwd, parkSignal: stepOpts.parkSignal });
+			return result();
+		};
+		await runPrReviewGate({
+			pr: "1",
+			parkSignal,
+			policy: reviewPolicy({ maxPasses: 1, budgetCap: 20, providerDiversity: "off" }),
+			execFileSync: ((_: string, args: readonly string[]) => (args.includes("--name-only") ? "packages/server/src/config.ts\n" : "+CONTROL_PLANE_TOKEN\n")) as typeof import("node:child_process").execFileSync,
+			runStep,
+		});
+		assert.equal(calls.length, 2, "security-sensitive diff runs standard + red-team");
+		assert.ok(
+			calls.every((call) => call.parkSignal === parkSignal),
+			"every pass receives the caller's signal object",
+		);
 	});
 
 	it("library runner accepts trusted cwd with custom diff refs and does not post unless asked", async () => {
@@ -315,7 +337,8 @@ describe("pr-review CLI aggregation", () => {
 			out.calls.map((call) => call.name),
 			["pr-review", "pr-verify"],
 		);
-		assert.notEqual(out.calls[0].parkSignal, out.calls[1].parkSignal);
+		// The verifier is a separate runStep call, but it shares the gate's one park signal.
+		assert.equal(out.calls[0].parkSignal, out.calls[1].parkSignal);
 		assert.match(out.calls[1].prompt, /VERIFICATION_CANDIDATES/);
 		assert.match(out.calls[1].prompt, /"candidateId":"C1"/);
 		assert.match(out.calls[1].prompt, /Original message/);
@@ -343,12 +366,71 @@ describe("pr-review CLI aggregation", () => {
 	});
 
 	it("fails closed and retains candidates for invalid or failed verification", async () => {
-		for (const verifier of [result({ text: "malformed" }), verification([], { ok: false, subtype: "error_rate_limit" }), new Error("provider crashed")]) {
+		// A rate-limit verifier no longer retains-and-blocks — it parks (see the gate-park cases
+		// below). The remaining verifier failures (malformed report, thrown crash) still block.
+		for (const verifier of [result({ text: "malformed" }), new Error("provider crashed")]) {
 			const out = await runCli({ results: [result({ text: report("Candidate.", [{ severity: "must-fix", message: "Retained blocker." }]) }), verifier] });
 			assert.equal(out.code, 1);
 			assert.match(out.comments[0], /Retained blocker/);
 			assert.match(out.comments[0], /isolated verification failed; blocker retained/);
 		}
+	});
+
+	it("parks the gate on a discovery rate-limit without running further passes", async () => {
+		const calls: string[] = [];
+		const queued: StepResult[] = [
+			result({ ok: false, subtype: "error_rate_limit", cost: 0, turns: 0 }),
+			result(), // must NOT be consumed — the park short-circuits the convergence loop
+		];
+		const review = await runPrReviewGate({
+			pr: "1",
+			policy: reviewPolicy({ maxPasses: 3, budgetCap: 30, providerDiversity: "off" }),
+			execFileSync: ((_: string, args: readonly string[]) => (args.includes("--name-only") ? "docs/a.md\n" : "+docs")) as typeof import("node:child_process").execFileSync,
+			runStep: async (name) => {
+				calls.push(name);
+				const next = queued.shift();
+				assert.ok(next);
+				return next;
+			},
+		});
+		assert.equal(review.gate, "park");
+		assert.equal(review.subtype, "error_rate_limit");
+		assert.ok(review.park, "park info present");
+		assert.ok((review.park?.resetsAt ?? 0) > 0, "reset backfilled from #68 precedence");
+		assert.deepEqual(calls, ["pr-review"], "no second iteration and no verify pass");
+	});
+
+	it("parks the gate on a verify rate-limit rather than retaining the blocker", async () => {
+		const calls: string[] = [];
+		const queued: StepResult[] = [
+			result({ text: report("Found.", [{ severity: "must-fix", message: "Broken.", path: "src/a.ts", line: 1 }]) }),
+			result({ ok: false, subtype: "error_rate_limit", cost: 0, turns: 0 }),
+			result(), // must NOT be consumed
+		];
+		const review = await runPrReviewGate({
+			pr: "1",
+			policy: reviewPolicy({ maxPasses: 2, budgetCap: 30, providerDiversity: "off" }),
+			execFileSync: ((_: string, args: readonly string[]) => (args.includes("--name-only") ? "docs/a.md\n" : "+docs")) as typeof import("node:child_process").execFileSync,
+			runStep: async (name) => {
+				calls.push(name);
+				const next = queued.shift();
+				assert.ok(next);
+				return next;
+			},
+		});
+		assert.equal(review.gate, "park");
+		assert.equal(review.subtype, "error_rate_limit");
+		assert.ok(review.park, "park info present");
+		assert.deepEqual(calls, ["pr-review", "pr-verify"], "discovery + verify, then short-circuit");
+		assert.doesNotMatch(review.body, /Retained blocker/);
+	});
+
+	it("CI main stays fail-closed (red status + exit 1) on a rate-limit park", async () => {
+		const out = await runCli({ results: [result({ ok: false, subtype: "error_rate_limit", cost: 0, turns: 0 })] });
+		assert.equal(out.code, 1);
+		assert.deepEqual(out.statuses, ["block"], "park maps to a red review status on a CI job");
+		assert.deepEqual(out.statusShas, [REVIEWED_SHA]);
+		assert.match(out.comments.join("\n"), /rate limit/i);
 	});
 
 	it("two-pass policy converges only after explicit carried refutation", async () => {
