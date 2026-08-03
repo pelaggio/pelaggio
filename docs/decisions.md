@@ -6,6 +6,10 @@ Status values are `default-taken`, `resolved`, or `resolved→ADR-nnnn`. Source 
 
 | Decision | Status | Chosen/leaning | Alternatives | Source | Date |
 | --- | --- | --- | --- | --- | --- |
+| no-revise API shape | default-taken | discriminated union `mode: "no-revise"` with optional author and no revise prompt | `maxRevisions:0` + dummies (not seam-enforced); separate orchestrator (dual maintenance) | https://github.com/pelaggio/pelaggio/issues/384 | 2026-08-03 |
+<!-- decision:60ce8533a10c2ded -->
+| safetyFloorNote source | default-taken | added optional `safetyFloorNote` to `ReviewLoopBase` options so the loop can stamp the plan-specified result field (loop stays domain-neutral) | hardcode doc wording in the loop (wrong layer); omit from result (plan lists it) | https://github.com/pelaggio/pelaggio/issues/384 | 2026-08-03 |
+<!-- decision:e833f1ddd4a059e4 -->
 | Scope crosses pelaggio orchestration, server, and web (larger than M) | default-taken | carry the complete vertical slice because every layer is required for a truthful Watch ×2 control-plane action and the changes share one typed launch/state contract | defer parallel continuous mode or state projection, which would ship a preset that fails at launch or an idle UI with no authoritative liveness | https://github.com/pelaggio/pelaggio/issues/83 | 2026-08-03 |
 <!-- decision:44d4657742c6461e -->
 | Run-state representation | default-taken | keep terminal/process `RunStatus` and add an orthogonal discriminated `RunActivity` (`active`, `watch-idle`, `budget-idle`, `parked`) with event-specific metadata | overload `RunStatus` with transient states, which makes live-process actions and exit transitions ambiguous | https://github.com/pelaggio/pelaggio/issues/83 | 2026-08-03 |
