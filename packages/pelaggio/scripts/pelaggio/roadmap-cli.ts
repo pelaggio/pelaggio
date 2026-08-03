@@ -18,7 +18,7 @@ import { DEFAULT_FLOW_POLICY, type FlowSnapshot } from "./flow-policy.js";
 import { AlreadyClaimedError, isMarkdownRoadmapFormat, type RoadmapSource } from "./roadmap/index.js";
 import { activeQuarantineIds, clearEntry, listQuarantine, loadQuarantine, resolveKeep, upsertHits } from "./roadmap/stale-quarantine.js";
 import { scanStaleItems } from "./roadmap/stale-scan.js";
-import type { RoadmapItemStatus } from "./roadmap/types.js";
+import type { RoadmapItemStatus, Scope } from "./roadmap/types.js";
 
 type Args = {
 	flags: Record<string, string | boolean>;
@@ -127,7 +127,7 @@ function escapeRegExp(value: string): string {
 	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-export function buildFlowSnapshot(items: readonly RoadmapItemStatus[], topic?: string): FlowSnapshot {
+export function buildFlowSnapshot(items: readonly RoadmapItemStatus[], opts?: { topic?: string; maxScope?: Scope }): FlowSnapshot {
 	const known = [...items].sort((a, b) => b.id.length - a.id.length);
 	const candidates = items.map((item, fifoOrdinal) => {
 		let remainder = item.deps.trim();
@@ -149,7 +149,7 @@ export function buildFlowSnapshot(items: readonly RoadmapItemStatus[], topic?: s
 			...(typeof priority === "number" && Number.isFinite(priority) ? { priority } : {}),
 		};
 	});
-	return { candidates, readiness: { kind: "derived" }, ...(topic ? { topic } : {}) };
+	return { candidates, readiness: { kind: "derived" }, ...(opts?.topic ? { topic: opts.topic } : {}), ...(opts?.maxScope ? { maxScope: opts.maxScope } : {}) };
 }
 
 async function cmdNext(args: Args): Promise<number> {
@@ -158,7 +158,8 @@ async function cmdNext(args: Args): Promise<number> {
 	const items = await roadmap.listItems({ includeDone: true });
 	const topic = typeof args.flags.topic === "string" ? args.flags.topic : undefined;
 	const staleQuarantinedIds = await refreshQuarantineIds(repo, items);
-	const result = DEFAULT_FLOW_POLICY.evaluate({ ...buildFlowSnapshot(items, topic), staleQuarantinedIds });
+	const { CONFIG } = await import("./config.js");
+	const result = DEFAULT_FLOW_POLICY.evaluate({ ...buildFlowSnapshot(items, { topic, maxScope: CONFIG.pick.maxScope }), staleQuarantinedIds });
 	if (args.flags.json) {
 		printJson(result);
 	} else if (result.candidates[0]) {

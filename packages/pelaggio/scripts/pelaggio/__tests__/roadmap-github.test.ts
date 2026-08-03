@@ -172,6 +172,14 @@ describe("projectGhIssue", () => {
 		assert.equal(rich.body, "x");
 		assert.deepEqual(rich.labels, ["autopilot"]);
 	});
+
+	it("extracts declared scope from labels before body", () => {
+		assert.equal(projectGhIssue({ number: 1, title: "body", body: "Scope: L" }, repo).scope, "L");
+		assert.equal(projectGhIssue({ number: 2, title: "label", body: "Scope: XL", labels: [{ name: "scope:s" }] }, repo).scope, "S");
+		assert.equal(projectGhIssue({ number: 3, title: "case", body: "scope: xl" }, repo).scope, "XL");
+		assert.equal(projectGhIssue({ number: 4, title: "absent", body: "No scope" }, repo).scope, undefined);
+		assert.equal(projectGhIssue({ number: 5, title: "word", body: "Scope: Medium" }, repo).scope, undefined);
+	});
 });
 
 describe("GitHubIssuesRoadmap.listItems — curation projection", () => {

@@ -144,6 +144,43 @@ describe("FifoPolicy.evaluate", () => {
 		assert.equal(result.verdicts.length, 2);
 		assert.ok(result.verdicts.every((v) => v.reason === "deferred" && !v.eligible));
 	});
+
+	it("excludes only declared scopes above the active threshold", () => {
+		const scopes = ["XS", "S", "M", "L", "XL"] as const;
+		const result = evaluate(
+			scopes.map((scope, fifoOrdinal) => candidate(scope, { item: { ...candidate(scope).item, scope }, fifoOrdinal })),
+			{ maxScope: "M" },
+		);
+		assert.deepEqual(
+			result.candidates.map(({ item }) => item.id),
+			["XS", "S", "M"],
+		);
+		assert.deepEqual(
+			result.verdicts.slice(3).map(({ reason, blockers }) => ({ reason, blockers })),
+			[
+				{ reason: "over-scope", blockers: ["L"] },
+				{ reason: "over-scope", blockers: ["XL"] },
+			],
+		);
+	});
+
+	it("fails open for undeclared scope, absent threshold, and the XL escape hatch", () => {
+		const undeclared = candidate("undeclared");
+		const large = candidate("large", { item: { ...candidate("large").item, scope: "L" }, fifoOrdinal: 0 });
+		const extraLarge = candidate("extra-large", { item: { ...candidate("extra-large").item, scope: "XL" }, fifoOrdinal: 1 });
+		assert.deepEqual(
+			evaluate([undeclared, large], { maxScope: "M" }).candidates.map(({ item }) => item.id),
+			["undeclared"],
+		);
+		assert.deepEqual(
+			evaluate([large]).candidates.map(({ item }) => item.id),
+			["large"],
+		);
+		assert.deepEqual(
+			evaluate([large, extraLarge], { maxScope: "XL" }).candidates.map(({ item }) => item.id),
+			["large", "extra-large"],
+		);
+	});
 });
 
 describe("FifoPolicy.isQuickScope", () => {

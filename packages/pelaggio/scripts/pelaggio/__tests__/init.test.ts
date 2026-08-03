@@ -37,6 +37,10 @@ describe("init — planCopies", () => {
 			dests.some((d) => d.startsWith(".claude/skills/") && d.endsWith("SKILL.md")),
 			"at least one skill SKILL.md",
 		);
+		assert.ok(
+			dests.some((d) => d.endsWith(".claude/skills/decompose/SKILL.md")),
+			"decompose skill is scaffolded",
+		);
 
 		// _rubric.md must not be sourced from the package's own .claude/skills/ — it
 		// comes from the template.
@@ -62,6 +66,7 @@ describe("init — runInit", () => {
 		assert.equal(result.skipped, 0);
 		assert.equal(result.overwritten, 0);
 		assert.ok(existsSync(join(consumer, ".claude/skills/_rubric.md")));
+		assert.ok(existsSync(join(consumer, ".claude/skills/decompose/SKILL.md")), "decompose skill installed");
 		assert.ok(existsSync(join(consumer, "docs/task-index.md")));
 		assert.ok(existsSync(join(consumer, ".pelaggio.yml")));
 	});
