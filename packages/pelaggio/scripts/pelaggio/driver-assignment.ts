@@ -1,6 +1,6 @@
 import type { ProviderName } from "./types.js";
 
-export type DriverIdentity = { provider: "codex"; codexModel?: string } | { provider: "claude" | "grok"; model?: string };
+export type DriverIdentity = { provider: "codex"; codexModel?: string } | { provider: "claude" | "grok" | "opencode"; model?: string };
 
 export interface DriverAssignmentState {
 	cycle: number;

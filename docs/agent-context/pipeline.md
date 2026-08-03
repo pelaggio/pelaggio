@@ -18,7 +18,7 @@ No model strings live outside `MODEL_PROFILES`. No other file references `claude
 
 ## Step Providers
 
-`packages/pelaggio/scripts/pelaggio/step-runner.ts` exposes the `StepProvider` seam. The default registered provider is `claude`. Issue `#80` adds `codex`.
+`packages/pelaggio/scripts/pelaggio/step-runner.ts` exposes the `StepProvider` seam. The default registered provider is `claude`. Issue `#80` adds `codex`; `#136` adds `grok` (ACP), and `#137` adds `opencode` as a headless `run --format json` peer alongside Codex.
 
 Important contracts:
 

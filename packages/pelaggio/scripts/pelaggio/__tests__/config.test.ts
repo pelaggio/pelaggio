@@ -950,6 +950,13 @@ describe("loadConfig — providers.<name>.bin (#241)", () => {
 		assert.equal(cfg.providerBins.grok, "~/.grok/bin/grok");
 	});
 
+	it("accepts a bin override for opencode (registered since #137)", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "providers:\n  opencode:\n    bin: ~/.opencode/bin/opencode\n");
+		const cfg = loadConfig({ repo, configPath: path });
+		assert.equal(cfg.providerBins.opencode, "~/.opencode/bin/opencode");
+	});
+
 	it("parses the Grok-only unsandboxed fallback escape hatch", () => {
 		const repo = tmpRepo();
 		const path = writeYml(repo, "providers:\n  grok:\n    allow-unsandboxed-fallback: true\n");

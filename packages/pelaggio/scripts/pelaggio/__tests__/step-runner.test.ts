@@ -5,6 +5,7 @@ import { codexProvider } from "../codex-provider.js";
 import { CONFIG } from "../config.js";
 import { grokCapabilities } from "../grok-provider.js";
 import type { MainCheckoutDeltaObserver, MainCheckoutDeltaResult } from "../helpers.js";
+import { OPENCODE_CAPABILITIES, opencodeProvider } from "../opencode-provider.js";
 import { beginMainCheckoutAttribution, blockForeignRootWrite, blockPlanPolish, blockWorktreeInstall, claudeProvider, composeSystemAppend, endMainCheckoutAttribution, getProvider, isWorktreePath } from "../step-runner.js";
 import type { ProviderName } from "../types.js";
 
@@ -231,6 +232,10 @@ describe("getProvider — registry + guard", () => {
 		assert.equal(getProvider("codex"), codexProvider);
 	});
 
+	it("returns the exact registered opencodeProvider instance", () => {
+		assert.equal(getProvider("opencode"), opencodeProvider);
+	});
+
 	it("throws on an unknown provider name (defense-in-depth for #80)", () => {
 		assert.throws(() => getProvider("bogus" as ProviderName), /unknown step provider: bogus/);
 	});
@@ -238,7 +243,7 @@ describe("getProvider — registry + guard", () => {
 
 describe("provider capability matrix (#337)", () => {
 	it("exposes a complete descriptor on every registered provider", () => {
-		for (const name of ["claude", "codex", "grok"] as const) {
+		for (const name of ["claude", "codex", "grok", "opencode"] as const) {
 			const caps = getProvider(name).capabilities;
 			assert.equal(typeof caps.semanticDeny, "boolean");
 			assert.ok(Array.isArray(caps.isolation));
@@ -274,16 +279,28 @@ describe("provider capability matrix (#337)", () => {
 			outputTransport: "stream",
 			sessionResume: false,
 		});
+		assert.deepEqual(getProvider("opencode").capabilities, {
+			semanticDeny: false,
+			isolation: [], // OPENCODE_PERMISSION is a permission-policy env, not OS isolation (#137)
+			costMeter: { kind: "usd-estimated" },
+			cacheReporting: false,
+			outputTransport: "stream",
+			sessionResume: false,
+		});
+		assert.deepEqual(getProvider("opencode").capabilities, OPENCODE_CAPABILITIES);
 	});
 
 	it("claims semanticDeny only for Claude (not OS isolation)", () => {
 		assert.equal(getProvider("claude").capabilities.semanticDeny, true);
 		assert.equal(getProvider("codex").capabilities.semanticDeny, false);
 		assert.equal(getProvider("grok").capabilities.semanticDeny, false);
+		assert.equal(getProvider("opencode").capabilities.semanticDeny, false);
 		// Isolation membership is independent of semantic deny.
 		assert.ok(getProvider("codex").capabilities.isolation.includes("workspace-write"));
 		assert.equal(getProvider("grok").capabilities.isolation.includes("landlock"), !CONFIG.grokAllowUnsandboxedFallback);
 		assert.equal(getProvider("claude").capabilities.isolation.length, 0);
+		// OpenCode's OPENCODE_PERMISSION is a policy env, not OS isolation — honest empty row (#137).
+		assert.equal(getProvider("opencode").capabilities.isolation.length, 0);
 	});
 
 	it("does not advertise Landlock when unsandboxed Grok fallback is enabled", () => {
@@ -291,14 +308,16 @@ describe("provider capability matrix (#337)", () => {
 		assert.deepEqual(grokCapabilities(true).isolation, []);
 	});
 
-	it("reports cache counters on all three providers (corrected matrix)", () => {
+	it("reports cache counters on claude/codex/grok but not opencode (unevidenced)", () => {
 		assert.equal(getProvider("claude").capabilities.cacheReporting, true);
 		assert.equal(getProvider("codex").capabilities.cacheReporting, true);
 		assert.equal(getProvider("grok").capabilities.cacheReporting, true);
+		// OpenCode's cache-counter fields are unverified (binary absent at implement) — claim false.
+		assert.equal(getProvider("opencode").capabilities.cacheReporting, false);
 	});
 
 	it("does not claim typed structured output or session resume on any driver", () => {
-		for (const name of ["claude", "codex", "grok"] as const) {
+		for (const name of ["claude", "codex", "grok", "opencode"] as const) {
 			const caps = getProvider(name).capabilities;
 			assert.equal(caps.sessionResume, false);
 			// No typed-output axis on the descriptor at all (#306 owns that future claim).
