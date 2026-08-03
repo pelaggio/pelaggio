@@ -7,7 +7,7 @@
 // (`.claude/workflows/` is absent from the package `files`, `pack-prepare` PACK_TARGETS,
 // and `check-publish` ALLOWED_PREFIXES). See ./README.md.
 //
-// Invoke:
+// Invoke (note: the harness may deliver `args` as a JSON string — it is parsed below):
 //   Workflow({ name: 'triad-review', args: {
 //     title,                 // short label for the thing under review
 //     artifact,              // the text/spec/diff under review (or a path to read)
@@ -25,9 +25,11 @@ export const meta = {
   ],
 }
 
-const A = args ?? {}
+const A = typeof args === 'string' ? JSON.parse(args) : (args ?? {})
 const TITLE = A.title ?? 'artifact under review'
 const ARTIFACT = A.artifact ?? ''
+// Fail closed: an empty artifact would silently burn four agent seats reviewing nothing.
+if (!String(ARTIFACT).trim()) throw new Error('triad-review: empty artifact — pass args.artifact; refusing to spawn reviewers')
 const GROUNDING = A.grounding ?? ''
 const LENSES =
   Array.isArray(A.lenses) && A.lenses.length

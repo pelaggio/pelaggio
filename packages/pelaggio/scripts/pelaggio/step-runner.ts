@@ -1,6 +1,6 @@
 import { lstatSync } from "node:fs";
 import { join, resolve } from "node:path";
-import type { HookInput, HookJSONOutput, SDKAssistantMessage, SDKRateLimitEvent, SDKResultMessage, SDKSystemMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { HookInput, HookJSONOutput, SDKAssistantMessage, SDKRateLimitEvent, SDKResultMessage, SDKSystemMessage, SyncHookJSONOutput } from "@anthropic-ai/claude-agent-sdk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { codexProvider } from "./codex-provider.js";
 import { CONFIG, REPO, resolveStepSettings } from "./config.js";
@@ -66,7 +66,7 @@ export const CLAUDE_CAPABILITIES: ProviderCapabilities = {
 // --repair-main` invocation, which restores the layout from the lockfile.
 const INSTALL_PATTERN = /\b(pnpm\s+(install|i|add|update|up|upgrade|remove|rm)|npm\s+(install|i|ci))\b/;
 
-export function blockWorktreeInstall(input: HookInput): HookJSONOutput {
+export function blockWorktreeInstall(input: HookInput): SyncHookJSONOutput {
 	const tn = "tool_name" in input ? String(input.tool_name) : "";
 	if (tn !== "Bash") return {};
 	const ti = ("tool_input" in input ? input.tool_input : {}) as Record<string, unknown>;
@@ -84,7 +84,7 @@ export function blockWorktreeInstall(input: HookInput): HookJSONOutput {
 // Plan-polish guard: during `implement`, block writes to docs/plans/ so the model
 // executes the plan instead of editing it. Surfaced as a named helper because the
 // reason — not the mechanics — is the non-obvious part worth locating.
-export function blockPlanPolish(input: HookInput, cwd: string): HookJSONOutput {
+export function blockPlanPolish(input: HookInput, cwd: string): SyncHookJSONOutput {
 	const tn = "tool_name" in input ? String(input.tool_name) : "";
 	if (tn !== "Write" && tn !== "Edit") return {};
 	const ti = ("tool_input" in input ? input.tool_input : {}) as Record<string, unknown>;
@@ -104,7 +104,7 @@ export function blockPlanPolish(input: HookInput, cwd: string): HookJSONOutput {
  * under `MAIN_REPO/.dev/authoring-review-seats/` (#269). The old prefix check
  * (`fp.startsWith(mainAbs)`) blocked legitimate absolute paths inside nested seats.
  */
-export function blockMainRepoWrite(input: HookInput, worktreeCwd: string, repo: string): HookJSONOutput {
+export function blockMainRepoWrite(input: HookInput, worktreeCwd: string, repo: string): SyncHookJSONOutput {
 	const tn = "tool_name" in input ? String(input.tool_name) : "";
 	if (tn !== "Write" && tn !== "Edit") return {};
 	const ti = ("tool_input" in input ? input.tool_input : {}) as Record<string, unknown>;
@@ -125,7 +125,7 @@ export function blockMainRepoWrite(input: HookInput, worktreeCwd: string, repo: 
 	return {};
 }
 
-export function beginMainCheckoutAttribution(input: HookInput, toolUseId: string | undefined, observer?: MainCheckoutDeltaObserver): HookJSONOutput {
+export function beginMainCheckoutAttribution(input: HookInput, toolUseId: string | undefined, observer?: MainCheckoutDeltaObserver): SyncHookJSONOutput {
 	const toolName = "tool_name" in input ? String(input.tool_name) : "";
 	if (!observer || !MUTATING_TOOLS.has(toolName)) return {};
 	const outcome = observer.beforeTool(toolUseId ?? "");
@@ -430,7 +430,10 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 					subtype = "error_refusal";
 					emit({ type: "sdk_error", message: "model refused / declined the task" });
 				}
-				const u = (r as { usage?: Record<string, number> }).usage;
+				// `usage` is NonNullableUsage: token counts are numbers, but
+				// `cache_creation` is an object (BetaCacheCreation) — read only the
+				// numeric per-category token fields, never the object.
+				const u: SDKResultMessage["usage"] | undefined = r.usage;
 				if (u) {
 					tokens = {
 						input: u.input_tokens ?? 0,
