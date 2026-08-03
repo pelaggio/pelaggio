@@ -31,6 +31,15 @@ Claims are git-native (#12). "Claimed" means the `feat/<id>` branch exists — g
 
 Shared-file writers — `markDone`/`createItem`/`archivePlan` and `commitStrayBookkeeping`'s `git add -A` sweep — take `.dev/roadmap-mutation.lock` **internally** (O_EXCL token lockfile, expiry-in-content, atomic rename-verify steal/release — `roadmap/mutation-lock.ts`). Callers never manage the lock. Do not add call-site locking or a parallel claim registry. Claim worktree naming uses `WORKTREE_PREFIX` from config (env > yml > basename) in all adapters.
 
+## Staleness quarantine (#217)
+
+Open items that are already implemented or obsolete used to sit in the pickable pool and burn a whole cycle before the plan gate discovered there was nothing to build. A deterministic staleness sweep now quarantines them **locally** so `roadmap next` / `roadmap claim` skip them until an operator resolves them. This is provider-neutral harness-local state — no tracker labels, no auto-close (honoring the recorded #217 decision).
+
+- **Store**: `MAIN_REPO/.dev/stale-quarantine.json` (gitignored), resolved via the shared `mainWorktree()` redirect so `/tidy` on main and `claim`/`next` from a sibling worktree see one store. Writes serialize on the roadmap mutation lock; entries are **fingerprint-bound** (`sha256` of normalized id+title+deps+body) so a retitled/rewritten item auto-expires out of quarantine. `roadmap/stale-quarantine.ts`.
+- **Heuristics** (`roadmap/stale-scan.ts`, high-precision, fail-open, open items only): `shipped-by-commit` (a bounded `git log main` subject completes the id), `superseded-marker` (body/title says done by a done sibling), `title-match-done` (title equals a done item's title, min length). Never calls the network, never closes items.
+- **CLI** (under `roadmap`): `stale-scan [--json] [--write]`, `stale-list [--json]`, `stale-resolve <id> --as done|keep [--note …]`.
+- **Gating**: `roadmap next` does a cheap best-effort write-through (scan → persist active hits → exclude them; **fail-open** — a lock/write error never blocks a pick), surfacing excluded ids as `FlowVerdictReason: "stale-quarantined"`. `roadmap claim <id>` refuses an active-quarantined item with **exit 4** (mirrors the exit-3 already-claimed gate; adapters stay quarantine-agnostic). `/pick` maps exit 4 to `pick-result: stale-quarantined` (recoverable). A sticky `--as keep` disposition suppresses re-quarantine of a confirmed false positive until the fingerprint changes.
+
 ## Ship Targets
 
 `ship.target` in `.pelaggio.yml` selects the behavior, dispatched via adapters under `ship/`:

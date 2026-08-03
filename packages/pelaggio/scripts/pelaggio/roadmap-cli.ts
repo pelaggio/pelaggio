@@ -8,13 +8,16 @@
  * across markdown / github-issues / linear adapters.
  *
  * Exit codes: 0 success, 2 "not found" (callers distinguish from crashes),
- * 3 "already claimed" (claim lost the race — the feat/<id> branch exists).
+ * 3 "already claimed" (claim lost the race — the feat/<id> branch exists),
+ * 4 "stale-quarantined" (claim refused a suspected already-done/obsolete item; #217).
  */
 
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_FLOW_POLICY, type FlowSnapshot } from "./flow-policy.js";
 import { AlreadyClaimedError, isMarkdownRoadmapFormat, type RoadmapSource } from "./roadmap/index.js";
+import { activeQuarantineIds, clearEntry, listQuarantine, loadQuarantine, resolveKeep, upsertHits } from "./roadmap/stale-quarantine.js";
+import { scanStaleItems } from "./roadmap/stale-scan.js";
 import type { RoadmapItemStatus } from "./roadmap/types.js";
 
 type Args = {
@@ -55,10 +58,45 @@ function makeRoadmap(): RoadmapSource {
 	return roadmapFactory();
 }
 
+let repoOverride: string | null = null;
+
+/** Test seam: pin the repo used for the staleness scan / quarantine store, avoiding the
+ *  eager `config.REPO` resolution (which would target the real repo, not a temp fixture). */
+export function setRepo(repo: string): void {
+	repoOverride = repo;
+}
+
+async function resolveRepoPath(): Promise<string> {
+	if (repoOverride) return repoOverride;
+	const { REPO } = await import("./config.js");
+	return REPO;
+}
+
 async function defaultFactory(): Promise<() => RoadmapSource> {
 	const { REPO, ROADMAP_GITHUB, ROADMAP_LINEAR, ROADMAP_SOURCE } = await import("./config.js");
+	setRepo(REPO);
 	const { getRoadmapSource } = await import("./roadmap/index.js");
 	return () => getRoadmapSource(ROADMAP_SOURCE, { repo: REPO, github: ROADMAP_GITHUB, linear: ROADMAP_LINEAR });
+}
+
+/**
+ * Cheap best-effort write-through (#217): scan the open set, persist active hits, and return the
+ * gating id set. FAIL-OPEN on the hot path — a lock timeout / write error must never block a pick,
+ * so it is caught and swallowed and policy still evaluates against the last-persisted set (or empty).
+ */
+async function refreshQuarantineIds(repo: string, items: readonly RoadmapItemStatus[]): Promise<ReadonlySet<string>> {
+	try {
+		const hits = scanStaleItems(items, repo);
+		const openIds = new Set(items.filter((item) => item.status === "open").map((item) => item.id));
+		return activeQuarantineIds(await upsertHits(repo, hits, openIds), items);
+	} catch (err) {
+		process.stderr.write(`⚠ stale quarantine refresh skipped: ${err instanceof Error ? err.message : String(err)}\n`);
+		try {
+			return activeQuarantineIds(loadQuarantine(repo), items);
+		} catch {
+			return new Set();
+		}
+	}
 }
 
 function publishRoot(): string {
@@ -116,9 +154,11 @@ export function buildFlowSnapshot(items: readonly RoadmapItemStatus[], topic?: s
 
 async function cmdNext(args: Args): Promise<number> {
 	const roadmap = makeRoadmap();
+	const repo = await resolveRepoPath();
 	const items = await roadmap.listItems({ includeDone: true });
 	const topic = typeof args.flags.topic === "string" ? args.flags.topic : undefined;
-	const result = DEFAULT_FLOW_POLICY.evaluate(buildFlowSnapshot(items, topic));
+	const staleQuarantinedIds = await refreshQuarantineIds(repo, items);
+	const result = DEFAULT_FLOW_POLICY.evaluate({ ...buildFlowSnapshot(items, topic), staleQuarantinedIds });
 	if (args.flags.json) {
 		printJson(result);
 	} else if (result.candidates[0]) {
@@ -155,6 +195,20 @@ async function cmdClaim(args: Args): Promise<number> {
 	if (!id) {
 		process.stderr.write("usage: roadmap claim <id> [--no-worktree]\n");
 		return 1;
+	}
+	// Staleness gate (#217): refuse an active-quarantined item (exit 4). Read-only — no scan here;
+	// the write-through lives on `next`. A missing item falls through to the adapter's own handling.
+	const staleItem = await roadmap.getItem(id);
+	if (staleItem) {
+		const file = loadQuarantine(await resolveRepoPath());
+		if (activeQuarantineIds(file, [staleItem]).has(staleItem.id)) {
+			const entry = file.entries[staleItem.id];
+			const reason = entry?.reason ?? "stale";
+			const evidence = entry?.evidence.join("; ") || "—";
+			process.stderr.write(`${staleItem.id} is stale-quarantined (${reason}); evidence: ${evidence}\n`);
+			process.stderr.write(`resolve first: npx pelaggio roadmap stale-resolve ${staleItem.id} --as done|keep\n`);
+			return 4;
+		}
 	}
 	const noWorktree = args.flags["no-worktree"] === true;
 	try {
@@ -279,6 +333,82 @@ async function cmdBackfillPriorityLabels(args: Args): Promise<number> {
 	return result.conflicts.length > 0 ? 1 : 0;
 }
 
+async function cmdStaleScan(args: Args): Promise<number> {
+	const roadmap = makeRoadmap();
+	const repo = await resolveRepoPath();
+	const items = await roadmap.listItems({ includeDone: true });
+	const hits = scanStaleItems(items, repo);
+	const write = args.flags.write === true;
+	if (write) {
+		const openIds = new Set(items.filter((item) => item.status === "open").map((item) => item.id));
+		await upsertHits(repo, hits, openIds);
+	}
+	if (args.flags.json) {
+		printJson({ hits, wrote: write });
+		return 0;
+	}
+	if (hits.length === 0) {
+		process.stdout.write("no stale candidates\n");
+		return 0;
+	}
+	for (const hit of hits) {
+		process.stdout.write(`${hit.id}\t${hit.reason}\t${hit.evidence.join("; ")}\n`);
+	}
+	if (write) process.stdout.write(`\nquarantined ${hits.length} item(s) — resolve with: npx pelaggio roadmap stale-resolve <id> --as done|keep\n`);
+	return 0;
+}
+
+async function cmdStaleList(args: Args): Promise<number> {
+	const roadmap = makeRoadmap();
+	const repo = await resolveRepoPath();
+	const items = await roadmap.listItems({ includeDone: true });
+	const rows = listQuarantine(loadQuarantine(repo), items);
+	if (args.flags.json) {
+		printJson(rows);
+		return 0;
+	}
+	if (rows.length === 0) {
+		process.stdout.write("no active quarantine entries\n");
+		return 0;
+	}
+	for (const row of rows) {
+		process.stdout.write(`${row.id}\t${row.reason}${row.suppressed ? " (keep)" : ""}\t${row.evidence.join("; ")}\t${row.quarantinedAt}\n`);
+	}
+	return 0;
+}
+
+async function cmdStaleResolve(args: Args): Promise<number> {
+	const roadmap = makeRoadmap();
+	const repo = await resolveRepoPath();
+	const id = args.positional[0];
+	const as = args.flags.as;
+	if (!id || (as !== "done" && as !== "keep")) {
+		process.stderr.write("usage: roadmap stale-resolve <id> --as done|keep [--note <text>]\n");
+		return 1;
+	}
+	const item = await roadmap.getItem(id);
+	if (!item) {
+		process.stderr.write(`not found: ${id}\n`);
+		return 2;
+	}
+	const entry = loadQuarantine(repo).entries[item.id];
+	if (!entry) {
+		process.stderr.write(`not quarantined: ${item.id}\n`);
+		return 2;
+	}
+	if (as === "keep") {
+		await resolveKeep(repo, item.id, item);
+		process.stdout.write(`kept ${item.id} — sticky until the item changes\n`);
+		return 0;
+	}
+	const note = typeof args.flags.note === "string" ? args.flags.note : `stale-resolve done: ${entry.reason} — ${entry.evidence.join("; ") || "no evidence"}`;
+	// markDone throwing propagates to main() (exit 1) BEFORE clearEntry, so a failed close retains the entry.
+	await roadmap.markDone(item.id, { note });
+	await clearEntry(repo, item.id);
+	process.stdout.write(`marked ${item.id} done and cleared quarantine\n`);
+	return 0;
+}
+
 const HANDLERS: Record<string, (args: Args) => Promise<number>> = {
 	list: cmdList,
 	next: cmdNext,
@@ -290,6 +420,9 @@ const HANDLERS: Record<string, (args: Args) => Promise<number>> = {
 	"create-item": cmdCreateItem,
 	"archive-plan": cmdArchivePlan,
 	"backfill-priority-labels": cmdBackfillPriorityLabels,
+	"stale-scan": cmdStaleScan,
+	"stale-list": cmdStaleList,
+	"stale-resolve": cmdStaleResolve,
 	source: cmdSource,
 };
 

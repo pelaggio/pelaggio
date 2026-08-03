@@ -24,9 +24,12 @@ export interface FlowSnapshot {
 	readonly candidates: readonly FlowCandidate[];
 	readonly readiness: FlowReadiness;
 	readonly topic?: string;
+	/** Active staleness-quarantine ids (fingerprint-validated by the caller, #217). Harness-local
+	 *  policy input — never a storage/adapter field. Excluded items surface reason `stale-quarantined`. */
+	readonly staleQuarantinedIds?: ReadonlySet<string>;
 }
 
-export type FlowVerdictReason = "eligible" | "status" | "deferred" | "not-native-ready" | "dependency" | "unresolved-dependency" | "topic";
+export type FlowVerdictReason = "eligible" | "status" | "stale-quarantined" | "deferred" | "not-native-ready" | "dependency" | "unresolved-dependency" | "topic";
 
 export interface FlowItemVerdict {
 	readonly id: string;
@@ -67,6 +70,12 @@ function excludedStatus(status: RoadmapItemStatus["status"]): boolean {
 function verdict(candidate: FlowCandidate, snapshot: FlowSnapshot, nativeReadyIds: ReadonlySet<string>): FlowItemVerdict {
 	if (excludedStatus(candidate.item.status)) {
 		return { id: candidate.item.id, eligible: false, reason: "status", blockers: [candidate.item.status] };
+	}
+	// Staleness quarantine (#217): suspected already-done/obsolete open items. After status (so
+	// done/blocked never read as "stale") but before deferred — a quarantined item's actionable
+	// reason is the staleness resolve, not its curation flag.
+	if (snapshot.staleQuarantinedIds?.has(candidate.item.id)) {
+		return { id: candidate.item.id, eligible: false, reason: "stale-quarantined", blockers: [] };
 	}
 	// Deferred is curated backlog (not dependency failure). After status so done/blocked/
 	// in-progress deferred items still surface as `status` for explicit-pick display.
