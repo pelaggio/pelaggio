@@ -2,6 +2,7 @@ import { execSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { basename, delimiter, extname, isAbsolute, join, resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import {
 	CONFIG,
 	CONFINEMENT_CONFIG,
@@ -141,6 +142,11 @@ const TRANSIENT_BACKOFF_MS = 1000;
 // recoverable (#127's behavior); this many in a row parks + pages instead of quietly
 // burning through every remaining --cycles against a dead provider.
 const CONSECUTIVE_TRANSIENT_ERROR_LIMIT = 3;
+// #388: cadence for the mid-step forbidden-root prober that runs concurrently with an
+// in-flight provider call. Bounds a mid-step confinement violation's cost to roughly one
+// interval instead of the whole step, without polling git status so often it competes with
+// the step's own work. Overridable in tests via PipelineDeps.confinementProbeIntervalMs.
+const CONFINEMENT_PROBE_INTERVAL_MS = 15_000;
 
 export interface PipelineDeps {
 	runStep?: RunStepFn;
@@ -171,6 +177,8 @@ export interface PipelineDeps {
 	resolveEligibleSessions?: typeof resolveEligibleSessions;
 	/** Test seam: replace diff-time session revalidation (#369). */
 	revalidateChangedRoot?: typeof revalidateChangedRoot;
+	/** Test seam: override the mid-step confinement prober's polling interval (#388). */
+	confinementProbeIntervalMs?: number;
 	/** Test seam: replace evaluator-context capture (#369). */
 	captureEvaluatorContext?: typeof captureEvaluatorContext;
 	/** Test seam: replace session-controller factory (#369). */
@@ -210,6 +218,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	const diffForbiddenRootSnapshotsFn = deps.diffForbiddenRootSnapshots ?? diffForbiddenRootSnapshots;
 	const resolveEligibleSessionsFn = deps.resolveEligibleSessions ?? resolveEligibleSessions;
 	const revalidateChangedRootFn = deps.revalidateChangedRoot ?? revalidateChangedRoot;
+	const confinementProbeIntervalMs = deps.confinementProbeIntervalMs ?? CONFINEMENT_PROBE_INTERVAL_MS;
 	const captureEvaluatorContextFn = deps.captureEvaluatorContext ?? captureEvaluatorContext;
 	const createSessionControllerFn = deps.createSessionController ?? createSessionController;
 	const appendDecisions = deps.appendDecisions ?? appendDecisionsDefault;
@@ -391,6 +400,41 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				log(`⚠ ${confinementAuditError}`);
 			}
 
+			// #369-eligibility classification of a raw before/after diff, shared by the
+			// mid-step prober and the natural end-of-step diff (#388) so a probe never trips
+			// on a legitimate concurrent peer write that the end-of-step diff would have
+			// excluded anyway — both apply the identical revalidation discipline.
+			const classifyForbiddenRootChanges = (before: ReadonlyMap<string, string>, after: ReadonlyMap<string, string>): { violated: string[]; excludedSessions: AcceptedSession[]; warnings: string[] } => {
+				const violated: string[] = [];
+				const excludedSessions: AcceptedSession[] = [];
+				const warnings: string[] = [];
+				for (const root of diffForbiddenRootSnapshotsFn(before, after)) {
+					const abs = resolve(root);
+					if (abs === resolve(mainRepo)) {
+						violated.push(root);
+						continue;
+					}
+					const stillLive = revalidateChangedRootFn(sessionEvaluator, abs);
+					if (stillLive) {
+						const paths = firstDiffPathsByRoot(before, after, [abs]).get(abs) ?? [];
+						const warn = `confinement: excluded live session ${stillLive.identity.sessionId} (${stillLive.identity.claimedItem} @ ${abs}${paths.length ? `; paths: ${paths.join(", ")}` : ""})`;
+						warnings.push(warn);
+						log(`⚠ ${warn}`);
+						excludedSessions.push(stillLive);
+						continue;
+					}
+					violated.push(root);
+				}
+				return { violated, excludedSessions, warnings };
+			};
+			const mergeExcludedSessions = (found: AcceptedSession[]): void => {
+				for (const s of found) {
+					if (!stepExcludedSessions.some((es) => es.worktreePath === s.worktreePath)) {
+						stepExcludedSessions = [...stepExcludedSessions, s];
+					}
+				}
+			};
+
 			// #369: foreign-root Write/Edit denial + sessions-dir protection for Claude steps,
 			// including shipwreck (main cwd + ownWorktree). Registered roots from listWorktrees.
 			const registeredWorktrees = (() => {
@@ -411,51 +455,94 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 					}
 				: undefined;
 
-			const providerResult = await runStep(
-				name,
-				prompt,
-				{
-					cwd,
-					profile,
-					trace: flags.trace,
-					itemId: itemId ?? undefined,
-					parkSignal: parkSignalOverride ?? parkSignal,
-					...(executionOverride ? { executionOverride } : {}),
-					...(maxTurnsOverride !== undefined ? { maxTurnsOverride } : {}),
-					...(opts.signal ? { signal: opts.signal } : {}),
-					...(mainCheckoutObserver ? { mainCheckoutObserver } : {}),
-					foreignRootDenial,
-					...(onChildSpawn ? { onChildSpawn } : {}),
-				},
-				emit,
-			);
+			let providerResult: StepResult;
+			if (confinementAuditError !== undefined) {
+				// #388: fail closed before any provider spend. A before-phase audit problem
+				// (root enumeration or snapshot execution failure) already means the tree
+				// cannot be trusted as a clean baseline for this step — continuing on to spend
+				// the full step cost only to override the result afterward (the prior
+				// behavior) burns real money on a step already known to be error_confinement.
+				providerResult = { ok: false, subtype: "error_confinement", text: confinementAuditError, fullText: confinementAuditError, cost: 0, turns: 0 };
+			} else {
+				// A step-scoped controller composes the external (SIGINT) signal with an
+				// internal one the periodic prober below can trip independently, so a
+				// mid-step forbidden-root mutation cancels the in-flight provider call through
+				// the same signal/driver boundary SIGINT already uses (#388) — and confirmed
+				// child termination is awaited (the `await runStep` below) before this step
+				// classifies anything. Deliberately never touches `opts.signal` itself: `finish()`
+				// labels a cycle "aborted" only when `opts.signal.aborted`, and a confinement
+				// trip must classify as error_confinement, not a SIGINT abort.
+				const stepAbort = new AbortController();
+				if (opts.signal) {
+					if (opts.signal.aborted) stepAbort.abort();
+					else opts.signal.addEventListener("abort", () => stepAbort.abort(), { once: true });
+				}
+				// Woken early (not just on its own interval) once the provider call settles, so a
+				// normal/fast step never waits out a stale probe tick before returning (#388).
+				let midStepSettled = false;
+				const settledController = new AbortController();
+				const probeLoop = (async () => {
+					while (!midStepSettled) {
+						try {
+							await delay(confinementProbeIntervalMs, undefined, { signal: settledController.signal });
+						} catch {
+							return; // settledController fired — the step already settled.
+						}
+						if (midStepSettled) return;
+						try {
+							const probeSnapshot = snapshotForbiddenRootsFn(forbiddenRoots);
+							const probeEval = classifyForbiddenRootChanges(forbiddenBefore, probeSnapshot);
+							if (probeEval.violated.length > 0) {
+								forbiddenAfter = probeSnapshot;
+								confinementRoots.push(...probeEval.violated);
+								revalidationWarnings.push(...probeEval.warnings);
+								mergeExcludedSessions(probeEval.excludedSessions);
+								log(`⚠ confinement: mid-step forbidden root change detected during ${name}: ${probeEval.violated.join(", ")} — aborting`);
+								stepAbort.abort();
+								return;
+							}
+						} catch (e) {
+							// A probe-tick snapshot execution failure is the same fail-closed audit
+							// problem as a before/after snapshot failure — abort rather than silently
+							// retrying indefinitely against a root we can no longer verify.
+							confinementAuditError = `confinement audit failed during ${name} (mid-step probe): ${e instanceof Error ? e.message : String(e)}`;
+							log(`⚠ ${confinementAuditError}`);
+							stepAbort.abort();
+							return;
+						}
+					}
+				})();
+
+				providerResult = await runStep(
+					name,
+					prompt,
+					{
+						cwd,
+						profile,
+						trace: flags.trace,
+						itemId: itemId ?? undefined,
+						parkSignal: parkSignalOverride ?? parkSignal,
+						...(executionOverride ? { executionOverride } : {}),
+						...(maxTurnsOverride !== undefined ? { maxTurnsOverride } : {}),
+						signal: stepAbort.signal,
+						...(mainCheckoutObserver ? { mainCheckoutObserver } : {}),
+						foreignRootDenial,
+						...(onChildSpawn ? { onChildSpawn } : {}),
+					},
+					emit,
+				);
+				midStepSettled = true;
+				settledController.abort();
+				await probeLoop;
+			}
 
 			if (confinementRoots.length === 0 && confinementAuditError === undefined) {
 				try {
 					forbiddenAfter = snapshotForbiddenRootsFn(forbiddenRoots);
-					const rawChanged = diffForbiddenRootSnapshotsFn(forbiddenBefore, forbiddenAfter);
-					// #369: revalidate each changed sibling with the same eligibility predicate.
-					// Still-live peers warn + suppress; main / expired / identity-mutated park.
-					for (const root of rawChanged) {
-						const abs = resolve(root);
-						if (abs === resolve(mainRepo)) {
-							confinementRoots.push(root);
-							continue;
-						}
-						const stillLive = revalidateChangedRootFn(sessionEvaluator, abs);
-						if (stillLive) {
-							const paths = firstDiffPathsByRoot(forbiddenBefore, forbiddenAfter, [abs]).get(abs) ?? [];
-							const warn = `confinement: excluded live session ${stillLive.identity.sessionId} (${stillLive.identity.claimedItem} @ ${abs}${paths.length ? `; paths: ${paths.join(", ")}` : ""})`;
-							revalidationWarnings.push(warn);
-							log(`⚠ ${warn}`);
-							// Keep evidence in stepExcludedSessions for park diagnostics if other roots fail.
-							if (!stepExcludedSessions.some((s) => s.worktreePath === abs)) {
-								stepExcludedSessions = [...stepExcludedSessions, stillLive];
-							}
-							continue;
-						}
-						confinementRoots.push(root);
-					}
+					const finalEval = classifyForbiddenRootChanges(forbiddenBefore, forbiddenAfter);
+					confinementRoots.push(...finalEval.violated);
+					revalidationWarnings.push(...finalEval.warnings);
+					mergeExcludedSessions(finalEval.excludedSessions);
 				} catch (e) {
 					confinementAuditError = `confinement audit failed after ${name}: ${e instanceof Error ? e.message : String(e)}`;
 					log(`⚠ ${confinementAuditError}`);
