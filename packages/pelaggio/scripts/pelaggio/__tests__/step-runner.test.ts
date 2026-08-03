@@ -5,7 +5,7 @@ import { codexProvider } from "../codex-provider.js";
 import { CONFIG } from "../config.js";
 import { grokCapabilities } from "../grok-provider.js";
 import type { MainCheckoutDeltaObserver, MainCheckoutDeltaResult } from "../helpers.js";
-import { beginMainCheckoutAttribution, blockMainRepoWrite, blockPlanPolish, blockWorktreeInstall, claudeProvider, composeSystemAppend, endMainCheckoutAttribution, getProvider, isWorktreePath } from "../step-runner.js";
+import { beginMainCheckoutAttribution, blockForeignRootWrite, blockPlanPolish, blockWorktreeInstall, claudeProvider, composeSystemAppend, endMainCheckoutAttribution, getProvider, isWorktreePath } from "../step-runner.js";
 import type { ProviderName } from "../types.js";
 
 function bash(command: string): HookInput {
@@ -156,34 +156,65 @@ describe("isWorktreePath", () => {
 	});
 });
 
-describe("blockMainRepoWrite (#269 nested seats)", () => {
+describe("blockForeignRootWrite (#369 / #269 nested seats)", () => {
 	const main = "/home/user/my-repo";
 	const sibling = "/home/user/my-repo-269";
+	const other = "/home/user/my-repo-other";
 	const seat = "/home/user/my-repo/.dev/authoring-review-seats/abc/grok-p1";
+	const registered = [main, sibling, other];
 
-	it("allows writes inside a sibling worktree", () => {
-		assert.deepEqual(blockMainRepoWrite(write(`${sibling}/src/a.ts`), sibling, main), {});
-		assert.deepEqual(blockMainRepoWrite(write("src/a.ts"), sibling, main), {});
+	it("allows writes inside a sibling worktree (cwd)", () => {
+		assert.deepEqual(blockForeignRootWrite(write(`${sibling}/src/a.ts`), sibling, main, registered, sibling), {});
+		assert.deepEqual(blockForeignRootWrite(write("src/a.ts"), sibling, main, registered, sibling), {});
 	});
 
 	it("blocks writes that target the main checkout from a sibling worktree", () => {
-		const out = blockMainRepoWrite(write(`${main}/packages/pelaggio/x.ts`), sibling, main);
+		const out = blockForeignRootWrite(write(`${main}/packages/pelaggio/x.ts`), sibling, main, registered, sibling);
 		assert.equal(out.decision, "block");
+		assert.match(String(out.reason), /main repo/);
+	});
+
+	it("blocks writes into a foreign sibling worktree", () => {
+		const out = blockForeignRootWrite(write(`${other}/src/x.ts`), sibling, main, registered, sibling);
+		assert.equal(out.decision, "block");
+		assert.match(String(out.reason), /foreign worktree/);
 	});
 
 	it("allows absolute writes inside a nested seat under MAIN_REPO/.dev/", () => {
-		assert.deepEqual(blockMainRepoWrite(write(`${seat}/notes.md`), seat, main), {});
-		assert.deepEqual(blockMainRepoWrite(write("notes.md"), seat, main), {});
+		assert.deepEqual(blockForeignRootWrite(write(`${seat}/notes.md`), seat, main, registered), {});
+		assert.deepEqual(blockForeignRootWrite(write("notes.md"), seat, main, registered), {});
 	});
 
 	it("blocks writes from a nested seat into the main tree outside the seat", () => {
-		const out = blockMainRepoWrite(write(`${main}/packages/pelaggio/x.ts`), seat, main);
+		const out = blockForeignRootWrite(write(`${main}/packages/pelaggio/x.ts`), seat, main, registered);
 		assert.equal(out.decision, "block");
-		assert.match(String(out.reason), /targets main repo/);
+		assert.match(String(out.reason), /main repo/);
 	});
 
-	it("ignores non-Write/Edit tools", () => {
-		assert.deepEqual(blockMainRepoWrite(bash(`echo ${main}/x`), seat, main), {});
+	it("shipwreck shape: main cwd + ownWorktree allows own tree, blocks foreign sibling", () => {
+		assert.deepEqual(blockForeignRootWrite(write(`${sibling}/done.ts`), main, main, registered, sibling), {});
+		assert.deepEqual(blockForeignRootWrite(write(`${main}/bookkeeping.md`), main, main, registered, sibling), {});
+		const out = blockForeignRootWrite(write(`${other}/x.ts`), main, main, registered, sibling);
+		assert.equal(out.decision, "block");
+	});
+
+	it("denies Write/Edit into .dev/sessions even when cwd would allow", () => {
+		const sessionsPath = `${main}/.dev/sessions/forged.json`;
+		const out = blockForeignRootWrite(write(sessionsPath), main, main, registered, sibling);
+		assert.equal(out.decision, "block");
+		assert.match(String(out.reason), /session-record/);
+		// Relative path from main cwd
+		const out2 = blockForeignRootWrite(write(".dev/sessions/forged.json"), main, main, registered);
+		assert.equal(out2.decision, "block");
+	});
+
+	it("respects path-component boundaries (prefix sibling names)", () => {
+		const almost = "/home/user/my-repo-269-extra";
+		assert.deepEqual(blockForeignRootWrite(write(`${almost}/x.ts`), almost, main, [main, sibling, almost], almost), {});
+	});
+
+	it("ignores non-Write/Edit tools (Bash residual)", () => {
+		assert.deepEqual(blockForeignRootWrite(bash(`echo ${main}/x`), seat, main, registered), {});
 	});
 });
 

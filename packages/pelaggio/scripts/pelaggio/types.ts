@@ -412,6 +412,14 @@ export interface PipelineOpts {
 	 * and stays hard-gated by the snapshot.
 	 */
 	activeWorktrees?: Set<string>;
+	/**
+	 * #369: immutable cross-process session evaluator context (run-start inventory +
+	 * boot-relative starttime watermark). When absent, `runPipeline` captures it once
+	 * at entry so direct callers and tests still get inventory-based peer exemption.
+	 * The orchestrator may pre-capture once per process and thread the same object
+	 * into every worker. Typed object — not a boolean flag.
+	 */
+	sessionEvaluator?: import("./confinement/sessions.js").SessionEvaluatorContext;
 	workerStatus?: CycleStatus;
 	logPath?: string;
 	/** Required for creating step renderers — injected by orchestrate() */

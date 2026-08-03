@@ -79,7 +79,11 @@ If `{MAIN_REPO}/.dev/pelaggio-log.jsonl` exists, read it and report:
 - Average cost per successful cycle
 - Incomplete items (completed=false) that still have worktrees
 
-## 5. Codebase health check
+## 6. Expired session-record cleanup
+
+From `MAIN_REPO`, run `npx pelaggio sessions-sweep`. Report removed expired records and retained live/malformed counts. Do **not** hand-parse or delete `.dev/sessions/*.json` — the deterministic command owns expiry and compare-before-remove. SIGKILL/OOM/crash residue is cleaned here via content expiry.
+
+## 7. Codebase health check
 
 Run from MAIN_REPO the verification commands listed in `.claude/skills/_rubric.md`'s Verification section.
 
@@ -91,5 +95,6 @@ Summary table:
 - Roadmaps: X active, Y archived this run; decisions: Z resolved rows archived; stale: Q items quarantined (awaiting resolve)
 - Worktrees: X active, Y stale (flagged)
 - Branches: X active, Y merged (safe to delete)
+- Sessions: X expired removed, Y retained
 - Pelaggio: X cycles, Y shipped, $Z spent
 - Health: typecheck ✅/❌, lint ✅/❌

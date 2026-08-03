@@ -21,6 +21,7 @@ Commands:
   land    Deterministic red-merge guard + merge (--pr <n> [--admin] [--repo <owner/repo>]); refuses to merge a PR whose CI is not green.
   worktree-deps  Symlink/install node_modules for a worktree (called by /pick).
   run-contained  Run one command in the Linux contained-execution jail, or verify it with --self-test.
+  sessions-sweep  Remove content-expired cross-process session records under .dev/sessions/ (called by /tidy).
 
 See README for full options.
 `.trim();
@@ -37,6 +38,7 @@ const routes = {
 	land: ["scripts/pelaggio/land-cli.ts"],
 	"worktree-deps": ["scripts/pelaggio/worktree-deps.ts"],
 	"run-contained": ["scripts/pelaggio/run-contained-cli.ts"],
+	"sessions-sweep": ["scripts/pelaggio/sessions-cli.ts"],
 };
 
 if (!sub || sub === "--help" || sub === "-h" || !routes[sub]) {
