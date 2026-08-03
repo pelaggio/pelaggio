@@ -6,6 +6,7 @@ import {
 	DEFAULT_SHIP_TARGET,
 	isPipelineStep,
 	LOG_PATH,
+	type PipelineStep,
 	REPO,
 	REVIEW_CONFIG,
 	REVISE_LOCAL,
@@ -89,7 +90,7 @@ import { getRoadmapSource, type RoadmapSource } from "./roadmap/index.js";
 import { cleanupShipBodyFile, parseShipDecisionEffect, shipBodyFile } from "./ship/decision.js";
 import { commitStrayBookkeeping, getShipTarget, isAutonomousRemotePush, isShipTargetName, runShipBookkeeping as runShipBookkeepingDefault, SHIP_TARGET_NAMES } from "./ship/index.js";
 import { extractPrUrl } from "./ship/pull-request.js";
-import { getProvider, REGISTERED_PROVIDERS, runStep as runStepDefault } from "./step-runner.js";
+import { getProvider, REGISTERED_PROVIDERS, type RunStepFn, runStep as runStepDefault } from "./step-runner.js";
 import { A, createStepRenderer, fmtElapsed, LiveStatus, StatusBar, TUI_ENABLED } from "./tui.js";
 import {
 	type CycleGitBinding,
@@ -108,10 +109,8 @@ import {
 
 // ── Pipeline ───────────────────────────────────────────────────────────
 
-// Re-export the single-sourced runner signature (canonical in step-runner.ts) so
-// `mocks.ts`'s `import type { RunStepFn } from "../pipeline.js"` keeps resolving —
-// same public name, one definition, no pipeline↔step-runner type cycle.
-export type { RunStepFn } from "./step-runner.js";
+// Re-export so mocks.ts can keep resolving `import type { RunStepFn } from "../pipeline.js"`.
+export type { RunStepFn };
 
 /**
  * Outcome of a step run through `runStepWithRetry`: either a success carrying the
@@ -761,7 +760,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	}
 	startFrom ??= "plan";
 
-	const shouldRun = (s: Step): boolean => stepIndex(startFrom!) <= stepIndex(s);
+	const shouldRun = (s: PipelineStep): boolean => stepIndex(startFrom as PipelineStep) <= stepIndex(s);
 
 	function parkExit(reason?: string): CycleResult | null {
 		if (!parkSignal.parked && !reason) return null;
@@ -1257,6 +1256,8 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				}
 			}
 			if (!loop) {
+				// loop is only skipped for resolved-proceed; narrow before reading audit fields.
+				if (existingEscalation.state !== "resolved-proceed") return parkExit("adversarial review produced no loop result")!;
 				reviewRecordMarkdown = `## Adversarial review escalation\n\nDecision **${existingEscalation.id}** was resolved **proceed** by ${existingEscalation.resolution.actor}.\n\nRationale: ${existingEscalation.resolution.rationale}\n\nReviewed commit: \`${reviewedSha}\`. Evidence fingerprint: \`${existingEscalation.escalation.evidenceFingerprint}\`.`;
 				shakedownResult = { ok: true, subtype: "success", text: "resolved-proceed", fullText: "resolved-proceed", cost: 0, turns: 0 };
 			} else {

@@ -399,9 +399,15 @@ function parseProviderSelections(override: unknown, section: string, configPath:
 		}
 		if (!(POOLED_STEPS as readonly string[]).includes(key)) throw new Error(`${configPath}: provider lists are not supported at \`${section}.${key}\``);
 		if (value.length === 0) throw new Error(`${configPath}: expected \`${section}.${key}\` to be a non-empty provider list`);
-		if (!value.every(isProviderName)) throw new Error(`${configPath}: invalid provider in \`${section}.${key}\``);
-		if (new Set(value).size !== value.length) throw new Error(`${configPath}: duplicate provider in \`${section}.${key}\``);
-		out[key] = value as ProviderPool;
+		const names: ProviderName[] = [];
+		for (const entry of value) {
+			if (!isProviderName(entry)) throw new Error(`${configPath}: invalid provider in \`${section}.${key}\``);
+			names.push(entry);
+		}
+		if (new Set(names).size !== names.length) throw new Error(`${configPath}: duplicate provider in \`${section}.${key}\``);
+		const [first, ...rest] = names;
+		if (first === undefined) throw new Error(`${configPath}: expected \`${section}.${key}\` to be a non-empty provider list`);
+		out[key] = [first, ...rest];
 	}
 	return out;
 }
@@ -922,7 +928,9 @@ export function resolveStepSettings(config: ResolvedConfig, profile: string, ste
 export function resolveDriverCandidates(config: ResolvedConfig, profile: string, step: Step): StepSettings[] {
 	const base = resolveStepSettings(config, profile, step);
 	const selection = config.profileProviders[profile]?.[step] ?? base.provider;
-	const providers: readonly ProviderName[] = Array.isArray(selection) ? selection : [selection];
+	// ProviderName is a string union; ProviderPool is a non-empty tuple. typeof is the
+	// reliable narrow — Array.isArray does not exclude string from a string|tuple union cleanly.
+	const providers: readonly ProviderName[] = typeof selection === "string" ? [selection] : selection;
 	return providers.map((provider) => ({ ...base, provider }));
 }
 

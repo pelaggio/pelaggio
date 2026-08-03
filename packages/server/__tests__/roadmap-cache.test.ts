@@ -16,8 +16,11 @@ function fakeSource(name: string): RoadmapSource {
 		createItem: async () => {
 			throw new Error("not used");
 		},
-		planPath: async () => "x.md",
+		getItemPlan: async () => null,
+		resolvePlanPath: () => "x.md",
 		publishPlan: async () => {},
+		isCharterPickRace: () => false,
+		parseItemId: async () => null,
 	} satisfies RoadmapSource;
 }
 

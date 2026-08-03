@@ -14,7 +14,8 @@
 	"scripts": {
 		"dev": "tsx watch scripts/server.ts",
 		"start": "tsx scripts/server.ts",
-		"build": "tsx -e \"import('./src/app.ts')\"",
+		"typecheck": "pnpm -w exec tsc --noEmit --pretty false -p packages/server",
+		"build": "pnpm run typecheck && tsx -e \"import('./src/app.ts')\"",
 		"test": "tsx --test __tests__/*.test.ts"
 	},
 	"dependencies": {

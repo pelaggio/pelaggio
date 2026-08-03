@@ -192,14 +192,16 @@ export function loadAndValidateEffectsManifest(ctx: EffectsContext): EffectsMani
 	if (!Array.isArray(parsed.effects) || parsed.effects.length === 0) throw new EffectsManifestError("invalid_manifest", "effects manifest must contain at least one effect");
 
 	const effects = parsed.effects.map(validateEffect);
+	// Provenance fields were checked equal to ctx above; use ctx's typed values so the
+	// return is well-typed without re-validating JSON-parsed unknowns.
 	return {
 		schemaVersion: EFFECTS_SCHEMA_VERSION,
-		runId: parsed.runId,
-		itemId: parsed.itemId,
-		step: parsed.step,
-		attempt: parsed.attempt,
-		cwd: parsed.cwd,
-		preSha: parsed.preSha,
+		runId: ctx.runId,
+		itemId: ctx.itemId,
+		step: ctx.step,
+		attempt: ctx.attempt,
+		cwd: ctx.cwd,
+		preSha: ctx.preSha,
 		effects,
 	};
 }
@@ -210,19 +212,29 @@ export async function dispatchStepEffects(ctx: EffectsDispatchContext): Promise<
 	const appendText: string[] = [];
 	try {
 		for (const effect of manifest.effects) {
+			// Per-arm handler calls keep the discriminated effect type; a computed
+			// EFFECT_HANDLERS[kind](effect) collapses the parameter to `never`.
+			let result: EffectsDispatchResult | undefined;
 			switch (effect.kind) {
 				case "checkpoint":
-				case "plan.publish":
-				case "ship.ShipDecision":
-				case "review.Verdict":
-				case "review.Escalation": {
-					const result = await EFFECT_HANDLERS[effect.kind](effect, ctx);
-					if (result?.appendText) appendText.push(result.appendText);
+					result = await EFFECT_HANDLERS.checkpoint(effect, ctx);
 					break;
-				}
+				case "plan.publish":
+					result = await EFFECT_HANDLERS["plan.publish"](effect, ctx);
+					break;
+				case "ship.ShipDecision":
+					result = await EFFECT_HANDLERS["ship.ShipDecision"](effect, ctx);
+					break;
+				case "review.Verdict":
+					result = await EFFECT_HANDLERS["review.Verdict"](effect, ctx);
+					break;
+				case "review.Escalation":
+					result = await EFFECT_HANDLERS["review.Escalation"](effect, ctx);
+					break;
 				default:
 					throw new EffectsManifestError("unknown_effect_kind", `effect kind is not implemented: ${effect.kind}`);
 			}
+			if (result?.appendText) appendText.push(result.appendText);
 		}
 	} catch (e) {
 		if (e instanceof EffectsManifestError) throw e;

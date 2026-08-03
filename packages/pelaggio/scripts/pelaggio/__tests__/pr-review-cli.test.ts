@@ -1,8 +1,26 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { DEFAULTS, type ReviewConfig } from "../config.js";
 import { main, runPrReviewGate, setPrReviewDepsForTests } from "../pr-review-cli.js";
 import type { RunStepFn } from "../step-runner.js";
 import type { ParkSignal, StepEmit, StepResult } from "../types.js";
+
+/** Minimal ReviewConfig for gate tests — full authoring/taxonomy from defaults. */
+function reviewPolicy(over: Partial<Pick<ReviewConfig, "maxPasses" | "budgetCap" | "providerDiversity">> = {}): ReviewConfig {
+	return {
+		runner: DEFAULTS.review.runner,
+		statuslessAfter: DEFAULTS.review.statuslessAfter,
+		maxPasses: over.maxPasses ?? DEFAULTS.review.maxPasses,
+		budgetCap: over.budgetCap ?? DEFAULTS.review.budgetCap,
+		providerDiversity: over.providerDiversity ?? DEFAULTS.review.providerDiversity,
+		authoring: {
+			...DEFAULTS.review.authoring,
+			reviewers: DEFAULTS.review.authoring.reviewers.map((slot) => ({ ...slot })),
+			judge: { ...DEFAULTS.review.authoring.judge },
+		},
+		taxonomy: DEFAULTS.review.taxonomy,
+	};
+}
 
 interface RunCall {
 	name: string;
@@ -344,7 +362,7 @@ describe("pr-review CLI aggregation", () => {
 		const calls: string[] = [];
 		const review = await runPrReviewGate({
 			pr: "1",
-			policy: { runner: "ci", statuslessAfter: "2h", maxPasses: 2, budgetCap: 20, providerDiversity: "off" },
+			policy: reviewPolicy({ maxPasses: 2, budgetCap: 20, providerDiversity: "off" }),
 			execFileSync: ((_: string, args: readonly string[]) => (args.includes("--name-only") ? "docs/a.md\n" : "+docs")) as typeof import("node:child_process").execFileSync,
 			runStep: async (name) => {
 				calls.push(name);
@@ -368,7 +386,7 @@ describe("pr-review CLI aggregation", () => {
 		];
 		const review = await runPrReviewGate({
 			pr: "1",
-			policy: { runner: "ci", statuslessAfter: "2h", maxPasses: 3, budgetCap: 30, providerDiversity: "off" },
+			policy: reviewPolicy({ maxPasses: 3, budgetCap: 30, providerDiversity: "off" }),
 			execFileSync: ((_: string, args: readonly string[]) => (args.includes("--name-only") ? "docs/a.md\n" : "+docs")) as typeof import("node:child_process").execFileSync,
 			runStep: async () => {
 				const next = queued.shift();
@@ -391,9 +409,9 @@ describe("pr-review CLI aggregation", () => {
 				return result();
 			},
 		};
-		const diversity = await runPrReviewGate({ ...common, policy: { runner: "ci", statuslessAfter: "2h", maxPasses: 1, budgetCap: 20, providerDiversity: "require" } });
+		const diversity = await runPrReviewGate({ ...common, policy: reviewPolicy({ maxPasses: 1, budgetCap: 20, providerDiversity: "require" }) });
 		assert.equal(diversity.breakerReason, "provider-diversity");
-		const budget = await runPrReviewGate({ ...common, policy: { runner: "ci", statuslessAfter: "2h", maxPasses: 1, budgetCap: 9, providerDiversity: "off" } });
+		const budget = await runPrReviewGate({ ...common, policy: reviewPolicy({ maxPasses: 1, budgetCap: 9, providerDiversity: "off" }) });
 		assert.equal(budget.breakerReason, "budget");
 		assert.equal(calls, 0);
 	});
