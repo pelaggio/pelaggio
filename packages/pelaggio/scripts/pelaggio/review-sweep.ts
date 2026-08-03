@@ -97,6 +97,25 @@ export function postReviewStatus(gh: GhRunner, ghRepo: string, sha: string, stat
 	return postCommitStatus(gh, ghRepo, sha, state, REVIEW_CONTEXT, description, targetUrl);
 }
 
+/**
+ * Targeted `review` status probe for one commit SHA — the crash-between-post-and-dequeue
+ * idempotency check (#387). `findReviewCandidates` drops done PRs, so an enqueued record that
+ * is no longer a live candidate may already be terminal; the drain confirms that POSITIVELY
+ * here before deleting the record (never "absent from the listing" as evidence). Fail-soft: a
+ * probe error reads as `missing` so the drain re-runs (safe: status/comment upserts are
+ * idempotent) rather than dropping un-reviewed intent.
+ */
+export function reviewStatusForSha(gh: GhRunner, ghRepo: string, sha: string): "missing" | "pending" | "done" {
+	const out = runGhSoft(gh, ["api", `repos/${ghRepo}/commits/${sha}/status`]);
+	if (out === null) return "missing";
+	try {
+		const parsed = JSON.parse(out) as { statuses?: RollupEntry[] };
+		return reviewStatus(parsed.statuses).state;
+	} catch {
+		return "missing";
+	}
+}
+
 export function upsertReviewComment(gh: GhRunner, ghRepo: string, prNumber: number, body: string): boolean {
 	return upsertMarkerComment(gh, ghRepo, prNumber, PR_REVIEW_MARKER, body);
 }

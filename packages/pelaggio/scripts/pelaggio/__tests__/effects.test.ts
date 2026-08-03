@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
 import { dispatchStepEffects, type EffectsDispatchContext, EffectsManifestError, effectManifestPath, loadAndValidateEffectsManifest, writeEffectsManifest } from "../effects.js";
 import { digestManifestBytes, executionReceiptPath } from "../execution-receipt.js";
+import type { NewReviewRequest } from "../review-request-queue.js";
 import { allCommitMessages, makeMockRoadmap, makeTempGitRepo } from "./mocks.js";
 
 const FIXED_CHALLENGE = new Uint8Array(32).fill(7);
@@ -26,6 +27,35 @@ function baseContext(cwd = mkdtempSync(join(tmpdir(), "pelaggio-effects-test-"))
 		observeGit: () => ({ worktree: "test-wt", headSha: "abc123", branch: "feat/test" }),
 		now: () => "2026-08-03T12:00:00.000Z",
 	};
+}
+
+/** A committed repo on `feat/tool-99` with an origin remote, ready for `runShipPrEffects` to push. */
+function shipReadyRepo(): string {
+	const cwd = makeTempGitRepo();
+	const remote = mkdtempSync(join(tmpdir(), "pelaggio-effects-remote-"));
+	execSync("git init -q --bare", { cwd: remote });
+	execSync(`git remote add origin ${remote}`, { cwd });
+	writeFileSync(join(cwd, "src.txt"), "hello");
+	writeFileSync(join(cwd, ".gitignore"), ".dev/\n");
+	execSync("git add -A && git commit -q -m work", { cwd });
+	return cwd;
+}
+
+function shipEffect(itemId: string): { kind: "ship.ShipDecision"; target: "pull-request"; itemId: string; headBranch: string; prTitle: string; prBody: string } {
+	return { kind: "ship.ShipDecision", target: "pull-request", itemId, headBranch: "feat/tool-99", prTitle: "Ship TOOL-99", prBody: "Body" };
+}
+
+/** Run `fn` with a fake `gh` on PATH that answers `pr list` empty and `pr create` with `prUrl`. */
+async function withFakeGh(opts: { prUrl: string }, fn: () => Promise<void>): Promise<void> {
+	const bin = mkdtempSync(join(tmpdir(), "pelaggio-effects-fakebin-"));
+	writeFileSync(join(bin, "gh"), `#!/bin/sh\ncase "$1 $2" in\n"pr list") echo '[]' ;;\n"pr create") echo '${opts.prUrl}' ;;\n*) echo "unexpected gh call: $*" >&2; exit 1 ;;\nesac\n`, { mode: 0o755 });
+	const savedPath = process.env.PATH;
+	process.env.PATH = `${bin}:${savedPath}`;
+	try {
+		await fn();
+	} finally {
+		process.env.PATH = savedPath;
+	}
 }
 
 describe("effects manifest validation", () => {
@@ -361,44 +391,98 @@ describe("effects dispatch", () => {
 		assert.equal(existsSync(effectManifestPath(ctx)), true);
 	});
 
-	it("maps a successful ship dispatch's prUrl onto the dispatch result's appendText", async () => {
-		const cwd = makeTempGitRepo();
-		const remote = mkdtempSync(join(tmpdir(), "pelaggio-effects-remote-"));
-		execSync("git init -q --bare", { cwd: remote });
-		execSync(`git remote add origin ${remote}`, { cwd });
-		writeFileSync(join(cwd, "src.txt"), "hello");
-		// The effects manifest itself lands under `.dev/effects/` inside cwd (a real worktree's
-		// checked-in .gitignore excludes it; this scratch repo needs its own for a clean `git status`).
-		writeFileSync(join(cwd, ".gitignore"), ".dev/\n");
-		execSync("git add -A && git commit -q -m work", { cwd });
-
-		const prUrl = "https://github.com/acme/widget/pull/42";
-		const bin = mkdtempSync(join(tmpdir(), "pelaggio-effects-fakebin-"));
-		writeFileSync(join(bin, "gh"), `#!/bin/sh\ncase "$1 $2" in\n"pr list") echo '[]' ;;\n"pr create") echo '${prUrl}' ;;\n*) echo "unexpected gh call: $*" >&2; exit 1 ;;\nesac\n`, { mode: 0o755 });
-		const savedPath = process.env.PATH;
-		process.env.PATH = `${bin}:${savedPath}`;
-		try {
+	it("enqueues a review-request after a successful local-runner PR ship (#387)", async () => {
+		const cwd = shipReadyRepo();
+		const enqueued: Array<{ mainRepo: string; record: NewReviewRequest }> = [];
+		await withFakeGh({ prUrl: "https://github.com/acme/widget/pull/42" }, async () => {
 			const ctx = baseContext(cwd);
 			ctx.step = "ship";
-			writeEffectsManifest(ctx, [
-				{
-					kind: "ship.ShipDecision",
-					target: "pull-request",
-					itemId: ctx.itemId,
-					headBranch: "feat/tool-99",
-					prTitle: "Ship TOOL-99",
-					prBody: "Body",
+			ctx.reviewEnqueue = { runner: "local", ghRepo: "acme/widget", mainRepo: (c) => c, enqueue: (mainRepo, record) => enqueued.push({ mainRepo, record }) };
+			writeEffectsManifest(ctx, [shipEffect(ctx.itemId)]);
+			const result = await dispatchStepEffects(ctx);
+			assert.equal(result.appendText, "https://github.com/acme/widget/pull/42");
+		});
+		assert.equal(enqueued.length, 1);
+		assert.equal(enqueued[0].record.prNumber, 42);
+		assert.equal(enqueued[0].record.itemId, "TOOL-99");
+		assert.equal(enqueued[0].record.headBranch, "feat/tool-99");
+		assert.match(enqueued[0].record.headSha, /^[0-9a-f]{40}$/i);
+		assert.equal(enqueued[0].record.enqueuedAt, "2026-08-03T12:00:00.000Z");
+	});
+
+	it("does not enqueue under the ci runner or a non-github-issues source (#387)", async () => {
+		for (const deps of [
+			{ runner: "ci" as const, ghRepo: "acme/widget" },
+			{ runner: "local" as const, ghRepo: "" },
+		]) {
+			const cwd = shipReadyRepo();
+			const enqueued: NewReviewRequest[] = [];
+			await withFakeGh({ prUrl: "https://github.com/acme/widget/pull/42" }, async () => {
+				const ctx = baseContext(cwd);
+				ctx.step = "ship";
+				ctx.reviewEnqueue = { ...deps, mainRepo: (c) => c, enqueue: (_m, record) => enqueued.push(record) };
+				writeEffectsManifest(ctx, [shipEffect(ctx.itemId)]);
+				await dispatchStepEffects(ctx);
+			});
+			assert.equal(enqueued.length, 0, `expected no enqueue for ${JSON.stringify(deps)}`);
+		}
+	});
+
+	it("a null PR number skips the enqueue without failing the ship (#387)", async () => {
+		const cwd = shipReadyRepo();
+		const enqueued: NewReviewRequest[] = [];
+		const logs: string[] = [];
+		// A pr create URL that does not parse to a number → result.prNumber === null.
+		await withFakeGh({ prUrl: "https://github.com/acme/widget/pulls" }, async () => {
+			const ctx = baseContext(cwd);
+			ctx.step = "ship";
+			ctx.log = (m) => logs.push(m);
+			ctx.reviewEnqueue = { runner: "local", ghRepo: "acme/widget", mainRepo: (c) => c, enqueue: (_m, record) => enqueued.push(record) };
+			writeEffectsManifest(ctx, [shipEffect(ctx.itemId)]);
+			const result = await dispatchStepEffects(ctx);
+			assert.equal(result.appendText, "https://github.com/acme/widget/pulls"); // ship still succeeds
+		});
+		assert.equal(enqueued.length, 0);
+		assert.ok(logs.some((l) => l.includes("enqueue skipped")));
+	});
+
+	it("an enqueue failure does not throw out of the ship handler (#387)", async () => {
+		const cwd = shipReadyRepo();
+		const logs: string[] = [];
+		await withFakeGh({ prUrl: "https://github.com/acme/widget/pull/42" }, async () => {
+			const ctx = baseContext(cwd);
+			ctx.step = "ship";
+			ctx.log = (m) => logs.push(m);
+			ctx.reviewEnqueue = {
+				runner: "local",
+				ghRepo: "acme/widget",
+				mainRepo: (c) => c,
+				enqueue: () => {
+					throw new Error("disk full");
 				},
-			]);
+			};
+			writeEffectsManifest(ctx, [shipEffect(ctx.itemId)]);
+			const result = await dispatchStepEffects(ctx); // must not reject
+			assert.equal(result.appendText, "https://github.com/acme/widget/pull/42");
+			assert.equal(existsSync(effectManifestPath(ctx)), false, "manifest still deleted after a non-fatal enqueue failure");
+		});
+		assert.ok(logs.some((l) => l.includes("enqueue failed")));
+	});
+
+	it("maps a successful ship dispatch's prUrl onto the dispatch result's appendText", async () => {
+		const cwd = shipReadyRepo();
+		const prUrl = "https://github.com/acme/widget/pull/42";
+		await withFakeGh({ prUrl }, async () => {
+			const ctx = baseContext(cwd);
+			ctx.step = "ship";
+			writeEffectsManifest(ctx, [shipEffect(ctx.itemId)]);
 
 			const result = await dispatchStepEffects(ctx);
 
 			assert.equal(result.appendText, prUrl);
 			assert.equal(existsSync(effectManifestPath(ctx)), false);
 			assert.ok(result.receipt);
-		} finally {
-			process.env.PATH = savedPath;
-		}
+		});
 	});
 });
 

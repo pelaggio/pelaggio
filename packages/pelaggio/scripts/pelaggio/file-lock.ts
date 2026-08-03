@@ -139,3 +139,36 @@ export async function withFileLock<T>(path: string, fn: () => Promise<T> | T, op
 		takeIfContent(path, token); // release iff still ours — never a thief's lock
 	}
 }
+
+/**
+ * Non-blocking acquire: one O_EXCL attempt (after stealing an expired holder), then either
+ * run `fn` under the lock or report contention without waiting. Used by the per-worker
+ * post-cycle review drain (#387) — a plain `withFileLock` with a long timeout would block one
+ * worker for the entire duration of a peer's multi-minute review agent. On contention the
+ * peer holding the lock is already draining the shared main-tree queue, so skipping the round
+ * misses nothing. Returns `{ ran: true, value }` when it held the lock, `{ ran: false }` when a
+ * live holder owns it.
+ */
+export async function tryWithFileLock<T>(path: string, fn: () => Promise<T> | T, opts: { label: string; staleMs: number }): Promise<{ ran: true; value: T } | { ran: false }> {
+	const { staleMs } = opts;
+	mkdirSync(dirname(path), { recursive: true });
+	const token = `${Date.now() + staleMs}:${process.pid}-${randomBytes(8).toString("hex")}`;
+	for (const attempt of [0, 1]) {
+		try {
+			writeFileSync(path, token, { flag: "wx" }); // O_EXCL: acquire + identity + expiry
+		} catch (err) {
+			if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+			if (attempt === 0) {
+				stealIfStale(path); // reclaim an orphaned (crashed-holder) lock, then retry once
+				continue;
+			}
+			return { ran: false }; // live contention — a peer holds the lock
+		}
+		try {
+			return { ran: true, value: await fn() };
+		} finally {
+			takeIfContent(path, token); // release iff still ours
+		}
+	}
+	return { ran: false };
+}

@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
-import { withFileLock } from "../file-lock.js";
+import { tryWithFileLock, withFileLock } from "../file-lock.js";
 
 const OPTS = { label: "test lock", staleMs: 2_000, acquireTimeoutMs: 8_000 };
 
@@ -21,6 +21,37 @@ async function bumpCounter(dir: string): Promise<void> {
 	await new Promise((r) => setTimeout(r, 5)); // widen the race window
 	writeFileSync(counterPath(dir), String(n + 1));
 }
+
+const TRY_OPTS = { label: "try lock", staleMs: 2_000 };
+
+test("tryWithFileLock runs fn when the lock is free", async () => {
+	const dir = seedDir();
+	const res = await tryWithFileLock(lockPath(dir), () => 7, TRY_OPTS);
+	assert.deepEqual(res, { ran: true, value: 7 });
+	assert.equal(existsSync(lockPath(dir)), false, "released after fn");
+});
+
+test("tryWithFileLock skips (ran:false) when a live holder owns the lock", async () => {
+	const dir = seedDir();
+	let inner: { ran: boolean } = { ran: true };
+	await withFileLock(
+		lockPath(dir),
+		async () => {
+			inner = await tryWithFileLock(lockPath(dir), () => "should-not-run", TRY_OPTS);
+		},
+		OPTS,
+	);
+	assert.deepEqual(inner, { ran: false }, "contended try-acquire must not run fn");
+});
+
+test("tryWithFileLock steals an expired (orphaned) lock", async () => {
+	const dir = seedDir();
+	mkdirSync(resolve(dir, "lock"), { recursive: true });
+	// A crashed holder's lock whose expiry is already in the past.
+	writeFileSync(lockPath(dir), `${Date.now() - 1_000}:dead-holder`);
+	const res = await tryWithFileLock(lockPath(dir), () => "ok", TRY_OPTS);
+	assert.deepEqual(res, { ran: true, value: "ok" });
+});
 
 test("serializes concurrent critical sections (in-process)", async () => {
 	const dir = seedDir();

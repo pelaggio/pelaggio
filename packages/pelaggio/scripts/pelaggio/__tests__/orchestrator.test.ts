@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { REPO } from "../config.js";
 import type { NotifyPayload } from "../notify.js";
 import { runOrchestrator } from "../pipeline.js";
+import { enqueueReviewRequest, type NewReviewRequest, reviewRequestsDir } from "../review-request-queue.js";
 import { reviseFindingsPath } from "../revise-sweep.js";
 import type { GhRunner } from "../roadmap/github-issues.js";
 import { LiveStatus, StatusBar } from "../tui.js";
@@ -871,7 +872,10 @@ describe("runOrchestrator — revise sweep (issue #76)", () => {
 			statuses.map((args) => args.find((arg) => arg.startsWith("state="))),
 			["state=pending", "state=failure"],
 		);
-		assert.equal(prListCalls, 2, "review sweep must list before revise sweep lists");
+		// campaign-start review drain lists (1) → revise sweep lists (2) → the #387 post-cycle drain
+		// re-lists (3), sees the now-red PR as terminal, and no-ops. The pending→failure status posted
+		// by the campaign-start drain (above) precedes the revise run of item 84, which is the invariant.
+		assert.ok(prListCalls >= 2, `review sweep must list before revise sweep lists; got ${prListCalls}`);
 	});
 
 	// A pending PR fixture whose `review` status is PENDING → always a candidate (never "done",
@@ -945,9 +949,33 @@ describe("runOrchestrator — revise sweep (issue #76)", () => {
 		t.mock.timers.setTime(baseNow);
 
 		const ghCalls: string[][] = [];
+		// Stateful stub: once the retry posts a terminal `review` status on abc123, the forge's rollup
+		// reflects it so the #387 post-cycle drain drops the PR (done) instead of re-reviewing it.
+		let reviewState = "PENDING";
 		const gh: GhRunner = (args) => {
 			ghCalls.push(args);
-			if (args[0] === "pr" && args[1] === "list") return { stdout: JSON.stringify(pendingReviewPr()), stderr: "", status: 0 };
+			if (args[0] === "pr" && args[1] === "list") {
+				return {
+					stdout: JSON.stringify([
+						{
+							number: 201,
+							isDraft: false,
+							headRefName: "feat/issue-84-local-review",
+							headRefOid: "abc123",
+							headRepository: { nameWithOwner: "o/r" },
+							updatedAt: "2026-07-08T12:00:00Z",
+							statusCheckRollup: [{ __typename: "StatusContext", context: "review", state: reviewState, startedAt: "2026-07-08T12:00:00Z" }],
+						},
+					]),
+					stderr: "",
+					status: 0,
+				};
+			}
+			if (args[0] === "api" && args[1] === "repos/o/r/statuses/abc123") {
+				const posted = args.find((a) => a.startsWith("state="))?.slice("state=".length);
+				if (posted === "success" || posted === "failure") reviewState = posted.toUpperCase();
+				return { stdout: "", stderr: "", status: 0 };
+			}
 			if (args[0] === "issue" && args[1] === "view") return { stdout: JSON.stringify({ labels: [{ name: "autopilot" }] }), stderr: "", status: 0 };
 			if (args[0] === "api" && args[1]?.includes("/comments")) return { stdout: JSON.stringify([]), stderr: "", status: 0 };
 			return { stdout: "", stderr: "", status: 0 };
@@ -1257,5 +1285,235 @@ describe("runOrchestrator — continuous mode (issue #82)", () => {
 		);
 		assert.equal(calls.length, 1);
 		assert.equal(exitCode, 1);
+	});
+});
+
+describe("runOrchestrator — mid-run review drain (#387)", () => {
+	const HEAD = "abc123abc123abc123abc123abc123abc123abcd";
+	const dirs: string[] = [];
+	// A temp "main tree": the ship enqueues via `enqueueReviewRequest(main, …)` (→ main/.dev/review-requests),
+	// and the drain reads `reviewRequestsDir(main)` — the same split the pipeline uses in production.
+	function mainDir(): string {
+		const d = mkdtempSync(join(tmpdir(), "review-queue-387-"));
+		dirs.push(d);
+		return d;
+	}
+	after(() => {
+		for (const d of dirs) rmSync(d, { recursive: true, force: true });
+	});
+	const pending = (main: string): string[] => {
+		try {
+			return readdirSync(reviewRequestsDir(main)).filter((n) => n.endsWith(".json"));
+		} catch {
+			return [];
+		}
+	};
+	const passGate = async () => ({ gate: "pass" as const, body: "<!-- pelaggio-pr-review -->\nclean\n\nVerdict: PASS", cost: 0.2, costEstimated: false, turns: 3, ok: true, subtype: "success" });
+	type GateResult = { gate: "pass" | "block" | "park"; body: string; cost: number; costEstimated: boolean; turns: number; ok: boolean; subtype: string; park?: { resetsAt: number; limitType: string } };
+	type GateFn = (opts: { parkSignal?: { parked: boolean; resetsAt: number; limitType: string } }) => Promise<GateResult>;
+
+	function reviewDeps(over: { gh: GhRunner; main: string; runReviewGate?: GateFn }) {
+		return {
+			runner: "local" as const,
+			ghRepo: "o/r",
+			gh: over.gh,
+			queueRoot: reviewRequestsDir(over.main),
+			statuslessAfter: "2h",
+			now: () => Date.parse("2026-08-03T12:05:00Z"),
+			prepareReviewHead: () => ({ diffCwd: "/tmp/pr-head", baseRef: "origin/main", headRef: "refs/pelaggio-review/pr-201" }),
+			cleanupReviewHead: () => {},
+			runReviewGate: over.runReviewGate ?? passGate,
+		};
+	}
+
+	function record(over: Partial<NewReviewRequest> = {}): NewReviewRequest {
+		return { prNumber: 201, headSha: HEAD, itemId: "387", headBranch: "feat/issue-387", enqueuedAt: "2026-08-03T12:00:00.000Z", ...over };
+	}
+
+	it("post-cycle drain reviews a PR enqueued mid-cycle, then completes the record (the mid-run symptom fix)", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const main = mainDir();
+		const ghCalls: string[][] = [];
+		const gh: GhRunner = (args) => {
+			ghCalls.push(args);
+			if (args[0] === "pr" && args[1] === "list") return { stdout: "[]", stderr: "", status: 0 }; // no live candidates — the record is the only work
+			if (args[0] === "issue" && args[1] === "view") return { stdout: JSON.stringify({ labels: [{ name: "autopilot" }] }), stderr: "", status: 0 };
+			if (args[0] === "api" && args[1] === `repos/o/r/commits/${HEAD}/status`) return { stdout: JSON.stringify({ statuses: [] }), stderr: "", status: 0 };
+			if (args[0] === "api" && args[1]?.includes("/comments")) return { stdout: "[]", stderr: "", status: 0 };
+			return { stdout: "", stderr: "", status: 0 };
+		};
+		let gateCalls = 0;
+		const { runPipeline } = createMockRunPipeline({
+			byItem: { "387": { completed: true, cost: 0.5 } },
+			// The ship-tail enqueue lands the record in the main-tree queue as the cycle ships.
+			onCall: (opts) => {
+				if (opts.itemId === "387") enqueueReviewRequest(main, record());
+			},
+		});
+
+		await runOrchestrator(
+			{ ...baseFlags, item: "387", target: "pull-request", cycles: "1" },
+			{
+				runPipeline,
+				review: reviewDeps({
+					gh,
+					main,
+					runReviewGate: async () => {
+						gateCalls++;
+						return passGate();
+					},
+				}),
+			},
+		);
+
+		assert.equal(gateCalls, 1, "the enqueued PR is reviewed once by the post-cycle drain");
+		const statuses = ghCalls.filter((a) => a[0] === "api" && a[1] === `repos/o/r/statuses/${HEAD}`).map((a) => a.find((x) => x.startsWith("state=")));
+		assert.deepEqual(statuses, ["state=pending", "state=success"]);
+		assert.deepEqual(pending(main), [], "record completed (deleted) after the terminal status");
+	});
+
+	it("completes an already-terminal record without re-running the agent (crash-after-post idempotency)", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const main = mainDir();
+		enqueueReviewRequest(main, record());
+		let gateCalls = 0;
+		const ghCalls: string[][] = [];
+		const gh: GhRunner = (args) => {
+			ghCalls.push(args);
+			if (args[0] === "pr" && args[1] === "list") return { stdout: "[]", stderr: "", status: 0 };
+			if (args[0] === "issue" && args[1] === "view") return { stdout: JSON.stringify({ labels: [{ name: "autopilot" }] }), stderr: "", status: 0 };
+			// The forge already has a terminal `review` status for this exact SHA (posted before a crash).
+			if (args[0] === "api" && args[1] === `repos/o/r/commits/${HEAD}/status`) return { stdout: JSON.stringify({ statuses: [{ context: "review", state: "success" }] }), stderr: "", status: 0 };
+			return { stdout: "", stderr: "", status: 0 };
+		};
+		const { runPipeline } = createMockRunPipeline({ default: { completed: false, cost: 0, error: "pick:queue-empty" } });
+
+		await runOrchestrator(
+			{ ...baseFlags, target: "pull-request", cycles: "1" },
+			{
+				runPipeline,
+				resolveWorktree: () => "/fake/wt",
+				review: reviewDeps({
+					gh,
+					main,
+					runReviewGate: async () => {
+						gateCalls++;
+						return passGate();
+					},
+				}),
+			},
+		);
+
+		assert.equal(gateCalls, 0, "a positively-terminal SHA is not re-reviewed");
+		assert.ok(!ghCalls.some((a) => a[0] === "api" && a[1] === `repos/o/r/statuses/${HEAD}`), "no status re-posted");
+		assert.deepEqual(pending(main), [], "the orphaned record is deleted without a second gate call");
+	});
+
+	it("a rate-limit park leaves the status pending and hands the record back for the next drain", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const main = mainDir();
+		enqueueReviewRequest(main, record());
+		let gateCalls = 0;
+		const ghCalls: string[][] = [];
+		const gh: GhRunner = (args) => {
+			ghCalls.push(args);
+			if (args[0] === "pr" && args[1] === "list") return { stdout: "[]", stderr: "", status: 0 };
+			if (args[0] === "issue" && args[1] === "view") return { stdout: JSON.stringify({ labels: [{ name: "autopilot" }] }), stderr: "", status: 0 };
+			if (args[0] === "api" && args[1] === `repos/o/r/commits/${HEAD}/status`) return { stdout: JSON.stringify({ statuses: [] }), stderr: "", status: 0 };
+			return { stdout: "", stderr: "", status: 0 };
+		};
+		const { runPipeline, calls } = createMockRunPipeline({ default: { completed: false, cost: 0, error: "pick:queue-empty" } });
+
+		await runOrchestrator(
+			{ ...baseFlags, target: "pull-request", cycles: "1" },
+			{
+				runPipeline,
+				resolveWorktree: () => "/fake/wt",
+				park: { autoResume: false }, // hand back immediately
+				review: reviewDeps({
+					gh,
+					main,
+					runReviewGate: async (opts) => {
+						gateCalls++;
+						if (opts.parkSignal) {
+							opts.parkSignal.parked = true;
+							opts.parkSignal.resetsAt = 0;
+							opts.parkSignal.limitType = "5h";
+						}
+						return { gate: "park" as const, body: "should-not-post", cost: 0.1, costEstimated: false, turns: 0, ok: false, subtype: "error_rate_limit", park: { resetsAt: 0, limitType: "5h" } };
+					},
+				}),
+			},
+		);
+
+		assert.equal(gateCalls, 1);
+		const statuses = ghCalls.filter((a) => a[0] === "api" && a[1] === `repos/o/r/statuses/${HEAD}`).map((a) => a.find((x) => x.startsWith("state=")));
+		assert.deepEqual(statuses, ["state=pending"], "only pending — never a failure on a park");
+		assert.ok(!ghCalls.some((a) => a.some((x) => x.startsWith("body="))), "no findings comment upserted on a park");
+		assert.deepEqual(pending(main), [`201-${HEAD}.json`], "record handed back to pending for the next drain");
+		assert.equal(calls.length, 0, "the pick pool is skipped while parked");
+	});
+
+	it("an --item run drains review (candidate) but excludes revise (the DECISION fork)", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const main = mainDir();
+		let reviewState = "";
+		let editCalls = 0;
+		const gh: GhRunner = (args) => {
+			if (args[0] === "pr" && args[1] === "list") {
+				return {
+					stdout: JSON.stringify([
+						// PR 201 statusless → review reviews it; PR 202 red + unlabeled → revisable, but excluded under --item.
+						{
+							number: 201,
+							isDraft: false,
+							headRefName: "feat/issue-201-x",
+							headRefOid: HEAD,
+							headRepository: { nameWithOwner: "o/r" },
+							updatedAt: "2026-08-03T12:00:00Z",
+							statusCheckRollup: reviewState ? [{ __typename: "StatusContext", context: "review", state: reviewState }] : [],
+						},
+						{ number: 202, isDraft: false, headRefName: "feat/issue-202-y", labels: [], statusCheckRollup: [{ __typename: "StatusContext", context: "review", state: "FAILURE" }] },
+					]),
+					stderr: "",
+					status: 0,
+				};
+			}
+			if (args[0] === "issue" && args[1] === "view") return { stdout: JSON.stringify({ labels: [{ name: "autopilot" }] }), stderr: "", status: 0 };
+			if (args[0] === "api" && args[1] === `repos/o/r/statuses/${HEAD}`) {
+				const posted = args.find((a) => a.startsWith("state="))?.slice("state=".length);
+				if (posted === "success" || posted === "failure") reviewState = posted.toUpperCase();
+				return { stdout: "", stderr: "", status: 0 };
+			}
+			if (args[0] === "api" && args[1]?.includes("/comments")) return { stdout: "[]", stderr: "", status: 0 };
+			if (args[0] === "pr" && args[1] === "edit") editCalls++;
+			return { stdout: "", stderr: "", status: 0 };
+		};
+		let gateCalls = 0;
+		const { runPipeline, calls } = createMockRunPipeline({ byItem: { "387": { completed: true, cost: 0.5 } } });
+
+		await runOrchestrator(
+			{ ...baseFlags, item: "387", target: "pull-request", cycles: "1" },
+			{
+				runPipeline,
+				review: reviewDeps({
+					gh,
+					main,
+					runReviewGate: async () => {
+						gateCalls++;
+						return passGate();
+					},
+				}),
+				revise: { local: true, ghRepo: "o/r", gh },
+			},
+		);
+
+		assert.equal(gateCalls, 1, "review drains the statusless PR under --item");
+		assert.equal(editCalls, 0, "revise never claims (pr edit) under --item — the exclusion is preserved");
+		assert.deepEqual(
+			calls.map((c) => c.opts.itemId),
+			["387"],
+			"only the --item cycle ran; no revise cycle",
+		);
 	});
 });

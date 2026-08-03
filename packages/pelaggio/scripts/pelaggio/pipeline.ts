@@ -26,7 +26,7 @@ import {
 import { forbiddenRootsForConfinement } from "./confinement/roots.js";
 import { type AcceptedSession, captureEvaluatorContext, createSessionController, firstDiffPathsByRoot, resolveEligibleSessions, revalidateChangedRoot, type SessionController, type SessionEvaluatorContext } from "./confinement/sessions.js";
 import { continuousCycleCap, DayBudgetTracker, freeQueueProbe, resolveContinuousConfig } from "./continuous.js";
-import { appendDecisions as appendDecisionsDefault, appendReviewEscalation as appendReviewEscalationDefault, lookupReviewEscalation as lookupReviewEscalationDefault } from "./decisions.js";
+import { appendDecisions as appendDecisionsDefault, appendReviewEscalation as appendReviewEscalationDefault, lookupReviewEscalation as lookupReviewEscalationDefault, mainWorktree } from "./decisions.js";
 import { createDriverAssignmentState, type DriverIdentity, recordArtifactAuthor, resolveStaticAuthor, selectAuthor, selectReviewers } from "./driver-assignment.js";
 import {
 	dispatchStepEffects as dispatchStepEffectsDefault,
@@ -39,6 +39,7 @@ import {
 	writeEffectsManifest as writeEffectsManifestDefault,
 } from "./effects.js";
 import { digestChallenge } from "./execution-receipt.js";
+import { tryWithFileLock } from "./file-lock.js";
 import { DEFAULT_FLOW_POLICY, type FlowPolicy } from "./flow-policy.js";
 import {
 	appendLog as appendLogDefault,
@@ -88,7 +89,8 @@ import { capabilityMapFrom, resolveAuthoringReviewConfig } from "./provider-rout
 import { runReviewLoop } from "./review/loop.js";
 import { type ReviewRecord, renderReviewRecord, writeReviewRecord } from "./review/record.js";
 import { cleanupAuthoringReviewSeatsForSha, isAuthoringReviewSeatPath, prepareAuthoringReviewSeat } from "./review/seats.js";
-import { cleanupReviewHead, findReviewCandidates, isReviewHeadPath, postLocalModeWorkflowComment, postReviewStatus, prepareReviewHead, upsertReviewComment } from "./review-sweep.js";
+import { claimReviewRequest, completeReviewRequest, listReviewRequests, type ReviewRequestRecord, reclaimStaleReviewClaims, reviewDrainLockPath, reviewRequestsDir, unclaimReviewRequest } from "./review-request-queue.js";
+import { cleanupReviewHead, findReviewCandidates, isReviewHeadPath, postLocalModeWorkflowComment, postReviewStatus, prepareReviewHead, type ReviewCandidate, reviewStatusForSha, upsertReviewComment } from "./review-sweep.js";
 import { claimRevision, ensureReviseWorktree, fetchReviewFindings, findRevisablePrs, isAutopilotManaged, postParkComment, reviseFindingsPath } from "./revise-sweep.js";
 import { defaultGhRun, type GhRunner } from "./roadmap/github-issues.js";
 import { getRoadmapSource, type RoadmapSource } from "./roadmap/index.js";
@@ -1885,7 +1887,7 @@ export interface OrchestratorDeps {
 	 *  (`REVISE_LOCAL`, the github-source-gated `ghRepo`, `defaultGhRun`). Injecting `ghRepo` lets
 	 *  tests force-activate the sweep with a stubbed `gh` without a real github-issues config. */
 	revise?: Partial<{ local: boolean; ghRepo: string; gh: GhRunner }>;
-	/** Local review sweep config (issue #84). Partial — merged onto config defaults. */
+	/** Local review sweep config (issue #84; mid-run drain #387). Partial — merged onto config defaults. */
 	review?: Partial<{
 		runner: ReviewRunner;
 		policy: typeof REVIEW_CONFIG;
@@ -1896,6 +1898,9 @@ export interface OrchestratorDeps {
 		now: () => number;
 		prepareReviewHead: typeof prepareReviewHead;
 		cleanupReviewHead: typeof cleanupReviewHead;
+		/** Mid-run review-request queue root (#387). Defaults to `mainWorktree(REPO)/.dev/review-requests`;
+		 *  tests inject a temp dir to drive the drain without touching real `.dev/`. */
+		queueRoot: string;
 	}>;
 	/**
 	 * Continuous-mode free queue probe (issue #82). Defaults to `listItems` + FlowPolicy
@@ -1920,6 +1925,10 @@ const RESUME_JITTER_MS = 15_000;
 // Defensive bound against a pathological park→tiny-reset→park spin. Each real wait is
 // minutes+, and `maxWaitMs` already caps each round, so 12 is generous insurance.
 const MAX_RESUME_ROUNDS = 12;
+// Review drain lock (#387): one drain pass reviews PRs sequentially and may run minutes per PR;
+// size the orphan-steal window well above the longest realistic single pass. It only matters
+// across processes (a crashed holder), so 4h is generous insurance, not a per-PR timeout.
+const REVIEW_DRAIN_LOCK_STALE_MS = 4 * 60 * 60 * 1000;
 
 /**
  * Wait out the current park's reset window, or report that we can't. The timing/jitter/max-wait
@@ -2358,6 +2367,18 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 
 				if (v) liveStatus.render();
 
+				// Post-cycle review drain (#387): the load-bearing symptom fix — review the PR this cycle
+				// just shipped (and any backlog) before the worker pulls again, in every mode incl. a single
+				// `--item` (its lone ship drains before the worker returns). In continuous mode this drain of
+				// iteration N precedes revise-at-top of N+1, preserving review→revise order across the
+				// boundary. Non-blocking lock: a peer worker already draining the shared queue covers this
+				// round, so contention skips rather than stalling the pool on a peer's multi-minute agent. On
+				// a rate-limit park the drain sets parkSignal and returns; the break below hands off to the
+				// main park-and-resume block (no nested auto-resume wait inside the worker).
+				if (doReviewDrain && !parkSignal.parked) {
+					await tryWithFileLock(reviewDrainLock, () => runLocalReviewDrainOnce({ notifyStranded: false }), { label: "review drain lock", staleMs: REVIEW_DRAIN_LOCK_STALE_MS });
+				}
+
 				if (parkSignal.parked) break;
 				if (!result.completed && !RECOVERABLE.has(result.error ?? "")) return;
 				// Continuous drain: a race can leave pick:queue-empty after the free probe
@@ -2376,12 +2397,14 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		const autoResume = park.autoResume;
 		const maxWaitMs = parseWaitFlag(flags["max-wait"] ?? park.maxWait);
 
-		// ── Local review sweep (issue #84) ──
+		// ── Local review drain (issue #84 sweep + #387 mid-run reconciler) ──
 		//
-		// In local review mode the trusted local tree owns the review CLI/skill/parser/status
-		// posting code. PR heads are only diff/file data. This sweep posts `review` commit
-		// statuses before the existing revise sweep runs, so a fresh local BLOCK is immediately
-		// visible to `findRevisablePrs` below.
+		// In local review mode the trusted local main tree owns the review CLI/skill/parser/status
+		// posting code; PR heads are only diff/file data. The reconciler is the SOLE executor and
+		// status poster — the ship tail only ENQUEUES a review-request (#387). It drains at campaign
+		// start (cold-start + backlog) and post-cycle inside every worker, so a PR opened mid-run — or
+		// the sole PR of an `--item` run — gets its `review` status before the worker exits rather than
+		// "next process". It always runs before revise, so a fresh local BLOCK is immediately revisable.
 		const review = {
 			runner: REVIEW_CONFIG.runner,
 			policy: REVIEW_CONFIG,
@@ -2392,83 +2415,140 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			now: () => Date.now(),
 			prepareReviewHead,
 			cleanupReviewHead,
+			queueRoot: reviewRequestsDir(mainWorktree(REPO)),
 			...deps.review,
 		};
 		const shipIsPr = shipTargetName === "pull-request" || shipTargetName === "auto-merge-pr";
-		const doReviewSweep = review.runner === "local" && shipIsPr && !!review.ghRepo && !noWorktree && !dryRun && items.length === 0;
+		// #387: `items.length === 0` is REMOVED for review only — the `review` status is a merge gate,
+		// not optional campaign work, so an explicit `--item` run drains too. Revise keeps its
+		// `items.length === 0` exclusion below ("do exactly these").
+		const doReviewDrain = review.runner === "local" && shipIsPr && !!review.ghRepo && !noWorktree && !dryRun;
+		const reviewDrainLock = reviewDrainLockPath(review.queueRoot);
 
-		if (doReviewSweep) {
-			// A rate-limit park during pr-review/pr-verify is transient, not a BLOCK: the gate returns
-			// `park`, the sweep leaves the `review` status *pending* (never red, never a revisable
-			// findings comment), stops starting more reviews, and — under the same auto-resume /
-			// --max-wait / reset-time policy as the item park-and-resume loop — waits and retries the
-			// sweep in-process. Pending PRs stay eligible in `findReviewCandidates`, so a resumed round
-			// re-lists and re-reviews them; a hand-back leaves the PR pending for the next run.
-			let reviewRound = 0;
-			while (reviewRound < MAX_RESUME_ROUNDS) {
-				reviewRound++;
-				const { candidates, stranded } = findReviewCandidates(review.gh, review.ghRepo, review.now(), parseWaitFlag(review.statuslessAfter));
-				// Stranded handling is a one-time nudge (idempotent comment + a notification) — only on
-				// the first round, so a resumed retry does not re-notify the same stranded PRs.
-				if (reviewRound === 1) {
-					for (const pr of stranded) {
-						postLocalModeWorkflowComment(review.gh, review.ghRepo, pr.prNumber);
-						if (notifyEnabled) await notifyStrandedReview(notifyCfg, { itemId: pr.itemId, prNumber: pr.prNumber, ghRepo: review.ghRepo, headSha: pr.headSha, logPath: LOG_PATH }, { send });
-					}
+		// One drain pass: reconcile enqueued records with live statusless PRs, post each `review`
+		// status from the trusted tree, and complete records. Respects `parkSignal` — a rate-limit
+		// park stops starting new reviews and returns (the caller decides whether to wait+retry).
+		// Serialized by the drain lock at both call sites so two finishing workers never
+		// double-execute one PR+SHA.
+		async function runLocalReviewDrainOnce(opts: { notifyStranded: boolean }): Promise<void> {
+			reclaimStaleReviewClaims(review.queueRoot, review.now());
+			const records = listReviewRequests(review.queueRoot);
+			const { candidates, stranded } = findReviewCandidates(review.gh, review.ghRepo, review.now(), parseWaitFlag(review.statuslessAfter));
+			// Stranded nudge (idempotent comment + notification) — campaign-start's first round only, so
+			// post-cycle drains and resumed retries do not re-notify the same stranded PRs.
+			if (opts.notifyStranded) {
+				for (const pr of stranded) {
+					postLocalModeWorkflowComment(review.gh, review.ghRepo, pr.prNumber);
+					if (notifyEnabled) await notifyStrandedReview(notifyCfg, { itemId: pr.itemId, prNumber: pr.prNumber, ghRepo: review.ghRepo, headSha: pr.headSha, logPath: LOG_PATH }, { send });
 				}
+			}
 
-				for (const pr of candidates) {
-					if (parkSignal.parked) break;
-					if (!isAutopilotManaged(review.gh, review.ghRepo, pr.itemId, ROADMAP_GITHUB.label)) continue;
-					if (!postReviewStatus(review.gh, review.ghRepo, pr.headSha, "pending", "local pelaggio review running")) continue;
-					let body = "";
-					let finalState: "success" | "failure" = "failure";
-					let reviewCost = 0;
-					let reviewCostEstimated = false;
-					try {
-						const prepared = review.prepareReviewHead(REPO, pr);
-						if (!prepared) throw new Error("could not prepare PR head for local review");
-						const result = await review.runReviewGate({
-							pr: String(pr.prNumber),
-							profile: "standard",
-							cwd: REPO,
-							diffCwd: prepared.diffCwd,
-							diffBaseRef: prepared.baseRef,
-							diffHeadRef: prepared.headRef,
-							policy: review.policy,
-							parkSignal, // shared: a rate-limit park sets this and flows into the wait+retry below
-						});
-						if (result.gate === "park") {
-							// Transient: leave the pending status as-is (do NOT upsert findings or post
-							// failure), charge the partial cost, and stop starting new reviews this round.
-							// `finally` still cleans the review head; the shared `parkSignal` is already parked.
-							totalSpent += result.cost;
-							console.log(`review ${pr.itemId}#${pr.prNumber} — parked (${result.park?.limitType ?? parkSignal.limitType})`);
-							break;
-						}
+			// Union by (prNumber, headSha): enqueued records are authoritative mid-run intent; live
+			// candidates (status missing|pending) backfill cold-start backlog + prior-run statusless PRs.
+			const work = new Map<string, { candidate: ReviewCandidate; record?: ReviewRequestRecord }>();
+			for (const { record } of records) {
+				work.set(`${record.prNumber}-${record.headSha}`, {
+					candidate: { prNumber: record.prNumber, itemId: record.itemId, branch: record.headBranch, headSha: record.headSha, statusState: "missing" },
+					record,
+				});
+			}
+			const liveKeys = new Set(candidates.map((c) => `${c.prNumber}-${c.headSha}`));
+			for (const candidate of candidates) {
+				const key = `${candidate.prNumber}-${candidate.headSha}`;
+				const existing = work.get(key);
+				if (existing)
+					existing.candidate = candidate; // prefer live candidate data; keep the record for completion
+				else work.set(key, { candidate });
+			}
+
+			for (const { candidate: pr, record } of work.values()) {
+				if (parkSignal.parked) break;
+				if (!isAutopilotManaged(review.gh, review.ghRepo, pr.itemId, ROADMAP_GITHUB.label)) {
+					if (record) completeReviewRequest(review.queueRoot, pr.prNumber, pr.headSha);
+					continue;
+				}
+				// Crash-between-post-and-dequeue: an orphaned record (no live candidate) may already be
+				// terminal on the forge. Confirm POSITIVELY on the exact SHA — never "absent from the
+				// candidate list" — before deleting without re-running the agent. Live candidates are
+				// never terminal (findReviewCandidates drops done PRs), so they skip this probe.
+				const key = `${pr.prNumber}-${pr.headSha}`;
+				if (record && !liveKeys.has(key) && reviewStatusForSha(review.gh, review.ghRepo, pr.headSha) === "done") {
+					completeReviewRequest(review.queueRoot, pr.prNumber, pr.headSha);
+					continue;
+				}
+				if (record) claimReviewRequest(review.queueRoot, pr.prNumber, pr.headSha);
+				if (!postReviewStatus(review.gh, review.ghRepo, pr.headSha, "pending", "local pelaggio review running")) {
+					if (record) unclaimReviewRequest(review.queueRoot, pr.prNumber, pr.headSha);
+					continue;
+				}
+				let body = "";
+				let finalState: "success" | "failure" = "failure";
+				let reviewCost = 0;
+				let reviewCostEstimated = false;
+				let parked = false;
+				try {
+					const prepared = review.prepareReviewHead(REPO, pr);
+					if (!prepared) throw new Error("could not prepare PR head for local review");
+					const result = await review.runReviewGate({
+						pr: String(pr.prNumber),
+						profile: "standard",
+						cwd: REPO,
+						diffCwd: prepared.diffCwd,
+						diffBaseRef: prepared.baseRef,
+						diffHeadRef: prepared.headRef,
+						policy: review.policy,
+						parkSignal, // shared: a rate-limit park sets this and flows into the wait+retry policy
+					});
+					if (result.gate === "park") {
+						// Transient: leave the pending status as-is (do NOT upsert findings or post failure),
+						// charge the partial cost, hand the record back, and stop starting new reviews this pass.
+						totalSpent += result.cost;
+						parked = true;
+						console.log(`review ${pr.itemId}#${pr.prNumber} — parked (${result.park?.limitType ?? parkSignal.limitType})`);
+					} else {
 						body = result.body;
 						finalState = result.gate === "pass" ? "success" : "failure";
 						reviewCost = result.cost;
 						reviewCostEstimated = result.costEstimated;
-					} catch (e) {
-						const msg = e instanceof Error ? e.message : String(e);
-						body = buildFailClosedComment("error_crash", `local pr-review crashed before producing a review, so this gate blocks the merge.\n\n${msg}`);
-						finalState = "failure";
-					} finally {
-						review.cleanupReviewHead(REPO, pr);
 					}
-					upsertReviewComment(review.gh, review.ghRepo, pr.prNumber, body);
-					postReviewStatus(review.gh, review.ghRepo, pr.headSha, finalState, finalState === "success" ? "local pelaggio review passed" : "local pelaggio review blocked");
-					totalSpent += reviewCost;
-					dayBudgetTracker.add(reviewCost);
-					console.log(`review ${pr.itemId}#${pr.prNumber} — ${finalState}${reviewCost > 0 ? ` ${reviewCostEstimated ? "~" : ""}$${reviewCost.toFixed(2)}` : ""}`);
+				} catch (e) {
+					const msg = e instanceof Error ? e.message : String(e);
+					body = buildFailClosedComment("error_crash", `local pr-review crashed before producing a review, so this gate blocks the merge.\n\n${msg}`);
+					finalState = "failure";
+				} finally {
+					review.cleanupReviewHead(REPO, pr);
 				}
+				if (parked) {
+					if (record) unclaimReviewRequest(review.queueRoot, pr.prNumber, pr.headSha);
+					break;
+				}
+				upsertReviewComment(review.gh, review.ghRepo, pr.prNumber, body);
+				postReviewStatus(review.gh, review.ghRepo, pr.headSha, finalState, finalState === "success" ? "local pelaggio review passed" : "local pelaggio review blocked");
+				totalSpent += reviewCost;
+				dayBudgetTracker.add(reviewCost);
+				// Positive terminal reached this pass → the record is satisfied.
+				if (record) completeReviewRequest(review.queueRoot, pr.prNumber, pr.headSha);
+				console.log(`review ${pr.itemId}#${pr.prNumber} — ${finalState}${reviewCost > 0 ? ` ${reviewCostEstimated ? "~" : ""}$${reviewCost.toFixed(2)}` : ""}`);
+			}
+		}
 
-				if (!parkSignal.parked) break; // no rate-limit park this round → sweep is done
+		if (doReviewDrain) {
+			// Campaign-start drain: cold-start backlog + statusless PRs from prior runs (all modes incl.
+			// `--item`). A rate-limit park during the gate is transient — under the same auto-resume /
+			// --max-wait / reset-time policy as the item loop, wait and retry the drain in-process
+			// (records + pending PRs stay eligible). A non-blocking drain lock avoids blocking startup on
+			// a peer process's in-flight drain; contention skips the round (the peer covers the queue).
+			// awaitParkReset runs OUTSIDE the lock so a park never holds the queue for the reset window.
+			let reviewRound = 0;
+			while (reviewRound < MAX_RESUME_ROUNDS) {
+				reviewRound++;
+				const notifyStranded = reviewRound === 1;
+				await tryWithFileLock(reviewDrainLock, () => runLocalReviewDrainOnce({ notifyStranded }), { label: "review drain lock", staleMs: REVIEW_DRAIN_LOCK_STALE_MS });
+				if (!parkSignal.parked) break; // no rate-limit park this round → drain is done (or a peer holds the lock)
 				if (!autoResume) break; // off-switch → leave pending, hand back (park block reports it)
 				const outcome = await awaitParkReset(parkSignal, { maxWaitMs });
 				if (outcome === "handback") break; // no reset / exceeds --max-wait → leave pending
-				// resumed: parkSignal cleared → re-list candidates (pending PRs remain) and retry.
+				// resumed: parkSignal cleared → re-list records + candidates and retry.
 			}
 		}
 

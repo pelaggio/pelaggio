@@ -6,6 +6,12 @@ Status values are `default-taken`, `resolved`, or `resolved→ADR-nnnn`. Source 
 
 | Decision | Status | Chosen/leaning | Alternatives | Source | Date |
 | --- | --- | --- | --- | --- | --- |
+| halt-campaign mechanism | default-taken | run-scoped halt flag; alternatives: per-worker return / park signal / abort in-flight workers. |  | https://github.com/pelaggio/pelaggio/issues/385 | 2026-08-03 |
+<!-- decision:3c562b46fe317c7a -->
+| confinement continuation | default-taken | halt by default with no configuration knob; alternatives: configurable opt-in. |  | https://github.com/pelaggio/pelaggio/issues/385 | 2026-08-03 |
+<!-- decision:a4b0997948e094d2 -->
+| quarantine limit | default-taken | five consecutive quarantines escalating to typed campaign halt; alternatives: lower limit / per-worker counter / parking. |  | https://github.com/pelaggio/pelaggio/issues/385 | 2026-08-03 |
+<!-- decision:66c62192358f56e1 -->
 | no-revise API shape | default-taken | discriminated union `mode: "no-revise"` with optional author and no revise prompt | `maxRevisions:0` + dummies (not seam-enforced); separate orchestrator (dual maintenance) | https://github.com/pelaggio/pelaggio/issues/384 | 2026-08-03 |
 <!-- decision:60ce8533a10c2ded -->
 | safetyFloorNote source | default-taken | added optional `safetyFloorNote` to `ReviewLoopBase` options so the loop can stamp the plan-specified result field (loop stays domain-neutral) | hardcode doc wording in the loop (wrong layer); omit from result (plan lists it) | https://github.com/pelaggio/pelaggio/issues/384 | 2026-08-03 |
