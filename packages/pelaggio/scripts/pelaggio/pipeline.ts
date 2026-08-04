@@ -62,6 +62,7 @@ import {
 	findLoggedArtifactAuthor,
 	fmtWait,
 	formatResumeHint,
+	getArtifactHeadSha,
 	getHeadSha,
 	gitDiffNameOnly,
 	hasDeliverableCommits,
@@ -1444,7 +1445,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 
 		let shakedownResult: StepResult;
 		if (REVIEW_CONFIG.authoring.enabled) {
-			const reviewedSha = getHeadSha(worktree!);
+			const reviewedSha = getArtifactHeadSha(worktree!);
 			if (!reviewedSha) return parkExit("adversarial review could not bind current HEAD")!;
 			const existingEscalation = lookupReviewEscalation(worktree!, itemId!, reviewedSha);
 			if (existingEscalation.state === "active" || existingEscalation.state === "resolved-block" || existingEscalation.state === "invalid") return parkExit(`adversarial review escalation ${existingEscalation.state}`)!;
@@ -1506,7 +1507,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 							// exempting the artifact would let a seat mutate it unaudited. Peer
 							// seats are skipped via isEphemeralReviewWorktree in forbiddenRootsForStep.
 							const prepare = seatPrepareChain.then(() => {
-								const seatSha = getHeadSha(worktree!) ?? reviewedSha;
+								const seatSha = getArtifactHeadSha(worktree!) ?? reviewedSha;
 								preparedSeatShas.add(seatSha);
 								return prepareAuthoringReviewSeat(mainRepo, { sha: seatSha, seatId: slot.id, pass });
 							});
@@ -1545,7 +1546,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				shakedownResult = { ok: true, subtype: "success", text: "resolved-proceed", fullText: "resolved-proceed", cost: 0, turns: 0 };
 			} else {
 				cost += loop.cost;
-				const finalReviewedSha = getHeadSha(worktree!);
+				const finalReviewedSha = getArtifactHeadSha(worktree!);
 				if (!finalReviewedSha) return parkExit("adversarial review could not bind final reviewed HEAD")!;
 				const reviewRunId = `${runIdBase}-${itemId}`;
 				const record: ReviewRecord = { schemaVersion: 1, runId: reviewRunId, itemId: itemId!, createdAt: new Date().toISOString(), blockingBar: "must-fix", result: loop };

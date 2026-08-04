@@ -337,6 +337,13 @@ describe("review escalation tamper-evidence", () => {
 		payload.escalation.hasSafetyBlocker = false;
 		const tamperedMarker = `<!-- review-escalation:${Buffer.from(JSON.stringify(payload)).toString("base64url")} -->`;
 		writeFileSync(decisionsPath, body.replace(match[0], tamperedMarker));
+		// Uncommitted working-tree tamper is invisible: lookup reads committed content
+		// only, so the intact committed record still reports active.
+		const uncommitted = lookupReviewEscalation(path, "300", "a".repeat(40));
+		assert.equal(uncommitted.state, "active");
+		// A committed tamper is detected as tamper (invalid), not a silent flip.
+		execFileSync("git", ["add", "-A"], { cwd: path, stdio: "pipe" });
+		execFileSync("git", ["commit", "--no-verify", "-m", "tamper"], { cwd: path, stdio: "pipe" });
 		const found = lookupReviewEscalation(path, "300", "a".repeat(40));
 		assert.equal(found.state, "invalid");
 	});

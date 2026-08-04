@@ -847,6 +847,22 @@ export function getHeadSha(cwd: string): string | null {
 	}
 }
 
+/**
+ * The sha the adversarial review actually binds to: the last commit that touches
+ * anything OTHER than docs/decision-log/. Escalation/resolution records commit into
+ * the worktree (#386) and would otherwise advance HEAD past the stored reviewedSha,
+ * making resume's exact-sha lookup permanently miss (a human resolve would never be
+ * honored). Falls back to plain HEAD when the pathspec yields nothing.
+ */
+export function getArtifactHeadSha(cwd: string): string | null {
+	try {
+		const sha = execSync("git log -1 --format=%H -- . ':(exclude)docs/decision-log'", { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+		return sha || getHeadSha(cwd);
+	} catch {
+		return getHeadSha(cwd);
+	}
+}
+
 export function uniqueDriverProvenance(steps: StepLog[]): CycleDriverProvenance[] {
 	const seen = new Set<string>();
 	const drivers: CycleDriverProvenance[] = [];

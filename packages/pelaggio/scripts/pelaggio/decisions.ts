@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import { listWorktreesIn, parseDecisions } from "./helpers.js";
 import { withMutationLock } from "./roadmap/mutation-lock.js";
@@ -149,7 +149,18 @@ function metaMarker(meta: DecisionMeta): string {
 const escalationMarker = (value: { escalation: ReviewEscalation; resolution?: ReviewResolution }): string => `<!-- review-escalation:${Buffer.from(JSON.stringify(value)).toString("base64url")} -->`;
 
 function decisionLogDir(repo: string): string {
-	return resolve(repo, "docs", DECISION_LOG_DIR);
+	const dir = resolve(repo, "docs", DECISION_LOG_DIR);
+	// Leaf-file symlink checks are insufficient: if docs/, the decision-log dir, or
+	// the archive subdir is itself a symlink, Node follows it and a harness write
+	// lands outside the worktree. Realpath-contain the whole chain under the repo.
+	try {
+		const real = realpathSync(dir);
+		const repoReal = realpathSync(repo);
+		if (real !== repoReal && !real.startsWith(`${repoReal}/`)) throw new Error(`decision-log directory escapes the repo (symlink?): ${dir} -> ${real}`);
+	} catch (e) {
+		if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+	}
+	return dir;
 }
 
 function authorityPath(repo: string, owner: string): string {
@@ -509,18 +520,32 @@ function lookupEscalationInFile(file: AuthorityFile, itemId: string, reviewedSha
 	};
 }
 
+/**
+ * Escalation lookups read COMMITTED content only (`git show HEAD:<path>`), never the
+ * working tree: escalation records gate whether the adversarial review loop can be
+ * skipped, and a step could otherwise plant an uncommitted forged resolved-proceed
+ * file at the current HEAD. Residual (tracked as a follow-up charter): an agent that
+ * commits a forged record via Bash is not stopped here — full mitigation is moving
+ * escalation authority to harness-owned storage.
+ */
+function readCommittedAuthorityFile(repo: string, owner: string): AuthorityFile {
+	const rel = relative(repo, authorityPath(repo, owner));
+	try {
+		const body = execFileSync("git", ["show", `HEAD:${rel}`], { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+		return parseAuthorityBody(body, owner);
+	} catch {
+		return { owner, active: [], resolved: [] };
+	}
+}
+
 export function lookupReviewEscalation(repo: string, itemId: string, reviewedSha: string): ReviewEscalationLookup {
 	try {
-		const ownerPath = authorityPath(repo, itemId);
-		if (existsSync(ownerPath)) {
-			const file = readAuthorityFile(ownerPath, itemId);
-			const hit = lookupEscalationInFile(file, itemId, reviewedSha);
-			if (hit.state !== "missing") return hit;
-		}
+		const hitOwn = lookupEscalationInFile(readCommittedAuthorityFile(repo, itemId), itemId, reviewedSha);
+		if (hitOwn.state !== "missing") return hitOwn;
 		// Fallback: scan authority files (alias / mis-owned edge cases).
 		let found: ReviewEscalationLookup | undefined;
 		for (const owner of listOwnerFiles(repo)) {
-			const hit = lookupEscalationInFile(readAuthorityFile(authorityPath(repo, owner), owner), itemId, reviewedSha);
+			const hit = lookupEscalationInFile(readCommittedAuthorityFile(repo, owner), itemId, reviewedSha);
 			if (hit.state === "missing") continue;
 			if (found) return { state: "invalid", error: "multiple review escalations match item and SHA" };
 			found = hit;
