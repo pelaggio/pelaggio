@@ -278,10 +278,14 @@ deferral to the provider (`bd gate`, `--type=gh:pr` / `--type=gh:run`) is unchan
 **Landing mechanism (ADR-0025 detail).** Three layers with distinct jobs: the CAS
 fence above (mandatory, fail-closed); an optional local-file-lock **contention
 reducer** taken before merge+verify, whose `staleMs` must exceed a worst-case
-attempt rather than the roadmap lock's 120 s, and which is **fail-closed** for
-dependency-changing landings because the fence protects the ref but not the
+attempt rather than the roadmap lock's 120 s, and which is **fail-closed for every
+attempt sharing the dependency tree while a dependency-changing landing may be in
+flight** — not just for the mutator — because the fence protects the ref but not the
 verification environment (worktree `node_modules` symlink into `MAIN_REPO` and
-lockfile-touching merges install there — `worktree-deps.ts`, `ship/SKILL.md:114`);
+lockfile-touching merges install there — `worktree-deps.ts`, `ship/SKILL.md:114`;
+a bypassing non-dependency attempt could verify against a half-installed tree).
+Per-attempt dependency isolation (a real install in the attempt worktree) removes
+the shared hazard and lifts the all-sharers requirement (ADR-0025 §1);
 and optional `bd merge-slot` ordering. The seam is an executor,
 `land(attempt) → Landed | Contended`, not a lock: CAS is optimistic (the fence is
 the rejected push at the end) while a slot is pessimistic, so no acquire/release
@@ -341,7 +345,11 @@ server-side at merge time **and** no bypass is in use (`enforce_admins: false` i
 one; so is `land-cli.ts`'s opt-in `gh pr merge --admin`, which checks CI-green but
 not base freshness). A successful read showing enforcement off is `unordered`, not
 `unreadable`. The `provider`+`unordered` cap is evaluated per enqueue against a
-harness-held in-flight count, never a forge poll.
+harness-held in-flight count, never a forge poll — a **run-local bound**, sound only
+under a single-writer assumption (one run, no concurrent auto-merging actors).
+It is a degraded mode, not a verified-trunk guarantee; multi-writer operation
+requires the branch-protection remediation (required up-to-date without bypass, or
+a merge queue) as a precondition — see ADR-0025 decision 6.
 
 **Prior art / reference design.** Gastown (`gt`), the sibling orchestrator on the
 `bd` substrate, already ships this as its **Refinery**: a Bors-style
