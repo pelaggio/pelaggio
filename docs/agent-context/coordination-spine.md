@@ -141,10 +141,13 @@ exactly what flow.md calls policy:
   disjointness);
 - **flow policy** — ranked ordering / WIP / class-of-service *over* `bd ready`
   (#171), and the landing *discipline* (fair ordering, waiter hygiene, dead-holder
-  reconcile) *over* `merge-slot` (#174).
+  reconcile) *over* the harness's own landing fence (#174).
 
-The primitive is Beads'; the *policy and safety around it* are pelaggio's — the
-storage-vs-policy line, drawn one layer higher than before this spike.
+The ready-set primitive is Beads'; the **landing primitive is the harness's git ref
+compare-and-swap** (ADR-0025) — `bd merge-slot` is at most an optional ordering layer
+above that fence, never the exclusion mechanism itself. The *policy and safety* remain
+pelaggio's — the storage-vs-policy line, drawn one layer higher than before this
+spike and re-drawn at landing by ADR-0025.
 
 ## Gastown: prior-art sibling orchestrator
 
