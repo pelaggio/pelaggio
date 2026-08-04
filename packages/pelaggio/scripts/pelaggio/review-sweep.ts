@@ -163,6 +163,12 @@ export function prepareReviewHead(repo: string, candidate: ReviewCandidate, exec
 	try {
 		mkdirSync(resolve(repo, ".dev", "review-heads"), { recursive: true });
 		run(`git fetch origin refs/pull/${candidate.prNumber}/head:${headRef}`, repo);
+		// The status will be posted for candidate.headSha — the reviewed ref MUST be
+		// that exact commit. If the branch moved between listing and fetch, reviewing
+		// the new head while certifying the old SHA is a phantom sign-off; bail and
+		// let the next drain round re-list with the fresh SHA.
+		const fetched = run(`git rev-parse ${headRef}`, repo).trim();
+		if (fetched !== candidate.headSha) return null;
 		if (!existsSync(path)) run(`git worktree add --detach ${path} ${candidate.headSha}`, repo);
 		return { diffCwd: path, baseRef: "origin/main", headRef };
 	} catch {

@@ -100,11 +100,26 @@ describe("prepareReviewHead", () => {
 		const cmds: string[] = [];
 		const out = prepareReviewHead(repo, { prNumber: 9, itemId: "84", branch: "feat/issue-84-x", headSha: "abc123", statusState: "missing" }, (cmd) => {
 			cmds.push(cmd);
+			// The fetched ref must resolve to the candidate SHA (the OID-match guard).
+			if (cmd.startsWith("git rev-parse")) return "abc123\n";
 			return "";
 		});
 		assert.deepEqual(out, { diffCwd: join(repo, ".dev", "review-heads", "abc123"), baseRef: "origin/main", headRef: "refs/pelaggio-review/pr-9" });
 		assert.ok(cmds.includes("git fetch origin refs/pull/9/head:refs/pelaggio-review/pr-9"));
 		assert.ok(cmds.includes(`git worktree add --detach ${join(repo, ".dev", "review-heads", "abc123")} abc123`));
+		rmSync(repo, { recursive: true, force: true });
+	});
+
+	it("bails without a worktree when the fetched head no longer matches the candidate SHA (moved branch)", () => {
+		const repo = mkdtempSync(join(tmpdir(), "review-head-moved-"));
+		const cmds: string[] = [];
+		const out = prepareReviewHead(repo, { prNumber: 9, itemId: "84", branch: "feat/issue-84-x", headSha: "abc123", statusState: "missing" }, (cmd) => {
+			cmds.push(cmd);
+			if (cmd.startsWith("git rev-parse")) return "def456\n";
+			return "";
+		});
+		assert.equal(out, null, "a moved branch must not be reviewed under the stale SHA");
+		assert.ok(!cmds.some((c) => c.startsWith("git worktree add")), "no worktree for a stale candidate");
 		rmSync(repo, { recursive: true, force: true });
 	});
 });

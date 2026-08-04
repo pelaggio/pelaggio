@@ -2654,7 +2654,10 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					if (result.gate === "park") {
 						// Transient: leave the pending status as-is (do NOT upsert findings or post failure),
 						// charge the partial cost, hand the record back, and stop starting new reviews this pass.
+						// Day-budget must see the partial spend too, or a rate-limited review
+						// under-reports --day-budget and drains keep picking past the cap.
 						totalSpent += result.cost;
+						dayBudgetTracker.add(result.cost);
 						parked = true;
 						console.log(`review ${pr.itemId}#${pr.prNumber} — parked (${result.park?.limitType ?? parkSignal.limitType})`);
 					} else {
