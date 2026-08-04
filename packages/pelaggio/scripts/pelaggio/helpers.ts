@@ -7,7 +7,7 @@ import { resolveArtifactRoot } from "./artifact-root.js";
 import { CONFIG, isPipelineStep, LOG_PATH, type PipelineStep, REPO, resolveProviderBin, STEPS, WORKTREE_PREFIX } from "./config.js";
 import { MarkdownRoadmap } from "./roadmap/markdown.js";
 import type { CreateItemOpts, RoadmapSource } from "./roadmap/types.js";
-import type { CycleDriverProvenance, CycleGitBinding, CycleVersionProvenance, Decision, Mutex, ProviderName, Step, StepLog, StepResult } from "./types.js";
+import type { CycleDisposition, CycleDriverProvenance, CycleGitBinding, CycleResult, CycleVersionProvenance, Decision, Mutex, ProviderName, Step, StepLog, StepResult } from "./types.js";
 
 export function parseDecisions(text: string): Decision[] {
 	const decisions: Decision[] = [];
@@ -589,6 +589,14 @@ export function classifyOutcome(result: Pick<StepResult, "subtype">): StepSubtyp
 	return CLOSED_SUBTYPES.has(result.subtype) ? (result.subtype as StepSubtype) : "error";
 }
 
+export function classifyCycleDisposition(result: Pick<CycleResult, "completed" | "error" | "disposition">, recoverable: ReadonlySet<string>): CycleDisposition {
+	if (result.completed) return "continue";
+	if (result.error === "aborted") return "halt-campaign";
+	if (result.disposition) return result.disposition;
+	if (recoverable.has(result.error ?? "")) return "continue";
+	return "halt-campaign";
+}
+
 // ── Retry budget decision ──────────────────────────────────────────────
 
 /**
@@ -788,6 +796,15 @@ export function checkpoint(cwd: string, label: string): boolean {
 		const msg = (streams || String((e as Error).message ?? "")).slice(0, 300);
 		if (/nothing to commit|clean/i.test(msg)) return false;
 		process.stderr.write(`⚠ checkpoint commit failed: ${msg}\n`);
+		return false;
+	}
+}
+
+export function quarantineCheckpoint(cwd: string, label: string): boolean {
+	try {
+		checkpoint(cwd, label);
+		return execSync("git status --porcelain", { cwd, encoding: "utf-8" }).trim() === "";
+	} catch {
 		return false;
 	}
 }

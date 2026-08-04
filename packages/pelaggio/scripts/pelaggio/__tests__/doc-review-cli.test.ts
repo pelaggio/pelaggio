@@ -8,7 +8,7 @@ import { DOC_REVIEW_SAFETY_FLOOR_NOTE, main, resolveDocReviewPolicy, reviewDocum
 import { snapshotDocument } from "../review/document.js";
 import type { StepResult } from "../types.js";
 
-const ok = (text: string): StepResult => ({ ok: true, subtype: "success", text, fullText: text, cost: 0, turns: 1 });
+const ok = (text: string): StepResult => ({ ok: true, subtype: "success", text, fullText: text, assistantText: text, cost: 0, turns: 1 });
 const findings = (raw: unknown[]) => `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 3, summary: "s", findings: raw })}\nEND_AUTHORING_REVIEW_FINDINGS`;
 const judge = (decisions: unknown[]) => `AUTHORING_REVIEW_JUDGE\n${JSON.stringify({ schemaVersion: 1, decisions })}\nEND_AUTHORING_REVIEW_JUDGE`;
 const CLEAN = findings([]);

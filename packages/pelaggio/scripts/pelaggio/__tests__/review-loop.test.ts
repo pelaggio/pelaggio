@@ -85,7 +85,7 @@ describe("authoring review loop controller", () => {
 		budgetCap: 1000,
 		providerDiversity: "prefer",
 	};
-	const ok = (fullText: string): StepResult => ({ ok: true, subtype: "success", text: fullText, fullText, cost: 0, turns: 0 });
+	const ok = (fullText: string): StepResult => ({ ok: true, subtype: "success", text: fullText, fullText, assistantText: fullText, cost: 0, turns: 0 });
 	/** schema v3 raw evidence — harness classifies. */
 	const reviewerFindings = (kind: "safety" | "judgment" | "hint-judgment" | "unmatched") => {
 		const finding =
@@ -147,7 +147,7 @@ describe("authoring review loop controller", () => {
 			runSeat: async (req) => {
 				if (req.role === "judge") return ok(judgeReport([{ candidateId: "C1", decision: "refuted", rationale: "r", class: "security-and-secrets" }]));
 				if (req.slot.provider === "grok") return ok(empty);
-				return { ok: false, subtype: "error_max_turns", text: reviewerFindings("safety"), fullText: reviewerFindings("safety"), cost: 0, turns: 0 };
+				return { ok: false, subtype: "error_max_turns", text: reviewerFindings("safety"), fullText: reviewerFindings("safety"), assistantText: reviewerFindings("safety"), cost: 0, turns: 0 };
 			},
 			prompts: { review: () => "r", judge: () => "j", revise: () => "rev" },
 		});
@@ -610,7 +610,7 @@ describe("authoring review loop controller", () => {
 });
 
 describe("authoring review loop — no-revise + safety floor (#384)", () => {
-	const ok = (fullText: string): StepResult => ({ ok: true, subtype: "success", text: fullText, fullText, cost: 0, turns: 0 });
+	const ok = (fullText: string): StepResult => ({ ok: true, subtype: "success", text: fullText, fullText, assistantText: fullText, cost: 0, turns: 0 });
 	const findings = (raw: unknown[]) => `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 3, summary: "s", findings: raw })}\nEND_AUTHORING_REVIEW_FINDINGS`;
 	const clean = findings([]);
 	const judgeReport = (decisions: unknown[]) => `AUTHORING_REVIEW_JUDGE\n${JSON.stringify({ schemaVersion: 1, decisions })}\nEND_AUTHORING_REVIEW_JUDGE`;

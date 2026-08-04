@@ -50,6 +50,7 @@ import {
 	canRetryWithinBudget,
 	captureShipState,
 	checkpoint,
+	classifyCycleDisposition,
 	classifyOutcome,
 	computeImplementTurns,
 	createMainCheckoutDeltaObserver,
@@ -75,6 +76,7 @@ import {
 	parseVerdict,
 	parseWaitFlag,
 	pickDivergedFromPin,
+	quarantineCheckpoint,
 	readGitBinding,
 	readRuntimeVersions,
 	resolveWorktree,
@@ -102,6 +104,7 @@ import { extractPrUrl } from "./ship/pull-request.js";
 import { getProvider, REGISTERED_PROVIDERS, type RunStepFn, runStep as runStepDefault } from "./step-runner.js";
 import { A, createStepRenderer, fmtElapsed, LiveStatus, StatusBar, TUI_ENABLED } from "./tui.js";
 import {
+	type CycleDisposition,
 	type CycleGitBinding,
 	type CycleResult,
 	type CycleStatus,
@@ -144,6 +147,9 @@ const TRANSIENT_BACKOFF_MS = 1000;
 // recoverable (#127's behavior); this many in a row parks + pages instead of quietly
 // burning through every remaining --cycles against a dead provider.
 const CONSECUTIVE_TRANSIENT_ERROR_LIMIT = 3;
+// Shared across workers and reset by any non-quarantine outcome, so this only trips
+// on an unbroken no-ship streak. Five tolerates a few independent blocked items.
+const CONSECUTIVE_QUARANTINE_LIMIT = 5;
 // #388: cadence for the mid-step forbidden-root prober that runs concurrently with an
 // in-flight provider call. Bounds a mid-step confinement violation's cost to roughly one
 // interval instead of the whole step, without polling git status so often it competes with
@@ -1048,6 +1054,14 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		return finish({ itemId, completed: false, cost, error: "parked" });
 	}
 
+	function quarantineExit(error: string, extra: Pick<CycleResult, "verdict"> = {}): CycleResult {
+		const preserved = worktree ? quarantineCheckpoint(worktree, "andon quarantine") : true;
+		const disposition: CycleDisposition = preserved ? "quarantine-and-continue" : "halt-campaign";
+		if (preserved) log(`⊘ quarantined: ${error} — checkpointed, sweep continues`);
+		else log("⚠ quarantine checkpoint failed — halting campaign to preserve WIP + diagnosis");
+		return finish({ ...extra, itemId, completed: false, cost, error, disposition });
+	}
+
 	/**
 	 * Run a step with the shared bounded max-turns retry policy (issue #33), consolidating
 	 * the four previously-inlined loops (plan / shakedown-plan / implement / shakedown-code)
@@ -1116,7 +1130,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				return { kind: "terminal", cycleResult: parkExit() ?? finish({ itemId, completed: false, cost, error: `${cfg.name} failed` }) };
 			}
 			if (outcome === "blocked") {
-				return { kind: "terminal", cycleResult: finish({ itemId, completed: false, cost, error: `${cfg.name} blocked: ${result.text}` }) };
+				return { kind: "terminal", cycleResult: quarantineExit(`${cfg.name} blocked: ${result.text}`) };
 			}
 			if (outcome === "error_refusal") {
 				return { kind: "terminal", cycleResult: finish({ itemId, completed: false, cost, error: cfg.refusedError }) };
@@ -1840,7 +1854,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		const parked = parkExit();
 		if (parked) return parked;
 	}
-	if (classifyOutcome(ship) === "blocked") return finish({ itemId, completed: false, cost, verdict, error: `ship blocked: ${ship.text}` });
+	if (classifyOutcome(ship) === "blocked") return quarantineExit(`ship blocked: ${ship.text}`, { verdict });
 
 	// Direct-push: the agent's job ended at the merge. Detect whether it landed
 	// on local `main`, then either run the deterministic bookkeeping tail (the
@@ -1943,14 +1957,16 @@ function resultIcon(r: CycleResult): string {
 	if (r.completed) return A.green("✓");
 	if (r.error === "parked") return A.yellow("⏸");
 	if (r.error === "plan needs rethink") return A.yellow("↻");
+	if (r.disposition === "quarantine-and-continue") return A.yellow("⊘");
 	return A.red("✗");
 }
 
-function resultStatus(r: CycleResult): "done" | "warning" | "skipped" | "failed" | "parked" {
+function resultStatus(r: CycleResult): "done" | "warning" | "skipped" | "failed" | "parked" | "quarantined" {
 	if (r.completed && r.bookkeepingWarnings?.length) return "warning";
 	if (r.completed) return "done";
 	if (r.error === "parked") return "parked";
 	if (r.error === "plan needs rethink") return "skipped";
+	if (r.disposition === "quarantine-and-continue") return "quarantined";
 	return "failed";
 }
 
@@ -2303,6 +2319,8 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		// (issue #128) — reset by any other outcome. Shared across parallel workers since
 		// it tracks the campaign's overall health, not any one worker's.
 		let consecutiveTransientErrors = 0;
+		let consecutiveQuarantines = 0;
+		let campaignHalted = false;
 		// Single-sourced with `notify.ts`'s classifier via `RECOVERABLE_ERRORS` (types.ts) to
 		// prevent drift. `pick:unknown-id` and `pick:blocked` are intentionally *absent* — fatal
 		// so typos in `--item X,Y,Z` and user-requested blocked items halt loudly instead of
@@ -2310,6 +2328,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		const RECOVERABLE = new Set<string>(RECOVERABLE_ERRORS);
 
 		async function worker(): Promise<void> {
+			if (campaignHalted) return;
 			while (true) {
 				// Continuous-mode pre-cycle gates (issue #82/#83): day budget, per-iteration
 				// revise, and free queue probe — under one continuous gate so ×N workers do
@@ -2322,7 +2341,9 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					let retryGate = false;
 					await continuousGate.acquire();
 					try {
-						if (parkSignal.parked || drainComplete) {
+						if (campaignHalted) {
+							exitWorker = true;
+						} else if (parkSignal.parked || drainComplete) {
 							if (parkSignal.parked) emitSuspendedIfParked();
 							exitWorker = true;
 						} else if (dayBudgetTracker.exceeded()) {
@@ -2363,7 +2384,10 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 							// Run even when the pick queue is empty: red PRs are independent work and
 							// watch sessions must keep discovering them between queue probes.
 							await runReviseSweepOnce();
-							if (parkSignal.parked) {
+							if (campaignHalted) {
+								// A halt can land during the sweep; honor it before any further probe/pick.
+								exitWorker = true;
+							} else if (parkSignal.parked) {
 								emitSuspendedIfParked();
 								exitWorker = true;
 							} else if (dayBudgetTracker.exceeded()) {
@@ -2428,6 +2452,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					// Fall through to paid work with gate released.
 				}
 
+				if (campaignHalted) return;
 				const cycle = ++nextCycle;
 				if (cycle > cycles) return;
 				if (totalSpent >= maxBudget) {
@@ -2483,6 +2508,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				// a rate-limit park uses, instead of quietly burning the rest of --cycles.
 				if (result.error === "transient sdk error") {
 					consecutiveTransientErrors++;
+					consecutiveQuarantines = 0;
 					if (consecutiveTransientErrors >= CONSECUTIVE_TRANSIENT_ERROR_LIMIT && !parkSignal.parked) {
 						parkSignal.parked = true;
 						parkSignal.resetsAt = 0;
@@ -2490,13 +2516,22 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						parkSignal.triggerWorker = result.itemId ?? "";
 						result.error = "parked";
 					}
+				} else if (result.disposition === "quarantine-and-continue") {
+					consecutiveQuarantines++;
+					consecutiveTransientErrors = 0;
+					if (consecutiveQuarantines >= CONSECUTIVE_QUARANTINE_LIMIT) result.disposition = "halt-campaign";
 				} else {
 					consecutiveTransientErrors = 0;
+					consecutiveQuarantines = 0;
 				}
 
 				totalSpent += result.cost;
 				dayBudgetTracker.add(result.cost);
 				results.push(result);
+				// Set the halt flag BEFORE the notification await: notify() is best-effort
+				// network I/O, and a peer worker must not launch a new cycle in that gap
+				// when this result halts the campaign (#385 round-3 review finding).
+				if (classifyCycleDisposition(result, RECOVERABLE) === "halt-campaign") campaignHalted = true;
 				await notify(result, logPath ?? LOG_PATH);
 
 				status.itemId = result.itemId ?? "?";
@@ -2527,7 +2562,13 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					if (continuous) emitSuspendedIfParked();
 					break;
 				}
-				if (!result.completed && !RECOVERABLE.has(result.error ?? "")) return;
+				// #385's typed disposition replaces the raw RECOVERABLE membership check:
+				// continue / quarantine-and-continue keep the worker pulling; only
+				// halt-campaign (confinement/safety polarity) stops new cycle launches.
+				if (classifyCycleDisposition(result, RECOVERABLE) === "halt-campaign") {
+					campaignHalted = true;
+					return;
+				}
 				// Continuous drain: a race can leave pick:queue-empty after the free probe
 				// saw work (another process claimed it). Stop rather than spinning paid picks.
 				if (continuous?.preset === "drain" && result.error === "pick:queue-empty") {
@@ -2862,6 +2903,12 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				totalSpent += r.cost;
 				dayBudgetTracker.add(r.cost);
 				results.push(r);
+				// Revise outcomes gate the campaign exactly like cycle outcomes: a
+				// confinement/safety-classed revise failure must stop new cycle launches,
+				// not just render red. Flag set BEFORE the notify await so a peer worker
+				// cannot launch in the delivery gap (#385 round-2/3 review findings).
+				const reviseHalts = classifyCycleDisposition(r, RECOVERABLE) === "halt-campaign";
+				if (reviseHalts) campaignHalted = true;
 				await notify(r, LOG_PATH);
 				status.status = resultStatus(r);
 				status.cost = r.cost;
@@ -2869,6 +2916,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				if (v) liveStatus.render();
 				const detail = resultDetail(r);
 				console.log(`${resultIcon(r)} revise ${pr.itemId} — ${r.costEstimated ? "~" : ""}$${r.cost.toFixed(2)}${detail ? `  ${A.dim(detail)}` : ""}`);
+				if (reviseHalts) return;
 			}
 		}
 
@@ -2997,8 +3045,27 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					statusBar.setup();
 				}
 
-				const batch = await Promise.all(pending.map((id, i) => resumeOne(id, i)));
-				results.push(...batch);
+				// Resume SEQUENTIALLY: a resumed item can itself report a halt-campaign-
+				// classed failure (confinement/safety), and concurrent launches would let
+				// peers run before the halt is known. A suspect environment argues for
+				// serial resumes anyway; parked lists are small (#385 round-4/5 findings).
+				const batch: CycleResult[] = [];
+				let resumeHalted = false;
+				for (const [i, id] of pending.entries()) {
+					const r = await resumeOne(id, i);
+					batch.push(r);
+					results.push(r);
+					if (classifyCycleDisposition(r, RECOVERABLE) === "halt-campaign") {
+						resumeHalted = true;
+						break;
+					}
+				}
+				if (resumeHalted) {
+					campaignHalted = true;
+					const remaining = pending.slice(batch.length);
+					if (remaining.length) console.log(`${A.yellow("⏸")} halt-campaign during auto-resume — leaving ${remaining.length} item(s) parked`);
+					break;
+				}
 				pending = batch.filter((r) => r.error === "parked" && r.itemId).map((r) => r.itemId!);
 			}
 

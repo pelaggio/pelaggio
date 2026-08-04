@@ -24,7 +24,7 @@ function decision(over: Partial<ShipDecisionEffect> = {}): ShipDecisionEffect {
 }
 
 function step(text: string): StepResult {
-	return { ok: true, subtype: "success", text, fullText: "", cost: 0, turns: 0 };
+	return { ok: true, subtype: "success", text, fullText: "", assistantText: text, cost: 0, turns: 0 };
 }
 
 const HEAD_SHA = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";

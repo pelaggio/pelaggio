@@ -341,12 +341,18 @@ const JUDGE_RULINGS: readonly JudgeRuling[] = ["fixable-blocker", "unfixable-blo
 const CWE_RE = /^CWE-\d{1,5}$/i;
 
 // The verbatim schema-example placeholder printed in `.claude/skills/pr-review/SKILL.md`
-// (the `AUTHORING_REVIEW_FINDINGS` example block). A weaker instruction-follower — observed
-// with the codex reviewer seat, which runs a single turn and does no diff inspection — echoes
-// this example instead of reviewing. Because it is schema-valid it would sail through as a real
-// `must-fix / correctness-regression` at `src/file.ts:1`, manufacturing a cross-model split and a
-// spurious escalation/park. Reject it fail-closed so the seat is recorded as not-completed rather
-// than as a fabricated blocker. Provider-agnostic: any seat that parrots the example is rejected.
+// (the `AUTHORING_REVIEW_FINDINGS` example block). A seat that echoes the example instead of
+// reviewing would emit a schema-valid `must-fix / correctness-regression` at `src/file.ts:1`,
+// manufacturing a cross-model split and a spurious escalation/park. Reject it fail-closed so the
+// seat is recorded as not-completed rather than as a fabricated blocker. Provider-agnostic: any
+// seat that parrots the example is rejected.
+//
+// This guard was originally attributed to the codex seat being "a weaker instruction-follower"
+// that runs one turn and does no inspection. That diagnosis was wrong. The codex seat performs a
+// full review; its first tool call is typically `sed .claude/skills/pr-review/SKILL.md`, and the
+// codex provider folds command OUTPUT into `fullText` — so the example block printed by that
+// `sed` entered the parsed text ahead of the model's real block and tripped this guard on every
+// run. The parse source is now the final assistant message (see selectAuthoringFindingsSource).
 const EXAMPLE_SUMMARY = "Concise single-line summary.";
 const EXAMPLE_FINDING_MESSAGE = "Concrete single-line finding.";
 const EXAMPLE_FINDING_PATH = "src/file.ts";
@@ -410,6 +416,40 @@ function parseRawAuthoringFinding(value: unknown, index: number): RawAuthoringRe
 		raw.classHint = value.classHint;
 	}
 	return raw;
+}
+
+/** True when `text` contains at least one well-formed findings block. */
+export function hasAuthoringReviewFindingsBlock(text: string): boolean {
+	// AUTHORING_RE is /g and therefore stateful; `matchAll` does not mutate lastIndex.
+	return [...text.matchAll(AUTHORING_RE)].length > 0;
+}
+
+/**
+ * The one legitimate source for a seat's findings and rulings: the model's own final message.
+ *
+ * The transcript (`fullText`) is NOT an acceptable substitute, and must not be used even as a
+ * fallback. For the codex provider `fullText` includes command *output*, so every file a reviewer
+ * reads becomes a candidate findings source. That is how the schema example in
+ * `.claude/skills/pr-review/SKILL.md` — read by the reviewer's first tool call — deterministically
+ * poisoned every codex seat.
+ *
+ * A fallback for seats whose final message carries no block was considered and rejected: it lets a
+ * reviewed repository plant one valid block in any file the mandated review reads and have it
+ * ingested as a genuine safety blocker, forcing a fabricated escalation/park. Repository-controlled
+ * bytes must never become harness-trusted findings.
+ *
+ * Dropping mid-run findings from an incomplete seat is NOT a fail-open: an incomplete seat leaves
+ * its required (driver × label) cell uncompleted, and the all-pass gate cannot reach
+ * consensus-pass with an uncompleted cell. Safety comes from cell completion, not from scavenging
+ * a transcript.
+ *
+ * Reads `assistantText`, not `text`. `text` is the FINAL chunk on some providers — opencode
+ * reassigns it per streamed text part — so a block split across parts would be truncated to an
+ * invalid tail and fail-close every affected seat. `assistantText` accumulates every model-authored
+ * chunk in order and carries no tool data on any provider.
+ */
+export function modelAuthoredText(result: { assistantText?: string; text?: string }): string {
+	return result.assistantText ?? result.text ?? "";
 }
 
 /**
