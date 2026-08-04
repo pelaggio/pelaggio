@@ -64,10 +64,43 @@ export function resolveWorktree(itemId: string): string {
 }
 
 export function listWorktrees(): string[] {
-	return execSync("git worktree list --porcelain", { cwd: REPO, encoding: "utf-8" })
-		.split("\n")
-		.filter((l) => l.startsWith("worktree "))
-		.map((l) => l.slice(9).trim());
+	return listWorktreesIn(REPO);
+}
+
+/** List every registered worktree path for a given repo root (porcelain). */
+export function listWorktreesIn(repo: string): string[] {
+	try {
+		return execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: repo, encoding: "utf-8" })
+			.split("\n")
+			.filter((l) => l.startsWith("worktree "))
+			.map((l) => l.slice("worktree ".length).trim())
+			.filter(Boolean);
+	} catch {
+		return [repo];
+	}
+}
+
+/**
+ * Resolve the checkout that currently holds `refs/heads/main`.
+ * Used by harness-local stores (stale-quarantine) that must land on main regardless of
+ * which feature worktree the caller sits in. Decision storage no longer uses this —
+ * per-item authority lives under each caller's own checkout.
+ */
+export function mainWorktree(repo: string): string {
+	try {
+		const output = execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: repo, encoding: "utf8" });
+		for (const block of output.trim().split(/\n\n+/)) {
+			const lines = block.split("\n");
+			if (lines.includes("branch refs/heads/main")) return lines[0].slice("worktree ".length);
+		}
+	} catch {
+		// `git worktree list` unavailable (non-worktree layout / no git) — fall back to the caller's repo.
+	}
+	// `--no-worktree` / CI: claim leaves only the feature branch checked out, so no worktree holds
+	// `refs/heads/main`. Fall back to the caller's repo — stores land there and there is no sibling
+	// main to diverge from in that mode. When a main worktree exists (local supervised runs), the loop
+	// above redirects writes to it instead. Never throw: a missing main must not fail store writes.
+	return repo;
 }
 
 /** Fixed confirmation budget for transient Git snapshot interference (not config). */
@@ -831,6 +864,22 @@ export function getHeadSha(cwd: string): string | null {
 	}
 }
 
+/**
+ * The sha the adversarial review actually binds to: the last commit that touches
+ * anything OTHER than docs/decision-log/. Escalation/resolution records commit into
+ * the worktree (#386) and would otherwise advance HEAD past the stored reviewedSha,
+ * making resume's exact-sha lookup permanently miss (a human resolve would never be
+ * honored). Falls back to plain HEAD when the pathspec yields nothing.
+ */
+export function getArtifactHeadSha(cwd: string): string | null {
+	try {
+		const sha = execSync("git log -1 --format=%H -- . ':(exclude)docs/decision-log'", { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+		return sha || getHeadSha(cwd);
+	} catch {
+		return getHeadSha(cwd);
+	}
+}
+
 export function uniqueDriverProvenance(steps: StepLog[]): CycleDriverProvenance[] {
 	const seen = new Set<string>();
 	const drivers: CycleDriverProvenance[] = [];
@@ -1086,7 +1135,10 @@ export function hasDeliverableCommits(worktree: string): boolean {
 			stdio: ["ignore", "pipe", "pipe"],
 		}).trim();
 		if (!files) return false;
-		return files.split("\n").some((f) => !f.startsWith("docs/plans/"));
+		// docs/decision-log/ rows are harness bookkeeping (#386): a branch whose only
+		// non-plan changes are decision records is still the ghost-ship case — DECISION:
+		// emissions must never make a plan-only branch shippable.
+		return files.split("\n").some((f) => !f.startsWith("docs/plans/") && !f.startsWith("docs/decision-log/"));
 	} catch {
 		return false;
 	}

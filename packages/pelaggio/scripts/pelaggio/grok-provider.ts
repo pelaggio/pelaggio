@@ -12,8 +12,9 @@
 
 import { type AcpIncomingRequest, AcpRpcError, spawnAcpAgent } from "./acp-client.js";
 import { CONFIG, REPO, resolveProviderBin, resolveStepSettings, type StepSettings } from "./config.js";
+import { emitDecisionsFromText } from "./decisions.js";
 import { buildGrokArgs, detectLandlock, installGrokSandboxProfile } from "./grok-sandbox.js";
-import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseDecisions, parseWaitFlag, resolveParkReset } from "./helpers.js";
+import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseWaitFlag, resolveParkReset } from "./helpers.js";
 import { buildAgentEnv, makeSecretScrubber } from "./secret-hygiene.js";
 import type { StepProvider } from "./step-runner.js";
 import { composeSystemAppend, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "./step-runner-shared.js";
@@ -303,8 +304,8 @@ export function buildGrokStepResult(name: Step, updates: JsonObject[], exitInfo:
 
 	const stalledAsk = ok && looksLikeStalledAsk(text);
 	const outputTail = text ? text.replace(/\x1b\[[0-9;]*m/g, "").slice(-200) : undefined;
-	const decisions = parseDecisions(fullText);
-	for (const decision of decisions) emitted.push({ type: "decision", decision });
+	const decisions = emitDecisionsFromText(fullText);
+	for (const d of decisions) emitted.push({ type: "decision", decision: d.decision });
 	const toolCountsObj = toolCounts.size > 0 ? Object.fromEntries(toolCounts) : undefined;
 	return {
 		result: {

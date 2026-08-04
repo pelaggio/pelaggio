@@ -17,6 +17,15 @@ export interface Decision {
 	alternatives?: string;
 }
 
+/** Lifecycle identity assigned at emission; semantic payload remains `Decision`. */
+export interface EmittedDecision {
+	/** Opaque UUID assigned once when the decision is emitted. */
+	id: string;
+	/** SHA-256 hex of normalized fork/chosen/alternatives (dedupe content axis). */
+	contentFingerprint: string;
+	decision: Decision;
+}
+
 export interface ReviewEscalationDriver {
 	identity: { role: "reviewer"; seatId: string; provider: ProviderName; model?: string; sessionId: string };
 	verdict: "pass" | "block";
@@ -97,7 +106,8 @@ export interface StepResult {
 	};
 	/** Observe-only stall heuristic: the final message ended in a question / offer-to-continue (no `BLOCKED:` sentinel). Never fails a step. */
 	stalledAsk?: boolean;
-	decisions?: Decision[];
+	/** Emitted decisions with lifecycle IDs retained for cycle-log audit. */
+	decisions?: EmittedDecision[];
 }
 
 export interface StepLog {
@@ -141,7 +151,8 @@ export interface StepLog {
 	filesChanged?: string[];
 	/** Observe-only stall heuristic — the step ended in a question / offer-to-continue. Telemetry only; never fails the step. */
 	stalledAsk?: boolean;
-	decisions?: Decision[];
+	/** Emitted decisions with lifecycle IDs retained for cycle-log audit. */
+	decisions?: EmittedDecision[];
 	/**
 	 * Descriptor for the execution receipt written after successful effects
 	 * dispatch (#188). Optional for legacy log compatibility.
@@ -495,6 +506,8 @@ export interface Flags {
 	parallel: string;
 	item?: string;
 	resume?: string;
+	/** Resume-only acknowledgement of a reviewed escalation evidence fingerprint. */
+	"acknowledge-escalation"?: string;
 	/** Resume-only: override the auto-detected restart step. Validated against STEPS in runOrchestrator. */
 	from?: string;
 	/** Resume-only: path to a file of PR-review findings injected into the implement step as
