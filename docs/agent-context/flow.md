@@ -43,9 +43,11 @@ Two seams, deliberately separated:
   markdown already give you. Keep it the thin lowest-common-denominator it is.
   (Exception worth naming: **Beads** — see `coordination-spine.md`, #181 — is a
   first-class source that provides *more* than the LCD: a deterministic ready-set
-  (`bd ready`) and a landing primitive (`bd merge-slot`). Policy still consumes
-  the snapshot, not the store; but where Beads offers a sound primitive, flow
-  *rides* it rather than reimplementing — the "best foundation, not novel" call.)
+  (`bd ready`), plus `bd merge-slot` as an OPTIONAL ordering layer above the
+  harness's own landing fence (git ref compare-and-swap, ADR-0025 — never the
+  exclusion primitive itself). Policy still consumes the snapshot, not the store;
+  where Beads offers a sound primitive, flow *rides* it rather than
+  reimplementing — the "best foundation, not novel" call.)
 - **`FlowPolicy` = policy (planned).** pelaggio-owned, provider-neutral,
   pluggable. It decides readiness, class of service, swimlane, and pull order.
 
