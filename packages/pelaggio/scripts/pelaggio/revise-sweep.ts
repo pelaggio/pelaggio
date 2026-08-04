@@ -127,13 +127,22 @@ export function findRevisablePrs(gh: GhRunner, ghRepo: string): { revisable: Rev
  * Cheap: only runs for the rare red candidate.
  */
 export function isAutopilotManaged(gh: GhRunner, ghRepo: string, itemId: string, label: string): boolean {
+	return autopilotManagedState(gh, ghRepo, itemId, label) === "managed";
+}
+
+/**
+ * Tri-state variant for callers that take a DESTRUCTIVE action on the negative
+ * (e.g. deleting a durable review-request record): a transient/malformed lookup is
+ * "unknown", not "unmanaged" — only a positive label read may justify deletion.
+ */
+export function autopilotManagedState(gh: GhRunner, ghRepo: string, itemId: string, label: string): "managed" | "unmanaged" | "unknown" {
 	const out = runGhSoft(gh, ["issue", "view", itemId, "--repo", ghRepo, "--json", "labels"]);
-	if (out === null) return false;
+	if (out === null) return "unknown";
 	try {
 		const issue = parseGhJson<IssueLabels>(out, isObject);
-		return (issue.labels ?? []).some((l) => l.name === label);
+		return (issue.labels ?? []).some((l) => l.name === label) ? "managed" : "unmanaged";
 	} catch {
-		return false;
+		return "unknown";
 	}
 }
 

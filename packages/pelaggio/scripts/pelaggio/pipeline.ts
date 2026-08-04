@@ -93,7 +93,7 @@ import { type ReviewRecord, renderReviewRecord, writeReviewRecord } from "./revi
 import { cleanupAuthoringReviewSeatsForSha, isAuthoringReviewSeatPath, prepareAuthoringReviewSeat } from "./review/seats.js";
 import { claimReviewRequest, completeReviewRequest, listReviewRequests, type ReviewRequestRecord, reclaimStaleReviewClaims, reviewDrainLockPath, reviewRequestsDir, unclaimReviewRequest } from "./review-request-queue.js";
 import { cleanupReviewHead, findReviewCandidates, isReviewHeadPath, postLocalModeWorkflowComment, postReviewStatus, prepareReviewHead, type ReviewCandidate, reviewStatusForSha, upsertReviewComment } from "./review-sweep.js";
-import { claimRevision, ensureReviseWorktree, fetchReviewFindings, findRevisablePrs, isAutopilotManaged, postParkComment, reviseFindingsPath } from "./revise-sweep.js";
+import { autopilotManagedState, claimRevision, ensureReviseWorktree, fetchReviewFindings, findRevisablePrs, isAutopilotManaged, postParkComment, reviseFindingsPath } from "./revise-sweep.js";
 import { defaultGhRun, type GhRunner } from "./roadmap/github-issues.js";
 import { getRoadmapSource, type RoadmapSource } from "./roadmap/index.js";
 import { cleanupShipBodyFile, parseShipDecisionEffect, shipBodyFile } from "./ship/decision.js";
@@ -2195,67 +2195,6 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				}
 			: undefined;
 
-		// Resume mode
-		if (flags.resume) {
-			const id = flags.resume.toUpperCase();
-			const worktree = noWorktree ? REPO : _resolveWorktree(id);
-			const v = flags.verbose;
-
-			let startFrom: Step;
-			if (flags.from !== undefined) {
-				// "pick" is excluded: resume mode starts with the worktree already resolved,
-				// so the pick step (worktree/branch creation) never executes — accepting it
-				// would silently start at plan instead of honoring the override.
-				if (!isPipelineStep(flags.from) || flags.from === "pick") {
-					console.error(`invalid --from ${JSON.stringify(flags.from)}; valid: ${STEPS.filter((s) => s !== "pick").join(", ")}`);
-					return { exitCode: 2, results };
-				}
-				startFrom = flags.from;
-				console.log(`${A.bold("resume")} ${id} from ${A.bold(startFrom)} ${A.dim("(--from override)")}`);
-			} else if (flags["review-findings"] !== undefined) {
-				startFrom = "implement";
-				console.log(`${A.bold("resume")} ${id} from ${A.bold(startFrom)} ${A.dim("(--review-findings)")}`);
-			} else {
-				startFrom = _detectResumeStep(id, worktree);
-				console.log(`${A.bold("resume")} ${id} from ${A.bold(startFrom)}`);
-			}
-
-			const status: CycleStatus = { itemId: id, status: "running", cost: 0 };
-			liveStatus.cycles.push(status);
-			liveStatus.totalCycles = 1;
-			if (v) statusBar.setup();
-
-			const result = await _runPipeline(
-				{
-					itemId: id,
-					worktree,
-					startFrom,
-					cycle: 1,
-					verbose: v,
-					shipTarget,
-					dryRun: false,
-					workerStatus: status,
-					liveStatus,
-					...(decisionNotifier ? { notifyDecision: decisionNotifier } : {}),
-					...(noWorktree ? { noWorktree: true } : {}),
-					...(signal ? { signal } : {}),
-				},
-				parkSignal,
-				flags,
-			);
-			results.push(result);
-			await notify(result, LOG_PATH);
-
-			status.status = resultStatus(result);
-			status.step = undefined;
-			if (v) {
-				liveStatus.render();
-				statusBar.teardown();
-			}
-			console.log(`\n${result.completed ? A.green("✓") : A.red("✗")} ${id} — ${result.costEstimated ? "~" : ""}$${result.cost.toFixed(2)}`);
-			return { exitCode: result.completed ? 0 : 1, results };
-		}
-
 		// Normal mode
 		const parallel = parseInt(flags.parallel, 10);
 		const items =
@@ -2672,8 +2611,12 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 
 			for (const { candidate: pr, record } of work.values()) {
 				if (parkSignal.parked) break;
-				if (!isAutopilotManaged(review.gh, review.ghRepo, pr.itemId, ROADMAP_GITHUB.label)) {
-					if (record) completeReviewRequest(review.queueRoot, pr.prNumber, pr.headSha);
+				// Tri-state on purpose: deleting the durable record requires a POSITIVE
+				// "unmanaged" read — a transient/malformed gh response ("unknown") skips
+				// this round and retains the record for retry (#387 gate finding).
+				const managed = autopilotManagedState(review.gh, review.ghRepo, pr.itemId, ROADMAP_GITHUB.label);
+				if (managed !== "managed") {
+					if (record && managed === "unmanaged") completeReviewRequest(review.queueRoot, pr.prNumber, pr.headSha);
 					continue;
 				}
 				// Crash-between-post-and-dequeue: an orphaned record (no live candidate) may already be
@@ -2745,6 +2688,73 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				}
 				console.log(`review ${pr.itemId}#${pr.prNumber} — ${finalState}${reviewCost > 0 ? ` ${reviewCostEstimated ? "~" : ""}$${reviewCost.toFixed(2)}` : ""}`);
 			}
+		}
+
+		// Resume mode
+		if (flags.resume) {
+			const id = flags.resume.toUpperCase();
+			const worktree = noWorktree ? REPO : _resolveWorktree(id);
+			const v = flags.verbose;
+
+			let startFrom: Step;
+			if (flags.from !== undefined) {
+				// "pick" is excluded: resume mode starts with the worktree already resolved,
+				// so the pick step (worktree/branch creation) never executes — accepting it
+				// would silently start at plan instead of honoring the override.
+				if (!isPipelineStep(flags.from) || flags.from === "pick") {
+					console.error(`invalid --from ${JSON.stringify(flags.from)}; valid: ${STEPS.filter((s) => s !== "pick").join(", ")}`);
+					return { exitCode: 2, results };
+				}
+				startFrom = flags.from;
+				console.log(`${A.bold("resume")} ${id} from ${A.bold(startFrom)} ${A.dim("(--from override)")}`);
+			} else if (flags["review-findings"] !== undefined) {
+				startFrom = "implement";
+				console.log(`${A.bold("resume")} ${id} from ${A.bold(startFrom)} ${A.dim("(--review-findings)")}`);
+			} else {
+				startFrom = _detectResumeStep(id, worktree);
+				console.log(`${A.bold("resume")} ${id} from ${A.bold(startFrom)}`);
+			}
+
+			const status: CycleStatus = { itemId: id, status: "running", cost: 0 };
+			liveStatus.cycles.push(status);
+			liveStatus.totalCycles = 1;
+			if (v) statusBar.setup();
+
+			const result = await _runPipeline(
+				{
+					itemId: id,
+					worktree,
+					startFrom,
+					cycle: 1,
+					verbose: v,
+					shipTarget,
+					dryRun: false,
+					workerStatus: status,
+					liveStatus,
+					...(decisionNotifier ? { notifyDecision: decisionNotifier } : {}),
+					...(noWorktree ? { noWorktree: true } : {}),
+					...(signal ? { signal } : {}),
+				},
+				parkSignal,
+				flags,
+			);
+			results.push(result);
+			await notify(result, LOG_PATH);
+
+			status.status = resultStatus(result);
+			status.step = undefined;
+			if (v) {
+				liveStatus.render();
+				statusBar.teardown();
+			}
+			console.log(`\n${result.completed ? A.green("✓") : A.red("✗")} ${id} — ${result.costEstimated ? "~" : ""}$${result.cost.toFixed(2)}`);
+			// #387: a resumed cycle can ship a PR whose review-request record would
+			// otherwise sit undrained until the next process. Drain before returning
+			// so resume mode gets the same review-at-delivery as the worker pool.
+			if (doReviewDrain && !parkSignal.parked) {
+				await tryWithFileLock(reviewDrainLock, () => runLocalReviewDrainOnce({ notifyStranded: false }), { label: "review drain lock", staleMs: REVIEW_DRAIN_LOCK_STALE_MS });
+			}
+			return { exitCode: result.completed ? 0 : 1, results };
 		}
 
 		if (doReviewDrain) {
