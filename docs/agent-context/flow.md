@@ -308,8 +308,12 @@ the idempotent write-back — an ambiguous push outcome must never be re-merged 
 base containing its own merge. Reconciliation on
 startup/resume follows the same rule; a claim with no landed SHA on the remote is
 retained for retry. Where a `RoadmapSource` produces commits (`MarkdownRoadmap`'s
-`markDone`/`archivePlan`) they ride the verified candidate, so no unverified second
-push exists; API-backed sources write back after confirmed landing.
+`markDone`/`archivePlan`) they are **staged into the candidate before verification**
+(the executor invokes them against the attempt worktree while building the
+candidate — ADR-0025 §8), so they land atomically with the work and no unverified
+second push exists; an adapter without the staging seam terminates `Contended`
+rather than pushing unverified commits. API-backed sources write back after
+confirmed landing.
 
 **Why the retry ladder is shaped this way.** Measured on this repo: a full verify is
 ~195 s (median of 14 `ci.yml` runs — CI wall time used as a proxy for a local
