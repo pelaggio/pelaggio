@@ -332,7 +332,8 @@ harness-held in-flight count, never a forge poll.
 `bd` substrate, already ships this as its **Refinery**: a Bors-style
 batch-then-bisect merge queue that rebases each MR onto latest main, runs
 validation, merges when clear, and re-implements on conflict. pelaggio builds its
-own on `bd merge-slot` rather than adopting `gt` (an all-or-nothing town), but the
+own landing discipline above the harness CAS fence (ADR-0025; `bd merge-slot` only
+as optional ordering) rather than adopting `gt` (an all-or-nothing town), but the
 Refinery + `gt done` (submit → notify → sync) + `gt mq` (ordered queue, `next` =
 highest priority) are the design to mirror. Note the divergence that is *ours*:
 Gastown handles conflicts **reactively** (Refinery re-implements); pelaggio adds
