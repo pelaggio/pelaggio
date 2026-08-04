@@ -111,7 +111,9 @@ export function findRevisablePrs(gh: GhRunner, ghRepo: string): { revisable: Rev
 	for (const pr of prs) {
 		if (pr.isDraft) continue;
 		const branch = pr.headRefName ?? "";
-		const m = branch.match(/^feat\/issue-(\d+)/);
+		// End-anchored with a strict charset: headRefName is forge-controlled input and
+		// flows into git commands — "feat/issue-1;payload" must never qualify.
+		const m = branch.match(/^feat\/issue-(\d+)(?:-[A-Za-z0-9._-]*)?$/);
 		if (!m) continue;
 		if (!hasReviewFailure(pr.statusCheckRollup)) continue;
 		const entry: RevisablePr = { prNumber: pr.number, itemId: m[1], branch };
@@ -192,6 +194,10 @@ export function fetchReviewFindings(gh: GhRunner, ghRepo: string, prNumber: numb
  */
 export function ensureReviseWorktree(worktreePath: string, branch: string, opts: { repo: string; exec?: (cmd: string, cwd: string) => string }): string | null {
 	if (existsSync(worktreePath)) return worktreePath;
+	// Fail closed before any exec: branch is forge-controlled. Allow only git-ref-safe
+	// characters and forbid a leading dash (git option injection); the default exec is
+	// a shell string, so any metacharacter here would be command injection.
+	if (!/^[A-Za-z0-9][A-Za-z0-9/._-]*$/.test(branch)) return null;
 	const exec = opts.exec ?? ((cmd, cwd) => execSync(cmd, { cwd, encoding: "utf-8" }));
 	try {
 		// The local branch ref may be gone (a prior `/tidy` pruned it) — recreate it from origin
