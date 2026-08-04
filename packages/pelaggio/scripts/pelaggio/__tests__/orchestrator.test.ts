@@ -1593,6 +1593,43 @@ describe("runOrchestrator — mid-run review drain (#387)", () => {
 		assert.equal(calls.length, 0, "the pick pool is skipped while parked");
 	});
 
+	it("resume: a drain park exits 1 even when the resumed cycle completed", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const main = mainDir();
+		enqueueReviewRequest(main, record());
+		const gh: GhRunner = (args) => {
+			if (args[0] === "pr" && args[1] === "list") return { stdout: "[]", stderr: "", status: 0 };
+			if (args[0] === "issue" && args[1] === "view") return { stdout: JSON.stringify({ labels: [{ name: "autopilot" }] }), stderr: "", status: 0 };
+			if (args[0] === "api" && args[1] === `repos/o/r/commits/${HEAD}/status`) return { stdout: JSON.stringify({ statuses: [] }), stderr: "", status: 0 };
+			return { stdout: "", stderr: "", status: 0 };
+		};
+		const { runPipeline } = createMockRunPipeline({ byItem: { "TOOL-99": { completed: true, cost: 1 } } });
+
+		const { exitCode } = await runOrchestrator(
+			{ ...baseFlags, resume: "tool-99", target: "pull-request" },
+			{
+				runPipeline,
+				detectResumeStep: () => "implement" as const,
+				resolveWorktree: () => "/fake/wt",
+				park: { autoResume: false },
+				review: reviewDeps({
+					gh,
+					main,
+					runReviewGate: async (opts) => {
+						if (opts.parkSignal) {
+							opts.parkSignal.parked = true;
+							opts.parkSignal.resetsAt = 0;
+							opts.parkSignal.limitType = "5h";
+						}
+						return { gate: "park" as const, body: "parked", cost: 0.1, costEstimated: false, turns: 0, ok: false, subtype: "error_rate_limit", park: { resetsAt: 0, limitType: "5h" } };
+					},
+				}),
+			},
+		);
+
+		assert.equal(exitCode, 1, "a parked post-resume drain must not report delivery-complete");
+	});
+
 	it("an --item run drains review (candidate) but excludes revise (the DECISION fork)", async (t) => {
 		t.mock.method(console, "log", () => {});
 		const main = mainDir();

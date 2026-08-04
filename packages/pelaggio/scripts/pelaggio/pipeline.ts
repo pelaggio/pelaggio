@@ -2769,6 +2769,12 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			// so resume mode gets the same review-at-delivery as the worker pool.
 			if (doReviewDrain && !parkSignal.parked) {
 				await runPostCycleReviewDrain();
+				// A drain park (rate limit) leaves the merge-gate review undrained; exiting
+				// 0 would falsely report delivery-complete and bypass park handling.
+				if (parkSignal.parked) {
+					console.log(`${A.yellow("⚠")} post-resume review drain parked — review status still pending; re-run --resume ${id} after the limit clears`);
+					return { exitCode: 1, results };
+				}
 			}
 			return { exitCode: result.completed ? 0 : 1, results };
 		}
