@@ -249,6 +249,11 @@ function parseEscalationMetadata(encoded: string): { escalation: ReviewEscalatio
 	if (esc.kind !== "review-escalation" || typeof esc.itemId !== "string" || typeof esc.reviewedSha !== "string") {
 		throw new Error("malformed review escalation metadata");
 	}
+	// A record without evidence binding can never mint proceed authority: the resume
+	// ack gate compares against this fingerprint, and undefined must not match anything.
+	if (typeof esc.evidenceFingerprint !== "string" || esc.evidenceFingerprint.length === 0) {
+		throw new Error("malformed review escalation metadata: missing evidenceFingerprint");
+	}
 	return value as { escalation: ReviewEscalation; resolution?: ReviewResolution };
 }
 
@@ -787,8 +792,14 @@ export async function migrateDecisions(repo: string): Promise<MigrateDecisionsRe
 		const legacyRows = (() => {
 			try {
 				return parseLegacyRegister(body);
-			} catch {
-				// Empty skeleton or unrecognized shape — nothing to migrate.
+			} catch (e) {
+				// Only a genuinely empty skeleton may no-op. A body carrying decision
+				// markers or table rows that fails to parse is corruption; failing open
+				// here would silently strand operational decisions unmigrated.
+				if (body.includes("<!-- decision:") || /^\| .+ \|$/m.test(body)) {
+					const msg = e instanceof Error ? e.message : String(e);
+					throw new Error(`legacy decisions register is unparseable — refusing to no-op the migration: ${msg}`);
+				}
 				return [] as Array<StoredDecision & { owner: string }>;
 			}
 		})();

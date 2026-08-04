@@ -137,10 +137,25 @@ function pathUnderRoot(abs: string, root: string): boolean {
  * Nested authoring-review seats under `MAIN_REPO/.dev/authoring-review-seats/`
  * remain allowed as cwd (#269). Separately denies Write/Edit into
  * `MAIN_REPO/.dev/sessions/` so agents cannot forge session evidence.
- * Bash is not covered — residual matches the prior main-repo string guard only.
+ * Bash residual for general paths remains (the command string is opaque), but a
+ * Bash command that mentions a harness-owned register (`docs/decision-log/`,
+ * `.dev/sessions/`) is denied outright (#386, fail closed): a shell redirect is
+ * how an agent would forge decision or escalation authority in its own worktree,
+ * and reads of those registers are supplied by the harness, never self-served.
  */
 export function blockForeignRootWrite(input: HookInput, cwd: string, mainRepo: string, registeredWorktrees: readonly string[], ownWorktree?: string): SyncHookJSONOutput {
 	const tn = "tool_name" in input ? String(input.tool_name) : "";
+	if (tn === "Bash") {
+		const ti = ("tool_input" in input ? input.tool_input : {}) as Record<string, unknown>;
+		const cmd = String(ti.command ?? "");
+		if (/(^|[\s"'=/])docs\/decision-log(\/|\b)/.test(cmd) || /(^|[\s"'=/])\.dev\/sessions(\/|\b)/.test(cmd)) {
+			return {
+				decision: "block" as const,
+				reason: 'This Bash command references a harness-owned register (docs/decision-log/ or .dev/sessions/). These are written only by the harness; emit a "DECISION:" line in your step output instead.',
+			};
+		}
+		return {};
+	}
 	if (tn !== "Write" && tn !== "Edit") return {};
 	const ti = ("tool_input" in input ? input.tool_input : {}) as Record<string, unknown>;
 	const fp = String(ti.file_path ?? "");

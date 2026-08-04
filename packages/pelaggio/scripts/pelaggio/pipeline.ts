@@ -1451,8 +1451,17 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			if (existingEscalation.state === "active" || existingEscalation.state === "resolved-block" || existingEscalation.state === "invalid") return parkExit(`adversarial review escalation ${existingEscalation.state}`)!;
 			// A committed resolution remains untrusted policy input until an operator binds
 			// this resume to its evidence. Issue #419 owns the successor authority design.
-			if (existingEscalation.state === "resolved-proceed" && flags["acknowledge-escalation"] !== existingEscalation.escalation.evidenceFingerprint) {
-				return parkExit(`adversarial review escalation active; after reviewing, re-run with --resume ${itemId} --acknowledge-escalation ${existingEscalation.escalation.evidenceFingerprint}`)!;
+			if (existingEscalation.state === "resolved-proceed") {
+				// Both sides must be present strings: a record missing its fingerprint and
+				// an omitted flag are each undefined, and undefined must never satisfy the gate.
+				const evidenceFp = existingEscalation.escalation.evidenceFingerprint;
+				const ackFlag = flags["acknowledge-escalation"];
+				if (typeof evidenceFp !== "string" || evidenceFp.length === 0) {
+					return parkExit("adversarial review escalation record lacks an evidence fingerprint — treated as active; re-escalate through the review loop")!;
+				}
+				if (typeof ackFlag !== "string" || ackFlag !== evidenceFp) {
+					return parkExit(`adversarial review escalation active; after reviewing, re-run with --resume ${itemId} --acknowledge-escalation ${evidenceFp}`)!;
+				}
 			}
 			if (existingEscalation.state === "resolved-proceed" && existingEscalation.escalation.hasSafetyBlocker) return parkExit("adversarial review safety blocker")!;
 			// Capability-aware fixed-seat resolution (#337): fill configured seats via settings
