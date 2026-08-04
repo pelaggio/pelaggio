@@ -31,6 +31,7 @@ interface ApiCalls {
 	addLabel: { issueId: string; labelName: string }[];
 	removeLabel: { issueId: string; labelName: string }[];
 	getIssueComments: string[];
+	createIssue: Parameters<LinearApi["createIssue"]>[0][];
 }
 
 interface StubOpts {
@@ -51,6 +52,7 @@ function makeStub(opts: StubOpts = {}): { api: LinearApi; calls: ApiCalls } {
 		addLabel: [],
 		removeLabel: [],
 		getIssueComments: [],
+		createIssue: [],
 	};
 	const api: LinearApi = {
 		async listIssues(args) {
@@ -82,6 +84,7 @@ function makeStub(opts: StubOpts = {}): { api: LinearApi; calls: ApiCalls } {
 			return opts.comments?.[identifier] ?? [];
 		},
 		async createIssue(input) {
+			calls.createIssue.push(input);
 			return { id: "uuid-new", identifier: "ENG-99", title: input.title };
 		},
 	};
@@ -97,6 +100,18 @@ function mk(opts: { repo: string; teamId?: string; label?: string; planLocation?
 		api: opts.api,
 	});
 }
+
+describe("LinearRoadmap.createItem", () => {
+	it("preserves the charter before generated metadata", async () => {
+		const { api, calls } = makeStub();
+		const r = mk({ repo: "/tmp", api });
+
+		await r.createItem({ title: "Concise", description: "Full charter", scope: "S", deps: ["ENG-1"] });
+
+		assert.equal(calls.createIssue.length, 1);
+		assert.equal(calls.createIssue[0].description, "Full charter\nDepends on: ENG-1\nScope: S");
+	});
+});
 
 describe("LinearRoadmap.parseItemId", () => {
 	const r = mk({ repo: "/tmp" });

@@ -354,6 +354,7 @@ export class BeadsRoadmap implements RoadmapSource {
 	async createItem(opts: CreateItemOpts): Promise<RoadmapItem> {
 		const deps = opts.deps ?? [];
 		const bodyParts: string[] = [];
+		if (opts.description) bodyParts.push(opts.description);
 		if (opts.scope) bodyParts.push(`Scope: ${opts.scope}`);
 		if (opts.deferred) bodyParts.push("Deferred: true");
 		const description = bodyParts.join("\n");
