@@ -2651,7 +2651,10 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 							// Transient: leave the pending status as-is (do NOT upsert findings or post
 							// failure), charge the partial cost, and stop starting new reviews this round.
 							// `finally` still cleans the review head; the shared `parkSignal` is already parked.
+							// Day-budget must see the partial spend too (#397): local review is in the
+							// day-budget accounting set, and the post-try path below is skipped on break.
 							totalSpent += result.cost;
+							dayBudgetTracker.add(result.cost);
 							console.log(`review ${pr.itemId}#${pr.prNumber} — parked (${result.park?.limitType ?? parkSignal.limitType})`);
 							break;
 						}
