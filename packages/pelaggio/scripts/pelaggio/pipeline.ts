@@ -2922,14 +2922,24 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					statusBar.setup();
 				}
 
-				const batch = await Promise.all(pending.map((id, i) => resumeOne(id, i)));
-				results.push(...batch);
-				// A resumed item can itself report a halt-campaign-classed failure
-				// (confinement/safety). Stop resuming peers — the environment is suspect —
-				// and leave them parked for the operator (#385 round-4 review finding).
-				if (batch.some((r) => classifyCycleDisposition(r, RECOVERABLE) === "halt-campaign")) {
+				// Resume SEQUENTIALLY: a resumed item can itself report a halt-campaign-
+				// classed failure (confinement/safety), and concurrent launches would let
+				// peers run before the halt is known. A suspect environment argues for
+				// serial resumes anyway; parked lists are small (#385 round-4/5 findings).
+				const batch: CycleResult[] = [];
+				let resumeHalted = false;
+				for (const [i, id] of pending.entries()) {
+					const r = await resumeOne(id, i);
+					batch.push(r);
+					results.push(r);
+					if (classifyCycleDisposition(r, RECOVERABLE) === "halt-campaign") {
+						resumeHalted = true;
+						break;
+					}
+				}
+				if (resumeHalted) {
 					campaignHalted = true;
-					const remaining = batch.filter((r) => r.error === "parked" && r.itemId).map((r) => r.itemId!);
+					const remaining = pending.slice(batch.length);
 					if (remaining.length) console.log(`${A.yellow("⏸")} halt-campaign during auto-resume — leaving ${remaining.length} item(s) parked`);
 					break;
 				}
