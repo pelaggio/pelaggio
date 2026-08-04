@@ -24,6 +24,9 @@ interface RollupEntry {
 	startedAt?: string;
 	createdAt?: string;
 	updatedAt?: string;
+	/** REST /commits/:sha/status uses snake_case timestamps (GraphQL rollup is camelCase). */
+	created_at?: string;
+	updated_at?: string;
 }
 
 interface PrListEntry {
@@ -45,15 +48,29 @@ function sameRepo(pr: PrListEntry, ghRepo: string): boolean {
 	return !!headOwner && !!headName && headOwner.toLowerCase() === owner?.toLowerCase() && headName.toLowerCase() === repo?.toLowerCase();
 }
 
+function statusTimestamp(entry: RollupEntry): number {
+	// GraphQL rollup entries carry camelCase timestamps; REST /commits/:sha/status
+	// carries snake_case. Read both, or every REST entry ties at 0 and recency
+	// classification degrades to array-order accidents (#387 gate finding).
+	const raw = entry.startedAt ?? entry.createdAt ?? entry.updatedAt ?? entry.created_at ?? entry.updated_at;
+	const parsed = raw ? Date.parse(raw) : Number.NaN;
+	return Number.isFinite(parsed) ? parsed : 0;
+}
+
 function reviewStatus(rollup: RollupEntry[] | undefined): { state: "missing" | "pending" | "done"; startedAt?: string } {
 	if (!Array.isArray(rollup)) return { state: "missing" };
 	const statuses = rollup.filter((e) => (e.context ?? "").toLowerCase() === REVIEW_CONTEXT);
-	for (const status of statuses) {
-		const state = (status.state ?? "").toUpperCase();
-		if (state === "SUCCESS" || state === "FAILURE" || state === "ERROR") return { state: "done" };
-	}
-	const pending = statuses.find((e) => (e.state ?? "").toUpperCase() === "PENDING");
-	if (pending) return { state: "pending", startedAt: pending.startedAt ?? pending.createdAt ?? pending.updatedAt };
+	if (statuses.length === 0) return { state: "missing" };
+	// Classify by the MOST RECENT review status, not first-terminal-wins: a re-review
+	// posts pending over an older success/failure, and treating the stale terminal as
+	// "done" lets the drain delete a queue record while the effective context stays
+	// pending forever (#387 gate finding). Untimestamped entries sort oldest.
+	// Strict > keeps the FIRST entry on timestamp ties: the REST endpoint returns
+	// newest-first, so first-wins is the correct degradation when timestamps are absent.
+	const latest = statuses.reduce((a, b) => (statusTimestamp(b) > statusTimestamp(a) ? b : a));
+	const state = (latest.state ?? "").toUpperCase();
+	if (state === "SUCCESS" || state === "FAILURE" || state === "ERROR") return { state: "done" };
+	if (state === "PENDING") return { state: "pending", startedAt: latest.startedAt ?? latest.createdAt ?? latest.updatedAt };
 	return { state: "missing" };
 }
 
@@ -97,6 +114,25 @@ export function postReviewStatus(gh: GhRunner, ghRepo: string, sha: string, stat
 	return postCommitStatus(gh, ghRepo, sha, state, REVIEW_CONTEXT, description, targetUrl);
 }
 
+/**
+ * Targeted `review` status probe for one commit SHA — the crash-between-post-and-dequeue
+ * idempotency check (#387). `findReviewCandidates` drops done PRs, so an enqueued record that
+ * is no longer a live candidate may already be terminal; the drain confirms that POSITIVELY
+ * here before deleting the record (never "absent from the listing" as evidence). Fail-soft: a
+ * probe error reads as `missing` so the drain re-runs (safe: status/comment upserts are
+ * idempotent) rather than dropping un-reviewed intent.
+ */
+export function reviewStatusForSha(gh: GhRunner, ghRepo: string, sha: string): "missing" | "pending" | "done" {
+	const out = runGhSoft(gh, ["api", `repos/${ghRepo}/commits/${sha}/status`]);
+	if (out === null) return "missing";
+	try {
+		const parsed = JSON.parse(out) as { statuses?: RollupEntry[] };
+		return reviewStatus(parsed.statuses).state;
+	} catch {
+		return "missing";
+	}
+}
+
 export function upsertReviewComment(gh: GhRunner, ghRepo: string, prNumber: number, body: string): boolean {
 	return upsertMarkerComment(gh, ghRepo, prNumber, PR_REVIEW_MARKER, body);
 }
@@ -127,6 +163,12 @@ export function prepareReviewHead(repo: string, candidate: ReviewCandidate, exec
 	try {
 		mkdirSync(resolve(repo, ".dev", "review-heads"), { recursive: true });
 		run(`git fetch origin refs/pull/${candidate.prNumber}/head:${headRef}`, repo);
+		// The status will be posted for candidate.headSha — the reviewed ref MUST be
+		// that exact commit. If the branch moved between listing and fetch, reviewing
+		// the new head while certifying the old SHA is a phantom sign-off; bail and
+		// let the next drain round re-list with the fresh SHA.
+		const fetched = run(`git rev-parse ${headRef}`, repo).trim();
+		if (fetched !== candidate.headSha) return null;
 		if (!existsSync(path)) run(`git worktree add --detach ${path} ${candidate.headSha}`, repo);
 		return { diffCwd: path, baseRef: "origin/main", headRef };
 	} catch {

@@ -96,6 +96,20 @@ describe("findRevisablePrs", () => {
 		const { run } = stub(() => ({ stdout: "not json" }));
 		assert.deepEqual(findRevisablePrs(run, "o/r"), { revisable: [], labeledStillRed: [] });
 	});
+
+	it("rejects branch names with shell metacharacters after the issue prefix (injection guard)", () => {
+		const fixture = JSON.stringify(
+			["feat/issue-1;id", "feat/issue-1$(cmd)", "feat/issue-1 --upload-pack=x", "feat/issue-1-ok`x`"].map((headRefName, i) => ({
+				number: i + 1,
+				isDraft: false,
+				headRefName,
+				labels: [],
+				statusCheckRollup: [{ __typename: "CheckRun", name: "review", conclusion: "failure" }],
+			})),
+		);
+		const { run } = stub(() => ({ stdout: fixture }));
+		assert.deepEqual(findRevisablePrs(run, "o/r"), { revisable: [], labeledStillRed: [] });
+	});
 });
 
 describe("isAutopilotManaged", () => {
@@ -186,6 +200,22 @@ describe("ensureReviseWorktree", () => {
 		assert.equal(path, dir);
 		assert.equal(execRan, false, "exec must not run when the worktree already exists");
 		rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("refuses a branch with shell metacharacters without invoking exec (injection guard)", () => {
+		const missing = join(tmpdir(), `revise-wt-inject-${process.pid}`);
+		for (const branch of ["feat/issue-1;id", "feat/issue-1$(cmd)", "-feat/issue-1", "feat/issue-1 x"]) {
+			let execRan = false;
+			const path = ensureReviseWorktree(missing, branch, {
+				repo: "/repo",
+				exec: () => {
+					execRan = true;
+					return "";
+				},
+			});
+			assert.equal(path, null, `branch ${JSON.stringify(branch)} must be refused`);
+			assert.equal(execRan, false, `exec must never run for ${JSON.stringify(branch)}`);
+		}
 	});
 
 	it("recreates a missing worktree via `git worktree add` and returns the path", () => {

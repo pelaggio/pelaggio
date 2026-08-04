@@ -58,9 +58,12 @@ runner. `review.runner` selects which:
 - `ci` (default): `.github/workflows/pr-review.yml` runs the `pr-review` CLI in
   GitHub Actions and posts the `review` **commit status** (pending → success/failure)
   for the PR head SHA.
-- `local`: a normal local pelaggio auto-pick run sweeps open PRs before revise,
-  runs the same `pr-review` step from the trusted local tree, and posts the `review`
-  **commit status**.
+- `local`: a normal local pelaggio run reconciles open PRs before revise, runs the
+  same `pr-review` step from the trusted local tree, and posts the `review` **commit
+  status**. The reconciler drains **at campaign start and after every cycle** (see
+  [Mid-run posting](#mid-run-posting-387) below), so PRs opened mid-run — and the sole
+  PR of an explicit `--item` run — are reviewed before the worker exits, not "next
+  process".
 
 **Branch protection: require the `review` _status_ context, not a check named
 `review`.** No workflow job is named `review` (the CI job is `pr-review-ci`) precisely
@@ -77,6 +80,37 @@ Set the repo variable `AUTOPILOT_REVIEW_RUNNER=local` so the CI workflow leaves 
 a diagnostic comment and does not execute review tooling from the PR branch. The
 local `gh` auth needs permission to write commit statuses (`statuses: write`) and PR
 comments.
+
+### Mid-run posting (#387)
+
+The local review reconciler drains at two moments — **campaign start** (cold-start
+backlog + statusless PRs from prior runs) and **after every cycle inside each worker**
+(the PR this cycle just shipped). This closes the earlier gap where the sweep ran
+**once** at campaign start, before the pick worker pool: a multi-cycle, continuous
+(#82), or `--item` run that opened PRs after that sweep left them statusless (auto-merge
+queued but inert) until the *next* process. The `--item` path drains too — the `review`
+status is a merge gate, not optional campaign work (revise keeps its `--item` exclusion:
+"do exactly these").
+
+**Enqueue / execute split.** The trusted-tree invariant is preserved by never running
+review from a PR-branch worktree. After a successful PR ship, the harness ship-tail only
+**enqueues** a durable review-request into the main tree at
+`MAIN_REPO/.dev/review-requests/{prNumber}-{headSha}.json` (gitignored; redirected via
+`mainWorktree()` like the decisions register / stale quarantine). It posts **no** status
+from the ship path. The main-tree reconciler is the **sole** executor: it drains the
+queue, runs `pr-review`, and posts the status from local `main`. The queue key is
+`(prNumber, headSha)`, so the drain is idempotent — a re-push (new SHA) is new work; a
+crash after posting the status but before dequeuing is reconciled by a positive terminal
+status probe on that exact SHA (never "absent from the PR listing"), which deletes the
+record without re-running the agent. A rate-limit park leaves the status pending and
+hands the record back for the next drain. Parallel workers serialize one drain round
+under `MAIN_REPO/.dev/review-requests/.drain.lock`; a losing worker skips the round (a
+peer is already draining the shared queue). Enqueue failures and un-parseable
+PR-number/HEAD inputs are non-fatal to the ship — the PR is already on the forge, and the
+campaign-start drain's `findReviewCandidates` re-derives it from the forge and recovers.
+
+Review always drains **before** revise, so a fresh local BLOCK is immediately revisable
+in the same window; a just-shipped PR has no red `review` yet, so revise ignores it.
 
 ## CI runner flow
 

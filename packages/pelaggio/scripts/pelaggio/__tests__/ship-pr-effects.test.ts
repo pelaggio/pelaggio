@@ -27,7 +27,9 @@ function step(text: string): StepResult {
 	return { ok: true, subtype: "success", text, fullText: "", assistantText: text, cost: 0, turns: 0 };
 }
 
-function makeExec(opts: { dirty?: boolean; branch?: string; deliverable?: string; rejectFirstPush?: boolean } = {}): { exec: (cmd: string, cwd: string) => string; calls: string[] } {
+const HEAD_SHA = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+
+function makeExec(opts: { dirty?: boolean; branch?: string; deliverable?: string; rejectFirstPush?: boolean; headSha?: string; headShaError?: boolean } = {}): { exec: (cmd: string, cwd: string) => string; calls: string[] } {
 	const calls: string[] = [];
 	let pushCount = 0;
 	const exec = (cmd: string): string => {
@@ -44,6 +46,10 @@ function makeExec(opts: { dirty?: boolean; branch?: string; deliverable?: string
 			return "";
 		}
 		if (cmd === "git push --force-with-lease -u origin HEAD") return "";
+		if (cmd === "git rev-parse HEAD") {
+			if (opts.headShaError) throw new Error("rev-parse failed");
+			return opts.headSha ?? HEAD_SHA;
+		}
 		throw new Error(`unexpected exec: ${cmd}`);
 	};
 	return { exec, calls };
@@ -225,6 +231,9 @@ describe("runShipPrEffects", () => {
 		const result = await runShipPrEffects({ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision() }, { exec: ex.exec, gh: gh.gh, log: () => {} });
 
 		assert.equal(result.prUrl, PR_URL);
+		// #387: a successful PR ship carries the parsed PR number + squashed HEAD for the review enqueue.
+		assert.equal(result.prNumber, 42);
+		assert.equal(result.headSha, HEAD_SHA);
 		assert.ok(ex.calls.includes("git push -u origin HEAD"));
 		// Always-on Assisted-by trailer (#189) on the harness squash commit.
 		const commit = ex.calls.find((c) => c.startsWith("git commit "));
@@ -253,6 +262,36 @@ describe("runShipPrEffects", () => {
 		assert.match(commit, /Assisted-by: Codex <noreply@openai\.com>/);
 		assert.match(commit, /Assisted-by: Grok <noreply@x\.ai>/);
 		assert.ok(!commit.includes("Assisted-by: Claude"));
+	});
+
+	it("succeeds with prNumber=null when pr create's URL does not parse (#387 fail-closed contradiction guard)", async () => {
+		const ex = makeExec();
+		const gh = makeGh([
+			{ match: ["pr", "list"], stdout: "[]" },
+			// A non-standard URL that parsePrNumber can't extract a number from — the PR is still created.
+			{ match: ["pr", "create"], stdout: "https://github.com/acme/widget/pulls\n" },
+		]);
+
+		const result = await runShipPrEffects({ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision() }, { exec: ex.exec, gh: gh.gh, log: () => {} });
+
+		// Landed PR: returns the URL, no throw. The handler skips enqueue on the null number.
+		assert.equal(result.prUrl, "https://github.com/acme/widget/pulls");
+		assert.equal(result.prNumber, null);
+		assert.equal(result.headSha, HEAD_SHA);
+	});
+
+	it("carries headSha=null when HEAD cannot be read, without failing the ship (#387)", async () => {
+		const ex = makeExec({ headShaError: true });
+		const gh = makeGh([
+			{ match: ["pr", "list"], stdout: "[]" },
+			{ match: ["pr", "create"], stdout: `${PR_URL}\n` },
+		]);
+
+		const result = await runShipPrEffects({ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision() }, { exec: ex.exec, gh: gh.gh, log: () => {} });
+
+		assert.equal(result.prUrl, PR_URL);
+		assert.equal(result.prNumber, 42);
+		assert.equal(result.headSha, null);
 	});
 
 	it("updates and reuses an existing PR by head branch", async () => {

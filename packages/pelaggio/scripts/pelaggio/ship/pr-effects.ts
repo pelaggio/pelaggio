@@ -14,6 +14,12 @@ export interface ShipPrEffectsDeps {
 
 export interface ShipPrEffectsResult {
 	prUrl: string;
+	/** Forge PR number, or null when `pr create`'s URL did not parse. Carried as-is for the
+	 *  #387 mid-run review enqueue; a null skips the enqueue (cold-start drain recovers the PR)
+	 *  and NEVER fails the ship — the PR is already on the forge. */
+	prNumber: number | null;
+	/** Squashed HEAD OID just pushed, or null when it could not be read. Same skip-on-null contract. */
+	headSha: string | null;
 }
 
 interface ExistingPr {
@@ -60,6 +66,10 @@ export async function runShipPrEffects(
 	if (changed.length === 0) throw new Error("nothing to ship: branch only touches docs/plans/ and/or docs/decision-log/ after squash");
 
 	pushBranch(exec, cwd, deps.log);
+	// Read the squashed HEAD created by the commit above — the exact SHA the #387 review
+	// status is posted against. Carried as-is (null on error); the enqueue skips on null and
+	// the ship never fails on a missing enqueue input.
+	const headSha = headShaOf(exec, cwd);
 	const upserted = upsertPr(gh, decision);
 	if (decision.target === "auto-merge-pr") {
 		if (upserted.number === null) throw new Error("cannot enable auto-merge without a PR number");
@@ -70,7 +80,18 @@ export async function runShipPrEffects(
 		runGh(gh, ["pr", "merge", "--auto", "--squash", String(upserted.number)]);
 		deps.log(`auto-merge enabled for ${upserted.url}`);
 	}
-	return { prUrl: upserted.url };
+	return { prUrl: upserted.url, prNumber: upserted.number, headSha };
+}
+
+/** HEAD OID of the just-pushed squash commit, or null if it can't be read. Never throws:
+ *  a landed PR whose HEAD couldn't be resolved is still a shipped PR (see the null contract). */
+function headShaOf(exec: ExecFn, cwd: string): string | null {
+	try {
+		const sha = exec("git rev-parse HEAD", cwd).trim();
+		return /^[0-9a-f]{7,40}$/i.test(sha) ? sha : null;
+	} catch {
+		return null;
+	}
 }
 
 function pushBranch(exec: ExecFn, cwd: string, log: (msg: string) => void): void {

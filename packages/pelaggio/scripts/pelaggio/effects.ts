@@ -1,10 +1,12 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { REVIEW_CONFIG, type ReviewRunner, ROADMAP_GITHUB, ROADMAP_SOURCE } from "./config.js";
 import { buildEffectsManifestReceipt, ExecutionReceiptError, type GitRevisionBinding, writeExecutionReceipt } from "./execution-receipt.js";
-import { checkpoint, ensureCheckpointed } from "./helpers.js";
+import { checkpoint, ensureCheckpointed, mainWorktree } from "./helpers.js";
+import { enqueueReviewRequest, type NewReviewRequest } from "./review-request-queue.js";
 import type { RoadmapSource } from "./roadmap/index.js";
 import { SHIP_TARGET_NAMES } from "./ship/index.js";
-import { runShipPrEffects } from "./ship/pr-effects.js";
+import { runShipPrEffects, type ShipPrEffectsResult } from "./ship/pr-effects.js";
 import type { ExecutionReceiptDescriptor, ProviderName, ReviewOutcome, Step } from "./types.js";
 
 export const EFFECTS_SCHEMA_VERSION = 1;
@@ -98,6 +100,21 @@ export interface EffectsDispatchContext extends EffectsContext {
 	observeGit: () => { worktree: string | null; headSha: string | null; branch: string | null };
 	/** ISO timestamp clock; tests inject a fixed clock. Defaults to `new Date().toISOString()`. */
 	now?: () => string;
+	/**
+	 * Mid-run review-request enqueue seam (#387). Defaults read module-level config
+	 * (`REVIEW_CONFIG.runner`, the github-issues `ghRepo`) and write through `mainWorktree()`;
+	 * tests override to exercise both runners / a null-key skip without touching real `.dev/`.
+	 */
+	reviewEnqueue?: ReviewEnqueueDeps;
+}
+
+export interface ReviewEnqueueDeps {
+	runner?: ReviewRunner;
+	/** Non-empty only for the github-issues roadmap source — the drain can run this repo. */
+	ghRepo?: string;
+	/** Resolve the tree holding `refs/heads/main` from the ship worktree cwd. */
+	mainRepo?: (cwd: string) => string;
+	enqueue?: (mainRepo: string, record: NewReviewRequest) => void;
 }
 
 export interface EffectsDispatchResult {
@@ -151,6 +168,9 @@ const EFFECT_HANDLERS: { [K in ImplementedEffect["kind"]]: EffectHandler<K> } = 
 		if (effect.target === "direct-push") throw new EffectsManifestError("unknown_effect_kind", "ship.ShipDecision is not implemented for direct-push");
 		if (effect.itemId !== ctx.itemId) throw new EffectsManifestError("provenance_mismatch", `ship decision itemId ${effect.itemId} does not match ${ctx.itemId}`);
 		const result = await runShipPrEffects({ cwd: ctx.cwd, itemId: ctx.itemId, decision: effect }, { log: ctx.log, assistedByProviders: ctx.assistedByProviders });
+		// #387: after a successful PR ship, enqueue a durable review-request into the main tree so
+		// the trusted reconciler posts the `review` status mid-run. Never fails the ship (below).
+		maybeEnqueueReviewRequest(effect, ctx, result);
 		return { appendText: result.prUrl };
 	},
 	// Validate-and-log attestation only: durable review records / escalations stay on the
@@ -171,6 +191,36 @@ const EFFECT_HANDLERS: { [K in ImplementedEffect["kind"]]: EffectHandler<K> } = 
 		ctx.log(`review.Escalation fingerprint=${effect.evidenceFingerprint.slice(0, 12)}… safety=${effect.hasSafetyBlocker} @ ${effect.reviewedSha.slice(0, 7)}`);
 	},
 };
+
+/**
+ * Conditional ship-tail enqueue of a mid-run review-request (#387). Writes at most one main-tree
+ * record and only when ALL hold: local review runner, a PR-mode ship, a repo the drain can run
+ * (github-issues `ghRepo`), and BOTH key fields present. Any miss logs and skips — cold-start
+ * `findReviewCandidates` re-derives `prNumber`/`headSha` from the forge and recovers the PR next
+ * drain. Enqueue failures (fs errors or null keys) are non-fatal to the ship: the PR is already on
+ * the forge, so throwing here would misreport a landed ship as a failed cycle.
+ */
+function maybeEnqueueReviewRequest(effect: ShipDecisionEffect, ctx: EffectsDispatchContext, result: ShipPrEffectsResult): void {
+	const deps = ctx.reviewEnqueue ?? {};
+	const runner = deps.runner ?? REVIEW_CONFIG.runner;
+	const ghRepo = deps.ghRepo ?? (ROADMAP_SOURCE === "github-issues" ? ROADMAP_GITHUB.ghRepo : "");
+	if (runner !== "local") return; // ci runner: CI posts the `review` status, never the harness
+	if (effect.target !== "pull-request" && effect.target !== "auto-merge-pr") return;
+	if (!ghRepo) return; // non-github-issues source: the drain cannot run this repo
+	if (result.prNumber === null || result.headSha === null) {
+		ctx.log(`review-request enqueue skipped (prNumber=${String(result.prNumber)} headSha=${String(result.headSha)}); cold-start drain will recover`);
+		return;
+	}
+	const enqueue = deps.enqueue ?? enqueueReviewRequest;
+	const resolveMain = deps.mainRepo ?? mainWorktree;
+	const now = ctx.now ?? (() => new Date().toISOString());
+	try {
+		enqueue(resolveMain(ctx.cwd), { prNumber: result.prNumber, headSha: result.headSha, itemId: ctx.itemId, headBranch: effect.headBranch, enqueuedAt: now() });
+		ctx.log(`review-request enqueued for PR #${result.prNumber} @ ${result.headSha.slice(0, 7)}`);
+	} catch (e) {
+		ctx.log(`review-request enqueue failed (non-fatal, cold-start drain recovers): ${e instanceof Error ? e.message : String(e)}`);
+	}
+}
 
 export function effectManifestPath(ctx: EffectsContext): string {
 	return join(ctx.cwd, ".dev", "effects", ctx.runId, `${ctx.step}-${ctx.attempt}.json`);

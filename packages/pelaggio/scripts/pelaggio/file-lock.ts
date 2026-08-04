@@ -99,14 +99,18 @@ export interface FileLockOptions {
 export async function withFileLock<T>(path: string, fn: () => Promise<T> | T, opts: FileLockOptions): Promise<T> {
 	const { label, staleMs, acquireTimeoutMs } = opts;
 	mkdirSync(dirname(path), { recursive: true });
-	const token = `${Date.now() + staleMs}:${process.pid}-${randomBytes(8).toString("hex")}`;
 	const deadline = Date.now() + acquireTimeoutMs;
 	// A waiter must be allowed to outlive an orphan's expiry or the steal path is
 	// unreachable for early arrivals (deadline < staleness). The hard cap bounds
 	// the extension so live-contention starvation still surfaces as a timeout.
 	const hardCap = deadline + staleMs + 2_000;
 
+	// Minted fresh on every attempt: the lease must date from ACQUISITION, not from
+	// entry to the wait loop — a long wait would otherwise acquire an already-expired
+	// lease that another process can immediately steal mid-critical-section.
+	let token: string;
 	for (;;) {
+		token = `${Date.now() + staleMs}:${process.pid}-${randomBytes(8).toString("hex")}`;
 		try {
 			writeFileSync(path, token, { flag: "wx" }); // O_EXCL: acquire + identity + expiry in one syscall
 			break;
@@ -138,4 +142,35 @@ export async function withFileLock<T>(path: string, fn: () => Promise<T> | T, op
 	} finally {
 		takeIfContent(path, token); // release iff still ours — never a thief's lock
 	}
+}
+
+/**
+ * Non-blocking acquire: one O_EXCL attempt (after stealing an expired holder), then either
+ * run `fn` under the lock or report contention without waiting. Used by the per-worker
+ * post-cycle review drain (#387), whose caller decides whether contention can safely skip or
+ * must wait and re-list. Returns `{ ran: true, value }` when it held the lock, `{ ran: false }`
+ * when a live holder owns it.
+ */
+export async function tryWithFileLock<T>(path: string, fn: () => Promise<T> | T, opts: { label: string; staleMs: number }): Promise<{ ran: true; value: T } | { ran: false }> {
+	const { staleMs } = opts;
+	mkdirSync(dirname(path), { recursive: true });
+	const token = `${Date.now() + staleMs}:${process.pid}-${randomBytes(8).toString("hex")}`;
+	for (const attempt of [0, 1]) {
+		try {
+			writeFileSync(path, token, { flag: "wx" }); // O_EXCL: acquire + identity + expiry
+		} catch (err) {
+			if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+			if (attempt === 0) {
+				stealIfStale(path); // reclaim an orphaned (crashed-holder) lock, then retry once
+				continue;
+			}
+			return { ran: false }; // live contention — a peer holds the lock
+		}
+		try {
+			return { ran: true, value: await fn() };
+		} finally {
+			takeIfContent(path, token); // release iff still ours
+		}
+	}
+	return { ran: false };
 }

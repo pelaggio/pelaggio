@@ -111,7 +111,9 @@ export function findRevisablePrs(gh: GhRunner, ghRepo: string): { revisable: Rev
 	for (const pr of prs) {
 		if (pr.isDraft) continue;
 		const branch = pr.headRefName ?? "";
-		const m = branch.match(/^feat\/issue-(\d+)/);
+		// End-anchored with a strict charset: headRefName is forge-controlled input and
+		// flows into git commands — "feat/issue-1;payload" must never qualify.
+		const m = branch.match(/^feat\/issue-(\d+)(?:-[A-Za-z0-9._-]*)?$/);
 		if (!m) continue;
 		if (!hasReviewFailure(pr.statusCheckRollup)) continue;
 		const entry: RevisablePr = { prNumber: pr.number, itemId: m[1], branch };
@@ -127,13 +129,22 @@ export function findRevisablePrs(gh: GhRunner, ghRepo: string): { revisable: Rev
  * Cheap: only runs for the rare red candidate.
  */
 export function isAutopilotManaged(gh: GhRunner, ghRepo: string, itemId: string, label: string): boolean {
+	return autopilotManagedState(gh, ghRepo, itemId, label) === "managed";
+}
+
+/**
+ * Tri-state variant for callers that take a DESTRUCTIVE action on the negative
+ * (e.g. deleting a durable review-request record): a transient/malformed lookup is
+ * "unknown", not "unmanaged" — only a positive label read may justify deletion.
+ */
+export function autopilotManagedState(gh: GhRunner, ghRepo: string, itemId: string, label: string): "managed" | "unmanaged" | "unknown" {
 	const out = runGhSoft(gh, ["issue", "view", itemId, "--repo", ghRepo, "--json", "labels"]);
-	if (out === null) return false;
+	if (out === null) return "unknown";
 	try {
 		const issue = parseGhJson<IssueLabels>(out, isObject);
-		return (issue.labels ?? []).some((l) => l.name === label);
+		return (issue.labels ?? []).some((l) => l.name === label) ? "managed" : "unmanaged";
 	} catch {
-		return false;
+		return "unknown";
 	}
 }
 
@@ -183,6 +194,10 @@ export function fetchReviewFindings(gh: GhRunner, ghRepo: string, prNumber: numb
  */
 export function ensureReviseWorktree(worktreePath: string, branch: string, opts: { repo: string; exec?: (cmd: string, cwd: string) => string }): string | null {
 	if (existsSync(worktreePath)) return worktreePath;
+	// Fail closed before any exec: branch is forge-controlled. Allow only git-ref-safe
+	// characters and forbid a leading dash (git option injection); the default exec is
+	// a shell string, so any metacharacter here would be command injection.
+	if (!/^[A-Za-z0-9][A-Za-z0-9/._-]*$/.test(branch)) return null;
 	const exec = opts.exec ?? ((cmd, cwd) => execSync(cmd, { cwd, encoding: "utf-8" }));
 	try {
 		// The local branch ref may be gone (a prior `/tidy` pruned it) — recreate it from origin
