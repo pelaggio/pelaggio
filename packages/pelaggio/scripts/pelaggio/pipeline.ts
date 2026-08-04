@@ -2924,6 +2924,15 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 
 				const batch = await Promise.all(pending.map((id, i) => resumeOne(id, i)));
 				results.push(...batch);
+				// A resumed item can itself report a halt-campaign-classed failure
+				// (confinement/safety). Stop resuming peers — the environment is suspect —
+				// and leave them parked for the operator (#385 round-4 review finding).
+				if (batch.some((r) => classifyCycleDisposition(r, RECOVERABLE) === "halt-campaign")) {
+					campaignHalted = true;
+					const remaining = batch.filter((r) => r.error === "parked" && r.itemId).map((r) => r.itemId!);
+					if (remaining.length) console.log(`${A.yellow("⏸")} halt-campaign during auto-resume — leaving ${remaining.length} item(s) parked`);
+					break;
+				}
 				pending = batch.filter((r) => r.error === "parked" && r.itemId).map((r) => r.itemId!);
 			}
 
