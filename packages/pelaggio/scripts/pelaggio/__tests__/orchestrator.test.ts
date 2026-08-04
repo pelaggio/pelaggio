@@ -1420,6 +1420,42 @@ describe("runOrchestrator — continuous mode (issue #82)", () => {
 		assert.ok(maxInFlight >= 2, `expected concurrent pipelines, maxInFlight=${maxInFlight}`);
 	});
 
+	it("a gate waiter observes a campaign halt that occurs while it waits", async (t) => {
+		t.mock.method(console, "log", () => {});
+		let enterSecondProbe!: () => void;
+		const secondProbeEntered = new Promise<void>((resolve) => {
+			enterSecondProbe = resolve;
+		});
+		let releaseSecondProbe!: () => void;
+		const holdSecondProbe = new Promise<void>((resolve) => {
+			releaseSecondProbe = resolve;
+		});
+		let probes = 0;
+		let calls = 0;
+		const { exitCode } = await runOrchestrator(
+			{ ...baseFlags, continuous: true, preset: "drain", parallel: "3", cycles: "3" },
+			{
+				runPipeline: async () => {
+					calls++;
+					await secondProbeEntered;
+					setImmediate(releaseSecondProbe);
+					return { itemId: "A-1", completed: false, cost: 0, error: "implement failed: confinement violation", disposition: "halt-campaign" };
+				},
+				queueProbe: async () => {
+					probes++;
+					if (probes === 2) {
+						enterSecondProbe();
+						await holdSecondProbe;
+					}
+					return { empty: false, readyCount: 1 };
+				},
+			},
+		);
+		assert.equal(exitCode, 1);
+		assert.equal(calls, 1);
+		assert.equal(probes, 2, "the waiter must take the halt path before probing after it acquires the gate");
+	});
+
 	it("drain: pick:queue-empty race also stops", async (t) => {
 		t.mock.method(console, "log", () => {});
 		const { runPipeline, calls } = createMockRunPipeline({

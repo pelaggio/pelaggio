@@ -2393,7 +2393,9 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					let retryGate = false;
 					await continuousGate.acquire();
 					try {
-						if (parkSignal.parked || drainComplete) {
+						if (campaignHalted) {
+							exitWorker = true;
+						} else if (parkSignal.parked || drainComplete) {
 							if (parkSignal.parked) emitSuspendedIfParked();
 							exitWorker = true;
 						} else if (dayBudgetTracker.exceeded()) {
@@ -2434,7 +2436,10 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 							// Run even when the pick queue is empty: red PRs are independent work and
 							// watch sessions must keep discovering them between queue probes.
 							await runReviseSweepOnce();
-							if (parkSignal.parked) {
+							if (campaignHalted) {
+								// A halt can land during the sweep; honor it before any further probe/pick.
+								exitWorker = true;
+							} else if (parkSignal.parked) {
 								emitSuspendedIfParked();
 								exitWorker = true;
 							} else if (dayBudgetTracker.exceeded()) {
