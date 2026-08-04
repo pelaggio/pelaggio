@@ -31,9 +31,12 @@ against a shared mutable store (the trunk). It reads a snapshot (branch off
 `main`). Today that is **Optimistic Concurrency Control with an unsound
 validator**: git's textual merge is *syntactic*, so it bounces on textual
 overlap and passes on semantic breakage (cycle A renames a symbol; cycle B calls
-it from a file A never touched → clean merge, broken build). `ship`'s post-merge
-verify is the real *semantic* validator, but it runs serially and after the
-fact. The flow work makes that structure explicit and sound.
+it from a file A never touched → clean merge, broken build). A `ship` post-merge
+verify *would be* the real semantic validator, but today it is neither serial nor
+reliably run — no harness land mutex, production `verify` hook unset, and
+`verifyShipLanded` satisfied by any advance of `main`
+([ADR-0025](../decisions/0025-landing-serialization-cas-fence-optional-ordering.md);
+detail in Tier 2 below). The flow work makes that structure explicit and sound.
 
 ## Storage vs. Policy (the load-bearing seam)
 

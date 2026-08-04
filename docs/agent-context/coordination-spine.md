@@ -177,8 +177,10 @@ Two concrete reference designs pelaggio borrows — the *design*, not the binary
 daemon + Dolt):
 
 - **Landing queue (#174):** the Refinery + `gt done` (submit → notify → sync) +
-  `gt mq` (ordered queue, `next` = highest priority). pelaggio builds its own on
-  `bd merge-slot`. Divergence worth keeping: Gastown resolves conflicts
+  `gt mq` (ordered queue, `next` = highest priority). pelaggio's landing safety
+  is the harness CAS fence ([ADR-0025](../decisions/0025-landing-serialization-cas-fence-optional-ordering.md));
+  `bd merge-slot` is at most optional cross-process *ordering* above it, never
+  the fence. Divergence worth keeping: Gastown resolves conflicts
   *reactively* (re-implement); pelaggio *prevents* via declared write-sets (#173).
 - **Provider seam (#176):** Gastown wraps harnesses as a registry of command
   templates (`gt config agent set <name> <cmd>`) — spawn-generic, but its
