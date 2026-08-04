@@ -2575,6 +2575,10 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				totalSpent += result.cost;
 				dayBudgetTracker.add(result.cost);
 				results.push(result);
+				// Set the halt flag BEFORE the notification await: notify() is best-effort
+				// network I/O, and a peer worker must not launch a new cycle in that gap
+				// when this result halts the campaign (#385 round-3 review finding).
+				if (classifyCycleDisposition(result, RECOVERABLE) === "halt-campaign") campaignHalted = true;
 				await notify(result, logPath ?? LOG_PATH);
 
 				status.itemId = result.itemId ?? "?";
@@ -2776,6 +2780,12 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				totalSpent += r.cost;
 				dayBudgetTracker.add(r.cost);
 				results.push(r);
+				// Revise outcomes gate the campaign exactly like cycle outcomes: a
+				// confinement/safety-classed revise failure must stop new cycle launches,
+				// not just render red. Flag set BEFORE the notify await so a peer worker
+				// cannot launch in the delivery gap (#385 round-2/3 review findings).
+				const reviseHalts = classifyCycleDisposition(r, RECOVERABLE) === "halt-campaign";
+				if (reviseHalts) campaignHalted = true;
 				await notify(r, LOG_PATH);
 				status.status = resultStatus(r);
 				status.cost = r.cost;
@@ -2783,13 +2793,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				if (v) liveStatus.render();
 				const detail = resultDetail(r);
 				console.log(`${resultIcon(r)} revise ${pr.itemId} — ${r.costEstimated ? "~" : ""}$${r.cost.toFixed(2)}${detail ? `  ${A.dim(detail)}` : ""}`);
-				// Revise outcomes gate the campaign exactly like cycle outcomes: a
-				// confinement/safety-classed revise failure must stop new cycle launches,
-				// not just render red (#385 round-2 review finding).
-				if (classifyCycleDisposition(r, RECOVERABLE) === "halt-campaign") {
-					campaignHalted = true;
-					return;
-				}
+				if (reviseHalts) return;
 			}
 		}
 
