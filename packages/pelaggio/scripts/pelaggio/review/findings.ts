@@ -341,12 +341,18 @@ const JUDGE_RULINGS: readonly JudgeRuling[] = ["fixable-blocker", "unfixable-blo
 const CWE_RE = /^CWE-\d{1,5}$/i;
 
 // The verbatim schema-example placeholder printed in `.claude/skills/pr-review/SKILL.md`
-// (the `AUTHORING_REVIEW_FINDINGS` example block). A weaker instruction-follower — observed
-// with the codex reviewer seat, which runs a single turn and does no diff inspection — echoes
-// this example instead of reviewing. Because it is schema-valid it would sail through as a real
-// `must-fix / correctness-regression` at `src/file.ts:1`, manufacturing a cross-model split and a
-// spurious escalation/park. Reject it fail-closed so the seat is recorded as not-completed rather
-// than as a fabricated blocker. Provider-agnostic: any seat that parrots the example is rejected.
+// (the `AUTHORING_REVIEW_FINDINGS` example block). A seat that echoes the example instead of
+// reviewing would emit a schema-valid `must-fix / correctness-regression` at `src/file.ts:1`,
+// manufacturing a cross-model split and a spurious escalation/park. Reject it fail-closed so the
+// seat is recorded as not-completed rather than as a fabricated blocker. Provider-agnostic: any
+// seat that parrots the example is rejected.
+//
+// This guard was originally attributed to the codex seat being "a weaker instruction-follower"
+// that runs one turn and does no inspection. That diagnosis was wrong. The codex seat performs a
+// full review; its first tool call is typically `sed .claude/skills/pr-review/SKILL.md`, and the
+// codex provider folds command OUTPUT into `fullText` — so the example block printed by that
+// `sed` entered the parsed text ahead of the model's real block and tripped this guard on every
+// run. The parse source is now the final assistant message (see selectAuthoringFindingsSource).
 const EXAMPLE_SUMMARY = "Concise single-line summary.";
 const EXAMPLE_FINDING_MESSAGE = "Concrete single-line finding.";
 const EXAMPLE_FINDING_PATH = "src/file.ts";
@@ -410,6 +416,32 @@ function parseRawAuthoringFinding(value: unknown, index: number): RawAuthoringRe
 		raw.classHint = value.classHint;
 	}
 	return raw;
+}
+
+/** True when `text` contains at least one well-formed findings block. */
+export function hasAuthoringReviewFindingsBlock(text: string): boolean {
+	// AUTHORING_RE is /g and therefore stateful; `matchAll` does not mutate lastIndex.
+	return [...text.matchAll(AUTHORING_RE)].length > 0;
+}
+
+/**
+ * Choose which of a seat's outputs to parse findings from.
+ *
+ * The final assistant message is authoritative: the skill mandates ending with exactly the v3
+ * block. The full transcript is NOT interchangeable — for the codex provider `fullText` includes
+ * command *output*, so any file a reviewer reads can inject blocks into the parse. Reading
+ * `.claude/skills/pr-review/SKILL.md`, which the reviewer does first and which contains the schema
+ * example, deterministically poisoned every codex seat. Treating tool output as a findings source
+ * is also an injection surface: a reviewed repo could plant a block in a file and manufacture
+ * findings it never earned.
+ *
+ * The transcript is still the fallback when the final message carries no block at all — an
+ * incomplete seat (max-turns, provider error) may have emitted findings mid-run, and dropping a
+ * security must-fix from such a seat would be a fail-open (see the ingestion comment in loop.ts).
+ */
+export function selectAuthoringFindingsSource(text: string | undefined, fullText: string | undefined): string {
+	if (text && hasAuthoringReviewFindingsBlock(text)) return text;
+	return fullText ?? text ?? "";
 }
 
 /**

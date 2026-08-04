@@ -12,6 +12,7 @@ import {
 	type ReviewFindingClass,
 	reviewFindingFingerprint,
 	reviewFindingsGate,
+	selectAuthoringFindingsSource,
 } from "./findings.js";
 import { BASELINE_TAXONOMY, isSafetyClass, safetyClasses, type TaxonomyConfig } from "./taxonomy.js";
 
@@ -232,7 +233,9 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 			}
 			cost += result.value.cost;
 			try {
-				const report = parseAuthoringReviewFindings(result.value.fullText ?? result.value.text);
+				// Final assistant message first; the transcript is a fallback only when it carries no
+				// block (tool output must never be a findings source — see selectAuthoringFindingsSource).
+				const report = parseAuthoringReviewFindings(selectAuthoringFindingsSource(result.value.text, result.value.fullText));
 				// Always ingest parseable findings — including from a non-ok seat (max-turns/errored):
 				// dropping them is a fail-open (a security must-fix from an incomplete seat must still
 				// block, and must feed hasSafetyBlocker). Only the pass/block VERDICT is ok-gated below,

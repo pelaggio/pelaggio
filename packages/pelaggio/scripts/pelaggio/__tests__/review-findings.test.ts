@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, it } from "node:test";
 import {
 	applyReviewPass,
@@ -6,6 +8,7 @@ import {
 	classifyAuthoringReviewFinding,
 	evaluateReviewConvergence,
 	extractDiffPathSignals,
+	hasAuthoringReviewFindingsBlock,
 	isSafetyClass,
 	materializeAuthoringFinding,
 	normalizeCwe,
@@ -20,6 +23,7 @@ import {
 	reviewFindingFingerprint,
 	reviewFindingsGate,
 	SAFETY_CLASSES,
+	selectAuthoringFindingsSource,
 } from "../review/findings.js";
 import { resolveTaxonomy } from "../review/taxonomy.js";
 
@@ -160,9 +164,10 @@ describe("parseAuthoringReviewFindings (schema v3)", () => {
 
 	it("rejects the SKILL.md schema example echoed verbatim instead of a real review", () => {
 		// The exact placeholder from `.claude/skills/pr-review/SKILL.md`'s AUTHORING_REVIEW_FINDINGS
-		// example. Observed from the codex reviewer seat parroting the example (1 turn, no diff read),
-		// which manufactured a fake must-fix / correctness-regression at src/file.ts:1 and a spurious
-		// cross-model split. Fail closed so the seat reads as incomplete, not as a real blocker.
+		// example. An echoed example manufactures a fake must-fix / correctness-regression at
+		// src/file.ts:1 and a spurious cross-model split, so it fails closed and the seat reads as
+		// incomplete rather than as a real blocker. (This was previously attributed to the codex seat
+		// parroting the example. It does not — see the parse-source suite below.)
 		const echoed = authoringBlock({
 			schemaVersion: 3,
 			summary: "Concise single-line summary.",
@@ -179,6 +184,60 @@ describe("parseAuthoringReviewFindings (schema v3)", () => {
 		// A genuine review that merely mentions the example path in a real message is NOT rejected.
 		const real = parseAuthoringReviewFindings(authoringBlock({ schemaVersion: 3, summary: "Real review.", findings: [{ severity: "must-fix", message: "Token leaked in src/file.ts logging.", path: "src/file.ts", line: 42 }] }));
 		assert.equal(real.findings.length, 1);
+	});
+});
+
+describe("selectAuthoringFindingsSource", () => {
+	const realBlock = authoringBlock({
+		schemaVersion: 3,
+		summary: "A genuine review summary.",
+		findings: [{ severity: "must-fix", message: "A real defect.", path: "docs/x.md", line: 5 }],
+	});
+
+	it("parses the final message when the transcript contains the SKILL.md schema example", () => {
+		// The regression. The codex provider folds command OUTPUT into `fullText`, and a reviewer's
+		// first tool call is typically `sed .claude/skills/pr-review/SKILL.md` — a file that contains
+		// the AUTHORING_REVIEW_FINDINGS example. Parsing the transcript therefore read the example
+		// (blocks are unioned and the FIRST summary wins), tripping the parrot guard on every codex
+		// seat while the model's real review sat in the final message, unread.
+		//
+		// Read the real skill file rather than a fixture: if the example block moves or changes, this
+		// test must follow it, because the production hazard follows it too.
+		const skillPath = resolve(import.meta.dirname, "../../../../../.claude/skills/pr-review/SKILL.md");
+		const skillBody = readFileSync(skillPath, "utf-8");
+		assert.ok(skillBody.includes("AUTHORING_REVIEW_FINDINGS"), "SKILL.md should still carry the schema example this guards against");
+
+		const transcript = `${skillBody}\n${realBlock}`;
+		// Parsing the transcript directly is what used to happen — it still fails closed.
+		assert.throws(() => parseAuthoringReviewFindings(transcript), ReviewFindingsParseError);
+
+		// Selecting the source first yields the final message, so the real review survives.
+		const report = parseAuthoringReviewFindings(selectAuthoringFindingsSource(realBlock, transcript));
+		assert.equal(report.summary, "A genuine review summary.");
+		assert.equal(report.findings.length, 1);
+		assert.equal(report.findings[0].message, "A real defect.");
+	});
+
+	it("falls back to the transcript when the final message carries no block", () => {
+		// An incomplete seat (max-turns / provider error) may have emitted findings mid-run; dropping
+		// them would be a fail-open, so the transcript remains the fallback.
+		assert.equal(selectAuthoringFindingsSource("ran out of turns", realBlock), realBlock);
+		assert.equal(selectAuthoringFindingsSource(undefined, realBlock), realBlock);
+		assert.equal(selectAuthoringFindingsSource("", realBlock), realBlock);
+	});
+
+	it("prefers the final message and never returns an empty source", () => {
+		assert.equal(selectAuthoringFindingsSource(realBlock, "unrelated transcript"), realBlock);
+		assert.equal(selectAuthoringFindingsSource(undefined, undefined), "");
+		assert.equal(selectAuthoringFindingsSource("no block here", undefined), "no block here");
+	});
+
+	it("detects blocks for the source decision", () => {
+		assert.equal(hasAuthoringReviewFindingsBlock(realBlock), true);
+		assert.equal(hasAuthoringReviewFindingsBlock("nothing to see"), false);
+		// The /g regex is stateful; repeated calls must not alternate.
+		assert.equal(hasAuthoringReviewFindingsBlock(realBlock), true);
+		assert.equal(hasAuthoringReviewFindingsBlock(realBlock), true);
 	});
 });
 
