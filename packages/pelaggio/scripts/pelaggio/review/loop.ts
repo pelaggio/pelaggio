@@ -7,6 +7,7 @@ import {
 	type JudgeReport,
 	type JudgeRuling,
 	materializeAuthoringFinding,
+	modelAuthoredText,
 	parseAuthoringReviewFindings,
 	parseJudgeReport,
 	type ReviewFindingClass,
@@ -232,11 +233,17 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 			}
 			cost += result.value.cost;
 			try {
-				const report = parseAuthoringReviewFindings(result.value.fullText ?? result.value.text);
-				// Always ingest parseable findings — including from a non-ok seat (max-turns/errored):
-				// dropping them is a fail-open (a security must-fix from an incomplete seat must still
-				// block, and must feed hasSafetyBlocker). Only the pass/block VERDICT is ok-gated below,
-				// since an incomplete seat has no trustworthy overall verdict for disagreement.
+				// Model-authored final message only — never the transcript (see modelAuthoredText).
+				const report = parseAuthoringReviewFindings(modelAuthoredText(result.value));
+				// Ingest parseable findings even from a non-ok seat (max-turns/errored): a security
+				// must-fix a seat did emit must still block and feed hasSafetyBlocker. Only the
+				// pass/block VERDICT is ok-gated below, since an incomplete seat has no trustworthy
+				// overall verdict for disagreement.
+				//
+				// A seat whose model-authored text carries no parseable block is now dropped rather
+				// than scavenged from the transcript. That is not a fail-open: the seat's required
+				// (driver × label) cell stays uncompleted and the all-pass gate cannot reach
+				// consensus-pass with an uncompleted cell.
 				// Classify at the emission boundary before dedup/ingestion (#293).
 				for (const raw of report.findings) {
 					discovered.push({ finding: materializeAuthoringFinding(raw, classificationContext, taxonomy), source: slot.id });
@@ -300,7 +307,9 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 		let report: JudgeReport | undefined;
 		let diagnostic: string | undefined;
 		try {
-			report = parseJudgeReport(judgeResult.fullText ?? judgeResult.text);
+			// Same rule as the reviewer seats: the Judge's ruling is model-authored text only. Parsing
+			// the transcript here would leave the identical tool-output injection class on the Judge.
+			report = parseJudgeReport(modelAuthoredText(judgeResult));
 			// Fail-closed completeness: exactly one decision per candidate, no duplicates, no unknowns.
 			// The distinct-count check alone accepts a duplicate that still covers every id (e.g.
 			// [{C1,refuted},{C1,survives}] for two candidates); the survivor filter's `.find` would then

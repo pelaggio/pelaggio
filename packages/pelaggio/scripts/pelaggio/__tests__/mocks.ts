@@ -73,7 +73,7 @@ export function createMockRunStep(behavior: MockBehavior, parkSignal: ParkSignal
 		const outcome: StepOutcome = Array.isArray(spec) ? (spec[Math.min(attempt - 1, spec.length - 1)] ?? {}) : (spec ?? {});
 		if (opts.signal?.aborted) {
 			emit({ type: "done", ok: false, subtype: "error_abort", cost: 0, turns: 0, elapsed: 0 });
-			return { ok: false, subtype: "error_abort", text: "aborted", fullText: "", cost: 0, turns: 0 };
+			return { ok: false, subtype: "error_abort", text: "aborted", fullText: "", assistantText: "aborted", cost: 0, turns: 0 };
 		}
 		if (outcome.awaitAbort && opts.signal) {
 			await new Promise<void>((resolve) => opts.signal?.addEventListener("abort", () => resolve(), { once: true }));
@@ -101,6 +101,7 @@ export function createMockRunStep(behavior: MockBehavior, parkSignal: ParkSignal
 			subtype: outcome.subtype ?? "success",
 			text: outcome.text ?? "",
 			fullText: outcome.fullText ?? outcome.text ?? "",
+			assistantText: outcome.assistantText ?? outcome.text ?? "",
 			cost: outcome.cost ?? 0.01,
 			turns: outcome.turns ?? 1,
 			...(outcome.tokens ? { tokens: outcome.tokens } : {}),

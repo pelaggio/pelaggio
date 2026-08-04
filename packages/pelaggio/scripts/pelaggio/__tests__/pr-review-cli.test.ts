@@ -63,6 +63,7 @@ function result(overrides: Partial<StepResult> = {}): StepResult {
 		subtype: "success",
 		text,
 		fullText: text,
+		assistantText: text,
 		cost: 1,
 		turns: 2,
 		...overrides,

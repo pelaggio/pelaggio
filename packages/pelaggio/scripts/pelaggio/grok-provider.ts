@@ -182,6 +182,9 @@ export function buildGrokStepResult(name: Step, updates: JsonObject[], exitInfo:
 	const emitted: StepEvent[] = [];
 	let text = "";
 	let fullText = "";
+	// Separate from `text`: the rate-limit / did-not-complete / edit-loop paths below replace
+	// `text` with a diagnostic string, which would otherwise discard the model's own output.
+	let assistantText = "";
 	let turns = 0;
 	let sawTurn = false;
 	let usage: JsonObject | undefined;
@@ -196,6 +199,7 @@ export function buildGrokStepResult(name: Step, updates: JsonObject[], exitInfo:
 				const chunk = contentText(u.content);
 				if (chunk) {
 					text += chunk;
+					assistantText += chunk;
 					fullText += chunk;
 					emitted.push({ type: "text", content: chunk });
 				}
@@ -308,6 +312,7 @@ export function buildGrokStepResult(name: Step, updates: JsonObject[], exitInfo:
 			subtype,
 			text,
 			fullText,
+			assistantText,
 			cost,
 			costEstimated: true,
 			turns,
@@ -367,7 +372,7 @@ export const runStep: StepProvider["runStep"] = async (name, prompt, opts, emit)
 		const message = "Grok sandbox requires Landlock, but this Linux kernel does not expose it; set providers.grok.allow-unsandboxed-fallback: true only for a supervised run with an external containment boundary";
 		emit({ type: "sdk_error", message });
 		emit({ type: "done", ok: false, subtype: "error_confinement", cost: 0, turns: 0, elapsed: Date.now() - t0 });
-		return { ok: false, subtype: "error_confinement", text: message, fullText: "", cost: 0, costEstimated: true, turns: 0 };
+		return { ok: false, subtype: "error_confinement", text: message, fullText: "", assistantText: "", cost: 0, costEstimated: true, turns: 0 };
 	}
 	if (sandbox) {
 		try {
@@ -376,7 +381,7 @@ export const runStep: StepProvider["runStep"] = async (name, prompt, opts, emit)
 			const message = `Grok sandbox profile preparation failed: ${error instanceof Error ? error.message : String(error)}`;
 			emit({ type: "sdk_error", message });
 			emit({ type: "done", ok: false, subtype: "error_confinement", cost: 0, turns: 0, elapsed: Date.now() - t0 });
-			return { ok: false, subtype: "error_confinement", text: message, fullText: "", cost: 0, costEstimated: true, turns: 0 };
+			return { ok: false, subtype: "error_confinement", text: message, fullText: "", assistantText: "", cost: 0, costEstimated: true, turns: 0 };
 		}
 	} else {
 		emit({
