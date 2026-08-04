@@ -6,12 +6,6 @@ Status values are `default-taken`, `resolved`, or `resolved→ADR-nnnn`. Source 
 
 | Decision | Status | Chosen/leaning | Alternatives | Source | Date |
 | --- | --- | --- | --- | --- | --- |
-| mid-step probe cadence | default-taken | hardcoded 15s constant (`CONFINEMENT_PROBE_INTERVAL_MS`), test-overridable via `PipelineDeps.confinementProbeIntervalMs` | expose via `.pelaggio.yml` `confinement:` block for operator tuning | https://github.com/pelaggio/pelaggio/issues/388 | 2026-08-03 |
-<!-- decision:85da42538da34afb -->
-| cancellation signal composition | default-taken | a new per-step `AbortController` whose signal is passed to `runStep`, forwarding `opts.signal`'s abort into it (rather than passing `opts.signal` straight through) | reuse `opts.signal` directly and add a second SIGINT-vs-confinement discriminant elsewhere | https://github.com/pelaggio/pelaggio/issues/388 | 2026-08-03 |
-<!-- decision:b8c315ceba0bf22b -->
-| probe-tick snapshot exec failure | default-taken | treat as fail-closed (abort immediately, classify `error_confinement`) | swallow and retry next tick indefinitely (rejected — inconsistent with the codebase's existing fail-closed treatment of before/after snapshot exec failures) | https://github.com/pelaggio/pelaggio/issues/388 | 2026-08-03 |
-<!-- decision:a63ce07f7166d189 -->
 | halt-campaign mechanism | default-taken | run-scoped halt flag; alternatives: per-worker return / park signal / abort in-flight workers. |  | https://github.com/pelaggio/pelaggio/issues/385 | 2026-08-03 |
 <!-- decision:3c562b46fe317c7a -->
 | confinement continuation | default-taken | halt by default with no configuration knob; alternatives: configurable opt-in. |  | https://github.com/pelaggio/pelaggio/issues/385 | 2026-08-03 |
