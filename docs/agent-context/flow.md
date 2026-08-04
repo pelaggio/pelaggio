@@ -256,8 +256,10 @@ pelaggio owns a landing queue only for `direct-push`. The queue sits *above* the
 — the landing half of the Beads decision is demoted from *mechanism* to
 *optimization*; the work-store half, #181, is untouched).** The exclusive-access
 primitive for `direct-push` is **git ref compare-and-swap**, built in the harness
-and always available: verification bound to the exact candidate SHA, pushed with an
-explicit `--force-with-lease=main:<observed-sha>` (never the implicit form, which
+and always available: verification bound to the exact candidate SHA; before the
+push the executor independently requires the observed SHA to be an ancestor of the
+candidate (the lease fences lost updates, not ancestry); then an explicit
+`--force-with-lease=main:<observed-sha>` (never the implicit form, which
 compares a remote-tracking ref a background fetch can advance). `bd merge-slot`
 remains available as an **optional ordering layer above** that fence — an atomic
 exclusive slot (spike-proven: exactly one winner under an 8-way simultaneous
