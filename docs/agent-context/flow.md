@@ -242,8 +242,10 @@ Tier 2's load: disjoint write-sets mean the queue rarely bounces on text and can
 spend verify budget on semantic hazards.
 
 **The landing queue is target-agnostic and defers to the provider's merge queue
-in PR mode.** In `pull-request` / `auto-merge-pr`, GitHub's merge queue *is* the
-landing queue — speculative verified landing already exists; do not rebuild it.
+in PR mode.** In `pull-request` / `auto-merge-pr`, the provider's merge queue is
+the landing queue WHERE ONE IS ENABLED — speculative verified landing already
+exists; do not rebuild it. Where no provider queue is enabled, admission is the
+ADR-0025 lattice (required checks + the harness CAS fence for any direct write).
 pelaggio owns a landing queue only for `direct-push`. The queue sits *above* the
 `ship.target` seam. Same leverage principle as storage and initiatives.
 
