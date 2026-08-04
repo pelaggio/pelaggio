@@ -10,6 +10,7 @@ import {
 	buildStepArgs,
 	canRetryWithinBudget,
 	checkpoint,
+	classifyCycleDisposition,
 	classifyOutcome,
 	classifySecurityReviewDiff,
 	classifyStepError,
@@ -44,6 +45,7 @@ import {
 	parseVerdict,
 	parseWaitFlag,
 	pickDivergedFromPin,
+	quarantineCheckpoint,
 	REVIEW_DIFF_MAX_BYTES,
 	readGitBinding,
 	readRuntimeVersions,
@@ -1544,6 +1546,46 @@ describe("checkpoint", () => {
 		assert.equal(checkpoint(dir, "test"), true);
 		const log = execSync("git log --format=%s -1", { cwd: dir, encoding: "utf-8" }).trim();
 		assert.equal(log, "wip: pelaggio test");
+	});
+});
+
+describe("classifyCycleDisposition", () => {
+	const recoverable = new Set(["transient sdk error"]);
+
+	it("continues completed and recoverable cycles", () => {
+		assert.equal(classifyCycleDisposition({ completed: true }, recoverable), "continue");
+		assert.equal(classifyCycleDisposition({ completed: false, error: "transient sdk error" }, recoverable), "continue");
+	});
+
+	it("lets aborted override a stale disposition", () => {
+		assert.equal(classifyCycleDisposition({ completed: false, error: "aborted", disposition: "quarantine-and-continue" }, recoverable), "halt-campaign");
+	});
+
+	it("passes through explicit dispositions", () => {
+		assert.equal(classifyCycleDisposition({ completed: false, disposition: "quarantine-and-continue" }, recoverable), "quarantine-and-continue");
+		assert.equal(classifyCycleDisposition({ completed: false, disposition: "halt-campaign" }, recoverable), "halt-campaign");
+	});
+
+	it("halts unknown non-recoverable failures", () => {
+		assert.equal(classifyCycleDisposition({ completed: false, error: "unknown failure" }, recoverable), "halt-campaign");
+	});
+});
+
+describe("quarantineCheckpoint", () => {
+	it("commits a dirty tree and leaves it clean", () => {
+		const dir = makeFeatRepo();
+		writeFileSync(resolve(dir, "wip.txt"), "work");
+		assert.equal(quarantineCheckpoint(dir, "andon quarantine"), true);
+		assert.equal(execSync("git status --porcelain", { cwd: dir, encoding: "utf-8" }).trim(), "");
+	});
+
+	it("accepts an already-clean tree", () => {
+		assert.equal(quarantineCheckpoint(makeFeatRepo(), "andon quarantine"), true);
+	});
+
+	it("fails closed outside a git repository", () => {
+		const dir = mkdtempSync(join(tmpdir(), "pelaggio-quarantine-"));
+		assert.equal(quarantineCheckpoint(dir, "andon quarantine"), false);
 	});
 });
 

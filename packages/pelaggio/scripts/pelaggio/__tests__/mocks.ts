@@ -157,6 +157,7 @@ export function createMockRunPipeline(behavior: PipelineBehavior): MockRunPipeli
 			cost: outcome.cost ?? 0,
 			...(outcome.verdict ? { verdict: outcome.verdict } : {}),
 			...(outcome.error ? { error: outcome.error } : {}),
+			...(outcome.disposition ? { disposition: outcome.disposition } : {}),
 			...(outcome.awaitingMerge ? { awaitingMerge: outcome.awaitingMerge } : {}),
 			...(outcome.prUrl ? { prUrl: outcome.prUrl } : {}),
 			...(outcome.shipwrecked ? { shipwrecked: outcome.shipwrecked } : {}),

@@ -384,6 +384,76 @@ describe("runOrchestrator — sustained transient SDK outage (#128)", () => {
 	});
 });
 
+describe("runOrchestrator — cycle disposition", () => {
+	const quarantine = { completed: false, cost: 0, error: "implement blocked: x", disposition: "quarantine-and-continue" as const };
+	function spySend() {
+		const sent: Array<{ payload: { event: string; itemId: string | null } }> = [];
+		const sendNotification = async (_url: string, _format: "json" | "ntfy", payload: { event: string; itemId: string | null }) => {
+			sent.push({ payload });
+			return true;
+		};
+		return { sent, sendNotification };
+	}
+
+	it("quarantine keeps pulling and pages the blocked item", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { sent, sendNotification } = spySend();
+		const { runPipeline, calls } = createMockRunPipeline({ byItem: { "A-1": quarantine, "A-2": { completed: true, cost: 0 } } });
+		await runOrchestrator({ ...baseFlags, item: "A-1,A-2" }, { runPipeline, notifyConfig: { url: "https://hook.example" }, sendNotification });
+		assert.equal(calls.length, 2);
+		assert.equal(sent.filter((entry) => entry.payload.itemId === "A-1" && entry.payload.event === "failed").length, 1);
+	});
+
+	it("unknown safety-class failures halt the queue tail", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({ byItem: { "A-1": { completed: false, cost: 0, error: "implement failed: confinement violation" }, "A-2": { completed: true, cost: 0 } } });
+		await runOrchestrator({ ...baseFlags, item: "A-1,A-2" }, { runPipeline });
+		assert.equal(calls.length, 1);
+	});
+
+	it("halts on the fifth consecutive quarantine without relabeling its diagnosis", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const byItem = Object.fromEntries([1, 2, 3, 4, 5].map((n) => [`A-${n}`, { ...quarantine }]));
+		const { runPipeline, calls } = createMockRunPipeline({ byItem: { ...byItem, "A-6": { completed: true, cost: 0 } } });
+		const { results } = await runOrchestrator({ ...baseFlags, item: "A-1,A-2,A-3,A-4,A-5,A-6" }, { runPipeline });
+		assert.equal(calls.length, 5);
+		assert.equal(results.at(-1)?.error, "implement blocked: x");
+		assert.equal(results.at(-1)?.disposition, "halt-campaign");
+	});
+
+	it("a success resets the quarantine streak", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({
+			byItem: { "A-1": { ...quarantine }, "A-2": { ...quarantine }, "A-3": { completed: true, cost: 0 }, "A-4": { ...quarantine }, "A-5": { ...quarantine } },
+		});
+		await runOrchestrator({ ...baseFlags, item: "A-1,A-2,A-3,A-4,A-5" }, { runPipeline });
+		assert.equal(calls.length, 5);
+	});
+
+	it("parallel campaign halt prevents a third allocation while an existing cycle finishes", async (t) => {
+		t.mock.method(console, "log", () => {});
+		let release!: () => void;
+		const held = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const calls: string[] = [];
+		const runPipeline = async (opts: { itemId?: string }) => {
+			calls.push(opts.itemId ?? "");
+			if (opts.itemId === "A-1") {
+				await held;
+				return { itemId: "A-1", completed: true, cost: 0 };
+			}
+			return { itemId: opts.itemId ?? null, completed: false, cost: 0, error: "implement failed: confinement violation" };
+		};
+		const pending = runOrchestrator({ ...baseFlags, parallel: "2", item: "A-1,A-2,A-3" }, { runPipeline });
+		while (calls.length < 2) await new Promise(setImmediate);
+		await new Promise(setImmediate);
+		release();
+		await pending;
+		assert.deepEqual(calls.sort(), ["A-1", "A-2"]);
+	});
+});
+
 describe("runOrchestrator — park-and-resume", () => {
 	it("success: resumes after wait, uses detectResumeStep startFrom, exitCode 0", async (t) => {
 		t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
@@ -872,6 +942,42 @@ describe("runOrchestrator — revise sweep (issue #76)", () => {
 			["state=pending", "state=failure"],
 		);
 		assert.equal(prListCalls, 2, "review sweep must list before revise sweep lists");
+	});
+
+	it("a halt-campaign-classed revise failure stops the pick pool (revise outcomes gate the campaign like cycle outcomes)", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const gh: GhRunner = (args) => {
+			if (args[0] === "pr" && args[1] === "list") {
+				return {
+					stdout: JSON.stringify([{ number: 201, isDraft: false, headRefName: "feat/issue-84-local-review", labels: [], statusCheckRollup: [{ __typename: "StatusContext", context: "review", state: "FAILURE" }] }]),
+					stderr: "",
+					status: 0,
+				};
+			}
+			if (args[0] === "issue" && args[1] === "view") return { stdout: JSON.stringify({ labels: [{ name: "autopilot" }] }), stderr: "", status: 0 };
+			if (args[0] === "pr" && args[1] === "view") return { stdout: JSON.stringify({ comments: [{ body: "<!-- pelaggio-pr-review -->\nfix local blocker", createdAt: "2026-07-08T12:01:00Z" }] }), stderr: "", status: 0 };
+			return { stdout: "", stderr: "", status: 0 };
+		};
+		const { runPipeline, calls } = createMockRunPipeline({
+			byItem: { "84": { completed: false, cost: 0.5, error: "implement failed: confinement violation", disposition: "halt-campaign" } },
+			default: { completed: true, cost: 0.5 },
+		});
+
+		const { exitCode } = await runOrchestrator(
+			{ ...baseFlags, target: "pull-request", cycles: "2" },
+			{
+				runPipeline,
+				resolveWorktree: resolveWt,
+				// runner:"ci" disables the local review sweep — WITHOUT this, the sweep falls
+				// through to production defaults and spawns REAL provider agents (#420).
+				review: { runner: "ci", ghRepo: "o/r", gh },
+				revise: { local: true, ghRepo: "o/r", gh },
+			},
+		);
+
+		assert.equal(exitCode, 1);
+		assert.equal(calls.length, 1, `only the revise run may execute — a halt-campaign revise must not launch pick cycles; got ${calls.map((c) => c.opts.itemId ?? "auto").join(",")}`);
+		assert.equal(calls[0].opts.itemId, "84");
 	});
 
 	// A pending PR fixture whose `review` status is PENDING → always a candidate (never "done",
@@ -1405,6 +1511,42 @@ describe("runOrchestrator — continuous mode (issue #82)", () => {
 		assert.equal(exitCode, 0);
 		assert.equal(calls, 2);
 		assert.ok(maxInFlight >= 2, `expected concurrent pipelines, maxInFlight=${maxInFlight}`);
+	});
+
+	it("a gate waiter observes a campaign halt that occurs while it waits", async (t) => {
+		t.mock.method(console, "log", () => {});
+		let enterSecondProbe!: () => void;
+		const secondProbeEntered = new Promise<void>((resolve) => {
+			enterSecondProbe = resolve;
+		});
+		let releaseSecondProbe!: () => void;
+		const holdSecondProbe = new Promise<void>((resolve) => {
+			releaseSecondProbe = resolve;
+		});
+		let probes = 0;
+		let calls = 0;
+		const { exitCode } = await runOrchestrator(
+			{ ...baseFlags, continuous: true, preset: "drain", parallel: "3", cycles: "3" },
+			{
+				runPipeline: async () => {
+					calls++;
+					await secondProbeEntered;
+					setImmediate(releaseSecondProbe);
+					return { itemId: "A-1", completed: false, cost: 0, error: "implement failed: confinement violation", disposition: "halt-campaign" };
+				},
+				queueProbe: async () => {
+					probes++;
+					if (probes === 2) {
+						enterSecondProbe();
+						await holdSecondProbe;
+					}
+					return { empty: false, readyCount: 1 };
+				},
+			},
+		);
+		assert.equal(exitCode, 1);
+		assert.equal(calls, 1);
+		assert.equal(probes, 2, "the waiter must take the halt path before probing after it acquires the gate");
 	});
 
 	it("drain: pick:queue-empty race also stops", async (t) => {
