@@ -105,7 +105,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if [ "${{ steps.gate.outputs.run }}" != "true" ]; then
+          if [ "${{ steps.gate.outcome }}" != "success" ]; then
+            state=failure
+            desc="Gate step failed (fail-closed)"
+          elif [ "${{ steps.gate.outputs.run }}" != "true" ]; then
             state=success
             desc="Skipped (fork or draft PR) — no review required"
           elif [ "${{ steps.review.outcome }}" = "success" ]; then
