@@ -24,6 +24,9 @@ interface RollupEntry {
 	startedAt?: string;
 	createdAt?: string;
 	updatedAt?: string;
+	/** REST /commits/:sha/status uses snake_case timestamps (GraphQL rollup is camelCase). */
+	created_at?: string;
+	updated_at?: string;
 }
 
 interface PrListEntry {
@@ -46,7 +49,10 @@ function sameRepo(pr: PrListEntry, ghRepo: string): boolean {
 }
 
 function statusTimestamp(entry: RollupEntry): number {
-	const raw = entry.startedAt ?? entry.createdAt ?? entry.updatedAt;
+	// GraphQL rollup entries carry camelCase timestamps; REST /commits/:sha/status
+	// carries snake_case. Read both, or every REST entry ties at 0 and recency
+	// classification degrades to array-order accidents (#387 gate finding).
+	const raw = entry.startedAt ?? entry.createdAt ?? entry.updatedAt ?? entry.created_at ?? entry.updated_at;
 	const parsed = raw ? Date.parse(raw) : Number.NaN;
 	return Number.isFinite(parsed) ? parsed : 0;
 }
@@ -59,7 +65,9 @@ function reviewStatus(rollup: RollupEntry[] | undefined): { state: "missing" | "
 	// posts pending over an older success/failure, and treating the stale terminal as
 	// "done" lets the drain delete a queue record while the effective context stays
 	// pending forever (#387 gate finding). Untimestamped entries sort oldest.
-	const latest = statuses.reduce((a, b) => (statusTimestamp(b) >= statusTimestamp(a) ? b : a));
+	// Strict > keeps the FIRST entry on timestamp ties: the REST endpoint returns
+	// newest-first, so first-wins is the correct degradation when timestamps are absent.
+	const latest = statuses.reduce((a, b) => (statusTimestamp(b) > statusTimestamp(a) ? b : a));
 	const state = (latest.state ?? "").toUpperCase();
 	if (state === "SUCCESS" || state === "FAILURE" || state === "ERROR") return { state: "done" };
 	if (state === "PENDING") return { state: "pending", startedAt: latest.startedAt ?? latest.createdAt ?? latest.updatedAt };
