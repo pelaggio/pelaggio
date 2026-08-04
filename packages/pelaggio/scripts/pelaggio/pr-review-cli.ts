@@ -476,7 +476,13 @@ function verificationPrompt(candidates: readonly VerificationCandidate[], localC
 	].join("\n");
 }
 
-async function runVerificationPass(pass: ReviewPass, carried: ReadonlyMap<string, ReviewFinding>, profile: string, pr: string, opts: { cwd: string; runStep: RunStepFn; localContext: string; parkSignal: ParkSignal }): Promise<void> {
+async function runVerificationPass(
+	pass: ReviewPass,
+	carried: ReadonlyMap<string, ReviewFinding>,
+	profile: string,
+	pr: string,
+	opts: { cwd: string; runStep: RunStepFn; localContext: string; parkSignal: ParkSignal; verifySettings: StepSettings },
+): Promise<void> {
 	if (!pass.report) return;
 	const unique = new Map(carried);
 	for (const finding of pass.report.findings.filter((finding) => finding.severity === "must-fix")) unique.set(reviewFindingFingerprint(finding), finding);
@@ -485,7 +491,15 @@ async function runVerificationPass(pass: ReviewPass, carried: ReadonlyMap<string
 	process.stderr.write(`▶ pr-verify ${pass.label} · ${driverLabel(pass.driver)}\n`);
 	let result: StepResult;
 	try {
-		result = await opts.runStep("pr-verify", verificationPrompt(candidates, opts.localContext), { cwd: opts.cwd, profile, trace: false, parkSignal: opts.parkSignal, itemId: pr }, emit);
+		// The resolved verifier settings drive the diversity gate, budget reservation,
+		// and the reported provider — the actual run must use the SAME seat, or the
+		// record lies about who verified (#397 gate finding).
+		result = await opts.runStep(
+			"pr-verify",
+			verificationPrompt(candidates, opts.localContext),
+			{ cwd: opts.cwd, profile, trace: false, parkSignal: opts.parkSignal, itemId: pr, executionOverride: executionOverrideFor(opts.verifySettings) },
+			emit,
+		);
 	} catch (error) {
 		pass.verificationDiagnostic = `Verifier execution threw: ${error instanceof Error ? error.message : String(error)}.`;
 		pass.failureSubtype = "error_verification";
@@ -643,7 +657,7 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 
 		// Sequential verify per driver pass that has candidate blockers (scalar pr-verify).
 		for (const pass of iterationPasses) {
-			await runVerificationPass(pass, carried, profile, options.pr, { cwd, runStep: runStepImpl, localContext, parkSignal: signal });
+			await runVerificationPass(pass, carried, profile, options.pr, { cwd, runStep: runStepImpl, localContext, parkSignal: signal, verifySettings });
 			const parked = parkGateResult(signal, pass.verificationResult ?? pass.result, passes);
 			if (parked) return parked;
 		}

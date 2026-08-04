@@ -9,7 +9,7 @@ It owns only the **out-of-band delta**: driving a cycle by hand and landing it v
 ## Procedure
 
 1. **Prune worktrees first.** `git worktree prune`. A stale review-head worktree makes the confinement audit fail. (until worktree GC is automatic — see `tidy`.)
-2. **Run the cycle.** `pnpm pelaggio --item <N> --cycles 1`; watch it to a PR. On a transient `529`/`Overloaded`, `pnpm pelaggio --resume <N>` (work is checkpointed via `parkExit`; resume re-enters fresh — [ADR-0019](../decisions/0019-checkpoint-restart-not-replay.md)).
+2. **Run the cycle.** `pnpm pelaggio --item <N> --cycles 1`; watch it to a PR. Do **not** pass `--verbose` on supervised runs — supervise from the out-of-band station/logs instead. On a transient `529`/`Overloaded`, `pnpm pelaggio --resume <N>` (work is checkpointed via `parkExit`; resume re-enters fresh — [ADR-0019](../decisions/0019-checkpoint-restart-not-replay.md)).
 
 When an adversarial-review escalation is resolved `proceed`, inspect the committed resolution and evidence, then resume with the exact fingerprint printed by the park message: `pnpm pelaggio --resume <N> --acknowledge-escalation <fingerprint>`. A missing or mismatched acknowledgement parks again, and `resolved-block` cannot be acknowledged through.
 3. **Review from the worktree.** `cd` into the item worktree; confirm `git rev-parse HEAD` equals the PR head; `npx pelaggio pr-review --pr <N>`. Fix must-fix findings **directly** and add regression tests; re-review until `survivors=0`. (The `pr-review` skill is a read-only CI gate; the fix-and-re-review loop is the supervisor's, not the pipeline's.)

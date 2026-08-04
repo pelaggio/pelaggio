@@ -790,7 +790,7 @@ describe("runPipeline — blocked terminates without retry or park", () => {
 			{
 				plan: { ok: true },
 				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
-				implement: { ok: false, subtype: "blocked", text: "the schema field does not exist" },
+				implement: { ok: false, subtype: "blocked", text: "the schema field does not exist", writes: { "blocked-wip.txt": "work" } },
 			},
 			parkSignal,
 		);
@@ -806,6 +806,13 @@ describe("runPipeline — blocked terminates without retry or park", () => {
 
 		assert.equal(result.completed, false);
 		assert.equal(result.error, "implement blocked: the schema field does not exist");
+		assert.equal(result.disposition, "quarantine-and-continue");
+		assert.equal(execSync("git status --porcelain", { cwd: worktree, encoding: "utf-8" }).trim(), "");
+		// Work is preserved by EITHER path: implement's checkpoint effect commits WIP
+		// first ("implementation checkpoint"), so quarantineCheckpoint correctly no-ops
+		// on the then-clean tree; its own "andon quarantine" commit appears only when
+		// the tree is still dirty at quarantine time.
+		assert.match(execSync("git log -1 --format=%s", { cwd: worktree, encoding: "utf-8" }), /andon quarantine|implementation checkpoint/);
 		const implementCalls = calls.filter((c) => c.step === "implement");
 		assert.equal(implementCalls.length, 1, `expected no implement retry; got ${implementCalls.length} calls`);
 		const stepsRun = calls.map((c) => c.step);
@@ -845,6 +852,34 @@ describe("runPipeline — blocked terminates without retry or park", () => {
 			calls.map((c) => c.step),
 			["plan", "shakedown-plan"],
 		);
+		assert.equal(parkSignal.parked, false);
+	});
+
+	it("ship blocked → quarantines while preserving the review verdict", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const { runStep } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "work" } },
+				"shakedown-code": { ok: true, text: "VERDICT: APPROVE" },
+				ship: { ok: false, subtype: "blocked", text: "merge queue unavailable" },
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
+			runStep,
+			mainRepo: worktree,
+			listWorktrees: () => [],
+			appendLog: () => {},
+		});
+
+		assert.equal(result.completed, false);
+		assert.equal(result.error, "ship blocked: merge queue unavailable");
+		assert.equal(result.disposition, "quarantine-and-continue");
+		assert.equal(result.verdict, "APPROVE");
 		assert.equal(parkSignal.parked, false);
 	});
 });
@@ -992,6 +1027,7 @@ describe("runPipeline — worktree confinement audit", () => {
 
 		assert.equal(result.completed, false);
 		assert.equal(result.error, "implement failed: confinement violation");
+		assert.equal(result.disposition, undefined);
 		assert.deepEqual(
 			calls.map((c) => c.step),
 			["implement"],

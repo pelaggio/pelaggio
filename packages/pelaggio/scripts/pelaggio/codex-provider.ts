@@ -349,6 +349,7 @@ export function buildCodexStepResult(name: Step, events: JsonObject[], exitInfo:
 			subtype,
 			text,
 			fullText,
+			assistantText,
 			cost,
 			costEstimated: true,
 			turns,

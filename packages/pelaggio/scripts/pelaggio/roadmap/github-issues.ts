@@ -244,15 +244,18 @@ export class GitHubIssuesRoadmap implements RoadmapSource {
 		const slug = kebab(title).slice(0, 40);
 		const branch = `feat/issue-${id}${slug ? `-${slug}` : ""}`;
 
-		// Best-effort label add — the server-side claim marker listItems/getItem
-		// surface as `in-progress` for other hosts (issue #12).
+		// Authoritative git claim first — AlreadyClaimedError before any GitHub write-back.
+		const claim = createClaimWorkspace(this.repo, id, branch, opts);
+
+		// Best-effort GitHub projection; never roll back a valid git claim. The server-side
+		// marker makes listItems/getItem surface the claim as `in-progress` for other hosts.
 		try {
 			this.runGh(["issue", "edit", id, "--repo", this.ghRepo, "--add-label", "in-progress"]);
 		} catch {
 			// swallowed — label may not exist on the repo
 		}
 
-		return createClaimWorkspace(this.repo, id, branch, opts);
+		return claim;
 	}
 
 	async markDone(id: string, ctx?: MarkDoneContext): Promise<void> {

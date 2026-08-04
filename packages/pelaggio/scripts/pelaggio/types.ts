@@ -75,6 +75,17 @@ export interface StepResult {
 	text: string;
 	/** All assistant text + tool inputs accumulated — richer than `text` for ID parsing */
 	fullText: string;
+	/**
+	 * Every model-authored text chunk, accumulated and in order — no tool inputs and no tool
+	 * output. This is the only field safe to parse structured model output from: `text` is the
+	 * FINAL chunk on some providers (opencode overwrites it per streamed part) and so truncates a
+	 * block split across parts, while `fullText` carries repository-controlled tool data on others.
+	 *
+	 * Optional only so existing synthetic/test StepResult literals need not be rewritten; every
+	 * real provider sets it. Making it required — and asserting it cross-provider — is part of the
+	 * fullText contract-conformance work (#418).
+	 */
+	assistantText?: string;
 	cost: number;
 	/** True when `cost` is a provider-side estimate rather than billed USD. */
 	costEstimated?: boolean;
@@ -294,6 +305,8 @@ export interface FlowEventProjection {
 
 // ── Cycle / pipeline ───────────────────────────────────────────────────
 
+export type CycleDisposition = "continue" | "quarantine-and-continue" | "halt-campaign";
+
 export interface CycleResult {
 	itemId: string | null;
 	completed: boolean;
@@ -303,6 +316,7 @@ export interface CycleResult {
 	costEstimated?: boolean;
 	verdict?: string;
 	error?: string;
+	disposition?: CycleDisposition;
 	/** Display-only legible one-liner for a failure: the machine `error` plus the failing step's
 	 *  subtype + bounded output tail. `error` stays the classification string (RECOVERABLE_ERRORS,
 	 *  "parked", "aborted"); `detail` is what the console prints so a failure explains itself (#268). */
@@ -431,7 +445,7 @@ export interface ShipTarget {
 
 export interface CycleStatus {
 	itemId: string;
-	status: "done" | "warning" | "running" | "failed" | "skipped" | "parked";
+	status: "done" | "warning" | "running" | "failed" | "skipped" | "parked" | "quarantined";
 	cost: number;
 	step?: string;
 	turns?: number;

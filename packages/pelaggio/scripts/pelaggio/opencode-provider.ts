@@ -295,8 +295,11 @@ export function buildOpenCodeStepResult(name: Step, events: JsonObject[], exitIn
 			const chunk = contentText(part.text ?? part.content ?? ev.text ?? ev.content ?? ev.message);
 			if (chunk) {
 				text = chunk;
-				assistantText += `${chunk}\n`;
-				fullText += `${chunk}\n`;
+				// Concatenate WITHOUT a separator: text parts are token-boundary fragments
+				// of one assistant message, and an injected newline inside a findings/Judge
+				// JSON block corrupts the delimited report (#417 gate finding).
+				assistantText += chunk;
+				fullText += chunk;
 				emitted.push({ type: "text", content: chunk });
 			}
 		}
@@ -370,6 +373,7 @@ export function buildOpenCodeStepResult(name: Step, events: JsonObject[], exitIn
 			subtype,
 			text,
 			fullText,
+			assistantText,
 			cost,
 			costEstimated: true,
 			turns,

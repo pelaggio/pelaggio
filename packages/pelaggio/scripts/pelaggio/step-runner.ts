@@ -613,6 +613,7 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 		subtype,
 		text,
 		fullText,
+		assistantText,
 		cost,
 		turns: resultTurns,
 		...(tokens ? { tokens } : {}),

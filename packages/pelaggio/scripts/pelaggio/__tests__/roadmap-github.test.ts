@@ -394,6 +394,23 @@ describe("GitHubIssuesRoadmap.claimItem", () => {
 		const wtList = execSync("git worktree list", { cwd: repo, encoding: "utf-8" });
 		assert.ok(wtList.includes(worktree));
 	});
+
+	it("does not mutate GitHub when the authoritative git claim already exists", async () => {
+		const repo = seedRepo();
+		const id = freshId();
+		const { run, calls } = makeStub({
+			routes: [
+				{ match: (a) => a[1] === "view", stdout: JSON.stringify({ title: "Already Claimed" }) },
+				{ match: (a) => a[1] === "edit", stdout: "" },
+			],
+		});
+		const r = mk({ repo, ghRun: run });
+		const { worktree } = await r.claimItem(id);
+		claimedWorktrees.push(worktree);
+
+		await assert.rejects(() => r.claimItem(id), /already claimed/);
+		assert.equal(calls.filter((c) => c.args[1] === "edit").length, 1);
+	});
 });
 
 describe("GitHubIssuesRoadmap.markDone", () => {
