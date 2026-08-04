@@ -10,10 +10,12 @@ land, or they get built on prose-scrape and inherit its non-determinism.
 This doc is the durable home for the *why*. The one-line invariants at the
 bottom mirror to `AGENTS.md` when the implementing item ships.
 
-**Update (2026-07):** the substrate question is decided — pelaggio adopts Beads
-(`bd`) as the work store and landing primitive (see *Landscape and the chosen
-substrate* below). Chartered as #181 (adapter) with the flow items re-pointed onto
-it: #171 (FlowPolicy over `bd ready`), #174 (landing queue on `bd merge-slot`/
+**Update (2026-07, amended by ADR-0025 2026-08):** the substrate question is
+decided — pelaggio adopts Beads (`bd`) as the work store (see *Landscape and the
+chosen substrate* below). The LANDING primitive is the harness's git ref
+compare-and-swap (ADR-0025); `bd merge-slot` is only an optional ordering layer
+above that fence. Chartered as #181 (adapter) with the flow items re-pointed onto
+it: #171 (FlowPolicy over `bd ready`), #174 (landing discipline above the CAS fence, optionally ordered by `bd merge-slot`/
 `gate`), #173 (write-sets — the one layer with no Beads analog, stays pelaggio's).
 
 ## The question this answers
@@ -103,8 +105,10 @@ agent-native issue tracker with a deterministic `--json`-everywhere CLI and a
 code-based ready-set (`bd ready` = dependency-graph filtering, not LLM prose). A
 spike (bd 1.1.0, findings in the #181 charter) confirmed Beads already ships the
 machine-first work store this doc set out to build, **and more**: `bd merge-slot`
-is an atomic exclusive-access landing primitive (proven under an 8-way race), and
-`bd gate` (`gh:pr`/`gh:run`/`timer`/`human`) maps onto the `ship.target` seam.
+provides atomic exclusive-access ordering (proven under an 8-way race — though per
+ADR-0025 pelaggio uses it only as an optional ordering layer, never as the landing
+fence), and `bd gate` (`gh:pr`/`gh:run`/`timer`/`human`) maps onto the
+`ship.target` seam.
 
 **Correction to an earlier claim in this doc:** a first pass here said Beads had
 "crossed its orchestration boundary." It has not. Beads ships richer
@@ -115,14 +119,22 @@ primitives-vs-policy boundary holds: `bd` = substrate + primitives, `gt` = the
 orchestrator. That makes pelaggio a **sibling orchestrator to Gastown on the
 shared `bd` substrate** — see *Gastown: the sibling orchestrator* below.
 
-**Decision (adopt Beads as substrate).** Rather than build the store and the
-landing primitive, pelaggio adopts Beads as a first-class `RoadmapSource` (#181)
-and rides `bd merge-slot`/`gate` for the landing queue (#174). This is the "best
-foundation, not novel" call: the typed store, `bd ready` as the pick candidate
-set, and the merge-slot landing primitive move from *build* to *adopt*.
+**Decision (adopt Beads as substrate).** Rather than build the store, pelaggio
+adopts Beads as a first-class `RoadmapSource` (#181) and `bd ready` as the pick
+candidate set. This is the "best foundation, not novel" call for the *store*.
 
-**The differentiator narrows — and sharpens — accordingly.** Beads owns the store,
-the ready-set, and the landing *primitive*. What stays distinctly pelaggio's is
+**Amended by [ADR-0025](../decisions/0025-landing-serialization-cas-fence-optional-ordering.md):
+the landing half is demoted from *adopt* to *optional optimization*.** `bd
+merge-slot` cannot be the fence — it orders pelaggio's own workers without fencing
+an external pusher, its binary ships via `postinstall` and is absent in practice,
+and making landing *safety* depend on that fetch imports the vector ADR-0006
+closes. The `direct-push` primitive is therefore **git ref compare-and-swap** built
+in the harness, with `merge-slot` available as an optional ordering layer above it
+(#174). The store half of this decision is untouched.
+
+**The differentiator narrows — and sharpens — accordingly.** Beads owns the store
+and the ready-set (and, optionally, landing *ordering*). What stays distinctly
+pelaggio's is
 exactly what flow.md calls policy:
 
 - the **provider-neutral pick→plan→implement→review→ship cycle** and the
@@ -133,10 +145,13 @@ exactly what flow.md calls policy:
   disjointness);
 - **flow policy** — ranked ordering / WIP / class-of-service *over* `bd ready`
   (#171), and the landing *discipline* (fair ordering, waiter hygiene, dead-holder
-  reconcile) *over* `merge-slot` (#174).
+  reconcile) *over* the harness's own landing fence (#174).
 
-The primitive is Beads'; the *policy and safety around it* are pelaggio's — the
-storage-vs-policy line, drawn one layer higher than before this spike.
+The ready-set primitive is Beads'; the **landing primitive is the harness's git ref
+compare-and-swap** (ADR-0025) — `bd merge-slot` is at most an optional ordering layer
+above that fence, never the exclusion mechanism itself. The *policy and safety* remain
+pelaggio's — the storage-vs-policy line, drawn one layer higher than before this
+spike and re-drawn at landing by ADR-0025.
 
 ## Gastown: prior-art sibling orchestrator
 
@@ -162,8 +177,10 @@ Two concrete reference designs pelaggio borrows — the *design*, not the binary
 daemon + Dolt):
 
 - **Landing queue (#174):** the Refinery + `gt done` (submit → notify → sync) +
-  `gt mq` (ordered queue, `next` = highest priority). pelaggio builds its own on
-  `bd merge-slot`. Divergence worth keeping: Gastown resolves conflicts
+  `gt mq` (ordered queue, `next` = highest priority). pelaggio's landing safety
+  is the harness CAS fence ([ADR-0025](../decisions/0025-landing-serialization-cas-fence-optional-ordering.md));
+  `bd merge-slot` is at most optional cross-process *ordering* above it, never
+  the fence. Divergence worth keeping: Gastown resolves conflicts
   *reactively* (re-implement); pelaggio *prevents* via declared write-sets (#173).
 - **Provider seam (#176):** Gastown wraps harnesses as a registry of command
   templates (`gt config agent set <name> <cmd>`) — spawn-generic, but its
@@ -282,8 +299,11 @@ spine is the floor they stand on.
   logic never assumes the Claude Code harness.
 - MCP is a deferred thin transport over the spine, added only when a concrete
   external-agent consumer exists — not designed-in.
-- Beads (`bd`) is the chosen work-store + landing substrate: adopt it as a
-  `RoadmapSource` and ride `bd merge-slot`/`gate` for landing. The `feat/<id>` git
-  branch stays the authoritative claim token (bd status is write-back, never the
-  claims registry); the merge slot lives in one shared `MAIN_REPO/.beads`. Beads
-  owns the primitive; ordering/waiter-hygiene/dead-holder reconcile stay pelaggio's.
+- Beads (`bd`) is the chosen **work-store** substrate: adopt it as a
+  `RoadmapSource`. The `feat/<id>` git branch stays the authoritative claim token
+  (bd status is write-back, never the claims registry). For **landing**, ADR-0025
+  demotes Beads from mechanism to optional optimization: the `direct-push` fence is
+  git ref compare-and-swap in the harness, with `bd merge-slot` available as an
+  ordering layer above it (gated on a positive typed-output probe; when used the slot
+  lives in one shared `MAIN_REPO/.beads`, and ordering/waiter-hygiene/dead-holder
+  reconcile stay pelaggio's).

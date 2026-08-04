@@ -31,9 +31,12 @@ against a shared mutable store (the trunk). It reads a snapshot (branch off
 `main`). Today that is **Optimistic Concurrency Control with an unsound
 validator**: git's textual merge is *syntactic*, so it bounces on textual
 overlap and passes on semantic breakage (cycle A renames a symbol; cycle B calls
-it from a file A never touched → clean merge, broken build). `ship`'s post-merge
-verify is the real *semantic* validator, but it runs serially and after the
-fact. The flow work makes that structure explicit and sound.
+it from a file A never touched → clean merge, broken build). A `ship` post-merge
+verify *would be* the real semantic validator, but today it is neither serial nor
+reliably run — no harness land mutex, production `verify` hook unset, and
+`verifyShipLanded` satisfied by any advance of `main`
+([ADR-0025](../decisions/0025-landing-serialization-cas-fence-optional-ordering.md);
+detail in Tier 2 below). The flow work makes that structure explicit and sound.
 
 ## Storage vs. Policy (the load-bearing seam)
 
@@ -43,9 +46,11 @@ Two seams, deliberately separated:
   markdown already give you. Keep it the thin lowest-common-denominator it is.
   (Exception worth naming: **Beads** — see `coordination-spine.md`, #181 — is a
   first-class source that provides *more* than the LCD: a deterministic ready-set
-  (`bd ready`) and a landing primitive (`bd merge-slot`). Policy still consumes
-  the snapshot, not the store; but where Beads offers a sound primitive, flow
-  *rides* it rather than reimplementing — the "best foundation, not novel" call.)
+  (`bd ready`), plus `bd merge-slot` as an OPTIONAL ordering layer above the
+  harness's own landing fence (git ref compare-and-swap, ADR-0025 — never the
+  exclusion primitive itself). Policy still consumes the snapshot, not the store;
+  where Beads offers a sound primitive, flow *rides* it rather than
+  reimplementing — the "best foundation, not novel" call.)
 - **`FlowPolicy` = policy (planned).** pelaggio-owned, provider-neutral,
   pluggable. It decides readiness, class of service, swimlane, and pull order.
 
@@ -228,41 +233,130 @@ on conflict. Tractable, not free.
 **Tier 2 — an explicit verified landing queue (detects read-write).** Read-write
 hazards are unpreventable by scheduling (read-sets are unbounded — B reads half
 the codebase transitively). They must be *detected* by verifying each candidate
-against the real post-merge state before it lands. `ship` is already this queue
-at depth 1 without speculation (serialize merge into local `main` → post-merge
-verify → push, else `/shipwreck`). Formalizing it — explicit queue, optional
-N-deep speculation to recover throughput — turns the bandaid into a proof of a
-green trunk. Tier 1 lightens Tier 2's load: disjoint write-sets mean the queue
-rarely bounces on text and can spend verify budget on semantic hazards.
+against the real post-merge state before it lands. **`ship` is *not* already this
+queue** — that claim, made in earlier revisions of this doc, was false and is
+corrected by [ADR-0025](../decisions/0025-landing-serialization-cas-fence-optional-ordering.md):
+there is no harness land mutex, the merge is performed by the model inside the one
+shared `MAIN_REPO` checkout (`ship/direct-push.ts:8`, `roadmap/git-claim.ts:73`),
+the post-pull `verify` hook is unset in production (`pipeline.ts:1786`), and
+`verifyShipLanded` accepts any advance of `main` so a sibling's merge satisfies
+another worker's phantom-ship gate (`helpers.ts:1109-1112`). Tier 1 still lightens
+Tier 2's load: disjoint write-sets mean the queue rarely bounces on text and can
+spend verify budget on semantic hazards.
 
 **The landing queue is target-agnostic and defers to the provider's merge queue
-in PR mode.** In `pull-request` / `auto-merge-pr`, GitHub's merge queue *is* the
-landing queue — speculative verified landing already exists; do not rebuild it.
+in PR mode.** In `pull-request` / `auto-merge-pr`, the provider's merge queue is
+the landing queue WHERE ONE IS ENABLED — speculative verified landing already
+exists; do not rebuild it. Where no provider queue is enabled, admission is the
+ADR-0025 lattice (required checks + the harness CAS fence for any direct write).
 pelaggio owns a landing queue only for `direct-push`. The queue sits *above* the
 `ship.target` seam. Same leverage principle as storage and initiatives.
 
-**Substrate (Beads, decided — see `coordination-spine.md`, #174).** For
-`direct-push`, the exclusive-access primitive is **not** built from scratch: it
-rides **`bd merge-slot`** — an atomic exclusive slot (spike-proven: exactly one
-winner under an 8-way simultaneous acquire) with a typed contract (`exit 1` +
-`{"acquired":false,"holder":…}`) and a waiter list. PR-mode deferral is
-**`bd gate`** (`--type=gh:pr` waits for PR merge, `--type=gh:run` for CI) — the
-provider-merge-queue deferral above, expressed as a Beads primitive. This is the
-storage-vs-policy line one layer up: Beads owns the *mechanism*; pelaggio owns the
-*policy Beads deliberately omits* — fair ordering (release does not hand off; the
-orchestrator polls `check`, picks the next waiter, re-acquires), waiter-list
-hygiene (re-acquire does not self-remove), and dead-holder reconcile (no native
-lease — compose a `timer` gate or reconcile-on-startup, ground truth wins).
-**Load-bearing constraint:** the slot must live in one shared `MAIN_REPO/.beads`
-(ship already `cd`s there); per-worktree `.beads` copies are eventual-consistent
-via `refs/dolt/data` and cannot back the slot. Markdown/gh sources without `bd`
-fall back to today's serialized ship-into-local-main.
+**Substrate (amended by [ADR-0025](../decisions/0025-landing-serialization-cas-fence-optional-ordering.md)
+— the landing half of the Beads decision is demoted from *mechanism* to
+*optimization*; the work-store half, #181, is untouched).** The exclusive-access
+primitive for `direct-push` is **git ref compare-and-swap**, built in the harness
+and always available: verification bound to the exact candidate SHA; before the
+push the executor independently requires the observed SHA to be an ancestor of the
+candidate (the lease fences lost updates, not ancestry); then an explicit
+`--force-with-lease=main:<observed-sha>` (never the implicit form, which
+compares a remote-tracking ref a background fetch can advance). `bd merge-slot`
+remains available as an **optional ordering layer above** that fence — an atomic
+exclusive slot (spike-proven: exactly one winner under an 8-way simultaneous
+acquire) with a typed contract (`exit 1` + `{"acquired":false,"holder":…}`) and a
+waiter list, over which pelaggio owns the policy Beads omits: fair ordering (release
+does not hand off; the orchestrator polls `check`, picks the next waiter,
+re-acquires), waiter-list hygiene (re-acquire does not self-remove), and
+dead-holder reconcile. It never *replaces* the CAS fence, because a slot orders
+pelaggio's own workers without fencing an external pusher. Availability is a
+**positive typed-output probe**: the `@beads/bd` npm wrapper exits 0 while printing
+"binary not found", so exit status fails open. **Load-bearing constraint when it is
+used:** the slot must live in one shared `MAIN_REPO/.beads`; per-worktree `.beads`
+copies are eventual-consistent via `refs/dolt/data` and cannot back it. PR-mode
+deferral to the provider (`bd gate`, `--type=gh:pr` / `--type=gh:run`) is unchanged.
+
+**Landing mechanism (ADR-0025 detail).** Three layers with distinct jobs: the CAS
+fence above (mandatory, fail-closed); an optional local-file-lock **contention
+reducer** taken before merge+verify, whose `staleMs` must exceed a worst-case
+attempt rather than the roadmap lock's 120 s, and which is **fail-closed for every
+attempt sharing the dependency tree while a dependency-changing landing may be in
+flight** — not just for the mutator — because the fence protects the ref but not the
+verification environment (worktree `node_modules` symlink into `MAIN_REPO` and
+lockfile-touching merges install there — `worktree-deps.ts`, `ship/SKILL.md:114`;
+a bypassing non-dependency attempt could verify against a half-installed tree).
+Per-attempt dependency isolation (a real install in the attempt worktree) removes
+the shared hazard and lifts the all-sharers requirement (ADR-0025 §1);
+and optional `bd merge-slot` ordering. The seam is an executor,
+`land(attempt) → Landed | Contended`, not a lock: CAS is optimistic (the fence is
+the rejected push at the end) while a slot is pessimistic, so no acquire/release
+contract spans both.
+
+Each attempt integrates in a **dedicated detached-HEAD worktree** cut from the
+observed remote SHA — two worktrees cannot both check out `main`, and integration
+must leave the shared checkout. After a confirmed push, `MAIN_REPO`'s `main` is
+fast-forwarded to the landed SHA (`--ff-only`, idempotent, under the reducer);
+failure there warns rather than contending, but ownership cannot be implicit because
+claims are cut from that literal ref and a stale checkout misleads the operator
+(`pipeline.ts:783-787`).
+
+A receipt `(item, attempt, observedBase, candidateSha)` is persisted **before** the
+push and confirmed with `landedSha` on success. Receipts follow ADR-0025 §8's trust
+model: harness-issued and harness-stored outside any model-writable worktree,
+validated fail-closed on read (typed challenge/content binding as in
+`execution-receipt.ts`), and never sufficient alone — `Landed` additionally requires
+the recorded candidate to descend from the recorded `observedBase` and be confirmed
+against the actual remote, rejecting records that name a pre-existing `main` commit.
+Before each attempt the remote is re-read: if a **validated** receipt's candidate
+SHA is already an ancestor of remote `main`, the attempt returns `Landed` and runs
+the idempotent write-back — an ambiguous push outcome must never be re-merged onto a
+base containing its own merge. Reconciliation on
+startup/resume follows the same rule; a claim with no landed SHA on the remote is
+retained for retry. Where a `RoadmapSource` produces commits (`MarkdownRoadmap`'s
+`markDone`/`archivePlan`) they are **staged into the candidate before verification**
+(the executor invokes them against the attempt worktree while building the
+candidate — ADR-0025 §8), so they land atomically with the work and no unverified
+second push exists; an adapter without the staging seam terminates `Contended`
+rather than pushing unverified commits. API-backed sources write back after
+confirmed landing.
+
+**Why the retry ladder is shaped this way.** Measured on this repo: a full verify is
+~195 s (median of 14 `ci.yml` runs — CI wall time used as a proxy for a local
+post-merge verify) and cycle wall time ~26 min (median of 61 cycle-log gaps), so a
+~4-minute landing window is ~15% occupancy per worker and at `--parallel 3` about
+28% of landings lose a race. Three bounded attempts put worst-case give-up near
+`0.285³ ≈ 2%` — a floor, not an estimate, since a loser re-enters synchronised with
+the winner's release. Serialized landing consumes ~45% of one lane at N=3 and
+saturates near N=6–7, so ordering is affordable and retry policy is what matters.
+A clean re-merge with passing verification retries mechanically; a merge conflict or
+verification failure is a judgment act (`ship/SKILL.md:110`, `:116`) and terminates
+as `Contended`, routed to the existing `shipwreck`-style action — `Step` already
+admits non-`STEPS` actions (`config.ts:53`), so `STEPS` stays the fixed six.
+
+**Admission placement.** Landing admission is *run-scoped*, resolved before workers
+start, reusing `ship/ci-guard.ts`'s fail-closed forge-read helpers. It does not
+belong on `ShipTarget` (`types.ts:410-414` is a prompt/parse seam with no I/O), on
+the provider-capability registry (`CapabilityAxis = keyof ProviderCapabilities`,
+`types.ts:363`, describes drivers), or on `effects.ts`'s `ship.ShipDecision` (which
+rejects `direct-push` outright and runs after the ship step). The lattice is trigger
+(`pelaggio | provider | human | no-forge`) × ordering (`queue | latest-base |
+pelaggio-serial | unordered`) against evidence (`readable | unreadable |
+unsupported`); `latest-base` is admitted only where up-to-date is enforced
+server-side at merge time **and** no bypass is in use (`enforce_admins: false` is
+one; so is `land-cli.ts`'s opt-in `gh pr merge --admin`, which checks CI-green but
+not base freshness). A successful read showing enforcement off is `unordered`, not
+`unreadable`. The `provider`+`unordered` cap is evaluated per enqueue against a
+harness-held in-flight count, never a forge poll — a **run-local bound**, sound only
+under a single-writer assumption (one run, no concurrent auto-merging actors).
+It is a degraded mode, not a verified-trunk guarantee; multi-writer operation
+requires the branch-protection remediation (required up-to-date without bypass, or
+a merge queue) as a precondition — see ADR-0025 decision 6.
 
 **Prior art / reference design.** Gastown (`gt`), the sibling orchestrator on the
 `bd` substrate, already ships this as its **Refinery**: a Bors-style
 batch-then-bisect merge queue that rebases each MR onto latest main, runs
 validation, merges when clear, and re-implements on conflict. pelaggio builds its
-own on `bd merge-slot` rather than adopting `gt` (an all-or-nothing town), but the
+own landing discipline above the harness CAS fence (ADR-0025; `bd merge-slot` only
+as optional ordering) rather than adopting `gt` (an all-or-nothing town), but the
 Refinery + `gt done` (submit → notify → sync) + `gt mq` (ordered queue, `next` =
 highest priority) are the design to mirror. Note the divergence that is *ours*:
 Gastown handles conflicts **reactively** (Refinery re-implements); pelaggio adds
@@ -335,7 +429,11 @@ here so they do not have to be re-litigated.
 - Declared write-sets are enforced by the worktree write-guard; the scheduler
   will not co-schedule intersecting write-sets.
 - The landing queue is target-agnostic and defers to the provider's merge queue
-  in PR mode; pelaggio owns integration ordering only for `direct-push`. On the
-  Beads substrate it rides `bd merge-slot` (direct-push) / `bd gate` (PR mode);
-  Beads owns the primitive, pelaggio owns ordering + waiter-hygiene + dead-holder
-  reconcile, and the slot lives in one shared `MAIN_REPO/.beads`.
+  in PR mode; pelaggio owns integration ordering only for `direct-push`, where the
+  exclusive-access primitive is **git ref compare-and-swap** in the harness
+  (verification bound to the candidate SHA; explicit `--force-with-lease`).
+  `bd merge-slot` is an **optional ordering layer above** that fence, never a
+  replacement, gated on a positive typed-output probe; when used, the slot lives in
+  one shared `MAIN_REPO/.beads` and pelaggio owns ordering + waiter-hygiene +
+  dead-holder reconcile. Amended by
+  [ADR-0025](../decisions/0025-landing-serialization-cas-fence-optional-ordering.md).
