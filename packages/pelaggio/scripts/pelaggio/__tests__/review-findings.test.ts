@@ -281,11 +281,18 @@ describe("classifyAuthoringReviewFinding", () => {
 			{ raw: { ...base, ruleId: "pelaggio/git/force-push" }, expected: "irreversible-git/unsafe-landing" },
 			{ raw: { ...base, message: "unmatched alone" }, expected: "correctness-regression" },
 			{ raw: { ...base, ruleId: "pelaggio/judgment/style" }, expected: "judgment" },
+			// Plan-stage judgment classes (#277)
+			{ raw: { ...base, ruleId: "pelaggio/plan/approach-flaw" }, expected: "approach-flaw" },
+			{ raw: { ...base, ruleId: "pelaggio/plan/scope-mismatch" }, expected: "scope-mismatch" },
+			{ raw: { ...base, ruleId: "pelaggio/plan/missing-risk" }, expected: "missing-risk" },
 		];
 		for (const { raw, expected } of cases) {
 			const pathSignals = extractDiffPathSignals(raw.path);
 			const result = classifyAuthoringReviewFinding(raw, { ...emptyCtx, fingerprint: reviewFindingFingerprint(raw), pathSignals });
 			assert.equal(result.class, expected, `expected ${expected} for ${JSON.stringify(raw)}`);
+			if (expected === "approach-flaw" || expected === "scope-mismatch" || expected === "missing-risk") {
+				assert.equal(isSafetyClass(result.class), false, `${expected} must be judgment-tier`);
+			}
 		}
 		// path signal
 		const pathFinding: RawAuthoringReviewFinding = { severity: "must-fix", message: "workflow risk", path: ".github/workflows/ci.yml" };
@@ -305,6 +312,8 @@ describe("classifyAuthoringReviewFinding", () => {
 			{ severity: "must-fix" as const, message: "hint only", classHint: "judgment" as const },
 			{ severity: "must-fix" as const, message: "hint security only", classHint: "security-and-secrets" as const },
 			{ severity: "must-fix" as const, message: "unknown cwe", cwe: "CWE-99999" },
+			// Plan classHint alone must not yield judgment (#277)
+			{ severity: "must-fix" as const, message: "plan hint only", classHint: "approach-flaw" as const },
 		]) {
 			const result = classifyAuthoringReviewFinding(raw, { ...emptyCtx, fingerprint: reviewFindingFingerprint(raw) });
 			assert.equal(result.kind, "default-safety");

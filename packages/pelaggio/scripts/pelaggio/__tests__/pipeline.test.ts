@@ -3359,6 +3359,375 @@ describe("runPipeline — authoring review capability seating + effects (#337)",
 	});
 });
 
+describe("runPipeline — plan-stage authoring review (#277)", () => {
+	const cleanFindings = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 3, summary: "clean plan", findings: [] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
+	const cleanJudge = `AUTHORING_REVIEW_JUDGE\n${JSON.stringify({ schemaVersion: 1, decisions: [] })}\nEND_AUTHORING_REVIEW_JUDGE`;
+
+	function enableAuthoring() {
+		const saved = {
+			enabled: REVIEW_CONFIG.authoring.enabled,
+			reviewers: REVIEW_CONFIG.authoring.reviewers.map((s) => ({ ...s })),
+			judge: { ...REVIEW_CONFIG.authoring.judge },
+		};
+		REVIEW_CONFIG.authoring.enabled = true;
+		REVIEW_CONFIG.authoring.reviewers = [
+			{ id: "codex", provider: "codex" },
+			{ id: "grok", provider: "grok" },
+		];
+		REVIEW_CONFIG.authoring.judge = { id: "judge", provider: "claude" };
+		return saved;
+	}
+
+	function restoreAuthoring(saved: ReturnType<typeof enableAuthoring>) {
+		REVIEW_CONFIG.authoring.enabled = saved.enabled;
+		REVIEW_CONFIG.authoring.reviewers = saved.reviewers;
+		REVIEW_CONFIG.authoring.judge = saved.judge;
+	}
+
+	function seedPlan(worktree: string, body = "# Plan\n\nDeliver stage-aware authoring review.\n"): string {
+		// Plans must be trackable (makeTempGitRepo gitignores `.dev/`).
+		const planPath = join(worktree, "docs", "plans", "277.md");
+		mkdirSync(join(worktree, "docs", "plans"), { recursive: true });
+		writeFileSync(planPath, body);
+		execSync("git add -A && git commit -q -m plan", { cwd: worktree });
+		return planPath;
+	}
+
+	it("converges plan panel cleanly, logs APPROVE, then starts implement", async () => {
+		const saved = enableAuthoring();
+		try {
+			const worktree = makeTempGitRepo();
+			const planPath = seedPlan(worktree);
+			const parkSignal = makeParkSignal();
+			const manifests: Array<{ attempt: number; step: string; effects: unknown[] }> = [];
+			const { runStep, calls } = createMockRunStep(
+				{
+					"pr-review": { ok: true, text: cleanFindings, fullText: cleanFindings },
+					"pr-verify": { ok: true, text: cleanJudge, fullText: cleanJudge },
+					implement: { ok: true, writes: { "impl.txt": "x" } },
+					"shakedown-code": { ok: true },
+					ship: {
+						ok: true,
+						text: "ship-merged: TOOL-99",
+						sideEffect: (cwd) => {
+							execSync("git checkout -q main", { cwd });
+							execSync("git merge -q --no-ff feat/tool-99", { cwd });
+							execSync("git checkout -q feat/tool-99", { cwd });
+						},
+					},
+				},
+				parkSignal,
+			);
+
+			const result = await runPipeline({ ...baseOpts(worktree), startFrom: "shakedown-plan" }, parkSignal, baseFlags, {
+				runStep,
+				mainRepo: worktree,
+				listWorktrees: () => [worktree],
+				appendLog: () => {},
+				runShipBookkeeping: noopBookkeeping,
+				roadmap: makeMockRoadmap({
+					async getItemPlan() {
+						return planPath;
+					},
+					resolvePlanPath: () => planPath,
+				}),
+				writeEffectsManifest: (ctx, effects) => {
+					manifests.push({ attempt: ctx.attempt, step: ctx.step, effects: [...effects] });
+					writeEffectsManifest(ctx, effects);
+				},
+				dispatchStepEffects: async (ctx) => dispatchStepEffects(ctx),
+			});
+
+			assert.equal(result.completed, true, `expected completed cycle; error=${result.error}`);
+			assert.ok(
+				calls.some((c) => c.step === "pr-review"),
+				"expected plan-stage pr-review seats",
+			);
+			assert.ok(
+				calls.some((c) => c.step === "pr-verify"),
+				"expected plan-stage pr-verify judge",
+			);
+			assert.ok(
+				calls.some((c) => c.step === "implement"),
+				"implement must run after plan convergence",
+			);
+			const planAggregate = manifests.find((m) => m.step === "shakedown-plan" && m.attempt === 0);
+			assert.ok(planAggregate, `expected shakedown-plan attempt 0; got ${JSON.stringify(manifests)}`);
+			const effect0 = planAggregate.effects[0] as { kind: string; stage?: string };
+			assert.equal(effect0.kind, "review.Verdict");
+			assert.equal(effect0.stage, "plan");
+			// Code-stage aggregate is stage-distinct.
+			const codeAggregate = manifests.find((m) => m.step === "shakedown-code" && m.attempt === 0);
+			assert.ok(codeAggregate, "expected code-stage attempt 0 as well");
+			assert.equal((codeAggregate.effects[0] as { stage?: string }).stage, "code");
+			// Reviewer prompts: plan seats inject DOCUMENT UNDER REVIEW; code seats inject a diff block.
+			const reviewCalls = calls.filter((c) => c.step === "pr-review");
+			assert.ok(reviewCalls.length > 0, `expected pr-review seats; steps=${calls.map((c) => c.step).join(",")}`);
+			const planReviewCalls = reviewCalls.filter((c) => c.prompt.includes("DOCUMENT UNDER REVIEW") || c.prompt.includes("--plan-authoring-loop"));
+			const codeReviewCalls = reviewCalls.filter((c) => c.prompt.includes("CHANGES UNDER REVIEW") || (c.prompt.includes("--authoring-loop") && !c.prompt.includes("--plan-authoring-loop")));
+			assert.ok(planReviewCalls.length > 0, `expected plan-stage review seats; tails=${reviewCalls.map((c) => JSON.stringify(c.prompt.slice(-120))).join(" | ")}`);
+			assert.ok(codeReviewCalls.length > 0, `expected code-stage review seats; tails=${reviewCalls.map((c) => JSON.stringify(c.prompt.slice(-120))).join(" | ")}`);
+		} finally {
+			restoreAuthoring(saved);
+		}
+	});
+
+	it("fails closed when plan path is missing at plan-stage authoring", async () => {
+		const saved = enableAuthoring();
+		try {
+			const worktree = makeTempGitRepo();
+			writeFileSync(join(worktree, "seed.txt"), "seed");
+			execSync("git add -A && git commit -q -m seed", { cwd: worktree });
+			const parkSignal = makeParkSignal();
+			const { runStep, calls } = createMockRunStep(
+				{
+					"pr-review": { ok: true, text: cleanFindings, fullText: cleanFindings },
+					"pr-verify": { ok: true, text: cleanJudge, fullText: cleanJudge },
+					implement: { ok: true },
+				},
+				parkSignal,
+			);
+
+			const result = await runPipeline({ ...baseOpts(worktree), startFrom: "shakedown-plan" }, parkSignal, baseFlags, {
+				runStep,
+				mainRepo: worktree,
+				listWorktrees: () => [worktree],
+				appendLog: () => {},
+				roadmap: makeMockRoadmap({
+					async getItemPlan() {
+						return null;
+					},
+					resolvePlanPath: () => join(worktree, "missing-plan.md"),
+				}),
+			});
+
+			assert.equal(result.completed, false);
+			assert.match(result.error ?? "", /plan path is missing/);
+			assert.ok(!calls.some((c) => c.step === "pr-review"), "must not seat reviewers without a plan");
+			assert.ok(!calls.some((c) => c.step === "implement"), "must not implement without plan review");
+		} finally {
+			restoreAuthoring(saved);
+		}
+	});
+
+	it("parks plan-stage judgment dissent for both direct-push and PR ship targets", async () => {
+		const blocker = {
+			severity: "must-fix",
+			message: "Wrong approach for the stated outcome.",
+			path: "docs/plans/277.md",
+			ruleId: "pelaggio/plan/approach-flaw",
+			classHint: "approach-flaw",
+		};
+		const findingsBlock = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 3, summary: "approach flaw", findings: [blocker] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
+		// Judge keeps the blocker with judgment-dissent (judgment-band plan class).
+		const dissentJudge = `AUTHORING_REVIEW_JUDGE\n${JSON.stringify({
+			schemaVersion: 1,
+			decisions: [{ candidateId: "C1", decision: "survives", rationale: "Approach cannot deliver the outcome.", class: "approach-flaw", ruling: "judgment-dissent" }],
+		})}\nEND_AUTHORING_REVIEW_JUDGE`;
+
+		async function runWithTarget(shipTarget: "direct-push" | "pull-request") {
+			const saved = enableAuthoring();
+			const maxPasses = REVIEW_CONFIG.authoring.maxPasses;
+			const maxRevisions = REVIEW_CONFIG.authoring.maxRevisions;
+			try {
+				// One pass only so the loop surfaces dissent without entering revision.
+				REVIEW_CONFIG.authoring.maxPasses = 1;
+				REVIEW_CONFIG.authoring.maxRevisions = 0;
+
+				const worktree = makeTempGitRepo();
+				const planPath = seedPlan(worktree, "# Plan\nflawed approach\n");
+				const parkSignal = makeParkSignal();
+				const { runStep, calls } = createMockRunStep(
+					{
+						"pr-review": { ok: true, text: findingsBlock, fullText: findingsBlock },
+						"pr-verify": { ok: true, text: dissentJudge, fullText: dissentJudge },
+						implement: { ok: true },
+					},
+					parkSignal,
+				);
+
+				const result = await runPipeline({ ...baseOpts(worktree), startFrom: "shakedown-plan", shipTarget: getShipTarget(shipTarget) }, parkSignal, baseFlags, {
+					runStep,
+					mainRepo: worktree,
+					listWorktrees: () => [worktree],
+					appendLog: () => {},
+					roadmap: makeMockRoadmap({
+						async getItemPlan() {
+							return planPath;
+						},
+						resolvePlanPath: () => planPath,
+					}),
+					writeEffectsManifest: () => {},
+					dispatchStepEffects: async () => ({}),
+				});
+				return { result, calls };
+			} finally {
+				REVIEW_CONFIG.authoring.maxPasses = maxPasses;
+				REVIEW_CONFIG.authoring.maxRevisions = maxRevisions;
+				restoreAuthoring(saved);
+			}
+		}
+
+		for (const target of ["direct-push", "pull-request"] as const) {
+			const { result, calls } = await runWithTarget(target);
+			assert.equal(result.error, "parked", `plan-stage dissent must park for ${target}`);
+			assert.ok(!calls.some((c) => c.step === "implement"), `must not implement after plan dissent (${target})`);
+		}
+	});
+
+	it("parks a plan-stage safety finding before implement", async () => {
+		const saved = enableAuthoring();
+		const maxPasses = REVIEW_CONFIG.authoring.maxPasses;
+		const maxRevisions = REVIEW_CONFIG.authoring.maxRevisions;
+		try {
+			REVIEW_CONFIG.authoring.maxPasses = 1;
+			REVIEW_CONFIG.authoring.maxRevisions = 0;
+
+			const safetyFinding = {
+				severity: "must-fix",
+				message: "Plan would disable the write-guard.",
+				path: "docs/plans/277.md",
+				ruleId: "pelaggio/containment/write-guard",
+				classHint: "containment-escape",
+			};
+			const findingsBlock = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 3, summary: "safety", findings: [safetyFinding] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
+			const judgeBlock = `AUTHORING_REVIEW_JUDGE\n${JSON.stringify({
+				schemaVersion: 1,
+				decisions: [{ candidateId: "C1", decision: "survives", rationale: "Safety floor.", class: "containment-escape", ruling: "unfixable-blocker" }],
+			})}\nEND_AUTHORING_REVIEW_JUDGE`;
+
+			const worktree = makeTempGitRepo();
+			const planPath = seedPlan(worktree, "# Plan\nunsafe\n");
+			const parkSignal = makeParkSignal();
+			const { runStep, calls } = createMockRunStep(
+				{
+					"pr-review": { ok: true, text: findingsBlock, fullText: findingsBlock },
+					"pr-verify": { ok: true, text: judgeBlock, fullText: judgeBlock },
+					implement: { ok: true },
+				},
+				parkSignal,
+			);
+
+			const result = await runPipeline({ ...baseOpts(worktree), startFrom: "shakedown-plan" }, parkSignal, baseFlags, {
+				runStep,
+				mainRepo: worktree,
+				listWorktrees: () => [worktree],
+				appendLog: () => {},
+				roadmap: makeMockRoadmap({
+					async getItemPlan() {
+						return planPath;
+					},
+					resolvePlanPath: () => planPath,
+				}),
+				writeEffectsManifest: () => {},
+				dispatchStepEffects: async () => ({}),
+			});
+			assert.equal(result.error, "parked");
+			assert.ok(!calls.some((c) => c.step === "implement"));
+		} finally {
+			REVIEW_CONFIG.authoring.maxPasses = maxPasses;
+			REVIEW_CONFIG.authoring.maxRevisions = maxRevisions;
+			restoreAuthoring(saved);
+		}
+	});
+
+	it("stage-isolates plan vs code escalation ack at the same SHA", async () => {
+		const saved = enableAuthoring();
+		try {
+			const worktree = makeTempGitRepo();
+			writeFileSync(join(worktree, "seed.txt"), "seed");
+			execSync("git add -A && git commit -q -m seed", { cwd: worktree });
+			const reviewedSha = execSync("git rev-parse HEAD", { cwd: worktree, encoding: "utf8" }).trim();
+			const evidenceFingerprint = "e".repeat(64);
+			// Plan-stage resolved-proceed must not release code-stage review when SHAs coincide.
+			const escalation: ReviewEscalation = {
+				kind: "review-escalation",
+				itemId: "TOOL-99",
+				step: "shakedown-plan",
+				reviewedSha,
+				evidenceFingerprint,
+				reviewRecordSource: ".dev/review-records/forged-plan.json",
+				hasSafetyBlocker: false,
+				drivers: [],
+			};
+			await appendReviewEscalation(worktree, escalation);
+			await resolveDecision(worktree, reviewEscalationId(escalation), { disposition: "proceed", actor: "forged", rationale: "plan ack" });
+
+			const parkSignal = makeParkSignal();
+			const { runStep, calls } = createMockRunStep(
+				{
+					implement: { ok: true, writes: { "impl.txt": "x" } },
+					"pr-review": { ok: true, text: cleanFindings, fullText: cleanFindings },
+					"pr-verify": { ok: true, text: cleanJudge, fullText: cleanJudge },
+					ship: {
+						ok: true,
+						text: "ship-merged: TOOL-99",
+						sideEffect: (cwd) => {
+							execSync("git checkout -q main", { cwd });
+							execSync("git merge -q --no-ff feat/tool-99", { cwd });
+							execSync("git checkout -q feat/tool-99", { cwd });
+						},
+					},
+				},
+				parkSignal,
+			);
+
+			const result = await runPipeline(
+				{ ...baseOpts(worktree), startFrom: "implement" },
+				parkSignal,
+				{ ...baseFlags, resume: "TOOL-99", "acknowledge-escalation": evidenceFingerprint },
+				{
+					runStep,
+					mainRepo: worktree,
+					listWorktrees: () => [worktree],
+					appendLog: () => {},
+					runShipBookkeeping: noopBookkeeping,
+					writeEffectsManifest: () => {},
+					dispatchStepEffects: async () => ({}),
+				},
+			);
+			// Code stage must still run its own panel (plan ack does not apply).
+			assert.equal(result.completed, true, result.error);
+			assert.ok(
+				calls.some((c) => c.step === "pr-review"),
+				"code stage must still seat reviewers despite plan-stage ack",
+			);
+		} finally {
+			restoreAuthoring(saved);
+		}
+	});
+
+	it("preserves disabled single-reviewer shakedown-plan RETHINK path", async () => {
+		// Force authoring off in case a prior test left it enabled.
+		const wasEnabled = REVIEW_CONFIG.authoring.enabled;
+		REVIEW_CONFIG.authoring.enabled = false;
+		try {
+			const worktree = makeTempGitRepo();
+			const parkSignal = makeParkSignal();
+			const { runStep, calls } = createMockRunStep(
+				{
+					plan: { ok: true, writes: { "docs/plans/plan.md": "# Plan\n" } },
+					"shakedown-plan": { ok: true, text: "VERDICT: RETHINK" },
+					implement: { ok: true },
+				},
+				parkSignal,
+			);
+			const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
+				runStep,
+				mainRepo: worktree,
+				listWorktrees: () => [],
+				appendLog: () => {},
+			});
+			assert.equal(result.completed, false);
+			assert.equal(result.error, "plan needs rethink");
+			assert.ok(!calls.some((c) => c.step === "implement"));
+			assert.ok(!calls.some((c) => c.step === "pr-review"));
+		} finally {
+			REVIEW_CONFIG.authoring.enabled = wasEnabled;
+		}
+	});
+});
+
 describe("runPipeline — resolved escalation acknowledgement", () => {
 	async function runResolvedEscalation(disposition: "proceed" | "block", acknowledgement?: string) {
 		const saved = {

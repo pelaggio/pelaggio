@@ -86,6 +86,11 @@ export const BASELINE_TAXONOMY_CLASSES: Readonly<Record<FindingClassId, FindingT
 	"test-coverage": "judgment",
 	style: "judgment",
 	documentation: "judgment",
+	// Plan-stage judgment classes (#277): registered as judgment so plan findings are not
+	// silently safety-floored by tierOf's unclassified⇒safety default.
+	"approach-flaw": "judgment",
+	"scope-mismatch": "judgment",
+	"missing-risk": "judgment",
 };
 
 /** Baseline safety precedence (ADR order; deterministic tie-break only — all safety classes park equally). */

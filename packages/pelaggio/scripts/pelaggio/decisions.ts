@@ -4,7 +4,7 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSy
 import { dirname, relative, resolve } from "node:path";
 import { listWorktreesIn, parseDecisions } from "./helpers.js";
 import { withMutationLock } from "./roadmap/mutation-lock.js";
-import type { Decision, EmittedDecision, ReviewEscalation, ReviewResolution, Step } from "./types.js";
+import type { AuthoringReviewStep, Decision, EmittedDecision, ReviewEscalation, ReviewResolution, Step } from "./types.js";
 
 export const DECISIONS_HEADER = "| Decision | Status | Chosen/leaning | Alternatives | Source | Date |";
 const RULE = "| --- | --- | --- | --- | --- | --- |";
@@ -514,10 +514,12 @@ export async function appendReviewEscalation(repo: string, escalation: ReviewEsc
 	}
 }
 
-function lookupEscalationInFile(file: AuthorityFile, itemId: string, reviewedSha: string): ReviewEscalationLookup {
-	const matches = allEntries(file).filter((e) => e.escalation && e.escalation.escalation.itemId === itemId && e.escalation.escalation.reviewedSha === reviewedSha);
+function lookupEscalationInFile(file: AuthorityFile, itemId: string, reviewedSha: string, step: AuthoringReviewStep): ReviewEscalationLookup {
+	// Stage/step is load-bearing: when implement produces no new commit the SHAs coincide, and a
+	// plan-stage resolved-proceed must never skip code review (or the reverse).
+	const matches = allEntries(file).filter((e) => e.escalation && e.escalation.escalation.itemId === itemId && e.escalation.escalation.reviewedSha === reviewedSha && e.escalation.escalation.step === step);
 	if (matches.length === 0) return { state: "missing" };
-	if (matches.length !== 1) return { state: "invalid", error: "multiple review escalations match item and SHA" };
+	if (matches.length !== 1) return { state: "invalid", error: "multiple review escalations match item, SHA, and step" };
 	const entry = matches[0];
 	if (!entry?.escalation) return { state: "invalid", error: "review escalation metadata missing" };
 	const metadata = entry.escalation;
@@ -550,16 +552,20 @@ function readCommittedAuthorityFile(repo: string, owner: string): AuthorityFile 
 	}
 }
 
-export function lookupReviewEscalation(repo: string, itemId: string, reviewedSha: string): ReviewEscalationLookup {
+/**
+ * Look up a review escalation bound to `(itemId, reviewedSha, step)`.
+ * `step` is required so plan-stage and code-stage escalations never release each other when SHAs coincide.
+ */
+export function lookupReviewEscalation(repo: string, itemId: string, reviewedSha: string, step: AuthoringReviewStep): ReviewEscalationLookup {
 	try {
-		const hitOwn = lookupEscalationInFile(readCommittedAuthorityFile(repo, itemId), itemId, reviewedSha);
+		const hitOwn = lookupEscalationInFile(readCommittedAuthorityFile(repo, itemId), itemId, reviewedSha, step);
 		if (hitOwn.state !== "missing") return hitOwn;
 		// Fallback: scan authority files (alias / mis-owned edge cases).
 		let found: ReviewEscalationLookup | undefined;
 		for (const owner of listOwnerFiles(repo)) {
-			const hit = lookupEscalationInFile(readCommittedAuthorityFile(repo, owner), itemId, reviewedSha);
+			const hit = lookupEscalationInFile(readCommittedAuthorityFile(repo, owner), itemId, reviewedSha, step);
 			if (hit.state === "missing") continue;
-			if (found) return { state: "invalid", error: "multiple review escalations match item and SHA" };
+			if (found) return { state: "invalid", error: "multiple review escalations match item, SHA, and step" };
 			found = hit;
 		}
 		return found ?? { state: "missing" };

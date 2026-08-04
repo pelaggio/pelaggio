@@ -67,14 +67,17 @@ revise:                         # local revise sweep — auto-fix red-review PRs
 review:                         # PR review poster (issue #84)
   runner: ci                    # default: ci. values: ci | local
   statusless-after: 2h          # local-mode diagnostic threshold
-  authoring:                    # opt-in pre-ship adversarial loop
-    enabled: false              # concurrent reviewer/Judge seats use detached
-                                # checkouts under .dev/authoring-review-seats/ (#269)
+  authoring:                    # opt-in adversarial loop at plan + code stages (#277)
+    enabled: false              # when true, shakedown-plan and shakedown-code both run the
+                                # N-reviewer + Judge panel; concurrent seats use detached
+                                # checkouts under .dev/authoring-review-seats/ (#269).
+                                # Plan revisions only before implement; each stage has its own
+                                # budget counter against budget-cap (not a shared cycle pool).
     provider-diversity: prefer
     blocking-bar: must-fix
     max-passes: 5              # iterate to convergence (integer 1..5) before raising to a human
     max-revisions: 4           # author revisions (integer 0..max-passes-1); 0 = review but never auto-revise
-    budget-cap: 180            # aggregate $ cap; sized for a full 5-pass convergence
+    budget-cap: 180            # per-stage $ cap; sized for a full 5-pass convergence
     reviewers:
       - { id: claude, provider: claude }
       - { id: codex, provider: codex, codex-model: gpt-5-codex }

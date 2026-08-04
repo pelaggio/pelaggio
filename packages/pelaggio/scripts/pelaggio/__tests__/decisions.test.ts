@@ -327,7 +327,7 @@ describe("review escalation tamper-evidence", () => {
 		seed(path);
 		const written = await appendReviewEscalation(path, escalation({ hasSafetyBlocker: true }));
 		assert.equal(written.status, "written");
-		const found = lookupReviewEscalation(path, "300", "a".repeat(40));
+		const found = lookupReviewEscalation(path, "300", "a".repeat(40), "shakedown-code");
 		assert.equal(found.state, "active");
 		if (found.state === "active") {
 			assert.equal(found.id, written.ids[0]);
@@ -351,13 +351,36 @@ describe("review escalation tamper-evidence", () => {
 		writeFileSync(decisionsPath, body.replace(match[0], tamperedMarker));
 		// Uncommitted working-tree tamper is invisible: lookup reads committed content
 		// only, so the intact committed record still reports active.
-		const uncommitted = lookupReviewEscalation(path, "300", "a".repeat(40));
+		const uncommitted = lookupReviewEscalation(path, "300", "a".repeat(40), "shakedown-code");
 		assert.equal(uncommitted.state, "active");
 		// A committed tamper is detected as tamper (invalid), not a silent flip.
 		execFileSync("git", ["add", "-A"], { cwd: path, stdio: "pipe" });
 		execFileSync("git", ["commit", "--no-verify", "-m", "tamper"], { cwd: path, stdio: "pipe" });
-		const found = lookupReviewEscalation(path, "300", "a".repeat(40));
+		const found = lookupReviewEscalation(path, "300", "a".repeat(40), "shakedown-code");
 		assert.equal(found.state, "invalid");
+	});
+
+	it("stage-keys lookup so same-SHA plan and code escalations do not release each other (#277)", async () => {
+		const path = repo();
+		seed(path);
+		const sha = "a".repeat(40);
+		const planEsc = escalation({ step: "shakedown-plan", reviewedSha: sha, evidenceFingerprint: "c".repeat(64) });
+		const codeEsc = escalation({ step: "shakedown-code", reviewedSha: sha, evidenceFingerprint: "d".repeat(64) });
+		assert.equal((await appendReviewEscalation(path, planEsc)).status, "written");
+		assert.equal((await appendReviewEscalation(path, codeEsc)).status, "written");
+
+		const planHit = lookupReviewEscalation(path, "300", sha, "shakedown-plan");
+		const codeHit = lookupReviewEscalation(path, "300", sha, "shakedown-code");
+		assert.equal(planHit.state, "active");
+		assert.equal(codeHit.state, "active");
+		if (planHit.state === "active" && codeHit.state === "active") {
+			assert.notEqual(planHit.id, codeHit.id);
+			assert.equal(planHit.escalation.step, "shakedown-plan");
+			assert.equal(codeHit.escalation.step, "shakedown-code");
+		}
+		// Wrong stage is missing even when SHA matches.
+		assert.equal(lookupReviewEscalation(path, "300", sha, "shakedown-plan").state, "active");
+		assert.notEqual(reviewEscalationId(planEsc), reviewEscalationId(codeEsc));
 	});
 });
 

@@ -2,11 +2,18 @@
 
 > **Decision recorded in [ADR-0024](../decisions/0024-adversarial-authoring-review-loop.md)** — this doc is the detailed design + how-to; the ADR records the settled *why*.
 
-(design) Move review **upstream, into the authoring cycle**: an internal multi-driver adversarial
+Move review **upstream, into the authoring cycle**: an internal multi-driver adversarial
 loop that **resolves** findings as it goes, converges, and ships a PR that is **already reviewed and
 clean**, with the converged review record attached as **provenance**. The human audits an
 evidence-backed result instead of triaging a raw first draft. This is what this very repo's design
 work was dogfooded through.
+
+**Two stages share one controller.** When `review.authoring.enabled` is true, the same N-reviewer +
+Judge convergence loop runs at **plan** (`shakedown-plan`) and **code** (`shakedown-code`). Plan seats
+review the committed plan artifact (cold, read-only, no `git diff` / check protocol); plan-author
+revisions may mutate the plan **only before implement** — `implement` still treats plan documents as
+read-only. Each stage has distinct run ids, review records, effects, and escalation identity so a
+code-stage resolution cannot release a plan-stage escalation (or vice versa), even when SHAs coincide.
 
 ## What is (and isn't) novel
 
@@ -101,7 +108,7 @@ promoted. That split escapes local maxima without weakening the merge invariant.
 | **Converged-clean** | all ≥-bar findings resolved, no new blockers | ship + full provenance *(preferred)* |
 | **Converged-with-notes** | blockers resolved; residual minors/nits recorded | ship, notes in provenance |
 | **Ceiling-reached** | hit M passes, remaining items below the bar | ship, open items flagged |
-| **Dissent** *(judgment-band only)* | a genuine **non-safety** disagreement revision can't close, below the safety floor | ship depends on `ship.target` (below) + record dissent + notify |
+| **Dissent** *(judgment-band only)* | a genuine **non-safety** disagreement revision can't close, below the safety floor | **plan stage:** always `parkExit()` (no PR yet to veto a contested plan). **code stage:** ship depends on `ship.target` (below) + record dissent + notify |
 | **Hard-block** | any **unrefuted** finding in the safety-critical class, or a verified blocker revision can't fix | `parkExit()` for human — never ships |
 | **Budget/rate-limit** | cost/turn cap or a sub's limit hit mid-loop | checkpoint + park |
 
@@ -132,14 +139,22 @@ satisfy [ADR-0014](../decisions/0014-mechanism-policy-separation-spine.md). See
 [ADR-0016](../decisions/0016-severity-taxonomy-and-owner.md) for the taxonomy,
 `packages/pelaggio/scripts/pelaggio/review/taxonomy.ts` for its signed config gate, and
 `packages/pelaggio/scripts/pelaggio/review/findings.ts` for the classification seam.
-2. **Condition Dissent on `ship.target`.** For **`direct-push`**, dissent defaults to **park/block**
-   (post-hoc human adjudication after a merge is not a control). For **`pull-request` / `auto-merge-pr`**,
-   dissent may push the branch + record + notify — GitHub's required checks and the human merge still
-   gate. Dissent must record: the minority finding, the judge's ruling, attempts made, and the notify
-   target. This ship.target conditioning is the seed of the general **tolerance policy**
+2. **Condition Dissent by stage + `ship.target`.** At the **plan stage**, Judge-ruled judgment dissent
+   **always parks** for every ship target — there is no PR yet to act as a veto over a contested plan.
+   At the **code stage**, for **`direct-push`** dissent parks/blocks (post-hoc human adjudication after
+   a merge is not a control); for **`pull-request` / `auto-merge-pr`**, dissent may push the branch +
+   record + notify — GitHub's required checks and the human merge still gate. Dissent must record: the
+   minority finding, the judge's ruling, attempts made, and the notify target. This is the seed of the
+   general **tolerance policy**
    ([ADR-0015](../decisions/0015-autonomy-by-default-configurable-tolerance.md)): the *judgment band* is
    tolerance-configurable (flag vs. move), while the *safety class* is never — it always fails closed,
    per the taxonomy and its owner in [ADR-0016](../decisions/0016-severity-taxonomy-and-owner.md).
+
+**Plan-stage finding classes.** Plan reviewers emit evidence under the same schema-v3 contract. Exact
+rule IDs map to judgment-tier classes registered in the baseline taxonomy: `pelaggio/plan/approach-flaw`
+→ `approach-flaw`, `pelaggio/plan/scope-mismatch` → `scope-mismatch`, `pelaggio/plan/missing-risk` →
+`missing-risk`. True safety issues still use safety evidence and retain the ADR-0016 floor. Unknown or
+ambiguous evidence still defaults to safety.
 
 **Parse tolerance vs. genuine fail-closed (#280).** The teeth above must fire on *real* disagreement,
 not on output-format flakes that would fail-close good code. Two redundancies are tolerated: a reviewer

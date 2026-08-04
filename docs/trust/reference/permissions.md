@@ -27,8 +27,8 @@ last_reviewed: 2026-07-08
 |---|---|---|---|---|
 | `pick` | Roadmap, git/worktree state | Branch/worktree, claim state | Roadmap adapter when configured | `TC-006`, `TC-011`, `TC-015` |
 | `plan` | Item context, repo docs/code | Plan file | May publish plan through adapter | `TC-006`, `TC-015` |
-| `shakedown-plan` | Plan/source context | Plan revisions before implement | Model provider | `TC-006`, `TC-015` |
-| `implement` | Approved plan, repo files | Target files in worktree | Model provider | `TC-006`, `TC-011`, `TC-015` |
-| `shakedown-code` | Diff/source/tests | Worktree fixes | Model provider | `TC-006`, `TC-011`, `TC-015` |
+| `shakedown-plan` | Plan/source context; when authoring enabled, cold plan panel | Plan revisions before implement only | Model provider (execution-context auth) | `TC-006`, `TC-015` |
+| `implement` | Approved plan, repo files | Target files in worktree (plans read-only) | Model provider | `TC-006`, `TC-011`, `TC-015` |
+| `shakedown-code` | Diff/source/tests; when authoring enabled, code panel | Worktree fixes | Model provider (execution-context auth) | `TC-006`, `TC-011`, `TC-015` |
 | `ship` | Git state, config | Branch/PR/default branch by target | GitHub/git remote | `TC-003`, `TC-006`, `TC-012`, `TC-013` |
 | `pr-review` | PR diff/changed files | PR comment/status only by CLI | GitHub, model provider | `TC-003`, `TC-006`, `TC-015` |

@@ -171,6 +171,7 @@ const FINGERPRINT = "a".repeat(64);
 const verdictEffect = {
 	kind: "review.Verdict" as const,
 	itemId: "TOOL-99",
+	stage: "code" as const,
 	reviewedSha: SHA,
 	reviewRecordSource: ".dev/review-records/cycle-1-TOOL-99.json",
 	outcome: "converged-clean" as const,
@@ -183,6 +184,7 @@ const verdictEffect = {
 const escalationEffect = {
 	kind: "review.Escalation" as const,
 	itemId: "TOOL-99",
+	stage: "code" as const,
 	reviewedSha: SHA,
 	reviewRecordSource: ".dev/review-records/cycle-1-TOOL-99.json",
 	evidenceFingerprint: FINGERPRINT,
@@ -253,6 +255,29 @@ describe("review.Verdict / review.Escalation effects (#337)", () => {
 			() => loadAndValidateEffectsManifest(ctx),
 			(err) => err instanceof EffectsManifestError && err.code === "invalid_manifest" && /hasSafetyBlocker/.test(err.message),
 		);
+	});
+
+	it("requires stage on review effects and accepts plan-stage payloads (#277)", () => {
+		const ctx = baseContext();
+		ctx.step = "shakedown-plan";
+		ctx.attempt = 0;
+		ctx.preSha = SHA;
+
+		// Missing stage fails closed — never default to code.
+		const { stage: _s, ...verdictNoStage } = verdictEffect;
+		writeEffectsManifest(ctx, [verdictNoStage as typeof verdictEffect]);
+		assert.throws(
+			() => loadAndValidateEffectsManifest(ctx),
+			(err) => err instanceof EffectsManifestError && err.code === "invalid_manifest" && /stage/.test(err.message),
+		);
+
+		const planVerdict = { ...verdictEffect, stage: "plan" as const, reviewRecordSource: ".dev/review-records/cycle-1-TOOL-99-plan.json" };
+		const planEscalation = { ...escalationEffect, stage: "plan" as const, reviewRecordSource: ".dev/review-records/cycle-1-TOOL-99-plan.json" };
+		writeEffectsManifest(ctx, [planVerdict, planEscalation]);
+		const { manifest } = loadAndValidateEffectsManifest(ctx);
+		assert.equal(manifest.effects.length, 2);
+		assert.equal((manifest.effects[0] as { stage: string }).stage, "plan");
+		assert.equal((manifest.effects[1] as { stage: string }).stage, "plan");
 	});
 
 	it("rejects provenance mismatch on itemId and reviewedSha vs preSha", async () => {

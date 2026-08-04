@@ -32,10 +32,17 @@ export interface ReviewEscalationDriver {
 	rationale: string;
 }
 
+/** Authoring-review stage discriminator (plan vs code). Distinct from the pipeline Step name. */
+export type AuthoringReviewStage = "plan" | "code";
+
+/** Pipeline steps that host the authoring-review loop. */
+export type AuthoringReviewStep = "shakedown-plan" | "shakedown-code";
+
 export interface ReviewEscalation {
 	kind: "review-escalation";
 	itemId: string;
-	step: "shakedown-code";
+	/** Stage-bound authoring step so plan and code escalations cannot release each other. */
+	step: AuthoringReviewStep;
 	reviewedSha: string;
 	evidenceFingerprint: string;
 	reviewRecordSource: string;

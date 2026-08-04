@@ -373,7 +373,7 @@ describe("authoring review loop controller", () => {
 		assert.ok(result.passes[0].reviewers.length > 0);
 		assert.ok(result.passes[0].reviewers.every((seat) => seat.diagnostic?.includes("ECONNRESET")));
 		assert.equal(result.passes[0].judge.diagnostic, "skipped: no reviewer seat completed");
-		const md = renderReviewRecord({ schemaVersion: 1, runId: "cycle-1-legibility", itemId: "L", createdAt: new Date("2026-01-01T00:00:00Z").toISOString(), blockingBar: "must-fix", result });
+		const md = renderReviewRecord({ schemaVersion: 1, runId: "cycle-1-legibility", itemId: "L", stage: "code", createdAt: new Date("2026-01-01T00:00:00Z").toISOString(), blockingBar: "must-fix", result });
 		assert.match(md, /Seat diagnostics/);
 		assert.match(md, /ECONNRESET/);
 	});

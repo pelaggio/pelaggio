@@ -1,11 +1,18 @@
 import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import type { AuthoringReviewStage } from "../types.js";
 import type { ReviewLoopResult } from "./loop.js";
+
+export type { AuthoringReviewStage };
+
+export const AUTHORING_REVIEW_STAGES: readonly AuthoringReviewStage[] = ["plan", "code"];
 
 export interface ReviewRecord {
 	schemaVersion: 1;
 	runId: string;
 	itemId: string;
+	/** Required stage binding so plan/code records cannot overwrite or render interchangeably. */
+	stage: AuthoringReviewStage;
 	createdAt: string;
 	blockingBar: "must-fix";
 	result: ReviewLoopResult;
@@ -30,6 +37,8 @@ export interface DocReviewRecord {
 
 export function validateReviewRecord(value: ReviewRecord): ReviewRecord {
 	if (value.schemaVersion !== 1 || !value.runId || !value.itemId || value.blockingBar !== "must-fix") throw new Error("invalid review record");
+	// Stage is required — never default a missing stage to "code" (would launder plan records).
+	if (value.stage !== "plan" && value.stage !== "code") throw new Error("invalid review record stage");
 	if (Number.isNaN(Date.parse(value.createdAt))) throw new Error("invalid review record timestamp");
 	return value;
 }
@@ -95,7 +104,8 @@ export function renderReviewRecord(record: ReviewRecord): string {
 	const escalation = valid.escalation
 		? `\n\nDecision **${valid.escalation.id}**: **${valid.escalation.status}**${valid.escalation.actor ? ` by ${valid.escalation.actor}` : ""}${valid.escalation.rationale ? ` — ${valid.escalation.rationale}` : ""}.`
 		: "";
-	return `## Adversarial review record\n\nThis is an unbound review record, not a cryptographic attestation.\n\n- Outcome: **${valid.result.outcome}**\n${renderDiversity(valid.result)}\n- Cost: $${valid.result.cost.toFixed(2)}\n\n${renderResultDetail(valid.result)}${escalation}`;
+	const stageLabel = valid.stage === "plan" ? "plan" : "code";
+	return `## Adversarial review record\n\nThis is an unbound review record, not a cryptographic attestation.\n\n- Stage: **${stageLabel}**\n- Outcome: **${valid.result.outcome}**\n${renderDiversity(valid.result)}\n- Cost: $${valid.result.cost.toFixed(2)}\n\n${renderResultDetail(valid.result)}${escalation}`;
 }
 
 export function renderDocReviewRecord(record: DocReviewRecord): string {

@@ -40,7 +40,7 @@ Apply the target detection rules above. You will land in one of two modes.
 
 ### Plan review mode
 
-Target: a `.md` plan file (usually `docs/plans/{branch-slug}.md`).
+Target: a `.md` plan file (usually `docs/plans/{branch-slug}.md` or `.dev/plans/{id}.md`).
 
 1. Read the plan in full.
 2. Understand the item. If a `## Roadmap item context` block appears in your Arguments (pelaggio mode — the harness provides the item because a sandboxed provider can't fetch it), use THAT as the spec and do **not** run `roadmap get` / `gh issue view` (read its `sourceRef` local file only if you need more). Otherwise (inline): extract the item ID from the branch name and run `npx pelaggio roadmap get <ID> --json` for title, deps, `sourceRef` (markdown: roadmap file path; github-issues: issue body); read the `sourceRef` file / body for scope and dependencies.
@@ -49,9 +49,15 @@ Target: a `.md` plan file (usually `docs/plans/{branch-slug}.md`).
 5. **Verify APIs the plan assumes** — for every function, type, or component the plan calls or extends, read the actual source and confirm signatures match. Flag mismatches concretely (e.g., "plan assumes `foo()` returns `X` but it returns `Y`").
 6. Find reference implementations for similar features already in the codebase — don't review in a vacuum.
 7. Apply the rubric. Focus on design soundness, project invariants from the Correct dimension, and Idioms drift.
-8. **Fix issues in place** — edit the plan file directly to address every fix-now item. The user wants a better plan, not just a list of complaints.
+8. **Fix issues in place** — edit the plan file directly to address every fix-now item. The user wants a better plan, not just a list of complaints. Plan mutation is allowed **only in this pre-implement seat**; once `implement` begins, plan artifacts are read-only.
 9. **If the plan has a fundamental design flaw** that in-place editing cannot fix (wrong data model, wrong architectural layer, contradicts a core invariant the whole approach depends on) — emit `Verdict: RETHINK` and stop. Do not paper over structural problems.
 10. Output the summary and verdict per the review logic above.
+
+**Authoring-loop revision seat (plan):** When the prompt includes Judge-retained blockers from the
+plan-stage authoring review loop, revise **only the plan artifact** to address those blockers.
+Re-check requirements and named source APIs. Preserve `DECISION:` and decomposition markers where
+applicable. Do not implement code. Emit your normal `Verdict:` line for the transcript, but the
+**loop** decides convergence — your prose verdict is not a gate.
 
 For reviewer-vetoable forks affecting invariants, security, cost, public API surface, or scope beyond M, emit `DECISION: <fork> | chose: <default> | alternatives: <other options>` and continue the review. It is non-halting, may appear multiple times, and is not for routine choices. Preserve these lines in the review summary.
 

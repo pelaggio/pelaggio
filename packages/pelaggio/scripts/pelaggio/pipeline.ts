@@ -34,7 +34,6 @@ import {
 	type Effect,
 	type EffectsContext,
 	EffectsManifestError,
-	type ReviewEscalationEffect,
 	type ReviewSeatIdentity,
 	type ReviewVerdictEffect,
 	writeEffectsManifest as writeEffectsManifestDefault,
@@ -92,6 +91,7 @@ import {
 import { type NotifyConfig, notifyCycle, notifyDecision as notifyDecisionEvent, notifyStrandedReview, sendNotification as sendNotificationDefault } from "./notify.js";
 import { buildFailClosedComment, runPrReviewGate } from "./pr-review-cli.js";
 import { capabilityMapFrom, resolveAuthoringReviewConfig } from "./provider-routing.js";
+import { documentInjectionState, formatDocumentUnderReview, snapshotDocument } from "./review/document.js";
 import { runReviewLoop } from "./review/loop.js";
 import { type ReviewRecord, renderReviewRecord, writeReviewRecord } from "./review/record.js";
 import { cleanupAuthoringReviewSeatsForSha, isAuthoringReviewSeatPath, prepareAuthoringReviewSeat } from "./review/seats.js";
@@ -106,6 +106,8 @@ import { extractPrUrl } from "./ship/pull-request.js";
 import { getProvider, REGISTERED_PROVIDERS, type RunStepFn, runStep as runStepDefault } from "./step-runner.js";
 import { A, createStepRenderer, fmtElapsed, LiveStatus, StatusBar, TUI_ENABLED } from "./tui.js";
 import {
+	type AuthoringReviewStage,
+	type AuthoringReviewStep,
 	type CycleDisposition,
 	type CycleGitBinding,
 	type CycleResult,
@@ -1227,6 +1229,305 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		recordArtifactAuthor(assignment, artifact, fallback);
 	};
 
+	/**
+	 * Shared authoring-review orchestration for plan and code stages (#277).
+	 * Deterministic convergence stays in `review/loop.ts`; this helper owns seating,
+	 * cold worktrees, provenance/effects, escalation, and stage-specific terminal mapping.
+	 */
+	async function runAuthoringReviewStage(stageOpts: {
+		stage: AuthoringReviewStage;
+		authorStep: AuthoringReviewStep;
+		author: DriverIdentity;
+		revisePromptArgs: string;
+		/** Required for stage:"plan"; fail-closed when missing/unreadable. */
+		planPath?: string | null;
+	}): Promise<{ kind: "terminal"; cycleResult: CycleResult } | { kind: "ok"; result: StepResult; reviewRecordMarkdown?: string }> {
+		const { stage, authorStep, author, revisePromptArgs, planPath } = stageOpts;
+		const stageLabel = stage === "plan" ? "plan review" : "adversarial review";
+		const commitLabel = stage === "plan" ? "plan review revision" : "adversarial review revision";
+		const skillMode = stage === "plan" ? "--plan-authoring-loop" : "--authoring-loop";
+
+		// Plan stage must bind a real artifact before seats run — never review an empty path.
+		if (stage === "plan") {
+			if (!planPath) return { kind: "terminal", cycleResult: finish({ itemId, completed: false, cost, error: `${authorStep} assignment failed: plan path is missing for authoring review` }) };
+			try {
+				snapshotDocument(planPath, worktree!);
+			} catch (e) {
+				const message = e instanceof Error ? e.message : String(e);
+				return { kind: "terminal", cycleResult: finish({ itemId, completed: false, cost, error: `${authorStep} assignment failed: plan unreadable for authoring review (${message})` }) };
+			}
+		}
+
+		const reviewedSha = getArtifactHeadSha(worktree!);
+		if (!reviewedSha) return { kind: "terminal", cycleResult: parkExit(`${stageLabel} could not bind current HEAD`)! };
+
+		const existingEscalation = lookupReviewEscalation(worktree!, itemId!, reviewedSha, authorStep);
+		if (existingEscalation.state === "active" || existingEscalation.state === "resolved-block" || existingEscalation.state === "invalid") {
+			return { kind: "terminal", cycleResult: parkExit(`${stageLabel} escalation ${existingEscalation.state}`)! };
+		}
+		// A committed resolution remains untrusted policy input until an operator binds
+		// this resume to its evidence. Issue #419 owns the successor authority design.
+		if (existingEscalation.state === "resolved-proceed") {
+			const evidenceFp = existingEscalation.escalation.evidenceFingerprint;
+			const ackFlag = flags["acknowledge-escalation"];
+			if (typeof evidenceFp !== "string" || evidenceFp.length === 0) {
+				return { kind: "terminal", cycleResult: parkExit(`${stageLabel} escalation record lacks an evidence fingerprint — treated as active; re-escalate through the review loop`)! };
+			}
+			if (typeof ackFlag !== "string" || ackFlag !== evidenceFp) {
+				return { kind: "terminal", cycleResult: parkExit(`${stageLabel} escalation active; after reviewing, re-run with --resume ${itemId} --acknowledge-escalation ${evidenceFp}`)! };
+			}
+		}
+		if (existingEscalation.state === "resolved-proceed" && existingEscalation.escalation.hasSafetyBlocker) {
+			return { kind: "terminal", cycleResult: parkExit(`${stageLabel} safety blocker`)! };
+		}
+
+		const authorIdentity = {
+			provider: author.provider,
+			...(author.provider === "codex" ? (author.codexModel ? { model: author.codexModel } : {}) : author.model ? { model: author.model } : {}),
+		};
+		const seating = resolveAuthoringReviewConfig({
+			config: CONFIG,
+			profile,
+			author: authorIdentity,
+			capabilities: capabilityMapFrom(getProvider, REGISTERED_PROVIDERS),
+		});
+		if (!seating.ok) return { kind: "terminal", cycleResult: finish({ itemId, completed: false, cost, error: `${authorStep} assignment failed: ${seating.reason}` }) };
+		const policy = seating.policy;
+		log(`${stageLabel} capability realizations: ${JSON.stringify(seating.realizations)}`);
+
+		let loop: Awaited<ReturnType<typeof runReviewLoop>> | undefined;
+		if (existingEscalation.state === "resolved-proceed") {
+			loop = undefined;
+		} else {
+			let seatPrepareChain: Promise<void> = Promise.resolve();
+			const preparedSeatShas = new Set<string>([reviewedSha]);
+			try {
+				loop = await runReviewLoop({
+					policy,
+					author: authorIdentity,
+					parkSignal,
+					// Plan stage: empty changedFiles so code path-signals cannot mis-elevate findings.
+					// Code stage: plain changed-file list for emission-time classification.
+					classificationContext: stage === "plan" ? { changedFiles: [] } : { changedFiles: gitDiffNameOnly(worktree!) },
+					taxonomy: REVIEW_CONFIG.taxonomy,
+					runSeat: async ({ role, slot, pass, prompt, parkSignal: child }) => {
+						const executionOverride = { provider: slot.provider, ...(slot.provider === "codex" ? (slot.codexModel ? { codexModel: slot.codexModel } : {}) : slot.model ? { model: slot.model } : {}) };
+						if (role === "author") {
+							return step(authorStep, prompt, worktree!, {
+								attempt: pass,
+								parkSignalOverride: child,
+								executionOverride,
+								commitLabel,
+							});
+						}
+						// Reviewer + Judge: cold seats pinned to the artifact HEAD at seat start.
+						// Do NOT pass ownWorktree: artifact — confinement is change-based.
+						const prepare = seatPrepareChain.then(() => {
+							const seatSha = getArtifactHeadSha(worktree!) ?? reviewedSha;
+							preparedSeatShas.add(seatSha);
+							return prepareAuthoringReviewSeat(mainRepo, { sha: seatSha, seatId: slot.id, pass });
+						});
+						seatPrepareChain = prepare.then(
+							() => undefined,
+							() => undefined,
+						);
+						let seatCwd: string;
+						try {
+							seatCwd = await prepare;
+						} catch (e) {
+							const message = e instanceof Error ? e.message : String(e);
+							log(`⚠ ${stageLabel} seat prepare failed (${slot.id} p${pass}): ${message}`);
+							return { ok: false, subtype: "error", text: `${stageLabel} seat prepare failed: ${message}`, fullText: `${stageLabel} seat prepare failed: ${message}`, cost: 0, turns: 0 };
+						}
+						return step(role === "reviewer" ? "pr-review" : "pr-verify", prompt, seatCwd, {
+							attempt: pass,
+							parkSignalOverride: child,
+							executionOverride,
+						});
+					},
+					prompts: {
+						review: () => {
+							if (stage === "plan") {
+								// Re-read the plan each pass so a post-revision review sees current bytes.
+								const snapshot = snapshotDocument(planPath!, worktree!);
+								return `${expandSkill("pr-review", skillMode)}\n\n${formatDocumentUnderReview(snapshot, documentInjectionState(snapshot))}`;
+							}
+							return `${expandSkill("pr-review", skillMode)}\n\n${buildReviewDiffBlock(worktree!)}`;
+						},
+						judge: (candidates) => `${expandSkill("pr-verify", "--authoring-loop-judge")}\n\nTRUSTED_CANDIDATE_DATA\n${JSON.stringify(candidates)}\nEND_TRUSTED_CANDIDATE_DATA`,
+						revise: (survivors) => {
+							const reviseBody =
+								stage === "plan"
+									? [
+											`${expandSkill("shakedown", revisePromptArgs)}`,
+											"",
+											"You are the plan-author revision seat for the authoring review loop.",
+											"Revise ONLY the plan artifact to address the retained blockers below.",
+											"Do not implement code. Re-check requirements and named source APIs.",
+											"Preserve DECISION: and decomposition markers where applicable.",
+											"The loop — not your prose Verdict — decides convergence.",
+											"",
+											"The Judge retained these blockers:",
+											JSON.stringify(survivors),
+										].join("\n")
+									: `${expandSkill("shakedown", revisePromptArgs)}\n\nThe Judge retained these blockers:\n${JSON.stringify(survivors)}`;
+							return reviseBody;
+						},
+					},
+				});
+			} finally {
+				for (const sha of preparedSeatShas) cleanupAuthoringReviewSeatsForSha(mainRepo, sha);
+			}
+		}
+
+		if (!loop) {
+			if (existingEscalation.state !== "resolved-proceed") return { kind: "terminal", cycleResult: parkExit(`${stageLabel} produced no loop result`)! };
+			const markdown = `## Adversarial review escalation\n\nDecision **${existingEscalation.id}** was resolved **proceed** by ${existingEscalation.resolution.actor}.\n\nRationale: ${existingEscalation.resolution.rationale}\n\nStage: **${stage}**. Reviewed commit: \`${reviewedSha}\`. Evidence fingerprint: \`${existingEscalation.escalation.evidenceFingerprint}\`.`;
+			return { kind: "ok", result: { ok: true, subtype: "success", text: "resolved-proceed", fullText: "resolved-proceed", cost: 0, turns: 0 }, reviewRecordMarkdown: markdown };
+		}
+
+		cost += loop.cost;
+		const finalReviewedSha = getArtifactHeadSha(worktree!);
+		if (!finalReviewedSha) return { kind: "terminal", cycleResult: parkExit(`${stageLabel} could not bind final reviewed HEAD`)! };
+
+		// Stage-distinct run ids so plan/code records never collide or overwrite.
+		const reviewRunId = `${runIdBase}-${itemId}-${stage}`;
+		const record: ReviewRecord = {
+			schemaVersion: 1,
+			runId: reviewRunId,
+			itemId: itemId!,
+			stage,
+			createdAt: new Date().toISOString(),
+			blockingBar: "must-fix",
+			result: loop,
+		};
+		const recordPath = writeReviewRecord(worktree!, record);
+		const reviewRecordMarkdown = renderReviewRecord(record);
+		log(`review record → ${recordPath}`);
+		const reviewRecordSource = `.dev/review-records/${record.runId}.json`;
+
+		const seats: ReviewSeatIdentity[] = [
+			{ role: "author", seatId: "author", provider: authorIdentity.provider, ...(authorIdentity.model ? { model: authorIdentity.model } : {}) },
+			...policy.reviewers.map((slot) => ({
+				role: "reviewer" as const,
+				seatId: slot.id,
+				provider: slot.provider,
+				...(slot.provider === "codex" ? (slot.codexModel ? { model: slot.codexModel } : {}) : slot.model ? { model: slot.model } : {}),
+			})),
+			{
+				role: "judge",
+				seatId: policy.judge.id,
+				provider: policy.judge.provider,
+				...(policy.judge.provider === "codex" ? (policy.judge.codexModel ? { model: policy.judge.codexModel } : {}) : policy.judge.model ? { model: policy.judge.model } : {}),
+			},
+		];
+		const verdictEffect: ReviewVerdictEffect = {
+			kind: "review.Verdict",
+			itemId: itemId!,
+			stage,
+			reviewedSha: finalReviewedSha,
+			reviewRecordSource,
+			outcome: loop.outcome,
+			seats,
+		};
+		const reviewEffects: Effect[] = [verdictEffect];
+		if (loop.disagreement) {
+			reviewEffects.push({
+				kind: "review.Escalation",
+				itemId: itemId!,
+				stage,
+				reviewedSha: finalReviewedSha,
+				reviewRecordSource,
+				evidenceFingerprint: loop.disagreement.evidenceFingerprint,
+				hasSafetyBlocker: loop.disagreement.hasSafetyBlocker,
+			});
+		}
+		const effectsCtx: EffectsContext = {
+			runId: reviewRunId,
+			itemId: itemId!,
+			step: authorStep,
+			attempt: 0,
+			cwd: worktree!,
+			preSha: finalReviewedSha,
+		};
+
+		let escalationParkReason: string | undefined;
+		if (loop.disagreement) {
+			const escalation = {
+				kind: "review-escalation" as const,
+				itemId: itemId!,
+				step: authorStep,
+				reviewedSha: finalReviewedSha,
+				evidenceFingerprint: loop.disagreement.evidenceFingerprint,
+				reviewRecordSource,
+				hasSafetyBlocker: loop.disagreement.hasSafetyBlocker,
+				drivers: loop.disagreement.drivers.map((driver) => ({ ...driver, identity: { ...driver.identity, role: "reviewer" as const } })),
+			};
+			try {
+				// Durable escalation precedes effect attestation so a dispatch failure cannot swallow it.
+				const written = await appendReviewEscalation(worktree!, escalation);
+				if (written.status !== "failed")
+					await opts.notifyDecision?.({
+						itemId,
+						decision: { fork: `Cross-model review split (${written.ids[0]})`, chosen: "human adjudication required", alternatives: "proceed or block" },
+						step: authorStep,
+						source: escalation.reviewRecordSource,
+						logPath: opts.logPath ?? LOG_PATH,
+						escalation: { ...escalation, id: written.ids[0] },
+					});
+				const state = lookupReviewEscalation(worktree!, itemId!, finalReviewedSha, authorStep);
+				if (written.status === "failed" || state.state !== "resolved-proceed" || escalation.hasSafetyBlocker) {
+					escalationParkReason = `${stageLabel} escalation ${written.status === "failed" ? "write-failed" : state.state}`;
+				}
+			} catch (error) {
+				log(`⚠ ${stageLabel} escalation write failed: ${error instanceof Error ? error.message : String(error)}`);
+				return { kind: "terminal", cycleResult: parkExit(`${stageLabel} escalation write-failed`)! };
+			}
+		}
+
+		if (!opts.dryRun) {
+			try {
+				writeEffectsManifest(effectsCtx, reviewEffects);
+				const reviewSettings = resolveStepSettings(CONFIG, profile, authorStep);
+				const reviewProvider = policy.judge.provider;
+				const reviewModel = policy.judge.provider === "codex" ? (policy.judge.codexModel ?? "default") : (policy.judge.model ?? reviewSettings.model ?? "default");
+				const reviewEffectsResult = await dispatchStepEffects({
+					...effectsCtx,
+					roadmap,
+					log,
+					challenge: cycleChallenge,
+					provider: reviewProvider,
+					model: reviewModel,
+					observeGit: () => observeGitForReceipt(worktree!),
+				});
+				if (reviewEffectsResult.receipt) executionReceipts.push(reviewEffectsResult.receipt);
+			} catch (e) {
+				const code = e instanceof EffectsManifestError ? e.code : "effect_failed";
+				const message = e instanceof Error ? e.message : String(e);
+				const text = `${code}: ${message}`;
+				if (loop.disagreement) return { kind: "terminal", cycleResult: parkExit(`${authorStep} effects failed after escalation: ${text}`)! };
+				return { kind: "terminal", cycleResult: finish({ itemId, completed: false, cost, error: `${authorStep} effects failed: ${text}` }) };
+			}
+		}
+
+		if (escalationParkReason) return { kind: "terminal", cycleResult: parkExit(escalationParkReason)! };
+
+		// Terminal mapping is stage-aware:
+		// - budget / hard-block always park
+		// - plan-stage judgment dissent always parks (no PR exists yet to veto a contested plan)
+		// - code-stage judgment dissent parks only for direct-push; PR modes may ship with dissent recorded
+		const parkOnDissent = stage === "plan" || opts.shipTarget.name === "direct-push";
+		if (loop.outcome === "budget" || loop.outcome === "hard-block" || (loop.outcome === "dissent" && parkOnDissent)) {
+			return { kind: "terminal", cycleResult: parkExit(`${stageLabel} ${loop.outcome}`)! };
+		}
+
+		return {
+			kind: "ok",
+			result: { ok: true, subtype: "success", text: loop.outcome, fullText: loop.outcome, cost: 0, turns: 0 },
+			reviewRecordMarkdown,
+		};
+	}
+
 	let verdict: "APPROVE" | "REVISE" | "RETHINK" = "APPROVE";
 	let shakedownPlanText = "";
 	// Shared across the plan-time and shakedown-code deferred-item parses so a marker echoed in both
@@ -1286,26 +1587,45 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	if (shouldRun("shakedown-plan")) {
 		const planAuthor = assignment.authors.plan;
 		if (!planAuthor) return finish({ itemId, completed: false, cost, error: "shakedown-plan assignment failed: plan author attribution is unavailable" });
-		const selected = selectReviewers(assignment, driverCandidates("shakedown-plan"), planAuthor, 1, available);
-		if (!selected.ok) return finish({ itemId, completed: false, cost, error: `shakedown-plan assignment failed: ${selected.reason}` });
 		const shakedownPlanArgs = await buildStepArgs(roadmap, itemId!, "plan-review");
-		const outcome = await runStepWithRetry({
-			name: "shakedown-plan",
-			stepBudget: resolveStepSettings(CONFIG, profile, "shakedown-plan").budget,
-			buildPrompt: () => expandSkill("shakedown", shakedownPlanArgs),
-			logAttempt: (attempt) => log(attempt === 1 ? "shakedown (plan)..." : "continuing shakedown-plan (attempt 2)..."),
-			refusedError: "shakedown-plan refused (model declined the review)",
-			executionOverride: selected.drivers[0],
-		});
-		if (outcome.kind === "terminal") return outcome.cycleResult;
 
-		const shakedown = outcome.result;
-		verdict = parseVerdict(shakedown.text);
-		shakedownPlanText = shakedown.text;
-		const lastStep = steps[steps.length - 1];
-		if (lastStep && lastStep.name === "shakedown-plan") lastStep.verdict = verdict;
-		log(`verdict: ${verdict}`);
-		if (verdict === "RETHINK") return finish({ itemId, completed: false, cost, verdict, error: "plan needs rethink" });
+		if (REVIEW_CONFIG.authoring.enabled) {
+			const planPath = await roadmap.getItemPlan({ worktree: worktree! });
+			const outcome = await runAuthoringReviewStage({
+				stage: "plan",
+				authorStep: "shakedown-plan",
+				author: planAuthor,
+				revisePromptArgs: shakedownPlanArgs,
+				planPath,
+			});
+			if (outcome.kind === "terminal") return outcome.cycleResult;
+			// Converged plan review advances with APPROVE; the loop (not parseVerdict) owns the gate.
+			verdict = "APPROVE";
+			shakedownPlanText = outcome.result.text;
+			const lastStep = steps[steps.length - 1];
+			if (lastStep && lastStep.name === "shakedown-plan") lastStep.verdict = verdict;
+			log(`verdict: ${verdict} (plan authoring review: ${outcome.result.text})`);
+		} else {
+			const selected = selectReviewers(assignment, driverCandidates("shakedown-plan"), planAuthor, 1, available);
+			if (!selected.ok) return finish({ itemId, completed: false, cost, error: `shakedown-plan assignment failed: ${selected.reason}` });
+			const outcome = await runStepWithRetry({
+				name: "shakedown-plan",
+				stepBudget: resolveStepSettings(CONFIG, profile, "shakedown-plan").budget,
+				buildPrompt: () => expandSkill("shakedown", shakedownPlanArgs),
+				logAttempt: (attempt) => log(attempt === 1 ? "shakedown (plan)..." : "continuing shakedown-plan (attempt 2)..."),
+				refusedError: "shakedown-plan refused (model declined the review)",
+				executionOverride: selected.drivers[0],
+			});
+			if (outcome.kind === "terminal") return outcome.cycleResult;
+
+			const shakedown = outcome.result;
+			verdict = parseVerdict(shakedown.text);
+			shakedownPlanText = shakedown.text;
+			const lastStep = steps[steps.length - 1];
+			if (lastStep && lastStep.name === "shakedown-plan") lastStep.verdict = verdict;
+			log(`verdict: ${verdict}`);
+			if (verdict === "RETHINK") return finish({ itemId, completed: false, cost, verdict, error: "plan needs rethink" });
+		}
 	}
 
 	// ── Implement ──
@@ -1462,239 +1782,15 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 
 		let shakedownResult: StepResult;
 		if (REVIEW_CONFIG.authoring.enabled) {
-			const reviewedSha = getArtifactHeadSha(worktree!);
-			if (!reviewedSha) return parkExit("adversarial review could not bind current HEAD")!;
-			const existingEscalation = lookupReviewEscalation(worktree!, itemId!, reviewedSha);
-			if (existingEscalation.state === "active" || existingEscalation.state === "resolved-block" || existingEscalation.state === "invalid") return parkExit(`adversarial review escalation ${existingEscalation.state}`)!;
-			// A committed resolution remains untrusted policy input until an operator binds
-			// this resume to its evidence. Issue #419 owns the successor authority design.
-			if (existingEscalation.state === "resolved-proceed") {
-				// Both sides must be present strings: a record missing its fingerprint and
-				// an omitted flag are each undefined, and undefined must never satisfy the gate.
-				const evidenceFp = existingEscalation.escalation.evidenceFingerprint;
-				const ackFlag = flags["acknowledge-escalation"];
-				if (typeof evidenceFp !== "string" || evidenceFp.length === 0) {
-					return parkExit("adversarial review escalation record lacks an evidence fingerprint — treated as active; re-escalate through the review loop")!;
-				}
-				if (typeof ackFlag !== "string" || ackFlag !== evidenceFp) {
-					return parkExit(`adversarial review escalation active; after reviewing, re-run with --resume ${itemId} --acknowledge-escalation ${evidenceFp}`)!;
-				}
-			}
-			if (existingEscalation.state === "resolved-proceed" && existingEscalation.escalation.hasSafetyBlocker) return parkExit("adversarial review safety blocker")!;
-			// Capability-aware fixed-seat resolution (#337): fill configured seats via settings
-			// inheritance + capability matcher; fail before seat worktrees when ineligible.
-			const authorSettings = implementationAuthor;
-			const authorIdentity = {
-				provider: authorSettings.provider,
-				...(authorSettings.provider === "codex" ? (authorSettings.codexModel ? { model: authorSettings.codexModel } : {}) : authorSettings.model ? { model: authorSettings.model } : {}),
-			};
-			const seating = resolveAuthoringReviewConfig({
-				config: CONFIG,
-				profile,
-				author: authorIdentity,
-				capabilities: capabilityMapFrom(getProvider, REGISTERED_PROVIDERS),
+			const outcome = await runAuthoringReviewStage({
+				stage: "code",
+				authorStep: "shakedown-code",
+				author: implementationAuthor,
+				revisePromptArgs: shakedownCodeArgs,
 			});
-			if (!seating.ok) return finish({ itemId, completed: false, cost, error: `shakedown-code assignment failed: ${seating.reason}` });
-			const policy = seating.policy;
-			log(`authoring review capability realizations: ${JSON.stringify(seating.realizations)}`);
-			// Hand every reviewer seat the actual branch diff so a single-turn seat that never runs
-			// `git diff` (codex) still reviews real code instead of parroting the skill example.
-			// Recomputed per pass inside the `review` prompt: the author revision seat advances HEAD
-			// between passes, so a once-computed block would show pass 2+ reviewers pre-revision code.
-			// Concurrent reviewer seats get isolated detached checkouts so they no longer race on
-			// the shared artifact worktree's index.lock (#269). Author revisions stay on the real
-			// worktree (they must commit). Seat SHAs are re-read from the artifact HEAD so a
-			// post-revision pass reviews the new commit, not the pre-revision tree. Seats are
-			// torn down after the loop. `git worktree add` is serialized (shared main-repo lock)
-			// while the seat agents still fan out via Promise.allSettled once checkouts exist.
-			let loop: Awaited<ReturnType<typeof runReviewLoop>> | undefined;
-			if (existingEscalation.state === "resolved-proceed") {
-				loop = undefined;
-			} else {
-				let seatPrepareChain: Promise<void> = Promise.resolve();
-				const preparedSeatShas = new Set<string>([reviewedSha]);
-				try {
-					loop = await runReviewLoop({
-						policy,
-						author: authorIdentity,
-						parkSignal,
-						// Plain changed-file list for emission-time classification; path signals are derived pure-side.
-						classificationContext: { changedFiles: gitDiffNameOnly(worktree!) },
-						// Resolved ADR-0016 taxonomy: the deterministic safety floor consulted by the loop.
-						taxonomy: REVIEW_CONFIG.taxonomy,
-						runSeat: async ({ role, slot, pass, prompt, parkSignal: child }) => {
-							const executionOverride = { provider: slot.provider, ...(slot.provider === "codex" ? (slot.codexModel ? { codexModel: slot.codexModel } : {}) : slot.model ? { model: slot.model } : {}) };
-							if (role === "author") {
-								return step("shakedown-code", prompt, worktree!, {
-									attempt: pass,
-									parkSignalOverride: child,
-									executionOverride,
-									commitLabel: "adversarial review revision",
-								});
-							}
-							// Reviewer + Judge: cold seats pinned to the artifact HEAD at seat start
-							// (post-revision pass 2 must not re-review the pre-revision tree).
-							// Do NOT pass ownWorktree: artifact — confinement is change-based;
-							// exempting the artifact would let a seat mutate it unaudited. Peer
-							// seats are skipped via isEphemeralReviewWorktree in forbiddenRootsForStep.
-							const prepare = seatPrepareChain.then(() => {
-								const seatSha = getArtifactHeadSha(worktree!) ?? reviewedSha;
-								preparedSeatShas.add(seatSha);
-								return prepareAuthoringReviewSeat(mainRepo, { sha: seatSha, seatId: slot.id, pass });
-							});
-							seatPrepareChain = prepare.then(
-								() => undefined,
-								() => undefined,
-							);
-							let seatCwd: string;
-							try {
-								seatCwd = await prepare;
-							} catch (e) {
-								const message = e instanceof Error ? e.message : String(e);
-								log(`⚠ authoring review seat prepare failed (${slot.id} p${pass}): ${message}`);
-								return { ok: false, subtype: "error", text: `authoring review seat prepare failed: ${message}`, fullText: `authoring review seat prepare failed: ${message}`, cost: 0, turns: 0 };
-							}
-							return step(role === "reviewer" ? "pr-review" : "pr-verify", prompt, seatCwd, {
-								attempt: pass,
-								parkSignalOverride: child,
-								executionOverride,
-							});
-						},
-						prompts: {
-							review: () => `${expandSkill("pr-review", "--authoring-loop")}\n\n${buildReviewDiffBlock(worktree!)}`,
-							judge: (candidates) => `${expandSkill("pr-verify", "--authoring-loop-judge")}\n\nTRUSTED_CANDIDATE_DATA\n${JSON.stringify(candidates)}\nEND_TRUSTED_CANDIDATE_DATA`,
-							revise: (survivors) => `${expandSkill("shakedown", shakedownCodeArgs)}\n\nThe Judge retained these blockers:\n${JSON.stringify(survivors)}`,
-						},
-					});
-				} finally {
-					for (const sha of preparedSeatShas) cleanupAuthoringReviewSeatsForSha(mainRepo, sha);
-				}
-			}
-			if (!loop) {
-				// loop is only skipped for resolved-proceed; narrow before reading audit fields.
-				if (existingEscalation.state !== "resolved-proceed") return parkExit("adversarial review produced no loop result")!;
-				reviewRecordMarkdown = `## Adversarial review escalation\n\nDecision **${existingEscalation.id}** was resolved **proceed** by ${existingEscalation.resolution.actor}.\n\nRationale: ${existingEscalation.resolution.rationale}\n\nReviewed commit: \`${reviewedSha}\`. Evidence fingerprint: \`${existingEscalation.escalation.evidenceFingerprint}\`.`;
-				shakedownResult = { ok: true, subtype: "success", text: "resolved-proceed", fullText: "resolved-proceed", cost: 0, turns: 0 };
-			} else {
-				cost += loop.cost;
-				const finalReviewedSha = getArtifactHeadSha(worktree!);
-				if (!finalReviewedSha) return parkExit("adversarial review could not bind final reviewed HEAD")!;
-				const reviewRunId = `${runIdBase}-${itemId}`;
-				const record: ReviewRecord = { schemaVersion: 1, runId: reviewRunId, itemId: itemId!, createdAt: new Date().toISOString(), blockingBar: "must-fix", result: loop };
-				const recordPath = writeReviewRecord(worktree!, record);
-				reviewRecordMarkdown = renderReviewRecord(record);
-				log(`review record → ${recordPath}`);
-				const reviewRecordSource = `.dev/review-records/${record.runId}.json`;
-				// Aggregate authoring-review provenance at reserved attempt 0 (seat step() calls
-				// use 1-indexed pass as attempt; effectManifestPath is `${step}-${attempt}.json`).
-				const seats: ReviewSeatIdentity[] = [
-					{ role: "author", seatId: "author", provider: authorIdentity.provider, ...(authorIdentity.model ? { model: authorIdentity.model } : {}) },
-					...policy.reviewers.map((slot) => ({
-						role: "reviewer" as const,
-						seatId: slot.id,
-						provider: slot.provider,
-						...(slot.provider === "codex" ? (slot.codexModel ? { model: slot.codexModel } : {}) : slot.model ? { model: slot.model } : {}),
-					})),
-					{
-						role: "judge",
-						seatId: policy.judge.id,
-						provider: policy.judge.provider,
-						...(policy.judge.provider === "codex" ? (policy.judge.codexModel ? { model: policy.judge.codexModel } : {}) : policy.judge.model ? { model: policy.judge.model } : {}),
-					},
-				];
-				const verdictEffect: ReviewVerdictEffect = {
-					kind: "review.Verdict",
-					itemId: itemId!,
-					reviewedSha: finalReviewedSha,
-					reviewRecordSource,
-					outcome: loop.outcome,
-					seats,
-				};
-				const reviewEffects: Effect[] = [verdictEffect];
-				if (loop.disagreement) {
-					const escalationEffect: ReviewEscalationEffect = {
-						kind: "review.Escalation",
-						itemId: itemId!,
-						reviewedSha: finalReviewedSha,
-						reviewRecordSource,
-						evidenceFingerprint: loop.disagreement.evidenceFingerprint,
-						hasSafetyBlocker: loop.disagreement.hasSafetyBlocker,
-					};
-					reviewEffects.push(escalationEffect);
-				}
-				const effectsCtx: EffectsContext = {
-					runId: reviewRunId,
-					itemId: itemId!,
-					step: "shakedown-code",
-					attempt: 0,
-					cwd: worktree!,
-					preSha: finalReviewedSha,
-				};
-				let escalationParkReason: string | undefined;
-				if (loop.disagreement) {
-					const escalation = {
-						kind: "review-escalation" as const,
-						itemId: itemId!,
-						step: "shakedown-code" as const,
-						reviewedSha: finalReviewedSha,
-						evidenceFingerprint: loop.disagreement.evidenceFingerprint,
-						reviewRecordSource,
-						hasSafetyBlocker: loop.disagreement.hasSafetyBlocker,
-						drivers: loop.disagreement.drivers.map((driver) => ({ ...driver, identity: { ...driver.identity, role: "reviewer" as const } })),
-					};
-					try {
-						// The durable safety action precedes effect attestation. A manifest write or
-						// dispatch failure below must never swallow the escalation or skip parking.
-						const written = await appendReviewEscalation(worktree!, escalation);
-						if (written.status !== "failed")
-							await opts.notifyDecision?.({
-								itemId,
-								decision: { fork: `Cross-model review split (${written.ids[0]})`, chosen: "human adjudication required", alternatives: "proceed or block" },
-								step: "shakedown-code",
-								source: escalation.reviewRecordSource,
-								logPath: opts.logPath ?? LOG_PATH,
-								escalation: { ...escalation, id: written.ids[0] },
-							});
-						const state = lookupReviewEscalation(worktree!, itemId!, finalReviewedSha);
-						if (written.status === "failed" || state.state !== "resolved-proceed" || escalation.hasSafetyBlocker) escalationParkReason = `adversarial review escalation ${written.status === "failed" ? "write-failed" : state.state}`;
-					} catch (error) {
-						log(`⚠ adversarial review escalation write failed: ${error instanceof Error ? error.message : String(error)}`);
-						return parkExit("adversarial review escalation write-failed")!;
-					}
-				}
-				if (!opts.dryRun) {
-					try {
-						writeEffectsManifest(effectsCtx, reviewEffects);
-						// Aggregate authoring-review uses reserved attempt 0; provider/model from the
-						// configured judge seat when present, else the shakedown-code step settings.
-						const reviewSettings = resolveStepSettings(CONFIG, profile, "shakedown-code");
-						const reviewProvider = policy.judge.provider;
-						const reviewModel = policy.judge.provider === "codex" ? (policy.judge.codexModel ?? "default") : (policy.judge.model ?? reviewSettings.model ?? "default");
-						const reviewEffectsResult = await dispatchStepEffects({
-							...effectsCtx,
-							roadmap,
-							log,
-							challenge: cycleChallenge,
-							provider: reviewProvider,
-							model: reviewModel,
-							observeGit: () => observeGitForReceipt(worktree!),
-						});
-						if (reviewEffectsResult.receipt) executionReceipts.push(reviewEffectsResult.receipt);
-					} catch (e) {
-						const code = e instanceof EffectsManifestError ? e.code : "effect_failed";
-						const message = e instanceof Error ? e.message : String(e);
-						const text = `${code}: ${message}`;
-						if (loop.disagreement) return parkExit(`shakedown-code effects failed after escalation: ${text}`)!;
-						return finish({ itemId, completed: false, cost, error: `shakedown-code effects failed: ${text}` });
-					}
-				}
-				if (escalationParkReason) return parkExit(escalationParkReason)!;
-				// A reviewer-split `dissent` already escalated + parked in the `loop.disagreement` block above.
-				// A Judge-ruled judgment-dissent (no disagreement, non-safety) keeps its pre-#244 posture:
-				// park only for direct-push; in PR mode ship with the dissent recorded (the PR is the veto).
-				if (loop.outcome === "budget" || loop.outcome === "hard-block" || (loop.outcome === "dissent" && opts.shipTarget.name === "direct-push")) return parkExit(`adversarial review ${loop.outcome}`)!;
-				shakedownResult = { ok: true, subtype: "success", text: loop.outcome, fullText: loop.outcome, cost: 0, turns: 0 };
-			}
+			if (outcome.kind === "terminal") return outcome.cycleResult;
+			shakedownResult = outcome.result;
+			reviewRecordMarkdown = outcome.reviewRecordMarkdown;
 		} else {
 			const selected = selectReviewers(assignment, driverCandidates("shakedown-code"), implementationAuthor, 1, available);
 			if (!selected.ok) return finish({ itemId, completed: false, cost, error: `shakedown-code assignment failed: ${selected.reason}` });

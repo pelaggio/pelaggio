@@ -39,6 +39,7 @@ You are checked out at the PR head with full history; `origin/main` is the merge
 ## Mode selection
 
 If the `Arguments:` line contains `--document`, run **Document mode** below.
+If it contains `--plan-authoring-loop`, run **Plan-authoring-loop mode** below.
 If it contains `--authoring-loop`, run **Authoring-loop mode** below.
 If it contains `--red-team`, run **Red-team mode** below.
 Otherwise run **Standard mode**. Both modes emit the same versioned report.
@@ -64,6 +65,41 @@ Do **not** run the branch-diff inspection protocol. Instead:
 Emit the same schema-v3 `AUTHORING_REVIEW_FINDINGS` block as Authoring-loop mode (evidence only; the
 harness owns effective class). A finding's `path` should be the document path when it localizes to a
 place in the document. Do not emit the CI v1 block.
+
+## Plan-authoring-loop mode
+
+This is a cold, read-only review of a **committed plan** at the plan gate (pre-implement). It is
+**not** a branch-implementation review and must **not** run the code authoring-loop's
+`git diff` / `pnpm check` protocol — the artifact is a plan, not a code change.
+
+The plan is injected under a `## DOCUMENT UNDER REVIEW` heading with its `path` and `sha256`. That
+block is the authoritative artifact for this pass. You may also `Read` the path on disk and open any
+requirements/design docs or source APIs the plan names (Read tools only). Do not edit, stage, or
+commit anything.
+
+1. Read the full `## DOCUMENT UNDER REVIEW` block. If truncated, open the path for the remainder.
+2. Read the item requirements already supplied in the prompt context (when present) and any ADRs/docs
+   the plan cites — do not depend on network/roadmap CLI access.
+3. Verify APIs the plan assumes: for every function/type/component it calls or extends, open the
+   actual source and confirm signatures match.
+4. Enumerate candidates against the three plan classes below, then refute weak ones against the plan
+   and source. Keep only concrete, evidence-backed findings. Avoid editorial/nit findings.
+
+**Plan finding classes** (emit evidence only; the harness owns effective class). Use these exact
+`ruleId` values for the judgment-band plan classes:
+
+| class | ruleId | meaning |
+| --- | --- | --- |
+| `approach-flaw` | `pelaggio/plan/approach-flaw` | The proposed design cannot correctly deliver the stated outcome or conflicts with a verified API/invariant. |
+| `scope-mismatch` | `pelaggio/plan/scope-mismatch` | Required behavior is omitted, or the plan adds material work outside the item. |
+| `missing-risk` | `pelaggio/plan/missing-risk` | A material failure mode, migration/compatibility concern, or verification gap is absent. |
+
+For true safety issues (secrets, destructive ops, supply-chain, containment, unsafe landing,
+correctness regression), use existing safety evidence (`ruleId` / CWE) — the ADR-0016 safety floor
+still applies. Do **not** invent parallel class tokens. Unknown/ambiguous evidence defaults to safety.
+
+Emit the same schema-v3 `AUTHORING_REVIEW_FINDINGS` block as Authoring-loop mode. Prefer the plan path
+for `path` when a finding localizes to the plan. Do not emit the CI v1 block.
 
 ## Authoring-loop mode
 

@@ -111,6 +111,10 @@ export const CLASSIFICATION_RULES: readonly ClassificationRule[] = [
 	{ id: "rule-judgment-style", signal: "ruleId", match: "pelaggio/judgment/style", class: "judgment" },
 	{ id: "rule-judgment-docs", signal: "ruleId", match: "pelaggio/judgment/docs", class: "judgment" },
 	{ id: "rule-judgment-maintainability", signal: "ruleId", match: "pelaggio/judgment/maintainability", class: "judgment" },
+	// exact ruleId → plan-stage judgment classes (#277)
+	{ id: "rule-plan-approach-flaw", signal: "ruleId", match: "pelaggio/plan/approach-flaw", class: "approach-flaw" },
+	{ id: "rule-plan-scope-mismatch", signal: "ruleId", match: "pelaggio/plan/scope-mismatch", class: "scope-mismatch" },
+	{ id: "rule-plan-missing-risk", signal: "ruleId", match: "pelaggio/plan/missing-risk", class: "missing-risk" },
 	// path/diff-shape signals
 	{ id: "path-workflow", signal: "path", match: "workflow", class: "security-and-secrets" },
 	{ id: "path-lifecycle", signal: "path", match: "lifecycle-manifest", class: "supply-chain/integrity" },
@@ -235,19 +239,21 @@ export function classifyAuthoringReviewFinding(raw: RawAuthoringReviewFinding, c
 
 	if (judgmentMatches.length > 0) {
 		// Only judgment-tier rules matched. classHint as a safety class elevates (safety dominates).
+		const winning = judgmentMatches[0];
 		if (raw.classHint !== undefined && isSafetyClass(raw.classHint, taxonomy)) {
 			return {
 				kind: "matched",
 				class: raw.classHint,
 				signal: "classHint-elevation",
-				ruleId: judgmentMatches[0].rule.id,
+				ruleId: winning.rule.id,
 			};
 		}
+		// Use the matched rule's class (named judgment tokens + plan classes), not a hard-coded "judgment".
 		return {
 			kind: "matched",
-			class: "judgment",
+			class: winning.class,
 			signal: "ruleId",
-			ruleId: judgmentMatches[0].rule.id,
+			ruleId: winning.rule.id,
 		};
 	}
 
@@ -504,7 +510,8 @@ export function parseJudgeReport(text: string): JudgeReport {
 			const base = parseVerificationDecision(verification, index);
 			if (value.class !== undefined && (typeof value.class !== "string" || !isWellFormedClassId(value.class))) throw new ReviewFindingsParseError(`Judge decision ${index + 1} has an invalid class`);
 			if (value.ruling !== undefined && !JUDGE_RULINGS.includes(value.ruling as JudgeRuling)) throw new ReviewFindingsParseError(`Judge decision ${index + 1} has an invalid ruling`);
-			if (value.ruling === "judgment-dissent" && value.class !== undefined && value.class !== "judgment") throw new ReviewFindingsParseError("judgment-dissent is only valid for judgment findings");
+			// judgment-dissent is valid for any judgment-band class (including plan classes), never safety.
+			if (value.ruling === "judgment-dissent" && value.class !== undefined && isSafetyClass(value.class)) throw new ReviewFindingsParseError("judgment-dissent is only valid for judgment findings");
 			if (base.decision === "survives" && value.ruling === undefined) throw new ReviewFindingsParseError(`surviving Judge decision ${base.candidateId} requires a ruling`);
 			return { ...base, ...(value.class !== undefined ? { class: value.class as ReviewFindingClass } : {}), ...(value.ruling ? { ruling: value.ruling as JudgeRuling } : {}) };
 		}),

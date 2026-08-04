@@ -27,9 +27,9 @@ Pelaggio's permission model is a manifest-backed description of current capabili
 |---|---|---|---|---|
 | `pick` | Reads roadmap, claims an item, creates branch/worktree. | Roadmap adapter mutation when configured. | Roadmap source is the configured adapter. | `TC-006`, `TC-015` |
 | `plan` | Reads item context and writes a plan. | May publish plan through the configured adapter. | Plan text can contain untrusted issue/PR content. | `TC-006`, `TC-015` |
-| `shakedown-plan` | Reads the plan/source context and may revise the plan before implement. | None by default. | Same untrusted-input model as other review steps. | `TC-015` |
+| `shakedown-plan` | Reads the plan/source context and may revise the plan before implement. When `review.authoring.enabled`, runs the cold N-reviewer + Judge panel against the committed plan; plan-author revision seat may edit the plan only. | None by default. | Same untrusted-input model as other review steps; plan mutation ends before implement. Auth inherits execution-context posture (local subs/keys; CI/unattended requires metered/org keys). | `TC-015` |
 | `implement` | Writes target files and runs commands in the worktree. | None by default. | `docs/plans/` is read-only; confinement audits main plus siblings by default and applies provider-specific main protection in dirty-main mode. | `TC-011`, `TC-015` |
-| `shakedown-code` | Reviews and fixes code in the worktree. | None by default. | Same worktree and injection limits as implement. | `TC-011`, `TC-015` |
+| `shakedown-code` | Reviews and fixes code in the worktree. When `review.authoring.enabled`, runs the same panel against the implementation diff with stage-distinct provenance. | None by default. | Same worktree and injection limits as implement. Auth posture as above. | `TC-011`, `TC-015` |
 | `ship` | Pushes branch or lands work according to `ship.target`. | Opens PR by default; direct push/auto-merge only by explicit opt-in. | Auto-merge relies on external branch protection today. | `TC-003`, `TC-012`, `TC-013` |
 
 ## Non-Pipeline Actions

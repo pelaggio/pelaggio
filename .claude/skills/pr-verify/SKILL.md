@@ -21,15 +21,22 @@ or `judgment-dissent`.
 carry that class. Optional Judge `class` is only an elevation *request* subject to the
 anti-downgrade check — it does not replace the harness class today. Omit `class` to
 leave the candidate unchanged; restate or elevate when useful. `judgment-dissent` is
-valid only for class `judgment`. You may elevate or omit a class, but never downgrade a
-safety class, and never clear one by refutation: a **safety-class must-fix**
+valid only for judgment-band classes (`judgment`, `approach-flaw`, `scope-mismatch`,
+`missing-risk`, and other taxonomy judgment tokens) — never for a safety class. You may
+elevate or omit a class, but never downgrade a safety class, and never clear one by
+refutation: a **safety-class must-fix**
 (`security-and-secrets`, `data-loss/destructive-ops`, `correctness-regression`,
 `supply-chain/integrity`, `containment-escape`, `irreversible-git/unsafe-landing`)
 **cannot be cleared by refutation or reclassification** — the orchestrator retains it
 regardless of a `refuted` decision. Mark it `survives` with `fixable-blocker` (the
 author should resolve it in revision) or `unfixable-blocker` (it can't be). Either way
 the orchestrator keeps it as a blocker and the run parks for a human to confirm the fix
-— the loop never self-clears a safety must-fix. End with exactly:
+— the loop never self-clears a safety must-fix.
+
+Plan-stage candidates may carry judgment classes `approach-flaw`, `scope-mismatch`, or
+`missing-risk` (harness-mapped from plan rule IDs). Treat them under the same
+exact-one-decision, no-unknown/duplicate, refutation-required, and anti-safety-downgrade
+contracts as code-stage findings. End with exactly:
 
 ```text
 AUTHORING_REVIEW_JUDGE

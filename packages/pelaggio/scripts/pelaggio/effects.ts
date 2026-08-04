@@ -7,7 +7,7 @@ import { enqueueReviewRequest, type NewReviewRequest } from "./review-request-qu
 import type { RoadmapSource } from "./roadmap/index.js";
 import { SHIP_TARGET_NAMES } from "./ship/index.js";
 import { runShipPrEffects, type ShipPrEffectsResult } from "./ship/pr-effects.js";
-import type { ExecutionReceiptDescriptor, ProviderName, ReviewOutcome, Step } from "./types.js";
+import type { AuthoringReviewStage, ExecutionReceiptDescriptor, ProviderName, ReviewOutcome, Step } from "./types.js";
 
 export const EFFECTS_SCHEMA_VERSION = 1;
 
@@ -38,6 +38,8 @@ export interface ReviewSeatIdentity {
 export interface ReviewVerdictEffect {
 	kind: "review.Verdict";
 	itemId: string;
+	/** Stage discriminator so plan/code verdicts cannot be attributed interchangeably. */
+	stage: AuthoringReviewStage;
 	reviewedSha: string;
 	reviewRecordSource: string;
 	outcome: ReviewOutcome;
@@ -51,6 +53,8 @@ export interface ReviewVerdictEffect {
 export interface ReviewEscalationEffect {
 	kind: "review.Escalation";
 	itemId: string;
+	/** Stage discriminator so plan/code escalations cannot be attributed interchangeably. */
+	stage: AuthoringReviewStage;
 	reviewedSha: string;
 	reviewRecordSource: string;
 	evidenceFingerprint: string;
@@ -442,8 +446,19 @@ function validateReviewSeat(seat: unknown, label: string): ReviewSeatIdentity {
 	};
 }
 
+const AUTHORING_STAGES: readonly AuthoringReviewStage[] = ["plan", "code"];
+
+function validateAuthoringStage(value: unknown, label: string): AuthoringReviewStage {
+	// Missing stage is rejected — never default to "code" (would launder plan provenance).
+	if (!(AUTHORING_STAGES as readonly string[]).includes(value as string)) {
+		throw new EffectsManifestError("invalid_manifest", `${label} stage must be plan|code`);
+	}
+	return value as AuthoringReviewStage;
+}
+
 function validateReviewVerdictEffect(effect: Record<string, unknown>): ReviewVerdictEffect {
 	if (!isNonEmptyString(effect.itemId)) throw new EffectsManifestError("invalid_manifest", "review.Verdict itemId must be a non-empty string");
+	const stage = validateAuthoringStage(effect.stage, "review.Verdict");
 	if (!isNonEmptyString(effect.reviewedSha) || !SHA_RE.test(effect.reviewedSha)) throw new EffectsManifestError("invalid_manifest", "review.Verdict reviewedSha must be a git SHA");
 	if (!isNonEmptyString(effect.reviewRecordSource)) throw new EffectsManifestError("invalid_manifest", "review.Verdict reviewRecordSource must be a non-empty string");
 	if (!(REVIEW_OUTCOMES as readonly string[]).includes(effect.outcome as string)) throw new EffectsManifestError("invalid_manifest", "review.Verdict outcome must be a known ReviewOutcome");
@@ -452,6 +467,7 @@ function validateReviewVerdictEffect(effect: Record<string, unknown>): ReviewVer
 	return {
 		kind: "review.Verdict",
 		itemId: effect.itemId,
+		stage,
 		reviewedSha: effect.reviewedSha,
 		reviewRecordSource: effect.reviewRecordSource,
 		outcome: effect.outcome as ReviewOutcome,
@@ -461,6 +477,7 @@ function validateReviewVerdictEffect(effect: Record<string, unknown>): ReviewVer
 
 function validateReviewEscalationEffect(effect: Record<string, unknown>): ReviewEscalationEffect {
 	if (!isNonEmptyString(effect.itemId)) throw new EffectsManifestError("invalid_manifest", "review.Escalation itemId must be a non-empty string");
+	const stage = validateAuthoringStage(effect.stage, "review.Escalation");
 	if (!isNonEmptyString(effect.reviewedSha) || !SHA_RE.test(effect.reviewedSha)) throw new EffectsManifestError("invalid_manifest", "review.Escalation reviewedSha must be a git SHA");
 	if (!isNonEmptyString(effect.reviewRecordSource)) throw new EffectsManifestError("invalid_manifest", "review.Escalation reviewRecordSource must be a non-empty string");
 	if (!isNonEmptyString(effect.evidenceFingerprint) || !FINGERPRINT_RE.test(effect.evidenceFingerprint)) {
@@ -470,6 +487,7 @@ function validateReviewEscalationEffect(effect: Record<string, unknown>): Review
 	return {
 		kind: "review.Escalation",
 		itemId: effect.itemId,
+		stage,
 		reviewedSha: effect.reviewedSha,
 		reviewRecordSource: effect.reviewRecordSource,
 		evidenceFingerprint: effect.evidenceFingerprint,
