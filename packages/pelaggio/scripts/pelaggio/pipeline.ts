@@ -3067,6 +3067,10 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					break;
 				}
 				pending = batch.filter((r) => r.error === "parked" && r.itemId).map((r) => r.itemId!);
+				// #387: an auto-resumed cycle can ship a PR; drain its enqueued review
+				// request like the worker-pool and explicit --resume paths do, or the
+				// process can exit 0 with the required review status absent.
+				if (doReviewDrain && !parkSignal.parked) await runPostCycleReviewDrain();
 			}
 
 			if (round >= MAX_RESUME_ROUNDS && parkSignal.parked) {
