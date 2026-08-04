@@ -5,13 +5,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it, mock } from "node:test";
 import { REVIEW_CONFIG, WORKTREE_PREFIX } from "../config.js";
+import { appendReviewEscalation, resolveDecision, reviewEscalationId } from "../decisions.js";
 import { dispatchStepEffects, EffectsManifestError, writeEffectsManifest } from "../effects.js";
 import { FifoPolicy } from "../flow-policy.js";
 import { type RunStepFn, runOrchestrator, runPipeline } from "../pipeline.js";
 import { shipBodyFile } from "../ship/decision.js";
 import type { ShipBookkeepingResult } from "../ship/index.js";
 import { getShipTarget } from "../ship/index.js";
-import type { Flags, ParkSignal, PipelineOpts } from "../types.js";
+import type { Flags, ParkSignal, PipelineOpts, ReviewEscalation } from "../types.js";
 import {
 	allCommitMessages,
 	createMockRunPipeline,
@@ -3319,6 +3320,104 @@ describe("runPipeline — authoring review capability seating + effects (#337)",
 
 		assert.equal(result.completed, true, `expected completed cycle; error=${result.error}`);
 		assert.ok(!manifests.some((m) => m.step === "shakedown-code" && m.attempt === 0));
+	});
+});
+
+describe("runPipeline — resolved escalation acknowledgement", () => {
+	async function runResolvedEscalation(disposition: "proceed" | "block", acknowledgement?: string) {
+		const saved = {
+			enabled: REVIEW_CONFIG.authoring.enabled,
+			reviewers: REVIEW_CONFIG.authoring.reviewers.map((seat) => ({ ...seat })),
+			judge: { ...REVIEW_CONFIG.authoring.judge },
+		};
+		REVIEW_CONFIG.authoring.enabled = true;
+		REVIEW_CONFIG.authoring.reviewers = [
+			{ id: "codex", provider: "codex" },
+			{ id: "grok", provider: "grok" },
+		];
+		REVIEW_CONFIG.authoring.judge = { id: "judge", provider: "claude" };
+
+		const worktree = makeTempGitRepo();
+		writeFileSync(join(worktree, "seed.txt"), "seed");
+		execSync("git add -A && git commit -q -m seed", { cwd: worktree });
+		const reviewedSha = execSync("git rev-parse HEAD", { cwd: worktree, encoding: "utf8" }).trim();
+		const evidenceFingerprint = "e".repeat(64);
+		const escalation: ReviewEscalation = {
+			kind: "review-escalation",
+			itemId: "TOOL-99",
+			step: "shakedown-code",
+			reviewedSha,
+			evidenceFingerprint,
+			reviewRecordSource: ".dev/review-records/forged.json",
+			hasSafetyBlocker: false,
+			drivers: [],
+		};
+		await appendReviewEscalation(worktree, escalation);
+		await resolveDecision(worktree, reviewEscalationId(escalation), { disposition, actor: "forged", rationale: "committed record" });
+
+		const parkSignal = makeParkSignal();
+		const { runStep, calls } = createMockRunStep(
+			{
+				implement: { ok: true },
+				ship: {
+					ok: true,
+					text: "ship-merged: TOOL-99",
+					sideEffect: (cwd) => {
+						execSync("git checkout -q main", { cwd });
+						execSync("git merge -q --no-ff feat/tool-99", { cwd });
+						execSync("git checkout -q feat/tool-99", { cwd });
+					},
+				},
+			},
+			parkSignal,
+		);
+
+		try {
+			const result = await runPipeline(
+				{ ...baseOpts(worktree), startFrom: "implement" },
+				parkSignal,
+				{ ...baseFlags, resume: "TOOL-99", ...(acknowledgement ? { "acknowledge-escalation": acknowledgement } : {}) },
+				{
+					runStep,
+					mainRepo: worktree,
+					listWorktrees: () => [worktree],
+					appendLog: () => {},
+					runShipBookkeeping: noopBookkeeping,
+					writeEffectsManifest: () => {},
+					dispatchStepEffects: async () => ({}),
+				},
+			);
+			return { result, calls, evidenceFingerprint };
+		} finally {
+			REVIEW_CONFIG.authoring.enabled = saved.enabled;
+			REVIEW_CONFIG.authoring.reviewers = saved.reviewers;
+			REVIEW_CONFIG.authoring.judge = saved.judge;
+		}
+	}
+
+	it("parks a committed forged resolved-proceed without acknowledgement", async () => {
+		const { result, calls } = await runResolvedEscalation("proceed");
+		assert.equal(result.error, "parked");
+		assert.ok(!calls.some((call) => call.step === "ship"));
+	});
+
+	it("parks resolved-proceed with the wrong fingerprint", async () => {
+		const { result, calls } = await runResolvedEscalation("proceed", "f".repeat(64));
+		assert.equal(result.error, "parked");
+		assert.ok(!calls.some((call) => call.step === "ship"));
+	});
+
+	it("honors resolved-proceed with the matching fingerprint", async () => {
+		const fingerprint = "e".repeat(64);
+		const { result, calls } = await runResolvedEscalation("proceed", fingerprint);
+		assert.equal(result.completed, true, result.error);
+		assert.ok(calls.some((call) => call.step === "ship"));
+	});
+
+	it("never honors resolved-block regardless of acknowledgement", async () => {
+		const { result, calls } = await runResolvedEscalation("block", "e".repeat(64));
+		assert.equal(result.error, "parked");
+		assert.ok(!calls.some((call) => call.step === "ship"));
 	});
 });
 

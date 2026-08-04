@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { describe, it } from "node:test";
@@ -70,6 +70,18 @@ describe("decision log authority", () => {
 
 	it("archive-resolved is a no-op when no authority directory exists", async () => {
 		assert.equal(await archiveResolvedDecisions(repo(), new Date("2026-03-15T00:00:00Z")), 0);
+	});
+
+	it("refuses to archive through a pre-planted archive-directory symlink", async () => {
+		const path = repo();
+		seed(path);
+		const written = await appendDecisions(path, appendInput());
+		await resolveDecision(path, written.ids[0]!, { now: new Date("2026-02-01T00:00:00Z") });
+		const outside = mkdtempSync(resolve(tmpdir(), "pelaggio-decisions-outside-"));
+		symlinkSync(outside, resolve(path, "docs/decision-log/archive"), "dir");
+
+		await assert.rejects(archiveResolvedDecisions(path, new Date("2026-03-15T00:00:00Z")), /archive directory escapes the repo/);
+		assert.equal(existsSync(resolve(outside, "85.md")), false);
 	});
 
 	it("keeps identical occurrences distinct", async () => {

@@ -28,6 +28,13 @@ describe("parseCli", () => {
 		assert.equal(intent.flags.from, "implement");
 	});
 
+	it("parses the resume escalation acknowledgement", () => {
+		const intent = parseCli(["--resume", "X", "--acknowledge-escalation", "a".repeat(64)]);
+		assert.equal(intent.kind, "run");
+		if (intent.kind !== "run") return;
+		assert.equal(intent.flags["acknowledge-escalation"], "a".repeat(64));
+	});
+
 	it("parses `--review-findings <path>` (issue #60)", () => {
 		const intent = parseCli(["--resume", "X", "--from", "implement", "--review-findings", "p.md"]);
 		assert.equal(intent.kind, "run");

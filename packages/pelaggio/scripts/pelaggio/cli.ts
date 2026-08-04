@@ -8,6 +8,7 @@ const OPTIONS = {
 	parallel: { type: "string", default: "1" },
 	item: { type: "string" },
 	resume: { type: "string" },
+	"acknowledge-escalation": { type: "string" },
 	from: { type: "string" },
 	// Resume-only: path to a file of PR-review findings injected into the implement step
 	// (issue #60). No default → unset stays `undefined`.

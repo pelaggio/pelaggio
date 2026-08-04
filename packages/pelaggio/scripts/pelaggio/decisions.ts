@@ -150,17 +150,22 @@ const escalationMarker = (value: { escalation: ReviewEscalation; resolution?: Re
 
 function decisionLogDir(repo: string): string {
 	const dir = resolve(repo, "docs", DECISION_LOG_DIR);
-	// Leaf-file symlink checks are insufficient: if docs/, the decision-log dir, or
-	// the archive subdir is itself a symlink, Node follows it and a harness write
-	// lands outside the worktree. Realpath-contain the whole chain under the repo.
-	try {
-		const real = realpathSync(dir);
-		const repoReal = realpathSync(repo);
-		if (real !== repoReal && !real.startsWith(`${repoReal}/`)) throw new Error(`decision-log directory escapes the repo (symlink?): ${dir} -> ${real}`);
-	} catch (e) {
-		if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
-	}
+	requireExistingAncestorInRepo(repo, dir, "decision-log directory");
 	return dir;
+}
+
+function requireExistingAncestorInRepo(repo: string, target: string, label: string): void {
+	const repoReal = realpathSync(repo);
+	let ancestor = target;
+	while (!existsSync(ancestor)) {
+		const parent = dirname(ancestor);
+		if (parent === ancestor) throw new Error(`${label} has no existing ancestor: ${target}`);
+		ancestor = parent;
+	}
+	const ancestorReal = realpathSync(ancestor);
+	if (ancestorReal !== repoReal && !ancestorReal.startsWith(`${repoReal}/`)) {
+		throw new Error(`${label} escapes the repo (symlink?): ${ancestor} -> ${ancestorReal}`);
+	}
 }
 
 function authorityPath(repo: string, owner: string): string {
@@ -177,7 +182,9 @@ function authorityPath(repo: string, owner: string): string {
 }
 
 function archivePath(repo: string, owner: string): string {
-	const path = resolve(decisionLogDir(repo), "archive", `${validateOwner(owner)}.md`);
+	const archiveDir = resolve(decisionLogDir(repo), "archive");
+	requireExistingAncestorInRepo(repo, archiveDir, "decision-log archive directory");
+	const path = resolve(archiveDir, `${validateOwner(owner)}.md`);
 	try {
 		if (lstatSync(path).isSymbolicLink()) throw new Error(`decision-log archive is a symlink, refusing: ${path}`);
 	} catch (e) {

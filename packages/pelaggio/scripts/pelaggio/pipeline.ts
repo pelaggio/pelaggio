@@ -1449,6 +1449,11 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			if (!reviewedSha) return parkExit("adversarial review could not bind current HEAD")!;
 			const existingEscalation = lookupReviewEscalation(worktree!, itemId!, reviewedSha);
 			if (existingEscalation.state === "active" || existingEscalation.state === "resolved-block" || existingEscalation.state === "invalid") return parkExit(`adversarial review escalation ${existingEscalation.state}`)!;
+			// A committed resolution remains untrusted policy input until an operator binds
+			// this resume to its evidence. Issue #419 owns the successor authority design.
+			if (existingEscalation.state === "resolved-proceed" && flags["acknowledge-escalation"] !== existingEscalation.escalation.evidenceFingerprint) {
+				return parkExit(`adversarial review escalation active; after reviewing, re-run with --resume ${itemId} --acknowledge-escalation ${existingEscalation.escalation.evidenceFingerprint}`)!;
+			}
 			if (existingEscalation.state === "resolved-proceed" && existingEscalation.escalation.hasSafetyBlocker) return parkExit("adversarial review safety blocker")!;
 			// Capability-aware fixed-seat resolution (#337): fill configured seats via settings
 			// inheritance + capability matcher; fail before seat worktrees when ineligible.
@@ -2151,6 +2156,11 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		// it is meaningless without a resume (a fresh --item run implements from the plan, not findings).
 		if (flags["review-findings"] !== undefined && !flags.resume) {
 			console.error("--review-findings <path> requires --resume <id> (it feeds the implement step revision input)");
+			return { exitCode: 2, results };
+		}
+
+		if (flags["acknowledge-escalation"] !== undefined && !flags.resume) {
+			console.error("--acknowledge-escalation <fingerprint> requires --resume <id>");
 			return { exitCode: 2, results };
 		}
 

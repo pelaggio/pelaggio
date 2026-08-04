@@ -139,6 +139,15 @@ describe("runOrchestrator — CI resume + review-findings (issue #60)", () => {
 		assert.equal(exitCode, 2);
 		assert.equal(calls.length, 0);
 	});
+
+	it("--acknowledge-escalation without --resume exits 2 without invoking runPipeline", async (t) => {
+		const error = t.mock.method(console, "error", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({ default: { completed: true } });
+		const { exitCode } = await runOrchestrator({ ...baseFlags, item: "X-1", "acknowledge-escalation": "a".repeat(64) }, { runPipeline });
+		assert.equal(exitCode, 2);
+		assert.equal(calls.length, 0);
+		assert.match(String(error.mock.calls[0]?.arguments[0]), /requires --resume/);
+	});
 });
 
 describe("runOrchestrator — invalid target", () => {

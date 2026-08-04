@@ -492,6 +492,8 @@ export interface Flags {
 	parallel: string;
 	item?: string;
 	resume?: string;
+	/** Resume-only acknowledgement of a reviewed escalation evidence fingerprint. */
+	"acknowledge-escalation"?: string;
 	/** Resume-only: override the auto-detected restart step. Validated against STEPS in runOrchestrator. */
 	from?: string;
 	/** Resume-only: path to a file of PR-review findings injected into the implement step as
