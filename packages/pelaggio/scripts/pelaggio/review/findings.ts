@@ -442,9 +442,14 @@ export function hasAuthoringReviewFindingsBlock(text: string): boolean {
  * its required (driver × label) cell uncompleted, and the all-pass gate cannot reach
  * consensus-pass with an uncompleted cell. Safety comes from cell completion, not from scavenging
  * a transcript.
+ *
+ * Reads `assistantText`, not `text`. `text` is the FINAL chunk on some providers — opencode
+ * reassigns it per streamed text part — so a block split across parts would be truncated to an
+ * invalid tail and fail-close every affected seat. `assistantText` accumulates every model-authored
+ * chunk in order and carries no tool data on any provider.
  */
-export function modelAuthoredText(result: { text?: string }): string {
-	return result.text ?? "";
+export function modelAuthoredText(result: { assistantText?: string; text?: string }): string {
+	return result.assistantText ?? result.text ?? "";
 }
 
 /**

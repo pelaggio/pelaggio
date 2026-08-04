@@ -308,6 +308,9 @@ export function buildGrokStepResult(name: Step, updates: JsonObject[], exitInfo:
 			subtype,
 			text,
 			fullText,
+			// grok's `text` accumulates agent_message chunks only — no tool data — so it is the
+			// assistant text verbatim.
+			assistantText: text,
 			cost,
 			costEstimated: true,
 			turns,
@@ -367,7 +370,7 @@ export const runStep: StepProvider["runStep"] = async (name, prompt, opts, emit)
 		const message = "Grok sandbox requires Landlock, but this Linux kernel does not expose it; set providers.grok.allow-unsandboxed-fallback: true only for a supervised run with an external containment boundary";
 		emit({ type: "sdk_error", message });
 		emit({ type: "done", ok: false, subtype: "error_confinement", cost: 0, turns: 0, elapsed: Date.now() - t0 });
-		return { ok: false, subtype: "error_confinement", text: message, fullText: "", cost: 0, costEstimated: true, turns: 0 };
+		return { ok: false, subtype: "error_confinement", text: message, fullText: "", assistantText: "", cost: 0, costEstimated: true, turns: 0 };
 	}
 	if (sandbox) {
 		try {
@@ -376,7 +379,7 @@ export const runStep: StepProvider["runStep"] = async (name, prompt, opts, emit)
 			const message = `Grok sandbox profile preparation failed: ${error instanceof Error ? error.message : String(error)}`;
 			emit({ type: "sdk_error", message });
 			emit({ type: "done", ok: false, subtype: "error_confinement", cost: 0, turns: 0, elapsed: Date.now() - t0 });
-			return { ok: false, subtype: "error_confinement", text: message, fullText: "", cost: 0, costEstimated: true, turns: 0 };
+			return { ok: false, subtype: "error_confinement", text: message, fullText: "", assistantText: "", cost: 0, costEstimated: true, turns: 0 };
 		}
 	} else {
 		emit({

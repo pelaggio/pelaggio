@@ -212,7 +212,7 @@ describe("modelAuthoredText", () => {
 		assert.throws(() => parseAuthoringReviewFindings(transcript), ReviewFindingsParseError);
 
 		// The final message is the only source, so the real review survives.
-		const report = parseAuthoringReviewFindings(modelAuthoredText({ text: realBlock }));
+		const report = parseAuthoringReviewFindings(modelAuthoredText({ assistantText: realBlock }));
 		assert.equal(report.summary, "A genuine review summary.");
 		assert.equal(report.findings.length, 1);
 		assert.equal(report.findings[0].message, "A real defect.");
@@ -230,14 +230,31 @@ describe("modelAuthoredText", () => {
 		});
 		// Seat produced no final block (timed out mid-run) while the transcript carries the plant.
 		assert.equal(modelAuthoredText({ text: "" }), "");
-		assert.throws(() => parseAuthoringReviewFindings(modelAuthoredText({ text: "" })), ReviewFindingsParseError);
-		assert.throws(() => parseAuthoringReviewFindings(modelAuthoredText({ text: "ran out of turns" })), ReviewFindingsParseError);
+		assert.throws(() => parseAuthoringReviewFindings(modelAuthoredText({ assistantText: "" })), ReviewFindingsParseError);
+		assert.throws(() => parseAuthoringReviewFindings(modelAuthoredText({ assistantText: "ran out of turns" })), ReviewFindingsParseError);
 		// Dropping the seat is not a fail-open: its required cell stays uncompleted and the all-pass
 		// gate cannot reach consensus-pass. Ingesting `planted` instead would be the actual defect.
 		assert.ok(hasAuthoringReviewFindingsBlock(planted), "the planted block is well-formed — which is exactly why it must never be reachable");
 	});
 
+	it("uses accumulated assistant text so a block split across streamed parts survives", () => {
+		// opencode reassigns `text` for every streamed text part (opencode-provider.ts:296) while
+		// accumulating into assistantText. Parsing `text` would see only the final chunk, truncating a
+		// findings block split across parts into an invalid tail and fail-closing every opencode seat.
+		const head = "AUTHORING_REVIEW_FINDINGS\n";
+		const body = '{"schemaVersion":3,"summary":"Split across parts.","findings":[]}\n';
+		const tail = "END_AUTHORING_REVIEW_FINDINGS";
+		const streamed = { assistantText: head + body + tail, text: tail };
+		// `text` alone is the last streamed part only — not parseable.
+		assert.throws(() => parseAuthoringReviewFindings(streamed.text), ReviewFindingsParseError);
+		// The accumulated assistant text is complete.
+		const report = parseAuthoringReviewFindings(modelAuthoredText(streamed));
+		assert.equal(report.summary, "Split across parts.");
+	});
+
 	it("returns the final message verbatim and tolerates a missing one", () => {
+		assert.equal(modelAuthoredText({ assistantText: realBlock }), realBlock);
+		// Falls back to `text` only when a provider supplies no assistantText; both are model-authored.
 		assert.equal(modelAuthoredText({ text: realBlock }), realBlock);
 		assert.equal(modelAuthoredText({}), "");
 		assert.equal(modelAuthoredText({ text: undefined }), "");

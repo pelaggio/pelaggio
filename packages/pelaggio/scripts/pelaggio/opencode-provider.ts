@@ -369,6 +369,7 @@ export function buildOpenCodeStepResult(name: Step, events: JsonObject[], exitIn
 			subtype,
 			text,
 			fullText,
+			assistantText,
 			cost,
 			costEstimated: true,
 			turns,

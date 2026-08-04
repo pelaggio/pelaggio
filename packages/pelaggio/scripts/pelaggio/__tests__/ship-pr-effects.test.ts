@@ -24,7 +24,7 @@ function decision(over: Partial<ShipDecisionEffect> = {}): ShipDecisionEffect {
 }
 
 function step(text: string): StepResult {
-	return { ok: true, subtype: "success", text, fullText: "", cost: 0, turns: 0 };
+	return { ok: true, subtype: "success", text, fullText: "", assistantText: text, cost: 0, turns: 0 };
 }
 
 function makeExec(opts: { dirty?: boolean; branch?: string; deliverable?: string; rejectFirstPush?: boolean } = {}): { exec: (cmd: string, cwd: string) => string; calls: string[] } {
