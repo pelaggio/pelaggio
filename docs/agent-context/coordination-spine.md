@@ -10,10 +10,12 @@ land, or they get built on prose-scrape and inherit its non-determinism.
 This doc is the durable home for the *why*. The one-line invariants at the
 bottom mirror to `AGENTS.md` when the implementing item ships.
 
-**Update (2026-07):** the substrate question is decided — pelaggio adopts Beads
-(`bd`) as the work store and landing primitive (see *Landscape and the chosen
-substrate* below). Chartered as #181 (adapter) with the flow items re-pointed onto
-it: #171 (FlowPolicy over `bd ready`), #174 (landing queue on `bd merge-slot`/
+**Update (2026-07, amended by ADR-0025 2026-08):** the substrate question is
+decided — pelaggio adopts Beads (`bd`) as the work store (see *Landscape and the
+chosen substrate* below). The LANDING primitive is the harness's git ref
+compare-and-swap (ADR-0025); `bd merge-slot` is only an optional ordering layer
+above that fence. Chartered as #181 (adapter) with the flow items re-pointed onto
+it: #171 (FlowPolicy over `bd ready`), #174 (landing discipline above the CAS fence, optionally ordered by `bd merge-slot`/
 `gate`), #173 (write-sets — the one layer with no Beads analog, stays pelaggio's).
 
 ## The question this answers
@@ -103,8 +105,10 @@ agent-native issue tracker with a deterministic `--json`-everywhere CLI and a
 code-based ready-set (`bd ready` = dependency-graph filtering, not LLM prose). A
 spike (bd 1.1.0, findings in the #181 charter) confirmed Beads already ships the
 machine-first work store this doc set out to build, **and more**: `bd merge-slot`
-is an atomic exclusive-access landing primitive (proven under an 8-way race), and
-`bd gate` (`gh:pr`/`gh:run`/`timer`/`human`) maps onto the `ship.target` seam.
+provides atomic exclusive-access ordering (proven under an 8-way race — though per
+ADR-0025 pelaggio uses it only as an optional ordering layer, never as the landing
+fence), and `bd gate` (`gh:pr`/`gh:run`/`timer`/`human`) maps onto the
+`ship.target` seam.
 
 **Correction to an earlier claim in this doc:** a first pass here said Beads had
 "crossed its orchestration boundary." It has not. Beads ships richer
