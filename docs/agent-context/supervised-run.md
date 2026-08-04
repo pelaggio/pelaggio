@@ -16,6 +16,10 @@ It owns only the **out-of-band delta**: driving a cycle by hand and landing it v
 6. **Mark done.** After an admin merge, `npx pelaggio roadmap mark-done <N>` — an admin merge bypasses the pipeline's post-merge mark-done, so the issue otherwise stays open. (Admin PR merge never runs the direct-push bookkeeping tail; #205's claim-branch retention only covers direct-push mark-done failure, not this path.)
 7. **Clean up.** Remove the worktree; sync main via a **rebase-pull that preserves any concurrent session's unpushed local commits** (`git pull --rebase`; never fast-forward-discard or reset).
 
+## Concurrent human work
+
+Don't inspect, fix up, or otherwise edit files inside the main checkout or a claimed item worktree while a cycle holds it. The confinement audit snapshots main plus every registered sibling worktree before, periodically during, and after each step (`pipeline.md`); a concurrent edit is indistinguishable from a real violation, and a mid-step trip now fails the cycle closed with an early abort rather than parking it (#388) — a park would checkpoint the now-contaminated tree, and `--resume` re-enters "fresh" onto it, re-burning spend against state already proven compromised (see [ADR-0019](../decisions/0019-checkpoint-restart-not-replay.md)). Do your own review or fixups from a **separate `git clone`**, not a second `git worktree add`: a worktree registers with `git worktree list` and becomes a new sibling the running cycle's audit tracks (so your own edits there would trip it), while a plain clone has its own independent `.git` the audit never enumerates. Only touch the live worktree once the cycle has exited (parked, completed, or errored).
+
 ## Escalation adjudication
 
 When the driver pulls the Andon cord ([ADR-0011](../decisions/0011-andon-not-dor.md)) or a review does not converge, the supervisor adjudicates. The defaults:

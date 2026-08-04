@@ -32,11 +32,13 @@ function makeFakeChild(pid: number): FakeChild {
 	return ee;
 }
 
+type Spawned = { cmd: string; args: string[]; opts: { cwd: string; env: Record<string, string> }; child: FakeChild };
+
 function setup() {
 	const dir = mkdtempSync(join(tmpdir(), "supervisor-"));
 	const store = new StateStore(join(dir, "state.json"));
 	const broker = new LogBroker();
-	const spawned: Array<{ cmd: string; args: string[]; opts: { cwd: string; env: Record<string, string> }; child: FakeChild }> = [];
+	const spawned: Spawned[] = [];
 	let nextPid = 1000;
 	const spawn = ((cmd: string, args: string[], opts: unknown) => {
 		const child = makeFakeChild(nextPid++);
@@ -55,20 +57,52 @@ function setup() {
 	return { dir, store, broker, spawn, spawned, supervisor, registry };
 }
 
+/** Narrow `spawned[i]` for strict noUncheckedIndexedAccess. */
+function at(spawned: Spawned[], index: number): Spawned {
+	const entry = spawned[index];
+	assert.ok(entry, `expected spawn at index ${index}`);
+	return entry;
+}
+
 describe("Supervisor.start", () => {
 	it("spawns pnpm with the expected argv and records status: running", () => {
 		const { dir, supervisor, spawned } = setup();
 		const run = supervisor.start({ repo: "main", item: "TOOL-1", parallel: 2, cycles: 3, shipTarget: "pull-request" });
 		assert.equal(spawned.length, 1);
-		assert.equal(spawned[0].cmd, "pnpm");
-		assert.deepEqual(spawned[0].args, ["--filter", "pelaggio", "pelaggio", "--item", "TOOL-1", "--parallel", "2", "--cycles", "3", "--target", "pull-request", "--verbose"]);
+		const s0 = at(spawned, 0);
+		assert.equal(s0.cmd, "pnpm");
+		// Default non-verbose: no --verbose flag.
+		assert.deepEqual(s0.args, ["--filter", "pelaggio", "pelaggio", "--item", "TOOL-1", "--parallel", "2", "--cycles", "3", "--target", "pull-request"]);
 		assert.equal(run.status, "running");
 		assert.equal(run.item, "TOOL-1");
 		assert.equal(run.repo, "main");
 		assert.equal(run.pid, 1000);
-		assert.equal(spawned[0].opts.cwd, dir);
-		assert.equal(spawned[0].opts.env.PELAGGIO_REPO, dir);
-		assert.equal(spawned[0].opts.env.PELAGGIO_PLAIN, "1");
+		assert.equal(s0.opts.cwd, dir);
+		assert.equal(s0.opts.env.PELAGGIO_REPO, dir);
+		assert.equal(s0.opts.env.PELAGGIO_PLAIN, "1");
+		assert.equal(s0.opts.env.PELAGGIO_EXECUTION_ID, run.id);
+		assert.equal(s0.opts.env.PELAGGIO_EVENT_STREAM_ID, run.id);
+	});
+
+	it("adds --verbose only when verbose: true", () => {
+		const { supervisor, spawned } = setup();
+		supervisor.start({ repo: "main", item: "TOOL-1", verbose: true });
+		assert.ok(at(spawned, 0).args.includes("--verbose"));
+	});
+
+	it("continuous drain: --preset without --item/--resume", () => {
+		const { supervisor, spawned } = setup();
+		const run = supervisor.start({ repo: "main", mode: "drain", parallel: 2 });
+		assert.deepEqual(at(spawned, 0).args, ["--filter", "pelaggio", "pelaggio", "--preset", "drain", "--parallel", "2"]);
+		assert.equal(run.item, undefined);
+		assert.equal(run.mode, "drain");
+	});
+
+	it("continuous watch: optional --day-budget from request", () => {
+		const { supervisor, spawned } = setup();
+		const run = supervisor.start({ repo: "main", mode: "watch", parallel: 2, watchDailyBudget: 25 });
+		assert.deepEqual(at(spawned, 0).args, ["--filter", "pelaggio", "pelaggio", "--preset", "watch", "--day-budget", "25", "--parallel", "2"]);
+		assert.equal(run.watchDailyBudget, 25);
 	});
 
 	it("throws SupervisorError(unknown-repo) when slug is not registered", () => {
@@ -86,7 +120,7 @@ describe("Supervisor.pause", () => {
 		const run = supervisor.start({ repo: "main", item: "TOOL-1" });
 		const updated = supervisor.pause(run.id);
 		assert.equal(updated.status, "paused");
-		assert.deepEqual(spawned[0].child.signals, ["SIGUSR2"]);
+		assert.deepEqual(at(spawned, 0).child.signals, ["SIGUSR2"]);
 	});
 
 	it("throws on unknown id", () => {
@@ -105,17 +139,17 @@ describe("Supervisor.stop", () => {
 		t.mock.timers.tick(5001);
 		const updated = await stopPromise;
 		assert.equal(updated.status, "abandoned");
-		assert.deepEqual(spawned[0].child.signals, ["SIGINT", "SIGKILL"]);
+		assert.deepEqual(at(spawned, 0).child.signals, ["SIGINT", "SIGKILL"]);
 	});
 
 	it("returns once child exits before grace expires", async () => {
 		const { supervisor, spawned } = setup();
 		const run = supervisor.start({ repo: "main", item: "TOOL-1" });
 		const stopPromise = supervisor.stop(run.id);
-		setImmediate(() => spawned[0].child.emit("exit", 130));
+		setImmediate(() => at(spawned, 0).child.emit("exit", 130));
 		const updated = await stopPromise;
 		assert.equal(updated.status, "abandoned");
-		assert.deepEqual(spawned[0].child.signals, ["SIGINT"]);
+		assert.deepEqual(at(spawned, 0).child.signals, ["SIGINT"]);
 	});
 });
 
@@ -125,12 +159,23 @@ describe("Supervisor.resume", () => {
 		const original = supervisor.start({ repo: "main", item: "TOOL-1", shipTarget: "auto-merge-pr" });
 		const resumed = supervisor.resume(original.id);
 		assert.equal(spawned.length, 2);
-		assert.deepEqual(spawned[1].args, ["--filter", "pelaggio", "pelaggio", "--resume", "TOOL-1", "--target", "auto-merge-pr", "--verbose"]);
+		const s1 = at(spawned, 1);
+		assert.deepEqual(s1.args, ["--filter", "pelaggio", "pelaggio", "--resume", "TOOL-1", "--target", "auto-merge-pr"]);
 		assert.equal(resumed.resumedFrom, original.id);
 		assert.notEqual(resumed.id, original.id);
 		// Re-uses original repo slug → same cwd
-		assert.equal(spawned[1].opts.cwd, dir);
+		assert.equal(s1.opts.cwd, dir);
 		assert.equal(resumed.repo, "main");
+	});
+
+	it("continuous resume rebuilds --preset without --resume/--item", () => {
+		const { supervisor, spawned } = setup();
+		const original = supervisor.start({ repo: "main", mode: "watch", parallel: 2, watchDailyBudget: 12, verbose: true });
+		const resumed = supervisor.resume(original.id);
+		assert.deepEqual(at(spawned, 1).args, ["--filter", "pelaggio", "pelaggio", "--preset", "watch", "--day-budget", "12", "--parallel", "2", "--verbose"]);
+		assert.equal(resumed.mode, "watch");
+		assert.equal(resumed.item, undefined);
+		assert.equal(resumed.resumedFrom, original.id);
 	});
 });
 
@@ -175,20 +220,34 @@ describe("Supervisor child exit", () => {
 	it("status becomes completed on exit code 0", async () => {
 		const { supervisor, spawned } = setup();
 		const run = supervisor.start({ repo: "main", item: "TOOL-1" });
-		spawned[0].child.emit("exit", 0);
+		at(spawned, 0).child.emit("exit", 0);
 		await new Promise(setImmediate);
 		const updated = supervisor.get(run.id);
 		assert.equal(updated?.status, "completed");
 		assert.equal(updated?.exitCode, 0);
+		assert.equal(updated?.activity, undefined);
 	});
 
 	it("status becomes failed on non-zero exit", async () => {
 		const { supervisor, spawned } = setup();
 		const run = supervisor.start({ repo: "main", item: "TOOL-1" });
-		spawned[0].child.emit("exit", 1);
+		at(spawned, 0).child.emit("exit", 1);
 		await new Promise(setImmediate);
 		const updated = supervisor.get(run.id);
 		assert.equal(updated?.status, "failed");
+		assert.equal(updated?.exitCode, 1);
+	});
+
+	it("paused child exit keeps paused status and clears activity", async () => {
+		const { supervisor, spawned } = setup();
+		const run = supervisor.start({ repo: "main", mode: "watch", parallel: 2 });
+		supervisor.pause(run.id);
+		at(spawned, 0).child.emit("exit", 1);
+		await new Promise(setImmediate);
+		const updated = supervisor.get(run.id);
+		assert.equal(updated?.status, "paused");
+		assert.equal(updated?.pid, null);
+		assert.equal(updated?.activity, undefined);
 		assert.equal(updated?.exitCode, 1);
 	});
 });

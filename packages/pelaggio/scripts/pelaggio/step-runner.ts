@@ -36,8 +36,10 @@ export interface RunStepOpts {
 	 * budget from the plan's file count (see `computeImplementTurns` in helpers.ts).
 	 * When undefined, falls back to the profile-resolved turn limit. */
 	maxTurnsOverride?: number;
-	/** SIGINT-driven cancellation. Threaded through to the SDK's `query()` call so an
-	 * in-flight fetch stream tears down when the parent controller aborts. */
+	/** Cancellation signal — sourced from SIGINT and/or a mid-step confinement trip
+	 * (#388; the pipeline always threads its own per-step `AbortController` here, composed
+	 * with any external SIGINT signal). Threaded through to the SDK's `query()` call so an
+	 * in-flight fetch stream tears down when the controller aborts. */
 	signal?: AbortSignal;
 	/** Brackets mutating provider tools for dirty-main delta attribution. */
 	mainCheckoutObserver?: MainCheckoutDeltaObserver;

@@ -16,6 +16,14 @@ import {
 import { BASELINE_TAXONOMY, isSafetyClass, safetyClasses, type TaxonomyConfig } from "./taxonomy.js";
 
 export type { ReviewOutcome };
+/**
+ * Safety-floor posture for the run. `enabled` (default) applies the ADR-0016 code-diff safety floor:
+ * safety-class must-fixes are non-contractible, retained every pass, and a lone Judge can never refute
+ * them. `disabled` records honestly that the code-diff path-signal taxonomy is the wrong floor for the
+ * artifact under review (e.g. a bare design document): safety classes are no longer treated as an
+ * un-refutable gate floor, so the Judge's ruling is authoritative. See #384.
+ */
+export type SafetyFloor = "enabled" | "disabled";
 export type DiversityStatus = { state: "met" } | { state: "softened"; explanation: string };
 export interface DriverIdentity {
 	role: "author" | "reviewer" | "judge";
@@ -51,6 +59,10 @@ export interface ReviewLoopResult {
 	survivors: ReviewCandidate[];
 	notes: ReviewCandidate[];
 	cost: number;
+	/** Recorded posture of this run's safety floor (honest record, not a taxonomy swap). */
+	safetyFloor: SafetyFloor;
+	/** Optional human explanation when the floor is disabled (e.g. "document review: …"). */
+	safetyFloorNote?: string;
 	dissent?: { finding: ReviewCandidate; ruling: "judgment-dissent"; attemptedResolution: string; notificationTarget: string };
 	disagreement?: ReviewDisagreement;
 }
@@ -62,18 +74,42 @@ export interface SeatRequest {
 	parkSignal: ParkSignal;
 }
 export type RunSeatFn = (request: SeatRequest) => Promise<StepResult>;
-export interface ReviewLoopOptions {
+export type ReviewAuthorIdentity = { provider: ProviderName; model?: string };
+type ReviewLoopBase = {
 	policy: AuthoringReviewConfig;
-	author: { provider: ProviderName; model?: string };
 	parkSignal: ParkSignal;
 	runSeat: RunSeatFn;
-	prompts: { review(pass: number): string; judge(candidates: readonly ReviewCandidate[], pass: number): string; revise(survivors: readonly ReviewCandidate[]): string };
 	notificationTarget?: string;
 	/** Diff context for emission-time classification (plain data; no shell). */
 	classificationContext: ClassificationContextBase;
 	/** Resolved safety/judgment taxonomy (baseline ADR table unless the owner extended/contracted it). */
 	taxonomy: TaxonomyConfig;
-}
+	/**
+	 * When `"disabled"`, the safety class is ignored for gate/#272 retention and Judge-downgrade
+	 * invalidation; recorded on the result. Default `"enabled"` preserves the pipeline's code-diff floor.
+	 */
+	safetyFloor?: SafetyFloor;
+	/** Optional explanation stamped on the result when the floor is disabled. */
+	safetyFloorNote?: string;
+};
+/**
+ * `mode: "revise"` (default) is the pipeline authoring loop: an artifact author is present and the
+ * loop may run author revisions between passes. `mode: "no-revise"` makes the revision branch
+ * unreachable by construction — the author is optional (excluded from reviewer seats only when
+ * present) and no `revise` prompt exists, so a read-only caller cannot supply a mutating seat path.
+ */
+export type ReviewLoopOptions =
+	| (ReviewLoopBase & {
+			mode?: "revise";
+			author: ReviewAuthorIdentity;
+			prompts: { review(pass: number): string; judge(candidates: readonly ReviewCandidate[], pass: number): string; revise(survivors: readonly ReviewCandidate[]): string };
+	  })
+	| (ReviewLoopBase & {
+			mode: "no-revise";
+			/** Optional: when present, still excluded from reviewer seats (authoring reuse). Absent for doc-review. */
+			author?: ReviewAuthorIdentity;
+			prompts: { review(pass: number): string; judge(candidates: readonly ReviewCandidate[], pass: number): string };
+	  });
 
 // classRank: safety > judgment; among safety classes earlier taxonomy precedence entries rank higher.
 const classRank = (value: ReviewFindingClass, taxonomy: TaxonomyConfig): number => {
@@ -82,6 +118,13 @@ const classRank = (value: ReviewFindingClass, taxonomy: TaxonomyConfig): number 
 	return idx >= 0 ? order.length - idx : isSafetyClass(value, taxonomy) ? 1 : 0;
 };
 const blockingRank = (finding: AuthoringReviewFinding, taxonomy: TaxonomyConfig): number => (finding.severity === "must-fix" ? 2 * (safetyClasses(taxonomy).length + 1) : 0) + classRank(finding.class, taxonomy);
+/**
+ * Effective safety predicate for the gate. With the floor disabled, no class is treated as a safety
+ * floor for retention / hard-block / downgrade-invalidation — the deterministic code-diff taxonomy is
+ * the wrong floor for the artifact, so the Judge's ruling governs. Emission-time classification still
+ * runs on the real taxonomy for the honest forensic `classification` on each finding.
+ */
+const isSafetyFloorClass = (value: ReviewFindingClass, taxonomy: TaxonomyConfig, safetyFloor: SafetyFloor): boolean => safetyFloor !== "disabled" && isSafetyClass(value, taxonomy);
 const identity = (role: DriverIdentity["role"], slot: ReviewSlot, pass: number): DriverIdentity => ({
 	role,
 	seatId: slot.id,
@@ -91,7 +134,13 @@ const identity = (role: DriverIdentity["role"], slot: ReviewSlot, pass: number):
 });
 const childSignal = (): ParkSignal => ({ parked: false, resetsAt: 0, limitType: "", triggerWorker: "" });
 
-export function classifyReviewDisagreement(pass: number, records: ReviewPassRecord["reviewers"], candidates: readonly ReviewCandidate[], taxonomy: TaxonomyConfig = BASELINE_TAXONOMY): ReviewDisagreement | undefined {
+export function classifyReviewDisagreement(
+	pass: number,
+	records: ReviewPassRecord["reviewers"],
+	candidates: readonly ReviewCandidate[],
+	taxonomy: TaxonomyConfig = BASELINE_TAXONOMY,
+	safetyFloor: SafetyFloor = "enabled",
+): ReviewDisagreement | undefined {
 	const drivers = records
 		.filter((record): record is typeof record & { verdict: DriverReviewVerdict } => record.ok && record.verdict !== undefined)
 		.map((record) => ({ identity: record.identity, ...record.verdict }))
@@ -101,7 +150,7 @@ export function classifyReviewDisagreement(pass: number, records: ReviewPassReco
 	return {
 		pass,
 		drivers,
-		hasSafetyBlocker: candidates.some((candidate) => candidate.finding.severity === "must-fix" && isSafetyClass(candidate.finding.class, taxonomy)),
+		hasSafetyBlocker: candidates.some((candidate) => candidate.finding.severity === "must-fix" && isSafetyFloorClass(candidate.finding.class, taxonomy, safetyFloor)),
 		evidenceFingerprint: createHash("sha256").update(JSON.stringify(normalized)).digest("hex"),
 	};
 }
@@ -130,8 +179,9 @@ export function classifyReviewOutcome(
 	judgeValid: boolean,
 	pass: number,
 	taxonomy: TaxonomyConfig = BASELINE_TAXONOMY,
+	safetyFloor: SafetyFloor = "enabled",
 ): ReviewOutcome {
-	if (!judgeValid || survivors.some((candidate) => isSafetyClass(candidate.finding.class, taxonomy) || rulings.get(candidate.candidateId) === "unfixable-blocker")) return "hard-block";
+	if (!judgeValid || survivors.some((candidate) => isSafetyFloorClass(candidate.finding.class, taxonomy, safetyFloor) || rulings.get(candidate.candidateId) === "unfixable-blocker")) return "hard-block";
 	if (survivors.some((candidate) => rulings.get(candidate.candidateId) === "judgment-dissent")) return "dissent";
 	if (survivors.length > 0) return "hard-block";
 	if (notes.length === 0) return "converged-clean";
@@ -140,20 +190,34 @@ export function classifyReviewOutcome(
 
 export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewLoopResult> {
 	const { policy, classificationContext, taxonomy } = options;
-	const configuredReviewers = policy.reviewers.filter((slot) => slot.provider !== options.author.provider);
+	// no-revise: the author is optional and the revision branch is unreachable — force the effective
+	// revision budget to 0 and drop the revise prompt so a mutating seat cannot be reached at all.
+	const author = options.author;
+	const revise = options.mode === "no-revise" ? undefined : options.prompts.revise;
+	const effectiveMaxRevisions = options.mode === "no-revise" ? 0 : policy.maxRevisions;
+	const safetyFloor: SafetyFloor = options.safetyFloor ?? "enabled";
+	const safetyFloorNote = options.safetyFloorNote;
+	// Stamp the run's safety-floor posture on every terminal result without repeating it at 8 return sites.
+	const withFloor = (result: Omit<ReviewLoopResult, "safetyFloor" | "safetyFloorNote">): ReviewLoopResult => ({
+		...result,
+		safetyFloor,
+		...(safetyFloorNote ? { safetyFloorNote } : {}),
+	});
+	// Author exclusion / inclusion applies ONLY when an author is present (doc-review omits it).
+	const configuredReviewers = author ? policy.reviewers.filter((slot) => slot.provider !== author.provider) : policy.reviewers;
 	let cost = 0;
 	let carried: ReviewCandidate[] = [];
 	let notes: ReviewCandidate[] = [];
 	let revisionsUsed = 0;
 	const passes: ReviewPassRecord[] = [];
 	if (new Set(configuredReviewers.map((slot) => slot.provider)).size !== configuredReviewers.length) {
-		return { outcome: "hard-block", diversity: { state: "softened", explanation: "review seats must be distinct and must exclude the artifact author" }, passes, survivors: carried, notes, cost };
+		return withFloor({ outcome: "hard-block", diversity: { state: "softened", explanation: "review seats must be distinct and must exclude the artifact author" }, passes, survivors: carried, notes, cost });
 	}
-	const distinctProviders = new Set([options.author.provider, policy.judge.provider, ...configuredReviewers.map((slot) => slot.provider)]);
+	const distinctProviders = new Set([...(author ? [author.provider] : []), policy.judge.provider, ...configuredReviewers.map((slot) => slot.provider)]);
 	const diversity: DiversityStatus = distinctProviders.size >= 3 ? { state: "met" } : { state: "softened", explanation: "configured seats do not provide three distinct providers" };
 	for (let pass = 1; pass <= policy.maxPasses; pass++) {
 		const phaseReservation = configuredReviewers.length * 5 + 5;
-		if (cost + phaseReservation > policy.budgetCap) return { outcome: "budget", diversity, passes, survivors: carried, notes, cost };
+		if (cost + phaseReservation > policy.budgetCap) return withFloor({ outcome: "budget", diversity, passes, survivors: carried, notes, cost });
 		const children = configuredReviewers.map(() => childSignal());
 		const settled = await Promise.allSettled(configuredReviewers.map((slot, index) => options.runSeat({ role: "reviewer", slot, pass, prompt: options.prompts.review(pass), parkSignal: children[index] })));
 		for (const child of children) if (child.parked) Object.assign(options.parkSignal, child);
@@ -202,10 +266,10 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 				carriedBefore: discovered.filter((item) => item.source === "carried").map((item) => reviewFindingFingerprint(item.finding)),
 				carriedAfter: carried.filter((candidate) => candidate.finding.severity === "must-fix").map((candidate) => candidate.fingerprint),
 			});
-			return { outcome: options.parkSignal.parked ? "budget" : "hard-block", diversity, passes, survivors: carried, notes, cost };
+			return withFloor({ outcome: options.parkSignal.parked ? "budget" : "hard-block", diversity, passes, survivors: carried, notes, cost });
 		}
 		const candidates = deduplicateCandidates(discovered, taxonomy);
-		const disagreement = classifyReviewDisagreement(pass, reviewerRecords, candidates, taxonomy);
+		const disagreement = classifyReviewDisagreement(pass, reviewerRecords, candidates, taxonomy, safetyFloor);
 		if (disagreement) {
 			passes.push({
 				pass,
@@ -214,7 +278,7 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 				carriedBefore: discovered.filter((item) => item.source === "carried").map((item) => reviewFindingFingerprint(item.finding)),
 				carriedAfter: candidates.filter((candidate) => candidate.finding.severity === "must-fix").map((candidate) => candidate.fingerprint),
 			});
-			return {
+			return withFloor({
 				outcome: disagreement.hasSafetyBlocker ? "hard-block" : "dissent",
 				diversity,
 				passes,
@@ -222,14 +286,14 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 				notes: candidates.filter((candidate) => candidate.finding.severity !== "must-fix"),
 				cost,
 				disagreement,
-			};
+			});
 		}
 		const judgeSignal = childSignal();
 		let judgeResult: StepResult;
 		try {
 			judgeResult = await options.runSeat({ role: "judge", slot: policy.judge, pass, prompt: options.prompts.judge(candidates, pass), parkSignal: judgeSignal });
 		} catch {
-			return { outcome: "hard-block", diversity, passes, survivors: candidates, notes, cost };
+			return withFloor({ outcome: "hard-block", diversity, passes, survivors: candidates, notes, cost });
 		}
 		if (judgeSignal.parked) Object.assign(options.parkSignal, judgeSignal);
 		cost += judgeResult.cost;
@@ -252,7 +316,7 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 					// echo the Judge shouldn't have to restate. #272: but the Judge must not DOWNGRADE a
 					// harness safety-class candidate to a non-safety class (a reclassify-to-ship evasion);
 					// restating the same class or elevating a non-safety candidate stays allowed.
-					return decision.class !== undefined && isSafetyClass(candidate.finding.class, taxonomy) && !isSafetyClass(decision.class, taxonomy);
+					return decision.class !== undefined && isSafetyFloorClass(candidate.finding.class, taxonomy, safetyFloor) && !isSafetyClass(decision.class, taxonomy);
 				})
 			)
 				throw new Error("Judge decisions are incomplete, duplicated, downgrade a safety class, or contain unknown candidates");
@@ -273,7 +337,7 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 					// it is retained every pass (carried is re-seeded above, so reviewer omission can't drop it
 					// either) and the run parks for a human — a lone Judge's `refuted`/reclassify decision never
 					// clears it; the loop does not self-clear a safety must-fix.
-					if (candidate.finding.severity === "must-fix" && isSafetyClass(candidate.finding.class, taxonomy)) return true;
+					if (candidate.finding.severity === "must-fix" && isSafetyFloorClass(candidate.finding.class, taxonomy, safetyFloor)) return true;
 					return decision.decision === "survives";
 				})
 			: candidates;
@@ -286,7 +350,7 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 			carriedBefore: discovered.filter((item) => item.source === "carried").map((item) => reviewFindingFingerprint(item.finding)),
 			carriedAfter: carried.map((item) => item.fingerprint),
 		});
-		const outcome = classifyReviewOutcome(carried, notes, rulings, Boolean(report), pass, taxonomy);
+		const outcome = classifyReviewOutcome(carried, notes, rulings, Boolean(report), pass, taxonomy, safetyFloor);
 		// Escalate-early: revise->re-review only when the carried set can actually converge — i.e. EVERY
 		// surviving must-fix is fixable-by-the-loop. A survivor is unclearable when it is safety-class
 		// (retained every pass by #272, a lone Judge can never clear it) or the Judge ruled it
@@ -294,10 +358,12 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 		// fixable ones the author clears — so a mixed fixable+unclearable set must NOT keep iterating; raise
 		// to a human now instead of burning revision passes. Also stop once the configured `maxRevisions`
 		// budget is spent (0 → no author revision at all). (Cross-model disagreement already returns above.)
-		const hasUnclearableSurvivor = carried.some((candidate) => isSafetyClass(candidate.finding.class, taxonomy) || rulings.get(candidate.candidateId) === "unfixable-blocker");
-		if (outcome !== "hard-block" || pass === policy.maxPasses || !report || hasUnclearableSurvivor || revisionsUsed >= policy.maxRevisions) {
+		const hasUnclearableSurvivor = carried.some((candidate) => isSafetyFloorClass(candidate.finding.class, taxonomy, safetyFloor) || rulings.get(candidate.candidateId) === "unfixable-blocker");
+		// `!author || !revise` short-circuits every no-revise run (effectiveMaxRevisions is 0 there anyway),
+		// and narrows both to non-undefined for the author-seat construction below (revise mode only).
+		if (outcome !== "hard-block" || pass === policy.maxPasses || !report || hasUnclearableSurvivor || revisionsUsed >= effectiveMaxRevisions || !author || !revise) {
 			const dissentCandidate = carried.find((candidate) => rulings.get(candidate.candidateId) === "judgment-dissent");
-			return {
+			return withFloor({
 				outcome,
 				diversity,
 				passes,
@@ -305,20 +371,20 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 				notes,
 				cost,
 				...(dissentCandidate ? { dissent: { finding: dissentCandidate, ruling: "judgment-dissent", attemptedResolution: "one author revision pass", notificationTarget: options.notificationTarget ?? "PR reviewers" } } : {}),
-			};
+			});
 		}
 		const revisionSignal = childSignal();
 		const revision = await options.runSeat({
 			role: "author",
-			slot: { id: "author", provider: options.author.provider, ...(options.author.provider === "codex" ? { codexModel: options.author.model } : { model: options.author.model }) } as ReviewSlot,
+			slot: { id: "author", provider: author.provider, ...(author.provider === "codex" ? { codexModel: author.model } : { model: author.model }) } as ReviewSlot,
 			pass,
-			prompt: options.prompts.revise(carried),
+			prompt: revise(carried),
 			parkSignal: revisionSignal,
 		});
 		if (revisionSignal.parked) Object.assign(options.parkSignal, revisionSignal);
 		cost += revision.cost;
-		if (!revision.ok || cost > policy.budgetCap) return { outcome: options.parkSignal.parked || cost > policy.budgetCap ? "budget" : "hard-block", diversity, passes, survivors: carried, notes, cost };
+		if (!revision.ok || cost > policy.budgetCap) return withFloor({ outcome: options.parkSignal.parked || cost > policy.budgetCap ? "budget" : "hard-block", diversity, passes, survivors: carried, notes, cost });
 		revisionsUsed++;
 	}
-	return { outcome: "hard-block", diversity, passes, survivors: carried, notes, cost };
+	return withFloor({ outcome: "hard-block", diversity, passes, survivors: carried, notes, cost });
 }
