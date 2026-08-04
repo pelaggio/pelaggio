@@ -55,9 +55,9 @@ Run `git branch --list 'feat/*'`. For branches not associated with a worktree:
 - If merged to main → safe to delete. Report but don't auto-delete.
 - If not merged and >14 days old → flag as potentially abandoned
 
-## 4. Decision register hygiene
+## 4. Decision log hygiene
 
-From `MAIN_REPO`, run `npx pelaggio decisions archive-resolved --older-than 30d`. Report the moved count. The deterministic locked command archives only resolved rows; leave unresolved and `default-taken` rows untouched and do not edit the Markdown register manually.
+From `MAIN_REPO`, run `npx pelaggio decisions archive-resolved --older-than 30d`. Report the moved count. The command archives only resolved rows from per-item authority files (`docs/decision-log/<owner>.md`) into `docs/decision-log/archive/<owner>.md`; leave unresolved and `default-taken` rows untouched. Do not hand-edit authority files or the generated `docs/decisions.md` index — regenerate the index only via `npx pelaggio decisions rebuild-index` when an operator wants a fresh projection.
 
 ## 4b. Staleness quarantine sweep (#217)
 

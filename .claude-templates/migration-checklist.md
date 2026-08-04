@@ -97,7 +97,7 @@ Copy each template from `.claude-templates/docs/` to `docs/` in the new project.
 2. **`docs/philosophy.md`** — the "why." 30 minutes if you know the product; multiple sessions if still discovering.
 3. **`docs/architecture.md`** — C4 level 1 (system context) and level 2 (containers). Skip levels 3+ until you have code.
 4. **`docs/conventions-ui.md`** — already Expo-opinionated; prune what doesn't apply, add project-specific components as you build them.
-5. **`docs/decisions.md`** — list the open architectural decisions you haven't resolved yet (stack choices, auth model, etc.).
+5. **`docs/decisions.md`** — list the open architectural decisions you haven't resolved yet (stack choices, auth model, etc.). Pelaggio's *operational* decision log is separate: copy `docs/decision-log/README.md` and let the harness write per-item files under `docs/decision-log/` at runtime.
 6. **`docs/tone.md`** — if the product has a user-facing voice. Skip for infrastructure/tooling.
 7. **`docs/build.md`** — fill in EAS project ID + first-build commands.
 8. **`docs/task-index.md`** — start empty; will populate as you add roadmap items.

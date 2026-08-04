@@ -16,7 +16,8 @@ Opinionated starting point for new Expo/TypeScript projects, extracted from Fath
 | `docs/build.md` | `docs/build.md` | EAS + local build commands |
 | `docs/task-index.md` | `docs/task-index.md` | Cross-roadmap item index for pelaggio `/pick` |
 | `docs/roadmap-example.md` | `docs/roadmap-{track}.md` | Roadmap format pelaggio's parser expects (checkbox + table) |
-| `docs/decisions.md` | `docs/decisions.md` | Open + resolved architectural decisions |
+| `docs/decisions.md` | `docs/decisions.md` | Open + resolved architectural decisions (product scratchpad) |
+| `docs/decision-log/README.md` | `docs/decision-log/README.md` | Operational pelaggio decision-log authority (per-item files) |
 
 ## How to use
 

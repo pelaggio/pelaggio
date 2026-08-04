@@ -62,8 +62,8 @@ export async function runShipPrEffects(
 	const changed = exec("git diff --name-only main...HEAD", cwd)
 		.split("\n")
 		.map((line) => line.trim())
-		.filter((line) => line !== "" && !line.startsWith("docs/plans/"));
-	if (changed.length === 0) throw new Error("nothing to ship: branch only touches docs/plans/ after squash");
+		.filter((line) => line !== "" && !line.startsWith("docs/plans/") && !line.startsWith("docs/decision-log/"));
+	if (changed.length === 0) throw new Error("nothing to ship: branch only touches docs/plans/ and/or docs/decision-log/ after squash");
 
 	pushBranch(exec, cwd, deps.log);
 	// Read the squashed HEAD created by the commit above — the exact SHA the #387 review

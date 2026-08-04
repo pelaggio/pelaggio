@@ -20,7 +20,8 @@
 
 import { spawn } from "node:child_process";
 import { CONFIG, REPO, resolveProviderBin, resolveStepSettings, type StepSettings } from "./config.js";
-import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseDecisions, parseWaitFlag, resolveParkReset } from "./helpers.js";
+import { emitDecisionsFromText } from "./decisions.js";
+import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseWaitFlag, resolveParkReset } from "./helpers.js";
 import { buildAgentEnv, makeSecretScrubber } from "./secret-hygiene.js";
 import type { StepProvider } from "./step-runner.js";
 import { composeSystemAppend, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "./step-runner-shared.js";
@@ -363,8 +364,8 @@ export function buildOpenCodeStepResult(name: Step, events: JsonObject[], exitIn
 	}
 
 	const outputTail = text ? text.replace(/\x1b\[[0-9;]*m/g, "").slice(-200) : undefined;
-	const decisions = parseDecisions(assistantText);
-	for (const decision of decisions) emitted.push({ type: "decision", decision });
+	const decisions = emitDecisionsFromText(assistantText);
+	for (const d of decisions) emitted.push({ type: "decision", decision: d.decision });
 	const toolCountsObj = toolCounts.size > 0 ? Object.fromEntries(toolCounts) : undefined;
 	return {
 		result: {

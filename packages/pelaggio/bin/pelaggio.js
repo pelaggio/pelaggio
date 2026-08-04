@@ -15,7 +15,7 @@ Commands:
   run     Run the pipeline (same flags as \`pnpm pelaggio\`: --cycles --parallel --item …).
   stats   Print the stats dashboard from .dev/pelaggio-log.jsonl.
   roadmap Adapter-backed queries (list / get / claim / plan-path / publish-plan / mark-done / create-item / archive-plan / stale-scan / stale-list / stale-resolve / source). Used by skill bodies.
-  decisions Resolve or archive rows in docs/decisions.md.
+  decisions Lifecycle/projection for docs/decision-log/ (resolve, archive-resolved, migrate, rebuild-index).
   taxonomy Owner ritual for the ADR-0016 safety taxonomy (verify / sign / canonical).
   pr-review  Run the CI merge-gate review of a PR (--pr <n>); posts a comment and exits non-zero on a blocking finding.
   doc-review  Provider-diverse read-only review of a document (<path>); binds the report to its sha256 and exits non-zero on a blocking finding.

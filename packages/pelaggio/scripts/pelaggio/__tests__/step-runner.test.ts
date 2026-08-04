@@ -214,8 +214,19 @@ describe("blockForeignRootWrite (#369 / #269 nested seats)", () => {
 		assert.deepEqual(blockForeignRootWrite(write(`${almost}/x.ts`), almost, main, [main, sibling, almost], almost), {});
 	});
 
-	it("ignores non-Write/Edit tools (Bash residual)", () => {
+	it("ignores Bash commands that do not touch harness-owned registers (residual)", () => {
 		assert.deepEqual(blockForeignRootWrite(bash(`echo ${main}/x`), seat, main, registered), {});
+	});
+
+	it("blocks Bash commands referencing docs/decision-log (#386 forge path)", () => {
+		const out = blockForeignRootWrite(bash("printf forged > docs/decision-log/tool-1.md"), seat, main, registered);
+		assert.equal(out.decision, "block");
+		assert.match(String(out.reason), /harness-owned register/);
+	});
+
+	it("blocks Bash commands referencing .dev/sessions", () => {
+		const out = blockForeignRootWrite(bash(`cat x >> ${main}/.dev/sessions/s.json`), seat, main, registered);
+		assert.equal(out.decision, "block");
 	});
 });
 
