@@ -235,10 +235,15 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 			try {
 				// Model-authored final message only — never the transcript (see modelAuthoredText).
 				const report = parseAuthoringReviewFindings(modelAuthoredText(result.value));
-				// Always ingest parseable findings — including from a non-ok seat (max-turns/errored):
-				// dropping them is a fail-open (a security must-fix from an incomplete seat must still
-				// block, and must feed hasSafetyBlocker). Only the pass/block VERDICT is ok-gated below,
-				// since an incomplete seat has no trustworthy overall verdict for disagreement.
+				// Ingest parseable findings even from a non-ok seat (max-turns/errored): a security
+				// must-fix a seat did emit must still block and feed hasSafetyBlocker. Only the
+				// pass/block VERDICT is ok-gated below, since an incomplete seat has no trustworthy
+				// overall verdict for disagreement.
+				//
+				// A seat whose model-authored text carries no parseable block is now dropped rather
+				// than scavenged from the transcript. That is not a fail-open: the seat's required
+				// (driver × label) cell stays uncompleted and the all-pass gate cannot reach
+				// consensus-pass with an uncompleted cell.
 				// Classify at the emission boundary before dedup/ingestion (#293).
 				for (const raw of report.findings) {
 					discovered.push({ finding: materializeAuthoringFinding(raw, classificationContext, taxonomy), source: slot.id });

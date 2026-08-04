@@ -182,6 +182,9 @@ export function buildGrokStepResult(name: Step, updates: JsonObject[], exitInfo:
 	const emitted: StepEvent[] = [];
 	let text = "";
 	let fullText = "";
+	// Separate from `text`: the rate-limit / did-not-complete / edit-loop paths below replace
+	// `text` with a diagnostic string, which would otherwise discard the model's own output.
+	let assistantText = "";
 	let turns = 0;
 	let sawTurn = false;
 	let usage: JsonObject | undefined;
@@ -196,6 +199,7 @@ export function buildGrokStepResult(name: Step, updates: JsonObject[], exitInfo:
 				const chunk = contentText(u.content);
 				if (chunk) {
 					text += chunk;
+					assistantText += chunk;
 					fullText += chunk;
 					emitted.push({ type: "text", content: chunk });
 				}
@@ -308,9 +312,7 @@ export function buildGrokStepResult(name: Step, updates: JsonObject[], exitInfo:
 			subtype,
 			text,
 			fullText,
-			// grok's `text` accumulates agent_message chunks only — no tool data — so it is the
-			// assistant text verbatim.
-			assistantText: text,
+			assistantText,
 			cost,
 			costEstimated: true,
 			turns,
