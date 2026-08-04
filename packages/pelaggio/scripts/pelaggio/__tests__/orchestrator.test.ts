@@ -1456,6 +1456,61 @@ describe("runOrchestrator — mid-run review drain (#387)", () => {
 		assert.deepEqual(pending(main), [], "record completed (deleted) after the terminal status");
 	});
 
+	it("a lock loser re-lists after the holder releases and drains a record enqueued after the holder listed", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const main = mainDir();
+		const secondHead = "def456def456def456def456def456def456defa";
+		const gh: GhRunner = (args) => {
+			if (args[0] === "pr" && args[1] === "list") return { stdout: "[]", stderr: "", status: 0 };
+			if (args[0] === "issue" && args[1] === "view") return { stdout: JSON.stringify({ labels: [{ name: "autopilot" }] }), stderr: "", status: 0 };
+			if (args[0] === "api" && args[1]?.includes("/commits/") && args[1]?.endsWith("/status")) return { stdout: JSON.stringify({ statuses: [] }), stderr: "", status: 0 };
+			if (args[0] === "api" && args[1]?.includes("/comments")) return { stdout: "[]", stderr: "", status: 0 };
+			return { stdout: "", stderr: "", status: 0 };
+		};
+		let releaseFirstGate!: () => void;
+		const firstGateReleased = new Promise<void>((resolve) => {
+			releaseFirstGate = resolve;
+		});
+		let signalFirstGate!: () => void;
+		const firstGateStarted = new Promise<void>((resolve) => {
+			signalFirstGate = resolve;
+		});
+		let gateCalls = 0;
+		const runReviewGate = async () => {
+			gateCalls++;
+			if (gateCalls === 1) {
+				signalFirstGate();
+				await firstGateReleased;
+			}
+			return passGate();
+		};
+		const firstPipeline = createMockRunPipeline({
+			byItem: { "387": { completed: true, cost: 0.5 } },
+			onCall: () => enqueueReviewRequest(main, record()),
+		}).runPipeline;
+		let signalSecondEnqueue!: () => void;
+		const secondEnqueued = new Promise<void>((resolve) => {
+			signalSecondEnqueue = resolve;
+		});
+		const secondPipeline = createMockRunPipeline({
+			byItem: { "388": { completed: true, cost: 0.5 } },
+			onCall: () => {
+				enqueueReviewRequest(main, record({ prNumber: 202, headSha: secondHead, itemId: "388", headBranch: "feat/issue-388", enqueuedAt: "2026-08-03T12:01:00.000Z" }));
+				signalSecondEnqueue();
+			},
+		}).runPipeline;
+
+		const first = runOrchestrator({ ...baseFlags, item: "387", target: "pull-request", cycles: "1" }, { runPipeline: firstPipeline, review: reviewDeps({ gh, main, runReviewGate }) });
+		await firstGateStarted; // holder has already listed and is processing its snapshot
+		const second = runOrchestrator({ ...baseFlags, item: "388", target: "pull-request", cycles: "1" }, { runPipeline: secondPipeline, review: reviewDeps({ gh, main, runReviewGate }) });
+		await secondEnqueued;
+		releaseFirstGate();
+		await Promise.all([first, second]);
+
+		assert.equal(gateCalls, 2, "the lock loser performs a fresh drain after the holder releases");
+		assert.deepEqual(pending(main), [], "the late record is drained in the same cycle");
+	});
+
 	it("completes an already-terminal record without re-running the agent (crash-after-post idempotency)", async (t) => {
 		t.mock.method(console, "log", () => {});
 		const main = mainDir();

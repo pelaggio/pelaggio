@@ -40,7 +40,7 @@ import {
 	writeEffectsManifest as writeEffectsManifestDefault,
 } from "./effects.js";
 import { digestChallenge } from "./execution-receipt.js";
-import { tryWithFileLock } from "./file-lock.js";
+import { tryWithFileLock, withFileLock } from "./file-lock.js";
 import { createEventWriter } from "./flow-events.js";
 import { DEFAULT_FLOW_POLICY, type FlowPolicy } from "./flow-policy.js";
 import {
@@ -2515,12 +2515,12 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				// just shipped (and any backlog) before the worker pulls again, in every mode incl. a single
 				// `--item` (its lone ship drains before the worker returns). In continuous mode this drain of
 				// iteration N precedes revise-at-top of N+1, preserving review→revise order across the
-				// boundary. Non-blocking lock: a peer worker already draining the shared queue covers this
-				// round, so contention skips rather than stalling the pool on a peer's multi-minute agent. On
+				// boundary. The first lock attempt is non-blocking; on contention this cycle waits and then
+				// re-lists, because the current holder may have snapshotted before this cycle enqueued. On
 				// a rate-limit park the drain sets parkSignal and returns; the break below hands off to the
 				// main park-and-resume block (no nested auto-resume wait inside the worker).
 				if (doReviewDrain && !parkSignal.parked) {
-					await tryWithFileLock(reviewDrainLock, () => runLocalReviewDrainOnce({ notifyStranded: false }), { label: "review drain lock", staleMs: REVIEW_DRAIN_LOCK_STALE_MS });
+					await runPostCycleReviewDrain();
 				}
 
 				if (parkSignal.parked) {
@@ -2693,6 +2693,19 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			}
 		}
 
+		async function runPostCycleReviewDrain(): Promise<void> {
+			const attempt = await tryWithFileLock(reviewDrainLock, () => runLocalReviewDrainOnce({ notifyStranded: false }), { label: "review drain lock", staleMs: REVIEW_DRAIN_LOCK_STALE_MS });
+			if (!attempt.ran) {
+				// The holder may have listed before this cycle enqueued its ship record. Wait for
+				// release, then re-list under the lock so that record cannot be stranded.
+				await withFileLock(reviewDrainLock, () => runLocalReviewDrainOnce({ notifyStranded: false }), {
+					label: "review drain lock",
+					staleMs: REVIEW_DRAIN_LOCK_STALE_MS,
+					acquireTimeoutMs: REVIEW_DRAIN_LOCK_STALE_MS,
+				});
+			}
+		}
+
 		// Resume mode
 		if (flags.resume) {
 			const id = flags.resume.toUpperCase();
@@ -2755,7 +2768,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			// otherwise sit undrained until the next process. Drain before returning
 			// so resume mode gets the same review-at-delivery as the worker pool.
 			if (doReviewDrain && !parkSignal.parked) {
-				await tryWithFileLock(reviewDrainLock, () => runLocalReviewDrainOnce({ notifyStranded: false }), { label: "review drain lock", staleMs: REVIEW_DRAIN_LOCK_STALE_MS });
+				await runPostCycleReviewDrain();
 			}
 			return { exitCode: result.completed ? 0 : 1, results };
 		}

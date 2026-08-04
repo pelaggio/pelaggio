@@ -143,11 +143,9 @@ export async function withFileLock<T>(path: string, fn: () => Promise<T> | T, op
 /**
  * Non-blocking acquire: one O_EXCL attempt (after stealing an expired holder), then either
  * run `fn` under the lock or report contention without waiting. Used by the per-worker
- * post-cycle review drain (#387) — a plain `withFileLock` with a long timeout would block one
- * worker for the entire duration of a peer's multi-minute review agent. On contention the
- * peer holding the lock is already draining the shared main-tree queue, so skipping the round
- * misses nothing. Returns `{ ran: true, value }` when it held the lock, `{ ran: false }` when a
- * live holder owns it.
+ * post-cycle review drain (#387), whose caller decides whether contention can safely skip or
+ * must wait and re-list. Returns `{ ran: true, value }` when it held the lock, `{ ran: false }`
+ * when a live holder owns it.
  */
 export async function tryWithFileLock<T>(path: string, fn: () => Promise<T> | T, opts: { label: string; staleMs: number }): Promise<{ ran: true; value: T } | { ran: false }> {
 	const { staleMs } = opts;
