@@ -7,12 +7,12 @@ import {
 	type JudgeReport,
 	type JudgeRuling,
 	materializeAuthoringFinding,
+	modelAuthoredText,
 	parseAuthoringReviewFindings,
 	parseJudgeReport,
 	type ReviewFindingClass,
 	reviewFindingFingerprint,
 	reviewFindingsGate,
-	selectAuthoringFindingsSource,
 } from "./findings.js";
 import { BASELINE_TAXONOMY, isSafetyClass, safetyClasses, type TaxonomyConfig } from "./taxonomy.js";
 
@@ -233,9 +233,8 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 			}
 			cost += result.value.cost;
 			try {
-				// Final assistant message first; the transcript is a fallback only when it carries no
-				// block (tool output must never be a findings source — see selectAuthoringFindingsSource).
-				const report = parseAuthoringReviewFindings(selectAuthoringFindingsSource(result.value.text, result.value.fullText));
+				// Model-authored final message only — never the transcript (see modelAuthoredText).
+				const report = parseAuthoringReviewFindings(modelAuthoredText(result.value));
 				// Always ingest parseable findings — including from a non-ok seat (max-turns/errored):
 				// dropping them is a fail-open (a security must-fix from an incomplete seat must still
 				// block, and must feed hasSafetyBlocker). Only the pass/block VERDICT is ok-gated below,
@@ -303,7 +302,9 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 		let report: JudgeReport | undefined;
 		let diagnostic: string | undefined;
 		try {
-			report = parseJudgeReport(judgeResult.fullText ?? judgeResult.text);
+			// Same rule as the reviewer seats: the Judge's ruling is model-authored text only. Parsing
+			// the transcript here would leave the identical tool-output injection class on the Judge.
+			report = parseJudgeReport(modelAuthoredText(judgeResult));
 			// Fail-closed completeness: exactly one decision per candidate, no duplicates, no unknowns.
 			// The distinct-count check alone accepts a duplicate that still covers every id (e.g.
 			// [{C1,refuted},{C1,survives}] for two candidates); the survivor filter's `.find` would then

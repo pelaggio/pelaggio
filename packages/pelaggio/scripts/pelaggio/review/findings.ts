@@ -425,23 +425,26 @@ export function hasAuthoringReviewFindingsBlock(text: string): boolean {
 }
 
 /**
- * Choose which of a seat's outputs to parse findings from.
+ * The one legitimate source for a seat's findings and rulings: the model's own final message.
  *
- * The final assistant message is authoritative: the skill mandates ending with exactly the v3
- * block. The full transcript is NOT interchangeable — for the codex provider `fullText` includes
- * command *output*, so any file a reviewer reads can inject blocks into the parse. Reading
- * `.claude/skills/pr-review/SKILL.md`, which the reviewer does first and which contains the schema
- * example, deterministically poisoned every codex seat. Treating tool output as a findings source
- * is also an injection surface: a reviewed repo could plant a block in a file and manufacture
- * findings it never earned.
+ * The transcript (`fullText`) is NOT an acceptable substitute, and must not be used even as a
+ * fallback. For the codex provider `fullText` includes command *output*, so every file a reviewer
+ * reads becomes a candidate findings source. That is how the schema example in
+ * `.claude/skills/pr-review/SKILL.md` — read by the reviewer's first tool call — deterministically
+ * poisoned every codex seat.
  *
- * The transcript is still the fallback when the final message carries no block at all — an
- * incomplete seat (max-turns, provider error) may have emitted findings mid-run, and dropping a
- * security must-fix from such a seat would be a fail-open (see the ingestion comment in loop.ts).
+ * A fallback for seats whose final message carries no block was considered and rejected: it lets a
+ * reviewed repository plant one valid block in any file the mandated review reads and have it
+ * ingested as a genuine safety blocker, forcing a fabricated escalation/park. Repository-controlled
+ * bytes must never become harness-trusted findings.
+ *
+ * Dropping mid-run findings from an incomplete seat is NOT a fail-open: an incomplete seat leaves
+ * its required (driver × label) cell uncompleted, and the all-pass gate cannot reach
+ * consensus-pass with an uncompleted cell. Safety comes from cell completion, not from scavenging
+ * a transcript.
  */
-export function selectAuthoringFindingsSource(text: string | undefined, fullText: string | undefined): string {
-	if (text && hasAuthoringReviewFindingsBlock(text)) return text;
-	return fullText ?? text ?? "";
+export function modelAuthoredText(result: { text?: string }): string {
+	return result.text ?? "";
 }
 
 /**
