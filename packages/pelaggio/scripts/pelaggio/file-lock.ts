@@ -99,14 +99,18 @@ export interface FileLockOptions {
 export async function withFileLock<T>(path: string, fn: () => Promise<T> | T, opts: FileLockOptions): Promise<T> {
 	const { label, staleMs, acquireTimeoutMs } = opts;
 	mkdirSync(dirname(path), { recursive: true });
-	const token = `${Date.now() + staleMs}:${process.pid}-${randomBytes(8).toString("hex")}`;
 	const deadline = Date.now() + acquireTimeoutMs;
 	// A waiter must be allowed to outlive an orphan's expiry or the steal path is
 	// unreachable for early arrivals (deadline < staleness). The hard cap bounds
 	// the extension so live-contention starvation still surfaces as a timeout.
 	const hardCap = deadline + staleMs + 2_000;
 
+	// Minted fresh on every attempt: the lease must date from ACQUISITION, not from
+	// entry to the wait loop — a long wait would otherwise acquire an already-expired
+	// lease that another process can immediately steal mid-critical-section.
+	let token: string;
 	for (;;) {
+		token = `${Date.now() + staleMs}:${process.pid}-${randomBytes(8).toString("hex")}`;
 		try {
 			writeFileSync(path, token, { flag: "wx" }); // O_EXCL: acquire + identity + expiry in one syscall
 			break;
