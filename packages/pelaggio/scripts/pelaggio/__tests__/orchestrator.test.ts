@@ -855,6 +855,10 @@ describe("runOrchestrator — revise sweep (issue #76)", () => {
 					runner: "local",
 					ghRepo: "o/r",
 					gh,
+					// Isolated queue/lock root: without this the drain hits the REAL
+					// REPO/.dev/review-requests/.drain.lock, which mocked timers cannot
+					// steal (#387 gate finding).
+					queueRoot: mkdtempSync(join(tmpdir(), "review-queue-")),
 					statuslessAfter: "2h",
 					now: () => Date.parse("2026-07-08T12:05:00Z"),
 					prepareReviewHead: () => ({ diffCwd: "/tmp/pr-head", baseRef: "origin/main", headRef: "refs/pelaggio-review/pr-201" }),
@@ -917,6 +921,10 @@ describe("runOrchestrator — revise sweep (issue #76)", () => {
 					runner: "local",
 					ghRepo: "o/r",
 					gh,
+					// Isolated queue/lock root: without this the drain hits the REAL
+					// REPO/.dev/review-requests/.drain.lock, which mocked timers cannot
+					// steal (#387 gate finding).
+					queueRoot: mkdtempSync(join(tmpdir(), "review-queue-")),
 					statuslessAfter: "2h",
 					now: () => Date.parse("2026-07-08T12:05:00Z"),
 					prepareReviewHead: () => ({ diffCwd: "/tmp/pr-head", baseRef: "origin/main", headRef: "refs/pelaggio-review/pr-201" }),
@@ -992,6 +1000,10 @@ describe("runOrchestrator — revise sweep (issue #76)", () => {
 					runner: "local",
 					ghRepo: "o/r",
 					gh,
+					// Isolated queue/lock root: without this the drain hits the REAL
+					// REPO/.dev/review-requests/.drain.lock, which mocked timers cannot
+					// steal (#387 gate finding).
+					queueRoot: mkdtempSync(join(tmpdir(), "review-queue-")),
 					statuslessAfter: "2h",
 					now: () => Date.now(),
 					prepareReviewHead: () => ({ diffCwd: "/tmp/pr-head", baseRef: "origin/main", headRef: "refs/pelaggio-review/pr-201" }),

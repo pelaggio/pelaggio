@@ -45,15 +45,24 @@ function sameRepo(pr: PrListEntry, ghRepo: string): boolean {
 	return !!headOwner && !!headName && headOwner.toLowerCase() === owner?.toLowerCase() && headName.toLowerCase() === repo?.toLowerCase();
 }
 
+function statusTimestamp(entry: RollupEntry): number {
+	const raw = entry.startedAt ?? entry.createdAt ?? entry.updatedAt;
+	const parsed = raw ? Date.parse(raw) : Number.NaN;
+	return Number.isFinite(parsed) ? parsed : 0;
+}
+
 function reviewStatus(rollup: RollupEntry[] | undefined): { state: "missing" | "pending" | "done"; startedAt?: string } {
 	if (!Array.isArray(rollup)) return { state: "missing" };
 	const statuses = rollup.filter((e) => (e.context ?? "").toLowerCase() === REVIEW_CONTEXT);
-	for (const status of statuses) {
-		const state = (status.state ?? "").toUpperCase();
-		if (state === "SUCCESS" || state === "FAILURE" || state === "ERROR") return { state: "done" };
-	}
-	const pending = statuses.find((e) => (e.state ?? "").toUpperCase() === "PENDING");
-	if (pending) return { state: "pending", startedAt: pending.startedAt ?? pending.createdAt ?? pending.updatedAt };
+	if (statuses.length === 0) return { state: "missing" };
+	// Classify by the MOST RECENT review status, not first-terminal-wins: a re-review
+	// posts pending over an older success/failure, and treating the stale terminal as
+	// "done" lets the drain delete a queue record while the effective context stays
+	// pending forever (#387 gate finding). Untimestamped entries sort oldest.
+	const latest = statuses.reduce((a, b) => (statusTimestamp(b) >= statusTimestamp(a) ? b : a));
+	const state = (latest.state ?? "").toUpperCase();
+	if (state === "SUCCESS" || state === "FAILURE" || state === "ERROR") return { state: "done" };
+	if (state === "PENDING") return { state: "pending", startedAt: latest.startedAt ?? latest.createdAt ?? latest.updatedAt };
 	return { state: "missing" };
 }
 

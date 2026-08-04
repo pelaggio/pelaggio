@@ -2523,11 +2523,17 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					break;
 				}
 				upsertReviewComment(review.gh, review.ghRepo, pr.prNumber, body);
-				postReviewStatus(review.gh, review.ghRepo, pr.headSha, finalState, finalState === "success" ? "local pelaggio review passed" : "local pelaggio review blocked");
+				const posted = postReviewStatus(review.gh, review.ghRepo, pr.headSha, finalState, finalState === "success" ? "local pelaggio review passed" : "local pelaggio review blocked");
 				totalSpent += reviewCost;
 				dayBudgetTracker.add(reviewCost);
-				// Positive terminal reached this pass → the record is satisfied.
-				if (record) completeReviewRequest(review.queueRoot, pr.prNumber, pr.headSha);
+				// The record is satisfied only when the terminal status POST SUCCEEDED —
+				// deleting it on a failed post would leave the PR pending forever with no
+				// durable request to guarantee a retry (#387 gate finding). Unclaim instead
+				// so the next drain round retries.
+				if (record) {
+					if (posted) completeReviewRequest(review.queueRoot, pr.prNumber, pr.headSha);
+					else unclaimReviewRequest(review.queueRoot, pr.prNumber, pr.headSha);
+				}
 				console.log(`review ${pr.itemId}#${pr.prNumber} — ${finalState}${reviewCost > 0 ? ` ${reviewCostEstimated ? "~" : ""}$${reviewCost.toFixed(2)}` : ""}`);
 			}
 		}
