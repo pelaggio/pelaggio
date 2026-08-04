@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
-import { continuousCycleCap, DayBudgetTracker, dayKey, freeQueueProbe, isContinuousPreset, nextLocalMidnightMs, resolveContinuousConfig } from "../continuous.js";
+import { continuousCycleCap, DayBudgetTracker, dayKey, freeQueueProbe, isContinuousPreset, nextLocalMidnightMs, resolveContinuousConfig, sumDaySpendFromLog } from "../continuous.js";
 import { DEFAULT_FLOW_POLICY } from "../flow-policy.js";
 import type { RoadmapItemStatus } from "../roadmap/types.js";
 import type { Flags } from "../types.js";
@@ -170,6 +173,97 @@ describe("DayBudgetTracker", () => {
 		const t = new DayBudgetTracker(undefined);
 		t.add(999);
 		assert.equal(t.exceeded(), false);
+	});
+
+	it("seeds today's spend from initialSpent (process-start reconstruction)", () => {
+		const now = () => Date.parse("2026-08-02T12:00:00Z");
+		const t = new DayBudgetTracker(10, now, 8);
+		assert.equal(t.daySpent, 8);
+		assert.equal(t.exceeded(), false);
+		t.add(2);
+		assert.equal(t.daySpent, 10);
+		assert.equal(t.exceeded(), true);
+	});
+
+	it("ignores a non-positive or non-finite initialSpent", () => {
+		const now = () => Date.parse("2026-08-02T12:00:00Z");
+		assert.equal(new DayBudgetTracker(10, now, 0).daySpent, 0);
+		assert.equal(new DayBudgetTracker(10, now, -5).daySpent, 0);
+		assert.equal(new DayBudgetTracker(10, now, Number.NaN).daySpent, 0);
+	});
+
+	it("seeded spend still rolls to zero after local midnight", () => {
+		let now = new Date(2026, 7, 2, 12, 0, 0).getTime();
+		const t = new DayBudgetTracker(10, () => now, 9);
+		assert.equal(t.exceeded(), false);
+		assert.equal(t.daySpent, 9);
+		now = new Date(2026, 7, 3, 1, 0, 0).getTime(); // next local day
+		assert.equal(t.daySpent, 0);
+		assert.equal(t.exceeded(), false);
+	});
+});
+
+describe("sumDaySpendFromLog", () => {
+	const localNoonIso = (y: number, m: number, d: number): string => new Date(y, m, d, 12, 0, 0).toISOString();
+
+	function withTempLog(lines: string[], run: (path: string) => void): void {
+		const dir = mkdtempSync(join(tmpdir(), "pelaggio-daylog-"));
+		const path = join(dir, "pelaggio-log.jsonl");
+		writeFileSync(path, lines.join("\n"));
+		try {
+			run(path);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	}
+
+	it("sums only today's total_cost", () => {
+		const now = new Date(2026, 7, 2, 12, 0, 0).getTime();
+		const lines = [
+			JSON.stringify({ ts: localNoonIso(2026, 7, 2), total_cost: 1.5 }),
+			JSON.stringify({ ts: localNoonIso(2026, 7, 2), total_cost: 2.25 }),
+			JSON.stringify({ ts: localNoonIso(2026, 7, 1), total_cost: 4 }), // yesterday
+			JSON.stringify({ ts: localNoonIso(2026, 7, 3), total_cost: 8 }), // tomorrow
+		];
+		withTempLog(lines, (path) => {
+			assert.equal(sumDaySpendFromLog(path, now), 3.75);
+		});
+	});
+
+	it("missing file → 0", () => {
+		assert.equal(sumDaySpendFromLog(join(tmpdir(), "pelaggio-does-not-exist-daylog.jsonl"), Date.parse("2026-08-02T12:00:00Z")), 0);
+	});
+
+	it("empty file → 0", () => {
+		const now = new Date(2026, 7, 2, 12, 0, 0).getTime();
+		withTempLog([""], (path) => {
+			assert.equal(sumDaySpendFromLog(path, now), 0);
+		});
+	});
+
+	it("skips malformed lines and missing/non-numeric/non-positive costs", () => {
+		const now = new Date(2026, 7, 2, 12, 0, 0).getTime();
+		const lines = [
+			"not json",
+			JSON.stringify({ ts: localNoonIso(2026, 7, 2) }), // no total_cost
+			JSON.stringify({ ts: localNoonIso(2026, 7, 2), total_cost: "5" }), // string cost
+			JSON.stringify({ ts: localNoonIso(2026, 7, 2), total_cost: Number.POSITIVE_INFINITY }), // serializes to null
+			JSON.stringify({ total_cost: 9 }), // no ts
+			JSON.stringify({ ts: "not-a-date", total_cost: 3 }),
+			JSON.stringify({ ts: localNoonIso(2026, 7, 2), total_cost: -2 }), // negative
+			JSON.stringify({ ts: localNoonIso(2026, 7, 2), total_cost: 2 }), // the only valid today line
+		];
+		withTempLog(lines, (path) => {
+			assert.equal(sumDaySpendFromLog(path, now), 2);
+		});
+	});
+
+	it("includes budgetCharge marker rows (they carry ts + total_cost)", () => {
+		const now = new Date(2026, 7, 2, 12, 0, 0).getTime();
+		const lines = [JSON.stringify({ ts: localNoonIso(2026, 7, 2), total_cost: 1, budgetCharge: true, steps: [] }), JSON.stringify({ ts: localNoonIso(2026, 7, 2), total_cost: 2 })];
+		withTempLog(lines, (path) => {
+			assert.equal(sumDaySpendFromLog(path, now), 3);
+		});
 	});
 });
 

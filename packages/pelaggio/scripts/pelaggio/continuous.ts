@@ -6,6 +6,7 @@
  * definition of the stop conditions.
  */
 
+import { existsSync, readFileSync } from "node:fs";
 import type { FlowPolicy } from "./flow-policy.js";
 import type { RoadmapSource } from "./roadmap/index.js";
 import { buildFlowSnapshot } from "./roadmap-cli.js";
@@ -139,18 +140,68 @@ export function nextLocalMidnightMs(nowMs: number = Date.now()): number {
 }
 
 /**
+ * Sum `total_cost` of cycle-log lines whose `ts` falls on the local calendar day
+ * of `nowMs`. Seeds `DayBudgetTracker` so a continuous process restart (fresh
+ * launch, daemon pause→resume, crash restart) reconstructs today's spend from the
+ * durable ledger (`.dev/pelaggio-log.jsonl`) instead of resetting to 0 (#82 item 6:
+ * "No new state file").
+ *
+ * Fail-open to 0: a missing file, unreadable file, malformed line, or a
+ * missing/non-finite `total_cost` is skipped rather than thrown. Counts only
+ * positive finite costs (mirrors `DayBudgetTracker.add`) and keys on the local
+ * calendar day (same basis as `roll()`).
+ */
+export function sumDaySpendFromLog(logPath: string, nowMs: number = Date.now()): number {
+	if (!existsSync(logPath)) return 0;
+	let raw: string;
+	try {
+		raw = readFileSync(logPath, "utf8");
+	} catch {
+		return 0;
+	}
+	const today = dayKey(nowMs);
+	let sum = 0;
+	for (const line of raw.split("\n")) {
+		const trimmed = line.trim();
+		if (!trimmed) continue;
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(trimmed);
+		} catch {
+			continue;
+		}
+		if (typeof parsed !== "object" || parsed === null) continue;
+		const { total_cost: cost, ts } = parsed as { total_cost?: unknown; ts?: unknown };
+		if (typeof cost !== "number" || !Number.isFinite(cost) || cost <= 0) continue;
+		if (typeof ts !== "string") continue;
+		const tsMs = Date.parse(ts);
+		if (Number.isNaN(tsMs) || dayKey(tsMs) !== today) continue;
+		sum += cost;
+	}
+	return sum;
+}
+
+/**
  * Track spend against a per-day budget. Returns whether the day budget is now
  * exhausted after adding `cost`. Resets the accumulator when the calendar day
- * rolls over.
+ * rolls over. `initialSpent` seeds today's spend on construction (process-start
+ * reconstruction via `sumDaySpendFromLog`).
  */
 export class DayBudgetTracker {
-	private day = dayKey();
-	private spent = 0;
+	private day: string;
+	private spent: number;
 
 	constructor(
 		private readonly dayBudget: number | undefined,
 		private readonly now: () => number = Date.now,
-	) {}
+		initialSpent = 0,
+	) {
+		// Source the day key from the injected clock (not a real-`Date.now()` field
+		// initializer) so a tracker seeded under a test clock does not roll-to-zero on
+		// its first access when the injected date differs from wall-clock today.
+		this.day = dayKey(this.now());
+		this.spent = Number.isFinite(initialSpent) && initialSpent > 0 ? initialSpent : 0;
+	}
 
 	/** Current day spend (after any rollover). */
 	get daySpent(): number {

@@ -26,7 +26,7 @@ import {
 } from "./config.js";
 import { forbiddenRootsForConfinement } from "./confinement/roots.js";
 import { type AcceptedSession, captureEvaluatorContext, createSessionController, firstDiffPathsByRoot, resolveEligibleSessions, revalidateChangedRoot, type SessionController, type SessionEvaluatorContext } from "./confinement/sessions.js";
-import { continuousCycleCap, DayBudgetTracker, freeQueueProbe, nextLocalMidnightMs, resolveContinuousConfig } from "./continuous.js";
+import { continuousCycleCap, DayBudgetTracker, freeQueueProbe, nextLocalMidnightMs, resolveContinuousConfig, sumDaySpendFromLog } from "./continuous.js";
 import { appendDecisions as appendDecisionsDefault, appendReviewEscalation as appendReviewEscalationDefault, lookupReviewEscalation as lookupReviewEscalationDefault } from "./decisions.js";
 import { createDriverAssignmentState, type DriverIdentity, recordArtifactAuthor, resolveStaticAuthor, selectAuthor, selectReviewers } from "./driver-assignment.js";
 import {
@@ -2041,6 +2041,15 @@ export interface OrchestratorDeps {
 	/** Roadmap + flow policy used by the default free queue probe. */
 	roadmap?: RoadmapSource;
 	flowPolicy?: FlowPolicy;
+	/** Cycle-log appender for local-review day-budget spend receipts (#398). Defaults to the
+	 *  helpers.ts export; injectable so tests can capture the `budgetCharge` marker writes. */
+	appendLog?: (entry: Record<string, unknown>) => void;
+	/** Day-budget seed override (#398): today's already-spent USD. Skips reading the cycle log
+	 *  (test seam). When omitted, continuous+day-budget runs derive it from `daySpendLogPath`. */
+	initialDaySpend?: number;
+	/** Path to the cycle log scanned for the day-budget seed (#398). Defaults to `LOG_PATH`;
+	 *  overridable so integration tests can point at a temp jsonl. */
+	daySpendLogPath?: string;
 }
 
 // Post-reset resume grace: jitter deliberately bounded inside the pre-existing 30s
@@ -2260,7 +2269,13 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		const isParallel = parallel > 1;
 		const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
 		const now = deps.now ?? Date.now;
-		const dayBudgetTracker = new DayBudgetTracker(continuous?.dayBudget, now);
+		const appendLog = deps.appendLog ?? appendLogDefault;
+		// Day-budget durability (#398): reconstruct today's spend on every continuous process start
+		// (fresh launch, daemon pause→resume, crash restart) from the durable cycle-log ledger, so a
+		// same-day restart and a midnight-crossing restart both honor the cap. Read the log only when
+		// continuous AND a day budget is set — ordinary `--item` runs pay no IO.
+		const initialDaySpend = continuous?.dayBudget != null ? (deps.initialDaySpend ?? sumDaySpendFromLog(deps.daySpendLogPath ?? LOG_PATH, now())) : 0;
+		const dayBudgetTracker = new DayBudgetTracker(continuous?.dayBudget, now, initialDaySpend);
 		const roadmapForProbe = deps.roadmap ?? getRoadmapSource(ROADMAP_SOURCE, { repo: REPO, github: ROADMAP_GITHUB, linear: ROADMAP_LINEAR });
 		const flowPolicyForProbe = deps.flowPolicy ?? DEFAULT_FLOW_POLICY;
 		const queueProbe = deps.queueProbe ?? (() => freeQueueProbe(roadmapForProbe, flowPolicyForProbe));
@@ -2641,6 +2656,32 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		const doReviewDrain = review.runner === "local" && shipIsPr && !!review.ghRepo && !noWorktree && !dryRun;
 		const reviewDrainLock = reviewDrainLockPath(review.queueRoot);
 
+		// Local-review day-budget durability (#398): the review drain charges `dayBudgetTracker.add`
+		// but — unlike pick/revise cycles — writes no cycle-log line, so a pure jsonl seed would
+		// under-count review spend after a restart. Append a minimal `budgetCharge` receipt whenever
+		// review cost is charged to the day budget. `sumDaySpendFromLog` reads these rows for the seed
+		// while `stats.reduce()` filters them, so durability costs `/stats` nothing. `doReviewDrain` is
+		// already `!dryRun`-gated, so this only runs on real spend.
+		const appendDayBudgetCharge = (cost: number): void => {
+			// The receipt exists solely to seed durable day-spend reconstruction, so it is meaningful
+			// only when a continuous day budget is set. No budget (or non-continuous single-item runs
+			// that still drain reviews) → nothing is "charged to the day budget", so skip the write.
+			if (continuous?.dayBudget == null) return;
+			if (!(Number.isFinite(cost) && cost > 0)) return;
+			appendLog({
+				ts: new Date(now()).toISOString(),
+				cycle: 0,
+				item: null, // spend receipt, not a delivered item
+				quick: false,
+				steps: [],
+				total_cost: Number(cost.toFixed(4)),
+				completed: true,
+				error: null,
+				verdict: null,
+				budgetCharge: true,
+			});
+		};
+
 		// One drain pass: reconcile enqueued records with live statusless PRs, post each `review`
 		// status from the trusted tree, and complete records. Respects `parkSignal` — a rate-limit
 		// park stops starting new reviews and returns (the caller decides whether to wait+retry).
@@ -2726,6 +2767,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						// under-reports --day-budget and drains keep picking past the cap.
 						totalSpent += result.cost;
 						dayBudgetTracker.add(result.cost);
+						appendDayBudgetCharge(result.cost);
 						parked = true;
 						console.log(`review ${pr.itemId}#${pr.prNumber} — parked (${result.park?.limitType ?? parkSignal.limitType})`);
 					} else {
@@ -2749,6 +2791,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				const posted = postReviewStatus(review.gh, review.ghRepo, pr.headSha, finalState, finalState === "success" ? "local pelaggio review passed" : "local pelaggio review blocked");
 				totalSpent += reviewCost;
 				dayBudgetTracker.add(reviewCost);
+				appendDayBudgetCharge(reviewCost);
 				// The record is satisfied only when the terminal status POST SUCCEEDED —
 				// deleting it on a failed post would leave the PR pending forever with no
 				// durable request to guarantee a retry (#387 gate finding). Unclaim instead

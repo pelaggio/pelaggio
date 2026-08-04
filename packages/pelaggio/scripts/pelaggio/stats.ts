@@ -66,7 +66,12 @@ function cacheHitRatio(t: TokenUsage): number {
 	return denom === 0 ? 0 : t.cacheRead / denom;
 }
 
-export function reduce(entries: CycleLogEntry[]): Stats {
+export function reduce(all: CycleLogEntry[]): Stats {
+	// Day-budget spend receipts (#398) are not pipeline cycles: drop them before any tally so
+	// `totalCycles`/`completedCycles`/`totalCostUsd`/`recentFailures` stay byte-identical to a
+	// log without them. `sumDaySpendFromLog` reads these rows directly, so `/stats` losing them
+	// costs the day-budget seed nothing.
+	const entries = all.filter((e) => !e.budgetCharge);
 	const totalTokens = emptyTokens();
 	const costByStep: Record<string, number> = {};
 	const costEstimatedByStep: Record<string, boolean> = {};

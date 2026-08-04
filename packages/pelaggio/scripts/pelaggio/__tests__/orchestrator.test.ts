@@ -1439,6 +1439,59 @@ describe("runOrchestrator — continuous mode (issue #82)", () => {
 		assert.equal(exitCode, 0);
 	});
 
+	// #398: durable seed. Process restart reconstructs today's spend so a same-day restart still
+	// honors the cap. `initialDaySpend` overrides the disk read; seed ≥ budget must gate before pick.
+	it("drain: pre-seeded day spend ≥ budget stops before any pick (#398)", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({ default: { completed: true, cost: 3 } });
+		let probes = 0;
+		const { exitCode } = await runOrchestrator(
+			{ ...baseFlags, continuous: true, preset: "drain", "day-budget": "5" },
+			{
+				runPipeline,
+				initialDaySpend: 5,
+				queueProbe: async () => {
+					probes++;
+					return { empty: false, readyCount: 1 };
+				},
+				sleep: async () => {},
+			},
+		);
+		assert.equal(exitCode, 0);
+		assert.equal(calls.length, 0, "seeded day spend ≥ budget must stop drain before any paid pick");
+		assert.equal(probes, 0, "the day-budget gate short-circuits before the free queue probe");
+	});
+
+	it("watch: pre-seeded day spend ≥ budget idles before any pick, then picks after rollover (#398)", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({ default: { completed: true, cost: 0.1 } });
+		let nowMs = new Date(2026, 7, 2, 12, 0, 0).getTime(); // mid-day so the idle sleep is long
+		const sleeps: number[] = [];
+		let picksBeforeFirstSleep = -1;
+		const { exitCode } = await runOrchestrator(
+			// cycles: "2" is a safety ceiling so the post-rollover picks terminate the run
+			{ ...baseFlags, continuous: true, preset: "watch", "day-budget": "5", "probe-interval": "1m", cycles: "2" },
+			{
+				runPipeline,
+				initialDaySpend: 6,
+				queueProbe: async () => ({ empty: false, readyCount: 1 }),
+				sleep: async (ms) => {
+					if (sleeps.length === 0) picksBeforeFirstSleep = calls.length;
+					sleeps.push(ms);
+					nowMs += ms + 1; // advance past the sleep so the tracker rolls past midnight
+				},
+				now: () => nowMs,
+			},
+		);
+		assert.equal(exitCode, 0);
+		assert.equal(picksBeforeFirstSleep, 0, "watch must budget-idle before any paid pick when seeded over budget");
+		assert.ok(
+			sleeps.some((ms) => ms > 60_000),
+			`expected a long budget-idle sleep, got ${JSON.stringify(sleeps)}`,
+		);
+		assert.equal(calls.length, 2, "after rollover the cap-bounded picks proceed");
+	});
+
 	// #397: local-review park path charged totalSpent but skipped DayBudgetTracker.add
 	// (the post-try success/failure path is skipped on break). After auto-resume the
 	// retry's cost was counted, but the partial park spend leaked — continuous drain
@@ -1471,12 +1524,16 @@ describe("runOrchestrator — continuous mode (issue #82)", () => {
 		});
 
 		let gateCall = 0;
+		const logged: Record<string, unknown>[] = [];
 		const promise = runOrchestrator(
 			{ ...baseFlags, continuous: true, preset: "drain", "day-budget": "5", target: "pull-request" },
 			{
 				runPipeline,
 				queueProbe: async () => ({ empty: false, readyCount: 1 }),
 				sleep: async () => {},
+				appendLog: (entry) => {
+					logged.push(entry);
+				},
 				review: {
 					runner: "local",
 					ghRepo: "o/r",
@@ -1530,6 +1587,10 @@ describe("runOrchestrator — continuous mode (issue #82)", () => {
 		assert.equal(gateCall, 2, "review sweep retried after park wait");
 		assert.equal(calls.length, 0, "day budget must include park cost so drain does not start paid picks");
 		assert.equal(exitCode, 0);
+		// #398: both the park partial ($4) and the retry success ($1.5) are written as durable
+		// budget-charge receipts so a process restart re-reads today's local-review spend.
+		const charges = logged.filter((e) => e.budgetCharge === true).map((e) => e.total_cost);
+		assert.deepEqual(charges, [4, 1.5], "local-review park + success costs are logged as budget-charge receipts");
 	});
 
 	it("drain ×2: two concurrent paid cycles when probe has work", async (t) => {
