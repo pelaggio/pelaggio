@@ -296,10 +296,16 @@ claims are cut from that literal ref and a stale checkout misleads the operator
 (`pipeline.ts:783-787`).
 
 A receipt `(item, attempt, observedBase, candidateSha)` is persisted **before** the
-push and confirmed with `landedSha` on success. Before each attempt the remote is
-re-read: if the candidate SHA is already an ancestor of remote `main`, the attempt
-returns `Landed` and runs the idempotent write-back — an ambiguous push outcome must
-never be re-merged onto a base containing its own merge. Reconciliation on
+push and confirmed with `landedSha` on success. Receipts follow ADR-0025 §8's trust
+model: harness-issued and harness-stored outside any model-writable worktree,
+validated fail-closed on read (typed challenge/content binding as in
+`execution-receipt.ts`), and never sufficient alone — `Landed` additionally requires
+the recorded candidate to descend from the recorded `observedBase` and be confirmed
+against the actual remote, rejecting records that name a pre-existing `main` commit.
+Before each attempt the remote is re-read: if a **validated** receipt's candidate
+SHA is already an ancestor of remote `main`, the attempt returns `Landed` and runs
+the idempotent write-back — an ambiguous push outcome must never be re-merged onto a
+base containing its own merge. Reconciliation on
 startup/resume follows the same rule; a claim with no landed SHA on the remote is
 retained for retry. Where a `RoadmapSource` produces commits (`MarkdownRoadmap`'s
 `markDone`/`archivePlan`) they ride the verified candidate, so no unverified second
