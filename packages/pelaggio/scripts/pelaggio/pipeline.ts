@@ -2783,6 +2783,13 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				if (v) liveStatus.render();
 				const detail = resultDetail(r);
 				console.log(`${resultIcon(r)} revise ${pr.itemId} — ${r.costEstimated ? "~" : ""}$${r.cost.toFixed(2)}${detail ? `  ${A.dim(detail)}` : ""}`);
+				// Revise outcomes gate the campaign exactly like cycle outcomes: a
+				// confinement/safety-classed revise failure must stop new cycle launches,
+				// not just render red (#385 round-2 review finding).
+				if (classifyCycleDisposition(r, RECOVERABLE) === "halt-campaign") {
+					campaignHalted = true;
+					return;
+				}
 			}
 		}
 

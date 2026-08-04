@@ -944,6 +944,42 @@ describe("runOrchestrator — revise sweep (issue #76)", () => {
 		assert.equal(prListCalls, 2, "review sweep must list before revise sweep lists");
 	});
 
+	it("a halt-campaign-classed revise failure stops the pick pool (revise outcomes gate the campaign like cycle outcomes)", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const gh: GhRunner = (args) => {
+			if (args[0] === "pr" && args[1] === "list") {
+				return {
+					stdout: JSON.stringify([{ number: 201, isDraft: false, headRefName: "feat/issue-84-local-review", labels: [], statusCheckRollup: [{ __typename: "StatusContext", context: "review", state: "FAILURE" }] }]),
+					stderr: "",
+					status: 0,
+				};
+			}
+			if (args[0] === "issue" && args[1] === "view") return { stdout: JSON.stringify({ labels: [{ name: "autopilot" }] }), stderr: "", status: 0 };
+			if (args[0] === "pr" && args[1] === "view") return { stdout: JSON.stringify({ comments: [{ body: "<!-- pelaggio-pr-review -->\nfix local blocker", createdAt: "2026-07-08T12:01:00Z" }] }), stderr: "", status: 0 };
+			return { stdout: "", stderr: "", status: 0 };
+		};
+		const { runPipeline, calls } = createMockRunPipeline({
+			byItem: { "84": { completed: false, cost: 0.5, error: "implement failed: confinement violation", disposition: "halt-campaign" } },
+			default: { completed: true, cost: 0.5 },
+		});
+
+		const { exitCode } = await runOrchestrator(
+			{ ...baseFlags, target: "pull-request", cycles: "2" },
+			{
+				runPipeline,
+				resolveWorktree: resolveWt,
+				// runner:"ci" disables the local review sweep — WITHOUT this, the sweep falls
+				// through to production defaults and spawns REAL provider agents (#420).
+				review: { runner: "ci", ghRepo: "o/r", gh },
+				revise: { local: true, ghRepo: "o/r", gh },
+			},
+		);
+
+		assert.equal(exitCode, 1);
+		assert.equal(calls.length, 1, `only the revise run may execute — a halt-campaign revise must not launch pick cycles; got ${calls.map((c) => c.opts.itemId ?? "auto").join(",")}`);
+		assert.equal(calls[0].opts.itemId, "84");
+	});
+
 	// A pending PR fixture whose `review` status is PENDING → always a candidate (never "done",
 	// never "stranded"), so it stays eligible for the local review sweep across retry rounds (#134).
 	function pendingReviewPr(): unknown {
