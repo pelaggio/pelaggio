@@ -27,7 +27,7 @@ import {
 import { forbiddenRootsForConfinement } from "./confinement/roots.js";
 import { type AcceptedSession, captureEvaluatorContext, createSessionController, firstDiffPathsByRoot, resolveEligibleSessions, revalidateChangedRoot, type SessionController, type SessionEvaluatorContext } from "./confinement/sessions.js";
 import { continuousCycleCap, DayBudgetTracker, freeQueueProbe, nextLocalMidnightMs, resolveContinuousConfig } from "./continuous.js";
-import { appendDecisions as appendDecisionsDefault, appendReviewEscalation as appendReviewEscalationDefault, lookupReviewEscalation as lookupReviewEscalationDefault, mainWorktree } from "./decisions.js";
+import { appendDecisions as appendDecisionsDefault, appendReviewEscalation as appendReviewEscalationDefault, lookupReviewEscalation as lookupReviewEscalationDefault } from "./decisions.js";
 import { createDriverAssignmentState, type DriverIdentity, recordArtifactAuthor, resolveStaticAuthor, selectAuthor, selectReviewers } from "./driver-assignment.js";
 import {
 	dispatchStepEffects as dispatchStepEffectsDefault,
@@ -70,6 +70,7 @@ import {
 	hasDeliverableCommits,
 	isTransientSdkError,
 	listWorktrees as listWorktreesDefault,
+	mainWorktree,
 	parseDeferredItems,
 	parsePickItem,
 	parsePickResult,

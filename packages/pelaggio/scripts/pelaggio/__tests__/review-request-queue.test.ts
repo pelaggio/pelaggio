@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { mainWorktree } from "../decisions.js";
+import { mainWorktree } from "../helpers.js";
 import {
 	claimReviewRequest,
 	completeReviewRequest,
