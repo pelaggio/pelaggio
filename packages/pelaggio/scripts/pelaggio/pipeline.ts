@@ -3100,6 +3100,12 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			console.log(`  ${resultIcon(r)} ${r.itemId ?? "?"}: ${label}`);
 		}
 
+		// A review drain that parked left a required review status pending (#387):
+		// completed cycles alone must not report delivery-complete over it.
+		if (doReviewDrain && parkSignal.parked) {
+			console.log(`${A.yellow("⚠")} review drain parked — one or more review statuses still pending; re-run after the limit clears`);
+			return { exitCode: 1, results };
+		}
 		return { exitCode: results.every((r) => r.completed) ? 0 : 1, results };
 	} finally {
 		process.off("SIGUSR2", onPause);
