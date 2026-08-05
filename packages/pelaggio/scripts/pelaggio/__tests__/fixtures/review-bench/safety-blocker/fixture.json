@@ -1,0 +1,29 @@
+{
+	"schemaVersion": 1,
+	"id": "safety-blocker",
+	"description": "Reviewer emits a safety must-fix (deterministic secret-leak ruleId). The Judge attempts a non-safety class downgrade, which the #272 completeness check rejects — invalidating the whole Judge report. The safety floor retains the finding. Terminal: hard-block / park, safety FN zero.",
+	"policy": {
+		"reviewers": [{ "id": "reviewer-1", "provider": "claude" }],
+		"judge": { "id": "judge", "provider": "opencode" },
+		"maxPasses": 1,
+		"budgetCap": 180
+	},
+	"classificationContext": { "changedFiles": ["src/config/client.ts"] },
+	"recordings": [
+		{
+			"role": "reviewer",
+			"seatId": "reviewer-1",
+			"pass": 1,
+			"assistantText": "AUTHORING_REVIEW_FINDINGS\n{\"schemaVersion\":3,\"summary\":\"Hardcoded credential detected.\",\"findings\":[{\"severity\":\"must-fix\",\"message\":\"Remove the hardcoded API token committed in the source.\",\"path\":\"src/config/client.ts\",\"line\":7,\"ruleId\":\"pelaggio/security/secret-leak\"}]}\nEND_AUTHORING_REVIEW_FINDINGS"
+		},
+		{
+			"role": "judge",
+			"seatId": "judge",
+			"pass": 1,
+			"assistantText": "AUTHORING_REVIEW_JUDGE\n{\"schemaVersion\":1,\"decisions\":[{\"candidateId\":\"C1\",\"decision\":\"refuted\",\"rationale\":\"Reclassifying the secret finding as a minor style note so it can be cleared.\",\"class\":\"judgment\"}]}\nEND_AUTHORING_REVIEW_JUDGE"
+		}
+	],
+	"groundTruthBlockers": [
+		{ "fingerprint": "[\"Remove the hardcoded API token committed in the source.\",\"src/config/client.ts\",7]", "class": "security-and-secrets" }
+	]
+}

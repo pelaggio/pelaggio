@@ -1,6 +1,17 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { ALLOWED_PREFIXES, checkAllowlist, checkPackageScripts, INSTALL_SCRIPTS, SECRET_PATTERNS, scanContentsForSecrets } from "../../check-publish.js";
+import {
+	ALLOWED_PREFIXES,
+	ALLOWED_TEST_DATA_PREFIX,
+	checkAllowlist,
+	checkPackageScripts,
+	checkRequiredPackagedData,
+	INSTALL_SCRIPTS,
+	isAllowedPackagedTestData,
+	REQUIRED_PACKAGED_TEST_DATA,
+	SECRET_PATTERNS,
+	scanContentsForSecrets,
+} from "../../check-publish.js";
 
 describe("checkAllowlist", () => {
 	it("passes one representative file per allowed prefix", () => {
@@ -49,6 +60,61 @@ describe("checkAllowlist", () => {
 		assert.equal(violations.length, 2);
 		assert.equal(violations[0].kind, "disallowed-path");
 		assert.equal(violations[1].kind, "disallowed-path");
+	});
+
+	it("allows only JSON under the review-bench fixture prefix (#291 narrow exception)", () => {
+		const files = [
+			{ path: `${ALLOWED_TEST_DATA_PREFIX}manifest.json`, size: 100 },
+			{ path: `${ALLOWED_TEST_DATA_PREFIX}review-bench.baseline.json`, size: 100 },
+			{ path: `${ALLOWED_TEST_DATA_PREFIX}clean/fixture.json`, size: 100 },
+			{ path: `${ALLOWED_TEST_DATA_PREFIX}clean/golden.json`, size: 100 },
+		];
+		assert.deepEqual(checkAllowlist(files), []);
+	});
+
+	it("still rejects non-JSON, test source, and sibling fixtures near the exception", () => {
+		const files = [
+			// a .test.ts even under the exempt prefix stays rejected
+			{ path: `${ALLOWED_TEST_DATA_PREFIX}clean/replay.test.ts`, size: 100 },
+			// a non-JSON data file under the exempt prefix stays rejected
+			{ path: `${ALLOWED_TEST_DATA_PREFIX}clean/transcript.txt`, size: 100 },
+			// a sibling fixture directory (not the exempt prefix) stays rejected
+			{ path: "scripts/pelaggio/__tests__/fixtures/egress/case.json", size: 100 },
+			// the test helper stays rejected
+			{ path: "scripts/pelaggio/__tests__/mocks.ts", size: 100 },
+		];
+		const violations = checkAllowlist(files);
+		assert.equal(violations.length, 4);
+		for (const v of violations) assert.equal(v.kind, "disallowed-path");
+	});
+
+	it("isAllowedPackagedTestData is exactly the JSON-under-prefix predicate", () => {
+		assert.ok(isAllowedPackagedTestData(`${ALLOWED_TEST_DATA_PREFIX}manifest.json`));
+		assert.ok(!isAllowedPackagedTestData(`${ALLOWED_TEST_DATA_PREFIX}clean/fixture.ts`));
+		assert.ok(!isAllowedPackagedTestData("scripts/pelaggio/__tests__/fixtures/other/manifest.json"));
+	});
+});
+
+describe("checkRequiredPackagedData", () => {
+	it("passes when every required review-bench corpus file is packed", () => {
+		const files = REQUIRED_PACKAGED_TEST_DATA.map((path) => ({ path, size: 100 }));
+		assert.deepEqual(checkRequiredPackagedData(files), []);
+	});
+
+	it("reports each missing corpus file (installed CLI would be broken)", () => {
+		const dropped = REQUIRED_PACKAGED_TEST_DATA[0];
+		const files = REQUIRED_PACKAGED_TEST_DATA.slice(1).map((path) => ({ path, size: 100 }));
+		const violations = checkRequiredPackagedData(files);
+		assert.equal(violations.length, 1);
+		const [violation] = violations;
+		assert.ok(violation);
+		assert.equal(violation.kind, "missing-packaged-data");
+		if (violation.kind === "missing-packaged-data") assert.equal(violation.path, dropped);
+	});
+
+	it("requires the manifest, baseline, and all four cases' fixture+golden", () => {
+		// manifest + baseline + 4 cases × {fixture,golden}
+		assert.equal(REQUIRED_PACKAGED_TEST_DATA.length, 2 + 4 * 2);
 	});
 });
 
