@@ -10,6 +10,8 @@ import {
 	isPipelineStep,
 	LOG_PATH,
 	type PipelineStep,
+	REAP_ENABLED,
+	RECONCILE_ORDER,
 	REPO,
 	REVIEW_CONFIG,
 	REVISE_LOCAL,
@@ -92,6 +94,7 @@ import {
 import { type NotifyConfig, notifyCycle, notifyDecision as notifyDecisionEvent, notifyStrandedReview, sendNotification as sendNotificationDefault } from "./notify.js";
 import { buildFailClosedComment, runPrReviewGate } from "./pr-review-cli.js";
 import { capabilityMapFrom, resolveAuthoringReviewConfig } from "./provider-routing.js";
+import { confirmLanding, enumerateReapCandidates, reapItem, reapReviewHeadOrphans, reconcileMutationLockPath, refreshLandingBase, shouldReap } from "./reap-sweep.js";
 import { runReviewLoop } from "./review/loop.js";
 import { type ReviewRecord, renderReviewRecord, writeReviewRecord } from "./review/record.js";
 import { cleanupAuthoringReviewSeatsForSha, isAuthoringReviewSeatPath, prepareAuthoringReviewSeat } from "./review/seats.js";
@@ -2013,6 +2016,15 @@ export interface OrchestratorDeps {
 	 *  (`REVISE_LOCAL`, the github-source-gated `ghRepo`, `defaultGhRun`). Injecting `ghRepo` lets
 	 *  tests force-activate the sweep with a stubbed `gh` without a real github-issues config. */
 	revise?: Partial<{ local: boolean; ghRepo: string; gh: GhRunner }>;
+	/** Post-merge reap seams. Partial injection keeps hard no-op gates testable without git/forge. */
+	reap?: Partial<{
+		enabled: boolean;
+		enumerate: typeof enumerateReapCandidates;
+		refresh: typeof refreshLandingBase;
+		confirm: typeof confirmLanding;
+		reapItem: typeof reapItem;
+		reapReviewHeads: typeof reapReviewHeadOrphans;
+	}>;
 	/** Local review sweep config (issue #84; mid-run drain #387). Partial — merged onto config defaults. */
 	review?: Partial<{
 		runner: ReviewRunner;
@@ -2055,6 +2067,7 @@ const MAX_RESUME_ROUNDS = 12;
 // size the orphan-steal window well above the longest realistic single pass. It only matters
 // across processes (a crashed holder), so 4h is generous insurance, not a per-PR timeout.
 const REVIEW_DRAIN_LOCK_STALE_MS = 4 * 60 * 60 * 1000;
+const RECONCILE_MUTATION_LOCK_STALE_MS = 4 * 60 * 60 * 1000;
 
 /**
  * Wait out the current park's reset window, or report that we can't. The timing/jitter/max-wait
@@ -2581,8 +2594,8 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				// re-lists, because the current holder may have snapshotted before this cycle enqueued. On
 				// a rate-limit park the drain sets parkSignal and returns; the break below hands off to the
 				// main park-and-resume block (no nested auto-resume wait inside the worker).
-				if (doReviewDrain && !parkSignal.parked) {
-					await runPostCycleReviewDrain();
+				if (!parkSignal.parked) {
+					await runPostCycleReconcile();
 				}
 
 				if (parkSignal.parked) {
@@ -2761,7 +2774,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			}
 		}
 
-		async function runPostCycleReviewDrain(): Promise<void> {
+		async function runReviewDrainAfterCycle(): Promise<void> {
 			const attempt = await tryWithFileLock(reviewDrainLock, () => runLocalReviewDrainOnce({ notifyStranded: false }), { label: "review drain lock", staleMs: REVIEW_DRAIN_LOCK_STALE_MS });
 			if (!attempt.ran) {
 				// The holder may have listed before this cycle enqueued its ship record. Wait for
@@ -2773,6 +2786,58 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				});
 			}
 		}
+
+		const reap = {
+			enabled: REAP_ENABLED,
+			enumerate: enumerateReapCandidates,
+			refresh: refreshLandingBase,
+			confirm: confirmLanding,
+			reapItem,
+			reapReviewHeads: reapReviewHeadOrphans,
+			...deps.reap,
+		};
+		const mainRepo = mainWorktree(REPO);
+		const reconcileLock = reconcileMutationLockPath(mainRepo);
+		const doReap = shouldReap({ enabled: reap.enabled, shipIsPr, ghRepo: review.ghRepo, noWorktree, dryRun });
+
+		async function runReapPassOnce(): Promise<void> {
+			if (!doReap) return;
+			await tryWithFileLock(
+				reconcileLock,
+				async () => {
+					const base = reap.refresh(mainRepo);
+					if (base.state !== "fresh") return;
+					for (const candidate of reap.enumerate(mainRepo)) {
+						if (parkSignal.parked) break;
+						const landing = reap.confirm(review.gh, review.ghRepo, candidate.branch, base.ref);
+						if (landing.state !== "landed" || landing.prNumber === null) continue;
+						if (autopilotManagedState(review.gh, review.ghRepo, candidate.itemId, ROADMAP_GITHUB.label) !== "managed") continue;
+						const result = await reap.reapItem(candidate, { roadmap: roadmapForProbe, mainRepo, prNumber: landing.prNumber });
+						console.log(`reap ${candidate.itemId} — ${result.branchDeleted ? "complete" : "retained"}`);
+						for (const warning of result.warnings) console.warn(`reap ${candidate.itemId}: ${warning}`);
+					}
+					await tryWithFileLock(reviewDrainLock, () => reap.reapReviewHeads(mainRepo), { label: "review drain lock", staleMs: REVIEW_DRAIN_LOCK_STALE_MS });
+				},
+				{ label: "reconcile mutation lock", staleMs: RECONCILE_MUTATION_LOCK_STALE_MS },
+			);
+		}
+
+		async function runReconcilePass(phase: "run-start" | "post-cycle"): Promise<void> {
+			for (const name of RECONCILE_ORDER) {
+				if (parkSignal.parked) return;
+				if (phase === "post-cycle" && (name === "sessions" || name === "main-ff")) continue;
+				if (name === "reap") await runReapPassOnce();
+				// #438/#439 add their run-start dispatch at their declared slots. Review and revise
+				// retain their proven call sites until a third wired reconciler warrants a registry.
+			}
+		}
+
+		async function runPostCycleReconcile(): Promise<void> {
+			await runReconcilePass("post-cycle");
+			if (doReviewDrain && !parkSignal.parked) await runReviewDrainAfterCycle();
+		}
+
+		await runReconcilePass("run-start");
 
 		// Resume mode
 		if (flags.resume) {
@@ -2835,8 +2900,8 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			// #387: a resumed cycle can ship a PR whose review-request record would
 			// otherwise sit undrained until the next process. Drain before returning
 			// so resume mode gets the same review-at-delivery as the worker pool.
-			if (doReviewDrain && !parkSignal.parked) {
-				await runPostCycleReviewDrain();
+			if (!parkSignal.parked) {
+				await runPostCycleReconcile();
 				// A drain park (rate limit) leaves the merge-gate review undrained; exiting
 				// 0 would falsely report delivery-complete and bypass park handling.
 				if (parkSignal.parked) {
@@ -2888,7 +2953,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		};
 		const doSweep = revise.local && shipIsPr && !!revise.ghRepo && !noWorktree && !dryRun && items.length === 0;
 
-		async function runReviseSweepOnce(): Promise<void> {
+		async function runReviseSweepUnlocked(): Promise<void> {
 			if (!doSweep) return;
 			const { revisable, labeledStillRed } = findRevisablePrs(revise.gh, revise.ghRepo);
 			// PRs already past their one revision pass but still red → idempotent human handoff.
@@ -2945,6 +3010,10 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				console.log(`${resultIcon(r)} revise ${pr.itemId} — ${r.costEstimated ? "~" : ""}$${r.cost.toFixed(2)}${detail ? `  ${A.dim(detail)}` : ""}`);
 				if (reviseHalts) return;
 			}
+		}
+
+		async function runReviseSweepOnce(): Promise<void> {
+			await tryWithFileLock(reconcileLock, runReviseSweepUnlocked, { label: "reconcile mutation lock", staleMs: RECONCILE_MUTATION_LOCK_STALE_MS });
 		}
 
 		// One-shot pre-pool revise for non-continuous runs. Continuous mode runs the sweep
@@ -3097,7 +3166,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				// #387: an auto-resumed cycle can ship a PR; drain its enqueued review
 				// request like the worker-pool and explicit --resume paths do, or the
 				// process can exit 0 with the required review status absent.
-				if (doReviewDrain && !parkSignal.parked) await runPostCycleReviewDrain();
+				if (!parkSignal.parked) await runPostCycleReconcile();
 			}
 
 			if (round >= MAX_RESUME_ROUNDS && parkSignal.parked) {

@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { DEFAULTS, loadConfig, resolveDriverCandidates, resolveProviderBin, resolveRepo, resolveStepSettings } from "../config.js";
+import { DEFAULTS, loadConfig, RECONCILE_ORDER, resolveDriverCandidates, resolveProviderBin, resolveRepo, resolveStepSettings } from "../config.js";
 import { BASELINE_TAXONOMY_CLASSES, canonicalizeContractionPayload, isSafetyClass, mergeTaxonomyClasses, signContractionPayload } from "../review/taxonomy.js";
 
 function tmpRepo(): string {
@@ -697,6 +697,27 @@ describe("loadConfig — revise", () => {
 		const repo = tmpRepo();
 		const path = writeYml(repo, "revise: nope\n");
 		assert.throws(() => loadConfig({ repo, configPath: path }), /expected `revise` to be a map/);
+	});
+});
+
+describe("loadConfig — reap", () => {
+	it("defaults enabled and parses the off-switch", () => {
+		const repo = tmpRepo();
+		assert.deepEqual(loadConfig({ repo, configPath: join(repo, ".pelaggio.yml") }).reap, { enabled: true });
+		const path = writeYml(repo, "reap:\n  enabled: false\n");
+		assert.equal(loadConfig({ repo, configPath: path }).reap.enabled, false);
+	});
+
+	it("validates the reap block", () => {
+		const repo = tmpRepo();
+		let path = writeYml(repo, "reap:\n  enabled: sometimes\n");
+		assert.throws(() => loadConfig({ repo, configPath: path }), /reap\.enabled.*boolean/);
+		path = writeYml(repo, "reap: nope\n");
+		assert.throws(() => loadConfig({ repo, configPath: path }), /expected `reap` to be a map/);
+	});
+
+	it("declares the deterministic reconcile order", () => {
+		assert.deepEqual(RECONCILE_ORDER, ["sessions", "main-ff", "reap", "review-drain", "revise"]);
 	});
 });
 

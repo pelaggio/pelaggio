@@ -75,7 +75,7 @@ If the output is empty (only the `/plan` artifact changed), **abort immediately*
 
 **Never discard MAIN_REPO changes.** If the merge target (`{MAIN_REPO}` on `main`) has uncommitted changes — e.g. a prior cycle's deferred `create-item` or pending bookkeeping — **commit them** (`git add -A && git commit -m "chore: recover uncommitted bookkeeping" --no-verify`); do **not** `git checkout`/`reset --hard`/`stash drop`/`git clean` them away to get a clean tree. Destroying a sibling cycle's work to make your merge tidy is never acceptable.
 
-**If `--pr` or `--target=pull-request` or `--target=auto-merge-pr`**: skip merge and emit a harness decision. The pipeline owns squash, commit, push, PR create/update, optional auto-merge, mark-done, archive, cleanup, and every network/roadmap effect for PR targets.
+**If `--pr` or `--target=pull-request` or `--target=auto-merge-pr`**: skip merge and emit a harness decision. The pipeline owns squash, commit, push, PR create/update, optional auto-merge queueing, and the review-drain and revise reconcilers. Mark-done, archive, and worktree/branch cleanup happen after confirmed landing through the zero-turn reap reconciler, not in the ship session.
 
 For PR targets, do not run `git reset`, `git commit`, `git push`, `gh`, `npx pelaggio roadmap`, mark-done, archive, or cleanup. Inspect with read-only commands as needed, then:
 

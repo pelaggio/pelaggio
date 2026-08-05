@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { GhRunner } from "../roadmap/github-issues.js";
-import { assertCiGreen, assertCiNotRed } from "../ship/ci-guard.js";
+import { assertCiGreen, assertCiNotRed, fetchPrLanding } from "../ship/ci-guard.js";
 
 function makeGh(response: { stdout?: string; stderr?: string; status?: number }): { gh: GhRunner; calls: string[][] } {
 	const calls: string[][] = [];
@@ -11,6 +11,15 @@ function makeGh(response: { stdout?: string; stderr?: string; status?: number })
 	};
 	return { gh, calls };
 }
+
+describe("fetchPrLanding", () => {
+	it("fails closed and returns a validated merge commit", () => {
+		assert.deepEqual(fetchPrLanding(makeGh({ stdout: "[]" }).gh, "o/r", "feat/issue-1"), { state: "not-merged" });
+		assert.deepEqual(fetchPrLanding(makeGh({ stdout: JSON.stringify([{ number: 2, mergeCommit: { oid: "abc" } }]) }).gh, "o/r", "feat/issue-2"), { state: "merged", prNumber: 2, mergeCommitOid: "abc" });
+		assert.deepEqual(fetchPrLanding(makeGh({ stdout: "not-json" }).gh, "o/r", "feat/issue-2"), { state: "unknown" });
+		assert.deepEqual(fetchPrLanding(makeGh({ stdout: JSON.stringify([{ number: 2, mergeCommit: null }]) }).gh, "o/r", "feat/issue-2"), { state: "unknown" });
+	});
+});
 
 const HEAD = "abc123headoid";
 // A PR-view JSON with a resolvable head oid (required for assertCiGreen to pin the merge).

@@ -48,6 +48,7 @@ export const LOG_PATH = resolve(REPO, ".dev", "pelaggio-log.jsonl");
 // ── Pipeline steps ─────────────────────────────────────────────────────
 
 export const STEPS = ["pick", "plan", "shakedown-plan", "implement", "shakedown-code", "ship"] as const;
+export const RECONCILE_ORDER = ["sessions", "main-ff", "reap", "review-drain", "revise"] as const;
 export type PipelineStep = (typeof STEPS)[number];
 /** Pipeline steps + non-pipeline actions. These carry per-step config but are absent from `STEPS`. */
 export type Step = PipelineStep | "shipwreck" | "pr-review" | "pr-verify";
@@ -110,6 +111,8 @@ export interface ResolvedConfig {
 	 *  github-issues + PR-ship repo sweeps for red-review PRs and revises them in-process on the
 	 *  local Claude subscription. `local: false` is the documented off-switch. */
 	revise: { local: boolean };
+	/** Post-merge PR reconciliation. Enabled by default and gated to eligible PR-mode runs. */
+	reap: { enabled: boolean };
 	/** PR review poster. `ci` preserves the GitHub Actions gate; `local` runs a trusted local sweep
 	 *  and posts commit statuses with context `review`. `statuslessAfter` is parsed by consumers. */
 	review: ReviewConfig;
@@ -216,6 +219,7 @@ export const DEFAULTS = {
 	// default-on does nothing for every markdown/direct-push consumer. `revise.local: false` is
 	// the off-switch, mirroring the CI `AUTOPILOT_AUTO_REVISE=false` off-switch.
 	revise: { local: true },
+	reap: { enabled: true },
 	review: {
 		runner: "ci",
 		statuslessAfter: "2h",
@@ -705,6 +709,21 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		}
 	}
 
+	let reapEnabled: boolean = DEFAULTS.reap.enabled;
+	const reapBlock = yml.reap;
+	if (reapBlock !== undefined) {
+		if (!isPlainObject(reapBlock)) {
+			throw new Error(`${configPath}: expected \`reap\` to be a map`);
+		}
+		const enabled = reapBlock.enabled;
+		if (enabled !== undefined) {
+			if (typeof enabled !== "boolean") {
+				throw new Error(`${configPath}: expected \`reap.enabled\` to be a boolean, got ${typeof enabled}`);
+			}
+			reapEnabled = enabled;
+		}
+	}
+
 	// review.*: CI vs local PR-review poster. Type-validate only; the wait string is parsed by
 	// the sweep consumer with parseWaitFlag, matching park.max-wait's tolerant parsing.
 	let reviewRunner: ReviewRunner = DEFAULTS.review.runner;
@@ -923,6 +942,7 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		park: { autoResume: parkAutoResume, maxWait: parkMaxWait, unknownResetWait: parkUnknownResetWait },
 		watch: { ...(watchDailyBudget !== undefined ? { dailyBudget: watchDailyBudget } : {}) },
 		revise: { local: reviseLocal },
+		reap: { enabled: reapEnabled },
 		review: { runner: reviewRunner, statuslessAfter: reviewStatuslessAfter, maxPasses: reviewMaxPasses, budgetCap: reviewBudgetCap, providerDiversity: reviewProviderDiversity, authoring: reviewAuthoring, taxonomy: reviewTaxonomy },
 		confinement: { allowDirtyMain: confinementAllowDirtyMain },
 		security: { envAllowlist: securityEnvAllowlist },
@@ -999,5 +1019,6 @@ export const ROADMAP_SOURCE: RoadmapSourceName = CONFIG.roadmapSource;
 export const ROADMAP_GITHUB: GithubRoadmapConfig = CONFIG.roadmapGithub;
 export const ROADMAP_LINEAR: LinearRoadmapConfig = CONFIG.roadmapLinear;
 export const REVISE_LOCAL: boolean = CONFIG.revise.local;
+export const REAP_ENABLED: boolean = CONFIG.reap.enabled;
 export const REVIEW_CONFIG: ReviewConfig = CONFIG.review;
 export const CONFINEMENT_CONFIG: { allowDirtyMain: boolean } = CONFIG.confinement;
