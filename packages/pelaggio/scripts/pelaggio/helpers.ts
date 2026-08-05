@@ -1292,7 +1292,15 @@ export function detectResumeStep(itemId: string, worktree: string): Step {
 
 export type LoggedDriverIdentity = { provider: "codex"; codexModel?: string } | { provider: "claude" | "grok" | "opencode"; model?: string };
 
-/** Find the latest successful realized author across all cycle entries for an item. */
+/**
+ * Find the latest successful realized author across all cycle entries for an item.
+ *
+ * The cycle log stores a realized provider plus a single generic `model` string. Codex is
+ * reconstructed as `codexModel`; Claude, Grok, and OpenCode as the generic `model` (#431: a Grok or
+ * OpenCode step now logs its own realized model, not the top-level Claude id, so the recovered
+ * identity round-trips into a correct execution override). A logged `"default"` model means the
+ * seat ran on the CLI default and is recovered as an absent model, matching the Codex behavior.
+ */
 export function findLoggedArtifactAuthor(itemId: string, step: "plan" | "implement", logPath = LOG_PATH): LoggedDriverIdentity | undefined {
 	if (!existsSync(logPath)) return undefined;
 	try {

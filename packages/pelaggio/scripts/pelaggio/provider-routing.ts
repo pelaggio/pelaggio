@@ -9,7 +9,7 @@
  */
 
 import type { AuthoringReviewConfig, ResolvedConfig, ReviewSlot, StepSettings } from "./config.js";
-import { resolveStepSettings } from "./config.js";
+import { modelForProvider, resolveStepSettings } from "./config.js";
 import type { CapabilityAxis, CapabilityCandidate, CapabilityPredicate, CapabilityRealization, CapabilityRouteResult, ProviderCapabilities, ProviderName } from "./types.js";
 
 // ── Per-axis matching ──────────────────────────────────────────────────
@@ -159,7 +159,9 @@ function fillSlot(slot: ReviewSlot, defaults: StepSettings): ReviewSlot {
 		const codexModel = slot.codexModel ?? defaults.codexModel;
 		return codexModel ? { ...slot, codexModel } : { ...slot };
 	}
-	const model = slot.model ?? defaults.model;
+	// Fill a non-Codex seat from that provider's own step-settings slot, never the top-level
+	// Claude `model` slot — a Grok/OpenCode seat must not scavenge the Claude id (#431).
+	const model = slot.model ?? modelForProvider(defaults, slot.provider);
 	return model ? { ...slot, model } : { ...slot };
 }
 

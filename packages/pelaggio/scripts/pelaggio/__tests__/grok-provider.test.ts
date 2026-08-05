@@ -3,7 +3,7 @@ import { access, chmod, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { CONFIG, REPO } from "../config.js";
+import { CONFIG, REPO, type StepSettings } from "../config.js";
 import { buildGrokStepResult, grokEffort, grokServerRequestResponse, grokTimeoutMs, runStep, selectGrokModel } from "../grok-provider.js";
 import { detectLandlock } from "../grok-sandbox.js";
 import type { StepEvent } from "../types.js";
@@ -108,10 +108,14 @@ describe("buildGrokStepResult — failure modes", () => {
 });
 
 describe("grok helpers", () => {
-	it("selectGrokModel forwards a grok id, never a claude id", () => {
-		assert.equal(selectGrokModel({ model: "grok-4.5", codexModel: undefined }), "grok-4.5");
-		assert.equal(selectGrokModel({ model: "claude-opus-4-8", codexModel: undefined }), undefined);
-		assert.equal(selectGrokModel({ model: undefined, codexModel: undefined }), undefined);
+	it("selectGrokModel reads only grokModel; never a claude id or a foreign slot", () => {
+		assert.equal(selectGrokModel({ grokModel: "grok-4.5" }), "grok-4.5");
+		// Defensive: a claude id in grok's own slot is rejected.
+		assert.equal(selectGrokModel({ grokModel: "claude-opus-4-8" }), undefined);
+		assert.equal(selectGrokModel({ grokModel: undefined }), undefined);
+		// Foreign slots are ignored — grok only ever reads `grokModel` (#431).
+		const foreignOnly = { grokModel: undefined, model: "claude-opus-4-8", codexModel: "gpt-5-codex", openCodeModel: "openrouter/qwen" } satisfies Partial<StepSettings>;
+		assert.equal(selectGrokModel(foreignOnly), undefined);
 	});
 
 	it("grokEffort collapses the fine scale onto low|medium|high", () => {

@@ -37,6 +37,8 @@ function driver(provider: ProviderName, over: Partial<Omit<StepSettings, "provid
 		effort: over.effort ?? DEFAULTS.effort["pr-review"],
 		model: over.model ?? (provider === "claude" ? "claude-opus-4-8" : undefined),
 		codexModel: over.codexModel ?? (provider === "codex" ? "gpt-5-codex" : undefined),
+		grokModel: over.grokModel ?? (provider === "grok" ? "grok-code-fast-1" : undefined),
+		openCodeModel: over.openCodeModel ?? (provider === "opencode" ? "openrouter/qwen" : undefined),
 		provider,
 	};
 }
@@ -77,7 +79,7 @@ function report(summary: string, findings: unknown[] = []): string {
 const REVIEWED_SHA = "a".repeat(40);
 
 async function runCli(
-	opts: { files?: string; diff?: string; results?: Array<StepResult | Error>; diffError?: Error; statusPosted?: boolean } = {},
+	opts: { files?: string; diff?: string; results?: Array<StepResult | Error>; diffError?: Error; statusPosted?: boolean; reviewDrivers?: StepSettings[]; verifySettings?: StepSettings } = {},
 ): Promise<{ code: number; calls: RunCall[]; comments: string[]; statuses: string[]; statusShas: string[]; stdout: string; stderr: string }> {
 	const calls: RunCall[] = [];
 	const comments: string[] = [];
@@ -110,8 +112,8 @@ async function runCli(
 		// Hermetic pool: a single claude reviewer + claude verifier. Without this the gate
 		// resolves drivers from the host repo's .pelaggio.yml, so editing pelaggio's own
 		// review config silently changes fan-out width and breaks every queued-result test.
-		reviewDrivers: [driver("claude")],
-		verifySettings: driver("claude"),
+		reviewDrivers: opts.reviewDrivers ?? [driver("claude")],
+		verifySettings: opts.verifySettings ?? driver("claude"),
 		policy: reviewPolicy(),
 		execFileSync,
 		runStep,
@@ -160,6 +162,22 @@ describe("pr-review CLI aggregation", () => {
 		// The required status is pinned to the PR *head* sha, resolved once before the
 		// review — not the local checkout's HEAD, and not re-queried after (no fail-open).
 		assert.deepEqual(out.statusShas, [REVIEWED_SHA]);
+	});
+
+	it("routes a Grok/OpenCode pool driver's realized model into the generic execution override (#431)", async () => {
+		const grokOut = await runCli({ reviewDrivers: [driver("grok")], verifySettings: driver("grok") });
+		assert.equal(grokOut.code, 0);
+		const grokCall = grokOut.calls[0];
+		assert.ok(grokCall, "expected at least one runStep call for the grok driver");
+		// The pooled Grok driver's own model reaches runStep as a generic non-Codex override —
+		// never a claude id, never the codexModel slot.
+		assert.deepEqual(grokCall.executionOverride, { provider: "grok", model: "grok-code-fast-1" });
+
+		const ocOut = await runCli({ reviewDrivers: [driver("opencode")], verifySettings: driver("opencode") });
+		assert.equal(ocOut.code, 0);
+		const ocCall = ocOut.calls[0];
+		assert.ok(ocCall, "expected at least one runStep call for the opencode driver");
+		assert.deepEqual(ocCall.executionOverride, { provider: "opencode", model: "openrouter/qwen" });
 	});
 
 	it("fails loudly when the required review status cannot be posted", async () => {
