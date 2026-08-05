@@ -62,7 +62,10 @@ models:
         shipwreck: claude
         # Fan-out set: every driver runs the same discovery prompt concurrently and
         # every (driver × label) cell must return a valid PASS — all-pass/fail-closed.
-        pr-review: [claude, codex, grok]
+        # grok is temporarily out of THIS pool only (#434): its concurrent unsandboxed
+        # boot races the claude SDK cell to a turn-1 "Internal error". Selection-based
+        # pools below keep all three drivers. Restore grok here when #434 ships.
+        pr-review: [claude, codex]
         # Scalar verifier, pinned off the pool's first entry (claude) so
         # provider-diversity: require is satisfied by construction.
         pr-verify: codex
