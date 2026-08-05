@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { resolve } from "node:path";
 import { describe, it } from "node:test";
 import { confirmLanding, enumerateReapCandidates, reapItem, reconcileMutationLockPath, shouldReap } from "../reap-sweep.js";
 import type { GhRunner } from "../roadmap/github-issues.js";
@@ -27,13 +30,28 @@ describe("reap sweep", () => {
 	});
 
 	it("requires merged forge state and ancestry", () => {
-		const gh: GhRunner = () => ({ stdout: JSON.stringify([{ number: 9, mergeCommit: { oid: "abc" } }]), stderr: "", status: 0 });
-		assert.deepEqual(confirmLanding(gh, "o/r", "feat/issue-9", "origin/main", { isAncestor: () => true }), { state: "landed", prNumber: 9 });
-		assert.deepEqual(confirmLanding(gh, "o/r", "feat/issue-9", "origin/main", { isAncestor: () => false }), { state: "stale-ref", prNumber: 9 });
+		const gh: GhRunner = () => ({ stdout: JSON.stringify([{ number: 9, mergeCommit: { oid: "abc" }, headRefOid: "head" }]), stderr: "", status: 0 });
+		assert.deepEqual(confirmLanding(gh, "o/r", "/main", "feat/issue-9", "origin/main", { branchTip: () => "head", isAncestor: () => true }), { state: "landed", prNumber: 9 });
+		assert.deepEqual(confirmLanding(gh, "o/r", "/main", "feat/issue-9", "origin/main", { branchTip: () => "head", isAncestor: () => false }), { state: "stale-ref", prNumber: 9 });
 		assert.deepEqual(
-			confirmLanding(() => ({ stdout: "nope", stderr: "", status: 0 }), "o/r", "feat/issue-9", "origin/main"),
+			confirmLanding(() => ({ stdout: "nope", stderr: "", status: 0 }), "o/r", "/main", "feat/issue-9", "origin/main", { branchTip: () => "head" }),
 			{ state: "unknown", prNumber: null },
 		);
+	});
+
+	it("refuses a historical merged PR when the current branch tip differs", () => {
+		const gh: GhRunner = () => ({ stdout: JSON.stringify([{ number: 9, mergeCommit: { oid: "abc" }, headRefOid: "old-head" }]), stderr: "", status: 0 });
+		assert.deepEqual(confirmLanding(gh, "o/r", "/main", "feat/issue-9", "origin/main", { branchTip: () => "new-head", isAncestor: () => true }), { state: "not-merged", prNumber: null });
+	});
+
+	it("fails closed before the forge read when the local branch tip is unavailable", () => {
+		let ghCalled = false;
+		const gh: GhRunner = () => {
+			ghCalled = true;
+			return { stdout: "[]", stderr: "", status: 0 };
+		};
+		assert.deepEqual(confirmLanding(gh, "o/r", "/main", "feat/issue-9", "origin/main", { branchTip: () => null }), { state: "unknown", prNumber: null });
+		assert.equal(ghCalled, false);
 	});
 
 	it("uses the shared lock path", () => {
@@ -96,5 +114,36 @@ describe("reap sweep", () => {
 			gitCalls.some((args) => args[0] === "branch"),
 			false,
 		);
+	});
+
+	it("clears only the exact item resume log", async () => {
+		const mainRepo = mkdtempSync(resolve(tmpdir(), "pelaggio-reap-residue-"));
+		try {
+			const dev = resolve(mainRepo, ".dev");
+			mkdirSync(dev);
+			const itemLog = resolve(dev, "pelaggio-resume-9.log");
+			const siblingLog = resolve(dev, "pelaggio-resume-90.log");
+			writeFileSync(itemLog, "item 9");
+			writeFileSync(siblingLog, "item 90");
+			await reapItem(
+				{ itemId: "9", branch: "feat/issue-9", worktree: null },
+				{
+					roadmap: {
+						async getItem() {
+							return { id: "9", title: "x", deps: "", sourceRef: "9", status: "done" as const };
+						},
+						async markDone() {},
+						async archivePlan() {},
+					},
+					mainRepo,
+					prNumber: 4,
+					git: () => ({ stdout: "", stderr: "", status: 0 }),
+				},
+			);
+			assert.equal(existsSync(itemLog), false);
+			assert.equal(existsSync(siblingLog), true);
+		} finally {
+			rmSync(mainRepo, { recursive: true, force: true });
+		}
 	});
 });

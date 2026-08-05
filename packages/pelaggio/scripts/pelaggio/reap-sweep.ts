@@ -68,10 +68,29 @@ export function refreshLandingBase(mainRepo: string, io: { git?: GitRunner } = {
 	return result.status === 0 ? { state: "fresh", ref: "refs/remotes/origin/main" } : { state: "unknown" };
 }
 
-export function confirmLanding(gh: GhRunner, ghRepo: string, branch: string, landingRef: string, io: { isAncestor?: (oid: string, ref: string) => boolean | null } = {}): { state: LandingState; prNumber: number | null } {
-	const landing = fetchPrLanding(gh, ghRepo, branch);
+export function confirmLanding(
+	gh: GhRunner,
+	ghRepo: string,
+	mainRepo: string,
+	branch: string,
+	landingRef: string,
+	io: { branchTip?: (branch: string) => string | null; isAncestor?: (oid: string, ref: string) => boolean | null } = {},
+): { state: LandingState; prNumber: number | null } {
+	const branchTip = io.branchTip
+		? io.branchTip(branch)
+		: (() => {
+				const result = defaultGit(["rev-parse", "--verify", `refs/heads/${branch}^{commit}`], mainRepo);
+				return result.status === 0 ? result.stdout.trim() || null : null;
+			})();
+	if (!branchTip) return { state: "unknown", prNumber: null };
+	const landing = fetchPrLanding(gh, ghRepo, branch, branchTip);
 	if (landing.state !== "merged") return { state: landing.state, prNumber: null };
-	const isAncestor = io.isAncestor ?? ((oid, ref) => defaultGit(["merge-base", "--is-ancestor", oid, ref], process.cwd()).status === 0);
+	const isAncestor =
+		io.isAncestor ??
+		((oid, ref) => {
+			const result = defaultGit(["merge-base", "--is-ancestor", oid, ref], mainRepo);
+			return result.status === 0 ? true : result.status === 1 ? false : null;
+		});
 	try {
 		const ancestor = isAncestor(landing.mergeCommitOid, landingRef);
 		if (ancestor === null) return { state: "unknown", prNumber: landing.prNumber };
@@ -85,7 +104,7 @@ function clearResidue(mainRepo: string, candidate: ReapCandidate, prNumber: numb
 	rmSync(reviseFindingsPath(mainRepo, candidate.itemId), { force: true });
 	const dev = resolve(mainRepo, ".dev");
 	if (existsSync(dev)) {
-		for (const name of readdirSync(dev)) if (name.startsWith(`pelaggio-resume-${candidate.itemId.toLowerCase()}`)) rmSync(resolve(dev, name), { force: true, recursive: true });
+		rmSync(resolve(dev, `pelaggio-resume-${candidate.itemId.toLowerCase()}.log`), { force: true });
 		const requests = resolve(dev, "review-requests");
 		if (existsSync(requests)) for (const name of readdirSync(requests)) if (name.startsWith(`${prNumber}-`) && (name.endsWith(".json") || name.endsWith(".claimed"))) rmSync(resolve(requests, name), { force: true });
 	}

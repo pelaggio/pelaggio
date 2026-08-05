@@ -14,10 +14,27 @@ function makeGh(response: { stdout?: string; stderr?: string; status?: number })
 
 describe("fetchPrLanding", () => {
 	it("fails closed and returns a validated merge commit", () => {
-		assert.deepEqual(fetchPrLanding(makeGh({ stdout: "[]" }).gh, "o/r", "feat/issue-1"), { state: "not-merged" });
-		assert.deepEqual(fetchPrLanding(makeGh({ stdout: JSON.stringify([{ number: 2, mergeCommit: { oid: "abc" } }]) }).gh, "o/r", "feat/issue-2"), { state: "merged", prNumber: 2, mergeCommitOid: "abc" });
-		assert.deepEqual(fetchPrLanding(makeGh({ stdout: "not-json" }).gh, "o/r", "feat/issue-2"), { state: "unknown" });
-		assert.deepEqual(fetchPrLanding(makeGh({ stdout: JSON.stringify([{ number: 2, mergeCommit: null }]) }).gh, "o/r", "feat/issue-2"), { state: "unknown" });
+		assert.deepEqual(fetchPrLanding(makeGh({ stdout: "[]" }).gh, "o/r", "feat/issue-1", "head-1"), { state: "not-merged" });
+		assert.deepEqual(fetchPrLanding(makeGh({ stdout: JSON.stringify([{ number: 2, mergeCommit: { oid: "abc" }, headRefOid: "head-2" }]) }).gh, "o/r", "feat/issue-2", "head-2"), {
+			state: "merged",
+			prNumber: 2,
+			mergeCommitOid: "abc",
+		});
+		assert.deepEqual(fetchPrLanding(makeGh({ stdout: "not-json" }).gh, "o/r", "feat/issue-2", "head-2"), { state: "unknown" });
+		assert.deepEqual(fetchPrLanding(makeGh({ stdout: JSON.stringify([{ number: 2, mergeCommit: null, headRefOid: "head-2" }]) }).gh, "o/r", "feat/issue-2", "head-2"), { state: "unknown" });
+	});
+
+	it("does not accept a historical merge for a reused branch name", () => {
+		const historical = JSON.stringify([{ number: 1, mergeCommit: { oid: "merged-old" }, headRefOid: "old-head" }]);
+		assert.deepEqual(fetchPrLanding(makeGh({ stdout: historical }).gh, "o/r", "feat/issue-2", "new-head"), { state: "not-merged" });
+	});
+
+	it("selects the merged PR whose head matches the current branch tip", () => {
+		const reused = JSON.stringify([
+			{ number: 1, mergeCommit: { oid: "merged-old" }, headRefOid: "old-head" },
+			{ number: 2, mergeCommit: { oid: "merged-current" }, headRefOid: "current-head" },
+		]);
+		assert.deepEqual(fetchPrLanding(makeGh({ stdout: reused }).gh, "o/r", "feat/issue-2", "current-head"), { state: "merged", prNumber: 2, mergeCommitOid: "merged-current" });
 	});
 });
 

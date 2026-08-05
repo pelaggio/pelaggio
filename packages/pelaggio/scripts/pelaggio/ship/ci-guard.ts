@@ -89,17 +89,19 @@ function fetchPrStatus(gh: GhRunner, prNumber: number, ghRepo?: string): PrStatu
 }
 
 /** Fail-closed forge read used before destructive post-merge reconciliation. */
-export function fetchPrLanding(gh: GhRunner, ghRepo: string, headBranch: string): PrLanding {
+export function fetchPrLanding(gh: GhRunner, ghRepo: string, headBranch: string, headOid: string): PrLanding {
 	try {
-		const result = gh(["pr", "list", "--head", headBranch, "--state", "merged", "--json", "number,mergeCommit", "--limit", "10", "--repo", ghRepo]);
+		const result = gh(["pr", "list", "--head", headBranch, "--state", "merged", "--json", "number,mergeCommit,headRefOid", "--limit", "10", "--repo", ghRepo]);
 		if (result.status !== 0) return { state: "unknown" };
 		const parsed = parseGhJson<unknown[]>(result.stdout, Array.isArray);
 		if (parsed.length === 0) return { state: "not-merged" };
-		const row = parsed[0];
-		if (!isObject(row) || typeof row.number !== "number" || !isObject(row.mergeCommit) || typeof row.mergeCommit.oid !== "string" || row.mergeCommit.oid.length === 0) {
-			return { state: "unknown" };
+		for (const row of parsed) {
+			if (!isObject(row) || typeof row.headRefOid !== "string") return { state: "unknown" };
+			if (row.headRefOid !== headOid) continue;
+			if (typeof row.number !== "number" || !isObject(row.mergeCommit) || typeof row.mergeCommit.oid !== "string" || row.mergeCommit.oid.length === 0) return { state: "unknown" };
+			return { state: "merged", prNumber: row.number, mergeCommitOid: row.mergeCommit.oid };
 		}
-		return { state: "merged", prNumber: row.number, mergeCommitOid: row.mergeCommit.oid };
+		return { state: "not-merged" };
 	} catch {
 		return { state: "unknown" };
 	}

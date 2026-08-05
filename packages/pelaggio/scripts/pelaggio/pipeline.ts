@@ -2809,7 +2809,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					if (base.state !== "fresh") return;
 					for (const candidate of reap.enumerate(mainRepo)) {
 						if (parkSignal.parked) break;
-						const landing = reap.confirm(review.gh, review.ghRepo, candidate.branch, base.ref);
+						const landing = reap.confirm(review.gh, review.ghRepo, mainRepo, candidate.branch, base.ref);
 						if (landing.state !== "landed" || landing.prNumber === null) continue;
 						if (autopilotManagedState(review.gh, review.ghRepo, candidate.itemId, ROADMAP_GITHUB.label) !== "managed") continue;
 						const result = await reap.reapItem(candidate, { roadmap: roadmapForProbe, mainRepo, prNumber: landing.prNumber });
