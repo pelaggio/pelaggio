@@ -66,6 +66,23 @@ export interface RunStepOpts {
  *  the `deps.runStep` DI seam resolve to one definition. */
 export type RunStepFn = (name: Step, prompt: string, opts: RunStepOpts, emit: StepEmit) => Promise<StepResult>;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
+/** Preserve the SDK's structured turn-limit signal when the child-process exit
+ * error arrives after the result message and carries only a generic message. */
+export function isClaudeMaxTurnsError(error: unknown, resultSubtype: string): boolean {
+	if (resultSubtype === "error_max_turns") return true;
+	if (!isRecord(error)) return false;
+	const attachments = Array.isArray(error.attachments) ? error.attachments : [];
+	return attachments.some((attachment) => {
+		if (attachment === "max_turns_reached") return true;
+		if (!isRecord(attachment)) return false;
+		return attachment.type === "max_turns_reached" || attachment.subtype === "error_max_turns";
+	});
+}
+
 /** A step-execution backend. Every registered provider declares a complete static
  *  capability descriptor beside `runStep` (ADR-0020 / #337). The exported `runStep`
  *  dispatches by the per-step resolved `provider` and gains no adaptation registry. */
@@ -561,9 +578,19 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 	} catch (err) {
 		ok = false;
 		const errMsg = err instanceof Error ? err.message : String(err);
-		subtype = classifyStepError(errMsg, opts.parkSignal.parked);
+		const maxTurns = isClaudeMaxTurnsError(err, subtype);
+		subtype = maxTurns ? "error_max_turns" : classifyStepError(errMsg, opts.parkSignal.parked);
 		text = errMsg;
 		emit({ type: "sdk_error", message: errMsg });
+	}
+
+	// A turn cap is resumable WIP. Park it whether the SDK returned the typed
+	// result normally or threw a generic child-exit error immediately afterward.
+	if (subtype === "error_max_turns") {
+		opts.parkSignal.parked = true;
+		opts.parkSignal.resetsAt = 0;
+		opts.parkSignal.limitType = "max-turns";
+		opts.parkSignal.triggerWorker = opts.itemId ?? "";
 	}
 
 	// Edit loop override
