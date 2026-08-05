@@ -16,6 +16,16 @@ export function forbiddenRootsForConfinement(args: {
 	worktrees: string[];
 	/** Own item worktree (a legitimately-mutating step); exempt when present. */
 	ownWorktree?: string;
+	/**
+	 * #435: opt-in to auditing `cwd` itself instead of auto-exempting it. Default `false`
+	 * keeps the historical contract — a step's own cwd is always exempt because its writes
+	 * are legitimate. Set `true` for a step whose cwd is execution context but not an
+	 * authorized Git write root: `pick` runs with `cwd === mainRepo` yet has a read-only
+	 * main-tree contract (its only legitimate writes are gitignored `.dev/` bookkeeping),
+	 * so its own cwd must stay audited. The independent `ownWorktree`, active-peer, session,
+	 * and ephemeral-review-seat exemptions are unaffected.
+	 */
+	auditCwd?: boolean;
 	/** When true, drop mainRepo from the set (operator main-checkout tolerated). */
 	allowDirtyMain?: boolean;
 	/** Predicate: is this root a harness-managed ephemeral review worktree — an authoring-review
@@ -43,7 +53,7 @@ export function forbiddenRootsForConfinement(args: {
 	// Record-derived exemptions: independently drop mainAbs (sessions.ts already filters;
 	// this is defense in depth and must not touch allowDirtyMain / activeWorktrees).
 	const sessionExempt = [...(args.sessionWorktrees ?? [])].map((w) => resolve(w)).filter((w) => w !== mainAbs);
-	const exempt = new Set([cwdAbs, ...(args.ownWorktree ? [resolve(args.ownWorktree)] : []), ...[...(args.activeWorktrees ?? [])].map((w) => resolve(w)), ...sessionExempt]);
+	const exempt = new Set([...(args.auditCwd ? [] : [cwdAbs]), ...(args.ownWorktree ? [resolve(args.ownWorktree)] : []), ...[...(args.activeWorktrees ?? [])].map((w) => resolve(w)), ...sessionExempt]);
 	const seen = new Set<string>();
 	const roots: string[] = [];
 	for (const root of args.worktrees) {

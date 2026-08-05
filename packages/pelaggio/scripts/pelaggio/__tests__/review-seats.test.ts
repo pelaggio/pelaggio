@@ -293,3 +293,60 @@ describe("authoring review seats (#269)", () => {
 		rmSync(repo, { recursive: true, force: true });
 	});
 });
+
+// #435: `pick` runs with cwd === mainRepo but has a read-only main-tree contract. The
+// pure helper carries the opt-in (auditCwd) that audits the step's own cwd instead of
+// exempting it; the pipeline pairs it with a forced allowDirtyMain:false for pick.
+describe("cwd-audit opt-in for a main-cwd read-only step (#435)", () => {
+	const repo = "/tmp/main-repo";
+
+	it("keeps cwd exempt by default (unchanged contract for every existing caller)", () => {
+		const roots = forbiddenRootsForConfinement({
+			cwd: repo,
+			mainRepo: repo,
+			worktrees: [repo],
+			isEphemeralReviewWorktree: () => false,
+		});
+		assert.ok(!roots.includes(repo), "cwd (main) stays exempt when auditCwd is unset");
+	});
+
+	it("audits cwd (main) when opted in, even though it is the step cwd", () => {
+		const roots = forbiddenRootsForConfinement({
+			cwd: repo,
+			mainRepo: repo,
+			worktrees: [repo],
+			auditCwd: true,
+			allowDirtyMain: false,
+			isEphemeralReviewWorktree: () => false,
+		});
+		assert.ok(roots.includes(repo), "opted-in cwd (main) is audited");
+	});
+
+	it("main cannot be dropped by allowDirtyMain under the pipeline's forced-off value", () => {
+		// The allowDirtyMain branch is orthogonal to auditCwd, so a caller that left
+		// allowDirtyMain:true would reopen the #435 hole. The pipeline prevents this by
+		// pairing auditCwd:true with a forced allowDirtyMain:false (see forbiddenRootsForStep).
+		const hole = forbiddenRootsForConfinement({ cwd: repo, mainRepo: repo, worktrees: [repo], auditCwd: true, allowDirtyMain: true, isEphemeralReviewWorktree: () => false });
+		assert.ok(!hole.includes(repo), "raw allowDirtyMain:true still drops main — hence the pipeline forces it off");
+		const gated = forbiddenRootsForConfinement({ cwd: repo, mainRepo: repo, worktrees: [repo], auditCwd: true, allowDirtyMain: false, isEphemeralReviewWorktree: () => false });
+		assert.ok(gated.includes(repo), "the pipeline's forced allowDirtyMain:false keeps main audited");
+	});
+
+	it("still exempts ownWorktree and active peers while auditing cwd (independent filters intact)", () => {
+		const own = "/tmp/claude-autopilot-435";
+		const peer = "/tmp/claude-autopilot-peer";
+		const roots = forbiddenRootsForConfinement({
+			cwd: repo,
+			mainRepo: repo,
+			worktrees: [repo, own, peer],
+			auditCwd: true,
+			allowDirtyMain: false,
+			ownWorktree: own,
+			activeWorktrees: [peer],
+			isEphemeralReviewWorktree: () => false,
+		});
+		assert.ok(roots.includes(repo), "main is audited");
+		assert.ok(!roots.includes(own), "ownWorktree stays exempt");
+		assert.ok(!roots.includes(peer), "active peer stays exempt");
+	});
+});

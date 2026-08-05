@@ -1673,6 +1673,67 @@ describe("runPipeline — worktree confinement audit", () => {
 		assert.equal(last?.subtype, "error_confinement");
 	});
 
+	// #435: pick runs with cwd === MAIN_REPO. A pick that changes Git-visible state in the
+	// main checkout (the incident: a rogue tracked-file edit) must fail closed as
+	// error_confinement — and the operator's `allow-dirty-main` escape hatch must NOT open a
+	// hole for it. Table-driven over both postures proves the gate cannot be opted out.
+	for (const allowDirtyMain of [false, true]) {
+		it(`fails closed when a pick step mutates a tracked file in main (allowDirtyMain=${allowDirtyMain}) (#435)`, async () => {
+			const { parent, repo: mainRepo } = makeTempRepoWithParent();
+			writeFileSync(join(mainRepo, "config.ts"), "// original\n");
+			execSync('git add config.ts && git commit -q -m "add config"', { cwd: mainRepo });
+			const worktreePath = join(parent, `${WORKTREE_PREFIX}tool-99`);
+			const parkSignal = makeParkSignal();
+			const logs: Array<Record<string, unknown>> = [];
+			const { runStep, calls } = createMockRunStep(
+				{
+					pick: {
+						ok: true,
+						text: "claimed TOOL-99\npick-item: TOOL-99\npick-result: claimed",
+						sideEffect: (cwd) => {
+							// A rogue pick edits a tracked file in the main checkout — the #435 incident.
+							writeFileSync(join(cwd, "config.ts"), "// mutated by a rogue pick\n");
+							// It still creates the item worktree as a real pick would.
+							execSync(`git worktree add -q -b feat/tool-99 "${worktreePath}"`, { cwd });
+						},
+					},
+					plan: { ok: true },
+				},
+				parkSignal,
+			);
+
+			const result = await runPipeline({ cycle: 1, verbose: false, shipTarget: getShipTarget("direct-push"), dryRun: false, liveStatus: makeLiveStatus() }, parkSignal, baseFlags, {
+				runStep,
+				mainRepo,
+				resolveWorktree: (id) => join(parent, `${WORKTREE_PREFIX}${id.toLowerCase()}`),
+				listWorktrees: () => [mainRepo],
+				allowDirtyMain,
+				appendLog: (e) => {
+					logs.push(e);
+				},
+				roadmap: makeMockRoadmap(),
+				runShipBookkeeping: noopBookkeeping,
+			});
+
+			assert.equal(result.completed, false);
+			assert.equal(result.error, "pick failed");
+			// The gate stops the pipeline at pick — no plan/implement/ship on a confinement trip.
+			assert.deepEqual(
+				calls.map((c) => c.step),
+				["pick"],
+			);
+			const steps = logs[0].steps as Array<{ name: string; subtype?: string; ok: boolean; errorDetail?: string }>;
+			const last = steps.at(-1);
+			assert.equal(last?.name, "pick");
+			assert.equal(last?.ok, false);
+			assert.equal(last?.subtype, "error_confinement", `allow-dirty-main must not opt pick out of the main audit (allowDirtyMain=${allowDirtyMain})`);
+			// The confinement diagnostic names the changed root (main) so an operator can locate
+			// the breach. (The per-file path also appears but is mangled for ` M` tracked-mod
+			// entries by a pre-existing porcelain-trim quirk outside this fix's scope.)
+			assert.ok(last?.errorDetail?.includes(mainRepo), `errorDetail should name the changed root; got: ${last?.errorDetail}`);
+		});
+	}
+
 	it("fails when a shipwreck step dirties a sibling worktree", async () => {
 		const { parent, mainRepo, worktree } = makeConfinementRepos();
 		const sibling = join(parent, `${WORKTREE_PREFIX}shipwreck-sibling`);

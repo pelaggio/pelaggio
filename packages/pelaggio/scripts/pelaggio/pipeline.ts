@@ -277,21 +277,28 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	};
 	if (allowDirtyMain) {
 		log(
-			"⚠ confinement.allow-dirty-main is active: operator main-checkout changes between tool windows are tolerated; Claude mutating-tool deltas and sibling changes remain audited, while Codex excludes main through its workspace boundary; simultaneous changes inside a tool window fail closed",
+			"⚠ confinement.allow-dirty-main is active: operator main-checkout changes between tool windows are tolerated; Claude mutating-tool deltas and sibling changes remain audited, while Codex excludes main through its workspace boundary; simultaneous changes inside a tool window fail closed. The pick step is exempt from this tolerance — its main checkout is always audited (#435).",
 		);
 	}
 
-	function forbiddenRootsForStep(cwd: string, ownWorktree?: string): { roots: string[]; excludedSessions: AcceptedSession[] } {
+	function forbiddenRootsForStep(name: Step, cwd: string, ownWorktree?: string): { roots: string[]; excludedSessions: AcceptedSession[] } {
 		const cwdAbs = resolve(cwd);
 		const mainAbs = resolve(mainRepo);
-		// Main-repo-based steps (pick, shipwreck) legitimately write inside mainRepo
-		// itself — and shipwreck legitimately finishes a squash/commit in the item's
-		// own worktree (SKILL.md states 3c/3d) — but must not touch sibling worktrees.
-		// `listWorktrees()` already includes mainRepo, so prepend it only when it must be
-		// audited and dedup by resolved path. `allowDirtyMain` drops mainRepo from the set.
-		// Authoring-review seats (#269) are throwaway per-seat checkouts under
-		// `.dev/authoring-review-seats/`; concurrent peer seats may hold session files
-		// and must not trip confinement.
+		// #435: `pick` runs with `cwd === mainRepo` but has a read-only main-tree contract —
+		// its only legitimate writes are gitignored `.dev/` bookkeeping (plan file, mutation
+		// lock, session records), never tracked/untracked files in the checkout. So audit
+		// pick's own cwd (main) rather than exempting it, and force the gate on even under
+		// `allow-dirty-main`: that operator escape hatch tolerates inter-window main edits for
+		// worktree steps, but must not open a hole for a pick that mutates main. shipwreck and
+		// `--no-worktree` implement steps DO have legitimate main / own-worktree writes
+		// (SKILL.md 3c/3d, no-worktree mode) and stay exempt.
+		const auditCwd = name === "pick";
+		const effectiveAllowDirtyMain = auditCwd ? false : allowDirtyMain;
+		// `listWorktrees()` already includes mainRepo, so prepend it only when cwd is a
+		// worktree (so main is still audited there) and dedup by resolved path.
+		// `allowDirtyMain` drops mainRepo from the set for non-pick steps. Authoring-review
+		// seats (#269) are throwaway per-seat checkouts under `.dev/authoring-review-seats/`;
+		// concurrent peer seats may hold session files and must not trip confinement.
 		const candidates = cwdAbs === mainAbs ? listWorktrees() : [mainRepo, ...listWorktrees()];
 		// #369: cross-process peers proven by the eligibility predicate. Kept distinct
 		// from in-memory activeWorktrees so the trust boundary stays visible.
@@ -303,7 +310,8 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				mainRepo,
 				worktrees: candidates,
 				ownWorktree,
-				allowDirtyMain,
+				auditCwd,
+				allowDirtyMain: effectiveAllowDirtyMain,
 				isEphemeralReviewWorktree: (root) => isAuthoringReviewSeatPath(root, mainRepo) || isReviewHeadPath(root, mainRepo),
 				activeWorktrees: opts.activeWorktrees,
 				sessionWorktrees,
@@ -394,7 +402,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			let stepExcludedSessions: AcceptedSession[] = [];
 			const revalidationWarnings: string[] = [];
 			try {
-				const enumResult = forbiddenRootsForStep(cwd, ownWorktree);
+				const enumResult = forbiddenRootsForStep(name, cwd, ownWorktree);
 				forbiddenRoots = enumResult.roots;
 				stepExcludedSessions = enumResult.excludedSessions;
 			} catch (e) {
