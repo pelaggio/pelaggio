@@ -66,6 +66,23 @@ export interface RunStepOpts {
  *  the `deps.runStep` DI seam resolve to one definition. */
 export type RunStepFn = (name: Step, prompt: string, opts: RunStepOpts, emit: StepEmit) => Promise<StepResult>;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
+/** Preserve the SDK's structured turn-limit signal when the child-process exit
+ * error arrives after the result message and carries only a generic message. */
+export function isClaudeMaxTurnsError(error: unknown, resultSubtype: string): boolean {
+	if (resultSubtype === "error_max_turns") return true;
+	if (!isRecord(error)) return false;
+	const attachments = Array.isArray(error.attachments) ? error.attachments : [];
+	return attachments.some((attachment) => {
+		if (attachment === "max_turns_reached") return true;
+		if (!isRecord(attachment)) return false;
+		return attachment.type === "max_turns_reached" || attachment.subtype === "error_max_turns";
+	});
+}
+
 /** A step-execution backend. Every registered provider declares a complete static
  *  capability descriptor beside `runStep` (ADR-0020 / #337). The exported `runStep`
  *  dispatches by the per-step resolved `provider` and gains no adaptation registry. */
@@ -561,7 +578,10 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 	} catch (err) {
 		ok = false;
 		const errMsg = err instanceof Error ? err.message : String(err);
-		subtype = classifyStepError(errMsg, opts.parkSignal.parked);
+		// Preserve classification only. The pipeline owns the bounded max-turns
+		// retry policy; parkSignal is reserved for actual rate-limit handbacks.
+		const maxTurns = isClaudeMaxTurnsError(err, subtype);
+		subtype = maxTurns ? "error_max_turns" : classifyStepError(errMsg, opts.parkSignal.parked);
 		text = errMsg;
 		emit({ type: "sdk_error", message: errMsg });
 	}
