@@ -3204,7 +3204,8 @@ describe("runOrchestrator — resume review findings routing", () => {
 		assert.equal(calls[0].flags["review-findings"], "findings.md");
 	});
 
-	it("honors explicit --from even when review findings are present", async () => {
+	it("rejects a non-implement --from when review findings are present (exit 2)", async (t) => {
+		t.mock.method(console, "error", () => {});
 		const { runPipeline: mockRun, calls } = createMockRunPipeline({ default: { completed: true, cost: 0 } });
 		const worktree = "/tmp/pelaggio-resume-review-findings";
 
@@ -3217,9 +3218,28 @@ describe("runOrchestrator — resume review findings routing", () => {
 			},
 		);
 
+		// A later --from would skip the implement step that reads and validates the
+		// findings — the combination fails closed before any pipeline spend.
+		assert.equal(result.exitCode, 2);
+		assert.equal(calls.length, 0);
+	});
+
+	it("allows --from implement combined with review findings", async () => {
+		const { runPipeline: mockRun, calls } = createMockRunPipeline({ default: { completed: true, cost: 0 } });
+		const worktree = "/tmp/pelaggio-resume-review-findings";
+
+		const result = await runOrchestrator(
+			{ ...baseFlags, resume: "108", from: "implement", "review-findings": "findings.md" },
+			{
+				runPipeline: mockRun,
+				resolveWorktree: () => worktree,
+				detectResumeStep: () => "ship",
+			},
+		);
+
 		assert.equal(result.exitCode, 0);
 		assert.equal(calls.length, 1);
-		assert.equal(calls[0].opts.startFrom, "shakedown-code");
+		assert.equal(calls[0].opts.startFrom, "implement");
 		assert.equal(calls[0].flags["review-findings"], "findings.md");
 	});
 });
