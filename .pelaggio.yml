@@ -32,7 +32,9 @@ review:
     # errors distinct + non-fatal). Restore the three-reviewer panel after top-up.
     reviewers:
       - { id: claude, provider: claude }
-      - { id: codex, provider: codex, codex-model: gpt-5-codex }
+      # No codex-model pin: this environment's Codex runs on a ChatGPT account
+      # where 'gpt-5-codex' 400s; the CLI default is correct here.
+      - { id: codex, provider: codex }
   # Dogfooding posture: highest-quality gate, still auto-merging. Two independent
   # review iterations over a three-driver fan-out, with a structurally-different
   # scalar verifier.
