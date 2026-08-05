@@ -48,6 +48,15 @@ const fakeResolveWorktree = (id: string): string => `/fake/wt-${id.toLowerCase()
 const fakeDetectResumeStep = () => "implement" as const;
 
 describe("runOrchestrator — resume mode", () => {
+	it("rejects --review-findings combined with a later --from (exit 2)", async (t) => {
+		t.mock.method(console, "error", () => {});
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({});
+		const { exitCode } = await runOrchestrator({ ...baseFlags, resume: "tool-99", from: "ship", "review-findings": "f.md" }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });
+		assert.equal(exitCode, 2);
+		assert.equal(calls.length, 0, "no pipeline run may start past the rejected combination");
+	});
+
 	it("success: runPipeline called with startFrom and exitCode 0", async (t) => {
 		t.mock.method(console, "log", () => {});
 		const { runPipeline, calls } = createMockRunPipeline({

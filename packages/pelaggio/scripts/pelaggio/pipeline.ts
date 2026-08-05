@@ -2801,6 +2801,12 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					console.error(`invalid --from ${JSON.stringify(flags.from)}; valid: ${STEPS.filter((s) => s !== "pick").join(", ")}`);
 					return { exitCode: 2, results };
 				}
+				// A findings-driven resume must run implement, where the findings file is read
+				// and validated; any later --from would silently skip the revision task.
+				if (flags["review-findings"] !== undefined && flags.from !== "implement") {
+					console.error(`--review-findings requires --from implement (got ${JSON.stringify(flags.from)}): the findings are read and validated by the implement step`);
+					return { exitCode: 2, results };
+				}
 				startFrom = flags.from;
 				console.log(`${A.bold("resume")} ${id} from ${A.bold(startFrom)} ${A.dim("(--from override)")}`);
 			} else if (flags["review-findings"] !== undefined) {
