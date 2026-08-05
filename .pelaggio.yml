@@ -27,6 +27,12 @@ review:
   # Opt-in; unattended authoring loops require key authentication.
   authoring:
     enabled: true
+    # grok is temporarily out of the reviewer seats (#434): concurrent unsandboxed
+    # boot races the claude SDK seat to a turn-1 "Internal error". Restore the
+    # default three-reviewer panel when #434 ships.
+    reviewers:
+      - { id: claude, provider: claude }
+      - { id: codex, provider: codex, codex-model: gpt-5-codex }
   # Dogfooding posture: highest-quality gate, still auto-merging. Two independent
   # review iterations over a three-driver fan-out, with a structurally-different
   # scalar verifier.
