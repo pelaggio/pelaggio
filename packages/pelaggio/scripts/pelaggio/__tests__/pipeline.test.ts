@@ -282,6 +282,26 @@ describe("runPipeline — review findings revision prompt", () => {
 		);
 	});
 
+	it("fails closed on an explicitly empty --review-findings path", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const { runStep, calls } = createMockRunStep({}, parkSignal);
+
+		const result = await runPipeline(
+			{ ...baseOpts(worktree), startFrom: "implement" },
+			parkSignal,
+			{ ...baseFlags, "review-findings": "" },
+			{ runStep, mainRepo: worktree, listWorktrees: () => [], appendLog: () => {}, roadmap: makeMockRoadmap() },
+		);
+
+		assert.equal(result.completed, false);
+		assert.match(result.error ?? "", /empty --review-findings path/);
+		assert.equal(
+			calls.some((call) => call.step === "implement"),
+			false,
+		);
+	});
+
 	it("fails closed when the review findings file is whitespace-only (no preamble)", async () => {
 		const worktree = makeTempGitRepo();
 		const parkSignal = makeParkSignal();

@@ -1342,6 +1342,11 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		// input cannot be read: continuing would silently ask the worker to revise without its task.
 		let reviewNote = "";
 		const findingsPath = flags["review-findings"];
+		// Any DEFINED value is a findings-driven resume — `--review-findings ""` must not
+		// slip past a truthiness check into the generic plan prompt.
+		if (findingsPath !== undefined && findingsPath.trim() === "") {
+			return finish({ itemId, completed: false, cost, error: "empty --review-findings path — refusing a findings-driven resume without findings" });
+		}
 		if (findingsPath) {
 			try {
 				reviewNote = reviewFindingsPreamble(readFileSync(findingsPath, "utf-8"));
