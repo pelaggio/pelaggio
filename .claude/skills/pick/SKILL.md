@@ -28,7 +28,7 @@ Parse `$ARGUMENTS` (may be empty).
 - `unknown` (exit 2) → report which source was queried and emit `pick-result: unknown-id`.
 - `done` → report it and emit `pick-result: already-done`.
 - `blocked` → **stop immediately** and report "⚠ {ID} is blocked: {blockedReason or deps text}. Cannot pick a blocked item." Do not create a branch or worktree. Emit `pick-result: blocked`.
-- `open` → proceed to Claim. An open item with `deferred: true` is still claimable on this explicit-ID path (operator override of automatic curation).
+- `open` → proceed to Claim. An open item with `deferred: true` is **not** an unconditional override: `roadmap claim` first runs the #367 charter-review activation (a fresh panel over the current body), clears the deferred state only on a `ship`, and exits 5 if the review does not ship. Resolve first with `npx pelaggio roadmap un-defer <id>`.
 - `in-progress` → a cycle (or stale branch) holds the claim: report it and go to the reuse flow below (ask whether to reuse the existing worktree or pick a different item; emit `pick-result: worktree-exists`). Never attempt a fresh claim on an in-progress item — it deterministically exits 3.
 
 **`/pick next`** (argument is exactly "next", no topic) — run `npx pelaggio roadmap next --json`. Parse the `{ candidates: [{ item, verdict }], verdicts: [...] }` envelope and claim candidates in their returned order. Deferred and declared over-scope items appear only as non-eligible verdicts (`reason: "deferred"` / `reason: "over-scope"`) and never in `candidates`. **Immediately auto-claim the first candidate — do NOT ask for confirmation, do NOT list alternatives, do NOT wait for user input.** If `candidates` is empty (including an all-deferred set), emit `pick-result: queue-empty`.

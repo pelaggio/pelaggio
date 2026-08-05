@@ -1,11 +1,25 @@
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { hasCharterProvenance, parseCharterMarker, provenanceFromCreateOpts, stripCharterMarker, withCharterMarker } from "./charter-provenance.js";
 import { createClaimWorkspace } from "./git-claim.js";
-import type { CreateItemOpts, ItemStatus, LinearRoadmapConfig, MarkDoneContext, PlanLocation, RoadmapItem, RoadmapItemStatus, RoadmapSource, RoadmapSourceName } from "./types.js";
+import type { CreateItemOpts, ItemStatus, LinearRoadmapConfig, MarkDoneContext, PlanLocation, ReviewProvenance, RoadmapItem, RoadmapItemStatus, RoadmapSource, RoadmapSourceName } from "./types.js";
 
 const PLAN_MARKER = "<!-- pelaggio-plan -->";
 const IN_PROGRESS_LABEL = "in-progress";
+const LABEL_DEFERRED = "deferred";
+
+/** Apply parsed charter provenance + the deferred label/marker to a projected item (#367). */
+function applyCharterProjection(item: RoadmapItemStatus, description: string | null | undefined, labels: readonly string[]): void {
+	const provenance = parseCharterMarker(description ?? "");
+	// listIssues does not fetch labels, so the marker's own deferred flag is the round-trip signal there;
+	// getItem fetches labels and the `deferred` label is the SoT when present.
+	if (labels.includes(LABEL_DEFERRED) || provenance?.deferred) item.deferred = true;
+	if (provenance) {
+		if (provenance.reviewDigest) item.reviewDigest = provenance.reviewDigest;
+		if (provenance.level) item.reviewLevel = provenance.level;
+	}
+}
 
 interface LinearIssueRelation {
 	type: string;
@@ -39,6 +53,8 @@ export interface LinearApi {
 	transitionIssue(issueId: string, teamId: string, stateType: "started" | "completed"): Promise<void>;
 	addLabel(issueId: string, labelName: string): Promise<void>;
 	removeLabel(issueId: string, labelName: string): Promise<void>;
+	/** Charter-review activation re-stamps the description marker before deferral can be cleared (#367). */
+	updateDescription(issueId: string, description: string): Promise<void>;
 	getIssueComments(identifier: string): Promise<LinearCommentNode[]>;
 	createIssue(input: { teamId: string; title: string; description?: string; labelNames?: string[] }): Promise<{ id: string; identifier: string; title: string }>;
 }
@@ -90,13 +106,15 @@ export class LinearRoadmap implements RoadmapSource {
 			// Server-side claim markers double as the cross-host claim signal (issue #12).
 			const claimed = it.stateType === "started" || (it.labels ?? []).includes(IN_PROGRESS_LABEL);
 			const status: ItemStatus = blocked ? "blocked" : claimed ? "in-progress" : "open";
-			return {
+			const item: RoadmapItemStatus = {
 				id: it.identifier,
 				title: it.title,
 				deps: formatBlockers(inverseRelations),
 				sourceRef: it.identifier,
 				status,
 			};
+			applyCharterProjection(item, it.description, it.labels ?? []);
+			return item;
 		});
 	}
 
@@ -109,7 +127,7 @@ export class LinearRoadmap implements RoadmapSource {
 		if (issue.stateType === "completed" || issue.stateType === "canceled") status = "done";
 		else if (hasBlocker(inverseRelations)) status = "blocked";
 		else if (issue.stateType === "started" || (issue.labels ?? []).includes(IN_PROGRESS_LABEL)) status = "in-progress";
-		return {
+		const item: RoadmapItemStatus = {
 			id: issue.identifier,
 			title: issue.title,
 			deps: formatBlockers(inverseRelations),
@@ -118,6 +136,8 @@ export class LinearRoadmap implements RoadmapSource {
 			body: issue.description ?? "",
 			labels: issue.labels ?? [],
 		};
+		applyCharterProjection(item, issue.description, issue.labels ?? []);
+		return item;
 	}
 
 	resolvePlanPath(ctx: { id: string; worktree: string }): string {
@@ -143,10 +163,11 @@ export class LinearRoadmap implements RoadmapSource {
 		if (opts.deps && opts.deps.length > 0) parts.push(`Depends on: ${opts.deps.join(", ")}`);
 		if (opts.scope) parts.push(`Scope: ${opts.scope}`);
 		if (opts.priority) parts.push(`Priority: ${opts.priority}`);
-		const description = parts.join("\n");
+		const rawDescription = parts.join("\n");
+		const description = hasCharterProvenance(opts) ? withCharterMarker(rawDescription, provenanceFromCreateOpts(opts)) : rawDescription;
 		const labelNames: string[] = [];
 		if (this.label) labelNames.push(this.label);
-		if (opts.deferred) labelNames.push("deferred");
+		if (opts.deferred) labelNames.push(LABEL_DEFERRED);
 		const created = await api.createIssue({ teamId: this.teamId, title: opts.title, description: description || undefined, labelNames: labelNames.length > 0 ? labelNames : undefined });
 		return {
 			id: created.identifier,
@@ -154,6 +175,24 @@ export class LinearRoadmap implements RoadmapSource {
 			deps: (opts.deps ?? []).join(", "),
 			sourceRef: created.identifier,
 		};
+	}
+
+	async activateItem(id: string, provenance: ReviewProvenance): Promise<RoadmapItemStatus> {
+		const api = await this.api();
+		const issue = await api.getIssue(id);
+		if (!issue) throw new Error(`activateItem: Linear issue ${id} not found`);
+		// Re-stamp the description marker (deferred=false + digest) then drop the deferred label. A throw
+		// before the label removal retains the deferred state (#367).
+		const restamped: ReviewProvenance = { ...provenance, deferred: false };
+		const newDescription = withCharterMarker(stripCharterMarker(issue.description ?? ""), restamped);
+		await api.updateDescription(id, newDescription);
+		await api.removeLabel(id, LABEL_DEFERRED);
+		const item = await this.getItem(id);
+		if (!item) throw new Error(`activateItem: Linear issue ${id} vanished after activation`);
+		item.deferred = false;
+		item.reviewDigest = provenance.reviewDigest;
+		item.reviewLevel = provenance.level;
+		return item;
 	}
 
 	async archivePlan(_id: string): Promise<void> {
@@ -324,7 +363,7 @@ interface LinearSdkClient {
 	issues(args: unknown): Promise<{ nodes: LinearSdkIssue[] }>;
 	issue(identifier: string): Promise<LinearSdkIssue | null>;
 	createComment(input: { issueId: string; body: string }): Promise<unknown>;
-	updateIssue(id: string, input: { stateId?: string; labelIds?: string[] }): Promise<unknown>;
+	updateIssue(id: string, input: { stateId?: string; labelIds?: string[]; description?: string }): Promise<unknown>;
 	workflowStates(args: unknown): Promise<{ nodes: { id: string; type: string }[] }>;
 	issueLabels(args: unknown): Promise<{ nodes: { id: string; name: string }[] }>;
 	createIssue(input: { teamId: string; title: string; description?: string; labelIds?: string[] }): Promise<{ issue?: () => Promise<LinearSdkIssue | null> }>;
@@ -431,6 +470,9 @@ async function defaultLinearApi(): Promise<LinearApi> {
 			const issue = await client.issue(issueId);
 			const existing = issue?.labelIds ?? [];
 			await client.updateIssue(issueId, { labelIds: existing.filter((lid) => lid !== labelId) });
+		},
+		async updateDescription(issueId, description) {
+			await client.updateIssue(issueId, { description });
 		},
 		async getIssueComments(identifier) {
 			const issue = await client.issue(identifier);

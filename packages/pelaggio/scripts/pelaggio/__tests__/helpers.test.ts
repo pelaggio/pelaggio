@@ -622,12 +622,12 @@ describe("buildStepArgs (#103, #115)", () => {
 });
 
 describe("parseDeferredItems (#115)", () => {
-	it("parses deferred-item markers into CreateItemOpts with deferred:true", () => {
+	it("parses deferred-item markers into CreateItemOpts without deferred (gate owns it, #367)", () => {
 		const text = ["Some review prose.", 'deferred-item: {"title": "Add retries", "scope": "S", "deps": "T-1, T-2"}', 'deferred-item: {"title": "Doc the flag"}', "more prose"].join("\n");
 		const items = parseDeferredItems(text);
 		assert.equal(items.length, 2);
-		assert.deepEqual(items[0], { title: "Add retries", scope: "S", deps: ["T-1", "T-2"], deferred: true });
-		assert.deepEqual(items[1], { title: "Doc the flag", deferred: true });
+		assert.deepEqual(items[0], { title: "Add retries", scope: "S", deps: ["T-1", "T-2"] });
+		assert.deepEqual(items[1], { title: "Doc the flag" });
 	});
 
 	it("skips malformed JSON, title-less, and invalid-scope entries gracefully", () => {
@@ -638,7 +638,7 @@ describe("parseDeferredItems (#115)", () => {
 			'deferred-item: {"title": "Keep", "scope": "HUGE"}', // invalid scope dropped, item kept
 		].join("\n");
 		const items = parseDeferredItems(text);
-		assert.deepEqual(items, [{ title: "Keep", deferred: true }]);
+		assert.deepEqual(items, [{ title: "Keep" }]);
 	});
 
 	it("returns [] when there are no markers", () => {
@@ -647,7 +647,7 @@ describe("parseDeferredItems (#115)", () => {
 
 	it("handles a `}` inside a string value and normalizes lowercase scope", () => {
 		const items = parseDeferredItems('deferred-item: {"title": "fix the } brace", "scope": "s"}');
-		assert.deepEqual(items, [{ title: "fix the } brace", scope: "S", deferred: true }]);
+		assert.deepEqual(items, [{ title: "fix the } brace", scope: "S" }]);
 	});
 
 	it("does not match a mid-line/prose mention of deferred-item: (line-anchored)", () => {
@@ -662,7 +662,7 @@ describe("parseDeferredItems (#115)", () => {
 
 	it("accepts deps as a JSON array (not just a CSV string) (#353)", () => {
 		const arr = parseDeferredItems('deferred-item: {"title": "Slice B", "deps": ["TOOL-99", " TOOL-100 ", ""]}');
-		assert.deepEqual(arr, [{ title: "Slice B", deps: ["TOOL-99", "TOOL-100"], deferred: true }]);
+		assert.deepEqual(arr, [{ title: "Slice B", deps: ["TOOL-99", "TOOL-100"] }]);
 		const csv = parseDeferredItems('deferred-item: {"title": "Slice C", "deps": "A, B"}');
 		assert.deepEqual(csv[0].deps, ["A", "B"]);
 	});

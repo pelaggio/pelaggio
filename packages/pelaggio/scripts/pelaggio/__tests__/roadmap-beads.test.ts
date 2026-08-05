@@ -611,7 +611,7 @@ describe("getRoadmapSource — beads factory", () => {
 describe("BeadsRoadmap RoadmapSource surface", () => {
 	it("exposes every RoadmapSource method", () => {
 		const r = mk({ repo: "/tmp", bdRun: makeStub({}).run });
-		const methods = ["listOpenItems", "listItems", "getItem", "claimItem", "markDone", "getItemPlan", "resolvePlanPath", "publishPlan", "createItem", "archivePlan", "isCharterPickRace", "parseItemId"] as const;
+		const methods = ["listOpenItems", "listItems", "getItem", "claimItem", "markDone", "getItemPlan", "resolvePlanPath", "publishPlan", "createItem", "activateItem", "archivePlan", "isCharterPickRace", "parseItemId"] as const;
 		for (const m of methods) {
 			assert.equal(typeof r[m], "function", `missing ${m}`);
 		}

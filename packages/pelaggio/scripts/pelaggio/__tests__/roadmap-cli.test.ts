@@ -4,10 +4,18 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { after, afterEach, before, describe, it } from "node:test";
+import type { ResolvedConfig } from "../config.js";
+import type { CharterReviewConfig } from "../review/charter-policy.js";
 import { MarkdownRoadmap, type RoadmapSource } from "../roadmap/index.js";
 import { loadQuarantine } from "../roadmap/stale-quarantine.js";
 import type { CreateItemOpts, RoadmapItemStatus } from "../roadmap/types.js";
-import { main, setRepo, setRoadmapFactory } from "../roadmap-cli.js";
+import { main, setCharterGateForTests, setRepo, setRoadmapFactory } from "../roadmap-cli.js";
+
+/** Charter gate pinned to `off` so create-item tests never spin the real review executor. */
+const OFF_CHARTER: CharterReviewConfig = { effectiveLevel: "off", rawYmlLevel: "off", rawEnvFloor: "off", reviewers: [], judge: { id: "judge", provider: "claude" }, maxPasses: 2 };
+function offCharterGate(repo: string) {
+	setCharterGateForTests({ config: { repo, review: { charter: OFF_CHARTER } } as unknown as ResolvedConfig });
+}
 
 function makeRepo(): string {
 	const dir = mkdtempSync(join(tmpdir(), "pelaggio-cli-test-"));
@@ -75,6 +83,9 @@ function stubRoadmap(items: Awaited<ReturnType<RoadmapSource["listItems"]>>, cal
 		async createItem({ title }) {
 			return { id: "NEW-1", title, deps: "—", sourceRef: "unused" };
 		},
+		async activateItem(id) {
+			return { id, title: "", deps: "—", sourceRef: "unused", status: "open" };
+		},
 		async archivePlan() {},
 		isCharterPickRace() {
 			return false;
@@ -94,6 +105,7 @@ describe("roadmap-cli", () => {
 		// completion commits) so `next`'s write-through never quarantines a fixture item.
 		setRepo(repo);
 		setRoadmapFactory(() => new MarkdownRoadmap({ repo }));
+		offCharterGate(repo);
 		seed(repo, "docs/roadmap-core.md", ["# Core", "", "| Item | Depends on |", "|---|---|", "| TOOL-1. First item | — |", "| TOOL-2. Second item | blocked: waiting on X |", "", "## Recently completed", "", "- TOOL-0 ✓", ""].join("\n"));
 		seed(repo, "docs/task-index.md", "| TOOL-1 | First item | — | — | core |\n| TOOL-2 | Second item | blocked | — | core |\n");
 		execSync("git add -A && git commit -q -m seed", { cwd: repo });
@@ -108,6 +120,7 @@ describe("roadmap-cli", () => {
 	afterEach(() => {
 		setRepo(repo);
 		setRoadmapFactory(() => new MarkdownRoadmap({ repo }));
+		offCharterGate(repo);
 	});
 
 	it("source prints configured name", async () => {
@@ -246,6 +259,25 @@ describe("roadmap-cli", () => {
 		assert.equal(existsSync(resolve(localRepo, "docs/roadmap-new-track.md")), false);
 	});
 
+	it("create-item rejects invalid --scope before constructing or calling the adapter", async () => {
+		let factoryCalls = 0;
+		setRoadmapFactory(() => {
+			factoryCalls++;
+			return stubRoadmap([], { list: 0, claim: 0 });
+		});
+
+		const res = await captureStdout(() => main(["create-item", "--title", "Bypass", "--scope", "bogus", "--json"]));
+		assert.equal(res.code, 1);
+		assert.match(res.stderr, /--scope must be one of XS\|S\|M\|L\|XL/);
+		assert.equal(factoryCalls, 0);
+	});
+
+	it("charter-review rejects invalid --scope before loading the executor", async () => {
+		const res = await captureStdout(() => main(["charter-review", "--title", "Bypass", "--scope", "bogus", "--json"]));
+		assert.equal(res.code, 2);
+		assert.match(res.stderr, /--scope must be one of XS\|S\|M\|L\|XL/);
+	});
+
 	it("next ranks by priority then FIFO and excludes deferred", async () => {
 		const calls = { list: 0, claim: 0 };
 		// list order becomes fifoOrdinal; mirrors GitHub ascending issue numbers after sort.
@@ -371,6 +403,9 @@ function staleStub(items: RoadmapItemStatus[], calls: StaleCalls, opts: { markDo
 		async publishPlan() {},
 		async createItem({ title }) {
 			return { id: "NEW-1", title, deps: "—", sourceRef: "unused" };
+		},
+		async activateItem(id) {
+			return { id, title: "", deps: "—", sourceRef: "unused", status: "open" };
 		},
 		async archivePlan() {},
 		isCharterPickRace() {

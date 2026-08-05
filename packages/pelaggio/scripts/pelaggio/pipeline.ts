@@ -98,6 +98,7 @@ import { cleanupAuthoringReviewSeatsForSha, isAuthoringReviewSeatPath, prepareAu
 import { claimReviewRequest, completeReviewRequest, listReviewRequests, type ReviewRequestRecord, reclaimStaleReviewClaims, reviewDrainLockPath, reviewRequestsDir, unclaimReviewRequest } from "./review-request-queue.js";
 import { cleanupReviewHead, findReviewCandidates, isReviewHeadPath, postLocalModeWorkflowComment, postReviewStatus, prepareReviewHead, type ReviewCandidate, reviewStatusForSha, upsertReviewComment } from "./review-sweep.js";
 import { autopilotManagedState, claimRevision, ensureReviseWorktree, fetchReviewFindings, findRevisablePrs, isAutopilotManaged, postParkComment, reviseFindingsPath } from "./revise-sweep.js";
+import { createReviewedItem } from "./roadmap/charter-gate.js";
 import { defaultGhRun, type GhRunner } from "./roadmap/github-issues.js";
 import { getRoadmapSource, type RoadmapSource } from "./roadmap/index.js";
 import { cleanupShipBodyFile, parseShipDecisionEffect, shipBodyFile } from "./ship/decision.js";
@@ -1271,7 +1272,9 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			if (!opts.dryRun) {
 				for (const d of parseDeferredItems(outcome.result.fullText, deferredItemTitles)) {
 					try {
-						const created = await roadmap.createItem(d);
+						// Harness-owned deferral (#367): route through the create gate with the harness exemption
+						// so the follow-up is minted deferred (reviewed at activation, not now). Non-fatal.
+						const created = await createReviewedItem(roadmap, { ...d, origin: "harness-deferral" }, { config: CONFIG });
 						log(`plan deferred → ${created.id}: ${d.title}`);
 					} catch (e) {
 						log(`deferred-item create failed (non-fatal): ${e instanceof Error ? e.message : String(e)}`);
@@ -1734,7 +1737,9 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		if (!opts.dryRun) {
 			for (const d of parseDeferredItems(shakedownResult.fullText, deferredItemTitles)) {
 				try {
-					const created = await roadmap.createItem(d);
+					// Harness-owned deferral (#367): the create gate mints it deferred under the harness
+					// exemption; the real review runs at activation. Non-fatal, as before.
+					const created = await createReviewedItem(roadmap, { ...d, origin: "harness-deferral" }, { config: CONFIG });
 					log(`deferred → ${created.id}: ${d.title}`);
 				} catch (e) {
 					log(`deferred-item create failed (non-fatal): ${e instanceof Error ? e.message : String(e)}`);

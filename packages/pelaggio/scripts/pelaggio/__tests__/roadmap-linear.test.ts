@@ -30,6 +30,7 @@ interface ApiCalls {
 	transitionIssue: { issueId: string; teamId: string; stateType: "started" | "completed" }[];
 	addLabel: { issueId: string; labelName: string }[];
 	removeLabel: { issueId: string; labelName: string }[];
+	updateDescription: { issueId: string; description: string }[];
 	getIssueComments: string[];
 	createIssue: Parameters<LinearApi["createIssue"]>[0][];
 }
@@ -40,6 +41,7 @@ interface StubOpts {
 	comments?: Record<string, LinearCommentNode[]>;
 	addLabelError?: Error;
 	removeLabelError?: Error;
+	updateDescriptionError?: Error;
 	transitionError?: Error;
 }
 
@@ -51,6 +53,7 @@ function makeStub(opts: StubOpts = {}): { api: LinearApi; calls: ApiCalls } {
 		transitionIssue: [],
 		addLabel: [],
 		removeLabel: [],
+		updateDescription: [],
 		getIssueComments: [],
 		createIssue: [],
 	};
@@ -78,6 +81,10 @@ function makeStub(opts: StubOpts = {}): { api: LinearApi; calls: ApiCalls } {
 		async removeLabel(issueId, labelName) {
 			calls.removeLabel.push({ issueId, labelName });
 			if (opts.removeLabelError) throw opts.removeLabelError;
+		},
+		async updateDescription(issueId, description) {
+			calls.updateDescription.push({ issueId, description });
+			if (opts.updateDescriptionError) throw opts.updateDescriptionError;
 		},
 		async getIssueComments(identifier) {
 			calls.getIssueComments.push(identifier);
@@ -110,6 +117,43 @@ describe("LinearRoadmap.createItem", () => {
 
 		assert.equal(calls.createIssue.length, 1);
 		assert.equal(calls.createIssue[0].description, "Full charter\nDepends on: ENG-1\nScope: S");
+	});
+});
+
+describe("LinearRoadmap.activateItem", () => {
+	it("persists verified provenance before removing the deferred label", async () => {
+		const { api, calls } = makeStub({
+			issuesByIdentifier: {
+				"ENG-7": { id: "uuid-7", identifier: "ENG-7", title: "Deferred", description: "Charter", labels: ["deferred"] },
+			},
+		});
+		const r = mk({ repo: "/tmp", api });
+
+		const item = await r.activateItem("ENG-7", { reviewDigest: "a".repeat(64), level: "triad", scope: "M", deferred: true });
+
+		assert.equal(calls.updateDescription.length, 1);
+		const update = calls.updateDescription[0];
+		assert.ok(update);
+		assert.equal(update.issueId, "ENG-7");
+		assert.match(update.description, /digest=a{64}/);
+		assert.match(update.description, /deferred=false/);
+		assert.deepEqual(calls.removeLabel, [{ issueId: "ENG-7", labelName: "deferred" }]);
+		assert.equal(item.deferred, false);
+		assert.equal(item.reviewDigest, "a".repeat(64));
+	});
+
+	it("retains deferral when provenance persistence fails", async () => {
+		const { api, calls } = makeStub({
+			issuesByIdentifier: {
+				"ENG-7": { id: "uuid-7", identifier: "ENG-7", title: "Deferred", description: "Charter", labels: ["deferred"] },
+			},
+			updateDescriptionError: new Error("description write failed"),
+		});
+		const r = mk({ repo: "/tmp", api });
+
+		await assert.rejects(() => r.activateItem("ENG-7", { reviewDigest: "a".repeat(64), level: "triad", scope: "M", deferred: true }), /description write failed/);
+		assert.equal(calls.updateDescription.length, 1);
+		assert.equal(calls.removeLabel.length, 0);
 	});
 });
 

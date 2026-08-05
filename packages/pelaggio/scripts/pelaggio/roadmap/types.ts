@@ -72,6 +72,28 @@ export interface RoadmapItemStatus extends RoadmapItem {
 	 * `/pick <id>` / `--item <id>` still claim it. Omitted or false means not deferred.
 	 */
 	deferred?: boolean;
+	/** Charter-review digest parsed from the provenance marker, when present (#367). Content-addresses the record. */
+	reviewDigest?: string;
+	/** Resolved charter-review level recorded on the item (`off` | `triad`), when a provenance marker is present. */
+	reviewLevel?: string;
+}
+
+/**
+ * Charter-review provenance stamped on an item at create/activation (#367). Rendered into a stable
+ * marker so every adapter persists compatible bytes; `reviewDigest` is the only adapter credential and
+ * is minted solely by the create gate / activation wrapper.
+ */
+export interface ReviewProvenance {
+	/** Content address of the charter-review record (`.dev/charter-reviews/<digest>.json`). */
+	reviewDigest: string;
+	/** Effective charter-review level this item was minted under. */
+	level: string;
+	/** Declared scope recorded for audit (untrusted for sub-floor exemption). */
+	scope?: Scope;
+	/** Internal origin: only the two pipeline marker sites may claim the harness deferral exemption. */
+	origin?: "create" | "harness-deferral";
+	/** True when the item is created/left deferred pending a successful activation review. */
+	deferred?: boolean;
 }
 
 /** Result of an idempotent body→label priority migration (`backfillPriorityLabels`). */
@@ -86,6 +108,23 @@ export interface CreateItemOpts {
 	title: string;
 	/** Full charter/spec text. Remote work stores persist it as the item body/description. */
 	description?: string;
+	/**
+	 * Settled internal charter body (#367). Normalized once at the CLI boundary from `description`; the
+	 * create gate hashes exactly these bytes into the review record. Adapters persist body ⇒ description.
+	 */
+	body?: string;
+	/**
+	 * Charter-review digest — the ONLY adapter review credential. Minted solely by `createReviewedItem`
+	 * / `activateDeferredItem`; the public CLI boundary rejects any caller-supplied value (#367).
+	 */
+	reviewDigest?: string;
+	/** Recorded charter-review level (`off` | `triad`) minted alongside `reviewDigest`. */
+	reviewLevel?: string;
+	/**
+	 * Internal harness-deferral exemption. ONLY the two pipeline marker call sites may set it; the public
+	 * CLI rejects it. A `harness-deferral` create records the declared scope but is minted deferred.
+	 */
+	origin?: "harness-deferral";
 	deps?: string[];
 	scope?: Scope;
 	/** Markdown: target roadmap file (partial match). Gh/Linear: no-op (issue goes to configured repo/team). */
@@ -124,6 +163,12 @@ export interface RoadmapSource {
 	publishPlan(body: string, ctx: { id: string; worktree: string }): Promise<void>;
 	/** Create a new backlog item. Returns the item; id is source-assigned for gh/linear. */
 	createItem(opts: CreateItemOpts): Promise<RoadmapItem>;
+	/**
+	 * Clear an item's deferred state, appending verified review provenance atomically as far as the
+	 * provider allows (#367). Narrow by design — the harness never issues free-form body edits. Adapters
+	 * remove the deferred label/marker only here, and only after the provenance write succeeds.
+	 */
+	activateItem(id: string, provenance: ReviewProvenance): Promise<RoadmapItemStatus>;
 	/** Archive a shipped plan. Markdown: `git mv` + commit. No-op elsewhere. */
 	archivePlan(id: string): Promise<void>;
 	/** True when the item exists in uncommitted working-tree state but not yet in HEAD. Gh/linear: always false. */

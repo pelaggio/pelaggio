@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { basename, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { NOTIFY_EVENTS, NOTIFY_FORMATS, type NotifyConfig, type NotifyEvent, type NotifyFormat } from "./notify.js";
+import { type CharterReviewConfig, isCharterReviewLevel, type RawCharterInput, resolveCharterPolicy } from "./review/charter-policy.js";
 import { type RawTaxonomyInput, resolveTaxonomy, type TaxonomyConfig } from "./review/taxonomy.js";
 import { type GithubRoadmapConfig, isScope, type LinearRoadmapConfig, PLAN_LOCATIONS, type PlanLocation, ROADMAP_SOURCE_NAMES, type RoadmapSourceName, type Scope } from "./roadmap/types.js";
 import type { ProviderName, ShipTargetName } from "./types.js";
@@ -150,7 +151,21 @@ export interface ReviewConfig {
 	authoring: AuthoringReviewConfig;
 	/** ADR-0016 safety/judgment taxonomy (baseline ADR table; owner-signed to contract the floor). */
 	taxonomy: TaxonomyConfig;
+	/** Charter-review gate (#367). Off ships by default; `triad` runs the configured panel at create time. */
+	charter: CharterReviewConfig;
 }
+
+/** Package-default charter seats: three distinct providers + a claude Judge, mirroring the authoring panel. */
+const DEFAULT_CHARTER_RAW: RawCharterInput = {
+	// Omit `level`: the resolver materializes shipped `off`, while absent YAML can inherit an env floor.
+	reviewers: [
+		{ id: "claude", provider: "claude" },
+		{ id: "codex", provider: "codex" },
+		{ id: "grok", provider: "grok" },
+	],
+	judge: { id: "judge", provider: "claude" },
+	maxPasses: 2,
+};
 
 const DEFAULT_GITHUB_ROADMAP: GithubRoadmapConfig = {
 	ghRepo: "",
@@ -223,6 +238,9 @@ export const DEFAULTS = {
 		budgetCap: 20,
 		providerDiversity: "off",
 		taxonomy: resolveTaxonomy({}),
+		// Env-independent at import: the shipped baseline is `off` regardless of an ambient
+		// PELAGGIO_CHARTER_REVIEW_FLOOR. loadConfig re-resolves with the live env below.
+		charter: resolveCharterPolicy(DEFAULT_CHARTER_RAW, { env: {} }),
 		authoring: {
 			enabled: false,
 			reviewers: [
@@ -326,6 +344,67 @@ function parseTaxonomyBlock(value: unknown, configPath: string): TaxonomyConfig 
 	} catch (error) {
 		throw new Error(`${configPath}: ${error instanceof Error ? error.message : String(error)}`);
 	}
+}
+
+/**
+ * Structurally validate `review.charter` into a fully-populated `RawCharterInput` (fail-closed). Strictly
+ * rejects unknown keys here and under `contract`. Uniqueness / capability / signed-contraction gating is
+ * `resolveCharterPolicy`'s job; this only enforces shape + the parse-time seat-uniqueness contract.
+ */
+function readRawCharter(value: unknown, configPath: string, defaults: RawCharterInput): RawCharterInput {
+	if (!isPlainObject(value)) throw new Error(`${configPath}: expected \`review.charter\` to be a map`);
+	const allowed = ["level", "reviewers", "judge", "max-passes", "contract"];
+	const unknownKey = Object.keys(value).find((k) => !allowed.includes(k));
+	if (unknownKey) throw new Error(`${configPath}: unknown key \`review.charter.${unknownKey}\``);
+	const raw: RawCharterInput = { ...defaults };
+	if (value.level !== undefined) {
+		if (!isCharterReviewLevel(value.level)) throw new Error(`${configPath}: expected \`review.charter.level\` to be off|triad, got ${JSON.stringify(value.level)}`);
+		raw.level = value.level;
+	}
+	if (value.reviewers !== undefined) {
+		if (!Array.isArray(value.reviewers) || value.reviewers.length === 0) throw new Error(`${configPath}: expected \`review.charter.reviewers\` to be a non-empty array`);
+		const reviewers = value.reviewers.map((slot, index) => parseReviewSlot(slot, `review.charter.reviewers[${index}]`, configPath, `reviewer-${index + 1}`));
+		if (new Set(reviewers.map((slot) => slot.id)).size !== reviewers.length) throw new Error(`${configPath}: review.charter reviewer ids must be unique`);
+		if (new Set(reviewers.map((slot) => slot.provider)).size !== reviewers.length) throw new Error(`${configPath}: review.charter reviewer providers must be unique`);
+		raw.reviewers = reviewers;
+	}
+	if (value.judge !== undefined) raw.judge = parseReviewSlot(value.judge, "review.charter.judge", configPath, "judge");
+	if (value["max-passes"] !== undefined) {
+		const mp = value["max-passes"];
+		if (!Number.isInteger(mp) || (mp as number) < 1 || (mp as number) > 5) throw new Error(`${configPath}: \`review.charter.max-passes\` must be an integer from 1 to 5, got ${JSON.stringify(mp)}`);
+		raw.maxPasses = mp as number;
+	}
+	if (value.contract !== undefined) {
+		if (!isPlainObject(value.contract)) throw new Error(`${configPath}: expected \`review.charter.contract\` to be a map`);
+		const unknownContractKey = Object.keys(value.contract).find((k) => k !== "signature-b64");
+		if (unknownContractKey) throw new Error(`${configPath}: unknown key \`review.charter.contract.${unknownContractKey}\``);
+		const sig = value.contract["signature-b64"];
+		if (!isString(sig) || sig.trim() === "") throw new Error(`${configPath}: expected \`review.charter.contract.signature-b64\` to be a non-empty string`);
+		raw.contract = { signatureB64: sig };
+	}
+	return raw;
+}
+
+/** Parse + gate `review.charter` into a resolved `CharterReviewConfig`, throwing with config-path context. */
+function parseCharterBlock(value: unknown, configPath: string, defaults: RawCharterInput): CharterReviewConfig {
+	const raw = readRawCharter(value, configPath, defaults);
+	try {
+		return resolveCharterPolicy(raw);
+	} catch (error) {
+		throw new Error(`${configPath}: ${error instanceof Error ? error.message : String(error)}`);
+	}
+}
+
+/**
+ * Read `review.charter` into a validated `RawCharterInput` for the operator `charter-floor sign` /
+ * `canonical` paths — the pre-gate overlay, so a contracted-but-unsigned config can still be signed.
+ */
+export function readCharterOverlay(opts: { repo?: string; configPath?: string } = {}): RawCharterInput {
+	const repo = opts.repo ?? REPO;
+	const configPath = opts.configPath ?? resolve(repo, ".pelaggio.yml");
+	const reviewBlock = parseFile(configPath).review;
+	if (reviewBlock === undefined || !isPlainObject(reviewBlock) || reviewBlock.charter === undefined) return { ...DEFAULT_CHARTER_RAW };
+	return readRawCharter(reviewBlock.charter, configPath, DEFAULT_CHARTER_RAW);
 }
 
 /**
@@ -719,6 +798,8 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 	};
 	// Default to the baseline ADR taxonomy (empty overlay ⇒ no contraction ⇒ no signature required).
 	let reviewTaxonomy: TaxonomyConfig = DEFAULTS.review.taxonomy;
+	// Re-resolve charter with the live env so PELAGGIO_CHARTER_REVIEW_FLOOR is honored per-load.
+	let reviewCharter: CharterReviewConfig = resolveCharterPolicy(DEFAULT_CHARTER_RAW);
 	const reviewBlock = yml.review;
 	if (reviewBlock !== undefined) {
 		if (!isPlainObject(reviewBlock)) {
@@ -795,6 +876,7 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 			};
 		}
 		if (reviewBlock.taxonomy !== undefined) reviewTaxonomy = parseTaxonomyBlock(reviewBlock.taxonomy, configPath);
+		if (reviewBlock.charter !== undefined) reviewCharter = parseCharterBlock(reviewBlock.charter, configPath, DEFAULT_CHARTER_RAW);
 	}
 
 	let confinementAllowDirtyMain: boolean = DEFAULTS.confinement.allowDirtyMain;
@@ -923,7 +1005,16 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		park: { autoResume: parkAutoResume, maxWait: parkMaxWait, unknownResetWait: parkUnknownResetWait },
 		watch: { ...(watchDailyBudget !== undefined ? { dailyBudget: watchDailyBudget } : {}) },
 		revise: { local: reviseLocal },
-		review: { runner: reviewRunner, statuslessAfter: reviewStatuslessAfter, maxPasses: reviewMaxPasses, budgetCap: reviewBudgetCap, providerDiversity: reviewProviderDiversity, authoring: reviewAuthoring, taxonomy: reviewTaxonomy },
+		review: {
+			runner: reviewRunner,
+			statuslessAfter: reviewStatuslessAfter,
+			maxPasses: reviewMaxPasses,
+			budgetCap: reviewBudgetCap,
+			providerDiversity: reviewProviderDiversity,
+			authoring: reviewAuthoring,
+			taxonomy: reviewTaxonomy,
+			charter: reviewCharter,
+		},
 		confinement: { allowDirtyMain: confinementAllowDirtyMain },
 		security: { envAllowlist: securityEnvAllowlist },
 		notify: { url: notifyUrl, format: notifyFormat, events: notifyEvents },

@@ -19,6 +19,7 @@ function reviewPolicy(over: Partial<Pick<ReviewConfig, "maxPasses" | "budgetCap"
 			judge: { ...DEFAULTS.review.authoring.judge },
 		},
 		taxonomy: DEFAULTS.review.taxonomy,
+		charter: DEFAULTS.review.charter,
 	};
 }
 

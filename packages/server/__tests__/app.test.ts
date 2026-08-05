@@ -39,6 +39,7 @@ function makeRoadmap(items: RoadmapItem[]): RoadmapSource {
 		markDone: async () => {},
 		archivePlan: async () => {},
 		createItem: async () => items[0]!,
+		activateItem: async () => ({ ...items[0]!, status: "open" as const }),
 		getItemPlan: async () => null,
 		resolvePlanPath: () => "x.md",
 		publishPlan: async () => {},

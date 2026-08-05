@@ -1,8 +1,9 @@
 import { execSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { hasCharterProvenance, parseCharterMarker, provenanceFromCreateOpts, stripCharterMarker, withCharterMarker } from "./charter-provenance.js";
 import { createClaimWorkspace } from "./git-claim.js";
-import type { CreateItemOpts, GithubRoadmapConfig, ItemStatus, MarkDoneContext, PlanLocation, PriorityLabelBackfillResult, RoadmapItem, RoadmapItemStatus, RoadmapSource, RoadmapSourceName } from "./types.js";
+import type { CreateItemOpts, GithubRoadmapConfig, ItemStatus, MarkDoneContext, PlanLocation, PriorityLabelBackfillResult, ReviewProvenance, RoadmapItem, RoadmapItemStatus, RoadmapSource, RoadmapSourceName } from "./types.js";
 import { isScope, type Scope } from "./types.js";
 
 const PLAN_MARKER = "<!-- pelaggio-plan -->";
@@ -77,6 +78,12 @@ export function projectGhIssue(
 		...(scope ? { scope } : {}),
 	};
 	if (labels.includes(LABEL_DEFERRED)) item.deferred = true;
+	// Charter-review provenance (#367) rides a body marker; label stays the SoT for the deferred flag.
+	const provenance = parseCharterMarker(it.body ?? "");
+	if (provenance) {
+		if (provenance.reviewDigest) item.reviewDigest = provenance.reviewDigest;
+		if (provenance.level) item.reviewLevel = provenance.level;
+	}
 	if (opts?.includeBodyLabels) {
 		item.body = it.body ?? "";
 		item.labels = labels;
@@ -167,7 +174,9 @@ export class GitHubIssuesRoadmap implements RoadmapSource {
 		if (deps.length > 0) bodyParts.push(`Depends on: ${deps.join(", ")}`);
 		if (opts.scope) bodyParts.push(`Scope: ${opts.scope}`);
 		if (opts.priority) bodyParts.push(`Priority: ${opts.priority}`);
-		const body = bodyParts.join("\n");
+		const rawBody = bodyParts.join("\n");
+		// Append the canonical charter-review marker when the gate stamped provenance (#367).
+		const body = hasCharterProvenance(opts) ? withCharterMarker(rawBody, provenanceFromCreateOpts(opts)) : rawBody;
 		const args = ["issue", "create", "--repo", this.ghRepo, "--title", opts.title, "--label", this.label, "--body", body];
 		if (opts.deferred) args.push("--label", LABEL_DEFERRED);
 		// Labels are the runtime SoT for priority; body marker stays as human-readable prose.
@@ -183,6 +192,19 @@ export class GitHubIssuesRoadmap implements RoadmapSource {
 			deps: deps.join(", "),
 			sourceRef: `${this.ghRepo}#${number}`,
 		};
+	}
+
+	async activateItem(id: string, provenance: ReviewProvenance): Promise<RoadmapItemStatus> {
+		// Re-stamp the marker (deferred=false + verified digest) into the body, THEN drop the deferred
+		// label — a failed edit throws and leaves the label (and deferred state) intact (#367).
+		const raw = this.runGh(["issue", "view", id, "--repo", this.ghRepo, "--json", "number,title,body,labels,state"]);
+		const summary = parseGhJson<GhIssueSummary>(raw, (v) => isPlainObject(v) && typeof (v as { number?: unknown }).number === "number");
+		const restamped: ReviewProvenance = { ...provenance, deferred: false };
+		const newBody = withCharterMarker(stripCharterMarker(summary.body ?? ""), restamped);
+		this.runGh(["issue", "edit", id, "--repo", this.ghRepo, "--body", newBody, "--remove-label", LABEL_DEFERRED]);
+		const projected = projectGhIssue({ ...summary, body: newBody, labels: (summary.labels ?? []).filter((l) => l.name !== LABEL_DEFERRED) }, this.ghRepo, { includeBodyLabels: true });
+		projected.deferred = false;
+		return projected;
 	}
 
 	/**

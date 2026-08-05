@@ -1,9 +1,10 @@
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
+import { type CharterSidecar, charterSidecarPath, readCharterSidecar, writeCharterSidecar } from "./charter-sidecar.js";
 import { claimedIds, createClaimWorkspace } from "./git-claim.js";
 import { withMutationLock } from "./mutation-lock.js";
-import type { CreateItemOpts, ItemStatus, MarkDoneContext, MarkdownRoadmapFormat, RoadmapItem, RoadmapItemStatus, RoadmapSource, RoadmapSourceName } from "./types.js";
+import type { CreateItemOpts, ItemStatus, MarkDoneContext, MarkdownRoadmapFormat, ReviewProvenance, RoadmapItem, RoadmapItemStatus, RoadmapSource, RoadmapSourceName } from "./types.js";
 
 export class MarkdownRoadmap implements RoadmapSource {
 	readonly name: RoadmapSourceName = "markdown";
@@ -103,6 +104,13 @@ export class MarkdownRoadmap implements RoadmapSource {
 				}
 				const item: RoadmapItemStatus = { id, title, deps: row.deps, sourceRef: path, status, body: row.body };
 				if (blockedReason) item.blockedReason = blockedReason;
+				// Charter-review provenance (#367) rides an ID-keyed sidecar, not the format-strict row.
+				const sidecar = readCharterSidecar(this.repo, id);
+				if (sidecar) {
+					if (sidecar.deferred) item.deferred = true;
+					if (sidecar.reviewDigest) item.reviewDigest = sidecar.reviewDigest;
+					if (sidecar.reviewLevel) item.reviewLevel = sidecar.reviewLevel;
+				}
 				out.push(item);
 			}
 		}
@@ -297,11 +305,39 @@ export class MarkdownRoadmap implements RoadmapSource {
 		// the calling step, and only the files this call touched are committed.
 		const staged = [relative(this.repo, targetPath)];
 		if (indexExists) staged.push(relative(this.repo, indexPath));
+		// Charter-review provenance (#367): persist deferred/digest state in the ID-keyed sidecar and
+		// commit it alongside the row so a later clean-tree ship can't strand a deferred item.
+		if (opts.reviewLevel !== undefined || opts.deferred || opts.reviewDigest) {
+			const sidecar: CharterSidecar = {
+				deferred: opts.deferred === true,
+				...(opts.reviewDigest ? { reviewDigest: opts.reviewDigest } : {}),
+				...(opts.reviewLevel ? { reviewLevel: opts.reviewLevel } : {}),
+				...(opts.scope ? { scope: opts.scope } : {}),
+			};
+			writeCharterSidecar(this.repo, id, sidecar);
+			staged.push(relative(this.repo, charterSidecarPath(this.repo, id)));
+		}
 		const stagedArgs = staged.map((p) => JSON.stringify(p)).join(" ");
 		execSync(`git add ${stagedArgs}`, { cwd: this.repo, stdio: "pipe" });
 		execSync(`git commit --no-verify -m ${JSON.stringify(`docs: add roadmap item ${id} — ${title}`)} -- ${stagedArgs}`, { cwd: this.repo, stdio: "pipe" });
 
 		return { id, title, deps, sourceRef: targetPath };
+	}
+
+	async activateItem(id: string, provenance: ReviewProvenance): Promise<RoadmapItemStatus> {
+		return withMutationLock(this.repo, () => this.activateItemUnlocked(id, provenance));
+	}
+
+	private async activateItemUnlocked(id: string, provenance: ReviewProvenance): Promise<RoadmapItemStatus> {
+		const item = await this.getItem(id);
+		if (!item) throw new Error(`activateItem: item ${id} not found`);
+		// Clear the deferred marker only after stamping verified provenance into the sidecar (#367).
+		const sidecar: CharterSidecar = { deferred: false, reviewDigest: provenance.reviewDigest, reviewLevel: provenance.level, ...(provenance.scope ? { scope: provenance.scope } : {}) };
+		const path = writeCharterSidecar(this.repo, id, sidecar);
+		const rel = JSON.stringify(relative(this.repo, path));
+		execSync(`git add ${rel}`, { cwd: this.repo, stdio: "pipe" });
+		execSync(`git commit --no-verify -m ${JSON.stringify(`docs: activate ${id} (charter review ${provenance.reviewDigest.slice(0, 12)})`)} -- ${rel}`, { cwd: this.repo, stdio: "pipe" });
+		return { ...item, deferred: false, reviewDigest: provenance.reviewDigest, reviewLevel: provenance.level };
 	}
 
 	async archivePlan(id: string): Promise<void> {

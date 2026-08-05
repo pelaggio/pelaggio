@@ -9,13 +9,15 @@
  *
  * Exit codes: 0 success, 2 "not found" (callers distinguish from crashes),
  * 3 "already claimed" (claim lost the race — the feat/<id> branch exists),
- * 4 "stale-quarantined" (claim refused a suspected already-done/obsolete item; #217).
+ * 4 "stale-quarantined" (claim refused a suspected already-done/obsolete item; #217),
+ * 5 "deferred-activation-failed" (claim/un-defer refused a deferred item whose charter review did not ship; #367).
  */
 
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_FLOW_POLICY, type FlowSnapshot } from "./flow-policy.js";
-import { AlreadyClaimedError, isMarkdownRoadmapFormat, type RoadmapSource } from "./roadmap/index.js";
+import { activateDeferredItem, type CharterGateContext, createReviewedItem } from "./roadmap/charter-gate.js";
+import { AlreadyClaimedError, isMarkdownRoadmapFormat, isScope, type RoadmapSource } from "./roadmap/index.js";
 import { activeQuarantineIds, clearEntry, listQuarantine, loadQuarantine, resolveKeep, upsertHits } from "./roadmap/stale-quarantine.js";
 import { scanStaleItems } from "./roadmap/stale-scan.js";
 import type { RoadmapItemStatus, Scope } from "./roadmap/types.js";
@@ -98,6 +100,19 @@ async function refreshQuarantineIds(repo: string, items: readonly RoadmapItemSta
 			return new Set();
 		}
 	}
+}
+
+let charterGateOverride: CharterGateContext | null = null;
+
+/** Test seam: inject a charter-gate context (with a fake executor) so create/claim tests skip real drivers. */
+export function setCharterGateForTests(ctx: CharterGateContext | null): void {
+	charterGateOverride = ctx;
+}
+
+async function charterGateContext(): Promise<CharterGateContext> {
+	if (charterGateOverride) return charterGateOverride;
+	const { CONFIG } = await import("./config.js");
+	return { config: CONFIG, cwd: process.cwd() };
 }
 
 function publishRoot(): string {
@@ -212,6 +227,17 @@ async function cmdClaim(args: Args): Promise<number> {
 			return 4;
 		}
 	}
+	// Charter-review activation gate (#367): a deferred item must pass a fresh, body-current review
+	// before the git-native claim. Ordered AFTER stale quarantine (which rejects before spending seats)
+	// and BEFORE claimItem — a failed activation returns exit 5 and never creates a branch.
+	if (staleItem?.deferred) {
+		const result = await activateDeferredItem(roadmap, id, await charterGateContext());
+		if (!result.activated) {
+			process.stderr.write(`${id} is deferred and failed charter-review activation: ${result.reason ?? "review did not ship"}\n`);
+			process.stderr.write(`resolve first: npx pelaggio roadmap un-defer ${id}\n`);
+			return 5;
+		}
+	}
 	const noWorktree = args.flags["no-worktree"] === true;
 	try {
 		const { branch, worktree } = await roadmap.claimItem(id, noWorktree ? { noWorktree: true } : undefined);
@@ -266,14 +292,22 @@ async function cmdMarkDone(args: Args): Promise<number> {
 	return 0;
 }
 
+/** Public-boundary flags a caller may never supply — charter-review provenance is minted only by the gate (#367). */
+const FORBIDDEN_CREATE_FLAGS = ["deferred", "review-digest", "reviewDigest", "review-level", "reviewLevel", "origin"];
+
 async function cmdCreateItem(args: Args): Promise<number> {
-	const roadmap = makeRoadmap();
 	const title = args.flags.title;
 	if (typeof title !== "string") {
-		process.stderr.write(
-			"usage: roadmap create-item --title <t> [--description <text>] [--deps <csv>] [--scope <x>] [--to <r>] [--after <id>] [--priority high|normal] [--deferred] [--create] [--prefix <PFX>] [--format checkbox|table] [--json]\n",
-		);
+		process.stderr.write("usage: roadmap create-item --title <t> [--description <text>] [--deps <csv>] [--scope <x>] [--to <r>] [--after <id>] [--priority high|normal] [--create] [--prefix <PFX>] [--format checkbox|table] [--json]\n");
 		return 1;
+	}
+	// Reject privileged provenance flags BEFORE touching the adapter: a human charter can neither defer
+	// itself, supply a reviewDigest, nor stamp an origin. The gate owns all of that (#367).
+	for (const forbidden of FORBIDDEN_CREATE_FLAGS) {
+		if (args.flags[forbidden] !== undefined) {
+			process.stderr.write(`create-item: --${forbidden} is not allowed; charter-review provenance is minted by the create gate\n`);
+			return 1;
+		}
 	}
 	const description = typeof args.flags.description === "string" ? args.flags.description : undefined;
 	const deps =
@@ -283,11 +317,15 @@ async function cmdCreateItem(args: Args): Promise<number> {
 					.map((s) => s.trim())
 					.filter(Boolean)
 			: undefined;
-	const scope = typeof args.flags.scope === "string" ? (args.flags.scope as "XS" | "S" | "M" | "L" | "XL") : undefined;
+	const rawScope = args.flags.scope;
+	if (rawScope !== undefined && !isScope(rawScope)) {
+		process.stderr.write(`create-item: --scope must be one of XS|S|M|L|XL, got ${JSON.stringify(rawScope)}\n`);
+		return 1;
+	}
+	const scope = rawScope;
 	const roadmapArg = typeof args.flags.to === "string" ? args.flags.to : undefined;
 	const after = typeof args.flags.after === "string" ? args.flags.after : undefined;
 	const priority = args.flags.priority === "high" ? "high" : args.flags.priority === "normal" ? "normal" : undefined;
-	const deferred = args.flags.deferred === true;
 	const create = args.flags.create === true;
 	const prefix = typeof args.flags.prefix === "string" ? args.flags.prefix : undefined;
 	const rawFormat = args.flags.format;
@@ -296,9 +334,78 @@ async function cmdCreateItem(args: Args): Promise<number> {
 		return 1;
 	}
 	const format = rawFormat;
-	const created = await roadmap.createItem({ title, description, deps, scope, roadmap: roadmapArg, after, priority, deferred, create, prefix, format });
+	// The one create-time charter-review gate owns scope/floor decisions and all provenance minting.
+	const roadmap = makeRoadmap();
+	const created = await createReviewedItem(roadmap, { title, description, deps, scope, roadmap: roadmapArg, after, priority, create, prefix, format }, await charterGateContext());
 	if (args.flags.json) printJson(created);
 	else process.stdout.write(`${created.id}\t${created.title}\n`);
+	return 0;
+}
+
+async function cmdUnDefer(args: Args): Promise<number> {
+	const roadmap = makeRoadmap();
+	const id = args.positional[0];
+	if (!id) {
+		process.stderr.write("usage: roadmap un-defer <id> [--json]\n");
+		return 1;
+	}
+	const result = await activateDeferredItem(roadmap, id, await charterGateContext());
+	if (result.reason?.startsWith("not found")) {
+		process.stderr.write(`not found: ${id}\n`);
+		return 2;
+	}
+	if (args.flags.json) printJson({ id, activated: result.activated, verdict: result.verdict ?? null, reason: result.reason ?? null });
+	// A failed activation returns nonzero and leaves the item deferred with a typed andon (#367).
+	if (!result.activated) {
+		process.stderr.write(`${id} stays deferred: ${result.reason ?? "charter-review activation did not ship"}\n`);
+		return 5;
+	}
+	process.stdout.write(`activated ${id}\n`);
+	return 0;
+}
+
+async function cmdCharterReview(args: Args): Promise<number> {
+	const title = args.flags.title;
+	if (typeof title !== "string" || title.trim() === "") {
+		process.stderr.write("usage: roadmap charter-review --title <t> [--body <text>] [--scope <x>] [--json]\n");
+		return 2;
+	}
+	const body = typeof args.flags.body === "string" ? args.flags.body : "";
+	const rawScope = typeof args.flags.scope === "string" ? args.flags.scope.toUpperCase() : args.flags.scope;
+	if (rawScope !== undefined && !isScope(rawScope)) {
+		process.stderr.write(`charter-review: --scope must be one of XS|S|M|L|XL, got ${JSON.stringify(args.flags.scope)}\n`);
+		return 2;
+	}
+	const scope: Scope | undefined = rawScope;
+	const { CONFIG } = await import("./config.js");
+	const { executeCharterReview } = await import("./review/charter-executor.js");
+	const { renderCharterReviewRecord } = await import("./review/charter-record.js");
+	// Standalone review always forces the triad panel — its output is a record/report, never a credential.
+	const result = await executeCharterReview({ title, body, ...(scope ? { scope } : {}), origin: "create", policy: { ...CONFIG.review.charter, effectiveLevel: "triad" }, config: CONFIG });
+	if (args.flags.json) printJson(result.record);
+	else process.stdout.write(`${renderCharterReviewRecord(result.record, result.digest)}\n\nRecord: ${result.recordPath}\n`);
+	return result.verdict === "ship" ? 0 : 1;
+}
+
+async function cmdCharterAudit(args: Args): Promise<number> {
+	const roadmap = makeRoadmap();
+	const items = await roadmap.listItems({ includeDone: false });
+	// (a) every deferred item lacking a valid review digest, at any scope.
+	const deferredMissingDigest = items.filter((it) => it.deferred && !it.reviewDigest).map((it) => ({ id: it.id, title: it.title, scope: it.scope ?? null }));
+	// (b) S/XS items with no recorded review provenance. Age is unavailable across adapters, so this is
+	// flagged for spot-checking rather than claimed-recent (never asserts a legacy item is recent).
+	const subFloorNoProvenance = items.filter((it) => (it.scope === "S" || it.scope === "XS") && it.reviewLevel === undefined).map((it) => ({ id: it.id, title: it.title, scope: it.scope, age: "unavailable" as const }));
+	const findings = { deferredMissingDigest, subFloorNoProvenance };
+	if (args.flags.json) {
+		printJson(findings);
+		return 0;
+	}
+	if (deferredMissingDigest.length === 0 && subFloorNoProvenance.length === 0) {
+		process.stdout.write("charter audit: no findings\n");
+		return 0;
+	}
+	for (const f of deferredMissingDigest) process.stdout.write(`deferred-no-digest\t${f.id}\t${f.scope ?? "?"}\t${f.title}\n`);
+	for (const f of subFloorNoProvenance) process.stdout.write(`subfloor-no-provenance\t${f.id}\t${f.scope}\t(age ${f.age})\t${f.title}\n`);
 	return 0;
 }
 
@@ -423,6 +530,9 @@ const HANDLERS: Record<string, (args: Args) => Promise<number>> = {
 	"publish-plan": cmdPublishPlan,
 	"mark-done": cmdMarkDone,
 	"create-item": cmdCreateItem,
+	"un-defer": cmdUnDefer,
+	"charter-review": cmdCharterReview,
+	"charter-audit": cmdCharterAudit,
 	"archive-plan": cmdArchivePlan,
 	"backfill-priority-labels": cmdBackfillPriorityLabels,
 	"stale-scan": cmdStaleScan,

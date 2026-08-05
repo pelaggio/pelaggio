@@ -48,6 +48,17 @@ review:
   # `require` blocks before agent work unless at least one review driver differs
   # from the verifier — makes the diversity structural rather than incidental.
   provider-diversity: require
+  # Charter-review gate (#367). Dogfood posture: M+ chartered work runs the panel at create time;
+  # XS/S direct creates are the documented sub-floor skip (declared scope + level are still recorded).
+  # Deferred items (harness markers) always run the panel at activation, regardless of declared scope.
+  # Reviewer/Judge models inherit pr-review/pr-verify; the two-seat panel matches the authoring config.
+  charter:
+    level: triad
+    max-passes: 2
+    reviewers:
+      - { id: claude, provider: claude }
+      - { id: codex, provider: codex }
+    judge: { id: judge, provider: codex }
 budgets:
   shakedown-plan: 8
 providers:

@@ -10,8 +10,9 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { hasCharterProvenance, parseCharterMarker, provenanceFromCreateOpts, stripCharterMarker, withCharterMarker } from "./charter-provenance.js";
 import { claimedIds, createClaimWorkspace } from "./git-claim.js";
-import type { CreateItemOpts, ItemStatus, MarkDoneContext, RoadmapItem, RoadmapItemStatus, RoadmapSource, RoadmapSourceName } from "./types.js";
+import type { CreateItemOpts, ItemStatus, MarkDoneContext, ReviewProvenance, RoadmapItem, RoadmapItemStatus, RoadmapSource, RoadmapSourceName } from "./types.js";
 
 /** Spawn timeout for a single `bd` invocation — mirrors `GH_TIMEOUT_MS`. */
 export const BD_TIMEOUT_MS = 30_000;
@@ -357,7 +358,8 @@ export class BeadsRoadmap implements RoadmapSource {
 		if (opts.description) bodyParts.push(opts.description);
 		if (opts.scope) bodyParts.push(`Scope: ${opts.scope}`);
 		if (opts.deferred) bodyParts.push("Deferred: true");
-		const description = bodyParts.join("\n");
+		const rawDescription = bodyParts.join("\n");
+		const description = hasCharterProvenance(opts) ? withCharterMarker(rawDescription, provenanceFromCreateOpts(opts)) : rawDescription;
 		const priority = opts.priority === "high" ? BD_PRIORITY_HIGH : BD_PRIORITY_NORMAL;
 
 		const args = ["create", "--title", opts.title, "--priority", String(priority), "--json"];
@@ -382,6 +384,21 @@ export class BeadsRoadmap implements RoadmapSource {
 			deps: deps.map((d) => d.toLowerCase()).join(", "),
 			sourceRef: id,
 		};
+	}
+
+	async activateItem(id: string, provenance: ReviewProvenance): Promise<RoadmapItemStatus> {
+		const item = await this.getItem(id);
+		if (!item) throw new Error(`activateItem: Beads item ${id} not found`);
+		// Rewrite the description: drop the marker + legacy `Deferred: true` line, re-stamp deferred=false
+		// with the verified digest. A failed `bd update` throws and leaves the deferred state (#367).
+		const restamped: ReviewProvenance = { ...provenance, deferred: false };
+		const cleaned = stripCharterMarker(item.body ?? "")
+			.replace(/^Deferred:\s*true\s*$/gim, "")
+			.replace(/\n{3,}/g, "\n\n")
+			.trim();
+		const newDescription = withCharterMarker(cleaned, restamped);
+		this.runBd(["update", id.toLowerCase(), "--description", newDescription]);
+		return { ...item, deferred: false, reviewDigest: provenance.reviewDigest, reviewLevel: provenance.level };
 	}
 
 	async archivePlan(_id: string): Promise<void> {
@@ -428,6 +445,12 @@ export class BeadsRoadmap implements RoadmapSource {
 		if (opts?.includeBody && typeof issue.description === "string") {
 			item.body = issue.description;
 		}
+		// Charter-review provenance (#367): marker in the description, or the legacy `Deferred: true` line.
+		const description = typeof issue.description === "string" ? issue.description : "";
+		const provenance = parseCharterMarker(description);
+		if (provenance?.deferred || /^Deferred:\s*true\s*$/im.test(description)) item.deferred = true;
+		if (provenance?.reviewDigest) item.reviewDigest = provenance.reviewDigest;
+		if (provenance?.level) item.reviewLevel = provenance.level;
 		return attachPriority(item, issue.priority);
 	}
 

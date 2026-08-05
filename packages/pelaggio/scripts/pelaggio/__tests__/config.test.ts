@@ -709,6 +709,38 @@ describe("loadConfig — review", () => {
 		assert.equal(cfg.review.taxonomy.judgmentDefault, "permissive");
 	});
 
+	it("raises an unconfigured charter policy to the environment floor", () => {
+		const previousFloor = process.env.PELAGGIO_CHARTER_REVIEW_FLOOR;
+		process.env.PELAGGIO_CHARTER_REVIEW_FLOOR = "triad";
+		try {
+			const repo = tmpRepo();
+			const cfg = loadConfig({ repo, configPath: join(repo, ".pelaggio.yml") });
+			assert.equal(cfg.review.charter.rawYmlLevel, "off");
+			assert.equal(cfg.review.charter.rawEnvFloor, "triad");
+			assert.equal(cfg.review.charter.effectiveLevel, "triad");
+		} finally {
+			if (previousFloor === undefined) delete process.env.PELAGGIO_CHARTER_REVIEW_FLOOR;
+			else process.env.PELAGGIO_CHARTER_REVIEW_FLOOR = previousFloor;
+		}
+	});
+
+	it("raises a charter block with no explicit level to the environment floor", () => {
+		const previousFloor = process.env.PELAGGIO_CHARTER_REVIEW_FLOOR;
+		process.env.PELAGGIO_CHARTER_REVIEW_FLOOR = "triad";
+		try {
+			const repo = tmpRepo();
+			const path = writeYml(repo, "review:\n  charter:\n    max-passes: 3\n");
+			const cfg = loadConfig({ repo, configPath: path });
+			assert.equal(cfg.review.charter.rawYmlLevel, "off");
+			assert.equal(cfg.review.charter.rawEnvFloor, "triad");
+			assert.equal(cfg.review.charter.effectiveLevel, "triad");
+			assert.equal(cfg.review.charter.maxPasses, 3);
+		} finally {
+			if (previousFloor === undefined) delete process.env.PELAGGIO_CHARTER_REVIEW_FLOOR;
+			else process.env.PELAGGIO_CHARTER_REVIEW_FLOOR = previousFloor;
+		}
+	});
+
 	it("parses review.runner: local and review.statusless-after", () => {
 		const repo = tmpRepo();
 		const path = writeYml(repo, "review:\n  runner: local\n  statusless-after: 45m\n");

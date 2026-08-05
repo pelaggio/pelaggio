@@ -16,6 +16,9 @@ function fakeSource(name: string): RoadmapSource {
 		createItem: async () => {
 			throw new Error("not used");
 		},
+		activateItem: async () => {
+			throw new Error("not used");
+		},
 		getItemPlan: async () => null,
 		resolvePlanPath: () => "x.md",
 		publishPlan: async () => {},

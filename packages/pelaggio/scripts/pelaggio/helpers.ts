@@ -511,7 +511,9 @@ export async function buildStepArgs(roadmap: RoadmapSource, itemId: string, mode
  * model lists deferred follow-ups as these markers instead of running `roadmap create-item` itself
  * (a sandboxed provider can't); the harness creates them post-step. One JSON object per line:
  * `{ "title": "...", "scope"?: "XS|S|M|L|XL", "deps"?: "A, B" }`. Malformed/title-less lines are
- * skipped; every item is flagged `deferred: true`. `deps` accepts a JSON array
+ * skipped. It returns only agent-declared title/scope/deps — the deferred state is NOT set here (#367):
+ * the pipeline routes each item through the create gate with `origin: "harness-deferral"`, which is the
+ * only authority that mints deferred + records provenance. `deps` accepts a JSON array
  * (`["A","B"]`) or a comma-separated string (`"A, B"`). Pass a shared `seen` set to
  * dedup across multiple call sites (e.g. plan + shakedown-code both parse markers —
  * `createItem` is not idempotent, so a marker echoed in both must create only once).
@@ -541,7 +543,7 @@ export function parseDeferredItems(text: string, seen: Set<string> = new Set<str
 						.map((s) => s.trim())
 						.filter(Boolean)
 				: undefined;
-		items.push({ title, ...(scope ? { scope } : {}), ...(deps && deps.length > 0 ? { deps } : {}), deferred: true });
+		items.push({ title, ...(scope ? { scope } : {}), ...(deps && deps.length > 0 ? { deps } : {}) });
 	}
 	return items;
 }

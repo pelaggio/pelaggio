@@ -70,6 +70,15 @@ Report the table it prints (`id`, `reason`, `evidence`). Review existing entries
 - `npx pelaggio roadmap stale-resolve <id> --as done [--note "…"]` — confirm it is already implemented/obsolete: closes it (`markDone`) and clears the entry.
 - `npx pelaggio roadmap stale-resolve <id> --as keep` — a false positive or still-real work: a sticky `keep` suppresses re-quarantine until the item's title/body/deps change.
 
+## 4c. Charter-review provenance audit (#367)
+
+From `MAIN_REPO`, run `npx pelaggio roadmap charter-audit`. This is a read-only audit over the open set (all adapters — do **not** inspect provider storage directly) that returns two typed finding groups:
+
+- `deferred-no-digest` — deferred items missing a valid review digest, at **any** declared scope. These cannot enter the claimable population until an operator runs `npx pelaggio roadmap un-defer <id>`, which re-reviews the then-current body and clears deferred state only on a shipping verdict.
+- `subfloor-no-provenance` — S/XS items with no recorded review level, flagged for spot-checking. Age is reported as `unavailable` across adapters; the audit never claims a legacy item is recent.
+
+Report the rows it prints (or "charter audit: no findings"). **Do not auto-resolve** — deferred items are cleared only via `un-defer`, and sub-floor findings are advisory.
+
 ## 5. Pelaggio log review
 
 If `{MAIN_REPO}/.dev/pelaggio-log.jsonl` exists, read it and report:
@@ -93,6 +102,7 @@ Report any errors. These should be zero — if not, flag as blocking for pelaggi
 
 Summary table:
 - Roadmaps: X active, Y archived this run; decisions: Z resolved rows archived; stale: Q items quarantined (awaiting resolve)
+- Charter audit: X deferred items missing a digest (need `un-defer`), Y S/XS items without provenance (spot-check)
 - Worktrees: X active, Y stale (flagged)
 - Branches: X active, Y merged (safe to delete)
 - Sessions: X expired removed, Y retained

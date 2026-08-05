@@ -847,6 +847,88 @@ package outside the candidate checkout (its actual execution model; hardened fur
 work), never from the PR branch under review. Treat the taxonomy code path as a code-review +
 confinement integrity surface.
 
+### `review.charter` (charter-review gate, #367)
+
+Charter review is the create-time analog of the authoring/PR loop: when chartered work is created, the
+harness itself runs a configured reviewer panel + Judge over the digest-bound title/body/policy **before**
+the item enters the claimable population. A review may recommend deferral but can **never veto** creation.
+
+```yaml
+review:
+  charter:
+    level: triad          # off (shipped default) | triad
+    max-passes: 2         # integer 1–5
+    reviewers:
+      - { id: claude, provider: claude }
+      - { id: codex, provider: codex }
+    judge: { id: judge, provider: codex }
+    contract:
+      signature-b64: "…"  # only required for a signed sub-floor contraction (see below)
+```
+
+Reviewer/Judge models are not pinned here — they inherit the resolved `pr-review` / `pr-verify` step
+settings, exactly like the doc-review panel. Reviewer `id`s and providers must be unique; at `triad`
+every seat's provider must have a registered driver or config loading fails.
+
+**Levels and the scope threshold.** `off` (the package default) creates directly with no panel. `triad`
+runs the panel for **direct creates at scope M or larger**; XS/S direct creates are the documented
+sub-floor skip — they are still stamped with the declared scope and resolved level (a residual audit
+channel), just not reviewed. Ambiguous/absent scope is treated as M (fail toward review).
+
+**Verdicts.** A `ship` verdict creates the item non-deferred with the minted `reviewDigest`. Any other
+verdict (`defer`, `degenerate`, `execution-error`) creates the item **deferred** — driver failure is
+advisory for direct creation, never a veto. Deferred items are excluded from `roadmap next` and refused
+by `roadmap claim` until activated.
+
+**Activation / andon recovery.** A deferred item must pass a fresh review of its *then-current* body
+before it can be claimed. `npx pelaggio roadmap un-defer <id>` (and the claim path itself) run the panel,
+forcing `triad` at **every** declared scope — the deferred exemption is the one exception to the M+
+threshold. A current, valid, body/title/policy-matching `ship` record avoids duplicate execution; a
+stale/missing/mismatched record triggers a backfill. On `ship` the adapter clears deferred and appends
+verified provenance; on non-ship the item stays deferred with a typed andon and the command exits nonzero
+(exit 5). Declared sub-floor scope is never trusted to admit a digest-less deferred item.
+
+**Records and provenance.** Each run writes a tamper-evident record to `.dev/charter-reviews/<digest>.json`,
+content-addressed by the SHA-256 of its own canonical bytes and binding the exact title, body, and
+effective policy by SHA-256. That digest is the only `reviewDigest` an adapter carries; it is re-derived
+from disk and verified before it is ever accepted (a caller-supplied record object/path/digest is never
+trusted). Remote adapters persist a canonical `<!-- pelaggio:charter-review v1 … -->` marker in the issue
+body/description; markdown uses an ID-keyed `.dev/charter-reviews/items/<id>.json` sidecar (its rows are
+format-strict). The evidence is tamper-**evident**, not tamper-**proof**: direct out-of-band tracker edits
+and same-environment source/signature forgery remain outside the settled threat model, and supervised
+daemon countersigning is a deferred follow-up.
+
+**The public CLI boundary is capability-denied.** `roadmap create-item` rejects `--deferred`,
+`--review-digest`, `--review-level`, and any origin flag before the adapter is touched: a human charter
+can neither defer itself nor supply a digest. Only the two pipeline deferred-marker sites carry the
+internal `origin: harness-deferral` exemption (minted deferred, reviewed at activation).
+
+**Raise-only floor + signed contraction.** `PELAGGIO_CHARTER_REVIEW_FLOOR` (set out-of-band, like the
+taxonomy pubkey — never repo source) can only **strengthen** the effective level: the effective level is
+`max(yml level, env floor)`. An **explicit** yml `level` *below* the floor is a contraction and fails
+config loading unless authorized by a verified owner Ed25519 signature over the domain-separated
+`charter-floor.v1` payload, checked against the shared `PELAGGIO_TAXONOMY_PUBKEY` anchor:
+
+```bash
+export PELAGGIO_TAXONOMY_PUBKEY="$(cat /secure/operator-ed25519.pub.pem)"
+npx pelaggio charter-floor sign --private-key /secure/operator-ed25519.pem --config .pelaggio.yml
+# Paste the emitted signature-b64 under review.charter.contract, then:
+npx pelaggio charter-floor verify --config .pelaggio.yml
+```
+
+The `charter-floor.v1` canonicalizer is kept separate from the taxonomy canonicalizer so a signature can
+never replay across the two protocols (a taxonomy signature fails against the charter domain and vice
+versa). Absent/invalid signatures and a missing trust anchor fail closed at read time, before any caller
+can observe a weakened policy.
+
+**Diagnostics.** `npx pelaggio roadmap charter-audit [--json]` lists every deferred item lacking a valid
+review digest (any scope) plus recent S/XS creates with no review provenance for spot-checking (item age
+is unavailable across adapters, so these are flagged, never claimed-recent). `/tidy` surfaces this audit.
+
+The same source-integrity caveat as the taxonomy gate applies: the gate is deterministic only when
+pelaggio runs from a pinned/installed package outside the candidate checkout, not from the PR branch under
+review.
+
 **Replay residual (documented, intentional).** A signature authorizes that exact contraction set
 indefinitely; there is no nonce or expiry, so an owner-signed demotion can be re-applied later without a
 fresh ritual, and revocation is by key rotation or removing the `contract` block. If the same owner key

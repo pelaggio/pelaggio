@@ -24,7 +24,8 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { loadConfig, readTaxonomyOverlay } from "./config.js";
+import { loadConfig, readCharterOverlay, readTaxonomyOverlay } from "./config.js";
+import { canonicalizeCharterFloorPayload, isCharterContraction, resolveCharterEnvFloor, signCharterFloorPayload } from "./review/charter-policy.js";
 import { canonicalizeContractionPayload, contractionSet, mergeTaxonomyClasses, signContractionPayload } from "./review/taxonomy.js";
 
 function parseConfigFlag(args: string[]): { configPath?: string; rest: string[] } {
@@ -43,8 +44,59 @@ function parseConfigFlag(args: string[]): { configPath?: string; rest: string[] 
 	return { configPath, rest };
 }
 
+/**
+ * `pelaggio charter-floor <verify|sign|canonical>` — the operator ritual parallel to `taxonomy` for the
+ * #367 charter-review floor. A yml `review.charter.level` BELOW `PELAGGIO_CHARTER_REVIEW_FLOOR` is a
+ * contraction: signing the domain-separated `charter-floor.v1` payload authorizes it. Canonicalizers are
+ * kept separate from taxonomy so a signature cannot replay across protocols.
+ */
+export function charterFloorCliMain(argv: string[]): number {
+	const [command, ...rawRest] = argv;
+	const { configPath, rest } = parseConfigFlag(rawRest);
+	const configOpts = configPath ? { configPath } : {};
+
+	if (command === "verify") {
+		const charter = loadConfig(configOpts).review.charter;
+		console.log(`effective-level: ${charter.effectiveLevel} (yml ${charter.rawYmlLevel}, env-floor ${charter.rawEnvFloor}, max-passes ${charter.maxPasses})`);
+		console.log(charter.contract ? "ok (signed contraction verified)" : "ok");
+		return 0;
+	}
+
+	if (command === "canonical") {
+		const raw = readCharterOverlay(configOpts);
+		console.log(canonicalizeCharterFloorPayload(raw.level ?? "off", resolveCharterEnvFloor()));
+		return 0;
+	}
+
+	if (command === "sign") {
+		let privateKeyPath: string | undefined;
+		for (let i = 0; i < rest.length; i++) {
+			if (rest[i] === "--private-key") {
+				privateKeyPath = rest[i + 1];
+				i++;
+			}
+		}
+		if (!privateKeyPath) throw new Error("usage: pelaggio charter-floor sign --private-key <pem-path> [--config path]");
+		const raw = readCharterOverlay(configOpts);
+		const ymlLevel = raw.level ?? "off";
+		const envFloor = resolveCharterEnvFloor();
+		if (!(raw.level !== undefined && isCharterContraction(ymlLevel, envFloor))) {
+			console.log("This config does not contract the charter-review floor — no signature needed.");
+			return 0;
+		}
+		const signatureB64 = signCharterFloorPayload(canonicalizeCharterFloorPayload(ymlLevel, envFloor), readFileSync(privateKeyPath, "utf-8"));
+		console.log("Paste this under `review.charter.contract` in .pelaggio.yml:");
+		console.log(`  signature-b64: "${signatureB64}"`);
+		return 0;
+	}
+
+	throw new Error("usage: pelaggio charter-floor <verify|sign|canonical> [--config path]");
+}
+
 export function taxonomyCliMain(argv = process.argv.slice(2)): number {
 	const [command, ...rawRest] = argv;
+	// The bin dispatcher routes `pelaggio charter-floor …` here with a leading `charter-floor` token.
+	if (command === "charter-floor") return charterFloorCliMain(rawRest);
 	const { configPath, rest } = parseConfigFlag(rawRest);
 	const configOpts = configPath ? { configPath } : {};
 

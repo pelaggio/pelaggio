@@ -252,6 +252,9 @@ export function makeMockRoadmap(overrides: Partial<RoadmapSource> = {}): Roadmap
 		async createItem({ title, deps }) {
 			return { id: "MOCK-1", title, deps: (deps ?? []).join(", "), sourceRef: "mock" };
 		},
+		async activateItem(id) {
+			return { id, title: "", deps: "", sourceRef: "mock", status: "open" };
+		},
 		async archivePlan() {
 			/* noop */
 		},
