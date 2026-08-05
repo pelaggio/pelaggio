@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
-import { buildCodexStepResult, CODEX_SANDBOX_APPEND, codexTimeoutMs, selectCodexModel } from "../codex-provider.js";
+import { buildCodexExecArgs, buildCodexStepResult, CODEX_SANDBOX_APPEND, codexEffort, codexTimeoutMs, selectCodexModel } from "../codex-provider.js";
 import { EDIT_LOOP_THRESHOLD } from "../step-runner-shared.js";
 
 function fixtureEvents(name: string): Record<string, unknown>[] {
@@ -191,5 +191,41 @@ describe("codexTimeoutMs", () => {
 		assert.equal(codexTimeoutMs(1), 10 * 60_000);
 		assert.equal(codexTimeoutMs(30), 30 * 60_000);
 		assert.equal(codexTimeoutMs(200), 90 * 60_000);
+	});
+});
+
+describe("codexEffort (#431)", () => {
+	it("preserves low + medium and collapses high|xhigh|max to high", () => {
+		assert.equal(codexEffort("low"), "low");
+		assert.equal(codexEffort("medium"), "medium");
+		assert.equal(codexEffort("high"), "high");
+		assert.equal(codexEffort("xhigh"), "high");
+		assert.equal(codexEffort("max"), "high");
+	});
+});
+
+describe("buildCodexExecArgs (#431)", () => {
+	it("emits `-c model_reasoning_effort=<mapped>` exactly once, just before the stdin `-`, with a model", () => {
+		const args = buildCodexExecArgs({ cwd: "/wt", outputPath: "/tmp/out.txt", model: "gpt-5-codex", effort: "high" });
+		// Model flag preserved.
+		assert.deepEqual(args.slice(0, 8), ["exec", "--json", "-C", "/wt", "-s", "workspace-write", "-o", "/tmp/out.txt"]);
+		const mIdx = args.indexOf("-m");
+		assert.equal(args[mIdx + 1], "gpt-5-codex");
+		// Effort override present exactly once, as a separate argv element (no shell quoting).
+		assert.equal(args.filter((a) => a === "-c").length, 1);
+		assert.equal(args.filter((a) => a === "model_reasoning_effort=high").length, 1);
+		const cIdx = args.indexOf("-c");
+		assert.equal(args[cIdx + 1], "model_reasoning_effort=high");
+		// stdin sentinel stays last, immediately after the config pair.
+		assert.equal(args[args.length - 1], "-");
+		assert.equal(cIdx + 2, args.length - 1);
+	});
+
+	it("omits `-m` when no model is pinned but still forwards the mapped effort", () => {
+		const args = buildCodexExecArgs({ cwd: "/wt", outputPath: "/tmp/out.txt", effort: "medium" });
+		assert.equal(args.includes("-m"), false);
+		assert.equal(args.filter((a) => a === "-c").length, 1);
+		assert.equal(args[args.indexOf("-c") + 1], "model_reasoning_effort=medium");
+		assert.equal(args[args.length - 1], "-");
 	});
 });

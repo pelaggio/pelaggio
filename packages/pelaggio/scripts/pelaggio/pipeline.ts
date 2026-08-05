@@ -9,6 +9,7 @@ import {
 	DEFAULT_SHIP_TARGET,
 	isPipelineStep,
 	LOG_PATH,
+	modelForProvider,
 	type PipelineStep,
 	REPO,
 	REVIEW_CONFIG,
@@ -337,7 +338,14 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		} = {},
 	): Promise<StepResult> {
 		const settings = resolveStepSettings(CONFIG, profile, name);
-		const realized = executionOverride ?? settings;
+		// Normalize into a realized driver identity for logging + effects attribution. An
+		// `executionOverride` is already realized (its generic `model`/`codexModel` was projected
+		// when the pooled candidate/seat was chosen), so read it as-is. A raw `StepSettings` —
+		// a single-provider, non-pooled step (e.g. `providers.<step>: grok`) — must project its
+		// provider-specific slot here, or a Grok/OpenCode step would record the top-level Claude id
+		// and corrupt `findLoggedArtifactAuthor` recovery and cycle provenance (issue #431).
+		const realized: { provider: import("./types.js").ProviderName; model?: string; codexModel?: string } =
+			executionOverride ?? (settings.provider === "codex" ? { provider: "codex", codexModel: modelForProvider(settings, "codex") } : { provider: settings.provider, model: modelForProvider(settings, settings.provider) });
 		const stepLog = (entry: Omit<StepLog, "name" | "provider" | "model">): StepLog => ({
 			name,
 			provider: realized.provider,
@@ -1181,10 +1189,13 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	}
 
 	// ── Plan + Shakedown-plan ──
+	// Realize each raw candidate's provider-specific model into the generic DriverIdentity slot:
+	// Codex keeps `codexModel`; Claude/Grok/OpenCode carry their own model in `model` (#431).
 	const driverCandidates = (name: Step): DriverIdentity[] =>
-		resolveDriverCandidates(CONFIG, profile, name).map((candidate) =>
-			candidate.provider === "codex" ? { provider: "codex", ...(candidate.codexModel ? { codexModel: candidate.codexModel } : {}) } : { provider: candidate.provider, ...(candidate.model ? { model: candidate.model } : {}) },
-		);
+		resolveDriverCandidates(CONFIG, profile, name).map((candidate) => {
+			const model = modelForProvider(candidate, candidate.provider);
+			return candidate.provider === "codex" ? { provider: "codex", ...(model ? { codexModel: model } : {}) } : { provider: candidate.provider, ...(model ? { model } : {}) };
+		});
 	const available: (candidate: DriverIdentity) => boolean =
 		providerAvailableForTests ??
 		((candidate: DriverIdentity): boolean => {
@@ -1681,7 +1692,9 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 						// configured judge seat when present, else the shakedown-code step settings.
 						const reviewSettings = resolveStepSettings(CONFIG, profile, "shakedown-code");
 						const reviewProvider = policy.judge.provider;
-						const reviewModel = policy.judge.provider === "codex" ? (policy.judge.codexModel ?? "default") : (policy.judge.model ?? reviewSettings.model ?? "default");
+						// Non-Codex judge: prefer the realized seat model; else the judge provider's own
+						// step-settings slot (never the top-level Claude `model` slot) (#431).
+						const reviewModel = policy.judge.provider === "codex" ? (policy.judge.codexModel ?? "default") : (policy.judge.model ?? modelForProvider(reviewSettings, reviewProvider) ?? "default");
 						const reviewEffectsResult = await dispatchStepEffects({
 							...effectsCtx,
 							roadmap,
