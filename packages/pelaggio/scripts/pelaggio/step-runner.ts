@@ -578,19 +578,12 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 	} catch (err) {
 		ok = false;
 		const errMsg = err instanceof Error ? err.message : String(err);
+		// Preserve classification only. The pipeline owns the bounded max-turns
+		// retry policy; parkSignal is reserved for actual rate-limit handbacks.
 		const maxTurns = isClaudeMaxTurnsError(err, subtype);
 		subtype = maxTurns ? "error_max_turns" : classifyStepError(errMsg, opts.parkSignal.parked);
 		text = errMsg;
 		emit({ type: "sdk_error", message: errMsg });
-	}
-
-	// A turn cap is resumable WIP. Park it whether the SDK returned the typed
-	// result normally or threw a generic child-exit error immediately afterward.
-	if (subtype === "error_max_turns") {
-		opts.parkSignal.parked = true;
-		opts.parkSignal.resetsAt = 0;
-		opts.parkSignal.limitType = "max-turns";
-		opts.parkSignal.triggerWorker = opts.itemId ?? "";
 	}
 
 	// Edit loop override
