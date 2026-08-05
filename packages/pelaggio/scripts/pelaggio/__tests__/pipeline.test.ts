@@ -260,6 +260,28 @@ describe("runPipeline — happy path", () => {
 });
 
 describe("runPipeline — review findings revision prompt", () => {
+	it("fails closed when the review findings file cannot be read", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const findingsPath = join(worktree, "missing-findings.md");
+		const { runStep, calls } = createMockRunStep({}, parkSignal);
+
+		const result = await runPipeline(
+			{ ...baseOpts(worktree), startFrom: "implement" },
+			parkSignal,
+			{ ...baseFlags, "review-findings": findingsPath },
+			{ runStep, mainRepo: worktree, listWorktrees: () => [], appendLog: () => {}, roadmap: makeMockRoadmap() },
+		);
+
+		assert.equal(result.completed, false);
+		assert.match(result.error ?? "", /could not read review findings/);
+		assert.match(result.error ?? "", /missing-findings\.md/);
+		assert.equal(
+			calls.some((call) => call.step === "implement"),
+			false,
+		);
+	});
+
 	it("treats review findings as the primary implement task", async () => {
 		const worktree = makeTempGitRepo();
 		const parkSignal = makeParkSignal();
@@ -3110,6 +3132,16 @@ describe("runPipeline — SIGINT cancellation", () => {
 });
 
 describe("runOrchestrator — resume review findings routing", () => {
+	it("prints the failure reason when a findings-driven resume fails", async (t) => {
+		const consoleLog = t.mock.method(console, "log", () => {});
+		const { runPipeline: mockRun } = createMockRunPipeline({ default: { completed: false, cost: 0, error: 'could not read review findings "missing.md"' } });
+
+		const result = await runOrchestrator({ ...baseFlags, resume: "108", "review-findings": "missing.md" }, { runPipeline: mockRun, resolveWorktree: () => "/tmp/pelaggio-resume-review-findings" });
+
+		assert.equal(result.exitCode, 1);
+		assert.ok(consoleLog.mock.calls.some((call) => String(call.arguments[0]).includes("could not read review findings")));
+	});
+
 	it("defaults resume with review findings to implement when --from is absent", async () => {
 		const { runPipeline: mockRun, calls } = createMockRunPipeline({ default: { completed: true, cost: 0 } });
 		const worktree = "/tmp/pelaggio-resume-review-findings";

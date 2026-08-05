@@ -1338,15 +1338,16 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		].join("\n");
 
 		// Revision input (issue #60): on a resume driven by a red PR review, `--review-findings <path>`
-		// points at a findings file the closed-loop workflow wrote. Read best-effort — an absent or
-		// unreadable file must never crash a resume; it just means no review preamble is injected.
+		// points at a findings file the closed-loop workflow wrote. Fail closed when that explicit
+		// input cannot be read: continuing would silently ask the worker to revise without its task.
 		let reviewNote = "";
 		const findingsPath = flags["review-findings"];
 		if (findingsPath) {
 			try {
 				reviewNote = reviewFindingsPreamble(readFileSync(findingsPath, "utf-8"));
-			} catch {
-				reviewNote = "";
+			} catch (err) {
+				const detail = err instanceof Error ? err.message : String(err);
+				return finish({ itemId, completed: false, cost, error: `could not read review findings ${JSON.stringify(findingsPath)}: ${detail}` });
 			}
 		}
 
@@ -2831,7 +2832,8 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				liveStatus.render();
 				statusBar.teardown();
 			}
-			console.log(`\n${result.completed ? A.green("✓") : A.red("✗")} ${id} — ${result.costEstimated ? "~" : ""}$${result.cost.toFixed(2)}`);
+			const detail = resultDetail(result);
+			console.log(`\n${result.completed ? A.green("✓") : A.red("✗")} ${id} — ${result.costEstimated ? "~" : ""}$${result.cost.toFixed(2)}${detail ? `  ${A.dim(detail)}` : ""}`);
 			// #387: a resumed cycle can ship a PR whose review-request record would
 			// otherwise sit undrained until the next process. Drain before returning
 			// so resume mode gets the same review-at-delivery as the worker pool.
