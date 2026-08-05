@@ -123,7 +123,7 @@ Print the complete proposal from Phase 2, then:
 1. The **topological creation order** as exact shell lines:
 
    ```bash
-   npx pelaggio roadmap create-item --title "..." --scope <S|M> [--deps "<csv of real IDs>"] --json
+   npx pelaggio roadmap create-item --title "..." --description "<slice outcome and acceptance details>" --scope <S|M> [--deps "<csv of real IDs>"] --json
    # … one line per child, in topo order; later deps will use IDs returned by earlier creates
    ```
 
@@ -166,7 +166,7 @@ npx pelaggio roadmap create-item \
   --json
 ```
 
-**Persistable child payload is title + scope + deps only** — that is today's create-item / charter contract. Slice outcomes and coverage notes live in the approval transcript; they are not written onto child bodies (`create-item` has no description field).
+Persist each child's slice outcome and acceptance details with `--description`; the concise title, scope, and dependencies alone are not a complete charter.
 
 After each successful create:
 

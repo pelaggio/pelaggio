@@ -421,7 +421,7 @@ describe("BeadsRoadmap.createItem", () => {
 			routes: [{ match: (a) => a[0] === "create", stdout: JSON.stringify(created) }],
 		});
 		const r = mk({ repo: "/tmp", bdRun: run });
-		const item = await r.createItem({ title: "New work", priority: "high", scope: "M", deferred: true });
+		const item = await r.createItem({ title: "New work", description: "Full charter", priority: "high", scope: "M", deferred: true });
 		assert.equal(item.id, "bd-main-newid1");
 		assert.equal(item.title, "New work");
 		assert.equal(item.sourceRef, "bd-main-newid1");
@@ -435,6 +435,7 @@ describe("BeadsRoadmap.createItem", () => {
 		assert.ok(create.args.includes("--json"));
 		const descIdx = create.args.indexOf("--description");
 		assert.ok(descIdx >= 0);
+		assert.match(create.args[descIdx + 1], /^Full charter\n/);
 		assert.match(create.args[descIdx + 1], /Scope: M/);
 		assert.match(create.args[descIdx + 1], /Deferred: true/);
 		// No shell-string interpolation — every arg is a discrete array element.

@@ -250,13 +250,14 @@ describe("GitHubIssuesRoadmap.createItem — priority labels", () => {
 			routes: [{ match: (a) => a[0] === "issue" && a[1] === "create", stdout: "https://github.com/acme/widgets/issues/99\n" }],
 		});
 		const r = mk({ repo: "/tmp", ghRun: run });
-		const created = await r.createItem({ title: "Hi", priority: "high", deferred: true, deps: ["#1"] });
+		const created = await r.createItem({ title: "Hi", description: "Full charter", priority: "high", deferred: true, deps: ["#1"] });
 		assert.equal(created.id, "99");
 		const args = calls[0].args;
 		assert.ok(args.includes("priority:high"));
 		assert.ok(args.includes("deferred"));
 		assert.ok(args.includes("autopilot"));
 		const bodyIdx = args.indexOf("--body");
+		assert.match(args[bodyIdx + 1], /^Full charter\n/);
 		assert.match(args[bodyIdx + 1], /Priority: high/);
 		assert.match(args[bodyIdx + 1], /Depends on: #1/);
 	});

@@ -49,6 +49,7 @@ Build the argument list from the parsed flags and call the adapter:
 ```bash
 npx pelaggio roadmap create-item \
   --title "<concise imperative title derived from the user's input>" \
+  --description "<the user's full item description, with parsed flags removed>" \
   [--scope <XS|S|M|L|XL>] \
   [--to <roadmap>] \
   [--create] \
@@ -61,6 +62,8 @@ npx pelaggio roadmap create-item \
 ```
 
 The CLI prints JSON with `id`, `title`, `deps`, `sourceRef`. The `id` is adapter-assigned — markdown allocates the next prefixed ID in the chosen roadmap file, github-issues returns the new issue number, linear returns the team-prefixed identifier. All file/format detection (checkbox vs table, prefix scanning, task-index update) lives in the adapter; only pass `--prefix` or `--format` when the user explicitly wants to override markdown inference.
+
+The description is the charter, not a restatement of the concise title. Preserve the user's requirements and acceptance details. GitHub, Linear, and Beads persist it in the item body; markdown roadmaps retain their compact row format and ignore it.
 
 ## Report
 

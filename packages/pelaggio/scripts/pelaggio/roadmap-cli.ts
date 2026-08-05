@@ -270,9 +270,12 @@ async function cmdCreateItem(args: Args): Promise<number> {
 	const roadmap = makeRoadmap();
 	const title = args.flags.title;
 	if (typeof title !== "string") {
-		process.stderr.write("usage: roadmap create-item --title <t> [--deps <csv>] [--scope <x>] [--to <r>] [--after <id>] [--priority high|normal] [--deferred] [--create] [--prefix <PFX>] [--format checkbox|table] [--json]\n");
+		process.stderr.write(
+			"usage: roadmap create-item --title <t> [--description <text>] [--deps <csv>] [--scope <x>] [--to <r>] [--after <id>] [--priority high|normal] [--deferred] [--create] [--prefix <PFX>] [--format checkbox|table] [--json]\n",
+		);
 		return 1;
 	}
+	const description = typeof args.flags.description === "string" ? args.flags.description : undefined;
 	const deps =
 		typeof args.flags.deps === "string"
 			? args.flags.deps
@@ -293,7 +296,7 @@ async function cmdCreateItem(args: Args): Promise<number> {
 		return 1;
 	}
 	const format = rawFormat;
-	const created = await roadmap.createItem({ title, deps, scope, roadmap: roadmapArg, after, priority, deferred, create, prefix, format });
+	const created = await roadmap.createItem({ title, description, deps, scope, roadmap: roadmapArg, after, priority, deferred, create, prefix, format });
 	if (args.flags.json) printJson(created);
 	else process.stdout.write(`${created.id}\t${created.title}\n`);
 	return 0;
