@@ -282,6 +282,29 @@ describe("runPipeline — review findings revision prompt", () => {
 		);
 	});
 
+	it("fails closed when the review findings file is whitespace-only (no preamble)", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const findingsPath = join(worktree, "empty-findings.md");
+		writeFileSync(findingsPath, "   \n\t\n");
+		const { runStep, calls } = createMockRunStep({}, parkSignal);
+
+		const result = await runPipeline(
+			{ ...baseOpts(worktree), startFrom: "implement" },
+			parkSignal,
+			{ ...baseFlags, "review-findings": findingsPath },
+			{ runStep, mainRepo: worktree, listWorktrees: () => [], appendLog: () => {}, roadmap: makeMockRoadmap() },
+		);
+
+		assert.equal(result.completed, false);
+		assert.match(result.error ?? "", /is empty — refusing a findings-driven resume/);
+		assert.equal(
+			calls.some((call) => call.step === "implement"),
+			false,
+			"the generic plan prompt must not run in place of the missing revision task",
+		);
+	});
+
 	it("treats review findings as the primary implement task", async () => {
 		const worktree = makeTempGitRepo();
 		const parkSignal = makeParkSignal();

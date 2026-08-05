@@ -1349,6 +1349,12 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				const detail = err instanceof Error ? err.message : String(err);
 				return finish({ itemId, completed: false, cost, error: `could not read review findings ${JSON.stringify(findingsPath)}: ${detail}` });
 			}
+			// A readable but empty/whitespace-only findings file yields no preamble; the
+			// prompt selection below would silently fall back to the generic plan prompt
+			// and revise without its task. Same failure class as unreadable — fail closed.
+			if (!reviewNote) {
+				return finish({ itemId, completed: false, cost, error: `review findings ${JSON.stringify(findingsPath)} is empty — refusing a findings-driven resume without findings` });
+			}
 		}
 
 		const buildRevisionPrompt = (continued: boolean): string =>
