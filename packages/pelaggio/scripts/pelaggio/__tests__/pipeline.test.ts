@@ -1674,11 +1674,11 @@ describe("runPipeline — worktree confinement audit", () => {
 	});
 
 	// #435: pick runs with cwd === MAIN_REPO. A pick that changes Git-visible state in the
-	// main checkout (the incident: a rogue tracked-file edit) must fail closed as
+	// main checkout (including a clean commit) must fail closed as
 	// error_confinement — and the operator's `allow-dirty-main` escape hatch must NOT open a
 	// hole for it. Table-driven over both postures proves the gate cannot be opted out.
 	for (const allowDirtyMain of [false, true]) {
-		it(`fails closed when a pick step mutates a tracked file in main (allowDirtyMain=${allowDirtyMain}) (#435)`, async () => {
+		it(`fails closed when a pick step commits a tracked-file mutation in main (allowDirtyMain=${allowDirtyMain}) (#435)`, async () => {
 			const { parent, repo: mainRepo } = makeTempRepoWithParent();
 			writeFileSync(join(mainRepo, "config.ts"), "// original\n");
 			execSync('git add config.ts && git commit -q -m "add config"', { cwd: mainRepo });
@@ -1691,8 +1691,10 @@ describe("runPipeline — worktree confinement audit", () => {
 						ok: true,
 						text: "claimed TOOL-99\npick-item: TOOL-99\npick-result: claimed",
 						sideEffect: (cwd) => {
-							// A rogue pick edits a tracked file in the main checkout — the #435 incident.
+							// A rogue pick edits and commits a tracked file. Porcelain is clean when the
+							// step returns, so HEAD/ref state must carry the confinement signal.
 							writeFileSync(join(cwd, "config.ts"), "// mutated by a rogue pick\n");
+							execSync('git add config.ts && git commit -q -m "rogue pick mutation"', { cwd });
 							// It still creates the item worktree as a real pick would.
 							execSync(`git worktree add -q -b feat/tool-99 "${worktreePath}"`, { cwd });
 						},
@@ -1717,6 +1719,7 @@ describe("runPipeline — worktree confinement audit", () => {
 
 			assert.equal(result.completed, false);
 			assert.equal(result.error, "pick failed");
+			assert.equal(execSync("git status --porcelain", { cwd: mainRepo, encoding: "utf-8" }).trim(), "", "the regression must exercise the clean-status bypass");
 			// The gate stops the pipeline at pick — no plan/implement/ship on a confinement trip.
 			assert.deepEqual(
 				calls.map((c) => c.step),
@@ -1728,8 +1731,7 @@ describe("runPipeline — worktree confinement audit", () => {
 			assert.equal(last?.ok, false);
 			assert.equal(last?.subtype, "error_confinement", `allow-dirty-main must not opt pick out of the main audit (allowDirtyMain=${allowDirtyMain})`);
 			// The confinement diagnostic names the changed root (main) so an operator can locate
-			// the breach. (The per-file path also appears but is mangled for ` M` tracked-mod
-			// entries by a pre-existing porcelain-trim quirk outside this fix's scope.)
+			// the clean HEAD/ref-state breach.
 			assert.ok(last?.errorDetail?.includes(mainRepo), `errorDetail should name the changed root; got: ${last?.errorDetail}`);
 		});
 	}

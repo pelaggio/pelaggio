@@ -111,15 +111,14 @@ export const FORBIDDEN_ROOT_SNAPSHOT_RETRY_DELAY_MS = 25;
  * Typed sentinel for a forbidden root unavailable at snapshot time: fully absent (#330), or a
  * residual present directory shell that is not a Git repository (Git's explicit
  * `fatal: not a git repository` diagnostic conjoined with confirmed absence of `<root>/.git` —
- * #339; e.g. `worktree remove` left an empty path). Distinct from any `git status --porcelain`
- * output (which is either "" or newline-separated entries, never NUL-prefixed), so the diff can
- * treat it as no-violation without colliding with a real clean/dirty observation. Never use `""`
- * — that collides with a clean tree.
+ * #339; e.g. `worktree remove` left an empty path). Distinct from the versioned Git-state
+ * snapshot below, so the diff can treat it as no-violation without colliding with a real clean
+ * observation. Never use `""` — that collides with a legacy clean-tree test snapshot.
  */
 export const FORBIDDEN_ROOT_GONE = "\0gone";
 
 export interface SnapshotForbiddenRootOptions {
-	/** Test seam: replace the real Git runner. Defaults to `git --no-optional-locks status …`. */
+	/** Test seam: replace the real Git-state runner. The returned string is compared opaquely. */
 	run?: (root: string) => string;
 	/** Test seam: replace the sync sleeper between failed attempts. */
 	sleepSync?: (ms: number) => void;
@@ -157,19 +156,30 @@ function runForbiddenRootSnapshot(root: string): string {
 	// `--no-optional-locks`: parallel cycles snapshot the *shared* main-repo index twice per
 	// step; without it `git status` opportunistically takes `index.lock` to write back its
 	// refreshed stat cache, and concurrent snapshots collide (`index.lock: File exists`), which
-	// the fail-closed audit would misread as a confinement violation. The porcelain output is
-	// identical either way — the flag only skips the index writeback.
-	return execSync("git --no-optional-locks status --porcelain=v1 --untracked-files=all", {
-		cwd: root,
-		encoding: "utf-8",
-		stdio: ["ignore", "pipe", "pipe"],
-	}).trim();
+	// the fail-closed audit would misread as a confinement violation. The flag only skips the
+	// index writeback.
+	const run = (args: string[]): string =>
+		execFileSync("git", args, {
+			cwd: root,
+			encoding: "utf-8",
+			stdio: ["ignore", "pipe", "pipe"],
+		}).trim();
+	const status = run(["--no-optional-locks", "status", "--porcelain=v1", "--untracked-files=all"]);
+	const head = run(["rev-parse", "--verify", "HEAD"]);
+	const ref = run(["rev-parse", "--symbolic-full-name", "HEAD"]);
+	// HEAD catches a clean commit, while the checkout-local reflog tip also catches a commit
+	// reset back to the original SHA. Creating a different feat/* worktree during `pick` changes
+	// neither value for main's checkout (#435).
+	const reflog = run(["reflog", "-1", "--format=%H%x09%gs", "HEAD"]);
+	// Metadata lines are NUL-prefixed so porcelain-path diagnostics can ignore them without
+	// confusing them with real status entries. Keep status first for bounded path reporting.
+	return [status, `\0head ${head}`, `\0ref ${ref}`, `\0reflog ${reflog}`].filter(Boolean).join("\n");
 }
 
 /**
- * Snapshot a forbidden Git root's porcelain status. Retries **execution failures only**
- * (throws from the runner) a fixed number of times; a successful dirty/clean observation
- * is returned immediately and never re-polled.
+ * Snapshot a forbidden Git root's porcelain status and checkout identity (HEAD, symbolic ref,
+ * and HEAD reflog tip). Retries **execution failures only** (throws from the runner) a fixed
+ * number of times; a successful observation is returned immediately and never re-polled.
  */
 export function snapshotForbiddenRoot(root: string, opts?: SnapshotForbiddenRootOptions): string {
 	const attempts = opts?.attempts ?? FORBIDDEN_ROOT_SNAPSHOT_ATTEMPTS;
@@ -224,7 +234,7 @@ export function diffForbiddenRootSnapshots(before: ReadonlyMap<string, string>, 
 		const next = after.get(root);
 		// A root that is GONE at *either* endpoint was already absent or was removed mid-step; it
 		// cannot have been mutated-and-observed by this step, so it is never a violation. Only a
-		// present→present pair with differing porcelain output is a real confinement breach. (#308)
+		// present→present pair with differing Git-visible state is a confinement breach. (#308/#435)
 		if (status === FORBIDDEN_ROOT_GONE || next === FORBIDDEN_ROOT_GONE) continue;
 		if (next !== status) changed.push(root);
 	}

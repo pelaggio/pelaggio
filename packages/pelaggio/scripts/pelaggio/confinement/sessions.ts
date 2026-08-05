@@ -658,7 +658,7 @@ export function createSessionController(args: CreateSessionControllerArgs): Sess
 	};
 }
 
-// ── Porcelain first-difference paths ───────────────────────────────────
+// ── Git-state first-difference paths ───────────────────────────────────
 
 /**
  * Extract path entries from `git status --porcelain` output, including rename/copy
@@ -668,7 +668,9 @@ export function createSessionController(args: CreateSessionControllerArgs): Sess
 export function porcelainPaths(porcelain: string): string[] {
 	const paths = new Set<string>();
 	for (const line of porcelain.split("\n")) {
-		if (!line || line === "\0gone") continue;
+		// Forbidden-root snapshots append NUL-prefixed HEAD/ref/reflog identity lines after
+		// porcelain state. They are audit inputs, never file paths (#435).
+		if (!line || line.startsWith("\0")) continue;
 		// Porcelain v1: first two chars are status, then space, then path.
 		// Rename/copy may be: "R  old -> new" or with score "R100 old -> new"
 		// or null-separated in -z mode (we don't use -z; stick to space form).
@@ -708,7 +710,9 @@ export function firstDiffPaths(beforePorcelain: string, afterPorcelain: string, 
 	// Status-only change (e.g. same path, different XY): report paths present on either side.
 	const union = [...new Set([...before, ...after])].sort();
 	if (union.length > 0) return union.slice(0, limit);
-	// Unparseable porcelain change — surface a bounded raw snippet for diagnostics.
+	// A clean→clean checkout identity change (for example a commit) has no porcelain path.
+	if (beforePorcelain.includes("\0head ") || afterPorcelain.includes("\0head ")) return ["HEAD/ref state"];
+	// Unparseable legacy porcelain change — surface a bounded raw snippet for diagnostics.
 	const snippet = afterPorcelain.slice(0, 80).replace(/\n/g, "\\n");
 	return snippet ? [snippet] : [];
 }

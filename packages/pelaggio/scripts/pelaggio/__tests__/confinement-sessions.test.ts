@@ -371,6 +371,11 @@ describe("porcelain first-diff paths", () => {
 	it("extracts paths including rename/copy", () => {
 		assert.deepEqual(porcelainPaths(" M src/a.ts\n?? new.txt\n"), ["new.txt", "src/a.ts"]);
 		assert.deepEqual(porcelainPaths("R  old.ts -> new.ts\n"), ["new.ts", "old.ts"]);
+		assert.deepEqual(porcelainPaths("\0head abc\n\0ref refs/heads/main\n\0reflog abc\tcommit: init"), [], "snapshot identity metadata is not a path");
+	});
+
+	it("reports checkout identity when clean snapshots differ only by HEAD/ref metadata (#435)", () => {
+		assert.deepEqual(firstDiffPaths("\0head aaa\n\0ref refs/heads/main", "\0head bbb\n\0ref refs/heads/main"), ["HEAD/ref state"]);
 	});
 
 	it("firstDiffPaths prefers newly appeared paths and bounds output", () => {

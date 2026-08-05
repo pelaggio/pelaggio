@@ -103,6 +103,23 @@ function commitFile(dir: string, rel: string, content: string, msg: string): voi
 }
 
 describe("snapshotForbiddenRoot", () => {
+	it("detects a clean commit and a commit reset back to the original HEAD (#435)", () => {
+		const dir = makeFeatRepo();
+		const originalHead = execSync("git rev-parse HEAD", { cwd: dir, encoding: "utf-8" }).trim();
+		const before = snapshotForbiddenRoot(dir);
+
+		commitFile(dir, "tracked.txt", "committed mutation\n", "mutate forbidden root");
+		const committed = snapshotForbiddenRoot(dir);
+		assert.equal(execSync("git status --porcelain", { cwd: dir, encoding: "utf-8" }).trim(), "", "the commit leaves porcelain clean");
+		assert.deepEqual(diffForbiddenRootSnapshots(new Map([[dir, before]]), new Map([[dir, committed]])), [dir], "HEAD identity must expose a clean commit");
+
+		execSync(`git reset --hard -q ${originalHead}`, { cwd: dir });
+		const restored = snapshotForbiddenRoot(dir);
+		assert.equal(execSync("git rev-parse HEAD", { cwd: dir, encoding: "utf-8" }).trim(), originalHead);
+		assert.equal(execSync("git status --porcelain", { cwd: dir, encoding: "utf-8" }).trim(), "", "the reset restores both HEAD and porcelain");
+		assert.deepEqual(diffForbiddenRootSnapshots(new Map([[dir, before]]), new Map([[dir, restored]])), [dir], "the HEAD reflog tip must expose commit→reset restoration");
+	});
+
 	it("returns the first successful porcelain after transient execution failures", () => {
 		const sleeps: number[] = [];
 		let calls = 0;
