@@ -204,13 +204,16 @@ export interface CycleProvenance {
 /**
  * Closed set of park causes. Assigned by `classifyParkReason` in helpers.ts.
  *
- * Caveat on `sdk-outage`: sustained-outage detection (#128) lives in `runOrchestrator`, which
- * relabels the tripping cycle's in-memory result *after* `runPipeline`'s `finish()` has already
- * appended that cycle's log entry. The append-only log is never reconciled, so the cycle that
- * *trips* the outage records as an ordinary `transient sdk error` failure, not a park. The
- * `sdk-outage` class therefore lands on the *next* cycle, which observes the shared
- * `parkSignal.parked` and exits through the early park return. Read outage parks as "the outage
- * was active by this cycle", not "this cycle tripped it".
+ * Known gap on `sdk-outage` (#458): sustained-outage detection (#128) lives in `runOrchestrator`,
+ * which relabels the tripping cycle's in-memory result *after* `runPipeline`'s `finish()` has
+ * already appended that cycle's log entry. The append-only log is never reconciled, so the cycle
+ * that trips the outage persists as an ordinary `transient sdk error` failure — counted by
+ * `failuresByCause`, not `parksByClass`.
+ *
+ * It does NOT simply land on the next cycle: the relabel sets `resetsAt = 0`, so `awaitParkReset`
+ * hands back immediately and a serial run has no next cycle at all. In practice this class is
+ * only reachable when a parallel sibling worker starts a cycle after the signal is set. Until
+ * #458 lands, treat an absent `sdk-outage` count as "not measured", not "did not happen".
  */
 export type ParkClass = "rate-limit" | "paused" | "sdk-outage" | "review-escalation" | "review-blocked" | "review-binding" | "effects-failed" | "unclassified";
 

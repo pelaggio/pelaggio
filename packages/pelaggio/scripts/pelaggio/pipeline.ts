@@ -2572,12 +2572,13 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					consecutiveTransientErrors++;
 					consecutiveQuarantines = 0;
 					if (consecutiveTransientErrors >= CONSECUTIVE_TRANSIENT_ERROR_LIMIT && !parkSignal.parked) {
-						// NOTE: this relabel is in-memory only and happens *after* runPipeline's
-						// finish() already appended this cycle's log entry, which the append-only
-						// log never reconciles. So this cycle stays logged as a `transient sdk
-						// error` failure with no `parkClass`; the `sdk-outage` class surfaces on
-						// the next cycle, which sees `parkSignal.parked` and takes the early park
-						// return. Stats read accordingly — see the ParkClass doc in types.ts.
+						// KNOWN GAP (#458): this relabel is in-memory only and happens *after*
+						// runPipeline's finish() already appended this cycle's log entry, which
+						// the append-only log never reconciles. So the tripping cycle persists as
+						// an ordinary `transient sdk error` failure with no `parkClass`, and
+						// `resetsAt = 0` below makes awaitParkReset hand back immediately — so a
+						// serial run has no next cycle to record the park either. `pelaggio stats`
+						// therefore under-reports `sdk-outage`. See the ParkClass doc in types.ts.
 						parkSignal.parked = true;
 						parkSignal.resetsAt = 0;
 						parkSignal.limitType = "sdk-outage";
