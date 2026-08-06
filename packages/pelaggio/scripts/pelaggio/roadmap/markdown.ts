@@ -110,6 +110,9 @@ export class MarkdownRoadmap implements RoadmapSource {
 					if (sidecar.deferred) item.deferred = true;
 					if (sidecar.reviewDigest) item.reviewDigest = sidecar.reviewDigest;
 					if (sidecar.reviewLevel) item.reviewLevel = sidecar.reviewLevel;
+					// The markdown row carries no size, so the sidecar is the only scope source here.
+					// Without this, `charter-audit`'s S/XS sub-floor filter never matches on this adapter.
+					if (sidecar.scope) item.scope = sidecar.scope;
 				}
 				out.push(item);
 			}
@@ -318,7 +321,11 @@ export class MarkdownRoadmap implements RoadmapSource {
 			staged.push(relative(this.repo, charterSidecarPath(this.repo, id)));
 		}
 		const stagedArgs = staged.map((p) => JSON.stringify(p)).join(" ");
-		execSync(`git add ${stagedArgs}`, { cwd: this.repo, stdio: "pipe" });
+		// `-f`: the charter sidecar lives under `.dev/`, which the canonical layout gitignores
+		// (.gitignore:3). A non-forced add exits non-zero and throws, failing the create after the
+		// roadmap row is already written — leaving dirty partial state. Forcing is a no-op for the
+		// already-tracked roadmap/index paths.
+		execSync(`git add -f ${stagedArgs}`, { cwd: this.repo, stdio: "pipe" });
 		execSync(`git commit --no-verify -m ${JSON.stringify(`docs: add roadmap item ${id} — ${title}`)} -- ${stagedArgs}`, { cwd: this.repo, stdio: "pipe" });
 
 		return { id, title, deps, sourceRef: targetPath };
@@ -335,7 +342,8 @@ export class MarkdownRoadmap implements RoadmapSource {
 		const sidecar: CharterSidecar = { deferred: false, reviewDigest: provenance.reviewDigest, reviewLevel: provenance.level, ...(provenance.scope ? { scope: provenance.scope } : {}) };
 		const path = writeCharterSidecar(this.repo, id, sidecar);
 		const rel = JSON.stringify(relative(this.repo, path));
-		execSync(`git add ${rel}`, { cwd: this.repo, stdio: "pipe" });
+		// `-f`: sidecar path is gitignored under `.dev/` — see the note in createItemUnlocked.
+		execSync(`git add -f ${rel}`, { cwd: this.repo, stdio: "pipe" });
 		execSync(`git commit --no-verify -m ${JSON.stringify(`docs: activate ${id} (charter review ${provenance.reviewDigest.slice(0, 12)})`)} -- ${rel}`, { cwd: this.repo, stdio: "pipe" });
 		return { ...item, deferred: false, reviewDigest: provenance.reviewDigest, reviewLevel: provenance.level };
 	}

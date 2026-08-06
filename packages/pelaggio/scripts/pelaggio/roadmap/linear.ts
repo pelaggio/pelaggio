@@ -18,6 +18,9 @@ function applyCharterProjection(item: RoadmapItemStatus, description: string | n
 	if (provenance) {
 		if (provenance.reviewDigest) item.reviewDigest = provenance.reviewDigest;
 		if (provenance.level) item.reviewLevel = provenance.level;
+		// The Linear projection carries no size of its own, so the marker is the only scope source.
+		// Without this, `charter-audit`'s S/XS sub-floor filter never matches on this adapter.
+		if (provenance.scope) item.scope = provenance.scope;
 	}
 }
 

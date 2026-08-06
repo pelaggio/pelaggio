@@ -451,6 +451,9 @@ export class BeadsRoadmap implements RoadmapSource {
 		if (provenance?.deferred || /^Deferred:\s*true\s*$/im.test(description)) item.deferred = true;
 		if (provenance?.reviewDigest) item.reviewDigest = provenance.reviewDigest;
 		if (provenance?.level) item.reviewLevel = provenance.level;
+		// The Beads projection carries no size of its own, so the marker is the only scope source.
+		// Without this, `charter-audit`'s S/XS sub-floor filter never matches on this adapter.
+		if (provenance?.scope) item.scope = provenance.scope;
 		return attachPriority(item, issue.priority);
 	}
 

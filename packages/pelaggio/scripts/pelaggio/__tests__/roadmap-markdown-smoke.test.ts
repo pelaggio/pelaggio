@@ -84,4 +84,27 @@ describe("markdown roadmap — config-selected source drives a real lifecycle", 
 		assert.doesNotMatch(index, /^\| TOOL-2 \|/m, "shipped item leaves the Open items table");
 		assert.match(index, /- TOOL-2 ✓/, "shipped item lands in Recently completed");
 	});
+
+	// The canonical layout gitignores `.dev/`, where the charter sidecar lives. The lifecycle test
+	// above seeds no `.gitignore`, so a non-forced `git add` of the sidecar passes there and fails
+	// on every real consumer — the create throws *after* the roadmap row is written, leaving dirty
+	// partial state. Scope rides the same sidecar and is what `charter-audit` filters the S/XS
+	// sub-floor on, so an unprojected scope silently empties that audit.
+	it("gitignored `.dev/`: the charter sidecar commits, and its scope reaches the projected item", async () => {
+		const repo = seedRepo();
+		seedFile(repo, ".gitignore", ".dev/\n");
+		seedFile(repo, ".pelaggio.yml", "roadmap:\n  source: markdown\n");
+		seedFile(repo, "docs/roadmap-core.md", ["# Core", "", "| Item | Depends on |", "|------|-----------|", "| TOOL-1. Existing open item | — |", ""].join("\n"));
+		execSync("git add -A && git commit -q -m seed", { cwd: repo });
+
+		const cfg = loadConfig({ repo, configPath: join(repo, ".pelaggio.yml") });
+		const src = getRoadmapSource(cfg.roadmapSource, { repo, github: cfg.roadmapGithub });
+
+		const created = await src.createItem({ title: "Sub-floor item", scope: "XS", reviewLevel: "triad", reviewDigest: "a".repeat(64) });
+		assert.equal(git(repo, "status --porcelain"), "", "create commits the ignored sidecar rather than throwing mid-write");
+
+		const listed = (await src.listItems()).find((i) => i.id === created.id);
+		assert.equal(listed?.scope, "XS", "sidecar scope projects onto the item, so charter-audit's S/XS filter can match");
+		assert.equal(listed?.reviewLevel, "triad");
+	});
 });
