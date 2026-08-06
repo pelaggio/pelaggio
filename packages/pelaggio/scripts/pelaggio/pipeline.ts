@@ -2131,11 +2131,21 @@ export function hermeticDefault<T extends (...args: never[]) => unknown>(dep: st
 	}) as unknown as T;
 }
 
-export function hermeticQueueRoot(real: () => string): string {
+/** One temp base per process, created lazily. Memoised: `hermeticQueueRoot` is called on every
+ *  `runOrchestrator`, so minting a fresh `mkdtempSync` per call leaked ~170 directories per test
+ *  run and never removed them — on a box where /tmp inode exhaustion is already a known failure
+ *  mode for repeated test runs. */
+let hermeticBaseDir: string | undefined;
+
+export function hermeticQueueRoot(real: () => string, name = "queue"): string {
 	if (!IN_NODE_TEST) return real();
 	// Not a throw: the path is read eagerly to derive the drain-lock path even when the drain
 	// never runs, so withholding it would break tests that legitimately never touch the queue.
-	return mkdtempSync(join(tmpdir(), "pelaggio-hermetic-queue-"));
+	hermeticBaseDir ??= mkdtempSync(join(tmpdir(), "pelaggio-hermetic-"));
+	// Distinct subdirectories so queue records and gate records cannot collide in the shared base.
+	const dir = join(hermeticBaseDir, name);
+	mkdirSync(dir, { recursive: true });
+	return dir;
 }
 
 /**
@@ -2356,7 +2366,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		const daySpendLogPath =
 			deps.daySpendLogPath ??
 			join(
-				hermeticQueueRoot(() => dirname(LOG_PATH)),
+				hermeticQueueRoot(() => dirname(LOG_PATH), "day-spend-log"),
 				basename(LOG_PATH),
 			);
 		if (continuous?.dayBudget != null && deps.initialDaySpend === undefined) {
@@ -2759,8 +2769,8 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			now: () => Date.now(),
 			prepareReviewHead: hermeticDefault("review.prepareReviewHead", prepareReviewHead),
 			cleanupReviewHead: hermeticDefault("review.cleanupReviewHead", cleanupReviewHead),
-			queueRoot: hermeticQueueRoot(() => reviewRequestsDir(mainWorktree(REPO))),
-			gateRecordsRoot: hermeticQueueRoot(() => gateRecordsDir(mainWorktree(REPO))),
+			queueRoot: hermeticQueueRoot(() => reviewRequestsDir(mainWorktree(REPO)), "review-requests"),
+			gateRecordsRoot: hermeticQueueRoot(() => gateRecordsDir(mainWorktree(REPO)), "gate-records"),
 			// Not guarded: it writes to `gateRecordsRoot`, which is itself hermetic by default above.
 			writeGateRecord: writePrReviewGateRecord,
 			...deps.review,
