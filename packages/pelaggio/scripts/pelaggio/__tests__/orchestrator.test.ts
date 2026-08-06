@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { REPO } from "../config.js";
 import type { NotifyPayload } from "../notify.js";
-import { runOrchestrator } from "../pipeline.js";
+import { hermeticDefault, hermeticQueueRoot, runOrchestrator } from "../pipeline.js";
 import { gateRecordsDir, readPrReviewGateRecord, writePrReviewGateRecord } from "../pr-review-gate-record.js";
 import { enqueueReviewRequest, type NewReviewRequest, reviewRequestsDir } from "../review-request-queue.js";
 import { reviseFindingsPath } from "../revise-sweep.js";
@@ -860,6 +860,33 @@ describe("runOrchestrator — notifications", () => {
 		assert.equal(sent.length, 2);
 		assert.equal(sent[0].payload.event, "parked");
 		assert.equal(sent[1].payload.event, "shipped");
+	});
+});
+
+describe("hermetic-test guard (#420, #456)", () => {
+	// The effectful review/revise defaults reach the host repo and the network: `gh` shells out and
+	// `runReviewGate` spawns provider agents. Reaching the drain without injecting them used the
+	// developer's real repo — producing live Claude/Codex/Grok spawns (#420) and a 4-hour hang on
+	// the host's stale `.drain.lock` (#456). These assert the guard directly, since whether any
+	// particular orchestrator path reaches the drain is incidental to the property being protected.
+	it("withholds an effectful default under node --test and names the dep to inject", () => {
+		const real = (() => "REAL") as () => string;
+		const guarded = hermeticDefault("review.gh", real);
+		assert.notEqual(guarded, real, "the real implementation must not be handed out under node --test");
+		assert.throws(() => guarded(), /hermetic-test guard.*review\.gh/s);
+	});
+
+	// The queue root is read eagerly to derive the drain-lock path even when the drain never runs,
+	// so it cannot throw — it must resolve somewhere harmless instead.
+	it("resolves queue roots to a temp dir, never the host .dev/", () => {
+		let realCalls = 0;
+		const root = hermeticQueueRoot(() => {
+			realCalls++;
+			return "/home/chris/workspace/pelaggio/.dev/review-requests";
+		});
+		assert.equal(realCalls, 0, "the host path must not even be computed under node --test");
+		assert.ok(!root.includes("/.dev/review-requests"), `expected a temp root, got ${root}`);
+		assert.ok(existsSync(root), "the substitute root must exist so lock/record paths resolve");
 	});
 });
 

@@ -1,6 +1,7 @@
 import { execSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { accessSync, appendFileSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, delimiter, extname, isAbsolute, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import {
@@ -2101,6 +2102,43 @@ const MAX_RESUME_ROUNDS = 12;
 const REVIEW_DRAIN_LOCK_STALE_MS = 4 * 60 * 60 * 1000;
 
 /**
+ * Hermetic-test guard (#420, #456).
+ *
+ * `runOrchestrator`/`runPipeline` build their review + revise dependency bundles from real
+ * defaults — the `gh` CLI runner, the PR-review gate that spawns provider agents, and the
+ * host repo's `.dev/review-requests` queue. A test that reaches the drain without injecting
+ * `deps.review` / `deps.revise` therefore uses the developer's real repo and network.
+ *
+ * Two failures were observed from exactly that: live Claude/Codex/Grok agents spawned out of
+ * `orchestrator.test.ts` (#420), and a 4-hour hang because the host queue held a stale
+ * `.drain.lock` and the post-cycle drain fell back to a blocking acquire (#456). The lock was
+ * accidentally *masking* the agent spawn — clearing it to "fix" the hang exposes the escape.
+ *
+ * Under `node --test` (`NODE_TEST_CONTEXT`), the effectful defaults are replaced:
+ * - callables throw on invocation, naming the dep to inject. Lazy by design: a test that never
+ *   reaches the drain (e.g. `runner: "ci"`) stays green without boilerplate.
+ * - queue roots point at a per-process temp dir, so lock paths and records can never resolve
+ *   into the host `.dev/`.
+ */
+const IN_NODE_TEST = process.env.NODE_TEST_CONTEXT !== undefined;
+
+export function hermeticDefault<T extends (...args: never[]) => unknown>(dep: string, real: T): T {
+	if (!IN_NODE_TEST) return real;
+	return ((..._args: never[]) => {
+		throw new Error(
+			`hermetic-test guard: \`${dep}\` was not injected. Under node --test the real implementation is withheld because it reaches the host repo or spawns provider agents (#420/#456). Pass it via deps.review/deps.revise in the test.`,
+		);
+	}) as unknown as T;
+}
+
+export function hermeticQueueRoot(real: () => string): string {
+	if (!IN_NODE_TEST) return real();
+	// Not a throw: the path is read eagerly to derive the drain-lock path even when the drain
+	// never runs, so withholding it would break tests that legitimately never touch the queue.
+	return mkdtempSync(join(tmpdir(), "pelaggio-hermetic-queue-"));
+}
+
+/**
  * Wait out the current park's reset window, or report that we can't. The timing/jitter/max-wait
  * semantics live here in exactly one place so both the item park-and-resume loop and the local
  * review-retry sweep (#134) share one implementation — copy-pasting the wait block would let
@@ -2683,13 +2721,14 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			policy: REVIEW_CONFIG,
 			statuslessAfter: REVIEW_CONFIG.statuslessAfter,
 			ghRepo: ROADMAP_SOURCE === "github-issues" ? ROADMAP_GITHUB.ghRepo : "",
-			gh: defaultGhRun,
-			runReviewGate: runPrReviewGate,
+			gh: hermeticDefault("review.gh", defaultGhRun),
+			runReviewGate: hermeticDefault("review.runReviewGate", runPrReviewGate),
 			now: () => Date.now(),
-			prepareReviewHead,
-			cleanupReviewHead,
-			queueRoot: reviewRequestsDir(mainWorktree(REPO)),
-			gateRecordsRoot: gateRecordsDir(mainWorktree(REPO)),
+			prepareReviewHead: hermeticDefault("review.prepareReviewHead", prepareReviewHead),
+			cleanupReviewHead: hermeticDefault("review.cleanupReviewHead", cleanupReviewHead),
+			queueRoot: hermeticQueueRoot(() => reviewRequestsDir(mainWorktree(REPO))),
+			gateRecordsRoot: hermeticQueueRoot(() => gateRecordsDir(mainWorktree(REPO))),
+			// Not guarded: it writes to `gateRecordsRoot`, which is itself hermetic by default above.
 			writeGateRecord: writePrReviewGateRecord,
 			...deps.review,
 		};
@@ -3030,7 +3069,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		const revise = {
 			local: REVISE_LOCAL,
 			ghRepo: ROADMAP_SOURCE === "github-issues" ? ROADMAP_GITHUB.ghRepo : "",
-			gh: defaultGhRun,
+			gh: hermeticDefault("revise.gh", defaultGhRun),
 			...deps.revise,
 		};
 		const doSweep = revise.local && shipIsPr && !!revise.ghRepo && !noWorktree && !dryRun && items.length === 0;
