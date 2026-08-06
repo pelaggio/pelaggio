@@ -167,6 +167,22 @@ describe("dual-format reader", () => {
 		assert.match(event.eventId, /^[0-9A-HJKMNP-TV-Z]{26}$/);
 	});
 
+	it("skips day-budget spend receipts rather than promoting them to phantom cycles (#398)", () => {
+		const root = tempRoot();
+		const cycleLogPath = join(root, ".dev", "pelaggio-log.jsonl");
+		mkdirSync(dirname(cycleLogPath), { recursive: true });
+		const realCycle = { ts: "2026-08-05T00:00:00.000Z", cycle: 1, item: "42", quick: false, steps: [], total_cost: 1.5, verdict: null, completed: true, error: null };
+		// Exactly the shape `appendDayBudgetCharge` writes: it satisfies every isCycleFields()
+		// clause, so an unfiltered reader counts each spend receipt as a completed cycle.
+		const receipt = { ts: "2026-08-05T00:05:00.000Z", cycle: 0, item: null, quick: false, steps: [], total_cost: 0.25, verdict: null, completed: true, error: null, budgetCharge: true };
+		writeFileSync(cycleLogPath, `${JSON.stringify(realCycle)}\n${JSON.stringify(receipt)}\n`);
+		const { events, diagnostics } = readEventLog({ root });
+		assert.equal(events.length, 1, "the spend receipt must not decode as a cycle event");
+		assert.equal("cycle" in events[0] && events[0].cycle, 1);
+		assert.deepEqual(diagnostics.details, [], "a well-formed receipt is skipped, not reported malformed");
+		assert.equal(diagnostics.counts.malformed, 0);
+	});
+
 	it("preserves additive provenance on normalized legacy cycle records", () => {
 		const root = tempRoot();
 		const cycleLogPath = join(root, ".dev", "pelaggio-log.jsonl");

@@ -202,6 +202,12 @@ function readFileEvents(path: string, diagnostics: EventLogDiagnostics): FlowEve
 			diagnose(diagnostics, { kind, source, line, message: kind === "truncatedTail" ? "Malformed unterminated tail record" : "Invalid JSON" });
 			continue;
 		}
+		// Day-budget spend receipts (#398) are cycle-log rows, not cycles. They satisfy every clause
+		// of isCycleFields() — cycle 0, item null, empty steps — so without this they promote to
+		// phantom `pelaggio.cycle-completed` events and inflate authoritative historical cycle counts.
+		// `stats.reduce()` filters them on the same marker; this is the reader-side mirror. Not a
+		// diagnostic: the row is a well-formed receipt, simply not an event.
+		if (isRecord(value) && value.type === undefined && value.budgetCharge === true) continue;
 		if (isRecord(value) && value.type === undefined && isCycleFields(value) && isCanonicalInstant(value.ts)) {
 			const event = legacyEvent(value, source, line, bytes);
 			if (event) events.push(event);
