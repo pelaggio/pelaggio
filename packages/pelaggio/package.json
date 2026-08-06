@@ -33,7 +33,7 @@
 		"check:publish": "tsx scripts/check-publish.ts",
 		"check:skills": "tsx scripts/pelaggio/check-skills.ts",
 		"typecheck": "pnpm -w exec tsc --noEmit --pretty false -p packages/pelaggio",
-		"test": "tsx --test scripts/pelaggio/__tests__/*.test.ts",
+		"test": "tsx --test --test-timeout=60000 scripts/pelaggio/__tests__/*.test.ts",
 		"prepack": "tsx scripts/pack-prepare.ts",
 		"postpack": "tsx scripts/pack-cleanup.ts"
 	},
