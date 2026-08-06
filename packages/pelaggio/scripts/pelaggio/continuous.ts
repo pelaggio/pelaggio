@@ -6,7 +6,7 @@
  * definition of the stop conditions.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import type { FlowPolicy } from "./flow-policy.js";
 import type { RoadmapSource } from "./roadmap/index.js";
 import { buildFlowSnapshot } from "./roadmap-cli.js";
@@ -151,19 +151,23 @@ export function nextLocalMidnightMs(nowMs: number = Date.now()): number {
  * positive finite costs (mirrors `DayBudgetTracker.add`) and keys on the local
  * calendar day (same basis as `roll()`).
  *
- * Throws when a ledger that *exists* cannot be read. Returning 0 there would seed the
- * tracker as if nothing had been spent, so a permissions or I/O fault would silently
- * grant a fresh full daily budget — the one failure mode a spend cap must not have.
- * "File absent" and "file unreadable" are different facts and only the first means zero.
+ * Only a genuinely absent ledger (ENOENT) means zero. Every other I/O failure throws:
+ * seeding the tracker at $0 when spend may exist on disk would silently grant a fresh
+ * full daily budget — the one failure mode a spend cap must not have.
+ *
+ * The read is attempted directly rather than gated on `existsSync`, which cannot tell
+ * "absent" from "unreadable": it returns false when the file exists but a parent
+ * directory denies traversal (EACCES/EPERM), which would route a permission fault into
+ * the absent-means-zero path and defeat the check entirely.
  */
 export function sumDaySpendFromLog(logPath: string, nowMs: number = Date.now()): number {
-	if (!existsSync(logPath)) return 0;
 	let raw: string;
 	try {
 		raw = readFileSync(logPath, "utf8");
 	} catch (e) {
+		if ((e as NodeJS.ErrnoException)?.code === "ENOENT") return 0;
 		const msg = e instanceof Error ? e.message : String(e);
-		throw new Error(`day-budget ledger exists but could not be read (${logPath}): ${msg}. Refusing to reconstruct today's spend as $0 — fix the ledger or clear the day budget.`);
+		throw new Error(`day-budget ledger could not be read (${logPath}): ${msg}. Refusing to reconstruct today's spend as $0 — fix the ledger or clear the day budget.`);
 	}
 	const today = dayKey(nowMs);
 	let sum = 0;
@@ -183,6 +187,13 @@ export function sumDaySpendFromLog(logPath: string, nowMs: number = Date.now()):
 		const tsMs = Date.parse(ts);
 		if (Number.isNaN(tsMs) || dayKey(tsMs) !== today) continue;
 		sum += cost;
+		// Accumulator overflow is a fail-open in disguise: once `sum` reaches Infinity,
+		// DayBudgetTracker's `Number.isFinite(initialSpent)` guard converts it to 0 and grants a
+		// fresh full budget. Two 1e308 rows are enough. A non-finite total means spend is at least
+		// as large as anything representable, so refuse rather than seed a number we cannot trust.
+		if (!Number.isFinite(sum)) {
+			throw new Error(`day-budget ledger reconstructs to a non-finite total (${logPath}): the accumulated spend overflowed. Refusing to seed an untrustworthy day spend — inspect the ledger for corrupt total_cost values.`);
+		}
 	}
 	return sum;
 }

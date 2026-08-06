@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -247,6 +247,36 @@ describe("sumDaySpendFromLog", () => {
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
+	});
+
+	// `existsSync` cannot distinguish absent from unreadable — it returns false when a parent
+	// directory denies traversal — so gating the read on it routed EACCES into the absent→0 path.
+	// Only ENOENT may mean zero; every other errno must throw.
+	it("unreadable parent directory → throws, not $0", () => {
+		const dir = mkdtempSync(join(tmpdir(), "pelaggio-daylog-noaccess-"));
+		const sub = join(dir, "locked");
+		mkdirSync(sub);
+		const path = join(sub, "pelaggio-log.jsonl");
+		writeFileSync(path, "");
+		chmodSync(sub, 0o000);
+		try {
+			if (process.getuid?.() === 0) return; // root ignores the mode bits
+			assert.equal(existsSync(path), false, "precondition: existsSync hides the permission fault");
+			assert.throws(() => sumDaySpendFromLog(path, Date.parse("2026-08-02T12:00:00Z")), /could not be read/);
+		} finally {
+			chmodSync(sub, 0o700);
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	// Overflow is a fail-open in disguise: Infinity trips DayBudgetTracker's isFinite guard,
+	// which converts it to 0 and grants a fresh full budget.
+	it("accumulator overflow → throws rather than seeding a non-finite total", () => {
+		const now = new Date(2026, 7, 2, 12, 0, 0).getTime();
+		const row = (c: string) => JSON.stringify({ ts: new Date(2026, 7, 2, 12, 0, 0).toISOString(), total_cost: Number(c) });
+		withTempLog([row("1e308"), row("1e308")], (path) => {
+			assert.throws(() => sumDaySpendFromLog(path, now), /non-finite/);
+		});
 	});
 
 	it("empty file → 0", () => {
