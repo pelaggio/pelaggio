@@ -16,7 +16,7 @@
 import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { type AuthoringReviewConfig, CONFIG, type ResolvedConfig, type ReviewSlot, resolveStepSettings, type StepSettings } from "./config.js";
+import { type AuthoringReviewConfig, CONFIG, modelForProvider, type ResolvedConfig, type ReviewSlot, resolveStepSettings, type StepSettings } from "./config.js";
 import { expandPackagedSkill } from "./helpers.js";
 import { assertDocumentUnchanged, type DocumentSnapshot, documentInjectionState, formatDocumentUnderReview, snapshotDocument } from "./review/document.js";
 import type { ReviewOutcome } from "./review/loop.js";
@@ -83,7 +83,9 @@ function fillReviewSlot(slot: ReviewSlot, defaults: StepSettings): ReviewSlot {
 		const codexModel = slot.codexModel ?? defaults.codexModel;
 		return codexModel ? { ...slot, codexModel } : { ...slot };
 	}
-	const model = slot.model ?? defaults.model;
+	// Fill a non-Codex seat from that provider's own step-settings slot, never the top-level
+	// Claude `model` slot (#431).
+	const model = slot.model ?? modelForProvider(defaults, slot.provider);
 	return model ? { ...slot, model } : { ...slot };
 }
 

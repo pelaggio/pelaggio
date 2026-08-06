@@ -9,6 +9,7 @@ import {
 	DEFAULT_SHIP_TARGET,
 	isPipelineStep,
 	LOG_PATH,
+	modelForProvider,
 	type PipelineStep,
 	REAP_ENABLED,
 	RECONCILE_ORDER,
@@ -54,6 +55,7 @@ import {
 	checkpoint,
 	classifyCycleDisposition,
 	classifyOutcome,
+	classifyParkReason,
 	computeImplementTurns,
 	createMainCheckoutDeltaObserver,
 	createMutex,
@@ -92,7 +94,8 @@ import {
 	verifyShipLanded,
 } from "./helpers.js";
 import { type NotifyConfig, notifyCycle, notifyDecision as notifyDecisionEvent, notifyStrandedReview, sendNotification as sendNotificationDefault } from "./notify.js";
-import { buildFailClosedComment, runPrReviewGate } from "./pr-review-cli.js";
+import { buildFailClosedComment, type PrReviewGateResult, runPrReviewGate } from "./pr-review-cli.js";
+import { gateRecordsDir, type NewPrReviewGateRecord, writePrReviewGateRecord } from "./pr-review-gate-record.js";
 import { capabilityMapFrom, resolveAuthoringReviewConfig } from "./provider-routing.js";
 import { confirmLanding, enumerateReapCandidates, reapItem, reapReviewHeadOrphans, reconcileMutationLockPath, refreshLandingBase, shouldReap } from "./reap-sweep.js";
 import { runReviewLoop } from "./review/loop.js";
@@ -340,7 +343,14 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		} = {},
 	): Promise<StepResult> {
 		const settings = resolveStepSettings(CONFIG, profile, name);
-		const realized = executionOverride ?? settings;
+		// Normalize into a realized driver identity for logging + effects attribution. An
+		// `executionOverride` is already realized (its generic `model`/`codexModel` was projected
+		// when the pooled candidate/seat was chosen), so read it as-is. A raw `StepSettings` —
+		// a single-provider, non-pooled step (e.g. `providers.<step>: grok`) — must project its
+		// provider-specific slot here, or a Grok/OpenCode step would record the top-level Claude id
+		// and corrupt `findLoggedArtifactAuthor` recovery and cycle provenance (issue #431).
+		const realized: { provider: import("./types.js").ProviderName; model?: string; codexModel?: string } =
+			executionOverride ?? (settings.provider === "codex" ? { provider: "codex", codexModel: modelForProvider(settings, "codex") } : { provider: settings.provider, model: modelForProvider(settings, settings.provider) });
 		const stepLog = (entry: Omit<StepLog, "name" | "provider" | "model">): StepLog => ({
 			name,
 			provider: realized.provider,
@@ -777,6 +787,10 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	}
 
 	let shipwrecked = false;
+	// Detail for a review-loop park. Signal-driven parks (rate limit, pause, outage) carry
+	// `parkSignal.limitType` instead; review-loop parks pass their reason to `parkExit()`,
+	// which previously used it only for the console line — so it never reached the log.
+	let parkReasonDetail: string | null = null;
 
 	function finish(result: CycleResult): CycleResult {
 		// Deregister this cycle's worktree from the active-peer registry on every exit path
@@ -843,7 +857,8 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				completed: result.completed,
 				error: result.error ?? null,
 				parked,
-				parkReason: parked ? parkSignal.limitType || null : null,
+				parkReason: parked ? parkReasonDetail || parkSignal.limitType || null : null,
+				...(parked ? { parkClass: classifyParkReason(parkReasonDetail, parkSignal.limitType) } : {}),
 				shipwrecked,
 				...(result.bookkeepingWarnings?.length ? { bookkeepingWarnings: result.bookkeepingWarnings } : {}),
 				provenance: {
@@ -1060,6 +1075,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 
 	function parkExit(reason?: string): CycleResult | null {
 		if (!parkSignal.parked && !reason) return null;
+		if (reason) parkReasonDetail = reason;
 		if (worktree) checkpoint(worktree, reason ? "review-loop park" : "rate-limit park");
 		log(`⏸ parked (${reason ?? parkSignal.limitType})`);
 		return finish({ itemId, completed: false, cost, error: "parked" });
@@ -1184,10 +1200,13 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	}
 
 	// ── Plan + Shakedown-plan ──
+	// Realize each raw candidate's provider-specific model into the generic DriverIdentity slot:
+	// Codex keeps `codexModel`; Claude/Grok/OpenCode carry their own model in `model` (#431).
 	const driverCandidates = (name: Step): DriverIdentity[] =>
-		resolveDriverCandidates(CONFIG, profile, name).map((candidate) =>
-			candidate.provider === "codex" ? { provider: "codex", ...(candidate.codexModel ? { codexModel: candidate.codexModel } : {}) } : { provider: candidate.provider, ...(candidate.model ? { model: candidate.model } : {}) },
-		);
+		resolveDriverCandidates(CONFIG, profile, name).map((candidate) => {
+			const model = modelForProvider(candidate, candidate.provider);
+			return candidate.provider === "codex" ? { provider: "codex", ...(model ? { codexModel: model } : {}) } : { provider: candidate.provider, ...(model ? { model } : {}) };
+		});
 	const available: (candidate: DriverIdentity) => boolean =
 		providerAvailableForTests ??
 		((candidate: DriverIdentity): boolean => {
@@ -1341,15 +1360,27 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		].join("\n");
 
 		// Revision input (issue #60): on a resume driven by a red PR review, `--review-findings <path>`
-		// points at a findings file the closed-loop workflow wrote. Read best-effort — an absent or
-		// unreadable file must never crash a resume; it just means no review preamble is injected.
+		// points at a findings file the closed-loop workflow wrote. Fail closed when that explicit
+		// input cannot be read: continuing would silently ask the worker to revise without its task.
 		let reviewNote = "";
 		const findingsPath = flags["review-findings"];
+		// Any DEFINED value is a findings-driven resume — `--review-findings ""` must not
+		// slip past a truthiness check into the generic plan prompt.
+		if (findingsPath !== undefined && findingsPath.trim() === "") {
+			return finish({ itemId, completed: false, cost, error: "empty --review-findings path — refusing a findings-driven resume without findings" });
+		}
 		if (findingsPath) {
 			try {
 				reviewNote = reviewFindingsPreamble(readFileSync(findingsPath, "utf-8"));
-			} catch {
-				reviewNote = "";
+			} catch (err) {
+				const detail = err instanceof Error ? err.message : String(err);
+				return finish({ itemId, completed: false, cost, error: `could not read review findings ${JSON.stringify(findingsPath)}: ${detail}` });
+			}
+			// A readable but empty/whitespace-only findings file yields no preamble; the
+			// prompt selection below would silently fall back to the generic plan prompt
+			// and revise without its task. Same failure class as unreadable — fail closed.
+			if (!reviewNote) {
+				return finish({ itemId, completed: false, cost, error: `review findings ${JSON.stringify(findingsPath)} is empty — refusing a findings-driven resume without findings` });
 			}
 		}
 
@@ -1672,7 +1703,9 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 						// configured judge seat when present, else the shakedown-code step settings.
 						const reviewSettings = resolveStepSettings(CONFIG, profile, "shakedown-code");
 						const reviewProvider = policy.judge.provider;
-						const reviewModel = policy.judge.provider === "codex" ? (policy.judge.codexModel ?? "default") : (policy.judge.model ?? reviewSettings.model ?? "default");
+						// Non-Codex judge: prefer the realized seat model; else the judge provider's own
+						// step-settings slot (never the top-level Claude `model` slot) (#431).
+						const reviewModel = policy.judge.provider === "codex" ? (policy.judge.codexModel ?? "default") : (policy.judge.model ?? modelForProvider(reviewSettings, reviewProvider) ?? "default");
 						const reviewEffectsResult = await dispatchStepEffects({
 							...effectsCtx,
 							roadmap,
@@ -2039,6 +2072,8 @@ export interface OrchestratorDeps {
 		/** Mid-run review-request queue root (#387). Defaults to `mainWorktree(REPO)/.dev/review-requests`;
 		 *  tests inject a temp dir to drive the drain without touching real `.dev/`. */
 		queueRoot: string;
+		gateRecordsRoot: string;
+		writeGateRecord: typeof writePrReviewGateRecord;
 	}>;
 	/**
 	 * Continuous-mode free queue probe (issue #82). Defaults to `listItems` + FlowPolicy
@@ -2550,6 +2585,13 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					consecutiveTransientErrors++;
 					consecutiveQuarantines = 0;
 					if (consecutiveTransientErrors >= CONSECUTIVE_TRANSIENT_ERROR_LIMIT && !parkSignal.parked) {
+						// KNOWN GAP (#458): this relabel is in-memory only and happens *after*
+						// runPipeline's finish() already appended this cycle's log entry, which
+						// the append-only log never reconciles. So the tripping cycle persists as
+						// an ordinary `transient sdk error` failure with no `parkClass`, and
+						// `resetsAt = 0` below makes awaitParkReset hand back immediately — so a
+						// serial run has no next cycle to record the park either. `pelaggio stats`
+						// therefore under-reports `sdk-outage`. See the ParkClass doc in types.ts.
 						parkSignal.parked = true;
 						parkSignal.resetsAt = 0;
 						parkSignal.limitType = "sdk-outage";
@@ -2645,6 +2687,8 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			prepareReviewHead,
 			cleanupReviewHead,
 			queueRoot: reviewRequestsDir(mainWorktree(REPO)),
+			gateRecordsRoot: gateRecordsDir(mainWorktree(REPO)),
+			writeGateRecord: writePrReviewGateRecord,
 			...deps.review,
 		};
 		const shipIsPr = shipTargetName === "pull-request" || shipTargetName === "auto-merge-pr";
@@ -2719,6 +2763,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				let reviewCost = 0;
 				let reviewCostEstimated = false;
 				let parked = false;
+				let gateResult: PrReviewGateResult | null = null;
 				try {
 					const prepared = review.prepareReviewHead(REPO, pr);
 					if (!prepared) throw new Error("could not prepare PR head for local review");
@@ -2742,6 +2787,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						parked = true;
 						console.log(`review ${pr.itemId}#${pr.prNumber} — parked (${result.park?.limitType ?? parkSignal.limitType})`);
 					} else {
+						gateResult = result;
 						body = result.body;
 						finalState = result.gate === "pass" ? "success" : "failure";
 						reviewCost = result.cost;
@@ -2758,10 +2804,52 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					if (record) unclaimReviewRequest(review.queueRoot, pr.prNumber, pr.headSha);
 					break;
 				}
-				upsertReviewComment(review.gh, review.ghRepo, pr.prNumber, body);
-				const posted = postReviewStatus(review.gh, review.ghRepo, pr.headSha, finalState, finalState === "success" ? "local pelaggio review passed" : "local pelaggio review blocked");
+				const gateRecord: NewPrReviewGateRecord = gateResult
+					? {
+							prNumber: pr.prNumber,
+							headSha: pr.headSha,
+							itemId: pr.itemId,
+							gate: gateResult.gate === "pass" ? "pass" : "block",
+							ok: gateResult.ok,
+							subtype: gateResult.subtype,
+							agreement: gateResult.agreement ?? "invalid",
+							breakerReason: gateResult.breakerReason,
+							iterations: gateResult.iterations,
+							survivorCount: gateResult.survivorCount,
+							cost: gateResult.cost,
+							costEstimated: gateResult.costEstimated,
+							turns: gateResult.turns,
+							runner: "local",
+							reviewedAt: new Date(review.now()).toISOString(),
+						}
+					: {
+							prNumber: pr.prNumber,
+							headSha: pr.headSha,
+							itemId: pr.itemId,
+							gate: "block",
+							ok: false,
+							subtype: "error_crash",
+							agreement: "invalid",
+							cost: 0,
+							costEstimated: false,
+							turns: 0,
+							runner: "local",
+							reviewedAt: new Date(review.now()).toISOString(),
+						};
+				// The review has already incurred its cost. Charge it before persistence so
+				// a durable-store failure cannot turn retries into unmetered paid runs.
 				totalSpent += reviewCost;
 				dayBudgetTracker.add(reviewCost);
+				try {
+					review.writeGateRecord(review.gateRecordsRoot, gateRecord);
+				} catch (e) {
+					const msg = e instanceof Error ? e.message : String(e);
+					console.warn(`review ${pr.itemId}#${pr.prNumber} — could not persist gate outcome: ${msg}`);
+					if (record) unclaimReviewRequest(review.queueRoot, pr.prNumber, pr.headSha);
+					continue;
+				}
+				upsertReviewComment(review.gh, review.ghRepo, pr.prNumber, body);
+				const posted = postReviewStatus(review.gh, review.ghRepo, pr.headSha, finalState, finalState === "success" ? "local pelaggio review passed" : "local pelaggio review blocked");
 				// The record is satisfied only when the terminal status POST SUCCEEDED —
 				// deleting it on a failed post would leave the PR pending forever with no
 				// durable request to guarantee a retry (#387 gate finding). Unclaim instead
@@ -2854,6 +2942,12 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					console.error(`invalid --from ${JSON.stringify(flags.from)}; valid: ${STEPS.filter((s) => s !== "pick").join(", ")}`);
 					return { exitCode: 2, results };
 				}
+				// A findings-driven resume must run implement, where the findings file is read
+				// and validated; any later --from would silently skip the revision task.
+				if (flags["review-findings"] !== undefined && flags.from !== "implement") {
+					console.error(`--review-findings requires --from implement (got ${JSON.stringify(flags.from)}): the findings are read and validated by the implement step`);
+					return { exitCode: 2, results };
+				}
 				startFrom = flags.from;
 				console.log(`${A.bold("resume")} ${id} from ${A.bold(startFrom)} ${A.dim("(--from override)")}`);
 			} else if (flags["review-findings"] !== undefined) {
@@ -2896,7 +2990,8 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				liveStatus.render();
 				statusBar.teardown();
 			}
-			console.log(`\n${result.completed ? A.green("✓") : A.red("✗")} ${id} — ${result.costEstimated ? "~" : ""}$${result.cost.toFixed(2)}`);
+			const detail = resultDetail(result);
+			console.log(`\n${result.completed ? A.green("✓") : A.red("✗")} ${id} — ${result.costEstimated ? "~" : ""}$${result.cost.toFixed(2)}${detail ? `  ${A.dim(detail)}` : ""}`);
 			// #387: a resumed cycle can ship a PR whose review-request record would
 			// otherwise sit undrained until the next process. Drain before returning
 			// so resume mode gets the same review-at-delivery as the worker pool.

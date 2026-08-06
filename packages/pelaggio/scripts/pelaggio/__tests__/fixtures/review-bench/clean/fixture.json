@@ -1,0 +1,27 @@
+{
+	"schemaVersion": 1,
+	"id": "clean",
+	"description": "Reviewer reports no findings; the loop still requests the Judge (zero-candidate case), which returns an empty decision set. Terminal: converged-clean / pass.",
+	"policy": {
+		"reviewers": [{ "id": "reviewer-1", "provider": "claude" }],
+		"judge": { "id": "judge", "provider": "opencode" },
+		"maxPasses": 1,
+		"budgetCap": 180
+	},
+	"classificationContext": { "changedFiles": ["src/widget.ts"] },
+	"recordings": [
+		{
+			"role": "reviewer",
+			"seatId": "reviewer-1",
+			"pass": 1,
+			"assistantText": "AUTHORING_REVIEW_FINDINGS\n{\"schemaVersion\":3,\"summary\":\"No blocking issues found in the reviewed diff.\",\"findings\":[]}\nEND_AUTHORING_REVIEW_FINDINGS"
+		},
+		{
+			"role": "judge",
+			"seatId": "judge",
+			"pass": 1,
+			"assistantText": "AUTHORING_REVIEW_JUDGE\n{\"schemaVersion\":1,\"decisions\":[]}\nEND_AUTHORING_REVIEW_JUDGE"
+		}
+	],
+	"groundTruthBlockers": []
+}

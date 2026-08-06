@@ -153,10 +153,24 @@ export async function reapItem(
 	} else clearResidue(deps.mainRepo, candidate, deps.prNumber);
 	git(["worktree", "prune"], deps.mainRepo);
 	if (markedDone && worktreeRemoved) {
+		// Read the tip *before* the local delete: this is the SHA `confirmLanding` proved merged,
+		// and it is the lease the remote deletion is pinned to. Deleting the remote unconditionally
+		// destroys work when the remote advanced (or the branch name was reused) after landing —
+		// the local ref cannot witness that. Matches the explicit-lease idiom the landing fence uses
+		// (AGENTS.md): `--force-with-lease=<ref>:<observed-sha>`, never the implicit form.
+		const tip = git(["rev-parse", "--verify", `refs/heads/${candidate.branch}^{commit}`], deps.mainRepo);
+		const mergedSha = tip.status === 0 ? tip.stdout.trim() : "";
 		const local = git(["branch", "-D", candidate.branch], deps.mainRepo);
 		if (local.status === 0) {
 			branchDeleted = true;
-			git(["push", "origin", "--delete", candidate.branch], deps.mainRepo);
+			if (!mergedSha) warnings.push(`remote branch retained (could not resolve merged tip): ${candidate.branch}`);
+			else {
+				const ref = `refs/heads/${candidate.branch}`;
+				const remote = git(["push", "origin", `--force-with-lease=${ref}:${mergedSha}`, `:${ref}`], deps.mainRepo);
+				// Lease mismatch is the safe outcome, not an error: the remote moved, so it is not the
+				// branch we confirmed landed. Retain it and surface it rather than deleting blind.
+				if (remote.status !== 0) warnings.push(`remote branch retained (advanced since landing): ${candidate.branch}`);
+			}
 		} else warnings.push(`branch deletion failed: ${candidate.branch}`);
 	}
 	return { markedDone, archived, worktreeRemoved, branchDeleted, warnings };

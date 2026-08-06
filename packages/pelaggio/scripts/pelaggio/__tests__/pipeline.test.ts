@@ -260,6 +260,71 @@ describe("runPipeline — happy path", () => {
 });
 
 describe("runPipeline — review findings revision prompt", () => {
+	it("fails closed when the review findings file cannot be read", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const findingsPath = join(worktree, "missing-findings.md");
+		const { runStep, calls } = createMockRunStep({}, parkSignal);
+
+		const result = await runPipeline(
+			{ ...baseOpts(worktree), startFrom: "implement" },
+			parkSignal,
+			{ ...baseFlags, "review-findings": findingsPath },
+			{ runStep, mainRepo: worktree, listWorktrees: () => [], appendLog: () => {}, roadmap: makeMockRoadmap() },
+		);
+
+		assert.equal(result.completed, false);
+		assert.match(result.error ?? "", /could not read review findings/);
+		assert.match(result.error ?? "", /missing-findings\.md/);
+		assert.equal(
+			calls.some((call) => call.step === "implement"),
+			false,
+		);
+	});
+
+	it("fails closed on an explicitly empty --review-findings path", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const { runStep, calls } = createMockRunStep({}, parkSignal);
+
+		const result = await runPipeline(
+			{ ...baseOpts(worktree), startFrom: "implement" },
+			parkSignal,
+			{ ...baseFlags, "review-findings": "" },
+			{ runStep, mainRepo: worktree, listWorktrees: () => [], appendLog: () => {}, roadmap: makeMockRoadmap() },
+		);
+
+		assert.equal(result.completed, false);
+		assert.match(result.error ?? "", /empty --review-findings path/);
+		assert.equal(
+			calls.some((call) => call.step === "implement"),
+			false,
+		);
+	});
+
+	it("fails closed when the review findings file is whitespace-only (no preamble)", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const findingsPath = join(worktree, "empty-findings.md");
+		writeFileSync(findingsPath, "   \n\t\n");
+		const { runStep, calls } = createMockRunStep({}, parkSignal);
+
+		const result = await runPipeline(
+			{ ...baseOpts(worktree), startFrom: "implement" },
+			parkSignal,
+			{ ...baseFlags, "review-findings": findingsPath },
+			{ runStep, mainRepo: worktree, listWorktrees: () => [], appendLog: () => {}, roadmap: makeMockRoadmap() },
+		);
+
+		assert.equal(result.completed, false);
+		assert.match(result.error ?? "", /is empty — refusing a findings-driven resume/);
+		assert.equal(
+			calls.some((call) => call.step === "implement"),
+			false,
+			"the generic plan prompt must not run in place of the missing revision task",
+		);
+	});
+
 	it("treats review findings as the primary implement task", async () => {
 		const worktree = makeTempGitRepo();
 		const parkSignal = makeParkSignal();
@@ -2488,6 +2553,9 @@ describe("runPipeline — rate-limit park preserves state", () => {
 
 		assert.equal(logs[0].parked, true);
 		assert.equal(logs[0].parkReason, "5h");
+		// Signal-driven park: the structured limitType classifies it, and no review-loop
+		// reason is present to override it.
+		assert.equal(logs[0]?.parkClass, "rate-limit");
 	});
 });
 
@@ -3110,6 +3178,16 @@ describe("runPipeline — SIGINT cancellation", () => {
 });
 
 describe("runOrchestrator — resume review findings routing", () => {
+	it("prints the failure reason when a findings-driven resume fails", async (t) => {
+		const consoleLog = t.mock.method(console, "log", () => {});
+		const { runPipeline: mockRun } = createMockRunPipeline({ default: { completed: false, cost: 0, error: 'could not read review findings "missing.md"' } });
+
+		const result = await runOrchestrator({ ...baseFlags, resume: "108", "review-findings": "missing.md" }, { runPipeline: mockRun, resolveWorktree: () => "/tmp/pelaggio-resume-review-findings" });
+
+		assert.equal(result.exitCode, 1);
+		assert.ok(consoleLog.mock.calls.some((call) => String(call.arguments[0]).includes("could not read review findings")));
+	});
+
 	it("defaults resume with review findings to implement when --from is absent", async () => {
 		const { runPipeline: mockRun, calls } = createMockRunPipeline({ default: { completed: true, cost: 0 } });
 		const worktree = "/tmp/pelaggio-resume-review-findings";
@@ -3129,7 +3207,8 @@ describe("runOrchestrator — resume review findings routing", () => {
 		assert.equal(calls[0].flags["review-findings"], "findings.md");
 	});
 
-	it("honors explicit --from even when review findings are present", async () => {
+	it("rejects a non-implement --from when review findings are present (exit 2)", async (t) => {
+		t.mock.method(console, "error", () => {});
 		const { runPipeline: mockRun, calls } = createMockRunPipeline({ default: { completed: true, cost: 0 } });
 		const worktree = "/tmp/pelaggio-resume-review-findings";
 
@@ -3142,9 +3221,28 @@ describe("runOrchestrator — resume review findings routing", () => {
 			},
 		);
 
+		// A later --from would skip the implement step that reads and validates the
+		// findings — the combination fails closed before any pipeline spend.
+		assert.equal(result.exitCode, 2);
+		assert.equal(calls.length, 0);
+	});
+
+	it("allows --from implement combined with review findings", async () => {
+		const { runPipeline: mockRun, calls } = createMockRunPipeline({ default: { completed: true, cost: 0 } });
+		const worktree = "/tmp/pelaggio-resume-review-findings";
+
+		const result = await runOrchestrator(
+			{ ...baseFlags, resume: "108", from: "implement", "review-findings": "findings.md" },
+			{
+				runPipeline: mockRun,
+				resolveWorktree: () => worktree,
+				detectResumeStep: () => "ship",
+			},
+		);
+
 		assert.equal(result.exitCode, 0);
 		assert.equal(calls.length, 1);
-		assert.equal(calls[0].opts.startFrom, "shakedown-code");
+		assert.equal(calls[0].opts.startFrom, "implement");
 		assert.equal(calls[0].flags["review-findings"], "findings.md");
 	});
 });

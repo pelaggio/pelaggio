@@ -1,0 +1,7 @@
+{
+	"schemaVersion": 1,
+	"outcome": "hard-block",
+	"gate": "park",
+	"survivorFingerprints": ["[\"Remove the hardcoded API token committed in the source.\",\"src/config/client.ts\",7]"],
+	"diversity": "softened"
+}

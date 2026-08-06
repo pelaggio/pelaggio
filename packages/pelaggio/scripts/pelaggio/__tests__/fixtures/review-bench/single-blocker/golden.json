@@ -1,0 +1,7 @@
+{
+	"schemaVersion": 1,
+	"outcome": "hard-block",
+	"gate": "block",
+	"survivorFingerprints": ["[\"Rename the ambiguous variable `x` to a descriptive name.\",\"src/widget.ts\",42]"],
+	"diversity": "softened"
+}

@@ -79,12 +79,56 @@ describe("reap sweep", () => {
 				prNumber: 4,
 				git: (args) => {
 					calls.push(args.join(" "));
-					return { stdout: "", stderr: "", status: 0 };
+					// rev-parse supplies the merged tip the remote delete is leased against.
+					return { stdout: args[0] === "rev-parse" ? "abc123" : "", stderr: "", status: 0 };
 				},
 			},
 		);
 		assert.equal(result.branchDeleted, true);
-		assert.deepEqual(calls, ["mark", "archive", "worktree prune", "branch -D feat/issue-9", "push origin --delete feat/issue-9"]);
+		assert.deepEqual(calls, [
+			"mark",
+			"archive",
+			"worktree prune",
+			"rev-parse --verify refs/heads/feat/issue-9^{commit}",
+			"branch -D feat/issue-9",
+			// Remote deletion is leased to the merged tip, never unconditional.
+			"push origin --force-with-lease=refs/heads/feat/issue-9:abc123 :refs/heads/feat/issue-9",
+		]);
+	});
+
+	// A remote that moved after landing is not the branch we confirmed merged. The lease must fail
+	// the push and the branch must survive with a warning — deleting blind is irreversible data loss.
+	it("retains the remote branch when the lease fails (remote advanced since landing)", async () => {
+		const calls: string[] = [];
+		const result = await reapItem(
+			{ itemId: "9", branch: "feat/issue-9", worktree: null },
+			{
+				roadmap: {
+					async getItem() {
+						return { id: "9", title: "x", deps: "", sourceRef: "9", status: "open" as const };
+					},
+					async markDone() {},
+					async archivePlan() {},
+				},
+				mainRepo: "/repo",
+				prNumber: 4,
+				git: (args) => {
+					calls.push(args.join(" "));
+					if (args[0] === "rev-parse") return { stdout: "abc123", stderr: "", status: 0 };
+					// Simulate git rejecting the push because the remote ref no longer matches the lease.
+					if (args[0] === "push") return { stdout: "", stderr: "stale info", status: 1 };
+					return { stdout: "", stderr: "", status: 0 };
+				},
+			},
+		);
+		assert.ok(
+			calls.some((c) => c.startsWith("push origin --force-with-lease=")),
+			"deletion is attempted under a lease",
+		);
+		assert.ok(
+			result.warnings.some((w) => w.includes("remote branch retained")),
+			"a failed lease is surfaced as a retained remote branch, not swallowed",
+		);
 	});
 
 	it("retains the claim branch when mark-done fails", async () => {

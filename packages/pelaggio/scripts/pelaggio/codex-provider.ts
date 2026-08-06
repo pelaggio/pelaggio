@@ -66,6 +66,29 @@ export function selectCodexModel(settings: Pick<StepSettings, "model" | "codexMo
 	return candidate && !candidate.startsWith("claude-") ? candidate : undefined;
 }
 
+/**
+ * Collapse Pelaggio's five-value effort scale onto Codex CLI 0.146.0's `model_reasoning_effort`
+ * vocabulary (issue #431). The CLI accepts `low | medium | high` (also `minimal`, which has no
+ * Pelaggio analogue); preserve `low`/`medium` and collapse `high`/`xhigh`/`max` to `high`. Mirrors
+ * `grokEffort` so both subprocess providers translate the single resolved step effort identically.
+ */
+export function codexEffort(effort: StepSettings["effort"]): "low" | "medium" | "high" {
+	if (effort === "low") return "low";
+	if (effort === "medium") return "medium";
+	return "high";
+}
+
+/**
+ * Pure assembly of the `codex exec` argv (issue #431). Kept exported and side-effect-free so the
+ * acceptance criterion — mapped reasoning effort is present in the spawned argv on every run — is
+ * unit-testable without spawning a real Codex session. Passing the value as a separate argv element
+ * (`-c`, `model_reasoning_effort=<mapped>`) avoids shell quoting and lets `--config` parse it as a
+ * TOML string literal. The `-c` pair sits just before the stdin `-` sentinel, after any `-m` model.
+ */
+export function buildCodexExecArgs(opts: { cwd: string; outputPath: string; model?: string; effort: "low" | "medium" | "high" }): string[] {
+	return ["exec", "--json", "-C", opts.cwd, "-s", "workspace-write", "-o", opts.outputPath, ...(opts.model ? ["-m", opts.model] : []), "-c", `model_reasoning_effort=${opts.effort}`, "-"];
+}
+
 function isObject(v: unknown): v is JsonObject {
 	return typeof v === "object" && v !== null && !Array.isArray(v);
 }
@@ -383,7 +406,7 @@ function parseJsonlChunk(buffer: string, lines: JsonObject[]): string {
 const runStep: StepProvider["runStep"] = async (name, prompt, opts, emit) => {
 	const resolved = resolveStepSettings(CONFIG, opts.profile, name);
 	const settings = { ...resolved, model: opts.executionOverride?.model ?? resolved.model, codexModel: opts.executionOverride?.codexModel ?? resolved.codexModel };
-	const { budget, turns: baseTurns } = settings;
+	const { budget, turns: baseTurns, effort } = settings;
 	const turns = opts.maxTurnsOverride ?? baseTurns;
 	const codexModel = selectCodexModel(settings);
 	const modelLabel = codexModel ?? "default";
@@ -403,7 +426,9 @@ const runStep: StepProvider["runStep"] = async (name, prompt, opts, emit) => {
 	const finalPrompt = `${prompt}\n\n${systemAppend}\n\n${CODEX_SANDBOX_APPEND}`;
 	const tmp = mkdtempSync(join(tmpdir(), "pelaggio-codex-"));
 	const outputPath = join(tmp, "last-message.txt");
-	const args = ["exec", "--json", "-C", opts.cwd, "-s", "workspace-write", "-o", outputPath, ...(codexModel ? ["-m", codexModel] : []), "-"];
+	// Always forward the mapped reasoning effort, even when no Codex model is pinned, so a
+	// configured step effort reaches the CLI (issue #431).
+	const args = buildCodexExecArgs({ cwd: opts.cwd, outputPath, ...(codexModel ? { model: codexModel } : {}), effort: codexEffort(effort) });
 	// Deny-by-default env: the child gets only the allowlisted vars, never the full parent env, so
 	// a prompt-injected step cannot read/echo credentials it was never given (#237 / TC-014).
 	const scrub = makeSecretScrubber();

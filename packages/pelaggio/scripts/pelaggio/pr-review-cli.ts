@@ -16,7 +16,7 @@
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { CONFIG, REPO, type ReviewConfig, ROADMAP_GITHUB, resolveDriverCandidates, resolveStepSettings, type StepSettings } from "./config.js";
+import { CONFIG, modelForProvider, REPO, type ReviewConfig, ROADMAP_GITHUB, resolveDriverCandidates, resolveStepSettings, type StepSettings } from "./config.js";
 import { upsertMarkerComment } from "./github-posting.js";
 import { classifySecurityReviewDiff, expandPackagedSkill, formatReviewMetrics, parseWaitFlag, resolveParkReset, type SecurityDiffSignal } from "./helpers.js";
 import {
@@ -231,9 +231,12 @@ function formatReviewerSet(drivers: readonly StepSettings[]): string {
 }
 
 function executionOverrideFor(candidate: StepSettings): { provider: ProviderName; model?: string; codexModel?: string } {
+	// Realize each provider's own slot into the generic override shape: Codex uses `codexModel`,
+	// Claude/Grok/OpenCode carry their model in the generic `model` field (#431).
+	const model = modelForProvider(candidate, candidate.provider);
 	return {
 		provider: candidate.provider,
-		...(candidate.provider === "codex" ? (candidate.codexModel ? { codexModel: candidate.codexModel } : {}) : candidate.model ? { model: candidate.model } : {}),
+		...(candidate.provider === "codex" ? (model ? { codexModel: model } : {}) : model ? { model } : {}),
 	};
 }
 
@@ -411,10 +414,11 @@ function trustedLocalContext(opts: { diffCwd: string; diffBaseRef: string; diffH
 }
 
 function driverIdentity(candidate: StepSettings): ReviewDriverIdentity {
+	// Realize the provider's own model slot: Codex → `codexModel`, others → `model` (#431).
+	const model = modelForProvider(candidate, candidate.provider);
 	return {
 		provider: candidate.provider,
-		...(candidate.model ? { model: candidate.model } : {}),
-		...(candidate.codexModel ? { codexModel: candidate.codexModel } : {}),
+		...(candidate.provider === "codex" ? (model ? { codexModel: model } : {}) : model ? { model } : {}),
 	};
 }
 
