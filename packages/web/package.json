@@ -9,7 +9,7 @@
 		"dev": "astro dev",
 		"build": "tsx scripts/gen-icons.ts && astro build",
 		"check:types": "astro check",
-		"test": "tsx --test __tests__/*.test.ts"
+		"test": "tsx --test --test-timeout=60000 __tests__/*.test.ts"
 	},
 	"dependencies": {
 		"@astrojs/react": "^6.0.2",
