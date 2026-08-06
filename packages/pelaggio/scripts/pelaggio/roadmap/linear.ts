@@ -139,6 +139,7 @@ export class LinearRoadmap implements RoadmapSource {
 	async createItem(opts: CreateItemOpts): Promise<RoadmapItem> {
 		const api = await this.api();
 		const parts: string[] = [];
+		if (opts.description) parts.push(opts.description);
 		if (opts.deps && opts.deps.length > 0) parts.push(`Depends on: ${opts.deps.join(", ")}`);
 		if (opts.scope) parts.push(`Scope: ${opts.scope}`);
 		if (opts.priority) parts.push(`Priority: ${opts.priority}`);

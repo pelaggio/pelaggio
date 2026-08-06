@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
+import type { StepSettings } from "../config.js";
 import { buildOpenCodeStepResult, OPENCODE_CAPABILITIES, OPENCODE_SANDBOX_APPEND, opencodeTimeoutMs, selectOpenCodeModel } from "../opencode-provider.js";
 import { EDIT_LOOP_THRESHOLD } from "../step-runner-shared.js";
 
@@ -183,24 +184,21 @@ describe("buildOpenCodeStepResult", () => {
 });
 
 describe("selectOpenCodeModel", () => {
-	it("returns an explicitly configured model", () => {
-		assert.equal(selectOpenCodeModel({ model: "anthropic/claude-sonnet-4-5", codexModel: undefined }), "anthropic/claude-sonnet-4-5");
+	it("returns an explicitly configured openCodeModel", () => {
+		assert.equal(selectOpenCodeModel({ openCodeModel: "anthropic/claude-sonnet-4-5" }), "anthropic/claude-sonnet-4-5");
 	});
 
-	it("lets the shared model slot win over the codex layer", () => {
-		assert.equal(selectOpenCodeModel({ model: "openai/gpt-5", codexModel: "gpt-5-codex" }), "openai/gpt-5");
+	it("reads only openCodeModel; foreign slots are ignored (#431)", () => {
+		const foreignOnly = { openCodeModel: undefined, model: "claude-opus-4-8", codexModel: "gpt-5-codex", grokModel: "grok-4.5" } satisfies Partial<StepSettings>;
+		assert.equal(selectOpenCodeModel(foreignOnly), undefined);
 	});
 
-	it("drops a bare claude SDK id (never forwarded to the opencode CLI)", () => {
-		assert.equal(selectOpenCodeModel({ model: "claude-opus-4-8", codexModel: undefined }), undefined);
+	it("drops a bare claude SDK id in its own slot (never forwarded to the opencode CLI)", () => {
+		assert.equal(selectOpenCodeModel({ openCodeModel: "claude-opus-4-8" }), undefined);
 	});
 
-	it("returns undefined when neither layer is configured", () => {
-		assert.equal(selectOpenCodeModel({ model: undefined, codexModel: undefined }), undefined);
-	});
-
-	it("falls back to the codex layer when the shared slot is empty", () => {
-		assert.equal(selectOpenCodeModel({ model: undefined, codexModel: "openrouter/some-model" }), "openrouter/some-model");
+	it("returns undefined when openCodeModel is unset", () => {
+		assert.equal(selectOpenCodeModel({ openCodeModel: undefined }), undefined);
 	});
 });
 

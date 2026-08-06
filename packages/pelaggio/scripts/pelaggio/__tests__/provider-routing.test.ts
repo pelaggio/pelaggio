@@ -214,6 +214,42 @@ describe("resolveAuthoringReviewConfig — fixed-seat overlay", () => {
 		assert.notEqual(result.policy.judge.model, "claude-shakedown-model");
 	});
 
+	it("fills a non-Codex seat from the provider's own slot, never the Claude model (#431)", () => {
+		const config = baseConfig({
+			reviewers: [
+				{ id: "grk", provider: "grok" },
+				{ id: "oc", provider: "opencode" },
+			],
+			judge: { id: "judge", provider: "opencode" },
+		});
+		// Distinct per-provider slots at pr-review + pr-verify prove the seat reads its own slot.
+		config.modelProfiles = { standard: { "pr-review": "claude-review", "pr-verify": "claude-verify" } };
+		config.profileGrokModels = { standard: { "pr-review": "grok-review" } };
+		config.profileOpenCodeModels = { standard: { "pr-review": "oc-review", "pr-verify": "oc-verify" } };
+		const result = resolveAuthoringReviewConfig({ config, profile: "standard", author: { provider: "claude", model: "author" }, capabilities: ALL_CAPS });
+		assert.equal(result.ok, true);
+		if (!result.ok) return;
+		const grk = result.policy.reviewers.find((r) => r.provider === "grok");
+		const oc = result.policy.reviewers.find((r) => r.provider === "opencode");
+		assert.ok(grk && grk.provider === "grok" && grk.model === "grok-review");
+		assert.ok(oc && oc.provider === "opencode" && oc.model === "oc-review");
+		// Judge (opencode) inherits from pr-verify's opencode slot — not the Claude pr-verify id.
+		assert.ok(result.policy.judge.provider === "opencode" && result.policy.judge.model === "oc-verify");
+	});
+
+	it("lets an explicit slot-level model win over the provider default (#431)", () => {
+		const config = baseConfig({
+			reviewers: [{ id: "grk", provider: "grok", model: "grok-explicit" }],
+			judge: { id: "judge", provider: "claude" },
+		});
+		config.profileGrokModels = { standard: { "pr-review": "grok-default" } };
+		const result = resolveAuthoringReviewConfig({ config, profile: "standard", author: { provider: "claude" }, capabilities: ALL_CAPS });
+		assert.equal(result.ok, true);
+		if (!result.ok) return;
+		const grk = result.policy.reviewers.find((r) => r.provider === "grok");
+		assert.ok(grk && grk.provider === "grok" && grk.model === "grok-explicit");
+	});
+
 	it("preserves configured seat providers (no pool draw that swaps seats)", () => {
 		const config = baseConfig({
 			reviewers: [

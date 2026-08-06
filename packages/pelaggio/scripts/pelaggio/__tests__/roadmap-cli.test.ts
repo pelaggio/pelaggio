@@ -6,7 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { after, afterEach, before, describe, it } from "node:test";
 import { MarkdownRoadmap, type RoadmapSource } from "../roadmap/index.js";
 import { loadQuarantine } from "../roadmap/stale-quarantine.js";
-import type { RoadmapItemStatus } from "../roadmap/types.js";
+import type { CreateItemOpts, RoadmapItemStatus } from "../roadmap/types.js";
 import { main, setRepo, setRoadmapFactory } from "../roadmap-cli.js";
 
 function makeRepo(): string {
@@ -219,6 +219,20 @@ describe("roadmap-cli", () => {
 
 		const roadmap = readFileSync(resolve(localRepo, "docs/roadmap-new-track.md"), "utf-8");
 		assert.match(roadmap, /^- \[ \] \*\*NEW-1\. New\*\*/m);
+	});
+
+	it("create-item forwards the charter description", async () => {
+		let received: CreateItemOpts | undefined;
+		const roadmap = stubRoadmap([], { list: 0, claim: 0 });
+		roadmap.createItem = async (opts) => {
+			received = opts;
+			return { id: "NEW-1", title: opts.title, deps: "—", sourceRef: "unused" };
+		};
+		setRoadmapFactory(() => roadmap);
+
+		const res = await captureStdout(() => main(["create-item", "--title", "Concise", "--description", "Full requirements and acceptance criteria", "--json"]));
+		assert.equal(res.code, 0);
+		assert.equal(received?.description, "Full requirements and acceptance criteria");
 	});
 
 	it("create-item rejects invalid --format before writing files", async () => {

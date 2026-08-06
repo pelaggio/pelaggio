@@ -6,9 +6,28 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { cleanSkillsOut, copySkillsIn } from "./pack-prepare.js";
 
 export type PackedFile = { path: string; size: number };
-export type Violation = { kind: "disallowed-path"; path: string } | { kind: "secret"; path: string; pattern: string; match: string } | { kind: "install-script"; name: string };
+export type Violation = { kind: "disallowed-path"; path: string } | { kind: "secret"; path: string; pattern: string; match: string } | { kind: "install-script"; name: string } | { kind: "missing-packaged-data"; path: string };
 
 export const ALLOWED_PREFIXES = ["scripts/pelaggio/", ".claude/skills/", ".claude-templates/", "bin/"];
+
+/**
+ * The one runtime-data exception inside the otherwise-excluded test tree: the `review-bench` benchmark
+ * fixtures are consumed by the installed `npx pelaggio review-bench --replay` command (#291), so they
+ * must ship. The exception is narrow — only JSON under this exact prefix — so test TypeScript and every
+ * other `__tests__` path (including non-JSON under this prefix) stays rejected.
+ */
+export const ALLOWED_TEST_DATA_PREFIX = "scripts/pelaggio/__tests__/fixtures/review-bench/";
+
+export function isAllowedPackagedTestData(path: string): boolean {
+	return path.startsWith(ALLOWED_TEST_DATA_PREFIX) && path.endsWith(".json");
+}
+
+/** The review-bench corpus files that MUST be present in the packed artifact or the installed CLI is broken. */
+export const REQUIRED_PACKAGED_TEST_DATA: readonly string[] = [
+	`${ALLOWED_TEST_DATA_PREFIX}manifest.json`,
+	`${ALLOWED_TEST_DATA_PREFIX}review-bench.baseline.json`,
+	...["clean", "single-blocker", "safety-blocker", "plausible-wrong"].flatMap((id) => [`${ALLOWED_TEST_DATA_PREFIX}${id}/fixture.json`, `${ALLOWED_TEST_DATA_PREFIX}${id}/golden.json`]),
+];
 
 export const ALLOWED_EXACT = [
 	"package.json",
@@ -41,11 +60,17 @@ export function checkAllowlist(files: PackedFile[]): Violation[] {
 			violations.push({ kind: "disallowed-path", path });
 			continue;
 		}
-		if (DISALLOWED_INSIDE_ALLOWED.some((re) => re.test(path))) {
+		if (DISALLOWED_INSIDE_ALLOWED.some((re) => re.test(path)) && !isAllowedPackagedTestData(path)) {
 			violations.push({ kind: "disallowed-path", path });
 		}
 	}
 	return violations;
+}
+
+/** Presence check: the installed CLI needs its default review-bench corpus, so require every corpus file. */
+export function checkRequiredPackagedData(files: PackedFile[]): Violation[] {
+	const present = new Set(files.map((f) => f.path));
+	return REQUIRED_PACKAGED_TEST_DATA.filter((path) => !present.has(path)).map((path) => ({ kind: "missing-packaged-data", path }));
 }
 
 export function scanContentsForSecrets(entries: Array<{ path: string; contents: string }>): Violation[] {
@@ -111,6 +136,8 @@ function formatViolation(v: Violation): string {
 			return `  secret (${v.pattern}): ${v.path} — matched ${JSON.stringify(v.match.slice(0, 40))}`;
 		case "install-script":
 			return `  install-script: package.json declares "${v.name}" (forbidden)`;
+		case "missing-packaged-data":
+			return `  missing-packaged-data: ${v.path} (installed review-bench CLI needs this fixture)`;
 	}
 }
 
@@ -126,10 +153,11 @@ export function runCli(): number {
 	const { files: packed, entries } = npmPackDryRun(repoRoot);
 	const pathViolations = checkAllowlist(packed);
 	const secretViolations = scanContentsForSecrets(entries);
+	const missingDataViolations = checkRequiredPackagedData(packed);
 
 	const scriptViolations = checkPackageScripts(pkg);
 
-	const all = [...pathViolations, ...secretViolations, ...scriptViolations];
+	const all = [...pathViolations, ...secretViolations, ...missingDataViolations, ...scriptViolations];
 
 	if (all.length === 0) {
 		console.log(`check-publish: OK (${packed.length} files)`);

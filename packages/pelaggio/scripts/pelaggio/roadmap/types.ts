@@ -84,6 +84,8 @@ export interface PriorityLabelBackfillResult {
 
 export interface CreateItemOpts {
 	title: string;
+	/** Full charter/spec text. Remote work stores persist it as the item body/description. */
+	description?: string;
 	deps?: string[];
 	scope?: Scope;
 	/** Markdown: target roadmap file (partial match). Gh/Linear: no-op (issue goes to configured repo/team). */

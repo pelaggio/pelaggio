@@ -163,6 +163,7 @@ export class GitHubIssuesRoadmap implements RoadmapSource {
 	async createItem(opts: CreateItemOpts): Promise<RoadmapItem> {
 		const deps = opts.deps ?? [];
 		const bodyParts: string[] = [];
+		if (opts.description) bodyParts.push(opts.description);
 		if (deps.length > 0) bodyParts.push(`Depends on: ${deps.join(", ")}`);
 		if (opts.scope) bodyParts.push(`Scope: ${opts.scope}`);
 		if (opts.priority) bodyParts.push(`Priority: ${opts.priority}`);
