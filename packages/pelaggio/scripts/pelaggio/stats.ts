@@ -24,9 +24,37 @@ interface RecentFailure {
 export interface Stats {
 	totalCycles: number;
 	completedCycles: number;
+	/**
+	 * Cycles that ended in a hard failure. **Excludes parked cycles** — a park is a
+	 * checkpoint the operator can resume, not a failure, and counting it as both made
+	 * the real fail-closed rate unreadable (`completed + failed` used to equal
+	 * `totalCycles` with `parked` double-counted inside `failed`).
+	 */
 	failedCycles: number;
+	/** Cycles that ended parked. Disjoint from `completedCycles` and `failedCycles`. */
 	parkedCycles: number;
 	shipwreckedCycles: number;
+	/**
+	 * Parked cycles grouped by closed park class. Records written before park
+	 * classification existed group under `unrecorded` rather than being folded into a
+	 * real class — an honest gap beats a wrong attribution.
+	 */
+	parksByClass: Record<string, number>;
+	/**
+	 * Failed (not parked) cycles grouped by cause: the step that failed, or — for a
+	 * pipeline guard that rejected before any step failed (`pick:worktree-exists`,
+	 * `plan needs rethink`, `nothing to ship: …`) — the stable prefix of the cycle error.
+	 * Those guard rejections are a real and separately-actionable share of failures, so
+	 * folding them into one `unattributed` bucket would hide them.
+	 */
+	failuresByCause: Record<string, number>;
+	/** Spend attributed to the realized driver of each step (#327 provenance). */
+	costByProvider: Record<string, number>;
+	/** Per-provider flag: true when that provider's cost included an estimate. */
+	costEstimatedByProvider: Record<string, boolean>;
+	tokensByProvider: Record<string, TokenUsage>;
+	/** Step executions per provider — the denominator for the cost figures above. */
+	stepsByProvider: Record<string, number>;
 	totalCostUsd: number;
 	/** True when any cycle's cost included a provider-side estimate — the USD figures below then
 	 *  mix estimated and billed dollars, so they render with a `~` prefix. */
@@ -66,6 +94,20 @@ function cacheHitRatio(t: TokenUsage): number {
 	return denom === 0 ? 0 : t.cacheRead / denom;
 }
 
+/**
+ * Label for a failed cycle with no failed step — i.e. a pipeline guard rejected before or
+ * between steps. Guard errors are either `prefix:detail` (`pick:worktree-exists`) or a
+ * stable leading phrase (`plan needs rethink`). Keying on the part before the first colon
+ * keeps variable detail — paths, item ids, receipt names — from fragmenting the grouping
+ * into a long tail of one-count entries.
+ */
+function failureCause(error: string | null | undefined): string {
+	const text = (error ?? "").trim();
+	if (!text) return "unattributed";
+	const colon = text.indexOf(":");
+	return colon > 0 ? text.slice(0, colon) : text;
+}
+
 export function reduce(entries: CycleLogEntry[]): Stats {
 	const totalTokens = emptyTokens();
 	const costByStep: Record<string, number> = {};
@@ -84,14 +126,30 @@ export function reduce(entries: CycleLogEntry[]): Stats {
 	let failed = 0;
 	let parked = 0;
 	let shipwrecked = 0;
+	const parksByClass: Record<string, number> = {};
+	const failuresByCause: Record<string, number> = {};
+	const costByProvider: Record<string, number> = {};
+	const costEstimatedByProvider: Record<string, boolean> = {};
+	const tokensByProvider: Record<string, TokenUsage> = {};
+	const stepsByProvider: Record<string, number> = {};
 	const itemsDelivered: DeliveredItem[] = [];
 
 	for (const entry of entries) {
 		totalCost += entry.total_cost ?? 0;
 		if (entry.costEstimated) anyCostEstimated = true;
-		if (entry.completed) completed++;
-		else failed++;
-		if (entry.parked) parked++;
+		// Three-way and mutually exclusive: a parked cycle is checkpointed, not failed.
+		if (entry.completed) {
+			completed++;
+		} else if (entry.parked) {
+			parked++;
+			const cls = entry.parkClass ?? "unrecorded";
+			parksByClass[cls] = (parksByClass[cls] ?? 0) + 1;
+		} else {
+			failed++;
+			const failingStep = (entry.steps ?? []).find((s) => s.ok === false);
+			const key = failingStep?.name ?? failureCause(entry.error);
+			failuresByCause[key] = (failuresByCause[key] ?? 0) + 1;
+		}
 		if (entry.shipwrecked) shipwrecked++;
 
 		// Step aggregations: group by step name, find max attempt per (cycle, step)
@@ -101,11 +159,22 @@ export function reduce(entries: CycleLogEntry[]): Stats {
 		for (const s of entry.steps ?? []) {
 			costByStep[s.name] = (costByStep[s.name] ?? 0) + (s.cost ?? 0);
 			if (s.costEstimated) costEstimatedByStep[s.name] = true;
+
+			// Provider attribution. `provider` is absent on records predating #327, so those
+			// steps aggregate under `unattributed` instead of being charged to a driver that
+			// may not have run them.
+			const provider = s.provider ?? "unattributed";
+			costByProvider[provider] = (costByProvider[provider] ?? 0) + (s.cost ?? 0);
+			stepsByProvider[provider] = (stepsByProvider[provider] ?? 0) + 1;
+			if (s.costEstimated) costEstimatedByProvider[provider] = true;
+
 			if (s.tokens) {
 				if (!tokensByStep[s.name]) tokensByStep[s.name] = emptyTokens();
 				addTokens(tokensByStep[s.name], s.tokens);
 				addTokens(totalTokens, s.tokens);
 				addTokens(cycleTokens, s.tokens);
+				if (!tokensByProvider[provider]) tokensByProvider[provider] = emptyTokens();
+				addTokens(tokensByProvider[provider], s.tokens);
 			}
 			const attempt = s.attempt ?? 1;
 			const prev = maxAttemptByStep.get(s.name) ?? 0;
@@ -184,6 +253,12 @@ export function reduce(entries: CycleLogEntry[]): Stats {
 		failedCycles: failed,
 		parkedCycles: parked,
 		shipwreckedCycles: shipwrecked,
+		parksByClass,
+		failuresByCause,
+		costByProvider,
+		costEstimatedByProvider,
+		tokensByProvider,
+		stepsByProvider,
 		totalCostUsd: totalCost,
 		costEstimated: anyCostEstimated,
 		totalTokens,
@@ -260,6 +335,43 @@ export function renderDashboard(stats: Stats): string {
 			lines.push(
 				`    ${name.padEnd(14)}  ${fmtUsd(stats.costByStep[name], stats.costEstimatedByStep[name]).padStart(8)}  ${fmtNum(tok.input).padStart(6)}  ${fmtNum(tok.output).padStart(5)}  ${fmtNum(tok.cacheRead).padStart(9)}  ${fmtPct(hit).padStart(5)}`,
 			);
+		}
+		lines.push("");
+	}
+
+	// Per-provider table — which driver the spend actually landed on.
+	const providerNames = Object.keys(stats.costByProvider).sort((a, b) => stats.costByProvider[b] - stats.costByProvider[a]);
+	if (providerNames.length > 0) {
+		lines.push(`  ${A.dim("By provider")}     ${"cost".padStart(8)}  ${"steps".padStart(5)}  ${"in".padStart(6)}  ${"out".padStart(5)}  ${"hit%".padStart(5)}`);
+		for (const name of providerNames) {
+			const tok = stats.tokensByProvider[name] ?? emptyTokens();
+			lines.push(
+				`    ${name.padEnd(14)}  ${fmtUsd(stats.costByProvider[name], stats.costEstimatedByProvider[name]).padStart(8)}  ${String(stats.stepsByProvider[name] ?? 0).padStart(5)}  ${fmtNum(tok.input).padStart(6)}  ${fmtNum(tok.output).padStart(5)}  ${fmtPct(cacheHitRatio(tok)).padStart(5)}`,
+			);
+		}
+		lines.push("");
+	}
+
+	// Outcomes — the fail-closed split. A park is a resumable checkpoint; a failure is not.
+	const parkClasses = Object.keys(stats.parksByClass).sort((a, b) => stats.parksByClass[b] - stats.parksByClass[a]);
+	const failSteps = Object.keys(stats.failuresByCause).sort((a, b) => stats.failuresByCause[b] - stats.failuresByCause[a]);
+	if (parkClasses.length > 0 || failSteps.length > 0) {
+		lines.push(A.bold("Outcomes"));
+		if (parkClasses.length > 0) {
+			lines.push(`  ${A.dim("Parked by cause")}`);
+			for (const c of parkClasses) {
+				const note = c === "unrecorded" ? A.dim("  (logged before park classification)") : "";
+				lines.push(`    ${A.yellow(c.padEnd(20))} ${String(stats.parksByClass[c]).padStart(3)}${note}`);
+			}
+		}
+		if (failSteps.length > 0) {
+			lines.push(`  ${A.dim("Failed by cause")}`);
+			for (const s of failSteps) {
+				// Guard causes are whole error phrases, so clamp the label to keep the count column
+				// aligned. The full string stays in `recentFailures` below and in the jsonl.
+				const label = s.length > 28 ? `${s.slice(0, 27)}…` : s;
+				lines.push(`    ${A.red(label.padEnd(28))} ${String(stats.failuresByCause[s]).padStart(3)}`);
+			}
 		}
 		lines.push("");
 	}

@@ -165,6 +165,102 @@ describe("reduce — parked cycle", () => {
 		assert.equal(s.completedCycles, 0);
 		assert.equal(s.itemsDelivered.length, 0);
 	});
+
+	it("keeps parked cycles out of failedCycles — a park is a checkpoint, not a failure", () => {
+		const parkedEntry = mkEntry({ cycle: 1, item: "A", completed: false, parked: true, error: "parked" });
+		const failedEntry = mkEntry({ cycle: 2, item: "B", completed: false, steps: [mkStep({ name: "implement", ok: false })] });
+		const doneEntry = mkEntry({ cycle: 3, item: "C", completed: true });
+		const s = reduce([parkedEntry, failedEntry, doneEntry]);
+		assert.equal(s.parkedCycles, 1);
+		assert.equal(s.failedCycles, 1);
+		assert.equal(s.completedCycles, 1);
+		// The three buckets partition the cycle set exactly once.
+		assert.equal(s.completedCycles + s.failedCycles + s.parkedCycles, s.totalCycles);
+	});
+
+	it("groups parks by class and files unclassified legacy records under `unrecorded`", () => {
+		const legacy = mkEntry({ cycle: 1, completed: false, parked: true, error: "parked" });
+		const reviewBlocked = mkEntry({ cycle: 2, completed: false, parked: true, error: "parked", parkClass: "review-blocked" });
+		const alsoBlocked = mkEntry({ cycle: 3, completed: false, parked: true, error: "parked", parkClass: "review-blocked" });
+		const rateLimited = mkEntry({ cycle: 4, completed: false, parked: true, error: "parked", parkClass: "rate-limit" });
+		const s = reduce([legacy, reviewBlocked, alsoBlocked, rateLimited]);
+		assert.deepEqual(s.parksByClass, { unrecorded: 1, "review-blocked": 2, "rate-limit": 1 });
+	});
+});
+
+describe("reduce — failure attribution", () => {
+	it("attributes a failed cycle to its failing step", () => {
+		const entry = mkEntry({
+			cycle: 1,
+			completed: false,
+			steps: [mkStep({ name: "plan", ok: true }), mkStep({ name: "implement", ok: false })],
+		});
+		const s = reduce([entry]);
+		assert.deepEqual(s.failuresByCause, { implement: 1 });
+	});
+
+	it("files a failed cycle with no failing step and no error under `unattributed`", () => {
+		const s = reduce([mkEntry({ cycle: 1, completed: false, steps: [] })]);
+		assert.deepEqual(s.failuresByCause, { unattributed: 1 });
+	});
+
+	it("attributes guard rejections to the stable error prefix, not one bucket", () => {
+		const entries = [
+			mkEntry({ cycle: 1, completed: false, error: "pick:worktree-exists" }),
+			mkEntry({ cycle: 2, completed: false, error: "pick:diverted" }),
+			mkEntry({ cycle: 3, completed: false, error: "plan needs rethink" }),
+			// Variable trailing detail must not fragment the grouping.
+			mkEntry({ cycle: 4, completed: false, error: "nothing to ship: branch only touches docs/plans/" }),
+			mkEntry({ cycle: 5, completed: false, error: "nothing to ship: some other detail entirely" }),
+		];
+		const s = reduce(entries);
+		assert.deepEqual(s.failuresByCause, { pick: 2, "plan needs rethink": 1, "nothing to ship": 2 });
+	});
+
+	it("prefers the failing step over the cycle error when both are present", () => {
+		const entry = mkEntry({ cycle: 1, completed: false, error: "implement failed", steps: [mkStep({ name: "implement", ok: false })] });
+		assert.deepEqual(reduce([entry]).failuresByCause, { implement: 1 });
+	});
+});
+
+describe("reduce — provider attribution", () => {
+	it("splits cost, steps and tokens across the realized drivers", () => {
+		const entry = mkEntry({
+			cycle: 1,
+			completed: true,
+			steps: [
+				mkStep({ name: "implement", provider: "codex", cost: 10, tokens: { input: 100, output: 10, cacheCreation: 0, cacheRead: 0 } }),
+				mkStep({ name: "shakedown-code", provider: "claude", cost: 4, tokens: { input: 20, output: 2, cacheCreation: 0, cacheRead: 0 } }),
+				mkStep({ name: "plan", provider: "codex", cost: 6, tokens: { input: 50, output: 5, cacheCreation: 0, cacheRead: 0 } }),
+			],
+		});
+		const s = reduce([entry]);
+		assert.equal(s.costByProvider.codex, 16);
+		assert.equal(s.costByProvider.claude, 4);
+		assert.equal(s.stepsByProvider.codex, 2);
+		assert.equal(s.stepsByProvider.claude, 1);
+		assert.equal(s.tokensByProvider.codex.input, 150);
+		assert.equal(s.tokensByProvider.claude.input, 20);
+	});
+
+	it("attributes provider-less legacy steps to `unattributed` rather than a real driver", () => {
+		const entry = mkEntry({ cycle: 1, completed: true, steps: [mkStep({ name: "implement", cost: 7 })] });
+		const s = reduce([entry]);
+		assert.equal(s.costByProvider.unattributed, 7);
+		assert.equal(s.costByProvider.codex, undefined);
+		assert.equal(s.costByProvider.claude, undefined);
+	});
+
+	it("marks a provider's cost estimated when any of its steps was estimated", () => {
+		const entry = mkEntry({
+			cycle: 1,
+			completed: true,
+			steps: [mkStep({ name: "implement", provider: "codex", cost: 5, costEstimated: true }), mkStep({ name: "ship", provider: "claude", cost: 1 })],
+		});
+		const s = reduce([entry]);
+		assert.equal(s.costEstimatedByProvider.codex, true);
+		assert.equal(s.costEstimatedByProvider.claude, undefined);
+	});
 });
 
 describe("reduce — shipwreck cycle", () => {

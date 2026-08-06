@@ -53,6 +53,7 @@ import {
 	checkpoint,
 	classifyCycleDisposition,
 	classifyOutcome,
+	classifyParkReason,
 	computeImplementTurns,
 	createMainCheckoutDeltaObserver,
 	createMutex,
@@ -783,6 +784,10 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	}
 
 	let shipwrecked = false;
+	// Detail for a review-loop park. Signal-driven parks (rate limit, pause, outage) carry
+	// `parkSignal.limitType` instead; review-loop parks pass their reason to `parkExit()`,
+	// which previously used it only for the console line — so it never reached the log.
+	let parkReasonDetail: string | null = null;
 
 	function finish(result: CycleResult): CycleResult {
 		// Deregister this cycle's worktree from the active-peer registry on every exit path
@@ -849,7 +854,8 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				completed: result.completed,
 				error: result.error ?? null,
 				parked,
-				parkReason: parked ? parkSignal.limitType || null : null,
+				parkReason: parked ? parkReasonDetail || parkSignal.limitType || null : null,
+				...(parked ? { parkClass: classifyParkReason(parkReasonDetail, parkSignal.limitType) } : {}),
 				shipwrecked,
 				...(result.bookkeepingWarnings?.length ? { bookkeepingWarnings: result.bookkeepingWarnings } : {}),
 				provenance: {
@@ -1066,6 +1072,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 
 	function parkExit(reason?: string): CycleResult | null {
 		if (!parkSignal.parked && !reason) return null;
+		if (reason) parkReasonDetail = reason;
 		if (worktree) checkpoint(worktree, reason ? "review-loop park" : "rate-limit park");
 		log(`⏸ parked (${reason ?? parkSignal.limitType})`);
 		return finish({ itemId, completed: false, cost, error: "parked" });

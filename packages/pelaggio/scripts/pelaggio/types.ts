@@ -201,6 +201,9 @@ export interface CycleProvenance {
 
 // ── Log entries (read from .dev/pelaggio-log.jsonl) ───────────────────
 
+/** Closed set of park causes. Assigned by `classifyParkReason` in helpers.ts. */
+export type ParkClass = "rate-limit" | "paused" | "sdk-outage" | "review-escalation" | "review-blocked" | "review-binding" | "effects-failed" | "unclassified";
+
 export interface CycleLogEntry {
 	ts: string;
 	cycle: number;
@@ -216,6 +219,10 @@ export interface CycleLogEntry {
 	error: string | null;
 	parked?: boolean;
 	parkReason?: string | null;
+	/** Closed classification of `parkReason` (see `classifyParkReason`). Absent on records
+	 *  written before park classification existed — stats render those as `unrecorded`
+	 *  rather than silently folding them into a real class. */
+	parkClass?: ParkClass;
 	shipwrecked?: boolean;
 	bookkeepingWarnings?: string[];
 	/** Additive cycle provenance. Optional only for legacy log compatibility. */
