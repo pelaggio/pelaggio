@@ -2,7 +2,7 @@ import { execSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { accessSync, appendFileSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, delimiter, extname, isAbsolute, join, resolve } from "node:path";
+import { basename, delimiter, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import {
 	CONFIG,
@@ -2347,7 +2347,32 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		// (fresh launch, daemon pause→resume, crash restart) from the durable cycle-log ledger, so a
 		// same-day restart and a midnight-crossing restart both honor the cap. Read the log only when
 		// continuous AND a day budget is set — ordinary `--item` runs pay no IO.
-		const initialDaySpend = continuous?.dayBudget != null ? (deps.initialDaySpend ?? sumDaySpendFromLog(deps.daySpendLogPath ?? LOG_PATH, now())) : 0;
+		// Under node --test this must not resolve to the host cycle log: seeding from a developer's
+		// real spend makes an existing main test ("drain: day-budget exhaustion stops") fail whenever
+		// today's actual spend exceeds its $5 cap — green on a fresh CI runner, red locally. Same
+		// non-hermetic class as #456. `hermeticQueueRoot` yields a temp dir under test and the real
+		// parent otherwise, so the composed path is LOG_PATH in production and a nonexistent temp file
+		// in tests (which `sumDaySpendFromLog` reads as ENOENT → $0).
+		const daySpendLogPath =
+			deps.daySpendLogPath ??
+			join(
+				hermeticQueueRoot(() => dirname(LOG_PATH)),
+				basename(LOG_PATH),
+			);
+		if (continuous?.dayBudget != null && deps.initialDaySpend === undefined) {
+			// Reconstruction proves the ledger is *readable*; the day budget also depends on it being
+			// *appendable*. A readable-but-unwritable ledger otherwise passes startup, paid review then
+			// runs, and only `appendDayBudgetCharge` discovers EACCES — after the money is spent, with
+			// the charge unrecorded, so the next restart under-counts and grants budget again. Probe the
+			// write path before any paid work rather than after (#398 review).
+			try {
+				accessSync(existsSync(daySpendLogPath) ? daySpendLogPath : dirname(daySpendLogPath), constants.W_OK);
+			} catch (e) {
+				const msg = e instanceof Error ? e.message : String(e);
+				throw new Error(`day-budget ledger is not writable (${daySpendLogPath}): ${msg}. Refusing to start paid work whose spend could not be durably recorded — fix permissions or clear the day budget.`);
+			}
+		}
+		const initialDaySpend = continuous?.dayBudget != null ? (deps.initialDaySpend ?? sumDaySpendFromLog(daySpendLogPath, now())) : 0;
 		const dayBudgetTracker = new DayBudgetTracker(continuous?.dayBudget, now, initialDaySpend);
 		const roadmapForProbe = deps.roadmap ?? getRoadmapSource(ROADMAP_SOURCE, { repo: REPO, github: ROADMAP_GITHUB, linear: ROADMAP_LINEAR });
 		const flowPolicyForProbe = deps.flowPolicy ?? DEFAULT_FLOW_POLICY;
@@ -2461,6 +2486,14 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						} else if (parkSignal.parked || drainComplete) {
 							if (parkSignal.parked) emitSuspendedIfParked();
 							exitWorker = true;
+						} else if (campaignDrainDeferred && !dayBudgetTracker.exceeded()) {
+							// The budget rolled over (or a peer's spend was refunded): run the campaign-start
+							// drain that was deferred at startup, before any paid pick work. Claimed under the
+							// continuous gate and flipped before awaiting so ×N workers cannot double-drain.
+							campaignDrainDeferred = false;
+							console.log(`${A.dim("↻")} day budget rolled over — running the deferred campaign-start review drain`);
+							await runCampaignStartDrain();
+							retryGate = true;
 						} else if (dayBudgetTracker.exceeded()) {
 							if (continuous.preset === "drain") {
 								console.log(`${A.yellow("⚠")} day budget ($${continuous.dayBudget!.toFixed(2)}) exhausted (spent $${dayBudgetTracker.daySpent.toFixed(2)} today) — stopping continuous run`);
@@ -3027,19 +3060,13 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			return { exitCode: result.completed ? 0 : 1, results };
 		}
 
-		// The campaign-start drain launches paid review agents, so it is gated on the *reconstructed*
-		// day spend exactly like the in-loop drains (see the `exceeded()` checks in the item loop).
-		// Without this, a restart that reloads a ledger already at or over the cap would spend a
-		// second full day budget on review before the loop ever gets a chance to stop it (#398 review).
-		if (doReviewDrain && dayBudgetTracker.exceeded()) {
-			console.log(`${A.yellow("⚠")} day budget ($${continuous?.dayBudget?.toFixed(2)}) already exhausted (spent $${dayBudgetTracker.daySpent.toFixed(2)} today) — skipping campaign-start review drain`);
-		} else if (doReviewDrain) {
-			// Campaign-start drain: cold-start backlog + statusless PRs from prior runs (all modes incl.
-			// `--item`). A rate-limit park during the gate is transient — under the same auto-resume /
-			// --max-wait / reset-time policy as the item loop, wait and retry the drain in-process
-			// (records + pending PRs stay eligible). A non-blocking drain lock avoids blocking startup on
-			// a peer process's in-flight drain; contention skips the round (the peer covers the queue).
-			// awaitParkReset runs OUTSIDE the lock so a park never holds the queue for the reset window.
+		// Campaign-start drain: cold-start backlog + statusless PRs from prior runs (all modes incl.
+		// `--item`). A rate-limit park during the gate is transient — under the same auto-resume /
+		// --max-wait / reset-time policy as the item loop, wait and retry the drain in-process
+		// (records + pending PRs stay eligible). A non-blocking drain lock avoids blocking startup on
+		// a peer process's in-flight drain; contention skips the round (the peer covers the queue).
+		// awaitParkReset runs OUTSIDE the lock so a park never holds the queue for the reset window.
+		async function runCampaignStartDrain(): Promise<void> {
 			let reviewRound = 0;
 			while (reviewRound < MAX_RESUME_ROUNDS) {
 				reviewRound++;
@@ -3051,6 +3078,23 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				if (outcome === "handback") break; // no reset / exceeds --max-wait → leave pending
 				// resumed: parkSignal cleared → re-list records + candidates and retry.
 			}
+		}
+
+		// The drain launches paid review agents, so it is gated on the *reconstructed* day spend
+		// exactly like the in-loop drains. Without that, a restart reloading a ledger already at the
+		// cap spends a second full day budget on review before the loop can stop it.
+		//
+		// Deferred, never skipped: this is the only drain that clears the cold-start backlog, so
+		// dropping it strands pending and statusless PRs for the rest of the run. In watch mode the
+		// budget rolls over at local midnight and the loop keeps going, so the drain is re-attempted
+		// on the first iteration after the cap clears (#398 review). Drain mode exits when exhausted,
+		// so there is no later chance and the deferral simply never fires.
+		let campaignDrainDeferred = false;
+		if (doReviewDrain && dayBudgetTracker.exceeded()) {
+			campaignDrainDeferred = true;
+			console.log(`${A.yellow("⚠")} day budget ($${continuous?.dayBudget?.toFixed(2)}) already exhausted (spent $${dayBudgetTracker.daySpent.toFixed(2)} today) — campaign-start review drain deferred until the budget rolls over`);
+		} else if (doReviewDrain) {
+			await runCampaignStartDrain();
 		}
 
 		// ── Revise sweep (issue #76, continuous per-iteration in #82) ──
