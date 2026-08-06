@@ -239,8 +239,8 @@ describe("reduce — provider attribution", () => {
 		assert.equal(s.costByProvider.claude, 4);
 		assert.equal(s.stepsByProvider.codex, 2);
 		assert.equal(s.stepsByProvider.claude, 1);
-		assert.equal(s.tokensByProvider.codex.input, 150);
-		assert.equal(s.tokensByProvider.claude.input, 20);
+		assert.equal(s.tokensByProvider.codex?.input, 150);
+		assert.equal(s.tokensByProvider.claude?.input, 20);
 	});
 
 	it("attributes provider-less legacy steps to `unattributed` rather than a real driver", () => {

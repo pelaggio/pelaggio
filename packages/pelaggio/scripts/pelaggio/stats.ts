@@ -173,8 +173,12 @@ export function reduce(entries: CycleLogEntry[]): Stats {
 				addTokens(tokensByStep[s.name], s.tokens);
 				addTokens(totalTokens, s.tokens);
 				addTokens(cycleTokens, s.tokens);
-				if (!tokensByProvider[provider]) tokensByProvider[provider] = emptyTokens();
-				addTokens(tokensByProvider[provider], s.tokens);
+				let providerTokens = tokensByProvider[provider];
+				if (!providerTokens) {
+					providerTokens = emptyTokens();
+					tokensByProvider[provider] = providerTokens;
+				}
+				addTokens(providerTokens, s.tokens);
 			}
 			const attempt = s.attempt ?? 1;
 			const prev = maxAttemptByStep.get(s.name) ?? 0;
@@ -339,38 +343,39 @@ export function renderDashboard(stats: Stats): string {
 		lines.push("");
 	}
 
-	// Per-provider table — which driver the spend actually landed on.
-	const providerNames = Object.keys(stats.costByProvider).sort((a, b) => stats.costByProvider[b] - stats.costByProvider[a]);
-	if (providerNames.length > 0) {
+	// Per-provider table — which driver the spend actually landed on. Iterating entries (rather
+	// than keys + re-indexing) keeps this clean under the strict config's noUncheckedIndexedAccess.
+	const providerRows = Object.entries(stats.costByProvider).sort(([, a], [, b]) => b - a);
+	if (providerRows.length > 0) {
 		lines.push(`  ${A.dim("By provider")}     ${"cost".padStart(8)}  ${"steps".padStart(5)}  ${"in".padStart(6)}  ${"out".padStart(5)}  ${"hit%".padStart(5)}`);
-		for (const name of providerNames) {
+		for (const [name, cost] of providerRows) {
 			const tok = stats.tokensByProvider[name] ?? emptyTokens();
 			lines.push(
-				`    ${name.padEnd(14)}  ${fmtUsd(stats.costByProvider[name], stats.costEstimatedByProvider[name]).padStart(8)}  ${String(stats.stepsByProvider[name] ?? 0).padStart(5)}  ${fmtNum(tok.input).padStart(6)}  ${fmtNum(tok.output).padStart(5)}  ${fmtPct(cacheHitRatio(tok)).padStart(5)}`,
+				`    ${name.padEnd(14)}  ${fmtUsd(cost, stats.costEstimatedByProvider[name]).padStart(8)}  ${String(stats.stepsByProvider[name] ?? 0).padStart(5)}  ${fmtNum(tok.input).padStart(6)}  ${fmtNum(tok.output).padStart(5)}  ${fmtPct(cacheHitRatio(tok)).padStart(5)}`,
 			);
 		}
 		lines.push("");
 	}
 
 	// Outcomes — the fail-closed split. A park is a resumable checkpoint; a failure is not.
-	const parkClasses = Object.keys(stats.parksByClass).sort((a, b) => stats.parksByClass[b] - stats.parksByClass[a]);
-	const failSteps = Object.keys(stats.failuresByCause).sort((a, b) => stats.failuresByCause[b] - stats.failuresByCause[a]);
-	if (parkClasses.length > 0 || failSteps.length > 0) {
+	const parkRows = Object.entries(stats.parksByClass).sort(([, a], [, b]) => b - a);
+	const failRows = Object.entries(stats.failuresByCause).sort(([, a], [, b]) => b - a);
+	if (parkRows.length > 0 || failRows.length > 0) {
 		lines.push(A.bold("Outcomes"));
-		if (parkClasses.length > 0) {
+		if (parkRows.length > 0) {
 			lines.push(`  ${A.dim("Parked by cause")}`);
-			for (const c of parkClasses) {
-				const note = c === "unrecorded" ? A.dim("  (logged before park classification)") : "";
-				lines.push(`    ${A.yellow(c.padEnd(20))} ${String(stats.parksByClass[c]).padStart(3)}${note}`);
+			for (const [cls, count] of parkRows) {
+				const note = cls === "unrecorded" ? A.dim("  (logged before park classification)") : "";
+				lines.push(`    ${A.yellow(cls.padEnd(20))} ${String(count).padStart(3)}${note}`);
 			}
 		}
-		if (failSteps.length > 0) {
+		if (failRows.length > 0) {
 			lines.push(`  ${A.dim("Failed by cause")}`);
-			for (const s of failSteps) {
+			for (const [cause, count] of failRows) {
 				// Guard causes are whole error phrases, so clamp the label to keep the count column
 				// aligned. The full string stays in `recentFailures` below and in the jsonl.
-				const label = s.length > 28 ? `${s.slice(0, 27)}…` : s;
-				lines.push(`    ${A.red(label.padEnd(28))} ${String(stats.failuresByCause[s]).padStart(3)}`);
+				const label = cause.length > 28 ? `${cause.slice(0, 27)}…` : cause;
+				lines.push(`    ${A.red(label.padEnd(28))} ${String(count).padStart(3)}`);
 			}
 		}
 		lines.push("");

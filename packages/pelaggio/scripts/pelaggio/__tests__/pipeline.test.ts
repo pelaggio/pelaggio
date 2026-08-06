@@ -2555,7 +2555,7 @@ describe("runPipeline — rate-limit park preserves state", () => {
 		assert.equal(logs[0].parkReason, "5h");
 		// Signal-driven park: the structured limitType classifies it, and no review-loop
 		// reason is present to override it.
-		assert.equal(logs[0].parkClass, "rate-limit");
+		assert.equal(logs[0]?.parkClass, "rate-limit");
 	});
 });
 
