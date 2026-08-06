@@ -2974,7 +2974,13 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			return { exitCode: result.completed ? 0 : 1, results };
 		}
 
-		if (doReviewDrain) {
+		// The campaign-start drain launches paid review agents, so it is gated on the *reconstructed*
+		// day spend exactly like the in-loop drains (see the `exceeded()` checks in the item loop).
+		// Without this, a restart that reloads a ledger already at or over the cap would spend a
+		// second full day budget on review before the loop ever gets a chance to stop it (#398 review).
+		if (doReviewDrain && dayBudgetTracker.exceeded()) {
+			console.log(`${A.yellow("⚠")} day budget ($${continuous?.dayBudget?.toFixed(2)}) already exhausted (spent $${dayBudgetTracker.daySpent.toFixed(2)} today) — skipping campaign-start review drain`);
+		} else if (doReviewDrain) {
 			// Campaign-start drain: cold-start backlog + statusless PRs from prior runs (all modes incl.
 			// `--item`). A rate-limit park during the gate is transient — under the same auto-resume /
 			// --max-wait / reset-time policy as the item loop, wait and retry the drain in-process

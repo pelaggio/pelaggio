@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -232,6 +232,21 @@ describe("sumDaySpendFromLog", () => {
 
 	it("missing file → 0", () => {
 		assert.equal(sumDaySpendFromLog(join(tmpdir(), "pelaggio-does-not-exist-daylog.jsonl"), Date.parse("2026-08-02T12:00:00Z")), 0);
+	});
+
+	// "absent" and "unreadable" are different facts and only the first means zero: swallowing a
+	// read fault would seed the tracker at $0 and hand a restart a second full daily budget.
+	// A directory at the ledger path exists but always fails readFileSync (EISDIR) — portable,
+	// unlike chmod, which a root-running CI ignores.
+	it("existing but unreadable ledger → throws rather than seeding $0", () => {
+		const dir = mkdtempSync(join(tmpdir(), "pelaggio-daylog-unreadable-"));
+		const path = join(dir, "pelaggio-log.jsonl");
+		mkdirSync(path);
+		try {
+			assert.throws(() => sumDaySpendFromLog(path, Date.parse("2026-08-02T12:00:00Z")), /could not be read/);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 
 	it("empty file → 0", () => {

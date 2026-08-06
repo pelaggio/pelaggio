@@ -146,18 +146,24 @@ export function nextLocalMidnightMs(nowMs: number = Date.now()): number {
  * durable ledger (`.dev/pelaggio-log.jsonl`) instead of resetting to 0 (#82 item 6:
  * "No new state file").
  *
- * Fail-open to 0: a missing file, unreadable file, malformed line, or a
- * missing/non-finite `total_cost` is skipped rather than thrown. Counts only
+ * Absent ledger → 0: no prior spend to reconstruct. Malformed lines and
+ * missing/non-finite `total_cost` values are skipped rather than thrown. Counts only
  * positive finite costs (mirrors `DayBudgetTracker.add`) and keys on the local
  * calendar day (same basis as `roll()`).
+ *
+ * Throws when a ledger that *exists* cannot be read. Returning 0 there would seed the
+ * tracker as if nothing had been spent, so a permissions or I/O fault would silently
+ * grant a fresh full daily budget — the one failure mode a spend cap must not have.
+ * "File absent" and "file unreadable" are different facts and only the first means zero.
  */
 export function sumDaySpendFromLog(logPath: string, nowMs: number = Date.now()): number {
 	if (!existsSync(logPath)) return 0;
 	let raw: string;
 	try {
 		raw = readFileSync(logPath, "utf8");
-	} catch {
-		return 0;
+	} catch (e) {
+		const msg = e instanceof Error ? e.message : String(e);
+		throw new Error(`day-budget ledger exists but could not be read (${logPath}): ${msg}. Refusing to reconstruct today's spend as $0 — fix the ledger or clear the day budget.`);
 	}
 	const today = dayKey(nowMs);
 	let sum = 0;
