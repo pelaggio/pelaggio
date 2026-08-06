@@ -82,11 +82,16 @@ models:
         shipwreck: claude
         # Fan-out set: every driver runs the same discovery prompt concurrently and
         # every (driver × label) cell must return a valid PASS — all-pass/fail-closed.
-        # Deliberately NOT restored to three drivers alongside the grok top-up: this
-        # is a veto fan-out, not a rotation, so a third seat adds cost and blocking
-        # surface without conserving any Claude (Claude runs either way). Widen only
-        # as a deliberate strictness decision, not as a side effect of restoring grok.
-        pr-review: [claude, codex]
+        # Widened to three drivers 2026-08-06. The earlier two-driver rationale measured
+        # cost *per pass* and concluded a third seat "adds cost without conserving Claude
+        # (Claude runs either way)". True per pass; wrong for cost-to-land — under-enumeration
+        # is what forces repeat gate runs, and Claude runs on every one. A third seat cuts the
+        # number of passes, and the two added cells are grok (Build subscription), so Claude's
+        # per-pass cell count is unchanged: we pay in a resource we have for one we don't.
+        # Caveat: this is fail-closed, so an exhausted grok Build balance blocks every PR — a
+        # 402 surfaces as `block (infra)`, not a real finding (see #428). Until #455 gives
+        # balance-exhaustion its own non-blocking fault class, keep the Build balance funded.
+        pr-review: [claude, codex, grok]
         # Scalar verifier, pinned off the pool's first entry (claude) so
         # provider-diversity: require is satisfied by construction.
         pr-verify: codex
