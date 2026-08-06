@@ -2352,7 +2352,6 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		const isParallel = parallel > 1;
 		const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
 		const now = deps.now ?? Date.now;
-		const appendLog = deps.appendLog ?? appendLogDefault;
 		// Day-budget durability (#398): reconstruct today's spend on every continuous process start
 		// (fresh launch, daemon pause→resume, crash restart) from the durable cycle-log ledger, so a
 		// same-day restart and a midnight-crossing restart both honor the cap. Read the log only when
@@ -2376,6 +2375,11 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			// the charge unrecorded, so the next restart under-counts and grants budget again. Probe the
 			// write path before any paid work rather than after (#398 review).
 			try {
+				// `appendLog` creates `.dev/` lazily on first write (helpers.ts), so on a fresh consumer
+				// checkout the ledger's parent does not exist yet and probing it would throw ENOENT —
+				// reported as "not writable", failing every first-ever day-budget run including --dry-run.
+				// Create it first, exactly as the eventual writer would, then probe for real.
+				mkdirSync(dirname(daySpendLogPath), { recursive: true });
 				accessSync(existsSync(daySpendLogPath) ? daySpendLogPath : dirname(daySpendLogPath), constants.W_OK);
 			} catch (e) {
 				const msg = e instanceof Error ? e.message : String(e);
@@ -2788,24 +2792,48 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		// review cost is charged to the day budget. `sumDaySpendFromLog` reads these rows for the seed
 		// while `stats.reduce()` filters them, so durability costs `/stats` nothing. `doReviewDrain` is
 		// already `!dryRun`-gated, so this only runs on real spend.
-		const appendDayBudgetCharge = (cost: number): void => {
+		// Receipts must land in the same ledger the seed reads (`daySpendLogPath`), not the ambient
+		// `appendLog` default. Production keeps them identical (both `LOG_PATH`), but under `node --test`
+		// only the seed was redirected: the default wrote real $5 `budgetCharge` rows into the host
+		// cycle log, so `sumDaySpendFromLog` counted them and the next real `--day-budget 5` campaign
+		// started already exhausted. Injection still wins, so tests can capture marker writes.
+		const appendDayBudgetReceipt =
+			deps.appendLog ??
+			((entry: Record<string, unknown>): void => {
+				mkdirSync(dirname(daySpendLogPath), { recursive: true });
+				appendFileSync(daySpendLogPath, `${JSON.stringify(entry)}\n`);
+			});
+		/** Returns false when the receipt could not be made durable — callers must stop paid work. */
+		const appendDayBudgetCharge = (cost: number): boolean => {
 			// The receipt exists solely to seed durable day-spend reconstruction, so it is meaningful
 			// only when a continuous day budget is set. No budget (or non-continuous single-item runs
 			// that still drain reviews) → nothing is "charged to the day budget", so skip the write.
-			if (continuous?.dayBudget == null) return;
-			if (!(Number.isFinite(cost) && cost > 0)) return;
-			appendLog({
-				ts: new Date(now()).toISOString(),
-				cycle: 0,
-				item: null, // spend receipt, not a delivered item
-				quick: false,
-				steps: [],
-				total_cost: Number(cost.toFixed(4)),
-				completed: true,
-				error: null,
-				verdict: null,
-				budgetCharge: true,
-			});
+			if (continuous?.dayBudget == null) return true;
+			if (!(Number.isFinite(cost) && cost > 0)) return true;
+			try {
+				appendDayBudgetReceipt({
+					ts: new Date(now()).toISOString(),
+					cycle: 0,
+					item: null, // spend receipt, not a delivered item
+					quick: false,
+					steps: [],
+					total_cost: Number(cost.toFixed(4)),
+					completed: true,
+					error: null,
+					verdict: null,
+					budgetCharge: true,
+				});
+			} catch (e) {
+				// The startup W_OK probe proves writability before any paid work, so reaching here means
+				// the ledger went unwritable mid-run. The in-memory charge stands (this process still
+				// honors the cap), but nothing survives a restart — the next launch would reconstruct a
+				// smaller day spend and re-grant budget already spent. Fail closed rather than absorb it:
+				// the broad review catch would otherwise record a zero-cost crash and keep drawing.
+				const msg = e instanceof Error ? e.message : String(e);
+				console.error(`day-budget receipt could not be written (${daySpendLogPath}): ${msg}. $${cost.toFixed(2)} is charged in memory but will not survive a restart — stopping paid review work.`);
+				return false;
+			}
+			return true;
 		};
 
 		// One drain pass: reconcile enqueued records with live statusless PRs, post each `review`
@@ -2954,7 +2982,10 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				// #398 receipt rides immediately after the charge it durabilizes, so a later
 				// `writeGateRecord` failure (which `continue`s) still leaves the already-incurred
 				// review cost reconstructable from the cycle log after a restart.
-				appendDayBudgetCharge(reviewCost);
+				// A lost receipt means restart-reconstruction would under-count this spend, so stop
+				// starting new paid reviews this pass rather than drawing against a budget that will
+				// look unspent after a restart.
+				if (!appendDayBudgetCharge(reviewCost)) parked = true;
 				try {
 					review.writeGateRecord(review.gateRecordsRoot, gateRecord);
 				} catch (e) {

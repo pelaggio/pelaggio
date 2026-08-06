@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -1696,6 +1696,77 @@ describe("runOrchestrator — continuous mode (issue #82)", () => {
 		assert.equal(probes, 0, "the exhausted day budget stops before the free queue probe");
 		assert.equal(calls.length, 0, "the exhausted day budget stops before paid pick work");
 		assert.equal(exitCode, 0);
+	});
+
+	// Both tests below are regressions for the #429 trio review, which blocked on them.
+	it("day-budget receipts never reach the host cycle log", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const reviewMain = mkdtempSync(join(tmpdir(), "review-budget-host-log-"));
+		t.after(() => rmSync(reviewMain, { recursive: true, force: true }));
+		// `appendLogDefault`'s target. The seed read was hermetic but the receipt write was not, so a
+		// plain `pnpm -r test` appended real $5 `budgetCharge` rows here and the next real
+		// `--day-budget 5` campaign started already exhausted. Deliberately inject no `appendLog`.
+		const hostLog = join(REPO, ".dev", "pelaggio-log.jsonl");
+		const sizeOf = (f: string): number => (existsSync(f) ? statSync(f).size : -1);
+		const before = sizeOf(hostLog);
+		const pendingPr = [
+			{
+				number: 202,
+				isDraft: false,
+				headRefName: "feat/issue-398-host-log",
+				headRefOid: "def456b",
+				headRepository: { nameWithOwner: "o/r" },
+				updatedAt: "2026-07-08T12:00:00Z",
+				statusCheckRollup: [{ __typename: "StatusContext", context: "review", state: "PENDING", startedAt: "2026-07-08T12:00:00Z" }],
+			},
+		];
+		const gh: GhRunner = (args) => {
+			if (args[0] === "pr" && args[1] === "list") return { stdout: JSON.stringify(pendingPr), stderr: "", status: 0 };
+			if (args[0] === "issue" && args[1] === "view") return { stdout: JSON.stringify({ labels: [{ name: "autopilot" }] }), stderr: "", status: 0 };
+			return { stdout: "", stderr: "", status: 0 };
+		};
+		const { runPipeline } = createMockRunPipeline({ default: { completed: true, cost: 0.1 } });
+
+		await runOrchestrator(
+			{ ...baseFlags, continuous: true, preset: "drain", "day-budget": "5", target: "pull-request" },
+			{
+				runPipeline,
+				queueProbe: async () => ({ empty: true, readyCount: 0 }),
+				review: {
+					runner: "local",
+					ghRepo: "o/r",
+					gh,
+					queueRoot: reviewRequestsDir(reviewMain),
+					gateRecordsRoot: gateRecordsDir(reviewMain),
+					statuslessAfter: "2h",
+					now: () => Date.parse("2026-08-05T12:00:00Z"),
+					prepareReviewHead: () => ({ diffCwd: "/tmp/pr-head", baseRef: "origin/main", headRef: "refs/pelaggio-review/pr-202" }),
+					cleanupReviewHead: () => {},
+					runReviewGate: async () => ({ gate: "pass", body: "clean", cost: 5, costEstimated: false, turns: 3, ok: true, subtype: "success", agreement: "consensus-pass" }),
+					writeGateRecord: () => join(reviewMain, "gate-record.json"),
+				},
+				revise: { local: false, ghRepo: "o/r", gh },
+			},
+		);
+
+		assert.equal(sizeOf(hostLog), before, "budgetCharge receipts must land in the hermetic ledger, never the developer's real cycle log");
+	});
+
+	it("day-budget preflight creates a missing ledger directory instead of reporting it unwritable", async (t) => {
+		t.mock.method(console, "log", () => {});
+		// A fresh consumer checkout has no `.dev/` — `appendLog` creates it lazily on first write. The
+		// preflight probed the absent parent and threw ENOENT, surfaced as "ledger is not writable",
+		// which failed every first-ever day-budget run including `--dry-run`.
+		const fresh = mkdtempSync(join(tmpdir(), "day-budget-fresh-repo-"));
+		t.after(() => rmSync(fresh, { recursive: true, force: true }));
+		const ledger = join(fresh, ".dev", "pelaggio-log.jsonl");
+		assert.equal(existsSync(join(fresh, ".dev")), false, "precondition: the ledger's parent must not exist");
+		const { runPipeline } = createMockRunPipeline({ default: { completed: true, cost: 0.1 } });
+
+		const { exitCode } = await runOrchestrator({ ...baseFlags, continuous: true, preset: "drain", "day-budget": "5" }, { runPipeline, daySpendLogPath: ledger, queueProbe: async () => ({ empty: true, readyCount: 0 }) });
+
+		assert.equal(existsSync(join(fresh, ".dev")), true, "the preflight creates the ledger directory, as the eventual writer would");
+		assert.equal(exitCode, 0, "a fresh checkout must not fail startup with a spurious not-writable error");
 	});
 
 	it("drain ×2: two concurrent paid cycles when probe has work", async (t) => {
