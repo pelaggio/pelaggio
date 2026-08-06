@@ -150,6 +150,20 @@ describe("continuousCycleCap", () => {
 });
 
 describe("DayBudgetTracker", () => {
+	it("pins the starting day to the seed instant so a midnight-crossing scan cannot bind yesterday's spend to today", () => {
+		// The orchestrator sampled the clock twice — once for `sumDaySpendFromLog`, once inside this
+		// constructor. A synchronous ledger scan that straddles local midnight therefore reconstructed
+		// *yesterday's* spend but keyed it to *today*, stopping the campaign for a second full day.
+		const beforeMidnight = new Date(2026, 7, 5, 23, 59, 59, 900).getTime();
+		const afterMidnight = new Date(2026, 7, 6, 0, 0, 0, 100).getTime();
+		const seeded = new DayBudgetTracker(5, () => afterMidnight, 4.5, dayKey(beforeMidnight));
+		assert.equal(seeded.daySpent, 0, "spend seeded from yesterday's ledger rolls over on the new day");
+		assert.equal(seeded.exceeded(), false, "a fresh day starts with the full budget");
+		// Without the pin the seeded spend is attributed to the new day and the cap is already blown.
+		const unpinned = new DayBudgetTracker(5, () => afterMidnight, 4.5);
+		assert.equal(unpinned.daySpent, 4.5);
+	});
+
 	it("tracks spend and reports exceeded", () => {
 		const t = new DayBudgetTracker(10, () => Date.parse("2026-08-02T12:00:00Z"));
 		assert.equal(t.exceeded(), false);

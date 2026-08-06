@@ -1769,6 +1769,82 @@ describe("runOrchestrator — continuous mode (issue #82)", () => {
 		assert.equal(exitCode, 0, "a fresh checkout must not fail startup with a spurious not-writable error");
 	});
 
+	// Two PRs, each review costing the whole day budget. Both regressions below need a *second*
+	// candidate to be observable at all: the drain only misbehaves when it starts another review.
+	const twoPendingPrs = (): unknown[] =>
+		[301, 302].map((number) => ({
+			number,
+			isDraft: false,
+			headRefName: `feat/issue-398-drain-stop-${number}`,
+			headRefOid: `sha${number}`,
+			headRepository: { nameWithOwner: "o/r" },
+			updatedAt: "2026-07-08T12:00:00Z",
+			statusCheckRollup: [{ __typename: "StatusContext", context: "review", state: "PENDING", startedAt: "2026-07-08T12:00:00Z" }],
+		}));
+
+	const drainWithTwoReviews = async (reviewOverrides: Record<string, unknown>, topOverrides: Record<string, unknown> = {}): Promise<number> => {
+		const reviewMain = mkdtempSync(join(tmpdir(), "review-drain-stop-"));
+		const gh: GhRunner = (args) => {
+			if (args[0] === "pr" && args[1] === "list") return { stdout: JSON.stringify(twoPendingPrs()), stderr: "", status: 0 };
+			if (args[0] === "issue" && args[1] === "view") return { stdout: JSON.stringify({ labels: [{ name: "autopilot" }] }), stderr: "", status: 0 };
+			return { stdout: "", stderr: "", status: 0 };
+		};
+		let gateCalls = 0;
+		const { runPipeline } = createMockRunPipeline({ default: { completed: true, cost: 0.1 } });
+		await runOrchestrator(
+			{ ...baseFlags, continuous: true, preset: "drain", "day-budget": "5", target: "pull-request" },
+			{
+				runPipeline,
+				...topOverrides,
+				queueProbe: async () => ({ empty: true, readyCount: 0 }),
+				review: {
+					runner: "local",
+					ghRepo: "o/r",
+					gh,
+					queueRoot: reviewRequestsDir(reviewMain),
+					gateRecordsRoot: gateRecordsDir(reviewMain),
+					statuslessAfter: "2h",
+					now: () => Date.parse("2026-08-05T12:00:00Z"),
+					prepareReviewHead: () => ({ diffCwd: "/tmp/pr-head", baseRef: "origin/main", headRef: "refs/pelaggio-review/pr" }),
+					cleanupReviewHead: () => {},
+					runReviewGate: async () => {
+						gateCalls++;
+						return { gate: "pass", body: "clean", cost: 5, costEstimated: false, turns: 3, ok: true, subtype: "success", agreement: "consensus-pass" };
+					},
+					writeGateRecord: () => join(reviewMain, "gate-record.json"),
+					...reviewOverrides,
+				},
+				revise: { local: false, ghRepo: "o/r", gh },
+			},
+		);
+		rmSync(reviewMain, { recursive: true, force: true });
+		return gateCalls;
+	};
+
+	it("a lost day-budget receipt stops the drain from starting another paid review", async (t) => {
+		t.mock.method(console, "log", () => {});
+		t.mock.method(console, "error", () => {});
+		// The first attempt at this fix set a loop-local flag that was re-initialised each iteration
+		// and only read *before* the charge site — a dead store, so the drain kept paying.
+		const gateCalls = await drainWithTwoReviews(
+			{},
+			{
+				appendLog: () => {
+					throw new Error("EACCES: permission denied, open '.dev/pelaggio-log.jsonl'");
+				},
+			},
+		);
+		assert.equal(gateCalls, 1, "an unwritable ledger must stop paid review work, not merely warn");
+	});
+
+	it("crossing the day budget stops the drain after the permitted one-operation overshoot", async (t) => {
+		t.mock.method(console, "log", () => {});
+		// Cost is unknowable until the gate returns, so one review may cross the cap. The next may not:
+		// the campaign-start gate alone let the entire remaining backlog run once the cap was crossed.
+		const gateCalls = await drainWithTwoReviews({});
+		assert.equal(gateCalls, 1, "the second review must not start once the day budget is exhausted");
+	});
+
 	it("drain ×2: two concurrent paid cycles when probe has work", async (t) => {
 		t.mock.method(console, "log", () => {});
 		let inFlight = 0;

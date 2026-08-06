@@ -212,11 +212,16 @@ export class DayBudgetTracker {
 		private readonly dayBudget: number | undefined,
 		private readonly now: () => number = Date.now,
 		initialSpent = 0,
+		initialDay?: string,
 	) {
 		// Source the day key from the injected clock (not a real-`Date.now()` field
 		// initializer) so a tracker seeded under a test clock does not roll-to-zero on
 		// its first access when the injected date differs from wall-clock today.
-		this.day = dayKey(this.now());
+		// `initialDay` lets the caller pin it to the *same* instant the ledger seed was
+		// computed from: sampling the clock twice straddles local midnight if the
+		// synchronous scan crosses it, which would bind yesterday's reconstructed spend
+		// to today and idle the campaign for a full extra day.
+		this.day = initialDay ?? dayKey(this.now());
 		this.spent = Number.isFinite(initialSpent) && initialSpent > 0 ? initialSpent : 0;
 	}
 

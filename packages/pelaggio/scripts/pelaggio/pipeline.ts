@@ -28,7 +28,7 @@ import {
 } from "./config.js";
 import { forbiddenRootsForConfinement } from "./confinement/roots.js";
 import { type AcceptedSession, captureEvaluatorContext, createSessionController, firstDiffPathsByRoot, resolveEligibleSessions, revalidateChangedRoot, type SessionController, type SessionEvaluatorContext } from "./confinement/sessions.js";
-import { continuousCycleCap, DayBudgetTracker, freeQueueProbe, nextLocalMidnightMs, resolveContinuousConfig, sumDaySpendFromLog } from "./continuous.js";
+import { continuousCycleCap, DayBudgetTracker, dayKey, freeQueueProbe, nextLocalMidnightMs, resolveContinuousConfig, sumDaySpendFromLog } from "./continuous.js";
 import { appendDecisions as appendDecisionsDefault, appendReviewEscalation as appendReviewEscalationDefault, lookupReviewEscalation as lookupReviewEscalationDefault } from "./decisions.js";
 import { createDriverAssignmentState, type DriverIdentity, recordArtifactAuthor, resolveStaticAuthor, selectAuthor, selectReviewers } from "./driver-assignment.js";
 import {
@@ -2137,6 +2137,12 @@ export function hermeticDefault<T extends (...args: never[]) => unknown>(dep: st
  *  mode for repeated test runs. */
 let hermeticBaseDir: string | undefined;
 
+/** Per-`runOrchestrator` discriminator for the hermetic day-spend ledger. One shared temp file would
+ *  let each test's `budgetCharge` receipts seed the *next* test's reconstructed day spend, making
+ *  every day-budget assertion order-dependent (and passing for the wrong reason once the accumulated
+ *  total crosses the cap). Ignored outside `node --test`, where the real ledger path is returned. */
+let hermeticRunSeq = 0;
+
 export function hermeticQueueRoot(real: () => string, name = "queue"): string {
 	if (!IN_NODE_TEST) return real();
 	// Not a throw: the path is read eagerly to derive the drain-lock path even when the drain
@@ -2365,7 +2371,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		const daySpendLogPath =
 			deps.daySpendLogPath ??
 			join(
-				hermeticQueueRoot(() => dirname(LOG_PATH), "day-spend-log"),
+				hermeticQueueRoot(() => dirname(LOG_PATH), `day-spend-log-${++hermeticRunSeq}`),
 				basename(LOG_PATH),
 			);
 		if (continuous?.dayBudget != null && deps.initialDaySpend === undefined) {
@@ -2386,8 +2392,11 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				throw new Error(`day-budget ledger is not writable (${daySpendLogPath}): ${msg}. Refusing to start paid work whose spend could not be durably recorded — fix permissions or clear the day budget.`);
 			}
 		}
-		const initialDaySpend = continuous?.dayBudget != null ? (deps.initialDaySpend ?? sumDaySpendFromLog(daySpendLogPath, now())) : 0;
-		const dayBudgetTracker = new DayBudgetTracker(continuous?.dayBudget, now, initialDaySpend);
+		// One clock sample feeds both the ledger scan and the tracker's starting day. Sampling twice
+		// lets a scan that crosses local midnight seed yesterday's spend against today's key.
+		const seedNowMs = now();
+		const initialDaySpend = continuous?.dayBudget != null ? (deps.initialDaySpend ?? sumDaySpendFromLog(daySpendLogPath, seedNowMs)) : 0;
+		const dayBudgetTracker = new DayBudgetTracker(continuous?.dayBudget, now, initialDaySpend, dayKey(seedNowMs));
 		const roadmapForProbe = deps.roadmap ?? getRoadmapSource(ROADMAP_SOURCE, { repo: REPO, github: ROADMAP_GITHUB, linear: ROADMAP_LINEAR });
 		const flowPolicyForProbe = deps.flowPolicy ?? DEFAULT_FLOW_POLICY;
 		const queueProbe = deps.queueProbe ?? (() => freeQueueProbe(roadmapForProbe, flowPolicyForProbe));
@@ -2872,8 +2881,18 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				else work.set(key, { candidate });
 			}
 
+			// Declared outside the per-PR loop on purpose: `parked` below is re-initialised every
+			// iteration and is read before the charge site, so it cannot carry a receipt failure
+			// forward. This must, or an unwritable ledger keeps launching paid reviews.
+			let receiptUndurable = false;
 			for (const { candidate: pr, record } of work.values()) {
 				if (parkSignal.parked) break;
+				// Stop before *starting* another paid review. A single operation may cross the cap
+				// (cost is unknowable until the gate returns), but the next one must not: without this
+				// the campaign-start gate is the only check, so one review crossing the cap still let
+				// the whole remaining backlog run.
+				if (dayBudgetTracker.exceeded()) break;
+				if (receiptUndurable) break;
 				// Tri-state on purpose: deleting the durable record requires a POSITIVE
 				// "unmanaged" read — a transient/malformed gh response ("unknown") skips
 				// this round and retains the record for retry (#387 gate finding).
@@ -2984,8 +3003,9 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				// review cost reconstructable from the cycle log after a restart.
 				// A lost receipt means restart-reconstruction would under-count this spend, so stop
 				// starting new paid reviews this pass rather than drawing against a budget that will
-				// look unspent after a restart.
-				if (!appendDayBudgetCharge(reviewCost)) parked = true;
+				// look unspent after a restart. Persistence for *this* PR still completes below — the
+				// review is already paid for, so its outcome must not be thrown away too.
+				if (!appendDayBudgetCharge(reviewCost)) receiptUndurable = true;
 				try {
 					review.writeGateRecord(review.gateRecordsRoot, gateRecord);
 				} catch (e) {
