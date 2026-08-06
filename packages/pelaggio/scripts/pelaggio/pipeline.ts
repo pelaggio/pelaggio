@@ -2925,12 +2925,22 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		}
 
 		const reap = {
-			enabled: REAP_ENABLED,
-			enumerate: enumerateReapCandidates,
-			refresh: refreshLandingBase,
-			confirm: confirmLanding,
-			reapItem,
-			reapReviewHeads: reapReviewHeadOrphans,
+			// Off by default under `node --test`. Reap is enabled in config and `shouldReap` needs only
+			// a PR target plus a ghRepo, both of which many orchestrator tests set — so the sweep ran
+			// in tests that have nothing to do with it. The seams below are guarded too, so a test that
+			// opts back in without injecting them fails loudly instead of touching the real repo.
+			enabled: IN_NODE_TEST ? false : REAP_ENABLED,
+			// Guarded for the same reason as the review/revise seams (#456): reap is on by default and
+			// `shouldReap` needs only a PR target plus a ghRepo, both of which many tests set. Left
+			// unguarded, `enumerate` ran real `git worktree list`/`git branch --list` against the
+			// developer's own repo and `reapItem` was one plausibly-shaped gh mock away from deleting
+			// real `feat/*` branches and force-pushing their deletion. A test that genuinely wants reap
+			// injects these; one that does not passes `reap: { enabled: false }`.
+			enumerate: hermeticDefault("reap.enumerate", enumerateReapCandidates),
+			refresh: hermeticDefault("reap.refresh", refreshLandingBase),
+			confirm: hermeticDefault("reap.confirm", confirmLanding),
+			reapItem: hermeticDefault("reap.reapItem", reapItem),
+			reapReviewHeads: hermeticDefault("reap.reapReviewHeads", reapReviewHeadOrphans),
 			...deps.reap,
 		};
 		const mainRepo = mainWorktree(REPO);
