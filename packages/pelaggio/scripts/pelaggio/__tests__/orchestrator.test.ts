@@ -1821,6 +1821,55 @@ describe("runOrchestrator — continuous mode (issue #82)", () => {
 		return gateCalls;
 	};
 
+	it("a lost day-budget receipt halts the whole campaign and reports failure", async (t) => {
+		t.mock.method(console, "log", () => {});
+		t.mock.method(console, "error", () => {});
+		// Stopping only the review drain is not enough: below the cap the orchestrator went on to
+		// revise and pick work whose spend is equally unreconstructable, and still exited 0.
+		const reviewMain = mkdtempSync(join(tmpdir(), "review-receipt-halt-"));
+		t.after(() => rmSync(reviewMain, { recursive: true, force: true }));
+		const gh: GhRunner = (args) => {
+			if (args[0] === "pr" && args[1] === "list") return { stdout: JSON.stringify(twoPendingPrs()), stderr: "", status: 0 };
+			if (args[0] === "issue" && args[1] === "view") return { stdout: JSON.stringify({ labels: [{ name: "autopilot" }] }), stderr: "", status: 0 };
+			return { stdout: "", stderr: "", status: 0 };
+		};
+		const { runPipeline, calls } = createMockRunPipeline({ default: { completed: true, cost: 0.1 } });
+		let probes = 0;
+		const { exitCode } = await runOrchestrator(
+			{ ...baseFlags, continuous: true, preset: "drain", "day-budget": "500", target: "pull-request" },
+			{
+				runPipeline,
+				appendLog: () => {
+					throw new Error("EACCES: permission denied, open '.dev/pelaggio-log.jsonl'");
+				},
+				queueProbe: async () => {
+					probes++;
+					return { empty: false, readyCount: 1 };
+				},
+				review: {
+					runner: "local",
+					ghRepo: "o/r",
+					gh,
+					queueRoot: reviewRequestsDir(reviewMain),
+					gateRecordsRoot: gateRecordsDir(reviewMain),
+					statuslessAfter: "2h",
+					now: () => Date.parse("2026-08-05T12:00:00Z"),
+					prepareReviewHead: () => ({ diffCwd: "/tmp/pr-head", baseRef: "origin/main", headRef: "refs/pelaggio-review/pr" }),
+					cleanupReviewHead: () => {},
+					runReviewGate: async () => ({ gate: "pass", body: "clean", cost: 5, costEstimated: false, turns: 3, ok: true, subtype: "success", agreement: "consensus-pass" }),
+					writeGateRecord: () => join(reviewMain, "gate-record.json"),
+				},
+				revise: { local: false, ghRepo: "o/r", gh },
+			},
+		);
+
+		// The day budget is 500 and one review cost 5, so nothing below stops for the cap — only the
+		// undurable ledger does.
+		assert.equal(calls.length, 0, "no paid pick work may start once the ledger is known undurable");
+		assert.equal(probes, 0, "the campaign halts before even the free queue probe");
+		assert.equal(exitCode, 1, "a run whose spend cannot be reconstructed must not report success");
+	});
+
 	it("a lost day-budget receipt stops the drain from starting another paid review", async (t) => {
 		t.mock.method(console, "log", () => {});
 		t.mock.method(console, "error", () => {});

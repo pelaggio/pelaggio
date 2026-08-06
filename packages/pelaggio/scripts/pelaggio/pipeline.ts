@@ -2813,6 +2813,11 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				appendFileSync(daySpendLogPath, `${JSON.stringify(entry)}\n`);
 			});
 		/** Returns false when the receipt could not be made durable — callers must stop paid work. */
+		// Campaign-scoped latch. This flag has now been widened three times — per-PR, per-drain-pass,
+		// then review-drain-only — each time because the previous scope let some other paid path keep
+		// running. It lives here, above the only writer, and the writer halts the whole campaign:
+		// an undurable ledger invalidates *all* spend accounting, not just review spend.
+		let receiptUndurable = false;
 		const appendDayBudgetCharge = (cost: number): boolean => {
 			// The receipt exists solely to seed durable day-spend reconstruction, so it is meaningful
 			// only when a continuous day budget is set. No budget (or non-continuous single-item runs
@@ -2839,7 +2844,11 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				// smaller day spend and re-grant budget already spent. Fail closed rather than absorb it:
 				// the broad review catch would otherwise record a zero-cost crash and keep drawing.
 				const msg = e instanceof Error ? e.message : String(e);
-				console.error(`day-budget receipt could not be written (${daySpendLogPath}): ${msg}. $${cost.toFixed(2)} is charged in memory but will not survive a restart — stopping paid review work.`);
+				console.error(`day-budget receipt could not be written (${daySpendLogPath}): ${msg}. $${cost.toFixed(2)} is charged in memory but will not survive a restart — halting the campaign.`);
+				// Halt every paid path, not just the review drain: below the cap the orchestrator would
+				// otherwise go on to revise and pick work whose spend is equally unreconstructable.
+				receiptUndurable = true;
+				campaignHalted = true;
 				return false;
 			}
 			return true;
@@ -2850,11 +2859,6 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		// park stops starting new reviews and returns (the caller decides whether to wait+retry).
 		// Serialized by the drain lock at both call sites so two finishing workers never
 		// double-execute one PR+SHA.
-		// Campaign-scoped latch, deliberately outside `runLocalReviewDrainOnce`. `parked` is
-		// re-initialised per PR and read before the charge site, so it cannot carry a receipt failure
-		// forward; a pass-local flag cannot either, because park auto-resume re-enters the drain with
-		// a fresh one. Once a charge cannot be made durable, no further paid review runs this process.
-		let receiptUndurable = false;
 		async function runLocalReviewDrainOnce(opts: { notifyStranded: boolean }): Promise<void> {
 			reclaimStaleReviewClaims(review.queueRoot, review.now());
 			const records = listReviewRequests(review.queueRoot);
@@ -2942,9 +2946,8 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						// under-reports --day-budget and drains keep picking past the cap.
 						totalSpent += result.cost;
 						dayBudgetTracker.add(result.cost);
-						// The partial cost is real spend. If its receipt cannot be written, a restart or
-						// auto-resume re-grants that budget, so latch the same stop as the success path.
-						if (!appendDayBudgetCharge(result.cost)) receiptUndurable = true;
+						// The partial cost is real spend; a lost receipt re-grants that budget on restart.
+						appendDayBudgetCharge(result.cost);
 						parked = true;
 						console.log(`review ${pr.itemId}#${pr.prNumber} — parked (${result.park?.limitType ?? parkSignal.limitType})`);
 					} else {
@@ -3008,7 +3011,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				// starting new paid reviews this pass rather than drawing against a budget that will
 				// look unspent after a restart. Persistence for *this* PR still completes below — the
 				// review is already paid for, so its outcome must not be thrown away too.
-				if (!appendDayBudgetCharge(reviewCost)) receiptUndurable = true;
+				appendDayBudgetCharge(reviewCost); // failure latches receiptUndurable + halts the campaign
 				try {
 					review.writeGateRecord(review.gateRecordsRoot, gateRecord);
 				} catch (e) {
@@ -3425,6 +3428,10 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		// completed cycles alone must not report delivery-complete over it.
 		if (doReviewDrain && parkSignal.parked) {
 			console.log(`${A.yellow("⚠")} review drain parked — one or more review statuses still pending; re-run after the limit clears`);
+			return { exitCode: 1, results };
+		}
+		if (receiptUndurable) {
+			console.log(`${A.yellow("⚠")} day-budget ledger became unwritable mid-run — spend after that point is not reconstructable; fix permissions before the next run`);
 			return { exitCode: 1, results };
 		}
 		return { exitCode: results.every((r) => r.completed) ? 0 : 1, results };
