@@ -1,0 +1,27 @@
+{
+	"schemaVersion": 1,
+	"id": "plausible-wrong",
+	"description": "Reviewer emits a well-formed non-safety judgment must-fix that is actually wrong; the Judge refutes it (ruling omitted). No blocker survives and no false positive is carried. Terminal: converged-clean / pass.",
+	"policy": {
+		"reviewers": [{ "id": "reviewer-1", "provider": "claude" }],
+		"judge": { "id": "judge", "provider": "opencode" },
+		"maxPasses": 1,
+		"budgetCap": 180
+	},
+	"classificationContext": { "changedFiles": ["src/retry.ts"] },
+	"recordings": [
+		{
+			"role": "reviewer",
+			"seatId": "reviewer-1",
+			"pass": 1,
+			"assistantText": "AUTHORING_REVIEW_FINDINGS\n{\"schemaVersion\":3,\"summary\":\"Possible documentation gap.\",\"findings\":[{\"severity\":\"must-fix\",\"message\":\"Add a doc comment explaining the retry backoff constant.\",\"path\":\"src/retry.ts\",\"line\":15,\"ruleId\":\"pelaggio/judgment/docs\"}]}\nEND_AUTHORING_REVIEW_FINDINGS"
+		},
+		{
+			"role": "judge",
+			"seatId": "judge",
+			"pass": 1,
+			"assistantText": "AUTHORING_REVIEW_JUDGE\n{\"schemaVersion\":1,\"decisions\":[{\"candidateId\":\"C1\",\"decision\":\"refuted\",\"rationale\":\"The backoff constant is already documented two lines above; the finding is incorrect.\"}]}\nEND_AUTHORING_REVIEW_JUDGE"
+		}
+	],
+	"groundTruthBlockers": []
+}
