@@ -166,7 +166,7 @@ function digestId(domain: string, value: string): string {
 	return output;
 }
 
-function legacyEvent(record: UnknownRecord & CycleLogEntry, source: string, line: number, bytes: string): FlowEvent | undefined {
+function legacyEvent(record: UnknownRecord & CycleLogEntry, source: string, line: number, bytes: string, seq: number): FlowEvent | undefined {
 	const key = `${source}\0${line}\0${bytes}`;
 	return decodeV1({
 		...record,
@@ -174,7 +174,10 @@ function legacyEvent(record: UnknownRecord & CycleLogEntry, source: string, line
 		type: "pelaggio.cycle-completed",
 		eventId: digestId("pelaggio-legacy-event", key),
 		streamId: digestId("pelaggio-legacy-stream", source),
-		seq: line,
+		// Counts promoted events, not physical lines: rows the reader skips (day-budget receipts,
+		// blanks) would otherwise punch holes in the sequence and raise a false `sequenceGap`.
+		// `eventId` still keys on `line`, so identity stays tied to physical position.
+		seq,
 		itemId: record.item,
 		claimId: null,
 		readinessEpisodeId: null,
@@ -190,6 +193,7 @@ function readFileEvents(path: string, diagnostics: EventLogDiagnostics): FlowEve
 	const lines = contents.split("\n");
 	const terminated = contents.endsWith("\n");
 	const events: FlowEvent[] = [];
+	let legacySeq = 0;
 	for (let index = 0; index < lines.length; index++) {
 		const bytes = lines[index];
 		if (bytes.trim() === "") continue;
@@ -209,9 +213,11 @@ function readFileEvents(path: string, diagnostics: EventLogDiagnostics): FlowEve
 		// diagnostic: the row is a well-formed receipt, simply not an event.
 		if (isRecord(value) && value.type === undefined && value.budgetCharge === true) continue;
 		if (isRecord(value) && value.type === undefined && isCycleFields(value) && isCanonicalInstant(value.ts)) {
-			const event = legacyEvent(value, source, line, bytes);
-			if (event) events.push(event);
-			else diagnose(diagnostics, { kind: "malformed", source, line, message: "Invalid legacy cycle record" });
+			const event = legacyEvent(value, source, line, bytes, legacySeq + 1);
+			if (event) {
+				legacySeq += 1; // only a promoted event consumes a sequence number
+				events.push(event);
+			} else diagnose(diagnostics, { kind: "malformed", source, line, message: "Invalid legacy cycle record" });
 			continue;
 		}
 		if (isRecord(value) && typeof value.type === "string" && !PELAGGIO_EVENT_TYPE_SET.has(value.type as PelaggioEventType)) {

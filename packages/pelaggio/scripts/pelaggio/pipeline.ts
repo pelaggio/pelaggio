@@ -2850,6 +2850,11 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		// park stops starting new reviews and returns (the caller decides whether to wait+retry).
 		// Serialized by the drain lock at both call sites so two finishing workers never
 		// double-execute one PR+SHA.
+		// Campaign-scoped latch, deliberately outside `runLocalReviewDrainOnce`. `parked` is
+		// re-initialised per PR and read before the charge site, so it cannot carry a receipt failure
+		// forward; a pass-local flag cannot either, because park auto-resume re-enters the drain with
+		// a fresh one. Once a charge cannot be made durable, no further paid review runs this process.
+		let receiptUndurable = false;
 		async function runLocalReviewDrainOnce(opts: { notifyStranded: boolean }): Promise<void> {
 			reclaimStaleReviewClaims(review.queueRoot, review.now());
 			const records = listReviewRequests(review.queueRoot);
@@ -2881,10 +2886,6 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				else work.set(key, { candidate });
 			}
 
-			// Declared outside the per-PR loop on purpose: `parked` below is re-initialised every
-			// iteration and is read before the charge site, so it cannot carry a receipt failure
-			// forward. This must, or an unwritable ledger keeps launching paid reviews.
-			let receiptUndurable = false;
 			for (const { candidate: pr, record } of work.values()) {
 				if (parkSignal.parked) break;
 				// Stop before *starting* another paid review. A single operation may cross the cap
@@ -2941,7 +2942,9 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						// under-reports --day-budget and drains keep picking past the cap.
 						totalSpent += result.cost;
 						dayBudgetTracker.add(result.cost);
-						appendDayBudgetCharge(result.cost);
+						// The partial cost is real spend. If its receipt cannot be written, a restart or
+						// auto-resume re-grants that budget, so latch the same stop as the success path.
+						if (!appendDayBudgetCharge(result.cost)) receiptUndurable = true;
 						parked = true;
 						console.log(`review ${pr.itemId}#${pr.prNumber} — parked (${result.park?.limitType ?? parkSignal.limitType})`);
 					} else {
