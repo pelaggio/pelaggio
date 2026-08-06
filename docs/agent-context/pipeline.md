@@ -87,6 +87,17 @@ Manifest **validation** is fail-closed: an unknown kind, a provenance/`preSha` m
 
 Every pipeline exit path must call `parkExit()` (which checkpoints uncommitted work) before returning on rate-limit rejection, so work is checkpointed before the process exits or waits. This matters for subscription-backed providers whose retry windows are outside the pipeline's control.
 
+Parks come in two families and the cycle log records both. *Signal-driven* parks
+(rate limit, operator `SIGUSR2` pause, sustained SDK outage) carry a structured
+`parkSignal.limitType`; *review-loop* parks pass an explicit reason string to
+`parkExit(reason)`. Only the former used to reach the log, so every review-gate
+park persisted `parkReason: null` and a park's cause was unrecoverable after the
+fact. `parkExit()` now retains the reason and the log record carries both the
+free-form `parkReason` detail and a closed `parkClass` (`classifyParkReason` in
+`helpers.ts`) that `pelaggio stats` groups on. `limitType` wins when present.
+Records written before classification existed report as `unrecorded` in stats
+rather than being folded into a real class.
+
 Driver assignment is decided in the harness before `plan`, `implement`, and
 their ordinary shakedown reviews execute. Ordered pools rotate deterministically
 within a cycle; readiness is preflight-only, and an in-flight failure still uses

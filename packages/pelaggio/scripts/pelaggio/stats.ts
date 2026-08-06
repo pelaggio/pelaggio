@@ -24,9 +24,37 @@ interface RecentFailure {
 export interface Stats {
 	totalCycles: number;
 	completedCycles: number;
+	/**
+	 * Cycles that ended in a hard failure. **Excludes parked cycles** — a park is a
+	 * checkpoint the operator can resume, not a failure, and counting it as both made
+	 * the real fail-closed rate unreadable (`completed + failed` used to equal
+	 * `totalCycles` with `parked` double-counted inside `failed`).
+	 */
 	failedCycles: number;
+	/** Cycles that ended parked. Disjoint from `completedCycles` and `failedCycles`. */
 	parkedCycles: number;
 	shipwreckedCycles: number;
+	/**
+	 * Parked cycles grouped by closed park class. Records written before park
+	 * classification existed group under `unrecorded` rather than being folded into a
+	 * real class — an honest gap beats a wrong attribution.
+	 */
+	parksByClass: Record<string, number>;
+	/**
+	 * Failed (not parked) cycles grouped by cause: the step that failed, or — for a
+	 * pipeline guard that rejected before any step failed (`pick:worktree-exists`,
+	 * `plan needs rethink`, `nothing to ship: …`) — the stable prefix of the cycle error.
+	 * Those guard rejections are a real and separately-actionable share of failures, so
+	 * folding them into one `unattributed` bucket would hide them.
+	 */
+	failuresByCause: Record<string, number>;
+	/** Spend attributed to the realized driver of each step (#327 provenance). */
+	costByProvider: Record<string, number>;
+	/** Per-provider flag: true when that provider's cost included an estimate. */
+	costEstimatedByProvider: Record<string, boolean>;
+	tokensByProvider: Record<string, TokenUsage>;
+	/** Step executions per provider — the denominator for the cost figures above. */
+	stepsByProvider: Record<string, number>;
 	totalCostUsd: number;
 	/** True when any cycle's cost included a provider-side estimate — the USD figures below then
 	 *  mix estimated and billed dollars, so they render with a `~` prefix. */
@@ -66,6 +94,42 @@ function cacheHitRatio(t: TokenUsage): number {
 	return denom === 0 ? 0 : t.cacheRead / denom;
 }
 
+/**
+ * Label for a failed cycle with no failed step — i.e. a pipeline guard rejected before or
+ * between steps. Guard errors are either `prefix:detail` (`pick:worktree-exists`) or a
+ * stable leading phrase (`plan needs rethink`). Keying on the part before the first colon
+ * keeps variable detail — paths, item ids, receipt names — from fragmenting the grouping
+ * into a long tail of one-count entries.
+ */
+function failureCause(error: string | null | undefined): string {
+	const text = (error ?? "").trim();
+	if (!text) return "unattributed";
+	const colon = text.indexOf(":");
+	return colon > 0 ? text.slice(0, colon) : text;
+}
+
+/**
+ * What actually ended a failed cycle.
+ *
+ * Two traps make the naive `steps.find(s => !s.ok)` wrong, because the pipeline logs **every
+ * attempt** of a retried step rather than only its final one:
+ *
+ * 1. A step that failed once and then succeeded on retry is not the cause at all — it recovered.
+ *    So collapse each step name to its *final* attempt before looking for a failure.
+ * 2. When several steps genuinely failed, the one that ended the cycle is the *last*, not the
+ *    first. `runPipeline`'s own diagnostic does the same thing (`[...steps].reverse().find`).
+ *
+ * If no step is still failing at the end, the cycle died on a pipeline guard between steps and
+ * the cycle `error` carries the reason.
+ */
+function terminalFailureCause(entry: CycleLogEntry): string {
+	const steps = entry.steps ?? [];
+	const finalAttemptOk = new Map<string, boolean>();
+	for (const s of steps) finalAttemptOk.set(s.name, s.ok !== false);
+	const terminal = [...steps].reverse().find((s) => finalAttemptOk.get(s.name) === false);
+	return terminal?.name ?? failureCause(entry.error);
+}
+
 export function reduce(entries: CycleLogEntry[]): Stats {
 	const totalTokens = emptyTokens();
 	const costByStep: Record<string, number> = {};
@@ -84,14 +148,29 @@ export function reduce(entries: CycleLogEntry[]): Stats {
 	let failed = 0;
 	let parked = 0;
 	let shipwrecked = 0;
+	const parksByClass: Record<string, number> = {};
+	const failuresByCause: Record<string, number> = {};
+	const costByProvider: Record<string, number> = {};
+	const costEstimatedByProvider: Record<string, boolean> = {};
+	const tokensByProvider: Record<string, TokenUsage> = {};
+	const stepsByProvider: Record<string, number> = {};
 	const itemsDelivered: DeliveredItem[] = [];
 
 	for (const entry of entries) {
 		totalCost += entry.total_cost ?? 0;
 		if (entry.costEstimated) anyCostEstimated = true;
-		if (entry.completed) completed++;
-		else failed++;
-		if (entry.parked) parked++;
+		// Three-way and mutually exclusive: a parked cycle is checkpointed, not failed.
+		if (entry.completed) {
+			completed++;
+		} else if (entry.parked) {
+			parked++;
+			const cls = entry.parkClass ?? "unrecorded";
+			parksByClass[cls] = (parksByClass[cls] ?? 0) + 1;
+		} else {
+			failed++;
+			const cause = terminalFailureCause(entry);
+			failuresByCause[cause] = (failuresByCause[cause] ?? 0) + 1;
+		}
 		if (entry.shipwrecked) shipwrecked++;
 
 		// Step aggregations: group by step name, find max attempt per (cycle, step)
@@ -101,11 +180,26 @@ export function reduce(entries: CycleLogEntry[]): Stats {
 		for (const s of entry.steps ?? []) {
 			costByStep[s.name] = (costByStep[s.name] ?? 0) + (s.cost ?? 0);
 			if (s.costEstimated) costEstimatedByStep[s.name] = true;
+
+			// Provider attribution. `provider` is absent on records predating #327, so those
+			// steps aggregate under `unattributed` instead of being charged to a driver that
+			// may not have run them.
+			const provider = s.provider ?? "unattributed";
+			costByProvider[provider] = (costByProvider[provider] ?? 0) + (s.cost ?? 0);
+			stepsByProvider[provider] = (stepsByProvider[provider] ?? 0) + 1;
+			if (s.costEstimated) costEstimatedByProvider[provider] = true;
+
 			if (s.tokens) {
 				if (!tokensByStep[s.name]) tokensByStep[s.name] = emptyTokens();
 				addTokens(tokensByStep[s.name], s.tokens);
 				addTokens(totalTokens, s.tokens);
 				addTokens(cycleTokens, s.tokens);
+				let providerTokens = tokensByProvider[provider];
+				if (!providerTokens) {
+					providerTokens = emptyTokens();
+					tokensByProvider[provider] = providerTokens;
+				}
+				addTokens(providerTokens, s.tokens);
 			}
 			const attempt = s.attempt ?? 1;
 			const prev = maxAttemptByStep.get(s.name) ?? 0;
@@ -164,7 +258,11 @@ export function reduce(entries: CycleLogEntry[]): Stats {
 	}
 
 	const recentFailures: RecentFailure[] = entries
-		.filter((e) => !e.completed)
+		// Parked cycles are excluded for the same reason they are excluded from `failedCycles`:
+		// a park is a resumable checkpoint, not a failure. Listing them here would contradict
+		// the counts directly above it in both the CLI and web dashboards. Park causes are
+		// reported by `parksByClass` instead.
+		.filter((e) => !e.completed && !e.parked)
 		.slice(-5)
 		.reverse()
 		.map((e) => {
@@ -184,6 +282,12 @@ export function reduce(entries: CycleLogEntry[]): Stats {
 		failedCycles: failed,
 		parkedCycles: parked,
 		shipwreckedCycles: shipwrecked,
+		parksByClass,
+		failuresByCause,
+		costByProvider,
+		costEstimatedByProvider,
+		tokensByProvider,
+		stepsByProvider,
 		totalCostUsd: totalCost,
 		costEstimated: anyCostEstimated,
 		totalTokens,
@@ -260,6 +364,44 @@ export function renderDashboard(stats: Stats): string {
 			lines.push(
 				`    ${name.padEnd(14)}  ${fmtUsd(stats.costByStep[name], stats.costEstimatedByStep[name]).padStart(8)}  ${fmtNum(tok.input).padStart(6)}  ${fmtNum(tok.output).padStart(5)}  ${fmtNum(tok.cacheRead).padStart(9)}  ${fmtPct(hit).padStart(5)}`,
 			);
+		}
+		lines.push("");
+	}
+
+	// Per-provider table — which driver the spend actually landed on. Iterating entries (rather
+	// than keys + re-indexing) keeps this clean under the strict config's noUncheckedIndexedAccess.
+	const providerRows = Object.entries(stats.costByProvider).sort(([, a], [, b]) => b - a);
+	if (providerRows.length > 0) {
+		lines.push(`  ${A.dim("By provider")}     ${"cost".padStart(8)}  ${"steps".padStart(5)}  ${"in".padStart(6)}  ${"out".padStart(5)}  ${"hit%".padStart(5)}`);
+		for (const [name, cost] of providerRows) {
+			const tok = stats.tokensByProvider[name] ?? emptyTokens();
+			lines.push(
+				`    ${name.padEnd(14)}  ${fmtUsd(cost, stats.costEstimatedByProvider[name]).padStart(8)}  ${String(stats.stepsByProvider[name] ?? 0).padStart(5)}  ${fmtNum(tok.input).padStart(6)}  ${fmtNum(tok.output).padStart(5)}  ${fmtPct(cacheHitRatio(tok)).padStart(5)}`,
+			);
+		}
+		lines.push("");
+	}
+
+	// Outcomes — the fail-closed split. A park is a resumable checkpoint; a failure is not.
+	const parkRows = Object.entries(stats.parksByClass).sort(([, a], [, b]) => b - a);
+	const failRows = Object.entries(stats.failuresByCause).sort(([, a], [, b]) => b - a);
+	if (parkRows.length > 0 || failRows.length > 0) {
+		lines.push(A.bold("Outcomes"));
+		if (parkRows.length > 0) {
+			lines.push(`  ${A.dim("Parked by cause")}`);
+			for (const [cls, count] of parkRows) {
+				const note = cls === "unrecorded" ? A.dim("  (logged before park classification)") : "";
+				lines.push(`    ${A.yellow(cls.padEnd(20))} ${String(count).padStart(3)}${note}`);
+			}
+		}
+		if (failRows.length > 0) {
+			lines.push(`  ${A.dim("Failed by cause")}`);
+			for (const [cause, count] of failRows) {
+				// Guard causes are whole error phrases, so clamp the label to keep the count column
+				// aligned. The full string stays in `recentFailures` below and in the jsonl.
+				const label = cause.length > 28 ? `${cause.slice(0, 27)}…` : cause;
+				lines.push(`    ${A.red(label.padEnd(28))} ${String(count).padStart(3)}`);
+			}
 		}
 		lines.push("");
 	}
