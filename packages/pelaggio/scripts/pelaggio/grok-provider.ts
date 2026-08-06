@@ -75,9 +75,10 @@ export function grokEffort(effort: StepSettings["effort"]): "low" | "medium" | "
 	return "high";
 }
 
-/** Pick the grok model to pass with `-m`. Never forward a Claude id; absence → grok CLI default. */
-export function selectGrokModel(settings: Pick<StepSettings, "model" | "codexModel">): string | undefined {
-	const candidate = settings.model ?? settings.codexModel;
+/** Pick the grok model to pass with `-m` from Grok's own slot only (issue #431). Never forward a
+ *  Claude id (defensive — correct routing fills `grokModel`); absence → grok CLI default. */
+export function selectGrokModel(settings: Pick<StepSettings, "grokModel">): string | undefined {
+	const candidate = settings.grokModel;
 	return candidate && !candidate.startsWith("claude-") ? candidate : undefined;
 }
 
@@ -348,7 +349,10 @@ export function grokServerRequestResponse(req: AcpIncomingRequest): unknown {
 
 export const runStep: StepProvider["runStep"] = async (name, prompt, opts, emit) => {
 	const resolved = resolveStepSettings(CONFIG, opts.profile, name);
-	const settings = { ...resolved, model: opts.executionOverride?.model ?? resolved.model, codexModel: opts.executionOverride?.codexModel ?? resolved.codexModel };
+	// A pooled Grok seat's realized model arrives in the generic `executionOverride.model`
+	// slot (DriverIdentity/ReviewSlot stay generic for non-Codex providers); route it into
+	// Grok's own `grokModel` slot so selection never scavenges the Claude model (issue #431).
+	const settings = { ...resolved, grokModel: opts.executionOverride?.model ?? resolved.grokModel };
 	const { budget, turns: baseTurns, effort } = settings;
 	const turns = opts.maxTurnsOverride ?? baseTurns;
 	const model = selectGrokModel(settings);

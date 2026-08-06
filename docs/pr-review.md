@@ -112,6 +112,28 @@ campaign-start drain's `findReviewCandidates` re-derives it from the forge and r
 Review always drains **before** revise, so a fresh local BLOCK is immediately revisable
 in the same window; a just-shipped PR has no red `review` yet, so revise ignores it.
 
+### PR-keyed gate-outcome record
+
+Every terminal local-runner review also writes a durable, atomic record at
+`MAIN_REPO/.dev/pr-review-gate-records/{prNumber}-{headSha}.json`. The schema-versioned
+record contains the item ID, `pass`/`block` gate, `ok` and subtype, agreement and
+convergence fields, cost/estimate/turn metrics, runner, and review timestamp. A park is
+transient and writes no record; a crash writes a synthetic `error_crash` block. Re-running
+the same `(prNumber, headSha)` overwrites that key, while a pushed revision creates a new
+record.
+
+This store is the durable right-hand side of a post-cycle join. A consumer joins it to a
+shipping `.dev/pelaggio-log.jsonl` cycle's `CycleProvenance` only when the record's PR
+number equals the number parsed from `provenance.prUrl` **and** its `headSha` equals
+`provenance.git.headSha`. Both predicates are required because one PR may have several
+reviewed revisions; `itemId` is useful for grouping but is not an identity fallback.
+Legacy provenance without a usable PR URL or head SHA remains unjoined rather than being
+guessed. The projection that performs this join is deferred.
+
+Only the local drain persists these files today. A CI runner has a read-only token and an
+ephemeral checkout, so its durable outcome remains the forge metrics marker until a later
+local materialization pass is implemented.
+
 ## CI runner flow
 
 The `pr-review` subcommand is the CI/local-runner implementation of this gate. It is
