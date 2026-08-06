@@ -12,6 +12,7 @@ import {
 	checkpoint,
 	classifyCycleDisposition,
 	classifyOutcome,
+	classifyParkReason,
 	classifySecurityReviewDiff,
 	classifyStepError,
 	computeImplementTurns,
@@ -1195,6 +1196,36 @@ describe("canRetryWithinBudget", () => {
 
 	it("disables the gate for a non-finite maxBudget (unset / unparseable --budget)", () => {
 		assert.equal(canRetryWithinBudget({ spent: 100, maxBudget: NaN, stepBudget: 25 }), true);
+	});
+});
+
+describe("classifyParkReason", () => {
+	it("lets a structured limitType win over any reason text", () => {
+		assert.equal(classifyParkReason(null, "paused"), "paused");
+		assert.equal(classifyParkReason(null, "sdk-outage"), "sdk-outage");
+		assert.equal(classifyParkReason("adversarial review dissent", "5h"), "rate-limit");
+	});
+
+	it("classifies the review-loop park reasons the pipeline actually emits", () => {
+		assert.equal(classifyParkReason("adversarial review could not bind current HEAD", ""), "review-binding");
+		assert.equal(classifyParkReason("adversarial review could not bind final reviewed HEAD", ""), "review-binding");
+		assert.equal(classifyParkReason("adversarial review escalation active", ""), "review-escalation");
+		assert.equal(classifyParkReason("adversarial review escalation write-failed", ""), "review-escalation");
+		assert.equal(classifyParkReason("adversarial review safety blocker", ""), "review-blocked");
+		assert.equal(classifyParkReason("adversarial review hard-block", ""), "review-blocked");
+		assert.equal(classifyParkReason("adversarial review dissent", ""), "review-blocked");
+		assert.equal(classifyParkReason("adversarial review budget", ""), "review-blocked");
+		assert.equal(classifyParkReason("adversarial review produced no loop result", ""), "review-blocked");
+	});
+
+	it("treats an effects failure after escalation as effects-failed, not escalation", () => {
+		assert.equal(classifyParkReason("shakedown-code effects failed after escalation: gh pr edit exploded", ""), "effects-failed");
+	});
+
+	it("returns unclassified for an absent or unrecognized reason", () => {
+		assert.equal(classifyParkReason(null, null), "unclassified");
+		assert.equal(classifyParkReason("", ""), "unclassified");
+		assert.equal(classifyParkReason("something nobody has seen before", ""), "unclassified");
 	});
 });
 
