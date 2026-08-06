@@ -61,7 +61,7 @@ const ALL_STEPS: readonly Step[] = [...STEPS, "shipwreck", "pr-review", "pr-veri
 
 // ── Model literals ─────────────────────────────────────────────────────
 
-const OPUS = "claude-opus-4-8";
+const OPUS = "claude-opus-5";
 const SONNET = "claude-sonnet-5";
 
 // ── Defaults ───────────────────────────────────────────────────────────
