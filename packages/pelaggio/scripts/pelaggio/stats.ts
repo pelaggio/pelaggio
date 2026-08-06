@@ -108,6 +108,28 @@ function failureCause(error: string | null | undefined): string {
 	return colon > 0 ? text.slice(0, colon) : text;
 }
 
+/**
+ * What actually ended a failed cycle.
+ *
+ * Two traps make the naive `steps.find(s => !s.ok)` wrong, because the pipeline logs **every
+ * attempt** of a retried step rather than only its final one:
+ *
+ * 1. A step that failed once and then succeeded on retry is not the cause at all — it recovered.
+ *    So collapse each step name to its *final* attempt before looking for a failure.
+ * 2. When several steps genuinely failed, the one that ended the cycle is the *last*, not the
+ *    first. `runPipeline`'s own diagnostic does the same thing (`[...steps].reverse().find`).
+ *
+ * If no step is still failing at the end, the cycle died on a pipeline guard between steps and
+ * the cycle `error` carries the reason.
+ */
+function terminalFailureCause(entry: CycleLogEntry): string {
+	const steps = entry.steps ?? [];
+	const finalAttemptOk = new Map<string, boolean>();
+	for (const s of steps) finalAttemptOk.set(s.name, s.ok !== false);
+	const terminal = [...steps].reverse().find((s) => finalAttemptOk.get(s.name) === false);
+	return terminal?.name ?? failureCause(entry.error);
+}
+
 export function reduce(entries: CycleLogEntry[]): Stats {
 	const totalTokens = emptyTokens();
 	const costByStep: Record<string, number> = {};
@@ -146,9 +168,8 @@ export function reduce(entries: CycleLogEntry[]): Stats {
 			parksByClass[cls] = (parksByClass[cls] ?? 0) + 1;
 		} else {
 			failed++;
-			const failingStep = (entry.steps ?? []).find((s) => s.ok === false);
-			const key = failingStep?.name ?? failureCause(entry.error);
-			failuresByCause[key] = (failuresByCause[key] ?? 0) + 1;
+			const cause = terminalFailureCause(entry);
+			failuresByCause[cause] = (failuresByCause[cause] ?? 0) + 1;
 		}
 		if (entry.shipwrecked) shipwrecked++;
 
@@ -237,7 +258,11 @@ export function reduce(entries: CycleLogEntry[]): Stats {
 	}
 
 	const recentFailures: RecentFailure[] = entries
-		.filter((e) => !e.completed)
+		// Parked cycles are excluded for the same reason they are excluded from `failedCycles`:
+		// a park is a resumable checkpoint, not a failure. Listing them here would contradict
+		// the counts directly above it in both the CLI and web dashboards. Park causes are
+		// reported by `parksByClass` instead.
+		.filter((e) => !e.completed && !e.parked)
 		.slice(-5)
 		.reverse()
 		.map((e) => {

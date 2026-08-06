@@ -221,6 +221,44 @@ describe("reduce — failure attribution", () => {
 		const entry = mkEntry({ cycle: 1, completed: false, error: "implement failed", steps: [mkStep({ name: "implement", ok: false })] });
 		assert.deepEqual(reduce([entry]).failuresByCause, { implement: 1 });
 	});
+
+	it("ignores a step that failed once but recovered on retry", () => {
+		// The pipeline logs every attempt. implement failed then succeeded, so the cycle died on
+		// the later guard — attributing this to implement would blame a step that recovered.
+		const entry = mkEntry({
+			cycle: 1,
+			completed: false,
+			error: "nothing to ship: branch only touches docs/plans/",
+			steps: [mkStep({ name: "implement", attempt: 1, ok: false }), mkStep({ name: "implement", attempt: 2, ok: true })],
+		});
+		assert.deepEqual(reduce([entry]).failuresByCause, { "nothing to ship": 1 });
+	});
+
+	it("attributes to the terminal failure, not the first, when several steps failed", () => {
+		const entry = mkEntry({
+			cycle: 1,
+			completed: false,
+			steps: [mkStep({ name: "implement", attempt: 1, ok: false }), mkStep({ name: "implement", attempt: 2, ok: true }), mkStep({ name: "ship", ok: false })],
+		});
+		assert.deepEqual(reduce([entry]).failuresByCause, { ship: 1 });
+	});
+});
+
+describe("reduce — recentFailures excludes parked", () => {
+	it("omits parked cycles so the list agrees with the disjoint outcome counts", () => {
+		const entries: CycleLogEntry[] = [
+			mkEntry({ cycle: 1, item: "BAD", completed: false, error: "implement failed", steps: [mkStep({ name: "implement", ok: false })] }),
+			mkEntry({ cycle: 2, item: "PARKED", completed: false, parked: true, error: "parked", parkClass: "review-blocked" }),
+		];
+		const s = reduce(entries);
+		assert.deepEqual(
+			s.recentFailures.map((f) => f.item),
+			["BAD"],
+			"a resumable checkpoint must not be listed as a recent failure",
+		);
+		assert.equal(s.parkedCycles, 1);
+		assert.equal(s.failedCycles, 1);
+	});
 });
 
 describe("reduce — provider attribution", () => {

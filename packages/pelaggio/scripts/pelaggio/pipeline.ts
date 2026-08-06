@@ -2572,6 +2572,12 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					consecutiveTransientErrors++;
 					consecutiveQuarantines = 0;
 					if (consecutiveTransientErrors >= CONSECUTIVE_TRANSIENT_ERROR_LIMIT && !parkSignal.parked) {
+						// NOTE: this relabel is in-memory only and happens *after* runPipeline's
+						// finish() already appended this cycle's log entry, which the append-only
+						// log never reconciles. So this cycle stays logged as a `transient sdk
+						// error` failure with no `parkClass`; the `sdk-outage` class surfaces on
+						// the next cycle, which sees `parkSignal.parked` and takes the early park
+						// return. Stats read accordingly — see the ParkClass doc in types.ts.
 						parkSignal.parked = true;
 						parkSignal.resetsAt = 0;
 						parkSignal.limitType = "sdk-outage";

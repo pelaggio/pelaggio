@@ -201,7 +201,17 @@ export interface CycleProvenance {
 
 // ── Log entries (read from .dev/pelaggio-log.jsonl) ───────────────────
 
-/** Closed set of park causes. Assigned by `classifyParkReason` in helpers.ts. */
+/**
+ * Closed set of park causes. Assigned by `classifyParkReason` in helpers.ts.
+ *
+ * Caveat on `sdk-outage`: sustained-outage detection (#128) lives in `runOrchestrator`, which
+ * relabels the tripping cycle's in-memory result *after* `runPipeline`'s `finish()` has already
+ * appended that cycle's log entry. The append-only log is never reconciled, so the cycle that
+ * *trips* the outage records as an ordinary `transient sdk error` failure, not a park. The
+ * `sdk-outage` class therefore lands on the *next* cycle, which observes the shared
+ * `parkSignal.parked` and exits through the early park return. Read outage parks as "the outage
+ * was active by this cycle", not "this cycle tripped it".
+ */
 export type ParkClass = "rate-limit" | "paused" | "sdk-outage" | "review-escalation" | "review-blocked" | "review-binding" | "effects-failed" | "unclassified";
 
 export interface CycleLogEntry {
