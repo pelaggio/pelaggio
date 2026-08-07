@@ -162,8 +162,10 @@ later, in a different cycle.
 
 Two things fall out.
 
-**`review-request-queue.ts` is the template.** It already has every property the rest of
-the system lacks: an idempotency key `(prNumber, headSha)`; a claim protocol (atomic
+**`review-request-queue.ts` supplies the contract** (but see ADR-0026 decision 3 — its own
+four-hour fixed leases carry the time-lease fail-open this document criticises elsewhere,
+so the shape is the template, not the implementation). It already has every property the
+rest of the system lacks: an idempotency key `(prNumber, headSha)`; a claim protocol (atomic
 rename to `.claimed`); a crash protocol (reclaim after `REVIEW_CLAIM_STALE_MS`); a
 rollback edge (rename back on park); and — critically — *"Record completion always
 requires a POSITIVE terminal check … never 'absent from the forge listing'."* That

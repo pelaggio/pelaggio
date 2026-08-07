@@ -25,7 +25,7 @@ Generalizes ADR-0025's `land(attempt) → Landed | Contended` executor into a re
 
 ### G2 — Quota: reserve / settle-observed / refund-unused
 - Subsumes **#402** (budget reservation ledger) — already scoped M and specified.
-- Subsumes the **accounting half of #460** (spend abandoned at the cap). #460's *re-drain*
+- Subsumes the **accounting half of #460** (#460 now closed; both halves owned) (spend abandoned at the cap). #460's *re-drain*
   half is not a quota question — its body specifies `campaignDrainDeferred = true` at the
   cap break — so it is co-owned with G6b, which supplies the reconciler that re-drives the
   abandoned drain. Splitting it across two primitives is the honest reading; assigning it
@@ -61,9 +61,10 @@ Generalizes ADR-0025's `land(attempt) → Landed | Contended` executor into a re
   identity, so the queue drain and a durable retry counter keyed alongside
   `(prNumber, headSha)` ship inside G5, not after it. Local-runner-only.
 
-### G6a — Liveness reader
-- **#461** (trustworthy session-liveness primitive), already correctly scoped. Strict
-  precondition for every destructive operation in G6b.
+### G6a — Liveness reader → **this is #461 itself**
+- **#461** (trustworthy session-liveness primitive), already correctly scoped, is the item.
+  No wrapper G-item: #469 was created as one and closed as redundant. Strict precondition
+  for every destructive operation in G6b.
 - Scope: M. Depends on nothing.
 
 ### G6b — Reconcilers over off-process transitions
@@ -151,9 +152,19 @@ Nothing below has been executed. All roadmap writes go through `npx pelaggio roa
    duplicate or conflicting implementations. The ready queue would *grow*, which is the
    precise opposite of a collapse.
 
-   Two exceptions stay open because a G-item does not fully contain them: **#460**, whose
-   two halves are split across G2 and G6b, and **#461**, which *is* G6a rather than being
-   absorbed by it.
+   **Both earlier "exceptions" were incoherent and have been corrected.** The reasoning was
+   that #460 and #461 were not *fully* contained by a single G-item. But readiness does not
+   care about that: all of #460's work is owned (accounting half → G2, re-drain half → G6b,
+   each naming it) and all of #461's work is the liveness primitive — so leaving them open
+   left them pickable **alongside their own replacements**, the precise failure this
+   mutation exists to prevent.
+
+   - **#460 is closed**, superseded by G2 + G6b jointly.
+   - **#461 stays open and G6a (#469) is closed instead.** G6a was a thin wrapper whose own
+     body said #461 "stays open as the item of record" — so it, not #461, was the duplicate.
+     #461 has the fuller charter; G6b names it directly as its arming precondition.
+
+   Caught by codex in the #463 review gate, after execution.
 
 3. **Leave** #445, #458, #297 and #434 untouched. No new ticket for single-iteration
    termination — see the residue section for why the earlier draft's was withdrawn.
