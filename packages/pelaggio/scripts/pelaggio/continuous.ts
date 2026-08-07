@@ -6,6 +6,7 @@
  * definition of the stop conditions.
  */
 
+import { readFileSync } from "node:fs";
 import type { FlowPolicy } from "./flow-policy.js";
 import type { RoadmapSource } from "./roadmap/index.js";
 import { buildFlowSnapshot } from "./roadmap-cli.js";
@@ -139,18 +140,90 @@ export function nextLocalMidnightMs(nowMs: number = Date.now()): number {
 }
 
 /**
+ * Sum `total_cost` of cycle-log lines whose `ts` falls on the local calendar day
+ * of `nowMs`. Seeds `DayBudgetTracker` so a continuous process restart (fresh
+ * launch, daemon pause→resume, crash restart) reconstructs today's spend from the
+ * durable ledger (`.dev/pelaggio-log.jsonl`) instead of resetting to 0 (#82 item 6:
+ * "No new state file").
+ *
+ * Absent ledger → 0: no prior spend to reconstruct. Malformed lines and
+ * missing/non-finite `total_cost` values are skipped rather than thrown. Counts only
+ * positive finite costs (mirrors `DayBudgetTracker.add`) and keys on the local
+ * calendar day (same basis as `roll()`).
+ *
+ * Only a genuinely absent ledger (ENOENT) means zero. Every other I/O failure throws:
+ * seeding the tracker at $0 when spend may exist on disk would silently grant a fresh
+ * full daily budget — the one failure mode a spend cap must not have.
+ *
+ * The read is attempted directly rather than gated on `existsSync`, which cannot tell
+ * "absent" from "unreadable": it returns false when the file exists but a parent
+ * directory denies traversal (EACCES/EPERM), which would route a permission fault into
+ * the absent-means-zero path and defeat the check entirely.
+ */
+export function sumDaySpendFromLog(logPath: string, nowMs: number = Date.now()): number {
+	let raw: string;
+	try {
+		raw = readFileSync(logPath, "utf8");
+	} catch (e) {
+		if ((e as NodeJS.ErrnoException)?.code === "ENOENT") return 0;
+		const msg = e instanceof Error ? e.message : String(e);
+		throw new Error(`day-budget ledger could not be read (${logPath}): ${msg}. Refusing to reconstruct today's spend as $0 — fix the ledger or clear the day budget.`);
+	}
+	const today = dayKey(nowMs);
+	let sum = 0;
+	for (const line of raw.split("\n")) {
+		const trimmed = line.trim();
+		if (!trimmed) continue;
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(trimmed);
+		} catch {
+			continue;
+		}
+		if (typeof parsed !== "object" || parsed === null) continue;
+		const { total_cost: cost, ts } = parsed as { total_cost?: unknown; ts?: unknown };
+		if (typeof cost !== "number" || !Number.isFinite(cost) || cost <= 0) continue;
+		if (typeof ts !== "string") continue;
+		const tsMs = Date.parse(ts);
+		if (Number.isNaN(tsMs) || dayKey(tsMs) !== today) continue;
+		sum += cost;
+		// Accumulator overflow is a fail-open in disguise: once `sum` reaches Infinity,
+		// DayBudgetTracker's `Number.isFinite(initialSpent)` guard converts it to 0 and grants a
+		// fresh full budget. Two 1e308 rows are enough. A non-finite total means spend is at least
+		// as large as anything representable, so refuse rather than seed a number we cannot trust.
+		if (!Number.isFinite(sum)) {
+			throw new Error(`day-budget ledger reconstructs to a non-finite total (${logPath}): the accumulated spend overflowed. Refusing to seed an untrustworthy day spend — inspect the ledger for corrupt total_cost values.`);
+		}
+	}
+	return sum;
+}
+
+/**
  * Track spend against a per-day budget. Returns whether the day budget is now
  * exhausted after adding `cost`. Resets the accumulator when the calendar day
- * rolls over.
+ * rolls over. `initialSpent` seeds today's spend on construction (process-start
+ * reconstruction via `sumDaySpendFromLog`).
  */
 export class DayBudgetTracker {
-	private day = dayKey();
-	private spent = 0;
+	private day: string;
+	private spent: number;
 
 	constructor(
 		private readonly dayBudget: number | undefined,
 		private readonly now: () => number = Date.now,
-	) {}
+		initialSpent = 0,
+		initialDay?: string,
+	) {
+		// Source the day key from the injected clock (not a real-`Date.now()` field
+		// initializer) so a tracker seeded under a test clock does not roll-to-zero on
+		// its first access when the injected date differs from wall-clock today.
+		// `initialDay` lets the caller pin it to the *same* instant the ledger seed was
+		// computed from: sampling the clock twice straddles local midnight if the
+		// synchronous scan crosses it, which would bind yesterday's reconstructed spend
+		// to today and idle the campaign for a full extra day.
+		this.day = initialDay ?? dayKey(this.now());
+		this.spent = Number.isFinite(initialSpent) && initialSpent > 0 ? initialSpent : 0;
+	}
 
 	/** Current day spend (after any rollover). */
 	get daySpent(): number {

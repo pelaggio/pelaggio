@@ -1,5 +1,10 @@
 import type { ProviderName } from "./types.js";
 
+// A realized driver identity. Codex carries its model in `codexModel`; Claude, Grok, and OpenCode
+// each carry their already-realized provider-specific model in the generic `model` field — the
+// provider-specific profile slot (`grokModel`/`openCodeModel`) is projected into `model` at the
+// point a raw StepSettings is realized (see `modelForProvider` in config.ts, #431), so this runtime
+// shape stays generic and does not widen with storage-only fields.
 export type DriverIdentity = { provider: "codex"; codexModel?: string } | { provider: "claude" | "grok" | "opencode"; model?: string };
 
 export interface DriverAssignmentState {

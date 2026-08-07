@@ -27,12 +27,18 @@ review:
   # Opt-in; unattended authoring loops require key authentication.
   authoring:
     enabled: true
-    # grok is temporarily out of the reviewer seats: its Build balance is exhausted
-    # (402), which pelaggio masks as a turn-1 "Internal error" (#434 makes billing
-    # errors distinct + non-fatal). Restore the three-reviewer panel after top-up.
+    # Three-reviewer panel restored 2026-08-05 after the grok Build top-up.
+    # Caveat until #455 lands: a grok balance failure (402) has no distinct fault
+    # class. Grok's own "Internal error" text passes through as a generic error_sdk,
+    # so a grok seat failing at turn 1 means check the Build balance first.
+    # (#434 is the concurrent-boot race — a different fault with the same symptom;
+    # landing it will NOT fix this masking.)
     reviewers:
       - { id: claude, provider: claude }
-      - { id: codex, provider: codex, codex-model: gpt-5-codex }
+      # No codex-model pin: this environment's Codex runs on a ChatGPT account
+      # where 'gpt-5-codex' 400s; the CLI default is correct here.
+      - { id: codex, provider: codex }
+      - { id: grok, provider: grok }
   # Dogfooding posture: highest-quality gate, still auto-merging. Two independent
   # review iterations over a three-driver fan-out, with a structurally-different
   # scalar verifier.
@@ -60,29 +66,43 @@ models:
     standard:
       providers:
         pick: claude
-        plan: [claude, codex]
-        shakedown-plan: [claude, codex]
-        implement: [claude, codex]
-        shakedown-code: [claude, codex]
+        # Claude-conservation posture (2026-08-05): the token-heavy authoring
+        # selection sets exclude Claude entirely and rotate grok/codex, with grok
+        # first — it currently has the most subscription room. `implement` alone was
+        # 52% of all-time spend, so this is where conservation actually bites.
+        # These are selection sets: exactly one driver runs per cycle.
+        plan: [grok, codex]
+        shakedown-plan: [grok, codex]
+        implement: [grok, codex]
+        # Selection set, author-excluded: keeps the final code review cross-model
+        # against a grok/codex implementation while dropping Claude's share from
+        # 1-in-2 to 1-in-3.
+        shakedown-code: [claude, grok, codex]
         ship: claude
         shipwreck: claude
         # Fan-out set: every driver runs the same discovery prompt concurrently and
         # every (driver × label) cell must return a valid PASS — all-pass/fail-closed.
-        # grok is temporarily out of ALL pools: its Build balance is exhausted (402),
-        # masked today as a turn-1 "Internal error" (#434 makes billing errors distinct
-        # + non-fatal). Restore grok across the pools after top-up.
-        pr-review: [claude, codex]
+        # Widened to three drivers 2026-08-06. The earlier two-driver rationale measured
+        # cost *per pass* and concluded a third seat "adds cost without conserving Claude
+        # (Claude runs either way)". True per pass; wrong for cost-to-land — under-enumeration
+        # is what forces repeat gate runs, and Claude runs on every one. A third seat cuts the
+        # number of passes, and the two added cells are grok (Build subscription), so Claude's
+        # per-pass cell count is unchanged: we pay in a resource we have for one we don't.
+        # Caveat: this is fail-closed, so an exhausted grok Build balance blocks every PR — a
+        # 402 surfaces as `block (infra)`, not a real finding (see #428). Until #455 gives
+        # balance-exhaustion its own non-blocking fault class, keep the Build balance funded.
+        pr-review: [claude, codex, grok]
         # Scalar verifier, pinned off the pool's first entry (claude) so
         # provider-diversity: require is satisfied by construction.
         pr-verify: codex
     # Quick mode (S/XS/bug) skips plan+shakedown-plan and runs implement-only under
-    # this profile. Offload that implement to Codex too so small bugs also lean on
-    # Codex; the model stays Sonnet-priced in config but a claude-* id is never
-    # forwarded, so Codex uses its CLI default.
+    # this profile. Its implement mirrors the standard profile's Claude-conservation
+    # posture so small bugs lean on grok/codex too; a claude-* id is never forwarded
+    # to those drivers, so each uses its own default model.
     quick:
       providers:
         pick: claude
-        implement: [claude, codex]
-        shakedown-code: [claude, codex]
+        implement: [grok, codex]
+        shakedown-code: [claude, grok, codex]
         ship: claude
         shipwreck: claude

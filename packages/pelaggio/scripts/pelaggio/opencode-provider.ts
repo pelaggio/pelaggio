@@ -85,11 +85,12 @@ export function opencodeTimeoutMs(turns: number): number {
 }
 
 /**
- * Pick the model to pass with `-m`. OpenCode addresses backends as `provider/model`; never forward a
- * bare Claude SDK id (same filter as Grok/Codex). Absence → the OpenCode CLI's configured default.
+ * Pick the model to pass with `-m` from OpenCode's own slot only (issue #431). OpenCode addresses
+ * backends as `provider/model`; never forward a bare Claude SDK id (defensive — correct routing
+ * fills `openCodeModel`). Absence → the OpenCode CLI's configured default.
  */
-export function selectOpenCodeModel(settings: Pick<StepSettings, "model" | "codexModel">): string | undefined {
-	const candidate = settings.model ?? settings.codexModel;
+export function selectOpenCodeModel(settings: Pick<StepSettings, "openCodeModel">): string | undefined {
+	const candidate = settings.openCodeModel;
 	return candidate && !candidate.startsWith("claude-") ? candidate : undefined;
 }
 
@@ -406,7 +407,10 @@ function parseJsonlChunk(buffer: string, lines: JsonObject[]): string {
 
 const runStep: StepProvider["runStep"] = async (name, prompt, opts, emit) => {
 	const resolved = resolveStepSettings(CONFIG, opts.profile, name);
-	const settings = { ...resolved, model: opts.executionOverride?.model ?? resolved.model, codexModel: opts.executionOverride?.codexModel ?? resolved.codexModel };
+	// A pooled OpenCode seat's realized model arrives in the generic `executionOverride.model`
+	// slot (DriverIdentity/ReviewSlot stay generic for non-Codex providers); route it into
+	// OpenCode's own `openCodeModel` slot so selection never scavenges the Claude model (issue #431).
+	const settings = { ...resolved, openCodeModel: opts.executionOverride?.model ?? resolved.openCodeModel };
 	const { budget, turns: baseTurns } = settings;
 	const turns = opts.maxTurnsOverride ?? baseTurns;
 	const model = selectOpenCodeModel(settings);

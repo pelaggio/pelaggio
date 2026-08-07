@@ -1,0 +1,4 @@
+{
+	"schemaVersion": 1,
+	"fixtures": ["clean", "single-blocker", "safety-blocker", "plausible-wrong"]
+}

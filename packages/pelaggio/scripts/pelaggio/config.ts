@@ -61,7 +61,7 @@ const ALL_STEPS: readonly Step[] = [...STEPS, "shipwreck", "pr-review", "pr-veri
 
 // ── Model literals ─────────────────────────────────────────────────────
 
-const OPUS = "claude-opus-4-8";
+const OPUS = "claude-opus-5";
 const SONNET = "claude-sonnet-5";
 
 // ── Defaults ───────────────────────────────────────────────────────────
@@ -79,6 +79,10 @@ export interface ResolvedConfig {
 	effort: Record<Step, Effort>;
 	modelProfiles: Record<string, Partial<Record<Step, string>>>;
 	profileCodexModels: Record<string, Partial<Record<Step, string>>>;
+	/** Sparse per-profile Grok/OpenCode model maps (issue #431). Mirror `profileCodexModels`:
+	 *  a provider only receives a model for a step it explicitly names, else its CLI default. */
+	profileGrokModels: Record<string, Partial<Record<Step, string>>>;
+	profileOpenCodeModels: Record<string, Partial<Record<Step, string>>>;
 	profileBudgets: Record<string, Partial<Record<Step, number>>>;
 	profileTurnLimits: Record<string, Partial<Record<Step, number>>>;
 	profileEffort: Record<string, Partial<Record<Step, Effort>>>;
@@ -386,6 +390,8 @@ function parseSparseStepRecord<T>(override: unknown, section: string, validate: 
 interface ParsedProfiles {
 	models: Record<string, Partial<Record<Step, string>>>;
 	codexModels: Record<string, Partial<Record<Step, string>>>;
+	grokModels: Record<string, Partial<Record<Step, string>>>;
+	openCodeModels: Record<string, Partial<Record<Step, string>>>;
 	budgets: Record<string, Partial<Record<Step, number>>>;
 	turnLimits: Record<string, Partial<Record<Step, number>>>;
 	effort: Record<string, Partial<Record<Step, Effort>>>;
@@ -427,11 +433,13 @@ function parseProfiles(defaults: Record<string, Partial<Record<Step, string>>>, 
 	for (const [name, base] of Object.entries(defaults)) models[name] = { ...base };
 	const budgets: Record<string, Partial<Record<Step, number>>> = {};
 	const codexModels: Record<string, Partial<Record<Step, string>>> = {};
+	const grokModels: Record<string, Partial<Record<Step, string>>> = {};
+	const openCodeModels: Record<string, Partial<Record<Step, string>>> = {};
 	const turnLimits: Record<string, Partial<Record<Step, number>>> = {};
 	const effort: Record<string, Partial<Record<Step, Effort>>> = {};
 	const providers: Record<string, Partial<Record<Step, ProviderSelection>>> = {};
 
-	if (override === undefined) return { models, codexModels, budgets, turnLimits, effort, providers };
+	if (override === undefined) return { models, codexModels, grokModels, openCodeModels, budgets, turnLimits, effort, providers };
 	if (!isPlainObject(override)) {
 		throw new Error(`${configPath}: expected \`models.profiles\` to be a map, got ${Array.isArray(override) ? "array" : typeof override}`);
 	}
@@ -459,8 +467,12 @@ function parseProfiles(defaults: Record<string, Partial<Record<Step, string>>>, 
 		if (Object.keys(p).length > 0) providers[name] = p;
 		const cm = parseSparseStepRecord(profile.codex, `models.profiles.${name}.codex`, isString, configPath);
 		if (Object.keys(cm).length > 0) codexModels[name] = cm;
+		const gm = parseSparseStepRecord(profile.grok, `models.profiles.${name}.grok`, isString, configPath);
+		if (Object.keys(gm).length > 0) grokModels[name] = gm;
+		const om = parseSparseStepRecord(profile.opencode, `models.profiles.${name}.opencode`, isString, configPath);
+		if (Object.keys(om).length > 0) openCodeModels[name] = om;
 	}
-	return { models, codexModels, budgets, turnLimits, effort, providers };
+	return { models, codexModels, grokModels, openCodeModels, budgets, turnLimits, effort, providers };
 }
 
 function parseFile(configPath: string): Record<string, unknown> {
@@ -514,6 +526,8 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 	const {
 		models: modelProfiles,
 		codexModels: profileCodexModels,
+		grokModels: profileGrokModels,
+		openCodeModels: profileOpenCodeModels,
 		budgets: profileBudgets,
 		turnLimits: profileTurnLimits,
 		effort: profileEffort,
@@ -908,6 +922,8 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		effort,
 		modelProfiles,
 		profileCodexModels,
+		profileGrokModels,
+		profileOpenCodeModels,
 		profileBudgets,
 		profileTurnLimits,
 		profileEffort,
@@ -938,7 +954,31 @@ export interface StepSettings {
 	effort: Effort;
 	model: string | undefined;
 	codexModel: string | undefined;
+	/** Sparse per-profile Grok/OpenCode model slots (issue #431). Like `codexModel`, they
+	 *  stay `string | undefined` with no default fill: absence delegates to the CLI default. */
+	grokModel: string | undefined;
+	openCodeModel: string | undefined;
 	provider: ProviderName;
+}
+
+/**
+ * Project the model a given provider should run for these resolved settings (issue #431).
+ * Routing glue, not a fallback policy: each provider carries its own slot (`model` for Claude,
+ * `codexModel`/`grokModel`/`openCodeModel` for the subprocess providers), so a Grok/OpenCode
+ * seat never scavenges the Claude `model` slot. Used at conversion sites that turn a raw
+ * `StepSettings` (a profile default) into a realized driver identity or execution override.
+ */
+export function modelForProvider(settings: StepSettings, provider: ProviderName): string | undefined {
+	switch (provider) {
+		case "codex":
+			return settings.codexModel;
+		case "grok":
+			return settings.grokModel;
+		case "opencode":
+			return settings.openCodeModel;
+		default:
+			return settings.model;
+	}
 }
 
 /**
@@ -948,8 +988,9 @@ export interface StepSettings {
  * so a missing key falls through to the always-present global — a resolution can
  * never surface `undefined` for budget/turns/effort. `model` and `codexModel`
  * stay `string | undefined` (a profile need not name every step; the SDK/CLI
- * defaults). `codexModel` mirrors `model` as a sparse per-profile lookup with
- * no default fill. `provider` mirrors `model`'s per-profile lookup but falls back to
+ * defaults). `codexModel`, `grokModel`, and `openCodeModel` each mirror `model` as
+ * sparse per-profile lookups with no default fill (issue #431), so each subprocess
+ * provider receives only its own slot. `provider` mirrors `model`'s per-profile lookup but falls back to
  * `DEFAULT_PROVIDER` instead of `undefined`, so it never surfaces unset — every
  * present and future step resolves to a concrete backend with no exhaustive map.
  */
@@ -962,6 +1003,8 @@ export function resolveStepSettings(config: ResolvedConfig, profile: string, ste
 		effort: config.profileEffort[profile]?.[step] ?? config.effort[step],
 		model: config.modelProfiles[profile]?.[step] ?? config.modelProfiles[profile]?.[inheritedStep],
 		codexModel: config.profileCodexModels[profile]?.[step] ?? config.profileCodexModels[profile]?.[inheritedStep],
+		grokModel: config.profileGrokModels[profile]?.[step] ?? config.profileGrokModels[profile]?.[inheritedStep],
+		openCodeModel: config.profileOpenCodeModels[profile]?.[step] ?? config.profileOpenCodeModels[profile]?.[inheritedStep],
 		provider: Array.isArray(selection) ? selection[0] : selection,
 	};
 }

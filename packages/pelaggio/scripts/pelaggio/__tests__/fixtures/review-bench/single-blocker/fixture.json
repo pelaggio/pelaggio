@@ -1,0 +1,29 @@
+{
+	"schemaVersion": 1,
+	"id": "single-blocker",
+	"description": "Reviewer emits one non-safety judgment must-fix (allowlisted judgment ruleId + benign path); the Judge retains it with ruling fixable-blocker. Terminal: hard-block / block.",
+	"policy": {
+		"reviewers": [{ "id": "reviewer-1", "provider": "claude" }],
+		"judge": { "id": "judge", "provider": "opencode" },
+		"maxPasses": 1,
+		"budgetCap": 180
+	},
+	"classificationContext": { "changedFiles": ["src/widget.ts"] },
+	"recordings": [
+		{
+			"role": "reviewer",
+			"seatId": "reviewer-1",
+			"pass": 1,
+			"assistantText": "AUTHORING_REVIEW_FINDINGS\n{\"schemaVersion\":3,\"summary\":\"One style must-fix.\",\"findings\":[{\"severity\":\"must-fix\",\"message\":\"Rename the ambiguous variable `x` to a descriptive name.\",\"path\":\"src/widget.ts\",\"line\":42,\"ruleId\":\"pelaggio/judgment/style\"}]}\nEND_AUTHORING_REVIEW_FINDINGS"
+		},
+		{
+			"role": "judge",
+			"seatId": "judge",
+			"pass": 1,
+			"assistantText": "AUTHORING_REVIEW_JUDGE\n{\"schemaVersion\":1,\"decisions\":[{\"candidateId\":\"C1\",\"decision\":\"survives\",\"rationale\":\"The naming issue is a real, fixable style blocker.\",\"ruling\":\"fixable-blocker\"}]}\nEND_AUTHORING_REVIEW_JUDGE"
+		}
+	],
+	"groundTruthBlockers": [
+		{ "fingerprint": "[\"Rename the ambiguous variable `x` to a descriptive name.\",\"src/widget.ts\",42]", "class": "judgment" }
+	]
+}

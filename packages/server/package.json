@@ -16,7 +16,7 @@
 		"start": "tsx scripts/server.ts",
 		"typecheck": "pnpm -w exec tsc --noEmit --pretty false -p packages/server",
 		"build": "pnpm run typecheck && tsx -e \"import('./src/app.ts')\"",
-		"test": "tsx --test __tests__/*.test.ts"
+		"test": "tsx --test --test-timeout=60000 __tests__/*.test.ts"
 	},
 	"dependencies": {
 		"@hono/node-server": "^2.0.12",

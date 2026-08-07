@@ -1,7 +1,8 @@
 import { execSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync } from "node:fs";
-import { basename, delimiter, extname, isAbsolute, join, resolve } from "node:path";
+import { accessSync, appendFileSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, delimiter, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import {
 	CONFIG,
@@ -9,6 +10,7 @@ import {
 	DEFAULT_SHIP_TARGET,
 	isPipelineStep,
 	LOG_PATH,
+	modelForProvider,
 	type PipelineStep,
 	REPO,
 	REVIEW_CONFIG,
@@ -26,7 +28,7 @@ import {
 } from "./config.js";
 import { forbiddenRootsForConfinement } from "./confinement/roots.js";
 import { type AcceptedSession, captureEvaluatorContext, createSessionController, firstDiffPathsByRoot, resolveEligibleSessions, revalidateChangedRoot, type SessionController, type SessionEvaluatorContext } from "./confinement/sessions.js";
-import { continuousCycleCap, DayBudgetTracker, freeQueueProbe, nextLocalMidnightMs, resolveContinuousConfig } from "./continuous.js";
+import { continuousCycleCap, DayBudgetTracker, dayKey, freeQueueProbe, nextLocalMidnightMs, resolveContinuousConfig, sumDaySpendFromLog } from "./continuous.js";
 import { appendDecisions as appendDecisionsDefault, appendReviewEscalation as appendReviewEscalationDefault, lookupReviewEscalation as lookupReviewEscalationDefault } from "./decisions.js";
 import { createDriverAssignmentState, type DriverIdentity, recordArtifactAuthor, resolveStaticAuthor, selectAuthor, selectReviewers } from "./driver-assignment.js";
 import {
@@ -52,6 +54,7 @@ import {
 	checkpoint,
 	classifyCycleDisposition,
 	classifyOutcome,
+	classifyParkReason,
 	computeImplementTurns,
 	createMainCheckoutDeltaObserver,
 	createMutex,
@@ -90,7 +93,8 @@ import {
 	verifyShipLanded,
 } from "./helpers.js";
 import { type NotifyConfig, notifyCycle, notifyDecision as notifyDecisionEvent, notifyStrandedReview, sendNotification as sendNotificationDefault } from "./notify.js";
-import { buildFailClosedComment, runPrReviewGate } from "./pr-review-cli.js";
+import { buildFailClosedComment, type PrReviewGateResult, runPrReviewGate } from "./pr-review-cli.js";
+import { gateRecordsDir, type NewPrReviewGateRecord, writePrReviewGateRecord } from "./pr-review-gate-record.js";
 import { capabilityMapFrom, resolveAuthoringReviewConfig } from "./provider-routing.js";
 import { runReviewLoop } from "./review/loop.js";
 import { type ReviewRecord, renderReviewRecord, writeReviewRecord } from "./review/record.js";
@@ -345,7 +349,14 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		} = {},
 	): Promise<StepResult> {
 		const settings = resolveStepSettings(CONFIG, profile, name);
-		const realized = executionOverride ?? settings;
+		// Normalize into a realized driver identity for logging + effects attribution. An
+		// `executionOverride` is already realized (its generic `model`/`codexModel` was projected
+		// when the pooled candidate/seat was chosen), so read it as-is. A raw `StepSettings` —
+		// a single-provider, non-pooled step (e.g. `providers.<step>: grok`) — must project its
+		// provider-specific slot here, or a Grok/OpenCode step would record the top-level Claude id
+		// and corrupt `findLoggedArtifactAuthor` recovery and cycle provenance (issue #431).
+		const realized: { provider: import("./types.js").ProviderName; model?: string; codexModel?: string } =
+			executionOverride ?? (settings.provider === "codex" ? { provider: "codex", codexModel: modelForProvider(settings, "codex") } : { provider: settings.provider, model: modelForProvider(settings, settings.provider) });
 		const stepLog = (entry: Omit<StepLog, "name" | "provider" | "model">): StepLog => ({
 			name,
 			provider: realized.provider,
@@ -782,6 +793,10 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	}
 
 	let shipwrecked = false;
+	// Detail for a review-loop park. Signal-driven parks (rate limit, pause, outage) carry
+	// `parkSignal.limitType` instead; review-loop parks pass their reason to `parkExit()`,
+	// which previously used it only for the console line — so it never reached the log.
+	let parkReasonDetail: string | null = null;
 
 	function finish(result: CycleResult): CycleResult {
 		// Deregister this cycle's worktree from the active-peer registry on every exit path
@@ -848,7 +863,8 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				completed: result.completed,
 				error: result.error ?? null,
 				parked,
-				parkReason: parked ? parkSignal.limitType || null : null,
+				parkReason: parked ? parkReasonDetail || parkSignal.limitType || null : null,
+				...(parked ? { parkClass: classifyParkReason(parkReasonDetail, parkSignal.limitType) } : {}),
 				shipwrecked,
 				...(result.bookkeepingWarnings?.length ? { bookkeepingWarnings: result.bookkeepingWarnings } : {}),
 				provenance: {
@@ -1065,6 +1081,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 
 	function parkExit(reason?: string): CycleResult | null {
 		if (!parkSignal.parked && !reason) return null;
+		if (reason) parkReasonDetail = reason;
 		if (worktree) checkpoint(worktree, reason ? "review-loop park" : "rate-limit park");
 		log(`⏸ parked (${reason ?? parkSignal.limitType})`);
 		return finish({ itemId, completed: false, cost, error: "parked" });
@@ -1189,10 +1206,13 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	}
 
 	// ── Plan + Shakedown-plan ──
+	// Realize each raw candidate's provider-specific model into the generic DriverIdentity slot:
+	// Codex keeps `codexModel`; Claude/Grok/OpenCode carry their own model in `model` (#431).
 	const driverCandidates = (name: Step): DriverIdentity[] =>
-		resolveDriverCandidates(CONFIG, profile, name).map((candidate) =>
-			candidate.provider === "codex" ? { provider: "codex", ...(candidate.codexModel ? { codexModel: candidate.codexModel } : {}) } : { provider: candidate.provider, ...(candidate.model ? { model: candidate.model } : {}) },
-		);
+		resolveDriverCandidates(CONFIG, profile, name).map((candidate) => {
+			const model = modelForProvider(candidate, candidate.provider);
+			return candidate.provider === "codex" ? { provider: "codex", ...(model ? { codexModel: model } : {}) } : { provider: candidate.provider, ...(model ? { model } : {}) };
+		});
 	const available: (candidate: DriverIdentity) => boolean =
 		providerAvailableForTests ??
 		((candidate: DriverIdentity): boolean => {
@@ -1346,15 +1366,27 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		].join("\n");
 
 		// Revision input (issue #60): on a resume driven by a red PR review, `--review-findings <path>`
-		// points at a findings file the closed-loop workflow wrote. Read best-effort — an absent or
-		// unreadable file must never crash a resume; it just means no review preamble is injected.
+		// points at a findings file the closed-loop workflow wrote. Fail closed when that explicit
+		// input cannot be read: continuing would silently ask the worker to revise without its task.
 		let reviewNote = "";
 		const findingsPath = flags["review-findings"];
+		// Any DEFINED value is a findings-driven resume — `--review-findings ""` must not
+		// slip past a truthiness check into the generic plan prompt.
+		if (findingsPath !== undefined && findingsPath.trim() === "") {
+			return finish({ itemId, completed: false, cost, error: "empty --review-findings path — refusing a findings-driven resume without findings" });
+		}
 		if (findingsPath) {
 			try {
 				reviewNote = reviewFindingsPreamble(readFileSync(findingsPath, "utf-8"));
-			} catch {
-				reviewNote = "";
+			} catch (err) {
+				const detail = err instanceof Error ? err.message : String(err);
+				return finish({ itemId, completed: false, cost, error: `could not read review findings ${JSON.stringify(findingsPath)}: ${detail}` });
+			}
+			// A readable but empty/whitespace-only findings file yields no preamble; the
+			// prompt selection below would silently fall back to the generic plan prompt
+			// and revise without its task. Same failure class as unreadable — fail closed.
+			if (!reviewNote) {
+				return finish({ itemId, completed: false, cost, error: `review findings ${JSON.stringify(findingsPath)} is empty — refusing a findings-driven resume without findings` });
 			}
 		}
 
@@ -1677,7 +1709,9 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 						// configured judge seat when present, else the shakedown-code step settings.
 						const reviewSettings = resolveStepSettings(CONFIG, profile, "shakedown-code");
 						const reviewProvider = policy.judge.provider;
-						const reviewModel = policy.judge.provider === "codex" ? (policy.judge.codexModel ?? "default") : (policy.judge.model ?? reviewSettings.model ?? "default");
+						// Non-Codex judge: prefer the realized seat model; else the judge provider's own
+						// step-settings slot (never the top-level Claude `model` slot) (#431).
+						const reviewModel = policy.judge.provider === "codex" ? (policy.judge.codexModel ?? "default") : (policy.judge.model ?? modelForProvider(reviewSettings, reviewProvider) ?? "default");
 						const reviewEffectsResult = await dispatchStepEffects({
 							...effectsCtx,
 							roadmap,
@@ -2035,6 +2069,8 @@ export interface OrchestratorDeps {
 		/** Mid-run review-request queue root (#387). Defaults to `mainWorktree(REPO)/.dev/review-requests`;
 		 *  tests inject a temp dir to drive the drain without touching real `.dev/`. */
 		queueRoot: string;
+		gateRecordsRoot: string;
+		writeGateRecord: typeof writePrReviewGateRecord;
 	}>;
 	/**
 	 * Continuous-mode free queue probe (issue #82). Defaults to `listItems` + FlowPolicy
@@ -2049,6 +2085,15 @@ export interface OrchestratorDeps {
 	/** Roadmap + flow policy used by the default free queue probe. */
 	roadmap?: RoadmapSource;
 	flowPolicy?: FlowPolicy;
+	/** Cycle-log appender for local-review day-budget spend receipts (#398). Defaults to the
+	 *  helpers.ts export; injectable so tests can capture the `budgetCharge` marker writes. */
+	appendLog?: (entry: Record<string, unknown>) => void;
+	/** Day-budget seed override (#398): today's already-spent USD. Skips reading the cycle log
+	 *  (test seam). When omitted, continuous+day-budget runs derive it from `daySpendLogPath`. */
+	initialDaySpend?: number;
+	/** Path to the cycle log scanned for the day-budget seed (#398). Defaults to `LOG_PATH`;
+	 *  overridable so integration tests can point at a temp jsonl. */
+	daySpendLogPath?: string;
 }
 
 // Post-reset resume grace: jitter deliberately bounded inside the pre-existing 30s
@@ -2063,6 +2108,59 @@ const MAX_RESUME_ROUNDS = 12;
 // size the orphan-steal window well above the longest realistic single pass. It only matters
 // across processes (a crashed holder), so 4h is generous insurance, not a per-PR timeout.
 const REVIEW_DRAIN_LOCK_STALE_MS = 4 * 60 * 60 * 1000;
+
+/**
+ * Hermetic-test guard (#420, #456).
+ *
+ * `runOrchestrator`/`runPipeline` build their review + revise dependency bundles from real
+ * defaults — the `gh` CLI runner, the PR-review gate that spawns provider agents, and the
+ * host repo's `.dev/review-requests` queue. A test that reaches the drain without injecting
+ * `deps.review` / `deps.revise` therefore uses the developer's real repo and network.
+ *
+ * Two failures were observed from exactly that: live Claude/Codex/Grok agents spawned out of
+ * `orchestrator.test.ts` (#420), and a 4-hour hang because the host queue held a stale
+ * `.drain.lock` and the post-cycle drain fell back to a blocking acquire (#456). The lock was
+ * accidentally *masking* the agent spawn — clearing it to "fix" the hang exposes the escape.
+ *
+ * Under `node --test` (`NODE_TEST_CONTEXT`), the effectful defaults are replaced:
+ * - callables throw on invocation, naming the dep to inject. Lazy by design: a test that never
+ *   reaches the drain (e.g. `runner: "ci"`) stays green without boilerplate.
+ * - queue roots point at a per-process temp dir, so lock paths and records can never resolve
+ *   into the host `.dev/`.
+ */
+const IN_NODE_TEST = process.env.NODE_TEST_CONTEXT !== undefined;
+
+export function hermeticDefault<T extends (...args: never[]) => unknown>(dep: string, real: T): T {
+	if (!IN_NODE_TEST) return real;
+	return ((..._args: never[]) => {
+		throw new Error(
+			`hermetic-test guard: \`${dep}\` was not injected. Under node --test the real implementation is withheld because it reaches the host repo or spawns provider agents (#420/#456). Pass it via deps.review/deps.revise in the test.`,
+		);
+	}) as unknown as T;
+}
+
+/** One temp base per process, created lazily. Memoised: `hermeticQueueRoot` is called on every
+ *  `runOrchestrator`, so minting a fresh `mkdtempSync` per call leaked ~170 directories per test
+ *  run and never removed them — on a box where /tmp inode exhaustion is already a known failure
+ *  mode for repeated test runs. */
+let hermeticBaseDir: string | undefined;
+
+/** Per-`runOrchestrator` discriminator for the hermetic day-spend ledger. One shared temp file would
+ *  let each test's `budgetCharge` receipts seed the *next* test's reconstructed day spend, making
+ *  every day-budget assertion order-dependent (and passing for the wrong reason once the accumulated
+ *  total crosses the cap). Ignored outside `node --test`, where the real ledger path is returned. */
+let hermeticRunSeq = 0;
+
+export function hermeticQueueRoot(real: () => string, name = "queue"): string {
+	if (!IN_NODE_TEST) return real();
+	// Not a throw: the path is read eagerly to derive the drain-lock path even when the drain
+	// never runs, so withholding it would break tests that legitimately never touch the queue.
+	hermeticBaseDir ??= mkdtempSync(join(tmpdir(), "pelaggio-hermetic-"));
+	// Distinct subdirectories so queue records and gate records cannot collide in the shared base.
+	const dir = join(hermeticBaseDir, name);
+	mkdirSync(dir, { recursive: true });
+	return dir;
+}
 
 /**
  * Wait out the current park's reset window, or report that we can't. The timing/jitter/max-wait
@@ -2268,7 +2366,45 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		const isParallel = parallel > 1;
 		const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
 		const now = deps.now ?? Date.now;
-		const dayBudgetTracker = new DayBudgetTracker(continuous?.dayBudget, now);
+		// Day-budget durability (#398): reconstruct today's spend on every continuous process start
+		// (fresh launch, daemon pause→resume, crash restart) from the durable cycle-log ledger, so a
+		// same-day restart and a midnight-crossing restart both honor the cap. Read the log only when
+		// continuous AND a day budget is set — ordinary `--item` runs pay no IO.
+		// Under node --test this must not resolve to the host cycle log: seeding from a developer's
+		// real spend makes an existing main test ("drain: day-budget exhaustion stops") fail whenever
+		// today's actual spend exceeds its $5 cap — green on a fresh CI runner, red locally. Same
+		// non-hermetic class as #456. `hermeticQueueRoot` yields a temp dir under test and the real
+		// parent otherwise, so the composed path is LOG_PATH in production and a nonexistent temp file
+		// in tests (which `sumDaySpendFromLog` reads as ENOENT → $0).
+		const daySpendLogPath =
+			deps.daySpendLogPath ??
+			join(
+				hermeticQueueRoot(() => dirname(LOG_PATH), `day-spend-log-${++hermeticRunSeq}`),
+				basename(LOG_PATH),
+			);
+		if (continuous?.dayBudget != null && deps.initialDaySpend === undefined) {
+			// Reconstruction proves the ledger is *readable*; the day budget also depends on it being
+			// *appendable*. A readable-but-unwritable ledger otherwise passes startup, paid review then
+			// runs, and only `appendDayBudgetCharge` discovers EACCES — after the money is spent, with
+			// the charge unrecorded, so the next restart under-counts and grants budget again. Probe the
+			// write path before any paid work rather than after (#398 review).
+			try {
+				// `appendLog` creates `.dev/` lazily on first write (helpers.ts), so on a fresh consumer
+				// checkout the ledger's parent does not exist yet and probing it would throw ENOENT —
+				// reported as "not writable", failing every first-ever day-budget run including --dry-run.
+				// Create it first, exactly as the eventual writer would, then probe for real.
+				mkdirSync(dirname(daySpendLogPath), { recursive: true });
+				accessSync(existsSync(daySpendLogPath) ? daySpendLogPath : dirname(daySpendLogPath), constants.W_OK);
+			} catch (e) {
+				const msg = e instanceof Error ? e.message : String(e);
+				throw new Error(`day-budget ledger is not writable (${daySpendLogPath}): ${msg}. Refusing to start paid work whose spend could not be durably recorded — fix permissions or clear the day budget.`);
+			}
+		}
+		// One clock sample feeds both the ledger scan and the tracker's starting day. Sampling twice
+		// lets a scan that crosses local midnight seed yesterday's spend against today's key.
+		const seedNowMs = now();
+		const initialDaySpend = continuous?.dayBudget != null ? (deps.initialDaySpend ?? sumDaySpendFromLog(daySpendLogPath, seedNowMs)) : 0;
+		const dayBudgetTracker = new DayBudgetTracker(continuous?.dayBudget, now, initialDaySpend, dayKey(seedNowMs));
 		const roadmapForProbe = deps.roadmap ?? getRoadmapSource(ROADMAP_SOURCE, { repo: REPO, github: ROADMAP_GITHUB, linear: ROADMAP_LINEAR });
 		const flowPolicyForProbe = deps.flowPolicy ?? DEFAULT_FLOW_POLICY;
 		const queueProbe = deps.queueProbe ?? (() => freeQueueProbe(roadmapForProbe, flowPolicyForProbe));
@@ -2381,6 +2517,14 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						} else if (parkSignal.parked || drainComplete) {
 							if (parkSignal.parked) emitSuspendedIfParked();
 							exitWorker = true;
+						} else if (campaignDrainDeferred && !dayBudgetTracker.exceeded()) {
+							// The budget rolled over (or a peer's spend was refunded): run the campaign-start
+							// drain that was deferred at startup, before any paid pick work. Claimed under the
+							// continuous gate and flipped before awaiting so ×N workers cannot double-drain.
+							campaignDrainDeferred = false;
+							console.log(`${A.dim("↻")} day budget rolled over — running the deferred campaign-start review drain`);
+							await runCampaignStartDrain();
+							retryGate = true;
 						} else if (dayBudgetTracker.exceeded()) {
 							if (continuous.preset === "drain") {
 								console.log(`${A.yellow("⚠")} day budget ($${continuous.dayBudget!.toFixed(2)}) exhausted (spent $${dayBudgetTracker.daySpent.toFixed(2)} today) — stopping continuous run`);
@@ -2545,6 +2689,13 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					consecutiveTransientErrors++;
 					consecutiveQuarantines = 0;
 					if (consecutiveTransientErrors >= CONSECUTIVE_TRANSIENT_ERROR_LIMIT && !parkSignal.parked) {
+						// KNOWN GAP (#458): this relabel is in-memory only and happens *after*
+						// runPipeline's finish() already appended this cycle's log entry, which
+						// the append-only log never reconciles. So the tripping cycle persists as
+						// an ordinary `transient sdk error` failure with no `parkClass`, and
+						// `resetsAt = 0` below makes awaitParkReset hand back immediately — so a
+						// serial run has no next cycle to record the park either. `pelaggio stats`
+						// therefore under-reports `sdk-outage`. See the ParkClass doc in types.ts.
 						parkSignal.parked = true;
 						parkSignal.resetsAt = 0;
 						parkSignal.limitType = "sdk-outage";
@@ -2634,12 +2785,15 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			policy: REVIEW_CONFIG,
 			statuslessAfter: REVIEW_CONFIG.statuslessAfter,
 			ghRepo: ROADMAP_SOURCE === "github-issues" ? ROADMAP_GITHUB.ghRepo : "",
-			gh: defaultGhRun,
-			runReviewGate: runPrReviewGate,
+			gh: hermeticDefault("review.gh", defaultGhRun),
+			runReviewGate: hermeticDefault("review.runReviewGate", runPrReviewGate),
 			now: () => Date.now(),
-			prepareReviewHead,
-			cleanupReviewHead,
-			queueRoot: reviewRequestsDir(mainWorktree(REPO)),
+			prepareReviewHead: hermeticDefault("review.prepareReviewHead", prepareReviewHead),
+			cleanupReviewHead: hermeticDefault("review.cleanupReviewHead", cleanupReviewHead),
+			queueRoot: hermeticQueueRoot(() => reviewRequestsDir(mainWorktree(REPO)), "review-requests"),
+			gateRecordsRoot: hermeticQueueRoot(() => gateRecordsDir(mainWorktree(REPO)), "gate-records"),
+			// Not guarded: it writes to `gateRecordsRoot`, which is itself hermetic by default above.
+			writeGateRecord: writePrReviewGateRecord,
 			...deps.review,
 		};
 		const shipIsPr = shipTargetName === "pull-request" || shipTargetName === "auto-merge-pr";
@@ -2648,6 +2802,65 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		// `items.length === 0` exclusion below ("do exactly these").
 		const doReviewDrain = review.runner === "local" && shipIsPr && !!review.ghRepo && !noWorktree && !dryRun;
 		const reviewDrainLock = reviewDrainLockPath(review.queueRoot);
+
+		// Local-review day-budget durability (#398): the review drain charges `dayBudgetTracker.add`
+		// but — unlike pick/revise cycles — writes no cycle-log line, so a pure jsonl seed would
+		// under-count review spend after a restart. Append a minimal `budgetCharge` receipt whenever
+		// review cost is charged to the day budget. `sumDaySpendFromLog` reads these rows for the seed
+		// while `stats.reduce()` filters them, so durability costs `/stats` nothing. `doReviewDrain` is
+		// already `!dryRun`-gated, so this only runs on real spend.
+		// Receipts must land in the same ledger the seed reads (`daySpendLogPath`), not the ambient
+		// `appendLog` default. Production keeps them identical (both `LOG_PATH`), but under `node --test`
+		// only the seed was redirected: the default wrote real $5 `budgetCharge` rows into the host
+		// cycle log, so `sumDaySpendFromLog` counted them and the next real `--day-budget 5` campaign
+		// started already exhausted. Injection still wins, so tests can capture marker writes.
+		const appendDayBudgetReceipt =
+			deps.appendLog ??
+			((entry: Record<string, unknown>): void => {
+				mkdirSync(dirname(daySpendLogPath), { recursive: true });
+				appendFileSync(daySpendLogPath, `${JSON.stringify(entry)}\n`);
+			});
+		/** Returns false when the receipt could not be made durable — callers must stop paid work. */
+		// Campaign-scoped latch. This flag has now been widened three times — per-PR, per-drain-pass,
+		// then review-drain-only — each time because the previous scope let some other paid path keep
+		// running. It lives here, above the only writer, and the writer halts the whole campaign:
+		// an undurable ledger invalidates *all* spend accounting, not just review spend.
+		let receiptUndurable = false;
+		const appendDayBudgetCharge = (cost: number): boolean => {
+			// The receipt exists solely to seed durable day-spend reconstruction, so it is meaningful
+			// only when a continuous day budget is set. No budget (or non-continuous single-item runs
+			// that still drain reviews) → nothing is "charged to the day budget", so skip the write.
+			if (continuous?.dayBudget == null) return true;
+			if (!(Number.isFinite(cost) && cost > 0)) return true;
+			try {
+				appendDayBudgetReceipt({
+					ts: new Date(now()).toISOString(),
+					cycle: 0,
+					item: null, // spend receipt, not a delivered item
+					quick: false,
+					steps: [],
+					total_cost: Number(cost.toFixed(4)),
+					completed: true,
+					error: null,
+					verdict: null,
+					budgetCharge: true,
+				});
+			} catch (e) {
+				// The startup W_OK probe proves writability before any paid work, so reaching here means
+				// the ledger went unwritable mid-run. The in-memory charge stands (this process still
+				// honors the cap), but nothing survives a restart — the next launch would reconstruct a
+				// smaller day spend and re-grant budget already spent. Fail closed rather than absorb it:
+				// the broad review catch would otherwise record a zero-cost crash and keep drawing.
+				const msg = e instanceof Error ? e.message : String(e);
+				console.error(`day-budget receipt could not be written (${daySpendLogPath}): ${msg}. $${cost.toFixed(2)} is charged in memory but will not survive a restart — halting the campaign.`);
+				// Halt every paid path, not just the review drain: below the cap the orchestrator would
+				// otherwise go on to revise and pick work whose spend is equally unreconstructable.
+				receiptUndurable = true;
+				campaignHalted = true;
+				return false;
+			}
+			return true;
+		};
 
 		// One drain pass: reconcile enqueued records with live statusless PRs, post each `review`
 		// status from the trusted tree, and complete records. Respects `parkSignal` — a rate-limit
@@ -2687,6 +2900,12 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 
 			for (const { candidate: pr, record } of work.values()) {
 				if (parkSignal.parked) break;
+				// Stop before *starting* another paid review. A single operation may cross the cap
+				// (cost is unknowable until the gate returns), but the next one must not: without this
+				// the campaign-start gate is the only check, so one review crossing the cap still let
+				// the whole remaining backlog run.
+				if (dayBudgetTracker.exceeded()) break;
+				if (receiptUndurable) break;
 				// Tri-state on purpose: deleting the durable record requires a POSITIVE
 				// "unmanaged" read — a transient/malformed gh response ("unknown") skips
 				// this round and retains the record for retry (#387 gate finding).
@@ -2714,6 +2933,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				let reviewCost = 0;
 				let reviewCostEstimated = false;
 				let parked = false;
+				let gateResult: PrReviewGateResult | null = null;
 				try {
 					const prepared = review.prepareReviewHead(REPO, pr);
 					if (!prepared) throw new Error("could not prepare PR head for local review");
@@ -2734,9 +2954,12 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						// under-reports --day-budget and drains keep picking past the cap.
 						totalSpent += result.cost;
 						dayBudgetTracker.add(result.cost);
+						// The partial cost is real spend; a lost receipt re-grants that budget on restart.
+						appendDayBudgetCharge(result.cost);
 						parked = true;
 						console.log(`review ${pr.itemId}#${pr.prNumber} — parked (${result.park?.limitType ?? parkSignal.limitType})`);
 					} else {
+						gateResult = result;
 						body = result.body;
 						finalState = result.gate === "pass" ? "success" : "failure";
 						reviewCost = result.cost;
@@ -2753,10 +2976,60 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					if (record) unclaimReviewRequest(review.queueRoot, pr.prNumber, pr.headSha);
 					break;
 				}
-				upsertReviewComment(review.gh, review.ghRepo, pr.prNumber, body);
-				const posted = postReviewStatus(review.gh, review.ghRepo, pr.headSha, finalState, finalState === "success" ? "local pelaggio review passed" : "local pelaggio review blocked");
+				const gateRecord: NewPrReviewGateRecord = gateResult
+					? {
+							prNumber: pr.prNumber,
+							headSha: pr.headSha,
+							itemId: pr.itemId,
+							gate: gateResult.gate === "pass" ? "pass" : "block",
+							ok: gateResult.ok,
+							subtype: gateResult.subtype,
+							agreement: gateResult.agreement ?? "invalid",
+							breakerReason: gateResult.breakerReason,
+							iterations: gateResult.iterations,
+							survivorCount: gateResult.survivorCount,
+							cost: gateResult.cost,
+							costEstimated: gateResult.costEstimated,
+							turns: gateResult.turns,
+							runner: "local",
+							reviewedAt: new Date(review.now()).toISOString(),
+						}
+					: {
+							prNumber: pr.prNumber,
+							headSha: pr.headSha,
+							itemId: pr.itemId,
+							gate: "block",
+							ok: false,
+							subtype: "error_crash",
+							agreement: "invalid",
+							cost: 0,
+							costEstimated: false,
+							turns: 0,
+							runner: "local",
+							reviewedAt: new Date(review.now()).toISOString(),
+						};
+				// The review has already incurred its cost. Charge it before persistence so
+				// a durable-store failure cannot turn retries into unmetered paid runs.
 				totalSpent += reviewCost;
 				dayBudgetTracker.add(reviewCost);
+				// #398 receipt rides immediately after the charge it durabilizes, so a later
+				// `writeGateRecord` failure (which `continue`s) still leaves the already-incurred
+				// review cost reconstructable from the cycle log after a restart.
+				// A lost receipt means restart-reconstruction would under-count this spend, so stop
+				// starting new paid reviews this pass rather than drawing against a budget that will
+				// look unspent after a restart. Persistence for *this* PR still completes below — the
+				// review is already paid for, so its outcome must not be thrown away too.
+				appendDayBudgetCharge(reviewCost); // failure latches receiptUndurable + halts the campaign
+				try {
+					review.writeGateRecord(review.gateRecordsRoot, gateRecord);
+				} catch (e) {
+					const msg = e instanceof Error ? e.message : String(e);
+					console.warn(`review ${pr.itemId}#${pr.prNumber} — could not persist gate outcome: ${msg}`);
+					if (record) unclaimReviewRequest(review.queueRoot, pr.prNumber, pr.headSha);
+					continue;
+				}
+				upsertReviewComment(review.gh, review.ghRepo, pr.prNumber, body);
+				const posted = postReviewStatus(review.gh, review.ghRepo, pr.headSha, finalState, finalState === "success" ? "local pelaggio review passed" : "local pelaggio review blocked");
 				// The record is satisfied only when the terminal status POST SUCCEEDED —
 				// deleting it on a failed post would leave the PR pending forever with no
 				// durable request to guarantee a retry (#387 gate finding). Unclaim instead
@@ -2795,6 +3068,12 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				// would silently start at plan instead of honoring the override.
 				if (!isPipelineStep(flags.from) || flags.from === "pick") {
 					console.error(`invalid --from ${JSON.stringify(flags.from)}; valid: ${STEPS.filter((s) => s !== "pick").join(", ")}`);
+					return { exitCode: 2, results };
+				}
+				// A findings-driven resume must run implement, where the findings file is read
+				// and validated; any later --from would silently skip the revision task.
+				if (flags["review-findings"] !== undefined && flags.from !== "implement") {
+					console.error(`--review-findings requires --from implement (got ${JSON.stringify(flags.from)}): the findings are read and validated by the implement step`);
 					return { exitCode: 2, results };
 				}
 				startFrom = flags.from;
@@ -2839,7 +3118,8 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				liveStatus.render();
 				statusBar.teardown();
 			}
-			console.log(`\n${result.completed ? A.green("✓") : A.red("✗")} ${id} — ${result.costEstimated ? "~" : ""}$${result.cost.toFixed(2)}`);
+			const detail = resultDetail(result);
+			console.log(`\n${result.completed ? A.green("✓") : A.red("✗")} ${id} — ${result.costEstimated ? "~" : ""}$${result.cost.toFixed(2)}${detail ? `  ${A.dim(detail)}` : ""}`);
 			// #387: a resumed cycle can ship a PR whose review-request record would
 			// otherwise sit undrained until the next process. Drain before returning
 			// so resume mode gets the same review-at-delivery as the worker pool.
@@ -2855,13 +3135,13 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			return { exitCode: result.completed ? 0 : 1, results };
 		}
 
-		if (doReviewDrain) {
-			// Campaign-start drain: cold-start backlog + statusless PRs from prior runs (all modes incl.
-			// `--item`). A rate-limit park during the gate is transient — under the same auto-resume /
-			// --max-wait / reset-time policy as the item loop, wait and retry the drain in-process
-			// (records + pending PRs stay eligible). A non-blocking drain lock avoids blocking startup on
-			// a peer process's in-flight drain; contention skips the round (the peer covers the queue).
-			// awaitParkReset runs OUTSIDE the lock so a park never holds the queue for the reset window.
+		// Campaign-start drain: cold-start backlog + statusless PRs from prior runs (all modes incl.
+		// `--item`). A rate-limit park during the gate is transient — under the same auto-resume /
+		// --max-wait / reset-time policy as the item loop, wait and retry the drain in-process
+		// (records + pending PRs stay eligible). A non-blocking drain lock avoids blocking startup on
+		// a peer process's in-flight drain; contention skips the round (the peer covers the queue).
+		// awaitParkReset runs OUTSIDE the lock so a park never holds the queue for the reset window.
+		async function runCampaignStartDrain(): Promise<void> {
 			let reviewRound = 0;
 			while (reviewRound < MAX_RESUME_ROUNDS) {
 				reviewRound++;
@@ -2873,6 +3153,23 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				if (outcome === "handback") break; // no reset / exceeds --max-wait → leave pending
 				// resumed: parkSignal cleared → re-list records + candidates and retry.
 			}
+		}
+
+		// The drain launches paid review agents, so it is gated on the *reconstructed* day spend
+		// exactly like the in-loop drains. Without that, a restart reloading a ledger already at the
+		// cap spends a second full day budget on review before the loop can stop it.
+		//
+		// Deferred, never skipped: this is the only drain that clears the cold-start backlog, so
+		// dropping it strands pending and statusless PRs for the rest of the run. In watch mode the
+		// budget rolls over at local midnight and the loop keeps going, so the drain is re-attempted
+		// on the first iteration after the cap clears (#398 review). Drain mode exits when exhausted,
+		// so there is no later chance and the deferral simply never fires.
+		let campaignDrainDeferred = false;
+		if (doReviewDrain && dayBudgetTracker.exceeded()) {
+			campaignDrainDeferred = true;
+			console.log(`${A.yellow("⚠")} day budget ($${continuous?.dayBudget?.toFixed(2)}) already exhausted (spent $${dayBudgetTracker.daySpent.toFixed(2)} today) — campaign-start review drain deferred until the budget rolls over`);
+		} else if (doReviewDrain) {
+			await runCampaignStartDrain();
 		}
 
 		// ── Revise sweep (issue #76, continuous per-iteration in #82) ──
@@ -2891,7 +3188,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		const revise = {
 			local: REVISE_LOCAL,
 			ghRepo: ROADMAP_SOURCE === "github-issues" ? ROADMAP_GITHUB.ghRepo : "",
-			gh: defaultGhRun,
+			gh: hermeticDefault("revise.gh", defaultGhRun),
 			...deps.revise,
 		};
 		const doSweep = revise.local && shipIsPr && !!revise.ghRepo && !noWorktree && !dryRun && items.length === 0;
@@ -3139,6 +3436,10 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		// completed cycles alone must not report delivery-complete over it.
 		if (doReviewDrain && parkSignal.parked) {
 			console.log(`${A.yellow("⚠")} review drain parked — one or more review statuses still pending; re-run after the limit clears`);
+			return { exitCode: 1, results };
+		}
+		if (receiptUndurable) {
+			console.log(`${A.yellow("⚠")} day-budget ledger became unwritable mid-run — spend after that point is not reconstructable; fix permissions before the next run`);
 			return { exitCode: 1, results };
 		}
 		return { exitCode: results.every((r) => r.completed) ? 0 : 1, results };

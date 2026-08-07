@@ -8,6 +8,22 @@ import { DOC_REVIEW_SAFETY_FLOOR_NOTE, main, resolveDocReviewPolicy, reviewDocum
 import { snapshotDocument } from "../review/document.js";
 import type { StepResult } from "../types.js";
 
+// Pin the review pool: diversity assertions ("met" needs three distinct providers)
+// must not float with the host .pelaggio.yml, whose pools shrink operationally
+// (e.g. a provider's balance running out).
+const TEST_CONFIG = ((): typeof CONFIG => {
+	const c = JSON.parse(JSON.stringify(CONFIG)) as typeof CONFIG;
+	for (const selections of Object.values(c.profileProviders)) {
+		if (selections["pr-review"]) selections["pr-review"] = ["claude", "codex", "grok"];
+	}
+	c.review.authoring.reviewers = [
+		{ id: "claude", provider: "claude" },
+		{ id: "codex", provider: "codex" },
+		{ id: "grok", provider: "grok" },
+	] as typeof c.review.authoring.reviewers;
+	return c;
+})();
+
 const ok = (text: string): StepResult => ({ ok: true, subtype: "success", text, fullText: text, assistantText: text, cost: 0, turns: 1 });
 const findings = (raw: unknown[]) => `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 3, summary: "s", findings: raw })}\nEND_AUTHORING_REVIEW_FINDINGS`;
 const judge = (decisions: unknown[]) => `AUTHORING_REVIEW_JUDGE\n${JSON.stringify({ schemaVersion: 1, decisions })}\nEND_AUTHORING_REVIEW_JUDGE`;
@@ -58,7 +74,7 @@ describe("doc-review CLI (#384)", () => {
 	it("clean multi-seat review → exit 0 with a path+digest-bound report", async () => {
 		const path = writeDoc("clean.md", "# Design\n\nAll good.\n");
 		const snapshot = snapshotDocument(path);
-		const result = await reviewDocument({ snapshot, cwd: dir, config: CONFIG, runStep: cannedRunStep(CLEAN, judge([])), clock });
+		const result = await reviewDocument({ snapshot, cwd: dir, config: TEST_CONFIG, runStep: cannedRunStep(CLEAN, judge([])), clock });
 		assert.equal(result.exitCode, 0);
 		assert.equal(result.outcome, "converged-clean");
 		assert.ok(result.recordPath && existsSync(result.recordPath));
@@ -73,7 +89,7 @@ describe("doc-review CLI (#384)", () => {
 	it("blocking survivor → exit 1", async () => {
 		const path = writeDoc("block.md", "# Design\n\nContradictory.\n");
 		const snapshot = snapshotDocument(path);
-		const result = await reviewDocument({ snapshot, cwd: dir, config: CONFIG, runStep: cannedRunStep(BLOCK, judge([{ candidateId: "C1", decision: "survives", rationale: "real", ruling: "fixable-blocker" }])), clock });
+		const result = await reviewDocument({ snapshot, cwd: dir, config: TEST_CONFIG, runStep: cannedRunStep(BLOCK, judge([{ candidateId: "C1", decision: "survives", rationale: "real", ruling: "fixable-blocker" }])), clock });
 		assert.equal(result.exitCode, 1);
 		assert.equal(result.outcome, "hard-block");
 	});
@@ -82,7 +98,7 @@ describe("doc-review CLI (#384)", () => {
 		const path = writeDoc("seats.md", "# Design\n\nInspect me.\n");
 		const snapshot = snapshotDocument(path);
 		const calls: Array<{ name: string; prompt: string; cwd: string; itemId?: string }> = [];
-		await reviewDocument({ snapshot, cwd: dir, config: CONFIG, runStep: cannedRunStep(CLEAN, judge([]), calls), clock });
+		await reviewDocument({ snapshot, cwd: dir, config: TEST_CONFIG, runStep: cannedRunStep(CLEAN, judge([]), calls), clock });
 		assert.ok(calls.length >= 2);
 		// Only pr-review / pr-verify — never an author (shakedown-code) or any other step.
 		assert.deepEqual([...new Set(calls.map((c) => c.name))].sort(), ["pr-review", "pr-verify"]);
@@ -108,7 +124,7 @@ describe("doc-review CLI (#384)", () => {
 		const snapshot = snapshotDocument(path);
 		// The file changes on disk after the snapshot but before the digest re-verification.
 		writeFileSync(path, "# Tampered\n\nv2\n", "utf-8");
-		const result = await reviewDocument({ snapshot, cwd: dir, config: CONFIG, runStep: cannedRunStep(CLEAN, judge([])), clock });
+		const result = await reviewDocument({ snapshot, cwd: dir, config: TEST_CONFIG, runStep: cannedRunStep(CLEAN, judge([])), clock });
 		assert.equal(result.exitCode, 1);
 		assert.equal(result.outcome, "digest-changed");
 		assert.equal(result.record, undefined);
