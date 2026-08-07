@@ -160,6 +160,26 @@ export class GitHubIssuesRoadmap implements RoadmapSource {
 		return match?.url?.match(/#issuecomment-(\d+)/)?.[1] ?? null;
 	}
 
+	/**
+	 * Best-effort `gh label create` for a label we are about to attach. `gh issue create`
+	 * rejects the WHOLE call on an unknown label, so a label the repo happens to lack fails
+	 * item creation outright — which halts a batch partway, with some items created and some
+	 * not. Creating first makes the call self-sufficient; an already-existing label makes
+	 * `label create` fail, harmlessly. Same precedent as `claimRevision` in revise-sweep.ts.
+	 *
+	 * Deliberately swallows every error: a repo where we lack label-write permission but the
+	 * label already exists must still create items, so a failure here is never fatal on its
+	 * own. A label that is genuinely missing AND uncreatable still surfaces — as the original
+	 * `gh issue create` error, which names it.
+	 */
+	private ensureLabel(name: string, description: string): void {
+		try {
+			this.runGh(["label", "create", name, "--repo", this.ghRepo, "--description", description]);
+		} catch {
+			// already exists, or no permission — see above
+		}
+	}
+
 	async createItem(opts: CreateItemOpts): Promise<RoadmapItem> {
 		const deps = opts.deps ?? [];
 		const bodyParts: string[] = [];
@@ -169,10 +189,23 @@ export class GitHubIssuesRoadmap implements RoadmapSource {
 		if (opts.priority) bodyParts.push(`Priority: ${opts.priority}`);
 		const body = bodyParts.join("\n");
 		const args = ["issue", "create", "--repo", this.ghRepo, "--title", opts.title, "--label", this.label, "--body", body];
-		if (opts.deferred) args.push("--label", LABEL_DEFERRED);
+		// The pickup label is required on every item, and nothing else in pelaggio creates it —
+		// so a fresh consumer repo fails its very first create-item without this.
+		this.ensureLabel(this.label, "Pelaggio autonomous-cycle pickup label");
+		if (opts.deferred) {
+			this.ensureLabel(LABEL_DEFERRED, "Deferred: not eligible for pickup");
+			args.push("--label", LABEL_DEFERRED);
+		}
 		// Labels are the runtime SoT for priority; body marker stays as human-readable prose.
-		if (opts.priority === "high") args.push("--label", LABEL_PRIORITY_HIGH);
-		else if (opts.priority === "normal") args.push("--label", LABEL_PRIORITY_NORMAL);
+		// `priority:normal` is not redundant with its own absence: backfillPriorityLabels treats
+		// an explicit normal label as a triage decision and fail-closes on body-high conflicts.
+		if (opts.priority === "high") {
+			this.ensureLabel(LABEL_PRIORITY_HIGH, "Projects as numeric priority 1 (most urgent)");
+			args.push("--label", LABEL_PRIORITY_HIGH);
+		} else if (opts.priority === "normal") {
+			this.ensureLabel(LABEL_PRIORITY_NORMAL, "Projects as numeric priority 2");
+			args.push("--label", LABEL_PRIORITY_NORMAL);
+		}
 		const rawUrl = this.runGh(args).trim();
 		// `gh issue create` prints the URL on stdout.
 		const m = rawUrl.match(/\/issues\/(\d+)/);

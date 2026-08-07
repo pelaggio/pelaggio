@@ -563,6 +563,14 @@ Every projected GitHub item materializes priority `1` or `2` (unlabeled → `2`)
 `create-item --priority high|normal` adds the matching label (and keeps the
 human-readable body marker). Omitted priority adds neither label.
 
+**Labels are created on demand.** `gh issue create` rejects the entire call on a
+label the repo does not have, so `create-item` first issues a best-effort
+`gh label create` for every label it is about to attach — the pickup label, plus
+`deferred` / `priority:*` when requested. An existing label makes that call fail
+harmlessly, and a failure never blocks item creation on its own (a repo where you
+lack label-write permission but the label already exists still works). This is why
+a fresh consumer repo does not need any labels pre-created by hand (#471).
+
 **FIFO within the newest-200 window:** `gh issue list --limit 200` returns the
 newest ≤200 matching issues; the adapter then sorts that window by ascending
 issue number so equal-priority ties drain oldest-first. This does **not** fetch
