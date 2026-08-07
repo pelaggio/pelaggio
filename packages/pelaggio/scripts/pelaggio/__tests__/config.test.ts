@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { DEFAULTS, loadConfig, resolveDriverCandidates, resolveProviderBin, resolveRepo, resolveStepSettings } from "../config.js";
+import { DEFAULTS, loadConfig, modelForProvider, resolveDriverCandidates, resolveProviderBin, resolveRepo, resolveStepSettings } from "../config.js";
 import { BASELINE_TAXONOMY_CLASSES, canonicalizeContractionPayload, isSafetyClass, mergeTaxonomyClasses, signContractionPayload } from "../review/taxonomy.js";
 
 function tmpRepo(): string {
@@ -40,6 +40,8 @@ describe("loadConfig — missing / empty", () => {
 		assert.deepEqual(cfg.modelProfiles, DEFAULTS.modelProfiles);
 		assert.equal(cfg.confinement.allowDirtyMain, false);
 		assert.deepEqual(cfg.profileCodexModels, {});
+		assert.deepEqual(cfg.profileGrokModels, {});
+		assert.deepEqual(cfg.profileOpenCodeModels, {});
 		assert.equal(cfg.pick.maxScope, "M");
 	});
 
@@ -50,6 +52,8 @@ describe("loadConfig — missing / empty", () => {
 		assert.deepEqual(cfg.budgets, DEFAULTS.budgets);
 		assert.deepEqual(cfg.modelProfiles, DEFAULTS.modelProfiles);
 		assert.deepEqual(cfg.profileCodexModels, {});
+		assert.deepEqual(cfg.profileGrokModels, {});
+		assert.deepEqual(cfg.profileOpenCodeModels, {});
 	});
 });
 
@@ -417,6 +421,80 @@ describe("resolveStepSettings — precedence & fallback", () => {
 		const repo = tmpRepo();
 		const path = writeYml(repo, ["models:", "  profiles:", "    deep:", "      codex: gpt-5-codex", ""].join("\n"));
 		assert.throws(() => loadConfig({ repo, configPath: path }), /expected `models\.profiles\.deep\.codex` to be a map/);
+	});
+
+	// ── #431: per-provider model slots for grok + opencode ──
+	it("pins distinct Claude, Codex, Grok, and OpenCode models for one step (all four slots resolve independently)", () => {
+		const repo = tmpRepo();
+		const path = writeYml(
+			repo,
+			[
+				"models:",
+				"  profiles:",
+				"    quad:",
+				"      implement: claude-opus-4-8",
+				"      codex:",
+				"        implement: gpt-5-codex",
+				"      grok:",
+				"        implement: grok-code-fast-1",
+				"      opencode:",
+				"        implement: openrouter/qwen",
+				"",
+			].join("\n"),
+		);
+		const cfg = loadConfig({ repo, configPath: path });
+		assert.equal(cfg.profileGrokModels.quad?.implement, "grok-code-fast-1");
+		assert.equal(cfg.profileOpenCodeModels.quad?.implement, "openrouter/qwen");
+		const s = resolveStepSettings(cfg, "quad", "implement");
+		assert.equal(s.model, "claude-opus-4-8");
+		assert.equal(s.codexModel, "gpt-5-codex");
+		assert.equal(s.grokModel, "grok-code-fast-1");
+		assert.equal(s.openCodeModel, "openrouter/qwen");
+		// modelForProvider projects each provider's own slot — never scavenges another's.
+		assert.equal(modelForProvider(s, "claude"), "claude-opus-4-8");
+		assert.equal(modelForProvider(s, "codex"), "gpt-5-codex");
+		assert.equal(modelForProvider(s, "grok"), "grok-code-fast-1");
+		assert.equal(modelForProvider(s, "opencode"), "openrouter/qwen");
+	});
+
+	it("keeps grok + opencode maps sparse, ignores unknown steps, and resolves undefined for omitted steps", () => {
+		const repo = tmpRepo();
+		const path = writeYml(
+			repo,
+			["models:", "  profiles:", "    deep:", "      grok:", "        implement: grok-code-fast-1", "        bogus: grok-4.5", "      opencode:", "        implement: openrouter/qwen", "        nope: openrouter/x", ""].join("\n"),
+		);
+		const cfg = loadConfig({ repo, configPath: path });
+		assert.deepEqual(cfg.profileGrokModels, { deep: { implement: "grok-code-fast-1" } });
+		assert.deepEqual(cfg.profileOpenCodeModels, { deep: { implement: "openrouter/qwen" } });
+		assert.equal(resolveStepSettings(cfg, "deep", "plan").grokModel, undefined);
+		assert.equal(resolveStepSettings(cfg, "deep", "plan").openCodeModel, undefined);
+	});
+
+	it("inherits the provider's pr-review model at pr-verify, and an exact pr-verify value wins", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, ["models:", "  profiles:", "    mixed:", "      grok:", "        pr-review: grok-reviewer", "      opencode:", "        pr-review: oc-reviewer", "        pr-verify: oc-verifier", ""].join("\n"));
+		const cfg = loadConfig({ repo, configPath: path });
+		const v = resolveStepSettings(cfg, "mixed", "pr-verify");
+		// grok has no exact pr-verify → inherits its own pr-review value.
+		assert.equal(v.grokModel, "grok-reviewer");
+		// opencode has an exact pr-verify → that wins over its pr-review value.
+		assert.equal(v.openCodeModel, "oc-verifier");
+	});
+
+	it("throws on a non-string grok value with a dotted path, and when the block is not a map", () => {
+		const repo = tmpRepo();
+		const badValue = writeYml(repo, ["models:", "  profiles:", "    deep:", "      grok:", "        implement: 123", ""].join("\n"));
+		assert.throws(() => loadConfig({ repo, configPath: badValue }), /models\.profiles\.deep\.grok\.implement/);
+		const notMap = writeYml(tmpRepo(), ["models:", "  profiles:", "    deep:", "      grok: grok-4.5", ""].join("\n"));
+		assert.throws(() => loadConfig({ repo: tmpRepo(), configPath: notMap }), /expected `models\.profiles\.deep\.grok` to be a map/);
+	});
+
+	it("throws on a non-string opencode value with a dotted path, and when the block is not a map", () => {
+		const repo = tmpRepo();
+		const badValue = writeYml(repo, ["models:", "  profiles:", "    deep:", "      opencode:", "        implement: 123", ""].join("\n"));
+		assert.throws(() => loadConfig({ repo, configPath: badValue }), /models\.profiles\.deep\.opencode\.implement/);
+		const notMap = writeYml(tmpRepo(), ["models:", "  profiles:", "    deep:", "      opencode: openrouter/qwen", ""].join("\n"));
+		assert.throws(() => loadConfig({ repo: tmpRepo(), configPath: notMap }), /expected `models\.profiles\.deep\.opencode` to be a map/);
 	});
 
 	it("throws on an invalid provider value (documents #80's two-spot widening)", () => {

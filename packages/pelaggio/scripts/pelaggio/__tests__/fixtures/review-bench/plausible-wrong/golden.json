@@ -1,0 +1,7 @@
+{
+	"schemaVersion": 1,
+	"outcome": "converged-clean",
+	"gate": "pass",
+	"survivorFingerprints": [],
+	"diversity": "softened"
+}

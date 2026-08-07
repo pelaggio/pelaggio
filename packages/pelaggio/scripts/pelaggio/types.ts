@@ -201,6 +201,22 @@ export interface CycleProvenance {
 
 // ── Log entries (read from .dev/pelaggio-log.jsonl) ───────────────────
 
+/**
+ * Closed set of park causes. Assigned by `classifyParkReason` in helpers.ts.
+ *
+ * Known gap on `sdk-outage` (#458): sustained-outage detection (#128) lives in `runOrchestrator`,
+ * which relabels the tripping cycle's in-memory result *after* `runPipeline`'s `finish()` has
+ * already appended that cycle's log entry. The append-only log is never reconciled, so the cycle
+ * that trips the outage persists as an ordinary `transient sdk error` failure — counted by
+ * `failuresByCause`, not `parksByClass`.
+ *
+ * It does NOT simply land on the next cycle: the relabel sets `resetsAt = 0`, so `awaitParkReset`
+ * hands back immediately and a serial run has no next cycle at all. In practice this class is
+ * only reachable when a parallel sibling worker starts a cycle after the signal is set. Until
+ * #458 lands, treat an absent `sdk-outage` count as "not measured", not "did not happen".
+ */
+export type ParkClass = "rate-limit" | "paused" | "sdk-outage" | "review-escalation" | "review-blocked" | "review-binding" | "effects-failed" | "unclassified";
+
 export interface CycleLogEntry {
 	ts: string;
 	cycle: number;
@@ -216,8 +232,16 @@ export interface CycleLogEntry {
 	error: string | null;
 	parked?: boolean;
 	parkReason?: string | null;
+	/** Closed classification of `parkReason` (see `classifyParkReason`). Absent on records
+	 *  written before park classification existed — stats render those as `unrecorded`
+	 *  rather than silently folding them into a real class. */
+	parkClass?: ParkClass;
 	shipwrecked?: boolean;
 	bookkeepingWarnings?: string[];
+	/** True when this line is a day-budget spend receipt (local-review charge), NOT a pipeline
+	 *  cycle. Read by `sumDaySpendFromLog` for the durable day-budget seed (#398); filtered out at
+	 *  the top of `stats.reduce()` so it never inflates `/stats` cycle/cost tallies. */
+	budgetCharge?: boolean;
 	/** Additive cycle provenance. Optional only for legacy log compatibility. */
 	provenance?: CycleProvenance;
 }

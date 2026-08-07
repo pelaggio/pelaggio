@@ -298,50 +298,78 @@ The `grok` provider drives `grok agent stdio` over ACP (issue #136). Follow the
 [Grok operator guide](./grok.md) for the pinned install, authentication,
 Landlock preflight, metering, and trust limits. Its off-PATH binary must be
 pinned via `providers.grok.bin` (see [Provider binaries](#provider-binaries)).
-A `grok` model id can be pinned in that profile's `<step>` slot (a `claude-*` id is
-never forwarded); otherwise the grok CLI default applies.
+Pin a `grok` model id in that profile's `grok` sub-block (see
+[Per-provider model sub-blocks](#per-provider-model-sub-blocks) below); a
+`claude-*` id is never forwarded, and absence means the grok CLI default applies.
 
 The `opencode` provider drives `opencode run --format json` as a headless
 subprocess (issue #137), fronting OpenCode's 75+ model backends on the same seam.
 Follow the [OpenCode operator guide](./opencode.md) for install, authentication,
 the autonomous-permission env, and trust limits. Its off-PATH binary can be
 pinned via `providers.opencode.bin`. Address a backend model in that profile's
-`<step>` slot using OpenCode's `provider/model` form (for example
+`opencode` sub-block using OpenCode's `provider/model` form (for example
 `anthropic/claude-sonnet-4-5` or `openai/gpt-5`); a bare `claude-*` id is never
 forwarded, so the OpenCode CLI default applies when only such an id is present.
-Unlike Codex, OpenCode uses the shared `model` slot — there is no `opencode`
-model sub-block. OpenCode is not a default authoring reviewer; opt in per profile.
+OpenCode is not a default authoring reviewer; opt in per profile.
 
-When a step runs on Codex, an optional `codex` sub-block selects the Codex model
-for that step:
+### Per-provider model sub-blocks
+
+Each subprocess-backed provider has its own sparse model sub-block —
+`codex`, `grok`, and `opencode` — parallel to the top-level `<step>` slot that
+pins the Claude model. A provider receives **only its own** sub-block's model;
+it never scavenges another provider's slot, so one profile can pin a distinct
+model per provider for the same step:
 
 ```yaml
 models:
   profiles:
     deep:
+      implement: claude-opus-4-8   # Claude model (top-level <step> slot)
       providers:
-        implement: codex
+        implement: [claude, codex, grok, opencode]
       codex:
         implement: gpt-5-codex
+      grok:
+        implement: grok-code-fast-1
+      opencode:
+        implement: openrouter/qwen3-coder   # provider/model form
 ```
 
-`codex` is sparse like the other per-profile sub-blocks. It only affects steps
-whose provider resolves to `codex`; Claude-provider steps ignore it. Model
-selection for a Codex step is:
+Whichever provider the pipeline selects for `implement` receives only its own
+model. Model selection order for a subprocess provider is:
 
-1. `models.profiles.<name>.codex.<step>`
-2. `models.profiles.<name>.<step>`, but only when the value is not a
-   `claude-*` id
-3. Codex CLI default
+1. the matching provider sub-block's exact step —
+   `models.profiles.<name>.<codex|grok|opencode>.<step>`;
+2. for `pr-verify`, that same provider sub-block's `pr-review` value when the
+   sub-block has no exact `pr-verify` value (mirrors the Claude/`<step>`
+   inheritance);
+3. the provider CLI default.
 
-No default Codex model ids ship in this config. Absence means "let the Codex CLI
-choose." A `claude-*` id is never forwarded to Codex, even if it appears in the
-`codex` block.
+Codex additionally retains a legacy fallback: when its `codex` sub-block has no
+value for the step, Codex reads the top-level `<step>` slot, but only when that
+value is not a `claude-*` id. Grok and OpenCode do **not** read the top-level
+`<step>` slot — without their own sub-block entry they fall through to the CLI
+default. A `claude-*` id is never forwarded to any subprocess provider.
 
-`codex` validates like the other sparse sub-blocks: values must be strings, a
+No default Codex/Grok/OpenCode model ids ship in this config. Omitting a
+provider sub-block preserves each CLI's default-model behavior exactly.
+
+Each sub-block validates like the other sparse blocks: values must be strings, a
 non-map block fails at startup, and wrong value types report the dotted key (for
-example `models.profiles.deep.codex.implement`). Unknown step keys inside the
-block are ignored.
+example `models.profiles.deep.grok.implement`). Unknown step keys inside a block
+are ignored.
+
+#### Reasoning effort at provider boundaries
+
+A step carries one scalar `effort` (`low | medium | high | xhigh | max`); there
+is no per-provider effort override. Pelaggio translates that single value at each
+provider's boundary into the vocabulary that CLI accepts:
+
+- **Grok** and **Codex** accept `low | medium | high`. Pelaggio preserves `low`
+  and `medium` and collapses `high`, `xhigh`, and `max` to `high`. Codex receives
+  the mapped value as `-c model_reasoning_effort=<low|medium|high>` on every
+  `exec` run, whether or not a Codex model is pinned.
+- **Claude** consumes the full five-value scale directly.
 
 ## Provider binaries
 
@@ -686,7 +714,21 @@ pick steps on an empty queue.
 
 **Budget exhaustion:** **drain** stops when the day budget is exceeded. **watch**
 emits `pelaggio.budget-idle`, sleeps until local midnight, rolls the tracker,
-emits `pelaggio.budget-wake`, and probes again.
+emits `pelaggio.budget-wake`, and probes again. (This drain-stop vs. watch-idle
+split is intentional and unchanged: drain finishes the queue or stops; only watch
+idles to rollover.)
+
+**Day-budget durability (issue #398):** the day-spend total is durable across
+process restarts, with no new state file. Every continuous process start (fresh
+launch, daemon pause→resume, crash restart) reconstructs today's spend by summing
+the `total_cost` of cycle-log lines in `.dev/pelaggio-log.jsonl` whose timestamp
+falls on the local calendar day, then seeds the tracker with it — so a same-day
+restart resumes at the accumulated spend and a midnight-crossing restart starts
+fresh. Pick cycles and revise sweeps already record their cost in the cycle log;
+local-review charges additionally append a minimal `budgetCharge` receipt line so
+review spend survives a restart too. Those receipts are excluded from `/stats`
+cycle and cost tallies. A cycle that crashes before it logs is under-counted by at
+most that one cycle's spend; budget is not pre-reserved for in-flight work.
 
 Constraints: auto-pick only (no `--item` / `--resume` / `--no-worktree`).
 Continuous mode re-runs the local revise sweep **before each pick iteration** so

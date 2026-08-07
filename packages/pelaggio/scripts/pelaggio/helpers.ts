@@ -7,7 +7,7 @@ import { resolveArtifactRoot } from "./artifact-root.js";
 import { CONFIG, isPipelineStep, LOG_PATH, type PipelineStep, REPO, resolveProviderBin, STEPS, WORKTREE_PREFIX } from "./config.js";
 import { MarkdownRoadmap } from "./roadmap/markdown.js";
 import type { CreateItemOpts, RoadmapSource } from "./roadmap/types.js";
-import type { CycleDisposition, CycleDriverProvenance, CycleGitBinding, CycleResult, CycleVersionProvenance, Decision, Mutex, ProviderName, Step, StepLog, StepResult } from "./types.js";
+import type { CycleDisposition, CycleDriverProvenance, CycleGitBinding, CycleResult, CycleVersionProvenance, Decision, Mutex, ParkClass, ProviderName, Step, StepLog, StepResult } from "./types.js";
 
 export function parseDecisions(text: string): Decision[] {
 	const decisions: Decision[] = [];
@@ -622,6 +622,35 @@ const CLOSED_SUBTYPES: ReadonlySet<string> = new Set(["success", "error_rate_lim
 
 export function classifyOutcome(result: Pick<StepResult, "subtype">): StepSubtype {
 	return CLOSED_SUBTYPES.has(result.subtype) ? (result.subtype as StepSubtype) : "error";
+}
+
+/**
+ * Closed classification of *why* a cycle parked, recorded next to the free-form
+ * `parkReason` detail in the cycle log.
+ *
+ * Two families reach `parkExit()`: signal-driven parks carry a structured
+ * `parkSignal.limitType` (rate limit, operator pause, SDK outage), while
+ * review-loop parks pass an explicit reason string and leave `limitType` empty.
+ * Only the former was ever persisted, so every review-gate park logged a null
+ * reason — which made "parked because a reviewer found a real blocker" and
+ * "parked because the provider fell over" indistinguishable in the stats.
+ *
+ * `limitType` wins when present: it is already structured. The reason string is
+ * matched only as a fallback, most-specific first — "effects failed after
+ * escalation" is an effects failure, not an escalation.
+ */
+export function classifyParkReason(reason: string | null | undefined, limitType: string | null | undefined): ParkClass {
+	const limit = (limitType ?? "").trim();
+	if (limit === "paused") return "paused";
+	if (limit === "sdk-outage") return "sdk-outage";
+	if (limit) return "rate-limit";
+	const text = (reason ?? "").trim();
+	if (!text) return "unclassified";
+	if (/effects failed/i.test(text)) return "effects-failed";
+	if (/could not bind/i.test(text)) return "review-binding";
+	if (/escalation/i.test(text)) return "review-escalation";
+	if (/safety blocker|hard-block|dissent|budget|no loop result/i.test(text)) return "review-blocked";
+	return "unclassified";
 }
 
 export function classifyCycleDisposition(result: Pick<CycleResult, "completed" | "error" | "disposition">, recoverable: ReadonlySet<string>): CycleDisposition {
@@ -1294,7 +1323,15 @@ export function detectResumeStep(itemId: string, worktree: string): Step {
 
 export type LoggedDriverIdentity = { provider: "codex"; codexModel?: string } | { provider: "claude" | "grok" | "opencode"; model?: string };
 
-/** Find the latest successful realized author across all cycle entries for an item. */
+/**
+ * Find the latest successful realized author across all cycle entries for an item.
+ *
+ * The cycle log stores a realized provider plus a single generic `model` string. Codex is
+ * reconstructed as `codexModel`; Claude, Grok, and OpenCode as the generic `model` (#431: a Grok or
+ * OpenCode step now logs its own realized model, not the top-level Claude id, so the recovered
+ * identity round-trips into a correct execution override). A logged `"default"` model means the
+ * seat ran on the CLI default and is recovered as an absent model, matching the Codex behavior.
+ */
 export function findLoggedArtifactAuthor(itemId: string, step: "plan" | "implement", logPath = LOG_PATH): LoggedDriverIdentity | undefined {
 	if (!existsSync(logPath)) return undefined;
 	try {

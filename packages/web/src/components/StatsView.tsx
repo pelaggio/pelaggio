@@ -52,6 +52,10 @@ export function StatsView() {
 
 	const stepKeys = Array.from(new Set([...Object.keys(stats.costByStep), ...Object.keys(stats.avgRetriesByStep), ...Object.keys(stats.maxTurnsRetriesByStep), ...Object.keys(stats.rethinkRateByStep)])).sort();
 	const totalTokens = stats.totalTokens.input + stats.totalTokens.output + stats.totalTokens.cacheRead + stats.totalTokens.cacheCreation;
+	// Sorted by spend / count descending — the top row is the one worth acting on.
+	const providerKeys = Object.keys(stats.costByProvider).sort((a, b) => (stats.costByProvider[b] ?? 0) - (stats.costByProvider[a] ?? 0));
+	const parkKeys = Object.keys(stats.parksByClass).sort((a, b) => (stats.parksByClass[b] ?? 0) - (stats.parksByClass[a] ?? 0));
+	const failKeys = Object.keys(stats.failuresByCause).sort((a, b) => (stats.failuresByCause[b] ?? 0) - (stats.failuresByCause[a] ?? 0));
 
 	return (
 		<div className="space-y-8">
@@ -93,6 +97,72 @@ export function StatsView() {
 					</tbody>
 				</table>
 			</section>
+
+			{providerKeys.length > 0 && (
+				<section>
+					<h2 className="mb-2 text-lg font-semibold">Per-provider</h2>
+					<table>
+						<thead>
+							<tr>
+								<th>Provider</th>
+								<th>Cost</th>
+								<th>Steps</th>
+								<th>Tokens</th>
+							</tr>
+						</thead>
+						<tbody>
+							{providerKeys.map((p) => {
+								const t = stats.tokensByProvider[p];
+								const total = t ? t.input + t.output + t.cacheRead + t.cacheCreation : 0;
+								return (
+									<tr key={p}>
+										<td>{p}</td>
+										<td>
+											{stats.costEstimatedByProvider[p] ? "~" : ""}
+											{formatUsd(stats.costByProvider[p] ?? 0)}
+										</td>
+										<td>{stats.stepsByProvider[p] ?? 0}</td>
+										<td>{formatTokens(total)}</td>
+									</tr>
+								);
+							})}
+						</tbody>
+					</table>
+				</section>
+			)}
+
+			{(parkKeys.length > 0 || failKeys.length > 0) && (
+				<section>
+					<h2 className="mb-2 text-lg font-semibold">Outcomes</h2>
+					<div className="grid gap-6 sm:grid-cols-2">
+						{parkKeys.length > 0 && (
+							<div>
+								<h3 className="mb-1 text-sm font-semibold text-slate-600">Parked by cause</h3>
+								<ul className="space-y-1 text-sm">
+									{parkKeys.map((k) => (
+										<li key={k}>
+											<code>{k}</code> · {stats.parksByClass[k]}
+											{k === "unrecorded" ? <span className="text-slate-500"> (logged before park classification)</span> : ""}
+										</li>
+									))}
+								</ul>
+							</div>
+						)}
+						{failKeys.length > 0 && (
+							<div>
+								<h3 className="mb-1 text-sm font-semibold text-slate-600">Failed by cause</h3>
+								<ul className="space-y-1 text-sm">
+									{failKeys.map((k) => (
+										<li key={k}>
+											<code>{k}</code> · {stats.failuresByCause[k]}
+										</li>
+									))}
+								</ul>
+							</div>
+						)}
+					</div>
+				</section>
+			)}
 
 			<section>
 				<h2 className="mb-2 text-lg font-semibold">Items delivered ({stats.itemsDelivered.length})</h2>

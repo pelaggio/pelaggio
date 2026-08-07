@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { REPO } from "../config.js";
 import type { NotifyPayload } from "../notify.js";
-import { runOrchestrator } from "../pipeline.js";
+import { hermeticDefault, hermeticQueueRoot, runOrchestrator } from "../pipeline.js";
+import { gateRecordsDir, readPrReviewGateRecord, writePrReviewGateRecord } from "../pr-review-gate-record.js";
 import { enqueueReviewRequest, type NewReviewRequest, reviewRequestsDir } from "../review-request-queue.js";
 import { reviseFindingsPath } from "../revise-sweep.js";
 import type { GhRunner } from "../roadmap/github-issues.js";
@@ -48,6 +49,15 @@ const fakeResolveWorktree = (id: string): string => `/fake/wt-${id.toLowerCase()
 const fakeDetectResumeStep = () => "implement" as const;
 
 describe("runOrchestrator — resume mode", () => {
+	it("rejects --review-findings combined with a later --from (exit 2)", async (t) => {
+		t.mock.method(console, "error", () => {});
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({});
+		const { exitCode } = await runOrchestrator({ ...baseFlags, resume: "tool-99", from: "ship", "review-findings": "f.md" }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });
+		assert.equal(exitCode, 2);
+		assert.equal(calls.length, 0, "no pipeline run may start past the rejected combination");
+	});
+
 	it("success: runPipeline called with startFrom and exitCode 0", async (t) => {
 		t.mock.method(console, "log", () => {});
 		const { runPipeline, calls } = createMockRunPipeline({
@@ -853,6 +863,33 @@ describe("runOrchestrator — notifications", () => {
 	});
 });
 
+describe("hermetic-test guard (#420, #456)", () => {
+	// The effectful review/revise defaults reach the host repo and the network: `gh` shells out and
+	// `runReviewGate` spawns provider agents. Reaching the drain without injecting them used the
+	// developer's real repo — producing live Claude/Codex/Grok spawns (#420) and a 4-hour hang on
+	// the host's stale `.drain.lock` (#456). These assert the guard directly, since whether any
+	// particular orchestrator path reaches the drain is incidental to the property being protected.
+	it("withholds an effectful default under node --test and names the dep to inject", () => {
+		const real = (() => "REAL") as () => string;
+		const guarded = hermeticDefault("review.gh", real);
+		assert.notEqual(guarded, real, "the real implementation must not be handed out under node --test");
+		assert.throws(() => guarded(), /hermetic-test guard.*review\.gh/s);
+	});
+
+	// The queue root is read eagerly to derive the drain-lock path even when the drain never runs,
+	// so it cannot throw — it must resolve somewhere harmless instead.
+	it("resolves queue roots to a temp dir, never the host .dev/", () => {
+		let realCalls = 0;
+		const root = hermeticQueueRoot(() => {
+			realCalls++;
+			return "/home/chris/workspace/pelaggio/.dev/review-requests";
+		});
+		assert.equal(realCalls, 0, "the host path must not even be computed under node --test");
+		assert.ok(!root.includes("/.dev/review-requests"), `expected a temp root, got ${root}`);
+		assert.ok(existsSync(root), "the substitute root must exist so lock/record paths resolve");
+	});
+});
+
 describe("runOrchestrator — revise sweep (issue #76)", () => {
 	// One revisable PR: open, non-draft, feat/issue-76 head, unlabeled, review=FAILURE.
 	const ONE_REVISABLE = [{ number: 101, isDraft: false, headRefName: "feat/issue-76-x", labels: [], statusCheckRollup: [{ __typename: "CheckRun", name: "review", conclusion: "FAILURE" }] }];
@@ -899,7 +936,7 @@ describe("runOrchestrator — revise sweep (issue #76)", () => {
 								number: 201,
 								isDraft: false,
 								headRefName: "feat/issue-84-local-review",
-								headRefOid: "abc123",
+								headRefOid: "abc123a",
 								headRepository: { nameWithOwner: "o/r" },
 								updatedAt: "2026-07-08T12:00:00Z",
 								statusCheckRollup: [],
@@ -938,6 +975,7 @@ describe("runOrchestrator — revise sweep (issue #76)", () => {
 					// REPO/.dev/review-requests/.drain.lock, which mocked timers cannot
 					// steal (#387 gate finding).
 					queueRoot: mkdtempSync(join(tmpdir(), "review-queue-")),
+					gateRecordsRoot: mkdtempSync(join(tmpdir(), "review-gate-records-")),
 					statuslessAfter: "2h",
 					now: () => Date.parse("2026-07-08T12:05:00Z"),
 					prepareReviewHead: () => ({ diffCwd: "/tmp/pr-head", baseRef: "origin/main", headRef: "refs/pelaggio-review/pr-201" }),
@@ -950,7 +988,7 @@ describe("runOrchestrator — revise sweep (issue #76)", () => {
 
 		assert.equal(calls[0].opts.itemId, "84");
 		assert.equal(calls[0].opts.startFrom, "implement");
-		const statuses = ghCalls.filter((args) => args[0] === "api" && args[1] === "repos/o/r/statuses/abc123");
+		const statuses = ghCalls.filter((args) => args[0] === "api" && args[1] === "repos/o/r/statuses/abc123a");
 		assert.deepEqual(
 			statuses.map((args) => args.find((arg) => arg.startsWith("state="))),
 			["state=pending", "state=failure"],
@@ -1005,7 +1043,7 @@ describe("runOrchestrator — revise sweep (issue #76)", () => {
 				number: 201,
 				isDraft: false,
 				headRefName: "feat/issue-84-local-review",
-				headRefOid: "abc123",
+				headRefOid: "abc123a",
 				headRepository: { nameWithOwner: "o/r" },
 				updatedAt: "2026-07-08T12:00:00Z",
 				statusCheckRollup: [{ __typename: "StatusContext", context: "review", state: "PENDING", startedAt: "2026-07-08T12:00:00Z" }],
@@ -1040,6 +1078,7 @@ describe("runOrchestrator — revise sweep (issue #76)", () => {
 					// REPO/.dev/review-requests/.drain.lock, which mocked timers cannot
 					// steal (#387 gate finding).
 					queueRoot: mkdtempSync(join(tmpdir(), "review-queue-")),
+					gateRecordsRoot: mkdtempSync(join(tmpdir(), "review-gate-records-")),
 					statuslessAfter: "2h",
 					now: () => Date.parse("2026-07-08T12:05:00Z"),
 					prepareReviewHead: () => ({ diffCwd: "/tmp/pr-head", baseRef: "origin/main", headRef: "refs/pelaggio-review/pr-201" }),
@@ -1058,7 +1097,7 @@ describe("runOrchestrator — revise sweep (issue #76)", () => {
 		);
 
 		assert.equal(exitCode, 1);
-		const statusStates = ghCalls.filter((a) => a[0] === "api" && a[1] === "repos/o/r/statuses/abc123").map((a) => a.find((arg) => arg.startsWith("state=")));
+		const statusStates = ghCalls.filter((a) => a[0] === "api" && a[1] === "repos/o/r/statuses/abc123a").map((a) => a.find((arg) => arg.startsWith("state=")));
 		assert.deepEqual(statusStates, ["state=pending"], "only a pending status — never failure — on a rate-limit park");
 		const commentUpserts = ghCalls.filter((a) => a.some((arg) => arg.startsWith("body=")));
 		assert.equal(commentUpserts.length, 0, "no findings (or any) comment upserted on a park");
@@ -1072,7 +1111,7 @@ describe("runOrchestrator — revise sweep (issue #76)", () => {
 		t.mock.timers.setTime(baseNow);
 
 		const ghCalls: string[][] = [];
-		// Stateful stub: once the retry posts a terminal `review` status on abc123, the forge's rollup
+		// Stateful stub: once the retry posts a terminal `review` status on abc123a, the forge's rollup
 		// reflects it so the #387 post-cycle drain drops the PR (done) instead of re-reviewing it.
 		let reviewState = "PENDING";
 		const gh: GhRunner = (args) => {
@@ -1084,7 +1123,7 @@ describe("runOrchestrator — revise sweep (issue #76)", () => {
 							number: 201,
 							isDraft: false,
 							headRefName: "feat/issue-84-local-review",
-							headRefOid: "abc123",
+							headRefOid: "abc123a",
 							headRepository: { nameWithOwner: "o/r" },
 							updatedAt: "2026-07-08T12:00:00Z",
 							statusCheckRollup: [{ __typename: "StatusContext", context: "review", state: reviewState, startedAt: "2026-07-08T12:00:00Z" }],
@@ -1094,7 +1133,7 @@ describe("runOrchestrator — revise sweep (issue #76)", () => {
 					status: 0,
 				};
 			}
-			if (args[0] === "api" && args[1] === "repos/o/r/statuses/abc123") {
+			if (args[0] === "api" && args[1] === "repos/o/r/statuses/abc123a") {
 				const posted = args.find((a) => a.startsWith("state="))?.slice("state=".length);
 				if (posted === "success" || posted === "failure") reviewState = posted.toUpperCase();
 				return { stdout: "", stderr: "", status: 0 };
@@ -1119,6 +1158,7 @@ describe("runOrchestrator — revise sweep (issue #76)", () => {
 					// REPO/.dev/review-requests/.drain.lock, which mocked timers cannot
 					// steal (#387 gate finding).
 					queueRoot: mkdtempSync(join(tmpdir(), "review-queue-")),
+					gateRecordsRoot: mkdtempSync(join(tmpdir(), "review-gate-records-")),
 					statuslessAfter: "2h",
 					now: () => Date.now(),
 					prepareReviewHead: () => ({ diffCwd: "/tmp/pr-head", baseRef: "origin/main", headRef: "refs/pelaggio-review/pr-201" }),
@@ -1146,7 +1186,7 @@ describe("runOrchestrator — revise sweep (issue #76)", () => {
 		await promise;
 
 		assert.equal(gateCall, 2, "the review sweep retried after the wait window");
-		const statusStates = ghCalls.filter((a) => a[0] === "api" && a[1] === "repos/o/r/statuses/abc123").map((a) => a.find((arg) => arg.startsWith("state=")));
+		const statusStates = ghCalls.filter((a) => a[0] === "api" && a[1] === "repos/o/r/statuses/abc123a").map((a) => a.find((arg) => arg.startsWith("state=")));
 		assert.ok(statusStates.includes("state=success"), `expected a success status after retry; got ${statusStates.join(", ")}`);
 		assert.ok(!statusStates.includes("state=failure"), "never posts failure on a rate-limit park");
 	});
@@ -1439,6 +1479,59 @@ describe("runOrchestrator — continuous mode (issue #82)", () => {
 		assert.equal(exitCode, 0);
 	});
 
+	// #398: durable seed. Process restart reconstructs today's spend so a same-day restart still
+	// honors the cap. `initialDaySpend` overrides the disk read; seed ≥ budget must gate before pick.
+	it("drain: pre-seeded day spend ≥ budget stops before any pick (#398)", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({ default: { completed: true, cost: 3 } });
+		let probes = 0;
+		const { exitCode } = await runOrchestrator(
+			{ ...baseFlags, continuous: true, preset: "drain", "day-budget": "5" },
+			{
+				runPipeline,
+				initialDaySpend: 5,
+				queueProbe: async () => {
+					probes++;
+					return { empty: false, readyCount: 1 };
+				},
+				sleep: async () => {},
+			},
+		);
+		assert.equal(exitCode, 0);
+		assert.equal(calls.length, 0, "seeded day spend ≥ budget must stop drain before any paid pick");
+		assert.equal(probes, 0, "the day-budget gate short-circuits before the free queue probe");
+	});
+
+	it("watch: pre-seeded day spend ≥ budget idles before any pick, then picks after rollover (#398)", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({ default: { completed: true, cost: 0.1 } });
+		let nowMs = new Date(2026, 7, 2, 12, 0, 0).getTime(); // mid-day so the idle sleep is long
+		const sleeps: number[] = [];
+		let picksBeforeFirstSleep = -1;
+		const { exitCode } = await runOrchestrator(
+			// cycles: "2" is a safety ceiling so the post-rollover picks terminate the run
+			{ ...baseFlags, continuous: true, preset: "watch", "day-budget": "5", "probe-interval": "1m", cycles: "2" },
+			{
+				runPipeline,
+				initialDaySpend: 6,
+				queueProbe: async () => ({ empty: false, readyCount: 1 }),
+				sleep: async (ms) => {
+					if (sleeps.length === 0) picksBeforeFirstSleep = calls.length;
+					sleeps.push(ms);
+					nowMs += ms + 1; // advance past the sleep so the tracker rolls past midnight
+				},
+				now: () => nowMs,
+			},
+		);
+		assert.equal(exitCode, 0);
+		assert.equal(picksBeforeFirstSleep, 0, "watch must budget-idle before any paid pick when seeded over budget");
+		assert.ok(
+			sleeps.some((ms) => ms > 60_000),
+			`expected a long budget-idle sleep, got ${JSON.stringify(sleeps)}`,
+		);
+		assert.equal(calls.length, 2, "after rollover the cap-bounded picks proceed");
+	});
+
 	// #397: local-review park path charged totalSpent but skipped DayBudgetTracker.add
 	// (the post-try success/failure path is skipped on break). After auto-resume the
 	// retry's cost was counted, but the partial park spend leaked — continuous drain
@@ -1446,6 +1539,8 @@ describe("runOrchestrator — continuous mode (issue #82)", () => {
 	it("day-budget accounts for local review park cost (#397)", async (t) => {
 		t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
 		t.mock.method(console, "log", () => {});
+		const reviewMain = mkdtempSync(join(tmpdir(), "review-budget-397-"));
+		t.after(() => rmSync(reviewMain, { recursive: true, force: true }));
 		const baseNow = 1_700_000_000_000;
 		t.mock.timers.setTime(baseNow);
 
@@ -1454,7 +1549,7 @@ describe("runOrchestrator — continuous mode (issue #82)", () => {
 				number: 201,
 				isDraft: false,
 				headRefName: "feat/issue-397-day-budget",
-				headRefOid: "abc123",
+				headRefOid: "abc123a",
 				headRepository: { nameWithOwner: "o/r" },
 				updatedAt: "2026-07-08T12:00:00Z",
 				statusCheckRollup: [{ __typename: "StatusContext", context: "review", state: "PENDING", startedAt: "2026-07-08T12:00:00Z" }],
@@ -1471,16 +1566,22 @@ describe("runOrchestrator — continuous mode (issue #82)", () => {
 		});
 
 		let gateCall = 0;
+		const logged: Record<string, unknown>[] = [];
 		const promise = runOrchestrator(
 			{ ...baseFlags, continuous: true, preset: "drain", "day-budget": "5", target: "pull-request" },
 			{
 				runPipeline,
 				queueProbe: async () => ({ empty: false, readyCount: 1 }),
 				sleep: async () => {},
+				appendLog: (entry) => {
+					logged.push(entry);
+				},
 				review: {
 					runner: "local",
 					ghRepo: "o/r",
 					gh,
+					queueRoot: reviewRequestsDir(reviewMain),
+					gateRecordsRoot: gateRecordsDir(reviewMain),
 					statuslessAfter: "2h",
 					now: () => Date.now(),
 					prepareReviewHead: () => ({ diffCwd: "/tmp/pr-head", baseRef: "origin/main", headRef: "refs/pelaggio-review/pr-201" }),
@@ -1530,6 +1631,267 @@ describe("runOrchestrator — continuous mode (issue #82)", () => {
 		assert.equal(gateCall, 2, "review sweep retried after park wait");
 		assert.equal(calls.length, 0, "day budget must include park cost so drain does not start paid picks");
 		assert.equal(exitCode, 0);
+		// #398: both the park partial ($4) and the retry success ($1.5) are written as durable
+		// budget-charge receipts so a process restart re-reads today's local-review spend.
+		const charges = logged.filter((e) => e.budgetCharge === true).map((e) => e.total_cost);
+		assert.deepEqual(charges, [4, 1.5], "local-review park + success costs are logged as budget-charge receipts");
+	});
+
+	it("day-budget accounts for a completed review when gate-record persistence fails", async (t) => {
+		t.mock.method(console, "log", () => {});
+		t.mock.method(console, "warn", () => {});
+		const reviewMain = mkdtempSync(join(tmpdir(), "review-budget-record-failure-"));
+		t.after(() => rmSync(reviewMain, { recursive: true, force: true }));
+		const pendingPr = [
+			{
+				number: 201,
+				isDraft: false,
+				headRefName: "feat/issue-328-gate-record-budget",
+				headRefOid: "abc123a",
+				headRepository: { nameWithOwner: "o/r" },
+				updatedAt: "2026-07-08T12:00:00Z",
+				statusCheckRollup: [{ __typename: "StatusContext", context: "review", state: "PENDING", startedAt: "2026-07-08T12:00:00Z" }],
+			},
+		];
+		const gh: GhRunner = (args) => {
+			if (args[0] === "pr" && args[1] === "list") return { stdout: JSON.stringify(pendingPr), stderr: "", status: 0 };
+			if (args[0] === "issue" && args[1] === "view") return { stdout: JSON.stringify({ labels: [{ name: "autopilot" }] }), stderr: "", status: 0 };
+			return { stdout: "", stderr: "", status: 0 };
+		};
+		const { runPipeline, calls } = createMockRunPipeline({ default: { completed: true, cost: 0.1 } });
+		let gateCalls = 0;
+		let probes = 0;
+
+		const { exitCode } = await runOrchestrator(
+			{ ...baseFlags, continuous: true, preset: "drain", "day-budget": "5", target: "pull-request" },
+			{
+				runPipeline,
+				queueProbe: async () => {
+					probes++;
+					return { empty: false, readyCount: 1 };
+				},
+				review: {
+					runner: "local",
+					ghRepo: "o/r",
+					gh,
+					queueRoot: reviewRequestsDir(reviewMain),
+					gateRecordsRoot: gateRecordsDir(reviewMain),
+					statuslessAfter: "2h",
+					now: () => Date.parse("2026-08-05T12:00:00Z"),
+					prepareReviewHead: () => ({ diffCwd: "/tmp/pr-head", baseRef: "origin/main", headRef: "refs/pelaggio-review/pr-201" }),
+					cleanupReviewHead: () => {},
+					runReviewGate: async () => {
+						gateCalls++;
+						return { gate: "pass", body: "clean", cost: 5, costEstimated: false, turns: 3, ok: true, subtype: "success", agreement: "consensus-pass" };
+					},
+					writeGateRecord: () => {
+						throw new Error("disk full");
+					},
+				},
+				revise: { local: false, ghRepo: "o/r", gh },
+			},
+		);
+
+		assert.equal(gateCalls, 1, "the failed persistence attempt must not trigger another unmetered review");
+		assert.equal(probes, 0, "the exhausted day budget stops before the free queue probe");
+		assert.equal(calls.length, 0, "the exhausted day budget stops before paid pick work");
+		assert.equal(exitCode, 0);
+	});
+
+	// Both tests below are regressions for the #429 trio review, which blocked on them.
+	it("day-budget receipts never reach the host cycle log", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const reviewMain = mkdtempSync(join(tmpdir(), "review-budget-host-log-"));
+		t.after(() => rmSync(reviewMain, { recursive: true, force: true }));
+		// `appendLogDefault`'s target. The seed read was hermetic but the receipt write was not, so a
+		// plain `pnpm -r test` appended real $5 `budgetCharge` rows here and the next real
+		// `--day-budget 5` campaign started already exhausted. Deliberately inject no `appendLog`.
+		const hostLog = join(REPO, ".dev", "pelaggio-log.jsonl");
+		const sizeOf = (f: string): number => (existsSync(f) ? statSync(f).size : -1);
+		const before = sizeOf(hostLog);
+		const pendingPr = [
+			{
+				number: 202,
+				isDraft: false,
+				headRefName: "feat/issue-398-host-log",
+				headRefOid: "def456b",
+				headRepository: { nameWithOwner: "o/r" },
+				updatedAt: "2026-07-08T12:00:00Z",
+				statusCheckRollup: [{ __typename: "StatusContext", context: "review", state: "PENDING", startedAt: "2026-07-08T12:00:00Z" }],
+			},
+		];
+		const gh: GhRunner = (args) => {
+			if (args[0] === "pr" && args[1] === "list") return { stdout: JSON.stringify(pendingPr), stderr: "", status: 0 };
+			if (args[0] === "issue" && args[1] === "view") return { stdout: JSON.stringify({ labels: [{ name: "autopilot" }] }), stderr: "", status: 0 };
+			return { stdout: "", stderr: "", status: 0 };
+		};
+		const { runPipeline } = createMockRunPipeline({ default: { completed: true, cost: 0.1 } });
+
+		await runOrchestrator(
+			{ ...baseFlags, continuous: true, preset: "drain", "day-budget": "5", target: "pull-request" },
+			{
+				runPipeline,
+				queueProbe: async () => ({ empty: true, readyCount: 0 }),
+				review: {
+					runner: "local",
+					ghRepo: "o/r",
+					gh,
+					queueRoot: reviewRequestsDir(reviewMain),
+					gateRecordsRoot: gateRecordsDir(reviewMain),
+					statuslessAfter: "2h",
+					now: () => Date.parse("2026-08-05T12:00:00Z"),
+					prepareReviewHead: () => ({ diffCwd: "/tmp/pr-head", baseRef: "origin/main", headRef: "refs/pelaggio-review/pr-202" }),
+					cleanupReviewHead: () => {},
+					runReviewGate: async () => ({ gate: "pass", body: "clean", cost: 5, costEstimated: false, turns: 3, ok: true, subtype: "success", agreement: "consensus-pass" }),
+					writeGateRecord: () => join(reviewMain, "gate-record.json"),
+				},
+				revise: { local: false, ghRepo: "o/r", gh },
+			},
+		);
+
+		assert.equal(sizeOf(hostLog), before, "budgetCharge receipts must land in the hermetic ledger, never the developer's real cycle log");
+	});
+
+	it("day-budget preflight creates a missing ledger directory instead of reporting it unwritable", async (t) => {
+		t.mock.method(console, "log", () => {});
+		// A fresh consumer checkout has no `.dev/` — `appendLog` creates it lazily on first write. The
+		// preflight probed the absent parent and threw ENOENT, surfaced as "ledger is not writable",
+		// which failed every first-ever day-budget run including `--dry-run`.
+		const fresh = mkdtempSync(join(tmpdir(), "day-budget-fresh-repo-"));
+		t.after(() => rmSync(fresh, { recursive: true, force: true }));
+		const ledger = join(fresh, ".dev", "pelaggio-log.jsonl");
+		assert.equal(existsSync(join(fresh, ".dev")), false, "precondition: the ledger's parent must not exist");
+		const { runPipeline } = createMockRunPipeline({ default: { completed: true, cost: 0.1 } });
+
+		const { exitCode } = await runOrchestrator({ ...baseFlags, continuous: true, preset: "drain", "day-budget": "5" }, { runPipeline, daySpendLogPath: ledger, queueProbe: async () => ({ empty: true, readyCount: 0 }) });
+
+		assert.equal(existsSync(join(fresh, ".dev")), true, "the preflight creates the ledger directory, as the eventual writer would");
+		assert.equal(exitCode, 0, "a fresh checkout must not fail startup with a spurious not-writable error");
+	});
+
+	// Two PRs, each review costing the whole day budget. Both regressions below need a *second*
+	// candidate to be observable at all: the drain only misbehaves when it starts another review.
+	const twoPendingPrs = (): unknown[] =>
+		[301, 302].map((number) => ({
+			number,
+			isDraft: false,
+			headRefName: `feat/issue-398-drain-stop-${number}`,
+			headRefOid: `sha${number}`,
+			headRepository: { nameWithOwner: "o/r" },
+			updatedAt: "2026-07-08T12:00:00Z",
+			statusCheckRollup: [{ __typename: "StatusContext", context: "review", state: "PENDING", startedAt: "2026-07-08T12:00:00Z" }],
+		}));
+
+	const drainWithTwoReviews = async (reviewOverrides: Record<string, unknown>, topOverrides: Record<string, unknown> = {}): Promise<number> => {
+		const reviewMain = mkdtempSync(join(tmpdir(), "review-drain-stop-"));
+		const gh: GhRunner = (args) => {
+			if (args[0] === "pr" && args[1] === "list") return { stdout: JSON.stringify(twoPendingPrs()), stderr: "", status: 0 };
+			if (args[0] === "issue" && args[1] === "view") return { stdout: JSON.stringify({ labels: [{ name: "autopilot" }] }), stderr: "", status: 0 };
+			return { stdout: "", stderr: "", status: 0 };
+		};
+		let gateCalls = 0;
+		const { runPipeline } = createMockRunPipeline({ default: { completed: true, cost: 0.1 } });
+		await runOrchestrator(
+			{ ...baseFlags, continuous: true, preset: "drain", "day-budget": "5", target: "pull-request" },
+			{
+				runPipeline,
+				...topOverrides,
+				queueProbe: async () => ({ empty: true, readyCount: 0 }),
+				review: {
+					runner: "local",
+					ghRepo: "o/r",
+					gh,
+					queueRoot: reviewRequestsDir(reviewMain),
+					gateRecordsRoot: gateRecordsDir(reviewMain),
+					statuslessAfter: "2h",
+					now: () => Date.parse("2026-08-05T12:00:00Z"),
+					prepareReviewHead: () => ({ diffCwd: "/tmp/pr-head", baseRef: "origin/main", headRef: "refs/pelaggio-review/pr" }),
+					cleanupReviewHead: () => {},
+					runReviewGate: async () => {
+						gateCalls++;
+						return { gate: "pass", body: "clean", cost: 5, costEstimated: false, turns: 3, ok: true, subtype: "success", agreement: "consensus-pass" };
+					},
+					writeGateRecord: () => join(reviewMain, "gate-record.json"),
+					...reviewOverrides,
+				},
+				revise: { local: false, ghRepo: "o/r", gh },
+			},
+		);
+		rmSync(reviewMain, { recursive: true, force: true });
+		return gateCalls;
+	};
+
+	it("a lost day-budget receipt halts the whole campaign and reports failure", async (t) => {
+		t.mock.method(console, "log", () => {});
+		t.mock.method(console, "error", () => {});
+		// Stopping only the review drain is not enough: below the cap the orchestrator went on to
+		// revise and pick work whose spend is equally unreconstructable, and still exited 0.
+		const reviewMain = mkdtempSync(join(tmpdir(), "review-receipt-halt-"));
+		t.after(() => rmSync(reviewMain, { recursive: true, force: true }));
+		const gh: GhRunner = (args) => {
+			if (args[0] === "pr" && args[1] === "list") return { stdout: JSON.stringify(twoPendingPrs()), stderr: "", status: 0 };
+			if (args[0] === "issue" && args[1] === "view") return { stdout: JSON.stringify({ labels: [{ name: "autopilot" }] }), stderr: "", status: 0 };
+			return { stdout: "", stderr: "", status: 0 };
+		};
+		const { runPipeline, calls } = createMockRunPipeline({ default: { completed: true, cost: 0.1 } });
+		let probes = 0;
+		const { exitCode } = await runOrchestrator(
+			{ ...baseFlags, continuous: true, preset: "drain", "day-budget": "500", target: "pull-request" },
+			{
+				runPipeline,
+				appendLog: () => {
+					throw new Error("EACCES: permission denied, open '.dev/pelaggio-log.jsonl'");
+				},
+				queueProbe: async () => {
+					probes++;
+					return { empty: false, readyCount: 1 };
+				},
+				review: {
+					runner: "local",
+					ghRepo: "o/r",
+					gh,
+					queueRoot: reviewRequestsDir(reviewMain),
+					gateRecordsRoot: gateRecordsDir(reviewMain),
+					statuslessAfter: "2h",
+					now: () => Date.parse("2026-08-05T12:00:00Z"),
+					prepareReviewHead: () => ({ diffCwd: "/tmp/pr-head", baseRef: "origin/main", headRef: "refs/pelaggio-review/pr" }),
+					cleanupReviewHead: () => {},
+					runReviewGate: async () => ({ gate: "pass", body: "clean", cost: 5, costEstimated: false, turns: 3, ok: true, subtype: "success", agreement: "consensus-pass" }),
+					writeGateRecord: () => join(reviewMain, "gate-record.json"),
+				},
+				revise: { local: false, ghRepo: "o/r", gh },
+			},
+		);
+
+		// The day budget is 500 and one review cost 5, so nothing below stops for the cap — only the
+		// undurable ledger does.
+		assert.equal(calls.length, 0, "no paid pick work may start once the ledger is known undurable");
+		assert.equal(probes, 0, "the campaign halts before even the free queue probe");
+		assert.equal(exitCode, 1, "a run whose spend cannot be reconstructed must not report success");
+	});
+
+	it("a lost day-budget receipt stops the drain from starting another paid review", async (t) => {
+		t.mock.method(console, "log", () => {});
+		t.mock.method(console, "error", () => {});
+		// The first attempt at this fix set a loop-local flag that was re-initialised each iteration
+		// and only read *before* the charge site — a dead store, so the drain kept paying.
+		const gateCalls = await drainWithTwoReviews(
+			{},
+			{
+				appendLog: () => {
+					throw new Error("EACCES: permission denied, open '.dev/pelaggio-log.jsonl'");
+				},
+			},
+		);
+		assert.equal(gateCalls, 1, "an unwritable ledger must stop paid review work, not merely warn");
+	});
+
+	it("crossing the day budget stops the drain after the permitted one-operation overshoot", async (t) => {
+		t.mock.method(console, "log", () => {});
+		// Cost is unknowable until the gate returns, so one review may cross the cap. The next may not:
+		// the campaign-start gate alone let the entire remaining backlog run once the cap was crossed.
+		const gateCalls = await drainWithTwoReviews({});
+		assert.equal(gateCalls, 1, "the second review must not start once the day budget is exhausted");
 	});
 
 	it("drain ×2: two concurrent paid cycles when probe has work", async (t) => {
@@ -1636,21 +1998,33 @@ describe("runOrchestrator — mid-run review drain (#387)", () => {
 			return [];
 		}
 	};
-	const passGate = async () => ({ gate: "pass" as const, body: "<!-- pelaggio-pr-review -->\nclean\n\nVerdict: PASS", cost: 0.2, costEstimated: false, turns: 3, ok: true, subtype: "success" });
-	type GateResult = { gate: "pass" | "block" | "park"; body: string; cost: number; costEstimated: boolean; turns: number; ok: boolean; subtype: string; park?: { resetsAt: number; limitType: string } };
+	const passGate = async () => ({ gate: "pass" as const, body: "<!-- pelaggio-pr-review -->\nclean\n\nVerdict: PASS", cost: 0.2, costEstimated: false, turns: 3, ok: true, subtype: "success", agreement: "consensus-pass" as const });
+	type GateResult = {
+		gate: "pass" | "block" | "park";
+		body: string;
+		cost: number;
+		costEstimated: boolean;
+		turns: number;
+		ok: boolean;
+		subtype: string;
+		agreement?: "consensus-pass" | "consensus-block" | "disagreement" | "invalid";
+		park?: { resetsAt: number; limitType: string };
+	};
 	type GateFn = (opts: { parkSignal?: { parked: boolean; resetsAt: number; limitType: string } }) => Promise<GateResult>;
 
-	function reviewDeps(over: { gh: GhRunner; main: string; runReviewGate?: GateFn }) {
+	function reviewDeps(over: { gh: GhRunner; main: string; runReviewGate?: GateFn; writeGateRecord?: typeof writePrReviewGateRecord }) {
 		return {
 			runner: "local" as const,
 			ghRepo: "o/r",
 			gh: over.gh,
 			queueRoot: reviewRequestsDir(over.main),
+			gateRecordsRoot: gateRecordsDir(over.main),
 			statuslessAfter: "2h",
 			now: () => Date.parse("2026-08-03T12:05:00Z"),
 			prepareReviewHead: () => ({ diffCwd: "/tmp/pr-head", baseRef: "origin/main", headRef: "refs/pelaggio-review/pr-201" }),
 			cleanupReviewHead: () => {},
 			runReviewGate: over.runReviewGate ?? passGate,
+			writeGateRecord: over.writeGateRecord ?? writePrReviewGateRecord,
 		};
 	}
 
@@ -1698,6 +2072,106 @@ describe("runOrchestrator — mid-run review drain (#387)", () => {
 		const statuses = ghCalls.filter((a) => a[0] === "api" && a[1] === `repos/o/r/statuses/${HEAD}`).map((a) => a.find((x) => x.startsWith("state=")));
 		assert.deepEqual(statuses, ["state=pending", "state=success"]);
 		assert.deepEqual(pending(main), [], "record completed (deleted) after the terminal status");
+		assert.deepEqual(readPrReviewGateRecord(gateRecordsDir(main), 201, HEAD), {
+			schemaVersion: 1,
+			prNumber: 201,
+			headSha: HEAD,
+			itemId: "387",
+			gate: "pass",
+			ok: true,
+			subtype: "success",
+			agreement: "consensus-pass",
+			cost: 0.2,
+			costEstimated: false,
+			turns: 3,
+			runner: "local",
+			reviewedAt: "2026-08-03T12:05:00.000Z",
+		});
+	});
+
+	it("persists block and crash outcomes fail-closed", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const gh: GhRunner = (args) => {
+			if (args[0] === "pr" && args[1] === "list") return { stdout: "[]", stderr: "", status: 0 };
+			if (args[0] === "issue" && args[1] === "view") return { stdout: JSON.stringify({ labels: [{ name: "autopilot" }] }), stderr: "", status: 0 };
+			if (args[0] === "api" && args[1]?.includes("/commits/") && args[1]?.endsWith("/status")) return { stdout: JSON.stringify({ statuses: [] }), stderr: "", status: 0 };
+			if (args[0] === "api" && args[1]?.includes("/comments")) return { stdout: "[]", stderr: "", status: 0 };
+			return { stdout: "", stderr: "", status: 0 };
+		};
+
+		for (const [subtype, runReviewGate, expected] of [
+			[
+				"findings",
+				async () => ({ gate: "block" as const, body: "blocked", cost: 0.4, costEstimated: true, turns: 5, ok: false, subtype: "findings", agreement: "consensus-block" as const }),
+				{ gate: "block", subtype: "findings", agreement: "consensus-block", cost: 0.4, turns: 5 },
+			],
+			["error_crash", async () => Promise.reject(new Error("boom")), { gate: "block", subtype: "error_crash", agreement: "invalid", cost: 0, turns: 0 }],
+		] as const) {
+			const main = mainDir();
+			enqueueReviewRequest(main, record());
+			const { runPipeline } = createMockRunPipeline({ default: { completed: false, cost: 0, error: "pick:queue-empty" } });
+			await runOrchestrator({ ...baseFlags, target: "pull-request", cycles: "1" }, { runPipeline, resolveWorktree: () => "/fake/wt", review: reviewDeps({ gh, main, runReviewGate }) });
+			const stored = readPrReviewGateRecord(gateRecordsDir(main), 201, HEAD);
+			assert.ok(stored, `${subtype} record exists`);
+			assert.deepEqual({ gate: stored.gate, subtype: stored.subtype, agreement: stored.agreement, cost: stored.cost, turns: stored.turns }, expected);
+		}
+	});
+
+	it("retains and unclaims the request without posting terminal status when record persistence fails", async (t) => {
+		t.mock.method(console, "log", () => {});
+		t.mock.method(console, "warn", () => {});
+		const main = mainDir();
+		enqueueReviewRequest(main, record());
+		const ghCalls: string[][] = [];
+		const gh: GhRunner = (args) => {
+			ghCalls.push(args);
+			if (args[0] === "pr" && args[1] === "list") return { stdout: "[]", stderr: "", status: 0 };
+			if (args[0] === "issue" && args[1] === "view") return { stdout: JSON.stringify({ labels: [{ name: "autopilot" }] }), stderr: "", status: 0 };
+			if (args[0] === "api" && args[1] === `repos/o/r/commits/${HEAD}/status`) return { stdout: JSON.stringify({ statuses: [] }), stderr: "", status: 0 };
+			return { stdout: "", stderr: "", status: 0 };
+		};
+		const { runPipeline } = createMockRunPipeline({ default: { completed: false, cost: 0, error: "pick:queue-empty" } });
+		await runOrchestrator(
+			{ ...baseFlags, target: "pull-request", cycles: "1" },
+			{
+				runPipeline,
+				resolveWorktree: () => "/fake/wt",
+				review: reviewDeps({
+					gh,
+					main,
+					writeGateRecord: () => {
+						throw new Error("disk full");
+					},
+				}),
+			},
+		);
+		const states = ghCalls.filter((args) => args[0] === "api" && args[1] === `repos/o/r/statuses/${HEAD}`).map((args) => args.find((arg) => arg.startsWith("state=")));
+		assert.ok(states.length > 0);
+		assert.ok(
+			states.every((state) => state === "state=pending"),
+			"no terminal status is posted on any retry",
+		);
+		assert.deepEqual(pending(main), [`201-${HEAD}.json`]);
+	});
+
+	it("keeps the persisted outcome and request when terminal status delivery fails", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const main = mainDir();
+		enqueueReviewRequest(main, record());
+		const gh: GhRunner = (args) => {
+			if (args[0] === "pr" && args[1] === "list") return { stdout: "[]", stderr: "", status: 0 };
+			if (args[0] === "issue" && args[1] === "view") return { stdout: JSON.stringify({ labels: [{ name: "autopilot" }] }), stderr: "", status: 0 };
+			if (args[0] === "api" && args[1] === `repos/o/r/commits/${HEAD}/status`) return { stdout: JSON.stringify({ statuses: [] }), stderr: "", status: 0 };
+			if (args[0] === "api" && args[1] === `repos/o/r/statuses/${HEAD}`) {
+				return { stdout: "", stderr: "delivery failed", status: args.some((arg) => arg === "state=pending") ? 0 : 1 };
+			}
+			if (args[0] === "api" && args[1]?.includes("/comments")) return { stdout: "[]", stderr: "", status: 0 };
+			return { stdout: "", stderr: "", status: 0 };
+		};
+		const { runPipeline } = createMockRunPipeline({ default: { completed: false, cost: 0, error: "pick:queue-empty" } });
+		await runOrchestrator({ ...baseFlags, target: "pull-request", cycles: "1" }, { runPipeline, resolveWorktree: () => "/fake/wt", review: reviewDeps({ gh, main }) });
+		assert.equal(readPrReviewGateRecord(gateRecordsDir(main), 201, HEAD)?.gate, "pass");
+		assert.deepEqual(pending(main), [`201-${HEAD}.json`]);
 	});
 
 	it("a lock loser re-lists after the holder releases and drains a record enqueued after the holder listed", async (t) => {
@@ -1834,6 +2308,7 @@ describe("runOrchestrator — mid-run review drain (#387)", () => {
 		assert.deepEqual(statuses, ["state=pending"], "only pending — never a failure on a park");
 		assert.ok(!ghCalls.some((a) => a.some((x) => x.startsWith("body="))), "no findings comment upserted on a park");
 		assert.deepEqual(pending(main), [`201-${HEAD}.json`], "record handed back to pending for the next drain");
+		assert.equal(readPrReviewGateRecord(gateRecordsDir(main), 201, HEAD), null, "transient parks are not persisted");
 		assert.equal(calls.length, 0, "the pick pool is skipped while parked");
 	});
 

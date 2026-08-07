@@ -12,6 +12,7 @@ import {
 	checkpoint,
 	classifyCycleDisposition,
 	classifyOutcome,
+	classifyParkReason,
 	classifySecurityReviewDiff,
 	classifyStepError,
 	computeImplementTurns,
@@ -65,6 +66,26 @@ describe("findLoggedArtifactAuthor", () => {
 		writeFileSync(path, `${JSON.stringify({ item: "245", steps: [{ name: "plan", ok: true }] })}\n${JSON.stringify({ item: "245", steps: [{ name: "implement", ok: true, provider: "codex", model: "gpt-5" }] })}\n`);
 		assert.deepEqual(findLoggedArtifactAuthor("245", "implement", path), { provider: "codex", codexModel: "gpt-5" });
 		assert.equal(findLoggedArtifactAuthor("245", "plan", path), undefined);
+	});
+
+	// #431: a Grok/OpenCode step now logs its own realized model; recovery must round-trip it into
+	// the generic `model` field so it can be reused as an execution override.
+	it("recovers a realized grok model from the generic model field", () => {
+		const dir = mkdtempSync(join(tmpdir(), "pelaggio-author-log-"));
+		const path = join(dir, "log.jsonl");
+		writeFileSync(path, `${JSON.stringify({ item: "431", steps: [{ name: "plan", ok: true, provider: "grok", model: "grok-code-fast-1" }] })}\n`);
+		assert.deepEqual(findLoggedArtifactAuthor("431", "plan", path), { provider: "grok", model: "grok-code-fast-1" });
+	});
+
+	it("recovers a realized opencode model, and treats a logged default as an absent model", () => {
+		const dir = mkdtempSync(join(tmpdir(), "pelaggio-author-log-"));
+		const path = join(dir, "log.jsonl");
+		writeFileSync(
+			path,
+			`${JSON.stringify({ item: "431", steps: [{ name: "implement", ok: true, provider: "opencode", model: "openrouter/qwen" }] })}\n${JSON.stringify({ item: "432", steps: [{ name: "implement", ok: true, provider: "opencode", model: "default" }] })}\n`,
+		);
+		assert.deepEqual(findLoggedArtifactAuthor("431", "implement", path), { provider: "opencode", model: "openrouter/qwen" });
+		assert.deepEqual(findLoggedArtifactAuthor("432", "implement", path), { provider: "opencode" });
 	});
 });
 
@@ -1175,6 +1196,36 @@ describe("canRetryWithinBudget", () => {
 
 	it("disables the gate for a non-finite maxBudget (unset / unparseable --budget)", () => {
 		assert.equal(canRetryWithinBudget({ spent: 100, maxBudget: NaN, stepBudget: 25 }), true);
+	});
+});
+
+describe("classifyParkReason", () => {
+	it("lets a structured limitType win over any reason text", () => {
+		assert.equal(classifyParkReason(null, "paused"), "paused");
+		assert.equal(classifyParkReason(null, "sdk-outage"), "sdk-outage");
+		assert.equal(classifyParkReason("adversarial review dissent", "5h"), "rate-limit");
+	});
+
+	it("classifies the review-loop park reasons the pipeline actually emits", () => {
+		assert.equal(classifyParkReason("adversarial review could not bind current HEAD", ""), "review-binding");
+		assert.equal(classifyParkReason("adversarial review could not bind final reviewed HEAD", ""), "review-binding");
+		assert.equal(classifyParkReason("adversarial review escalation active", ""), "review-escalation");
+		assert.equal(classifyParkReason("adversarial review escalation write-failed", ""), "review-escalation");
+		assert.equal(classifyParkReason("adversarial review safety blocker", ""), "review-blocked");
+		assert.equal(classifyParkReason("adversarial review hard-block", ""), "review-blocked");
+		assert.equal(classifyParkReason("adversarial review dissent", ""), "review-blocked");
+		assert.equal(classifyParkReason("adversarial review budget", ""), "review-blocked");
+		assert.equal(classifyParkReason("adversarial review produced no loop result", ""), "review-blocked");
+	});
+
+	it("treats an effects failure after escalation as effects-failed, not escalation", () => {
+		assert.equal(classifyParkReason("shakedown-code effects failed after escalation: gh pr edit exploded", ""), "effects-failed");
+	});
+
+	it("returns unclassified for an absent or unrecognized reason", () => {
+		assert.equal(classifyParkReason(null, null), "unclassified");
+		assert.equal(classifyParkReason("", ""), "unclassified");
+		assert.equal(classifyParkReason("something nobody has seen before", ""), "unclassified");
 	});
 });
 

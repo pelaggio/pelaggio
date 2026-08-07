@@ -6,7 +6,18 @@ import { CONFIG } from "../config.js";
 import { grokCapabilities } from "../grok-provider.js";
 import type { MainCheckoutDeltaObserver, MainCheckoutDeltaResult } from "../helpers.js";
 import { OPENCODE_CAPABILITIES, opencodeProvider } from "../opencode-provider.js";
-import { beginMainCheckoutAttribution, blockForeignRootWrite, blockPlanPolish, blockWorktreeInstall, claudeProvider, composeSystemAppend, endMainCheckoutAttribution, getProvider, isWorktreePath } from "../step-runner.js";
+import {
+	beginMainCheckoutAttribution,
+	blockForeignRootWrite,
+	blockPlanPolish,
+	blockWorktreeInstall,
+	claudeProvider,
+	composeSystemAppend,
+	endMainCheckoutAttribution,
+	getProvider,
+	isClaudeMaxTurnsError,
+	isWorktreePath,
+} from "../step-runner.js";
 import type { ProviderName } from "../types.js";
 
 function bash(command: string): HookInput {
@@ -20,6 +31,22 @@ function write(fp: string): HookInput {
 function edit(fp: string): HookInput {
 	return { tool_name: "Edit", tool_input: { file_path: fp } } as unknown as HookInput;
 }
+
+describe("isClaudeMaxTurnsError (#437)", () => {
+	it("preserves an error_max_turns result across a later generic process exit", () => {
+		assert.equal(isClaudeMaxTurnsError(new Error("Claude Code process exited with code 1"), "error_max_turns"), true);
+	});
+
+	it("recognizes the SDK max_turns_reached attachment", () => {
+		const error = Object.assign(new Error("Claude Code process exited with code 1"), { attachments: [{ type: "max_turns_reached" }] });
+		assert.equal(isClaudeMaxTurnsError(error, "unknown"), true);
+	});
+
+	it("does not reclassify an unrelated process failure", () => {
+		const error = Object.assign(new Error("Claude Code process exited with code 1"), { attachments: [{ type: "diagnostic" }] });
+		assert.equal(isClaudeMaxTurnsError(error, "unknown"), false);
+	});
+});
 
 describe("main-checkout tool attribution hooks", () => {
 	it("brackets every mutating tool and ignores Read", () => {

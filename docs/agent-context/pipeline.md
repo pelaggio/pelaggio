@@ -87,6 +87,17 @@ Manifest **validation** is fail-closed: an unknown kind, a provenance/`preSha` m
 
 Every pipeline exit path must call `parkExit()` (which checkpoints uncommitted work) before returning on rate-limit rejection, so work is checkpointed before the process exits or waits. This matters for subscription-backed providers whose retry windows are outside the pipeline's control.
 
+Parks come in two families and the cycle log records both. *Signal-driven* parks
+(rate limit, operator `SIGUSR2` pause, sustained SDK outage) carry a structured
+`parkSignal.limitType`; *review-loop* parks pass an explicit reason string to
+`parkExit(reason)`. Only the former used to reach the log, so every review-gate
+park persisted `parkReason: null` and a park's cause was unrecoverable after the
+fact. `parkExit()` now retains the reason and the log record carries both the
+free-form `parkReason` detail and a closed `parkClass` (`classifyParkReason` in
+`helpers.ts`) that `pelaggio stats` groups on. `limitType` wins when present.
+Records written before classification existed report as `unrecorded` in stats
+rather than being folded into a real class.
+
 Driver assignment is decided in the harness before `plan`, `implement`, and
 their ordinary shakedown reviews execute. Ordered pools rotate deterministically
 within a cycle; readiness is preflight-only, and an in-flight failure still uses
@@ -103,4 +114,4 @@ Issue `#80` relies on conservative rate-limit waits when Codex does not report a
 
 ## Continuous mode (#82)
 
-Auto-pick campaigns can run past a fixed `--cycles` count via drain/watch presets (`--continuous` / `--preset drain|watch`). Before each pick the orchestrator **free-probes** the ready queue (`listItems` + FlowPolicy — no pick agent) under a **continuous gate** (serial probe/revise/idle; gate released before paid cycles so `--parallel N` can overlap work): **drain** exits on empty; **watch** sleeps `--probe-interval` and re-probes. Day-budget precedence: CLI `--day-budget` > `watch.daily-budget` > unlimited. Drain hard-stops on day-budget exhaustion; watch budget-idles until local midnight then wakes. Lifecycle events (`watch-idle|wake`, `budget-idle|wake`, catalog `suspended|resumed`) write to `.dev/flow-events/`. Continuous mode re-runs the local revise sweep **per iteration**. No `--item` / `--resume` / `--no-worktree`. Server/UI: #83. See `docs/config.md` § Continuous mode.
+Auto-pick campaigns can run past a fixed `--cycles` count via drain/watch presets (`--continuous` / `--preset drain|watch`). Before each pick the orchestrator **free-probes** the ready queue (`listItems` + FlowPolicy — no pick agent) under a **continuous gate** (serial probe/revise/idle; gate released before paid cycles so `--parallel N` can overlap work): **drain** exits on empty; **watch** sleeps `--probe-interval` and re-probes. Day-budget precedence: CLI `--day-budget` > `watch.daily-budget` > unlimited. Drain hard-stops on day-budget exhaustion; watch budget-idles until local midnight then wakes. Day spend is durable without a state file (#398): on every continuous **process start** the tracker is seeded by summing today's local-calendar `total_cost` from the `.dev/pelaggio-log.jsonl` cycle log (`sumDaySpendFromLog`), and local-review charges append a `budgetCharge` receipt line (filtered from `/stats`) so review spend survives a restart. Lifecycle events (`watch-idle|wake`, `budget-idle|wake`, catalog `suspended|resumed`) write to `.dev/flow-events/`. Continuous mode re-runs the local revise sweep **per iteration**. No `--item` / `--resume` / `--no-worktree`. Server/UI: #83. See `docs/config.md` § Continuous mode.
