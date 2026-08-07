@@ -311,6 +311,20 @@ describe("reduce — shipwreck cycle", () => {
 	});
 });
 
+describe("reduce — day-budget charge marker (#398)", () => {
+	it("drops budgetCharge rows before any tally", () => {
+		const realCycles = [mkEntry({ cycle: 1, item: "A", completed: true, total_cost: 2, steps: [mkStep({ name: "ship", cost: 2 })] }), mkEntry({ cycle: 2, item: "B", completed: false, total_cost: 1, error: "boom" })];
+		const marker = mkEntry({ cycle: 0, item: null, completed: true, total_cost: 5, budgetCharge: true });
+		const withMarker = reduce([...realCycles, marker]);
+		const withoutMarker = reduce(realCycles);
+		assert.equal(withMarker.totalCycles, withoutMarker.totalCycles);
+		assert.equal(withMarker.completedCycles, withoutMarker.completedCycles);
+		assert.equal(withMarker.failedCycles, withoutMarker.failedCycles);
+		assert.equal(withMarker.totalCostUsd, withoutMarker.totalCostUsd);
+		assert.equal(withMarker.recentFailures.length, withoutMarker.recentFailures.length);
+	});
+});
+
 describe("reduce — RETHINK verdict", () => {
 	it("increments rethinkRate and item rethink counter", () => {
 		const approve = mkEntry({

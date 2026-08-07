@@ -167,6 +167,44 @@ describe("dual-format reader", () => {
 		assert.match(event.eventId, /^[0-9A-HJKMNP-TV-Z]{26}$/);
 	});
 
+	it("skips day-budget spend receipts rather than promoting them to phantom cycles (#398)", () => {
+		const root = tempRoot();
+		const cycleLogPath = join(root, ".dev", "pelaggio-log.jsonl");
+		mkdirSync(dirname(cycleLogPath), { recursive: true });
+		const realCycle = { ts: "2026-08-05T00:00:00.000Z", cycle: 1, item: "42", quick: false, steps: [], total_cost: 1.5, verdict: null, completed: true, error: null };
+		// Exactly the shape `appendDayBudgetCharge` writes: it satisfies every isCycleFields()
+		// clause, so an unfiltered reader counts each spend receipt as a completed cycle.
+		const receipt = { ts: "2026-08-05T00:05:00.000Z", cycle: 0, item: null, quick: false, steps: [], total_cost: 0.25, verdict: null, completed: true, error: null, budgetCharge: true };
+		writeFileSync(cycleLogPath, `${JSON.stringify(realCycle)}\n${JSON.stringify(receipt)}\n`);
+		const { events, diagnostics } = readEventLog({ root });
+		assert.equal(events.length, 1, "the spend receipt must not decode as a cycle event");
+		assert.equal("cycle" in events[0] && events[0].cycle, 1);
+		assert.deepEqual(diagnostics.details, [], "a well-formed receipt is skipped, not reported malformed");
+		assert.equal(diagnostics.counts.malformed, 0);
+	});
+
+	it("a skipped spend receipt between two cycles does not fabricate a sequence gap (#398)", () => {
+		const root = tempRoot();
+		const cycleLogPath = join(root, ".dev", "pelaggio-log.jsonl");
+		mkdirSync(dirname(cycleLogPath), { recursive: true });
+		// Legacy sequence numbers used to be the physical line number, so a receipt sitting *between*
+		// two cycles left a hole (seq 1 → 3) and the reader reported a gap that never happened. The
+		// existing receipt test puts the receipt last, where no hole can form.
+		const first = { ts: "2026-08-05T00:00:00.000Z", cycle: 1, item: "42", quick: false, steps: [], total_cost: 1.5, verdict: null, completed: true, error: null };
+		const receipt = { ts: "2026-08-05T00:05:00.000Z", cycle: 0, item: null, quick: false, steps: [], total_cost: 0.25, verdict: null, completed: true, error: null, budgetCharge: true };
+		const second = { ts: "2026-08-05T00:10:00.000Z", cycle: 2, item: "43", quick: false, steps: [], total_cost: 2, verdict: null, completed: true, error: null };
+		writeFileSync(cycleLogPath, `${JSON.stringify(first)}\n${JSON.stringify(receipt)}\n${JSON.stringify(second)}\n`);
+		const { events, diagnostics } = readEventLog({ root });
+		assert.equal(events.length, 2, "both real cycles decode; the receipt does not");
+		assert.deepEqual(
+			events.map((e) => e.seq),
+			[1, 2],
+			"sequence numbers count promoted events, not physical lines",
+		);
+		assert.equal(diagnostics.counts.sequenceGap, 0, "skipping a receipt must be diagnostically invisible");
+		assert.deepEqual(diagnostics.details, []);
+	});
+
 	it("preserves additive provenance on normalized legacy cycle records", () => {
 		const root = tempRoot();
 		const cycleLogPath = join(root, ".dev", "pelaggio-log.jsonl");

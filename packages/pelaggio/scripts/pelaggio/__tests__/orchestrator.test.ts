@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -1479,6 +1479,59 @@ describe("runOrchestrator — continuous mode (issue #82)", () => {
 		assert.equal(exitCode, 0);
 	});
 
+	// #398: durable seed. Process restart reconstructs today's spend so a same-day restart still
+	// honors the cap. `initialDaySpend` overrides the disk read; seed ≥ budget must gate before pick.
+	it("drain: pre-seeded day spend ≥ budget stops before any pick (#398)", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({ default: { completed: true, cost: 3 } });
+		let probes = 0;
+		const { exitCode } = await runOrchestrator(
+			{ ...baseFlags, continuous: true, preset: "drain", "day-budget": "5" },
+			{
+				runPipeline,
+				initialDaySpend: 5,
+				queueProbe: async () => {
+					probes++;
+					return { empty: false, readyCount: 1 };
+				},
+				sleep: async () => {},
+			},
+		);
+		assert.equal(exitCode, 0);
+		assert.equal(calls.length, 0, "seeded day spend ≥ budget must stop drain before any paid pick");
+		assert.equal(probes, 0, "the day-budget gate short-circuits before the free queue probe");
+	});
+
+	it("watch: pre-seeded day spend ≥ budget idles before any pick, then picks after rollover (#398)", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({ default: { completed: true, cost: 0.1 } });
+		let nowMs = new Date(2026, 7, 2, 12, 0, 0).getTime(); // mid-day so the idle sleep is long
+		const sleeps: number[] = [];
+		let picksBeforeFirstSleep = -1;
+		const { exitCode } = await runOrchestrator(
+			// cycles: "2" is a safety ceiling so the post-rollover picks terminate the run
+			{ ...baseFlags, continuous: true, preset: "watch", "day-budget": "5", "probe-interval": "1m", cycles: "2" },
+			{
+				runPipeline,
+				initialDaySpend: 6,
+				queueProbe: async () => ({ empty: false, readyCount: 1 }),
+				sleep: async (ms) => {
+					if (sleeps.length === 0) picksBeforeFirstSleep = calls.length;
+					sleeps.push(ms);
+					nowMs += ms + 1; // advance past the sleep so the tracker rolls past midnight
+				},
+				now: () => nowMs,
+			},
+		);
+		assert.equal(exitCode, 0);
+		assert.equal(picksBeforeFirstSleep, 0, "watch must budget-idle before any paid pick when seeded over budget");
+		assert.ok(
+			sleeps.some((ms) => ms > 60_000),
+			`expected a long budget-idle sleep, got ${JSON.stringify(sleeps)}`,
+		);
+		assert.equal(calls.length, 2, "after rollover the cap-bounded picks proceed");
+	});
+
 	// #397: local-review park path charged totalSpent but skipped DayBudgetTracker.add
 	// (the post-try success/failure path is skipped on break). After auto-resume the
 	// retry's cost was counted, but the partial park spend leaked — continuous drain
@@ -1513,12 +1566,16 @@ describe("runOrchestrator — continuous mode (issue #82)", () => {
 		});
 
 		let gateCall = 0;
+		const logged: Record<string, unknown>[] = [];
 		const promise = runOrchestrator(
 			{ ...baseFlags, continuous: true, preset: "drain", "day-budget": "5", target: "pull-request" },
 			{
 				runPipeline,
 				queueProbe: async () => ({ empty: false, readyCount: 1 }),
 				sleep: async () => {},
+				appendLog: (entry) => {
+					logged.push(entry);
+				},
 				review: {
 					runner: "local",
 					ghRepo: "o/r",
@@ -1574,6 +1631,10 @@ describe("runOrchestrator — continuous mode (issue #82)", () => {
 		assert.equal(gateCall, 2, "review sweep retried after park wait");
 		assert.equal(calls.length, 0, "day budget must include park cost so drain does not start paid picks");
 		assert.equal(exitCode, 0);
+		// #398: both the park partial ($4) and the retry success ($1.5) are written as durable
+		// budget-charge receipts so a process restart re-reads today's local-review spend.
+		const charges = logged.filter((e) => e.budgetCharge === true).map((e) => e.total_cost);
+		assert.deepEqual(charges, [4, 1.5], "local-review park + success costs are logged as budget-charge receipts");
 	});
 
 	it("day-budget accounts for a completed review when gate-record persistence fails", async (t) => {
@@ -1635,6 +1696,202 @@ describe("runOrchestrator — continuous mode (issue #82)", () => {
 		assert.equal(probes, 0, "the exhausted day budget stops before the free queue probe");
 		assert.equal(calls.length, 0, "the exhausted day budget stops before paid pick work");
 		assert.equal(exitCode, 0);
+	});
+
+	// Both tests below are regressions for the #429 trio review, which blocked on them.
+	it("day-budget receipts never reach the host cycle log", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const reviewMain = mkdtempSync(join(tmpdir(), "review-budget-host-log-"));
+		t.after(() => rmSync(reviewMain, { recursive: true, force: true }));
+		// `appendLogDefault`'s target. The seed read was hermetic but the receipt write was not, so a
+		// plain `pnpm -r test` appended real $5 `budgetCharge` rows here and the next real
+		// `--day-budget 5` campaign started already exhausted. Deliberately inject no `appendLog`.
+		const hostLog = join(REPO, ".dev", "pelaggio-log.jsonl");
+		const sizeOf = (f: string): number => (existsSync(f) ? statSync(f).size : -1);
+		const before = sizeOf(hostLog);
+		const pendingPr = [
+			{
+				number: 202,
+				isDraft: false,
+				headRefName: "feat/issue-398-host-log",
+				headRefOid: "def456b",
+				headRepository: { nameWithOwner: "o/r" },
+				updatedAt: "2026-07-08T12:00:00Z",
+				statusCheckRollup: [{ __typename: "StatusContext", context: "review", state: "PENDING", startedAt: "2026-07-08T12:00:00Z" }],
+			},
+		];
+		const gh: GhRunner = (args) => {
+			if (args[0] === "pr" && args[1] === "list") return { stdout: JSON.stringify(pendingPr), stderr: "", status: 0 };
+			if (args[0] === "issue" && args[1] === "view") return { stdout: JSON.stringify({ labels: [{ name: "autopilot" }] }), stderr: "", status: 0 };
+			return { stdout: "", stderr: "", status: 0 };
+		};
+		const { runPipeline } = createMockRunPipeline({ default: { completed: true, cost: 0.1 } });
+
+		await runOrchestrator(
+			{ ...baseFlags, continuous: true, preset: "drain", "day-budget": "5", target: "pull-request" },
+			{
+				runPipeline,
+				queueProbe: async () => ({ empty: true, readyCount: 0 }),
+				review: {
+					runner: "local",
+					ghRepo: "o/r",
+					gh,
+					queueRoot: reviewRequestsDir(reviewMain),
+					gateRecordsRoot: gateRecordsDir(reviewMain),
+					statuslessAfter: "2h",
+					now: () => Date.parse("2026-08-05T12:00:00Z"),
+					prepareReviewHead: () => ({ diffCwd: "/tmp/pr-head", baseRef: "origin/main", headRef: "refs/pelaggio-review/pr-202" }),
+					cleanupReviewHead: () => {},
+					runReviewGate: async () => ({ gate: "pass", body: "clean", cost: 5, costEstimated: false, turns: 3, ok: true, subtype: "success", agreement: "consensus-pass" }),
+					writeGateRecord: () => join(reviewMain, "gate-record.json"),
+				},
+				revise: { local: false, ghRepo: "o/r", gh },
+			},
+		);
+
+		assert.equal(sizeOf(hostLog), before, "budgetCharge receipts must land in the hermetic ledger, never the developer's real cycle log");
+	});
+
+	it("day-budget preflight creates a missing ledger directory instead of reporting it unwritable", async (t) => {
+		t.mock.method(console, "log", () => {});
+		// A fresh consumer checkout has no `.dev/` — `appendLog` creates it lazily on first write. The
+		// preflight probed the absent parent and threw ENOENT, surfaced as "ledger is not writable",
+		// which failed every first-ever day-budget run including `--dry-run`.
+		const fresh = mkdtempSync(join(tmpdir(), "day-budget-fresh-repo-"));
+		t.after(() => rmSync(fresh, { recursive: true, force: true }));
+		const ledger = join(fresh, ".dev", "pelaggio-log.jsonl");
+		assert.equal(existsSync(join(fresh, ".dev")), false, "precondition: the ledger's parent must not exist");
+		const { runPipeline } = createMockRunPipeline({ default: { completed: true, cost: 0.1 } });
+
+		const { exitCode } = await runOrchestrator({ ...baseFlags, continuous: true, preset: "drain", "day-budget": "5" }, { runPipeline, daySpendLogPath: ledger, queueProbe: async () => ({ empty: true, readyCount: 0 }) });
+
+		assert.equal(existsSync(join(fresh, ".dev")), true, "the preflight creates the ledger directory, as the eventual writer would");
+		assert.equal(exitCode, 0, "a fresh checkout must not fail startup with a spurious not-writable error");
+	});
+
+	// Two PRs, each review costing the whole day budget. Both regressions below need a *second*
+	// candidate to be observable at all: the drain only misbehaves when it starts another review.
+	const twoPendingPrs = (): unknown[] =>
+		[301, 302].map((number) => ({
+			number,
+			isDraft: false,
+			headRefName: `feat/issue-398-drain-stop-${number}`,
+			headRefOid: `sha${number}`,
+			headRepository: { nameWithOwner: "o/r" },
+			updatedAt: "2026-07-08T12:00:00Z",
+			statusCheckRollup: [{ __typename: "StatusContext", context: "review", state: "PENDING", startedAt: "2026-07-08T12:00:00Z" }],
+		}));
+
+	const drainWithTwoReviews = async (reviewOverrides: Record<string, unknown>, topOverrides: Record<string, unknown> = {}): Promise<number> => {
+		const reviewMain = mkdtempSync(join(tmpdir(), "review-drain-stop-"));
+		const gh: GhRunner = (args) => {
+			if (args[0] === "pr" && args[1] === "list") return { stdout: JSON.stringify(twoPendingPrs()), stderr: "", status: 0 };
+			if (args[0] === "issue" && args[1] === "view") return { stdout: JSON.stringify({ labels: [{ name: "autopilot" }] }), stderr: "", status: 0 };
+			return { stdout: "", stderr: "", status: 0 };
+		};
+		let gateCalls = 0;
+		const { runPipeline } = createMockRunPipeline({ default: { completed: true, cost: 0.1 } });
+		await runOrchestrator(
+			{ ...baseFlags, continuous: true, preset: "drain", "day-budget": "5", target: "pull-request" },
+			{
+				runPipeline,
+				...topOverrides,
+				queueProbe: async () => ({ empty: true, readyCount: 0 }),
+				review: {
+					runner: "local",
+					ghRepo: "o/r",
+					gh,
+					queueRoot: reviewRequestsDir(reviewMain),
+					gateRecordsRoot: gateRecordsDir(reviewMain),
+					statuslessAfter: "2h",
+					now: () => Date.parse("2026-08-05T12:00:00Z"),
+					prepareReviewHead: () => ({ diffCwd: "/tmp/pr-head", baseRef: "origin/main", headRef: "refs/pelaggio-review/pr" }),
+					cleanupReviewHead: () => {},
+					runReviewGate: async () => {
+						gateCalls++;
+						return { gate: "pass", body: "clean", cost: 5, costEstimated: false, turns: 3, ok: true, subtype: "success", agreement: "consensus-pass" };
+					},
+					writeGateRecord: () => join(reviewMain, "gate-record.json"),
+					...reviewOverrides,
+				},
+				revise: { local: false, ghRepo: "o/r", gh },
+			},
+		);
+		rmSync(reviewMain, { recursive: true, force: true });
+		return gateCalls;
+	};
+
+	it("a lost day-budget receipt halts the whole campaign and reports failure", async (t) => {
+		t.mock.method(console, "log", () => {});
+		t.mock.method(console, "error", () => {});
+		// Stopping only the review drain is not enough: below the cap the orchestrator went on to
+		// revise and pick work whose spend is equally unreconstructable, and still exited 0.
+		const reviewMain = mkdtempSync(join(tmpdir(), "review-receipt-halt-"));
+		t.after(() => rmSync(reviewMain, { recursive: true, force: true }));
+		const gh: GhRunner = (args) => {
+			if (args[0] === "pr" && args[1] === "list") return { stdout: JSON.stringify(twoPendingPrs()), stderr: "", status: 0 };
+			if (args[0] === "issue" && args[1] === "view") return { stdout: JSON.stringify({ labels: [{ name: "autopilot" }] }), stderr: "", status: 0 };
+			return { stdout: "", stderr: "", status: 0 };
+		};
+		const { runPipeline, calls } = createMockRunPipeline({ default: { completed: true, cost: 0.1 } });
+		let probes = 0;
+		const { exitCode } = await runOrchestrator(
+			{ ...baseFlags, continuous: true, preset: "drain", "day-budget": "500", target: "pull-request" },
+			{
+				runPipeline,
+				appendLog: () => {
+					throw new Error("EACCES: permission denied, open '.dev/pelaggio-log.jsonl'");
+				},
+				queueProbe: async () => {
+					probes++;
+					return { empty: false, readyCount: 1 };
+				},
+				review: {
+					runner: "local",
+					ghRepo: "o/r",
+					gh,
+					queueRoot: reviewRequestsDir(reviewMain),
+					gateRecordsRoot: gateRecordsDir(reviewMain),
+					statuslessAfter: "2h",
+					now: () => Date.parse("2026-08-05T12:00:00Z"),
+					prepareReviewHead: () => ({ diffCwd: "/tmp/pr-head", baseRef: "origin/main", headRef: "refs/pelaggio-review/pr" }),
+					cleanupReviewHead: () => {},
+					runReviewGate: async () => ({ gate: "pass", body: "clean", cost: 5, costEstimated: false, turns: 3, ok: true, subtype: "success", agreement: "consensus-pass" }),
+					writeGateRecord: () => join(reviewMain, "gate-record.json"),
+				},
+				revise: { local: false, ghRepo: "o/r", gh },
+			},
+		);
+
+		// The day budget is 500 and one review cost 5, so nothing below stops for the cap — only the
+		// undurable ledger does.
+		assert.equal(calls.length, 0, "no paid pick work may start once the ledger is known undurable");
+		assert.equal(probes, 0, "the campaign halts before even the free queue probe");
+		assert.equal(exitCode, 1, "a run whose spend cannot be reconstructed must not report success");
+	});
+
+	it("a lost day-budget receipt stops the drain from starting another paid review", async (t) => {
+		t.mock.method(console, "log", () => {});
+		t.mock.method(console, "error", () => {});
+		// The first attempt at this fix set a loop-local flag that was re-initialised each iteration
+		// and only read *before* the charge site — a dead store, so the drain kept paying.
+		const gateCalls = await drainWithTwoReviews(
+			{},
+			{
+				appendLog: () => {
+					throw new Error("EACCES: permission denied, open '.dev/pelaggio-log.jsonl'");
+				},
+			},
+		);
+		assert.equal(gateCalls, 1, "an unwritable ledger must stop paid review work, not merely warn");
+	});
+
+	it("crossing the day budget stops the drain after the permitted one-operation overshoot", async (t) => {
+		t.mock.method(console, "log", () => {});
+		// Cost is unknowable until the gate returns, so one review may cross the cap. The next may not:
+		// the campaign-start gate alone let the entire remaining backlog run once the cap was crossed.
+		const gateCalls = await drainWithTwoReviews({});
+		assert.equal(gateCalls, 1, "the second review must not start once the day budget is exhausted");
 	});
 
 	it("drain ×2: two concurrent paid cycles when probe has work", async (t) => {
