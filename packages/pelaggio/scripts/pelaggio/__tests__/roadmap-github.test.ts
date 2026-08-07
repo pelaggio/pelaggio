@@ -244,6 +244,16 @@ describe("GitHubIssuesRoadmap.listItems — curation projection", () => {
 	});
 });
 
+/** The `issue create` call — createItem now emits `label create` calls before it. */
+const issueCreateArgs = (calls: { args: string[] }[]): string[] => {
+	const call = calls.find((c) => c.args[0] === "issue" && c.args[1] === "create");
+	assert.ok(call, "expected an `issue create` call");
+	return call.args;
+};
+
+/** Labels this call attempted to create, in order. */
+const createdLabels = (calls: { args: string[] }[]): string[] => calls.filter((c) => c.args[0] === "label" && c.args[1] === "create").map((c) => c.args[2]);
+
 describe("GitHubIssuesRoadmap.createItem — priority labels", () => {
 	it("adds priority:high with deferred and body marker", async () => {
 		const { run, calls } = makeStub({
@@ -252,7 +262,7 @@ describe("GitHubIssuesRoadmap.createItem — priority labels", () => {
 		const r = mk({ repo: "/tmp", ghRun: run });
 		const created = await r.createItem({ title: "Hi", description: "Full charter", priority: "high", deferred: true, deps: ["#1"] });
 		assert.equal(created.id, "99");
-		const args = calls[0].args;
+		const args = issueCreateArgs(calls);
 		assert.ok(args.includes("priority:high"));
 		assert.ok(args.includes("deferred"));
 		assert.ok(args.includes("autopilot"));
@@ -268,7 +278,7 @@ describe("GitHubIssuesRoadmap.createItem — priority labels", () => {
 		});
 		const r = mk({ repo: "/tmp", ghRun: run });
 		await r.createItem({ title: "N", priority: "normal" });
-		const args = calls[0].args;
+		const args = issueCreateArgs(calls);
 		assert.ok(args.includes("priority:normal"));
 		assert.ok(!args.includes("priority:high"));
 		const bodyIdx = args.indexOf("--body");
@@ -281,11 +291,48 @@ describe("GitHubIssuesRoadmap.createItem — priority labels", () => {
 		});
 		const r = mk({ repo: "/tmp", ghRun: run });
 		await r.createItem({ title: "Plain" });
-		const args = calls[0].args;
+		const args = issueCreateArgs(calls);
 		assert.ok(!args.includes("priority:high"));
 		assert.ok(!args.includes("priority:normal"));
 		const bodyIdx = args.indexOf("--body");
 		assert.ok(!/Priority:/.test(args[bodyIdx + 1]));
+	});
+
+	// #471: gh issue create rejects the WHOLE call on an unknown label, so a label the repo
+	// lacks failed item creation outright — halting a batch partway.
+	it("ensures every attached label exists before creating the issue", async () => {
+		const { run, calls } = makeStub({
+			routes: [{ match: (a) => a[0] === "issue" && a[1] === "create", stdout: "https://github.com/acme/widgets/issues/12\n" }],
+		});
+		const r = mk({ repo: "/tmp", ghRun: run });
+		await r.createItem({ title: "N", priority: "normal", deferred: true });
+		assert.deepEqual(createdLabels(calls), ["autopilot", "deferred", "priority:normal"]);
+		// Ordering matters: every label must be created BEFORE the issue that attaches it.
+		const createIdx = calls.findIndex((c) => c.args[0] === "issue" && c.args[1] === "create");
+		assert.ok(calls.every((c, i) => !(c.args[0] === "label" && c.args[1] === "create") || i < createIdx));
+	});
+
+	it("creates the pickup label even when no optional labels are requested", async () => {
+		const { run, calls } = makeStub({
+			routes: [{ match: (a) => a[0] === "issue" && a[1] === "create", stdout: "https://github.com/acme/widgets/issues/13\n" }],
+		});
+		const r = mk({ repo: "/tmp", ghRun: run });
+		await r.createItem({ title: "Plain" });
+		// A fresh consumer repo has no pickup label; nothing else in pelaggio creates it.
+		assert.deepEqual(createdLabels(calls), ["autopilot"]);
+	});
+
+	it("still creates the item when label creation fails (already exists, or no permission)", async () => {
+		const { run, calls } = makeStub({
+			routes: [
+				{ match: (a) => a[0] === "label" && a[1] === "create", status: 1, stderr: "label already exists" },
+				{ match: (a) => a[0] === "issue" && a[1] === "create", stdout: "https://github.com/acme/widgets/issues/14\n" },
+			],
+		});
+		const r = mk({ repo: "/tmp", ghRun: run });
+		const created = await r.createItem({ title: "N", priority: "normal" });
+		assert.equal(created.id, "14");
+		assert.ok(issueCreateArgs(calls).includes("priority:normal"));
 	});
 });
 
