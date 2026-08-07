@@ -1,7 +1,8 @@
 # Ticket collapse: the guard cluster under ADR-0026
 
-Status: proposal, pre-execution. No issue has been closed, relabelled, or created.
-Verified at `4a6ac3c`, roadmap read 2026-08-07.
+Status: **executed 2026-08-07**; retained as the record of what was decided and why.
+G1-G6b were created as #464-#470 and ten subsumed issues were closed with supersession
+notes. The roadmap snapshot below is as read *before* execution, at `4a6ac3c`.
 
 ## Claim under test
 
@@ -11,8 +12,8 @@ honestly, including where it fails.
 
 ## The collapse
 
-**Seven items (G1–G6b) absorb twelve point-fix issues**, plus G7 which handles one more as
-a classification fix rather than a new primitive. Each is one shippable piece of mechanism
+**Seven primitives (G1–G6b) absorb twelve point-fix issues**, and an eighth item, G7,
+handles one more as a classification fix rather than a new primitive. Each is one shippable piece of mechanism
 with named adopters, not an epic. The arithmetic is reconciled in the score table below.
 
 ### G1 — Fence: authority-validated compare-and-swap
@@ -95,6 +96,14 @@ collapse score does — a model that appears to absorb everything is not being t
   becomes expressible once G5 lands but is not subsumed by it (ADR-0014 keeps them
   separate by construction).
 - **#434** (grok boot race) — the underlying race survives G5.
+- **#438 / #440** (run-root main auto-sync + staleness preflight; the operator-workbench
+  runbook) — **not in the §1 denominator, but they belong to this model.** #438's auto-sync
+  is a P5 reconciler (`main` advancing on the forge is an off-process transition nobody
+  observes) and its preflight is an admission check in G1's half. Live evidence, 2026-08-07:
+  `npx pelaggio` executed pre-fix code because the main checkout was left on a feature
+  branch — a variant #438 does not currently cover, since its problem statement is `main`
+  never *advancing* rather than HEAD not *being* main. The preflight must assert HEAD
+  identity, not just freshness. Left as their own items; #438 gates #440 by its own terms.
 - **No new ticket for single-iteration termination.** An earlier draft filed one, on the
   theory that `evaluateReviewConvergence`'s ordering made `max-passes: 2` unreachable. That
   was a misdiagnosis: `pr-review-cli.ts:675/696` makes disagreement and invalid terminal
@@ -114,8 +123,10 @@ issues named in `guarded-actions.md` §1 — #401, #402, #409, #410, #435, #439,
 | Handled by G7 (classification fix, not a new primitive) | 1 | #435 |
 | Do not collapse | 1 | #445 |
 
-**13 of 14 are absorbed by seven items; one resists.** #458, #297 and #434 appear in the
-residue below but are *not* members of this denominator — they were never part of the §1
+**13 of 14 are absorbed by eight items; one resists.** Twelve collapse into the seven
+primitives G1-G6b, and #435 is handled by G7 — which is an eighth item even though it is a
+classification fix rather than a new primitive. #458, #297 and #434 appear in the
+residue section above but are *not* members of this denominator — they were never part of the §1
 cluster, and counting them as non-collapses (as an earlier draft did) inflated the failure
 rate while making the arithmetic unreconstructible.
 

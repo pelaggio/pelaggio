@@ -218,7 +218,8 @@ and the second is what makes the allocator trustworthy rather than merely atomic
    validate itself. Self-validation is not fencing: an old attempt passes its own check, a
    newer sequence is then allocated, and the old actor still posts.
 
-Adopters: #451, #450, #458.
+Adopters: #451, #450. (Not #458 — that is a park-log reconciliation defect in
+`pipeline.ts`, outside this collapse; see §9.)
 
 **P5 — Reconciler.** A converging observer over declared-vs-actual, for every transition
 that happens off-process. Contract, generalized from the review queue: idempotency key;
@@ -336,7 +337,7 @@ The map must be explicit, enumerated, and **default-deny**: a subtype not on the
 | provider transport/boot failure (#434) | unavailable | indeterminate | we could not look |
 | balance exhaustion / 402 (#455) | unavailable | indeterminate | we could not look |
 | rate-limit park | unavailable | indeterminate | already the existing `park`; this generalizes it |
-| SDK outage (#458) | unavailable | indeterminate | we could not look |
+| SDK outage | unavailable | indeterminate | we could not look |
 | parse-invalid / no findings block (ADR-0004) | partial | **block** | the reviewer misbehaved — that *is* a signal |
 | security-diff failure (`error_diff`) | unavailable | **block** | inspection failed before any cell ran — unavailable, but a *diff we cannot read* is not retryable-by-waiting, so it blocks |
 | budget refusal | partial | **block** | a policy decision, deterministic |

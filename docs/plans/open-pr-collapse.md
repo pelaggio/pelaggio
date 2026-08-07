@@ -1,7 +1,8 @@
 # Open-PR collapse: dispositions under ADR-0026
 
-Status: proposal, pre-execution. Nothing here has been merged, closed, or relabelled.
-Verified at `4a6ac3c`, forge state read 2026-08-07.
+Status: **executed 2026-08-07**; retained as the record of what was decided and why.
+The forge state below is the snapshot as read *before* execution, at `4a6ac3c` — read the
+measurement table as history, not as current state. Execution outcomes are noted inline.
 
 ## The measurement
 
@@ -133,8 +134,24 @@ The claim release is not optional bookkeeping and is easy to miss: #448's head b
 runs only on landing) or `/tidy` — and closing a PR triggers neither. Close it without
 deleting the branch and worktree and #367 reads `already claimed` (CLI exit 3) forever,
 with a live worktree: exactly the exit-less state ADR-0026 decision 4 forbids. So the
-disposition is three acts, in order: close the PR, delete the local and remote
-`feat/issue-367-…` branch, remove its worktree.
+disposition is four acts, and **the order matters in two places**:
+
+1. Close the PR.
+2. **Remove the worktree first.** Git refuses to delete a branch a worktree has checked
+   out (`cannot delete branch used by worktree`). `ship/bookkeeping.ts` and its ordering
+   test get this right; an earlier draft of this document had it backwards.
+3. Delete the local and remote `feat/issue-367-…` branch.
+4. **Remove the `in-progress` label.** Deleting the claim branch does *not* clear it, and
+   `github-issues.ts` projects an open issue carrying that label as status `in-progress`,
+   which `flow-policy.ts` excludes from `roadmap next`. Only `markDone` removes it, and
+   this plan deliberately keeps #367 open — so the issue ends up open, unclaimed, and
+   permanently unpickable. There is no sanctioned CLI path for this (no
+   `roadmap update-item`; see #473); it currently requires
+   `gh issue edit --remove-label in-progress`.
+
+Act 4 is the one that actually strands the issue, and deleting the branch looks like a
+complete release without it. **This was missed in execution:** #367 was left `in-progress`
+and unpickable until the #463 review gate caught it.
 
 Closing here is a scope decision, not a rejection of the work, and it is the one
 disposition that discards completed effort — flagged explicitly for a human call rather
@@ -172,6 +189,6 @@ starts, without taking on the stale-actor deletion hazard.
 - No disposition above depends on ADR-0026 having landed. All four are executable today;
   the ADR explains *why* they cluster, and #428 is the one whose recurrence the ADR
   prevents.
-- Step 2's "default `reap.enabled` off" is a **proposed change to PR #449**, not a merge
-  decision, and needs the author's agreement or a follow-up commit. It is called out here
-  because merging #449 as-written arms destructive reap on every run.
+- Step 2's "default `reap.enabled` off" was a proposed change to PR #449 when this was
+  written. It has since been **made**: head `4531520` sets `reap: { enabled: false }`
+  citing ADR-0026 decision 2, so no author agreement is outstanding.
