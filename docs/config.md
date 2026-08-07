@@ -714,7 +714,21 @@ pick steps on an empty queue.
 
 **Budget exhaustion:** **drain** stops when the day budget is exceeded. **watch**
 emits `pelaggio.budget-idle`, sleeps until local midnight, rolls the tracker,
-emits `pelaggio.budget-wake`, and probes again.
+emits `pelaggio.budget-wake`, and probes again. (This drain-stop vs. watch-idle
+split is intentional and unchanged: drain finishes the queue or stops; only watch
+idles to rollover.)
+
+**Day-budget durability (issue #398):** the day-spend total is durable across
+process restarts, with no new state file. Every continuous process start (fresh
+launch, daemon pause→resume, crash restart) reconstructs today's spend by summing
+the `total_cost` of cycle-log lines in `.dev/pelaggio-log.jsonl` whose timestamp
+falls on the local calendar day, then seeds the tracker with it — so a same-day
+restart resumes at the accumulated spend and a midnight-crossing restart starts
+fresh. Pick cycles and revise sweeps already record their cost in the cycle log;
+local-review charges additionally append a minimal `budgetCharge` receipt line so
+review spend survives a restart too. Those receipts are excluded from `/stats`
+cycle and cost tallies. A cycle that crashes before it logs is under-counted by at
+most that one cycle's spend; budget is not pre-reserved for in-flight work.
 
 Constraints: auto-pick only (no `--item` / `--resume` / `--no-worktree`).
 Continuous mode re-runs the local revise sweep **before each pick iteration** so

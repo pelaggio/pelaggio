@@ -238,6 +238,10 @@ export interface CycleLogEntry {
 	parkClass?: ParkClass;
 	shipwrecked?: boolean;
 	bookkeepingWarnings?: string[];
+	/** True when this line is a day-budget spend receipt (local-review charge), NOT a pipeline
+	 *  cycle. Read by `sumDaySpendFromLog` for the durable day-budget seed (#398); filtered out at
+	 *  the top of `stats.reduce()` so it never inflates `/stats` cycle/cost tallies. */
+	budgetCharge?: boolean;
 	/** Additive cycle provenance. Optional only for legacy log compatibility. */
 	provenance?: CycleProvenance;
 }
