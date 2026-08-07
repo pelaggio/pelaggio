@@ -223,7 +223,13 @@ export const DEFAULTS = {
 	// default-on does nothing for every markdown/direct-push consumer. `revise.local: false` is
 	// the off-switch, mirroring the CI `AUTOPILOT_AUTO_REVISE=false` off-switch.
 	revise: { local: true },
-	reap: { enabled: true },
+	// Default-OFF until a positive session-liveness verdict (#461 / G6a #469) is wired into
+	// EVERY deletion path here. `reapItem` gates only on landing-confirmation plus a dirty-
+	// porcelain check, with no liveness call site on `git worktree remove`, `branch -D`, or the
+	// force-with-lease remote delete — so default-on would remove a clean worktree that a live
+	// session is using. Providing the reader is not enough; flipping this before the wiring
+	// exists re-enables live-session deletion. See ADR-0026 decision 2 and #461's Blocks.
+	reap: { enabled: false },
 	review: {
 		runner: "ci",
 		statuslessAfter: "2h",

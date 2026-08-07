@@ -779,11 +779,12 @@ describe("loadConfig — revise", () => {
 });
 
 describe("loadConfig — reap", () => {
-	it("defaults enabled and parses the off-switch", () => {
+	it("defaults DISABLED and parses the on-switch", () => {
 		const repo = tmpRepo();
-		assert.deepEqual(loadConfig({ repo, configPath: join(repo, ".pelaggio.yml") }).reap, { enabled: true });
-		const path = writeYml(repo, "reap:\n  enabled: false\n");
-		assert.equal(loadConfig({ repo, configPath: path }).reap.enabled, false);
+		// Default-off until a liveness verdict gates every deletion path (#461 / G6a #469).
+		assert.deepEqual(loadConfig({ repo, configPath: join(repo, ".pelaggio.yml") }).reap, { enabled: false });
+		const path = writeYml(repo, "reap:\n  enabled: true\n");
+		assert.equal(loadConfig({ repo, configPath: path }).reap.enabled, true);
 	});
 
 	it("validates the reap block", () => {
