@@ -1,9 +1,9 @@
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { hasCharterProvenance, parseCharterMarker, provenanceFromCreateOpts, stripCharterMarker, withCharterMarker } from "./charter-provenance.js";
+import { assertActivationInputsUnchanged, hasCharterProvenance, parseCharterMarker, provenanceFromCreateOpts, stripCharterMarker, withCharterMarker } from "./charter-provenance.js";
 import { createClaimWorkspace } from "./git-claim.js";
-import type { CreateItemOpts, ItemStatus, LinearRoadmapConfig, MarkDoneContext, PlanLocation, ReviewProvenance, RoadmapItem, RoadmapItemStatus, RoadmapSource, RoadmapSourceName } from "./types.js";
+import type { ActivationExpectation, CreateItemOpts, ItemStatus, LinearRoadmapConfig, MarkDoneContext, PlanLocation, ReviewProvenance, RoadmapItem, RoadmapItemStatus, RoadmapSource, RoadmapSourceName } from "./types.js";
 
 const PLAN_MARKER = "<!-- pelaggio-plan -->";
 const IN_PROGRESS_LABEL = "in-progress";
@@ -180,10 +180,12 @@ export class LinearRoadmap implements RoadmapSource {
 		};
 	}
 
-	async activateItem(id: string, provenance: ReviewProvenance): Promise<RoadmapItemStatus> {
+	async activateItem(id: string, provenance: ReviewProvenance, expected?: ActivationExpectation): Promise<RoadmapItemStatus> {
 		const api = await this.api();
 		const issue = await api.getIssue(id);
 		if (!issue) throw new Error(`activateItem: Linear issue ${id} not found`);
+		// Before any mutation: refuse if the description drifted under the in-flight panel.
+		assertActivationInputsUnchanged(id, expected, { title: issue.title ?? "", body: issue.description ?? "" });
 		// Re-stamp the description marker (deferred=false + digest) then drop the deferred label. A throw
 		// before the label removal retains the deferred state (#367).
 		const restamped: ReviewProvenance = { ...provenance, deferred: false };

@@ -83,6 +83,17 @@ export interface RoadmapItemStatus extends RoadmapItem {
  * marker so every adapter persists compatible bytes; `reviewDigest` is the only adapter credential and
  * is minted solely by the create gate / activation wrapper.
  */
+/**
+ * The exact content the activation panel reviewed. Adapters refetch before restamping, so without
+ * this they would stamp "reviewed" onto whatever the item says *now* — an edit or close landing
+ * during the (asynchronous, minutes-long) panel would be silently blessed.
+ */
+export interface ActivationExpectation {
+	title: string;
+	/** Verbatim body as the panel saw it, marker included. */
+	body: string;
+}
+
 export interface ReviewProvenance {
 	/** Content address of the charter-review record (`.dev/charter-reviews/<digest>.json`). */
 	reviewDigest: string;
@@ -168,7 +179,7 @@ export interface RoadmapSource {
 	 * provider allows (#367). Narrow by design — the harness never issues free-form body edits. Adapters
 	 * remove the deferred label/marker only here, and only after the provenance write succeeds.
 	 */
-	activateItem(id: string, provenance: ReviewProvenance): Promise<RoadmapItemStatus>;
+	activateItem(id: string, provenance: ReviewProvenance, expected?: ActivationExpectation): Promise<RoadmapItemStatus>;
 	/** Archive a shipped plan. Markdown: `git mv` + commit. No-op elsewhere. */
 	archivePlan(id: string): Promise<void>;
 	/** True when the item exists in uncommitted working-tree state but not yet in HEAD. Gh/linear: always false. */

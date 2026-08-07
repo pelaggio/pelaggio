@@ -16,6 +16,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_FLOW_POLICY, type FlowSnapshot } from "./flow-policy.js";
+import { readCharterReviewRecord } from "./review/charter-record.js";
 import { activateDeferredItem, type CharterGateContext, createReviewedItem } from "./roadmap/charter-gate.js";
 import { AlreadyClaimedError, isMarkdownRoadmapFormat, isScope, type RoadmapSource } from "./roadmap/index.js";
 import { activeQuarantineIds, clearEntry, listQuarantine, loadQuarantine, resolveKeep, upsertHits } from "./roadmap/stale-quarantine.js";
@@ -387,11 +388,33 @@ async function cmdCharterReview(args: Args): Promise<number> {
 	return result.verdict === "ship" ? 0 : 1;
 }
 
+/**
+ * Why a deferred item's review digest cannot be trusted, or null when it can.
+ *
+ * "Valid" means the digest actually resolves. A nonempty string proves nothing, and the audit exists
+ * precisely to find items without real review evidence — accepting any truthy digest defeated it.
+ * `readCharterReviewRecord` returns null unless the digest is 64-hex, names a readable record that
+ * validates, AND content-addresses to that record's own contents, so a forged, truncated, or
+ * points-at-nothing digest is caught here.
+ *
+ * Exported for test: the record primitives are covered on their own, but that the audit *consults*
+ * them is the behaviour that regressed.
+ */
+export function charterDigestFault(repo: string, digest: string | undefined): string | null {
+	if (!digest) return "no review digest";
+	return readCharterReviewRecord(repo, digest) ? null : "digest resolves to no valid record (missing, malformed, or not content-addressed to its contents)";
+}
+
 async function cmdCharterAudit(args: Args): Promise<number> {
 	const roadmap = makeRoadmap();
 	const items = await roadmap.listItems({ includeDone: false });
+	const { CONFIG } = await import("./config.js");
+	const digestFault = (digest: string | undefined): string | null => charterDigestFault(CONFIG.repo, digest);
 	// (a) every deferred item lacking a valid review digest, at any scope.
-	const deferredMissingDigest = items.filter((it) => it.deferred && !it.reviewDigest).map((it) => ({ id: it.id, title: it.title, scope: it.scope ?? null }));
+	const deferredMissingDigest = items
+		.filter((it) => it.deferred)
+		.map((it) => ({ id: it.id, title: it.title, scope: it.scope ?? null, fault: digestFault(it.reviewDigest) }))
+		.filter((f): f is typeof f & { fault: string } => f.fault !== null);
 	// (b) S/XS items with no recorded review provenance. Age is unavailable across adapters, so this is
 	// flagged for spot-checking rather than claimed-recent (never asserts a legacy item is recent).
 	const subFloorNoProvenance = items.filter((it) => (it.scope === "S" || it.scope === "XS") && it.reviewLevel === undefined).map((it) => ({ id: it.id, title: it.title, scope: it.scope, age: "unavailable" as const }));
@@ -404,8 +427,12 @@ async function cmdCharterAudit(args: Args): Promise<number> {
 		process.stdout.write("charter audit: no findings\n");
 		return 0;
 	}
-	for (const f of deferredMissingDigest) process.stdout.write(`deferred-no-digest\t${f.id}\t${f.scope ?? "?"}\t${f.title}\n`);
+	for (const f of deferredMissingDigest) process.stdout.write(`deferred-no-digest\t${f.id}\t${f.scope ?? "?"}\t${f.fault}\t${f.title}\n`);
 	for (const f of subFloorNoProvenance) process.stdout.write(`subfloor-no-provenance\t${f.id}\t${f.scope}\t(age ${f.age})\t${f.title}\n`);
+	// Stated rather than implied: `listItems` carries no bodies across adapters, so this audit cannot
+	// check that a valid record still *binds* to the item's current title/body. A digest that resolved
+	// here may still describe superseded text; `activateDeferredItem` performs that binding check.
+	process.stdout.write("note: digest validity is checked; input binding to current title/body is not (bodies are not listed)\n");
 	return 0;
 }
 

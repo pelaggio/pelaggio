@@ -10,9 +10,9 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
-import { hasCharterProvenance, parseCharterMarker, provenanceFromCreateOpts, stripCharterMarker, withCharterMarker } from "./charter-provenance.js";
+import { assertActivationInputsUnchanged, hasCharterProvenance, parseCharterMarker, provenanceFromCreateOpts, stripCharterMarker, withCharterMarker } from "./charter-provenance.js";
 import { claimedIds, createClaimWorkspace } from "./git-claim.js";
-import type { CreateItemOpts, ItemStatus, MarkDoneContext, ReviewProvenance, RoadmapItem, RoadmapItemStatus, RoadmapSource, RoadmapSourceName } from "./types.js";
+import type { ActivationExpectation, CreateItemOpts, ItemStatus, MarkDoneContext, ReviewProvenance, RoadmapItem, RoadmapItemStatus, RoadmapSource, RoadmapSourceName } from "./types.js";
 
 /** Spawn timeout for a single `bd` invocation — mirrors `GH_TIMEOUT_MS`. */
 export const BD_TIMEOUT_MS = 30_000;
@@ -386,9 +386,11 @@ export class BeadsRoadmap implements RoadmapSource {
 		};
 	}
 
-	async activateItem(id: string, provenance: ReviewProvenance): Promise<RoadmapItemStatus> {
+	async activateItem(id: string, provenance: ReviewProvenance, expected?: ActivationExpectation): Promise<RoadmapItemStatus> {
 		const item = await this.getItem(id);
 		if (!item) throw new Error(`activateItem: Beads item ${id} not found`);
+		// Before the `bd update` below: refuse if the description drifted under the in-flight panel.
+		assertActivationInputsUnchanged(id, expected, { title: item.title, body: item.body ?? "" });
 		// Rewrite the description: drop the marker + legacy `Deferred: true` line, re-stamp deferred=false
 		// with the verified digest. A failed `bd update` throws and leaves the deferred state (#367).
 		const restamped: ReviewProvenance = { ...provenance, deferred: false };

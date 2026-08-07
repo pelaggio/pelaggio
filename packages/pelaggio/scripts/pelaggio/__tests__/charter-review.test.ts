@@ -10,8 +10,9 @@ import { CharterPolicyError, type CharterReviewConfig, canonicalizeCharterFloorP
 import { type CharterReviewRecord, canonicalizeCharterRecord, charterRecordInputsMatch, charterReviewInputs, computeCharterRecordDigest, readCharterReviewRecord, writeCharterReviewRecord } from "../review/charter-record.js";
 import { canonicalizeContractionPayload } from "../review/taxonomy.js";
 import { activateDeferredItem, charterReviewRequired, createReviewedItem } from "../roadmap/charter-gate.js";
-import { parseCharterMarker, renderCharterMarker, stripCharterMarker, withCharterMarker } from "../roadmap/charter-provenance.js";
-import type { CreateItemOpts, ReviewProvenance, RoadmapItem, RoadmapItemStatus, RoadmapSource } from "../roadmap/types.js";
+import { assertActivationInputsUnchanged, parseCharterMarker, renderCharterMarker, stripCharterMarker, withCharterMarker } from "../roadmap/charter-provenance.js";
+import type { ActivationExpectation, CreateItemOpts, ReviewProvenance, RoadmapItem, RoadmapItemStatus, RoadmapSource } from "../roadmap/types.js";
+import { charterDigestFault } from "../roadmap-cli.js";
 
 function ed25519(): { publicKeyPem: string; privateKeyPem: string } {
 	const { publicKey, privateKey } = generateKeyPairSync("ed25519");
@@ -181,6 +182,30 @@ describe("charter provenance marker round-trip (#367)", () => {
 		assert.doesNotMatch(stripCharterMarker(second), /pelaggio:charter-review/);
 	});
 
+	it("an injected second marker cannot survive restamping (#367 gate bypass)", () => {
+		// Bodies are attacker-controlled. Planting two markers used to leave one alive after the
+		// single-match strip, sitting *ahead* of the genuine marker `withCharterMarker` appends — and
+		// the parser trusted the first it found, so a forged digest read back as harness provenance.
+		const forged = renderCharterMarker({ reviewDigest: "f".repeat(64), level: "triad", deferred: false });
+		const hostile = `Body text\n\n${forged}\n\n${forged}`;
+		const restamped = withCharterMarker(hostile, { reviewDigest: "", level: "off", deferred: true });
+
+		assert.equal((restamped.match(/pelaggio:charter-review/g) ?? []).length, 1, "restamping must leave exactly one marker");
+		const parsed = parseCharterMarker(restamped);
+		assert.equal(parsed?.deferred, true, "the harness marker wins, not the injected one");
+		assert.equal(parsed?.reviewDigest, undefined, "the forged digest must not be adopted");
+	});
+
+	it("a body carrying two markers refuses to parse rather than picking one", () => {
+		// Fail closed: null means callers adopt no digest and no level, so the item reads as
+		// un-reviewed and the gate demands a real review. Choosing first-or-last would only move
+		// which position an attacker has to write to.
+		const a = renderCharterMarker({ reviewDigest: "a".repeat(64), level: "triad", deferred: false });
+		const b = renderCharterMarker({ reviewDigest: "b".repeat(64), level: "off", deferred: true });
+		assert.equal(parseCharterMarker(`Body\n\n${a}\n\n${b}`), null);
+		assert.equal(parseCharterMarker(`Body\n\n${b}\n\n${a}`), null, "order must not decide trust");
+	});
+
 	it("legacy text with no marker parses to null", () => {
 		assert.equal(parseCharterMarker("just a plain body"), null);
 	});
@@ -230,7 +255,11 @@ class FakeSource implements RoadmapSource {
 		this.items.set(item.id, item);
 		return item;
 	}
-	async activateItem(id: string, provenance: ReviewProvenance): Promise<RoadmapItemStatus> {
+	async activateItem(id: string, provenance: ReviewProvenance, expected?: ActivationExpectation): Promise<RoadmapItemStatus> {
+		const before = this.items.get(id);
+		// Mirrors every real adapter: the staleness check precedes the mutation *and* the call record,
+		// so a refusal leaves the item deferred and is not counted as an activation.
+		assertActivationInputsUnchanged(id, expected, { title: before?.title ?? "", body: before?.body ?? "" });
 		this.activateCalls.push({ id, provenance });
 		const current = this.items.get(id);
 		const updated: RoadmapItemStatus = { ...(current ?? { id, title: "", deps: "", sourceRef: "fake", status: "open" }), deferred: false, reviewDigest: provenance.reviewDigest, reviewLevel: provenance.level };
@@ -357,6 +386,39 @@ describe("charter create gate (#367)", () => {
 	});
 });
 
+describe("charter-audit digest validity (#367)", () => {
+	it("flags a deferred item whose digest names no valid record, not just a missing one", () => {
+		// The audit used to accept any nonempty digest, which defeated the one thing it exists to do.
+		// The record primitives are covered above; what regressed is that the audit consults them.
+		const dir = mkdtempSync(join(tmpdir(), "charter-audit-digest-"));
+		try {
+			const policy = resolveCharterPolicy({ ...BASE_RAW, level: "triad" }, { env: {} });
+			const { digest } = writeCharterReviewRecord(dir, {
+				schemaVersion: 1,
+				recordId: "charter-audit-1",
+				createdAt: "2026-08-05T00:00:00.000Z",
+				scope: "M",
+				origin: "create",
+				verdict: "ship",
+				inputs: charterReviewInputs("Title", "Body", policy),
+				policy,
+				evidence: { outcome: "converged-clean", diversity: "met", passes: 1, survivors: 0, notes: 0, cost: 1, seats: [] },
+			});
+
+			assert.equal(charterDigestFault(dir, digest), null, "a digest that resolves to its own record is trusted");
+			assert.match(charterDigestFault(dir, undefined) ?? "", /no review digest/);
+			assert.match(charterDigestFault(dir, "") ?? "", /no review digest/);
+			// Well-formed but points at nothing — the shape an operator-invented digest has.
+			assert.match(charterDigestFault(dir, "0".repeat(64)) ?? "", /no valid record/);
+			// Malformed: too short, and not hex.
+			assert.match(charterDigestFault(dir, "abc123") ?? "", /no valid record/);
+			assert.match(charterDigestFault(dir, "z".repeat(64)) ?? "", /no valid record/);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
 describe("charter activation (#367)", () => {
 	it("a deferred item with no valid record backfills, and a ship activates it", async () => {
 		const source = new FakeSource();
@@ -373,6 +435,43 @@ describe("charter activation (#367)", () => {
 		const result = await activateDeferredItem(source, "A-2", { config: { repo: "/x", review: { charter: charterConfig("off") } } as unknown as ResolvedConfig, executor: fakeExecutor("defer") as never });
 		assert.equal(result.activated, false);
 		assert.equal(source.activateCalls.length, 0);
+	});
+
+	it("an edit landing during the activation panel is refused, not blessed", async () => {
+		// The panel is asynchronous and can run for minutes. The adapter refetches before restamping,
+		// so without binding the write to the reviewed snapshot it stamps "reviewed" onto whatever the
+		// item says now — the review would describe content nobody approved.
+		const source = new FakeSource();
+		source.items.set("A-4", { id: "A-4", title: "Deferred", deps: "", sourceRef: "fake", status: "open", deferred: true, body: "the spec the panel read", scope: "M" });
+		const result = await activateDeferredItem(source, "A-4", {
+			config: { repo: "/x", review: { charter: charterConfig("off") } } as unknown as ResolvedConfig,
+			executor: (async () => {
+				// Someone edits the issue while the panel is deliberating.
+				const live = source.items.get("A-4");
+				if (live) source.items.set("A-4", { ...live, body: "something else entirely" });
+				return { verdict: "ship", digest: "e".repeat(64) } as CharterExecutorResult;
+			}) as never,
+		});
+
+		assert.equal(result.activated, false, "a review of stale content must not activate");
+		assert.equal(source.activateCalls.length, 0, "the refusal precedes any mutation");
+		assert.equal(source.items.get("A-4")?.deferred, true, "the item stays deferred");
+		assert.match(result.reason ?? "", /changed while its activation review was running/);
+	});
+
+	it("a title edit during the panel is refused too", async () => {
+		const source = new FakeSource();
+		source.items.set("A-5", { id: "A-5", title: "Original", deps: "", sourceRef: "fake", status: "open", deferred: true, body: "body", scope: "M" });
+		const result = await activateDeferredItem(source, "A-5", {
+			config: { repo: "/x", review: { charter: charterConfig("off") } } as unknown as ResolvedConfig,
+			executor: (async () => {
+				const live = source.items.get("A-5");
+				if (live) source.items.set("A-5", { ...live, title: "Renamed to something broader" });
+				return { verdict: "ship", digest: "e".repeat(64) } as CharterExecutorResult;
+			}) as never,
+		});
+		assert.equal(result.activated, false);
+		assert.match(result.reason ?? "", /title differs/);
 	});
 
 	it("a non-deferred item is a no-op success", async () => {

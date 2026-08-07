@@ -1,6 +1,7 @@
 import type { ResolvedConfig } from "../config.js";
 import { type CharterExecutorResult, executeCharterReview } from "../review/charter-executor.js";
 import { type CharterReviewVerdict, charterRecordInputsMatch, readCharterReviewRecord } from "../review/charter-record.js";
+import { CharterActivationStaleError } from "./charter-provenance.js";
 import type { CreateItemOpts, RoadmapItem, RoadmapItemStatus, RoadmapSource, Scope } from "./types.js";
 
 /**
@@ -123,8 +124,18 @@ export async function activateDeferredItem(source: RoadmapSource, id: string, ct
 	}
 
 	if (verdict === "ship" && digest) {
-		const activated = await source.activateItem(id, { reviewDigest: digest, level: "triad", ...(item.scope ? { scope: item.scope } : {}), deferred: false });
-		return { activated: true, item: activated, verdict };
+		// Bind the write to the exact content the panel reviewed. The panel is asynchronous and can run
+		// for minutes; without this the adapter refetches and stamps "reviewed" onto whatever the item
+		// says now, so an edit (or a close) landing mid-review is silently blessed.
+		try {
+			const activated = await source.activateItem(id, { reviewDigest: digest, level: "triad", ...(item.scope ? { scope: item.scope } : {}), deferred: false }, { title, body });
+			return { activated: true, item: activated, verdict };
+		} catch (e) {
+			// Stale input is a legitimate outcome, not a crash: the item stays deferred and the caller
+			// gets the same shape as any other non-activation.
+			if (e instanceof CharterActivationStaleError) return { activated: false, item, verdict, reason: e.message };
+			throw e;
+		}
 	}
 	return { activated: false, item, verdict, reason: `activation review did not ship (verdict ${verdict}); item stays deferred with a typed andon` };
 }

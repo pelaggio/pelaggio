@@ -1,9 +1,22 @@
 import { execSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { hasCharterProvenance, parseCharterMarker, provenanceFromCreateOpts, stripCharterMarker, withCharterMarker } from "./charter-provenance.js";
+import { assertActivationInputsUnchanged, CharterActivationStaleError, hasCharterProvenance, parseCharterMarker, provenanceFromCreateOpts, stripCharterMarker, withCharterMarker } from "./charter-provenance.js";
 import { createClaimWorkspace } from "./git-claim.js";
-import type { CreateItemOpts, GithubRoadmapConfig, ItemStatus, MarkDoneContext, PlanLocation, PriorityLabelBackfillResult, ReviewProvenance, RoadmapItem, RoadmapItemStatus, RoadmapSource, RoadmapSourceName } from "./types.js";
+import type {
+	ActivationExpectation,
+	CreateItemOpts,
+	GithubRoadmapConfig,
+	ItemStatus,
+	MarkDoneContext,
+	PlanLocation,
+	PriorityLabelBackfillResult,
+	ReviewProvenance,
+	RoadmapItem,
+	RoadmapItemStatus,
+	RoadmapSource,
+	RoadmapSourceName,
+} from "./types.js";
 import { isScope, type Scope } from "./types.js";
 
 const PLAN_MARKER = "<!-- pelaggio-plan -->";
@@ -194,11 +207,18 @@ export class GitHubIssuesRoadmap implements RoadmapSource {
 		};
 	}
 
-	async activateItem(id: string, provenance: ReviewProvenance): Promise<RoadmapItemStatus> {
+	async activateItem(id: string, provenance: ReviewProvenance, expected?: ActivationExpectation): Promise<RoadmapItemStatus> {
 		// Re-stamp the marker (deferred=false + verified digest) into the body, THEN drop the deferred
 		// label — a failed edit throws and leaves the label (and deferred state) intact (#367).
 		const raw = this.runGh(["issue", "view", id, "--repo", this.ghRepo, "--json", "number,title,body,labels,state"]);
 		const summary = parseGhJson<GhIssueSummary>(raw, (v) => isPlainObject(v) && typeof (v as { number?: unknown }).number === "number");
+		// Both checks precede every mutation below, so a refusal leaves the item deferred.
+		if (typeof summary.state === "string" && summary.state.toUpperCase() !== "OPEN") {
+			throw new CharterActivationStaleError(`activateItem: ${id} is ${summary.state.toLowerCase()}, not open; refusing to stamp an activation review onto a closed item`);
+		}
+		// Compare through the same projection the gate read, so a formatting difference in the raw
+		// payload cannot masquerade as an edit.
+		assertActivationInputsUnchanged(id, expected, projectGhIssue(summary, this.ghRepo, { includeBodyLabels: true }) as { title: string; body: string });
 		const restamped: ReviewProvenance = { ...provenance, deferred: false };
 		const newBody = withCharterMarker(stripCharterMarker(summary.body ?? ""), restamped);
 		this.runGh(["issue", "edit", id, "--repo", this.ghRepo, "--body", newBody, "--remove-label", LABEL_DEFERRED]);
