@@ -738,7 +738,11 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				// Write into the step worktree (per-item authority); never redirect to main.
 				await appendDecisions(cwd, {
 					...(itemId ? { itemId } : {}),
-					runId: runIdBase,
+					// Attempt-scoped: decision dedupe keys on (runId, step, occurrence) WITHOUT the
+					// fingerprint (decisions.ts), so an unsalted runId makes a resumed attempt's
+					// decision collide with its predecessor's in the same slot and be dropped from
+					// the durable record.
+					runId: itemRunId(),
 					step: name,
 					attempt,
 					decisions: result.decisions.map((emitted, occurrence) => ({
@@ -878,6 +882,10 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				shipwrecked,
 				...(result.bookkeepingWarnings?.length ? { bookkeepingWarnings: result.bookkeepingWarnings } : {}),
 				provenance: {
+					// Deliberately NOT attempt-scoped. This is a cycle label, not an artifact key —
+					// nothing dedupes on it — and salting it would rename the runId of every
+					// unclaimed cycle (a failed pick has no item to scope to). Distinguishing a
+					// resume in the cycle log is worth doing, but as its own change.
 					runId: runIdBase,
 					durationMs: Math.max(0, Math.trunc(now() - pipelineT0)),
 					drivers,

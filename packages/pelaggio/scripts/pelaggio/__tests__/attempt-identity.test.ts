@@ -31,14 +31,34 @@ describe("attempt-identity", () => {
 		assert.equal(currentAttempt(repo, "never-seen"), 0);
 	});
 
-	it("never reuses a number even when an earlier record is deleted", () => {
+	it("never reuses a number when a NON-highest record is deleted", () => {
 		const item = "C-1";
 		assert.equal(allocateAttempt(repo, item), 1);
 		assert.equal(allocateAttempt(repo, item), 2);
-		// A tidy sweep (or an agent) removes the middle record. Reuse would resurrect a
-		// superseded attempt's identity and re-open the receipt collision this closes.
 		rmSync(join(attemptsDir(repo), "c-1", "1.json"), { force: true });
 		assert.equal(allocateAttempt(repo, item), 3);
+	});
+
+	it("never reuses a number when the HIGHEST record is deleted", () => {
+		// The case the first version of this module got wrong: scanning records alone makes
+		// a deleted maximum invisible, so the next allocation re-creates it and regenerates
+		// the superseded runId — re-opening the exact receipt collision this module closes.
+		// A tidy sweep or a stray `rm` on .dev/ is enough to trigger it.
+		const item = "C-2";
+		assert.equal(allocateAttempt(repo, item), 1);
+		assert.equal(allocateAttempt(repo, item), 2);
+		assert.equal(allocateAttempt(repo, item), 3);
+		rmSync(join(attemptsDir(repo), "c-2", "3.json"), { force: true });
+		assert.equal(allocateAttempt(repo, item), 4);
+		assert.equal(currentAttempt(repo, item), 4);
+	});
+
+	it("never reuses a number when EVERY record is deleted", () => {
+		const item = "C-3";
+		assert.equal(allocateAttempt(repo, item), 1);
+		assert.equal(allocateAttempt(repo, item), 2);
+		for (const n of [1, 2]) rmSync(join(attemptsDir(repo), "c-3", `${n}.json`), { force: true });
+		assert.equal(allocateAttempt(repo, item), 3, "high-water mark must survive record pruning");
 	});
 
 	it("confines item ids to the attempts directory", () => {

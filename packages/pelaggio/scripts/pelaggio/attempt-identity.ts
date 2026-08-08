@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 /**
@@ -34,6 +34,20 @@ import { join, resolve } from "node:path";
  */
 
 const ATTEMPTS_DIR = "attempts";
+/**
+ * Monotonic high-water mark, written beside the numbered records.
+ *
+ * Scanning the records alone is not enough: deleting the HIGHEST record makes the scan
+ * report the preceding value, and the next allocation then re-creates the deleted number —
+ * regenerating the superseded runId and re-opening the very collision this module exists to
+ * close. Records are deletable in practice (a `/tidy` sweep, a stray `rm -rf .dev`), so the
+ * allocator must not depend on the record set being complete.
+ *
+ * The mark only ever advances, so losing any single numbered record is harmless. Losing the
+ * mark itself degrades to scan-only behaviour, which is the pre-existing weakness rather
+ * than a new one — and is one more reason properties 2-3 in the header matter.
+ */
+const HIGH_WATER = ".high-water";
 /** Bounds the ascending-n scan; far above any plausible resume count for one item. */
 const MAX_ATTEMPT = 10_000;
 const SAFE_ID = /[^a-z0-9._-]+/gi;
@@ -73,10 +87,13 @@ export function allocateAttempt(mainRepo: string, itemId: string): number {
 	// Start the scan from what is already there so a long-resumed item does not re-walk
 	// every prior attempt; correctness does not depend on the hint being fresh, because a
 	// racing allocator only makes our create fail and we advance.
-	let next = currentAttempt(mainRepo, itemId) + 1;
+	// Take the greater of the scanned maximum and the high-water mark, so a deleted record
+	// (including the highest) can never cause a number to be handed out twice.
+	let next = Math.max(scanMaxAttempt(dir), readHighWater(dir)) + 1;
 	for (; next <= MAX_ATTEMPT; next++) {
 		try {
 			writeFileSync(join(dir, `${next}.json`), `${JSON.stringify({ schemaVersion: 1, itemId, attempt: next }, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+			bumpHighWater(dir, next);
 			return next;
 		} catch (err) {
 			if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
@@ -86,11 +103,11 @@ export function allocateAttempt(mainRepo: string, itemId: string): number {
 	throw new Error(`attempt-identity: exhausted ${MAX_ATTEMPT} attempts for item ${itemId} under ${dir}`);
 }
 
-/** Highest attempt allocated for `itemId`, or 0 when the item has never been attempted. */
-export function currentAttempt(mainRepo: string, itemId: string): number {
+/** Highest numbered record present in `dir`, ignoring anything else living there. */
+function scanMaxAttempt(dir: string): number {
 	let names: string[];
 	try {
-		names = readdirSync(itemDir(mainRepo, itemId));
+		names = readdirSync(dir);
 	} catch {
 		return 0; // never attempted — not an error
 	}
@@ -102,6 +119,36 @@ export function currentAttempt(mainRepo: string, itemId: string): number {
 		if (Number.isFinite(n) && n > max) max = n;
 	}
 	return max;
+}
+
+function readHighWater(dir: string): number {
+	try {
+		const n = Number.parseInt(readFileSync(join(dir, HIGH_WATER), "utf-8").trim(), 10);
+		return Number.isFinite(n) && n > 0 ? n : 0;
+	} catch {
+		return 0; // absent or unreadable — fall back to the scan
+	}
+}
+
+/** Advance the mark, never retreat it. Best-effort: a failure here costs reuse protection
+ *  for that one allocation, never the allocation itself. */
+function bumpHighWater(dir: string, attempt: number): void {
+	try {
+		if (attempt <= readHighWater(dir)) return;
+		writeFileSync(join(dir, HIGH_WATER), `${attempt}\n`, { mode: 0o600 });
+	} catch {
+		// see above
+	}
+}
+
+/**
+ * Highest attempt allocated for `itemId`, or 0 when the item has never been attempted.
+ * Reads the high-water mark as well as the records, so a pruned record does not make an
+ * item look less-attempted than it is.
+ */
+export function currentAttempt(mainRepo: string, itemId: string): number {
+	const dir = itemDir(mainRepo, itemId);
+	return Math.max(scanMaxAttempt(dir), readHighWater(dir));
 }
 
 /**
