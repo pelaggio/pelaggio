@@ -102,12 +102,6 @@ export interface SessionProbes {
 	 * EACCES/EMFILE/EIO must never be reported as "nothing is running".
 	 */
 	readSessionsDir?: (dir: string) => { files: string[] } | { error: "absent" | "unreadable" };
-	/**
-	 * Numeric pids currently present in /proc, or undefined where that cannot be enumerated.
-	 * Used to corroborate the ABSENCE of a session record, which is not by itself proof that
-	 * nothing is running (see `sessionLiveness`).
-	 */
-	listProcPids?: () => number[] | undefined;
 	/** Write file contents (used by atomic register). */
 	writeFile?: (path: string, data: string, flag?: string) => void;
 	rename?: (from: string, to: string) => void;
@@ -317,17 +311,6 @@ function resolveProbes(probes: SessionProbes = {}): Required<SessionProbes> {
 					// ENOENT is a fact (no sessions have ever registered). Anything else is a
 					// failure to observe, and must not be reported as absence.
 					return { error: (err as NodeJS.ErrnoException).code === "ENOENT" ? "absent" : "unreadable" };
-				}
-			}),
-		listProcPids:
-			probes.listProcPids ??
-			(() => {
-				try {
-					return readdirSync("/proc")
-						.filter((e) => /^\d+$/.test(e))
-						.map((e) => Number.parseInt(e, 10));
-				} catch {
-					return undefined; // not Linux, or /proc unreadable — cannot corroborate
 				}
 			}),
 		writeFile:
@@ -794,35 +777,6 @@ export interface SessionLivenessVerdict {
 	sessions: string[];
 }
 
-/**
- * Is any live process working inside `worktree`, independent of session records?
- *
- * Needed because the ABSENCE of a record is not proof that nothing is running:
- * `runPipeline` catches session-registration failure and continues (pipeline.ts), so a live
- * cycle with no record is a normal reachable state, and the worktree exists before
- * registration happens at all. Answering `dead` from absence alone would let a reconciler
- * delete a running cycle's work.
- */
-function anyProcessInside(worktree: string, p: Required<SessionProbes>): "yes" | "no" | "cannot-tell" {
-	if (p.platform !== "linux") return "cannot-tell";
-	const pids = p.listProcPids();
-	if (pids === undefined) return "cannot-tell";
-	let opaque = false;
-	for (const pid of pids) {
-		const cwd = p.readlink(`/proc/${pid}/cwd`);
-		if (cwd === undefined) {
-			// EACCES on another user's process, or an exit race. Either way this pid's cwd is
-			// unobserved, so the scan can no longer conclude "no". An earlier version skipped
-			// these and still returned "no", which turned a permission error into authorization
-			// to destroy.
-			opaque = true;
-			continue;
-		}
-		if (cwdInsideWorktree(cwd, worktree)) return "yes";
-	}
-	return opaque ? "cannot-tell" : "no";
-}
-
 /** Least-safe-wins: any live → live; else any unknown → unknown; else dead. */
 function mergeLiveness(verdicts: Array<{ state: SessionLivenessState; sessionId: string }>): SessionLivenessState {
 	if (verdicts.some((v) => v.state === "live")) return "live";
@@ -868,17 +822,23 @@ function recordLiveness(record: SessionRecord, worktreePath: string, p: Required
  *   - `dead`    → the action is permitted by THIS check. Other preconditions still apply;
  *                 this reader answers "is someone using it", never "should it be removed".
  *
- * WHAT `dead` MEANS, precisely, because it is weaker than it looks:
+ * THE QUESTION THIS ANSWERS is narrower than the name suggests:
  *
- *   "No RECORDED session is live, and no process observable from here is working inside."
+ *   "Is any RECORDED session live in this worktree?"
  *
- * It does NOT mean "provably nothing is running". Registration is skipped silently — with no
- * error to catch — for a dry run, for `worktree === mainRepo`, before `itemId` resolves, and
- * whenever the checked-out branch is not `feat/*` (which includes a DETACHED HEAD, and a
- * failed `git branch --show-current` swallowed to `""`). `runPipeline` additionally catches
- * registration failure and continues. And the /proc corroboration can only ever prove
- * PRESENCE: a cycle's controller runs with cwd in MAIN_REPO, not the worktree, so between
- * provider children there may be no process cwd'd inside at all.
+ * NOT "is anything running here". That broader question has no sound answer available:
+ *
+ * registration is skipped silently — with no error to catch — for a dry run, for
+ * `worktree === mainRepo`, before `itemId` resolves, and whenever the checked-out branch is
+ * not `feat/*` (which includes a DETACHED HEAD, and a failed `git branch --show-current`
+ * swallowed to `""`), and `runPipeline` additionally catches registration failure and
+ * continues. Scanning /proc for a process cwd'd inside the worktree was tried and does not
+ * work: a cycle's controller runs from MAIN_REPO between provider children, so its absence
+ * proves nothing, and on a normal host most `/proc/<pid>/cwd` links are EACCES to an
+ * unprivileged reader, so such a scan cannot conclude absence regardless.
+ *
+ * So the reader ABSTAINS (`unknown`) when no record claims the worktree, rather than
+ * guessing. `dead` therefore means "every record claiming this worktree has expired".
  *
  * So `dead` is NECESSARY but NOT SUFFICIENT authorization to destroy. A caller must pair it
  * with evidence covering the unregistered population — for an item worktree, that the claim
@@ -902,9 +862,9 @@ export function sessionLiveness(mainRepo: string, worktreePath: string, probes: 
 		if (listing.error === "unreadable") {
 			return { state: "unknown", reason: `cannot read the sessions directory ${dir}; treating ${target} as live`, sessions: [] };
 		}
-		// Absent means no session has ever registered on this host — but that is not proof
-		// nothing is running, so corroborate against /proc before authorizing destruction.
-		return unrecordedVerdict(target, p, `no sessions directory at ${dir}`);
+		// No sessions directory: nothing has ever registered. Same abstention as the no-record
+		// case below — absence of a record is not evidence that nothing is running.
+		return { state: "unknown", reason: `no sessions directory at ${dir}; this reader cannot answer for unregistered worktrees`, sessions: [] };
 	}
 	const perRecord: Array<{ state: SessionLivenessState; sessionId: string }> = [];
 	for (const file of listing.files) {
@@ -924,18 +884,16 @@ export function sessionLiveness(mainRepo: string, worktreePath: string, probes: 
 		perRecord.push({ state: recordLiveness(rec, target, p), sessionId: rec.sessionId });
 	}
 	if (perRecord.length === 0) {
-		return unrecordedVerdict(target, p, `no session record claims ${target}`);
+		// ABSTAIN. This reader answers "is any RECORDED session live"; with no record there is
+		// nothing to read, and no substitute evidence exists — see the header. Returning `dead`
+		// here was fail-open (registration is skipped or swallowed in several normal paths), and
+		// an earlier attempt to corroborate absence by scanning /proc for a process cwd'd inside
+		// the worktree could not work either: a cycle's controller runs from MAIN_REPO between
+		// provider children, and on a normal host most /proc cwd links are EACCES to an
+		// unprivileged reader, so the scan could never conclude absence anyway.
+		return { state: "unknown", reason: `no session record claims ${target}; this reader cannot answer for unregistered worktrees`, sessions: [] };
 	}
-	const merged = mergeLiveness(perRecord);
-	if (merged === "dead") {
-		// Every claiming record is expired. That is NOT equivalent to "nothing is running":
-		// registration failures are swallowed by the pipeline, so a live unregistered cycle can
-		// coexist with a stale record. Corroborate exactly as the no-record path does —
-		// otherwise one leftover expired record would flip a live worktree from `unknown` to
-		// `dead`, making the reader LESS safe the more stale records accumulate.
-		return unrecordedVerdict(target, p, `all ${perRecord.length} session record(s) for ${target} are expired`);
-	}
-	const state = merged;
+	const state = mergeLiveness(perRecord);
 	const contributing = perRecord.filter((v) => v.state === state).map((v) => v.sessionId);
 	const reason =
 		state === "live"
@@ -944,22 +902,6 @@ export function sessionLiveness(mainRepo: string, worktreePath: string, probes: 
 				? `cannot establish liveness for ${target} (session ${contributing.join(", ")}); treating as live`
 				: `all ${perRecord.length} session record(s) for ${target} are dead`;
 	return { state, reason, sessions: contributing };
-}
-
-/**
- * Verdict when no record claims the worktree. Absence is corroborated against /proc rather
- * than trusted, because a registration failure is swallowed by the pipeline and a record can
- * be removed out from under this reader.
- */
-function unrecordedVerdict(target: string, p: Required<SessionProbes>, absenceReason: string): SessionLivenessVerdict {
-	const scan = anyProcessInside(target, p);
-	if (scan === "yes") {
-		return { state: "unknown", reason: `${absenceReason}, but a live process is working inside it; treating as live`, sessions: [] };
-	}
-	if (scan === "cannot-tell") {
-		return { state: "unknown", reason: `${absenceReason}, and this host cannot enumerate processes to corroborate; treating as live`, sessions: [] };
-	}
-	return { state: "dead", reason: `${absenceReason}, and no live process is working inside it`, sessions: [] };
 }
 
 /** Convenience for destructive callers: true iff the action must be refused. */
