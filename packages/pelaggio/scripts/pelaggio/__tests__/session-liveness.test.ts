@@ -190,6 +190,14 @@ describe("sessionLiveness — destructive-reconciler contract (#461)", () => {
 		assert.ok(mustNotDestroy(v));
 	});
 
+	it("reaches `dead` for a recorded session that expired with nothing running", () => {
+		// `dead` must be REACHABLE or the reader arms nothing: ADR-0026 decisions 3 and 4 both
+		// require a positive dead verdict before reclaim. This is the case that produces it.
+		const v = sessionLiveness(MAIN, WT, probes({ records: [rec({ expiresAt: NOW - 1, pid: 7 })], procCwd: undefined, pidAlive: false }));
+		assert.equal(v.state, "dead");
+		assert.equal(mustNotDestroy(v), false);
+	});
+
 	it("least-safe-wins: one live record outvotes any number of dead ones", () => {
 		const records = [rec({ sessionId: "dead-1", pid: 7 }), rec({ sessionId: "live-1", pid: 4242 })];
 		// Only pid 4242 has a corroborating /proc cwd; pid 7 resolves to nothing.

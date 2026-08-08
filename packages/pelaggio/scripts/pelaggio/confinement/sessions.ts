@@ -868,11 +868,26 @@ function recordLiveness(record: SessionRecord, worktreePath: string, p: Required
  *   - `dead`    → the action is permitted by THIS check. Other preconditions still apply;
  *                 this reader answers "is someone using it", never "should it be removed".
  *
- * `dead` is returned when no record claims the worktree at all. That is the honest reading —
- * a live pelaggio session always registers a record before doing work — but it does mean this
- * reader cannot protect a worktree whose record was deleted out from under it. Records live in
- * `MAIN_REPO/.dev/sessions/`, which `blockForeignRootWrite` denies to agent tools absolutely,
- * so that gap is a filesystem-level concern rather than an agent-reachable one.
+ * WHAT `dead` MEANS, precisely, because it is weaker than it looks:
+ *
+ *   "No RECORDED session is live, and no process observable from here is working inside."
+ *
+ * It does NOT mean "provably nothing is running". Registration is skipped silently — with no
+ * error to catch — for a dry run, for `worktree === mainRepo`, before `itemId` resolves, and
+ * whenever the checked-out branch is not `feat/*` (which includes a DETACHED HEAD, and a
+ * failed `git branch --show-current` swallowed to `""`). `runPipeline` additionally catches
+ * registration failure and continues. And the /proc corroboration can only ever prove
+ * PRESENCE: a cycle's controller runs with cwd in MAIN_REPO, not the worktree, so between
+ * provider children there may be no process cwd'd inside at all.
+ *
+ * So `dead` is NECESSARY but NOT SUFFICIENT authorization to destroy. A caller must pair it
+ * with evidence covering the unregistered population — for an item worktree, that the claim
+ * branch is merged into `main`, CAS-fenced to the exact verified SHA, with a clean tree, so
+ * that even an unobserved writer has nothing unsaved. `.dev/review-heads/<sha>` checkouts are
+ * a third population with their own owner (`review-sweep.ts`) and their own rule.
+ *
+ * This reader deliberately answers only the half it can observe. Widening it to answer
+ * "is anything running here" would require evidence that does not exist.
  */
 export function sessionLiveness(mainRepo: string, worktreePath: string, probes: SessionProbes = {}): SessionLivenessVerdict {
 	const p = resolveProbes(probes);
