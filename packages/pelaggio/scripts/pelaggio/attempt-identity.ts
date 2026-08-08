@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 /**
@@ -89,7 +89,7 @@ function itemDir(mainRepo: string, itemId: string): string {
  */
 export function allocateAttempt(mainRepo: string, itemId: string): number {
 	const dir = itemDir(mainRepo, itemId);
-	mkdirSync(dir, { recursive: true });
+	const marks = ensureMarksDir(dir);
 	// Start the scan from what is already there so a long-resumed item does not re-walk
 	// every prior attempt; correctness does not depend on the hint being fresh, because a
 	// racing allocator only makes our create fail and we advance.
@@ -98,13 +98,25 @@ export function allocateAttempt(mainRepo: string, itemId: string): number {
 	let next = Math.max(scanMaxAttempt(dir), readHighWater(dir)) + 1;
 	for (; next <= MAX_ATTEMPT; next++) {
 		try {
-			writeFileSync(join(dir, `${next}.json`), `${JSON.stringify({ schemaVersion: 1, itemId, attempt: next }, null, 2)}\n`, { flag: "wx", mode: 0o600 });
-			bumpHighWater(dir, next);
-			return next;
+			// The MARKER is the allocation, and it is written first. Creating the informational
+			// record first and marking afterwards would leave a window where a crash (or a
+			// swallowed marker-write failure) yields a number with no durable trace, which a
+			// later prune of the record turns back into a reissue. O_EXCL both decides the
+			// race and makes the allocation durable in one syscall; any error other than
+			// EEXIST propagates rather than returning an unprotected number.
+			writeFileSync(join(marks, String(next)), "", { flag: "wx", mode: 0o600 });
 		} catch (err) {
-			if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-			// lost the race for this n — advance and retry
+			if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err; // fail closed
+			continue; // lost the race for this n — advance and retry
 		}
+		// Informational metadata, deliberately best-effort and deliberately second: losing it
+		// costs a debugging aid, never the no-reuse guarantee.
+		try {
+			writeFileSync(join(dir, `${next}.json`), `${JSON.stringify({ schemaVersion: 1, itemId, attempt: next }, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+		} catch {
+			// already present, or unwritable — the marker above is what matters
+		}
+		return next;
 	}
 	throw new Error(`attempt-identity: exhausted ${MAX_ATTEMPT} attempts for item ${itemId} under ${dir}`);
 }
@@ -127,6 +139,38 @@ function scanMaxAttempt(dir: string): number {
 	return max;
 }
 
+/**
+ * Create the marker directory, migrating a legacy single-file mark if one is present.
+ *
+ * An intermediate version of this module wrote `.high-water` as a FILE holding the maximum.
+ * `mkdirSync(..., { recursive: true })` does not tolerate a file at the target — it throws
+ * EEXIST — so without this, any checkout carrying the old shape fails every allocation.
+ * The legacy value is preserved as a marker before the file is removed, so migrating cannot
+ * lower the mark.
+ */
+function ensureMarksDir(dir: string): string {
+	const marks = join(dir, HIGH_WATER_DIR);
+	try {
+		if (statSync(marks).isFile()) {
+			const legacy = Number.parseInt(readFileSync(marks, "utf-8").trim(), 10);
+			rmSync(marks, { force: true });
+			mkdirSync(marks, { recursive: true });
+			if (Number.isFinite(legacy) && legacy > 0) {
+				try {
+					writeFileSync(join(marks, String(legacy)), "", { flag: "wx", mode: 0o600 });
+				} catch {
+					// already marked — nothing to preserve
+				}
+			}
+			return marks;
+		}
+	} catch {
+		// absent, or unreadable — fall through to the normal create
+	}
+	mkdirSync(marks, { recursive: true });
+	return marks;
+}
+
 function readHighWater(dir: string): number {
 	let names: string[];
 	try {
@@ -140,21 +184,6 @@ function readHighWater(dir: string): number {
 		if (Number.isFinite(n) && n > max) max = n;
 	}
 	return max;
-}
-
-/**
- * Record that `attempt` was allocated. Create-only, so concurrent allocators cannot lower
- * the mark — an already-present marker is success, not a conflict. Best-effort: a failure
- * here costs reuse protection for that one allocation, never the allocation itself.
- */
-function bumpHighWater(dir: string, attempt: number): void {
-	try {
-		const marks = join(dir, HIGH_WATER_DIR);
-		mkdirSync(marks, { recursive: true });
-		writeFileSync(join(marks, String(attempt)), "", { flag: "wx", mode: 0o600 });
-	} catch {
-		// EEXIST (already marked) or a write failure — see above
-	}
 }
 
 /**

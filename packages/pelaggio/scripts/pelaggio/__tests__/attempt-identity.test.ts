@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -54,12 +54,35 @@ describe("attempt-identity", () => {
 		assert.equal(currentAttempt(repo, item), 4);
 	});
 
+	it("never reuses a number whose record was never written (crash between marker and record)", () => {
+		// The marker is the allocation and is written first, so a crash before the
+		// informational record lands must still consume the number. Simulated by deleting the
+		// record while leaving the marker — the state such a crash leaves behind.
+		const item = "C-4";
+		assert.equal(allocateAttempt(repo, item), 1);
+		rmSync(join(attemptsDir(repo), "c-4", "1.json"), { force: true });
+		assert.equal(allocateAttempt(repo, item), 2, "a number with a marker but no record must not be reissued");
+	});
+
 	it("never reuses a number when EVERY record is deleted", () => {
 		const item = "C-3";
 		assert.equal(allocateAttempt(repo, item), 1);
 		assert.equal(allocateAttempt(repo, item), 2);
 		for (const n of [1, 2]) rmSync(join(attemptsDir(repo), "c-3", `${n}.json`), { force: true });
 		assert.equal(allocateAttempt(repo, item), 3, "high-water mark must survive record pruning");
+	});
+
+	it("migrates a legacy single-file high-water mark without lowering it", () => {
+		// An intermediate version wrote `.high-water` as a FILE. mkdirSync(recursive) throws
+		// EEXIST on a file at the target, so without migration every allocation fails on any
+		// checkout carrying the old shape — and a naive migration that discards the value
+		// would reissue numbers below it.
+		const item = "C-5";
+		const dir = join(attemptsDir(repo), "c-5");
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(join(dir, ".high-water"), "7\n");
+		assert.equal(allocateAttempt(repo, item), 8, "legacy mark must be preserved, not discarded");
+		assert.equal(allocateAttempt(repo, item), 9);
 	});
 
 	it("confines item ids to the attempts directory", () => {
