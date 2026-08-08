@@ -809,7 +809,15 @@ function recordLiveness(record: SessionRecord, worktreePath: string, p: Required
 		// `kill(pid, 0)` but will not be working inside this worktree.
 		if (binding !== undefined && cwdInsideWorktree(binding.cwd, worktreePath)) return "live";
 	}
-	return record.expiresAt > p.now() ? "unknown" : "dead";
+	if (record.expiresAt > p.now()) return "unknown";
+	// Expired — but expiry is a DEADLINE, not proof the owner exited. A controller suspended
+	// by laptop sleep or SIGSTOP, or starved of scheduling, misses heartbeats while remaining
+	// very much alive; concluding `dead` there deletes its work. So `isPidAlive` gets a VETO
+	// here even though it can never authorize: a recycled pid producing a false "alive" only
+	// makes this more conservative, which is the safe direction. This is the one legitimate
+	// use of the diagnostic-only signal — vetoing a destructive verdict, never granting one.
+	if (Number.isInteger(record.pid) && record.pid > 0 && p.isPidAlive(record.pid)) return "unknown";
+	return "dead";
 }
 
 /**
@@ -838,7 +846,19 @@ function recordLiveness(record: SessionRecord, worktreePath: string, p: Required
  * unprivileged reader, so such a scan cannot conclude absence regardless.
  *
  * So the reader ABSTAINS (`unknown`) when no record claims the worktree, rather than
- * guessing. `dead` therefore means "every record claiming this worktree has expired".
+ * guessing. `dead` therefore means "every record claiming this worktree has expired, and no
+ * recorded pid is still alive".
+ *
+ * RESIDUAL, stated because it bounds what `dead` may be used for: session records are
+ * unauthenticated JSON. The Bash half of `blockForeignRootWrite` matches a literal
+ * `.dev/sessions` substring, so `.dev/./sessions` or a split path variable evades it — the
+ * same command-text residual ADR-0026 decision 10 records for the attempt register. A
+ * prompt-injected worker could therefore forge an expired record and force `dead`.
+ *
+ * The compensating control is the caller's, not this reader's: `dead` is necessary but never
+ * sufficient, and the required pairing (claim branch merged into `main`, CAS-fenced to the
+ * verified SHA, clean tree) means a forged `dead` still cannot destroy unmerged work.
+ * Hardening the path denial itself belongs with the attempt-register work on #467.
  *
  * So `dead` is NECESSARY but NOT SUFFICIENT authorization to destroy. A caller must pair it
  * with evidence covering the unregistered population — for an item worktree, that the claim

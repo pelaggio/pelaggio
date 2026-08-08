@@ -68,9 +68,20 @@ describe("sessionLiveness — destructive-reconciler contract (#461)", () => {
 		assert.ok(mustNotDestroy(v), "an uncorroborated alive pid must still block destruction");
 	});
 
-	it("is dead once an uncorroborated record has passed its own deadline", () => {
+	it("an expired record whose pid is still ALIVE is unknown, not dead", () => {
+		// Expiry is a deadline, not proof the owner exited: a controller suspended by laptop
+		// sleep or SIGSTOP misses heartbeats while remaining live. isPidAlive gets a VETO here
+		// even though it can never authorize — a recycled pid reading as alive only makes this
+		// more conservative, which is the safe direction.
 		const v = sessionLiveness(MAIN, WT, probes({ records: [rec({ expiresAt: NOW - 1 })], procCwd: "/elsewhere", pidAlive: true }));
+		assert.equal(v.state, "unknown");
+		assert.ok(mustNotDestroy(v));
+	});
+
+	it("is dead once an expired record's pid is also gone", () => {
+		const v = sessionLiveness(MAIN, WT, probes({ records: [rec({ expiresAt: NOW - 1 })], procCwd: undefined, pidAlive: false }));
 		assert.equal(v.state, "dead");
+		assert.equal(mustNotDestroy(v), false);
 	});
 
 	it("is unknown — not dead — when the pid is alive but /proc is unreadable", () => {
