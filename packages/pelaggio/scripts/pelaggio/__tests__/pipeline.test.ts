@@ -1876,6 +1876,10 @@ describe("runPipeline — cross-process session records (#369)", () => {
 			{
 				implement: {
 					ok: true,
+					// A real deliverable in the ITEM worktree: these tests are about peer-session
+					// exemption, not the plan-only ship guard, and with `.dev/` correctly ignored
+					// (as in production) a peer-only side effect leaves nothing to ship.
+					writes: { "impl.txt": "x" },
 					sideEffect: () => {
 						writeFileSync(join(peer, "peer-only.txt"), "ok");
 					},
@@ -1921,6 +1925,9 @@ describe("runPipeline — cross-process session records (#369)", () => {
 				{
 					implement: {
 						ok: true,
+						// See the sibling test: a real deliverable in the ITEM worktree, so the
+						// plan-only ship guard does not mask what this test is actually asserting.
+						writes: { "impl.txt": "x" },
 						sideEffect: () => {
 							writeFileSync(join(peer, "during.txt"), "x");
 						},
