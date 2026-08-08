@@ -93,8 +93,15 @@ export interface SessionProbes {
 	readFile?: (path: string) => string | undefined;
 	/** Read a symlink target (e.g. /proc/<pid>/cwd). */
 	readlink?: (path: string) => string | undefined;
-	/** List .json basenames under the sessions directory. */
+	/** List .json basenames under the sessions directory. Errors collapse to `[]`. */
 	listSessionFiles?: (dir: string) => string[];
+	/**
+	 * Like `listSessionFiles`, but distinguishes "there is no sessions directory" from
+	 * "the sessions directory could not be read". `sessionLiveness()` requires that
+	 * distinction: an absent directory genuinely means no session claims anything, while an
+	 * EACCES/EMFILE/EIO must never be reported as "nothing is running".
+	 */
+	readSessionsDir?: (dir: string) => { files: string[] } | { error: "absent" | "unreadable" };
 	/** Write file contents (used by atomic register). */
 	writeFile?: (path: string, data: string, flag?: string) => void;
 	rename?: (from: string, to: string) => void;
@@ -293,6 +300,17 @@ function resolveProbes(probes: SessionProbes = {}): Required<SessionProbes> {
 					return readdirSync(dir).filter((f) => f.endsWith(".json"));
 				} catch {
 					return [];
+				}
+			}),
+		readSessionsDir:
+			probes.readSessionsDir ??
+			((dir) => {
+				try {
+					return { files: readdirSync(dir).filter((f) => f.endsWith(".json")) };
+				} catch (err) {
+					// ENOENT is a fact (no sessions have ever registered). Anything else is a
+					// failure to observe, and must not be reported as absence.
+					return { error: (err as NodeJS.ErrnoException).code === "ENOENT" ? "absent" : "unreadable" };
 				}
 			}),
 		writeFile:
@@ -776,26 +794,21 @@ function mergeLiveness(verdicts: Array<{ state: SessionLivenessState; sessionId:
  * always does, because the step runs with cwd set to its own worktree.
  */
 function recordLiveness(record: SessionRecord, worktreePath: string, p: Required<SessionProbes>): SessionLivenessState {
-	if (!Number.isInteger(record.pid) || record.pid <= 0) {
-		// No binding pid was ever recorded. Expiry is all we have, and expiry is a deadline,
-		// not evidence — so an unexpired record without a pid is `unknown`, never `dead`.
-		return record.expiresAt > p.now() ? "unknown" : "dead";
+	// The pid can only ever prove LIVE. It can never prove dead, and an earlier version of
+	// this function got that wrong: pelaggio keeps ONE session record for a whole cycle and
+	// updates its pid on each provider spawn, so between steps the recorded child has exited
+	// while the controller is very much alive and still heartbeating. Concluding `dead` from
+	// a vanished /proc entry would let a reconciler delete the active cycle's worktree.
+	//
+	// What proves dead is the record's own deadline, because the controller rewrites
+	// `expiresAt` every SESSION_HEARTBEAT_MS. An unexpired record means a controller was
+	// alive within the last heartbeat, whatever the child pid is doing.
+	if (Number.isInteger(record.pid) && record.pid > 0 && p.platform === "linux") {
+		const binding = readProcBinding(record.pid, p);
+		// Corroborated against cwd rather than trusted: a recycled pid reads as alive to
+		// `kill(pid, 0)` but will not be working inside this worktree.
+		if (binding !== undefined && cwdInsideWorktree(binding.cwd, worktreePath)) return "live";
 	}
-	if (p.platform !== "linux") {
-		// No /proc to corroborate with. `kill(pid, 0)` alone cannot distinguish a live session
-		// from a recycled pid, so this host cannot answer — it must not answer `dead`.
-		return record.expiresAt > p.now() ? "unknown" : "dead";
-	}
-	const binding = readProcBinding(record.pid, p);
-	if (binding === undefined) {
-		// /proc entry absent. If the pid is not alive either, the session is genuinely gone.
-		// If it IS alive, /proc was unreadable for some other reason and we cannot corroborate.
-		if (p.isPidAlive(record.pid)) return "unknown";
-		return "dead";
-	}
-	if (cwdInsideWorktree(binding.cwd, worktreePath)) return "live";
-	// Alive, but working somewhere else: either a recycled pid or a session that moved on.
-	// Not corroborated — so `dead` only once the record's own deadline has passed.
 	return record.expiresAt > p.now() ? "unknown" : "dead";
 }
 
@@ -819,8 +832,20 @@ export function sessionLiveness(mainRepo: string, worktreePath: string, probes: 
 	const p = resolveProbes(probes);
 	const dir = sessionsDir(mainRepo);
 	const target = resolve(worktreePath);
+	const listing = p.readSessionsDir(dir);
+	if ("error" in listing) {
+		// An unreadable sessions directory is a failure to OBSERVE, never evidence of absence.
+		// The default `listSessionFiles` probe collapses every readdir error to `[]`, which
+		// would have arrived here as "no records" and authorized deletion — fail-open, and the
+		// exact opposite of how an unreadable individual record is handled below.
+		if (listing.error === "unreadable") {
+			return { state: "unknown", reason: `cannot read the sessions directory ${dir}; treating ${target} as live`, sessions: [] };
+		}
+		// Absent is a fact: no session has ever registered on this host.
+		return { state: "dead", reason: `no sessions directory at ${dir}`, sessions: [] };
+	}
 	const perRecord: Array<{ state: SessionLivenessState; sessionId: string }> = [];
-	for (const file of p.listSessionFiles(dir)) {
+	for (const file of listing.files) {
 		const text = p.readFile(join(dir, file));
 		if (text === undefined) {
 			// A session file we can see but cannot read is exactly the case that must not be

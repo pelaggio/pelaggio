@@ -18,6 +18,7 @@ function probes(opts: { records?: Array<SessionRecord | string>; procCwd?: strin
 		platform: opts.platform ?? "linux",
 		now: () => NOW,
 		listSessionFiles: () => files,
+		readSessionsDir: () => ({ files }),
 		readFile: (path) => {
 			const m = path.match(/s(\d+)\.json$/);
 			if (m?.[1] !== undefined) {
@@ -45,10 +46,19 @@ describe("sessionLiveness — destructive-reconciler contract (#461)", () => {
 		assert.equal(sessionLiveness(MAIN, WT, probes({ procCwd: `${WT}/packages/x`, pidAlive: true })).state, "live");
 	});
 
-	it("is dead when the pid is gone and /proc has no entry", () => {
-		const v = sessionLiveness(MAIN, WT, probes({ procCwd: undefined, pidAlive: false }));
+	it("is dead when the pid is gone AND the record has expired", () => {
+		const v = sessionLiveness(MAIN, WT, probes({ records: [rec({ expiresAt: NOW - 1 })], procCwd: undefined, pidAlive: false }));
 		assert.equal(v.state, "dead");
 		assert.equal(mustNotDestroy(v), false);
+	});
+
+	it("is unknown when the child pid is gone but the record is still heartbeating", () => {
+		// pelaggio keeps ONE record per cycle and updates its pid on each provider spawn, so
+		// between steps the recorded child has exited while the controller is alive and still
+		// refreshing expiresAt. Concluding `dead` here would delete the active cycle's work.
+		const v = sessionLiveness(MAIN, WT, probes({ procCwd: undefined, pidAlive: false }));
+		assert.equal(v.state, "unknown");
+		assert.ok(mustNotDestroy(v));
 	});
 
 	it("resists pid reuse: an alive pid working elsewhere is never live", () => {
@@ -91,9 +101,24 @@ describe("sessionLiveness — destructive-reconciler contract (#461)", () => {
 	});
 
 	it("is dead when nothing claims the worktree", () => {
-		const v = sessionLiveness(MAIN, WT, { platform: "linux", now: () => NOW, listSessionFiles: () => [] });
+		const v = sessionLiveness(MAIN, WT, { platform: "linux", now: () => NOW, readSessionsDir: () => ({ files: [] }) });
 		assert.equal(v.state, "dead");
 		assert.equal(mustNotDestroy(v), false);
+	});
+
+	it("is dead when the sessions directory does not exist", () => {
+		const v = sessionLiveness(MAIN, WT, { platform: "linux", now: () => NOW, readSessionsDir: () => ({ error: "absent" }) });
+		assert.equal(v.state, "dead");
+	});
+
+	it("is unknown — never dead — when the sessions directory cannot be read", () => {
+		// EACCES/EMFILE/EIO is a failure to OBSERVE. The default listSessionFiles probe
+		// collapses every readdir error to [], which would arrive as "no records" and
+		// authorize deletion of every live worktree during a reap sweep.
+		const v = sessionLiveness(MAIN, WT, { platform: "linux", now: () => NOW, readSessionsDir: () => ({ error: "unreadable" }) });
+		assert.equal(v.state, "unknown");
+		assert.ok(mustNotDestroy(v));
+		assert.match(v.reason, /cannot read the sessions directory/);
 	});
 
 	it("least-safe-wins: one live record outvotes any number of dead ones", () => {
@@ -114,7 +139,8 @@ describe("sessionLiveness — destructive-reconciler contract (#461)", () => {
 	});
 
 	it("unknown outranks dead when both are present", () => {
-		const records = [rec({ sessionId: "dead-1", pid: 7 }), rec({ sessionId: "nopid", pid: 0 })];
+		// `dead-1` is genuinely dead (past its deadline); `nopid` is still heartbeating.
+		const records = [rec({ sessionId: "dead-1", pid: 7, expiresAt: NOW - 1 }), rec({ sessionId: "nopid", pid: 0 })];
 		const v = sessionLiveness(MAIN, WT, probes({ records, procCwd: undefined, pidAlive: false }));
 		assert.equal(v.state, "unknown");
 		assert.deepEqual(v.sessions, ["nopid"]);
