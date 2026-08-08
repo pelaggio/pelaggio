@@ -6,7 +6,15 @@
  * false-positive on legitimate peer writes. Eligibility is fail-closed:
  * Git claim validation plus either Linux /proc binding (cwd + starttime before
  * evaluator start) or an exact immutable-identity match against the evaluator's
- * run-start inventory. PID aliveness is diagnostic only.
+ * run-start inventory. For CONFINEMENT EVALUATION, pid aliveness remains diagnostic
+ * only — a wrong answer there degrades an audit.
+ *
+ * For DESTRUCTIVE RECONCILERS it is not enough and never was, which is why
+ * `sessionLiveness()` (#461, bottom of this file) exists as a separate reader with a
+ * fail-closed tri-state contract. It corroborates the pid against its /proc cwd rather
+ * than trusting `kill(pid, 0)`, and answers `unknown` — which callers must treat as
+ * `live` — wherever it cannot establish the answer. Do not substitute one for the other:
+ * they have opposite failure postures, because a wrong answer for reap deletes work.
  *
  * Records are NOT a claims registry — the feat/* branch remains authoritative.
  */
@@ -71,7 +79,12 @@ export interface AcceptedSession {
 	worktreePath: string;
 	leg: SessionEligibilityLeg;
 	pid: number;
-	/** True when kill(pid,0) succeeded — diagnostic corroboration only. */
+	/** True when kill(pid,0) succeeded.
+	 *
+	 *  Diagnostic corroboration ONLY, and deliberately so: pids are recycled, so this is
+	 *  true for an unrelated process that inherited a dead session's number. Never gate a
+	 *  destructive action on it — use `sessionLiveness()`, which corroborates against the
+	 *  process's /proc cwd and fails closed. */
 	pidAlive?: boolean;
 }
 
@@ -724,4 +737,120 @@ export function firstDiffPathsByRoot(before: ReadonlyMap<string, string>, after:
 		out.set(resolve(root), firstDiffPaths(b, a, limit));
 	}
 	return out;
+}
+
+// ── Liveness for destructive reconcilers (#461) ─────────────────────────
+
+/**
+ * Verdict a destructive operation may act on.
+ *
+ * `unknown` is NOT a soft `dead`. It means "this reader could not establish the answer",
+ * and every destructive caller must treat it exactly as `live`. The tri-state exists so a
+ * refusal can say WHICH it was — an operator debugging a worktree that will not reap needs
+ * to distinguish "a session is running" from "this host cannot tell".
+ */
+export type SessionLivenessState = "live" | "dead" | "unknown";
+
+export interface SessionLivenessVerdict {
+	state: SessionLivenessState;
+	/** Operator-facing explanation; always populated, including for `dead`. */
+	reason: string;
+	/** Session ids that produced a `live` or `unknown` contribution, for diagnostics. */
+	sessions: string[];
+}
+
+/** Least-safe-wins: any live → live; else any unknown → unknown; else dead. */
+function mergeLiveness(verdicts: Array<{ state: SessionLivenessState; sessionId: string }>): SessionLivenessState {
+	if (verdicts.some((v) => v.state === "live")) return "live";
+	if (verdicts.some((v) => v.state === "unknown")) return "unknown";
+	return "dead";
+}
+
+/**
+ * Liveness of one record, corroborated rather than trusted.
+ *
+ * A bare `kill(pid, 0)` is not sufficient: pids are recycled, so a dead session whose number
+ * has been reissued to an unrelated process reads as alive. Corroboration is the /proc
+ * binding — the process must currently have its cwd inside the worktree the record claims.
+ * A recycled pid will essentially never satisfy that, and a genuinely live pelaggio session
+ * always does, because the step runs with cwd set to its own worktree.
+ */
+function recordLiveness(record: SessionRecord, worktreePath: string, p: Required<SessionProbes>): SessionLivenessState {
+	if (!Number.isInteger(record.pid) || record.pid <= 0) {
+		// No binding pid was ever recorded. Expiry is all we have, and expiry is a deadline,
+		// not evidence — so an unexpired record without a pid is `unknown`, never `dead`.
+		return record.expiresAt > p.now() ? "unknown" : "dead";
+	}
+	if (p.platform !== "linux") {
+		// No /proc to corroborate with. `kill(pid, 0)` alone cannot distinguish a live session
+		// from a recycled pid, so this host cannot answer — it must not answer `dead`.
+		return record.expiresAt > p.now() ? "unknown" : "dead";
+	}
+	const binding = readProcBinding(record.pid, p);
+	if (binding === undefined) {
+		// /proc entry absent. If the pid is not alive either, the session is genuinely gone.
+		// If it IS alive, /proc was unreadable for some other reason and we cannot corroborate.
+		if (p.isPidAlive(record.pid)) return "unknown";
+		return "dead";
+	}
+	if (cwdInsideWorktree(binding.cwd, worktreePath)) return "live";
+	// Alive, but working somewhere else: either a recycled pid or a session that moved on.
+	// Not corroborated — so `dead` only once the record's own deadline has passed.
+	return record.expiresAt > p.now() ? "unknown" : "dead";
+}
+
+/**
+ * Whether any session is using `worktreePath`. Intended for reconcilers that DELETE — worktree
+ * removal, claim-branch deletion — where a wrong answer is unrecoverable.
+ *
+ * Contract for callers, and it is fail-closed by construction:
+ *   - `live`    → refuse the destructive action.
+ *   - `unknown` → refuse the destructive action. Identical obligation to `live`.
+ *   - `dead`    → the action is permitted by THIS check. Other preconditions still apply;
+ *                 this reader answers "is someone using it", never "should it be removed".
+ *
+ * `dead` is returned when no record claims the worktree at all. That is the honest reading —
+ * a live pelaggio session always registers a record before doing work — but it does mean this
+ * reader cannot protect a worktree whose record was deleted out from under it. Records live in
+ * `MAIN_REPO/.dev/sessions/`, which `blockForeignRootWrite` denies to agent tools absolutely,
+ * so that gap is a filesystem-level concern rather than an agent-reachable one.
+ */
+export function sessionLiveness(mainRepo: string, worktreePath: string, probes: SessionProbes = {}): SessionLivenessVerdict {
+	const p = resolveProbes(probes);
+	const dir = sessionsDir(mainRepo);
+	const target = resolve(worktreePath);
+	const perRecord: Array<{ state: SessionLivenessState; sessionId: string }> = [];
+	for (const file of p.listSessionFiles(dir)) {
+		const text = p.readFile(join(dir, file));
+		if (text === undefined) {
+			// A session file we can see but cannot read is exactly the case that must not be
+			// silently ignored: it may claim this worktree.
+			perRecord.push({ state: "unknown", sessionId: file });
+			continue;
+		}
+		const rec = readSessionRecordFromText(text);
+		if (!rec) {
+			perRecord.push({ state: "unknown", sessionId: file });
+			continue;
+		}
+		if (resolve(rec.worktreePath) !== target) continue;
+		perRecord.push({ state: recordLiveness(rec, target, p), sessionId: rec.sessionId });
+	}
+	if (perRecord.length === 0) {
+		return { state: "dead", reason: `no session record claims ${target}`, sessions: [] };
+	}
+	const state = mergeLiveness(perRecord);
+	const contributing = perRecord.filter((v) => v.state === state).map((v) => v.sessionId);
+	const reason =
+		state === "live"
+			? `session ${contributing.join(", ")} is running in ${target}`
+			: state === "unknown"
+				? `cannot establish liveness for ${target} (session ${contributing.join(", ")}); treating as live`
+				: `all ${perRecord.length} session record(s) for ${target} are dead`;
+	return { state, reason, sessions: contributing };
+}
+
+/** Convenience for destructive callers: true iff the action must be refused. */
+export function mustNotDestroy(verdict: SessionLivenessVerdict): boolean {
+	return verdict.state !== "dead";
 }
