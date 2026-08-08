@@ -160,6 +160,36 @@ describe("sessionLiveness — destructive-reconciler contract (#461)", () => {
 		assert.match(v.reason, /cannot read the sessions directory/);
 	});
 
+	it("corroborates even when a stale expired record claims the worktree", () => {
+		// Gating corroboration on "zero records" made the reader LESS safe as stale records
+		// accumulated: with a live process inside, zero records gave `unknown` but one expired
+		// record gave `dead`. Every all-expired verdict must corroborate exactly as absence does.
+		const v = sessionLiveness(MAIN, WT, {
+			platform: "linux",
+			now: () => NOW,
+			readSessionsDir: () => ({ files: ["s0.json"] }),
+			readFile: (path) => (path.endsWith("s0.json") ? JSON.stringify(rec({ expiresAt: NOW - 1, pid: 7 })) : undefined),
+			listProcPids: () => [99],
+			readlink: (path) => (path === "/proc/99/cwd" ? WT : undefined),
+		});
+		assert.equal(v.state, "unknown");
+		assert.ok(mustNotDestroy(v));
+	});
+
+	it("cannot conclude absence when a process cwd is unreadable", () => {
+		// EACCES on another user's process, or an exit race, leaves that pid unobserved — the
+		// scan must degrade to `unknown`, not report `no` and authorize destruction.
+		const v = sessionLiveness(MAIN, WT, {
+			platform: "linux",
+			now: () => NOW,
+			readSessionsDir: () => ({ files: [] }),
+			listProcPids: () => [99],
+			readlink: () => undefined,
+		});
+		assert.equal(v.state, "unknown");
+		assert.ok(mustNotDestroy(v));
+	});
+
 	it("least-safe-wins: one live record outvotes any number of dead ones", () => {
 		const records = [rec({ sessionId: "dead-1", pid: 7 }), rec({ sessionId: "live-1", pid: 4242 })];
 		// Only pid 4242 has a corroborating /proc cwd; pid 7 resolves to nothing.

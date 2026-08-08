@@ -807,15 +807,20 @@ function anyProcessInside(worktree: string, p: Required<SessionProbes>): "yes" |
 	if (p.platform !== "linux") return "cannot-tell";
 	const pids = p.listProcPids();
 	if (pids === undefined) return "cannot-tell";
+	let opaque = false;
 	for (const pid of pids) {
 		const cwd = p.readlink(`/proc/${pid}/cwd`);
-		// A process that exited mid-scan, or whose cwd we may not read, is not evidence of
-		// absence — but it is also not evidence of presence. Skipping is correct here because
-		// the surrounding contract already refuses on `cannot-tell`.
-		if (cwd === undefined) continue;
+		if (cwd === undefined) {
+			// EACCES on another user's process, or an exit race. Either way this pid's cwd is
+			// unobserved, so the scan can no longer conclude "no". An earlier version skipped
+			// these and still returned "no", which turned a permission error into authorization
+			// to destroy.
+			opaque = true;
+			continue;
+		}
 		if (cwdInsideWorktree(cwd, worktree)) return "yes";
 	}
-	return "no";
+	return opaque ? "cannot-tell" : "no";
 }
 
 /** Least-safe-wins: any live → live; else any unknown → unknown; else dead. */
@@ -906,7 +911,16 @@ export function sessionLiveness(mainRepo: string, worktreePath: string, probes: 
 	if (perRecord.length === 0) {
 		return unrecordedVerdict(target, p, `no session record claims ${target}`);
 	}
-	const state = mergeLiveness(perRecord);
+	const merged = mergeLiveness(perRecord);
+	if (merged === "dead") {
+		// Every claiming record is expired. That is NOT equivalent to "nothing is running":
+		// registration failures are swallowed by the pipeline, so a live unregistered cycle can
+		// coexist with a stale record. Corroborate exactly as the no-record path does —
+		// otherwise one leftover expired record would flip a live worktree from `unknown` to
+		// `dead`, making the reader LESS safe the more stale records accumulate.
+		return unrecordedVerdict(target, p, `all ${perRecord.length} session record(s) for ${target} are expired`);
+	}
+	const state = merged;
 	const contributing = perRecord.filter((v) => v.state === state).map((v) => v.sessionId);
 	const reason =
 		state === "live"
