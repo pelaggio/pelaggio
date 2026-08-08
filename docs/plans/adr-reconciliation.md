@@ -153,38 +153,78 @@ These belong in recipe policy, skill design, agent-context/design docs, trust/co
 
 ## 4. Disposition of the current ADRs
 
-This is a review proposal, not an instruction to edit them in place yet.
+**Revised after the trio document review** (3/3 reviewers `block`, 11 must-fix; record bound to
+`fefa0848`). The first draft of this table treated the problem as *too much ADR* and reached for
+demotion. The review's convergent objection was that the demotions dropped properties that are
+load-bearing precisely *because* they name a failure — ADR-0001's independence from tool-input path
+parsing (failed PR #112) being the clearest case, preserved in the first draft as only "writes are
+bounded to the item workspace".
 
-| ADR | Proposed disposition | Durable content to preserve |
-|---|---|---|
-| 0001 worktree write confinement | **narrow / fold into D** | agent writes are bounded to the item workspace; harness owns broader mutation |
-| 0002 untrusted input/tool scope | **retain, align with C/D** | repo/issue/PR content is untrusted; content cannot grant authority |
-| 0003 PR-gated default | **demote to product default/config** | safe consumer default may remain PR; not architecture |
-| 0004 review fails closed | **supersede into H + review policy** | irreversible advancement requires deterministic authorization; parser details are mechanism |
-| 0005 branch-protection auto-merge | **supersede** | external landing authority must be positively verified/fenced |
-| 0006 no lifecycle scripts | **retain narrow** | package publication/install attack-surface choice is concrete and independently auditable |
-| 0007 signed-tag provenance publish | **narrow** | published artifacts require verifiable provenance; exact publication mechanism may remain a narrow ADR |
-| 0008 control plane fail closed | **retain/narrow** | unauthenticated control authority must not be exposed |
-| 0009 claims are git branches | **retain narrow** | atomic git ref is the claim token; unrelated to custody registry |
-| 0010 env allowlist/log scrub | **fold into D** | no ambient secrets/environment authority; evidence must not leak credentials |
-| 0011 Andon not DoR | **supersede** | charter inadequacy produces typed escalation rather than guessing |
-| 0012 readiness computed | **demote to charter/recipe policy** | readiness signals may inform scheduling; no need to constitutionalize FlowPolicy/INVEST |
-| 0013 reversibility-weighted gates | **narrow into H** | authorization/evidence rigor should match consequence; do not turn one cost model into doctrine |
-| 0014 mechanism/policy spine | **supersede by C/H** | agents judge; harness owns authority and advancement |
-| 0015 autonomy/tolerance | **demote to policy** | recipes may permit autonomous progression above an invariant safety/authority floor |
-| 0016 severity taxonomy | **demote to review policy/config** | safety-relevant advancement fails closed; exact classes/ceremony should evolve independently |
-| 0017 graceful degradation | **fold into D/H + policy** | degradation must never silently broaden authority |
-| 0018 in-toto attestation | **retain narrow, split from dossier** | standard machine-verifiable envelope is useful; rich authoring history is a separate first-class artifact |
-| 0019 checkpoint restart | **retain / generalize as F** | resume from accepted step boundaries; do not replay nondeterministic agents |
-| 0020 provider seam/capabilities | **retain seam, rewrite philosophy as E** | provider-neutral invocation and factual capability telemetry; harness safety must not depend on Claude-shaped hooks |
-| 0021 ocap/effects placement | **supersede** | explicit authority and typed boundary effects survive; implementation vocabulary does not |
-| 0022 fixed six steps/review orchestrators | **reopen / supersede by A/B** | ordered, auditable delivery survives; exact topology does not |
-| 0023 contained execution | **narrow / generalize as D** | no ambient authority and explicit containment survive; substrate/broker details move to design/conformance |
-| 0024 adversarial authoring review | **demote to review strategy** | review belongs in authoring and produces evidence; N+Judge algorithm must earn its keep by benchmark |
-| 0025 landing serialization | **split** | preserve narrow landing correctness ADR(s) only where mechanism is genuinely hard to reverse; move detailed policy/lattice to landing design |
-| 0026 stateful guards/disposition | **extract small invariants into H** | fence-or-reconcile; typed recovery; attempt identity/evidence lineage; move merge-gate algorithm to design |
+The resolution is a layering rule, not a smaller set of conclusions. See
+[`docs/decisions/README.md` § the three layers](../decisions/README.md#what-belongs-in-an-adr--the-three-layers):
+an ADR carries the **invariant** and the **constraints a replacement must also satisfy**;
+**construction** — how it is built today — lives in a detail doc the ADR points at.
 
-The expected result is **not** eight giant ADRs containing all of the old text. It is eight small architectural decisions plus a few narrow, mechanism-specific ADRs that genuinely deserve permanence.
+That changes the dominant verb from *demote* to **cut**. Cutting reaches the same smaller
+constitution the first draft wanted, without dropping teeth, because the constraint layer is
+explicitly retained rather than implicitly assumed. Dispositions below use four verbs:
+
+- **cut** — the ADR survives, re-cut to [`_TEMPLATE.md`](../decisions/_TEMPLATE.md); construction moves to a named home.
+- **split** — one document is carrying two decisions that should be independently replaceable.
+- **supersede** — the decision is genuinely replaced; the old file is marked, never rewritten.
+- **demote** — not an architectural decision at all; it becomes policy, config, or recipe.
+
+**Cut is gated on the construction home existing.** ✅ marks a home that already exists today.
+Everything else lands its detail doc *with the feature polish that produces it* — which is why this
+is a ratchet (`pnpm check:adr`, baseline `ci/adr-shape-baseline.json`) rather than a migration.
+
+| ADR | Disposition | Invariant **and** the constraint that must survive the cut | Construction home |
+|---|---|---|---|
+| 0001 worktree write confinement | **cut** *(done)* | hard gate on **observed effect**, not requested intent; must **not depend on parsing tool inputs** (failed PR #112); ambiguity resolves to violation; advisory layers never load-bearing | `pipeline.md` § Worktree Isolation ✅ |
+| 0002 untrusted input/tool scope | **cut** | repo/issue/PR content is untrusted; **content can never grant authority** | *home needed* |
+| 0003 PR-gated default | **demote** to product default/config | a safe consumer default may remain PR | — (config) |
+| 0004 review fails closed | **cut**, amended by 0026 | irreversible advancement requires deterministic authorization; **parse-invalid is a real signal and must never be laundered into retry** | `guarded-actions.md` § 7.2 ✅ |
+| 0005 branch-protection auto-merge | **supersede** by 0025 | external landing authority must be **positively verified, never assumed** | `flow.md` ✅ |
+| 0006 no lifecycle scripts | **cut**, narrow | no install/lifecycle scripts in published manifests — externally auditable, so the mechanism *is* the decision | `architecture.md` § publishing shape ✅ |
+| 0007 signed-tag provenance publish | **cut**, narrow | published artifacts carry verifiable provenance; **the signing format is externally load-bearing and stays named** | trust docs ✅ |
+| 0008 control plane fail closed | **cut** | unauthenticated control authority must never be exposed | `docs/server.md` ✅ |
+| 0009 claims are git branches | **cut**, narrow | the atomic git ref **is** the claim token — resolved by the authority, never by a pre-check; no registry | `roadmap-and-ship.md` ✅ |
+| 0010 env allowlist / log scrub | **cut** | no ambient secret or environment authority; **evidence must not leak credentials** | `architecture.md` *(section needed)* |
+| 0011 Andon not DoR | **cut** | charter inadequacy produces a **typed escalation**, never a guess | `flow.md` ✅ |
+| 0012 readiness computed | **demote** to charter/recipe policy | readiness signals may inform scheduling | `flow.md` ✅ |
+| 0013 reversibility-weighted gates | **cut**, fold into H | authorization rigor scales with consequence; **one cost model must not become doctrine** | `guarded-actions.md` ✅ |
+| 0014 mechanism/policy spine | **cut** — this *is* C/H; keep as the spine ADR | agents judge; the harness owns authority and advancement | (spine — no single home) |
+| 0015 autonomy / tolerance | **demote** to policy | recipes may permit autonomous progression **above a safety/authority floor policy cannot lower** | `pipeline.md` ✅ |
+| 0016 severity taxonomy | **cut**, retain the floor | the safety/judgment split is **not agent-contractible**; emission defaults to safety; **a lone judge cannot downgrade a safety class**. The class list is construction. | `adversarial-review-loop.md` ✅ |
+| 0017 graceful degradation | **cut**, fold into D/H | degradation may reduce rigor and **must never broaden authority**; a degraded run emits a **visibly weaker** record | `adversarial-review-loop.md` ✅ |
+| 0018 in-toto attestation | **split** from the dossier | the envelope format is externally verifiable and stays named; the rich dossier is a separate first-class artifact | trust docs ✅ |
+| 0019 checkpoint restart | **cut**, generalize as F | resume from accepted boundaries; never replay nondeterministic agents. **Mid-step WIP checkpoints on park are preserved** — F must not narrow to accepted-step outputs only | `pipeline.md` § Parking ✅ |
+| 0020 provider seam / capabilities | **cut**, rewrite philosophy as E | provider-neutral invocation + factual capability telemetry; **a required capability with no harness equivalent still refuses seating** until equivalence is proven | `pipeline.md` § Step Providers ✅ |
+| 0021 ocap / effects placement | **supersede** | explicit authority and typed boundary effects survive; the vocabulary does not | `pipeline.md` § Effects Manifests ✅ |
+| 0022 pipeline shape + orchestrators | **split** | ordered, auditable delivery survives as A/B; **the cold gate's out-of-context isolation is a separate product guarantee** and must not be absorbed into the step envelope; the step *count* is construction | `pipeline.md` ✅ |
+| 0023 contained execution | **cut**, generalize as D | no ambient authority; explicit containment; the substrate is construction | `contained-execution.md` ✅ |
+| 0024 adversarial authoring review | **split** | **constitutional:** review happens *during authoring*; the PR arrives converged carrying an auditable record — this is the shift-left promise and A–H must restate it. **Demoted:** the N-reviewers-plus-Judge algorithm and fingerprint-survival. | `adversarial-review-loop.md` ✅ |
+| 0025 landing serialization | **cut**, narrow | git ref CAS with an **explicit `--force-with-lease`, never the implicit form**; ordering layers never replace the fence | `flow.md` ✅ |
+| 0026 stateful guards | **cut** *(done)* | fence-or-reconcile incl. transitive derived-exclusive; typed absorbing states each naming clearer **and** actor; judgment ≠ disposition; default-deny over typed causes | `guarded-actions.md` ✅ |
+
+The result is a smaller constitution *and* a stronger one: every row keeps its constraint, and the
+ADRs that survive are shorter because construction left, not because decisions did.
+
+**What this closes from the trio review.** The layering dissolves the findings that were
+"you dropped the tradeoff" rather than "keep the mechanism": C3/C14 (0001 confinement), C7 (0016
+safety floor), C11 + N7 (0026 fence classes), C12/C21 (fail-closed advancement), N6 (0020 capability
+routing), and N2 (the accepted-vs-proposed criterion becomes principled — the question is whether a
+construction home exists, not whether the ADR is implemented).
+
+**What it does not close, and is now explicit above:** C6 (0022 cold-gate isolation, handled by the
+split), C10 (0019 mid-step checkpoints), C15 (the Stage-2 probe must exercise *denial* per authority
+axis, not happy-path invocation), C16/N10 (trust-claim rebinding — see Stage 3), N8 (`proposed`
+re-triage).
+
+**A worked instance of the gate, found while cutting 0026.** Its decision 7 carried a five-rule
+normative aggregation order that existed *nowhere else*; `guarded-actions.md` had the cause table
+but not the precedence. Cutting first would have deleted it. It was back-ported to
+`guarded-actions.md` § 7.2 in the same change. This is the rule earning its keep on its first use.
 
 ---
 

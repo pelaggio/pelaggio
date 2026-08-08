@@ -1,0 +1,28 @@
+{
+	"exempt": [
+		"docs/decisions/0002-untrusted-input-and-tool-scope.md",
+		"docs/decisions/0003-pr-gated-by-default.md",
+		"docs/decisions/0004-review-gate-fails-closed-shakedown-fails-safe.md",
+		"docs/decisions/0005-auto-merge-safety-via-branch-protection.md",
+		"docs/decisions/0006-no-lifecycle-scripts-in-published-manifests.md",
+		"docs/decisions/0007-signed-tag-provenance-publish.md",
+		"docs/decisions/0008-control-plane-fail-closed.md",
+		"docs/decisions/0009-claims-are-git-branches.md",
+		"docs/decisions/0010-agent-env-allowlist-and-log-scrub.md",
+		"docs/decisions/0011-andon-not-dor.md",
+		"docs/decisions/0012-readiness-computed-not-groomed.md",
+		"docs/decisions/0013-reversibility-weighted-gate-sizing.md",
+		"docs/decisions/0014-mechanism-policy-separation-spine.md",
+		"docs/decisions/0015-autonomy-by-default-configurable-tolerance.md",
+		"docs/decisions/0016-severity-taxonomy-and-owner.md",
+		"docs/decisions/0017-graceful-degradation-rigor-only.md",
+		"docs/decisions/0018-in-toto-attestation-envelope.md",
+		"docs/decisions/0019-checkpoint-restart-not-replay.md",
+		"docs/decisions/0020-multi-driver-provider-seam-and-capability-model.md",
+		"docs/decisions/0021-capability-enforcement-and-placement.md",
+		"docs/decisions/0022-pipeline-shape-and-review-orchestrators.md",
+		"docs/decisions/0023-contained-execution-boundary.md",
+		"docs/decisions/0024-adversarial-authoring-review-loop.md",
+		"docs/decisions/0025-landing-serialization-cas-fence-optional-ordering.md"
+	]
+}
