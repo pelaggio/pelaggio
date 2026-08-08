@@ -19,6 +19,7 @@ function probes(opts: { records?: Array<SessionRecord | string>; procCwd?: strin
 		now: () => NOW,
 		listSessionFiles: () => files,
 		readSessionsDir: () => ({ files }),
+		listProcPids: () => [],
 		readFile: (path) => {
 			const m = path.match(/s(\d+)\.json$/);
 			if (m?.[1] !== undefined) {
@@ -100,14 +101,52 @@ describe("sessionLiveness — destructive-reconciler contract (#461)", () => {
 		assert.match(v.reason, /no session record claims/);
 	});
 
-	it("is dead when nothing claims the worktree", () => {
-		const v = sessionLiveness(MAIN, WT, { platform: "linux", now: () => NOW, readSessionsDir: () => ({ files: [] }) });
+	it("is dead when nothing claims the worktree AND no process is working inside it", () => {
+		const v = sessionLiveness(MAIN, WT, { platform: "linux", now: () => NOW, readSessionsDir: () => ({ files: [] }), listProcPids: () => [] });
 		assert.equal(v.state, "dead");
 		assert.equal(mustNotDestroy(v), false);
 	});
 
-	it("is dead when the sessions directory does not exist", () => {
-		const v = sessionLiveness(MAIN, WT, { platform: "linux", now: () => NOW, readSessionsDir: () => ({ error: "absent" }) });
+	it("is dead when the sessions directory does not exist and nothing is running inside", () => {
+		const v = sessionLiveness(MAIN, WT, { platform: "linux", now: () => NOW, readSessionsDir: () => ({ error: "absent" }), listProcPids: () => [] });
+		assert.equal(v.state, "dead");
+	});
+
+	// runPipeline CATCHES session-registration failure and continues (pipeline.ts), and the
+	// worktree exists before registration, so "live cycle with no record" is a normal state.
+	// Absence must therefore be corroborated, never trusted.
+	it("is unknown when no record claims it but a live process is working inside", () => {
+		const v = sessionLiveness(MAIN, WT, {
+			platform: "linux",
+			now: () => NOW,
+			readSessionsDir: () => ({ files: [] }),
+			listProcPids: () => [99],
+			readlink: (path) => (path === "/proc/99/cwd" ? `${WT}/packages` : undefined),
+		});
+		assert.equal(v.state, "unknown");
+		assert.ok(mustNotDestroy(v));
+		assert.match(v.reason, /live process is working inside/);
+	});
+
+	it("is unknown when absence cannot be corroborated (no process enumeration)", () => {
+		const v = sessionLiveness(MAIN, WT, { platform: "linux", now: () => NOW, readSessionsDir: () => ({ files: [] }), listProcPids: () => undefined });
+		assert.equal(v.state, "unknown");
+		assert.ok(mustNotDestroy(v));
+	});
+
+	it("is unknown on a non-Linux host with no record, since absence cannot be corroborated", () => {
+		const v = sessionLiveness(MAIN, WT, { platform: "darwin", now: () => NOW, readSessionsDir: () => ({ files: [] }) });
+		assert.equal(v.state, "unknown");
+	});
+
+	it("ignores processes working outside the worktree when corroborating absence", () => {
+		const v = sessionLiveness(MAIN, WT, {
+			platform: "linux",
+			now: () => NOW,
+			readSessionsDir: () => ({ files: [] }),
+			listProcPids: () => [99],
+			readlink: (path) => (path === "/proc/99/cwd" ? "/somewhere/else" : undefined),
+		});
 		assert.equal(v.state, "dead");
 	});
 
