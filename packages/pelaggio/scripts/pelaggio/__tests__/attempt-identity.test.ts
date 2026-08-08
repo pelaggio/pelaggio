@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -72,17 +72,31 @@ describe("attempt-identity", () => {
 		assert.equal(allocateAttempt(repo, item), 3, "high-water mark must survive record pruning");
 	});
 
-	it("migrates a legacy single-file high-water mark without lowering it", () => {
-		// An intermediate version wrote `.high-water` as a FILE. mkdirSync(recursive) throws
-		// EEXIST on a file at the target, so without migration every allocation fails on any
-		// checkout carrying the old shape — and a naive migration that discards the value
-		// would reissue numbers below it.
+	it("honours a legacy single-file mark without deleting it", () => {
+		// A never-released version wrote `.high-water` as a FILE. It is read, never removed:
+		// migrating by deleting it leaves a window where the only durable value is gone and
+		// its replacement does not yet exist, so a crash there restarts at 1 and reissues a
+		// live runId. Markers live in a separate directory, so there is no window at all.
 		const item = "C-5";
 		const dir = join(attemptsDir(repo), "c-5");
 		mkdirSync(dir, { recursive: true });
 		writeFileSync(join(dir, ".high-water"), "7\n");
-		assert.equal(allocateAttempt(repo, item), 8, "legacy mark must be preserved, not discarded");
+		assert.equal(allocateAttempt(repo, item), 8, "legacy mark must be honoured, not discarded");
 		assert.equal(allocateAttempt(repo, item), 9);
+		// Still present: nothing may depend on having removed it.
+		assert.equal(readFileSync(join(dir, ".high-water"), "utf-8").trim(), "7");
+	});
+
+	it("does not restart at 1 when records are pruned and only the legacy mark survives", () => {
+		const item = "C-6";
+		const dir = join(attemptsDir(repo), "c-6");
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(join(dir, ".high-water"), "4\n");
+		assert.equal(allocateAttempt(repo, item), 5);
+		// Prune everything the allocator itself wrote, leaving only the legacy file.
+		rmSync(join(dir, ".marks"), { recursive: true, force: true });
+		for (const name of readdirSync(dir)) if (/^\d+\.json$/.test(name)) rmSync(join(dir, name), { force: true });
+		assert.equal(allocateAttempt(repo, item), 5, "legacy mark alone must still prevent restarting below it");
 	});
 
 	it("confines item ids to the attempts directory", () => {

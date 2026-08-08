@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 /**
@@ -53,7 +53,16 @@ const ATTEMPTS_DIR = "attempts";
  * Losing the marker directory degrades to scan-only behaviour, which is the pre-existing
  * weakness rather than a new one — and one more reason properties 2-3 in the header matter.
  */
-const HIGH_WATER_DIR = ".high-water";
+const MARKS_DIR = ".marks";
+/**
+ * An intermediate, never-released version wrote `.high-water` as a FILE holding the maximum.
+ * It is READ but never written or removed: migrating by deleting it leaves a window in which
+ * the only durable value is gone and its replacement marker does not yet exist, so a crash
+ * (or a concurrent allocator finding an empty marker directory after records were pruned)
+ * restarts at 1 and reissues a live runId. Using a separate directory name removes that
+ * window by construction — there is nothing to migrate, only an extra place to look.
+ */
+const LEGACY_MARK_FILE = ".high-water";
 /** Bounds the ascending-n scan; far above any plausible resume count for one item. */
 const MAX_ATTEMPT = 10_000;
 const SAFE_ID = /[^a-z0-9._-]+/gi;
@@ -139,46 +148,31 @@ function scanMaxAttempt(dir: string): number {
 	return max;
 }
 
-/**
- * Create the marker directory, migrating a legacy single-file mark if one is present.
- *
- * An intermediate version of this module wrote `.high-water` as a FILE holding the maximum.
- * `mkdirSync(..., { recursive: true })` does not tolerate a file at the target — it throws
- * EEXIST — so without this, any checkout carrying the old shape fails every allocation.
- * The legacy value is preserved as a marker before the file is removed, so migrating cannot
- * lower the mark.
- */
+/** Create the marker directory. Nothing is migrated or removed — see LEGACY_MARK_FILE. */
 function ensureMarksDir(dir: string): string {
-	const marks = join(dir, HIGH_WATER_DIR);
-	try {
-		if (statSync(marks).isFile()) {
-			const legacy = Number.parseInt(readFileSync(marks, "utf-8").trim(), 10);
-			rmSync(marks, { force: true });
-			mkdirSync(marks, { recursive: true });
-			if (Number.isFinite(legacy) && legacy > 0) {
-				try {
-					writeFileSync(join(marks, String(legacy)), "", { flag: "wx", mode: 0o600 });
-				} catch {
-					// already marked — nothing to preserve
-				}
-			}
-			return marks;
-		}
-	} catch {
-		// absent, or unreadable — fall through to the normal create
-	}
+	const marks = join(dir, MARKS_DIR);
 	mkdirSync(marks, { recursive: true });
 	return marks;
 }
 
+/** Value of the never-released single-file mark, if a checkout still carries one. */
+function readLegacyMark(dir: string): number {
+	try {
+		const n = Number.parseInt(readFileSync(join(dir, LEGACY_MARK_FILE), "utf-8").trim(), 10);
+		return Number.isFinite(n) && n > 0 ? n : 0;
+	} catch {
+		return 0; // absent, a directory, or unreadable — nothing to contribute
+	}
+}
+
 function readHighWater(dir: string): number {
+	let max = readLegacyMark(dir);
 	let names: string[];
 	try {
-		names = readdirSync(join(dir, HIGH_WATER_DIR));
+		names = readdirSync(join(dir, MARKS_DIR));
 	} catch {
-		return 0; // absent — fall back to the scan
+		return max; // no marker directory — the legacy file, or the scan, is all we have
 	}
-	let max = 0;
 	for (const name of names) {
 		const n = Number.parseInt(name, 10);
 		if (Number.isFinite(n) && n > max) max = n;
