@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
+import { promisify } from "node:util";
 import { allocateAttempt, attemptRunId, attemptsDir, currentAttempt } from "../attempt-identity.js";
 
 let repo: string;
@@ -84,7 +85,7 @@ describe("attempt-identity", () => {
 		assert.equal(attemptRunId("cycle-1", "435", 2), "cycle-1-435-a2");
 	});
 
-	it("allocates uniquely across concurrent processes", () => {
+	it("allocates uniquely across genuinely concurrent processes", async () => {
 		const item = "E-1";
 		const script = `
 			import { allocateAttempt } from ${JSON.stringify(join(import.meta.dirname, "..", "attempt-identity.ts"))};
@@ -93,8 +94,31 @@ describe("attempt-identity", () => {
 		const file = join(repo, "alloc.mts");
 		writeFileSync(file, script);
 		const N = 6;
-		const got = Array.from({ length: N }, () => Number(execFileSync("npx", ["tsx", file], { encoding: "utf-8" }).trim()));
-		// O_EXCL decides the winner, so every process must receive a distinct number.
+		// execFileSync would launch these SEQUENTIALLY — the first version of this test did,
+		// so it proved only that six sequential allocations differ, which is trivially true
+		// and exercised no interleaving at all. Spawn them in parallel and await together.
+		const run = promisify(execFile);
+		const got = (await Promise.all(Array.from({ length: N }, () => run("npx", ["tsx", file])))).map((r) => Number(r.stdout.trim()));
 		assert.equal(new Set(got).size, N, `duplicate attempt numbers: ${got.join(", ")}`);
+	});
+
+	it("does not lower the high-water mark under concurrent allocation", async () => {
+		// The lost-update the create-only markers exist to prevent: with a single mutable
+		// file, A reads 0, B writes 2, A overwrites with 1 — and a later prune of the highest
+		// record reissues that number. Allocate concurrently, prune every numbered record,
+		// then assert the next allocation still advances past the highest ever issued.
+		const item = "E-2";
+		const script = `
+			import { allocateAttempt } from ${JSON.stringify(join(import.meta.dirname, "..", "attempt-identity.ts"))};
+			process.stdout.write(String(allocateAttempt(${JSON.stringify(repo)}, ${JSON.stringify(item)})));
+		`;
+		const file = join(repo, "alloc-hw.mts");
+		writeFileSync(file, script);
+		const run = promisify(execFile);
+		const got = (await Promise.all(Array.from({ length: 5 }, () => run("npx", ["tsx", file])))).map((r) => Number(r.stdout.trim()));
+		const highest = Math.max(...got);
+		const dir = join(attemptsDir(repo), "e-2");
+		for (const name of readdirSync(dir)) if (/^\d+\.json$/.test(name)) rmSync(join(dir, name), { force: true });
+		assert.equal(allocateAttempt(repo, item), highest + 1, `reissued a used attempt after pruning; issued ${got.join(", ")}`);
 	});
 });

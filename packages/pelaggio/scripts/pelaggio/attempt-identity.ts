@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 /**
@@ -35,7 +35,8 @@ import { join, resolve } from "node:path";
 
 const ATTEMPTS_DIR = "attempts";
 /**
- * Monotonic high-water mark, written beside the numbered records.
+ * Monotonic high-water marks: a directory of empty files named for each value ever
+ * allocated, created with O_EXCL and never rewritten.
  *
  * Scanning the records alone is not enough: deleting the HIGHEST record makes the scan
  * report the preceding value, and the next allocation then re-creates the deleted number —
@@ -43,11 +44,16 @@ const ATTEMPTS_DIR = "attempts";
  * close. Records are deletable in practice (a `/tidy` sweep, a stray `rm -rf .dev`), so the
  * allocator must not depend on the record set being complete.
  *
- * The mark only ever advances, so losing any single numbered record is harmless. Losing the
- * mark itself degrades to scan-only behaviour, which is the pre-existing weakness rather
- * than a new one — and is one more reason properties 2-3 in the header matter.
+ * A single mutable file cannot carry this: read-then-write is a lost update, so two
+ * allocators interleaving (A reads 0, B writes 2, A writes 1) LOWER the mark, and a
+ * subsequent prune of the highest record then reissues that number — the collision this
+ * module exists to close. Create-only markers cannot regress, because nothing is ever
+ * overwritten; the maximum of a set that only grows is monotonic by construction.
+ *
+ * Losing the marker directory degrades to scan-only behaviour, which is the pre-existing
+ * weakness rather than a new one — and one more reason properties 2-3 in the header matter.
  */
-const HIGH_WATER = ".high-water";
+const HIGH_WATER_DIR = ".high-water";
 /** Bounds the ascending-n scan; far above any plausible resume count for one item. */
 const MAX_ATTEMPT = 10_000;
 const SAFE_ID = /[^a-z0-9._-]+/gi;
@@ -122,22 +128,32 @@ function scanMaxAttempt(dir: string): number {
 }
 
 function readHighWater(dir: string): number {
+	let names: string[];
 	try {
-		const n = Number.parseInt(readFileSync(join(dir, HIGH_WATER), "utf-8").trim(), 10);
-		return Number.isFinite(n) && n > 0 ? n : 0;
+		names = readdirSync(join(dir, HIGH_WATER_DIR));
 	} catch {
-		return 0; // absent or unreadable — fall back to the scan
+		return 0; // absent — fall back to the scan
 	}
+	let max = 0;
+	for (const name of names) {
+		const n = Number.parseInt(name, 10);
+		if (Number.isFinite(n) && n > max) max = n;
+	}
+	return max;
 }
 
-/** Advance the mark, never retreat it. Best-effort: a failure here costs reuse protection
- *  for that one allocation, never the allocation itself. */
+/**
+ * Record that `attempt` was allocated. Create-only, so concurrent allocators cannot lower
+ * the mark — an already-present marker is success, not a conflict. Best-effort: a failure
+ * here costs reuse protection for that one allocation, never the allocation itself.
+ */
 function bumpHighWater(dir: string, attempt: number): void {
 	try {
-		if (attempt <= readHighWater(dir)) return;
-		writeFileSync(join(dir, HIGH_WATER), `${attempt}\n`, { mode: 0o600 });
+		const marks = join(dir, HIGH_WATER_DIR);
+		mkdirSync(marks, { recursive: true });
+		writeFileSync(join(marks, String(attempt)), "", { flag: "wx", mode: 0o600 });
 	} catch {
-		// see above
+		// EEXIST (already marked) or a write failure — see above
 	}
 }
 
