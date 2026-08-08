@@ -4,6 +4,7 @@ import { accessSync, appendFileSync, constants, existsSync, mkdirSync, mkdtempSy
 import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { allocateAttempt, attemptRunId } from "./attempt-identity.js";
 import {
 	CONFIG,
 	CONFINEMENT_CONFIG,
@@ -267,6 +268,23 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	const assignment = createDriverAssignmentState(opts.cycle);
 	const pipelineT0 = now();
 	const runIdBase = opts.logPath ? basename(opts.logPath, extname(opts.logPath)) : `cycle-${opts.cycle}`;
+	// #467: a resume recomputes `cycle` from scratch (`results.length + i + 1` is 1 for a
+	// fresh `--resume`), so runIdBase alone repeats the superseded attempt's value and every
+	// runId-keyed artifact collides with its own predecessor — receipts fail closed with
+	// `already exists with different content` (#451). Salting with a monotonic per-item
+	// attempt makes the old artifacts stale rather than conflicting.
+	//
+	// Allocated lazily and memoized: `itemId` is not known until pick resolves, and the
+	// allocation must happen exactly once per cycle, not once per step. A dry run never
+	// allocates — it writes no artifacts, so it needs no identity and must not advance a
+	// real item's sequence.
+	let allocated: { itemId: string; attempt: number } | null = null;
+	const itemRunId = (): string => {
+		if (!itemId) return `${runIdBase}-unclaimed`;
+		if (opts.dryRun) return `${runIdBase}-${itemId}`;
+		if (!allocated || allocated.itemId !== itemId) allocated = { itemId, attempt: allocateAttempt(mainRepo, itemId) };
+		return attemptRunId(runIdBase, itemId, allocated.attempt);
+	};
 	let logLabel = `cycle ${opts.cycle}`;
 	const log = (msg: string): void => {
 		const elapsed = fmtElapsed(now() - pipelineT0);
@@ -628,7 +646,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			const checkpointEffect = staticEffects.find((effect): effect is Extract<Effect, { kind: "checkpoint" }> => effect.kind === "checkpoint");
 			if (result.ok && !parkSignal.parked && !opts.dryRun) {
 				const ctx = {
-					runId: `${runIdBase}-${itemId ?? "unclaimed"}`,
+					runId: itemRunId(),
 					itemId: itemId ?? "",
 					step: name,
 					attempt,
@@ -720,7 +738,11 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				// Write into the step worktree (per-item authority); never redirect to main.
 				await appendDecisions(cwd, {
 					...(itemId ? { itemId } : {}),
-					runId: runIdBase,
+					// Attempt-scoped: decision dedupe keys on (runId, step, occurrence) WITHOUT the
+					// fingerprint (decisions.ts), so an unsalted runId makes a resumed attempt's
+					// decision collide with its predecessor's in the same slot and be dropped from
+					// the durable record.
+					runId: itemRunId(),
 					step: name,
 					attempt,
 					decisions: result.decisions.map((emitted, occurrence) => ({
@@ -860,6 +882,10 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				shipwrecked,
 				...(result.bookkeepingWarnings?.length ? { bookkeepingWarnings: result.bookkeepingWarnings } : {}),
 				provenance: {
+					// Deliberately NOT attempt-scoped. This is a cycle label, not an artifact key —
+					// nothing dedupes on it — and salting it would rename the runId of every
+					// unclaimed cycle (a failed pick has no item to scope to). Distinguishing a
+					// resume in the cycle log is worth doing, but as its own change.
 					runId: runIdBase,
 					durationMs: Math.max(0, Math.trunc(now() - pipelineT0)),
 					drivers,
@@ -1010,7 +1036,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			claimBranch = "";
 		}
 		if (claimBranch.startsWith("feat/")) {
-			const sessionId = `${runIdBase}-${itemId}`;
+			const sessionId = itemRunId();
 			try {
 				sessionController = createSessionControllerFn({
 					mainRepo,
@@ -1611,7 +1637,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				cost += loop.cost;
 				const finalReviewedSha = getArtifactHeadSha(worktree!);
 				if (!finalReviewedSha) return parkExit("adversarial review could not bind final reviewed HEAD")!;
-				const reviewRunId = `${runIdBase}-${itemId}`;
+				const reviewRunId = itemRunId();
 				const record: ReviewRecord = { schemaVersion: 1, runId: reviewRunId, itemId: itemId!, createdAt: new Date().toISOString(), blockingBar: "must-fix", result: loop };
 				const recordPath = writeReviewRecord(worktree!, record);
 				reviewRecordMarkdown = renderReviewRecord(record);

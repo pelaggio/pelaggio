@@ -217,7 +217,13 @@ export function makeTempRepoWithParent(): { parent: string; repo: string } {
 	execSync("git config user.name t", { cwd: repo });
 	execSync("git config user.email t@t", { cwd: repo });
 	execSync("git config commit.gpgsign false", { cwd: repo });
-	execSync("git commit --allow-empty -q -m init", { cwd: repo });
+	// Mirror production (and makeTempGitRepo): harness artifacts under `.dev/` — effects
+	// manifests, execution receipts, review records, attempt records (#467) — are gitignored
+	// in every real consumer, so a fixture that tracks them makes "the cycle left the repo
+	// clean" assertions fail on harness-owned state rather than on real tree mutation.
+	writeFileSync(join(repo, ".gitignore"), ".dev/\n");
+	execSync("git add .gitignore", { cwd: repo });
+	execSync("git commit -q -m init", { cwd: repo });
 	// Leave repo on main so tests can `git worktree add -b feat/tool-99 <path>` for the sibling worktree.
 	return { parent, repo };
 }
