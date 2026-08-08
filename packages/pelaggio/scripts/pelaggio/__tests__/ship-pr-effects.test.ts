@@ -298,7 +298,7 @@ describe("runShipPrEffects", () => {
 		const ex = makeExec();
 		const gh = makeGh([
 			{ match: ["pr", "list"], stdout: JSON.stringify([{ number: 42, url: PR_URL }]) },
-			{ match: ["pr", "edit"], stdout: "" },
+			{ match: ["api"], stdout: "" },
 		]);
 
 		const result = await runShipPrEffects({ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision() }, { exec: ex.exec, gh: gh.gh, log: () => {} });
@@ -308,9 +308,28 @@ describe("runShipPrEffects", () => {
 			gh.calls.map((args) => args.slice(0, 2)),
 			[
 				["pr", "list"],
-				["pr", "edit"],
+				["api", "repos/{owner}/{repo}/pulls/42"],
 			],
 		);
+	});
+
+	// #474: `gh pr edit` resolves the PR via GraphQL, whose query selects the Projects
+	// (classic) `projectCards` field. Where classic projects are sunset the call fails
+	// outright and the ship step dies with effect_failed, despite only title and body
+	// changing. Asserted by shape so a regression back to `pr edit` fails here.
+	it("updates an existing PR over REST, never `gh pr edit` (Projects-classic deprecation)", async () => {
+		const ex = makeExec();
+		const gh = makeGh([
+			{ match: ["pr", "list"], stdout: JSON.stringify([{ number: 42, url: PR_URL }]) },
+			{ match: ["api"], stdout: "" },
+		]);
+
+		await runShipPrEffects({ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision() }, { exec: ex.exec, gh: gh.gh, log: () => {} });
+
+		assert.ok(!gh.calls.some((args) => args[0] === "pr" && args[1] === "edit"), "must not call `gh pr edit` — it fails on repos with classic projects sunset");
+		const patch = gh.calls.find((args) => args[0] === "api");
+		assert.ok(patch, "expected a REST call to update the PR");
+		assert.deepEqual(patch, ["api", "repos/{owner}/{repo}/pulls/42", "-X", "PATCH", "-f", `title=${decision().prTitle}`, "-f", `body=${decision().prBody}`]);
 	});
 
 	it("retries a rejected push with force-with-lease", async () => {
@@ -330,7 +349,7 @@ describe("runShipPrEffects", () => {
 		const ex = makeExec();
 		const gh = makeGh([
 			{ match: ["pr", "list"], stdout: JSON.stringify([{ number: 42, url: PR_URL }]) },
-			{ match: ["pr", "edit"], stdout: "" },
+			{ match: ["api"], stdout: "" },
 			{ match: ["pr", "view"], stdout: JSON.stringify({ statusCheckRollup: [] }) },
 			{ match: ["pr", "merge"], stdout: "" },
 		]);
@@ -344,7 +363,7 @@ describe("runShipPrEffects", () => {
 		const ex = makeExec();
 		const gh = makeGh([
 			{ match: ["pr", "list"], stdout: JSON.stringify([{ number: 42, url: PR_URL }]) },
-			{ match: ["pr", "edit"], stdout: "" },
+			{ match: ["api"], stdout: "" },
 			{ match: ["pr", "view"], stdout: JSON.stringify({ statusCheckRollup: [{ __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "FAILURE" }] }) },
 		]);
 
@@ -376,7 +395,7 @@ describe("runShipPrEffects", () => {
 						exec: makeExec().exec,
 						gh: makeGh([
 							{ match: ["pr", "list"], stdout: JSON.stringify([{ number: 42, url: PR_URL }]) },
-							{ match: ["pr", "edit"], stdout: "" },
+							{ match: ["api"], stdout: "" },
 							{ match: ["pr", "view"], stdout: JSON.stringify({ statusCheckRollup: [] }) },
 							{ match: ["pr", "merge"], stderr: "merge disabled", status: 1 },
 						]).gh,

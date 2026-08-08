@@ -109,7 +109,16 @@ function upsertPr(gh: GhRunner, decision: ShipDecisionEffect): { number: number 
 	const existing = parseGhJson<ExistingPr[]>(existingRaw, isExistingPrList);
 	const current = existing[0];
 	if (current) {
-		runGh(gh, ["pr", "edit", String(current.number), "--title", decision.prTitle, "--body", decision.prBody]);
+		// REST, not `gh pr edit` (#474). `gh pr edit` resolves the PR through GraphQL, and that
+		// query selects `projectCards` — a Projects (classic) field. On a repo where classic
+		// projects have been sunset the whole call fails with
+		//   GraphQL: Projects (classic) is being deprecated in favor of the new Projects experience
+		// and the ship step dies with `effect_failed`, even though nothing here touches
+		// projects and the only fields being changed are title and body. Observed on cycle 328.
+		// The REST endpoint updates exactly those two fields and never queries projects.
+		// `{owner}/{repo}` are gh placeholders resolved from the same repo context the
+		// surrounding `pr list` / `pr create` calls already rely on.
+		runGh(gh, ["api", `repos/{owner}/{repo}/pulls/${current.number}`, "-X", "PATCH", "-f", `title=${decision.prTitle}`, "-f", `body=${decision.prBody}`]);
 		return { number: current.number, url: current.url };
 	}
 	const created = runGh(gh, ["pr", "create", "--title", decision.prTitle, "--body", decision.prBody, "--head", decision.headBranch]).stdout.trim();
