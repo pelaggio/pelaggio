@@ -38,12 +38,21 @@ Generalizes ADR-0025's `land(attempt) → Landed | Contended` executor into a re
   issue, promoted from "fix a label" to "add the primitive."
 - Scope: M. Independent of G2 — opposite failure semantics, per ADR-0026 decision 9.
 
-### G4 — Attempt identity: allocator + consumer-side CAS
+### G4 — Attempt identity: agent-inaccessible register + consumer-side fencing
 - Subsumes **#451** (resumed cycles reuse the prior `runId`).
 - Subsumes **#450** (resume after review hard-block ships the checkpoint) — routing on
   persisted attempt state is what makes the resume correct; #450 is unfixable without it.
-- Scope: M/L. The allocator is small; consumer-side CAS is the open sizing question
-  (ADR-0026 decision 10).
+- **Scope correction (post-review).** #467's recorded charter predates the tightening of
+  ADR-0026 decision 10 and understates it: it asks for an atomic allocator plus consumer-side
+  CAS. The item must also carry (a) an **agent-inaccessible** authoritative register —
+  orchestrator-held, outside any agent-reachable path, with anti-rollback freshness, since a
+  writer that merely *consults* an agent-writable register validates forged state and a signed
+  blob alone is replayable after supersession — and (b) a **reconciled single writer** for
+  consumers with no conditional write at all, GitHub commit statuses being the live case.
+  #467's body cannot be amended through the sanctioned CLI (#473), so this document carries
+  the correction.
+- Scope: M/L. The allocator is small; the register's storage boundary and consumer-side
+  fencing are the open sizing question (ADR-0026 decision 10).
 
 ### G5 — Gate disposition: judgment/evidence split, allowlist, bounded `indeterminate`
 - Subsumes **#455** (balance exhaustion has no distinct class) — #455's detector work is
@@ -56,7 +65,11 @@ Generalizes ADR-0025's `land(attempt) → Landed | Contended` executor into a re
   decision 5's mandatory disposition inputs, the carried candidate-blocker set and the
   isolated-verification result. Neither had a G-item or a residue entry, which left the
   mutation set incomplete against the ADR it collapses.
-- Scope: L. Depends on **G2, G4, and its own retry actor** — ADR-0026 decision 8 makes the
+- **Depends on #461 (liveness) too.** G5 ships a retry actor, which is a reconciler, and
+  ADR-0026 decision 3 now requires every reconciler to gate reclaim on a positive liveness
+  verdict rather than elapsed time — precisely because the queue template's fixed four-hour
+  lease reclaims live work. An earlier draft's dependency graph omitted this.
+- Scope: L. Depends on **G2, G4, #461, and its own retry actor** — ADR-0026 decision 8 makes the
   minimum shippable unit `indeterminate` + retry actor + settle-observed quota + attempt
   identity, so the queue drain and a durable retry counter keyed alongside
   `(prNumber, headSha)` ship inside G5, not after it. Local-runner-only.
@@ -190,8 +203,8 @@ G1  (fence)                              ── independent
 G3  (token)                              ── independent
 G6a (#461 liveness) ──→ G6b (reconcilers; PR #449 open, must not land armed before G6a)
 G2  (quota) ──┐
-              ├──→ G5 (gate disposition + retry actor, local runner only)
-G4  (attempt id) ─┘
+G4  (attempt id) ─┼──→ G5 (gate disposition + retry actor, local runner only)
+#461 (liveness) ──┘   (G5's retry actor is a reconciler → liveness-gated reclaim)
 ```
 
 Two primitives are already *written* and sitting in **open, blocked** PRs — G7 as #452 and
