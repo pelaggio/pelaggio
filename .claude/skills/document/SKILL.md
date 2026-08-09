@@ -14,6 +14,31 @@ wrong lane, or the same content in two lanes drifting apart.
 Parse `$ARGUMENTS` for the subject and an optional lane flag. With `--cut ADR-NNNN`, run
 **Cutting an existing ADR** below instead of authoring.
 
+## The governing test
+
+For every sentence considered for an ADR, ask:
+
+> **If the mechanism changed tomorrow, would this sentence still be required to avoid
+> reintroducing a known failure?**
+
+This is the semantic test. Everything else in this skill exists to help apply it.
+
+- **Yes, because it states what must remain true** → invariant / `## Decision`.
+- **Yes, because it rules out a known-bad solution shape** → `## Constraints on any implementation`.
+- **No, because it describes how today's mechanism achieves the property** → construction; move it
+  out of the ADR.
+
+Do not preserve an implementation boundary merely because it currently delivers a valuable
+property. Preserve the **property**. For example, "independent evaluation receives no mutable author
+session state" can be architectural; "therefore it must not use the common checkpoint/effects
+machinery" is construction unless sharing that machinery has itself been shown to violate the
+property.
+
+Likewise, do not turn an observed strategy into a universal noun. A review panel, Judge, lock,
+broker, parser, provider hook, queue, or particular orchestrator earns ADR status only when a
+replacement would have to preserve that exact mechanism to avoid a demonstrated failure or to keep
+an externally load-bearing contract.
+
 ## Step 1 — Route to the lane
 
 | Lane | Holds | Test |
@@ -26,7 +51,8 @@ Parse `$ARGUMENTS` for the subject and an optional lane flag. With `--cut ADR-NN
 **RFC-before-ADR.** A design doc explores; an ADR records the decision it converged on. Do not
 open an ADR for something still being explored — write it in `agent-context/` first.
 
-Keep the ADR bar where it is. Do not lower it to log a routine choice.
+Keep the ADR bar where it is. Do not lower it to log a routine choice, a current topology, or an
+experiment that has not yet earned permanence through use.
 
 ## Step 2 — Apply the three layers
 
@@ -37,13 +63,36 @@ This applies whichever lane you land in, because it decides what *stays behind*:
   property, citing the failure that motivates it. → ADR `## Constraints on any implementation`.
 - **Construction** — how it is built today. → `agent-context/` (or code, or a test).
 
-The cut test, per line: **if someone replaced this mechanism tomorrow, would they need this line to
-avoid reintroducing a known failure?** Yes and mechanism-free → Decision. Yes but only as "not X" →
-Constraint. No → Construction.
-
 Write constraints as negative constraints on the solution space. *"Must not depend on parsing tool
 inputs (PR #112)"* — not *"uses the Git porcelain audit"*. The first survives a rewrite; the second
 has to be deleted by it.
+
+A constraint should normally answer **what failed, or what external contract would break, if this
+constraint were removed**. If it cannot answer either, challenge whether it is actually a
+constraint or merely a preference.
+
+### Properties over topology
+
+When reviewing an existing ADR, explicitly separate:
+
+1. the **user/trust property** being promised;
+2. the **negative constraint** learned from prior failures;
+3. the **current topology/mechanism** delivering it.
+
+Only (1) and justified parts of (2) belong constitutionally. The number of orchestrators, exact
+step count, warm-vs-cold implementation plumbing, provider-native hook, retry algorithm, or current
+storage layout are construction unless changing them would violate the property or a proven
+constraint.
+
+### Policy over premature constitution
+
+A configurable posture is usually policy, not architecture. Review counts, model/provider mix,
+readiness rubrics, severity tables, tolerance dials, retry counts, and similar values should stay in
+policy/config unless the architecture genuinely depends on their exact shape.
+
+The invariant may instead be something like "policy may reduce rigor but must never broaden
+execution authority". Record that invariant; do not constitutionalize today's table merely because
+it implements it.
 
 ## Step 3 — Write it
 
@@ -56,6 +105,17 @@ failure is a second copy that drifts. Extend the existing section rather than op
 
 Never restate a construction detail in the ADR "for convenience". One home, one copy, a link
 between them.
+
+### Do not write to the checker
+
+`pnpm check:adr` enforces a mechanical floor, not architectural truth. Do **not** contort prose to
+satisfy a syntactic rule while preserving the wrong semantics, and do not infer that a sentence is
+architectural merely because the checker permits it.
+
+If a useful invariant or constraint trips a heuristic, first apply the governing test above. If the
+sentence genuinely survives mechanism replacement, fix or narrow the heuristic rather than hiding
+the concept in construction. Conversely, passing the checker is not evidence that an ADR has been
+cut correctly.
 
 ## Cutting an existing ADR
 
@@ -70,8 +130,12 @@ change, and only alongside the feature polish that produced its detail doc.
 3. **Promote the buried constraints.** Load-bearing properties are usually sitting in
    `## Alternatives not taken` as a parenthetical. Lift each into
    `## Constraints on any implementation` with its issue/PR citation.
-4. **Cut construction out**, leaving `## Construction` as pointers only.
-5. **Drop the baseline entry** and verify.
+4. **Challenge topology masquerading as a constraint.** Rewrite "must use X" into the property or
+   failed alternative that made X necessary. If X itself is externally load-bearing, say why.
+5. **Cut construction out**, leaving `## Construction` as pointers only.
+6. **Re-read the remainder using the governing test.** Every surviving sentence should still be
+   useful if the current mechanism vanished tomorrow.
+7. **Drop the baseline entry** and verify.
 
 Amendment sections are a smell: an `## Amendment: …` heading is almost always construction that
 accreted after the decision. Fold its invariant into `## Decision`, its property into
@@ -90,4 +154,5 @@ If you superseded or folded an ADR that governs a `TC-` claim, rebind it in
 `docs/trust/trust-claims.yml` and the trust doc that links to it in the same change. An orphaned
 claim is a broken trust cross-link, and no check will infer the new owner for you.
 
-Report which lane you wrote to, what moved between layers, and anything you back-ported in step 2.
+Report which lane you wrote to, what moved between layers, what known failure each retained
+constraint protects against, and anything you back-ported from the ADR into its construction home.
