@@ -103,11 +103,15 @@ Agents may propose, implement, inspect, review, and judge. They do not grant the
 
 The harness decides whether an agent judgment is sufficient to advance and which requested effects are permitted.
 
+The **blocking** decision is always deterministic — fingerprint survival, parse validity, network denial, integer spend caps, host-computed write-sets. The model is a policy *input* to the judgment band and is never itself the gate: probabilistic supervision of a probabilistic process furnishes no deterministic lower bound, and a lower bound cannot be prompt-engineered. **Policy is data, not code** — a posture expressed as configuration the harness evaluates, never as model discretion at the seam.
+
 ### D. Agent execution has no ambient authority
 
 Each agentic step executes inside a harness-controlled sandbox / authority boundary. Authorities are explicit grants; the execution environment cannot broaden its own authority.
 
 The constitution should preserve this property and any proven negative constraints, not freeze bubblewrap vs Podman vs Landlock, broker topology, package-store layout, or credential plumbing.
+
+**Containment is not permission.** A sandbox bounds what execution *can* reach; it establishes nothing about whether that execution is contractually permitted. An authority boundary that fully satisfies D can still be running work a provider's terms forbid in that context. The permission question is decided separately, on its own evidence, and must never be treated as answered by the strength of the sandbox.
 
 ### E. Agent Drivers are interchangeable intelligence adapters
 
@@ -137,11 +141,17 @@ The final lineage must be sufficient, without mutable external joins, to answer:
 - why the final candidate was authorized to land;
 - what exact commit/tree resulted.
 
+Provenance is worth exactly what the identity vouching for it is worth. Where an artifact leaves the system for external consumption, the lineage must bind a **trusted builder identity**: a signature and attestation produced by an opaque or attacker-controlled builder give a consumer nothing to verify against. The signing format, attestation envelope, and runner topology are construction; that the builder is identified and independently trustworthy is not.
+
 ### H. Consequential effects require deterministic authorization and durable evidence
 
 Agent judgment may be an input to policy; it is not itself authority. Consequential mutations require harness-owned authorization and evidence appropriate to the effect.
 
 Stateful mutations — external **or shared local harness state** — must have real ownership semantics: fence stale actors at the authority or make the operation idempotently reconcilable. Observational pre-checks and expiring hints are not correctness boundaries.
+
+Required rigor scales with the **consequence and reversibility** of the effect, not with its position in the lifecycle. An easily reverted mutation and an irreversible publish do not warrant the same gate; sizing by lifecycle stage rather than by consequence produces ceremony where it is cheap and gaps where it is not. The particular cost model used to weigh consequence is policy, not doctrine.
+
+**Degradation reduces rigor; it never broadens authority.** Under resource or availability loss a recipe may fall back to a *previously verified* surface, and must then record a **visibly weaker** result rather than reissuing the same badge. Falling back to an unverified or uncontained surface is never permitted, at any availability cost. A verified-but-stale fallback is **bounded**: it carries a staleness ceiling and an active re-verification trigger, and parks rather than running indefinitely once the ceiling is exceeded. Silent, unbounded pinning to a stale surface is precisely the failure this permission must not become.
 
 Every non-success terminal state identifies its recovery transition and the actor authorized to perform it.
 
@@ -150,6 +160,8 @@ Every non-success terminal state identifies its recovery transition and the acto
 A change is challenged, revised, and resolved during authoring rather than presenting a raw first draft as the finished artifact. The resulting review record contributes to source provenance.
 
 This does **not** constitutionalize N reviewers, a Judge, fingerprint survival, provider diversity, or any other particular convergence algorithm. Those are strategies that must earn their keep.
+
+One property is not strategy: **the actor that authored a change cannot be the actor that clears it.** Author, evaluator, and whoever rules the terminal outcome must be separable actors, whatever the algorithm. Without that separation a recipe could satisfy I by having a change review and approve itself — the pre-review posture with extra steps and a provenance record attesting to it. This is distinct from J: role separation is required of *any* review claimed under I, whereas J's isolation applies only where policy demands independence.
 
 ### J. When policy requires independent evaluation, independence is a property of the execution
 
@@ -196,43 +208,56 @@ These belong in policy, skill/design docs, construction docs, trust/conformance 
 
 The trio reviews corrected the first draft's over-simplification: **shrinking an ADR must not delete the reason a replacement would otherwise repeat a known failure.** The resulting model is invariant + constraint + construction, with construction outside the ADR.
 
+The third review found the same error one level up: the swap *rules* were sound and the *text* had not executed them. Seven of its nine blockers were supersede rows whose constraint A–K never stated — 0014's deterministic-gate corollary, 0017's staleness ceiling, 0023's containment-≠-permission reframe, 0007's trusted builder, 0013's consequence-scaled rigor. Those clauses are now written into C, D, G and H, and the Carried-by column below makes the binding checkable rather than promised.
+
+Its one novel finding was structural: with I mandating authoring review and J making independence conditional, nothing required the author and the evaluator to be different actors — a recipe could have satisfied I by reviewing its own change. Role separation is a property, not topology, and it is now stated in I.
+
+One accepted finding is deliberately **not** yet fixed: the ADR-0026 worked cut still packs multi-primitive construction (quota/token, attempt register, cause-allowlist detail) into `## Decision` rather than Constraints or its home. ADR-0001 is the honest exemplar of the method; 0026 is shape-compliant but not yet method-compliant. Re-cutting it needs the same back-port discipline that found the missing aggregation ordering, so it is queued as its own change rather than done in haste here.
+
 Dispositions use four verbs:
 
 - **cut** — the ADR survives under its number, reduced to invariant + constraints; construction moves to a named home;
 - **split** — one file carries independently replaceable decisions;
-- **supersede** — a new A–K invariant owns the decision; the old ADR remains as superseded history and its constraints move forward;
+- **supersede** — a **named** A–K clause owns the decision; the old ADR remains as superseded history, and each of its constraints is written into that clause *before* the supersession lands. "Its constraints move forward" is a promise the Carried-by column has to cash;
 - **demote** — it is policy/config/recipe rather than architecture.
 
 `cut` is gated on a construction home existing. The current `pnpm check:adr` ratchet is a prototype of that maintenance rule; its semantic authority is intentionally weaker than the cut test in the document skill.
 
-| ADR | Disposition | Invariant / constraint that survives | Construction home |
-|---|---|---|---|
-| 0001 worktree write confinement | **cut** *(worked example)* | hard gate on observed effect, not requested intent; must not depend on parsing tool inputs; ambiguity resolves to violation | `pipeline.md` § Worktree Isolation ✅ |
-| 0002 untrusted input/tool scope | **cut** | repo/issue/PR content is untrusted; content can never grant authority | *home needed* |
-| 0003 PR-gated default | **demote** | safe consumer default may remain PR | config |
-| 0004 review gate / shakedown parsing | **cut**, amended by 0026 | irreversible advancement fails closed; parse-invalid is real; gate/shakedown may require distinct role-appropriate parsers | gate half in `guarded-actions.md`; shakedown home needed |
-| 0005 branch-protection auto-merge | **cut**, narrow | external landing authority positively verified, never assumed | `flow.md` ✅ |
-| 0006 no lifecycle scripts | **cut**, narrow | published manifests carry no install/lifecycle scripts | `architecture.md` ✅ |
-| 0007 signed-tag provenance publish | **cut**, narrow | published artifacts carry externally verifiable provenance; externally load-bearing signing format remains named | trust docs ✅ |
-| 0008 control plane fail closed | **cut** | unauthenticated control authority is never exposed | `docs/server.md` ✅ |
-| 0009 claims are git branches | **cut**, narrow | atomic authority owns the claim; no pre-check/secondary registry | `roadmap-and-ship.md` ✅ |
-| 0010 env allowlist / log scrub | **cut** | no ambient secret/environment authority; evidence must not leak credentials | `architecture.md` section needed |
-| 0011 Andon not DoR | **cut** | charter inadequacy produces typed escalation rather than guessing | `flow.md` ✅ |
-| 0012 readiness computed | **demote** | readiness signals may inform scheduling | `flow.md` ✅ |
-| 0013 reversibility-weighted gates | **supersede** by H | rigor scales with consequence; one cost model is not doctrine | home needed |
-| 0014 mechanism/policy spine | **supersede** by C + H | agents judge; harness owns authority/advancement | cross-cutting |
-| 0015 autonomy / tolerance | **demote** | autonomy policy sits above a floor it cannot lower | home needed |
-| 0016 severity taxonomy | **cut**, retain floor | safety/judgment boundary is not agent-contractible; ambiguous emission fails toward floor; lone judge cannot downgrade safety | `adversarial-review-loop.md` ✅ |
-| 0017 graceful degradation | **supersede** by D + H | degradation may reduce rigor, never broaden authority; record becomes visibly weaker | `adversarial-review-loop.md` ✅ |
-| 0018 in-toto attestation | **split** | envelope/signing decision remains narrow; rich source provenance is G | trust docs ✅ |
-| 0019 checkpoint restart | **supersede** by F | no deterministic LLM replay; accepted boundaries + valid mid-step WIP durability survive | `pipeline.md` § Parking ✅ |
-| 0020 provider seam / capabilities | **split** | runtime seam becomes Agent Driver (E); factual capability telemetry survives; no-equivalent hard requirement refuses seating | `pipeline.md` § Step Providers ✅ |
-| 0021 ocap / effects placement | **supersede** | explicit authority and typed boundary effects survive; vocabulary does not | `pipeline.md` § Effects Manifests ✅ |
-| 0022 pipeline shape + orchestrators | **split** | A/B own ordered lifecycle; J owns conditional independence; exact topology is construction | cold-evaluation home needed |
-| 0023 contained execution | **supersede** by D | no ambient authority / explicit sandbox boundary survive; substrate is construction | `contained-execution.md` ✅ |
-| 0024 adversarial authoring review | **split** | I owns review-during-authoring + provenance; algorithm/provider mix are strategy | `adversarial-review-loop.md` ✅ |
-| 0025 landing serialization | **cut**, narrow | actual ref fence remains load-bearing; ordering never substitutes for fence | `flow.md` ✅ |
-| 0026 stateful guards | **cut** *(worked example)* | fence-or-reconcile; typed recovery; judgment ≠ disposition; default-deny typed causes; omission is never refutation | `guarded-actions.md` ✅ |
+**Carried by** names the clause that will actually hold each constraint after the swap. A `supersede`
+or `split` row without a named carrier is not a disposition — it is a deletion with a citation. `self`
+means the ADR survives under its own number and carries its own constraints. Three rows previously
+read `supersede` with no carrier at all; the third trio review found that every one of them orphaned
+a constraint A–K did not state, which is why this column exists rather than the prose promise it
+replaces.
+
+| ADR | Disposition | Invariant / constraint that survives | Carried by | Construction home |
+|---|---|---|---|---|
+| 0001 worktree write confinement | **cut** *(worked example)* | hard gate on observed effect, not requested intent; must not depend on parsing tool inputs; ambiguity resolves to violation | self | `pipeline.md` § Worktree Isolation ✅ |
+| 0002 untrusted input/tool scope | **cut** | repo/issue/PR content is untrusted; content can never grant authority | self | *home needed* |
+| 0003 PR-gated default | **demote** | safe consumer default may remain PR | policy — no A–K clause required | config |
+| 0004 review gate / shakedown parsing | **cut**, amended by 0026 | irreversible advancement fails closed; parse-invalid is real; gate/shakedown may require distinct role-appropriate parsers | self | gate half in `guarded-actions.md`; shakedown home needed |
+| 0005 branch-protection auto-merge | **cut**, narrow | external landing authority positively verified, never assumed | self | `flow.md` ✅ |
+| 0006 no lifecycle scripts | **cut**, narrow | published manifests carry no install/lifecycle scripts | self | `architecture.md` ✅ |
+| 0007 signed-tag provenance publish | **cut**, narrow | published artifacts carry externally verifiable provenance from a **trusted builder identity**; externally load-bearing signing format remains named | self + **G** ¶ trusted builder | trust docs ✅ |
+| 0008 control plane fail closed | **cut** | unauthenticated control authority is never exposed | self | `docs/server.md` ✅ |
+| 0009 claims are git branches | **cut**, narrow | atomic authority owns the claim; no pre-check/secondary registry | self | `roadmap-and-ship.md` ✅ |
+| 0010 env allowlist / log scrub | **cut** | no ambient secret/environment authority; evidence must not leak credentials | self | `architecture.md` section needed |
+| 0011 Andon not DoR | **cut** | charter inadequacy produces typed escalation rather than guessing | self | `flow.md` ✅ |
+| 0012 readiness computed | **demote** | readiness signals may inform scheduling | policy — no A–K clause required | `flow.md` ✅ |
+| 0013 reversibility-weighted gates | **supersede** by H | rigor scales with consequence and reversibility, not lifecycle stage; one cost model is not doctrine | **H** ¶ *Required rigor scales…* | home needed |
+| 0014 mechanism/policy spine | **supersede** by C + H | agents judge; harness owns authority/advancement; **the blocking gate is always deterministic and the model is never the gate**; **policy is data, not code** | **C** ¶ *The blocking decision…* | cross-cutting |
+| 0015 autonomy / tolerance | **demote** (dial) above a **constitutional floor** | the tolerance dial is policy; the floor beneath it is not — policy may reduce rigor but can never broaden execution authority | floor: **H** ¶ *Degradation reduces rigor…* + **D**; dial: policy | home needed |
+| 0016 severity taxonomy | **cut**, retain floor | safety/judgment boundary is not agent-contractible; ambiguous emission fails toward floor; lone judge cannot downgrade safety | self | `adversarial-review-loop.md` ✅ |
+| 0017 graceful degradation | **supersede** by D + H | degradation may reduce rigor, never broaden authority; record becomes visibly weaker; last-verified-pin permitted but **bounded by a staleness ceiling + re-verification trigger**; uncontained fallback never | **H** ¶ *Degradation reduces rigor…* | `adversarial-review-loop.md` ✅ |
+| 0018 in-toto attestation | **split** | envelope/signing decision remains narrow; rich source provenance is G | narrow half: self; rich half: **G** | trust docs ✅ |
+| 0019 checkpoint restart | **supersede** by F | no deterministic LLM replay; accepted boundaries + valid mid-step WIP durability survive | **F** ¶ *Accepted step outputs are not the only durable state* | `pipeline.md` § Parking ✅ |
+| 0020 provider seam / capabilities | **split** | runtime seam becomes Agent Driver (E); factual capability telemetry survives; no-equivalent hard requirement refuses seating | **E**; seam half: self | `pipeline.md` § Step Providers ✅ |
+| 0021 ocap / effects placement | **supersede** by C + D + H | explicit authority survives (C/D); typed boundary effects requiring authorization and evidence survive (H); ocap/algebraic-effects vocabulary does not | **C** + **D** + **H** | `pipeline.md` § Effects Manifests ✅ |
+| 0022 pipeline shape + orchestrators | **split** | A/B own ordered lifecycle; J owns conditional independence; exact topology is construction | **A** + **B** + **J** | cold-evaluation home needed |
+| 0023 contained execution | **supersede** by D | no ambient authority / explicit sandbox boundary survive; **containment ≠ permission** survives independently of substrate; substrate is construction | **D** ¶ *Containment is not permission* | `contained-execution.md` ✅ |
+| 0024 adversarial authoring review | **split** | I owns review-during-authoring + provenance **and author ≠ evaluator ≠ outcome-ruler**; algorithm/provider mix are strategy | **I** ¶ *One property is not strategy* | `adversarial-review-loop.md` ✅ |
+| 0025 landing serialization | **cut**, narrow | actual ref fence remains load-bearing; ordering never substitutes for fence | self | `flow.md` ✅ |
+| 0026 stateful guards | **cut** *(worked example)* | fence-or-reconcile; typed recovery; judgment ≠ disposition; default-deny typed causes; omission is never refutation | self | `guarded-actions.md` ✅ |
 
 The worked cuts of 0001/0026 are evidence for the method, not authorization to mechanically cut the rest without the constitutional/probe work below.
 
@@ -284,13 +309,14 @@ Only after stages 1–2:
 
 1. add the replacement ADRs;
 2. mark displaced ADRs superseded with explicit replacement links;
-3. cut surviving ADR construction only when its canonical home exists;
-4. rebind every affected `TC-` trust claim in the same change;
-5. replace the current ambiguous `proposed = decided-unimplemented` vocabulary and re-triage every ADR carrying the old status;
-6. update `AGENTS.md` so the always-loaded lane states implemented/current invariants only;
-7. keep mechanical ADR checks deliberately narrow: shape, links, construction-home existence, status/supersession integrity. Semantic layering remains review/skill territory unless a heuristic proves high-signal;
-8. establish the high-level canonical vocabulary once (`Pipeline → Step → Run → Attempt`, `Agent Driver → Provider → Model`, sandbox/authority boundary, provenance/dossier/attestation) and route other docs to it;
-9. dedupe overlapping living docs based on the Stage 2 ownership inventory rather than adding another master document.
+3. **refuse any supersession whose carrier clause does not yet state the constraint.** For every `supersede`/`split` row, the named A–K clause must contain the surviving constraint *in the replacement ADR text* before the old ADR is marked. A row whose carrier is absent, unnamed, or silent on the constraint blocks that row — the rest of the swap may proceed. This is the ordering rule that keeps supersession from being deletion with a citation;
+4. cut surviving ADR construction only when its canonical home exists;
+5. rebind every affected `TC-` trust claim in the same change;
+6. replace the current ambiguous `proposed = decided-unimplemented` vocabulary and re-triage every ADR carrying the old status;
+7. update `AGENTS.md` so the always-loaded lane states implemented/current invariants only;
+8. keep mechanical ADR checks deliberately narrow: shape, links, construction-home existence, status/supersession integrity. Semantic layering remains review/skill territory unless a heuristic proves high-signal;
+9. establish the high-level canonical vocabulary once (`Pipeline → Step → Run → Attempt`, `Agent Driver → Provider → Model`, sandbox/authority boundary, provenance/dossier/attestation) and route other docs to it;
+10. dedupe overlapping living docs based on the Stage 2 ownership inventory rather than adding another master document.
 
 Superseded ADRs remain useful archaeology. Deleting or silently rewriting them would undermine the provenance principle this reconciliation is trying to establish.
 
