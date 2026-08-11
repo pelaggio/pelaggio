@@ -43,4 +43,4 @@ Pelaggio's permission model is a manifest-backed description of current capabili
 
 ## Configuration Gates
 
-`ship.target` defaults to `pull-request`; `direct-push` and `auto-merge-pr` are explicit values in `.pelaggio.yml` or `--target` and emit a warning banner (`TC-012`). The notify webhook is disabled until `notify.url` is set (`TC-002`, `TC-006`). The server requires bearer auth on non-loopback binds and exposes only `/healthz` and `/.well-known/pelaggio.trust.json` outside the bearer chain (`TC-010`).
+`ship.target` defaults to `pull-request`; `direct-push` and `auto-merge-pr` are explicit values in `.pelaggio.yml` or `--target` and emit a warning banner (`TC-012`). The notify webhook is disabled until `notify.url` is set (`TC-002`, `TC-006`). The server requires bearer auth on every bind — startup fails without `CONTROL_PLANE_TOKEN`, including on loopback — and exposes only `/healthz`, `/.well-known/pelaggio.trust.json`, and the static UI shell (`/` and `/ui/*`, which carries no run authority) outside the bearer chain (`TC-010`).

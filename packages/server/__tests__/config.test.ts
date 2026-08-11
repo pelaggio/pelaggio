@@ -99,6 +99,15 @@ describe("loadServerConfig", () => {
 		}
 	});
 
+	it("trims surrounding whitespace from the token (env-file trailing space must not 401 every request)", () => {
+		const cfg = loadServerConfig(baseEnv({ CONTROL_PLANE_TOKEN: " s3cret \n" }), { webDistDefault: join(tmpdir(), "no-such-dist") });
+		assert.equal(cfg.token, "s3cret");
+	});
+
+	it("whitespace-only token fails closed", () => {
+		assert.throws(() => loadServerConfig(baseEnv({ CONTROL_PLANE_TOKEN: "   " }), { webDistDefault: join(tmpdir(), "no-such-dist") }), /CONTROL_PLANE_TOKEN is required/);
+	});
+
 	it("token set on a non-loopback host is unchanged (does not throw; token preserved)", () => {
 		const cfg = loadServerConfig(baseEnv({ AUTOPILOT_SERVER_HOST: "100.64.0.1", CONTROL_PLANE_TOKEN: "s3cret" }), {
 			webDistDefault: join(tmpdir(), "no-such-dist"),

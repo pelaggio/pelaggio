@@ -286,6 +286,10 @@ process. `AUTOPILOT_SERVER_WEB_DIST` (default `${repo}/packages/web/dist`) names
 the build output. If the path is missing, the daemon boots without the static
 handler — pre-build deploys still come up.
 
+Static serving is unauthenticated but bounded to the configured `webDist`
+directory: pointing `AUTOPILOT_SERVER_WEB_DIST` at a broader directory would
+publish those files without auth (operator-controlled).
+
 URL layout:
 
 | Path | Handler |

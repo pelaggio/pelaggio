@@ -47,7 +47,9 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env, { webDist
 	const statePath = env.AUTOPILOT_SERVER_STATE_PATH ? resolve(env.AUTOPILOT_SERVER_STATE_PATH) : resolve(stateRoot, "state.json");
 	const logDir = env.AUTOPILOT_SERVER_LOG_DIR ? resolve(env.AUTOPILOT_SERVER_LOG_DIR) : resolve(stateRoot, "logs");
 	const trustManifestPath = env.AUTOPILOT_SERVER_TRUST_MANIFEST ? resolve(env.AUTOPILOT_SERVER_TRUST_MANIFEST) : resolve(process.cwd(), "docs/trust/pelaggio.trust.json");
-	const token = required("CONTROL_PLANE_TOKEN", env.CONTROL_PLANE_TOKEN);
+	// Trim so a stray trailing space/newline in the operator env file cannot 401 every
+	// request; a whitespace-only value trims to "" and still fails closed via required().
+	const token = required("CONTROL_PLANE_TOKEN", env.CONTROL_PLANE_TOKEN?.trim());
 	const webDistCandidate = env.AUTOPILOT_SERVER_WEB_DIST ? resolve(env.AUTOPILOT_SERVER_WEB_DIST) : webDistDefault;
 	const webDist = existsSync(webDistCandidate) ? webDistCandidate : undefined;
 	return { host, port, registryPath, token, statePath, logDir, webDist, trustManifestPath };
