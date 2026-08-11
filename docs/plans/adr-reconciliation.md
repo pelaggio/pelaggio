@@ -338,7 +338,7 @@ Before a replacement ADR lands:
 3. target-state claims with material implementation risk have probe evidence or are clearly recorded as unimplemented decisions;
 4. affected trust claims are rebound or weakened in the same change;
 5. `proposed = decided-unimplemented` is replaced and existing ADRs are re-triaged;
-6. mechanical ADR checks remain narrow; semantic layering stays review/skill territory unless a heuristic proves high-signal;
+6. mechanical ADR checks remain narrow; semantic layering stays review/skill territory unless a heuristic proves high-signal. **Open for the next trio, stated as fact rather than pre-decided:** `check:adr` is added to `package.json` but is **not referenced by `.github/workflows/ci.yml`** (which runs `check:skills` and `check:trust`), and its baseline exempts **24 of 26** ADRs — so as shipped it enforces shape on exactly the two files this branch rewrote. Its `construction-leak` rule forbids `*.ts` paths and `symbol()` outside `## Construction` by regex, which is the prose-distorting syntactic proxy this clause warns about: a source path in a Context section is frequently the correct evidence. Either wire it into CI **and drop that rule**, keeping the frontmatter/required-section/construction-home floors, or drop the tooling from this PR and re-land it at Stage 3 once the corpus conforms;
 7. planned-vs-shipped facts in always-loaded/agent-facing docs have production-seam evidence.
 
 Superseded ADRs remain archaeology.
