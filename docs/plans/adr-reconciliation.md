@@ -1,6 +1,6 @@
 # ADR reconciliation: reduce the constitution to the product we mean to build
 
-Status: proposal, pre-decision. Based on `path-forward.md`, trio review, and the Stage 2 falsification campaign under `docs/spikes/adr-probes/`.
+Status: proposal, pre-decision. Based on `path-forward.md`, trio review, Stage 2 falsification probes, and the architecture discovery in PR #482.
 
 ## Why this exists
 
@@ -10,7 +10,12 @@ The governing ADR test is:
 
 > **If the mechanism changed tomorrow, would this sentence still be required to avoid reintroducing a known failure?**
 
-The probe campaign adds a second discipline: distinguish **current-state fact**, **target-state invariant**, and **candidate abstraction**. A desirable target may be false today; a useful current seam need not become the final abstraction.
+The probe/discovery work adds two further disciplines:
+
+- distinguish **current-state fact**, **target-state invariant**, and **candidate abstraction**;
+- **prefer widening an underspecified existing boundary over introducing a new abstraction** when the existing concept is sound and the leakage exists because its interface is one size too small.
+
+A desirable target may be false today. A useful current seam need not become the final abstraction. A large function does not, by itself, justify a framework.
 
 ## 1. Product target
 
@@ -22,18 +27,29 @@ The target has four concerns: delivery, safe execution, source provenance, and s
 
 ### A. Work executes as typed steps in an ordered pipeline
 
-A pipeline orders typed steps. Pelaggio need not become a general DAG scheduler. The invariant is explicit lifecycle boundaries with typed inputs and outputs, not today's exact step count or orchestrator topology.
+A pipeline orders typed steps. Pelaggio does not need to become a general DAG scheduler. The invariant is explicit lifecycle boundaries with typed inputs and outputs, not today's exact step count or orchestrator topology.
 
-### B. Keep execution narrow; compose lifecycle around it
+Architecture discovery reinforces this: the current pipeline is honestly linear and step-name branching is already low. There is no measured DAG pressure.
 
-P1 found a real shared execution seam: nine heterogeneous activities use `RunStepFn` without an untyped options bag. It did **not** find a lifecycle contract containing authority, exit criteria, accepted outputs, provenance, reconciliation, or recovery.
+### B. Keep execution narrow; make lifecycle state explicit around it
+
+P1 found a real shared execution seam: nine heterogeneous activities use `RunStepFn` without an untyped options bag. PR #482 independently found the provider/type layer comparatively healthy while lifecycle concerns concentrate in `runPipeline` and `runOrchestrator`.
 
 Therefore:
 
 - **execution contract** — narrow invocation of work; exists today and should remain small;
-- **lifecycle contract** — target-state behavior around execution: identity, authority, accepted outputs, recovery, provenance, reconciliation.
+- **lifecycle behavior** — identity, authority, accepted outputs, recovery, provenance, reconciliation, and transition ownership around execution.
 
-The lifecycle layer should wrap/compose the execution seam rather than turning `RunStepFn` into a universal options bag. The target vocabulary may be `Pipeline → Run → Step → StepRun → Attempt`, but exact type decomposition remains construction.
+The important architectural property is **explicit lifecycle state and ownership**, not necessarily one universal `LifecycleContract` interface.
+
+Two constructions remain intentionally open for the next probe:
+
+1. a small lifecycle wrapper / `StepRun` abstraction around the existing execution seam; or
+2. narrow phase functions over a shared typed cycle/run context.
+
+For example, `plan(ctx) → PlanResult`, `implement(ctx) → ImplementResult`, `review(ctx) → ReviewResult`, `ship(ctx,target) → ShipResult` may prove clearer than a deeply generic `Step<Input, Output, Authority, Recovery, …>`.
+
+**Constraint:** do not enlarge `RunStepFn` into a universal optional-field record, and do not hide today's special cases inside a new lifecycle god-object.
 
 ### C. Agents provide intelligence; Pelaggio retains advancement authority
 
@@ -45,45 +61,59 @@ Agents may propose, implement, inspect, review, and judge. They do not grant the
 
 Each consequential agentic execution must run inside a harness-controlled sandbox / authority boundary with explicit grants. The environment cannot broaden its own authority.
 
-P2 falsified any claim that today's ordinary `runStep` path already provides this. The designed containment path is not currently the production step path.
+P2 falsified any claim that today's ordinary `runStep` path already provides this. PR #482 confirms the designed containment stack exists but is only connected to `run-contained`, not normal pipeline execution.
 
 **Containment is not permission.** Technical reachability and contractual permission are separate decisions.
 
-Trust evidence must exercise controls at the real production seam. Testing a helper that constructs a safe environment does not prove that every driver invocation uses it; TC-014 currently demonstrates this failure.
+**Trust evidence must exercise the real production seam.** A correct helper is not proof that every driver uses it. TC-014 is the measured exemplar: the env builder is correct and tested while the default Claude production path bypasses it.
 
-### E. Agent Drivers enter through one declared authority construction
+### E. Preserve the good Agent Driver dispatch seam; construct authority around it
 
 An **Agent Driver** is the runtime integration; provider and model are separate execution facts.
 
-P1/P2 falsified the stronger current-state story of interchangeable drivers. The replacement constraint is:
+PR #482 found the dispatch itself is already a healthy seam: typed providers behind a registry and narrow dispatcher. P1/P2 found that authority and driver-specific lifecycle concerns leak around it.
 
-> **Every Agent Driver enters through the harness's declared authority construction; driver-specific lifecycle concerns do not leak into the shared execution/lifecycle contract.**
+The replacement invariant is:
 
-Drivers may add native defense-in-depth. A required capability with no proven harness equivalent refuses seating. “Interchangeable” means interchangeable behind the same declared authority contract **where equivalence has been demonstrated**, not assumed equality or lowest-common-denominator behavior.
+> **Every Agent Driver enters through the harness's declared authority construction; driver-specific lifecycle concerns do not leak into the shared execution/lifecycle boundary.**
+
+Do not redesign a functioning dispatch abstraction merely because its surrounding authority plumbing is wrong. Widen or wrap the existing seam as needed.
+
+Drivers may add native defense-in-depth. A required capability with no proven harness equivalent refuses seating. “Interchangeable” means interchangeable behind the same declared authority contract **where equivalence has been demonstrated**, not assumed equality or lowest-common-denominator execution.
 
 ### F. Durable recovery follows run/attempt lineage, not deterministic replay
 
 Accepted outputs, resumable WIP, failed attempts, and superseded attempts remain distinct. Nondeterministic agent execution is not pretended replayable. P3 supported this behavior; refactoring should preserve it.
 
-### G. Capture provenance at authoritative semantic boundaries
+Architecture discovery also found identity fragmentation around otherwise useful attempt identity. Unification should strengthen joins without destroying the working attempt-lineage semantics.
+
+### G. Capture provenance at authoritative semantic boundaries, in a durable attempt-keyed home
 
 The final lineage must explain charter/outcome/scope; supplied context and skill; Agent Driver/provider/model; sandbox/authority; step/attempt outputs; checks; review findings/resolution; retries/parks/supersession; semantic reconciliation; landing authorization; and final subject without mutable external joins.
 
-P3 showed this is not durable today. The replacement rule is:
+P3 showed this is not durable today. PR #482 identified the concrete inversion: strong execution receipts and review records live under `WORKTREE/.dev` and are destroyed by successful ship, while durable identities do not cleanly join.
+
+The replacement rules are:
 
 > **Capture each provenance fact durably at the authoritative boundary where it becomes known rather than reconstructing it later.**
+
+> **Evidence that must survive delivery lives in a durable home keyed by coherent run/attempt identity, not only inside the disposable worktree.**
 
 Claim snapshots charter intent; step boundaries bind attempt/input/output; review binds clearing evidence; ship/landing binds authorization and final subject. The Change Dossier is a projection over these records, not a transcript/event-log requirement.
 
 Externally consumed provenance binds a builder identity whose trust basis the consumer can independently verify.
 
-### H. Consequential effects require authorization, evidence, and recovery ownership
+### H. Consequential transitions require authorization, evidence, and an owner/reconciler
 
 Consequential mutations require harness-owned authorization and evidence appropriate to consequence/reversibility.
 
 Stateful mutations are fenced at the state-owning authority or idempotently reconciled. Pre-checks, locks, ordering, and expiring hints do not substitute for authority.
 
-**Safe refusal is incomplete without recovery ownership.** Every non-success absorbing state names a clearing transition and authorized actor. P2's confinement abort demonstrated the failure: correct guards stranded worktree, branch, and roadmap state and poisoned subsequent runs. Claim/pick therefore falls under this rule and ADR-0026.
+**Safe refusal is incomplete without recovery ownership.** Every non-success absorbing state names a clearing transition and authorized actor.
+
+The same principle applies to successful external transitions: **a lifecycle transition that completes outside the current process must have an explicit owner/reconciler for the next state.** PR #482's clearest example is production `auto-merge-pr`: GitHub can merge the PR, but no code currently owns `merged → done`; stale quarantine is the accidental reconciler.
+
+P2's confinement abort is the failure-side mirror: correct guards strand worktree, branch, and roadmap state and poison subsequent runs.
 
 Degradation may reduce rigor but never broaden authority; degraded evidence is visibly weaker and stale verified fallback is bounded.
 
@@ -91,7 +121,11 @@ Degradation may reduce rigor but never broaden authority; degraded evidence is v
 
 The same decision-maker cannot both author a candidate and supply its clearing judgment. Clearing judgment is independently attributable; Pelaggio resolves it plus required evidence into authoritative disposition.
 
-This does not prescribe reviewer count, Judge topology, convergence algorithm, driver diversity, or a third reviewing actor. P3 did not reach review, so I remains materially untested.
+This does not prescribe reviewer count, Judge topology, convergence algorithm, driver diversity, or a third reviewing actor.
+
+PR #482 suggests the **review concept is healthy but orchestration is duplicated**: the pure authoring-review core exists while authoring and cold-gate orchestration have diverged enough to create safety asymmetry. Prefer reusing/widening the good shared review core over preserving multiple independent review engines.
+
+I remains materially untested end-to-end because P3 did not reach review.
 
 ### J. Independent evaluation isolates information, not necessarily execution authority
 
@@ -109,97 +143,106 @@ P4 found reconstruction tractable across eight historical PRs but did not prove 
 
 > **Conflict with architecture, trust, or an external contract escalates rather than silently rewriting the authoritative statement to fit implementation.**
 
+PR #482 supplies further evidence for why this matters: agent-facing docs currently blur planned vs shipped behavior, including a landing fence and skill expansion behavior that code does not implement.
+
 Routine construction/behavior reconciliation may be autonomous. Noise suppression is optimization, not the safety property.
 
-## 3. Design tradeoffs the architecture must optimize
+## 3. Construction bias from architecture discovery
 
-These are not additional ADRs. They are the tensions architecture discovery and the remaining probes should resolve.
+PR #482 changes the default refactoring posture:
 
-### T1. Narrow execution seam vs rich lifecycle abstraction
+> **Before creating a new abstraction, ask whether a sound existing boundary is merely underspecified. Prefer widening that boundary when doing so restores singular ownership and removes leaked orchestration without making the interface incoherent.**
 
-**Bias:** preserve the small execution primitive and compose lifecycle around it.
+`ShipTarget` is the canonical current example: it exposes too little, so direct-push/PR-specific lifecycle behavior leaks back into the orchestrator. Widening the target contract is presumptively better than creating a generic shipping framework.
 
-Putting authority, provenance, recovery, reconciliation, budgets, and every output shape directly into `RunStepFn` would make one interface easy to find but difficult to understand and extend. A lifecycle wrapper costs an additional concept/indirection but keeps execution simple and permits deterministic/non-agent work to share lifecycle without pretending it has identical invocation needs.
+The same test applies elsewhere:
 
-**Failure signal:** the wrapper merely moves today's special cases into another giant optional record.
+- provider dispatch: preserve it; fix authority around it;
+- review core: preserve/reuse it; extract duplicated orchestration;
+- flow policy: preserve its pure deterministic core rather than delegating policy back through an agent turn;
+- attempt lineage: preserve the semantics; fix durability/join ownership around it.
+
+A new abstraction must answer: **which concrete duplication, ownership ambiguity, or invalid state disappears because this abstraction exists?**
+
+## 4. Design tradeoffs the architecture must optimize
+
+These are not additional ADRs.
+
+### T1. Narrow execution seam vs lifecycle explicitness
+
+**Bias:** preserve the small execution primitive; make lifecycle explicit around it. Do not assume that means one generic lifecycle interface.
+
+**Competing shapes to probe:** generic lifecycle wrapper vs narrow phase functions over shared run/cycle context.
+
+**Failure signal:** either shape becomes a giant optional record or reproduces the orchestration closure under a different name.
 
 ### T2. Driver neutrality vs lowest-common-denominator execution
 
 **Bias:** common authority contract, heterogeneous capabilities.
 
-Do not make all runtimes look identical by throwing away useful native capabilities. Driver-native controls can strengthen safety/observability; they cannot silently weaken the declared harness boundary. Unsupported required capabilities refuse seating.
-
-**Failure signal:** adding a driver either requires orchestration edits or forces every other driver down to its weakest feature set.
+**Failure signal:** adding a driver requires orchestration edits or forces every driver down to the weakest feature set.
 
 ### T3. Harness-owned authority vs driver-native safety
 
-**Bias:** the harness owns the portable authority floor; driver controls are defense-in-depth.
+**Bias:** harness owns the portable authority floor; driver controls are defense-in-depth.
 
-This is the engineering-heavy choice. Relying primarily on driver-native controls is cheaper but makes Pelaggio's safety semantics driver-dependent and weakens bring-any-agent. The remaining authority probe should determine which axes the harness can actually own and where a runtime genuinely cannot be seated equivalently.
-
-**Failure signal:** a required authority axis cannot be mediated outside a particular driver without unacceptable complexity or bypass.
+**Failure signal:** a required authority axis cannot be mediated outside a particular driver without unacceptable complexity/bypass.
 
 ### T4. Strong containment vs developer friction
 
-**Bias:** make ordinary safe work cheap; make unusual authority explicit.
+**Bias:** ordinary repo work is cheap; unusual authority is explicit. Ceremony scales with consequence/reversibility.
 
-Routine repo read/write and test execution should not require capability bureaucracy. Network, credentials, external mutation, and irreversible effects justify progressively more explicit grants/evidence. H's consequence/reversibility principle should govern ceremony.
-
-**Failure signal:** common skill authors need to understand sandbox internals or enumerate incidental low-risk capabilities to do ordinary work.
+**Failure signal:** routine skill authors need sandbox-internal knowledge or incidental capability declarations.
 
 ### T5. Boundary-captured provenance vs omniscient logging
 
-**Bias:** small durable records at authoritative transitions.
+**Bias:** small durable attempt-keyed records at authoritative transitions.
 
-Boundary capture imposes a recording obligation on claim/step/review/ship, but avoids a centralized recorder, transcript retention, or mutable post-hoc joins. Provenance should be sufficient to explain custody without becoming observability storage.
-
-**Failure signal:** answering basic custody questions still requires provider/GitHub/log joins, or provenance volume approaches transcript volume.
+**Failure signal:** custody still requires mutable joins or evidence volume approaches transcript volume.
 
 ### T6. Durable WIP vs immutable accepted history
 
-**Bias:** preserve both and type the distinction.
+**Bias:** preserve and type both.
 
-Attempt-local WIP may be mutable/resumable; accepted outputs and historical attempts must not be rewritten. P3 suggests this distinction already works and should not be sacrificed for a purist event model.
-
-**Failure signal:** resumption launders failed work into accepted state, or preserving history makes useful resume prohibitively expensive.
+**Failure signal:** resumption launders failed work into accepted state, or history makes useful resume impractical.
 
 ### T7. Fail-closed vs recoverable
 
 **Bias:** safe refusal plus explicit recovery ownership.
 
-A guard that blocks unsafe progress but strands the system is incomplete. Recovery does not mean automatically clearing safety conditions; it means every blocked state has a known transition/actor capable of resolving it.
+**Failure signal:** ordinary faults create debris that poisons future runs or requires archaeological cleanup.
 
-**Failure signal:** normal faults create debris that causes unrelated future runs to fail or require archaeological manual cleanup.
-
-### T8. Review separation vs review bureaucracy
+### T8. Review separation vs bureaucracy
 
 **Bias:** author ≠ clearing judgment; everything beyond that earns itself empirically.
 
-Do not infer three agents, N+Judge, always-cold review, or provider diversity from the role-separation invariant. Review strategy should be replaceable and benchmarked for quality/cost.
-
-**Failure signal:** satisfying the invariant requires a fixed multi-agent topology rather than independently attributable clearing judgment.
+**Failure signal:** the invariant requires a fixed multi-agent topology.
 
 ### T9. Context isolation vs authority isolation
 
-**Bias:** model these as orthogonal properties.
+**Bias:** model and test them independently.
 
-A cold evaluator can be context-independent yet have broad host authority; a warm author can be tightly sandboxed. APIs, tests, and provenance should not use one property as evidence for the other.
-
-**Failure signal:** “cold,” “independent,” or “sandboxed” becomes shorthand for multiple unverified guarantees.
+**Failure signal:** “cold,” “independent,” or “sandboxed” becomes shorthand for unverified bundles of guarantees.
 
 ### T10. Semantic reconciliation rigor vs autonomous-development friction
 
-**Bias:** optimize first for consequential escalation correctness, then for prose quietness.
+**Bias:** optimize first for consequential escalation correctness, then prose quietness.
 
-False-positive doc suggestions are annoying; silently normalizing an architecture/trust violation into prose is materially worse. Routine construction docs should be low-friction and autonomous while authoritative semantic conflicts stop/escalate.
+**Failure signal:** reconciliation sprays routine edits or silently rewrites authoritative decisions to fit implementation.
 
-**Failure signal:** reconciliation either sprays routine edits everywhere or rewrites authoritative decisions to make implementation appear coherent.
+### T11. Widen an existing boundary vs introduce a new abstraction
 
-## 4. What should not be constitutional
+**Bias:** widen when the concept is sound, ownership belongs there, and leaked behavior is homogeneous with that responsibility. Introduce a new abstraction only when responsibilities are genuinely independent and need separate evolution.
 
-Exact pipeline step/orchestrator count; N+Judge/fingerprint algorithm; provider diversity as permanent primitive; ocap/algebraic-effects vocabulary; containment substrate/broker topology; readiness rubric; retry counts; exact severity/tolerance tables; landing retry arithmetic; current Agent Driver limitations; a dedicated `reconcile-docs` step or `DocumentationImpact` enum; current doc filenames; or a prohibition on cold evaluation sharing generic lifecycle machinery.
+**Failure signal for widening:** the interface accumulates unrelated concerns and becomes another god-object.
 
-## 5. Current ADR disposition
+**Failure signal for a new abstraction:** it adds indirection without removing duplication, invalid states, or ownership ambiguity.
+
+## 5. What should not be constitutional
+
+Exact pipeline step/orchestrator count; generic DAG semantics; N+Judge/fingerprint algorithm; provider diversity as permanent primitive; ocap/algebraic-effects vocabulary; containment substrate/broker topology; readiness rubric; retry counts; exact severity/tolerance tables; landing retry arithmetic; current Agent Driver limitations; a dedicated `reconcile-docs` step or `DocumentationImpact` enum; current doc filenames; a universal lifecycle interface; or a prohibition on cold evaluation sharing generic lifecycle machinery.
+
+## 6. Current ADR disposition
 
 The rule is: shrinking/superseding an ADR must not orphan the reason a replacement would otherwise repeat a known failure. `cut` preserves the ADR under its number; `split` separates independently replaceable decisions; `supersede` moves surviving constraints into named replacement clauses first; `demote` moves policy/config out of architecture.
 
@@ -224,24 +267,65 @@ The rule is: shrinking/superseding an ADR must not orphan the reason a replaceme
 | 0017 graceful degradation | **supersede** | weaker path never broadens authority; visibly weaker record; bounded stale fallback | H | `adversarial-review-loop.md` ✅ |
 | 0018 in-toto attestation | **split** | narrow envelope/signing decision vs rich source provenance | self + G | trust docs ✅ |
 | 0019 checkpoint restart | **supersede** | no deterministic replay; accepted + valid WIP durability | F | `pipeline.md` § Parking ✅ |
-| 0020 provider seam/capabilities | **split** | Agent Driver seam + factual capabilities; every driver enters through harness authority; no-equivalent requirement refuses seating | E + self | `pipeline.md` § Step Providers ✅ |
+| 0020 provider seam/capabilities | **split** | preserve Agent Driver dispatch; every driver enters through harness authority; no-equivalent requirement refuses seating | E + self | `pipeline.md` § Step Providers ✅ |
 | 0021 effects placement | **supersede** | explicit authority and authorized/evidenced boundary effects | C + D + H | `pipeline.md` § Effects Manifests ✅ |
-| 0022 pipeline shape/orchestrators | **split** | ordered lifecycle; execution/lifecycle distinction; conditional context isolation; topology replaceable | A + B + J | cold-evaluation home needed |
+| 0022 pipeline shape/orchestrators | **split** | ordered lifecycle; execution/lifecycle distinction; conditional context isolation; topology and exact lifecycle abstraction replaceable | A + B + J | cold-evaluation home needed |
 | 0023 contained execution | **supersede** | target-state no ambient authority; containment ≠ permission | D | `contained-execution.md` ✅ |
 | 0024 authoring review | **split** | review during authoring; author cannot supply own clearing judgment; algorithm replaceable | I | `adversarial-review-loop.md` ✅ |
-| 0025 landing serialization | **cut** | actual ref fence remains load-bearing; ordering never substitutes | self | `flow.md` ✅ |
+| 0025 landing serialization | **cut / re-check against current code** | landing must be positively fenced at the authority; do not state the planned direct-push CAS as shipped behavior | self + H | `flow.md` / landing construction |
 | 0026 stateful guards | **cut** | fence-or-reconcile; typed recovery across guard lifecycles including claim/pick; judgment/evidence/disposition separation; bounded retry; omission never refutation | self | `guarded-actions.md` ✅ |
 
-## 6. Immediate correctness findings
+## 7. Immediate correctness findings
 
 Independent of the architecture choice:
 
 1. **TC-014 is overstated on the default Claude path.** The env helper works but the real driver bypasses it. Fix the path or weaken the claim until end-to-end evidence exists.
 2. **Confinement abort strands claim state across worktree, branch, and roadmap.** This is a missing clearing transition under H/ADR-0026, not a guard failure.
+3. **Production `auto-merge-pr` has no explicit `merged → done` owner.** This is a lifecycle/reconciliation gap, not merely a shipping implementation detail.
+4. **Durable evidence is currently inverted.** Execution receipts/review records may be destroyed with the successful worktree; evidence required for custody needs a durable home.
+5. **Agent-facing docs contain planned-as-shipped claims.** In particular, the ADR-0025 direct-push CAS fence and skill include expansion must not be treated as current-state guarantees without production evidence.
 
-## 7. Remaining probes / architecture discovery
+## 8. Remaining probes / architecture discovery
 
 Do not re-test questions P1–P4 already answered. Focus on:
 
-- falsifying a minimal lifecycle wrapper around the narrow execution seam;
-- seating at least
+- compare a **minimal lifecycle wrapper** with **narrow phase functions over shared typed cycle/run context**; falsify both rather than assuming one;
+- seat at least two materially different Agent Drivers behind one **real harness authority construction** and repeat authority-denial probes;
+- exercise the designed containment path through ordinary step execution rather than only `run-contained`;
+- complete authoring review + clearing to test I and deliberately test context leakage for J;
+- prototype capture-at-boundary provenance into a **durable attempt-keyed evidence home**, including successful worktree destruction;
+- verify `merged → done` reconciliation for the production PR target under success, delayed merge, restart, and duplicate observation;
+- run an autonomous semantic reconciler on representative changes, prioritizing escalation correctness;
+- use reconciliation output to derive canonical document ownership/dedupe rather than designing the doc tree first.
+
+Architecture discovery should use PR #482 as the current-state evidence anchor and this document as the target/tradeoff anchor. Candidate refactors should state which assumptions remain probe-dependent.
+
+## 9. Stage 3 gate
+
+Do not perform the constitutional swap merely because an item is desirable target state.
+
+Before a replacement ADR lands:
+
+1. every surviving old constraint is present in its named carrier;
+2. current-state vs target-state language is explicit;
+3. target-state claims with material implementation risk have probe evidence or are clearly recorded as unimplemented decisions;
+4. affected trust claims are rebound or weakened in the same change;
+5. `proposed = decided-unimplemented` is replaced and existing ADRs are re-triaged;
+6. mechanical ADR checks remain narrow; semantic layering stays review/skill territory unless a heuristic proves high-signal;
+7. planned-vs-shipped facts in always-loaded/agent-facing docs have production-seam evidence.
+
+Superseded ADRs remain archaeology.
+
+## 10. What success looks like
+
+Adding a runtime means implementing/preserving an Agent Driver and proving it seats behind the same declared authority construction, not editing orchestration around its peculiarities.
+
+Adding a delivery activity means using the narrow execution seam plus explicit lifecycle state/ownership without extending a monolithic controller or inventing a framework.
+
+Shipping through any target leaves the item in a reconciled terminal lifecycle state, even when completion occurs asynchronously outside the process.
+
+Provenance facts are captured once where they become authoritative, survive successful worktree destruction, and project into one coherent Change Dossier.
+
+Implementation can report **what changed** without discovering every prose surface; reconciliation updates routine canonical material and escalates architecture/trust/external-contract conflict.
+
+And a future maintainer can replace today's driver, review, containment, landing, or documentation machinery without fighting ADRs that accidentally made those mechanisms Pelaggio's identity.
