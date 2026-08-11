@@ -9,30 +9,33 @@ consumer: false
 
 # /document — Author a Repo Document in Its Lane
 
-> **Status: the governing test and the lane table below track a *proposal*, not a decided
-> constitution.** They mirror the adr-reconciliation plan (lands with PR #479), which is
-> pre-decision and has not passed its Stage-3 gate. Use this skill for routing and shape; do not
-> cite it as authority for what is constitutional. If the reconciliation lands differently, this
-> skill changes with it, and anything it produced under the old cut is re-triaged rather than
-> grandfathered.
+> **Status: the shape convention this skill routes to has landed.** `docs/decisions/README.md`
+> § "Required shape" (shipped with PR #479) now requires `docs/decisions/_TEMPLATE.md` and the
+> `construction:` frontmatter field for new and re-cut ADRs; that README is the governing rule,
+> and this skill follows it. What has **not** landed is the mechanical gate — `pnpm check:adr`
+> and its `ci/adr-shape-baseline.json` ratchet are #481's chartered work — so the shape is
+> reviewer-enforced for now and the [Absent artifacts](#absent-artifacts--do-not-execute)
+> section at the end stays fenced. The wider re-cut of existing ADRs tracks
+> `docs/plans/adr-reconciliation.md`, whose own header still reads pre-decision; if that
+> sequencing settles differently, this skill changes with it.
 
 A ship's papers are only useful if each one says the thing it is *for*. This repo has four
 documentation lanes, and the recurring defect is not a missing document — it is content in the
 wrong lane, or the same content in two lanes drifting apart.
 
-Parse `$ARGUMENTS` for the subject and an optional lane flag. With `--cut ADR-NNNN`: the
-ADR-cutting workflow is part of the proposed shape gate and is **blocked on #481** — do not
-execute it. See [Proposed workflow](#proposed-workflow--do-not-execute) at the end, and report the
-block to the operator instead.
+Parse `$ARGUMENTS` for the subject and an optional lane flag. With `--cut ADR-NNNN`: follow
+[Cutting an existing ADR](#cutting-an-existing-adr) near the end. Its ratchet bookkeeping is
+blocked on #481 — skip that part and say so in your report.
 
-## The governing test *(proposed — see status note above)*
+## The governing test
 
 For every sentence considered for an ADR, ask:
 
 > **If the mechanism changed tomorrow, would this sentence still be required to avoid
 > reintroducing a known failure?**
 
-This is the semantic test. Everything else in this skill exists to help apply it.
+This is the semantic test — the README calls it the cut test. Everything else in this skill
+exists to help apply it.
 
 - **Yes, because it states what must remain true** → invariant / `## Decision`.
 - **Yes, because it rules out a known-bad solution shape** → `## Constraints on any implementation`.
@@ -50,7 +53,10 @@ broker, parser, provider hook, queue, or particular orchestrator earns ADR statu
 replacement would have to preserve that exact mechanism to avoid a demonstrated failure or to keep
 an externally load-bearing contract.
 
-## Step 1 — Route to the lane *(lane map is proposed, not decided)*
+## Step 1 — Route to the lane
+
+The lane map below mirrors `docs/decisions/README.md` § "The four documentation lanes", which is
+the governing copy.
 
 | Lane | Holds | Test |
 |---|---|---|
@@ -107,13 +113,16 @@ it implements it.
 
 ## Step 3 — Write it
 
-For an ADR, follow the current convention in `docs/decisions/README.md`: MADR 4.0.0
-(`adr-template-minimal`), numbered sequentially, matching the section shape of a recent ADR in
-that directory rather than inventing structure. Add a row to the README's index table — decision
-one-liner, a status from the README's vocabulary, and the `TC-` claim(s) the ADR governs, if any.
-There is no template file today, and ADR frontmatter has no `construction:` field — that scheme is
-part of the proposal (see [Proposed workflow](#proposed-workflow--do-not-execute)); do not use it
-until #481 lands.
+For an ADR, start from `docs/decisions/_TEMPLATE.md` and keep its six sections in order
+(`Context`, `Decision`, `Constraints on any implementation`, `Alternatives not taken`,
+`Consequences`, `Construction`). The governing rule is `docs/decisions/README.md` § "Required
+shape": MADR 4.0.0 (`adr-template-minimal`), numbered sequentially; frontmatter carries `title`,
+`status`, `date`, `claims`, and `construction:` — the path of the detail doc that holds the
+mechanism (with a resolvable `#anchor` when given), or the literal `none` when nothing is built
+yet; no source-file paths or code symbols outside `## Construction`. Add a row to the README's
+index table — decision one-liner, a status from the README's vocabulary, and the `TC-` claim(s)
+the ADR governs, if any. The shape is reviewer-enforced until the #481 gate lands (see
+[Absent artifacts](#absent-artifacts--do-not-execute)); that is not license to drift from it.
 
 For an `agent-context/` doc, check first whether the construction already has a home — the common
 failure is a second copy that drifts. Extend the existing section rather than opening a new file.
@@ -153,31 +162,11 @@ constraint protects against, and anything you back-ported from the ADR into its 
 
 ---
 
-## Proposed workflow — DO NOT EXECUTE
+## Cutting an existing ADR
 
-> **Blocked on #481 (the ADR shape gate) and the adr-reconciliation plan (PR #479). Nothing in
-> this section is runnable today.** The artifacts it names — `docs/decisions/_TEMPLATE.md`, the
-> `construction:` frontmatter field, `ci/adr-shape-baseline.json`, and `pnpm check:adr` — do not
-> exist anywhere in this repo. If you are an agent executing this skill, **stop here**: everything
-> below is the proposal being tracked, kept in the skill only so it and the plan do not drift.
-> When #481 ships, this section is promoted into the live steps above.
-
-### Proposed: template and `construction:` field
-
-Step 3 would start an ADR from `docs/decisions/_TEMPLATE.md` and keep its six sections in order.
-Frontmatter would set `construction:` to the detail doc that holds the mechanism, or the literal
-`none` when nothing is built yet.
-
-### Proposed: the shape checker
-
-`pnpm check:adr` would enforce the mechanical floor for ADR shape (sections present, `construction:`
-resolves, ratchet respected) and would join the Step 4 verify block. Everything in "Do not write to
-the checker" above applies to it with full force.
-
-### Proposed: cutting an existing ADR (`--cut ADR-NNNN`)
-
-The ratchet in `ci/adr-shape-baseline.json` would list ADRs not yet re-cut. Remove exactly one
-entry per change, and only alongside the feature polish that produced its detail doc.
+With `--cut ADR-NNNN`, re-cut an existing ADR to the required shape. The governing rules are the
+README's cut test and its "Cut is gated on the construction home existing" section: an ADR is cut
+when its detail doc lands, alongside the feature polish that produced it — never speculatively.
 
 1. **Find the construction home.** If none exists, stop — the cut is gated on the home existing.
    Landing an ADR cut with the mechanism unhomed is the failure this whole rule prevents.
@@ -189,11 +178,39 @@ entry per change, and only alongside the feature polish that produced its detail
    `## Constraints on any implementation` with its issue/PR citation.
 4. **Challenge topology masquerading as a constraint.** Rewrite "must use X" into the property or
    failed alternative that made X necessary. If X itself is externally load-bearing, say why.
-5. **Cut construction out**, leaving `## Construction` as pointers only.
+5. **Cut construction out**, leaving `## Construction` as pointers only, and set the
+   `construction:` frontmatter to the home.
 6. **Re-read the remainder using the governing test.** Every surviving sentence should still be
    useful if the current mechanism vanished tomorrow.
-7. **Drop the baseline entry** and verify with `pnpm check:adr`.
+
+There is no ratchet bookkeeping yet: `ci/adr-shape-baseline.json` and `pnpm check:adr` are #481's
+chartered work (see [Absent artifacts](#absent-artifacts--do-not-execute) below). Verify with the
+Step 4 checks and note in your report that the shape was reviewer-checked, not gate-checked.
 
 Amendment sections are a smell: an `## Amendment: …` heading is almost always construction that
 accreted after the decision. Fold its invariant into `## Decision`, its property into
 `## Constraints`, and its mechanism into the home.
+
+---
+
+## Absent artifacts — DO NOT EXECUTE
+
+> **Blocked on #481 (the ADR shape gate). Nothing in this section is runnable today.** The
+> artifacts it names — `ci/adr-shape-baseline.json` and `pnpm check:adr` — do not exist anywhere
+> in this repo; the README (§ "Required shape") deliberately ships the convention
+> reviewer-enforced until a gate lands with a real ratchet (a prototype was withdrawn on review —
+> see `docs/plans/adr-reconciliation.md` §9.6). If you are an agent executing this skill, do not
+> run or simulate anything below. When #481 ships, this section is promoted into the live steps
+> above.
+
+### Proposed: the shape checker
+
+`pnpm check:adr` would enforce the mechanical floor for ADR shape (sections present, `construction:`
+resolves, ratchet respected) and would join the Step 4 verify block. Everything in "Do not write to
+the checker" above applies to it with full force.
+
+### Proposed: the ratchet
+
+`ci/adr-shape-baseline.json` would list ADRs not yet re-cut. A cut would remove exactly one entry
+per change and verify with `pnpm check:adr`. Until it exists, a cut ends at step 6 above, with the
+missing bookkeeping noted in the report.
