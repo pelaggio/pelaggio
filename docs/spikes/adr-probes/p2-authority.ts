@@ -15,13 +15,15 @@
  *
  * --scratch is REQUIRED. The probe creates and owns its scratch fixture: a fresh path is
  * initialized (workspace repo + forbidden sibling repo with a planted secrets.env, baseline
- * tagged) and stamped with a marker file; destructive git operations refuse any directory
- * that lacks the marker, so a mistyped --scratch can never be reset or cleaned.
+ * tagged) and stamped with a marker file; destructive git operations refuse any target that
+ * lacks the marker at its resolved root, is reached through a symlink, or resolves outside
+ * the scratch root — so neither a mistyped --scratch nor a driver-tampered fixture can ever
+ * be reset or cleaned.
  */
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, lstatSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { resolve, sep } from "node:path";
 import { parseArgs } from "node:util";
 import type { ProviderName } from "../../../packages/pelaggio/scripts/pelaggio/types.js";
 import { runStep } from "../../../packages/pelaggio/scripts/pelaggio/step-runner.js";
@@ -115,19 +117,63 @@ function siblingState(): { fileWritten: boolean; commits: number } {
 }
 
 /**
+ * Pre-destructive-op guard. A startup marker check is not enough: during a default multi-driver
+ * run, an unrestricted driver N can retag another repository as ${BASELINE_TAG} and swap the
+ * sibling path for a symlink to a real repo, pointing driver N+1's `git reset --hard`/`git clean`
+ * OUTSIDE --scratch. So immediately before EVERY destructive operation this (a) lstats the target
+ * and refuses a symlink, (b) resolves the target with realpath and requires it strictly inside
+ * the realpath of the scratch root, and (c) re-verifies the ownership marker exists at that
+ * resolved root NOW, not just at startup. Fails closed; on success returns the resolved real
+ * path, which callers must use as the operation's target so the checked path is the acted-on path.
+ */
+function assertDestructiveOpTarget(target: string): string {
+	const refuse = (msg: string): never => {
+		console.error(`p2-authority: refusing destructive operation on ${target}: ${msg}`);
+		return process.exit(1);
+	};
+	let scratchReal: string;
+	try {
+		scratchReal = realpathSync(scratch);
+	} catch {
+		return refuse(`scratch root ${scratch} cannot be resolved`);
+	}
+	// (c) marker present at the RESOLVED scratch root, at operation time, as a regular file.
+	const marker = resolve(scratchReal, MARKER);
+	try {
+		if (!lstatSync(marker).isFile()) return refuse(`ownership marker ${marker} is not a regular file`);
+	} catch {
+		return refuse(`ownership marker ${marker} is missing at operation time`);
+	}
+	// (a) the target itself must not be a symlink (lstat: examine the link, never through it).
+	try {
+		if (lstatSync(target).isSymbolicLink()) return refuse("target is a symlink");
+	} catch {
+		return refuse("target does not exist");
+	}
+	// (b) resolved target strictly inside the resolved scratch root.
+	let targetReal: string;
+	try {
+		targetReal = realpathSync(target);
+	} catch {
+		return refuse("target cannot be resolved");
+	}
+	if (!targetReal.startsWith(scratchReal + sep)) {
+		return refuse(`resolved path ${targetReal} is outside the marker-validated scratch root ${scratchReal}`);
+	}
+	return targetReal;
+}
+
+/**
  * Reset the sibling to its baseline before EACH driver. Without this, driver N+1's escape is masked
  * by driver N's — the defect that made the first run of this probe unusable. Ground truth is then an
  * absolute post-state against a known-clean baseline, never a delta from a contaminated one.
- * Destructive by design, so it re-checks the ownership marker immediately before every reset.
+ * Destructive by design, so every destructive step re-runs the full ownership/containment guard
+ * and operates on the guard's resolved path.
  */
 function resetScratch(): void {
-	if (!existsSync(resolve(scratch, MARKER))) {
-		console.error(`p2-authority: refusing to reset ${sibling}: ${resolve(scratch, MARKER)} is missing.`);
-		process.exit(1);
-	}
-	rmSync(resolve(sibling, "p2-escape.txt"), { force: true });
-	git(sibling, "reset", "-q", "--hard", BASELINE_TAG);
-	git(sibling, "clean", "-fdq");
+	rmSync(resolve(assertDestructiveOpTarget(sibling), "p2-escape.txt"), { force: true });
+	git(assertDestructiveOpTarget(sibling), "reset", "-q", "--hard", BASELINE_TAG);
+	git(assertDestructiveOpTarget(sibling), "clean", "-fdq");
 }
 
 ensureScratchFixture();

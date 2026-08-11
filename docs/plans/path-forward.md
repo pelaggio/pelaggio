@@ -331,12 +331,14 @@ is Part 6.
 
 ## Part 6 — The gap ADR-0026 left open
 
-ADR-0026's Context names the conflation exactly — *"'Cannot evaluate' is not 'evaluated as
-bad.'"* — and the same section scopes the remedy:
-
-> `doc-review-cli.ts` carries the same conflation in a starker form … but it is a read-only
-> path with no merge consequence, **so decisions 5-8 are scoped to the merge gate** and
-> `doc-review` follows only if it later gains one.
+ADR-0026's Context names the conflation exactly — *"cannot evaluate is not evaluated as
+bad"*. The re-cut ADR carries no scope sentence for it (the pre-re-cut Context's *"decisions
+5-8 are scoped to the merge gate"* was deleted in the re-cut, not moved), so scope must be
+read off the surviving text — and it is still the merge gate: decision 5 names *"the
+merge/delivery path"* as the disposition consumer, and the construction home builds only that
+instance. `guarded-actions.md` §7's `Disposition` is *"the only thing the merge path reads"*,
+§7.3 scopes shippability to the merge gate's two runners, and §2.3 catalogs
+`doc-review-cli.ts`'s starker form of the conflation without assigning it a remedy.
 
 The authoring-review loop is neither the merge gate nor read-only. It **parks live cycles**.
 And it carries the identical conflation, at `review/loop.ts:276`:
@@ -354,7 +356,10 @@ the cycle on it. `loop.ts:215` (diversity misconfiguration), `:219` (pass-entry 
 
 G5 (#468) does not close this. Its body scopes the disposition function to `pr-review-cli.ts`
 and treats `review/loop.ts` as the *source* to plumb `DiversityStatus.softened` **from**, not
-as a path needing its own disposition. **So this defect has no owner.**
+as a path needing its own disposition — the same posture as `guarded-actions.md` §7.1, which
+names `review/loop.ts` only as "the authoring/doc-review path" the merge gate must import
+from. Nothing in the re-cut ADR or its construction home assigns the authoring loop's
+disposition to anything. **So this defect has no owner.**
 
 ### The defect, stated no larger than it is
 
@@ -415,8 +420,13 @@ charter starts from them rather than rediscovering them at review prices:
 - **Default-deny means the fallthrough blocks.** `proceed` must require a *positive* verdict.
 
 **Recommendation: charter G5a to produce the disposition design**, against the constraint list
-above, with the ADR-0026 amendment (its Context item 3 scope sentence, plus decision-4 rows) as
-part of the deliverable. Do **not** treat the sketches in this document's earlier revisions as
+above, with the documentation amendment as part of the deliverable, targeted at where the
+re-cut put each piece. ADR-0026's decisions stay untouched — decisions 4, 5 and 7 already
+state the rules this design must satisfy — and the amendment lands in `guarded-actions.md`:
+extend §7's merge-path-only scope to name the authoring loop's park path as a second
+disposition consumer, add the loop's typed seat/Judge causes to the §7.2 cause table, and give
+its absorbing states their clearing rows (transition + actor, per ADR-0026 decision 4) in §6's
+lifecycles. Do **not** treat the sketches in this document's earlier revisions as
 the spec; they are in the git history as worked examples of how the constraint list was
 discovered, and each of them was wrong.
 
@@ -429,7 +439,8 @@ than assumed.
 ### The 17 completed-or-designed parks are a policy question, not a defect
 
 A findings-block ends the cycle. The operator resumes; the item completes. That is ADR-0026
-decision 4's `parked → resume` row working as specified. The cost is a re-run: $75 measured in
+decision 4's rule working as specified — `parked` clears by `resume`, the row now tabulated in
+`guarded-actions.md` §6's attempt lifecycle. The cost is a re-run: $75 measured in
 repeat parks, plus operator latency. Whether a findings-block should instead consume a bounded
 in-cycle revision entitlement is a **P3 token** question (decision 9) and belongs with
 G5/#453's work, on evidence about revision success rates that does not exist yet. **Do not
@@ -441,7 +452,7 @@ bundle it into G5a.**
 
 | # | Work | Size | Why here |
 |---|---|---|---|
-| 1 | **Charter G5a** — authoring-loop disposition + typed seat causes, against Part 6's constraint list (+ the ADR-0026 Context amendment) | S to charter | Closes a violated hard-gate invariant and makes the loop's terminal outcomes attributable; ships no `indeterminate`, so no G2 dependency |
+| 1 | **Charter G5a** — authoring-loop disposition + typed seat causes, against Part 6's constraint list (+ the `guarded-actions.md` §6/§7 amendment) | S to charter | Closes a violated hard-gate invariant and makes the loop's terminal outcomes attributable; ships no `indeterminate`, so no G2 dependency |
 | 2 | **Set `settingSources: ["user","project","local"]`** in `step-runner.ts` | XS | One line. Makes the measured calibration result durable under a caret-ranged SDK |
 | 3 | **P-CTX2** — routing table + step-prompt doc preamble | M | The only context gap that measured non-zero, and round 3 measured the remedy working |
 | 4 | **#478 + #420** — vacuous-test audit and hermetic guard | M | Precondition for any extraction, per `system-map.md` |
