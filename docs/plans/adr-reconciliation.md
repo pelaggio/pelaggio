@@ -37,7 +37,7 @@ PR #482 §K litigated the open product questions on 2026-08-10. They are **settl
 | K6 | Evidence is written durable **at emission**; failed and superseded attempts retain theirs | G |
 | K7 | The metrics/projection surface is a product commitment | G |
 
-K3 and K6 are load-bearing here: K3 means C and D share one probe, and K6 is G's capture obligation stated as a write-time rule. **K6 also precedes K1** — measured on #483, worktree evidence survives today only because the merged→done gap leaves the worktree standing, so a closer that cleans up before the evidence home exists converts a lifecycle bug into provenance loss.
+K3 and K6 are load-bearing here: K3 means C and D share one probe, and K6 is G's capture obligation stated as a write-time rule. **K6 constrains K1's cleanup half**: *the closer may reconcile immediately; it must not remove a worktree until its evidence is durable elsewhere.* The justification is **failed and superseded attempts** — abandoned worktrees no closer ever touches, so promote-at-cleanup cannot cover them and only write-at-emission can. Not a #483 inference: `runShipBookkeeping` has run `git worktree remove --force` (`bookkeeping.ts:284`) on every successful direct-push ship since it landed, destroying identical evidence, so the hazard predates the closer. K1's reconcile half is unblocked today.
 
 ## 2. Candidate architectural constitution
 
@@ -58,10 +58,10 @@ Therefore:
 
 The important architectural property is **explicit lifecycle state and ownership**, not necessarily one universal `LifecycleContract` interface.
 
-Two constructions remain intentionally open for the next probe:
+Two constructions were held open for a probe; **§3 closes the fork on evidence already in hand** — narrow phase functions over a shared typed cycle/run context, not a lifecycle wrapper. The rejected alternative is recorded so the reasoning survives:
 
-1. a small lifecycle wrapper / `StepRun` abstraction around the existing execution seam; or
-2. narrow phase functions over a shared typed cycle/run context.
+1. ~~a small lifecycle wrapper / `StepRun` abstraction around the existing execution seam~~ — rejected: it would have exactly six consumers, each re-specializing it; or
+2. narrow phase functions over a shared typed cycle/run context — **chosen**, with the falsifiers stated in §3.
 
 For example, `plan(ctx) → PlanResult`, `implement(ctx) → ImplementResult`, `review(ctx) → ReviewResult`, `ship(ctx,target) → ShipResult` may prove clearer than a deeply generic `Step<Input, Output, Authority, Recovery, …>`.
 
@@ -71,9 +71,9 @@ For example, `plan(ctx) → PlanResult`, `implement(ctx) → ImplementResult`, `
 
 Agents may propose, implement, inspect, review, and judge. They do not grant themselves authority.
 
-**C1 — the resolution is harness-owned (holds today).** Advancement authority resolves through deterministic harness semantics. Model judgments may be required evidence, but cannot themselves exercise authority to advance. Policy is explicit, inspectable, versioned, and evaluated outside model discretion; its representation is construction.
+**C1 — the resolution is harness-owned (holds by inspection; untested by probe).** No probe exercised C1: P2 tested D (ambient authority) and P5 tested C2 (the state resolved over). It must not enter Stage 3 as evidence-backed. Advancement authority resolves through deterministic harness semantics. Model judgments may be required evidence, but cannot themselves exercise authority to advance. Policy is explicit, inspectable, versioned, and evaluated outside model discretion; its representation is construction.
 
-**C2 — the state resolved over must not be agent-writable — target state.** A deterministic resolution over agent-writable inputs is not harness authority, and C1 is currently violated in production. **Measured on #483 (2026-08-11):** the issue closed one second after merge because GitHub honoured a `Closes #483.` line the **ship agent wrote into the PR body** — no harness code templates one. A model-authored artifact performed a roadmap state transition, which is precisely what C forbids. The surrounding conditions are the same class: P2 measured git mutation succeeding on all three drivers, claims *are* git branches (ADR-0009), `pick` runs with `cwd = MAIN_REPO`, and `attempt-identity.ts` records that its register "is an identity, never an authorization."
+**C2 — the state resolved over must not be agent-writable — target state.** A deterministic resolution over agent-writable inputs is not harness authority, and **C as previously written is currently violated in production**. **Measured on #483 (2026-08-11):** the issue closed one second after merge because GitHub honoured a `Closes #483.` line the **ship agent wrote into the PR body** — no harness code templates one. A model-authored artifact performed a roadmap state transition, which is precisely what C forbids. The surrounding conditions are the same class: P2 measured git mutation succeeding on all three drivers, claims *are* git branches (ADR-0009), `pick` runs with `cwd = MAIN_REPO`, and `attempt-identity.ts` records that its register "is an identity, never an authorization."
 
 C2 is bound to the same probe as D, and §1.5 K3 makes the dependency explicit: the register needs no bespoke mechanism because the authority profile is what makes it unwritable.
 
@@ -137,7 +137,11 @@ Stateful mutations are fenced at the state-owning authority or idempotently reco
 
 The same principle applies to successful external transitions: **a lifecycle transition that completes outside the current process must have an explicit owner/reconciler for the next state.** PR #482's clearest example is production `auto-merge-pr`: GitHub can merge the PR, but no code currently owns `merged → done`; stale quarantine is the accidental reconciler.
 
-**Measured (#483):** the transition does not merely stall — it **tears**. The issue closed via model-authored PR-body prose while `in-progress`, both claim branches and the worktree all persisted, leaving a tracker that reads done over an item still ineligible for re-pick. The owner must therefore be **one** reconciler owning all four transitions atomically, not a per-target tail (a tail is homogeneous with `ShipTarget` only for `direct-push`, where landing completes in-cycle), and it must normalize or suppress model-authored closing keywords at ship time or they will race it.
+**Measured (#483):** the transition does not merely stall — it **tears**. The issue closed via model-authored PR-body prose while `in-progress`, both claim branches and the worktree all persisted, leaving a tracker that reads done over an item still ineligible for re-pick. The fallback does not catch it either: `scanStaleItems` filters `item.status === "open"` (`stale-scan.ts:106`) while `github-issues.ts:64` maps `state === "closed" → "done"`, so the prose does not *race* the stale scan — it removes the item from the fallback's candidate set entirely. The residue is an orphan worktree, local and remote claim branches, a lying `in-progress` label, and evidence stranded where `/tidy` will delete it.
+
+The owner is therefore **one** idempotent reconciler owning all four transitions, `reconcileLanded(item, evidence)`, **exposed as a CLI verb** so any scheduler may invoke it (§1.5 K5) — and *not* sited in the review drain, which requires `review.runner === "local"` (`pipeline.ts:2821`) while the default is `"ci"` (`config.ts:224`). A drain-sited closer would never run on default config, reproducing this defect for every consumer who did not opt into local review, and would miss the `--item N` case where the cycle exits before auto-merge completes.
+
+Its duty is **post-merge reconciliation only**. Suppressing the model-authored `Closes #N` cannot be its job — its trigger is observed forge merge, so it runs *after* the transition and cannot win that race by ordering. That belongs at the ship-decision effect boundary: `ship/decision.ts` already validates the body file's path, symlink status, regular-file-ness and size and validates nothing about its content, so it is one more check in an existing validator chain, plus a matching negative instruction in `.claude/skills/ship/SKILL.md`. No new abstraction.
 
 P2's confinement abort is the failure-side mirror: correct guards strand worktree, branch, and roadmap state and poison subsequent runs.
 
@@ -179,7 +183,7 @@ PR #482 changes the default refactoring posture:
 
 > **Before creating a new abstraction, ask whether a sound existing boundary is merely underspecified. Prefer widening that boundary when doing so restores singular ownership and removes leaked orchestration without making the interface incoherent.**
 
-`ShipTarget` is the canonical current example: it exposes too little, so direct-push/PR-specific lifecycle behavior leaks back into the orchestrator. Widening the target contract is presumptively better than creating a generic shipping framework.
+`ShipTarget` was the canonical example — but the widening does **not** survive its own evidence. The real count is 7 ship-phase branches, one of which is a log-string suffix; `:1755` is a review-policy decision and `:2250` a banner builder outside `runPipeline`. No measured failure is attributed to the inline branching (F2/H measured a lifecycle failure a closer alone closes), the widening would relocate roughly 4 of 7 and leave the PR side inline, and `verify` would be a no-op member on PR targets — the optionality-carries-heterogeneity smell P1 flagged on `RunStepOpts`. **`ShipTarget` stays at three members.** The example survives as a *cautionary* one: widening beats a framework, and still has to be paid for by measured leakage.
 
 The same test applies elsewhere:
 
@@ -188,7 +192,9 @@ The same test applies elsewhere:
 - flow policy: preserve its pure deterministic core rather than delegating policy back through an agent turn;
 - attempt lineage: preserve the semantics; fix durability/join ownership around it.
 
-**The B-construction fork is closed by evidence already in hand.** P1 established that nine heterogeneous activities share the *execution* seam and that the 16 step-indexed maps are config-fanout **orthogonal to B**; #482 established that the six phases are already visually delimited blocks in `runPipeline`. The halves have different shapes — execution is uniform, phases are not — so a generic `Step<Input, Output, Authority, Recovery>` wrapper would have exactly six consumers, each re-specializing it. The smallest construction preserving every property is one `CycleContext` record, one `Record<Step, StepPolicy>` of declared data, six phase functions, and today's `step()` unbundled into thin audit/run/effects wrappers: widening, not a new layer, adding two data records and zero interfaces. No probe is needed to decide this.
+**The B-construction fork is closed by evidence already in hand** — §2.B, §8 and #482 §G/§I are aligned to this, not to a live probe. P1 established that nine heterogeneous activities share the *execution* seam and that the step-indexed maps are config-fanout **orthogonal to B**. The halves have different shapes — execution is uniform, phases are not — so a generic `Step<Input, Output, Authority, Recovery>` wrapper would have exactly six consumers, each re-specializing it. The smallest construction is one `CycleContext` record, one `Record<Step, StepPolicy>`, six phase functions, and today's `step()` unbundled into thin audit/run/effects wrappers: widening, not a new layer.
+
+Two corrections to the payoff, so this does not become an implementation plan on bad figures. **The consolidation is 3, not 11:** only `budgets`, `turnLimits` and `effort` are one-dimensional; the other 8 at `config.ts:77–89` are `Record<string, Partial<Record<Step, T>>>` profile overlays whose resolution is two-dimensional, and they remain a separate dimension. **The phases are not already delimited:** the first `// ──` marker is `pipeline.ts:904`, so 685 lines (38% of `runPipeline`, including the nested `step()` closure at :337) precede any marker, and `:1084` is a mode check rather than a phase. That prologue is where the `CycleContext` god-object risk lives, so the construction carries hard falsifiers: **any `StepPolicy` field meaningful for fewer than three steps means the per-family split wins**, and a `CycleContext` whose field count exceeds the phase count means the closure was renamed rather than decomposed.
 
 A new abstraction must answer: **which concrete duplication, ownership ambiguity, or invalid state disappears because this abstraction exists?**
 
@@ -307,7 +313,7 @@ The rule is: shrinking/superseding an ADR must not orphan the reason a replaceme
 
 Independent of the architecture choice:
 
-1. **TC-014's guarantee outranks its own scope note.** `buildAgentEnv` is correct and unit-tested; the claude path forwards `spawnOpts.env` as the SDK built it. The record already discloses part of this — `trust-claims.yml` `known_limits` scopes the allowlist to "codex today, grok via the ACP client" — but `status: guarantee` and an unqualified mechanism sentence sit above it, so a reader gets a guarantee that silently excludes the default driver. This is a layering defect in the trust record, not an undisclosed false claim, and the remedy is cheaper than re-litigation: route the claude adapter through `buildAgentEnv`, add the per-driver conformance test, and delete the limit. Until then downgrade the claim rather than reword it.
+1. **TC-014's guarantee outranks its own scope note.** `buildAgentEnv` is correct and unit-tested; the claude path forwards `spawnOpts.env` as the SDK built it. `known_limits` names only "codex today, grok via the ACP client", which is **wrong in both directions**: `opencode-provider.ts:438` and `contained-execution.ts:200` also call it, and the claude exclusion appears only by omission. A field that inaccurate cannot carry a softening, so this stands as `gaps.md` G1 records it — a trust-claim failure. The remedy: route the claude adapter through `buildAgentEnv`, add the per-driver conformance test, and delete the limit. Until then downgrade the claim rather than reword it.
 2. **Confinement abort strands claim state across worktree, branch, and roadmap.** This is a missing clearing transition under H/ADR-0026, not a guard failure.
 3. **Production `auto-merge-pr` has no explicit `merged → done` owner.** This is a lifecycle/reconciliation gap, not merely a shipping implementation detail.
 4. **Durable evidence is currently inverted.** Execution receipts/review records may be destroyed with the successful worktree; evidence required for custody needs a durable home.
@@ -338,7 +344,7 @@ Before a replacement ADR lands:
 3. target-state claims with material implementation risk have probe evidence or are clearly recorded as unimplemented decisions;
 4. affected trust claims are rebound or weakened in the same change;
 5. `proposed = decided-unimplemented` is replaced and existing ADRs are re-triaged;
-6. mechanical ADR checks remain narrow; semantic layering stays review/skill territory unless a heuristic proves high-signal. **Open for the next trio, stated as fact rather than pre-decided:** `check:adr` is added to `package.json` but is **not referenced by `.github/workflows/ci.yml`** (which runs `check:skills` and `check:trust`), and its baseline exempts **24 of 26** ADRs — so as shipped it enforces shape on exactly the two files this branch rewrote. Its `construction-leak` rule forbids `*.ts` paths and `symbol()` outside `## Construction` by regex, which is the prose-distorting syntactic proxy this clause warns about: a source path in a Context section is frequently the correct evidence. Either wire it into CI **and drop that rule**, keeping the frontmatter/required-section/construction-home floors, or drop the tooling from this PR and re-land it at Stage 3 once the corpus conforms;
+6. mechanical ADR checks remain narrow; semantic layering stays review/skill territory unless a heuristic proves high-signal. The prototype `check:adr` gate **was removed from this PR** on trio review. Beyond being absent from `.github/workflows/ci.yml` (which runs `check:skills`, `check:trust`, `check:links` and `check:doc-claims`) and exempting 24 of 26 ADRs, its advertised ratchet did not exist: the banner printed "baseline may only shrink" while nothing compared against a prior baseline and `writeBaseline()` re-seeded the exemption set from whatever currently failed — a claimed mechanism whose production path does not implement it, inside the PR that names that pattern as the campaign's headline lesson. Re-land at Stage 3 with a real ratchet and without the `construction-leak` regex, the prose-distorting proxy this clause warns about;
 7. planned-vs-shipped facts in always-loaded/agent-facing docs have production-seam evidence.
 
 Superseded ADRs remain archaeology.

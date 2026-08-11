@@ -98,8 +98,10 @@ whose mechanism does not exist yet; it is not an excuse to leave built mechanism
 
 ## Required shape
 
-New and re-cut ADRs follow [`_TEMPLATE.md`](./_TEMPLATE.md). `pnpm check:adr` enforces the
-mechanical part:
+New and re-cut ADRs follow [`_TEMPLATE.md`](./_TEMPLATE.md). The shape below is the convention;
+a mechanical gate for it is **deliberately not shipped yet** (a prototype was withdrawn on review —
+see `adr-reconciliation.md` §9.6 — because its ratchet did not exist and it would have enforced
+shape on 2 of 26 ADRs). Until one lands with a real ratchet, this is reviewer-enforced:
 
 - frontmatter carries `title`, `status`, `date`, `claims`, and `construction`;
 - `construction` names an existing path (with a resolvable `#anchor` when given) or the literal

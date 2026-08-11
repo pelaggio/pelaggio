@@ -18,7 +18,6 @@
 		"check:trust": "node --import tsx ci/verify-claims.ts",
 		"check:links": "node --import tsx ci/verify-links.ts",
 		"check:doc-claims": "node --import tsx ci/verify-doc-claims.ts",
-		"check:adr": "node --import tsx ci/verify-adr-shape.ts",
 		"trust:generate": "node --import tsx ci/trust-manifest.ts --write",
 		"format": "biome check --write",
 		"prepare": "lefthook install"
