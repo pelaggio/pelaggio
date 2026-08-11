@@ -359,6 +359,35 @@ zero valid cells, yet must resolve to `block` and `indeterminate` respectively. 
 aggregate evidence value cannot distinguish them, so default-deny classification is only
 implementable if each cell's failure cause survives into the disposition input.
 
+#### Aggregation over a mixed matrix is ordered
+
+The cause table classifies one cell. A real matrix mixes them — #428's shape is some cells
+passing, one carrying a real finding, and two transport failures — so precedence has to be
+stated or an implementer is free to re-terminalize real findings, launder them into retry,
+or merge on a partial pass. The disposition function resolves in this order and **stops at
+the first match**:
+
+1. **Any retained blocker → `block` (findings).** Evaluated *before* the availability
+   allowlist: an unavailable cell never clears a blocker, because omission is never
+   refutation. **"Retained" spans prior passes *and* the current one** — every ≥-bar finding
+   that has survived isolated verification and has not been explicitly refuted, including
+   first-pass survivors. Reading it as "carried from a prior pass" would let rule 3 launder
+   a first-pass findings-block sitting alongside transport cells into `indeterminate`, which
+   is precisely the #428 shape this ordering exists to fix.
+2. **Any cell with a non-allowlisted cause → `block`**, per the §7.2 table.
+3. **Any allowlisted `unavailable` cell → `indeterminate`**, provided 1 and 2 did not match.
+4. **All required cells valid and passing, but configured policy unsatisfied → `block`**
+   (reason `policy`, cleared by `operator-remedy`). The live case is
+   `provider-diversity: require` with a softened realization: the matrix is complete and
+   green, and it still must not merge. Stating it explicitly matters because rules 1–3 fail
+   closed on this input only *by omission*, which leaves an implementer without a default.
+5. **All required cells valid and passing, policy satisfied → `merge`.**
+
+A partial pass never merges: rule 4 requires the *required* matrix complete, so a matrix
+short of it falls to 3 (retryable) or 2 (blocking) by cause. Under this order #428 resolves
+to `block` with a live carried blocker — revisable, which is the point — rather than to
+`invalid`, which is terminal.
+
 ### 7.3 `indeterminate` requires a retry actor as a precondition
 
 `indeterminate` is not a disposition that can ship on its own. The two runners have
