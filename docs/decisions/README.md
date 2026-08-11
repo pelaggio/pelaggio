@@ -20,7 +20,7 @@ Numbered from the security audit's implicit-decision candidates.
 | [0005](./0005-auto-merge-safety-via-branch-protection.md) | Auto-merge safety delegated to branch protection (amended by 0025) | accepted (to verify) | `TC-013` |
 | [0006](./0006-no-lifecycle-scripts-in-published-manifests.md) | No install/lifecycle scripts in published manifests | accepted | `TC-004`, `TC-016` |
 | [0007](./0007-signed-tag-provenance-publish.md) | Publish = signed tag + provenance on self-hosted runner | accepted | `TC-005` |
-| [0008](./0008-control-plane-fail-closed.md) | Control plane fails closed (auth required / loopback-only) | proposed | `TC-010` |
+| [0008](./0008-control-plane-fail-closed.md) | Control plane fails closed (auth required on every bind) | proposed | `TC-010` |
 | [0009](./0009-claims-are-git-branches.md) | Claims are git branches; no registry | accepted | — |
 | [0010](./0010-agent-env-allowlist-and-log-scrub.md) | Deny-by-default child env allowlist + secret-scrubbed logs | accepted | `TC-001`, `TC-014` |
 | [0011](./0011-andon-not-dor.md) | Spec quality is runtime Andon, not upstream Definition-of-Ready | proposed | — |

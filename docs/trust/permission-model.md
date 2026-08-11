@@ -19,7 +19,7 @@ Pelaggio's permission model is a manifest-backed description of current capabili
 | `local_read` | Allowed | Read repository files, config, roadmap material, diffs, logs, and plans needed to select, plan, review, or verify work. | Repo/issue/PR text is treated as untrusted input. | `TC-015` |
 | `worktree_write` | Allowed for mutating steps | Edit files and run commands in the item worktree. | By default, a post-step audit fails on main-checkout or sibling changes. Dirty-main mode uses Claude tool-window attribution or Codex workspace exclusion for main and retains sibling auditing. | `TC-011`, `TC-015` |
 | `remote_mutation` | PR open allowed; default-branch push and auto-merge denied by default | Open PRs, push branches, optionally direct-push or auto-merge with explicit `ship.target`. | Auto-merge gate verification is planned; external branch protection owns enforcement today. | `TC-003`, `TC-012`, `TC-013` |
-| `control_plane.spawn_run` | Denied unless server is intentionally reachable and authenticated | Start/pause/resume/stop supervised runs through HTTP. | Non-loopback host refuses to start without `CONTROL_PLANE_TOKEN`; loopback dev can run tokenless with warning. | `TC-010` |
+| `control_plane.spawn_run` | Denied unless server is intentionally reachable and authenticated | Start/pause/resume/stop supervised runs through HTTP. | Every host, including loopback, refuses to start without `CONTROL_PLANE_TOKEN`. | `TC-010` |
 
 ## Pipeline Steps
 

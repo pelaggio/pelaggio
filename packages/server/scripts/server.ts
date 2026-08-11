@@ -11,9 +11,6 @@ import { StateStore } from "../src/state-store.js";
 import { Supervisor } from "../src/supervisor.js";
 
 const cfg = loadServerConfig();
-if (cfg.token === undefined) {
-	console.warn(`pelaggio-server: CONTROL_PLANE_TOKEN is unset — running unauthenticated on loopback (${cfg.host}). Set CONTROL_PLANE_TOKEN to require bearer auth.`);
-}
 // Exclusive ownership of the state path before any registry/store work so a
 // duplicate instance fails before touching other files. Release on exit so
 // orderly shutdown does not leave residue; crash residue is reclaimed on the

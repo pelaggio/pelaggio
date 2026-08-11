@@ -43,6 +43,7 @@ The invariants below share one spine: **determinism lives in the harness (mechan
 - Rate-limit paths must park through `parkExit()` so uncommitted work is checkpointed.
 - `ship.target` owns direct-push vs PR behavior. Do not hardcode merge behavior in TypeScript or skills.
 - PR candidate blockers may be removed only by a complete, valid isolated verification report; verifier failure retains them.
+- The daemon is an authenticated authority boundary: `CONTROL_PLANE_TOKEN` is required on every bind, including loopback; only non-authority surfaces (health, the public trust manifest, and the static UI shell) bypass bearer auth.
 - Claims are git-native (`feat/<id>` branch); roadmap mutations self-serialize on `.dev/roadmap-mutation.lock`. Don't add call-site locking or a claims registry.
 - Access the roadmap via `npx pelaggio roadmap ...`; skills never read roadmap storage or issue trackers directly.
 - Review artifacts through the harness, never by shelling out to a provider CLI (`codex exec`, `grok -p`) for an ordinary review: the harness owns provider plumbing (ACP permission auto-approval, subprocess stdin) and bypassing it degrades *silently* — grok exits 0 with an empty review, codex hangs on stdin. Direct CLI use stays legitimate for provider development and pinned conformance work (`docs/agent-context/acp-grok-protocol.md`).

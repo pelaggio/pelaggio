@@ -9,6 +9,7 @@ function baseEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
 	return {
 		AUTOPILOT_SERVER_HOST: "127.0.0.1",
 		AUTOPILOT_SERVER_PORT: "7777",
+		CONTROL_PLANE_TOKEN: "test-token",
 		...extra,
 	};
 }
@@ -90,8 +91,12 @@ describe("loadServerConfig", () => {
 		}
 	});
 
-	it("fails closed: unset token + non-loopback host is refused", () => {
-		assert.throws(() => loadServerConfig(baseEnv({ AUTOPILOT_SERVER_HOST: "100.64.0.1" }), { webDistDefault: join(tmpdir(), "no-such-dist") }), /CONTROL_PLANE_TOKEN/);
+	it("fails closed when the token is unset, including on loopback", () => {
+		for (const host of ["127.0.0.1", "localhost", "::1", "100.64.0.1"]) {
+			for (const token of [undefined, ""]) {
+				assert.throws(() => loadServerConfig(baseEnv({ AUTOPILOT_SERVER_HOST: host, CONTROL_PLANE_TOKEN: token }), { webDistDefault: join(tmpdir(), "no-such-dist") }), /CONTROL_PLANE_TOKEN is required/, host);
+			}
+		}
 	});
 
 	it("token set on a non-loopback host is unchanged (does not throw; token preserved)", () => {
@@ -101,26 +106,10 @@ describe("loadServerConfig", () => {
 		assert.equal(cfg.token, "s3cret");
 	});
 
-	it("loopback bind without a token is allowed (token undefined)", () => {
-		const cfg = loadServerConfig(baseEnv(), { webDistDefault: join(tmpdir(), "no-such-dist") });
-		assert.equal(cfg.token, undefined);
-	});
-
-	it("loopback aliases without a token are allowed (localhost, ::1)", () => {
-		for (const host of ["localhost", "::1"]) {
-			assert.doesNotThrow(() => loadServerConfig(baseEnv({ AUTOPILOT_SERVER_HOST: host }), { webDistDefault: join(tmpdir(), "no-such-dist") }));
-		}
-	});
-
-	it("fails closed: 127.*-prefixed hostnames are not loopback (Node resolves them, could bind routable)", () => {
-		for (const host of ["127.example.com", "127.0.0.1.example.com", "127."]) {
-			assert.throws(() => loadServerConfig(baseEnv({ AUTOPILOT_SERVER_HOST: host }), { webDistDefault: join(tmpdir(), "no-such-dist") }), /CONTROL_PLANE_TOKEN/, host);
-		}
-	});
-
-	it("a valid 127.0.0.0/8 IPv4 literal without a token is allowed", () => {
-		for (const host of ["127.0.0.1", "127.1.2.3"]) {
-			assert.doesNotThrow(() => loadServerConfig(baseEnv({ AUTOPILOT_SERVER_HOST: host }), { webDistDefault: join(tmpdir(), "no-such-dist") }), host);
+	it("token set on loopback hosts is unchanged", () => {
+		for (const host of ["127.0.0.1", "127.1.2.3", "localhost", "::1"]) {
+			const cfg = loadServerConfig(baseEnv({ AUTOPILOT_SERVER_HOST: host }), { webDistDefault: join(tmpdir(), "no-such-dist") });
+			assert.equal(cfg.token, "test-token", host);
 		}
 	});
 });

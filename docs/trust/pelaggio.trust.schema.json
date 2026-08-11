@@ -23,7 +23,7 @@
       "properties": {
         "ship_target": { "enum": ["pull-request", "direct-push"] },
         "telemetry": { "enum": ["off", "on"] },
-        "control_plane_auth": { "enum": ["required_or_loopback_only", "optional"] }
+        "control_plane_auth": { "enum": ["required", "optional"] }
       }
     },
     "capabilities": {
