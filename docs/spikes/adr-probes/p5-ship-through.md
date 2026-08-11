@@ -43,8 +43,8 @@ they will race it.
 
 ## F / G — the destruction case is untestable here
 
-The dossier is **byte-identical** before and after merge: 7 durable / 2 mutable-join / 4
-unanswerable. Nothing was destroyed because nothing cleaned up — worktree destruction exists only on
+The dossier is **identical** before and after merge: **6 durable / 3 mutable-join / 4
+unanswerable** (corrected — see the retraction below; the run originally reported 7/2/4). Nothing was destroyed because nothing cleaned up — worktree destruction exists only on
 `direct-push`, where `runShipBookkeeping` removes it.
 
 Two consequences. First, **K6 is a precondition for K1, not a parallel track**: today's production
@@ -54,10 +54,34 @@ home exists converts a lifecycle bug into provenance loss. Second, the plan's pr
 "capture-at-boundary provenance … including successful worktree destruction" tests a path production
 never takes; scope it to `direct-push` or to the post-closer world.
 
-**F5 is stronger than written.** Run from main against a live item whose worktree still existed, the
-assembler reports `receipts: 3 (0 present on disk)`: the durable cycle log cites paths that resolve
-only inside the worktree while `MAIN_REPO/.dev/execution-receipts/` is empty. The join is broken
-*before* destruction; ship merely makes it permanent.
+### Retracted: "the receipt join is broken before destruction"
+
+This report originally claimed F5 was *stronger than written* — that the assembler's
+`receipts: 3 (0 present on disk)` showed the cycle log citing unresolvable referents even while the
+worktree still existed. **That was wrong, and it was an artifact of this probe's own instrument.**
+`ExecutionReceiptDescriptor.path` is documented worktree-relative (`types.ts:67`) and every pipeline
+item works in a sibling worktree, but `p3-dossier.ts` resolved receipts under the main repo only —
+so `present: false` was guaranteed regardless of the truth. Corrected, item 483 reports
+`receipts: 3 (3 present on disk)`: the receipts were exactly where their contract says they are.
+
+Caught by the cold gate reviewing this branch (codex, isolated-verified), after the claim had been
+written into two documents and reported as measured. The disconfirming evidence — a directory
+listing showing all four receipts in the worktree — was in hand at the time and not connected to
+the zero.
+
+**What survives is F5 as originally written:** receipts and review records live under
+`WORKTREE/.dev` and are destroyed with the worktree at ship (`bookkeeping.ts:284`). Item 481
+demonstrates it — its worktree was removed during this campaign's own cleanup and its receipt now
+reports `1 (0 present on disk)`, unrecoverable. The claim is that ship destroys the evidence, not
+that the reference was already dangling.
+
+**Two further instrument defects, found by the same review and fixed:** the assembler derived steps,
+provenance and cost from `records[records.length - 1]` only, silently dropping failed and superseded
+attempts — the exact conflation F is about, inside the probe that measures F; and it classified
+reviewer history as *durable* from an unfiltered count of every gate record in the store, without
+selecting this item. Correcting that moves the answer to `mutable-join` and the totals from
+7/2/4 to **6/3/4**. Earlier citations of 7/2/4 in this campaign, including P3's, should be read as
+that instrument's output rather than as measurements.
 
 **A new unanswerable:** *what caused each lifecycle transition.* The ship-authored PR body that
 closed the issue lived in `.dev/ship/pr-body-483.md`, now deleted; the cause survives only as

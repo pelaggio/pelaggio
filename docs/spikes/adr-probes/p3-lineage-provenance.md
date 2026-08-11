@@ -37,6 +37,16 @@ something self-contained on `main`. I/J therefore remain unexercised here.
 Run against the fresh #481 lineage, and against #435 (which predates the #457 park-cause and #467
 attempt-identity work) as a comparison:
 
+> **Instrument correction (added after P5).** The assembler these figures come from had three
+> defects, found by the cold gate reviewing this branch: it resolved worktree-relative receipt paths
+> (`types.ts:67`) under the main repo, derived steps/provenance/cost from the last cycle record only
+> (dropping the failed and superseded attempts this probe exists to distinguish), and classified
+> reviewer history as durable from an unfiltered count of every gate record in the store. Corrected,
+> #481 scores **6 durable / 2 mutable-join / 5 unanswerable**, not 5/2/5, and #483 scores 6/3/4. The
+> shape of the finding is unchanged — the charter and landing authorization remain mutable-joins, and
+> the same four answers remain unanswerable — but treat the individual numbers as this instrument's
+> output rather than as measurements.
+
 | | durable | mutable-join | unanswerable |
 |---|---|---|---|
 | **#481** (post-#457, post-#467) | **7** | 2 | 4 |

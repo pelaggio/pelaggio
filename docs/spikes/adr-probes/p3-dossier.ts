@@ -51,21 +51,45 @@ function cycleRecords(): Record<string, any>[] {
 
 function attemptRecords(): string[] {
 	const dir = resolve(repo, ".dev/attempts", item.toLowerCase().replace(/[^a-z0-9._-]+/gi, "-"));
-	return existsSync(dir) ? readdirSync(dir).sort() : [];
+	// `<n>.json` are the attempt records; `.marks/<n>` are empty O_EXCL high-water marks. Counting
+	// the directory wholesale counts the marks dir as an attempt and over-reports by one.
+	return existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith(".json")).sort() : [];
 }
 
-function receipts(records: Record<string, any>[]): { step: string; path: string; sha256: string; present: boolean }[] {
+/**
+ * `ExecutionReceiptDescriptor.path` is **worktree-relative** (`types.ts:67`), and every pipeline
+ * item works in a sibling worktree — so resolving it under the main repo reports `present: false`
+ * for every receipt regardless of the truth. An earlier revision of this probe did exactly that,
+ * and the resulting "0 present on disk" was read as evidence that the receipt join was broken
+ * before worktree destruction. It was an instrument artifact; the receipts were where their
+ * contract says they are. Resolve against the item worktree first, then the main repo.
+ */
+function receipts(records: Record<string, any>[], worktree: string | null): { step: string; path: string; sha256: string; present: boolean; root: string | null }[] {
 	return records
 		.flatMap((r) => (r.steps ?? []).map((s: any) => ({ step: s.name, receipt: s.executionReceipt })))
 		.filter((s) => s.receipt)
-		.map((s) => ({ step: s.step, path: s.receipt.path, sha256: s.receipt.sha256, present: existsSync(resolve(repo, s.receipt.path)) }));
+		.map((s) => {
+			const roots = [worktree, repo].filter((r): r is string => !!r);
+			const root = roots.find((r) => existsSync(resolve(r, s.receipt.path))) ?? null;
+			return { step: s.step, path: s.receipt.path, sha256: s.receipt.sha256, present: root !== null, root };
+		});
+}
+
+/** The item worktree, if it still exists — receipts and review records live under it, not main. */
+function itemWorktree(): string | null {
+	const guess = resolve(repo, "..", `pelaggio-${item.toLowerCase()}`);
+	return existsSync(guess) ? guess : null;
 }
 
 const records = cycleRecords();
 const last = records[records.length - 1];
-const steps: any[] = last?.steps ?? [];
+// Lineage spans EVERY cycle record for the item, not just the last. Reading only the final record
+// silently drops failed and superseded attempts — the exact conflation F is about, in the probe
+// that measures F. `last` is retained only where the question is genuinely about the final state.
+const steps: any[] = records.flatMap((r: any) => r.steps ?? []);
 const attempts = attemptRecords();
-const rcpts = receipts(records);
+const worktree = itemWorktree();
+const rcpts = receipts(records, worktree);
 
 const answers: Answer[] = [
 	// The charter lives in the roadmap adapter's store (a GitHub issue here), which is mutable and
@@ -76,7 +100,22 @@ const answers: Answer[] = [
 	{ question: "under what authority / sandbox profile?", source: "unanswerable", from: "no authority profile is declared or recorded per step (see P2)", value: null },
 	{ question: "what did each step and attempt produce?", source: "durable", from: "steps[].filesChanged + executionReceipt", value: steps.map((s) => ({ step: s.name, files: s.filesChanged ?? null, receipt: s.executionReceipt?.sha256?.slice(0, 12) ?? null })) },
 	{ question: "what deterministic checks ran?", source: "unanswerable", from: "check invocations are inside step execution; no typed record of which gates ran", value: null },
-	{ question: "what did reviewers find, and how were findings fixed/refuted?", source: "durable", from: ".dev/doc-review-records + .dev/pr-review-gate-records (PR-keyed)", value: existsSync(resolve(repo, ".dev/pr-review-gate-records")) ? readdirSync(resolve(repo, ".dev/pr-review-gate-records")).length : 0 },
+	// Gate records are keyed `<pr>-<headSha>` and carry `itemId`; an unfiltered COUNT of every record
+	// in the store answers nothing about this item and would report unrelated reviews as evidence.
+	// Select by itemId, and report what the records actually carry: a gate disposition, not findings.
+	// Findings live in the rendered PR comment (mutable), so the resolution half stays a mutable-join.
+	(() => {
+		const dir = resolve(repo, ".dev/pr-review-gate-records");
+		const mine = existsSync(dir)
+			? readdirSync(dir).filter((f) => f.endsWith(".json")).map((f) => { try { return JSON.parse(readFileSync(resolve(dir, f), "utf8")); } catch { return null; } }).filter((r: any) => r && String(r.itemId) === item)
+			: [];
+		return {
+			question: "what did reviewers find, and how were findings fixed/refuted?",
+			source: (mine.length > 0 ? "mutable-join" : "unanswerable") as Source,
+			from: mine.length > 0 ? ".dev/pr-review-gate-records carries the DISPOSITION for this item; the findings and their resolution live only in the rendered PR comment" : "no gate record for this item",
+			value: mine.map((r: any) => ({ pr: r.prNumber, head: String(r.headSha ?? "").slice(0, 7), gate: r.gate, survivors: r.survivorCount })),
+		};
+	})(),
 	// Split deliberately: park CAUSE became durable with #457, but ATTEMPT LINEAGE (supersession,
 	// which attempt produced which output) needs the #467 registry. An item that ran before it has
 	// the former and not the latter, so one verdict for both would be wrong in one direction.
