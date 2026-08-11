@@ -22,6 +22,7 @@ When adapting skills for Codex: keep workflow instructions provider-neutral wher
 - `shakedown`: review plans or code and fix issues.
 - `charter`: create a new work item.
 - `decompose`: propose a human-approved split of an oversized (L/XL) parent into S/M children and close the parent after create (charter creates one item; decompose splits one).
+- `document`: author or revise a repo document in its lane (ADR, agent-context, trust, AGENTS.md).
 - `ship`: finalize, push, and clean up completed work.
 - `shipwreck`: recover a failed direct-push ship attempt.
 - `pickup`: rebuild context for in-progress work.
@@ -29,6 +30,7 @@ When adapting skills for Codex: keep workflow instructions provider-neutral wher
 - `tidy`: prune stale worktrees and clean roadmap state.
 - `bump-models`: refresh Claude model IDs in config.
 - `pr-review`: fresh-session CI merge-gate review.
+- `pr-verify`: fresh-session adversarial verification of candidate PR blockers.
 
 `sync` (`npx pelaggio sync`) diffs installed skills against the package and prompts overwrite/skip/merge per file. It is a consumer CLI, not a pipeline step.
 
