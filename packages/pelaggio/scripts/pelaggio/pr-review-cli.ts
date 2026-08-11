@@ -202,9 +202,13 @@ function renderPass(pass: ReviewPass): string {
 		});
 		return [heading, "", escapeMarkdown(pass.report.summary), "", ...(findings.length > 0 ? findings : ["No findings."])].join("\n");
 	}
-	// Show what the parser actually read, not `result.text` — otherwise a chunk-reassigning provider
-	// renders a different body than the one that failed to parse (#484 review).
-	const text = modelAuthoredText(pass.result).trim();
+	// Deliberately `result.text`, NOT `modelAuthoredText`. Rendering the accumulated assistant text
+	// would publish every assistant turn into a public PR comment and the CI log, and the review
+	// workflow hands the seat inherited credentials — a prompt-injected PR could induce an
+	// intermediate token echo, then invalid output, and exfiltrate them even when the final message
+	// is benign (#484 red-team, isolated-verified). The cosmetic mismatch on a chunk-reassigning
+	// provider (this shows the final chunk; the parser read the accumulation) is the cheaper defect.
+	const text = pass.result.text.trim();
 	const partial = text ? ["", "Partial review output (untrusted and possibly incomplete):", "", `<pre>${escapeHtml(text)}</pre>`] : [];
 	return [heading, "", `${escapeMarkdown(pass.diagnostic ?? `Run did not complete cleanly (${pass.result.subtype}).`)} Failing this pass closed.`, ...partial].join("\n");
 }
