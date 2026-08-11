@@ -9,10 +9,10 @@ standing caveats: [`README.md`](./README.md).
 | **E** — drivers are interchangeable intelligence adapters | [P1](./p1-step-contract.md) | driver-specific concern on the shared contract | `RunStepOpts.onChildSpawn` = *"register the Claude SDK child PID"* | **Falsified (narrow)** | E needs a constraint: no driver-specific field on the shared step contract |
 | **C/D** — harness retains authority; execution has no ambient authority | [P2](./p2-authority.md) | a driver bypasses an authority the harness claims to own, or safety depends on a driver's native hook | 6 axes × 3 drivers on the real `runStep` seam. Only harness-enforced control: env allowlist, and **only on codex + grok**. Claude child returned a non-allowlisted parent env var, disk-confirmed | **Falsified** | D is aspirational, not implemented. Label it target-state or wire ADR-0023 into `runStep` first |
 | **E** — harness safety must not depend on Claude-shaped hooks | [P2](./p2-authority.md) | as above | The mirror image: the harness's own control is *absent* on Claude, present on codex/grok/opencode | **Falsified (inverted)** | Constrain: every driver adapter must route through the harness's authority construction |
-| **F** — run/attempt lineage preserves WIP without conflating it with accepted output | P3 | resume requires replay; failed WIP indistinguishable from accepted output | pending — subject is item **#481** | pending | — |
-| **G** — self-contained source provenance without transcript storage | P3 | provenance answers require mutable joins, or degenerate into transcripts | pending | pending | — |
-| **I/J** — review in authoring; independence is a property of execution | P3 | cold evaluation receives undeclared author state | pending — see caveat 4 (`sessionResume` false everywhere → satisfied by construction) | pending | — |
-| **K** — semantic reconciliation is a tractable delivery obligation | P4 | unbounded research task; sprays edits; cannot separate construction from architecture | pending | pending | — |
+| **F** — run/attempt lineage preserves WIP without conflating it with accepted output | [P3](./p3-lineage-provenance.md) | resume requires replay; failed WIP indistinguishable from accepted output | Attempt 1 (confinement-aborted) and attempt 2 both durable in `.dev/attempts/481/`; implement checkpoint stayed distinct from accepted output; quarantine is its own terminal state | **Supported** | None. F holds as written |
+| **G** — self-contained source provenance without transcript storage | [P3](./p3-lineage-provenance.md) | provenance answers require mutable joins, or degenerate into transcripts | **6 of 12 questions not durable** — 2 mutable-join, 4 unanswerable. The charter itself (G's own first question) lives in an editable issue body. Transcript signal did **not** fire | **Falsified** | G needs a *capture-at-the-boundary* obligation, not just a schema. Do not weaken the definition to match |
+| **I/J** — review in authoring; independence is a property of execution | [P3](./p3-lineage-provenance.md) | cold evaluation receives undeclared author state | **Untested** — the run quarantined at `implement` on a chartering error, never reaching review. Caveat 4 stands regardless | **Untested** | Do not record as passing. Re-run on a self-contained item |
+| **K** — semantic reconciliation is a tractable delivery obligation | [P4](./p4-reconciliation.md) | unbounded research task; sprays edits; cannot separate construction from architecture | No signal fired. 0/8 spraying, 0 silent rewrites, 6/6 correct canonical owner. But **2/8 missed entirely**, both architecture/trust changes | **Supported (tractability only)** | Autonomy untested — P4 measured reconstruction, not an agent. Predicted failure was noise; observed failure is silence |
 
 ## Trust-lane consequence
 
@@ -23,3 +23,26 @@ application.** The claim needs re-evidencing at the call sites or downgrading fr
 
 This is the campaign's first result that changes something outside the ADR set, and it was found by
 a probe designed to falsify rather than to demonstrate.
+
+
+## Recommended amendments to A–K
+
+Only where evidence requires them. Everything else in A–K is left alone.
+
+| Invariant | Amendment | Evidence |
+|---|---|---|
+| **B** | Split into an *execution* contract (ships, carries 9 activities) and a *lifecycle* contract (does not exist). Recording both as one invariant hides that half is aspirational | P1 |
+| **D** | Mark target-state, or wire ADR-0023 containment into `runStep` before constitutionalizing. "No ambient authority" describes nothing on today's step path | P2 |
+| **E** | Add the inverted constraint: *every driver adapter must route through the harness's authority construction; a path that bypasses it is not a conforming adapter.* Also: *no driver-specific field on the shared step contract* | P1 (`onChildSpawn`), P2 (`buildAgentEnv` absent on claude) |
+| **G** | Add a capture-at-the-boundary obligation: the charter is snapshotted at claim and the landing authorization mirrored at ship. Without it, G's own first question needs the mutable join it forbids | P3 |
+| **J** | Do not read as implying containment. The cold path is the *least* protected, not the most — it is isolation from author context, carrying no authority boundary | P2 |
+| **K** | Tune for the observed failure, not the predicted one. Escalation on architecture/trust changes is the load-bearing half; noise suppression is not the problem | P4 |
+
+**A, C, F, H, I** need no amendment on this evidence. F is the only invariant a probe actively
+supported rather than merely failing to falsify.
+
+## Campaign cost
+
+P1 $0 (static) · P2 $2.37 across two runs (one discarded for a probe defect) · P3 $7.11 across four
+cycles (three lost to stranded claim state, see [G5](./gaps.md#g5)) · P4 $0 (read-only).
+**Total ≈ $9.48.**
