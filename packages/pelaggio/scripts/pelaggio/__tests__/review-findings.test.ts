@@ -154,7 +154,7 @@ describe("parseReviewVerification", () => {
 		assert.throws(() => parseReviewVerification(verification([{ candidateId: "C1", decision: "refuted", rationale: "Concrete single-line repository evidence." }])), ReviewFindingsParseError);
 		// A genuine refutation still parses.
 		const real = parseReviewVerification(verification([{ candidateId: "C1", decision: "refuted", rationale: "pr-review-cli.ts:443 already parses the tail block." }]));
-		assert.equal(real.decisions[0].decision, "refuted");
+		assert.equal(real.decisions.at(0)?.decision, "refuted");
 	});
 
 	it("takes the FINAL verification block and rejects one followed by prose", () => {
@@ -164,7 +164,7 @@ describe("parseReviewVerification", () => {
 		// Unlike findings, a second verification block stays invalid: "last one wins" would let a late
 		// refutation clear a real blocker, which is the fail-OPEN direction.
 		assert.throws(() => parseReviewVerification(`${refuted}\n\nCorrection:\n${survives}`), ReviewFindingsParseError);
-		assert.equal(parseReviewVerification(survives).decisions[0].decision, "survives");
+		assert.equal(parseReviewVerification(survives).decisions.at(0)?.decision, "survives");
 	});
 
 	it("binds the pr-verify example sentinel to the packaged SKILL.md", () => {

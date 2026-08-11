@@ -401,8 +401,8 @@ function assertNotSchemaExample(summary: string | undefined, findings: ReadonlyA
  * A seat whose early draft block makes the pass invalid fails closed, which is the correct
  * direction; making that case merely non-fatal is an operability question, not this fix.
  */
-function assertBlockAtTail(text: string, match: RegExpExecArray | RegExpMatchArray, label: string): void {
-	const end = (match.index ?? 0) + match[0].length;
+function assertBlockAtTail(text: string, match: RegExpMatchArray, label: string): void {
+	const end = (match.index ?? 0) + (match[0]?.length ?? 0);
 	if (text.slice(end).trim() !== "") throw new ReviewFindingsParseError(`${label} block is not the final model-authored output (a non-report answer follows it)`);
 }
 
@@ -552,13 +552,14 @@ export function parseJudgeReport(text: string): JudgeReport {
 
 export function parseReviewFindings(text: string): ReviewFindingsReport {
 	const matches = [...text.matchAll(REPORT_RE)];
-	if (matches.length === 0) throw new ReviewFindingsParseError("review findings block not found");
+	const match = matches[0];
+	if (!match) throw new ReviewFindingsParseError("review findings block not found");
 	if (matches.length !== 1) throw new ReviewFindingsParseError("multiple review findings blocks found");
-	assertBlockAtTail(text, matches[0], "review findings");
+	assertBlockAtTail(text, match, "review findings");
 
 	let parsed: unknown;
 	try {
-		parsed = JSON.parse(matches[0][1]);
+		parsed = JSON.parse(match[1] ?? "");
 	} catch (error) {
 		throw new ReviewFindingsParseError("review findings block is not valid JSON", { cause: error });
 	}
@@ -580,13 +581,14 @@ export function parseReviewFindings(text: string): ReviewFindingsReport {
 
 export function parseReviewVerification(text: string): ReviewVerificationReport {
 	const matches = [...text.matchAll(VERIFICATION_RE)];
-	if (matches.length === 0) throw new ReviewFindingsParseError("review verification block not found");
+	const match = matches[0];
+	if (!match) throw new ReviewFindingsParseError("review verification block not found");
 	if (matches.length !== 1) throw new ReviewFindingsParseError("multiple review verification blocks found");
-	assertBlockAtTail(text, matches[0], "review verification");
+	assertBlockAtTail(text, match, "review verification");
 
 	let parsed: unknown;
 	try {
-		parsed = JSON.parse(matches[0][1]);
+		parsed = JSON.parse(match[1] ?? "");
 	} catch (error) {
 		throw new ReviewFindingsParseError("review verification block is not valid JSON", { cause: error });
 	}
