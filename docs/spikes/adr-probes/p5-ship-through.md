@@ -128,7 +128,7 @@ defeat and a green result remains weak evidence.
    the same fail-open direction #484 closed for verification, **pre-existing on `main`**.
 2. Parrot guards are exact-string and non-fuzzy; a one-character near-miss parses. Deliberate, but
    undecided — accept as documented residual or strengthen.
-3. `p3-dossier.ts` over-counts attempts (it counts `.marks/<n>` as an attempt).
+3. ~~`p3-dossier.ts` over-counts attempts~~ — **fixed on this branch**, along with the three defects in the retraction above (main-relative receipt resolution, last-record-only lineage, unfiltered reviewer count, and the `.marks/` over-count).
 4. The `renderPass` diagnostic mismatch remains open: the safe version needs scrub plus truncation.
 5. #418 (`assistantText` cross-provider conformance) moves up — the cold gate's parse source now
    depends on a contract G3 recorded as provider-divergent.

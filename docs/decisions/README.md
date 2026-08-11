@@ -98,12 +98,19 @@ whose mechanism does not exist yet; it is not an excuse to leave built mechanism
 
 ## Citing a decision
 
-Cite by **name**, not by number alone: *ADR-0026 decision 3 (`blocking state is typed and
-recoverable`)*, or for an unnumbered clause, *ADR-0026's `a time lease is not liveness`
-constraint*. Numbers move when an ADR is re-cut, and a citation that carries only a number does
-not dangle when that happens — it **mis-resolves onto a different rule, silently**. That is what
-the ADR-0026 re-cut did to 29 citations across 9 files, including shipped source, and it is why
-this convention exists.
+**Decision numbers are stable and are never reused.** When a re-cut absorbs a decision into
+another, demotes it to construction, or promotes it to a constraint, the slot stays and is marked
+*withdrawn* in place with a pointer to what now carries its rule. Surviving decisions keep their
+original numbers.
+
+The reason is that a stale numeric citation does not dangle — it **mis-resolves onto a different
+rule, silently**, and no tool reports it. The 2026-08 ADR-0026 re-cut renumbered ten decisions to
+six with different subjects and broke roughly forty citations across nine documents *and shipped
+source*; a hand sweep failed twice before the numbering was restored instead. Renumbering is not
+worth what it costs to verify.
+
+Where a citation is load-bearing, also name the rule — *ADR-0026 decision 4 (`blocking state is
+typed and recoverable`)* — so a future mis-resolution is visible to a reader rather than silent.
 
 ## Required shape
 

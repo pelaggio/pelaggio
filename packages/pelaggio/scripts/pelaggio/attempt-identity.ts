@@ -2,8 +2,7 @@ import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 /**
- * Attempt identity (#467 / ADR-0026's *attempt freshness must be unforgeable by the agent*
- * constraint, property 1).
+ * Attempt identity (#467 / ADR-0026 decision 10, property 1).
  *
  * A cycle's `runId` is derived from its cycle number, and a resume recomputes that number
  * from scratch — `cycle: results.length + i + 1` is 1 for a fresh `--resume`, exactly as it
@@ -21,7 +20,7 @@ import { join, resolve } from "node:path";
  * operation that is atomic across processes without a lock. Two concurrent allocators
  * cannot receive the same n; the loser's create fails EEXIST and it advances.
  *
- * SCOPE, stated because the ADR is stricter than this module: that constraint requires three
+ * SCOPE, stated because the ADR is stricter than this module: decision 10 requires three
  * properties, and this delivers only the first.
  *  1. Atomic allocation — here.
  *  2. An agent-INACCESSIBLE authoritative register with anti-rollback freshness — NOT here.

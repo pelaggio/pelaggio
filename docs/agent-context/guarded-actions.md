@@ -162,7 +162,7 @@ later, in a different cycle.
 
 Two things fall out.
 
-**`review-request-queue.ts` supplies the contract** (but see ADR-0026's *a time lease is not liveness* constraint — its own
+**`review-request-queue.ts` supplies the contract** (but see ADR-0026 decision 3 — its own
 four-hour fixed leases carry the time-lease fail-open this document criticises elsewhere,
 so the shape is the template, not the implementation). It already has every property the
 rest of the system lacks: an idempotency key `(prNumber, headSha)`; a claim protocol (atomic

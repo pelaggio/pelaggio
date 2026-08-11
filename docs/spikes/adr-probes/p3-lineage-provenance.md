@@ -49,8 +49,11 @@ attempt-identity work) as a comparison:
 
 | | durable | mutable-join | unanswerable |
 |---|---|---|---|
-| **#481** (post-#457, post-#467) | **7** | 2 | 4 |
+| **#481** (post-#457, post-#467) | **6** | 2 | 5 |
 | #435 (pre-#467) | 5 | 2 | 5 |
+
+Both rows are the *corrected* assembler's output (the #481 row read 7/2/4 before the three
+instrument defects above were fixed). #435 predates the run and is left as originally recorded.
 
 The same assembler shows provenance completeness **measurably improving** as those items landed —
 attempt lineage and park cause moved from unanswerable to durable.

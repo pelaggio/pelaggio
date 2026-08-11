@@ -123,7 +123,7 @@ const answers: Answer[] = [
 	{ question: "what attempt lineage / supersession occurred?", source: attempts.length > 0 ? "durable" : "unanswerable", from: attempts.length > 0 ? ".dev/attempts/<item>/ registry (#467)" : "no attempt registry for this item — predates #467, so supersession is unrecoverable", value: attempts },
 	{ question: "why was the final candidate authorized to land?", source: "mutable-join", from: "branch-protection status checks on GitHub — not mirrored into lineage", value: null },
 	{ question: "what exact commit/tree resulted?", source: "durable", from: "provenance.git (branch, mainShaAtStart, worktree)", value: last?.provenance?.git ?? null },
-	{ question: "what did it cost?", source: "durable", from: "steps[].cost + total_cost", value: { total: last?.total_cost ?? null, estimated: last?.costEstimated ?? null } },
+	{ question: "what did it cost?", source: "durable", from: "sum of every cycle record's total_cost for this item — NOT the last record only", value: { total: records.reduce((sum: number, r: any) => sum + (r.total_cost ?? 0), 0), estimated: records.some((r: any) => r.costEstimated), cycles: records.length } },
 	{ question: "what semantic surfaces were reconciled?", source: "unanswerable", from: "no reconciliation capability exists (K is unimplemented)", value: null },
 ];
 

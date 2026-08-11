@@ -18,12 +18,22 @@ The durable decision is the semantic rule replacements must preserve. The concre
 
 ## Decision
 
+Numbering is **stable**: these are the original ten decision slots. Four were absorbed into
+surviving decisions or demoted to construction by the 2026-08 re-cut and are marked *withdrawn* in
+place, with a pointer to what carries their rule. They are not renumbered, because a citation that
+carries only a number does not dangle when numbering moves — it mis-resolves onto a different rule,
+silently. See [`README.md`](./README.md#citing-a-decision).
+
 1. **Every load-bearing guarded action is fenced or reconciled.** A fence is enforced by the authority that owns the state; a reconciled effect is idempotent and converges under an observer. Anything else is a hint and may not carry correctness.
 2. **Derived exclusivity is valid only while its authoritative claim remains valid.** A derived target does not create authority of its own; if the derivation or liveness premise fails, the action loses the exclusivity guarantee.
-3. **Blocking state is typed and recoverable.** Every absorbing state without progress names the transition that can clear it and the actor authorized to perform that transition. Completion is not required to have a recovery edge.
-4. **Judgment, evidence completeness, and disposition are distinct.** Agent/model output is evidence or judgment. Harness authority resolves the resulting disposition under explicit policy and typed causes. The merge/delivery path consumes the disposition, not raw model output.
-5. **Unavailable evidence cannot erase an unresolved blocker.** Disposition is default-deny over typed causes; omission is not refutation. A blocker survives until complete, valid verification explicitly removes it.
-6. **A retryable/indeterminate outcome is bounded and actionable.** It exists only where a retry actor is actually available; it never represents success, and exhaustion becomes a blocking state with a named clearer.
+3. *(withdrawn — construction.)* The reconciler **contract** (idempotency key, claim-with-crash-recovery, liveness-gated reclaim) is construction and lives in [`guarded-actions.md`](../agent-context/guarded-actions.md). Its durable half is the constraint *a time lease is not liveness*, below.
+4. **Blocking state is typed and recoverable.** Every absorbing state without progress names the transition that can clear it and the actor authorized to perform that transition. Completion is not required to have a recovery edge.
+5. **Judgment, evidence completeness, and disposition are distinct.** Agent/model output is evidence or judgment. Harness authority resolves the resulting disposition under explicit policy and typed causes. The merge/delivery path consumes the disposition, not raw model output.
+6. *(withdrawn — absorbed into 5.)* "Evidence is completeness, not diversity" — `complete | partial | unavailable` describes how much of the required matrix ran, never how varied it was. Carried by decision 5 and by the evidence/cause matrix in `guarded-actions.md`.
+7. **Unavailable evidence cannot erase an unresolved blocker.** Disposition is default-deny over typed causes; omission is not refutation. A blocker survives until complete, valid verification explicitly removes it.
+8. **A retryable/indeterminate outcome is bounded and actionable.** It exists only where a retry actor is actually available; it never represents success, and exhaustion becomes a blocking state with a named clearer.
+9. *(withdrawn — construction.)* Quota and token are two primitives, not one: quota (dollars) is divisible and refundable, a token is not. Carried by the quota/token primitives in `guarded-actions.md` §7.3.
+10. *(withdrawn — promoted to a constraint.)* "Attempt identity is an authority, not a naming convention" is now the constraint *attempt freshness must be unforgeable by the agent*, below, because it binds any implementation rather than describing one.
 
 ## Constraints on any implementation
 

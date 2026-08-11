@@ -89,7 +89,7 @@ Observed as four consecutive failed cycles ($0.19, $0.09, $0.26, then the real r
 the previous one's debris. Every guard fired correctly; none has a clearing transition wired to it.
 Recovery required manual action in both git and GitHub with no single command.
 
-This is the ADR-0026 decision 3 shape (*blocking state is typed and recoverable*) — an absorbing-without-progress state with no exit — appearing
+This is the ADR-0026 decision-4 shape — an absorbing-without-progress state with no exit — appearing
 in the claim/pick path, which that decision currently scopes out.
 
 **Also observed:** the diverted pick marked the wrong item `in-progress` **before** the guard refused
@@ -157,7 +157,7 @@ should carry per-decision status.
 
 **Severity:** documentation integrity / trust. **Found by:** P4.
 
-- **#475** implements ADR-0026's *attempt freshness must be unforgeable* constraint; neither the ADR status nor `guarded-actions.md` was
+- **#475** implements ADR-0026 decision 10; neither the ADR status nor `guarded-actions.md` was
   updated, so both still describe attempt identity as target-state.
 - **#427** pinned third-party workflow actions to immutable commit SHAs — a supply-chain posture
   change under ADR-0007 / `TC-005`. No trust document records it.

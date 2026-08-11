@@ -54,7 +54,7 @@ Sort that table by maintenance cost and a clean line appears:
   - **The audit's one protective catch (#435) is the case `blockForeignRootWrite` missed** —
     `pick` runs with `cwd=MAIN_REPO`, and `foreignRoots.delete(cwdAbs)` exempts it. The first
     draft proposed keeping the guard that failed and discarding the guard that worked.
-  - **Bash is outside the semantic hook entirely** (`pipeline.md`), and ADR-0026's attempt-freshness constraint
+  - **Bash is outside the semantic hook entirely** (`pipeline.md`), and ADR-0026 decision 10
     rates the Bash string guard defence-in-depth only.
   - **OpenCode declares `isolation: []`** and `blockForeignRootWrite` is Claude-only, so
     dropping the audit leaves that provider with **no enforced isolation at all**.
@@ -136,7 +136,7 @@ preserve the verified-landing contract.
 design with a recorded incident justifying it.
 
 **Transfer with mandatory corrections, not as-is:** the `review-request-queue` reconciler must
-adopt ADR-0026's *a time lease is not liveness* constraint and its two fixes — liveness-gated reclaim instead of the heartbeat-less
+adopt ADR-0026 decision 3's two fixes — liveness-gated reclaim instead of the heartbeat-less
 four-hour lease, and idempotent-or-fenced terminal effects. Copying its current shape is what
 that decision calls "adopting its bug".
 
@@ -175,7 +175,7 @@ preferences — such providers are still seated. Recording an uncalibrated drive
 would let it run anyway, which is not fail-closed. The probe needs a distinct
 **ineligible/unavailable** outcome plus an admission rule that excludes the seat.
 
-*Corrected:* the first draft cited an `evidence: degraded` axis in ADR-0026 decision 4 (*judgment, evidence completeness and disposition are distinct*). **No
+*Corrected:* the first draft cited an `evidence: degraded` axis in ADR-0026 decision 6. **No
 such value exists** — decision 6 defines evidence as `complete | partial | unavailable`,
 computed from matrix completeness *independently of cause*, and putting provider degradation
 there would recreate the evidence/disposition conflation decision 7 exists to prevent. I wrote
