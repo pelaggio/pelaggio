@@ -202,7 +202,9 @@ function renderPass(pass: ReviewPass): string {
 		});
 		return [heading, "", escapeMarkdown(pass.report.summary), "", ...(findings.length > 0 ? findings : ["No findings."])].join("\n");
 	}
-	const text = pass.result.text.trim();
+	// Show what the parser actually read, not `result.text` — otherwise a chunk-reassigning provider
+	// renders a different body than the one that failed to parse (#484 review).
+	const text = modelAuthoredText(pass.result).trim();
 	const partial = text ? ["", "Partial review output (untrusted and possibly incomplete):", "", `<pre>${escapeHtml(text)}</pre>`] : [];
 	return [heading, "", `${escapeMarkdown(pass.diagnostic ?? `Run did not complete cleanly (${pass.result.subtype}).`)} Failing this pass closed.`, ...partial].join("\n");
 }
@@ -271,7 +273,7 @@ export function buildComment(
 	const cost = results.reduce((sum, result) => sum + result.cost, 0);
 	const turns = results.reduce((sum, result) => sum + result.turns, 0);
 	// Durable, aggregatable precision signal — appended by the CLI, never seen by
-	// the report parser (which reads the agent's `result.text`, not this comment).
+	// the report parser (which reads the agent's model-authored text, not this comment).
 	const baseMetrics = formatReviewMetrics(gate, ok, subtype, cost, turns);
 	const agreementToken = convergence?.agreement ? ` agreement=${convergence.agreement}` : "";
 	const metrics = convergence
