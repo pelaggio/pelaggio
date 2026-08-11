@@ -63,15 +63,22 @@ export class Supervisor {
 		const id = ulid();
 		const logPath = resolve(this.logDir, `${id}.log`);
 		const args = this.buildArgs(opts, resumedFrom);
+		const env: NodeJS.ProcessEnv = {
+			...process.env,
+			PELAGGIO_REPO: repoCwd,
+			PELAGGIO_PLAIN: "1",
+			PELAGGIO_EXECUTION_ID: id,
+			PELAGGIO_EVENT_STREAM_ID: id,
+		};
+		// The daemon requires CONTROL_PLANE_TOKEN (config.ts), but nothing a run
+		// executes consumes it, and children (including SDK subprocesses) inherit
+		// this env; strip it so prompt-injected code in the run's subtree cannot
+		// read the credential and call back into the control-plane API. Server
+		// host/port vars are not credentials and pass through untouched.
+		delete env.CONTROL_PLANE_TOKEN;
 		const child = this.spawn("pnpm", args, {
 			cwd: repoCwd,
-			env: {
-				...process.env,
-				PELAGGIO_REPO: repoCwd,
-				PELAGGIO_PLAIN: "1",
-				PELAGGIO_EXECUTION_ID: id,
-				PELAGGIO_EVENT_STREAM_ID: id,
-			},
+			env,
 			stdio: ["ignore", "pipe", "pipe"],
 		});
 		const startedAt = this.now().toISOString();

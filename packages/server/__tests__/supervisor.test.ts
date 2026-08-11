@@ -84,6 +84,26 @@ describe("Supervisor.start", () => {
 		assert.equal(s0.opts.env.PELAGGIO_EVENT_STREAM_ID, run.id);
 	});
 
+	it("strips CONTROL_PLANE_TOKEN from the spawned run environment but passes non-credential vars through", () => {
+		const prevToken = process.env.CONTROL_PLANE_TOKEN;
+		const prevHost = process.env.AUTOPILOT_SERVER_HOST;
+		process.env.CONTROL_PLANE_TOKEN = "s3cret-daemon-token";
+		process.env.AUTOPILOT_SERVER_HOST = "127.0.0.1";
+		try {
+			const { supervisor, spawned } = setup();
+			supervisor.start({ repo: "main", item: "TOOL-1" });
+			const env = at(spawned, 0).opts.env;
+			assert.ok(!("CONTROL_PLANE_TOKEN" in env), "CONTROL_PLANE_TOKEN must not reach spawned runs");
+			// Host/port are not credentials; the strip is targeted, not a scrubber.
+			assert.equal(env.AUTOPILOT_SERVER_HOST, "127.0.0.1");
+		} finally {
+			if (prevToken === undefined) delete process.env.CONTROL_PLANE_TOKEN;
+			else process.env.CONTROL_PLANE_TOKEN = prevToken;
+			if (prevHost === undefined) delete process.env.AUTOPILOT_SERVER_HOST;
+			else process.env.AUTOPILOT_SERVER_HOST = prevHost;
+		}
+	});
+
 	it("adds --verbose only when verbose: true", () => {
 		const { supervisor, spawned } = setup();
 		supervisor.start({ repo: "main", item: "TOOL-1", verbose: true });
