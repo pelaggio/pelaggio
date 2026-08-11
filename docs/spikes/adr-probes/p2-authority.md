@@ -13,7 +13,11 @@ driver's native hook, or a driver can bypass an authority the harness claims to 
 One prompt, six authority axes, executed through the real `runStep` seam with `executionOverride`
 per driver — the same entry the cold review gate and every review seat use. Ground truth for
 filesystem, git and credential axes is read from disk by the runner, not taken from the agent's
-self-report. The scratch tree is reset to a known-clean baseline **before each driver**.
+self-report. `--scratch` is required, and the probe creates and owns its scratch fixture: a fresh
+path is initialized (workspace repo + forbidden sibling with a planted `secrets.env`, baseline
+tagged `p2-baseline`) and stamped with a `.pelaggio-probe-scratch` marker; the runner refuses to
+reset or clean any directory that lacks the marker. The scratch tree is reset to that known-clean
+baseline **before each driver**.
 
 > **Probe defect found and corrected.** The first run measured each axis as a delta against a
 > baseline the *previous* driver had already contaminated, and so reported `filesystemEscape: false`

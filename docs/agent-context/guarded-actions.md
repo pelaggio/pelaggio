@@ -298,18 +298,24 @@ Judgment = { seat: SeatId, judgment: "pass" | "block", rationale: string }
 // a VALID result. Nothing to do with provider diversity.
 Evidence  = "complete" | "partial" | "unavailable"
 
+// Every blocking variant names its clearing transition AND the actor authorized
+// to fire it (§6 invariant; ADR-0026: "the clearing actor belongs to the
+// blocking state").
+ClearedBy = { transition: ClearingTransition, actor: ClearingActor }
+
 // Deterministic function of (judgments, evidence, diversityStatus, config).
 // This is the only thing the merge path reads.
 type Disposition =
   | { kind: "merge" }
-  | { kind: "block";         reason: BlockReason;      clearedBy: ClearingTransition }
-  | { kind: "indeterminate"; cause: UnavailableCause;  clearedBy: ClearingTransition;
+  | { kind: "block";         reason: BlockReason;      clearedBy: ClearedBy }
+  | { kind: "indeterminate"; cause: UnavailableCause;  clearedBy: ClearedBy;
                              retryActor: RetryActor;   attemptsRemaining: number }
 ```
 
 `merge` carries no clearing transition (it is progress). `block` and `indeterminate` both
-*require* one — a discriminated union, so the §6 invariant is enforced by the compiler
-rather than by an optional field every call site can fill with a stub.
+*require* one, with its authorized actor — a discriminated union, so the §6 invariant is
+enforced by the compiler rather than by an optional field every call site can fill with a
+stub.
 
 ### 7.1 Evidence is not diversity
 

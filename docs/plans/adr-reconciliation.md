@@ -282,7 +282,7 @@ The rule is: shrinking/superseding an ADR must not orphan the reason a replaceme
 
 | ADR | Disposition | Invariant / constraint that survives | Carried by | Construction home |
 |---|---|---|---|---|
-| 0001 worktree write confinement | **cut** | observed-effect gate; no correctness dependence on parsing tool intent; ambiguity violates | self | `pipeline.md` § Worktree Isolation ✅ |
+| 0001 worktree write confinement | **cut** | observed-effect gate; no correctness dependence on parsing tool intent; ambiguity violates | self | `pipeline.md` § Effects Manifests ✅ |
 | 0002 untrusted input/tool scope | **cut** | untrusted content cannot grant authority | self | *home needed* |
 | 0003 PR-gated default | **demote** | safe default may remain PR | policy | config |
 | 0004 review gate / shakedown parsing | **cut**, amended by 0026 | irreversible advancement fails closed; parse-invalid remains signal; role-appropriate parsing may differ | self | gate half in `guarded-actions.md`; shakedown home needed |

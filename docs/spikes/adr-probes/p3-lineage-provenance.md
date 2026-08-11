@@ -34,8 +34,8 @@ something self-contained on `main`. I/J therefore remain unexercised here.
 
 ## Dossier result
 
-Run against the fresh #481 lineage, and against #435 (which predates the #457 park-cause and #467
-attempt-identity work) as a comparison:
+Run against the fresh #481 lineage, and against #435 (which predates the #467 attempt-identity
+work) as a comparison:
 
 > **Instrument correction (added after P5).** The assembler these figures come from had three
 > defects, found by the cold gate reviewing this branch: it resolved worktree-relative receipt paths
@@ -43,20 +43,23 @@ attempt-identity work) as a comparison:
 > (dropping the failed and superseded attempts this probe exists to distinguish), and classified
 > reviewer history as durable from an unfiltered count of every gate record in the store. Corrected,
 > #481 scores **6 durable / 2 mutable-join / 5 unanswerable**, not 5/2/5, and #483 scores 6/3/4. The
-> shape of the finding is unchanged — the charter and landing authorization remain mutable-joins, and
-> the same four answers remain unanswerable — but treat the individual numbers as this instrument's
-> output rather than as measurements.
+> shape of the finding is unchanged — the charter and landing authorization remain mutable-joins,
+> the same four answers remain unanswerable, and the reviewer-findings answer joins them (its
+> durable reading was the unfiltered-count defect) — but treat the individual numbers as this
+> instrument's output rather than as measurements.
 
 | | durable | mutable-join | unanswerable |
 |---|---|---|---|
 | **#481** (post-#457, post-#467) | **6** | 2 | 5 |
-| #435 (pre-#467) | 5 | 2 | 5 |
+| #435 (pre-#467) | 5 | 2 | 6 |
 
-Both rows are the *corrected* assembler's output (the #481 row read 7/2/4 before the three
-instrument defects above were fixed). #435 predates the run and is left as originally recorded.
+Both rows are the *corrected* assembler's output over thirteen answers (the #481 row read 7/2/4
+before the three instrument defects above were fixed); #435's lineage predates the run and is read
+as it stands on disk.
 
 The same assembler shows provenance completeness **measurably improving** as those items landed —
-attempt lineage and park cause moved from unanswerable to durable.
+attempt lineage moved from unanswerable to durable (park cause reads durable on both rows: #435's
+cycle records already carry the #457 `parked` field).
 
 ### What cannot be answered durably today
 
@@ -67,6 +70,7 @@ attempt lineage and park cause moved from unanswerable to durable.
 | what context and skill were supplied? | **unanswerable** | skill bodies are expanded into the prompt; no prompt or skill digest is recorded per step |
 | under what authority / sandbox profile? | **unanswerable** | no authority profile is declared or recorded per step — consistent with P2 |
 | what deterministic checks ran? | **unanswerable** | check invocations happen inside step execution; no typed record of which gates ran |
+| what did reviewers find, and how were findings fixed/refuted? | **unanswerable** on #481, **mutable-join** on #483 | the gate record carries only the disposition; findings and their resolution live in the rendered PR comment — and #481 never reached `pr-review`, so it has no record at all |
 | what semantic surfaces were reconciled? | **unanswerable** | K is unimplemented |
 
 ## Verdicts
@@ -78,13 +82,16 @@ terminal state, and no resume pretended an LLM execution could be replayed. The 
 that "failed WIP becomes indistinguishable from accepted output" did not materialize.
 
 **G — falsified as written.** G requires the dossier to be "sufficient to answer, **without mutable
-external joins**" a list of twelve questions. Six cannot be answered durably today, and the very
-first item on G's own list — what was chartered — is among them. A charter that lives in an editable
-issue body is precisely the mutable external state G forbids relying on.
+external joins**", the provenance questions it lists — thirteen answers as the assembler splits them
+(park cause and attempt lineage/supersession are classified separately, because one verdict for both
+would be wrong in one direction). Seven of the thirteen cannot be answered durably today — two
+mutable-joins and five unanswerable — and the very first item on G's own list — what was chartered —
+is among them. A charter that lives in an editable issue body is precisely the mutable external
+state G forbids relying on.
 
-**G's other signal did not fire.** Nothing degenerated into transcript storage: the seven durable
+**G's other signal did not fire.** Nothing degenerated into transcript storage: the six durable
 answers come from structured records (`pelaggio-log.jsonl`, execution receipts, the attempt
-registry, review records). Telemetry and provenance stayed distinct. **G is achievable — it is just
+registry). Telemetry and provenance stayed distinct. **G is achievable — it is just
 not achieved**, and the gap is specific and small rather than architectural.
 
 **I/J — untested.** See coverage above, and standing caveat 4: with `sessionResume` false on every

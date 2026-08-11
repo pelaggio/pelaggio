@@ -4,7 +4,8 @@
  * P3 — Change Dossier assembler (throwaway spike scaffolding).
  *
  * Assembles source provenance for one item from DURABLE artifacts only, and classifies each of the
- * twelve questions G requires the dossier to answer:
+ * thirteen answers it assembles for G's required provenance questions (park cause and attempt
+ * lineage/supersession are classified separately — see the inline note at that answer):
  *
  *   durable      — answered from local append-only/content-addressed state
  *   mutable-join — answerable only by reading provider sessions, GitHub, or another mutable source
@@ -23,6 +24,12 @@ import { parseArgs } from "node:util";
 
 const { values } = parseArgs({ options: { item: { type: "string" }, repo: { type: "string" }, json: { type: "boolean" } } });
 const item = values.item ?? "";
+// The item id is joined into filesystem paths (attempt registry, sibling-worktree guess), so an
+// unvalidated value like `../../.ssh` would traverse out of them. Closed pattern, hard error.
+if (!/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(item)) {
+	console.error(`p3-dossier: --item is required and must match [A-Za-z0-9][A-Za-z0-9-]* (got ${JSON.stringify(item)})`);
+	process.exit(1);
+}
 const repo = resolve(values.repo ?? "/home/chris/workspace/pelaggio");
 
 type Source = "durable" | "mutable-join" | "unanswerable";

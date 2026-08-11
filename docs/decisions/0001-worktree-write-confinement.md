@@ -3,7 +3,7 @@ title: "ADR-0001: Writes confined to the item's worktree"
 status: accepted
 date: 2026-07-08
 claims: [TC-011]
-construction: docs/agent-context/pipeline.md#worktree-isolation
+construction: docs/agent-context/pipeline.md#effects-manifests
 ---
 
 # ADR-0001 — Writes confined to the item's worktree
@@ -42,4 +42,4 @@ An operator may relax the gate for *main* only — never for siblings — on ite
 
 ## Construction
 
-`docs/agent-context/pipeline.md` § Worktree Isolation — the snapshot/diff mechanism and its `error_confinement` outcome, the two confinement tiers and the provider-specific main protection each uses, bounded snapshot-execution retries, absent-root sentinels, and mid-step probe timing and cancellation.
+`docs/agent-context/pipeline.md` § Effects Manifests — the snapshot/diff mechanism and its `error_confinement` outcome, the two confinement tiers and the provider-specific main protection each uses, bounded snapshot-execution retries, absent-root sentinels, and mid-step probe timing and cancellation. (§ Worktree Isolation in the same file documents only the advisory PreToolUse layer, which this ADR's third constraint forbids counting as the gate.)

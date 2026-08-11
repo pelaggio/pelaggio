@@ -29,7 +29,7 @@ derived from the four-lane routing, and the result compared against what the PR 
 | 446 | Agent Driver / provider change | per-step model + effort parity, 4 providers | `docs/config.md` | `config.md` + `decision-log/431` | ✅ correct owner |
 | 442 | provenance change | PR-keyed review-gate record | `docs/pr-review.md` | `pr-review.md` + `decision-log/328` | ✅ correct owner |
 | 463 | docs-only | ADR-0026 + collapse plans | decisions / agent-context | 5 docs | ✅ correct owner |
-| **475** | **safety/authority change** | implements **ADR-0026 decision 10** (attempt identity as an authority) | ADR-0026 status + `guarded-actions.md` | **none** | ❌ **missed** |
+| **475** | **safety/authority change** | ships the **atomic allocation half** of ADR-0026's attempt identity (collision-free runIds) — not the authority half | ADR-0026 status + `guarded-actions.md` | **none** | ❌ **missed** |
 | **427** | **trust / supply-chain** | third-party actions pinned to immutable commit SHAs | `docs/trust/` + ADR-0007 | **none** | ❌ **missed** |
 
 ### Measurements
@@ -48,9 +48,17 @@ Both failures are changes that **realize or alter an architectural or trust clai
 class K says must escalate rather than be handled autonomously. Every change that was purely
 construction or behavior got its canonical owner right.
 
-- **#475** implements ADR-0026's decision 10. That ADR is still `status: proposed`, which this
-  repository defines as *decided, not yet implemented*. Part of it is now implemented. Both
-  `0026` and `guarded-actions.md` still describe attempt identity as target-state.
+- **#475** implements only the *allocation* half of ADR-0026's attempt-identity work — the
+  atomic per-item allocator behind collision-free runIds. Its own module header and
+  `guarded-actions.md` §5 P4 are explicit that the other two properties (an agent-denied
+  register, consumer-side fencing) did **not** ship and that the attempt number "is an
+  identity, never an authorization" — so #475 did not implement attempt identity *as an
+  authority*, and decision 10's promoted form (the *attempt-freshness-unforgeable*
+  constraint) remains unmet. The ADR is still `status: proposed`, which this repository
+  defines as *decided, not yet implemented*, yet part of its construction is now
+  implemented. At the time #475 merged, neither `0026` nor `guarded-actions.md` recorded
+  any of that; `guarded-actions.md`'s #475 status note was added only later, by this
+  campaign's revision.
 - **#427** pinned third-party workflow actions to immutable SHAs — a material supply-chain posture
   change under ADR-0007 / `TC-005`. No trust document records it.
 
@@ -75,11 +83,15 @@ class.** A reconciliation capability tuned to suppress noise would make this wor
 
 ## Independent convergence with the document reviews
 
-ADR-0026's `proposed` status is now wrong in a way the vocabulary cannot express: 1 of its 10
-decisions is implemented. The third trio review reached the same conclusion from the document side
-(finding C17 — redefining `proposed` without re-triaging the ADRs that carry it). P4 reaches it from
-the implementation side. Two independent methods, one defect: **the status vocabulary has no term
-for partially implemented**, and a bundled ADR makes that unavoidable rather than rare.
+ADR-0026's `proposed` status is now wrong in a way the vocabulary cannot express — though by less
+than this document first claimed. No decision of its ten is fully implemented: #475 realized only
+the allocation half of one construction primitive (P4 attempt identity), and the constraint that
+half serves remains unmet. But `proposed` — *decided, not yet implemented* — has no way to say even
+that much, so the finding stands on allocation-only grounds. The third trio review reached the same
+conclusion from the document side (finding C17 — redefining `proposed` without re-triaging the ADRs
+that carry it). P4 reaches it from the implementation side. Two independent methods, one defect:
+**the status vocabulary has no term for partially implemented**, and a bundled ADR makes that
+unavoidable rather than rare.
 
 ## Canonical ownership / dedupe observations
 

@@ -32,7 +32,7 @@ silently. See [`README.md`](./README.md#citing-a-decision).
 6. *(withdrawn — absorbed into 5.)* "Evidence is completeness, not diversity" — `complete | partial | unavailable` describes how much of the required matrix ran, never how varied it was. Carried by decision 5 and by the evidence/cause matrix in `guarded-actions.md`.
 7. **Unavailable evidence cannot erase an unresolved blocker.** Disposition is default-deny over typed causes; omission is not refutation. A blocker survives until complete, valid verification explicitly removes it.
 8. **A retryable/indeterminate outcome is bounded and actionable.** It exists only where a retry actor is actually available; it never represents success, and exhaustion becomes a blocking state with a named clearer.
-9. *(withdrawn — construction.)* Quota and token are two primitives, not one: quota (dollars) is divisible and refundable, a token is not. Carried by the quota/token primitives in `guarded-actions.md` §7.3.
+9. *(withdrawn — construction.)* Quota and token are two primitives, not one: quota (dollars) is divisible and refundable, a token is not. Carried by the quota/token primitives (P2/P3) defined in `guarded-actions.md` §5 and applied in §7.3.
 10. *(withdrawn — promoted to a constraint.)* "Attempt identity is an authority, not a naming convention" is now the constraint *attempt freshness must be unforgeable by the agent*, below, because it binds any implementation rather than describing one.
 
 ## Constraints on any implementation

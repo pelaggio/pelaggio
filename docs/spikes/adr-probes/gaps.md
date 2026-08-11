@@ -141,9 +141,11 @@ time; requires no transcripts.
 
 **Severity:** documentation integrity. **Found by:** P4, and independently by the third trio review.
 
-ADR-0026 is `status: proposed` (*decided, not yet implemented*) while #475 has implemented its
-decision 10. Bundling ten decisions into one ADR makes partial implementation the norm rather than
-an edge case, and the vocabulary has no term for it.
+ADR-0026 is `status: proposed` (*decided, not yet implemented*) while #475 has implemented the
+atomic-allocation half of its attempt-identity construction — decision 10's promoted form, the
+*attempt-freshness-unforgeable* constraint, remains unmet, but part of the construction is real.
+Bundling ten decisions into one ADR makes partial implementation the norm rather than an edge
+case, and the vocabulary has no term for it.
 
 The third trio review reached the same conclusion from the document side (finding C17). Two
 independent methods, one defect.
@@ -157,8 +159,9 @@ should carry per-decision status.
 
 **Severity:** documentation integrity / trust. **Found by:** P4.
 
-- **#475** implements ADR-0026 decision 10; neither the ADR status nor `guarded-actions.md` was
-  updated, so both still describe attempt identity as target-state.
+- **#475** shipped the atomic-allocation half of ADR-0026's attempt identity (never the authority
+  half); neither the ADR status nor `guarded-actions.md` was updated when it merged.
+  `guarded-actions.md` gained its #475 status note only later, from this campaign's revision.
 - **#427** pinned third-party workflow actions to immutable commit SHAs — a supply-chain posture
   change under ADR-0007 / `TC-005`. No trust document records it.
 
