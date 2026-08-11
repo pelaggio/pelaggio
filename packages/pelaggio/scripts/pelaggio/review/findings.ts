@@ -340,26 +340,41 @@ const CANDIDATE_ID_RE = /^C[1-9]\d*$/;
 const JUDGE_RULINGS: readonly JudgeRuling[] = ["fixable-blocker", "unfixable-blocker", "judgment-dissent"];
 const CWE_RE = /^CWE-\d{1,5}$/i;
 
-// The verbatim schema-example placeholder printed in `.claude/skills/pr-review/SKILL.md`
-// (the `AUTHORING_REVIEW_FINDINGS` example block). A seat that echoes the example instead of
-// reviewing would emit a schema-valid `must-fix / correctness-regression` at `src/file.ts:1`,
-// manufacturing a cross-model split and a spurious escalation/park. Reject it fail-closed so the
-// seat is recorded as not-completed rather than as a fabricated blocker. Provider-agnostic: any
-// seat that parrots the example is rejected.
+// The verbatim schema-example placeholders printed in `.claude/skills/pr-review/SKILL.md`
+// (the `AUTHORING_REVIEW_FINDINGS` v3 example and the cold-gate `REVIEW_FINDINGS` v1 example).
+// A seat that echoes either example instead of reviewing would emit a schema-valid report —
+// manufacturing a fabricated blocker or, worse, a fake-clean authorization. Reject it fail-closed
+// so the seat is recorded as not-completed rather than as a real pass/block. Provider-agnostic:
+// any seat that parrots the example is rejected.
 //
 // This guard was originally attributed to the codex seat being "a weaker instruction-follower"
 // that runs one turn and does no inspection. That diagnosis was wrong. The codex seat performs a
 // full review; its first tool call is typically `sed .claude/skills/pr-review/SKILL.md`, and the
 // codex provider folds command OUTPUT into `fullText` — so the example block printed by that
 // `sed` entered the parsed text ahead of the model's real block and tripped this guard on every
-// run. The parse source is now the final assistant message (see selectAuthoringFindingsSource).
+// run. The parse source is now the final assistant message (see modelAuthoredText).
 const EXAMPLE_SUMMARY = "Concise single-line summary.";
-const EXAMPLE_FINDING_MESSAGE = "Concrete single-line finding.";
-const EXAMPLE_FINDING_PATH = "src/file.ts";
+/** Exact (message, path, line) tuples from the packaged v3 and v1 schema examples. */
+const SCHEMA_EXAMPLE_FINDINGS = [
+	{ message: "Concrete single-line finding.", path: "src/file.ts", line: 1 }, // v3 authoring
+	{ message: "Concise single-line finding.", path: "src/file.ts", line: 12 }, // v1 cold-gate
+] as const;
 
-/** Works on raw or classified findings — only message/path/line are compared. */
+/** Works on raw or classified findings — only message/path/line are compared (exact full-tuple match). */
 function isSchemaExampleFinding(finding: Pick<ReviewFinding, "message" | "path" | "line">): boolean {
-	return finding.message === EXAMPLE_FINDING_MESSAGE && finding.path === EXAMPLE_FINDING_PATH && finding.line === 1;
+	return SCHEMA_EXAMPLE_FINDINGS.some((example) => finding.message === example.message && finding.path === example.path && finding.line === example.line);
+}
+
+/**
+ * Fail closed when a seat echoes the packaged schema example (summary and/or finding sentinel).
+ * Trip on either the example summary or any example finding — a real review never emits these
+ * exact placeholders, so this cannot false-positive, and it also catches a fake-clean echo
+ * (example summary, empty findings).
+ */
+function assertNotSchemaExample(summary: string | undefined, findings: ReadonlyArray<Pick<ReviewFinding, "message" | "path" | "line">>, label: string): void {
+	if (summary?.trim() === EXAMPLE_SUMMARY || findings.some(isSchemaExampleFinding)) {
+		throw new ReviewFindingsParseError(`${label} echo the schema example verbatim (the seat did not review the diff)`);
+	}
 }
 
 function parseDelimited(text: string, regex: RegExp, label: string): Record<string, unknown> {
@@ -478,14 +493,9 @@ export function parseAuthoringReviewFindings(text: string): AuthoringReviewRepor
 			findings.push(parseRawAuthoringFinding(value, index));
 		}
 	});
-	// Fail closed on the parroted schema example (see EXAMPLE_* above). The seat did not review;
-	// treat it as an incomplete seat, not a real blocker. Trip on either the example summary or any
-	// example finding — a real review never emits these exact placeholder strings, so this cannot
-	// false-positive, and it also catches a fake-clean echo (example summary, empty findings). The v3
-	// example keeps these same sentinel strings, so the guard covers #293's evidence schema too.
-	if (summary?.trim() === EXAMPLE_SUMMARY || findings.some(isSchemaExampleFinding)) {
-		throw new ReviewFindingsParseError("authoring review findings echo the schema example verbatim (the seat did not review the diff)");
-	}
+	// Fail closed on the parroted schema example (see EXAMPLE_* / assertNotSchemaExample). The seat
+	// did not review; treat it as an incomplete seat, not a real blocker.
+	assertNotSchemaExample(summary, findings, "authoring review findings");
 	return { schemaVersion: 3, summary: summary ?? "", findings };
 }
 
@@ -527,11 +537,14 @@ export function parseReviewFindings(text: string): ReviewFindingsReport {
 	if (parsed.schemaVersion !== 1) throw new ReviewFindingsParseError("unsupported review findings schemaVersion");
 	const summary = parseSingleLine(parsed.summary, "summary");
 	if (!Array.isArray(parsed.findings)) throw new ReviewFindingsParseError("review findings must be an array");
+	const findings = parsed.findings.map(parseFinding);
+	// Fail closed on the parroted cold-gate schema example (same exact-tuple guard as authoring).
+	assertNotSchemaExample(summary, findings, "review findings");
 
 	return {
 		schemaVersion: 1,
 		summary,
-		findings: parsed.findings.map(parseFinding),
+		findings,
 	};
 }
 

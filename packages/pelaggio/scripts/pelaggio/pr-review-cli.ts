@@ -21,6 +21,7 @@ import { upsertMarkerComment } from "./github-posting.js";
 import { classifySecurityReviewDiff, expandPackagedSkill, formatReviewMetrics, parseWaitFlag, resolveParkReset, type SecurityDiffSignal } from "./helpers.js";
 import {
 	evaluateReviewConvergence,
+	modelAuthoredText,
 	parseReviewFindings,
 	parseReviewVerification,
 	type ReviewExhaustionReason,
@@ -439,7 +440,7 @@ async function runReviewPass(iteration: number, label: ReviewLabel, prompt: stri
 		};
 	}
 	try {
-		const report = parseReviewFindings(result.text);
+		const report = parseReviewFindings(modelAuthoredText(result));
 		const gate = reviewFindingsGate(report);
 		return {
 			iteration,
@@ -522,7 +523,7 @@ async function runVerificationPass(
 		return;
 	}
 	try {
-		pass.dispositions = reconcileReviewVerification(candidates, parseReviewVerification(result.text));
+		pass.dispositions = reconcileReviewVerification(candidates, parseReviewVerification(modelAuthoredText(result)));
 		const survives = pass.dispositions.some((disposition) => disposition.decision === "survives");
 		pass.gate = survives ? "block" : "pass";
 		pass.effectiveVerdict = survives ? "block" : "pass";

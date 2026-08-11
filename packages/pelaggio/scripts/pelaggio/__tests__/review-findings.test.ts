@@ -93,6 +93,34 @@ describe("parseReviewFindings", () => {
 		for (const finding of invalid) assert.throws(() => parseReviewFindings(block({ schemaVersion: 1, summary: "Ok.", findings: [finding] })), ReviewFindingsParseError);
 		for (const summary of ["", "two\nlines"]) assert.throws(() => parseReviewFindings(block({ schemaVersion: 1, summary, findings: [] })), ReviewFindingsParseError);
 	});
+
+	it("rejects the SKILL.md schema-v1 example echoed verbatim instead of a real review", () => {
+		// Exact placeholder from `.claude/skills/pr-review/SKILL.md`'s REVIEW_FINDINGS example.
+		// A verbatim echo — especially the fake-clean form with empty findings — would authorize a
+		// merge without a real review. Exact full-tuple match only (not message-only / fuzzy).
+		const echoed = block({
+			schemaVersion: 1,
+			summary: "Concise single-line summary.",
+			findings: [{ severity: "must-fix", message: "Concise single-line finding.", path: "src/file.ts", line: 12 }],
+		});
+		assert.throws(() => parseReviewFindings(echoed), ReviewFindingsParseError);
+		// Fake-clean echo (example summary, no findings) is rejected too.
+		assert.throws(() => parseReviewFindings(block({ schemaVersion: 1, summary: "Concise single-line summary.", findings: [] })), ReviewFindingsParseError);
+		// Example finding under a genuine summary is still rejected.
+		assert.throws(
+			() => parseReviewFindings(block({ schemaVersion: 1, summary: "Reviewed the claim-branch delete gating.", findings: [{ severity: "must-fix", message: "Concise single-line finding.", path: "src/file.ts", line: 12 }] })),
+			ReviewFindingsParseError,
+		);
+		// Genuine report that merely shares the example path (or otherwise differs from the full
+		// sentinel tuple) still parses — guard is exact, not fuzzy.
+		const real = parseReviewFindings(block({ schemaVersion: 1, summary: "Real review.", findings: [{ severity: "must-fix", message: "Token leaked in src/file.ts logging.", path: "src/file.ts", line: 42 }] }));
+		assert.equal(real.findings.length, 1);
+		const nearMiss = parseReviewFindings(block({ schemaVersion: 1, summary: "Real review.", findings: [{ severity: "must-fix", message: "Concise single-line finding.", path: "src/file.ts", line: 99 }] }));
+		assert.deepEqual(
+			nearMiss.findings.map((f) => f.line),
+			[99],
+		);
+	});
 });
 
 describe("parseAuthoringReviewFindings (schema v3)", () => {
