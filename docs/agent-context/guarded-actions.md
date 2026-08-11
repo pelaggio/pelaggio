@@ -213,6 +213,15 @@ and the second is what makes the allocator trustworthy rather than merely atomic
    denies agent writes only under `MAIN_REPO/.dev/sessions/` and `docs/decision-log/`, so
    anywhere else the very agent being fenced can unlink or forge the sequence. The
    allocator must join that denied set, on the same footing as session records.
+
+   *Status (#475, and the ADR's attempt-freshness constraint):* property 1 shipped —
+   `attempt-identity.ts` allocates atomically via O_EXCL under `MAIN_REPO/.dev/attempts/`.
+   Properties 2 and 3 did **not**, and the module says so in its own header: the register is
+   *not* in the denied set, because `blockForeignRootWrite` protects it from worktree steps but
+   not from a main-cwd step or an opaque Bash command — so the attempt number "is an identity,
+   never an authorization." #435 closes that by giving `pick` a bounded fs scope; per #482 §K3
+   the register inherits protection from the authority-profile work rather than getting a
+   bespoke mechanism. Read the paragraph above as the requirement, not as the current state.
 3. *Every effect consumer fences against the current attempt, at the authority.*
    Carrying identity into artifact paths only stops collisions. Inertness requires an
    authority-bound current-attempt compare-and-swap — a superseded attempt must be
@@ -289,18 +298,24 @@ Judgment = { seat: SeatId, judgment: "pass" | "block", rationale: string }
 // a VALID result. Nothing to do with provider diversity.
 Evidence  = "complete" | "partial" | "unavailable"
 
+// Every blocking variant names its clearing transition AND the actor authorized
+// to fire it (§6 invariant; ADR-0026: "the clearing actor belongs to the
+// blocking state").
+ClearedBy = { transition: ClearingTransition, actor: ClearingActor }
+
 // Deterministic function of (judgments, evidence, diversityStatus, config).
 // This is the only thing the merge path reads.
 type Disposition =
   | { kind: "merge" }
-  | { kind: "block";         reason: BlockReason;      clearedBy: ClearingTransition }
-  | { kind: "indeterminate"; cause: UnavailableCause;  clearedBy: ClearingTransition;
+  | { kind: "block";         reason: BlockReason;      clearedBy: ClearedBy }
+  | { kind: "indeterminate"; cause: UnavailableCause;  clearedBy: ClearedBy;
                              retryActor: RetryActor;   attemptsRemaining: number }
 ```
 
 `merge` carries no clearing transition (it is progress). `block` and `indeterminate` both
-*require* one — a discriminated union, so the §6 invariant is enforced by the compiler
-rather than by an optional field every call site can fill with a stub.
+*require* one, with its authorized actor — a discriminated union, so the §6 invariant is
+enforced by the compiler rather than by an optional field every call site can fill with a
+stub.
 
 ### 7.1 Evidence is not diversity
 
@@ -359,6 +374,35 @@ zero valid cells, yet must resolve to `block` and `indeterminate` respectively. 
 aggregate evidence value cannot distinguish them, so default-deny classification is only
 implementable if each cell's failure cause survives into the disposition input.
 
+#### Aggregation over a mixed matrix is ordered
+
+The cause table classifies one cell. A real matrix mixes them — #428's shape is some cells
+passing, one carrying a real finding, and two transport failures — so precedence has to be
+stated or an implementer is free to re-terminalize real findings, launder them into retry,
+or merge on a partial pass. The disposition function resolves in this order and **stops at
+the first match**:
+
+1. **Any retained blocker → `block` (findings).** Evaluated *before* the availability
+   allowlist: an unavailable cell never clears a blocker, because omission is never
+   refutation. **"Retained" spans prior passes *and* the current one** — every ≥-bar finding
+   that has survived isolated verification and has not been explicitly refuted, including
+   first-pass survivors. Reading it as "carried from a prior pass" would let rule 3 launder
+   a first-pass findings-block sitting alongside transport cells into `indeterminate`, which
+   is precisely the #428 shape this ordering exists to fix.
+2. **Any cell with a non-allowlisted cause → `block`**, per the §7.2 table.
+3. **Any allowlisted `unavailable` cell → `indeterminate`**, provided 1 and 2 did not match.
+4. **All required cells valid and passing, but configured policy unsatisfied → `block`**
+   (reason `policy`, cleared by `operator-remedy`). The live case is
+   `provider-diversity: require` with a softened realization: the matrix is complete and
+   green, and it still must not merge. Stating it explicitly matters because rules 1–3 fail
+   closed on this input only *by omission*, which leaves an implementer without a default.
+5. **All required cells valid and passing, policy satisfied → `merge`.**
+
+A partial pass never merges: rule 4 requires the *required* matrix complete, so a matrix
+short of it falls to 3 (retryable) or 2 (blocking) by cause. Under this order #428 resolves
+to `block` with a live carried blocker — revisable, which is the point — rather than to
+`invalid`, which is terminal.
+
 ### 7.3 `indeterminate` requires a retry actor as a precondition
 
 `indeterminate` is not a disposition that can ship on its own. The two runners have
@@ -389,6 +433,14 @@ So the rules are:
 The minimum shippable unit is therefore **`indeterminate` + its retry actor**, scoped to
 the local runner first. That is a correction to the first draft's sequencing, not a
 detail.
+
+*Later correction, carried by ADR-0026 and restated here so this section does not read as
+the whole unit:* the unit is **`indeterminate` + its retry actor + settle-observed quota +
+attempt identity**. Quota and token are two primitives, not one — P2 quota (dollars) is
+divisible and refundable while a P3 token is not — and an evaluation that dies after billing
+has spent real money, so the retry actor is unsound without settle-observed quota beneath it.
+Attempt identity belongs to the same unit because a retry that cannot distinguish its own
+superseded predecessor's artifacts is not a retry.
 
 ## 8. Failure-mode taxonomy to implement against
 

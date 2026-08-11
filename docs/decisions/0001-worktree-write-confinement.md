@@ -3,37 +3,43 @@ title: "ADR-0001: Writes confined to the item's worktree"
 status: accepted
 date: 2026-07-08
 claims: [TC-011]
+construction: docs/agent-context/pipeline.md#effects-manifests
 ---
 
 # ADR-0001 — Writes confined to the item's worktree
 
 ## Context
 
-Runs are unattended and the agent has allow-all tools. It must not corrupt the main checkout or a sibling worktree — and, under injection (`ADR-0002`), a "write to `../main`" instruction must not succeed.
+Runs are unattended and the agent has allow-all tools. It must not corrupt the main checkout or a sibling worktree — and, under injection ([ADR-0002](./0002-untrusted-input-and-tool-scope.md)), a "write to `../main`" instruction must not succeed.
 
-**Before the gate:** confinement was only an advisory `PreToolUse` string-prefix check on `Write`/`Edit`/`Bash` (best-effort, untested). Sibling writes and `cd ../` / `$HOME` / symlink Bash escapes could slip through. That layer remains as an early diagnostic block in `step-runner.ts`; it is not the hard gate.
+Confinement began as an advisory pre-tool check on the paths an agent *asked* to write. That layer is best-effort by construction: it sees the request, not the effect, so sibling writes and `cd ../` / `$HOME` / symlink escapes could slip through it.
 
 ## Decision
 
-Make confinement a **hard gate**: after each step, assert the working tree touched only the item's own worktree, and **fail the step** on violation. Cover sibling worktrees and relative/symlink escapes. Boundary strength is **before/after Git porcelain deltas for enumerated main and sibling worktrees** — not an OS sandbox, command allowlist, or process-lifetime provenance.
+Confinement is a **hard gate on observed effect**, not on requested intent. After each step the harness asserts that the working tree touched only the item's own worktree, and **fails the step** on violation. Enumerated main and sibling roots are in scope; relative and symlink escapes are covered because the gate observes the tree rather than the request.
+
+An operator may relax the gate for *main* only — never for siblings — on item-worktree steps. Under that relaxation, unchanged pre-tool dirtiness is operator-owned, and any delta the harness cannot attribute to the operator is a confinement failure.
+
+## Constraints on any implementation
+
+- **Enforcement must not depend on parsing tool inputs.** Path extraction from tool arguments was tried and rejected (failed PR #112): it is bypassable through shell indirection (`OUT=…; printf x > "$OUT"`). Independence from tool-input path parsing is the load-bearing property, and any replacement mechanism must retain it.
+- **Ambiguity resolves to violation.** A change the gate cannot attribute fails the step. Failure to *execute* the check may be retried a bounded number of times as confirmation of transient interference, but an observed violation is never re-polled away as "maybe transient".
+- **Advisory layers must not be counted as the gate.** Pre-tool path blocks are permitted as an early diagnostic and must never be load-bearing for `TC-011`.
+- **A confinement failure must not be treated as recoverable.** Checkpointing a tree already proven contaminated, then resuming onto it, re-burns spend against state known to be compromised ([ADR-0019](./0019-checkpoint-restart-not-replay.md)).
+- **The guarantee is scoped to observed tree effects, and claims must not outrun it.** This is not an OS sandbox, a command allowlist, or process-lifetime provenance. Writes outside the observation window — detached or background writes after the step, non-Git paths, a main-cwd step's own working directory — are out of scope and must be stated as such.
 
 ## Alternatives not taken
 
-- OS sandbox / containers per step — stronger, but heavy and less portable across harnesses.
-- Tool allowlist — doesn't stop in-worktree Bash reaching out.
-- Path extraction from tool args as the hard gate (failed PR #112 approach) — bypassable via shell indirection (`OUT=…; printf x > "$OUT"`). Independence from tool-input path parsing is the load-bearing property.
+- **OS sandbox / containers per step** — stronger, but heavy and less portable across harnesses. Revisited by [ADR-0023](./0023-contained-execution-boundary.md), which adds containment *around* this gate rather than replacing it.
+- **Tool allowlist** — does not stop in-worktree Bash reaching out.
+- **Path extraction from tool args as the hard gate** — failed PR #112; see the first constraint.
 
 ## Consequences
 
 - (+) Turns the audit's "load-bearing but advisory" boundary into a verifiable guarantee (`TC-011` → `guarantee`).
 - (−) A post-step assertion adds a check per step; escapes must be enumerated and tested.
+- (−) The relaxed-main mode narrows the gate to a per-tool window, so its guarantee there is provider-dependent and strictly weaker than the default. It is an operator opt-in, not a default.
 
-**Implemented as:** the hard gate is the pipeline whole-step Git porcelain audit in `pipeline.ts` (`snapshotForbiddenRoots` / `diffForbiddenRootSnapshots` → `error_confinement`; `#105`, with #111's independence-from-path-parsing intent satisfied by the same mechanism). The advisory PreToolUse path blocks remain an early diagnostic layer only.
+## Construction
 
-## Amendment: concurrent operator edits
-
-The default remains a fail-closed whole-step audit of main plus sibling worktrees. With `confinement.allow-dirty-main: true`, sibling worktrees remain hard-gated, while main uses provider-specific protection for item-worktree steps: Claude compares Git state immediately before and after each mutating tool, and Codex excludes main through its workspace boundary. Unchanged pre-tool dirtiness is operator-owned; a delta or attribution failure is `error_confinement`. A simultaneous operator change inside a tool window is conservatively attributed to the tool. Detached/background changes after the post hook, non-Git paths, and main-cwd steps are outside this attribution mechanism, so it is not process-lifetime provenance or an OS sandbox.
-
-## Amendment: bounded snapshot-execution retries
-
-Snapshot **execution** failures (Git throws, e.g. shared `index.lock` under parallel cycles) may be retried a small fixed number of times inside the snapshot helper before the audit fails closed. This is a mechanism-level confirmation of transient interference, not a policy change to the hard gate: a successful dirty porcelain is never rechecked away, and exhausted attempts still terminate the step as `error_confinement` with the last concrete Git diagnostic. The retry is provider-neutral and shared by the whole-step audit and the main-checkout tool-window observer.
+`docs/agent-context/pipeline.md` § Effects Manifests — the snapshot/diff mechanism and its `error_confinement` outcome, the two confinement tiers and the provider-specific main protection each uses, bounded snapshot-execution retries, absent-root sentinels, and mid-step probe timing and cancellation. (§ Worktree Isolation in the same file documents only the advisory PreToolUse layer, which this ADR's third constraint forbids counting as the gate.)
