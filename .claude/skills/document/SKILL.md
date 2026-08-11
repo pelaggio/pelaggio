@@ -2,23 +2,28 @@
 name: document
 description: Author or revise a repo document in the correct lane — ADR, agent-context, trust, or AGENTS.md — enforcing the three-layer seam so invariants, constraints, and construction each land in their home
 argument-hint: "<what to document> [--adr | --context | --trust | --cut <ADR-NNNN>]"
-allowed-tools: Read Glob Grep Edit Write Bash(pnpm:*) Bash(node:*) Bash(git:*)
+disable-model-invocation: true
+allowed-tools: Read Glob Grep Edit Write Bash(pnpm:*)
+consumer: false
 ---
 
 # /document — Author a Repo Document in Its Lane
 
 > **Status: the governing test and the lane table below track a *proposal*, not a decided
-> constitution.** They mirror `docs/plans/adr-reconciliation.md`, which is pre-decision and has not
-> passed its Stage-3 gate. Use this skill for routing and shape; do not cite it as authority for
-> what is constitutional. If the reconciliation lands differently, this skill changes with it, and
-> anything it produced under the old cut is re-triaged rather than grandfathered.
+> constitution.** They mirror the adr-reconciliation plan (lands with PR #479), which is
+> pre-decision and has not passed its Stage-3 gate. Use this skill for routing and shape; do not
+> cite it as authority for what is constitutional. If the reconciliation lands differently, this
+> skill changes with it, and anything it produced under the old cut is re-triaged rather than
+> grandfathered.
 
 A ship's papers are only useful if each one says the thing it is *for*. This repo has four
 documentation lanes, and the recurring defect is not a missing document — it is content in the
 wrong lane, or the same content in two lanes drifting apart.
 
-Parse `$ARGUMENTS` for the subject and an optional lane flag. With `--cut ADR-NNNN`, run
-**Cutting an existing ADR** below instead of authoring.
+Parse `$ARGUMENTS` for the subject and an optional lane flag. With `--cut ADR-NNNN`: the
+ADR-cutting workflow is part of the proposed shape gate and is **blocked on #481** — do not
+execute it. See [Proposed workflow](#proposed-workflow--do-not-execute) at the end, and report the
+block to the operator instead.
 
 ## The governing test *(proposed — see status note above)*
 
@@ -102,9 +107,13 @@ it implements it.
 
 ## Step 3 — Write it
 
-For an ADR, start from `docs/decisions/_TEMPLATE.md` and keep the six sections in order. Set
-`construction:` to the detail doc that holds the mechanism, or the literal `none` when nothing is
-built yet.
+For an ADR, follow the current convention in `docs/decisions/README.md`: MADR 4.0.0
+(`adr-template-minimal`), numbered sequentially, matching the section shape of a recent ADR in
+that directory rather than inventing structure. Add a row to the README's index table — decision
+one-liner, a status from the README's vocabulary, and the `TC-` claim(s) the ADR governs, if any.
+There is no template file today, and ADR frontmatter has no `construction:` field — that scheme is
+part of the proposal (see [Proposed workflow](#proposed-workflow--do-not-execute)); do not use it
+until #481 lands.
 
 For an `agent-context/` doc, check first whether the construction already has a home — the common
 failure is a second copy that drifts. Extend the existing section rather than opening a new file.
@@ -114,19 +123,61 @@ between them.
 
 ### Do not write to the checker
 
-`pnpm check:adr` enforces a mechanical floor, not architectural truth. Do **not** contort prose to
-satisfy a syntactic rule while preserving the wrong semantics, and do not infer that a sentence is
-architectural merely because the checker permits it.
+The doc checks in Step 4 enforce a mechanical floor, not architectural truth. Do **not** contort
+prose to satisfy a syntactic rule while preserving the wrong semantics, and do not infer that a
+sentence is architectural merely because a checker permits it.
 
-If a useful invariant or constraint trips a heuristic, first apply the governing test above. If the
-sentence genuinely survives mechanism replacement, fix or narrow the heuristic rather than hiding
-the concept in construction. Conversely, passing the checker is not evidence that an ADR has been
-cut correctly.
+If a useful invariant or constraint trips a check, first apply the governing test above. If the
+sentence genuinely survives mechanism replacement, **never weaken or narrow a checker to
+accommodate the document under review** — escalate to the operator with the exact sentence and the
+exact rule it trips, and leave the checker to change (or not) as its own reviewed change.
+Conversely, passing the checks is not evidence that a document says the right thing.
 
-## Cutting an existing ADR
+## Step 4 — Verify
 
-The ratchet in `ci/adr-shape-baseline.json` lists ADRs not yet re-cut. Remove exactly one entry per
-change, and only alongside the feature polish that produced its detail doc.
+```bash
+pnpm check:links        # link resolution
+pnpm check:doc-claims   # TC-ids resolve
+pnpm check              # formatting
+```
+
+(`pnpm check:adr` — the proposed ADR shape + ratchet check — does not exist yet; it is #481's
+chartered work. Do not attempt to run it.)
+
+If you superseded or folded an ADR that governs a `TC-` claim, rebind it in
+`docs/trust/trust-claims.yml` and the trust doc that links to it in the same change. An orphaned
+claim is a broken trust cross-link, and no check will infer the new owner for you.
+
+Report which lane you wrote to, what moved between layers, what known failure each retained
+constraint protects against, and anything you back-ported from the ADR into its construction home.
+
+---
+
+## Proposed workflow — DO NOT EXECUTE
+
+> **Blocked on #481 (the ADR shape gate) and the adr-reconciliation plan (PR #479). Nothing in
+> this section is runnable today.** The artifacts it names — `docs/decisions/_TEMPLATE.md`, the
+> `construction:` frontmatter field, `ci/adr-shape-baseline.json`, and `pnpm check:adr` — do not
+> exist anywhere in this repo. If you are an agent executing this skill, **stop here**: everything
+> below is the proposal being tracked, kept in the skill only so it and the plan do not drift.
+> When #481 ships, this section is promoted into the live steps above.
+
+### Proposed: template and `construction:` field
+
+Step 3 would start an ADR from `docs/decisions/_TEMPLATE.md` and keep its six sections in order.
+Frontmatter would set `construction:` to the detail doc that holds the mechanism, or the literal
+`none` when nothing is built yet.
+
+### Proposed: the shape checker
+
+`pnpm check:adr` would enforce the mechanical floor for ADR shape (sections present, `construction:`
+resolves, ratchet respected) and would join the Step 4 verify block. Everything in "Do not write to
+the checker" above applies to it with full force.
+
+### Proposed: cutting an existing ADR (`--cut ADR-NNNN`)
+
+The ratchet in `ci/adr-shape-baseline.json` would list ADRs not yet re-cut. Remove exactly one
+entry per change, and only alongside the feature polish that produced its detail doc.
 
 1. **Find the construction home.** If none exists, stop — the cut is gated on the home existing.
    Landing an ADR cut with the mechanism unhomed is the failure this whole rule prevents.
@@ -141,24 +192,8 @@ change, and only alongside the feature polish that produced its detail doc.
 5. **Cut construction out**, leaving `## Construction` as pointers only.
 6. **Re-read the remainder using the governing test.** Every surviving sentence should still be
    useful if the current mechanism vanished tomorrow.
-7. **Drop the baseline entry** and verify.
+7. **Drop the baseline entry** and verify with `pnpm check:adr`.
 
 Amendment sections are a smell: an `## Amendment: …` heading is almost always construction that
 accreted after the decision. Fold its invariant into `## Decision`, its property into
 `## Constraints`, and its mechanism into the home.
-
-## Step 4 — Verify
-
-```bash
-pnpm check:adr          # ADR shape + ratchet
-pnpm check:links        # link resolution
-pnpm check:doc-claims   # TC-ids resolve
-pnpm check              # formatting
-```
-
-If you superseded or folded an ADR that governs a `TC-` claim, rebind it in
-`docs/trust/trust-claims.yml` and the trust doc that links to it in the same change. An orphaned
-claim is a broken trust cross-link, and no check will infer the new owner for you.
-
-Report which lane you wrote to, what moved between layers, what known failure each retained
-constraint protects against, and anything you back-ported from the ADR into its construction home.
