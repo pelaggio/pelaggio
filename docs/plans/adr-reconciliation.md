@@ -23,6 +23,22 @@ A desirable target may be false today. A useful current seam need not become the
 
 The target has four concerns: delivery, safe execution, source provenance, and semantic reconciliation.
 
+## 1.5 Positions settled outside the probe set
+
+PR #482 §K litigated the open product questions on 2026-08-10. They are **settled unless a named probe falsifies their premise**, and they constrain §6 — recorded here so the constitution is not written as though they were still open.
+
+| # | Position | Carried by |
+|---|---|---|
+| K1 | `direct-push` is product-grade under single-integrator semantics, fenced. Landing gets **one lifecycle closer** with two triggers, not two tails | H; the 0025 row in §6 |
+| K2 | Roadmap adapters are tiered, insured by a shared conformance suite over fake seams | construction |
+| K3 | The attempt register gets **no bespoke protection** — properties 2–3 are inherited from the authority-profile work | C + D |
+| K4 | Skills stay single-file; sync is enforced by lint | construction |
+| K5 | The daemon is observational only | C |
+| K6 | Evidence is written durable **at emission**; failed and superseded attempts retain theirs | G |
+| K7 | The metrics/projection surface is a product commitment | G |
+
+K3 and K6 are load-bearing here: K3 means C and D share one probe, and K6 is G's capture obligation stated as a write-time rule. **K6 also precedes K1** — measured on #483, worktree evidence survives today only because the merged→done gap leaves the worktree standing, so a closer that cleans up before the evidence home exists converts a lifecycle bug into provenance loss.
+
 ## 2. Candidate architectural constitution
 
 ### A. Work executes as typed steps in an ordered pipeline
@@ -55,7 +71,13 @@ For example, `plan(ctx) → PlanResult`, `implement(ctx) → ImplementResult`, `
 
 Agents may propose, implement, inspect, review, and judge. They do not grant themselves authority.
 
-**Advancement authority resolves through deterministic harness semantics.** Model judgments may be required evidence, but cannot themselves exercise authority to advance. Policy is explicit, inspectable, versioned, and evaluated outside model discretion; its representation is construction.
+**C1 — the resolution is harness-owned (holds today).** Advancement authority resolves through deterministic harness semantics. Model judgments may be required evidence, but cannot themselves exercise authority to advance. Policy is explicit, inspectable, versioned, and evaluated outside model discretion; its representation is construction.
+
+**C2 — the state resolved over must not be agent-writable — target state.** A deterministic resolution over agent-writable inputs is not harness authority, and C1 is currently violated in production. **Measured on #483 (2026-08-11):** the issue closed one second after merge because GitHub honoured a `Closes #483.` line the **ship agent wrote into the PR body** — no harness code templates one. A model-authored artifact performed a roadmap state transition, which is precisely what C forbids. The surrounding conditions are the same class: P2 measured git mutation succeeding on all three drivers, claims *are* git branches (ADR-0009), `pick` runs with `cwd = MAIN_REPO`, and `attempt-identity.ts` records that its register "is an identity, never an authorization."
+
+C2 is bound to the same probe as D, and §1.5 K3 makes the dependency explicit: the register needs no bespoke mechanism because the authority profile is what makes it unwritable.
+
+**A daemon may improve latency or visibility, never correctness or authority** (§1.5 K5). Authority-bearing processes are harness-spawned and run-scoped; every reconciler is a CLI verb, and no pipeline correctness may depend on daemon liveness.
 
 ### D. Consequential agent execution has a harness-owned authority boundary — target state
 
@@ -99,6 +121,8 @@ The replacement rules are:
 
 > **Evidence that must survive delivery lives in a durable home keyed by coherent run/attempt identity, not only inside the disposable worktree.**
 
+Note the gap between *written* and *checked*: receipts are collision-guarded and content-bound, and `verifyExecutionReceipt` has **zero production callers** — evidence written and never verified. **Measured (#483):** the join is already broken before any destruction (`receipts: 3 (0 present on disk)` read from main while the worktree still existed), and "what caused this lifecycle transition" is a new unanswerable — the ship-authored PR body that closed the issue lived in `.dev/ship/pr-body-483.md`, now deleted, surviving only as mutable GitHub state. Per §1.5 K6 the write happens at emission, including for failed and superseded attempts.
+
 Claim snapshots charter intent; step boundaries bind attempt/input/output; review binds clearing evidence; ship/landing binds authorization and final subject. The Change Dossier is a projection over these records, not a transcript/event-log requirement.
 
 Externally consumed provenance binds a builder identity whose trust basis the consumer can independently verify.
@@ -112,6 +136,8 @@ Stateful mutations are fenced at the state-owning authority or idempotently reco
 **Safe refusal is incomplete without recovery ownership.** Every non-success absorbing state names a clearing transition and authorized actor.
 
 The same principle applies to successful external transitions: **a lifecycle transition that completes outside the current process must have an explicit owner/reconciler for the next state.** PR #482's clearest example is production `auto-merge-pr`: GitHub can merge the PR, but no code currently owns `merged → done`; stale quarantine is the accidental reconciler.
+
+**Measured (#483):** the transition does not merely stall — it **tears**. The issue closed via model-authored PR-body prose while `in-progress`, both claim branches and the worktree all persisted, leaving a tracker that reads done over an item still ineligible for re-pick. The owner must therefore be **one** reconciler owning all four transitions atomically, not a per-target tail (a tail is homogeneous with `ShipTarget` only for `direct-push`, where landing completes in-cycle), and it must normalize or suppress model-authored closing keywords at ship time or they will race it.
 
 P2's confinement abort is the failure-side mirror: correct guards strand worktree, branch, and roadmap state and poison subsequent runs.
 
@@ -133,7 +159,7 @@ Where policy requires independent evaluation, the evaluator receives only declar
 
 This is an information-isolation property, not evidence of sandboxing. Today's cold path may be better isolated informationally while being less protected on authority. Generic lifecycle/storage/budget/provenance machinery may be shared if information isolation survives.
 
-### K. Semantic reconciliation is a delivery obligation
+### K. Semantic reconciliation is a delivery obligation — target state
 
 Chartering identifies potentially affected semantic surfaces; execution records realized impact; delivery reconciles the two.
 
@@ -161,6 +187,8 @@ The same test applies elsewhere:
 - review core: preserve/reuse it; extract duplicated orchestration;
 - flow policy: preserve its pure deterministic core rather than delegating policy back through an agent turn;
 - attempt lineage: preserve the semantics; fix durability/join ownership around it.
+
+**The B-construction fork is closed by evidence already in hand.** P1 established that nine heterogeneous activities share the *execution* seam and that the 16 step-indexed maps are config-fanout **orthogonal to B**; #482 established that the six phases are already visually delimited blocks in `runPipeline`. The halves have different shapes — execution is uniform, phases are not — so a generic `Step<Input, Output, Authority, Recovery>` wrapper would have exactly six consumers, each re-specializing it. The smallest construction preserving every property is one `CycleContext` record, one `Record<Step, StepPolicy>` of declared data, six phase functions, and today's `step()` unbundled into thin audit/run/effects wrappers: widening, not a new layer, adding two data records and zero interfaces. No probe is needed to decide this.
 
 A new abstraction must answer: **which concrete duplication, ownership ambiguity, or invalid state disappears because this abstraction exists?**
 
@@ -272,31 +300,30 @@ The rule is: shrinking/superseding an ADR must not orphan the reason a replaceme
 | 0022 pipeline shape/orchestrators | **split** | ordered lifecycle; execution/lifecycle distinction; conditional context isolation; topology and exact lifecycle abstraction replaceable | A + B + J | cold-evaluation home needed |
 | 0023 contained execution | **supersede** | target-state no ambient authority; containment ≠ permission | D | `contained-execution.md` ✅ |
 | 0024 authoring review | **split** | review during authoring; author cannot supply own clearing judgment; algorithm replaceable | I | `adversarial-review-loop.md` ✅ |
-| 0025 landing serialization | **cut / re-check against current code** | landing must be positively fenced at the authority; do not state the planned direct-push CAS as shipped behavior | self + H | `flow.md` / landing construction |
+| 0025 landing serialization | **cut / re-check against current code** | landing must be positively fenced at the authority; do not state the planned direct-push CAS as shipped behavior (decision 8's landing receipt is likewise unimplemented); **`direct-push` is a product target under single-integrator semantics (§1.5 K1)**; **one closer owns merged→done for both targets**, preserving the #205-derived ordering — roadmap failures warn once the merge is verified, push/integration failures block, branch deletion is gated on mark-done | self + H | `flow.md` / landing construction |
 | 0026 stateful guards | **cut** | fence-or-reconcile; typed recovery across guard lifecycles including claim/pick; judgment/evidence/disposition separation; bounded retry; omission never refutation | self | `guarded-actions.md` ✅ |
 
 ## 7. Immediate correctness findings
 
 Independent of the architecture choice:
 
-1. **TC-014 is overstated on the default Claude path.** The env helper works but the real driver bypasses it. Fix the path or weaken the claim until end-to-end evidence exists.
+1. **TC-014's guarantee outranks its own scope note.** `buildAgentEnv` is correct and unit-tested; the claude path forwards `spawnOpts.env` as the SDK built it. The record already discloses part of this — `trust-claims.yml` `known_limits` scopes the allowlist to "codex today, grok via the ACP client" — but `status: guarantee` and an unqualified mechanism sentence sit above it, so a reader gets a guarantee that silently excludes the default driver. This is a layering defect in the trust record, not an undisclosed false claim, and the remedy is cheaper than re-litigation: route the claude adapter through `buildAgentEnv`, add the per-driver conformance test, and delete the limit. Until then downgrade the claim rather than reword it.
 2. **Confinement abort strands claim state across worktree, branch, and roadmap.** This is a missing clearing transition under H/ADR-0026, not a guard failure.
 3. **Production `auto-merge-pr` has no explicit `merged → done` owner.** This is a lifecycle/reconciliation gap, not merely a shipping implementation detail.
 4. **Durable evidence is currently inverted.** Execution receipts/review records may be destroyed with the successful worktree; evidence required for custody needs a durable home.
-5. **Agent-facing docs contain planned-as-shipped claims.** In particular, the ADR-0025 direct-push CAS fence and skill include expansion must not be treated as current-state guarantees without production evidence.
+5. **The cold merge gate lacked two hardening measures the authoring loop has, and one was a fail-open.** The v1 parser had **no schema-example guard at all** while v3 fails closed on one, and `.claude/skills/pr-review/SKILL.md:187` ships a schemaVersion:1 example carrying the exact sentinels — a parroted *fake-clean echo* would record a clean review that never happened. **Measured:** transferring the hardening naively is itself unsafe — `assistantText` accumulates every assistant turn while the v1 regexes match a block anywhere, so an early clean block or `refuted` verification stays gate-authoritative despite a non-report final answer. The transfer requires a tail rule plus a guard on `parseReviewVerification`, the one parrot direction that fails open (#483/#484). `parseJudgeReport` still lacks both — pre-existing, and worth chartering.
+
+6. **Agent-facing docs contain planned-as-shipped claims.** In particular, the ADR-0025 direct-push CAS fence and skill include expansion must not be treated as current-state guarantees without production evidence.
 
 ## 8. Remaining probes / architecture discovery
 
-Do not re-test questions P1–P4 already answered. Focus on:
+**P5 (ship-through, #483/#484) has since run** and measured H, re-measured F5/G on the real path, and exercised I/J. Do not re-test what P1–P5 answered. What remains:
 
-- compare a **minimal lifecycle wrapper** with **narrow phase functions over shared typed cycle/run context**; falsify both rather than assuming one;
-- seat at least two materially different Agent Drivers behind one **real harness authority construction** and repeat authority-denial probes;
-- exercise the designed containment path through ordinary step execution rather than only `run-contained`;
-- complete authoring review + clearing to test I and deliberately test context leakage for J;
-- prototype capture-at-boundary provenance into a **durable attempt-keyed evidence home**, including successful worktree destruction;
-- verify `merged → done` reconciliation for the production PR target under success, delayed merge, restart, and duplicate observation;
-- run an autonomous semantic reconciler on representative changes, prioritizing escalation correctness;
-- use reconciliation output to derive canonical document ownership/dedupe rather than designing the doc tree first.
+- seat at least two materially different Agent Drivers behind one **real harness authority construction** and repeat authority-denial probes — P2's diversity was three CLI-over-stdio agents and OpenCode was absent, so this is blocked on substrate rather than effort;
+- run an autonomous semantic reconciler on representative changes, prioritizing escalation correctness — P4 measured reconstruction, not autonomy;
+- use reconciliation output to derive canonical document ownership rather than designing the doc tree first.
+
+**Struck:** comparing a minimal lifecycle wrapper against narrow phase functions — existing evidence decides it (§3). **Reclassified as implementation, not probing:** exercising the containment path through ordinary step execution is building D. **Scoped:** "capture-at-boundary provenance including successful worktree destruction" tests a path the production target never takes — on `auto-merge-pr` nothing cleans up, and the #483 dossier was byte-identical before and after merge; scope it to `direct-push` or to the post-closer world. **Answered:** `merged → done` for the production PR target — it tears (§2 H).
 
 Architecture discovery should use PR #482 as the current-state evidence anchor and this document as the target/tradeoff anchor. Candidate refactors should state which assumptions remain probe-dependent.
 

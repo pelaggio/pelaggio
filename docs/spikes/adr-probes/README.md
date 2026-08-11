@@ -21,9 +21,10 @@ observation that would falsify it, and the architectural consequence of failure 
 | | Probe | Targets | Status |
 |---|---|---|---|
 | **P1** | Step-contract conformance | A, B | [`p1-step-contract.md`](./p1-step-contract.md) |
-| **P2** | Agent Driver authority | C, D, E | pending |
-| **P3** | Lineage, cold isolation, provenance | F, G, I, J | pending — subject is item #481 |
-| **P4** | Semantic reconciliation & doc ownership | K | pending |
+| **P2** | Agent Driver authority | C, D, E | [`p2-authority.md`](./p2-authority.md) |
+| **P3** | Lineage, cold isolation, provenance | F, G, I, J | [`p3-lineage-provenance.md`](./p3-lineage-provenance.md) — subject #481, quarantined before review |
+| **P4** | Semantic reconciliation & doc ownership | K | [`p4-reconciliation.md`](./p4-reconciliation.md) |
+| **P5** | Ship-through lineage on the production target | F, G, H, I, J | [`p5-ship-through.md`](./p5-ship-through.md) — subject #483, merged as #484 |
 
 Results roll up into [`architecture-probes.md`](./architecture-probes.md).
 
@@ -41,6 +42,12 @@ Recorded at campaign start so no probe silently inherits an unstated assumption:
    already run unsandboxed. Its P2 row is contaminated unless the probe pins that off.
 4. **`sessionResume` is `false` for every provider**, and the type comment records it as
    *unevidenced*. There is no session-inheritance mechanism to defeat, so J is currently satisfied
-   **by construction, not by design** — a green P3 result on cold isolation is weak evidence.
+   **by construction, not by design** — a green result on cold isolation is weak evidence. P5
+   exercised the cold path for real and this caveat is unchanged by it.
 5. **No reconciliation capability exists.** P4 builds a throwaway one, so a negative result may
    measure the prototype rather than the concept.
+6. **P5 rides the production pipeline, so it is not free of side effects.** It chartered a real item,
+   opened and merged a real PR, and required two rounds of remediation before the gate passed. Its
+   findings are correspondingly strong — they are observations of production, not of a harness — but
+   its cost is an order of magnitude above the read-only probes, and almost all of that is
+   remediation rather than measurement.
