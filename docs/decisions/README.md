@@ -96,6 +96,15 @@ means the detail doc lands *with the feature polish that produced it*, written b
 work, and the ADR is cut in the same change. `construction: none` is an honest state for a decision
 whose mechanism does not exist yet; it is not an excuse to leave built mechanism inline.
 
+## Citing a decision
+
+Cite by **name**, not by number alone: *ADR-0026 decision 3 (`blocking state is typed and
+recoverable`)*, or for an unnumbered clause, *ADR-0026's `a time lease is not liveness`
+constraint*. Numbers move when an ADR is re-cut, and a citation that carries only a number does
+not dangle when that happens — it **mis-resolves onto a different rule, silently**. That is what
+the ADR-0026 re-cut did to 29 citations across 9 files, including shipped source, and it is why
+this convention exists.
+
 ## Required shape
 
 New and re-cut ADRs follow [`_TEMPLATE.md`](./_TEMPLATE.md). The shape below is the convention;

@@ -30,20 +30,20 @@ Generalizes ADR-0025's `land(attempt) → Landed | Contended` executor into a re
   cap break — so it is co-owned with G6b, which supplies the reconciler that re-drives the
   abandoned drain. Splitting it across two primitives is the honest reading; assigning it
   to G2 alone silently dropped the transition that actually fixes it.
-- Scope: M. Blocks G5 (ADR-0026 decision 8 settles observed spend).
+- Scope: M. Blocks G5 (ADR-0026 decision 6 — *a retryable outcome is bounded and actionable* — settles observed spend).
 
 ### G3 — Token: one-shot entitlement with pre/post-work split
 - Subsumes **#453** (revision entitlement burned by a park). #453 already contains the
   correct design including the do-not-release-on-every-non-completion warning; G3 is that
   issue, promoted from "fix a label" to "add the primitive."
-- Scope: M. Independent of G2 — opposite failure semantics, per ADR-0026 decision 9.
+- Scope: M. Independent of G2 — opposite failure semantics, per the quota/token primitives now carried in `guarded-actions.md`.
 
 ### G4 — Attempt identity: agent-inaccessible register + consumer-side fencing
 - Subsumes **#451** (resumed cycles reuse the prior `runId`).
 - Subsumes **#450** (resume after review hard-block ships the checkpoint) — routing on
   persisted attempt state is what makes the resume correct; #450 is unfixable without it.
 - **Scope correction (post-review).** #467's recorded charter predates the tightening of
-  ADR-0026 decision 10 and understates it: it asks for an atomic allocator plus consumer-side
+  ADR-0026's attempt-freshness constraint and understates it: it asks for an atomic allocator plus consumer-side
   CAS. The item must also carry (a) an **agent-inaccessible** authoritative register —
   orchestrator-held, outside any agent-reachable path, with anti-rollback freshness, since a
   writer that merely *consults* an agent-writable register validates forged state and a signed
@@ -52,24 +52,24 @@ Generalizes ADR-0025's `land(attempt) → Landed | Contended` executor into a re
   #467's body cannot be amended through the sanctioned CLI (#473), so this document carries
   the correction.
 - Scope: M/L. The allocator is small; the register's storage boundary and consumer-side
-  fencing are the open sizing question (ADR-0026 decision 10).
+  fencing are the open sizing question (ADR-0026's attempt-freshness constraint).
 
 ### G5 — Gate disposition: judgment/evidence split, allowlist, bounded `indeterminate`
 - Subsumes **#455** (balance exhaustion has no distinct class) — #455's detector work is
   the `unavailable` allowlist's first entry.
 - Subsumes **#434** (grok concurrent-boot race) *as a gate concern only*: G5 stops the
   race from blocking PRs. It does **not** fix the race, which remains its own item.
-- **Also in scope, and previously missing:** ADR-0026 decision 6's prerequisite — plumbing
+- **Also in scope, and previously missing:** ADR-0026 decision 4's prerequisite (*judgment, evidence completeness and disposition are distinct*) — plumbing
   realized provider diversity onto the merge-gate path (`softened` exists only in
   `review/loop.ts`, `bench.ts` and `record.ts`; `pr-review-cli.ts` never imports it) — and
   decision 5's mandatory disposition inputs, the carried candidate-blocker set and the
   isolated-verification result. Neither had a G-item or a residue entry, which left the
   mutation set incomplete against the ADR it collapses.
 - **Depends on #461 (liveness) too.** G5 ships a retry actor, which is a reconciler, and
-  ADR-0026 decision 3 now requires every reconciler to gate reclaim on a positive liveness
+  ADR-0026's *a time lease is not liveness* constraint now requires every reconciler to gate reclaim on a positive liveness
   verdict rather than elapsed time — precisely because the queue template's fixed four-hour
   lease reclaims live work. An earlier draft's dependency graph omitted this.
-- Scope: L. Depends on **G2, G4, #461, and its own retry actor** — ADR-0026 decision 8 makes the
+- Scope: L. Depends on **G2, G4, #461, and its own retry actor** — ADR-0026 decision 6 (*a retryable outcome is bounded and actionable*) makes the
   minimum shippable unit `indeterminate` + retry actor + settle-observed quota + attempt
   identity, so the queue drain and a durable retry counter keyed alongside
   `(prNumber, headSha)` ship inside G5, not after it. Local-runner-only.

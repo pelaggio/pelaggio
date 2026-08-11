@@ -80,9 +80,9 @@ the PR could never be revised against. That is one measured PR, not 93% of spend
 ## Prerequisites the first draft omitted
 
 - **G2 (#465), settle-observed quota**, is a hard prerequisite of G5's minimum shippable
-  unit per ADR-0026 decision 8 and `ticket-collapse.md`. It is open, unstarted, and has no
+  unit per ADR-0026 decision 6 (*a retryable outcome is bounded and actionable*) and `ticket-collapse.md`. It is open, unstarted, and has no
   code in the tree. "Do G5 next" was not executable as written.
-- **#461 is already on G5's critical path**, not merely G6b's. ADR-0026 decision 3 requires
+- **#461 is already on G5's critical path**, not merely G6b's. ADR-0026's *a time lease is not liveness* constraint requires
   every reconciler's crash-reclaim to be gated by a positive P6 liveness verdict, and G5
   ships the local queue reconciler as its retry actor. `ticket-collapse.md` states
   "Depends on #461 (liveness) too" and places it on the critical path in its diagram. The

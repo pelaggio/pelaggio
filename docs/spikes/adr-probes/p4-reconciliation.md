@@ -29,7 +29,7 @@ derived from the four-lane routing, and the result compared against what the PR 
 | 446 | Agent Driver / provider change | per-step model + effort parity, 4 providers | `docs/config.md` | `config.md` + `decision-log/431` | ✅ correct owner |
 | 442 | provenance change | PR-keyed review-gate record | `docs/pr-review.md` | `pr-review.md` + `decision-log/328` | ✅ correct owner |
 | 463 | docs-only | ADR-0026 + collapse plans | decisions / agent-context | 5 docs | ✅ correct owner |
-| **475** | **safety/authority change** | implements **ADR-0026 decision 10** (attempt identity as an authority) | ADR-0026 status + `guarded-actions.md` | **none** | ❌ **missed** |
+| **475** | **safety/authority change** | implements **ADR-0026's attempt-freshness constraint** (attempt identity as an authority) | ADR-0026 status + `guarded-actions.md` | **none** | ❌ **missed** |
 | **427** | **trust / supply-chain** | third-party actions pinned to immutable commit SHAs | `docs/trust/` + ADR-0007 | **none** | ❌ **missed** |
 
 ### Measurements
@@ -48,7 +48,7 @@ Both failures are changes that **realize or alter an architectural or trust clai
 class K says must escalate rather than be handled autonomously. Every change that was purely
 construction or behavior got its canonical owner right.
 
-- **#475** implements ADR-0026's decision 10. That ADR is still `status: proposed`, which this
+- **#475** implements ADR-0026's *attempt freshness must be unforgeable* constraint. That ADR is still `status: proposed`, which this
   repository defines as *decided, not yet implemented*. Part of it is now implemented. Both
   `0026` and `guarded-actions.md` still describe attempt identity as target-state.
 - **#427** pinned third-party workflow actions to immutable SHAs — a material supply-chain posture

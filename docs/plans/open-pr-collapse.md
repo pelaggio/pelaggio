@@ -38,7 +38,7 @@ if (decision.state !== "continue" || terminalSplit) break;
 
 Reordering `findings.ts` would therefore not run a second pass for any of these four PRs,
 and blindly retrying every `invalid-pass` would retry parse-invalid and genuine
-disagreement — the cases ADR-0004 and ADR-0026 decision 7 require to stay blocked.
+disagreement — the cases ADR-0004 and ADR-0026 decision 5 (*omission is never refutation*) require to stay blocked.
 
 The real defect is upstream of the loop: **an infrastructure fault produces
 `agreement: invalid`, and `invalid` is deliberately terminal.** #428 is the proof — two
@@ -75,7 +75,7 @@ two defects ADR-0026 names**, which makes it the natural first validation of the
 
 *Disposition:* **rebase, release the entitlement, revise against the real finding, then
 re-review.** Reclassifying the grok cells is necessary but not sufficient: the codex
-red-team cell carries one genuine surviving finding, and ADR-0026 decision 5 requires it
+red-team cell carries one genuine surviving finding, and ADR-0026 decision 4 (*judgment, evidence completeness and disposition are distinct*) requires it
 to be fixed or validly refuted by an isolated verification — omission is never refutation.
 The label release is a one-off human `grant-additional-entitlement`, the clearing
 transition decision 9 names. Do not close: the underlying #277 work is wanted.
@@ -101,14 +101,14 @@ run."*
 
 An earlier draft of this document sequenced #449 second and claimed it unblocked #461.
 That was backwards and unsafe — it is precisely the "liveness before anything destructive"
-rule of ADR-0026 decision 2. Two admissible paths: land #449 with `reap.enabled` defaulted
+rule of ADR-0026 decision 2 (*derived exclusivity is valid only while its authoritative claim remains valid*). Two admissible paths: land #449 with `reap.enabled` defaulted
 **off** and arm it only after #461, or hold #449 until #461 lands. The first is preferable
 — it banks the reviewed work without arming the hazard — but it is a change to the PR, not
 just a merge decision.
 
 ### #452 — fix CI, then re-review. Smallest, and it is the derived-exclusivity fix.
 
-Implements #435, which ADR-0026 decision 2 names as the canonical broken-derived-
+Implements #435, which ADR-0026 decision 2 (*derived exclusivity*) names as the canonical broken-derived-
 exclusivity case. +231/−32 across 9 files. Only 2 survivors, and only two providers
 participated (`claude+codex` — grok absent from the pairing entirely). `review` is
 **pending**, not failed: no terminal status was ever posted, so this PR is in the
@@ -133,7 +133,7 @@ The claim release is not optional bookkeeping and is easy to miss: #448's head b
 **that branch *is* the claim**. Release is branch deletion, owned by ship bookkeeping (which
 runs only on landing) or `/tidy` — and closing a PR triggers neither. Close it without
 deleting the branch and worktree and #367 reads `already claimed` (CLI exit 3) forever,
-with a live worktree: exactly the exit-less state ADR-0026 decision 4 forbids. So the
+with a live worktree: exactly the exit-less state ADR-0026 decision 3 (*blocking state is typed and recoverable*) forbids. So the
 disposition is four acts, and **the order matters in two places**:
 
 1. Close the PR.
@@ -191,4 +191,4 @@ starts, without taking on the stale-actor deletion hazard.
   prevents.
 - Step 2's "default `reap.enabled` off" was a proposed change to PR #449 when this was
   written. It has since been **made**: head `4531520` sets `reap: { enabled: false }`
-  citing ADR-0026 decision 2, so no author agreement is outstanding.
+  citing ADR-0026 decision 2 (*derived exclusivity*), so no author agreement is outstanding.

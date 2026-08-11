@@ -290,7 +290,7 @@ it because "keep fenced only" was the error it had to correct twice:
 |---|---|---|
 | **fenced** | keep | red-merge guard; effects manifest (provenance + `preSha`, content-bound); execution receipts (content-bound); `feat/<id>` claim creation (git ref atomicity); landing CAS (ADR-0025, unbuilt) |
 | **derived-exclusive** | keep — the ADR-0001 isolation spine | worktree confinement via the **whole-step Git porcelain audit**, which ADR-0001 (**accepted**) names the hard gate; `blockForeignRootWrite` retained as the advisory early layer ADR-0001 says it is |
-| **reconciled** | keep, **with mandatory corrections** | `review-request-queue` drain — must adopt ADR-0026 decision 3's two fixes (liveness-gated reclaim replacing the heartbeat-less four-hour lease; idempotent-or-fenced terminal effects). Copying its current shape is adopting its bug |
+| **reconciled** | keep, **with mandatory corrections** | `review-request-queue` drain — must adopt ADR-0026's *a time lease is not liveness* constraint and its two fixes (liveness-gated reclaim replacing the heartbeat-less four-hour lease; idempotent-or-fenced terminal effects). Copying its current shape is adopting its bug |
 | **hint** | not load-bearing for correctness | `withFileLock` / `withMutationLock` (16 call sites) |
 
 Two things this audit does **not** license:
@@ -406,16 +406,16 @@ charter starts from them rather than rediscovering them at review prices:
   never Dissent, and `hasUnclearableSurvivor` already forbids harness revision.
 - **The pre-Judge split gate is fixed.** A genuine reviewer split parks before the Judge for
   *all* ship targets — three of category C. Not a fault to reclassify.
-- **Ship no `indeterminate`.** Decision-7-allowlisted causes (transport/boot, 402, rate-limit,
+- **Ship no `indeterminate`.** Decision-5-allowlisted causes (*unavailable evidence cannot erase an unresolved blocker*) (transport/boot, 402, rate-limit,
   SDK outage) must keep today's recoverable park: default-deny without `indeterminate` would
   turn them into non-recoverable blocks, a regression. `indeterminate` for that population is
-  G5's, and ADR-0026 decision 8 binds it to the decision-9 quota primitive (G2/#465). A fix
+  G5's, and ADR-0026 decision 6 (*a retryable outcome is bounded and actionable*) binds it to the quota primitive now carried in `guarded-actions.md` (G2/#465). A fix
   that ships no `indeterminate` inherits none of that — which is the property that makes this
   separable from G5.
 - **Default-deny means the fallthrough blocks.** `proceed` must require a *positive* verdict.
 
 **Recommendation: charter G5a to produce the disposition design**, against the constraint list
-above, with the ADR-0026 amendment (its Context item 3 scope sentence, plus decision-4 rows) as
+above, with the ADR-0026 amendment (its Context item 3 scope sentence, plus decision 3 rows — *blocking state is typed and recoverable*) as
 part of the deliverable. Do **not** treat the sketches in this document's earlier revisions as
 the spec; they are in the git history as worked examples of how the constraint list was
 discovered, and each of them was wrong.

@@ -162,7 +162,7 @@ later, in a different cycle.
 
 Two things fall out.
 
-**`review-request-queue.ts` supplies the contract** (but see ADR-0026 decision 3 — its own
+**`review-request-queue.ts` supplies the contract** (but see ADR-0026's *a time lease is not liveness* constraint — its own
 four-hour fixed leases carry the time-lease fail-open this document criticises elsewhere,
 so the shape is the template, not the implementation). It already has every property the
 rest of the system lacks: an idempotency key `(prNumber, headSha)`; a claim protocol (atomic
@@ -213,6 +213,15 @@ and the second is what makes the allocator trustworthy rather than merely atomic
    denies agent writes only under `MAIN_REPO/.dev/sessions/` and `docs/decision-log/`, so
    anywhere else the very agent being fenced can unlink or forge the sequence. The
    allocator must join that denied set, on the same footing as session records.
+
+   *Status (#475, and the ADR's attempt-freshness constraint):* property 1 shipped —
+   `attempt-identity.ts` allocates atomically via O_EXCL under `MAIN_REPO/.dev/attempts/`.
+   Properties 2 and 3 did **not**, and the module says so in its own header: the register is
+   *not* in the denied set, because `blockForeignRootWrite` protects it from worktree steps but
+   not from a main-cwd step or an opaque Bash command — so the attempt number "is an identity,
+   never an authorization." #435 closes that by giving `pick` a bounded fs scope; per #482 §K3
+   the register inherits protection from the authority-profile work rather than getting a
+   bespoke mechanism. Read the paragraph above as the requirement, not as the current state.
 3. *Every effect consumer fences against the current attempt, at the authority.*
    Carrying identity into artifact paths only stops collisions. Inertness requires an
    authority-bound current-attempt compare-and-swap — a superseded attempt must be
@@ -418,6 +427,14 @@ So the rules are:
 The minimum shippable unit is therefore **`indeterminate` + its retry actor**, scoped to
 the local runner first. That is a correction to the first draft's sequencing, not a
 detail.
+
+*Later correction, carried by ADR-0026 and restated here so this section does not read as
+the whole unit:* the unit is **`indeterminate` + its retry actor + settle-observed quota +
+attempt identity**. Quota and token are two primitives, not one — P2 quota (dollars) is
+divisible and refundable while a P3 token is not — and an evaluation that dies after billing
+has spent real money, so the retry actor is unsound without settle-observed quota beneath it.
+Attempt identity belongs to the same unit because a retry that cannot distinguish its own
+superseded predecessor's artifacts is not a retry.
 
 ## 8. Failure-mode taxonomy to implement against
 
