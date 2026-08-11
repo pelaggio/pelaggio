@@ -190,13 +190,26 @@ The load-bearing invariant is that the gate can never go green on a phantom sign
 Two layers enforce it:
 
 - `runStep` downgrades a refusal / decline to `ok: false`.
-- `parseReviewFindings(text)` validates the delimited JSON report at the untrusted
-  model-output boundary. Unknown versions, keys, severities, or malformed fields are
-  rejected. A valid report blocks only when it contains a `must-fix`; `nice` and `note`
+- Both schema-v1 parsers receive `modelAuthoredText(result)` — the accumulated
+  model-authored `assistantText` (falling back to `text` only for legacy/synthetic
+  results). `text` alone is not a safe parse source on streaming providers: it may be
+  only the final chunk, and the transcript (`fullText`) can include tool output that must
+  never be ingested as a findings or verification report.
+- `parseReviewFindings(modelAuthoredText(result))` validates the delimited JSON report at
+  the untrusted model-output boundary. Unknown versions, keys, severities, or malformed
+  fields are rejected. A verbatim findings-schema example (the packaged summary sentinel
+  or an exact example finding) is rejected as an incomplete/invalid review and therefore
+  blocks. A valid report blocks only when it contains a `must-fix`; `nice` and `note`
   remain visible but non-blocking. `ok: false` and parser failures block separately.
-- `parseReviewVerification(text)` and reconciliation require exactly one decision for
-  every orchestration-owned candidate ID. Only a complete valid report can remove a
-  candidate; all verifier failures retain it.
+- `parseReviewVerification(modelAuthoredText(result))` and reconciliation require exactly
+  one decision for every orchestration-owned candidate ID. Only a complete valid report
+  can remove a candidate; all verifier failures retain it. An echoed pr-verify example
+  rationale is rejected: unguarded, it would refute a candidate and clear a real blocker —
+  the one parrot direction that fails open.
+- Because `modelAuthoredText` accumulates every assistant turn, both parsers additionally
+  require their single block to be the **final** model-authored output. A report followed
+  by a non-report answer is invalid, so an early draft block can never authorize a pass or
+  clear a blocker that the seat's own final answer does not support.
 
 A transient failure (rate limit, flaky SDK error) therefore shows red. If a security
 diff triggers the red-team pass and that pass cannot complete, the whole gate blocks

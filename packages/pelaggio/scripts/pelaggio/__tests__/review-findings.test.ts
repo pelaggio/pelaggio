@@ -93,6 +93,84 @@ describe("parseReviewFindings", () => {
 		for (const finding of invalid) assert.throws(() => parseReviewFindings(block({ schemaVersion: 1, summary: "Ok.", findings: [finding] })), ReviewFindingsParseError);
 		for (const summary of ["", "two\nlines"]) assert.throws(() => parseReviewFindings(block({ schemaVersion: 1, summary, findings: [] })), ReviewFindingsParseError);
 	});
+
+	it("rejects the SKILL.md schema-v1 example echoed verbatim instead of a real review", () => {
+		// Exact placeholder from `.claude/skills/pr-review/SKILL.md`'s REVIEW_FINDINGS example.
+		// A verbatim echo — especially the fake-clean form with empty findings — would authorize a
+		// merge without a real review. Exact full-tuple match only (not message-only / fuzzy).
+		const echoed = block({
+			schemaVersion: 1,
+			summary: "Concise single-line summary.",
+			findings: [{ severity: "must-fix", message: "Concise single-line finding.", path: "src/file.ts", line: 12 }],
+		});
+		assert.throws(() => parseReviewFindings(echoed), ReviewFindingsParseError);
+		// Fake-clean echo (example summary, no findings) is rejected too.
+		assert.throws(() => parseReviewFindings(block({ schemaVersion: 1, summary: "Concise single-line summary.", findings: [] })), ReviewFindingsParseError);
+		// Example finding under a genuine summary is still rejected.
+		assert.throws(
+			() => parseReviewFindings(block({ schemaVersion: 1, summary: "Reviewed the claim-branch delete gating.", findings: [{ severity: "must-fix", message: "Concise single-line finding.", path: "src/file.ts", line: 12 }] })),
+			ReviewFindingsParseError,
+		);
+		// Genuine report that merely shares the example path (or otherwise differs from the full
+		// sentinel tuple) still parses — guard is exact, not fuzzy.
+		const real = parseReviewFindings(block({ schemaVersion: 1, summary: "Real review.", findings: [{ severity: "must-fix", message: "Token leaked in src/file.ts logging.", path: "src/file.ts", line: 42 }] }));
+		assert.equal(real.findings.length, 1);
+		const nearMiss = parseReviewFindings(block({ schemaVersion: 1, summary: "Real review.", findings: [{ severity: "must-fix", message: "Concise single-line finding.", path: "src/file.ts", line: 99 }] }));
+		assert.deepEqual(
+			nearMiss.findings.map((f) => f.line),
+			[99],
+		);
+	});
+
+	it("takes the FINAL block and rejects one followed by a non-report answer", () => {
+		// `modelAuthoredText` accumulates every assistant turn, so an early block must never remain
+		// gate-authoritative when the seat's own final answer is not a report (#484 review).
+		const clean = block({ schemaVersion: 1, summary: "Looks fine.", findings: [] });
+		const real = block({ schemaVersion: 1, summary: "Real review.", findings: [{ severity: "must-fix", message: "Leaks a token.", path: "src/a.ts", line: 3 }] });
+		// early clean block + later prose → invalid, so it can neither pass nor clear anything
+		assert.throws(() => parseReviewFindings(`${clean}\n\nActually, let me look further.`), ReviewFindingsParseError);
+		// A second block stays invalid (the single-block contract is unchanged); the seat fails closed
+		// rather than the harness guessing which draft was meant.
+		assert.throws(() => parseReviewFindings(`${clean}\n\nOn reflection:\n${real}`), ReviewFindingsParseError);
+		// trailing whitespace after the block is still the tail
+		assert.equal(parseReviewFindings(`${real}\n\n   \n`).findings.length, 1);
+	});
+
+	it("binds the schema-example sentinels to the packaged SKILL.md", () => {
+		// If the packaged example is edited without updating the guard, the guard silently stops
+		// matching and the parrot path reopens. Bind them so that edit fails here instead.
+		const skill = readFileSync(resolve(import.meta.dirname, "../../../../../.claude/skills/pr-review/SKILL.md"), "utf-8");
+		assert.ok(skill.includes('"summary":"Concise single-line summary."'), "v1/v3 example summary sentinel drifted");
+		assert.ok(skill.includes('"message":"Concise single-line finding."'), "v1 example finding sentinel drifted");
+		assert.ok(skill.includes('"message":"Concrete single-line finding."'), "v3 example finding sentinel drifted");
+	});
+});
+
+describe("parseReviewVerification", () => {
+	const verification = (decisions: unknown[]) => `REVIEW_VERIFICATION\n${JSON.stringify({ schemaVersion: 1, decisions })}\nEND_REVIEW_VERIFICATION`;
+
+	it("rejects the packaged pr-verify example echoed verbatim", () => {
+		// The one parrot direction that fails OPEN: an echoed `refuted` clears a real blocker.
+		assert.throws(() => parseReviewVerification(verification([{ candidateId: "C1", decision: "refuted", rationale: "Concrete single-line repository evidence." }])), ReviewFindingsParseError);
+		// A genuine refutation still parses.
+		const real = parseReviewVerification(verification([{ candidateId: "C1", decision: "refuted", rationale: "pr-review-cli.ts:443 already parses the tail block." }]));
+		assert.equal(real.decisions.at(0)?.decision, "refuted");
+	});
+
+	it("takes the FINAL verification block and rejects one followed by prose", () => {
+		const refuted = verification([{ candidateId: "C1", decision: "refuted", rationale: "Genuine evidence at findings.ts:1." }]);
+		const survives = verification([{ candidateId: "C1", decision: "survives", rationale: "Reproduced against head." }]);
+		assert.throws(() => parseReviewVerification(`${refuted}\n\nLet me double-check that.`), ReviewFindingsParseError);
+		// Unlike findings, a second verification block stays invalid: "last one wins" would let a late
+		// refutation clear a real blocker, which is the fail-OPEN direction.
+		assert.throws(() => parseReviewVerification(`${refuted}\n\nCorrection:\n${survives}`), ReviewFindingsParseError);
+		assert.equal(parseReviewVerification(survives).decisions.at(0)?.decision, "survives");
+	});
+
+	it("binds the pr-verify example sentinel to the packaged SKILL.md", () => {
+		const skill = readFileSync(resolve(import.meta.dirname, "../../../../../.claude/skills/pr-verify/SKILL.md"), "utf-8");
+		assert.ok(skill.includes('"rationale":"Concrete single-line repository evidence."'), "pr-verify example rationale sentinel drifted");
+	});
 });
 
 describe("parseAuthoringReviewFindings (schema v3)", () => {

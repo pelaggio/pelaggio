@@ -59,16 +59,20 @@ function verification(decisions: unknown[], overrides: Partial<StepResult> = {})
 }
 
 function result(overrides: Partial<StepResult> = {}): StepResult {
-	const text = report("Clean review.");
+	// When a caller supplies only `text`, assistantText/fullText track that body so the gate's
+	// modelAuthoredText(result) parse source stays coherent. Truncation fixtures set text and
+	// assistantText to different values explicitly.
+	const { text: textOverride, fullText: fullTextOverride, assistantText: assistantTextOverride, ...rest } = overrides;
+	const text = textOverride ?? report("Clean review.");
 	return {
 		ok: true,
 		subtype: "success",
-		text,
-		fullText: text,
-		assistantText: text,
 		cost: 1,
 		turns: 2,
-		...overrides,
+		text,
+		fullText: fullTextOverride ?? text,
+		assistantText: assistantTextOverride ?? text,
+		...rest,
 	};
 }
 
@@ -284,6 +288,42 @@ describe("pr-review CLI aggregation", () => {
 			assert.match(out.comments[0], /Invalid review findings report/);
 			assert.match(out.comments[0], /gate=block ok=false subtype=standard:error_invalid_output/);
 		}
+	});
+
+	it("parses discovery findings from accumulated assistantText, not the final streamed chunk", async () => {
+		// Streaming providers may leave `text` as only the last fragment. The gate must read the
+		// complete model-authored body via modelAuthoredText (assistantText).
+		const complete = report("Clean review.");
+		const out = await runCli({
+			results: [result({ text: "END_REVIEW_FINDINGS", assistantText: complete })],
+		});
+		assert.equal(out.code, 0);
+		assert.deepEqual(out.statuses, ["pass"]);
+	});
+
+	it("parses verification decisions from accumulated assistantText, not the final streamed chunk", async () => {
+		const discovery = report("Candidate.", [{ severity: "must-fix", message: "Original message.", path: "src/a.ts", line: 7 }]);
+		const verificationBody = `REVIEW_VERIFICATION\n${JSON.stringify({ schemaVersion: 1, decisions: [{ candidateId: "C1", decision: "refuted", rationale: "A guard rejects the input." }] })}\nEND_REVIEW_VERIFICATION`;
+		const out = await runCli({
+			results: [result({ text: discovery, assistantText: discovery }), result({ text: "END_REVIEW_VERIFICATION", assistantText: verificationBody, fullText: verificationBody })],
+		});
+		assert.equal(out.code, 0);
+		const body = out.comments.join("\n");
+		assert.match(body, /isolated verification: \*\*refuted\*\*/);
+		assert.deepEqual(out.statuses, ["pass"]);
+	});
+
+	it("blocks when discovery echoes the schema-v1 fake-clean example", async () => {
+		// Verbatim SKILL.md REVIEW_FINDINGS example with empty findings — would authorize a merge
+		// under a naive "clean report" parse. Must fail closed as invalid output, not pass.
+		const parrot = report("Concise single-line summary.", []);
+		const out = await runCli({ results: [result({ text: parrot, assistantText: parrot })] });
+		assert.equal(out.code, 1);
+		const body = out.comments.join("\n");
+		assert.match(body, /Invalid review findings report/);
+		assert.match(body, /schema example/);
+		assert.match(body, /gate=block ok=false subtype=standard:error_invalid_output/);
+		assert.deepEqual(out.statuses, ["block"]);
 	});
 
 	it("fails closed without model calls when diff inspection fails", async () => {

@@ -21,6 +21,7 @@ import { upsertMarkerComment } from "./github-posting.js";
 import { classifySecurityReviewDiff, expandPackagedSkill, formatReviewMetrics, parseWaitFlag, resolveParkReset, type SecurityDiffSignal } from "./helpers.js";
 import {
 	evaluateReviewConvergence,
+	modelAuthoredText,
 	parseReviewFindings,
 	parseReviewVerification,
 	type ReviewExhaustionReason,
@@ -201,6 +202,12 @@ function renderPass(pass: ReviewPass): string {
 		});
 		return [heading, "", escapeMarkdown(pass.report.summary), "", ...(findings.length > 0 ? findings : ["No findings."])].join("\n");
 	}
+	// Deliberately `result.text`, NOT `modelAuthoredText`. Rendering the accumulated assistant text
+	// would publish every assistant turn into a public PR comment and the CI log, and the review
+	// workflow hands the seat inherited credentials — a prompt-injected PR could induce an
+	// intermediate token echo, then invalid output, and exfiltrate them even when the final message
+	// is benign (#484 red-team, isolated-verified). The cosmetic mismatch on a chunk-reassigning
+	// provider (this shows the final chunk; the parser read the accumulation) is the cheaper defect.
 	const text = pass.result.text.trim();
 	const partial = text ? ["", "Partial review output (untrusted and possibly incomplete):", "", `<pre>${escapeHtml(text)}</pre>`] : [];
 	return [heading, "", `${escapeMarkdown(pass.diagnostic ?? `Run did not complete cleanly (${pass.result.subtype}).`)} Failing this pass closed.`, ...partial].join("\n");
@@ -270,7 +277,7 @@ export function buildComment(
 	const cost = results.reduce((sum, result) => sum + result.cost, 0);
 	const turns = results.reduce((sum, result) => sum + result.turns, 0);
 	// Durable, aggregatable precision signal — appended by the CLI, never seen by
-	// the report parser (which reads the agent's `result.text`, not this comment).
+	// the report parser (which reads the agent's model-authored text, not this comment).
 	const baseMetrics = formatReviewMetrics(gate, ok, subtype, cost, turns);
 	const agreementToken = convergence?.agreement ? ` agreement=${convergence.agreement}` : "";
 	const metrics = convergence
@@ -439,7 +446,7 @@ async function runReviewPass(iteration: number, label: ReviewLabel, prompt: stri
 		};
 	}
 	try {
-		const report = parseReviewFindings(result.text);
+		const report = parseReviewFindings(modelAuthoredText(result));
 		const gate = reviewFindingsGate(report);
 		return {
 			iteration,
@@ -522,7 +529,7 @@ async function runVerificationPass(
 		return;
 	}
 	try {
-		pass.dispositions = reconcileReviewVerification(candidates, parseReviewVerification(result.text));
+		pass.dispositions = reconcileReviewVerification(candidates, parseReviewVerification(modelAuthoredText(result)));
 		const survives = pass.dispositions.some((disposition) => disposition.decision === "survives");
 		pass.gate = survives ? "block" : "pass";
 		pass.effectiveVerdict = survives ? "block" : "pass";

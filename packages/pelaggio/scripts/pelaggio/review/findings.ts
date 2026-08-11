@@ -340,26 +340,70 @@ const CANDIDATE_ID_RE = /^C[1-9]\d*$/;
 const JUDGE_RULINGS: readonly JudgeRuling[] = ["fixable-blocker", "unfixable-blocker", "judgment-dissent"];
 const CWE_RE = /^CWE-\d{1,5}$/i;
 
-// The verbatim schema-example placeholder printed in `.claude/skills/pr-review/SKILL.md`
-// (the `AUTHORING_REVIEW_FINDINGS` example block). A seat that echoes the example instead of
-// reviewing would emit a schema-valid `must-fix / correctness-regression` at `src/file.ts:1`,
-// manufacturing a cross-model split and a spurious escalation/park. Reject it fail-closed so the
-// seat is recorded as not-completed rather than as a fabricated blocker. Provider-agnostic: any
-// seat that parrots the example is rejected.
+// The verbatim schema-example placeholders printed in `.claude/skills/pr-review/SKILL.md`
+// (the `AUTHORING_REVIEW_FINDINGS` v3 example and the cold-gate `REVIEW_FINDINGS` v1 example).
+// A seat that echoes either example instead of reviewing would emit a schema-valid report —
+// manufacturing a fabricated blocker or, worse, a fake-clean authorization. Reject it fail-closed
+// so the seat is recorded as not-completed rather than as a real pass/block. Provider-agnostic:
+// any seat that parrots the example is rejected.
 //
 // This guard was originally attributed to the codex seat being "a weaker instruction-follower"
 // that runs one turn and does no inspection. That diagnosis was wrong. The codex seat performs a
 // full review; its first tool call is typically `sed .claude/skills/pr-review/SKILL.md`, and the
 // codex provider folds command OUTPUT into `fullText` — so the example block printed by that
 // `sed` entered the parsed text ahead of the model's real block and tripped this guard on every
-// run. The parse source is now the final assistant message (see selectAuthoringFindingsSource).
+// run. The parse source is now the final assistant message (see modelAuthoredText).
 const EXAMPLE_SUMMARY = "Concise single-line summary.";
-const EXAMPLE_FINDING_MESSAGE = "Concrete single-line finding.";
-const EXAMPLE_FINDING_PATH = "src/file.ts";
+/** Exact (message, path, line) tuples from the packaged v3 and v1 schema examples. */
+const SCHEMA_EXAMPLE_FINDINGS = [
+	{ message: "Concrete single-line finding.", path: "src/file.ts", line: 1 }, // v3 authoring
+	{ message: "Concise single-line finding.", path: "src/file.ts", line: 12 }, // v1 cold-gate
+] as const;
 
-/** Works on raw or classified findings — only message/path/line are compared. */
+/**
+ * The verbatim rationale printed in `.claude/skills/pr-verify/SKILL.md`'s `REVIEW_VERIFICATION`
+ * example, whose decision is `refuted` for `C1`. This is the one parrot direction that fails
+ * OPEN: a verifier echoing the example is complete and schema-valid, so it silently clears a
+ * carried blocker and greens the gate (#484 review). The findings guards fail toward block; this
+ * one is what stops a non-review from removing a blocker.
+ */
+const EXAMPLE_VERIFICATION_RATIONALE = "Concrete single-line repository evidence.";
+
+/** Works on raw or classified findings — only message/path/line are compared (exact full-tuple match). */
 function isSchemaExampleFinding(finding: Pick<ReviewFinding, "message" | "path" | "line">): boolean {
-	return finding.message === EXAMPLE_FINDING_MESSAGE && finding.path === EXAMPLE_FINDING_PATH && finding.line === 1;
+	return SCHEMA_EXAMPLE_FINDINGS.some((example) => finding.message === example.message && finding.path === example.path && finding.line === example.line);
+}
+
+/**
+ * Fail closed when a seat echoes the packaged schema example (summary and/or finding sentinel).
+ * Trip on either the example summary or any example finding — a real review never emits these
+ * exact placeholders, so this cannot false-positive, and it also catches a fake-clean echo
+ * (example summary, empty findings).
+ */
+function assertNotSchemaExample(summary: string | undefined, findings: ReadonlyArray<Pick<ReviewFinding, "message" | "path" | "line">>, label: string): void {
+	if (summary?.trim() === EXAMPLE_SUMMARY || findings.some(isSchemaExampleFinding)) {
+		throw new ReviewFindingsParseError(`${label} echo the schema example verbatim (the seat did not review the diff)`);
+	}
+}
+
+/**
+ * Require the single delimited block to END the model-authored text.
+ *
+ * The cold-gate parsers read `modelAuthoredText`, which accumulates EVERY assistant turn
+ * (`step-runner.ts`), while the block regexes match anywhere. Without a tail rule a seat could emit
+ * a clean findings block — or a `refuted` verification — in an early turn, answer with unstructured
+ * prose, and have that early block stay gate-authoritative: an accepted pass, or a cleared blocker,
+ * that the seat's own final answer does not support (#484 review).
+ *
+ * This is added ON TOP of the existing single-block contract, never in place of it. Relaxing
+ * multiplicity to "the last block wins" was considered and rejected: for verification it would let
+ * a late refutation clear a real blocker, which is a fail-OPEN change to a merge authorization.
+ * A seat whose early draft block makes the pass invalid fails closed, which is the correct
+ * direction; making that case merely non-fatal is an operability question, not this fix.
+ */
+function assertBlockAtTail(text: string, match: RegExpMatchArray, label: string): void {
+	const end = (match.index ?? 0) + (match[0]?.length ?? 0);
+	if (text.slice(end).trim() !== "") throw new ReviewFindingsParseError(`${label} block is not the final model-authored output (a non-report answer follows it)`);
 }
 
 function parseDelimited(text: string, regex: RegExp, label: string): Record<string, unknown> {
@@ -478,14 +522,9 @@ export function parseAuthoringReviewFindings(text: string): AuthoringReviewRepor
 			findings.push(parseRawAuthoringFinding(value, index));
 		}
 	});
-	// Fail closed on the parroted schema example (see EXAMPLE_* above). The seat did not review;
-	// treat it as an incomplete seat, not a real blocker. Trip on either the example summary or any
-	// example finding — a real review never emits these exact placeholder strings, so this cannot
-	// false-positive, and it also catches a fake-clean echo (example summary, empty findings). The v3
-	// example keeps these same sentinel strings, so the guard covers #293's evidence schema too.
-	if (summary?.trim() === EXAMPLE_SUMMARY || findings.some(isSchemaExampleFinding)) {
-		throw new ReviewFindingsParseError("authoring review findings echo the schema example verbatim (the seat did not review the diff)");
-	}
+	// Fail closed on the parroted schema example (see EXAMPLE_* / assertNotSchemaExample). The seat
+	// did not review; treat it as an incomplete seat, not a real blocker.
+	assertNotSchemaExample(summary, findings, "authoring review findings");
 	return { schemaVersion: 3, summary: summary ?? "", findings };
 }
 
@@ -513,12 +552,14 @@ export function parseJudgeReport(text: string): JudgeReport {
 
 export function parseReviewFindings(text: string): ReviewFindingsReport {
 	const matches = [...text.matchAll(REPORT_RE)];
-	if (matches.length === 0) throw new ReviewFindingsParseError("review findings block not found");
+	const match = matches[0];
+	if (!match) throw new ReviewFindingsParseError("review findings block not found");
 	if (matches.length !== 1) throw new ReviewFindingsParseError("multiple review findings blocks found");
+	assertBlockAtTail(text, match, "review findings");
 
 	let parsed: unknown;
 	try {
-		parsed = JSON.parse(matches[0][1]);
+		parsed = JSON.parse(match[1] ?? "");
 	} catch (error) {
 		throw new ReviewFindingsParseError("review findings block is not valid JSON", { cause: error });
 	}
@@ -527,22 +568,27 @@ export function parseReviewFindings(text: string): ReviewFindingsReport {
 	if (parsed.schemaVersion !== 1) throw new ReviewFindingsParseError("unsupported review findings schemaVersion");
 	const summary = parseSingleLine(parsed.summary, "summary");
 	if (!Array.isArray(parsed.findings)) throw new ReviewFindingsParseError("review findings must be an array");
+	const findings = parsed.findings.map(parseFinding);
+	// Fail closed on the parroted cold-gate schema example (same exact-tuple guard as authoring).
+	assertNotSchemaExample(summary, findings, "review findings");
 
 	return {
 		schemaVersion: 1,
 		summary,
-		findings: parsed.findings.map(parseFinding),
+		findings,
 	};
 }
 
 export function parseReviewVerification(text: string): ReviewVerificationReport {
 	const matches = [...text.matchAll(VERIFICATION_RE)];
-	if (matches.length === 0) throw new ReviewFindingsParseError("review verification block not found");
+	const match = matches[0];
+	if (!match) throw new ReviewFindingsParseError("review verification block not found");
 	if (matches.length !== 1) throw new ReviewFindingsParseError("multiple review verification blocks found");
+	assertBlockAtTail(text, match, "review verification");
 
 	let parsed: unknown;
 	try {
-		parsed = JSON.parse(matches[0][1]);
+		parsed = JSON.parse(match[1] ?? "");
 	} catch (error) {
 		throw new ReviewFindingsParseError("review verification block is not valid JSON", { cause: error });
 	}
@@ -550,10 +596,16 @@ export function parseReviewVerification(text: string): ReviewVerificationReport 
 	assertKeys(parsed, ["schemaVersion", "decisions"], ["schemaVersion", "decisions"], "review verification report");
 	if (parsed.schemaVersion !== 1) throw new ReviewFindingsParseError("unsupported review verification schemaVersion");
 	if (!Array.isArray(parsed.decisions)) throw new ReviewFindingsParseError("review verification decisions must be an array");
+	const decisions = parsed.decisions.map((value, index) => parseVerificationDecision(value, index));
+	// Fail closed on the parroted pr-verify example. Unguarded, echoing it refutes the candidate and
+	// clears a real blocker — the opposite direction from the findings guard, and the dangerous one.
+	if (decisions.some((decision) => decision.rationale.trim() === EXAMPLE_VERIFICATION_RATIONALE)) {
+		throw new ReviewFindingsParseError("review verification decisions echo the schema example verbatim (the seat did not verify the candidate)");
+	}
 
 	return {
 		schemaVersion: 1,
-		decisions: parsed.decisions.map((value, index) => parseVerificationDecision(value, index)),
+		decisions,
 	};
 }
 
