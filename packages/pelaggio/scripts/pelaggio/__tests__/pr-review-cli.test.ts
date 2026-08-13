@@ -1,9 +1,26 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { after, describe, it } from "node:test";
 import { DEFAULTS, type ReviewConfig, type StepSettings } from "../config.js";
+import { main as adjudicateMain, type PrAdjudicateDeps } from "../pr-adjudicate-cli.js";
 import { main, runPrReviewGate, setPrReviewDepsForTests } from "../pr-review-cli.js";
+import { listPrReviewGateRecords, readPrReviewGateRecord, writePrReviewGateRecord } from "../pr-review-gate-record.js";
+import { isEligibleFleetGateRecord, readAdjudicationSourceRecord } from "../review/adjudication.js";
+import { reviewFindingFingerprint } from "../review/findings.js";
 import type { RunStepFn } from "../step-runner.js";
 import type { ParkSignal, ProviderName, StepEmit, StepResult } from "../types.js";
+
+const tmpDirs: string[] = [];
+after(() => {
+	for (const dir of tmpDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+function tmpRoot(prefix: string): string {
+	const dir = mkdtempSync(join(tmpdir(), prefix));
+	tmpDirs.push(dir);
+	return dir;
+}
 
 /** Minimal ReviewConfig for gate tests — full authoring/taxonomy from defaults. */
 function reviewPolicy(over: Partial<Pick<ReviewConfig, "maxPasses" | "budgetCap" | "providerDiversity">> = {}): ReviewConfig {
@@ -83,20 +100,23 @@ function report(summary: string, findings: unknown[] = []): string {
 const REVIEWED_SHA = "a".repeat(40);
 
 async function runCli(
-	opts: { files?: string; diff?: string; results?: Array<StepResult | Error>; diffError?: Error; statusPosted?: boolean; reviewDrivers?: StepSettings[]; verifySettings?: StepSettings } = {},
-): Promise<{ code: number; calls: RunCall[]; comments: string[]; statuses: string[]; statusShas: string[]; stdout: string; stderr: string }> {
+	opts: { files?: string; diff?: string; results?: Array<StepResult | Error>; diffError?: Error; statusPosted?: boolean; reviewDrivers?: StepSettings[]; verifySettings?: StepSettings; headRef?: string; ci?: boolean } = {},
+): Promise<{ code: number; calls: RunCall[]; comments: string[]; statuses: string[]; statusShas: string[]; stdout: string; stderr: string; gateRecordsRoot: string; adjudicationSourcesRoot: string }> {
 	const calls: RunCall[] = [];
 	const comments: string[] = [];
 	const statuses: string[] = [];
 	const statusShas: string[] = [];
 	const queued = [...(opts.results ?? [result()])];
+	// Hermetic evidence roots: local persistence must never land in the host repo's .dev/.
+	const gateRecordsRoot = join(tmpRoot("pr-review-cli-evidence-"), "gates");
+	const adjudicationSourcesRoot = join(tmpRoot("pr-review-cli-evidence-"), "sources");
 	const execFileSync = ((cmd: string, args: readonly string[]) => {
 		const a = args.join(" ");
-		// resolveReviewedSha pins the PR head sha via gh, then fetches it — independent of the
-		// diff, so it must resolve even when the diff inspection is being made to fail.
+		// resolveReviewedHead pins the PR head sha + claim branch via gh, then fetches — independent
+		// of the diff, so it must resolve even when the diff inspection is being made to fail.
 		if (cmd === "gh") {
-			assert.equal(a, "api repos/pelaggio/pelaggio/pulls/123 --jq .head.sha");
-			return `${REVIEWED_SHA}\n`;
+			assert.equal(a, "api repos/pelaggio/pelaggio/pulls/123 --jq {sha: .head.sha, ref: .head.ref}");
+			return `${JSON.stringify({ sha: REVIEWED_SHA, ref: opts.headRef ?? "feat/issue-123-fix" })}\n`;
 		}
 		assert.equal(cmd, "git");
 		if (a === "fetch --quiet origin main pull/123/head") return "";
@@ -127,6 +147,11 @@ async function runCli(
 			statusShas.push(sha);
 			return opts.statusPosted ?? true;
 		},
+		gateRecordsRoot,
+		adjudicationSourcesRoot,
+		now: () => Date.parse("2026-08-13T12:00:00Z"),
+		// Pinned: the ambient env (a real CI job) must not decide whether persistence runs.
+		isCi: () => opts.ci ?? false,
 	});
 	const originalStdout = process.stdout.write;
 	const originalStderr = process.stderr.write;
@@ -142,7 +167,7 @@ async function runCli(
 	}) as typeof process.stderr.write;
 	try {
 		const code = await main(["--pr", "123"]);
-		return { code, calls, comments, statuses, statusShas, stdout, stderr };
+		return { code, calls, comments, statuses, statusShas, stdout, stderr, gateRecordsRoot, adjudicationSourcesRoot };
 	} finally {
 		process.stdout.write = originalStdout;
 		process.stderr.write = originalStderr;
@@ -944,5 +969,241 @@ describe("pr-review CLI aggregation", () => {
 		assert.equal(review.gate, "pass");
 		assert.equal(review.agreement, "consensus-pass");
 		assert.match(review.body, /providers=claude\//);
+	});
+
+	const REVIEWED_HEAD = "d".repeat(40);
+	const mappableFinding = { severity: "must-fix" as const, message: "Broken parser.", path: "src/a.ts", line: 10 };
+	function mappableDiffExec(): typeof import("node:child_process").execFileSync {
+		const diff = ["diff --git a/src/a.ts b/src/a.ts", "index 1111111..2222222 100644", "--- a/src/a.ts", "+++ b/src/a.ts", "@@ -8,5 +8,5 @@", " context", " context", "-old", "+new", " context", " context", ""].join("\n");
+		return ((_: string, args: readonly string[]) => (args.includes("--name-only") ? "src/a.ts\n" : diff)) as typeof import("node:child_process").execFileSync;
+	}
+
+	it("emits SHA-bound adjudication source data for a complete consensus-block with mappable survivors", async () => {
+		const review = await runPrReviewGate({
+			pr: "497",
+			itemId: "497",
+			reviewedSha: REVIEWED_HEAD,
+			reviewDrivers: twoDrivers,
+			policy: reviewPolicy({ maxPasses: 1, budgetCap: 40, providerDiversity: "off" }),
+			execFileSync: mappableDiffExec(),
+			runStep: async (name) => {
+				if (name === "pr-review") return result({ text: report("Block.", [mappableFinding]) });
+				return verification([{ candidateId: "C1", decision: "survives", rationale: "Still present." }]);
+			},
+		});
+		assert.equal(review.gate, "block");
+		assert.equal(review.agreement, "consensus-block");
+		assert.equal(review.ok, true);
+		assert.ok(review.adjudicationSource);
+		assert.equal(review.adjudicationSource.reviewedSha, REVIEWED_HEAD);
+		assert.equal(review.adjudicationSource.prNumber, 497);
+		assert.equal(review.adjudicationSource.itemId, "497");
+		assert.equal(review.adjudicationSource.survivorCount, 1);
+		assert.equal(review.adjudicationSource.survivors[0]?.tier, "safety");
+		assert.equal(review.adjudicationSource.survivors[0]?.class, "correctness-regression");
+		assert.deepEqual(review.adjudicationSource.survivors[0]?.hunk, { path: "src/a.ts", start: 8, end: 12 });
+		assert.equal(review.adjudicationSource.survivors[0]?.finding.line, 10);
+		assert.match(review.body, /agreement=consensus-block/);
+	});
+
+	it("does not emit adjudicable evidence without an explicit reviewed SHA", async () => {
+		const review = await runPrReviewGate({
+			pr: "497",
+			itemId: "497",
+			reviewDrivers: twoDrivers,
+			policy: reviewPolicy({ maxPasses: 1, budgetCap: 40, providerDiversity: "off" }),
+			execFileSync: mappableDiffExec(),
+			runStep: async (name) => {
+				if (name === "pr-review") return result({ text: report("Block.", [mappableFinding]) });
+				return verification([{ candidateId: "C1", decision: "survives", rationale: "Still present." }]);
+			},
+		});
+		assert.equal(review.agreement, "consensus-block");
+		assert.equal(review.adjudicationSource, undefined);
+	});
+
+	it("does not emit adjudicable evidence for disagreement, invalid, or unmappable survivors", async () => {
+		const disagreement = await runPrReviewGate({
+			pr: "497",
+			itemId: "497",
+			reviewedSha: REVIEWED_HEAD,
+			reviewDrivers: twoDrivers,
+			policy: reviewPolicy({ maxPasses: 1, budgetCap: 40, providerDiversity: "off" }),
+			execFileSync: mappableDiffExec(),
+			runStep: async (name, _prompt, stepOpts) => {
+				if (name === "pr-review") {
+					return stepOpts.executionOverride?.provider === "claude" ? result({ text: report("Clean.") }) : result({ text: report("Block.", [mappableFinding]) });
+				}
+				return verification([{ candidateId: "C1", decision: "survives", rationale: "Yes." }]);
+			},
+		});
+		assert.equal(disagreement.agreement, "disagreement");
+		assert.equal(disagreement.adjudicationSource, undefined);
+
+		const invalid = await runPrReviewGate({
+			pr: "497",
+			itemId: "497",
+			reviewedSha: REVIEWED_HEAD,
+			reviewDrivers: twoDrivers,
+			policy: reviewPolicy({ maxPasses: 1, budgetCap: 40, providerDiversity: "off" }),
+			execFileSync: mappableDiffExec(),
+			runStep: async (_name, _prompt, stepOpts) => {
+				if (stepOpts.executionOverride?.provider === "codex") return result({ text: "not a report" });
+				return result({ text: report("Clean.") });
+			},
+		});
+		assert.equal(invalid.agreement, "invalid");
+		assert.equal(invalid.adjudicationSource, undefined);
+
+		const unmappable = await runPrReviewGate({
+			pr: "497",
+			itemId: "497",
+			reviewedSha: REVIEWED_HEAD,
+			reviewDrivers: twoDrivers,
+			policy: reviewPolicy({ maxPasses: 1, budgetCap: 40, providerDiversity: "off" }),
+			execFileSync: mappableDiffExec(),
+			runStep: async (name) => {
+				if (name === "pr-review") return result({ text: report("Block.", [{ severity: "must-fix", message: "No location." }]) });
+				return verification([{ candidateId: "C1", decision: "survives", rationale: "Still present." }]);
+			},
+		});
+		assert.equal(unmappable.agreement, "consensus-block");
+		assert.equal(unmappable.ok, true);
+		assert.equal(unmappable.adjudicationSource, undefined);
+		assert.match(unmappable.body, /No location/);
+	});
+});
+
+describe("pr-review CLI local gate-evidence persistence (#497)", () => {
+	const NEW_HEAD = "b".repeat(40);
+	const redFinding = { severity: "must-fix" as const, message: "Broken parser.", path: "src/a.ts", line: 10 };
+	const rollInspectionDiff = ["diff --git a/src/a.ts b/src/a.ts", "index 1111111..2222222 100644", "--- a/src/a.ts", "+++ b/src/a.ts", "@@ -8,5 +8,5 @@", " context", " context", "-old", "+new", " context", " context", ""].join("\n");
+
+	function redRoll(over: { ci?: boolean; headRef?: string } = {}) {
+		return runCli({
+			...over,
+			files: "src/a.ts\n",
+			diff: rollInspectionDiff,
+			results: [result({ text: report("Block.", [redFinding]) }), verification([{ candidateId: "C1", decision: "survives", rationale: "Still present." }])],
+		});
+	}
+
+	/** Full PrAdjudicateDeps against the roots a local pr-review run just wrote. */
+	function adjudicateHarness(roll: { gateRecordsRoot: string; adjudicationSourcesRoot: string }): { deps: PrAdjudicateDeps; effects: string[]; comments: string[] } {
+		const effects: string[] = [];
+		const comments: string[] = [];
+		const repo = tmpRoot("pr-review-adjudicate-flow-");
+		const prPayload = JSON.stringify({ state: "OPEN", isDraft: false, headRefName: "feat/issue-123-fix", headRefOid: NEW_HEAD, headRepository: { nameWithOwner: "pelaggio/pelaggio" } });
+		const deps: PrAdjudicateDeps = {
+			repo,
+			ghRepo: "pelaggio/pelaggio",
+			shipTargetName: "pull-request",
+			reviewRunner: "local",
+			gh: (args) => {
+				if (args[0] === "pr" && args[1] === "view") return { stdout: prPayload, stderr: "", status: 0 };
+				if (args[0] === "api" && args[1] === "user") return { stdout: "operator\n", stderr: "", status: 0 };
+				throw new Error(`unexpected gh call: ${args.join(" ")}`);
+			},
+			execFileSync: ((cmd: string, args: readonly string[]) => {
+				assert.equal(cmd, "git");
+				if (args[0] === "merge-base") return "";
+				if (args[0] === "diff") {
+					// A genuinely narrow fix: one in-range replacement inside the recorded hunk (8-12).
+					return ["diff --git a/src/a.ts b/src/a.ts", "index 2222222..3333333 100644", "--- a/src/a.ts", "+++ b/src/a.ts", "@@ -10,1 +10,1 @@", "-new", "+guarded", ""].join("\n");
+				}
+				throw new Error(`unexpected git: ${args.join(" ")}`);
+			}) as typeof import("node:child_process").execFileSync,
+			log: () => {},
+			err: (msg) => effects.push(`err:${msg}`),
+			now: () => Date.parse("2026-08-13T13:00:00Z"),
+			mainWorktree: (cwd) => cwd,
+			listGateRecords: listPrReviewGateRecords,
+			gateRecordsRoot: roll.gateRecordsRoot,
+			adjudicationSourcesRoot: roll.adjudicationSourcesRoot,
+			readAdjudicationSource: readAdjudicationSourceRecord,
+			readFileSync,
+			writeGateRecord: writePrReviewGateRecord,
+			prepareReviewHead: (_repo, candidate, _exec, headRef) => ({ diffCwd: "/tmp/adjudicate-flow-head", baseRef: "origin/main", headRef: headRef ?? `refs/pelaggio-review/pr-${candidate.prNumber}` }),
+			cleanupReviewHead: () => {},
+			runStep: async (name) => {
+				effects.push(`step:${name}`);
+				return verification([{ candidateId: "C1", decision: "refuted", rationale: "Fixed in the current head." }]);
+			},
+			resolveVerifySettings: () => driver("claude"),
+			upsertComment: (_gh, _repo, prNumber, body) => {
+				effects.push(`comment:${prNumber}`);
+				comments.push(body);
+				return true;
+			},
+			postStatus: (_gh, _repo, sha, state) => {
+				effects.push(`status:${state}:${sha}`);
+				return true;
+			},
+			managedState: () => "managed",
+			isCi: false,
+			isSingleShot: false,
+		};
+		return { deps, effects, comments };
+	}
+
+	it("a local red roll persists drain-parity fleet + source evidence that pr-adjudicate binds to", async () => {
+		const roll = await redRoll();
+		assert.equal(roll.code, 1);
+		// Fleet record: drain-parity shape, itemId resolved from the claim branch, adjudicable.
+		const fleetRecord = readPrReviewGateRecord(roll.gateRecordsRoot, 123, REVIEWED_SHA);
+		assert.ok(fleetRecord && fleetRecord.schemaVersion === 2 && fleetRecord.producer === "fleet");
+		assert.equal(fleetRecord.itemId, "123");
+		assert.equal(fleetRecord.agreement, "consensus-block");
+		assert.equal(fleetRecord.survivorCount, 1);
+		assert.equal(fleetRecord.runner, "local");
+		assert.ok(isEligibleFleetGateRecord(fleetRecord));
+		// SHA-bound source record with the pre-fix survives evidence and the mapped hunk.
+		const source = readAdjudicationSourceRecord(roll.adjudicationSourcesRoot, 123, REVIEWED_SHA);
+		assert.ok(source);
+		assert.equal(source.itemId, "123");
+		assert.equal(source.survivors[0]?.verification.rationale, "Still present.");
+		assert.deepEqual(source.survivors[0]?.hunk, { path: "src/a.ts", start: 8, end: 12 });
+
+		// The real pr-adjudicate CLI now finds CURRENT evidence from this roll and completes.
+		const flow = adjudicateHarness(roll);
+		assert.equal(await adjudicateMain(["--pr", "123"], flow.deps), 0);
+		assert.ok(flow.effects.includes("step:pr-verify"), "safety survivor gets a live adjudication-time verification");
+		assert.ok(flow.effects.includes(`status:success:${NEW_HEAD}`));
+		// The persisted operator record quotes the LIVE refutation, never the stale survives text.
+		const operator = readPrReviewGateRecord(roll.gateRecordsRoot, 123, NEW_HEAD);
+		assert.ok(operator && operator.schemaVersion === 2 && operator.producer === "operator-adjudication");
+		assert.equal(operator.reviewedSourceSha, REVIEWED_SHA);
+		const rationale = operator.dispositions[reviewFindingFingerprint(redFinding)]?.rationale ?? "";
+		assert.match(rationale, /Fixed in the current head\./);
+		assert.doesNotMatch(rationale, /Still present/);
+		assert.match(rationale, /adjudication-time/);
+	});
+
+	it("a clean local pass persists a drain-parity fleet record without adjudication source", async () => {
+		const out = await runCli();
+		assert.equal(out.code, 0);
+		const record = readPrReviewGateRecord(out.gateRecordsRoot, 123, REVIEWED_SHA);
+		assert.ok(record && record.schemaVersion === 2 && record.producer === "fleet");
+		assert.equal(record.gate, "pass");
+		assert.equal(record.agreement, "consensus-pass");
+		assert.equal(readAdjudicationSourceRecord(out.adjudicationSourcesRoot, 123, REVIEWED_SHA), null);
+	});
+
+	it("a CI run posts the red status but persists no local gate evidence", async () => {
+		const out = await redRoll({ ci: true });
+		assert.equal(out.code, 1);
+		assert.deepEqual(out.statuses, ["block"]);
+		assert.deepEqual(listPrReviewGateRecords(out.gateRecordsRoot), []);
+		assert.equal(readAdjudicationSourceRecord(out.adjudicationSourcesRoot, 123, REVIEWED_SHA), null);
+	});
+
+	it("persists nothing for a non-claim head branch or a parked gate", async () => {
+		const manual = await redRoll({ headRef: "manual/fix" });
+		assert.equal(manual.code, 1);
+		assert.deepEqual(listPrReviewGateRecords(manual.gateRecordsRoot), []);
+
+		const parked = await runCli({ results: [result({ ok: false, subtype: "error_rate_limit", cost: 0, turns: 0 })] });
+		assert.equal(parked.code, 1);
+		assert.deepEqual(listPrReviewGateRecords(parked.gateRecordsRoot), []);
 	});
 });

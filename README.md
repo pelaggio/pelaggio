@@ -113,6 +113,12 @@ findings-driven resume pipeline. `--allow-repeat` bypasses only the one-pass
 `autopilot:revised` label — it does not skip review, confinement, or the ship
 target. Invoke it from the main checkout, the same station as `land` / `pr-review`.
 
+`pelaggio pr-adjudicate --pr <number>` is the local-operator “go” after a *narrow*
+fix on a findings-terminal review: it re-verifies only the recorded repair hunks
+and posts `review=success` to the pinned head. Broad churn, missing source
+evidence, or a surviving safety finding refuses and sends you back to a full
+`pr-review` / `revise`. Same main-checkout station as `pr-review` / `land`.
+
 ### Platform support
 
 Pelaggio runs on macOS, Linux, and **Windows via [WSL](https://learn.microsoft.com/windows/wsl/)**. The

@@ -137,6 +137,38 @@ describe("cleanupReviewHead", () => {
 		rmSync(repo, { recursive: true, force: true });
 	});
 
+	it("fetches and deletes an explicit adjudication ref without touching the drain ref", () => {
+		const repo = mkdtempSync(join(tmpdir(), "review-head-adj-"));
+		const cmds: string[] = [];
+		const candidate = { prNumber: 9, itemId: "84", branch: "feat/issue-84-x", headSha: "abc123", statusState: "missing" as const };
+		const out = prepareReviewHead(
+			repo,
+			candidate,
+			(cmd) => {
+				cmds.push(cmd);
+				if (cmd.startsWith("git rev-parse")) return "abc123\n";
+				return "";
+			},
+			"refs/pelaggio-adjudicate/pr-9",
+		);
+		assert.equal(out?.headRef, "refs/pelaggio-adjudicate/pr-9");
+		assert.ok(cmds.includes("git fetch origin refs/pull/9/head:refs/pelaggio-adjudicate/pr-9"));
+		assert.ok(!cmds.some((c) => c.includes("refs/pelaggio-review/pr-9")));
+		cmds.length = 0;
+		mkdirSync(join(repo, ".dev", "review-heads", "abc123"), { recursive: true });
+		cleanupReviewHead(
+			repo,
+			candidate,
+			(cmd) => {
+				cmds.push(cmd);
+				return "";
+			},
+			"refs/pelaggio-adjudicate/pr-9",
+		);
+		assert.deepEqual(cmds, [`git worktree remove --force ${join(repo, ".dev", "review-heads", "abc123")}`, "git update-ref -d refs/pelaggio-adjudicate/pr-9"]);
+		rmSync(repo, { recursive: true, force: true });
+	});
+
 	it("skips the worktree remove when the path is absent and stays fail-soft on error", () => {
 		const repo = mkdtempSync(join(tmpdir(), "review-clean-"));
 		const cmds: string[] = [];

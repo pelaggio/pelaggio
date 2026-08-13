@@ -97,6 +97,7 @@ import { type NotifyConfig, notifyCycle, notifyDecision as notifyDecisionEvent, 
 import { buildFailClosedComment, type PrReviewGateResult, runPrReviewGate } from "./pr-review-cli.js";
 import { gateRecordsDir, type NewPrReviewGateRecord, writePrReviewGateRecord } from "./pr-review-gate-record.js";
 import { capabilityMapFrom, resolveAuthoringReviewConfig } from "./provider-routing.js";
+import { adjudicationSourcesDir, fleetRecordDigestOf, writeAdjudicationSourceRecord } from "./review/adjudication.js";
 import { runReviewLoop } from "./review/loop.js";
 import { type ReviewRecord, renderReviewRecord, writeReviewRecord } from "./review/record.js";
 import { cleanupAuthoringReviewSeatsForSha, isAuthoringReviewSeatPath, prepareAuthoringReviewSeat } from "./review/seats.js";
@@ -2100,6 +2101,8 @@ export interface OrchestratorDeps {
 		queueRoot: string;
 		gateRecordsRoot: string;
 		writeGateRecord: typeof writePrReviewGateRecord;
+		adjudicationSourcesRoot: string;
+		writeAdjudicationSource: typeof writeAdjudicationSourceRecord;
 	}>;
 	/**
 	 * Continuous-mode free queue probe (issue #82). Defaults to `listItems` + FlowPolicy
@@ -2945,6 +2948,8 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			gateRecordsRoot: hermeticQueueRoot(() => gateRecordsDir(mainWorktree(REPO)), "gate-records"),
 			// Not guarded: it writes to `gateRecordsRoot`, which is itself hermetic by default above.
 			writeGateRecord: writePrReviewGateRecord,
+			adjudicationSourcesRoot: hermeticQueueRoot(() => adjudicationSourcesDir(mainWorktree(REPO)), "adjudication-sources"),
+			writeAdjudicationSource: writeAdjudicationSourceRecord,
 			...deps.review,
 		};
 		const shipIsPr = shipTargetName === "pull-request" || shipTargetName === "auto-merge-pr";
@@ -3090,11 +3095,13 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					if (!prepared) throw new Error("could not prepare PR head for local review");
 					const result = await review.runReviewGate({
 						pr: String(pr.prNumber),
+						itemId: pr.itemId,
 						profile: "standard",
 						cwd: REPO,
 						diffCwd: prepared.diffCwd,
 						diffBaseRef: prepared.baseRef,
 						diffHeadRef: prepared.headRef,
+						reviewedSha: pr.headSha,
 						policy: review.policy,
 						parkSignal, // shared: a rate-limit park sets this and flows into the wait+retry policy
 					});
@@ -3173,13 +3180,36 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				// look unspent after a restart. Persistence for *this* PR still completes below — the
 				// review is already paid for, so its outcome must not be thrown away too.
 				appendDayBudgetCharge(reviewCost); // failure latches receiptUndurable + halts the campaign
+				let fleetPath: string | undefined;
 				try {
-					review.writeGateRecord(review.gateRecordsRoot, gateRecord);
+					fleetPath = review.writeGateRecord(review.gateRecordsRoot, gateRecord);
 				} catch (e) {
 					const msg = e instanceof Error ? e.message : String(e);
 					console.warn(`review ${pr.itemId}#${pr.prNumber} — could not persist gate outcome: ${msg}`);
 					if (record) unclaimReviewRequest(review.queueRoot, pr.prNumber, pr.headSha);
 					continue;
+				}
+				const draft = gateResult?.adjudicationSource;
+				if (
+					fleetPath &&
+					draft &&
+					draft.reviewedSha.toLowerCase() === pr.headSha.toLowerCase() &&
+					draft.survivorCount === gateRecord.survivorCount &&
+					draft.agreement === gateRecord.agreement &&
+					draft.prNumber === gateRecord.prNumber &&
+					draft.itemId === gateRecord.itemId
+				) {
+					try {
+						const fleetBytes = readFileSync(fleetPath);
+						review.writeAdjudicationSource(review.adjudicationSourcesRoot, {
+							...draft,
+							schemaVersion: 1,
+							fleetRecordDigest: fleetRecordDigestOf(fleetBytes),
+						});
+					} catch (e) {
+						const msg = e instanceof Error ? e.message : String(e);
+						console.warn(`review ${pr.itemId}#${pr.prNumber} — could not persist adjudication source: ${msg}`);
+					}
 				}
 				upsertReviewComment(review.gh, review.ghRepo, pr.prNumber, body);
 				const posted = postReviewStatus(review.gh, review.ghRepo, pr.headSha, finalState, finalState === "success" ? "local pelaggio review passed" : "local pelaggio review blocked");

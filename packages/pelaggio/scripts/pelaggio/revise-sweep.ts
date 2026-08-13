@@ -26,7 +26,7 @@ const PARK_MARKER = "<!-- pelaggio-revise-parked -->";
 /** Append-only operator-invocation audit — never upserted (`gh pr comment` POST, not PATCH). */
 export const REVISE_INVOCATION_MARKER = "<!-- pelaggio-revise-invocation -->";
 /** Claim-branch grammar shared with `findRevisablePrs` — load-bearing for git-ref safety. */
-const CLAIM_BRANCH_RE = /^feat\/issue-(\d+)(?:-[A-Za-z0-9._-]*)?$/;
+export const CLAIM_BRANCH_RE = /^feat\/issue-(\d+)(?:-[A-Za-z0-9._-]*)?$/;
 
 export interface RevisablePr {
 	prNumber: number;

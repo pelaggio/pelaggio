@@ -14,11 +14,14 @@
  */
 
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { CONFIG, modelForProvider, REPO, type ReviewConfig, ROADMAP_GITHUB, resolveDriverCandidates, resolveStepSettings, type StepSettings } from "./config.js";
 import { upsertMarkerComment } from "./github-posting.js";
-import { classifySecurityReviewDiff, expandPackagedSkill, formatReviewMetrics, parseWaitFlag, resolveParkReset, type SecurityDiffSignal } from "./helpers.js";
+import { classifySecurityReviewDiff, expandPackagedSkill, formatReviewMetrics, mainWorktree, parseWaitFlag, resolveParkReset, type SecurityDiffSignal } from "./helpers.js";
+import { gateRecordsDir, type NewPrReviewFleetGateRecord, writePrReviewGateRecord } from "./pr-review-gate-record.js";
+import { adjudicationSourcesDir, buildAdjudicationSourceDraft, fleetRecordDigestOf, type PrAdjudicationSourceDraft, writeAdjudicationSourceRecord } from "./review/adjudication.js";
 import {
 	evaluateReviewConvergence,
 	modelAuthoredText,
@@ -33,6 +36,7 @@ import {
 	type VerificationCandidate,
 	type VerificationDisposition,
 } from "./review/findings.js";
+import { CLAIM_BRANCH_RE } from "./revise-sweep.js";
 import type { GhRunner } from "./roadmap/github-issues.js";
 import type { RunStepFn } from "./step-runner.js";
 import { runStep } from "./step-runner.js";
@@ -81,14 +85,30 @@ interface PrReviewDeps {
 	verifySettings?: StepSettings;
 	/** Same rationale as above for the review policy (pass count, cap, diversity mode). */
 	policy?: ReviewConfig;
+	/** Local-runner gate-evidence persistence (#497): the drain's write path, reachable from a
+	 *  direct `pelaggio pr-review --pr <n>` run so a later `pr-adjudicate` finds CURRENT
+	 *  evidence. Roots are unset in production (resolved lazily from the main worktree); tests
+	 *  MUST pin them so a test run never writes into the host repo's `.dev/`. */
+	writeGateRecord: typeof writePrReviewGateRecord;
+	writeAdjudicationSource: typeof writeAdjudicationSourceRecord;
+	readFileSync: typeof readFileSync;
+	gateRecordsRoot?: string;
+	adjudicationSourcesRoot?: string;
+	now: () => number;
+	/** CI runs post the red/green status but never claim `runner: "local"` evidence. */
+	isCi: () => boolean;
 }
 
 export interface RunPrReviewGateOptions {
 	pr: string;
+	/** Roadmap item id. Required when emitting adjudication source evidence. */
+	itemId?: string;
 	profile?: string;
 	cwd?: string;
 	diffBaseRef?: string;
 	diffHeadRef?: string;
+	/** Full 40-character SHA of the reviewed head. Never inferred from `diffHeadRef`. */
+	reviewedSha?: string;
 	diffCwd?: string;
 	runStep?: RunStepFn;
 	execFileSync?: typeof execFileSync;
@@ -118,6 +138,8 @@ export interface PrReviewGateResult {
 	breakerReason?: ReviewExhaustionReason;
 	iterations?: number;
 	survivorCount?: number;
+	/** Present only for a complete findings-terminal consensus-block with mappable survivors. */
+	adjudicationSource?: PrAdjudicationSourceDraft;
 }
 
 let deps: PrReviewDeps = {
@@ -125,6 +147,11 @@ let deps: PrReviewDeps = {
 	execFileSync,
 	upsertComment: upsertCommentDefault,
 	postStatus: postStatusDefault,
+	writeGateRecord: writePrReviewGateRecord,
+	writeAdjudicationSource: writeAdjudicationSourceRecord,
+	readFileSync,
+	now: () => Date.now(),
+	isCi: () => process.env.CI === "true",
 };
 
 export function setPrReviewDepsForTests(overrides: Partial<PrReviewDeps>): () => void {
@@ -237,7 +264,7 @@ function formatReviewerSet(drivers: readonly StepSettings[]): string {
 	return drivers.map((driver) => driver.provider).join("+");
 }
 
-function executionOverrideFor(candidate: StepSettings): { provider: ProviderName; model?: string; codexModel?: string } {
+export function executionOverrideFor(candidate: StepSettings): { provider: ProviderName; model?: string; codexModel?: string } {
 	// Realize each provider's own slot into the generic override shape: Codex uses `codexModel`,
 	// Claude/Grok/OpenCode carry their model in the generic `model` field (#431).
 	const model = modelForProvider(candidate, candidate.provider);
@@ -326,14 +353,25 @@ function upsertCommentDefault(pr: string, body: string): void {
  *  that lands mid-review is neither reviewed nor greened (no fail-open). Reviewing the
  *  local checkout's HEAD instead posts to whatever happens to be checked out, greening
  *  the wrong commit while the PR head stays blocked (#282/#307). */
-function resolveReviewedSha(exec: typeof execFileSync, pr: string, ghRepo: string): string {
+function resolveReviewedHead(exec: typeof execFileSync, pr: string, ghRepo: string): { sha: string; itemId?: string } {
 	const git = (args: string[]): string => String(exec("git", args, { cwd: REPO, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] })).trim();
-	const sha = String(exec("gh", ["api", `repos/${ghRepo}/pulls/${pr}`, "--jq", ".head.sha"], { cwd: REPO, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] })).trim();
-	if (!/^[0-9a-f]{7,64}$/.test(sha)) throw new Error(`could not resolve PR #${pr} head sha (got ${JSON.stringify(sha)})`);
+	const raw = String(exec("gh", ["api", `repos/${ghRepo}/pulls/${pr}`, "--jq", "{sha: .head.sha, ref: .head.ref}"], { cwd: REPO, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] })).trim();
+	let head: { sha?: unknown; ref?: unknown };
+	try {
+		head = JSON.parse(raw) as { sha?: unknown; ref?: unknown };
+	} catch {
+		throw new Error(`could not resolve PR #${pr} head (got ${JSON.stringify(raw.slice(0, 200))})`);
+	}
+	const sha = typeof head.sha === "string" ? head.sha : "";
+	if (!/^[0-9a-f]{7,64}$/.test(sha)) throw new Error(`could not resolve PR #${pr} head sha (got ${JSON.stringify(head.sha)})`);
+	// Item identity resolves from the claim-branch name — the same resolution the local review
+	// drain uses (`findReviewCandidates`) and the same grammar `pr-adjudicate` checks the PR
+	// against, so locally persisted gate evidence carries the itemId adjudication will expect.
+	const itemId = typeof head.ref === "string" ? head.ref.match(CLAIM_BRANCH_RE)?.[1] : undefined;
 	// Make origin/main and the pinned PR head reachable locally for the diff. `pull/<n>/head`
 	// always resolves for a GitHub PR (unlike a bare sha, which the server may refuse to serve).
 	git(["fetch", "--quiet", "origin", "main", `pull/${pr}/head`]);
-	return sha;
+	return { sha, ...(itemId ? { itemId } : {}) };
 }
 
 function postStatusDefault(gate: "pass" | "block", sha: string): boolean {
@@ -385,7 +423,7 @@ function parkGateResult(signal: ParkSignal, result: StepResult, passes: readonly
 	return { gate: "park", body, cost, costEstimated, turns, ok: false, subtype: "error_rate_limit", park: { resetsAt: signal.resetsAt, limitType: signal.limitType } };
 }
 
-function readSecuritySignal(opts: { execFileSync: typeof execFileSync; diffCwd: string; diffBaseRef: string; diffHeadRef: string }): SecurityDiffSignal {
+function readInspectionDiff(opts: { execFileSync: typeof execFileSync; diffCwd: string; diffBaseRef: string; diffHeadRef: string }): { signal: SecurityDiffSignal; files: string[]; diff: string } {
 	const range = `${opts.diffBaseRef}...${opts.diffHeadRef}`;
 	const files = opts
 		.execFileSync("git", ["diff", "--name-only", range], {
@@ -401,10 +439,10 @@ function readSecuritySignal(opts: { execFileSync: typeof execFileSync; diffCwd: 
 		encoding: "utf-8",
 		stdio: ["ignore", "pipe", "pipe"],
 	});
-	return classifySecurityReviewDiff(files, diff);
+	return { signal: classifySecurityReviewDiff(files, diff), files, diff };
 }
 
-function trustedLocalContext(opts: { diffCwd: string; diffBaseRef: string; diffHeadRef: string } | null): string {
+export function trustedLocalContext(opts: { diffCwd: string; diffBaseRef: string; diffHeadRef: string } | null): string {
 	if (!opts) return "";
 	return [
 		"",
@@ -474,7 +512,7 @@ async function runReviewPass(iteration: number, label: ReviewLabel, prompt: stri
 	}
 }
 
-function verificationPrompt(candidates: readonly VerificationCandidate[], localContext: string): string {
+export function verificationPrompt(candidates: readonly VerificationCandidate[], localContext: string): string {
 	return [
 		expandPackagedSkill("pr-verify", ""),
 		"",
@@ -564,8 +602,13 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 	const verifySettings = options.verifySettings ?? deps.verifySettings ?? resolveStepSettings(CONFIG, profile, "pr-verify");
 
 	let securitySignal: SecurityDiffSignal;
+	let inspectionFiles: string[] = [];
+	let inspectionDiff = "";
 	try {
-		securitySignal = readSecuritySignal({ execFileSync: execFileSyncImpl, diffCwd, diffBaseRef, diffHeadRef });
+		const inspected = readInspectionDiff({ execFileSync: execFileSyncImpl, diffCwd, diffBaseRef, diffHeadRef });
+		securitySignal = inspected.signal;
+		inspectionFiles = inspected.files;
+		inspectionDiff = inspected.diff;
 	} catch (e) {
 		const msg = e instanceof Error ? e.message : String(e);
 		const body = buildFailClosedComment("error_diff", `Could not inspect the PR diff for security-sensitive changes, so this gate blocks the merge.\n\n${msg}`);
@@ -709,16 +752,111 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 	const costEstimated = results.some((result) => result.costEstimated);
 	const turns = results.reduce((sum, result) => sum + result.turns, 0);
 	const subtype = gate === "pass" ? "success" : (breakerReason ?? aggregateSubtype(passes));
-	const summary = `Convergence: ${gate === "pass" ? "converged" : `exhausted (${breakerReason ?? "invalid-pass"})`} · agreement=${agreement} · iterations=${passes.at(-1)?.iteration ?? 0} · survivors=${carried.size} · providers=${pairing} · aggregate cost=$${cost.toFixed(2)}`;
+	const lastIteration = passes.at(-1)?.iteration ?? 0;
+	const lastPasses = passes.filter((pass) => pass.iteration === lastIteration);
+	const completedCells = lastPasses.filter(passOk).length;
+	const verifications = new Map<string, { id: string; rationale: string }>();
+	for (const pass of [...passes].reverse()) {
+		for (const disposition of pass.dispositions ?? []) {
+			if (disposition.decision !== "survives") continue;
+			const fingerprint = reviewFindingFingerprint(disposition.finding);
+			if (!verifications.has(fingerprint)) verifications.set(fingerprint, { id: disposition.id, rationale: disposition.rationale });
+		}
+	}
+	const prNumber = Number.parseInt(options.pr, 10);
+	const adjudicationSource = buildAdjudicationSourceDraft({
+		prNumber,
+		itemId: options.itemId ?? "",
+		reviewedSha: options.reviewedSha ?? "",
+		agreement,
+		requiredCells,
+		completedCells,
+		ok,
+		survivors: [...carried.values()],
+		verifications,
+		inspectionDiff,
+		changedFiles: inspectionFiles,
+		taxonomy: policy.taxonomy,
+	});
+	const summary = `Convergence: ${gate === "pass" ? "converged" : `exhausted (${breakerReason ?? "invalid-pass"})`} · agreement=${agreement} · iterations=${lastIteration} · survivors=${carried.size} · providers=${pairing} · aggregate cost=$${cost.toFixed(2)}`;
 	const body = buildComment(gate, passes, securitySignal, summary, {
-		iterations: passes.at(-1)?.iteration ?? 0,
+		iterations: lastIteration,
 		survivors: carried.size,
 		breaker: breakerReason,
 		providers: pairing,
 		agreement,
 	});
 	options.upsertComment?.(options.pr, body);
-	return { gate, body, cost, costEstimated, turns, ok, subtype, agreement, breakerReason, iterations: passes.at(-1)?.iteration ?? 0, survivorCount: carried.size };
+	return { gate, body, cost, costEstimated, turns, ok, subtype, agreement, breakerReason, iterations: lastIteration, survivorCount: carried.size, ...(adjudicationSource ? { adjudicationSource } : {}) };
+}
+
+/**
+ * Persist the local fleet gate record and (when present and consistent) the SHA-bound
+ * adjudication source record for a completed direct `pr-review` run — the same write path and
+ * consistency conditions the pipeline review drain uses (`runLocalReviewDrain`), so the
+ * documented local pr-review → revise → pr-adjudicate flow leaves CURRENT evidence that
+ * `pr-adjudicate` can find (#497). Best-effort: a persistence failure warns and returns —
+ * adjudication then refuses on missing evidence, which is the safe outcome.
+ */
+export function persistLocalGateEvidence(opts: {
+	prNumber: number;
+	headSha: string;
+	itemId: string;
+	review: PrReviewGateResult;
+	gateRecordsRoot: string;
+	adjudicationSourcesRoot: string;
+	writeGateRecord: typeof writePrReviewGateRecord;
+	writeAdjudicationSource: typeof writeAdjudicationSourceRecord;
+	readFileSync: typeof readFileSync;
+	now: () => number;
+	warn: (msg: string) => void;
+}): void {
+	if (opts.review.gate === "park") return;
+	const gateRecord: NewPrReviewFleetGateRecord = {
+		producer: "fleet",
+		prNumber: opts.prNumber,
+		headSha: opts.headSha,
+		itemId: opts.itemId,
+		gate: opts.review.gate === "pass" ? "pass" : "block",
+		ok: opts.review.ok,
+		subtype: opts.review.subtype,
+		agreement: opts.review.agreement ?? "invalid",
+		breakerReason: opts.review.breakerReason,
+		iterations: opts.review.iterations,
+		survivorCount: opts.review.survivorCount,
+		cost: opts.review.cost,
+		costEstimated: opts.review.costEstimated,
+		turns: opts.review.turns,
+		runner: "local",
+		reviewedAt: new Date(opts.now()).toISOString(),
+	};
+	let fleetPath: string;
+	try {
+		fleetPath = opts.writeGateRecord(opts.gateRecordsRoot, gateRecord);
+	} catch (e) {
+		opts.warn(`could not persist gate outcome: ${e instanceof Error ? e.message : String(e)}`);
+		return;
+	}
+	const draft = opts.review.adjudicationSource;
+	if (
+		draft &&
+		draft.reviewedSha.toLowerCase() === opts.headSha.toLowerCase() &&
+		draft.survivorCount === gateRecord.survivorCount &&
+		draft.agreement === gateRecord.agreement &&
+		draft.prNumber === gateRecord.prNumber &&
+		draft.itemId === gateRecord.itemId
+	) {
+		try {
+			const fleetBytes = opts.readFileSync(fleetPath);
+			opts.writeAdjudicationSource(opts.adjudicationSourcesRoot, {
+				...draft,
+				schemaVersion: 1,
+				fleetRecordDigest: fleetRecordDigestOf(fleetBytes),
+			});
+		} catch (e) {
+			opts.warn(`could not persist adjudication source: ${e instanceof Error ? e.message : String(e)}`);
+		}
+	}
 }
 
 export async function main(argv: string[]): Promise<number> {
@@ -754,15 +892,46 @@ export async function main(argv: string[]): Promise<number> {
 	// status leaves the PR blocked, which is the safe (fail-closed) outcome.
 	let reviewedSha: string | undefined;
 	try {
-		reviewedSha = resolveReviewedSha(deps.execFileSync, pr, ROADMAP_GITHUB.ghRepo);
+		const head = resolveReviewedHead(deps.execFileSync, pr, ROADMAP_GITHUB.ghRepo);
+		reviewedSha = head.sha;
 		// Policy/pool are intentionally not passed: runPrReviewGate resolves them through
 		// options → deps → CONFIG, so the same defaults apply and tests can pin the seam.
-		const review = await runPrReviewGate({ pr, profile, cwd: REPO, diffCwd: REPO, diffHeadRef: reviewedSha, runStep: deps.runStep, execFileSync: deps.execFileSync });
+		const review = await runPrReviewGate({
+			pr,
+			...(head.itemId ? { itemId: head.itemId } : {}),
+			profile,
+			cwd: REPO,
+			diffCwd: REPO,
+			diffHeadRef: reviewedSha,
+			reviewedSha,
+			runStep: deps.runStep,
+			execFileSync: deps.execFileSync,
+		});
 
 		// The review text goes to stdout unconditionally so the CI log always
 		// carries the findings — a failed comment upsert (or a truncated run)
 		// must not be able to lose the only copy of a $-priced review.
 		process.stdout.write(`${review.body}\n`);
+
+		// Local (non-CI) completed runs persist their gate evidence exactly as the drain does,
+		// so a red roll here is adjudicable: without this, `pr-adjudicate` either refuses or
+		// binds to an older drain record and ignores this run's survivors (#497). CI runs skip
+		// it — their checkout is ephemeral and the records claim `runner: "local"`.
+		if (!deps.isCi() && head.itemId && review.gate !== "park") {
+			persistLocalGateEvidence({
+				prNumber: Number.parseInt(pr, 10),
+				headSha: reviewedSha,
+				itemId: head.itemId,
+				review,
+				gateRecordsRoot: deps.gateRecordsRoot ?? gateRecordsDir(mainWorktree(REPO)),
+				adjudicationSourcesRoot: deps.adjudicationSourcesRoot ?? adjudicationSourcesDir(mainWorktree(REPO)),
+				writeGateRecord: deps.writeGateRecord,
+				writeAdjudicationSource: deps.writeAdjudicationSource,
+				readFileSync: deps.readFileSync,
+				now: deps.now,
+				warn: (msg) => process.stderr.write(`⚠ ${msg}\n`),
+			});
+		}
 
 		// CI stays fail-closed: a rate-limit park has no park loop on a one-shot GH Actions job, so
 		// it posts red and exits 1 exactly as a block does. Only the local orchestrator sweep treats
