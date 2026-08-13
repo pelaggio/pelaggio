@@ -158,6 +158,88 @@ Only the local drain persists fleet files today. A CI runner has a read-only tok
 ephemeral checkout, so its durable outcome remains the forge metrics marker until a later
 local materialization pass is implemented.
 
+## Operator adjudication — `pelaggio pr-adjudicate`
+
+`npx pelaggio pr-adjudicate --pr <n> [--profile <name>]` is the local-runner “go” after a
+narrow fix. It does **not** launch another discovery fleet. It binds the old reviewed SHA,
+the current PR-head SHA, the exact interdiff bytes, every carried survivor, and the
+authenticated operator; accepts only interdiff edits inside the recorded finding-bearing
+hunks; re-runs one bounded `pr-verify` over every safety-tier survivor; then writes the
+schema-v2 `operator-adjudication` record, upserts the marker comment, and posts
+`review=success` to the pinned current SHA **last**.
+
+### Local source-evidence contract
+
+A complete, verified findings-terminal local fleet also writes a sidecar at
+`MAIN_REPO/.dev/pr-review-adjudication-sources/{prNumber}-{reviewedSha}.json` (schema v1).
+The file is content-digest-bound to the **exact on-disk** fleet-v2 bytes from the same
+drain attempt (`fleetRecordDigest`, SHA-256 hex, no `sha256:` prefix). It records each
+survivor’s v1 finding, recomputed fingerprint, emission-time class/tier, successful
+`survives` verification, and the inspection-diff new-side hunk that is the repair
+boundary. Locationless or unmappable survivors omit the whole sidecar — the ordinary red
+gate still stands.
+
+Forge comments are display/audit only. The command never scrapes Markdown or reconstructs
+evidence from a CI-only / legacy fleet run. Those cases refuse with a full-re-review
+instruction.
+
+### Eligible / refusal matrix
+
+Eligible: a complete v2 `producer: "fleet"` record with `gate: "block"`, structural
+`ok: true`, `agreement: "consensus-block"`, `survivorCount ≥ 1` matching the sidecar, and
+a matching digest. A `budget` / `max-passes` / `diminishing-returns` breaker is eligible
+only with that complete matrix. The current head must be a descendant of the reviewed SHA,
+and every interdiff edit must fall in a recorded hunk (insertions may use the immediate
+start/end boundary).
+
+Churn bounds are threefold and fail-closed: per hunk, added lines are capped by the extent
+of the covering recorded hunks; across the whole interdiff, TOTAL added lines are capped by
+the total deduped covering extent (so `--unified=0` anchor-splitting cannot multiply the
+per-hunk allowance); and each added line's UTF-8 byte length is capped by a per-hunk
+ceiling derived from the hunk's own replaced lines, clamped to a 200-byte floor / 1000-byte
+ceiling (so one in-range line cannot be replaced with an arbitrarily large single line).
+
+Refuses: v1 / operator / pass / disagreement / `invalid-pass` / provider-diversity /
+preflight budget / zero-survivor / digest or identity mismatch / missing sidecar /
+force-push or rebase / extra file or hunk / binary, rename, copy, create, delete / any
+file-mode metadata change (executable-bit or file-type transition, with or without hunks) /
+per-hunk, aggregate, or byte churn-bound overrun / empty or malformed interdiff /
+uncovered survivor. Broad churn returns to full `pr-review` or `pelaggio revise`.
+
+### Safety re-verification and cost
+
+Today’s schema-v1 fleet survivors have no `ruleId`/`cwe`/`classHint`, so emission-time
+classification lands them in `correctness-regression` / safety. Live adjudication
+therefore always spends **one** bounded `pr-verify` seat (the `--profile` scalar
+`pr-verify` settings). A non-`ok`, parked, malformed, incomplete, or `survives` result
+refuses with no authorization effects. A judgment-only set (taxonomy extension / test)
+skips the model call. Line numbers are not remapped through the interdiff — they hint at
+the pre-fix location; the verifier inspects the current head.
+
+The verifier is confined the same way the pipeline confines its `pr-verify` seats: its cwd
+is the detached data-only review-head checkout (at `.dev/review-heads/<sha>-adjudicate`,
+disjoint from a concurrent drain’s checkout of the same SHA) — never the authenticated
+main checkout — with foreign-root Write/Edit denial over main and every registered
+worktree, a main-checkout delta observer around mutating tools, and a before/after
+porcelain snapshot of main. Any observed main-checkout mutation or audit failure refuses
+before any authorization effect.
+
+### Status-last authorization and recovery
+
+Effects are fail-closed and ordered: write the operator record first, require the marker
+comment upsert second, post `review=success` to the **pinned** inspected SHA last. A
+record or comment failure cannot green the PR. A status failure leaves the revision
+blocked and safely retryable — re-run `pr-adjudicate`, never `revise`. The operator
+comment carries its own `<!-- pelaggio-pr-adjudication -->` marker, distinct from the
+fleet `<!-- pelaggio-pr-review -->` marker, so the `revise` seam (which scrapes only the
+fleet marker) can never ingest a PASS body as findings; the fleet findings comment is left
+in place as pre-adjudication history. A push in the irreducible API-call window cannot
+green the new head: the status is keyed to the old pinned SHA, and a post-status head
+mismatch returns 1.
+
+The command is local-only (`review.runner: local`, PR ship target, main checkout, not CI /
+`PELAGGIO_SINGLE_SHOT`). It is effectful in the same class as `pr-review` / `land`.
+
 ## CI runner flow
 
 The `pr-review` subcommand is the CI/local-runner implementation of this gate. It is

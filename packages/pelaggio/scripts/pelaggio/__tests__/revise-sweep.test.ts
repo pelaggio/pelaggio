@@ -289,6 +289,30 @@ describe("fetchReviewFindings", () => {
 		assert.equal(existsSync(path), false);
 	});
 
+	it("never scrapes an operator adjudication comment as findings (#510 distinct marker)", () => {
+		// A pr-adjudicate PASS body must not reach revise/implement as "findings" — it carries its
+		// own marker, and only the fleet marker matches here.
+		const path = tmpFile();
+		const adjudicationOnly = JSON.stringify({
+			comments: [{ body: "<!-- pelaggio-pr-adjudication -->\n✅ **Operator adjudication: PASS**", createdAt: "2026-01-04T00:00:00Z" }],
+		});
+		const { run } = stub(() => ({ stdout: adjudicationOnly }));
+		assert.equal(fetchReviewFindings(run, "o/r", 101, path), false);
+		assert.equal(existsSync(path), false);
+		// With both present, the fleet findings body wins even when the PASS comment is newer.
+		const both = JSON.stringify({
+			comments: [
+				{ body: "<!-- pelaggio-pr-review -->\nfleet findings", createdAt: "2026-01-03T00:00:00Z" },
+				{ body: "<!-- pelaggio-pr-adjudication -->\n✅ **Operator adjudication: PASS**", createdAt: "2026-01-04T00:00:00Z" },
+			],
+		});
+		const { run: run2 } = stub(() => ({ stdout: both }));
+		assert.equal(fetchReviewFindings(run2, "o/r", 101, path), true);
+		const written = readFileSync(path, "utf-8");
+		assert.ok(written.includes("fleet findings"));
+		assert.ok(!written.includes("Operator adjudication"));
+	});
+
 	it("fail-soft: gh error → false", () => {
 		assert.equal(fetchReviewFindings(throwingGh, "o/r", 101, tmpFile()), false);
 	});

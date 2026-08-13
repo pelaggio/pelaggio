@@ -255,6 +255,26 @@ describe("blockForeignRootWrite (#369 / #269 nested seats)", () => {
 		const out = blockForeignRootWrite(bash(`cat x >> ${main}/.dev/sessions/s.json`), seat, main, registered);
 		assert.equal(out.decision, "block");
 	});
+
+	it("blocks Bash commands referencing the pr-adjudication evidence stores (#510 forge path)", () => {
+		const gate = blockForeignRootWrite(bash(`printf '{}' > ${main}/.dev/pr-review-gate-records/510-abc.json`), sibling, main, registered, sibling);
+		assert.equal(gate.decision, "block");
+		assert.match(String(gate.reason), /harness-owned register/);
+		const source = blockForeignRootWrite(bash("cat forged.json >> .dev/pr-review-adjudication-sources/510-abc.json"), seat, main, registered);
+		assert.equal(source.decision, "block");
+		// Bare directory mention (delete/replace the store wholesale) is denied too.
+		assert.equal(blockForeignRootWrite(bash("rm -rf .dev/pr-review-gate-records"), sibling, main, registered, sibling).decision, "block");
+		assert.equal(blockForeignRootWrite(bash("mv forged .dev/pr-review-adjudication-sources"), sibling, main, registered, sibling).decision, "block");
+	});
+
+	it("denies Write/Edit into the pr-adjudication evidence stores even when cwd would allow (#510)", () => {
+		const out = blockForeignRootWrite(write(`${main}/.dev/pr-review-gate-records/510-abc.json`), main, main, registered, sibling);
+		assert.equal(out.decision, "block");
+		assert.match(String(out.reason), /evidence store/);
+		const out2 = blockForeignRootWrite(edit(".dev/pr-review-adjudication-sources/510-abc.json"), main, main, registered);
+		assert.equal(out2.decision, "block");
+		assert.match(String(out2.reason), /evidence store/);
+	});
 });
 
 describe("getProvider — registry + guard", () => {

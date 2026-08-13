@@ -1,4 +1,5 @@
 import { execFileSync, execSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { basename, dirname, relative, resolve } from "node:path";
@@ -229,6 +230,35 @@ export function diffForbiddenRootSnapshots(before: ReadonlyMap<string, string>, 
 		if (next !== status) changed.push(root);
 	}
 	return changed;
+}
+
+/**
+ * HEAD + full ref-state digest of a Git checkout (#510 round-2, finding 2a). A porcelain
+ * snapshot cannot see clean-to-clean mutations — `git commit --allow-empty` on a clean tree or a
+ * bare ref move (`git update-ref`) leaves porcelain identical — so `pr-adjudicate` brackets its
+ * attacker-influenced verifier run with this digest as well: any HEAD move or ref
+ * create/move/delete changes the string and the caller refuses. Throws on execution failure
+ * (callers fail closed).
+ */
+export function snapshotRepoRefState(root: string): string {
+	const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+	const refs = execFileSync("git", ["for-each-ref"], { cwd: root, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+	return `${head}\n${createHash("sha256").update(refs).digest("hex")}`;
+}
+
+/**
+ * Porcelain + HEAD snapshot of a registered sibling worktree (#510 round-2, finding 2b).
+ * Branch-ref moves are visible in the shared ref store (covered by `snapshotRepoRefState` on the
+ * main root); the per-worktree HEAD here additionally catches a commit made in a detached
+ * sibling checkout, and the porcelain catches working-tree writes. Returns the GONE sentinel for
+ * an absent root (gone at both endpoints compares equal, i.e. no delta); throws on a real
+ * execution failure so callers fail closed.
+ */
+export function snapshotSiblingWorktree(root: string): string {
+	const status = snapshotForbiddenRoot(root);
+	if (status === FORBIDDEN_ROOT_GONE) return status;
+	const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+	return `${status}\n@${head}`;
 }
 
 export type MainCheckoutDeltaResult = { kind: "clean" } | { kind: "violation"; roots: readonly string[] } | { kind: "error"; message: string };

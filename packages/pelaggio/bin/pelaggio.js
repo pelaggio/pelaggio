@@ -18,6 +18,7 @@ Commands:
   decisions Lifecycle/projection for docs/decision-log/ (resolve, archive-resolved, migrate, rebuild-index).
   taxonomy Owner ritual for the ADR-0016 safety taxonomy (verify / sign / canonical).
   pr-review  Run the CI merge-gate review of a PR (--pr <n>); posts a comment and exits non-zero on a blocking finding.
+  pr-adjudicate  Local-operator clearance of a findings-terminal review after a narrow fix (--pr <n>); posts success last.
   doc-review  Provider-diverse read-only review of a document (<path>); binds the report to its sha256 and exits non-zero on a blocking finding.
   review-bench  Deterministic zero-LLM Tier A authoring-review benchmark (--replay [--json]); replays committed panel/Judge recordings and exits non-zero on golden or baseline regression.
   land    Deterministic red-merge guard + merge (--pr <n> [--admin] [--repo <owner/repo>]); refuses to merge a PR whose CI is not green.
@@ -38,6 +39,7 @@ const routes = {
 	decisions: ["scripts/pelaggio/decisions-cli.ts"],
 	taxonomy: ["scripts/pelaggio/taxonomy-cli.ts"],
 	"pr-review": ["scripts/pelaggio/pr-review-cli.ts"],
+	"pr-adjudicate": ["scripts/pelaggio/pr-adjudicate-cli.ts"],
 	"doc-review": ["scripts/pelaggio/doc-review-cli.ts"],
 	"review-bench": ["scripts/pelaggio/review-bench-cli.ts"],
 	land: ["scripts/pelaggio/land-cli.ts"],

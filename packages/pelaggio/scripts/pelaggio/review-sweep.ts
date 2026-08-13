@@ -156,10 +156,18 @@ export function isReviewHeadPath(root: string, repo: string): boolean {
 	return abs === headsRoot || abs.startsWith(`${headsRoot}/`);
 }
 
-export function prepareReviewHead(repo: string, candidate: ReviewCandidate, exec?: (cmd: string, cwd: string) => string): { diffCwd: string; baseRef: string; headRef: string } | null {
+export function prepareReviewHead(
+	repo: string,
+	candidate: ReviewCandidate,
+	exec?: (cmd: string, cwd: string) => string,
+	headRef = `refs/pelaggio-review/pr-${candidate.prNumber}`,
+	// Caller-keyed directory suffix (#510): the drain and `pr-adjudicate` can hold checkouts of
+	// the SAME head SHA concurrently, and adjudication's finally-block force-remove must never
+	// tear down the drain's live checkout. Distinct callers pass distinct suffixes.
+	pathSuffix = "",
+): { diffCwd: string; baseRef: string; headRef: string } | null {
 	const run = exec ?? ((cmd, cwd) => execSync(cmd, { cwd, encoding: "utf-8" }));
-	const headRef = `refs/pelaggio-review/pr-${candidate.prNumber}`;
-	const path = resolve(repo, ".dev", "review-heads", candidate.headSha);
+	const path = resolve(repo, ".dev", "review-heads", `${candidate.headSha}${pathSuffix}`);
 	try {
 		mkdirSync(resolve(repo, ".dev", "review-heads"), { recursive: true });
 		run(`git fetch origin refs/pull/${candidate.prNumber}/head:${headRef}`, repo);
@@ -180,12 +188,12 @@ export function prepareReviewHead(repo: string, candidate: ReviewCandidate, exec
  *  These are keyed by head SHA and detached, so `/tidy`'s branch-merged/recent-commit heuristics
  *  never sweep them — an uncleaned watcher would grow `.dev/review-heads/` without bound. Best-effort:
  *  a leaked worktree is inert (gitignored, unreferenced) and is retried on the next same-SHA sweep. */
-export function cleanupReviewHead(repo: string, candidate: ReviewCandidate, exec?: (cmd: string, cwd: string) => string): void {
+export function cleanupReviewHead(repo: string, candidate: ReviewCandidate, exec?: (cmd: string, cwd: string) => string, headRef = `refs/pelaggio-review/pr-${candidate.prNumber}`, pathSuffix = ""): void {
 	const run = exec ?? ((cmd, cwd) => execSync(cmd, { cwd, encoding: "utf-8" }));
-	const path = resolve(repo, ".dev", "review-heads", candidate.headSha);
+	const path = resolve(repo, ".dev", "review-heads", `${candidate.headSha}${pathSuffix}`);
 	try {
 		if (existsSync(path)) run(`git worktree remove --force ${path}`, repo);
-		run(`git update-ref -d refs/pelaggio-review/pr-${candidate.prNumber}`, repo);
+		run(`git update-ref -d ${headRef}`, repo);
 	} catch {
 		// best-effort; see doc comment
 	}

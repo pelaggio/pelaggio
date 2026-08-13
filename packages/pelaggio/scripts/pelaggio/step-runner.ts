@@ -10,6 +10,8 @@ import { emitDecisionsFromText } from "./decisions.js";
 import { grokProvider } from "./grok-provider.js";
 import { classifyStepError, isRefusal, looksLikeStalledAsk, type MainCheckoutDeltaObserver, parseBlockedReason, parseWaitFlag, resolveParkReset } from "./helpers.js";
 import { opencodeProvider } from "./opencode-provider.js";
+import { gateRecordsDir, PR_REVIEW_GATE_RECORDS_DIR } from "./pr-review-gate-record.js";
+import { ADJUDICATION_SOURCES_DIR, adjudicationSourcesDir } from "./review/adjudication.js";
 import { composeSystemAppend, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "./step-runner-shared.js";
 import { MUTATING_TOOLS, toolBrief } from "./tui.js";
 import type { ParkSignal, ProviderCapabilities, ProviderName, Step, StepEmit, StepResult, TokenUsage } from "./types.js";
@@ -149,6 +151,17 @@ function pathUnderRoot(abs: string, root: string): boolean {
 }
 
 /**
+ * #510 must-fix (1a): `MAIN_REPO/.dev/` registers whose mere mention in an opaque Bash command is
+ * denied outright — the session-evidence store plus BOTH pr-adjudicate evidence stores
+ * (`pelaggio pr-adjudicate` consumes gate records and adjudication-source records as
+ * authorization, so a seat that can shell-redirect into either can forge a consensus-block
+ * record + matching source and turn a red review green without fleet evidence). Names come from
+ * the canonical storage modules so the deny list cannot drift from the real paths.
+ */
+const BASH_DENIED_DEV_REGISTERS = ["sessions", PR_REVIEW_GATE_RECORDS_DIR, ADJUDICATION_SOURCES_DIR] as const;
+const BASH_DENIED_DEV_REGISTER_RE = new RegExp(`(^|[\\s"'=/])\\.dev/(${BASH_DENIED_DEV_REGISTERS.join("|")})(/|\\b)`);
+
+/**
  * #369: Block Write/Edit into main and every known foreign Git worktree root,
  * while allowing the step cwd and an explicitly threaded own item worktree.
  * Nested authoring-review seats under `MAIN_REPO/.dev/authoring-review-seats/`
@@ -165,10 +178,17 @@ export function blockForeignRootWrite(input: HookInput, cwd: string, mainRepo: s
 	if (tn === "Bash") {
 		const ti = ("tool_input" in input ? input.tool_input : {}) as Record<string, unknown>;
 		const cmd = String(ti.command ?? "");
-		if (/(^|[\s"'=/])docs\/decision-log(\/|\b)/.test(cmd) || /(^|[\s"'=/])\.dev\/sessions(\/|\b)/.test(cmd)) {
+		// Residual (#510 1a, documented): this denial covers pipeline seats reached through this
+		// hook seam only. Host processes and un-jailed Bash outside the hook system can still
+		// write these registers until the chartered ADR-0018/#419 harness-attested-evidence and
+		// ADR-0023 execution-jail work lands.
+		if (/(^|[\s"'=/])docs\/decision-log(\/|\b)/.test(cmd) || BASH_DENIED_DEV_REGISTER_RE.test(cmd)) {
 			return {
 				decision: "block" as const,
-				reason: 'This Bash command references a harness-owned register (docs/decision-log/ or .dev/sessions/). These are written only by the harness; emit a "DECISION:" line in your step output instead.',
+				reason:
+					"This Bash command references a harness-owned register (docs/decision-log/, .dev/sessions/, " +
+					`.dev/${PR_REVIEW_GATE_RECORDS_DIR}/, or .dev/${ADJUDICATION_SOURCES_DIR}/). These are written only by the harness; ` +
+					'emit a "DECISION:" line in your step output for decisions — review/adjudication evidence is produced only by the harness\'s own review commands.',
 			};
 		}
 		return {};
@@ -188,6 +208,18 @@ export function blockForeignRootWrite(input: HookInput, cwd: string, mainRepo: s
 			decision: "block" as const,
 			reason: `Path "${fp}" targets the session-record directory (${sessionsAbs}), which is harness-owned evidence. Do not write session records from agent tools.`,
 		};
+	}
+
+	// Adjudication-evidence denial is likewise absolute (#510 1a): these stores authorize
+	// `review=success` without a fleet run, so no seat may Write/Edit them — even when cwd
+	// or ownWorktree would otherwise allow the path.
+	for (const evidenceRoot of [gateRecordsDir(mainAbs), adjudicationSourcesDir(mainAbs)]) {
+		if (pathUnderRoot(abs, evidenceRoot)) {
+			return {
+				decision: "block" as const,
+				reason: `Path "${fp}" targets the pr-adjudication evidence store (${evidenceRoot}), which is harness-owned authorization evidence. Do not write gate or adjudication-source records from agent tools.`,
+			};
+		}
 	}
 
 	// Decision-log denial is likewise absolute (#386): docs/decision-log/ holds
