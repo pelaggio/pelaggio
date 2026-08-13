@@ -256,6 +256,7 @@ describe("PR review gate record store", () => {
 			{ ...validOperator, dispositions: { fp: { disposition: "fixed", rationale: "   " } } },
 			{ ...validOperator, dispositions: { fp: { disposition: "fixed", rationale: "x", extra: true } } },
 			{ ...validOperator, dispositions: { fp: "fixed" } },
+			{ ...validOperator, dispositions: { "fp-1": { disposition: "fixed", rationale: "x" }, " fp-1 ": { disposition: "refuted", rationale: "y" } } },
 		];
 		for (const value of invalid) assert.throws(() => validatePrReviewGateRecord(value));
 	});

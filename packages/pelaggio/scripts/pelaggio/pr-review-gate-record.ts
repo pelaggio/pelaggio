@@ -216,9 +216,11 @@ function validateV1(value: Record<string, unknown>): PrReviewGateRecordV1 {
 function validateDispositions(value: unknown): Record<string, PrReviewFindingDispositionEntry> {
 	if (!isRecord(value)) fail("dispositions");
 	const entries: [string, PrReviewFindingDispositionEntry][] = [];
+	const seen = new Set<string>();
 	for (const [rawKey, rawEntry] of Object.entries(value)) {
 		const key = rawKey.trim();
-		if (key.length === 0) fail("disposition key");
+		if (key.length === 0 || seen.has(key)) fail("disposition key");
+		seen.add(key);
 		if (!isRecord(rawEntry)) fail("disposition entry");
 		requireClosedKeys(rawEntry, DISPOSITION_ENTRY_KEYS, "disposition entry");
 		if (!DISPOSITIONS.includes(rawEntry.disposition as PrReviewFindingDisposition)) fail("disposition");
