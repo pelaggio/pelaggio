@@ -100,10 +100,15 @@ function harness(
 			effects.push(`exec-acquire:${itemId}`);
 			if (over.execOutcome === "held") return { kind: "held", holder: `held by pid 12345; remove ${join(repo, ".dev", "revise-exec", "498.lease")}` };
 			if (over.execOutcome === "unavailable") return { kind: "unavailable" };
+			// Mirror the real lease's idempotent release: the CLI releases before the
+			// orchestrator handoff AND in its finally safety net — one effect, not two.
+			let released = false;
 			return {
 				kind: "acquired",
 				lease: {
 					release: async () => {
+						if (released) return;
+						released = true;
 						effects.push(`exec-release:${itemId}`);
 					},
 				},
@@ -158,12 +163,14 @@ describe("pelaggio revise — parsing", () => {
 });
 
 describe("pelaggio revise — first pass", () => {
-	it("acquires the execution lease, claims, records accepted-first-pass AFTER the claim, verifies the checkout binding, runs operator-revision, and releases", async () => {
+	it("acquires the execution lease, claims, records accepted-first-pass AFTER the claim, verifies the checkout binding, releases, then runs operator-revision", async () => {
 		const h = harness({ orchExit: 0 });
 		assert.equal(await main(["--pr", "42"], h.deps), 0);
 		// Ordering is the contract: lease before the one-pass label claim (a refused invocation
 		// must not consume the label), audit only after `claimed`, binding check before the
-		// orchestrator, release after everything.
+		// orchestrator, release BEFORE the orchestrator handoff — the orchestrator reacquires
+		// the same lease per revision attempt (#507 round 3), so a held-through-orchestration
+		// lease would deadlock the leased resume against its own process.
 		assert.deepEqual(h.effects, [
 			"resolve:42",
 			"managed:498",
@@ -173,8 +180,8 @@ describe("pelaggio revise — first pass", () => {
 			"fetch:42",
 			"worktree:feat/issue-498-revise",
 			`verify:feat/issue-498-revise@${PR_HEAD_OID.slice(0, 7)}`,
-			"orchestrator",
 			"exec-release:498",
+			"orchestrator",
 		]);
 		assert.equal(h.orchCalls.length, 1);
 		assert.equal(h.orchCalls.at(0)?.flags.resume, "498");
@@ -185,11 +192,11 @@ describe("pelaggio revise — first pass", () => {
 		rmSync(h.repo, { recursive: true, force: true });
 	});
 
-	it("propagates a non-zero orchestrator exit, leaves the findings file, and still releases the lease", async () => {
+	it("propagates a non-zero orchestrator exit, leaves the findings file, and has released the pre-flight lease", async () => {
 		const h = harness({ orchExit: 1 });
 		assert.equal(await main(["--pr", "42"], h.deps), 1);
 		assert.ok(existsSync(h.findingsPath));
-		assert.ok(h.effects.includes("exec-release:498"), "the execution lease must be released on a failed run too");
+		assert.ok(h.effects.indexOf("exec-release:498") < h.effects.indexOf("orchestrator"), "the pre-flight lease must be handed off (released) before the orchestrator reacquires per attempt");
 		rmSync(h.repo, { recursive: true, force: true });
 	});
 });
@@ -205,12 +212,13 @@ describe("pelaggio revise — one-pass label", () => {
 		rmSync(h.repo, { recursive: true, force: true });
 	});
 
-	it("explicit --allow-repeat bypasses the label claim but NOT the execution lease: acquires, records, runs once, releases", async () => {
+	it("explicit --allow-repeat bypasses the label claim but NOT the execution lease: acquires, records, releases, runs once", async () => {
 		const h = harness({ alreadyRevised: true });
 		assert.equal(await main(["--pr", "42", "--allow-repeat"], h.deps), 0);
 		// The repeat skips the one-pass label test-and-set by design, so the execution lease is
 		// the ONLY thing serializing it against an in-flight pass — it must be acquired before
-		// any audit/paid work and held through orchestration.
+		// any audit/paid work, then handed off to the orchestrator (which reacquires it around
+		// every revision attempt, #507 round 3).
 		assert.deepEqual(h.effects, [
 			"resolve:42",
 			"managed:498",
@@ -219,8 +227,8 @@ describe("pelaggio revise — one-pass label", () => {
 			"fetch:42",
 			"worktree:feat/issue-498-revise",
 			`verify:feat/issue-498-revise@${PR_HEAD_OID.slice(0, 7)}`,
-			"orchestrator",
 			"exec-release:498",
+			"orchestrator",
 		]);
 		assert.ok(!h.effects.some((e) => e.startsWith("claim:")));
 		rmSync(h.repo, { recursive: true, force: true });

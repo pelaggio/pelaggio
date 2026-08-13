@@ -2083,7 +2083,7 @@ export interface OrchestratorDeps {
 	/** Local revise sweep config (issue #76). Partial — merged onto the resolved defaults
 	 *  (`REVISE_LOCAL`, the github-source-gated `ghRepo`, `defaultGhRun`). Injecting `ghRepo` lets
 	 *  tests force-activate the sweep with a stubbed `gh` without a real github-issues config. */
-	revise?: Partial<{ local: boolean; ghRepo: string; gh: GhRunner; acquireExec: typeof acquireReviseExecution; execLeaseRoot: string }>;
+	revise?: Partial<{ local: boolean; ghRepo: string; gh: GhRunner; acquireExec: typeof acquireReviseExecution; execLeaseRoot: string; claimRepo: string }>;
 	/** Local review sweep config (issue #84; mid-run drain #387). Partial — merged onto config defaults. */
 	review?: Partial<{
 		runner: ReviewRunner;
@@ -2816,19 +2816,44 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		const autoResume = park.autoResume;
 		const maxWaitMs = parseWaitFlag(flags["max-wait"] ?? park.maxWait);
 
+		// Revise-sweep config — hoisted above `resumeOne` because the execution lease it
+		// carries is shared by every revision executor: the sweep, and (#507 round 3) every
+		// revision-mode resume path. Injecting `ghRepo` lets tests force-activate the sweep
+		// with a stubbed `gh` without a real github-issues config.
+		const revise = {
+			local: REVISE_LOCAL,
+			ghRepo: ROADMAP_SOURCE === "github-issues" ? ROADMAP_GITHUB.ghRepo : "",
+			gh: hermeticDefault("revise.gh", defaultGhRun),
+			// Execution lease shared with `pelaggio revise --pr` (revise-cli.ts). The real
+			// function is safe under node --test because the ROOT is hermetically redirected —
+			// tests never write the host `.dev/revise-exec/`.
+			acquireExec: acquireReviseExecution,
+			execLeaseRoot: hermeticQueueRoot(() => reviseExecLeaseRoot(REPO), "revise-exec"),
+			// Repo whose `.dev/revise-claim.lock` serializes the one-pass label claim.
+			// Hermetically redirected like execLeaseRoot so `node --test` never writes the
+			// HOST repo's `.dev/revise-claim.lock`.
+			claimRepo: hermeticQueueRoot(() => REPO, "revise-claim-repo"),
+			...deps.revise,
+		};
+
+		// #507 round 3: every path that executes a revision in an item's claim worktree must
+		// hold the per-item execution lease — the sweep, the operator CLI, AND every
+		// revision-mode resume. The lease is released when a revision attempt parks (holding
+		// it across a reset sleep would pin it), so each resume attempt REACQUIRES it before
+		// touching the worktree. Fail-soft on contention: refuse naming the holder, never
+		// proceed unleased.
+		const acquireRevisionResumeLease = async (id: string): Promise<{ ok: true; release: () => Promise<void> } | { ok: false; refusal: string }> => {
+			const acq = await revise.acquireExec(revise.execLeaseRoot, id);
+			if (acq.kind === "acquired") return { ok: true, release: () => acq.lease.release() };
+			const why = acq.kind === "held" ? acq.holder : `the execution-lease register under ${revise.execLeaseRoot} is unavailable`;
+			return { ok: false, refusal: `refusing to resume ${id} without the revise execution lease — ${why}` };
+		};
+
 		// Per-item resume body — the `--resume` re-entry path in-process. Hoisted so both
 		// the campaign park-and-resume loop and operator-revision mode call the same function
 		// (it used to be declared only inside the later campaign `if (parkSignal.parked)` block).
 		const resumeOne = async (id: string, i: number): Promise<CycleResult> => {
 			const wt = noWorktree ? REPO : _resolveWorktree(id);
-			const st: CycleStatus = { itemId: id, status: "running", cost: 0 };
-			liveStatus.cycles.push(st);
-			if (v) liveStatus.render();
-			let resumeLogPath: string | undefined;
-			if (isParallel && v) {
-				resumeLogPath = resolve(REPO, ".dev", `pelaggio-resume-${id.toLowerCase()}.log`);
-				appendFileSync(resumeLogPath, `${"=".repeat(60)}\nresume ${id} — ${new Date().toISOString()}\n${"=".repeat(60)}\n`);
-			}
 			// Findings survival across park→auto-resume (issue #76): if the sweep-written
 			// findings file still exists on disk, re-inject it before choosing the restart step so
 			// the resumed item routes through implement and still fixes the specific blockers.
@@ -2840,37 +2865,62 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				const fp = reviseFindingsPath(REPO, id);
 				if (existsSync(fp)) resumeFlags = { ...flags, "review-findings": fp };
 			}
-			const sf = resumeFlags["review-findings"] ? "implement" : _detectResumeStep(id, wt);
-			const r = await _runPipeline(
-				{
-					itemId: id,
-					worktree: wt,
-					startFrom: sf,
-					cycle: results.length + i + 1,
-					verbose: !isParallel && v,
-					shipTarget,
-					dryRun: false,
-					// Resume skips pick (no pickMutex) but still opens audited provider steps;
-					// register its (already-existing) worktree so peers exempt it.
-					activeWorktrees,
-					workerStatus: st,
-					logPath: resumeLogPath,
-					liveStatus,
-					...(decisionNotifier ? { notifyDecision: decisionNotifier } : {}),
-					...(noWorktree ? { noWorktree: true } : {}),
-					...(signal ? { signal } : {}),
-				},
-				parkSignal,
-				resumeFlags,
-			);
-			await notify(r, resumeLogPath ?? LOG_PATH);
-			st.status = resultStatus(r);
-			st.cost = r.cost;
-			st.step = undefined;
-			if (v) liveStatus.render();
-			const detail = resultDetail(r);
-			console.log(`${resultIcon(r)} resume ${id} — ${r.costEstimated ? "~" : ""}$${r.cost.toFixed(2)}${detail ? `  ${A.dim(detail)}` : ""}`);
-			return r;
+			// A findings-driven resume is a revision attempt in the item's claim worktree, so it
+			// reacquires the execution lease released by the parked attempt (#507 round 3).
+			let releaseLease: (() => Promise<void>) | undefined;
+			if (resumeFlags["review-findings"]) {
+				const leased = await acquireRevisionResumeLease(id);
+				if (!leased.ok) {
+					console.log(`${A.red("✗")} resume ${id} — ${leased.refusal}`);
+					return { itemId: id, completed: false, cost: 0, error: "revise lease unavailable", detail: leased.refusal, disposition: "continue" };
+				}
+				releaseLease = leased.release;
+			}
+			try {
+				const st: CycleStatus = { itemId: id, status: "running", cost: 0 };
+				liveStatus.cycles.push(st);
+				if (v) liveStatus.render();
+				let resumeLogPath: string | undefined;
+				if (isParallel && v) {
+					resumeLogPath = resolve(REPO, ".dev", `pelaggio-resume-${id.toLowerCase()}.log`);
+					appendFileSync(resumeLogPath, `${"=".repeat(60)}\nresume ${id} — ${new Date().toISOString()}\n${"=".repeat(60)}\n`);
+				}
+				const sf = resumeFlags["review-findings"] ? "implement" : _detectResumeStep(id, wt);
+				const r = await _runPipeline(
+					{
+						itemId: id,
+						worktree: wt,
+						startFrom: sf,
+						cycle: results.length + i + 1,
+						verbose: !isParallel && v,
+						shipTarget,
+						dryRun: false,
+						// Resume skips pick (no pickMutex) but still opens audited provider steps;
+						// register its (already-existing) worktree so peers exempt it.
+						activeWorktrees,
+						workerStatus: st,
+						logPath: resumeLogPath,
+						liveStatus,
+						...(decisionNotifier ? { notifyDecision: decisionNotifier } : {}),
+						...(noWorktree ? { noWorktree: true } : {}),
+						...(signal ? { signal } : {}),
+					},
+					parkSignal,
+					resumeFlags,
+				);
+				await notify(r, resumeLogPath ?? LOG_PATH);
+				st.status = resultStatus(r);
+				st.cost = r.cost;
+				st.step = undefined;
+				if (v) liveStatus.render();
+				const detail = resultDetail(r);
+				console.log(`${resultIcon(r)} resume ${id} — ${r.costEstimated ? "~" : ""}$${r.cost.toFixed(2)}${detail ? `  ${A.dim(detail)}` : ""}`);
+				return r;
+			} finally {
+				// Release-on-park by construction: the attempt ends (parked or not) before the
+				// shared wait loop sleeps, so the lease is never pinned across a reset window.
+				await releaseLease?.();
+			}
 		};
 
 		// ── Local review drain (issue #84 sweep + #387 mid-run reconciler) ──
@@ -3189,29 +3239,51 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				console.log(`${A.bold("resume")} ${id} from ${A.bold(startFrom)}`);
 			}
 
+			// Revision-mode resumes (operator-revision, and a standard `--resume <id>
+			// --review-findings <path>` — the advertised park continuation) execute in the
+			// item's claim worktree, so the attempt holds the same per-item execution lease as
+			// the sweep and the operator CLI (#507 round 3). Acquired before any worktree work,
+			// released right after the attempt — never across a park sleep; the auto-resume
+			// loop's `resumeOne` reacquires per attempt. Fail-soft: refuse naming the holder,
+			// never proceed unleased.
+			let releaseResumeLease: (() => Promise<void>) | undefined;
+			if (flags["review-findings"] !== undefined || orchestratorMode === "operator-revision") {
+				const leased = await acquireRevisionResumeLease(id);
+				if (!leased.ok) {
+					console.error(leased.refusal);
+					return { exitCode: 1, results };
+				}
+				releaseResumeLease = leased.release;
+			}
+
 			const status: CycleStatus = { itemId: id, status: "running", cost: 0 };
 			liveStatus.cycles.push(status);
 			liveStatus.totalCycles = 1;
 			if (v) statusBar.setup();
 
-			const result = await _runPipeline(
-				{
-					itemId: id,
-					worktree,
-					startFrom,
-					cycle: 1,
-					verbose: v,
-					shipTarget,
-					dryRun: false,
-					workerStatus: status,
-					liveStatus,
-					...(decisionNotifier ? { notifyDecision: decisionNotifier } : {}),
-					...(noWorktree ? { noWorktree: true } : {}),
-					...(signal ? { signal } : {}),
-				},
-				parkSignal,
-				flags,
-			);
+			let result: CycleResult;
+			try {
+				result = await _runPipeline(
+					{
+						itemId: id,
+						worktree,
+						startFrom,
+						cycle: 1,
+						verbose: v,
+						shipTarget,
+						dryRun: false,
+						workerStatus: status,
+						liveStatus,
+						...(decisionNotifier ? { notifyDecision: decisionNotifier } : {}),
+						...(noWorktree ? { noWorktree: true } : {}),
+						...(signal ? { signal } : {}),
+					},
+					parkSignal,
+					flags,
+				);
+			} finally {
+				await releaseResumeLease?.();
+			}
 			results.push(result);
 			await notify(result, LOG_PATH);
 
@@ -3229,6 +3301,9 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			// (mode default `"standard"`) still returns after one attempt.
 			if (orchestratorMode === "operator-revision" && parkSignal.parked) {
 				const findingsPath = flags["review-findings"];
+				// The advertised continuation is itself a LEASED resume: a findings-driven
+				// `--resume` re-enters this branch, which reacquires the execution lease before
+				// touching the worktree (#507 round 3) — no unleased command is advertised.
 				const printOperatorHandback = (): void => {
 					const hint = findingsPath ? `pnpm pelaggio --resume ${id} --review-findings ${findingsPath}` : formatResumeHint([id]);
 					console.log(`  Parked: ${id}`);
@@ -3325,17 +3400,6 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		// Non-continuous: run once before the pick worker pool.
 		// Continuous (#82): run at the start of every iteration so newly-red PRs are revised
 		// between picks rather than only at campaign start.
-		const revise = {
-			local: REVISE_LOCAL,
-			ghRepo: ROADMAP_SOURCE === "github-issues" ? ROADMAP_GITHUB.ghRepo : "",
-			gh: hermeticDefault("revise.gh", defaultGhRun),
-			// Execution lease shared with `pelaggio revise --pr` (revise-cli.ts). The real
-			// function is safe under node --test because the ROOT is hermetically redirected —
-			// tests never write the host `.dev/revise-exec/`.
-			acquireExec: acquireReviseExecution,
-			execLeaseRoot: hermeticQueueRoot(() => reviseExecLeaseRoot(REPO), "revise-exec"),
-			...deps.revise,
-		};
 		const doSweep = revise.local && shipIsPr && !!revise.ghRepo && !noWorktree && !dryRun && items.length === 0;
 
 		async function runReviseSweepOnce(): Promise<void> {
@@ -3355,8 +3419,10 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				if (exec.kind !== "acquired") continue;
 				try {
 					// Atomic one-pass claim BEFORE any work — cross-process with the operator
-					// `pelaggio revise --pr` CLI (see claimRevisionExclusive); non-claimed skips fail-soft.
-					if ((await claimRevisionExclusive(revise.gh, revise.ghRepo, REPO, pr.prNumber)) !== "claimed") continue;
+					// `pelaggio revise --pr` CLI (see claimRevisionExclusive); non-claimed skips
+					// fail-soft. The claim-lock repo is `revise.claimRepo`, hermetically redirected
+					// under node --test so the lock never lands in the HOST repo's `.dev/`.
+					if ((await claimRevisionExclusive(revise.gh, revise.ghRepo, revise.claimRepo, pr.prNumber)) !== "claimed") continue;
 					const findingsPath = reviseFindingsPath(REPO, pr.itemId);
 					if (!fetchReviewFindings(revise.gh, revise.ghRepo, pr.prNumber, findingsPath)) {
 						// labeled but no findings comment → fail-safe park + skip (mirrors CI).

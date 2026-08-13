@@ -5,15 +5,23 @@
  * findings-driven resume seam (issue #498).
  *
  * Resolves a Pelaggio-managed red-review PR, acquires the per-item execution
- * lease (`acquireReviseExecution` — held for the whole run, so a first pass and
- * an `--allow-repeat` repeat can never revise the same claim worktree
- * concurrently), atomically claims the one-pass label (cross-process with the
- * in-run revise sweep — `claimRevisionExclusive`), records the accepted-pass
- * audit comment only after that claim, fetches the marked findings, restores
- * the claim worktree and verifies its branch + HEAD against the PR head OID,
- * then calls `runOrchestrator` in-process with `--resume` + `--review-findings`
- * in `operator-revision` mode. Exit codes: 0 success, 1 refused/unavailable, 2
- * usage / ambient single-shot / non-PR ship target.
+ * lease (`acquireReviseExecution`) for the pre-flight — so a first pass and an
+ * `--allow-repeat` repeat can never race the label claim, audit, findings
+ * fetch, or worktree restore for the same item — atomically claims the
+ * one-pass label (cross-process with the in-run revise sweep —
+ * `claimRevisionExclusive`), records the accepted-pass audit comment only
+ * after that claim, fetches the marked findings, restores the claim worktree
+ * and verifies its branch + HEAD against the PR head OID, then RELEASES the
+ * lease and calls `runOrchestrator` in-process with `--resume` +
+ * `--review-findings` in `operator-revision` mode. The orchestrator owns
+ * execution exclusivity from there (#507 round 3): every revision attempt —
+ * the first one and every post-park resume, including the advertised manual
+ * `--resume <id> --review-findings <path>` continuation — reacquires the lease
+ * before touching the worktree and releases it when the attempt ends, so a
+ * park never pins the lease across a reset sleep. A crashed pass leaves the
+ * lease in place; recovery is manual (the refusal names the lease file).
+ * Exit codes: 0 success, 1 refused/unavailable, 2 usage / ambient single-shot
+ * / non-PR ship target.
  */
 
 import { isAbsolute, resolve } from "node:path";
@@ -55,7 +63,7 @@ export interface ReviseCliDeps {
 	managedState: (itemId: string) => "managed" | "unmanaged" | "unknown";
 	/** Atomic cross-process claim (`claimRevisionExclusive`) — serializes against the in-run sweep. */
 	claimRevision: (prNumber: number) => Promise<ClaimRevisionOutcome>;
-	/** Execution lease held for the whole run (`acquireReviseExecution`) — serializes ALL revision passes per item, including `--allow-repeat` repeats that bypass the one-pass label. */
+	/** Execution lease (`acquireReviseExecution`) held for the pre-flight (claim/audit/fetch/restore/verify), then released so the orchestrator can reacquire it per revision attempt (#507 round 3). Serializes ALL revision passes per item, including `--allow-repeat` repeats that bypass the one-pass label. */
 	acquireExecution: (itemId: string) => Promise<AcquireReviseExecutionResult>;
 	fetchFindings: (prNumber: number, findingsPath: string) => boolean;
 	ensureWorktree: (worktreePath: string, branch: string) => string | null;
@@ -197,12 +205,14 @@ export async function main(argv: string[], overrides: Partial<ReviseCliDeps> = {
 	const disposition: ReviseInvocationDisposition = target.alreadyRevised ? "accepted-repeat" : "accepted-first-pass";
 
 	// Execution-scoped exclusion, acquired BEFORE the one-pass label claim and held for the
-	// whole run: the label is a one-shot entitlement, not an execution guard — a repeat pass
+	// pre-flight: the label is a one-shot entitlement, not an execution guard — a repeat pass
 	// (`--allow-repeat`) bypasses it entirely, so without this lease a repeat could run
 	// concurrently with an in-flight first pass (or another repeat) in the same claim
 	// worktree, racing findings writes, commits, and pushes. Acquiring before the claim also
 	// means a refused invocation never consumes the label. Fail closed on anything but
 	// `acquired` (see `acquireReviseExecution` for the guard class and crash semantics).
+	// Released just before handing off to the orchestrator, which reacquires it per revision
+	// attempt (#507 round 3) — a same-process hold would make that reacquisition refuse.
 	const exec = await deps.acquireExecution(target.itemId);
 	if (exec.kind === "held") {
 		deps.err(`a revision for item ${target.itemId} (PR #${pr}) is already in flight — refusing a concurrent pass in the same claim worktree (${exec.holder}). A parked in-flight pass continues with: ${parkedResume}`);
@@ -264,11 +274,19 @@ export async function main(argv: string[], overrides: Partial<ReviseCliDeps> = {
 			deps.err(intent.kind === "error" ? intent.message : USAGE);
 			return 2;
 		}
+		// Hand execution exclusivity to the orchestrator: every attempt (the first one and
+		// every post-park resume) reacquires the per-item lease and releases it when the
+		// attempt ends, so a park never pins the lease across a reset sleep (#507 round 3).
+		// Released here first because the orchestrator acquires the same register — a
+		// same-process hold would refuse as "held by pid <self>". The in-process handoff gap
+		// is fail-closed: a concurrent acquirer makes the orchestrator refuse loudly, naming
+		// the holder; it can never produce an unleased run.
+		await exec.lease.release();
 		const orchDeps: OrchestratorDeps = { mode: "operator-revision" };
 		const { exitCode } = await deps.runOrchestrator(intent.flags, orchDeps);
 		return exitCode;
 	} finally {
-		await exec.lease.release();
+		await exec.lease.release(); // idempotent — covers every pre-flight failure return
 	}
 }
 

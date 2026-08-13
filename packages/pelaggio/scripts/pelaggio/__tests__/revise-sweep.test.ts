@@ -550,13 +550,20 @@ describe("acquireReviseExecution", () => {
 		rmSync(root, { recursive: true, force: true });
 	});
 
-	it("reclaims a crashed holder's lease immediately (dead pid is positive evidence the pass is over)", async () => {
+	it("a dead holder pid still refuses — crash recovery is manual and fail-closed (#507 round 3)", async () => {
 		const root = tmpRoot();
 		mkdirSync(root, { recursive: true });
 		writeFileSync(reviseExecLeasePath(root, "498"), `${JSON.stringify({ version: 1, itemId: "498", pid: 4_000_000, token: "crashed-holder", acquiredAt: Date.now() })}\n`);
+		// A missing parent pid is NOT positive evidence the pass ended: providers spawn child
+		// processes that can outlive a crashed orchestrator and keep mutating the worktree.
 		const r = await acquireReviseExecution(root, "498", { isPidAlive: () => false });
-		assert.equal(r.kind, "acquired", "a dead holder's lease must be reclaimable without any timeout");
-		if (r.kind === "acquired") await r.lease.release();
+		assert.equal(r.kind, "held", "a dead-pid lease must never be auto-reclaimed — a second reviser could start under orphaned provider children");
+		if (r.kind === "held") {
+			assert.ok(/manual/i.test(r.holder), `refusal must state crash recovery is manual; got ${r.holder}`);
+			assert.ok(r.holder.includes(`rm ${reviseExecLeasePath(root, "498")}`), `refusal must name the exact removal step for the lease file; got ${r.holder}`);
+			assert.ok(/still be running/i.test(r.holder), `refusal must warn that processes from the pass may still be running; got ${r.holder}`);
+		}
+		assert.ok(existsSync(reviseExecLeasePath(root, "498")), "the crashed holder's lease must be left in place");
 		rmSync(root, { recursive: true, force: true });
 	});
 

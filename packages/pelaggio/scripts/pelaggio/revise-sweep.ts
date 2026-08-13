@@ -249,9 +249,9 @@ export function claimRevision(gh: GhRunner, ghRepo: string, prNumber: number): b
 
 /** Lock file guarding the revised-label test-and-set; lives beside the roadmap mutation lock. */
 const CLAIM_LOCK_FILE = "revise-claim.lock";
-// Critical section is two gh calls (label re-read + add), each bounded by gh's own 30s
-// timeout; 120s covers worst-case network stalls. Env overrides for tests, read per call
-// so `node --test` can set them without module-reload games.
+// Critical section is three gh calls (label re-read, best-effort label create, label add),
+// each bounded by gh's own 30s timeout; 120s covers worst-case network stalls. Env overrides
+// for tests, read per call so `node --test` can set them without module-reload games.
 const claimLockStaleMs = () => Number(process.env.PELAGGIO_REVISE_CLAIM_LOCK_STALE_MS) || 120_000;
 const claimLockTimeoutMs = () => Number(process.env.PELAGGIO_REVISE_CLAIM_LOCK_TIMEOUT_MS) || 30_000;
 
@@ -387,28 +387,33 @@ export function reviseExecLeasePath(root: string, itemId: string): string {
  * (`pipeline.ts`), an operator first pass, and an operator `--allow-repeat` repeat — so no
  * two of them can run concurrently in the same worktree.
  *
- * Guard class (docs/agent-context/guarded-actions.md §3–§4): a liveness-bound execution
- * lease, fenced AT THE REGISTER for cooperating harness processes on this host. The lease
- * file is the single register for "who may execute a revision for this item"; every
- * mutation (acquire test-and-set, token-compared release, dead-holder reclaim) runs under
- * one short `withFileLock` critical section, so contenders can never interleave a
- * check-then-write. Deliberately NOT a time-leased `withFileLock` hold: a revision runs for
- * hours, and file-lock's `staleMs` steal would silently strip a live holder's exclusion
- * mid-run (its documented residual). There is no time-based theft here at all —
- * reclaim requires POSITIVE evidence the holding pass is over (its pid is gone, or the
- * holder's own token-compared release removed the lease).
+ * Guard class (docs/agent-context/guarded-actions.md §3–§4): an execution lease, fenced AT
+ * THE REGISTER for cooperating harness processes on this host. The lease file is the single
+ * register for "who may execute a revision for this item"; every mutation (acquire
+ * test-and-set, token-compared release) runs under one short `withFileLock` critical
+ * section, so contenders can never interleave a check-then-write. Deliberately NOT a
+ * time-leased `withFileLock` hold: a revision runs for hours, and file-lock's `staleMs`
+ * steal would silently strip a live holder's exclusion mid-run (its documented residual).
+ * There is no theft here at all — only the holder's own token-compared release (or an
+ * operator's manual removal of the lease file) frees the register. A dead holder pid is NOT
+ * positive evidence the pass is over: step-runner and the providers spawn child processes
+ * that can survive an orchestrator crash and keep mutating the worktree, so pid-death
+ * auto-reclaim would let a second reviser start under an orphaned first one.
+ * Descendant-aware reclaim (proving the holder's whole process tree is gone) is deferred to
+ * the #453 one-shot-token successor design.
  *
  * Failure semantics, fail-closed throughout:
  * - live holder → `held` (refuse; the message names the holder pid and the lease path);
- * - crashed holder → its pid probes dead (ESRCH) and the lease is reclaimed immediately;
+ * - crashed holder (pid probes dead) → still `held`; crash recovery is MANUAL — the refusal
+ *   states that descendant provider processes may still be running and names the exact
+ *   removal step (`rm <lease path>`) to take once the operator has verified they are not;
  * - lock unavailable → `unavailable` (no exclusion evidence → no revision work);
- * - a suspended-then-resumed holder KEEPS the lease (its pid stays alive) — exclusion is
+ * - a suspended-then-resumed holder KEEPS the lease (no time-based theft) — exclusion is
  *   never silently transferred under it.
- * Residuals: pid recycling after a crash/reboot can hold the lease closed until the recycled
- * pid exits or an operator removes the named lease file (fail-closed, never fail-open); the
- * register lives under `MAIN_REPO/.dev/`, which is not in the agent-denied write set, so —
- * like attempt-identity.ts — this is exclusion among cooperating harness processes, never an
- * authorization boundary against a forging agent.
+ * Residuals: a crashed pass holds the lease closed until an operator removes the named lease
+ * file (fail-closed, never fail-open); the register lives under `MAIN_REPO/.dev/`, which is
+ * not in the agent-denied write set, so — like attempt-identity.ts — this is exclusion among
+ * cooperating harness processes, never an authorization boundary against a forging agent.
  */
 export async function acquireReviseExecution(root: string, itemId: string, opts: { isPidAlive?: (pid: number) => boolean } = {}): Promise<AcquireReviseExecutionResult> {
 	const isPidAlive = opts.isPidAlive ?? defaultExecPidAlive;
@@ -422,11 +427,17 @@ export async function acquireReviseExecution(root: string, itemId: string, opts:
 			lockPath,
 			() => {
 				const cur = readExecLease(leasePath);
-				if (cur && isPidAlive(cur.pid)) {
-					holder = `held by pid ${cur.pid} since ${new Date(cur.acquiredAt).toISOString()}; if that process is not a live revision pass, remove ${leasePath}`;
+				if (cur) {
+					// A valid lease ALWAYS refuses — even when the holder pid probes dead. A missing
+					// parent pid is not positive evidence the pass ended: providers run child
+					// processes that can outlive a crashed orchestrator and still mutate the
+					// worktree, so reclaiming here could start a second reviser under them.
+					holder = isPidAlive(cur.pid)
+						? `held by pid ${cur.pid} since ${new Date(cur.acquiredAt).toISOString()}; if that process is not a live revision pass, remove ${leasePath}`
+						: `held by pid ${cur.pid} (no longer running) since ${new Date(cur.acquiredAt).toISOString()}; crash recovery is manual — provider processes spawned by that pass may still be running and mutating the worktree. Verify none are, then run \`rm ${leasePath}\` to release the lease`;
 					return;
 				}
-				// Absent, malformed, or dead holder (ESRCH is positive evidence its pass is over).
+				// Absent or malformed register only — a readable lease is never auto-reclaimed.
 				const record: ExecLeaseRecord = { version: 1, itemId, pid: process.pid, token, acquiredAt: Date.now() };
 				writeFileSync(leasePath, `${JSON.stringify(record, null, "\t")}\n`);
 				acquired = true;
@@ -454,7 +465,8 @@ export async function acquireReviseExecution(root: string, itemId: string, opts:
 						{ label: "revise execution lease", staleMs: execLockStaleMs(), acquireTimeoutMs: execLockTimeoutMs() },
 					);
 				} catch {
-					// Leave the lease: once this process exits, the dead-pid reclaim recovers it.
+					// Leave the lease. There is no automatic reclaim (see the acquire docstring):
+					// an operator recovers it by removing the named lease file.
 				}
 			},
 		},
