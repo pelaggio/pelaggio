@@ -15,7 +15,7 @@ const OPTIONS = {
 	"review-findings": { type: "string" },
 	verbose: { type: "boolean", default: false },
 	trace: { type: "boolean", default: false },
-	budget: { type: "string", default: "40" },
+	budget: { type: "string", default: "100" },
 	// No default: an unset flag stays `undefined` so `park.max-wait` config can take
 	// effect. Precedence (resolved in the orchestrator): CLI flag > config > "6h".
 	"max-wait": { type: "string" },
