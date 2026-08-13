@@ -3,20 +3,15 @@ import { describe, it } from "node:test";
 import { Hono } from "hono";
 import { bearerAuth } from "../src/auth.js";
 
-function makeApp(token: string | undefined): Hono {
+function makeApp(token: string): Hono {
 	const app = new Hono();
 	app.use("*", bearerAuth(token));
 	app.get("/x", (c) => c.json({ ok: true }));
+	app.post("/x", (c) => c.json({ ok: true }));
 	return app;
 }
 
 describe("bearerAuth", () => {
-	it("undefined token: every request passes (no-op)", async () => {
-		const app = makeApp(undefined);
-		const res = await app.request("/x");
-		assert.equal(res.status, 200);
-	});
-
 	it("missing Authorization header: 401", async () => {
 		const app = makeApp("secret");
 		const res = await app.request("/x");
@@ -34,6 +29,12 @@ describe("bearerAuth", () => {
 	it("correct token: 200", async () => {
 		const app = makeApp("secret");
 		const res = await app.request("/x", { headers: { Authorization: "Bearer secret" } });
+		assert.equal(res.status, 200);
+	});
+
+	it("correct token authenticates state changes", async () => {
+		const app = makeApp("secret");
+		const res = await app.request("/x", { method: "POST", headers: { Authorization: "Bearer secret" } });
 		assert.equal(res.status, 200);
 	});
 

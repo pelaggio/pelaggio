@@ -13,7 +13,7 @@ export interface AppDeps {
 	supervisor: Supervisor;
 	registry: Registry;
 	roadmapCache: RoadmapCache;
-	token: string | undefined;
+	token: string;
 	webDist: string | undefined;
 	trustManifestPath?: string;
 }
@@ -36,12 +36,8 @@ export function createApp(deps: AppDeps): Hono {
 		}
 	});
 
-	const guarded = new Hono();
-	guarded.use("*", bearerAuth(deps.token));
-	registerRunRoutes(guarded, deps.supervisor);
-	registerReposRoutes(guarded, { registry: deps.registry, roadmapCache: deps.roadmapCache });
-	app.route("/", guarded);
-
+	// The static shell must load before the operator can enter a bearer token.
+	// It carries no authority; every API route remains in the guarded sub-app.
 	if (deps.webDist !== undefined) {
 		const root = deps.webDist;
 		app.get("/", (c) => c.redirect("/ui/", 302));
@@ -53,6 +49,12 @@ export function createApp(deps: AppDeps): Hono {
 			}),
 		);
 	}
+
+	const guarded = new Hono();
+	guarded.use("*", bearerAuth(deps.token));
+	registerRunRoutes(guarded, deps.supervisor);
+	registerReposRoutes(guarded, { registry: deps.registry, roadmapCache: deps.roadmapCache });
+	app.route("/", guarded);
 
 	return app;
 }

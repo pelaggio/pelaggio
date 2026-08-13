@@ -18,7 +18,7 @@ last_reviewed: 2026-07-08
 | `pr.open` | Allowed | Ship default | Opens PR in `pull-request` mode. | `TC-003`, `TC-012` |
 | `git.push.default_branch` | Denied by default | Explicit `ship.target=direct-push` | Emits a warning banner when configured. | `TC-012` |
 | `pr.automerge` | Denied by default | Explicit `ship.target=auto-merge-pr` | Requires external branch protection today; in-code verification planned. | `TC-013` |
-| `control_plane.spawn_run` | Denied unless server is reachable/authenticated | Bearer token on non-loopback | Loopback tokenless dev is allowed with warning. | `TC-010` |
+| `control_plane.spawn_run` | Denied unless server is reachable/authenticated | Bearer token on every bind | Loopback development also requires a configured token. | `TC-010` |
 | `notify_webhook` | Disabled | Set `notify.url` | Sends outcome metadata to operator endpoint. | `TC-002`, `TC-006` |
 
 ## Step Defaults

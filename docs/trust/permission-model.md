@@ -19,7 +19,7 @@ Pelaggio's permission model is a manifest-backed description of current capabili
 | `local_read` | Allowed | Read repository files, config, roadmap material, diffs, logs, and plans needed to select, plan, review, or verify work. | Repo/issue/PR text is treated as untrusted input. | `TC-015` |
 | `worktree_write` | Allowed for mutating steps | Edit files and run commands in the item worktree. | By default, a post-step audit fails on main-checkout or sibling changes. Dirty-main mode uses Claude tool-window attribution or Codex workspace exclusion for main and retains sibling auditing. | `TC-011`, `TC-015` |
 | `remote_mutation` | PR open allowed; default-branch push and auto-merge denied by default | Open PRs, push branches, optionally direct-push or auto-merge with explicit `ship.target`. | Auto-merge gate verification is planned; external branch protection owns enforcement today. | `TC-003`, `TC-012`, `TC-013` |
-| `control_plane.spawn_run` | Denied unless server is intentionally reachable and authenticated | Start/pause/resume/stop supervised runs through HTTP. | Non-loopback host refuses to start without `CONTROL_PLANE_TOKEN`; loopback dev can run tokenless with warning. | `TC-010` |
+| `control_plane.spawn_run` | Denied unless server is intentionally reachable and authenticated | Start/pause/resume/stop supervised runs through HTTP. | Every host, including loopback, refuses to start without `CONTROL_PLANE_TOKEN`. | `TC-010` |
 
 ## Pipeline Steps
 
@@ -43,4 +43,4 @@ Pelaggio's permission model is a manifest-backed description of current capabili
 
 ## Configuration Gates
 
-`ship.target` defaults to `pull-request`; `direct-push` and `auto-merge-pr` are explicit values in `.pelaggio.yml` or `--target` and emit a warning banner (`TC-012`). The notify webhook is disabled until `notify.url` is set (`TC-002`, `TC-006`). The server requires bearer auth on non-loopback binds and exposes only `/healthz` and `/.well-known/pelaggio.trust.json` outside the bearer chain (`TC-010`).
+`ship.target` defaults to `pull-request`; `direct-push` and `auto-merge-pr` are explicit values in `.pelaggio.yml` or `--target` and emit a warning banner (`TC-012`). The notify webhook is disabled until `notify.url` is set (`TC-002`, `TC-006`). The server requires bearer auth on every bind — startup fails without `CONTROL_PLANE_TOKEN`, including on loopback — and exposes only `/healthz`, `/.well-known/pelaggio.trust.json`, and the static UI shell (`/` and `/ui/*`, which carries no run authority) outside the bearer chain (`TC-010`).

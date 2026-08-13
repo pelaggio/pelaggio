@@ -76,8 +76,8 @@ Pelaggio's guarantees are documented and verifiable, not marketing:
 - **Worktree isolation** — each item works only inside its own git worktree.
 - **PR-gated by default** — human review is the shipped default; direct-push is opt-in.
 - **Fail-closed review gate** — only a valid report without `must-fix` findings passes.
-- **Authenticated control plane** — the daemon refuses to start unauthenticated on a
-  non-loopback host; no silent open port.
+- **Authenticated control plane** — the daemon refuses to start unauthenticated on
+  any host, including loopback; no silent open port.
 - **No surprise egress** — self-hosted, no telemetry, and secrets are never interpolated
   into prompts or logs.
 

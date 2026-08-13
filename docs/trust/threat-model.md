@@ -26,13 +26,13 @@ This maps directly to OWASP LLM01 Prompt Injection, OWASP LLM06 Excessive Agency
 | Roadmap adapter | User-controlled integration | GitHub/Linear only when configured as the roadmap source. | `TC-006` |
 | Git remote | User-controlled endpoint | Branch/commit push during ship modes; default branch push denied by default. | `TC-006`, `TC-012` |
 | Notify webhook | User-controlled endpoint | Disabled until `notify.url` is set; sends outcome metadata. | `TC-002`, `TC-006` |
-| Control-plane HTTP API | Operator surface | Non-loopback binds require `CONTROL_PLANE_TOKEN`; loopback without token is allowed with warning. | `TC-010` |
+| Control-plane HTTP API | Operator surface | Every bind requires `CONTROL_PLANE_TOKEN`; bearer auth guards all operator routes. | `TC-010` |
 
 ## STRIDE
 
 | Category | Threat | Current posture | Claim(s) |
 |---|---|---|---|
-| Spoofing | A reachable peer starts or controls runs through the daemon. | Non-loopback startup fails without `CONTROL_PLANE_TOKEN`; bearer auth guards everything except `/healthz` and the public trust manifest. | `TC-010` |
+| Spoofing | A reachable peer starts or controls runs through the daemon. | Startup fails without `CONTROL_PLANE_TOKEN`; bearer auth guards every authority-bearing API route. Health, the trust manifest, and the static UI shell carry no run authority. | `TC-010` |
 | Tampering | Injected instructions write outside the item worktree or corrupt the main checkout. | Hooks and the install guard reduce exposure. By default the audit catches main and sibling changes; dirty-main mode uses Claude tool-window deltas or Codex workspace exclusion for main and retains siblings. Other paths remain outside this non-OS boundary. | `TC-011`, `TC-015` |
 | Repudiation | Operators cannot tell what ran, what shipped, or why a gate blocked. | `.dev/pelaggio-log.jsonl`, branches, PR comments, review metrics, and server state/logs preserve operational evidence; verbose raw logs have scrubbing limits. | `TC-001`, `TC-003`, `TC-014`, `TC-015` |
 | Information disclosure | Secrets or private source leave through prompts, child env, logs, provider calls, or webhooks. | Known secret env vars are not interpolated into prompts/structured run logs; no telemetry exists; configured provider/integration egress is documented. Full child env inheritance and unsanitized verbose logs are planned hardening work. | `TC-001`, `TC-002`, `TC-006`, `TC-014` |

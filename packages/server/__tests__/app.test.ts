@@ -63,14 +63,22 @@ function setup(opts: { token?: string; webDist?: string; trustManifestPath?: str
 		spawn: fakeSpawn(),
 		now: () => new Date("2026-04-19T00:00:00.000Z"),
 	});
-	const app = createApp({ supervisor, registry, roadmapCache, token: opts.token, webDist: opts.webDist, trustManifestPath: opts.trustManifestPath });
-	return { app, supervisor, store, dir, registry };
+	const token = opts.token ?? "test-token";
+	const rawApp = createApp({ supervisor, registry, roadmapCache, token, webDist: opts.webDist, trustManifestPath: opts.trustManifestPath });
+	const app = {
+		request(path: string, init?: RequestInit): Response | Promise<Response> {
+			const headers = new Headers(init?.headers);
+			headers.set("Authorization", `Bearer ${token}`);
+			return rawApp.request(path, { ...init, headers });
+		},
+	};
+	return { app, rawApp, supervisor, store, dir, registry };
 }
 
 describe("createApp", () => {
 	it("GET /healthz bypasses bearer auth", async () => {
-		const { app } = setup({ token: "secret" });
-		const res = await app.request("/healthz");
+		const { rawApp } = setup({ token: "secret" });
+		const res = await rawApp.request("/healthz");
 		assert.equal(res.status, 200);
 	});
 
@@ -78,16 +86,16 @@ describe("createApp", () => {
 		const dir = mkdtempSync(join(tmpdir(), "trust-manifest-"));
 		const path = join(dir, "pelaggio.trust.json");
 		writeFileSync(path, JSON.stringify({ product: "pelaggio" }));
-		const { app } = setup({ token: "secret", trustManifestPath: path });
-		const res = await app.request("/.well-known/pelaggio.trust.json");
+		const { rawApp } = setup({ token: "secret", trustManifestPath: path });
+		const res = await rawApp.request("/.well-known/pelaggio.trust.json");
 		assert.equal(res.status, 200);
 		assert.match(res.headers.get("content-type") ?? "", /application\/json/);
 		assert.deepEqual(await res.json(), { product: "pelaggio" });
 	});
 
 	it("GET /.well-known/pelaggio.trust.json returns JSON 404 when missing", async () => {
-		const { app } = setup({ trustManifestPath: join(tmpdir(), "missing-pelaggio-trust.json") });
-		const res = await app.request("/.well-known/pelaggio.trust.json");
+		const { rawApp } = setup({ trustManifestPath: join(tmpdir(), "missing-pelaggio-trust.json") });
+		const res = await rawApp.request("/.well-known/pelaggio.trust.json");
 		assert.equal(res.status, 404);
 		assert.match(res.headers.get("content-type") ?? "", /application\/json/);
 		const body = (await res.json()) as { code: string };
@@ -152,6 +160,19 @@ describe("createApp", () => {
 		assert.equal(res.status, 400);
 		const body = (await res.json()) as { code: string };
 		assert.equal(body.code, "bad-request");
+	});
+
+	it("unauthenticated POST /runs rejects a text/plain simple request before spawning", async () => {
+		const { rawApp, supervisor } = setup();
+		const res = await rawApp.request("/runs", {
+			method: "POST",
+			body: JSON.stringify({ repo: "main", item: "TOOL-1" }),
+			headers: { "content-type": "text/plain" },
+		});
+		assert.equal(res.status, 401);
+		const body = (await res.json()) as { code: string };
+		assert.equal(body.code, "unauthorized");
+		assert.equal(supervisor.list().length, 0);
 	});
 
 	it("POST /runs missing repo → 400", async () => {
@@ -314,26 +335,26 @@ describe("createApp", () => {
 	});
 
 	it("bearer gate: missing token → 401 except /healthz", async () => {
-		const { app } = setup({ token: "secret" });
-		assert.equal((await app.request("/repos")).status, 401);
-		assert.equal((await app.request("/repos/main/roadmap")).status, 401);
-		assert.equal((await app.request("/repos/main/stats")).status, 401);
-		assert.equal((await app.request("/runs")).status, 401);
-		assert.equal((await app.request("/healthz")).status, 200);
-		assert.equal((await app.request("/.well-known/pelaggio.trust.json")).status, 404);
+		const { rawApp } = setup({ token: "secret" });
+		assert.equal((await rawApp.request("/repos")).status, 401);
+		assert.equal((await rawApp.request("/repos/main/roadmap")).status, 401);
+		assert.equal((await rawApp.request("/repos/main/stats")).status, 401);
+		assert.equal((await rawApp.request("/runs")).status, 401);
+		assert.equal((await rawApp.request("/healthz")).status, 200);
+		assert.equal((await rawApp.request("/.well-known/pelaggio.trust.json")).status, 404);
 	});
 
 	it("bearer gate: correct token → 200", async () => {
-		const { app } = setup({ token: "secret" });
-		const res = await app.request("/repos", { headers: { Authorization: "Bearer secret" } });
+		const { rawApp } = setup({ token: "secret" });
+		const res = await rawApp.request("/repos", { headers: { Authorization: "Bearer secret" } });
 		assert.equal(res.status, 200);
 	});
 
 	it("static handler serves /ui/index.html when webDist is set", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "web-dist-"));
 		writeFileSync(join(dir, "index.html"), "<!doctype html><html><body>pelaggio ui</body></html>");
-		const { app } = setup({ webDist: dir });
-		const res = await app.request("/ui/");
+		const { rawApp } = setup({ token: "secret", webDist: dir });
+		const res = await rawApp.request("/ui/");
 		assert.equal(res.status, 200);
 		const body = await res.text();
 		assert.match(body, /pelaggio ui/);
@@ -354,8 +375,8 @@ describe("createApp", () => {
 	it("GET / 302s to /ui/ when webDist is set", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "web-dist-"));
 		writeFileSync(join(dir, "index.html"), "<!doctype html>");
-		const { app } = setup({ webDist: dir });
-		const res = await app.request("/");
+		const { rawApp } = setup({ token: "secret", webDist: dir });
+		const res = await rawApp.request("/");
 		assert.equal(res.status, 302);
 		assert.equal(res.headers.get("location"), "/ui/");
 	});

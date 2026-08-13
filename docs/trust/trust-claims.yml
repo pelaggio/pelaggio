@@ -106,19 +106,19 @@ claims:
     adr: null
     last_verified: "2026-07-07"
 
-  # ---- The endpoint intent (planned — NOT yet true; honest labels) ----------
+  # ---- Control-plane authentication -----------------------------------------
   - id: TC-010
-    claim: "On a routable interface the control plane never runs unauthenticated: with no token set it refuses to start. (Loopback stays allowed for local dev, with a boot warning.)"
-    status: guarantee          # closed by #102 (F1), merged 2026-07-08
+    claim: "The control plane never runs unauthenticated: with no token set it refuses to start, including on loopback."
+    status: guarantee          # closed by #102 (F1), strengthened by #500
     applies_to: ">=0.1.0"
-    mechanism: "loadServerConfig() throws when CONTROL_PLANE_TOKEN is unset AND the host is non-loopback; loopback is classified by parsed IP literal (node:net isIP): a valid 127.0.0.0/8 IPv4 literal, ::1, or the exact host 'localhost' (packages/server/src/config.ts)."
-    evidence_command: "grep -q 'isIP' packages/server/src/config.ts && grep -q 'CONTROL_PLANE_TOKEN is unset' packages/server/src/config.ts && node --import tsx --test --test-reporter=dot packages/server/__tests__/config.test.ts >/dev/null"
-    test_file: "packages/server/__tests__/config.test.ts (fail-closed + adversarial 127.*-hostname cases)"
+    mechanism: "loadServerConfig() requires CONTROL_PLANE_TOKEN before the daemon starts on any host (packages/server/src/config.ts); bearerAuth() guards every authority-bearing API route. Health, the public trust manifest, and the static UI shell carry no run authority and intentionally bypass it."
+    evidence_command: "grep -q 'required(\"CONTROL_PLANE_TOKEN\"' packages/server/src/config.ts && node --import tsx --test --test-reporter=dot packages/server/__tests__/config.test.ts packages/server/__tests__/auth.test.ts >/dev/null"
+    test_file: "packages/server/__tests__/{config,auth}.test.ts (mandatory token on loopback/routable hosts + bearer validation)"
     failure_mode: "refuse to start, loudly (throws an actionable error)"
-    known_limits: "Loopback-without-token is intentionally allowed for local dev (a boot warn fires). Conservative: IPv4-mapped loopback (::ffff:127.0.0.1) is refused rather than parsed."
+    known_limits: "The health endpoint, public trust manifest, and static UI shell intentionally bypass bearer auth; none can invoke authority-bearing actions without the token. The web UI stores its operator-supplied token in localStorage, so XSS can disclose it."
     standards: ["ASVS-V2", "OWASP-LLM06"]
     adr: "ADR-8"
-    last_verified: "2026-07-08"
+    last_verified: "2026-08-11"
 
   - id: TC-011
     claim: "By default, writes are confined to the work item's own worktree: main-checkout or sibling changes fail the step. Dirty-main mode retains sibling enforcement and provider-specific main protection."
@@ -218,7 +218,7 @@ manifest:
   defaults:
     ship_target: pull-request
     telemetry: off
-    control_plane_auth: required_or_loopback_only
+    control_plane_auth: required
   capabilities:
     - id: repo.read
       description: "Read repository files, local configuration, and roadmap context needed to plan or verify work."
@@ -256,7 +256,7 @@ manifest:
     - id: control_plane.spawn_run
       description: "Spawn an orchestrator run via the control-plane API."
       default: denied
-      scope: authenticated_or_loopback_only
+      scope: authenticated
       approval: explicit_config_required
       evidence: [TC-010]
   egress:

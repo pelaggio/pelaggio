@@ -1,12 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import type { MiddlewareHandler } from "hono";
 
-export function bearerAuth(token: string | undefined): MiddlewareHandler {
-	if (token === undefined) {
-		return async (_c, next) => {
-			await next();
-		};
-	}
+export function bearerAuth(token: string): MiddlewareHandler {
 	const expected = Buffer.from(token, "utf-8");
 	return async (c, next) => {
 		const header = c.req.header("Authorization") ?? "";

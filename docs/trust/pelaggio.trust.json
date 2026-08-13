@@ -8,7 +8,7 @@
   "defaults": {
     "ship_target": "pull-request",
     "telemetry": "off",
-    "control_plane_auth": "required_or_loopback_only"
+    "control_plane_auth": "required"
   },
   "capabilities": [
     {
@@ -75,7 +75,7 @@
       "id": "control_plane.spawn_run",
       "description": "Spawn an orchestrator run via the control-plane API.",
       "default": "denied",
-      "scope": "authenticated_or_loopback_only",
+      "scope": "authenticated",
       "approval": "explicit_config_required",
       "evidence": [
         "TC-010"
