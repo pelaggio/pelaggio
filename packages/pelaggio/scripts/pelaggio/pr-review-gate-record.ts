@@ -73,7 +73,9 @@ export type NewPrReviewFleetGateRecord = Omit<PrReviewFleetGateRecordV2, "schema
 export type NewPrReviewOperatorGateRecord = Omit<PrReviewOperatorGateRecordV2, "schemaVersion">;
 export type NewPrReviewGateRecord = NewPrReviewFleetGateRecord | NewPrReviewOperatorGateRecord;
 
-const RECORDS_DIR = "pr-review-gate-records";
+/** Store directory name under `MAIN_REPO/.dev/`. Exported so the step-runner's Bash register
+ *  denial (#510) names the exact same path as the store — the deny list must not drift. */
+export const PR_REVIEW_GATE_RECORDS_DIR = "pr-review-gate-records";
 const SHA_RE = /^[0-9a-f]{7,40}$/i;
 const DIGEST_RE = /^[a-f0-9]{64}$/;
 const RECORD_RE = /^(\d+)-([0-9a-f]{7,40})\.json$/i;
@@ -86,7 +88,7 @@ const OPERATOR_V2_KEYS = ["schemaVersion", "producer", "agreement", "prNumber", 
 const DISPOSITION_ENTRY_KEYS = ["disposition", "rationale"] as const;
 
 export function gateRecordsDir(mainRepo: string): string {
-	return resolve(mainRepo, ".dev", RECORDS_DIR);
+	return resolve(mainRepo, ".dev", PR_REVIEW_GATE_RECORDS_DIR);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

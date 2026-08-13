@@ -22,7 +22,7 @@ import {
 	type PrAdjudicationSurvivorEntry,
 	readAdjudicationSourceRecord,
 	renderOperatorAdjudicationComment,
-	selectLatestFleetGateRecord,
+	selectUnambiguousFleetGateRecord,
 	validateAdjudicationSourceRecord,
 	writeAdjudicationSourceRecord,
 } from "../review/adjudication.js";
@@ -330,9 +330,10 @@ describe("fleet eligibility and binding", () => {
 		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ survivorCount: 0 }) }), false);
 	});
 
-	it("selects the latest fleet record by reviewedAt then headSha, ignoring operator records", () => {
+	it("selects a single fleet record, ignores operator records and other PRs, and refuses multi-record ambiguity (#510)", () => {
 		const older = { schemaVersion: 2, ...fleet({ reviewedAt: "2026-08-01T00:00:00.000Z" }) } as PrReviewGateRecord;
-		const newer = { schemaVersion: 2, ...fleet({ reviewedAt: "2026-08-02T00:00:00.000Z", headSha: HEAD }) } as PrReviewGateRecord;
+		const forgedNewer = { schemaVersion: 2, ...fleet({ reviewedAt: "2027-01-01T00:00:00.000Z", headSha: HEAD }) } as PrReviewGateRecord;
+		const otherPr = { schemaVersion: 2, ...fleet({ prNumber: 500 }) } as PrReviewGateRecord;
 		const operator = {
 			schemaVersion: 2 as const,
 			producer: "operator-adjudication" as const,
@@ -348,8 +349,14 @@ describe("fleet eligibility and binding", () => {
 			interdiffDigest: DIGEST,
 			dispositions: {},
 		};
-		const selected = selectLatestFleetGateRecord([older, operator, newer], 497);
-		assert.equal(selected, newer);
+		assert.deepEqual(selectUnambiguousFleetGateRecord([], 497), { kind: "none" });
+		assert.deepEqual(selectUnambiguousFleetGateRecord([operator], 497), { kind: "none" });
+		assert.deepEqual(selectUnambiguousFleetGateRecord([older, operator, otherPr], 497), { kind: "one", record: older });
+		// A forged record with a future model-supplied reviewedAt must NOT win selection — two
+		// qualifying fleet records refuse, naming both files.
+		const ambiguous = selectUnambiguousFleetGateRecord([older, operator, forgedNewer], 497);
+		assert.equal(ambiguous.kind, "ambiguous");
+		assert.deepEqual(ambiguous.kind === "ambiguous" ? ambiguous.files : [], [`497-${REVIEWED}.json`, `497-${HEAD}.json`].sort());
 	});
 
 	it("cross-checks identity, counts, agreement, and the exact fleet-file digest", () => {

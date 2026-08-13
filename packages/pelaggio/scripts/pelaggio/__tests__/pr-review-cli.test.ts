@@ -1131,9 +1131,11 @@ describe("pr-review CLI local gate-evidence persistence (#497)", () => {
 			},
 			resolveVerifySettings: () => driver("claude"),
 			// #510 confinement seams pinned hermetic: the tmp repo is not a Git root, so the real
-			// snapshot would read GONE and refuse before the verifier runs.
+			// snapshots would read GONE / throw and refuse before the verifier runs.
 			listWorktrees: (forRepo) => [forRepo],
 			snapshotMainRoot: () => "",
+			snapshotRepoRefState: () => "head\nrefs-digest",
+			snapshotSiblingWorktree: () => "\n@head",
 			createCheckoutObserver: () => ({
 				beforeTool: () => ({ kind: "clean" as const }),
 				afterTool: () => ({ kind: "clean" as const }),

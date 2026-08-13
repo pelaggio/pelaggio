@@ -55,6 +55,8 @@ import {
 	revertPlanPolish,
 	reviewFindingsPreamble,
 	snapshotForbiddenRoot,
+	snapshotRepoRefState,
+	snapshotSiblingWorktree,
 	uniqueDriverProvenance,
 	verifyShipLanded,
 } from "../helpers.js";
@@ -358,6 +360,41 @@ describe("diffForbiddenRootSnapshots (#308 GONE-aware)", () => {
 	});
 	it("passes GONE→present (root appeared mid-step — cannot be this step's mutation)", () => {
 		assert.deepEqual(diffForbiddenRootSnapshots(new Map([["/wt", gone]]), new Map([["/wt", ""]])), []);
+	});
+});
+
+describe("snapshotRepoRefState / snapshotSiblingWorktree (#510 round-2)", () => {
+	it("detects a clean-to-clean --allow-empty commit that porcelain cannot see", () => {
+		const dir = makeFeatRepo();
+		const porcelainBefore = snapshotForbiddenRoot(dir);
+		const refsBefore = snapshotRepoRefState(dir);
+		execSync("git commit --allow-empty -q -m sneaky", { cwd: dir });
+		assert.equal(snapshotForbiddenRoot(dir), porcelainBefore, "porcelain is blind to the empty commit");
+		assert.notEqual(snapshotRepoRefState(dir), refsBefore, "ref-state digest sees the HEAD move");
+	});
+
+	it("detects a bare ref move (branch created without touching the working tree)", () => {
+		const dir = makeFeatRepo();
+		const before = snapshotRepoRefState(dir);
+		execSync("git branch forged-branch", { cwd: dir });
+		assert.notEqual(snapshotRepoRefState(dir), before);
+	});
+
+	it("throws on a non-repository root (callers fail closed)", () => {
+		assert.throws(() => snapshotRepoRefState(mkdtempSync(join(tmpdir(), "pelaggio-refstate-notrepo-"))));
+	});
+
+	it("sibling snapshot combines porcelain and HEAD, and returns GONE for an absent root", () => {
+		const dir = makeFeatRepo();
+		const before = snapshotSiblingWorktree(dir);
+		assert.match(before, /\n@[0-9a-f]{40}$/);
+		writeFileSync(join(dir, "leaked.txt"), "x");
+		const dirty = snapshotSiblingWorktree(dir);
+		assert.notEqual(dirty, before, "working-tree write changes the snapshot");
+		execSync("git add -A && git commit -q -m leak", { cwd: dir });
+		// Porcelain is clean again (as before the write) but HEAD moved — clean-to-clean commits differ.
+		assert.notEqual(snapshotSiblingWorktree(dir), before, "commit moves HEAD even once porcelain is clean again");
+		assert.equal(snapshotSiblingWorktree(join(tmpdir(), "does-not-exist-pelaggio-510")), FORBIDDEN_ROOT_GONE);
 	});
 });
 

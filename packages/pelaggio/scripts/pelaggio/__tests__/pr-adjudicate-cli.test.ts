@@ -182,6 +182,11 @@ function harness(
 		 *  observer's finish() result. Defaults: clean snapshots, clean observer. */
 		mainSnapshots?: string[];
 		observerFinish?: MainCheckoutDeltaResult;
+		/** #510 round-2 seams: successive HEAD+ref-state snapshots (last one repeats), extra
+		 *  registered worktrees appended after the main root, and per-sibling snapshot queues. */
+		refStateSnapshots?: string[];
+		extraWorktrees?: string[];
+		siblingSnapshots?: Record<string, string[]>;
 	} = {},
 ): Harness {
 	const repo = tmp();
@@ -220,6 +225,8 @@ function harness(
 		return next;
 	};
 	const mainSnapshots = [...(over.mainSnapshots ?? [""])];
+	const refStateSnapshots = [...(over.refStateSnapshots ?? ["head\nrefs-digest"])];
+	const siblingQueues = new Map(Object.entries(over.siblingSnapshots ?? {}).map(([root, snaps]) => [root, [...snaps]]));
 	const deps: PrAdjudicateDeps = {
 		repo,
 		ghRepo: over.ghRepo ?? "o/r",
@@ -269,12 +276,22 @@ function harness(
 		resolveVerifySettings: () => verifySettings(),
 		listWorktrees: (forRepo) => {
 			effects.push("list-worktrees");
-			return [forRepo];
+			return [forRepo, ...(over.extraWorktrees ?? [])];
 		},
 		snapshotMainRoot: () => {
 			effects.push("snapshot-main");
 			const next = mainSnapshots.length > 1 ? mainSnapshots.shift()! : mainSnapshots[0]!;
 			return next;
+		},
+		snapshotRepoRefState: () => {
+			effects.push("snapshot-refs");
+			return refStateSnapshots.length > 1 ? refStateSnapshots.shift()! : refStateSnapshots[0]!;
+		},
+		snapshotSiblingWorktree: (root) => {
+			effects.push(`snapshot-sibling:${root}`);
+			const queue = siblingQueues.get(root);
+			if (!queue || queue.length === 0) return "\n@head";
+			return queue.length > 1 ? queue.shift()! : queue[0]!;
 		},
 		createCheckoutObserver: () => {
 			effects.push("observer:create");
@@ -344,6 +361,16 @@ describe("pr-adjudicate CLI config and eligibility", () => {
 		assert.equal(await main(["--pr", "497"], noSource.deps), 1);
 		assert.ok(!noSource.effects.some((e) => e.startsWith("step:") || e.startsWith("comment:") || e.startsWith("status:")));
 	});
+
+	it("refuses ambiguous fleet evidence naming the conflicting files, never picking by reviewedAt (#510 1b)", async () => {
+		const h = harness();
+		// A second fleet record for the same PR with a FUTURE model-supplied timestamp — under
+		// newest-wins this forged record would steer adjudication; now any second record refuses.
+		writePrReviewGateRecord(h.gateRoot, fleet({ headSha: NEW_HEAD, reviewedAt: "2027-01-01T00:00:00.000Z" }));
+		assert.equal(await main(["--pr", "497"], h.deps), 1);
+		assert.ok(h.errs.some((e) => e.includes(`497-${REVIEWED}.json`) && e.includes(`497-${NEW_HEAD}.json`)));
+		assert.ok(!h.effects.some((e) => e.startsWith("read-source:") || e.startsWith("step:") || e.startsWith("comment:") || e.startsWith("status:")));
+	});
 });
 
 describe("pr-adjudicate CLI verification and effects", () => {
@@ -399,6 +426,44 @@ describe("pr-adjudicate CLI verification and effects", () => {
 		assert.equal(await main(["--pr", "497"], gone.deps), 1);
 		assert.ok(!gone.effects.some((e) => e.startsWith("step:")));
 		assert.ok(!gone.effects.some((e) => e.startsWith("write-gate:operator") || e.startsWith("comment:") || e.startsWith("status:")));
+	});
+
+	it("refuses clean-to-clean main mutations — HEAD/ref moves porcelain cannot see (#510 round-2 2a)", async () => {
+		// Porcelain stays clean at both ends; only the HEAD+for-each-ref digest changes, the
+		// `git -C ../../.. commit --allow-empty` shape from the verified finding.
+		const h = harness({ refStateSnapshots: ["h1\nrefs-digest", "h2\nrefs-digest"] });
+		assert.equal(await main(["--pr", "497"], h.deps), 1);
+		assert.ok(h.errs.some((e) => /HEAD or refs changed during verification/.test(e)));
+		assert.ok(!h.effects.some((e) => e.startsWith("write-gate:operator") || e.startsWith("comment:") || e.startsWith("status:")));
+	});
+
+	it("refuses sibling-worktree deltas and exempts only the verifier's own review-head cwd (#510 round-2 2b)", async () => {
+		// The registered enumeration includes the verifier's own review-head checkout and a true
+		// sibling: only the sibling is audited, and its porcelain/HEAD delta refuses.
+		const sibling = "/wt/pelaggio-extra";
+		const dirty = harness({
+			extraWorktrees: ["/tmp/adjudicate-head", sibling],
+			siblingSnapshots: { [sibling]: ["\n@h1", " M src/a.ts\n@h1"] },
+		});
+		assert.equal(await main(["--pr", "497"], dirty.deps), 1);
+		assert.ok(dirty.errs.some((e) => e.includes(`sibling worktree ${sibling} changed during verification`)));
+		assert.ok(!dirty.effects.some((e) => e === "snapshot-sibling:/tmp/adjudicate-head"));
+		assert.ok(!dirty.effects.some((e) => e.startsWith("write-gate:operator") || e.startsWith("comment:") || e.startsWith("status:")));
+
+		// A detached-HEAD commit in a clean sibling (porcelain identical, HEAD moved) refuses too.
+		const headMoved = harness({
+			extraWorktrees: [sibling],
+			siblingSnapshots: { [sibling]: ["\n@h1", "\n@h2"] },
+		});
+		assert.equal(await main(["--pr", "497"], headMoved.deps), 1);
+		assert.ok(headMoved.errs.some((e) => e.includes(`sibling worktree ${sibling} changed during verification`)));
+		assert.ok(!headMoved.effects.some((e) => e.startsWith("write-gate:operator") || e.startsWith("comment:") || e.startsWith("status:")));
+
+		// Unchanged siblings pass through to the normal success path.
+		const clean = harness({ extraWorktrees: [sibling], siblingSnapshots: { [sibling]: ["\n@h1"] } });
+		assert.equal(await main(["--pr", "497"], clean.deps), 0);
+		assert.ok(clean.effects.filter((e) => e === `snapshot-sibling:${sibling}`).length === 2);
+		assert.ok(clean.effects.includes(`status:success:${HEAD}`));
 	});
 
 	it("refuses non-ok, thrown, malformed, example, missing, and surviving verification without effects", async () => {
@@ -493,10 +558,12 @@ describe("pr-adjudicate CLI verification and effects", () => {
 		assert.ok(!after.effects.some((e) => e === `status:success:${NEW_HEAD}`));
 	});
 
-	it("cleans up the adjudication checkout when preparation fails after the ref is requested", async () => {
+	it("cleans up the adjudication ref even when preparation fails after the fetch created it (#510 leaked ref)", async () => {
+		// prepareReviewHead fetches refs/pelaggio-adjudicate/pr-<n> BEFORE its readiness checks, so
+		// a null return can still have created the ref — cleanup must run regardless of readiness.
 		const h = harness({ prepareOk: false });
 		assert.equal(await main(["--pr", "497"], h.deps), 1);
 		assert.ok(h.effects.includes("prepare:refs/pelaggio-adjudicate/pr-497:" + HEAD + ":-adjudicate"));
-		assert.ok(!h.effects.some((e) => e.startsWith("cleanup:refs/pelaggio-adjudicate/pr-497")));
+		assert.ok(h.effects.includes("cleanup:refs/pelaggio-adjudicate/pr-497:-adjudicate"));
 	});
 });

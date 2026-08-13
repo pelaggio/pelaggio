@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { CONFIG, REPO, REVIEW_CONFIG, ROADMAP_GITHUB, resolveStepSettings, SHIP_TARGET, type StepSettings } from "./config.js";
 import { upsertMarkerComment } from "./github-posting.js";
-import { createMainCheckoutDeltaObserver, FORBIDDEN_ROOT_GONE, listWorktreesIn, type MainCheckoutDeltaObserver, mainWorktree, snapshotForbiddenRoot } from "./helpers.js";
+import { createMainCheckoutDeltaObserver, FORBIDDEN_ROOT_GONE, listWorktreesIn, type MainCheckoutDeltaObserver, mainWorktree, snapshotForbiddenRoot, snapshotRepoRefState, snapshotSiblingWorktree } from "./helpers.js";
 import { executionOverrideFor, trustedLocalContext, verificationPrompt } from "./pr-review-cli.js";
 import { gateRecordsDir, listPrReviewGateRecords, type PrReviewGateRecord, writePrReviewGateRecord } from "./pr-review-gate-record.js";
 import {
@@ -30,7 +30,7 @@ import {
 	PR_ADJUDICATION_MARKER,
 	readAdjudicationSourceRecord,
 	renderOperatorAdjudicationComment,
-	selectLatestFleetGateRecord,
+	selectUnambiguousFleetGateRecord,
 } from "./review/adjudication.js";
 import { modelAuthoredText, parseReviewVerification, reconcileReviewVerification, reviewFindingFingerprint, type VerificationCandidate, type VerificationDisposition } from "./review/findings.js";
 import { cleanupReviewHead, postReviewStatus, prepareReviewHead, type ReviewCandidate } from "./review-sweep.js";
@@ -77,6 +77,11 @@ export interface PrAdjudicateDeps {
 	listWorktrees: (repo: string) => string[];
 	/** #510: porcelain snapshot of the authenticated main checkout, taken around the verifier run. */
 	snapshotMainRoot: (root: string) => string;
+	/** #510 round-2 (2a): HEAD + ref-state digest of the main checkout — detects clean-to-clean
+	 *  mutations (an `--allow-empty` commit, a bare ref move) that porcelain cannot see. */
+	snapshotRepoRefState: (root: string) => string;
+	/** #510 round-2 (2b): porcelain + HEAD snapshot of a registered sibling worktree. */
+	snapshotSiblingWorktree: (root: string) => string;
 	/** #510: delta observer bracketing the verifier's mutating tools against the main checkout. */
 	createCheckoutObserver: (root: string) => MainCheckoutDeltaObserver;
 	upsertComment: typeof upsertAdjudicationComment;
@@ -141,6 +146,8 @@ function defaultDeps(): PrAdjudicateDeps {
 		resolveVerifySettings: (profile) => resolveStepSettings(CONFIG, profile, "pr-verify"),
 		listWorktrees: listWorktreesIn,
 		snapshotMainRoot: snapshotForbiddenRoot,
+		snapshotRepoRefState,
+		snapshotSiblingWorktree,
 		createCheckoutObserver: createMainCheckoutDeltaObserver,
 		upsertComment: upsertAdjudicationComment,
 		postStatus: postReviewStatus,
@@ -225,8 +232,19 @@ export async function runPrAdjudication(pr: number, profile: string, deps: PrAdj
 	const adjudicator = actor.stdout.trim();
 	if (actor.status !== 0 || adjudicator.length === 0) return refuse(deps, "could not resolve the authenticated adjudicator");
 
-	const latest = selectLatestFleetGateRecord(deps.listGateRecords(deps.gateRecordsRoot), pr);
-	if (!latest) return refuse(deps, "no local fleet review record for this PR; run a full pr-review first");
+	// #510 must-fix (1b/1c): both evidence stores consumed below live under gitignored
+	// MAIN_REPO/.dev and function as authorization. Contained hardenings: every pipeline seat is
+	// denied opaque-Bash and Write/Edit access to both store paths (step-runner register denial),
+	// and selection refuses ambiguity instead of trusting the model-supplied `reviewedAt`
+	// ordering. Residual, accepted until the chartered ADR-0018/#419 harness-attested-evidence
+	// work: the path denial covers pipeline seats only — host processes and un-jailed Bash
+	// outside the hook system can still write these stores.
+	const selection = selectUnambiguousFleetGateRecord(deps.listGateRecords(deps.gateRecordsRoot), pr);
+	if (selection.kind === "none") return refuse(deps, "no local fleet review record for this PR; run a full pr-review first");
+	if (selection.kind === "ambiguous") {
+		return refuse(deps, `multiple fleet review records exist for PR #${pr} under ${deps.gateRecordsRoot} (${selection.files.join(", ")}); refusing ambiguous evidence — remove the stale record(s) or run a full pr-review`);
+	}
+	const latest = selection.record;
 	if (!isEligibleFleetGateRecord(latest)) {
 		return refuse(deps, "latest fleet outcome is not an adjudicable complete consensus-block; run a full pr-review");
 	}
@@ -245,11 +263,9 @@ export async function runPrAdjudication(pr: number, profile: string, deps: PrAdj
 	const candidate: ReviewCandidate = { prNumber: pr, itemId, branch, headSha, statusState: "missing" };
 	const headRef = `refs/pelaggio-adjudicate/pr-${pr}`;
 	let prepared: { diffCwd: string; baseRef: string; headRef: string } | null = null;
-	let checkoutReady = false;
 	try {
 		prepared = deps.prepareReviewHead(deps.repo, candidate, undefined, headRef, ADJUDICATION_HEAD_SUFFIX);
 		if (!prepared) return refuse(deps, "could not prepare a detached checkout of the current PR head");
-		checkoutReady = true;
 
 		let isAncestor = false;
 		try {
@@ -291,10 +307,12 @@ export async function runPrAdjudication(pr: number, profile: string, deps: PrAdj
 			//   - foreignRootDenial (the step-runner's PreToolUse hook seam, pipeline.ts fan-out
 			//     wiring) denies Write/Edit into main and every registered worktree, plus the
 			//     sessions/decision-log registers;
-			//   - a main-checkout delta observer brackets mutating tools, and a before/after
-			//     porcelain snapshot of main backstops providers without hook support.
-			// Any observed main-checkout mutation or audit failure refuses BEFORE any
-			// authorization effect (record, comment, or status).
+			//   - a main-checkout delta observer brackets mutating tools, and before/after
+			//     snapshots backstop providers without hook support: main's porcelain PLUS its
+			//     HEAD + for-each-ref digest (clean-to-clean commits and ref moves), plus a
+			//     porcelain + HEAD snapshot of every registered sibling worktree (#510 round-2).
+			// Any observed mutation or audit failure refuses BEFORE any authorization effect
+			// (record, comment, or status).
 			const registeredWorktrees = deps.listWorktrees(deps.repo);
 			const observer = deps.createCheckoutObserver(deps.repo);
 			let mainBefore: string;
@@ -304,6 +322,35 @@ export async function runPrAdjudication(pr: number, profile: string, deps: PrAdj
 				return refuse(deps, `could not snapshot the main checkout before verification: ${e instanceof Error ? e.message : String(e)}`);
 			}
 			if (mainBefore === FORBIDDEN_ROOT_GONE) return refuse(deps, "main checkout is not observable as a Git root; refusing to run the verifier");
+			// #510 round-2 (2a): porcelain cannot see clean-to-clean mutations — `git -C <main>
+			// commit --allow-empty` or a bare ref move leaves it identical — so also bracket the
+			// verifier with main's HEAD + a digest of `git for-each-ref` (the shared ref store, so
+			// branch moves made from ANY worktree are visible here).
+			let mainRefsBefore: string;
+			try {
+				mainRefsBefore = deps.snapshotRepoRefState(deps.repo);
+			} catch (e) {
+				return refuse(deps, `could not snapshot the main checkout ref state before verification: ${e instanceof Error ? e.message : String(e)}`);
+			}
+			// #510 round-2 (2b): the foreign-root denial registers sibling worktrees, but the audit
+			// previously observed only main — opaque Bash could mutate an unaudited sibling and still
+			// reach the success status. Snapshot every REGISTERED worktree (the same enumeration the
+			// denial uses) except the main root (audited above, more strongly) and the verifier's own
+			// detached review-head cwd (its only permitted write surface). Residual: these audits
+			// observe outcomes; they do not confine execution. Opaque Bash outside the hook seam —
+			// providers without semantic deny, or effects beyond the audited roots — stays possible
+			// until the chartered ADR-0023 execution-jail work lands.
+			const mainRootAbs = resolve(deps.repo);
+			const verifierCwdAbs = resolve(prepared.diffCwd);
+			const auditedSiblings = [...new Set(registeredWorktrees.map((worktree) => resolve(worktree)))].filter((worktree) => worktree !== mainRootAbs && worktree !== verifierCwdAbs);
+			const siblingsBefore = new Map<string, string>();
+			for (const worktree of auditedSiblings) {
+				try {
+					siblingsBefore.set(worktree, deps.snapshotSiblingWorktree(worktree));
+				} catch (e) {
+					return refuse(deps, `could not snapshot sibling worktree ${worktree} before verification: ${e instanceof Error ? e.message : String(e)}`);
+				}
+			}
 			let result: Awaited<ReturnType<RunStepFn>>;
 			try {
 				result = await deps.runStep(
@@ -337,6 +384,24 @@ export async function runPrAdjudication(pr: number, profile: string, deps: PrAdj
 			}
 			if (mainAfter === FORBIDDEN_ROOT_GONE) return refuse(deps, "main checkout vanished during verification; refusing without authorization effects");
 			if (mainAfter !== mainBefore) return refuse(deps, "main checkout changed during verification; refusing without authorization effects");
+			let mainRefsAfter: string;
+			try {
+				mainRefsAfter = deps.snapshotRepoRefState(deps.repo);
+			} catch (e) {
+				return refuse(deps, `could not snapshot the main checkout ref state after verification: ${e instanceof Error ? e.message : String(e)}`);
+			}
+			if (mainRefsAfter !== mainRefsBefore) {
+				return refuse(deps, "main checkout HEAD or refs changed during verification (clean-to-clean commit or ref move); refusing without authorization effects");
+			}
+			for (const worktree of auditedSiblings) {
+				let siblingAfter: string;
+				try {
+					siblingAfter = deps.snapshotSiblingWorktree(worktree);
+				} catch (e) {
+					return refuse(deps, `could not snapshot sibling worktree ${worktree} after verification: ${e instanceof Error ? e.message : String(e)}`);
+				}
+				if (siblingAfter !== siblingsBefore.get(worktree)) return refuse(deps, `sibling worktree ${worktree} changed during verification; refusing without authorization effects`);
+			}
 			let dispositions: VerificationDisposition[];
 			try {
 				dispositions = reconcileReviewVerification(candidates, parseReviewVerification(modelAuthoredText(result)));
@@ -403,7 +468,12 @@ export async function runPrAdjudication(pr: number, profile: string, deps: PrAdj
 		deps.log(`adjudicated PR #${pr} ${source.reviewedSha.slice(0, 8)} → ${headSha.slice(0, 8)}`);
 		return 0;
 	} finally {
-		if (checkoutReady) deps.cleanupReviewHead(deps.repo, candidate, undefined, headRef, ADJUDICATION_HEAD_SUFFIX);
+		// #510: prepareReviewHead's fetch creates refs/pelaggio-adjudicate/pr-<n> BEFORE its
+		// readiness checks, so a null return can still have created the ref (head moved between
+		// listing and fetch; worktree add failed) — gating cleanup on checkout readiness leaked
+		// one ref per PR. cleanupReviewHead is best-effort and tolerates a missing worktree path
+		// and a missing ref, so it runs whenever preparation was attempted.
+		deps.cleanupReviewHead(deps.repo, candidate, undefined, headRef, ADJUDICATION_HEAD_SUFFIX);
 	}
 }
 
