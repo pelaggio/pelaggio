@@ -192,11 +192,19 @@ only with that complete matrix. The current head must be a descendant of the rev
 and every interdiff edit must fall in a recorded hunk (insertions may use the immediate
 start/end boundary).
 
+Churn bounds are threefold and fail-closed: per hunk, added lines are capped by the extent
+of the covering recorded hunks; across the whole interdiff, TOTAL added lines are capped by
+the total deduped covering extent (so `--unified=0` anchor-splitting cannot multiply the
+per-hunk allowance); and each added line's UTF-8 byte length is capped by a per-hunk
+ceiling derived from the hunk's own replaced lines, clamped to a 200-byte floor / 1000-byte
+ceiling (so one in-range line cannot be replaced with an arbitrarily large single line).
+
 Refuses: v1 / operator / pass / disagreement / `invalid-pass` / provider-diversity /
 preflight budget / zero-survivor / digest or identity mismatch / missing sidecar /
-force-push or rebase / extra file or hunk / binary, rename, copy, create, delete,
-mode-only, empty, or malformed interdiff / uncovered survivor. Broad churn returns to
-full `pr-review` or `pelaggio revise`.
+force-push or rebase / extra file or hunk / binary, rename, copy, create, delete / any
+file-mode metadata change (executable-bit or file-type transition, with or without hunks) /
+per-hunk, aggregate, or byte churn-bound overrun / empty or malformed interdiff /
+uncovered survivor. Broad churn returns to full `pr-review` or `pelaggio revise`.
 
 ### Safety re-verification and cost
 
@@ -208,15 +216,26 @@ refuses with no authorization effects. A judgment-only set (taxonomy extension /
 skips the model call. Line numbers are not remapped through the interdiff — they hint at
 the pre-fix location; the verifier inspects the current head.
 
+The verifier is confined the same way the pipeline confines its `pr-verify` seats: its cwd
+is the detached data-only review-head checkout (at `.dev/review-heads/<sha>-adjudicate`,
+disjoint from a concurrent drain’s checkout of the same SHA) — never the authenticated
+main checkout — with foreign-root Write/Edit denial over main and every registered
+worktree, a main-checkout delta observer around mutating tools, and a before/after
+porcelain snapshot of main. Any observed main-checkout mutation or audit failure refuses
+before any authorization effect.
+
 ### Status-last authorization and recovery
 
 Effects are fail-closed and ordered: write the operator record first, require the marker
 comment upsert second, post `review=success` to the **pinned** inspected SHA last. A
 record or comment failure cannot green the PR. A status failure leaves the revision
-blocked and safely retryable — re-run `pr-adjudicate`, never `revise` (that seam scrapes
-the marked comment, which the operator upsert already replaced). A push in the
-irreducible API-call window cannot green the new head: the status is keyed to the old
-pinned SHA, and a post-status head mismatch returns 1.
+blocked and safely retryable — re-run `pr-adjudicate`, never `revise`. The operator
+comment carries its own `<!-- pelaggio-pr-adjudication -->` marker, distinct from the
+fleet `<!-- pelaggio-pr-review -->` marker, so the `revise` seam (which scrapes only the
+fleet marker) can never ingest a PASS body as findings; the fleet findings comment is left
+in place as pre-adjudication history. A push in the irreducible API-call window cannot
+green the new head: the status is keyed to the old pinned SHA, and a post-status head
+mismatch returns 1.
 
 The command is local-only (`review.runner: local`, PR ship target, main checkout, not CI /
 `PELAGGIO_SINGLE_SHOT`). It is effectful in the same class as `pr-review` / `land`.

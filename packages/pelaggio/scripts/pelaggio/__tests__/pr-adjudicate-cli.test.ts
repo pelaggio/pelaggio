@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { DEFAULTS, type StepSettings } from "../config.js";
+import { FORBIDDEN_ROOT_GONE, type MainCheckoutDeltaResult } from "../helpers.js";
 import { main, type PrAdjudicateDeps, parsePrAdjudicateArgs } from "../pr-adjudicate-cli.js";
 import { listPrReviewGateRecords, type NewPrReviewFleetGateRecord, readPrReviewGateRecord, writePrReviewGateRecord } from "../pr-review-gate-record.js";
 import { type PrAdjudicationSourceRecordV1, type PrAdjudicationSurvivorEntry, readAdjudicationSourceRecord, writeAdjudicationSourceRecord } from "../review/adjudication.js";
@@ -118,7 +119,15 @@ function verifySettings(): StepSettings {
 interface Harness {
 	deps: PrAdjudicateDeps;
 	effects: string[];
-	stepCalls: Array<{ name: string; prompt: string; cwd: string; parkSignal: ParkSignal; executionOverride?: { provider: string; model?: string } }>;
+	stepCalls: Array<{
+		name: string;
+		prompt: string;
+		cwd: string;
+		parkSignal: ParkSignal;
+		executionOverride?: { provider: string; model?: string };
+		foreignRootDenial?: { mainRepo: string; registeredWorktrees: readonly string[]; ownWorktree?: string };
+		hasObserver: boolean;
+	}>;
 	logs: string[];
 	errs: string[];
 	repo: string;
@@ -169,6 +178,10 @@ function harness(
 		statusOk?: boolean;
 		writeGateOk?: boolean;
 		prViewFail?: boolean;
+		/** #510 confinement seams: successive main-checkout snapshots (last one repeats) and the
+		 *  observer's finish() result. Defaults: clean snapshots, clean observer. */
+		mainSnapshots?: string[];
+		observerFinish?: MainCheckoutDeltaResult;
 	} = {},
 ): Harness {
 	const repo = tmp();
@@ -192,12 +205,21 @@ function harness(
 	};
 	const runStep: RunStepFn = async (name, prompt, stepOpts) => {
 		effects.push(`step:${name}`);
-		stepCalls.push({ name, prompt, cwd: stepOpts.cwd, parkSignal: stepOpts.parkSignal, executionOverride: stepOpts.executionOverride });
+		stepCalls.push({
+			name,
+			prompt,
+			cwd: stepOpts.cwd,
+			parkSignal: stepOpts.parkSignal,
+			executionOverride: stepOpts.executionOverride,
+			foreignRootDenial: stepOpts.foreignRootDenial,
+			hasObserver: stepOpts.mainCheckoutObserver !== undefined,
+		});
 		const next = over.verify ?? verification([{ candidateId: "C1", decision: "refuted", rationale: "Fixed in the current head." }]);
 		if (next instanceof Error) throw next;
 		if (next.subtype === "error_rate_limit") stepOpts.parkSignal.parked = true;
 		return next;
 	};
+	const mainSnapshots = [...(over.mainSnapshots ?? [""])];
 	const deps: PrAdjudicateDeps = {
 		repo,
 		ghRepo: over.ghRepo ?? "o/r",
@@ -235,16 +257,36 @@ function harness(
 			if (over.writeGateOk === false) throw new Error("record write failed");
 			return writePrReviewGateRecord(root, record);
 		},
-		prepareReviewHead: (_repo, candidate, _exec, headRef) => {
-			effects.push(`prepare:${headRef ?? "default"}:${candidate.headSha}`);
+		prepareReviewHead: (_repo, candidate, _exec, headRef, pathSuffix) => {
+			effects.push(`prepare:${headRef ?? "default"}:${candidate.headSha}:${pathSuffix ?? ""}`);
 			if (over.prepareOk === false) return null;
 			return { diffCwd: "/tmp/adjudicate-head", baseRef: "origin/main", headRef: headRef ?? `refs/pelaggio-review/pr-${candidate.prNumber}` };
 		},
-		cleanupReviewHead: (_repo, _candidate, _exec, headRef) => {
-			effects.push(`cleanup:${headRef ?? "default"}`);
+		cleanupReviewHead: (_repo, _candidate, _exec, headRef, pathSuffix) => {
+			effects.push(`cleanup:${headRef ?? "default"}:${pathSuffix ?? ""}`);
 		},
 		runStep,
 		resolveVerifySettings: () => verifySettings(),
+		listWorktrees: (forRepo) => {
+			effects.push("list-worktrees");
+			return [forRepo];
+		},
+		snapshotMainRoot: () => {
+			effects.push("snapshot-main");
+			const next = mainSnapshots.length > 1 ? mainSnapshots.shift()! : mainSnapshots[0]!;
+			return next;
+		},
+		createCheckoutObserver: () => {
+			effects.push("observer:create");
+			return {
+				beforeTool: () => ({ kind: "clean" as const }),
+				afterTool: () => ({ kind: "clean" as const }),
+				finish: () => {
+					effects.push("observer:finish");
+					return over.observerFinish ?? { kind: "clean" as const };
+				},
+			};
+		},
 		upsertComment: (_gh, _repo, prNumber, _body) => {
 			effects.push(`comment:${prNumber}`);
 			return over.commentOk !== false;
@@ -324,12 +366,39 @@ describe("pr-adjudicate CLI verification and effects", () => {
 		assert.equal(await main(["--pr", "497"], h.deps), 0);
 		assert.equal(h.stepCalls.length, 1);
 		assert.equal(h.stepCalls[0]?.name, "pr-verify");
-		assert.equal(h.stepCalls[0]?.cwd, h.repo);
+		// #510 must-fix: the verifier's cwd is the DETACHED data-only review-head checkout — never
+		// the authenticated main checkout — with the pipeline's confinement wiring threaded in.
+		assert.equal(h.stepCalls[0]?.cwd, "/tmp/adjudicate-head");
+		assert.deepEqual(h.stepCalls[0]?.foreignRootDenial, { mainRepo: h.repo, registeredWorktrees: [h.repo] });
+		assert.equal(h.stepCalls[0]?.hasObserver, true);
 		assert.deepEqual(h.stepCalls[0]?.executionOverride, { provider: "claude", model: "claude-opus-4-8" });
 		assert.match(h.stepCalls[0]?.prompt ?? "", /"candidateId":"C1"/);
 		assert.match(h.stepCalls[0]?.prompt ?? "", /Null deref in the parser/);
 		assert.match(h.stepCalls[0]?.prompt ?? "", /"line":10/);
 		assert.match(h.stepCalls[0]?.prompt ?? "", /\/tmp\/adjudicate-head/);
+	});
+
+	it("refuses on verifier confinement violations without authorization effects (#510)", async () => {
+		// Observer-attributed main-checkout mutation.
+		const violated = harness({ observerFinish: { kind: "violation", roots: ["/main"] } });
+		assert.equal(await main(["--pr", "497"], violated.deps), 1);
+		assert.ok(violated.errs.some((e) => /verifier mutated the main checkout/.test(e)));
+		assert.ok(!violated.effects.some((e) => e.startsWith("write-gate:operator") || e.startsWith("comment:") || e.startsWith("status:")));
+		// Attribution audit failure fails closed.
+		const attributionError = harness({ observerFinish: { kind: "error", message: "unclosed invocation" } });
+		assert.equal(await main(["--pr", "497"], attributionError.deps), 1);
+		assert.ok(attributionError.errs.some((e) => /confinement attribution failed/.test(e)));
+		assert.ok(!attributionError.effects.some((e) => e.startsWith("write-gate:operator") || e.startsWith("comment:") || e.startsWith("status:")));
+		// Snapshot delta on the main checkout (catches non-hook providers).
+		const delta = harness({ mainSnapshots: ["", " M src/a.ts"] });
+		assert.equal(await main(["--pr", "497"], delta.deps), 1);
+		assert.ok(delta.errs.some((e) => /main checkout changed during verification/.test(e)));
+		assert.ok(!delta.effects.some((e) => e.startsWith("write-gate:operator") || e.startsWith("comment:") || e.startsWith("status:")));
+		// An unobservable main root refuses BEFORE spending the verifier.
+		const gone = harness({ mainSnapshots: [FORBIDDEN_ROOT_GONE] });
+		assert.equal(await main(["--pr", "497"], gone.deps), 1);
+		assert.ok(!gone.effects.some((e) => e.startsWith("step:")));
+		assert.ok(!gone.effects.some((e) => e.startsWith("write-gate:operator") || e.startsWith("comment:") || e.startsWith("status:")));
 	});
 
 	it("refuses non-ok, thrown, malformed, example, missing, and surviving verification without effects", async () => {
@@ -345,7 +414,7 @@ describe("pr-adjudicate CLI verification and effects", () => {
 			const h = harness({ verify });
 			assert.equal(await main(["--pr", "497"], h.deps), 1);
 			assert.ok(!h.effects.some((e) => e.startsWith("write-gate:operator") || e.startsWith("comment:") || e.startsWith("status:")));
-			assert.ok(h.effects.includes("cleanup:refs/pelaggio-adjudicate/pr-497"));
+			assert.ok(h.effects.includes("cleanup:refs/pelaggio-adjudicate/pr-497:-adjudicate"));
 		}
 	});
 
@@ -376,8 +445,8 @@ describe("pr-adjudicate CLI verification and effects", () => {
 		assert.equal(stored.adjudicator, "operator");
 		assert.equal(stored.interdiffDigest, createHash("sha256").update(replacementDiff()).digest("hex"));
 		assert.equal(stored.dispositions[reviewFindingFingerprint(finding())]?.disposition, "fixed");
-		assert.ok(h.effects.includes("prepare:refs/pelaggio-adjudicate/pr-497:" + HEAD));
-		assert.ok(h.effects.includes("cleanup:refs/pelaggio-adjudicate/pr-497"));
+		assert.ok(h.effects.includes("prepare:refs/pelaggio-adjudicate/pr-497:" + HEAD + ":-adjudicate"));
+		assert.ok(h.effects.includes("cleanup:refs/pelaggio-adjudicate/pr-497:-adjudicate"));
 		assert.ok(!h.effects.some((e) => e.includes("refs/pelaggio-review/pr-497")));
 	});
 
@@ -427,7 +496,7 @@ describe("pr-adjudicate CLI verification and effects", () => {
 	it("cleans up the adjudication checkout when preparation fails after the ref is requested", async () => {
 		const h = harness({ prepareOk: false });
 		assert.equal(await main(["--pr", "497"], h.deps), 1);
-		assert.ok(h.effects.includes("prepare:refs/pelaggio-adjudicate/pr-497:" + HEAD));
-		assert.ok(!h.effects.includes("cleanup:refs/pelaggio-adjudicate/pr-497"));
+		assert.ok(h.effects.includes("prepare:refs/pelaggio-adjudicate/pr-497:" + HEAD + ":-adjudicate"));
+		assert.ok(!h.effects.some((e) => e.startsWith("cleanup:refs/pelaggio-adjudicate/pr-497")));
 	});
 });

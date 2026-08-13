@@ -15,7 +15,8 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { CONFIG, REPO, REVIEW_CONFIG, ROADMAP_GITHUB, resolveStepSettings, SHIP_TARGET, type StepSettings } from "./config.js";
-import { mainWorktree } from "./helpers.js";
+import { upsertMarkerComment } from "./github-posting.js";
+import { createMainCheckoutDeltaObserver, FORBIDDEN_ROOT_GONE, listWorktreesIn, type MainCheckoutDeltaObserver, mainWorktree, snapshotForbiddenRoot } from "./helpers.js";
 import { executionOverrideFor, trustedLocalContext, verificationPrompt } from "./pr-review-cli.js";
 import { gateRecordsDir, listPrReviewGateRecords, type PrReviewGateRecord, writePrReviewGateRecord } from "./pr-review-gate-record.js";
 import {
@@ -26,18 +27,30 @@ import {
 	evaluateInterdiffPolicy,
 	isEligibleFleetGateRecord,
 	type LiveSafetyRefutation,
+	PR_ADJUDICATION_MARKER,
 	readAdjudicationSourceRecord,
 	renderOperatorAdjudicationComment,
 	selectLatestFleetGateRecord,
 } from "./review/adjudication.js";
 import { modelAuthoredText, parseReviewVerification, reconcileReviewVerification, reviewFindingFingerprint, type VerificationCandidate, type VerificationDisposition } from "./review/findings.js";
-import { cleanupReviewHead, postReviewStatus, prepareReviewHead, type ReviewCandidate, upsertReviewComment } from "./review-sweep.js";
+import { cleanupReviewHead, postReviewStatus, prepareReviewHead, type ReviewCandidate } from "./review-sweep.js";
 import { autopilotManagedState, CLAIM_BRANCH_RE } from "./revise-sweep.js";
 import { defaultGhRun, type GhRunner, parseGhJson } from "./roadmap/github-issues.js";
 import { type RunStepFn, runStep } from "./step-runner.js";
 import type { ParkSignal, ShipTargetName } from "./types.js";
 
 const USAGE = "usage: pelaggio pr-adjudicate --pr <number> [--profile <name>]";
+
+/** Review-head directory suffix (#510): keeps adjudication's checkout at `<sha>-adjudicate`,
+ *  disjoint from a concurrent drain's `<sha>` checkout, so the finally-block force-remove can
+ *  never tear down the drain's live worktree at the same head SHA. */
+const ADJUDICATION_HEAD_SUFFIX = "-adjudicate";
+
+/** Upsert the operator PASS comment under its own marker (#510) — never the fleet
+ *  `<!-- pelaggio-pr-review -->` marker that `fetchReviewFindings` scrapes into revise prompts. */
+export function upsertAdjudicationComment(gh: GhRunner, ghRepo: string, prNumber: number, body: string): boolean {
+	return upsertMarkerComment(gh, ghRepo, prNumber, PR_ADJUDICATION_MARKER, body);
+}
 
 export interface PrAdjudicateDeps {
 	repo: string;
@@ -60,7 +73,13 @@ export interface PrAdjudicateDeps {
 	cleanupReviewHead: typeof cleanupReviewHead;
 	runStep: RunStepFn;
 	resolveVerifySettings: (profile: string) => StepSettings;
-	upsertComment: typeof upsertReviewComment;
+	/** #510: registered Git worktree roots — the verifier's foreign-root Write/Edit denial set. */
+	listWorktrees: (repo: string) => string[];
+	/** #510: porcelain snapshot of the authenticated main checkout, taken around the verifier run. */
+	snapshotMainRoot: (root: string) => string;
+	/** #510: delta observer bracketing the verifier's mutating tools against the main checkout. */
+	createCheckoutObserver: (root: string) => MainCheckoutDeltaObserver;
+	upsertComment: typeof upsertAdjudicationComment;
 	postStatus: typeof postReviewStatus;
 	managedState: (itemId: string) => "managed" | "unmanaged" | "unknown";
 	isCi: boolean;
@@ -120,7 +139,10 @@ function defaultDeps(): PrAdjudicateDeps {
 		cleanupReviewHead,
 		runStep,
 		resolveVerifySettings: (profile) => resolveStepSettings(CONFIG, profile, "pr-verify"),
-		upsertComment: upsertReviewComment,
+		listWorktrees: listWorktreesIn,
+		snapshotMainRoot: snapshotForbiddenRoot,
+		createCheckoutObserver: createMainCheckoutDeltaObserver,
+		upsertComment: upsertAdjudicationComment,
 		postStatus: postReviewStatus,
 		managedState: (itemId) => autopilotManagedState(gh, ghRepo, itemId, ROADMAP_GITHUB.label),
 		isCi: process.env.CI === "true",
@@ -225,7 +247,7 @@ export async function runPrAdjudication(pr: number, profile: string, deps: PrAdj
 	let prepared: { diffCwd: string; baseRef: string; headRef: string } | null = null;
 	let checkoutReady = false;
 	try {
-		prepared = deps.prepareReviewHead(deps.repo, candidate, undefined, headRef);
+		prepared = deps.prepareReviewHead(deps.repo, candidate, undefined, headRef, ADJUDICATION_HEAD_SUFFIX);
 		if (!prepared) return refuse(deps, "could not prepare a detached checkout of the current PR head");
 		checkoutReady = true;
 
@@ -261,14 +283,60 @@ export async function runPrAdjudication(pr: number, profile: string, deps: PrAdj
 			const parkSignal = emptyParkSignal();
 			const verifySettings = deps.resolveVerifySettings(profile);
 			const localContext = trustedLocalContext({ diffCwd: prepared.diffCwd, diffBaseRef: prepared.baseRef, diffHeadRef: prepared.headRef });
+			// #510 must-fix: the verifier consumes attacker-influenced text (finding messages, the
+			// inspected PR head), so it runs under the SAME confinement the pipeline threads into
+			// its pr-verify seats — never from the authenticated main checkout with allow-all tools:
+			//   - cwd is the DETACHED data-only review-head checkout prepared above, so Codex's
+			//     workspace-write sandbox roots there instead of in the trusted main tree;
+			//   - foreignRootDenial (the step-runner's PreToolUse hook seam, pipeline.ts fan-out
+			//     wiring) denies Write/Edit into main and every registered worktree, plus the
+			//     sessions/decision-log registers;
+			//   - a main-checkout delta observer brackets mutating tools, and a before/after
+			//     porcelain snapshot of main backstops providers without hook support.
+			// Any observed main-checkout mutation or audit failure refuses BEFORE any
+			// authorization effect (record, comment, or status).
+			const registeredWorktrees = deps.listWorktrees(deps.repo);
+			const observer = deps.createCheckoutObserver(deps.repo);
+			let mainBefore: string;
+			try {
+				mainBefore = deps.snapshotMainRoot(deps.repo);
+			} catch (e) {
+				return refuse(deps, `could not snapshot the main checkout before verification: ${e instanceof Error ? e.message : String(e)}`);
+			}
+			if (mainBefore === FORBIDDEN_ROOT_GONE) return refuse(deps, "main checkout is not observable as a Git root; refusing to run the verifier");
 			let result: Awaited<ReturnType<RunStepFn>>;
 			try {
-				result = await deps.runStep("pr-verify", verificationPrompt(candidates, localContext), { cwd: deps.repo, profile, trace: false, parkSignal, itemId, executionOverride: executionOverrideFor(verifySettings) }, () => {});
+				result = await deps.runStep(
+					"pr-verify",
+					verificationPrompt(candidates, localContext),
+					{
+						cwd: prepared.diffCwd,
+						profile,
+						trace: false,
+						parkSignal,
+						itemId,
+						executionOverride: executionOverrideFor(verifySettings),
+						foreignRootDenial: { mainRepo: deps.repo, registeredWorktrees },
+						mainCheckoutObserver: observer,
+					},
+					() => {},
+				);
 			} catch (e) {
 				return refuse(deps, `verifier execution threw: ${e instanceof Error ? e.message : String(e)}`);
 			}
 			if (parkSignal.parked || result.subtype === "error_rate_limit") return refuse(deps, "verifier hit a rate limit; retry pr-adjudicate after the reset");
 			if (!result.ok) return refuse(deps, `verifier run did not complete cleanly (${result.subtype})`);
+			const attributed = observer.finish();
+			if (attributed.kind === "error") return refuse(deps, `verifier confinement attribution failed: ${attributed.message}`);
+			if (attributed.kind === "violation") return refuse(deps, "verifier mutated the main checkout; refusing without authorization effects");
+			let mainAfter: string;
+			try {
+				mainAfter = deps.snapshotMainRoot(deps.repo);
+			} catch (e) {
+				return refuse(deps, `could not snapshot the main checkout after verification: ${e instanceof Error ? e.message : String(e)}`);
+			}
+			if (mainAfter === FORBIDDEN_ROOT_GONE) return refuse(deps, "main checkout vanished during verification; refusing without authorization effects");
+			if (mainAfter !== mainBefore) return refuse(deps, "main checkout changed during verification; refusing without authorization effects");
 			let dispositions: VerificationDisposition[];
 			try {
 				dispositions = reconcileReviewVerification(candidates, parseReviewVerification(modelAuthoredText(result)));
@@ -335,7 +403,7 @@ export async function runPrAdjudication(pr: number, profile: string, deps: PrAdj
 		deps.log(`adjudicated PR #${pr} ${source.reviewedSha.slice(0, 8)} → ${headSha.slice(0, 8)}`);
 		return 0;
 	} finally {
-		if (checkoutReady) deps.cleanupReviewHead(deps.repo, candidate, undefined, headRef);
+		if (checkoutReady) deps.cleanupReviewHead(deps.repo, candidate, undefined, headRef, ADJUDICATION_HEAD_SUFFIX);
 	}
 }
 

@@ -1130,6 +1130,15 @@ describe("pr-review CLI local gate-evidence persistence (#497)", () => {
 				return verification([{ candidateId: "C1", decision: "refuted", rationale: "Fixed in the current head." }]);
 			},
 			resolveVerifySettings: () => driver("claude"),
+			// #510 confinement seams pinned hermetic: the tmp repo is not a Git root, so the real
+			// snapshot would read GONE and refuse before the verifier runs.
+			listWorktrees: (forRepo) => [forRepo],
+			snapshotMainRoot: () => "",
+			createCheckoutObserver: () => ({
+				beforeTool: () => ({ kind: "clean" as const }),
+				afterTool: () => ({ kind: "clean" as const }),
+				finish: () => ({ kind: "clean" as const }),
+			}),
 			upsertComment: (_gh, _repo, prNumber, body) => {
 				effects.push(`comment:${prNumber}`);
 				comments.push(body);

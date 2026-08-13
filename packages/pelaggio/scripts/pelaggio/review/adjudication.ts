@@ -16,8 +16,15 @@ import type { NewPrReviewOperatorGateRecord, PrReviewFindingDispositionEntry, Pr
 import { type ClassificationResult, type ClassificationSignalKind, materializeAuthoringFinding, type ReviewFinding, type ReviewFindingClass, type ReviewFindingSeverity, reviewFindingFingerprint } from "./findings.js";
 import { type FindingTier, isWellFormedClassId, type TaxonomyConfig, tierOf } from "./taxonomy.js";
 
-/** Same marker the fleet comment uses so upsert replaces the prior automated-review body. */
-const PR_REVIEW_MARKER = "<!-- pelaggio-pr-review -->";
+/**
+ * Marker for the operator PASS comment. DISTINCT from the fleet `<!-- pelaggio-pr-review -->`
+ * marker on purpose (#510): `fetchReviewFindings` scrapes the fleet marker into revise/implement
+ * prompts, so a PASS body carrying the fleet marker would be fed back to an implementer as
+ * "findings" whenever the status post fails and a drain later revises the PR. The adjudication
+ * comment is display/audit output under its own marker; it never replaces (or masquerades as)
+ * the fleet findings body.
+ */
+export const PR_ADJUDICATION_MARKER = "<!-- pelaggio-pr-adjudication -->";
 
 export const ADJUDICATION_SOURCES_DIR = "pr-review-adjudication-sources";
 export const ADJUDICATION_SOURCE_MAX_BYTES = 1024 * 1024;
@@ -484,6 +491,42 @@ function addedLineCount(hunk: StructuredPatch["hunks"][number]): number {
 	return hunk.lines.filter((line) => line.startsWith("+")).length;
 }
 
+/**
+ * Byte-containment constants (#510 must-fix). The line-count bounds below cap how MANY lines an
+ * interdiff may add, but lines have no intrinsic size: replacing one allowed line with a single
+ * arbitrarily large line would smuggle broad unreviewed content past a count-only bound while the
+ * refute-only verifier examines only the original finding. Rule, applied per interdiff hunk:
+ * every added line's UTF-8 byte length must be at most
+ * `clamp(maxRemovedLineBytes, FLOOR, CEILING)`, where `maxRemovedLineBytes` is the longest
+ * removed line of the SAME hunk — deleted-side containment already pins every removed line inside
+ * a recorded finding hunk, so the removed lines ARE the recorded hunk's own original text and the
+ * ceiling is tied to that hunk's real line lengths. Pure insertions carry no original text and
+ * get the FLOOR. The FLOOR keeps a fix to a short line from being ineligible at a reasonable
+ * length; the CEILING caps the allowance even when the original hunk contained very long lines.
+ * Fail-closed: an oversized added line refuses; the fallback is a full pr-review.
+ */
+export const ADJUDICATION_ADDED_LINE_BYTE_FLOOR = 200;
+export const ADJUDICATION_ADDED_LINE_BYTE_CEILING = 1000;
+
+function addedLineByteCeiling(hunk: StructuredPatch["hunks"][number]): number {
+	let maxRemoved = 0;
+	for (const line of hunk.lines) {
+		if (!line.startsWith("-")) continue;
+		maxRemoved = Math.max(maxRemoved, Buffer.byteLength(line.slice(1), "utf8"));
+	}
+	return Math.min(Math.max(maxRemoved, ADJUDICATION_ADDED_LINE_BYTE_FLOOR), ADJUDICATION_ADDED_LINE_BYTE_CEILING);
+}
+
+function oversizedAddedLineBytes(hunk: StructuredPatch["hunks"][number]): { bytes: number; ceiling: number } | null {
+	const ceiling = addedLineByteCeiling(hunk);
+	for (const line of hunk.lines) {
+		if (!line.startsWith("+")) continue;
+		const bytes = Buffer.byteLength(line.slice(1), "utf8");
+		if (bytes > ceiling) return { bytes, ceiling };
+	}
+	return null;
+}
+
 /** Total extent of the distinct recorded finding hunks covering an interdiff hunk (deduped by
  *  span, so several survivors sharing one source hunk do not multiply the budget). */
 function coveredExtent(covering: Iterable<{ start: number; end: number }>): number {
@@ -565,6 +608,14 @@ export function evaluateInterdiffPolicy(opts: { isAncestor: boolean; interdiff: 
 
 	const allowedPaths = new Set(opts.survivors.map((survivor) => survivor.hunk.path));
 	const touched = new Set<string>();
+	// Aggregate added-line bookkeeping (#510 must-fix): total added lines across the WHOLE
+	// interdiff, and every distinct covering finding hunk (deduped by path+span — the same
+	// span-dedupe the per-hunk bound applies within one path).
+	let totalAddedLines = 0;
+	const aggregateCovering = new Map<string, { start: number; end: number }>();
+	const recordCovering = (path: string, ranges: Iterable<{ start: number; end: number }>): void => {
+		for (const range of ranges) aggregateCovering.set(`${path}:${range.start}-${range.end}`, range);
+	};
 
 	for (const patch of patches) {
 		if (patch.isBinary) return { kind: "refused", reason: "interdiff contains a binary change; run a full pr-review" };
@@ -575,8 +626,14 @@ export function evaluateInterdiffPolicy(opts: { isAncestor: boolean; interdiff: 
 		const path = patchPath(patch);
 		if (!path) return { kind: "refused", reason: "interdiff contains an unclassifiable path" };
 		if (!allowedPaths.has(path)) return { kind: "refused", reason: `interdiff touches extra file ${path}; run a full pr-review or pelaggio revise` };
-		if (patch.oldMode !== undefined && patch.newMode !== undefined && patch.oldMode !== patch.newMode && patch.hunks.length === 0) {
-			return { kind: "refused", reason: `interdiff is a mode-only edit on ${path}; run a full pr-review` };
+		// Mode containment (#510 must-fix): refuse ANY mode metadata, not only hunkless mode-only
+		// patches — an in-range text edit combined with `old mode`/`new mode` headers would
+		// otherwise smuggle an executable-bit flip (or a file-type transition) into an
+		// adjudication-eligible interdiff. Git emits those extended headers only when the mode
+		// actually changed (create/delete file modes are already refused above), and jsdiff
+		// surfaces them as oldMode/newMode. Narrow fixes never chmod.
+		if (patch.oldMode !== undefined || patch.newMode !== undefined) {
+			return { kind: "refused", reason: `interdiff changes the file mode on ${path}; run a full pr-review` };
 		}
 		const ranges = rangesForPath(opts.survivors, path);
 		if (ranges.length === 0) return { kind: "refused", reason: `interdiff touches extra file ${path}; run a full pr-review or pelaggio revise` };
@@ -590,6 +647,16 @@ export function evaluateInterdiffPolicy(opts: { isAncestor: boolean; interdiff: 
 		// replacement could add arbitrarily many unreviewed lines — code the refute-only
 		// pr-verify pass never inspects — and still be adjudication-eligible.
 		for (const hunk of patch.hunks) {
+			// Byte containment (#510 must-fix): applies to every hunk shape. See the rule and
+			// constants at ADJUDICATION_ADDED_LINE_BYTE_FLOOR/_CEILING above.
+			const oversized = oversizedAddedLineBytes(hunk);
+			if (oversized) {
+				const at = hunk.oldLines === 0 ? hunk.oldStart - 1 : hunk.oldStart;
+				return {
+					kind: "refused",
+					reason: `interdiff hunk at ${path}:${at} adds a ${oversized.bytes}-byte line, exceeding the ${oversized.ceiling}-byte per-line ceiling derived from the replaced lines; run a full pr-review or pelaggio revise`,
+				};
+			}
 			if (hunk.oldLines === 0) {
 				// jsdiff increments oldStart when oldLines === 0 (unified-diff 0-size quirk).
 				// The plan's allowlist is the git header anchor, so undo that adjustment.
@@ -603,6 +670,8 @@ export function evaluateInterdiffPolicy(opts: { isAncestor: boolean; interdiff: 
 				if (added > allowed) {
 					return { kind: "refused", reason: `interdiff insertion at ${path}:${gitOldStart} adds ${added} lines, exceeding the ${allowed}-line extent of its covering finding hunks; run a full pr-review or pelaggio revise` };
 				}
+				totalAddedLines += added;
+				recordCovering(path, covering);
 				for (const range of covering) touched.add(range.fingerprint);
 				continue;
 			}
@@ -624,7 +693,22 @@ export function evaluateInterdiffPolicy(opts: { isAncestor: boolean; interdiff: 
 			if (added > allowed) {
 				return { kind: "refused", reason: `interdiff hunk at ${path}:${hunk.oldStart} adds ${added} lines, exceeding the ${allowed}-line extent of its covering finding hunks; run a full pr-review or pelaggio revise` };
 			}
+			totalAddedLines += added;
+			recordCovering(path, hunkCovering.values());
 		}
+	}
+
+	// Aggregate added-line containment (#510 must-fix): the per-hunk allowance above is recomputed
+	// inside every hunk iteration, so a `--unified=0` interdiff with one insertion hunk per legal
+	// anchor multiplies it — a recorded extent-L hunk admits ~L(L+2) added lines across hunks
+	// while each hunk individually stays within bound (observed: extent 11 accepting 132 added
+	// lines). In ADDITION to (never instead of) the per-hunk bound, the TOTAL added lines across
+	// the whole interdiff must fit within the total extent of the distinct covering finding hunks
+	// (deduped by path+span — the same span-dedupe the per-hunk bound uses).
+	let aggregateAllowed = 0;
+	for (const range of aggregateCovering.values()) aggregateAllowed += range.end - range.start + 1;
+	if (totalAddedLines > aggregateAllowed) {
+		return { kind: "refused", reason: `interdiff adds ${totalAddedLines} lines in total, exceeding the ${aggregateAllowed}-line total extent of its covering finding hunks; run a full pr-review or pelaggio revise` };
 	}
 
 	const uncovered = opts.survivors.find((survivor) => !touched.has(survivor.fingerprint));
@@ -655,7 +739,7 @@ export function renderOperatorAdjudicationComment(opts: {
 		return `- **${survivor.finding.severity}**${location}: ${survivor.finding.message}${disposition}`;
 	});
 	return [
-		PR_REVIEW_MARKER,
+		PR_ADJUDICATION_MARKER,
 		"✅ **Operator adjudication: PASS**",
 		"",
 		`Reviewed \`${opts.sourceSha}\` → \`${opts.headSha}\`. Interdiff digest \`${opts.interdiffDigest}\`. Adjudicator: \`${opts.adjudicator}\`.`,
@@ -666,7 +750,7 @@ export function renderOperatorAdjudicationComment(opts: {
 		"### Findings",
 		...findings,
 		"",
-		"If the `review` status was not posted, retry `npx pelaggio pr-adjudicate --pr " + String(opts.prNumber) + "`. Do not run `revise` to recover — this comment replaced the fleet findings body.",
+		"If the `review` status was not posted, retry `npx pelaggio pr-adjudicate --pr " + String(opts.prNumber) + "`. Do not run `revise` to recover — any fleet findings comment above predates this adjudication.",
 		"",
 		"<sub>pelaggio pr-adjudicate · operator-adjudication</sub>",
 	].join("\n");

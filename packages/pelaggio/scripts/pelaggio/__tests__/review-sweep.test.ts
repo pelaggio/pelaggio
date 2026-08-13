@@ -169,6 +169,43 @@ describe("cleanupReviewHead", () => {
 		rmSync(repo, { recursive: true, force: true });
 	});
 
+	it("keys the checkout directory by caller suffix so adjudication never removes the drain's same-SHA worktree (#510)", () => {
+		const repo = mkdtempSync(join(tmpdir(), "review-head-suffix-"));
+		const candidate = { prNumber: 9, itemId: "84", branch: "feat/issue-84-x", headSha: "abc123", statusState: "missing" as const };
+		const cmds: string[] = [];
+		const out = prepareReviewHead(
+			repo,
+			candidate,
+			(cmd) => {
+				cmds.push(cmd);
+				if (cmd.startsWith("git rev-parse")) return "abc123\n";
+				return "";
+			},
+			"refs/pelaggio-adjudicate/pr-9",
+			"-adjudicate",
+		);
+		assert.equal(out?.diffCwd, join(repo, ".dev", "review-heads", "abc123-adjudicate"));
+		assert.ok(cmds.includes(`git worktree add --detach ${join(repo, ".dev", "review-heads", "abc123-adjudicate")} abc123`));
+		// A concurrent drain checkout of the SAME SHA lives at the unsuffixed path; the suffixed
+		// cleanup must remove only its own directory.
+		mkdirSync(join(repo, ".dev", "review-heads", "abc123"), { recursive: true });
+		mkdirSync(join(repo, ".dev", "review-heads", "abc123-adjudicate"), { recursive: true });
+		cmds.length = 0;
+		cleanupReviewHead(
+			repo,
+			candidate,
+			(cmd) => {
+				cmds.push(cmd);
+				return "";
+			},
+			"refs/pelaggio-adjudicate/pr-9",
+			"-adjudicate",
+		);
+		assert.deepEqual(cmds, [`git worktree remove --force ${join(repo, ".dev", "review-heads", "abc123-adjudicate")}`, "git update-ref -d refs/pelaggio-adjudicate/pr-9"]);
+		assert.ok(!cmds.some((c) => c.includes(`${join(repo, ".dev", "review-heads", "abc123")} `) || c.endsWith(join(repo, ".dev", "review-heads", "abc123"))));
+		rmSync(repo, { recursive: true, force: true });
+	});
+
 	it("skips the worktree remove when the path is absent and stays fail-soft on error", () => {
 		const repo = mkdtempSync(join(tmpdir(), "review-clean-"));
 		const cmds: string[] = [];

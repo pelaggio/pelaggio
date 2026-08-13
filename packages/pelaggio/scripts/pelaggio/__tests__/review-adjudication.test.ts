@@ -129,6 +129,19 @@ function multiInsertionDiff(path: string, oldStart: number, addedCount: number):
 	return [`diff --git a/${path} b/${path}`, `index 1111111..2222222 100644`, `--- a/${path}`, `+++ b/${path}`, `@@ -${oldStart},0 +${oldStart + 1},${addedCount} @@`, ...added, ""].join("\n");
 }
 
+/** One insertion hunk per anchor, each within the per-hunk bound — the #510 aggregate exploit shape. */
+function anchoredInsertionsDiff(path: string, anchors: readonly number[], addedPerHunk: number): string {
+	const lines = [`diff --git a/${path} b/${path}`, `index 1111111..2222222 100644`, `--- a/${path}`, `+++ b/${path}`];
+	let newOffset = 0;
+	for (const anchor of anchors) {
+		lines.push(`@@ -${anchor},0 +${anchor + 1 + newOffset},${addedPerHunk} @@`);
+		for (let i = 0; i < addedPerHunk; i++) lines.push(`+inserted ${anchor}.${i + 1}`);
+		newOffset += addedPerHunk;
+	}
+	lines.push("");
+	return lines.join("\n");
+}
+
 describe("adjudication source store", () => {
 	it("writes and reads a validated record with 0o600 and atomic replacement", () => {
 		const dir = root();
@@ -462,6 +475,50 @@ describe("zero-context interdiff policy", () => {
 		assert.equal(evaluateInterdiffPolicy({ isAncestor: true, interdiff: multiInsertionDiff("src/a.ts", 10, 7), survivors: [entry] }).kind, "eligible");
 	});
 
+	it("enforces an aggregate added-line cap across the whole interdiff (#510: 132 lines vs extent 11)", () => {
+		// Recorded finding hunk src/a.ts:10-20 — extent 11. With --unified=0, one insertion hunk
+		// per legal anchor (old lines 9..20 → 12 anchors) at 11 added lines each stays within the
+		// per-hunk bound on every hunk while adding 132 unreviewed lines in total. The aggregate
+		// cap (total added ≤ total deduped covering extent) must refuse it.
+		const wideFinding = finding({ line: 15 });
+		const wide = survivor({ finding: wideFinding, fingerprint: reviewFindingFingerprint(wideFinding), hunk: { path: "src/a.ts", start: 10, end: 20 } });
+		const anchors = Array.from({ length: 12 }, (_, i) => 9 + i);
+		const flood = evaluateInterdiffPolicy({ isAncestor: true, interdiff: anchoredInsertionsDiff("src/a.ts", anchors, 11), survivors: [wide] });
+		assert.equal(flood.kind, "refused");
+		if (flood.kind === "refused") assert.match(flood.reason, /adds 132 lines in total, exceeding the 11-line total extent/);
+		// The cap is aggregate IN ADDITION TO per-hunk: several hunks that fit the total stay eligible…
+		assert.equal(evaluateInterdiffPolicy({ isAncestor: true, interdiff: anchoredInsertionsDiff("src/a.ts", [9, 14], 5), survivors: [wide] }).kind, "eligible");
+		// …while two hunks each within the per-hunk bound but exceeding the total are refused.
+		const overTotal = evaluateInterdiffPolicy({ isAncestor: true, interdiff: anchoredInsertionsDiff("src/a.ts", [9, 14], 7), survivors: [wide] });
+		assert.equal(overTotal.kind, "refused");
+		if (overTotal.kind === "refused") assert.match(overTotal.reason, /adds 14 lines in total, exceeding the 11-line total extent/);
+	});
+
+	it("bounds added-line bytes by the replaced lines' own length, clamped to floor/ceiling (#510)", () => {
+		// A one-line in-range replacement whose single added line is arbitrarily large must be
+		// ineligible: line-count bounds alone cannot see bytes. Short original lines yield the
+		// 200-byte floor…
+		const huge = evaluateInterdiffPolicy({ isAncestor: true, interdiff: replacementDiff("src/a.ts", 10, "old", "x".repeat(1500)), survivors: [entry] });
+		assert.equal(huge.kind, "refused");
+		if (huge.kind === "refused") assert.match(huge.reason, /adds a 1500-byte line, exceeding the 200-byte per-line ceiling/);
+		assert.equal(evaluateInterdiffPolicy({ isAncestor: true, interdiff: replacementDiff("src/a.ts", 10, "old", "x".repeat(180)), survivors: [entry] }).kind, "eligible");
+		// …a genuinely long replaced line raises the ceiling to its own byte length…
+		assert.equal(evaluateInterdiffPolicy({ isAncestor: true, interdiff: replacementDiff("src/a.ts", 10, "y".repeat(600), "x".repeat(590)), survivors: [entry] }).kind, "eligible");
+		const overOwn = evaluateInterdiffPolicy({ isAncestor: true, interdiff: replacementDiff("src/a.ts", 10, "y".repeat(600), "x".repeat(700)), survivors: [entry] });
+		assert.equal(overOwn.kind, "refused");
+		if (overOwn.kind === "refused") assert.match(overOwn.reason, /700-byte line, exceeding the 600-byte per-line ceiling/);
+		// …and the 1000-byte ceiling caps the allowance no matter how long the original was.
+		assert.equal(evaluateInterdiffPolicy({ isAncestor: true, interdiff: replacementDiff("src/a.ts", 10, "y".repeat(5000), "x".repeat(990)), survivors: [entry] }).kind, "eligible");
+		const clamped = evaluateInterdiffPolicy({ isAncestor: true, interdiff: replacementDiff("src/a.ts", 10, "y".repeat(5000), "x".repeat(1200)), survivors: [entry] });
+		assert.equal(clamped.kind, "refused");
+		if (clamped.kind === "refused") assert.match(clamped.reason, /1200-byte line, exceeding the 1000-byte per-line ceiling/);
+		// Pure insertions have no original text: the floor is the whole allowance.
+		assert.equal(evaluateInterdiffPolicy({ isAncestor: true, interdiff: insertionDiff("src/a.ts", 10, "x".repeat(150)), survivors: [entry] }).kind, "eligible");
+		const insertionOver = evaluateInterdiffPolicy({ isAncestor: true, interdiff: insertionDiff("src/a.ts", 10, "x".repeat(250)), survivors: [entry] });
+		assert.equal(insertionOver.kind, "refused");
+		if (insertionOver.kind === "refused") assert.match(insertionOver.reason, /250-byte line, exceeding the 200-byte per-line ceiling/);
+	});
+
 	it("binds live adjudication-time refutation evidence over the stale red-review survives text", () => {
 		const result = evaluateInterdiffPolicy({ isAncestor: true, interdiff: replacementDiff("src/a.ts", 10, "old", "new"), survivors: [entry] });
 		assert.equal(result.kind, "eligible");
@@ -499,11 +556,17 @@ describe("zero-context interdiff policy", () => {
 		assert.equal(evaluateInterdiffPolicy({ isAncestor: true, interdiff: replacementDiff("src/a.ts", 10, "old", "new"), survivors: [entry, other] }).kind, "refused");
 	});
 
-	it("refuses mode-only, rename, create, delete, binary, malformed, empty, and non-ancestor history", () => {
+	it("refuses mode changes, rename, create, delete, binary, malformed, empty, and non-ancestor history", () => {
 		const modeOnly = ["diff --git a/src/a.ts b/src/a.ts", "old mode 100644", "new mode 100755", ""].join("\n");
 		const modeResult = evaluateInterdiffPolicy({ isAncestor: true, interdiff: modeOnly, survivors: [entry] });
 		assert.equal(modeResult.kind, "refused");
-		if (modeResult.kind === "refused") assert.match(modeResult.reason, /mode-only/);
+		if (modeResult.kind === "refused") assert.match(modeResult.reason, /changes the file mode/);
+		// #510 must-fix: an in-range text edit combined with mode metadata is a chmod smuggle —
+		// refused regardless of hunk content, not only when the patch is hunkless.
+		const modeWithEdit = ["diff --git a/src/a.ts b/src/a.ts", "old mode 100644", "new mode 100755", "index 1111111..2222222", "--- a/src/a.ts", "+++ b/src/a.ts", "@@ -10,1 +10,1 @@", "-old", "+new", ""].join("\n");
+		const modeEditResult = evaluateInterdiffPolicy({ isAncestor: true, interdiff: modeWithEdit, survivors: [entry] });
+		assert.equal(modeEditResult.kind, "refused");
+		if (modeEditResult.kind === "refused") assert.match(modeEditResult.reason, /changes the file mode/);
 		const rename = ["diff --git a/src/a.ts b/src/b.ts", "similarity index 100%", "rename from src/a.ts", "rename to src/b.ts", ""].join("\n");
 		assert.equal(evaluateInterdiffPolicy({ isAncestor: true, interdiff: rename, survivors: [entry] }).kind, "refused");
 		const created = ["diff --git a/src/c.ts b/src/c.ts", "new file mode 100644", "index 0000000..1111111", "--- /dev/null", "+++ b/src/c.ts", "@@ -0,0 +1,1 @@", "+hello", ""].join("\n");
@@ -531,7 +594,11 @@ describe("zero-context interdiff policy", () => {
 			survivors: [entry],
 			dispositions: result.dispositions,
 		});
-		assert.match(body, /<!-- pelaggio-pr-review -->/);
+		// #510: the operator comment carries its OWN marker. It must never contain the fleet
+		// marker that fetchReviewFindings scrapes into revise/implement prompts — a failed status
+		// post would otherwise feed this PASS body back as "findings".
+		assert.match(body, /<!-- pelaggio-pr-adjudication -->/);
+		assert.ok(!body.includes("<!-- pelaggio-pr-review -->"));
 		assert.match(body, /Operator adjudication: PASS/);
 		assert.match(body, new RegExp(REVIEWED));
 		assert.match(body, new RegExp(HEAD));
