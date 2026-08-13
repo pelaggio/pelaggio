@@ -8,7 +8,7 @@ import type { NotifyPayload } from "../notify.js";
 import { hermeticDefault, hermeticQueueRoot, runOrchestrator } from "../pipeline.js";
 import { gateRecordsDir, readPrReviewGateRecord, writePrReviewGateRecord } from "../pr-review-gate-record.js";
 import { enqueueReviewRequest, type NewReviewRequest, reviewRequestsDir } from "../review-request-queue.js";
-import { reviseFindingsPath } from "../revise-sweep.js";
+import { type AcquireReviseExecutionResult, reviseFindingsPath } from "../revise-sweep.js";
 import type { GhRunner } from "../roadmap/github-issues.js";
 import { LiveStatus, StatusBar } from "../tui.js";
 import type { Flags } from "../types.js";
@@ -1408,6 +1408,52 @@ describe("runOrchestrator — revise sweep (issue #76)", () => {
 		assert.equal(calls[0].opts.startFrom, "implement");
 		assert.ok(calls[0].flags["review-findings"]?.endsWith("review-findings-76.md"), `expected the findings flag on the revision call; got ${calls[0].flags["review-findings"]}`);
 		assert.equal(calls[1].opts.itemId, undefined, "second call is the auto-pick cycle (no explicit id)");
+	});
+
+	it("holds the per-item execution lease across the revision and releases it afterwards (#507)", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const events: string[] = [];
+		const inner = createMockRunPipeline({
+			byItem: { "76": { completed: true, cost: 0.5 } },
+			default: { completed: false, cost: 0, error: "pick:queue-empty" },
+		});
+		const runPipeline: typeof inner.runPipeline = async (...args) => {
+			if (args[0].itemId === "76") events.push("pipeline");
+			return inner.runPipeline(...args);
+		};
+		const acquireExec = async (_root: string, itemId: string): Promise<AcquireReviseExecutionResult> => {
+			events.push(`acquire:${itemId}`);
+			return {
+				kind: "acquired",
+				lease: {
+					release: async () => {
+						events.push(`release:${itemId}`);
+					},
+				},
+			};
+		};
+		await runOrchestrator({ ...baseFlags, target: "pull-request", cycles: "1" }, { runPipeline, resolveWorktree: resolveWt, revise: { local: true, ghRepo: "o/r", gh: makeGhStub(ONE_REVISABLE), acquireExec } });
+		assert.deepEqual(events, ["acquire:76", "pipeline", "release:76"], "the lease must bracket the whole revision run");
+	});
+
+	it("skips a PR whose execution lease is held (an operator pass is in flight) — fail-soft, picking proceeds", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({
+			default: { completed: false, cost: 0, error: "pick:queue-empty" },
+		});
+		const gh = makeGhStub(ONE_REVISABLE);
+		const ghCalls: string[][] = [];
+		const spyGh: GhRunner = (args) => {
+			ghCalls.push(args);
+			return gh(args);
+		};
+		const acquireExec = async (): Promise<AcquireReviseExecutionResult> => ({ kind: "held", holder: "held by pid 1" });
+		const { exitCode } = await runOrchestrator({ ...baseFlags, target: "pull-request", cycles: "1" }, { runPipeline, resolveWorktree: resolveWt, revise: { local: true, ghRepo: "o/r", gh: spyGh, acquireExec } });
+		assert.equal(exitCode, 1); // the auto-pick cycle hit an empty queue (recoverable)
+		assert.equal(calls.length, 1, "only the auto-pick cycle may run — the in-flight PR is skipped");
+		assert.equal(calls[0].opts.itemId, undefined);
+		// Fail-soft AND label-safe: the skipped PR's one-pass label must not be consumed.
+		assert.ok(!ghCalls.some((c) => c[0] === "pr" && c[1] === "edit" && c.includes("--add-label")), "a lease-refused sweep entry must never claim the one-pass label");
 	});
 
 	it("off-switch: revise.local:false skips the sweep and goes straight to picking", async (t) => {

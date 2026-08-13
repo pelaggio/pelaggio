@@ -4,12 +4,16 @@
  * `pelaggio revise --pr <n> [--allow-repeat]` — on-demand operator entry to the
  * findings-driven resume seam (issue #498).
  *
- * Resolves a Pelaggio-managed red-review PR, records a durable invocation
- * comment, atomically claims the one-pass label (cross-process with the in-run
- * revise sweep — `claimRevisionExclusive`), fetches the marked findings, restores the
- * claim worktree, and calls `runOrchestrator` in-process with `--resume` +
- * `--review-findings` in `operator-revision` mode. Exit codes: 0 success, 1
- * refused/unavailable, 2 usage / ambient single-shot / non-PR ship target.
+ * Resolves a Pelaggio-managed red-review PR, acquires the per-item execution
+ * lease (`acquireReviseExecution` — held for the whole run, so a first pass and
+ * an `--allow-repeat` repeat can never revise the same claim worktree
+ * concurrently), atomically claims the one-pass label (cross-process with the
+ * in-run revise sweep — `claimRevisionExclusive`), records the accepted-pass
+ * audit comment only after that claim, fetches the marked findings, restores
+ * the claim worktree and verifies its branch + HEAD against the PR head OID,
+ * then calls `runOrchestrator` in-process with `--resume` + `--review-findings`
+ * in `operator-revision` mode. Exit codes: 0 success, 1 refused/unavailable, 2
+ * usage / ambient single-shot / non-PR ship target.
  */
 
 import { isAbsolute, resolve } from "node:path";
@@ -20,6 +24,8 @@ import { REPO, ROADMAP_GITHUB, SHIP_TARGET } from "./config.js";
 import { resolveWorktree } from "./helpers.js";
 import { type OrchestratorDeps, runOrchestrator } from "./pipeline.js";
 import {
+	type AcquireReviseExecutionResult,
+	acquireReviseExecution,
 	autopilotManagedState,
 	type ClaimRevisionOutcome,
 	claimRevisionExclusive,
@@ -29,7 +35,9 @@ import {
 	type ReviseInvocationDisposition,
 	recordReviseInvocation,
 	resolveReviseTarget,
+	reviseExecLeaseRoot,
 	reviseFindingsPath,
+	verifyReviseWorktreeBinding,
 } from "./revise-sweep.js";
 import { defaultGhRun, type GhRunner } from "./roadmap/github-issues.js";
 import type { ShipTargetName } from "./types.js";
@@ -47,8 +55,12 @@ export interface ReviseCliDeps {
 	managedState: (itemId: string) => "managed" | "unmanaged" | "unknown";
 	/** Atomic cross-process claim (`claimRevisionExclusive`) — serializes against the in-run sweep. */
 	claimRevision: (prNumber: number) => Promise<ClaimRevisionOutcome>;
+	/** Execution lease held for the whole run (`acquireReviseExecution`) — serializes ALL revision passes per item, including `--allow-repeat` repeats that bypass the one-pass label. */
+	acquireExecution: (itemId: string) => Promise<AcquireReviseExecutionResult>;
 	fetchFindings: (prNumber: number, findingsPath: string) => boolean;
 	ensureWorktree: (worktreePath: string, branch: string) => string | null;
+	/** Bind the checkout to the PR head (branch + OID) before orchestrating (`verifyReviseWorktreeBinding`). */
+	verifyWorktreeBinding: (worktreePath: string, branch: string, headOid: string) => { ok: true } | { ok: false; reason: string };
 	recordInvocation: (prNumber: number, disposition: ReviseInvocationDisposition, allowRepeat: boolean) => boolean;
 	runOrchestrator: typeof runOrchestrator;
 	resolveWorktree: (itemId: string) => string;
@@ -75,8 +87,10 @@ function defaultDeps(): ReviseCliDeps {
 		resolveTarget: (pr) => resolveReviseTarget(gh, ghRepo, pr),
 		managedState: (itemId) => autopilotManagedState(gh, ghRepo, itemId, ROADMAP_GITHUB.label),
 		claimRevision: (prNumber) => claimRevisionExclusive(gh, ghRepo, REPO, prNumber),
+		acquireExecution: (itemId) => acquireReviseExecution(reviseExecLeaseRoot(REPO), itemId),
 		fetchFindings: (prNumber, findingsPath) => fetchReviewFindings(gh, ghRepo, prNumber, findingsPath),
 		ensureWorktree: (worktreePath, branch) => ensureReviseWorktree(worktreePath, branch, { repo: REPO }),
+		verifyWorktreeBinding: (worktreePath, branch, headOid) => verifyReviseWorktreeBinding(worktreePath, branch, headOid),
 		recordInvocation: (prNumber, disposition, allowRepeat) => recordReviseInvocation(gh, ghRepo, prNumber, disposition, allowRepeat),
 		runOrchestrator,
 		resolveWorktree,
@@ -121,6 +135,10 @@ export async function main(argv: string[], overrides: Partial<ReviseCliDeps> = {
 	}
 	if (overrides.repo && !overrides.ensureWorktree) {
 		deps.ensureWorktree = (worktreePath, branch) => ensureReviseWorktree(worktreePath, branch, { repo: deps.repo });
+	}
+	// The execution-lease register lives in <repo>/.dev, like the claim lock.
+	if (overrides.repo && !overrides.acquireExecution) {
+		deps.acquireExecution = (itemId) => acquireReviseExecution(reviseExecLeaseRoot(deps.repo), itemId);
 	}
 
 	const parsed = parseReviseArgs(argv);
@@ -167,60 +185,91 @@ export async function main(argv: string[], overrides: Partial<ReviseCliDeps> = {
 	const findingsPath = reviseFindingsPath(deps.repo, target.itemId);
 	const parkedResume = `pnpm pelaggio --resume ${target.itemId} --review-findings ${findingsPath}`;
 
-	let disposition: ReviseInvocationDisposition;
 	if (target.alreadyRevised && !allowRepeat) {
-		disposition = "refused-repeat";
-		if (!deps.recordInvocation(pr, disposition, allowRepeat)) {
+		// A pure refusal executes nothing, so it needs no lease — but it IS durably audited.
+		if (!deps.recordInvocation(pr, "refused-repeat", allowRepeat)) {
 			deps.err("failed to record revise invocation comment");
 			return 1;
 		}
 		deps.err(`PR #${pr} already has the autopilot:revised label. Pass --allow-repeat to start a new revision pass. A parked in-flight pass continues with: ${parkedResume}`);
 		return 1;
 	}
-	disposition = target.alreadyRevised ? "accepted-repeat" : "accepted-first-pass";
-	if (!deps.recordInvocation(pr, disposition, allowRepeat)) {
-		deps.err("failed to record revise invocation comment");
+	const disposition: ReviseInvocationDisposition = target.alreadyRevised ? "accepted-repeat" : "accepted-first-pass";
+
+	// Execution-scoped exclusion, acquired BEFORE the one-pass label claim and held for the
+	// whole run: the label is a one-shot entitlement, not an execution guard — a repeat pass
+	// (`--allow-repeat`) bypasses it entirely, so without this lease a repeat could run
+	// concurrently with an in-flight first pass (or another repeat) in the same claim
+	// worktree, racing findings writes, commits, and pushes. Acquiring before the claim also
+	// means a refused invocation never consumes the label. Fail closed on anything but
+	// `acquired` (see `acquireReviseExecution` for the guard class and crash semantics).
+	const exec = await deps.acquireExecution(target.itemId);
+	if (exec.kind === "held") {
+		deps.err(`a revision for item ${target.itemId} (PR #${pr}) is already in flight — refusing a concurrent pass in the same claim worktree (${exec.holder}). A parked in-flight pass continues with: ${parkedResume}`);
 		return 1;
 	}
+	if (exec.kind !== "acquired") {
+		deps.err("failed to acquire the revise execution lease");
+		return 1;
+	}
+	try {
+		if (!target.alreadyRevised) {
+			// Atomic one-pass claim: re-checks the label under the cross-process revise-claim
+			// lock (`claimRevisionExclusive`), so this command and the in-run sweep — or two
+			// operator invocations — can never both start a paid pass off the same stale
+			// "unlabeled" read. `already-claimed` means a concurrent caller won between
+			// `resolveTarget` and here; fail closed on anything but `claimed`.
+			const claim = await deps.claimRevision(pr);
+			if (claim === "already-claimed") {
+				deps.err(`PR #${pr} was claimed by a concurrent revise caller (the in-run sweep or another operator invocation) — refusing a duplicate pass. A parked in-flight pass continues with: ${parkedResume}`);
+				return 1;
+			}
+			if (claim !== "claimed") {
+				deps.err("failed to claim the autopilot:revised label");
+				return 1;
+			}
+		}
 
-	if (!target.alreadyRevised) {
-		// Atomic one-pass claim: re-checks the label under the cross-process revise-claim
-		// lock (`claimRevisionExclusive`), so this command and the in-run sweep — or two
-		// operator invocations — can never both start a paid pass off the same stale
-		// "unlabeled" read. `already-claimed` means a concurrent caller won between
-		// `resolveTarget` and here; fail closed on anything but `claimed`.
-		const claim = await deps.claimRevision(pr);
-		if (claim === "already-claimed") {
-			deps.err(`PR #${pr} was claimed by a concurrent revise caller (the in-run sweep or another operator invocation) — refusing a duplicate pass. A parked in-flight pass continues with: ${parkedResume}`);
+		// The accepted-* audit is recorded only after the pass is actually ours (label claimed /
+		// lease held) — a losing racer must never leave an audit record for a pass it never ran.
+		if (!deps.recordInvocation(pr, disposition, allowRepeat)) {
+			deps.err("failed to record revise invocation comment");
 			return 1;
 		}
-		if (claim !== "claimed") {
-			deps.err("failed to claim the autopilot:revised label");
+
+		if (!deps.fetchFindings(pr, findingsPath)) {
+			deps.err("no marked review findings comment, or findings file could not be written");
 			return 1;
 		}
-	}
 
-	if (!deps.fetchFindings(pr, findingsPath)) {
-		deps.err("no marked review findings comment, or findings file could not be written");
-		return 1;
-	}
+		const wt = deps.ensureWorktree(deps.resolveWorktree(target.itemId), target.branch);
+		if (!wt) {
+			deps.err("failed to restore the claim worktree");
+			return 1;
+		}
 
-	const wt = deps.ensureWorktree(deps.resolveWorktree(target.itemId), target.branch);
-	if (!wt) {
-		deps.err("failed to restore the claim worktree");
-		return 1;
-	}
+		// Bind the checkout to THIS PR before any work: the path is item-derived, so an
+		// existing directory may hold another branch or a stale HEAD. Fail closed — never
+		// auto-reset or checkout over an existing tree (it may hold parked work).
+		const binding = deps.verifyWorktreeBinding(wt, target.branch, target.headOid);
+		if (!binding.ok) {
+			deps.err(`PR #${pr}: ${binding.reason}`);
+			return 1;
+		}
 
-	deps.log(`revising PR #${pr} (item ${target.itemId}, ${disposition})`);
-	const absFindingsPath = isAbsolute(findingsPath) ? findingsPath : resolve(findingsPath);
-	const intent = parseCli(["--resume", target.itemId, "--review-findings", absFindingsPath]);
-	if (intent.kind !== "run") {
-		deps.err(intent.kind === "error" ? intent.message : USAGE);
-		return 2;
+		deps.log(`revising PR #${pr} (item ${target.itemId}, ${disposition})`);
+		const absFindingsPath = isAbsolute(findingsPath) ? findingsPath : resolve(findingsPath);
+		const intent = parseCli(["--resume", target.itemId, "--review-findings", absFindingsPath]);
+		if (intent.kind !== "run") {
+			deps.err(intent.kind === "error" ? intent.message : USAGE);
+			return 2;
+		}
+		const orchDeps: OrchestratorDeps = { mode: "operator-revision" };
+		const { exitCode } = await deps.runOrchestrator(intent.flags, orchDeps);
+		return exitCode;
+	} finally {
+		await exec.lease.release();
 	}
-	const orchDeps: OrchestratorDeps = { mode: "operator-revision" };
-	const { exitCode } = await deps.runOrchestrator(intent.flags, orchDeps);
-	return exitCode;
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {

@@ -102,7 +102,18 @@ import { type ReviewRecord, renderReviewRecord, writeReviewRecord } from "./revi
 import { cleanupAuthoringReviewSeatsForSha, isAuthoringReviewSeatPath, prepareAuthoringReviewSeat } from "./review/seats.js";
 import { claimReviewRequest, completeReviewRequest, listReviewRequests, type ReviewRequestRecord, reclaimStaleReviewClaims, reviewDrainLockPath, reviewRequestsDir, unclaimReviewRequest } from "./review-request-queue.js";
 import { cleanupReviewHead, findReviewCandidates, isReviewHeadPath, postLocalModeWorkflowComment, postReviewStatus, prepareReviewHead, type ReviewCandidate, reviewStatusForSha, upsertReviewComment } from "./review-sweep.js";
-import { autopilotManagedState, claimRevisionExclusive, ensureReviseWorktree, fetchReviewFindings, findRevisablePrs, isAutopilotManaged, postParkComment, reviseFindingsPath } from "./revise-sweep.js";
+import {
+	acquireReviseExecution,
+	autopilotManagedState,
+	claimRevisionExclusive,
+	ensureReviseWorktree,
+	fetchReviewFindings,
+	findRevisablePrs,
+	isAutopilotManaged,
+	postParkComment,
+	reviseExecLeaseRoot,
+	reviseFindingsPath,
+} from "./revise-sweep.js";
 import { defaultGhRun, type GhRunner } from "./roadmap/github-issues.js";
 import { getRoadmapSource, type RoadmapSource } from "./roadmap/index.js";
 import { cleanupShipBodyFile, parseShipDecisionEffect, shipBodyFile } from "./ship/decision.js";
@@ -2072,7 +2083,7 @@ export interface OrchestratorDeps {
 	/** Local revise sweep config (issue #76). Partial — merged onto the resolved defaults
 	 *  (`REVISE_LOCAL`, the github-source-gated `ghRepo`, `defaultGhRun`). Injecting `ghRepo` lets
 	 *  tests force-activate the sweep with a stubbed `gh` without a real github-issues config. */
-	revise?: Partial<{ local: boolean; ghRepo: string; gh: GhRunner }>;
+	revise?: Partial<{ local: boolean; ghRepo: string; gh: GhRunner; acquireExec: typeof acquireReviseExecution; execLeaseRoot: string }>;
 	/** Local review sweep config (issue #84; mid-run drain #387). Partial — merged onto config defaults. */
 	review?: Partial<{
 		runner: ReviewRunner;
@@ -3318,6 +3329,11 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			local: REVISE_LOCAL,
 			ghRepo: ROADMAP_SOURCE === "github-issues" ? ROADMAP_GITHUB.ghRepo : "",
 			gh: hermeticDefault("revise.gh", defaultGhRun),
+			// Execution lease shared with `pelaggio revise --pr` (revise-cli.ts). The real
+			// function is safe under node --test because the ROOT is hermetically redirected —
+			// tests never write the host `.dev/revise-exec/`.
+			acquireExec: acquireReviseExecution,
+			execLeaseRoot: hermeticQueueRoot(() => reviseExecLeaseRoot(REPO), "revise-exec"),
 			...deps.revise,
 		};
 		const doSweep = revise.local && shipIsPr && !!revise.ghRepo && !noWorktree && !dryRun && items.length === 0;
@@ -3331,55 +3347,65 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			for (const pr of revisable) {
 				if (parkSignal.parked) break; // a park mid-sweep stops starting new revisions
 				if (!isAutopilotManaged(revise.gh, revise.ghRepo, pr.itemId, ROADMAP_GITHUB.label)) continue;
-				// Atomic one-pass claim BEFORE any work — cross-process with the operator
-				// `pelaggio revise --pr` CLI (see claimRevisionExclusive); non-claimed skips fail-soft.
-				if ((await claimRevisionExclusive(revise.gh, revise.ghRepo, REPO, pr.prNumber)) !== "claimed") continue;
-				const findingsPath = reviseFindingsPath(REPO, pr.itemId);
-				if (!fetchReviewFindings(revise.gh, revise.ghRepo, pr.prNumber, findingsPath)) {
-					// labeled but no findings comment → fail-safe park + skip (mirrors CI).
-					postParkComment(revise.gh, revise.ghRepo, pr.prNumber);
-					continue;
-				}
-				const wt = ensureReviseWorktree(_resolveWorktree(pr.itemId), pr.branch, { repo: REPO });
-				if (!wt) continue;
+				// Execution-scoped exclusion (#507 finding): hold the per-item lease for the WHOLE
+				// revision so an operator `pelaggio revise --pr` — whose `--allow-repeat` bypasses
+				// the one-pass label — can never run concurrently in the same claim worktree.
+				// Contention or lock failure skips fail-soft, like every other sweep primitive.
+				const exec = await revise.acquireExec(revise.execLeaseRoot, pr.itemId);
+				if (exec.kind !== "acquired") continue;
+				try {
+					// Atomic one-pass claim BEFORE any work — cross-process with the operator
+					// `pelaggio revise --pr` CLI (see claimRevisionExclusive); non-claimed skips fail-soft.
+					if ((await claimRevisionExclusive(revise.gh, revise.ghRepo, REPO, pr.prNumber)) !== "claimed") continue;
+					const findingsPath = reviseFindingsPath(REPO, pr.itemId);
+					if (!fetchReviewFindings(revise.gh, revise.ghRepo, pr.prNumber, findingsPath)) {
+						// labeled but no findings comment → fail-safe park + skip (mirrors CI).
+						postParkComment(revise.gh, revise.ghRepo, pr.prNumber);
+						continue;
+					}
+					const wt = ensureReviseWorktree(_resolveWorktree(pr.itemId), pr.branch, { repo: REPO });
+					if (!wt) continue;
 
-				const status: CycleStatus = { itemId: pr.itemId, status: "running", cost: 0 };
-				liveStatus.cycles.push(status);
-				if (v) liveStatus.render();
-				const r = await _runPipeline(
-					{
-						itemId: pr.itemId,
-						worktree: wt,
-						startFrom: "implement",
-						cycle: results.length + 1,
-						verbose: !isParallel && v,
-						shipTarget,
-						dryRun: false,
-						workerStatus: status,
-						liveStatus,
-						...(decisionNotifier ? { notifyDecision: decisionNotifier } : {}),
-						...(signal ? { signal } : {}),
-					},
-					parkSignal,
-					{ ...flags, "review-findings": findingsPath }, // per-item findings injection
-				);
-				totalSpent += r.cost;
-				dayBudgetTracker.add(r.cost);
-				results.push(r);
-				// Revise outcomes gate the campaign exactly like cycle outcomes: a
-				// confinement/safety-classed revise failure must stop new cycle launches,
-				// not just render red. Flag set BEFORE the notify await so a peer worker
-				// cannot launch in the delivery gap (#385 round-2/3 review findings).
-				const reviseHalts = classifyCycleDisposition(r, RECOVERABLE) === "halt-campaign";
-				if (reviseHalts) campaignHalted = true;
-				await notify(r, LOG_PATH);
-				status.status = resultStatus(r);
-				status.cost = r.cost;
-				status.step = undefined;
-				if (v) liveStatus.render();
-				const detail = resultDetail(r);
-				console.log(`${resultIcon(r)} revise ${pr.itemId} — ${r.costEstimated ? "~" : ""}$${r.cost.toFixed(2)}${detail ? `  ${A.dim(detail)}` : ""}`);
-				if (reviseHalts) return;
+					const status: CycleStatus = { itemId: pr.itemId, status: "running", cost: 0 };
+					liveStatus.cycles.push(status);
+					if (v) liveStatus.render();
+					const r = await _runPipeline(
+						{
+							itemId: pr.itemId,
+							worktree: wt,
+							startFrom: "implement",
+							cycle: results.length + 1,
+							verbose: !isParallel && v,
+							shipTarget,
+							dryRun: false,
+							workerStatus: status,
+							liveStatus,
+							...(decisionNotifier ? { notifyDecision: decisionNotifier } : {}),
+							...(signal ? { signal } : {}),
+						},
+						parkSignal,
+						{ ...flags, "review-findings": findingsPath }, // per-item findings injection
+					);
+					totalSpent += r.cost;
+					dayBudgetTracker.add(r.cost);
+					results.push(r);
+					// Revise outcomes gate the campaign exactly like cycle outcomes: a
+					// confinement/safety-classed revise failure must stop new cycle launches,
+					// not just render red. Flag set BEFORE the notify await so a peer worker
+					// cannot launch in the delivery gap (#385 round-2/3 review findings).
+					const reviseHalts = classifyCycleDisposition(r, RECOVERABLE) === "halt-campaign";
+					if (reviseHalts) campaignHalted = true;
+					await notify(r, LOG_PATH);
+					status.status = resultStatus(r);
+					status.cost = r.cost;
+					status.step = undefined;
+					if (v) liveStatus.render();
+					const detail = resultDetail(r);
+					console.log(`${resultIcon(r)} revise ${pr.itemId} — ${r.costEstimated ? "~" : ""}$${r.cost.toFixed(2)}${detail ? `  ${A.dim(detail)}` : ""}`);
+					if (reviseHalts) return;
+				} finally {
+					await exec.lease.release();
+				}
 			}
 		}
 

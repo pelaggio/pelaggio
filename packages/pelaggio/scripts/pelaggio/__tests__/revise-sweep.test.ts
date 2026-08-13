@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
 import {
+	acquireReviseExecution,
 	claimRevision,
 	claimRevisionExclusive,
 	ensureReviseWorktree,
@@ -15,7 +16,9 @@ import {
 	recordReviseInvocation,
 	resolveReviseTarget,
 	reviseClaimLockPath,
+	reviseExecLeasePath,
 	reviseFindingsPath,
+	verifyReviseWorktreeBinding,
 } from "../revise-sweep.js";
 import type { GhRunner } from "../roadmap/github-issues.js";
 
@@ -384,11 +387,14 @@ describe("reviseFindingsPath", () => {
 	});
 });
 
+const VIEW_HEAD_OID = "0123456789abcdef0123456789abcdef01234567";
+
 function viewPayload(over: Record<string, unknown> = {}): string {
 	return JSON.stringify({
 		state: "OPEN",
 		isDraft: false,
 		headRefName: "feat/issue-498-revise",
+		headRefOid: VIEW_HEAD_OID,
 		headRepository: { nameWithOwner: "o/r" },
 		headRepositoryOwner: { login: "o" },
 		labels: [],
@@ -398,16 +404,25 @@ function viewPayload(over: Record<string, unknown> = {}): string {
 }
 
 describe("resolveReviseTarget", () => {
-	it("accepts an open, non-draft red-review claim-branch PR", () => {
+	it("accepts an open, non-draft red-review claim-branch PR, carrying the head OID for the binding check", () => {
 		const { run, calls } = stub((args) => (args[0] === "pr" && args[1] === "view" ? { stdout: viewPayload({ labels: [{ name: "autopilot" }] }) } : {}));
 		assert.deepEqual(resolveReviseTarget(run, "o/r", 42), {
 			kind: "ok",
-			target: { prNumber: 42, itemId: "498", branch: "feat/issue-498-revise", alreadyRevised: false },
+			target: { prNumber: 42, itemId: "498", branch: "feat/issue-498-revise", headOid: VIEW_HEAD_OID, alreadyRevised: false },
 		});
 		const joined = (calls.at(0) ?? []).join(" ");
 		assert.ok(joined.includes("headRepository"));
 		assert.ok(joined.includes("headRepositoryOwner"));
 		assert.ok(joined.includes("statusCheckRollup"));
+		assert.ok(joined.includes("headRefOid"), `the head OID must be requested so the checkout can be bound to it; got ${joined}`);
+	});
+
+	it("a missing or malformed head OID is unavailable (retryable), never ok", () => {
+		for (const headRefOid of [undefined, "", "not-a-sha", "abc123", `${VIEW_HEAD_OID}f`]) {
+			const { run } = stub(() => ({ stdout: viewPayload({ headRefOid }) }));
+			const result = resolveReviseTarget(run, "o/r", 1);
+			assert.equal(result.kind, "unavailable", `headRefOid=${JSON.stringify(headRefOid)} must be unavailable`);
+		}
 	});
 
 	it("reports alreadyRevised when the one-pass label is present", () => {
@@ -491,5 +506,157 @@ describe("recordReviseInvocation", () => {
 	it("returns false on GitHub failure", () => {
 		assert.equal(recordReviseInvocation(stub(() => ({ status: 1, stderr: "boom" })).run, "o/r", 1, "accepted-first-pass", false), false);
 		assert.equal(recordReviseInvocation(throwingGh, "o/r", 1, "accepted-first-pass", false), false);
+	});
+});
+
+describe("acquireReviseExecution", () => {
+	function tmpRoot(): string {
+		return mkdtempSync(join(tmpdir(), "revise-exec-"));
+	}
+
+	it("acquires when no lease exists; release removes the lease file", async () => {
+		const root = tmpRoot();
+		const r = await acquireReviseExecution(root, "498");
+		assert.equal(r.kind, "acquired");
+		assert.ok(existsSync(reviseExecLeasePath(root, "498")), "the lease file must exist while held");
+		if (r.kind === "acquired") await r.lease.release();
+		assert.equal(existsSync(reviseExecLeasePath(root, "498")), false, "release must remove the holder's own lease");
+		rmSync(root, { recursive: true, force: true });
+	});
+
+	it("refuses while a live holder owns the lease, naming the holder pid and the lease path", async () => {
+		const root = tmpRoot();
+		const first = await acquireReviseExecution(root, "498");
+		assert.equal(first.kind, "acquired");
+		// Default liveness probe: the recorded pid is THIS process — provably alive.
+		const second = await acquireReviseExecution(root, "498");
+		assert.equal(second.kind, "held");
+		if (second.kind === "held") {
+			assert.ok(second.holder.includes(String(process.pid)), `holder description must name the pid; got ${second.holder}`);
+			assert.ok(second.holder.includes(reviseExecLeasePath(root, "498")), "holder description must name the lease path for manual remediation");
+		}
+		if (first.kind === "acquired") await first.lease.release();
+		rmSync(root, { recursive: true, force: true });
+	});
+
+	it("leases are per-item: holding item A does not block item B", async () => {
+		const root = tmpRoot();
+		const a = await acquireReviseExecution(root, "498");
+		const b = await acquireReviseExecution(root, "499");
+		assert.equal(a.kind, "acquired");
+		assert.equal(b.kind, "acquired");
+		if (a.kind === "acquired") await a.lease.release();
+		if (b.kind === "acquired") await b.lease.release();
+		rmSync(root, { recursive: true, force: true });
+	});
+
+	it("reclaims a crashed holder's lease immediately (dead pid is positive evidence the pass is over)", async () => {
+		const root = tmpRoot();
+		mkdirSync(root, { recursive: true });
+		writeFileSync(reviseExecLeasePath(root, "498"), `${JSON.stringify({ version: 1, itemId: "498", pid: 4_000_000, token: "crashed-holder", acquiredAt: Date.now() })}\n`);
+		const r = await acquireReviseExecution(root, "498", { isPidAlive: () => false });
+		assert.equal(r.kind, "acquired", "a dead holder's lease must be reclaimable without any timeout");
+		if (r.kind === "acquired") await r.lease.release();
+		rmSync(root, { recursive: true, force: true });
+	});
+
+	it("never steals from a live holder on time alone: an old lease with a live pid still refuses", async () => {
+		const root = tmpRoot();
+		mkdirSync(root, { recursive: true });
+		// acquiredAt far in the past — a suspended-then-resumed holder must keep exclusion.
+		writeFileSync(reviseExecLeasePath(root, "498"), `${JSON.stringify({ version: 1, itemId: "498", pid: process.pid, token: "long-runner", acquiredAt: Date.now() - 24 * 60 * 60 * 1000 })}\n`);
+		const r = await acquireReviseExecution(root, "498", { isPidAlive: () => true });
+		assert.equal(r.kind, "held", "there is no TTL theft — only a dead pid or the holder's release frees the lease");
+		rmSync(root, { recursive: true, force: true });
+	});
+
+	it("a malformed lease is reclaimable (harness-owned register, mirrors file-lock's stale handling)", async () => {
+		const root = tmpRoot();
+		mkdirSync(root, { recursive: true });
+		writeFileSync(reviseExecLeasePath(root, "498"), "not json");
+		const r = await acquireReviseExecution(root, "498", { isPidAlive: () => true });
+		assert.equal(r.kind, "acquired");
+		if (r.kind === "acquired") await r.lease.release();
+		rmSync(root, { recursive: true, force: true });
+	});
+
+	it("two concurrent acquires: exactly one wins", async () => {
+		const root = tmpRoot();
+		const [a, b] = await Promise.all([acquireReviseExecution(root, "498"), acquireReviseExecution(root, "498")]);
+		assert.deepEqual([a.kind, b.kind].sort(), ["acquired", "held"], `expected one winner and one refusal; got ${a.kind}/${b.kind}`);
+		for (const r of [a, b]) if (r.kind === "acquired") await r.lease.release();
+		rmSync(root, { recursive: true, force: true });
+	});
+
+	it("release is token-guarded: a stale holder never removes a replacement's lease", async () => {
+		const root = tmpRoot();
+		const first = await acquireReviseExecution(root, "498");
+		assert.equal(first.kind, "acquired");
+		// Simulate the register changing hands (crash + reclaim by another process).
+		writeFileSync(reviseExecLeasePath(root, "498"), `${JSON.stringify({ version: 1, itemId: "498", pid: process.pid, token: "replacement", acquiredAt: Date.now() })}\n`);
+		if (first.kind === "acquired") await first.lease.release();
+		assert.ok(existsSync(reviseExecLeasePath(root, "498")), "the replacement's lease must survive a stale release");
+		rmSync(root, { recursive: true, force: true });
+	});
+
+	it("fail-closed: a live short-lock holder means unavailable — no lease decision without the lock", async () => {
+		const root = tmpRoot();
+		mkdirSync(root, { recursive: true });
+		// A live (far-future expiry) short-lock holder, per file-lock.ts's `<expiresAt>:<token>` format.
+		writeFileSync(join(root, ".lock"), `${Date.now() + 60 * 60 * 1000}:live-holder`);
+		process.env.PELAGGIO_REVISE_EXEC_LOCK_TIMEOUT_MS = "100";
+		process.env.PELAGGIO_REVISE_EXEC_LOCK_STALE_MS = "200";
+		try {
+			const r = await acquireReviseExecution(root, "498");
+			assert.equal(r.kind, "unavailable");
+			assert.equal(existsSync(reviseExecLeasePath(root, "498")), false, "no lease may be written without the lock");
+		} finally {
+			delete process.env.PELAGGIO_REVISE_EXEC_LOCK_TIMEOUT_MS;
+			delete process.env.PELAGGIO_REVISE_EXEC_LOCK_STALE_MS;
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("verifyReviseWorktreeBinding", () => {
+	const OID = "0123456789abcdef0123456789abcdef01234567";
+	const OTHER = "fedcba9876543210fedcba9876543210fedcba98";
+
+	function gitStub(branch: string, head: string): (cmd: string, cwd: string) => string {
+		return (cmd) => {
+			if (cmd === "git rev-parse --abbrev-ref HEAD") return `${branch}\n`;
+			if (cmd === "git rev-parse HEAD") return `${head}\n`;
+			throw new Error(`unexpected command: ${cmd}`);
+		};
+	}
+
+	it("accepts a checkout on the PR branch at the PR head (case-insensitive OID compare)", () => {
+		assert.deepEqual(verifyReviseWorktreeBinding("/wt", "feat/issue-498-x", OID, { exec: gitStub("feat/issue-498-x", OID) }), { ok: true });
+		assert.deepEqual(verifyReviseWorktreeBinding("/wt", "feat/issue-498-x", OID.toUpperCase(), { exec: gitStub("feat/issue-498-x", OID) }), { ok: true });
+	});
+
+	it("refuses a checkout on a different branch, naming both branches, without touching HEAD state", () => {
+		const r = verifyReviseWorktreeBinding("/wt", "feat/issue-498-x", OID, { exec: gitStub("main", OID) });
+		assert.equal(r.ok, false);
+		if (!r.ok) {
+			assert.ok(r.reason.includes('"main"') && r.reason.includes('"feat/issue-498-x"'), r.reason);
+			assert.ok(r.reason.includes("nothing was reset"), "the refusal must promise the tree was not touched");
+		}
+	});
+
+	it("refuses a stale HEAD, naming both SHAs", () => {
+		const r = verifyReviseWorktreeBinding("/wt", "feat/issue-498-x", OID, { exec: gitStub("feat/issue-498-x", OTHER) });
+		assert.equal(r.ok, false);
+		if (!r.ok) assert.ok(r.reason.includes(OTHER) && r.reason.includes(OID), `the refusal must name both the observed and expected SHA; got ${r.reason}`);
+	});
+
+	it("fails closed when git cannot be read in the worktree", () => {
+		const r = verifyReviseWorktreeBinding("/wt", "feat/issue-498-x", OID, {
+			exec: () => {
+				throw new Error("not a git repository");
+			},
+		});
+		assert.equal(r.ok, false);
+		if (!r.ok) assert.ok(r.reason.includes("not a git repository"));
 	});
 });

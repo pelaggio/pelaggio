@@ -627,12 +627,22 @@ Run it from the **main checkout** (the same station as `land` / `pr-review`) so 
   `PELAGGIO_SINGLE_SHOT` / `--no-worktree` all refuse before paid work.
 - **Durable findings** — the marked gate comment is written verbatim under `.dev/` and left in
   place on every later outcome so a parked/retried revision keeps its task.
-- **Audit comment** — every invocation that reaches the one-pass decision appends a new
-  `<!-- pelaggio-revise-invocation -->` PR comment
-  (`disposition=accepted-first-pass|refused-repeat|accepted-repeat`). Failure to post it
-  fail-closes (no revision work).
-- **`--allow-repeat`** bypasses only the `autopilot:revised` label. It does not remove the
-  label, skip review, or change the ship target.
+- **Execution exclusivity** — every pass (first pass, `--allow-repeat` repeat, and the in-run
+  sweep) holds a per-item execution lease under `MAIN_REPO/.dev/revise-exec/` for the whole
+  run, so two passes can never revise the same claim worktree concurrently. A refused
+  invocation names the holder pid and the lease file; a crashed holder's lease is reclaimed
+  as soon as its pid is gone (no time-based theft — a live holder never loses exclusion).
+- **Head binding** — before any work, the claim worktree's branch and `HEAD` are verified
+  against the PR's head branch and head OID from the same lookup. A stale or mismatched
+  checkout fails closed naming both SHAs; nothing is ever reset or checked out over an
+  existing tree.
+- **Audit comment** — invocations append a new `<!-- pelaggio-revise-invocation -->` PR comment
+  (`disposition=accepted-first-pass|refused-repeat|accepted-repeat`). `accepted-*` records are
+  posted only after the pass is actually owned (label claimed, lease held), so a losing racer
+  never leaves an audit record for a pass it did not run. Failure to post it fail-closes (no
+  revision work).
+- **`--allow-repeat`** bypasses only the `autopilot:revised` label — never the execution
+  lease. It does not remove the label, skip review, or change the ship target.
 - **Park handback** — a parked first pass is not a repeat. Continue it with the printed
   `pnpm pelaggio --resume <id> --review-findings <abs-path>`; running `revise --pr` again is a
   new pass and needs `--allow-repeat`.

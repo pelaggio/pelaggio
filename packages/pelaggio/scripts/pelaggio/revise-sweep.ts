@@ -1,5 +1,6 @@
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { withFileLock } from "./file-lock.js";
 import { type GhRunner, parseGhJson } from "./roadmap/github-issues.js";
@@ -38,6 +39,8 @@ export interface TargetedRevisablePr {
 	prNumber: number;
 	itemId: string;
 	branch: string;
+	/** Full head commit OID at lookup time — the checkout is bound to this before any revision work. */
+	headOid: string;
 	alreadyRevised: boolean;
 }
 
@@ -64,6 +67,7 @@ interface PrViewEntry {
 	state?: string;
 	isDraft?: boolean;
 	headRefName?: string;
+	headRefOid?: string;
 	headRepository?: { nameWithOwner?: string; owner?: { login?: string }; name?: string } | null;
 	headRepositoryOwner?: { login?: string } | null;
 	labels?: { name: string }[];
@@ -171,7 +175,7 @@ export function findRevisablePrs(gh: GhRunner, ghRepo: string): { revisable: Rev
  * loud without message scraping. Does not weaken the sweep's fail-soft contract.
  */
 export function resolveReviseTarget(gh: GhRunner, ghRepo: string, prNumber: number): ResolveReviseTargetResult {
-	const out = runGhSoft(gh, ["pr", "view", String(prNumber), "--repo", ghRepo, "--json", "state,isDraft,headRefName,headRepository,headRepositoryOwner,labels,statusCheckRollup"]);
+	const out = runGhSoft(gh, ["pr", "view", String(prNumber), "--repo", ghRepo, "--json", "state,isDraft,headRefName,headRefOid,headRepository,headRepositoryOwner,labels,statusCheckRollup"]);
 	if (out === null) return { kind: "unavailable", reason: "github lookup failed" };
 	let pr: PrViewEntry;
 	try {
@@ -187,12 +191,19 @@ export function resolveReviseTarget(gh: GhRunner, ghRepo: string, prNumber: numb
 	const itemId = m?.[1];
 	if (!itemId) return { kind: "ineligible", reason: "head branch is not a pelaggio claim branch" };
 	if (!hasReviewFailure(pr.statusCheckRollup)) return { kind: "ineligible", reason: "review gate is not currently red" };
+	// The head OID binds the checkout to THIS PR head before any revision work
+	// (`verifyReviseWorktreeBinding`); without it a stale or mismatched worktree could be
+	// revised and shipped while the requested PR is labeled and audited. Fail closed
+	// (`unavailable`, retryable) when the forge payload lacks a well-formed full OID.
+	const headOid = pr.headRefOid ?? "";
+	if (!/^[0-9a-fA-F]{40}$/.test(headOid)) return { kind: "unavailable", reason: "pull request head OID unavailable" };
 	return {
 		kind: "ok",
 		target: {
 			prNumber,
 			itemId,
 			branch,
+			headOid,
 			alreadyRevised: (pr.labels ?? []).some((l) => l.name === REVISED_LABEL),
 		},
 	};
@@ -293,6 +304,187 @@ export async function claimRevisionExclusive(gh: GhRunner, ghRepo: string, mainR
 	} catch {
 		return "unavailable"; // no lock → no claim → no paid revision work
 	}
+}
+
+// ── Execution-scoped revision exclusion (PR #507 review finding) ───────
+//
+// The `autopilot:revised` label is a ONE-SHOT entitlement token, not an execution guard:
+// `claimRevisionExclusive` releases its lock immediately after the label test-and-set, and
+// `--allow-repeat` bypasses the label entirely. Without a separate guard, a repeat pass can
+// run concurrently with an in-flight first pass (or with another repeat) in the SAME claim
+// worktree — racing findings-file writes, commits, and pushes. The lease below is that guard.
+
+/** Directory of per-item execution leases; `<root>/.lock` serializes every lease mutation. */
+export function reviseExecLeaseRoot(mainRepo: string): string {
+	return resolve(mainRepo, ".dev", "revise-exec");
+}
+
+// The short lock guards only a few fs operations per mutation; sizes mirror the claim lock.
+// Env overrides for tests, read per call so `node --test` needs no module-reload games.
+const execLockStaleMs = () => Number(process.env.PELAGGIO_REVISE_EXEC_LOCK_STALE_MS) || 120_000;
+const execLockTimeoutMs = () => Number(process.env.PELAGGIO_REVISE_EXEC_LOCK_TIMEOUT_MS) || 30_000;
+
+export interface ReviseExecutionLease {
+	/** Remove the lease iff this holder still owns it (token compare). Idempotent, fail-soft. */
+	release(): Promise<void>;
+}
+
+export type AcquireReviseExecutionResult = { kind: "acquired"; lease: ReviseExecutionLease } | { kind: "held"; holder: string } | { kind: "unavailable" };
+
+interface ExecLeaseRecord {
+	version: 1;
+	itemId: string;
+	pid: number;
+	token: string;
+	acquiredAt: number;
+}
+
+/** Parse an on-disk lease fail-soft: anything unreadable/malformed is reclaimable. */
+function readExecLease(path: string): ExecLeaseRecord | undefined {
+	let raw: unknown;
+	try {
+		raw = JSON.parse(readFileSync(path, "utf-8")) as unknown;
+	} catch {
+		return undefined;
+	}
+	if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+	const o = raw as Record<string, unknown>;
+	if (o.version !== 1) return undefined;
+	if (typeof o.itemId !== "string") return undefined;
+	if (typeof o.pid !== "number" || !Number.isInteger(o.pid) || o.pid <= 0) return undefined;
+	if (typeof o.token !== "string" || o.token.length === 0) return undefined;
+	const acquiredAt = typeof o.acquiredAt === "number" && Number.isFinite(o.acquiredAt) ? o.acquiredAt : 0;
+	return { version: 1, itemId: o.itemId, pid: o.pid, token: o.token, acquiredAt };
+}
+
+/** kill(pid, 0) liveness; EPERM means the process exists but is not ours — still alive. */
+function defaultExecPidAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (err) {
+		return (err as NodeJS.ErrnoException).code === "EPERM";
+	}
+}
+
+/** Path-safe per-item lease name; mirrors attempt-identity's slug rule (ids come from adapters). */
+function execLeaseSlug(itemId: string): string {
+	const slug = itemId
+		.toLowerCase()
+		.replace(/[^a-z0-9._-]+/g, "-")
+		.replace(/^[.-]+/, "");
+	return slug.length > 0 ? slug : "unknown";
+}
+
+/** Exposed for diagnostics and refusal messages — where the lease for `itemId` lives. */
+export function reviseExecLeasePath(root: string, itemId: string): string {
+	return resolve(root, `${execLeaseSlug(itemId)}.lease`);
+}
+
+/**
+ * Acquire the per-item revision execution lease, held for the WHOLE revision run. Taken by
+ * every path that executes a revision in the item's claim worktree — the in-run sweep
+ * (`pipeline.ts`), an operator first pass, and an operator `--allow-repeat` repeat — so no
+ * two of them can run concurrently in the same worktree.
+ *
+ * Guard class (docs/agent-context/guarded-actions.md §3–§4): a liveness-bound execution
+ * lease, fenced AT THE REGISTER for cooperating harness processes on this host. The lease
+ * file is the single register for "who may execute a revision for this item"; every
+ * mutation (acquire test-and-set, token-compared release, dead-holder reclaim) runs under
+ * one short `withFileLock` critical section, so contenders can never interleave a
+ * check-then-write. Deliberately NOT a time-leased `withFileLock` hold: a revision runs for
+ * hours, and file-lock's `staleMs` steal would silently strip a live holder's exclusion
+ * mid-run (its documented residual). There is no time-based theft here at all —
+ * reclaim requires POSITIVE evidence the holding pass is over (its pid is gone, or the
+ * holder's own token-compared release removed the lease).
+ *
+ * Failure semantics, fail-closed throughout:
+ * - live holder → `held` (refuse; the message names the holder pid and the lease path);
+ * - crashed holder → its pid probes dead (ESRCH) and the lease is reclaimed immediately;
+ * - lock unavailable → `unavailable` (no exclusion evidence → no revision work);
+ * - a suspended-then-resumed holder KEEPS the lease (its pid stays alive) — exclusion is
+ *   never silently transferred under it.
+ * Residuals: pid recycling after a crash/reboot can hold the lease closed until the recycled
+ * pid exits or an operator removes the named lease file (fail-closed, never fail-open); the
+ * register lives under `MAIN_REPO/.dev/`, which is not in the agent-denied write set, so —
+ * like attempt-identity.ts — this is exclusion among cooperating harness processes, never an
+ * authorization boundary against a forging agent.
+ */
+export async function acquireReviseExecution(root: string, itemId: string, opts: { isPidAlive?: (pid: number) => boolean } = {}): Promise<AcquireReviseExecutionResult> {
+	const isPidAlive = opts.isPidAlive ?? defaultExecPidAlive;
+	const leasePath = reviseExecLeasePath(root, itemId);
+	const lockPath = resolve(root, ".lock");
+	const token = `${process.pid}-${randomBytes(8).toString("hex")}`;
+	let acquired = false;
+	let holder = "";
+	try {
+		await withFileLock(
+			lockPath,
+			() => {
+				const cur = readExecLease(leasePath);
+				if (cur && isPidAlive(cur.pid)) {
+					holder = `held by pid ${cur.pid} since ${new Date(cur.acquiredAt).toISOString()}; if that process is not a live revision pass, remove ${leasePath}`;
+					return;
+				}
+				// Absent, malformed, or dead holder (ESRCH is positive evidence its pass is over).
+				const record: ExecLeaseRecord = { version: 1, itemId, pid: process.pid, token, acquiredAt: Date.now() };
+				writeFileSync(leasePath, `${JSON.stringify(record, null, "\t")}\n`);
+				acquired = true;
+			},
+			{ label: "revise execution lease", staleMs: execLockStaleMs(), acquireTimeoutMs: execLockTimeoutMs() },
+		);
+	} catch {
+		return { kind: "unavailable" };
+	}
+	if (!acquired) return { kind: "held", holder };
+	let released = false;
+	return {
+		kind: "acquired",
+		lease: {
+			async release(): Promise<void> {
+				if (released) return;
+				released = true;
+				try {
+					await withFileLock(
+						lockPath,
+						() => {
+							const cur = readExecLease(leasePath);
+							if (cur && cur.token === token) unlinkSync(leasePath); // never a replacement's lease
+						},
+						{ label: "revise execution lease", staleMs: execLockStaleMs(), acquireTimeoutMs: execLockTimeoutMs() },
+					);
+				} catch {
+					// Leave the lease: once this process exits, the dead-pid reclaim recovers it.
+				}
+			},
+		},
+	};
+}
+
+/**
+ * Bind an existing checkout to the selected PR before any revision work (PR #507 finding 2):
+ * the worktree path is item-derived, so a pre-existing directory may hold a different branch
+ * or a stale HEAD, and revising it would ship code the labeled-and-audited PR never showed.
+ * Fail-closed on mismatch with both observed and expected values in the reason — the caller
+ * must NOT auto-reset or checkout over an existing tree (it may hold parked work).
+ */
+export function verifyReviseWorktreeBinding(worktreePath: string, branch: string, headOid: string, opts: { exec?: (cmd: string, cwd: string) => string } = {}): { ok: true } | { ok: false; reason: string } {
+	const exec = opts.exec ?? ((cmd, cwd) => execSync(cmd, { cwd, encoding: "utf-8" }));
+	let currentBranch: string;
+	let currentHead: string;
+	try {
+		currentBranch = exec("git rev-parse --abbrev-ref HEAD", worktreePath).trim();
+		currentHead = exec("git rev-parse HEAD", worktreePath).trim();
+	} catch (e) {
+		return { ok: false, reason: `could not read the checkout at ${worktreePath} (${e instanceof Error ? e.message : String(e)}) — refusing to revise an unverified worktree` };
+	}
+	if (currentBranch !== branch) {
+		return { ok: false, reason: `worktree ${worktreePath} is checked out on "${currentBranch}", not the PR head branch "${branch}" — refusing to revise a mismatched checkout (nothing was reset; fix or remove the worktree and re-run)` };
+	}
+	if (currentHead.toLowerCase() !== headOid.toLowerCase()) {
+		return { ok: false, reason: `worktree HEAD ${currentHead} does not match the PR head ${headOid} — refusing to revise a stale checkout (nothing was reset; push the local commits or remove the worktree so it is recreated at the PR head)` };
+	}
+	return { ok: true };
 }
 
 /**
