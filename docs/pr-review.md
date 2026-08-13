@@ -115,12 +115,28 @@ in the same window; a just-shipped PR has no red `review` yet, so revise ignores
 ### PR-keyed gate-outcome record
 
 Every terminal local-runner review also writes a durable, atomic record at
-`MAIN_REPO/.dev/pr-review-gate-records/{prNumber}-{headSha}.json`. The schema-versioned
-record contains the item ID, `pass`/`block` gate, `ok` and subtype, agreement and
-convergence fields, cost/estimate/turn metrics, runner, and review timestamp. A park is
-transient and writes no record; a crash writes a synthetic `error_crash` block. Re-running
-the same `(prNumber, headSha)` overwrites that key, while a pushed revision creates a new
-record.
+`MAIN_REPO/.dev/pr-review-gate-records/{prNumber}-{headSha}.json`. New writes are schema
+v2; existing schema-v1 files remain readable and are never rewritten. The two-key file
+name is unchanged: last write wins, including an operator record overwriting a fleet
+record on the same `(prNumber, headSha)`.
+
+A v2 record is a producer-discriminated union:
+
+- `producer: "fleet"` — a completed local review-fleet attempt. It carries the fleet
+  `pass`/`block` gate, `ok` and subtype, the four-value fleet `agreement`
+  (`consensus-pass` | `consensus-block` | `disagreement` | `invalid`), optional
+  convergence fields, cost/estimate/turn metrics, `runner: "local"`, and the review
+  timestamp. A park is transient and writes no record; a crash writes a synthetic
+  `error_crash` fleet block (`agreement: "invalid"`).
+- `producer: "operator-adjudication"` — a human adjudication. No fleet ran:
+  `agreement` is fixed to `"not-run"`. The record identifies the adjudicator, binds
+  the inspected interdiff as `reviewedSourceSha` → `headSha` (equality is allowed;
+  an identity/empty interdiff still has a digest), stores a 64-character lowercase
+  SHA-256 `interdiffDigest` of the exact inspected bytes (no `sha256:` prefix), and
+  retains a `dispositions` map keyed by `reviewFindingFingerprint` strings. Each
+  entry is `fixed` (addressed in the interdiff), `refuted` (not a real defect), or
+  `accepted` (real, shipping with it), plus a non-empty rationale. An empty map is
+  valid. Operator `gate` is the adjudication outcome, not fleet consensus.
 
 This store is the durable right-hand side of a post-cycle join. A consumer joins it to a
 shipping `.dev/pelaggio-log.jsonl` cycle's `CycleProvenance` only when the record's PR
@@ -128,9 +144,17 @@ number equals the number parsed from `provenance.prUrl` **and** its `headSha` eq
 `provenance.git.headSha`. Both predicates are required because one PR may have several
 reviewed revisions; `itemId` is useful for grouping but is not an identity fallback.
 Legacy provenance without a usable PR URL or head SHA remains unjoined rather than being
-guessed. The projection that performs this join is deferred.
+guessed.
 
-Only the local drain persists these files today. A CI runner has a read-only token and an
+An operator record is durable adjudication evidence, not a fleet run. It must never be
+counted or rendered as `consensus-pass`, `consensus-block`, or disagreement. Only
+`fleetAgreementOf` may supply a fleet consensus value (the stored four-value agreement
+for historical v1 and v2 fleet records; `null` for operator adjudication). Operator
+`gate: "pass"` is not consensus.
+
+The projection that performs this join is deferred.
+
+Only the local drain persists fleet files today. A CI runner has a read-only token and an
 ephemeral checkout, so its durable outcome remains the forge metrics marker until a later
 local materialization pass is implemented.
 

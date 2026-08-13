@@ -2072,8 +2072,11 @@ describe("runOrchestrator — mid-run review drain (#387)", () => {
 		const statuses = ghCalls.filter((a) => a[0] === "api" && a[1] === `repos/o/r/statuses/${HEAD}`).map((a) => a.find((x) => x.startsWith("state=")));
 		assert.deepEqual(statuses, ["state=pending", "state=success"]);
 		assert.deepEqual(pending(main), [], "record completed (deleted) after the terminal status");
-		assert.deepEqual(readPrReviewGateRecord(gateRecordsDir(main), 201, HEAD), {
-			schemaVersion: 1,
+		const storedPass = readPrReviewGateRecord(gateRecordsDir(main), 201, HEAD);
+		assert.ok(storedPass && storedPass.schemaVersion === 2 && storedPass.producer === "fleet");
+		assert.deepEqual(storedPass, {
+			schemaVersion: 2,
+			producer: "fleet",
 			prNumber: 201,
 			headSha: HEAD,
 			itemId: "387",
@@ -2112,7 +2115,9 @@ describe("runOrchestrator — mid-run review drain (#387)", () => {
 			const { runPipeline } = createMockRunPipeline({ default: { completed: false, cost: 0, error: "pick:queue-empty" } });
 			await runOrchestrator({ ...baseFlags, target: "pull-request", cycles: "1" }, { runPipeline, resolveWorktree: () => "/fake/wt", review: reviewDeps({ gh, main, runReviewGate }) });
 			const stored = readPrReviewGateRecord(gateRecordsDir(main), 201, HEAD);
-			assert.ok(stored, `${subtype} record exists`);
+			if (stored?.schemaVersion !== 2 || stored.producer !== "fleet") {
+				assert.fail(`${subtype} record exists as v2 fleet`);
+			}
 			assert.deepEqual({ gate: stored.gate, subtype: stored.subtype, agreement: stored.agreement, cost: stored.cost, turns: stored.turns }, expected);
 		}
 	});

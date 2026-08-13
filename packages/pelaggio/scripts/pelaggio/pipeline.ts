@@ -2996,6 +2996,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				}
 				const gateRecord: NewPrReviewGateRecord = gateResult
 					? {
+							producer: "fleet",
 							prNumber: pr.prNumber,
 							headSha: pr.headSha,
 							itemId: pr.itemId,
@@ -3013,6 +3014,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 							reviewedAt: new Date(review.now()).toISOString(),
 						}
 					: {
+							producer: "fleet",
 							prNumber: pr.prNumber,
 							headSha: pr.headSha,
 							itemId: pr.itemId,
