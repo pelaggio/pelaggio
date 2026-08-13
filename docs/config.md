@@ -942,6 +942,12 @@ throws into the run. This is the **local** counterpart to the API-funded CI
 workflow (`.github/workflows/pr-review-revise.yml`); see
 [docs/pr-review.md](./pr-review.md) for which path is active.
 
+`revise.local` controls **only automated sweeping**. The explicit operator
+command `npx pelaggio revise --pr <n>` is on-demand and is not gated by
+`revise.local`. It still uses the configured ship target, notifications, models,
+and budgets — it does not invent a second revision implementation. `--allow-repeat`
+bypasses only the one-pass `autopilot:revised` label.
+
 ## Spawned-agent env allowlist
 
 Driver subprocesses (codex today, grok next) run work influenced by untrusted

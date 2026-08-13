@@ -8,7 +8,7 @@ import type { NotifyPayload } from "../notify.js";
 import { hermeticDefault, hermeticQueueRoot, runOrchestrator } from "../pipeline.js";
 import { gateRecordsDir, readPrReviewGateRecord, writePrReviewGateRecord } from "../pr-review-gate-record.js";
 import { enqueueReviewRequest, type NewReviewRequest, reviewRequestsDir } from "../review-request-queue.js";
-import { reviseFindingsPath } from "../revise-sweep.js";
+import { type AcquireReviseExecutionResult, reviseFindingsPath } from "../revise-sweep.js";
 import type { GhRunner } from "../roadmap/github-issues.js";
 import { LiveStatus, StatusBar } from "../tui.js";
 import type { Flags } from "../types.js";
@@ -158,6 +158,313 @@ describe("runOrchestrator — CI resume + review-findings (issue #60)", () => {
 		assert.equal(exitCode, 2);
 		assert.equal(calls.length, 0);
 		assert.match(String(error.mock.calls[0]?.arguments[0]), /requires --resume/);
+	});
+});
+
+describe("runOrchestrator — operator-revision mode (#498)", () => {
+	const findingsPath = "/tmp/pelaggio-op-rev/review-findings-498.md";
+	const resumeFlags = (): Flags => ({ ...baseFlags, resume: "498", "review-findings": findingsPath });
+
+	it("parks then resumes from implement with the same findings path, notifies per attempt, and exits 0", async (t) => {
+		t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
+		t.mock.method(console, "log", () => {});
+		const baseNow = 1_700_000_000_000;
+		t.mock.timers.setTime(baseNow);
+
+		const sent: Array<{ payload: { event: string; itemId: string | null } }> = [];
+		const sendNotification = async (_url: string, _format: "json" | "ntfy", payload: { event: string; itemId: string | null }) => {
+			sent.push({ payload });
+			return true;
+		};
+		const { runPipeline, calls } = createMockRunPipeline({
+			byItem: {
+				"498": [
+					{ completed: false, cost: 0.2, error: "parked", park: { parked: true, resetsAt: baseNow + 60_000, limitType: "5h" } },
+					{ completed: true, cost: 0.5 },
+				],
+			},
+		});
+		const promise = runOrchestrator(resumeFlags(), {
+			runPipeline,
+			detectResumeStep: fakeDetectResumeStep,
+			resolveWorktree: fakeResolveWorktree,
+			mode: "operator-revision",
+			notifyConfig: { url: "https://hook.example" },
+			sendNotification,
+		});
+		for (let i = 0; i < 5; i++) await new Promise(setImmediate);
+		t.mock.timers.tick(60_000 + 30_000);
+		for (let i = 0; i < 5; i++) await new Promise(setImmediate);
+		const { exitCode, results } = await promise;
+
+		assert.equal(exitCode, 0);
+		assert.equal(calls.length, 2);
+		assert.equal(calls.at(0)?.opts.startFrom, "implement");
+		assert.equal(calls.at(1)?.opts.startFrom, "implement");
+		assert.equal(calls.at(0)?.flags["review-findings"], findingsPath);
+		assert.equal(calls.at(1)?.flags["review-findings"], findingsPath);
+		assert.equal(calls.at(0)?.opts.itemId, "498");
+		assert.equal(calls.at(1)?.opts.itemId, "498");
+		assert.equal(results.length, 2);
+		assert.equal(results.at(0)?.error, "parked");
+		assert.equal(results.at(0)?.cost, 0.2);
+		assert.equal(results.at(1)?.completed, true);
+		assert.equal(results.at(1)?.cost, 0.5);
+		assert.equal(sent.length, 2);
+		assert.equal(sent.at(0)?.payload.event, "parked");
+		assert.equal(sent.at(1)?.payload.event, "shipped");
+	});
+
+	it("brackets every revision attempt with the execution lease: released on park, reacquired by the auto-resume (#507 round 3)", async (t) => {
+		t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
+		t.mock.method(console, "log", () => {});
+		const baseNow = 1_700_000_000_000;
+		t.mock.timers.setTime(baseNow);
+		const events: string[] = [];
+		const inner = createMockRunPipeline({
+			byItem: {
+				"498": [
+					{ completed: false, cost: 0.2, error: "parked", park: { parked: true, resetsAt: baseNow + 60_000, limitType: "5h" } },
+					{ completed: true, cost: 0.5 },
+				],
+			},
+		});
+		const runPipeline: typeof inner.runPipeline = async (...args) => {
+			events.push("pipeline");
+			return inner.runPipeline(...args);
+		};
+		const acquireExec = async (_root: string, itemId: string): Promise<AcquireReviseExecutionResult> => {
+			events.push(`acquire:${itemId}`);
+			return {
+				kind: "acquired",
+				lease: {
+					release: async () => {
+						events.push(`release:${itemId}`);
+					},
+				},
+			};
+		};
+		const promise = runOrchestrator(resumeFlags(), {
+			runPipeline,
+			detectResumeStep: fakeDetectResumeStep,
+			resolveWorktree: fakeResolveWorktree,
+			mode: "operator-revision",
+			revise: { acquireExec },
+		});
+		for (let i = 0; i < 5; i++) await new Promise(setImmediate);
+		t.mock.timers.tick(60_000 + 30_000);
+		for (let i = 0; i < 5; i++) await new Promise(setImmediate);
+		const { exitCode } = await promise;
+		assert.equal(exitCode, 0);
+		assert.deepEqual(
+			events,
+			["acquire:498", "pipeline", "release:498", "acquire:498", "pipeline", "release:498"],
+			"each attempt must acquire before the pipeline and release when it ends — a park releases (never pinned across the reset sleep) and the resume reacquires",
+		);
+	});
+
+	it("a standard --resume --review-findings attempt is leased: acquire before the pipeline, release after (#507 round 3)", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const events: string[] = [];
+		const inner = createMockRunPipeline({ byItem: { "498": { completed: true, cost: 0.5 } } });
+		const runPipeline: typeof inner.runPipeline = async (...args) => {
+			events.push("pipeline");
+			return inner.runPipeline(...args);
+		};
+		const acquireExec = async (_root: string, itemId: string): Promise<AcquireReviseExecutionResult> => {
+			events.push(`acquire:${itemId}`);
+			return {
+				kind: "acquired",
+				lease: {
+					release: async () => {
+						events.push(`release:${itemId}`);
+					},
+				},
+			};
+		};
+		const { exitCode } = await runOrchestrator(resumeFlags(), { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree, revise: { acquireExec } });
+		assert.equal(exitCode, 0);
+		assert.deepEqual(events, ["acquire:498", "pipeline", "release:498"], "the advertised manual continuation must itself be a leased resume");
+	});
+
+	it("a held execution lease refuses the revision resume naming the holder — never proceeds unleased", async (t) => {
+		const error = t.mock.method(console, "error", () => {});
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({ default: { completed: true } });
+		const acquireExec = async (): Promise<AcquireReviseExecutionResult> => ({ kind: "held", holder: "held by pid 4242; remove /fake/revise-exec/498.lease" });
+		const { exitCode } = await runOrchestrator(resumeFlags(), {
+			runPipeline,
+			detectResumeStep: fakeDetectResumeStep,
+			resolveWorktree: fakeResolveWorktree,
+			mode: "operator-revision",
+			revise: { acquireExec },
+		});
+		assert.equal(exitCode, 1);
+		assert.equal(calls.length, 0, "an unleased revision resume must never touch the worktree");
+		const err = String(error.mock.calls[0]?.arguments[0]);
+		assert.match(err, /pid 4242/, `the refusal must name the holder; got: ${err}`);
+	});
+
+	it("an ordinary --resume without findings takes no execution lease", async (t) => {
+		t.mock.method(console, "log", () => {});
+		let acquires = 0;
+		const acquireExec = async (): Promise<AcquireReviseExecutionResult> => {
+			acquires++;
+			return { kind: "acquired", lease: { release: async () => {} } };
+		};
+		const { runPipeline } = createMockRunPipeline({ byItem: { "TOOL-99": { completed: true, cost: 1 } } });
+		const { exitCode } = await runOrchestrator({ ...baseFlags, resume: "tool-99" }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree, revise: { acquireExec } });
+		assert.equal(exitCode, 0);
+		assert.equal(acquires, 0, "a non-revision resume must not take the revise execution lease");
+	});
+
+	it("autoResume: false hands back with --resume --review-findings and starts no pick/sweep", async (t) => {
+		const logs: string[] = [];
+		t.mock.method(console, "log", (...args: unknown[]) => {
+			logs.push(args.join(" "));
+		});
+		const baseNow = 1_700_000_000_000;
+		const { runPipeline, calls } = createMockRunPipeline({
+			byItem: {
+				"498": { completed: false, cost: 0.1, error: "parked", park: { parked: true, resetsAt: baseNow + 60_000, limitType: "5h" } },
+			},
+		});
+		const { exitCode } = await runOrchestrator(resumeFlags(), {
+			runPipeline,
+			detectResumeStep: fakeDetectResumeStep,
+			resolveWorktree: fakeResolveWorktree,
+			mode: "operator-revision",
+			park: { autoResume: false },
+		});
+		assert.equal(exitCode, 1);
+		assert.equal(calls.length, 1);
+		assert.equal(calls.at(0)?.opts.itemId, "498");
+		assert.ok(
+			logs.some((l) => l.includes("Resume:") && l.includes(`pnpm pelaggio --resume 498 --review-findings ${findingsPath}`)),
+			`expected findings-driven resume hint; got:\n${logs.join("\n")}`,
+		);
+		assert.ok(!logs.some((l) => /summary/i.test(l) && l.includes("cycle")), "must not fall through to the campaign summary");
+	});
+
+	it("no reset time hands back with the findings-driven resume hint", async (t) => {
+		const logs: string[] = [];
+		t.mock.method(console, "log", (...args: unknown[]) => {
+			logs.push(args.join(" "));
+		});
+		const { runPipeline, calls } = createMockRunPipeline({
+			byItem: {
+				"498": { completed: false, cost: 0.1, error: "parked", park: { parked: true, resetsAt: 0, limitType: "paused" } },
+			},
+		});
+		const { exitCode } = await runOrchestrator(resumeFlags(), {
+			runPipeline,
+			detectResumeStep: fakeDetectResumeStep,
+			resolveWorktree: fakeResolveWorktree,
+			mode: "operator-revision",
+		});
+		assert.equal(exitCode, 1);
+		assert.equal(calls.length, 1);
+		assert.ok(logs.some((l) => l.includes(`--resume 498 --review-findings ${findingsPath}`)));
+	});
+
+	it("wait beyond maxWait hands back without a second pipeline call", async (t) => {
+		t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
+		const logs: string[] = [];
+		t.mock.method(console, "log", (...args: unknown[]) => {
+			logs.push(args.join(" "));
+		});
+		const baseNow = 1_700_000_000_000;
+		t.mock.timers.setTime(baseNow);
+		const { runPipeline, calls } = createMockRunPipeline({
+			byItem: {
+				"498": { completed: false, cost: 0.1, error: "parked", park: { parked: true, resetsAt: baseNow + 3 * 3600_000, limitType: "5h" } },
+			},
+		});
+		const { exitCode } = await runOrchestrator({ ...resumeFlags(), "max-wait": "1h" }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree, mode: "operator-revision" });
+		assert.equal(exitCode, 1);
+		assert.equal(calls.length, 1);
+		assert.ok(logs.some((l) => l.includes(`--resume 498 --review-findings ${findingsPath}`)));
+	});
+
+	it("round ceiling hands back after MAX_RESUME_ROUNDS", async (t) => {
+		t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
+		t.mock.method(console, "log", () => {});
+		const baseNow = 1_700_000_000_000;
+		t.mock.timers.setTime(baseNow);
+		const parked = () => ({ completed: false as const, cost: 0.1, error: "parked", park: { parked: true, resetsAt: baseNow + 60_000, limitType: "5h" } });
+		const { runPipeline, calls } = createMockRunPipeline({
+			byItem: { "498": Array.from({ length: 20 }, parked) },
+			onCall: (_opts, ps) => {
+				if (ps.parked) ps.resetsAt = Date.now() + 60_000;
+			},
+		});
+		const promise = runOrchestrator(resumeFlags(), {
+			runPipeline,
+			detectResumeStep: fakeDetectResumeStep,
+			resolveWorktree: fakeResolveWorktree,
+			mode: "operator-revision",
+		});
+		// 12 wait/resume rounds after the first park. Each wait is reset+≤30s jitter.
+		for (let round = 0; round < 12; round++) {
+			for (let i = 0; i < 5; i++) await new Promise(setImmediate);
+			t.mock.timers.tick(60_000 + 30_000);
+			for (let i = 0; i < 5; i++) await new Promise(setImmediate);
+		}
+		const { exitCode } = await promise;
+		assert.equal(exitCode, 1);
+		// First attempt + 12 resumeOne calls, then the cap hands back.
+		assert.equal(calls.length, 13);
+		assert.ok(calls.every((c) => c.opts.itemId === "498"));
+	});
+
+	it("operator-revision + --no-worktree exits 2 with zero runPipeline calls", async (t) => {
+		const error = t.mock.method(console, "error", () => {});
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({ default: { completed: true } });
+		const { exitCode } = await runOrchestrator({ ...resumeFlags(), "no-worktree": true }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree, mode: "operator-revision" });
+		assert.equal(exitCode, 2);
+		assert.equal(calls.length, 0);
+		assert.match(String(error.mock.calls[0]?.arguments[0]), /operator-revision refuses --no-worktree/);
+	});
+
+	it("standard --resume --review-findings that parks returns after one attempt", async (t) => {
+		t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
+		t.mock.method(console, "log", () => {});
+		const baseNow = 1_700_000_000_000;
+		t.mock.timers.setTime(baseNow);
+		const { runPipeline, calls } = createMockRunPipeline({
+			byItem: {
+				"498": [
+					{ completed: false, cost: 0.1, error: "parked", park: { parked: true, resetsAt: baseNow + 60_000, limitType: "5h" } },
+					{ completed: true, cost: 0.5 },
+				],
+			},
+		});
+		const { exitCode, results } = await runOrchestrator(resumeFlags(), {
+			runPipeline,
+			detectResumeStep: fakeDetectResumeStep,
+			resolveWorktree: fakeResolveWorktree,
+		});
+		assert.equal(exitCode, 1);
+		assert.equal(calls.length, 1, "standard resume must not enter the wait/resume loop");
+		assert.equal(results.length, 1);
+		assert.equal(results.at(0)?.error, "parked");
+	});
+
+	it("CI / no-worktree findings resume stays single-attempt", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const baseNow = 1_700_000_000_000;
+		const { runPipeline, calls } = createMockRunPipeline({
+			byItem: {
+				"498": [
+					{ completed: false, cost: 0.1, error: "parked", park: { parked: true, resetsAt: baseNow + 60_000, limitType: "5h" } },
+					{ completed: true, cost: 0.5 },
+				],
+			},
+		});
+		const { exitCode } = await runOrchestrator({ ...resumeFlags(), "no-worktree": true }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });
+		assert.equal(exitCode, 1);
+		assert.equal(calls.length, 1);
 	});
 });
 
@@ -1204,6 +1511,90 @@ describe("runOrchestrator — revise sweep (issue #76)", () => {
 		assert.equal(calls[0].opts.startFrom, "implement");
 		assert.ok(calls[0].flags["review-findings"]?.endsWith("review-findings-76.md"), `expected the findings flag on the revision call; got ${calls[0].flags["review-findings"]}`);
 		assert.equal(calls[1].opts.itemId, undefined, "second call is the auto-pick cycle (no explicit id)");
+	});
+
+	it("holds the per-item execution lease across the revision and releases it afterwards (#507)", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const events: string[] = [];
+		const inner = createMockRunPipeline({
+			byItem: { "76": { completed: true, cost: 0.5 } },
+			default: { completed: false, cost: 0, error: "pick:queue-empty" },
+		});
+		const runPipeline: typeof inner.runPipeline = async (...args) => {
+			if (args[0].itemId === "76") events.push("pipeline");
+			return inner.runPipeline(...args);
+		};
+		const acquireExec = async (_root: string, itemId: string): Promise<AcquireReviseExecutionResult> => {
+			events.push(`acquire:${itemId}`);
+			return {
+				kind: "acquired",
+				lease: {
+					release: async () => {
+						events.push(`release:${itemId}`);
+					},
+				},
+			};
+		};
+		await runOrchestrator({ ...baseFlags, target: "pull-request", cycles: "1" }, { runPipeline, resolveWorktree: resolveWt, revise: { local: true, ghRepo: "o/r", gh: makeGhStub(ONE_REVISABLE), acquireExec } });
+		assert.deepEqual(events, ["acquire:76", "pipeline", "release:76"], "the lease must bracket the whole revision run");
+	});
+
+	it("skips a PR whose execution lease is held (an operator pass is in flight) — fail-soft, picking proceeds", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({
+			default: { completed: false, cost: 0, error: "pick:queue-empty" },
+		});
+		const gh = makeGhStub(ONE_REVISABLE);
+		const ghCalls: string[][] = [];
+		const spyGh: GhRunner = (args) => {
+			ghCalls.push(args);
+			return gh(args);
+		};
+		const acquireExec = async (): Promise<AcquireReviseExecutionResult> => ({ kind: "held", holder: "held by pid 1" });
+		const { exitCode } = await runOrchestrator({ ...baseFlags, target: "pull-request", cycles: "1" }, { runPipeline, resolveWorktree: resolveWt, revise: { local: true, ghRepo: "o/r", gh: spyGh, acquireExec } });
+		assert.equal(exitCode, 1); // the auto-pick cycle hit an empty queue (recoverable)
+		assert.equal(calls.length, 1, "only the auto-pick cycle may run — the in-flight PR is skipped");
+		assert.equal(calls[0].opts.itemId, undefined);
+		// Fail-soft AND label-safe: the skipped PR's one-pass label must not be consumed.
+		assert.ok(!ghCalls.some((c) => c[0] === "pr" && c[1] === "edit" && c.includes("--add-label")), "a lease-refused sweep entry must never claim the one-pass label");
+	});
+
+	it("a parked sweep revision's auto-resume reacquires the execution lease before touching the worktree (#507 round 3)", async (t) => {
+		t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
+		t.mock.method(console, "log", () => {});
+		const baseNow = 1_700_000_000_000;
+		t.mock.timers.setTime(baseNow);
+		const events: string[] = [];
+		const inner = createMockRunPipeline({
+			byItem: {
+				"76": [
+					{ completed: false, cost: 0.1, error: "parked", park: { parked: true, resetsAt: baseNow + 60_000, limitType: "5h" } },
+					{ completed: true, cost: 0.5 },
+				],
+			},
+			default: { completed: false, cost: 0, error: "pick:queue-empty" },
+		});
+		const runPipeline: typeof inner.runPipeline = async (...args) => {
+			if (args[0].itemId === "76") events.push("pipeline");
+			return inner.runPipeline(...args);
+		};
+		const acquireExec = async (_root: string, itemId: string): Promise<AcquireReviseExecutionResult> => {
+			events.push(`acquire:${itemId}`);
+			return {
+				kind: "acquired",
+				lease: {
+					release: async () => {
+						events.push(`release:${itemId}`);
+					},
+				},
+			};
+		};
+		const promise = runOrchestrator({ ...baseFlags, target: "pull-request", cycles: "1" }, { runPipeline, resolveWorktree: resolveWt, revise: { local: true, ghRepo: "o/r", gh: makeGhStub(ONE_REVISABLE), acquireExec } });
+		for (let i = 0; i < 5; i++) await new Promise(setImmediate);
+		t.mock.timers.tick(60_000 + 30_000);
+		for (let i = 0; i < 10; i++) await new Promise(setImmediate);
+		await promise;
+		assert.deepEqual(events, ["acquire:76", "pipeline", "release:76", "acquire:76", "pipeline", "release:76"], "the sweep releases the lease when the revision parks; the shared auto-resume loop must reacquire it around the resumed attempt");
 	});
 
 	it("off-switch: revise.local:false skips the sweep and goes straight to picking", async (t) => {

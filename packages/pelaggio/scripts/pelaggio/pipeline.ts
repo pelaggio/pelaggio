@@ -102,7 +102,18 @@ import { type ReviewRecord, renderReviewRecord, writeReviewRecord } from "./revi
 import { cleanupAuthoringReviewSeatsForSha, isAuthoringReviewSeatPath, prepareAuthoringReviewSeat } from "./review/seats.js";
 import { claimReviewRequest, completeReviewRequest, listReviewRequests, type ReviewRequestRecord, reclaimStaleReviewClaims, reviewDrainLockPath, reviewRequestsDir, unclaimReviewRequest } from "./review-request-queue.js";
 import { cleanupReviewHead, findReviewCandidates, isReviewHeadPath, postLocalModeWorkflowComment, postReviewStatus, prepareReviewHead, type ReviewCandidate, reviewStatusForSha, upsertReviewComment } from "./review-sweep.js";
-import { autopilotManagedState, claimRevision, ensureReviseWorktree, fetchReviewFindings, findRevisablePrs, isAutopilotManaged, postParkComment, reviseFindingsPath } from "./revise-sweep.js";
+import {
+	acquireReviseExecution,
+	autopilotManagedState,
+	claimRevisionExclusive,
+	ensureReviseWorktree,
+	fetchReviewFindings,
+	findRevisablePrs,
+	isAutopilotManaged,
+	postParkComment,
+	reviseExecLeaseRoot,
+	reviseFindingsPath,
+} from "./revise-sweep.js";
 import { defaultGhRun, type GhRunner } from "./roadmap/github-issues.js";
 import { getRoadmapSource, type RoadmapSource } from "./roadmap/index.js";
 import { cleanupShipBodyFile, parseShipDecisionEffect, shipBodyFile } from "./ship/decision.js";
@@ -2072,7 +2083,7 @@ export interface OrchestratorDeps {
 	/** Local revise sweep config (issue #76). Partial — merged onto the resolved defaults
 	 *  (`REVISE_LOCAL`, the github-source-gated `ghRepo`, `defaultGhRun`). Injecting `ghRepo` lets
 	 *  tests force-activate the sweep with a stubbed `gh` without a real github-issues config. */
-	revise?: Partial<{ local: boolean; ghRepo: string; gh: GhRunner }>;
+	revise?: Partial<{ local: boolean; ghRepo: string; gh: GhRunner; acquireExec: typeof acquireReviseExecution; execLeaseRoot: string; claimRepo: string }>;
 	/** Local review sweep config (issue #84; mid-run drain #387). Partial — merged onto config defaults. */
 	review?: Partial<{
 		runner: ReviewRunner;
@@ -2103,6 +2114,13 @@ export interface OrchestratorDeps {
 	/** Roadmap + flow policy used by the default free queue probe. */
 	roadmap?: RoadmapSource;
 	flowPolicy?: FlowPolicy;
+	/**
+	 * Orchestrator entry mode. `"standard"` (default) is every existing campaign / `--resume`
+	 * / CI path. `"operator-revision"` is the `pelaggio revise --pr` entry: after a findings-
+	 * driven `--resume` parks, it reuses the campaign `awaitParkReset` / `resumeOne` loop for
+	 * that single id. Not a `Flags` field — ordinary `--resume` stays single-attempt.
+	 */
+	mode?: "standard" | "operator-revision";
 	/** Cycle-log appender for local-review day-budget spend receipts (#398). Defaults to the
 	 *  helpers.ts export; injectable so tests can capture the `budgetCharge` marker writes. */
 	appendLog?: (entry: Record<string, unknown>) => void;
@@ -2295,6 +2313,14 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 
 		// Resolve no-worktree: --no-worktree flag, CI=true, or PELAGGIO_SINGLE_SHOT=1
 		const noWorktree = flags["no-worktree"] || process.env.CI === "true" || process.env.PELAGGIO_SINGLE_SHOT === "1";
+		const orchestratorMode = deps.mode ?? "standard";
+		// Operator revise restores a claim worktree then calls us in-process. Those ambient
+		// single-shot paths set `worktree = REPO`, which would write the revision into the
+		// main checkout — refuse loud rather than silently degrade.
+		if (orchestratorMode === "operator-revision" && noWorktree) {
+			console.error("operator-revision refuses --no-worktree / CI / PELAGGIO_SINGLE_SHOT (would write the revision into the main checkout)");
+			return { exitCode: 2, results };
+		}
 		if (noWorktree && !flags.item && !flags.resume) {
 			console.error("--no-worktree / CI mode requires --item <ID> or --resume <ID> (explicit id required; no auto-pick)");
 			return { exitCode: 2, results };
@@ -2790,6 +2816,113 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		const autoResume = park.autoResume;
 		const maxWaitMs = parseWaitFlag(flags["max-wait"] ?? park.maxWait);
 
+		// Revise-sweep config — hoisted above `resumeOne` because the execution lease it
+		// carries is shared by every revision executor: the sweep, and (#507 round 3) every
+		// revision-mode resume path. Injecting `ghRepo` lets tests force-activate the sweep
+		// with a stubbed `gh` without a real github-issues config.
+		const revise = {
+			local: REVISE_LOCAL,
+			ghRepo: ROADMAP_SOURCE === "github-issues" ? ROADMAP_GITHUB.ghRepo : "",
+			gh: hermeticDefault("revise.gh", defaultGhRun),
+			// Execution lease shared with `pelaggio revise --pr` (revise-cli.ts). The real
+			// function is safe under node --test because the ROOT is hermetically redirected —
+			// tests never write the host `.dev/revise-exec/`.
+			acquireExec: acquireReviseExecution,
+			execLeaseRoot: hermeticQueueRoot(() => reviseExecLeaseRoot(REPO), "revise-exec"),
+			// Repo whose `.dev/revise-claim.lock` serializes the one-pass label claim.
+			// Hermetically redirected like execLeaseRoot so `node --test` never writes the
+			// HOST repo's `.dev/revise-claim.lock`.
+			claimRepo: hermeticQueueRoot(() => REPO, "revise-claim-repo"),
+			...deps.revise,
+		};
+
+		// #507 round 3: every path that executes a revision in an item's claim worktree must
+		// hold the per-item execution lease — the sweep, the operator CLI, AND every
+		// revision-mode resume. The lease is released when a revision attempt parks (holding
+		// it across a reset sleep would pin it), so each resume attempt REACQUIRES it before
+		// touching the worktree. Fail-soft on contention: refuse naming the holder, never
+		// proceed unleased.
+		const acquireRevisionResumeLease = async (id: string): Promise<{ ok: true; release: () => Promise<void> } | { ok: false; refusal: string }> => {
+			const acq = await revise.acquireExec(revise.execLeaseRoot, id);
+			if (acq.kind === "acquired") return { ok: true, release: () => acq.lease.release() };
+			const why = acq.kind === "held" ? acq.holder : `the execution-lease register under ${revise.execLeaseRoot} is unavailable`;
+			return { ok: false, refusal: `refusing to resume ${id} without the revise execution lease — ${why}` };
+		};
+
+		// Per-item resume body — the `--resume` re-entry path in-process. Hoisted so both
+		// the campaign park-and-resume loop and operator-revision mode call the same function
+		// (it used to be declared only inside the later campaign `if (parkSignal.parked)` block).
+		const resumeOne = async (id: string, i: number): Promise<CycleResult> => {
+			const wt = noWorktree ? REPO : _resolveWorktree(id);
+			// Findings survival across park→auto-resume (issue #76): if the sweep-written
+			// findings file still exists on disk, re-inject it before choosing the restart step so
+			// the resumed item routes through implement and still fixes the specific blockers.
+			// Inert for non-revision items — no findings file is present, so `flags` passes
+			// through unchanged. Operator-revision always passes the absolute path, so
+			// re-injection is the flag itself.
+			let resumeFlags = flags;
+			if (!flags["review-findings"]) {
+				const fp = reviseFindingsPath(REPO, id);
+				if (existsSync(fp)) resumeFlags = { ...flags, "review-findings": fp };
+			}
+			// A findings-driven resume is a revision attempt in the item's claim worktree, so it
+			// reacquires the execution lease released by the parked attempt (#507 round 3).
+			let releaseLease: (() => Promise<void>) | undefined;
+			if (resumeFlags["review-findings"]) {
+				const leased = await acquireRevisionResumeLease(id);
+				if (!leased.ok) {
+					console.log(`${A.red("✗")} resume ${id} — ${leased.refusal}`);
+					return { itemId: id, completed: false, cost: 0, error: "revise lease unavailable", detail: leased.refusal, disposition: "continue" };
+				}
+				releaseLease = leased.release;
+			}
+			try {
+				const st: CycleStatus = { itemId: id, status: "running", cost: 0 };
+				liveStatus.cycles.push(st);
+				if (v) liveStatus.render();
+				let resumeLogPath: string | undefined;
+				if (isParallel && v) {
+					resumeLogPath = resolve(REPO, ".dev", `pelaggio-resume-${id.toLowerCase()}.log`);
+					appendFileSync(resumeLogPath, `${"=".repeat(60)}\nresume ${id} — ${new Date().toISOString()}\n${"=".repeat(60)}\n`);
+				}
+				const sf = resumeFlags["review-findings"] ? "implement" : _detectResumeStep(id, wt);
+				const r = await _runPipeline(
+					{
+						itemId: id,
+						worktree: wt,
+						startFrom: sf,
+						cycle: results.length + i + 1,
+						verbose: !isParallel && v,
+						shipTarget,
+						dryRun: false,
+						// Resume skips pick (no pickMutex) but still opens audited provider steps;
+						// register its (already-existing) worktree so peers exempt it.
+						activeWorktrees,
+						workerStatus: st,
+						logPath: resumeLogPath,
+						liveStatus,
+						...(decisionNotifier ? { notifyDecision: decisionNotifier } : {}),
+						...(noWorktree ? { noWorktree: true } : {}),
+						...(signal ? { signal } : {}),
+					},
+					parkSignal,
+					resumeFlags,
+				);
+				await notify(r, resumeLogPath ?? LOG_PATH);
+				st.status = resultStatus(r);
+				st.cost = r.cost;
+				st.step = undefined;
+				if (v) liveStatus.render();
+				const detail = resultDetail(r);
+				console.log(`${resultIcon(r)} resume ${id} — ${r.costEstimated ? "~" : ""}$${r.cost.toFixed(2)}${detail ? `  ${A.dim(detail)}` : ""}`);
+				return r;
+			} finally {
+				// Release-on-park by construction: the attempt ends (parked or not) before the
+				// shared wait loop sleeps, so the lease is never pinned across a reset window.
+				await releaseLease?.();
+			}
+		};
+
 		// ── Local review drain (issue #84 sweep + #387 mid-run reconciler) ──
 		//
 		// In local review mode the trusted local main tree owns the review CLI/skill/parser/status
@@ -3106,29 +3239,51 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				console.log(`${A.bold("resume")} ${id} from ${A.bold(startFrom)}`);
 			}
 
+			// Revision-mode resumes (operator-revision, and a standard `--resume <id>
+			// --review-findings <path>` — the advertised park continuation) execute in the
+			// item's claim worktree, so the attempt holds the same per-item execution lease as
+			// the sweep and the operator CLI (#507 round 3). Acquired before any worktree work,
+			// released right after the attempt — never across a park sleep; the auto-resume
+			// loop's `resumeOne` reacquires per attempt. Fail-soft: refuse naming the holder,
+			// never proceed unleased.
+			let releaseResumeLease: (() => Promise<void>) | undefined;
+			if (flags["review-findings"] !== undefined || orchestratorMode === "operator-revision") {
+				const leased = await acquireRevisionResumeLease(id);
+				if (!leased.ok) {
+					console.error(leased.refusal);
+					return { exitCode: 1, results };
+				}
+				releaseResumeLease = leased.release;
+			}
+
 			const status: CycleStatus = { itemId: id, status: "running", cost: 0 };
 			liveStatus.cycles.push(status);
 			liveStatus.totalCycles = 1;
 			if (v) statusBar.setup();
 
-			const result = await _runPipeline(
-				{
-					itemId: id,
-					worktree,
-					startFrom,
-					cycle: 1,
-					verbose: v,
-					shipTarget,
-					dryRun: false,
-					workerStatus: status,
-					liveStatus,
-					...(decisionNotifier ? { notifyDecision: decisionNotifier } : {}),
-					...(noWorktree ? { noWorktree: true } : {}),
-					...(signal ? { signal } : {}),
-				},
-				parkSignal,
-				flags,
-			);
+			let result: CycleResult;
+			try {
+				result = await _runPipeline(
+					{
+						itemId: id,
+						worktree,
+						startFrom,
+						cycle: 1,
+						verbose: v,
+						shipTarget,
+						dryRun: false,
+						workerStatus: status,
+						liveStatus,
+						...(decisionNotifier ? { notifyDecision: decisionNotifier } : {}),
+						...(noWorktree ? { noWorktree: true } : {}),
+						...(signal ? { signal } : {}),
+					},
+					parkSignal,
+					flags,
+				);
+			} finally {
+				await releaseResumeLease?.();
+			}
 			results.push(result);
 			await notify(result, LOG_PATH);
 
@@ -3140,6 +3295,45 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			}
 			const detail = resultDetail(result);
 			console.log(`\n${result.completed ? A.green("✓") : A.red("✗")} ${id} — ${result.costEstimated ? "~" : ""}$${result.cost.toFixed(2)}${detail ? `  ${A.dim(detail)}` : ""}`);
+
+			// Operator-revision park parity: stay inside this `--resume` branch. Never fall
+			// out into pick, the revise sweep, or campaign-start drain. Ordinary `--resume`
+			// (mode default `"standard"`) still returns after one attempt.
+			if (orchestratorMode === "operator-revision" && parkSignal.parked) {
+				const findingsPath = flags["review-findings"];
+				// The advertised continuation is itself a LEASED resume: a findings-driven
+				// `--resume` re-enters this branch, which reacquires the execution lease before
+				// touching the worktree (#507 round 3) — no unleased command is advertised.
+				const printOperatorHandback = (): void => {
+					const hint = findingsPath ? `pnpm pelaggio --resume ${id} --review-findings ${findingsPath}` : formatResumeHint([id]);
+					console.log(`  Parked: ${id}`);
+					console.log(`  Resume: ${A.bold(hint)}`);
+				};
+				if (!autoResume) {
+					console.log("");
+					console.log(`${A.yellow("⏸")} ${parkSignal.limitType} limit hit — auto-resume disabled`);
+					printOperatorHandback();
+					return { exitCode: 1, results };
+				}
+				let round = 0;
+				while (parkSignal.parked && round < MAX_RESUME_ROUNDS) {
+					round++;
+					const outcome = await awaitParkReset(parkSignal, { maxWaitMs, itemsLabel: id });
+					if (outcome === "handback") {
+						printOperatorHandback();
+						return { exitCode: 1, results };
+					}
+					emitResumed();
+					console.log(`\n${A.green("▶")} ${A.bold("Resuming")} ${id}...`);
+					results.push(await resumeOne(id, 0));
+				}
+				if (parkSignal.parked) {
+					console.log(`${A.yellow("⏸")} auto-resume round cap (${MAX_RESUME_ROUNDS}) reached — leaving remaining items parked`);
+					printOperatorHandback();
+					return { exitCode: 1, results };
+				}
+			}
+
 			// #387: a resumed cycle can ship a PR whose review-request record would
 			// otherwise sit undrained until the next process. Drain before returning
 			// so resume mode gets the same review-at-delivery as the worker pool.
@@ -3152,7 +3346,8 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					return { exitCode: 1, results };
 				}
 			}
-			return { exitCode: result.completed ? 0 : 1, results };
+			const last = results[results.length - 1];
+			return { exitCode: last?.completed ? 0 : 1, results };
 		}
 
 		// Campaign-start drain: cold-start backlog + statusless PRs from prior runs (all modes incl.
@@ -3205,12 +3400,6 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		// Non-continuous: run once before the pick worker pool.
 		// Continuous (#82): run at the start of every iteration so newly-red PRs are revised
 		// between picks rather than only at campaign start.
-		const revise = {
-			local: REVISE_LOCAL,
-			ghRepo: ROADMAP_SOURCE === "github-issues" ? ROADMAP_GITHUB.ghRepo : "",
-			gh: hermeticDefault("revise.gh", defaultGhRun),
-			...deps.revise,
-		};
 		const doSweep = revise.local && shipIsPr && !!revise.ghRepo && !noWorktree && !dryRun && items.length === 0;
 
 		async function runReviseSweepOnce(): Promise<void> {
@@ -3222,53 +3411,67 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			for (const pr of revisable) {
 				if (parkSignal.parked) break; // a park mid-sweep stops starting new revisions
 				if (!isAutopilotManaged(revise.gh, revise.ghRepo, pr.itemId, ROADMAP_GITHUB.label)) continue;
-				if (!claimRevision(revise.gh, revise.ghRepo, pr.prNumber)) continue; // one-pass label BEFORE any work
-				const findingsPath = reviseFindingsPath(REPO, pr.itemId);
-				if (!fetchReviewFindings(revise.gh, revise.ghRepo, pr.prNumber, findingsPath)) {
-					// labeled but no findings comment → fail-safe park + skip (mirrors CI).
-					postParkComment(revise.gh, revise.ghRepo, pr.prNumber);
-					continue;
-				}
-				const wt = ensureReviseWorktree(_resolveWorktree(pr.itemId), pr.branch, { repo: REPO });
-				if (!wt) continue;
+				// Execution-scoped exclusion (#507 finding): hold the per-item lease for the WHOLE
+				// revision so an operator `pelaggio revise --pr` — whose `--allow-repeat` bypasses
+				// the one-pass label — can never run concurrently in the same claim worktree.
+				// Contention or lock failure skips fail-soft, like every other sweep primitive.
+				const exec = await revise.acquireExec(revise.execLeaseRoot, pr.itemId);
+				if (exec.kind !== "acquired") continue;
+				try {
+					// Atomic one-pass claim BEFORE any work — cross-process with the operator
+					// `pelaggio revise --pr` CLI (see claimRevisionExclusive); non-claimed skips
+					// fail-soft. The claim-lock repo is `revise.claimRepo`, hermetically redirected
+					// under node --test so the lock never lands in the HOST repo's `.dev/`.
+					if ((await claimRevisionExclusive(revise.gh, revise.ghRepo, revise.claimRepo, pr.prNumber)) !== "claimed") continue;
+					const findingsPath = reviseFindingsPath(REPO, pr.itemId);
+					if (!fetchReviewFindings(revise.gh, revise.ghRepo, pr.prNumber, findingsPath)) {
+						// labeled but no findings comment → fail-safe park + skip (mirrors CI).
+						postParkComment(revise.gh, revise.ghRepo, pr.prNumber);
+						continue;
+					}
+					const wt = ensureReviseWorktree(_resolveWorktree(pr.itemId), pr.branch, { repo: REPO });
+					if (!wt) continue;
 
-				const status: CycleStatus = { itemId: pr.itemId, status: "running", cost: 0 };
-				liveStatus.cycles.push(status);
-				if (v) liveStatus.render();
-				const r = await _runPipeline(
-					{
-						itemId: pr.itemId,
-						worktree: wt,
-						startFrom: "implement",
-						cycle: results.length + 1,
-						verbose: !isParallel && v,
-						shipTarget,
-						dryRun: false,
-						workerStatus: status,
-						liveStatus,
-						...(decisionNotifier ? { notifyDecision: decisionNotifier } : {}),
-						...(signal ? { signal } : {}),
-					},
-					parkSignal,
-					{ ...flags, "review-findings": findingsPath }, // per-item findings injection
-				);
-				totalSpent += r.cost;
-				dayBudgetTracker.add(r.cost);
-				results.push(r);
-				// Revise outcomes gate the campaign exactly like cycle outcomes: a
-				// confinement/safety-classed revise failure must stop new cycle launches,
-				// not just render red. Flag set BEFORE the notify await so a peer worker
-				// cannot launch in the delivery gap (#385 round-2/3 review findings).
-				const reviseHalts = classifyCycleDisposition(r, RECOVERABLE) === "halt-campaign";
-				if (reviseHalts) campaignHalted = true;
-				await notify(r, LOG_PATH);
-				status.status = resultStatus(r);
-				status.cost = r.cost;
-				status.step = undefined;
-				if (v) liveStatus.render();
-				const detail = resultDetail(r);
-				console.log(`${resultIcon(r)} revise ${pr.itemId} — ${r.costEstimated ? "~" : ""}$${r.cost.toFixed(2)}${detail ? `  ${A.dim(detail)}` : ""}`);
-				if (reviseHalts) return;
+					const status: CycleStatus = { itemId: pr.itemId, status: "running", cost: 0 };
+					liveStatus.cycles.push(status);
+					if (v) liveStatus.render();
+					const r = await _runPipeline(
+						{
+							itemId: pr.itemId,
+							worktree: wt,
+							startFrom: "implement",
+							cycle: results.length + 1,
+							verbose: !isParallel && v,
+							shipTarget,
+							dryRun: false,
+							workerStatus: status,
+							liveStatus,
+							...(decisionNotifier ? { notifyDecision: decisionNotifier } : {}),
+							...(signal ? { signal } : {}),
+						},
+						parkSignal,
+						{ ...flags, "review-findings": findingsPath }, // per-item findings injection
+					);
+					totalSpent += r.cost;
+					dayBudgetTracker.add(r.cost);
+					results.push(r);
+					// Revise outcomes gate the campaign exactly like cycle outcomes: a
+					// confinement/safety-classed revise failure must stop new cycle launches,
+					// not just render red. Flag set BEFORE the notify await so a peer worker
+					// cannot launch in the delivery gap (#385 round-2/3 review findings).
+					const reviseHalts = classifyCycleDisposition(r, RECOVERABLE) === "halt-campaign";
+					if (reviseHalts) campaignHalted = true;
+					await notify(r, LOG_PATH);
+					status.status = resultStatus(r);
+					status.cost = r.cost;
+					status.step = undefined;
+					if (v) liveStatus.render();
+					const detail = resultDetail(r);
+					console.log(`${resultIcon(r)} revise ${pr.itemId} — ${r.costEstimated ? "~" : ""}$${r.cost.toFixed(2)}${detail ? `  ${A.dim(detail)}` : ""}`);
+					if (reviseHalts) return;
+				} finally {
+					await exec.lease.release();
+				}
 			}
 		}
 
@@ -3297,63 +3500,9 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			if (v) statusBar.teardown();
 			if (statusInterval) clearInterval(statusInterval);
 
-			// `park`/`autoResume`/`maxWaitMs` are hoisted above the review sweep (shared with its
-			// retry loop). The park signal is reset by `awaitParkReset` on a successful wait.
-
-			// Per-item resume body — the `--resume` re-entry path in-process. Reused each
-			// round of the loop, so the resume-worktree/log/detect wiring lives in one place.
-			const resumeOne = async (id: string, i: number): Promise<CycleResult> => {
-				const wt = noWorktree ? REPO : _resolveWorktree(id);
-				const st: CycleStatus = { itemId: id, status: "running", cost: 0 };
-				liveStatus.cycles.push(st);
-				if (v) liveStatus.render();
-				let resumeLogPath: string | undefined;
-				if (isParallel && v) {
-					resumeLogPath = resolve(REPO, ".dev", `pelaggio-resume-${id.toLowerCase()}.log`);
-					appendFileSync(resumeLogPath, `${"=".repeat(60)}\nresume ${id} — ${new Date().toISOString()}\n${"=".repeat(60)}\n`);
-				}
-				// Findings survival across park→auto-resume (issue #76): if the sweep-written
-				// findings file still exists on disk, re-inject it before choosing the restart step so
-				// the resumed item routes through implement and still fixes the specific blockers.
-				// Inert for non-revision items — no findings file is present, so `flags` passes
-				// through unchanged.
-				let resumeFlags = flags;
-				if (!flags["review-findings"]) {
-					const fp = reviseFindingsPath(REPO, id);
-					if (existsSync(fp)) resumeFlags = { ...flags, "review-findings": fp };
-				}
-				const sf = resumeFlags["review-findings"] ? "implement" : _detectResumeStep(id, wt);
-				const r = await _runPipeline(
-					{
-						itemId: id,
-						worktree: wt,
-						startFrom: sf,
-						cycle: results.length + i + 1,
-						verbose: !isParallel && v,
-						shipTarget,
-						dryRun: false,
-						// Resume skips pick (no pickMutex) but still opens audited provider steps;
-						// register its (already-existing) worktree so peers exempt it.
-						activeWorktrees,
-						workerStatus: st,
-						logPath: resumeLogPath,
-						liveStatus,
-						...(decisionNotifier ? { notifyDecision: decisionNotifier } : {}),
-						...(noWorktree ? { noWorktree: true } : {}),
-						...(signal ? { signal } : {}),
-					},
-					parkSignal,
-					resumeFlags,
-				);
-				await notify(r, resumeLogPath ?? LOG_PATH);
-				st.status = resultStatus(r);
-				st.cost = r.cost;
-				st.step = undefined;
-				if (v) liveStatus.render();
-				const detail = resultDetail(r);
-				console.log(`${resultIcon(r)} resume ${id} — ${r.costEstimated ? "~" : ""}$${r.cost.toFixed(2)}${detail ? `  ${A.dim(detail)}` : ""}`);
-				return r;
-			};
+			// `park`/`autoResume`/`maxWaitMs`/`resumeOne` are hoisted above the review sweep
+			// (shared with operator-revision and the review-retry loop). The park signal is
+			// reset by `awaitParkReset` on a successful wait.
 
 			let pending = results.filter((r) => r.error === "parked" && r.itemId).map((r) => r.itemId!);
 

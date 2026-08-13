@@ -531,18 +531,24 @@ When `--review-findings` is present, `--resume` defaults to the `implement` step
 cannot auto-detect a later restart point and skip the findings. An explicit valid `--from` still wins
 for advanced recovery.
 
-There are **two** automated paths that use this same seam, the same one-pass bound (the
-`autopilot:revised` PR label), and the same handoff marker (`<!-- pelaggio-revise-parked -->`):
+There are **three** paths that use this same seam and the same one-pass bound (the
+`autopilot:revised` PR label). The two automated paths also share the handoff marker
+(`<!-- pelaggio-revise-parked -->`):
 
 | Path | Runs on | Funded by | Trigger | Status |
 |---|---|---|---|---|
 | **Local sweep** (issue #76) | your local runner, in-process | your Claude **subscription** | orchestrator, at the start of an auto-pick `--cycles` run | **active** (this repo) |
 | **CI workflow** (issue #60) | GitHub-hosted `ubuntu-latest` | the metered `ANTHROPIC_API_KEY` | `pr-review-revise.yml` on `workflow_run: failure` | present but **disabled** repo-wide |
+| **Operator command** (issue #498) | your local runner, in-process | your Claude **subscription** | explicit `npx pelaggio revise --pr <n>` from the main checkout | **active** |
 
-Only one should be active at a time to avoid both racing for the label. On this repo the CI workflow
-is the documented API-funded *alternative* — it is turned off (`AUTOPILOT_AUTO_REVISE=false`, no
-`GH_TOKEN` PAT) so the local sweep is the sole active reviser. A repo without a local runner enables
-the CI workflow instead (set the variable + PAT) and leaves `revise.local` moot (its markdown /
+The two local paths — the sweep and the operator command — are both active by design: they share
+the atomic one-pass label claim (`.dev/revise-claim.lock`) and the per-item execution lease, and
+the lease is what serializes their execution in the same claim worktree (see *Execution
+exclusivity* below). The CI workflow is the exception: it runs on a GitHub runner outside the
+host's locks, so it must not be enabled while a local reviser is active. On this repo it is the
+documented API-funded *alternative* — turned off (`AUTOPILOT_AUTO_REVISE=false`, no `GH_TOKEN`
+PAT) so the local paths are the only active revisers. A repo without a local runner enables the
+CI workflow instead (set the variable + PAT) and leaves `revise.local` moot (its markdown /
 non-PR-target case is a no-op anyway).
 
 ### Local sweep (issue #76) — active
@@ -603,6 +609,57 @@ triggers on the review workflow's `workflow_run: completed` with `conclusion == 
 Every failure branch terminates: if the revision run itself crashes/parks before pushing, no
 re-review fires, the label is already set, and the `if: failure()` step posts a park comment — no
 second attempt.
+
+### Operator command (issue #498) — on-demand
+
+When a managed PR is currently review-red, an operator can start one findings-driven revision
+without waiting for the local sweep or re-enabling CI:
+
+```bash
+npx pelaggio revise --pr <number> [--allow-repeat]
+```
+
+Run it from the **main checkout** (the same station as `land` / `pr-review`) so `REPO` /
+`WORKTREE_PREFIX` resolve the claim worktree. It does not add a pipeline step: it writes the latest
+`<!-- pelaggio-pr-review -->` comment to `.dev/review-findings-<id>.md` and calls the public
+`--resume <id> --review-findings <abs-path>` orchestrator in `operator-revision` mode.
+
+- **Eligibility** — the PR must be open, non-draft, same-repository, on
+  `feat/issue-<n>[...]`, currently review-red, linked to a pelaggio-managed issue, and the
+  configured ship target must be `pull-request` or `auto-merge-pr`. Drafts, closed/merged PRs,
+  forks, green/pending/missing review, unmanaged issues, `direct-push`, and `CI` /
+  `PELAGGIO_SINGLE_SHOT` / `--no-worktree` all refuse before paid work.
+- **Durable findings** — the marked gate comment is written verbatim under `.dev/` and left in
+  place on every later outcome so a parked/retried revision keeps its task.
+- **Execution exclusivity** — every revision attempt (a first pass, an `--allow-repeat`
+  repeat, an in-run sweep revision, and every findings-driven resume — the auto-resume
+  after a park and the advertised manual `--resume <id> --review-findings <path>`
+  continuation alike) holds the per-item execution lease under `MAIN_REPO/.dev/revise-exec/`
+  for the duration of the attempt, so two passes can never revise the same claim worktree
+  concurrently. The lease is released when an attempt parks (never pinned across a
+  rate-limit reset sleep) and **reacquired by every resume path** before it touches the
+  worktree; a refused acquisition names the holder pid and the lease file and never proceeds
+  unleased. There is no automatic reclaim — not even when the holder pid is gone: provider
+  child processes can outlive a crashed orchestrator and keep mutating the worktree, so
+  crash recovery is manual (verify nothing from the pass is still running, then remove the
+  named lease file).
+- **Head binding** — before any work, the claim worktree's branch and `HEAD` are verified
+  against the PR's head branch and head OID from the same lookup. A stale or mismatched
+  checkout fails closed naming both SHAs; nothing is ever reset or checked out over an
+  existing tree.
+- **Audit comment** — invocations append a new `<!-- pelaggio-revise-invocation -->` PR comment
+  (`disposition=accepted-first-pass|refused-repeat|accepted-repeat`). `accepted-*` records are
+  posted only after the pass is actually owned (label claimed, lease held), so a losing racer
+  never leaves an audit record for a pass it did not run. Failure to post it fail-closes (no
+  revision work).
+- **`--allow-repeat`** bypasses only the `autopilot:revised` label — never the execution
+  lease. It does not remove the label, skip review, or change the ship target.
+- **Park handback** — a parked first pass is not a repeat. Continue it with the printed
+  `pnpm pelaggio --resume <id> --review-findings <abs-path>`, which reacquires the execution
+  lease before touching the worktree; running `revise --pr` again is a new pass and needs
+  `--allow-repeat`.
+- **Exit** — `0` success, `1` refused/unavailable/failed revision, `2` usage or ambient
+  single-shot / missing repo / non-PR ship target.
 
 ## Document review — `pelaggio doc-review <path>` (#384)
 
