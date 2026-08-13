@@ -531,13 +531,15 @@ When `--review-findings` is present, `--resume` defaults to the `implement` step
 cannot auto-detect a later restart point and skip the findings. An explicit valid `--from` still wins
 for advanced recovery.
 
-There are **two** automated paths that use this same seam, the same one-pass bound (the
-`autopilot:revised` PR label), and the same handoff marker (`<!-- pelaggio-revise-parked -->`):
+There are **three** paths that use this same seam and the same one-pass bound (the
+`autopilot:revised` PR label). The two automated paths also share the handoff marker
+(`<!-- pelaggio-revise-parked -->`):
 
 | Path | Runs on | Funded by | Trigger | Status |
 |---|---|---|---|---|
 | **Local sweep** (issue #76) | your local runner, in-process | your Claude **subscription** | orchestrator, at the start of an auto-pick `--cycles` run | **active** (this repo) |
 | **CI workflow** (issue #60) | GitHub-hosted `ubuntu-latest` | the metered `ANTHROPIC_API_KEY` | `pr-review-revise.yml` on `workflow_run: failure` | present but **disabled** repo-wide |
+| **Operator command** (issue #498) | your local runner, in-process | your Claude **subscription** | explicit `npx pelaggio revise --pr <n>` from the main checkout | **active** |
 
 Only one should be active at a time to avoid both racing for the label. On this repo the CI workflow
 is the documented API-funded *alternative* — it is turned off (`AUTOPILOT_AUTO_REVISE=false`, no
@@ -603,6 +605,39 @@ triggers on the review workflow's `workflow_run: completed` with `conclusion == 
 Every failure branch terminates: if the revision run itself crashes/parks before pushing, no
 re-review fires, the label is already set, and the `if: failure()` step posts a park comment — no
 second attempt.
+
+### Operator command (issue #498) — on-demand
+
+When a managed PR is currently review-red, an operator can start one findings-driven revision
+without waiting for the local sweep or re-enabling CI:
+
+```bash
+npx pelaggio revise --pr <number> [--allow-repeat]
+```
+
+Run it from the **main checkout** (the same station as `land` / `pr-review`) so `REPO` /
+`WORKTREE_PREFIX` resolve the claim worktree. It does not add a pipeline step: it writes the latest
+`<!-- pelaggio-pr-review -->` comment to `.dev/review-findings-<id>.md` and calls the public
+`--resume <id> --review-findings <abs-path>` orchestrator in `operator-revision` mode.
+
+- **Eligibility** — the PR must be open, non-draft, same-repository, on
+  `feat/issue-<n>[...]`, currently review-red, linked to a pelaggio-managed issue, and the
+  configured ship target must be `pull-request` or `auto-merge-pr`. Drafts, closed/merged PRs,
+  forks, green/pending/missing review, unmanaged issues, `direct-push`, and `CI` /
+  `PELAGGIO_SINGLE_SHOT` / `--no-worktree` all refuse before paid work.
+- **Durable findings** — the marked gate comment is written verbatim under `.dev/` and left in
+  place on every later outcome so a parked/retried revision keeps its task.
+- **Audit comment** — every invocation that reaches the one-pass decision appends a new
+  `<!-- pelaggio-revise-invocation -->` PR comment
+  (`disposition=accepted-first-pass|refused-repeat|accepted-repeat`). Failure to post it
+  fail-closes (no revision work).
+- **`--allow-repeat`** bypasses only the `autopilot:revised` label. It does not remove the
+  label, skip review, or change the ship target.
+- **Park handback** — a parked first pass is not a repeat. Continue it with the printed
+  `pnpm pelaggio --resume <id> --review-findings <abs-path>`; running `revise --pr` again is a
+  new pass and needs `--allow-repeat`.
+- **Exit** — `0` success, `1` refused/unavailable/failed revision, `2` usage or ambient
+  single-shot / missing repo / non-PR ship target.
 
 ## Document review — `pelaggio doc-review <path>` (#384)
 

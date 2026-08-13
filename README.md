@@ -107,6 +107,12 @@ a non-zero exit code when the gate blocks. The default CI runner invokes it from
 `.github/workflows/pr-review.yml`; see the [PR review gate guide](./docs/pr-review.md)
 for runner setup and required credentials.
 
+`pelaggio revise --pr <number>` is the operator fix command for a currently red
+Pelaggio-managed PR: it fetches the marked review findings and re-enters the
+findings-driven resume pipeline. `--allow-repeat` bypasses only the one-pass
+`autopilot:revised` label — it does not skip review, confinement, or the ship
+target. Invoke it from the main checkout, the same station as `land` / `pr-review`.
+
 ### Platform support
 
 Pelaggio runs on macOS, Linux, and **Windows via [WSL](https://learn.microsoft.com/windows/wsl/)**. The

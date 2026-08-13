@@ -21,6 +21,7 @@ Commands:
   doc-review  Provider-diverse read-only review of a document (<path>); binds the report to its sha256 and exits non-zero on a blocking finding.
   review-bench  Deterministic zero-LLM Tier A authoring-review benchmark (--replay [--json]); replays committed panel/Judge recordings and exits non-zero on golden or baseline regression.
   land    Deterministic red-merge guard + merge (--pr <n> [--admin] [--repo <owner/repo>]); refuses to merge a PR whose CI is not green.
+  revise  On-demand operator revision of a red-review PR (--pr <n> [--allow-repeat]); --allow-repeat bypasses only the one-pass label.
   worktree-deps  Symlink/install node_modules for a worktree (called by /pick).
   run-contained  Run one command in the Linux contained-execution jail, or verify it with --self-test.
   sessions-sweep  Remove content-expired cross-process session records under .dev/sessions/ (called by /tidy).
@@ -40,6 +41,7 @@ const routes = {
 	"doc-review": ["scripts/pelaggio/doc-review-cli.ts"],
 	"review-bench": ["scripts/pelaggio/review-bench-cli.ts"],
 	land: ["scripts/pelaggio/land-cli.ts"],
+	revise: ["scripts/pelaggio/revise-cli.ts"],
 	"worktree-deps": ["scripts/pelaggio/worktree-deps.ts"],
 	"run-contained": ["scripts/pelaggio/run-contained-cli.ts"],
 	"sessions-sweep": ["scripts/pelaggio/sessions-cli.ts"],

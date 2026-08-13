@@ -1,9 +1,22 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
-import { claimRevision, ensureReviseWorktree, fetchReviewFindings, findRevisablePrs, isAutopilotManaged, postParkComment, reviseFindingsPath } from "../revise-sweep.js";
+import {
+	claimRevision,
+	claimRevisionExclusive,
+	ensureReviseWorktree,
+	fetchReviewFindings,
+	findRevisablePrs,
+	isAutopilotManaged,
+	postParkComment,
+	REVISE_INVOCATION_MARKER,
+	recordReviseInvocation,
+	resolveReviseTarget,
+	reviseClaimLockPath,
+	reviseFindingsPath,
+} from "../revise-sweep.js";
 import type { GhRunner } from "../roadmap/github-issues.js";
 
 /** Records every gh call; `fn` returns the response (defaults to exit-0, empty stdout). */
@@ -155,6 +168,98 @@ describe("claimRevision", () => {
 	});
 });
 
+describe("claimRevisionExclusive", () => {
+	/**
+	 * gh stub over a SHARED mutable label store, mimicking GitHub's semantics: the
+	 * label read returns current state, and `--add-label` is idempotent (succeeds
+	 * even when the label is already present — the exact property that makes the
+	 * bare `claimRevision` a check-then-write rather than a claim).
+	 */
+	function labelStore(initial: string[] = []): { run: GhRunner; calls: string[][]; labels: Set<string> } {
+		const labels = new Set(initial);
+		const calls: string[][] = [];
+		const run: GhRunner = (args) => {
+			calls.push(args);
+			if (args[0] === "pr" && args[1] === "view" && args.includes("labels")) {
+				return { stdout: JSON.stringify({ labels: [...labels].map((name) => ({ name })) }), stderr: "", status: 0 };
+			}
+			if (args[0] === "pr" && args[1] === "edit" && args.includes("--add-label")) {
+				labels.add("autopilot:revised");
+				return { stdout: "", stderr: "", status: 0 };
+			}
+			return { stdout: "", stderr: "", status: 0 };
+		};
+		return { run, calls, labels };
+	}
+
+	const addCalls = (calls: string[][]) => calls.filter((c) => c[0] === "pr" && c[1] === "edit" && c.includes("--add-label"));
+
+	function tmpRepo(): string {
+		return mkdtempSync(join(tmpdir(), "revise-claim-"));
+	}
+
+	it("claims when the label is absent: re-reads under the lock, then adds", async () => {
+		const repo = tmpRepo();
+		const { run, calls, labels } = labelStore();
+		assert.equal(await claimRevisionExclusive(run, "o/r", repo, 101), "claimed");
+		const viewIdx = calls.findIndex((c) => c[0] === "pr" && c[1] === "view");
+		const editIdx = calls.findIndex((c) => c[0] === "pr" && c[1] === "edit");
+		assert.ok(viewIdx >= 0 && editIdx > viewIdx, "the label must be re-read before the add, inside the critical section");
+		assert.ok(labels.has("autopilot:revised"));
+		rmSync(repo, { recursive: true, force: true });
+	});
+
+	it("refuses when the label is present at claim time — a stale earlier read is corrected under the lock", async () => {
+		const repo = tmpRepo();
+		// Simulates the TOCTOU window: the caller's earlier listing/resolve saw no label,
+		// but by claim time a peer has labeled the PR.
+		const { run, calls } = labelStore(["autopilot:revised"]);
+		assert.equal(await claimRevisionExclusive(run, "o/r", repo, 101), "already-claimed");
+		assert.equal(addCalls(calls).length, 0, "a refused claim must never write the label");
+		rmSync(repo, { recursive: true, force: true });
+	});
+
+	it("two concurrent claimants: exactly one wins, the loser observes the winner and refuses", async () => {
+		const repo = tmpRepo();
+		const { run, calls } = labelStore();
+		const [a, b] = await Promise.all([claimRevisionExclusive(run, "o/r", repo, 101), claimRevisionExclusive(run, "o/r", repo, 101)]);
+		assert.deepEqual([a, b].sort(), ["already-claimed", "claimed"], `expected one winner and one refusal; got ${a}/${b}`);
+		assert.equal(addCalls(calls).length, 1, "the pass must be claimed exactly once");
+		rmSync(repo, { recursive: true, force: true });
+	});
+
+	it("fail-closed: an unreadable label state is unavailable and never adds", async () => {
+		const repo = tmpRepo();
+		const calls: string[][] = [];
+		const run: GhRunner = (args) => {
+			calls.push(args);
+			return { stdout: "", stderr: "boom", status: 1 };
+		};
+		assert.equal(await claimRevisionExclusive(run, "o/r", repo, 101), "unavailable");
+		assert.equal(addCalls(calls).length, 0);
+		rmSync(repo, { recursive: true, force: true });
+	});
+
+	it("fail-closed: a live lock holder means unavailable — no claim proceeds without the lock", async () => {
+		const repo = tmpRepo();
+		const lockPath = reviseClaimLockPath(repo);
+		mkdirSync(dirname(lockPath), { recursive: true });
+		// A live (far-future expiry) holder, per file-lock.ts's `<expiresAt>:<token>` format.
+		writeFileSync(lockPath, `${Date.now() + 60 * 60 * 1000}:live-holder`);
+		process.env.PELAGGIO_REVISE_CLAIM_LOCK_TIMEOUT_MS = "100";
+		process.env.PELAGGIO_REVISE_CLAIM_LOCK_STALE_MS = "200";
+		try {
+			const { run, calls } = labelStore();
+			assert.equal(await claimRevisionExclusive(run, "o/r", repo, 101), "unavailable");
+			assert.equal(calls.length, 0, "the critical section must never run without the lock");
+		} finally {
+			delete process.env.PELAGGIO_REVISE_CLAIM_LOCK_TIMEOUT_MS;
+			delete process.env.PELAGGIO_REVISE_CLAIM_LOCK_STALE_MS;
+			rmSync(repo, { recursive: true, force: true });
+		}
+	});
+});
+
 describe("fetchReviewFindings", () => {
 	function tmpFile(): string {
 		return join(mkdtempSync(join(tmpdir(), "revise-findings-")), "findings.md");
@@ -276,5 +381,115 @@ describe("reviseFindingsPath", () => {
 	it("is absolute, under <repo>/.dev/, with a lowercased id", () => {
 		const p = reviseFindingsPath("/home/x/repo", "ENG-42");
 		assert.equal(p, "/home/x/repo/.dev/review-findings-eng-42.md");
+	});
+});
+
+function viewPayload(over: Record<string, unknown> = {}): string {
+	return JSON.stringify({
+		state: "OPEN",
+		isDraft: false,
+		headRefName: "feat/issue-498-revise",
+		headRepository: { nameWithOwner: "o/r" },
+		headRepositoryOwner: { login: "o" },
+		labels: [],
+		statusCheckRollup: [{ __typename: "CheckRun", name: "review", conclusion: "FAILURE" }],
+		...over,
+	});
+}
+
+describe("resolveReviseTarget", () => {
+	it("accepts an open, non-draft red-review claim-branch PR", () => {
+		const { run, calls } = stub((args) => (args[0] === "pr" && args[1] === "view" ? { stdout: viewPayload({ labels: [{ name: "autopilot" }] }) } : {}));
+		assert.deepEqual(resolveReviseTarget(run, "o/r", 42), {
+			kind: "ok",
+			target: { prNumber: 42, itemId: "498", branch: "feat/issue-498-revise", alreadyRevised: false },
+		});
+		const joined = (calls.at(0) ?? []).join(" ");
+		assert.ok(joined.includes("headRepository"));
+		assert.ok(joined.includes("headRepositoryOwner"));
+		assert.ok(joined.includes("statusCheckRollup"));
+	});
+
+	it("reports alreadyRevised when the one-pass label is present", () => {
+		const { run } = stub(() => ({ stdout: viewPayload({ labels: [{ name: "autopilot:revised" }] }) }));
+		const result = resolveReviseTarget(run, "o/r", 42);
+		assert.equal(result.kind, "ok");
+		if (result.kind === "ok") assert.equal(result.target.alreadyRevised, true);
+	});
+
+	it("matches both failed CheckRun and StatusContext forms case-insensitively", () => {
+		const check = stub(() => ({ stdout: viewPayload({ statusCheckRollup: [{ __typename: "CheckRun", name: "Review", conclusion: "failure" }] }) }));
+		const status = stub(() => ({ stdout: viewPayload({ statusCheckRollup: [{ __typename: "StatusContext", context: "Review", state: "failure" }] }) }));
+		assert.equal(resolveReviseTarget(check.run, "o/r", 1).kind, "ok");
+		assert.equal(resolveReviseTarget(status.run, "o/r", 1).kind, "ok");
+	});
+
+	it("discriminates unavailable (gh/json) from ineligible (policy)", () => {
+		assert.equal(resolveReviseTarget(stub(() => ({ status: 1, stderr: "boom" })).run, "o/r", 1).kind, "unavailable");
+		assert.equal(resolveReviseTarget(throwingGh, "o/r", 1).kind, "unavailable");
+		assert.equal(resolveReviseTarget(stub(() => ({ stdout: "not json" })).run, "o/r", 1).kind, "unavailable");
+		assert.equal(resolveReviseTarget(stub(() => ({ stdout: viewPayload({ isDraft: true }) })).run, "o/r", 1).kind, "ineligible");
+		assert.equal(resolveReviseTarget(stub(() => ({ stdout: viewPayload({ state: "CLOSED" }) })).run, "o/r", 1).kind, "ineligible");
+		assert.equal(resolveReviseTarget(stub(() => ({ stdout: viewPayload({ state: "MERGED" }) })).run, "o/r", 1).kind, "ineligible");
+	});
+
+	it("rejects a cross-repository head via nameWithOwner and the owner/name fallback", () => {
+		const named = stub(() => ({ stdout: viewPayload({ headRepository: { nameWithOwner: "other/fork" } }) }));
+		assert.equal(resolveReviseTarget(named.run, "o/r", 1).kind, "ineligible");
+		// Clear nameWithOwner so the fallback path is used.
+		const parsed = JSON.parse(viewPayload()) as Record<string, unknown>;
+		parsed.headRepository = { name: "fork" };
+		parsed.headRepositoryOwner = { login: "other" };
+		const { run } = stub(() => ({ stdout: JSON.stringify(parsed) }));
+		assert.equal(resolveReviseTarget(run, "o/r", 1).kind, "ineligible");
+	});
+
+	it("accepts a same-repo head via the owner/name fallback when nameWithOwner is absent", () => {
+		const parsed = JSON.parse(viewPayload()) as Record<string, unknown>;
+		parsed.headRepository = { name: "r" };
+		parsed.headRepositoryOwner = { login: "O" };
+		const { run } = stub(() => ({ stdout: JSON.stringify(parsed) }));
+		assert.equal(resolveReviseTarget(run, "o/r", 1).kind, "ok");
+	});
+
+	it("rejects green, pending, and missing review status", () => {
+		assert.equal(resolveReviseTarget(stub(() => ({ stdout: viewPayload({ statusCheckRollup: [{ name: "review", conclusion: "SUCCESS" }] }) })).run, "o/r", 1).kind, "ineligible");
+		assert.equal(resolveReviseTarget(stub(() => ({ stdout: viewPayload({ statusCheckRollup: [{ name: "review", conclusion: "PENDING" }] }) })).run, "o/r", 1).kind, "ineligible");
+		assert.equal(resolveReviseTarget(stub(() => ({ stdout: viewPayload({ statusCheckRollup: [] }) })).run, "o/r", 1).kind, "ineligible");
+		assert.equal(resolveReviseTarget(stub(() => ({ stdout: viewPayload({ statusCheckRollup: undefined }) })).run, "o/r", 1).kind, "ineligible");
+	});
+
+	it("rejects unsafe or unrelated head branches", () => {
+		for (const headRefName of ["chore/cleanup", "feat/issue-1;id", "feat/issue-1$(cmd)", "main", "feat/other-1"]) {
+			assert.equal(resolveReviseTarget(stub(() => ({ stdout: viewPayload({ headRefName }) })).run, "o/r", 1).kind, "ineligible", headRefName);
+		}
+	});
+});
+
+describe("recordReviseInvocation", () => {
+	it("POSTs one new marker-bearing comment with the deterministic disposition body", () => {
+		const { run, calls } = stub();
+		assert.equal(recordReviseInvocation(run, "o/r", 42, "accepted-first-pass", false), true);
+		const comment = calls.find((c) => c[0] === "pr" && c[1] === "comment");
+		assert.ok(comment, "expected a `pr comment` call");
+		assert.ok(!calls.some((c) => c.includes("PATCH") || c[1] === "edit"), "must POST, never PATCH/upsert");
+		const body = comment.find((_a, i) => comment[i - 1] === "--body");
+		assert.ok(body?.includes(REVISE_INVOCATION_MARKER));
+		assert.equal(body, `${REVISE_INVOCATION_MARKER}\noperator revise --pr 42 disposition=accepted-first-pass allow-repeat=false`);
+		assert.ok(!body?.toLowerCase().includes("finding"), "must not interpolate review findings");
+	});
+
+	it("records refused-repeat and accepted-repeat without findings text", () => {
+		const { run, calls } = stub();
+		assert.equal(recordReviseInvocation(run, "o/r", 7, "refused-repeat", false), true);
+		assert.equal(recordReviseInvocation(run, "o/r", 7, "accepted-repeat", true), true);
+		const bodies = calls.filter((c) => c[0] === "pr" && c[1] === "comment").map((c) => c[c.indexOf("--body") + 1]);
+		assert.ok(bodies.at(0)?.includes("disposition=refused-repeat") && bodies.at(0)?.includes("allow-repeat=false"));
+		assert.ok(bodies.at(1)?.includes("disposition=accepted-repeat") && bodies.at(1)?.includes("allow-repeat=true"));
+	});
+
+	it("returns false on GitHub failure", () => {
+		assert.equal(recordReviseInvocation(stub(() => ({ status: 1, stderr: "boom" })).run, "o/r", 1, "accepted-first-pass", false), false);
+		assert.equal(recordReviseInvocation(throwingGh, "o/r", 1, "accepted-first-pass", false), false);
 	});
 });

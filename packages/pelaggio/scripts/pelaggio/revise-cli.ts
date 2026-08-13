@@ -1,0 +1,228 @@
+#!/usr/bin/env tsx
+
+/**
+ * `pelaggio revise --pr <n> [--allow-repeat]` — on-demand operator entry to the
+ * findings-driven resume seam (issue #498).
+ *
+ * Resolves a Pelaggio-managed red-review PR, records a durable invocation
+ * comment, atomically claims the one-pass label (cross-process with the in-run
+ * revise sweep — `claimRevisionExclusive`), fetches the marked findings, restores the
+ * claim worktree, and calls `runOrchestrator` in-process with `--resume` +
+ * `--review-findings` in `operator-revision` mode. Exit codes: 0 success, 1
+ * refused/unavailable, 2 usage / ambient single-shot / non-PR ship target.
+ */
+
+import { isAbsolute, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
+import { parseCli } from "./cli.js";
+import { REPO, ROADMAP_GITHUB, SHIP_TARGET } from "./config.js";
+import { resolveWorktree } from "./helpers.js";
+import { type OrchestratorDeps, runOrchestrator } from "./pipeline.js";
+import {
+	autopilotManagedState,
+	type ClaimRevisionOutcome,
+	claimRevisionExclusive,
+	ensureReviseWorktree,
+	fetchReviewFindings,
+	type ResolveReviseTargetResult,
+	type ReviseInvocationDisposition,
+	recordReviseInvocation,
+	resolveReviseTarget,
+	reviseFindingsPath,
+} from "./revise-sweep.js";
+import { defaultGhRun, type GhRunner } from "./roadmap/github-issues.js";
+import type { ShipTargetName } from "./types.js";
+
+const USAGE = "usage: pelaggio revise --pr <number> [--allow-repeat]";
+
+export interface ReviseCliDeps {
+	gh: GhRunner;
+	repo: string;
+	ghRepo: string;
+	shipTargetName: ShipTargetName;
+	log: (msg: string) => void;
+	err: (msg: string) => void;
+	resolveTarget: (pr: number) => ResolveReviseTargetResult;
+	managedState: (itemId: string) => "managed" | "unmanaged" | "unknown";
+	/** Atomic cross-process claim (`claimRevisionExclusive`) — serializes against the in-run sweep. */
+	claimRevision: (prNumber: number) => Promise<ClaimRevisionOutcome>;
+	fetchFindings: (prNumber: number, findingsPath: string) => boolean;
+	ensureWorktree: (worktreePath: string, branch: string) => string | null;
+	recordInvocation: (prNumber: number, disposition: ReviseInvocationDisposition, allowRepeat: boolean) => boolean;
+	runOrchestrator: typeof runOrchestrator;
+	resolveWorktree: (itemId: string) => string;
+}
+
+function isPrShipTarget(name: string): name is "pull-request" | "auto-merge-pr" {
+	return name === "pull-request" || name === "auto-merge-pr";
+}
+
+function defaultDeps(): ReviseCliDeps {
+	const gh = defaultGhRun;
+	const ghRepo = ROADMAP_GITHUB.ghRepo;
+	return {
+		gh,
+		repo: REPO,
+		ghRepo,
+		shipTargetName: SHIP_TARGET,
+		log: (msg) => {
+			console.log(msg);
+		},
+		err: (msg) => {
+			console.error(msg);
+		},
+		resolveTarget: (pr) => resolveReviseTarget(gh, ghRepo, pr),
+		managedState: (itemId) => autopilotManagedState(gh, ghRepo, itemId, ROADMAP_GITHUB.label),
+		claimRevision: (prNumber) => claimRevisionExclusive(gh, ghRepo, REPO, prNumber),
+		fetchFindings: (prNumber, findingsPath) => fetchReviewFindings(gh, ghRepo, prNumber, findingsPath),
+		ensureWorktree: (worktreePath, branch) => ensureReviseWorktree(worktreePath, branch, { repo: REPO }),
+		recordInvocation: (prNumber, disposition, allowRepeat) => recordReviseInvocation(gh, ghRepo, prNumber, disposition, allowRepeat),
+		runOrchestrator,
+		resolveWorktree,
+	};
+}
+
+function parseReviseArgs(argv: string[]): { kind: "run"; pr: number; allowRepeat: boolean } | { kind: "error"; message: string } {
+	let values: { pr?: string; "allow-repeat"?: boolean };
+	try {
+		({ values } = parseArgs({
+			args: argv,
+			options: { pr: { type: "string" }, "allow-repeat": { type: "boolean" } },
+			allowPositionals: false,
+		}));
+	} catch (e) {
+		return { kind: "error", message: `${e instanceof Error ? e.message : String(e)}\n${USAGE}` };
+	}
+	const prRaw = values.pr;
+	if (!prRaw || !/^\d+$/.test(prRaw) || Number(prRaw) <= 0) return { kind: "error", message: USAGE };
+	return { kind: "run", pr: Number(prRaw), allowRepeat: !!values["allow-repeat"] };
+}
+
+export async function main(argv: string[], overrides: Partial<ReviseCliDeps> = {}): Promise<number> {
+	const deps: ReviseCliDeps = { ...defaultDeps(), ...overrides };
+	// Re-bind primitives that close over gh/ghRepo/repo when the caller overrode those
+	// seams but not the primitive itself — production defaults already close over the
+	// real values; tests inject the primitives they care about.
+	if (overrides.gh || overrides.ghRepo) {
+		const gh = deps.gh;
+		const ghRepo = deps.ghRepo;
+		if (!overrides.resolveTarget) deps.resolveTarget = (pr) => resolveReviseTarget(gh, ghRepo, pr);
+		if (!overrides.managedState) deps.managedState = (itemId) => autopilotManagedState(gh, ghRepo, itemId, ROADMAP_GITHUB.label);
+		if (!overrides.fetchFindings) deps.fetchFindings = (prNumber, findingsPath) => fetchReviewFindings(gh, ghRepo, prNumber, findingsPath);
+		if (!overrides.recordInvocation) deps.recordInvocation = (prNumber, disposition, allowRepeat) => recordReviseInvocation(gh, ghRepo, prNumber, disposition, allowRepeat);
+	}
+	// claimRevisionExclusive closes over gh, ghRepo, AND repo (its lock lives in <repo>/.dev).
+	if ((overrides.gh || overrides.ghRepo || overrides.repo) && !overrides.claimRevision) {
+		const gh = deps.gh;
+		const ghRepo = deps.ghRepo;
+		const repo = deps.repo;
+		deps.claimRevision = (prNumber) => claimRevisionExclusive(gh, ghRepo, repo, prNumber);
+	}
+	if (overrides.repo && !overrides.ensureWorktree) {
+		deps.ensureWorktree = (worktreePath, branch) => ensureReviseWorktree(worktreePath, branch, { repo: deps.repo });
+	}
+
+	const parsed = parseReviseArgs(argv);
+	if (parsed.kind === "error") {
+		deps.err(parsed.message);
+		return 2;
+	}
+	const { pr, allowRepeat } = parsed;
+
+	if (!deps.ghRepo) {
+		deps.err("no GitHub repo configured — set roadmap.github.repo in .pelaggio.yml");
+		return 2;
+	}
+	if (!isPrShipTarget(deps.shipTargetName)) {
+		deps.err(`pelaggio revise requires a PR ship target (got ${deps.shipTargetName})`);
+		return 2;
+	}
+	if (process.env.CI === "true" || process.env.PELAGGIO_SINGLE_SHOT === "1") {
+		deps.err("pelaggio revise refuses CI / PELAGGIO_SINGLE_SHOT (would write the revision into the main checkout)");
+		return 2;
+	}
+
+	const resolved = deps.resolveTarget(pr);
+	if (resolved.kind === "unavailable") {
+		deps.err(resolved.reason);
+		return 1;
+	}
+	if (resolved.kind === "ineligible") {
+		deps.err(resolved.reason);
+		return 1;
+	}
+	const { target } = resolved;
+
+	const managed = deps.managedState(target.itemId);
+	if (managed === "unknown") {
+		deps.err("could not determine whether the linked issue is pelaggio-managed (github lookup failed); retry");
+		return 1;
+	}
+	if (managed === "unmanaged") {
+		deps.err("linked issue is not a pelaggio-managed item");
+		return 1;
+	}
+
+	const findingsPath = reviseFindingsPath(deps.repo, target.itemId);
+	const parkedResume = `pnpm pelaggio --resume ${target.itemId} --review-findings ${findingsPath}`;
+
+	let disposition: ReviseInvocationDisposition;
+	if (target.alreadyRevised && !allowRepeat) {
+		disposition = "refused-repeat";
+		if (!deps.recordInvocation(pr, disposition, allowRepeat)) {
+			deps.err("failed to record revise invocation comment");
+			return 1;
+		}
+		deps.err(`PR #${pr} already has the autopilot:revised label. Pass --allow-repeat to start a new revision pass. A parked in-flight pass continues with: ${parkedResume}`);
+		return 1;
+	}
+	disposition = target.alreadyRevised ? "accepted-repeat" : "accepted-first-pass";
+	if (!deps.recordInvocation(pr, disposition, allowRepeat)) {
+		deps.err("failed to record revise invocation comment");
+		return 1;
+	}
+
+	if (!target.alreadyRevised) {
+		// Atomic one-pass claim: re-checks the label under the cross-process revise-claim
+		// lock (`claimRevisionExclusive`), so this command and the in-run sweep — or two
+		// operator invocations — can never both start a paid pass off the same stale
+		// "unlabeled" read. `already-claimed` means a concurrent caller won between
+		// `resolveTarget` and here; fail closed on anything but `claimed`.
+		const claim = await deps.claimRevision(pr);
+		if (claim === "already-claimed") {
+			deps.err(`PR #${pr} was claimed by a concurrent revise caller (the in-run sweep or another operator invocation) — refusing a duplicate pass. A parked in-flight pass continues with: ${parkedResume}`);
+			return 1;
+		}
+		if (claim !== "claimed") {
+			deps.err("failed to claim the autopilot:revised label");
+			return 1;
+		}
+	}
+
+	if (!deps.fetchFindings(pr, findingsPath)) {
+		deps.err("no marked review findings comment, or findings file could not be written");
+		return 1;
+	}
+
+	const wt = deps.ensureWorktree(deps.resolveWorktree(target.itemId), target.branch);
+	if (!wt) {
+		deps.err("failed to restore the claim worktree");
+		return 1;
+	}
+
+	deps.log(`revising PR #${pr} (item ${target.itemId}, ${disposition})`);
+	const absFindingsPath = isAbsolute(findingsPath) ? findingsPath : resolve(findingsPath);
+	const intent = parseCli(["--resume", target.itemId, "--review-findings", absFindingsPath]);
+	if (intent.kind !== "run") {
+		deps.err(intent.kind === "error" ? intent.message : USAGE);
+		return 2;
+	}
+	const orchDeps: OrchestratorDeps = { mode: "operator-revision" };
+	const { exitCode } = await deps.runOrchestrator(intent.flags, orchDeps);
+	return exitCode;
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+	main(process.argv.slice(2)).then((code) => process.exit(code));
+}

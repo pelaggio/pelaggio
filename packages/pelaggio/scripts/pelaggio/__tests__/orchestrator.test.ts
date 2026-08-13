@@ -161,6 +161,210 @@ describe("runOrchestrator — CI resume + review-findings (issue #60)", () => {
 	});
 });
 
+describe("runOrchestrator — operator-revision mode (#498)", () => {
+	const findingsPath = "/tmp/pelaggio-op-rev/review-findings-498.md";
+	const resumeFlags = (): Flags => ({ ...baseFlags, resume: "498", "review-findings": findingsPath });
+
+	it("parks then resumes from implement with the same findings path, notifies per attempt, and exits 0", async (t) => {
+		t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
+		t.mock.method(console, "log", () => {});
+		const baseNow = 1_700_000_000_000;
+		t.mock.timers.setTime(baseNow);
+
+		const sent: Array<{ payload: { event: string; itemId: string | null } }> = [];
+		const sendNotification = async (_url: string, _format: "json" | "ntfy", payload: { event: string; itemId: string | null }) => {
+			sent.push({ payload });
+			return true;
+		};
+		const { runPipeline, calls } = createMockRunPipeline({
+			byItem: {
+				"498": [
+					{ completed: false, cost: 0.2, error: "parked", park: { parked: true, resetsAt: baseNow + 60_000, limitType: "5h" } },
+					{ completed: true, cost: 0.5 },
+				],
+			},
+		});
+		const promise = runOrchestrator(resumeFlags(), {
+			runPipeline,
+			detectResumeStep: fakeDetectResumeStep,
+			resolveWorktree: fakeResolveWorktree,
+			mode: "operator-revision",
+			notifyConfig: { url: "https://hook.example" },
+			sendNotification,
+		});
+		for (let i = 0; i < 5; i++) await new Promise(setImmediate);
+		t.mock.timers.tick(60_000 + 30_000);
+		for (let i = 0; i < 5; i++) await new Promise(setImmediate);
+		const { exitCode, results } = await promise;
+
+		assert.equal(exitCode, 0);
+		assert.equal(calls.length, 2);
+		assert.equal(calls.at(0)?.opts.startFrom, "implement");
+		assert.equal(calls.at(1)?.opts.startFrom, "implement");
+		assert.equal(calls.at(0)?.flags["review-findings"], findingsPath);
+		assert.equal(calls.at(1)?.flags["review-findings"], findingsPath);
+		assert.equal(calls.at(0)?.opts.itemId, "498");
+		assert.equal(calls.at(1)?.opts.itemId, "498");
+		assert.equal(results.length, 2);
+		assert.equal(results.at(0)?.error, "parked");
+		assert.equal(results.at(0)?.cost, 0.2);
+		assert.equal(results.at(1)?.completed, true);
+		assert.equal(results.at(1)?.cost, 0.5);
+		assert.equal(sent.length, 2);
+		assert.equal(sent.at(0)?.payload.event, "parked");
+		assert.equal(sent.at(1)?.payload.event, "shipped");
+	});
+
+	it("autoResume: false hands back with --resume --review-findings and starts no pick/sweep", async (t) => {
+		const logs: string[] = [];
+		t.mock.method(console, "log", (...args: unknown[]) => {
+			logs.push(args.join(" "));
+		});
+		const baseNow = 1_700_000_000_000;
+		const { runPipeline, calls } = createMockRunPipeline({
+			byItem: {
+				"498": { completed: false, cost: 0.1, error: "parked", park: { parked: true, resetsAt: baseNow + 60_000, limitType: "5h" } },
+			},
+		});
+		const { exitCode } = await runOrchestrator(resumeFlags(), {
+			runPipeline,
+			detectResumeStep: fakeDetectResumeStep,
+			resolveWorktree: fakeResolveWorktree,
+			mode: "operator-revision",
+			park: { autoResume: false },
+		});
+		assert.equal(exitCode, 1);
+		assert.equal(calls.length, 1);
+		assert.equal(calls.at(0)?.opts.itemId, "498");
+		assert.ok(
+			logs.some((l) => l.includes("Resume:") && l.includes(`pnpm pelaggio --resume 498 --review-findings ${findingsPath}`)),
+			`expected findings-driven resume hint; got:\n${logs.join("\n")}`,
+		);
+		assert.ok(!logs.some((l) => /summary/i.test(l) && l.includes("cycle")), "must not fall through to the campaign summary");
+	});
+
+	it("no reset time hands back with the findings-driven resume hint", async (t) => {
+		const logs: string[] = [];
+		t.mock.method(console, "log", (...args: unknown[]) => {
+			logs.push(args.join(" "));
+		});
+		const { runPipeline, calls } = createMockRunPipeline({
+			byItem: {
+				"498": { completed: false, cost: 0.1, error: "parked", park: { parked: true, resetsAt: 0, limitType: "paused" } },
+			},
+		});
+		const { exitCode } = await runOrchestrator(resumeFlags(), {
+			runPipeline,
+			detectResumeStep: fakeDetectResumeStep,
+			resolveWorktree: fakeResolveWorktree,
+			mode: "operator-revision",
+		});
+		assert.equal(exitCode, 1);
+		assert.equal(calls.length, 1);
+		assert.ok(logs.some((l) => l.includes(`--resume 498 --review-findings ${findingsPath}`)));
+	});
+
+	it("wait beyond maxWait hands back without a second pipeline call", async (t) => {
+		t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
+		const logs: string[] = [];
+		t.mock.method(console, "log", (...args: unknown[]) => {
+			logs.push(args.join(" "));
+		});
+		const baseNow = 1_700_000_000_000;
+		t.mock.timers.setTime(baseNow);
+		const { runPipeline, calls } = createMockRunPipeline({
+			byItem: {
+				"498": { completed: false, cost: 0.1, error: "parked", park: { parked: true, resetsAt: baseNow + 3 * 3600_000, limitType: "5h" } },
+			},
+		});
+		const { exitCode } = await runOrchestrator({ ...resumeFlags(), "max-wait": "1h" }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree, mode: "operator-revision" });
+		assert.equal(exitCode, 1);
+		assert.equal(calls.length, 1);
+		assert.ok(logs.some((l) => l.includes(`--resume 498 --review-findings ${findingsPath}`)));
+	});
+
+	it("round ceiling hands back after MAX_RESUME_ROUNDS", async (t) => {
+		t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
+		t.mock.method(console, "log", () => {});
+		const baseNow = 1_700_000_000_000;
+		t.mock.timers.setTime(baseNow);
+		const parked = () => ({ completed: false as const, cost: 0.1, error: "parked", park: { parked: true, resetsAt: baseNow + 60_000, limitType: "5h" } });
+		const { runPipeline, calls } = createMockRunPipeline({
+			byItem: { "498": Array.from({ length: 20 }, parked) },
+			onCall: (_opts, ps) => {
+				if (ps.parked) ps.resetsAt = Date.now() + 60_000;
+			},
+		});
+		const promise = runOrchestrator(resumeFlags(), {
+			runPipeline,
+			detectResumeStep: fakeDetectResumeStep,
+			resolveWorktree: fakeResolveWorktree,
+			mode: "operator-revision",
+		});
+		// 12 wait/resume rounds after the first park. Each wait is reset+≤30s jitter.
+		for (let round = 0; round < 12; round++) {
+			for (let i = 0; i < 5; i++) await new Promise(setImmediate);
+			t.mock.timers.tick(60_000 + 30_000);
+			for (let i = 0; i < 5; i++) await new Promise(setImmediate);
+		}
+		const { exitCode } = await promise;
+		assert.equal(exitCode, 1);
+		// First attempt + 12 resumeOne calls, then the cap hands back.
+		assert.equal(calls.length, 13);
+		assert.ok(calls.every((c) => c.opts.itemId === "498"));
+	});
+
+	it("operator-revision + --no-worktree exits 2 with zero runPipeline calls", async (t) => {
+		const error = t.mock.method(console, "error", () => {});
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({ default: { completed: true } });
+		const { exitCode } = await runOrchestrator({ ...resumeFlags(), "no-worktree": true }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree, mode: "operator-revision" });
+		assert.equal(exitCode, 2);
+		assert.equal(calls.length, 0);
+		assert.match(String(error.mock.calls[0]?.arguments[0]), /operator-revision refuses --no-worktree/);
+	});
+
+	it("standard --resume --review-findings that parks returns after one attempt", async (t) => {
+		t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
+		t.mock.method(console, "log", () => {});
+		const baseNow = 1_700_000_000_000;
+		t.mock.timers.setTime(baseNow);
+		const { runPipeline, calls } = createMockRunPipeline({
+			byItem: {
+				"498": [
+					{ completed: false, cost: 0.1, error: "parked", park: { parked: true, resetsAt: baseNow + 60_000, limitType: "5h" } },
+					{ completed: true, cost: 0.5 },
+				],
+			},
+		});
+		const { exitCode, results } = await runOrchestrator(resumeFlags(), {
+			runPipeline,
+			detectResumeStep: fakeDetectResumeStep,
+			resolveWorktree: fakeResolveWorktree,
+		});
+		assert.equal(exitCode, 1);
+		assert.equal(calls.length, 1, "standard resume must not enter the wait/resume loop");
+		assert.equal(results.length, 1);
+		assert.equal(results.at(0)?.error, "parked");
+	});
+
+	it("CI / no-worktree findings resume stays single-attempt", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const baseNow = 1_700_000_000_000;
+		const { runPipeline, calls } = createMockRunPipeline({
+			byItem: {
+				"498": [
+					{ completed: false, cost: 0.1, error: "parked", park: { parked: true, resetsAt: baseNow + 60_000, limitType: "5h" } },
+					{ completed: true, cost: 0.5 },
+				],
+			},
+		});
+		const { exitCode } = await runOrchestrator({ ...resumeFlags(), "no-worktree": true }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });
+		assert.equal(exitCode, 1);
+		assert.equal(calls.length, 1);
+	});
+});
+
 describe("runOrchestrator — invalid target", () => {
 	it("exits 2 without invoking runPipeline", async (t) => {
 		t.mock.method(console, "error", () => {});
