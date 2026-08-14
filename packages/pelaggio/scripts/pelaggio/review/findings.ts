@@ -426,7 +426,20 @@ function assertNotExampleRationale(decisions: readonly { rationale: string }[], 
  */
 function assertBlockAtTail(text: string, match: RegExpMatchArray, label: string): void {
 	const end = (match.index ?? 0) + (match[0]?.length ?? 0);
-	if (text.slice(end).trim() !== "") throw new ReviewFindingsParseError(`${label} block is not the final model-authored output (a non-report answer follows it)`);
+	const tail = text.slice(end).trim();
+	if (tail === "") return;
+
+	// The packaged skills illustrate the required report inside a Markdown fence. Models may
+	// preserve that presentation in their final answer, leaving the paired closing fence after
+	// the END marker. Treat only that terminal delimiter as formatting: an unmatched fence, a
+	// mismatched delimiter, or any prose after it still fails closed as non-report output.
+	const closingFence = tail.match(/^(`{3,}|~{3,})$/)?.[1];
+	const prefix = text.slice(0, match.index ?? 0).trimEnd();
+	const openingLine = prefix.split(/\r?\n/).at(-1)?.trim();
+	const openingFence = openingLine?.match(/^(`{3,}|~{3,})(?:[^\r\n]*)$/)?.[1];
+	if (closingFence && openingFence && closingFence[0] === openingFence[0] && closingFence.length >= openingFence.length) return;
+
+	throw new ReviewFindingsParseError(`${label} block is not the final model-authored output (a non-report answer follows it)`);
 }
 
 function parseDelimited(text: string, regex: RegExp, label: string): Record<string, unknown> {
