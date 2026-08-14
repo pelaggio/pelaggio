@@ -288,6 +288,50 @@ function mergeChildParkSignals(parent: ParkSignal, children: readonly ParkSignal
 	Object.assign(parent, winner);
 }
 
+/**
+ * Launch each discovery candidate and settle in `candidates` order.
+ *
+ * Pools without both Claude and Grok start every seat immediately. When both are present,
+ * non-Grok seats start immediately and Grok waits for every Claude promise to settle
+ * (fulfillment including park/`ok: false`, or rejection). Every seat promise is wrapped
+ * into a settle record AT CREATION — never stored bare — so a seat rejecting while the
+ * stage is awaiting a different subset (e.g. Codex crashing during the Claude wait) is
+ * already observed and lands as that seat's rejected record instead of an unhandled
+ * rejection killing the process before main()'s fail-closed catch (#434). A sparse list
+ * would treat holes as fulfilled `undefined`, so the returned list is always dense and
+ * index-aligned.
+ */
+async function settleDiscoveryLaunches<T>(candidates: readonly StepSettings[], launch: (candidate: StepSettings, index: number) => Promise<T>): Promise<PromiseSettledResult<T>[]> {
+	// Runs synchronously up to `await launch(...)`, attaching the rejection observer the
+	// moment the seat promise exists; the returned settle-record promise never rejects.
+	const settleLaunch = async (candidate: StepSettings, index: number): Promise<PromiseSettledResult<T>> => {
+		try {
+			return { status: "fulfilled", value: await launch(candidate, index) };
+		} catch (reason) {
+			return { status: "rejected", reason };
+		}
+	};
+	const stageGrok = candidates.some((c) => c.provider === "claude") && candidates.some((c) => c.provider === "grok");
+	if (!stageGrok) return Promise.all(candidates.map(settleLaunch));
+
+	const slots: Array<Promise<PromiseSettledResult<T>> | undefined> = Array.from({ length: candidates.length });
+	const claude: Promise<PromiseSettledResult<T>>[] = [];
+	for (const [index, candidate] of candidates.entries()) {
+		if (candidate.provider === "grok") continue;
+		const started = settleLaunch(candidate, index);
+		slots[index] = started;
+		if (candidate.provider === "claude") claude.push(started);
+	}
+	// Staged wait reads settled records (which cannot reject), preserving launch order:
+	// Grok starts only after every Claude seat settles.
+	await Promise.all(claude);
+	for (const [index, candidate] of candidates.entries()) {
+		if (candidate.provider !== "grok") continue;
+		slots[index] = settleLaunch(candidate, index);
+	}
+	return Promise.all(slots.map((slot, index) => slot ?? Promise.resolve<PromiseSettledResult<T>>({ status: "rejected", reason: new Error(`discovery launch missing at index ${index}`) })));
+}
+
 /** Build the PR-comment body. The agent text is preserved under per-pass
  *  sections; aggregate status and metrics live in the CLI-owned wrapper. */
 export function buildComment(
@@ -648,19 +692,18 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 		const iterationPasses: ReviewPass[] = [];
 		for (const label of labels) {
 			const args = label === "standard" ? `--pr ${options.pr}` : `--pr ${options.pr} --red-team --security-reasons ${JSON.stringify(securitySignal.reasons.join(", "))}`;
-			// Build the discovery prompt once; every driver runs the same prompt concurrently.
+			// One shared prompt; configured-order aggregation. When Claude and Grok share the
+			// pool, non-Grok seats start immediately and Grok waits for every Claude promise to settle.
 			const prompt = `${expandPackagedSkill("pr-review", args)}${localContext}`;
 			const children = reviewDrivers.map(() => childParkSignal());
-			const settled = await Promise.allSettled(
-				reviewDrivers.map((candidate, index) =>
-					runReviewPass(iteration, label, prompt, candidate, options.pr, {
-						cwd,
-						runStep: runStepImpl,
-						profile,
-						// children is built from the same reviewDrivers map, so index always lands.
-						parkSignal: children[index] ?? childParkSignal(),
-					}),
-				),
+			const settled = await settleDiscoveryLaunches(reviewDrivers, (candidate, index) =>
+				runReviewPass(iteration, label, prompt, candidate, options.pr, {
+					cwd,
+					runStep: runStepImpl,
+					profile,
+					// children is built from the same reviewDrivers map, so index always lands.
+					parkSignal: children[index] ?? childParkSignal(),
+				}),
 			);
 			mergeChildParkSignals(signal, children);
 
