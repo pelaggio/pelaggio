@@ -134,6 +134,14 @@ describe("parseReviewFindings", () => {
 		assert.throws(() => parseReviewFindings(`${clean}\n\nOn reflection:\n${real}`), ReviewFindingsParseError);
 		// trailing whitespace after the block is still the tail
 		assert.equal(parseReviewFindings(`${real}\n\n   \n`).findings.length, 1);
+		// The skill presents this contract in a text fence; preserving that paired terminal
+		// formatting must not make the documented output invalid.
+		const fenced = `Review complete.\n\`\`\`text\nREVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 1, summary: "Fenced review.", findings: [] })}\nEND_REVIEW_FINDINGS\n\`\`\``;
+		assert.equal(parseReviewFindings(fenced).summary, "Fenced review.");
+		assert.throws(() => parseReviewFindings(`${fenced}\nMore prose.`), ReviewFindingsParseError);
+		// A closing delimiter is formatting only when it pairs with the opener immediately
+		// before the report block.
+		assert.throws(() => parseReviewFindings(`${real}\n\`\`\``), ReviewFindingsParseError);
 	});
 
 	it("binds the schema-example sentinels to the packaged SKILL.md", () => {
@@ -165,6 +173,7 @@ describe("parseReviewVerification", () => {
 		// refutation clear a real blocker, which is the fail-OPEN direction.
 		assert.throws(() => parseReviewVerification(`${refuted}\n\nCorrection:\n${survives}`), ReviewFindingsParseError);
 		assert.equal(parseReviewVerification(survives).decisions.at(0)?.decision, "survives");
+		assert.equal(parseReviewVerification(`\`\`\`text\n${survives}\n\`\`\``).decisions.at(0)?.decision, "survives");
 	});
 
 	it("binds the pr-verify example sentinel to the packaged SKILL.md", () => {
@@ -528,6 +537,8 @@ describe("parseJudgeReport", () => {
 		assert.throws(() => parseJudgeReport(`${refutedBlock}\n\nCorrection:\n${survivesBlock}`), ReviewFindingsParseError);
 		// trailing whitespace after the block is still the tail
 		assert.equal(parseJudgeReport(`${survivesBlock}\n\n   \n`).decisions.length, 1);
+		const fenced = `${survivesBlock.replace("AUTHORING_REVIEW_JUDGE", "```text\nAUTHORING_REVIEW_JUDGE")}\n\`\`\``;
+		assert.equal(parseJudgeReport(fenced).decisions.length, 1);
 	});
 
 	it("rejects the packaged Judge example echoed verbatim", () => {
