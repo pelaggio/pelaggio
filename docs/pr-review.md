@@ -267,8 +267,10 @@ the ordinary `pelaggio run` pipeline.
    `pr-review`: budget / turns / effort / model are first-class config, see below).
    The safe default is one iteration and one review driver; `review.max-passes` opts
    into at most three iterations, and `models.profiles.*.providers.pr-review: […]`
-   opts into multi-driver **fan-out** (every listed driver runs the same discovery
-   prompt concurrently — not author rotation). If the deterministic classifier sees
+   opts into multi-driver **fan-out** (every listed driver **runs** the same
+   discovery prompt — not author rotation). Launch is fully concurrent except when
+   the pool contains both Claude and Grok: Grok waits for Claude discovery to
+   finish, not merely to boot. If the deterministic classifier sees
    security-sensitive paths or diff keywords, the CLI runs a second fresh
    `pr-review --red-team` discovery label and fans that label across the same
    drivers. After discovery, every driver pass with `must-fix` candidates gets its
@@ -374,8 +376,11 @@ human handoff.
 
 ### Multi-driver agreement (CI gate)
 
-When `providers.pr-review` is a list, discovery fans out concurrently (private
-per-driver park signals; earliest positive `resetsAt` wins on merge). After sequential
+When `providers.pr-review` is a list, every required `(driver × label)` cell still
+runs (private per-driver park signals; earliest positive `resetsAt` wins on merge).
+Launch is fully concurrent except when Claude and Grok share the pool: non-Grok
+seats start immediately and Grok waits for every Claude discovery promise to
+settle. All-pass / fail-closed matrix semantics are unchanged. After sequential
 per-driver verification, the gate computes a closed `agreement` field on the result
 (and in the metrics marker) without scraping comment prose:
 

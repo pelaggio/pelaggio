@@ -80,8 +80,11 @@ models:
         shakedown-code: [claude, grok, codex]
         ship: claude
         shipwreck: claude
-        # Fan-out set: every driver runs the same discovery prompt concurrently and
-        # every (driver × label) cell must return a valid PASS — all-pass/fail-closed.
+        # Fan-out set: every driver runs the same discovery prompt and every
+        # (driver × label) cell must return a valid PASS — all-pass/fail-closed.
+        # List order is render/aggregation order. Launch is fully concurrent except
+        # when Claude and Grok share the pool: non-Grok seats start immediately
+        # and Grok waits for every Claude discovery promise to settle.
         # Widened to three drivers 2026-08-06. The earlier two-driver rationale measured
         # cost *per pass* and concluded a third seat "adds cost without conserving Claude
         # (Claude runs either way)". True per pass; wrong for cost-to-land — under-enumeration

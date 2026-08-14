@@ -61,6 +61,7 @@ function driver(provider: ProviderName, over: Partial<Omit<StepSettings, "provid
 }
 
 const twoDrivers: StepSettings[] = [driver("claude"), driver("codex")];
+const threeDrivers: StepSettings[] = [driver("claude"), driver("codex"), driver("grok")];
 
 function plainDiffExec(): typeof import("node:child_process").execFileSync {
 	return ((_: string, args: readonly string[]) => (args.includes("--name-only") ? "docs/a.md\n" : "+docs")) as typeof import("node:child_process").execFileSync;
@@ -687,6 +688,250 @@ describe("pr-review CLI aggregation", () => {
 				{ provider: "codex", codexModel: "gpt-5-codex" },
 			],
 		);
+	});
+
+	it("stages grok until claude settles while keeping codex concurrent", async () => {
+		let releaseClaude!: () => void;
+		let releaseCodex!: () => void;
+		let releaseGrok!: () => void;
+		const claudeHold = new Promise<void>((resolve) => {
+			releaseClaude = resolve;
+		});
+		const codexHold = new Promise<void>((resolve) => {
+			releaseCodex = resolve;
+		});
+		const grokHold = new Promise<void>((resolve) => {
+			releaseGrok = resolve;
+		});
+		let firstWave!: () => void;
+		const firstWaveSeen = new Promise<void>((resolve) => {
+			firstWave = resolve;
+		});
+		let grokEntered!: () => void;
+		const grokStarted = new Promise<void>((resolve) => {
+			grokEntered = resolve;
+		});
+		const inFlight = new Set<ProviderName>();
+		const started: ProviderName[] = [];
+		const calls: RunCall[] = [];
+		const gatePromise = runPrReviewGate({
+			pr: "1",
+			reviewDrivers: threeDrivers,
+			policy: reviewPolicy({ maxPasses: 1, budgetCap: 60, providerDiversity: "off" }),
+			execFileSync: plainDiffExec(),
+			runStep: async (name, prompt, stepOpts) => {
+				calls.push({ name, prompt, cwd: stepOpts.cwd, parkSignal: stepOpts.parkSignal, executionOverride: stepOpts.executionOverride });
+				if (name === "pr-review") {
+					const provider = stepOpts.executionOverride?.provider;
+					assert.ok(provider);
+					started.push(provider);
+					inFlight.add(provider);
+					if (inFlight.has("claude") && inFlight.has("codex") && !inFlight.has("grok")) queueMicrotask(() => firstWave());
+					if (provider === "grok") grokEntered();
+					if (provider === "claude") await claudeHold;
+					else if (provider === "codex") await codexHold;
+					else await grokHold;
+					inFlight.delete(provider);
+				}
+				return result({ cost: 1, turns: 1 });
+			},
+		});
+		await firstWaveSeen;
+		assert.ok(started.includes("claude") && started.includes("codex"), "non-grok seats start immediately");
+		assert.ok(!started.includes("grok"), "grok must not start while claude is in flight");
+
+		releaseClaude();
+		await grokStarted;
+		assert.ok(started.includes("grok"), "grok starts after claude settles");
+		assert.ok(inFlight.has("codex"), "codex remains in flight when grok starts");
+		assert.ok(!inFlight.has("claude"), "claude has settled before grok starts");
+
+		releaseCodex();
+		releaseGrok();
+		const review = await gatePromise;
+		assert.equal(review.gate, "pass");
+		assert.equal(review.agreement, "consensus-pass");
+		const discovery = calls.filter((call) => call.name === "pr-review");
+		assert.equal(discovery.length, 3);
+		const first = discovery[0];
+		assert.ok(first);
+		assert.ok(
+			discovery.every((call) => call.prompt === first.prompt),
+			"shared discovery prompt",
+		);
+		assert.deepEqual(
+			discovery.map((call) => call.executionOverride),
+			[
+				{ provider: "claude", model: "claude-opus-4-8" },
+				{ provider: "codex", codexModel: "gpt-5-codex" },
+				{ provider: "grok", model: "grok-code-fast-1" },
+			],
+		);
+		assert.equal(new Set(discovery.map((call) => call.parkSignal)).size, 3, "each driver gets its own child park signal");
+		const verdicts = review.body.slice(review.body.indexOf("### Driver verdicts"));
+		assert.ok(verdicts.indexOf("claude") < verdicts.indexOf("codex") && verdicts.indexOf("codex") < verdicts.indexOf("grok"), "driver sections follow configured order");
+	});
+
+	it("rejected claude still releases grok and stays fail-closed", async () => {
+		let releaseCodex!: () => void;
+		const codexHold = new Promise<void>((resolve) => {
+			releaseCodex = resolve;
+		});
+		let grokEntered!: () => void;
+		const grokStarted = new Promise<void>((resolve) => {
+			grokEntered = resolve;
+		});
+		const started: ProviderName[] = [];
+		const gatePromise = runPrReviewGate({
+			pr: "1",
+			reviewDrivers: threeDrivers,
+			policy: reviewPolicy({ maxPasses: 1, budgetCap: 60, providerDiversity: "off" }),
+			execFileSync: plainDiffExec(),
+			runStep: async (name, _prompt, stepOpts) => {
+				if (name === "pr-review") {
+					const provider = stepOpts.executionOverride?.provider;
+					assert.ok(provider);
+					started.push(provider);
+					if (provider === "grok") grokEntered();
+					if (provider === "claude") throw new Error("claude crashed");
+					if (provider === "codex") await codexHold;
+				}
+				return result();
+			},
+		});
+		await grokStarted;
+		assert.ok(started.includes("grok"), "grok starts after claude rejects");
+		assert.ok(started.includes("codex"), "codex was already in flight");
+		releaseCodex();
+		const review = await gatePromise;
+		assert.equal(review.gate, "block");
+		assert.equal(review.agreement, "invalid");
+		assert.match(review.body, /claude/);
+		assert.match(review.body, /codex/);
+		assert.match(review.body, /grok/);
+	});
+
+	it("codex rejecting during the claude wait is an observed infra block, not an unhandled rejection (#434)", async () => {
+		const unhandled: unknown[] = [];
+		const onUnhandled = (reason: unknown) => unhandled.push(reason);
+		process.on("unhandledRejection", onUnhandled);
+		let releaseClaude!: () => void;
+		const claudeHold = new Promise<void>((resolve) => {
+			releaseClaude = resolve;
+		});
+		let grokEntered!: () => void;
+		const grokStarted = new Promise<void>((resolve) => {
+			grokEntered = resolve;
+		});
+		const started: ProviderName[] = [];
+		try {
+			const gatePromise = runPrReviewGate({
+				pr: "1",
+				reviewDrivers: threeDrivers,
+				policy: reviewPolicy({ maxPasses: 1, budgetCap: 60, providerDiversity: "off" }),
+				execFileSync: plainDiffExec(),
+				runStep: async (name, _prompt, stepOpts) => {
+					if (name === "pr-review") {
+						const provider = stepOpts.executionOverride?.provider;
+						assert.ok(provider);
+						started.push(provider);
+						if (provider === "grok") grokEntered();
+						if (provider === "codex") throw new Error("codex crashed");
+						if (provider === "claude") await claudeHold;
+					}
+					return result();
+				},
+			});
+			// Codex has rejected while the stage is still awaiting Claude. Pump real
+			// event-loop turns so an unobserved seat promise would surface here as
+			// `unhandledRejection` (the pre-fix crash shape: Node terminates before
+			// main()'s fail-closed catch) rather than being masked by a later stage
+			// finally attaching handlers.
+			for (let i = 0; i < 4; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+			assert.ok(started.includes("codex"), "codex was launched in the first wave");
+			assert.ok(!started.includes("grok"), "staged order holds: grok still waits for claude after codex rejects");
+			assert.deepEqual(unhandled, [], "codex rejection during the claude wait must be observed at creation, not unhandled");
+
+			releaseClaude();
+			await grokStarted;
+			assert.ok(started.includes("grok"), "grok still launches after claude settles");
+			const review = await gatePromise;
+			assert.deepEqual(unhandled, [], "no unhandled rejection across the full gate run");
+			assert.equal(review.gate, "block");
+			assert.equal(review.agreement, "invalid");
+			assert.match(review.body, /Review execution threw: codex crashed/);
+			assert.match(review.body, /claude/);
+			assert.match(review.body, /grok/);
+		} finally {
+			process.removeListener("unhandledRejection", onUnhandled);
+		}
+	});
+
+	it("parked claude still releases grok and parks the gate", async () => {
+		let grokEntered!: () => void;
+		const grokStarted = new Promise<void>((resolve) => {
+			grokEntered = resolve;
+		});
+		const started: ProviderName[] = [];
+		const parent: ParkSignal = { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" };
+		const calls: string[] = [];
+		const gatePromise = runPrReviewGate({
+			pr: "1",
+			parkSignal: parent,
+			reviewDrivers: threeDrivers,
+			policy: reviewPolicy({ maxPasses: 2, budgetCap: 60, providerDiversity: "off" }),
+			execFileSync: plainDiffExec(),
+			runStep: async (name, _prompt, stepOpts) => {
+				calls.push(`${name}:${stepOpts.executionOverride?.provider ?? "verify"}`);
+				if (name === "pr-review") {
+					const provider = stepOpts.executionOverride?.provider;
+					assert.ok(provider);
+					started.push(provider);
+					if (provider === "grok") grokEntered();
+					if (provider === "claude") {
+						stepOpts.parkSignal.parked = true;
+						stepOpts.parkSignal.resetsAt = 100;
+						stepOpts.parkSignal.limitType = "rate_limit";
+						return result({ ok: false, subtype: "error_rate_limit", cost: 0.5, turns: 1 });
+					}
+				}
+				return result();
+			},
+		});
+		await grokStarted;
+		assert.ok(started.includes("grok"), "park fulfillment still releases grok");
+		const review = await gatePromise;
+		assert.equal(review.gate, "park");
+		assert.ok(!calls.some((c) => c.startsWith("pr-verify")), "no verify after park");
+		assert.equal(calls.filter((c) => c.startsWith("pr-review")).length, 3, "required fan-out still attempted");
+	});
+
+	it("fans discovery concurrently when the pool has grok but no claude", async () => {
+		let release!: () => void;
+		const hold = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let inFlight = 0;
+		let maxInFlight = 0;
+		const review = await runPrReviewGate({
+			pr: "1",
+			reviewDrivers: [driver("codex"), driver("grok")],
+			policy: reviewPolicy({ maxPasses: 1, budgetCap: 40, providerDiversity: "off" }),
+			execFileSync: plainDiffExec(),
+			runStep: async (name) => {
+				if (name === "pr-review") {
+					inFlight++;
+					maxInFlight = Math.max(maxInFlight, inFlight);
+					if (inFlight === 2) queueMicrotask(() => release());
+					await hold;
+					inFlight--;
+				}
+				return result({ cost: 1, turns: 1 });
+			},
+		});
+		assert.equal(maxInFlight, 2, "codex and grok start before either resolves");
+		assert.equal(review.gate, "pass");
+		assert.equal(review.agreement, "consensus-pass");
 	});
 
 	it("two clean multi-driver reports yield consensus-pass", async () => {
