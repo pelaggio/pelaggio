@@ -76,7 +76,7 @@ Read only the detail docs needed for the task:
 - `docs/agent-context/guarded-actions.md`: (design → ADR-0026) the guard audit — fenced / derived-exclusive / reconciled / hint, the three conflations behind the lock-and-gate defect cluster, the six primitives, and the new-guard checklist.
 - `docs/agent-context/flow-event-catalog.md`: (design) the `#170` spec — event envelope + identity/ordering contract, the fat-historical vs. derive-on-read split, separate-file storage + dual-format reader, effects-sourced emission, and the consumer extension seam.
 - `docs/agent-context/acp-grok-protocol.md`: (design) ACP-over-stdio wire-protocol reference for `grok agent stdio` (grok 0.2.103 conformance target) — framing, lifecycle, `session/update` shapes, usage/cost, permissions; feeds the #239 client + #136 grok-provider.
-- `docs/agent-context/supervised-run.md`: operator runbook for supervising an end-to-end run out-of-band (start → watch → review-from-worktree → admin-land → mark-done → cleanup) + the escalation-adjudication defaults; distinct from the in-cycle pipeline skills.
+- `docs/agent-context/supervised-run.md`: operator runbook for supervising an end-to-end run out-of-band (start → watch → review/revise from main checkout → verify in worktree → land → mark-done → cleanup) + the escalation-adjudication defaults; distinct from the in-cycle pipeline skills.
 - `docs/agent-context/skills.md`: skill layout, canonical tree, bilingual substrate, frontmatter, includes, project-context extension point.
 - `docs/agent-context/testing-and-quality.md`: test commands, lint rules, rubric, review-shape rationale.
 - `docs/config.md`: `.pelaggio.yml` schema.
