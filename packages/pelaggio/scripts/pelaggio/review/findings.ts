@@ -369,6 +369,18 @@ const SCHEMA_EXAMPLE_FINDINGS = [
  */
 const EXAMPLE_VERIFICATION_RATIONALE = "Concrete single-line repository evidence.";
 
+/**
+ * The verbatim rationale printed in `.claude/skills/pr-verify/SKILL.md`'s Judge example,
+ * whose decision is `survives` for `C1`. Match rationale only, after `trim()` — a full-object
+ * match would miss the fail-open parrot that copies the example rationale and flips `decision`
+ * to `refuted`. Distinct from `EXAMPLE_VERIFICATION_RATIONALE` (`…repository evidence.`).
+ *
+ * Matching is deliberately exact (shared helper rule, not Judge-only). A one-character near
+ * miss still parses: fuzzy matching has no principled threshold at a gate and is not needed
+ * to close the verbatim-echo path.
+ */
+const EXAMPLE_JUDGE_RATIONALE = "Concrete single-line evidence.";
+
 /** Works on raw or classified findings — only message/path/line are compared (exact full-tuple match). */
 function isSchemaExampleFinding(finding: Pick<ReviewFinding, "message" | "path" | "line">): boolean {
 	return SCHEMA_EXAMPLE_FINDINGS.some((example) => finding.message === example.message && finding.path === example.path && finding.line === example.line);
@@ -383,6 +395,17 @@ function isSchemaExampleFinding(finding: Pick<ReviewFinding, "message" | "path" 
 function assertNotSchemaExample(summary: string | undefined, findings: ReadonlyArray<Pick<ReviewFinding, "message" | "path" | "line">>, label: string): void {
 	if (summary?.trim() === EXAMPLE_SUMMARY || findings.some(isSchemaExampleFinding)) {
 		throw new ReviewFindingsParseError(`${label} echo the schema example verbatim (the seat did not review the diff)`);
+	}
+}
+
+/**
+ * Fail closed when a decision rationale equals a packaged schema-example sentinel after
+ * `trim()`. `parseSingleLine` returns the raw string (it only *checks* `trim()`), so the
+ * comparison trim is load-bearing. Exact match only — see `EXAMPLE_JUDGE_RATIONALE`.
+ */
+function assertNotExampleRationale(decisions: readonly { rationale: string }[], sentinel: string, label: string): void {
+	if (decisions.some((decision) => decision.rationale.trim() === sentinel)) {
+		throw new ReviewFindingsParseError(`${label} echo the schema example verbatim (the seat did not review)`);
 	}
 }
 
@@ -408,9 +431,12 @@ function assertBlockAtTail(text: string, match: RegExpMatchArray, label: string)
 
 function parseDelimited(text: string, regex: RegExp, label: string): Record<string, unknown> {
 	const matches = [...text.matchAll(regex)];
-	if (matches.length !== 1) throw new ReviewFindingsParseError(matches.length === 0 ? `${label} block not found` : `multiple ${label} blocks found`);
+	const match = matches[0];
+	if (!match) throw new ReviewFindingsParseError(`${label} block not found`);
+	if (matches.length !== 1) throw new ReviewFindingsParseError(`multiple ${label} blocks found`);
+	assertBlockAtTail(text, match, label);
 	try {
-		const value: unknown = JSON.parse(matches[0][1]);
+		const value: unknown = JSON.parse(match[1] ?? "");
 		if (!isRecord(value)) throw new ReviewFindingsParseError(`${label} must be a JSON object`);
 		return value;
 	} catch (error) {
@@ -532,21 +558,25 @@ export function parseJudgeReport(text: string): JudgeReport {
 	const parsed = parseDelimited(text, JUDGE_RE, "authoring review Judge");
 	assertKeys(parsed, ["schemaVersion", "decisions"], ["schemaVersion", "decisions"], "authoring review Judge report");
 	if (parsed.schemaVersion !== 1 || !Array.isArray(parsed.decisions)) throw new ReviewFindingsParseError("invalid authoring review Judge schema");
+	const decisions: JudgeReport["decisions"] = parsed.decisions.map((value, index) => {
+		if (!isRecord(value)) throw new ReviewFindingsParseError(`Judge decision ${index + 1} must be an object`);
+		// #280: `class` is optional — candidate already carries harness-owned effective class.
+		// When present it is validated; loop.ts blocks a safety→non-safety downgrade (#272).
+		assertKeys(value, ["candidateId", "decision", "rationale", "class", "ruling"], ["candidateId", "decision", "rationale"], `Judge decision ${index + 1}`);
+		const { class: _class, ruling: _ruling, ...verification } = value;
+		const base = parseVerificationDecision(verification, index);
+		if (value.class !== undefined && (typeof value.class !== "string" || !isWellFormedClassId(value.class))) throw new ReviewFindingsParseError(`Judge decision ${index + 1} has an invalid class`);
+		if (value.ruling !== undefined && !JUDGE_RULINGS.includes(value.ruling as JudgeRuling)) throw new ReviewFindingsParseError(`Judge decision ${index + 1} has an invalid ruling`);
+		if (value.ruling === "judgment-dissent" && value.class !== undefined && value.class !== "judgment") throw new ReviewFindingsParseError("judgment-dissent is only valid for judgment findings");
+		if (base.decision === "survives" && value.ruling === undefined) throw new ReviewFindingsParseError(`surviving Judge decision ${base.candidateId} requires a ruling`);
+		return { ...base, ...(value.class !== undefined ? { class: value.class as ReviewFindingClass } : {}), ...(value.ruling ? { ruling: value.ruling as JudgeRuling } : {}) };
+	});
+	// Fail closed on the parroted Judge example. Rationale-only: the packaged example is
+	// `survives`, so a full-tuple match would miss a `refuted` flip of the same sentinel.
+	assertNotExampleRationale(decisions, EXAMPLE_JUDGE_RATIONALE, "authoring review Judge decisions");
 	return {
 		schemaVersion: 1,
-		decisions: parsed.decisions.map((value, index) => {
-			if (!isRecord(value)) throw new ReviewFindingsParseError(`Judge decision ${index + 1} must be an object`);
-			// #280: `class` is optional — candidate already carries harness-owned effective class.
-			// When present it is validated; loop.ts blocks a safety→non-safety downgrade (#272).
-			assertKeys(value, ["candidateId", "decision", "rationale", "class", "ruling"], ["candidateId", "decision", "rationale"], `Judge decision ${index + 1}`);
-			const { class: _class, ruling: _ruling, ...verification } = value;
-			const base = parseVerificationDecision(verification, index);
-			if (value.class !== undefined && (typeof value.class !== "string" || !isWellFormedClassId(value.class))) throw new ReviewFindingsParseError(`Judge decision ${index + 1} has an invalid class`);
-			if (value.ruling !== undefined && !JUDGE_RULINGS.includes(value.ruling as JudgeRuling)) throw new ReviewFindingsParseError(`Judge decision ${index + 1} has an invalid ruling`);
-			if (value.ruling === "judgment-dissent" && value.class !== undefined && value.class !== "judgment") throw new ReviewFindingsParseError("judgment-dissent is only valid for judgment findings");
-			if (base.decision === "survives" && value.ruling === undefined) throw new ReviewFindingsParseError(`surviving Judge decision ${base.candidateId} requires a ruling`);
-			return { ...base, ...(value.class !== undefined ? { class: value.class as ReviewFindingClass } : {}), ...(value.ruling ? { ruling: value.ruling as JudgeRuling } : {}) };
-		}),
+		decisions,
 	};
 }
 
@@ -599,9 +629,7 @@ export function parseReviewVerification(text: string): ReviewVerificationReport 
 	const decisions = parsed.decisions.map((value, index) => parseVerificationDecision(value, index));
 	// Fail closed on the parroted pr-verify example. Unguarded, echoing it refutes the candidate and
 	// clears a real blocker — the opposite direction from the findings guard, and the dangerous one.
-	if (decisions.some((decision) => decision.rationale.trim() === EXAMPLE_VERIFICATION_RATIONALE)) {
-		throw new ReviewFindingsParseError("review verification decisions echo the schema example verbatim (the seat did not verify the candidate)");
-	}
+	assertNotExampleRationale(decisions, EXAMPLE_VERIFICATION_RATIONALE, "review verification decisions");
 
 	return {
 		schemaVersion: 1,
