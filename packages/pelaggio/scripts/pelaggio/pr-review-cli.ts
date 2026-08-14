@@ -370,7 +370,7 @@ export function buildComment(
 }
 
 export function buildFailClosedComment(subtype: string, message: string): string {
-	const result: StepResult = { ok: false, subtype, text: message, fullText: message, cost: 0, turns: 0 };
+	const result: StepResult = { ok: false, subtype, text: message, fullText: "", assistantText: "", cost: 0, turns: 0 };
 	const pass: ReviewPass = {
 		iteration: 1,
 		label: "standard",
@@ -712,7 +712,7 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 				const settledResult = settled[index];
 				let pass: ReviewPass;
 				if (!settledResult) {
-					const result: StepResult = { ok: false, subtype: "error_crash", text: "missing settled result", fullText: "missing settled result", cost: 0, turns: 0 };
+					const result: StepResult = { ok: false, subtype: "error_crash", text: "missing settled result", fullText: "", assistantText: "", cost: 0, turns: 0 };
 					pass = {
 						iteration,
 						label,
@@ -728,7 +728,7 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 					pass = settledResult.value;
 				} else {
 					const message = settledResult.reason instanceof Error ? settledResult.reason.message : String(settledResult.reason);
-					const result: StepResult = { ok: false, subtype: "error_crash", text: message, fullText: message, cost: 0, turns: 0 };
+					const result: StepResult = { ok: false, subtype: "error_crash", text: message, fullText: "", assistantText: "", cost: 0, turns: 0 };
 					pass = {
 						iteration,
 						label,

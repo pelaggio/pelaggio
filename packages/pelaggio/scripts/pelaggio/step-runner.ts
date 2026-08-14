@@ -12,12 +12,24 @@ import { classifyStepError, isRefusal, looksLikeStalledAsk, type MainCheckoutDel
 import { opencodeProvider } from "./opencode-provider.js";
 import { gateRecordsDir, PR_REVIEW_GATE_RECORDS_DIR } from "./pr-review-gate-record.js";
 import { ADJUDICATION_SOURCES_DIR, adjudicationSourcesDir } from "./review/adjudication.js";
-import { composeSystemAppend, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "./step-runner-shared.js";
+import { composeSystemAppend, createStepTextProjection, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath, type StepTextProjection } from "./step-runner-shared.js";
 import { MUTATING_TOOLS, toolBrief } from "./tui.js";
 import type { ParkSignal, ProviderCapabilities, ProviderName, Step, StepEmit, StepResult, TokenUsage } from "./types.js";
 import { ensureWorktreeDeps } from "./worktree-deps.js";
 
-export { composeSystemAppend, isWorktreePath } from "./step-runner-shared.js";
+export type { StepTextProjection } from "./step-runner-shared.js";
+export { composeSystemAppend, createStepTextProjection, isWorktreePath } from "./step-runner-shared.js";
+
+/** Pure walker over Claude assistant content blocks. Tests feed synthetic blocks; `claudeRunStep` calls this on each message. */
+export function projectClaudeAssistantBlocks(blocks: ReadonlyArray<{ type: string; text?: string; input?: unknown }>, projection: StepTextProjection): void {
+	for (const block of blocks) {
+		if (block.type === "text") {
+			if (typeof block.text === "string") projection.appendAssistant(block.text);
+		} else if (block.type === "tool_use") {
+			projection.appendToolInput(block.input);
+		}
+	}
+}
 
 // ── Step runner ────────────────────────────────────────────────────────
 
@@ -470,8 +482,7 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 	});
 
 	let text = "";
-	let fullText = "";
-	let assistantText = "";
+	const projection = createStepTextProjection({ assistantSeparator: "\n" });
 	let cost = 0;
 	let resultTurns = 0;
 	let ok = true;
@@ -525,11 +536,10 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 				const assistant = msg as SDKAssistantMessage;
 				emit({ type: "turn" });
 				const content = assistant.message?.content ?? [];
+				projectClaudeAssistantBlocks(content, projection);
 				for (const block of content) {
 					if (block.type === "text" && "text" in block) {
 						const blockText = (block as { text: string }).text;
-						fullText += blockText + "\n";
-						assistantText += blockText + "\n";
 						if (blockText.trim()) {
 							emit({ type: "text", content: blockText });
 						}
@@ -537,8 +547,6 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 					if (block.type === "tool_use" && "name" in block) {
 						const toolName = (block as { name: string }).name;
 						const input = (block as { input: Record<string, unknown> }).input;
-						if (input.command) fullText += String(input.command) + "\n";
-						if (input.description) fullText += String(input.description) + "\n";
 						const brief = toolBrief(toolName, input);
 						const mutating = MUTATING_TOOLS.has(toolName);
 
@@ -652,6 +660,7 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 
 	if (onParentAbort) opts.signal?.removeEventListener("abort", onParentAbort);
 
+	const { assistantText, fullText } = projection.read();
 	const decisions = emitDecisionsFromText(assistantText);
 	for (const emitted of decisions) emit({ type: "decision", decision: emitted.decision });
 	const elapsed = Date.now() - t0;

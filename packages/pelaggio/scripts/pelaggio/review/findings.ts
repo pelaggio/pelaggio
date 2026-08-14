@@ -1,3 +1,4 @@
+import type { StepResult } from "../types.js";
 import { BASELINE_TAXONOMY, DEFAULT_SAFETY_PRECEDENCE, DEFAULT_SAFETY_SINK_CLASS, type FindingClassId, isSafetyClass, isWellFormedClassId, safetyClasses, type TaxonomyConfig } from "./taxonomy.js";
 
 export type { FindingClassId, TaxonomyConfig } from "./taxonomy.js";
@@ -349,10 +350,10 @@ const CWE_RE = /^CWE-\d{1,5}$/i;
 //
 // This guard was originally attributed to the codex seat being "a weaker instruction-follower"
 // that runs one turn and does no inspection. That diagnosis was wrong. The codex seat performs a
-// full review; its first tool call is typically `sed .claude/skills/pr-review/SKILL.md`, and the
-// codex provider folds command OUTPUT into `fullText` — so the example block printed by that
-// `sed` entered the parsed text ahead of the model's real block and tripped this guard on every
-// run. The parse source is now the final assistant message (see modelAuthoredText).
+// full review; its first tool call is typically `sed .claude/skills/pr-review/SKILL.md`. Before
+// #418, some providers folded command output into `fullText`, so the example block printed by
+// that `sed` entered the parsed text ahead of the model's real block. The parse source is now
+// required `assistantText` (see modelAuthoredText).
 const EXAMPLE_SUMMARY = "Concise single-line summary.";
 /** Exact (message, path, line) tuples from the packaged v3 and v1 schema examples. */
 const SCHEMA_EXAMPLE_FINDINGS = [
@@ -495,12 +496,14 @@ export function hasAuthoringReviewFindingsBlock(text: string): boolean {
 }
 
 /**
- * The one legitimate source for a seat's findings and rulings: the model's own final message.
+ * The one legitimate source for a seat's findings and rulings: the model's own accumulated
+ * assistant text.
  *
- * The transcript (`fullText`) is NOT an acceptable substitute, and must not be used even as a
- * fallback. For the codex provider `fullText` includes command *output*, so every file a reviewer
- * reads becomes a candidate findings source. That is how the schema example in
- * `.claude/skills/pr-review/SKILL.md` — read by the reviewer's first tool call — deterministically
+ * `fullText` is NOT an acceptable substitute, and must not be used even as a fallback. After
+ * #418 it intentionally carries command/description tool input; before #418 some providers also
+ * folded command *output* into it. Either way, tool-shaped or repository-controlled bytes must
+ * never be ingested as findings. That is how the schema example in
+ * `.claude/skills/pr-review/SKILL.md` — read by the reviewer's first tool call — historically
  * poisoned every codex seat.
  *
  * A fallback for seats whose final message carries no block was considered and rejected: it lets a
@@ -513,13 +516,12 @@ export function hasAuthoringReviewFindingsBlock(text: string): boolean {
  * consensus-pass with an uncompleted cell. Safety comes from cell completion, not from scavenging
  * a transcript.
  *
- * Reads `assistantText`, not `text`. `text` is the FINAL chunk on some providers — opencode
+ * Reads required `assistantText`. `text` is the FINAL chunk on some providers — opencode
  * reassigns it per streamed text part — so a block split across parts would be truncated to an
- * invalid tail and fail-close every affected seat. `assistantText` accumulates every model-authored
- * chunk in order and carries no tool data on any provider.
+ * invalid tail. There is no `text` fallback.
  */
-export function modelAuthoredText(result: { assistantText?: string; text?: string }): string {
-	return result.assistantText ?? result.text ?? "";
+export function modelAuthoredText(result: Pick<StepResult, "assistantText">): string {
+	return result.assistantText;
 }
 
 /**

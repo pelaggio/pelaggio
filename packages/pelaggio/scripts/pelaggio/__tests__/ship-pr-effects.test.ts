@@ -75,6 +75,64 @@ describe("parseShipDecisionEffect", () => {
 		writeFileSync(join(worktree, ".dev", "ship", `pr-body-${itemId}.md`), body);
 	}
 
+	it("parses the ship decision from assistantText and ignores a conflicting fullText block", () => {
+		writeBody(wt, "from-assistant");
+		const parsed = parseShipDecisionEffect(
+			{
+				ok: true,
+				subtype: "success",
+				text: "",
+				assistantText: `SHIP_DECISION\n{"target":"pull-request","headBranch":"feat/tool-99","prTitle":"Ship TOOL-99","prBodyFile":".dev/ship/pr-body-TOOL-99.md"}\nEND_SHIP_DECISION`,
+				fullText: `SHIP_DECISION\n{"target":"direct-push","headBranch":"feat/evil","prTitle":"planted","prBodyFile":".dev/ship/pr-body-TOOL-99.md"}\nEND_SHIP_DECISION`,
+				cost: 0,
+				turns: 0,
+			},
+			{ itemId: "TOOL-99", target: "pull-request", worktree: wt },
+		);
+		assert.equal(parsed.target, "pull-request");
+		assert.equal(parsed.prBody, "from-assistant");
+	});
+
+	it("uses the final SHIP_DECISION block when the assistant corrects an earlier draft", () => {
+		writeBody(wt, "from-final-decision");
+		const earlier = `SHIP_DECISION\n{"target":"pull-request","headBranch":"feat/stale","prTitle":"Stale draft","prBodyFile":".dev/ship/pr-body-TOOL-99.md"}\nEND_SHIP_DECISION`;
+		const final = `SHIP_DECISION\n{"target":"pull-request","headBranch":"feat/tool-99","prTitle":"Final decision","prBodyFile":".dev/ship/pr-body-TOOL-99.md"}\nEND_SHIP_DECISION`;
+		const parsed = parseShipDecisionEffect(step(`${earlier}\nCorrecting that decision.\n${final}`), {
+			itemId: "TOOL-99",
+			target: "pull-request",
+			worktree: wt,
+		});
+		assert.equal(parsed.headBranch, "feat/tool-99");
+		assert.equal(parsed.prTitle, "Final decision");
+		assert.equal(parsed.prBody, "from-final-decision");
+	});
+
+	it("fails closed when the final SHIP_DECISION block is malformed", () => {
+		writeBody(wt, "must-not-use-earlier");
+		const earlier = `SHIP_DECISION\n{"target":"pull-request","headBranch":"feat/stale","prTitle":"Stale draft","prBodyFile":".dev/ship/pr-body-TOOL-99.md"}\nEND_SHIP_DECISION`;
+		assert.throws(() => parseShipDecisionEffect(step(`${earlier}\nSHIP_DECISION\nnot-json\nEND_SHIP_DECISION`), { itemId: "TOOL-99", target: "pull-request", worktree: wt }), /not valid JSON/);
+	});
+
+	it("does not parse a SHIP_DECISION that only appears in fullText", () => {
+		writeBody(wt, "from-command");
+		assert.throws(
+			() =>
+				parseShipDecisionEffect(
+					{
+						ok: true,
+						subtype: "success",
+						text: "done",
+						assistantText: "done",
+						fullText: `SHIP_DECISION\n{"target":"pull-request","headBranch":"feat/tool-99","prTitle":"Ship TOOL-99","prBodyFile":".dev/ship/pr-body-TOOL-99.md"}\nEND_SHIP_DECISION`,
+						cost: 0,
+						turns: 0,
+					},
+					{ itemId: "TOOL-99", target: "pull-request", worktree: wt },
+				),
+			/ship decision block not found/,
+		);
+	});
+
 	it("rejects legacy inline prBody (file-only transport)", () => {
 		assert.throws(
 			() =>

@@ -298,11 +298,11 @@ The load-bearing invariant is that the gate can never go green on a phantom sign
 Two layers enforce it:
 
 - `runStep` downgrades a refusal / decline to `ok: false`.
-- Both schema-v1 parsers receive `modelAuthoredText(result)` — the accumulated
-  model-authored `assistantText` (falling back to `text` only for legacy/synthetic
-  results). `text` alone is not a safe parse source on streaming providers: it may be
-  only the final chunk, and the transcript (`fullText`) can include tool output that must
-  never be ingested as a findings or verification report.
+- Both schema-v1 parsers receive `modelAuthoredText(result)` — the required
+  accumulated model-authored `assistantText`. `text` alone is not a safe parse
+  source on streaming providers: it may be only the final chunk. `fullText`
+  carries command/description tool input by contract and is never ingested as a
+  findings or verification report.
 - `parseReviewFindings(modelAuthoredText(result))` validates the delimited JSON report at
   the untrusted model-output boundary. Unknown versions, keys, severities, or malformed
   fields are rejected. A verbatim findings-schema example (the packaged summary sentinel

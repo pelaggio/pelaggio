@@ -53,6 +53,47 @@ describe("buildGrokStepResult — tools", () => {
 		assert.equal((tool as { mutating: boolean }).mutating, true);
 	});
 
+	it("projects rawInput.command and description into fullText, not file bodies or tool output", () => {
+		const built = buildGrokStepResult(
+			"implement",
+			[
+				{
+					sessionUpdate: "tool_call",
+					toolCallId: "c1",
+					title: "bash",
+					rawInput: { command: "echo done", description: "print done", content: "FILE_BODY", file_path: "src/a.ts" },
+				},
+				{ sessionUpdate: "tool_call_update", toolCallId: "c1", status: "completed", rawOutput: "TOOL_OUTPUT\n", content: [{ type: "content", content: { type: "text", text: "TOOL_OUTPUT\n" } }] },
+				msg("ok"),
+				turnCompleted("end_turn", USAGE),
+			],
+			{ stopReason: "end_turn" },
+		);
+		assert.match(built.result.fullText, /echo done/);
+		assert.match(built.result.fullText, /print done/);
+		assert.equal(built.result.fullText.includes("FILE_BODY"), false);
+		assert.equal(built.result.fullText.includes("TOOL_OUTPUT"), false);
+		assert.equal(built.result.assistantText.includes("echo done"), false);
+	});
+
+	it("derives decisions from assistant text, not rawInput.command", () => {
+		const built = buildGrokStepResult(
+			"implement",
+			[
+				{
+					sessionUpdate: "tool_call",
+					title: "bash",
+					rawInput: { command: "DECISION: cmd-fork | chose: cmd | alternatives: other" },
+				},
+				msg("DECISION: asst-fork | chose: asst | alternatives: other"),
+				turnCompleted("end_turn", USAGE),
+			],
+			{ stopReason: "end_turn" },
+		);
+		assert.equal(built.result.decisions?.length, 1);
+		assert.equal(built.result.decisions?.[0]?.decision.fork, "asst-fork");
+	});
+
 	it("emits a tool_error for a failed tool_call_update but keeps the step ok on end_turn", () => {
 		const built = buildGrokStepResult(
 			"implement",

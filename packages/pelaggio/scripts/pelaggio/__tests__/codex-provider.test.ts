@@ -50,7 +50,8 @@ describe("buildCodexStepResult", () => {
 		assert.equal(out.result.text, "OK");
 		assert.deepEqual(out.result.toolCounts, { Edit: 1, Bash: 1 });
 		assert.equal(countOccurrences(out.result.fullText, command), 1);
-		assert.equal(countOccurrences(out.result.fullText, "done\n"), 1);
+		assert.equal(countOccurrences(out.result.fullText, "done\n"), 0);
+		assert.equal(out.result.assistantText.includes(command), false);
 		assert.ok(out.events.some((e) => e.type === "tool_use" && e.name === "Edit"));
 		assert.ok(out.events.some((e) => e.type === "tool_use" && e.name === "Bash"));
 	});
@@ -157,6 +158,50 @@ describe("buildCodexStepResult", () => {
 		assert.equal(out.result.text, "pick-item: 80");
 		assert.match(out.result.fullText, /intermediate/);
 		assert.match(out.result.fullText, /pick-item: 80/);
+		assert.match(out.result.assistantText, /pick-item: 80/);
+	});
+
+	it("does not duplicate outputLastMessage when it matches the streamed final agent message", () => {
+		const out = buildCodexStepResult("pick", [{ type: "turn.started" }, { type: "item.completed", item: { type: "agent_message", text: "pick-item: 80" } }, { type: "turn.completed" }], {
+			exitCode: 0,
+			outputLastMessage: "pick-item: 80",
+		});
+
+		assert.equal(out.result.text, "pick-item: 80");
+		assert.equal(countOccurrences(out.result.fullText, "pick-item: 80"), 1);
+		assert.equal(countOccurrences(out.result.assistantText, "pick-item: 80"), 1);
+	});
+
+	it("projects a started+completed command once by item.id and still projects a missing-id event", () => {
+		const events = [
+			{ type: "turn.started" },
+			{ type: "item.started", item: { id: "item_2", type: "command_execution", command: "echo paired", description: "run paired" } },
+			{ type: "item.completed", item: { id: "item_2", type: "command_execution", command: "echo paired", description: "run paired", aggregated_output: "PAIRED_OUTPUT\n" } },
+			{ type: "item.completed", item: { type: "command_execution", command: "echo orphan" } },
+			{ type: "item.completed", item: { type: "agent_message", text: "OK" } },
+			{ type: "turn.completed" },
+		];
+		const out = buildCodexStepResult("implement", events, { exitCode: 0 });
+		assert.equal(countOccurrences(out.result.fullText, "echo paired"), 1);
+		assert.equal(countOccurrences(out.result.fullText, "run paired"), 1);
+		assert.equal(countOccurrences(out.result.fullText, "echo orphan"), 1);
+		assert.equal(out.result.fullText.includes("PAIRED_OUTPUT"), false);
+	});
+
+	it("does not consume an item.id before a later event supplies its command", () => {
+		const out = buildCodexStepResult(
+			"implement",
+			[
+				{ type: "turn.started" },
+				{ type: "item.started", item: { id: "item_late", type: "command_execution", status: "in_progress" } },
+				{ type: "item.completed", item: { id: "item_late", type: "command_execution", command: "echo late", aggregated_output: "LATE_OUTPUT\n" } },
+				{ type: "item.completed", item: { type: "agent_message", text: "OK" } },
+				{ type: "turn.completed" },
+			],
+			{ exitCode: 0 },
+		);
+		assert.equal(countOccurrences(out.result.fullText, "echo late"), 1);
+		assert.equal(out.result.fullText.includes("LATE_OUTPUT"), false);
 	});
 });
 

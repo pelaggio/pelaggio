@@ -7,7 +7,7 @@ import { emitDecisionsFromText } from "./decisions.js";
 import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseWaitFlag, resolveParkReset } from "./helpers.js";
 import { buildAgentEnv, makeSecretScrubber } from "./secret-hygiene.js";
 import type { StepProvider } from "./step-runner.js";
-import { composeSystemAppend, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "./step-runner-shared.js";
+import { composeSystemAppend, createStepTextProjection, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "./step-runner-shared.js";
 import { MUTATING_TOOLS, toolBrief } from "./tui.js";
 import type { ParkSignal, ProviderCapabilities, Step, StepEvent, StepResult, TokenUsage } from "./types.js";
 import { ensureWorktreeDeps } from "./worktree-deps.js";
@@ -144,7 +144,8 @@ function agentMessageText(ev: JsonObject): string {
 	return "";
 }
 
-function commandExecutionText(ev: JsonObject): string {
+/** Command plus output/stderr for `tool_error` diagnostics, never for text projection. */
+function commandExecutionDiagnostic(ev: JsonObject): string {
 	const item = eventItem(ev);
 	if (itemKind(ev) !== "command_execution") return "";
 	return [stringField(item, "command"), stringField(item, "aggregated_output", "stdout", "output"), stringField(item, "stderr", "error")].filter(Boolean).join("\n");
@@ -236,8 +237,8 @@ function rateLimitType(errorText: string): string {
 export function buildCodexStepResult(name: Step, events: JsonObject[], exitInfo: CodexExitInfo): CodexBuildResult {
 	const emitted: StepEvent[] = [];
 	let text = "";
-	let fullText = "";
-	let assistantText = "";
+	const projection = createStepTextProjection({ assistantSeparator: "\n" });
+	const seenCommandIds = new Set<string>();
 	let turns = 0;
 	let completed = false;
 	let failed = false;
@@ -288,19 +289,25 @@ export function buildCodexStepResult(name: Step, events: JsonObject[], exitInfo:
 				}
 			}
 		}
+		if ((toolStart || itemCompleted) && kind === "command_execution") {
+			const item = eventItem(ev);
+			const id = typeof item.id === "string" && item.id ? item.id : undefined;
+			if (id === undefined || !seenCommandIds.has(id)) {
+				const appended = projection.appendToolInput(item);
+				if (id !== undefined && appended) seenCommandIds.add(id);
+			}
+		}
 		if (itemCompleted && kind === "command_execution") {
-			const cmdText = commandExecutionText(ev);
-			if (cmdText) fullText += `${cmdText}\n`;
+			const diagnostic = commandExecutionDiagnostic(ev);
 			const exitCode = commandExitCode(ev);
 			if (exitCode !== undefined && exitCode !== 0) {
-				emitted.push({ type: "tool_error", name: "Bash", brief: toolBrief("Bash", codexToolInput(ev, "Bash")), error: cmdText || `command exited ${exitCode}` });
+				emitted.push({ type: "tool_error", name: "Bash", brief: toolBrief("Bash", codexToolInput(ev, "Bash")), error: diagnostic || `command exited ${exitCode}` });
 			}
 		}
 		const msg = agentMessageText(ev);
 		if (msg) {
 			text = msg;
-			assistantText += `${msg}\n`;
-			fullText += `${msg}\n`;
+			projection.appendAssistant(msg);
 			emitted.push({ type: "text", content: msg });
 		}
 	}
@@ -308,8 +315,7 @@ export function buildCodexStepResult(name: Step, events: JsonObject[], exitInfo:
 	const streamedFinalText = text;
 	if (exitInfo.outputLastMessage?.trim()) {
 		text = exitInfo.outputLastMessage;
-		fullText += `${exitInfo.outputLastMessage}\n`;
-		if (exitInfo.outputLastMessage.trim() !== streamedFinalText.trim()) assistantText += `${exitInfo.outputLastMessage}\n`;
+		if (exitInfo.outputLastMessage.trim() !== streamedFinalText.trim()) projection.appendAssistant(exitInfo.outputLastMessage);
 	}
 	const cost = estimateCodexCost(tokens);
 	let ok = completed && !failed && exitInfo.exitCode === 0 && !exitInfo.timedOut;
@@ -363,6 +369,7 @@ export function buildCodexStepResult(name: Step, events: JsonObject[], exitInfo:
 	}
 
 	const outputTail = text ? text.replace(/\x1b\[[0-9;]*m/g, "").slice(-200) : undefined;
+	const { assistantText, fullText } = projection.read();
 	const decisions = emitDecisionsFromText(assistantText);
 	for (const d of decisions) emitted.push({ type: "decision", decision: d.decision });
 	const toolCountsObj = toolCounts.size > 0 ? Object.fromEntries(toolCounts) : undefined;

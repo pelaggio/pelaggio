@@ -468,7 +468,7 @@ describe("pr-adjudicate CLI verification and effects", () => {
 
 	it("refuses non-ok, thrown, malformed, example, missing, and surviving verification without effects", async () => {
 		const cases: Array<StepResult | Error> = [
-			{ ok: false, subtype: "error_max_turns", text: "", fullText: "", cost: 0, turns: 0 },
+			{ ok: false, subtype: "error_max_turns", text: "", fullText: "", assistantText: "", cost: 0, turns: 0 },
 			new Error("verifier crashed"),
 			{ ok: true, subtype: "success", text: "not a report", fullText: "not a report", assistantText: "not a report", cost: 0, turns: 0 },
 			verification([{ candidateId: "C1", decision: "refuted", rationale: "Concrete single-line repository evidence." }]),
