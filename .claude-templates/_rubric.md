@@ -4,15 +4,15 @@ Six dimensions — apply when planning, reviewing, or fixing code. These drive `
 
 ## Dimensions
 
-**Well-typed** — No `any`. Schema-derived types (`$inferInsert`, `$inferSelect`, domain enums). Branded types for values that need semantic identity (e.g., `Cents`, `UserId`, `{{YOUR-DOMAIN-BRAND}}`). Explicit return types on exports. Discriminated unions over boolean flags where state matters.
+**Well-typed** — Strong types at every boundary; no escape hatches (`any`, untyped dicts, blind casts). Types derived from the schema or source of truth rather than duplicated by hand. Branded/nominal types for values that need semantic identity (e.g., `Cents`, `UserId`, `{{YOUR-DOMAIN-BRAND}}`). Explicit return types on exported functions. Discriminated unions (or your language's equivalent) over boolean flags where state matters. {{ADD YOUR TYPE-SYSTEM RULES}}
 
-**Well-tested** — Unit tests for pure logic. Integration tests for DB (real SQLite, not mocks). Edge cases: empty state, boundaries, error paths. i18n key parity passes *(if bilingual)*. {{ADD STACK-SPECIFIC TEST RULES}}
+**Well-tested** — Unit tests for pure logic. Integration tests against real infrastructure (a real database file, not mocks) where practical. Edge cases: empty state, boundaries, error paths. {{ADD STACK-SPECIFIC TEST RULES — e.g., fixture conventions, i18n key parity, snapshot policy}}
 
-**Well-factored** — SRP. Business logic in domain engines (`src/{your-domain}/`, e.g., `src/ingestion/`, `src/matching/`, `src/pricing/`), not hooks. Reuse shared components ({{LIST YOUR SHARED UI COMPONENTS HERE, e.g., `Screen`, `ScreenHeader`, `Button`, `InfoRow`, `ItemTable`, `StatCard`}}). Hooks are thin wrappers.
+**Well-factored** — Single responsibility. Business logic lives in domain modules (`{{e.g., src/ingestion/, src/pricing/}}`), not in UI glue, route handlers, or hooks. Reuse the shared components and helpers you already have ({{LIST YOUR SHARED COMPONENTS/HELPERS}}). Thin adapters at the edges.
 
-**Idiomatic** — Biome-clean. ULIDs over auto-increment IDs. ISO-8601 UTC via `nowISO()`. Soft deletes with `deleted_at`. Zustand v5 named import. Explicit `created_at`/`updated_at` on inserts. `<Redirect href>` not `useEffect` + `router.replace()`. Schema types from `@db/schema`. Display labels from `get*Label()`. Press feedback on every interactive element. `MOTION.duration.*` tokens.
+**Idiomatic** — Clean under the project linter/formatter ({{YOUR LINTER}}). {{LIST YOUR PROJECT IDIOMS — the "this codebase does X, never Y" rules a new contributor would trip on. Examples of the right shape: "ULIDs over auto-increment IDs", "ISO-8601 UTC timestamps via nowISO()", "soft deletes with deleted_at", "display labels via get*Label(), never hardcoded maps"}}
 
-**Correct** — *This is the project-specific invariants section — fill this in yourself, it's the single most important part of the rubric.* {{REPLACE BELOW WITH YOUR DOMAIN INVARIANTS}}
+**Correct** — *This is the project-specific invariants section — fill this in yourself; it's the single most important part of the rubric.* {{REPLACE BELOW WITH YOUR DOMAIN INVARIANTS}}
 
 *Starter prompts to help you author this section:*
 
@@ -22,22 +22,20 @@ Six dimensions — apply when planning, reviewing, or fixing code. These drive `
 - What operations must be atomic (multi-table writes, cross-entity mutations)?
 - What can the system infer automatically, and what requires explicit user confirmation?
 
-*Examples from Fathom (for reference — replace with yours):*
-- ~~*Currency boundaries enforced — all amounts as integer cents with branded `Cents` type*~~
-- ~~*Transfer exclusion on spend/income queries*~~
-- ~~*Evidence chain to `source_documents`*~~
-- ~~*Confidence-gated automation (3-tier: auto / review / flag)*~~
-- ~~*Multi-table writes in `db.transaction()`*~~
-- ~~*Agent writes via `proposeAction()` only*~~
+*Example invariants of the right shape (replace with yours):*
+- ~~*All money amounts stored as integer cents behind a branded `Cents` type — float arithmetic on currency is a bug*~~
+- ~~*Every derived record traces to its source row (evidence chain)*~~
+- ~~*Multi-table writes always inside a transaction*~~
+- ~~*Automated mutations go through the propose-then-confirm path, never direct writes*~~
 
-**Concise** — YAGNI. No dead code. Early returns. Destructured props. No premature abstractions. No backwards-compat shims. Three similar lines is better than a premature helper.
+**Concise** — YAGNI. No dead code. Early returns. No premature abstractions. No backwards-compat shims. Three similar lines is better than a premature helper.
 
 ## Verification
 
 ```bash
-pnpm typecheck          # repo root
-pnpm check              # apps/mobile — biome
-npx jest --no-coverage  # apps/mobile
+{{TYPECHECK COMMAND}}   # e.g. pnpm typecheck / tsc --noEmit / mypy .
+{{LINT COMMAND}}        # e.g. pnpm check / ruff check / rubocop
+{{TEST COMMAND}}        # e.g. pnpm test / pytest / bin/rails test
 ```
 
-All three must exit 0. **Biome warnings are acceptable** — only errors block. Do not fix warnings in files outside your diff.
+All must exit 0. **Warnings are acceptable** — only errors block. Do not fix warnings in files outside your diff.

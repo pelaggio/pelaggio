@@ -1,3 +1,12 @@
 # @pelaggio/server
 
-Placeholder. The control-plane daemon lands in TOOL-39 — see `docs/roadmap-core.md`. Until then this package exists only so the workspace has the right shape.
+The control-plane daemon for supervised Pelaggio runs — a private, unpublished workspace
+package.
+
+A [Hono](https://hono.dev/) service that starts, watches, and steers pipeline runs, and
+serves the static web UI (`packages/web`) under `/ui/`. The daemon is an authenticated
+authority boundary: `CONTROL_PLANE_TOKEN` is required on every bind, **including
+loopback** — only non-authority surfaces (health, the public trust manifest at
+`/.well-known/pelaggio.trust.json`, and the static UI shell) bypass bearer auth.
+
+Setup, API, and deployment: [`docs/server.md`](../../docs/server.md).

@@ -7,12 +7,14 @@ review, ship — at whatever level of supervision you're comfortable with. Sit i
 session steering the roadmap by hand, hand off the whole project and let it run end to end,
 or dial in anywhere between. You choose the involvement and the token budget; the pipeline
 runs with the same discipline either way. Self-hosted, bring your own agent (Claude Code,
-Codex, or Grok Build), every change behind a bounded blast radius.
+Codex, Grok Build, or OpenCode), every change behind a bounded blast radius.
 
-> **The name.** *Pelaggio* comes from *pelagos*, the open sea. Its agents work **pelagic** —
-> out in open water, far from the shore of direct control — while the platform carves that
-> ocean into an **archipelago** of bounded, isolated islands of work. Say it *peh-LAH-joh*.
-> The orchestrator answers to **Joe**.
+> **The name.** *Pelaggio* plays two notes at once. **Arpeggio**: a chord rolled note by
+> note — the way every work item moves through the pipeline in legible, interruptible
+> sequence. A chord struck all at once is a black box; rolled as an arpeggio, every note
+> can be heard. And *pelagos*, the open sea: its agents work **pelagic** — out in open
+> water, far from the shore of direct control. Say it *peh-LAH-joh*. The orchestrator
+> answers to **Joe**.
 
 ## Why Pelaggio
 
@@ -85,6 +87,19 @@ The threat model and the full trust posture live under [`docs/trust/`](./docs/tr
 
 ## Install
 
+### Prerequisites
+
+- **Node ≥ 20.6** and a **git repository** to run in.
+- **At least one agent CLI**, installed and logged in: Claude Code (`claude`), Codex
+  (`codex`), Grok (`grok` — a version-pinned, managed setup with extra sandbox
+  requirements; follow the [operator guide](./docs/grok.md)), or OpenCode (`opencode`).
+- **`gh` (GitHub CLI), authenticated** — required to ship pull requests. The GitHub-issues
+  roadmap source additionally requires `roadmap.github.repo` (`owner/repo`) in
+  `.pelaggio.yml`; the roadmap label defaults to `autopilot`.
+- **Windows:** run the pipeline inside WSL — see [Platform support](#platform-support).
+
+### Quickstart
+
 ```bash
 npx pelaggio init
 ```
@@ -126,7 +141,7 @@ pipeline leans on POSIX filesystem semantics — worktrees share `node_modules`
 through symlinks, and skill bodies run as `bash` — so on Windows, run the
 pipeline (`pelaggio run`) inside a WSL distribution rather than native
 PowerShell/cmd, where directory symlinks require elevation and bash is absent.
-The read-only CLI surface (`pelaggio roadmap …`, `stats`, `init`, `sync`) works
+The non-pipeline CLI commands (`pelaggio roadmap …`, `stats`, `init`, `sync`) work
 natively on Windows.
 
 ## Using it on itself

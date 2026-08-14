@@ -1,52 +1,53 @@
-# Project Scaffold Templates
+# Pelaggio Consumer Templates
 
-Opinionated starting point for new Expo/TypeScript projects, extracted from Fathom. Pairs with the `.claude/skills/` + `scripts/pelaggio/` stack to give a new project the same propose-then-confirm + rubric-driven workflow on day one.
+The files `pelaggio init` copies into a consumer repo, plus an optional scaffold-doc set
+for bootstrapping a project onto the same propose-then-confirm, rubric-driven workflow.
 
-## What's in here
+## What `init` installs
 
-| File | Goes in new project at | Purpose |
+`init` first copies the entire `.claude/skills/` workflow tree (the pipeline's skills)
+into your repo, then the files below:
+
+| File | Lands in your repo at | Purpose |
 |---|---|---|
-| `migration-checklist.md` | *(reference only)* | The per-project playbook — follow it in order |
-| `CLAUDE.md` | `CLAUDE.md` (repo root) | Claude's orientation primer for this repo |
-| `_rubric.md` | `.claude/skills/_rubric.md` | Six-dimension quality bar that `/shakedown` reads |
-| `docs/philosophy.md` | `docs/philosophy.md` | Why this project exists and what it optimizes for |
-| `docs/architecture.md` | `docs/architecture.md` | C4 structure, data flows, invariants |
-| `docs/conventions-ui.md` | `docs/conventions-ui.md` | Expo/RN component + styling conventions |
-| `docs/tone.md` | `docs/tone.md` | Voice for agent/app copy/error messages |
-| `docs/build.md` | `docs/build.md` | EAS + local build commands |
-| `docs/task-index.md` | `docs/task-index.md` | Cross-roadmap item index for pelaggio `/pick` |
-| `docs/roadmap-example.md` | `docs/roadmap-{track}.md` | Roadmap format pelaggio's parser expects (checkbox + table) |
-| `docs/decisions.md` | `docs/decisions.md` | Open + resolved architectural decisions (product scratchpad) |
-| `docs/decision-log/README.md` | `docs/decision-log/README.md` | Operational pelaggio decision-log authority (per-item files) |
+| `_rubric.md` | `.claude/skills/_rubric.md` | The quality bar `/shakedown` and every review pass read. **Author this before your first cycle** — it is the single highest-leverage setup task |
+| `docs/task-index.md` | `docs/task-index.md` | Cross-roadmap item index for `/pick` |
+| `docs/roadmap-example.md` | `docs/roadmap-example.md` | The roadmap format Pelaggio's parser expects (checkbox + table); rename per track (`docs/roadmap-{track}.md`) as you adopt it |
+| `.pelaggio.example.yml` | `.pelaggio.yml` | Configuration stub — uncomment only the overrides you need |
 
-## How to use
+## The rest of this directory
 
-1. Clone the source project (the one with `.claude/skills/` + `scripts/pelaggio/` + these templates)
-2. Follow `migration-checklist.md` end to end — it tells you what to copy, what to rewrite, and in what order
-3. **Write `_rubric.md` before writing any code.** This is the single highest-leverage task in bootstrapping a new project
-4. First commit should land the scaffold docs + rubric + CLAUDE.md together so Claude has context from turn one
+Three kinds of files ship here beyond what `init` installs:
 
-## Philosophy
+- **Shape references** (`CLAUDE.md`, `docs/philosophy.md`, `docs/architecture.md`,
+  `docs/conventions-ui.md`, `docs/tone.md`, `docs/build.md`, `docs/decisions.md`,
+  `docs/roadmap-phase1-core.md`): they show what a well-scaffolded repo gives its agents,
+  with `{{PLACEHOLDER}}` markers for the parts you must supply. Their concrete examples
+  come from a mobile-app project and will not match your stack — copy the structure,
+  rewrite the content wholesale.
+- **`docs/decision-log/README.md`** is an operational contract, not a shape reference:
+  it defines the per-item decision-log convention the harness and skills read. Adopt it
+  as-is; don't rewrite it.
+- **`migration-checklist.md`** is the legacy pre-npm bootstrap playbook (copying the
+  pipeline out of a source project by hand). `npx pelaggio init` supersedes it; it remains
+  only as a reference for manual setups.
 
-These templates are **opinionated, not abstract.** They reflect a specific take on:
+## Workflow opinions these templates encode
 
-- Local-first where possible; cloud is a choice, never a requirement
-- Propose-then-confirm for any automation touching meaningful state
-- Confidence-gated automation: high = auto-act, mid = propose, low = flag
-- Raw data preservation alongside normalized/enriched versions
-- Expo + TypeScript + pnpm + Biome + Jest as the baseline stack
-- Bilingual i18n from day one (or document explicitly why not)
-- Six-dimension review rubric (well-typed, well-tested, well-factored, idiomatic, correct, concise)
+- **Propose-then-confirm** for any automation touching meaningful state.
+- **Confidence-gated automation**: high = auto-act, mid = propose, low = flag.
+- **Rubric-driven review** across six dimensions (well-typed, well-tested, well-factored,
+  idiomatic, correct, concise).
+- **Documented deviations**: if you disagree with an opinion, say so in
+  `docs/decisions.md` on day one and rewrite the affected rubric section. Opinionated
+  scaffolding only works when deviations are written down.
 
-If you disagree with any of these for your project, **say so in `docs/decisions.md` on day one** and rewrite the affected section of the rubric. Don't silently deviate — opinionated scaffolding only works when deviations are documented.
+## What's NOT here
 
-## What's NOT in here
+Things too project-specific to template, hand-authored in your first week:
 
-Things that are too project-specific to template and must be hand-authored:
-
-- **Domain model** — your schema, your aggregates, your invariants
-- **Rubric bullets under "Correct"** — the project-specific correctness invariants
-- **Roadmap content** — your actual tracks and items
-- **Any domain deep-dive docs** — e.g., `docs/reconciliation.md` in Fathom
-
-These are what the first week of a new project is *for*. Templates can't predict them.
+- **Domain model** — your schema, your aggregates, your invariants.
+- **Rubric bullets under "Correct"** — the project-specific correctness invariants.
+- **Roadmap content** — your actual tracks and items.
+- **Domain deep-dive docs** — whatever your project's equivalent of a reconciliation or
+  pricing engine writeup is.
