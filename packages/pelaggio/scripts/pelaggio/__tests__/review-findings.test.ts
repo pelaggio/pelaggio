@@ -517,6 +517,46 @@ describe("parseJudgeReport", () => {
 		assert.equal(surviving.decisions[0].class, undefined);
 		assert.equal(surviving.decisions[0].ruling, "fixable-blocker");
 	});
+
+	it("takes the FINAL Judge block and rejects one followed by prose", () => {
+		// `modelAuthoredText` accumulates every assistant turn, so an early draft must never remain
+		// gate-authoritative when the seat's own final answer is not a report (#488).
+		const refutedBlock = judgeBlock({ schemaVersion: 1, decisions: [{ candidateId: "C1", decision: "refuted", rationale: "Not reachable." }] });
+		const survivesBlock = judgeBlock({ schemaVersion: 1, decisions: [{ candidateId: "C1", decision: "survives", rationale: "Reproduced.", ruling: "fixable-blocker" }] });
+		assert.throws(() => parseJudgeReport(`${refutedBlock}\n\nLet me think further.`), ReviewFindingsParseError);
+		// A second block stays invalid: "last one wins" would let a late `refuted` clear a real blocker.
+		assert.throws(() => parseJudgeReport(`${refutedBlock}\n\nCorrection:\n${survivesBlock}`), ReviewFindingsParseError);
+		// trailing whitespace after the block is still the tail
+		assert.equal(parseJudgeReport(`${survivesBlock}\n\n   \n`).decisions.length, 1);
+	});
+
+	it("rejects the packaged Judge example echoed verbatim", () => {
+		// Full packaged example from `.claude/skills/pr-verify/SKILL.md` (survives + class + ruling).
+		assert.throws(
+			() =>
+				parseJudgeReport(
+					judgeBlock({
+						schemaVersion: 1,
+						decisions: [{ candidateId: "C1", decision: "survives", rationale: "Concrete single-line evidence.", class: "correctness-regression", ruling: "fixable-blocker" }],
+					}),
+				),
+			ReviewFindingsParseError,
+		);
+		// Fail-open flip a full-tuple match would miss: copy the example rationale, refute.
+		assert.throws(() => parseJudgeReport(judgeBlock({ schemaVersion: 1, decisions: [{ candidateId: "C1", decision: "refuted", rationale: "Concrete single-line evidence." }] })), ReviewFindingsParseError);
+		// A genuine rationale still parses (already used above in this describe).
+		const real = parseJudgeReport(judgeBlock({ schemaVersion: 1, decisions: [{ candidateId: "C1", decision: "refuted", rationale: "Not reachable." }] }));
+		assert.equal(real.decisions.at(0)?.decision, "refuted");
+		// Exact-match residual (shared helper rule, not Judge-only): one-character near miss parses.
+		const nearMiss = parseJudgeReport(judgeBlock({ schemaVersion: 1, decisions: [{ candidateId: "C1", decision: "refuted", rationale: "Concrete single-line evidence!" }] }));
+		assert.equal(nearMiss.decisions.at(0)?.rationale, "Concrete single-line evidence!");
+	});
+
+	it("binds the Judge example sentinel to the packaged SKILL.md", () => {
+		// Distinct from the verification sentinel (`…repository evidence.`); keep as a separate check.
+		const skill = readFileSync(resolve(import.meta.dirname, "../../../../../.claude/skills/pr-verify/SKILL.md"), "utf-8");
+		assert.ok(skill.includes('"rationale":"Concrete single-line evidence."'), "Judge example rationale sentinel drifted");
+	});
 });
 
 describe("review convergence", () => {
