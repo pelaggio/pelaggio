@@ -53,6 +53,7 @@
 		".claude-templates/**",
 		"bin/**",
 		"LICENSE",
+		".pelaggio.example.yml",
 		"!scripts/pelaggio/__tests__/**",
 		"!scripts/pelaggio/**/*.test.ts",
 		"scripts/pelaggio/__tests__/fixtures/review-bench/**"

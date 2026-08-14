@@ -15,8 +15,11 @@ pick → plan → shakedown-plan → implement → shakedown-code → ship
 Each item runs on its own branch in its own git worktree, isolated from `main` and from your
 other work. Each step runs in a fresh agent session with its own model, budget, and turn
 limit. Shipping defaults to a **pull request** — autonomous direct-push is an explicit,
-informed opt-in — and the review gate is **fail-closed**: only a valid, severity-tagged
-report with no `must-fix` findings passes.
+informed opt-in — and the optional
+[PR review gate](https://github.com/pelaggio/pelaggio/blob/main/docs/pr-review.md) is
+**fail-closed**: only a valid, severity-tagged report with no `must-fix` findings posts a
+passing status. (The gate needs one-time runner setup in your repo — `init` does not
+install it.)
 
 Full story, docs, and source: **<https://github.com/pelaggio/pelaggio>**
 
@@ -26,11 +29,15 @@ Full story, docs, and source: **<https://github.com/pelaggio/pelaggio>**
 
 - **Node ≥ 20.6** and a **git repository** to run in.
 - **At least one agent CLI**, installed and logged in: Claude Code (`claude`), Codex
-  (`codex`), Grok (`grok`), or OpenCode (`opencode`).
-- **`gh` (GitHub CLI), authenticated** — required to ship pull requests; the GitHub-issues
-  roadmap source also needs a configured label.
+  (`codex`), Grok (`grok` — a version-pinned, managed setup with extra sandbox
+  requirements; follow the
+  [operator guide](https://github.com/pelaggio/pelaggio/blob/main/docs/grok.md)), or
+  OpenCode (`opencode`).
+- **`gh` (GitHub CLI), authenticated** — required to ship pull requests. The GitHub-issues
+  roadmap source additionally requires `roadmap.github.repo` (`owner/repo`) in
+  `.pelaggio.yml`; the roadmap label defaults to `autopilot`.
 - **Windows:** run the pipeline inside [WSL](https://learn.microsoft.com/windows/wsl/); the
-  read-only CLI surface (`roadmap`, `stats`, `init`, `sync`) works natively.
+  non-pipeline CLI commands (`roadmap`, `stats`, `init`, `sync`) run natively.
 
 ### Quickstart
 
@@ -60,13 +67,16 @@ not code — see the
 For a tool that writes to your repo, the security posture *is* the feature — documented,
 versioned, and falsifiable:
 
-- **Worktree isolation** — each item works only inside its own git worktree.
+- **Worktree isolation** — each item runs on its own branch in its own git worktree;
+  agent writes to the main checkout or sibling worktrees are blocked and audited.
+  (Full-host confinement is the separate, opt-in jail below.)
 - **PR-gated by default** — human review is the shipped default.
 - **Fail-closed review gate** — a malformed report, an error, or a parked run blocks.
 - **Authenticated control plane** — the daemon refuses to start unauthenticated on any
   host, including loopback.
-- **No surprise egress** — self-hosted, no telemetry; secrets are never interpolated into
-  prompts or logs.
+- **No surprise egress** — self-hosted, no telemetry; known secret environment variables
+  are scrubbed from prompts and structured logs (best-effort defense-in-depth — scope and
+  limits are documented in the trust registry).
 
 The threat model and the versioned trust-claims registry live in
 [`docs/trust/`](https://github.com/pelaggio/pelaggio/tree/main/docs/trust).
@@ -91,9 +101,10 @@ host-computed `writeSet`. Entries explicitly identify creates, modifications (wi
 digests), and deletions among tracked or non-ignored untracked files. The contained process
 cannot supply this list.
 
-Run `--self-test` on each host before relying on the boundary. `--debug` prints and retains
-bounded, non-secret diagnostics under the gitignored `.dev/contained-runs/<run-id>/`
-directory after the jailed process has stopped; normal runs remove private runner state.
+Run `--self-test` on each host before relying on the boundary. It fails if any isolation
+probe is unavailable or unsuccessful. `--debug` prints and retains bounded, non-secret
+diagnostics under the gitignored `.dev/contained-runs/<run-id>/` directory after the jailed
+process has stopped; normal runs remove private runner state.
 
 ## Learn more
 
@@ -106,6 +117,7 @@ directory after the jailed process has stopped; normal runs remove private runne
 ## License
 
 Copyright © 2026 Chris Horne. Licensed under the **GNU Affero General Public License,
-version 3 or later** (`AGPL-3.0-or-later`). Because Pelaggio includes a network-facing
-control plane, AGPL section 13 applies: if you run a modified version and let others
-interact with it over a network, you must offer those users the corresponding source.
+version 3 or later** (`AGPL-3.0-or-later`). Because the Pelaggio project includes a
+network-facing control plane (the daemon lives in the source repository, not in this
+package), AGPL section 13 applies: if you run a modified version and let others interact
+with it over a network, you must offer those users the corresponding source.

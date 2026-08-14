@@ -33,6 +33,8 @@ export const ALLOWED_EXACT = [
 	"package.json",
 	"README.md",
 	"LICENSE",
+	// `pelaggio init` scaffold source, packed from the repo root via PACK_TARGETS.
+	".pelaggio.example.yml",
 	// Top-level pipeline entry point; bin/pelaggio.js routes `run`/`stats`
 	// to this file. The `scripts/pelaggio/` prefix does NOT cover it.
 	"scripts/pelaggio.ts",

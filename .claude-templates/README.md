@@ -5,21 +5,32 @@ for bootstrapping a project onto the same propose-then-confirm, rubric-driven wo
 
 ## What `init` installs
 
+`init` first copies the entire `.claude/skills/` workflow tree (the pipeline's skills)
+into your repo, then the files below:
+
 | File | Lands in your repo at | Purpose |
 |---|---|---|
 | `_rubric.md` | `.claude/skills/_rubric.md` | The quality bar `/shakedown` and every review pass read. **Author this before your first cycle** — it is the single highest-leverage setup task |
 | `docs/task-index.md` | `docs/task-index.md` | Cross-roadmap item index for `/pick` |
-| `docs/roadmap-example.md` | `docs/roadmap-{track}.md` | The roadmap format Pelaggio's parser expects (checkbox + table) |
+| `docs/roadmap-example.md` | `docs/roadmap-example.md` | The roadmap format Pelaggio's parser expects (checkbox + table); rename per track (`docs/roadmap-{track}.md`) as you adopt it |
 | `.pelaggio.example.yml` | `.pelaggio.yml` | Configuration stub — uncomment only the overrides you need |
 
-## Optional scaffold docs
+## The rest of this directory
 
-The remaining files (`CLAUDE.md`, `docs/philosophy.md`, `docs/architecture.md`,
-`docs/conventions-ui.md`, `docs/tone.md`, `docs/build.md`, `docs/decisions.md`,
-`docs/decision-log/README.md`, `migration-checklist.md`) are **shape references**: they
-show what a well-scaffolded repo gives its agents, with `{{PLACEHOLDER}}` markers for the
-parts you must supply. Their concrete examples come from a mobile-app project and will not
-match your stack — copy the structure, rewrite the content wholesale.
+Three kinds of files ship here beyond what `init` installs:
+
+- **Shape references** (`CLAUDE.md`, `docs/philosophy.md`, `docs/architecture.md`,
+  `docs/conventions-ui.md`, `docs/tone.md`, `docs/build.md`, `docs/decisions.md`,
+  `docs/roadmap-phase1-core.md`): they show what a well-scaffolded repo gives its agents,
+  with `{{PLACEHOLDER}}` markers for the parts you must supply. Their concrete examples
+  come from a mobile-app project and will not match your stack — copy the structure,
+  rewrite the content wholesale.
+- **`docs/decision-log/README.md`** is an operational contract, not a shape reference:
+  it defines the per-item decision-log convention the harness and skills read. Adopt it
+  as-is; don't rewrite it.
+- **`migration-checklist.md`** is the legacy pre-npm bootstrap playbook (copying the
+  pipeline out of a source project by hand). `npx pelaggio init` supersedes it; it remains
+  only as a reference for manual setups.
 
 ## Workflow opinions these templates encode
 
