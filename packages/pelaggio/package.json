@@ -1,8 +1,37 @@
 {
 	"name": "pelaggio",
 	"version": "0.1.0",
-	"description": "Headless pipeline for running Claude Agent SDK cycles per roadmap item",
+	"description": "Extend how much one developer can ship: autonomous plan → implement → review → ship cycles with Claude Code, Codex, Grok, or OpenCode — worktree-isolated, budget-capped, PR-gated, fail-closed",
+	"keywords": [
+		"ai",
+		"agent",
+		"agents",
+		"autonomous",
+		"coding-agent",
+		"agent-harness",
+		"claude",
+		"claude-code",
+		"codex",
+		"grok",
+		"opencode",
+		"orchestration",
+		"code-review",
+		"git-worktree",
+		"pipeline",
+		"automation",
+		"cli"
+	],
 	"license": "AGPL-3.0-or-later",
+	"author": "Chris Horne",
+	"homepage": "https://github.com/pelaggio/pelaggio#readme",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/pelaggio/pelaggio.git",
+		"directory": "packages/pelaggio"
+	},
+	"bugs": {
+		"url": "https://github.com/pelaggio/pelaggio/issues"
+	},
 	"packageManager": "pnpm@11.18.0+sha512.33d83c77da82f49fba836925c6f1b841181ec3132b670639bd012f7075f5c7cf634c5f870147c19aae7478fac01df09d8892e880454896edd23ee9b33757563c",
 	"type": "module",
 	"engines": {

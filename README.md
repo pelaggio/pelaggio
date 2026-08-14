@@ -9,10 +9,12 @@ or dial in anywhere between. You choose the involvement and the token budget; th
 runs with the same discipline either way. Self-hosted, bring your own agent (Claude Code,
 Codex, or Grok Build), every change behind a bounded blast radius.
 
-> **The name.** *Pelaggio* comes from *pelagos*, the open sea. Its agents work **pelagic** —
-> out in open water, far from the shore of direct control — while the platform carves that
-> ocean into an **archipelago** of bounded, isolated islands of work. Say it *peh-LAH-joh*.
-> The orchestrator answers to **Joe**.
+> **The name.** *Pelaggio* plays two notes at once. **Arpeggio**: a chord rolled note by
+> note — the way every work item moves through the pipeline in legible, interruptible
+> sequence. A chord struck all at once is a black box; rolled as an arpeggio, every note
+> can be heard. And *pelagos*, the open sea: its agents work **pelagic** — out in open
+> water, far from the shore of direct control. Say it *peh-LAH-joh*. The orchestrator
+> answers to **Joe**.
 
 ## Why Pelaggio
 
@@ -84,6 +86,17 @@ Pelaggio's guarantees are documented and verifiable, not marketing:
 The threat model and the full trust posture live under [`docs/trust/`](./docs/trust/).
 
 ## Install
+
+### Prerequisites
+
+- **Node ≥ 20.6** and a **git repository** to run in.
+- **At least one agent CLI**, installed and logged in: Claude Code (`claude`), Codex
+  (`codex`), Grok (`grok`), or OpenCode (`opencode`).
+- **`gh` (GitHub CLI), authenticated** — required to ship pull requests; the GitHub-issues
+  roadmap source also needs a configured label.
+- **Windows:** run the pipeline inside WSL — see [Platform support](#platform-support).
+
+### Quickstart
 
 ```bash
 npx pelaggio init

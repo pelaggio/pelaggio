@@ -1,4 +1,4 @@
-# .pelaggio.yml — see https://github.com/cdhorne/pelaggio/blob/main/docs/config.md
+# .pelaggio.yml — see https://github.com/pelaggio/pelaggio/blob/main/docs/config.md
 #
 # All keys are optional. Defaults live in `DEFAULTS` in scripts/pelaggio/config.ts.
 # Uncomment only the overrides you need.
