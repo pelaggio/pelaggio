@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { buildAgentEnv, collectSecretEnvValues, makeSecretScrubber, REDACTED, scrubSecrets } from "../secret-hygiene.js";
+import { buildAgentEnv, collectSecretEnvValues, makeSecretScrubber, PROVIDER_KEY_ENV, REDACTED, scopeEnvAllowlistToProvider, scrubSecrets } from "../secret-hygiene.js";
 
 describe("buildAgentEnv (#237) — deny-by-default env allowlist", () => {
 	const source: NodeJS.ProcessEnv = {
@@ -37,6 +37,47 @@ describe("buildAgentEnv (#237) — deny-by-default env allowlist", () => {
 	it("applies explicit `extra` overrides", () => {
 		const env = buildAgentEnv({ source, extra: { PATH: "/override" } });
 		assert.equal(env.PATH, "/override");
+	});
+});
+
+describe("scopeEnvAllowlistToProvider (#276) — per-provider key scoping", () => {
+	// The configured global allowlist for a keys-mode multi-provider review.
+	const globalAllowlist = ["OPENAI_API_KEY", "XAI_API_KEY", "ANTHROPIC_API_KEY", "NODE_EXTRA_CA_CERTS", "MY_CUSTOM_VAR"];
+	const source: NodeJS.ProcessEnv = {
+		PATH: "/usr/bin",
+		HOME: "/home/agent",
+		OPENAI_API_KEY: "sk-codex-key-0123456789",
+		XAI_API_KEY: "xai-grok-key-0123456789",
+		ANTHROPIC_API_KEY: "sk-ant-claude-key-0123456789",
+		MY_CUSTOM_VAR: "harmless-but-wanted",
+	};
+
+	it("codex launch env contains the codex key but not grok's or claude's", () => {
+		const env = buildAgentEnv({ source, allow: scopeEnvAllowlistToProvider(globalAllowlist, "codex") });
+		assert.equal(env.OPENAI_API_KEY, "sk-codex-key-0123456789");
+		assert.equal("XAI_API_KEY" in env, false);
+		assert.equal("ANTHROPIC_API_KEY" in env, false);
+	});
+
+	it("grok launch env contains the grok key but not codex's or claude's", () => {
+		const env = buildAgentEnv({ source, allow: scopeEnvAllowlistToProvider(globalAllowlist, "grok") });
+		assert.equal(env.XAI_API_KEY, "xai-grok-key-0123456789");
+		assert.equal("OPENAI_API_KEY" in env, false);
+		assert.equal("ANTHROPIC_API_KEY" in env, false);
+	});
+
+	it("opencode (no direct-key contract) receives no provider key at all", () => {
+		const scoped = scopeEnvAllowlistToProvider(globalAllowlist, "opencode");
+		for (const key of Object.values(PROVIDER_KEY_ENV)) assert.equal(scoped.includes(key as string), false);
+	});
+
+	it("non-key allowlist entries are unaffected for every provider", () => {
+		for (const provider of ["codex", "grok", "opencode"] as const) {
+			const env = buildAgentEnv({ source, allow: scopeEnvAllowlistToProvider(globalAllowlist, provider) });
+			assert.equal(env.MY_CUSTOM_VAR, "harmless-but-wanted");
+			const scoped = scopeEnvAllowlistToProvider(globalAllowlist, provider);
+			assert.ok(scoped.includes("NODE_EXTRA_CA_CERTS"));
+		}
 	});
 });
 

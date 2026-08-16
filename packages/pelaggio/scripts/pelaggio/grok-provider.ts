@@ -15,7 +15,7 @@ import { CONFIG, REPO, resolveProviderBin, resolveStepSettings, type StepSetting
 import { emitDecisionsFromText } from "./decisions.js";
 import { buildGrokArgs, detectLandlock, installGrokSandboxProfile } from "./grok-sandbox.js";
 import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseWaitFlag, resolveParkReset } from "./helpers.js";
-import { buildAgentEnv, makeSecretScrubber } from "./secret-hygiene.js";
+import { buildAgentEnv, makeSecretScrubber, scopeEnvAllowlistToProvider } from "./secret-hygiene.js";
 import type { StepProvider } from "./step-runner.js";
 import { composeSystemAppend, createStepTextProjection, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "./step-runner-shared.js";
 import { MUTATING_TOOLS, toolBrief } from "./tui.js";
@@ -371,7 +371,8 @@ export const runStep: StepProvider["runStep"] = async (name, prompt, opts, emit)
 	const systemAppend = composeSystemAppend({ isWorktree, cwd: opts.cwd, repo: REPO, planBlockActive: name === "implement" });
 	const finalPrompt = `${prompt}\n\n${systemAppend}\n\n${GROK_SANDBOX_APPEND}`;
 	const scrub = makeSecretScrubber();
-	const agentEnv = buildAgentEnv({ allow: CONFIG.security.envAllowlist });
+	// Provider-scoped allowlist: grok gets its own key var but never a sibling provider's (#276).
+	const agentEnv = buildAgentEnv({ allow: scopeEnvAllowlistToProvider(CONFIG.security.envAllowlist, "grok") });
 	const sandbox = await detectLandlock();
 	if (!sandbox && !CONFIG.grokAllowUnsandboxedFallback) {
 		const message = "Grok sandbox requires Landlock, but this Linux kernel does not expose it; set providers.grok.allow-unsandboxed-fallback: true only for a supervised run with an external containment boundary";

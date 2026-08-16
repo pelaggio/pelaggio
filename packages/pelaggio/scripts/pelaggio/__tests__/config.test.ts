@@ -189,6 +189,47 @@ describe("loadConfig — env var precedence", () => {
 	});
 });
 
+describe("loadConfig — PELAGGIO_AUTHORING_ENABLED override (#276)", () => {
+	const AUTHORING_ENV = "PELAGGIO_AUTHORING_ENABLED";
+	let saved: string | undefined;
+
+	beforeEach(() => {
+		saved = process.env[AUTHORING_ENV];
+		delete process.env[AUTHORING_ENV];
+	});
+
+	afterEach(() => {
+		if (saved === undefined) delete process.env[AUTHORING_ENV];
+		else process.env[AUTHORING_ENV] = saved;
+	});
+
+	it("env `off` wins over a yml `local` (CI callers run authoring off without forking the file)", () => {
+		process.env[AUTHORING_ENV] = "off";
+		const repo = tmpRepo();
+		const path = writeYml(repo, "review:\n  authoring:\n    enabled: local\n");
+		assert.equal(loadConfig({ repo, configPath: path }).review.authoring.enabled, "off");
+	});
+
+	it("env applies even when the yml has no review block at all", () => {
+		process.env[AUTHORING_ENV] = "keys";
+		const repo = tmpRepo();
+		const cfg = loadConfig({ repo, configPath: join(repo, "missing.yml") });
+		assert.equal(cfg.review.authoring.enabled, "keys");
+	});
+
+	it("yml value stands when the env var is unset", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "review:\n  authoring:\n    enabled: local\n");
+		assert.equal(loadConfig({ repo, configPath: path }).review.authoring.enabled, "local");
+	});
+
+	it("an invalid env value fails loudly instead of silently falling through", () => {
+		process.env[AUTHORING_ENV] = "true";
+		const repo = tmpRepo();
+		assert.throws(() => loadConfig({ repo, configPath: join(repo, "missing.yml") }), /PELAGGIO_AUTHORING_ENABLED must be one of off\|local\|keys/);
+	});
+});
+
 describe("loadConfig — unknown keys", () => {
 	it("ignores unknown top-level keys", () => {
 		const repo = tmpRepo();

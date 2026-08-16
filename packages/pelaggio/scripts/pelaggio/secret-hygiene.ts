@@ -10,7 +10,35 @@
 // Both are best-effort defense-in-depth, not a secrets broker (that is #176). The env allowlist
 // is the primary control; scrubbing is the backstop for what still reaches a log stream.
 
+import type { ProviderName } from "./types.js";
+
 export const REDACTED = "[REDACTED]";
+
+/** Canonical provider → direct-key env var contract. Single source shared by keys-mode seat
+ *  validation (provider-routing) and per-launch allowlist scoping below, so the two can never
+ *  disagree. Claude's SDK consumes its key in-process; it is listed so subprocess providers
+ *  never receive it. */
+export const PROVIDER_KEY_ENV: Readonly<Partial<Record<ProviderName, string>>> = {
+	claude: "ANTHROPIC_API_KEY",
+	codex: "OPENAI_API_KEY",
+	grok: "XAI_API_KEY",
+};
+
+/**
+ * Scope the configured `security.env-allowlist` to one subprocess provider: every OTHER
+ * provider's key var is stripped, so a multi-provider run (e.g. a codex+grok review panel)
+ * never hands one untrusted seat a sibling provider's credential. Fail-closed nuance: the
+ * launched provider's OWN key still passes through, and non-key allowlist entries are
+ * unaffected. A provider with no key contract (opencode) receives no provider key at all.
+ */
+export function scopeEnvAllowlistToProvider(allowlist: readonly string[], provider: ProviderName): string[] {
+	const foreignKeys = new Set(
+		Object.entries(PROVIDER_KEY_ENV)
+			.filter(([name]) => name !== provider)
+			.map(([, key]) => key),
+	);
+	return allowlist.filter((name) => !foreignKeys.has(name));
+}
 
 /** Env vars a driver subprocess legitimately needs regardless of provider. Deny-by-default: only
  *  these (plus caller/config additions) are forwarded. HOME is required — codex/grok read auth

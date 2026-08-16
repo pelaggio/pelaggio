@@ -814,6 +814,18 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		if (reviewBlock.taxonomy !== undefined) reviewTaxonomy = parseTaxonomyBlock(reviewBlock.taxonomy, configPath);
 	}
 
+	// Per-invocation execution-context override for `review.authoring.enabled` — env wins over
+	// file for this one key (mirrors PELAGGIO_WORKTREE_PREFIX). Repo CI callers use it to run
+	// with authoring off without forking .pelaggio.yml: CI has no subprocess-provider keys, and
+	// CI-shipped PRs are gated by the cold pr-review path, so the in-cycle loop is redundant there.
+	const authoringEnvMode = process.env.PELAGGIO_AUTHORING_ENABLED;
+	if (authoringEnvMode !== undefined) {
+		if (authoringEnvMode !== "off" && authoringEnvMode !== "local" && authoringEnvMode !== "keys") {
+			throw new Error(`PELAGGIO_AUTHORING_ENABLED must be one of off|local|keys, got ${JSON.stringify(authoringEnvMode)}`);
+		}
+		reviewAuthoring = { ...reviewAuthoring, enabled: authoringEnvMode };
+	}
+
 	let confinementAllowDirtyMain: boolean = DEFAULTS.confinement.allowDirtyMain;
 	const confinementBlock = yml.confinement;
 	if (confinementBlock !== undefined) {

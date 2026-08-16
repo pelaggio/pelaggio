@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { CONFIG, REPO, resolveProviderBin, resolveStepSettings, type StepSettings } from "./config.js";
 import { emitDecisionsFromText } from "./decisions.js";
 import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseWaitFlag, resolveParkReset } from "./helpers.js";
-import { buildAgentEnv, makeSecretScrubber } from "./secret-hygiene.js";
+import { buildAgentEnv, makeSecretScrubber, scopeEnvAllowlistToProvider } from "./secret-hygiene.js";
 import type { StepProvider } from "./step-runner.js";
 import { composeSystemAppend, createStepTextProjection, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "./step-runner-shared.js";
 import { MUTATING_TOOLS, toolBrief } from "./tui.js";
@@ -437,9 +437,10 @@ const runStep: StepProvider["runStep"] = async (name, prompt, opts, emit) => {
 	// configured step effort reaches the CLI (issue #431).
 	const args = buildCodexExecArgs({ cwd: opts.cwd, outputPath, ...(codexModel ? { model: codexModel } : {}), effort: codexEffort(effort) });
 	// Deny-by-default env: the child gets only the allowlisted vars, never the full parent env, so
-	// a prompt-injected step cannot read/echo credentials it was never given (#237 / TC-014).
+	// a prompt-injected step cannot read/echo credentials it was never given (#237 / TC-014). The
+	// allowlist is provider-scoped: another provider's key var never reaches this child (#276).
 	const scrub = makeSecretScrubber();
-	const child = spawn(resolveProviderBin(CONFIG, "codex", "codex"), args, { cwd: opts.cwd, stdio: ["pipe", "pipe", "pipe"], env: buildAgentEnv({ allow: CONFIG.security.envAllowlist }) });
+	const child = spawn(resolveProviderBin(CONFIG, "codex", "codex"), args, { cwd: opts.cwd, stdio: ["pipe", "pipe", "pipe"], env: buildAgentEnv({ allow: scopeEnvAllowlistToProvider(CONFIG.security.envAllowlist, "codex") }) });
 
 	try {
 		const events: JsonObject[] = [];

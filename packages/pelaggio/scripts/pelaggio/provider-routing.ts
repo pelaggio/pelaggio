@@ -10,6 +10,7 @@
 
 import type { AuthoringReviewConfig, ResolvedConfig, ReviewSlot, StepSettings } from "./config.js";
 import { modelForProvider, resolveStepSettings } from "./config.js";
+import { PROVIDER_KEY_ENV } from "./secret-hygiene.js";
 import type { CapabilityAxis, CapabilityCandidate, CapabilityPredicate, CapabilityRealization, CapabilityRouteResult, ProviderCapabilities, ProviderName } from "./types.js";
 
 // ── Per-axis matching ──────────────────────────────────────────────────
@@ -154,12 +155,6 @@ export interface ResolveAuthoringReviewOptions {
 	authorSoft?: CapabilityPredicate;
 }
 
-const AUTHORING_KEY_ENV: Partial<Record<ProviderName, string>> = {
-	claude: "ANTHROPIC_API_KEY",
-	codex: "OPENAI_API_KEY",
-	grok: "XAI_API_KEY",
-};
-
 export type AuthoringReviewExecutionResult =
 	| { ok: true; enabled: false }
 	| {
@@ -276,7 +271,7 @@ export function resolveAuthoringReviewExecution(
 	const env = options.env ?? process.env;
 	const allowed = new Set(options.envAllowlist ?? []);
 	const unavailableReason = (provider: ProviderName): string | undefined => {
-		const key = AUTHORING_KEY_ENV[provider];
+		const key = PROVIDER_KEY_ENV[provider];
 		if (!key) return `${provider} has no single direct-key authentication contract`;
 		if (!env[key]?.trim()) return `${key} is not set`;
 		if (provider !== "claude" && !allowed.has(key)) return `${key} is not forwarded by security.env-allowlist`;
