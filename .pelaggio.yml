@@ -26,7 +26,8 @@ review:
   runner: local
   # Opt-in; unattended authoring loops require key authentication.
   authoring:
-    enabled: true
+    enabled: local
+    provider-diversity: prefer
     # Three-reviewer panel restored 2026-08-05 after the grok Build top-up.
     # Caveat until #455 lands: a grok balance failure (402) has no distinct fault
     # class. Grok's own "Internal error" text passes through as a generic error_sdk,

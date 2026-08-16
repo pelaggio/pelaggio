@@ -67,6 +67,9 @@ export class Supervisor {
 			...process.env,
 			PELAGGIO_REPO: repoCwd,
 			PELAGGIO_PLAIN: "1",
+			// Daemon-spawned children are unattended; the local subscription-auth
+			// authoring-review mode must refuse this execution context.
+			PELAGGIO_SUPERVISED_RUN: "1",
 			PELAGGIO_EXECUTION_ID: id,
 			PELAGGIO_EVENT_STREAM_ID: id,
 		};

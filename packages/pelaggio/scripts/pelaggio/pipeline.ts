@@ -101,7 +101,7 @@ import {
 import { type NotifyConfig, notifyCycle, notifyDecision as notifyDecisionEvent, notifyStrandedReview, sendNotification as sendNotificationDefault } from "./notify.js";
 import { buildFailClosedComment, type PrReviewGateResult, runPrReviewGate } from "./pr-review-cli.js";
 import { gateRecordsDir, type NewPrReviewGateRecord, writePrReviewGateRecord } from "./pr-review-gate-record.js";
-import { capabilityMapFrom, resolveAuthoringReviewConfig } from "./provider-routing.js";
+import { capabilityMapFrom, detectUnattendedSignals, resolveAuthoringReviewConfig, resolveAuthoringReviewExecution } from "./provider-routing.js";
 import { adjudicationSourcesDir, fleetRecordDigestOf, writeAdjudicationSourceRecord } from "./review/adjudication.js";
 import { runReviewLoop } from "./review/loop.js";
 import { type ReviewRecord, renderReviewRecord, writeReviewRecord } from "./review/record.js";
@@ -353,6 +353,11 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	let profile = flags.profile ?? "standard";
 	const steps: StepLog[] = [];
 	const provenanceUnavailable: string[] = [];
+	// Attestation audit (#276): PELAGGIO_OPERATOR_ATTENDED suppressions are cycle-scoped
+	// evidence. `finish()` persists them into cycle provenance on every exit path (success,
+	// failure, park) so an attested headless run is reconstructible from
+	// .dev/pelaggio-log.jsonl alone — the resolution-time console line is not durable.
+	const unattendedSignalSuppressions = [...(opts.unattendedSignalSuppressions ?? [])];
 	/** Descriptors for every execution receipt written this cycle (steps + aggregate review). */
 	const executionReceipts: ExecutionReceiptDescriptor[] = [];
 	const assignment = createDriverAssignmentState(opts.cycle);
@@ -1011,6 +1016,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 					...(unavailable.length ? { unavailable: [...new Set(unavailable)] } : {}),
 					challengeDigest: cycleChallengeDigest,
 					...(executionReceipts.length > 0 ? { executionReceipts: [...executionReceipts] } : {}),
+					...(unattendedSignalSuppressions.length > 0 ? { unattendedSignalSuppressions: [...unattendedSignalSuppressions] } : {}),
 				},
 			});
 		}
@@ -1642,7 +1648,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		const shakedownCodeArgs = await buildStepArgs(roadmap, itemId!, "code-review");
 
 		let shakedownResult: StepResult;
-		if (REVIEW_CONFIG.authoring.enabled) {
+		if (REVIEW_CONFIG.authoring.enabled !== "off") {
 			const reviewedSha = getArtifactHeadSha(worktree!);
 			if (!reviewedSha) return parkExit("adversarial review could not bind current HEAD")!;
 			const existingEscalation = lookupReviewEscalation(worktree!, itemId!, reviewedSha);
@@ -1676,8 +1682,24 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				capabilities: capabilityMapFrom(getProvider, REGISTERED_PROVIDERS),
 			});
 			if (!seating.ok) return finish({ itemId, completed: false, cost, error: `shakedown-code assignment failed: ${seating.reason}` });
-			const policy = seating.policy;
+			const execution = resolveAuthoringReviewExecution(seating.policy, {
+				// Orchestrator-computed evidence (CI/single-shot, daemon marker, multi-cycle,
+				// headless). Fallback for direct callers keeps the legacy single-shot-only signal.
+				unattendedSignals: opts.unattendedSignals ?? (opts.noWorktree === true ? ["CI/single-shot (--no-worktree)"] : []),
+				suppressedSignals: opts.unattendedSignalSuppressions ?? [],
+				// Keys mode validates the author revision seat's key with the same fail-closed
+				// rule as Judge/reviewers — before any seat runs (#276 follow-up).
+				author: seating.author,
+				envAllowlist: CONFIG.security.envAllowlist,
+			});
+			if (!execution.ok) return finish({ itemId, completed: false, cost, error: `shakedown-code execution context failed: ${execution.reason}` });
+			if (!execution.enabled) return finish({ itemId, completed: false, cost, error: "shakedown-code execution context unexpectedly disabled the authoring loop" });
+			const policy = execution.policy;
 			log(`authoring review capability realizations: ${JSON.stringify(seating.realizations)}`);
+			// Attestation audit: every operator-attested suppression is logged at resolution time
+			// so a run that used PELAGGIO_OPERATOR_ATTENDED is reconstructible from the cycle log.
+			if (execution.suppressedSignals.length > 0) log(execution.suppressedSignals.join("; "));
+			if (execution.softened.length > 0) log(`authoring review key-mode softening: ${execution.softened.join("; ")}`);
 			// Hand every reviewer seat the actual branch diff so a single-turn seat that never runs
 			// `git diff` (codex) still reviews real code instead of parroting the skill example.
 			// Recomputed per pass inside the `review` prompt: the author revision seat advances HEAD
@@ -1747,6 +1769,14 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 							revise: (survivors) => `${expandSkill("shakedown", shakedownCodeArgs)}\n\nThe Judge retained these blockers:\n${JSON.stringify(survivors)}`,
 						},
 					});
+					if (execution.softened.length > 0) {
+						// Key-mode softening joins — never replaces — the loop's own diversity
+						// explanation (e.g. "reviewer seats did not complete"), mirroring the
+						// merge rule inside runReviewLoop.
+						const explanation = execution.softened.join("; ");
+						if (loop.diversity.state === "met") loop.diversity = { state: "softened", explanation };
+						else if (!loop.diversity.explanation.includes(explanation)) loop.diversity = { state: "softened", explanation: `${loop.diversity.explanation}; ${explanation}` };
+					}
 				} finally {
 					for (const sha of preparedSeatShas) cleanupAuthoringReviewSeatsForSha(mainRepo, sha);
 				}
@@ -2732,6 +2762,11 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 
 		// Resolve no-worktree: --no-worktree flag, CI=true, or PELAGGIO_SINGLE_SHOT=1
 		const noWorktree = flags["no-worktree"] || process.env.CI === "true" || process.env.PELAGGIO_SINGLE_SHOT === "1";
+		// Unattended-execution evidence for the review.authoring=local gate (#276): computed
+		// once here — the only place run shape (cycles), daemon marker, and TTY are all known —
+		// and threaded through PipelineOpts so the gate itself stays pure/injectable. The report
+		// carries both positive signals and any PELAGGIO_OPERATOR_ATTENDED TTY suppression.
+		const unattendedEvidenceFor = (multiCycle: boolean) => detectUnattendedSignals({ singleShot: noWorktree, multiCycle, env: process.env, stdoutIsTTY: process.stdout.isTTY === true });
 		const orchestratorMode = deps.mode ?? "standard";
 		// Operator revise restores a claim worktree then calls us in-process. Those ambient
 		// single-shot paths set `worktree = REPO`, which would write the revision into the
@@ -2820,6 +2855,27 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		// Continuous mode (issue #82): default `--cycles 1` means unlimited; explicit
 		// `--cycles N` (N>1) is a safety ceiling. See `continuousCycleCap`.
 		const cycles = continuousCycleCap(flags, continuous);
+		// One campaign-wide signal set: a multi-cycle campaign stays "multi-cycle" for every
+		// cycle in it (including park-and-resume rounds), not just cycles after the first.
+		const runUnattendedEvidence = unattendedEvidenceFor(cycles > 1);
+		// Pre-flight (#276 follow-up): `enabled=local` with a deterministic unattended signal
+		// (CI/single-shot, daemon marker, multi-cycle) can only ever refuse — yet the
+		// resolution-time gate sits at shakedown-code, after the full plan+implement spend.
+		// Refuse before any paid work, reusing the exact resolution-time refusal. The TTY
+		// evidence is deliberately excluded (`stdoutIsTTY: true`): the headless signal is
+		// operator-attestable via PELAGGIO_OPERATOR_ATTENDED and belongs to resolution time.
+		// Resume re-entry may legitimately start past shakedown-code, so it keeps the
+		// resolution-time gate alone; that gate stays the authoritative backstop everywhere.
+		if (!flags.resume && REVIEW_CONFIG.authoring.enabled === "local") {
+			const deterministic = detectUnattendedSignals({ singleShot: noWorktree, multiCycle: cycles > 1, env: process.env, stdoutIsTTY: true });
+			if (deterministic.signals.length > 0) {
+				const preflight = resolveAuthoringReviewExecution(REVIEW_CONFIG.authoring, { unattendedSignals: deterministic.signals });
+				if (!preflight.ok) {
+					console.error(preflight.reason);
+					return { exitCode: 2, results };
+				}
+			}
+		}
 		// Provider-estimated spend (e.g. Codex on a subscription) counts toward `--budget` the same
 		// as billed USD — deliberate: it fails safe (a subscription run still respects the cap as a
 		// token-spend proxy) and the warning below marks the figure `~` so it never reads as real USD.
@@ -3134,6 +3190,8 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						workerStatus: status,
 						logPath,
 						liveStatus,
+						unattendedSignals: runUnattendedEvidence.signals,
+						unattendedSignalSuppressions: runUnattendedEvidence.suppressed,
 						...(decisionNotifier ? { notifyDecision: decisionNotifier } : {}),
 						...(noWorktree ? { noWorktree: true } : {}),
 						...(signal ? { signal } : {}),
@@ -3320,6 +3378,8 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						workerStatus: st,
 						logPath: resumeLogPath,
 						liveStatus,
+						unattendedSignals: runUnattendedEvidence.signals,
+						unattendedSignalSuppressions: runUnattendedEvidence.suppressed,
 						...(decisionNotifier ? { notifyDecision: decisionNotifier } : {}),
 						...(noWorktree ? { noWorktree: true } : {}),
 						...(signal ? { signal } : {}),
@@ -3709,6 +3769,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 
 			let result: CycleResult;
 			try {
+				const unattendedEvidence = unattendedEvidenceFor(false);
 				result = await _runPipeline(
 					{
 						itemId: id,
@@ -3720,6 +3781,8 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						dryRun: false,
 						workerStatus: status,
 						liveStatus,
+						unattendedSignals: unattendedEvidence.signals,
+						unattendedSignalSuppressions: unattendedEvidence.suppressed,
 						...(decisionNotifier ? { notifyDecision: decisionNotifier } : {}),
 						...(noWorktree ? { noWorktree: true } : {}),
 						...(signal ? { signal } : {}),
@@ -3892,6 +3955,8 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 							dryRun: false,
 							workerStatus: status,
 							liveStatus,
+							unattendedSignals: runUnattendedEvidence.signals,
+							unattendedSignalSuppressions: runUnattendedEvidence.suppressed,
 							...(decisionNotifier ? { notifyDecision: decisionNotifier } : {}),
 							...(signal ? { signal } : {}),
 						},

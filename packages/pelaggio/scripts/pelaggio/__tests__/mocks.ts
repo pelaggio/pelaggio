@@ -19,12 +19,12 @@ import type { CycleResult, Flags, ParkSignal, PipelineOpts, Step, StepResult } f
 // reviewer-not-author fails closed on a claude-only host like CI and the cycle parks), and pin
 // the authoring loop off (else the adversarial path parks on unmocked review steps). Call
 // setupHermeticPipelineEnv from `before` and teardownHermeticPipelineEnv from `after`.
-let savedAuthoringEnabled = false;
+let savedAuthoringEnabled = REVIEW_CONFIG.authoring.enabled;
 export function setupHermeticPipelineEnv(): void {
 	mock.method(console, "log", () => {});
 	mock.method(console, "error", () => {});
 	savedAuthoringEnabled = REVIEW_CONFIG.authoring.enabled;
-	REVIEW_CONFIG.authoring.enabled = false;
+	REVIEW_CONFIG.authoring.enabled = "off";
 	__setProviderAvailableForTests(() => true);
 }
 export function teardownHermeticPipelineEnv(): void {

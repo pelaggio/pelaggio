@@ -207,7 +207,7 @@ function recordingKey(role: BenchRole, seatId: string, pass: number): string {
 /** Assemble the full `AuthoringReviewConfig` from the fixture's pinned policy fields. */
 function buildPolicy(policy: BenchPolicy): AuthoringReviewConfig {
 	return {
-		enabled: true,
+		enabled: "local",
 		reviewers: policy.reviewers,
 		judge: policy.judge,
 		blockingBar: "must-fix",

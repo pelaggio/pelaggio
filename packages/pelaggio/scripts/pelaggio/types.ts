@@ -203,6 +203,13 @@ export interface CycleProvenance {
 	 * legacy log compatibility.
 	 */
 	executionReceipts?: ExecutionReceiptDescriptor[];
+	/**
+	 * Unattended signals suppressed by the per-invocation `PELAGGIO_OPERATOR_ATTENDED`
+	 * attestation (#276). Persisted on every exit path (success, failure, park) so an
+	 * attested headless run is reconstructible from the cycle log alone — the
+	 * resolution-time console line is not durable. Present only when non-empty.
+	 */
+	unattendedSignalSuppressions?: string[];
 }
 
 // ── Log entries (read from .dev/pelaggio-log.jsonl) ───────────────────
@@ -516,6 +523,23 @@ export interface PipelineOpts {
 	signal?: AbortSignal;
 	/** CI/single-shot mode: use REPO as worktree, skip sibling-path creation. */
 	noWorktree?: boolean;
+	/**
+	 * Unattended-execution evidence for the `review.authoring.enabled=local` gate, computed
+	 * once per run by the orchestrator via `detectUnattendedSignals` (CI/single-shot,
+	 * daemon-spawned, multi-cycle, headless). Direct `runPipeline()` callers that omit it
+	 * fall back to the single-shot signal derived from `noWorktree` — ambient env/TTY are
+	 * deliberately not probed inside the pipeline so tests stay hermetic and injectable.
+	 */
+	unattendedSignals?: readonly string[];
+	/**
+	 * Unattended signals suppressed by the per-invocation operator attestation
+	 * (`PELAGGIO_OPERATOR_ATTENDED=1`; only the headless/TTY signal is attestable).
+	 * Threaded alongside `unattendedSignals` so the resolution site logs each
+	 * suppression and `finish()` persists it into cycle provenance
+	 * (`CycleProvenance.unattendedSignalSuppressions`) on every exit path — an
+	 * attested run stays reconstructible from the JSONL log after the fact.
+	 */
+	unattendedSignalSuppressions?: readonly string[];
 	/** Independently gated, fail-soft per-decision delivery. */
 	notifyDecision?: (input: { itemId: string | null; decision: Decision; step: Step; source: string; logPath: string; escalation?: ReviewEscalation & { id: string } }) => Promise<void>;
 }

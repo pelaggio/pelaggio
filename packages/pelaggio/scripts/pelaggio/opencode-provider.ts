@@ -22,7 +22,7 @@ import { spawn } from "node:child_process";
 import { CONFIG, REPO, resolveProviderBin, resolveStepSettings, type StepSettings } from "./config.js";
 import { emitDecisionsFromText } from "./decisions.js";
 import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseWaitFlag, resolveParkReset } from "./helpers.js";
-import { buildAgentEnv, makeSecretScrubber } from "./secret-hygiene.js";
+import { buildAgentEnv, makeSecretScrubber, scopeEnvAllowlistToProvider } from "./secret-hygiene.js";
 import type { StepProvider } from "./step-runner.js";
 import { composeSystemAppend, createStepTextProjection, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "./step-runner-shared.js";
 import { MUTATING_TOOLS, toolBrief } from "./tui.js";
@@ -432,10 +432,12 @@ const runStep: StepProvider["runStep"] = async (name, prompt, opts, emit) => {
 	const args = ["run", "--format", "json", ...(model ? ["-m", model] : []), finalPrompt];
 	// Deny-by-default env: the child gets only the allowlisted vars, never the full parent env, so a
 	// prompt-injected step cannot read/echo credentials it was never given (#237 / TC-014). The
-	// autonomous-permission + lsp knobs ride child-only extras, never a process.env mutation.
+	// allowlist is provider-scoped — opencode has no direct-key contract, so no provider key var
+	// reaches it at all (#276). The autonomous-permission + lsp knobs ride child-only extras,
+	// never a process.env mutation.
 	const scrub = makeSecretScrubber();
 	const agentEnv = buildAgentEnv({
-		allow: CONFIG.security.envAllowlist,
+		allow: scopeEnvAllowlistToProvider(CONFIG.security.envAllowlist, "opencode"),
 		extra: {
 			OPENCODE_PERMISSION: JSON.stringify({ "*": "allow" }),
 			OPENCODE_CONFIG_CONTENT: JSON.stringify({ lsp: true }),

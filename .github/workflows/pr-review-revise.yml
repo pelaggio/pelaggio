@@ -139,6 +139,12 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           ITEM_ID: ${{ steps.resolve.outputs.item_id }}
           CI: "true"
+          # Override .pelaggio.yml's `review.authoring.enabled: local` (the reviewed
+          # interactive/supervised intent): this ephemeral VM has no Codex/Grok provider
+          # keys, and the revised push is re-gated by the cold pr-review path anyway, so
+          # the in-cycle authoring loop is redundant here. Without this the `--resume`
+          # path skips pre-flight, pays for implement, then fail-closes at shakedown-code.
+          PELAGGIO_AUTHORING_ENABLED: "off"
         run: |
           pnpm pelaggio --resume "$ITEM_ID" --no-worktree \
             --target pull-request --review-findings ".dev/review-findings-$ITEM_ID.md" --verbose

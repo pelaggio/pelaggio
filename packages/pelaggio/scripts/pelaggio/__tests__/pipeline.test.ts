@@ -10,6 +10,7 @@ import { dispatchStepEffects, EffectsManifestError, writeEffectsManifest } from 
 import { FifoPolicy } from "../flow-policy.js";
 import { defaultTypecheckRatchet, type RunStepFn, runOrchestrator, runPipeline } from "../pipeline.js";
 import type { PrReviewGateResult, RunPrReviewGateOptions } from "../pr-review-cli.js";
+import { OPERATOR_ATTESTED_TTY_SUPPRESSION } from "../provider-routing.js";
 import { shipBodyFile } from "../ship/decision.js";
 import type { ShipBookkeepingResult } from "../ship/index.js";
 import { getShipTarget } from "../ship/index.js";
@@ -3520,7 +3521,7 @@ describe("runPipeline — authoring review capability seating + effects (#337)",
 			judge: { ...REVIEW_CONFIG.authoring.judge },
 		};
 		// Two non-author reviewers so author (claude, default implement) is excluded cleanly.
-		REVIEW_CONFIG.authoring.enabled = true;
+		REVIEW_CONFIG.authoring.enabled = "local";
 		REVIEW_CONFIG.authoring.reviewers = [
 			{ id: "codex", provider: "codex" },
 			{ id: "grok", provider: "grok" },
@@ -3598,7 +3599,7 @@ describe("runPipeline — authoring review capability seating + effects (#337)",
 		};
 		// cycle=1 + implement-only rotates implement author to codex (pool [claude,codex,grok]).
 		// A sole codex reviewer is then excluded → seating fails before any seat step runs.
-		REVIEW_CONFIG.authoring.enabled = true;
+		REVIEW_CONFIG.authoring.enabled = "local";
 		REVIEW_CONFIG.authoring.reviewers = [{ id: "only-codex", provider: "codex" }];
 
 		const worktree = makeTempGitRepo();
@@ -3630,6 +3631,174 @@ describe("runPipeline — authoring review capability seating + effects (#337)",
 		} finally {
 			REVIEW_CONFIG.authoring.enabled = saved.enabled;
 			REVIEW_CONFIG.authoring.reviewers = saved.reviewers;
+		}
+	});
+
+	it("refuses local subscription mode in CI/single-shot execution before starting review seats", async () => {
+		const saved = REVIEW_CONFIG.authoring.enabled;
+		REVIEW_CONFIG.authoring.enabled = "local";
+		const worktree = makeTempGitRepo();
+		writeFileSync(join(worktree, "seed.txt"), "seed");
+		execSync("git add -A && git commit -q -m seed", { cwd: worktree });
+		const parkSignal = makeParkSignal();
+		const { runStep, calls } = createMockRunStep({ implement: { ok: true, writes: { "impl.txt": "x" } } }, parkSignal);
+
+		try {
+			const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", noWorktree: true }, parkSignal, baseFlags, {
+				runStep,
+				mainRepo: worktree,
+				listWorktrees: () => [worktree],
+				appendLog: () => {},
+				runShipBookkeeping: noopBookkeeping,
+			});
+
+			assert.equal(result.completed, false);
+			assert.match(result.error ?? "", /execution context failed.*enabled=local.*CI\/single-shot/);
+			assert.ok(!calls.some((call) => call.step === "pr-review" || call.step === "pr-verify"));
+		} finally {
+			REVIEW_CONFIG.authoring.enabled = saved;
+		}
+	});
+
+	it("refuses local mode on orchestrator-computed unattended signals (daemon/multi-cycle)", async () => {
+		const saved = REVIEW_CONFIG.authoring.enabled;
+		REVIEW_CONFIG.authoring.enabled = "local";
+		const worktree = makeTempGitRepo();
+		writeFileSync(join(worktree, "seed.txt"), "seed");
+		execSync("git add -A && git commit -q -m seed", { cwd: worktree });
+		const parkSignal = makeParkSignal();
+		const { runStep, calls } = createMockRunStep({ implement: { ok: true, writes: { "impl.txt": "x" } } }, parkSignal);
+
+		try {
+			// Worktree-backed run (noWorktree unset): the broadened gate must refuse on the
+			// orchestrator-threaded signal set, not only on CI/single-shot.
+			const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", unattendedSignals: ["daemon-spawned (PELAGGIO_SUPERVISED_RUN=1)", "multi-cycle campaign (--cycles/--parallel > 1)"] }, parkSignal, baseFlags, {
+				runStep,
+				mainRepo: worktree,
+				listWorktrees: () => [worktree],
+				appendLog: () => {},
+				runShipBookkeeping: noopBookkeeping,
+			});
+
+			assert.equal(result.completed, false);
+			assert.match(result.error ?? "", /execution context failed.*enabled=local.*daemon-spawned.*multi-cycle/);
+			assert.ok(!calls.some((call) => call.step === "pr-review" || call.step === "pr-verify"));
+		} finally {
+			REVIEW_CONFIG.authoring.enabled = saved;
+		}
+	});
+
+	it("attested piped single-cycle run allows local mode and logs the TTY-signal suppression (#276)", async () => {
+		const saved = {
+			enabled: REVIEW_CONFIG.authoring.enabled,
+			reviewers: REVIEW_CONFIG.authoring.reviewers.map((s) => ({ ...s })),
+			judge: { ...REVIEW_CONFIG.authoring.judge },
+		};
+		REVIEW_CONFIG.authoring.enabled = "local";
+		REVIEW_CONFIG.authoring.reviewers = [
+			{ id: "codex", provider: "codex" },
+			{ id: "grok", provider: "grok" },
+		];
+		REVIEW_CONFIG.authoring.judge = { id: "judge", provider: "claude" };
+
+		const worktree = makeTempGitRepo();
+		writeFileSync(join(worktree, "seed.txt"), "seed");
+		execSync("git add -A && git commit -q -m seed", { cwd: worktree });
+		const parkSignal = makeParkSignal();
+		const { runStep, calls } = createMockRunStep(
+			{
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"pr-review": { ok: true, text: cleanFindings, fullText: cleanFindings },
+				"pr-verify": { ok: true, text: cleanJudge, fullText: cleanJudge },
+				ship: {
+					ok: true,
+					text: "ship-merged: TOOL-99",
+					sideEffect: (cwd) => {
+						execSync("git checkout -q main", { cwd });
+						execSync("git merge -q --no-ff feat/tool-99", { cwd });
+						execSync("git checkout -q feat/tool-99", { cwd });
+					},
+				},
+			},
+			parkSignal,
+		);
+
+		const messages: string[] = [];
+		mock.method(console, "log", (message: string) => messages.push(String(message)));
+		try {
+			// Orchestrator-computed evidence for an operator-attested piped run: the TTY signal
+			// was suppressed by PELAGGIO_OPERATOR_ATTENDED=1 and no positive signal remains.
+			const appended: Array<Record<string, unknown>> = [];
+			const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", unattendedSignals: [], unattendedSignalSuppressions: [OPERATOR_ATTESTED_TTY_SUPPRESSION] }, parkSignal, baseFlags, {
+				runStep,
+				mainRepo: worktree,
+				listWorktrees: () => [worktree],
+				appendLog: (entry) => appended.push(entry),
+				runShipBookkeeping: noopBookkeeping,
+			});
+
+			assert.equal(result.completed, true, `expected completed cycle; error=${result.error}`);
+			assert.ok(
+				calls.some((c) => c.step === "pr-review"),
+				"expected the review loop to run under the attested local gate",
+			);
+			const suppressionLines = messages.filter((message) => message.includes(OPERATOR_ATTESTED_TTY_SUPPRESSION));
+			assert.equal(suppressionLines.length, 1, "the attestation suppression must be logged exactly once at resolution time");
+			// The security contract: an attested headless run is reconstructible from the
+			// APPENDED cycle record, not just console output (#276 must-fix).
+			assert.equal(appended.length, 1, "expected exactly one appended cycle record");
+			const provenance = appended[0]?.provenance as { unattendedSignalSuppressions?: string[] } | undefined;
+			assert.deepEqual(provenance?.unattendedSignalSuppressions, [OPERATOR_ATTESTED_TTY_SUPPRESSION], "the attestation suppression must be persisted in the appended cycle provenance");
+		} finally {
+			mock.restoreAll();
+			mock.method(console, "log", () => {});
+			mock.method(console, "error", () => {});
+			REVIEW_CONFIG.authoring.enabled = saved.enabled;
+			REVIEW_CONFIG.authoring.reviewers = saved.reviewers;
+			REVIEW_CONFIG.authoring.judge = saved.judge;
+		}
+	});
+
+	it("attested run still refuses local mode when a non-TTY signal remains (attestation is not an override)", async () => {
+		const saved = REVIEW_CONFIG.authoring.enabled;
+		REVIEW_CONFIG.authoring.enabled = "local";
+		const worktree = makeTempGitRepo();
+		writeFileSync(join(worktree, "seed.txt"), "seed");
+		execSync("git add -A && git commit -q -m seed", { cwd: worktree });
+		const parkSignal = makeParkSignal();
+		const { runStep, calls } = createMockRunStep({ implement: { ok: true, writes: { "impl.txt": "x" } } }, parkSignal);
+
+		try {
+			const appended: Array<Record<string, unknown>> = [];
+			const result = await runPipeline(
+				{
+					...baseOpts(worktree),
+					startFrom: "implement",
+					unattendedSignals: ["multi-cycle campaign (--cycles/--parallel > 1)"],
+					unattendedSignalSuppressions: [OPERATOR_ATTESTED_TTY_SUPPRESSION],
+				},
+				parkSignal,
+				baseFlags,
+				{
+					runStep,
+					mainRepo: worktree,
+					listWorktrees: () => [worktree],
+					appendLog: (entry) => appended.push(entry),
+					runShipBookkeeping: noopBookkeeping,
+				},
+			);
+
+			assert.equal(result.completed, false);
+			assert.match(result.error ?? "", /execution context failed.*enabled=local.*multi-cycle/);
+			assert.match(result.error ?? "", /suppressed by PELAGGIO_OPERATOR_ATTENDED attestation/);
+			assert.ok(!calls.some((call) => call.step === "pr-review" || call.step === "pr-verify"));
+			// Failure exit paths persist the suppression too — reconstruction must not
+			// depend on the cycle succeeding (#276 must-fix).
+			assert.equal(appended.length, 1, "expected exactly one appended cycle record");
+			const provenance = appended[0]?.provenance as { unattendedSignalSuppressions?: string[] } | undefined;
+			assert.deepEqual(provenance?.unattendedSignalSuppressions, [OPERATOR_ATTESTED_TTY_SUPPRESSION], "the suppression must be persisted on the failed cycle's appended record");
+		} finally {
+			REVIEW_CONFIG.authoring.enabled = saved;
 		}
 	});
 
@@ -3680,7 +3849,7 @@ describe("runPipeline — resolved escalation acknowledgement", () => {
 			reviewers: REVIEW_CONFIG.authoring.reviewers.map((seat) => ({ ...seat })),
 			judge: { ...REVIEW_CONFIG.authoring.judge },
 		};
-		REVIEW_CONFIG.authoring.enabled = true;
+		REVIEW_CONFIG.authoring.enabled = "local";
 		REVIEW_CONFIG.authoring.reviewers = [
 			{ id: "codex", provider: "codex" },
 			{ id: "grok", provider: "grok" },

@@ -80,6 +80,9 @@ describe("Supervisor.start", () => {
 		assert.equal(s0.opts.cwd, dir);
 		assert.equal(s0.opts.env.PELAGGIO_REPO, dir);
 		assert.equal(s0.opts.env.PELAGGIO_PLAIN, "1");
+		// Daemon children are unattended by definition: this marker drives the
+		// review.authoring=local refusal in the pelaggio harness (#276).
+		assert.equal(s0.opts.env.PELAGGIO_SUPERVISED_RUN, "1");
 		assert.equal(s0.opts.env.PELAGGIO_EXECUTION_ID, run.id);
 		assert.equal(s0.opts.env.PELAGGIO_EVENT_STREAM_ID, run.id);
 	});

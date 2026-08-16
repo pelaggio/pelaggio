@@ -169,6 +169,20 @@ execution context.** This is load-bearing and non-negotiable:
 - **Unattended / CI / shared / at-scale loop**: **metered/org keys**, exactly like `#214`. The loop
   must run correctly key-metered with **tight ceilings** — the fleet is optional, never a free lunch.
 
+The runtime encodes this boundary in `review.authoring.enabled`: `off` disables the loop, `local`
+allows subscription-or-key auth only for attended worktree-backed operator runs, and `keys`
+requires direct provider keys for the Judge and at least one reviewer. `local` fails closed on any
+deterministic unattended signal — CI/single-shot, daemon-spawned (`PELAGGIO_SUPERVISED_RUN=1`),
+multi-cycle campaigns, or headless/no-TTY execution (`detectUnattendedSignals` in
+`provider-routing.ts`). The headless signal is the one mechanically-ambiguous member of that set —
+bare `isTTY` cannot distinguish an operator-initiated backgrounded/piped invocation (which the
+local definition permits) from cron — so it alone is operator-attestable: a per-invocation
+`PELAGGIO_OPERATOR_ATTENDED=1` (exact value; anything else fails closed) suppresses only the TTY
+signal, the suppression is logged at resolution time and carried on the execution result into the
+cycle log, and it never overrides the other signals. In `keys` mode an unavailable reviewer is
+omitted and weakens provenance to `softened`; an unavailable Judge or an empty reviewer panel
+fails closed.
+
 The differentiator is **integration + provenance**, not the pool. Never build an OAuth vault so N
 reviewers can share subscription seats — that is the unattended-subscription-automation
 `contained-execution.md` rules out.

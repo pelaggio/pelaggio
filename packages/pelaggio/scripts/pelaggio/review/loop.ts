@@ -215,7 +215,7 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 		return withFloor({ outcome: "hard-block", diversity: { state: "softened", explanation: "review seats must be distinct and must exclude the artifact author" }, passes, survivors: carried, notes, cost });
 	}
 	const distinctProviders = new Set([...(author ? [author.provider] : []), policy.judge.provider, ...configuredReviewers.map((slot) => slot.provider)]);
-	const diversity: DiversityStatus = distinctProviders.size >= 3 ? { state: "met" } : { state: "softened", explanation: "configured seats do not provide three distinct providers" };
+	let diversity: DiversityStatus = distinctProviders.size >= 3 ? { state: "met" } : { state: "softened", explanation: "configured seats do not provide three distinct providers" };
 	for (let pass = 1; pass <= policy.maxPasses; pass++) {
 		const phaseReservation = configuredReviewers.length * 5 + 5;
 		if (cost + phaseReservation > policy.budgetCap) return withFloor({ outcome: "budget", diversity, passes, survivors: carried, notes, cost });
@@ -261,6 +261,12 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 				reviewerRecords.push({ identity: identity("reviewer", slot, pass), ok: false, cost: result.value.cost, turns: result.value.turns, diagnostic: error instanceof Error ? error.message : String(error) });
 			}
 		});
+		const incompleteSeats = reviewerRecords.filter((record) => !record.ok).map((record) => record.identity.seatId);
+		if (incompleteSeats.length > 0) {
+			const explanation = `reviewer seats did not complete: ${incompleteSeats.join(", ")}`;
+			if (diversity.state === "met") diversity = { state: "softened", explanation };
+			else if (!diversity.explanation.includes(explanation)) diversity = { state: "softened", explanation: `${diversity.explanation}; ${explanation}` };
+		}
 		if (!reviewerRecords.some((record) => record.ok)) {
 			// No reviewer seat completed. Persist the pass so each seat's `diagnostic` (WHY it failed —
 			// parse error, provider crash, max-turns) survives in the review record, instead of returning

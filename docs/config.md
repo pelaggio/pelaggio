@@ -10,10 +10,17 @@ the message — delete the file to fall back to defaults.
 
 ## Precedence
 
-For the worktree prefix (the one key with an env-var escape hatch):
+Two keys have per-invocation env-var escape hatches. The worktree prefix:
 
 ```
 PELAGGIO_WORKTREE_PREFIX  >  worktree.prefix (yml)  >  basename(REPO) + "-"
+```
+
+and the authoring-review execution context (see
+[`review.authoring.enabled`](#annotated-example) below):
+
+```
+PELAGGIO_AUTHORING_ENABLED  >  review.authoring.enabled (yml)  >  off
 ```
 
 All other values use: `yml value` > default.
@@ -68,7 +75,7 @@ review:                         # PR review poster (issue #84)
   runner: ci                    # default: ci. values: ci | local
   statusless-after: 2h          # local-mode diagnostic threshold
   authoring:                    # opt-in pre-ship adversarial loop
-    enabled: false              # concurrent reviewer/Judge seats use detached
+    enabled: off                # off | local | keys; local permits subscription auth
                                 # checkouts under .dev/authoring-review-seats/ (#269)
     provider-diversity: prefer
     blocking-bar: must-fix
@@ -179,6 +186,47 @@ models:
     #   turn-limits:
     #     plan: 120
 ```
+
+`review.authoring.enabled` is execution-context aware:
+
+- `off` (default) uses the ordinary single `shakedown-code` session.
+- `local` enables the panel + Judge for attended, worktree-backed, operator-initiated
+  runs. Official CLI subscription auth or API keys are allowed. Pelaggio fails closed
+  when any deterministic unattended signal is present: CI/single-shot execution
+  (`--no-worktree`, `CI=true`, `PELAGGIO_SINGLE_SHOT=1`), daemon-spawned runs
+  (`PELAGGIO_SUPERVISED_RUN=1`, stamped by the server Supervisor on its children),
+  multi-cycle campaigns (resolved cycle count > 1, which subsumes `--parallel`), and
+  headless execution (stdout is not an interactive TTY — cron, redirected output).
+  An attended single-cycle interactive run is the only `local` context.
+  The headless/TTY signal alone is operator-attestable: bare `isTTY` cannot
+  distinguish an operator-initiated backgrounded/piped invocation (which the `local`
+  definition permits) from cron, so setting `PELAGGIO_OPERATOR_ATTENDED=1` on the
+  invocation (exact value `1`; absent, `0`, `true`, or empty all fail closed)
+  suppresses only that signal. The suppression is never silent: it is logged at
+  resolution time ("headless TTY signal suppressed by PELAGGIO_OPERATOR_ATTENDED
+  attestation") and carried on the execution result into the cycle log. The
+  attestation is per-invocation and never overrides CI/single-shot, the daemon
+  marker, or multi-cycle — an attested run tripping any of those still refuses.
+- `keys` enables the loop in any execution context and requires direct provider API
+  keys for the Judge, reviewer, and author revision seats (`ANTHROPIC_API_KEY`,
+  `OPENAI_API_KEY`, or `XAI_API_KEY`). Codex/Grok key names must also appear in
+  `security.env-allowlist`. A reviewer without usable key auth is omitted and the
+  provenance is marked `softened`; a missing Judge or zero remaining reviewers fails
+  closed before any review seat starts. The author revision seat fails closed the
+  same way: a surviving fixable finding re-invokes the implementation author inside
+  the same unattended context, so its provider key is validated up front rather than
+  silently falling back to stored subscription auth.
+
+Legacy booleans remain accepted for existing repositories: `false` maps to `off` and
+`true` maps to `local`. Use the named modes in new configuration so a local
+subscription opt-in cannot be mistaken for unattended authorization.
+
+The `PELAGGIO_AUTHORING_ENABLED` environment variable overrides the yml value for a
+single invocation (same `off | local | keys` values; any other value fails loudly at
+config load). Env wins over file for this one key so a caller in a different
+execution context — e.g. the repo's own CI workflows, which have no
+subprocess-provider keys and are gated by the cold `pr-review` path instead — can
+run with authoring off without forking the committed `.pelaggio.yml`.
 
 `confinement.allow-dirty-main: true` tolerates main-checkout dirtiness that is unchanged across provider tool windows. Claude snapshots main immediately before and after every mutating tool and fails closed on a delta or attribution error; Codex excludes main through its workspace-write boundary. Sibling worktrees remain whole-step audited. A simultaneous operator edit inside a Claude tool window is conservatively attributed to that tool, while detached writes after the post hook and paths outside audited Git roots remain out of scope. Future providers that can reach main must use the same observer before this mode can claim attribution coverage.
 
@@ -972,7 +1020,13 @@ security:
   env-allowlist: [OPENAI_API_KEY, XAI_API_KEY]
 ```
 
-`security.env-allowlist` must be an array of strings. Independently, captured
+`security.env-allowlist` must be an array of strings. At launch the allowlist is
+additionally **provider-scoped**: a subprocess driver receives its own key var
+but never a sibling provider's — `OPENAI_API_KEY` never reaches Grok,
+`XAI_API_KEY` never reaches Codex, and `ANTHROPIC_API_KEY` (consumed in-process
+by the Claude SDK) reaches no subprocess driver — so a multi-provider review
+never exposes one seat to another provider's credential. Non-key entries are
+forwarded unchanged. Independently, captured
 driver stderr and the verbose `.dev/*.log` transcript are **secret-scrubbed
 before write**: credential-shaped strings (JWTs, provider keys, tokens) and the
 values of secret-named env vars are replaced with `[REDACTED]`.
