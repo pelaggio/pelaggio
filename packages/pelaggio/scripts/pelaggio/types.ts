@@ -516,6 +516,21 @@ export interface PipelineOpts {
 	signal?: AbortSignal;
 	/** CI/single-shot mode: use REPO as worktree, skip sibling-path creation. */
 	noWorktree?: boolean;
+	/**
+	 * Unattended-execution evidence for the `review.authoring.enabled=local` gate, computed
+	 * once per run by the orchestrator via `detectUnattendedSignals` (CI/single-shot,
+	 * daemon-spawned, multi-cycle, headless). Direct `runPipeline()` callers that omit it
+	 * fall back to the single-shot signal derived from `noWorktree` — ambient env/TTY are
+	 * deliberately not probed inside the pipeline so tests stay hermetic and injectable.
+	 */
+	unattendedSignals?: readonly string[];
+	/**
+	 * Unattended signals suppressed by the per-invocation operator attestation
+	 * (`PELAGGIO_OPERATOR_ATTENDED=1`; only the headless/TTY signal is attestable).
+	 * Threaded alongside `unattendedSignals` so the resolution site logs every
+	 * suppression into the cycle log — an attested run stays auditable after the fact.
+	 */
+	unattendedSignalSuppressions?: readonly string[];
 	/** Independently gated, fail-soft per-decision delivery. */
 	notifyDecision?: (input: { itemId: string | null; decision: Decision; step: Step; source: string; logPath: string; escalation?: ReviewEscalation & { id: string } }) => Promise<void>;
 }

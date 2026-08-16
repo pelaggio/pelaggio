@@ -131,12 +131,13 @@ export type ProviderPool = readonly [ProviderName, ...ProviderName[]];
 export type ProviderSelection = ProviderName | ProviderPool;
 
 export type ProviderDiversityPolicy = "off" | "prefer" | "require";
+export type AuthoringReviewMode = "off" | "local" | "keys";
 /** @deprecated Prefer `ReviewFindingClass` from `./review/findings.js` — single source of truth. */
 export type { ReviewFindingClass as AuthoringFindingClass } from "./review/findings.js";
 export type AuthoringBlockingBar = "must-fix";
 export type ReviewSlot = { id: string; provider: "claude" | "grok" | "opencode"; model?: string } | { id: string; provider: "codex"; codexModel?: string };
 export interface AuthoringReviewConfig {
-	enabled: boolean;
+	enabled: AuthoringReviewMode;
 	reviewers: ReviewSlot[];
 	judge: ReviewSlot;
 	blockingBar: AuthoringBlockingBar;
@@ -228,7 +229,7 @@ export const DEFAULTS = {
 		providerDiversity: "off",
 		taxonomy: resolveTaxonomy({}),
 		authoring: {
-			enabled: false,
+			enabled: "off",
 			reviewers: [
 				{ id: "claude", provider: "claude" },
 				{ id: "codex", provider: "codex" },
@@ -771,7 +772,8 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		const authoring = reviewBlock.authoring;
 		if (authoring !== undefined) {
 			if (!isPlainObject(authoring)) throw new Error(`${configPath}: expected \`review.authoring\` to be a map`);
-			if (authoring.enabled !== undefined && typeof authoring.enabled !== "boolean") throw new Error(`${configPath}: expected \`review.authoring.enabled\` to be a boolean`);
+			if (authoring.enabled !== undefined && typeof authoring.enabled !== "boolean" && authoring.enabled !== "off" && authoring.enabled !== "local" && authoring.enabled !== "keys")
+				throw new Error(`${configPath}: expected \`review.authoring.enabled\` to be one of off|local|keys (legacy booleans are also accepted)`);
 			let authoringMaxPasses = reviewAuthoring.maxPasses;
 			if (authoring["max-passes"] !== undefined) {
 				const mp = authoring["max-passes"];
@@ -797,8 +799,9 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 				if (new Set(reviewers.map((slot) => slot.provider)).size !== reviewers.length) throw new Error(`${configPath}: review.authoring reviewer providers must be unique`);
 			}
 			const judge = authoring.judge === undefined ? reviewAuthoring.judge : parseReviewSlot(authoring.judge, "review.authoring.judge", configPath, "judge");
+			const enabled = authoring.enabled === true ? "local" : authoring.enabled === false ? "off" : ((authoring.enabled as AuthoringReviewMode | undefined) ?? reviewAuthoring.enabled);
 			reviewAuthoring = {
-				enabled: (authoring.enabled as boolean | undefined) ?? reviewAuthoring.enabled,
+				enabled,
 				reviewers,
 				judge,
 				blockingBar: "must-fix",

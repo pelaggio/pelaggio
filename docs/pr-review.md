@@ -44,7 +44,7 @@ formal analysis of that cohort.
 
 ## Authoring-time adversarial loop
 
-`review.authoring.enabled: true` replaces the single `shakedown-code` session with
+`review.authoring.enabled: local` replaces the single `shakedown-code` session with
 two bounded cold-review/Judge passes and at most one author revision. Omission never
 clears a carried fingerprint; malformed or incomplete Judge output fails closed.
 Safety-class survivors always hard-block. Judgment dissent may continue only for PR
@@ -77,9 +77,19 @@ writes an atomic, unbound `.dev/review-records/<run-id>.json`; PR targets append
 same deterministic record to the PR body. This is a review record, not an
 identity-bound attestation.
 
-Local interactive execution may use official CLI subscription authentication or API
-keys. Unattended, CI, and shared execution require keys. Configuration does not probe
-credentials in advance.
+`local` is the explicit subscription-or-keys opt-in for attended, worktree-backed,
+operator-initiated execution. It is refused fail-closed on any unattended signal:
+CI/single-shot mode, daemon-spawned runs (`PELAGGIO_SUPERVISED_RUN=1`), multi-cycle
+campaigns, and headless (no interactive TTY) execution such as cron. The headless
+signal alone is operator-attestable — bare `isTTY` cannot tell an operator-initiated
+piped/backgrounded invocation from cron — via `PELAGGIO_OPERATOR_ATTENDED=1` (exact
+value; anything else fails closed). The suppression is logged at resolution time and
+recorded on the execution result in the cycle log; it never overrides the other
+signals, so an attested multi-cycle, CI, or daemon run still refuses. Use `keys` for
+unattended, CI, or shared execution: the runtime requires direct provider API keys
+for the Judge and at least one reviewer, omits reviewer seats whose keys are
+unavailable, and records that omission as softened diversity. `off` (the default)
+keeps the ordinary single review. Legacy `true`/`false` values map to `local`/`off`.
 
 ## Runner modes
 

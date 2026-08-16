@@ -76,7 +76,7 @@ describe("authoring review outcome", () => {
 
 describe("authoring review loop controller", () => {
 	const basePolicy: AuthoringReviewConfig = {
-		enabled: true,
+		enabled: "local" as const,
 		reviewers: [{ id: "grok", provider: "grok" }],
 		judge: { id: "judge", provider: "claude" },
 		blockingBar: "must-fix",
@@ -222,6 +222,7 @@ describe("authoring review loop controller", () => {
 		const codexRecord = result.passes[0].reviewers.find((r) => r.identity.seatId === "codex");
 		assert.equal(codexRecord?.ok, false);
 		assert.match(codexRecord?.diagnostic ?? "", /schema example/);
+		assert.deepEqual(result.diversity, { state: "softened", explanation: "reviewer seats did not complete: codex" });
 	});
 
 	it("escalates a safety-class must-fix on pass 1 with no author revision (escalate-early)", async () => {
@@ -616,7 +617,7 @@ describe("authoring review loop — no-revise + safety floor (#384)", () => {
 	const judgeReport = (decisions: unknown[]) => `AUTHORING_REVIEW_JUDGE\n${JSON.stringify({ schemaVersion: 1, decisions })}\nEND_AUTHORING_REVIEW_JUDGE`;
 	const parkSignal = () => ({ parked: false, resetsAt: 0, limitType: "", triggerWorker: "" });
 	const noRevisePolicy: AuthoringReviewConfig = {
-		enabled: true,
+		enabled: "local",
 		reviewers: [{ id: "grok", provider: "grok" }],
 		judge: { id: "judge", provider: "claude" },
 		blockingBar: "must-fix",

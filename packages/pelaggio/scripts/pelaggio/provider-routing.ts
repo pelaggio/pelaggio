@@ -154,6 +154,146 @@ export interface ResolveAuthoringReviewOptions {
 	authorSoft?: CapabilityPredicate;
 }
 
+const AUTHORING_KEY_ENV: Partial<Record<ProviderName, string>> = {
+	claude: "ANTHROPIC_API_KEY",
+	codex: "OPENAI_API_KEY",
+	grok: "XAI_API_KEY",
+};
+
+export type AuthoringReviewExecutionResult =
+	| { ok: true; enabled: false }
+	| {
+			ok: true;
+			enabled: true;
+			policy: AuthoringReviewConfig;
+			softened: string[];
+			/** Attestation-suppressed unattended signals (see `detectUnattendedSignals`) — carried so the resolution site can log them into the cycle log. */
+			suppressedSignals: string[];
+	  }
+	| { ok: false; reason: string };
+
+/**
+ * Deterministic evidence for the `contained-execution.md` local/unattended boundary.
+ * `local` subscription auth is only defensible for operator-attended execution, so every
+ * field is a positive signal that no operator is (verifiably) attending this run.
+ */
+export interface UnattendedSignalContext {
+	/** CI / `--no-worktree` / `PELAGGIO_SINGLE_SHOT` single-shot execution. */
+	singleShot: boolean;
+	/**
+	 * Resolved cycle budget > 1 (subsumes `--parallel`, which floors the cycle count).
+	 * A multi-cycle campaign is at-scale execution the harness cannot verify as attended.
+	 */
+	multiCycle: boolean;
+	/**
+	 * Injected environment. `PELAGGIO_SUPERVISED_RUN=1` marks daemon (server Supervisor)-spawned
+	 * children. `PELAGGIO_OPERATOR_ATTENDED=1` (exact value) is the per-invocation operator
+	 * attestation that disambiguates the headless/TTY signal — see `detectUnattendedSignals`.
+	 */
+	env: NodeJS.ProcessEnv;
+	/**
+	 * `process.stdout.isTTY === true` at the entrypoint. Cron/headless/redirected runs have
+	 * no interactive TTY; per `contained-execution.md` those are keys-required contexts, so a
+	 * missing TTY fails closed even when output is merely piped through `tee` — unless the
+	 * operator attests attendance via `PELAGGIO_OPERATOR_ATTENDED=1` (suppression is recorded,
+	 * never silent).
+	 */
+	stdoutIsTTY: boolean;
+}
+
+/** Audit line recorded (and logged at resolution time) whenever the attestation suppresses the TTY signal. */
+export const OPERATOR_ATTESTED_TTY_SUPPRESSION = "headless TTY signal suppressed by PELAGGIO_OPERATOR_ATTENDED attestation";
+
+export interface UnattendedSignalReport {
+	/** Positive unattended-execution signals; empty means verifiably attended context. */
+	signals: string[];
+	/**
+	 * Signals suppressed by an explicit per-invocation operator attestation — audit evidence,
+	 * threaded to the cycle log so every attested run is reconstructible after the fact.
+	 * Only the headless/TTY signal is attestable.
+	 */
+	suppressed: string[];
+}
+
+/**
+ * Pure fail-closed detector: returns the (possibly empty) list of unattended-execution
+ * signals plus any attestation-suppressed signals. An empty `signals` list means
+ * "attended interactive single-cycle run" — the only context where
+ * `review.authoring.enabled=local` subscription auth is permitted.
+ *
+ * The headless/TTY signal is the one mechanically-ambiguous signal: bare `isTTY` cannot
+ * distinguish an operator-initiated backgrounded/piped invocation (which the `local`
+ * definition — operator's own machine, operator-initiated, single-tenant — permits) from
+ * cron. `PELAGGIO_OPERATOR_ATTENDED=1` — exact value; absent/"0"/"true"/empty all fail
+ * closed — is a per-invocation operator attestation that suppresses ONLY this signal.
+ * It never overrides CI/single-shot, the daemon marker, or multi-cycle, and every
+ * suppression is surfaced in `suppressed` (never silent).
+ */
+export function detectUnattendedSignals(context: UnattendedSignalContext): UnattendedSignalReport {
+	const signals: string[] = [];
+	const suppressed: string[] = [];
+	if (context.singleShot) signals.push("CI/single-shot (--no-worktree)");
+	if (context.env.PELAGGIO_SUPERVISED_RUN === "1") signals.push("daemon-spawned (PELAGGIO_SUPERVISED_RUN=1)");
+	if (context.multiCycle) signals.push("multi-cycle campaign (--cycles/--parallel > 1)");
+	if (!context.stdoutIsTTY) {
+		if (context.env.PELAGGIO_OPERATOR_ATTENDED === "1") suppressed.push(OPERATOR_ATTESTED_TTY_SUPPRESSION);
+		else signals.push("headless (stdout is not an interactive TTY)");
+	}
+	return { signals, suppressed };
+}
+
+/**
+ * Resolve the authoring loop against the runtime trust context.
+ *
+ * `local` is an explicit operator attestation and is refused whenever any unattended
+ * signal is present (CI/single-shot, daemon-spawned, multi-cycle campaign, headless —
+ * see `detectUnattendedSignals`; the headless signal alone is operator-attestable via
+ * `PELAGGIO_OPERATOR_ATTENDED=1`, and such suppressions arrive in `suppressedSignals`
+ * and are echoed on the result for the cycle log). `keys` requires direct provider keys; unavailable
+ * reviewer seats are a soft diversity degradation, while an unavailable Judge (or every
+ * reviewer) fails closed. Codex/Grok keys must also be forwarded through the child-env
+ * allowlist; Claude's SDK consumes its key in-process.
+ */
+export function resolveAuthoringReviewExecution(
+	policy: AuthoringReviewConfig,
+	options: { unattendedSignals: readonly string[]; suppressedSignals?: readonly string[]; env?: NodeJS.ProcessEnv; envAllowlist?: readonly string[] },
+): AuthoringReviewExecutionResult {
+	const suppressedSignals = [...(options.suppressedSignals ?? [])];
+	if (policy.enabled === "off") return { ok: true, enabled: false };
+	if (policy.enabled === "local") {
+		if (options.unattendedSignals.length > 0) {
+			// The attestation disambiguates only the TTY signal — a remaining signal still
+			// refuses; surface any suppression in the reason so the refusal is auditable too.
+			const note = suppressedSignals.length > 0 ? ` (${suppressedSignals.join("; ")}; the attestation never overrides other signals)` : "";
+			return { ok: false, reason: `review.authoring.enabled=local requires attended interactive execution; unattended signals: ${options.unattendedSignals.join("; ")}; use keys or off${note}` };
+		}
+		return { ok: true, enabled: true, policy, softened: [], suppressedSignals };
+	}
+
+	const env = options.env ?? process.env;
+	const allowed = new Set(options.envAllowlist ?? []);
+	const unavailableReason = (slot: ReviewSlot): string | undefined => {
+		const key = AUTHORING_KEY_ENV[slot.provider];
+		if (!key) return `${slot.provider} has no single direct-key authentication contract`;
+		if (!env[key]?.trim()) return `${key} is not set`;
+		if (slot.provider !== "claude" && !allowed.has(key)) return `${key} is not forwarded by security.env-allowlist`;
+		return undefined;
+	};
+
+	const judgeReason = unavailableReason(policy.judge);
+	if (judgeReason) return { ok: false, reason: `authoring review Judge ${policy.judge.id} (${policy.judge.provider}) requires key auth: ${judgeReason}` };
+
+	const softened: string[] = [];
+	const reviewers = policy.reviewers.filter((slot) => {
+		const reason = unavailableReason(slot);
+		if (!reason) return true;
+		softened.push(`reviewer ${slot.id} (${slot.provider}) omitted: ${reason}`);
+		return false;
+	});
+	if (reviewers.length === 0) return { ok: false, reason: `authoring review has no key-authenticated reviewer seats (${softened.join("; ")})` };
+	return { ok: true, enabled: true, policy: { ...policy, reviewers }, softened, suppressedSignals };
+}
+
 function fillSlot(slot: ReviewSlot, defaults: StepSettings): ReviewSlot {
 	if (slot.provider === "codex") {
 		const codexModel = slot.codexModel ?? defaults.codexModel;

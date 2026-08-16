@@ -885,10 +885,10 @@ describe("loadConfig — review", () => {
 		const repo = tmpRepo();
 		const path = writeYml(
 			repo,
-			"review:\n  authoring:\n    enabled: true\n    budget-cap: 30\n    reviewers:\n      - id: cdx\n        provider: codex\n        codex-model: gpt-review\n      - id: grk\n        provider: grok\n        model: grok-review\n    judge:\n      provider: claude\n      model: claude-judge\n",
+			"review:\n  authoring:\n    enabled: local\n    budget-cap: 30\n    reviewers:\n      - id: cdx\n        provider: codex\n        codex-model: gpt-review\n      - id: grk\n        provider: grok\n        model: grok-review\n    judge:\n      provider: claude\n      model: claude-judge\n",
 		);
 		assert.deepEqual(loadConfig({ repo, configPath: path }).review.authoring, {
-			enabled: true,
+			enabled: "local",
 			reviewers: [
 				{ id: "cdx", provider: "codex", codexModel: "gpt-review" },
 				{ id: "grk", provider: "grok", model: "grok-review" },
@@ -900,6 +900,26 @@ describe("loadConfig — review", () => {
 			budgetCap: 30,
 			providerDiversity: "prefer",
 		});
+	});
+
+	it("parses execution-aware authoring modes and normalizes legacy booleans", () => {
+		for (const [raw, expected] of [
+			["off", "off"],
+			["local", "local"],
+			["keys", "keys"],
+			["true", "local"],
+			["false", "off"],
+		] as const) {
+			const repo = tmpRepo();
+			const path = writeYml(repo, `review:\n  authoring:\n    enabled: ${raw}\n`);
+			assert.equal(loadConfig({ repo, configPath: path }).review.authoring.enabled, expected);
+		}
+	});
+
+	it("rejects an unknown authoring execution mode", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "review:\n  authoring:\n    enabled: unattended-subscription\n");
+		assert.throws(() => loadConfig({ repo, configPath: path }), /off\|local\|keys/);
 	});
 
 	it("parses a bounded authoring convergence policy (max-passes / max-revisions)", () => {

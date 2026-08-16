@@ -7,7 +7,7 @@ import { CODEX_CAPABILITIES } from "../codex-provider.js";
 import { DEFAULTS, loadConfig, type ResolvedConfig } from "../config.js";
 import { grokCapabilities } from "../grok-provider.js";
 import { OPENCODE_CAPABILITIES } from "../opencode-provider.js";
-import { matchEligibleProviders, matchesCapabilityPredicate, resolveAuthoringReviewConfig, softDegradedAxes } from "../provider-routing.js";
+import { detectUnattendedSignals, matchEligibleProviders, matchesCapabilityPredicate, OPERATOR_ATTESTED_TTY_SUPPRESSION, resolveAuthoringReviewConfig, resolveAuthoringReviewExecution, softDegradedAxes } from "../provider-routing.js";
 import { CLAUDE_CAPABILITIES } from "../step-runner.js";
 import type { ProviderCapabilities, ProviderName } from "../types.js";
 
@@ -29,7 +29,7 @@ function baseConfig(over: Partial<ResolvedConfig["review"]["authoring"]> = {}): 
 			...cfg.review,
 			authoring: {
 				...cfg.review.authoring,
-				enabled: true,
+				enabled: "local",
 				reviewers: (over.reviewers ?? DEFAULTS.review.authoring.reviewers).map((s) => ({ ...s })),
 				judge: over.judge ? { ...over.judge } : { ...DEFAULTS.review.authoring.judge },
 				...over,
@@ -353,5 +353,184 @@ describe("resolveAuthoringReviewConfig — fixed-seat overlay", () => {
 		const codexR = result.realizations.find((r) => r.provider === "codex");
 		assert.equal(codexR?.mode, "degraded");
 		assert.ok(codexR?.degradedAxes.includes("semanticDeny"));
+	});
+});
+
+describe("resolveAuthoringReviewExecution — auth context gate (#276)", () => {
+	it("allows local mode only for attended execution (no unattended signals)", () => {
+		const policy = { ...baseConfig().review.authoring, enabled: "local" as const };
+		assert.equal(resolveAuthoringReviewExecution(policy, { unattendedSignals: [] }).ok, true);
+		const unattended = resolveAuthoringReviewExecution(policy, { unattendedSignals: ["CI/single-shot (--no-worktree)"] });
+		assert.equal(unattended.ok, false);
+		if (!unattended.ok) assert.match(unattended.reason, /CI\/single-shot/);
+	});
+
+	it("local mode refusal names every detected unattended signal", () => {
+		const policy = { ...baseConfig().review.authoring, enabled: "local" as const };
+		const { signals } = detectUnattendedSignals({ singleShot: false, multiCycle: true, env: { PELAGGIO_SUPERVISED_RUN: "1" }, stdoutIsTTY: false });
+		const result = resolveAuthoringReviewExecution(policy, { unattendedSignals: signals });
+		assert.equal(result.ok, false);
+		if (!result.ok) {
+			assert.match(result.reason, /PELAGGIO_SUPERVISED_RUN=1/);
+			assert.match(result.reason, /multi-cycle/);
+			assert.match(result.reason, /interactive TTY/);
+			assert.match(result.reason, /use keys or off/);
+		}
+	});
+
+	it("key mode omits an unauthenticated reviewer and records a softening", () => {
+		const policy = {
+			...baseConfig().review.authoring,
+			enabled: "keys" as const,
+			reviewers: [
+				{ id: "codex", provider: "codex" as const },
+				{ id: "grok", provider: "grok" as const },
+			],
+			judge: { id: "judge", provider: "claude" as const },
+		};
+		const result = resolveAuthoringReviewExecution(policy, {
+			unattendedSignals: ["CI/single-shot (--no-worktree)"],
+			env: { ANTHROPIC_API_KEY: "anthropic-key", XAI_API_KEY: "xai-key" },
+			envAllowlist: ["XAI_API_KEY"],
+		});
+		assert.equal(result.ok, true);
+		if (!result.ok || !result.enabled) return;
+		assert.deepEqual(
+			result.policy.reviewers.map((slot) => slot.provider),
+			["grok"],
+		);
+		assert.match(result.softened.join(" "), /codex.*OPENAI_API_KEY/);
+	});
+
+	it("key mode fails closed without a key-authenticated Judge or reviewer", () => {
+		const policy = {
+			...baseConfig().review.authoring,
+			enabled: "keys" as const,
+			reviewers: [{ id: "codex", provider: "codex" as const }],
+			judge: { id: "judge", provider: "claude" as const },
+		};
+		const noJudge = resolveAuthoringReviewExecution(policy, { unattendedSignals: ["CI/single-shot (--no-worktree)"], env: { OPENAI_API_KEY: "openai-key" }, envAllowlist: ["OPENAI_API_KEY"] });
+		assert.equal(noJudge.ok, false);
+		if (!noJudge.ok) assert.match(noJudge.reason, /Judge.*ANTHROPIC_API_KEY/);
+		const noReviewer = resolveAuthoringReviewExecution(policy, { unattendedSignals: ["CI/single-shot (--no-worktree)"], env: { ANTHROPIC_API_KEY: "anthropic-key", OPENAI_API_KEY: "openai-key" } });
+		assert.equal(noReviewer.ok, false);
+		if (!noReviewer.ok) assert.match(noReviewer.reason, /no key-authenticated reviewer.*env-allowlist/);
+	});
+});
+
+describe("detectUnattendedSignals — unattended-execution evidence (#276)", () => {
+	const attended = { singleShot: false, multiCycle: false, env: {} as NodeJS.ProcessEnv, stdoutIsTTY: true };
+
+	it("returns no signals (and no suppressions) for an attended interactive single-cycle run", () => {
+		assert.deepEqual(detectUnattendedSignals(attended), { signals: [], suppressed: [] });
+	});
+
+	it("flags CI/single-shot execution", () => {
+		const { signals } = detectUnattendedSignals({ ...attended, singleShot: true });
+		assert.equal(signals.length, 1);
+		assert.match(signals[0]!, /CI\/single-shot/);
+	});
+
+	it("flags daemon-spawned runs via PELAGGIO_SUPERVISED_RUN=1 and ignores other values", () => {
+		const { signals } = detectUnattendedSignals({ ...attended, env: { PELAGGIO_SUPERVISED_RUN: "1" } });
+		assert.equal(signals.length, 1);
+		assert.match(signals[0]!, /daemon-spawned.*PELAGGIO_SUPERVISED_RUN=1/);
+		assert.deepEqual(detectUnattendedSignals({ ...attended, env: { PELAGGIO_SUPERVISED_RUN: "0" } }).signals, []);
+		assert.deepEqual(detectUnattendedSignals({ ...attended, env: { PELAGGIO_SUPERVISED_RUN: "" } }).signals, []);
+	});
+
+	it("flags multi-cycle campaigns", () => {
+		const { signals } = detectUnattendedSignals({ ...attended, multiCycle: true });
+		assert.equal(signals.length, 1);
+		assert.match(signals[0]!, /multi-cycle/);
+	});
+
+	it("flags headless execution (no interactive TTY)", () => {
+		const { signals } = detectUnattendedSignals({ ...attended, stdoutIsTTY: false });
+		assert.equal(signals.length, 1);
+		assert.match(signals[0]!, /interactive TTY/);
+	});
+
+	it("each signal alone fails local mode closed", () => {
+		const policy = { ...baseConfig().review.authoring, enabled: "local" as const };
+		const contexts = [
+			{ ...attended, singleShot: true },
+			{ ...attended, env: { PELAGGIO_SUPERVISED_RUN: "1" } },
+			{ ...attended, multiCycle: true },
+			{ ...attended, stdoutIsTTY: false },
+		];
+		for (const context of contexts) {
+			const result = resolveAuthoringReviewExecution(policy, { unattendedSignals: detectUnattendedSignals(context).signals });
+			assert.equal(result.ok, false);
+		}
+	});
+});
+
+describe("PELAGGIO_OPERATOR_ATTENDED — attestable headless/TTY signal (#276)", () => {
+	const piped = { singleShot: false, multiCycle: false, env: {} as NodeJS.ProcessEnv, stdoutIsTTY: false };
+	const localPolicy = () => ({ ...baseConfig().review.authoring, enabled: "local" as const });
+
+	it("attested piped single-cycle run: TTY signal suppressed, local allowed, suppression carried for the cycle log", () => {
+		const report = detectUnattendedSignals({ ...piped, env: { PELAGGIO_OPERATOR_ATTENDED: "1" } });
+		assert.deepEqual(report, { signals: [], suppressed: [OPERATOR_ATTESTED_TTY_SUPPRESSION] });
+		const result = resolveAuthoringReviewExecution(localPolicy(), { unattendedSignals: report.signals, suppressedSignals: report.suppressed });
+		assert.equal(result.ok, true);
+		if (!result.ok || !result.enabled) return;
+		assert.deepEqual(result.suppressedSignals, [OPERATOR_ATTESTED_TTY_SUPPRESSION]);
+	});
+
+	it("unattested piped run is refused (headless signal fires)", () => {
+		const report = detectUnattendedSignals(piped);
+		assert.deepEqual(report.suppressed, []);
+		const result = resolveAuthoringReviewExecution(localPolicy(), { unattendedSignals: report.signals, suppressedSignals: report.suppressed });
+		assert.equal(result.ok, false);
+		if (!result.ok) assert.match(result.reason, /interactive TTY/);
+	});
+
+	it('only the exact value "1" attests — "0", "true", "yes", and empty all fail closed', () => {
+		for (const value of ["0", "true", "yes", ""]) {
+			const report = detectUnattendedSignals({ ...piped, env: { PELAGGIO_OPERATOR_ATTENDED: value } });
+			assert.equal(report.signals.length, 1, `value ${JSON.stringify(value)} must not attest`);
+			assert.match(report.signals[0]!, /interactive TTY/);
+			assert.deepEqual(report.suppressed, []);
+		}
+	});
+
+	it("attestation is a disambiguation, not an override: attested + multi-cycle (cycles > 2) still refuses", () => {
+		const report = detectUnattendedSignals({ ...piped, multiCycle: true, env: { PELAGGIO_OPERATOR_ATTENDED: "1" } });
+		assert.deepEqual(
+			report.signals.map((s) => /multi-cycle/.test(s)),
+			[true],
+		);
+		assert.deepEqual(report.suppressed, [OPERATOR_ATTESTED_TTY_SUPPRESSION]);
+		const result = resolveAuthoringReviewExecution(localPolicy(), { unattendedSignals: report.signals, suppressedSignals: report.suppressed });
+		assert.equal(result.ok, false);
+		if (!result.ok) {
+			assert.match(result.reason, /multi-cycle/);
+			assert.match(result.reason, /suppressed by PELAGGIO_OPERATOR_ATTENDED attestation/);
+			assert.match(result.reason, /never overrides other signals/);
+		}
+	});
+
+	it("attestation never suppresses CI/single-shot or the daemon marker", () => {
+		const ci = detectUnattendedSignals({ ...piped, singleShot: true, env: { PELAGGIO_OPERATOR_ATTENDED: "1" } });
+		assert.deepEqual(
+			ci.signals.map((s) => /CI\/single-shot/.test(s)),
+			[true],
+		);
+		const daemon = detectUnattendedSignals({ ...piped, env: { PELAGGIO_OPERATOR_ATTENDED: "1", PELAGGIO_SUPERVISED_RUN: "1" } });
+		assert.deepEqual(
+			daemon.signals.map((s) => /daemon-spawned/.test(s)),
+			[true],
+		);
+		for (const report of [ci, daemon]) {
+			const result = resolveAuthoringReviewExecution(localPolicy(), { unattendedSignals: report.signals, suppressedSignals: report.suppressed });
+			assert.equal(result.ok, false);
+		}
+	});
+
+	it("attestation is inert on an interactive TTY (nothing to suppress, nothing recorded)", () => {
+		const report = detectUnattendedSignals({ singleShot: false, multiCycle: false, env: { PELAGGIO_OPERATOR_ATTENDED: "1" }, stdoutIsTTY: true });
+		assert.deepEqual(report, { signals: [], suppressed: [] });
 	});
 });
