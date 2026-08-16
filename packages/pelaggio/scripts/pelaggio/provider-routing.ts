@@ -251,12 +251,15 @@ export function detectUnattendedSignals(context: UnattendedSignalContext): Unatt
  * `PELAGGIO_OPERATOR_ATTENDED=1`, and such suppressions arrive in `suppressedSignals`
  * and are echoed on the result for the cycle log). `keys` requires direct provider keys; unavailable
  * reviewer seats are a soft diversity degradation, while an unavailable Judge (or every
- * reviewer) fails closed. Codex/Grok keys must also be forwarded through the child-env
- * allowlist; Claude's SDK consumes its key in-process.
+ * reviewer) fails closed. The author revision seat fails closed too: a surviving fixable
+ * finding re-invokes the implementation author inside the same unattended execution, so
+ * its provider key is validated here — before any seat runs — rather than silently
+ * falling back to stored subscription auth. Codex/Grok keys must also be forwarded
+ * through the child-env allowlist; Claude's SDK consumes its key in-process.
  */
 export function resolveAuthoringReviewExecution(
 	policy: AuthoringReviewConfig,
-	options: { unattendedSignals: readonly string[]; suppressedSignals?: readonly string[]; env?: NodeJS.ProcessEnv; envAllowlist?: readonly string[] },
+	options: { unattendedSignals: readonly string[]; suppressedSignals?: readonly string[]; author?: AuthoringSeatAuthor; env?: NodeJS.ProcessEnv; envAllowlist?: readonly string[] },
 ): AuthoringReviewExecutionResult {
 	const suppressedSignals = [...(options.suppressedSignals ?? [])];
 	if (policy.enabled === "off") return { ok: true, enabled: false };
@@ -272,20 +275,27 @@ export function resolveAuthoringReviewExecution(
 
 	const env = options.env ?? process.env;
 	const allowed = new Set(options.envAllowlist ?? []);
-	const unavailableReason = (slot: ReviewSlot): string | undefined => {
-		const key = AUTHORING_KEY_ENV[slot.provider];
-		if (!key) return `${slot.provider} has no single direct-key authentication contract`;
+	const unavailableReason = (provider: ProviderName): string | undefined => {
+		const key = AUTHORING_KEY_ENV[provider];
+		if (!key) return `${provider} has no single direct-key authentication contract`;
 		if (!env[key]?.trim()) return `${key} is not set`;
-		if (slot.provider !== "claude" && !allowed.has(key)) return `${key} is not forwarded by security.env-allowlist`;
+		if (provider !== "claude" && !allowed.has(key)) return `${key} is not forwarded by security.env-allowlist`;
 		return undefined;
 	};
 
-	const judgeReason = unavailableReason(policy.judge);
+	const judgeReason = unavailableReason(policy.judge.provider);
 	if (judgeReason) return { ok: false, reason: `authoring review Judge ${policy.judge.id} (${policy.judge.provider}) requires key auth: ${judgeReason}` };
+
+	// The author revision seat runs whenever a fixable finding survives, under the same
+	// unattended trust context as the review seats — validate its key with the same rule
+	// and failure mode as the Judge, and fail closed when the identity itself is missing.
+	if (!options.author) return { ok: false, reason: "authoring review author seat requires key auth: author identity was not provided at resolution" };
+	const authorReason = unavailableReason(options.author.provider);
+	if (authorReason) return { ok: false, reason: `authoring review author seat (${options.author.provider}) requires key auth: ${authorReason}` };
 
 	const softened: string[] = [];
 	const reviewers = policy.reviewers.filter((slot) => {
-		const reason = unavailableReason(slot);
+		const reason = unavailableReason(slot.provider);
 		if (!reason) return true;
 		softened.push(`reviewer ${slot.id} (${slot.provider}) omitted: ${reason}`);
 		return false;

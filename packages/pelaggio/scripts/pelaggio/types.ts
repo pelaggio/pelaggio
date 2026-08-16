@@ -203,6 +203,13 @@ export interface CycleProvenance {
 	 * legacy log compatibility.
 	 */
 	executionReceipts?: ExecutionReceiptDescriptor[];
+	/**
+	 * Unattended signals suppressed by the per-invocation `PELAGGIO_OPERATOR_ATTENDED`
+	 * attestation (#276). Persisted on every exit path (success, failure, park) so an
+	 * attested headless run is reconstructible from the cycle log alone — the
+	 * resolution-time console line is not durable. Present only when non-empty.
+	 */
+	unattendedSignalSuppressions?: string[];
 }
 
 // ── Log entries (read from .dev/pelaggio-log.jsonl) ───────────────────
@@ -527,8 +534,10 @@ export interface PipelineOpts {
 	/**
 	 * Unattended signals suppressed by the per-invocation operator attestation
 	 * (`PELAGGIO_OPERATOR_ATTENDED=1`; only the headless/TTY signal is attestable).
-	 * Threaded alongside `unattendedSignals` so the resolution site logs every
-	 * suppression into the cycle log — an attested run stays auditable after the fact.
+	 * Threaded alongside `unattendedSignals` so the resolution site logs each
+	 * suppression and `finish()` persists it into cycle provenance
+	 * (`CycleProvenance.unattendedSignalSuppressions`) on every exit path — an
+	 * attested run stays reconstructible from the JSONL log after the fact.
 	 */
 	unattendedSignalSuppressions?: readonly string[];
 	/** Independently gated, fail-soft per-decision delivery. */

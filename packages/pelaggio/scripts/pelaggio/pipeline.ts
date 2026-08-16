@@ -353,6 +353,11 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	let profile = flags.profile ?? "standard";
 	const steps: StepLog[] = [];
 	const provenanceUnavailable: string[] = [];
+	// Attestation audit (#276): PELAGGIO_OPERATOR_ATTENDED suppressions are cycle-scoped
+	// evidence. `finish()` persists them into cycle provenance on every exit path (success,
+	// failure, park) so an attested headless run is reconstructible from
+	// .dev/pelaggio-log.jsonl alone — the resolution-time console line is not durable.
+	const unattendedSignalSuppressions = [...(opts.unattendedSignalSuppressions ?? [])];
 	/** Descriptors for every execution receipt written this cycle (steps + aggregate review). */
 	const executionReceipts: ExecutionReceiptDescriptor[] = [];
 	const assignment = createDriverAssignmentState(opts.cycle);
@@ -1011,6 +1016,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 					...(unavailable.length ? { unavailable: [...new Set(unavailable)] } : {}),
 					challengeDigest: cycleChallengeDigest,
 					...(executionReceipts.length > 0 ? { executionReceipts: [...executionReceipts] } : {}),
+					...(unattendedSignalSuppressions.length > 0 ? { unattendedSignalSuppressions: [...unattendedSignalSuppressions] } : {}),
 				},
 			});
 		}
@@ -1681,6 +1687,9 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				// headless). Fallback for direct callers keeps the legacy single-shot-only signal.
 				unattendedSignals: opts.unattendedSignals ?? (opts.noWorktree === true ? ["CI/single-shot (--no-worktree)"] : []),
 				suppressedSignals: opts.unattendedSignalSuppressions ?? [],
+				// Keys mode validates the author revision seat's key with the same fail-closed
+				// rule as Judge/reviewers — before any seat runs (#276 follow-up).
+				author: seating.author,
 				envAllowlist: CONFIG.security.envAllowlist,
 			});
 			if (!execution.ok) return finish({ itemId, completed: false, cost, error: `shakedown-code execution context failed: ${execution.reason}` });
@@ -1760,7 +1769,14 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 							revise: (survivors) => `${expandSkill("shakedown", shakedownCodeArgs)}\n\nThe Judge retained these blockers:\n${JSON.stringify(survivors)}`,
 						},
 					});
-					if (execution.softened.length > 0) loop.diversity = { state: "softened", explanation: execution.softened.join("; ") };
+					if (execution.softened.length > 0) {
+						// Key-mode softening joins — never replaces — the loop's own diversity
+						// explanation (e.g. "reviewer seats did not complete"), mirroring the
+						// merge rule inside runReviewLoop.
+						const explanation = execution.softened.join("; ");
+						if (loop.diversity.state === "met") loop.diversity = { state: "softened", explanation };
+						else if (!loop.diversity.explanation.includes(explanation)) loop.diversity = { state: "softened", explanation: `${loop.diversity.explanation}; ${explanation}` };
+					}
 				} finally {
 					for (const sha of preparedSeatShas) cleanupAuthoringReviewSeatsForSha(mainRepo, sha);
 				}
@@ -2842,6 +2858,24 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		// One campaign-wide signal set: a multi-cycle campaign stays "multi-cycle" for every
 		// cycle in it (including park-and-resume rounds), not just cycles after the first.
 		const runUnattendedEvidence = unattendedEvidenceFor(cycles > 1);
+		// Pre-flight (#276 follow-up): `enabled=local` with a deterministic unattended signal
+		// (CI/single-shot, daemon marker, multi-cycle) can only ever refuse — yet the
+		// resolution-time gate sits at shakedown-code, after the full plan+implement spend.
+		// Refuse before any paid work, reusing the exact resolution-time refusal. The TTY
+		// evidence is deliberately excluded (`stdoutIsTTY: true`): the headless signal is
+		// operator-attestable via PELAGGIO_OPERATOR_ATTENDED and belongs to resolution time.
+		// Resume re-entry may legitimately start past shakedown-code, so it keeps the
+		// resolution-time gate alone; that gate stays the authoritative backstop everywhere.
+		if (!flags.resume && REVIEW_CONFIG.authoring.enabled === "local") {
+			const deterministic = detectUnattendedSignals({ singleShot: noWorktree, multiCycle: cycles > 1, env: process.env, stdoutIsTTY: true });
+			if (deterministic.signals.length > 0) {
+				const preflight = resolveAuthoringReviewExecution(REVIEW_CONFIG.authoring, { unattendedSignals: deterministic.signals });
+				if (!preflight.ok) {
+					console.error(preflight.reason);
+					return { exitCode: 2, results };
+				}
+			}
+		}
 		// Provider-estimated spend (e.g. Codex on a subscription) counts toward `--budget` the same
 		// as billed USD — deliberate: it fails safe (a subscription run still respects the cap as a
 		// token-spend proxy) and the warning below marks the figure `~` so it never reads as real USD.

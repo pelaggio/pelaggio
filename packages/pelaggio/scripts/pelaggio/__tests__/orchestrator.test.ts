@@ -24,8 +24,9 @@ import { createMockRunPipeline } from "./mocks.js";
 // single-shot path and short-circuits before runPipeline is called.
 const savedEnv: Record<string, string | undefined> = {};
 let savedReviewRunner: typeof REVIEW_CONFIG.runner;
+let savedAuthoringEnabled: typeof REVIEW_CONFIG.authoring.enabled;
 before(() => {
-	for (const key of ["CI", "PELAGGIO_SINGLE_SHOT"]) {
+	for (const key of ["CI", "PELAGGIO_SINGLE_SHOT", "PELAGGIO_SUPERVISED_RUN"]) {
 		savedEnv[key] = process.env[key];
 		delete process.env[key];
 	}
@@ -34,6 +35,11 @@ before(() => {
 	// real provider whenever an otherwise unrelated fixture happens to expose a PR.
 	savedReviewRunner = REVIEW_CONFIG.runner;
 	REVIEW_CONFIG.runner = "ci";
+	// Pin the authoring loop off: the host `.pelaggio.yml` may set `enabled: local`,
+	// which would trip the deterministic multi-cycle pre-flight (#276 follow-up) in
+	// otherwise unrelated campaign fixtures. The pre-flight tests opt in explicitly.
+	savedAuthoringEnabled = REVIEW_CONFIG.authoring.enabled;
+	REVIEW_CONFIG.authoring.enabled = "off";
 });
 after(() => {
 	for (const [key, value] of Object.entries(savedEnv)) {
@@ -41,6 +47,7 @@ after(() => {
 		else process.env[key] = value;
 	}
 	REVIEW_CONFIG.runner = savedReviewRunner;
+	REVIEW_CONFIG.authoring.enabled = savedAuthoringEnabled;
 });
 
 const baseFlags: Flags = {
@@ -135,6 +142,43 @@ describe("runOrchestrator — resume --from override", () => {
 		const { exitCode } = await runOrchestrator({ ...baseFlags, item: "X-1", from: "implement" }, { runPipeline });
 		assert.equal(exitCode, 2);
 		assert.equal(calls.length, 0);
+	});
+});
+
+describe("runOrchestrator — local-mode deterministic pre-flight (#276 follow-up)", () => {
+	it("refuses enabled=local at start for a multi-cycle campaign, before any paid work", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const errors: string[] = [];
+		t.mock.method(console, "error", (message: string) => errors.push(String(message)));
+		const saved = REVIEW_CONFIG.authoring.enabled;
+		REVIEW_CONFIG.authoring.enabled = "local";
+		try {
+			const { runPipeline, calls } = createMockRunPipeline({ default: { completed: true } });
+			const { exitCode } = await runOrchestrator({ ...baseFlags, item: "A-1,A-2", cycles: "2" }, { runPipeline });
+			assert.equal(exitCode, 2);
+			assert.equal(calls.length, 0, "no cycle may start past the deterministic refusal");
+			assert.match(errors.join(" "), /enabled=local requires attended interactive execution.*multi-cycle/);
+		} finally {
+			REVIEW_CONFIG.authoring.enabled = saved;
+		}
+	});
+
+	it("does not pre-flight on the attestable TTY signal alone (resolution time owns it)", async (t) => {
+		t.mock.method(console, "log", () => {});
+		t.mock.method(console, "error", () => {});
+		const saved = REVIEW_CONFIG.authoring.enabled;
+		REVIEW_CONFIG.authoring.enabled = "local";
+		try {
+			// Under node --test stdout is typically piped (no TTY). A single-cycle run with no
+			// CI/daemon/multi-cycle signal must still reach the pipeline: the headless signal is
+			// operator-attestable, so only the shakedown-code resolution gate may judge it.
+			const { runPipeline, calls } = createMockRunPipeline({ default: { completed: true } });
+			const { exitCode } = await runOrchestrator({ ...baseFlags, item: "A-1" }, { runPipeline });
+			assert.equal(exitCode, 0);
+			assert.equal(calls.length, 1, "the single-cycle run must reach runPipeline");
+		} finally {
+			REVIEW_CONFIG.authoring.enabled = saved;
+		}
 	});
 });
 

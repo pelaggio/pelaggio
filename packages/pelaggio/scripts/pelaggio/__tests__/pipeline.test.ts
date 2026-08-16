@@ -3728,11 +3728,12 @@ describe("runPipeline — authoring review capability seating + effects (#337)",
 		try {
 			// Orchestrator-computed evidence for an operator-attested piped run: the TTY signal
 			// was suppressed by PELAGGIO_OPERATOR_ATTENDED=1 and no positive signal remains.
+			const appended: Array<Record<string, unknown>> = [];
 			const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", unattendedSignals: [], unattendedSignalSuppressions: [OPERATOR_ATTESTED_TTY_SUPPRESSION] }, parkSignal, baseFlags, {
 				runStep,
 				mainRepo: worktree,
 				listWorktrees: () => [worktree],
-				appendLog: () => {},
+				appendLog: (entry) => appended.push(entry),
 				runShipBookkeeping: noopBookkeeping,
 			});
 
@@ -3743,6 +3744,11 @@ describe("runPipeline — authoring review capability seating + effects (#337)",
 			);
 			const suppressionLines = messages.filter((message) => message.includes(OPERATOR_ATTESTED_TTY_SUPPRESSION));
 			assert.equal(suppressionLines.length, 1, "the attestation suppression must be logged exactly once at resolution time");
+			// The security contract: an attested headless run is reconstructible from the
+			// APPENDED cycle record, not just console output (#276 must-fix).
+			assert.equal(appended.length, 1, "expected exactly one appended cycle record");
+			const provenance = appended[0]?.provenance as { unattendedSignalSuppressions?: string[] } | undefined;
+			assert.deepEqual(provenance?.unattendedSignalSuppressions, [OPERATOR_ATTESTED_TTY_SUPPRESSION], "the attestation suppression must be persisted in the appended cycle provenance");
 		} finally {
 			mock.restoreAll();
 			mock.method(console, "log", () => {});
@@ -3763,6 +3769,7 @@ describe("runPipeline — authoring review capability seating + effects (#337)",
 		const { runStep, calls } = createMockRunStep({ implement: { ok: true, writes: { "impl.txt": "x" } } }, parkSignal);
 
 		try {
+			const appended: Array<Record<string, unknown>> = [];
 			const result = await runPipeline(
 				{
 					...baseOpts(worktree),
@@ -3776,7 +3783,7 @@ describe("runPipeline — authoring review capability seating + effects (#337)",
 					runStep,
 					mainRepo: worktree,
 					listWorktrees: () => [worktree],
-					appendLog: () => {},
+					appendLog: (entry) => appended.push(entry),
 					runShipBookkeeping: noopBookkeeping,
 				},
 			);
@@ -3785,6 +3792,11 @@ describe("runPipeline — authoring review capability seating + effects (#337)",
 			assert.match(result.error ?? "", /execution context failed.*enabled=local.*multi-cycle/);
 			assert.match(result.error ?? "", /suppressed by PELAGGIO_OPERATOR_ATTENDED attestation/);
 			assert.ok(!calls.some((call) => call.step === "pr-review" || call.step === "pr-verify"));
+			// Failure exit paths persist the suppression too — reconstruction must not
+			// depend on the cycle succeeding (#276 must-fix).
+			assert.equal(appended.length, 1, "expected exactly one appended cycle record");
+			const provenance = appended[0]?.provenance as { unattendedSignalSuppressions?: string[] } | undefined;
+			assert.deepEqual(provenance?.unattendedSignalSuppressions, [OPERATOR_ATTESTED_TTY_SUPPRESSION], "the suppression must be persisted on the failed cycle's appended record");
 		} finally {
 			REVIEW_CONFIG.authoring.enabled = saved;
 		}

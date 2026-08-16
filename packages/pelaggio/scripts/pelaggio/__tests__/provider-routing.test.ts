@@ -390,6 +390,7 @@ describe("resolveAuthoringReviewExecution — auth context gate (#276)", () => {
 		};
 		const result = resolveAuthoringReviewExecution(policy, {
 			unattendedSignals: ["CI/single-shot (--no-worktree)"],
+			author: { provider: "claude" },
 			env: { ANTHROPIC_API_KEY: "anthropic-key", XAI_API_KEY: "xai-key" },
 			envAllowlist: ["XAI_API_KEY"],
 		});
@@ -409,12 +410,62 @@ describe("resolveAuthoringReviewExecution — auth context gate (#276)", () => {
 			reviewers: [{ id: "codex", provider: "codex" as const }],
 			judge: { id: "judge", provider: "claude" as const },
 		};
-		const noJudge = resolveAuthoringReviewExecution(policy, { unattendedSignals: ["CI/single-shot (--no-worktree)"], env: { OPENAI_API_KEY: "openai-key" }, envAllowlist: ["OPENAI_API_KEY"] });
+		const noJudge = resolveAuthoringReviewExecution(policy, { unattendedSignals: ["CI/single-shot (--no-worktree)"], author: { provider: "claude" }, env: { OPENAI_API_KEY: "openai-key" }, envAllowlist: ["OPENAI_API_KEY"] });
 		assert.equal(noJudge.ok, false);
 		if (!noJudge.ok) assert.match(noJudge.reason, /Judge.*ANTHROPIC_API_KEY/);
-		const noReviewer = resolveAuthoringReviewExecution(policy, { unattendedSignals: ["CI/single-shot (--no-worktree)"], env: { ANTHROPIC_API_KEY: "anthropic-key", OPENAI_API_KEY: "openai-key" } });
+		const noReviewer = resolveAuthoringReviewExecution(policy, { unattendedSignals: ["CI/single-shot (--no-worktree)"], author: { provider: "claude" }, env: { ANTHROPIC_API_KEY: "anthropic-key", OPENAI_API_KEY: "openai-key" } });
 		assert.equal(noReviewer.ok, false);
 		if (!noReviewer.ok) assert.match(noReviewer.reason, /no key-authenticated reviewer.*env-allowlist/);
+	});
+
+	it("key mode fails closed when the author revision seat has no provider key (reviewer + Judge keys present)", () => {
+		const policy = {
+			...baseConfig().review.authoring,
+			enabled: "keys" as const,
+			reviewers: [{ id: "grok", provider: "grok" as const }],
+			judge: { id: "judge", provider: "claude" as const },
+		};
+		const result = resolveAuthoringReviewExecution(policy, {
+			unattendedSignals: ["CI/single-shot (--no-worktree)"],
+			author: { provider: "codex" },
+			env: { ANTHROPIC_API_KEY: "anthropic-key", XAI_API_KEY: "xai-key" },
+			envAllowlist: ["XAI_API_KEY"],
+		});
+		assert.equal(result.ok, false);
+		if (!result.ok) assert.match(result.reason, /author seat \(codex\) requires key auth: OPENAI_API_KEY is not set/);
+	});
+
+	it("key mode fails closed when the author seat's key is set but not forwarded by the env allowlist", () => {
+		const policy = {
+			...baseConfig().review.authoring,
+			enabled: "keys" as const,
+			reviewers: [{ id: "grok", provider: "grok" as const }],
+			judge: { id: "judge", provider: "claude" as const },
+		};
+		const result = resolveAuthoringReviewExecution(policy, {
+			unattendedSignals: ["CI/single-shot (--no-worktree)"],
+			author: { provider: "codex" },
+			env: { ANTHROPIC_API_KEY: "anthropic-key", XAI_API_KEY: "xai-key", OPENAI_API_KEY: "openai-key" },
+			envAllowlist: ["XAI_API_KEY"],
+		});
+		assert.equal(result.ok, false);
+		if (!result.ok) assert.match(result.reason, /author seat \(codex\).*OPENAI_API_KEY is not forwarded by security\.env-allowlist/);
+	});
+
+	it("key mode fails closed when the author identity is missing at resolution", () => {
+		const policy = {
+			...baseConfig().review.authoring,
+			enabled: "keys" as const,
+			reviewers: [{ id: "grok", provider: "grok" as const }],
+			judge: { id: "judge", provider: "claude" as const },
+		};
+		const result = resolveAuthoringReviewExecution(policy, {
+			unattendedSignals: ["CI/single-shot (--no-worktree)"],
+			env: { ANTHROPIC_API_KEY: "anthropic-key", XAI_API_KEY: "xai-key" },
+			envAllowlist: ["XAI_API_KEY"],
+		});
+		assert.equal(result.ok, false);
+		if (!result.ok) assert.match(result.reason, /author seat requires key auth: author identity was not provided/);
 	});
 });
 
