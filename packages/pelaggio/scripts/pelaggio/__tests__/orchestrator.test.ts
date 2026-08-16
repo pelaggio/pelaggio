@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
-import { REPO } from "../config.js";
+import { REPO, REVIEW_CONFIG } from "../config.js";
 import type { NotifyPayload } from "../notify.js";
 import { hermeticDefault, hermeticQueueRoot, runOrchestrator } from "../pipeline.js";
 import { gateRecordsDir, readPrReviewGateRecord, writePrReviewGateRecord } from "../pr-review-gate-record.js";
@@ -23,17 +23,24 @@ import { createMockRunPipeline } from "./mocks.js";
 // GitHub Actions always sets CI=true, which flips the orchestrator onto the
 // single-shot path and short-circuits before runPipeline is called.
 const savedEnv: Record<string, string | undefined> = {};
+let savedReviewRunner: typeof REVIEW_CONFIG.runner;
 before(() => {
 	for (const key of ["CI", "PELAGGIO_SINGLE_SHOT"]) {
 		savedEnv[key] = process.env[key];
 		delete process.env[key];
 	}
+	// Orchestrator tests must opt into local review explicitly with hermetic review
+	// dependencies. Inheriting the repository's production-local default can launch a
+	// real provider whenever an otherwise unrelated fixture happens to expose a PR.
+	savedReviewRunner = REVIEW_CONFIG.runner;
+	REVIEW_CONFIG.runner = "ci";
 });
 after(() => {
 	for (const [key, value] of Object.entries(savedEnv)) {
 		if (value === undefined) delete process.env[key];
 		else process.env[key] = value;
 	}
+	REVIEW_CONFIG.runner = savedReviewRunner;
 });
 
 const baseFlags: Flags = {
@@ -1332,9 +1339,6 @@ describe("runOrchestrator — revise sweep (issue #76)", () => {
 			{
 				runPipeline,
 				resolveWorktree: resolveWt,
-				// runner:"ci" disables the local review sweep — WITHOUT this, the sweep falls
-				// through to production defaults and spawns REAL provider agents (#420).
-				review: { runner: "ci", ghRepo: "o/r", gh },
 				revise: { local: true, ghRepo: "o/r", gh },
 			},
 		);

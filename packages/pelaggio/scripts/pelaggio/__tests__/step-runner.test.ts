@@ -19,6 +19,7 @@ import {
 	isClaudeMaxTurnsError,
 	isWorktreePath,
 	projectClaudeAssistantBlocks,
+	runStep,
 } from "../step-runner.js";
 import type { ProviderName } from "../types.js";
 
@@ -33,6 +34,27 @@ function write(fp: string): HookInput {
 function edit(fp: string): HookInput {
 	return { tool_name: "Edit", tool_input: { file_path: fp } } as unknown as HookInput;
 }
+
+describe("provider test guard (#420)", () => {
+	it("blocks the production dispatcher under node --test before a provider can run", () => {
+		assert.notEqual(process.env.NODE_TEST_CONTEXT, undefined, "this regression test must run under node --test");
+		assert.throws(
+			() =>
+				void runStep(
+					"implement",
+					"must not reach a provider",
+					{
+						cwd: "/tmp/pelaggio-test-guard",
+						profile: "standard",
+						trace: false,
+						parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" },
+					},
+					() => {},
+				),
+			/provider execution blocked under node --test.*inject a RunStepFn/s,
+		);
+	});
+});
 
 describe("projectClaudeAssistantBlocks", () => {
 	it("projects text and tool_use input and ignores other block types", () => {
