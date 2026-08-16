@@ -6,7 +6,7 @@ import { checkpoint, ensureCheckpointed, mainWorktree } from "./helpers.js";
 import { enqueueReviewRequest, type NewReviewRequest } from "./review-request-queue.js";
 import type { RoadmapSource } from "./roadmap/index.js";
 import { SHIP_TARGET_NAMES } from "./ship/index.js";
-import { runShipPrEffects, type ShipPrEffectsResult } from "./ship/pr-effects.js";
+import { type PrShipGateBinding, runShipPrEffects, type ShipPrEffectsResult } from "./ship/pr-effects.js";
 import type { ExecutionReceiptDescriptor, ProviderName, ReviewOutcome, Step } from "./types.js";
 
 export const EFFECTS_SCHEMA_VERSION = 1;
@@ -106,6 +106,12 @@ export interface EffectsDispatchContext extends EffectsContext {
 	 * tests override to exercise both runners / a null-key skip without touching real `.dev/`.
 	 */
 	reviewEnqueue?: ReviewEnqueueDeps;
+	/**
+	 * Gated-OID binding for `ship.ShipDecision` (ADR-0025 applied to the PR-ship path).
+	 * Harness-observed, in-process only — never read from disk. Required to dispatch a
+	 * PR ship decision; the handler fails closed when absent.
+	 */
+	shipGate?: PrShipGateBinding;
 }
 
 export interface ReviewEnqueueDeps {
@@ -167,7 +173,10 @@ const EFFECT_HANDLERS: { [K in ImplementedEffect["kind"]]: EffectHandler<K> } = 
 	async "ship.ShipDecision"(effect, ctx) {
 		if (effect.target === "direct-push") throw new EffectsManifestError("unknown_effect_kind", "ship.ShipDecision is not implemented for direct-push");
 		if (effect.itemId !== ctx.itemId) throw new EffectsManifestError("provenance_mismatch", `ship decision itemId ${effect.itemId} does not match ${ctx.itemId}`);
-		const result = await runShipPrEffects({ cwd: ctx.cwd, itemId: ctx.itemId, decision: effect }, { log: ctx.log, assistedByProviders: ctx.assistedByProviders });
+		// ADR-0025: a dispatch without the harness-observed gated-OID binding is ungated
+		// by definition — refuse rather than ship whatever HEAD currently is.
+		if (!ctx.shipGate) throw new EffectsManifestError("provenance_mismatch", "ship.ShipDecision dispatched without a gated-OID binding (shipGate) — refusing to ship ungated");
+		const result = await runShipPrEffects({ cwd: ctx.cwd, itemId: ctx.itemId, decision: effect, gate: ctx.shipGate }, { log: ctx.log, assistedByProviders: ctx.assistedByProviders });
 		// #387: after a successful PR ship, enqueue a durable review-request into the main tree so
 		// the trusted reconciler posts the `review` status mid-run. Never fails the ship (below).
 		maybeEnqueueReviewRequest(effect, ctx, result);

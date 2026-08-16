@@ -997,13 +997,20 @@ describe("preparePrShipFreshness / verifyPrShipFreshness", () => {
 			return execSync(`git ${args.map((a) => JSON.stringify(a)).join(" ")}`, { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
 		});
 		assert.equal(result.kind, "up-to-date");
+		if (result.kind !== "up-to-date") return;
+		// The retained OID is the fetched origin/main tip, resolved immediately post-fetch.
+		assert.equal(result.originMainOid, execSync("git rev-parse origin/main", { cwd: worktree, encoding: "utf-8" }).trim());
 		assert.ok(argv.some((a) => a[0] === "fetch" && a[1] === "origin" && a[2] === "main"));
 		assert.ok(!argv.some((a) => a[0] === "merge"));
-		assert.deepEqual(verifyPrShipFreshness(worktree), { ok: true });
+		assert.deepEqual(verifyPrShipFreshness(worktree, result.originMainOid), { ok: true });
 	});
 
-	it("merges a branch behind origin/main and records the exact upstream-touched paths", () => {
+	it("merges a branch behind origin/main and records only upstream-side touched paths (three-dot)", () => {
 		const { worktree, origin } = makeFreshnessPair();
+		// A branch-side commit must NOT appear in upstreamTouchedFiles: two-dot
+		// `HEAD..origin/main` would list it (the endpoint trees differ); three-dot
+		// lists only the upstream side since the merge-base.
+		commitFile(worktree, "src/feature.ts", "export const feat = 1;\n", "feat side");
 		commitFile(origin, "src/upstream.ts", "export const up = 1;\n", "upstream");
 		commitFile(origin, "docs/note.md", "note\n", "upstream docs");
 		const result = preparePrShipFreshness(worktree);
@@ -1011,7 +1018,27 @@ describe("preparePrShipFreshness / verifyPrShipFreshness", () => {
 		if (result.kind !== "merged") return;
 		assert.deepEqual(result.upstreamTouchedFiles.sort(), ["docs/note.md", "src/upstream.ts"]);
 		assert.equal(existsSync(join(worktree, "src/upstream.ts")), true);
-		assert.deepEqual(verifyPrShipFreshness(worktree), { ok: true });
+		assert.deepEqual(verifyPrShipFreshness(worktree, result.originMainOid), { ok: true });
+	});
+
+	it("TOCTOU: origin/main moved to an older ancestor between fetch and verify fails naming both OIDs", () => {
+		const { worktree, origin } = makeFreshnessPair();
+		const olderOid = execSync("git rev-parse origin/main", { cwd: worktree, encoding: "utf-8" }).trim();
+		commitFile(origin, "src/upstream.ts", "export const up = 1;\n", "upstream");
+		const result = preparePrShipFreshness(worktree);
+		assert.equal(result.kind, "merged");
+		if (result.kind !== "merged") return;
+		const fetchedOid = result.originMainOid;
+		assert.notEqual(fetchedOid, olderOid);
+		// Simulate the writable author step moving the shared remote-tracking ref back to
+		// an older ancestor (the tree stays clean and still contains the older tip).
+		execSync(`git update-ref refs/remotes/origin/main ${olderOid}`, { cwd: worktree });
+		const verified = verifyPrShipFreshness(worktree, fetchedOid);
+		assert.equal(verified.ok, false);
+		if (verified.ok) return;
+		assert.ok(verified.detail.includes(fetchedOid), `detail names the fetched OID: ${verified.detail}`);
+		assert.ok(verified.detail.includes(olderOid), `detail names the moved-to OID: ${verified.detail}`);
+		assert.match(verified.detail, /moved after fetch/);
 	});
 
 	it("returns conflicted and leaves MERGE_HEAD when the merge has unmerged paths", () => {
@@ -1027,10 +1054,11 @@ describe("preparePrShipFreshness / verifyPrShipFreshness", () => {
 		if (result.kind !== "conflicted") return;
 		assert.ok(result.unmergedFiles.includes("shared.ts"));
 		assert.ok(result.upstreamTouchedFiles.includes("shared.ts"));
+		assert.equal(result.originMainOid, execSync("git rev-parse origin/main", { cwd: worktree, encoding: "utf-8" }).trim());
 		assert.equal(execSync("git rev-parse -q --verify MERGE_HEAD", { cwd: worktree, encoding: "utf-8" }).trim().length > 0, true);
 		assert.ok(!argv.some((a) => a[0] === "merge" && a.includes("--abort")));
 		assert.ok(!argv.some((a) => a[0] === "reset" || a[0] === "clean"));
-		assert.equal(verifyPrShipFreshness(worktree).ok, false);
+		assert.equal(verifyPrShipFreshness(worktree, result.originMainOid!).ok, false);
 	});
 
 	it("treats an already-conflicted input (MERGE_HEAD) as conflicted without fetching or merging again", () => {
@@ -1047,6 +1075,8 @@ describe("preparePrShipFreshness / verifyPrShipFreshness", () => {
 		assert.equal(second.kind, "conflicted");
 		if (second.kind !== "conflicted") return;
 		assert.ok(second.unmergedFiles.includes("shared.ts"));
+		// No fetch on the resume path, but the OID observed before the author step is still retained.
+		assert.equal(second.originMainOid, execSync("git rev-parse origin/main", { cwd: worktree, encoding: "utf-8" }).trim());
 		assert.ok(!argv.some((a) => a[0] === "fetch" || a[0] === "merge"));
 		assert.equal(execSync("git rev-parse -q --verify MERGE_HEAD", { cwd: worktree, encoding: "utf-8" }).trim().length > 0, true);
 	});
@@ -1075,9 +1105,10 @@ describe("preparePrShipFreshness / verifyPrShipFreshness", () => {
 			if (key === "status --porcelain") return "";
 			if (key === "fetch origin main") return "";
 			if (key === "rev-parse --verify origin/main") return "abc";
-			if (key === "merge-base --is-ancestor origin/main HEAD") throw new Error("behind");
-			if (key === "diff --name-only HEAD..origin/main") return "src/a.ts\n";
-			if (key === "merge --no-edit origin/main") throw Object.assign(new Error("not a fast-forward"), { stderr: "fatal: refusing to merge unrelated histories" });
+			// Post-fetch checks and the merge itself run against the retained OID, never the ref name.
+			if (key === "merge-base --is-ancestor abc HEAD") throw new Error("behind");
+			if (key === "diff --name-only HEAD...abc") return "src/a.ts\n";
+			if (key === "merge --no-edit abc") throw Object.assign(new Error("not a fast-forward"), { stderr: "fatal: refusing to merge unrelated histories" });
 			throw new Error(`unexpected argv: ${key}`);
 		});
 		assert.equal(fake.kind, "failed");
@@ -1088,30 +1119,30 @@ describe("preparePrShipFreshness / verifyPrShipFreshness", () => {
 		assert.ok(!argv.some((a) => a[0] === "reset" || a[0] === "clean"));
 	});
 
-	it("post-author verification accepts only clean, conflict-free branches containing origin/main", () => {
+	it("post-author verification accepts only clean, conflict-free branches containing the fetched OID", () => {
 		const { worktree, origin } = makeFreshnessPair();
-		assert.deepEqual(verifyPrShipFreshness(worktree), { ok: true });
+		const fetchedOid = execSync("git rev-parse origin/main", { cwd: worktree, encoding: "utf-8" }).trim();
+		assert.deepEqual(verifyPrShipFreshness(worktree, fetchedOid), { ok: true });
 
 		writeFileSync(join(worktree, "dirty.txt"), "x");
-		assert.equal(verifyPrShipFreshness(worktree).ok, false);
+		assert.equal(verifyPrShipFreshness(worktree, fetchedOid).ok, false);
 		execSync("git clean -fdq", { cwd: worktree });
 
 		commitFile(origin, "src/more.ts", "more\n", "more upstream");
-		// Local origin/main is stale until fetch; ancestry still holds for the previous tip,
-		// so force a failed ancestry probe via argv.
-		const stale = verifyPrShipFreshness(worktree, (args) => {
+		// The fetched OID no longer being an ancestor fails; force the probe via argv.
+		const stale = verifyPrShipFreshness(worktree, "def", (args) => {
 			const key = args.join(" ");
 			if (key === "rev-parse -q --verify MERGE_HEAD") throw new Error("no merge");
 			if (key === "diff --name-only --diff-filter=U") return "";
 			if (key === "status --porcelain") return "";
 			if (key === "rev-parse --verify origin/main") return "def";
-			if (key === "merge-base --is-ancestor origin/main HEAD") throw new Error("not ancestor");
+			if (key === "merge-base --is-ancestor def HEAD") throw new Error("not ancestor");
 			throw new Error(`unexpected argv: ${key}`);
 		});
 		assert.equal(stale.ok, false);
 		if (!stale.ok) assert.match(stale.detail, /ancestor/);
 
-		const unresolved = verifyPrShipFreshness(worktree, (args) => {
+		const unresolved = verifyPrShipFreshness(worktree, fetchedOid, (args) => {
 			const key = args.join(" ");
 			if (key === "rev-parse -q --verify MERGE_HEAD") return "mergehead";
 			throw new Error(`unexpected argv: ${key}`);

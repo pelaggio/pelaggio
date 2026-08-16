@@ -1269,7 +1269,19 @@ export type GitArgvExec = (args: readonly string[], cwd: string) => string;
 
 const defaultGitArgvExec: GitArgvExec = (args, cwd) => execFileSync("git", [...args], { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
 
-export type PrShipFreshnessResult = { kind: "up-to-date" } | { kind: "merged"; upstreamTouchedFiles: string[] } | { kind: "conflicted"; unmergedFiles: string[]; upstreamTouchedFiles: string[] } | { kind: "failed"; detail: string };
+/**
+ * Non-failed results retain `originMainOid` — the OID `origin/main` resolved to when this
+ * run observed it (immediately post-fetch, or at classification time on the no-fetch
+ * resume path). ADR-0025: every later freshness check and the ship effect bind to this
+ * OID, never to the mutable `origin/main` ref name, which a subsequent writable author
+ * step can move. `conflicted` carries `null` only when `origin/main` does not resolve at
+ * all (pathological resume); the pipeline fails closed on a null OID before shipping.
+ */
+export type PrShipFreshnessResult =
+	| { kind: "up-to-date"; originMainOid: string }
+	| { kind: "merged"; upstreamTouchedFiles: string[]; originMainOid: string }
+	| { kind: "conflicted"; unmergedFiles: string[]; upstreamTouchedFiles: string[]; originMainOid: string | null }
+	| { kind: "failed"; detail: string };
 
 export type PrShipFreshnessVerification = { ok: true } | { ok: false; detail: string };
 
@@ -1310,16 +1322,20 @@ function porcelainStatus(run: GitArgvExec, cwd: string): { ok: true; dirty: bool
 	return { ok: true, dirty: result.out !== "" };
 }
 
-function originMainResolves(run: GitArgvExec, cwd: string): boolean {
-	return tryGitArgv(run, ["rev-parse", "--verify", "origin/main"], cwd).ok;
+function resolveOriginMainOid(run: GitArgvExec, cwd: string): string | null {
+	const result = tryGitArgv(run, ["rev-parse", "--verify", "origin/main"], cwd);
+	return result.ok && result.out !== "" ? result.out : null;
 }
 
-function originMainIsAncestor(run: GitArgvExec, cwd: string): boolean {
-	return tryGitArgv(run, ["merge-base", "--is-ancestor", "origin/main", "HEAD"], cwd).ok;
+function oidIsAncestorOfHead(run: GitArgvExec, cwd: string, oid: string): boolean {
+	return tryGitArgv(run, ["merge-base", "--is-ancestor", oid, "HEAD"], cwd).ok;
 }
 
 function upstreamTouchedFrom(run: GitArgvExec, cwd: string, incomingRef: string): string[] {
-	return gitNameOnly(run, ["diff", "--name-only", `HEAD..${incomingRef}`], cwd);
+	// Three-dot: only files touched on the upstream side since the merge-base. Two-dot
+	// (`HEAD..ref`) diffs the endpoint trees, so the branch's own files leak into the
+	// "Upstream-touched files" list fed to the author.
+	return gitNameOnly(run, ["diff", "--name-only", `HEAD...${incomingRef}`], cwd);
 }
 
 /**
@@ -1336,11 +1352,16 @@ export function preparePrShipFreshness(worktree: string, exec?: GitArgvExec): Pr
 	const mergeInProgress = hasMergeHead(run, worktree);
 	const unmerged = unmergedPaths(run, worktree);
 	if (mergeInProgress || unmerged.length > 0) {
-		const incoming = mergeInProgress ? "MERGE_HEAD" : originMainResolves(run, worktree) ? "origin/main" : null;
+		// No fetch on this resume path: retain whatever origin/main resolves to NOW. Still
+		// observed before the writable author step runs, so OID-bound verification rejects
+		// any movement the author causes afterwards.
+		const originMainOid = resolveOriginMainOid(run, worktree);
+		const incoming = mergeInProgress ? "MERGE_HEAD" : originMainOid;
 		return {
 			kind: "conflicted",
 			unmergedFiles: unmerged,
 			upstreamTouchedFiles: incoming ? upstreamTouchedFrom(run, worktree, incoming) : [],
+			originMainOid,
 		};
 	}
 	const status = porcelainStatus(run, worktree);
@@ -1349,26 +1370,36 @@ export function preparePrShipFreshness(worktree: string, exec?: GitArgvExec): Pr
 
 	const fetched = tryGitArgv(run, ["fetch", "origin", "main"], worktree);
 	if (!fetched.ok) return { kind: "failed", detail: fetched.detail || "git fetch origin main failed" };
-	if (!originMainResolves(run, worktree)) return { kind: "failed", detail: "origin/main does not resolve after fetch" };
-	if (originMainIsAncestor(run, worktree)) return { kind: "up-to-date" };
+	// ADR-0025: resolve and retain the fetched OID once, immediately post-fetch. Every
+	// subsequent check (including the merge below) uses this OID, never the ref name.
+	const originMainOid = resolveOriginMainOid(run, worktree);
+	if (!originMainOid) return { kind: "failed", detail: "origin/main does not resolve after fetch" };
+	if (oidIsAncestorOfHead(run, worktree, originMainOid)) return { kind: "up-to-date", originMainOid };
 
-	const upstreamTouchedFiles = upstreamTouchedFrom(run, worktree, "origin/main");
-	const merged = tryGitArgv(run, ["merge", "--no-edit", "origin/main"], worktree);
-	if (merged.ok) return { kind: "merged", upstreamTouchedFiles };
+	const upstreamTouchedFiles = upstreamTouchedFrom(run, worktree, originMainOid);
+	const merged = tryGitArgv(run, ["merge", "--no-edit", originMainOid], worktree);
+	if (merged.ok) return { kind: "merged", upstreamTouchedFiles, originMainOid };
 
 	const afterUnmerged = unmergedPaths(run, worktree);
 	if (hasMergeHead(run, worktree) || afterUnmerged.length > 0) {
-		return { kind: "conflicted", unmergedFiles: afterUnmerged, upstreamTouchedFiles };
+		return { kind: "conflicted", unmergedFiles: afterUnmerged, upstreamTouchedFiles, originMainOid };
 	}
 	return { kind: "failed", detail: merged.detail || "git merge --no-edit origin/main failed" };
 }
 
 /**
  * Deterministic Git gate before PR pre-flight or ship. Accepts only a clean,
- * conflict-free worktree whose HEAD already contains `origin/main`.
+ * conflict-free worktree whose HEAD already contains the origin/main OID retained
+ * at fetch time (`expectedOriginMainOid`, from `preparePrShipFreshness`).
  * Never aborts, resets, or cleans.
+ *
+ * ADR-0025: verification binds to the fetched OID, never the mutable ref name — a
+ * writable author step between fetch and this gate can move `origin/main` (e.g. to an
+ * older ancestor) and leave a clean tree that a ref-name check would accept. ANY
+ * movement fails closed with both OIDs named; a legitimately-advanced upstream also
+ * fails here, and the resume re-fetches — correct and self-healing.
  */
-export function verifyPrShipFreshness(worktree: string, exec?: GitArgvExec): PrShipFreshnessVerification {
+export function verifyPrShipFreshness(worktree: string, expectedOriginMainOid: string, exec?: GitArgvExec): PrShipFreshnessVerification {
 	const run = exec ?? defaultGitArgvExec;
 	if (hasMergeHead(run, worktree)) return { ok: false, detail: "merge in progress (MERGE_HEAD present)" };
 	const unmerged = unmergedPaths(run, worktree);
@@ -1376,8 +1407,12 @@ export function verifyPrShipFreshness(worktree: string, exec?: GitArgvExec): PrS
 	const status = porcelainStatus(run, worktree);
 	if (!status.ok) return { ok: false, detail: status.detail };
 	if (status.dirty) return { ok: false, detail: "worktree is dirty" };
-	if (!originMainResolves(run, worktree)) return { ok: false, detail: "origin/main does not resolve" };
-	if (!originMainIsAncestor(run, worktree)) return { ok: false, detail: "origin/main is not an ancestor of HEAD" };
+	const currentOid = resolveOriginMainOid(run, worktree);
+	if (!currentOid) return { ok: false, detail: "origin/main does not resolve" };
+	if (currentOid !== expectedOriginMainOid) {
+		return { ok: false, detail: `origin/main moved after fetch: fetched ${expectedOriginMainOid}, now ${currentOid} — rejecting ref movement` };
+	}
+	if (!oidIsAncestorOfHead(run, worktree, expectedOriginMainOid)) return { ok: false, detail: `fetched origin/main OID ${expectedOriginMainOid} is not an ancestor of HEAD` };
 	return { ok: true };
 }
 

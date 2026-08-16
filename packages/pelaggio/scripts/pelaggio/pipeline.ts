@@ -124,6 +124,7 @@ import { defaultGhRun, type GhRunner } from "./roadmap/github-issues.js";
 import { getRoadmapSource, type RoadmapSource } from "./roadmap/index.js";
 import { cleanupShipBodyFile, parseShipDecisionEffect, shipBodyFile } from "./ship/decision.js";
 import { commitStrayBookkeeping, getShipTarget, isAutonomousRemotePush, isShipTargetName, runShipBookkeeping as runShipBookkeepingDefault, SHIP_TARGET_NAMES } from "./ship/index.js";
+import type { PrShipGateBinding } from "./ship/pr-effects.js";
 import { extractPrUrl } from "./ship/pull-request.js";
 import { getProvider, REGISTERED_PROVIDERS, type RunStepFn, runStep as runStepDefault } from "./step-runner.js";
 import { A, createStepRenderer, fmtElapsed, LiveStatus, StatusBar, TUI_ENABLED } from "./tui.js";
@@ -437,6 +438,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			executionOverride,
 			parkSignalOverride,
 			preCheckpointGate,
+			shipGate,
 		}: {
 			attempt?: number;
 			commitLabel?: string;
@@ -451,6 +453,9 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			 *  is never committed as resolved. Result classification is left untouched — the
 			 *  caller re-checks the same tree state and fails with the gate's detail. */
 			preCheckpointGate?: () => { ok: true } | { ok: false; detail: string };
+			/** Gated-OID binding threaded into the effects dispatch for `ship.ShipDecision`
+			 *  (ADR-0025 applied to the PR-ship path). Ship step only. */
+			shipGate?: PrShipGateBinding;
 		} = {},
 	): Promise<StepResult> {
 		const settings = resolveStepSettings(CONFIG, profile, name);
@@ -810,6 +815,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 								provider: realizedProvider,
 								model: realizedModel,
 								observeGit: () => observeGitForReceipt(cwd),
+								...(shipGate ? { shipGate } : {}),
 							});
 							if (effectsResult.appendText) {
 								result = {
@@ -2088,6 +2094,12 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	const target = opts.shipTarget;
 	const targetSuffix = target.name === "direct-push" ? "" : ` (${target.name})`;
 
+	// ADR-0025 applied to the PR-ship path (#424): the OIDs the ship effect must match
+	// exactly, observed by the harness when the last deterministic gate + pre-flight
+	// review passed. Set only on the PR pre-ship tail below; runShipPrEffects fails
+	// closed without it.
+	let prShipGate: PrShipGateBinding | undefined;
+
 	// PR-only pre-ship tail (#424): freshness + cold pre-flight. Not a PipelineStep.
 	if (!opts.dryRun && (target.name === "pull-request" || target.name === "auto-merge-pr")) {
 		// Deterministic freshness gates (typecheck:ratchet backstop + Git verification), with
@@ -2095,7 +2107,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		// the freshness merge is already committed, so a resume classifies the branch
 		// `up-to-date` — gate completion must be a recorded fact, never inferred from that
 		// state, or the resume would skip the very gates that failed.
-		const runFreshnessGates = async (context: string): Promise<CycleResult | null> => {
+		const runFreshnessGates = async (context: string, fetchedOriginMainOid: string): Promise<CycleResult | null> => {
 			const typecheck = await runTypecheckRatchetFn(worktree!);
 			if (!typecheck.ok) {
 				const detail = typecheck.detail ? `: ${typecheck.detail}` : "";
@@ -2105,7 +2117,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			if (typecheck.skipped) {
 				log(`typecheck:ratchet not present in target repo — gate skipped (${typecheck.detail ?? "no script"})`);
 			}
-			const verified = verifyPrShipFreshnessFn(worktree!);
+			const verified = verifyPrShipFreshnessFn(worktree!, fetchedOriginMainOid);
 			if (!verified.ok) {
 				log(`⚠ PR freshness verification failed: ${verified.detail}`);
 				return finish({ itemId, completed: false, cost, verdict, error: `PR freshness verification failed: ${verified.detail}` });
@@ -2129,6 +2141,16 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			log(`⚠ PR freshness failed: ${freshness.detail}`);
 			return finish({ itemId, completed: false, cost, verdict, error: `PR freshness failed: ${freshness.detail}` });
 		}
+		// ADR-0025: every later freshness check and the ship effect bind to this OID —
+		// resolved when the harness fetched — never to the mutable `origin/main` ref,
+		// which the writable author steps below can move. Null only on the pathological
+		// resume where origin/main does not resolve at all: fail closed before spending
+		// author budget (the gates could never pass).
+		const fetchedOriginMainOid = freshness.originMainOid;
+		if (!fetchedOriginMainOid) {
+			log("⚠ PR freshness could not retain an origin/main OID — refusing to verify against the mutable ref");
+			return finish({ itemId, completed: false, cost, verdict, error: "PR freshness failed: origin/main OID could not be retained (ref does not resolve) — cannot bind verification to a fetched OID" });
+		}
 		if (freshness.kind === "merged" || freshness.kind === "conflicted") {
 			log(freshness.kind === "conflicted" ? "PR freshness conflicted — routing to implementation author" : "PR freshness merged — routing to implementation author");
 			const conflictedFiles = freshness.kind === "conflicted" ? freshness.unmergedFiles : [];
@@ -2146,7 +2168,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				log(`⚠ conflict repair incomplete: ${repaired.detail}`);
 				return finish({ itemId, completed: false, cost, verdict, error: `conflict repair incomplete: ${repaired.detail}` });
 			}
-			const gateFailure = await runFreshnessGates("after freshness repair");
+			const gateFailure = await runFreshnessGates("after freshness repair", fetchedOriginMainOid);
 			if (gateFailure) return gateFailure;
 		} else {
 			// up-to-date: run (or re-run) the gates unless completion is recorded for the CURRENT head.
@@ -2161,7 +2183,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			if (record && record.itemId === itemId) {
 				log(`freshness gates already recorded for ${headSha?.slice(0, 12)} — skipping re-run`);
 			} else {
-				const gateFailure = await runFreshnessGates("for ship candidate");
+				const gateFailure = await runFreshnessGates("for ship candidate", fetchedOriginMainOid);
 				if (gateFailure) return gateFailure;
 			}
 		}
@@ -2203,6 +2225,18 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		} else if (review.gate !== "pass") {
 			log(`PR pre-flight ${review.gate} is not author-actionable (ok=${String(review.ok)} agreement=${review.agreement ?? "n/a"} survivors=${String(review.survivorCount ?? 0)} subtype=${review.subtype}) — opening PR for the required gate`);
 		}
+
+		// ADR-0025 (verification bound to the candidate SHA) applied to the PR-ship path:
+		// snapshot the HEAD OID that just passed the deterministic gates and pre-flight
+		// review. The ship step below is a writable agent (Edit + Bash(git:*)); the ship
+		// effect requires the worktree HEAD to exactly equal this OID before pushing, so a
+		// post-gate commit can never be shipped untypechecked and unreviewed. Fail closed,
+		// no auto-regate.
+		const gatedHeadOid = getHeadSha(worktree!);
+		if (!gatedHeadOid) {
+			return finish({ itemId, completed: false, cost, verdict, error: "could not snapshot gated HEAD OID before ship — refusing to ship unbound" });
+		}
+		prShipGate = { gatedHeadOid, originMainOid: fetchedOriginMainOid };
 	}
 
 	log(`shipping...${targetSuffix}`);
@@ -2286,7 +2320,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		} else {
 			// Attempt-cap only (no budget gate) — one acceptance-required recovery for a
 			// malformed decision / missing body file before any manifest is written.
-			ship = await step("ship", shipPrompt, worktree!, { attempt: 1, effects: shipEffects });
+			ship = await step("ship", shipPrompt, worktree!, { attempt: 1, effects: shipEffects, ...(prShipGate ? { shipGate: prShipGate } : {}) });
 			cost += ship.cost;
 			const canRetryShip = !ship.ok && ship.subtype === "error_effects_manifest" && ship.effectsError?.code === "invalid_manifest" && ship.effectsError?.phase === "resolve";
 			if (canRetryShip) {
@@ -2303,7 +2337,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 					shipPrompt,
 				].join("\n");
 				log("ship decision invalid — retrying once...");
-				ship = await step("ship", retryPrompt, worktree!, { attempt: 2, effects: shipEffects });
+				ship = await step("ship", retryPrompt, worktree!, { attempt: 2, effects: shipEffects, ...(prShipGate ? { shipGate: prShipGate } : {}) });
 				cost += ship.cost;
 			}
 			// Scratch lifecycle: delete the body file only after a successful PR dispatch.

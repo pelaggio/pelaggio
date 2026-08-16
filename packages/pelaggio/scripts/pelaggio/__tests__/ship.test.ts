@@ -13,7 +13,18 @@ import type { ShipBookkeepingCtx, ShipBookkeepingResult } from "../ship/index.js
 import { getShipTarget, isAutonomousRemotePush, isShipTargetName, SHIP_TARGET_NAMES } from "../ship/index.js";
 import { stripAnsi } from "../tui.js";
 import type { Flags, PipelineOpts, ShipTargetName, StepResult } from "../types.js";
-import { allCommitMessages, createMockRunStep, defaultPrPreflightStubs, makeLiveStatus, makeParkSignal, makeTempGitRepo, makeTempRepoWithParent, setupHermeticPipelineEnv, teardownHermeticPipelineEnv } from "./mocks.js";
+import {
+	allCommitMessages,
+	createMockRunStep,
+	defaultPrPreflightStubs,
+	makeLiveStatus,
+	makeParkSignal,
+	makeTempGitRepo,
+	makeTempRepoWithParent,
+	STUB_ORIGIN_MAIN_OID,
+	setupHermeticPipelineEnv,
+	teardownHermeticPipelineEnv,
+} from "./mocks.js";
 
 /** PR-mode ship fixture: body via fixed file path (inline prBody is no longer accepted). */
 function prShipDecision(
@@ -1064,7 +1075,7 @@ describe("runPipeline — PR freshness sequencing (#424)", () => {
 		const spies: PipelineDeps = {
 			preparePrShipFreshness: () => {
 				freshness += 1;
-				return { kind: "up-to-date" };
+				return { kind: "up-to-date", originMainOid: STUB_ORIGIN_MAIN_OID };
 			},
 			runPrReviewGate: async () => {
 				gate += 1;
@@ -1134,7 +1145,7 @@ describe("runPipeline — PR freshness sequencing (#424)", () => {
 			...defaultPrPreflightStubs(),
 			preparePrShipFreshness: () => {
 				order.push("freshness");
-				return { kind: "merged", upstreamTouchedFiles: ["src/upstream.ts"] };
+				return { kind: "merged", upstreamTouchedFiles: ["src/upstream.ts"], originMainOid: STUB_ORIGIN_MAIN_OID };
 			},
 			runTypecheckRatchet: async () => {
 				order.push("typecheck");
@@ -1174,7 +1185,7 @@ describe("runPipeline — PR freshness sequencing (#424)", () => {
 		const result = await runPipeline({ ...baseOpts(worktree, "pull-request"), startFrom: "ship" }, parkSignal, baseFlags, {
 			runStep,
 			...defaultPrPreflightStubs(),
-			preparePrShipFreshness: () => ({ kind: "conflicted", unmergedFiles: ["shared.ts"], upstreamTouchedFiles: ["shared.ts"] }),
+			preparePrShipFreshness: () => ({ kind: "conflicted", unmergedFiles: ["shared.ts"], upstreamTouchedFiles: ["shared.ts"], originMainOid: STUB_ORIGIN_MAIN_OID }),
 			runTypecheckRatchet: async () => ({ ok: true }),
 			verifyPrShipFreshness: () => ({ ok: false, detail: "merge in progress (MERGE_HEAD present)" }),
 			runPrReviewGate: async () => {
@@ -1201,7 +1212,7 @@ describe("runPipeline — PR freshness sequencing (#424)", () => {
 		for (const deps of [
 			{ preparePrShipFreshness: () => ({ kind: "failed" as const, detail: "origin missing" }) },
 			{
-				preparePrShipFreshness: () => ({ kind: "merged" as const, upstreamTouchedFiles: ["a.ts"] }),
+				preparePrShipFreshness: () => ({ kind: "merged" as const, upstreamTouchedFiles: ["a.ts"], originMainOid: STUB_ORIGIN_MAIN_OID }),
 				runTypecheckRatchet: async () => ({ ok: false, detail: "TS2345" }),
 			},
 		]) {
@@ -1232,7 +1243,7 @@ describe("runPipeline — PR freshness sequencing (#424)", () => {
 		const result = await runPipeline({ ...baseOpts(worktree, "pull-request"), startFrom: "ship" }, parkSignal, baseFlags, {
 			runStep: wrapped,
 			...defaultPrPreflightStubs(),
-			preparePrShipFreshness: () => ({ kind: "conflicted", unmergedFiles: ["a.ts"], upstreamTouchedFiles: ["a.ts"] }),
+			preparePrShipFreshness: () => ({ kind: "conflicted", unmergedFiles: ["a.ts"], upstreamTouchedFiles: ["a.ts"], originMainOid: STUB_ORIGIN_MAIN_OID }),
 			runTypecheckRatchet: async () => ({ ok: true }),
 			verifyPrShipFreshness: () => ({ ok: true }),
 			listWorktrees: () => [],
@@ -1242,6 +1253,55 @@ describe("runPipeline — PR freshness sequencing (#424)", () => {
 		assert.equal(result.completed, true);
 		assert.equal(overrides.length, 1);
 		assert.ok(overrides[0]?.provider, "reconstructed implementation author must be the execution override");
+	});
+
+	it("TOCTOU: verification receives the OID retained at fetch, and a moved origin/main fails the cycle naming both OIDs", async () => {
+		const worktree = makeDeliverableRepo();
+		const parkSignal = makeParkSignal();
+		const fetchedOid = "1".repeat(40);
+		const movedOid = "2".repeat(40);
+		const receivedOids: string[] = [];
+		const { runStep, calls } = createMockRunStep({ "shakedown-code": { ok: true }, ship: prShipDecision("pull-request") }, parkSignal);
+		const result = await runPipeline({ ...baseOpts(worktree, "pull-request"), startFrom: "ship" }, parkSignal, baseFlags, {
+			runStep,
+			...defaultPrPreflightStubs(),
+			preparePrShipFreshness: () => ({ kind: "merged", upstreamTouchedFiles: ["a.ts"], originMainOid: fetchedOid }),
+			runTypecheckRatchet: async () => ({ ok: true }),
+			verifyPrShipFreshness: (_worktree, expectedOid) => {
+				receivedOids.push(expectedOid);
+				// What the real verifier reports when the intervening author step moved the ref.
+				return { ok: false, detail: `origin/main moved after fetch: fetched ${expectedOid}, now ${movedOid} — rejecting ref movement` };
+			},
+			listWorktrees: () => [],
+			appendLog: () => {},
+		});
+		assert.equal(result.completed, false);
+		assert.deepEqual(receivedOids, [fetchedOid], "verification must bind to the OID retained at fetch time, not re-resolve the ref");
+		assert.ok(result.error?.includes(fetchedOid) && result.error?.includes(movedOid), `cycle error must name both OIDs: ${result.error}`);
+		assert.equal(calls.filter((c) => c.step === "ship").length, 0);
+	});
+
+	it("binds the ship-effects dispatch to the gated HEAD OID and the fetched origin/main OID (ADR-0025)", async () => {
+		const worktree = makeDeliverableRepo();
+		const parkSignal = makeParkSignal();
+		const shipGates: Array<{ gatedHeadOid: string; originMainOid: string } | undefined> = [];
+		const { runStep } = createMockRunStep({ ship: prShipDecision("pull-request") }, parkSignal);
+		const result = await runPipeline({ ...baseOpts(worktree, "pull-request"), startFrom: "ship" }, parkSignal, baseFlags, {
+			runStep,
+			...defaultPrPreflightStubs(),
+			listWorktrees: () => [],
+			appendLog: () => {},
+			dispatchStepEffects: async (ctx) => {
+				if (ctx.step === "ship") shipGates.push(ctx.shipGate);
+				return ctx.step === "ship" ? { appendText: PR_URL } : {};
+			},
+		});
+		assert.equal(result.completed, true);
+		assert.equal(shipGates.length, 1);
+		const shipGate = shipGates[0];
+		assert.ok(shipGate, "ship dispatch context must carry the gated-OID binding");
+		assert.equal(shipGate.gatedHeadOid, execSync("git rev-parse HEAD", { cwd: worktree, encoding: "utf-8" }).trim(), "gatedHeadOid must be the worktree HEAD that passed the gates");
+		assert.equal(shipGate.originMainOid, STUB_ORIGIN_MAIN_OID, "originMainOid must be the OID retained by the freshness fetch");
 	});
 });
 
@@ -1266,7 +1326,7 @@ describe("runPipeline — conflicted freshness repair gate (#424 review fixes)",
 	function conflictedDeps(extra: PipelineDeps = {}): PipelineDeps {
 		return {
 			...defaultPrPreflightStubs(),
-			preparePrShipFreshness: () => ({ kind: "conflicted", unmergedFiles: ["f.txt"], upstreamTouchedFiles: ["f.txt"] }),
+			preparePrShipFreshness: () => ({ kind: "conflicted", unmergedFiles: ["f.txt"], upstreamTouchedFiles: ["f.txt"], originMainOid: STUB_ORIGIN_MAIN_OID }),
 			listWorktrees: () => [],
 			appendLog: () => {},
 			dispatchStepEffects: async () => ({ appendText: PR_URL }),

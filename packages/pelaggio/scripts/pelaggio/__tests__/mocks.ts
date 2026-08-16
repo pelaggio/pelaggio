@@ -176,6 +176,9 @@ export function makeParkSignal(): ParkSignal {
 	return { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" };
 }
 
+/** Fetched-origin/main OID reported by the default `preparePrShipFreshness` stub (#424). */
+export const STUB_ORIGIN_MAIN_OID = "f".repeat(40);
+
 /** Default PR-mode freshness + pre-flight stubs. `setupShipRepo` / `makeTempGitRepo` have no
  *  `origin` and are not the pelaggio monorepo — unstubbed production defaults would fetch a
  *  missing remote, run `pnpm typecheck:ratchet` in an empty tree, verify against a missing
@@ -186,7 +189,7 @@ export function defaultPrPreflightStubs(): Pick<
 	"preparePrShipFreshness" | "runPrReviewGate" | "runTypecheckRatchet" | "verifyPrShipFreshness" | "readFreshnessGateRecord" | "writeFreshnessGateRecord" | "prepareAuthoringReviewSeat" | "cleanupAuthoringReviewSeatsForSha"
 > {
 	return {
-		preparePrShipFreshness: () => ({ kind: "up-to-date" }),
+		preparePrShipFreshness: () => ({ kind: "up-to-date", originMainOid: STUB_ORIGIN_MAIN_OID }),
 		verifyPrShipFreshness: () => ({ ok: true }),
 		readFreshnessGateRecord: () => null,
 		writeFreshnessGateRecord: () => "",
