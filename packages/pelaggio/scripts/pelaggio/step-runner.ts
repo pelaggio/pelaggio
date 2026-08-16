@@ -170,8 +170,9 @@ function pathUnderRoot(abs: string, root: string): boolean {
  * authorization, so a seat that can shell-redirect into either can forge a consensus-block
  * record + matching source and turn a red review green without fleet evidence). Names come from
  * the canonical storage modules so the deny list cannot drift from the real paths.
- * `.dev/freshness-gate-records/` (#424) joins the list for the same reason: a forged record
- * lets a ship resume skip the deterministic typecheck + freshness gates.
+ * `.dev/freshness-gate-records/` (#424) joins the list as defense in depth: gate-skip trust
+ * is in-process only (#511 — a forged disk record no longer authorizes anything), but the
+ * observability register still must not be seat-writable.
  */
 const BASH_DENIED_DEV_REGISTERS = ["sessions", PR_REVIEW_GATE_RECORDS_DIR, ADJUDICATION_SOURCES_DIR, FRESHNESS_GATE_RECORDS_DIR] as const;
 const BASH_DENIED_DEV_REGISTER_RE = new RegExp(`(^|[\\s"'=/])\\.dev/(${BASH_DENIED_DEV_REGISTERS.join("|")})(/|\\b)`);
@@ -227,8 +228,9 @@ export function blockForeignRootWrite(input: HookInput, cwd: string, mainRepo: s
 
 	// Adjudication-evidence denial is likewise absolute (#510 1a): these stores authorize
 	// `review=success` without a fleet run, so no seat may Write/Edit them — even when cwd
-	// or ownWorktree would otherwise allow the path. Freshness-gate records (#424) authorize
-	// skipping the deterministic ship gates on resume and get the same treatment.
+	// or ownWorktree would otherwise allow the path. Freshness-gate records (#424) get the
+	// same treatment as defense in depth (gate-skip trust is in-process only — #511 — but
+	// the observability register still must not be seat-writable).
 	for (const evidenceRoot of [gateRecordsDir(mainAbs), adjudicationSourcesDir(mainAbs), freshnessGateRecordsDir(mainAbs)]) {
 		if (pathUnderRoot(abs, evidenceRoot)) {
 			return {

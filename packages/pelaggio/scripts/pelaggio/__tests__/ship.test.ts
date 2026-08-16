@@ -1299,6 +1299,40 @@ describe("runPipeline — conflicted freshness repair gate (#424 review fixes)",
 		assert.equal(calls.filter((c) => c.step === "ship").length, 0);
 	});
 
+	it("a rate limit mid-repair parks without committing staged markers or concluding the merge (#424 interleave)", async () => {
+		const worktree = makeConflictedRepo();
+		const parkSignal = makeParkSignal();
+		const { runStep, calls } = createMockRunStep(
+			{
+				// The interleave: the author has `git add`-ed the marker-laden conflict file
+				// (clearing unmerged-path state) when the rate limit lands. The step's own
+				// preCheckpointGate skips the "freshness merge repair" commit, and the
+				// subsequent parkExit checkpoint must ALSO refuse — it would otherwise
+				// conclude MERGE_HEAD with the markers committed and resume would ship them.
+				"shakedown-code": {
+					ok: false,
+					subtype: "error_rate_limit",
+					text: "rate limited",
+					sideEffect: (cwd) => execSync("git add f.txt", { cwd }),
+					park: { parked: true, resetsAt: Date.now() + 60_000, limitType: "rate_limit" },
+				},
+			},
+			parkSignal,
+		);
+		const result = await runPipeline({ ...baseOpts(worktree, "pull-request"), startFrom: "ship" }, parkSignal, baseFlags, {
+			runStep,
+			...conflictedDeps(),
+		});
+		assert.equal(result.completed, false);
+		assert.equal(result.error, "parked");
+		// Parked dirty-with-MERGE_HEAD — the documented park contract; resume re-enters `conflicted`.
+		assert.equal(execSync("git rev-parse -q --verify MERGE_HEAD", { cwd: worktree, encoding: "utf-8" }).trim().length > 0, true, "merge stays open");
+		assert.ok(!allCommitMessages(worktree).some((m) => m.startsWith("wip: pelaggio")), "no park checkpoint may conclude the merge");
+		assert.match(readFileSync(join(worktree, "f.txt"), "utf-8"), /^<{7} /m, "markers stay observable");
+		assert.equal(execSync("git diff --name-only --diff-filter=U", { cwd: worktree, encoding: "utf-8" }).trim(), "", "interleave precondition held: staging had cleared unmerged-path state, so only the marker scan refused");
+		assert.equal(calls.filter((c) => c.step === "ship").length, 0);
+	});
+
 	it("author-staged conflict markers fail the gate before any checkpoint commit", async () => {
 		const worktree = makeConflictedRepo();
 		const parkSignal = makeParkSignal();

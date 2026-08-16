@@ -4069,6 +4069,9 @@ describe("runPipeline — PR pre-flight and freshness (#424)", () => {
 			},
 			runPrReviewGate: async (opts) => {
 				assert.ok(opts.runStep);
+				// #424 fix: the gate's diff source is the detached data-only checkout, never the live claim worktree.
+				assert.equal(opts.diffCwd, join(tmpdir(), "preflight-seat-preflight-diff"));
+				assert.notEqual(opts.diffCwd, worktree);
 				await opts.runStep("pr-review", "d1", { cwd: opts.cwd ?? "", profile: "standard", trace: false, parkSignal: opts.parkSignal ?? parkSignal, executionOverride: { provider: "claude" } }, () => {});
 				await opts.runStep("pr-review", "d2", { cwd: opts.cwd ?? "", profile: "standard", trace: false, parkSignal: opts.parkSignal ?? parkSignal, executionOverride: { provider: "codex" } }, () => {});
 				await opts.runStep("pr-verify", "v", { cwd: opts.cwd ?? "", profile: "standard", trace: false, parkSignal: opts.parkSignal ?? parkSignal, executionOverride: { provider: "grok" } }, () => {});
@@ -4086,7 +4089,8 @@ describe("runPipeline — PR pre-flight and freshness (#424)", () => {
 		assert.equal(steps.filter((s) => s.name === "pr-review").length, 2);
 		assert.equal(steps.filter((s) => s.name === "pr-verify").length, 1);
 		assert.deepEqual([...new Set(seats)].sort(), [...seats].sort(), "each driver/verify call gets a distinct seat");
-		assert.equal(seats.length, 3);
+		assert.equal(seats.length, 4, "diff-source checkout + one seat per driver/verify call");
+		assert.equal(seats[0], "preflight-diff", "the diff-source checkout is prepared before any reviewer seat");
 		assert.equal(cleaned.length, 1);
 	});
 
@@ -4108,7 +4112,7 @@ describe("runPipeline — PR pre-flight and freshness (#424)", () => {
 			runPrReviewGate: async (opts) => {
 				gateCalls += 1;
 				shas.push(opts.reviewedSha ?? "");
-				if (gateCalls === 1) return survivorBlock({ cost: 0.3 });
+				if (gateCalls === 1) return survivorBlock({ cost: 0.3, body: "must-fix: leaked token\n<!-- pr-review-metrics gate=block ok=true subtype=success cost=0.30 turns=2 -->" });
 				return passGate({ cost: 0.2 });
 			},
 			listWorktrees: () => [],
@@ -4118,8 +4122,12 @@ describe("runPipeline — PR pre-flight and freshness (#424)", () => {
 		assert.equal(result.completed, true);
 		assert.equal(gateCalls, 2);
 		assert.equal(calls.filter((c) => c.step === "shakedown-code").length, 1);
-		assert.match(calls.find((c) => c.step === "shakedown-code")?.prompt ?? "", /PREFLIGHT_FINDINGS/);
-		assert.match(calls.find((c) => c.step === "shakedown-code")?.prompt ?? "", /data only/);
+		const repairPrompt = calls.find((c) => c.step === "shakedown-code")?.prompt ?? "";
+		assert.match(repairPrompt, /PREFLIGHT_FINDINGS/);
+		assert.match(repairPrompt, /data only/);
+		assert.match(repairPrompt, /leaked token/);
+		// #424 fix: the CLI-owned metrics marker is telemetry, stripped before the author sees the body.
+		assert.doesNotMatch(repairPrompt, /pr-review-metrics/);
 		assert.equal(calls.filter((c) => c.step === "ship").length, 1);
 		assert.equal(shas.length, 2);
 	});
@@ -4204,6 +4212,7 @@ describe("runPipeline — PR pre-flight and freshness (#424)", () => {
 		const worktree = makeDeliverableRepo();
 		const parkSignal = makeParkSignal();
 		const cleaned: string[] = [];
+		let gateCalls = 0;
 		const { runStep, calls } = createMockRunStep({ ship: prShipDecision() }, parkSignal);
 		const result = await runPipeline(shipFrom(worktree), parkSignal, baseFlags, {
 			runStep,
@@ -4214,19 +4223,103 @@ describe("runPipeline — PR pre-flight and freshness (#424)", () => {
 			cleanupAuthoringReviewSeatsForSha: (_main, sha) => {
 				cleaned.push(sha);
 			},
-			runPrReviewGate: async (opts) => {
-				const stepResult = await opts.runStep!("pr-review", "inspect", { cwd: worktree, profile: "standard", trace: false, parkSignal: opts.parkSignal ?? parkSignal, executionOverride: { provider: "claude" } }, () => {});
-				assert.equal(stepResult.ok, false);
-				assert.match(stepResult.text, /seat prepare failed/);
-				return passGate({ gate: "block", ok: false, agreement: "invalid", subtype: "error", survivorCount: 0, cost: 0 });
+			runPrReviewGate: async () => {
+				gateCalls += 1;
+				return passGate();
 			},
 			listWorktrees: () => [],
 			appendLog: () => {},
 			dispatchStepEffects: async () => ({ appendText: "https://example.test/pull/1" }),
 		});
-		assert.equal(result.completed, true);
+		// #424 fix: the diff-source checkout is prepared BEFORE the gate; its failure is an
+		// advisory infra BLOCK that never falls back to reviewing the live claim worktree.
+		assert.equal(result.completed, true, "advisory: the required PR gate still reviews the PR");
+		assert.equal(gateCalls, 0, "no gate run without a detached diff source");
 		assert.equal(calls.filter((c) => c.step === "pr-review").length, 0, "must not run review against the artifact checkout");
+		assert.equal(calls.filter((c) => c.step === "ship").length, 1);
 		assert.equal(cleaned.length, 1);
+	});
+
+	it("pre-flight reviewer seats carry no claim-worktree write authorization (detached, read-only)", async () => {
+		const worktree = makeDeliverableRepo();
+		const parkSignal = makeParkSignal();
+		const denials: Array<{ ownWorktree?: string; registeredWorktrees: readonly string[] } | undefined> = [];
+		const { runStep } = createMockRunStep({ ship: prShipDecision() }, parkSignal);
+		const wrapped: RunStepFn = async (name, prompt, opts, emit) => {
+			if (name === "pr-review") denials.push(opts.foreignRootDenial);
+			return runStep(name, prompt, opts, emit);
+		};
+		const result = await runPipeline(shipFrom(worktree), parkSignal, baseFlags, {
+			runStep: wrapped,
+			...defaultPrPreflightStubs(),
+			runPrReviewGate: async (opts) => {
+				await opts.runStep!("pr-review", "inspect", { cwd: opts.cwd ?? "", profile: "standard", trace: false, parkSignal: opts.parkSignal ?? parkSignal, executionOverride: { provider: "claude" } }, () => {});
+				return passGate();
+			},
+			listWorktrees: () => [worktree],
+			appendLog: () => {},
+			dispatchStepEffects: async () => ({ appendText: "https://example.test/pull/1" }),
+		});
+		assert.equal(result.completed, true, `expected completed; error=${result.error}`);
+		assert.equal(denials.length, 1);
+		assert.ok(denials[0], "seat steps still install foreign-root denial");
+		// #424 fix: the live claim worktree is a DENIED foreign root for reviewer seats, not an
+		// ownWorktree write grant (only its registration keeps it in the denied set).
+		assert.equal(denials[0]?.ownWorktree, undefined);
+		assert.ok(denials[0]?.registeredWorktrees.includes(worktree));
+	});
+
+	it("a clean commit into the live claim worktree during pre-flight fails the cycle before ship", async () => {
+		const worktree = makeDeliverableRepo();
+		const parkSignal = makeParkSignal();
+		const { runStep, calls } = createMockRunStep({ ship: prShipDecision() }, parkSignal);
+		const result = await runPipeline(shipFrom(worktree), parkSignal, baseFlags, {
+			runStep,
+			...defaultPrPreflightStubs(),
+			runPrReviewGate: async () => {
+				// Porcelain-invisible mutation: a clean commit leaves `git status` empty, so only
+				// the pre/post HEAD compare can catch it.
+				execSync("git commit -q --allow-empty -m sneaky-seat-commit", { cwd: worktree });
+				return passGate();
+			},
+			listWorktrees: () => [],
+			appendLog: () => {},
+			dispatchStepEffects: async () => ({ appendText: "https://example.test/pull/1" }),
+		});
+		assert.equal(result.completed, false);
+		assert.match(result.error ?? "", /HEAD moved during pre-flight/);
+		assert.equal(calls.filter((c) => c.step === "ship").length, 0, "a mutated tree must never ship");
+	});
+
+	it("a type-breaking pre-flight author revision fails the deterministic backstop and never opens the PR", async () => {
+		const worktree = makeDeliverableRepo();
+		const parkSignal = makeParkSignal();
+		let typecheckCalls = 0;
+		let gateCalls = 0;
+		const { runStep, calls } = createMockRunStep({ "shakedown-code": { ok: true, writes: { "fix.txt": "broken types" } }, ship: prShipDecision() }, parkSignal);
+		const result = await runPipeline(shipFrom(worktree), parkSignal, baseFlags, {
+			runStep,
+			...defaultPrPreflightStubs(),
+			runTypecheckRatchet: async () => {
+				typecheckCalls += 1;
+				// Call 1: the up-to-date freshness gate (pre-revision head) — green.
+				// Call 2: the post-revision backstop — the revision broke the types.
+				return typecheckCalls === 1 ? { ok: true } : { ok: false, detail: "TS2551" };
+			},
+			runPrReviewGate: async () => {
+				gateCalls += 1;
+				return survivorBlock();
+			},
+			listWorktrees: () => [],
+			appendLog: () => {},
+		});
+		assert.equal(result.completed, false);
+		assert.match(result.error ?? "", /typecheck:ratchet failed after pre-flight revision/);
+		assert.match(result.error ?? "", /TS2551/);
+		assert.equal(typecheckCalls, 2);
+		assert.equal(gateCalls, 1, "the recheck's review budget is never spent on a type-broken tree");
+		assert.equal(calls.filter((c) => c.step === "shakedown-code").length, 1);
+		assert.equal(calls.filter((c) => c.step === "ship").length, 0);
 	});
 
 	it("soft-skips when the target repo has no typecheck:ratchet script, keeps a present script as a hard gate (#424 review)", async () => {
@@ -4260,6 +4353,26 @@ describe("runPipeline — PR pre-flight and freshness (#424)", () => {
 		const green = await defaultTypecheckRatchet(gated);
 		assert.equal(green.ok, true);
 		assert.equal(green.skipped, undefined);
+
+		// #424 gate review: a GREEN ratchet with output beyond node's 1 MiB default maxBuffer
+		// must not crash the gate — oversized output is bounded, not fatal.
+		writeFileSync(join(gated, "package.json"), JSON.stringify({ name: "x", scripts: { "typecheck:ratchet": "node -e \"process.stdout.write('x'.repeat(2 * 1024 * 1024))\"" } }));
+		const chatty = await defaultTypecheckRatchet(gated);
+		assert.equal(chatty.ok, true, `oversized green output must pass; detail=${chatty.detail}`);
+
+		// #424 gate review: pnpm missing from PATH is an environment gap → soft skip, like a
+		// missing script — never a red gate.
+		const emptyPath = mkdtempSync(join(tmpdir(), "pelaggio-ratchet-empty-path-"));
+		const savedPath = process.env.PATH;
+		process.env.PATH = emptyPath;
+		try {
+			const noPnpm = await defaultTypecheckRatchet(gated);
+			assert.equal(noPnpm.ok, true);
+			assert.equal(noPnpm.skipped, true);
+			assert.match(noPnpm.detail ?? "", /pnpm not found/);
+		} finally {
+			process.env.PATH = savedPath;
+		}
 	});
 
 	it("cleans prepared seats when the gate throws", async () => {

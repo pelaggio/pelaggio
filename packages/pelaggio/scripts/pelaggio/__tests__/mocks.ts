@@ -179,13 +179,19 @@ export function makeParkSignal(): ParkSignal {
 /** Default PR-mode freshness + pre-flight stubs. `setupShipRepo` / `makeTempGitRepo` have no
  *  `origin` and are not the pelaggio monorepo — unstubbed production defaults would fetch a
  *  missing remote, run `pnpm typecheck:ratchet` in an empty tree, verify against a missing
- *  `origin/main`, and (the gate-record store, #424) read/write the HOST repo's `.dev/`. */
-export function defaultPrPreflightStubs(): Pick<PipelineDeps, "preparePrShipFreshness" | "runPrReviewGate" | "runTypecheckRatchet" | "verifyPrShipFreshness" | "readFreshnessGateRecord" | "writeFreshnessGateRecord"> {
+ *  `origin/main`, (the gate-record store, #424) read/write the HOST repo's `.dev/`, and (the
+ *  pre-flight diff/seat checkouts) run `git worktree add` against the HOST repo. */
+export function defaultPrPreflightStubs(): Pick<
+	PipelineDeps,
+	"preparePrShipFreshness" | "runPrReviewGate" | "runTypecheckRatchet" | "verifyPrShipFreshness" | "readFreshnessGateRecord" | "writeFreshnessGateRecord" | "prepareAuthoringReviewSeat" | "cleanupAuthoringReviewSeatsForSha"
+> {
 	return {
 		preparePrShipFreshness: () => ({ kind: "up-to-date" }),
 		verifyPrShipFreshness: () => ({ ok: true }),
 		readFreshnessGateRecord: () => null,
 		writeFreshnessGateRecord: () => "",
+		prepareAuthoringReviewSeat: (_main, key) => join(tmpdir(), `pelaggio-test-seat-${key.seatId}-p${key.pass}`),
+		cleanupAuthoringReviewSeatsForSha: () => {},
 		runPrReviewGate: async (): Promise<PrReviewGateResult> => ({
 			gate: "pass",
 			body: "preflight pass",

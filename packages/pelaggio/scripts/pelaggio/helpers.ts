@@ -871,6 +871,24 @@ export function looksLikeStalledAsk(text: string): boolean {
 
 // ── Git checkpointing ──────────────────────────────────────────────────
 
+/**
+ * Paths the checkpoint's `git add -A` would stage: every porcelain v1 entry, including
+ * untracked files. `-z` avoids quoting; a rename/copy record carries a second (source-path)
+ * token that must be consumed, not read as its own entry.
+ */
+function pendingCommitPaths(cwd: string): string[] {
+	const out = execSync("git status --porcelain=v1 -z --untracked-files=all", { cwd, encoding: "utf-8", stdio: "pipe" });
+	const tokens = out.split("\0");
+	const paths: string[] = [];
+	for (let i = 0; i < tokens.length; i++) {
+		const entry = tokens[i];
+		if (entry.length < 4) continue;
+		paths.push(entry.slice(3));
+		if (entry[0] === "R" || entry[0] === "C") i++; // skip the rename/copy source-path token
+	}
+	return paths;
+}
+
 export function checkpoint(cwd: string, label: string): boolean {
 	// #424 review: a checkpoint must never conclude an unresolved merge. `git add -A`
 	// stages unmerged paths as "resolved" — conflict markers and all — and the commit
@@ -882,6 +900,29 @@ export function checkpoint(cwd: string, label: string): boolean {
 		if (unmerged !== "") {
 			process.stderr.write(`⚠ checkpoint refused (${label}): unresolved merge paths present\n`);
 			return false;
+		}
+		// #424 gate fix: unmerged-path state alone is bypassable — a mid-repair `git add` on a
+		// marker-laden conflict file clears it while the markers survive in content, and an
+		// interleaved rate-limit park then reaches this choke point (parkExit → checkpoint)
+		// with MERGE_HEAD still open, which the commit below would silently conclude. When
+		// this commit would CONCLUDE a merge, the originally-conflicted file list is not
+		// available here (parkExit is generic and `--diff-filter=U` is already empty), so
+		// conservatively scan every path `git add -A` would commit for conflict-marker lines.
+		// Fail closed: refuse the checkpoint and leave the tree dirty-with-MERGE_HEAD — the
+		// documented park contract — so resume re-enters `conflicted` and the repair re-runs.
+		let mergeInProgress = false;
+		try {
+			execSync("git rev-parse -q --verify MERGE_HEAD", { cwd, stdio: "pipe" });
+			mergeInProgress = true;
+		} catch {
+			// no merge being concluded
+		}
+		if (mergeInProgress) {
+			const gate = verifyConflictRepairComplete(cwd, pendingCommitPaths(cwd));
+			if (!gate.ok) {
+				process.stderr.write(`⚠ checkpoint refused (${label}): would conclude a merge with ${gate.detail}\n`);
+				return false;
+			}
 		}
 	} catch {
 		// Not a repo / git unavailable — fall through so the add/commit below reports the real error.

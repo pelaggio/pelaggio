@@ -1209,6 +1209,32 @@ describe("checkpoint — unresolved merge refusal (#424)", () => {
 		assert.throws(() => execSync("git rev-parse -q --verify MERGE_HEAD", { cwd: dir, stdio: "pipe" }), "merge must be concluded");
 		assert.equal(execSync("git log -1 --format=%P", { cwd: dir, encoding: "utf-8" }).trim().split(" ").length, 2, "two-parent merge commit");
 	});
+
+	// #424 gate fix (rate-limit-during-repair interleave): mid-repair the author has
+	// `git add`-ed the conflicted file with its markers intact — unmerged-path state is
+	// empty, so the original refusal above is blind — and a rate-limit park then calls
+	// this unguarded checkpoint while MERGE_HEAD is still open.
+	it("refuses the rate-limit-park interleave: staged conflict markers with MERGE_HEAD open never commit", () => {
+		const dir = makeConflictedFeatRepo();
+		execSync("git add f.txt", { cwd: dir });
+		assert.equal(execSync("git diff --name-only --diff-filter=U", { cwd: dir, encoding: "utf-8" }).trim(), "", "precondition: staging cleared unmerged-path state — the unmerged-path guard alone is blind here");
+		const before = execSync("git rev-parse HEAD", { cwd: dir, encoding: "utf-8" }).trim();
+		assert.equal(checkpoint(dir, "rate-limit park"), false);
+		assert.equal(execSync("git rev-parse HEAD", { cwd: dir, encoding: "utf-8" }).trim(), before, "no commit may land");
+		assert.equal(execSync("git rev-parse -q --verify MERGE_HEAD", { cwd: dir, encoding: "utf-8" }).trim().length > 0, true, "merge stays open for resume to re-enter `conflicted`");
+		assert.match(readFileSync(join(dir, "f.txt"), "utf-8"), /^<{7} /m, "markers stay observable in the working tree");
+	});
+
+	it("conservatively refuses ANY staged marker lines while a merge is open (conflicted set unknown at this choke point)", () => {
+		const dir = makeConflictedFeatRepo();
+		writeFileSync(join(dir, "f.txt"), "resolved\n");
+		execSync("git add f.txt", { cwd: dir });
+		// A separate file with a marker-shaped line (setext underline). With MERGE_HEAD open the
+		// checkpoint cannot know the conflicted set, so it must fail closed and park dirty.
+		writeFileSync(join(dir, "notes.md"), "Heading\n=======\nbody\n");
+		assert.equal(checkpoint(dir, "rate-limit park"), false);
+		assert.equal(execSync("git rev-parse -q --verify MERGE_HEAD", { cwd: dir, encoding: "utf-8" }).trim().length > 0, true, "merge stays open");
+	});
 });
 
 describe("verifyShipLanded", () => {
