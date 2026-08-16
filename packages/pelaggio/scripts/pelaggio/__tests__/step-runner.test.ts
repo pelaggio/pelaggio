@@ -298,6 +298,17 @@ describe("blockForeignRootWrite (#369 / #269 nested seats)", () => {
 		assert.equal(out2.decision, "block");
 		assert.match(String(out2.reason), /evidence store/);
 	});
+
+	it("blocks Bash mention and Write/Edit of the freshness-gate record store (#424 forge path)", () => {
+		// A forged record would let a ship resume skip the deterministic typecheck + freshness gates.
+		const bashOut = blockForeignRootWrite(bash(`printf '{}' > ${main}/.dev/freshness-gate-records/${"a".repeat(40)}.json`), sibling, main, registered, sibling);
+		assert.equal(bashOut.decision, "block");
+		assert.match(String(bashOut.reason), /harness-owned register/);
+		assert.equal(blockForeignRootWrite(bash("rm -rf .dev/freshness-gate-records"), sibling, main, registered, sibling).decision, "block");
+		const writeOut = blockForeignRootWrite(write(`${main}/.dev/freshness-gate-records/${"a".repeat(40)}.json`), main, main, registered, sibling);
+		assert.equal(writeOut.decision, "block");
+		assert.match(String(writeOut.reason), /evidence store/);
+	});
 });
 
 describe("getProvider — registry + guard", () => {

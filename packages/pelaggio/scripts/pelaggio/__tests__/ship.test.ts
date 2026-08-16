@@ -13,7 +13,7 @@ import type { ShipBookkeepingCtx, ShipBookkeepingResult } from "../ship/index.js
 import { getShipTarget, isAutonomousRemotePush, isShipTargetName, SHIP_TARGET_NAMES } from "../ship/index.js";
 import { stripAnsi } from "../tui.js";
 import type { Flags, PipelineOpts, ShipTargetName, StepResult } from "../types.js";
-import { allCommitMessages, createMockRunStep, makeLiveStatus, makeParkSignal, makeTempGitRepo, makeTempRepoWithParent, setupHermeticPipelineEnv, teardownHermeticPipelineEnv } from "./mocks.js";
+import { allCommitMessages, createMockRunStep, defaultPrPreflightStubs, makeLiveStatus, makeParkSignal, makeTempGitRepo, makeTempRepoWithParent, setupHermeticPipelineEnv, teardownHermeticPipelineEnv } from "./mocks.js";
 
 /** PR-mode ship fixture: body via fixed file path (inline prBody is no longer accepted). */
 function prShipDecision(
@@ -575,6 +575,7 @@ describe("runPipeline — ship target dispatch", () => {
 		};
 		const result = await runPipeline(pipelineOpts, parkSignal, baseFlags, {
 			runStep,
+			...defaultPrPreflightStubs(),
 			listWorktrees: () => [],
 			appendLog: () => {},
 			dispatchStepEffects: async () => ({ appendText: PR_URL }),
@@ -610,6 +611,7 @@ describe("runPipeline — ship target dispatch", () => {
 		);
 		const result = await runPipeline(baseOpts(worktree, "auto-merge-pr"), parkSignal, baseFlags, {
 			runStep,
+			...defaultPrPreflightStubs(),
 			listWorktrees: () => [],
 			appendLog: () => {},
 			dispatchStepEffects: async () => ({ appendText: PR_URL }),
@@ -640,6 +642,7 @@ describe("runPipeline — ship target dispatch", () => {
 		);
 		const result = await runPipeline(baseOpts(worktree, "pull-request"), parkSignal, baseFlags, {
 			runStep,
+			...defaultPrPreflightStubs(),
 			listWorktrees: () => [],
 			appendLog: () => {},
 			writeEffectsManifest: (ctx, effects) => {
@@ -676,6 +679,7 @@ describe("runPipeline — ship target dispatch", () => {
 		);
 		const result = await runPipeline(baseOpts(worktree, "pull-request"), parkSignal, baseFlags, {
 			runStep,
+			...defaultPrPreflightStubs(),
 			listWorktrees: () => [],
 			appendLog: (e) => {
 				logs.push(e);
@@ -732,6 +736,7 @@ describe("runPipeline — ship target dispatch", () => {
 		);
 		const result = await runPipeline(baseOpts(worktree, "pull-request"), parkSignal, baseFlags, {
 			runStep,
+			...defaultPrPreflightStubs(),
 			listWorktrees: () => [],
 			appendLog: (e) => {
 				logs.push(e);
@@ -782,6 +787,7 @@ describe("runPipeline — ship target dispatch", () => {
 		);
 		const result = await runPipeline(baseOpts(worktree, "pull-request"), parkSignal, baseFlags, {
 			runStep,
+			...defaultPrPreflightStubs(),
 			listWorktrees: () => [],
 			appendLog: () => {},
 			dispatchStepEffects: async (ctx) => {
@@ -819,6 +825,7 @@ describe("runPipeline — ship target dispatch", () => {
 		);
 		const result = await runPipeline(baseOpts(worktree, "pull-request"), parkSignal, baseFlags, {
 			runStep,
+			...defaultPrPreflightStubs(),
 			listWorktrees: () => [],
 			appendLog: () => {},
 			dispatchStepEffects: async (ctx) => {
@@ -866,6 +873,7 @@ describe("runPipeline — ship target dispatch", () => {
 			};
 			const result = await runPipeline(pipelineOpts, parkSignal, baseFlags, {
 				runStep,
+				...defaultPrPreflightStubs(),
 				listWorktrees: () => [],
 				appendLog: () => {},
 				// Only fail ship dispatch — plan/shakedown still need a no-op success path.
@@ -915,6 +923,7 @@ describe("runPipeline — shipwreck skipped for PR modes", () => {
 		);
 		const result = await runPipeline(baseOpts(worktree, "pull-request"), parkSignal, baseFlags, {
 			runStep,
+			...defaultPrPreflightStubs(),
 			listWorktrees: () => [],
 			appendLog: () => {},
 		});
@@ -1035,5 +1044,438 @@ describe("remotePushWarning", () => {
 		const text = stripAnsi(banner);
 		assert.match(text, /auto-merge-pr/);
 		assert.match(text, /pull-request/);
+	});
+});
+
+function makeDeliverableRepo(): string {
+	const dir = makeTempGitRepo();
+	writeFileSync(join(dir, "impl.txt"), "x\n");
+	execSync("git add impl.txt && git commit -q -m impl", { cwd: dir });
+	return dir;
+}
+
+describe("runPipeline — PR freshness sequencing (#424)", () => {
+	it("direct-push and dry-run never invoke PR freshness or pre-flight", async () => {
+		const { repo, worktree, mergeIntoMain } = setupShipRepo();
+		const parkSignal = makeParkSignal();
+		let freshness = 0;
+		let gate = 0;
+		let typecheck = 0;
+		const spies: PipelineDeps = {
+			preparePrShipFreshness: () => {
+				freshness += 1;
+				return { kind: "up-to-date" };
+			},
+			runPrReviewGate: async () => {
+				gate += 1;
+				return { gate: "pass", body: "", cost: 0, costEstimated: false, turns: 0, ok: true, subtype: "success", agreement: "consensus-pass", survivorCount: 0 };
+			},
+			runTypecheckRatchet: async () => {
+				typecheck += 1;
+				return { ok: true };
+			},
+		};
+		const { runStep } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				ship: { ok: true, text: "ship-merged: TOOL-99", sideEffect: () => mergeIntoMain() },
+			},
+			parkSignal,
+		);
+		const bk = makeBkSpy();
+		const direct = await runPipeline(baseOpts(worktree, "direct-push"), parkSignal, baseFlags, {
+			runStep,
+			mainRepo: repo,
+			listWorktrees: () => [],
+			appendLog: () => {},
+			runShipBookkeeping: bk.fn,
+			...spies,
+		});
+		assert.equal(direct.completed, true);
+		assert.equal(freshness, 0);
+		assert.equal(gate, 0);
+		assert.equal(typecheck, 0);
+
+		const dryTree = makeDeliverableRepo();
+		const dryPark = makeParkSignal();
+		const dry = await runPipeline(
+			{ ...baseOpts(dryTree, "pull-request"), dryRun: true, startFrom: "ship" },
+			dryPark,
+			{ ...baseFlags, "dry-run": true },
+			{
+				runStep: createMockRunStep({}, dryPark).runStep,
+				listWorktrees: () => [],
+				appendLog: () => {},
+				...spies,
+			},
+		);
+		assert.equal(dry.completed, true);
+		assert.equal(freshness, 0);
+		assert.equal(gate, 0);
+		assert.equal(typecheck, 0);
+	});
+
+	it("a clean freshness merge invokes the implementation author, then typecheck + verify, then pre-flight and ship", async () => {
+		const worktree = makeDeliverableRepo();
+		const parkSignal = makeParkSignal();
+		const order: string[] = [];
+		const { runStep, calls } = createMockRunStep(
+			{
+				"shakedown-code": { ok: true },
+				ship: prShipDecision("pull-request"),
+			},
+			parkSignal,
+		);
+		const result = await runPipeline({ ...baseOpts(worktree, "pull-request"), startFrom: "ship" }, parkSignal, baseFlags, {
+			runStep,
+			...defaultPrPreflightStubs(),
+			preparePrShipFreshness: () => {
+				order.push("freshness");
+				return { kind: "merged", upstreamTouchedFiles: ["src/upstream.ts"] };
+			},
+			runTypecheckRatchet: async () => {
+				order.push("typecheck");
+				return { ok: true };
+			},
+			verifyPrShipFreshness: () => {
+				order.push("verify");
+				return { ok: true };
+			},
+			runPrReviewGate: async () => {
+				order.push("preflight");
+				return { gate: "pass", body: "ok", cost: 0, costEstimated: false, turns: 0, ok: true, subtype: "success", agreement: "consensus-pass", survivorCount: 0 };
+			},
+			listWorktrees: () => [],
+			appendLog: () => {},
+			dispatchStepEffects: async () => {
+				order.push("ship-effect");
+				return { appendText: PR_URL };
+			},
+		});
+		assert.equal(result.completed, true);
+		const author = calls.find((c) => c.step === "shakedown-code");
+		assert.ok(author);
+		assert.match(author.prompt, /src\/upstream\.ts/);
+		assert.match(author.prompt, /typecheck:ratchet/);
+		assert.match(author.prompt, /merge --abort/);
+		assert.ok(calls.filter((c) => c.step === "ship").length === 1);
+		assert.deepEqual(order, ["freshness", "typecheck", "verify", "preflight", "ship-effect"]);
+	});
+
+	it("a conflicted merge routes through the same author seam; unresolved verification prevents review, ship, and effects", async () => {
+		const worktree = makeDeliverableRepo();
+		const parkSignal = makeParkSignal();
+		let gate = 0;
+		let effects = 0;
+		const { runStep, calls } = createMockRunStep({ "shakedown-code": { ok: true } }, parkSignal);
+		const result = await runPipeline({ ...baseOpts(worktree, "pull-request"), startFrom: "ship" }, parkSignal, baseFlags, {
+			runStep,
+			...defaultPrPreflightStubs(),
+			preparePrShipFreshness: () => ({ kind: "conflicted", unmergedFiles: ["shared.ts"], upstreamTouchedFiles: ["shared.ts"] }),
+			runTypecheckRatchet: async () => ({ ok: true }),
+			verifyPrShipFreshness: () => ({ ok: false, detail: "merge in progress (MERGE_HEAD present)" }),
+			runPrReviewGate: async () => {
+				gate += 1;
+				return { gate: "pass", body: "", cost: 0, costEstimated: false, turns: 0, ok: true, subtype: "success", agreement: "consensus-pass", survivorCount: 0 };
+			},
+			listWorktrees: () => [],
+			appendLog: () => {},
+			dispatchStepEffects: async () => {
+				effects += 1;
+				return {};
+			},
+		});
+		assert.equal(result.completed, false);
+		assert.match(result.error ?? "", /freshness verification failed/);
+		assert.equal(gate, 0);
+		assert.equal(effects, 0);
+		assert.equal(calls.filter((c) => c.step === "ship").length, 0);
+		assert.match(calls.find((c) => c.step === "shakedown-code")?.prompt ?? "", /shared\.ts/);
+		assert.match(calls.find((c) => c.step === "shakedown-code")?.prompt ?? "", /Do NOT run/);
+	});
+
+	it("a failed freshness or red typecheck prevents ship", async () => {
+		for (const deps of [
+			{ preparePrShipFreshness: () => ({ kind: "failed" as const, detail: "origin missing" }) },
+			{
+				preparePrShipFreshness: () => ({ kind: "merged" as const, upstreamTouchedFiles: ["a.ts"] }),
+				runTypecheckRatchet: async () => ({ ok: false, detail: "TS2345" }),
+			},
+		]) {
+			const worktree = makeDeliverableRepo();
+			const parkSignal = makeParkSignal();
+			const { runStep, calls } = createMockRunStep({ "shakedown-code": { ok: true }, ship: prShipDecision("pull-request") }, parkSignal);
+			const result = await runPipeline({ ...baseOpts(worktree, "pull-request"), startFrom: "ship" }, parkSignal, baseFlags, {
+				runStep,
+				...defaultPrPreflightStubs(),
+				...deps,
+				listWorktrees: () => [],
+				appendLog: () => {},
+			});
+			assert.equal(result.completed, false);
+			assert.equal(calls.filter((c) => c.step === "ship").length, 0);
+		}
+	});
+
+	it("startFrom: ship reconstructs the implementation author before freshness repair", async () => {
+		const worktree = makeDeliverableRepo();
+		const parkSignal = makeParkSignal();
+		const overrides: Array<{ provider?: string } | undefined> = [];
+		const { runStep } = createMockRunStep({ "shakedown-code": { ok: true }, ship: prShipDecision("pull-request") }, parkSignal);
+		const wrapped: NonNullable<PipelineDeps["runStep"]> = async (name, prompt, opts, emit) => {
+			if (name === "shakedown-code") overrides.push(opts.executionOverride);
+			return runStep(name, prompt, opts, emit);
+		};
+		const result = await runPipeline({ ...baseOpts(worktree, "pull-request"), startFrom: "ship" }, parkSignal, baseFlags, {
+			runStep: wrapped,
+			...defaultPrPreflightStubs(),
+			preparePrShipFreshness: () => ({ kind: "conflicted", unmergedFiles: ["a.ts"], upstreamTouchedFiles: ["a.ts"] }),
+			runTypecheckRatchet: async () => ({ ok: true }),
+			verifyPrShipFreshness: () => ({ ok: true }),
+			listWorktrees: () => [],
+			appendLog: () => {},
+			dispatchStepEffects: async () => ({ appendText: PR_URL }),
+		});
+		assert.equal(result.completed, true);
+		assert.equal(overrides.length, 1);
+		assert.ok(overrides[0]?.provider, "reconstructed implementation author must be the execution override");
+	});
+});
+
+/** Deliverable repo left mid-merge: add/add conflict on f.txt with MERGE_HEAD + markers. */
+function makeConflictedRepo(): string {
+	const dir = makeDeliverableRepo();
+	writeFileSync(join(dir, "f.txt"), "feat\n");
+	execSync("git add f.txt && git commit -qm feat-f", { cwd: dir });
+	execSync("git checkout -q main", { cwd: dir });
+	writeFileSync(join(dir, "f.txt"), "main\n");
+	execSync("git add f.txt && git commit -qm main-f", { cwd: dir });
+	execSync("git checkout -q feat/tool-99", { cwd: dir });
+	try {
+		execSync("git merge --no-edit main", { cwd: dir, stdio: "pipe" });
+	} catch {
+		// conflict expected
+	}
+	return dir;
+}
+
+describe("runPipeline — conflicted freshness repair gate (#424 review fixes)", () => {
+	function conflictedDeps(extra: PipelineDeps = {}): PipelineDeps {
+		return {
+			...defaultPrPreflightStubs(),
+			preparePrShipFreshness: () => ({ kind: "conflicted", unmergedFiles: ["f.txt"], upstreamTouchedFiles: ["f.txt"] }),
+			listWorktrees: () => [],
+			appendLog: () => {},
+			dispatchStepEffects: async () => ({ appendText: PR_URL }),
+			...extra,
+		};
+	}
+
+	it("a no-op conflict repair fails the deterministic gate and is never committed as resolved", async () => {
+		const worktree = makeConflictedRepo();
+		const parkSignal = makeParkSignal();
+		let gate = 0;
+		const { runStep, calls } = createMockRunStep({ "shakedown-code": { ok: true }, ship: prShipDecision("pull-request") }, parkSignal);
+		const result = await runPipeline({ ...baseOpts(worktree, "pull-request"), startFrom: "ship" }, parkSignal, baseFlags, {
+			runStep,
+			...conflictedDeps({
+				runPrReviewGate: async () => {
+					gate += 1;
+					return { gate: "pass", body: "", cost: 0, costEstimated: false, turns: 0, ok: true, subtype: "success", agreement: "consensus-pass", survivorCount: 0 };
+				},
+			}),
+		});
+		assert.equal(result.completed, false);
+		assert.match(result.error ?? "", /conflict repair incomplete/);
+		assert.match(result.error ?? "", /unmerged paths remain/);
+		// The tree stays exactly as the author left it: merge open, markers intact, no wip commit.
+		assert.equal(execSync("git rev-parse -q --verify MERGE_HEAD", { cwd: worktree, encoding: "utf-8" }).trim().length > 0, true);
+		assert.match(readFileSync(join(worktree, "f.txt"), "utf-8"), /^<{7} /m);
+		assert.ok(!allCommitMessages(worktree).some((m) => m.includes("freshness merge repair")), "no checkpoint commit may conclude the merge");
+		assert.equal(gate, 0, "pre-flight must not run");
+		assert.equal(calls.filter((c) => c.step === "ship").length, 0);
+	});
+
+	it("author-staged conflict markers fail the gate before any checkpoint commit", async () => {
+		const worktree = makeConflictedRepo();
+		const parkSignal = makeParkSignal();
+		const { runStep, calls } = createMockRunStep(
+			{
+				// The author "resolves" by staging the marker-laden file as-is: unmerged-path
+				// state clears, so only the marker scan of the was-conflicted file catches it.
+				"shakedown-code": { ok: true, sideEffect: (cwd) => execSync("git add f.txt", { cwd }) },
+				ship: prShipDecision("pull-request"),
+			},
+			parkSignal,
+		);
+		const result = await runPipeline({ ...baseOpts(worktree, "pull-request"), startFrom: "ship" }, parkSignal, baseFlags, {
+			runStep,
+			...conflictedDeps(),
+		});
+		assert.equal(result.completed, false);
+		assert.match(result.error ?? "", /conflict markers remain in: f\.txt/);
+		assert.ok(!allCommitMessages(worktree).some((m) => m.includes("freshness merge repair")), "markers must never be committed as resolved");
+		assert.equal(calls.filter((c) => c.step === "ship").length, 0);
+	});
+
+	it("a genuine resolution passes the gate, the checkpoint concludes the merge, and completion is recorded for the new head", async () => {
+		const worktree = makeConflictedRepo();
+		const parkSignal = makeParkSignal();
+		const recorded: Array<{ itemId: string; headSha: string; typecheck: string }> = [];
+		const { runStep, calls } = createMockRunStep(
+			{
+				"shakedown-code": {
+					ok: true,
+					sideEffect: (cwd) => {
+						writeFileSync(join(cwd, "f.txt"), "resolved\n");
+						execSync("git add f.txt", { cwd });
+					},
+				},
+				ship: prShipDecision("pull-request"),
+			},
+			parkSignal,
+		);
+		const result = await runPipeline({ ...baseOpts(worktree, "pull-request"), startFrom: "ship" }, parkSignal, baseFlags, {
+			runStep,
+			...conflictedDeps({
+				writeFreshnessGateRecord: (_main, record) => {
+					recorded.push(record);
+					return "";
+				},
+			}),
+		});
+		assert.equal(result.completed, true, `expected completed; error=${result.error}`);
+		assert.ok(
+			allCommitMessages(worktree).some((m) => m.includes("freshness merge repair")),
+			"checkpoint concludes the resolved merge",
+		);
+		assert.throws(() => execSync("git rev-parse -q --verify MERGE_HEAD", { cwd: worktree, stdio: "pipe" }), "merge must be concluded");
+		const head = execSync("git rev-parse HEAD", { cwd: worktree, encoding: "utf-8" }).trim();
+		assert.deepEqual(
+			recorded.map((r) => [r.itemId, r.headSha, r.typecheck]),
+			[["TOOL-99", head, "passed"]],
+		);
+		assert.equal(calls.filter((c) => c.step === "ship").length, 1);
+	});
+});
+
+describe("runPipeline — up-to-date freshness gates are recorded facts (#424 review fix)", () => {
+	it("runs the gates when completion is not recorded for HEAD, then records it", async () => {
+		const worktree = makeDeliverableRepo();
+		const parkSignal = makeParkSignal();
+		let typecheck = 0;
+		let verify = 0;
+		const recorded: string[] = [];
+		const { runStep, calls } = createMockRunStep({ ship: prShipDecision("pull-request") }, parkSignal);
+		const result = await runPipeline({ ...baseOpts(worktree, "pull-request"), startFrom: "ship" }, parkSignal, baseFlags, {
+			runStep,
+			...defaultPrPreflightStubs(),
+			runTypecheckRatchet: async () => {
+				typecheck += 1;
+				return { ok: true };
+			},
+			verifyPrShipFreshness: () => {
+				verify += 1;
+				return { ok: true };
+			},
+			readFreshnessGateRecord: () => null,
+			writeFreshnessGateRecord: (_main, record) => {
+				recorded.push(record.headSha);
+				return "";
+			},
+			listWorktrees: () => [],
+			appendLog: () => {},
+			dispatchStepEffects: async () => ({ appendText: PR_URL }),
+		});
+		assert.equal(result.completed, true, `expected completed; error=${result.error}`);
+		assert.equal(typecheck, 1, "typecheck gate must run on the up-to-date path");
+		assert.equal(verify, 1, "freshness verification must run on the up-to-date path");
+		assert.deepEqual(recorded, [execSync("git rev-parse HEAD", { cwd: worktree, encoding: "utf-8" }).trim()]);
+		assert.equal(calls.filter((c) => c.step === "ship").length, 1);
+	});
+
+	it("skips re-running gates only for a matching record; a foreign item's record does not authorize", async () => {
+		for (const [recordItem, expectedRuns] of [
+			["TOOL-99", 0],
+			["OTHER-1", 1],
+		] as const) {
+			const worktree = makeDeliverableRepo();
+			const parkSignal = makeParkSignal();
+			const head = execSync("git rev-parse HEAD", { cwd: worktree, encoding: "utf-8" }).trim();
+			let typecheck = 0;
+			let verify = 0;
+			const { runStep, calls } = createMockRunStep({ ship: prShipDecision("pull-request") }, parkSignal);
+			const result = await runPipeline({ ...baseOpts(worktree, "pull-request"), startFrom: "ship" }, parkSignal, baseFlags, {
+				runStep,
+				...defaultPrPreflightStubs(),
+				runTypecheckRatchet: async () => {
+					typecheck += 1;
+					return { ok: true };
+				},
+				verifyPrShipFreshness: () => {
+					verify += 1;
+					return { ok: true };
+				},
+				readFreshnessGateRecord: (_main, sha) => (sha === head ? { schemaVersion: 1, itemId: recordItem, headSha: head, typecheck: "passed", recordedAt: "2026-08-15T00:00:00.000Z" } : null),
+				listWorktrees: () => [],
+				appendLog: () => {},
+				dispatchStepEffects: async () => ({ appendText: PR_URL }),
+			});
+			assert.equal(result.completed, true, `expected completed; error=${result.error}`);
+			assert.equal(typecheck, expectedRuns, `record for ${recordItem}: typecheck runs ${expectedRuns}x`);
+			assert.equal(verify, expectedRuns, `record for ${recordItem}: verify runs ${expectedRuns}x`);
+			assert.equal(calls.filter((c) => c.step === "ship").length, 1);
+		}
+	});
+
+	it("a red typecheck on the up-to-date path prevents ship (resume cannot skip a failed gate)", async () => {
+		const worktree = makeDeliverableRepo();
+		const parkSignal = makeParkSignal();
+		const recorded: string[] = [];
+		const { runStep, calls } = createMockRunStep({ ship: prShipDecision("pull-request") }, parkSignal);
+		const result = await runPipeline({ ...baseOpts(worktree, "pull-request"), startFrom: "ship" }, parkSignal, baseFlags, {
+			runStep,
+			...defaultPrPreflightStubs(),
+			runTypecheckRatchet: async () => ({ ok: false, detail: "TS2345" }),
+			writeFreshnessGateRecord: (_main, record) => {
+				recorded.push(record.headSha);
+				return "";
+			},
+			listWorktrees: () => [],
+			appendLog: () => {},
+		});
+		assert.equal(result.completed, false);
+		assert.match(result.error ?? "", /typecheck:ratchet failed/);
+		assert.match(result.error ?? "", /TS2345/);
+		assert.deepEqual(recorded, [], "a failed gate must never be recorded as passed");
+		assert.equal(calls.filter((c) => c.step === "ship").length, 0);
+	});
+
+	it("a soft-skipped typecheck (consumer repo without the script) is not a gate and records typecheck: skipped", async () => {
+		const worktree = makeDeliverableRepo();
+		const parkSignal = makeParkSignal();
+		const recorded: Array<{ typecheck: string }> = [];
+		const { runStep, calls } = createMockRunStep({ ship: prShipDecision("pull-request") }, parkSignal);
+		const result = await runPipeline({ ...baseOpts(worktree, "pull-request"), startFrom: "ship" }, parkSignal, baseFlags, {
+			runStep,
+			...defaultPrPreflightStubs(),
+			runTypecheckRatchet: async () => ({ ok: true, skipped: true, detail: "no typecheck:ratchet script in package.json" }),
+			writeFreshnessGateRecord: (_main, record) => {
+				recorded.push(record);
+				return "";
+			},
+			listWorktrees: () => [],
+			appendLog: () => {},
+			dispatchStepEffects: async () => ({ appendText: PR_URL }),
+		});
+		assert.equal(result.completed, true, `expected completed; error=${result.error}`);
+		assert.deepEqual(
+			recorded.map((r) => r.typecheck),
+			["skipped"],
+		);
+		assert.equal(calls.filter((c) => c.step === "ship").length, 1);
 	});
 });

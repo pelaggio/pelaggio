@@ -46,6 +46,7 @@ import {
 	parseVerdict,
 	parseWaitFlag,
 	pickDivergedFromPin,
+	preparePrShipFreshness,
 	quarantineCheckpoint,
 	REVIEW_DIFF_MAX_BYTES,
 	readGitBinding,
@@ -58,6 +59,8 @@ import {
 	snapshotRepoRefState,
 	snapshotSiblingWorktree,
 	uniqueDriverProvenance,
+	verifyConflictRepairComplete,
+	verifyPrShipFreshness,
 	verifyShipLanded,
 } from "../helpers.js";
 
@@ -962,6 +965,249 @@ describe("hasDeliverableCommits", () => {
 		commitFile(dir, "src/unrelated.ts", "export const y = 2;\n", "main moved ahead");
 		execSync("git checkout -q feat/tool-99", { cwd: dir });
 		assert.equal(hasDeliverableCommits(dir), false);
+	});
+});
+
+function initBareGit(dir: string): void {
+	execSync("git init -q -b main", { cwd: dir });
+	execSync("git config user.name t", { cwd: dir });
+	execSync("git config user.email t@t", { cwd: dir });
+	execSync("git config commit.gpgsign false", { cwd: dir });
+	execSync("git commit --allow-empty -q -m init", { cwd: dir });
+}
+
+function makeFreshnessPair(): { worktree: string; origin: string } {
+	const origin = mkdtempSync(join(tmpdir(), "pelaggio-fresh-origin-"));
+	initBareGit(origin);
+	const worktree = mkdtempSync(join(tmpdir(), "pelaggio-fresh-wt-"));
+	execSync(`git clone -q ${JSON.stringify(origin)} ${JSON.stringify(worktree)}`);
+	execSync("git config user.name t", { cwd: worktree });
+	execSync("git config user.email t@t", { cwd: worktree });
+	execSync("git config commit.gpgsign false", { cwd: worktree });
+	execSync("git checkout -q -b feat/tool-99", { cwd: worktree });
+	return { worktree, origin };
+}
+
+describe("preparePrShipFreshness / verifyPrShipFreshness", () => {
+	it("returns up-to-date without invoking merge when origin/main is already an ancestor", () => {
+		const { worktree } = makeFreshnessPair();
+		const argv: string[][] = [];
+		const result = preparePrShipFreshness(worktree, (args, cwd) => {
+			argv.push([...args]);
+			return execSync(`git ${args.map((a) => JSON.stringify(a)).join(" ")}`, { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+		});
+		assert.equal(result.kind, "up-to-date");
+		assert.ok(argv.some((a) => a[0] === "fetch" && a[1] === "origin" && a[2] === "main"));
+		assert.ok(!argv.some((a) => a[0] === "merge"));
+		assert.deepEqual(verifyPrShipFreshness(worktree), { ok: true });
+	});
+
+	it("merges a branch behind origin/main and records the exact upstream-touched paths", () => {
+		const { worktree, origin } = makeFreshnessPair();
+		commitFile(origin, "src/upstream.ts", "export const up = 1;\n", "upstream");
+		commitFile(origin, "docs/note.md", "note\n", "upstream docs");
+		const result = preparePrShipFreshness(worktree);
+		assert.equal(result.kind, "merged");
+		if (result.kind !== "merged") return;
+		assert.deepEqual(result.upstreamTouchedFiles.sort(), ["docs/note.md", "src/upstream.ts"]);
+		assert.equal(existsSync(join(worktree, "src/upstream.ts")), true);
+		assert.deepEqual(verifyPrShipFreshness(worktree), { ok: true });
+	});
+
+	it("returns conflicted and leaves MERGE_HEAD when the merge has unmerged paths", () => {
+		const { worktree, origin } = makeFreshnessPair();
+		commitFile(worktree, "shared.ts", "feat\n", "feat edit");
+		commitFile(origin, "shared.ts", "main\n", "main edit");
+		const argv: string[][] = [];
+		const result = preparePrShipFreshness(worktree, (args, cwd) => {
+			argv.push([...args]);
+			return execSync(`git ${args.map((a) => JSON.stringify(a)).join(" ")}`, { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+		});
+		assert.equal(result.kind, "conflicted");
+		if (result.kind !== "conflicted") return;
+		assert.ok(result.unmergedFiles.includes("shared.ts"));
+		assert.ok(result.upstreamTouchedFiles.includes("shared.ts"));
+		assert.equal(execSync("git rev-parse -q --verify MERGE_HEAD", { cwd: worktree, encoding: "utf-8" }).trim().length > 0, true);
+		assert.ok(!argv.some((a) => a[0] === "merge" && a.includes("--abort")));
+		assert.ok(!argv.some((a) => a[0] === "reset" || a[0] === "clean"));
+		assert.equal(verifyPrShipFreshness(worktree).ok, false);
+	});
+
+	it("treats an already-conflicted input (MERGE_HEAD) as conflicted without fetching or merging again", () => {
+		const { worktree, origin } = makeFreshnessPair();
+		commitFile(worktree, "shared.ts", "feat\n", "feat edit");
+		commitFile(origin, "shared.ts", "main\n", "main edit");
+		const first = preparePrShipFreshness(worktree);
+		assert.equal(first.kind, "conflicted");
+		const argv: string[][] = [];
+		const second = preparePrShipFreshness(worktree, (args, cwd) => {
+			argv.push([...args]);
+			return execSync(`git ${args.map((a) => JSON.stringify(a)).join(" ")}`, { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+		});
+		assert.equal(second.kind, "conflicted");
+		if (second.kind !== "conflicted") return;
+		assert.ok(second.unmergedFiles.includes("shared.ts"));
+		assert.ok(!argv.some((a) => a[0] === "fetch" || a[0] === "merge"));
+		assert.equal(execSync("git rev-parse -q --verify MERGE_HEAD", { cwd: worktree, encoding: "utf-8" }).trim().length > 0, true);
+	});
+
+	it("returns failed with bounded detail on fetch failure, missing origin, dirty-without-merge, and non-conflict merge failure", () => {
+		const dirty = makeFeatRepo();
+		writeFileSync(join(dirty, "loose.txt"), "x");
+		const dirtyResult = preparePrShipFreshness(dirty);
+		assert.equal(dirtyResult.kind, "failed");
+		if (dirtyResult.kind === "failed") assert.match(dirtyResult.detail, /dirty/);
+
+		const noOrigin = makeFeatRepo();
+		const missing = preparePrShipFreshness(noOrigin);
+		assert.equal(missing.kind, "failed");
+		if (missing.kind === "failed") {
+			assert.ok(missing.detail.length > 0);
+			assert.ok(missing.detail.length <= 300);
+		}
+
+		const argv: string[][] = [];
+		const fake = preparePrShipFreshness("/tmp/freshness-argv", (args) => {
+			argv.push([...args]);
+			const key = args.join(" ");
+			if (key === "rev-parse -q --verify MERGE_HEAD") throw new Error("no merge");
+			if (key === "diff --name-only --diff-filter=U") return "";
+			if (key === "status --porcelain") return "";
+			if (key === "fetch origin main") return "";
+			if (key === "rev-parse --verify origin/main") return "abc";
+			if (key === "merge-base --is-ancestor origin/main HEAD") throw new Error("behind");
+			if (key === "diff --name-only HEAD..origin/main") return "src/a.ts\n";
+			if (key === "merge --no-edit origin/main") throw Object.assign(new Error("not a fast-forward"), { stderr: "fatal: refusing to merge unrelated histories" });
+			throw new Error(`unexpected argv: ${key}`);
+		});
+		assert.equal(fake.kind, "failed");
+		if (fake.kind === "failed") assert.match(fake.detail, /unrelated histories/);
+		assert.deepEqual(argv[0], ["rev-parse", "-q", "--verify", "MERGE_HEAD"]);
+		assert.ok(argv.every((a) => Array.isArray(a)));
+		assert.ok(!argv.some((a) => a[0] === "merge" && a.includes("--abort")));
+		assert.ok(!argv.some((a) => a[0] === "reset" || a[0] === "clean"));
+	});
+
+	it("post-author verification accepts only clean, conflict-free branches containing origin/main", () => {
+		const { worktree, origin } = makeFreshnessPair();
+		assert.deepEqual(verifyPrShipFreshness(worktree), { ok: true });
+
+		writeFileSync(join(worktree, "dirty.txt"), "x");
+		assert.equal(verifyPrShipFreshness(worktree).ok, false);
+		execSync("git clean -fdq", { cwd: worktree });
+
+		commitFile(origin, "src/more.ts", "more\n", "more upstream");
+		// Local origin/main is stale until fetch; ancestry still holds for the previous tip,
+		// so force a failed ancestry probe via argv.
+		const stale = verifyPrShipFreshness(worktree, (args) => {
+			const key = args.join(" ");
+			if (key === "rev-parse -q --verify MERGE_HEAD") throw new Error("no merge");
+			if (key === "diff --name-only --diff-filter=U") return "";
+			if (key === "status --porcelain") return "";
+			if (key === "rev-parse --verify origin/main") return "def";
+			if (key === "merge-base --is-ancestor origin/main HEAD") throw new Error("not ancestor");
+			throw new Error(`unexpected argv: ${key}`);
+		});
+		assert.equal(stale.ok, false);
+		if (!stale.ok) assert.match(stale.detail, /ancestor/);
+
+		const unresolved = verifyPrShipFreshness(worktree, (args) => {
+			const key = args.join(" ");
+			if (key === "rev-parse -q --verify MERGE_HEAD") return "mergehead";
+			throw new Error(`unexpected argv: ${key}`);
+		});
+		assert.equal(unresolved.ok, false);
+		if (!unresolved.ok) assert.match(unresolved.detail, /MERGE_HEAD/);
+	});
+
+	it("never interpolates the worktree path into git argv", () => {
+		const seen: string[][] = [];
+		preparePrShipFreshness("/tmp/some worktree/with spaces", (args) => {
+			seen.push([...args]);
+			throw new Error("stop");
+		});
+		assert.ok(seen.length > 0);
+		for (const args of seen) {
+			assert.ok(!args.some((a) => a.includes("/tmp/some worktree")));
+			assert.ok(!args.join(" ").includes("git -C"));
+		}
+	});
+});
+
+/** Local two-branch conflict on f.txt: worktree left mid-merge (MERGE_HEAD + markers). */
+function makeConflictedFeatRepo(): string {
+	const dir = makeFeatRepo();
+	commitFile(dir, "f.txt", "feat\n", "feat side");
+	execSync("git checkout -q main", { cwd: dir });
+	commitFile(dir, "f.txt", "main\n", "main side");
+	execSync("git checkout -q feat/tool-99", { cwd: dir });
+	try {
+		execSync("git merge --no-edit main", { cwd: dir, stdio: "pipe" });
+	} catch {
+		// conflict expected
+	}
+	return dir;
+}
+
+describe("verifyConflictRepairComplete (#424)", () => {
+	it("fails while git unmerged-path state remains (no-op repair)", () => {
+		const dir = makeConflictedFeatRepo();
+		const result = verifyConflictRepairComplete(dir, ["f.txt"]);
+		assert.equal(result.ok, false);
+		if (!result.ok) assert.match(result.detail, /unmerged paths remain: f\.txt/);
+	});
+
+	it("fails when a formerly-conflicted file was staged with its markers intact", () => {
+		const dir = makeConflictedFeatRepo();
+		execSync("git add f.txt", { cwd: dir });
+		const result = verifyConflictRepairComplete(dir, ["f.txt"]);
+		assert.equal(result.ok, false);
+		if (!result.ok) assert.match(result.detail, /conflict markers remain in: f\.txt/);
+	});
+
+	it("passes once the file is genuinely resolved and staged", () => {
+		const dir = makeConflictedFeatRepo();
+		writeFileSync(join(dir, "f.txt"), "resolved\n");
+		execSync("git add f.txt", { cwd: dir });
+		assert.deepEqual(verifyConflictRepairComplete(dir, ["f.txt"]), { ok: true });
+	});
+
+	it("treats deletion of a conflicted file as a legitimate resolution", () => {
+		const dir = makeConflictedFeatRepo();
+		execSync("git rm -q -f f.txt", { cwd: dir });
+		assert.deepEqual(verifyConflictRepairComplete(dir, ["f.txt"]), { ok: true });
+	});
+
+	it("scans only the listed files: markers elsewhere do not trip the gate", () => {
+		const dir = makeConflictedFeatRepo();
+		writeFileSync(join(dir, "f.txt"), "resolved\n");
+		execSync("git add f.txt", { cwd: dir });
+		// A doc legitimately containing a seven-equals line, never part of the conflict set.
+		writeFileSync(join(dir, "notes.md"), "Heading\n=======\nbody\n");
+		assert.deepEqual(verifyConflictRepairComplete(dir, ["f.txt"]), { ok: true });
+		const flagged = verifyConflictRepairComplete(dir, ["f.txt", "notes.md"]);
+		assert.equal(flagged.ok, false, "the same content IS flagged when the file was conflicted");
+	});
+});
+
+describe("checkpoint — unresolved merge refusal (#424)", () => {
+	it("refuses to conclude an unresolved merge: no commit, MERGE_HEAD and markers intact", () => {
+		const dir = makeConflictedFeatRepo();
+		const before = execSync("git rev-parse HEAD", { cwd: dir, encoding: "utf-8" }).trim();
+		assert.equal(checkpoint(dir, "test"), false);
+		assert.equal(execSync("git rev-parse HEAD", { cwd: dir, encoding: "utf-8" }).trim(), before, "no commit may land");
+		assert.equal(execSync("git rev-parse -q --verify MERGE_HEAD", { cwd: dir, encoding: "utf-8" }).trim().length > 0, true, "merge stays open");
+		assert.match(readFileSync(join(dir, "f.txt"), "utf-8"), /^<{7} /m, "markers stay in the working tree");
+		assert.match(execSync("git diff --name-only --diff-filter=U", { cwd: dir, encoding: "utf-8" }), /f\.txt/, "unmerged state is preserved");
+	});
+
+	it("still commits a resolved-and-staged merge (concluding it) as before", () => {
+		const dir = makeConflictedFeatRepo();
+		writeFileSync(join(dir, "f.txt"), "resolved\n");
+		execSync("git add f.txt", { cwd: dir });
+		assert.equal(checkpoint(dir, "merge done"), true);
+		assert.throws(() => execSync("git rev-parse -q --verify MERGE_HEAD", { cwd: dir, stdio: "pipe" }), "merge must be concluded");
+		assert.equal(execSync("git log -1 --format=%P", { cwd: dir, encoding: "utf-8" }).trim().split(" ").length, 2, "two-parent merge commit");
 	});
 });
 

@@ -38,6 +38,8 @@ function shipReadyRepo(): string {
 	writeFileSync(join(cwd, "src.txt"), "hello");
 	writeFileSync(join(cwd, ".gitignore"), ".dev/\n");
 	execSync("git add -A && git commit -q -m work", { cwd });
+	// Squash/diff now require origin/main to resolve and be an ancestor of HEAD (#424).
+	execSync("git push -q origin main:main", { cwd });
 	return cwd;
 }
 

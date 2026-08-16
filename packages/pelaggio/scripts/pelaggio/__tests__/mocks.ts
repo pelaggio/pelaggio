@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { mock } from "node:test";
 import { REVIEW_CONFIG } from "../config.js";
-import { __setProviderAvailableForTests, type RunStepFn, type runPipeline } from "../pipeline.js";
+import { __setProviderAvailableForTests, type PipelineDeps, type RunStepFn, type runPipeline } from "../pipeline.js";
+import type { PrReviewGateResult } from "../pr-review-cli.js";
 import type { RoadmapSource } from "../roadmap/index.js";
 import { LiveStatus, StatusBar } from "../tui.js";
 import type { CycleResult, Flags, ParkSignal, PipelineOpts, Step, StepResult } from "../types.js";
@@ -173,6 +174,31 @@ export function makeLiveStatus(): LiveStatus {
 
 export function makeParkSignal(): ParkSignal {
 	return { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" };
+}
+
+/** Default PR-mode freshness + pre-flight stubs. `setupShipRepo` / `makeTempGitRepo` have no
+ *  `origin` and are not the pelaggio monorepo — unstubbed production defaults would fetch a
+ *  missing remote, run `pnpm typecheck:ratchet` in an empty tree, verify against a missing
+ *  `origin/main`, and (the gate-record store, #424) read/write the HOST repo's `.dev/`. */
+export function defaultPrPreflightStubs(): Pick<PipelineDeps, "preparePrShipFreshness" | "runPrReviewGate" | "runTypecheckRatchet" | "verifyPrShipFreshness" | "readFreshnessGateRecord" | "writeFreshnessGateRecord"> {
+	return {
+		preparePrShipFreshness: () => ({ kind: "up-to-date" }),
+		verifyPrShipFreshness: () => ({ ok: true }),
+		readFreshnessGateRecord: () => null,
+		writeFreshnessGateRecord: () => "",
+		runPrReviewGate: async (): Promise<PrReviewGateResult> => ({
+			gate: "pass",
+			body: "preflight pass",
+			cost: 0,
+			costEstimated: false,
+			turns: 0,
+			ok: true,
+			subtype: "success",
+			agreement: "consensus-pass",
+			survivorCount: 0,
+		}),
+		runTypecheckRatchet: async () => ({ ok: true }),
+	};
 }
 
 export function makeTempGitRepo(): string {

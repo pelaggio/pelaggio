@@ -63,6 +63,15 @@ The review-time sibling of plan-polish lives in `/shakedown`'s code-review mode:
 
 `pipeline.ts` calls `hasDeliverableCommits()` before invoking `ship`. A cycle whose branch only touches `docs/plans/` (the `/plan` artifact with no implementation) is flagged `completed: false` with a "nothing to ship" error, and ship is never invoked. Doc-only work outside `docs/plans/` (rubric, skill bodies, README, roadmap edits) is still deliverable. The identical guard inside `/ship`'s SKILL.md is defense in depth for inline use.
 
+## PR-only pre-ship tail (#424)
+
+After the phantom-ship guard and only for `pull-request` / `auto-merge-pr` (never `direct-push`, never dry-run), the pipeline runs two bounded tail phases that are **not** additions to `STEPS` or the step-indexed config maps:
+
+1. **Freshness.** `preparePrShipFreshness()` fetches `origin/main` and merges it into the claim worktree. Outcomes are `up-to-date` / `merged` / `conflicted` / `failed`. A parked unresolved merge is dirty-with-`MERGE_HEAD`; resume treats that as `conflicted`, not generic dirty `failed`. The merge is never aborted, reset, or cleaned. `merged` and `conflicted` route once through the realized implementation author (`runStepWithRetry` / `shakedown-code`); the harness then runs `pnpm typecheck:ratchet` and `verifyPrShipFreshness()` (clean, no `MERGE_HEAD`, `origin/main` ancestor of `HEAD`). A red typecheck, failed verification, refusal, or confinement ends the cycle without ship. Rate limits use `parkExit()` so conflicted/resolved work is checkpointed.
+2. **Cold pre-flight.** The real `runPrReviewGate()` core runs from per-invocation detached seats (`prepareAuthoringReviewSeat`, unique `seatId` per driver/verify call) over `origin/main...<artifact-sha>` with `skillArguments: "--preflight"` and no comment/status callbacks. A valid survivor BLOCK (`ok`, `survivorCount > 0`, `consensus-block`/`disagreement`) gets one author revision and one newly SHA-bound recheck. Remaining findings or an infrastructure-invalid BLOCK are advisory — the PR may still open; the required forge gate is the merge authority. Pre-flight `review.cost` is added once per gate call; nested discovery/verify `step()` rows log but do not double-count. Seat SHAs are cleaned on PASS, BLOCK, throw, and park. `startFrom: "ship"` reconstructs the implementation author (log, else static fallback) before these repairs.
+
+Cold-seat confinement matches `#269`: reviewers never share the mutable artifact checkout. The adapter fail-closes a seat-prepare error as a typed failed `StepResult` rather than reviewing the live worktree.
+
 ## Effects Manifests
 
 Step-boundary harness effects use `.dev/effects/<run-id>/<step>-<attempt>.json`. The manifest envelope includes `schemaVersion`, `runId`, `itemId`, `step`, `attempt`, `cwd`, `preSha`, and an ordered `effects` array. `effects.ts` validates the schema and rejects stale or foreign manifests by exact provenance match; `cwd` is compared by resolved path and `preSha` must match exactly, including `null`.

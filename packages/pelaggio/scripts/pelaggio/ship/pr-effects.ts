@@ -51,15 +51,30 @@ export async function runShipPrEffects(
 	const branch = exec("git branch --show-current", cwd).trim();
 	if (branch !== decision.headBranch) throw new Error(`head branch mismatch: current ${branch || "(detached)"} does not match decision ${decision.headBranch}`);
 
-	const mergeBase = exec("git merge-base main HEAD", cwd).trim();
-	if (!mergeBase) throw new Error("cannot determine merge-base with main");
+	// Freshness is owned by the pipeline (author can repair a conflict). The effect
+	// handler only verifies the remote base is already integrated, then squashes
+	// against it — resetting to local `main` after merging `origin/main` would fold
+	// upstream-only commits into the feature squash.
+	try {
+		exec("git rev-parse --verify origin/main", cwd);
+	} catch (e) {
+		throw new Error(`origin/main does not resolve: ${short(e)}`);
+	}
+	try {
+		exec("git merge-base --is-ancestor origin/main HEAD", cwd);
+	} catch {
+		throw new Error("origin/main is not an ancestor of HEAD — branch is not fresh");
+	}
+
+	const mergeBase = exec("git merge-base origin/main HEAD", cwd).trim();
+	if (!mergeBase) throw new Error("cannot determine merge-base with origin/main");
 	exec(`git reset --soft ${shellQuote(mergeBase)}`, cwd);
 	// Always-on Assisted-by trailers (#189): stamp realized cycle providers from the
 	// cycle log when present; withAssistedBy falls back to the default identity.
 	const assistedBody = withAssistedBy(decision.prBody, [...collectLoggedAssistedByIdentities(ctx.itemId), ...identitiesForProviders(deps.assistedByProviders ?? [])]);
 	exec(`git commit -m ${shellQuote(decision.prTitle)} -m ${shellQuote(assistedBody)}`, cwd);
 
-	const changed = exec("git diff --name-only main...HEAD", cwd)
+	const changed = exec("git diff --name-only origin/main...HEAD", cwd)
 		.split("\n")
 		.map((line) => line.trim())
 		.filter((line) => line !== "" && !line.startsWith("docs/plans/") && !line.startsWith("docs/decision-log/"));

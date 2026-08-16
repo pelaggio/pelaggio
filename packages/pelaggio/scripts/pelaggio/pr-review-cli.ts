@@ -101,6 +101,12 @@ interface PrReviewDeps {
 
 export interface RunPrReviewGateOptions {
 	pr: string;
+	/**
+	 * Skill argument string. Defaults to `--pr ${pr}`. Pre-flight passes `--preflight`
+	 * so the reviewer is not given a forge PR number (`gh pr diff <itemId>` would
+	 * inspect the wrong artifact).
+	 */
+	skillArguments?: string;
 	/** Roadmap item id. Required when emitting adjudication source evidence. */
 	itemId?: string;
 	profile?: string;
@@ -691,7 +697,8 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 	for (let iteration = 1; iteration <= policy.maxPasses; iteration++) {
 		const iterationPasses: ReviewPass[] = [];
 		for (const label of labels) {
-			const args = label === "standard" ? `--pr ${options.pr}` : `--pr ${options.pr} --red-team --security-reasons ${JSON.stringify(securitySignal.reasons.join(", "))}`;
+			const skillArgs = options.skillArguments ?? `--pr ${options.pr}`;
+			const args = label === "standard" ? skillArgs : `${skillArgs} --red-team --security-reasons ${JSON.stringify(securitySignal.reasons.join(", "))}`;
 			// One shared prompt; configured-order aggregation. When Claude and Grok share the
 			// pool, non-Grok seats start immediately and Grok waits for every Claude promise to settle.
 			const prompt = `${expandPackagedSkill("pr-review", args)}${localContext}`;

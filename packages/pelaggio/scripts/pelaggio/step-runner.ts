@@ -7,6 +7,7 @@ import { codexProvider } from "./codex-provider.js";
 import { CONFIG, REPO, resolveStepSettings } from "./config.js";
 import { sessionsDir } from "./confinement/sessions.js";
 import { emitDecisionsFromText } from "./decisions.js";
+import { FRESHNESS_GATE_RECORDS_DIR, freshnessGateRecordsDir } from "./freshness-gate-record.js";
 import { grokProvider } from "./grok-provider.js";
 import { classifyStepError, isRefusal, looksLikeStalledAsk, type MainCheckoutDeltaObserver, parseBlockedReason, parseWaitFlag, resolveParkReset } from "./helpers.js";
 import { opencodeProvider } from "./opencode-provider.js";
@@ -169,8 +170,10 @@ function pathUnderRoot(abs: string, root: string): boolean {
  * authorization, so a seat that can shell-redirect into either can forge a consensus-block
  * record + matching source and turn a red review green without fleet evidence). Names come from
  * the canonical storage modules so the deny list cannot drift from the real paths.
+ * `.dev/freshness-gate-records/` (#424) joins the list for the same reason: a forged record
+ * lets a ship resume skip the deterministic typecheck + freshness gates.
  */
-const BASH_DENIED_DEV_REGISTERS = ["sessions", PR_REVIEW_GATE_RECORDS_DIR, ADJUDICATION_SOURCES_DIR] as const;
+const BASH_DENIED_DEV_REGISTERS = ["sessions", PR_REVIEW_GATE_RECORDS_DIR, ADJUDICATION_SOURCES_DIR, FRESHNESS_GATE_RECORDS_DIR] as const;
 const BASH_DENIED_DEV_REGISTER_RE = new RegExp(`(^|[\\s"'=/])\\.dev/(${BASH_DENIED_DEV_REGISTERS.join("|")})(/|\\b)`);
 
 /**
@@ -199,7 +202,7 @@ export function blockForeignRootWrite(input: HookInput, cwd: string, mainRepo: s
 				decision: "block" as const,
 				reason:
 					"This Bash command references a harness-owned register (docs/decision-log/, .dev/sessions/, " +
-					`.dev/${PR_REVIEW_GATE_RECORDS_DIR}/, or .dev/${ADJUDICATION_SOURCES_DIR}/). These are written only by the harness; ` +
+					`.dev/${PR_REVIEW_GATE_RECORDS_DIR}/, .dev/${ADJUDICATION_SOURCES_DIR}/, or .dev/${FRESHNESS_GATE_RECORDS_DIR}/). These are written only by the harness; ` +
 					'emit a "DECISION:" line in your step output for decisions — review/adjudication evidence is produced only by the harness\'s own review commands.',
 			};
 		}
@@ -224,12 +227,13 @@ export function blockForeignRootWrite(input: HookInput, cwd: string, mainRepo: s
 
 	// Adjudication-evidence denial is likewise absolute (#510 1a): these stores authorize
 	// `review=success` without a fleet run, so no seat may Write/Edit them — even when cwd
-	// or ownWorktree would otherwise allow the path.
-	for (const evidenceRoot of [gateRecordsDir(mainAbs), adjudicationSourcesDir(mainAbs)]) {
+	// or ownWorktree would otherwise allow the path. Freshness-gate records (#424) authorize
+	// skipping the deterministic ship gates on resume and get the same treatment.
+	for (const evidenceRoot of [gateRecordsDir(mainAbs), adjudicationSourcesDir(mainAbs), freshnessGateRecordsDir(mainAbs)]) {
 		if (pathUnderRoot(abs, evidenceRoot)) {
 			return {
 				decision: "block" as const,
-				reason: `Path "${fp}" targets the pr-adjudication evidence store (${evidenceRoot}), which is harness-owned authorization evidence. Do not write gate or adjudication-source records from agent tools.`,
+				reason: `Path "${fp}" targets a harness-owned evidence store (${evidenceRoot}). Do not write gate, adjudication-source, or freshness-gate records from agent tools.`,
 			};
 		}
 	}

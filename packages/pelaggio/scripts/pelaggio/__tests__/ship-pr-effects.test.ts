@@ -29,17 +29,28 @@ function step(text: string): StepResult {
 
 const HEAD_SHA = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
 
-function makeExec(opts: { dirty?: boolean; branch?: string; deliverable?: string; rejectFirstPush?: boolean; headSha?: string; headShaError?: boolean } = {}): { exec: (cmd: string, cwd: string) => string; calls: string[] } {
+function makeExec(opts: { dirty?: boolean; branch?: string; deliverable?: string; rejectFirstPush?: boolean; headSha?: string; headShaError?: boolean; originMain?: "ok" | "missing" | "not-ancestor" } = {}): {
+	exec: (cmd: string, cwd: string) => string;
+	calls: string[];
+} {
 	const calls: string[] = [];
 	let pushCount = 0;
 	const exec = (cmd: string): string => {
 		calls.push(cmd);
 		if (cmd === "git status --porcelain") return opts.dirty ? "M dirty.txt" : "";
 		if (cmd === "git branch --show-current") return opts.branch ?? "feat/tool-99";
-		if (cmd === "git merge-base main HEAD") return "abc123";
+		if (cmd === "git rev-parse --verify origin/main") {
+			if (opts.originMain === "missing") throw new Error("needed a single revision");
+			return "originmainsha";
+		}
+		if (cmd === "git merge-base --is-ancestor origin/main HEAD") {
+			if (opts.originMain === "not-ancestor") throw new Error("exit 1");
+			return "";
+		}
+		if (cmd === "git merge-base origin/main HEAD") return "abc123";
 		if (cmd.startsWith("git reset --soft ")) return "";
 		if (cmd.startsWith("git commit ")) return "";
-		if (cmd === "git diff --name-only main...HEAD") return opts.deliverable ?? "src/app.ts";
+		if (cmd === "git diff --name-only origin/main...HEAD") return opts.deliverable ?? "src/app.ts";
 		if (cmd === "git push -u origin HEAD") {
 			pushCount += 1;
 			if (opts.rejectFirstPush && pushCount === 1) throw new Error("rejected");
@@ -279,6 +290,40 @@ describe("cleanupShipBodyFile", () => {
 });
 
 describe("runShipPrEffects", () => {
+	it("resolves origin/main ancestry before reset, diffs against the remote base, and never uses local main", async () => {
+		const ex = makeExec();
+		const gh = makeGh([
+			{ match: ["pr", "list"], stdout: "[]" },
+			{ match: ["pr", "create"], stdout: `${PR_URL}\n` },
+		]);
+
+		await runShipPrEffects({ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision() }, { exec: ex.exec, gh: gh.gh, log: () => {} });
+
+		assert.deepEqual(ex.calls.slice(0, 8), [
+			"git status --porcelain",
+			"git branch --show-current",
+			"git rev-parse --verify origin/main",
+			"git merge-base --is-ancestor origin/main HEAD",
+			"git merge-base origin/main HEAD",
+			"git reset --soft 'abc123'",
+			ex.calls[6],
+			"git diff --name-only origin/main...HEAD",
+		]);
+		assert.ok(ex.calls[6]?.startsWith("git commit "));
+		assert.ok(!ex.calls.some((cmd) => cmd === "git merge-base main HEAD" || cmd === "git diff --name-only main...HEAD"));
+		assert.ok(ex.calls.includes("git push -u origin HEAD"));
+	});
+
+	it("fails before reset, commit, push, or forge effects when origin/main is missing or not an ancestor", async () => {
+		for (const originMain of ["missing", "not-ancestor"] as const) {
+			const ex = makeExec({ originMain });
+			const gh = makeGh([]);
+			await assert.rejects(() => runShipPrEffects({ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision() }, { exec: ex.exec, gh: gh.gh, log: () => {} }), originMain === "missing" ? /origin\/main does not resolve/ : /not an ancestor/);
+			assert.ok(!ex.calls.some((cmd) => cmd.startsWith("git reset") || cmd.startsWith("git commit") || cmd.startsWith("git push")));
+			assert.equal(gh.calls.length, 0);
+		}
+	});
+
 	it("creates a PR when none is open", async () => {
 		const ex = makeExec();
 		const gh = makeGh([
