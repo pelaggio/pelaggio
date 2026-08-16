@@ -13,10 +13,12 @@ import {
 	blockWorktreeInstall,
 	claudeProvider,
 	composeSystemAppend,
+	createStepTextProjection,
 	endMainCheckoutAttribution,
 	getProvider,
 	isClaudeMaxTurnsError,
 	isWorktreePath,
+	projectClaudeAssistantBlocks,
 } from "../step-runner.js";
 import type { ProviderName } from "../types.js";
 
@@ -31,6 +33,27 @@ function write(fp: string): HookInput {
 function edit(fp: string): HookInput {
 	return { tool_name: "Edit", tool_input: { file_path: fp } } as unknown as HookInput;
 }
+
+describe("projectClaudeAssistantBlocks", () => {
+	it("projects text and tool_use input and ignores other block types", () => {
+		const projection = createStepTextProjection({ assistantSeparator: "\n" });
+		projectClaudeAssistantBlocks(
+			[
+				{ type: "text", text: "hello" },
+				{ type: "thinking", text: "secret-output" },
+				{ type: "tool_use", input: { command: "echo hi", description: "say hi", new_string: "FILE_BODY" } },
+			],
+			projection,
+		);
+		const { assistantText, fullText } = projection.read();
+		assert.match(assistantText, /hello/);
+		assert.equal(assistantText.includes("echo hi"), false);
+		assert.match(fullText, /echo hi/);
+		assert.match(fullText, /say hi/);
+		assert.equal(fullText.includes("secret-output"), false);
+		assert.equal(fullText.includes("FILE_BODY"), false);
+	});
+});
 
 describe("isClaudeMaxTurnsError (#437)", () => {
 	it("preserves an error_max_turns result across a later generic process exit", () => {

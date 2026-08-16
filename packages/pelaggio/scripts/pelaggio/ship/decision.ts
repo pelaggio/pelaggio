@@ -4,7 +4,7 @@ import { EffectsManifestError, type ShipDecisionEffect } from "../effects.js";
 import type { ShipTargetName, StepResult } from "../types.js";
 import { SHIP_TARGET_NAMES } from "./index.js";
 
-const SHIP_DECISION_RE = /SHIP_DECISION\s*([\s\S]*?)\s*END_SHIP_DECISION/;
+const SHIP_DECISION_RE = /SHIP_DECISION\s*([\s\S]*?)\s*END_SHIP_DECISION/g;
 // A PR body far past any real deliverable + appended review record. Bounds the file read.
 const MAX_PR_BODY_BYTES = 512 * 1024;
 
@@ -33,8 +33,10 @@ export function cleanupShipBodyFile(worktree: string, itemId: string): void {
 }
 
 export function parseShipDecisionEffect(step: StepResult, expected: { itemId: string; target: ShipTargetName; worktree: string }): ShipDecisionEffect {
-	const haystack = `${step.text}\n${step.fullText}`;
-	const match = haystack.match(SHIP_DECISION_RE);
+	const haystack = step.assistantText;
+	// assistantText is chronological, while the ship worker may correct an earlier draft in its
+	// final message. Preserve the former final-message precedence by selecting the last block.
+	const match = [...haystack.matchAll(SHIP_DECISION_RE)].at(-1);
 	if (!match) throw new EffectsManifestError("invalid_manifest", "ship decision block not found");
 
 	let parsed: unknown;

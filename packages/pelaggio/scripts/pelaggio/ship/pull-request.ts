@@ -4,8 +4,7 @@ import { shipBodyFile } from "./decision.js";
 const PR_URL_RE = /https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/pull\/\d+/;
 
 export function extractPrUrl(step: StepResult): string | undefined {
-	const haystack = `${step.text}\n${step.fullText}`;
-	const match = haystack.match(PR_URL_RE);
+	const match = step.text.match(PR_URL_RE);
 	return match ? match[0] : undefined;
 }
 

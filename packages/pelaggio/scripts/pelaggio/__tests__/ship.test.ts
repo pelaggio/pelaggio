@@ -68,7 +68,7 @@ function makeBkSpy(over: Partial<ShipBookkeepingResult> = {}): { fn: NonNullable
 const PR_URL = "https://github.com/acme/widget/pull/42";
 
 function makeStepResult(over: Partial<StepResult> = {}): StepResult {
-	return { ok: true, subtype: "success", text: "", fullText: "", cost: 0, turns: 0, ...over };
+	return { ok: true, subtype: "success", text: "", fullText: "", assistantText: "", cost: 0, turns: 0, ...over };
 }
 
 const baseFlags: Flags = {
@@ -177,9 +177,14 @@ describe("pull-request adapter", () => {
 		assert.equal(r.prUrl, PR_URL);
 	});
 
-	it("interpretResult extracts PR URL from fullText when text is empty", () => {
-		const r = a.interpretResult(makeStepResult({ ok: true, text: "done", fullText: `created PR: ${PR_URL}` }));
+	it("interpretResult extracts PR URL from text (effects-append destination), not fullText", () => {
+		const r = a.interpretResult(makeStepResult({ ok: true, text: `created PR: ${PR_URL}`, fullText: "created PR: https://github.com/acme/widget/pull/999" }));
 		assert.equal(r.prUrl, PR_URL);
+	});
+
+	it("interpretResult does not read a PR URL that only appears in fullText", () => {
+		const r = a.interpretResult(makeStepResult({ ok: true, text: "done", fullText: `created PR: ${PR_URL}` }));
+		assert.equal(r.prUrl, undefined);
 	});
 
 	it("interpretResult: success with no URL still reports awaitingMerge", () => {
@@ -255,6 +260,38 @@ describe("runPipeline — ship target dispatch", () => {
 		const shipCall = calls.find((c) => c.step === "ship");
 		assert.ok(shipCall);
 		assert.match(shipCall.prompt, /direct-push/);
+	});
+
+	it("direct-push: ship-merged is read from assistantText, not a conflicting fullText marker", async () => {
+		const { repo, worktree, mergeIntoMain } = setupShipRepo();
+		const parkSignal = makeParkSignal();
+		const bk = makeBkSpy();
+		const { runStep, calls } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"shakedown-code": { ok: true },
+				ship: {
+					ok: true,
+					text: "ship-merged: TOOL-99",
+					assistantText: "ship-merged: TOOL-99",
+					fullText: "ship-merged: OTHER\n",
+					sideEffect: () => mergeIntoMain(),
+				},
+			},
+			parkSignal,
+		);
+		const result = await runPipeline(baseOpts(worktree, "direct-push"), parkSignal, baseFlags, {
+			runStep,
+			mainRepo: repo,
+			listWorktrees: () => [],
+			appendLog: () => {},
+			runShipBookkeeping: bk.fn,
+		});
+		assert.equal(result.completed, true);
+		assert.equal(bk.calls.length, 1);
+		assert.ok(!calls.map((c) => c.step).includes("shipwreck"));
 	});
 
 	it("direct-push: merged but turn-exhausted (error_max_turns) → shipwreck re-verifies → deterministic tail runs", async () => {
@@ -514,17 +551,29 @@ describe("runPipeline — ship target dispatch", () => {
 	it("pull-request: decision effect appends PR URL, result marks awaitingMerge + prUrl", async () => {
 		const worktree = makeTempGitRepo();
 		const parkSignal = makeParkSignal();
+		const shipOutcome = prShipDecision("pull-request");
+		const projectedFullText = `${shipOutcome.text}\necho CONTRACT_COMMAND\n`;
 		const { runStep, calls } = createMockRunStep(
 			{
 				plan: { ok: true },
 				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
 				implement: { ok: true, writes: { "impl.txt": "x" } },
 				"shakedown-code": { ok: true },
-				ship: prShipDecision("pull-request"),
+				ship: { ...shipOutcome, assistantText: shipOutcome.text, fullText: projectedFullText },
 			},
 			parkSignal,
 		);
-		const result = await runPipeline(baseOpts(worktree, "pull-request"), parkSignal, baseFlags, {
+		const pipelineOpts = baseOpts(worktree, "pull-request");
+		const target = pipelineOpts.shipTarget;
+		const interpreted: StepResult[] = [];
+		pipelineOpts.shipTarget = {
+			...target,
+			interpretResult(step) {
+				interpreted.push(step);
+				return target.interpretResult(step);
+			},
+		};
+		const result = await runPipeline(pipelineOpts, parkSignal, baseFlags, {
 			runStep,
 			listWorktrees: () => [],
 			appendLog: () => {},
@@ -533,6 +582,11 @@ describe("runPipeline — ship target dispatch", () => {
 		assert.equal(result.completed, true);
 		assert.equal(result.awaitingMerge, true);
 		assert.equal(result.prUrl, PR_URL);
+		assert.equal(interpreted.length, 1);
+		assert.match(interpreted[0]?.text ?? "", new RegExp(PR_URL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+		assert.equal(interpreted[0]?.assistantText, shipOutcome.text);
+		assert.equal(interpreted[0]?.fullText, projectedFullText);
+		assert.equal(interpreted[0]?.fullText.includes(PR_URL), false);
 		const shipCall = calls.find((c) => c.step === "ship");
 		assert.ok(shipCall);
 		assert.match(shipCall.prompt, /SHIP_DECISION/);
@@ -788,17 +842,29 @@ describe("runPipeline — ship target dispatch", () => {
 		] as const) {
 			const worktree = makeTempGitRepo();
 			const parkSignal = makeParkSignal();
+			const shipOutcome = prShipDecision("pull-request");
+			const projectedFullText = `${shipOutcome.text}\necho CONTRACT_COMMAND\n`;
 			const { runStep, calls } = createMockRunStep(
 				{
 					plan: { ok: true },
 					"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
 					implement: { ok: true, writes: { "impl.txt": "x" } },
 					"shakedown-code": { ok: true },
-					ship: prShipDecision("pull-request"),
+					ship: { ...shipOutcome, assistantText: shipOutcome.text, fullText: projectedFullText },
 				},
 				parkSignal,
 			);
-			const result = await runPipeline(baseOpts(worktree, "pull-request"), parkSignal, baseFlags, {
+			const pipelineOpts = baseOpts(worktree, "pull-request");
+			const target = pipelineOpts.shipTarget;
+			const interpreted: StepResult[] = [];
+			pipelineOpts.shipTarget = {
+				...target,
+				interpretResult(step) {
+					interpreted.push(step);
+					return target.interpretResult(step);
+				},
+			};
+			const result = await runPipeline(pipelineOpts, parkSignal, baseFlags, {
 				runStep,
 				listWorktrees: () => [],
 				appendLog: () => {},
@@ -810,6 +876,10 @@ describe("runPipeline — ship target dispatch", () => {
 			});
 			assert.equal(result.completed, false);
 			assert.equal(calls.filter((c) => c.step === "ship").length, 1, "single attempt only");
+			assert.equal(interpreted.length, 1);
+			assert.equal(interpreted[0]?.assistantText, shipOutcome.text);
+			assert.equal(interpreted[0]?.fullText, projectedFullText);
+			assert.match(interpreted[0]?.text ?? "", /provenance_mismatch|effect_failed/);
 			// Scratch retained on terminal failure.
 			assert.equal(existsSync(join(worktree, shipBodyFile("TOOL-99"))), true);
 		}

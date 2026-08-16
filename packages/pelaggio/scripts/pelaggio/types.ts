@@ -72,20 +72,26 @@ export interface ExecutionReceiptDescriptor {
 export interface StepResult {
 	ok: boolean;
 	subtype: string;
+	/**
+	 * The provider/pipeline's final operational result. May be replaced by a failure
+	 * diagnosis or extended with a harness-issued effect result.
+	 */
 	text: string;
-	/** All assistant text + tool inputs accumulated — richer than `text` for ID parsing */
+	/**
+	 * Ordered assistant chunks plus only the model-authored command string and optional
+	 * command description from tool calls. Excludes tool results/output (`output`,
+	 * `aggregated_output`, `stdout`, `stderr`, errors) and every other tool-input field,
+	 * especially Edit/Write file bodies. The one intentional production reader is the
+	 * auto-pick last-resort item-id parse.
+	 */
 	fullText: string;
 	/**
-	 * Every model-authored text chunk, accumulated and in order — no tool inputs and no tool
-	 * output. This is the only field safe to parse structured model output from: `text` is the
-	 * FINAL chunk on some providers (opencode overwrites it per streamed part) and so truncates a
-	 * block split across parts, while `fullText` carries repository-controlled tool data on others.
-	 *
-	 * Optional only so existing synthetic/test StepResult literals need not be rewritten; every
-	 * real provider sets it. Making it required — and asserting it cross-provider — is part of the
-	 * fullText contract-conformance work (#418).
+	 * Required, ordered model-authored assistant chunks only — no tool inputs or outputs.
+	 * This is the only structured model-output parse source: `text` is the FINAL chunk on
+	 * some providers (opencode overwrites it per streamed part) and so truncates a block
+	 * split across parts, while `fullText` intentionally carries command/description input.
 	 */
-	assistantText?: string;
+	assistantText: string;
 	cost: number;
 	/** True when `cost` is a provider-side estimate rather than billed USD. */
 	costEstimated?: boolean;

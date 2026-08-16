@@ -50,3 +50,53 @@ export function composeSystemAppend(args: { isWorktree: boolean; cwd: string; re
 
 	return [AUTONOMY_APPEND, worktreeAppend, planAppend].filter(Boolean).join("\n");
 }
+
+/**
+ * Provider-neutral accumulator for the two accumulated StepResult text views. The caller
+ * supplies the assistant-chunk separator (`"\n"` for message-boundary providers,
+ * `""` for token-boundary streams); this helper never invents one.
+ */
+export interface StepTextProjection {
+	appendAssistant(chunk: string): void;
+	appendToolInput(input: unknown): boolean;
+	read(): { assistantText: string; fullText: string };
+}
+
+function ownEnumerableString(obj: object, key: string): string | undefined {
+	if (!Object.prototype.propertyIsEnumerable.call(obj, key)) return undefined;
+	const value = (obj as Record<string, unknown>)[key];
+	return typeof value === "string" ? value : undefined;
+}
+
+/** Allowlist: own enumerable string `command`/`cmd` plus a real, distinct `description`. */
+function projectToolInput(input: unknown): { command?: string; description?: string } {
+	if (typeof input !== "object" || input === null) return {};
+	const command = ownEnumerableString(input, "command");
+	const cmd = ownEnumerableString(input, "cmd");
+	const selected = command || cmd;
+	const description = ownEnumerableString(input, "description");
+	const out: { command?: string; description?: string } = {};
+	if (selected) out.command = selected;
+	if (description && description !== selected) out.description = description;
+	return out;
+}
+
+export function createStepTextProjection(opts: { assistantSeparator: string }): StepTextProjection {
+	let assistantText = "";
+	let fullText = "";
+	return {
+		appendAssistant(chunk: string): void {
+			assistantText += chunk + opts.assistantSeparator;
+			fullText += chunk + opts.assistantSeparator;
+		},
+		appendToolInput(input: unknown): boolean {
+			const projected = projectToolInput(input);
+			if (projected.command !== undefined) fullText += `${projected.command}\n`;
+			if (projected.description !== undefined) fullText += `${projected.description}\n`;
+			return projected.command !== undefined || projected.description !== undefined;
+		},
+		read() {
+			return { assistantText, fullText };
+		},
+	};
+}

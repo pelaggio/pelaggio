@@ -24,7 +24,7 @@ import { emitDecisionsFromText } from "./decisions.js";
 import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseWaitFlag, resolveParkReset } from "./helpers.js";
 import { buildAgentEnv, makeSecretScrubber } from "./secret-hygiene.js";
 import type { StepProvider } from "./step-runner.js";
-import { composeSystemAppend, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "./step-runner-shared.js";
+import { composeSystemAppend, createStepTextProjection, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "./step-runner-shared.js";
 import { MUTATING_TOOLS, toolBrief } from "./tui.js";
 import type { ParkSignal, ProviderCapabilities, Step, StepEvent, StepResult, TokenUsage } from "./types.js";
 import { ensureWorktreeDeps } from "./worktree-deps.js";
@@ -225,8 +225,7 @@ function increment(map: Map<string, number>, key: string): number {
 export function buildOpenCodeStepResult(name: Step, events: JsonObject[], exitInfo: OpenCodeExitInfo): OpenCodeBuildResult {
 	const emitted: StepEvent[] = [];
 	let text = "";
-	let fullText = "";
-	let assistantText = "";
+	const projection = createStepTextProjection({ assistantSeparator: "" });
 	let turns = 0;
 	let completed = false;
 	let failed = false;
@@ -288,7 +287,7 @@ export function buildOpenCodeStepResult(name: Step, events: JsonObject[], exitIn
 			const briefInput = opencodeToolBriefInput(toolName, part);
 			emitted.push({ type: "tool_use", name: toolName, brief: toolBrief(toolName, briefInput) || toolRaw, mutating: MUTATING_TOOLS.has(toolName) });
 			if (toolName === "Edit") for (const fp of toolFilePaths(part)) trackEdit(fp);
-			if (output) fullText += `${output}\n`;
+			projection.appendToolInput(toolInputObject(part));
 			if (status === "error" || status === "failed") emitted.push({ type: "tool_error", name: toolName, brief: toolBrief(toolName, briefInput) || toolRaw, error: output || `tool ${toolRaw || "call"} failed` });
 			continue;
 		}
@@ -299,8 +298,7 @@ export function buildOpenCodeStepResult(name: Step, events: JsonObject[], exitIn
 				// Concatenate WITHOUT a separator: text parts are token-boundary fragments
 				// of one assistant message, and an injected newline inside a findings/Judge
 				// JSON block corrupts the delimited report (#417 gate finding).
-				assistantText += chunk;
-				fullText += chunk;
+				projection.appendAssistant(chunk);
 				emitted.push({ type: "text", content: chunk });
 			}
 		}
@@ -365,6 +363,7 @@ export function buildOpenCodeStepResult(name: Step, events: JsonObject[], exitIn
 	}
 
 	const outputTail = text ? text.replace(/\x1b\[[0-9;]*m/g, "").slice(-200) : undefined;
+	const { assistantText, fullText } = projection.read();
 	const decisions = emitDecisionsFromText(assistantText);
 	for (const d of decisions) emitted.push({ type: "decision", decision: d.decision });
 	const toolCountsObj = toolCounts.size > 0 ? Object.fromEntries(toolCounts) : undefined;

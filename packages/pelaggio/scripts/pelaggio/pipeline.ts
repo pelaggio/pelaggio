@@ -398,13 +398,13 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			});
 			emitAbort({ type: "done", ok: false, subtype: "error_abort", cost: 0, turns: 0, elapsed: 0 });
 			steps.push(stepLog({ cost: 0, turns: 0, ok: false, ...(attempt > 1 ? { attempt } : {}) }));
-			return { ok: false, subtype: "error_abort", text: "aborted", fullText: "", cost: 0, turns: 0 };
+			return { ok: false, subtype: "error_abort", text: "aborted", fullText: "", assistantText: "", cost: 0, turns: 0 };
 		}
 
 		if (opts.dryRun) {
 			log(`[dry-run] ${name}: "${prompt.slice(0, 60)}" in ${cwd}`);
 			steps.push(stepLog({ cost: 0, turns: 0, ok: true, ...(attempt > 1 ? { attempt } : {}) }));
-			return { ok: true, subtype: "success", text: `[dry-run] ${name}`, fullText: `[dry-run] ${name}`, cost: 0, turns: 0 };
+			return { ok: true, subtype: "success", text: `[dry-run] ${name}`, fullText: "", assistantText: "", cost: 0, turns: 0 };
 		}
 
 		const emit = createStepRenderer({
@@ -513,7 +513,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				// cannot be trusted as a clean baseline for this step — continuing on to spend
 				// the full step cost only to override the result afterward (the prior
 				// behavior) burns real money on a step already known to be error_confinement.
-				providerResult = { ok: false, subtype: "error_confinement", text: confinementAuditError, fullText: confinementAuditError, cost: 0, turns: 0 };
+				providerResult = { ok: false, subtype: "error_confinement", text: confinementAuditError, fullText: "", assistantText: "", cost: 0, turns: 0 };
 			} else {
 				// A step-scoped controller composes the external (SIGINT) signal with an
 				// internal one the periodic prober below can trip independently, so a
@@ -608,17 +608,18 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			}
 
 			result = providerResult;
-			// Pipeline-owned diagnosis: replace the provider's text/fullText/outputTail so
-			// finish() detail and JSONL recent-failures show the confinement cause, not a
-			// stale provider success/review tail. outputTail takes the *first* 200 chars
-			// (diagnosis leads with phase/root; provider tails care about the end).
+			// Pipeline-owned diagnosis: replace the provider's text/outputTail so finish()
+			// detail and JSONL recent-failures show the confinement cause, not a stale
+			// provider success/review tail. Preserve assistantText/fullText — those are
+			// model-authored accumulators and must not take harness diagnostics. outputTail
+			// takes the *first* 200 chars (diagnosis leads with phase/root; provider tails
+			// care about the end).
 			if (confinementAuditError !== undefined) {
 				result = {
 					...providerResult,
 					ok: false,
 					subtype: "error_confinement",
 					text: confinementAuditError,
-					fullText: confinementAuditError,
 					outputTail: confinementAuditError.slice(0, 200),
 				};
 			} else if (confinementRoots.length > 0) {
@@ -638,7 +639,6 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 					ok: false,
 					subtype: "error_confinement",
 					text,
-					fullText: text,
 					outputTail: text.slice(0, 200),
 				};
 			} else if (revalidationWarnings.length > 0) {
@@ -678,7 +678,6 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 						ok: false,
 						subtype: "error_effects_manifest",
 						text,
-						fullText: text,
 						outputTail: text.slice(0, 200),
 						effectsError: { code, message, phase },
 					};
@@ -716,7 +715,6 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 								result = {
 									...result,
 									text: appendResultText(result.text, effectsResult.appendText),
-									fullText: appendResultText(result.fullText, effectsResult.appendText),
 								};
 							}
 							if (effectsResult.receipt) {
@@ -924,7 +922,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		gitBinding = { branch: null, worktree: worktree ? basename(worktree) : null, mainShaAtStart: null, headSha: null };
 		provenanceUnavailable.push("git");
 	}
-	let pickText = "";
+	let pickAssistantText = "";
 	let startFrom = opts.startFrom;
 	if (itemId) logLabel = itemId;
 
@@ -953,7 +951,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			const pickArgs = itemId ? (opts.noWorktree ? `${itemId} --no-worktree` : itemId) : "next";
 			const pick = await step("pick", expandSkill("pick", pickArgs), mainRepo);
 			cost += pick.cost;
-			pickText = pick.text + "\n" + pick.fullText;
+			pickAssistantText = pick.assistantText;
 
 			if (!pick.ok) {
 				const err = classifyOutcome(pick) === "blocked" ? `pick blocked: ${pick.text}` : "pick failed";
@@ -961,7 +959,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			}
 
 			if (!opts.dryRun) {
-				const reason = parsePickResult(pickText);
+				const reason = parsePickResult(pickAssistantText);
 				if (reason !== "claimed") {
 					return finish({ itemId: null, completed: false, cost, error: `pick:${reason ?? "unknown"}` });
 				}
@@ -977,14 +975,14 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			if (opts.dryRun) {
 				itemId = itemId ?? "DRY";
 			} else if (opts.itemId) {
-				itemId = parsePickItem(pickText);
+				itemId = parsePickItem(pickAssistantText);
 				if (!itemId) return finish({ itemId: null, completed: false, cost, error: "pick:unparsed-marker" });
 				if (await pickDivergedFromPin(opts.itemId, itemId, (text) => roadmap.parseItemId(text))) {
 					log(`⚠ pick diverted: requested ${opts.itemId} but /pick claimed ${itemId} — refusing (a pinned --item must resolve exactly; the stray claim needs cleanup)`);
 					return finish({ itemId, completed: false, cost, error: "pick:diverted" });
 				}
 			} else {
-				itemId = parsePickItem(pickText) ?? (await roadmap.parseItemId(pick.text)) ?? (await roadmap.parseItemId(pick.fullText));
+				itemId = parsePickItem(pickAssistantText) ?? (await roadmap.parseItemId(pick.text)) ?? (await roadmap.parseItemId(pick.fullText));
 				if (!itemId) return finish({ itemId: null, completed: false, cost, error: "no item ID parsed" });
 			}
 
@@ -1099,7 +1097,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 
 	if (!flags.profile) {
 		const quickItem = !opts.dryRun && itemId ? await roadmap.getItem(itemId).catch(() => null) : null;
-		if (flowPolicy.isQuickScope({ item: quickItem, summaryText: pickText })) {
+		if (flowPolicy.isQuickScope({ item: quickItem, summaryText: pickAssistantText })) {
 			profile = "quick";
 			log("scope S/XS or bug — quick mode (Sonnet, skip plan+shakedown-plan)");
 			startFrom ??= "implement";
@@ -1327,7 +1325,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			// preferred path for large items; the raised implement turn ceiling is the escape hatch for
 			// changes that don't decompose cleanly. Best-effort, mirrors the shakedown-code deferral (#115).
 			if (!opts.dryRun) {
-				for (const d of parseDeferredItems(outcome.result.fullText, deferredItemTitles)) {
+				for (const d of parseDeferredItems(outcome.result.assistantText, deferredItemTitles)) {
 					try {
 						const created = await roadmap.createItem(d);
 						log(`plan deferred → ${created.id}: ${d.title}`);
@@ -1622,7 +1620,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 							} catch (e) {
 								const message = e instanceof Error ? e.message : String(e);
 								log(`⚠ authoring review seat prepare failed (${slot.id} p${pass}): ${message}`);
-								return { ok: false, subtype: "error", text: `authoring review seat prepare failed: ${message}`, fullText: `authoring review seat prepare failed: ${message}`, cost: 0, turns: 0 };
+								return { ok: false, subtype: "error", text: `authoring review seat prepare failed: ${message}`, fullText: "", assistantText: "", cost: 0, turns: 0 };
 							}
 							return step(role === "reviewer" ? "pr-review" : "pr-verify", prompt, seatCwd, {
 								attempt: pass,
@@ -1644,7 +1642,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				// loop is only skipped for resolved-proceed; narrow before reading audit fields.
 				if (existingEscalation.state !== "resolved-proceed") return parkExit("adversarial review produced no loop result")!;
 				reviewRecordMarkdown = `## Adversarial review escalation\n\nDecision **${existingEscalation.id}** was resolved **proceed** by ${existingEscalation.resolution.actor}.\n\nRationale: ${existingEscalation.resolution.rationale}\n\nReviewed commit: \`${reviewedSha}\`. Evidence fingerprint: \`${existingEscalation.escalation.evidenceFingerprint}\`.`;
-				shakedownResult = { ok: true, subtype: "success", text: "resolved-proceed", fullText: "resolved-proceed", cost: 0, turns: 0 };
+				shakedownResult = { ok: true, subtype: "success", text: "resolved-proceed", fullText: "", assistantText: "", cost: 0, turns: 0 };
 			} else {
 				cost += loop.cost;
 				const finalReviewedSha = getArtifactHeadSha(worktree!);
@@ -1765,7 +1763,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				// A Judge-ruled judgment-dissent (no disagreement, non-safety) keeps its pre-#244 posture:
 				// park only for direct-push; in PR mode ship with the dissent recorded (the PR is the veto).
 				if (loop.outcome === "budget" || loop.outcome === "hard-block" || (loop.outcome === "dissent" && opts.shipTarget.name === "direct-push")) return parkExit(`adversarial review ${loop.outcome}`)!;
-				shakedownResult = { ok: true, subtype: "success", text: loop.outcome, fullText: loop.outcome, cost: 0, turns: 0 };
+				shakedownResult = { ok: true, subtype: "success", text: loop.outcome, fullText: "", assistantText: "", cost: 0, turns: 0 };
 			}
 		} else {
 			const selected = selectReviewers(assignment, driverCandidates("shakedown-code"), implementationAuthor, 1, available);
@@ -1804,7 +1802,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		// provider can't). Create them in-process, best-effort — a failure logs and continues (they're
 		// backlog niceties, not the cycle's deliverable). Skipped in dry-run (no real backlog writes).
 		if (!opts.dryRun) {
-			for (const d of parseDeferredItems(shakedownResult.fullText, deferredItemTitles)) {
+			for (const d of parseDeferredItems(shakedownResult.assistantText, deferredItemTitles)) {
 				try {
 					const created = await roadmap.createItem(d);
 					log(`deferred → ${created.id}: ${d.title}`);
@@ -1900,7 +1898,17 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		const staleBlock = !opts.dryRun && existsSync(staleBody) ? `stale ship body file could not be cleared before attempt 1: ${shipBodyFile(itemId!)}` : undefined;
 		if (staleBlock) {
 			log(`⚠ ${staleBlock} — refusing to ship`);
-			ship = { ok: false, subtype: "error_effects_manifest", text: staleBlock, fullText: staleBlock, cost: 0, turns: 0, outputTail: staleBlock.slice(0, 200), effectsError: { code: "invalid_manifest", message: staleBlock, phase: "resolve" } };
+			ship = {
+				ok: false,
+				subtype: "error_effects_manifest",
+				text: staleBlock,
+				fullText: "",
+				assistantText: "",
+				cost: 0,
+				turns: 0,
+				outputTail: staleBlock.slice(0, 200),
+				effectsError: { code: "invalid_manifest", message: staleBlock, phase: "resolve" },
+			};
 		} else {
 			// Attempt-cap only (no budget gate) — one acceptance-required recovery for a
 			// malformed decision / missing body file before any manifest is written.
@@ -1963,7 +1971,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		// other way (issue #37). Session `ok` + an advanced `main` are necessary but not
 		// sufficient; without the marker the merge is treated as UNVERIFIED.
 		const reportedShipMerged = (r: StepResult): boolean => {
-			const id = parseShipMerged(`${r.text}\n${r.fullText}`);
+			const id = parseShipMerged(r.assistantText);
 			return id !== null && id.toLowerCase() === itemId!.toLowerCase();
 		};
 		// The deterministic tail runs ONLY on a cleanly-verified merge. `ship.ok`

@@ -17,7 +17,7 @@ import { buildGrokArgs, detectLandlock, installGrokSandboxProfile } from "./grok
 import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseWaitFlag, resolveParkReset } from "./helpers.js";
 import { buildAgentEnv, makeSecretScrubber } from "./secret-hygiene.js";
 import type { StepProvider } from "./step-runner.js";
-import { composeSystemAppend, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "./step-runner-shared.js";
+import { composeSystemAppend, createStepTextProjection, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "./step-runner-shared.js";
 import { MUTATING_TOOLS, toolBrief } from "./tui.js";
 import type { ParkSignal, ProviderCapabilities, Step, StepEvent, StepResult, TokenUsage } from "./types.js";
 import { ensureWorktreeDeps } from "./worktree-deps.js";
@@ -183,10 +183,9 @@ export interface GrokBuildResult {
 export function buildGrokStepResult(name: Step, updates: JsonObject[], exitInfo: GrokExitInfo): GrokBuildResult {
 	const emitted: StepEvent[] = [];
 	let text = "";
-	let fullText = "";
 	// Separate from `text`: the rate-limit / did-not-complete / edit-loop paths below replace
 	// `text` with a diagnostic string, which would otherwise discard the model's own output.
-	let assistantText = "";
+	const projection = createStepTextProjection({ assistantSeparator: "" });
 	let turns = 0;
 	let sawTurn = false;
 	let usage: JsonObject | undefined;
@@ -201,8 +200,7 @@ export function buildGrokStepResult(name: Step, updates: JsonObject[], exitInfo:
 				const chunk = contentText(u.content);
 				if (chunk) {
 					text += chunk;
-					assistantText += chunk;
-					fullText += chunk;
+					projection.appendAssistant(chunk);
 					emitted.push({ type: "text", content: chunk });
 				}
 				break;
@@ -212,6 +210,7 @@ export function buildGrokStepResult(name: Step, updates: JsonObject[], exitInfo:
 				const kind = stringField(u, "kind");
 				const toolName = grokToolName(title, kind);
 				const input = isObject(u.rawInput) ? u.rawInput : {};
+				projection.appendToolInput(input);
 				increment(toolCounts, toolName);
 				emitted.push({ type: "tool_use", name: toolName, brief: toolBrief(toolName, input) || title, mutating: MUTATING_TOOLS.has(toolName) });
 				for (const fp of updateLocations(u)) trackEdit(fp);
@@ -305,7 +304,8 @@ export function buildGrokStepResult(name: Step, updates: JsonObject[], exitInfo:
 
 	const stalledAsk = ok && looksLikeStalledAsk(text);
 	const outputTail = text ? text.replace(/\x1b\[[0-9;]*m/g, "").slice(-200) : undefined;
-	const decisions = emitDecisionsFromText(fullText);
+	const { assistantText, fullText } = projection.read();
+	const decisions = emitDecisionsFromText(assistantText);
 	for (const d of decisions) emitted.push({ type: "decision", decision: d.decision });
 	const toolCountsObj = toolCounts.size > 0 ? Object.fromEntries(toolCounts) : undefined;
 	return {

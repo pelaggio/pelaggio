@@ -58,7 +58,9 @@ describe("buildOpenCodeStepResult", () => {
 		assert.equal(out.result.ok, true);
 		assert.equal(out.result.text, "OK");
 		assert.deepEqual(out.result.toolCounts, { Edit: 1, Bash: 1 });
-		assert.equal(countOccurrences(out.result.fullText, "done\n"), 1);
+		assert.equal(countOccurrences(out.result.fullText, "echo done"), 1);
+		assert.equal(out.result.fullText.split("\n").includes("done"), false);
+		assert.equal(out.result.assistantText.includes("echo done"), false);
 		assert.ok(out.events.some((e) => e.type === "tool_use" && e.name === "Edit"));
 		assert.ok(out.events.some((e) => e.type === "tool_use" && e.name === "Bash"));
 	});
