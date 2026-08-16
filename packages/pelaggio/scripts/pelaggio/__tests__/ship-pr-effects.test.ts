@@ -6,7 +6,7 @@ import { describe, it } from "node:test";
 import type { ShipDecisionEffect } from "../effects.js";
 import type { GhRunner } from "../roadmap/github-issues.js";
 import { cleanupShipBodyFile, parseShipDecisionEffect, shipBodyFile } from "../ship/decision.js";
-import { runShipPrEffects } from "../ship/pr-effects.js";
+import { type PrShipGateBinding, runShipPrEffects } from "../ship/pr-effects.js";
 import type { StepResult } from "../types.js";
 
 const PR_URL = "https://github.com/acme/widget/pull/42";
@@ -28,18 +28,37 @@ function step(text: string): StepResult {
 }
 
 const HEAD_SHA = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+const ORIGIN_MAIN_OID = "0123456789abcdef0123456789abcdef01234567";
+const MOVED_ORIGIN_MAIN_OID = "aaaa567890abcdef0123456789abcdef01234567";
 
-function makeExec(opts: { dirty?: boolean; branch?: string; deliverable?: string; rejectFirstPush?: boolean; headSha?: string; headShaError?: boolean } = {}): { exec: (cmd: string, cwd: string) => string; calls: string[] } {
+/** Gated-OID binding matching makeExec's defaults (ADR-0025 ship binding, #424). */
+function gate(over: Partial<PrShipGateBinding> = {}): PrShipGateBinding {
+	return { gatedHeadOid: HEAD_SHA, originMainOid: ORIGIN_MAIN_OID, ...over };
+}
+
+function makeExec(opts: { dirty?: boolean; branch?: string; deliverable?: string; rejectFirstPush?: boolean; headSha?: string; headShaError?: boolean; originMain?: "ok" | "missing" | "not-ancestor" | "moved" } = {}): {
+	exec: (cmd: string, cwd: string) => string;
+	calls: string[];
+} {
 	const calls: string[] = [];
 	let pushCount = 0;
+	let revParseHeadCount = 0;
 	const exec = (cmd: string): string => {
 		calls.push(cmd);
 		if (cmd === "git status --porcelain") return opts.dirty ? "M dirty.txt" : "";
 		if (cmd === "git branch --show-current") return opts.branch ?? "feat/tool-99";
-		if (cmd === "git merge-base main HEAD") return "abc123";
+		if (cmd === "git rev-parse --verify origin/main") {
+			if (opts.originMain === "missing") throw new Error("needed a single revision");
+			return opts.originMain === "moved" ? MOVED_ORIGIN_MAIN_OID : ORIGIN_MAIN_OID;
+		}
+		if (cmd === `git merge-base --is-ancestor ${ORIGIN_MAIN_OID} HEAD`) {
+			if (opts.originMain === "not-ancestor") throw new Error("exit 1");
+			return "";
+		}
+		if (cmd === `git merge-base ${ORIGIN_MAIN_OID} HEAD`) return "abc123";
 		if (cmd.startsWith("git reset --soft ")) return "";
 		if (cmd.startsWith("git commit ")) return "";
-		if (cmd === "git diff --name-only main...HEAD") return opts.deliverable ?? "src/app.ts";
+		if (cmd === `git diff --name-only ${ORIGIN_MAIN_OID}...HEAD`) return opts.deliverable ?? "src/app.ts";
 		if (cmd === "git push -u origin HEAD") {
 			pushCount += 1;
 			if (opts.rejectFirstPush && pushCount === 1) throw new Error("rejected");
@@ -47,7 +66,10 @@ function makeExec(opts: { dirty?: boolean; branch?: string; deliverable?: string
 		}
 		if (cmd === "git push --force-with-lease -u origin HEAD") return "";
 		if (cmd === "git rev-parse HEAD") {
-			if (opts.headShaError) throw new Error("rev-parse failed");
+			// First read is the pre-effect gated-OID match (must succeed); headShaError
+			// simulates only the post-push headShaOf read failing (its null contract).
+			revParseHeadCount += 1;
+			if (opts.headShaError && revParseHeadCount > 1) throw new Error("rev-parse failed");
 			return opts.headSha ?? HEAD_SHA;
 		}
 		throw new Error(`unexpected exec: ${cmd}`);
@@ -279,6 +301,78 @@ describe("cleanupShipBodyFile", () => {
 });
 
 describe("runShipPrEffects", () => {
+	it("checks the gated OIDs and origin/main ancestry before reset, diffs against the fetched OID, and never uses local main or the mutable ref", async () => {
+		const ex = makeExec();
+		const gh = makeGh([
+			{ match: ["pr", "list"], stdout: "[]" },
+			{ match: ["pr", "create"], stdout: `${PR_URL}\n` },
+		]);
+
+		await runShipPrEffects({ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision(), gate: gate() }, { exec: ex.exec, gh: gh.gh, log: () => {} });
+
+		assert.deepEqual(ex.calls.slice(0, 9), [
+			"git status --porcelain",
+			"git branch --show-current",
+			"git rev-parse HEAD",
+			"git rev-parse --verify origin/main",
+			`git merge-base --is-ancestor ${ORIGIN_MAIN_OID} HEAD`,
+			`git merge-base ${ORIGIN_MAIN_OID} HEAD`,
+			"git reset --soft 'abc123'",
+			ex.calls[7],
+			`git diff --name-only ${ORIGIN_MAIN_OID}...HEAD`,
+		]);
+		assert.ok(ex.calls[7]?.startsWith("git commit "));
+		assert.ok(!ex.calls.some((cmd) => cmd === "git merge-base main HEAD" || cmd === "git diff --name-only main...HEAD"));
+		// ADR-0025: after the identity check, every ancestry/diff/merge-base runs on the
+		// retained OID — the mutable ref name must not appear in any later command.
+		assert.ok(!ex.calls.some((cmd) => cmd.includes("origin/main") && cmd !== "git rev-parse --verify origin/main"));
+		assert.ok(ex.calls.includes("git push -u origin HEAD"));
+	});
+
+	it("fails before reset, commit, push, or forge effects when origin/main is missing or not an ancestor", async () => {
+		for (const originMain of ["missing", "not-ancestor"] as const) {
+			const ex = makeExec({ originMain });
+			const gh = makeGh([]);
+			await assert.rejects(
+				() => runShipPrEffects({ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision(), gate: gate() }, { exec: ex.exec, gh: gh.gh, log: () => {} }),
+				originMain === "missing" ? /origin\/main does not resolve/ : /not an ancestor/,
+			);
+			assert.ok(!ex.calls.some((cmd) => cmd.startsWith("git reset") || cmd.startsWith("git commit") || cmd.startsWith("git push")));
+			assert.equal(gh.calls.length, 0);
+		}
+	});
+
+	it("TOCTOU: refuses the ship effect when HEAD is not the gated OID, naming both OIDs (post-gate commit)", async () => {
+		const postGateSha = "beefbeefbeefbeefbeefbeefbeefbeefbeefbeef";
+		const ex = makeExec({ headSha: postGateSha });
+		const gh = makeGh([]);
+		await assert.rejects(
+			() => runShipPrEffects({ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision(), gate: gate() }, { exec: ex.exec, gh: gh.gh, log: () => {} }),
+			(err: Error) => err.message.includes(postGateSha) && err.message.includes(HEAD_SHA) && /refusing ship effect/.test(err.message),
+		);
+		assert.ok(!ex.calls.some((cmd) => cmd.startsWith("git reset") || cmd.startsWith("git commit") || cmd.startsWith("git push")));
+		assert.equal(gh.calls.length, 0);
+	});
+
+	it("TOCTOU: refuses the ship effect when origin/main moved after fetch, naming both OIDs", async () => {
+		const ex = makeExec({ originMain: "moved" });
+		const gh = makeGh([]);
+		await assert.rejects(
+			() => runShipPrEffects({ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision(), gate: gate() }, { exec: ex.exec, gh: gh.gh, log: () => {} }),
+			(err: Error) => err.message.includes(MOVED_ORIGIN_MAIN_OID) && err.message.includes(ORIGIN_MAIN_OID) && /ref moved after fetch/.test(err.message),
+		);
+		assert.ok(!ex.calls.some((cmd) => cmd.startsWith("git reset") || cmd.startsWith("git commit") || cmd.startsWith("git push")));
+		assert.equal(gh.calls.length, 0);
+	});
+
+	it("rejects a gate binding whose values are not git OIDs before running any git command", async () => {
+		for (const bad of [gate({ gatedHeadOid: "not-a-sha" }), gate({ originMainOid: "origin/main" })]) {
+			const ex = makeExec();
+			await assert.rejects(() => runShipPrEffects({ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision(), gate: bad }, { exec: ex.exec, gh: makeGh([]).gh, log: () => {} }), /not a git OID/);
+			assert.equal(ex.calls.length, 0);
+		}
+	});
+
 	it("creates a PR when none is open", async () => {
 		const ex = makeExec();
 		const gh = makeGh([
@@ -286,7 +380,7 @@ describe("runShipPrEffects", () => {
 			{ match: ["pr", "create"], stdout: `${PR_URL}\n` },
 		]);
 
-		const result = await runShipPrEffects({ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision() }, { exec: ex.exec, gh: gh.gh, log: () => {} });
+		const result = await runShipPrEffects({ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision(), gate: gate() }, { exec: ex.exec, gh: gh.gh, log: () => {} });
 
 		assert.equal(result.prUrl, PR_URL);
 		// #387: a successful PR ship carries the parsed PR number + squashed HEAD for the review enqueue.
@@ -314,7 +408,7 @@ describe("runShipPrEffects", () => {
 			{ match: ["pr", "create"], stdout: `${PR_URL}\n` },
 		]);
 
-		await runShipPrEffects({ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision() }, { exec: ex.exec, gh: gh.gh, log: () => {}, assistedByProviders: ["codex", "grok"] });
+		await runShipPrEffects({ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision(), gate: gate() }, { exec: ex.exec, gh: gh.gh, log: () => {}, assistedByProviders: ["codex", "grok"] });
 
 		const commit = ex.calls.find((call) => call.startsWith("git commit ")) ?? "";
 		assert.match(commit, /Assisted-by: Codex <noreply@openai\.com>/);
@@ -330,7 +424,7 @@ describe("runShipPrEffects", () => {
 			{ match: ["pr", "create"], stdout: "https://github.com/acme/widget/pulls\n" },
 		]);
 
-		const result = await runShipPrEffects({ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision() }, { exec: ex.exec, gh: gh.gh, log: () => {} });
+		const result = await runShipPrEffects({ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision(), gate: gate() }, { exec: ex.exec, gh: gh.gh, log: () => {} });
 
 		// Landed PR: returns the URL, no throw. The handler skips enqueue on the null number.
 		assert.equal(result.prUrl, "https://github.com/acme/widget/pulls");
@@ -345,7 +439,7 @@ describe("runShipPrEffects", () => {
 			{ match: ["pr", "create"], stdout: `${PR_URL}\n` },
 		]);
 
-		const result = await runShipPrEffects({ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision() }, { exec: ex.exec, gh: gh.gh, log: () => {} });
+		const result = await runShipPrEffects({ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision(), gate: gate() }, { exec: ex.exec, gh: gh.gh, log: () => {} });
 
 		assert.equal(result.prUrl, PR_URL);
 		assert.equal(result.prNumber, 42);
@@ -359,7 +453,7 @@ describe("runShipPrEffects", () => {
 			{ match: ["api"], stdout: "" },
 		]);
 
-		const result = await runShipPrEffects({ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision() }, { exec: ex.exec, gh: gh.gh, log: () => {} });
+		const result = await runShipPrEffects({ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision(), gate: gate() }, { exec: ex.exec, gh: gh.gh, log: () => {} });
 
 		assert.equal(result.prUrl, PR_URL);
 		assert.deepEqual(
@@ -382,7 +476,7 @@ describe("runShipPrEffects", () => {
 			{ match: ["api"], stdout: "" },
 		]);
 
-		await runShipPrEffects({ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision() }, { exec: ex.exec, gh: gh.gh, log: () => {} });
+		await runShipPrEffects({ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision(), gate: gate() }, { exec: ex.exec, gh: gh.gh, log: () => {} });
 
 		assert.ok(!gh.calls.some((args) => args[0] === "pr" && args[1] === "edit"), "must not call `gh pr edit` — it fails on repos with classic projects sunset");
 		const patch = gh.calls.find((args) => args[0] === "api");
@@ -397,7 +491,7 @@ describe("runShipPrEffects", () => {
 			{ match: ["pr", "create"], stdout: `${PR_URL}\n` },
 		]);
 
-		await runShipPrEffects({ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision() }, { exec: ex.exec, gh: gh.gh, log: () => {} });
+		await runShipPrEffects({ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision(), gate: gate() }, { exec: ex.exec, gh: gh.gh, log: () => {} });
 
 		assert.ok(ex.calls.includes("git push -u origin HEAD"));
 		assert.ok(ex.calls.includes("git push --force-with-lease -u origin HEAD"));
@@ -412,7 +506,7 @@ describe("runShipPrEffects", () => {
 			{ match: ["pr", "merge"], stdout: "" },
 		]);
 
-		await runShipPrEffects({ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision({ target: "auto-merge-pr" }) }, { exec: ex.exec, gh: gh.gh, log: () => {} });
+		await runShipPrEffects({ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision({ target: "auto-merge-pr" }), gate: gate() }, { exec: ex.exec, gh: gh.gh, log: () => {} });
 
 		assert.deepEqual(gh.calls.at(-1), ["pr", "merge", "--auto", "--squash", "42"]);
 	});
@@ -425,18 +519,18 @@ describe("runShipPrEffects", () => {
 			{ match: ["pr", "view"], stdout: JSON.stringify({ statusCheckRollup: [{ __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "FAILURE" }] }) },
 		]);
 
-		await assert.rejects(() => runShipPrEffects({ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision({ target: "auto-merge-pr" }) }, { exec: ex.exec, gh: gh.gh, log: () => {} }), /red-merge guard.*CI is red/);
+		await assert.rejects(() => runShipPrEffects({ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision({ target: "auto-merge-pr" }), gate: gate() }, { exec: ex.exec, gh: gh.gh, log: () => {} }), /red-merge guard.*CI is red/);
 		assert.ok(!gh.calls.some((args) => args[0] === "pr" && args[1] === "merge"), "must not enable auto-merge on a red PR");
 	});
 
 	it("rejects dirty worktrees, branch mismatches, empty deliverable diffs, gh failures, and auto-merge failures", async () => {
-		await assert.rejects(() => runShipPrEffects({ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision() }, { exec: makeExec({ dirty: true }).exec, gh: makeGh([]).gh, log: () => {} }), /dirty/);
-		await assert.rejects(() => runShipPrEffects({ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision() }, { exec: makeExec({ branch: "feat/other" }).exec, gh: makeGh([]).gh, log: () => {} }), /branch mismatch/);
-		await assert.rejects(() => runShipPrEffects({ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision() }, { exec: makeExec({ deliverable: "docs/plans/99.md" }).exec, gh: makeGh([]).gh, log: () => {} }), /nothing to ship/);
+		await assert.rejects(() => runShipPrEffects({ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision(), gate: gate() }, { exec: makeExec({ dirty: true }).exec, gh: makeGh([]).gh, log: () => {} }), /dirty/);
+		await assert.rejects(() => runShipPrEffects({ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision(), gate: gate() }, { exec: makeExec({ branch: "feat/other" }).exec, gh: makeGh([]).gh, log: () => {} }), /branch mismatch/);
+		await assert.rejects(() => runShipPrEffects({ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision(), gate: gate() }, { exec: makeExec({ deliverable: "docs/plans/99.md" }).exec, gh: makeGh([]).gh, log: () => {} }), /nothing to ship/);
 		await assert.rejects(
 			() =>
 				runShipPrEffects(
-					{ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision() },
+					{ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision(), gate: gate() },
 					{
 						exec: makeExec().exec,
 						gh: makeGh([{ match: ["pr", "list"], stderr: "auth failed", status: 1 }]).gh,
@@ -448,7 +542,7 @@ describe("runShipPrEffects", () => {
 		await assert.rejects(
 			() =>
 				runShipPrEffects(
-					{ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision({ target: "auto-merge-pr" }) },
+					{ cwd: "/tmp/wt", itemId: "TOOL-99", decision: decision({ target: "auto-merge-pr" }), gate: gate() },
 					{
 						exec: makeExec().exec,
 						gh: makeGh([

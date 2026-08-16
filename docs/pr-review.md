@@ -11,6 +11,37 @@ the pipeline's own work *in-context*, before ship. This gate is a fresh SDK sess
 that reads the PR diff cold — the same shape that has caught things the in-context
 review missed.
 
+## In-cycle advisory pre-flight (#424)
+
+PR-mode cycles also run this same gate core **before** ship, from detached cold seats
+over `origin/main...<artifact-sha>`, with `skillArguments: --preflight` (no forge PR
+number, no `gh pr *`, no comment or `review` status). That pass is **advisory**: one
+author revision plus one recheck is the in-cycle cap; leftover findings still open the
+PR so the required forge gate can independently recompute and enforce. Pre-flight
+output lives only in the cycle log. It must not emit or post the
+`<!-- pr-review-metrics ... -->` marker anywhere durable — including the ship PR body —
+or it would contaminate the gate dataset.
+
+Pre-flight `pr-review` / `pr-verify` spend is already in cycle cost summaries (nested
+`step()` rows plus one `review.cost` add). Do not invent a second ledger.
+
+**First-pass cohort** (reproducible from forge data; do not fabricate missing history):
+a PR whose **first** clean (`ok=true subtype=success`) `pr-review-metrics` marker is
+`gate=pass` **and** that has no `autopilot:revised` label and no
+`pelaggio-revise-invocation` comment with `disposition=accepted-*` **before** that
+marker. Record the baseline window and sample size when forge data is available.
+Formal efficacy analysis is #291.
+
+Example marker query once a one-week baseline window exists:
+
+```text
+<!-- pr-review-metrics gate=pass ok=true subtype=success ... -->
+```
+
+Join to the PR's labels/comments and keep only PRs whose first such clean marker is
+`gate=pass` with no automated-revision disposition preceding it. Leave #291 as the
+formal analysis of that cohort.
+
 ## Authoring-time adversarial loop
 
 `review.authoring.enabled: true` replaces the single `shakedown-code` session with

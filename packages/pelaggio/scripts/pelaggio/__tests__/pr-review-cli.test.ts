@@ -455,6 +455,33 @@ describe("pr-review CLI aggregation", () => {
 		);
 	});
 
+	it("defaults skill arguments to --pr <n> and accepts a --preflight override", async () => {
+		const calls: string[] = [];
+		const runStep: RunStepFn = async (_name, prompt) => {
+			calls.push(prompt);
+			return result();
+		};
+		const common = {
+			reviewDrivers: [driver("claude")],
+			verifySettings: driver("claude"),
+			policy: reviewPolicy({ maxPasses: 1, budgetCap: 40, providerDiversity: "off" }),
+			execFileSync: plainDiffExec(),
+			runStep,
+		};
+
+		const def = await runPrReviewGate({ ...common, pr: "123" });
+		assert.equal(def.gate, "pass");
+		assert.match(calls[0] ?? "", /Arguments: --pr 123/);
+		assert.doesNotMatch(calls[0] ?? "", /Arguments: --preflight/);
+
+		calls.length = 0;
+		const preflight = await runPrReviewGate({ ...common, pr: "preflight", skillArguments: "--preflight" });
+		assert.equal(preflight.gate, "pass");
+		assert.equal(preflight.adjudicationSource, undefined, "non-numeric pr must not emit adjudication evidence");
+		assert.match(calls[0] ?? "", /Arguments: --preflight/);
+		assert.doesNotMatch(calls[0] ?? "", /Arguments: --pr /);
+	});
+
 	it("refutes blockers in a separate fresh verifier call and preserves original findings", async () => {
 		const out = await runCli({
 			results: [

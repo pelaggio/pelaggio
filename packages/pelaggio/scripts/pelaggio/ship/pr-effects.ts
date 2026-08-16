@@ -12,6 +12,22 @@ export interface ShipPrEffectsDeps {
 	assistedByProviders?: import("../types.js").ProviderName[];
 }
 
+/**
+ * OIDs the harness observed when the deterministic gates passed. ADR-0025 — verification
+ * bound to the candidate SHA, never a mutable ref — applied to the PR-ship path: the
+ * writable ship agent runs AFTER typecheck + pre-flight review, so "the tree is clean"
+ * proves nothing about WHAT is clean. `runShipPrEffects` refuses to ship unless the
+ * worktree still matches both OIDs exactly. Fail closed; no auto-regate.
+ */
+export interface PrShipGateBinding {
+	/** Worktree HEAD OID snapshotted by the pipeline when the last gate + pre-flight review passed. */
+	gatedHeadOid: string;
+	/** `origin/main` OID retained at fetch time by `preparePrShipFreshness`. */
+	originMainOid: string;
+}
+
+const OID_RE = /^[0-9a-f]{7,40}$/i;
+
 export interface ShipPrEffectsResult {
 	prUrl: string;
 	/** Forge PR number, or null when `pr create`'s URL did not parse. Carried as-is for the
@@ -36,14 +52,19 @@ export async function runShipPrEffects(
 		cwd: string;
 		itemId: string;
 		decision: ShipDecisionEffect;
+		gate: PrShipGateBinding;
 	},
 	deps: ShipPrEffectsDeps,
 ): Promise<ShipPrEffectsResult> {
 	const exec = deps.exec ?? defaultExec;
 	const gh = deps.gh ?? defaultGhRun;
-	const { cwd, decision } = ctx;
+	const { cwd, decision, gate } = ctx;
 	if (decision.target === "direct-push") throw new Error("ship.ShipDecision is not supported for direct-push");
 	if (decision.itemId !== ctx.itemId) throw new Error(`ship decision itemId ${decision.itemId} does not match ${ctx.itemId}`);
+	// Validated before shell interpolation below; the binding is harness-produced, so a
+	// non-OID here is a wiring bug, not agent input.
+	if (!OID_RE.test(gate.gatedHeadOid)) throw new Error(`gate binding gatedHeadOid is not a git OID: ${gate.gatedHeadOid}`);
+	if (!OID_RE.test(gate.originMainOid)) throw new Error(`gate binding originMainOid is not a git OID: ${gate.originMainOid}`);
 
 	const status = exec("git status --porcelain", cwd);
 	if (status.trim() !== "") throw new Error("refusing PR ship with dirty worktree");
@@ -51,15 +72,45 @@ export async function runShipPrEffects(
 	const branch = exec("git branch --show-current", cwd).trim();
 	if (branch !== decision.headBranch) throw new Error(`head branch mismatch: current ${branch || "(detached)"} does not match decision ${decision.headBranch}`);
 
-	const mergeBase = exec("git merge-base main HEAD", cwd).trim();
-	if (!mergeBase) throw new Error("cannot determine merge-base with main");
+	// ADR-0025 (verification bound to the candidate SHA) applied to the PR-ship path:
+	// the SHA that passed typecheck and pre-flight review must be the exact SHA this
+	// effect ships. The writable ship agent (Edit + Bash(git:*)) ran between the gates
+	// and this dispatch, so require an exact pre-effect match against the gated HEAD
+	// OID — a clean post-gate commit is NOT gated. Fail closed, no auto-regate.
+	const head = exec("git rev-parse HEAD", cwd).trim();
+	if (head !== gate.gatedHeadOid) {
+		throw new Error(`refusing ship effect: HEAD ${head} does not match gated OID ${gate.gatedHeadOid} — post-gate commits are ungated`);
+	}
+
+	// Freshness is owned by the pipeline (author can repair a conflict). The effect
+	// handler re-verifies the remote base against the OID retained at fetch time —
+	// never the mutable ref, which an intervening agent step can move — then squashes
+	// against that OID; resetting to local `main` after merging `origin/main` would
+	// fold upstream-only commits into the feature squash.
+	let originMainNow: string;
+	try {
+		originMainNow = exec("git rev-parse --verify origin/main", cwd).trim();
+	} catch (e) {
+		throw new Error(`origin/main does not resolve: ${short(e)}`);
+	}
+	if (originMainNow !== gate.originMainOid) {
+		throw new Error(`refusing ship effect: origin/main ${originMainNow} does not match fetched OID ${gate.originMainOid} — ref moved after fetch`);
+	}
+	try {
+		exec(`git merge-base --is-ancestor ${gate.originMainOid} HEAD`, cwd);
+	} catch {
+		throw new Error(`fetched origin/main OID ${gate.originMainOid} is not an ancestor of HEAD — branch is not fresh`);
+	}
+
+	const mergeBase = exec(`git merge-base ${gate.originMainOid} HEAD`, cwd).trim();
+	if (!mergeBase) throw new Error("cannot determine merge-base with the fetched origin/main OID");
 	exec(`git reset --soft ${shellQuote(mergeBase)}`, cwd);
 	// Always-on Assisted-by trailers (#189): stamp realized cycle providers from the
 	// cycle log when present; withAssistedBy falls back to the default identity.
 	const assistedBody = withAssistedBy(decision.prBody, [...collectLoggedAssistedByIdentities(ctx.itemId), ...identitiesForProviders(deps.assistedByProviders ?? [])]);
 	exec(`git commit -m ${shellQuote(decision.prTitle)} -m ${shellQuote(assistedBody)}`, cwd);
 
-	const changed = exec("git diff --name-only main...HEAD", cwd)
+	const changed = exec(`git diff --name-only ${gate.originMainOid}...HEAD`, cwd)
 		.split("\n")
 		.map((line) => line.trim())
 		.filter((line) => line !== "" && !line.startsWith("docs/plans/") && !line.startsWith("docs/decision-log/"));

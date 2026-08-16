@@ -8,7 +8,8 @@ import { REVIEW_CONFIG, WORKTREE_PREFIX } from "../config.js";
 import { appendReviewEscalation, resolveDecision, reviewEscalationId } from "../decisions.js";
 import { dispatchStepEffects, EffectsManifestError, writeEffectsManifest } from "../effects.js";
 import { FifoPolicy } from "../flow-policy.js";
-import { type RunStepFn, runOrchestrator, runPipeline } from "../pipeline.js";
+import { defaultTypecheckRatchet, type RunStepFn, runOrchestrator, runPipeline } from "../pipeline.js";
+import type { PrReviewGateResult, RunPrReviewGateOptions } from "../pr-review-cli.js";
 import { shipBodyFile } from "../ship/decision.js";
 import type { ShipBookkeepingResult } from "../ship/index.js";
 import { getShipTarget } from "../ship/index.js";
@@ -17,6 +18,7 @@ import {
 	allCommitMessages,
 	createMockRunPipeline,
 	createMockRunStep,
+	defaultPrPreflightStubs,
 	makeGitDirWithoutMain,
 	makeLiveStatus,
 	makeMockRoadmap,
@@ -105,6 +107,7 @@ describe("runPipeline — pick divergence gate (#332)", () => {
 		);
 		const result = await runPipeline({ itemId: "286", cycle: 1, verbose: false, shipTarget: getShipTarget("pull-request"), dryRun: false, liveStatus: makeLiveStatus() }, parkSignal, baseFlags, {
 			runStep,
+			...defaultPrPreflightStubs(),
 			mainRepo,
 			listWorktrees: () => [mainRepo],
 			appendLog: () => {},
@@ -125,6 +128,7 @@ describe("runPipeline — pick divergence gate (#332)", () => {
 		const { runStep, calls } = createMockRunStep({ pick: { ok: true, text: "Requested issue 286.\nClaimed a ready item.\npick-result: claimed" }, plan: { ok: true } }, parkSignal);
 		const result = await runPipeline({ itemId: "286", cycle: 1, verbose: false, shipTarget: getShipTarget("pull-request"), dryRun: false, liveStatus: makeLiveStatus() }, parkSignal, baseFlags, {
 			runStep,
+			...defaultPrPreflightStubs(),
 			mainRepo,
 			listWorktrees: () => [mainRepo],
 			appendLog: () => {},
@@ -144,6 +148,7 @@ describe("runPipeline — pick divergence gate (#332)", () => {
 		const { runStep } = createMockRunStep({ pick: { ok: true, text: "pick-item: 286\npick-result: claimed" }, plan: { ok: true } }, parkSignal);
 		const result = await runPipeline({ itemId: "286", cycle: 1, verbose: false, shipTarget: getShipTarget("pull-request"), dryRun: false, liveStatus: makeLiveStatus() }, parkSignal, baseFlags, {
 			runStep,
+			...defaultPrPreflightStubs(),
 			mainRepo,
 			listWorktrees: () => [mainRepo],
 			appendLog: () => {},
@@ -1125,6 +1130,7 @@ describe("runPipeline — worktree confinement audit", () => {
 
 		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
 			runStep,
+			...defaultPrPreflightStubs(),
 			mainRepo,
 			listWorktrees,
 			appendLog: (e) => {
@@ -1160,6 +1166,7 @@ describe("runPipeline — worktree confinement audit", () => {
 
 		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
 			runStep,
+			...defaultPrPreflightStubs(),
 			mainRepo,
 			listWorktrees,
 			allowDirtyMain: true,
@@ -1179,6 +1186,7 @@ describe("runPipeline — worktree confinement audit", () => {
 		const { runStep } = createMockRunStep({ implement: { ok: false, subtype: "error_refusal", sideEffect: () => writeFileSync(join(mainRepo, "operator.txt"), "existing") } }, parkSignal);
 		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
 			runStep,
+			...defaultPrPreflightStubs(),
 			mainRepo,
 			listWorktrees,
 			allowDirtyMain: true,
@@ -1196,6 +1204,7 @@ describe("runPipeline — worktree confinement audit", () => {
 		const { runStep } = createMockRunStep({ implement: { ok: true, sideEffect: () => writeFileSync(join(sibling, "foreign.txt"), "x") } }, parkSignal);
 		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
 			runStep,
+			...defaultPrPreflightStubs(),
 			mainRepo,
 			listWorktrees: () => [mainRepo, worktree, sibling],
 			allowDirtyMain: true,
@@ -1212,6 +1221,7 @@ describe("runPipeline — worktree confinement audit", () => {
 		const logs: Array<Record<string, unknown>> = [];
 		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
 			runStep,
+			...defaultPrPreflightStubs(),
 			mainRepo,
 			listWorktrees: () => {
 				throw new Error("inventory unavailable");
@@ -1269,6 +1279,7 @@ describe("runPipeline — worktree confinement audit", () => {
 
 		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
 			runStep,
+			...defaultPrPreflightStubs(),
 			mainRepo,
 			listWorktrees,
 			allowDirtyMain: true,
@@ -1309,6 +1320,7 @@ describe("runPipeline — worktree confinement audit", () => {
 
 		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
 			runStep,
+			...defaultPrPreflightStubs(),
 			mainRepo,
 			listWorktrees: () => [mainRepo, worktree],
 			appendLog: (e) => {
@@ -1340,6 +1352,7 @@ describe("runPipeline — worktree confinement audit", () => {
 
 		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
 			runStep,
+			...defaultPrPreflightStubs(),
 			mainRepo,
 			listWorktrees,
 			appendLog: (e) => {
@@ -1378,6 +1391,7 @@ describe("runPipeline — worktree confinement audit", () => {
 
 		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
 			runStep,
+			...defaultPrPreflightStubs(),
 			mainRepo,
 			listWorktrees: () => [mainRepo, worktree, sibling],
 			appendLog: () => {},
@@ -1422,6 +1436,7 @@ describe("runPipeline — worktree confinement audit", () => {
 
 		const deps = {
 			runStep,
+			...defaultPrPreflightStubs(),
 			mainRepo: repo,
 			listWorktrees,
 			appendLog: () => {},
@@ -1460,6 +1475,7 @@ describe("runPipeline — worktree confinement audit", () => {
 
 		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request"), activeWorktrees }, parkSignal, baseFlags, {
 			runStep,
+			...defaultPrPreflightStubs(),
 			mainRepo,
 			listWorktrees: () => [mainRepo, worktree],
 			appendLog: () => {},
@@ -1492,6 +1508,7 @@ describe("runPipeline — worktree confinement audit", () => {
 
 		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request"), activeWorktrees }, parkSignal, baseFlags, {
 			runStep,
+			...defaultPrPreflightStubs(),
 			mainRepo,
 			listWorktrees: () => [mainRepo, worktree, inactive],
 			appendLog: () => {},
@@ -1517,6 +1534,7 @@ describe("runPipeline — worktree confinement audit", () => {
 
 		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
 			runStep,
+			...defaultPrPreflightStubs(),
 			mainRepo,
 			listWorktrees,
 			appendLog: () => {},
@@ -1548,6 +1566,7 @@ describe("runPipeline — worktree confinement audit", () => {
 
 		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
 			runStep,
+			...defaultPrPreflightStubs(),
 			mainRepo,
 			listWorktrees,
 			appendLog: (e) => {
@@ -1597,6 +1616,7 @@ describe("runPipeline — worktree confinement audit", () => {
 		let calls = 0;
 		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
 			runStep,
+			...defaultPrPreflightStubs(),
 			mainRepo,
 			listWorktrees,
 			appendLog: (e) => {
@@ -1637,6 +1657,7 @@ describe("runPipeline — worktree confinement audit", () => {
 		const t0 = Date.now();
 		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
 			runStep,
+			...defaultPrPreflightStubs(),
 			mainRepo,
 			listWorktrees,
 			appendLog: (e) => {
@@ -1682,6 +1703,7 @@ describe("runPipeline — worktree confinement audit", () => {
 		const peerWriteAt = setTimeout(() => writeFileSync(join(peer, "during.txt"), "x"), 10);
 		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
 			runStep,
+			...defaultPrPreflightStubs(),
 			mainRepo,
 			listWorktrees: () => [mainRepo, worktree, peer],
 			appendLog: () => {},
@@ -1719,6 +1741,7 @@ describe("runPipeline — worktree confinement audit", () => {
 
 		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
 			runStep,
+			...defaultPrPreflightStubs(),
 			mainRepo,
 			listWorktrees,
 			appendLog: (e) => {
@@ -1936,6 +1959,7 @@ describe("runPipeline — cross-process session records (#369)", () => {
 
 		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
 			runStep,
+			...defaultPrPreflightStubs(),
 			mainRepo,
 			listWorktrees: () => [mainRepo, worktree, peer],
 			appendLog: () => {},
@@ -1990,6 +2014,7 @@ describe("runPipeline — cross-process session records (#369)", () => {
 			};
 			const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
 				runStep,
+				...defaultPrPreflightStubs(),
 				mainRepo,
 				listWorktrees: () => [mainRepo, worktree, peer],
 				appendLog: () => {},
@@ -2029,6 +2054,7 @@ describe("runPipeline — cross-process session records (#369)", () => {
 
 		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
 			runStep,
+			...defaultPrPreflightStubs(),
 			mainRepo,
 			listWorktrees: () => [mainRepo, worktree, peer],
 			appendLog: () => {},
@@ -2055,6 +2081,7 @@ describe("runPipeline — cross-process session records (#369)", () => {
 
 		await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
 			runStep,
+			...defaultPrPreflightStubs(),
 			mainRepo,
 			listWorktrees: () => [mainRepo, worktree],
 			appendLog: () => {},
@@ -2111,6 +2138,7 @@ describe("runPipeline — cross-process session records (#369)", () => {
 
 		await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
 			runStep,
+			...defaultPrPreflightStubs(),
 			mainRepo,
 			listWorktrees: () => [mainRepo, worktree, peer, inactive],
 			appendLog: (e) => {
@@ -2146,6 +2174,7 @@ describe("runPipeline — cross-process session records (#369)", () => {
 
 		await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("pull-request") }, parkSignal, baseFlags, {
 			runStep,
+			...defaultPrPreflightStubs(),
 			mainRepo,
 			listWorktrees: () => [mainRepo, worktree],
 			appendLog: () => {},
@@ -3943,5 +3972,429 @@ describe("execution receipts (#188)", () => {
 		assert.equal("challengeDigest" in legacy.provenance, false);
 		assert.equal("executionReceipts" in legacy.provenance, false);
 		assert.equal(legacy.provenance.runId, "cycle-1");
+	});
+});
+
+function makeDeliverableRepo(): string {
+	const dir = makeTempGitRepo();
+	writeFileSync(join(dir, "impl.txt"), "x\n");
+	execSync("git add impl.txt && git commit -q -m impl", { cwd: dir });
+	return dir;
+}
+
+function passGate(over: Partial<PrReviewGateResult> = {}): PrReviewGateResult {
+	return {
+		gate: "pass",
+		body: "preflight pass",
+		cost: 0,
+		costEstimated: false,
+		turns: 0,
+		ok: true,
+		subtype: "success",
+		agreement: "consensus-pass",
+		survivorCount: 0,
+		...over,
+	};
+}
+
+function survivorBlock(over: Partial<PrReviewGateResult> = {}): PrReviewGateResult {
+	return {
+		gate: "block",
+		body: "must-fix: leaked token",
+		cost: 0.4,
+		costEstimated: false,
+		turns: 2,
+		ok: true,
+		subtype: "success",
+		agreement: "consensus-block",
+		survivorCount: 1,
+		...over,
+	};
+}
+
+function shipFrom(worktree: string): PipelineOpts {
+	return { ...baseOpts(worktree), startFrom: "ship", shipTarget: getShipTarget("pull-request") };
+}
+
+describe("runPipeline — PR pre-flight and freshness (#424)", () => {
+	it("up-to-date path runs one cold gate before ship with origin/main pin and no comment callback", async () => {
+		const worktree = makeDeliverableRepo();
+		const parkSignal = makeParkSignal();
+		const sha = execSync("git rev-parse HEAD", { cwd: worktree, encoding: "utf-8" }).trim();
+		const seen: RunPrReviewGateOptions[] = [];
+		const { runStep, calls } = createMockRunStep({ ship: prShipDecision() }, parkSignal);
+		const result = await runPipeline(shipFrom(worktree), parkSignal, baseFlags, {
+			runStep,
+			...defaultPrPreflightStubs(),
+			runPrReviewGate: async (opts) => {
+				seen.push(opts);
+				return passGate({ cost: 1.25 });
+			},
+			listWorktrees: () => [],
+			appendLog: () => {},
+			dispatchStepEffects: async () => ({ appendText: "https://example.test/pull/1" }),
+		});
+		assert.equal(result.completed, true);
+		assert.equal(seen.length, 1);
+		assert.equal(seen[0]?.skillArguments, "--preflight");
+		assert.equal(seen[0]?.diffBaseRef, "origin/main");
+		assert.equal(seen[0]?.diffHeadRef, sha);
+		assert.equal(seen[0]?.reviewedSha, sha);
+		assert.equal(seen[0]?.itemId, "TOOL-99");
+		assert.equal(seen[0]?.pr, "preflight");
+		assert.equal(seen[0]?.upsertComment, undefined);
+		assert.ok(seen[0]?.policy);
+		assert.ok((seen[0]?.reviewDrivers?.length ?? 0) >= 1);
+		assert.ok(seen[0]?.verifySettings);
+		assert.equal(calls.filter((c) => c.step === "ship").length, 1);
+		assert.ok(Math.abs(result.cost - 1.26) < 1e-9, `expected ship 0.01 + review 1.25, got ${result.cost}`);
+	});
+
+	it("adds review.cost once while nested discovery/verify steps log separately", async () => {
+		const worktree = makeDeliverableRepo();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const seats: string[] = [];
+		const cleaned: string[] = [];
+		const { runStep } = createMockRunStep({ ship: prShipDecision() }, parkSignal);
+		const result = await runPipeline(shipFrom(worktree), parkSignal, baseFlags, {
+			runStep,
+			...defaultPrPreflightStubs(),
+			prepareAuthoringReviewSeat: (_main, key) => {
+				seats.push(key.seatId);
+				return join(tmpdir(), `preflight-seat-${key.seatId}`);
+			},
+			cleanupAuthoringReviewSeatsForSha: (_main, sha) => {
+				cleaned.push(sha);
+			},
+			runPrReviewGate: async (opts) => {
+				assert.ok(opts.runStep);
+				// #424 fix: the gate's diff source is the detached data-only checkout, never the live claim worktree.
+				assert.equal(opts.diffCwd, join(tmpdir(), "preflight-seat-preflight-diff"));
+				assert.notEqual(opts.diffCwd, worktree);
+				await opts.runStep("pr-review", "d1", { cwd: opts.cwd ?? "", profile: "standard", trace: false, parkSignal: opts.parkSignal ?? parkSignal, executionOverride: { provider: "claude" } }, () => {});
+				await opts.runStep("pr-review", "d2", { cwd: opts.cwd ?? "", profile: "standard", trace: false, parkSignal: opts.parkSignal ?? parkSignal, executionOverride: { provider: "codex" } }, () => {});
+				await opts.runStep("pr-verify", "v", { cwd: opts.cwd ?? "", profile: "standard", trace: false, parkSignal: opts.parkSignal ?? parkSignal, executionOverride: { provider: "grok" } }, () => {});
+				return passGate({ cost: 0.9 });
+			},
+			listWorktrees: () => [],
+			appendLog: (entry) => {
+				logs.push(entry);
+			},
+			dispatchStepEffects: async () => ({ appendText: "https://example.test/pull/1" }),
+		});
+		assert.equal(result.completed, true);
+		assert.ok(Math.abs(result.cost - 0.91) < 1e-9, `review.cost once + ship; got ${result.cost}`);
+		const steps = (logs[0]?.steps as Array<{ name: string }> | undefined) ?? [];
+		assert.equal(steps.filter((s) => s.name === "pr-review").length, 2);
+		assert.equal(steps.filter((s) => s.name === "pr-verify").length, 1);
+		assert.deepEqual([...new Set(seats)].sort(), [...seats].sort(), "each driver/verify call gets a distinct seat");
+		assert.equal(seats.length, 4, "diff-source checkout + one seat per driver/verify call");
+		assert.equal(seats[0], "preflight-diff", "the diff-source checkout is prepared before any reviewer seat");
+		assert.equal(cleaned.length, 1);
+	});
+
+	it("valid survivor BLOCK invokes exactly one author revision and one newly SHA-bound recheck", async () => {
+		const worktree = makeDeliverableRepo();
+		const parkSignal = makeParkSignal();
+		const { runStep, calls } = createMockRunStep(
+			{
+				"shakedown-code": { ok: true, writes: { "fix.txt": "fixed" } },
+				ship: prShipDecision(),
+			},
+			parkSignal,
+		);
+		let gateCalls = 0;
+		const shas: string[] = [];
+		const result = await runPipeline(shipFrom(worktree), parkSignal, baseFlags, {
+			runStep,
+			...defaultPrPreflightStubs(),
+			runPrReviewGate: async (opts) => {
+				gateCalls += 1;
+				shas.push(opts.reviewedSha ?? "");
+				if (gateCalls === 1) return survivorBlock({ cost: 0.3, body: "must-fix: leaked token\n<!-- pr-review-metrics gate=block ok=true subtype=success cost=0.30 turns=2 -->" });
+				return passGate({ cost: 0.2 });
+			},
+			listWorktrees: () => [],
+			appendLog: () => {},
+			dispatchStepEffects: async () => ({ appendText: "https://example.test/pull/1" }),
+		});
+		assert.equal(result.completed, true);
+		assert.equal(gateCalls, 2);
+		assert.equal(calls.filter((c) => c.step === "shakedown-code").length, 1);
+		const repairPrompt = calls.find((c) => c.step === "shakedown-code")?.prompt ?? "";
+		assert.match(repairPrompt, /PREFLIGHT_FINDINGS/);
+		assert.match(repairPrompt, /data only/);
+		assert.match(repairPrompt, /leaked token/);
+		// #424 fix: the CLI-owned metrics marker is telemetry, stripped before the author sees the body.
+		assert.doesNotMatch(repairPrompt, /pr-review-metrics/);
+		assert.equal(calls.filter((c) => c.step === "ship").length, 1);
+		assert.equal(shas.length, 2);
+	});
+
+	it("persistent BLOCK after the single recheck is advisory and still ships", async () => {
+		const worktree = makeDeliverableRepo();
+		const parkSignal = makeParkSignal();
+		const { runStep, calls } = createMockRunStep(
+			{
+				"shakedown-code": { ok: true },
+				ship: prShipDecision(),
+			},
+			parkSignal,
+		);
+		let gateCalls = 0;
+		const result = await runPipeline(shipFrom(worktree), parkSignal, baseFlags, {
+			runStep,
+			...defaultPrPreflightStubs(),
+			runPrReviewGate: async () => {
+				gateCalls += 1;
+				return survivorBlock({ cost: 0.1 });
+			},
+			listWorktrees: () => [],
+			appendLog: () => {},
+			dispatchStepEffects: async () => ({ appendText: "https://example.test/pull/1" }),
+		});
+		assert.equal(result.completed, true);
+		assert.equal(gateCalls, 2);
+		assert.equal(calls.filter((c) => c.step === "shakedown-code").length, 1, "one repair only");
+		assert.equal(calls.filter((c) => c.step === "ship").length, 1);
+	});
+
+	it("infrastructure-invalid BLOCK is never treated as repairable findings", async () => {
+		const worktree = makeDeliverableRepo();
+		const parkSignal = makeParkSignal();
+		const { runStep, calls } = createMockRunStep({ ship: prShipDecision() }, parkSignal);
+		const result = await runPipeline(shipFrom(worktree), parkSignal, baseFlags, {
+			runStep,
+			...defaultPrPreflightStubs(),
+			runPrReviewGate: async () =>
+				passGate({
+					gate: "block",
+					ok: false,
+					agreement: "invalid",
+					subtype: "error_diff",
+					survivorCount: 0,
+					body: "infra",
+					cost: 0,
+				}),
+			listWorktrees: () => [],
+			appendLog: () => {},
+			dispatchStepEffects: async () => ({ appendText: "https://example.test/pull/1" }),
+		});
+		assert.equal(result.completed, true);
+		assert.equal(calls.filter((c) => c.step === "shakedown-code").length, 0);
+		assert.equal(calls.filter((c) => c.step === "ship").length, 1);
+	});
+
+	it("pre-flight park checkpoints and returns parked before ship", async () => {
+		const worktree = makeDeliverableRepo();
+		const parkSignal = makeParkSignal();
+		const { runStep, calls } = createMockRunStep({ ship: prShipDecision() }, parkSignal);
+		const result = await runPipeline(shipFrom(worktree), parkSignal, baseFlags, {
+			runStep,
+			...defaultPrPreflightStubs(),
+			runPrReviewGate: async (opts) => {
+				const signal = opts.parkSignal ?? parkSignal;
+				signal.parked = true;
+				signal.limitType = "rate_limit";
+				signal.resetsAt = Date.now() + 60_000;
+				return { gate: "park", body: "", cost: 0.2, costEstimated: false, turns: 0, ok: false, subtype: "error_rate_limit", park: { resetsAt: signal.resetsAt, limitType: "rate_limit" } };
+			},
+			listWorktrees: () => [],
+			appendLog: () => {},
+		});
+		assert.equal(result.completed, false);
+		assert.equal(result.error, "parked");
+		assert.equal(calls.filter((c) => c.step === "ship").length, 0);
+	});
+
+	it("seat prepare failure is diagnosed without reviewing the mutable artifact checkout and still cleans the SHA", async () => {
+		const worktree = makeDeliverableRepo();
+		const parkSignal = makeParkSignal();
+		const cleaned: string[] = [];
+		let gateCalls = 0;
+		const { runStep, calls } = createMockRunStep({ ship: prShipDecision() }, parkSignal);
+		const result = await runPipeline(shipFrom(worktree), parkSignal, baseFlags, {
+			runStep,
+			...defaultPrPreflightStubs(),
+			prepareAuthoringReviewSeat: () => {
+				throw new Error("seat boom");
+			},
+			cleanupAuthoringReviewSeatsForSha: (_main, sha) => {
+				cleaned.push(sha);
+			},
+			runPrReviewGate: async () => {
+				gateCalls += 1;
+				return passGate();
+			},
+			listWorktrees: () => [],
+			appendLog: () => {},
+			dispatchStepEffects: async () => ({ appendText: "https://example.test/pull/1" }),
+		});
+		// #424 fix: the diff-source checkout is prepared BEFORE the gate; its failure is an
+		// advisory infra BLOCK that never falls back to reviewing the live claim worktree.
+		assert.equal(result.completed, true, "advisory: the required PR gate still reviews the PR");
+		assert.equal(gateCalls, 0, "no gate run without a detached diff source");
+		assert.equal(calls.filter((c) => c.step === "pr-review").length, 0, "must not run review against the artifact checkout");
+		assert.equal(calls.filter((c) => c.step === "ship").length, 1);
+		assert.equal(cleaned.length, 1);
+	});
+
+	it("pre-flight reviewer seats carry no claim-worktree write authorization (detached, read-only)", async () => {
+		const worktree = makeDeliverableRepo();
+		const parkSignal = makeParkSignal();
+		const denials: Array<{ ownWorktree?: string; registeredWorktrees: readonly string[] } | undefined> = [];
+		const { runStep } = createMockRunStep({ ship: prShipDecision() }, parkSignal);
+		const wrapped: RunStepFn = async (name, prompt, opts, emit) => {
+			if (name === "pr-review") denials.push(opts.foreignRootDenial);
+			return runStep(name, prompt, opts, emit);
+		};
+		const result = await runPipeline(shipFrom(worktree), parkSignal, baseFlags, {
+			runStep: wrapped,
+			...defaultPrPreflightStubs(),
+			runPrReviewGate: async (opts) => {
+				await opts.runStep!("pr-review", "inspect", { cwd: opts.cwd ?? "", profile: "standard", trace: false, parkSignal: opts.parkSignal ?? parkSignal, executionOverride: { provider: "claude" } }, () => {});
+				return passGate();
+			},
+			listWorktrees: () => [worktree],
+			appendLog: () => {},
+			dispatchStepEffects: async () => ({ appendText: "https://example.test/pull/1" }),
+		});
+		assert.equal(result.completed, true, `expected completed; error=${result.error}`);
+		assert.equal(denials.length, 1);
+		assert.ok(denials[0], "seat steps still install foreign-root denial");
+		// #424 fix: the live claim worktree is a DENIED foreign root for reviewer seats, not an
+		// ownWorktree write grant (only its registration keeps it in the denied set).
+		assert.equal(denials[0]?.ownWorktree, undefined);
+		assert.ok(denials[0]?.registeredWorktrees.includes(worktree));
+	});
+
+	it("a clean commit into the live claim worktree during pre-flight fails the cycle before ship", async () => {
+		const worktree = makeDeliverableRepo();
+		const parkSignal = makeParkSignal();
+		const { runStep, calls } = createMockRunStep({ ship: prShipDecision() }, parkSignal);
+		const result = await runPipeline(shipFrom(worktree), parkSignal, baseFlags, {
+			runStep,
+			...defaultPrPreflightStubs(),
+			runPrReviewGate: async () => {
+				// Porcelain-invisible mutation: a clean commit leaves `git status` empty, so only
+				// the pre/post HEAD compare can catch it.
+				execSync("git commit -q --allow-empty -m sneaky-seat-commit", { cwd: worktree });
+				return passGate();
+			},
+			listWorktrees: () => [],
+			appendLog: () => {},
+			dispatchStepEffects: async () => ({ appendText: "https://example.test/pull/1" }),
+		});
+		assert.equal(result.completed, false);
+		assert.match(result.error ?? "", /HEAD moved during pre-flight/);
+		assert.equal(calls.filter((c) => c.step === "ship").length, 0, "a mutated tree must never ship");
+	});
+
+	it("a type-breaking pre-flight author revision fails the deterministic backstop and never opens the PR", async () => {
+		const worktree = makeDeliverableRepo();
+		const parkSignal = makeParkSignal();
+		let typecheckCalls = 0;
+		let gateCalls = 0;
+		const { runStep, calls } = createMockRunStep({ "shakedown-code": { ok: true, writes: { "fix.txt": "broken types" } }, ship: prShipDecision() }, parkSignal);
+		const result = await runPipeline(shipFrom(worktree), parkSignal, baseFlags, {
+			runStep,
+			...defaultPrPreflightStubs(),
+			runTypecheckRatchet: async () => {
+				typecheckCalls += 1;
+				// Call 1: the up-to-date freshness gate (pre-revision head) — green.
+				// Call 2: the post-revision backstop — the revision broke the types.
+				return typecheckCalls === 1 ? { ok: true } : { ok: false, detail: "TS2551" };
+			},
+			runPrReviewGate: async () => {
+				gateCalls += 1;
+				return survivorBlock();
+			},
+			listWorktrees: () => [],
+			appendLog: () => {},
+		});
+		assert.equal(result.completed, false);
+		assert.match(result.error ?? "", /typecheck:ratchet failed after pre-flight revision/);
+		assert.match(result.error ?? "", /TS2551/);
+		assert.equal(typecheckCalls, 2);
+		assert.equal(gateCalls, 1, "the recheck's review budget is never spent on a type-broken tree");
+		assert.equal(calls.filter((c) => c.step === "shakedown-code").length, 1);
+		assert.equal(calls.filter((c) => c.step === "ship").length, 0);
+	});
+
+	it("soft-skips when the target repo has no typecheck:ratchet script, keeps a present script as a hard gate (#424 review)", async () => {
+		// Absent script → skip with detail (consumer repos don't ship ci/typecheck-ratchet.ts).
+		const noScript = mkdtempSync(join(tmpdir(), "pelaggio-ratchet-"));
+		writeFileSync(join(noScript, "package.json"), JSON.stringify({ name: "consumer", scripts: { test: "true" } }));
+		const skippedAbsent = await defaultTypecheckRatchet(noScript);
+		assert.equal(skippedAbsent.ok, true);
+		assert.equal(skippedAbsent.skipped, true);
+		assert.match(skippedAbsent.detail ?? "", /no typecheck:ratchet script/);
+
+		// Missing or unparseable package.json → also a soft skip, with the reason in the detail.
+		const noManifest = await defaultTypecheckRatchet(mkdtempSync(join(tmpdir(), "pelaggio-ratchet-")));
+		assert.equal(noManifest.ok, true);
+		assert.equal(noManifest.skipped, true);
+		const badManifestDir = mkdtempSync(join(tmpdir(), "pelaggio-ratchet-"));
+		writeFileSync(join(badManifestDir, "package.json"), "{nope");
+		const badManifest = await defaultTypecheckRatchet(badManifestDir);
+		assert.equal(badManifest.ok, true);
+		assert.equal(badManifest.skipped, true);
+
+		// Present script → its failure stays a hard gate (never `skipped`), detail captured.
+		const gated = mkdtempSync(join(tmpdir(), "pelaggio-ratchet-"));
+		writeFileSync(join(gated, "package.json"), JSON.stringify({ name: "x", scripts: { "typecheck:ratchet": "node -e \"console.error('TSFAIL');process.exit(3)\"" } }));
+		const red = await defaultTypecheckRatchet(gated);
+		assert.equal(red.ok, false);
+		assert.equal(red.skipped, undefined);
+		assert.match(red.detail ?? "", /TSFAIL/);
+
+		writeFileSync(join(gated, "package.json"), JSON.stringify({ name: "x", scripts: { "typecheck:ratchet": 'node -e "process.exit(0)"' } }));
+		const green = await defaultTypecheckRatchet(gated);
+		assert.equal(green.ok, true);
+		assert.equal(green.skipped, undefined);
+
+		// #424 gate review: a GREEN ratchet with output beyond node's 1 MiB default maxBuffer
+		// must not crash the gate — oversized output is bounded, not fatal.
+		writeFileSync(join(gated, "package.json"), JSON.stringify({ name: "x", scripts: { "typecheck:ratchet": "node -e \"process.stdout.write('x'.repeat(2 * 1024 * 1024))\"" } }));
+		const chatty = await defaultTypecheckRatchet(gated);
+		assert.equal(chatty.ok, true, `oversized green output must pass; detail=${chatty.detail}`);
+
+		// #424 gate review: pnpm missing from PATH is an environment gap → soft skip, like a
+		// missing script — never a red gate.
+		const emptyPath = mkdtempSync(join(tmpdir(), "pelaggio-ratchet-empty-path-"));
+		const savedPath = process.env.PATH;
+		process.env.PATH = emptyPath;
+		try {
+			const noPnpm = await defaultTypecheckRatchet(gated);
+			assert.equal(noPnpm.ok, true);
+			assert.equal(noPnpm.skipped, true);
+			assert.match(noPnpm.detail ?? "", /pnpm not found/);
+		} finally {
+			process.env.PATH = savedPath;
+		}
+	});
+
+	it("cleans prepared seats when the gate throws", async () => {
+		const worktree = makeDeliverableRepo();
+		const parkSignal = makeParkSignal();
+		const cleaned: string[] = [];
+		const { runStep, calls } = createMockRunStep({ ship: prShipDecision() }, parkSignal);
+		const result = await runPipeline(shipFrom(worktree), parkSignal, baseFlags, {
+			runStep,
+			...defaultPrPreflightStubs(),
+			cleanupAuthoringReviewSeatsForSha: (_main, sha) => {
+				cleaned.push(sha);
+			},
+			runPrReviewGate: async () => {
+				throw new Error("gate exploded");
+			},
+			listWorktrees: () => [],
+			appendLog: () => {},
+			dispatchStepEffects: async () => ({ appendText: "https://example.test/pull/1" }),
+		});
+		assert.equal(result.completed, true, "thrown pre-flight is advisory");
+		assert.equal(calls.filter((c) => c.step === "ship").length, 1);
+		assert.equal(cleaned.length, 1);
 	});
 });

@@ -40,8 +40,17 @@ You are checked out at the PR head with full history; `origin/main` is the merge
 
 If the `Arguments:` line contains `--document`, run **Document mode** below.
 If it contains `--authoring-loop`, run **Authoring-loop mode** below.
+If it contains `--preflight`, apply **Pre-flight mode** below on top of Standard or Red-team.
 If it contains `--red-team`, run **Red-team mode** below.
 Otherwise run **Standard mode**. Both modes emit the same versioned report.
+
+## Pre-flight mode
+
+This is an in-cycle advisory pass of the same Standard-mode findings review (and
+Red-team mode when `--red-team` is also present). There is **no GitHub PR** and no
+PR number — do **not** run `gh pr *`. The trusted local context git commands in
+this prompt are the only inspection path. The v1 findings contract and red-team
+discipline are unchanged.
 
 ## Document mode
 

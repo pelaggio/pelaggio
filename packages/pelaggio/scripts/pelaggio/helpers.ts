@@ -871,7 +871,62 @@ export function looksLikeStalledAsk(text: string): boolean {
 
 // ── Git checkpointing ──────────────────────────────────────────────────
 
+/**
+ * Paths the checkpoint's `git add -A` would stage: every porcelain v1 entry, including
+ * untracked files. `-z` avoids quoting; a rename/copy record carries a second (source-path)
+ * token that must be consumed, not read as its own entry.
+ */
+function pendingCommitPaths(cwd: string): string[] {
+	const out = execSync("git status --porcelain=v1 -z --untracked-files=all", { cwd, encoding: "utf-8", stdio: "pipe" });
+	const tokens = out.split("\0");
+	const paths: string[] = [];
+	for (let i = 0; i < tokens.length; i++) {
+		const entry = tokens[i];
+		if (entry.length < 4) continue;
+		paths.push(entry.slice(3));
+		if (entry[0] === "R" || entry[0] === "C") i++; // skip the rename/copy source-path token
+	}
+	return paths;
+}
+
 export function checkpoint(cwd: string, label: string): boolean {
+	// #424 review: a checkpoint must never conclude an unresolved merge. `git add -A`
+	// stages unmerged paths as "resolved" — conflict markers and all — and the commit
+	// then ends the merge, silently turning a conflicted tree into a clean, ancestor-
+	// containing branch. Refuse instead: the tree stays dirty-with-MERGE_HEAD, which
+	// `preparePrShipFreshness` already classifies as `conflicted` on resume.
+	try {
+		const unmerged = execSync("git diff --name-only --diff-filter=U", { cwd, encoding: "utf-8", stdio: "pipe" }).trim();
+		if (unmerged !== "") {
+			process.stderr.write(`⚠ checkpoint refused (${label}): unresolved merge paths present\n`);
+			return false;
+		}
+		// #424 gate fix: unmerged-path state alone is bypassable — a mid-repair `git add` on a
+		// marker-laden conflict file clears it while the markers survive in content, and an
+		// interleaved rate-limit park then reaches this choke point (parkExit → checkpoint)
+		// with MERGE_HEAD still open, which the commit below would silently conclude. When
+		// this commit would CONCLUDE a merge, the originally-conflicted file list is not
+		// available here (parkExit is generic and `--diff-filter=U` is already empty), so
+		// conservatively scan every path `git add -A` would commit for conflict-marker lines.
+		// Fail closed: refuse the checkpoint and leave the tree dirty-with-MERGE_HEAD — the
+		// documented park contract — so resume re-enters `conflicted` and the repair re-runs.
+		let mergeInProgress = false;
+		try {
+			execSync("git rev-parse -q --verify MERGE_HEAD", { cwd, stdio: "pipe" });
+			mergeInProgress = true;
+		} catch {
+			// no merge being concluded
+		}
+		if (mergeInProgress) {
+			const gate = verifyConflictRepairComplete(cwd, pendingCommitPaths(cwd));
+			if (!gate.ok) {
+				process.stderr.write(`⚠ checkpoint refused (${label}): would conclude a merge with ${gate.detail}\n`);
+				return false;
+			}
+		}
+	} catch {
+		// Not a repo / git unavailable — fall through so the add/commit below reports the real error.
+	}
 	try {
 		execSync(`git add -A && git commit -m "wip: pelaggio ${label}" --no-verify`, {
 			cwd,
@@ -1201,6 +1256,202 @@ export function hasDeliverableCommits(worktree: string): boolean {
 	} catch {
 		return false;
 	}
+}
+
+// ── PR-mode ship freshness (#424) ──────────────────────────────────────
+// Fetch + merge `origin/main` into the claim worktree. Discriminated outcomes
+// so the pipeline can route merge impact to the implementation author without
+// discarding a parked conflict. Argv-only Git — never interpolate a path or
+// ref into a shell string. Do not import review/seats.ts (helpers is the lower layer).
+
+/** Argv Git invoker. Same `(args, cwd) => string` shape as `GitExec` in review/seats.ts. */
+export type GitArgvExec = (args: readonly string[], cwd: string) => string;
+
+const defaultGitArgvExec: GitArgvExec = (args, cwd) => execFileSync("git", [...args], { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+
+/**
+ * Non-failed results retain `originMainOid` — the OID `origin/main` resolved to when this
+ * run observed it (immediately post-fetch, or at classification time on the no-fetch
+ * resume path). ADR-0025: every later freshness check and the ship effect bind to this
+ * OID, never to the mutable `origin/main` ref name, which a subsequent writable author
+ * step can move. `conflicted` carries `null` only when `origin/main` does not resolve at
+ * all (pathological resume); the pipeline fails closed on a null OID before shipping.
+ */
+export type PrShipFreshnessResult =
+	| { kind: "up-to-date"; originMainOid: string }
+	| { kind: "merged"; upstreamTouchedFiles: string[]; originMainOid: string }
+	| { kind: "conflicted"; unmergedFiles: string[]; upstreamTouchedFiles: string[]; originMainOid: string | null }
+	| { kind: "failed"; detail: string };
+
+export type PrShipFreshnessVerification = { ok: true } | { ok: false; detail: string };
+
+const FRESHNESS_DETAIL_CAP = 300;
+
+function gitArgvDetail(error: unknown): string {
+	const err = error as { stderr?: string | Buffer; stdout?: string | Buffer; message?: string };
+	const stderr = typeof err.stderr === "string" ? err.stderr : Buffer.isBuffer(err.stderr) ? err.stderr.toString("utf-8") : "";
+	const stdout = typeof err.stdout === "string" ? err.stdout : Buffer.isBuffer(err.stdout) ? err.stdout.toString("utf-8") : "";
+	return (stderr + stdout || err.message || String(error)).trim().slice(0, FRESHNESS_DETAIL_CAP);
+}
+
+function tryGitArgv(run: GitArgvExec, args: readonly string[], cwd: string): { ok: true; out: string } | { ok: false; detail: string } {
+	try {
+		return { ok: true, out: run(args, cwd).trim() };
+	} catch (error) {
+		return { ok: false, detail: gitArgvDetail(error) };
+	}
+}
+
+function gitNameOnly(run: GitArgvExec, args: readonly string[], cwd: string): string[] {
+	const result = tryGitArgv(run, args, cwd);
+	if (!result.ok || result.out === "") return [];
+	return result.out.split("\n").filter(Boolean);
+}
+
+function hasMergeHead(run: GitArgvExec, cwd: string): boolean {
+	return tryGitArgv(run, ["rev-parse", "-q", "--verify", "MERGE_HEAD"], cwd).ok;
+}
+
+function unmergedPaths(run: GitArgvExec, cwd: string): string[] {
+	return gitNameOnly(run, ["diff", "--name-only", "--diff-filter=U"], cwd);
+}
+
+function porcelainStatus(run: GitArgvExec, cwd: string): { ok: true; dirty: boolean } | { ok: false; detail: string } {
+	const result = tryGitArgv(run, ["status", "--porcelain"], cwd);
+	if (!result.ok) return { ok: false, detail: result.detail || "git status --porcelain failed" };
+	return { ok: true, dirty: result.out !== "" };
+}
+
+function resolveOriginMainOid(run: GitArgvExec, cwd: string): string | null {
+	const result = tryGitArgv(run, ["rev-parse", "--verify", "origin/main"], cwd);
+	return result.ok && result.out !== "" ? result.out : null;
+}
+
+function oidIsAncestorOfHead(run: GitArgvExec, cwd: string, oid: string): boolean {
+	return tryGitArgv(run, ["merge-base", "--is-ancestor", oid, "HEAD"], cwd).ok;
+}
+
+function upstreamTouchedFrom(run: GitArgvExec, cwd: string, incomingRef: string): string[] {
+	// Three-dot: only files touched on the upstream side since the merge-base. Two-dot
+	// (`HEAD..ref`) diffs the endpoint trees, so the branch's own files leak into the
+	// "Upstream-touched files" list fed to the author.
+	return gitNameOnly(run, ["diff", "--name-only", `HEAD...${incomingRef}`], cwd);
+}
+
+/**
+ * Fetch `origin/main` and merge it into the claim worktree.
+ *
+ * `conflicted` includes the resume-after-park case: `parkExit()` → `checkpoint()`
+ * cannot commit an unresolved merge, so a parked tree is dirty-with-`MERGE_HEAD`,
+ * not a generic dirty input. Treating that as `failed` would abort resume.
+ *
+ * Never runs `merge --abort`, reset, or clean.
+ */
+export function preparePrShipFreshness(worktree: string, exec?: GitArgvExec): PrShipFreshnessResult {
+	const run = exec ?? defaultGitArgvExec;
+	const mergeInProgress = hasMergeHead(run, worktree);
+	const unmerged = unmergedPaths(run, worktree);
+	if (mergeInProgress || unmerged.length > 0) {
+		// No fetch on this resume path: retain whatever origin/main resolves to NOW. Still
+		// observed before the writable author step runs, so OID-bound verification rejects
+		// any movement the author causes afterwards.
+		const originMainOid = resolveOriginMainOid(run, worktree);
+		const incoming = mergeInProgress ? "MERGE_HEAD" : originMainOid;
+		return {
+			kind: "conflicted",
+			unmergedFiles: unmerged,
+			upstreamTouchedFiles: incoming ? upstreamTouchedFrom(run, worktree, incoming) : [],
+			originMainOid,
+		};
+	}
+	const status = porcelainStatus(run, worktree);
+	if (!status.ok) return { kind: "failed", detail: status.detail };
+	if (status.dirty) return { kind: "failed", detail: "worktree is dirty (no merge in progress)" };
+
+	const fetched = tryGitArgv(run, ["fetch", "origin", "main"], worktree);
+	if (!fetched.ok) return { kind: "failed", detail: fetched.detail || "git fetch origin main failed" };
+	// ADR-0025: resolve and retain the fetched OID once, immediately post-fetch. Every
+	// subsequent check (including the merge below) uses this OID, never the ref name.
+	const originMainOid = resolveOriginMainOid(run, worktree);
+	if (!originMainOid) return { kind: "failed", detail: "origin/main does not resolve after fetch" };
+	if (oidIsAncestorOfHead(run, worktree, originMainOid)) return { kind: "up-to-date", originMainOid };
+
+	const upstreamTouchedFiles = upstreamTouchedFrom(run, worktree, originMainOid);
+	const merged = tryGitArgv(run, ["merge", "--no-edit", originMainOid], worktree);
+	if (merged.ok) return { kind: "merged", upstreamTouchedFiles, originMainOid };
+
+	const afterUnmerged = unmergedPaths(run, worktree);
+	if (hasMergeHead(run, worktree) || afterUnmerged.length > 0) {
+		return { kind: "conflicted", unmergedFiles: afterUnmerged, upstreamTouchedFiles, originMainOid };
+	}
+	return { kind: "failed", detail: merged.detail || "git merge --no-edit origin/main failed" };
+}
+
+/**
+ * Deterministic Git gate before PR pre-flight or ship. Accepts only a clean,
+ * conflict-free worktree whose HEAD already contains the origin/main OID retained
+ * at fetch time (`expectedOriginMainOid`, from `preparePrShipFreshness`).
+ * Never aborts, resets, or cleans.
+ *
+ * ADR-0025: verification binds to the fetched OID, never the mutable ref name — a
+ * writable author step between fetch and this gate can move `origin/main` (e.g. to an
+ * older ancestor) and leave a clean tree that a ref-name check would accept. ANY
+ * movement fails closed with both OIDs named; a legitimately-advanced upstream also
+ * fails here, and the resume re-fetches — correct and self-healing.
+ */
+export function verifyPrShipFreshness(worktree: string, expectedOriginMainOid: string, exec?: GitArgvExec): PrShipFreshnessVerification {
+	const run = exec ?? defaultGitArgvExec;
+	if (hasMergeHead(run, worktree)) return { ok: false, detail: "merge in progress (MERGE_HEAD present)" };
+	const unmerged = unmergedPaths(run, worktree);
+	if (unmerged.length > 0) return { ok: false, detail: `unmerged paths: ${unmerged.join(", ")}` };
+	const status = porcelainStatus(run, worktree);
+	if (!status.ok) return { ok: false, detail: status.detail };
+	if (status.dirty) return { ok: false, detail: "worktree is dirty" };
+	const currentOid = resolveOriginMainOid(run, worktree);
+	if (!currentOid) return { ok: false, detail: "origin/main does not resolve" };
+	if (currentOid !== expectedOriginMainOid) {
+		return { ok: false, detail: `origin/main moved after fetch: fetched ${expectedOriginMainOid}, now ${currentOid} — rejecting ref movement` };
+	}
+	if (!oidIsAncestorOfHead(run, worktree, expectedOriginMainOid)) return { ok: false, detail: `fetched origin/main OID ${expectedOriginMainOid} is not an ancestor of HEAD` };
+	return { ok: true };
+}
+
+/** Conflict-marker line forms git itself writes: `<<<<<<< …`, `||||||| …` (diff3), `=======`, `>>>>>>> …`. */
+const CONFLICT_MARKER_LINE_RE = /^(?:<{7}(?: |$)|\|{7}(?: |$)|={7}$|>{7}(?: |$))/;
+
+/**
+ * Deterministic gate on the conflicted freshness repair (#424 review): git's own
+ * unmerged-path state must be empty and the originally-conflicted files must not
+ * contain conflict-marker lines in the working tree.
+ *
+ * Ordering is load-bearing: this must run against the tree BEFORE any checkpoint's
+ * `git add -A` executes, because staging normalizes unmerged-path state (marking
+ * untouched conflict files "resolved") and the checkpoint commit would then conclude
+ * the merge with the markers committed. The working-tree file contents scanned here
+ * are exactly what `git add -A` would stage, so a pass here also vouches for the
+ * content a subsequent checkpoint commits. Fail-closed: an unreadable listed file
+ * counts as unresolved. A listed file absent from the working tree is a legitimate
+ * delete-resolution and is skipped.
+ */
+export function verifyConflictRepairComplete(worktree: string, conflictedFiles: readonly string[], exec?: GitArgvExec): { ok: true } | { ok: false; detail: string } {
+	const run = exec ?? defaultGitArgvExec;
+	const unmerged = unmergedPaths(run, worktree);
+	if (unmerged.length > 0) return { ok: false, detail: `unmerged paths remain: ${unmerged.join(", ")}` };
+	const marked: string[] = [];
+	for (const rel of [...new Set(conflictedFiles)]) {
+		const path = resolve(worktree, rel);
+		if (!existsSync(path)) continue;
+		let content: string;
+		try {
+			content = readFileSync(path, "utf-8");
+		} catch {
+			marked.push(rel);
+			continue;
+		}
+		if (content.split(/\r?\n/).some((line) => CONFLICT_MARKER_LINE_RE.test(line))) marked.push(rel);
+	}
+	if (marked.length > 0) return { ok: false, detail: `conflict markers remain in: ${marked.join(", ")}` };
+	return { ok: true };
 }
 
 // ── Ghost-ship verification ────────────────────────────────────────────

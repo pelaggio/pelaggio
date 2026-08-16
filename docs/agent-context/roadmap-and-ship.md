@@ -50,6 +50,16 @@ Open items that are already implemented or obsolete used to sit in the pickable 
 
 Skill bodies branch on the `--target` argument; don't hardcode merge logic in TS. `/shipwreck` recovery only runs for `direct-push` — PR modes never merge in-session, so a ship failure there is reported as-is.
 
+### PR freshness and remote-base squash (#424)
+
+Integrating `origin/main` is owned by the pipeline **before** `/ship` and any forge effect. `ship/pr-effects.ts` does not fetch or merge: a conflict needs the original implementation author, who is no longer in the effect handler. The effect handler instead:
+
+- requires `origin/main` to resolve and already be an ancestor of `HEAD` before any reset, commit, push, or `gh` call;
+- soft-resets to `git merge-base origin/main HEAD` (never local `main` — that would squash upstream-only commits into the feature commit after a freshness merge);
+- checks deliverables with `git diff --name-only origin/main...HEAD`.
+
+Only the forge-side required `review` status (CI or local drain) is merge authorization. In-cycle pre-flight does not post that status or a findings comment.
+
 ### Assisted-by trailers (lightweight provenance, #189)
 
 Every landed ship commit carries an always-on `Assisted-by: <Name> <email>` trailer for the AI provider(s) that authored the change. This is the lightweight, git-native provenance tier — forensic and always present, not a signed attestation and not a merge gate (those are #186–188).

@@ -38,11 +38,21 @@ function shipReadyRepo(): string {
 	writeFileSync(join(cwd, "src.txt"), "hello");
 	writeFileSync(join(cwd, ".gitignore"), ".dev/\n");
 	execSync("git add -A && git commit -q -m work", { cwd });
+	// Squash/diff now require origin/main to resolve and be an ancestor of HEAD (#424).
+	execSync("git push -q origin main:main", { cwd });
 	return cwd;
 }
 
 function shipEffect(itemId: string): { kind: "ship.ShipDecision"; target: "pull-request"; itemId: string; headBranch: string; prTitle: string; prBody: string } {
 	return { kind: "ship.ShipDecision", target: "pull-request", itemId, headBranch: "feat/tool-99", prTitle: "Ship TOOL-99", prBody: "Body" };
+}
+
+/** Gated-OID binding matching the repo's current state (ADR-0025 ship binding, #424). */
+function shipGateFor(cwd: string): { gatedHeadOid: string; originMainOid: string } {
+	return {
+		gatedHeadOid: execSync("git rev-parse HEAD", { cwd, encoding: "utf-8" }).trim(),
+		originMainOid: execSync("git rev-parse origin/main", { cwd, encoding: "utf-8" }).trim(),
+	};
 }
 
 /** Run `fn` with a fake `gh` on PATH that answers `pr list` empty and `pr create` with `prUrl`. */
@@ -352,6 +362,8 @@ describe("effects dispatch", () => {
 	it("wraps PR ship handler failures and retains the manifest", async () => {
 		const ctx = baseContext();
 		ctx.step = "ship";
+		// A syntactically valid binding so dispatch reaches the handler; the non-git cwd fails it.
+		ctx.shipGate = { gatedHeadOid: "a".repeat(40), originMainOid: "b".repeat(40) };
 		writeEffectsManifest(ctx, [
 			{
 				kind: "ship.ShipDecision",
@@ -368,6 +380,42 @@ describe("effects dispatch", () => {
 			(err) => err instanceof EffectsManifestError && err.code === "effect_failed",
 		);
 		assert.equal(existsSync(effectManifestPath(ctx)), true);
+	});
+
+	it("refuses to dispatch a ship decision without a gated-OID binding (ADR-0025 fail-closed)", async () => {
+		const cwd = shipReadyRepo();
+		const ctx = baseContext(cwd);
+		ctx.step = "ship";
+		writeEffectsManifest(ctx, [shipEffect(ctx.itemId)]);
+
+		await assert.rejects(
+			() => dispatchStepEffects(ctx),
+			(err) => err instanceof EffectsManifestError && err.code === "provenance_mismatch" && /shipGate/.test(err.message),
+		);
+		assert.equal(existsSync(effectManifestPath(ctx)), true);
+	});
+
+	it("TOCTOU: a post-gate commit is refused by the ship effect, naming both OIDs, and the manifest is retained", async () => {
+		const cwd = shipReadyRepo();
+		const gate = shipGateFor(cwd); // snapshot BEFORE the post-gate commit — as the pipeline does
+		writeFileSync(join(cwd, "sneaky.txt"), "post-gate change");
+		execSync("git add -A && git commit -q -m sneaky", { cwd });
+		const headNow = execSync("git rev-parse HEAD", { cwd, encoding: "utf-8" }).trim();
+		assert.notEqual(headNow, gate.gatedHeadOid);
+
+		const ctx = baseContext(cwd);
+		ctx.step = "ship";
+		ctx.shipGate = gate;
+		writeEffectsManifest(ctx, [shipEffect(ctx.itemId)]);
+
+		await assert.rejects(
+			() => dispatchStepEffects(ctx),
+			(err) => err instanceof EffectsManifestError && err.code === "effect_failed" && err.message.includes(gate.gatedHeadOid) && err.message.includes(headNow),
+		);
+		assert.equal(existsSync(effectManifestPath(ctx)), true);
+		// Nothing was pushed: the remote still has no feat branch.
+		const remoteRefs = execSync("git ls-remote origin", { cwd, encoding: "utf-8" });
+		assert.ok(!remoteRefs.includes("feat/tool-99"), "refused ship must not push the branch");
 	});
 
 	it("rejects a ship decision whose effect-level itemId does not match dispatch provenance, retaining the manifest", async () => {
@@ -397,6 +445,7 @@ describe("effects dispatch", () => {
 		await withFakeGh({ prUrl: "https://github.com/acme/widget/pull/42" }, async () => {
 			const ctx = baseContext(cwd);
 			ctx.step = "ship";
+			ctx.shipGate = shipGateFor(cwd);
 			ctx.reviewEnqueue = { runner: "local", ghRepo: "acme/widget", mainRepo: (c) => c, enqueue: (mainRepo, record) => enqueued.push({ mainRepo, record }) };
 			writeEffectsManifest(ctx, [shipEffect(ctx.itemId)]);
 			const result = await dispatchStepEffects(ctx);
@@ -420,6 +469,7 @@ describe("effects dispatch", () => {
 			await withFakeGh({ prUrl: "https://github.com/acme/widget/pull/42" }, async () => {
 				const ctx = baseContext(cwd);
 				ctx.step = "ship";
+				ctx.shipGate = shipGateFor(cwd);
 				ctx.reviewEnqueue = { ...deps, mainRepo: (c) => c, enqueue: (_m, record) => enqueued.push(record) };
 				writeEffectsManifest(ctx, [shipEffect(ctx.itemId)]);
 				await dispatchStepEffects(ctx);
@@ -436,6 +486,7 @@ describe("effects dispatch", () => {
 		await withFakeGh({ prUrl: "https://github.com/acme/widget/pulls" }, async () => {
 			const ctx = baseContext(cwd);
 			ctx.step = "ship";
+			ctx.shipGate = shipGateFor(cwd);
 			ctx.log = (m) => logs.push(m);
 			ctx.reviewEnqueue = { runner: "local", ghRepo: "acme/widget", mainRepo: (c) => c, enqueue: (_m, record) => enqueued.push(record) };
 			writeEffectsManifest(ctx, [shipEffect(ctx.itemId)]);
@@ -452,6 +503,7 @@ describe("effects dispatch", () => {
 		await withFakeGh({ prUrl: "https://github.com/acme/widget/pull/42" }, async () => {
 			const ctx = baseContext(cwd);
 			ctx.step = "ship";
+			ctx.shipGate = shipGateFor(cwd);
 			ctx.log = (m) => logs.push(m);
 			ctx.reviewEnqueue = {
 				runner: "local",
@@ -475,6 +527,7 @@ describe("effects dispatch", () => {
 		await withFakeGh({ prUrl }, async () => {
 			const ctx = baseContext(cwd);
 			ctx.step = "ship";
+			ctx.shipGate = shipGateFor(cwd);
 			writeEffectsManifest(ctx, [shipEffect(ctx.itemId)]);
 
 			const result = await dispatchStepEffects(ctx);
