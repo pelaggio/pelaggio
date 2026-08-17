@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { withFileLock } from "./file-lock.js";
+import { isTrustedCommentAuthor } from "./github-posting.js";
 import { type GhRunner, parseGhJson } from "./roadmap/github-issues.js";
 
 // ── Local revise sweep (issue #76) ─────────────────────────────────────
@@ -76,11 +77,38 @@ interface PrViewEntry {
 interface IssueLabels {
 	labels?: { name: string }[];
 }
+interface PrComment {
+	body: string;
+	createdAt: string;
+	authorAssociation: string;
+	author?: { login?: string } | null;
+}
 interface PrComments {
-	comments?: { body: string; createdAt: string }[];
+	comments?: PrComment[];
 }
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+
+function isPrComments(v: unknown): v is PrComments {
+	if (!isObject(v)) return false;
+	if (v.comments === undefined) return true;
+	return (
+		Array.isArray(v.comments) &&
+		v.comments.every(
+			(comment) =>
+				isObject(comment) &&
+				typeof comment.body === "string" &&
+				typeof comment.createdAt === "string" &&
+				typeof comment.authorAssociation === "string" &&
+				(comment.author === undefined || comment.author === null || (isObject(comment.author) && (comment.author.login === undefined || typeof comment.author.login === "string"))),
+		)
+	);
+}
+
+/** GraphQL-shape adapter over the canonical trust rule shared with the upsert path (`github-posting.ts`). */
+function isTrustedReviewComment(comment: PrComment): boolean {
+	return isTrustedCommentAuthor(comment.authorAssociation, comment.author?.login);
+}
 
 /**
  * Run a gh command fail-soft: return stdout on exit 0, else `null`. A thrown error (ENOENT,
@@ -500,19 +528,22 @@ export function verifyReviseWorktreeBinding(worktreePath: string, branch: string
 }
 
 /**
- * Fetch the latest `<!-- pelaggio-pr-review -->` comment body and write it to `findingsPath`.
- * Returns true if written, false when there is no findings comment or on any gh/fs error.
+ * Fetch the latest trusted `<!-- pelaggio-pr-review -->` comment body and write it to
+ * `findingsPath`. Marker text is not authority: an untrusted PR participant can copy it into a
+ * newer comment, so only repository actors and GitHub Actions may supply a revision prompt.
+ * Returns true if written, false when there is no trusted findings comment, the response shape
+ * is incomplete, or on any gh/fs error.
  */
 export function fetchReviewFindings(gh: GhRunner, ghRepo: string, prNumber: number, findingsPath: string): boolean {
 	const out = runGhSoft(gh, ["pr", "view", String(prNumber), "--repo", ghRepo, "--json", "comments"]);
 	if (out === null) return false;
 	let parsed: PrComments;
 	try {
-		parsed = parseGhJson<PrComments>(out, isObject);
+		parsed = parseGhJson<PrComments>(out, isPrComments);
 	} catch {
 		return false;
 	}
-	const matches = (parsed.comments ?? []).filter((c) => c.body.includes(PR_REVIEW_MARKER));
+	const matches = (parsed.comments ?? []).filter((c) => isTrustedReviewComment(c) && c.body.includes(PR_REVIEW_MARKER));
 	if (matches.length === 0) return false;
 	// Most recent marker-bearing comment wins (the CLI upserts a single one, but be robust to dupes).
 	const latest = matches.reduce((a, b) => (b.createdAt.localeCompare(a.createdAt) > 0 ? b : a));

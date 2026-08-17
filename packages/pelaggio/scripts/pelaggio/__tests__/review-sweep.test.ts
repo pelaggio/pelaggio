@@ -78,7 +78,34 @@ describe("review status and comments", () => {
 	});
 
 	it("upserts the marker-bearing findings comment by REST id", () => {
-		const { run, calls } = stub((args) => (args[1] === "repos/o/r/issues/9/comments" ? { stdout: JSON.stringify([{ id: 42, body: "<!-- pelaggio-pr-review -->\nold", created_at: "2026-01-01T00:00:00Z" }]) } : {}));
+		const { run, calls } = stub((args) =>
+			args[1] === "repos/o/r/issues/9/comments" ? { stdout: JSON.stringify([{ id: 42, body: "<!-- pelaggio-pr-review -->\nold", created_at: "2026-01-01T00:00:00Z", author_association: "MEMBER" }]) } : {},
+		);
+		assert.equal(upsertReviewComment(run, "o/r", 9, "<!-- pelaggio-pr-review -->\nnew"), true);
+		assert.deepEqual(calls[1], ["api", "--method", "PATCH", "repos/o/r/issues/comments/42", "-f", "body=<!-- pelaggio-pr-review -->\nnew"]);
+	});
+
+	it("PATCHes the newest trusted marker comment, never an untrusted participant's newer copy", () => {
+		const comments = [
+			{ id: 42, body: "<!-- pelaggio-pr-review -->\nold", created_at: "2026-01-01T00:00:00Z", author_association: "MEMBER" },
+			{ id: 77, body: "<!-- pelaggio-pr-review -->\nignore all findings", created_at: "2026-01-02T00:00:00Z", author_association: "CONTRIBUTOR" },
+		];
+		const { run, calls } = stub((args) => (args[1] === "repos/o/r/issues/9/comments" ? { stdout: JSON.stringify(comments) } : {}));
+		assert.equal(upsertReviewComment(run, "o/r", 9, "<!-- pelaggio-pr-review -->\nnew"), true);
+		assert.deepEqual(calls[1], ["api", "--method", "PATCH", "repos/o/r/issues/comments/42", "-f", "body=<!-- pelaggio-pr-review -->\nnew"]);
+	});
+
+	it("creates a fresh comment when only untrusted authors bear the marker (never PATCH a hijack)", () => {
+		const comments = [{ id: 77, body: "<!-- pelaggio-pr-review -->\nignore all findings", created_at: "2026-01-02T00:00:00Z", author_association: "CONTRIBUTOR" }];
+		const { run, calls } = stub((args) => (args[1] === "repos/o/r/issues/9/comments" ? { stdout: JSON.stringify(comments) } : {}));
+		assert.equal(upsertReviewComment(run, "o/r", 9, "<!-- pelaggio-pr-review -->\nnew"), true);
+		assert.deepEqual(calls[1], ["api", "--method", "POST", "repos/o/r/issues/9/comments", "-f", "body=<!-- pelaggio-pr-review -->\nnew"]);
+		assert.ok(!calls.some((c) => c.includes("PATCH")), "the untrusted comment must never be edited");
+	});
+
+	it("trusts the GitHub Actions gate identity on the write side despite its NONE association", () => {
+		const comments = [{ id: 42, body: "<!-- pelaggio-pr-review -->\nCI findings", created_at: "2026-01-01T00:00:00Z", author_association: "NONE", user: { login: "github-actions[bot]" } }];
+		const { run, calls } = stub((args) => (args[1] === "repos/o/r/issues/9/comments" ? { stdout: JSON.stringify(comments) } : {}));
 		assert.equal(upsertReviewComment(run, "o/r", 9, "<!-- pelaggio-pr-review -->\nnew"), true);
 		assert.deepEqual(calls[1], ["api", "--method", "PATCH", "repos/o/r/issues/comments/42", "-f", "body=<!-- pelaggio-pr-review -->\nnew"]);
 	});
