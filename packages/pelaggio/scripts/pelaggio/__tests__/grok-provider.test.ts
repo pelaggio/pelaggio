@@ -3,7 +3,8 @@ import { describe, it } from "node:test";
 import { AcpConnection } from "../acp-client.js";
 import { CONFIG, GROK_DEFAULT_MODEL, REPO, type StepSettings } from "../config.js";
 import { ContainedFailure, type ContainedLifecycleOptions, type withContainedInvocation } from "../contained-execution.js";
-import { buildGrokStepResult, createGrokRunStep, grokEffort, grokServerRequestResponse, grokTimeoutMs, selectGrokModel } from "../grok-provider.js";
+import { buildGrokStepResult, createGrokRunStep, grokEffort, grokServerRequestResponse, grokTimeoutMs, selectGrokModel, transparentAuthUnattendedRefusal, unsandboxedFallbackAuthRefusal } from "../grok-provider.js";
+import { detectUnattendedSignals, OPERATOR_ATTESTED_TTY_SUPPRESSION } from "../provider-routing.js";
 import type { StepEvent } from "../types.js";
 
 type JsonObject = Record<string, unknown>;
@@ -229,7 +230,7 @@ describe("Grok provider confinement setup", () => {
 		};
 		const runStep = createGrokRunStep({ contained, spawnAcp, detectSandbox: async () => true, resolveExecutable: async () => "/opt/grok" });
 		const events: StepEvent[] = [];
-		const result = await runStep("implement", "test", { cwd: REPO, profile: "standard", trace: false, parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" } }, (event) => events.push(event));
+		const result = await runStep("implement", "test", { cwd: REPO, profile: "standard", trace: false, parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" }, unattendedSignals: [] }, (event) => events.push(event));
 		assert.equal(result.ok, true);
 		assert.equal(captured?.egress?.provider, "grok");
 		assert.equal(captured?.egress?.model, GROK_DEFAULT_MODEL);
@@ -283,11 +284,84 @@ describe("Grok provider confinement setup", () => {
 		const result = await runStep(
 			"implement",
 			"test",
-			{ cwd: REPO, profile: "standard", trace: false, executionOverride: { provider: "grok", model: "grok-unreviewed" }, parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" } },
+			{ cwd: REPO, profile: "standard", trace: false, executionOverride: { provider: "grok", model: "grok-unreviewed" }, parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" }, unattendedSignals: [] },
 			() => undefined,
 		);
 		assert.equal(result.subtype, "error_confinement");
 		assert.equal(resolved, false);
+	});
+
+	it("refuses transparent auth on an unattended signal before resolving the driver (#279)", async () => {
+		let resolved = false;
+		const runStep = createGrokRunStep({
+			detectSandbox: async () => true,
+			resolveExecutable: async () => {
+				resolved = true;
+				return "/opt/grok";
+			},
+		});
+		const result = await runStep(
+			"implement",
+			"test",
+			{ cwd: REPO, profile: "standard", trace: false, parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" }, unattendedSignals: ["daemon-spawned (PELAGGIO_SUPERVISED_RUN=1)"] },
+			() => undefined,
+		);
+		assert.equal(result.subtype, "error_confinement");
+		assert.match(result.text, /daemon-spawned \(PELAGGIO_SUPERVISED_RUN=1\)/);
+		assert.match(result.text, /XAI_API_KEY/);
+		assert.equal(resolved, false);
+	});
+
+	it("treats a dispatch path that threads no unattended evidence as unattended, fail-closed (#279)", async () => {
+		let resolved = false;
+		const runStep = createGrokRunStep({
+			detectSandbox: async () => true,
+			resolveExecutable: async () => {
+				resolved = true;
+				return "/opt/grok";
+			},
+		});
+		const result = await runStep("implement", "test", { cwd: REPO, profile: "standard", trace: false, parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" } }, () => undefined);
+		assert.equal(result.subtype, "error_confinement");
+		assert.match(result.text, /threaded no unattended-execution evidence/);
+		assert.equal(resolved, false);
+	});
+
+	it("permits transparent auth for an attested TTY-only single-cycle run (empty signal set) (#279)", () => {
+		// The composition with the #276 detector: an operator-attested piped/backgrounded
+		// single-cycle run suppresses ONLY the TTY signal, leaving no positive signal.
+		const report = detectUnattendedSignals({ singleShot: false, multiCycle: false, env: { PELAGGIO_OPERATOR_ATTENDED: "1" }, stdoutIsTTY: false });
+		assert.deepEqual(report.signals, []);
+		assert.deepEqual(report.suppressed, [OPERATOR_ATTESTED_TTY_SUPPRESSION]);
+		assert.equal(transparentAuthUnattendedRefusal(report.signals), undefined);
+		// The wired empty-signal path is covered by the contained happy-path test above.
+	});
+
+	it("refuses the unsandboxed fallback for transparent auth — the jail is required (#279)", async () => {
+		const saved = CONFIG.grokAllowUnsandboxedFallback;
+		(CONFIG as { grokAllowUnsandboxedFallback: boolean }).grokAllowUnsandboxedFallback = true;
+		let resolved = false;
+		try {
+			const runStep = createGrokRunStep({
+				detectSandbox: async () => false,
+				resolveExecutable: async () => {
+					resolved = true;
+					return "/opt/grok";
+				},
+			});
+			const result = await runStep("implement", "test", { cwd: REPO, profile: "standard", trace: false, parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" }, unattendedSignals: [] }, () => undefined);
+			assert.equal(result.subtype, "error_confinement");
+			assert.match(result.text, /requires the nested Landlock sandbox/);
+			assert.match(result.text, /key auth \(XAI_API_KEY\)/);
+			assert.equal(resolved, false);
+		} finally {
+			(CONFIG as { grokAllowUnsandboxedFallback: boolean }).grokAllowUnsandboxedFallback = saved;
+		}
+	});
+
+	it("unsandboxedFallbackAuthRefusal permits key auth, where no credential file is staged (#279)", () => {
+		assert.equal(unsandboxedFallbackAuthRefusal({ kind: "key", env: "XAI_API_KEY", header: "authorization", scheme: "Bearer" }), undefined);
+		assert.match(unsandboxedFallbackAuthRefusal({ kind: "transparent" }) ?? "", /transparent subscription auth requires the nested Landlock sandbox/i);
 	});
 
 	it("keeps broker budget and rate-limit failures distinct", async () => {
@@ -300,7 +374,7 @@ describe("Grok provider confinement setup", () => {
 			};
 			const parkSignal = { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" };
 			const runStep = createGrokRunStep({ contained, detectSandbox: async () => true, resolveExecutable: async () => "/opt/grok" });
-			const result = await runStep("implement", "test", { cwd: REPO, profile: "standard", trace: false, parkSignal }, () => undefined);
+			const result = await runStep("implement", "test", { cwd: REPO, profile: "standard", trace: false, parkSignal, unattendedSignals: [] }, () => undefined);
 			assert.equal(result.subtype, subtype);
 			assert.equal(parkSignal.parked, reason === "rate_limit");
 		}

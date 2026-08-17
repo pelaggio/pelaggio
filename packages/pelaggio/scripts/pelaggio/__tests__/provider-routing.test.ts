@@ -7,7 +7,16 @@ import { CODEX_CAPABILITIES } from "../codex-provider.js";
 import { DEFAULTS, loadConfig, type ResolvedConfig } from "../config.js";
 import { grokCapabilities } from "../grok-provider.js";
 import { OPENCODE_CAPABILITIES } from "../opencode-provider.js";
-import { detectUnattendedSignals, matchEligibleProviders, matchesCapabilityPredicate, OPERATOR_ATTESTED_TTY_SUPPRESSION, resolveAuthoringReviewConfig, resolveAuthoringReviewExecution, softDegradedAxes } from "../provider-routing.js";
+import {
+	detectCliUnattendedSignals,
+	detectUnattendedSignals,
+	matchEligibleProviders,
+	matchesCapabilityPredicate,
+	OPERATOR_ATTESTED_TTY_SUPPRESSION,
+	resolveAuthoringReviewConfig,
+	resolveAuthoringReviewExecution,
+	softDegradedAxes,
+} from "../provider-routing.js";
 import { CLAUDE_CAPABILITIES } from "../step-runner.js";
 import type { ProviderCapabilities, ProviderName } from "../types.js";
 
@@ -509,6 +518,19 @@ describe("detectUnattendedSignals — unattended-execution evidence (#276)", () 
 			const result = resolveAuthoringReviewExecution(policy, { unattendedSignals: detectUnattendedSignals(context).signals });
 			assert.equal(result.ok, false);
 		}
+	});
+
+	it("detectCliUnattendedSignals maps CI/PELAGGIO_SINGLE_SHOT onto single-shot and never the multi-cycle signal (#279)", () => {
+		assert.deepEqual(detectCliUnattendedSignals({}, true), { signals: [], suppressed: [] });
+		assert.match(detectCliUnattendedSignals({ CI: "true" }, true).signals[0] ?? "", /CI\/single-shot/);
+		assert.match(detectCliUnattendedSignals({ PELAGGIO_SINGLE_SHOT: "1" }, true).signals[0] ?? "", /CI\/single-shot/);
+		assert.deepEqual(detectCliUnattendedSignals({ CI: "false" }, true).signals, []);
+		const headless = detectCliUnattendedSignals({}, false);
+		assert.match(headless.signals[0] ?? "", /interactive TTY/);
+		const attested = detectCliUnattendedSignals({ PELAGGIO_OPERATOR_ATTENDED: "1" }, false);
+		assert.deepEqual(attested.signals, []);
+		assert.deepEqual(attested.suppressed, [OPERATOR_ATTESTED_TTY_SUPPRESSION]);
+		assert.ok(detectCliUnattendedSignals({ CI: "true" }, true).signals.every((signal) => !/multi-cycle/.test(signal)));
 	});
 });
 

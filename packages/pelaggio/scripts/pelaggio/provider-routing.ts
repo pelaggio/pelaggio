@@ -238,6 +238,18 @@ export function detectUnattendedSignals(context: UnattendedSignalContext): Unatt
 }
 
 /**
+ * Ambient unattended evidence for operator CLI entrypoints (doc-review, pr-review,
+ * pr-adjudicate): a single invocation with no cycle budget, so only the CI/single-shot
+ * markers, the daemon marker, and the attestable headless/TTY signal apply. Threaded into
+ * `RunStepOpts.unattendedSignals` so provider-level auth gates (grok transparent
+ * subscription auth, #279) see the same evidence class `runOrchestrator` computes for
+ * pipeline runs. Parameters are injectable for tests; production callers use the defaults.
+ */
+export function detectCliUnattendedSignals(env: NodeJS.ProcessEnv = process.env, stdoutIsTTY: boolean = process.stdout.isTTY === true): UnattendedSignalReport {
+	return detectUnattendedSignals({ singleShot: env.CI === "true" || env.PELAGGIO_SINGLE_SHOT === "1", multiCycle: false, env, stdoutIsTTY });
+}
+
+/**
  * Resolve the authoring loop against the runtime trust context.
  *
  * `local` is an explicit operator attestation and is refused whenever any unattended

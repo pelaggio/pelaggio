@@ -8,7 +8,9 @@
 //
 // Confinement note: every run explicitly requests Pelaggio's fail-closed custom Grok profile when
 // Landlock is available. A config-gated fallback exists for externally contained, supervised runs
-// on Landlock-less hosts. Permission prompts remain auto-allowed because confinement is external.
+// on Landlock-less hosts — but only for key auth (#279): transparent subscription auth stages
+// ~/.grok/auth.json into the private HOME and therefore requires the nested Landlock jail.
+// Permission prompts remain auto-allowed because confinement is external.
 
 import { realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -17,6 +19,7 @@ import { type AcpIncomingRequest, AcpRpcError, spawnAcpAgent } from "./acp-clien
 import { CONFIG, GROK_DEFAULT_MODEL, REPO, resolveProviderBin, resolveStepSettings, type StepSettings } from "./config.js";
 import { CONTAINED_LOOPBACK_PORT, ContainedFailure, type ContainedInvocation, withContainedInvocation } from "./contained-execution.js";
 import { emitDecisionsFromText } from "./decisions.js";
+import type { EgressAuth } from "./egress-broker.js";
 import { resolveEgressPolicy } from "./egress-policies.js";
 import { buildGrokArgs, detectLandlock, GROK_SANDBOX_BLOCK } from "./grok-sandbox.js";
 import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseWaitFlag, resolveParkReset } from "./helpers.js";
@@ -378,6 +381,37 @@ interface GrokContainedValue {
 	exit: Awaited<ReturnType<typeof spawnAcpAgent>["done"]>;
 }
 
+/**
+ * #279 must-fix (1): transparent subscription auth reuses the operator's own OAuth credential,
+ * which the contained-execution decision limits to attended, operator-initiated, single-cycle
+ * local runs — unattended execution is keys-only. This gate sits where transparent auth is
+ * configured so EVERY grok dispatch path passes through it. `undefined` means the dispatch path
+ * never threaded `RunStepOpts.unattendedSignals` and cannot prove attendance, so it is treated
+ * as unattended, fail-closed.
+ */
+export function transparentAuthUnattendedRefusal(unattendedSignals: readonly string[] | undefined): string | undefined {
+	const keysAlternative = "unattended Grok execution requires key auth (XAI_API_KEY via security.env-allowlist) once grok's direct-key route is implemented and reviewed";
+	if (unattendedSignals === undefined) {
+		return `Grok transparent subscription auth refused: this dispatch path threaded no unattended-execution evidence (RunStepOpts.unattendedSignals) and is treated as unattended, fail-closed; ${keysAlternative}`;
+	}
+	if (unattendedSignals.length > 0) {
+		return `Grok transparent subscription auth refused: unattended-execution signals present (${unattendedSignals.join("; ")}); transparent subscription auth is limited to attended local single-cycle runs — ${keysAlternative}`;
+	}
+	return undefined;
+}
+
+/**
+ * #279 must-fix (3): without Grok's nested Landlock sandbox, the agent's shell tools share the
+ * private HOME where ~/.grok/auth.json is staged — prompt-injected code could copy the OAuth
+ * credential into the writable worktree, which write-set validation would accept for later
+ * checkpointing. The unsandboxed fallback is therefore safe by construction only for key auth
+ * (no credential file staged); transparent subscription auth requires the jail.
+ */
+export function unsandboxedFallbackAuthRefusal(auth: EgressAuth): string | undefined {
+	if (auth.kind !== "transparent") return undefined;
+	return "Grok transparent subscription auth requires the nested Landlock sandbox: under allow-unsandboxed-fallback, unsandboxed shell tools share the private HOME with the staged ~/.grok/auth.json and could copy the OAuth credential into the checkpointed worktree; the fallback may proceed only with key auth (XAI_API_KEY), which stages no credential file";
+}
+
 function confinementResult(message: string, subtype: "error_confinement" | "error_budget", emit: Parameters<StepProvider["runStep"]>[3], startedAt: number): StepResult {
 	emit({ type: "sdk_error", message });
 	emit({ type: "done", ok: false, subtype, cost: 0, turns: 0, elapsed: Date.now() - startedAt });
@@ -399,6 +433,13 @@ export function createGrokRunStep(deps: GrokProviderDependencies = {}): StepProv
 		if (CONFIG.review.authoring.enabled === "keys") {
 			return confinementResult("Grok key authentication is unavailable: the reviewed integrated route supports only local transparent subscription auth", "error_confinement", emit, t0);
 		}
+		// The reviewed integrated route supports only transparent subscription auth; grok's
+		// direct-key egress route is a separately reviewed item (DIRECT_KEY_AUTH_PROVIDERS).
+		const auth: EgressAuth = { kind: "transparent" };
+		if (auth.kind === "transparent") {
+			const unattendedRefusal = transparentAuthUnattendedRefusal(opts.unattendedSignals);
+			if (unattendedRefusal) return confinementResult(unattendedRefusal, "error_confinement", emit, t0);
+		}
 		const isWorktree = isWorktreePath(opts.cwd, REPO);
 		const systemAppend = composeSystemAppend({ isWorktree, cwd: opts.cwd, repo: REPO, planBlockActive: name === "implement" });
 		const finalPrompt = `${prompt}\n\n${systemAppend}\n\n${GROK_SANDBOX_APPEND}`;
@@ -413,6 +454,8 @@ export function createGrokRunStep(deps: GrokProviderDependencies = {}): StepProv
 			);
 		}
 		if (!sandbox) {
+			const fallbackRefusal = unsandboxedFallbackAuthRefusal(auth);
+			if (fallbackRefusal) return confinementResult(fallbackRefusal, "error_confinement", emit, t0);
 			emit({
 				type: "sdk_warning",
 				message: "Landlock is unavailable; the configured supervised fallback omits only Grok's nested native sandbox. The outer systemd/bubblewrap boundary and egress broker remain mandatory.",
@@ -431,8 +474,13 @@ export function createGrokRunStep(deps: GrokProviderDependencies = {}): StepProv
 					worktree: opts.cwd,
 					command: { kind: "brokered-mounted-driver", source: executable, args },
 					timeoutSeconds: timeoutMs / 1000,
-					egress: { provider: "grok", model, auth: { kind: "transparent" } },
-					privateHome: [{ kind: "copy", source: authPath, destination: ".grok/auth.json", mode: 0o600 }, ...(sandbox ? ([{ kind: "literal", content: `${GROK_SANDBOX_BLOCK}\n`, destination: ".grok/sandbox.toml", mode: 0o600 }] as const) : [])],
+					egress: { provider: "grok", model, auth },
+					// The credential file is staged only for transparent subscription auth; a key-auth
+					// run (future direct-key route) stages nothing readable worth exfiltrating (#279).
+					privateHome: [
+						...(auth.kind === "transparent" ? ([{ kind: "copy", source: authPath, destination: ".grok/auth.json", mode: 0o600 }] as const) : []),
+						...(sandbox ? ([{ kind: "literal", content: `${GROK_SANDBOX_BLOCK}\n`, destination: ".grok/sandbox.toml", mode: 0o600 }] as const) : []),
+					],
 					...(isWorktree ? { mainRepo: REPO } : {}),
 					...(opts.signal ? { signal: opts.signal } : {}),
 				},

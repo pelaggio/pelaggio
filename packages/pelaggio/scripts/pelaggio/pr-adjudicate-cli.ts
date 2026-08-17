@@ -19,6 +19,7 @@ import { upsertMarkerComment } from "./github-posting.js";
 import { createMainCheckoutDeltaObserver, FORBIDDEN_ROOT_GONE, listWorktreesIn, type MainCheckoutDeltaObserver, mainWorktree, snapshotForbiddenRoot, snapshotRepoRefState, snapshotSiblingWorktree } from "./helpers.js";
 import { executionOverrideFor, trustedLocalContext, verificationPrompt } from "./pr-review-cli.js";
 import { gateRecordsDir, listPrReviewGateRecords, type PrReviewGateRecord, writePrReviewGateRecord } from "./pr-review-gate-record.js";
+import { detectCliUnattendedSignals } from "./provider-routing.js";
 import {
 	adjudicationSourcesDir,
 	bindLiveSafetyVerification,
@@ -351,6 +352,11 @@ export async function runPrAdjudication(pr: number, profile: string, deps: PrAdj
 					return refuse(deps, `could not snapshot sibling worktree ${worktree} before verification: ${e instanceof Error ? e.message : String(e)}`);
 				}
 			}
+			// #279: ambient unattended evidence for the verifier seat's provider auth gate (grok
+			// transparent subscription auth). CI / PELAGGIO_SINGLE_SHOT were refused above, so this
+			// narrows to daemon/headless evidence; suppressions are logged, never silent.
+			const unattendedEvidence = detectCliUnattendedSignals();
+			if (unattendedEvidence.suppressed.length > 0) deps.log(unattendedEvidence.suppressed.join("; "));
 			let result: Awaited<ReturnType<RunStepFn>>;
 			try {
 				result = await deps.runStep(
@@ -365,6 +371,7 @@ export async function runPrAdjudication(pr: number, profile: string, deps: PrAdj
 						executionOverride: executionOverrideFor(verifySettings),
 						foreignRootDenial: { mainRepo: deps.repo, registeredWorktrees },
 						mainCheckoutObserver: observer,
+						unattendedSignals: unattendedEvidence.signals,
 					},
 					() => {},
 				);

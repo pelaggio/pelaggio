@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { type AuthoringReviewConfig, CONFIG, modelForProvider, type ResolvedConfig, type ReviewSlot, resolveStepSettings, type StepSettings } from "./config.js";
 import { expandPackagedSkill } from "./helpers.js";
+import { detectCliUnattendedSignals } from "./provider-routing.js";
 import { assertDocumentUnchanged, type DocumentSnapshot, documentInjectionState, formatDocumentUnderReview, snapshotDocument } from "./review/document.js";
 import type { ReviewOutcome } from "./review/loop.js";
 import { runReviewLoop } from "./review/loop.js";
@@ -123,6 +124,12 @@ export interface DocReviewOptions {
 	config?: ResolvedConfig;
 	runStep?: RunStepFn;
 	clock?: () => number;
+	/**
+	 * #279: unattended-execution evidence threaded into every seat's `RunStepOpts` for
+	 * provider-level auth gates (grok transparent subscription auth). Defaults to the
+	 * ambient CLI evidence (`detectCliUnattendedSignals`).
+	 */
+	unattendedSignals?: readonly string[];
 }
 
 export interface DocReviewResult {
@@ -148,6 +155,14 @@ export async function reviewDocument(options: DocReviewOptions): Promise<DocRevi
 	const policy = resolveDocReviewPolicy(config, profile);
 	const parkSignal = emptyParkSignal();
 	const documentBlock = formatDocumentUnderReview(snapshot, documentInjectionState(snapshot));
+	// #279: ambient unattended evidence for provider-level auth gates (grok transparent
+	// subscription auth). Attestation suppressions are echoed so they are never silent.
+	let unattendedSignals = options.unattendedSignals;
+	if (unattendedSignals === undefined) {
+		const ambient = detectCliUnattendedSignals();
+		if (ambient.suppressed.length > 0) process.stderr.write(`${ambient.suppressed.join("; ")}\n`);
+		unattendedSignals = ambient.signals;
+	}
 
 	const loop = await runReviewLoop({
 		policy,
@@ -159,7 +174,8 @@ export async function reviewDocument(options: DocReviewOptions): Promise<DocRevi
 		taxonomy: config.review.taxonomy,
 		safetyFloor: "disabled",
 		safetyFloorNote: DOC_REVIEW_SAFETY_FLOOR_NOTE,
-		runSeat: async ({ role, slot, prompt, parkSignal: child }) => runStepImpl(role === "judge" ? "pr-verify" : "pr-review", prompt, { cwd, profile, trace: false, parkSignal: child, executionOverride: executionOverrideFor(slot) }, emit),
+		runSeat: async ({ role, slot, prompt, parkSignal: child }) =>
+			runStepImpl(role === "judge" ? "pr-verify" : "pr-review", prompt, { cwd, profile, trace: false, parkSignal: child, executionOverride: executionOverrideFor(slot), unattendedSignals }, emit),
 		prompts: {
 			review: () => `${expandPackagedSkill("pr-review", "--document")}\n\n${documentBlock}`,
 			judge: (candidates) => `${expandPackagedSkill("pr-verify", "--authoring-loop-judge")}\n\nTRUSTED_CANDIDATE_DATA\n${JSON.stringify(candidates)}\nEND_TRUSTED_CANDIDATE_DATA`,

@@ -436,11 +436,45 @@ function allowedDependencyTarget(target: string, mainRepo: string): boolean {
 	return parts[0] === "node_modules" || (parts[0] === "packages" && parts.length >= 3 && parts[2] === "node_modules");
 }
 
-/** Resolve only dependency directories reached by worktree node_modules symlinks. */
+/** Prefix of `path` up to and including its outermost `node_modules` segment — the store root
+ *  that carries pnpm's `.pnpm` virtual store and the top-level dependency symlinks. */
+function outermostNodeModulesRoot(path: string): string | undefined {
+	const parts = path.split(sep);
+	const index = parts.indexOf("node_modules");
+	return index === -1 ? undefined : parts.slice(0, index + 1).join(sep);
+}
+
+/**
+ * Resolve the read-only dependency mounts a worktree's node_modules layout needs inside the jail.
+ *
+ * Two layouts exist (worktree-deps.ts): a whole-dir symlink (`node_modules` → MAIN's — mount its
+ * referent) and a materialized real dir whose entries are symlinks — workspace packages into the
+ * worktree itself, everything else to the ORIGINAL MAIN path (e.g. `MAIN/node_modules/<pkg>`),
+ * which is in turn usually a symlink into MAIN's `.pnpm` store. Mounting only `realpath()` leaves
+ * (the pre-#279 behavior) flattened that chain: the worktree symlink's original MAIN path did not
+ * exist inside the jail (dangling link) and `.pnpm`'s sibling links for transitive deps could not
+ * resolve. So for each materialized entry we mount the OUTERMOST MAIN `node_modules` root of both
+ * hops — the immediate readlink target (the original MAIN path exists, so the worktree symlink
+ * resolves) and the fully-resolved path (the shared `.pnpm` store is present, so pnpm's sibling
+ * links resolve) — read-only, reproducing exactly what module resolution needs.
+ *
+ * Conformance-test gap: no jail-side test exercises actual module resolution through these bind
+ * mounts; coverage is the unit test over the resolved mount set plus the live conformance run.
+ */
 export async function resolveContainedDependencyTargets(worktree: string, mainRepo: string): Promise<readonly string[]> {
-	const roots = [join(worktree, "node_modules")];
-	for (const name of await readdir(join(worktree, "packages")).catch(() => [])) roots.push(join(worktree, "packages", name, "node_modules"));
+	const work = await realpath(worktree);
+	const roots = [join(work, "node_modules")];
+	for (const name of await readdir(join(work, "packages")).catch(() => [])) roots.push(join(work, "packages", name, "node_modules"));
 	const targets = new Set<string>();
+	const addEntryRoots = async (entry: string): Promise<void> => {
+		const resolved = await realpath(entry);
+		if (resolved === work || resolved.startsWith(`${work}${sep}`)) return; // workspace package — the worktree mount covers it
+		const immediate = resolve(join(entry, ".."), await readlink(entry));
+		for (const hop of [immediate, resolved]) {
+			if (hop === work || hop.startsWith(`${work}${sep}`)) continue;
+			targets.add(outermostNodeModulesRoot(hop) ?? hop);
+		}
+	};
 	for (const root of roots) {
 		let rootInfo: Awaited<ReturnType<typeof lstat>>;
 		try {
@@ -453,23 +487,17 @@ export async function resolveContainedDependencyTargets(worktree: string, mainRe
 			for (const name of await readdir(root)) {
 				const entry = join(root, name);
 				const info = await lstat(entry);
-				if (info.isSymbolicLink()) {
-					const target = await realpath(entry);
-					if ((await stat(target)).isDirectory()) targets.add(target);
-				} else if (info.isDirectory() && name.startsWith("@")) {
+				if (info.isSymbolicLink()) await addEntryRoots(entry);
+				else if (info.isDirectory() && name.startsWith("@")) {
 					for (const scopedName of await readdir(entry)) {
 						const scopedEntry = join(entry, scopedName);
-						if ((await lstat(scopedEntry)).isSymbolicLink()) {
-							const target = await realpath(scopedEntry);
-							if ((await stat(target)).isDirectory()) targets.add(target);
-						}
+						if ((await lstat(scopedEntry)).isSymbolicLink()) await addEntryRoots(scopedEntry);
 					}
 				}
 			}
 		}
 	}
 	const main = await realpath(mainRepo);
-	const work = await realpath(worktree);
 	return [...targets]
 		.filter((target) => target !== work && !target.startsWith(`${work}${sep}`))
 		.map((target) => {

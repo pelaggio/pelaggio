@@ -21,6 +21,7 @@ import { CONFIG, modelForProvider, REPO, type ReviewConfig, ROADMAP_GITHUB, reso
 import { upsertMarkerComment } from "./github-posting.js";
 import { classifySecurityReviewDiff, expandPackagedSkill, formatReviewMetrics, mainWorktree, parseWaitFlag, resolveParkReset, type SecurityDiffSignal } from "./helpers.js";
 import { gateRecordsDir, type NewPrReviewFleetGateRecord, writePrReviewGateRecord } from "./pr-review-gate-record.js";
+import { detectCliUnattendedSignals } from "./provider-routing.js";
 import { adjudicationSourcesDir, buildAdjudicationSourceDraft, fleetRecordDigestOf, type PrAdjudicationSourceDraft, writeAdjudicationSourceRecord } from "./review/adjudication.js";
 import {
 	evaluateReviewConvergence,
@@ -127,6 +128,13 @@ export interface RunPrReviewGateOptions {
 	reviewDrivers?: StepSettings[];
 	/** Scalar verifier for this run. Defaults to resolveStepSettings(CONFIG, profile, "pr-verify"). */
 	verifySettings?: StepSettings;
+	/**
+	 * #279: unattended-execution evidence threaded into every seat's `RunStepOpts` for
+	 * provider-level auth gates (grok transparent subscription auth — a CI/headless gate
+	 * run must not ride the operator's transparent subscription). Defaults to the ambient
+	 * CLI evidence (`detectCliUnattendedSignals`).
+	 */
+	unattendedSignals?: readonly string[];
 }
 
 export interface PrReviewGateResult {
@@ -517,10 +525,22 @@ function driverIdentity(candidate: StepSettings): ReviewDriverIdentity {
 	};
 }
 
-async function runReviewPass(iteration: number, label: ReviewLabel, prompt: string, candidate: StepSettings, pr: string, opts: { cwd: string; runStep: RunStepFn; profile: string; parkSignal: ParkSignal }): Promise<ReviewPass> {
+async function runReviewPass(
+	iteration: number,
+	label: ReviewLabel,
+	prompt: string,
+	candidate: StepSettings,
+	pr: string,
+	opts: { cwd: string; runStep: RunStepFn; profile: string; parkSignal: ParkSignal; unattendedSignals: readonly string[] },
+): Promise<ReviewPass> {
 	const driver = driverIdentity(candidate);
 	process.stderr.write(`▶ pr-review ${label} · ${driverLabel(driver)}\n`);
-	const result = await opts.runStep("pr-review", prompt, { cwd: opts.cwd, profile: opts.profile, trace: false, parkSignal: opts.parkSignal, itemId: pr, executionOverride: executionOverrideFor(candidate) }, emit);
+	const result = await opts.runStep(
+		"pr-review",
+		prompt,
+		{ cwd: opts.cwd, profile: opts.profile, trace: false, parkSignal: opts.parkSignal, itemId: pr, executionOverride: executionOverrideFor(candidate), unattendedSignals: opts.unattendedSignals },
+		emit,
+	);
 	if (!result.ok) {
 		return {
 			iteration,
@@ -580,7 +600,7 @@ async function runVerificationPass(
 	carried: ReadonlyMap<string, ReviewFinding>,
 	profile: string,
 	pr: string,
-	opts: { cwd: string; runStep: RunStepFn; localContext: string; parkSignal: ParkSignal; verifySettings: StepSettings },
+	opts: { cwd: string; runStep: RunStepFn; localContext: string; parkSignal: ParkSignal; verifySettings: StepSettings; unattendedSignals: readonly string[] },
 ): Promise<void> {
 	if (!pass.report) return;
 	const unique = new Map(carried);
@@ -596,7 +616,7 @@ async function runVerificationPass(
 		result = await opts.runStep(
 			"pr-verify",
 			verificationPrompt(candidates, opts.localContext),
-			{ cwd: opts.cwd, profile, trace: false, parkSignal: opts.parkSignal, itemId: pr, executionOverride: executionOverrideFor(opts.verifySettings) },
+			{ cwd: opts.cwd, profile, trace: false, parkSignal: opts.parkSignal, itemId: pr, executionOverride: executionOverrideFor(opts.verifySettings), unattendedSignals: opts.unattendedSignals },
 			emit,
 		);
 	} catch (error) {
@@ -650,6 +670,14 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 	// this, so a caller that pins the pool must be able to pin the verifier too — otherwise
 	// it silently reads the host repo's own .pelaggio.yml and passes or fails by accident.
 	const verifySettings = options.verifySettings ?? deps.verifySettings ?? resolveStepSettings(CONFIG, profile, "pr-verify");
+	// #279: unattended evidence for provider-level auth gates (grok transparent subscription
+	// auth). Attestation suppressions are echoed so they are never silent.
+	let unattendedSignals = options.unattendedSignals;
+	if (unattendedSignals === undefined) {
+		const ambient = detectCliUnattendedSignals();
+		if (ambient.suppressed.length > 0) process.stderr.write(`${ambient.suppressed.join("; ")}\n`);
+		unattendedSignals = ambient.signals;
+	}
 
 	let securitySignal: SecurityDiffSignal;
 	let inspectionFiles: string[] = [];
@@ -710,6 +738,7 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 					profile,
 					// children is built from the same reviewDrivers map, so index always lands.
 					parkSignal: children[index] ?? childParkSignal(),
+					unattendedSignals,
 				}),
 			);
 			mergeChildParkSignals(signal, children);
@@ -761,7 +790,7 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 
 		// Sequential verify per driver pass that has candidate blockers (scalar pr-verify).
 		for (const pass of iterationPasses) {
-			await runVerificationPass(pass, carried, profile, options.pr, { cwd, runStep: runStepImpl, localContext, parkSignal: signal, verifySettings });
+			await runVerificationPass(pass, carried, profile, options.pr, { cwd, runStep: runStepImpl, localContext, parkSignal: signal, verifySettings, unattendedSignals });
 			const parked = parkGateResult(signal, pass.verificationResult ?? pass.result, passes);
 			if (parked) return parked;
 		}

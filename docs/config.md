@@ -462,10 +462,15 @@ discarded after the run.
 
 On a Landlock-less Linux host such as a default WSL2 kernel, operators may explicitly set
 `providers.grok.allow-unsandboxed-fallback: true`. Pelaggio then omits only Grok's nested
-`--sandbox` flag and prints a loud warning. The outer systemd/bubblewrap jail, private network,
-brokered `cli-chat-proxy.grok.com` allowlist, staged auth, and write-set validation remain mandatory.
-Built-in web search remains disabled in either mode. The fallback is for local supervised use, not
-unattended, CI, or shared-host subscription operation.
+`--sandbox` flag. The outer systemd/bubblewrap jail, private network, brokered
+`cli-chat-proxy.grok.com` allowlist, and write-set validation remain mandatory. Built-in web
+search remains disabled in either mode. Transparent subscription auth additionally requires the
+nested Landlock sandbox: without it, unsandboxed shell tools share the private HOME with the
+staged `~/.grok/auth.json` and could copy the credential into the checkpointed worktree, so a
+Landlock-less run refuses transparent auth fail-closed — the fallback may proceed only with key
+auth (not yet implemented/reviewed for grok). Independently, transparent subscription auth
+refuses under any unattended-execution signal (CI/single-shot, daemon, multi-cycle, headless
+without attestation); it is for attended local single-developer runs only.
 
 After a Grok upgrade, capture DNS names and/or TLS SNI for the same probe run
 with a privileged tool such as `tcpdump`, normalized without paths, payloads,

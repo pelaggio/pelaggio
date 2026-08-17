@@ -74,6 +74,15 @@ export interface RunStepOpts {
 	 * + `.dev/sessions/` denial actually run.
 	 */
 	foreignRootDenial?: ForeignRootDenial;
+	/**
+	 * #279: unattended-execution evidence threaded from the dispatch site (pipeline `step()`
+	 * from `PipelineOpts.unattendedSignals`; operator CLIs from `detectCliUnattendedSignals`).
+	 * Consumed by provider auth gates whose credential is only defensible for attended local
+	 * execution (grok transparent subscription auth). Empty array = verifiably attended;
+	 * `undefined` — a dispatch path that threads no evidence — is treated by such gates as
+	 * unattended, fail-closed.
+	 */
+	unattendedSignals?: readonly string[];
 }
 
 /** Canonical signature of a step runner. Single-sourced here (all four types are in

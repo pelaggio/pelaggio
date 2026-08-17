@@ -86,6 +86,19 @@ describe("doc-review CLI (#384)", () => {
 		assert.equal(parsed.result.diversity.state, "met");
 	});
 
+	it("threads unattended evidence into every seat's RunStepOpts (#279)", async () => {
+		const path = writeDoc("unattended.md", "# Design\n\nAll good.\n");
+		const snapshot = snapshotDocument(path);
+		const seen: Array<readonly string[] | undefined> = [];
+		const runStep = (async (name, _prompt, opts) => {
+			seen.push(opts.unattendedSignals);
+			return ok(name === "pr-verify" ? judge([]) : CLEAN);
+		}) as Parameters<typeof reviewDocument>[0]["runStep"];
+		await reviewDocument({ snapshot, cwd: dir, config: TEST_CONFIG, runStep, clock, unattendedSignals: ["CI/single-shot (--no-worktree)"] });
+		assert.ok(seen.length >= 2);
+		for (const threaded of seen) assert.deepEqual(threaded, ["CI/single-shot (--no-worktree)"]);
+	});
+
 	it("blocking survivor → exit 1", async () => {
 		const path = writeDoc("block.md", "# Design\n\nContradictory.\n");
 		const snapshot = snapshotDocument(path);

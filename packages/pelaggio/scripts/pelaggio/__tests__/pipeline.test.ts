@@ -3842,6 +3842,57 @@ describe("runPipeline — authoring review capability seating + effects (#337)",
 	});
 });
 
+describe("runPipeline — unattended evidence threading into RunStepOpts (#279)", () => {
+	it("threads PipelineOpts.unattendedSignals into every provider step's RunStepOpts", async () => {
+		const worktree = makeTempGitRepo();
+		writeFileSync(join(worktree, "seed.txt"), "seed");
+		execSync("git add -A && git commit -q -m seed", { cwd: worktree });
+		const parkSignal = makeParkSignal();
+		const { runStep } = createMockRunStep({ implement: { ok: true, writes: { "impl.txt": "x" } } }, parkSignal);
+		const seen: Array<{ step: string; signals: readonly string[] | undefined }> = [];
+		const capturing: RunStepFn = async (name, prompt, opts, emit) => {
+			seen.push({ step: name, signals: opts.unattendedSignals });
+			return runStep(name, prompt, opts, emit);
+		};
+		const signals = ["multi-cycle campaign (--cycles/--parallel > 1)"];
+
+		await runPipeline({ ...baseOpts(worktree), startFrom: "implement", unattendedSignals: signals }, parkSignal, baseFlags, {
+			runStep: capturing,
+			mainRepo: worktree,
+			listWorktrees: () => [worktree],
+			appendLog: () => {},
+			runShipBookkeeping: noopBookkeeping,
+		});
+
+		assert.ok(seen.length > 0, "expected at least one provider step to run");
+		for (const { step, signals: threaded } of seen) assert.deepEqual(threaded, signals, `step ${step} must receive the orchestrator-computed unattended evidence`);
+	});
+
+	it("falls back to the single-shot signal for direct callers in --no-worktree mode", async () => {
+		const worktree = makeTempGitRepo();
+		writeFileSync(join(worktree, "seed.txt"), "seed");
+		execSync("git add -A && git commit -q -m seed", { cwd: worktree });
+		const parkSignal = makeParkSignal();
+		const { runStep } = createMockRunStep({ implement: { ok: true, writes: { "impl.txt": "x" } } }, parkSignal);
+		const seen: Array<readonly string[] | undefined> = [];
+		const capturing: RunStepFn = async (name, prompt, opts, emit) => {
+			seen.push(opts.unattendedSignals);
+			return runStep(name, prompt, opts, emit);
+		};
+
+		await runPipeline({ ...baseOpts(worktree), startFrom: "implement", noWorktree: true }, parkSignal, baseFlags, {
+			runStep: capturing,
+			mainRepo: worktree,
+			listWorktrees: () => [worktree],
+			appendLog: () => {},
+			runShipBookkeeping: noopBookkeeping,
+		});
+
+		assert.ok(seen.length > 0, "expected at least one provider step to run");
+		for (const threaded of seen) assert.deepEqual(threaded, ["CI/single-shot (--no-worktree)"]);
+	});
+});
+
 describe("runPipeline — resolved escalation acknowledgement", () => {
 	async function runResolvedEscalation(disposition: "proceed" | "block", acknowledgement?: string) {
 		const saved = {

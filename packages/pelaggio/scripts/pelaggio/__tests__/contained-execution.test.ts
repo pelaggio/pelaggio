@@ -242,6 +242,34 @@ describe("contained invocation", () => {
 		assert.deepEqual(await resolveContainedDependencyTargets(root, main), [join(main, "node_modules", "tsx")]);
 	});
 
+	it("mounts the outermost MAIN node_modules roots for the materialized per-package layout (#279)", async () => {
+		const root = await fixture();
+		const main = await mkdtemp(join(tmpdir(), "contained-main-test-"));
+		roots.push(main);
+		const { mkdir } = await import("node:fs/promises");
+		// MAIN pnpm layout: top-level entries are symlinks into the shared .pnpm virtual store.
+		await mkdir(join(main, "node_modules", ".pnpm", "tsx@4.0.0", "node_modules", "tsx"), { recursive: true });
+		await mkdir(join(main, "node_modules", ".pnpm", "yaml@2.0.0", "node_modules", "yaml"), { recursive: true });
+		await symlink(join(main, "node_modules", ".pnpm", "tsx@4.0.0", "node_modules", "tsx"), join(main, "node_modules", "tsx"));
+		await mkdir(join(main, "packages", "pelaggio", "node_modules"), { recursive: true });
+		await symlink(join(main, "node_modules", ".pnpm", "yaml@2.0.0", "node_modules", "yaml"), join(main, "packages", "pelaggio", "node_modules", "yaml"));
+		// Worktree materialized layout (worktree-deps.ts): real dirs whose external entries are
+		// absolute symlinks to the ORIGINAL MAIN paths — not the resolved .pnpm leaves — plus a
+		// workspace self-link into the worktree.
+		await mkdir(join(root, "node_modules"), { recursive: true });
+		await mkdir(join(root, "packages", "pelaggio", "node_modules"), { recursive: true });
+		await symlink(join(main, "node_modules", "tsx"), join(root, "node_modules", "tsx"));
+		await symlink(join(main, "node_modules", ".pnpm"), join(root, "node_modules", ".pnpm"));
+		await symlink(join(root, "packages", "pelaggio"), join(root, "node_modules", "pelaggio"));
+		await symlink(join(main, "packages", "pelaggio", "node_modules", "yaml"), join(root, "packages", "pelaggio", "node_modules", "yaml"));
+		const targets = await resolveContainedDependencyTargets(root, main);
+		// Both hops of every symlink chain stay resolvable inside the jail: mounting the outermost
+		// node_modules roots keeps the original MAIN paths present (no dangling worktree symlink)
+		// and includes the .pnpm store (transitive sibling links resolve). Leaf-only mounts —
+		// the pre-#279 behavior — must not come back.
+		assert.deepEqual([...targets].sort(), [join(main, "node_modules"), join(main, "packages", "pelaggio", "node_modules")].sort());
+	});
+
 	it("kills the contained scope and fails closed when the broker seals", async () => {
 		const root = await fixture();
 		const privateRoot = await mkdtemp(join(tmpdir(), "contained-broker-test-"));

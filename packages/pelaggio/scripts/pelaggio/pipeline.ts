@@ -358,6 +358,12 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	// failure, park) so an attested headless run is reconstructible from
 	// .dev/pelaggio-log.jsonl alone — the resolution-time console line is not durable.
 	const unattendedSignalSuppressions = [...(opts.unattendedSignalSuppressions ?? [])];
+	// Unattended-execution evidence (#276) with two consumers: the authoring-review `local`
+	// gate and every provider step (`RunStepOpts.unattendedSignals`), so provider-level auth
+	// gates (grok transparent subscription auth, #279) see the orchestrator-computed evidence.
+	// Direct runPipeline() callers that omit it keep the legacy single-shot-only fallback —
+	// ambient env/TTY are deliberately not probed here so tests stay hermetic and injectable.
+	const unattendedSignals: readonly string[] = opts.unattendedSignals ?? (opts.noWorktree === true ? ["CI/single-shot (--no-worktree)"] : []);
 	/** Descriptors for every execution receipt written this cycle (steps + aggregate review). */
 	const executionReceipts: ExecutionReceiptDescriptor[] = [];
 	const assignment = createDriverAssignmentState(opts.cycle);
@@ -677,6 +683,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 						parkSignal: parkSignalOverride ?? parkSignal,
 						...(executionOverride ? { executionOverride } : {}),
 						...(maxTurnsOverride !== undefined ? { maxTurnsOverride } : {}),
+						unattendedSignals,
 						signal: stepAbort.signal,
 						...(mainCheckoutObserver ? { mainCheckoutObserver } : {}),
 						foreignRootDenial,
@@ -1684,8 +1691,8 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			if (!seating.ok) return finish({ itemId, completed: false, cost, error: `shakedown-code assignment failed: ${seating.reason}` });
 			const execution = resolveAuthoringReviewExecution(seating.policy, {
 				// Orchestrator-computed evidence (CI/single-shot, daemon marker, multi-cycle,
-				// headless). Fallback for direct callers keeps the legacy single-shot-only signal.
-				unattendedSignals: opts.unattendedSignals ?? (opts.noWorktree === true ? ["CI/single-shot (--no-worktree)"] : []),
+				// headless), shared with `RunStepOpts.unattendedSignals` — computed once above.
+				unattendedSignals,
 				suppressedSignals: opts.unattendedSignalSuppressions ?? [],
 				// Keys mode validates the author revision seat's key with the same fail-closed
 				// rule as Judge/reviewers — before any seat runs (#276 follow-up).

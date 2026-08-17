@@ -79,8 +79,7 @@ allows only the exact Grok 0.2.103 bootstrap/control routes and streaming model 
 
 ## Landlock-less hosts
 
-Without Landlock, Grok's nested native sandbox refuses by default. For a local, actively supervised
-run only:
+Without Landlock, Grok's nested native sandbox refuses by default. The config escape hatch:
 
 ```yaml
 providers:
@@ -90,15 +89,25 @@ providers:
 ```
 
 This omits only Grok's nested `--sandbox` selection. The outer systemd/bubblewrap jail, private
-network namespace, broker, staged auth, write-set validation, and scope-level teardown remain
-mandatory; there is no direct-network or uncontained fallback.
+network namespace, broker, write-set validation, and scope-level teardown remain mandatory; there
+is no direct-network or uncontained fallback.
+
+**Transparent subscription auth still refuses without Landlock.** The staged `~/.grok/auth.json`
+lives in the same private HOME Grok's unsandboxed shell tools can read, and prompt-injected code
+could copy the OAuth credential into the writable worktree, which write-set validation accepts. So
+the fallback is safe by construction only for key auth, where no credential file is staged — and
+grok's direct-key route is not yet implemented/reviewed. Until it is, Grok effectively requires
+Landlock.
 
 ## Limits and release conformance
 
 The selected model provider remains an allowed sink for prompts and repository/read-file context.
 Containment prevents alternate network destinations; it cannot make legitimate model traffic
 confidential from the provider or establish contractual permission for subscription automation.
-Subscription mode remains local single-developer only.
+Subscription mode remains local single-developer only, and the harness enforces it: any
+unattended-execution signal (CI/single-shot, daemon-spawned, multi-cycle campaign, or headless
+without the `PELAGGIO_OPERATOR_ATTENDED=1` attestation) refuses transparent subscription auth
+fail-closed before any auth staging, for every Grok dispatch path.
 
 The opt-in release gate requires Linux, working user scopes/bubblewrap, Grok 0.2.103, a safe auth
 file, and network access:
