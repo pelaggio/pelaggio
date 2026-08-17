@@ -25,10 +25,12 @@ import { adjudicationSourcesDir, buildAdjudicationSourceDraft, fleetRecordDigest
 import {
 	evaluateReviewConvergence,
 	modelAuthoredText,
+	parseFailureCode,
 	parseReviewFindings,
 	parseReviewVerification,
 	type ReviewExhaustionReason,
 	type ReviewFinding,
+	type ReviewFindingsParseErrorCode,
 	type ReviewFindingsReport,
 	reconcileReviewVerification,
 	reviewFindingFingerprint,
@@ -527,9 +529,11 @@ function driverIdentity(candidate: StepSettings): ReviewDriverIdentity {
 	};
 }
 
-// Backstop scrubber for the one model-derived fragment the structural diagnosis still carries:
-// the harness parse-error message, which can embed a model-controlled JSON key (assertKeys). The
-// structural facts themselves carry no model bytes. Collected once at module load (#237 / TC-014).
+// Belt-and-suspenders scrubber over the assembled structural diagnosis. After #536 the diagnosis
+// carries NO model-derived fragment at all — the parse-error MESSAGE (which can embed a
+// model-controlled JSON key via assertKeys) is no longer retained; only harness-authored structural
+// facts and a fixed, enumerated error CODE are. This scrub is a defensive floor, not a load-bearing
+// reversal. Collected once at module load (#237 / TC-014).
 const scrubRetainedOutput = makeSecretScrubber();
 
 /** The cold-gate delimiter pair the parser requires per phase. Used only to REPORT marker
@@ -556,15 +560,17 @@ function markerFact(name: string, matches: readonly RegExpMatchArray[]): string 
  * retain only structural facts about WHY the parse failed — which delimiter markers / fence
  * appeared and where, how much text trailed the closing marker (the fence-variant "block not
  * found" signal, #536 deliverable 1), and lengths — none of which can carry a reconstructable
- * secret. The harness parse-error message is the only model-derived fragment (it can embed a
- * model-controlled JSON key) and is scrubbed. #554 (jailing the seat so it holds no real
- * credential) is the complete fix; until it lands, this sink stays structural-only.
+ * secret. The failure reason is a FIXED, harness-authored error CODE (never the parse-error
+ * message, which can embed a model-controlled JSON key via assertKeys — #536 finding: a
+ * prompt-injected seat could base64-encode GH_TOKEN into an unknown key and have assertKeys echo
+ * it to stderr + the public comment). #554 (jailing the seat so it holds no real credential) is the
+ * complete fix; until it lands, this sink stays structural-and-code-only.
  *
  * Runs over `modelAuthoredText(result)` — the EXACT bytes the parser rejected — not `result.text`
  * (a final streamed chunk on some providers) and never the pre-sliced `result.outputTail` (whose
  * 200-char slice can split a credential and defeat scrubbing, #536 finding A).
  */
-function structuralParseFailureDiagnosis(phase: "discovery" | "verification", authored: string, scrubbedError: string): string {
+function structuralParseFailureDiagnosis(phase: "discovery" | "verification", authored: string, code: ReviewFindingsParseErrorCode): string {
 	const markers = PARSE_FAILURE_MARKERS[phase];
 	const openMatches = [...authored.matchAll(markers.openRe)];
 	const closeMatches = [...authored.matchAll(markers.closeRe)];
@@ -578,20 +584,22 @@ function structuralParseFailureDiagnosis(phase: "discovery" | "verification", au
 		markerFact("close", closeMatches),
 		`fence=${fence ? `${fence[0] === "`" ? "backtick" : "tilde"}x${fence.length}` : "absent"}`,
 		...(trailingAfterClose !== undefined ? [`trailingAfterClose=${trailingAfterClose}`] : []),
-		`error=${JSON.stringify(scrubbedError.slice(0, 300))}`,
+		// Fixed enumerated code — a closed set of harness-authored constants, never model bytes.
+		`errorCode=${code}`,
 	];
-	// Belt-and-suspenders: the assembled string holds no raw model bytes, but scrub once more so a
-	// secret-shaped token in the (already-scrubbed) error fragment can never slip through.
+	// Belt-and-suspenders: the assembled string is entirely harness-authored (structural facts + a
+	// fixed code), but scrub once more as a defensive floor.
 	return scrubRetainedOutput(facts.join(" "));
 }
 
 /**
  * Emit the structural parse-failure diagnosis to the durable CI log and return it for the (also
- * durable, PUBLIC) PR comment. Both sinks carry ONLY the structural diagnosis — never raw model
- * text — because the seat holds real credentials; see structuralParseFailureDiagnosis / #554.
+ * durable, PUBLIC) PR comment. Both sinks carry ONLY the structural diagnosis (harness facts + a
+ * fixed error CODE) — never raw model text or the model-interpolated parse-error message — because
+ * the seat holds real credentials; see structuralParseFailureDiagnosis / #536 / #554.
  */
-function retainParseFailureTail(label: ReviewLabel, phase: "discovery" | "verification", result: StepResult, scrubbedError: string): string {
-	const diagnosis = structuralParseFailureDiagnosis(phase, modelAuthoredText(result), scrubbedError);
+function retainParseFailureTail(label: ReviewLabel, phase: "discovery" | "verification", result: StepResult, code: ReviewFindingsParseErrorCode): string {
+	const diagnosis = structuralParseFailureDiagnosis(phase, modelAuthoredText(result), code);
 	process.stderr.write(`  ✗ pr-review ${label} ${phase} parse-failure (structural): ${diagnosis}\n`);
 	return diagnosis;
 }
@@ -626,10 +634,12 @@ async function runReviewPass(iteration: number, label: ReviewLabel, prompt: stri
 			...(gate === "block" ? { failureKind: "findings" as const } : {}),
 		};
 	} catch (error) {
-		// Scrub the parse-error message once, up front: it can embed a model-controlled JSON key
-		// (assertKeys) and it feeds BOTH the durable stderr diagnosis and the PUBLIC comment diagnostic.
-		const message = scrubRetainedOutput(error instanceof Error ? error.message : String(error));
-		const parseFailureDiagnosis = retainParseFailureTail(label, "discovery", result, message);
+		// Retain a FIXED, enumerated code — never the parse-error message. The message can embed a
+		// model-controlled JSON key (assertKeys) and it feeds BOTH the durable stderr diagnosis and the
+		// PUBLIC comment diagnostic; a base64-encoded credential in a key name would defeat scrubbing
+		// (#536). An unknown/unexpected error fails closed to the generic `parse-error` code.
+		const code = parseFailureCode(error);
+		const parseFailureDiagnosis = retainParseFailureTail(label, "discovery", result, code);
 		return {
 			iteration,
 			label,
@@ -638,7 +648,7 @@ async function runReviewPass(iteration: number, label: ReviewLabel, prompt: stri
 			driver,
 			effectiveVerdict: "block",
 			failureKind: "infra",
-			diagnostic: `Invalid review findings report: ${message}.`,
+			diagnostic: `Invalid review findings report (${code}).`,
 			failureSubtype: "error_invalid_output",
 			parseFailureDiagnosis,
 		};
@@ -707,11 +717,13 @@ async function runVerificationPass(
 		pass.failureKind = survives ? "findings" : undefined;
 	} catch (error) {
 		// Verifier stderr is the only durable copy of this failure (renderPass shows the report, not
-		// the verification result). Retain the structural diagnosis only — the verifier holds real
-		// credentials and could base64-encode one into a short malformed reply (#536 finding B).
-		const message = scrubRetainedOutput(error instanceof Error ? error.message : String(error));
-		retainParseFailureTail(pass.label, "verification", result, message);
-		pass.verificationDiagnostic = `Invalid verification report: ${message}.`;
+		// the verification result). Retain the structural diagnosis + a FIXED code only — never the
+		// parse-error message. The verifier holds real credentials and a model-controlled JSON key
+		// (assertKeys) could carry a base64-encoded secret the scrubber cannot reverse (#536 finding B).
+		// Unknown/unexpected errors fail closed to the generic `parse-error` code.
+		const code = parseFailureCode(error);
+		retainParseFailureTail(pass.label, "verification", result, code);
+		pass.verificationDiagnostic = `Invalid verification report (${code}).`;
 		pass.failureSubtype = "error_invalid_verification";
 		pass.gate = "block";
 		pass.effectiveVerdict = "block";

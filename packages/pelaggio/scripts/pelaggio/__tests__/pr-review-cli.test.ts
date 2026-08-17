@@ -335,11 +335,11 @@ describe("pr-review CLI aggregation", () => {
 		});
 		assert.equal(out.code, 1);
 
-		// Structural diagnosis IS retained and useful: markers present, and the harness JSON error.
+		// Structural diagnosis IS retained and useful: markers present, and the FIXED error code.
 		assert.match(out.stderr, /standard discovery parse-failure \(structural\)/);
 		assert.match(out.stderr, /open=present/);
 		assert.match(out.stderr, /close=present/);
-		assert.match(out.stderr, /error="review findings block is not valid JSON"/);
+		assert.match(out.stderr, /errorCode=invalid-json/);
 		const comment = out.comments.join("\n");
 		assert.match(comment, /Structural parse diagnosis \(no raw model text retained/);
 
@@ -349,6 +349,51 @@ describe("pr-review CLI aggregation", () => {
 			assert.ok(!sink.includes(anthropicKey), "raw ANTHROPIC key must not be retained");
 			assert.ok(!sink.includes(base64Secret), "base64-encoded secret must not be retained");
 			assert.ok(!sink.includes(finalChunkProse), "raw final-chunk prose must not be retained");
+		}
+	});
+
+	it("retains a fixed error CODE — not the model-interpolated parse-error message — for an unknown JSON key carrying a base64 secret", async () => {
+		// #536 root: a prompt-injected seat can place a reversible encoding of GH_TOKEN in an UNKNOWN
+		// top-level JSON key. assertKeys interpolates that key VERBATIM into its error message; the old
+		// retention path published that message to stderr + the public PR comment, and base64 defeats
+		// the value/pattern scrubber. The retained diagnosis must carry the fixed `unknown-key` code
+		// and NEITHER the encoded key NOR the decoded secret.
+		const secret = "GH_TOKEN=ghp_realtokenvalue_should_not_survive";
+		const encodedKey = Buffer.from(secret).toString("base64"); // the model-controlled unknown key
+		const body = JSON.stringify({ schemaVersion: 1, summary: "Real review.", findings: [], [encodedKey]: "x" });
+		const assistantText = `REVIEW_FINDINGS\n${body}\nEND_REVIEW_FINDINGS`;
+		const out = await runCli({ results: [result({ text: assistantText, assistantText })] });
+		assert.equal(out.code, 1);
+		const comment = out.comments.join("\n");
+		// The FIXED code is retained in both durable sinks (stderr diagnosis + public comment <pre>).
+		assert.match(out.stderr, /errorCode=unknown-key/);
+		assert.match(comment, /errorCode=unknown-key/);
+		assert.match(comment, /Invalid review findings report/);
+		// NEITHER the encoded key NOR the decoded secret reaches either sink.
+		for (const sink of [out.stderr, comment]) {
+			assert.ok(!sink.includes(encodedKey), "base64-encoded unknown key must not be retained");
+			assert.ok(!sink.includes(secret), "decoded secret must not be retained");
+			assert.ok(!sink.includes("GH_TOKEN"), "credential name from the unknown key must not be retained");
+		}
+	});
+
+	it("retains a fixed error CODE — not the offending enum value — when a finding severity is a base64 secret", async () => {
+		// #536 audit: bad-enum variant. A malformed finding whose `severity` is a base64-encoded secret
+		// must fail closed with the fixed `invalid-severity` code; the offending value is never echoed
+		// into a retained/published sink.
+		const secret = "ANTHROPIC_API_KEY=sk-ant-real-secret-value";
+		const encodedSeverity = Buffer.from(secret).toString("base64");
+		const body = JSON.stringify({ schemaVersion: 1, summary: "Real review.", findings: [{ severity: encodedSeverity, message: "A defect.", path: "src/a.ts", line: 1 }] });
+		const assistantText = `REVIEW_FINDINGS\n${body}\nEND_REVIEW_FINDINGS`;
+		const out = await runCli({ results: [result({ text: assistantText, assistantText })] });
+		assert.equal(out.code, 1);
+		const comment = out.comments.join("\n");
+		assert.match(out.stderr, /errorCode=invalid-severity/);
+		assert.match(comment, /errorCode=invalid-severity/);
+		assert.match(comment, /Invalid review findings report/);
+		for (const sink of [out.stderr, comment]) {
+			assert.ok(!sink.includes(encodedSeverity), "base64-encoded severity value must not be retained");
+			assert.ok(!sink.includes(secret), "decoded secret must not be retained");
 		}
 	});
 
@@ -383,7 +428,7 @@ describe("pr-review CLI aggregation", () => {
 		assert.equal(out.code, 1);
 		const body = out.comments.join("\n");
 		assert.match(body, /Invalid review findings report/);
-		assert.match(body, /schema example/);
+		assert.match(body, /schema-example-parroted/);
 		assert.match(body, /gate=block ok=false subtype=standard:error_invalid_output/);
 		assert.deepEqual(out.statuses, ["block"]);
 	});
@@ -567,9 +612,9 @@ describe("pr-review CLI aggregation", () => {
 			assert.match(out.comments[0], /Retained blocker/);
 			assert.match(out.comments[0], /isolated verification failed; blocker retained/);
 			if (!(verifier instanceof Error)) {
-				// Structural-only diagnosis: the harness "block not found" error, no raw model text.
+				// Structural-only diagnosis: the fixed "block-not-found" code, no raw model text.
 				assert.match(out.stderr, /standard verification parse-failure \(structural\)/);
-				assert.match(out.stderr, /error="review verification block not found"/);
+				assert.match(out.stderr, /errorCode=block-not-found/);
 			}
 		}
 	});
@@ -597,10 +642,10 @@ describe("pr-review CLI aggregation", () => {
 		});
 		assert.equal(out.code, 1);
 		assert.match(out.comments[0], /Retained blocker/);
-		// The structural diagnosis IS retained and useful: markers absent, harness error, lengths.
+		// The structural diagnosis IS retained and useful: markers absent, fixed code, lengths.
 		assert.match(out.stderr, /standard verification parse-failure \(structural\)/);
 		assert.match(out.stderr, /open=absent/);
-		assert.match(out.stderr, /error="review verification block not found"/);
+		assert.match(out.stderr, /errorCode=block-not-found/);
 		// NONE of the recoverable secrets — nor the boundary-straddled fragment — reaches either sink.
 		const comment = out.comments.join("\n");
 		for (const sink of [out.stderr, comment]) {

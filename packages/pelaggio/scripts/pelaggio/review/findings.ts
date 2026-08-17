@@ -324,11 +324,64 @@ export function evaluateReviewConvergence(options: { carried: ReadonlyMap<string
 	return { state: "continue", survivors };
 }
 
+/**
+ * Closed, harness-authored set of parse-failure codes (#536). This is the ONLY parse-failure
+ * signal that may be RETAINED or PUBLISHED: the human-readable `message` on the error is for
+ * local throwing/debugging and interpolates model-derived bytes at several sites (e.g. an unknown
+ * JSON key in {@link assertKeys}), so a prompt-injected seat holding a real credential could
+ * base64-encode a secret into a key name and have it echoed to stderr + the public PR comment.
+ * Retention sites carry `error.code`, never `error.message`. Any error that is not a
+ * `ReviewFindingsParseError` fails closed to `parse-error` (see {@link parseFailureCode}).
+ */
+export type ReviewFindingsParseErrorCode =
+	| "block-not-found"
+	| "multiple-blocks"
+	| "trailing-after-close"
+	| "not-json-object"
+	| "invalid-json"
+	| "unknown-key"
+	| "missing-field"
+	| "unsupported-schema-version"
+	| "findings-not-array"
+	| "decisions-not-array"
+	| "invalid-schema"
+	| "invalid-severity"
+	| "invalid-field"
+	| "line-requires-path"
+	| "invalid-line"
+	| "invalid-rule-id"
+	| "invalid-cwe"
+	| "invalid-class-hint"
+	| "invalid-class"
+	| "invalid-ruling"
+	| "judgment-dissent-misuse"
+	| "missing-ruling"
+	| "invalid-candidate-id"
+	| "invalid-decision"
+	| "duplicate-candidate-id"
+	| "duplicate-decision"
+	| "unknown-candidate"
+	| "missing-decision"
+	| "schema-example-parroted"
+	| "parse-error";
+
 export class ReviewFindingsParseError extends Error {
-	constructor(message: string, options?: ErrorOptions) {
+	/** Fixed, enumerated failure reason. This — never {@link Error.message} — is what is retained. */
+	readonly code: ReviewFindingsParseErrorCode;
+	constructor(code: ReviewFindingsParseErrorCode, message: string, options?: ErrorOptions) {
 		super(message, options);
 		this.name = "ReviewFindingsParseError";
+		this.code = code;
 	}
+}
+
+/**
+ * Total classifier for a caught parse failure. Fail-closed: a `ReviewFindingsParseError` yields
+ * its enumerated `code`; ANY other value (including a plain `Error`) yields the generic
+ * `parse-error` — the raw `.message` is NEVER passed through to a retained/published sink.
+ */
+export function parseFailureCode(error: unknown): ReviewFindingsParseErrorCode {
+	return error instanceof ReviewFindingsParseError ? error.code : "parse-error";
 }
 
 const REPORT_RE = /(?:^|\n)REVIEW_FINDINGS[ \t]*\n([\s\S]*?)\nEND_REVIEW_FINDINGS(?=\n|$)/g;
@@ -395,7 +448,7 @@ function isSchemaExampleFinding(finding: Pick<ReviewFinding, "message" | "path" 
  */
 function assertNotSchemaExample(summary: string | undefined, findings: ReadonlyArray<Pick<ReviewFinding, "message" | "path" | "line">>, label: string): void {
 	if (summary?.trim() === EXAMPLE_SUMMARY || findings.some(isSchemaExampleFinding)) {
-		throw new ReviewFindingsParseError(`${label} echo the schema example verbatim (the seat did not review the diff)`);
+		throw new ReviewFindingsParseError("schema-example-parroted", `${label} echo the schema example verbatim (the seat did not review the diff)`);
 	}
 }
 
@@ -406,7 +459,7 @@ function assertNotSchemaExample(summary: string | undefined, findings: ReadonlyA
  */
 function assertNotExampleRationale(decisions: readonly { rationale: string }[], sentinel: string, label: string): void {
 	if (decisions.some((decision) => decision.rationale.trim() === sentinel)) {
-		throw new ReviewFindingsParseError(`${label} echo the schema example verbatim (the seat did not review)`);
+		throw new ReviewFindingsParseError("schema-example-parroted", `${label} echo the schema example verbatim (the seat did not review)`);
 	}
 }
 
@@ -440,22 +493,22 @@ function assertBlockAtTail(text: string, match: RegExpMatchArray, label: string)
 	const openingFence = openingLine?.match(/^(`{3,}|~{3,})(?:[^\r\n]*)$/)?.[1];
 	if (closingFence && openingFence && closingFence[0] === openingFence[0] && closingFence.length >= openingFence.length) return;
 
-	throw new ReviewFindingsParseError(`${label} block is not the final model-authored output (a non-report answer follows it)`);
+	throw new ReviewFindingsParseError("trailing-after-close", `${label} block is not the final model-authored output (a non-report answer follows it)`);
 }
 
 function parseDelimited(text: string, regex: RegExp, label: string): Record<string, unknown> {
 	const matches = [...text.matchAll(regex)];
 	const match = matches[0];
-	if (!match) throw new ReviewFindingsParseError(`${label} block not found`);
-	if (matches.length !== 1) throw new ReviewFindingsParseError(`multiple ${label} blocks found`);
+	if (!match) throw new ReviewFindingsParseError("block-not-found", `${label} block not found`);
+	if (matches.length !== 1) throw new ReviewFindingsParseError("multiple-blocks", `multiple ${label} blocks found`);
 	assertBlockAtTail(text, match, label);
 	try {
 		const value: unknown = JSON.parse(match[1] ?? "");
-		if (!isRecord(value)) throw new ReviewFindingsParseError(`${label} must be a JSON object`);
+		if (!isRecord(value)) throw new ReviewFindingsParseError("not-json-object", `${label} must be a JSON object`);
 		return value;
 	} catch (error) {
 		if (error instanceof ReviewFindingsParseError) throw error;
-		throw new ReviewFindingsParseError(`${label} block is not valid JSON`, { cause: error });
+		throw new ReviewFindingsParseError("invalid-json", `${label} block is not valid JSON`, { cause: error });
 	}
 }
 
@@ -470,24 +523,24 @@ export function normalizeCwe(value: string): string | null {
 }
 
 function parseRawAuthoringFinding(value: unknown, index: number): RawAuthoringReviewFinding {
-	if (!isRecord(value)) throw new ReviewFindingsParseError(`review finding ${index + 1} must be a JSON object`);
+	if (!isRecord(value)) throw new ReviewFindingsParseError("not-json-object", `review finding ${index + 1} must be a JSON object`);
 	// Wire contract: no `class` or `fingerprint` — harness owns both.
 	assertKeys(value, ["severity", "message", "path", "line", "ruleId", "cwe", "classHint"], ["severity", "message"], `review finding ${index + 1}`);
 	const finding = parseFindingFields(value, index);
 	const raw: RawAuthoringReviewFinding = { ...finding };
 	if (value.ruleId !== undefined) {
-		if (typeof value.ruleId !== "string") throw new ReviewFindingsParseError(`review finding ${index + 1} ruleId must be a string`);
+		if (typeof value.ruleId !== "string") throw new ReviewFindingsParseError("invalid-rule-id", `review finding ${index + 1} ruleId must be a string`);
 		const ruleId = value.ruleId.trim();
-		if (ruleId === "" || /[\r\n]/.test(value.ruleId)) throw new ReviewFindingsParseError(`review finding ${index + 1} ruleId must be a non-empty single-line string`);
+		if (ruleId === "" || /[\r\n]/.test(value.ruleId)) throw new ReviewFindingsParseError("invalid-rule-id", `review finding ${index + 1} ruleId must be a non-empty single-line string`);
 		raw.ruleId = ruleId;
 	}
 	if (value.cwe !== undefined) {
-		if (typeof value.cwe !== "string") throw new ReviewFindingsParseError(`review finding ${index + 1} cwe must be a string`);
+		if (typeof value.cwe !== "string") throw new ReviewFindingsParseError("invalid-cwe", `review finding ${index + 1} cwe must be a string`);
 		if (!CWE_RE.test(value.cwe.trim()) && normalizeCwe(value.cwe) === null) {
-			throw new ReviewFindingsParseError(`review finding ${index + 1} cwe must match CWE-<digits>`);
+			throw new ReviewFindingsParseError("invalid-cwe", `review finding ${index + 1} cwe must match CWE-<digits>`);
 		}
 		const normalized = normalizeCwe(value.cwe);
-		if (normalized === null) throw new ReviewFindingsParseError(`review finding ${index + 1} cwe must match CWE-<digits>`);
+		if (normalized === null) throw new ReviewFindingsParseError("invalid-cwe", `review finding ${index + 1} cwe must match CWE-<digits>`);
 		raw.cwe = normalized;
 	}
 	if (value.classHint !== undefined) {
@@ -495,7 +548,7 @@ function parseRawAuthoringFinding(value: unknown, index: number): RawAuthoringRe
 		// A free-form judgment hint still never yields judgment tier — #293 emission rules require a
 		// positive allowlist match, unchanged.
 		if (typeof value.classHint !== "string" || !isWellFormedClassId(value.classHint)) {
-			throw new ReviewFindingsParseError(`review finding ${index + 1} has an invalid classHint`);
+			throw new ReviewFindingsParseError("invalid-class-hint", `review finding ${index + 1} has an invalid classHint`);
 		}
 		raw.classHint = value.classHint;
 	}
@@ -544,7 +597,7 @@ export function modelAuthoredText(result: Pick<StepResult, "assistantText">): st
  */
 export function parseAuthoringReviewFindings(text: string): AuthoringReviewReport {
 	const matches = [...text.matchAll(AUTHORING_RE)];
-	if (matches.length === 0) throw new ReviewFindingsParseError("authoring review findings block not found");
+	if (matches.length === 0) throw new ReviewFindingsParseError("block-not-found", "authoring review findings block not found");
 	let summary: string | undefined;
 	const findings: RawAuthoringReviewFinding[] = [];
 	matches.forEach((match, block) => {
@@ -552,12 +605,12 @@ export function parseAuthoringReviewFindings(text: string): AuthoringReviewRepor
 		try {
 			parsed = JSON.parse(match[1]);
 		} catch (error) {
-			throw new ReviewFindingsParseError(`authoring review findings block ${block + 1} is not valid JSON`, { cause: error });
+			throw new ReviewFindingsParseError("invalid-json", `authoring review findings block ${block + 1} is not valid JSON`, { cause: error });
 		}
-		if (!isRecord(parsed)) throw new ReviewFindingsParseError(`authoring review findings block ${block + 1} must be a JSON object`);
+		if (!isRecord(parsed)) throw new ReviewFindingsParseError("not-json-object", `authoring review findings block ${block + 1} must be a JSON object`);
 		assertKeys(parsed, ["schemaVersion", "summary", "findings"], ["schemaVersion", "summary", "findings"], "authoring review findings");
-		if (parsed.schemaVersion !== 3) throw new ReviewFindingsParseError("unsupported authoring review schemaVersion");
-		if (!Array.isArray(parsed.findings)) throw new ReviewFindingsParseError("authoring review findings must be an array");
+		if (parsed.schemaVersion !== 3) throw new ReviewFindingsParseError("unsupported-schema-version", "unsupported authoring review schemaVersion");
+		if (!Array.isArray(parsed.findings)) throw new ReviewFindingsParseError("findings-not-array", "authoring review findings must be an array");
 		if (summary === undefined) summary = parseSingleLine(parsed.summary, "summary");
 		for (const [index, value] of parsed.findings.entries()) {
 			findings.push(parseRawAuthoringFinding(value, index));
@@ -572,18 +625,18 @@ export function parseAuthoringReviewFindings(text: string): AuthoringReviewRepor
 export function parseJudgeReport(text: string): JudgeReport {
 	const parsed = parseDelimited(text, JUDGE_RE, "authoring review Judge");
 	assertKeys(parsed, ["schemaVersion", "decisions"], ["schemaVersion", "decisions"], "authoring review Judge report");
-	if (parsed.schemaVersion !== 1 || !Array.isArray(parsed.decisions)) throw new ReviewFindingsParseError("invalid authoring review Judge schema");
+	if (parsed.schemaVersion !== 1 || !Array.isArray(parsed.decisions)) throw new ReviewFindingsParseError("invalid-schema", "invalid authoring review Judge schema");
 	const decisions: JudgeReport["decisions"] = parsed.decisions.map((value, index) => {
-		if (!isRecord(value)) throw new ReviewFindingsParseError(`Judge decision ${index + 1} must be an object`);
+		if (!isRecord(value)) throw new ReviewFindingsParseError("not-json-object", `Judge decision ${index + 1} must be an object`);
 		// #280: `class` is optional — candidate already carries harness-owned effective class.
 		// When present it is validated; loop.ts blocks a safety→non-safety downgrade (#272).
 		assertKeys(value, ["candidateId", "decision", "rationale", "class", "ruling"], ["candidateId", "decision", "rationale"], `Judge decision ${index + 1}`);
 		const { class: _class, ruling: _ruling, ...verification } = value;
 		const base = parseVerificationDecision(verification, index);
-		if (value.class !== undefined && (typeof value.class !== "string" || !isWellFormedClassId(value.class))) throw new ReviewFindingsParseError(`Judge decision ${index + 1} has an invalid class`);
-		if (value.ruling !== undefined && !JUDGE_RULINGS.includes(value.ruling as JudgeRuling)) throw new ReviewFindingsParseError(`Judge decision ${index + 1} has an invalid ruling`);
-		if (value.ruling === "judgment-dissent" && value.class !== undefined && value.class !== "judgment") throw new ReviewFindingsParseError("judgment-dissent is only valid for judgment findings");
-		if (base.decision === "survives" && value.ruling === undefined) throw new ReviewFindingsParseError(`surviving Judge decision ${base.candidateId} requires a ruling`);
+		if (value.class !== undefined && (typeof value.class !== "string" || !isWellFormedClassId(value.class))) throw new ReviewFindingsParseError("invalid-class", `Judge decision ${index + 1} has an invalid class`);
+		if (value.ruling !== undefined && !JUDGE_RULINGS.includes(value.ruling as JudgeRuling)) throw new ReviewFindingsParseError("invalid-ruling", `Judge decision ${index + 1} has an invalid ruling`);
+		if (value.ruling === "judgment-dissent" && value.class !== undefined && value.class !== "judgment") throw new ReviewFindingsParseError("judgment-dissent-misuse", "judgment-dissent is only valid for judgment findings");
+		if (base.decision === "survives" && value.ruling === undefined) throw new ReviewFindingsParseError("missing-ruling", `surviving Judge decision ${base.candidateId} requires a ruling`);
 		return { ...base, ...(value.class !== undefined ? { class: value.class as ReviewFindingClass } : {}), ...(value.ruling ? { ruling: value.ruling as JudgeRuling } : {}) };
 	});
 	// Fail closed on the parroted Judge example. Rationale-only: the packaged example is
@@ -598,21 +651,21 @@ export function parseJudgeReport(text: string): JudgeReport {
 export function parseReviewFindings(text: string): ReviewFindingsReport {
 	const matches = [...text.matchAll(REPORT_RE)];
 	const match = matches[0];
-	if (!match) throw new ReviewFindingsParseError("review findings block not found");
-	if (matches.length !== 1) throw new ReviewFindingsParseError("multiple review findings blocks found");
+	if (!match) throw new ReviewFindingsParseError("block-not-found", "review findings block not found");
+	if (matches.length !== 1) throw new ReviewFindingsParseError("multiple-blocks", "multiple review findings blocks found");
 	assertBlockAtTail(text, match, "review findings");
 
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(match[1] ?? "");
 	} catch (error) {
-		throw new ReviewFindingsParseError("review findings block is not valid JSON", { cause: error });
+		throw new ReviewFindingsParseError("invalid-json", "review findings block is not valid JSON", { cause: error });
 	}
-	if (!isRecord(parsed)) throw new ReviewFindingsParseError("review findings report must be a JSON object");
+	if (!isRecord(parsed)) throw new ReviewFindingsParseError("not-json-object", "review findings report must be a JSON object");
 	assertKeys(parsed, ["schemaVersion", "summary", "findings"], ["schemaVersion", "summary", "findings"], "review findings report");
-	if (parsed.schemaVersion !== 1) throw new ReviewFindingsParseError("unsupported review findings schemaVersion");
+	if (parsed.schemaVersion !== 1) throw new ReviewFindingsParseError("unsupported-schema-version", "unsupported review findings schemaVersion");
 	const summary = parseSingleLine(parsed.summary, "summary");
-	if (!Array.isArray(parsed.findings)) throw new ReviewFindingsParseError("review findings must be an array");
+	if (!Array.isArray(parsed.findings)) throw new ReviewFindingsParseError("findings-not-array", "review findings must be an array");
 	const findings = parsed.findings.map(parseFinding);
 	// Fail closed on the parroted cold-gate schema example (same exact-tuple guard as authoring).
 	assertNotSchemaExample(summary, findings, "review findings");
@@ -627,20 +680,20 @@ export function parseReviewFindings(text: string): ReviewFindingsReport {
 export function parseReviewVerification(text: string): ReviewVerificationReport {
 	const matches = [...text.matchAll(VERIFICATION_RE)];
 	const match = matches[0];
-	if (!match) throw new ReviewFindingsParseError("review verification block not found");
-	if (matches.length !== 1) throw new ReviewFindingsParseError("multiple review verification blocks found");
+	if (!match) throw new ReviewFindingsParseError("block-not-found", "review verification block not found");
+	if (matches.length !== 1) throw new ReviewFindingsParseError("multiple-blocks", "multiple review verification blocks found");
 	assertBlockAtTail(text, match, "review verification");
 
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(match[1] ?? "");
 	} catch (error) {
-		throw new ReviewFindingsParseError("review verification block is not valid JSON", { cause: error });
+		throw new ReviewFindingsParseError("invalid-json", "review verification block is not valid JSON", { cause: error });
 	}
-	if (!isRecord(parsed)) throw new ReviewFindingsParseError("review verification report must be a JSON object");
+	if (!isRecord(parsed)) throw new ReviewFindingsParseError("not-json-object", "review verification report must be a JSON object");
 	assertKeys(parsed, ["schemaVersion", "decisions"], ["schemaVersion", "decisions"], "review verification report");
-	if (parsed.schemaVersion !== 1) throw new ReviewFindingsParseError("unsupported review verification schemaVersion");
-	if (!Array.isArray(parsed.decisions)) throw new ReviewFindingsParseError("review verification decisions must be an array");
+	if (parsed.schemaVersion !== 1) throw new ReviewFindingsParseError("unsupported-schema-version", "unsupported review verification schemaVersion");
+	if (!Array.isArray(parsed.decisions)) throw new ReviewFindingsParseError("decisions-not-array", "review verification decisions must be an array");
 	const decisions = parsed.decisions.map((value, index) => parseVerificationDecision(value, index));
 	// Fail closed on the parroted pr-verify example. Unguarded, echoing it refutes the candidate and
 	// clears a real blocker — the opposite direction from the findings guard, and the dangerous one.
@@ -654,18 +707,18 @@ export function parseReviewVerification(text: string): ReviewVerificationReport 
 
 export function reconcileReviewVerification(candidates: readonly VerificationCandidate[], report: ReviewVerificationReport): VerificationDisposition[] {
 	const originals = new Map(candidates.map((candidate) => [candidate.id, candidate]));
-	if (originals.size !== candidates.length) throw new ReviewFindingsParseError("verification candidates contain duplicate IDs");
+	if (originals.size !== candidates.length) throw new ReviewFindingsParseError("duplicate-candidate-id", "verification candidates contain duplicate IDs");
 	const decisions = new Map<string, ReviewVerificationReport["decisions"][number]>();
 	for (const decision of report.decisions) {
-		if (decisions.has(decision.candidateId)) throw new ReviewFindingsParseError(`duplicate verification decision for ${decision.candidateId}`);
-		if (!originals.has(decision.candidateId)) throw new ReviewFindingsParseError(`unknown verification candidate: ${decision.candidateId}`);
+		if (decisions.has(decision.candidateId)) throw new ReviewFindingsParseError("duplicate-decision", `duplicate verification decision for ${decision.candidateId}`);
+		if (!originals.has(decision.candidateId)) throw new ReviewFindingsParseError("unknown-candidate", `unknown verification candidate: ${decision.candidateId}`);
 		decisions.set(decision.candidateId, decision);
 	}
 	const missing = candidates.find((candidate) => !decisions.has(candidate.id));
-	if (missing) throw new ReviewFindingsParseError(`missing verification decision for ${missing.id}`);
+	if (missing) throw new ReviewFindingsParseError("missing-decision", `missing verification decision for ${missing.id}`);
 	return candidates.map((candidate) => {
 		const decision = decisions.get(candidate.id);
-		if (!decision) throw new ReviewFindingsParseError(`missing verification decision for ${candidate.id}`);
+		if (!decision) throw new ReviewFindingsParseError("missing-decision", `missing verification decision for ${candidate.id}`);
 		return { ...candidate, decision: decision.decision, rationale: decision.rationale };
 	});
 }
@@ -675,32 +728,32 @@ export function reviewFindingsGate(report: Pick<ReviewFindingsReport, "findings"
 }
 
 function parseFindingFields(value: Record<string, unknown>, index: number): ReviewFinding {
-	if (!SEVERITIES.includes(value.severity as ReviewFindingSeverity)) throw new ReviewFindingsParseError(`review finding ${index + 1} has an invalid severity`);
+	if (!SEVERITIES.includes(value.severity as ReviewFindingSeverity)) throw new ReviewFindingsParseError("invalid-severity", `review finding ${index + 1} has an invalid severity`);
 	const finding: ReviewFinding = {
 		severity: value.severity as ReviewFindingSeverity,
 		message: parseSingleLine(value.message, `review finding ${index + 1} message`),
 	};
 	if (value.path !== undefined) finding.path = parseSingleLine(value.path, `review finding ${index + 1} path`);
 	if (value.line !== undefined) {
-		if (finding.path === undefined) throw new ReviewFindingsParseError(`review finding ${index + 1} line requires path`);
-		if (!Number.isInteger(value.line) || (value.line as number) <= 0) throw new ReviewFindingsParseError(`review finding ${index + 1} line must be a positive integer`);
+		if (finding.path === undefined) throw new ReviewFindingsParseError("line-requires-path", `review finding ${index + 1} line requires path`);
+		if (!Number.isInteger(value.line) || (value.line as number) <= 0) throw new ReviewFindingsParseError("invalid-line", `review finding ${index + 1} line must be a positive integer`);
 		finding.line = value.line as number;
 	}
 	return finding;
 }
 
 function parseFinding(value: unknown, index: number): ReviewFinding {
-	if (!isRecord(value)) throw new ReviewFindingsParseError(`review finding ${index + 1} must be a JSON object`);
+	if (!isRecord(value)) throw new ReviewFindingsParseError("not-json-object", `review finding ${index + 1} must be a JSON object`);
 	assertKeys(value, ["severity", "message", "path", "line"], ["severity", "message"], `review finding ${index + 1}`);
 	return parseFindingFields(value, index);
 }
 
 function parseVerificationDecision(value: unknown, index: number): ReviewVerificationReport["decisions"][number] {
-	if (!isRecord(value)) throw new ReviewFindingsParseError(`review verification decision ${index + 1} must be a JSON object`);
+	if (!isRecord(value)) throw new ReviewFindingsParseError("not-json-object", `review verification decision ${index + 1} must be a JSON object`);
 	assertKeys(value, ["candidateId", "decision", "rationale"], ["candidateId", "decision", "rationale"], `review verification decision ${index + 1}`);
 	const candidateId = parseSingleLine(value.candidateId, `review verification decision ${index + 1} candidateId`);
-	if (!CANDIDATE_ID_RE.test(candidateId)) throw new ReviewFindingsParseError(`review verification decision ${index + 1} has an invalid candidateId`);
-	if (!VERIFICATION_DECISIONS.includes(value.decision as ReviewVerificationDecision)) throw new ReviewFindingsParseError(`review verification decision ${index + 1} has an invalid decision`);
+	if (!CANDIDATE_ID_RE.test(candidateId)) throw new ReviewFindingsParseError("invalid-candidate-id", `review verification decision ${index + 1} has an invalid candidateId`);
+	if (!VERIFICATION_DECISIONS.includes(value.decision as ReviewVerificationDecision)) throw new ReviewFindingsParseError("invalid-decision", `review verification decision ${index + 1} has an invalid decision`);
 	return {
 		candidateId,
 		decision: value.decision as ReviewVerificationDecision,
@@ -710,14 +763,15 @@ function parseVerificationDecision(value: unknown, index: number): ReviewVerific
 
 function assertKeys(value: Record<string, unknown>, allowed: readonly string[], required: readonly string[], label: string): void {
 	const unknown = Object.keys(value).find((key) => !allowed.includes(key));
-	if (unknown) throw new ReviewFindingsParseError(`${label} contains unknown key: ${unknown}`);
+	// `unknown` is a model-controlled JSON key — kept in the (thrown, never-retained) message only.
+	if (unknown) throw new ReviewFindingsParseError("unknown-key", `${label} contains unknown key: ${unknown}`);
 	const missing = required.find((key) => !(key in value));
-	if (missing) throw new ReviewFindingsParseError(`${label} is missing ${missing}`);
+	if (missing) throw new ReviewFindingsParseError("missing-field", `${label} is missing ${missing}`);
 }
 
 function parseSingleLine(value: unknown, label: string): string {
-	if (typeof value !== "string" || value.trim() === "") throw new ReviewFindingsParseError(`${label} must be a non-empty string`);
-	if (/[\r\n]/.test(value)) throw new ReviewFindingsParseError(`${label} must be a single line`);
+	if (typeof value !== "string" || value.trim() === "") throw new ReviewFindingsParseError("invalid-field", `${label} must be a non-empty string`);
+	if (/[\r\n]/.test(value)) throw new ReviewFindingsParseError("invalid-field", `${label} must be a single line`);
 	return value;
 }
 
