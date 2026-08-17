@@ -107,7 +107,9 @@ jobs:
           node-version: '24'
           cache: 'pnpm'
 
-      - run: pnpm install --frozen-lockfile
+      # --ignore-scripts for parity with pr-review.yml: the checkout is PR-head code, and this
+      # privileged context holds the PAT + provider key — lifecycle scripts must never run here.
+      - run: pnpm install --frozen-lockfile --ignore-scripts
         if: steps.guard.outputs.proceed == 'true'
 
       # c. Fetch the pr-review findings (the upserted comment carrying the marker) into a gitignored

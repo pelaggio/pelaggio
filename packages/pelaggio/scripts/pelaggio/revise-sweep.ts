@@ -80,7 +80,6 @@ interface IssueLabels {
 interface PrComment {
 	body: string;
 	createdAt: string;
-	authorAssociation: string;
 	author?: { login?: string } | null;
 }
 interface PrComments {
@@ -99,15 +98,14 @@ function isPrComments(v: unknown): v is PrComments {
 				isObject(comment) &&
 				typeof comment.body === "string" &&
 				typeof comment.createdAt === "string" &&
-				typeof comment.authorAssociation === "string" &&
 				(comment.author === undefined || comment.author === null || (isObject(comment.author) && (comment.author.login === undefined || typeof comment.author.login === "string"))),
 		)
 	);
 }
 
 /** GraphQL-shape adapter over the canonical trust rule shared with the upsert path (`github-posting.ts`). */
-function isTrustedReviewComment(comment: PrComment): boolean {
-	return isTrustedCommentAuthor(comment.authorAssociation, comment.author?.login);
+function isTrustedReviewComment(gh: GhRunner, ghRepo: string, comment: PrComment): boolean {
+	return isTrustedCommentAuthor(gh, ghRepo, comment.author?.login);
 }
 
 /**
@@ -530,8 +528,10 @@ export function verifyReviseWorktreeBinding(worktreePath: string, branch: string
 /**
  * Fetch the latest trusted `<!-- pelaggio-pr-review -->` comment body and write it to
  * `findingsPath`. Marker text is not authority: an untrusted PR participant can copy it into a
- * newer comment, so only the repository owner and the GitHub Actions gate identity may supply
- * a revision prompt (`isTrustedCommentAuthor`).
+ * newer comment, so only verified authority — the Actions gate identity, the authenticated gh
+ * identity itself, or an author with verified write permission — may supply a revision prompt
+ * (`isTrustedCommentAuthor`). The marker filter runs before the trust check so unrelated
+ * chatter never triggers identity/permission lookups.
  * Returns true if written, false when there is no trusted findings comment, the response shape
  * is incomplete, or on any gh/fs error.
  */
@@ -544,7 +544,7 @@ export function fetchReviewFindings(gh: GhRunner, ghRepo: string, prNumber: numb
 	} catch {
 		return false;
 	}
-	const matches = (parsed.comments ?? []).filter((c) => isTrustedReviewComment(c) && c.body.includes(PR_REVIEW_MARKER));
+	const matches = (parsed.comments ?? []).filter((c) => c.body.includes(PR_REVIEW_MARKER) && isTrustedReviewComment(gh, ghRepo, c));
 	if (matches.length === 0) return false;
 	// Most recent marker-bearing comment wins (the CLI upserts a single one, but be robust to dupes).
 	const latest = matches.reduce((a, b) => (b.createdAt.localeCompare(a.createdAt) > 0 ? b : a));
