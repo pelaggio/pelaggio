@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { REPO, REVIEW_CONFIG } from "../config.js";
 import type { NotifyPayload } from "../notify.js";
-import { hermeticDefault, hermeticQueueRoot, runOrchestrator } from "../pipeline.js";
+import { hermeticDefault, hermeticQueueRoot, PARKED_EXIT_CODE, runOrchestrator } from "../pipeline.js";
 import { gateRecordsDir, readPrReviewGateRecord, writePrReviewGateRecord } from "../pr-review-gate-record.js";
 import { fleetRecordDigestOf, readAdjudicationSourceRecord, writeAdjudicationSourceRecord } from "../review/adjudication.js";
 import { reviewFindingFingerprint } from "../review/findings.js";
@@ -96,6 +96,15 @@ describe("runOrchestrator — resume mode", () => {
 		});
 		const { exitCode } = await runOrchestrator({ ...baseFlags, resume: "tool-99" }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });
 		assert.equal(exitCode, 1);
+	});
+
+	it("parked: uses the distinct retryable exit code even without a rate-limit signal", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { runPipeline } = createMockRunPipeline({
+			byItem: { "TOOL-99": { completed: false, cost: 0, error: "parked" } },
+		});
+		const { exitCode } = await runOrchestrator({ ...baseFlags, resume: "tool-99" }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });
+		assert.equal(exitCode, PARKED_EXIT_CODE);
 	});
 });
 
@@ -389,7 +398,7 @@ describe("runOrchestrator — operator-revision mode (#498)", () => {
 			mode: "operator-revision",
 			park: { autoResume: false },
 		});
-		assert.equal(exitCode, 1);
+		assert.equal(exitCode, PARKED_EXIT_CODE);
 		assert.equal(calls.length, 1);
 		assert.equal(calls.at(0)?.opts.itemId, "498");
 		assert.ok(
@@ -415,7 +424,7 @@ describe("runOrchestrator — operator-revision mode (#498)", () => {
 			resolveWorktree: fakeResolveWorktree,
 			mode: "operator-revision",
 		});
-		assert.equal(exitCode, 1);
+		assert.equal(exitCode, PARKED_EXIT_CODE);
 		assert.equal(calls.length, 1);
 		assert.ok(logs.some((l) => l.includes(`--resume 498 --review-findings ${findingsPath}`)));
 	});
@@ -434,7 +443,7 @@ describe("runOrchestrator — operator-revision mode (#498)", () => {
 			},
 		});
 		const { exitCode } = await runOrchestrator({ ...resumeFlags(), "max-wait": "1h" }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree, mode: "operator-revision" });
-		assert.equal(exitCode, 1);
+		assert.equal(exitCode, PARKED_EXIT_CODE);
 		assert.equal(calls.length, 1);
 		assert.ok(logs.some((l) => l.includes(`--resume 498 --review-findings ${findingsPath}`)));
 	});
@@ -464,7 +473,7 @@ describe("runOrchestrator — operator-revision mode (#498)", () => {
 			for (let i = 0; i < 5; i++) await new Promise(setImmediate);
 		}
 		const { exitCode } = await promise;
-		assert.equal(exitCode, 1);
+		assert.equal(exitCode, PARKED_EXIT_CODE);
 		// First attempt + 12 resumeOne calls, then the cap hands back.
 		assert.equal(calls.length, 13);
 		assert.ok(calls.every((c) => c.opts.itemId === "498"));
@@ -498,7 +507,7 @@ describe("runOrchestrator — operator-revision mode (#498)", () => {
 			detectResumeStep: fakeDetectResumeStep,
 			resolveWorktree: fakeResolveWorktree,
 		});
-		assert.equal(exitCode, 1);
+		assert.equal(exitCode, PARKED_EXIT_CODE);
 		assert.equal(calls.length, 1, "standard resume must not enter the wait/resume loop");
 		assert.equal(results.length, 1);
 		assert.equal(results.at(0)?.error, "parked");
@@ -516,7 +525,7 @@ describe("runOrchestrator — operator-revision mode (#498)", () => {
 			},
 		});
 		const { exitCode } = await runOrchestrator({ ...resumeFlags(), "no-worktree": true }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });
-		assert.equal(exitCode, 1);
+		assert.equal(exitCode, PARKED_EXIT_CODE);
 		assert.equal(calls.length, 1);
 	});
 });
@@ -712,7 +721,7 @@ describe("runOrchestrator — sustained transient SDK outage (#128)", () => {
 		});
 		const { exitCode, results } = await runOrchestrator({ ...baseFlags, item: "A-1,A-2,A-3,A-4,A-5" }, { runPipeline, notifyConfig: { url: "https://hook.example" }, sendNotification });
 		assert.equal(calls.length, 3, "worker must stop after the 3rd consecutive transient error, never reaching A-4/A-5");
-		assert.equal(exitCode, 1);
+		assert.equal(exitCode, PARKED_EXIT_CODE);
 		assert.equal(results.at(-1)?.error, "parked", "the tripping cycle is relabeled parked so it flows through the park path");
 		assert.equal(sent.length, 1, "the sustained outage must page exactly once");
 		assert.equal(sent[0].payload.event, "parked");
@@ -752,7 +761,7 @@ describe("runOrchestrator — sustained transient SDK outage (#128)", () => {
 		});
 		const { exitCode } = await runOrchestrator({ ...baseFlags, item: "A-1,A-2,A-3" }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });
 		assert.equal(calls.length, 3);
-		assert.equal(exitCode, 1);
+		assert.equal(exitCode, PARKED_EXIT_CODE);
 		assert.ok(
 			logs.some((l) => l.includes("sdk-outage") && l.includes("cannot auto-resume")),
 			`expected a "cannot auto-resume" hand-back for the sdk-outage park; got:\n${logs.join("\n")}`,
@@ -875,7 +884,7 @@ describe("runOrchestrator — park-and-resume", () => {
 		assert.equal(results[1].completed, true);
 	});
 
-	it("exceeds --max-wait: exitCode 1, runPipeline not re-invoked", async (t) => {
+	it("exceeds --max-wait: uses the parked exit code and does not re-invoke runPipeline", async (t) => {
 		t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
 		const logs: string[] = [];
 		t.mock.method(console, "log", (...args: unknown[]) => {
@@ -890,7 +899,7 @@ describe("runOrchestrator — park-and-resume", () => {
 			},
 		});
 		const { exitCode } = await runOrchestrator({ ...baseFlags, item: "X-1", "max-wait": "1h" }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });
-		assert.equal(exitCode, 1);
+		assert.equal(exitCode, PARKED_EXIT_CODE);
 		assert.equal(calls.length, 1);
 		assert.ok(
 			logs.some((l) => l.includes("Resume:") && l.includes("pnpm pelaggio --resume X-1")),
@@ -914,7 +923,7 @@ describe("runOrchestrator — park-and-resume", () => {
 			},
 		});
 		const { exitCode } = await runOrchestrator({ ...baseFlags, item: "X-1", "max-wait": "1h" }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });
-		assert.equal(exitCode, 1);
+		assert.equal(exitCode, PARKED_EXIT_CODE);
 		assert.ok(
 			logs.some((l) => l.includes("Weekly rate limit")),
 			`expected "Weekly rate limit" in logs; got:\n${logs.join("\n")}`,
@@ -924,7 +933,7 @@ describe("runOrchestrator — park-and-resume", () => {
 	// resetsAt=0 no longer models a rate-limit park — those synthesize a conservative reset at the
 	// source (#68). It now reaches the orchestrator only via manual pause (SIGUSR2) or a stale reset,
 	// neither auto-resumable by time, so the run hands back with a resume hint.
-	it("no reset time (resetsAt=0, e.g. manual pause): exitCode 1, runPipeline not re-invoked", async (t) => {
+	it("no reset time (resetsAt=0, e.g. manual pause): uses the parked exit code without re-invoking runPipeline", async (t) => {
 		t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
 		const logs: string[] = [];
 		t.mock.method(console, "log", (...args: unknown[]) => {
@@ -939,7 +948,7 @@ describe("runOrchestrator — park-and-resume", () => {
 			},
 		});
 		const { exitCode } = await runOrchestrator({ ...baseFlags, item: "X-1" }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });
-		assert.equal(exitCode, 1);
+		assert.equal(exitCode, PARKED_EXIT_CODE);
 		assert.equal(calls.length, 1);
 		assert.ok(
 			logs.some((l) => l.includes("Resume:") && l.includes("pnpm pelaggio --resume X-1")),
@@ -949,7 +958,7 @@ describe("runOrchestrator — park-and-resume", () => {
 });
 
 describe("runOrchestrator — auto-resume config", () => {
-	it("off-switch: park.auto-resume=false reports parked items and exits 1 without resuming", async (t) => {
+	it("off-switch: park.auto-resume=false reports parked items and uses the parked exit code without resuming", async (t) => {
 		const logs: string[] = [];
 		t.mock.method(console, "log", (...args: unknown[]) => {
 			logs.push(args.join(" "));
@@ -961,7 +970,7 @@ describe("runOrchestrator — auto-resume config", () => {
 			},
 		});
 		const { exitCode } = await runOrchestrator({ ...baseFlags, item: "X-1" }, { runPipeline, park: { autoResume: false }, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });
-		assert.equal(exitCode, 1);
+		assert.equal(exitCode, PARKED_EXIT_CODE);
 		assert.equal(calls.length, 1, `expected no resume when auto-resume disabled; got ${calls.length} calls`);
 		assert.ok(
 			logs.some((l) => l.includes("auto-resume disabled")),
@@ -989,7 +998,7 @@ describe("runOrchestrator — auto-resume config", () => {
 		// parkSignal.parked — with the default parallel: "1" the single worker's `if
 		// (parkSignal.parked) break;` (pipeline.ts) would stop after X-1 and X-2 would never run.
 		const { exitCode } = await runOrchestrator({ ...baseFlags, item: "X-1,X-2", parallel: "2" }, { runPipeline, park: { autoResume: false }, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });
-		assert.equal(exitCode, 1);
+		assert.equal(exitCode, PARKED_EXIT_CODE);
 		const resumeLine = logs.find((l) => l.includes("Resume:"));
 		assert.ok(resumeLine, `expected a Resume: line in logs; got:\n${logs.join("\n")}`);
 		assert.ok(resumeLine.includes("pnpm pelaggio --resume X-1") && resumeLine.includes("pnpm pelaggio --resume X-2"), `expected one --resume command per parked item; got:\n${resumeLine}`);
@@ -1046,7 +1055,7 @@ describe("runOrchestrator — auto-resume config", () => {
 		// Flags without --max-wait; inject config cap 1h. A 3h reset exceeds it → exit parked.
 		const flagsNoMaxWait: Flags = { cycles: "1", parallel: "1", verbose: false, trace: false, budget: "10", "dry-run": false, "no-worktree": false };
 		const { exitCode } = await runOrchestrator({ ...flagsNoMaxWait, item: "X-1" }, { runPipeline, park: { maxWait: "1h" }, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });
-		assert.equal(exitCode, 1);
+		assert.equal(exitCode, PARKED_EXIT_CODE);
 		assert.equal(calls.length, 1, `expected no resume (config max-wait exceeded); got ${calls.length}`);
 	});
 
@@ -1105,7 +1114,7 @@ describe("runOrchestrator — auto-resume config", () => {
 		for (let i = 0; i < 5; i++) await new Promise(setImmediate);
 		const { exitCode } = await promise;
 
-		assert.equal(exitCode, 1);
+		assert.equal(exitCode, PARKED_EXIT_CODE);
 		const setups = events.filter((e) => e === "setup").length;
 		const teardowns = events.filter((e) => e === "teardown").length;
 		assert.equal(setups, teardowns, `setup/teardown must stay balanced; got ${JSON.stringify(events)}`);
@@ -1453,7 +1462,7 @@ describe("runOrchestrator — revise sweep (issue #76)", () => {
 			},
 		);
 
-		assert.equal(exitCode, 1);
+		assert.equal(exitCode, PARKED_EXIT_CODE);
 		const statusStates = ghCalls.filter((a) => a[0] === "api" && a[1] === "repos/o/r/statuses/abc123a").map((a) => a.find((arg) => arg.startsWith("state=")));
 		assert.deepEqual(statusStates, ["state=pending"], "only a pending status — never failure — on a rate-limit park");
 		const commentUpserts = ghCalls.filter((a) => a.some((arg) => arg.startsWith("body=")));
@@ -1680,7 +1689,7 @@ describe("runOrchestrator — revise sweep (issue #76)", () => {
 			{ ...baseFlags, target: "pull-request", cycles: "1" },
 			{ runPipeline, resolveWorktree: resolveWt, park: { autoResume: false }, revise: { local: true, ghRepo: "o/r", gh: makeGhStub(ONE_REVISABLE) } },
 		);
-		assert.equal(exitCode, 1);
+		assert.equal(exitCode, PARKED_EXIT_CODE);
 		assert.equal(calls.length, 1, "the park after the revision skips the pick worker pool");
 		assert.equal(results[0].error, "parked");
 		assert.equal(results[0].itemId, "76");
@@ -2900,7 +2909,7 @@ describe("runOrchestrator — mid-run review drain (#387)", () => {
 		assert.equal(calls.length, 0, "the pick pool is skipped while parked");
 	});
 
-	it("resume: a drain park exits 1 even when the resumed cycle completed", async (t) => {
+	it("resume: a drain park uses the parked exit code even when the resumed cycle completed", async (t) => {
 		t.mock.method(console, "log", () => {});
 		const main = mainDir();
 		enqueueReviewRequest(main, record());
@@ -2934,7 +2943,7 @@ describe("runOrchestrator — mid-run review drain (#387)", () => {
 			},
 		);
 
-		assert.equal(exitCode, 1, "a parked post-resume drain must not report delivery-complete");
+		assert.equal(exitCode, PARKED_EXIT_CODE, "a parked post-resume drain must remain distinguishable from delivery-complete and failure");
 	});
 
 	it("an --item run drains review (candidate) but excludes revise (the DECISION fork)", async (t) => {
