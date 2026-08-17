@@ -666,7 +666,7 @@ There are **three** paths that use this same seam and the same one-pass bound (t
 | Path | Runs on | Funded by | Trigger | Status |
 |---|---|---|---|---|
 | **Local sweep** (issue #76) | your local runner, in-process | your Claude **subscription** | orchestrator, at the start of an auto-pick `--cycles` run | **active** (this repo) |
-| **CI workflow** (issue #60) | GitHub-hosted `ubuntu-latest` | the metered `ANTHROPIC_API_KEY` | `pr-review-revise.yml` on `workflow_run: failure` | present but **disabled** repo-wide |
+| **CI workflow** (issue #60) | GitHub-hosted `ubuntu-latest` | the metered `ANTHROPIC_API_KEY` | `pr-review-revise.yml` on a red `review` status | present but **disabled** repo-wide |
 | **Operator command** (issue #498) | your local runner, in-process | your Claude **subscription** | explicit `npx pelaggio revise --pr <n>` from the main checkout | **active** |
 
 The two local paths — the sweep and the operator command — are both active by design: they share
@@ -709,11 +709,23 @@ run is `roadmap.source: github-issues` + a PR ship target + pure auto-pick mode 
 ### CI workflow (issue #60) — API-funded alternative
 
 A red `review` gate can instead be closed in CI: `.github/workflows/pr-review-revise.yml`
-triggers on the review workflow's `workflow_run: completed` with `conclusion == failure` and,
-**exactly once per PR**, re-implements from the findings and re-pushes so the gate re-runs.
+triggers on every completed `workflow_run` of the review workflow and, **exactly once per PR**,
+re-implements from the findings and re-pushes so the gate re-runs.
 
-- **Trigger** — `workflow_run` on `"PR review gate"` (the `pr-review.yml` job's `name:`), gated to
-  same-repo, non-fork, `feat/issue-*` branches whose linked issue carries the `autopilot` label.
+- **Trigger** — `workflow_run: completed` on `"PR review gate"` (the `pr-review.yml` job's
+  `name:`), gated to same-repo, non-fork, `feat/issue-*` branches whose linked issue carries the
+  `autopilot` label, with CI-runner mode active (`AUTOPILOT_REVIEW_RUNNER != 'local'` — in local
+  mode the local revise sweep owns revision). The run **conclusion** is deliberately not
+  consulted: `pr-review.yml` keeps its run green on an ordinary BLOCK (the required `review`
+  commit status is the gate, not the workflow conclusion), so the job's first step reads the
+  `review` status on `workflow_run.head_sha` and proceeds only on `failure`/`error`.
+- **SHA binding (ADR-0025)** — the reviewed `workflow_run.head_sha` is the candidate the red
+  status, the findings, and the one-pass label are statements about. A trusted-phase guard
+  verifies the PR's current head still equals it (mismatch → park naming both SHAs, label
+  unspent — the newer push's own review run re-enters the loop), the privileged checkout binds
+  that immutable OID (never the mutable branch name), and after the checkout's fetch the remote
+  head is re-verified so the revise push's `--force-with-lease` retry can never clobber newer,
+  unreviewed commits.
 - **One-pass bound** — the workflow adds an `autopilot:revised` label to the PR **before** doing any
   work. On a second red review the label is already present, so the workflow posts a park-for-human
   comment and stops. A per-branch `concurrency` group (`cancel-in-progress: false`, which serializes

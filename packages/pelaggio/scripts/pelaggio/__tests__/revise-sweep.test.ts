@@ -9,6 +9,7 @@ import {
 	claimRevisionExclusive,
 	ensureReviseWorktree,
 	fetchReviewFindings,
+	fetchReviewFindingsOutcome,
 	findRevisablePrs,
 	isAutopilotManaged,
 	postParkComment,
@@ -412,6 +413,68 @@ describe("fetchReviewFindings", () => {
 	});
 });
 
+describe("fetchReviewFindingsOutcome (CI exit-code contract)", () => {
+	// The CI shim maps: written → 0, no-trusted-comment → 1 (a trust verdict), error → 2 (a
+	// gh/parse/fs tool failure). The workflow's park comment names the cause from the exit code,
+	// so the two non-written outcomes must never collapse.
+	function tmpFile(): string {
+		return join(mkdtempSync(join(tmpdir(), "revise-outcome-")), "findings.md");
+	}
+
+	it("trusted comment → 'written'", () => {
+		const path = tmpFile();
+		const comments = JSON.stringify({
+			comments: [{ body: "<!-- pelaggio-pr-review -->\nfindings", createdAt: "2026-01-01T00:00:00Z", author: { login: "operator" } }],
+		});
+		const trust = trustRoutes({ self: "operator" });
+		const { run } = stub((args) => trust(args) ?? { stdout: comments });
+		assert.equal(fetchReviewFindingsOutcome(run, "o/r", 101, path), "written");
+		assert.ok(readFileSync(path, "utf-8").includes("findings"));
+	});
+
+	it("clean no-marker-comment verdict → 'no-trusted-comment'", () => {
+		const path = tmpFile();
+		const trust = trustRoutes({ self: "operator" });
+		const { run } = stub((args) => trust(args) ?? { stdout: JSON.stringify({ comments: [{ body: "just a note", createdAt: "2026-01-01T00:00:00Z", author: { login: "operator" } }] }) });
+		assert.equal(fetchReviewFindingsOutcome(run, "o/r", 101, path), "no-trusted-comment");
+		assert.equal(existsSync(path), false);
+	});
+
+	it("untrusted-only markers → 'no-trusted-comment' (refusing trust is a trust decision, not an error)", () => {
+		const path = tmpFile();
+		const comments = JSON.stringify({
+			comments: [{ body: "<!-- pelaggio-pr-review -->\ncopied findings", createdAt: "2026-01-01T00:00:00Z", author: { login: "drive-by" } }],
+		});
+		const trust = trustRoutes({ self: "operator" });
+		const { run } = stub((args) => trust(args) ?? { stdout: comments });
+		assert.equal(fetchReviewFindingsOutcome(run, "o/r", 101, path), "no-trusted-comment");
+		assert.equal(existsSync(path), false);
+	});
+
+	it("gh failure (thrown or non-zero) → 'error'", () => {
+		assert.equal(fetchReviewFindingsOutcome(throwingGh, "o/r", 101, tmpFile()), "error");
+		const { run } = stub(() => ({ status: 1, stderr: "boom" }));
+		assert.equal(fetchReviewFindingsOutcome(run, "o/r", 101, tmpFile()), "error");
+	});
+
+	it("malformed comments payload → 'error'", () => {
+		const { run } = stub(() => ({ stdout: JSON.stringify({ comments: [{ body: "<!-- pelaggio-pr-review -->\nfindings", createdAt: 1735689600 }] }) }));
+		assert.equal(fetchReviewFindingsOutcome(run, "o/r", 101, tmpFile()), "error");
+	});
+
+	it("unwritable findings path → 'error' (fs failure, not a trust verdict)", () => {
+		// The mkdtemp dir itself as the "file" path: writeFileSync fails with EISDIR.
+		const dir = mkdtempSync(join(tmpdir(), "revise-outcome-eisdir-"));
+		const comments = JSON.stringify({
+			comments: [{ body: "<!-- pelaggio-pr-review -->\nfindings", createdAt: "2026-01-01T00:00:00Z", author: { login: "operator" } }],
+		});
+		const trust = trustRoutes({ self: "operator" });
+		const { run } = stub((args) => trust(args) ?? { stdout: comments });
+		assert.equal(fetchReviewFindingsOutcome(run, "o/r", 101, dir), "error");
+		rmSync(dir, { recursive: true, force: true });
+	});
+});
+
 describe("CI revise workflow findings selection (#508)", () => {
 	// Bind the workflow to the canonical trust rule the same way SKILL.md sentinels are bound in
 	// review-findings.test.ts: if either side drifts back to a raw marker scrape, fail here.
@@ -430,6 +493,10 @@ describe("CI revise workflow findings selection (#508)", () => {
 		assert.ok(script.includes("fetchReviewFindings"), "CI shim must call the canonical fetchReviewFindings");
 		assert.ok(script.includes("revise-sweep.js"), "CI shim must import from the canonical module");
 		assert.ok(!script.includes("pelaggio-pr-review"), "CI shim must not re-implement marker matching");
+		// Exit-code contract the workflow's park comment depends on: 1 = the selector's clean
+		// "no trusted comment" trust verdict, 2 = a gh/parse/fs tool failure. The boolean
+		// selector collapses those, so the shim must use the tri-state variant.
+		assert.ok(script.includes("fetchReviewFindingsOutcome"), "CI shim must use the tri-state selector so exit 1 (no trusted comment) stays distinct from exit 2 (tool failure)");
 	});
 
 	it("the selector executes from trusted default-branch bytes; PR-head checkout and PAT exposure come only after the trust decision", () => {
@@ -442,11 +509,47 @@ describe("CI revise workflow findings selection (#508)", () => {
 		assert.ok(selectorAt >= 0, "workflow must invoke the selector via node --import tsx");
 		const trustedCheckoutAt = workflow.indexOf("github.event.repository.default_branch");
 		assert.ok(trustedCheckoutAt >= 0 && trustedCheckoutAt < selectorAt, "a default-branch checkout must precede the selector so it runs trusted bytes");
-		const prHeadCheckoutAt = workflow.search(/ref:\s*\$\{\{\s*github\.event\.workflow_run\.head_branch\s*\}\}/);
+		const prHeadCheckoutAt = workflow.search(/ref:\s*\$\{\{\s*github\.event\.workflow_run\.head_sha\s*\}\}/);
 		assert.ok(prHeadCheckoutAt > selectorAt, "the PR-head checkout must come after the findings trust decision");
 		const patAt = workflow.indexOf("secrets.GH_TOKEN");
 		assert.ok(patAt > selectorAt, "the PAT must not enter the job before the trust decision (pre-gate steps use the scoped github.token)");
 		assert.ok(workflow.includes("$RUNNER_TEMP/review-findings-"), "the findings file must live outside the workspace so the PR-head checkout cannot clobber or pre-plant it");
+	});
+});
+
+describe("CI revise trigger and SHA binding (#508 roll 4)", () => {
+	const root = join(import.meta.dirname, "..", "..", "..", "..", "..");
+	const workflow = () => readFileSync(join(root, ".github", "workflows", "pr-review-revise.yml"), "utf-8");
+
+	it("triggers on any completed review run and gates on the review commit status, not the run conclusion", () => {
+		const wf = workflow();
+		// pr-review.yml keeps its run GREEN on an ordinary BLOCK (the blocking step is
+		// continue-on-error; a final step posts the red `review` commit status and exits 0), so
+		// a conclusion filter never fires on the path this workflow exists for. The red decision
+		// must come from the authoritative gate: the `review` status on the reviewed SHA.
+		assert.ok(!wf.includes("workflow_run.conclusion"), "the job must not gate on the run conclusion — an ordinary review BLOCK is a successful run");
+		assert.match(wf, /commits\/\$HEAD_SHA\/status/, "the red gate must query the commit status on the triggering run's head SHA");
+		assert.ok(wf.includes('select(.context == "review")'), "the gate must key on the `review` status context (the required branch-protection context), not the combined state");
+		assert.ok(wf.includes("statuses: read"), "reading the commit status requires statuses: read in the explicit permissions block");
+		assert.ok(wf.includes("vars.AUTOPILOT_REVIEW_RUNNER != 'local'"), "local mode must keep CI revision off (the local sweep owns revision there) — previously implied by always-green local run conclusions");
+	});
+
+	it("privileged checkout binds workflow_run.head_sha and a guard verifies the head has not moved (ADR-0025)", () => {
+		const wf = workflow();
+		assert.match(wf, /ref:\s*\$\{\{\s*github\.event\.workflow_run\.head_sha\s*\}\}/, "the PR-head checkout must bind the immutable reviewed OID");
+		assert.ok(!/ref:\s*\$\{\{\s*github\.event\.workflow_run\.head_branch\s*\}\}/.test(wf), "no checkout may resolve the mutable head_branch — a racing push would execute unreviewed code under the PAT and provider key");
+		assert.match(wf, /pulls\/\$PR_NUMBER"\s+--jq\s+'\.head\.sha'/, "the bind guard must read the PR's current head from the API");
+		assert.ok(wf.includes('"$CURRENT" != "$HEAD_SHA"'), "the bind guard must compare the current head against the reviewed SHA before the one-pass label is spent");
+		// The bind guard must run in the trusted phase, before the label spend, so a moved
+		// branch costs nothing and the newer push's own review run re-enters the loop.
+		const bindAt = wf.indexOf('"$CURRENT" != "$HEAD_SHA"');
+		const labelAt = wf.indexOf("--add-label 'autopilot:revised'");
+		assert.ok(bindAt >= 0 && labelAt > bindAt, "the SHA bind check must precede the one-pass label add");
+		// Post-checkout, the detached reviewed OID is re-attached to the branch name and the
+		// just-fetched remote state is re-verified so the revise push's --force-with-lease retry
+		// can never be armed with a newer, unreviewed OID as its lease.
+		assert.ok(wf.includes('git checkout -B "$HEAD_BRANCH" "$HEAD_SHA"'), "the branch must be re-attached AT the reviewed OID for the revise push");
+		assert.ok(wf.includes('"$FETCHED" != "$HEAD_SHA"'), "the fetched remote head must be re-verified against the reviewed SHA before privileged execution");
 	});
 });
 
