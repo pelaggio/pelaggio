@@ -313,7 +313,21 @@ describe("pr-review CLI aggregation", () => {
 			assert.equal(out.code, 1);
 			assert.match(out.comments[0], /Invalid review findings report/);
 			assert.match(out.comments[0], /gate=block ok=false subtype=standard:error_invalid_output/);
+			assert.match(out.stderr, /standard discovery parse-failure tail/);
 		}
+	});
+
+	it("retains only a bounded final-result tail when discovery parsing fails", async () => {
+		const secretLikeIntermediate = "INTERMEDIATE_CREDENTIAL_MUST_NOT_BE_LOGGED";
+		const malformed = `EARLY_BYTES_MUST_BE_TRUNCATED-${"discarded-".repeat(30)}\n**REVIEW_FINDINGS**\n{"schemaVersion":1}\n**END_REVIEW_FINDINGS**`;
+		const out = await runCli({
+			results: [result({ text: malformed, assistantText: `${secretLikeIntermediate}\n${malformed}` })],
+		});
+		assert.equal(out.code, 1);
+		assert.match(out.stderr, /standard discovery parse-failure tail/);
+		assert.match(out.stderr, /\*\*END_REVIEW_FINDINGS\*\*/);
+		assert.doesNotMatch(out.stderr, /INTERMEDIATE_CREDENTIAL_MUST_NOT_BE_LOGGED/);
+		assert.doesNotMatch(out.stderr, /EARLY_BYTES_MUST_BE_TRUNCATED/);
 	});
 
 	it("parses discovery findings from accumulated assistantText, not the final streamed chunk", async () => {
@@ -530,6 +544,7 @@ describe("pr-review CLI aggregation", () => {
 			assert.equal(out.code, 1);
 			assert.match(out.comments[0], /Retained blocker/);
 			assert.match(out.comments[0], /isolated verification failed; blocker retained/);
+			if (!(verifier instanceof Error)) assert.match(out.stderr, /standard verification parse-failure tail: "malformed"/);
 		}
 	});
 

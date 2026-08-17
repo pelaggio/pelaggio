@@ -517,6 +517,21 @@ function driverIdentity(candidate: StepSettings): ReviewDriverIdentity {
 	};
 }
 
+/**
+ * Leave a bounded forensic tail in the durable CI log when structured parsing fails.
+ *
+ * This must stay on `text` / `outputTail`, never `assistantText`: the latter accumulates
+ * every assistant turn and may contain an intermediate credential echo induced by an
+ * untrusted PR. The final provider result is already the source rendered in the gate
+ * comment's untrusted partial-output section; logging only its bounded tail preserves the
+ * malformed delimiter variant across comment upserts without widening that trust boundary.
+ */
+function retainParseFailureTail(label: ReviewLabel, phase: "discovery" | "verification", result: StepResult): void {
+	const raw = result.outputTail ?? result.text;
+	const tail = raw.replace(/\x1b\[[0-9;]*m/g, "").slice(-200);
+	if (tail.trim()) process.stderr.write(`  ✗ pr-review ${label} ${phase} parse-failure tail: ${JSON.stringify(tail)}\n`);
+}
+
 async function runReviewPass(iteration: number, label: ReviewLabel, prompt: string, candidate: StepSettings, pr: string, opts: { cwd: string; runStep: RunStepFn; profile: string; parkSignal: ParkSignal }): Promise<ReviewPass> {
 	const driver = driverIdentity(candidate);
 	process.stderr.write(`▶ pr-review ${label} · ${driverLabel(driver)}\n`);
@@ -548,6 +563,7 @@ async function runReviewPass(iteration: number, label: ReviewLabel, prompt: stri
 		};
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
+		retainParseFailureTail(label, "discovery", result);
 		return {
 			iteration,
 			label,
@@ -623,6 +639,7 @@ async function runVerificationPass(
 		pass.effectiveVerdict = survives ? "block" : "pass";
 		pass.failureKind = survives ? "findings" : undefined;
 	} catch (error) {
+		retainParseFailureTail(pass.label, "verification", result);
 		pass.verificationDiagnostic = `Invalid verification report: ${error instanceof Error ? error.message : String(error)}.`;
 		pass.failureSubtype = "error_invalid_verification";
 		pass.gate = "block";
