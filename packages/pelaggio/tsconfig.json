@@ -3,5 +3,9 @@
 	"compilerOptions": {
 		"noUncheckedIndexedAccess": false
 	},
-	"include": ["scripts/**/*.ts"]
+	// Root ci/ entry scripts ride this program: they import these scripts (same module graph) and
+	// no other tsconfig includes them — without this, `pnpm typecheck` never sees e.g.
+	// ci/fetch-review-findings.ts (#508). ci/__tests__ stays out: it carries pre-existing
+	// standalone type debt and is executed (not typechecked) via `pnpm test:ci`.
+	"include": ["scripts/**/*.ts", "../../ci/*.ts"]
 }

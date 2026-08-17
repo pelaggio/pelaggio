@@ -1270,7 +1270,8 @@ describe("runOrchestrator — revise sweep (issue #76)", () => {
 		return (args) => {
 			if (args[0] === "pr" && args[1] === "list") return { stdout: JSON.stringify(prList), stderr: "", status: 0 };
 			if (args[0] === "issue" && args[1] === "view") return { stdout: JSON.stringify({ labels: [{ name: "autopilot" }] }), stderr: "", status: 0 };
-			if (args[0] === "pr" && args[1] === "view") return { stdout: JSON.stringify({ comments: [{ body: "<!-- pelaggio-pr-review -->\nfix the bug", createdAt: "2026-01-01T00:00:00Z" }] }), stderr: "", status: 0 };
+			if (args[0] === "pr" && args[1] === "view")
+				return { stdout: JSON.stringify({ comments: [{ body: "<!-- pelaggio-pr-review -->\nfix the bug", createdAt: "2026-01-01T00:00:00Z", author: { login: "github-actions" } }] }), stderr: "", status: 0 };
 			return { stdout: "", stderr: "", status: 0 };
 		};
 	}
@@ -1323,7 +1324,8 @@ describe("runOrchestrator — revise sweep (issue #76)", () => {
 			}
 			if (args[0] === "issue" && args[1] === "view") return { stdout: JSON.stringify({ labels: [{ name: "autopilot" }] }), stderr: "", status: 0 };
 			if (args[0] === "api" && args[1]?.includes("/comments")) return { stdout: JSON.stringify([{ id: 42, body: "<!-- pelaggio-pr-review -->\nfix local blocker", created_at: "2026-07-08T12:01:00Z" }]), stderr: "", status: 0 };
-			if (args[0] === "pr" && args[1] === "view") return { stdout: JSON.stringify({ comments: [{ body: "<!-- pelaggio-pr-review -->\nfix local blocker", createdAt: "2026-07-08T12:01:00Z" }] }), stderr: "", status: 0 };
+			if (args[0] === "pr" && args[1] === "view")
+				return { stdout: JSON.stringify({ comments: [{ body: "<!-- pelaggio-pr-review -->\nfix local blocker", createdAt: "2026-07-08T12:01:00Z", author: { login: "github-actions" } }] }), stderr: "", status: 0 };
 			return { stdout: "", stderr: "", status: 0 };
 		};
 		const { runPipeline, calls } = createMockRunPipeline({
@@ -1379,7 +1381,8 @@ describe("runOrchestrator — revise sweep (issue #76)", () => {
 				};
 			}
 			if (args[0] === "issue" && args[1] === "view") return { stdout: JSON.stringify({ labels: [{ name: "autopilot" }] }), stderr: "", status: 0 };
-			if (args[0] === "pr" && args[1] === "view") return { stdout: JSON.stringify({ comments: [{ body: "<!-- pelaggio-pr-review -->\nfix local blocker", createdAt: "2026-07-08T12:01:00Z" }] }), stderr: "", status: 0 };
+			if (args[0] === "pr" && args[1] === "view")
+				return { stdout: JSON.stringify({ comments: [{ body: "<!-- pelaggio-pr-review -->\nfix local blocker", createdAt: "2026-07-08T12:01:00Z", author: { login: "github-actions" } }] }), stderr: "", status: 0 };
 			return { stdout: "", stderr: "", status: 0 };
 		};
 		const { runPipeline, calls } = createMockRunPipeline({
@@ -1784,7 +1787,8 @@ describe("runOrchestrator — continuous mode (issue #82)", () => {
 		const gh: GhRunner = (args) => {
 			if (args[0] === "pr" && args[1] === "list") return { stdout: JSON.stringify(revisable), stderr: "", status: 0 };
 			if (args[0] === "issue" && args[1] === "view") return { stdout: JSON.stringify({ labels: [{ name: "autopilot" }] }), stderr: "", status: 0 };
-			if (args[0] === "pr" && args[1] === "view") return { stdout: JSON.stringify({ comments: [{ body: "<!-- pelaggio-pr-review -->\nfix the bug", createdAt: "2026-01-01T00:00:00Z" }] }), stderr: "", status: 0 };
+			if (args[0] === "pr" && args[1] === "view")
+				return { stdout: JSON.stringify({ comments: [{ body: "<!-- pelaggio-pr-review -->\nfix the bug", createdAt: "2026-01-01T00:00:00Z", author: { login: "github-actions" } }] }), stderr: "", status: 0 };
 			return { stdout: "", stderr: "", status: 0 };
 		};
 		const { runPipeline, calls } = createMockRunPipeline({ byItem: { "76": { completed: true, cost: 0.5 } } });
