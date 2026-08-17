@@ -40,7 +40,6 @@ import {
 } from "./review/findings.js";
 import { CLAIM_BRANCH_RE } from "./revise-sweep.js";
 import type { GhRunner } from "./roadmap/github-issues.js";
-import { makeSecretScrubber } from "./secret-hygiene.js";
 import type { RunStepFn } from "./step-runner.js";
 import { runStep } from "./step-runner.js";
 import type { ParkSignal, ProviderName, StepEmit, StepResult } from "./types.js";
@@ -74,9 +73,9 @@ interface ReviewPass {
 	verificationDiagnostic?: string;
 	diagnostic?: string;
 	failureSubtype?: string;
-	/** Structural, credential-free parse-failure diagnosis (see structuralParseFailureDiagnosis).
-	 *  Set on a discovery parse failure; the ONLY parse-failure evidence the public comment carries
-	 *  (raw model text is never published). */
+	/** Constant-only parse-failure diagnosis — the fixed `phase` enum + the fixed `errorCode`, and
+	 *  NOTHING derived from model output (see structuralParseFailureDiagnosis). Set on a discovery
+	 *  parse failure; the ONLY parse-failure evidence the public comment carries. */
 	parseFailureDiagnosis?: string;
 }
 
@@ -243,14 +242,15 @@ function renderPass(pass: ReviewPass): string {
 		return [heading, "", escapeMarkdown(pass.report.summary), "", ...(findings.length > 0 ? findings : ["No findings."])].join("\n");
 	}
 	// No structured report → discovery parse failure or infra failure. This comment is PUBLIC (and
-	// mirrored to CI stdout), so it must carry NEITHER `result.text` NOR `modelAuthoredText`: the
-	// pr-review seat is handed real inherited credentials (ANTHROPIC_API_KEY / GH_TOKEN — see
-	// .github/workflows/pr-review.yml), and a prompt-injected PR can make the seat echo a token —
-	// even base64-encoded — inside otherwise-benign malformed output that scrubbing cannot reliably
-	// reverse (#484 red-team; #536 findings B/C). The public comment therefore surfaces ONLY the
-	// STRUCTURAL, credential-free parse diagnosis. #554 (jailing the seat so it holds no real
-	// credential) is the complete fix; until then this sink is structural-only.
-	const diagnosis = pass.parseFailureDiagnosis ? ["", "Structural parse diagnosis (no raw model text retained; #536/#554):", "", `<pre>${escapeHtml(pass.parseFailureDiagnosis)}</pre>`] : [];
+	// mirrored to CI stdout), so it must carry NEITHER `result.text` NOR `modelAuthoredText` NOR any
+	// value DERIVED from model output: the pr-review seat is handed real inherited credentials
+	// (ANTHROPIC_API_KEY / GH_TOKEN — see .github/workflows/pr-review.yml), and a prompt-injected PR
+	// can make the seat pad malformed output so that any output-derived number (a length, a marker
+	// offset/count, a fence size) encodes credential bytes — a covert channel scrubbing cannot reverse
+	// (#484 red-team; #536 findings B/C). The public comment therefore surfaces ONLY the constant-only
+	// parse diagnosis (fixed phase enum + fixed error code). #554 (jailing the seat so it holds no real
+	// credential) is the complete fix; until then this sink is constant-only.
+	const diagnosis = pass.parseFailureDiagnosis ? ["", "Parse diagnosis (constant-only: phase + fixed error code; no model output retained — #536/#554):", "", `<pre>${escapeHtml(pass.parseFailureDiagnosis)}</pre>`] : [];
 	return [heading, "", `${escapeMarkdown(pass.diagnostic ?? `Run did not complete cleanly (${pass.result.subtype}).`)} Failing this pass closed.`, ...diagnosis].join("\n");
 }
 
@@ -529,78 +529,41 @@ function driverIdentity(candidate: StepSettings): ReviewDriverIdentity {
 	};
 }
 
-// Belt-and-suspenders scrubber over the assembled structural diagnosis. After #536 the diagnosis
-// carries NO model-derived fragment at all — the parse-error MESSAGE (which can embed a
-// model-controlled JSON key via assertKeys) is no longer retained; only harness-authored structural
-// facts and a fixed, enumerated error CODE are. This scrub is a defensive floor, not a load-bearing
-// reversal. Collected once at module load (#237 / TC-014).
-const scrubRetainedOutput = makeSecretScrubber();
-
-/** The cold-gate delimiter pair the parser requires per phase. Used only to REPORT marker
- *  presence/position in the structural diagnosis — never to re-parse. `matchAll` clones each
- *  global regex, so module-level reuse carries no shared `lastIndex` state. */
-const PARSE_FAILURE_MARKERS: Record<"discovery" | "verification", { openRe: RegExp; closeRe: RegExp }> = {
-	discovery: { openRe: /(?:^|\n)REVIEW_FINDINGS[ \t]*(?=\r?\n)/g, closeRe: /(?:^|\n)END_REVIEW_FINDINGS(?=\r?\n|$)/g },
-	verification: { openRe: /(?:^|\n)REVIEW_VERIFICATION[ \t]*(?=\r?\n)/g, closeRe: /(?:^|\n)END_REVIEW_VERIFICATION(?=\r?\n|$)/g },
-};
-
-function markerFact(name: string, matches: readonly RegExpMatchArray[]): string {
-	if (matches.length === 0) return `${name}=absent`;
-	return `${name}=present(idx=${matches[0]?.index ?? 0},count=${matches.length})`;
+/**
+ * Build the CONSTANT-ONLY diagnosis of a cold-gate parse failure — the ONLY parse-failure evidence
+ * retained on stderr (durable CI log) and published in the durable, PUBLIC PR comment.
+ *
+ * SECURITY (#536 / #554): this reads NOTHING from the model's output. It carries only two closed-set,
+ * harness-authored values — the fixed `phase` enum (discovery | verification, chosen by the harness,
+ * never derived from output) and the fixed, enumerated `errorCode` (a closed
+ * ReviewFindingsParseErrorCode constant, which alone distinguishes block-not-found /
+ * trailing-after-close / unknown-key / invalid-json / invalid-severity / etc.). The pr-review /
+ * pr-verify seat is handed REAL inherited credentials (ANTHROPIC_API_KEY / GH_TOKEN — see
+ * .github/workflows/pr-review.yml), and a prompt-injected seat can base64/hex-encode a secret into
+ * malformed output. ANY value DERIVED from that output — a length, a marker offset/count, a fence
+ * size, a trailing-byte count, a marker-present boolean — is a padding-based COVERT CHANNEL that
+ * encodes credential bytes into the public comment + CI log, and neither literal-value nor
+ * credential-pattern scrubbing can reverse it (verified finding). So the retention path is
+ * deliberately constant-only: no length, index, count, or output-derived boolean is computed. #554
+ * (jailing the seat so it holds NO real credential) is what lets richer, output-derived diagnosis
+ * return safely; until it lands, this sink stays phase-and-code-only.
+ */
+function structuralParseFailureDiagnosis(phase: "discovery" | "verification", code: ReviewFindingsParseErrorCode): string {
+	// Closed set only: the fixed phase enum + the fixed error code. Nothing here is read from or
+	// derived from the model's output — that is the covert-channel guarantee (#536 / #554).
+	return `phase=${phase} errorCode=${code}`;
 }
 
 /**
- * Build a STRUCTURAL, credential-free diagnosis of a cold-gate parse failure.
- *
- * SECURITY (#536 / #554): the model text parsed here is UNTRUSTED and the pr-review / pr-verify
- * seat is handed REAL inherited credentials (ANTHROPIC_API_KEY / GH_TOKEN — see
- * .github/workflows/pr-review.yml). Raw model text is therefore DELIBERATELY NOT retained: a
- * prompt-injected seat can base64/hex-encode a secret into a short malformed response, and neither
- * literal-value nor credential-pattern scrubbing can reverse that (verified finding B). Instead we
- * retain only structural facts about WHY the parse failed — which delimiter markers / fence
- * appeared and where, how much text trailed the closing marker (the fence-variant "block not
- * found" signal, #536 deliverable 1), and lengths — none of which can carry a reconstructable
- * secret. The failure reason is a FIXED, harness-authored error CODE (never the parse-error
- * message, which can embed a model-controlled JSON key via assertKeys — #536 finding: a
- * prompt-injected seat could base64-encode GH_TOKEN into an unknown key and have assertKeys echo
- * it to stderr + the public comment). #554 (jailing the seat so it holds no real credential) is the
- * complete fix; until it lands, this sink stays structural-and-code-only.
- *
- * Runs over `modelAuthoredText(result)` — the EXACT bytes the parser rejected — not `result.text`
- * (a final streamed chunk on some providers) and never the pre-sliced `result.outputTail` (whose
- * 200-char slice can split a credential and defeat scrubbing, #536 finding A).
+ * Emit the constant-only parse-failure diagnosis to the durable CI log (stderr) and return it for the
+ * (also durable, PUBLIC) PR comment. Both sinks carry ONLY `phase` + the fixed error `code` — never
+ * model output nor any value derived from it (see structuralParseFailureDiagnosis). Takes no
+ * StepResult: `modelAuthoredText` is deliberately NOT read on the retention path, so no output byte
+ * — raw or length/offset-encoded — can reach either sink.
  */
-function structuralParseFailureDiagnosis(phase: "discovery" | "verification", authored: string, code: ReviewFindingsParseErrorCode): string {
-	const markers = PARSE_FAILURE_MARKERS[phase];
-	const openMatches = [...authored.matchAll(markers.openRe)];
-	const closeMatches = [...authored.matchAll(markers.closeRe)];
-	const lastClose = closeMatches.at(-1);
-	const trailingAfterClose = lastClose ? authored.slice((lastClose.index ?? 0) + (lastClose[0]?.length ?? 0)).trim().length : undefined;
-	const fence = authored.match(/(?:^|\n)(`{3,}|~{3,})/)?.[1];
-	const facts = [
-		`phase=${phase}`,
-		`authoredLen=${authored.length}`,
-		markerFact("open", openMatches),
-		markerFact("close", closeMatches),
-		`fence=${fence ? `${fence[0] === "`" ? "backtick" : "tilde"}x${fence.length}` : "absent"}`,
-		...(trailingAfterClose !== undefined ? [`trailingAfterClose=${trailingAfterClose}`] : []),
-		// Fixed enumerated code — a closed set of harness-authored constants, never model bytes.
-		`errorCode=${code}`,
-	];
-	// Belt-and-suspenders: the assembled string is entirely harness-authored (structural facts + a
-	// fixed code), but scrub once more as a defensive floor.
-	return scrubRetainedOutput(facts.join(" "));
-}
-
-/**
- * Emit the structural parse-failure diagnosis to the durable CI log and return it for the (also
- * durable, PUBLIC) PR comment. Both sinks carry ONLY the structural diagnosis (harness facts + a
- * fixed error CODE) — never raw model text or the model-interpolated parse-error message — because
- * the seat holds real credentials; see structuralParseFailureDiagnosis / #536 / #554.
- */
-function retainParseFailureTail(label: ReviewLabel, phase: "discovery" | "verification", result: StepResult, code: ReviewFindingsParseErrorCode): string {
-	const diagnosis = structuralParseFailureDiagnosis(phase, modelAuthoredText(result), code);
-	process.stderr.write(`  ✗ pr-review ${label} ${phase} parse-failure (structural): ${diagnosis}\n`);
+function retainParseFailureTail(label: ReviewLabel, phase: "discovery" | "verification", code: ReviewFindingsParseErrorCode): string {
+	const diagnosis = structuralParseFailureDiagnosis(phase, code);
+	process.stderr.write(`  ✗ pr-review ${label} ${phase} parse-failure (constant-only): ${diagnosis}\n`);
 	return diagnosis;
 }
 
@@ -639,7 +602,7 @@ async function runReviewPass(iteration: number, label: ReviewLabel, prompt: stri
 		// PUBLIC comment diagnostic; a base64-encoded credential in a key name would defeat scrubbing
 		// (#536). An unknown/unexpected error fails closed to the generic `parse-error` code.
 		const code = parseFailureCode(error);
-		const parseFailureDiagnosis = retainParseFailureTail(label, "discovery", result, code);
+		const parseFailureDiagnosis = retainParseFailureTail(label, "discovery", code);
 		return {
 			iteration,
 			label,
@@ -717,12 +680,13 @@ async function runVerificationPass(
 		pass.failureKind = survives ? "findings" : undefined;
 	} catch (error) {
 		// Verifier stderr is the only durable copy of this failure (renderPass shows the report, not
-		// the verification result). Retain the structural diagnosis + a FIXED code only — never the
-		// parse-error message. The verifier holds real credentials and a model-controlled JSON key
-		// (assertKeys) could carry a base64-encoded secret the scrubber cannot reverse (#536 finding B).
-		// Unknown/unexpected errors fail closed to the generic `parse-error` code.
+		// the verification result). Retain the constant-only diagnosis (fixed phase enum + a FIXED
+		// error code) — never the parse-error message NOR any output-derived value. The verifier holds
+		// real credentials and a model-controlled JSON key (assertKeys) or a padded length could carry
+		// a base64-encoded secret the scrubber cannot reverse (#536 findings). Unknown/unexpected
+		// errors fail closed to the generic `parse-error` code.
 		const code = parseFailureCode(error);
-		retainParseFailureTail(pass.label, "verification", result, code);
+		retainParseFailureTail(pass.label, "verification", code);
 		pass.verificationDiagnostic = `Invalid verification report (${code}).`;
 		pass.failureSubtype = "error_invalid_verification";
 		pass.gate = "block";
