@@ -548,6 +548,27 @@ describe("pr-review CLI aggregation", () => {
 		}
 	});
 
+	it("scrubs credential-shaped strings from the retained verifier parse-failure tail", async () => {
+		// #536 retains the verifier's model-authored tail on a parse failure to diagnose the
+		// "block not found" delimiter variant. The verifier inspects untrusted PR content with
+		// inherited GH_TOKEN/ANTHROPIC_API_KEY, so a prompt-injected token echo must be redacted
+		// before it lands in the durable CI log (stderr) or the persisted PR comment.
+		const leakedSecret = `ghp_${"a1B2c3D4e5F6g7H8i9J0".repeat(2)}`; // GitHub-token-shaped
+		const malformedVerifier = result({ text: `verifier tail begins ${leakedSecret} and then invalid delimiter` });
+		const out = await runCli({
+			results: [result({ text: report("Candidate.", [{ severity: "must-fix", message: "Retained blocker." }]) }), malformedVerifier],
+		});
+		assert.equal(out.code, 1);
+		assert.match(out.stderr, /standard verification parse-failure tail/);
+		// Placeholder present, raw secret absent — and the surrounding evidence stays legible so the
+		// "block not found" diagnosis this retention enables still works on scrubbed output.
+		assert.match(out.stderr, /\[REDACTED\]/);
+		assert.match(out.stderr, /and then invalid delimiter/);
+		assert.ok(!out.stderr.includes(leakedSecret), "raw secret must not reach the CI log");
+		// The persisted PR comment is the other durable copy; it must be clean too.
+		assert.ok(!out.comments.join("\n").includes(leakedSecret), "raw secret must not reach the PR comment");
+	});
+
 	it("parks the gate on a discovery rate-limit without running further passes", async () => {
 		const calls: string[] = [];
 		const queued: StepResult[] = [

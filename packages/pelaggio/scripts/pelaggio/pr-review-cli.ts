@@ -38,6 +38,7 @@ import {
 } from "./review/findings.js";
 import { CLAIM_BRANCH_RE } from "./revise-sweep.js";
 import type { GhRunner } from "./roadmap/github-issues.js";
+import { makeSecretScrubber } from "./secret-hygiene.js";
 import type { RunStepFn } from "./step-runner.js";
 import { runStep } from "./step-runner.js";
 import type { ParkSignal, ProviderName, StepEmit, StepResult } from "./types.js";
@@ -517,18 +518,29 @@ function driverIdentity(candidate: StepSettings): ReviewDriverIdentity {
 	};
 }
 
+// Redact credential-shaped strings and secret env-var values before a retained tail lands in the
+// durable CI log (#237 / TC-014). Collected once at module load; the per-write cost is the replace
+// passes. The verifier inspects untrusted PR content with inherited ANTHROPIC_API_KEY / GH_TOKEN
+// and allow-all tooling, so a prompt-injected token echo must be scrubbed at this sink or it exfils.
+const scrubRetainedOutput = makeSecretScrubber();
+
 /**
  * Leave a bounded forensic tail in the durable CI log when structured parsing fails.
  *
  * This must stay on `text` / `outputTail`, never `assistantText`: the latter accumulates
  * every assistant turn and may contain an intermediate credential echo induced by an
- * untrusted PR. The final provider result is already the source rendered in the gate
- * comment's untrusted partial-output section; logging only its bounded tail preserves the
- * malformed delimiter variant across comment upserts without widening that trust boundary.
+ * untrusted PR. For discovery, the final provider result is also rendered in the gate
+ * comment's untrusted partial-output section, but `renderPass` omits the verification
+ * result — so on the verify phase this stderr write is the *only* place the retained tail
+ * lands. Scrub-before-write (redact-before-write, secret-hygiene.ts) keeps that sink safe:
+ * a token or encoded secret an injected PR places in the tail is replaced with a placeholder,
+ * while the "block not found" delimiter variant this retention diagnoses stays legible.
  */
 function retainParseFailureTail(label: ReviewLabel, phase: "discovery" | "verification", result: StepResult): void {
 	const raw = result.outputTail ?? result.text;
-	const tail = raw.replace(/\x1b\[[0-9;]*m/g, "").slice(-200);
+	// Scrub the full ANSI-stripped body before slicing, so a secret straddling the 200-char
+	// boundary is redacted whole rather than leaking a truncated fragment.
+	const tail = scrubRetainedOutput(raw.replace(/\x1b\[[0-9;]*m/g, "")).slice(-200);
 	if (tail.trim()) process.stderr.write(`  ✗ pr-review ${label} ${phase} parse-failure tail: ${JSON.stringify(tail)}\n`);
 }
 
