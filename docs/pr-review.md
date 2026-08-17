@@ -721,10 +721,14 @@ triggers on the review workflow's `workflow_run: completed` with `conclusion == 
   switch**: pre-apply `autopilot:revised` to opt a PR out of auto-revision entirely.
 - **Global off-switch** — set the repo Actions variable `AUTOPILOT_AUTO_REVISE` to `false` to disable
   the loop repo-wide (the workflow's job `if:` checks `vars.AUTOPILOT_AUTO_REVISE != 'false'`).
-- **The revision seam** — the workflow writes the pr-review findings comment to
-  `.dev/review-findings-<id>.md` via `ci/fetch-review-findings.ts`, which reuses the CLI's
+- **The revision seam** — the workflow first checks out the **default branch** and, from those
+  trusted bytes, writes the pr-review findings comment to `$RUNNER_TEMP/review-findings-<id>.md`
+  (outside the workspace) via `ci/fetch-review-findings.ts`, which reuses the CLI's
   canonical author-trust rule (`fetchReviewFindings` → `isTrustedCommentAuthor`) so a PR
-  participant's copied marker can never become the CI revise prompt, and runs
+  participant's copied marker can never become the CI revise prompt. Running the selector from
+  default-branch bytes is itself load-bearing: the selector is the gate that decides whether
+  PR-head code may run in this privileged job, so the PR head (and the PAT) enter the job only
+  **after** that trust decision. Post-gate, the workflow checks out the PR head and runs
   `pelaggio --resume <id> --no-worktree --target pull-request --review-findings <path>`.
   `--review-findings` is a **resume-only** flag: it reads the file best-effort and injects the findings
   into the implement step as revision input. With no explicit `--from`, it routes the resume to
@@ -733,8 +737,9 @@ triggers on the review workflow's `workflow_run: completed` with `conclusion == 
   branch.
 - **PAT push is load-bearing** — commits pushed with the default `GITHUB_TOKEN` do **not** trigger
   `pull_request` workflows (GitHub anti-recursion). The re-review depends on a `synchronize` (push)
-  event, so the workflow's `actions/checkout` uses `token: ${{ secrets.GH_TOKEN }}` (a PAT). Without
-  it the ship pushes but the loop silently never re-reviews.
+  event, so the workflow's **post-gate PR-head** `actions/checkout` uses
+  `token: ${{ secrets.GH_TOKEN }}` (a PAT). Without it the ship pushes but the loop silently never
+  re-reviews. Pre-gate steps authenticate with the scoped default `github.token` only.
 
 Every failure branch terminates: if the revision run itself crashes/parks before pushing, no
 re-review fires, the label is already set, and the `if: failure()` step posts a park comment — no

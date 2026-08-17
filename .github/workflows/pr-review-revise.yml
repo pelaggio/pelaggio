@@ -23,8 +23,10 @@ jobs:
       vars.AUTOPILOT_AUTO_REVISE != 'false'
     # GitHub-hosted like the review gate: this job runs the implement agent on
     # PR-influenced code, so it belongs on an ephemeral VM. Blast radius is the
-    # spend-capped API key + the GH_TOKEN PAT (see env note below) — keep that
-    # PAT fine-grained (contents + pull-requests + issues on this repo only).
+    # spend-capped API key + the GH_TOKEN PAT — keep that PAT fine-grained
+    # (contents + pull-requests + issues on this repo only). The PAT enters the
+    # job only AFTER the trusted findings gate below; every pre-gate step runs
+    # default-branch bytes under the scoped default GITHUB_TOKEN.
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -32,25 +34,27 @@ jobs:
       pull-requests: write
       issues: write
     env:
-      # PAT — REQUIRED. The re-review depends on a `synchronize` (push) event, and commits pushed
-      # with the default GITHUB_TOKEN do NOT trigger `pull_request` workflows (GitHub's documented
-      # anti-recursion behavior). The ship step's `git push` must be PAT-authed, hence the checkout
-      # `token:` below is also the PAT. Without this the loop silently never re-reviews.
-      GH_TOKEN: ${{ secrets.GH_TOKEN }}
       HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
 
     steps:
+      # ── TRUSTED BYTES ──────────────────────────────────────────────────────────────
+      # Everything up to the findings trust decision executes code checked out from the
+      # DEFAULT branch, never from the PR head: the findings selector and its whole
+      # import graph ARE the gate that decides whether PR-head code may run in this
+      # privileged job, so a malicious PR must not be able to replace them. No PAT is
+      # in scope on this side of the boundary.
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ github.event.workflow_run.head_branch }}
-          fetch-depth: 0
-          token: ${{ secrets.GH_TOKEN }}   # PAT-authed push re-triggers pr-review (NOT GITHUB_TOKEN)
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
 
       # a. Resolve the item id + open PR number from the branch (feat/issue-<n>-…). Bail (no-op,
       #    exit 0) if either is empty, the PR is a draft, or the linked issue lacks the `pelaggio`
       #    label — this loop only touches pelaggio-managed PRs.
       - name: Resolve item + PR
         id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           ITEM_ID=$(echo "$HEAD_BRANCH" | sed -nE 's|^feat/issue-([0-9]+).*|\1|p')
           if [ -z "$ITEM_ID" ]; then
@@ -78,6 +82,7 @@ jobs:
         id: guard
         if: steps.resolve.outputs.proceed == 'true'
         env:
+          GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ steps.resolve.outputs.pr_number }}
         run: |
           PARK_MARKER='<!-- pelaggio-revise-parked -->'
@@ -97,7 +102,8 @@ jobs:
 
       # Toolchain before the findings fetch: step (c) selects the findings comment through the
       # repo's canonical trusted path (ci/fetch-review-findings.ts), which needs the installed
-      # workspace. A cache-hit install keeps the no-findings park path cheap.
+      # workspace — the DEFAULT-branch workspace checked out above, so the selector's import
+      # graph is trusted bytes. A cache-hit install keeps the no-findings park path cheap.
       - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
         if: steps.guard.outputs.proceed == 'true'
 
@@ -107,31 +113,60 @@ jobs:
           node-version: '24'
           cache: 'pnpm'
 
-      # --ignore-scripts for parity with pr-review.yml: the checkout is PR-head code, and this
-      # privileged context holds the PAT + provider key — lifecycle scripts must never run here.
+      # --ignore-scripts for parity with pr-review.yml: even trusted bytes run no lifecycle
+      # scripts in a privileged context.
       - run: pnpm install --frozen-lockfile --ignore-scripts
         if: steps.guard.outputs.proceed == 'true'
 
-      # c. Fetch the pr-review findings (the upserted comment carrying the marker) into a gitignored
-      #    file the resume reads via --review-findings. Selection goes through the canonical
-      #    author-trust rule (`fetchReviewFindings` → `isTrustedCommentAuthor`,
+      # c. THE TRUST DECISION. Fetch the pr-review findings (the upserted comment carrying the
+      #    marker) into a file the resume reads via --review-findings. Selection goes through the
+      #    canonical author-trust rule (`fetchReviewFindings` → `isTrustedCommentAuthor`,
       #    packages/pelaggio/scripts/pelaggio/github-posting.ts): marker text is not authority — a
       #    raw "last marker comment" jq scrape would let any PR participant's copied marker become
-      #    the durable CI revise prompt. No trusted findings → fail-safe park + stop.
+      #    the durable CI revise prompt. The selector only reads the PR's comments via the API, so
+      #    it never needs PR-head files; its output lands OUTSIDE the workspace ($RUNNER_TEMP) so
+      #    the PR-head checkout below can neither clobber nor pre-plant it. Exit 1 is the
+      #    selector's "no trusted findings comment" verdict; any other non-zero exit is a tool
+      #    failure, not a trust decision — both park fail-safe, but the comment names the cause.
       - name: Fetch review findings
         id: findings
         if: steps.guard.outputs.proceed == 'true'
         env:
+          GH_TOKEN: ${{ github.token }}
           ITEM_ID: ${{ steps.resolve.outputs.item_id }}
           PR_NUMBER: ${{ steps.resolve.outputs.pr_number }}
           GH_REPO_SLUG: ${{ github.repository }}
         run: |
-          if node --import tsx ci/fetch-review-findings.ts "$GH_REPO_SLUG" "$PR_NUMBER" ".dev/review-findings-$ITEM_ID.md"; then
+          if node --import tsx ci/fetch-review-findings.ts "$GH_REPO_SLUG" "$PR_NUMBER" "$RUNNER_TEMP/review-findings-$ITEM_ID.md"; then
             echo "found=true" >> "$GITHUB_OUTPUT"
           else
-            gh pr comment "$PR_NUMBER" --body "⚠️ Auto-revision found no trusted PR-review findings comment to act on — parking for human attention."
+            status=$?
+            if [ "$status" -eq 1 ]; then
+              gh pr comment "$PR_NUMBER" --body "⚠️ Auto-revision found no trusted PR-review findings comment to act on — parking for human attention."
+            else
+              gh pr comment "$PR_NUMBER" --body "⚠️ Auto-revision could not run the findings selector (exit $status — a tool failure, not a trust decision) — parking for human attention."
+            fi
             echo "found=false" >> "$GITHUB_OUTPUT"
           fi
+
+      # ── TRUST BOUNDARY ── steps below run PR-HEAD code under the gate's authority ──
+      # PAT exposure begins here, as late as the workflow allows. The PAT is REQUIRED for this
+      # checkout: the re-review depends on a `synchronize` (push) event, and commits pushed with
+      # the default GITHUB_TOKEN do NOT trigger `pull_request` workflows (GitHub's documented
+      # anti-recursion behavior). The revise step's `git push` is PAT-authed through these
+      # persisted credentials — without them the loop silently never re-reviews.
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        if: steps.findings.outputs.found == 'true'
+        with:
+          ref: ${{ github.event.workflow_run.head_branch }}
+          fetch-depth: 0
+          token: ${{ secrets.GH_TOKEN }}   # PAT-authed push re-triggers pr-review (NOT GITHUB_TOKEN)
+
+      # The PR-head checkout wiped the trusted install (actions/checkout cleans the workspace);
+      # reinstall from the PR's own lockfile for the revise run. --ignore-scripts as above — this
+      # is now PR-head code with the PAT and provider key in scope.
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+        if: steps.findings.outputs.found == 'true'
 
       - name: Configure git
         if: steps.findings.outputs.found == 'true'
@@ -143,6 +178,7 @@ jobs:
         if: steps.findings.outputs.found == 'true'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}   # the run's gh calls share the PAT identity of the push
           ITEM_ID: ${{ steps.resolve.outputs.item_id }}
           CI: "true"
           # Override .pelaggio.yml's `review.authoring.enabled: local` (the reviewed
@@ -153,11 +189,12 @@ jobs:
           PELAGGIO_AUTHORING_ENABLED: "off"
         run: |
           pnpm pelaggio --resume "$ITEM_ID" --no-worktree \
-            --target pull-request --review-findings ".dev/review-findings-$ITEM_ID.md" --verbose
+            --target pull-request --review-findings "$RUNNER_TEMP/review-findings-$ITEM_ID.md" --verbose
 
       - name: Park on failure
         if: failure() && steps.resolve.outputs.pr_number != ''
         env:
+          GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ steps.resolve.outputs.pr_number }}
         run: |
           gh pr comment "$PR_NUMBER" \

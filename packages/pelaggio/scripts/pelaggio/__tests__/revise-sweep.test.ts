@@ -21,6 +21,7 @@ import {
 	verifyReviseWorktreeBinding,
 } from "../revise-sweep.js";
 import type { GhRunner } from "../roadmap/github-issues.js";
+import { trustRoutes } from "./trust-routes.js";
 
 /** Records every gh call; `fn` returns the response (defaults to exit-0, empty stdout). */
 function stub(fn?: (args: string[]) => { stdout?: string; stderr?: string; status?: number } | undefined): { run: GhRunner; calls: string[][] } {
@@ -31,25 +32,6 @@ function stub(fn?: (args: string[]) => { stdout?: string; stderr?: string; statu
 		return { stdout: r.stdout ?? "", stderr: r.stderr ?? "", status: r.status ?? 0 };
 	};
 	return { run, calls };
-}
-
-/**
- * Identity/permission routes for the layered trust rule (`isTrustedCommentAuthor`): `self`
- * answers `gh api user` (absent → exit 1), `permissions` answers the collaborator-permission
- * probe per login (absent login → exit 1, the 404 shape). Undefined for any other call so
- * tests can layer their own routes behind it.
- */
-function trustRoutes(opts: { self?: string; permissions?: Record<string, string> }): (args: string[]) => { stdout?: string; status?: number } | undefined {
-	return (args) => {
-		if (args[0] !== "api") return undefined;
-		if (args[1] === "user") return opts.self ? { stdout: `${opts.self}\n` } : { status: 1 };
-		const m = args[1]?.match(/^repos\/[^/]+\/[^/]+\/collaborators\/([^/]+)\/permission$/);
-		if (m) {
-			const permission = opts.permissions?.[decodeURIComponent(m[1])];
-			return permission ? { stdout: JSON.stringify({ permission, role_name: permission }) } : { status: 1 };
-		}
-		return undefined;
-	};
 }
 
 const throwingGh: GhRunner = () => {
@@ -448,6 +430,23 @@ describe("CI revise workflow findings selection (#508)", () => {
 		assert.ok(script.includes("fetchReviewFindings"), "CI shim must call the canonical fetchReviewFindings");
 		assert.ok(script.includes("revise-sweep.js"), "CI shim must import from the canonical module");
 		assert.ok(!script.includes("pelaggio-pr-review"), "CI shim must not re-implement marker matching");
+	});
+
+	it("the selector executes from trusted default-branch bytes; PR-head checkout and PAT exposure come only after the trust decision", () => {
+		// The selector and its import graph ARE the gate deciding whether PR-head code may run in
+		// the privileged revise job. Running it from the PR-head checkout (or exposing the PAT
+		// before it) lets a malicious PR replace the gate itself. Step order in a workflow file is
+		// execution order, so pin it textually.
+		const workflow = readFileSync(join(root, ".github", "workflows", "pr-review-revise.yml"), "utf-8");
+		const selectorAt = workflow.indexOf("node --import tsx ci/fetch-review-findings.ts");
+		assert.ok(selectorAt >= 0, "workflow must invoke the selector via node --import tsx");
+		const trustedCheckoutAt = workflow.indexOf("github.event.repository.default_branch");
+		assert.ok(trustedCheckoutAt >= 0 && trustedCheckoutAt < selectorAt, "a default-branch checkout must precede the selector so it runs trusted bytes");
+		const prHeadCheckoutAt = workflow.search(/ref:\s*\$\{\{\s*github\.event\.workflow_run\.head_branch\s*\}\}/);
+		assert.ok(prHeadCheckoutAt > selectorAt, "the PR-head checkout must come after the findings trust decision");
+		const patAt = workflow.indexOf("secrets.GH_TOKEN");
+		assert.ok(patAt > selectorAt, "the PAT must not enter the job before the trust decision (pre-gate steps use the scoped github.token)");
+		assert.ok(workflow.includes("$RUNNER_TEMP/review-findings-"), "the findings file must live outside the workspace so the PR-head checkout cannot clobber or pre-plant it");
 	});
 });
 
