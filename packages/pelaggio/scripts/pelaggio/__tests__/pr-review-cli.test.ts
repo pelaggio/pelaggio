@@ -313,21 +313,43 @@ describe("pr-review CLI aggregation", () => {
 			assert.equal(out.code, 1);
 			assert.match(out.comments[0], /Invalid review findings report/);
 			assert.match(out.comments[0], /gate=block ok=false subtype=standard:error_invalid_output/);
-			assert.match(out.stderr, /standard discovery parse-failure tail/);
+			assert.match(out.stderr, /standard discovery parse-failure \(structural\)/);
 		}
 	});
 
-	it("retains only a bounded final-result tail when discovery parsing fails", async () => {
-		const secretLikeIntermediate = "INTERMEDIATE_CREDENTIAL_MUST_NOT_BE_LOGGED";
-		const malformed = `EARLY_BYTES_MUST_BE_TRUNCATED-${"discarded-".repeat(30)}\n**REVIEW_FINDINGS**\n{"schemaVersion":1}\n**END_REVIEW_FINDINGS**`;
+	it("retains a structural (credential-free) diagnosis, not raw model text, when discovery parsing fails", async () => {
+		// #536: the review seat holds real inherited credentials (ANTHROPIC_API_KEY / GH_TOKEN). On a
+		// parse failure the harness keeps ONLY a structural diagnosis — which markers/fence appeared,
+		// where, and the harness error — never the model's prose. Here the markers ARE present but the
+		// JSON is invalid, so the diagnosis is genuinely useful (open/close present + a JSON error)
+		// while the surrounding secrets the injected PR planted are never retained.
+		const ghpToken = `ghp_${"aB3dE6gH9jK2mN5pQ8".repeat(2)}`; // 40 chars, GitHub-token-shaped
+		const anthropicKey = `sk-ant-api03-${"Zx9Yw8Vu7Ts6Rq5".repeat(2)}`; // pattern-catchable, must still not be retained
+		const base64Secret = Buffer.from("GH_TOKEN=ghp_realtokenvalue_should_not_survive").toString("base64"); // base64 evasion (finding B)
+		const finalChunkProse = "THIS_FINAL_CHUNK_PROSE_MUST_NOT_REACH_THE_PUBLIC_COMMENT";
+		// assistantText is what the parser reads: valid markers, invalid JSON, secrets in the body.
+		const assistantText = `Here is my review ${anthropicKey}.\nREVIEW_FINDINGS\n{not valid json ${base64Secret}}\nEND_REVIEW_FINDINGS`;
+		// text is the (formerly published) final streamed chunk — a distinct exfil sink (finding C).
 		const out = await runCli({
-			results: [result({ text: malformed, assistantText: `${secretLikeIntermediate}\n${malformed}` })],
+			results: [result({ text: `${finalChunkProse} ${ghpToken}`, assistantText, outputTail: `${finalChunkProse} ${ghpToken}`.slice(-200) })],
 		});
 		assert.equal(out.code, 1);
-		assert.match(out.stderr, /standard discovery parse-failure tail/);
-		assert.match(out.stderr, /\*\*END_REVIEW_FINDINGS\*\*/);
-		assert.doesNotMatch(out.stderr, /INTERMEDIATE_CREDENTIAL_MUST_NOT_BE_LOGGED/);
-		assert.doesNotMatch(out.stderr, /EARLY_BYTES_MUST_BE_TRUNCATED/);
+
+		// Structural diagnosis IS retained and useful: markers present, and the harness JSON error.
+		assert.match(out.stderr, /standard discovery parse-failure \(structural\)/);
+		assert.match(out.stderr, /open=present/);
+		assert.match(out.stderr, /close=present/);
+		assert.match(out.stderr, /error="review findings block is not valid JSON"/);
+		const comment = out.comments.join("\n");
+		assert.match(comment, /Structural parse diagnosis \(no raw model text retained/);
+
+		// No recoverable secret and no raw model prose reaches EITHER durable sink.
+		for (const sink of [out.stderr, comment]) {
+			assert.ok(!sink.includes(ghpToken), "ghp_ token must not be retained");
+			assert.ok(!sink.includes(anthropicKey), "raw ANTHROPIC key must not be retained");
+			assert.ok(!sink.includes(base64Secret), "base64-encoded secret must not be retained");
+			assert.ok(!sink.includes(finalChunkProse), "raw final-chunk prose must not be retained");
+		}
 	});
 
 	it("parses discovery findings from accumulated assistantText, not the final streamed chunk", async () => {
@@ -544,29 +566,49 @@ describe("pr-review CLI aggregation", () => {
 			assert.equal(out.code, 1);
 			assert.match(out.comments[0], /Retained blocker/);
 			assert.match(out.comments[0], /isolated verification failed; blocker retained/);
-			if (!(verifier instanceof Error)) assert.match(out.stderr, /standard verification parse-failure tail: "malformed"/);
+			if (!(verifier instanceof Error)) {
+				// Structural-only diagnosis: the harness "block not found" error, no raw model text.
+				assert.match(out.stderr, /standard verification parse-failure \(structural\)/);
+				assert.match(out.stderr, /error="review verification block not found"/);
+			}
 		}
 	});
 
-	it("scrubs credential-shaped strings from the retained verifier parse-failure tail", async () => {
-		// #536 retains the verifier's model-authored tail on a parse failure to diagnose the
-		// "block not found" delimiter variant. The verifier inspects untrusted PR content with
-		// inherited GH_TOKEN/ANTHROPIC_API_KEY, so a prompt-injected token echo must be redacted
-		// before it lands in the durable CI log (stderr) or the persisted PR comment.
-		const leakedSecret = `ghp_${"a1B2c3D4e5F6g7H8i9J0".repeat(2)}`; // GitHub-token-shaped
-		const malformedVerifier = result({ text: `verifier tail begins ${leakedSecret} and then invalid delimiter` });
+	it("retains a structural (credential-free) verifier diagnosis even when a secret straddles the 200-char tail boundary", async () => {
+		// #536 findings A/B: the verifier holds real inherited GH_TOKEN/ANTHROPIC_API_KEY. Production
+		// providers pre-slice `outputTail` to the last 200 chars BEFORE any scrub, so a credential
+		// straddling that boundary loses its recognizable prefix and evades pattern/value redaction
+		// (A); a base64-encoded secret evades it regardless (B). Retaining only a STRUCTURAL diagnosis
+		// (no raw model bytes) makes both moot. This fixture is production-shaped (a pre-sliced
+		// outputTail carrying the truncated fragment) so the outputTail path is actually exercised.
+		const ghpToken = `ghp_${"aB3dE6gH9jK2mN5pQ8".repeat(2)}`; // 40 chars
+		const anthropicKey = `sk-ant-api03-${"Zx9Yw8Vu7Ts6Rq5".repeat(2)}`;
+		const base64Secret = Buffer.from("ANTHROPIC_API_KEY=sk-ant-real-secret-value").toString("base64");
+		// Position ghpToken so the last-200-char boundary of the full body splits it: the pre-sliced
+		// outputTail keeps only a prefixless fragment (`ghp_` truncated away) that scrubbing that tail
+		// cannot catch. The base64/anthropic secrets sit in the prefix (before the boundary).
+		const truncatedFragment = ghpToken.slice(20); // last 20 chars — only ever present in outputTail
+		const fullBody = `intro ${base64Secret} mid ${anthropicKey} ${"x".repeat(60)}${ghpToken}${"y".repeat(180)}`;
+		const preSlicedOutputTail = fullBody.slice(-200);
+		assert.ok(preSlicedOutputTail.includes(truncatedFragment) && !preSlicedOutputTail.includes(ghpToken), "fixture: outputTail must carry only the truncated token");
+		const malformedVerifier = result({ text: fullBody, assistantText: fullBody, fullText: fullBody, outputTail: preSlicedOutputTail });
 		const out = await runCli({
 			results: [result({ text: report("Candidate.", [{ severity: "must-fix", message: "Retained blocker." }]) }), malformedVerifier],
 		});
 		assert.equal(out.code, 1);
-		assert.match(out.stderr, /standard verification parse-failure tail/);
-		// Placeholder present, raw secret absent — and the surrounding evidence stays legible so the
-		// "block not found" diagnosis this retention enables still works on scrubbed output.
-		assert.match(out.stderr, /\[REDACTED\]/);
-		assert.match(out.stderr, /and then invalid delimiter/);
-		assert.ok(!out.stderr.includes(leakedSecret), "raw secret must not reach the CI log");
-		// The persisted PR comment is the other durable copy; it must be clean too.
-		assert.ok(!out.comments.join("\n").includes(leakedSecret), "raw secret must not reach the PR comment");
+		assert.match(out.comments[0], /Retained blocker/);
+		// The structural diagnosis IS retained and useful: markers absent, harness error, lengths.
+		assert.match(out.stderr, /standard verification parse-failure \(structural\)/);
+		assert.match(out.stderr, /open=absent/);
+		assert.match(out.stderr, /error="review verification block not found"/);
+		// NONE of the recoverable secrets — nor the boundary-straddled fragment — reaches either sink.
+		const comment = out.comments.join("\n");
+		for (const sink of [out.stderr, comment]) {
+			assert.ok(!sink.includes(ghpToken), "ghp_ token must not be retained");
+			assert.ok(!sink.includes(truncatedFragment), "pre-sliced outputTail fragment must not be retained (bug A)");
+			assert.ok(!sink.includes(base64Secret), "base64-encoded secret must not be retained (finding B)");
+			assert.ok(!sink.includes(anthropicKey), "raw ANTHROPIC key must not be retained");
+		}
 	});
 
 	it("parks the gate on a discovery rate-limit without running further passes", async () => {
