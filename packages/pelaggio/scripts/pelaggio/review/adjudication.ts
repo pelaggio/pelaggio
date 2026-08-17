@@ -353,13 +353,15 @@ export type FleetGateRecordSelection = { kind: "none" } | { kind: "one"; record:
  * preferred the greatest `reviewedAt` — a MODEL-SUPPLIED timestamp in a gitignored store, so a
  * forged future-dated record could outrank the genuine one and steer adjudication to attacker
  * evidence. No field inside the records is a trustworthy ordering signal; with more than one
- * qualifying fleet record for the PR the selection is ambiguous and the caller must REFUSE,
- * naming the conflicting files so the operator can delete the stale ones (or run a full
- * pr-review). A single unambiguous record proceeds as before. Operator-adjudication records are
- * never candidates.
+ * qualifying fleet record for the targeted PR/item pair the selection is ambiguous and the
+ * caller must REFUSE, naming the conflicting files so the operator can delete the stale ones
+ * (or run a full pr-review). Records for another item are not candidates: PR identity alone is
+ * insufficient because the current target item is already known and is part of the evidence
+ * identity checked below. A single unambiguous record proceeds as before. Operator-adjudication
+ * records are never candidates.
  */
-export function selectUnambiguousFleetGateRecord(records: readonly PrReviewGateRecord[], prNumber: number): FleetGateRecordSelection {
-	const fleet = records.filter((record) => record.prNumber === prNumber && (record.schemaVersion === 1 || (record.schemaVersion === 2 && record.producer === "fleet")));
+export function selectUnambiguousFleetGateRecord(records: readonly PrReviewGateRecord[], prNumber: number, itemId: string): FleetGateRecordSelection {
+	const fleet = records.filter((record) => record.prNumber === prNumber && record.itemId === itemId && (record.schemaVersion === 1 || (record.schemaVersion === 2 && record.producer === "fleet")));
 	const only = fleet[0];
 	if (only === undefined) return { kind: "none" };
 	if (fleet.length === 1) return { kind: "one", record: only };

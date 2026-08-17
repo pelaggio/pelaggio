@@ -371,6 +371,14 @@ describe("pr-adjudicate CLI config and eligibility", () => {
 		assert.ok(h.errs.some((e) => e.includes(`497-${REVIEWED}.json`) && e.includes(`497-${NEW_HEAD}.json`)));
 		assert.ok(!h.effects.some((e) => e.startsWith("read-source:") || e.startsWith("step:") || e.startsWith("comment:") || e.startsWith("status:")));
 	});
+
+	it("ignores fleet evidence for a different item before checking ambiguity (#514)", async () => {
+		const h = harness();
+		writePrReviewGateRecord(h.gateRoot, fleet({ itemId: "500", headSha: NEW_HEAD }));
+		assert.equal(await main(["--pr", "497"], h.deps), 0);
+		assert.ok(h.effects.includes("write-gate:operator-adjudication"));
+		assert.ok(h.effects.includes(`status:success:${HEAD}`));
+	});
 });
 
 describe("pr-adjudicate CLI verification and effects", () => {

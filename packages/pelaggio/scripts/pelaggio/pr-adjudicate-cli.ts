@@ -239,10 +239,10 @@ export async function runPrAdjudication(pr: number, profile: string, deps: PrAdj
 	// ordering. Residual, accepted until the chartered ADR-0018/#419 harness-attested-evidence
 	// work: the path denial covers pipeline seats only — host processes and un-jailed Bash
 	// outside the hook system can still write these stores.
-	const selection = selectUnambiguousFleetGateRecord(deps.listGateRecords(deps.gateRecordsRoot), pr);
+	const selection = selectUnambiguousFleetGateRecord(deps.listGateRecords(deps.gateRecordsRoot), pr, itemId);
 	if (selection.kind === "none") return refuse(deps, "no local fleet review record for this PR; run a full pr-review first");
 	if (selection.kind === "ambiguous") {
-		return refuse(deps, `multiple fleet review records exist for PR #${pr} under ${deps.gateRecordsRoot} (${selection.files.join(", ")}); refusing ambiguous evidence — remove the stale record(s) or run a full pr-review`);
+		return refuse(deps, `multiple fleet review records exist for PR #${pr} and item ${itemId} under ${deps.gateRecordsRoot} (${selection.files.join(", ")}); refusing ambiguous evidence — remove the stale record(s) or run a full pr-review`);
 	}
 	const latest = selection.record;
 	if (!isEligibleFleetGateRecord(latest)) {
