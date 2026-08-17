@@ -95,37 +95,41 @@ jobs:
           gh pr edit "$PR_NUMBER" --add-label 'autopilot:revised'
           echo "proceed=true" >> "$GITHUB_OUTPUT"
 
+      # Toolchain before the findings fetch: step (c) selects the findings comment through the
+      # repo's canonical trusted path (ci/fetch-review-findings.ts), which needs the installed
+      # workspace. A cache-hit install keeps the no-findings park path cheap.
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
+        if: steps.guard.outputs.proceed == 'true'
+
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        if: steps.guard.outputs.proceed == 'true'
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - run: pnpm install --frozen-lockfile
+        if: steps.guard.outputs.proceed == 'true'
+
       # c. Fetch the pr-review findings (the upserted comment carrying the marker) into a gitignored
-      #    file the resume reads via --review-findings. No findings → fail-safe park + stop.
+      #    file the resume reads via --review-findings. Selection goes through the canonical
+      #    author-trust rule (`fetchReviewFindings` → `isTrustedCommentAuthor`,
+      #    packages/pelaggio/scripts/pelaggio/github-posting.ts): marker text is not authority — a
+      #    raw "last marker comment" jq scrape would let any PR participant's copied marker become
+      #    the durable CI revise prompt. No trusted findings → fail-safe park + stop.
       - name: Fetch review findings
         id: findings
         if: steps.guard.outputs.proceed == 'true'
         env:
           ITEM_ID: ${{ steps.resolve.outputs.item_id }}
           PR_NUMBER: ${{ steps.resolve.outputs.pr_number }}
+          GH_REPO_SLUG: ${{ github.repository }}
         run: |
-          mkdir -p .dev
-          MARKER='<!-- pelaggio-pr-review -->'
-          BODY=$(gh pr view "$PR_NUMBER" --json comments \
-            --jq "[.comments[] | select(.body | contains(\"$MARKER\"))] | last | .body // \"\"")
-          if [ -z "$BODY" ]; then
-            gh pr comment "$PR_NUMBER" --body "⚠️ Auto-revision found no PR-review findings comment to act on — parking for human attention."
-            echo "found=false" >> "$GITHUB_OUTPUT"; exit 0
+          if node --import tsx ci/fetch-review-findings.ts "$GH_REPO_SLUG" "$PR_NUMBER" ".dev/review-findings-$ITEM_ID.md"; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            gh pr comment "$PR_NUMBER" --body "⚠️ Auto-revision found no trusted PR-review findings comment to act on — parking for human attention."
+            echo "found=false" >> "$GITHUB_OUTPUT"
           fi
-          printf '%s\n' "$BODY" > ".dev/review-findings-$ITEM_ID.md"
-          echo "found=true" >> "$GITHUB_OUTPUT"
-
-      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
-        if: steps.findings.outputs.found == 'true'
-
-      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
-        if: steps.findings.outputs.found == 'true'
-        with:
-          node-version: '24'
-          cache: 'pnpm'
-
-      - run: pnpm install --frozen-lockfile
-        if: steps.findings.outputs.found == 'true'
 
       - name: Configure git
         if: steps.findings.outputs.found == 'true'

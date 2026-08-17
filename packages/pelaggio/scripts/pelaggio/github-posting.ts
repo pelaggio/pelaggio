@@ -11,22 +11,41 @@ interface CommentEntry {
 	author?: { login?: string } | null;
 }
 
-/** Associations whose comments the review loop treats as authoritative, on both directions of the seam. */
-const TRUSTED_COMMENT_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
+/**
+ * Associations whose comments the review loop treats as authoritative, on both directions of
+ * the seam. OWNER only: MEMBER and COLLABORATOR are relationship labels, not proof of write
+ * authority — a read-only organization member or triage-level collaborator carries them and
+ * could forge the marker. No pelaggio surface posts gate comments under either association:
+ * local mode posts as the operator's gh identity (OWNER of the repo it manages), CI posts as
+ * the Actions bot. A multi-maintainer repo that ever needs wider human trust should verify
+ * actual push permission (`gh api repos/{owner}/{repo}/collaborators/{login}/permission`)
+ * instead of widening this set.
+ */
+const TRUSTED_COMMENT_ASSOCIATIONS = new Set(["OWNER"]);
 
 /**
- * Canonical author-trust rule for marker comments — one rule for the read side
- * (`fetchReviewFindings` in `revise-sweep.ts`) and the write side (`upsertMarkerComment`).
- * Marker text is not authority: any PR participant can copy it into a comment, so only
- * repository actors and the GitHub Actions gate identity count. Takes the raw fields so both
- * API casings can call it (REST `author_association`/`user.login`, GraphQL
- * `authorAssociation`/`author.login`); a missing association fails closed to untrusted.
+ * The GitHub Actions gate identity in both API spellings: REST `user.login` (the `gh api`
+ * comment endpoints the upsert path reads) reports "github-actions[bot]", while GraphQL
+ * `author.login` (`gh pr view --json comments`, the read path) reports "github-actions".
+ * Missing either spelling silently drops every CI-posted findings comment on that side.
+ */
+const TRUSTED_BOT_LOGINS = new Set(["github-actions", "github-actions[bot]"]);
+
+/**
+ * Canonical author-trust rule for marker comments — ONE rule at every consumption site:
+ * the read side (`fetchReviewFindings` in `revise-sweep.ts`), the write side
+ * (`upsertMarkerComment`), the existence probe (`hasMarkerComment`), and the CI workflow's
+ * findings selection (`.github/workflows/pr-review-revise.yml` via
+ * `ci/fetch-review-findings.ts`). Marker text is not authority: any PR participant can copy
+ * it into a comment, so only the repository owner and the GitHub Actions gate identity count.
+ * Takes the raw fields so both API casings can call it (REST `author_association`/`user.login`,
+ * GraphQL `authorAssociation`/`author.login`); a missing association fails closed to untrusted.
  */
 export function isTrustedCommentAuthor(authorAssociation: string | undefined, login: string | null | undefined): boolean {
 	if (authorAssociation !== undefined && TRUSTED_COMMENT_ASSOCIATIONS.has(authorAssociation.toUpperCase())) return true;
 	// GitHub's built-in Actions identity has authorAssociation=NONE even though the
 	// workflow token is the authority that posts the CI review gate.
-	return login?.toLowerCase() === "github-actions[bot]";
+	return login != null && TRUSTED_BOT_LOGINS.has(login.toLowerCase());
 }
 
 const isTrustedEntry = (comment: CommentEntry): boolean => isTrustedCommentAuthor(comment.author_association ?? comment.authorAssociation, (comment.user ?? comment.author)?.login);
@@ -77,7 +96,10 @@ export function hasMarkerComment(gh: GhRunner, ghRepo: string, issueNumber: stri
 	if (out === null) return null;
 	try {
 		const comments = parseGhJson<CommentEntry[]>(out, (value) => Array.isArray(value));
-		return latestMarkerComment(comments, marker) !== null;
+		// Same author-trust rule as the read and upsert sides. This only gates an informational
+		// once-only diagnostic, but an untrusted participant copying the marker must not be able
+		// to suppress it — and the one-rule claim has to be true at every consumption site.
+		return latestMarkerComment(comments, marker, isTrustedEntry) !== null;
 	} catch {
 		return null;
 	}

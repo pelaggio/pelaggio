@@ -722,7 +722,9 @@ triggers on the review workflow's `workflow_run: completed` with `conclusion == 
 - **Global off-switch** — set the repo Actions variable `AUTOPILOT_AUTO_REVISE` to `false` to disable
   the loop repo-wide (the workflow's job `if:` checks `vars.AUTOPILOT_AUTO_REVISE != 'false'`).
 - **The revision seam** — the workflow writes the pr-review findings comment to
-  `.dev/review-findings-<id>.md` and runs
+  `.dev/review-findings-<id>.md` via `ci/fetch-review-findings.ts`, which reuses the CLI's
+  canonical author-trust rule (`fetchReviewFindings` → `isTrustedCommentAuthor`) so a PR
+  participant's copied marker can never become the CI revise prompt, and runs
   `pelaggio --resume <id> --no-worktree --target pull-request --review-findings <path>`.
   `--review-findings` is a **resume-only** flag: it reads the file best-effort and injects the findings
   into the implement step as revision input. With no explicit `--from`, it routes the resume to

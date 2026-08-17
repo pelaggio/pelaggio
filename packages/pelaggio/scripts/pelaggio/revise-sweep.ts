@@ -530,7 +530,8 @@ export function verifyReviseWorktreeBinding(worktreePath: string, branch: string
 /**
  * Fetch the latest trusted `<!-- pelaggio-pr-review -->` comment body and write it to
  * `findingsPath`. Marker text is not authority: an untrusted PR participant can copy it into a
- * newer comment, so only repository actors and GitHub Actions may supply a revision prompt.
+ * newer comment, so only the repository owner and the GitHub Actions gate identity may supply
+ * a revision prompt (`isTrustedCommentAuthor`).
  * Returns true if written, false when there is no trusted findings comment, the response shape
  * is incomplete, or on any gh/fs error.
  */
