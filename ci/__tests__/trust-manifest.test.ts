@@ -60,8 +60,8 @@ describe("trust manifest generator", () => {
 		const manifest = buildManifest(loadClaims(process.cwd()));
 		const grok = manifest.egress.find((entry) => entry.destination === "cli-chat-proxy.grok.com");
 		assert.ok(grok, "real registry must disclose the Grok service destination");
-		assert.deepEqual(grok.data_categories, ["prompts", "source_context", "read_file_context"]);
-		assert.deepEqual(grok.evidence, ["TC-006", "TC-014"]);
+		assert.deepEqual(grok.data_categories, ["prompts", "source_context", "read_file_context", "provider_usage"]);
+		assert.deepEqual(grok.evidence, ["TC-006", "TC-014", "TC-018"]);
 	});
 
 	it("generates stable manifest bytes with required scalars and a real claims_ref", () => {

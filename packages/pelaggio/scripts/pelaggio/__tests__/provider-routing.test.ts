@@ -378,7 +378,7 @@ describe("resolveAuthoringReviewExecution — auth context gate (#276)", () => {
 		}
 	});
 
-	it("key mode omits an unauthenticated reviewer and records a softening", () => {
+	it("key mode rejects a panel when every reviewer lacks an integrated key route", () => {
 		const policy = {
 			...baseConfig().review.authoring,
 			enabled: "keys" as const,
@@ -394,13 +394,8 @@ describe("resolveAuthoringReviewExecution — auth context gate (#276)", () => {
 			env: { ANTHROPIC_API_KEY: "anthropic-key", XAI_API_KEY: "xai-key" },
 			envAllowlist: ["XAI_API_KEY"],
 		});
-		assert.equal(result.ok, true);
-		if (!result.ok || !result.enabled) return;
-		assert.deepEqual(
-			result.policy.reviewers.map((slot) => slot.provider),
-			["grok"],
-		);
-		assert.match(result.softened.join(" "), /codex.*OPENAI_API_KEY/);
+		assert.equal(result.ok, false);
+		if (!result.ok) assert.match(result.reason, /no key-authenticated reviewer.*codex.*OPENAI_API_KEY.*grok.*no integrated direct-key authentication route/);
 	});
 
 	it("key mode fails closed without a key-authenticated Judge or reviewer", () => {

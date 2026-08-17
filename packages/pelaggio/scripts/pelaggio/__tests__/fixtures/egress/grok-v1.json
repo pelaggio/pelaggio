@@ -1,0 +1,80 @@
+[
+	{
+		"policy": "grok-v1",
+		"kind": "fixed",
+		"method": "GET",
+		"path": "/v1/models",
+		"body": "none",
+		"requestHeaders": ["accept", "content-type", "user-agent"],
+		"auth": "transparent",
+		"upstreamPath": "/v1/models"
+	},
+	{
+		"policy": "grok-v1",
+		"kind": "fixed",
+		"method": "GET",
+		"path": "/v1/settings",
+		"body": "none",
+		"requestHeaders": ["accept", "content-type", "user-agent"],
+		"auth": "transparent",
+		"upstreamPath": "/v1/settings"
+	},
+	{
+		"policy": "grok-v1",
+		"kind": "fixed",
+		"method": "GET",
+		"path": "/v1/mcp/configs",
+		"body": "none",
+		"requestHeaders": ["accept", "content-type", "user-agent"],
+		"auth": "transparent",
+		"upstreamPath": "/v1/mcp/configs"
+	},
+	{
+		"policy": "grok-v1",
+		"kind": "fixed",
+		"method": "GET",
+		"path": "/v1/bundle/archive",
+		"body": "none",
+		"requestHeaders": ["accept", "content-type", "user-agent"],
+		"auth": "transparent",
+		"upstreamPath": "/v1/bundle/archive"
+	},
+	{
+		"policy": "grok-v1",
+		"kind": "fixed",
+		"method": "GET",
+		"path": "/v1/feedback/config",
+		"body": "none",
+		"requestHeaders": ["accept", "content-type", "user-agent"],
+		"auth": "transparent",
+		"upstreamPath": "/v1/feedback/config"
+	},
+	{
+		"policy": "grok-v1",
+		"kind": "fixed",
+		"method": "POST",
+		"path": "/v1/responses/cancel",
+		"body": "json",
+		"requestHeaders": ["accept", "content-type", "user-agent"],
+		"auth": "transparent",
+		"upstreamPath": "/v1/responses/cancel"
+	},
+	{
+		"policy": "grok-v1",
+		"kind": "accounted",
+		"method": "POST",
+		"path": "/v1/responses",
+		"body": "json",
+		"requestHeaders": ["accept", "accept-encoding", "content-type", "user-agent", "x-stainless-arch", "x-stainless-lang", "x-stainless-os", "x-stainless-package-version", "x-stainless-runtime", "x-stainless-runtime-version"],
+		"models": ["grok-4.5"],
+		"modelField": "model",
+		"maxOutputTokensField": "max_output_tokens",
+		"streamField": "stream",
+		"stream": true,
+		"response": { "kind": "sse", "terminalEvent": "response.completed" },
+		"inputUsageField": ["response", "usage", "input_tokens"],
+		"outputUsageField": ["response", "usage", "output_tokens"],
+		"auth": "transparent",
+		"upstreamPath": "/v1/responses"
+	}
+]

@@ -10,17 +10,21 @@
 // Landlock is available. A config-gated fallback exists for externally contained, supervised runs
 // on Landlock-less hosts. Permission prompts remain auto-allowed because confinement is external.
 
+import { realpath, stat } from "node:fs/promises";
+import { homedir } from "node:os";
+import { isAbsolute, join } from "node:path";
 import { type AcpIncomingRequest, AcpRpcError, spawnAcpAgent } from "./acp-client.js";
-import { CONFIG, REPO, resolveProviderBin, resolveStepSettings, type StepSettings } from "./config.js";
+import { CONFIG, GROK_DEFAULT_MODEL, REPO, resolveProviderBin, resolveStepSettings, type StepSettings } from "./config.js";
+import { CONTAINED_LOOPBACK_PORT, ContainedFailure, type ContainedInvocation, withContainedInvocation } from "./contained-execution.js";
 import { emitDecisionsFromText } from "./decisions.js";
-import { buildGrokArgs, detectLandlock, installGrokSandboxProfile } from "./grok-sandbox.js";
+import { resolveEgressPolicy } from "./egress-policies.js";
+import { buildGrokArgs, detectLandlock, GROK_SANDBOX_BLOCK } from "./grok-sandbox.js";
 import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseWaitFlag, resolveParkReset } from "./helpers.js";
-import { buildAgentEnv, makeSecretScrubber, scopeEnvAllowlistToProvider } from "./secret-hygiene.js";
+import { makeSecretScrubber } from "./secret-hygiene.js";
 import type { StepProvider } from "./step-runner.js";
 import { composeSystemAppend, createStepTextProjection, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "./step-runner-shared.js";
 import { MUTATING_TOOLS, toolBrief } from "./tui.js";
 import type { ParkSignal, ProviderCapabilities, Step, StepEvent, StepResult, TokenUsage } from "./types.js";
-import { ensureWorktreeDeps } from "./worktree-deps.js";
 
 /**
  * Grok: Landlock isolation when declared native, pool-quota ticks (token-price fallback
@@ -43,8 +47,7 @@ export const GROK_CAPABILITIES = grokCapabilities(CONFIG.grokAllowUnsandboxedFal
 
 type JsonObject = Record<string, unknown>;
 
-/** The sole in-process operational destination observed in the Grok 0.2.103 live capture. Grok's
- * custom profile cannot express an L7 allowlist; release conformance locks this assumption. */
+/** The sole upstream origin enforced by the reviewed Grok 0.2.103 broker policy. */
 export const GROK_EGRESS_ENDPOINT = "cli-chat-proxy.grok.com";
 
 /**
@@ -54,18 +57,17 @@ export const GROK_EGRESS_ENDPOINT = "cli-chat-proxy.grok.com";
  */
 export const GROK_SANDBOX_APPEND = [
 	"## Sandbox: stay in the worktree; the harness owns git and network",
-	"Work only inside the current working directory (a git worktree). Do NOT run stateful git commands (`git add`, `commit`, `rm`, `restore`, `checkout`, `stash`, `push`, `merge`) and do NOT run network/roadmap CLIs (`gh ...`, `npx pelaggio roadmap ...`). Just create and edit files — the harness commits your work automatically after this step and owns all roadmap/forge effects. Read-only git (`git status`/`diff`/`log`/`show`) is fine.",
+	"Work only inside the current working directory (a git worktree). Git metadata is intentionally unavailable. Do NOT run git commands or network/roadmap CLIs (`gh ...`, `npx pelaggio roadmap ...`). Provider traffic is brokered through the harness; tool networking has no external route. Just create and edit files — the harness commits your work automatically after this step and owns all roadmap/forge effects.",
 ].join("\n");
 
 // grok bills against a flat-rate subscription; cost is reported (via costUsdTicks, nano-USD) for the
 // budget gate but is not per-token metered. Fallback rough per-token rate only if ticks are absent.
 const GROK_COST_PER_INPUT_TOKEN = 0.000_003;
 const GROK_COST_PER_OUTPUT_TOKEN = 0.000_015;
+const GROK_CONTAINMENT_TIMEOUT_HEADROOM_MS = 10_000;
 
 export function grokTimeoutMs(turns: number): number {
-	// Grok runs a prompt autonomously to completion; we can't cap internal turns, so bound by wall
-	// clock like codex (10–90 min, proportional to the step's turn budget).
-	return Math.max(10 * 60_000, Math.min(90 * 60_000, turns * 60_000));
+	return Math.max(10 * 60_000, Math.min(30 * 60_000, turns * 60_000));
 }
 
 /** Grok reasoning effort is high|medium|low; collapse pelaggio's finer scale onto it. */
@@ -80,6 +82,20 @@ export function grokEffort(effort: StepSettings["effort"]): "low" | "medium" | "
 export function selectGrokModel(settings: Pick<StepSettings, "grokModel">): string | undefined {
 	const candidate = settings.grokModel;
 	return candidate && !candidate.startsWith("claude-") ? candidate : undefined;
+}
+
+async function resolveGrokExecutable(configured: string): Promise<string> {
+	if (isAbsolute(configured)) return configured;
+	for (const directory of (process.env.PATH ?? "").split(":")) {
+		const candidate = join(directory, configured);
+		try {
+			const info = await stat(candidate);
+			if (info.isFile() && (info.mode & 0o111) !== 0) return await realpath(candidate);
+		} catch {
+			/* continue */
+		}
+	}
+	throw new Error(`required executable not found: ${configured}`);
 }
 
 function isObject(v: unknown): v is JsonObject {
@@ -347,110 +363,151 @@ export function grokServerRequestResponse(req: AcpIncomingRequest): unknown {
 	return { outcome: { outcome: "selected", optionId } };
 }
 
-export const runStep: StepProvider["runStep"] = async (name, prompt, opts, emit) => {
-	const resolved = resolveStepSettings(CONFIG, opts.profile, name);
-	// A pooled Grok seat's realized model arrives in the generic `executionOverride.model`
-	// slot (DriverIdentity/ReviewSlot stay generic for non-Codex providers); route it into
-	// Grok's own `grokModel` slot so selection never scavenges the Claude model (issue #431).
-	const settings = { ...resolved, grokModel: opts.executionOverride?.model ?? resolved.grokModel };
-	const { budget, turns: baseTurns, effort } = settings;
-	const turns = opts.maxTurnsOverride ?? baseTurns;
-	const model = selectGrokModel(settings);
-	emit({ type: "step_header", name, model: model ?? "default", budget, maxTurns: turns, prompt: opts.trace ? prompt : undefined });
+export interface GrokProviderDependencies {
+	contained?: typeof withContainedInvocation;
+	spawnAcp?: typeof spawnAcpAgent;
+	detectSandbox?: typeof detectLandlock;
+	resolveExecutable?: (configured: string) => Promise<string>;
+}
 
-	const t0 = Date.now();
-	const isWorktree = isWorktreePath(opts.cwd, REPO);
-	if (isWorktree) {
-		try {
-			ensureWorktreeDeps(opts.cwd, REPO);
-		} catch (err) {
-			emit({ type: "sdk_error", message: `worktree-deps guard failed: ${err instanceof Error ? err.message : String(err)}` });
+interface GrokContainedValue {
+	updates: JsonObject[];
+	resultStopReason?: string;
+	resultUsage?: JsonObject;
+	driveError?: Error;
+	exit: Awaited<ReturnType<typeof spawnAcpAgent>["done"]>;
+}
+
+function confinementResult(message: string, subtype: "error_confinement" | "error_budget", emit: Parameters<StepProvider["runStep"]>[3], startedAt: number): StepResult {
+	emit({ type: "sdk_error", message });
+	emit({ type: "done", ok: false, subtype, cost: 0, turns: 0, elapsed: Date.now() - startedAt });
+	return { ok: false, subtype, text: message, fullText: "", assistantText: "", cost: 0, costEstimated: true, turns: 0 };
+}
+
+export function createGrokRunStep(deps: GrokProviderDependencies = {}): StepProvider["runStep"] {
+	return async (name, prompt, opts, emit) => {
+		const resolved = resolveStepSettings(CONFIG, opts.profile, name);
+		// DriverIdentity remains provider-neutral, so a pooled Grok seat's realized model
+		// arrives in executionOverride.model and must be routed into Grok's own slot.
+		const settings = { ...resolved, grokModel: opts.executionOverride?.model ?? resolved.grokModel };
+		const { budget, turns: baseTurns, effort } = settings;
+		const turns = opts.maxTurnsOverride ?? baseTurns;
+		const model = selectGrokModel(settings) ?? GROK_DEFAULT_MODEL;
+		emit({ type: "step_header", name, model, budget, maxTurns: turns, prompt: opts.trace ? prompt : undefined });
+
+		const t0 = Date.now();
+		if (CONFIG.review.authoring.enabled === "keys") {
+			return confinementResult("Grok key authentication is unavailable: the reviewed integrated route supports only local transparent subscription auth", "error_confinement", emit, t0);
 		}
-	}
-
-	const systemAppend = composeSystemAppend({ isWorktree, cwd: opts.cwd, repo: REPO, planBlockActive: name === "implement" });
-	const finalPrompt = `${prompt}\n\n${systemAppend}\n\n${GROK_SANDBOX_APPEND}`;
-	const scrub = makeSecretScrubber();
-	// Provider-scoped allowlist: grok gets its own key var but never a sibling provider's (#276).
-	const agentEnv = buildAgentEnv({ allow: scopeEnvAllowlistToProvider(CONFIG.security.envAllowlist, "grok") });
-	const sandbox = await detectLandlock();
-	if (!sandbox && !CONFIG.grokAllowUnsandboxedFallback) {
-		const message = "Grok sandbox requires Landlock, but this Linux kernel does not expose it; set providers.grok.allow-unsandboxed-fallback: true only for a supervised run with an external containment boundary";
-		emit({ type: "sdk_error", message });
-		emit({ type: "done", ok: false, subtype: "error_confinement", cost: 0, turns: 0, elapsed: Date.now() - t0 });
-		return { ok: false, subtype: "error_confinement", text: message, fullText: "", assistantText: "", cost: 0, costEstimated: true, turns: 0 };
-	}
-	if (sandbox) {
+		const isWorktree = isWorktreePath(opts.cwd, REPO);
+		const systemAppend = composeSystemAppend({ isWorktree, cwd: opts.cwd, repo: REPO, planBlockActive: name === "implement" });
+		const finalPrompt = `${prompt}\n\n${systemAppend}\n\n${GROK_SANDBOX_APPEND}`;
+		const scrub = makeSecretScrubber();
+		const sandbox = await (deps.detectSandbox ?? detectLandlock)();
+		if (!sandbox && !CONFIG.grokAllowUnsandboxedFallback) {
+			return confinementResult(
+				"Grok's nested sandbox requires Landlock, but this Linux kernel does not expose it; set providers.grok.allow-unsandboxed-fallback: true only for a supervised run (the outer contained boundary remains mandatory)",
+				"error_confinement",
+				emit,
+				t0,
+			);
+		}
+		if (!sandbox) {
+			emit({
+				type: "sdk_warning",
+				message: "Landlock is unavailable; the configured supervised fallback omits only Grok's nested native sandbox. The outer systemd/bubblewrap boundary and egress broker remain mandatory.",
+			});
+		}
+		let contained: GrokContainedValue;
 		try {
-			await installGrokSandboxProfile({ home: agentEnv.HOME });
+			resolveEgressPolicy("grok", model);
+			const executable = await (deps.resolveExecutable ?? resolveGrokExecutable)(resolveProviderBin(CONFIG, "grok", "grok"));
+			const authPath = join(homedir(), ".grok", "auth.json");
+			const baseUrl = `http://127.0.0.1:${CONTAINED_LOOPBACK_PORT}/v1`;
+			const args = buildGrokArgs({ model, reasoningEffort: grokEffort(effort), sandbox, baseUrl });
+			const timeoutMs = grokTimeoutMs(turns);
+			const lifecycle = await (deps.contained ?? withContainedInvocation)(
+				{
+					worktree: opts.cwd,
+					command: { kind: "brokered-mounted-driver", source: executable, args },
+					timeoutSeconds: timeoutMs / 1000,
+					egress: { provider: "grok", model, auth: { kind: "transparent" } },
+					privateHome: [{ kind: "copy", source: authPath, destination: ".grok/auth.json", mode: 0o600 }, ...(sandbox ? ([{ kind: "literal", content: `${GROK_SANDBOX_BLOCK}\n`, destination: ".grok/sandbox.toml", mode: 0o600 }] as const) : [])],
+					...(isWorktree ? { mainRepo: REPO } : {}),
+					...(opts.signal ? { signal: opts.signal } : {}),
+				},
+				async (invocation: ContainedInvocation, terminateScope) => {
+					const { conn, done } = (deps.spawnAcp ?? spawnAcpAgent)({
+						bin: invocation.executable,
+						args: [...invocation.argv],
+						cwd: invocation.cwd,
+						env: invocation.env,
+						timeoutMs: timeoutMs - GROK_CONTAINMENT_TIMEOUT_HEADROOM_MS,
+					});
+					const updates: JsonObject[] = [];
+					conn.onNotification((notification) => {
+						if (!isObject(notification.params)) return;
+						const update = (notification.params as JsonObject).update;
+						if (isObject(update)) updates.push(update);
+					});
+					conn.onRequest((request) => grokServerRequestResponse(request));
+					let resultStopReason: string | undefined;
+					let resultUsage: JsonObject | undefined;
+					let driveError: Error | undefined;
+					try {
+						await conn.request("initialize", { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } } });
+						const session = (await conn.request("session/new", { cwd: opts.cwd, mcpServers: [] })) as JsonObject;
+						const sessionId = stringField(session, "sessionId", "session_id");
+						const response = (await conn.request("session/prompt", { sessionId, prompt: [{ type: "text", text: finalPrompt }] })) as JsonObject;
+						resultStopReason = stringField(response, "stopReason", "stop_reason") || undefined;
+						const meta = nestedObject(response, "_meta");
+						resultUsage = (meta && nestedObject(meta, "usage")) ?? meta;
+					} catch (error) {
+						driveError = error instanceof AcpRpcError || error instanceof Error ? error : new Error(String(error));
+					}
+					await terminateScope();
+					const exit = await done;
+					return {
+						value: { updates, ...(resultStopReason ? { resultStopReason } : {}), ...(resultUsage ? { resultUsage } : {}), ...(driveError ? { driveError } : {}), exit },
+						status: driveError ? 1 : 0,
+						signal: null,
+						stderr: exit.stderr,
+					};
+				},
+			);
+			contained = lifecycle.value;
 		} catch (error) {
-			const message = `Grok sandbox profile preparation failed: ${error instanceof Error ? error.message : String(error)}`;
-			emit({ type: "sdk_error", message });
-			emit({ type: "done", ok: false, subtype: "error_confinement", cost: 0, turns: 0, elapsed: Date.now() - t0 });
-			return { ok: false, subtype: "error_confinement", text: message, fullText: "", assistantText: "", cost: 0, costEstimated: true, turns: 0 };
+			const message = `Grok contained execution failed: ${error instanceof Error ? error.message : String(error)}`;
+			if (error instanceof ContainedFailure && error.reason === "rate_limit") {
+				contained = { updates: [], driveError: new Error(`rate limit: ${error.message}`), exit: { code: 1, signal: null, stderr: "", timedOut: false } };
+			} else {
+				return confinementResult(message, error instanceof ContainedFailure && error.reason === "budget" ? "error_budget" : "error_confinement", emit, t0);
+			}
 		}
-	} else {
-		emit({
-			type: "sdk_warning",
-			message: "Landlock is unavailable; providers.grok.allow-unsandboxed-fallback is enabled, so Grok is starting without its CLI sandbox. Only deny-env and cwd guidance protect this supervised run until Pelaggio's host-side jail is wired.",
+
+		const built = buildGrokStepResult(name, contained.updates, {
+			...(contained.resultStopReason ? { stopReason: contained.resultStopReason } : {}),
+			...(contained.resultUsage ? { resultUsage: contained.resultUsage } : {}),
+			stderr: scrub(contained.exit.stderr || ""),
+			timedOut: contained.exit.timedOut,
+			...(contained.exit.spawnError ? { spawnError: contained.exit.spawnError } : {}),
+			...(contained.driveError ? { driveError: contained.driveError } : {}),
+			now: Date.now(),
+			unknownResetWaitMs: parseWaitFlag(CONFIG.park.unknownResetWait),
 		});
-	}
-	const args = buildGrokArgs({ ...(model ? { model } : {}), reasoningEffort: grokEffort(effort), sandbox });
-	const { conn, done, kill } = spawnAcpAgent({
-		bin: resolveProviderBin(CONFIG, "grok", "grok"),
-		args,
-		cwd: opts.cwd,
-		env: agentEnv,
-		timeoutMs: grokTimeoutMs(turns),
-		...(opts.signal ? { signal: opts.signal } : {}),
-	});
 
-	const updates: JsonObject[] = [];
-	conn.onNotification((n) => {
-		if (!isObject(n.params)) return;
-		const u = (n.params as JsonObject).update;
-		if (isObject(u)) updates.push(u);
-	});
-	conn.onRequest((req) => grokServerRequestResponse(req));
+		if (built.parkUpdate) {
+			opts.parkSignal.parked = built.parkUpdate.parked ?? opts.parkSignal.parked;
+			opts.parkSignal.resetsAt = built.parkUpdate.resetsAt ?? opts.parkSignal.resetsAt;
+			opts.parkSignal.limitType = built.parkUpdate.limitType ?? opts.parkSignal.limitType;
+			opts.parkSignal.triggerWorker = opts.itemId ?? "";
+		}
+		for (const event of built.events) emit(event);
+		emit({ type: "done", ok: built.result.ok, subtype: built.result.subtype, cost: built.result.cost, turns: built.result.turns, elapsed: Date.now() - t0 });
+		return built.result;
+	};
+}
 
-	let resultStopReason: string | undefined;
-	let resultUsage: JsonObject | undefined;
-	let driveError: Error | undefined;
-	try {
-		await conn.request("initialize", { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } } });
-		const sess = (await conn.request("session/new", { cwd: opts.cwd, mcpServers: [] })) as JsonObject;
-		const sessionId = stringField(sess, "sessionId", "session_id");
-		const res = (await conn.request("session/prompt", { sessionId, prompt: [{ type: "text", text: finalPrompt }] })) as JsonObject;
-		resultStopReason = stringField(res, "stopReason", "stop_reason") || undefined;
-		const meta = nestedObject(res, "_meta");
-		resultUsage = (meta && nestedObject(meta, "usage")) ?? meta;
-	} catch (err) {
-		driveError = err instanceof AcpRpcError || err instanceof Error ? err : new Error(String(err));
-	}
-
-	kill();
-	const exit = await done;
-
-	const built = buildGrokStepResult(name, updates, {
-		...(resultStopReason ? { stopReason: resultStopReason } : {}),
-		...(resultUsage ? { resultUsage } : {}),
-		stderr: scrub(exit.stderr || ""),
-		timedOut: exit.timedOut,
-		...(exit.spawnError ? { spawnError: exit.spawnError } : {}),
-		...(driveError ? { driveError } : {}),
-		now: Date.now(),
-		unknownResetWaitMs: parseWaitFlag(CONFIG.park.unknownResetWait),
-	});
-
-	if (built.parkUpdate) {
-		opts.parkSignal.parked = built.parkUpdate.parked ?? opts.parkSignal.parked;
-		opts.parkSignal.resetsAt = built.parkUpdate.resetsAt ?? opts.parkSignal.resetsAt;
-		opts.parkSignal.limitType = built.parkUpdate.limitType ?? opts.parkSignal.limitType;
-		opts.parkSignal.triggerWorker = opts.itemId ?? "";
-	}
-	for (const event of built.events) emit(event);
-	emit({ type: "done", ok: built.result.ok, subtype: built.result.subtype, cost: built.result.cost, turns: built.result.turns, elapsed: Date.now() - t0 });
-	return built.result;
-};
+export const runStep: StepProvider["runStep"] = createGrokRunStep();
 
 export const grokProvider: StepProvider = { name: "grok", capabilities: GROK_CAPABILITIES, runStep };

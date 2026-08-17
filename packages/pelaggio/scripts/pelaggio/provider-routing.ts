@@ -10,7 +10,7 @@
 
 import type { AuthoringReviewConfig, ResolvedConfig, ReviewSlot, StepSettings } from "./config.js";
 import { modelForProvider, resolveStepSettings } from "./config.js";
-import { PROVIDER_KEY_ENV } from "./secret-hygiene.js";
+import { DIRECT_KEY_AUTH_PROVIDERS, PROVIDER_KEY_ENV } from "./secret-hygiene.js";
 import type { CapabilityAxis, CapabilityCandidate, CapabilityPredicate, CapabilityRealization, CapabilityRouteResult, ProviderCapabilities, ProviderName } from "./types.js";
 
 // ── Per-axis matching ──────────────────────────────────────────────────
@@ -249,8 +249,9 @@ export function detectUnattendedSignals(context: UnattendedSignalContext): Unatt
  * reviewer) fails closed. The author revision seat fails closed too: a surviving fixable
  * finding re-invokes the implementation author inside the same unattended execution, so
  * its provider key is validated here — before any seat runs — rather than silently
- * falling back to stored subscription auth. Codex/Grok keys must also be forwarded
- * through the child-env allowlist; Claude's SDK consumes its key in-process.
+ * falling back to stored subscription auth. Keys for integrated subprocess routes must also be
+ * forwarded through the child-env allowlist; Claude's SDK consumes its key in-process. Grok is
+ * ineligible here until its direct-key egress route is implemented and reviewed.
  */
 export function resolveAuthoringReviewExecution(
 	policy: AuthoringReviewConfig,
@@ -272,7 +273,7 @@ export function resolveAuthoringReviewExecution(
 	const allowed = new Set(options.envAllowlist ?? []);
 	const unavailableReason = (provider: ProviderName): string | undefined => {
 		const key = PROVIDER_KEY_ENV[provider];
-		if (!key) return `${provider} has no single direct-key authentication contract`;
+		if (!key || !DIRECT_KEY_AUTH_PROVIDERS.has(provider)) return `${provider} has no integrated direct-key authentication route`;
 		if (!env[key]?.trim()) return `${key} is not set`;
 		if (provider !== "claude" && !allowed.has(key)) return `${key} is not forwarded by security.env-allowlist`;
 		return undefined;

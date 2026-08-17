@@ -63,6 +63,8 @@ const ALL_STEPS: readonly Step[] = [...STEPS, "shipwreck", "pr-review", "pr-veri
 
 const OPUS = "claude-opus-5";
 const SONNET = "claude-sonnet-5";
+/** Reviewed against the brokered Grok 0.2.103 request fixture. */
+export const GROK_DEFAULT_MODEL = "grok-4.5";
 
 // ── Defaults ───────────────────────────────────────────────────────────
 

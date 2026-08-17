@@ -2,10 +2,11 @@
 
 > **Decision recorded in [ADR-0023](../decisions/0023-contained-execution-boundary.md)** — this doc is the detailed design + how-to; the ADR records the settled *why*.
 
-The execution jail and optional constrained egress broker are implemented for raw `run-contained`.
-The reviewed production policy is Codex key mode: `POST /v1/responses`, model
-`gpt-5.2-codex`, through `https://api.openai.com`. Provider step runners are not yet wired to this
-transport; until an official Unix/base-URL or host-stdio seam is verified, egress remains opt-in.
+The execution jail and constrained egress broker are implemented for raw `run-contained` and for
+the Grok step provider. Codex key mode permits only `POST /v1/responses` with
+`gpt-5.2-codex`. Grok transparent mode permits the reviewed Grok 0.2.103 bootstrap/control routes
+and a streaming `POST /v1/responses` with `grok-4.5`, all to the single fixed origin
+`https://cli-chat-proxy.grok.com`.
 
 Select it with `--egress codex --egress-model gpt-5.2-codex --egress-auth key --key-env NAME`.
 The named variable must exist in the host environment; its value is never accepted in argv or passed
@@ -32,8 +33,7 @@ converged on a hard truth:
 > token being unexfiltratable says nothing about whether you are *allowed* to make the calls, or who
 > owns the liability when you do.
 
-So the posture is deliberately **scoped and light**, not a bespoke security product. Remaining
-provider-runner integration is target-state.
+So the posture is deliberately **scoped and light**, not a bespoke security product.
 
 ## Posture (what we build, and the defaults)
 
@@ -91,11 +91,23 @@ the *last verified* pin (recorded, `ship.target`-gated), but never to an unconta
   read-only rootfs + tmpfs, `--pids-limit` + mem/cpu/disk/log caps, no Podman socket, no host `HOME`,
   explicit `--env` (never `--env-host`). The conformance probe must *assert* these, not just
   containment.
-- **Ingress:** grok's `--cli-chat-proxy-base-url` is an official flag → transparent re-origination is
-  a supported seam. `socat`-in-container reopens a loopback listener under `network=none`; prefer a
-  unix-socket base-URL or a host-side stdio shim, and never let the bridge be agent-killable.
+- **Ingress:** Grok's official `--cli-chat-proxy-base-url` points at a fixed loopback port inside the
+  private network namespace. A packaged Node shim remains the namespace's PID 1 and byte-forwards
+  that port to the mounted Unix broker socket before starting Grok. The shim is outside Grok's
+  child hierarchy, so Grok and its tools cannot remove the bridge while preserving their run.
 - **Env/creds:** deny-by-default env (#237); secrets via `podman --secret` / tmpfs / short-TTL, never
   a long-lived agent-writable auth volume.
+
+Grok receives only an ephemeral `0600` copy of the operator's regular, non-symlink
+`~/.grok/auth.json` plus the managed sandbox profile in its private `HOME`; the run directory is
+deleted afterward and changes are never copied back. A token that needs `auth.x.ai` refresh fails
+closed because that hostname is not allowed—re-run `grok login` on the host. Streaming responses
+are buffered to the response cap, require the reviewed `response.completed` event, and reconcile
+its nested usage before the broker permits the run to continue.
+
+This Grok integration implements only the local transparent-subscription row below. In `keys`
+mode, Grok author/Judge seats fail before auth staging and Grok reviewer seats are omitted until a
+separate key origin, broker policy, and request fixture are reviewed.
 
 ## Auth posture — the local/unattended boundary
 
@@ -177,8 +189,8 @@ single-dev is the only place subscription is defensible (no cross-user credentia
 
 - **#214 (native `review` status):** already available by re-enabling the GHA review job on a
   **metered key** — no self-hosted runner, no subscription. Review stays **ephemeral GHA + key**.
-- **#240 (grok sandbox):** folds into the execution jail; keep grok `--sandbox` / `codex -s` as cheap
-  defense-in-depth.
+- **#240 (grok sandbox):** folded into the execution jail; Grok's native `--sandbox` remains cheap
+  defense-in-depth when Landlock is available.
 - **#176 (creds outside the process):** realized with a **key** at the broker, not a held subscription
   refresh token.
 - **#237 (env allowlist):** the explicit `--env` list at the boundary.

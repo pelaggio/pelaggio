@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { buildContainedInvocation, captureWriteSnapshot, computeWriteSet, renderInvocation, runContained, runContainedSelfTest } from "../contained-execution.js";
+import { buildContainedInvocation, captureWriteSnapshot, computeWriteSet, renderInvocation, resolveContainedDependencyTargets, runContained, runContainedSelfTest, withContainedInvocation } from "../contained-execution.js";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -82,7 +82,7 @@ describe("contained invocation", () => {
 		await chmod(mask, 0o000);
 		process.env.PELAGGIO_SECRET_CANARY = "never-forward";
 		const invocation = buildContainedInvocation(
-			{ worktree: root, mode: { kind: "command", argv: ["/usr/bin/node"] }, command: ["/usr/bin/node", "hello world"], privateDir: "/tmp/private", gitMask: mask },
+			{ worktree: root, command: ["/usr/bin/node", "hello world"], privateDir: "/tmp/private", gitMask: mask },
 			{ platform: "linux", bwrap: "/usr/bin/bwrap", systemdRun: "/usr/bin/systemd-run", systemctl: "/usr/bin/systemctl", runtimeRoots: ["/usr"] },
 		);
 		const rendered = renderInvocation(invocation);
@@ -135,13 +135,111 @@ describe("contained invocation", () => {
 	it("mounts only the broker socket and exposes only its locator", async () => {
 		const root = await fixture();
 		const invocation = buildContainedInvocation(
-			{ worktree: root, mode: { kind: "command", argv: ["/usr/bin/node"] }, command: ["/usr/bin/node"], privateDir: "/tmp/private", gitMask: join(root, ".git"), egressSocket: "/tmp/private/egress.sock" },
+			{ worktree: root, command: ["/usr/bin/node"], privateDir: "/tmp/private", gitMask: join(root, ".git"), egressSocket: "/tmp/private/egress.sock" },
 			{ platform: "linux", bwrap: "/usr/bin/bwrap", systemdRun: "/usr/bin/systemd-run", systemctl: "/usr/bin/systemctl", runtimeRoots: ["/usr"] },
 		);
 		const rendered = renderInvocation(invocation);
 		assert.match(rendered, /egress\.sock/);
 		assert.match(rendered, /PELAGGIO_EGRESS_SOCKET/);
 		assert.equal(rendered.includes("api.openai.com"), false);
+	});
+
+	it("stages private-home files and builds an interactive brokered-driver invocation", async () => {
+		const root = await fixture();
+		const privateRoot = await mkdtemp(join(tmpdir(), "contained-private-test-"));
+		roots.push(privateRoot);
+		const driver = join(root, "grok");
+		const bridge = join(root, "bridge.mjs");
+		const auth = join(root, "auth.json");
+		await writeFile(driver, "driver", { mode: 0o700 });
+		await writeFile(bridge, "bridge", { mode: 0o600 });
+		await writeFile(auth, "secret", { mode: 0o600 });
+		let sawStaged = false;
+		const result = await withContainedInvocation(
+			{
+				worktree: root,
+				command: { kind: "brokered-mounted-driver", source: driver, bridgeSource: bridge, args: ["agent", "stdio"] },
+				privateHome: [
+					{ kind: "copy", source: auth, destination: ".grok/auth.json", mode: 0o600 },
+					{ kind: "literal", content: "profile", destination: ".grok/sandbox.toml", mode: 0o600 },
+				],
+			},
+			async (invocation) => {
+				const homeSource = invocation.argv[invocation.argv.indexOf("/run/pelaggio/home") - 1];
+				assert.ok(homeSource);
+				assert.equal(await readFile(join(homeSource, ".grok", "auth.json"), "utf8"), "secret");
+				assert.equal(await readFile(join(homeSource, ".grok", "sandbox.toml"), "utf8"), "profile");
+				assert.notEqual(invocation.argv.indexOf(driver), -1);
+				assert.notEqual(invocation.argv.indexOf(bridge), -1);
+				assert.deepEqual(invocation.argv.slice(-5), [process.execPath, "/run/pelaggio/bin/contained-loopback-bridge.mjs", "/run/pelaggio/bin/driver", "agent", "stdio"]);
+				sawStaged = true;
+				return { value: "ok", status: 0, signal: null, stderr: "" };
+			},
+			{
+				privateRoot,
+				listGitFiles: async () => [],
+				discoverCapabilities: async () => ({ platform: "linux", bwrap: "/usr/bin/bwrap", systemdRun: "/usr/bin/systemd-run", systemctl: "/usr/bin/systemctl", runtimeRoots: [dirname(process.execPath)] }),
+				preflight: async () => undefined,
+			},
+		);
+		assert.equal(result.value, "ok");
+		assert.equal(sawStaged, true);
+	});
+
+	it("uses a directory-form Git mask for a main checkout", async () => {
+		const root = await mkdtemp(join(tmpdir(), "contained-main-checkout-test-"));
+		const privateRoot = await mkdtemp(join(tmpdir(), "contained-private-test-"));
+		roots.push(root, privateRoot);
+		await mkdir(join(root, ".git"));
+		let sawDirectoryMask = false;
+		const result = await withContainedInvocation(
+			{ worktree: root, command: { kind: "runtime", argv: [process.execPath] }, debug: true },
+			async (invocation) => {
+				const gitTarget = join(root, ".git");
+				const mask = invocation.argv[invocation.argv.indexOf(gitTarget) - 1];
+				assert.ok(mask);
+				sawDirectoryMask = (await stat(mask)).isDirectory();
+				return { value: undefined, status: 0, signal: null, stderr: "" };
+			},
+			{
+				privateRoot,
+				listGitFiles: async () => [],
+				discoverCapabilities: async () => ({ platform: "linux", bwrap: "/usr/bin/bwrap", systemdRun: "/usr/bin/systemd-run", systemctl: "/usr/bin/systemctl", runtimeRoots: [dirname(process.execPath)] }),
+				preflight: async () => undefined,
+			},
+		);
+		assert.equal(sawDirectoryMask, true);
+		assert.ok(result.artifactDir);
+		assert.equal((await stat(join(result.artifactDir, "git-mask"))).isDirectory(), true);
+	});
+
+	it("rejects unsafe staged-home sources and destinations", async () => {
+		const root = await fixture();
+		const privateRoot = await mkdtemp(join(tmpdir(), "contained-private-test-"));
+		roots.push(privateRoot);
+		const target = join(root, "target");
+		const link = join(root, "link");
+		await writeFile(target, "secret");
+		await symlink(target, link);
+		for (const entry of [
+			{ kind: "copy" as const, source: link, destination: ".grok/auth.json", mode: 0o600 },
+			{ kind: "literal" as const, content: "x", destination: "../escape", mode: 0o600 },
+			{ kind: "literal" as const, content: "x", destination: ".grok/public", mode: 0o644 },
+		]) {
+			await assert.rejects(
+				withContainedInvocation({ worktree: root, command: { kind: "runtime", argv: [process.execPath] }, privateHome: [entry] }, async () => ({ value: undefined, status: 0, signal: null, stderr: "" }), { privateRoot }),
+				/private-home/,
+			);
+		}
+	});
+
+	it("resolves only exact dependency targets beneath the main repository dependency roots", async () => {
+		const root = await fixture();
+		const main = await mkdtemp(join(tmpdir(), "contained-main-test-"));
+		roots.push(main);
+		await import("node:fs/promises").then(({ mkdir }) => mkdir(join(main, "node_modules", "tsx"), { recursive: true }));
+		await symlink(join(main, "node_modules", "tsx"), join(root, "node_modules"));
+		assert.deepEqual(await resolveContainedDependencyTargets(root, main), [join(main, "node_modules", "tsx")]);
 	});
 
 	it("kills the contained scope and fails closed when the broker seals", async () => {
@@ -187,7 +285,8 @@ describe("contained invocation", () => {
 		fatalResolve(new Error("egress hard cap exceeded"));
 		await assert.rejects(run, /egress hard cap exceeded/);
 		assert.deepEqual(killArgv.slice(0, 3), ["--user", "kill", "--kill-whom=all"]);
-		assert.match(killArgv[3] ?? "", /^pelaggio-contained-.*\.scope$/);
+		assert.equal(killArgv[3], "--signal=SIGKILL");
+		assert.match(killArgv[4] ?? "", /^pelaggio-contained-.*\.scope$/);
 		assert.ok(closed);
 	});
 
@@ -209,7 +308,7 @@ describe("contained invocation", () => {
 
 	it("fails closed on unsupported platforms and commands outside runtime roots", async () => {
 		const root = await fixture();
-		const base = { worktree: root, mode: { kind: "command" as const, argv: ["/evil"] as [string] }, command: ["/evil"] as [string], privateDir: "/tmp/p", gitMask: join(root, ".git") };
+		const base = { worktree: root, command: ["/evil"] as [string], privateDir: "/tmp/p", gitMask: join(root, ".git") };
 		assert.throws(() => buildContainedInvocation(base, { platform: "darwin", bwrap: "b", systemdRun: "s", systemctl: "c", runtimeRoots: ["/usr"] }), /Linux/);
 		assert.throws(() => buildContainedInvocation(base, { platform: "linux", bwrap: "b", systemdRun: "s", systemctl: "c", runtimeRoots: ["/usr"] }), /runtime root/);
 	});

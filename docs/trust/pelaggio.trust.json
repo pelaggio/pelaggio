@@ -121,7 +121,8 @@
       "data_categories": [
         "prompts",
         "source_context",
-        "read_file_context"
+        "read_file_context",
+        "provider_usage"
       ],
       "required": false,
       "retention": "governed by the provider's policy",
@@ -129,7 +130,8 @@
       "role": "sub_processor",
       "evidence": [
         "TC-006",
-        "TC-014"
+        "TC-014",
+        "TC-018"
       ]
     },
     {
@@ -277,12 +279,13 @@
     }
   ],
   "sandbox_scope": {
-    "worktree_scope": "item worktree by convention and hooks; the post-step audit always gates siblings and gates main by default",
+    "worktree_scope": "item worktree by convention and hooks; Grok additionally runs in the TC-018 Linux systemd/bubblewrap boundary with masked Git metadata and host-validated writes",
     "main_repo_protection": "default post-step Git-state diff fails on main changes; dirty-main mode uses Claude mutating-tool delta attribution or Codex workspace exclusion while retaining sibling enforcement",
-    "planned_hardening": "not an OS/container sandbox: writes to paths outside any tracked git root (e.g. $HOME, /tmp, arbitrary absolute paths) are not caught by this audit and remain bounded by tool/egress scoping (TC-015)",
+    "planned_hardening": "For providers other than brokered Grok, writes to paths outside tracked Git roots remain bounded by provider tool/egress scoping rather than the TC-018 OS boundary. Prompt injection and the selected provider as an allowed sink remain residuals.",
     "evidence": [
       "TC-011",
-      "TC-015"
+      "TC-015",
+      "TC-018"
     ]
   },
   "claims_ref": "./trust-claims.yml"

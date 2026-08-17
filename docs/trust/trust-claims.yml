@@ -97,11 +97,11 @@ claims:
     claim: "Your code goes only where you point it: the model provider you configure, and the roadmap/notify integrations you enable. Nowhere else."
     status: default
     applies_to: ">=0.1.0"
-    mechanism: "Egress is limited to the configured model provider (Claude/Anthropic, Codex/OpenAI, or Grok/the operator-configured compatible endpoint), the roadmap adapter (GitHub/Linear), git push to your remote, and an optional notify webhook. Grok's managed profile and --disable-web-search restrict child/tool traffic, but its in-process model client remains provider egress. See the egress matrix in pelaggio.trust.json."
+    mechanism: "Egress is limited to the configured model provider (Claude/Anthropic, Codex/OpenAI, or brokered Grok), the roadmap adapter (GitHub/Linear), git push to your remote, and an optional notify webhook. Grok's private network namespace and host broker constrain provider traffic to its reviewed origin/routes; its native sandbox remains defense in depth. See the egress matrix in pelaggio.trust.json."
     evidence_command: "grep -rEn '@anthropic-ai/claude-agent-sdk|LinearClient|gh |git push origin|notify\\.url|fetch\\(' packages/pelaggio/scripts/pelaggio .github/workflows"
     test_file: "docs/trust/trust-claims.yml"
     failure_mode: "n/a"
-    known_limits: "Self-hosted means Pelaggio adds no hosted control plane, but the selected model provider still receives legitimate prompt and read-file/source context under its retention policy. For Grok 0.2.103, cli-chat-proxy.grok.com is observed and release-conformance-locked, not kernel- or L7-allowlisted; #279/#260 own constrained-broker routing. The unsandboxed Grok fallback is local-supervised only and makes no unattended containment claim."
+    known_limits: "Self-hosted means Pelaggio adds no hosted control plane, but the selected model provider still receives legitimate prompt and read-file/source context under its retention policy. Grok subscription mode remains local single-developer only; its Landlock fallback removes only nested defense in depth, not the outer brokered boundary."
     standards: ["GDPR-Art28", "OWASP-LLM02"]
     adr: null
     last_verified: "2026-07-07"
@@ -125,7 +125,7 @@ claims:
     status: guarantee          # shipped: pipeline.ts post-step confinement audit (#105/#111/#125), tested
     applies_to: ">=0.1.0"
     mechanism: "Post-step hard gate (pipeline.ts): forbiddenRootsForStep enumerates main + sibling worktrees (minus the item's own worktree) and diffs their Git state. In confinement.allow-dirty-main item-worktree steps, siblings retain that gate; Claude brackets mutating tools with main Git snapshots through RunStepOpts, while Codex excludes main through workspace-write. Deltas, lifecycle errors, and snapshot errors fail closed."
-    evidence_command: "grep -q 'snapshotForbiddenRoots' packages/pelaggio/scripts/pelaggio/pipeline.ts && grep -q 'diffForbiddenRootSnapshots' packages/pelaggio/scripts/pelaggio/pipeline.ts && grep -q 'error_confinement' packages/pelaggio/scripts/pelaggio/pipeline.ts && node --import tsx --test --test-name-pattern='confinement' packages/pelaggio/scripts/pelaggio/__tests__/pipeline.test.ts >/dev/null 2>&1"
+    evidence_command: "grep -q 'snapshotForbiddenRoots' packages/pelaggio/scripts/pelaggio/pipeline.ts && grep -q 'diffForbiddenRootSnapshots' packages/pelaggio/scripts/pelaggio/pipeline.ts && grep -q 'error_confinement' packages/pelaggio/scripts/pelaggio/pipeline.ts && PELAGGIO_REPO=$PWD node --import tsx --test --test-name-pattern='confinement' packages/pelaggio/scripts/pelaggio/__tests__/pipeline.test.ts >/dev/null 2>&1"
     test_file: "packages/pelaggio/scripts/pelaggio/__tests__/{helpers,step-runner,pipeline}.test.ts (observer state; hook correlation; attributed-main, sibling, enumeration, and precedence failures)"
     failure_mode: "fail the step, loudly (subtype error_confinement)"
     known_limits: "Tool-window deltas are conservative attribution, not writer or process-lifetime provenance: simultaneous operator changes inside a window fail closed, detached/background writes after its post hook are outside the window, and paths outside audited Git roots are never caught. Future providers that can reach main must bracket mutations through the observer."
@@ -163,11 +163,11 @@ claims:
     claim: "Child processes get only the secrets they need, and logs are scrubbed of anything that looks like a credential."
     status: guarantee
     applies_to: ">=0.1.0"
-    mechanism: "Spawned driver subprocesses receive a deny-by-default allowlisted env (buildAgentEnv in secret-hygiene.ts) — PATH/HOME plus explicitly configured vars only, never the full parent process.env. Captured stderr and the verbose file transcript are secret-scrubbed before write (scrubSecrets/makeSecretScrubber): credential-shaped patterns (JWT, provider API keys, bearer/PAT tokens) and the literal values of secret-named env vars are replaced with [REDACTED]."
+    mechanism: "Ordinary spawned driver subprocesses receive a deny-by-default allowlisted env (buildAgentEnv in secret-hygiene.ts), never the full parent process.env. Grok's bwrap boundary uses clearenv and a private HOME with only explicitly staged files. Captured stderr and the verbose file transcript are secret-scrubbed before write (scrubSecrets/makeSecretScrubber): credential-shaped patterns and literal secret-named env values are replaced with [REDACTED]."
     evidence_command: "node --import tsx --test packages/pelaggio/scripts/pelaggio/__tests__/secret-hygiene.test.ts"
     test_file: "packages/pelaggio/scripts/pelaggio/__tests__/secret-hygiene.test.ts"
     failure_mode: "deny-by-default env; redacted before write"
-    known_limits: "The env allowlist covers spawned driver subprocesses (codex today, grok via the ACP client); pelaggio's own git/gh helper commands still use the repo env by design. Scrubbing is pattern- and configured-value-based — a novel credential format that matches no pattern and is not a known secret env value could still reach a log. Not the full #176 out-of-process credential broker."
+    known_limits: "The env allowlist covers ordinary spawned drivers; Grok uses the stricter TC-018 contained environment instead. Pelaggio's own git/gh helpers still use the repo env by design. Scrubbing is pattern- and configured-value-based, so a novel unknown credential format could still reach a log."
     standards: ["OWASP-LLM02", "12FACTOR-Config"]
     adr: "ADR-10"
     last_verified: "2026-07-18"
@@ -201,18 +201,32 @@ claims:
     last_verified: "2026-07-07"
 
   - id: TC-017
-    claim: "Opt-in contained egress reaches only a reviewed provider route through a host-held, capped broker; the jail receives no provider key or upstream URL."
+    claim: "Opt-in contained key-mode egress reaches only a reviewed provider route through a host-held, capped broker; the jail receives no provider key or upstream URL."
     status: guarantee
     applies_to: ">=0.1.0"
-    condition: "run-contained with --egress"
+    condition: "run-contained with --egress and key auth"
     mechanism: "bubblewrap retains --unshare-all and mounts only a Unix HTTP socket. The host broker enforces an HTTPS origin, exact method/path/model policy, bounded buffered bodies, integer token/spend reservations, redirect refusal, response-header filtering, and one-shot scope termination on hard-cap or accounting failure."
-    evidence_command: "node --import tsx --test --test-reporter=dot packages/pelaggio/scripts/pelaggio/__tests__/egress-broker.test.ts packages/pelaggio/scripts/pelaggio/__tests__/contained-execution.test.ts"
+    evidence_command: "PELAGGIO_REPO=$PWD node --import tsx --test --test-reporter=dot packages/pelaggio/scripts/pelaggio/__tests__/egress-broker.test.ts packages/pelaggio/scripts/pelaggio/__tests__/contained-execution.test.ts"
     test_file: "packages/pelaggio/scripts/pelaggio/__tests__/{egress-broker,contained-execution,run-contained-cli}.test.ts"
     failure_mode: "deny the request, or seal the broker and kill the contained scope when accounting cannot remain safe"
-    known_limits: "The provider is an allowed sink, so prompt/body exfiltration to it remains possible. Codex key mode is the only advertised production policy; transparent auth is conformance-only pending a verified official transport seam."
+    known_limits: "The provider is an allowed sink, so prompt/body exfiltration to it remains possible. This claim is specifically host-held key mode; TC-018 covers Grok transparent OAuth, where the jail necessarily receives an ephemeral credential copy."
     standards: ["OWASP-LLM06", "ASVS-V4"]
     adr: null
     last_verified: "2026-07-19"
+
+  - id: TC-018
+    claim: "Every Grok step has a true L7 hostname/route allowlist: its private network namespace can reach only the capped broker for the reviewed cli-chat-proxy.grok.com contract."
+    status: guarantee
+    applies_to: ">=0.1.0"
+    condition: "provider = grok; local single-developer transparent subscription mode"
+    mechanism: "Grok runs as a mounted driver under systemd-run and bubblewrap --unshare-all. A trusted PID-1 loopback shim connects the official --cli-chat-proxy-base-url to one mounted Unix socket. The grok-v1 broker fixes the HTTPS origin, exact 0.2.103 bootstrap/control routes, grok-4.5 model, stream:true request, terminal SSE usage, route-owned headers, and byte/request/rate/token/spend caps. Only a safe auth.json copy and managed sandbox profile are staged into an ephemeral HOME; scope teardown and write-set validation are host-owned."
+    evidence_command: "PELAGGIO_REPO=$PWD node --import tsx --test --test-reporter=dot packages/pelaggio/scripts/pelaggio/__tests__/egress-broker.test.ts packages/pelaggio/scripts/pelaggio/__tests__/contained-execution.test.ts packages/pelaggio/scripts/pelaggio/__tests__/contained-loopback-bridge.test.ts packages/pelaggio/scripts/pelaggio/__tests__/grok-provider.test.ts"
+    test_file: "packages/pelaggio/scripts/pelaggio/__tests__/{egress-broker,contained-execution,contained-loopback-bridge,grok-provider,grok-sandbox}.test.ts"
+    failure_mode: "deny the request or seal the broker, kill the systemd scope, and return a typed rate-limit, budget, or confinement failure"
+    known_limits: "The provider remains an allowed sink for legitimate prompt/source context. Subscription use is local single-developer only. OAuth refresh that needs auth.x.ai requires host-side re-login. Provider route/SSE drift fails availability closed."
+    standards: ["OWASP-LLM06", "ASVS-V4"]
+    adr: "ADR-0023"
+    last_verified: "2026-08-16"
 
 manifest:
   defaults:
@@ -275,12 +289,12 @@ manifest:
       role: sub_processor
       evidence: [TC-006, TC-017]
     - destination: cli-chat-proxy.grok.com
-      data_categories: [prompts, source_context, read_file_context]
+      data_categories: [prompts, source_context, read_file_context, provider_usage]
       required: false
       retention: "governed by the provider's policy"
       opt_out: "configure a different model provider for the step"
       role: sub_processor
-      evidence: [TC-006, TC-014]
+      evidence: [TC-006, TC-014, TC-018]
     - destination: github
       data_categories: [issues, pull_requests, plan_bodies, diffs, comments]
       required: false
@@ -342,7 +356,7 @@ manifest:
       capabilities: [pr.open, git.push.default_branch, pr.automerge]
       evidence: [TC-003, TC-012, TC-013]
   sandbox_scope:
-    worktree_scope: "item worktree by convention and hooks; the post-step audit always gates siblings and gates main by default"
+    worktree_scope: "item worktree by convention and hooks; Grok additionally runs in the TC-018 Linux systemd/bubblewrap boundary with masked Git metadata and host-validated writes"
     main_repo_protection: "default post-step Git-state diff fails on main changes; dirty-main mode uses Claude mutating-tool delta attribution or Codex workspace exclusion while retaining sibling enforcement"
-    planned_hardening: "not an OS/container sandbox: writes to paths outside any tracked git root (e.g. $HOME, /tmp, arbitrary absolute paths) are not caught by this audit and remain bounded by tool/egress scoping (TC-015)"
-    evidence: [TC-011, TC-015]
+    planned_hardening: "For providers other than brokered Grok, writes to paths outside tracked Git roots remain bounded by provider tool/egress scoping rather than the TC-018 OS boundary. Prompt injection and the selected provider as an allowed sink remain residuals."
+    evidence: [TC-011, TC-015, TC-018]

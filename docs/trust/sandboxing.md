@@ -10,7 +10,7 @@ last_reviewed: 2026-07-19
 
 # Sandboxing
 
-Pelaggio's current isolation is worktree-oriented process discipline, not an OS/container sandbox (`TC-011`, `TC-015`). By default, its post-step confinement audit diffs main and sibling Git state across the whole step. With `confinement.allow-dirty-main: true`, Claude instead diffs main around each mutating tool, Codex excludes main through its workspace boundary, and siblings remain hard-gated. Attribution failures and tool-window deltas fail closed; unchanged main dirtiness between windows is tolerated.
+Pelaggio's general isolation is worktree-oriented process discipline; Grok additionally uses a shipped Linux OS boundary (`TC-018`). By default, its post-step confinement audit diffs main and sibling Git state across the whole step. With `confinement.allow-dirty-main: true`, Claude instead diffs main around each mutating tool, Codex excludes main through its workspace boundary, and siblings remain hard-gated. Attribution failures and tool-window deltas fail closed; unchanged main dirtiness between windows is tolerated.
 
 ## Current Boundaries
 
@@ -22,6 +22,7 @@ Pelaggio's current isolation is worktree-oriented process discipline, not an OS/
 | Plan-polish guard | During `implement`, writes to `docs/plans/` are blocked so the agent executes the approved plan instead of editing it. | `TC-011`, `TC-015` |
 | Worktree-side install guard | In-worktree `pnpm install`/similar commands are blocked because worktrees share main `node_modules` by symlink when lockfiles match. | `TC-011`, `TC-016` |
 | Dependency sharing seam | `worktree-deps` symlinks `node_modules` to the main repo when safe, falls back to install on lockfile drift, and repairs known corruption shapes. | `TC-011`, `TC-016` |
+| Brokered Grok boundary | Grok runs under systemd/bubblewrap with `--unshare-all`, masked Git metadata, an ephemeral home, exact read-only dependency targets, and one Unix broker socket. | `TC-018` |
 | PR gate | Even if code changes are made in the worktree, default shipping opens a PR and the merge gate fails closed in PR mode. | `TC-003`, `TC-012` |
 
 ## Known Limits
@@ -29,16 +30,16 @@ Pelaggio's current isolation is worktree-oriented process discipline, not an OS/
 Grok's managed custom profile requires `bubblewrap` and Landlock on Linux. Install
 `bubblewrap`, then require `grep landlock /sys/kernel/security/lsm` to succeed before an
 unattended run. Missing Landlock (notably on default WSL2) or profile-install failure refuses
-the step by default. The `providers.grok.allow-unsandboxed-fallback: true` escape hatch leaves
-only deny-env and CWD guidance and is suitable solely for local, actively supervised use; it
-is never an unattended containment boundary. See the [Grok operator guide](../grok.md).
+the step by default. The `providers.grok.allow-unsandboxed-fallback: true` escape hatch removes
+only the nested Grok sandbox and is suitable solely for local, actively supervised use. The outer
+systemd/bubblewrap boundary and broker remain mandatory. See the [Grok operator guide](../grok.md).
 
 | Limit | Why it matters | Claim(s) |
 |---|---|---|
-| Provider-dependent OS boundary | Claude remains worktree-discipline based; Codex uses its workspace boundary; Grok explicitly selects a custom profile extending `strict` (Linux `bubblewrap`, macOS Seatbelt). Grok child-network restriction is Linux-only. | `TC-011`, `TC-014`, `TC-015` |
+| Provider-dependent OS boundary | Claude remains worktree-discipline based; Codex uses its workspace boundary; Grok requires the Linux systemd/bubblewrap jail and adds its native Landlock profile when available. | `TC-011`, `TC-014`, `TC-015`, `TC-018` |
 | Attribution is windowed and Git-scoped | Paths outside audited Git roots and detached/background writes after a tool post hook are not caught. Simultaneous changes inside a Claude tool window are conservatively attributed. | `TC-011`, `TC-015` |
-| OS sandbox exceptions remain | Grok needs system runtime paths and its own auth/session/sandbox-event state under `~/.grok`; `strict` confines project access to CWD, not every runtime read/write literally. | `TC-011`, `TC-014`, `TC-015` |
-| In-process Grok model egress is not hostname-filtered | Grok 0.2.103 blocks child networking and Pelaggio disables web tools, but the model client is exempt. `cli-chat-proxy.grok.com` is observed and conformance-locked, not an OS/L7 allowlist. | `TC-006`, `TC-014` |
+| Grok provider remains an allowed sink | The L7 broker prevents alternate destinations but cannot stop legitimate model requests from carrying mounted worktree context. | `TC-006`, `TC-018` |
+| Grok pin changes can fail availability | An unreviewed bootstrap route, model, or terminal SSE shape is denied or seals the broker; recovery is a reviewed fixture/policy update, never direct networking. | `TC-018` |
 | Prompt injection is bounded, not solved | The agent still consumes attacker-reachable text and runs broad tools inside the worktree. | `TC-015` |
 
 ## Practical Reading

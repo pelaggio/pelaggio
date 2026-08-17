@@ -207,11 +207,12 @@ models:
   attestation") and carried on the execution result into the cycle log. The
   attestation is per-invocation and never overrides CI/single-shot, the daemon
   marker, or multi-cycle — an attested run tripping any of those still refuses.
-- `keys` enables the loop in any execution context and requires direct provider API
-  keys for the Judge, reviewer, and author revision seats (`ANTHROPIC_API_KEY`,
-  `OPENAI_API_KEY`, or `XAI_API_KEY`). Codex/Grok key names must also appear in
-  `security.env-allowlist`. A reviewer without usable key auth is omitted and the
-  provenance is marked `softened`; a missing Judge or zero remaining reviewers fails
+- `keys` enables the loop in any execution context and requires a currently integrated direct-key
+  route for the Judge, reviewer, and author revision seats (`ANTHROPIC_API_KEY` or
+  `OPENAI_API_KEY`). Codex's key name must also appear in `security.env-allowlist`. The integrated
+  Grok route is subscription-only, so Grok reviewers are omitted and a Grok Judge or author fails
+  closed until a separately reviewed key route exists. A reviewer without usable key auth is omitted
+  and the provenance is marked `softened`; a missing Judge or zero remaining reviewers fails
   closed before any review seat starts. The author revision seat fails closed the
   same way: a surviving fixable finding re-invokes the implementation author inside
   the same unattended context, so its provider key is validated up front rather than
@@ -449,29 +450,22 @@ in-process (no subprocess), so a `bin` override for it has no effect.
 The end-to-end setup and supervised fallback procedure live in the
 [Grok operator guide](./grok.md); this section is the configuration reference.
 
-On Linux, Grok's custom sandbox requires both `bubblewrap` and kernel Landlock support (Landlock
-must appear in `/sys/kernel/security/lsm`). Every Grok step normally installs and explicitly
-selects the namespaced `pelaggio-worktree-v1` profile in `~/.grok/sandbox.toml`; unrelated user
-profiles and file permissions are preserved. Missing Landlock or profile installation failure
-refuses the step by default.
+Grok steps require Linux, `bubblewrap`, and working systemd user scopes. They always run in the
+outer contained boundary with a private network namespace and the `grok-v1` broker policy. The
+reviewed model is `grok-4.5`; mixed-provider profiles that do not name a Grok model receive that
+default explicitly, while another Grok model fails before spawn.
+
+When kernel Landlock is present, Pelaggio stages the namespaced `pelaggio-worktree-v1` profile into
+the run's ephemeral private home and selects it as defense in depth. It never edits the operator's
+`~/.grok/sandbox.toml`. Only a safe `~/.grok/auth.json` is copied into the private home; writes are
+discarded after the run.
 
 On a Landlock-less Linux host such as a default WSL2 kernel, operators may explicitly set
-`providers.grok.allow-unsandboxed-fallback: true`. Pelaggio then starts Grok without `--sandbox`
-and prints a loud warning. Until the Pelaggio host-side jail is wired, only environment-secret
-denial and CWD guidance remain; this is acceptable for local supervised dogfooding, not unattended
-operation. The option does not bypass malformed or unwritable profile configuration when Landlock
-is available. Built-in web search remains disabled in either mode.
-
-The profile extends Grok's `strict` policy, so project/source access is limited
-to the invocation CWD. Grok still needs its executable, system libraries and
-certificates, and its own authentication/session/sandbox-event state under
-`~/.grok`. Linux read-deny needs `bubblewrap`; macOS uses Seatbelt. Grok
-0.2.103 only enforces `restrict_network` for child commands on Linux.
-
-Pelaggio also passes `--disable-web-search`, disabling Grok's built-in web
-search/fetch. Grok 0.2.103 has no hostname-firewall setting for its in-process
-model client: `cli-chat-proxy.grok.com` is the sole destination observed and
-locked by release conformance, not an OS-enforced allowlist.
+`providers.grok.allow-unsandboxed-fallback: true`. Pelaggio then omits only Grok's nested
+`--sandbox` flag and prints a loud warning. The outer systemd/bubblewrap jail, private network,
+brokered `cli-chat-proxy.grok.com` allowlist, staged auth, and write-set validation remain mandatory.
+Built-in web search remains disabled in either mode. The fallback is for local supervised use, not
+unattended, CI, or shared-host subscription operation.
 
 After a Grok upgrade, capture DNS names and/or TLS SNI for the same probe run
 with a privileged tool such as `tcpdump`, normalized without paths, payloads,
@@ -479,14 +473,13 @@ queries, or authentication. Then run:
 
 ```bash
 PELAGGIO_GROK_LIVE_CONFORMANCE=1 \
-PELAGGIO_GROK_NETWORK_CAPTURE=/path/to/normalized-capture.txt \
-npx tsx --test --test-name-pattern='live Grok' \
+node --import tsx --test --test-name-pattern='live Grok' \
   packages/pelaggio/scripts/pelaggio/__tests__/grok-sandbox.test.ts
 ```
 
-This release gate requires Linux, Grok 0.2.103, `bubblewrap`, valid Grok auth,
-network access, and packet-capture privileges. A destination change requires a
-security review; do not update the fixture as a routine snapshot refresh.
+This release gate requires Linux, Grok 0.2.103, `bubblewrap`, working systemd user scopes, valid
+Grok auth, and network access. A route/model/response-shape change requires security review; do not
+update the fixture as a routine snapshot refresh.
 
 ## Pinning a profile per run
 
@@ -1005,19 +998,17 @@ bypasses only the one-pass `autopilot:revised` label.
 
 ## Spawned-agent env allowlist
 
-Driver subprocesses (codex today, grok next) run work influenced by untrusted
-repo/issue/PR text. To stop a prompt-injected step from reading credentials, they
-are spawned with a **deny-by-default environment**: only a fixed allowlist
-(`PATH`, `HOME`, locale/cert vars) plus any names you add here is forwarded — the
-child never inherits the full parent environment (issue #237, TC-014).
+Driver subprocesses run work influenced by untrusted repo/issue/PR text. To stop a
+prompt-injected step from reading credentials, ordinary subprocess providers are spawned with a
+**deny-by-default environment**: only a fixed allowlist (`PATH`, `HOME`, locale/cert vars) plus any
+names you add here is forwarded. Grok is narrower: its contained boundary supplies a private
+`HOME`, stages only reviewed files, and does not forward `security.env-allowlist` variables.
 
-Subscription auth keeps working out of the box because codex/grok read their
-tokens from files under `HOME`. Add a var only when a driver needs it in the
-environment — e.g. an API key for key-based auth:
+Add a var only when an ordinary driver needs it in the environment—for example, Codex key auth:
 
 ```yaml
 security:
-  env-allowlist: [OPENAI_API_KEY, XAI_API_KEY]
+  env-allowlist: [OPENAI_API_KEY]
 ```
 
 `security.env-allowlist` must be an array of strings. At launch the allowlist is
@@ -1030,6 +1021,9 @@ forwarded unchanged. Independently, captured
 driver stderr and the verbose `.dev/*.log` transcript are **secret-scrubbed
 before write**: credential-shaped strings (JWTs, provider keys, tokens) and the
 values of secret-named env vars are replaced with `[REDACTED]`.
+
+The integrated Grok subscription route does not consume `XAI_API_KEY`; key/external-auth Grok needs
+a future reviewed egress policy rather than an env-allowlist entry.
 
 ## Notifications
 

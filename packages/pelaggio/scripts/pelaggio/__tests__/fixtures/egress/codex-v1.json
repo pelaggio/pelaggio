@@ -1,15 +1,20 @@
 [
 	{
 		"policy": "codex-v1",
+		"kind": "accounted",
 		"method": "POST",
 		"path": "/v1/responses",
+		"body": "json",
+		"requestHeaders": ["accept", "content-type", "user-agent"],
 		"models": ["gpt-5.2-codex"],
 		"modelField": "model",
 		"maxOutputTokensField": "max_output_tokens",
+		"streamField": "stream",
+		"stream": false,
+		"response": { "kind": "json" },
 		"inputUsageField": ["usage", "input_tokens"],
 		"outputUsageField": ["usage", "output_tokens"],
-		"authHeader": "authorization",
-		"authScheme": "Bearer",
-		"streaming": false
+		"auth": "key",
+		"upstreamPath": "/v1/responses"
 	}
 ]

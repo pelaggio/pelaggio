@@ -1,12 +1,14 @@
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { chmod, cp, lstat, mkdir, mkdtemp, open, readFile, readlink, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, cp, lstat, mkdir, mkdtemp, open, readdir, readFile, readlink, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { type EgressAuth, type EgressBrokerHandle, type EgressRequester, startEgressBroker } from "./egress-broker.js";
+import { fileURLToPath } from "node:url";
+import { type EgressAuth, type EgressBrokerHandle, EgressFatalError, type EgressRequester, startEgressBroker } from "./egress-broker.js";
 import { resolveEgressPolicy } from "./egress-policies.js";
 import { buildAgentEnv, makeSecretScrubber } from "./secret-hygiene.js";
+import { ensureWorktreeDeps } from "./worktree-deps.js";
 
 export type ContainedRunMode = { kind: "command"; argv: readonly [string, ...string[]] } | { kind: "self-test" };
 
@@ -20,11 +22,53 @@ export interface ContainedRunOptions {
 	egress?: { provider: string; model: string; auth: EgressAuth };
 }
 
+export type ContainedCommand =
+	| { kind: "runtime"; argv: readonly [string, ...string[]] }
+	| { kind: "mounted-driver"; source: string; args: readonly string[] }
+	| { kind: "brokered-mounted-driver"; source: string; args: readonly string[]; bridgeSource?: string };
+
+export type PrivateHomeEntry = { kind: "copy"; source: string; destination: string; mode: number } | { kind: "literal"; content: string; destination: string; mode: number };
+
+export interface ContainedLifecycleOptions {
+	worktree: string;
+	command: ContainedCommand;
+	debug?: boolean;
+	timeoutSeconds?: number;
+	egress?: { provider: string; model: string; auth: EgressAuth };
+	privateHome?: readonly PrivateHomeEntry[];
+	mainRepo?: string;
+	signal?: AbortSignal;
+}
+
 export interface ContainedRunResult {
 	status: number;
 	signal: NodeJS.Signals | null;
 	writeSet: readonly WriteSetEntry[];
 	artifactDir?: string;
+}
+
+export interface ContainedDriverResult<T> {
+	value: T;
+	status: number;
+	signal: NodeJS.Signals | null;
+	stderr: string;
+}
+
+export interface ContainedLifecycleResult<T> extends ContainedRunResult {
+	value: T;
+}
+
+export type ContainedFailureReason = "rate_limit" | "budget" | "confinement";
+
+export class ContainedFailure extends Error {
+	constructor(
+		message: string,
+		readonly reason: ContainedFailureReason,
+		options?: ErrorOptions,
+	) {
+		super(message, options);
+		this.name = "ContainedFailure";
+	}
 }
 
 export interface SelfTestProbe {
@@ -76,10 +120,19 @@ export interface ContainedDependencies {
 	startBroker?: typeof startEgressBroker;
 	brokerRequester?: EgressRequester;
 	runKill?: typeof spawnProcess;
+	ensureDeps?: (worktree: string, mainRepo: string) => void;
+	resolveDependencyTargets?: (worktree: string, mainRepo: string) => Promise<readonly string[]>;
 }
 
 const RUNTIME_ROOTS = ["/usr", "/bin", "/sbin", "/lib", "/lib64"] as const;
-const CGROUP_PROPERTIES = ["TasksMax=512", "MemoryMax=4G", "CPUQuota=200%", "RuntimeMaxSec=1800", "KillMode=control-group"] as const;
+const CGROUP_PROPERTIES = ["TasksMax=512", "MemoryMax=4G", "CPUQuota=200%", "KillMode=control-group"] as const;
+export const CONTAINED_LOOPBACK_PORT = 43179;
+export const CONTAINED_BRIDGE_PATH = fileURLToPath(new URL("./contained-loopback-bridge.mjs", import.meta.url));
+
+type ResolvedContainedCommand =
+	| { kind: "runtime"; argv: readonly [string, ...string[]] }
+	| { kind: "mounted-driver"; source: string; jailPath: string; args: readonly string[] }
+	| { kind: "brokered-mounted-driver"; source: string; jailPath: string; args: readonly string[]; bridgeSource: string; bridgeJailPath: string; node: string; nodeSource?: string };
 
 function assertRelativePath(path: string): void {
 	if (!path || isAbsolute(path) || path.includes("\\") || path.split("/").some((part) => !part || part === ".." || part === ".git")) {
@@ -188,12 +241,22 @@ export async function computeWriteSet(before: WriteSnapshot, worktree: string, d
 }
 
 export function buildContainedInvocation(
-	options: ContainedRunOptions & { command: readonly [string, ...string[]]; privateDir: string; gitMask: string; dependencyTargets?: readonly string[]; egressSocket?: string },
+	options: {
+		worktree: string;
+		command: ResolvedContainedCommand | readonly [string, ...string[]];
+		privateDir: string;
+		gitMask: string;
+		dependencyTargets?: readonly string[];
+		egressSocket?: string;
+		timeoutSeconds?: number;
+	},
 	capabilities: ContainedCapabilities,
 ): ContainedInvocation {
 	if (capabilities.platform !== "linux") throw new Error("contained execution requires Linux");
-	const command = options.command[0];
-	if (!isAbsolute(command) || !capabilities.runtimeRoots.some((root) => command === root || command.startsWith(`${root}/`))) throw new Error("command must resolve beneath a read-only runtime root");
+	const command: ResolvedContainedCommand = Array.isArray(options.command) ? { kind: "runtime", argv: options.command as readonly [string, ...string[]] } : (options.command as ResolvedContainedCommand);
+	if (command.kind === "runtime" && (!isAbsolute(command.argv[0]) || !capabilities.runtimeRoots.some((root) => command.argv[0] === root || command.argv[0].startsWith(`${root}/`)))) {
+		throw new Error("command must resolve beneath a read-only runtime root");
+	}
 	const unit = `pelaggio-contained-${randomUUID()}.scope`;
 	const jailHome = "/run/pelaggio/home";
 	const source: NodeJS.ProcessEnv = Object.fromEntries(["PATH", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TZ"].flatMap((key) => (process.env[key] === undefined ? [] : [[key, process.env[key]]])));
@@ -234,15 +297,24 @@ export function buildContainedInvocation(
 		bwrap.push("--ro-bind", options.egressSocket, "/run/pelaggio/egress.sock");
 		env.PELAGGIO_EGRESS_SOCKET = "/run/pelaggio/egress.sock";
 	}
+	if (command.kind !== "runtime") bwrap.push("--dir", "/run/pelaggio/bin", "--ro-bind", command.source, command.jailPath);
+	if (command.kind === "brokered-mounted-driver") {
+		bwrap.push("--ro-bind", command.bridgeSource, command.bridgeJailPath);
+		if (command.nodeSource) bwrap.push("--ro-bind", command.nodeSource, command.node);
+		env.PELAGGIO_EGRESS_BASE_URL = `http://127.0.0.1:${CONTAINED_LOOPBACK_PORT}`;
+	}
 	for (const target of options.dependencyTargets ?? []) bwrap.push("--ro-bind", target, target);
 	for (const [key, value] of Object.entries(env)) if (value !== undefined) bwrap.push("--setenv", key, value);
-	bwrap.push("--chdir", options.worktree, "--", ...options.command);
-	const argv = ["--user", "--scope", "--wait", "--collect", "--pipe", "--quiet", "--unit", unit, ...CGROUP_PROPERTIES.flatMap((value) => ["--property", value]), "--", capabilities.bwrap, ...bwrap];
+	const driverArgv = command.kind === "runtime" ? command.argv : command.kind === "mounted-driver" ? ([command.jailPath, ...command.args] as const) : ([command.node, command.bridgeJailPath, command.jailPath, ...command.args] as const);
+	bwrap.push("--chdir", options.worktree, "--", ...driverArgv);
+	const timeoutSeconds = Math.min(1800, Math.max(1, Math.floor(options.timeoutSeconds ?? 1800)));
+	const properties = [...CGROUP_PROPERTIES, `RuntimeMaxSec=${timeoutSeconds}`];
+	const argv = ["--user", "--scope", "--wait", "--collect", "--pipe", "--quiet", "--unit", unit, ...properties.flatMap((value) => ["--property", value]), "--", capabilities.bwrap, ...bwrap];
 	// `systemd-run --user` must reach the caller's user manager over D-Bus; forward only the session
 	// locator vars (never secrets). The jail's own env is set separately via bwrap --clearenv/--setenv,
 	// so this launcher env never reaches the contained process.
 	const launcherEnv: NodeJS.ProcessEnv = Object.fromEntries(["XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"].flatMap((key) => (process.env[key] === undefined ? [] : [[key, process.env[key]]])));
-	return { executable: capabilities.systemdRun, argv, env: launcherEnv, cwd: options.worktree, unit, kill: { executable: capabilities.systemctl, argv: ["--user", "kill", "--kill-whom=all", unit] } };
+	return { executable: capabilities.systemdRun, argv, env: launcherEnv, cwd: options.worktree, unit, kill: { executable: capabilities.systemctl, argv: ["--user", "kill", "--kill-whom=all", "--signal=SIGKILL", unit] } };
 }
 
 interface SpawnResult {
@@ -285,6 +357,127 @@ async function findCommand(name: string, pathValue = process.env.PATH ?? ""): Pr
 	throw new Error(`required executable not found: ${name}`);
 }
 
+function assertPrivateDestination(destination: string): void {
+	if (!destination || isAbsolute(destination) || destination.includes("\\") || destination.split("/").some((part) => !part || part === "." || part === "..")) {
+		throw new Error(`unsafe private-home destination: ${JSON.stringify(destination)}`);
+	}
+}
+
+async function stagePrivateHome(privateDir: string, entries: readonly PrivateHomeEntry[]): Promise<void> {
+	for (const entry of entries) {
+		assertPrivateDestination(entry.destination);
+		if (!Number.isInteger(entry.mode) || entry.mode < 0 || entry.mode > 0o777 || (entry.mode & 0o077) !== 0) throw new Error(`invalid private-home mode for ${entry.destination}`);
+		const destination = join(privateDir, "home", entry.destination);
+		await mkdir(resolve(destination, ".."), { recursive: true, mode: 0o700 });
+		let content: Buffer | string;
+		if (entry.kind === "literal") content = entry.content;
+		else {
+			if (!isAbsolute(entry.source)) throw new Error("private-home copy source must be absolute");
+			const before = await lstat(entry.source, { bigint: true });
+			if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1n) throw new Error("private-home copy source must be a single-link regular file");
+			const handle = await open(entry.source, constants.O_RDONLY | constants.O_NOFOLLOW);
+			try {
+				const opened = await handle.stat({ bigint: true });
+				if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino || opened.nlink !== 1n) throw new Error("private-home copy source identity changed");
+				content = await handle.readFile();
+			} finally {
+				await handle.close();
+			}
+		}
+		const output = await open(destination, "wx", entry.mode);
+		try {
+			await output.writeFile(content);
+		} finally {
+			await output.close();
+		}
+		await chmod(destination, entry.mode);
+	}
+}
+
+async function validateMountedFile(source: string, executable: boolean): Promise<string> {
+	if (!isAbsolute(source)) throw new Error("mounted source must be absolute");
+	const before = await lstat(source, { bigint: true });
+	if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1n || (executable && (before.mode & 0o111n) === 0n)) throw new Error("mounted source must be a safe regular executable");
+	const handle = await open(source, constants.O_RDONLY | constants.O_NOFOLLOW);
+	try {
+		const opened = await handle.stat({ bigint: true });
+		if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino || opened.nlink !== 1n) throw new Error("mounted source identity changed");
+	} finally {
+		await handle.close();
+	}
+	return source;
+}
+
+async function resolveContainedCommand(command: ContainedCommand, capabilities: ContainedCapabilities): Promise<ResolvedContainedCommand> {
+	if (command.kind === "runtime") return { kind: "runtime", argv: [await findCommand(command.argv[0]), ...command.argv.slice(1)] };
+	const source = await validateMountedFile(command.source, true);
+	const jailPath = "/run/pelaggio/bin/driver";
+	if (command.kind === "mounted-driver") return { kind: command.kind, source, jailPath, args: command.args };
+	const bridgeSource = await validateMountedFile(command.bridgeSource ?? CONTAINED_BRIDGE_PATH, false);
+	const node = await findCommand(process.execPath);
+	const nodeInRuntime = capabilities.runtimeRoots.some((root) => node === root || node.startsWith(`${root}/`));
+	if (!nodeInRuntime) await validateMountedFile(node, true);
+	return {
+		kind: command.kind,
+		source,
+		jailPath,
+		args: command.args,
+		bridgeSource,
+		bridgeJailPath: "/run/pelaggio/bin/contained-loopback-bridge.mjs",
+		node: nodeInRuntime ? node : "/run/pelaggio/bin/node",
+		...(nodeInRuntime ? {} : { nodeSource: node }),
+	};
+}
+
+function allowedDependencyTarget(target: string, mainRepo: string): boolean {
+	const relativeTarget = relative(mainRepo, target);
+	if (!relativeTarget || relativeTarget.startsWith(`..${sep}`) || isAbsolute(relativeTarget)) return false;
+	const parts = relativeTarget.split(sep);
+	return parts[0] === "node_modules" || (parts[0] === "packages" && parts.length >= 3 && parts[2] === "node_modules");
+}
+
+/** Resolve only dependency directories reached by worktree node_modules symlinks. */
+export async function resolveContainedDependencyTargets(worktree: string, mainRepo: string): Promise<readonly string[]> {
+	const roots = [join(worktree, "node_modules")];
+	for (const name of await readdir(join(worktree, "packages")).catch(() => [])) roots.push(join(worktree, "packages", name, "node_modules"));
+	const targets = new Set<string>();
+	for (const root of roots) {
+		let rootInfo: Awaited<ReturnType<typeof lstat>>;
+		try {
+			rootInfo = await lstat(root);
+		} catch {
+			continue;
+		}
+		if (rootInfo.isSymbolicLink()) targets.add(await realpath(root));
+		else if (rootInfo.isDirectory()) {
+			for (const name of await readdir(root)) {
+				const entry = join(root, name);
+				const info = await lstat(entry);
+				if (info.isSymbolicLink()) {
+					const target = await realpath(entry);
+					if ((await stat(target)).isDirectory()) targets.add(target);
+				} else if (info.isDirectory() && name.startsWith("@")) {
+					for (const scopedName of await readdir(entry)) {
+						const scopedEntry = join(entry, scopedName);
+						if ((await lstat(scopedEntry)).isSymbolicLink()) {
+							const target = await realpath(scopedEntry);
+							if ((await stat(target)).isDirectory()) targets.add(target);
+						}
+					}
+				}
+			}
+		}
+	}
+	const main = await realpath(mainRepo);
+	const work = await realpath(worktree);
+	return [...targets]
+		.filter((target) => target !== work && !target.startsWith(`${work}${sep}`))
+		.map((target) => {
+			if (!allowedDependencyTarget(target, main)) throw new Error(`dependency target outside expected roots: ${target}`);
+			return target;
+		});
+}
+
 async function defaultCapabilities(): Promise<ContainedCapabilities> {
 	if (process.platform !== "linux") throw new Error("contained execution requires Linux");
 	return { platform: process.platform, bwrap: await findCommand("bwrap"), systemdRun: await findCommand("systemd-run"), systemctl: await findCommand("systemctl"), runtimeRoots: RUNTIME_ROOTS };
@@ -321,24 +514,52 @@ export function renderInvocation(invocation: ContainedInvocation): string {
 	return [invocation.executable, ...invocation.argv].map((value) => JSON.stringify(value)).join(" ");
 }
 
-export async function runContained(options: ContainedRunOptions, deps: ContainedDependencies = {}): Promise<ContainedRunResult> {
-	if (options.mode.kind !== "command") throw new Error("runContained requires command mode");
+async function killContainedScope(invocation: ContainedInvocation, deps: ContainedDependencies, settled: () => boolean): Promise<void> {
+	const kill = deps.runKill ?? spawnProcess;
+	for (let attempt = 0; attempt < 3 && !settled(); attempt += 1) {
+		const result = await kill(invocation.kill.executable, invocation.kill.argv, { cwd: invocation.cwd, env: invocation.env, timeoutMs: 5_000 });
+		if (result.status === 0 || !/not found|not loaded/i.test(result.stderr)) break;
+		await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
+	}
+}
+
+function containedFailure(error: Error): ContainedFailure {
+	if (error instanceof ContainedFailure) return error;
+	if (error instanceof EgressFatalError) {
+		return new ContainedFailure(error.message, error.reason === "rate_limit" ? "rate_limit" : error.reason === "budget" ? "budget" : "confinement", { cause: error });
+	}
+	return new ContainedFailure(error.message, "confinement", { cause: error });
+}
+
+export async function withContainedInvocation<T>(
+	options: ContainedLifecycleOptions,
+	driver: (invocation: ContainedInvocation, terminateScope: () => Promise<void>) => Promise<ContainedDriverResult<T>>,
+	deps: ContainedDependencies = {},
+): Promise<ContainedLifecycleResult<T>> {
 	const egressPolicy = options.egress ? resolveEgressPolicy(options.egress.provider, options.egress.model) : undefined;
 	const egressKey = options.egress?.auth.kind === "key" ? process.env[options.egress.auth.env] : undefined;
 	if (options.egress?.auth.kind === "key" && !egressKey) throw new Error(`missing key from ${options.egress.auth.env}`);
 	const worktree = await realpath(options.worktree);
+	const timeoutSeconds = Math.min(1800, Math.max(1, Math.floor(options.timeoutSeconds ?? 1800)));
 	const privateDir = await mkdtemp(join(deps.privateRoot ?? tmpdir(), "pelaggio-contained-"));
 	const gitMask = join(privateDir, "git-mask");
-	await Promise.all(["home/.config", "home/.cache", "home/.local/share", "xdg", "tmp"].map((path) => mkdir(join(privateDir, path), { recursive: true })));
-	const gitEntry = await lstat(join(worktree, ".git"));
-	if (!gitEntry.isFile() && !gitEntry.isDirectory()) throw new Error("worktree .git entry is not regular metadata");
-	await (await open(gitMask, "w", 0o000)).close();
-	await chmod(gitMask, 0o000);
 	let artifactDir: string | undefined;
 	let broker: EgressBrokerHandle | undefined;
 	try {
+		await Promise.all(["home/.config", "home/.cache", "home/.local/share", "xdg", "tmp"].map((path) => mkdir(join(privateDir, path), { recursive: true })));
+		await stagePrivateHome(privateDir, options.privateHome ?? []);
+		const gitEntry = await lstat(join(worktree, ".git"));
+		if (!gitEntry.isFile() && !gitEntry.isDirectory()) throw new Error("worktree .git entry is not regular metadata");
+		if (gitEntry.isDirectory()) await mkdir(gitMask, { mode: 0o000 });
+		else await (await open(gitMask, "w", 0o000)).close();
+		await chmod(gitMask, 0o000);
 		const capabilities = await (deps.discoverCapabilities ?? defaultCapabilities)();
-		const command = await findCommand(options.mode.argv[0], process.env.PATH);
+		const command = await resolveContainedCommand(options.command, capabilities);
+		let dependencyTargets: readonly string[] = [];
+		if (options.mainRepo) {
+			(deps.ensureDeps ?? ensureWorktreeDeps)(worktree, options.mainRepo);
+			dependencyTargets = await (deps.resolveDependencyTargets ?? resolveContainedDependencyTargets)(worktree, options.mainRepo);
+		}
 		const egressSocket = egressPolicy ? join(privateDir, "egress.sock") : undefined;
 		if (egressPolicy && options.egress) {
 			broker = await (deps.startBroker ?? startEgressBroker)(
@@ -347,45 +568,88 @@ export async function runContained(options: ContainedRunOptions, deps: Contained
 			);
 			await broker.ready;
 		}
-		const invocation = buildContainedInvocation({ ...options, worktree, command: [command, ...options.mode.argv.slice(1)], privateDir, gitMask, ...(egressSocket ? { egressSocket } : {}) }, capabilities);
+		const invocation = buildContainedInvocation({ worktree, command, privateDir, gitMask, dependencyTargets, timeoutSeconds, ...(egressSocket ? { egressSocket } : {}) }, capabilities);
 		await (deps.preflight ?? defaultPreflight)(invocation);
 		const before = await captureWriteSnapshot(worktree, deps);
-		const runner = deps.spawn ?? spawnProcess;
 		let launchSettled = false;
-		const launch = runner(invocation.executable, invocation.argv, { cwd: invocation.cwd, env: invocation.env, timeoutMs: (options.timeoutSeconds ?? 1800) * 1000 }).finally(() => {
+		const launch = driver(invocation, async () => killContainedScope(invocation, deps, () => launchSettled)).finally(() => {
 			launchSettled = true;
 		});
+		let timer: NodeJS.Timeout | undefined;
+		let removeAbort = (): void => undefined;
+		const timeout = new Promise<Error>((resolvePromise) => {
+			timer = setTimeout(() => resolvePromise(new ContainedFailure("contained invocation timed out", "confinement")), timeoutSeconds * 1000);
+			timer.unref();
+		});
+		const aborted = new Promise<Error>((resolvePromise) => {
+			if (!options.signal) return;
+			const onAbort = () => resolvePromise(new ContainedFailure("contained invocation aborted", "confinement"));
+			removeAbort = () => options.signal?.removeEventListener("abort", onAbort);
+			if (options.signal.aborted) onAbort();
+			else options.signal.addEventListener("abort", onAbort, { once: true });
+		});
 		let brokerFailure: Error | undefined;
-		const watcher = broker
-			? broker.fatal.then(async (error) => {
-					brokerFailure = error;
-					const kill = deps.runKill ?? spawnProcess;
-					for (let attempt = 0; attempt < 3 && !launchSettled; attempt += 1) {
-						const result = await kill(invocation.kill.executable, invocation.kill.argv, { cwd: invocation.cwd, env: invocation.env, timeoutMs: 5_000 });
-						if (result.status === 0 || !/not found|not loaded/i.test(result.stderr)) break;
-						await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
-					}
-				})
-			: undefined;
-		const execution = await launch;
-		if (brokerFailure) throw brokerFailure;
-		void watcher?.catch(() => undefined);
+		const fatal =
+			broker?.fatal.then((error) => {
+				brokerFailure = error;
+				return error;
+			}) ?? new Promise<Error>(() => undefined);
+		const winner = await Promise.race([
+			launch.then(
+				(execution) => ({ kind: "execution" as const, execution }),
+				(error: unknown) => ({ kind: "failure" as const, error: error instanceof Error ? error : new Error(String(error)) }),
+			),
+			Promise.race([fatal, timeout, aborted]).then((error) => ({ kind: "failure" as const, error })),
+		]);
+		if (timer) clearTimeout(timer);
+		removeAbort();
+		if (winner.kind === "failure") {
+			await killContainedScope(invocation, deps, () => launchSettled);
+			await launch.catch(() => undefined);
+			throw containedFailure(winner.error);
+		}
+		await Promise.resolve();
+		if (brokerFailure) {
+			await killContainedScope(invocation, deps, () => launchSettled);
+			throw containedFailure(brokerFailure);
+		}
+		const execution = winner.execution;
 		if (execution.signal) throw new Error(`contained launcher terminated by ${execution.signal}`);
 		const writeSet = await computeWriteSet(before, worktree, deps);
 		if (options.debug) {
 			artifactDir = join(worktree, ".dev", "contained-runs", basename(privateDir));
 			await mkdir(artifactDir, { recursive: true });
-			await chmod(gitMask, 0o600);
-			await cp(gitMask, join(artifactDir, "git-mask"));
+			await chmod(gitMask, gitEntry.isDirectory() ? 0o700 : 0o600);
+			await cp(gitMask, join(artifactDir, "git-mask"), { recursive: gitEntry.isDirectory() });
 			const scrub = makeSecretScrubber();
 			await writeFile(join(artifactDir, "invocation.txt"), scrub(`${renderInvocation(invocation)}\n${execution.stderr.slice(0, 65_536)}`));
 		}
-		return { status: execution.status, signal: null, writeSet, ...(artifactDir ? { artifactDir } : {}) };
+		return { value: execution.value, status: execution.status, signal: null, writeSet, ...(artifactDir ? { artifactDir } : {}) };
 	} finally {
 		await broker?.close().catch(() => undefined);
 		await chmod(gitMask, 0o600).catch(() => undefined);
 		await rm(privateDir, { recursive: true, force: true });
 	}
+}
+
+export async function runContained(options: ContainedRunOptions, deps: ContainedDependencies = {}): Promise<ContainedRunResult> {
+	if (options.mode.kind !== "command") throw new Error("runContained requires command mode");
+	const runner = deps.spawn ?? spawnProcess;
+	const result = await withContainedInvocation(
+		{
+			worktree: options.worktree,
+			command: { kind: "runtime", argv: options.mode.argv },
+			...(options.debug !== undefined ? { debug: options.debug } : {}),
+			...(options.timeoutSeconds !== undefined ? { timeoutSeconds: options.timeoutSeconds } : {}),
+			...(options.egress ? { egress: options.egress } : {}),
+		},
+		async (invocation) => {
+			const execution = await runner(invocation.executable, invocation.argv, { cwd: invocation.cwd, env: invocation.env });
+			return { value: undefined, status: execution.status, signal: execution.signal, stderr: execution.stderr };
+		},
+		deps,
+	);
+	return { status: result.status, signal: result.signal, writeSet: result.writeSet, ...(result.artifactDir ? { artifactDir: result.artifactDir } : {}) };
 }
 
 export async function runContainedSelfTest(options: Omit<ContainedRunOptions, "mode">, deps: ContainedDependencies = {}): Promise<ContainedSelfTestResult> {
@@ -406,14 +670,22 @@ export async function runContainedSelfTest(options: Omit<ContainedRunOptions, "m
 		{ name: "network", script: "const ext=Object.values(require('os').networkInterfaces()).flat().filter((n)=>n&&!n.internal);process.exit(ext.length?2:0)", expect: 0 },
 	];
 	if (options.egress) {
+		const policy = resolveEgressPolicy(options.egress.provider, options.egress.model);
+		const route = policy.routes.find((candidate) => candidate.kind === "accounted");
+		if (route?.kind !== "accounted") throw new Error("egress self-test requires an accounted route");
+		const requestBody = JSON.stringify({ [route.modelField]: options.egress.model, [route.maxOutputTokensField]: 8, [route.streamField]: route.stream });
 		cases.push({
 			name: "egress-conformance",
-			script: `const http=require("http");const body=JSON.stringify({model:${JSON.stringify(options.egress.model)},max_output_tokens:8,stream:false});const r=http.request({socketPath:process.env.PELAGGIO_EGRESS_SOCKET,path:"/v1/responses?redacted=1",method:"POST",headers:{"content-type":"application/json","content-length":Buffer.byteLength(body)}},x=>{x.resume();x.on("end",()=>process.exit(x.statusCode===200?0:2))});r.on("error",()=>process.exit(3));r.end(body)`,
+			script: `const http=require("http");const body=${JSON.stringify(requestBody)};const r=http.request({socketPath:process.env.PELAGGIO_EGRESS_SOCKET,path:${JSON.stringify(`${route.path}?redacted=1`)},method:${JSON.stringify(route.method)},headers:{"content-type":"application/json","content-length":Buffer.byteLength(body)}},x=>{x.resume();x.on("end",()=>process.exit(x.statusCode===200?0:2))});r.on("error",()=>process.exit(3));r.end(body)`,
 			expect: 0,
 		});
+		const responseBody =
+			route.response.kind === "json"
+				? Buffer.from(JSON.stringify({ usage: { input_tokens: 1, output_tokens: 1 } }))
+				: Buffer.from(`event: ${route.response.terminalEvent}\ndata: ${JSON.stringify({ type: route.response.terminalEvent, response: { usage: { input_tokens: 1, output_tokens: 1 } } })}\n\n`);
 		deps = {
 			...deps,
-			brokerRequester: deps.brokerRequester ?? (async () => ({ status: 200, headers: { "content-type": "application/json" }, body: Buffer.from('{"usage":{"input_tokens":1,"output_tokens":1}}') })),
+			brokerRequester: deps.brokerRequester ?? (async () => ({ status: 200, headers: { "content-type": route.response.kind === "json" ? "application/json" : "text/event-stream" }, body: responseBody })),
 		};
 	}
 	for (const probe of cases) {

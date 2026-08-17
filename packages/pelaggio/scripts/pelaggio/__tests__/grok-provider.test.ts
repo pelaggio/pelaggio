@@ -1,11 +1,9 @@
 import assert from "node:assert/strict";
-import { access, chmod, mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { describe, it } from "node:test";
-import { CONFIG, REPO, type StepSettings } from "../config.js";
-import { buildGrokStepResult, grokEffort, grokServerRequestResponse, grokTimeoutMs, runStep, selectGrokModel } from "../grok-provider.js";
-import { detectLandlock } from "../grok-sandbox.js";
+import { AcpConnection } from "../acp-client.js";
+import { CONFIG, GROK_DEFAULT_MODEL, REPO, type StepSettings } from "../config.js";
+import { ContainedFailure, type ContainedLifecycleOptions, type withContainedInvocation } from "../contained-execution.js";
+import { buildGrokStepResult, createGrokRunStep, grokEffort, grokServerRequestResponse, grokTimeoutMs, selectGrokModel } from "../grok-provider.js";
 import type { StepEvent } from "../types.js";
 
 type JsonObject = Record<string, unknown>;
@@ -167,9 +165,9 @@ describe("grok helpers", () => {
 		assert.equal(grokEffort("max"), "high");
 	});
 
-	it("grokTimeoutMs stays within 10–90 minutes", () => {
+	it("grokTimeoutMs stays within the contained 10–30 minute range", () => {
 		assert.equal(grokTimeoutMs(1), 10 * 60_000);
-		assert.equal(grokTimeoutMs(1000), 90 * 60_000);
+		assert.equal(grokTimeoutMs(1000), 30 * 60_000);
 		assert.equal(grokTimeoutMs(30), 30 * 60_000);
 	});
 
@@ -207,41 +205,104 @@ describe("grok helpers", () => {
 });
 
 describe("Grok provider confinement setup", () => {
-	it("returns error_confinement without spawning when HOME is absent", async (t) => {
-		// The HOME-absent refusal lives inside the `if (sandbox)` branch, which only
-		// runs when Landlock is active. On a Landlock-less host the path is unreachable:
-		// with the fallback off Grok refuses for Landlock first, and with it on Grok
-		// starts unconfined and spawns — neither is the behavior under test. Skip rather
-		// than assert a host-inappropriate diagnostic.
-		if (!(await detectLandlock())) {
-			t.skip("HOME-absent confinement refusal is Landlock-gated; this kernel lacks Landlock");
-			return;
-		}
-		const root = await mkdtemp(join(tmpdir(), "pelaggio-grok-provider-"));
-		const sentinel = join(root, "spawned");
-		const executable = join(root, "grok-sentinel");
-		await writeFile(executable, `#!/bin/sh\ntouch "${sentinel}"\n`);
-		await chmod(executable, 0o700);
-		const previousHome = process.env.HOME;
-		const previousBin = CONFIG.providerBins.grok;
-		delete process.env.HOME;
-		CONFIG.providerBins.grok = executable;
+	it("uses the reviewed default and requests brokered mounted-driver containment", async () => {
+		let captured: ContainedLifecycleOptions | undefined;
+		let capturedTimeoutMs: number | undefined;
+		const contained: typeof withContainedInvocation = async (options, driver) => {
+			captured = options;
+			const driven = await driver({ executable: "/usr/bin/systemd-run", argv: ["--pipe", "grok"], env: {}, cwd: REPO, unit: "test.scope", kill: { executable: "/usr/bin/systemctl", argv: ["kill", "test.scope"] } }, async () => undefined);
+			return { ...driven, writeSet: [] };
+		};
+		const spawnAcp = (options: Parameters<typeof import("../acp-client.js").spawnAcpAgent>[0]): ReturnType<typeof import("../acp-client.js").spawnAcpAgent> => {
+			capturedTimeoutMs = options.timeoutMs;
+			const conn = new AcpConnection({
+				send: (line) => {
+					const request = JSON.parse(line) as { id: number; method: string };
+					queueMicrotask(() => {
+						if (request.method === "session/prompt") conn.receive(`${JSON.stringify({ jsonrpc: "2.0", method: "session/update", params: { update: msg("contained") } })}\n`);
+						const result = request.method === "session/new" ? { sessionId: "s1" } : request.method === "session/prompt" ? { stopReason: "end_turn", _meta: { usage: USAGE } } : {};
+						conn.receive(`${JSON.stringify({ jsonrpc: "2.0", id: request.id, result })}\n`);
+					});
+				},
+			});
+			return { conn, done: Promise.resolve({ code: 0, signal: null, stderr: "", timedOut: false }), kill: () => undefined };
+		};
+		const runStep = createGrokRunStep({ contained, spawnAcp, detectSandbox: async () => true, resolveExecutable: async () => "/opt/grok" });
 		const events: StepEvent[] = [];
+		const result = await runStep("implement", "test", { cwd: REPO, profile: "standard", trace: false, parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" } }, (event) => events.push(event));
+		assert.equal(result.ok, true);
+		assert.equal(captured?.egress?.provider, "grok");
+		assert.equal(captured?.egress?.model, GROK_DEFAULT_MODEL);
+		assert.deepEqual(captured?.egress?.auth, { kind: "transparent" });
+		assert.equal(capturedTimeoutMs, (captured?.timeoutSeconds ?? 0) * 1000 - 10_000);
+		assert.equal(captured?.command.kind, "brokered-mounted-driver");
+		if (captured?.command.kind !== "brokered-mounted-driver") return;
+		assert.equal(captured.command.source, "/opt/grok");
+		assert.notEqual(captured.command.args.indexOf("-m"), -1);
+		assert.equal(captured.command.args[captured.command.args.indexOf("-m") + 1], GROK_DEFAULT_MODEL);
+		assert.deepEqual(captured.command.args.slice(-3), ["--cli-chat-proxy-base-url", "http://127.0.0.1:43179/v1", "stdio"]);
+		assert.deepEqual(
+			captured.privateHome?.map((entry) => [entry.kind, entry.destination]),
+			[
+				["copy", ".grok/auth.json"],
+				["literal", ".grok/sandbox.toml"],
+			],
+		);
+	});
+
+	it("refuses Grok before auth staging when authoring requires direct keys", async () => {
+		const saved = CONFIG.review.authoring.enabled;
+		let resolved = false;
+		CONFIG.review.authoring.enabled = "keys";
 		try {
-			const result = await runStep("implement", "test", { cwd: REPO, profile: "standard", trace: false, parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" } }, (event) => events.push(event));
-			assert.equal(result.ok, false);
+			const runStep = createGrokRunStep({
+				detectSandbox: async () => true,
+				resolveExecutable: async () => {
+					resolved = true;
+					return "/opt/grok";
+				},
+			});
+			const result = await runStep("implement", "test", { cwd: REPO, profile: "standard", trace: false, parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" } }, () => undefined);
 			assert.equal(result.subtype, "error_confinement");
-			assert.equal(
-				events.some((event) => event.type === "sdk_error" && event.message.includes("HOME")),
-				true,
-			);
-			assert.equal(events.at(-1)?.type, "done");
-			await assert.rejects(access(sentinel));
+			assert.match(result.text, /key authentication is unavailable/);
+			assert.equal(resolved, false);
 		} finally {
-			if (previousHome === undefined) delete process.env.HOME;
-			else process.env.HOME = previousHome;
-			if (previousBin === undefined) delete CONFIG.providerBins.grok;
-			else CONFIG.providerBins.grok = previousBin;
+			CONFIG.review.authoring.enabled = saved;
+		}
+	});
+
+	it("rejects an unsupported model before resolving or spawning the driver", async () => {
+		let resolved = false;
+		const runStep = createGrokRunStep({
+			detectSandbox: async () => true,
+			resolveExecutable: async () => {
+				resolved = true;
+				return "/opt/grok";
+			},
+		});
+		const result = await runStep(
+			"implement",
+			"test",
+			{ cwd: REPO, profile: "standard", trace: false, executionOverride: { provider: "grok", model: "grok-unreviewed" }, parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" } },
+			() => undefined,
+		);
+		assert.equal(result.subtype, "error_confinement");
+		assert.equal(resolved, false);
+	});
+
+	it("keeps broker budget and rate-limit failures distinct", async () => {
+		for (const [reason, subtype] of [
+			["budget", "error_budget"],
+			["rate_limit", "error_rate_limit"],
+		] as const) {
+			const contained: typeof withContainedInvocation = async () => {
+				throw new ContainedFailure(`broker ${reason}`, reason);
+			};
+			const parkSignal = { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" };
+			const runStep = createGrokRunStep({ contained, detectSandbox: async () => true, resolveExecutable: async () => "/opt/grok" });
+			const result = await runStep("implement", "test", { cwd: REPO, profile: "standard", trace: false, parkSignal }, () => undefined);
+			assert.equal(result.subtype, subtype);
+			assert.equal(parkSignal.parked, reason === "rate_limit");
 		}
 	});
 });

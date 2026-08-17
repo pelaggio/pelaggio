@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { DEFAULTS, loadConfig, modelForProvider, resolveDriverCandidates, resolveProviderBin, resolveRepo, resolveStepSettings } from "../config.js";
+import { DEFAULTS, GROK_DEFAULT_MODEL, loadConfig, modelForProvider, resolveDriverCandidates, resolveProviderBin, resolveRepo, resolveStepSettings } from "../config.js";
 import { BASELINE_TAXONOMY_CLASSES, canonicalizeContractionPayload, isSafetyClass, mergeTaxonomyClasses, signContractionPayload } from "../review/taxonomy.js";
 
 function tmpRepo(): string {
@@ -19,6 +19,10 @@ function writeYml(repo: string, body: string): string {
 
 const ENV_KEY = "PELAGGIO_WORKTREE_PREFIX";
 let savedEnv: string | undefined;
+
+it("pins the reviewed Grok default model", () => {
+	assert.equal(GROK_DEFAULT_MODEL, "grok-4.5");
+});
 
 beforeEach(() => {
 	savedEnv = process.env[ENV_KEY];

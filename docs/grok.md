@@ -1,34 +1,33 @@
 # Grok Build provider setup
 
-Pelaggio's Grok provider is conformance-tested against Grok Build **0.2.103**. The ACP and sandbox contracts are release-specific: stop if the version check below reports anything else.
+Pelaggio's brokered Grok provider is conformance-tested against Grok Build **0.2.103** and the
+explicit model **`grok-4.5`**. The binary, ACP protocol, routes, and streaming response shape are a
+reviewed set: stop if the version check reports another release.
 
-## 1. Prepare Linux sandbox support
+## 1. Prepare Linux containment
 
-On Debian or Ubuntu, install Grok's Linux sandbox helper:
+Install `bubblewrap` and ensure user systemd scopes work:
 
 ```bash
 sudo apt-get update
 sudo apt-get install bubblewrap
+systemd-run --user --scope --wait --collect --quiet /bin/true
 ```
 
-Then verify that the running kernel exposes Landlock:
+Landlock adds Grok's native sandbox as defense in depth:
 
 ```bash
 grep landlock /sys/kernel/security/lsm
 ```
 
-The command must print a list containing `landlock`. A missing file or no match means Pelaggio's managed Grok sandbox will refuse to start. Default WSL2 kernels commonly lack Landlock; see [Landlock-less hosts](#landlock-less-hosts) before using Grok there.
-
 ## 2. Install and pin Grok 0.2.103
-
-The Grok 0.2.103 installer documents a positional version argument. Install that exact release, then verify the binary at its managed, normally off-PATH location:
 
 ```bash
 curl -fsSL https://x.ai/cli/install.sh | bash -s 0.2.103
 ~/.grok/bin/grok --version
 ```
 
-The output must contain `grok 0.2.103`. Do not continue on a mismatch and do not replace the versioned command with a latest-release install. Pin the same executable in `.pelaggio.yml` even if your shell can find `grok`:
+Pin that regular executable in `.pelaggio.yml`:
 
 ```yaml
 providers:
@@ -36,58 +35,27 @@ providers:
     bin: ~/.grok/bin/grok
 ```
 
-## 3. Choose authentication
-
-### Subscription device login
-
-Use a SuperGrok or X Premium+ subscription:
+## 3. Authenticate on the host
 
 ```bash
 ~/.grok/bin/grok login
 ```
 
-The device login is cached in `~/.grok/auth.json`. Pelaggio passes the allowlisted `HOME` variable, so Grok can read and refresh this file; do not copy the token into an environment variable. Usage is metered against the signed-in subscription.
+Pelaggio requires `~/.grok/auth.json` to be a regular, non-symlink file. Each run copies only that
+file into an ephemeral private `HOME` at mode `0600`; it never mounts the operator's `.grok`
+directory and never copies refresh/session writes back. If cached auth needs the separate
+`auth.x.ai` refresh service, the run fails closed. Run `grok login` again on the host rather than
+widening the egress allowlist.
 
-### API key
+This integrated route is the local, single-developer subscription/transparent-auth path. An
+`XAI_API_KEY` or custom endpoint is not silently sent to the subscription proxy. Key/external-auth
+mode needs a separately reviewed origin, auth rule, and request fixture.
 
-For provider-billed API-key usage, set `XAI_API_KEY` in the environment that starts Pelaggio and allowlist its **name**, never its value:
+Never add `--debug-file`: Grok 0.2.103 can write its OAuth JWT there in cleartext.
 
-```bash
-export XAI_API_KEY="xai-..."
-```
-
-```yaml
-security:
-  env-allowlist:
-    - XAI_API_KEY
-```
-
-Driver subprocesses otherwise receive a deny-by-default environment. API-key usage is billed and metered by the endpoint/provider account, not a SuperGrok or X Premium+ subscription; the operator owns its quota and billing controls.
-
-> Never add `--debug-file` to a Grok invocation. Grok 0.2.103 writes the OAuth JWT to that file in cleartext. Pelaggio neither needs nor enables the flag; a debug file inside a repository could also be committed accidentally.
-
-## 4. Optionally choose a compatible endpoint
-
-Grok 0.2.103 accepts custom OpenAI-compatible model endpoints in `~/.grok/config.toml`. Give the endpoint a model name and select that name in Pelaggio:
-
-```toml
-[model.company-grok]
-model = "grok-build"
-base_url = "https://grok-proxy.example.com/"
-name = "Company Grok proxy"
-```
-
-This is a Grok CLI endpoint override chosen and operated by you. It does not by itself prove that all vendor traffic is removed; validate the configured endpoint, authentication path, and observed traffic for your deployment. The unmodified, conformance-tested Grok 0.2.103 path was observed contacting `cli-chat-proxy.grok.com`.
-
-## 5. Select Grok for Pelaggio steps
-
-This complete example pins the executable and defines a profile that uses Grok for implementation and code review. Omitted steps retain their normal provider.
+## 4. Select Grok for steps
 
 ```yaml
-providers:
-  grok:
-    bin: ~/.grok/bin/grok
-
 models:
   profiles:
     grok-build:
@@ -98,13 +66,21 @@ models:
       shakedown-code: grok-4.5
 ```
 
-Run with `npx pelaggio run --profile grok-build`. Remove the two model lines to let the Grok CLI select its default, or use the custom model name from the optional endpoint example.
+Run with `npx pelaggio run --profile grok-build`. When a mixed-provider profile supplies a Claude
+model or no Grok model, Pelaggio uses the reviewed `grok-4.5` default explicitly. Any other Grok
+model fails before the broker or driver starts.
 
-For every Grok step, Pelaggio installs a namespaced `pelaggio-worktree-v1` block in `~/.grok/sandbox.toml` and invokes Grok with `--sandbox pelaggio-worktree-v1 --disable-web-search`. The profile extends Grok's `strict` policy: project access is confined to the invocation worktree, and on supported Linux hosts child commands cannot use the network. Grok still needs system runtime files and its own auth, session, and sandbox-event state under `~/.grok`.
+Every Grok step runs under `systemd-run` and bubblewrap with `--unshare-all`, a private home, masked
+Git metadata, the active worktree, read-only dependency targets, and one mounted Unix broker
+socket. A trusted PID-1 loopback shim supports Grok's official
+`--cli-chat-proxy-base-url`; no other interface in the namespace is externally routable. The broker
+allows only the exact Grok 0.2.103 bootstrap/control routes and streaming model route at
+`cli-chat-proxy.grok.com`, with request/response, rate, token, and spend caps.
 
 ## Landlock-less hosts
 
-Without Linux Landlock, including on typical default WSL2 kernels, the managed profile fails closed. For a **local, actively supervised run only**, this escape hatch is available:
+Without Landlock, Grok's nested native sandbox refuses by default. For a local, actively supervised
+run only:
 
 ```yaml
 providers:
@@ -113,10 +89,25 @@ providers:
     allow-unsandboxed-fallback: true
 ```
 
-Pelaggio then starts Grok without its CLI sandbox and prints a warning. The remaining controls are the deny-by-default child environment and CWD guidance; there is no Grok CLI filesystem or child-network enforcement. Never use this fallback for unattended, CI, or shared-host operation.
+This omits only Grok's nested `--sandbox` selection. The outer systemd/bubblewrap jail, private
+network namespace, broker, staged auth, write-set validation, and scope-level teardown remain
+mandatory; there is no direct-network or uncontained fallback.
 
-## Egress and containment limits
+## Limits and release conformance
 
-Selecting Grok sends prompts and repository context—including files read for a task—to the selected Grok service endpoint under that provider's retention policy. Denying child secrets, confining files, blocking child networking, and disabling web search reduce the blast radius; they do not prevent legitimate prompt and file context from reaching the selected model provider.
+The selected model provider remains an allowed sink for prompts and repository/read-file context.
+Containment prevents alternate network destinations; it cannot make legitimate model traffic
+confidential from the provider or establish contractual permission for subscription automation.
+Subscription mode remains local single-developer only.
 
-Grok 0.2.103 exempts its in-process model client from the child-network rule and exposes no hostname allowlist. Pelaggio's release probe observed and locks `cli-chat-proxy.grok.com`, but that is a conformance assertion, not kernel- or L7-enforced routing. See the [egress matrix](./trust/egress.md) and [sandboxing limits](./trust/sandboxing.md).
+The opt-in release gate requires Linux, working user scopes/bubblewrap, Grok 0.2.103, a safe auth
+file, and network access:
+
+```bash
+PELAGGIO_GROK_LIVE_CONFORMANCE=1 \
+node --import tsx --test --test-name-pattern='live Grok' \
+  packages/pelaggio/scripts/pelaggio/__tests__/grok-sandbox.test.ts
+```
+
+It verifies real ACP traffic through the broker, the pinned model/stream shape, exact decision
+routes, namespace denial of raw external traffic, and redaction of auth/query/origin/body data.
