@@ -25,12 +25,10 @@ import { adjudicationSourcesDir, buildAdjudicationSourceDraft, fleetRecordDigest
 import {
 	evaluateReviewConvergence,
 	modelAuthoredText,
-	parseFailureCode,
 	parseReviewFindings,
 	parseReviewVerification,
 	type ReviewExhaustionReason,
 	type ReviewFinding,
-	type ReviewFindingsParseErrorCode,
 	type ReviewFindingsReport,
 	reconcileReviewVerification,
 	reviewFindingFingerprint,
@@ -73,9 +71,11 @@ interface ReviewPass {
 	verificationDiagnostic?: string;
 	diagnostic?: string;
 	failureSubtype?: string;
-	/** Constant-only parse-failure diagnosis — the fixed `phase` enum + the fixed `errorCode`, and
-	 *  NOTHING derived from model output (see structuralParseFailureDiagnosis). Set on a discovery
-	 *  parse failure; the ONLY parse-failure evidence the public comment carries. */
+	/** Invariant parse-failure diagnosis — the fixed `phase` enum + the SINGLE constant
+	 *  `parse-failure` code, and NOTHING derived from model output (see
+	 *  structuralParseFailureDiagnosis). The specific ReviewFindingsParseErrorCode is deliberately
+	 *  withheld here (#536/#554). Set on a discovery parse failure; the ONLY parse-failure evidence the
+	 *  public comment carries. */
 	parseFailureDiagnosis?: string;
 }
 
@@ -247,10 +247,14 @@ function renderPass(pass: ReviewPass): string {
 	// (ANTHROPIC_API_KEY / GH_TOKEN — see .github/workflows/pr-review.yml), and a prompt-injected PR
 	// can make the seat pad malformed output so that any output-derived number (a length, a marker
 	// offset/count, a fence size) encodes credential bytes — a covert channel scrubbing cannot reverse
-	// (#484 red-team; #536 findings B/C). The public comment therefore surfaces ONLY the constant-only
-	// parse diagnosis (fixed phase enum + fixed error code). #554 (jailing the seat so it holds no real
-	// credential) is the complete fix; until then this sink is constant-only.
-	const diagnosis = pass.parseFailureDiagnosis ? ["", "Parse diagnosis (constant-only: phase + fixed error code; no model output retained — #536/#554):", "", `<pre>${escapeHtml(pass.parseFailureDiagnosis)}</pre>`] : [];
+	// (#484 red-team; #536 findings B/C). Even the CHOICE among specific parse codes is such a channel
+	// (a model selects WHICH failure to emit), so the public comment surfaces ONLY the invariant parse
+	// diagnosis: the fixed phase enum + the SINGLE constant `parse-failure` code, never the specific
+	// ReviewFindingsParseErrorCode. #554 (jailing the seat so it holds no real credential) is what lets
+	// the specific code + richer diagnosis publish safely; until then this sink is invariant.
+	const diagnosis = pass.parseFailureDiagnosis
+		? ["", "Parse diagnosis (invariant: phase + a single constant `parse-failure` code, never the specific parse error; no model output retained — #536/#554):", "", `<pre>${escapeHtml(pass.parseFailureDiagnosis)}</pre>`]
+		: [];
 	return [heading, "", `${escapeMarkdown(pass.diagnostic ?? `Run did not complete cleanly (${pass.result.subtype}).`)} Failing this pass closed.`, ...diagnosis].join("\n");
 }
 
@@ -530,39 +534,52 @@ function driverIdentity(candidate: StepSettings): ReviewDriverIdentity {
 }
 
 /**
- * Build the CONSTANT-ONLY diagnosis of a cold-gate parse failure — the ONLY parse-failure evidence
+ * The SINGLE invariant code published for EVERY model parse failure. The specific
+ * ReviewFindingsParseErrorCode (block-not-found / unknown-key / invalid-json / invalid-severity /
+ * schema-example-parroted / …) is deliberately WITHHELD from the retained/published sinks because the
+ * seat holds real credentials and even the CHOICE among error codes is a covert channel — a
+ * prompt-injected model selects WHICH failure to emit, encoding secret bits into stderr + the public
+ * comment. The enum + `parseFailureCode` classifier stay in review/findings.ts as correct
+ * infrastructure; #554 (jailing the verifier so it holds no real credential) is what lets the specific
+ * code + a richer diagnosis publish safely.
+ */
+const PUBLISHED_PARSE_FAILURE_CODE = "parse-failure";
+
+/**
+ * Build the INVARIANT diagnosis of a cold-gate parse failure — the ONLY parse-failure evidence
  * retained on stderr (durable CI log) and published in the durable, PUBLIC PR comment.
  *
  * SECURITY (#536 / #554): this reads NOTHING from the model's output. It carries only two closed-set,
  * harness-authored values — the fixed `phase` enum (discovery | verification, chosen by the harness,
- * never derived from output) and the fixed, enumerated `errorCode` (a closed
- * ReviewFindingsParseErrorCode constant, which alone distinguishes block-not-found /
- * trailing-after-close / unknown-key / invalid-json / invalid-severity / etc.). The pr-review /
- * pr-verify seat is handed REAL inherited credentials (ANTHROPIC_API_KEY / GH_TOKEN — see
- * .github/workflows/pr-review.yml), and a prompt-injected seat can base64/hex-encode a secret into
- * malformed output. ANY value DERIVED from that output — a length, a marker offset/count, a fence
- * size, a trailing-byte count, a marker-present boolean — is a padding-based COVERT CHANNEL that
- * encodes credential bytes into the public comment + CI log, and neither literal-value nor
- * credential-pattern scrubbing can reverse it (verified finding). So the retention path is
- * deliberately constant-only: no length, index, count, or output-derived boolean is computed. #554
- * (jailing the seat so it holds NO real credential) is what lets richer, output-derived diagnosis
- * return safely; until it lands, this sink stays phase-and-code-only.
+ * never derived from output) and the SINGLE constant `parse-failure` code (never the specific
+ * ReviewFindingsParseErrorCode). The pr-review / pr-verify seat is handed REAL inherited credentials
+ * (ANTHROPIC_API_KEY / GH_TOKEN — see .github/workflows/pr-review.yml), and a prompt-injected seat can
+ * base64/hex-encode a secret into malformed output. ANY value DERIVED from that output — a length, a
+ * marker offset/count, a fence size, a trailing-byte count, a marker-present boolean — is a
+ * padding-based COVERT CHANNEL, and so is the CHOICE among distinct error codes (the model selects
+ * which failure to emit); neither literal-value nor credential-pattern scrubbing can reverse either
+ * (verified finding). So the retention path is deliberately invariant: only `phase` and the one
+ * constant code, no length, index, count, output-derived boolean, or model-selectable code is
+ * computed. #554 (jailing the seat so it holds NO real credential) is what lets richer, output-derived
+ * or code-specific diagnosis return safely; until it lands, this sink stays phase-and-invariant-code-only.
  */
-function structuralParseFailureDiagnosis(phase: "discovery" | "verification", code: ReviewFindingsParseErrorCode): string {
-	// Closed set only: the fixed phase enum + the fixed error code. Nothing here is read from or
-	// derived from the model's output — that is the covert-channel guarantee (#536 / #554).
-	return `phase=${phase} errorCode=${code}`;
+function structuralParseFailureDiagnosis(phase: "discovery" | "verification"): string {
+	// Closed set only: the fixed phase enum + the single invariant code. Nothing here is read from or
+	// derived from the model's output — not even the choice of error code (#536 / #554).
+	return `phase=${phase} ${PUBLISHED_PARSE_FAILURE_CODE}`;
 }
 
 /**
- * Emit the constant-only parse-failure diagnosis to the durable CI log (stderr) and return it for the
- * (also durable, PUBLIC) PR comment. Both sinks carry ONLY `phase` + the fixed error `code` — never
- * model output nor any value derived from it (see structuralParseFailureDiagnosis). Takes no
- * StepResult: `modelAuthoredText` is deliberately NOT read on the retention path, so no output byte
- * — raw or length/offset-encoded — can reach either sink.
+ * Emit the invariant parse-failure diagnosis to the durable CI log (stderr) and return it for the
+ * (also durable, PUBLIC) PR comment. Both sinks carry ONLY `phase` + the single invariant
+ * `parse-failure` code — never model output, any value derived from it, nor the model-selectable
+ * specific error code (see structuralParseFailureDiagnosis). Takes no StepResult and no code:
+ * `modelAuthoredText` is deliberately NOT read on the retention path, and the specific code is
+ * deliberately NOT published, so no output byte — raw or length/offset/code-choice-encoded — can reach
+ * either sink.
  */
-function retainParseFailureTail(label: ReviewLabel, phase: "discovery" | "verification", code: ReviewFindingsParseErrorCode): string {
-	const diagnosis = structuralParseFailureDiagnosis(phase, code);
+function retainParseFailureTail(label: ReviewLabel, phase: "discovery" | "verification"): string {
+	const diagnosis = structuralParseFailureDiagnosis(phase);
 	process.stderr.write(`  ✗ pr-review ${label} ${phase} parse-failure (constant-only): ${diagnosis}\n`);
 	return diagnosis;
 }
@@ -596,13 +613,15 @@ async function runReviewPass(iteration: number, label: ReviewLabel, prompt: stri
 			effectiveVerdict: gate,
 			...(gate === "block" ? { failureKind: "findings" as const } : {}),
 		};
-	} catch (error) {
-		// Retain a FIXED, enumerated code — never the parse-error message. The message can embed a
-		// model-controlled JSON key (assertKeys) and it feeds BOTH the durable stderr diagnosis and the
-		// PUBLIC comment diagnostic; a base64-encoded credential in a key name would defeat scrubbing
-		// (#536). An unknown/unexpected error fails closed to the generic `parse-error` code.
-		const code = parseFailureCode(error);
-		const parseFailureDiagnosis = retainParseFailureTail(label, "discovery", code);
+	} catch {
+		// Publish the SINGLE invariant `parse-failure` code — never the specific
+		// ReviewFindingsParseErrorCode. Both the durable stderr diagnosis and the PUBLIC comment
+		// diagnostic reach a credential-holding seat's readers, and the CHOICE among distinct codes is
+		// itself a covert channel: a prompt-injected model selects WHICH failure to emit (block-not-found
+		// vs unknown-key vs invalid-json …), encoding secret bits. The enum + parseFailureCode classifier
+		// stay in review/findings.ts for internal use; #554 (jailed verifier) is what lets the specific
+		// code publish. The catch fails closed regardless of the underlying error.
+		const parseFailureDiagnosis = retainParseFailureTail(label, "discovery");
 		return {
 			iteration,
 			label,
@@ -611,7 +630,7 @@ async function runReviewPass(iteration: number, label: ReviewLabel, prompt: stri
 			driver,
 			effectiveVerdict: "block",
 			failureKind: "infra",
-			diagnostic: `Invalid review findings report (${code}).`,
+			diagnostic: `Invalid review findings report (${PUBLISHED_PARSE_FAILURE_CODE}).`,
 			failureSubtype: "error_invalid_output",
 			parseFailureDiagnosis,
 		};
@@ -678,16 +697,16 @@ async function runVerificationPass(
 		pass.gate = survives ? "block" : "pass";
 		pass.effectiveVerdict = survives ? "block" : "pass";
 		pass.failureKind = survives ? "findings" : undefined;
-	} catch (error) {
+	} catch {
 		// Verifier stderr is the only durable copy of this failure (renderPass shows the report, not
-		// the verification result). Retain the constant-only diagnosis (fixed phase enum + a FIXED
-		// error code) — never the parse-error message NOR any output-derived value. The verifier holds
-		// real credentials and a model-controlled JSON key (assertKeys) or a padded length could carry
-		// a base64-encoded secret the scrubber cannot reverse (#536 findings). Unknown/unexpected
-		// errors fail closed to the generic `parse-error` code.
-		const code = parseFailureCode(error);
-		retainParseFailureTail(pass.label, "verification", code);
-		pass.verificationDiagnostic = `Invalid verification report (${code}).`;
+		// the verification result), but `verificationDiagnostic` still rides the PUBLIC comment's
+		// retained-blocker line. Publish the SINGLE invariant `parse-failure` code — never the specific
+		// ReviewFindingsParseErrorCode. Same rationale as discovery (see runReviewPass): the verifier
+		// holds real credentials, and the CHOICE among distinct codes is itself a covert channel the
+		// scrubber cannot reverse (#536). The enum + parseFailureCode classifier stay for internal use;
+		// #554 (jailed verifier) is what lets the specific code publish. Fails closed regardless.
+		retainParseFailureTail(pass.label, "verification");
+		pass.verificationDiagnostic = `Invalid verification report (${PUBLISHED_PARSE_FAILURE_CODE}).`;
 		pass.failureSubtype = "error_invalid_verification";
 		pass.gate = "block";
 		pass.effectiveVerdict = "block";

@@ -98,10 +98,13 @@ function report(summary: string, findings: unknown[] = []): string {
 	return `REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 1, summary, findings })}\nEND_REVIEW_FINDINGS`;
 }
 
-// #536: the retained/published parse-failure diagnosis is CONSTANT-ONLY — the fixed `phase` enum and
-// the fixed `errorCode` enum, and NOTHING derived from model output. Any output-derived integer (a
-// length, marker offset/count, fence size, trailing-byte count) would be a padding-based covert
-// channel for a credential-holding, prompt-injected seat, so none may appear.
+// #536: the retained/published parse-failure diagnosis is INVARIANT — the fixed `phase` enum and the
+// SINGLE constant `parse-failure` code, and NOTHING derived from model output. Any output-derived
+// integer (a length, marker offset/count, fence size, trailing-byte count) would be a padding-based
+// covert channel for a credential-holding, prompt-injected seat — and so would the CHOICE among
+// distinct error codes (the model selects WHICH failure to emit). So neither an integer NOR the
+// specific ReviewFindingsParseErrorCode may appear in a published/retained sink until #554 jails the
+// verifier.
 const CONSTANT_ONLY_MARKER = "parse-failure (constant-only):";
 function stderrParseDiagnosis(stderr: string): string {
 	const line = stderr.split("\n").find((entry) => entry.includes(CONSTANT_ONLY_MARKER));
@@ -112,21 +115,27 @@ function commentParseDiagnosis(comment: string): string | undefined {
 	return comment.match(/<pre>([\s\S]*?)<\/pre>/)?.[1];
 }
 /**
- * Assert the durable sinks carry ONLY `phase=<x> errorCode=<code>` — exactly, and with NO
- * output-derived integer (length / marker offset / count / fence size). `inComment` is false for a
- * verification-phase failure, whose diagnosis reaches only stderr (renderPass shows the retained
- * blocker, not a <pre>). The errorCode/phase enums contain no digits, so `/\d/` cleanly flags any
- * leaked structural integer.
+ * Assert the durable sinks carry ONLY `phase=<x> parse-failure` — the single invariant code, exactly,
+ * with NO output-derived integer (length / marker offset / count / fence size) AND NO model-selectable
+ * specific error code (`expected.code`, e.g. block-not-found / unknown-key / invalid-severity /
+ * invalid-json). `inComment` is false for a verification-phase failure, whose <pre> diagnosis reaches
+ * only stderr (renderPass shows the retained blocker, not a <pre>) — but the specific code must still
+ * be absent from the whole comment (verificationDiagnostic rides the retained-blocker line). The
+ * phase/invariant-code strings contain no digits, so `/\d/` cleanly flags any leaked structural integer.
  */
 function assertConstantOnlyDiagnosis(out: { stderr: string; comments: string[] }, expected: { phase: "discovery" | "verification"; code: string }, inComment = true): void {
-	const want = `phase=${expected.phase} errorCode=${expected.code}`;
+	const want = `phase=${expected.phase} parse-failure`;
+	const comment = out.comments.join("\n");
 	const fromStderr = stderrParseDiagnosis(out.stderr);
-	assert.equal(fromStderr, want, "stderr diagnosis must be exactly phase + errorCode");
+	assert.equal(fromStderr, want, "stderr diagnosis must be exactly phase + the invariant parse-failure code");
 	assert.doesNotMatch(fromStderr, /\d/, "no output-derived integer may appear in the stderr diagnosis");
+	// The model-selectable specific code is a covert channel and must reach NEITHER durable sink.
+	assert.ok(!out.stderr.includes(expected.code), `the specific code ${expected.code} must not appear in stderr`);
+	assert.ok(!comment.includes(expected.code), `the specific code ${expected.code} must not appear in the public comment`);
 	if (!inComment) return;
-	const fromComment = commentParseDiagnosis(out.comments.join("\n"));
-	assert.ok(fromComment, "the public comment must carry the constant-only diagnosis in a <pre>");
-	assert.equal(fromComment, want, "public comment diagnosis must be exactly phase + errorCode");
+	const fromComment = commentParseDiagnosis(comment);
+	assert.ok(fromComment, "the public comment must carry the invariant diagnosis in a <pre>");
+	assert.equal(fromComment, want, "public comment diagnosis must be exactly phase + the invariant parse-failure code");
 	assert.doesNotMatch(fromComment, /\d/, "no output-derived integer may appear in the public comment diagnosis");
 }
 
@@ -349,13 +358,13 @@ describe("pr-review CLI aggregation", () => {
 		}
 	});
 
-	it("retains a constant-only diagnosis (phase + fixed code), no output-derived value, when discovery parsing fails", async () => {
+	it("publishes an invariant diagnosis (phase + the single `parse-failure` code), no output-derived value, when discovery parsing fails", async () => {
 		// #536: the review seat holds real inherited credentials (ANTHROPIC_API_KEY / GH_TOKEN). On a
-		// parse failure the harness keeps ONLY the constant-only diagnosis — the fixed `phase` enum and
-		// the fixed `errorCode` — and NOTHING derived from model output. The markers ARE present and the
-		// JSON is invalid, but even a marker-present boolean or a length is a covert channel, so the
-		// diagnosis is `invalid-json` and nothing else; the secrets the injected PR planted never reach
-		// either sink.
+		// parse failure the harness keeps ONLY the invariant diagnosis — the fixed `phase` enum and the
+		// SINGLE `parse-failure` code — and NOTHING derived from model output. The markers ARE present
+		// and the JSON is invalid, but even a marker-present boolean or a length is a covert channel, and
+		// so is the CHOICE among distinct codes — so the specific `invalid-json` code is withheld too;
+		// the secrets the injected PR planted never reach either sink.
 		const ghpToken = `ghp_${"aB3dE6gH9jK2mN5pQ8".repeat(2)}`; // 40 chars, GitHub-token-shaped
 		const anthropicKey = `sk-ant-api03-${"Zx9Yw8Vu7Ts6Rq5".repeat(2)}`; // pattern-catchable, must still not be retained
 		const base64Secret = Buffer.from("GH_TOKEN=ghp_realtokenvalue_should_not_survive").toString("base64"); // base64 evasion (finding B)
@@ -368,10 +377,11 @@ describe("pr-review CLI aggregation", () => {
 		});
 		assert.equal(out.code, 1);
 
-		// Constant-only diagnosis: EXACTLY phase + the FIXED error code, no marker/length integer.
+		// Invariant diagnosis: EXACTLY phase + the single `parse-failure` code, no marker/length integer,
+		// and NOT the specific `invalid-json` code.
 		assertConstantOnlyDiagnosis(out, { phase: "discovery", code: "invalid-json" });
 		const comment = out.comments.join("\n");
-		assert.match(comment, /Parse diagnosis \(constant-only: phase \+ fixed error code/);
+		assert.match(comment, /Parse diagnosis \(invariant: phase \+ a single constant `parse-failure` code/);
 
 		// No recoverable secret and no raw model prose reaches EITHER durable sink.
 		for (const sink of [out.stderr, comment]) {
@@ -382,12 +392,13 @@ describe("pr-review CLI aggregation", () => {
 		}
 	});
 
-	it("retains a fixed error CODE — not the model-interpolated parse-error message — for an unknown JSON key carrying a base64 secret", async () => {
+	it("withholds the specific code AND the model-interpolated message for an unknown JSON key carrying a base64 secret", async () => {
 		// #536 root: a prompt-injected seat can place a reversible encoding of GH_TOKEN in an UNKNOWN
 		// top-level JSON key. assertKeys interpolates that key VERBATIM into its error message; the old
 		// retention path published that message to stderr + the public PR comment, and base64 defeats
-		// the value/pattern scrubber. The retained diagnosis must carry the fixed `unknown-key` code
-		// and NEITHER the encoded key NOR the decoded secret.
+		// the value/pattern scrubber. The published diagnosis carries only the invariant `parse-failure`
+		// code — NOT the specific `unknown-key` code (its choice is itself a covert channel), and NEITHER
+		// the encoded key NOR the decoded secret.
 		const secret = "GH_TOKEN=ghp_realtokenvalue_should_not_survive";
 		const encodedKey = Buffer.from(secret).toString("base64"); // the model-controlled unknown key
 		const body = JSON.stringify({ schemaVersion: 1, summary: "Real review.", findings: [], [encodedKey]: "x" });
@@ -395,8 +406,8 @@ describe("pr-review CLI aggregation", () => {
 		const out = await runCli({ results: [result({ text: assistantText, assistantText })] });
 		assert.equal(out.code, 1);
 		const comment = out.comments.join("\n");
-		// Constant-only diagnosis in both durable sinks: EXACTLY phase + the fixed `unknown-key` code,
-		// no encoded key, and no output-derived integer.
+		// Invariant diagnosis in both durable sinks: EXACTLY phase + the single `parse-failure` code —
+		// NOT the specific `unknown-key` code, no encoded key, and no output-derived integer.
 		assertConstantOnlyDiagnosis(out, { phase: "discovery", code: "unknown-key" });
 		assert.match(comment, /Invalid review findings report/);
 		// NEITHER the encoded key NOR the decoded secret reaches either sink.
@@ -407,10 +418,10 @@ describe("pr-review CLI aggregation", () => {
 		}
 	});
 
-	it("retains a fixed error CODE — not the offending enum value — when a finding severity is a base64 secret", async () => {
+	it("withholds the specific code AND the offending enum value when a finding severity is a base64 secret", async () => {
 		// #536 audit: bad-enum variant. A malformed finding whose `severity` is a base64-encoded secret
-		// must fail closed with the fixed `invalid-severity` code; the offending value is never echoed
-		// into a retained/published sink.
+		// must fail closed with the invariant `parse-failure` code (NOT the specific `invalid-severity`
+		// code); neither the offending value nor the specific code is echoed into a retained/published sink.
 		const secret = "ANTHROPIC_API_KEY=sk-ant-real-secret-value";
 		const encodedSeverity = Buffer.from(secret).toString("base64");
 		const body = JSON.stringify({ schemaVersion: 1, summary: "Real review.", findings: [{ severity: encodedSeverity, message: "A defect.", path: "src/a.ts", line: 1 }] });
@@ -418,8 +429,8 @@ describe("pr-review CLI aggregation", () => {
 		const out = await runCli({ results: [result({ text: assistantText, assistantText })] });
 		assert.equal(out.code, 1);
 		const comment = out.comments.join("\n");
-		// Constant-only diagnosis: EXACTLY phase + the fixed `invalid-severity` code, no offending value
-		// and no output-derived integer.
+		// Invariant diagnosis: EXACTLY phase + the single `parse-failure` code — NOT the specific
+		// `invalid-severity` code, no offending value, and no output-derived integer.
 		assertConstantOnlyDiagnosis(out, { phase: "discovery", code: "invalid-severity" });
 		assert.match(comment, /Invalid review findings report/);
 		for (const sink of [out.stderr, comment]) {
@@ -459,7 +470,10 @@ describe("pr-review CLI aggregation", () => {
 		assert.equal(out.code, 1);
 		const body = out.comments.join("\n");
 		assert.match(body, /Invalid review findings report/);
-		assert.match(body, /schema-example-parroted/);
+		// #536: the specific parse code (here `schema-example-parroted`) is a covert channel — the model
+		// chooses which failure to emit — so it must be WITHHELD; both sinks carry only the invariant
+		// `phase=<x> parse-failure`. #554 (jailed verifier) is what lets the specific code publish.
+		assertConstantOnlyDiagnosis(out, { phase: "discovery", code: "schema-example-parroted" });
 		assert.match(body, /gate=block ok=false subtype=standard:error_invalid_output/);
 		assert.deepEqual(out.statuses, ["block"]);
 	});
@@ -643,22 +657,23 @@ describe("pr-review CLI aggregation", () => {
 			assert.match(out.comments[0], /Retained blocker/);
 			assert.match(out.comments[0], /isolated verification failed; blocker retained/);
 			if (!(verifier instanceof Error)) {
-				// Normal block-not-found: constant-only diagnosis (phase + fixed code) on stderr — a
-				// verification-phase failure reaches only stderr (the comment shows the retained blocker).
+				// Normal block-not-found: invariant diagnosis (phase + the single `parse-failure` code) on
+				// stderr — the specific `block-not-found` code is withheld from BOTH stderr and the comment
+				// (verificationDiagnostic rides the retained-blocker line). The <pre> reaches only stderr.
 				assertConstantOnlyDiagnosis(out, { phase: "verification", code: "block-not-found" }, false);
 			}
 		}
 	});
 
-	it("retains a constant-only verifier diagnosis even when a secret straddles the 200-char tail boundary", async () => {
+	it("publishes an invariant verifier diagnosis even when a secret straddles the 200-char tail boundary", async () => {
 		// #536 findings A/B: the verifier holds real inherited GH_TOKEN/ANTHROPIC_API_KEY. Production
 		// providers pre-slice `outputTail` to the last 200 chars BEFORE any scrub, so a credential
 		// straddling that boundary loses its recognizable prefix and evades pattern/value redaction
-		// (A); a base64-encoded secret evades it regardless (B). Retaining only the constant-only
-		// diagnosis (phase + fixed code — NO model bytes and NO output-derived length/offset) makes both
-		// moot. This fixture is production-shaped (a pre-sliced outputTail carrying the truncated
-		// fragment) so the outputTail path is actually exercised — and must NOT be read on the retention
-		// path.
+		// (A); a base64-encoded secret evades it regardless (B). Publishing only the invariant diagnosis
+		// (phase + the single `parse-failure` code — NO model bytes, NO output-derived length/offset, and
+		// NOT the model-selectable specific code) makes both moot. This fixture is production-shaped (a
+		// pre-sliced outputTail carrying the truncated fragment) so the outputTail path is actually
+		// exercised — and must NOT be read on the retention path.
 		const ghpToken = `ghp_${"aB3dE6gH9jK2mN5pQ8".repeat(2)}`; // 40 chars
 		const anthropicKey = `sk-ant-api03-${"Zx9Yw8Vu7Ts6Rq5".repeat(2)}`;
 		const base64Secret = Buffer.from("ANTHROPIC_API_KEY=sk-ant-real-secret-value").toString("base64");
@@ -675,8 +690,9 @@ describe("pr-review CLI aggregation", () => {
 		});
 		assert.equal(out.code, 1);
 		assert.match(out.comments[0], /Retained blocker/);
-		// Constant-only diagnosis (phase + fixed `block-not-found` code) on stderr — no marker/length
-		// integer, so the boundary-straddle exfil vector is closed at the source.
+		// Invariant diagnosis (phase + the single `parse-failure` code) on stderr — no marker/length
+		// integer and NOT the specific `block-not-found` code, so the boundary-straddle exfil vector is
+		// closed at the source.
 		assertConstantOnlyDiagnosis(out, { phase: "verification", code: "block-not-found" }, false);
 		// NONE of the recoverable secrets — nor the boundary-straddled fragment — reaches either sink.
 		const comment = out.comments.join("\n");
