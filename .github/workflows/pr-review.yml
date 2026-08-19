@@ -98,11 +98,14 @@ jobs:
         continue-on-error: true
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          # Deliberately the built-in token, NOT the GH_TOKEN PAT: (a) the review
-          # agent inherits this env, and the scoped token (comment, no push/merge)
-          # bounds prompt-injection blast radius; (b) comments post as
+          # Workflow and outer CLI retain GH_TOKEN for harness-owned comment and
+          # `review` status effects after the untrusted seat exits. Spawned
+          # reviewer/verifier seats are denied GH_TOKEN and the gh credential
+          # store (#554); they still receive ANTHROPIC_API_KEY because the child
+          # is the Claude Code CLI and must authenticate to Anthropic.
+          # Deliberately the built-in token, NOT a PAT: (a) comments post as
           # github-actions[bot], so `--edit-last` can never clobber a human
-          # comment from the PAT owner's account; (c) a PAT expiry can't turn the
+          # comment from the PAT owner's account; (b) a PAT expiry can't turn the
           # required check red repo-wide.
           GH_TOKEN: ${{ github.token }}
           CI: "true"

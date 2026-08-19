@@ -5,7 +5,7 @@ status: draft
 diataxis: explanation
 sidebar:
   order: 3
-last_reviewed: 2026-07-08
+last_reviewed: 2026-08-19
 ---
 
 # Permission Model
@@ -40,6 +40,18 @@ Pelaggio's permission model is a manifest-backed description of current capabili
 | `shipwreck` | Recovery path after ship failure; may inspect and repair local ship state. | `TC-011`, `TC-012`, `TC-015` |
 | `roadmap` CLI | Adapter-backed list/get/claim/plan/mark-done/archive commands used by skills and harness. | `TC-006`, `TC-015` |
 | `worktree-deps` | Symlink/install dependencies for a worktree and repair shared dependency layout. | `TC-011`, `TC-016` |
+
+## Claude seat forge authority
+
+The Claude child is an untrusted seat. Forge/remote credentials are an exhaustive internal `Step` policy, not operator configuration (`TC-014`, `TC-018`):
+
+| Role | Forge / remote recovery credentials | Why |
+|---|---|---|
+| `pick`, `ship`, `shipwreck` | Retained (GitHub token vars, `LINEAR_API_KEY`, `SSH_AUTH_SOCK`, GitHub CLI config location) | Source-proven roadmap claim, landing, and recovery commands run inside those seats. |
+| `plan`, `shakedown-plan`, `implement`, `shakedown-code`, `pr-review`, `pr-verify` | Denied: token env vars stripped; existing GitHub CLI config directories (`GH_CONFIG_DIR`, `$XDG_CONFIG_HOME/gh`, `$HOME/.config/gh`) masked | Authoring and review/verify seats must not be able to post a forge status or mutate the tracker. |
+| Outer harness (`pr-review-cli`, `pr-adjudicate-cli`, workflow status steps) | Retains `GH_TOKEN` / `gh` | Deterministic comment and `review` status effects run after the untrusted seat exits. |
+
+Every Claude child still receives the SDK-listed Anthropic/CLI auth names so the CLI can authenticate. Residual model-key exfil through those vars is bounded by the invariant parse-failure sink (`#536`) and is `#572` work, not a reason to give the seat forge authority.
 
 ## Configuration Gates
 

@@ -101,10 +101,10 @@ function report(summary: string, findings: unknown[] = []): string {
 // #536: the retained/published parse-failure diagnosis is INVARIANT — the fixed `phase` enum and the
 // SINGLE constant `parse-failure` code, and NOTHING derived from model output. Any output-derived
 // integer (a length, marker offset/count, fence size, trailing-byte count) would be a padding-based
-// covert channel for a credential-holding, prompt-injected seat — and so would the CHOICE among
-// distinct error codes (the model selects WHICH failure to emit). So neither an integer NOR the
-// specific ReviewFindingsParseErrorCode may appear in a published/retained sink until #554 jails the
-// verifier.
+// covert channel for a prompt-injected seat that still holds Anthropic CLI auth — and so would the
+// CHOICE among distinct error codes (the model selects WHICH failure to emit). #554 denied forge
+// tokens; leftover CLI auth means neither an integer NOR the specific ReviewFindingsParseErrorCode
+// may appear in a published/retained sink.
 const CONSTANT_ONLY_MARKER = "parse-failure (constant-only):";
 function stderrParseDiagnosis(stderr: string): string {
 	const line = stderr.split("\n").find((entry) => entry.includes(CONSTANT_ONLY_MARKER));
@@ -359,12 +359,12 @@ describe("pr-review CLI aggregation", () => {
 	});
 
 	it("publishes an invariant diagnosis (phase + the single `parse-failure` code), no output-derived value, when discovery parsing fails", async () => {
-		// #536: the review seat holds real inherited credentials (ANTHROPIC_API_KEY / GH_TOKEN). On a
-		// parse failure the harness keeps ONLY the invariant diagnosis — the fixed `phase` enum and the
-		// SINGLE `parse-failure` code — and NOTHING derived from model output. The markers ARE present
-		// and the JSON is invalid, but even a marker-present boolean or a length is a covert channel, and
-		// so is the CHOICE among distinct codes — so the specific `invalid-json` code is withheld too;
-		// the secrets the injected PR planted never reach either sink.
+		// #536: the review seat still receives Anthropic CLI auth (ANTHROPIC_API_KEY) even though forge
+		// tokens are denied. On a parse failure the harness keeps ONLY the invariant diagnosis — the
+		// fixed `phase` enum and the SINGLE `parse-failure` code — and NOTHING derived from model output.
+		// The markers ARE present and the JSON is invalid, but even a marker-present boolean or a length
+		// is a covert channel, and so is the CHOICE among distinct codes — so the specific `invalid-json`
+		// code is withheld too; the secrets the injected PR planted never reach either sink.
 		const ghpToken = `ghp_${"aB3dE6gH9jK2mN5pQ8".repeat(2)}`; // 40 chars, GitHub-token-shaped
 		const anthropicKey = `sk-ant-api03-${"Zx9Yw8Vu7Ts6Rq5".repeat(2)}`; // pattern-catchable, must still not be retained
 		const base64Secret = Buffer.from("GH_TOKEN=ghp_realtokenvalue_should_not_survive").toString("base64"); // base64 evasion (finding B)
@@ -666,14 +666,14 @@ describe("pr-review CLI aggregation", () => {
 	});
 
 	it("publishes an invariant verifier diagnosis even when a secret straddles the 200-char tail boundary", async () => {
-		// #536 findings A/B: the verifier holds real inherited GH_TOKEN/ANTHROPIC_API_KEY. Production
-		// providers pre-slice `outputTail` to the last 200 chars BEFORE any scrub, so a credential
-		// straddling that boundary loses its recognizable prefix and evades pattern/value redaction
-		// (A); a base64-encoded secret evades it regardless (B). Publishing only the invariant diagnosis
-		// (phase + the single `parse-failure` code — NO model bytes, NO output-derived length/offset, and
-		// NOT the model-selectable specific code) makes both moot. This fixture is production-shaped (a
-		// pre-sliced outputTail carrying the truncated fragment) so the outputTail path is actually
-		// exercised — and must NOT be read on the retention path.
+		// #536 findings A/B: the verifier still receives Anthropic CLI auth even though GH_TOKEN is
+		// denied. Production providers pre-slice `outputTail` to the last 200 chars BEFORE any scrub, so
+		// a credential straddling that boundary loses its recognizable prefix and evades pattern/value
+		// redaction (A); a base64-encoded secret evades it regardless (B). Publishing only the invariant
+		// diagnosis (phase + the single `parse-failure` code — NO model bytes, NO output-derived
+		// length/offset, and NOT the model-selectable specific code) makes both moot. This fixture is
+		// production-shaped (a pre-sliced outputTail carrying the truncated fragment) so the outputTail
+		// path is actually exercised — and must NOT be read on the retention path.
 		const ghpToken = `ghp_${"aB3dE6gH9jK2mN5pQ8".repeat(2)}`; // 40 chars
 		const anthropicKey = `sk-ant-api03-${"Zx9Yw8Vu7Ts6Rq5".repeat(2)}`;
 		const base64Secret = Buffer.from("ANTHROPIC_API_KEY=sk-ant-real-secret-value").toString("base64");

@@ -4,7 +4,8 @@ import { tmpdir as systemTmpdir } from "node:os";
 import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
 import { Transform, type Writable } from "node:stream";
 import type { SpawnedProcess, SpawnOptions } from "@anthropic-ai/claude-agent-sdk";
-import { makeSecretScrubber } from "./secret-hygiene.js";
+import { buildAgentEnv, makeSecretScrubber, scopeEnvAllowlistToProvider } from "./secret-hygiene.js";
+import type { Step } from "./types.js";
 
 /**
  * Harness-only Unix-socket locators whose dedicated parent directories the Claude
@@ -20,16 +21,60 @@ const MAX_BUFFERED_STDERR_BYTES = 64 * 1024;
 const SOCKET_MASK_CANARY_PREFIX = "pelaggio-claude-seat-mask-";
 const SOCKET_MASK_CANARY_VISIBLE_EXIT = 73;
 
+/** Non-secret SDK control markers installed `@anthropic-ai/claude-agent-sdk@0.3.220` writes onto SpawnOptions.env. */
+const CLAUDE_SDK_CONTROL_VARS = [
+	"CLAUDE_CODE_ENTRYPOINT",
+	"CLAUDE_AGENT_SDK_VERSION",
+	"CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING",
+	"CLAUDE_CODE_SDK_HAS_OAUTH_REFRESH",
+	"CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH",
+	"CLAUDE_CODE_QUESTION_PREVIEW_FORMAT",
+] as const;
+
+/**
+ * SDK-documented Claude CLI auth names. The spawned process *is* the API client, so every
+ * role extra-passes these independently of `security.env-allowlist`. They are not forge credentials.
+ */
+const CLAUDE_CLI_AUTH_VARS = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "AWS_BEARER_TOKEN_BEDROCK", "ANTHROPIC_FOUNDRY_API_KEY", "ANTHROPIC_FOUNDRY_AUTH_TOKEN", "ANTHROPIC_AWS_API_KEY"] as const;
+
+/** Documented GitHub CLI token variables plus remote-auth / config-location handles needed by roadmap/`gh`/`git`. */
+const FORGE_REMOTE_VARS = ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "LINEAR_API_KEY", "SSH_AUTH_SOCK", "GH_CONFIG_DIR", "GH_HOST", "GH_ENTERPRISE_HOST"] as const;
+
+type ClaudeSeatForgeAuthority = "forge-capable" | "denied";
+
+/**
+ * Exhaustive internal policy over `Step`. Widening `Step` cannot silently inherit forge
+ * authority. Interim set: pick/ship/shipwreck retain GitHub/Linear/SSH credentials;
+ * every other current role is denied. Not operator-configurable — see #572 for a broker.
+ */
+const CLAUDE_SEAT_FORGE_AUTHORITY = {
+	pick: "forge-capable",
+	plan: "denied",
+	"shakedown-plan": "denied",
+	implement: "denied",
+	"shakedown-code": "denied",
+	ship: "forge-capable",
+	shipwreck: "forge-capable",
+	"pr-review": "denied",
+	"pr-verify": "denied",
+} as const satisfies Record<Step, ClaudeSeatForgeAuthority>;
+
 export type ClaudeSeatSpawner = typeof spawn;
 
 export interface ClaudeSeatBuildOptions {
 	cwd: string;
 	bwrap: string;
+	/** Required role. Compile-time catch for omitted seat construction; the exhaustive record classifies it. */
+	step: Step;
 	/** Explicit locators; defaults to `resolveHarnessSocketPaths()`. */
 	socketPaths?: readonly string[];
 	home?: string;
 	tmpdir?: string;
 	xdgRuntimeDir?: string;
+	/** `XDG_CONFIG_HOME` for GitHub CLI config resolution; defaults to `process.env.XDG_CONFIG_HOME`. */
+	xdgConfigHome?: string;
+	/** `GH_CONFIG_DIR` for GitHub CLI config resolution; defaults to `process.env.GH_CONFIG_DIR`. */
+	ghConfigDir?: string;
 	claudeConfigDir?: string;
 }
 
@@ -37,6 +82,8 @@ export interface ClaudeSeatSpawnOptions extends ClaudeSeatBuildOptions {
 	onChildSpawn?: (info: { pid: number; cwd: string }) => void;
 	spawn?: ClaudeSeatSpawner;
 	stderr?: Writable;
+	/** Operator `security.env-allowlist`; applied at spawn, not in the argv builder. */
+	envAllowlist?: readonly string[];
 }
 
 export interface ClaudeSeatInvocation {
@@ -44,17 +91,23 @@ export interface ClaudeSeatInvocation {
 	args: readonly string[];
 	cwd: string;
 	socketParents: readonly string[];
+	/** Union of socket parents and existing GitHub credential directories actually mounted as `--tmpfs`. */
+	maskedDirectories: readonly string[];
 }
 
 export interface ClaudeSeatPreflightOptions {
 	cwd: string;
+	step: Step;
 	pathValue?: string;
 	platform?: NodeJS.Platform;
 	env?: NodeJS.ProcessEnv;
 	home?: string;
 	tmpdir?: string;
 	xdgRuntimeDir?: string;
+	xdgConfigHome?: string;
+	ghConfigDir?: string;
 	claudeConfigDir?: string;
+	envAllowlist?: readonly string[];
 	probe?: ClaudeSeatProbe;
 }
 
@@ -64,6 +117,38 @@ export type ClaudeSeatProbe = (command: string, args: readonly string[], options
 
 function seatFailure(detail: string): Error {
 	return new Error(`Claude seat isolation ${detail}`);
+}
+
+export function claudeSeatHoldsForgeAuthority(step: Step): boolean {
+	return CLAUDE_SEAT_FORGE_AUTHORITY[step] === "forge-capable";
+}
+
+function copyPresent(source: NodeJS.ProcessEnv, names: readonly string[], extra: Record<string, string>): void {
+	for (const name of names) {
+		const value = source[name];
+		if (value !== undefined) extra[name] = value;
+	}
+}
+
+/**
+ * Deny-by-default child environment for the unconditional Claude spawn seam.
+ * Source is the SDK-built `SpawnOptions.env` bag (control markers live there), never a fresh `process.env` read.
+ */
+export function buildClaudeSeatEnv(source: NodeJS.ProcessEnv | undefined, step: Step, configuredAllowlist: readonly string[] = []): NodeJS.ProcessEnv {
+	const bag = source ?? {};
+	const extra: Record<string, string> = {};
+	copyPresent(bag, CLAUDE_SDK_CONTROL_VARS, extra);
+	copyPresent(bag, CLAUDE_CLI_AUTH_VARS, extra);
+	if (claudeSeatHoldsForgeAuthority(step)) copyPresent(bag, FORGE_REMOTE_VARS, extra);
+	const env = buildAgentEnv({
+		source: bag,
+		allow: scopeEnvAllowlistToProvider(configuredAllowlist, "claude"),
+		extra,
+	});
+	if (!claudeSeatHoldsForgeAuthority(step)) {
+		for (const name of FORGE_REMOTE_VARS) delete env[name];
+	}
+	return env;
 }
 
 function isWritableByInvokingUser(filePath: string): boolean {
@@ -134,17 +219,21 @@ function pathEqualsOrPrefixes(parent: string, target: string): boolean {
 	return parent === target || target.startsWith(`${parent}/`);
 }
 
+function validateAbsolutePath(value: string, kind: "harness socket locator" | "GitHub credential directory"): string {
+	if (value.includes("\0") || value.includes("\\")) {
+		throw seatFailure(`rejected ${kind}: path contains forbidden characters`);
+	}
+	if (!isAbsolute(value)) {
+		throw seatFailure(`rejected ${kind}: path is not absolute`);
+	}
+	if (value.split("/").some((segment) => segment === "." || segment === "..")) {
+		throw seatFailure(`rejected ${kind}: path contains reserved segments`);
+	}
+	return normalize(value);
+}
+
 function validateLocatorParent(locator: string): string {
-	if (locator.includes("\0") || locator.includes("\\")) {
-		throw seatFailure("rejected harness socket locator: path contains forbidden characters");
-	}
-	if (!isAbsolute(locator)) {
-		throw seatFailure("rejected harness socket locator: path is not absolute");
-	}
-	if (locator.split("/").some((segment) => segment === "." || segment === "..")) {
-		throw seatFailure("rejected harness socket locator: path contains reserved segments");
-	}
-	const normalized = normalize(locator);
+	const normalized = validateAbsolutePath(locator, "harness socket locator");
 	const parent = dirname(normalized);
 	try {
 		return realpathSync(parent);
@@ -159,6 +248,16 @@ function isWideOrSharedParent(parent: string, protectedRoots: readonly string[])
 	return protectedRoots.some((root) => root !== "" && pathEqualsOrPrefixes(parent, root));
 }
 
+function collapseMountTargets(paths: readonly string[]): string[] {
+	const unique = [...new Set(paths)].sort((a, b) => a.length - b.length || a.localeCompare(b));
+	const kept: string[] = [];
+	for (const parent of unique) {
+		if (kept.some((outer) => pathEqualsOrPrefixes(outer, parent))) continue;
+		kept.push(parent);
+	}
+	return kept.sort((a, b) => a.localeCompare(b));
+}
+
 /** Validate locators, reject wide/shared parents, keep the shallower parent when one prefixes another. */
 export function resolveProtectedSocketParents(locators: readonly string[], protectedRoots: readonly string[]): string[] {
 	const parents: string[] = [];
@@ -170,13 +269,14 @@ export function resolveProtectedSocketParents(locators: readonly string[], prote
 		}
 		parents.push(parent);
 	}
-	const unique = [...new Set(parents)].sort((a, b) => a.length - b.length || a.localeCompare(b));
-	const kept: string[] = [];
-	for (const parent of unique) {
-		if (kept.some((outer) => pathEqualsOrPrefixes(outer, parent))) continue;
-		kept.push(parent);
-	}
-	return kept.sort((a, b) => a.localeCompare(b));
+	return collapseMountTargets(parents);
+}
+
+function harnessField(explicit: string | undefined, fallback: string | undefined): string | undefined {
+	const value = explicit ?? fallback;
+	if (typeof value !== "string") return undefined;
+	const trimmed = value.trim();
+	return trimmed === "" ? undefined : trimmed;
 }
 
 function protectedRootsFrom(options: ClaudeSeatBuildOptions, cwd: string): string[] {
@@ -186,6 +286,41 @@ function protectedRootsFrom(options: ClaudeSeatBuildOptions, cwd: string): strin
 			return trimmed === "" ? [] : [resolve(trimmed)];
 		},
 	);
+}
+
+/**
+ * Existing GitHub CLI config directories for a denied role. Missing candidates are skipped
+ * (CI runners often have `GH_TOKEN` and no `~/.config/gh`). Malformed/relative/non-directory/wide
+ * targets fail closed. Harness fields only — never SDK-supplied child values.
+ */
+function resolveGitHubCredentialDirectories(options: ClaudeSeatBuildOptions, protectedRoots: readonly string[]): string[] {
+	if (claudeSeatHoldsForgeAuthority(options.step)) return [];
+	const home = harnessField(options.home, process.env.HOME);
+	const xdgConfigHome = harnessField(options.xdgConfigHome, process.env.XDG_CONFIG_HOME);
+	const ghConfigDir = harnessField(options.ghConfigDir, process.env.GH_CONFIG_DIR);
+	const candidates: string[] = [];
+	if (ghConfigDir !== undefined) candidates.push(ghConfigDir);
+	if (xdgConfigHome !== undefined) candidates.push(join(xdgConfigHome, "gh"));
+	if (home !== undefined) candidates.push(join(home, ".config", "gh"));
+	const existing: string[] = [];
+	for (const candidate of candidates) {
+		const normalized = validateAbsolutePath(candidate, "GitHub credential directory");
+		try {
+			const resolved = realpathSync(normalized);
+			if (!statSync(resolved).isDirectory()) {
+				throw seatFailure(`cannot mask GitHub credential directory because it is not a directory: ${resolved}`);
+			}
+			if (isWideOrSharedParent(resolved, protectedRoots)) {
+				throw seatFailure("rejected GitHub credential directory: parent directory is too wide to mask");
+			}
+			existing.push(resolved);
+		} catch (error) {
+			if (error instanceof Error && error.message.startsWith("Claude seat isolation ")) throw error;
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+			throw seatFailure(`could not resolve GitHub credential directory: ${normalized}`);
+		}
+	}
+	return collapseMountTargets(existing);
 }
 
 function validateSocketParentMountTargets(parents: readonly string[]): void {
@@ -237,13 +372,16 @@ export function buildClaudeSeatInvocation(spawnOpts: Pick<SpawnOptions, "command
 	}
 	const cwd = resolve(spawnOpts.cwd ?? options.cwd);
 	const locators = options.socketPaths ?? resolveHarnessSocketPaths();
-	const socketParents = resolveProtectedSocketParents(locators, protectedRootsFrom(options, cwd));
+	const protectedRoots = protectedRootsFrom(options, cwd);
+	const socketParents = resolveProtectedSocketParents(locators, protectedRoots);
+	const credentialDirectories = resolveGitHubCredentialDirectories(options, protectedRoots);
+	const maskedDirectories = collapseMountTargets([...socketParents, ...credentialDirectories]);
 	const args: string[] = ["--unshare-pid", "--new-session", "--die-with-parent", "--dev-bind", "/", "/", "--proc", "/proc"];
-	for (const parent of socketParents) {
+	for (const parent of maskedDirectories) {
 		args.push("--tmpfs", parent);
 	}
 	args.push("--chdir", cwd, "--", spawnOpts.command, ...spawnOpts.args);
-	return { command: options.bwrap, args, cwd, socketParents };
+	return { command: options.bwrap, args, cwd, socketParents, maskedDirectories };
 }
 
 /**
@@ -254,13 +392,16 @@ export function buildClaudeSeatInvocation(spawnOpts: Pick<SpawnOptions, "command
 export function spawnClaudeSeat(spawnOpts: SpawnOptions, options: ClaudeSeatSpawnOptions): SpawnedProcess {
 	const invocation = buildClaudeSeatInvocation(spawnOpts, options);
 	const spawnFn = options.spawn ?? spawn;
+	const unfilteredEnv = (spawnOpts.env ?? {}) as NodeJS.ProcessEnv;
+	const childEnv = buildClaudeSeatEnv(unfilteredEnv, options.step, options.envAllowlist ?? []);
 	const child: ChildProcess = spawnFn(invocation.command, [...invocation.args], {
 		cwd: invocation.cwd,
-		env: spawnOpts.env as NodeJS.ProcessEnv,
+		env: childEnv,
 		stdio: ["pipe", "pipe", "pipe"],
 		signal: spawnOpts.signal,
 	});
-	child.stderr?.pipe(createScrubbedStderrStream(spawnOpts.env as NodeJS.ProcessEnv)).pipe(options.stderr ?? process.stderr, { end: false });
+	// Scrub from the unfiltered SDK bag so a stripped forge token that still appears on stderr is redacted.
+	child.stderr?.pipe(createScrubbedStderrStream(unfilteredEnv)).pipe(options.stderr ?? process.stderr, { end: false });
 	const pid = child.pid;
 	if (typeof pid === "number" && pid > 0) {
 		options.onChildSpawn?.({ pid, cwd: invocation.cwd });
@@ -288,10 +429,13 @@ export function preflightClaudeSeat(options: ClaudeSeatPreflightOptions): Claude
 			{
 				cwd: options.cwd,
 				bwrap,
+				step: options.step,
 				socketPaths: [...resolveHarnessSocketPaths(options.env ?? process.env), canaryPath],
 				home: options.home ?? process.env.HOME,
 				tmpdir: options.tmpdir ?? process.env.TMPDIR,
 				xdgRuntimeDir: options.xdgRuntimeDir ?? process.env.XDG_RUNTIME_DIR,
+				xdgConfigHome: options.xdgConfigHome ?? process.env.XDG_CONFIG_HOME,
+				ghConfigDir: options.ghConfigDir ?? process.env.GH_CONFIG_DIR,
 				claudeConfigDir: options.claudeConfigDir ?? process.env.CLAUDE_CONFIG_DIR,
 			},
 		);
@@ -305,7 +449,7 @@ export function preflightClaudeSeat(options: ClaudeSeatPreflightOptions): Claude
 				}));
 		const result = probe(invocation.command, invocation.args, {
 			cwd: invocation.cwd,
-			env: options.env ?? process.env,
+			env: buildClaudeSeatEnv(options.env ?? process.env, options.step, options.envAllowlist ?? []),
 		});
 		if (result.error) {
 			throw seatFailure(`could not run the Bubblewrap namespace probe: ${result.error.message}`);

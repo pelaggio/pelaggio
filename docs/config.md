@@ -1025,11 +1025,12 @@ bypasses only the one-pass `autopilot:revised` label.
 
 ## Spawned-agent env allowlist
 
-Driver subprocesses (codex today, grok next) run work influenced by untrusted
-repo/issue/PR text. To stop a prompt-injected step from reading credentials, they
-are spawned with a **deny-by-default environment**: only a fixed allowlist
-(`PATH`, `HOME`, locale/cert vars) plus any names you add here is forwarded — the
-child never inherits the full parent environment (issue #237, TC-014).
+Driver subprocesses (codex, grok, opencode, and Claude at `spawnClaudeSeat`) run
+work influenced by untrusted repo/issue/PR text. To stop a prompt-injected step
+from reading credentials, they are spawned with a **deny-by-default
+environment**: only a fixed allowlist (`PATH`, `HOME`, locale/cert vars) plus any
+names you add here is forwarded — the child never inherits the full parent
+environment (issue #237, TC-014).
 
 Subscription auth keeps working out of the box because codex/grok read their
 tokens from files under `HOME`. Add a var only when a driver needs it in the
@@ -1042,14 +1043,18 @@ security:
 
 `security.env-allowlist` must be an array of strings. At launch the allowlist is
 additionally **provider-scoped**: a subprocess driver receives its own key var
-but never a sibling provider's — `OPENAI_API_KEY` never reaches Grok,
-`XAI_API_KEY` never reaches Codex, and `ANTHROPIC_API_KEY` (consumed in-process
-by the Claude SDK) reaches no subprocess driver — so a multi-provider review
-never exposes one seat to another provider's credential. Non-key entries are
-forwarded unchanged. Independently, captured
-driver stderr and the verbose `.dev/*.log` transcript are **secret-scrubbed
-before write**: credential-shaped strings (JWTs, provider keys, tokens) and the
-values of secret-named env vars are replaced with `[REDACTED]`.
+but never a sibling provider's — `OPENAI_API_KEY` never reaches Grok and
+`XAI_API_KEY` never reaches Codex — so a multi-provider review never exposes one
+seat to another provider's credential. Claude now goes through `buildAgentEnv` at
+`spawnClaudeSeat` as well. The SDK-listed Anthropic/CLI auth names still reach
+every Claude child independently of this allowlist because that child **is** the
+API client; they are not forge credentials. Forge/remote vars (`GH_TOKEN` and
+the rest of the GitHub/Linear/SSH set) are role-gated inside the seat: only
+`pick`/`ship`/`shipwreck` retain them. Non-key entries are forwarded unchanged.
+Independently, captured driver stderr and the verbose `.dev/*.log` transcript
+are **secret-scrubbed before write**: credential-shaped strings (JWTs, provider
+keys, tokens) and the values of secret-named env vars are replaced with
+`[REDACTED]`.
 
 ## Notifications
 

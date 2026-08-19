@@ -163,14 +163,14 @@ claims:
     claim: "Child processes get only the secrets they need, and logs are scrubbed of anything that looks like a credential."
     status: guarantee
     applies_to: ">=0.1.0"
-    mechanism: "Spawned driver subprocesses receive a deny-by-default allowlisted env (buildAgentEnv in secret-hygiene.ts) — PATH/HOME plus explicitly configured vars only, never the full parent process.env. Captured stderr and the verbose file transcript are secret-scrubbed before write (scrubSecrets/makeSecretScrubber): credential-shaped patterns (JWT, provider API keys, bearer/PAT tokens) and the literal values of secret-named env vars are replaced with [REDACTED]."
-    evidence_command: "node --import tsx --test packages/pelaggio/scripts/pelaggio/__tests__/secret-hygiene.test.ts"
-    test_file: "packages/pelaggio/scripts/pelaggio/__tests__/secret-hygiene.test.ts"
+    mechanism: "Spawned driver subprocesses receive a deny-by-default allowlisted env (buildAgentEnv in secret-hygiene.ts) — PATH/HOME plus explicitly configured vars only, never the full parent process.env. Claude children are filtered at the unconditional spawnClaudeSeat seam (and its preflight probe) the same way; they extra-pass the SDK-listed Anthropic/CLI auth names (ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, CLAUDE_CODE_OAUTH_TOKEN, AWS_BEARER_TOKEN_BEDROCK, ANTHROPIC_FOUNDRY_API_KEY, ANTHROPIC_FOUNDRY_AUTH_TOKEN, ANTHROPIC_AWS_API_KEY) because the child is the API client, plus named non-secret SDK control markers. Captured stderr and the verbose file transcript are secret-scrubbed before write (scrubSecrets/makeSecretScrubber): credential-shaped patterns (JWT, provider API keys, bearer/PAT tokens) and the literal values of secret-named env vars are replaced with [REDACTED]. Claude stderr scrubbing reads the unfiltered SDK env bag so a stripped forge token that still appears on stderr is redacted."
+    evidence_command: "node --import tsx --test --test-reporter=dot packages/pelaggio/scripts/pelaggio/__tests__/secret-hygiene.test.ts packages/pelaggio/scripts/pelaggio/__tests__/claude-seat.test.ts"
+    test_file: "packages/pelaggio/scripts/pelaggio/__tests__/{secret-hygiene,claude-seat}.test.ts"
     failure_mode: "deny-by-default env; redacted before write"
-    known_limits: "The env allowlist covers spawned driver subprocesses (codex today, grok via the ACP client); pelaggio's own git/gh helper commands still use the repo env by design. Scrubbing is pattern- and configured-value-based — a novel credential format that matches no pattern and is not a known secret env value could still reach a log. Not the full #176 out-of-process credential broker."
+    known_limits: "The env allowlist covers spawned driver subprocesses (codex, grok, opencode, contained-execution, and Claude at spawnClaudeSeat). Pelaggio's own git/gh helper commands still use the repo env by design. Claude seats still receive SDK-listed Anthropic/CLI auth names so the CLI can authenticate. Scrubbing is pattern- and configured-value-based — a novel credential format that matches no pattern and is not a known secret env value could still reach a log. Not the full #176/#572 out-of-process credential broker."
     standards: ["OWASP-LLM02", "12FACTOR-Config"]
     adr: "ADR-10"
-    last_verified: "2026-07-18"
+    last_verified: "2026-08-19"
 
   # ---- The defining threat, as a first-class claim --------------------------
   - id: TC-015
@@ -219,14 +219,14 @@ claims:
     status: guarantee
     applies_to: ">=0.1.0"
     condition: "provider = claude"
-    mechanism: "claudeRunStep preflights a bwrap from the host PATH only when its real executable and full directory ancestry are root-owned, have no group/world write bits, and are not writable by a non-root invoking user; user-writable PATH entries are ignored. Before query(), it runs a zero-spend capability probe with the same namespace and mount arguments. It always supplies spawnClaudeCodeProcess → spawnClaudeSeat. The wrapper uses --unshare-pid, --proc /proc, --new-session, --dev-bind / / (so required device nodes remain usable), and --tmpfs on each dedicated harness-only socket parent from HARNESS_ONLY_SOCKET_ENVS (read from the harness env). Existing socket parents are canonicalized before the wide-parent policy is applied. Session binding records the outer bwrap PID."
+    mechanism: "claudeRunStep preflights a bwrap from the host PATH only when its real executable and full directory ancestry are root-owned, have no group/world write bits, and are not writable by a non-root invoking user; user-writable PATH entries are ignored. Before query(), it runs a zero-spend capability probe with the same namespace, mount arguments, and filtered child env. It always supplies spawnClaudeCodeProcess → spawnClaudeSeat with the Step role. The wrapper uses --unshare-pid, --proc /proc, --new-session, --dev-bind / / (so required device nodes remain usable), and --tmpfs on each dedicated harness-only socket parent from HARNESS_ONLY_SOCKET_ENVS (read from the harness env) plus, for forge-denied roles, each existing GitHub CLI config directory (GH_CONFIG_DIR, $XDG_CONFIG_HOME/gh, $HOME/.config/gh). Existing socket parents are canonicalized before the wide-parent policy is applied; missing GitHub config directories are skipped. The child env is deny-by-default via buildAgentEnv; forge/remote vars are extra-passed only for pick/ship/shipwreck. Session binding records the outer bwrap PID."
     evidence_command: "node --import tsx --test --test-reporter=dot packages/pelaggio/scripts/pelaggio/__tests__/claude-seat.test.ts"
     test_file: "packages/pelaggio/scripts/pelaggio/__tests__/claude-seat.test.ts"
     failure_mode: "fail the Claude step closed (subtype error_confinement); no unisolated fallback"
-    known_limits: "Not a full OS/container sandbox: the seat still has the host network namespace, a bound host root (minus /proc and masked socket parents), and the SDK-supplied child environment. Writes outside Git roots remain outside TC-011. Codex/Grok/OpenCode are not covered. CLAUDE_CAPABILITIES.isolation stays empty because this is harness wrapping, not a provider-native isolation mechanism."
+    known_limits: "Not a full OS/container sandbox: the seat still has the host network namespace and a bound host root (minus /proc, masked socket parents, and masked GitHub CLI config directories for denied roles). Anthropic/CLI auth names still reach the child because it is the API client. Leftover host credential files such as ~/.git-credentials, ~/.netrc, ~/.ssh, and ~/.claude remain readable by absolute path; enumerating them is #572, not a capability broker. Writes outside Git roots remain outside TC-011. Codex/Grok/OpenCode are not covered. CLAUDE_CAPABILITIES.isolation stays empty because this is harness wrapping, not a provider-native isolation mechanism."
     standards: ["OWASP-LLM06", "ASVS-V4"]
     adr: null
-    last_verified: "2026-08-18"
+    last_verified: "2026-08-19"
 
 manifest:
   defaults:

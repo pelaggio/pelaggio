@@ -1,17 +1,45 @@
 import assert from "node:assert/strict";
 import { type ChildProcess, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, it } from "node:test";
 import type { SpawnOptions } from "@anthropic-ai/claude-agent-sdk";
-import { buildClaudeSeatInvocation, type ClaudeSeatSpawner, HARNESS_ONLY_SOCKET_ENVS, preflightClaudeSeat, resolveClaudeSeatBwrap, resolveHarnessSocketPaths, spawnClaudeSeat } from "../claude-seat.js";
+import {
+	buildClaudeSeatEnv,
+	buildClaudeSeatInvocation,
+	type ClaudeSeatBuildOptions,
+	type ClaudeSeatSpawner,
+	claudeSeatHoldsForgeAuthority,
+	HARNESS_ONLY_SOCKET_ENVS,
+	preflightClaudeSeat,
+	resolveClaudeSeatBwrap,
+	resolveHarnessSocketPaths,
+	spawnClaudeSeat,
+} from "../claude-seat.js";
+import { STEPS } from "../config.js";
+import type { Step } from "../types.js";
 
 const temps: string[] = [];
 const servers: Server[] = [];
+const httpServers: Array<ReturnType<typeof createHttpServer>> = [];
 const children: ChildProcess[] = [];
+const ALL_STEPS: readonly Step[] = [...STEPS, "shipwreck", "pr-review", "pr-verify"];
+const FORGE_CAPABLE_STEPS: readonly Step[] = ["pick", "ship", "shipwreck"];
+const DENIED_STEPS: readonly Step[] = ALL_STEPS.filter((step) => !FORGE_CAPABLE_STEPS.includes(step));
+const FORGE_REMOTE_VARS = ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "LINEAR_API_KEY", "SSH_AUTH_SOCK", "GH_CONFIG_DIR", "GH_HOST", "GH_ENTERPRISE_HOST"] as const;
+const CLAUDE_CLI_AUTH_VARS = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "AWS_BEARER_TOKEN_BEDROCK", "ANTHROPIC_FOUNDRY_API_KEY", "ANTHROPIC_FOUNDRY_AUTH_TOKEN", "ANTHROPIC_AWS_API_KEY"] as const;
+const CLAUDE_SDK_CONTROL_VARS = [
+	"CLAUDE_CODE_ENTRYPOINT",
+	"CLAUDE_AGENT_SDK_VERSION",
+	"CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING",
+	"CLAUDE_CODE_SDK_HAS_OAUTH_REFRESH",
+	"CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH",
+	"CLAUDE_CODE_QUESTION_PREVIEW_FORMAT",
+] as const;
 const trustedSystemBwrap = (() => {
 	if (process.platform !== "linux") return undefined;
 	try {
@@ -25,14 +53,20 @@ afterEach(async () => {
 	for (const child of children.splice(0)) {
 		if (!child.killed && child.exitCode === null) child.kill("SIGKILL");
 	}
-	await Promise.all(
-		servers.splice(0).map(
+	await Promise.all([
+		...servers.splice(0).map(
 			(server) =>
 				new Promise<void>((done) => {
 					server.close(() => done());
 				}),
 		),
-	);
+		...httpServers.splice(0).map(
+			(server) =>
+				new Promise<void>((done) => {
+					server.close(() => done());
+				}),
+		),
+	]);
 	for (const root of temps.splice(0)) {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -74,6 +108,79 @@ function afterSeparator(args: readonly string[]): string[] {
 	const idx = args.indexOf("--");
 	assert.notEqual(idx, -1, "invocation must separate the SDK command with --");
 	return args.slice(idx + 1);
+}
+
+function isolatedHarnessPaths(): { home: string; tmpdir: string; xdgRuntimeDir: string; xdgConfigHome: string; ghConfigDir: string; claudeConfigDir: string } {
+	const root = tempDir("pelaggio-seat-iso-");
+	return {
+		home: join(root, "home"),
+		tmpdir: join(root, "tmp"),
+		xdgRuntimeDir: join(root, "run"),
+		xdgConfigHome: join(root, "xdg"),
+		ghConfigDir: join(root, "gh-config"),
+		claudeConfigDir: join(root, "claude"),
+	};
+}
+
+function deniedBuildOpts(overrides: Partial<ClaudeSeatBuildOptions> & Pick<ClaudeSeatBuildOptions, "cwd" | "bwrap">): ClaudeSeatBuildOptions {
+	const isolated = isolatedHarnessPaths();
+	return {
+		step: "pr-review",
+		home: isolated.home,
+		tmpdir: isolated.tmpdir,
+		xdgRuntimeDir: isolated.xdgRuntimeDir,
+		xdgConfigHome: isolated.xdgConfigHome,
+		ghConfigDir: isolated.ghConfigDir,
+		claudeConfigDir: isolated.claudeConfigDir,
+		...overrides,
+	};
+}
+
+function sdkShapedEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+	return {
+		PATH: "/usr/bin",
+		HOME: "/home/agent",
+		USER: "agent",
+		LANG: "C",
+		TMPDIR: "/tmp",
+		XDG_CONFIG_HOME: "/home/agent/.config",
+		GH_TOKEN: "ghp_forge_token_env_value",
+		GITHUB_TOKEN: "ghs_forge_github_token",
+		GH_ENTERPRISE_TOKEN: "ghe_enterprise_token_value",
+		GITHUB_ENTERPRISE_TOKEN: "ghe_github_enterprise_token",
+		LINEAR_API_KEY: "lin_api_key_value_xx",
+		ANTHROPIC_API_KEY: "sk-ant-cli-auth-value",
+		ANTHROPIC_AUTH_TOKEN: "anthropic-auth-token-value",
+		CLAUDE_CODE_OAUTH_TOKEN: "claude-oauth-token-value",
+		AWS_BEARER_TOKEN_BEDROCK: "bedrock-bearer-token-xx",
+		ANTHROPIC_FOUNDRY_API_KEY: "foundry-api-key-value",
+		ANTHROPIC_FOUNDRY_AUTH_TOKEN: "foundry-auth-token-value",
+		ANTHROPIC_AWS_API_KEY: "anthropic-aws-key-value",
+		SSH_AUTH_SOCK: "/run/ssh-agent.sock",
+		GH_CONFIG_DIR: "/home/agent/gh-config",
+		GH_HOST: "github.com",
+		GH_ENTERPRISE_HOST: "github.example",
+		SENTINEL_SECRET: "do-not-leak-me-sentinel",
+		CLAUDE_CODE_ENTRYPOINT: "sdk",
+		CLAUDE_AGENT_SDK_VERSION: "0.3.220",
+		CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING: "1",
+		CLAUDE_CODE_SDK_HAS_OAUTH_REFRESH: "1",
+		CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH: "1",
+		CLAUDE_CODE_QUESTION_PREVIEW_FORMAT: "markdown",
+		CLAUDE_FAKE_SECRET: "unknown-sdk-looking-secret",
+		TRACEPARENT: "00-trace-id-should-drop",
+		NODE_OPTIONS: "--require /evil.js",
+		MY_CUSTOM_VAR: "configured-addition",
+		OPENAI_API_KEY: "sk-codex-should-not-reach-claude",
+		...overrides,
+	};
+}
+
+function plantGhConfig(directory: string, token: string): string {
+	mkdirSync(directory, { recursive: true });
+	const hosts = join(directory, "hosts.yml");
+	writeFileSync(hosts, `github.com:\n    oauth_token: ${token}\n    user: planted\n`);
+	return hosts;
 }
 
 describe("HARNESS_ONLY_SOCKET_ENVS", () => {
@@ -135,7 +242,7 @@ describe("buildClaudeSeatInvocation", () => {
 	it("emits the documented argv order, detached session, device-capable root bind, fresh proc, and -- separated command/args with spaces", () => {
 		const invocation = buildClaudeSeatInvocation(
 			{ command: "/opt/claude code/cli", args: ["--flag", "bar baz", "a;b"], cwd },
-			{ cwd, bwrap, socketPaths: ["/run/pelaggio-signer/sock"], home: "/home/operator", tmpdir: "/tmp", xdgRuntimeDir: "/run/user/1000", claudeConfigDir: "/home/operator/.claude" },
+			deniedBuildOpts({ cwd, bwrap, socketPaths: ["/run/pelaggio-signer/sock"], home: "/home/operator", tmpdir: "/tmp", xdgRuntimeDir: "/run/user/1000", claudeConfigDir: "/home/operator/.claude" }),
 		);
 		assert.equal(invocation.command, bwrap);
 		assert.deepEqual(invocation.args.slice(0, 9), ["--unshare-pid", "--new-session", "--die-with-parent", "--dev-bind", "/", "/", "--proc", "/proc", "--tmpfs"]);
@@ -152,13 +259,13 @@ describe("buildClaudeSeatInvocation", () => {
 	it("emits one tmpfs per unique allowed parent and keeps the outer parent when one prefixes another", () => {
 		const invocation = buildClaudeSeatInvocation(
 			{ command: "node", args: [], cwd },
-			{
+			deniedBuildOpts({
 				cwd,
 				bwrap,
 				socketPaths: ["/run/pelaggio-signer/sock", "/run/pelaggio-signer/nested/other.sock", "/run/pelaggio-other/sock"],
 				home: "/home/operator",
 				tmpdir: "/tmp",
-			},
+			}),
 		);
 		assert.deepEqual(tmpfsTargets(invocation.args), ["/run/pelaggio-other", "/run/pelaggio-signer"]);
 	});
@@ -166,12 +273,12 @@ describe("buildClaudeSeatInvocation", () => {
 	it("still emits --tmpfs when the dedicated parent does not exist on the host", () => {
 		const missingParent = join(tempDir("pelaggio-missing-parent-"), "dedicated");
 		const locator = join(missingParent, "sock");
-		const invocation = buildClaudeSeatInvocation({ command: "node", args: [], cwd }, { cwd, bwrap, socketPaths: [locator], home: "/home/operator", tmpdir: "/tmp" });
+		const invocation = buildClaudeSeatInvocation({ command: "node", args: [], cwd }, deniedBuildOpts({ cwd, bwrap, socketPaths: [locator], home: "/home/operator", tmpdir: "/tmp" }));
 		assert.deepEqual(tmpfsTargets(invocation.args), [missingParent]);
 	});
 
 	it("fails closed on relative, malformed, and wide protected paths", () => {
-		const opts = { cwd, bwrap, home: "/home/operator", tmpdir: "/tmp", xdgRuntimeDir: "/run/user/1000", claudeConfigDir: "/home/operator/.claude" };
+		const opts = deniedBuildOpts({ cwd, bwrap, home: "/home/operator", tmpdir: "/tmp", xdgRuntimeDir: "/run/user/1000", claudeConfigDir: "/home/operator/.claude" });
 		assert.throws(() => buildClaudeSeatInvocation({ command: "node", args: [], cwd }, { ...opts, socketPaths: ["run/pelaggio-signer/sock"] }), /path is not absolute/);
 		assert.throws(() => buildClaudeSeatInvocation({ command: "node", args: [], cwd }, { ...opts, socketPaths: ["/run/pelaggio-signer/sock\0hidden"] }), /forbidden characters/);
 		assert.throws(() => buildClaudeSeatInvocation({ command: "node", args: [], cwd }, { ...opts, socketPaths: ["/run/pelaggio-signer\\sock"] }), /forbidden characters/);
@@ -189,7 +296,7 @@ describe("buildClaudeSeatInvocation", () => {
 		const linkedParent = join(root, "signer");
 		symlinkSync("/", linkedParent);
 		assert.throws(
-			() => buildClaudeSeatInvocation({ command: "node", args: [], cwd: "/work/item" }, { cwd: "/work/item", bwrap, socketPaths: [join(linkedParent, "sock")], home: "/home/operator", tmpdir: "/var/tmp" }),
+			() => buildClaudeSeatInvocation({ command: "node", args: [], cwd: "/work/item" }, deniedBuildOpts({ cwd: "/work/item", bwrap, socketPaths: [join(linkedParent, "sock")], home: "/home/operator", tmpdir: "/var/tmp" })),
 			/parent directory is too wide to mask/,
 		);
 	});
@@ -198,7 +305,7 @@ describe("buildClaudeSeatInvocation", () => {
 		const previous = process.env.PELAGGIO_REVIEW_EVIDENCE_SIGNER_SOCKET;
 		process.env.PELAGGIO_REVIEW_EVIDENCE_SIGNER_SOCKET = "/run/pelaggio-signer/from-harness.sock";
 		try {
-			const invocation = buildClaudeSeatInvocation({ command: "node", args: [], cwd }, { cwd, bwrap, home: "/home/operator", tmpdir: "/tmp" });
+			const invocation = buildClaudeSeatInvocation({ command: "node", args: [], cwd }, deniedBuildOpts({ cwd, bwrap, home: "/home/operator", tmpdir: "/tmp" }));
 			assert.deepEqual(tmpfsTargets(invocation.args), ["/run/pelaggio-signer"]);
 		} finally {
 			if (previous === undefined) delete process.env.PELAGGIO_REVIEW_EVIDENCE_SIGNER_SOCKET;
@@ -222,11 +329,7 @@ describe("spawnClaudeSeat", () => {
 		}) as ClaudeSeatSpawner;
 		const reported: Array<{ pid: number; cwd: string }> = [];
 		const child = spawnClaudeSeat(spawnOpts({ cwd, env, signal, command: "node", args: ["--eval", "ok"] }), {
-			cwd,
-			bwrap: "/usr/bin/bwrap",
-			socketPaths: ["/run/pelaggio-signer/sock"],
-			home: "/home/operator",
-			tmpdir: "/tmp",
+			...deniedBuildOpts({ cwd, bwrap: "/usr/bin/bwrap", socketPaths: ["/run/pelaggio-signer/sock"], home: "/home/operator", tmpdir: "/tmp" }),
 			spawn: spawnFake,
 			stderr: stderrSink,
 			onChildSpawn: (info) => reported.push(info),
@@ -235,7 +338,9 @@ describe("spawnClaudeSeat", () => {
 		assert.equal(seen.length, 1);
 		assert.equal(seen[0]?.command, "/usr/bin/bwrap");
 		assert.equal(seen[0]?.options.cwd, cwd);
-		assert.equal(seen[0]?.options.env, env);
+		assert.notEqual(seen[0]?.options.env, env);
+		assert.equal(seen[0]?.options.env?.PATH, "/usr/bin");
+		assert.equal(seen[0]?.options.env?.CLAUDE_FROM_SDK, undefined);
 		assert.deepEqual(seen[0]?.options.stdio, ["pipe", "pipe", "pipe"]);
 		assert.equal(fakeStderr.readableFlowing, true, "the wrapper must drain custom-spawn stderr");
 		assert.equal(seen[0]?.options.signal, signal);
@@ -254,21 +359,20 @@ describe("spawnClaudeSeat", () => {
 		stderrSink.on("data", (chunk: Buffer) => {
 			written += chunk.toString();
 		});
-		spawnClaudeSeat(spawnOpts({ cwd, env: { PATH: "/usr/bin", ANTHROPIC_API_KEY: secret } }), {
-			cwd,
-			bwrap: "/usr/bin/bwrap",
-			home: "/home/operator",
-			tmpdir: "/tmp",
+		const forgeSecret = "planted-gh-token-only-in-sdk-bag";
+		spawnClaudeSeat(spawnOpts({ cwd, env: { PATH: "/usr/bin", ANTHROPIC_API_KEY: secret, GH_TOKEN: forgeSecret } }), {
+			...deniedBuildOpts({ cwd, bwrap: "/usr/bin/bwrap", home: "/home/operator", tmpdir: "/tmp" }),
 			spawn: (() => fakeChild) as ClaudeSeatSpawner,
 			stderr: stderrSink,
 		});
 
 		fakeStderr.write("driver stderr: planted-anthropic-");
-		fakeStderr.end("secret-value\n");
+		fakeStderr.end("secret-value and planted-gh-token-only-in-sdk-bag\n");
 		await new Promise<void>((done) => setImmediate(done));
 
 		assert.equal(written.includes(secret), false);
-		assert.equal(written, "driver stderr: [REDACTED]\n");
+		assert.equal(written.includes(forgeSecret), false);
+		assert.equal(written, "driver stderr: [REDACTED] and [REDACTED]\n");
 	});
 
 	it("does not invent harness locators onto spawnOpts.env and still wraps without onChildSpawn", () => {
@@ -282,7 +386,7 @@ describe("spawnClaudeSeat", () => {
 		const previous = process.env.PELAGGIO_REVIEW_EVIDENCE_SIGNER_SOCKET;
 		process.env.PELAGGIO_REVIEW_EVIDENCE_SIGNER_SOCKET = "/run/pelaggio-signer/harness.sock";
 		try {
-			spawnClaudeSeat(spawnOpts({ cwd, env }), { cwd, bwrap: "/usr/bin/bwrap", home: "/home/operator", tmpdir: "/tmp", spawn: spawnFake });
+			spawnClaudeSeat(spawnOpts({ cwd, env }), { ...deniedBuildOpts({ cwd, bwrap: "/usr/bin/bwrap", home: "/home/operator", tmpdir: "/tmp" }), spawn: spawnFake });
 		} finally {
 			if (previous === undefined) delete process.env.PELAGGIO_REVIEW_EVIDENCE_SIGNER_SOCKET;
 			else process.env.PELAGGIO_REVIEW_EVIDENCE_SIGNER_SOCKET = previous;
@@ -298,7 +402,7 @@ describe("spawnClaudeSeat", () => {
 		for (const pid of [undefined, 0, -1]) {
 			const reported: Array<{ pid: number; cwd: string }> = [];
 			const spawnFake = (() => ({ pid }) as ChildProcess) as ClaudeSeatSpawner;
-			spawnClaudeSeat(spawnOpts({ cwd }), { cwd, bwrap: "/usr/bin/bwrap", home: "/home/operator", tmpdir: "/tmp", spawn: spawnFake, onChildSpawn: (info) => reported.push(info) });
+			spawnClaudeSeat(spawnOpts({ cwd }), { ...deniedBuildOpts({ cwd, bwrap: "/usr/bin/bwrap", home: "/home/operator", tmpdir: "/tmp" }), spawn: spawnFake, onChildSpawn: (info) => reported.push(info) });
 			assert.deepEqual(reported, []);
 		}
 	});
@@ -307,13 +411,13 @@ describe("spawnClaudeSeat", () => {
 describe("preflightClaudeSeat", () => {
 	it("returns a confinement diagnostic on non-Linux or missing Bubblewrap without using reserved error words", () => {
 		const cwd = "/tmp/pelaggio-seat-work/item";
-		const missing = preflightClaudeSeat({ cwd, platform: "linux", pathValue: tempDir("pelaggio-preflight-missing-") });
+		const missing = preflightClaudeSeat({ cwd, step: "pr-review", platform: "linux", pathValue: tempDir("pelaggio-preflight-missing-") });
 		assert.equal(missing.ok, false);
 		if (!missing.ok) {
 			assert.match(missing.message, /Bubblewrap in a trusted system directory on PATH/);
 			assert.doesNotMatch(missing.message, /abort|budget|rate.?limit|usage.?limit|quota|max.*turns|turn.?limit/i);
 		}
-		const platform = preflightClaudeSeat({ cwd, platform: "darwin", pathValue: "/usr/bin" });
+		const platform = preflightClaudeSeat({ cwd, step: "pr-review", platform: "darwin", pathValue: "/usr/bin" });
 		assert.equal(platform.ok, false);
 		if (!platform.ok) {
 			assert.match(platform.message, /Linux with Bubblewrap/);
@@ -327,9 +431,11 @@ describe("preflightClaudeSeat", () => {
 		const bwrap = trustedSystemBwrap;
 		const result = preflightClaudeSeat({
 			cwd,
+			step: "pr-review",
 			platform: "linux",
 			pathValue: dirname(bwrap),
 			env: { PELAGGIO_REVIEW_EVIDENCE_SIGNER_SOCKET: "/tmp/sock" },
+			...isolatedHarnessPaths(),
 			home: "/home/operator",
 			tmpdir: "/tmp",
 		});
@@ -344,9 +450,11 @@ describe("preflightClaudeSeat", () => {
 		let probed = false;
 		const result = preflightClaudeSeat({
 			cwd: tempDir("pelaggio-preflight-cwd-"),
+			step: "pr-review",
 			platform: "linux",
 			pathValue: dirname(bwrap),
 			env: { PELAGGIO_REVIEW_EVIDENCE_SIGNER_SOCKET: join(missingParent, "sock") },
+			...isolatedHarnessPaths(),
 			home: "/home/operator",
 			tmpdir: "/tmp",
 			probe: () => {
@@ -367,11 +475,15 @@ describe("preflightClaudeSeat", () => {
 		let canaryPath: string | undefined;
 		const result = preflightClaudeSeat({
 			cwd,
+			step: "pr-review",
 			platform: "linux",
 			pathValue: dirname(bwrap),
 			env: {},
-			home: "/home/operator",
+			...isolatedHarnessPaths(),
+			home: join(scratch, "home-missing"),
 			tmpdir: scratch,
+			xdgConfigHome: join(scratch, "xdg-missing"),
+			ghConfigDir: join(scratch, "gh-missing"),
 			probe: (_command, args) => {
 				const commandArgs = afterSeparator(args);
 				assert.equal(commandArgs[0], process.execPath);
@@ -394,9 +506,11 @@ describe("preflightClaudeSeat", () => {
 		let canaryPath: string | undefined;
 		const result = preflightClaudeSeat({
 			cwd: tempDir("pelaggio-preflight-visible-cwd-"),
+			step: "pr-review",
 			platform: "linux",
 			pathValue: dirname(bwrap),
 			env: {},
+			...isolatedHarnessPaths(),
 			home: "/home/operator",
 			tmpdir: tempDir("pelaggio-preflight-visible-tmp-"),
 			probe: (_command, args, options) => {
@@ -417,9 +531,11 @@ describe("preflightClaudeSeat", () => {
 		const cwd = tempDir("pelaggio-preflight-ready-");
 		const result = preflightClaudeSeat({
 			cwd,
+			step: "pr-review",
 			platform: "linux",
 			pathValue: dirname(bwrap),
 			env: {},
+			...isolatedHarnessPaths(),
 			home: "/home/operator",
 			tmpdir: "/tmp",
 		});
@@ -432,9 +548,11 @@ describe("preflightClaudeSeat", () => {
 		const cwd = tempDir("pelaggio-preflight-namespace-");
 		const result = preflightClaudeSeat({
 			cwd,
+			step: "pr-review",
 			platform: "linux",
 			pathValue: dirname(bwrap),
 			env: {},
+			...isolatedHarnessPaths(),
 			home: "/home/operator",
 			tmpdir: "/tmp",
 			probe: () => ({ status: 1, stderr: "Creating new namespace failed: Operation not permitted" }),
@@ -449,15 +567,239 @@ describe("preflightClaudeSeat", () => {
 		const cwd = tempDir("pelaggio-preflight-spawn-");
 		const result = preflightClaudeSeat({
 			cwd,
+			step: "pr-review",
 			platform: "linux",
 			pathValue: dirname(bwrap),
 			env: {},
+			...isolatedHarnessPaths(),
 			home: "/home/operator",
 			tmpdir: "/tmp",
 			probe: () => ({ status: null, error: new Error("spawn denied") }),
 		});
 		assert.equal(result.ok, false);
 		if (!result.ok) assert.match(result.message, /could not run the Bubblewrap namespace probe: spawn denied/);
+	});
+});
+
+describe("claude seat forge-authority policy", () => {
+	it("classifies every current Step exhaustively: review/verify/author denied, pick/ship/shipwreck allowed", () => {
+		assert.deepEqual(
+			ALL_STEPS.map((step) => [step, claudeSeatHoldsForgeAuthority(step)]),
+			[
+				["pick", true],
+				["plan", false],
+				["shakedown-plan", false],
+				["implement", false],
+				["shakedown-code", false],
+				["ship", true],
+				["shipwreck", true],
+				["pr-review", false],
+				["pr-verify", false],
+			],
+		);
+		for (const step of DENIED_STEPS) assert.equal(claudeSeatHoldsForgeAuthority(step), false, step);
+		for (const step of FORGE_CAPABLE_STEPS) assert.equal(claudeSeatHoldsForgeAuthority(step), true, step);
+	});
+});
+
+describe("buildClaudeSeatEnv", () => {
+	const allow = ["MY_CUSTOM_VAR", "GH_TOKEN", "OPENAI_API_KEY"];
+	const source = sdkShapedEnv();
+
+	it("denied roles keep allowlisted/configured values, named SDK controls, and CLI auth, but drop forge/sentinel/unknown values", () => {
+		for (const step of ["pr-review", "pr-verify", "plan", "implement"] as const) {
+			const env = buildClaudeSeatEnv(source, step, allow);
+			assert.equal(env.PATH, "/usr/bin");
+			assert.equal(env.HOME, "/home/agent");
+			assert.equal(env.MY_CUSTOM_VAR, "configured-addition");
+			for (const name of CLAUDE_SDK_CONTROL_VARS) assert.equal(env[name], source[name], `${step} ${name}`);
+			for (const name of CLAUDE_CLI_AUTH_VARS) assert.equal(env[name], source[name], `${step} ${name}`);
+			for (const name of FORGE_REMOTE_VARS) assert.equal(name in env, false, `${step} must drop ${name}`);
+			assert.equal("SENTINEL_SECRET" in env, false);
+			assert.equal("CLAUDE_FAKE_SECRET" in env, false);
+			assert.equal("TRACEPARENT" in env, false);
+			assert.equal("NODE_OPTIONS" in env, false);
+			assert.equal("OPENAI_API_KEY" in env, false);
+		}
+	});
+
+	it("forge-capable roles retain explicitly permitted forge inputs plus CLI auth names", () => {
+		for (const step of FORGE_CAPABLE_STEPS) {
+			const env = buildClaudeSeatEnv(source, step, allow);
+			for (const name of CLAUDE_CLI_AUTH_VARS) assert.equal(env[name], source[name], `${step} ${name}`);
+			assert.equal(env.GH_TOKEN, source.GH_TOKEN);
+			assert.equal(env.GITHUB_TOKEN, source.GITHUB_TOKEN);
+			assert.equal(env.GH_ENTERPRISE_TOKEN, source.GH_ENTERPRISE_TOKEN);
+			assert.equal(env.GITHUB_ENTERPRISE_TOKEN, source.GITHUB_ENTERPRISE_TOKEN);
+			assert.equal(env.LINEAR_API_KEY, source.LINEAR_API_KEY);
+			assert.equal(env.SSH_AUTH_SOCK, source.SSH_AUTH_SOCK);
+			assert.equal(env.GH_CONFIG_DIR, source.GH_CONFIG_DIR);
+			assert.equal(env.GH_HOST, source.GH_HOST);
+			assert.equal(env.GH_ENTERPRISE_HOST, source.GH_ENTERPRISE_HOST);
+			assert.equal("SENTINEL_SECRET" in env, false);
+			assert.equal("CLAUDE_FAKE_SECRET" in env, false);
+			assert.equal("TRACEPARENT" in env, false);
+			assert.equal("NODE_OPTIONS" in env, false);
+		}
+	});
+});
+
+describe("spawnClaudeSeat filtered environment", () => {
+	it("passes a filtered copy to spawn() for denied roles and does not mutate the SDK bag", () => {
+		const cwd = resolve(tempDir("pelaggio-seat-env-"));
+		const env = sdkShapedEnv();
+		const seen: Array<{ options: { env?: NodeJS.ProcessEnv } }> = [];
+		const spawnFake = ((_command: string, _args: readonly string[], options: { env?: NodeJS.ProcessEnv }) => {
+			seen.push({ options });
+			return { pid: 7, stderr: new PassThrough() } as unknown as ChildProcess;
+		}) as ClaudeSeatSpawner;
+		spawnClaudeSeat(spawnOpts({ cwd, env }), {
+			...deniedBuildOpts({ cwd, bwrap: "/usr/bin/bwrap", home: "/home/operator", tmpdir: "/tmp" }),
+			step: "pr-verify",
+			envAllowlist: ["MY_CUSTOM_VAR", "GH_TOKEN"],
+			spawn: spawnFake,
+			stderr: new PassThrough(),
+		});
+		assert.equal(seen.length, 1);
+		const childEnv = seen[0]?.options.env ?? {};
+		assert.notEqual(childEnv, env);
+		assert.equal(childEnv.PATH, "/usr/bin");
+		assert.equal(childEnv.MY_CUSTOM_VAR, "configured-addition");
+		assert.equal(childEnv.ANTHROPIC_API_KEY, env.ANTHROPIC_API_KEY);
+		assert.equal(childEnv.CLAUDE_CODE_ENTRYPOINT, "sdk");
+		assert.equal("GH_TOKEN" in childEnv, false);
+		assert.equal("SENTINEL_SECRET" in childEnv, false);
+		assert.equal("CLAUDE_FAKE_SECRET" in childEnv, false);
+		assert.equal(env.GH_TOKEN, "ghp_forge_token_env_value");
+	});
+
+	it("preserves forge credentials for pick/ship/shipwreck spawn bags", () => {
+		const cwd = resolve(tempDir("pelaggio-seat-forge-env-"));
+		for (const step of FORGE_CAPABLE_STEPS) {
+			const env = sdkShapedEnv();
+			const seen: Array<{ options: { env?: NodeJS.ProcessEnv } }> = [];
+			const spawnFake = ((_command: string, _args: readonly string[], options: { env?: NodeJS.ProcessEnv }) => {
+				seen.push({ options });
+				return { pid: 8, stderr: new PassThrough() } as unknown as ChildProcess;
+			}) as ClaudeSeatSpawner;
+			spawnClaudeSeat(spawnOpts({ cwd, env }), {
+				...deniedBuildOpts({ cwd, bwrap: "/usr/bin/bwrap", home: "/home/operator", tmpdir: "/tmp" }),
+				step,
+				spawn: spawnFake,
+				stderr: new PassThrough(),
+			});
+			assert.equal(seen[0]?.options.env?.GH_TOKEN, env.GH_TOKEN, step);
+			assert.equal(seen[0]?.options.env?.ANTHROPIC_API_KEY, env.ANTHROPIC_API_KEY, step);
+		}
+	});
+});
+
+describe("preflightClaudeSeat filtered probe env", () => {
+	it("filters the probe environment the same way as production spawn", { skip: trustedSystemBwrap === undefined }, () => {
+		assert.ok(trustedSystemBwrap);
+		const bwrap = trustedSystemBwrap;
+		const isolated = isolatedHarnessPaths();
+		let probeEnv: NodeJS.ProcessEnv | undefined;
+		const result = preflightClaudeSeat({
+			cwd: tempDir("pelaggio-preflight-env-cwd-"),
+			step: "pr-review",
+			platform: "linux",
+			pathValue: dirname(bwrap),
+			env: sdkShapedEnv(),
+			...isolated,
+			tmpdir: tempDir("pelaggio-preflight-env-tmp-"),
+			envAllowlist: ["MY_CUSTOM_VAR", "GH_TOKEN"],
+			probe: (_command, _args, options) => {
+				probeEnv = options.env;
+				return { status: 0 };
+			},
+		});
+		assert.deepEqual(result, { ok: true, bwrap });
+		assert.ok(probeEnv);
+		assert.equal(probeEnv.MY_CUSTOM_VAR, "configured-addition");
+		assert.equal(probeEnv.ANTHROPIC_API_KEY, "sk-ant-cli-auth-value");
+		assert.equal("GH_TOKEN" in probeEnv, false);
+		assert.equal("SENTINEL_SECRET" in probeEnv, false);
+	});
+});
+
+describe("GitHub credential-directory masks", () => {
+	const bwrap = "/usr/bin/bwrap";
+	const cwd = "/tmp/pelaggio-seat-work/item";
+
+	it("denied invocations mask every existing canonical GitHub config directory once", () => {
+		const homeRoot = tempDir("pelaggio-gh-home-");
+		const xdgRoot = tempDir("pelaggio-gh-xdg-");
+		const ghRoot = tempDir("pelaggio-gh-config-");
+		const homeGh = join(homeRoot, ".config", "gh");
+		const xdgGh = join(xdgRoot, "gh");
+		plantGhConfig(homeGh, "planted-home-config-token");
+		plantGhConfig(xdgGh, "planted-xdg-config-token");
+		plantGhConfig(ghRoot, "planted-gh-config-dir-token");
+		const invocation = buildClaudeSeatInvocation(
+			{ command: "node", args: [], cwd },
+			deniedBuildOpts({
+				cwd,
+				bwrap,
+				step: "pr-verify",
+				socketPaths: [],
+				home: homeRoot,
+				xdgConfigHome: xdgRoot,
+				ghConfigDir: ghRoot,
+				tmpdir: "/tmp",
+			}),
+		);
+		assert.deepEqual(
+			tmpfsTargets(invocation.args),
+			[resolve(ghRoot), resolve(homeGh), resolve(xdgGh)].sort((a, b) => a.localeCompare(b)),
+		);
+		assert.deepEqual(invocation.maskedDirectories, tmpfsTargets(invocation.args));
+	});
+
+	it("forge-capable invocations do not mask GitHub credential directories", () => {
+		const homeRoot = tempDir("pelaggio-gh-pick-home-");
+		const ghRoot = tempDir("pelaggio-gh-pick-config-");
+		plantGhConfig(join(homeRoot, ".config", "gh"), "planted-home-config-token");
+		plantGhConfig(ghRoot, "planted-gh-config-dir-token");
+		for (const step of FORGE_CAPABLE_STEPS) {
+			const invocation = buildClaudeSeatInvocation(
+				{ command: "node", args: [], cwd },
+				deniedBuildOpts({
+					cwd,
+					bwrap,
+					step,
+					socketPaths: ["/run/pelaggio-signer/sock"],
+					home: homeRoot,
+					xdgConfigHome: join(homeRoot, "xdg-missing"),
+					ghConfigDir: ghRoot,
+					tmpdir: "/tmp",
+				}),
+			);
+			assert.deepEqual(tmpfsTargets(invocation.args), ["/run/pelaggio-signer"], step);
+		}
+	});
+
+	it("missing GitHub config directories are skipped rather than failing closed", () => {
+		const isolated = isolatedHarnessPaths();
+		const invocation = buildClaudeSeatInvocation({ command: "node", args: [], cwd }, deniedBuildOpts({ cwd, bwrap, socketPaths: ["/run/pelaggio-signer/sock"], ...isolated, home: "/home/operator", tmpdir: "/tmp" }));
+		assert.deepEqual(tmpfsTargets(invocation.args), ["/run/pelaggio-signer"]);
+	});
+
+	it("fails closed on malformed, relative, non-directory, and wide GitHub credential targets", () => {
+		const fileTarget = join(tempDir("pelaggio-gh-file-"), "hosts.yml");
+		writeFileSync(fileTarget, "not-a-directory\n");
+		assert.throws(() => buildClaudeSeatInvocation({ command: "node", args: [], cwd }, deniedBuildOpts({ cwd, bwrap, home: "/home/operator", tmpdir: "/tmp", ghConfigDir: "relative/gh" })), /path is not absolute/);
+		assert.throws(() => buildClaudeSeatInvocation({ command: "node", args: [], cwd }, deniedBuildOpts({ cwd, bwrap, home: "/home/operator", tmpdir: "/tmp", ghConfigDir: "/tmp/gh\0hidden" })), /forbidden characters/);
+		assert.throws(() => buildClaudeSeatInvocation({ command: "node", args: [], cwd }, deniedBuildOpts({ cwd, bwrap, home: "/home/operator", tmpdir: "/tmp", ghConfigDir: "/tmp/../etc/gh" })), /reserved segments/);
+		assert.throws(() => buildClaudeSeatInvocation({ command: "node", args: [], cwd }, deniedBuildOpts({ cwd, bwrap, home: "/home/operator", tmpdir: "/tmp", ghConfigDir: fileTarget })), /not a directory/);
+		assert.throws(() => buildClaudeSeatInvocation({ command: "node", args: [], cwd }, deniedBuildOpts({ cwd, bwrap, home: "/home/operator", tmpdir: "/tmp", ghConfigDir: "/tmp" })), /too wide to mask/);
+	});
+
+	it("fails closed when a GitHub credential directory symlink resolves to a wide root", () => {
+		const root = tempDir("pelaggio-gh-link-");
+		const linked = join(root, "gh");
+		symlinkSync("/", linked);
+		assert.throws(() => buildClaudeSeatInvocation({ command: "node", args: [], cwd }, deniedBuildOpts({ cwd, bwrap, home: "/home/operator", tmpdir: "/var/tmp", ghConfigDir: linked })), /too wide to mask/);
 	});
 });
 
@@ -553,11 +895,7 @@ function connect(options) {
 				signal: new AbortController().signal,
 			},
 			{
-				cwd: worktree,
-				bwrap,
-				socketPaths: [socketPath],
-				home: "/home/operator",
-				tmpdir: "/tmp",
+				...deniedBuildOpts({ cwd: worktree, bwrap, socketPaths: [socketPath], home: "/home/operator", tmpdir: "/tmp" }),
 				onChildSpawn: (info) => reported.push(info),
 			},
 		) as unknown as ChildProcess;
@@ -594,4 +932,207 @@ function connect(options) {
 		assert.equal(result.ignoredStdio, "ok");
 		assert.equal(readFileSync(join(worktree, "seat-probe-write.txt"), "utf8"), "ok");
 	});
+
+	it("denies a production-shaped status-post from pr-review and pr-verify seats", { timeout: 15_000 }, async () => {
+		for (const step of ["pr-review", "pr-verify"] as const) {
+			const result = await runStatusForgeryProbe(step);
+			assert.deepEqual(result.hits, [], `${step} must not post a status`);
+			assert.equal(result.observed.env.GH_TOKEN, null, step);
+			assert.equal(result.observed.env.GITHUB_TOKEN, null, step);
+			assert.equal(result.observed.env.GH_ENTERPRISE_TOKEN, null, step);
+			assert.equal(result.observed.env.GITHUB_ENTERPRISE_TOKEN, null, step);
+			assert.equal(result.observed.env.ANTHROPIC_API_KEY, result.anthropicKey, `${step} still receives CLI auth`);
+			assert.equal(result.observed.hosts.home, "ENOENT");
+			assert.equal(result.observed.hosts.xdg, "ENOENT");
+			assert.equal(result.observed.hosts.ghConfig, "ENOENT");
+			for (const token of result.plantedTokens) {
+				assert.equal(JSON.stringify(result.observed).includes(token), false, `${step} leaked ${token}`);
+			}
+		}
+	});
+
+	it("preserves planted GitHub credentials for pick, ship, and shipwreck", { timeout: 15_000 }, async () => {
+		for (const step of FORGE_CAPABLE_STEPS) {
+			const result = await runStatusForgeryProbe(step);
+			assert.equal(result.hits.length, 1, `${step} must be able to post with a planted token`);
+			assert.match(result.hits[0] ?? "", /Authorization: token planted-env-gh-token-value-xx/);
+			assert.equal(result.observed.env.GH_TOKEN, "planted-env-gh-token-value-xx", step);
+			assert.equal(result.observed.env.ANTHROPIC_API_KEY, result.anthropicKey, step);
+			assert.match(result.observed.hosts.home, /planted-home-config-token-xx/);
+			assert.match(result.observed.hosts.xdg, /planted-xdg-config-token-xx/);
+			assert.match(result.observed.hosts.ghConfig, /planted-gh-config-dir-token-xx/);
+		}
+	});
 });
+
+async function runStatusForgeryProbe(step: Step): Promise<{
+	hits: string[];
+	anthropicKey: string;
+	plantedTokens: string[];
+	observed: {
+		env: { GH_TOKEN: string | null; GITHUB_TOKEN: string | null; GH_ENTERPRISE_TOKEN: string | null; GITHUB_ENTERPRISE_TOKEN: string | null; ANTHROPIC_API_KEY: string | null };
+		hosts: { home: string; xdg: string; ghConfig: string };
+		ghStatus: number | null;
+	};
+}> {
+	const bwrap = resolveClaudeSeatBwrap();
+	const worktree = tempDir(`pelaggio-seat-forge-${step}-`);
+	const homeRoot = tempDir(`pelaggio-seat-forge-home-${step}-`);
+	const xdgRoot = tempDir(`pelaggio-seat-forge-xdg-${step}-`);
+	const ghRoot = tempDir(`pelaggio-seat-forge-gh-${step}-`);
+	const homeHosts = plantGhConfig(join(homeRoot, ".config", "gh"), "planted-home-config-token-xx");
+	const xdgHosts = plantGhConfig(join(xdgRoot, "gh"), "planted-xdg-config-token-xx");
+	const ghHosts = plantGhConfig(ghRoot, "planted-gh-config-dir-token-xx");
+	const anthropicKey = "sk-ant-review-seat-auth-xx";
+	const plantedTokens = [
+		"planted-env-gh-token-value-xx",
+		"planted-env-github-token-xx",
+		"planted-env-ghe-token-xx",
+		"planted-env-ghe-github-token-xx",
+		"planted-home-config-token-xx",
+		"planted-xdg-config-token-xx",
+		"planted-gh-config-dir-token-xx",
+	];
+
+	const hits: string[] = [];
+	const httpServer = createHttpServer((req: IncomingMessage, res: ServerResponse) => {
+		const chunks: Buffer[] = [];
+		req.on("data", (chunk: Buffer) => chunks.push(chunk));
+		req.on("end", () => {
+			hits.push(`${req.method} ${req.url} Authorization: ${req.headers.authorization ?? ""} ${Buffer.concat(chunks).toString("utf8")}`);
+			res.writeHead(201);
+			res.end("created");
+		});
+	});
+	httpServers.push(httpServer);
+	const mockPort = await new Promise<number>((done, reject) => {
+		httpServer.once("error", reject);
+		httpServer.listen(0, "127.0.0.1", () => {
+			const address = httpServer.address();
+			if (address && typeof address === "object") done(address.port);
+			else reject(new Error("status mock did not bind a port"));
+		});
+	});
+
+	const binDir = join(worktree, "bin");
+	mkdirSync(binDir, { recursive: true });
+	const ghJs = join(worktree, "gh-double.cjs");
+	writeFileSync(
+		ghJs,
+		`
+const { readFileSync } = require("node:fs");
+const { request } = require("node:http");
+const { join } = require("node:path");
+function tokenFromEnv() {
+	return process.env.GH_TOKEN || process.env.GITHUB_TOKEN || process.env.GH_ENTERPRISE_TOKEN || process.env.GITHUB_ENTERPRISE_TOKEN || "";
+}
+function tokenFromConfig() {
+	const candidates = [];
+	if (process.env.GH_CONFIG_DIR) candidates.push(join(process.env.GH_CONFIG_DIR, "hosts.yml"));
+	if (process.env.XDG_CONFIG_HOME) candidates.push(join(process.env.XDG_CONFIG_HOME, "gh", "hosts.yml"));
+	if (process.env.HOME) candidates.push(join(process.env.HOME, ".config", "gh", "hosts.yml"));
+	for (const file of candidates) {
+		try {
+			const match = readFileSync(file, "utf8").match(/oauth_token:\\s*(\\S+)/);
+			if (match) return match[1];
+		} catch {}
+	}
+	return "";
+}
+const args = process.argv.slice(2);
+const isStatusPost = args[0] === "api" && args.some((arg) => arg.includes("/statuses/")) && args.includes("-X") && args.includes("POST");
+const token = tokenFromEnv() || tokenFromConfig();
+if (!isStatusPost || !token) {
+	process.stderr.write("gh: no usable GitHub credential\\n");
+	process.exit(1);
+}
+request({ host: "127.0.0.1", port: ${mockPort}, path: "/status-forge", method: "POST", headers: { Authorization: "token " + token } }, (res) => {
+	res.resume();
+	res.on("end", () => process.exit(res.statusCode === 201 ? 0 : 2));
+}).end("state=success&context=review");
+`,
+	);
+	writeFileSync(join(binDir, "gh"), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(ghJs)} "$@"\n`);
+	chmodSync(join(binDir, "gh"), 0o755);
+
+	const probe = join(worktree, "status-forge-probe.cjs");
+	writeFileSync(
+		probe,
+		`
+const { readFileSync } = require("node:fs");
+const { spawnSync } = require("node:child_process");
+function tryRead(path) {
+	try { return readFileSync(path, "utf8"); }
+	catch (error) { return error && error.code ? error.code : String(error); }
+}
+const [homeHosts, xdgHosts, ghHosts] = process.argv.slice(2);
+const gh = spawnSync("gh", ["api", "repos/owner/repo/statuses/deadbeef0123456789", "-X", "POST", "-f", "state=success", "-f", "context=review"], { encoding: "utf8" });
+process.stdout.write(JSON.stringify({
+	env: {
+		GH_TOKEN: process.env.GH_TOKEN || null,
+		GITHUB_TOKEN: process.env.GITHUB_TOKEN || null,
+		GH_ENTERPRISE_TOKEN: process.env.GH_ENTERPRISE_TOKEN || null,
+		GITHUB_ENTERPRISE_TOKEN: process.env.GITHUB_ENTERPRISE_TOKEN || null,
+		ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || null,
+	},
+	hosts: { home: tryRead(homeHosts), xdg: tryRead(xdgHosts), ghConfig: tryRead(ghHosts) },
+	ghStatus: gh.status,
+}) + "\\n");
+`,
+	);
+
+	const child = spawnClaudeSeat(
+		{
+			command: process.execPath,
+			args: [probe, homeHosts, xdgHosts, ghHosts],
+			cwd: worktree,
+			env: {
+				PATH: `${binDir}:/usr/bin`,
+				HOME: homeRoot,
+				XDG_CONFIG_HOME: xdgRoot,
+				GH_CONFIG_DIR: ghRoot,
+				GH_TOKEN: "planted-env-gh-token-value-xx",
+				GITHUB_TOKEN: "planted-env-github-token-xx",
+				GH_ENTERPRISE_TOKEN: "planted-env-ghe-token-xx",
+				GITHUB_ENTERPRISE_TOKEN: "planted-env-ghe-github-token-xx",
+				ANTHROPIC_API_KEY: anthropicKey,
+			},
+			signal: new AbortController().signal,
+		},
+		deniedBuildOpts({
+			cwd: worktree,
+			bwrap,
+			step,
+			socketPaths: [],
+			home: homeRoot,
+			xdgConfigHome: xdgRoot,
+			ghConfigDir: ghRoot,
+			tmpdir: "/tmp",
+		}),
+	) as unknown as ChildProcess;
+	children.push(child);
+
+	let stdout = "";
+	let stderr = "";
+	child.stdout?.on("data", (chunk: Buffer) => {
+		stdout += chunk.toString();
+	});
+	child.stderr?.on("data", (chunk: Buffer) => {
+		stderr += chunk.toString();
+	});
+	const code = await new Promise<number | null>((done, reject) => {
+		child.once("error", reject);
+		child.once("exit", (exitCode) => done(exitCode));
+	});
+	assert.equal(code, 0, `${step} probe failed (${code}): ${stderr}\n${stdout}`);
+	return {
+		hits,
+		anthropicKey,
+		plantedTokens,
+		observed: JSON.parse(stdout.trim()) as {
+			env: { GH_TOKEN: string | null; GITHUB_TOKEN: string | null; GH_ENTERPRISE_TOKEN: string | null; GITHUB_ENTERPRISE_TOKEN: string | null; ANTHROPIC_API_KEY: string | null };
+			hosts: { home: string; xdg: string; ghConfig: string };
+			ghStatus: number | null;
+		},
+	};
+}

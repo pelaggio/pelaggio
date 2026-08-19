@@ -243,15 +243,16 @@ function renderPass(pass: ReviewPass): string {
 	}
 	// No structured report → discovery parse failure or infra failure. This comment is PUBLIC (and
 	// mirrored to CI stdout), so it must carry NEITHER `result.text` NOR `modelAuthoredText` NOR any
-	// value DERIVED from model output: the pr-review seat is handed real inherited credentials
-	// (ANTHROPIC_API_KEY / GH_TOKEN — see .github/workflows/pr-review.yml), and a prompt-injected PR
-	// can make the seat pad malformed output so that any output-derived number (a length, a marker
-	// offset/count, a fence size) encodes credential bytes — a covert channel scrubbing cannot reverse
-	// (#484 red-team; #536 findings B/C). Even the CHOICE among specific parse codes is such a channel
-	// (a model selects WHICH failure to emit), so the public comment surfaces ONLY the invariant parse
+	// value DERIVED from model output. The pr-review / pr-verify seat is denied forge credentials
+	// (no GH_TOKEN / gh store); the outer CLI and workflow keep those for harness-owned comment and
+	// status effects. The seat still receives Anthropic CLI auth (ANTHROPIC_API_KEY and the other
+	// SDK-listed names) because the child is the Claude Code CLI. A prompt-injected PR can still pad
+	// malformed output so that any output-derived number encodes residual model-key bytes — a covert
+	// channel scrubbing cannot reverse (#484 red-team; #536 findings B/C). Even the CHOICE among
+	// specific parse codes is such a channel, so the public comment surfaces ONLY the invariant parse
 	// diagnosis: the fixed phase enum + the SINGLE constant `parse-failure` code, never the specific
-	// ReviewFindingsParseErrorCode. #554 (jailing the seat so it holds no real credential) is what lets
-	// the specific code + richer diagnosis publish safely; until then this sink is invariant.
+	// ReviewFindingsParseErrorCode. #554 closed the forge-status path; this sink stays invariant as
+	// defense in depth for leftover CLI auth (#536 / #572).
 	const diagnosis = pass.parseFailureDiagnosis
 		? ["", "Parse diagnosis (invariant: phase + a single constant `parse-failure` code, never the specific parse error; no model output retained — #536/#554):", "", `<pre>${escapeHtml(pass.parseFailureDiagnosis)}</pre>`]
 		: [];
@@ -537,11 +538,11 @@ function driverIdentity(candidate: StepSettings): ReviewDriverIdentity {
  * The SINGLE invariant code published for EVERY model parse failure. The specific
  * ReviewFindingsParseErrorCode (block-not-found / unknown-key / invalid-json / invalid-severity /
  * schema-example-parroted / …) is deliberately WITHHELD from the retained/published sinks because the
- * seat holds real credentials and even the CHOICE among error codes is a covert channel — a
- * prompt-injected model selects WHICH failure to emit, encoding secret bits into stderr + the public
- * comment. The enum + `parseFailureCode` classifier stay in review/findings.ts as correct
- * infrastructure; #554 (jailing the verifier so it holds no real credential) is what lets the specific
- * code + a richer diagnosis publish safely.
+ * seat still receives Anthropic CLI auth and even the CHOICE among error codes is a covert channel — a
+ * prompt-injected model selects WHICH failure to emit, encoding residual model-key bits into stderr +
+ * the public comment. The enum + `parseFailureCode` classifier stay in review/findings.ts as correct
+ * infrastructure; #554 removed forge tokens from the seat, but leftover CLI auth means the specific
+ * code + a richer diagnosis still must not publish (#536 / #572).
  */
 const PUBLISHED_PARSE_FAILURE_CODE = "parse-failure";
 
@@ -552,16 +553,16 @@ const PUBLISHED_PARSE_FAILURE_CODE = "parse-failure";
  * SECURITY (#536 / #554): this reads NOTHING from the model's output. It carries only two closed-set,
  * harness-authored values — the fixed `phase` enum (discovery | verification, chosen by the harness,
  * never derived from output) and the SINGLE constant `parse-failure` code (never the specific
- * ReviewFindingsParseErrorCode). The pr-review / pr-verify seat is handed REAL inherited credentials
- * (ANTHROPIC_API_KEY / GH_TOKEN — see .github/workflows/pr-review.yml), and a prompt-injected seat can
- * base64/hex-encode a secret into malformed output. ANY value DERIVED from that output — a length, a
- * marker offset/count, a fence size, a trailing-byte count, a marker-present boolean — is a
- * padding-based COVERT CHANNEL, and so is the CHOICE among distinct error codes (the model selects
- * which failure to emit); neither literal-value nor credential-pattern scrubbing can reverse either
- * (verified finding). So the retention path is deliberately invariant: only `phase` and the one
- * constant code, no length, index, count, output-derived boolean, or model-selectable code is
- * computed. #554 (jailing the seat so it holds NO real credential) is what lets richer, output-derived
- * or code-specific diagnosis return safely; until it lands, this sink stays phase-and-invariant-code-only.
+ * ReviewFindingsParseErrorCode). The pr-review / pr-verify seat is denied GH_TOKEN and the gh store;
+ * the workflow/outer CLI retain those for harness-owned effects. The seat still receives Anthropic
+ * CLI auth (ANTHROPIC_API_KEY — see .github/workflows/pr-review.yml) so the Claude Code CLI can run,
+ * and a prompt-injected seat can base64/hex-encode that residual secret into malformed output. ANY
+ * value DERIVED from that output — a length, a marker offset/count, a fence size, a trailing-byte
+ * count, a marker-present boolean — is a padding-based COVERT CHANNEL, and so is the CHOICE among
+ * distinct error codes (the model selects which failure to emit); neither literal-value nor
+ * credential-pattern scrubbing can reverse either (verified finding). So the retention path stays
+ * invariant: only `phase` and the one constant code. #554 closed forge-status posting; leftover CLI
+ * auth keeps this sink phase-and-invariant-code-only (#536 / #572).
  */
 function structuralParseFailureDiagnosis(phase: "discovery" | "verification"): string {
 	// Closed set only: the fixed phase enum + the single invariant code. Nothing here is read from or
