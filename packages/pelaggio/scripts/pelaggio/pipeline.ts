@@ -2725,6 +2725,16 @@ export function remotePushWarning(name: ShipTargetName): string | null {
 	return [A.yellow(A.bold(`⚠  ship.target = ${name} — autonomous remote push`)), A.yellow(`   ${body}`), A.yellow(`   To keep a review gate, set  ship: { target: ${DEFAULT_SHIP_TARGET} }  in .pelaggio.yml.`)].join("\n");
 }
 
+/** Retryable process status for a parked handback; 75 is the conventional EX_TEMPFAIL. */
+export const PARKED_EXIT_CODE = 75;
+
+function hasUnresolvedPark(results: CycleResult[]): boolean {
+	// A later attempt for the same item resolves its earlier parked result.
+	const latestByItem = new Map<string | null, CycleResult>();
+	for (const result of results) latestByItem.set(result.itemId, result);
+	return [...latestByItem.values()].some((result) => result.error === "parked");
+}
+
 export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {}, statusBar: StatusBar = new StatusBar(), signal?: AbortSignal): Promise<{ exitCode: number; results: CycleResult[] }> {
 	const _runPipeline = deps.runPipeline ?? runPipeline;
 	const _detectResumeStep = deps.detectResumeStep ?? detectResumeStep;
@@ -3829,7 +3839,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					console.log("");
 					console.log(`${A.yellow("⏸")} ${parkSignal.limitType} limit hit — auto-resume disabled`);
 					printOperatorHandback();
-					return { exitCode: 1, results };
+					return { exitCode: PARKED_EXIT_CODE, results };
 				}
 				let round = 0;
 				while (parkSignal.parked && round < MAX_RESUME_ROUNDS) {
@@ -3837,7 +3847,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					const outcome = await awaitParkReset(parkSignal, { maxWaitMs, itemsLabel: id });
 					if (outcome === "handback") {
 						printOperatorHandback();
-						return { exitCode: 1, results };
+						return { exitCode: PARKED_EXIT_CODE, results };
 					}
 					emitResumed();
 					console.log(`\n${A.green("▶")} ${A.bold("Resuming")} ${id}...`);
@@ -3846,7 +3856,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				if (parkSignal.parked) {
 					console.log(`${A.yellow("⏸")} auto-resume round cap (${MAX_RESUME_ROUNDS}) reached — leaving remaining items parked`);
 					printOperatorHandback();
-					return { exitCode: 1, results };
+					return { exitCode: PARKED_EXIT_CODE, results };
 				}
 			}
 
@@ -3859,11 +3869,11 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				// 0 would falsely report delivery-complete and bypass park handling.
 				if (parkSignal.parked) {
 					console.log(`${A.yellow("⚠")} post-resume review drain parked — review status still pending; re-run --resume ${id} after the limit clears`);
-					return { exitCode: 1, results };
+					return { exitCode: PARKED_EXIT_CODE, results };
 				}
 			}
 			const last = results[results.length - 1];
-			return { exitCode: last?.completed ? 0 : 1, results };
+			return { exitCode: parkSignal.parked || hasUnresolvedPark(results) ? PARKED_EXIT_CODE : last?.completed ? 0 : 1, results };
 		}
 
 		// Campaign-start drain: cold-start backlog + statusless PRs from prior runs (all modes incl.
@@ -4029,7 +4039,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				// review sweep parked and handed back (its pending PRs retry on the next run), or a manual
 				// pause fired before any work started.
 				console.log(`${A.yellow("⏸")} Rate limit hit but no items to resume (any pending local review retries on the next run).`);
-				return { exitCode: 1, results };
+				return { exitCode: receiptUndurable || campaignHalted ? 1 : PARKED_EXIT_CODE, results };
 			}
 
 			// Off-switch: auto-resume disabled → report parked items and hand the prompt back.
@@ -4038,7 +4048,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				console.log(`${A.yellow("⏸")} ${parkSignal.limitType} limit hit — auto-resume disabled`);
 				console.log(`  Parked: ${pending.join(", ")}`);
 				console.log(`  Resume: ${A.bold(formatResumeHint(pending))}`);
-				return { exitCode: 1, results };
+				return { exitCode: receiptUndurable || campaignHalted ? 1 : PARKED_EXIT_CODE, results };
 			}
 
 			let round = 0;
@@ -4121,14 +4131,15 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 
 		// A review drain that parked left a required review status pending (#387):
 		// completed cycles alone must not report delivery-complete over it.
-		if (doReviewDrain && parkSignal.parked) {
-			console.log(`${A.yellow("⚠")} review drain parked — one or more review statuses still pending; re-run after the limit clears`);
-			return { exitCode: 1, results };
-		}
 		if (receiptUndurable) {
 			console.log(`${A.yellow("⚠")} day-budget ledger became unwritable mid-run — spend after that point is not reconstructable; fix permissions before the next run`);
 			return { exitCode: 1, results };
 		}
+		if (doReviewDrain && parkSignal.parked) {
+			console.log(`${A.yellow("⚠")} review drain parked — one or more review statuses still pending; re-run after the limit clears`);
+			return { exitCode: campaignHalted ? 1 : PARKED_EXIT_CODE, results };
+		}
+		if (!campaignHalted && (parkSignal.parked || hasUnresolvedPark(results))) return { exitCode: PARKED_EXIT_CODE, results };
 		return { exitCode: results.every((r) => r.completed) ? 0 : 1, results };
 	} finally {
 		process.off("SIGUSR2", onPause);

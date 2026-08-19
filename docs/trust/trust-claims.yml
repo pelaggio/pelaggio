@@ -167,7 +167,7 @@ claims:
     evidence_command: "node --import tsx --test packages/pelaggio/scripts/pelaggio/__tests__/secret-hygiene.test.ts"
     test_file: "packages/pelaggio/scripts/pelaggio/__tests__/secret-hygiene.test.ts"
     failure_mode: "deny-by-default env; redacted before write"
-    known_limits: "The env allowlist covers ordinary spawned drivers; Grok uses the stricter TC-018 contained environment instead. Pelaggio's own git/gh helpers still use the repo env by design. Scrubbing is pattern- and configured-value-based, so a novel unknown credential format could still reach a log."
+    known_limits: "The env allowlist covers ordinary spawned drivers; Grok uses the stricter TC-019 contained environment instead. Pelaggio's own git/gh helpers still use the repo env by design. Scrubbing is pattern- and configured-value-based, so a novel unknown credential format could still reach a log."
     standards: ["OWASP-LLM02", "12FACTOR-Config"]
     adr: "ADR-10"
     last_verified: "2026-07-18"
@@ -209,12 +209,26 @@ claims:
     evidence_command: "PELAGGIO_REPO=$PWD node --import tsx --test --test-reporter=dot packages/pelaggio/scripts/pelaggio/__tests__/egress-broker.test.ts packages/pelaggio/scripts/pelaggio/__tests__/contained-execution.test.ts"
     test_file: "packages/pelaggio/scripts/pelaggio/__tests__/{egress-broker,contained-execution,run-contained-cli}.test.ts"
     failure_mode: "deny the request, or seal the broker and kill the contained scope when accounting cannot remain safe"
-    known_limits: "The provider is an allowed sink, so prompt/body exfiltration to it remains possible. This claim is specifically host-held key mode; TC-018 covers Grok transparent OAuth, where the jail necessarily receives an ephemeral credential copy."
+    known_limits: "The provider is an allowed sink, so prompt/body exfiltration to it remains possible. This claim is specifically host-held key mode; TC-019 covers Grok transparent OAuth, where the jail necessarily receives an ephemeral credential copy."
     standards: ["OWASP-LLM06", "ASVS-V4"]
     adr: null
     last_verified: "2026-07-19"
 
   - id: TC-018
+    claim: "On Linux, every Claude Agent SDK CLI child starts in a detached Bubblewrap PID + mount namespace: it cannot address the harness PID, inherit the harness controlling terminal, or see configured harness-only Unix-socket directories; missing Bubblewrap or a non-Linux host fails the step closed."
+    status: guarantee
+    applies_to: ">=0.1.0"
+    condition: "provider = claude"
+    mechanism: "claudeRunStep preflights a bwrap from the host PATH only when its real executable and full directory ancestry are root-owned, have no group/world write bits, and are not writable by a non-root invoking user; user-writable PATH entries are ignored. Before query(), it runs a zero-spend capability probe with the same namespace and mount arguments. It always supplies spawnClaudeCodeProcess → spawnClaudeSeat. The wrapper uses --unshare-pid, --proc /proc, --new-session, --dev-bind / / (so required device nodes remain usable), and --tmpfs on each dedicated harness-only socket parent from HARNESS_ONLY_SOCKET_ENVS (read from the harness env). Existing socket parents are canonicalized before the wide-parent policy is applied. Session binding records the outer bwrap PID."
+    evidence_command: "node --import tsx --test --test-reporter=dot packages/pelaggio/scripts/pelaggio/__tests__/claude-seat.test.ts"
+    test_file: "packages/pelaggio/scripts/pelaggio/__tests__/claude-seat.test.ts"
+    failure_mode: "fail the Claude step closed (subtype error_confinement); no unisolated fallback"
+    known_limits: "Not a full OS/container sandbox: the seat still has the host network namespace, a bound host root (minus /proc and masked socket parents), and the SDK-supplied child environment. Writes outside Git roots remain outside TC-011. Codex/Grok/OpenCode are not covered. CLAUDE_CAPABILITIES.isolation stays empty because this is harness wrapping, not a provider-native isolation mechanism."
+    standards: ["OWASP-LLM06", "ASVS-V4"]
+    adr: null
+    last_verified: "2026-08-18"
+
+  - id: TC-019
     claim: "Every Grok step has a true L7 hostname/route allowlist: its private network namespace can reach only the capped broker for the reviewed cli-chat-proxy.grok.com contract."
     status: guarantee
     applies_to: ">=0.1.0"
@@ -294,7 +308,7 @@ manifest:
       retention: "governed by the provider's policy"
       opt_out: "configure a different model provider for the step"
       role: sub_processor
-      evidence: [TC-006, TC-014, TC-018]
+      evidence: [TC-006, TC-014, TC-019]
     - destination: github
       data_categories: [issues, pull_requests, plan_bodies, diffs, comments]
       required: false
@@ -356,7 +370,7 @@ manifest:
       capabilities: [pr.open, git.push.default_branch, pr.automerge]
       evidence: [TC-003, TC-012, TC-013]
   sandbox_scope:
-    worktree_scope: "item worktree by convention and hooks; Grok additionally runs in the TC-018 Linux systemd/bubblewrap boundary with masked Git metadata and host-validated writes"
+    worktree_scope: "item worktree by convention and hooks; Grok additionally runs in the TC-019 Linux systemd/bubblewrap boundary with masked Git metadata and host-validated writes"
     main_repo_protection: "default post-step Git-state diff fails on main changes; dirty-main mode uses Claude mutating-tool delta attribution or Codex workspace exclusion while retaining sibling enforcement"
-    planned_hardening: "For providers other than brokered Grok, writes to paths outside tracked Git roots remain bounded by provider tool/egress scoping rather than the TC-018 OS boundary. Prompt injection and the selected provider as an allowed sink remain residuals."
-    evidence: [TC-011, TC-015, TC-018]
+    planned_hardening: "For providers other than brokered Grok, writes to paths outside tracked Git roots remain bounded by provider tool/egress scoping rather than the TC-019 OS boundary. Prompt injection and the selected provider as an allowed sink remain residuals."
+    evidence: [TC-011, TC-015, TC-018, TC-019]

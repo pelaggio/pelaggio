@@ -25,6 +25,9 @@ export function checkFile(file: string, knownIds: Set<string>): OrphanCitation[]
 		.map(({ id, line }) => ({ file, line, id }));
 }
 
+// Scope is docs/trust/ only, deliberately (#521): this is a required CI step, so
+// widening its input (e.g. to issue bodies) would add a new merge-blocking condition.
+// The non-blocking issue-body citation detector is chartered separately as #530.
 export function runDocClaimsGate(root = repoRoot(), dir = resolve(root, "docs/trust")): number {
 	const knownIds = new Set(loadClaims(root).claims.map((claim) => claim.id));
 	const orphans = findMarkdownFiles(dir)

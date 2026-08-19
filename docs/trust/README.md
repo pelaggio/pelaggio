@@ -6,11 +6,11 @@ This directory is Pelaggio's trust surface: what the orchestrator can touch, wha
 
 | Doc | What it answers | Claim center |
 |---|---|---|
-| [`overview.md`](./overview.md) | The top five evaluator questions. | `TC-001` through `TC-016` |
-| [`threat-model.md`](./threat-model.md) | Prompt injection, STRIDE, LINDDUN, and residual risk. | `TC-015`, `TC-006`, `TC-014` |
+| [`overview.md`](./overview.md) | The top five evaluator questions. | `TC-001` through `TC-019` |
+| [`threat-model.md`](./threat-model.md) | Prompt injection, STRIDE, LINDDUN, and residual risk. | `TC-015`, `TC-006`, `TC-014`, `TC-018` |
 | [`permission-model.md`](./permission-model.md) | Permission tiers and step capabilities. | `TC-003`, `TC-011`, `TC-012`, `TC-013` |
-| [`sandboxing.md`](./sandboxing.md) | Worktrees, hooks, dependency sharing, and current limits. | `TC-011`, `TC-015` |
-| [`egress.md`](./egress.md) | Provider, roadmap, git remote, and notify destinations. | `TC-002`, `TC-006`, `TC-014` |
+| [`sandboxing.md`](./sandboxing.md) | Worktrees, hooks, dependency sharing, Claude seat, and current limits. | `TC-011`, `TC-015`, `TC-018`, `TC-019` |
+| [`egress.md`](./egress.md) | Provider, roadmap, git remote, and notify destinations. | `TC-002`, `TC-006`, `TC-014`, `TC-019` |
 | [`quickstart.md`](./quickstart.md) | A safe dry-run path for first evaluation. | `TC-002`, `TC-006`, `TC-012` |
 | [`self-host.md`](./self-host.md) | Control-plane hosting, bearer auth, and manifest serving. | `TC-010`, `TC-006` |
 | [`reproducible-install.md`](./reproducible-install.md) | Pinned installs, release hardening, and dependency honesty. | `TC-004`, `TC-005`, `TC-016` |

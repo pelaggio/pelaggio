@@ -1,8 +1,8 @@
-import { type ChildProcess, spawn } from "node:child_process";
 import { lstatSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { HookInput, HookJSONOutput, SDKAssistantMessage, SDKRateLimitEvent, SDKResultMessage, SDKSystemMessage, SpawnedProcess, SpawnOptions, SyncHookJSONOutput } from "@anthropic-ai/claude-agent-sdk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import { preflightClaudeSeat, spawnClaudeSeat } from "./claude-seat.js";
 import { codexProvider } from "./codex-provider.js";
 import { CONFIG, REPO, resolveStepSettings } from "./config.js";
 import { sessionsDir } from "./confinement/sessions.js";
@@ -62,10 +62,11 @@ export interface RunStepOpts {
 	/** Select a provider/model for this invocation without changing profile configuration. */
 	executionOverride?: { provider: ProviderName; model?: string; codexModel?: string };
 	/**
-	 * #369: register the Claude SDK child PID once spawned so the session record
-	 * can bind Linux /proc evidence to the worktree-resident child. Invoked from
-	 * a custom `spawnClaudeCodeProcess` adapter; pid is captured from ChildProcess
-	 * (SpawnedProcess does not declare pid).
+	 * #369: register the outer Bubblewrap PID once spawned so the session record
+	 * can bind Linux /proc evidence to the worktree-resident wrapper. Invoked from
+	 * the unconditional `spawnClaudeCodeProcess` seat adapter; pid is captured from
+	 * ChildProcess (SpawnedProcess does not declare pid). Observation only — it
+	 * does not decide whether the seat wrap exists.
 	 */
 	onChildSpawn?: (info: { pid: number; cwd: string }) => void;
 	/**
@@ -374,6 +375,15 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 		}
 	}
 
+	// Fail closed before query() so a missing Bubblewrap / non-Linux host cannot
+	// become a retried error_sdk. There is no unisolated Claude fallback.
+	const seatPreflight = preflightClaudeSeat({ cwd: opts.cwd });
+	if (!seatPreflight.ok) {
+		emit({ type: "sdk_error", message: seatPreflight.message });
+		emit({ type: "done", ok: false, subtype: "error_confinement", cost: 0, turns: 0, elapsed: Date.now() - t0 });
+		return { ok: false, subtype: "error_confinement", text: seatPreflight.message, fullText: "", assistantText: "", cost: 0, turns: 0 };
+	}
+
 	const planBlockActive = name === "implement";
 	const systemAppend = composeSystemAppend({ isWorktree, cwd: opts.cwd, repo: REPO, planBlockActive });
 
@@ -451,26 +461,15 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 		}
 	}
 
-	// #369: observe the Claude SDK child PID via the documented custom-spawn seam.
-	// SpawnedProcess does not declare `pid` — capture it from the local ChildProcess
-	// before returning. Pass the SDK's forwarded `signal` so force-kill stays after
-	// the stdin-EOF + grace window.
-	const spawnClaudeCodeProcess = opts.onChildSpawn
-		? (spawnOpts: SpawnOptions): SpawnedProcess => {
-				const child: ChildProcess = spawn(spawnOpts.command, spawnOpts.args, {
-					cwd: spawnOpts.cwd,
-					env: spawnOpts.env as NodeJS.ProcessEnv,
-					stdio: ["pipe", "pipe", "pipe"],
-					signal: spawnOpts.signal,
-				});
-				const pid = child.pid;
-				if (typeof pid === "number" && pid > 0) {
-					opts.onChildSpawn?.({ pid, cwd: spawnOpts.cwd ?? opts.cwd });
-				}
-				// ChildProcess already satisfies SpawnedProcess (stdin/stdout/killed/exitCode/kill/on/once/off).
-				return child as unknown as SpawnedProcess;
-			}
-		: undefined;
+	// Unconditional seat wrap: every Claude SDK child starts under Bubblewrap.
+	// onChildSpawn is observation-only (#369 outer bwrap PID); it does not gate the seam.
+	// Pass the SDK's forwarded `signal` so force-kill stays after the stdin-EOF + grace window.
+	const spawnClaudeCodeProcess = (spawnOpts: SpawnOptions): SpawnedProcess =>
+		spawnClaudeSeat(spawnOpts, {
+			cwd: opts.cwd,
+			bwrap: seatPreflight.bwrap,
+			...(opts.onChildSpawn ? { onChildSpawn: opts.onChildSpawn } : {}),
+		});
 
 	const gen = query({
 		prompt,
@@ -492,7 +491,7 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 				append: systemAppend,
 			},
 			...(hooks ? { hooks } : {}),
-			...(spawnClaudeCodeProcess ? { spawnClaudeCodeProcess } : {}),
+			spawnClaudeCodeProcess,
 		},
 	});
 

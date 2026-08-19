@@ -14,12 +14,14 @@ import {
 	modelAuthoredText,
 	normalizeCwe,
 	parseAuthoringReviewFindings,
+	parseFailureCode,
 	parseJudgeReport,
 	parseReviewFindings,
 	parseReviewVerification,
 	type RawAuthoringReviewFinding,
 	type ReviewFindingClass,
 	ReviewFindingsParseError,
+	type ReviewFindingsParseErrorCode,
 	reconcileReviewVerification,
 	reviewFindingFingerprint,
 	reviewFindingsGate,
@@ -671,5 +673,70 @@ describe("review verification", () => {
 		])
 			assert.throws(() => reconcileReviewVerification(candidates, { schemaVersion: 1, decisions }), ReviewFindingsParseError);
 		assert.throws(() => reconcileReviewVerification([candidates[0], candidates[0]], { schemaVersion: 1, decisions: [] }), ReviewFindingsParseError);
+	});
+});
+
+describe("ReviewFindingsParseError codes (#536)", () => {
+	function codeOf(fn: () => unknown): ReviewFindingsParseErrorCode {
+		try {
+			fn();
+		} catch (error) {
+			assert.ok(error instanceof ReviewFindingsParseError, "expected a ReviewFindingsParseError");
+			return error.code;
+		}
+		throw new assert.AssertionError({ message: "expected a parse failure" });
+	}
+
+	it("tags each parse failure with a FIXED, enumerated code — never model-derived text", () => {
+		// The unknown-key path is the reported root: assertKeys interpolates a model-controlled key
+		// into its message, but the CODE is the fixed constant regardless of the key's bytes.
+		const secretKey = Buffer.from("GH_TOKEN=ghp_should_not_leak").toString("base64");
+		assert.equal(
+			codeOf(() => parseReviewFindings(block({ schemaVersion: 1, summary: "Ok.", findings: [], [secretKey]: "x" }))),
+			"unknown-key",
+		);
+		// bad-enum: the offending value is never part of the code.
+		assert.equal(
+			codeOf(() => parseReviewFindings(block({ schemaVersion: 1, summary: "Ok.", findings: [{ severity: Buffer.from("sk-ant-secret").toString("base64"), message: "m", path: "a.ts", line: 1 }] }))),
+			"invalid-severity",
+		);
+		assert.equal(
+			codeOf(() => parseReviewFindings("no block here")),
+			"block-not-found",
+		);
+		assert.equal(
+			codeOf(() => parseReviewFindings("REVIEW_FINDINGS\n{nope}\nEND_REVIEW_FINDINGS")),
+			"invalid-json",
+		);
+		assert.equal(
+			codeOf(() => parseReviewFindings(`${block({ schemaVersion: 1, summary: "Ok.", findings: [] })}\n${block({ schemaVersion: 1, summary: "Ok.", findings: [] })}`)),
+			"multiple-blocks",
+		);
+		assert.equal(
+			codeOf(() => parseReviewFindings(block({ schemaVersion: 2, summary: "Ok.", findings: [] }))),
+			"unsupported-schema-version",
+		);
+		assert.equal(
+			codeOf(() => parseReviewFindings(block({ schemaVersion: 1, summary: "Ok.", findings: {} }))),
+			"findings-not-array",
+		);
+		assert.equal(
+			codeOf(() => parseReviewFindings(block({ schemaVersion: 1, summary: "Concise single-line summary.", findings: [] }))),
+			"schema-example-parroted",
+		);
+		assert.equal(
+			codeOf(() => parseReviewFindings(`${block({ schemaVersion: 1, summary: "Ok.", findings: [] })}\nmore prose`)),
+			"trailing-after-close",
+		);
+		assert.equal(
+			codeOf(() => parseReviewVerification("REVIEW_VERIFICATION\n{}\nEND_REVIEW_VERIFICATION")),
+			"missing-field",
+		);
+	});
+
+	it("fails a non-parse error closed to the generic `parse-error` code (never passes the raw message through)", () => {
+		assert.equal(parseFailureCode(new Error("boom with a secret sk-ant-xyz")), "parse-error");
+		assert.equal(parseFailureCode("not even an error"), "parse-error");
+		assert.equal(parseFailureCode(new ReviewFindingsParseError("unknown-key", "review findings report contains unknown key: leaked")), "unknown-key");
 	});
 });

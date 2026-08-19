@@ -131,7 +131,7 @@
       "evidence": [
         "TC-006",
         "TC-014",
-        "TC-018"
+        "TC-019"
       ]
     },
     {
@@ -279,13 +279,14 @@
     }
   ],
   "sandbox_scope": {
-    "worktree_scope": "item worktree by convention and hooks; Grok additionally runs in the TC-018 Linux systemd/bubblewrap boundary with masked Git metadata and host-validated writes",
+    "worktree_scope": "item worktree by convention and hooks; Grok additionally runs in the TC-019 Linux systemd/bubblewrap boundary with masked Git metadata and host-validated writes",
     "main_repo_protection": "default post-step Git-state diff fails on main changes; dirty-main mode uses Claude mutating-tool delta attribution or Codex workspace exclusion while retaining sibling enforcement",
-    "planned_hardening": "For providers other than brokered Grok, writes to paths outside tracked Git roots remain bounded by provider tool/egress scoping rather than the TC-018 OS boundary. Prompt injection and the selected provider as an allowed sink remain residuals.",
+    "planned_hardening": "For providers other than brokered Grok, writes to paths outside tracked Git roots remain bounded by provider tool/egress scoping rather than the TC-019 OS boundary. Prompt injection and the selected provider as an allowed sink remain residuals.",
     "evidence": [
       "TC-011",
       "TC-015",
-      "TC-018"
+      "TC-018",
+      "TC-019"
     ]
   },
   "claims_ref": "./trust-claims.yml"

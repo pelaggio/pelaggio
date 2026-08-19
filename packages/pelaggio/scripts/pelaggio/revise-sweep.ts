@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { withFileLock } from "./file-lock.js";
+import { isTrustedCommentAuthor } from "./github-posting.js";
 import { type GhRunner, parseGhJson } from "./roadmap/github-issues.js";
 
 // ── Local revise sweep (issue #76) ─────────────────────────────────────
@@ -76,11 +77,36 @@ interface PrViewEntry {
 interface IssueLabels {
 	labels?: { name: string }[];
 }
+interface PrComment {
+	body: string;
+	createdAt: string;
+	author?: { login?: string } | null;
+}
 interface PrComments {
-	comments?: { body: string; createdAt: string }[];
+	comments?: PrComment[];
 }
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+
+function isPrComments(v: unknown): v is PrComments {
+	if (!isObject(v)) return false;
+	if (v.comments === undefined) return true;
+	return (
+		Array.isArray(v.comments) &&
+		v.comments.every(
+			(comment) =>
+				isObject(comment) &&
+				typeof comment.body === "string" &&
+				typeof comment.createdAt === "string" &&
+				(comment.author === undefined || comment.author === null || (isObject(comment.author) && (comment.author.login === undefined || typeof comment.author.login === "string"))),
+		)
+	);
+}
+
+/** GraphQL-shape adapter over the canonical trust rule shared with the upsert path (`github-posting.ts`). */
+function isTrustedReviewComment(gh: GhRunner, ghRepo: string, comment: PrComment): boolean {
+	return isTrustedCommentAuthor(gh, ghRepo, comment.author?.login);
+}
 
 /**
  * Run a gh command fail-soft: return stdout on exit 0, else `null`. A thrown error (ENOENT,
@@ -97,9 +123,12 @@ function runGhSoft(gh: GhRunner, args: string[]): string | null {
 }
 
 /**
- * Absolute findings path, resolved against `<repo>/.dev/` (gitignored), so `runPipeline`'s
- * `readFileSync(findingsPath)` is cwd-independent. Filename matches CI's
- * `.dev/review-findings-<id>.md` so both revise paths write the same place.
+ * Absolute findings path for the LOCAL revise paths, resolved against `<repo>/.dev/`
+ * (gitignored), so `runPipeline`'s `readFileSync(findingsPath)` is cwd-independent. CI
+ * deliberately writes its copy elsewhere — `$RUNNER_TEMP/review-findings-<id>.md`, OUTSIDE the
+ * workspace, so the privileged PR-head checkout can neither clobber nor pre-plant it
+ * (`.github/workflows/pr-review-revise.yml`); only the `review-findings-<id>.md` filename is
+ * shared.
  */
 export function reviseFindingsPath(repo: string, id: string): string {
 	return resolve(repo, ".dev", `review-findings-${id.toLowerCase()}.md`);
@@ -499,30 +528,49 @@ export function verifyReviseWorktreeBinding(worktreePath: string, branch: string
 	return { ok: true };
 }
 
+export type FetchFindingsOutcome = "written" | "no-trusted-comment" | "error";
+
 /**
- * Fetch the latest `<!-- pelaggio-pr-review -->` comment body and write it to `findingsPath`.
- * Returns true if written, false when there is no findings comment or on any gh/fs error.
+ * Fetch the latest trusted `<!-- pelaggio-pr-review -->` comment body and write it to
+ * `findingsPath`. Marker text is not authority: an untrusted PR participant can copy it into a
+ * newer comment, so only verified authority — the Actions gate identity, the authenticated gh
+ * identity itself, or an author with verified write permission — may supply a revision prompt
+ * (`isTrustedCommentAuthor`). The marker filter runs before the trust check so unrelated
+ * chatter never triggers identity/permission lookups.
+ *
+ * Tri-state so callers whose handoff message names the cause (the CI shim
+ * `ci/fetch-review-findings.ts` → the workflow's park comment) can tell the selector's clean
+ * trust verdict (`"no-trusted-comment"` → exit 1) from a gh/parse/fs TOOL failure (`"error"` →
+ * exit 2). A failed authority lookup inside `isTrustedCommentAuthor` fail-closes to untrusted
+ * and therefore surfaces as `"no-trusted-comment"` — refusing trust is a trust decision, not a
+ * tool failure. Never throws.
  */
-export function fetchReviewFindings(gh: GhRunner, ghRepo: string, prNumber: number, findingsPath: string): boolean {
+export function fetchReviewFindingsOutcome(gh: GhRunner, ghRepo: string, prNumber: number, findingsPath: string): FetchFindingsOutcome {
 	const out = runGhSoft(gh, ["pr", "view", String(prNumber), "--repo", ghRepo, "--json", "comments"]);
-	if (out === null) return false;
+	if (out === null) return "error";
 	let parsed: PrComments;
 	try {
-		parsed = parseGhJson<PrComments>(out, isObject);
+		parsed = parseGhJson<PrComments>(out, isPrComments);
 	} catch {
-		return false;
+		return "error";
 	}
-	const matches = (parsed.comments ?? []).filter((c) => c.body.includes(PR_REVIEW_MARKER));
-	if (matches.length === 0) return false;
+	const matches = (parsed.comments ?? []).filter((c) => c.body.includes(PR_REVIEW_MARKER) && isTrustedReviewComment(gh, ghRepo, c));
+	if (matches.length === 0) return "no-trusted-comment";
 	// Most recent marker-bearing comment wins (the CLI upserts a single one, but be robust to dupes).
 	const latest = matches.reduce((a, b) => (b.createdAt.localeCompare(a.createdAt) > 0 ? b : a));
 	try {
 		mkdirSync(dirname(findingsPath), { recursive: true });
 		writeFileSync(findingsPath, latest.body);
-		return true;
+		return "written";
 	} catch {
-		return false;
+		return "error";
 	}
+}
+
+/** Boolean fail-soft view of `fetchReviewFindingsOutcome` for the local sweep and operator CLI,
+ *  which park identically on both non-written outcomes: true iff the findings were written. */
+export function fetchReviewFindings(gh: GhRunner, ghRepo: string, prNumber: number, findingsPath: string): boolean {
+	return fetchReviewFindingsOutcome(gh, ghRepo, prNumber, findingsPath) === "written";
 }
 
 /**
