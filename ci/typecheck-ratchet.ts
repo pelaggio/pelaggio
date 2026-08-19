@@ -253,7 +253,7 @@ export function runRatchet(deps: RatchetDeps, opts: { baseRef?: string } = {}): 
 	if (exceeded.length > 0) {
 		return {
 			ok: false,
-			message: `strict diagnostic count exceeded baseline:\n  ${exceeded.join("\n  ")}\n  (actual: pelaggio=${actual.pelaggio}, server=${actual.server})`,
+			message: `strict diagnostic count exceeded baseline:\n  ${exceeded.join("\n  ")}\n  (actual: pelaggio=${actual.pelaggio}, server=${actual.server})\n  environment note: if missing-module diagnostics dominate, this checkout's dependency resolution is broken rather than its code. In-worktree installs are blocked by the write guard — an operator or the harness must repair the checkout before this gate can pass.`,
 		};
 	}
 

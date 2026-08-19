@@ -84,7 +84,11 @@ describe("runRatchet — current counts", () => {
 	it("fails when either package exceeds baseline", () => {
 		const highPel = runRatchet(deps({ actual: { pelaggio: 11, server: 5 } }));
 		assert.equal(highPel.ok, false);
-		if (!highPel.ok) assert.match(highPel.message, /pelaggio: actual 11 > baseline 10/);
+		if (!highPel.ok) {
+			assert.match(highPel.message, /pelaggio: actual 11 > baseline 10/);
+			assert.match(highPel.message, /environment note: if missing-module diagnostics dominate, this checkout's dependency resolution is broken rather than its code/);
+			assert.match(highPel.message, /In-worktree installs are blocked by the write guard — an operator or the harness must repair the checkout before this gate can pass/);
+		}
 
 		const highSrv = runRatchet(deps({ actual: { pelaggio: 10, server: 6 } }));
 		assert.equal(highSrv.ok, false);
