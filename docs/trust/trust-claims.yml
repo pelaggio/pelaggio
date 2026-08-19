@@ -214,6 +214,20 @@ claims:
     adr: null
     last_verified: "2026-07-19"
 
+  - id: TC-018
+    claim: "On Linux, every Claude Agent SDK CLI child starts in a detached Bubblewrap PID + mount namespace: it cannot address the harness PID, inherit the harness controlling terminal, or see configured harness-only Unix-socket directories; missing Bubblewrap or a non-Linux host fails the step closed."
+    status: guarantee
+    applies_to: ">=0.1.0"
+    condition: "provider = claude"
+    mechanism: "claudeRunStep preflights a bwrap from the host PATH only when its real executable and full directory ancestry are root-owned, have no group/world write bits, and are not writable by a non-root invoking user; user-writable PATH entries are ignored. Before query(), it runs a zero-spend capability probe with the same namespace and mount arguments. It always supplies spawnClaudeCodeProcess → spawnClaudeSeat. The wrapper uses --unshare-pid, --proc /proc, --new-session, --dev-bind / / (so required device nodes remain usable), and --tmpfs on each dedicated harness-only socket parent from HARNESS_ONLY_SOCKET_ENVS (read from the harness env). Existing socket parents are canonicalized before the wide-parent policy is applied. Session binding records the outer bwrap PID."
+    evidence_command: "node --import tsx --test --test-reporter=dot packages/pelaggio/scripts/pelaggio/__tests__/claude-seat.test.ts"
+    test_file: "packages/pelaggio/scripts/pelaggio/__tests__/claude-seat.test.ts"
+    failure_mode: "fail the Claude step closed (subtype error_confinement); no unisolated fallback"
+    known_limits: "Not a full OS/container sandbox: the seat still has the host network namespace, a bound host root (minus /proc and masked socket parents), and the SDK-supplied child environment. Writes outside Git roots remain outside TC-011. Codex/Grok/OpenCode are not covered. CLAUDE_CAPABILITIES.isolation stays empty because this is harness wrapping, not a provider-native isolation mechanism."
+    standards: ["OWASP-LLM06", "ASVS-V4"]
+    adr: null
+    last_verified: "2026-08-18"
+
 manifest:
   defaults:
     ship_target: pull-request
@@ -345,4 +359,4 @@ manifest:
     worktree_scope: "item worktree by convention and hooks; the post-step audit always gates siblings and gates main by default"
     main_repo_protection: "default post-step Git-state diff fails on main changes; dirty-main mode uses Claude mutating-tool delta attribution or Codex workspace exclusion while retaining sibling enforcement"
     planned_hardening: "not an OS/container sandbox: writes to paths outside any tracked git root (e.g. $HOME, /tmp, arbitrary absolute paths) are not caught by this audit and remain bounded by tool/egress scoping (TC-015)"
-    evidence: [TC-011, TC-015]
+    evidence: [TC-011, TC-015, TC-018]

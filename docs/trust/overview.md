@@ -5,7 +5,7 @@ status: draft
 diataxis: explanation
 sidebar:
   order: 1
-last_reviewed: 2026-07-19
+last_reviewed: 2026-08-18
 threat_model_ref: ./threat-model.md
 ---
 
@@ -21,7 +21,7 @@ By default, no. `ship.target` resolves to `pull-request`, so the shipped default
 
 ### 2. What can it write?
 
-Pelaggio is designed around item worktrees, and mutating steps receive hooks/conventions that steer writes into the claimed worktree; by default, a shipped post-step confinement audit then fails the step if any change lands in the main checkout or a sibling worktree (`TC-011`, [sandboxing](./sandboxing.md), [`ADR-0001`](../decisions/0001-worktree-write-confinement.md)). With `confinement.allow-dirty-main`, Claude attributes main Git-state deltas across mutating-tool windows, Codex excludes main through its workspace boundary, and siblings remain whole-step audited. This is still not an OS/container sandbox or process-lifetime provenance: non-Git paths and detached writes after a tool's post hook remain out of scope (`TC-011`, `TC-015`).
+Pelaggio is designed around item worktrees, and mutating steps receive hooks/conventions that steer writes into the claimed worktree; by default, a shipped post-step confinement audit then fails the step if any change lands in the main checkout or a sibling worktree (`TC-011`, [sandboxing](./sandboxing.md), [`ADR-0001`](../decisions/0001-worktree-write-confinement.md)). With `confinement.allow-dirty-main`, Claude attributes main Git-state deltas across mutating-tool windows, Codex excludes main through its workspace boundary, and siblings remain whole-step audited. On Linux, a Claude step also wraps the SDK CLI in a detached Bubblewrap PID + mount namespace so the seat cannot inherit the harness controlling terminal, read host `/proc/<harness-pid>`, or see configured harness-only socket directories (`TC-018`). That wrap is not a full OS/container sandbox: the seat still has the host network, a bound host root outside those masks, and its supplied child environment (`TC-011`, `TC-015`, `TC-018`).
 
 ### 3. What leaves my machine?
 
@@ -41,7 +41,7 @@ The defining threat is prompt injection through attacker-reachable repo, issue, 
 
 ## Verify
 
-Use the registry and manifest as the auditable surface (`TC-001` through `TC-016`):
+Use the registry and manifest as the auditable surface (`TC-001` through `TC-018`):
 
 ```bash
 pnpm check:trust

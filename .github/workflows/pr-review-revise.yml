@@ -233,6 +233,18 @@ jobs:
       - run: pnpm install --frozen-lockfile --ignore-scripts
         if: steps.findings.outputs.found == 'true'
 
+      - name: Provision Bubblewrap conformance
+        run: |
+          if sysctl -N kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          if sysctl -N kernel.unprivileged_userns_clone >/dev/null 2>&1; then
+            sudo sysctl -w kernel.unprivileged_userns_clone=1
+          fi
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+        if: steps.findings.outputs.found == 'true'
+
       - name: Configure git
         if: steps.findings.outputs.found == 'true'
         run: |

@@ -441,8 +441,26 @@ providers:
 
 Keys are validated against the registered provider names, so an entry for a
 provider that is not yet wired in fails loudly at startup rather than silently
-doing nothing. `bin` must be a non-empty string. The `claude` provider runs
-in-process (no subprocess), so a `bin` override for it has no effect.
+doing nothing. `bin` must be a non-empty string. `providers.claude.bin` remains
+a no-op — the Agent SDK still owns the CLI path via
+`pathToClaudeCodeExecutable`.
+
+### Claude seat isolation
+
+The Claude provider always starts the Agent SDK CLI through Pelaggio's
+Bubblewrap seat wrapper (`spawnClaudeSeat`). On Linux, every Claude step
+requires `bubblewrap` on `PATH`. Missing Bubblewrap, a non-Linux host, a
+malformed or overly wide harness-only socket locator, or a namespace setup
+failure refuses the step with `error_confinement`. There is no unisolated
+fallback: use another provider, or run on Linux with Bubblewrap installed.
+
+The wrapper creates a new PID namespace and a fresh `/proc`, detaches the child
+from the harness terminal session, binds the host root, and masks the dedicated
+parent directory of each configured harness-only socket
+(`PELAGGIO_REVIEW_EVIDENCE_SIGNER_SOCKET` is the first locator). It does not
+restrict the host network, hide the rest of the host filesystem, or replace the
+SDK environment. Harness-only sockets must live in a dedicated directory (for
+example `/run/pelaggio-signer/`), not a shared parent such as `/tmp` or `/run`.
 
 ### Grok sandbox
 

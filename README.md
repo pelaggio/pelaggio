@@ -93,6 +93,9 @@ The threat model and the full trust posture live under [`docs/trust/`](./docs/tr
 - **At least one agent CLI**, installed and logged in: Claude Code (`claude`), Codex
   (`codex`), Grok (`grok` — a version-pinned, managed setup with extra sandbox
   requirements; follow the [operator guide](./docs/grok.md)), or OpenCode (`opencode`).
+- **Claude provider only:** Linux with the `bubblewrap` package installed. Claude steps
+  fail closed on macOS or when a trusted system `bwrap` is unavailable; select another
+  provider on those hosts.
 - **`gh` (GitHub CLI), authenticated** — required to ship pull requests. The GitHub-issues
   roadmap source additionally requires `roadmap.github.repo` (`owner/repo`) in
   `.pelaggio.yml`; the roadmap label defaults to `autopilot`.
@@ -136,8 +139,9 @@ evidence, or a surviving safety finding refuses and sends you back to a full
 
 ### Platform support
 
-Pelaggio runs on macOS, Linux, and **Windows via [WSL](https://learn.microsoft.com/windows/wsl/)**. The
-pipeline leans on POSIX filesystem semantics — worktrees share `node_modules`
+Pelaggio runs on macOS, Linux, and **Windows via [WSL](https://learn.microsoft.com/windows/wsl/)**,
+subject to provider-specific prerequisites. The Claude provider requires Linux plus
+Bubblewrap, so macOS runs must select another provider. The pipeline leans on POSIX filesystem semantics — worktrees share `node_modules`
 through symlinks, and skill bodies run as `bash` — so on Windows, run the
 pipeline (`pelaggio run`) inside a WSL distribution rather than native
 PowerShell/cmd, where directory symlinks require elevation and bash is absent.

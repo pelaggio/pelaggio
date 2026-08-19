@@ -27,6 +27,11 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - name: Verify Claude seat host prerequisite
+        run: |
+          test "$(uname -s)" = Linux
+          node --import tsx -e "const { resolveClaudeSeatBwrap } = await import('./packages/pelaggio/scripts/pelaggio/claude-seat.ts'); console.log(resolveClaudeSeatBwrap())"
+
       - name: Configure git
         run: |
           git config user.name "pelaggio[bot]"
