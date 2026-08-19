@@ -1,5 +1,6 @@
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
-import { accessSync, constants, realpathSync, statSync } from "node:fs";
+import { accessSync, constants, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir as systemTmpdir } from "node:os";
 import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
 import { Transform, type Writable } from "node:stream";
 import type { SpawnedProcess, SpawnOptions } from "@anthropic-ai/claude-agent-sdk";
@@ -16,6 +17,8 @@ export const HARNESS_ONLY_SOCKET_ENVS = ["PELAGGIO_REVIEW_EVIDENCE_SIGNER_SOCKET
 /** Shared host directories that must never be replaced with an empty tmpfs. */
 const WIDE_SOCKET_PARENTS = new Set(["/", "/tmp", "/var", "/var/tmp", "/run", "/var/run", "/dev", "/proc", "/sys", "/home", "/root", "/usr", "/etc", "/opt"]);
 const MAX_BUFFERED_STDERR_BYTES = 64 * 1024;
+const SOCKET_MASK_CANARY_PREFIX = "pelaggio-claude-seat-mask-";
+const SOCKET_MASK_CANARY_VISIBLE_EXIT = 73;
 
 export type ClaudeSeatSpawner = typeof spawn;
 
@@ -267,14 +270,25 @@ export function spawnClaudeSeat(spawnOpts: SpawnOptions, options: ClaudeSeatSpaw
 
 /** Sync preflight used by `claudeRunStep` before `query()` so seat setup failures cannot become `error_sdk`. */
 export function preflightClaudeSeat(options: ClaudeSeatPreflightOptions): ClaudeSeatPreflight {
+	let canaryRoot: string | undefined;
 	try {
 		const bwrap = resolveClaudeSeatBwrap(options.pathValue ?? process.env.PATH, options.platform ?? process.platform);
+		// Exercise the socket-parent mask even when no operational harness socket is
+		// configured. Without this canary the namespace probe's successful exit says
+		// nothing about --tmpfs masking on the common unconfigured path.
+		canaryRoot = mkdtempSync(join(resolve(options.tmpdir ?? process.env.TMPDIR ?? systemTmpdir()), SOCKET_MASK_CANARY_PREFIX));
+		const canaryPath = join(canaryRoot, "visible-from-host");
+		writeFileSync(canaryPath, "must be hidden from the Claude seat\n", { mode: 0o600 });
 		const invocation = buildClaudeSeatInvocation(
-			{ command: process.execPath, args: ["-e", ""], cwd: options.cwd },
+			{
+				command: process.execPath,
+				args: ["-e", `process.exit(require("node:fs").existsSync(process.argv[1]) ? ${SOCKET_MASK_CANARY_VISIBLE_EXIT} : 0)`, canaryPath],
+				cwd: options.cwd,
+			},
 			{
 				cwd: options.cwd,
 				bwrap,
-				socketPaths: resolveHarnessSocketPaths(options.env ?? process.env),
+				socketPaths: [...resolveHarnessSocketPaths(options.env ?? process.env), canaryPath],
 				home: options.home ?? process.env.HOME,
 				tmpdir: options.tmpdir ?? process.env.TMPDIR,
 				xdgRuntimeDir: options.xdgRuntimeDir ?? process.env.XDG_RUNTIME_DIR,
@@ -296,6 +310,9 @@ export function preflightClaudeSeat(options: ClaudeSeatPreflightOptions): Claude
 		if (result.error) {
 			throw seatFailure(`could not run the Bubblewrap namespace probe: ${result.error.message}`);
 		}
+		if (result.status === SOCKET_MASK_CANARY_VISIBLE_EXIT) {
+			throw seatFailure("Bubblewrap socket-mask probe left its host canary visible");
+		}
 		if (result.status !== 0) {
 			const stderr = result.stderr?.toString().trim();
 			const outcome = result.signal ? `signal ${result.signal}` : `exit ${result.status ?? "unknown"}`;
@@ -304,5 +321,7 @@ export function preflightClaudeSeat(options: ClaudeSeatPreflightOptions): Claude
 		return { ok: true, bwrap };
 	} catch (error) {
 		return { ok: false, message: error instanceof Error ? error.message : String(error) };
+	} finally {
+		if (canaryRoot !== undefined) rmSync(canaryRoot, { recursive: true, force: true });
 	}
 }

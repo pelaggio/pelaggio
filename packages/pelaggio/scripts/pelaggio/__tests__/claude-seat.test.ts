@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import type { ChildProcess } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { type ChildProcess, spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -357,6 +357,58 @@ describe("preflightClaudeSeat", () => {
 		assert.equal(result.ok, false);
 		if (!result.ok) assert.match(result.message, /socket parent because it does not exist/);
 		assert.equal(probed, false);
+	});
+
+	it("always mounts a private canary parent and asks the probe to reject a visible canary", { skip: trustedSystemBwrap === undefined }, () => {
+		assert.ok(trustedSystemBwrap);
+		const bwrap = trustedSystemBwrap;
+		const cwd = tempDir("pelaggio-preflight-canary-cwd-");
+		const scratch = tempDir("pelaggio-preflight-canary-tmp-");
+		let canaryPath: string | undefined;
+		const result = preflightClaudeSeat({
+			cwd,
+			platform: "linux",
+			pathValue: dirname(bwrap),
+			env: {},
+			home: "/home/operator",
+			tmpdir: scratch,
+			probe: (_command, args) => {
+				const commandArgs = afterSeparator(args);
+				assert.equal(commandArgs[0], process.execPath);
+				assert.match(commandArgs[2] ?? "", /existsSync/);
+				canaryPath = commandArgs[3];
+				assert.ok(canaryPath);
+				assert.equal(existsSync(canaryPath), true, "the host-side canary must exist while the probe runs");
+				assert.deepEqual(tmpfsTargets(args), [dirname(canaryPath)]);
+				return { status: 0 };
+			},
+		});
+		assert.deepEqual(result, { ok: true, bwrap });
+		assert.ok(canaryPath);
+		assert.equal(existsSync(dirname(canaryPath)), false, "the private canary directory must be removed after preflight");
+	});
+
+	it("fails closed when the mask probe can still see its host-side canary", { skip: trustedSystemBwrap === undefined }, () => {
+		assert.ok(trustedSystemBwrap);
+		const bwrap = trustedSystemBwrap;
+		let canaryPath: string | undefined;
+		const result = preflightClaudeSeat({
+			cwd: tempDir("pelaggio-preflight-visible-cwd-"),
+			platform: "linux",
+			pathValue: dirname(bwrap),
+			env: {},
+			home: "/home/operator",
+			tmpdir: tempDir("pelaggio-preflight-visible-tmp-"),
+			probe: (_command, args, options) => {
+				const commandArgs = afterSeparator(args);
+				canaryPath = commandArgs[3];
+				return spawnSync(commandArgs[0] as string, commandArgs.slice(1), { ...options, stdio: ["ignore", "ignore", "pipe"] });
+			},
+		});
+		assert.equal(result.ok, false);
+		if (!result.ok) assert.match(result.message, /socket-mask probe left its host canary visible/);
+		assert.ok(canaryPath);
+		assert.equal(existsSync(dirname(canaryPath)), false, "a failed probe must still remove the canary directory");
 	});
 
 	it("returns the resolved absolute bwrap path when the host is ready", { skip: trustedSystemBwrap === undefined }, () => {
