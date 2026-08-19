@@ -105,7 +105,7 @@ describe("runRatchet — current counts", () => {
 		assert.equal(result.ok, true);
 	});
 
-	it("reports high unresolved-module counts when they dominate an excess", () => {
+	it("reports remediation for an unresolved-module-heavy excess", () => {
 		const result = runRatchet(
 			deps({
 				runCompiler: (key) => (key === "pelaggio" ? compilerUnresolved(11) : compilerOk(5)),
@@ -116,6 +116,7 @@ describe("runRatchet — current counts", () => {
 			assert.match(result.message, /pelaggio: actual 11 > baseline 10/);
 			assert.match(result.message, /unresolved-module diagnostics \(TS2307\): pelaggio 11, server 0/);
 			assert.match(result.message, /if those account for most of the excess, dependency resolution in this checkout is a more likely cause than the code/);
+			assert.match(result.message, /operator or the harness must repair the checkout/);
 		}
 	});
 
@@ -125,6 +126,7 @@ describe("runRatchet — current counts", () => {
 		if (!highPel.ok) {
 			assert.match(highPel.message, /pelaggio: actual 11 > baseline 10/);
 			assert.match(highPel.message, /unresolved-module diagnostics \(TS2307\): pelaggio 0, server 0/);
+			assert.doesNotMatch(highPel.message, /if those account for most of the excess/);
 		}
 	});
 

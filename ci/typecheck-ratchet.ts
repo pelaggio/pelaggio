@@ -265,9 +265,10 @@ export function runRatchet(deps: RatchetDeps, opts: { baseRef?: string } = {}): 
 		}
 	}
 	if (exceeded.length > 0) {
+		const hasUnresolvedModuleDiagnostics = unresolvedModuleDiagnostics.pelaggio + unresolvedModuleDiagnostics.server > 0;
 		return {
 			ok: false,
-			message: `strict diagnostic count exceeded baseline:\n  ${exceeded.join("\n  ")}\n  (actual: pelaggio=${actual.pelaggio}, server=${actual.server})\n  unresolved-module diagnostics (TS2307): pelaggio ${unresolvedModuleDiagnostics.pelaggio}, server ${unresolvedModuleDiagnostics.server}\n  if those account for most of the excess, dependency resolution in this checkout is a more likely cause than the code; in-worktree installs are blocked by the write guard, so an operator or the harness must repair the checkout.`,
+			message: `strict diagnostic count exceeded baseline:\n  ${exceeded.join("\n  ")}\n  (actual: pelaggio=${actual.pelaggio}, server=${actual.server})\n  unresolved-module diagnostics (TS2307): pelaggio ${unresolvedModuleDiagnostics.pelaggio}, server ${unresolvedModuleDiagnostics.server}${hasUnresolvedModuleDiagnostics ? "\n  if those account for most of the excess, dependency resolution in this checkout is a more likely cause than the code; in-worktree installs are blocked by the write guard, so an operator or the harness must repair the checkout." : ""}`,
 		};
 	}
 
