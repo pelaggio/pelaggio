@@ -251,6 +251,154 @@ rm -f ~/.local/state/pelaggio-server/state.json    # in case a prior boot wrote 
 systemctl --user restart pelaggio-server
 ```
 
+## Review-evidence signer (harness-attested adjudication)
+
+Signed local review evidence (#511) lets `pelaggio pr-adjudicate` clear a
+findings-terminal PR after a narrow local fix by verifying a detached Ed25519
+signature over the exact fleet + adjudication-source record bytes — instead of
+trusting a self-servable on-disk record. **Signed auto-adjudication is a
+supervised/daemon-deployment feature.** A dev-laptop run without the signer
+still works: it simply posts an *unsigned* red, and `pr-adjudicate` falls back to
+manual operator adjudication (the status quo before #511).
+
+### Why an out-of-process signer
+
+The pipeline runs Claude/Codex/Grok workers **same-UID** with an allow-all shell
+and no OS isolation. A prompt-injected step can therefore walk `/proc` to a
+harness ancestor's `environ` and read anything the harness holds — so if the
+harness held the Ed25519 **private** key, the attacker could forge the very
+evidence this feature makes unforgeable. Scrubbing the *child* env does not help;
+the attacker reads the *harness* process's own `environ`.
+
+So the harness **never holds the private key**. The key lives only in a separate
+`pelaggio evidence-signer` process, reached over a unix domain socket. That
+process must run **as a different UID** from the harness and its workers — that
+UID boundary is what stops a same-UID peer from `ptrace`-ing the signer or
+reading its `environ`. The signer signs **only** a canonical, domain-bound
+evidence payload it reconstructs itself, so a caller can never get arbitrary
+bytes signed. Socket reachability is **not** sufficient: every request must
+present a shared authenticator the harness loads into memory from a one-shot
+file (never from harness `environ`). Verification stays in the harness (the
+**public** key is not secret).
+
+### 1. Generate the keypair
+
+```bash
+# PKCS#8 Ed25519 private key (signer only) + SPKI public key (harness verify).
+openssl genpkey -algorithm ed25519 -out evidence-signer.key
+openssl pkey -in evidence-signer.key -pubout -out evidence-signer.pub
+chmod 0400 evidence-signer.key          # signer UID must be the sole reader
+# Request authenticator: signer keeps a durable copy; the harness gets a
+# one-shot copy it will unlink after load (see step 3).
+openssl rand -hex 32 > evidence-signer.token
+chmod 0400 evidence-signer.token
+```
+
+Install `evidence-signer.key` and the signer's durable `evidence-signer.token`
+readable **only** by the signer UID (the CLI refuses any key/token file with
+group/other access). Keep both off the harness-visible env entirely. The
+harness-readable token copy is provisioned separately at harness start and
+must not be the durable signer file.
+
+### 2. Run `evidence-signer` as a separate UID
+
+```ini
+# /etc/systemd/system/pelaggio-evidence-signer.service
+[Unit]
+Description=pelaggio review-evidence signing oracle
+After=network.target
+
+[Service]
+Type=simple
+User=pelaggio-signer                 # SEPARATE UID from the pelaggio daemon/workers
+Group=pelaggio-signer                # add the harness UID to this group for socket access
+StateDirectory=pelaggio-signer       # /var/lib/pelaggio-signer; persists while this unit is down
+StateDirectoryMode=0750
+UMask=0007
+ExecStartPre=/bin/rm -f /var/lib/pelaggio-signer/evidence-signer.sock
+ExecStart=/usr/bin/npx pelaggio evidence-signer \
+  --socket /var/lib/pelaggio-signer/evidence-signer.sock \
+  --key-file /etc/pelaggio/evidence-signer.key \
+  --token-file /etc/pelaggio/evidence-signer.token
+Restart=on-failure
+# Belt-and-braces: keep the key and token out of the environment block;
+# pass them via --key-file / --token-file.
+
+[Install]
+WantedBy=default.target
+```
+
+The signer loads the key from `--key-file` (mode 0400/0600) or, if omitted, from
+its own `PELAGGIO_REVIEW_EVIDENCE_PRIVATE_KEY` env, and the request token from
+`--token-file` or its own `PELAGGIO_REVIEW_EVIDENCE_SIGNER_TOKEN` env. It
+refuses to start without both. It listens on the socket and returns a
+base64url signature per authenticated request; SIGINT/SIGTERM close the
+socket and unlink the socket file.
+
+### 3. Point the harness at the socket + publish the pubkey
+
+On the **pelaggio harness/daemon** side (never the signer's key or durable token
+here). A root `ExecStartPre` must install a **one-shot** harness-readable copy
+of the token (`+` prefix so it runs as root) that the harness UID cannot also
+read from the durable signer path:
+
+```bash
+# pelaggio.service ExecStartPre (the `+` runs this as root):
+#   +/usr/bin/install -m 0400 -o pelaggio /etc/pelaggio/evidence-signer.token \
+#     /run/pelaggio/evidence-signer.token
+
+# ~/.config/pelaggio-server.env  (or the harness's environment)
+PELAGGIO_REVIEW_EVIDENCE_SIGNER_SOCKET=/var/lib/pelaggio-signer/evidence-signer.sock
+PELAGGIO_REVIEW_EVIDENCE_SIGNER_TOKEN_FILE=/run/pelaggio/evidence-signer.token
+# EnvironmentFile does not perform shell substitution. Paste the public PEM as
+# one double-quoted, multiline value; systemd preserves the embedded newlines.
+PELAGGIO_REVIEW_EVIDENCE_PUBKEY="-----BEGIN PUBLIC KEY-----
+<base64 body from /etc/pelaggio/evidence-signer.pub>
+-----END PUBLIC KEY-----"
+```
+
+Replace the placeholder line with the base64 body from the generated public-key
+file. The quotes and real line breaks are part of the `EnvironmentFile` value;
+do not replace it with `$(cat ...)`, because systemd does not run a shell while
+parsing `EnvironmentFile`.
+
+The harness must be able to **connect** to the socket (grant the harness UID
+access via the socket's group and directory permissions) but never needs the
+key. It reads the token file into memory during harness initialization, before
+any worker starts, and **unlinks** it so the value is not in `environ` and does
+not remain on a same-UID-readable path while workers exist. With the socket and
+token set, a completed local red review posts a signed red status; without
+either, the review posts an unsigned red and adjudication stays manual.
+If the token-file variable is present but the file is missing, accessible to
+group/other, unreadable, too short, or cannot be unlinked, harness startup aborts
+before any worker starts; remove the variable to opt out of signing.
+
+The socket's **parent directory must continue to exist while the signer is
+stopped**. Do not substitute systemd `RuntimeDirectory=` here: systemd removes
+runtime directories when their unit stops. Claude confinement preflight
+validates the configured socket-parent mount before every Claude seat; a
+missing parent therefore produces `error_confinement` for every Claude step,
+not merely an unavailable signer. `StateDirectory=` is persistent across unit
+stops, so signer downtime keeps Claude usable and degrades only evidence
+signing (unsigned red, then manual adjudication).
+
+**Known limitation (#568):** the harness token file is one-shot. A long-lived
+daemon does not currently mint a fresh per-run authenticator: its first pipeline
+child loads and unlinks the file, and every later run posts unsigned evidence
+until an operator reprovisions the file. Those later red reviews remain blocking
+and require manual adjudication. #568 tracks the durable token/per-run brokering
+design; do not treat the one-shot file as multi-run daemon provisioning.
+
+`PELAGGIO_REVIEW_EVIDENCE_PRIVATE_KEY` and
+`PELAGGIO_REVIEW_EVIDENCE_SIGNER_TOKEN` belong to the **signer process only**.
+They remain in the harness's `HARNESS_ONLY_ENV_DENY` deny-list (and the Claude
+subprocess env scrub) as defense-in-depth, but that scrubbing is **no longer
+load-bearing** for the private key — the harness simply has no key to leak.
+The socket path and token-file path are withheld from worker subprocesses for
+the same defense-in-depth reason. The load-bearing controls are: the signer
+refuses unauthenticated or non-canonical requests, and the record store the
+signature binds to is harness-write-guarded.
+
 ## Bearer-token auth
 
 `loadServerConfig()` **fails closed** whenever `CONTROL_PLANE_TOKEN` is unset,

@@ -15,31 +15,41 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { CONFIG, REPO, REVIEW_CONFIG, ROADMAP_GITHUB, resolveStepSettings, SHIP_TARGET, type StepSettings } from "./config.js";
+import { withFileLock } from "./file-lock.js";
 import { upsertMarkerComment } from "./github-posting.js";
 import { createMainCheckoutDeltaObserver, FORBIDDEN_ROOT_GONE, listWorktreesIn, type MainCheckoutDeltaObserver, mainWorktree, snapshotForbiddenRoot, snapshotRepoRefState, snapshotSiblingWorktree } from "./helpers.js";
 import { executionOverrideFor, trustedLocalContext, verificationPrompt } from "./pr-review-cli.js";
-import { gateRecordsDir, listPrReviewGateRecords, type PrReviewGateRecord, writePrReviewGateRecord } from "./pr-review-gate-record.js";
+import { gateRecordsDir, type PrReviewGateRecord, prReviewGateRecordPath, validatePrReviewGateRecord, writePrReviewGateRecord } from "./pr-review-gate-record.js";
 import {
+	adjudicationSourceRecordPath,
 	adjudicationSourcesDir,
 	bindLiveSafetyVerification,
 	buildOperatorGateRecord,
 	crossCheckAdjudicationSource,
 	evaluateInterdiffPolicy,
+	fleetRecordDigestOf,
 	isEligibleFleetGateRecord,
 	type LiveSafetyRefutation,
 	PR_ADJUDICATION_MARKER,
-	readAdjudicationSourceRecord,
+	type PrAdjudicationSourceRecordV1,
 	renderOperatorAdjudicationComment,
-	selectUnambiguousFleetGateRecord,
+	validateAdjudicationSourceRecord,
 } from "./review/adjudication.js";
 import { modelAuthoredText, parseReviewVerification, reconcileReviewVerification, reviewFindingFingerprint, type VerificationCandidate, type VerificationDisposition } from "./review/findings.js";
-import { cleanupReviewHead, postReviewStatus, prepareReviewHead, type ReviewCandidate } from "./review-sweep.js";
+import { buildReviewEvidencePayload, parseReviewEvidenceDescription, resolveReviewEvidencePubKey, verifyReviewEvidence } from "./review/gate-attestation.js";
+import { REVIEW_DRAIN_LOCK_STALE_MS, reviewDrainLockPath, reviewRequestsDir } from "./review-request-queue.js";
+import { cleanupReviewHead, postReviewStatus, prepareReviewHead, type ReviewCandidate, readReviewStatusForSha } from "./review-sweep.js";
 import { autopilotManagedState, CLAIM_BRANCH_RE } from "./revise-sweep.js";
 import { defaultGhRun, type GhRunner, parseGhJson } from "./roadmap/github-issues.js";
 import { type RunStepFn, runStep } from "./step-runner.js";
 import type { ParkSignal, ShipTargetName } from "./types.js";
 
 const USAGE = "usage: pelaggio pr-adjudicate --pr <number> [--profile <name>]";
+
+/** Hard cap on the paginated PR commit list. Never silently truncate. */
+const PR_COMMIT_LIST_CAP = 250;
+
+const FRESH_REVIEW = "run a full local pr-review";
 
 /** Review-head directory suffix (#510): keeps adjudication's checkout at `<sha>-adjudicate`,
  *  disjoint from a concurrent drain's `<sha>` checkout, so the finally-block force-remove can
@@ -63,11 +73,12 @@ export interface PrAdjudicateDeps {
 	err: (msg: string) => void;
 	now: () => number;
 	mainWorktree: (repo: string) => string;
-	listGateRecords: typeof listPrReviewGateRecords;
+	reviewQueueRoot?: string;
 	gateRecordsRoot: string;
 	adjudicationSourcesRoot: string;
-	readAdjudicationSource: typeof readAdjudicationSourceRecord;
 	readFileSync: typeof readFileSync;
+	/** Out-of-band verification key. Tests pin a generated SPKI PEM. */
+	reviewEvidencePubKey?: string;
 	writeGateRecord: typeof writePrReviewGateRecord;
 	prepareReviewHead: typeof prepareReviewHead;
 	cleanupReviewHead: typeof cleanupReviewHead;
@@ -134,11 +145,11 @@ function defaultDeps(): PrAdjudicateDeps {
 		},
 		now: () => Date.now(),
 		mainWorktree,
-		listGateRecords: listPrReviewGateRecords,
+		reviewQueueRoot: reviewRequestsDir(mainWorktree(repo)),
 		gateRecordsRoot: gateRecordsDir(mainWorktree(repo)),
 		adjudicationSourcesRoot: adjudicationSourcesDir(mainWorktree(repo)),
-		readAdjudicationSource: readAdjudicationSourceRecord,
 		readFileSync,
+		reviewEvidencePubKey: resolveReviewEvidencePubKey(),
 		writeGateRecord: writePrReviewGateRecord,
 		prepareReviewHead,
 		cleanupReviewHead,
@@ -209,8 +220,113 @@ function emptyParkSignal(): ParkSignal {
 	return { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" };
 }
 
-function fleetFilePath(root: string, record: PrReviewGateRecord): string {
-	return resolve(root, `${record.prNumber}-${record.headSha}.json`);
+function listPrCommits(deps: PrAdjudicateDeps, pr: number): { kind: "ok"; shas: string[] } | { kind: "error"; message: string } {
+	// `--slurp` collects the `--paginate` pages into ONE top-level array-of-arrays (one element per
+	// page). Without it, a PR spanning more than one API page emits as concatenated JSON arrays
+	// (`[...][...]`) that `JSON.parse` rejects, so the 250-commit adjudication path was refused as
+	// malformed (#511 must-fix). Flatten the pages here so every commit across every page is seen.
+	const listed = deps.gh(["api", "--paginate", "--slurp", `repos/${deps.ghRepo}/pulls/${pr}/commits`]);
+	if (listed.status !== 0) return { kind: "error", message: `could not list pull request commits; ${FRESH_REVIEW}` };
+	let pages: unknown;
+	try {
+		pages = parseGhJson<unknown>(listed.stdout, (v) => Array.isArray(v));
+	} catch {
+		return { kind: "error", message: `malformed pull request commit list; ${FRESH_REVIEW}` };
+	}
+	if (!Array.isArray(pages)) return { kind: "error", message: `malformed pull request commit list; ${FRESH_REVIEW}` };
+	const parsed: unknown[] = [];
+	for (const page of pages) {
+		if (!Array.isArray(page)) return { kind: "error", message: `malformed pull request commit list; ${FRESH_REVIEW}` };
+		for (const entry of page) parsed.push(entry);
+	}
+	if (parsed.length === 0) return { kind: "error", message: `pull request commit list is empty; ${FRESH_REVIEW}` };
+	if (parsed.length > PR_COMMIT_LIST_CAP) {
+		return { kind: "error", message: `pull request has more than ${PR_COMMIT_LIST_CAP} commits; refusing to silently truncate — ${FRESH_REVIEW}` };
+	}
+	const shas: string[] = [];
+	for (const entry of parsed) {
+		if (!isObject(entry) || typeof entry.sha !== "string" || !/^[0-9a-fA-F]{40}$/.test(entry.sha)) {
+			return { kind: "error", message: `malformed pull request commit list; ${FRESH_REVIEW}` };
+		}
+		shas.push(entry.sha);
+	}
+	return { kind: "ok", shas };
+}
+
+function resolveSignedRedEvidence(deps: PrAdjudicateDeps, pr: number, headSha: string): { kind: "ok"; reviewedSha: string; signature: string } | { kind: "error"; message: string } {
+	const listed = listPrCommits(deps, pr);
+	if (listed.kind === "error") return listed;
+	const snapshotIndex = listed.shas.findIndex((sha) => sha.toLowerCase() === headSha.toLowerCase());
+	if (snapshotIndex < 0) return { kind: "error", message: `snapshotted head is not in the pull request commit list; ${FRESH_REVIEW}` };
+	for (let i = snapshotIndex; i >= 0; i--) {
+		const sha = listed.shas[i];
+		if (!sha) continue;
+		const probe = readReviewStatusForSha(deps.gh, deps.ghRepo, sha);
+		if (probe.kind === "error") return { kind: "error", message: `could not read review status for ${sha}; ${FRESH_REVIEW}` };
+		if (probe.kind === "missing") continue;
+		if (probe.state.toUpperCase() !== "FAILURE") {
+			return { kind: "error", message: `nearest review status is not a signed red fleet result; ${FRESH_REVIEW}` };
+		}
+		const signature = parseReviewEvidenceDescription(probe.description);
+		if (!signature) return { kind: "error", message: `nearest review status is not a signed red fleet result; ${FRESH_REVIEW}` };
+		return { kind: "ok", reviewedSha: sha, signature };
+	}
+	return { kind: "error", message: `no signed red review evidence on this pull request; ${FRESH_REVIEW}` };
+}
+
+function verifyBoundEvidence(deps: PrAdjudicateDeps, pr: number, itemId: string, reviewedSha: string, signature: string): { kind: "ok"; source: PrAdjudicationSourceRecordV1 } | { kind: "error"; message: string } {
+	const pubKey = deps.reviewEvidencePubKey ?? resolveReviewEvidencePubKey();
+	if (!pubKey) return { kind: "error", message: `no review-evidence trust anchor is configured; set PELAGGIO_REVIEW_EVIDENCE_PUBKEY and ${FRESH_REVIEW}` };
+	// #511 TOCTOU: read the exact fleet/source bytes ONCE. The signature authenticates THESE
+	// buffers; every object consumed downstream (eligibility, cross-check, and the returned source
+	// the caller uses for interdiff + the green status) is parsed from them — never reread from the
+	// mutable path, where a concurrent writer could swap a schema-valid forgery between reads.
+	let fleetBytes: Buffer;
+	let sourceBytes: Buffer;
+	try {
+		fleetBytes = deps.readFileSync(prReviewGateRecordPath(deps.gateRecordsRoot, pr, reviewedSha));
+		sourceBytes = deps.readFileSync(adjudicationSourceRecordPath(deps.adjudicationSourcesRoot, pr, reviewedSha));
+	} catch {
+		return { kind: "error", message: `could not read the bound fleet/source records; ${FRESH_REVIEW}` };
+	}
+	let payload: string;
+	try {
+		payload = buildReviewEvidencePayload({
+			repository: deps.ghRepo,
+			prNumber: pr,
+			itemId,
+			reviewedSha: reviewedSha.toLowerCase(),
+			fleetRecordSha256: fleetRecordDigestOf(fleetBytes),
+			adjudicationSourceSha256: fleetRecordDigestOf(sourceBytes),
+		});
+	} catch {
+		return { kind: "error", message: `signed evidence identity is malformed; ${FRESH_REVIEW}` };
+	}
+	if (!verifyReviewEvidence(payload, pubKey, signature)) {
+		return { kind: "error", message: `review evidence signature does not verify; ${FRESH_REVIEW}` };
+	}
+	// Parse the authenticated records from the SAME verified buffers — no filesystem round-trip.
+	let latest: PrReviewGateRecord;
+	let source: PrAdjudicationSourceRecordV1;
+	try {
+		latest = validatePrReviewGateRecord(JSON.parse(fleetBytes.toString("utf8")));
+		source = validateAdjudicationSourceRecord(JSON.parse(sourceBytes.toString("utf8")));
+	} catch {
+		return { kind: "error", message: `bound fleet/source records are malformed; ${FRESH_REVIEW}` };
+	}
+	// Identity guards the SHA-keyed record readers enforce (path key ↔ record content).
+	if (latest.prNumber !== pr || latest.headSha.toLowerCase() !== reviewedSha.toLowerCase()) {
+		return { kind: "error", message: `bound fleet record identity does not match the signed SHA; ${FRESH_REVIEW}` };
+	}
+	if (source.prNumber !== pr || source.reviewedSha !== reviewedSha.toLowerCase()) {
+		return { kind: "error", message: `bound source record identity does not match the signed SHA; ${FRESH_REVIEW}` };
+	}
+	if (!isEligibleFleetGateRecord(latest)) {
+		return { kind: "error", message: `latest fleet outcome is not an adjudicable complete consensus-block; ${FRESH_REVIEW}` };
+	}
+	const bound = crossCheckAdjudicationSource(source, latest, fleetBytes, { prNumber: pr, itemId });
+	if (!bound.ok) return { kind: "error", message: bound.reason };
+	return { kind: "ok", source };
 }
 
 export async function runPrAdjudication(pr: number, profile: string, deps: PrAdjudicateDeps): Promise<number> {
@@ -232,33 +348,16 @@ export async function runPrAdjudication(pr: number, profile: string, deps: PrAdj
 	const adjudicator = actor.stdout.trim();
 	if (actor.status !== 0 || adjudicator.length === 0) return refuse(deps, "could not resolve the authenticated adjudicator");
 
-	// #510 must-fix (1b/1c): both evidence stores consumed below live under gitignored
-	// MAIN_REPO/.dev and function as authorization. Contained hardenings: every pipeline seat is
-	// denied opaque-Bash and Write/Edit access to both store paths (step-runner register denial),
-	// and selection refuses ambiguity instead of trusting the model-supplied `reviewedAt`
-	// ordering. Residual, accepted until the chartered ADR-0018/#419 harness-attested-evidence
-	// work: the path denial covers pipeline seats only — host processes and un-jailed Bash
-	// outside the hook system can still write these stores.
-	const selection = selectUnambiguousFleetGateRecord(deps.listGateRecords(deps.gateRecordsRoot), pr, itemId);
-	if (selection.kind === "none") return refuse(deps, "no local fleet review record for this PR; run a full pr-review first");
-	if (selection.kind === "ambiguous") {
-		return refuse(deps, `multiple fleet review records exist for PR #${pr} and item ${itemId} under ${deps.gateRecordsRoot} (${selection.files.join(", ")}); refusing ambiguous evidence — remove the stale record(s) or run a full pr-review`);
-	}
-	const latest = selection.record;
-	if (!isEligibleFleetGateRecord(latest)) {
-		return refuse(deps, "latest fleet outcome is not an adjudicable complete consensus-block; run a full pr-review");
-	}
-
-	const source = deps.readAdjudicationSource(deps.adjudicationSourcesRoot, pr, latest.headSha);
-	if (!source) return refuse(deps, "no typed adjudication source evidence for the reviewed SHA; run a full local pr-review (legacy and CI-only reviews cannot be reconstructed)");
-	let fleetBytes: Buffer;
-	try {
-		fleetBytes = deps.readFileSync(fleetFilePath(deps.gateRecordsRoot, latest));
-	} catch {
-		return refuse(deps, "could not read the bound fleet gate record");
-	}
-	const bound = crossCheckAdjudicationSource(source, latest, fleetBytes, { prNumber: pr, itemId });
-	if (!bound.ok) return refuse(deps, bound.reason);
+	// #511: forge history selects the nearest review status; the detached signature on
+	// that status authenticates the exact local fleet/source bytes. `.dev` files are
+	// durable evidence bytes only — no field stored solely there can authorize.
+	const selected = resolveSignedRedEvidence(deps, pr, headSha);
+	if (selected.kind === "error") return refuse(deps, selected.message);
+	const verified = verifyBoundEvidence(deps, pr, itemId, selected.reviewedSha, selected.signature);
+	if (verified.kind === "error") return refuse(deps, verified.message);
+	// #511 TOCTOU: consume the source record parsed from the exact verified bytes — never a fresh
+	// reread of the mutable path, which a concurrent writer could have swapped after verification.
+	const source = verified.source;
 
 	const candidate: ReviewCandidate = { prNumber: pr, itemId, branch, headSha, statusState: "missing" };
 	const headRef = `refs/pelaggio-adjudicate/pr-${pr}`;
@@ -453,17 +552,42 @@ export async function runPrAdjudication(pr: number, profile: string, deps: PrAdj
 		});
 		if (!deps.upsertComment(deps.gh, deps.ghRepo, pr, body)) return refuse(deps, "failed to upsert the operator adjudication comment");
 
-		const beforeStatus = snapshotPr(deps, pr);
-		if (beforeStatus.kind === "error") return refuse(deps, beforeStatus.message, beforeStatus.code);
-		if (beforeStatus.snapshot.headSha !== headSha) return refuse(deps, "PR head changed before status post; refusing to green a new head");
+		let statusResult: number;
+		try {
+			statusResult = await withFileLock(
+				reviewDrainLockPath(deps.reviewQueueRoot ?? reviewRequestsDir(deps.mainWorktree(deps.repo))),
+				() => {
+					const beforeStatus = snapshotPr(deps, pr);
+					if (beforeStatus.kind === "error") return refuse(deps, beforeStatus.message, beforeStatus.code);
+					if (beforeStatus.snapshot.headSha !== headSha) return refuse(deps, "PR head changed before status post; refusing to green a new head");
+					// The forge-carried signed red is authorization input, so pin it across the
+					// verifier/effect window just like the PR head. Holding the same lock as the
+					// local review drain makes this freshness read atomic with the success post:
+					// a same-SHA re-review cannot insert pending between them and be overwritten.
+					const currentEvidence = resolveSignedRedEvidence(deps, pr, headSha);
+					if (currentEvidence.kind === "error" || currentEvidence.reviewedSha.toLowerCase() !== selected.reviewedSha.toLowerCase() || currentEvidence.signature !== selected.signature) {
+						return refuse(deps, `signed review status changed during adjudication; ${FRESH_REVIEW}`);
+					}
 
-		if (!deps.postStatus(deps.gh, deps.ghRepo, headSha, "success", "local pelaggio operator adjudication passed")) {
-			return refuse(deps, "failed to post the review success status; retry pr-adjudicate");
+					if (!deps.postStatus(deps.gh, deps.ghRepo, headSha, "success", "local pelaggio operator adjudication passed")) {
+						return refuse(deps, "failed to post the review success status; retry pr-adjudicate");
+					}
+
+					const afterStatus = snapshotPr(deps, pr);
+					if (afterStatus.kind === "error") return refuse(deps, afterStatus.message, afterStatus.code);
+					if (afterStatus.snapshot.headSha !== headSha) return refuse(deps, "PR head changed after status post; the new head is not authorized");
+					return 0;
+				},
+				{
+					label: "review drain lock",
+					staleMs: REVIEW_DRAIN_LOCK_STALE_MS,
+					acquireTimeoutMs: REVIEW_DRAIN_LOCK_STALE_MS,
+				},
+			);
+		} catch (e) {
+			return refuse(deps, `could not acquire review drain lock: ${e instanceof Error ? e.message : String(e)}`);
 		}
-
-		const afterStatus = snapshotPr(deps, pr);
-		if (afterStatus.kind === "error") return refuse(deps, afterStatus.message, afterStatus.code);
-		if (afterStatus.snapshot.headSha !== headSha) return refuse(deps, "PR head changed after status post; the new head is not authorized");
+		if (statusResult !== 0) return statusResult;
 
 		deps.log(`adjudicated PR #${pr} ${source.reviewedSha.slice(0, 8)} → ${headSha.slice(0, 8)}`);
 		return 0;
@@ -484,6 +608,7 @@ export async function main(argv: string[], overrides: Partial<PrAdjudicateDeps> 
 	}
 	if (overrides.repo && !overrides.gateRecordsRoot) deps.gateRecordsRoot = gateRecordsDir(deps.mainWorktree(deps.repo));
 	if (overrides.repo && !overrides.adjudicationSourcesRoot) deps.adjudicationSourcesRoot = adjudicationSourcesDir(deps.mainWorktree(deps.repo));
+	if (overrides.repo && !overrides.reviewQueueRoot) deps.reviewQueueRoot = reviewRequestsDir(deps.mainWorktree(deps.repo));
 
 	const parsed = parsePrAdjudicateArgs(argv);
 	if (parsed.kind === "error") return refuse(deps, parsed.message, 2);

@@ -978,6 +978,40 @@ fresh ritual, and revocation is by key rotation or removing the `contract` block
 is reused across repositories, a signature valid in one repo verifies in another with the same contracted
 class set — use a distinct anchor key per repo where cross-repo replay matters.
 
+## Review-evidence signing key
+
+Local adjudication accepts only harness-signed, forge-anchored fleet/source evidence.
+The signing key is a dedicated Ed25519 pair, distinct from `PELAGGIO_TAXONOMY_PUBKEY`.
+The **private** key is literal PEM text and belongs **only** to a separate-UID
+`pelaggio evidence-signer` process — never the harness that runs `pr-review` or
+the drain. Putting it in the harness environment is both non-functional (the
+harness never signs in-process) and the `/proc/<pid>/environ` exposure this
+design exists to close: same-UID workers can read a harness ancestor's environ.
+
+The harness receives only:
+
+- `PELAGGIO_REVIEW_EVIDENCE_SIGNER_SOCKET` — unix-socket path of the signer
+- `PELAGGIO_REVIEW_EVIDENCE_SIGNER_TOKEN_FILE` — 0400 file holding the request
+  authenticator; the harness loads it into memory and unlinks the file so the
+  value is never in `environ`
+- `PELAGGIO_REVIEW_EVIDENCE_PUBKEY` — SPKI PEM used by `pr-adjudicate`
+
+None of these belong in `.pelaggio.yml`, the repository, or `security.env-allowlist`.
+`PELAGGIO_REVIEW_EVIDENCE_PRIVATE_KEY` and `PELAGGIO_REVIEW_EVIDENCE_SIGNER_TOKEN`
+are signer-process variables only.
+
+```bash
+openssl genpkey -algorithm ED25519
+# or: node -e 'const {generateKeyPairSync}=require("node:crypto"); const k=generateKeyPairSync("ed25519"); process.stdout.write(k.privateKey.export({type:"pkcs8",format:"pem"})); process.stdout.write(k.publicKey.export({type:"spki",format:"pem"}))'
+openssl rand -hex 32   # request token shared by the signer and a one-shot harness copy
+```
+
+See [Review-evidence signer](./server.md#review-evidence-signer-harness-attested-adjudication)
+for keypair generation, the systemd unit (separate UID), token provisioning, and
+pubkey publish. Rotation is a new key pair **and** a new token plus a fresh local
+`pr-review` — unsigned and previously signed records are never retroactively
+re-attested.
+
 ## Local revise sweep
 
 When a PR-mode ship opens a pull request and the `review` merge gate comes back

@@ -10,7 +10,19 @@
 // Both are best-effort defense-in-depth, not a secrets broker (that is #176). The env allowlist
 // is the primary control; scrubbing is the backstop for what still reaches a log stream.
 
+import { REVIEW_EVIDENCE_PRIVATE_KEY_ENV, REVIEW_EVIDENCE_SIGNER_SOCKET_ENV, REVIEW_EVIDENCE_SIGNER_TOKEN_ENV, REVIEW_EVIDENCE_SIGNER_TOKEN_FILE_ENV } from "./review/gate-attestation.js";
 import type { ProviderName } from "./types.js";
+
+/**
+ * Env names that must never reach a model subprocess, even under `security.env-allowlist`.
+ * The private-key and signer-token entries are defense-in-depth only since #511 (the
+ * harness no longer holds either — they live in the separate-UID signer). The socket
+ * path and token-file path are withheld too so an untrusted seat is not handed the
+ * oracle's address or the one-shot token file. The load-bearing controls are: the
+ * signer refuses unauthenticated or non-canonical requests, and the record store the
+ * signature binds to is write-guarded.
+ */
+export const HARNESS_ONLY_ENV_DENY: ReadonlySet<string> = new Set([REVIEW_EVIDENCE_PRIVATE_KEY_ENV, REVIEW_EVIDENCE_SIGNER_SOCKET_ENV, REVIEW_EVIDENCE_SIGNER_TOKEN_ENV, REVIEW_EVIDENCE_SIGNER_TOKEN_FILE_ENV]);
 
 export const REDACTED = "[REDACTED]";
 
@@ -85,10 +97,16 @@ export function buildAgentEnv(opts: BuildAgentEnvOptions = {}): NodeJS.ProcessEn
 	const allow = new Set<string>([...DEFAULT_AGENT_ENV_ALLOWLIST, ...(opts.allow ?? [])]);
 	const env: NodeJS.ProcessEnv = {};
 	for (const key of allow) {
+		if (HARNESS_ONLY_ENV_DENY.has(key)) continue;
 		const value = source[key];
 		if (value !== undefined) env[key] = value;
 	}
-	if (opts.extra) for (const [k, v] of Object.entries(opts.extra)) env[k] = v;
+	if (opts.extra) {
+		for (const [k, v] of Object.entries(opts.extra)) {
+			if (HARNESS_ONLY_ENV_DENY.has(k)) continue;
+			env[k] = v;
+		}
+	}
 	return env;
 }
 

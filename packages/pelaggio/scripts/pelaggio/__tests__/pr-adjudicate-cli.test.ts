@@ -1,16 +1,18 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createHash, generateKeyPairSync } from "node:crypto";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { DEFAULTS, type StepSettings } from "../config.js";
 import { FORBIDDEN_ROOT_GONE, type MainCheckoutDeltaResult } from "../helpers.js";
 import { main, type PrAdjudicateDeps, parsePrAdjudicateArgs } from "../pr-adjudicate-cli.js";
-import { listPrReviewGateRecords, type NewPrReviewFleetGateRecord, readPrReviewGateRecord, writePrReviewGateRecord } from "../pr-review-gate-record.js";
-import { type PrAdjudicationSourceRecordV1, type PrAdjudicationSurvivorEntry, readAdjudicationSourceRecord, writeAdjudicationSourceRecord } from "../review/adjudication.js";
+import { type NewPrReviewFleetGateRecord, prReviewGateRecordPath, readPrReviewGateRecord, writePrReviewGateRecord } from "../pr-review-gate-record.js";
+import { adjudicationSourceRecordPath, fleetRecordDigestOf, type PrAdjudicationSourceRecordV1, type PrAdjudicationSurvivorEntry, readAdjudicationSourceRecord, writeAdjudicationSourceRecord } from "../review/adjudication.js";
 import { materializeAuthoringFinding, type ReviewFinding, reviewFindingFingerprint } from "../review/findings.js";
+import { buildReviewEvidencePayload, formatReviewEvidenceDescription, signReviewEvidence } from "../review/gate-attestation.js";
 import { BASELINE_TAXONOMY, tierOf } from "../review/taxonomy.js";
+import { reviewDrainLockPath, reviewRequestsDir } from "../review-request-queue.js";
 import type { GhRunner } from "../roadmap/github-issues.js";
 import type { RunStepFn } from "../step-runner.js";
 import type { ParkSignal, StepResult } from "../types.js";
@@ -32,6 +34,13 @@ after(() => {
 const REVIEWED = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const HEAD = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const NEW_HEAD = "cccccccccccccccccccccccccccccccccccccccc";
+const TEST_KEYS = (() => {
+	const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+	return {
+		publicKeyPem: publicKey.export({ type: "spki", format: "pem" }).toString(),
+		privateKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+	};
+})();
 const dirs: string[] = [];
 
 after(() => {
@@ -136,15 +145,16 @@ interface Harness {
 	heads: string[];
 }
 
-function seedEvidence(gateRoot: string, sourceRoot: string, entry: PrAdjudicationSurvivorEntry = survivor()): { digest: string } {
-	const path = writePrReviewGateRecord(gateRoot, fleet());
+function seedEvidence(gateRoot: string, sourceRoot: string, entry: PrAdjudicationSurvivorEntry = survivor(), recordOver: Partial<NewPrReviewFleetGateRecord> = {}): { digest: string; description: string } {
+	const record = fleet(recordOver);
+	const path = writePrReviewGateRecord(gateRoot, record);
 	const bytes = readFileSync(path);
 	const digest = createHash("sha256").update(bytes).digest("hex");
-	const record: PrAdjudicationSourceRecordV1 = {
+	const source: PrAdjudicationSourceRecordV1 = {
 		schemaVersion: 1,
-		prNumber: 497,
-		itemId: "497",
-		reviewedSha: REVIEWED,
+		prNumber: record.prNumber,
+		itemId: record.itemId,
+		reviewedSha: record.headSha.toLowerCase(),
 		agreement: "consensus-block",
 		requiredCells: 1,
 		completedCells: 1,
@@ -152,8 +162,16 @@ function seedEvidence(gateRoot: string, sourceRoot: string, entry: PrAdjudicatio
 		survivors: [entry],
 		fleetRecordDigest: digest,
 	};
-	writeAdjudicationSourceRecord(sourceRoot, record);
-	return { digest };
+	const sourcePath = writeAdjudicationSourceRecord(sourceRoot, source);
+	const payload = buildReviewEvidencePayload({
+		repository: "o/r",
+		prNumber: record.prNumber,
+		itemId: record.itemId,
+		reviewedSha: record.headSha.toLowerCase(),
+		fleetRecordSha256: fleetRecordDigestOf(bytes),
+		adjudicationSourceSha256: fleetRecordDigestOf(readFileSync(sourcePath)),
+	});
+	return { digest, description: formatReviewEvidenceDescription(signReviewEvidence(payload, TEST_KEYS.privateKeyPem)) };
 }
 
 function harness(
@@ -187,17 +205,25 @@ function harness(
 		refStateSnapshots?: string[];
 		extraWorktrees?: string[];
 		siblingSnapshots?: Record<string, string[]>;
+		commits?: Array<{ sha: string }> | "fail" | "empty" | "malformed" | "overcap";
+		/** Multi-page `--paginate --slurp` fixture: one inner array per API page (#511). */
+		commitPages?: Array<Array<{ sha: string }>>;
+		statuses?: Record<string, { state: string; description?: string } | "error" | "missing">;
+		signedDescription?: string;
+		pubkey?: string | null;
 	} = {},
 ): Harness {
 	const repo = tmp();
 	const gateRoot = join(repo, "gates");
 	const sourceRoot = join(repo, "sources");
-	if (over.seed !== false) seedEvidence(gateRoot, sourceRoot, over.survivor);
+	const seeded = over.seed !== false ? seedEvidence(gateRoot, sourceRoot, over.survivor) : undefined;
+	const signedDescription = over.signedDescription ?? seeded?.description;
 	const effects: string[] = [];
 	const stepCalls: Harness["stepCalls"] = [];
 	const logs: string[] = [];
 	const errs: string[] = [];
 	const heads = Array.isArray(over.prJson) ? [...over.prJson] : [];
+	const ghRepo = over.ghRepo ?? "o/r";
 	const silentGh: GhRunner = (args) => {
 		effects.push(`gh:${args[0]}:${args[1] ?? ""}`);
 		if (args[0] === "pr" && args[1] === "view") {
@@ -206,6 +232,47 @@ function harness(
 			return { stdout: next, stderr: "", status: 0 };
 		}
 		if (args[0] === "api" && args[1] === "user") return { stdout: `${over.user ?? "operator"}\n`, stderr: "", status: over.userStatus ?? 0 };
+		if (args[0] === "api" && args[1] === "--paginate" && args[2] === "--slurp" && args[3] === `repos/${ghRepo}/pulls/497/commits`) {
+			// `--slurp` returns one array element per `--paginate` page (array-of-arrays); fixtures
+			// mirror that shape so the flatten in `listPrCommits` is exercised (#511).
+			if (over.commits === "fail") return { stdout: "", stderr: "boom", status: 1 };
+			if (over.commits === "empty") return { stdout: "[]", stderr: "", status: 0 };
+			if (over.commits === "malformed") return { stdout: "not json", stderr: "", status: 0 };
+			if (over.commits === "overcap") {
+				return { stdout: JSON.stringify([Array.from({ length: 251 }, (_, i) => ({ sha: i.toString(16).padStart(40, "0") }))]), stderr: "", status: 0 };
+			}
+			const pages = over.commitPages ?? [over.commits ?? [{ sha: REVIEWED }, { sha: HEAD }]];
+			return { stdout: JSON.stringify(pages), stderr: "", status: 0 };
+		}
+		if (args[0] === "api" && args[1] === "--paginate" && args[2] === "--slurp" && typeof args[3] === "string" && args[3].startsWith(`repos/${ghRepo}/commits/`) && /\/status(?:\?|$)/.test(args[3])) {
+			effects.push(`status-read-lock:${existsSync(reviewDrainLockPath(reviewRequestsDir(repo)))}`);
+			const sha = args[3].slice(`repos/${ghRepo}/commits/`.length).replace(/\/status(?:\?.*)?$/, "");
+			const configured = over.statuses?.[sha] ?? over.statuses?.[sha.toLowerCase()];
+			if (configured === "error") return { stdout: "", stderr: "boom", status: 1 };
+			if (configured && configured !== "missing") {
+				return {
+					stdout: JSON.stringify([
+						{
+							statuses: [{ context: "review", state: configured.state, description: configured.description ?? "", created_at: "2026-08-13T12:00:00Z" }],
+						},
+					]),
+					stderr: "",
+					status: 0,
+				};
+			}
+			if ((configured === undefined || configured === "missing") && signedDescription && sha.toLowerCase() === REVIEWED) {
+				return {
+					stdout: JSON.stringify([
+						{
+							statuses: [{ context: "review", state: "failure", description: signedDescription, created_at: "2026-08-13T12:00:00Z" }],
+						},
+					]),
+					stderr: "",
+					status: 0,
+				};
+			}
+			return { stdout: JSON.stringify([{ statuses: [] }]), stderr: "", status: 0 };
+		}
 		throw new Error(`unexpected gh call: ${args.join(" ")}`);
 	};
 	const runStep: RunStepFn = async (name, prompt, stepOpts) => {
@@ -251,13 +318,9 @@ function harness(
 		},
 		now: () => Date.parse("2026-08-13T13:00:00Z"),
 		mainWorktree: (cwd) => over.mainWorktree ?? cwd,
-		listGateRecords: listPrReviewGateRecords,
+		reviewQueueRoot: reviewRequestsDir(repo),
 		gateRecordsRoot: gateRoot,
 		adjudicationSourcesRoot: sourceRoot,
-		readAdjudicationSource: (root, prNumber, sha) => {
-			effects.push(`read-source:${prNumber}:${sha}`);
-			return readAdjudicationSourceRecord(root, prNumber, sha);
-		},
 		readFileSync,
 		writeGateRecord: (root, record) => {
 			effects.push(`write-gate:${record.producer}`);
@@ -309,6 +372,7 @@ function harness(
 			return over.commentOk !== false;
 		},
 		postStatus: (_gh, _repo, sha, state) => {
+			effects.push(`status-lock:${existsSync(reviewDrainLockPath(reviewRequestsDir(repo)))}`);
 			effects.push(`status:${state}:${sha}`);
 			return over.statusOk !== false;
 		},
@@ -318,6 +382,7 @@ function harness(
 		},
 		isCi: over.isCi ?? false,
 		isSingleShot: over.isSingleShot ?? false,
+		...(over.pubkey === null ? {} : { reviewEvidencePubKey: over.pubkey ?? TEST_KEYS.publicKeyPem }),
 	};
 	return { deps, effects, stepCalls, logs, errs, repo, gateRoot, sourceRoot, heads };
 }
@@ -362,22 +427,178 @@ describe("pr-adjudicate CLI config and eligibility", () => {
 		assert.ok(!noSource.effects.some((e) => e.startsWith("step:") || e.startsWith("comment:") || e.startsWith("status:")));
 	});
 
-	it("refuses ambiguous fleet evidence naming the conflicting files, never picking by reviewedAt (#510 1b)", async () => {
+	it("binds the nearest signed red status even when multiple per-SHA fleet files exist", async () => {
 		const h = harness();
-		// A second fleet record for the same PR with a FUTURE model-supplied timestamp — under
-		// newest-wins this forged record would steer adjudication; now any second record refuses.
 		writePrReviewGateRecord(h.gateRoot, fleet({ headSha: NEW_HEAD, reviewedAt: "2027-01-01T00:00:00.000Z" }));
-		assert.equal(await main(["--pr", "497"], h.deps), 1);
-		assert.ok(h.errs.some((e) => e.includes(`497-${REVIEWED}.json`) && e.includes(`497-${NEW_HEAD}.json`)));
-		assert.ok(!h.effects.some((e) => e.startsWith("read-source:") || e.startsWith("step:") || e.startsWith("comment:") || e.startsWith("status:")));
+		assert.equal(await main(["--pr", "497"], h.deps), 0);
+		assert.ok(h.effects.includes("write-gate:operator-adjudication"));
+		assert.ok(h.effects.includes(`status:success:${HEAD}`));
 	});
 
-	it("ignores fleet evidence for a different item before checking ambiguity (#514)", async () => {
+	it("ignores fleet evidence for a different item", async () => {
 		const h = harness();
 		writePrReviewGateRecord(h.gateRoot, fleet({ itemId: "500", headSha: NEW_HEAD }));
 		assert.equal(await main(["--pr", "497"], h.deps), 0);
 		assert.ok(h.effects.includes("write-gate:operator-adjudication"));
 		assert.ok(h.effects.includes(`status:success:${HEAD}`));
+	});
+});
+
+describe("pr-adjudicate CLI status-led evidence", () => {
+	it("refuses when the signed red status is superseded during verification", async () => {
+		const h = harness();
+		const originalGh = h.deps.gh;
+		let signedStatusReads = 0;
+		h.deps.gh = (args) => {
+			if (args[0] === "api" && args[1] === "--paginate" && args[2] === "--slurp" && args[3] === `repos/o/r/commits/${REVIEWED}/status?per_page=100`) {
+				signedStatusReads++;
+				if (signedStatusReads === 2) {
+					return {
+						stdout: JSON.stringify([
+							{
+								statuses: [{ context: "review", state: "failure", description: formatReviewEvidenceDescription(Buffer.alloc(64, 7).toString("base64url")), created_at: "2026-08-13T13:00:00Z" }],
+							},
+						]),
+						stderr: "",
+						status: 0,
+					};
+				}
+			}
+			return originalGh(args);
+		};
+
+		assert.equal(await main(["--pr", "497"], h.deps), 1);
+		assert.equal(signedStatusReads, 2, "the signed status must be read once for authorization and once immediately before green");
+		assert.ok(h.effects.includes("step:pr-verify"));
+		assert.ok(h.effects.includes("comment:497"));
+		assert.ok(h.errs.some((e) => /signed review status changed during adjudication/.test(e)));
+		assert.ok(!h.effects.some((e) => e.startsWith("status:success:")));
+	});
+
+	it("refuses a newer pending, pass, unsigned, or malformed review status without falling back", async () => {
+		for (const status of [
+			{ state: "pending", description: "local pelaggio review running" },
+			{ state: "success", description: "local pelaggio review passed" },
+			{ state: "failure", description: "pelaggio review block" },
+			{ state: "failure", description: "pelaggio review blocked; evidence-v2=abcd" },
+		]) {
+			const h = harness({ statuses: { [HEAD]: status } });
+			assert.equal(await main(["--pr", "497"], h.deps), 1);
+			assert.ok(h.errs.some((e) => /signed red fleet result|full local pr-review/.test(e)));
+			assert.ok(!h.effects.some((e) => e.startsWith("step:") || e.startsWith("comment:") || e.startsWith("status:")));
+		}
+	});
+
+	it("refuses a combined-status probe error on a newer commit rather than walking to older signed evidence", async () => {
+		const h = harness({ statuses: { [HEAD]: "error" } });
+		assert.equal(await main(["--pr", "497"], h.deps), 1);
+		assert.ok(h.errs.some((e) => /could not read review status/.test(e)));
+		assert.ok(!h.effects.some((e) => e.startsWith("step:") || e.startsWith("comment:") || e.startsWith("status:")));
+	});
+
+	it("refuses when the snapshotted head is missing from the commit list", async () => {
+		const h = harness({ commits: [{ sha: REVIEWED }] });
+		assert.equal(await main(["--pr", "497"], h.deps), 1);
+		assert.ok(h.errs.some((e) => /snapshotted head is not in the pull request commit list/.test(e)));
+		assert.ok(!h.effects.some((e) => e.startsWith("step:") || e.startsWith("comment:") || e.startsWith("status:")));
+	});
+
+	it("refuses an over-cap, empty, failed, or malformed commit list with no effects", async () => {
+		for (const commits of ["overcap", "empty", "fail", "malformed"] as const) {
+			const h = harness({ commits });
+			assert.equal(await main(["--pr", "497"], h.deps), 1);
+			assert.ok(!h.effects.some((e) => e.startsWith("step:") || e.startsWith("comment:") || e.startsWith("status:")));
+		}
+	});
+
+	it("flattens a multi-page `--paginate --slurp` commit list so a head on a later page is seen (#511)", async () => {
+		// `--slurp` returns one array element per API page; the reviewed SHA sits on page 1 and the
+		// snapshotted head on page 2. Before the fix the concatenated pages failed to parse and any
+		// PR spanning >1 page was refused as malformed — here every commit across both pages is seen.
+		const h = harness({ commitPages: [[{ sha: REVIEWED }], [{ sha: HEAD }]] });
+		assert.equal(await main(["--pr", "497"], h.deps), 0);
+		assert.ok(h.effects.some((e) => e === "gh:api:--paginate"));
+		assert.ok(h.effects.includes("status-read-lock:true"), "the final signed-evidence read must hold the local review drain lock");
+		assert.ok(h.effects.includes("status-lock:true"), "the success post must hold the local review drain lock");
+		assert.ok(h.effects.includes(`status:success:${HEAD}`));
+	});
+
+	it("refuses a missing public key before checkout, model, or authorization effects", async () => {
+		const h = harness({ pubkey: null });
+		assert.equal(await main(["--pr", "497"], h.deps), 1);
+		assert.ok(h.errs.some((e) => /PELAGGIO_REVIEW_EVIDENCE_PUBKEY/.test(e)));
+		assert.ok(!h.effects.some((e) => e.startsWith("prepare:") || e.startsWith("step:") || e.startsWith("comment:") || e.startsWith("status:")));
+	});
+
+	it("refuses when either local file is tampered after signing, even if digests still match each other", async () => {
+		const h = harness();
+		const forged = fleet({ cost: 99 });
+		const path = writePrReviewGateRecord(h.gateRoot, forged);
+		const bytes = readFileSync(path);
+		writeAdjudicationSourceRecord(h.sourceRoot, {
+			schemaVersion: 1,
+			prNumber: 497,
+			itemId: "497",
+			reviewedSha: REVIEWED,
+			agreement: "consensus-block",
+			requiredCells: 1,
+			completedCells: 1,
+			survivorCount: 1,
+			survivors: [survivor()],
+			fleetRecordDigest: fleetRecordDigestOf(bytes),
+		});
+		assert.equal(await main(["--pr", "497"], h.deps), 1);
+		assert.ok(h.errs.some((e) => /signature does not verify/.test(e)));
+		assert.ok(!h.effects.some((e) => e.startsWith("prepare:") || e.startsWith("step:") || e.startsWith("comment:") || e.startsWith("status:")));
+	});
+
+	it("consumes the verified source buffer, ignoring a post-verification swap of the on-disk file (#511 TOCTOU)", async () => {
+		const h = harness();
+		const sourcePath = adjudicationSourceRecordPath(h.sourceRoot, 497, REVIEWED);
+		// A concurrent writer swaps in a schema-valid forged survivor set (its hunk moved off the fix
+		// line) the instant the harness reads the source for verification. If adjudication reread the
+		// file it would consume the forgery and refuse ("outside recorded finding hunks"); binding to
+		// the verified buffer keeps the legit survivor (hunk 8-14) and the interdiff stays contained.
+		const forged: PrAdjudicationSourceRecordV1 = {
+			schemaVersion: 1,
+			prNumber: 497,
+			itemId: "497",
+			reviewedSha: REVIEWED,
+			agreement: "consensus-block",
+			requiredCells: 1,
+			completedCells: 1,
+			survivorCount: 1,
+			survivors: [survivor({ hunk: { path: "src/a.ts", start: 40, end: 45 } })],
+			fleetRecordDigest: fleetRecordDigestOf(readFileSync(prReviewGateRecordPath(h.gateRoot, 497, REVIEWED))),
+		};
+		let swapped = false;
+		h.deps.readFileSync = ((path: string | Buffer | URL) => {
+			const bytes = readFileSync(path);
+			if (!swapped && String(path) === sourcePath) {
+				swapped = true;
+				writeAdjudicationSourceRecord(h.sourceRoot, forged); // overwrite AFTER the verified bytes are read
+			}
+			return bytes;
+		}) as typeof readFileSync;
+		assert.equal(await main(["--pr", "497"], h.deps), 0);
+		assert.ok(swapped, "the on-disk source was swapped during verification");
+		assert.ok(h.effects.includes(`status:success:${HEAD}`));
+		// The forgery did land on disk (proving the race fired) yet was never the record adjudicated.
+		assert.deepEqual(readAdjudicationSourceRecord(h.sourceRoot, 497, REVIEWED)?.survivors[0]?.hunk, { path: "src/a.ts", start: 40, end: 45 });
+	});
+
+	it("refuses when the latest local bytes are deleted rather than selecting an older signed record", async () => {
+		const h = harness();
+		writeFileSync(prReviewGateRecordPath(h.gateRoot, 497, REVIEWED), "");
+		assert.equal(await main(["--pr", "497"], h.deps), 1);
+		assert.ok(!h.effects.some((e) => e.startsWith("prepare:") || e.startsWith("step:") || e.startsWith("comment:") || e.startsWith("status:")));
+	});
+
+	it("refuses a swapped repository identity in the reconstructed payload", async () => {
+		const h = harness({ ghRepo: "other/repo", prJson: prJson({ headRepository: { nameWithOwner: "other/repo" } }) });
+		assert.equal(await main(["--pr", "497"], h.deps), 1);
+		assert.ok(h.errs.some((e) => /signature does not verify/.test(e)));
+		assert.ok(!h.effects.some((e) => e.startsWith("prepare:") || e.startsWith("step:") || e.startsWith("comment:") || e.startsWith("status:")));
 	});
 });
 

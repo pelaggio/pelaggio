@@ -50,6 +50,9 @@ export interface ListedReviewRequest {
  */
 export const REVIEW_CLAIM_STALE_MS = 4 * 60 * 60 * 1000;
 
+/** One drain/adjudication critical section may include a full provider review. */
+export const REVIEW_DRAIN_LOCK_STALE_MS = 4 * 60 * 60 * 1000;
+
 const QUEUE_DIR = "review-requests";
 const DRAIN_LOCK = ".drain.lock";
 const SHA_RE = /^[0-9a-f]{7,40}$/i;

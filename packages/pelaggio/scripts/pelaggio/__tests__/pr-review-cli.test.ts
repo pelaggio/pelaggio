@@ -1,14 +1,17 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { generateKeyPairSync } from "node:crypto";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
 import { DEFAULTS, type ReviewConfig, type StepSettings } from "../config.js";
 import { main as adjudicateMain, type PrAdjudicateDeps } from "../pr-adjudicate-cli.js";
-import { main, runPrReviewGate, setPrReviewDepsForTests } from "../pr-review-cli.js";
-import { listPrReviewGateRecords, readPrReviewGateRecord, writePrReviewGateRecord } from "../pr-review-gate-record.js";
-import { isEligibleFleetGateRecord, readAdjudicationSourceRecord } from "../review/adjudication.js";
+import { main, persistLocalGateEvidence, runPrReviewGate, setPrReviewDepsForTests } from "../pr-review-cli.js";
+import { listPrReviewGateRecords, type NewPrReviewFleetGateRecord, readPrReviewGateRecord, serializePrReviewGateRecord, writePrReviewGateRecord } from "../pr-review-gate-record.js";
+import { fleetRecordDigestOf, isEligibleFleetGateRecord, readAdjudicationSourceRecord, serializeAdjudicationSourceRecord, writeAdjudicationSourceRecord } from "../review/adjudication.js";
+import { REVIEW_EVIDENCE_SIGNER_TOKEN_FILE_ENV, resetReviewEvidenceSignerAuthTokenCacheForTests, serveEvidenceSigner } from "../review/evidence-signer.js";
 import { reviewFindingFingerprint } from "../review/findings.js";
+import { buildReviewEvidencePayload, parseReviewEvidenceDescription, REVIEW_EVIDENCE_MARKER_PREFIX, verifyReviewEvidence } from "../review/gate-attestation.js";
 import type { RunStepFn } from "../step-runner.js";
 import type { ParkSignal, ProviderName, StepEmit, StepResult } from "../types.js";
 
@@ -140,14 +143,53 @@ function assertConstantOnlyDiagnosis(out: { stderr: string; comments: string[] }
 }
 
 const REVIEWED_SHA = "a".repeat(40);
+const REVIEW_EVIDENCE_KEYS = (() => {
+	const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+	return {
+		publicKeyPem: publicKey.export({ type: "spki", format: "pem" }).toString(),
+		privateKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+	};
+})();
+
+// A live out-of-process signer bound to the test key (#511). The harness holds no private
+// key; signing happens only over this socket with the request token. Hermetic: a temp
+// socket + a throwaway key + a throwaway authenticator.
+const SIGNER_AUTH = "a".repeat(32);
+const SIGNER = await serveEvidenceSigner({ socketPath: join(mkdtempSync(join(tmpdir(), "pr-review-signer-")), "s.sock"), privateKeyPem: REVIEW_EVIDENCE_KEYS.privateKeyPem, authToken: SIGNER_AUTH });
+after(() => SIGNER.close());
 
 async function runCli(
-	opts: { files?: string; diff?: string; results?: Array<StepResult | Error>; diffError?: Error; statusPosted?: boolean; reviewDrivers?: StepSettings[]; verifySettings?: StepSettings; headRef?: string; ci?: boolean } = {},
-): Promise<{ code: number; calls: RunCall[]; comments: string[]; statuses: string[]; statusShas: string[]; stdout: string; stderr: string; gateRecordsRoot: string; adjudicationSourcesRoot: string }> {
+	opts: {
+		files?: string;
+		diff?: string;
+		results?: Array<StepResult | Error>;
+		diffError?: Error;
+		statusPosted?: boolean;
+		reviewDrivers?: StepSettings[];
+		verifySettings?: StepSettings;
+		headRef?: string;
+		ci?: boolean;
+		signerSocket?: string;
+		signerAuthToken?: string;
+		onRunStep?: () => void;
+	} = {},
+): Promise<{
+	code: number;
+	calls: RunCall[];
+	comments: string[];
+	statuses: string[];
+	statusShas: string[];
+	statusDescriptions: Array<string | undefined>;
+	stdout: string;
+	stderr: string;
+	gateRecordsRoot: string;
+	adjudicationSourcesRoot: string;
+}> {
 	const calls: RunCall[] = [];
 	const comments: string[] = [];
 	const statuses: string[] = [];
 	const statusShas: string[] = [];
+	const statusDescriptions: Array<string | undefined> = [];
 	const queued = [...(opts.results ?? [result()])];
 	// Hermetic evidence roots: local persistence must never land in the host repo's .dev/.
 	const gateRecordsRoot = join(tmpRoot("pr-review-cli-evidence-"), "gates");
@@ -168,6 +210,7 @@ async function runCli(
 		throw new Error(`unexpected command: ${cmd} ${a}`);
 	}) as typeof import("node:child_process").execFileSync;
 	const runStep: RunStepFn = async (name, prompt, stepOpts, _emit: StepEmit) => {
+		opts.onRunStep?.();
 		calls.push({ name, prompt, cwd: stepOpts.cwd, parkSignal: stepOpts.parkSignal, executionOverride: stepOpts.executionOverride });
 		const next = queued.shift();
 		assert.ok(next, "unexpected extra runStep call");
@@ -184,9 +227,10 @@ async function runCli(
 		execFileSync,
 		runStep,
 		upsertComment: (_pr, body) => comments.push(body),
-		postStatus: (gate, sha) => {
+		postStatus: (gate, sha, description) => {
 			statuses.push(gate);
 			statusShas.push(sha);
+			statusDescriptions.push(description);
 			return opts.statusPosted ?? true;
 		},
 		gateRecordsRoot,
@@ -194,6 +238,9 @@ async function runCli(
 		now: () => Date.parse("2026-08-13T12:00:00Z"),
 		// Pinned: the ambient env (a real CI job) must not decide whether persistence runs.
 		isCi: () => opts.ci ?? false,
+		reviewEvidenceRepository: "pelaggio/pelaggio",
+		reviewEvidenceSignerSocket: opts.signerSocket,
+		reviewEvidenceSignerAuthToken: opts.signerAuthToken,
 	});
 	const originalStdout = process.stdout.write;
 	const originalStderr = process.stderr.write;
@@ -209,7 +256,7 @@ async function runCli(
 	}) as typeof process.stderr.write;
 	try {
 		const code = await main(["--pr", "123"]);
-		return { code, calls, comments, statuses, statusShas, stdout, stderr, gateRecordsRoot, adjudicationSourcesRoot };
+		return { code, calls, comments, statuses, statusShas, statusDescriptions, stdout, stderr, gateRecordsRoot, adjudicationSourcesRoot };
 	} finally {
 		process.stdout.write = originalStdout;
 		process.stderr.write = originalStderr;
@@ -1522,7 +1569,7 @@ describe("pr-review CLI local gate-evidence persistence (#497)", () => {
 	const redFinding = { severity: "must-fix" as const, message: "Broken parser.", path: "src/a.ts", line: 10 };
 	const rollInspectionDiff = ["diff --git a/src/a.ts b/src/a.ts", "index 1111111..2222222 100644", "--- a/src/a.ts", "+++ b/src/a.ts", "@@ -8,5 +8,5 @@", " context", " context", "-old", "+new", " context", " context", ""].join("\n");
 
-	function redRoll(over: { ci?: boolean; headRef?: string } = {}) {
+	function redRoll(over: { ci?: boolean; headRef?: string; signerSocket?: string; signerAuthToken?: string; onRunStep?: () => void } = {}) {
 		return runCli({
 			...over,
 			files: "src/a.ts\n",
@@ -1532,7 +1579,7 @@ describe("pr-review CLI local gate-evidence persistence (#497)", () => {
 	}
 
 	/** Full PrAdjudicateDeps against the roots a local pr-review run just wrote. */
-	function adjudicateHarness(roll: { gateRecordsRoot: string; adjudicationSourcesRoot: string }): { deps: PrAdjudicateDeps; effects: string[]; comments: string[] } {
+	function adjudicateHarness(roll: { gateRecordsRoot: string; adjudicationSourcesRoot: string; description?: string }): { deps: PrAdjudicateDeps; effects: string[]; comments: string[] } {
 		const effects: string[] = [];
 		const comments: string[] = [];
 		const repo = tmpRoot("pr-review-adjudicate-flow-");
@@ -1545,6 +1592,24 @@ describe("pr-review CLI local gate-evidence persistence (#497)", () => {
 			gh: (args) => {
 				if (args[0] === "pr" && args[1] === "view") return { stdout: prPayload, stderr: "", status: 0 };
 				if (args[0] === "api" && args[1] === "user") return { stdout: "operator\n", stderr: "", status: 0 };
+				if (args[0] === "api" && args[1] === "--paginate" && args[2] === "--slurp" && args[3] === "repos/pelaggio/pelaggio/pulls/123/commits") {
+					// `--slurp` wraps each `--paginate` page as one array element (array-of-arrays) (#511).
+					return { stdout: JSON.stringify([[{ sha: REVIEWED_SHA }, { sha: NEW_HEAD }]]), stderr: "", status: 0 };
+				}
+				if (args[0] === "api" && args[1] === "--paginate" && args[2] === "--slurp" && args[3] === `repos/pelaggio/pelaggio/commits/${REVIEWED_SHA}/status?per_page=100`) {
+					return {
+						stdout: JSON.stringify([
+							{
+								statuses: [{ context: "review", state: "failure", description: roll.description ?? "pelaggio review block", created_at: "2026-08-13T12:00:00Z" }],
+							},
+						]),
+						stderr: "",
+						status: 0,
+					};
+				}
+				if (args[0] === "api" && args[1] === "--paginate" && args[2] === "--slurp" && typeof args[3] === "string" && /\/status(?:\?|$)/.test(args[3])) {
+					return { stdout: JSON.stringify([{ statuses: [] }]), stderr: "", status: 0 };
+				}
 				throw new Error(`unexpected gh call: ${args.join(" ")}`);
 			},
 			execFileSync: ((cmd: string, args: readonly string[]) => {
@@ -1560,10 +1625,8 @@ describe("pr-review CLI local gate-evidence persistence (#497)", () => {
 			err: (msg) => effects.push(`err:${msg}`),
 			now: () => Date.parse("2026-08-13T13:00:00Z"),
 			mainWorktree: (cwd) => cwd,
-			listGateRecords: listPrReviewGateRecords,
 			gateRecordsRoot: roll.gateRecordsRoot,
 			adjudicationSourcesRoot: roll.adjudicationSourcesRoot,
-			readAdjudicationSource: readAdjudicationSourceRecord,
 			readFileSync,
 			writeGateRecord: writePrReviewGateRecord,
 			prepareReviewHead: (_repo, candidate, _exec, headRef) => ({ diffCwd: "/tmp/adjudicate-flow-head", baseRef: "origin/main", headRef: headRef ?? `refs/pelaggio-review/pr-${candidate.prNumber}` }),
@@ -1596,13 +1659,15 @@ describe("pr-review CLI local gate-evidence persistence (#497)", () => {
 			managedState: () => "managed",
 			isCi: false,
 			isSingleShot: false,
+			reviewEvidencePubKey: REVIEW_EVIDENCE_KEYS.publicKeyPem,
 		};
 		return { deps, effects, comments };
 	}
 
 	it("a local red roll persists drain-parity fleet + source evidence that pr-adjudicate binds to", async () => {
-		const roll = await redRoll();
+		const roll = await redRoll({ signerSocket: SIGNER.socketPath, signerAuthToken: SIGNER_AUTH });
 		assert.equal(roll.code, 1);
+		assert.equal(roll.statusDescriptions[0]?.startsWith(REVIEW_EVIDENCE_MARKER_PREFIX), true);
 		// Fleet record: drain-parity shape, itemId resolved from the claim branch, adjudicable.
 		const fleetRecord = readPrReviewGateRecord(roll.gateRecordsRoot, 123, REVIEWED_SHA);
 		assert.ok(fleetRecord && fleetRecord.schemaVersion === 2 && fleetRecord.producer === "fleet");
@@ -1619,7 +1684,7 @@ describe("pr-review CLI local gate-evidence persistence (#497)", () => {
 		assert.deepEqual(source.survivors[0]?.hunk, { path: "src/a.ts", start: 8, end: 12 });
 
 		// The real pr-adjudicate CLI now finds CURRENT evidence from this roll and completes.
-		const flow = adjudicateHarness(roll);
+		const flow = adjudicateHarness({ ...roll, description: roll.statusDescriptions[0] });
 		assert.equal(await adjudicateMain(["--pr", "123"], flow.deps), 0);
 		assert.ok(flow.effects.includes("step:pr-verify"), "safety survivor gets a live adjudication-time verification");
 		assert.ok(flow.effects.includes(`status:success:${NEW_HEAD}`));
@@ -1631,6 +1696,30 @@ describe("pr-review CLI local gate-evidence persistence (#497)", () => {
 		assert.match(rationale, /Fixed in the current head\./);
 		assert.doesNotMatch(rationale, /Still present/);
 		assert.match(rationale, /adjudication-time/);
+	});
+
+	it("loads and unlinks the signer token before the first reviewer seat starts", async () => {
+		const tokenFile = join(tmpRoot("pr-review-token-init-"), "signer.token");
+		writeFileSync(tokenFile, SIGNER_AUTH, { mode: 0o400 });
+		const previous = process.env[REVIEW_EVIDENCE_SIGNER_TOKEN_FILE_ENV];
+		process.env[REVIEW_EVIDENCE_SIGNER_TOKEN_FILE_ENV] = tokenFile;
+		resetReviewEvidenceSignerAuthTokenCacheForTests();
+		let seatStarted = false;
+		try {
+			const roll = await redRoll({
+				signerSocket: SIGNER.socketPath,
+				onRunStep: () => {
+					seatStarted = true;
+					assert.equal(existsSync(tokenFile), false, "the one-shot authenticator must be gone before an untrusted seat starts");
+				},
+			});
+			assert.equal(seatStarted, true);
+			assert.equal(roll.statusDescriptions[0]?.startsWith(REVIEW_EVIDENCE_MARKER_PREFIX), true, "the in-memory token remains usable after unlink");
+		} finally {
+			if (previous === undefined) delete process.env[REVIEW_EVIDENCE_SIGNER_TOKEN_FILE_ENV];
+			else process.env[REVIEW_EVIDENCE_SIGNER_TOKEN_FILE_ENV] = previous;
+			resetReviewEvidenceSignerAuthTokenCacheForTests();
+		}
 	});
 
 	it("a clean local pass persists a drain-parity fleet record without adjudication source", async () => {
@@ -1659,5 +1748,229 @@ describe("pr-review CLI local gate-evidence persistence (#497)", () => {
 		const parked = await runCli({ results: [result({ ok: false, subtype: "error_rate_limit", cost: 0, turns: 0 })] });
 		assert.equal(parked.code, 1);
 		assert.deepEqual(listPrReviewGateRecords(parked.gateRecordsRoot), []);
+	});
+
+	it("no configured signer still posts the ordinary unsigned red status (manual adjudication)", async () => {
+		const out = await redRoll();
+		assert.equal(out.code, 1);
+		assert.deepEqual(out.statuses, ["block"]);
+		assert.equal(out.statusDescriptions[0], undefined);
+		assert.ok(readPrReviewGateRecord(out.gateRecordsRoot, 123, REVIEWED_SHA));
+		assert.ok(readAdjudicationSourceRecord(out.adjudicationSourcesRoot, 123, REVIEWED_SHA));
+	});
+
+	it("an unreachable signer degrades to an unsigned red (never in-harness signing)", async () => {
+		// Socket path is configured but no signer is listening — the client returns unavailable and
+		// the harness posts an unsigned red, persisting the records for a later manual adjudication.
+		const deadSocket = join(mkdtempSync(join(tmpdir(), "pr-review-dead-signer-")), "absent.sock");
+		const out = await redRoll({ signerSocket: deadSocket });
+		assert.equal(out.code, 1);
+		assert.deepEqual(out.statuses, ["block"]);
+		assert.equal(out.statusDescriptions[0], undefined);
+		assert.ok(readPrReviewGateRecord(out.gateRecordsRoot, 123, REVIEWED_SHA));
+		assert.ok(readAdjudicationSourceRecord(out.adjudicationSourcesRoot, 123, REVIEWED_SHA));
+	});
+
+	it("signs only an eligible complete pair and leaves ineligible pairs unsigned", async () => {
+		const gateRecordsRoot = join(tmpRoot("persist-sign-"), "gates");
+		const adjudicationSourcesRoot = join(tmpRoot("persist-sign-"), "sources");
+		const eligible: NewPrReviewFleetGateRecord = {
+			producer: "fleet",
+			prNumber: 123,
+			headSha: REVIEWED_SHA,
+			itemId: "123",
+			gate: "block",
+			ok: true,
+			subtype: "consensus-block",
+			agreement: "consensus-block",
+			survivorCount: 1,
+			cost: 1,
+			costEstimated: false,
+			turns: 4,
+			runner: "local",
+			reviewedAt: "2026-08-13T12:00:00.000Z",
+		};
+		const finding = { severity: "must-fix" as const, message: "Broken parser.", path: "src/a.ts", line: 10 };
+		const draft = {
+			prNumber: 123,
+			itemId: "123",
+			reviewedSha: REVIEWED_SHA,
+			agreement: "consensus-block" as const,
+			requiredCells: 1,
+			completedCells: 1,
+			survivorCount: 1,
+			survivors: [
+				{
+					finding,
+					fingerprint: reviewFindingFingerprint(finding),
+					class: "correctness-regression" as const,
+					classification: { kind: "default-safety" as const, class: "correctness-regression" as const },
+					tier: "safety" as const,
+					verification: { id: "C1" as const, decision: "survives" as const, rationale: "Still present." },
+					hunk: { path: "src/a.ts", start: 8, end: 12 },
+				},
+			],
+		};
+		const signed = await persistLocalGateEvidence({
+			gateRecord: eligible,
+			draft,
+			gateRecordsRoot,
+			adjudicationSourcesRoot,
+			writeGateRecord: writePrReviewGateRecord,
+			writeAdjudicationSource: writeAdjudicationSourceRecord,
+			repository: "pelaggio/pelaggio",
+			signerSocket: SIGNER.socketPath,
+			signerAuthToken: SIGNER_AUTH,
+			warn: () => {},
+		});
+		assert.equal(signed.kind, "attested");
+		if (signed.kind !== "attested") return;
+		const sig = parseReviewEvidenceDescription(signed.description);
+		assert.ok(sig);
+		const fleetBytes = readFileSync(join(gateRecordsRoot, `123-${REVIEWED_SHA}.json`));
+		const sourceBytes = readFileSync(join(adjudicationSourcesRoot, `123-${REVIEWED_SHA}.json`));
+		assert.equal(
+			verifyReviewEvidence(
+				JSON.stringify({
+					domain: "pelaggio.pr-review.adjudication-evidence.v1",
+					repository: "pelaggio/pelaggio",
+					prNumber: 123,
+					itemId: "123",
+					reviewedSha: REVIEWED_SHA,
+					fleetRecordSha256: fleetRecordDigestOf(fleetBytes),
+					adjudicationSourceSha256: fleetRecordDigestOf(sourceBytes),
+				}),
+				REVIEW_EVIDENCE_KEYS.publicKeyPem,
+				sig!,
+			),
+			true,
+		);
+
+		const ineligibleRoot = join(tmpRoot("persist-unsigned-"), "gates");
+		const ineligibleSources = join(tmpRoot("persist-unsigned-"), "sources");
+		const unsigned = await persistLocalGateEvidence({
+			gateRecord: { ...eligible, breakerReason: "invalid-pass" },
+			draft,
+			gateRecordsRoot: ineligibleRoot,
+			adjudicationSourcesRoot: ineligibleSources,
+			writeGateRecord: writePrReviewGateRecord,
+			writeAdjudicationSource: writeAdjudicationSourceRecord,
+			repository: "pelaggio/pelaggio",
+			signerSocket: SIGNER.socketPath,
+			signerAuthToken: SIGNER_AUTH,
+			warn: () => {},
+		});
+		assert.equal(unsigned.kind, "unattested");
+		assert.ok(readPrReviewGateRecord(ineligibleRoot, 123, REVIEWED_SHA));
+		assert.ok(readAdjudicationSourceRecord(ineligibleSources, 123, REVIEWED_SHA));
+
+		const failed = await persistLocalGateEvidence({
+			gateRecord: eligible,
+			draft,
+			gateRecordsRoot,
+			adjudicationSourcesRoot,
+			writeGateRecord: () => {
+				throw new Error("disk full");
+			},
+			writeAdjudicationSource: writeAdjudicationSourceRecord,
+			repository: "pelaggio/pelaggio",
+			signerSocket: SIGNER.socketPath,
+			signerAuthToken: SIGNER_AUTH,
+			warn: () => {},
+		});
+		assert.equal(failed.kind, "failed");
+	});
+
+	it("signs the harness's in-memory bytes, never a post-write reread of the mutable file (#511 TOCTOU)", async () => {
+		const gateRecordsRoot = join(tmpRoot("persist-toctou-"), "gates");
+		const adjudicationSourcesRoot = join(tmpRoot("persist-toctou-"), "sources");
+		const eligible: NewPrReviewFleetGateRecord = {
+			producer: "fleet",
+			prNumber: 123,
+			headSha: REVIEWED_SHA,
+			itemId: "123",
+			gate: "block",
+			ok: true,
+			subtype: "consensus-block",
+			agreement: "consensus-block",
+			survivorCount: 1,
+			cost: 1,
+			costEstimated: false,
+			turns: 4,
+			runner: "local",
+			reviewedAt: "2026-08-13T12:00:00.000Z",
+		};
+		const finding = { severity: "must-fix" as const, message: "Broken parser.", path: "src/a.ts", line: 10 };
+		const draft = {
+			prNumber: 123,
+			itemId: "123",
+			reviewedSha: REVIEWED_SHA,
+			agreement: "consensus-block" as const,
+			requiredCells: 1,
+			completedCells: 1,
+			survivorCount: 1,
+			survivors: [
+				{
+					finding,
+					fingerprint: reviewFindingFingerprint(finding),
+					class: "correctness-regression" as const,
+					classification: { kind: "default-safety" as const, class: "correctness-regression" as const },
+					tier: "safety" as const,
+					verification: { id: "C1" as const, decision: "survives" as const, rationale: "Still present." },
+					hunk: { path: "src/a.ts", start: 8, end: 12 },
+				},
+			],
+		};
+		// Writers that persist the canonical record, then a concurrent writer overwrites the file with
+		// a schema-shaped forgery the instant before the harness would have reread it to sign.
+		const forge = (path: string) => writeFileSync(path, `${JSON.stringify({ forged: true })}\n`);
+		const signed = await persistLocalGateEvidence({
+			gateRecord: eligible,
+			draft,
+			gateRecordsRoot,
+			adjudicationSourcesRoot,
+			writeGateRecord: (root, record) => {
+				const p = writePrReviewGateRecord(root, record);
+				forge(p);
+				return p;
+			},
+			writeAdjudicationSource: (root, record) => {
+				const p = writeAdjudicationSourceRecord(root, record);
+				forge(p);
+				return p;
+			},
+			repository: "pelaggio/pelaggio",
+			signerSocket: SIGNER.socketPath,
+			signerAuthToken: SIGNER_AUTH,
+			warn: () => {},
+		});
+		assert.equal(signed.kind, "attested");
+		if (signed.kind !== "attested") return;
+		const sig = parseReviewEvidenceDescription(signed.description);
+		assert.ok(sig);
+		// The signature attests the harness's OWN serialization (bytes-signed == bytes-written).
+		const fleetBytes = serializePrReviewGateRecord(eligible).bytes;
+		const fleetDigest = fleetRecordDigestOf(fleetBytes);
+		const sourceBytes = serializeAdjudicationSourceRecord({ ...draft, schemaVersion: 1, fleetRecordDigest: fleetDigest }).bytes;
+		const canonicalPayload = buildReviewEvidencePayload({
+			repository: "pelaggio/pelaggio",
+			prNumber: 123,
+			itemId: "123",
+			reviewedSha: REVIEWED_SHA,
+			fleetRecordSha256: fleetDigest,
+			adjudicationSourceSha256: fleetRecordDigestOf(sourceBytes),
+		});
+		assert.equal(verifyReviewEvidence(canonicalPayload, REVIEW_EVIDENCE_KEYS.publicKeyPem, sig!), true);
+		// The forged on-disk bytes never entered the signature — a payload over them must NOT verify,
+		// so a concurrent forgery can never wear a harness-valid signature.
+		const forgedPayload = buildReviewEvidencePayload({
+			repository: "pelaggio/pelaggio",
+			prNumber: 123,
+			itemId: "123",
+			reviewedSha: REVIEWED_SHA,
+			fleetRecordSha256: fleetRecordDigestOf(readFileSync(join(gateRecordsRoot, `123-${REVIEWED_SHA}.json`))),
+			adjudicationSourceSha256: fleetRecordDigestOf(readFileSync(join(adjudicationSourcesRoot, `123-${REVIEWED_SHA}.json`))),
+		});
+		assert.equal(verifyReviewEvidence(forgedPayload, REVIEW_EVIDENCE_KEYS.publicKeyPem, sig!), false);
 	});
 });

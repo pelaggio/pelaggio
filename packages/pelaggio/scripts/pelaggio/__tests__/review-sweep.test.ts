@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { isTrustedCommentAuthor } from "../github-posting.js";
-import { cleanupReviewHead, findReviewCandidates, LOCAL_MODE_MARKER, postLocalModeWorkflowComment, postReviewStatus, prepareReviewHead, reviewStatusForSha, upsertReviewComment } from "../review-sweep.js";
+import { cleanupReviewHead, findReviewCandidates, LOCAL_MODE_MARKER, postLocalModeWorkflowComment, postReviewStatus, prepareReviewHead, readReviewStatusForSha, reviewStatusForSha, upsertReviewComment } from "../review-sweep.js";
 import type { GhRunner } from "../roadmap/github-issues.js";
 import { trustRoutes } from "./trust-routes.js";
 
@@ -36,6 +36,72 @@ describe("reviewStatusForSha", () => {
 		assert.equal(reviewStatusForSha(failed.run, "o/r", "sha1"), "missing");
 		const garbage = stub(() => ({ stdout: "not json" }));
 		assert.equal(reviewStatusForSha(garbage.run, "o/r", "sha1"), "missing");
+	});
+});
+
+describe("readReviewStatusForSha", () => {
+	it("returns state and description for the newest review status", () => {
+		const { run, calls } = stub(() => ({
+			stdout: JSON.stringify([
+				{
+					statuses: [
+						{ context: "review", state: "failure", description: "pelaggio review blocked; evidence-v1=abc", created_at: "2026-08-02T00:00:00Z" },
+						{ context: "review", state: "pending", description: "local pelaggio review running", created_at: "2026-08-01T00:00:00Z" },
+					],
+				},
+			]),
+		}));
+		assert.deepEqual(readReviewStatusForSha(run, "o/r", "sha1"), {
+			kind: "status",
+			state: "failure",
+			description: "pelaggio review blocked; evidence-v1=abc",
+		});
+		assert.deepEqual(calls[0], ["api", "--paginate", "--slurp", "repos/o/r/commits/sha1/status?per_page=100"]);
+	});
+
+	it("treats a missing review context as missing, not error", () => {
+		const empty = stub(() => ({ stdout: JSON.stringify([{ statuses: [] }]) }));
+		assert.deepEqual(readReviewStatusForSha(empty.run, "o/r", "sha1"), { kind: "missing" });
+		const other = stub(() => ({ stdout: JSON.stringify([{ statuses: [{ context: "ci", state: "success" }] }]) }));
+		assert.deepEqual(readReviewStatusForSha(other.run, "o/r", "sha1"), { kind: "missing" });
+	});
+
+	it("finds review on a later combined-status page instead of classifying the first page as missing", () => {
+		// Default page size is 30 unique contexts. A first page of non-review
+		// statuses used to return `missing` and let adjudication walk to older
+		// signed evidence; the later page is the nearest status.
+		const { run } = stub(() => ({
+			stdout: JSON.stringify([
+				{ statuses: [{ context: "ci", state: "success", created_at: "2026-08-03T00:00:00Z" }], total_count: 2 },
+				{
+					statuses: [{ context: "review", state: "failure", description: "pelaggio review blocked; evidence-v1=abc", created_at: "2026-08-02T00:00:00Z" }],
+					total_count: 2,
+				},
+			]),
+		}));
+		assert.deepEqual(readReviewStatusForSha(run, "o/r", "sha1"), {
+			kind: "status",
+			state: "failure",
+			description: "pelaggio review blocked; evidence-v1=abc",
+		});
+	});
+
+	it("fails closed to error on a probe failure or unparsable output (error ≠ missing)", () => {
+		const failed = stub(() => ({ status: 1, stderr: "boom" }));
+		assert.deepEqual(readReviewStatusForSha(failed.run, "o/r", "sha1"), { kind: "error" });
+		const garbage = stub(() => ({ stdout: "not json" }));
+		assert.deepEqual(readReviewStatusForSha(garbage.run, "o/r", "sha1"), { kind: "error" });
+		const emptySlurp = stub(() => ({ stdout: "[]" }));
+		assert.deepEqual(readReviewStatusForSha(emptySlurp.run, "o/r", "sha1"), { kind: "error" });
+		const unslurped = stub(() => ({ stdout: JSON.stringify({ statuses: [{ context: "review", state: "failure" }] }) }));
+		assert.deepEqual(readReviewStatusForSha(unslurped.run, "o/r", "sha1"), { kind: "error" });
+	});
+
+	it("fails closed when total_count says the collected pages are incomplete", () => {
+		const truncated = stub(() => ({
+			stdout: JSON.stringify([{ statuses: [{ context: "ci", state: "success" }], total_count: 31 }]),
+		}));
+		assert.deepEqual(readReviewStatusForSha(truncated.run, "o/r", "sha1"), { kind: "error" });
 	});
 });
 

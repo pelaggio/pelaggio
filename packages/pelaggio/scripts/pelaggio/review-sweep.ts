@@ -21,6 +21,7 @@ interface RollupEntry {
 	__typename?: string;
 	context?: string;
 	state?: string;
+	description?: string;
 	startedAt?: string;
 	createdAt?: string;
 	updatedAt?: string;
@@ -28,6 +29,8 @@ interface RollupEntry {
 	created_at?: string;
 	updated_at?: string;
 }
+
+export type ReviewStatusProbe = { kind: "error" } | { kind: "missing" } | { kind: "status"; state: string; description: string };
 
 interface PrListEntry {
 	number: number;
@@ -57,17 +60,46 @@ function statusTimestamp(entry: RollupEntry): number {
 	return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function reviewStatus(rollup: RollupEntry[] | undefined): { state: "missing" | "pending" | "done"; startedAt?: string } {
-	if (!Array.isArray(rollup)) return { state: "missing" };
+function latestReviewStatus(rollup: RollupEntry[] | undefined): RollupEntry | undefined {
+	if (!Array.isArray(rollup)) return undefined;
 	const statuses = rollup.filter((e) => (e.context ?? "").toLowerCase() === REVIEW_CONTEXT);
-	if (statuses.length === 0) return { state: "missing" };
+	if (statuses.length === 0) return undefined;
 	// Classify by the MOST RECENT review status, not first-terminal-wins: a re-review
 	// posts pending over an older success/failure, and treating the stale terminal as
 	// "done" lets the drain delete a queue record while the effective context stays
 	// pending forever (#387 gate finding). Untimestamped entries sort oldest.
 	// Strict > keeps the FIRST entry on timestamp ties: the REST endpoint returns
 	// newest-first, so first-wins is the correct degradation when timestamps are absent.
-	const latest = statuses.reduce((a, b) => (statusTimestamp(b) > statusTimestamp(a) ? b : a));
+	return statuses.reduce((a, b) => (statusTimestamp(b) > statusTimestamp(a) ? b : a));
+}
+
+/**
+ * Flatten `--paginate --slurp` combined-status pages into one statuses list.
+ * `null` is malformed or incomplete (fail closed) — never treat a truncated
+ * first page as "review is absent".
+ */
+function flattenCombinedStatusPages(parsed: unknown): RollupEntry[] | null {
+	if (!Array.isArray(parsed) || parsed.length === 0) return null;
+	const statuses: RollupEntry[] = [];
+	let totalCount: number | undefined;
+	for (const page of parsed) {
+		if (typeof page !== "object" || page === null || Array.isArray(page)) return null;
+		const rec = page as { statuses?: unknown; total_count?: unknown };
+		if (!Array.isArray(rec.statuses)) return null;
+		for (const entry of rec.statuses) statuses.push(entry as RollupEntry);
+		if (totalCount === undefined && typeof rec.total_count === "number" && Number.isFinite(rec.total_count)) {
+			totalCount = rec.total_count;
+		}
+	}
+	// Combined-status `total_count` is the number of unique contexts. If we
+	// collected fewer, pagination did not finish — refuse rather than classify.
+	if (totalCount !== undefined && statuses.length < totalCount) return null;
+	return statuses;
+}
+
+function reviewStatus(rollup: RollupEntry[] | undefined): { state: "missing" | "pending" | "done"; startedAt?: string } {
+	const latest = latestReviewStatus(rollup);
+	if (!latest) return { state: "missing" };
 	const state = (latest.state ?? "").toUpperCase();
 	if (state === "SUCCESS" || state === "FAILURE" || state === "ERROR") return { state: "done" };
 	if (state === "PENDING") return { state: "pending", startedAt: latest.startedAt ?? latest.createdAt ?? latest.updatedAt };
@@ -130,6 +162,37 @@ export function reviewStatusForSha(gh: GhRunner, ghRepo: string, sha: string): "
 		return reviewStatus(parsed.statuses).state;
 	} catch {
 		return "missing";
+	}
+}
+
+/**
+ * Fail-closed `review` status probe for adjudication (#511). Unlike
+ * {@link reviewStatusForSha} (fail-soft: probe error → `"missing"` so the drain
+ * re-runs), an API or parse error here is `{ kind: "error" }` so a consumer
+ * cannot skip a newer commit and fall back to older signed evidence.
+ *
+ * Combined-status `statuses` is paginated (default 30, max 100). One unpaginated
+ * page can omit `review` after enough other contexts, which this probe would
+ * misclassify as `missing` and let `resolveSignedRedEvidence` walk to older
+ * signed evidence. `--paginate --slurp` plus `per_page=100` flattens every
+ * page before classifying; an incomplete `total_count` is `{ kind: "error" }`.
+ */
+export function readReviewStatusForSha(gh: GhRunner, ghRepo: string, sha: string): ReviewStatusProbe {
+	// `--slurp` collects `--paginate` pages into one top-level array (one
+	// combined-status object per page). Without it, a commit with more status
+	// contexts than one page emits concatenated JSON objects that we cannot
+	// parse — and the first page alone can miss `review`.
+	const out = runGhSoft(gh, ["api", "--paginate", "--slurp", `repos/${ghRepo}/commits/${sha}/status?per_page=100`]);
+	if (out === null) return { kind: "error" };
+	try {
+		const parsed: unknown = JSON.parse(out);
+		const statuses = flattenCombinedStatusPages(parsed);
+		if (statuses === null) return { kind: "error" };
+		const latest = latestReviewStatus(statuses);
+		if (!latest) return { kind: "missing" };
+		return { kind: "status", state: latest.state ?? "", description: typeof latest.description === "string" ? latest.description : "" };
+	} catch {
+		return { kind: "error" };
 	}
 }
 

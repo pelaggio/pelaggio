@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { REVIEW_EVIDENCE_PRIVATE_KEY_ENV, REVIEW_EVIDENCE_SIGNER_SOCKET_ENV, REVIEW_EVIDENCE_SIGNER_TOKEN_ENV, REVIEW_EVIDENCE_SIGNER_TOKEN_FILE_ENV } from "../review/gate-attestation.js";
 import { buildAgentEnv, collectSecretEnvValues, makeSecretScrubber, PROVIDER_KEY_ENV, REDACTED, scopeEnvAllowlistToProvider, scrubSecrets } from "../secret-hygiene.js";
 
 describe("buildAgentEnv (#237) — deny-by-default env allowlist", () => {
@@ -37,6 +38,61 @@ describe("buildAgentEnv (#237) — deny-by-default env allowlist", () => {
 	it("applies explicit `extra` overrides", () => {
 		const env = buildAgentEnv({ source, extra: { PATH: "/override" } });
 		assert.equal(env.PATH, "/override");
+	});
+
+	it("excludes the review-evidence signing key even when explicitly allowlisted or extra", () => {
+		const pem = "-----BEGIN PRIVATE KEY-----\nfixture-pem-not-a-real-key\n-----END PRIVATE KEY-----";
+		const withKey: NodeJS.ProcessEnv = { ...source, [REVIEW_EVIDENCE_PRIVATE_KEY_ENV]: pem };
+		assert.equal(REVIEW_EVIDENCE_PRIVATE_KEY_ENV in buildAgentEnv({ source: withKey }), false);
+		assert.equal(REVIEW_EVIDENCE_PRIVATE_KEY_ENV in buildAgentEnv({ source: withKey, allow: [REVIEW_EVIDENCE_PRIVATE_KEY_ENV] }), false);
+		assert.equal(
+			REVIEW_EVIDENCE_PRIVATE_KEY_ENV in
+				buildAgentEnv({
+					source,
+					allow: [REVIEW_EVIDENCE_PRIVATE_KEY_ENV],
+					extra: { [REVIEW_EVIDENCE_PRIVATE_KEY_ENV]: pem },
+				}),
+			false,
+		);
+	});
+
+	it("excludes the review-evidence signer-socket path even when explicitly allowlisted or extra", () => {
+		const sock = "/run/pelaggio/evidence-signer.sock";
+		const withSock: NodeJS.ProcessEnv = { ...source, [REVIEW_EVIDENCE_SIGNER_SOCKET_ENV]: sock };
+		assert.equal(REVIEW_EVIDENCE_SIGNER_SOCKET_ENV in buildAgentEnv({ source: withSock }), false);
+		assert.equal(REVIEW_EVIDENCE_SIGNER_SOCKET_ENV in buildAgentEnv({ source: withSock, allow: [REVIEW_EVIDENCE_SIGNER_SOCKET_ENV] }), false);
+		assert.equal(
+			REVIEW_EVIDENCE_SIGNER_SOCKET_ENV in
+				buildAgentEnv({
+					source,
+					allow: [REVIEW_EVIDENCE_SIGNER_SOCKET_ENV],
+					extra: { [REVIEW_EVIDENCE_SIGNER_SOCKET_ENV]: sock },
+				}),
+			false,
+		);
+	});
+
+	it("excludes the review-evidence signer token and token-file path even when explicitly allowlisted or extra", () => {
+		const token = "a".repeat(32);
+		const file = "/run/pelaggio/evidence-signer.token";
+		const withAuth: NodeJS.ProcessEnv = {
+			...source,
+			[REVIEW_EVIDENCE_SIGNER_TOKEN_ENV]: token,
+			[REVIEW_EVIDENCE_SIGNER_TOKEN_FILE_ENV]: file,
+		};
+		for (const name of [REVIEW_EVIDENCE_SIGNER_TOKEN_ENV, REVIEW_EVIDENCE_SIGNER_TOKEN_FILE_ENV]) {
+			assert.equal(name in buildAgentEnv({ source: withAuth }), false);
+			assert.equal(name in buildAgentEnv({ source: withAuth, allow: [name] }), false);
+			assert.equal(
+				name in
+					buildAgentEnv({
+						source,
+						allow: [name],
+						extra: { [name]: name === REVIEW_EVIDENCE_SIGNER_TOKEN_ENV ? token : file },
+					}),
+				false,
+			);
+		}
 	});
 });
 
@@ -142,5 +198,12 @@ describe("makeSecretScrubber (#237) — end-to-end log capture", () => {
 		// The acceptance criterion: the raw secret never appears in captured/emitted logs.
 		assert.equal(scrubbed.includes("planted-secret-value-xyz"), false);
 		assert.ok(scrubbed.includes(REDACTED));
+	});
+
+	it("redacts a review-evidence private-key fixture from diagnostic text", () => {
+		const pem = "-----BEGIN PRIVATE KEY-----\nfixture-pem-not-a-real-key\n-----END PRIVATE KEY-----";
+		const scrub = makeSecretScrubber({ [REVIEW_EVIDENCE_PRIVATE_KEY_ENV]: pem });
+		assert.equal(scrub(`spawn failed: ${pem}`).includes(pem), false);
+		assert.ok(scrub(`spawn failed: ${pem}`).includes(REDACTED));
 	});
 });

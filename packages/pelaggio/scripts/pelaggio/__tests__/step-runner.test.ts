@@ -6,12 +6,14 @@ import { CONFIG } from "../config.js";
 import { grokCapabilities } from "../grok-provider.js";
 import type { MainCheckoutDeltaObserver, MainCheckoutDeltaResult } from "../helpers.js";
 import { OPENCODE_CAPABILITIES, opencodeProvider } from "../opencode-provider.js";
+import { REVIEW_EVIDENCE_PRIVATE_KEY_ENV, REVIEW_EVIDENCE_SIGNER_SOCKET_ENV, REVIEW_EVIDENCE_SIGNER_TOKEN_ENV, REVIEW_EVIDENCE_SIGNER_TOKEN_FILE_ENV } from "../review/gate-attestation.js";
 import {
 	beginMainCheckoutAttribution,
 	blockForeignRootWrite,
 	blockPlanPolish,
 	blockWorktreeInstall,
 	claudeProvider,
+	claudeSubprocessEnv,
 	composeSystemAppend,
 	createStepTextProjection,
 	endMainCheckoutAttribution,
@@ -34,6 +36,30 @@ function write(fp: string): HookInput {
 function edit(fp: string): HookInput {
 	return { tool_name: "Edit", tool_input: { file_path: fp } } as unknown as HookInput;
 }
+
+describe("claudeSubprocessEnv", () => {
+	it("spreads the parent env and deletes the review-evidence key, socket, and token vars", () => {
+		const source: NodeJS.ProcessEnv = {
+			PATH: "/usr/bin",
+			ANTHROPIC_API_KEY: "sk-ant-keep-me",
+			HOME: "/home/agent",
+			[REVIEW_EVIDENCE_PRIVATE_KEY_ENV]: "-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----",
+			[REVIEW_EVIDENCE_SIGNER_SOCKET_ENV]: "/run/pelaggio/evidence-signer.sock",
+			[REVIEW_EVIDENCE_SIGNER_TOKEN_ENV]: "a".repeat(32),
+			[REVIEW_EVIDENCE_SIGNER_TOKEN_FILE_ENV]: "/run/pelaggio/evidence-signer.token",
+		};
+		const env = claudeSubprocessEnv(source);
+		assert.equal(env.PATH, "/usr/bin");
+		assert.equal(env.ANTHROPIC_API_KEY, "sk-ant-keep-me");
+		assert.equal(env.HOME, "/home/agent");
+		assert.equal(REVIEW_EVIDENCE_PRIVATE_KEY_ENV in env, false);
+		assert.equal(REVIEW_EVIDENCE_SIGNER_SOCKET_ENV in env, false);
+		assert.equal(REVIEW_EVIDENCE_SIGNER_TOKEN_ENV in env, false);
+		assert.equal(REVIEW_EVIDENCE_SIGNER_TOKEN_FILE_ENV in env, false);
+		assert.notEqual(env, source);
+		assert.equal(source[REVIEW_EVIDENCE_PRIVATE_KEY_ENV]?.includes("secret"), true);
+	});
+});
 
 describe("provider test guard (#420)", () => {
 	it("blocks the production dispatcher under node --test before a provider can run", () => {

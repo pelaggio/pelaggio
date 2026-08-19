@@ -195,9 +195,10 @@ for historical v1 and v2 fleet records; `null` for operator adjudication). Opera
 
 The projection that performs this join is deferred.
 
-Only the local drain persists fleet files today. A CI runner has a read-only token and an
-ephemeral checkout, so its durable outcome remains the forge metrics marker until a later
-local materialization pass is implemented.
+Both the local review drain and a direct `pelaggio pr-review` persist fleet files (and,
+for a complete consensus-block, the adjudication-source sidecar). A CI runner has a
+read-only token and an ephemeral checkout, so it posts the ordinary required status
+and never materializes local adjudication evidence.
 
 ## Operator adjudication — `pelaggio pr-adjudicate`
 
@@ -209,19 +210,44 @@ hunks; re-runs one bounded `pr-verify` over every safety-tier survivor; then wri
 schema-v2 `operator-adjudication` record, upserts the marker comment, and posts
 `review=success` to the pinned current SHA **last**.
 
+### Harness-attested evidence
+
+Authorization is **not** “two files under `.dev` exist and agree.” A separate-UID
+`pelaggio evidence-signer` signs the exact fleet-v2 and source-v1 file bytes with
+a dedicated Ed25519 key. The harness holds only the signer socket path and a
+request token loaded from `PELAGGIO_REVIEW_EVIDENCE_SIGNER_TOKEN_FILE` (never the
+private key, never a token value in harness `environ`) and publishes the detached
+signature on that reviewed SHA’s `review` commit status as
+`pelaggio review blocked; evidence-v1=<base64url>`. `pr-adjudicate` walks this PR’s
+commit list from the snapshotted head toward older commits, stops at the nearest
+`review` status of any state, and requires that stopped result to be a signed red
+fleet outcome. It then rebuilds the payload from the live repo/PR/item/SHA plus the
+exact on-disk bytes and verifies against `PELAGGIO_REVIEW_EVIDENCE_PUBKEY`.
+
+A later review on a descendant commit supersedes an older one even if the older
+`.dev` files remain. A same-SHA rerun overwrites that SHA’s `review` context. Missing,
+unsigned, malformed, or newer pending/pass statuses refuse with a full-re-review
+instruction — they never fall back to older signed evidence. Unsigned and legacy
+records stay readable for telemetry but are never adjudicable; recover by configuring
+the separate-UID signer (key + request token) and running a fresh local `pr-review`.
+
+This is a narrow local-harness signature for operator adjudication, not the full
+externally verifiable in-toto attestation in ADR-0018.
+
 ### Local source-evidence contract
 
 A complete, verified findings-terminal local fleet also writes a sidecar at
 `MAIN_REPO/.dev/pr-review-adjudication-sources/{prNumber}-{reviewedSha}.json` (schema v1).
 The file is content-digest-bound to the **exact on-disk** fleet-v2 bytes from the same
-drain attempt (`fleetRecordDigest`, SHA-256 hex, no `sha256:` prefix). It records each
-survivor’s v1 finding, recomputed fingerprint, emission-time class/tier, successful
-`survives` verification, and the inspection-diff new-side hunk that is the repair
-boundary. Locationless or unmappable survivors omit the whole sidecar — the ordinary red
-gate still stands.
+drain or `pr-review` attempt (`fleetRecordDigest`, SHA-256 hex, no `sha256:` prefix).
+It records each survivor’s v1 finding, recomputed fingerprint, emission-time class/tier,
+successful `survives` verification, and the inspection-diff new-side hunk that is the
+repair boundary. Locationless or unmappable survivors omit the whole sidecar — the
+ordinary red gate still stands. Those `.dev` bytes are durable evidence; only the
+harness signature + forge status authorize adjudication.
 
 Forge comments are display/audit only. The command never scrapes Markdown or reconstructs
-evidence from a CI-only / legacy fleet run. Those cases refuse with a full-re-review
+evidence from a CI-only / legacy / unsigned fleet run. Those cases refuse with a full-re-review
 instruction.
 
 ### Eligible / refusal matrix

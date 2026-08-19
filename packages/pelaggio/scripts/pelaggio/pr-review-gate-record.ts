@@ -278,7 +278,8 @@ export function fleetAgreementOf(record: PrReviewGateRecord): PrReviewAgreement 
 	return null;
 }
 
-function recordPath(root: string, prNumber: number, headSha: string): string {
+/** SHA-keyed path — SHA is used as stored, not re-cased. */
+export function prReviewGateRecordPath(root: string, prNumber: number, headSha: string): string {
 	return resolve(root, `${prNumber}-${headSha}.json`);
 }
 
@@ -290,19 +291,29 @@ function readRecord(path: string): PrReviewGateRecord | null {
 	}
 }
 
-export function writePrReviewGateRecord(root: string, record: NewPrReviewGateRecord): string {
+/**
+ * The exact bytes the writer persists — serialized once so the harness can sign THESE bytes
+ * instead of rereading the mutable file after writing (#511 TOCTOU). The signed digest then
+ * attests the harness's own serialization, never whatever a concurrent writer left on disk.
+ */
+export function serializePrReviewGateRecord(record: NewPrReviewGateRecord): { record: PrReviewGateRecord; bytes: Buffer } {
 	const complete = validatePrReviewGateRecord({ ...record, schemaVersion: 2 });
+	return { record: complete, bytes: Buffer.from(`${JSON.stringify(complete, null, 2)}\n`, "utf8") };
+}
+
+export function writePrReviewGateRecord(root: string, record: NewPrReviewGateRecord): string {
+	const { record: complete, bytes } = serializePrReviewGateRecord(record);
 	mkdirSync(root, { recursive: true });
-	const path = recordPath(root, complete.prNumber, complete.headSha);
+	const path = prReviewGateRecordPath(root, complete.prNumber, complete.headSha);
 	const tmp = `${path}.${process.pid}.tmp`;
-	writeFileSync(tmp, `${JSON.stringify(complete, null, 2)}\n`, { mode: 0o600 });
+	writeFileSync(tmp, bytes, { mode: 0o600 });
 	renameSync(tmp, path);
 	return path;
 }
 
 export function readPrReviewGateRecord(root: string, prNumber: number, headSha: string): PrReviewGateRecord | null {
 	if (!Number.isInteger(prNumber) || prNumber <= 0 || !SHA_RE.test(headSha)) return null;
-	const record = readRecord(recordPath(root, prNumber, headSha));
+	const record = readRecord(prReviewGateRecordPath(root, prNumber, headSha));
 	if (!record || record.prNumber !== prNumber || record.headSha.toLowerCase() !== headSha.toLowerCase()) return null;
 	return record;
 }

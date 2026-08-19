@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { parsePatch } from "diff";
-import { type NewPrReviewFleetGateRecord, type PrReviewGateRecord, writePrReviewGateRecord } from "../pr-review-gate-record.js";
+import { type NewPrReviewFleetGateRecord, writePrReviewGateRecord } from "../pr-review-gate-record.js";
 import {
 	adjudicationSourcesDir,
 	bindLiveSafetyVerification,
@@ -22,7 +22,6 @@ import {
 	type PrAdjudicationSurvivorEntry,
 	readAdjudicationSourceRecord,
 	renderOperatorAdjudicationComment,
-	selectUnambiguousFleetGateRecord,
 	validateAdjudicationSourceRecord,
 	writeAdjudicationSourceRecord,
 } from "../review/adjudication.js";
@@ -328,36 +327,6 @@ describe("fleet eligibility and binding", () => {
 		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ breakerReason: "provider-diversity", agreement: "invalid" }) }), false);
 		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ ok: false }) }), false);
 		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ survivorCount: 0 }) }), false);
-	});
-
-	it("scopes fleet records to the target PR and item before refusing ambiguity (#510, #514)", () => {
-		const older = { schemaVersion: 2, ...fleet({ reviewedAt: "2026-08-01T00:00:00.000Z" }) } as PrReviewGateRecord;
-		const forgedNewer = { schemaVersion: 2, ...fleet({ reviewedAt: "2027-01-01T00:00:00.000Z", headSha: HEAD }) } as PrReviewGateRecord;
-		const otherPr = { schemaVersion: 2, ...fleet({ prNumber: 500 }) } as PrReviewGateRecord;
-		const otherItem = { schemaVersion: 2, ...fleet({ itemId: "500", headSha: HEAD }) } as PrReviewGateRecord;
-		const operator = {
-			schemaVersion: 2 as const,
-			producer: "operator-adjudication" as const,
-			agreement: "not-run" as const,
-			prNumber: 497,
-			itemId: "497",
-			headSha: HEAD,
-			gate: "pass" as const,
-			runner: "local" as const,
-			reviewedAt: "2026-08-03T00:00:00.000Z",
-			adjudicator: "op",
-			reviewedSourceSha: REVIEWED,
-			interdiffDigest: DIGEST,
-			dispositions: {},
-		};
-		assert.deepEqual(selectUnambiguousFleetGateRecord([], 497, "497"), { kind: "none" });
-		assert.deepEqual(selectUnambiguousFleetGateRecord([operator], 497, "497"), { kind: "none" });
-		assert.deepEqual(selectUnambiguousFleetGateRecord([older, operator, otherPr, otherItem], 497, "497"), { kind: "one", record: older });
-		// A forged record with a future model-supplied reviewedAt must NOT win selection — two
-		// qualifying fleet records refuse, naming both files.
-		const ambiguous = selectUnambiguousFleetGateRecord([older, operator, forgedNewer], 497, "497");
-		assert.equal(ambiguous.kind, "ambiguous");
-		assert.deepEqual(ambiguous.kind === "ambiguous" ? ambiguous.files : [], [`497-${REVIEWED}.json`, `497-${HEAD}.json`].sort());
 	});
 
 	it("cross-checks identity, counts, agreement, and the exact fleet-file digest", () => {

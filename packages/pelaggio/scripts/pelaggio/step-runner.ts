@@ -13,6 +13,7 @@ import { classifyStepError, isRefusal, looksLikeStalledAsk, type MainCheckoutDel
 import { opencodeProvider } from "./opencode-provider.js";
 import { gateRecordsDir, PR_REVIEW_GATE_RECORDS_DIR } from "./pr-review-gate-record.js";
 import { ADJUDICATION_SOURCES_DIR, adjudicationSourcesDir } from "./review/adjudication.js";
+import { REVIEW_EVIDENCE_PRIVATE_KEY_ENV, REVIEW_EVIDENCE_SIGNER_SOCKET_ENV, REVIEW_EVIDENCE_SIGNER_TOKEN_ENV, REVIEW_EVIDENCE_SIGNER_TOKEN_FILE_ENV } from "./review/gate-attestation.js";
 import { composeSystemAppend, createStepTextProjection, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath, type StepTextProjection } from "./step-runner-shared.js";
 import { MUTATING_TOOLS, toolBrief } from "./tui.js";
 import type { ParkSignal, ProviderCapabilities, ProviderName, Step, StepEmit, StepResult, TokenUsage } from "./types.js";
@@ -20,6 +21,19 @@ import { ensureWorktreeDeps } from "./worktree-deps.js";
 
 export type { StepTextProjection } from "./step-runner-shared.js";
 export { composeSystemAppend, createStepTextProjection, isWorktreePath } from "./step-runner-shared.js";
+
+/** Claude query env: parent process.env minus the harness-only review-evidence vars (the
+ *  signing key and signer token — defense-in-depth since #511, as the harness no longer
+ *  holds them — plus the socket path and token-file path, so an untrusted step is not
+ *  handed the oracle's address or the one-shot token file). */
+export function claudeSubprocessEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+	const env = { ...source };
+	delete env[REVIEW_EVIDENCE_PRIVATE_KEY_ENV];
+	delete env[REVIEW_EVIDENCE_SIGNER_SOCKET_ENV];
+	delete env[REVIEW_EVIDENCE_SIGNER_TOKEN_ENV];
+	delete env[REVIEW_EVIDENCE_SIGNER_TOKEN_FILE_ENV];
+	return env;
+}
 
 /** Pure walker over Claude assistant content blocks. Tests feed synthetic blocks; `claudeRunStep` calls this on each message. */
 export function projectClaudeAssistantBlocks(blocks: ReadonlyArray<{ type: string; text?: string; input?: unknown }>, projection: StepTextProjection): void {
@@ -466,6 +480,13 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 		prompt,
 		options: {
 			cwd: opts.cwd,
+			// Claude's SDK `options.env` replaces the subprocess env entirely. Spread the
+			// parent env so implicit SDK auth/runtime vars survive, then drop the
+			// harness-only review-evidence capabilities (#511). The seat still reads the
+			// socket locator from process.env to mask its parent before spawning the child.
+			// Do not route Claude through buildAgentEnv — that is the broader TC-014
+			// adapter-conformance fix.
+			env: claudeSubprocessEnv(),
 			// canUseTool allow-all instead of `permissionMode: "bypassPermissions"`: the SDK
 			// hardcodes a deny for writes to `.claude/skills/*` that survives bypassPermissions
 			// and allowDangerouslySkipPermissions. canUseTool is the only knob that reaches

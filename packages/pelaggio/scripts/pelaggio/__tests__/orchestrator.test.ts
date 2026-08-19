@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { generateKeyPairSync } from "node:crypto";
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -8,7 +9,9 @@ import type { NotifyPayload } from "../notify.js";
 import { hermeticDefault, hermeticQueueRoot, PARKED_EXIT_CODE, runOrchestrator } from "../pipeline.js";
 import { gateRecordsDir, readPrReviewGateRecord, writePrReviewGateRecord } from "../pr-review-gate-record.js";
 import { fleetRecordDigestOf, readAdjudicationSourceRecord, writeAdjudicationSourceRecord } from "../review/adjudication.js";
+import { REVIEW_EVIDENCE_SIGNER_TOKEN_FILE_ENV, resetReviewEvidenceSignerAuthTokenCacheForTests, serveEvidenceSigner } from "../review/evidence-signer.js";
 import { reviewFindingFingerprint } from "../review/findings.js";
+import { REVIEW_EVIDENCE_MARKER_PREFIX } from "../review/gate-attestation.js";
 import { enqueueReviewRequest, type NewReviewRequest, reviewRequestsDir } from "../review-request-queue.js";
 import { type AcquireReviseExecutionResult, reviseFindingsPath } from "../revise-sweep.js";
 import type { GhRunner } from "../roadmap/github-issues.js";
@@ -2509,7 +2512,15 @@ describe("runOrchestrator — mid-run review drain (#387)", () => {
 		};
 	}
 
-	function reviewDeps(over: { gh: GhRunner; main: string; runReviewGate?: GateFn; writeGateRecord?: typeof writePrReviewGateRecord; writeAdjudicationSource?: typeof writeAdjudicationSourceRecord }) {
+	function reviewDeps(over: {
+		gh: GhRunner;
+		main: string;
+		runReviewGate?: GateFn;
+		writeGateRecord?: typeof writePrReviewGateRecord;
+		writeAdjudicationSource?: typeof writeAdjudicationSourceRecord;
+		reviewEvidenceSignerSocket?: string;
+		reviewEvidenceSignerAuthToken?: string;
+	}) {
 		return {
 			runner: "local" as const,
 			ghRepo: "o/r",
@@ -2524,12 +2535,59 @@ describe("runOrchestrator — mid-run review drain (#387)", () => {
 			runReviewGate: over.runReviewGate ?? passGate,
 			writeGateRecord: over.writeGateRecord ?? writePrReviewGateRecord,
 			writeAdjudicationSource: over.writeAdjudicationSource ?? writeAdjudicationSourceRecord,
+			reviewEvidenceRepository: "o/r",
+			...(over.reviewEvidenceSignerSocket ? { reviewEvidenceSignerSocket: over.reviewEvidenceSignerSocket } : {}),
+			...(over.reviewEvidenceSignerAuthToken ? { reviewEvidenceSignerAuthToken: over.reviewEvidenceSignerAuthToken } : {}),
 		};
 	}
 
 	function record(over: Partial<NewReviewRequest> = {}): NewReviewRequest {
 		return { prNumber: 201, headSha: HEAD, itemId: "387", headBranch: "feat/issue-387", enqueuedAt: "2026-08-03T12:00:00.000Z", ...over };
 	}
+
+	it("loads and unlinks the signer token before the first pipeline worker starts", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const tokenFile = join(mainDir(), "signer.token");
+		writeFileSync(tokenFile, "z".repeat(32), { mode: 0o400 });
+		const previous = process.env[REVIEW_EVIDENCE_SIGNER_TOKEN_FILE_ENV];
+		process.env[REVIEW_EVIDENCE_SIGNER_TOKEN_FILE_ENV] = tokenFile;
+		resetReviewEvidenceSignerAuthTokenCacheForTests();
+		let workerStarted = false;
+		const { runPipeline } = createMockRunPipeline({
+			default: { completed: true, cost: 0 },
+			onCall: () => {
+				workerStarted = true;
+				assert.equal(existsSync(tokenFile), false, "the one-shot authenticator must be gone before a pipeline worker starts");
+			},
+		});
+		try {
+			await runOrchestrator({ ...baseFlags, item: "387", cycles: "1" }, { runPipeline, resolveWorktree: () => "/fake/wt" });
+			assert.equal(workerStarted, true);
+		} finally {
+			if (previous === undefined) delete process.env[REVIEW_EVIDENCE_SIGNER_TOKEN_FILE_ENV];
+			else process.env[REVIEW_EVIDENCE_SIGNER_TOKEN_FILE_ENV] = previous;
+			resetReviewEvidenceSignerAuthTokenCacheForTests();
+		}
+	});
+
+	it("aborts before the first worker when a configured signer token file is unsafe", async () => {
+		const tokenFile = join(mainDir(), "unsafe-signer.token");
+		writeFileSync(tokenFile, "z".repeat(32));
+		chmodSync(tokenFile, 0o644);
+		const previous = process.env[REVIEW_EVIDENCE_SIGNER_TOKEN_FILE_ENV];
+		process.env[REVIEW_EVIDENCE_SIGNER_TOKEN_FILE_ENV] = tokenFile;
+		resetReviewEvidenceSignerAuthTokenCacheForTests();
+		const { runPipeline, calls } = createMockRunPipeline({ default: { completed: true, cost: 0 } });
+		try {
+			await assert.rejects(runOrchestrator({ ...baseFlags, item: "387", cycles: "1" }, { runPipeline, resolveWorktree: () => "/fake/wt" }), /must not grant group or other access/);
+			assert.equal(calls.length, 0, "no pipeline worker may start with a recoverable signer authenticator on disk");
+			assert.equal(existsSync(tokenFile), true);
+		} finally {
+			if (previous === undefined) delete process.env[REVIEW_EVIDENCE_SIGNER_TOKEN_FILE_ENV];
+			else process.env[REVIEW_EVIDENCE_SIGNER_TOKEN_FILE_ENV] = previous;
+			resetReviewEvidenceSignerAuthTokenCacheForTests();
+		}
+	});
 
 	it("post-cycle drain reviews a PR enqueued mid-cycle, then completes the record (the mid-run symptom fix)", async (t) => {
 		t.mock.method(console, "log", () => {});
@@ -2665,6 +2723,95 @@ describe("runOrchestrator — mid-run review drain (#387)", () => {
 		const fleetBytes = readFileSync(join(gateRecordsDir(main), `201-${HEAD}.json`));
 		assert.equal(source.fleetRecordDigest, fleetRecordDigestOf(fleetBytes));
 		assert.equal(source.survivorCount, 1);
+	});
+
+	it("posts the attested red marker over the exact on-disk pair and stays red when signing is unconfigured", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { privateKey } = generateKeyPairSync("ed25519");
+		const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+		// The signer holds the key out-of-process; the harness signs only over this socket (#511).
+		const signerAuth = "a".repeat(32);
+		const signer = await serveEvidenceSigner({ socketPath: join(mkdtempSync(join(tmpdir(), "orch-signer-")), "s.sock"), privateKeyPem, authToken: signerAuth });
+		after(() => signer.close());
+		const main = mainDir();
+		enqueueReviewRequest(main, record());
+		const ghCalls: string[][] = [];
+		const gh: GhRunner = (args) => {
+			ghCalls.push(args);
+			if (args[0] === "pr" && args[1] === "list") return { stdout: "[]", stderr: "", status: 0 };
+			if (args[0] === "issue" && args[1] === "view") return { stdout: JSON.stringify({ labels: [{ name: "autopilot" }] }), stderr: "", status: 0 };
+			if (args[0] === "api" && args[1] === `repos/o/r/commits/${HEAD}/status`) return { stdout: JSON.stringify({ statuses: [] }), stderr: "", status: 0 };
+			if (args[0] === "api" && args[1]?.includes("/comments")) return { stdout: "[]", stderr: "", status: 0 };
+			return { stdout: "", stderr: "", status: 0 };
+		};
+		const { runPipeline } = createMockRunPipeline({ default: { completed: false, cost: 0, error: "pick:queue-empty" } });
+		await runOrchestrator(
+			{ ...baseFlags, target: "pull-request", cycles: "1" },
+			{
+				runPipeline,
+				resolveWorktree: () => "/fake/wt",
+				review: reviewDeps({
+					gh,
+					main,
+					reviewEvidenceSignerSocket: signer.socketPath,
+					reviewEvidenceSignerAuthToken: signerAuth,
+					runReviewGate: async () => ({
+						gate: "block",
+						body: "blocked",
+						cost: 0.4,
+						costEstimated: false,
+						turns: 5,
+						ok: true,
+						subtype: "consensus-block",
+						agreement: "consensus-block",
+						survivorCount: 1,
+						adjudicationSource: blockDraft(),
+					}),
+				}),
+			},
+		);
+		const failure = ghCalls.find((a) => a[0] === "api" && a[1] === `repos/o/r/statuses/${HEAD}` && a.some((x) => x === "state=failure"));
+		assert.ok(failure, "terminal red status posted");
+		const description = failure?.find((x) => typeof x === "string" && x.startsWith("description="));
+		assert.ok(description?.slice("description=".length).startsWith(REVIEW_EVIDENCE_MARKER_PREFIX));
+
+		const unsignedMain = mainDir();
+		enqueueReviewRequest(unsignedMain, record());
+		const unsignedCalls: string[][] = [];
+		const unsignedGh: GhRunner = (args) => {
+			unsignedCalls.push(args);
+			if (args[0] === "pr" && args[1] === "list") return { stdout: "[]", stderr: "", status: 0 };
+			if (args[0] === "issue" && args[1] === "view") return { stdout: JSON.stringify({ labels: [{ name: "autopilot" }] }), stderr: "", status: 0 };
+			if (args[0] === "api" && args[1] === `repos/o/r/commits/${HEAD}/status`) return { stdout: JSON.stringify({ statuses: [] }), stderr: "", status: 0 };
+			if (args[0] === "api" && args[1]?.includes("/comments")) return { stdout: "[]", stderr: "", status: 0 };
+			return { stdout: "", stderr: "", status: 0 };
+		};
+		await runOrchestrator(
+			{ ...baseFlags, target: "pull-request", cycles: "1" },
+			{
+				runPipeline: createMockRunPipeline({ default: { completed: false, cost: 0, error: "pick:queue-empty" } }).runPipeline,
+				resolveWorktree: () => "/fake/wt",
+				review: reviewDeps({
+					gh: unsignedGh,
+					main: unsignedMain,
+					runReviewGate: async () => ({
+						gate: "block",
+						body: "blocked",
+						cost: 0.4,
+						costEstimated: false,
+						turns: 5,
+						ok: true,
+						subtype: "consensus-block",
+						agreement: "consensus-block",
+						survivorCount: 1,
+						adjudicationSource: blockDraft(),
+					}),
+				}),
+			},
+		);
+		const unsignedFailure = unsignedCalls.find((a) => a[0] === "api" && a[1] === `repos/o/r/statuses/${HEAD}` && a.some((x) => x === "state=failure"));
+		const unsignedDesc = unsignedFailure?.find((x) => typeof x === "string" && x.startsWith("description="));
+		assert.equal(unsignedDesc, "description=local pelaggio review blocked");
 	});
 
 	it("still posts the ordinary red gate when adjudication source persistence fails", async (t) => {

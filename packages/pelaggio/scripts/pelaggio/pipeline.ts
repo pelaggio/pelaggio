@@ -99,14 +99,25 @@ import {
 	verifyShipLanded,
 } from "./helpers.js";
 import { type NotifyConfig, notifyCycle, notifyDecision as notifyDecisionEvent, notifyStrandedReview, sendNotification as sendNotificationDefault } from "./notify.js";
-import { buildFailClosedComment, type PrReviewGateResult, runPrReviewGate } from "./pr-review-cli.js";
-import { gateRecordsDir, type NewPrReviewGateRecord, writePrReviewGateRecord } from "./pr-review-gate-record.js";
+import { buildFailClosedComment, type PrReviewGateResult, persistLocalGateEvidence, runPrReviewGate } from "./pr-review-cli.js";
+import { gateRecordsDir, type NewPrReviewFleetGateRecord, writePrReviewGateRecord } from "./pr-review-gate-record.js";
 import { capabilityMapFrom, detectUnattendedSignals, resolveAuthoringReviewConfig, resolveAuthoringReviewExecution } from "./provider-routing.js";
-import { adjudicationSourcesDir, fleetRecordDigestOf, writeAdjudicationSourceRecord } from "./review/adjudication.js";
+import { adjudicationSourcesDir, writeAdjudicationSourceRecord } from "./review/adjudication.js";
+import { resolveReviewEvidenceSignerAuthToken, resolveReviewEvidenceSignerSocket } from "./review/evidence-signer.js";
 import { runReviewLoop } from "./review/loop.js";
 import { type ReviewRecord, renderReviewRecord, writeReviewRecord } from "./review/record.js";
 import { cleanupAuthoringReviewSeatsForSha, isAuthoringReviewSeatPath, prepareAuthoringReviewSeat } from "./review/seats.js";
-import { claimReviewRequest, completeReviewRequest, listReviewRequests, type ReviewRequestRecord, reclaimStaleReviewClaims, reviewDrainLockPath, reviewRequestsDir, unclaimReviewRequest } from "./review-request-queue.js";
+import {
+	claimReviewRequest,
+	completeReviewRequest,
+	listReviewRequests,
+	REVIEW_DRAIN_LOCK_STALE_MS,
+	type ReviewRequestRecord,
+	reclaimStaleReviewClaims,
+	reviewDrainLockPath,
+	reviewRequestsDir,
+	unclaimReviewRequest,
+} from "./review-request-queue.js";
 import { cleanupReviewHead, findReviewCandidates, isReviewHeadPath, postLocalModeWorkflowComment, postReviewStatus, prepareReviewHead, type ReviewCandidate, reviewStatusForSha, upsertReviewComment } from "./review-sweep.js";
 import {
 	acquireReviseExecution,
@@ -2549,6 +2560,9 @@ export interface OrchestratorDeps {
 		writeGateRecord: typeof writePrReviewGateRecord;
 		adjudicationSourcesRoot: string;
 		writeAdjudicationSource: typeof writeAdjudicationSourceRecord;
+		reviewEvidenceRepository?: string;
+		reviewEvidenceSignerSocket?: string;
+		reviewEvidenceSignerAuthToken?: string;
 	}>;
 	/**
 	 * Continuous-mode free queue probe (issue #82). Defaults to `listItems` + FlowPolicy
@@ -2589,11 +2603,6 @@ const RESUME_JITTER_MS = 15_000;
 // Defensive bound against a pathological park→tiny-reset→park spin. Each real wait is
 // minutes+, and `maxWaitMs` already caps each round, so 12 is generous insurance.
 const MAX_RESUME_ROUNDS = 12;
-// Review drain lock (#387): one drain pass reviews PRs sequentially and may run minutes per PR;
-// size the orphan-steal window well above the longest realistic single pass. It only matters
-// across processes (a crashed holder), so 4h is generous insurance, not a per-PR timeout.
-const REVIEW_DRAIN_LOCK_STALE_MS = 4 * 60 * 60 * 1000;
-
 /**
  * Hermetic-test guard (#420, #456).
  *
@@ -2732,6 +2741,10 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 	const _runPipeline = deps.runPipeline ?? runPipeline;
 	const _detectResumeStep = deps.detectResumeStep ?? detectResumeStep;
 	const _resolveWorktree = deps.resolveWorktree ?? resolveWorktree;
+	// Harness initialization owns the one-shot signer authenticator. Resolve it before
+	// any pipeline/review worker can spawn, unlinking the 0400 file while only the trusted
+	// orchestrator is running; later evidence persistence reuses this in-memory value.
+	const reviewEvidenceSignerAuthToken = deps.review?.reviewEvidenceSignerAuthToken ?? resolveReviewEvidenceSignerAuthToken();
 
 	const liveStatus = new LiveStatus(statusBar);
 	const parkSignal: ParkSignal = { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" };
@@ -3437,6 +3450,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			adjudicationSourcesRoot: hermeticQueueRoot(() => adjudicationSourcesDir(mainWorktree(REPO)), "adjudication-sources"),
 			writeAdjudicationSource: writeAdjudicationSourceRecord,
 			...deps.review,
+			reviewEvidenceSignerAuthToken,
 		};
 		const shipIsPr = shipTargetName === "pull-request" || shipTargetName === "auto-merge-pr";
 		// #387: `items.length === 0` is REMOVED for review only — the `review` status is a merge gate,
@@ -3620,7 +3634,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					if (record) unclaimReviewRequest(review.queueRoot, pr.prNumber, pr.headSha);
 					break;
 				}
-				const gateRecord: NewPrReviewGateRecord = gateResult
+				const gateRecord: NewPrReviewFleetGateRecord = gateResult
 					? {
 							producer: "fleet",
 							prNumber: pr.prNumber,
@@ -3666,39 +3680,25 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				// look unspent after a restart. Persistence for *this* PR still completes below — the
 				// review is already paid for, so its outcome must not be thrown away too.
 				appendDayBudgetCharge(reviewCost); // failure latches receiptUndurable + halts the campaign
-				let fleetPath: string | undefined;
-				try {
-					fleetPath = review.writeGateRecord(review.gateRecordsRoot, gateRecord);
-				} catch (e) {
-					const msg = e instanceof Error ? e.message : String(e);
-					console.warn(`review ${pr.itemId}#${pr.prNumber} — could not persist gate outcome: ${msg}`);
+				const persistResult = await persistLocalGateEvidence({
+					gateRecord,
+					draft: gateResult?.adjudicationSource,
+					gateRecordsRoot: review.gateRecordsRoot,
+					adjudicationSourcesRoot: review.adjudicationSourcesRoot,
+					writeGateRecord: review.writeGateRecord,
+					writeAdjudicationSource: review.writeAdjudicationSource,
+					repository: review.reviewEvidenceRepository ?? review.ghRepo,
+					signerSocket: review.reviewEvidenceSignerSocket ?? resolveReviewEvidenceSignerSocket(),
+					signerAuthToken: review.reviewEvidenceSignerAuthToken,
+					warn: (msg) => console.warn(`review ${pr.itemId}#${pr.prNumber} — ${msg}`),
+				});
+				if (persistResult.kind === "failed") {
 					if (record) unclaimReviewRequest(review.queueRoot, pr.prNumber, pr.headSha);
 					continue;
 				}
-				const draft = gateResult?.adjudicationSource;
-				if (
-					fleetPath &&
-					draft &&
-					draft.reviewedSha.toLowerCase() === pr.headSha.toLowerCase() &&
-					draft.survivorCount === gateRecord.survivorCount &&
-					draft.agreement === gateRecord.agreement &&
-					draft.prNumber === gateRecord.prNumber &&
-					draft.itemId === gateRecord.itemId
-				) {
-					try {
-						const fleetBytes = readFileSync(fleetPath);
-						review.writeAdjudicationSource(review.adjudicationSourcesRoot, {
-							...draft,
-							schemaVersion: 1,
-							fleetRecordDigest: fleetRecordDigestOf(fleetBytes),
-						});
-					} catch (e) {
-						const msg = e instanceof Error ? e.message : String(e);
-						console.warn(`review ${pr.itemId}#${pr.prNumber} — could not persist adjudication source: ${msg}`);
-					}
-				}
 				upsertReviewComment(review.gh, review.ghRepo, pr.prNumber, body);
-				const posted = postReviewStatus(review.gh, review.ghRepo, pr.headSha, finalState, finalState === "success" ? "local pelaggio review passed" : "local pelaggio review blocked");
+				const description = persistResult.kind === "attested" ? persistResult.description : finalState === "success" ? "local pelaggio review passed" : "local pelaggio review blocked";
+				const posted = postReviewStatus(review.gh, review.ghRepo, pr.headSha, finalState, description);
 				// The record is satisfied only when the terminal status POST SUCCEEDED —
 				// deleting it on a failed post would leave the PR pending forever with no
 				// durable request to guarantee a retry (#387 gate finding). Unclaim instead

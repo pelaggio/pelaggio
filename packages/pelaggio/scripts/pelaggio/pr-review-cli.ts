@@ -20,8 +20,18 @@ import { parseArgs } from "node:util";
 import { CONFIG, modelForProvider, REPO, type ReviewConfig, ROADMAP_GITHUB, resolveDriverCandidates, resolveStepSettings, type StepSettings } from "./config.js";
 import { upsertMarkerComment } from "./github-posting.js";
 import { classifySecurityReviewDiff, expandPackagedSkill, formatReviewMetrics, mainWorktree, parseWaitFlag, resolveParkReset, type SecurityDiffSignal } from "./helpers.js";
-import { gateRecordsDir, type NewPrReviewFleetGateRecord, writePrReviewGateRecord } from "./pr-review-gate-record.js";
-import { adjudicationSourcesDir, buildAdjudicationSourceDraft, fleetRecordDigestOf, type PrAdjudicationSourceDraft, writeAdjudicationSourceRecord } from "./review/adjudication.js";
+import { gateRecordsDir, type NewPrReviewFleetGateRecord, serializePrReviewGateRecord, writePrReviewGateRecord } from "./pr-review-gate-record.js";
+import {
+	adjudicationSourcesDir,
+	buildAdjudicationSourceDraft,
+	crossCheckAdjudicationSource,
+	fleetRecordDigestOf,
+	isEligibleFleetGateRecord,
+	type PrAdjudicationSourceDraft,
+	serializeAdjudicationSourceRecord,
+	writeAdjudicationSourceRecord,
+} from "./review/adjudication.js";
+import { resolveReviewEvidenceSignerAuthToken, resolveReviewEvidenceSignerSocket, signReviewEvidenceViaSigner } from "./review/evidence-signer.js";
 import {
 	evaluateReviewConvergence,
 	modelAuthoredText,
@@ -36,6 +46,7 @@ import {
 	type VerificationCandidate,
 	type VerificationDisposition,
 } from "./review/findings.js";
+import { formatReviewEvidenceDescription, type ReviewEvidenceIdentity } from "./review/gate-attestation.js";
 import { CLAIM_BRANCH_RE } from "./revise-sweep.js";
 import type { GhRunner } from "./roadmap/github-issues.js";
 import type { RunStepFn } from "./step-runner.js";
@@ -83,7 +94,7 @@ interface PrReviewDeps {
 	runStep: RunStepFn;
 	execFileSync: typeof execFileSync;
 	upsertComment: (pr: string, body: string) => void;
-	postStatus: (gate: "pass" | "block", sha: string) => boolean;
+	postStatus: (gate: "pass" | "block", sha: string, description?: string) => boolean;
 	/** Pool + verifier for runs that reach the gate through `main()` rather than a direct
 	 *  call. Unset in production (resolve from CONFIG); tests pin them so gate behavior is
 	 *  not a function of the host repo's own .pelaggio.yml. */
@@ -103,6 +114,14 @@ interface PrReviewDeps {
 	now: () => number;
 	/** CI runs post the red/green status but never claim `runner: "local"` evidence. */
 	isCi: () => boolean;
+	/** Repository identity (`owner/repo`) bound into the evidence payload. Tests pin it. */
+	reviewEvidenceRepository?: string;
+	/** Out-of-process signer socket path (#511). Production resolves from env; the harness
+	 *  holds NO private key and never signs in-process. Absent ⇒ no signed evidence. */
+	reviewEvidenceSignerSocket?: string;
+	/** Request authenticator for the signer. Production loads it from the one-shot
+	 *  token file into memory. Absent (or socket absent) ⇒ no signed evidence. */
+	reviewEvidenceSignerAuthToken?: string;
 }
 
 export interface RunPrReviewGateOptions {
@@ -440,12 +459,13 @@ function resolveReviewedHead(exec: typeof execFileSync, pr: string, ghRepo: stri
 	return { sha, ...(itemId ? { itemId } : {}) };
 }
 
-function postStatusDefault(gate: "pass" | "block", sha: string): boolean {
+function postStatusDefault(gate: "pass" | "block", sha: string, description?: string): boolean {
 	// Post directly (not via postCommitStatus) so the gh failure cause is surfaced rather
 	// than swallowed — an absent required status is otherwise indistinguishable from an
 	// auth/branch-protection/mismatched-context problem (#282).
 	const state = gate === "pass" ? "success" : "failure";
-	const res = defaultGhRunner(["api", `repos/${ROADMAP_GITHUB.ghRepo}/statuses/${sha}`, "-f", `state=${state}`, "-f", "context=review", "-f", `description=pelaggio review ${gate}`]);
+	const desc = description ?? `pelaggio review ${gate}`;
+	const res = defaultGhRunner(["api", `repos/${ROADMAP_GITHUB.ghRepo}/statuses/${sha}`, "-f", `state=${state}`, "-f", "context=review", "-f", `description=${desc}`]);
 	if (res.status !== 0) {
 		process.stderr.write(`✗ failed to post required review status to ${sha.slice(0, 8)}: ${res.stderr.trim() || "gh returned non-zero"}\n`);
 		return false;
@@ -923,76 +943,114 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 	return { gate, body, cost, costEstimated, turns, ok, subtype, agreement, breakerReason, iterations: lastIteration, survivorCount: carried.size, ...(adjudicationSource ? { adjudicationSource } : {}) };
 }
 
+export type PersistLocalGateEvidenceResult = { kind: "failed" } | { kind: "fleet-only" } | { kind: "unattested" } | { kind: "attested"; description: string };
+
 /**
  * Persist the local fleet gate record and (when present and consistent) the SHA-bound
- * adjudication source record for a completed direct `pr-review` run — the same write path and
- * consistency conditions the pipeline review drain uses (`runLocalReviewDrain`), so the
- * documented local pr-review → revise → pr-adjudicate flow leaves CURRENT evidence that
- * `pr-adjudicate` can find (#497). Best-effort: a persistence failure warns and returns —
- * adjudication then refuses on missing evidence, which is the safe outcome.
+ * adjudication source record, then (when a signer socket is configured and the pair is
+ * eligible) obtain a detached signature over the exact in-memory bytes from the
+ * out-of-process signer (#511, Design A). Both the direct `pr-review` CLI and the
+ * pipeline drain use this helper so a later `pr-adjudicate` can verify signed evidence.
+ * The harness holds NO private key: if the signer or its request token is
+ * unavailable, the evidence is simply unsigned (best-effort) — a persistence or
+ * signing failure warns and never turns a block into a pass, and pr-adjudicate's
+ * fail-closed path then requires manual adjudication.
  */
-export function persistLocalGateEvidence(opts: {
-	prNumber: number;
-	headSha: string;
-	itemId: string;
-	review: PrReviewGateResult;
+export async function persistLocalGateEvidence(opts: {
+	gateRecord: NewPrReviewFleetGateRecord;
+	draft?: PrAdjudicationSourceDraft;
 	gateRecordsRoot: string;
 	adjudicationSourcesRoot: string;
 	writeGateRecord: typeof writePrReviewGateRecord;
 	writeAdjudicationSource: typeof writeAdjudicationSourceRecord;
-	readFileSync: typeof readFileSync;
-	now: () => number;
+	repository: string;
+	/** Out-of-process signer socket. Absent ⇒ signing UNAVAILABLE (no signed evidence). */
+	signerSocket?: string;
+	/** Request authenticator. Absent ⇒ do not connect (no unauthenticated attempt). */
+	signerAuthToken?: string;
 	warn: (msg: string) => void;
-}): void {
-	if (opts.review.gate === "park") return;
-	const gateRecord: NewPrReviewFleetGateRecord = {
-		producer: "fleet",
-		prNumber: opts.prNumber,
-		headSha: opts.headSha,
-		itemId: opts.itemId,
-		gate: opts.review.gate === "pass" ? "pass" : "block",
-		ok: opts.review.ok,
-		subtype: opts.review.subtype,
-		agreement: opts.review.agreement ?? "invalid",
-		breakerReason: opts.review.breakerReason,
-		iterations: opts.review.iterations,
-		survivorCount: opts.review.survivorCount,
-		cost: opts.review.cost,
-		costEstimated: opts.review.costEstimated,
-		turns: opts.review.turns,
-		runner: "local",
-		reviewedAt: new Date(opts.now()).toISOString(),
-	};
-	let fleetPath: string;
+}): Promise<PersistLocalGateEvidenceResult> {
+	const gateRecord = opts.gateRecord;
+	// #511 TOCTOU: serialize the fleet record ONCE. These in-memory bytes are exactly what the
+	// writer persists AND what we later sign — never a reread of the mutable path, which a
+	// concurrent writer could swap for a schema-valid forgery between the write and the reread.
+	let fleetSerialized: ReturnType<typeof serializePrReviewGateRecord>;
 	try {
-		fleetPath = opts.writeGateRecord(opts.gateRecordsRoot, gateRecord);
+		fleetSerialized = serializePrReviewGateRecord(gateRecord);
 	} catch (e) {
 		opts.warn(`could not persist gate outcome: ${e instanceof Error ? e.message : String(e)}`);
-		return;
+		return { kind: "failed" };
 	}
-	const draft = opts.review.adjudicationSource;
+	try {
+		opts.writeGateRecord(opts.gateRecordsRoot, gateRecord);
+	} catch (e) {
+		opts.warn(`could not persist gate outcome: ${e instanceof Error ? e.message : String(e)}`);
+		return { kind: "failed" };
+	}
+	const draft = opts.draft;
 	if (
-		draft &&
-		draft.reviewedSha.toLowerCase() === opts.headSha.toLowerCase() &&
-		draft.survivorCount === gateRecord.survivorCount &&
-		draft.agreement === gateRecord.agreement &&
-		draft.prNumber === gateRecord.prNumber &&
-		draft.itemId === gateRecord.itemId
+		!(
+			draft &&
+			draft.reviewedSha.toLowerCase() === gateRecord.headSha.toLowerCase() &&
+			draft.survivorCount === gateRecord.survivorCount &&
+			draft.agreement === gateRecord.agreement &&
+			draft.prNumber === gateRecord.prNumber &&
+			draft.itemId === gateRecord.itemId
+		)
 	) {
-		try {
-			const fleetBytes = opts.readFileSync(fleetPath);
-			opts.writeAdjudicationSource(opts.adjudicationSourcesRoot, {
-				...draft,
-				schemaVersion: 1,
-				fleetRecordDigest: fleetRecordDigestOf(fleetBytes),
-			});
-		} catch (e) {
-			opts.warn(`could not persist adjudication source: ${e instanceof Error ? e.message : String(e)}`);
-		}
+		return { kind: "fleet-only" };
 	}
+	// Bind the source to the digest of the in-memory fleet bytes (what we sign), so the persisted
+	// source's fleetRecordDigest and the signature agree on the same harness-produced fleet bytes.
+	let sourceSerialized: ReturnType<typeof serializeAdjudicationSourceRecord>;
+	try {
+		sourceSerialized = serializeAdjudicationSourceRecord({
+			...draft,
+			schemaVersion: 1,
+			fleetRecordDigest: fleetRecordDigestOf(fleetSerialized.bytes),
+		});
+		opts.writeAdjudicationSource(opts.adjudicationSourcesRoot, sourceSerialized.record);
+	} catch (e) {
+		opts.warn(`could not persist adjudication source: ${e instanceof Error ? e.message : String(e)}`);
+		return { kind: "fleet-only" };
+	}
+	// No signer configured ⇒ signing is UNAVAILABLE. The harness never signs in-process
+	// (it holds no private key), so the evidence stays unsigned and pr-adjudicate falls
+	// back to manual operator adjudication (status quo before #511).
+	if (!opts.signerSocket || !opts.signerAuthToken || opts.repository.trim() === "") return { kind: "unattested" };
+	let identity: ReviewEvidenceIdentity;
+	try {
+		// Cross-check against the SAME in-memory records/bytes we serialized above, and bind the
+		// digests of THOSE bytes — the invariant is signed == verified == written bytes, with no
+		// filesystem round-trip in between (#511 TOCTOU). The signer re-canonicalizes this identity.
+		if (!isEligibleFleetGateRecord(fleetSerialized.record)) return { kind: "unattested" };
+		const bound = crossCheckAdjudicationSource(sourceSerialized.record, fleetSerialized.record, fleetSerialized.bytes, { prNumber: gateRecord.prNumber, itemId: gateRecord.itemId });
+		if (!bound.ok) return { kind: "unattested" };
+		identity = {
+			repository: opts.repository,
+			prNumber: gateRecord.prNumber,
+			itemId: gateRecord.itemId,
+			reviewedSha: gateRecord.headSha.toLowerCase(),
+			fleetRecordSha256: fleetRecordDigestOf(fleetSerialized.bytes),
+			adjudicationSourceSha256: fleetRecordDigestOf(sourceSerialized.bytes),
+		};
+	} catch (e) {
+		opts.warn(`could not attest gate evidence: ${e instanceof Error ? e.message : String(e)}`);
+		return { kind: "unattested" };
+	}
+	const signature = await signReviewEvidenceViaSigner(identity, opts.signerSocket, { authToken: opts.signerAuthToken });
+	if (!signature) {
+		opts.warn("evidence signer unavailable; posting an unsigned red (pr-adjudicate will require manual adjudication)");
+		return { kind: "unattested" };
+	}
+	return { kind: "attested", description: formatReviewEvidenceDescription(signature) };
 }
 
 export async function main(argv: string[]): Promise<number> {
+	// Load + unlink the one-shot signer authenticator before any reviewer/verifier seat
+	// can spawn. Keeping this resolution down in evidence persistence leaves the 0400
+	// file readable by same-UID workers throughout the review window (#511 review).
+	const reviewEvidenceSignerAuthToken = deps.reviewEvidenceSignerAuthToken ?? resolveReviewEvidenceSignerAuthToken();
 	let values: { pr?: string; profile?: string };
 	try {
 		({ values } = parseArgs({
@@ -1050,37 +1108,56 @@ export async function main(argv: string[]): Promise<number> {
 		// so a red roll here is adjudicable: without this, `pr-adjudicate` either refuses or
 		// binds to an older drain record and ignores this run's survivors (#497). CI runs skip
 		// it — their checkout is ephemeral and the records claim `runner: "local"`.
+		let attestedDescription: string | undefined;
 		if (!deps.isCi() && head.itemId && review.gate !== "park") {
-			persistLocalGateEvidence({
-				prNumber: Number.parseInt(pr, 10),
-				headSha: reviewedSha,
-				itemId: head.itemId,
-				review,
+			const persistResult = await persistLocalGateEvidence({
+				gateRecord: {
+					producer: "fleet",
+					prNumber: Number.parseInt(pr, 10),
+					headSha: reviewedSha,
+					itemId: head.itemId,
+					gate: review.gate === "pass" ? "pass" : "block",
+					ok: review.ok,
+					subtype: review.subtype,
+					agreement: review.agreement ?? "invalid",
+					breakerReason: review.breakerReason,
+					iterations: review.iterations,
+					survivorCount: review.survivorCount,
+					cost: review.cost,
+					costEstimated: review.costEstimated,
+					turns: review.turns,
+					runner: "local",
+					reviewedAt: new Date(deps.now()).toISOString(),
+				},
+				draft: review.adjudicationSource,
 				gateRecordsRoot: deps.gateRecordsRoot ?? gateRecordsDir(mainWorktree(REPO)),
 				adjudicationSourcesRoot: deps.adjudicationSourcesRoot ?? adjudicationSourcesDir(mainWorktree(REPO)),
 				writeGateRecord: deps.writeGateRecord,
 				writeAdjudicationSource: deps.writeAdjudicationSource,
-				readFileSync: deps.readFileSync,
-				now: deps.now,
+				repository: deps.reviewEvidenceRepository ?? ROADMAP_GITHUB.ghRepo,
+				signerSocket: deps.reviewEvidenceSignerSocket ?? resolveReviewEvidenceSignerSocket(),
+				signerAuthToken: reviewEvidenceSignerAuthToken,
 				warn: (msg) => process.stderr.write(`⚠ ${msg}\n`),
 			});
+			if (persistResult.kind === "attested") attestedDescription = persistResult.description;
 		}
 
 		// CI stays fail-closed: a rate-limit park has no park loop on a one-shot GH Actions job, so
 		// it posts red and exits 1 exactly as a block does. Only the local orchestrator sweep treats
-		// `park` specially (leaves the status pending and retries).
+		// `park` specially (leaves the status pending and retries). Comment then status: red is
+		// not authorization, and status-last still applies to green.
 		const statusGate: "pass" | "block" = review.gate === "pass" ? "pass" : "block";
-		const statusPosted = deps.postStatus(statusGate, reviewedSha);
 		deps.upsertComment(pr, review.body);
+		const statusPosted = deps.postStatus(statusGate, reviewedSha, attestedDescription);
 
 		process.stderr.write(`gate: ${review.gate.toUpperCase()} (ok=${review.ok})\n`);
 		return review.gate === "pass" && statusPosted ? 0 : 1;
 	} catch (e) {
 		const msg = e instanceof Error ? e.message : String(e);
 		process.stderr.write(`pr-review crashed — failing closed: ${msg}\n`);
+		deps.upsertComment(pr, buildFailClosedComment("error_crash", `pr-review crashed before producing a review, so this gate blocks the merge.\n\n${msg}`));
 		if (reviewedSha) deps.postStatus("block", reviewedSha);
 		else process.stderr.write("✗ reviewed SHA unavailable; posting no status (absent required status keeps the PR blocked)\n");
-		deps.upsertComment(pr, buildFailClosedComment("error_crash", `pr-review crashed before producing a review, so this gate blocks the merge.\n\n${msg}`));
 		return 1;
 	}
 }

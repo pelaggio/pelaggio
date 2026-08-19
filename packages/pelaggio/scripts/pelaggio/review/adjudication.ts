@@ -279,7 +279,8 @@ export function validateAdjudicationSourceRecord(value: unknown): PrAdjudication
 	};
 }
 
-function recordPath(root: string, prNumber: number, reviewedSha: string): string {
+/** SHA-keyed path — SHA is lowercased as stored. */
+export function adjudicationSourceRecordPath(root: string, prNumber: number, reviewedSha: string): string {
 	return resolve(root, `${prNumber}-${reviewedSha.toLowerCase()}.json`);
 }
 
@@ -295,21 +296,31 @@ function readRecord(path: string): PrAdjudicationSourceRecordV1 | null {
 	}
 }
 
-export function writeAdjudicationSourceRecord(root: string, record: PrAdjudicationSourceRecordV1 | (PrAdjudicationSourceDraft & { fleetRecordDigest: string })): string {
+/**
+ * The exact bytes the writer persists — serialized once so the harness can sign THESE bytes
+ * instead of rereading the mutable file after writing (#511 TOCTOU). The signed digest then
+ * attests the harness's own serialization, never whatever a concurrent writer left on disk.
+ */
+export function serializeAdjudicationSourceRecord(record: PrAdjudicationSourceRecordV1 | (PrAdjudicationSourceDraft & { fleetRecordDigest: string })): { record: PrAdjudicationSourceRecordV1; bytes: Buffer } {
 	const complete = validateAdjudicationSourceRecord({ ...record, schemaVersion: 1 });
-	const serialized = `${JSON.stringify(complete, null, 2)}\n`;
-	if (Buffer.byteLength(serialized, "utf8") > ADJUDICATION_SOURCE_MAX_BYTES) fail("size");
+	const bytes = Buffer.from(`${JSON.stringify(complete, null, 2)}\n`, "utf8");
+	if (bytes.byteLength > ADJUDICATION_SOURCE_MAX_BYTES) fail("size");
+	return { record: complete, bytes };
+}
+
+export function writeAdjudicationSourceRecord(root: string, record: PrAdjudicationSourceRecordV1 | (PrAdjudicationSourceDraft & { fleetRecordDigest: string })): string {
+	const { record: complete, bytes } = serializeAdjudicationSourceRecord(record);
 	mkdirSync(root, { recursive: true });
-	const path = recordPath(root, complete.prNumber, complete.reviewedSha);
+	const path = adjudicationSourceRecordPath(root, complete.prNumber, complete.reviewedSha);
 	const tmp = `${path}.${process.pid}.tmp`;
-	writeFileSync(tmp, serialized, { mode: 0o600 });
+	writeFileSync(tmp, bytes, { mode: 0o600 });
 	renameSync(tmp, path);
 	return path;
 }
 
 export function readAdjudicationSourceRecord(root: string, prNumber: number, reviewedSha: string): PrAdjudicationSourceRecordV1 | null {
 	if (!Number.isInteger(prNumber) || prNumber <= 0 || !SHA40_RE.test(reviewedSha)) return null;
-	const record = readRecord(recordPath(root, prNumber, reviewedSha));
+	const record = readRecord(adjudicationSourceRecordPath(root, prNumber, reviewedSha));
 	if (!record || record.prNumber !== prNumber || record.reviewedSha !== reviewedSha.toLowerCase()) return null;
 	return record;
 }
@@ -343,29 +354,6 @@ export function isEligibleFleetGateRecord(record: PrReviewGateRecord): boolean {
 	if ((record.survivorCount ?? 0) < 1) return false;
 	if (record.breakerReason !== undefined && INELIGIBLE_BREAKERS.has(record.breakerReason)) return false;
 	return true;
-}
-
-export type FleetGateRecordSelection = { kind: "none" } | { kind: "one"; record: PrReviewGateRecord } | { kind: "ambiguous"; files: string[] };
-
-/**
- * Fail-closed fleet-record selection (#510 must-fix). The store keys records by `(pr, headSha)`,
- * so several fleet records can exist for one PR (one per reviewed head). Selection previously
- * preferred the greatest `reviewedAt` — a MODEL-SUPPLIED timestamp in a gitignored store, so a
- * forged future-dated record could outrank the genuine one and steer adjudication to attacker
- * evidence. No field inside the records is a trustworthy ordering signal; with more than one
- * qualifying fleet record for the targeted PR/item pair the selection is ambiguous and the
- * caller must REFUSE, naming the conflicting files so the operator can delete the stale ones
- * (or run a full pr-review). Records for another item are not candidates: PR identity alone is
- * insufficient because the current target item is already known and is part of the evidence
- * identity checked below. A single unambiguous record proceeds as before. Operator-adjudication
- * records are never candidates.
- */
-export function selectUnambiguousFleetGateRecord(records: readonly PrReviewGateRecord[], prNumber: number, itemId: string): FleetGateRecordSelection {
-	const fleet = records.filter((record) => record.prNumber === prNumber && record.itemId === itemId && (record.schemaVersion === 1 || (record.schemaVersion === 2 && record.producer === "fleet")));
-	const only = fleet[0];
-	if (only === undefined) return { kind: "none" };
-	if (fleet.length === 1) return { kind: "one", record: only };
-	return { kind: "ambiguous", files: fleet.map((record) => `${record.prNumber}-${record.headSha}.json`).sort() };
 }
 
 export function crossCheckAdjudicationSource(source: PrAdjudicationSourceRecordV1, fleet: PrReviewGateRecord, fleetBytes: Buffer | string, expected: { prNumber: number; itemId: string }): AdjudicationSourceBindResult {
