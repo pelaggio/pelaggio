@@ -282,7 +282,8 @@
     "planned_hardening": "not an OS/container sandbox: writes to paths outside any tracked git root (e.g. $HOME, /tmp, arbitrary absolute paths) are not caught by this audit and remain bounded by tool/egress scoping (TC-015)",
     "evidence": [
       "TC-011",
-      "TC-015"
+      "TC-015",
+      "TC-018"
     ]
   },
   "claims_ref": "./trust-claims.yml"

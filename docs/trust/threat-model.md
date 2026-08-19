@@ -5,7 +5,7 @@ status: draft
 diataxis: explanation
 sidebar:
   order: 2
-last_reviewed: 2026-07-08
+last_reviewed: 2026-08-18
 ---
 
 # Threat Model
@@ -33,9 +33,9 @@ This maps directly to OWASP LLM01 Prompt Injection, OWASP LLM06 Excessive Agency
 | Category | Threat | Current posture | Claim(s) |
 |---|---|---|---|
 | Spoofing | A reachable peer starts or controls runs through the daemon. | Startup fails without `CONTROL_PLANE_TOKEN`; bearer auth guards every authority-bearing API route. Health, the trust manifest, and the static UI shell carry no run authority. | `TC-010` |
-| Tampering | Injected instructions write outside the item worktree or corrupt the main checkout. | Hooks and the install guard reduce exposure. By default the audit catches main and sibling changes; dirty-main mode uses Claude tool-window deltas or Codex workspace exclusion for main and retains siblings. Other paths remain outside this non-OS boundary. | `TC-011`, `TC-015` |
+| Tampering | Injected instructions write outside the item worktree or corrupt the main checkout. | Hooks and the install guard reduce exposure. By default the audit catches main and sibling changes; dirty-main mode uses Claude tool-window deltas or Codex workspace exclusion for main and retains siblings. The Claude seat starts a new terminal session so it cannot inject input through the harness controlling terminal (`TC-018`). Other paths remain outside this non-OS boundary. | `TC-011`, `TC-015`, `TC-018` |
 | Repudiation | Operators cannot tell what ran, what shipped, or why a gate blocked. | `.dev/pelaggio-log.jsonl`, branches, PR comments, review metrics, and server state/logs preserve operational evidence; verbose raw logs have scrubbing limits. | `TC-001`, `TC-003`, `TC-014`, `TC-015` |
-| Information disclosure | Secrets or private source leave through prompts, child env, logs, provider calls, or webhooks. | Known secret env vars are not interpolated into prompts/structured run logs; no telemetry exists; configured provider/integration egress is documented. Full child env inheritance and unsanitized verbose logs are planned hardening work. | `TC-001`, `TC-002`, `TC-006`, `TC-014` |
+| Information disclosure | Secrets or private source leave through prompts, child env, logs, provider calls, or webhooks. | Known secret env vars are not interpolated into prompts/structured run logs; no telemetry exists; configured provider/integration egress is documented. A Claude seat cannot read host `/proc/<harness-pid>/environ` or connect to configured harness-only socket directories (`TC-018`). The seat still has the host network, a bound host root outside those masks, and its supplied child environment. | `TC-001`, `TC-002`, `TC-006`, `TC-014`, `TC-018` |
 | Denial of service | Injection burns model budget/turns or leaves work half-finished. | Step budgets, turn caps, abort handling, rate-limit parking, and retry bounds limit unattended cost and preserve work at park paths. | `TC-015`, `TC-014` |
 | Elevation of privilege | Injected text causes autonomous merge or direct default-branch mutation. | PR mode is default and the review gate fails closed; direct push/auto-merge require explicit `ship.target`. Auto-merge branch-protection verification is planned, not current. | `TC-003`, `TC-012`, `TC-013`, `TC-015` |
 
@@ -53,6 +53,6 @@ This maps directly to OWASP LLM01 Prompt Injection, OWASP LLM06 Excessive Agency
 
 ## Residual Risk
 
-Pelaggio currently bounds prompt-injection blast radius but does not neutralize injection (`TC-015`). The default audit gates main and sibling worktrees; dirty-main mode gates siblings plus provider-specific main protection (`TC-011`). Neither is an OS sandbox or process-lifetime provenance. A compromised provider remains in the trust base (`TC-006`), child processes inherit the parent environment (`TC-014`), and auto-merge relies on external branch protection (`TC-013`).
+Pelaggio currently bounds prompt-injection blast radius but does not neutralize injection (`TC-015`). The default audit gates main and sibling worktrees; dirty-main mode gates siblings plus provider-specific main protection (`TC-011`). Neither is an OS sandbox or process-lifetime provenance. A Claude seat cannot see host procfs or configured private socket directories, but still has the host network and broad host filesystem visibility outside those masks (`TC-018`). A compromised provider remains in the trust base (`TC-006`), child processes inherit the parent environment (`TC-014`), and auto-merge relies on external branch protection (`TC-013`).
 
 The intended end state is stronger least-privilege tool scoping, provenance-aware prompt handling, env allowlisting, log redaction, and branch-protection verification. Until those claims move out of `planned`, the docs keep naming them as residual risk (`TC-013`, `TC-014`, `TC-015`).
