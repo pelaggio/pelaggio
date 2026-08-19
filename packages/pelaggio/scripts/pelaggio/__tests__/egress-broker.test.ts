@@ -213,7 +213,7 @@ describe("egress broker", () => {
 			assert.equal((await exchange(socketPath, "/v1/models", "", { authorization: "Bearer subscription" }, "GET")).status, 200);
 			assert.equal((await exchange(socketPath, "/v1/models", "{}", { authorization: "Bearer subscription" }, "GET")).status, 400);
 			const body = '{"model":"grok-4.5","max_output_tokens":8,"stream":true}';
-			const response = await exchange(socketPath, "/v1/responses", body, { authorization: "Bearer subscription", "x-not-reviewed": "drop" });
+			const response = await exchange(socketPath, "/v1/responses", body, { authorization: "Bearer subscription", "accept-encoding": "gzip", "x-not-reviewed": "drop" });
 			assert.equal(response.status, 200);
 			assert.equal(response.headers["set-cookie"], undefined);
 			assert.equal((await exchange(socketPath, "/v1/responses", body.replace("true", "false"), { authorization: "Bearer subscription" })).status, 403);
@@ -223,6 +223,7 @@ describe("egress broker", () => {
 			assert.ok(captured[0]?.headers);
 			assert.ok(captured.at(-1)?.headers);
 			assert.equal((captured[0].headers as Record<string, string>).authorization, "Bearer subscription");
+			assert.equal((captured.at(-1)?.headers as Record<string, string> | undefined)?.["accept-encoding"], undefined);
 			assert.equal((captured.at(-1)?.headers as Record<string, string> | undefined)?.["x-not-reviewed"], undefined);
 			const modelDecision = handle.decisions.find((decision) => decision.rule === "responses-v1" && decision.outcome === "allowed");
 			assert.equal(modelDecision?.inputTokens, 1);

@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 import { AcpConnection } from "../acp-client.js";
 import { CONFIG, GROK_DEFAULT_MODEL, REPO, type StepSettings } from "../config.js";
 import { ContainedFailure, type ContainedLifecycleOptions, type withContainedInvocation } from "../contained-execution.js";
-import { buildGrokStepResult, createGrokRunStep, grokEffort, grokServerRequestResponse, grokTimeoutMs, selectGrokModel, transparentAuthUnattendedRefusal, unsandboxedFallbackAuthRefusal } from "../grok-provider.js";
+import { buildGrokStepResult, createGrokRunStep, grokEffort, grokServerRequestResponse, grokTimeoutMs, resolveGrokExecutable, selectGrokModel, transparentAuthUnattendedRefusal, unsandboxedFallbackAuthRefusal } from "../grok-provider.js";
 import { detectUnattendedSignals, OPERATOR_ATTESTED_TTY_SUPPRESSION } from "../provider-routing.js";
 import type { StepEvent } from "../types.js";
 
@@ -170,6 +173,19 @@ describe("grok helpers", () => {
 		assert.equal(grokTimeoutMs(1), 10 * 60_000);
 		assert.equal(grokTimeoutMs(1000), 30 * 60_000);
 		assert.equal(grokTimeoutMs(30), 30 * 60_000);
+	});
+
+	it("resolves an absolute installer symlink before mounting the Grok executable", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pelaggio-grok-executable-"));
+		try {
+			const target = join(root, "grok-0.2.103");
+			const configured = join(root, "grok");
+			await writeFile(target, "#!/bin/sh\n", { mode: 0o700 });
+			await symlink(target, configured);
+			assert.equal(await resolveGrokExecutable(configured), target);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
 	});
 
 	it("grokServerRequestResponse selects an allow option for a permission request", () => {

@@ -171,6 +171,8 @@ describe("contained invocation", () => {
 				assert.equal(await readFile(join(homeSource, ".grok", "sandbox.toml"), "utf8"), "profile");
 				assert.notEqual(invocation.argv.indexOf(driver), -1);
 				assert.notEqual(invocation.argv.indexOf(bridge), -1);
+				assert.notEqual(invocation.argv.join("\0").indexOf(["--setenv", "PELAGGIO_LOOPBACK_PORT", "43179"].join("\0")), -1);
+				assert.equal(invocation.argv.includes("PELAGGIO_EGRESS_BASE_URL"), false);
 				assert.deepEqual(invocation.argv.slice(-5), [process.execPath, "/run/pelaggio/bin/contained-loopback-bridge.mjs", "/run/pelaggio/bin/driver", "agent", "stdio"]);
 				sawStaged = true;
 				return { value: "ok", status: 0, signal: null, stderr: "" };

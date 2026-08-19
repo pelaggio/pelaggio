@@ -27,13 +27,16 @@ curl -fsSL https://x.ai/cli/install.sh | bash -s 0.2.103
 ~/.grok/bin/grok --version
 ```
 
-Pin that regular executable in `.pelaggio.yml`:
+Pin the official installer path in `.pelaggio.yml`:
 
 ```yaml
 providers:
   grok:
     bin: ~/.grok/bin/grok
 ```
+
+The installer path may be a symlink. Pelaggio resolves it before containment and mounts only the
+resolved regular executable read-only inside the jail.
 
 ## 3. Authenticate on the host
 

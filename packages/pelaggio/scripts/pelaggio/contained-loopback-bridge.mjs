@@ -2,8 +2,13 @@ import { spawn } from "node:child_process";
 import { createServer, connect } from "node:net";
 
 const HOST = "127.0.0.1";
-const PORT = Number(process.env.PELAGGIO_LOOPBACK_PORT ?? 43179);
+const PORT = Number(process.env.PELAGGIO_LOOPBACK_PORT);
 const SOCKET = process.env.PELAGGIO_EGRESS_SOCKET ?? "/run/pelaggio/egress.sock";
+
+if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) {
+	process.stderr.write("contained bridge: invalid PELAGGIO_LOOPBACK_PORT\n");
+	process.exit(2);
+}
 
 const [driver, ...args] = process.argv.slice(2);
 if (!driver) {

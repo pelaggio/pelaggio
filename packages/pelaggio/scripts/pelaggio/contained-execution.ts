@@ -301,7 +301,7 @@ export function buildContainedInvocation(
 	if (command.kind === "brokered-mounted-driver") {
 		bwrap.push("--ro-bind", command.bridgeSource, command.bridgeJailPath);
 		if (command.nodeSource) bwrap.push("--ro-bind", command.nodeSource, command.node);
-		env.PELAGGIO_EGRESS_BASE_URL = `http://127.0.0.1:${CONTAINED_LOOPBACK_PORT}`;
+		env.PELAGGIO_LOOPBACK_PORT = String(CONTAINED_LOOPBACK_PORT);
 	}
 	for (const target of options.dependencyTargets ?? []) bwrap.push("--ro-bind", target, target);
 	for (const [key, value] of Object.entries(env)) if (value !== undefined) bwrap.push("--setenv", key, value);

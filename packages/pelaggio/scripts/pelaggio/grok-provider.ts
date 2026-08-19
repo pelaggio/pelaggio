@@ -87,8 +87,8 @@ export function selectGrokModel(settings: Pick<StepSettings, "grokModel">): stri
 	return candidate && !candidate.startsWith("claude-") ? candidate : undefined;
 }
 
-async function resolveGrokExecutable(configured: string): Promise<string> {
-	if (isAbsolute(configured)) return configured;
+export async function resolveGrokExecutable(configured: string): Promise<string> {
+	if (isAbsolute(configured)) return await realpath(configured);
 	for (const directory of (process.env.PATH ?? "").split(":")) {
 		const candidate = join(directory, configured);
 		try {

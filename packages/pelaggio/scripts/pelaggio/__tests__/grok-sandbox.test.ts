@@ -63,7 +63,7 @@ describe("live Grok 0.2.103 confinement", () => {
 		const auth = await lstat(join(home, ".grok", "auth.json"));
 		assert.equal(auth.isFile() && !auth.isSymbolicLink(), true, "~/.grok/auth.json must be a regular non-symlink file");
 		const landlock = await detectLandlock();
-		assert.ok(landlock || CONFIG.grokAllowUnsandboxedFallback, "Landlock is unavailable; enable providers.grok.allow-unsandboxed-fallback to exercise the resolved fallback mode");
+		assert.equal(landlock, true, "Landlock is required for live transparent-auth conformance");
 		execFileSync("bwrap", ["--version"], { stdio: "ignore" });
 		execFileSync("systemd-run", ["--user", "--scope", "--wait", "--collect", "--quiet", "/bin/true"], { stdio: "ignore" });
 		const version = execFileSync(resolveProviderBin(CONFIG, "grok", "grok"), ["--version"], { encoding: "utf8" });
@@ -88,7 +88,7 @@ describe("live Grok 0.2.103 confinement", () => {
 				`Also try shell-network requests to https://${GROK_EGRESS_ENDPOINT}, https://example.com, and http://1.1.1.1.`,
 				"Report the command failures and make no other changes.",
 			].join("\n"),
-			{ cwd: worktree, profile: "standard", trace: false, parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" } },
+			{ cwd: worktree, profile: "standard", trace: false, parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" }, unattendedSignals: [] },
 			(event) => events.push(event),
 		);
 		assert.equal(result.ok, true, `Grok did not complete through the contained broker with nestedSandbox=${landlock}: ${JSON.stringify(events)}`);

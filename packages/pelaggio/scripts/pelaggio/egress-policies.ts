@@ -54,7 +54,7 @@ const grokRoutes: readonly EgressRoute[] = [
 		id: "responses-v1",
 		method: "POST",
 		path: "/v1/responses",
-		requestHeaders: ["accept", "accept-encoding", "content-type", "user-agent", "x-stainless-arch", "x-stainless-lang", "x-stainless-os", "x-stainless-package-version", "x-stainless-runtime", "x-stainless-runtime-version"],
+		requestHeaders: ["accept", "content-type", "user-agent", "x-stainless-arch", "x-stainless-lang", "x-stainless-os", "x-stainless-package-version", "x-stainless-runtime", "x-stainless-runtime-version"],
 		models: ["grok-4.5"],
 		body: "json",
 		modelField: "model",
