@@ -17,6 +17,14 @@ Confine autonomous agent execution with **two composable boundaries**, chosen pe
 
 **Auth posture is set by execution context:** unattended / CI / shared / at-scale → **metered/org keys** (ToS-clean, liability-clean); local single-developer → **subscription is a defensible opt-in** under transparent isolation (the official CLI owns its own OAuth; no dummy `auth.json`, no header injection). A versioned conformance suite gates every CLI/image bump and only the supported surface.
 
+## Constraints on any implementation
+
+*Added 2026-08-18, after #557 made the Claude seat's confinement unconditional. The Claude seat is a **narrower, separate** mechanism from this ADR's jail — it keeps the host network and host filesystem — but both are confinement boundaries and both are Linux-only, so the platform constraint is recorded once, here, as a property of any confinement mechanism rather than of either one.*
+
+- **Confinement must refuse, never degrade, on a host it cannot confine.** A boundary that quietly falls back leaves the operator holding the guarantee's language without the guarantee, which is worse than having none. Both mechanisms refuse today (`contained-execution.ts` throws; the Claude seat's preflight returns `error_confinement` before `query()`), and a replacement must refuse too.
+- **The vector sets the scope, not the platform.** PID + mount namespaces were chosen to answer a *Linux-specific* exposure: same-UID `/proc/<pid>/environ` reads and unrestricted unix-socket reachability. This is **not** a finding that confinement is a Linux-shaped problem. A host without procfs has a materially different exposure and needs a differently-shaped mechanism — not this one ported. Do not read the current construction as a platform stance.
+- **Platform parity is required; today's Linux-only construction is tracked debt (#564), not the target state.** macOS support is a medium-term requirement. Any macOS mechanism must deliver the same three properties this one does — a worker cannot read another process's environment, cannot reach a harness-only socket, and cannot inject into the operator's controlling terminal — and must carry **its own** conformance evidence rather than inheriting the Linux suite's, since a trust claim cannot silently span two platforms with one probe.
+
 ## Alternatives not taken
 - **Subscription credential-*termination* as the productized "no reusable credential" answer** — lab-proven for grok, but makes pelaggio an OAuth vault + unofficial OIDC client + perpetual reverse-engineer of undocumented internals, absorbing token-liability + ToS heat for a security delta `network=none` + broker + spend-caps already mostly deliver. Keys earn that liability; kept as a lab spike behind an experimental flag at most.
 - **A heavy bespoke security product / whole-`MAIN_REPO` mount** — the heavier we go the more credential-handler liability + ToS exposure we own; light-and-key is safer on every axis, and mounting `MAIN_REPO` leaks `.git`/`.env`/`.dev` tokens.
@@ -28,6 +36,7 @@ Confine autonomous agent execution with **two composable boundaries**, chosen pe
 - (+) `network=none` + fail-closed broker means provider-CLI churn fails toward broken-and-visible, not leaky.
 - (−) Fail-closed protects **safety, not availability** — a wedged pin parks every cycle (an outage cost); the bounded remedy is falling back to the last *verified* pin (recorded, `ship.target`-gated) per ADR-0017, never to an uncontained run.
 - (−) **Contained ≠ confidential-from-provider**: prompt/body exfil to the provider (an allowed sink) is unclosable by any layer; stated plainly, never implied away.
+- (−) Every confinement mechanism shipped today is Linux-only, and #557 widened the blast radius: because the Claude seat is unconditional and Claude is the default driver for every step, a default install on macOS now fails at `pick`, not merely at review. Disclosed and fail-closed rather than silent, but it is **debt against a required platform (#564)** — the medium-term answer is a macOS mechanism meeting the constraints above, not a narrowed platform scope.
 - (−) Pelaggio becomes a credential-and-egress handler on the user's box — hence light-and-key as the default and local single-dev as the only place subscription is defensible (no cross-user credential custody).
 
 Specializes ADR-0014; FS confinement per ADR-0001, env allowlist per ADR-0010, degrade-on-rigor / last-verified-pin per ADR-0017. Capability *placement* (host-owned effects, deterministic handlers) is ADR-0021's, not restated here.
