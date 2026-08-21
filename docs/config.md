@@ -1168,13 +1168,21 @@ section (e.g. `budgets.bogus: 5`) are also ignored.
 - Secret handling — store secrets in the environment, not here.
 # Human resolution of cross-model review splits
 
-When successfully parsed authoring reviewers disagree (at least one pass and one block), Pelaggio records the commit-bound evidence in `docs/decision-log/<itemId>.md`, sends the existing `decision` notification when subscribed, and parks for every ship target. Notification delivery is best-effort and never changes the gate.
+When successfully parsed authoring reviewers disagree (at least one pass and one block), Pelaggio records the commit-bound evidence in `docs/decision-log/<itemId>.md`, writes a Markdown **review escalation packet** immediately after the machine marker, sends the existing `decision` notification when subscribed, and parks for every ship target. Notification delivery is best-effort and never changes the gate.
 
-Resolve the recorded decision explicitly, then resume the item:
+The packet is the adjudication source: reviewer identities, verdicts, and rationales; reviewed SHA; evidence fingerprint; review-record path; safety-blocker posture; cycle spend at park; any recommended default; and the exact proceed/block commands. A safety-class split recommends `block` (the safety floor cannot be acknowledged through). A judgment-only split presents both choices with no recommended default.
+
+Resolve the recorded decision from the packet, then resume with the packet's fingerprint-bearing command. `npx pelaggio decisions …` mutates the authority file; `pnpm pelaggio --resume …` re-enters the pipeline:
 
 ```bash
 npx pelaggio decisions resolve <decision-id> --disposition proceed --by <actor> --reason "<rationale>"
-npx pelaggio --resume <item-id>
+pnpm pelaggio --resume <item-id> --acknowledge-escalation <evidence-fingerprint>
 ```
 
-Run `resolve` from the item worktree, or from the main checkout when the ID is unique across sibling worktrees (0 or >1 matches fail closed). Flag syntax is unchanged. Use `--disposition block` to retain the block. A `proceed` resolution applies only to the unchanged reviewed commit and exact recorded evidence. Missing, malformed, ambiguous, stale, or safety-class evidence fails closed and parks; changing the code requires a fresh review.
+To retain the block:
+
+```bash
+npx pelaggio decisions resolve <decision-id> --disposition block --by <actor> --reason "<rationale>"
+```
+
+Run `resolve` from the item worktree, or from the main checkout when the ID is unique across sibling worktrees (0 or >1 matches fail closed). Flag syntax is unchanged. A `proceed` resolution applies only to the unchanged reviewed commit and exact recorded evidence; resume without `--acknowledge-escalation`, or with a mismatched fingerprint, parks again. Missing, malformed, ambiguous, stale, or safety-class evidence fails closed and parks; a `resolved-block` record cannot be acknowledged through. Changing the code requires a fresh review.

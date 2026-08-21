@@ -39,6 +39,25 @@ export type ReviewEscalationLookup =
 	| { state: "active"; id: string; escalation: ReviewEscalation }
 	| { state: "resolved-proceed" | "resolved-block"; id: string; escalation: ReviewEscalation; resolution: ReviewResolution };
 
+export type ReviewEscalationRecommendation = {
+	disposition: "proceed" | "block";
+	source: "judge" | "deterministic-policy";
+	rationale: string;
+};
+
+export interface ReviewEscalationAdjudication {
+	spend: { amount: number; estimated: boolean };
+	/** Copied from the sibling escalation; parse fails closed on mismatch. */
+	evidenceFingerprint: string;
+	recommendedDefault?: ReviewEscalationRecommendation;
+}
+
+export interface ReviewEscalationWriteInput {
+	escalation: ReviewEscalation;
+	adjudication: ReviewEscalationAdjudication;
+	now?: Date;
+}
+
 export interface MigrateDecisionsResult {
 	status: "written" | "noop";
 	owners: string[];
@@ -70,6 +89,7 @@ interface StoredDecision {
 	cells: string[];
 	meta: DecisionMeta;
 	escalation?: { escalation: ReviewEscalation; resolution?: ReviewResolution };
+	adjudication?: ReviewEscalationAdjudication;
 	/** Source order within the parsed file (stable for migration/reconcile). */
 	order: number;
 }
@@ -81,7 +101,11 @@ interface AuthorityFile {
 }
 
 function cell(value: string | undefined): string {
-	return (value ?? "").replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\r?\n/g, " ").trim();
+	return (value ?? "")
+		.replace(/\\/g, "\\\\")
+		.replace(/\|/g, "\\|")
+		.replace(/[\r\n\u2028\u2029]+/g, " ")
+		.trim();
 }
 
 function normalize(value: string): string {
@@ -113,6 +137,22 @@ export function reviewEscalationId(input: ReviewEscalation): string {
 		.update([input.itemId, input.step, input.reviewedSha, input.evidenceFingerprint, String(input.hasSafetyBlocker)].join("\0"))
 		.digest("hex")
 		.slice(0, 16);
+}
+
+export function reviewEscalationCommands(id: string, escalation: Pick<ReviewEscalation, "itemId" | "evidenceFingerprint">): { proceedResolve: string; resume: string; blockResolve: string } {
+	const decisionId = validateCommandToken(id, "decision ID");
+	const itemId = validateCommandToken(escalation.itemId, "item ID");
+	const evidenceFingerprint = validateCommandToken(escalation.evidenceFingerprint, "evidence fingerprint");
+	return {
+		proceedResolve: `npx pelaggio decisions resolve ${decisionId} --disposition proceed --by <actor> --reason "<rationale>"`,
+		resume: `pnpm pelaggio --resume ${itemId} --acknowledge-escalation ${evidenceFingerprint}`,
+		blockResolve: `npx pelaggio decisions resolve ${decisionId} --disposition block --by <actor> --reason "<rationale>"`,
+	};
+}
+
+function validateCommandToken(value: string, label: string): string {
+	if (!/^[A-Za-z0-9][A-Za-z0-9._:@/+~-]*$/.test(value)) throw new Error(`unsafe review escalation ${label}: ${JSON.stringify(value)}`);
+	return value;
 }
 
 export function validateOwner(owner: string): string {
@@ -147,6 +187,8 @@ function metaMarker(meta: DecisionMeta): string {
 }
 
 const escalationMarker = (value: { escalation: ReviewEscalation; resolution?: ReviewResolution }): string => `<!-- review-escalation:${Buffer.from(JSON.stringify(value)).toString("base64url")} -->`;
+
+const adjudicationMarker = (value: ReviewEscalationAdjudication): string => `<!-- review-adjudication:${Buffer.from(JSON.stringify(value)).toString("base64url")} -->`;
 
 function decisionLogDir(repo: string): string {
 	const dir = resolve(repo, "docs", DECISION_LOG_DIR);
@@ -257,14 +299,182 @@ function parseEscalationMetadata(encoded: string): { escalation: ReviewEscalatio
 	return value as { escalation: ReviewEscalation; resolution?: ReviewResolution };
 }
 
+function validateAdjudication(value: unknown, expectedFingerprint: string): ReviewEscalationAdjudication {
+	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("malformed review adjudication metadata");
+	const obj = value as Record<string, unknown>;
+	if (typeof obj.evidenceFingerprint !== "string" || obj.evidenceFingerprint.length === 0) {
+		throw new Error("malformed review adjudication metadata: missing evidenceFingerprint");
+	}
+	if (obj.evidenceFingerprint !== expectedFingerprint) {
+		throw new Error("malformed review adjudication metadata: evidenceFingerprint mismatch");
+	}
+	if (!obj.spend || typeof obj.spend !== "object" || Array.isArray(obj.spend)) {
+		throw new Error("malformed review adjudication metadata: spend");
+	}
+	const spendObj = obj.spend as Record<string, unknown>;
+	if (typeof spendObj.amount !== "number" || !Number.isFinite(spendObj.amount) || spendObj.amount < 0) {
+		throw new Error("malformed review adjudication metadata: spend.amount");
+	}
+	if (typeof spendObj.estimated !== "boolean") {
+		throw new Error("malformed review adjudication metadata: spend.estimated");
+	}
+	let recommendedDefault: ReviewEscalationRecommendation | undefined;
+	if (obj.recommendedDefault !== undefined) {
+		if (!obj.recommendedDefault || typeof obj.recommendedDefault !== "object" || Array.isArray(obj.recommendedDefault)) {
+			throw new Error("malformed review adjudication metadata: recommendedDefault");
+		}
+		const rec = obj.recommendedDefault as Record<string, unknown>;
+		if (rec.disposition !== "proceed" && rec.disposition !== "block") {
+			throw new Error("malformed review adjudication metadata: recommendedDefault.disposition");
+		}
+		if (rec.source !== "judge" && rec.source !== "deterministic-policy") {
+			throw new Error("malformed review adjudication metadata: recommendedDefault.source");
+		}
+		if (typeof rec.rationale !== "string" || rec.rationale.trim() === "") {
+			throw new Error("malformed review adjudication metadata: recommendedDefault.rationale");
+		}
+		recommendedDefault = { disposition: rec.disposition, source: rec.source, rationale: rec.rationale };
+	}
+	return {
+		spend: { amount: spendObj.amount, estimated: spendObj.estimated },
+		evidenceFingerprint: obj.evidenceFingerprint,
+		...(recommendedDefault ? { recommendedDefault } : {}),
+	};
+}
+
+function parseAdjudicationMetadata(encoded: string, sibling: ReviewEscalation): ReviewEscalationAdjudication {
+	const value: unknown = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+	return validateAdjudication(value, sibling.evidenceFingerprint);
+}
+
+function longestBacktickRun(text: string): number {
+	let max = 0;
+	let current = 0;
+	for (const ch of text) {
+		if (ch === "`") {
+			current += 1;
+			if (current > max) max = current;
+		} else {
+			current = 0;
+		}
+	}
+	return max;
+}
+
+/** Neutralize substrings that would retarget parseAuthorityBody's non-Markdown scanners. */
+function neutralizeParserSignificant(text: string): string {
+	return text.replace(/^## (Active|Resolved)$/gm, "## $1.").replace(/<!--/g, "< !--");
+}
+
+/** Keep record-sourced values inside one inline-code span without parser-significant text. */
+function inlineUntrusted(text: string): string {
+	const singleLine = neutralizeParserSignificant(text)
+		.replace(/[\r\n\u2028\u2029]+/g, " ")
+		.replace(/`/g, "'");
+	return `\`${singleLine}\``;
+}
+
+/**
+ * Table cells built from record-sourced values. `cell()` alone escapes pipes and folds
+ * newlines, but a stray backtick still opens a code span that swallows the rest of the row.
+ * Operator-authored decision cells keep `cell()`'s verbatim behavior.
+ */
+function untrustedCell(text: string): string {
+	return cell(neutralizeParserSignificant(text).replace(/`/g, "'"));
+}
+
+function fenceUntrusted(text: string): string {
+	const neutralized = neutralizeParserSignificant(text);
+	const fence = "`".repeat(Math.max(3, longestBacktickRun(neutralized) + 1));
+	return `${fence}\n${neutralized}\n${fence}`;
+}
+
+function packetState(resolution?: ReviewResolution): "active" | "resolved-proceed" | "resolved-block" {
+	if (!resolution) return "active";
+	return resolution.disposition === "proceed" ? "resolved-proceed" : "resolved-block";
+}
+
+function formatCycleSpend(spend: { amount: number; estimated: boolean }): string {
+	const dollars = `$${spend.amount.toFixed(2)}`;
+	return spend.estimated ? `~${dollars}` : dollars;
+}
+
+function renderReviewerLine(driver: ReviewEscalation["drivers"][number]): string {
+	const modelBit = driver.identity.model ? `, ${inlineUntrusted(driver.identity.model)}` : "";
+	return `- **${inlineUntrusted(driver.identity.role)} / ${inlineUntrusted(driver.identity.seatId)}** (${inlineUntrusted(driver.identity.provider)}${modelBit}, session ${inlineUntrusted(driver.identity.sessionId)}): **${inlineUntrusted(driver.verdict)}**\n${fenceUntrusted(driver.rationale)}`;
+}
+
+function renderReviewEscalationPacket(id: string, escalation: ReviewEscalation, resolution: ReviewResolution | undefined, adjudication: ReviewEscalationAdjudication): string {
+	const commands = reviewEscalationCommands(id, escalation);
+	const lines: string[] = [
+		`### Review escalation packet ${inlineUntrusted(id)} (${inlineUntrusted(packetState(resolution))})`,
+		"",
+		`- Reviewed SHA: ${inlineUntrusted(escalation.reviewedSha)}`,
+		`- Evidence fingerprint: ${inlineUntrusted(escalation.evidenceFingerprint)}`,
+		`- Review record: ${inlineUntrusted(escalation.reviewRecordSource)}`,
+		`- Safety blocker: ${inlineUntrusted(escalation.hasSafetyBlocker ? "yes" : "no")}`,
+		`- Cycle spend: ${inlineUntrusted(formatCycleSpend(adjudication.spend))}`,
+		"",
+		"#### Reviewers",
+		"",
+	];
+	if (escalation.drivers.length === 0) {
+		lines.push("- (none recorded)");
+		lines.push("");
+	} else {
+		for (const driver of escalation.drivers) {
+			lines.push(renderReviewerLine(driver));
+			lines.push("");
+		}
+	}
+	if (adjudication.recommendedDefault) {
+		const rec = adjudication.recommendedDefault;
+		lines.push(`Recommended default: ${inlineUntrusted(rec.disposition)} (${rec.source})`);
+		lines.push("");
+		lines.push(fenceUntrusted(rec.rationale));
+	} else {
+		lines.push("Choices: proceed or block. No recommended default on this record.");
+	}
+	lines.push("");
+	if (resolution) {
+		lines.push("#### Resolution");
+		lines.push("");
+		lines.push(`- Disposition: ${inlineUntrusted(resolution.disposition)}`);
+		lines.push(`- Actor: ${inlineUntrusted(resolution.actor)}`);
+		lines.push(`- Timestamp: ${inlineUntrusted(resolution.timestamp)}`);
+		if (resolution.adr) lines.push(`- ADR: ${inlineUntrusted(resolution.adr)}`);
+		lines.push("- Rationale:");
+		lines.push(fenceUntrusted(resolution.rationale));
+		if (resolution.disposition === "block") {
+			lines.push("");
+			lines.push("Acknowledgement cannot resume a `resolved-block` record.");
+		}
+		lines.push("");
+	}
+	lines.push("#### Commands");
+	lines.push("");
+	lines.push("Proceed (resolve, then resume with acknowledgement):");
+	lines.push(commands.proceedResolve);
+	lines.push(commands.resume);
+	lines.push("");
+	lines.push("Block:");
+	lines.push(commands.blockResolve);
+	lines.push("");
+	return `${lines.join("\n")}\n`;
+}
+
+function sectionHeadingIndex(body: string, heading: "Active" | "Resolved"): number {
+	return body.match(new RegExp(`^## ${heading}$`, "m"))?.index ?? -1;
+}
+
 function parseAuthorityBody(body: string, owner: string): AuthorityFile {
 	const normalized = body.replace(/\r\n/g, "\n");
-	const activeAt = normalized.indexOf("## Active");
-	const resolvedAt = normalized.indexOf("## Resolved");
+	const activeAt = sectionHeadingIndex(normalized, "Active");
+	const resolvedAt = sectionHeadingIndex(normalized, "Resolved");
 	if (activeAt < 0 || resolvedAt < 0 || resolvedAt < activeAt) throw new Error(`decision log missing Active/Resolved sections: ${owner}`);
 
 	const entries: StoredDecision[] = [];
-	const rowRe = /^\| (.+) \|\n<!-- decision:([^\s]+) -->\n(?:<!-- decision-meta:([A-Za-z0-9_-]+) -->\n)?(?:<!-- review-escalation:([A-Za-z0-9_-]+) -->\n)?/gm;
+	const rowRe = /^\| (.+) \|\n<!-- decision:([^\s]+) -->\n(?:<!-- decision-meta:([A-Za-z0-9_-]+) -->\n)?(?:<!-- review-escalation:([A-Za-z0-9_-]+) -->\n(?:<!-- review-adjudication:([A-Za-z0-9_-]+) -->\n)?)?/gm;
 	let order = 0;
 	for (const match of normalized.matchAll(rowRe)) {
 		const full = match[0];
@@ -274,14 +484,17 @@ function parseAuthorityBody(body: string, owner: string): AuthorityFile {
 		if (cells.length !== 6) throw new Error(`decision row must have 6 cells: ${id}`);
 		const metaRaw = match[3];
 		const escRaw = match[4];
+		const adjRaw = match[5];
 		const meta = metaRaw ? parseMetaPayload(metaRaw) : { aliases: [] as string[] };
 		const escalation = escRaw ? parseEscalationMetadata(escRaw) : undefined;
+		if (adjRaw && !escalation) throw new Error(`review adjudication without escalation: ${id}`);
+		const adjudication = adjRaw && escalation ? parseAdjudicationMetadata(adjRaw, escalation.escalation) : undefined;
 		const at = match.index ?? 0;
 		const section: "Active" | "Resolved" = at < resolvedAt ? "Active" : "Resolved";
 		if (escalation && reviewEscalationId(escalation.escalation) !== id) {
 			// Validation deferred to lookup for fail-closed invalid; still store for render fidelity.
 		}
-		entries.push({ id, section, cells, meta, ...(escalation ? { escalation } : {}), order: order++ });
+		entries.push({ id, section, cells, meta, ...(escalation ? { escalation } : {}), ...(adjudication ? { adjudication } : {}), order: order++ });
 	}
 
 	// Fail closed on duplicate IDs/aliases within the file.
@@ -309,7 +522,12 @@ function readAuthorityFile(path: string, owner: string): AuthorityFile {
 
 function renderEntry(entry: StoredDecision): string {
 	const row = `| ${entry.cells.join(" | ")} |\n${marker(entry.id)}\n${metaMarker(entry.meta)}\n`;
-	return entry.escalation ? `${row}${escalationMarker(entry.escalation)}\n` : row;
+	if (!entry.escalation) return row;
+	let out = `${row}${escalationMarker(entry.escalation)}\n`;
+	if (!entry.adjudication) return out;
+	out += `${adjudicationMarker(entry.adjudication)}\n`;
+	out += renderReviewEscalationPacket(entry.id, entry.escalation.escalation, entry.escalation.resolution, entry.adjudication);
+	return out.endsWith("\n") ? out : `${out}\n`;
 }
 
 function renderAuthority(file: AuthorityFile): string {
@@ -483,9 +701,12 @@ export async function appendDecisions(repo: string, input: AppendDecisionsInput)
 	}
 }
 
-export async function appendReviewEscalation(repo: string, escalation: ReviewEscalation, now = new Date()): Promise<DecisionWriteResult> {
+export async function appendReviewEscalation(repo: string, input: ReviewEscalationWriteInput): Promise<DecisionWriteResult> {
+	const escalation = input.escalation;
 	const id = reviewEscalationId(escalation);
 	try {
+		const adjudication = validateAdjudication(input.adjudication, escalation.evidenceFingerprint);
+		const now = input.now ?? new Date();
 		const owner = validateOwner(escalation.itemId);
 		return (() => {
 			const path = authorityPath(repo, owner);
@@ -500,9 +721,10 @@ export async function appendReviewEscalation(repo: string, escalation: ReviewEsc
 			file.active.push({
 				id,
 				section: "Active",
-				cells: [cell(`Cross-model review split for ${escalation.itemId}`), "default-taken", "Human adjudication required", "proceed or block", cell(escalation.reviewRecordSource), now.toISOString().slice(0, 10)],
+				cells: [untrustedCell(`Cross-model review split for ${escalation.itemId}`), "default-taken", "Human adjudication required", "proceed or block", untrustedCell(escalation.reviewRecordSource), now.toISOString().slice(0, 10)],
 				meta: { aliases: [] },
 				escalation: { escalation },
+				adjudication,
 				order: allEntries(file).length,
 			});
 			writeAuthority(repo, file);
@@ -542,12 +764,15 @@ function lookupEscalationInFile(file: AuthorityFile, itemId: string, reviewedSha
  */
 function readCommittedAuthorityFile(repo: string, owner: string): AuthorityFile {
 	const rel = relative(repo, authorityPath(repo, owner));
+	let body: string;
 	try {
-		const body = execFileSync("git", ["show", `HEAD:${rel}`], { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-		return parseAuthorityBody(body, owner);
+		body = execFileSync("git", ["show", `HEAD:${rel}`], { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 	} catch {
+		// Absent from HEAD is a genuine miss. Parse errors must not be collapsed into
+		// missing — a corrupt committed authority file is fail-closed invalid.
 		return { owner, active: [], resolved: [] };
 	}
+	return parseAuthorityBody(body, owner);
 }
 
 export function lookupReviewEscalation(repo: string, itemId: string, reviewedSha: string): ReviewEscalationLookup {

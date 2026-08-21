@@ -40,6 +40,7 @@ export interface RatchetDeps {
 export type RatchetResult = { ok: true; actual: Record<PackageKey, number>; baseline: TypecheckBaseline } | { ok: false; message: string };
 
 const DIAGNOSTIC_HEADER = /\berror TS\d+:/;
+const UNRESOLVED_MODULE_DIAGNOSTIC_HEADER = /\berror TS2307:/;
 
 export function repoRoot(): string {
 	return resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -51,6 +52,17 @@ export function countDiagnostics(stdout: string, stderr: string): number {
 	for (const stream of [stdout, stderr]) {
 		for (const line of stream.split("\n")) {
 			if (DIAGNOSTIC_HEADER.test(line)) count += 1;
+		}
+	}
+	return count;
+}
+
+/** Count only unresolved-module diagnostic headers (TS2307). */
+export function countUnresolvedModuleDiagnostics(stdout: string, stderr: string): number {
+	let count = 0;
+	for (const stream of [stdout, stderr]) {
+		for (const line of stream.split("\n")) {
+			if (UNRESOLVED_MODULE_DIAGNOSTIC_HEADER.test(line)) count += 1;
 		}
 	}
 	return count;
@@ -238,10 +250,12 @@ export function runRatchet(deps: RatchetDeps, opts: { baseRef?: string } = {}): 
 	}
 
 	const actual = {} as Record<PackageKey, number>;
+	const unresolvedModuleDiagnostics = {} as Record<PackageKey, number>;
 	for (const key of PACKAGE_KEYS) {
 		const result = deps.runCompiler(key);
 		if (!result.ok) return { ok: false, message: result.reason };
 		actual[key] = countDiagnostics(result.stdout, result.stderr);
+		unresolvedModuleDiagnostics[key] = countUnresolvedModuleDiagnostics(result.stdout, result.stderr);
 	}
 
 	const exceeded: string[] = [];
@@ -251,9 +265,10 @@ export function runRatchet(deps: RatchetDeps, opts: { baseRef?: string } = {}): 
 		}
 	}
 	if (exceeded.length > 0) {
+		const hasUnresolvedModuleDiagnostics = unresolvedModuleDiagnostics.pelaggio + unresolvedModuleDiagnostics.server > 0;
 		return {
 			ok: false,
-			message: `strict diagnostic count exceeded baseline:\n  ${exceeded.join("\n  ")}\n  (actual: pelaggio=${actual.pelaggio}, server=${actual.server})`,
+			message: `strict diagnostic count exceeded baseline:\n  ${exceeded.join("\n  ")}\n  (actual: pelaggio=${actual.pelaggio}, server=${actual.server})\n  unresolved-module diagnostics (TS2307): pelaggio ${unresolvedModuleDiagnostics.pelaggio}, server ${unresolvedModuleDiagnostics.server}${hasUnresolvedModuleDiagnostics ? "\n  if those account for most of the excess, dependency resolution in this checkout is a more likely cause than the code; in-worktree installs are blocked by the write guard, so an operator or the harness must repair the checkout." : ""}`,
 		};
 	}
 

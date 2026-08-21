@@ -1,6 +1,17 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { type BaseBaselineResult, type CompilerResult, countDiagnostics, formatDeltaMarker, type PackageKey, parseBaseline, type RatchetDeps, runRatchet, type TypecheckBaseline } from "../typecheck-ratchet.js";
+import {
+	type BaseBaselineResult,
+	type CompilerResult,
+	countDiagnostics,
+	countUnresolvedModuleDiagnostics,
+	formatDeltaMarker,
+	type PackageKey,
+	parseBaseline,
+	type RatchetDeps,
+	runRatchet,
+	type TypecheckBaseline,
+} from "../typecheck-ratchet.js";
 
 const BASE: TypecheckBaseline = {
 	typescript: "6.0.3",
@@ -9,6 +20,11 @@ const BASE: TypecheckBaseline = {
 
 function compilerOk(count: number): CompilerResult {
 	const lines = Array.from({ length: count }, (_, i) => `file.ts(${i + 1},1): error TS2304: Cannot find name 'x${i}'.`);
+	return { ok: true, exitCode: count === 0 ? 0 : 1, stdout: lines.join("\n"), stderr: "" };
+}
+
+function compilerUnresolved(count: number): CompilerResult {
+	const lines = Array.from({ length: count }, (_, i) => `file.ts(${i + 1},1): error TS2307: Cannot find module 'module-${i}' or its corresponding type declarations.`);
 	return { ok: true, exitCode: count === 0 ? 0 : 1, stdout: lines.join("\n"), stderr: "" };
 }
 
@@ -47,6 +63,14 @@ describe("countDiagnostics", () => {
 	});
 });
 
+describe("countUnresolvedModuleDiagnostics", () => {
+	it("counts only TS2307 diagnostic headers across stdout and stderr", () => {
+		const stdout = "a.ts(1,1): error TS2307: Cannot find module 'a'.\nb.ts(2,2): error TS2304: Cannot find name 'b'.";
+		const stderr = "c.ts(3,3): error TS2307: Cannot find module 'c'.\n  Imported via 'c' from file 'd.ts'.";
+		assert.equal(countUnresolvedModuleDiagnostics(stdout, stderr), 2);
+	});
+});
+
 describe("parseBaseline", () => {
 	it("accepts a well-formed baseline", () => {
 		assert.deepEqual(parseBaseline(BASE), BASE);
@@ -81,11 +105,32 @@ describe("runRatchet — current counts", () => {
 		assert.equal(result.ok, true);
 	});
 
-	it("fails when either package exceeds baseline", () => {
+	it("reports remediation for an unresolved-module-heavy excess", () => {
+		const result = runRatchet(
+			deps({
+				runCompiler: (key) => (key === "pelaggio" ? compilerUnresolved(11) : compilerOk(5)),
+			}),
+		);
+		assert.equal(result.ok, false);
+		if (!result.ok) {
+			assert.match(result.message, /pelaggio: actual 11 > baseline 10/);
+			assert.match(result.message, /unresolved-module diagnostics \(TS2307\): pelaggio 11, server 0/);
+			assert.match(result.message, /if those account for most of the excess, dependency resolution in this checkout is a more likely cause than the code/);
+			assert.match(result.message, /operator or the harness must repair the checkout/);
+		}
+	});
+
+	it("reports zero unresolved-module diagnostics for an ordinary type-error excess", () => {
 		const highPel = runRatchet(deps({ actual: { pelaggio: 11, server: 5 } }));
 		assert.equal(highPel.ok, false);
-		if (!highPel.ok) assert.match(highPel.message, /pelaggio: actual 11 > baseline 10/);
+		if (!highPel.ok) {
+			assert.match(highPel.message, /pelaggio: actual 11 > baseline 10/);
+			assert.match(highPel.message, /unresolved-module diagnostics \(TS2307\): pelaggio 0, server 0/);
+			assert.doesNotMatch(highPel.message, /if those account for most of the excess/);
+		}
+	});
 
+	it("fails when the server package exceeds baseline", () => {
 		const highSrv = runRatchet(deps({ actual: { pelaggio: 10, server: 6 } }));
 		assert.equal(highSrv.ok, false);
 		if (!highSrv.ok) assert.match(highSrv.message, /server: actual 6 > baseline 5/);
