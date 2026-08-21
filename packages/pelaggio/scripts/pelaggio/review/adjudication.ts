@@ -71,11 +71,20 @@ export interface PrAdjudicationSurvivorEntry {
 	hunk: PrAdjudicationHunk;
 }
 
+/**
+ * Fleet agreements adjudication accepts (#525): every required cell completed a structurally
+ * valid review and rendered a genuine model verdict. `disagreement` exhausts with the breaker
+ * label `invalid-pass`, but with `ok: true` no review was invalid — the label marks a terminal
+ * verdict split. Actually-broken runs (parse/infra failure, incomplete matrix) carry
+ * `ok: false` and `agreement: "invalid"` and stay refused everywhere below.
+ */
+export type PrAdjudicableAgreement = "consensus-block" | "disagreement";
+
 export interface PrAdjudicationSourceDraft {
 	prNumber: number;
 	itemId: string;
 	reviewedSha: string;
-	agreement: "consensus-block";
+	agreement: PrAdjudicableAgreement;
 	requiredCells: number;
 	completedCells: number;
 	survivorCount: number;
@@ -245,7 +254,7 @@ function validateDraftFields(value: Record<string, unknown>): PrAdjudicationSour
 	const prNumber = requirePositiveInt(value.prNumber, "prNumber");
 	const itemId = requireNonEmptyString(value.itemId, "itemId");
 	const reviewedSha = requireSha40(value.reviewedSha, "reviewedSha");
-	if (value.agreement !== "consensus-block") fail("agreement");
+	if (value.agreement !== "consensus-block" && value.agreement !== "disagreement") fail("agreement");
 	const requiredCells = requirePositiveInt(value.requiredCells, "requiredCells");
 	const completedCells = requirePositiveInt(value.completedCells, "completedCells");
 	if (requiredCells !== completedCells) fail("completedCells");
@@ -259,7 +268,7 @@ function validateDraftFields(value: Record<string, unknown>): PrAdjudicationSour
 		prNumber,
 		itemId,
 		reviewedSha,
-		agreement: "consensus-block",
+		agreement: value.agreement,
 		requiredCells,
 		completedCells,
 		survivorCount,
@@ -334,12 +343,16 @@ export function listAdjudicationSourceRecords(root: string): PrAdjudicationSourc
 	return records;
 }
 
-const INELIGIBLE_BREAKERS = new Set(["invalid-pass", "provider-diversity"]);
+const INELIGIBLE_BREAKERS = new Set(["provider-diversity"]);
 
 export function isEligibleFleetGateRecord(record: PrReviewGateRecord): boolean {
 	if (record.schemaVersion !== 2 || record.producer !== "fleet") return false;
 	if (record.gate !== "block" || record.ok !== true) return false;
-	if (record.agreement !== "consensus-block") return false;
+	// #525: `disagreement` is adjudicable alongside `consensus-block`. The convergence loop labels
+	// a terminal split's breaker `invalid-pass`, but with `ok: true` every required cell completed
+	// a structurally valid review — nothing was invalid, so the breaker is not disqualifying.
+	// Genuinely broken runs carry `ok: false` / `agreement: "invalid"` and are refused above/here.
+	if (record.agreement !== "consensus-block" && record.agreement !== "disagreement") return false;
 	if ((record.survivorCount ?? 0) < 1) return false;
 	if (record.breakerReason !== undefined && INELIGIBLE_BREAKERS.has(record.breakerReason)) return false;
 	return true;
@@ -369,11 +382,14 @@ export function selectUnambiguousFleetGateRecord(records: readonly PrReviewGateR
 }
 
 export function crossCheckAdjudicationSource(source: PrAdjudicationSourceRecordV1, fleet: PrReviewGateRecord, fleetBytes: Buffer | string, expected: { prNumber: number; itemId: string }): AdjudicationSourceBindResult {
-	if (!isEligibleFleetGateRecord(fleet)) return { ok: false, reason: "latest fleet outcome is not an adjudicable consensus-block" };
+	if (!isEligibleFleetGateRecord(fleet)) return { ok: false, reason: "latest fleet outcome is not an adjudicable complete blocked review" };
 	if (source.prNumber !== expected.prNumber || fleet.prNumber !== expected.prNumber) return { ok: false, reason: "source record PR does not match the targeted pull request" };
 	if (source.itemId !== expected.itemId || fleet.itemId !== expected.itemId) return { ok: false, reason: "source record item does not match the targeted pull request" };
 	if (source.reviewedSha !== fleet.headSha.toLowerCase()) return { ok: false, reason: "source record reviewed SHA does not match the fleet record" };
-	if (source.agreement !== "consensus-block" || (fleet.schemaVersion === 2 && fleet.producer === "fleet" && fleet.agreement !== "consensus-block")) {
+	// Exact agreement match (#525): eligibility above already pins the fleet record to an
+	// adjudicable v2 fleet agreement; the sidecar must claim the SAME one, not merely any of them.
+	const fleetAgreement = fleet.schemaVersion === 2 && fleet.producer === "fleet" ? fleet.agreement : null;
+	if (source.agreement !== fleetAgreement) {
 		return { ok: false, reason: "source record agreement does not match the fleet record" };
 	}
 	const fleetSurvivorCount = fleet.schemaVersion === 1 || (fleet.schemaVersion === 2 && fleet.producer === "fleet") ? (fleet.survivorCount ?? -1) : -1;
@@ -419,7 +435,8 @@ export function buildAdjudicationSourceDraft(opts: {
 	if (!Number.isInteger(opts.prNumber) || opts.prNumber <= 0) return undefined;
 	if (typeof opts.itemId !== "string" || opts.itemId.trim() === "") return undefined;
 	if (!SHA40_RE.test(opts.reviewedSha)) return undefined;
-	if (opts.agreement !== "consensus-block" || !opts.ok) return undefined;
+	if ((opts.agreement !== "consensus-block" && opts.agreement !== "disagreement") || !opts.ok) return undefined;
+	const agreement: PrAdjudicableAgreement = opts.agreement;
 	if (!Number.isInteger(opts.requiredCells) || opts.requiredCells <= 0 || opts.requiredCells !== opts.completedCells) return undefined;
 	if (opts.survivors.length < 1 || opts.survivors.length > ADJUDICATION_SOURCE_MAX_SURVIVORS) return undefined;
 	let patches: StructuredPatch[];
@@ -460,7 +477,7 @@ export function buildAdjudicationSourceDraft(opts: {
 			prNumber: opts.prNumber,
 			itemId: opts.itemId,
 			reviewedSha: opts.reviewedSha.toLowerCase(),
-			agreement: "consensus-block",
+			agreement,
 			requiredCells: opts.requiredCells,
 			completedCells: opts.completedCells,
 			survivorCount: survivors.length,

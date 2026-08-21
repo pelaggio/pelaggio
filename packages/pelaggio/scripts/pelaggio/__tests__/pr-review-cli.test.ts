@@ -1465,7 +1465,11 @@ describe("pr-review CLI aggregation", () => {
 		assert.equal(review.adjudicationSource, undefined);
 	});
 
-	it("does not emit adjudicable evidence for disagreement, invalid, or unmappable survivors", async () => {
+	it("emits adjudicable evidence for the complete disagreement split — the invalid-pass breaker shape (#525)", async () => {
+		// The PR #589 shape: one reviewer blocks with a verified survivor, the other passes; every
+		// cell is structurally valid (ok=true), so the terminal split exhausts as `invalid-pass`
+		// even though no review was invalid. The split is the operator-drain case, so it must
+		// carry the same SHA-bound adjudication evidence a consensus-block carries.
 		const disagreement = await runPrReviewGate({
 			pr: "497",
 			itemId: "497",
@@ -1480,9 +1484,19 @@ describe("pr-review CLI aggregation", () => {
 				return verification([{ candidateId: "C1", decision: "survives", rationale: "Yes." }]);
 			},
 		});
+		assert.equal(disagreement.gate, "block");
+		assert.equal(disagreement.ok, true);
 		assert.equal(disagreement.agreement, "disagreement");
-		assert.equal(disagreement.adjudicationSource, undefined);
+		assert.equal(disagreement.breakerReason, "invalid-pass");
+		assert.equal(disagreement.subtype, "invalid-pass");
+		assert.ok(disagreement.adjudicationSource);
+		assert.equal(disagreement.adjudicationSource.agreement, "disagreement");
+		assert.equal(disagreement.adjudicationSource.reviewedSha, REVIEWED_HEAD);
+		assert.equal(disagreement.adjudicationSource.survivorCount, 1);
+		assert.deepEqual(disagreement.adjudicationSource.survivors[0]?.hunk, { path: "src/a.ts", start: 8, end: 12 });
+	});
 
+	it("does not emit adjudicable evidence for invalid runs or unmappable survivors", async () => {
 		const invalid = await runPrReviewGate({
 			pr: "497",
 			itemId: "497",

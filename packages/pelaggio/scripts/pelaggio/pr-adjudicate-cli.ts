@@ -246,7 +246,7 @@ export async function runPrAdjudication(pr: number, profile: string, deps: PrAdj
 	}
 	const latest = selection.record;
 	if (!isEligibleFleetGateRecord(latest)) {
-		return refuse(deps, "latest fleet outcome is not an adjudicable complete consensus-block; run a full pr-review");
+		return refuse(deps, "latest fleet outcome is not an adjudicable complete blocked review (consensus-block or disagreement); run a full pr-review");
 	}
 
 	const source = deps.readAdjudicationSource(deps.adjudicationSourcesRoot, pr, latest.headSha);

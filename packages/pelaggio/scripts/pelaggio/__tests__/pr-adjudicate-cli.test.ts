@@ -136,8 +136,13 @@ interface Harness {
 	heads: string[];
 }
 
-function seedEvidence(gateRoot: string, sourceRoot: string, entry: PrAdjudicationSurvivorEntry = survivor()): { digest: string } {
-	const path = writePrReviewGateRecord(gateRoot, fleet());
+function seedEvidence(
+	gateRoot: string,
+	sourceRoot: string,
+	entry: PrAdjudicationSurvivorEntry = survivor(),
+	shape: { fleet?: Partial<NewPrReviewFleetGateRecord>; sourceAgreement?: "consensus-block" | "disagreement" } = {},
+): { digest: string } {
+	const path = writePrReviewGateRecord(gateRoot, fleet(shape.fleet));
 	const bytes = readFileSync(path);
 	const digest = createHash("sha256").update(bytes).digest("hex");
 	const record: PrAdjudicationSourceRecordV1 = {
@@ -145,7 +150,7 @@ function seedEvidence(gateRoot: string, sourceRoot: string, entry: PrAdjudicatio
 		prNumber: 497,
 		itemId: "497",
 		reviewedSha: REVIEWED,
-		agreement: "consensus-block",
+		agreement: shape.sourceAgreement ?? "consensus-block",
 		requiredCells: 1,
 		completedCells: 1,
 		survivorCount: 1,
@@ -169,6 +174,8 @@ function harness(
 		isSingleShot?: boolean;
 		mainWorktree?: string;
 		seed?: boolean;
+		/** Evidence-shape overrides threaded to seedEvidence (#525 disagreement coverage). */
+		evidenceShape?: { fleet?: Partial<NewPrReviewFleetGateRecord>; sourceAgreement?: "consensus-block" | "disagreement" };
 		survivor?: PrAdjudicationSurvivorEntry;
 		interdiff?: string;
 		ancestor?: boolean;
@@ -192,7 +199,7 @@ function harness(
 	const repo = tmp();
 	const gateRoot = join(repo, "gates");
 	const sourceRoot = join(repo, "sources");
-	if (over.seed !== false) seedEvidence(gateRoot, sourceRoot, over.survivor);
+	if (over.seed !== false) seedEvidence(gateRoot, sourceRoot, over.survivor, over.evidenceShape ?? {});
 	const effects: string[] = [];
 	const stepCalls: Harness["stepCalls"] = [];
 	const logs: string[] = [];
@@ -378,6 +385,39 @@ describe("pr-adjudicate CLI config and eligibility", () => {
 		assert.equal(await main(["--pr", "497"], h.deps), 0);
 		assert.ok(h.effects.includes("write-gate:operator-adjudication"));
 		assert.ok(h.effects.includes(`status:success:${HEAD}`));
+	});
+
+	it("adjudicates the complete disagreement/invalid-pass split end to end (#525)", async () => {
+		// The PR #589 shape: ok=true, agreement=disagreement, breaker labeled invalid-pass by the
+		// convergence loop although every review was structurally valid. The full effect chain
+		// (verify → record → comment → status) must run exactly as for a consensus-block.
+		const h = harness({
+			evidenceShape: {
+				fleet: { subtype: "invalid-pass", agreement: "disagreement", breakerReason: "invalid-pass", iterations: 1 },
+				sourceAgreement: "disagreement",
+			},
+		});
+		assert.equal(await main(["--pr", "497"], h.deps), 0);
+		const writes = h.effects.filter((e) => e.startsWith("write-gate:") || e.startsWith("comment:") || e.startsWith("status:"));
+		assert.deepEqual(writes, ["write-gate:operator-adjudication", "comment:497", `status:success:${HEAD}`]);
+	});
+
+	it("refuses a broken invalid-pass record and a sidecar whose agreement mismatches the fleet record (#525)", async () => {
+		// Genuinely broken review run: ok=false / agreement=invalid — never adjudicable.
+		const broken = harness({
+			evidenceShape: { fleet: { ok: false, agreement: "invalid", subtype: "invalid-pass", breakerReason: "invalid-pass" } },
+		});
+		assert.equal(await main(["--pr", "497"], broken.deps), 1);
+		assert.ok(broken.errs.some((e) => e.includes("not an adjudicable complete blocked review")));
+		assert.ok(!broken.effects.some((e) => e.startsWith("step:") || e.startsWith("comment:") || e.startsWith("status:")));
+
+		// Agreement mismatch: a consensus-block sidecar cannot bind a disagreement fleet record.
+		const mismatch = harness({
+			evidenceShape: { fleet: { subtype: "invalid-pass", agreement: "disagreement", breakerReason: "invalid-pass" }, sourceAgreement: "consensus-block" },
+		});
+		assert.equal(await main(["--pr", "497"], mismatch.deps), 1);
+		assert.ok(mismatch.errs.some((e) => e.includes("agreement does not match")));
+		assert.ok(!mismatch.effects.some((e) => e.startsWith("step:") || e.startsWith("comment:") || e.startsWith("status:")));
 	});
 });
 

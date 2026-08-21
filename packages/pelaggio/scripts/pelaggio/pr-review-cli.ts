@@ -150,7 +150,8 @@ export interface PrReviewGateResult {
 	breakerReason?: ReviewExhaustionReason;
 	iterations?: number;
 	survivorCount?: number;
-	/** Present only for a complete findings-terminal consensus-block with mappable survivors. */
+	/** Present only for a complete findings-terminal block (consensus-block, or the disagreement
+	 *  split whose breaker is labeled `invalid-pass` — #525) with mappable survivors. */
 	adjudicationSource?: PrAdjudicationSourceDraft;
 }
 

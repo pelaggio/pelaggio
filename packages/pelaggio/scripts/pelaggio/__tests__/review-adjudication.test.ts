@@ -187,7 +187,8 @@ describe("adjudication source store", () => {
 		const invalid = [
 			{ ...record(), survivors: [entry, { ...entry }], survivorCount: 2 },
 			{ ...record(), reviewedSha: "abc" },
-			{ ...record(), agreement: "disagreement" },
+			{ ...record(), agreement: "consensus-pass" },
+			{ ...record(), agreement: "invalid" },
 			{ ...record(), requiredCells: 2, completedCells: 1 },
 			{ ...record(), survivorCount: 0, survivors: [] },
 			{ ...record(), survivors: [{ ...entry, class: "not a class" }] },
@@ -224,6 +225,12 @@ describe("adjudication source store", () => {
 		mkdirSync(dir, { recursive: true });
 		writeFileSync(path, `${"a".repeat(1024 * 1024 + 8)}\n`);
 		assert.equal(readAdjudicationSourceRecord(dir, 497, REVIEWED), null);
+	});
+
+	it("round-trips a disagreement record — the invalid-pass split shape (#525)", () => {
+		const dir = root();
+		writeAdjudicationSourceRecord(dir, record({ agreement: "disagreement" }));
+		assert.equal(readAdjudicationSourceRecord(dir, 497, REVIEWED)?.agreement, "disagreement");
 	});
 
 	it("adjudicationSourcesDir lands under .dev", () => {
@@ -274,6 +281,28 @@ describe("emission-time classification", () => {
 		assert.equal(built.survivors[0]?.tier, "judgment");
 		assert.equal(built.survivors[0]?.class, "judgment");
 	});
+
+	it("emits a draft for a complete disagreement split and suppresses non-adjudicable shapes (#525)", () => {
+		const base = {
+			prNumber: 497,
+			itemId: "497",
+			reviewedSha: REVIEWED,
+			requiredCells: 3,
+			completedCells: 3,
+			ok: true,
+			survivors: [finding()],
+			verifications: new Map([[reviewFindingFingerprint(finding()), { id: "C1", rationale: "Still present." }]]),
+			inspectionDiff: inspectionDiff(),
+			changedFiles: ["src/a.ts"],
+			taxonomy: BASELINE_TAXONOMY,
+		} as const;
+		const built = buildAdjudicationSourceDraft({ ...base, agreement: "disagreement" });
+		assert.ok(built);
+		assert.equal(built.agreement, "disagreement");
+		assert.equal(buildAdjudicationSourceDraft({ ...base, agreement: "consensus-pass" }), undefined);
+		assert.equal(buildAdjudicationSourceDraft({ ...base, agreement: "invalid" }), undefined);
+		assert.equal(buildAdjudicationSourceDraft({ ...base, agreement: "disagreement", ok: false }), undefined);
+	});
 });
 
 describe("fleet eligibility and binding", () => {
@@ -284,7 +313,21 @@ describe("fleet eligibility and binding", () => {
 		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ breakerReason: "diminishing-returns" }) }), true);
 	});
 
-	it("refuses v1, operator, pass, disagreement/invalid-pass, diversity, zero-survivor, and mismatched-count cases", () => {
+	it("accepts the complete disagreement/invalid-pass split — the PR #589 shape (#525)", () => {
+		// Live shape from .dev/pr-review-gate-records/589-c0051a…json: a genuine verdict split
+		// (claude=pass, codex=block, grok=pass) whose breaker the convergence loop labels
+		// `invalid-pass` even though ok=true proves every review was structurally valid.
+		const prShape = fleet({ subtype: "invalid-pass", agreement: "disagreement", breakerReason: "invalid-pass", iterations: 1, survivorCount: 4 });
+		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...prShape }), true);
+		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ agreement: "disagreement" }) }), true);
+		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ breakerReason: "invalid-pass", agreement: "disagreement" }) }), true);
+		// A genuinely broken run (parse/infra failure) keeps ok=false / agreement=invalid — refused.
+		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ ok: false, agreement: "invalid", breakerReason: "invalid-pass" }) }), false);
+		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ agreement: "invalid", breakerReason: "invalid-pass" }) }), false);
+		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ ok: false, agreement: "disagreement", breakerReason: "invalid-pass" }) }), false);
+	});
+
+	it("refuses v1, operator, pass, broken-review, diversity, zero-survivor, and mismatched-count cases", () => {
 		assert.equal(
 			isEligibleFleetGateRecord({
 				schemaVersion: 1,
@@ -323,9 +366,10 @@ describe("fleet eligibility and binding", () => {
 			false,
 		);
 		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ gate: "pass", agreement: "consensus-pass", survivorCount: 0 }) }), false);
-		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ agreement: "disagreement", breakerReason: "invalid-pass" }) }), false);
-		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ breakerReason: "invalid-pass" }) }), false);
+		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ agreement: "consensus-pass" }) }), false);
+		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ agreement: "invalid" }) }), false);
 		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ breakerReason: "provider-diversity", agreement: "invalid" }) }), false);
+		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ breakerReason: "provider-diversity" }) }), false);
 		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ ok: false }) }), false);
 		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ survivorCount: 0 }) }), false);
 	});
@@ -368,6 +412,15 @@ describe("fleet eligibility and binding", () => {
 		assert.deepEqual(crossCheckAdjudicationSource(source, { schemaVersion: 2, ...fleet() }, bytes, { prNumber: 497, itemId: "497" }), { ok: true });
 		assert.equal(crossCheckAdjudicationSource(source, { schemaVersion: 2, ...fleet() }, Buffer.from("tampered"), { prNumber: 497, itemId: "497" }).ok, false);
 		assert.equal(crossCheckAdjudicationSource({ ...source, prNumber: 1 }, { schemaVersion: 2, ...fleet() }, bytes, { prNumber: 497, itemId: "497" }).ok, false);
+		// #525: the agreements must match EXACTLY — a consensus-block sidecar cannot bind a
+		// disagreement fleet record or vice versa, while a matching disagreement pair binds.
+		const splitFleet = fleet({ agreement: "disagreement", breakerReason: "invalid-pass", subtype: "invalid-pass" });
+		const splitPath = writePrReviewGateRecord(root(), splitFleet);
+		const splitBytes = readFileSync(splitPath);
+		const splitSource = record({ agreement: "disagreement", fleetRecordDigest: fleetRecordDigestOf(splitBytes) });
+		assert.deepEqual(crossCheckAdjudicationSource(splitSource, { schemaVersion: 2, ...splitFleet }, splitBytes, { prNumber: 497, itemId: "497" }), { ok: true });
+		assert.equal(crossCheckAdjudicationSource(source, { schemaVersion: 2, ...splitFleet }, splitBytes, { prNumber: 497, itemId: "497" }).ok, false);
+		assert.equal(crossCheckAdjudicationSource({ ...splitSource, agreement: "consensus-block" }, { schemaVersion: 2, ...splitFleet }, splitBytes, { prNumber: 497, itemId: "497" }).ok, false);
 		assert.equal(
 			crossCheckAdjudicationSource(
 				{ ...source, survivorCount: 2, survivors: [survivor(), survivor({ finding: finding({ message: "other" }), fingerprint: reviewFindingFingerprint(finding({ message: "other" })) })] },

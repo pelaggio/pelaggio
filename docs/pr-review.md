@@ -227,11 +227,15 @@ instruction.
 ### Eligible / refusal matrix
 
 Eligible: a complete v2 `producer: "fleet"` record with `gate: "block"`, structural
-`ok: true`, `agreement: "consensus-block"`, `survivorCount ≥ 1` matching the sidecar, and
-a matching digest. A `budget` / `max-passes` / `diminishing-returns` breaker is eligible
-only with that complete matrix. The current head must be a descendant of the reviewed SHA,
-and every interdiff edit must fall in a recorded hunk (insertions may use the immediate
-start/end boundary).
+`ok: true`, `agreement: "consensus-block"` **or** `"disagreement"` (#525), `survivorCount
+≥ 1` matching the sidecar, and a matching digest — the sidecar's agreement must equal the
+fleet record's exactly. A `budget` / `max-passes` / `diminishing-returns` breaker is
+eligible only with that complete matrix, and so is `invalid-pass`: the convergence loop
+labels a terminal verdict split's breaker `invalid-pass`, but with `ok: true` every
+required cell completed a structurally valid review — a genuinely broken run instead
+carries `ok: false` / `agreement: "invalid"` and stays refused. The current head must be a
+descendant of the reviewed SHA, and every interdiff edit must fall in a recorded hunk
+(insertions may use the immediate start/end boundary).
 
 Churn bounds are threefold and fail-closed: per hunk, added lines are capped by the extent
 of the covering recorded hunks; across the whole interdiff, TOTAL added lines are capped by
@@ -240,8 +244,9 @@ per-hunk allowance); and each added line's UTF-8 byte length is capped by a per-
 ceiling derived from the hunk's own replaced lines, clamped to a 200-byte floor / 1000-byte
 ceiling (so one in-range line cannot be replaced with an arbitrarily large single line).
 
-Refuses: v1 / operator / pass / disagreement / `invalid-pass` / provider-diversity /
-preflight budget / zero-survivor / digest or identity mismatch / missing sidecar /
+Refuses: v1 / operator / pass / `agreement: "invalid"` or non-`ok` (the broken-review
+`invalid-pass` shape) / provider-diversity /
+preflight budget / zero-survivor / digest or agreement or identity mismatch / missing sidecar /
 force-push or rebase / extra file or hunk / binary, rename, copy, create, delete / any
 file-mode metadata change (executable-bit or file-type transition, with or without hunks) /
 per-hunk, aggregate, or byte churn-bound overrun / empty or malformed interdiff /
