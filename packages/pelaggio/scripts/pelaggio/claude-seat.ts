@@ -92,6 +92,17 @@ const CLAUDE_CLI_PROVIDER_CONFIG_VARS = [
 	"ANTHROPIC_SMALL_FAST_MODEL_AWS_REGION",
 ] as const;
 
+/**
+ * Harness-owned pelaggio config overrides the inner `npx pelaggio ...` CLI re-reads at
+ * config load (every skill-invoked subcommand — roadmap/worktree-deps/decisions — builds
+ * CONFIG on import). Dropping these desynchronizes inner and outer config resolution:
+ * an env-selected `PELAGGIO_WORKTREE_PREFIX` makes the inner `roadmap claim` create a
+ * worktree under one prefix while the outer pipeline looks for another ("worktree
+ * missing" with a stranded claim). Non-secret, fixed pass-through for every role.
+ * `PELAGGIO_REVIEW_EVIDENCE_SIGNER_SOCKET` stays harness-only by design (#511).
+ */
+const PELAGGIO_HARNESS_CONFIG_VARS = ["PELAGGIO_REPO", "PELAGGIO_WORKTREE_PREFIX", "PELAGGIO_AUTHORING_ENABLED"] as const;
+
 /** Documented GitHub CLI token variables plus remote-auth / config-location handles needed by roadmap/`gh`/`git`. */
 const FORGE_REMOTE_VARS = ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "LINEAR_API_KEY", "SSH_AUTH_SOCK", "GH_CONFIG_DIR", "GH_HOST", "GH_ENTERPRISE_HOST"] as const;
 
@@ -195,6 +206,7 @@ export function buildClaudeSeatEnv(source: NodeJS.ProcessEnv | undefined, step: 
 	copyPresent(bag, CLAUDE_SDK_CONTROL_VARS, extra);
 	copyPresent(bag, CLAUDE_CLI_AUTH_VARS, extra);
 	copyPresent(bag, CLAUDE_CLI_PROVIDER_CONFIG_VARS, extra);
+	copyPresent(bag, PELAGGIO_HARNESS_CONFIG_VARS, extra);
 	if (claudeSeatHoldsForgeAuthority(step)) copyPresent(bag, FORGE_REMOTE_VARS, extra);
 	const env = buildAgentEnv({
 		source: bag,

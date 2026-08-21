@@ -3,9 +3,10 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
+import { buildClaudeSeatEnv } from "../claude-seat.js";
 import { DEFAULTS, type ReviewConfig, type StepSettings } from "../config.js";
 import { main as adjudicateMain, type PrAdjudicateDeps } from "../pr-adjudicate-cli.js";
-import { main, runPrReviewGate, setPrReviewDepsForTests } from "../pr-review-cli.js";
+import { main, reviewedHeadFetchAuthConfig, runPrReviewGate, setPrReviewDepsForTests } from "../pr-review-cli.js";
 import { listPrReviewGateRecords, readPrReviewGateRecord, writePrReviewGateRecord } from "../pr-review-gate-record.js";
 import { isEligibleFleetGateRecord, readAdjudicationSourceRecord } from "../review/adjudication.js";
 import { reviewFindingFingerprint } from "../review/findings.js";
@@ -142,9 +143,21 @@ function assertConstantOnlyDiagnosis(out: { stderr: string; comments: string[] }
 const REVIEWED_SHA = "a".repeat(40);
 
 async function runCli(
-	opts: { files?: string; diff?: string; results?: Array<StepResult | Error>; diffError?: Error; statusPosted?: boolean; reviewDrivers?: StepSettings[]; verifySettings?: StepSettings; headRef?: string; ci?: boolean } = {},
-): Promise<{ code: number; calls: RunCall[]; comments: string[]; statuses: string[]; statusShas: string[]; stdout: string; stderr: string; gateRecordsRoot: string; adjudicationSourcesRoot: string }> {
+	opts: {
+		files?: string;
+		diff?: string;
+		results?: Array<StepResult | Error>;
+		diffError?: Error;
+		statusPosted?: boolean;
+		reviewDrivers?: StepSettings[];
+		verifySettings?: StepSettings;
+		headRef?: string;
+		ci?: boolean;
+		env?: NodeJS.ProcessEnv;
+	} = {},
+): Promise<{ code: number; calls: RunCall[]; execCalls: Array<[string, string[]]>; comments: string[]; statuses: string[]; statusShas: string[]; stdout: string; stderr: string; gateRecordsRoot: string; adjudicationSourcesRoot: string }> {
 	const calls: RunCall[] = [];
+	const execCalls: Array<[string, string[]]> = [];
 	const comments: string[] = [];
 	const statuses: string[] = [];
 	const statusShas: string[] = [];
@@ -153,6 +166,7 @@ async function runCli(
 	const gateRecordsRoot = join(tmpRoot("pr-review-cli-evidence-"), "gates");
 	const adjudicationSourcesRoot = join(tmpRoot("pr-review-cli-evidence-"), "sources");
 	const execFileSync = ((cmd: string, args: readonly string[]) => {
+		execCalls.push([cmd, [...args]]);
 		const a = args.join(" ");
 		// resolveReviewedHead pins the PR head sha + claim branch via gh, then fetches — independent
 		// of the diff, so it must resolve even when the diff inspection is being made to fail.
@@ -161,7 +175,9 @@ async function runCli(
 			return `${JSON.stringify({ sha: REVIEWED_SHA, ref: opts.headRef ?? "feat/issue-123-fix" })}\n`;
 		}
 		assert.equal(cmd, "git");
-		if (a === "fetch --quiet origin main pull/123/head") return "";
+		// With a pinned harness token the fetch argv gains a leading process-scoped `-c` auth
+		// pair; the fetch-auth tests assert on the exact recorded argv.
+		if (a.endsWith("fetch --quiet origin main pull/123/head")) return "";
 		if (opts.diffError) throw opts.diffError;
 		if (a === `diff --name-only origin/main...${REVIEWED_SHA}`) return opts.files ?? "docs/readme.md\n";
 		if (a === `diff origin/main...${REVIEWED_SHA}`) return opts.diff ?? "+Clarify docs.\n";
@@ -194,6 +210,8 @@ async function runCli(
 		now: () => Date.parse("2026-08-13T12:00:00Z"),
 		// Pinned: the ambient env (a real CI job) must not decide whether persistence runs.
 		isCi: () => opts.ci ?? false,
+		// Pinned: ambient GH_TOKEN on a dev machine/CI must not change the fetch argv under test.
+		env: opts.env ?? {},
 	});
 	const originalStdout = process.stdout.write;
 	const originalStderr = process.stderr.write;
@@ -209,7 +227,7 @@ async function runCli(
 	}) as typeof process.stderr.write;
 	try {
 		const code = await main(["--pr", "123"]);
-		return { code, calls, comments, statuses, statusShas, stdout, stderr, gateRecordsRoot, adjudicationSourcesRoot };
+		return { code, calls, execCalls, comments, statuses, statusShas, stdout, stderr, gateRecordsRoot, adjudicationSourcesRoot };
 	} finally {
 		process.stdout.write = originalStdout;
 		process.stderr.write = originalStderr;
@@ -233,6 +251,47 @@ describe("pr-review CLI aggregation", () => {
 		// The required status is pinned to the PR *head* sha, resolved once before the
 		// review — not the local checkout's HEAD, and not re-queried after (no fail-open).
 		assert.deepEqual(out.statusShas, [REVIEWED_SHA]);
+	});
+
+	it("authenticates the pinned-head fetch process-scoped when the harness env holds a forge token (#554)", async () => {
+		const token = "ghs_ci_job_token_value";
+		const out = await runCli({ env: { GH_TOKEN: token } });
+		assert.equal(out.code, 0);
+		const fetchCall = out.execCalls.find(([cmd, args]) => cmd === "git" && args.includes("fetch"));
+		assert.ok(fetchCall, "the pinned-head fetch must run");
+		const fetchArgs = fetchCall[1];
+		// The credential rides THIS invocation's argv as a `-c` pair — actions/checkout's encoding.
+		assert.deepEqual(fetchArgs.slice(2), ["fetch", "--quiet", "origin", "main", "pull/123/head"]);
+		assert.equal(fetchArgs[0], "-c");
+		const basic = fetchArgs[1]?.match(/^http\.https:\/\/github\.com\/\.extraheader=AUTHORIZATION: basic (.+)$/)?.[1];
+		assert.ok(basic, "the -c value must be a github.com http.extraheader basic credential");
+		assert.equal(Buffer.from(basic, "base64").toString("utf8"), `x-access-token:${token}`);
+		// Process-scoped only: no `git config` write anywhere, and no other invocation carries it.
+		for (const [cmd, args] of out.execCalls) {
+			if (cmd === "git") assert.equal(args.includes("config"), false, "the credential must never be persisted via git config");
+			if (args !== fetchArgs) assert.equal(args.join(" ").includes("extraheader"), false, `header must ride only the fetch argv: ${cmd} ${args.join(" ")}`);
+		}
+		// Harness plumbing only: neither the token nor its encoding may enter a denied seat's child env.
+		for (const step of ["pr-review", "pr-verify"] as const) {
+			const seatEnv = buildClaudeSeatEnv({ PATH: "/usr/bin", HOME: "/home/agent", GH_TOKEN: token, GITHUB_TOKEN: token }, step, []);
+			const values = Object.entries(seatEnv)
+				.map(([name, value]) => `${name}=${value}`)
+				.join("\n");
+			assert.equal(values.includes(token), false, `${step} child env must not carry the forge token`);
+			assert.equal(values.includes(basic), false, `${step} child env must not carry the encoded fetch header`);
+		}
+	});
+
+	it("falls back to GITHUB_TOKEN and stays unauthenticated when the harness holds no token", async () => {
+		const fallback = await runCli({ env: { GITHUB_TOKEN: "ghp_actions_default" } });
+		const fallbackFetch = fallback.execCalls.find(([cmd, args]) => cmd === "git" && args.includes("fetch"));
+		const basic = fallbackFetch?.[1][1]?.match(/basic (.+)$/)?.[1];
+		assert.ok(basic);
+		assert.equal(Buffer.from(basic, "base64").toString("utf8"), "x-access-token:ghp_actions_default");
+		const bare = await runCli({});
+		const bareFetch = bare.execCalls.find(([cmd, args]) => cmd === "git" && args.includes("fetch"));
+		assert.deepEqual(bareFetch?.[1], ["fetch", "--quiet", "origin", "main", "pull/123/head"]);
+		assert.deepEqual(reviewedHeadFetchAuthConfig({}), []);
 	});
 
 	it("routes a Grok/OpenCode pool driver's realized model into the generic execution override (#431)", async () => {

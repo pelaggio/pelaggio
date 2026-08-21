@@ -48,10 +48,10 @@ The Claude child is an untrusted seat. Forge/remote credentials are an exhaustiv
 | Role | Forge / remote recovery credentials | Why |
 |---|---|---|
 | `pick`, `ship`, `shipwreck` | Retained (GitHub token vars, `LINEAR_API_KEY`, `SSH_AUTH_SOCK`, GitHub CLI config location) | Source-proven roadmap claim, landing, and recovery commands run inside those seats. |
-| `plan`, `shakedown-plan`, `implement`, `shakedown-code`, `pr-review`, `pr-verify` | Denied: token env vars stripped; existing GitHub CLI config directories (`GH_CONFIG_DIR`, `$XDG_CONFIG_HOME/gh`, `$HOME/.config/gh`) masked | Authoring and review/verify seats must not be able to post a forge status or mutate the tracker. |
+| `plan`, `shakedown-plan`, `implement`, `shakedown-code`, `pr-review`, `pr-verify` | Denied: token env vars stripped; existing GitHub CLI config directories (`GH_CONFIG_DIR`, `$XDG_CONFIG_HOME/gh`, `$HOME/.config/gh`) masked | Authoring and review/verify seats must not be able to post a forge status or mutate the tracker with harness-provided credentials. Leftover host credential files (`~/.git-credentials`, `~/.netrc`, `~/.ssh`) remain readable through the bound host root until `#572`, so the denial covers what the harness hands the seat, not every credential on the host. |
 | Outer harness (`pr-review-cli`, `pr-adjudicate-cli`, workflow status steps) | Retains `GH_TOKEN` / `gh` | Deterministic comment and `review` status effects run after the untrusted seat exits. |
 
-Every Claude child still receives the SDK-listed Anthropic/CLI auth names so the CLI can authenticate. Residual model-key exfil through those vars is bounded by the invariant parse-failure sink (`#536`) and is `#572` work, not a reason to give the seat forge authority.
+Every Claude child still receives the SDK-listed Anthropic/CLI auth names so the CLI can authenticate. Residual model-key exfil through those vars is bounded by the invariant parse-failure sink (`#536`) and is `#572` work, not a reason to give the seat forge authority. The same `#572` residual scopes the denied rows above: the seat keeps the host network and a bound host root outside the masked directories, so credentials in leftover host files (`~/.git-credentials`, `~/.netrc`, `~/.ssh`) are denied by convention, not by the mask (see [sandboxing](./sandboxing.md) and [threat model](./threat-model.md)).
 
 ## Configuration Gates
 

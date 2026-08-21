@@ -457,10 +457,13 @@ fallback: use another provider, or run on Linux with Bubblewrap installed.
 The wrapper creates a new PID namespace and a fresh `/proc`, detaches the child
 from the harness terminal session, binds the host root, and masks the dedicated
 parent directory of each configured harness-only socket
-(`PELAGGIO_REVIEW_EVIDENCE_SIGNER_SOCKET` is the first locator). It does not
-restrict the host network, hide the rest of the host filesystem, or replace the
-SDK environment. Harness-only sockets must live in a dedicated directory (for
-example `/run/pelaggio-signer/`), not a shared parent such as `/tmp` or `/run`.
+(`PELAGGIO_REVIEW_EVIDENCE_SIGNER_SOCKET` is the first locator) plus, for
+forge-denied roles, any existing GitHub CLI config directories. It also replaces
+the SDK-built environment with a filtered deny-by-default copy (see
+[Spawned-agent env allowlist](#spawned-agent-env-allowlist)); it does not
+restrict the host network or hide the rest of the host filesystem. Harness-only
+sockets must live in a dedicated directory (for example `/run/pelaggio-signer/`),
+not a shared parent such as `/tmp` or `/run`.
 
 ### Grok sandbox
 
@@ -1051,6 +1054,9 @@ every Claude child independently of this allowlist because that child **is** the
 API client; they are not forge credentials. Forge/remote vars (`GH_TOKEN` and
 the rest of the GitHub/Linear/SSH set) are role-gated inside the seat: only
 `pick`/`ship`/`shipwreck` retain them. Non-key entries are forwarded unchanged.
+Proxy configuration (`HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` and lowercase
+variants) is **not** in the default allowlist: operators running behind a proxy
+must add the vars their drivers need via `security.env-allowlist`.
 Independently, captured driver stderr and the verbose `.dev/*.log` transcript
 are **secret-scrubbed before write**: credential-shaped strings (JWTs, provider
 keys, tokens) and the values of secret-named env vars are replaced with

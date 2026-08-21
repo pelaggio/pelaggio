@@ -675,6 +675,22 @@ describe("buildClaudeSeatEnv", () => {
 		}
 	});
 
+	it("harness pelaggio config (PELAGGIO_WORKTREE_PREFIX and friends) survives into every role's child env", () => {
+		// Inner `npx pelaggio roadmap ...` invocations re-read these at config load; dropping the
+		// prefix makes the inner claim and the outer pipeline resolve different worktree paths.
+		const harnessConfig = {
+			PELAGGIO_REPO: "/home/operator/repo",
+			PELAGGIO_WORKTREE_PREFIX: "custom-prefix-",
+			PELAGGIO_AUTHORING_ENABLED: "off",
+		} as const;
+		const harnessSource = sdkShapedEnv({ ...harnessConfig });
+		for (const step of ALL_STEPS) {
+			const env = buildClaudeSeatEnv(harnessSource, step, allow);
+			for (const [name, value] of Object.entries(harnessConfig)) assert.equal(env[name], value, `${step} ${name}`);
+			assert.equal("SENTINEL_SECRET" in env, false);
+		}
+	});
+
 	it("forge-capable roles retain explicitly permitted forge inputs plus CLI auth names", () => {
 		for (const step of FORGE_CAPABLE_STEPS) {
 			const env = buildClaudeSeatEnv(source, step, allow);

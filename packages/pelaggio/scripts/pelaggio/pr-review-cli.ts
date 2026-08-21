@@ -103,6 +103,9 @@ interface PrReviewDeps {
 	now: () => number;
 	/** CI runs post the red/green status but never claim `runner: "local"` evidence. */
 	isCi: () => boolean;
+	/** HARNESS env — sources the process-scoped fetch credential (reviewedHeadFetchAuthConfig).
+	 *  Never a seat bag. Tests pin it so ambient GH_TOKEN cannot change fetch argv. */
+	env: NodeJS.ProcessEnv;
 }
 
 export interface RunPrReviewGateOptions {
@@ -164,6 +167,7 @@ let deps: PrReviewDeps = {
 	readFileSync,
 	now: () => Date.now(),
 	isCi: () => process.env.CI === "true",
+	env: process.env,
 };
 
 export function setPrReviewDepsForTests(overrides: Partial<PrReviewDeps>): () => void {
@@ -414,13 +418,31 @@ function upsertCommentDefault(pr: string, body: string): void {
 	if (!upsertMarkerComment(defaultGhRunner, ROADMAP_GITHUB.ghRepo, pr, PR_REVIEW_MARKER, body)) process.stderr.write("⚠ failed to upsert PR comment\n");
 }
 
+/**
+ * Process-scoped credential for the pinned-head fetch (#554). The CI review checkout uses
+ * `persist-credentials: false` so the statuses:write job token never sits in `.git/config`
+ * where the forge-denied seat could read it — which also strips the credential this
+ * HARNESS-owned fetch previously rode. When the harness env holds a forge token, carry it
+ * on the fetch invocation alone via a per-invocation `-c http.<host>.extraheader`
+ * (actions/checkout's `basic x-access-token:<token>` encoding). Harness plumbing only:
+ * the header exists solely in this one child argv — never written to git config, and never
+ * part of a seat's child env (`buildClaudeSeatEnv` strips GH_TOKEN/GITHUB_TOKEN from
+ * denied roles). No token → unauthenticated fetch, the unchanged public-repo/local path.
+ */
+export function reviewedHeadFetchAuthConfig(env: NodeJS.ProcessEnv): string[] {
+	const token = env.GH_TOKEN ?? env.GITHUB_TOKEN;
+	if (!token) return [];
+	const basic = Buffer.from(`x-access-token:${token}`).toString("base64");
+	return ["-c", `http.https://github.com/.extraheader=AUTHORIZATION: basic ${basic}`];
+}
+
 /** Resolve and pin the SHA to review + post to: the PR's *head* commit, fetched
  *  locally so the diff (origin/main...<sha>) is computed against it. Pinned once here,
  *  before the review, and used for BOTH the diff head and the posted status — so a push
  *  that lands mid-review is neither reviewed nor greened (no fail-open). Reviewing the
  *  local checkout's HEAD instead posts to whatever happens to be checked out, greening
  *  the wrong commit while the PR head stays blocked (#282/#307). */
-function resolveReviewedHead(exec: typeof execFileSync, pr: string, ghRepo: string): { sha: string; itemId?: string } {
+function resolveReviewedHead(exec: typeof execFileSync, pr: string, ghRepo: string, env: NodeJS.ProcessEnv): { sha: string; itemId?: string } {
 	const git = (args: string[]): string => String(exec("git", args, { cwd: REPO, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] })).trim();
 	const raw = String(exec("gh", ["api", `repos/${ghRepo}/pulls/${pr}`, "--jq", "{sha: .head.sha, ref: .head.ref}"], { cwd: REPO, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] })).trim();
 	let head: { sha?: unknown; ref?: unknown };
@@ -437,7 +459,8 @@ function resolveReviewedHead(exec: typeof execFileSync, pr: string, ghRepo: stri
 	const itemId = typeof head.ref === "string" ? head.ref.match(CLAIM_BRANCH_RE)?.[1] : undefined;
 	// Make origin/main and the pinned PR head reachable locally for the diff. `pull/<n>/head`
 	// always resolves for a GitHub PR (unlike a bare sha, which the server may refuse to serve).
-	git(["fetch", "--quiet", "origin", "main", `pull/${pr}/head`]);
+	// Auth (when the harness holds a token) is per-invocation only — see reviewedHeadFetchAuthConfig.
+	git([...reviewedHeadFetchAuthConfig(env), "fetch", "--quiet", "origin", "main", `pull/${pr}/head`]);
 	return { sha, ...(itemId ? { itemId } : {}) };
 }
 
@@ -1028,7 +1051,7 @@ export async function main(argv: string[]): Promise<number> {
 	// status leaves the PR blocked, which is the safe (fail-closed) outcome.
 	let reviewedSha: string | undefined;
 	try {
-		const head = resolveReviewedHead(deps.execFileSync, pr, ROADMAP_GITHUB.ghRepo);
+		const head = resolveReviewedHead(deps.execFileSync, pr, ROADMAP_GITHUB.ghRepo, deps.env);
 		reviewedSha = head.sha;
 		// Policy/pool are intentionally not passed: runPrReviewGate resolves them through
 		// options → deps → CONFIG, so the same defaults apply and tests can pin the seam.
