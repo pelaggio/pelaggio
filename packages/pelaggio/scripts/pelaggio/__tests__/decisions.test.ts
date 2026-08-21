@@ -9,11 +9,15 @@ import {
 	appendReviewEscalation,
 	archiveResolvedDecisions,
 	contentFingerprint,
+	DECISIONS_HEADER,
 	emitDecisionsFromText,
 	lookupReviewEscalation,
 	migrateDecisions,
+	type ReviewEscalationAdjudication,
+	type ReviewEscalationWriteInput,
 	rebuildDecisionIndex,
 	resolveDecision,
+	reviewEscalationCommands,
 	reviewEscalationId,
 	validateOwner,
 } from "../decisions.js";
@@ -66,6 +70,41 @@ describe("decision log authority", () => {
 		assert.equal(await archiveResolvedDecisions(path, new Date("2026-03-15T00:00:00Z")), 1);
 		assert.match(readFileSync(resolve(path, "docs/decision-log/archive/85.md"), "utf8"), /decision:11111111-1111-4111-8111-111111111111/);
 		assert.equal(existsSync(resolve(path, "docs/archived/decisions.md")), false);
+	});
+
+	it("preserves backticks and apostrophes as distinct authority content", async () => {
+		const path = repo();
+		seed(path);
+		const backticks = { fork: "use `x`" };
+		const apostrophes = { fork: "use 'x'" };
+		const result = await appendDecisions(path, {
+			itemId: "85",
+			runId: "cycle-1",
+			step: "implement",
+			attempt: 1,
+			source: "85",
+			now: new Date("2026-01-01T00:00:00Z"),
+			decisions: [
+				{
+					id: "22222222-2222-4222-8222-222222222220",
+					contentFingerprint: contentFingerprint(backticks),
+					occurrence: 0,
+					decision: backticks,
+				},
+				{
+					id: "22222222-2222-4222-8222-222222222221",
+					contentFingerprint: contentFingerprint(apostrophes),
+					occurrence: 1,
+					decision: apostrophes,
+				},
+			],
+		});
+
+		assert.equal(result.status, "written");
+		assert.notEqual(contentFingerprint(backticks), contentFingerprint(apostrophes));
+		const authority = readFileSync(resolve(path, "docs/decision-log/85.md"), "utf8");
+		assert.match(authority, /\| use `x` \|/);
+		assert.match(authority, /\| use 'x' \|/);
 	});
 
 	it("archive-resolved is a no-op when no authority directory exists", async () => {
@@ -315,6 +354,20 @@ function escalation(overrides: Partial<ReviewEscalation> = {}): ReviewEscalation
 	};
 }
 
+function dummyAdjudication(esc: ReviewEscalation, overrides: Partial<ReviewEscalationAdjudication> = {}): ReviewEscalationAdjudication {
+	return {
+		spend: { amount: 1.5, estimated: false },
+		evidenceFingerprint: esc.evidenceFingerprint,
+		...overrides,
+	};
+}
+
+function writeInput(esc: ReviewEscalation, overrides: Partial<ReviewEscalationAdjudication> = {}): ReviewEscalationWriteInput {
+	return { escalation: esc, adjudication: dummyAdjudication(esc, overrides), now: new Date("2026-01-01T00:00:00Z") };
+}
+
+const RULE = "| --- | --- | --- | --- | --- | --- |";
+
 describe("review escalation tamper-evidence", () => {
 	it("folds hasSafetyBlocker into the escalation ID so flipping it changes the ID", () => {
 		const withoutBlocker = reviewEscalationId(escalation({ hasSafetyBlocker: false }));
@@ -325,7 +378,7 @@ describe("review escalation tamper-evidence", () => {
 	it("round-trips an active escalation through append and lookup on per-item authority", async () => {
 		const path = repo();
 		seed(path);
-		const written = await appendReviewEscalation(path, escalation({ hasSafetyBlocker: true }));
+		const written = await appendReviewEscalation(path, writeInput(escalation({ hasSafetyBlocker: true })));
 		assert.equal(written.status, "written");
 		const found = lookupReviewEscalation(path, "300", "a".repeat(40));
 		assert.equal(found.state, "active");
@@ -339,7 +392,7 @@ describe("review escalation tamper-evidence", () => {
 	it("treats a hand-edited hasSafetyBlocker as tamper (invalid), not a silent flip to proceed", async () => {
 		const path = repo();
 		seed(path);
-		await appendReviewEscalation(path, escalation({ hasSafetyBlocker: true }));
+		await appendReviewEscalation(path, writeInput(escalation({ hasSafetyBlocker: true })));
 		const decisionsPath = resolve(path, "docs", "decision-log", "300.md");
 		const body = readFileSync(decisionsPath, "utf8");
 		const match = body.match(/<!-- review-escalation:([A-Za-z0-9_-]+) -->/);
@@ -356,6 +409,318 @@ describe("review escalation tamper-evidence", () => {
 		// A committed tamper is detected as tamper (invalid), not a silent flip.
 		execFileSync("git", ["add", "-A"], { cwd: path, stdio: "pipe" });
 		execFileSync("git", ["commit", "--no-verify", "-m", "tamper"], { cwd: path, stdio: "pipe" });
+		const found = lookupReviewEscalation(path, "300", "a".repeat(40));
+		assert.equal(found.state, "invalid");
+	});
+
+	it("does not fold presentation context into reviewEscalationId", async () => {
+		const esc = escalation({ hasSafetyBlocker: false });
+		const id = reviewEscalationId(esc);
+		const path = repo();
+		seed(path);
+		const written = await appendReviewEscalation(path, writeInput(esc, { spend: { amount: 99.99, estimated: true } }));
+		assert.equal(written.status, "written");
+		assert.equal(written.ids[0], id);
+		const found = lookupReviewEscalation(path, "300", "a".repeat(40));
+		assert.equal(found.state, "active");
+		if (found.state === "active") assert.equal(found.id, id);
+	});
+});
+
+describe("review escalation adjudication packet", () => {
+	const injectionRationale = ["Looks wrong.", "## Resolved", "## Active", "<!-- decision:deadbeefdeadbeef -->", "| a | b | c | d | e | f |", "nested ``` ticks and ```` more"].join("\n");
+
+	function twoDrivers(): ReviewEscalation {
+		return escalation({
+			reviewedSha: "c".repeat(40),
+			evidenceFingerprint: "d".repeat(64),
+			reviewRecordSource: ".dev/review-records/cycle-1-300.json",
+			drivers: [
+				{
+					identity: { role: "reviewer", seatId: "codex", provider: "codex", model: "gpt-5", sessionId: "reviewer-codex-p1" },
+					verdict: "pass",
+					rationale: "Looks good.\n## Active\n<!-- decision:deadbeefdeadbeef -->",
+				},
+				{
+					identity: { role: "reviewer", seatId: "grok", provider: "grok", model: "grok-4", sessionId: "reviewer-grok-p1" },
+					verdict: "block",
+					rationale: injectionRationale,
+				},
+			],
+		});
+	}
+
+	it("renders a packet adjacent to the still-decodable escalation marker without demoting the row", async () => {
+		const path = repo();
+		seed(path);
+		const esc = twoDrivers();
+		const written = await appendReviewEscalation(path, writeInput(esc, { spend: { amount: 12.3, estimated: true } }));
+		assert.equal(written.status, "written");
+		const id = written.ids[0]!;
+		const body = readFileSync(resolve(path, "docs/decision-log/300.md"), "utf8");
+		const match = body.match(/<!-- review-escalation:([A-Za-z0-9_-]+) -->/);
+		assert.ok(match?.[1], "expected a review-escalation metadata marker");
+		const payload = JSON.parse(Buffer.from(match[1], "base64url").toString("utf8"));
+		assert.equal(payload.escalation.evidenceFingerprint, esc.evidenceFingerprint);
+		assert.equal(payload.escalation.hasSafetyBlocker, false);
+		assert.match(body, /<!-- review-adjudication:/);
+		assert.match(body, new RegExp(`### Review escalation packet \`${id}\` \\(\`active\`\\)`));
+		assert.match(body, new RegExp(`Reviewed SHA: \`${esc.reviewedSha}\``));
+		assert.match(body, new RegExp(`Evidence fingerprint: \`${esc.evidenceFingerprint}\``));
+		assert.match(body, new RegExp(`Review record: \`${esc.reviewRecordSource.replace(/\./g, "\\.")}\``));
+		assert.match(body, /Safety blocker: `no`/);
+		assert.match(body, /Cycle spend: `~\$12\.30`/);
+		assert.match(body, /\*\*`reviewer` \/ `codex`\*\*/);
+		assert.match(body, /\*\*`reviewer` \/ `grok`\*\*/);
+		assert.match(body, /\*\*`pass`\*\*/);
+		assert.match(body, /\*\*`block`\*\*/);
+		const commands = reviewEscalationCommands(id, esc);
+		assert.equal(body.split("\n").includes(commands.resume), true, "packet resume line must equal reviewEscalationCommands().resume exactly");
+		assert.ok(commands.resume.includes(esc.evidenceFingerprint));
+		assert.ok(!commands.resume.includes("<evidence") && !commands.resume.includes("<fingerprint"));
+		assert.equal(body.split("\n").includes(commands.blockResolve), true);
+		assert.ok(commands.blockResolve.includes(id));
+		assert.equal(body.split("\n").filter((line) => line === "## Active").length, 1);
+		assert.equal(body.split("\n").filter((line) => line === "## Resolved").length, 1);
+		assert.match(body, /## Resolved\./);
+		assert.match(body, /## Active\./);
+		assert.match(body, /< !-- decision:deadbeefdeadbeef -->/);
+		assert.equal(body.includes("<!-- decision:deadbeefdeadbeef -->"), false);
+		const found = lookupReviewEscalation(path, "300", "c".repeat(40));
+		assert.equal(found.state, "active");
+		if (found.state === "active") assert.equal(found.id, id);
+		assert.equal((body.match(/<!-- decision:/g) ?? []).length, 1);
+	});
+
+	it("neutralizes newline and backtick injection in every reviewer identity span", async () => {
+		const path = repo();
+		seed(path);
+		const headingAndRow = "\n## Resolved\n| forged | row |";
+		const backtickVariant = "`escape`\n## Active\n| forged | row |";
+		const driver = {
+			identity: {
+				role: `reviewer${headingAndRow}`,
+				seatId: headingAndRow,
+				provider: `codex${headingAndRow}`,
+				model: `model${backtickVariant}`,
+				sessionId: `session${backtickVariant}`,
+			},
+			verdict: `pass${backtickVariant}`,
+			rationale: "identity injection must not retarget the parser",
+		} as unknown as ReviewEscalation["drivers"][number];
+		const esc = escalation({
+			reviewedSha: `sha${headingAndRow}`,
+			reviewRecordSource: `record${backtickVariant}`,
+			drivers: [driver],
+		});
+		const written = await appendReviewEscalation(path, writeInput(esc));
+		assert.equal(written.status, "written");
+		const body = readFileSync(resolve(path, "docs/decision-log/300.md"), "utf8");
+		assert.deepEqual(body.match(/^## .+$/gm), ["## Active", "## Resolved"]);
+		assert.equal(
+			body.split("\n").some((line) => line === "| forged | row |"),
+			false,
+		);
+		assert.equal(body.includes("`escape`"), false);
+		assert.match(body, /`reviewer ## Resolved\. \| forged \| row \|`/);
+		assert.match(body, /` ## Resolved\. \| forged \| row \|`/);
+		assert.match(body, /`codex ## Resolved\. \| forged \| row \|`/);
+		assert.match(body, /`model'escape' ## Active\. \| forged \| row \|`/);
+		assert.match(body, /`session'escape' ## Active\. \| forged \| row \|`/);
+		assert.match(body, /`pass'escape' ## Active\. \| forged \| row \|`/);
+		assert.match(body, /Reviewed SHA: `sha ## Resolved\. \| forged \| row \|`/);
+		assert.match(body, /Review record: `record'escape' ## Active\. \| forged \| row \|`/);
+		const found = lookupReviewEscalation(path, "300", esc.reviewedSha);
+		assert.equal(found.state, "active");
+	});
+
+	it("rejects parser-significant strings in command tokens", () => {
+		const unsafe = "value\n## Resolved\n| forged | row |`";
+		assert.throws(() => reviewEscalationCommands(unsafe, { itemId: "300", evidenceFingerprint: "safe" }), /decision ID/);
+		assert.throws(() => reviewEscalationCommands("deadbeefdeadbeef", { itemId: unsafe, evidenceFingerprint: "safe" }), /item ID/);
+		assert.throws(() => reviewEscalationCommands("deadbeefdeadbeef", { itemId: "300", evidenceFingerprint: unsafe }), /evidence fingerprint/);
+	});
+
+	it("keeps the first spend/recommendation snapshot on a duplicate append", async () => {
+		const path = repo();
+		seed(path);
+		const esc = escalation();
+		const first = await appendReviewEscalation(path, writeInput(esc, { spend: { amount: 4, estimated: false } }));
+		assert.equal(first.status, "written");
+		const second = await appendReviewEscalation(
+			path,
+			writeInput(esc, {
+				spend: { amount: 99, estimated: true },
+				recommendedDefault: { disposition: "block", source: "deterministic-policy", rationale: "should not land" },
+			}),
+		);
+		assert.equal(second.status, "duplicate");
+		const body = readFileSync(resolve(path, "docs/decision-log/300.md"), "utf8");
+		assert.match(body, /Cycle spend: `\$4\.00`/);
+		assert.match(body, /Choices: proceed or block\. No recommended default on this record\./);
+		assert.equal(body.includes("should not land"), false);
+	});
+
+	const recommendationCases: Array<{ name: string; adjudication: Partial<ReviewEscalationAdjudication>; expect: RegExp; forbid?: RegExp }> = [
+		{
+			name: "deterministic safety recommendation",
+			adjudication: {
+				recommendedDefault: { disposition: "block", source: "deterministic-policy", rationale: "safety floor cannot be acknowledged through" },
+			},
+			expect: /Recommended default: `block` \(deterministic-policy\)/,
+			forbid: /No recommended default on this record/,
+		},
+		{
+			name: "supplied Judge recommendation",
+			adjudication: {
+				recommendedDefault: { disposition: "proceed", source: "judge", rationale: "judgment band only" },
+			},
+			expect: /Recommended default: `proceed` \(judge\)/,
+			forbid: /No recommended default on this record/,
+		},
+		{
+			name: "no recommendation",
+			adjudication: {},
+			expect: /Choices: proceed or block\. No recommended default on this record\./,
+			forbid: /Recommended default:/,
+		},
+	];
+
+	for (const fixture of recommendationCases) {
+		it(`renders ${fixture.name}`, async () => {
+			const path = repo();
+			seed(path);
+			const written = await appendReviewEscalation(path, writeInput(escalation({ itemId: "301" }), fixture.adjudication));
+			assert.equal(written.status, "written");
+			const body = readFileSync(resolve(path, "docs/decision-log/301.md"), "utf8");
+			assert.match(body, fixture.expect);
+			if (fixture.forbid) assert.equal(fixture.forbid.test(body), false);
+		});
+	}
+
+	it("retains the packet and unacknowledgeable note after resolving as block", async () => {
+		const path = repo();
+		seed(path);
+		const esc = twoDrivers();
+		const written = await appendReviewEscalation(path, writeInput(esc));
+		assert.equal(written.status, "written");
+		const id = written.ids[0]!;
+		await resolveDecision(path, id, {
+			disposition: "block",
+			actor: "supervisor",
+			rationale: "safety-class split stays blocked\n## Resolved",
+			now: new Date("2026-02-02T00:00:00Z"),
+		});
+		const body = readFileSync(resolve(path, "docs/decision-log/300.md"), "utf8");
+		assert.match(body, new RegExp(`### Review escalation packet \`${id}\` \\(\`resolved-block\`\\)`));
+		assert.match(body, /<!-- review-adjudication:/);
+		assert.match(body, /Disposition: `block`/);
+		assert.match(body, /Actor: `supervisor`/);
+		assert.match(body, /Timestamp: `2026-02-02T00:00:00\.000Z`/);
+		assert.match(body, /Acknowledgement cannot resume a `resolved-block` record\./);
+		assert.match(body, /safety-class split stays blocked/);
+		assert.match(body, /## Resolved\./);
+		const found = lookupReviewEscalation(path, "300", "c".repeat(40));
+		assert.equal(found.state, "resolved-block");
+	});
+
+	it("parses and resolves a legacy escalation without inventing a packet", async () => {
+		const path = repo();
+		seed(path);
+		const esc = escalation();
+		const id = reviewEscalationId(esc);
+		const payload = Buffer.from(JSON.stringify({ escalation: esc })).toString("base64url");
+		const body = `# Decision log — 300
+
+Status values are \`default-taken\`, \`resolved\`, or \`resolved→ADR-nnnn\`. Source is an item, pull request, or review-note reference.
+
+## Active
+
+${DECISIONS_HEADER}
+${RULE}
+| Cross-model review split for 300 | default-taken | Human adjudication required | proceed or block | ${esc.reviewRecordSource} | 2026-01-01 |
+<!-- decision:${id} -->
+<!-- review-escalation:${payload} -->
+
+## Resolved
+
+${DECISIONS_HEADER}
+${RULE}
+`;
+		mkdirSync(resolve(path, "docs/decision-log"), { recursive: true });
+		writeFileSync(resolve(path, "docs/decision-log/300.md"), body);
+		execFileSync("git", ["add", "-A"], { cwd: path, stdio: "pipe" });
+		execFileSync("git", ["commit", "--no-verify", "-q", "-m", "legacy escalation"], { cwd: path, stdio: "pipe" });
+
+		const found = lookupReviewEscalation(path, "300", "a".repeat(40));
+		assert.equal(found.state, "active");
+		if (found.state === "active") {
+			assert.equal(found.id, id);
+			assert.equal(found.escalation.evidenceFingerprint, esc.evidenceFingerprint);
+		}
+		assert.equal(body.includes("### Review escalation packet"), false);
+		assert.equal(body.includes("review-adjudication:"), false);
+
+		await resolveDecision(path, id, { disposition: "proceed", actor: "legacy-op", rationale: "honor the old record", now: new Date("2026-03-01T00:00:00Z") });
+		const rewritten = readFileSync(resolve(path, "docs/decision-log/300.md"), "utf8");
+		assert.equal(rewritten.includes("### Review escalation packet"), false);
+		assert.equal(rewritten.includes("review-adjudication:"), false);
+		assert.match(rewritten, /review-escalation:/);
+		const resolved = lookupReviewEscalation(path, "300", "a".repeat(40));
+		assert.equal(resolved.state, "resolved-proceed");
+	});
+
+	it("rejects malformed additive context at the write boundary", async () => {
+		const path = repo();
+		seed(path);
+		const esc = escalation();
+		const cases: Array<{ label: string; adj: ReviewEscalationAdjudication; pattern: RegExp }> = [
+			{ label: "negative spend", adj: { spend: { amount: -1, estimated: false }, evidenceFingerprint: esc.evidenceFingerprint }, pattern: /spend\.amount/ },
+			{ label: "non-finite spend", adj: { spend: { amount: Number.POSITIVE_INFINITY, estimated: false }, evidenceFingerprint: esc.evidenceFingerprint }, pattern: /spend\.amount/ },
+			{
+				label: "invalid recommendation source",
+				adj: {
+					spend: { amount: 1, estimated: false },
+					evidenceFingerprint: esc.evidenceFingerprint,
+					recommendedDefault: { disposition: "block", source: "coin-flip", rationale: "nope" },
+				} as unknown as ReviewEscalationAdjudication,
+				pattern: /recommendedDefault\.source/,
+			},
+			{
+				label: "empty rationale",
+				adj: {
+					spend: { amount: 1, estimated: false },
+					evidenceFingerprint: esc.evidenceFingerprint,
+					recommendedDefault: { disposition: "block", source: "judge", rationale: "   " },
+				},
+				pattern: /recommendedDefault\.rationale/,
+			},
+			{ label: "fingerprint mismatch", adj: { spend: { amount: 1, estimated: false }, evidenceFingerprint: "f".repeat(64) }, pattern: /evidenceFingerprint mismatch/ },
+		];
+		for (const fixture of cases) {
+			const result = await appendReviewEscalation(path, { escalation: esc, adjudication: fixture.adj });
+			assert.equal(result.status, "failed", fixture.label);
+			if (result.status === "failed") assert.match(result.error, fixture.pattern, fixture.label);
+		}
+		assert.equal(existsSync(resolve(path, "docs/decision-log/300.md")), false);
+	});
+
+	it("rejects a committed adjudication marker whose fingerprint does not match the sibling escalation", async () => {
+		const path = repo();
+		seed(path);
+		const esc = escalation();
+		const written = await appendReviewEscalation(path, writeInput(esc));
+		assert.equal(written.status, "written");
+		const decisionsPath = resolve(path, "docs/decision-log/300.md");
+		const body = readFileSync(decisionsPath, "utf8");
+		const match = body.match(/<!-- review-adjudication:([A-Za-z0-9_-]+) -->/);
+		assert.ok(match?.[1]);
+		const payload = JSON.parse(Buffer.from(match[1], "base64url").toString("utf8"));
+		payload.evidenceFingerprint = "0".repeat(64);
+		const tampered = `<!-- review-adjudication:${Buffer.from(JSON.stringify(payload)).toString("base64url")} -->`;
+		writeFileSync(decisionsPath, body.replace(match[0], tampered));
+		execFileSync("git", ["add", "-A"], { cwd: path, stdio: "pipe" });
+		execFileSync("git", ["commit", "--no-verify", "-q", "-m", "tamper adjudication"], { cwd: path, stdio: "pipe" });
 		const found = lookupReviewEscalation(path, "300", "a".repeat(40));
 		assert.equal(found.state, "invalid");
 	});

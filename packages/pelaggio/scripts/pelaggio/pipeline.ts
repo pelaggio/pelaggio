@@ -30,7 +30,13 @@ import {
 import { forbiddenRootsForConfinement } from "./confinement/roots.js";
 import { type AcceptedSession, captureEvaluatorContext, createSessionController, firstDiffPathsByRoot, resolveEligibleSessions, revalidateChangedRoot, type SessionController, type SessionEvaluatorContext } from "./confinement/sessions.js";
 import { continuousCycleCap, DayBudgetTracker, dayKey, freeQueueProbe, nextLocalMidnightMs, resolveContinuousConfig, sumDaySpendFromLog } from "./continuous.js";
-import { appendDecisions as appendDecisionsDefault, appendReviewEscalation as appendReviewEscalationDefault, lookupReviewEscalation as lookupReviewEscalationDefault } from "./decisions.js";
+import {
+	appendDecisions as appendDecisionsDefault,
+	appendReviewEscalation as appendReviewEscalationDefault,
+	lookupReviewEscalation as lookupReviewEscalationDefault,
+	type ReviewEscalationAdjudication,
+	reviewEscalationCommands,
+} from "./decisions.js";
 import { createDriverAssignmentState, type DriverIdentity, recordArtifactAuthor, resolveStaticAuthor, selectAuthor, selectReviewers } from "./driver-assignment.js";
 import {
 	dispatchStepEffects as dispatchStepEffectsDefault,
@@ -1652,7 +1658,11 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			const reviewedSha = getArtifactHeadSha(worktree!);
 			if (!reviewedSha) return parkExit("adversarial review could not bind current HEAD")!;
 			const existingEscalation = lookupReviewEscalation(worktree!, itemId!, reviewedSha);
-			if (existingEscalation.state === "active" || existingEscalation.state === "resolved-block" || existingEscalation.state === "invalid") return parkExit(`adversarial review escalation ${existingEscalation.state}`)!;
+			if (existingEscalation.state === "active") {
+				const commands = reviewEscalationCommands(existingEscalation.id, existingEscalation.escalation);
+				return parkExit(`adversarial review escalation active\n${commands.proceedResolve}\n${commands.resume}\n${commands.blockResolve}`)!;
+			}
+			if (existingEscalation.state === "resolved-block" || existingEscalation.state === "invalid") return parkExit(`adversarial review escalation ${existingEscalation.state}`)!;
 			// A committed resolution remains untrusted policy input until an operator binds
 			// this resume to its evidence. Issue #419 owns the successor authority design.
 			if (existingEscalation.state === "resolved-proceed") {
@@ -1664,7 +1674,8 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 					return parkExit("adversarial review escalation record lacks an evidence fingerprint — treated as active; re-escalate through the review loop")!;
 				}
 				if (typeof ackFlag !== "string" || ackFlag !== evidenceFp) {
-					return parkExit(`adversarial review escalation active; after reviewing, re-run with --resume ${itemId} --acknowledge-escalation ${evidenceFp}`)!;
+					const commands = reviewEscalationCommands(existingEscalation.id, existingEscalation.escalation);
+					return parkExit(`adversarial review escalation active\n${commands.resume}`)!;
 				}
 			}
 			if (existingEscalation.state === "resolved-proceed" && existingEscalation.escalation.hasSafetyBlocker) return parkExit("adversarial review safety blocker")!;
@@ -1856,7 +1867,20 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 					try {
 						// The durable safety action precedes effect attestation. A manifest write or
 						// dispatch failure below must never swallow the escalation or skip parking.
-						const written = await appendReviewEscalation(worktree!, escalation);
+						const adjudication: ReviewEscalationAdjudication = {
+							spend: { amount: cost, estimated: steps.some((s) => s.costEstimated) },
+							evidenceFingerprint: escalation.evidenceFingerprint,
+							...(escalation.hasSafetyBlocker
+								? {
+										recommendedDefault: {
+											disposition: "block" as const,
+											source: "deterministic-policy" as const,
+											rationale: "A safety-class must-fix is on the record; the safety floor cannot be acknowledged through.",
+										},
+									}
+								: {}),
+						};
+						const written = await appendReviewEscalation(worktree!, { escalation, adjudication });
 						if (written.status !== "failed")
 							await opts.notifyDecision?.({
 								itemId,
@@ -1867,7 +1891,16 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 								escalation: { ...escalation, id: written.ids[0] },
 							});
 						const state = lookupReviewEscalation(worktree!, itemId!, finalReviewedSha);
-						if (written.status === "failed" || state.state !== "resolved-proceed" || escalation.hasSafetyBlocker) escalationParkReason = `adversarial review escalation ${written.status === "failed" ? "write-failed" : state.state}`;
+						if (written.status === "failed") escalationParkReason = "adversarial review escalation write-failed";
+						else if (state.state !== "resolved-proceed" || escalation.hasSafetyBlocker) {
+							const decisionId = written.ids[0];
+							if (state.state === "active" && decisionId) {
+								const commands = reviewEscalationCommands(decisionId, escalation);
+								escalationParkReason = `adversarial review escalation active\n${commands.proceedResolve}\n${commands.resume}\n${commands.blockResolve}`;
+							} else {
+								escalationParkReason = `adversarial review escalation ${state.state}`;
+							}
+						}
 					} catch (error) {
 						log(`⚠ adversarial review escalation write failed: ${error instanceof Error ? error.message : String(error)}`);
 						return parkExit("adversarial review escalation write-failed")!;
