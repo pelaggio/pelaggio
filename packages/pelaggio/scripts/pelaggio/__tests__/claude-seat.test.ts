@@ -31,7 +31,47 @@ const ALL_STEPS: readonly Step[] = [...STEPS, "shipwreck", "pr-review", "pr-veri
 const FORGE_CAPABLE_STEPS: readonly Step[] = ["pick", "ship", "shipwreck"];
 const DENIED_STEPS: readonly Step[] = ALL_STEPS.filter((step) => !FORGE_CAPABLE_STEPS.includes(step));
 const FORGE_REMOTE_VARS = ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "LINEAR_API_KEY", "SSH_AUTH_SOCK", "GH_CONFIG_DIR", "GH_HOST", "GH_ENTERPRISE_HOST"] as const;
-const CLAUDE_CLI_AUTH_VARS = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "AWS_BEARER_TOKEN_BEDROCK", "ANTHROPIC_FOUNDRY_API_KEY", "ANTHROPIC_FOUNDRY_AUTH_TOKEN", "ANTHROPIC_AWS_API_KEY"] as const;
+const CLAUDE_CLI_AUTH_VARS = [
+	"ANTHROPIC_API_KEY",
+	"ANTHROPIC_AUTH_TOKEN",
+	"CLAUDE_CODE_OAUTH_TOKEN",
+	"AWS_BEARER_TOKEN_BEDROCK",
+	"ANTHROPIC_FOUNDRY_API_KEY",
+	"ANTHROPIC_FOUNDRY_AUTH_TOKEN",
+	"ANTHROPIC_AWS_API_KEY",
+	"AWS_ACCESS_KEY_ID",
+	"AWS_SECRET_ACCESS_KEY",
+	"AWS_SESSION_TOKEN",
+] as const;
+const CLAUDE_CLI_PROVIDER_CONFIG_VARS = [
+	"CLAUDE_CONFIG_DIR",
+	"CLAUDE_CODE_USE_BEDROCK",
+	"CLAUDE_CODE_USE_VERTEX",
+	"CLAUDE_CODE_USE_FOUNDRY",
+	"CLAUDE_CODE_USE_MANTLE",
+	"CLAUDE_CODE_SKIP_BEDROCK_AUTH",
+	"CLAUDE_CODE_SKIP_VERTEX_AUTH",
+	"CLAUDE_CODE_SKIP_MANTLE_AUTH",
+	"ANTHROPIC_BASE_URL",
+	"ANTHROPIC_BEDROCK_BASE_URL",
+	"ANTHROPIC_BEDROCK_MANTLE_BASE_URL",
+	"ANTHROPIC_VERTEX_BASE_URL",
+	"ANTHROPIC_FOUNDRY_BASE_URL",
+	"ANTHROPIC_FOUNDRY_RESOURCE",
+	"ANTHROPIC_VERTEX_PROJECT_ID",
+	"GCLOUD_PROJECT",
+	"GOOGLE_CLOUD_PROJECT",
+	"GOOGLE_APPLICATION_CREDENTIALS",
+	"CLOUD_ML_REGION",
+	"AWS_REGION",
+	"AWS_DEFAULT_REGION",
+	"AWS_PROFILE",
+	"AWS_SHARED_CREDENTIALS_FILE",
+	"AWS_CONFIG_FILE",
+	"ANTHROPIC_BEDROCK_REGION_PREFIX",
+	"ANTHROPIC_BEDROCK_SERVICE_TIER",
+	"ANTHROPIC_SMALL_FAST_MODEL_AWS_REGION",
+] as const;
 const CLAUDE_SDK_CONTROL_VARS = [
 	"CLAUDE_CODE_ENTRYPOINT",
 	"CLAUDE_AGENT_SDK_VERSION",
@@ -156,6 +196,9 @@ function sdkShapedEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
 		ANTHROPIC_FOUNDRY_API_KEY: "foundry-api-key-value",
 		ANTHROPIC_FOUNDRY_AUTH_TOKEN: "foundry-auth-token-value",
 		ANTHROPIC_AWS_API_KEY: "anthropic-aws-key-value",
+		AWS_ACCESS_KEY_ID: "AKIAEXAMPLEKEYID0000",
+		AWS_SECRET_ACCESS_KEY: "aws-secret-access-key-value",
+		AWS_SESSION_TOKEN: "aws-session-token-value",
 		SSH_AUTH_SOCK: "/run/ssh-agent.sock",
 		GH_CONFIG_DIR: "/home/agent/gh-config",
 		GH_HOST: "github.com",
@@ -620,6 +663,15 @@ describe("buildClaudeSeatEnv", () => {
 			assert.equal("TRACEPARENT" in env, false);
 			assert.equal("NODE_OPTIONS" in env, false);
 			assert.equal("OPENAI_API_KEY" in env, false);
+		}
+	});
+
+	it("provider-mode selectors, provider configuration, and CLAUDE_CONFIG_DIR survive into every role's child env", () => {
+		const providerSource = sdkShapedEnv(Object.fromEntries(CLAUDE_CLI_PROVIDER_CONFIG_VARS.map((name, index) => [name, `provider-config-value-${index}`])));
+		for (const step of ALL_STEPS) {
+			const env = buildClaudeSeatEnv(providerSource, step, allow);
+			for (const name of CLAUDE_CLI_PROVIDER_CONFIG_VARS) assert.equal(env[name], providerSource[name], `${step} ${name}`);
+			assert.equal("SENTINEL_SECRET" in env, false);
 		}
 	});
 

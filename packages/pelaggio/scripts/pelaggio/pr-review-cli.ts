@@ -620,8 +620,9 @@ async function runReviewPass(iteration: number, label: ReviewLabel, prompt: stri
 		// diagnostic reach a credential-holding seat's readers, and the CHOICE among distinct codes is
 		// itself a covert channel: a prompt-injected model selects WHICH failure to emit (block-not-found
 		// vs unknown-key vs invalid-json …), encoding secret bits. The enum + parseFailureCode classifier
-		// stay in review/findings.ts for internal use; #554 (jailed verifier) is what lets the specific
-		// code publish. The catch fails closed regardless of the underlying error.
+		// stay in review/findings.ts for internal use; #554 removed forge tokens from the seat, but
+		// leftover CLI auth (#536 / #572) keeps the specific code withheld. The catch fails closed
+		// regardless of the underlying error.
 		const parseFailureDiagnosis = retainParseFailureTail(label, "discovery");
 		return {
 			iteration,
@@ -705,7 +706,8 @@ async function runVerificationPass(
 		// ReviewFindingsParseErrorCode. Same rationale as discovery (see runReviewPass): the verifier
 		// holds real credentials, and the CHOICE among distinct codes is itself a covert channel the
 		// scrubber cannot reverse (#536). The enum + parseFailureCode classifier stay for internal use;
-		// #554 (jailed verifier) is what lets the specific code publish. Fails closed regardless.
+		// #554 removed forge tokens from the seat, but leftover CLI auth (#536 / #572) keeps the
+		// specific code withheld. Fails closed regardless.
 		retainParseFailureTail(pass.label, "verification");
 		pass.verificationDiagnostic = `Invalid verification report (${PUBLISHED_PARSE_FAILURE_CODE}).`;
 		pass.failureSubtype = "error_invalid_verification";
