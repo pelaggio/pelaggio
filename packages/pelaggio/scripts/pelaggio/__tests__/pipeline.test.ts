@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it, mock } from "node:test";
 import { REVIEW_CONFIG, WORKTREE_PREFIX } from "../config.js";
-import { appendReviewEscalation, resolveDecision, reviewEscalationId } from "../decisions.js";
+import { appendReviewEscalation, type ReviewEscalationWriteInput, resolveDecision, reviewEscalationCommands, reviewEscalationId } from "../decisions.js";
 import { dispatchStepEffects, EffectsManifestError, writeEffectsManifest } from "../effects.js";
 import { FifoPolicy } from "../flow-policy.js";
 import { defaultTypecheckRatchet, type RunStepFn, runOrchestrator, runPipeline } from "../pipeline.js";
@@ -3871,7 +3871,10 @@ describe("runPipeline — resolved escalation acknowledgement", () => {
 			hasSafetyBlocker: false,
 			drivers: [],
 		};
-		await appendReviewEscalation(worktree, escalation);
+		await appendReviewEscalation(worktree, {
+			escalation,
+			adjudication: { spend: { amount: 0, estimated: false }, evidenceFingerprint },
+		});
 		await resolveDecision(worktree, reviewEscalationId(escalation), { disposition, actor: "forged", rationale: "committed record" });
 
 		const parkSignal = makeParkSignal();
@@ -3892,6 +3895,7 @@ describe("runPipeline — resolved escalation acknowledgement", () => {
 		);
 
 		try {
+			const logs: Array<Record<string, unknown>> = [];
 			const result = await runPipeline(
 				{ ...baseOpts(worktree), startFrom: "implement" },
 				parkSignal,
@@ -3900,13 +3904,13 @@ describe("runPipeline — resolved escalation acknowledgement", () => {
 					runStep,
 					mainRepo: worktree,
 					listWorktrees: () => [worktree],
-					appendLog: () => {},
+					appendLog: (entry) => logs.push(entry),
 					runShipBookkeeping: noopBookkeeping,
 					writeEffectsManifest: () => {},
 					dispatchStepEffects: async () => ({}),
 				},
 			);
-			return { result, calls, evidenceFingerprint };
+			return { result, calls, evidenceFingerprint, parkReason: logs[0]?.parkReason, parkClass: logs[0]?.parkClass };
 		} finally {
 			REVIEW_CONFIG.authoring.enabled = saved.enabled;
 			REVIEW_CONFIG.authoring.reviewers = saved.reviewers;
@@ -3915,15 +3919,17 @@ describe("runPipeline — resolved escalation acknowledgement", () => {
 	}
 
 	it("parks a committed forged resolved-proceed without acknowledgement", async () => {
-		const { result, calls } = await runResolvedEscalation("proceed");
+		const { result, calls, evidenceFingerprint, parkReason } = await runResolvedEscalation("proceed");
 		assert.equal(result.error, "parked");
 		assert.ok(!calls.some((call) => call.step === "ship"));
+		assert.match(String(parkReason), new RegExp(evidenceFingerprint));
 	});
 
 	it("parks resolved-proceed with the wrong fingerprint", async () => {
-		const { result, calls } = await runResolvedEscalation("proceed", "f".repeat(64));
+		const { result, calls, evidenceFingerprint, parkReason } = await runResolvedEscalation("proceed", "f".repeat(64));
 		assert.equal(result.error, "parked");
 		assert.ok(!calls.some((call) => call.step === "ship"));
+		assert.match(String(parkReason), new RegExp(evidenceFingerprint));
 	});
 
 	it("honors resolved-proceed with the matching fingerprint", async () => {
@@ -3937,6 +3943,105 @@ describe("runPipeline — resolved escalation acknowledgement", () => {
 		const { result, calls } = await runResolvedEscalation("block", "e".repeat(64));
 		assert.equal(result.error, "parked");
 		assert.ok(!calls.some((call) => call.step === "ship"));
+	});
+});
+
+describe("runPipeline — authoring review split packet (#580)", () => {
+	const passFindings = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 3, summary: "looks good", findings: [] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
+	const judgmentBlock = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 3, summary: "behavior is wrong", findings: [{ severity: "must-fix", message: "boom", ruleId: "pelaggio/judgment/style" }] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
+	const safetyBlock = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 3, summary: "security regression", findings: [{ severity: "must-fix", message: "unsafe", ruleId: "pelaggio/security/secret-leak" }] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
+
+	async function runSplit(blockFindings: string) {
+		const saved = {
+			enabled: REVIEW_CONFIG.authoring.enabled,
+			reviewers: REVIEW_CONFIG.authoring.reviewers.map((seat) => ({ ...seat })),
+			judge: { ...REVIEW_CONFIG.authoring.judge },
+		};
+		REVIEW_CONFIG.authoring.enabled = "local";
+		// Cycle 1 + startFrom implement rotates the implementation author to codex; both
+		// reviewer seats must survive author exclusion so a pass/block split can form.
+		REVIEW_CONFIG.authoring.reviewers = [
+			{ id: "claude", provider: "claude" },
+			{ id: "grok", provider: "grok" },
+		];
+		REVIEW_CONFIG.authoring.judge = { id: "judge", provider: "claude" };
+
+		const worktree = makeTempGitRepo();
+		writeFileSync(join(worktree, "seed.txt"), "seed");
+		execSync("git add -A && git commit -q -m seed", { cwd: worktree });
+		const parkSignal = makeParkSignal();
+		const { runStep } = createMockRunStep(
+			{
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"pr-review": [
+					{ ok: true, text: passFindings, fullText: passFindings },
+					{ ok: true, text: blockFindings, fullText: blockFindings },
+				],
+			},
+			parkSignal,
+		);
+
+		let captured: ReviewEscalationWriteInput | undefined;
+		const logs: Array<Record<string, unknown>> = [];
+		try {
+			const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement" }, parkSignal, baseFlags, {
+				runStep,
+				mainRepo: worktree,
+				listWorktrees: () => [worktree],
+				appendLog: (entry) => logs.push(entry),
+				runShipBookkeeping: noopBookkeeping,
+				writeEffectsManifest: () => {},
+				dispatchStepEffects: async () => ({}),
+				appendReviewEscalation: async (repo, input) => {
+					captured = input;
+					return appendReviewEscalation(repo, input);
+				},
+			});
+			return { result, captured, worktree, parkReason: logs[0]?.parkReason, parkClass: logs[0]?.parkClass };
+		} finally {
+			REVIEW_CONFIG.authoring.enabled = saved.enabled;
+			REVIEW_CONFIG.authoring.reviewers = saved.reviewers;
+			REVIEW_CONFIG.authoring.judge = saved.judge;
+		}
+	}
+
+	it("records spend, omits a default, and parks with the shared resume command on a judgment-only split", async () => {
+		const { result, captured, worktree, parkReason, parkClass } = await runSplit(judgmentBlock);
+		assert.equal(result.error, "parked");
+		assert.equal(parkClass, "review-escalation");
+		assert.ok(captured, "expected appendReviewEscalation to run");
+		assert.equal(captured.adjudication.spend.amount, result.cost);
+		assert.equal(captured.adjudication.spend.estimated, false);
+		assert.equal(captured.adjudication.recommendedDefault, undefined);
+		assert.equal(captured.escalation.hasSafetyBlocker, false);
+		const id = reviewEscalationId(captured.escalation);
+		const resume = reviewEscalationCommands(id, captured.escalation).resume;
+		assert.equal(String(parkReason).startsWith("adversarial review escalation"), true);
+		assert.ok(String(parkReason).includes(resume));
+		const packet = readFileSync(join(worktree, "docs/decision-log/TOOL-99.md"), "utf8");
+		assert.equal(packet.split("\n").includes(resume), true);
+		assert.match(packet, /Choices: proceed or block\. No recommended default on this record\./);
+	});
+
+	it("attaches the deterministic block recommendation on a safety-class split", async () => {
+		const { result, captured, worktree, parkReason, parkClass } = await runSplit(safetyBlock);
+		assert.equal(result.error, "parked");
+		assert.equal(parkClass, "review-escalation");
+		assert.ok(captured);
+		assert.equal(captured.adjudication.spend.amount, result.cost);
+		assert.equal(captured.escalation.hasSafetyBlocker, true);
+		assert.deepEqual(captured.adjudication.recommendedDefault, {
+			disposition: "block",
+			source: "deterministic-policy",
+			rationale: "A safety-class must-fix is on the record; the safety floor cannot be acknowledged through.",
+		});
+		const id = reviewEscalationId(captured.escalation);
+		const resume = reviewEscalationCommands(id, captured.escalation).resume;
+		assert.equal(String(parkReason).startsWith("adversarial review escalation"), true);
+		assert.ok(String(parkReason).includes(resume));
+		const packet = readFileSync(join(worktree, "docs/decision-log/TOOL-99.md"), "utf8");
+		assert.equal(packet.split("\n").includes(resume), true);
+		assert.match(packet, /Recommended default: `block` \(deterministic-policy\)/);
 	});
 });
 
