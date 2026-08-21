@@ -1276,10 +1276,15 @@ const defaultGitArgvExec: GitArgvExec = (args, cwd) => execFileSync("git", [...a
  * OID, never to the mutable `origin/main` ref name, which a subsequent writable author
  * step can move. `conflicted` carries `null` only when `origin/main` does not resolve at
  * all (pathological resume); the pipeline fails closed on a null OID before shipping.
+ *
+ * `content-integrated` is the fail-closed shortcut: the net upstream write-set is already
+ * byte/tree-entry equivalent at HEAD, so the harness records ancestry with `-s ours`
+ * rather than replaying content through an ordinary merge.
  */
 export type PrShipFreshnessResult =
 	| { kind: "up-to-date"; originMainOid: string }
 	| { kind: "merged"; upstreamTouchedFiles: string[]; originMainOid: string }
+	| { kind: "content-integrated"; upstreamTouchedFiles: string[]; originMainOid: string }
 	| { kind: "conflicted"; unmergedFiles: string[]; upstreamTouchedFiles: string[]; originMainOid: string | null }
 	| { kind: "failed"; detail: string };
 
@@ -1338,12 +1343,89 @@ function upstreamTouchedFrom(run: GitArgvExec, cwd: string, incomingRef: string)
 	return gitNameOnly(run, ["diff", "--name-only", `HEAD...${incomingRef}`], cwd);
 }
 
+/** Unique merge-base of HEAD and the retained OID, or null on Git failure / 0 / 2+ bases. */
+function uniqueMergeBase(run: GitArgvExec, cwd: string, originMainOid: string): string | null {
+	const result = tryGitArgv(run, ["merge-base", "--all", "HEAD", originMainOid], cwd);
+	if (!result.ok) return null;
+	const oids = result.out.split("\n").filter(Boolean);
+	return oids.length === 1 ? (oids[0] ?? null) : null;
+}
+
+function headTreeOid(run: GitArgvExec, cwd: string): string | null {
+	const result = tryGitArgv(run, ["rev-parse", "HEAD^{tree}"], cwd);
+	return result.ok && result.out !== "" ? result.out : null;
+}
+
+/**
+ * Plumbing `diff-tree` path set. Distinguishes Git failure from a valid empty set.
+ * Does not trim: a leading/trailing newline can be a legal path component, and
+ * `gitNameOnly` (newline-split, failure→`[]`) is display-grade only.
+ */
+function nulDiffTreePaths(run: GitArgvExec, cwd: string, a: string, b: string): { ok: true; paths: string[] } | { ok: false; detail: string } {
+	try {
+		const out = run(["diff-tree", "-r", "--name-only", "-z", "--no-renames", a, b], cwd);
+		return { ok: true, paths: out.split("\0").filter(Boolean) };
+	} catch (error) {
+		return { ok: false, detail: gitArgvDetail(error) };
+	}
+}
+
+/**
+ * If the net upstream write-set is already tree-entry equivalent at HEAD, record
+ * ancestry with `-s ours` and return that outcome. Incomplete proof (ambiguous
+ * base, unreadable diff-tree, pre-merge tree snapshot failure) returns `null` so
+ * the caller takes the ordinary merge — not `kind: "failed"`. `failed` is reserved
+ * for an `ours` merge that exited 0 and then failed the tree-OID or ancestry check.
+ */
+function tryRecordAlreadyPresentAncestry(run: GitArgvExec, cwd: string, originMainOid: string): PrShipFreshnessResult | null {
+	const mergeBase = uniqueMergeBase(run, cwd, originMainOid);
+	if (!mergeBase) return null;
+	const upstream = nulDiffTreePaths(run, cwd, mergeBase, originMainOid);
+	if (!upstream.ok) return null;
+	const endpoint = nulDiffTreePaths(run, cwd, "HEAD", originMainOid);
+	if (!endpoint.ok) return null;
+	const endpointSet = new Set(endpoint.paths);
+	if (upstream.paths.some((path) => endpointSet.has(path))) return null;
+
+	const preTree = headTreeOid(run, cwd);
+	if (!preTree) return null;
+	const merged = tryGitArgv(run, ["merge", "--no-edit", "--strategy=ours", originMainOid], cwd);
+	if (!merged.ok) {
+		const afterUnmerged = unmergedPaths(run, cwd);
+		if (hasMergeHead(run, cwd) || afterUnmerged.length > 0) {
+			return {
+				kind: "conflicted",
+				unmergedFiles: afterUnmerged,
+				upstreamTouchedFiles: upstreamTouchedFrom(run, cwd, originMainOid),
+				originMainOid,
+			};
+		}
+		return null;
+	}
+	const postTree = headTreeOid(run, cwd);
+	if (!postTree) {
+		return { kind: "failed", detail: "ours merge succeeded but HEAD tree could not be re-read" };
+	}
+	if (postTree !== preTree) {
+		return { kind: "failed", detail: "ours merge succeeded but HEAD tree changed — refusing to treat as content-integrated" };
+	}
+	if (!oidIsAncestorOfHead(run, cwd, originMainOid)) {
+		return { kind: "failed", detail: "ours merge succeeded but fetched origin/main is not an ancestor of HEAD" };
+	}
+	return { kind: "content-integrated", upstreamTouchedFiles: upstream.paths, originMainOid };
+}
+
 /**
  * Fetch `origin/main` and merge it into the claim worktree.
  *
  * `conflicted` includes the resume-after-park case: `parkExit()` → `checkpoint()`
  * cannot commit an unresolved merge, so a parked tree is dirty-with-`MERGE_HEAD`,
  * not a generic dirty input. Treating that as `failed` would abort resume.
+ *
+ * When the net upstream write-set is already byte-equivalent at HEAD, the harness
+ * records ancestry with a tree-preserving `-s ours` merge (`content-integrated`)
+ * instead of replaying content. Proof/Git ambiguity skips that shortcut and uses
+ * the ordinary merge; it does not fail the cycle.
  *
  * Never runs `merge --abort`, reset, or clean.
  */
@@ -1375,6 +1457,9 @@ export function preparePrShipFreshness(worktree: string, exec?: GitArgvExec): Pr
 	const originMainOid = resolveOriginMainOid(run, worktree);
 	if (!originMainOid) return { kind: "failed", detail: "origin/main does not resolve after fetch" };
 	if (oidIsAncestorOfHead(run, worktree, originMainOid)) return { kind: "up-to-date", originMainOid };
+
+	const recorded = tryRecordAlreadyPresentAncestry(run, worktree, originMainOid);
+	if (recorded) return recorded;
 
 	const upstreamTouchedFiles = upstreamTouchedFrom(run, worktree, originMainOid);
 	const merged = tryGitArgv(run, ["merge", "--no-edit", originMainOid], worktree);

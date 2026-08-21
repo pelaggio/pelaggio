@@ -1303,6 +1303,88 @@ describe("runPipeline — PR freshness sequencing (#424)", () => {
 		assert.equal(shipGate.gatedHeadOid, execSync("git rev-parse HEAD", { cwd: worktree, encoding: "utf-8" }).trim(), "gatedHeadOid must be the worktree HEAD that passed the gates");
 		assert.equal(shipGate.originMainOid, STUB_ORIGIN_MAIN_OID, "originMainOid must be the OID retained by the freshness fetch");
 	});
+
+	it("content-integrated skips the implementation author and binds the fetched OID through gates and ship", async () => {
+		const worktree = makeDeliverableRepo();
+		const parkSignal = makeParkSignal();
+		const fetchedOid = "c".repeat(40);
+		const order: string[] = [];
+		const verifiedOids: string[] = [];
+		const shipGates: Array<{ gatedHeadOid: string; originMainOid: string } | undefined> = [];
+		const { runStep, calls } = createMockRunStep({ ship: prShipDecision("pull-request") }, parkSignal);
+		const result = await runPipeline({ ...baseOpts(worktree, "pull-request"), startFrom: "ship" }, parkSignal, baseFlags, {
+			runStep,
+			...defaultPrPreflightStubs(),
+			preparePrShipFreshness: () => {
+				order.push("freshness");
+				return { kind: "content-integrated", upstreamTouchedFiles: ["src/up.ts"], originMainOid: fetchedOid };
+			},
+			runTypecheckRatchet: async () => {
+				order.push("typecheck");
+				return { ok: true };
+			},
+			verifyPrShipFreshness: (_worktree, expectedOid) => {
+				order.push("verify");
+				verifiedOids.push(expectedOid);
+				return { ok: true };
+			},
+			runPrReviewGate: async () => {
+				order.push("preflight");
+				return { gate: "pass", body: "ok", cost: 0, costEstimated: false, turns: 0, ok: true, subtype: "success", agreement: "consensus-pass", survivorCount: 0 };
+			},
+			listWorktrees: () => [],
+			appendLog: () => {},
+			dispatchStepEffects: async (ctx) => {
+				if (ctx.step === "ship") {
+					order.push("ship-effect");
+					shipGates.push(ctx.shipGate);
+				}
+				return ctx.step === "ship" ? { appendText: PR_URL } : {};
+			},
+		});
+		assert.equal(result.completed, true, `expected completed; error=${result.error}`);
+		assert.equal(calls.filter((c) => c.step === "shakedown-code").length, 0);
+		assert.equal(calls.filter((c) => c.step === "ship").length, 1);
+		assert.deepEqual(order, ["freshness", "typecheck", "verify", "preflight", "ship-effect"]);
+		assert.deepEqual(verifiedOids, [fetchedOid]);
+		assert.equal(shipGates[0]?.originMainOid, fetchedOid);
+	});
+
+	it("a genuine conflict spends only one author pass against an unchanged max-turn merge state", async () => {
+		const worktree = makeDeliverableRepo();
+		const parkSignal = makeParkSignal();
+		let gate = 0;
+		let effects = 0;
+		const { runStep, calls } = createMockRunStep(
+			{
+				"shakedown-code": { ok: false, subtype: "error_max_turns", text: "out of turns" },
+				ship: prShipDecision("pull-request"),
+			},
+			parkSignal,
+		);
+		const result = await runPipeline({ ...baseOpts(worktree, "pull-request"), startFrom: "ship" }, parkSignal, baseFlags, {
+			runStep,
+			...defaultPrPreflightStubs(),
+			preparePrShipFreshness: () => ({ kind: "conflicted", unmergedFiles: ["shared.ts"], upstreamTouchedFiles: ["shared.ts"], originMainOid: STUB_ORIGIN_MAIN_OID }),
+			runTypecheckRatchet: async () => ({ ok: true }),
+			runPrReviewGate: async () => {
+				gate += 1;
+				return { gate: "pass", body: "", cost: 0, costEstimated: false, turns: 0, ok: true, subtype: "success", agreement: "consensus-pass", survivorCount: 0 };
+			},
+			listWorktrees: () => [],
+			appendLog: () => {},
+			dispatchStepEffects: async () => {
+				effects += 1;
+				return {};
+			},
+		});
+		assert.equal(result.completed, false);
+		assert.match(result.error ?? "", /freshness conflict repair incomplete after one author pass/);
+		assert.equal(calls.filter((c) => c.step === "shakedown-code").length, 1);
+		assert.equal(calls.filter((c) => c.step === "ship").length, 0);
+		assert.equal(gate, 0);
+		assert.equal(effects, 0);
+	});
 });
 
 /** Deliverable repo left mid-merge: add/add conflict on f.txt with MERGE_HEAD + markers. */

@@ -52,7 +52,7 @@ Skill bodies branch on the `--target` argument; don't hardcode merge logic in TS
 
 ### PR freshness and remote-base squash (#424)
 
-Integrating `origin/main` is owned by the pipeline **before** `/ship` and any forge effect. `ship/pr-effects.ts` does not fetch or merge: a conflict needs the original implementation author, who is no longer in the effect handler. The effect handler instead:
+Integrating `origin/main` is owned by the pipeline **before** `/ship` and any forge effect. The pre-ship harness owns both the ordinary host merge (genuine content differences, with one author pass on conflict) and a proven tree-preserving `-s ours` merge when plumbing `diff-tree` shows the net upstream write-set is already byte-equivalent at `HEAD`. `ship/pr-effects.ts` does not fetch or merge: a conflict needs the original implementation author, who is no longer in the effect handler. The effect handler instead:
 
 - requires `origin/main` to resolve and already be an ancestor of `HEAD` before any reset, commit, push, or `gh` call;
 - soft-resets to `git merge-base origin/main HEAD` (never local `main` — that would squash upstream-only commits into the feature commit after a freshness merge);

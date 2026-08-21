@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -1162,6 +1162,231 @@ describe("preparePrShipFreshness / verifyPrShipFreshness", () => {
 			assert.ok(!args.some((a) => a.includes("/tmp/some worktree")));
 			assert.ok(!args.join(" ").includes("git -C"));
 		}
+	});
+
+	it("records ancestry with -s ours when upstream content is already present, preserving the feature tree", () => {
+		const { worktree, origin } = makeFreshnessPair();
+		commitFile(origin, "src/up-a.ts", "export const a = 1;\n", "upstream a");
+		commitFile(origin, "src/up-b.ts", "export const b = 2;\n", "upstream b");
+		commitFile(worktree, "src/feature.ts", "export const feat = 1;\n", "feature-only");
+		commitFile(worktree, "src/up-a.ts", "export const a = 1;\n", "copy a");
+		commitFile(worktree, "src/up-b.ts", "export const b = 2;\n", "copy b");
+		execSync("git fetch -q origin main", { cwd: worktree });
+		const fetchedBefore = execSync("git rev-parse origin/main", { cwd: worktree, encoding: "utf-8" }).trim();
+		assert.throws(() => execFileSync("git", ["merge-base", "--is-ancestor", fetchedBefore, "HEAD"], { cwd: worktree, stdio: "ignore" }));
+		const preTree = execSync('git rev-parse "HEAD^{tree}"', { cwd: worktree, encoding: "utf-8" }).trim();
+		const preHead = execSync("git rev-parse HEAD", { cwd: worktree, encoding: "utf-8" }).trim();
+		const argv: string[][] = [];
+		const result = preparePrShipFreshness(worktree, (args, cwd) => {
+			argv.push([...args]);
+			return execFileSync("git", [...args], { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+		});
+		assert.equal(result.kind, "content-integrated");
+		if (result.kind !== "content-integrated") return;
+		assert.notEqual(result.originMainOid, preHead);
+		assert.equal(execSync("git merge-base --is-ancestor " + result.originMainOid + " HEAD", { cwd: worktree, encoding: "utf-8" }).trim(), "");
+		assert.equal(execSync('git rev-parse "HEAD^{tree}"', { cwd: worktree, encoding: "utf-8" }).trim(), preTree);
+		assert.equal(execSync("git rev-parse HEAD^2", { cwd: worktree, encoding: "utf-8" }).trim(), result.originMainOid);
+		assert.deepEqual(verifyPrShipFreshness(worktree, result.originMainOid), { ok: true });
+		assert.ok(argv.some((a) => a[0] === "merge" && a.includes("--strategy=ours") && a.includes(result.originMainOid)));
+		assert.ok(!argv.some((a) => a[0] === "merge" && a.includes("--abort")));
+		assert.deepEqual([...result.upstreamTouchedFiles].sort(), ["src/up-a.ts", "src/up-b.ts"]);
+	});
+
+	it("accounts for rename source+destination and NUL-delimited unusual paths in the equivalence proof", () => {
+		const { worktree, origin } = makeFreshnessPair();
+		const newlinePath = "file\nwith\nnewline.txt";
+		// Shared history must contain the rename source so the net write-set lists both
+		// the deleted source and the added destination (`--no-renames`).
+		commitFile(origin, "old.txt", "renamed-content\n", "add old");
+		execSync("git fetch -q origin main", { cwd: worktree });
+		execSync("git merge -q --no-edit origin/main", { cwd: worktree });
+		execSync("git mv old.txt new.txt", { cwd: origin });
+		execSync("git commit -q -m rename", { cwd: origin });
+		commitFile(origin, newlinePath, "weird\n", "newline path");
+		commitFile(worktree, "src/feature.ts", "export const feat = 1;\n", "feature-only");
+		execSync("git rm -q old.txt", { cwd: worktree });
+		commitFile(worktree, "new.txt", "renamed-content\n", "copy dest");
+		commitFile(worktree, newlinePath, "weird\n", "copy newline path");
+		const preTree = execSync('git rev-parse "HEAD^{tree}"', { cwd: worktree, encoding: "utf-8" }).trim();
+		const result = preparePrShipFreshness(worktree);
+		assert.equal(result.kind, "content-integrated");
+		if (result.kind !== "content-integrated") return;
+		assert.ok(result.upstreamTouchedFiles.includes("old.txt"), "rename source must appear when rename detection is disabled");
+		assert.ok(result.upstreamTouchedFiles.includes("new.txt"), "rename destination must appear when rename detection is disabled");
+		assert.ok(result.upstreamTouchedFiles.includes(newlinePath), `NUL-parsed write-set must keep the newline path, got ${JSON.stringify(result.upstreamTouchedFiles)}`);
+		assert.ok(!result.upstreamTouchedFiles.includes("with"), "newline-split would leak path fragments");
+		assert.equal(execSync('git rev-parse "HEAD^{tree}"', { cwd: worktree, encoding: "utf-8" }).trim(), preTree);
+		assert.equal(execSync("git rev-parse HEAD^2", { cwd: worktree, encoding: "utf-8" }).trim(), result.originMainOid);
+		assert.deepEqual(verifyPrShipFreshness(worktree, result.originMainOid), { ok: true });
+	});
+
+	it("does not take the ours shortcut when any upstream-touched path still differs", () => {
+		const { worktree, origin } = makeFreshnessPair();
+		commitFile(origin, "src/copied.ts", "same\n", "upstream copied");
+		commitFile(origin, "src/dropped.ts", "main-only\n", "upstream not copied");
+		commitFile(worktree, "src/copied.ts", "same\n", "copy one file");
+		const argv: string[][] = [];
+		const result = preparePrShipFreshness(worktree, (args, cwd) => {
+			argv.push([...args]);
+			return execFileSync("git", [...args], { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+		});
+		assert.notEqual(result.kind, "content-integrated");
+		assert.equal(result.kind, "merged");
+		if (result.kind !== "merged") return;
+		assert.ok(!argv.some((a) => a.includes("--strategy=ours") || a.includes("-s")));
+		assert.ok(argv.some((a) => a[0] === "merge" && a[1] === "--no-edit" && a[2] === result.originMainOid));
+		assert.equal(existsSync(join(worktree, "src/dropped.ts")), true);
+		assert.deepEqual(verifyPrShipFreshness(worktree, result.originMainOid), { ok: true });
+	});
+
+	it("skips the shortcut and runs the ordinary merge when diff-tree fails, without classifying as failed", () => {
+		const argv: string[][] = [];
+		const result = preparePrShipFreshness("/tmp/freshness-difftree", (args) => {
+			argv.push([...args]);
+			const key = args.join(" ");
+			if (key === "rev-parse -q --verify MERGE_HEAD") throw new Error("no merge");
+			if (key === "diff --name-only --diff-filter=U") return "";
+			if (key === "status --porcelain") return "";
+			if (key === "fetch origin main") return "";
+			if (key === "rev-parse --verify origin/main") return "abc";
+			if (key === "merge-base --is-ancestor abc HEAD") throw new Error("behind");
+			if (key === "merge-base --all HEAD abc") return "baseoid";
+			if (args[0] === "diff-tree") throw new Error("diff-tree failed");
+			if (key === "diff --name-only HEAD...abc") return "src/a.ts\n";
+			if (key === "merge --no-edit abc") return "";
+			throw new Error(`unexpected argv: ${key}`);
+		});
+		assert.equal(result.kind, "merged");
+		if (result.kind !== "merged") return;
+		assert.equal(result.originMainOid, "abc");
+		assert.ok(argv.some((a) => a[0] === "diff-tree"));
+		assert.ok(argv.some((a) => a[0] === "merge" && a[1] === "--no-edit" && a[2] === "abc"));
+		assert.ok(!argv.some((a) => a.includes("--strategy=ours")));
+		assert.ok(argv.every((a) => Array.isArray(a)));
+		assert.ok(!argv.some((a) => a[0] === "merge" && a.includes("origin/main")));
+		assert.ok(!argv.some((a) => a[0] === "diff-tree" && a.includes("origin/main")));
+	});
+
+	it("skips the shortcut on an ambiguous merge-base rather than picking one parent", () => {
+		const argv: string[][] = [];
+		const result = preparePrShipFreshness("/tmp/freshness-crisscross", (args) => {
+			argv.push([...args]);
+			const key = args.join(" ");
+			if (key === "rev-parse -q --verify MERGE_HEAD") throw new Error("no merge");
+			if (key === "diff --name-only --diff-filter=U") return "";
+			if (key === "status --porcelain") return "";
+			if (key === "fetch origin main") return "";
+			if (key === "rev-parse --verify origin/main") return "abc";
+			if (key === "merge-base --is-ancestor abc HEAD") throw new Error("behind");
+			if (key === "merge-base --all HEAD abc") return "baseone\nbasetwo";
+			if (key === "diff --name-only HEAD...abc") return "src/a.ts\n";
+			if (key === "merge --no-edit abc") return "";
+			throw new Error(`unexpected argv: ${key}`);
+		});
+		assert.equal(result.kind, "merged");
+		assert.ok(!argv.some((a) => a[0] === "diff-tree"));
+		assert.ok(!argv.some((a) => a.includes("--strategy=ours")));
+		assert.ok(argv.some((a) => a[0] === "merge" && a[1] === "--no-edit" && a[2] === "abc"));
+	});
+
+	it("pins the successful-proof argv: unique base, NUL diff-tree, tree snapshot, ours merge, then tree+ancestry probes", () => {
+		const argv: string[][] = [];
+		let ancestorChecks = 0;
+		const result = preparePrShipFreshness("/tmp/freshness-ours-argv", (args) => {
+			argv.push([...args]);
+			const key = args.join(" ");
+			if (key === "rev-parse -q --verify MERGE_HEAD") throw new Error("no merge");
+			if (key === "diff --name-only --diff-filter=U") return "";
+			if (key === "status --porcelain") return "";
+			if (key === "fetch origin main") return "";
+			if (key === "rev-parse --verify origin/main") return "abc";
+			if (key === "merge-base --is-ancestor abc HEAD") {
+				ancestorChecks += 1;
+				if (ancestorChecks === 1) throw new Error("behind");
+				return "";
+			}
+			if (key === "merge-base --all HEAD abc") return "baseoid";
+			if (key === "diff-tree -r --name-only -z --no-renames baseoid abc") return "copied.ts\0";
+			if (key === "diff-tree -r --name-only -z --no-renames HEAD abc") return "feat.ts\0";
+			if (key === "rev-parse HEAD^{tree}") return "treeoid";
+			if (key === "merge --no-edit --strategy=ours abc") return "";
+			throw new Error(`unexpected argv: ${key}`);
+		});
+		assert.equal(result.kind, "content-integrated");
+		if (result.kind !== "content-integrated") return;
+		assert.equal(result.originMainOid, "abc");
+		assert.deepEqual(result.upstreamTouchedFiles, ["copied.ts"]);
+		assert.equal(ancestorChecks, 2);
+		const keys = argv.map((a) => a.join(" "));
+		const isAncestor = keys.indexOf("merge-base --is-ancestor abc HEAD");
+		const allBases = keys.indexOf("merge-base --all HEAD abc");
+		const upstreamDiff = keys.indexOf("diff-tree -r --name-only -z --no-renames baseoid abc");
+		const endpointDiff = keys.indexOf("diff-tree -r --name-only -z --no-renames HEAD abc");
+		const treeIdx = keys.indexOf("rev-parse HEAD^{tree}");
+		const ours = keys.indexOf("merge --no-edit --strategy=ours abc");
+		const treeAgain = keys.lastIndexOf("rev-parse HEAD^{tree}");
+		const ancestorAgain = keys.lastIndexOf("merge-base --is-ancestor abc HEAD");
+		assert.ok(isAncestor >= 0 && allBases > isAncestor);
+		assert.ok(upstreamDiff > allBases && endpointDiff > upstreamDiff);
+		assert.ok(treeIdx > endpointDiff && ours > treeIdx);
+		assert.ok(treeAgain > ours && ancestorAgain > treeAgain);
+		assert.ok(!argv.some((a) => a.includes("origin/main") && a[0] !== "rev-parse" && a[0] !== "fetch"));
+		assert.ok(argv.every((a) => Array.isArray(a)));
+		assert.ok(!keys.includes("merge --no-edit abc"));
+	});
+
+	// The two post-`ours` probes fail closed as `failed` — never `content-integrated`,
+	// never a silent fallthrough to the ordinary merge on the already-moved HEAD.
+	it("fails closed when the ours merge changed the HEAD tree instead of preserving it", () => {
+		let treeReads = 0;
+		const result = preparePrShipFreshness("/tmp/freshness-ours-tree-drift", (args) => {
+			const key = args.join(" ");
+			if (key === "rev-parse -q --verify MERGE_HEAD") throw new Error("no merge");
+			if (key === "diff --name-only --diff-filter=U") return "";
+			if (key === "status --porcelain") return "";
+			if (key === "fetch origin main") return "";
+			if (key === "rev-parse --verify origin/main") return "abc";
+			if (key === "merge-base --is-ancestor abc HEAD") throw new Error("behind");
+			if (key === "merge-base --all HEAD abc") return "baseoid";
+			if (key === "diff-tree -r --name-only -z --no-renames baseoid abc") return "copied.ts\0";
+			if (key === "diff-tree -r --name-only -z --no-renames HEAD abc") return "feat.ts\0";
+			if (key === "rev-parse HEAD^{tree}") {
+				treeReads += 1;
+				return treeReads === 1 ? "treeoid" : "differenttree";
+			}
+			if (key === "merge --no-edit --strategy=ours abc") return "";
+			throw new Error(`unexpected argv: ${key}`);
+		});
+		assert.equal(result.kind, "failed");
+		if (result.kind !== "failed") return;
+		assert.match(result.detail, /HEAD tree changed/);
+	});
+
+	it("fails closed when the ours merge did not make the fetched OID an ancestor of HEAD", () => {
+		let ancestorChecks = 0;
+		const result = preparePrShipFreshness("/tmp/freshness-ours-no-ancestry", (args) => {
+			const key = args.join(" ");
+			if (key === "rev-parse -q --verify MERGE_HEAD") throw new Error("no merge");
+			if (key === "diff --name-only --diff-filter=U") return "";
+			if (key === "status --porcelain") return "";
+			if (key === "fetch origin main") return "";
+			if (key === "rev-parse --verify origin/main") return "abc";
+			if (key === "merge-base --is-ancestor abc HEAD") {
+				ancestorChecks += 1;
+				throw new Error("not an ancestor");
+			}
+			if (key === "merge-base --all HEAD abc") return "baseoid";
+			if (key === "diff-tree -r --name-only -z --no-renames baseoid abc") return "copied.ts\0";
+			if (key === "diff-tree -r --name-only -z --no-renames HEAD abc") return "feat.ts\0";
+			if (key === "rev-parse HEAD^{tree}") return "treeoid";
+			if (key === "merge --no-edit --strategy=ours abc") return "";
+			throw new Error(`unexpected argv: ${key}`);
+		});
+		assert.equal(result.kind, "failed");
+		if (result.kind !== "failed") return;
+		assert.match(result.detail, /not an ancestor of HEAD/);
+		assert.equal(ancestorChecks, 2);
 	});
 });
 

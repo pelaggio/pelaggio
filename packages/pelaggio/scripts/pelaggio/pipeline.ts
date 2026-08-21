@@ -1265,6 +1265,8 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		/** Exact per-step refusal wording (task vs review noun) — preserved for tests. */
 		refusedError: string;
 		maxAttempts?: number;
+		/** When set, replaces `${name} failed (max retries)` on the final max-turns attempt. */
+		maxTurnsExhaustedError?: string;
 		/** implement / shakedown-code only: checkpoint label per attempt. */
 		commitLabel?: (attempt: number) => string;
 		/** Success-dispatched effects; checkpoint effects also preserve work on non-confinement failures. */
@@ -1342,7 +1344,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			prevMaxTurns = true;
 			log(`${noun} hit turn limit (attempt ${attempt}/${maxAttempts})`);
 			if (attempt === maxAttempts) {
-				return { kind: "terminal", cycleResult: finish({ itemId, completed: false, cost, error: `${cfg.name} failed (max retries)` }) };
+				return { kind: "terminal", cycleResult: finish({ itemId, completed: false, cost, error: cfg.maxTurnsExhaustedError ?? `${cfg.name} failed (max retries)` }) };
 			}
 			if (!canRetryWithinBudget({ spent: cost, maxBudget, stepBudget: cfg.stepBudget })) {
 				return { kind: "terminal", cycleResult: finish({ itemId, completed: false, cost, error: `${cfg.name} failed (insufficient budget to retry after max turns)` }) };
@@ -2038,7 +2040,14 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		].join("\n");
 	}
 
-	async function runImplementationAuthorRepair(cfg: { commitLabel: string; logMessage: string; prompt: string; preCheckpointGate?: () => { ok: true } | { ok: false; detail: string } }): Promise<StepAttempt> {
+	async function runImplementationAuthorRepair(cfg: {
+		commitLabel: string;
+		logMessage: string;
+		prompt: string;
+		preCheckpointGate?: () => { ok: true } | { ok: false; detail: string };
+		maxAttempts?: number;
+		maxTurnsExhaustedError?: string;
+	}): Promise<StepAttempt> {
 		const author = assignment.authors.implementation;
 		if (!author) {
 			return { kind: "terminal", cycleResult: finish({ itemId, completed: false, cost, error: "implementation author attribution is unavailable" }) };
@@ -2052,6 +2061,8 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			executionOverride: author,
 			logAttempt: () => log(cfg.logMessage),
 			buildPrompt: () => cfg.prompt,
+			...(cfg.maxAttempts !== undefined ? { maxAttempts: cfg.maxAttempts } : {}),
+			...(cfg.maxTurnsExhaustedError ? { maxTurnsExhaustedError: cfg.maxTurnsExhaustedError } : {}),
 			...(cfg.preCheckpointGate ? { preCheckpointGate: cfg.preCheckpointGate } : {}),
 		});
 	}
@@ -2214,7 +2225,13 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			log("⚠ PR freshness could not retain an origin/main OID — refusing to verify against the mutable ref");
 			return finish({ itemId, completed: false, cost, verdict, error: "PR freshness failed: origin/main OID could not be retained (ref does not resolve) — cannot bind verification to a fetched OID" });
 		}
-		if (freshness.kind === "merged" || freshness.kind === "conflicted") {
+		if (freshness.kind === "content-integrated") {
+			// -s ours left the proven feature tree unchanged, so skip shakedown-code. The
+			// merge commit is a new HEAD, so the in-process gate record cannot skip these gates.
+			log("PR freshness: upstream content already present — harness recorded ancestry");
+			const gateFailure = await runFreshnessGates("for ship candidate", fetchedOriginMainOid);
+			if (gateFailure) return gateFailure;
+		} else if (freshness.kind === "merged" || freshness.kind === "conflicted") {
 			log(freshness.kind === "conflicted" ? "PR freshness conflicted — routing to implementation author" : "PR freshness merged — routing to implementation author");
 			const conflictedFiles = freshness.kind === "conflicted" ? freshness.unmergedFiles : [];
 			const repair = await runImplementationAuthorRepair({
@@ -2224,6 +2241,12 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				// #424 review: runs against the tree BEFORE the checkpoint's `git add -A` can
 				// mark unresolved conflict files resolved; a failing gate skips the commit.
 				preCheckpointGate: () => verifyConflictRepairComplete(worktree!, conflictedFiles),
+				...(freshness.kind === "conflicted"
+					? {
+							maxAttempts: 1,
+							maxTurnsExhaustedError: "freshness conflict repair incomplete after one author pass (max turns)",
+						}
+					: {}),
 			});
 			if (repair.kind === "terminal") return repair.cycleResult;
 			const repaired = verifyConflictRepairComplete(worktree!, conflictedFiles);
@@ -2241,6 +2264,8 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			// literal path string and a hooked command can compose it through variables, so a
 			// disk record is forgeable until the chartered #511 harness-attested evidence lands.
 			// A cross-process resume therefore always re-runs the deterministic gates (cheap).
+			const _exhaustive: "up-to-date" = freshness.kind;
+			void _exhaustive;
 			const headSha = getHeadSha(worktree!);
 			const record = headSha ? readFreshnessGateRecordFn(mainRepo, headSha) : null;
 			if (record && record.itemId === itemId) {
