@@ -1,13 +1,15 @@
 # Guarded actions: a fencing/reconciliation model for pelaggio's locks and gates
 
-Status: design exploration, superseded in part (see below). **v5** — v3 was revised
-across two provider-diverse review passes; v4 added §8.1 (2026-08-22); v5 applies the
-v4 review pass (see the revision log). **Verification baseline, honestly:** the
+Status: living construction home under ADR-0026's semantic rules (see the Division
+of authority below). **v7** — v3 was revised across two provider-diverse review
+passes; v4 added §8.1; v5–v7 applied three further review passes (2026-08-22, see the
+revision log). **Verification baseline, honestly:** the
 code-referencing claims in §1–§7 were verified against `4a6ac3c` (2026-08-06) and have
 drifted — the issue cluster was closed and re-cut into the G-series on 2026-08-07
 (e.g. #466 "G3 — Token"), and `blockForeignRootWrite`'s denied-root set has grown. The
 audit's *shape* stands; treat its counts and issue pointers as the 2026-08-06 snapshot
-and follow the G-series for current work.
+and follow the G-series for current work. Claims marked **(v6)** or **(v7)** were
+verified at head on 2026-08-22 and are exceptions to that snapshot scoping.
 
 **Scope of confidence.** These parts are not equally settled, and the review passes made
 that split visible rather than closing it:
@@ -196,6 +198,11 @@ the migration surface is sixteen. In `worktree-deps` and every `withMutationLock
 *protected* mutation (a shared `pnpm install`; a file RMW plus git commit) is unfenced. You cannot fix this inside
 `file-lock.ts`.
 
+> *(v7 note: the §4 audit predates the per-item revision execution lease
+> (`revise-sweep.ts`), which cites §3–§4 for its guard class but has no row here —
+> one known omission from "every guard sorts into four classes," to be added when
+> the table is next re-verified.)*
+
 ## 5. The missing primitives
 
 **P1 — Fence.** `fence(authority, observedToken, action)`. The action is submitted *with*
@@ -300,13 +307,21 @@ The lifecycles:
   withholds progress — it is #453's stranded-PR state — and clears by
   `grant-additional-entitlement`, actor `human`. Without that edge P3 reproduces the
   defect it exists to fix.
-- **Gate evaluation**: §7 — the clearer is typed by block class (v6; ADR-0026's
-  clearing-actor constraint): an **artifact-judgment** `block` clears by `new-head-sha`
-  (the artifact changed), actor `harness | human`; a **policy** block (e.g.
-  `provider-diversity: require` unmet, §7.2 rule 4) clears by `operator-remedy` — a new
-  head sha changes nothing about unmet policy; **indeterminate** clears by `retry`,
-  actor per §7.3, and its exhaustion becomes a block with the named human clearer. One
-  clearer per class, never one clearer for all.
+- **Gate evaluation**: §7 — the clearer is typed by block class (v6, corrected v7;
+  ADR-0026's clearing-actor constraint): an **artifact-judgment** `block` is
+  *re-evaluated* on `new-head-sha` — the new sha triggers a fresh evaluation but
+  **never itself clears a retained blocker**, which survives until complete, valid
+  isolated verification explicitly refutes it (ADR-0026 decision 7; the repo's
+  PR-candidate-blocker invariant); actor `harness | human`. A **policy** block (e.g.
+  `provider-diversity: require` unmet, §7.2 rule 4) clears by `operator-remedy` — a
+  new head sha changes nothing about unmet policy. **Indeterminate** clears by
+  `retry` where §7.3 supplies an actual retry actor; where **no retry actor exists,
+  it is a block whose clearer is `human` from the start** — never an actor-less
+  `retry`, which would be the exit-less state this invariant exists to prevent (v7).
+  **Named open construction (G-series):** §7.2's remaining cause-class blocks —
+  parse-invalid, `error_diff`, budget-refusal, diversity-config-error, default-deny —
+  each still owe a named clearer and actor; until assigned they violate this
+  invariant, and assigning them is G-series work, not a gap this bullet hides.
 
 ## 7. The gate: separating judgment from disposition
 
@@ -367,6 +382,14 @@ policy block — exactly the completeness/cause conflation ADR-0026 forbids.
 `softened-by-configuration` must be split from `softened-by-incompletion` upstream
 before `require` + `softened` → `block` can be policy; until both exist the rule above
 is unimplementable there.
+
+> **Known-open (v7, G-series):** the type sketch above still takes *aggregate*
+> evidence (and `diversityStatus`) as the disposition input, and the cause table
+> below labels an all-parse-invalid matrix `partial` and an all-transport matrix
+> `unavailable` despite both having zero valid cells — the completeness/cause
+> entanglement ADR-0026 forbids, confirmed by three review passes. The repaired
+> seam carries **typed per-cell causes** into disposition; that construction is
+> G-series work and the sketch/table stand as the defective baseline it replaces.
 
 ### 7.2 `unavailable` is an allowlist, never a default
 
@@ -437,8 +460,11 @@ to `block` with a live carried blocker — revisable, which is the point — rat
 `indeterminate` is not a disposition that can ship on its own. The two runners have
 different status contracts and only one has a reconciler:
 
-- **local runner** — the review-request queue drain (#387) already *is* the retry actor.
-  It leaves the status pending and re-drains. `indeterminate` is expressible here today.
+- **local runner** — the review-request queue drain (#387) already *is* the retry
+  actor. It leaves the status pending and re-drains. The retry *actor* exists here
+  today; per rule 3 (v6) the bounded *counter* does not yet, so `indeterminate` is
+  expressible but not shippable until the harness-owned register lands — the same
+  condition, stated once (v7).
 - **CI runner** — one-shot, maps every non-success to `failure`, and has no reconciler.
   Shipping `indeterminate` there would either collapse back to `block` (no gain) or leave
   a permanently pending PR — recreating the stranding problem in a new cell.
@@ -549,14 +575,17 @@ As failure modes, checklist-style:
     generalized to every refusal exit, in whichever of three forms the refusal
     permits: **checkpoint-and-park** where committing is safe;
     **preserve-without-commit** where it is not; **leave-intact** where the state is
-    already durable. Honesty about the second form (v6): the repo does not implement
-    it today — `quarantineCheckpoint` *commits* (`helpers.ts`), and
-    `error_confinement` exits via `finish()` with no preservation at all
-    (`pipeline.ts`) — so `error_confinement` is the **open instance of this failure
-    mode**, not its counter-example: committing is forbidden there (contaminated
-    state), and the missing remedy is a non-committing preserve (patch file, stash,
-    or worktree copy under a harness-owned register). Refusal ≠ discard, in all
-    three forms.
+    already durable. Honesty about the second form (v6, corrected v7 against
+    `pipeline.ts`/`helpers.ts` at head): `quarantineCheckpoint` *commits*, so it is
+    not a preserve-without-commit; and `error_confinement` exits via `finish()`,
+    which deregisters and disposes but never deletes or resets the worktree — the
+    state is **left intact in effect**. What that path is missing is not
+    preservation machinery but the *contract*: the refusal does not name the
+    preserved state or the resume path, and nothing guarantees the intact worktree
+    against later cleanup (`/tidy` is operator-invoked and never auto-deletes, which
+    is a habit, not a fence). The open work is the naming + a reap-guard — and a
+    true non-committing preserve for any future case where leave-intact is
+    insufficient. Refusal ≠ discard, in all three forms.
 13. **Irreversible-too-early** — a tripped guard becomes final before any successor has
     consumed the contested resource. *Detector:* no reclaim window between trip and
     consequence. *Closes with:* reversible-until-consumed (lease expiry reclaimable
@@ -643,6 +672,20 @@ Steps 1–3 are independently valuable if the rest is never built.
    defect.
 
 ## Revision log
+
+**v7** (2026-08-22) — v6 confirmation pass (3 seats), 11 must-fix triaged: factual
+fixes applied (header version tokens; §8.1 item 12 corrected against head —
+`error_confinement`'s `finish()` leaves the worktree intact, so the path is de-facto
+leave-intact and the open work is the naming contract + reap-guard, not preservation
+machinery; the AGENTS.md invariant's preservation forms updated to match); two
+decidable semantic corrections (new-head-sha triggers re-evaluation but never clears a
+retained blocker — ADR-0026 decision 7; no-retry-actor indeterminate is a
+human-cleared block from the start, never an actor-less retry); the remaining
+state-machine construction (clearers for §7.2's cause-class blocks; typed per-cell
+causes through the disposition seam; the zero-valid-cell labeling) is **named open
+G-series work** at its sites rather than designed here — three passes have converged
+this document's claims to code and ADR reality; the residual is implementation design
+owned by the G-series issues.
 
 **v6** (2026-08-22) — v5 confirmation pass (3 seats), 7 must-fix accepted. The
 authority-cycle finding resolved by stating the ADR-0026 division exactly (the ADR owns
