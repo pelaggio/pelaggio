@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { describe, it } from "node:test";
 import { pathToFileURL } from "node:url";
+import { readFreshnessOursIntent, writeFreshnessOursIntent } from "../freshness-ours-intent.js";
 import {
 	buildReviewDiffBlock,
 	buildStepArgs,
@@ -985,6 +986,11 @@ function makeFreshnessPair(): { worktree: string; origin: string } {
 	execSync("git config user.email t@t", { cwd: worktree });
 	execSync("git config commit.gpgsign false", { cwd: worktree });
 	execSync("git checkout -q -b feat/tool-99", { cwd: worktree });
+	// In production the ours-intent store lives in the MAIN repo's gitignored `.dev/`;
+	// here the temp repo is its own main repo, so mirror the ignore via info/exclude to
+	// keep the porcelain-clean invariant the freshness gates rely on.
+	mkdirSync(join(worktree, ".git", "info"), { recursive: true });
+	writeFileSync(join(worktree, ".git", "info", "exclude"), ".dev/\n", { flag: "a" });
 	return { worktree, origin };
 }
 
@@ -1253,6 +1259,8 @@ describe("preparePrShipFreshness / verifyPrShipFreshness", () => {
 			if (key === "merge-base --is-ancestor abc HEAD") throw new Error("behind");
 			if (key === "rev-parse --verify HEAD^{commit}") return "headoid";
 			if (key === "merge-base --all headoid abc") return "baseoid";
+			if (key === "rev-parse --abbrev-ref HEAD") return "feat/tool-99";
+			if (key === "rev-parse --path-format=absolute --git-common-dir") return "/tmp/freshness-mock-store/.git";
 			if (args[0] === "diff-tree") throw new Error("diff-tree failed");
 			if (key === "diff --name-only HEAD...abc") return "src/a.ts\n";
 			if (key === "merge --no-edit abc") return "";
@@ -1282,6 +1290,8 @@ describe("preparePrShipFreshness / verifyPrShipFreshness", () => {
 			if (key === "merge-base --is-ancestor abc HEAD") throw new Error("behind");
 			if (key === "rev-parse --verify HEAD^{commit}") return "headoid";
 			if (key === "merge-base --all headoid abc") return "baseone\nbasetwo";
+			if (key === "rev-parse --abbrev-ref HEAD") return "feat/tool-99";
+			if (key === "rev-parse --path-format=absolute --git-common-dir") return "/tmp/freshness-mock-store/.git";
 			if (key === "diff --name-only HEAD...abc") return "src/a.ts\n";
 			if (key === "merge --no-edit abc") return "";
 			throw new Error(`unexpected argv: ${key}`);
@@ -1292,66 +1302,18 @@ describe("preparePrShipFreshness / verifyPrShipFreshness", () => {
 		assert.ok(argv.some((a) => a[0] === "merge" && a[1] === "--no-edit" && a[2] === "abc"));
 	});
 
-	it("pins the successful-proof argv: captured HEAD OID binds the proof, ours merge, then parent/tree/ancestry probes", () => {
-		const argv: string[][] = [];
-		let headReads = 0;
-		const result = preparePrShipFreshness("/tmp/freshness-ours-argv", (args) => {
-			argv.push([...args]);
-			const key = args.join(" ");
-			if (key === "rev-parse -q --verify MERGE_HEAD") throw new Error("no merge");
-			if (key === "diff --name-only --diff-filter=U") return "";
-			if (key === "status --porcelain") return "";
-			if (key === "fetch origin main") return "";
-			if (key === "rev-parse --verify origin/main") return "abc";
-			if (key === "merge-base --is-ancestor abc HEAD") throw new Error("behind");
-			if (key === "rev-parse --verify HEAD^{commit}") {
-				headReads += 1;
-				return headReads === 1 ? "headoid" : "mergeoid";
-			}
-			if (key === "merge-base --all headoid abc") return "baseoid";
-			if (key === "diff-tree -r --name-only -z --no-renames baseoid abc") return "copied.ts\0";
-			if (key === "diff-tree -r --name-only -z --no-renames headoid abc") return "feat.ts\0";
-			if (key === "rev-parse headoid^{tree}") return "treeoid";
-			if (key === "merge --no-edit --strategy=ours abc") return "";
-			if (key === "rev-parse --verify mergeoid^1^{commit}") return "headoid";
-			if (key === "rev-parse --verify mergeoid^2^{commit}") return "abc";
-			if (key === "rev-parse mergeoid^{tree}") return "treeoid";
-			if (key === "merge-base --is-ancestor abc mergeoid") return "";
-			throw new Error(`unexpected argv: ${key}`);
-		});
-		assert.equal(result.kind, "content-integrated");
-		if (result.kind !== "content-integrated") return;
-		assert.equal(result.originMainOid, "abc");
-		assert.deepEqual(result.upstreamTouchedFiles, ["copied.ts"]);
-		assert.equal(headReads, 2);
-		const keys = argv.map((a) => a.join(" "));
-		const isAncestor = keys.indexOf("merge-base --is-ancestor abc HEAD");
-		const capture = keys.indexOf("rev-parse --verify HEAD^{commit}");
-		const allBases = keys.indexOf("merge-base --all headoid abc");
-		const upstreamDiff = keys.indexOf("diff-tree -r --name-only -z --no-renames baseoid abc");
-		const endpointDiff = keys.indexOf("diff-tree -r --name-only -z --no-renames headoid abc");
-		const treeIdx = keys.indexOf("rev-parse headoid^{tree}");
-		const ours = keys.indexOf("merge --no-edit --strategy=ours abc");
-		const reRead = keys.lastIndexOf("rev-parse --verify HEAD^{commit}");
-		const firstParent = keys.indexOf("rev-parse --verify mergeoid^1^{commit}");
-		const secondParent = keys.indexOf("rev-parse --verify mergeoid^2^{commit}");
-		const treeAgain = keys.indexOf("rev-parse mergeoid^{tree}");
-		const ancestorOnMerge = keys.indexOf("merge-base --is-ancestor abc mergeoid");
-		assert.ok(isAncestor >= 0 && capture > isAncestor && allBases > capture);
-		assert.ok(upstreamDiff > allBases && endpointDiff > upstreamDiff);
-		assert.ok(treeIdx > endpointDiff && ours > treeIdx);
-		assert.ok(reRead > ours && firstParent > reRead && secondParent > firstParent);
-		assert.ok(treeAgain > ours && ancestorOnMerge > treeAgain);
-		assert.ok(!argv.some((a) => a.includes("origin/main") && a[0] !== "rev-parse" && a[0] !== "fetch"));
-		// Every post-merge probe binds to captured OIDs, never to symbolic HEAD.
-		assert.ok(!keys.slice(ours + 1).some((k) => k !== "rev-parse --verify HEAD^{commit}" && k.includes("HEAD")));
-		assert.ok(!keys.includes("merge --no-edit abc"));
-		assert.ok(!argv.some((a) => a[0] === "reset"));
-	});
+	// 40-hex OIDs for the shortcut mocks: the intent record validates OID shape strictly.
+	const OID_HEAD = "1".repeat(40);
+	const OID_MERGE = "2".repeat(40);
+	const OID_TREE = "3".repeat(40);
+	const OID_MAIN = "d".repeat(40);
+	const MOCK_BRANCH = "feat/tool-99";
 
-	/** Shared mock for the post-`ours` probe tests: proof passes bound to "headoid". */
-	function oursProbeExec(argv: string[][], overrides: (key: string) => string | null): (args: readonly string[]) => string {
-		return (args) => {
+	/** Shared mock for the shortcut/probe tests: proof passes bound to OID_HEAD; the
+	 *  intent record lands under a per-call temp mainRepo (returned for assertions). */
+	function oursProbeExec(argv: string[][], overrides: (key: string) => string | null): { exec: (args: readonly string[]) => string; mainRepo: string } {
+		const mainRepo = mkdtempSync(join(tmpdir(), "pelaggio-ours-intent-"));
+		const exec = (args: readonly string[]): string => {
 			argv.push([...args]);
 			const key = args.join(" ");
 			const overridden = overrides(key);
@@ -1360,66 +1322,120 @@ describe("preparePrShipFreshness / verifyPrShipFreshness", () => {
 			if (key === "diff --name-only --diff-filter=U") return "";
 			if (key === "status --porcelain") return "";
 			if (key === "fetch origin main") return "";
-			if (key === "rev-parse --verify origin/main") return "abc";
-			if (key === "merge-base --is-ancestor abc HEAD") throw new Error("behind");
-			if (key === "merge-base --all headoid abc") return "baseoid";
-			if (key === "diff-tree -r --name-only -z --no-renames baseoid abc") return "copied.ts\0";
-			if (key === "diff-tree -r --name-only -z --no-renames headoid abc") return "feat.ts\0";
-			if (key === "rev-parse headoid^{tree}") return "treeoid";
-			if (key === "merge --no-edit --strategy=ours abc") return "";
-			if (key === "rev-parse --verify mergeoid^1^{commit}") return "headoid";
-			if (key === "rev-parse --verify mergeoid^2^{commit}") return "abc";
-			if (key === "rev-parse mergeoid^{tree}") return "treeoid";
-			if (key === "merge-base --is-ancestor abc mergeoid") return "";
+			if (key === "rev-parse --verify origin/main") return OID_MAIN;
+			if (key === `merge-base --is-ancestor ${OID_MAIN} HEAD`) throw new Error("behind");
+			if (key === `merge-base --all ${OID_HEAD} ${OID_MAIN}`) return "baseoid";
+			if (key === `diff-tree -r --name-only -z --no-renames baseoid ${OID_MAIN}`) return "copied.ts\0";
+			if (key === `diff-tree -r --name-only -z --no-renames ${OID_HEAD} ${OID_MAIN}`) return "feat.ts\0";
+			if (key === `rev-parse ${OID_HEAD}^{tree}`) return OID_TREE;
+			if (key === "rev-parse --abbrev-ref HEAD") return MOCK_BRANCH;
+			if (key === "rev-parse --path-format=absolute --git-common-dir") return join(mainRepo, ".git");
+			if (key === `merge --no-edit --strategy=ours ${OID_MAIN}`) return "";
+			if (key === `rev-parse --verify ${OID_MERGE}^1^{commit}`) return OID_HEAD;
+			if (key === `rev-parse --verify ${OID_MERGE}^2^{commit}`) return OID_MAIN;
+			if (key === `rev-parse ${OID_MERGE}^{tree}`) return OID_TREE;
+			if (key === `merge-base --is-ancestor ${OID_MAIN} ${OID_MERGE}`) return "";
 			throw new Error(`unexpected argv: ${key}`);
 		};
+		return { exec, mainRepo };
 	}
+
+	it("pins the successful-proof argv: captured HEAD OID binds the proof, ours merge, then parent/tree/ancestry probes", () => {
+		const argv: string[][] = [];
+		let headReads = 0;
+		const { exec, mainRepo } = oursProbeExec(argv, (key) => {
+			if (key === "rev-parse --verify HEAD^{commit}") {
+				headReads += 1;
+				return headReads === 1 ? OID_HEAD : OID_MERGE;
+			}
+			return null;
+		});
+		const result = preparePrShipFreshness("/tmp/freshness-ours-argv", exec);
+		assert.equal(result.kind, "content-integrated");
+		if (result.kind !== "content-integrated") return;
+		assert.equal(result.originMainOid, OID_MAIN);
+		assert.deepEqual(result.upstreamTouchedFiles, ["copied.ts"]);
+		assert.equal(headReads, 2);
+		const keys = argv.map((a) => a.join(" "));
+		const isAncestor = keys.indexOf(`merge-base --is-ancestor ${OID_MAIN} HEAD`);
+		const capture = keys.indexOf("rev-parse --verify HEAD^{commit}");
+		const allBases = keys.indexOf(`merge-base --all ${OID_HEAD} ${OID_MAIN}`);
+		const upstreamDiff = keys.indexOf(`diff-tree -r --name-only -z --no-renames baseoid ${OID_MAIN}`);
+		const endpointDiff = keys.indexOf(`diff-tree -r --name-only -z --no-renames ${OID_HEAD} ${OID_MAIN}`);
+		const treeIdx = keys.indexOf(`rev-parse ${OID_HEAD}^{tree}`);
+		const ours = keys.indexOf(`merge --no-edit --strategy=ours ${OID_MAIN}`);
+		const reRead = keys.lastIndexOf("rev-parse --verify HEAD^{commit}");
+		const firstParent = keys.indexOf(`rev-parse --verify ${OID_MERGE}^1^{commit}`);
+		const secondParent = keys.indexOf(`rev-parse --verify ${OID_MERGE}^2^{commit}`);
+		const treeAgain = keys.indexOf(`rev-parse ${OID_MERGE}^{tree}`);
+		const ancestorOnMerge = keys.indexOf(`merge-base --is-ancestor ${OID_MAIN} ${OID_MERGE}`);
+		assert.ok(isAncestor >= 0 && capture > isAncestor && allBases > capture);
+		assert.ok(upstreamDiff > allBases && endpointDiff > upstreamDiff);
+		assert.ok(treeIdx > endpointDiff && ours > treeIdx);
+		assert.ok(reRead > ours && firstParent > reRead && secondParent > firstParent);
+		assert.ok(treeAgain > ours && ancestorOnMerge > treeAgain);
+		assert.ok(!argv.some((a) => a.includes("origin/main") && a[0] !== "rev-parse" && a[0] !== "fetch"));
+		// Every post-merge probe binds to captured OIDs, never to symbolic HEAD.
+		assert.ok(!keys.slice(ours + 1).some((k) => k !== "rev-parse --verify HEAD^{commit}" && k.includes("HEAD")));
+		assert.ok(!keys.includes(`merge --no-edit ${OID_MAIN}`));
+		assert.ok(!argv.some((a) => a[0] === "reset"));
+		// The intent/confirmation bracket closed: intent was durably recorded before the
+		// merge and confirmed with the probe-verified merge OID.
+		const record = readFreshnessOursIntent(mainRepo, MOCK_BRANCH);
+		assert.equal(record.kind, "record");
+		if (record.kind !== "record") return;
+		assert.equal(record.record.state, "confirmed");
+		assert.equal(record.record.mergeOid, OID_MERGE);
+		assert.equal(record.record.headOid, OID_HEAD);
+		assert.equal(record.record.expectedTreeOid, OID_TREE);
+	});
 
 	// The post-`ours` probes fail closed as `failed` — never `content-integrated`, never a
 	// silent fallthrough — and roll the tainted merge commit back to its first parent so a
-	// resume cannot launder the refused ancestry through `up-to-date`.
+	// resume cannot launder the refused ancestry through `up-to-date`. The intent record
+	// stays UNCONFIRMED either way: the durable guarantee when rollback cannot run.
 	it("fails closed and rolls back when the ours merge changed the HEAD tree instead of preserving it", () => {
 		const argv: string[][] = [];
 		let headReads = 0;
-		const result = preparePrShipFreshness(
-			"/tmp/freshness-ours-tree-drift",
-			oursProbeExec(argv, (key) => {
-				if (key === "rev-parse --verify HEAD^{commit}") {
-					headReads += 1;
-					return headReads === 1 ? "headoid" : "mergeoid";
-				}
-				if (key === "rev-parse mergeoid^{tree}") return "differenttree";
-				if (key === "reset --keep headoid") return "";
-				return null;
-			}),
-		);
+		const { exec, mainRepo } = oursProbeExec(argv, (key) => {
+			if (key === "rev-parse --verify HEAD^{commit}") {
+				headReads += 1;
+				return headReads === 1 ? OID_HEAD : OID_MERGE;
+			}
+			if (key === `rev-parse ${OID_MERGE}^{tree}`) return "4".repeat(40);
+			if (key === `reset --keep ${OID_HEAD}`) return "";
+			return null;
+		});
+		const result = preparePrShipFreshness("/tmp/freshness-ours-tree-drift", exec);
 		assert.equal(result.kind, "failed");
 		if (result.kind !== "failed") return;
 		assert.match(result.detail, /HEAD tree changed/);
-		assert.match(result.detail, /rolled the branch back to headoid/);
-		assert.ok(argv.some((a) => a.join(" ") === "reset --keep headoid"));
+		assert.ok(result.detail.includes(`rolled the branch back to ${OID_HEAD}`));
+		assert.ok(argv.some((a) => a.join(" ") === `reset --keep ${OID_HEAD}`));
+		const record = readFreshnessOursIntent(mainRepo, MOCK_BRANCH);
+		assert.equal(record.kind === "record" && record.record.state, "intent");
 	});
 
 	it("fails closed and rolls back when the ours merge did not make the fetched OID an ancestor", () => {
 		const argv: string[][] = [];
 		let headReads = 0;
-		const result = preparePrShipFreshness(
-			"/tmp/freshness-ours-no-ancestry",
-			oursProbeExec(argv, (key) => {
-				if (key === "rev-parse --verify HEAD^{commit}") {
-					headReads += 1;
-					return headReads === 1 ? "headoid" : "mergeoid";
-				}
-				if (key === "merge-base --is-ancestor abc mergeoid") throw new Error("not an ancestor");
-				if (key === "reset --keep headoid") return "";
-				return null;
-			}),
-		);
+		const { exec, mainRepo } = oursProbeExec(argv, (key) => {
+			if (key === "rev-parse --verify HEAD^{commit}") {
+				headReads += 1;
+				return headReads === 1 ? OID_HEAD : OID_MERGE;
+			}
+			if (key === `merge-base --is-ancestor ${OID_MAIN} ${OID_MERGE}`) throw new Error("not an ancestor");
+			if (key === `reset --keep ${OID_HEAD}`) return "";
+			return null;
+		});
+		const result = preparePrShipFreshness("/tmp/freshness-ours-no-ancestry", exec);
 		assert.equal(result.kind, "failed");
 		if (result.kind !== "failed") return;
 		assert.match(result.detail, /not an ancestor of HEAD/);
-		assert.match(result.detail, /rolled the branch back to headoid/);
-		assert.ok(argv.some((a) => a.join(" ") === "reset --keep headoid"));
+		assert.ok(result.detail.includes(`rolled the branch back to ${OID_HEAD}`));
+		assert.ok(argv.some((a) => a.join(" ") === `reset --keep ${OID_HEAD}`));
+		const record = readFreshnessOursIntent(mainRepo, MOCK_BRANCH);
+		assert.equal(record.kind === "record" && record.record.state, "intent");
 	});
 
 	it("does not roll back a HEAD it does not recognize as its own ours merge commit", () => {
@@ -1427,22 +1443,22 @@ describe("preparePrShipFreshness / verifyPrShipFreshness", () => {
 		let headReads = 0;
 		// A foreign commit landed on top of the ours merge before the probes: HEAD's
 		// second parent is not the fetched OID, so the harness must not reset anything.
-		const result = preparePrShipFreshness(
-			"/tmp/freshness-ours-foreign-head",
-			oursProbeExec(argv, (key) => {
-				if (key === "rev-parse --verify HEAD^{commit}") {
-					headReads += 1;
-					return headReads === 1 ? "headoid" : "mergeoid";
-				}
-				if (key === "rev-parse --verify mergeoid^2^{commit}") throw new Error("no second parent");
-				return null;
-			}),
-		);
+		const { exec, mainRepo } = oursProbeExec(argv, (key) => {
+			if (key === "rev-parse --verify HEAD^{commit}") {
+				headReads += 1;
+				return headReads === 1 ? OID_HEAD : OID_MERGE;
+			}
+			if (key === `rev-parse --verify ${OID_MERGE}^2^{commit}`) throw new Error("no second parent");
+			return null;
+		});
+		const result = preparePrShipFreshness("/tmp/freshness-ours-foreign-head", exec);
 		assert.equal(result.kind, "failed");
 		if (result.kind !== "failed") return;
 		assert.match(result.detail, /second parent/);
 		assert.match(result.detail, /branch left as-is/);
 		assert.ok(!argv.some((a) => a[0] === "reset"));
+		const record = readFreshnessOursIntent(mainRepo, MOCK_BRANCH);
+		assert.equal(record.kind === "record" && record.record.state, "intent");
 	});
 
 	it("TOCTOU: a HEAD moved between the equivalence proof and the merge fails closed and leaves no recorded ancestry", () => {
@@ -1527,6 +1543,128 @@ describe("preparePrShipFreshness / verifyPrShipFreshness", () => {
 		assert.ok(result.upstreamTouchedFiles.includes("src/up.ts"), "the proof must see the real upstream write-set");
 		// The ordinary merge integrated the REAL upstream content, not the replacement.
 		assert.equal(readFileSync(join(worktree, "src/up.ts"), "utf-8"), "export const up = 1;\n");
+	});
+
+	/** Content-copy pair whose shortcut proof passes; returns the pre-run OIDs. */
+	function makeContentCopiedPair(): { worktree: string; origin: string; headOid: string; originMainOid: string; expectedTreeOid: string } {
+		const { worktree, origin } = makeFreshnessPair();
+		commitFile(origin, "src/up.ts", "export const up = 1;\n", "upstream");
+		commitFile(worktree, "src/feature.ts", "export const feat = 1;\n", "feature-only");
+		commitFile(worktree, "src/up.ts", "export const up = 1;\n", "copy up");
+		execSync("git fetch -q origin main", { cwd: worktree });
+		return {
+			worktree,
+			origin,
+			headOid: execSync("git rev-parse HEAD", { cwd: worktree, encoding: "utf-8" }).trim(),
+			originMainOid: execSync("git rev-parse origin/main", { cwd: worktree, encoding: "utf-8" }).trim(),
+			expectedTreeOid: execSync('git rev-parse "HEAD^{tree}"', { cwd: worktree, encoding: "utf-8" }).trim(),
+		};
+	}
+
+	it("laundering is refused: ancestry through an unproven ours merge fails classification and verification closed", () => {
+		const { worktree, headOid, originMainOid, expectedTreeOid } = makeContentCopiedPair();
+		// Fabricate the residual directly: a merge with the recorded parent pair whose
+		// tree is NOT the proven feature tree (upstream's tree — feature work missing),
+		// left in history with only an unconfirmed intent to witness it.
+		const badMerge = execSync(`git commit-tree "${originMainOid}^{tree}" -p ${headOid} -p ${originMainOid} -m fake-ours`, { cwd: worktree, encoding: "utf-8" }).trim();
+		execSync(`git reset -q --hard ${badMerge}`, { cwd: worktree });
+		writeFreshnessOursIntent(worktree, { branch: "feat/tool-99", headOid, originMainOid, expectedTreeOid, recordedAt: new Date().toISOString() });
+		const result = preparePrShipFreshness(worktree);
+		assert.equal(result.kind, "failed");
+		if (result.kind !== "failed") return;
+		assert.match(result.detail, /unproven ours merge/);
+		assert.ok(result.detail.includes(badMerge));
+		// Call site 2: the deterministic verification gate refuses the same ancestry.
+		const verified = verifyPrShipFreshness(worktree, originMainOid);
+		assert.equal(verified.ok, false);
+		// The unconfirmed record is never auto-expired into a pass.
+		const record = readFreshnessOursIntent(worktree, "feat/tool-99");
+		assert.equal(record.kind === "record" && record.record.state, "intent");
+	});
+
+	it("a ^2-probe failure leaves the unconfirmed intent as the guarantee; the next run retro-confirms instead of blind up-to-date", () => {
+		const { worktree } = makeContentCopiedPair();
+		const first = preparePrShipFreshness(worktree, (args, cwd) => {
+			if (args[0] === "rev-parse" && args[1] === "--verify" && args[2]?.endsWith("^2^{commit}")) throw new Error("probe infra failure");
+			return execFileSync("git", [...args], { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+		});
+		assert.equal(first.kind, "failed");
+		if (first.kind !== "failed") return;
+		assert.match(first.detail, /second parent/);
+		assert.match(first.detail, /branch left as-is/);
+		// The unproven merge is still in history — rollback recognition failed — but the
+		// intent record survives on disk, unconfirmed (durable across a process restart:
+		// there is no in-memory registry, disk is the only store).
+		const mergeOid = execSync("git rev-parse HEAD", { cwd: worktree, encoding: "utf-8" }).trim();
+		const pending = readFreshnessOursIntent(worktree, "feat/tool-99");
+		assert.equal(pending.kind === "record" && pending.record.state, "intent");
+		// Next evaluation must not trust ancestry blindly: it retrospectively completes
+		// the bracket (probes pass — the merge is a faithful ours merge) and only then
+		// classifies up-to-date.
+		const second = preparePrShipFreshness(worktree);
+		assert.equal(second.kind, "up-to-date");
+		const confirmed = readFreshnessOursIntent(worktree, "feat/tool-99");
+		assert.equal(confirmed.kind, "record");
+		if (confirmed.kind !== "record") return;
+		assert.equal(confirmed.record.state, "confirmed");
+		assert.equal(confirmed.record.mergeOid, mergeOid);
+	});
+
+	it("a concurrent commit atop the ours merge defeats rollback but not the bracket: next run retro-confirms the merge beneath", () => {
+		const { worktree } = makeContentCopiedPair();
+		let mergeOid = "";
+		const first = preparePrShipFreshness(worktree, (args, cwd) => {
+			const out = execFileSync("git", [...args], { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+			if (args[0] === "merge" && args.includes("--strategy=ours")) {
+				mergeOid = execSync("git rev-parse HEAD", { cwd: worktree, encoding: "utf-8" }).trim();
+				writeFileSync(join(worktree, "atop.txt"), "raced\n");
+				execSync("git add atop.txt && git commit -q -m atop", { cwd: worktree });
+			}
+			return out;
+		});
+		assert.equal(first.kind, "failed");
+		if (first.kind !== "failed") return;
+		assert.match(first.detail, /second parent/);
+		assert.match(first.detail, /branch left as-is/);
+		const pending = readFreshnessOursIntent(worktree, "feat/tool-99");
+		assert.equal(pending.kind === "record" && pending.record.state, "intent");
+		const second = preparePrShipFreshness(worktree);
+		assert.equal(second.kind, "up-to-date");
+		const confirmed = readFreshnessOursIntent(worktree, "feat/tool-99");
+		assert.equal(confirmed.kind, "record");
+		if (confirmed.kind !== "record") return;
+		assert.equal(confirmed.record.state, "confirmed");
+		assert.equal(confirmed.record.mergeOid, mergeOid);
+		// The concurrent commit itself is preserved untouched at HEAD.
+		assert.equal(readFileSync(join(worktree, "atop.txt"), "utf-8"), "raced\n");
+	});
+
+	it("happy path closes the bracket: content-integrated confirms the record and later classification stays up-to-date", () => {
+		const { worktree } = makeContentCopiedPair();
+		const first = preparePrShipFreshness(worktree);
+		assert.equal(first.kind, "content-integrated");
+		const mergeOid = execSync("git rev-parse HEAD", { cwd: worktree, encoding: "utf-8" }).trim();
+		const confirmed = readFreshnessOursIntent(worktree, "feat/tool-99");
+		assert.equal(confirmed.kind, "record");
+		if (confirmed.kind !== "record") return;
+		assert.equal(confirmed.record.state, "confirmed");
+		assert.equal(confirmed.record.mergeOid, mergeOid);
+		// Regression pin: a confirmed record behaves exactly as before the bracket existed.
+		const second = preparePrShipFreshness(worktree);
+		assert.equal(second.kind, "up-to-date");
+		assert.deepEqual(verifyPrShipFreshness(worktree, first.kind === "content-integrated" ? first.originMainOid : ""), { ok: true });
+	});
+
+	it("an unreadable intent record fails classification closed rather than reading as absent", () => {
+		const { worktree } = makeFreshnessPair();
+		// origin/main is trivially an ancestor (clone tip): the plain up-to-date path.
+		const dir = join(worktree, ".dev", "freshness-ours-intents");
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(join(dir, `${encodeURIComponent("feat/tool-99")}.json`), "{ not json");
+		const result = preparePrShipFreshness(worktree);
+		assert.equal(result.kind, "failed");
+		if (result.kind !== "failed") return;
+		assert.match(result.detail, /cannot be ruled out/);
 	});
 });
 
