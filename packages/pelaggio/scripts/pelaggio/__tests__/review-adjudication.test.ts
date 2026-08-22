@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { parsePatch } from "diff";
+import { PR_REVIEW_MARKER } from "../pr-review-cli.js";
 import { type NewPrReviewFleetGateRecord, type PrReviewGateRecord, writePrReviewGateRecord } from "../pr-review-gate-record.js";
 import {
 	adjudicationSourcesDir,
@@ -28,6 +29,9 @@ import {
 } from "../review/adjudication.js";
 import { materializeAuthoringFinding, type ReviewFinding, reviewFindingFingerprint } from "../review/findings.js";
 import { BASELINE_TAXONOMY, type TaxonomyConfig, tierOf } from "../review/taxonomy.js";
+import { LOCAL_MODE_MARKER } from "../review-sweep.js";
+import { fetchReviewFindingsOutcome } from "../revise-sweep.js";
+import type { GhRunner } from "../roadmap/github-issues.js";
 
 const REVIEWED = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const HEAD = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -75,6 +79,7 @@ function draft(over: Partial<PrAdjudicationSourceDraft> = {}): PrAdjudicationSou
 		completedCells: 2,
 		survivorCount: 1,
 		survivors: [entry],
+		refuted: [],
 		...over,
 	};
 }
@@ -187,7 +192,8 @@ describe("adjudication source store", () => {
 		const invalid = [
 			{ ...record(), survivors: [entry, { ...entry }], survivorCount: 2 },
 			{ ...record(), reviewedSha: "abc" },
-			{ ...record(), agreement: "disagreement" },
+			{ ...record(), agreement: "consensus-pass" },
+			{ ...record(), agreement: "invalid" },
 			{ ...record(), requiredCells: 2, completedCells: 1 },
 			{ ...record(), survivorCount: 0, survivors: [] },
 			{ ...record(), survivors: [{ ...entry, class: "not a class" }] },
@@ -200,6 +206,105 @@ describe("adjudication source store", () => {
 		for (const value of invalid) {
 			assert.throws(() => writeAdjudicationSourceRecord(root(), value as PrAdjudicationSourceRecordV1));
 		}
+	});
+
+	it("validates refuted entries: decision, fingerprint integrity, survivor overlap, and count binding (#525)", () => {
+		const entry = survivor();
+		const goneFinding = finding({ message: "Alleged bug, refuted." });
+		const gone = { finding: goneFinding, fingerprint: reviewFindingFingerprint(goneFinding), verification: { id: "C2", decision: "refuted" as const, rationale: "Not reproducible." } };
+		// Valid: survivorCount binds survivors + refuted (the fleet carried count).
+		const dir = root();
+		writeAdjudicationSourceRecord(dir, record({ refuted: [gone], survivorCount: 2 }));
+		assert.equal(readAdjudicationSourceRecord(dir, 497, REVIEWED)?.survivorCount, 2);
+		const invalid = [
+			// count not including the refuted entry
+			{ ...record(), refuted: [gone] },
+			// a refuted entry cannot claim survives
+			{ ...record(), refuted: [{ ...gone, verification: { ...gone.verification, decision: "survives" } }], survivorCount: 2 },
+			// one carried fingerprint cannot be both surviving and refuted
+			{ ...record(), refuted: [{ finding: finding(), fingerprint: entry.fingerprint, verification: gone.verification }], survivorCount: 2 },
+			// fingerprint must recompute from the finding
+			{ ...record(), refuted: [{ ...gone, fingerprint: "tampered" }], survivorCount: 2 },
+			// closed keys
+			{ ...record(), refuted: [{ ...gone, hunk: { path: "src/a.ts", start: 1, end: 2 } }], survivorCount: 2 },
+			// at least one genuine survivor
+			{ ...record(), survivors: [], refuted: [gone], survivorCount: 1 },
+			// rationale must be single-line — same trust-boundary rule as finding.message
+			{ ...record(), refuted: [{ ...gone, verification: { ...gone.verification, rationale: "line one\nline two" } }], survivorCount: 2 },
+			{ ...record(), survivors: [{ ...entry, verification: { ...entry.verification, rationale: "line one\nline two" } }] },
+		];
+		for (const value of invalid) {
+			assert.throws(() => writeAdjudicationSourceRecord(root(), value as unknown as PrAdjudicationSourceRecordV1));
+		}
+	});
+
+	/** One renderer input with an injection planted in exactly the given model-authored fields. */
+	function renderWithInjection(inject: { survivorMessage?: string; survivorPath?: string; refutedMessage?: string; refutedPath?: string; dispositionRationale?: string; liveRationale?: string }): string {
+		const survivorFinding = finding({
+			...(inject.survivorMessage !== undefined ? { message: inject.survivorMessage } : {}),
+			...(inject.survivorPath !== undefined ? { path: inject.survivorPath } : {}),
+		});
+		const survivorEntry = survivor({ finding: survivorFinding });
+		const goneFinding = finding({
+			message: inject.refutedMessage ?? "Alleged bug, refuted.",
+			...(inject.refutedPath !== undefined ? { path: inject.refutedPath } : {}),
+		});
+		return renderOperatorAdjudicationComment({
+			prNumber: 497,
+			sourceSha: REVIEWED,
+			headSha: HEAD,
+			interdiffDigest: DIGEST,
+			adjudicator: "op",
+			survivors: [survivorEntry],
+			refuted: [{ finding: goneFinding, fingerprint: reviewFindingFingerprint(goneFinding), verification: { id: "C2", decision: "refuted", rationale: inject.liveRationale ?? "Not reproducible." } }],
+			dispositions: { [survivorEntry.fingerprint]: { disposition: "fixed", rationale: inject.dispositionRationale ?? "Contained by the source hunk." } },
+		});
+	}
+
+	it("escapes every model-authored comment field so an injected marker cannot make the PASS comment a scrape target (#597 sweep)", () => {
+		// fetchReviewFindings/revise-sweep selects any TRUSTED comment whose body contains the
+		// fleet marker, and the operator PASS comment is trusted — so every model-authored field
+		// on this surface must pass through the shared escapeMarkdown rule. Each field is tested
+		// in isolation with both scrape-relevant markers.
+		for (const marker of [PR_REVIEW_MARKER, LOCAL_MODE_MARKER]) {
+			const inject = `pwn ${marker} tail`;
+			const bodies: Array<[string, string]> = [
+				["survivor message", renderWithInjection({ survivorMessage: inject })],
+				["survivor path", renderWithInjection({ survivorPath: inject })],
+				["refuted message", renderWithInjection({ refutedMessage: inject })],
+				["refuted path", renderWithInjection({ refutedPath: inject })],
+				["disposition rationale", renderWithInjection({ dispositionRationale: `Live isolated verification C1 refuted the finding (${inject}).` })],
+				["live/fleet refutation rationale", renderWithInjection({ liveRationale: inject })],
+			];
+			for (const [field, body] of bodies) {
+				assert.ok(!body.includes(marker), `${field}: the raw marker must not appear (${marker})`);
+				assert.ok(body.includes("&lt;"), `${field}: escaped, not dropped`);
+				assert.match(body, /### Findings/, `${field}: comment still renders legibly`);
+				assert.match(body, /Carried findings already refuted by the fleet/, `${field}: refuted section intact`);
+			}
+		}
+	});
+
+	it("the actual revise-sweep marker matcher rejects a fully injected operator comment before any authority lookup (#597)", () => {
+		const inject = `pwn ${PR_REVIEW_MARKER} tail`;
+		const body = renderWithInjection({
+			survivorMessage: inject,
+			survivorPath: inject,
+			refutedMessage: inject,
+			refutedPath: inject,
+			dispositionRationale: inject,
+			liveRationale: inject,
+		});
+		const ghCalls: string[][] = [];
+		const gh: GhRunner = (args) => {
+			ghCalls.push([...args]);
+			return { stdout: JSON.stringify({ comments: [{ body, createdAt: "2026-08-21T00:00:00Z", author: { login: "someone" } }] }), stderr: "", status: 0 };
+		};
+		// The selector's marker filter (`body.includes(PR_REVIEW_MARKER)`) runs before the trust
+		// check; an escaped body must be rejected by the filter itself — exactly one gh call (the
+		// pr view), never an identity/permission lookup, and nothing written.
+		assert.equal(fetchReviewFindingsOutcome(gh, "o/r", 497, join(root(), "findings.md")), "no-trusted-comment");
+		assert.equal(ghCalls.length, 1, "the marker filter must reject before any authority lookup");
 	});
 
 	it("rejects incomplete cells, non-surviving verification, and digest/count mismatches on read", () => {
@@ -226,6 +331,12 @@ describe("adjudication source store", () => {
 		assert.equal(readAdjudicationSourceRecord(dir, 497, REVIEWED), null);
 	});
 
+	it("round-trips a disagreement record — the invalid-pass split shape (#525)", () => {
+		const dir = root();
+		writeAdjudicationSourceRecord(dir, record({ agreement: "disagreement" }));
+		assert.equal(readAdjudicationSourceRecord(dir, 497, REVIEWED)?.agreement, "disagreement");
+	});
+
 	it("adjudicationSourcesDir lands under .dev", () => {
 		assert.equal(adjudicationSourcesDir("/repo"), join("/repo", ".dev", "pr-review-adjudication-sources"));
 	});
@@ -242,7 +353,7 @@ describe("emission-time classification", () => {
 			completedCells: 1,
 			ok: true,
 			survivors: [finding()],
-			verifications: new Map([[reviewFindingFingerprint(finding()), { id: "C1", rationale: "Still present." }]]),
+			verifications: new Map([[reviewFindingFingerprint(finding()), { id: "C1", decision: "survives" as const, rationale: "Still present." }]]),
 			inspectionDiff: inspectionDiff(),
 			changedFiles: ["src/a.ts"],
 			taxonomy: BASELINE_TAXONOMY,
@@ -265,7 +376,7 @@ describe("emission-time classification", () => {
 			completedCells: 1,
 			ok: true,
 			survivors: [judged],
-			verifications: new Map([[reviewFindingFingerprint(judged), { id: "C1", rationale: "Still present." }]]),
+			verifications: new Map([[reviewFindingFingerprint(judged), { id: "C1", decision: "survives" as const, rationale: "Still present." }]]),
 			inspectionDiff: inspectionDiff(),
 			changedFiles: ["src/a.ts"],
 			taxonomy,
@@ -273,6 +384,75 @@ describe("emission-time classification", () => {
 		assert.ok(built);
 		assert.equal(built.survivors[0]?.tier, "judgment");
 		assert.equal(built.survivors[0]?.class, "judgment");
+	});
+
+	it("emits a draft for a complete disagreement split and suppresses non-adjudicable shapes (#525)", () => {
+		const base = {
+			prNumber: 497,
+			itemId: "497",
+			reviewedSha: REVIEWED,
+			requiredCells: 3,
+			completedCells: 3,
+			ok: true,
+			survivors: [finding()],
+			verifications: new Map([[reviewFindingFingerprint(finding()), { id: "C1", decision: "survives" as const, rationale: "Still present." }]]),
+			inspectionDiff: inspectionDiff(),
+			changedFiles: ["src/a.ts"],
+			taxonomy: BASELINE_TAXONOMY,
+		} as const;
+		const built = buildAdjudicationSourceDraft({ ...base, agreement: "disagreement" });
+		assert.ok(built);
+		assert.equal(built.agreement, "disagreement");
+		assert.equal(buildAdjudicationSourceDraft({ ...base, agreement: "consensus-pass" }), undefined);
+		assert.equal(buildAdjudicationSourceDraft({ ...base, agreement: "invalid" }), undefined);
+		assert.equal(buildAdjudicationSourceDraft({ ...base, agreement: "disagreement", ok: false }), undefined);
+	});
+
+	it("splits latest-refuted carried findings into refuted entries instead of suppressing the draft (#525 must-fix)", () => {
+		const surviving = finding();
+		// Unmappable on purpose (line outside every hunk): refuted entries need no hunk, so this
+		// must NOT suppress the draft the way an unmappable SURVIVOR does.
+		const gone = finding({ message: "Alleged bug, refuted.", line: 99 });
+		const base = {
+			prNumber: 497,
+			itemId: "497",
+			reviewedSha: REVIEWED,
+			agreement: "disagreement",
+			requiredCells: 3,
+			completedCells: 3,
+			ok: true,
+			survivors: [surviving, gone],
+			inspectionDiff: inspectionDiff(),
+			changedFiles: ["src/a.ts"],
+			taxonomy: BASELINE_TAXONOMY,
+		} as const;
+		const built = buildAdjudicationSourceDraft({
+			...base,
+			verifications: new Map([
+				[reviewFindingFingerprint(surviving), { id: "C1", decision: "survives" as const, rationale: "Still present." }],
+				[reviewFindingFingerprint(gone), { id: "C2", decision: "refuted" as const, rationale: "Fixed in the final iteration." }],
+			]),
+		});
+		assert.ok(built);
+		assert.equal(built.survivorCount, 2);
+		assert.equal(built.survivors.length, 1);
+		assert.equal(built.survivors[0]?.finding.message, surviving.message);
+		assert.deepEqual(built.refuted, [{ finding: gone, fingerprint: reviewFindingFingerprint(gone), verification: { id: "C2", decision: "refuted", rationale: "Fixed in the final iteration." } }]);
+		// Round-trips through the store and stays bindable.
+		const dir = root();
+		writeAdjudicationSourceRecord(dir, { ...built, fleetRecordDigest: DIGEST });
+		assert.equal(readAdjudicationSourceRecord(dir, 497, REVIEWED)?.refuted.length, 1);
+		// All-refuted leaves nothing to adjudicate — no draft.
+		assert.equal(
+			buildAdjudicationSourceDraft({
+				...base,
+				verifications: new Map([
+					[reviewFindingFingerprint(surviving), { id: "C1", decision: "refuted" as const, rationale: "Gone." }],
+					[reviewFindingFingerprint(gone), { id: "C2", decision: "refuted" as const, rationale: "Gone." }],
+				]),
+			}),
+			undefined,
+		);
 	});
 });
 
@@ -284,7 +464,29 @@ describe("fleet eligibility and binding", () => {
 		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ breakerReason: "diminishing-returns" }) }), true);
 	});
 
-	it("refuses v1, operator, pass, disagreement/invalid-pass, diversity, zero-survivor, and mismatched-count cases", () => {
+	it("accepts the complete disagreement/invalid-pass split — the PR #589 shape (#525)", () => {
+		// Live shape from .dev/pr-review-gate-records/589-c0051a…json: a genuine verdict split
+		// (claude=pass, codex=block, grok=pass) whose breaker the convergence loop labels
+		// `invalid-pass` even though ok=true proves every review was structurally valid.
+		const prShape = fleet({ subtype: "invalid-pass", agreement: "disagreement", breakerReason: "invalid-pass", iterations: 1, survivorCount: 4 });
+		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...prShape }), true);
+		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ agreement: "disagreement" }) }), true);
+		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ breakerReason: "invalid-pass", agreement: "disagreement" }) }), true);
+		// A genuinely broken run (parse/infra failure) keeps ok=false / agreement=invalid — refused.
+		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ ok: false, agreement: "invalid", breakerReason: "invalid-pass" }) }), false);
+		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ agreement: "invalid", breakerReason: "invalid-pass" }) }), false);
+		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ ok: false, agreement: "disagreement", breakerReason: "invalid-pass" }) }), false);
+	});
+
+	it("pins the loop-unreachable consensus-block+invalid-pass combo as eligible on completeness alone (#525, deliberate)", () => {
+		// The convergence loop never emits breaker invalid-pass alongside consensus-block. If such
+		// a record appears anyway, eligibility keys on the completeness fields (ok, agreement,
+		// survivors) — refusing on the breaker token would add no integrity, since a forged record
+		// can name any breaker. Pinned so the INELIGIBLE_BREAKERS loosening stays deliberate.
+		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ breakerReason: "invalid-pass" }) }), true);
+	});
+
+	it("refuses v1, operator, pass, broken-review, diversity, zero-survivor, and mismatched-count cases", () => {
 		assert.equal(
 			isEligibleFleetGateRecord({
 				schemaVersion: 1,
@@ -323,9 +525,10 @@ describe("fleet eligibility and binding", () => {
 			false,
 		);
 		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ gate: "pass", agreement: "consensus-pass", survivorCount: 0 }) }), false);
-		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ agreement: "disagreement", breakerReason: "invalid-pass" }) }), false);
-		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ breakerReason: "invalid-pass" }) }), false);
+		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ agreement: "consensus-pass" }) }), false);
+		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ agreement: "invalid" }) }), false);
 		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ breakerReason: "provider-diversity", agreement: "invalid" }) }), false);
+		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ breakerReason: "provider-diversity" }) }), false);
 		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ ok: false }) }), false);
 		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ survivorCount: 0 }) }), false);
 	});
@@ -368,6 +571,24 @@ describe("fleet eligibility and binding", () => {
 		assert.deepEqual(crossCheckAdjudicationSource(source, { schemaVersion: 2, ...fleet() }, bytes, { prNumber: 497, itemId: "497" }), { ok: true });
 		assert.equal(crossCheckAdjudicationSource(source, { schemaVersion: 2, ...fleet() }, Buffer.from("tampered"), { prNumber: 497, itemId: "497" }).ok, false);
 		assert.equal(crossCheckAdjudicationSource({ ...source, prNumber: 1 }, { schemaVersion: 2, ...fleet() }, bytes, { prNumber: 497, itemId: "497" }).ok, false);
+		// #525: the agreements must match EXACTLY — a consensus-block sidecar cannot bind a
+		// disagreement fleet record or vice versa, while a matching disagreement pair binds.
+		const splitFleet = fleet({ agreement: "disagreement", breakerReason: "invalid-pass", subtype: "invalid-pass" });
+		const splitPath = writePrReviewGateRecord(root(), splitFleet);
+		const splitBytes = readFileSync(splitPath);
+		const splitSource = record({ agreement: "disagreement", fleetRecordDigest: fleetRecordDigestOf(splitBytes) });
+		assert.deepEqual(crossCheckAdjudicationSource(splitSource, { schemaVersion: 2, ...splitFleet }, splitBytes, { prNumber: 497, itemId: "497" }), { ok: true });
+		assert.equal(crossCheckAdjudicationSource(source, { schemaVersion: 2, ...splitFleet }, splitBytes, { prNumber: 497, itemId: "497" }).ok, false);
+		assert.equal(crossCheckAdjudicationSource({ ...splitSource, agreement: "consensus-block" }, { schemaVersion: 2, ...splitFleet }, splitBytes, { prNumber: 497, itemId: "497" }).ok, false);
+		// The fleet carried count includes refuted-retained findings: survivors + refuted must bind it.
+		const goneFinding = finding({ message: "Alleged bug, refuted." });
+		const gone = { finding: goneFinding, fingerprint: reviewFindingFingerprint(goneFinding), verification: { id: "C2", decision: "refuted" as const, rationale: "Not reproducible." } };
+		const carriedFleet = fleet({ agreement: "disagreement", breakerReason: "invalid-pass", subtype: "invalid-pass", survivorCount: 2 });
+		const carriedPath = writePrReviewGateRecord(root(), carriedFleet);
+		const carriedBytes = readFileSync(carriedPath);
+		const carriedSource = record({ agreement: "disagreement", refuted: [gone], survivorCount: 2, fleetRecordDigest: fleetRecordDigestOf(carriedBytes) });
+		assert.deepEqual(crossCheckAdjudicationSource(carriedSource, { schemaVersion: 2, ...carriedFleet }, carriedBytes, { prNumber: 497, itemId: "497" }), { ok: true });
+		assert.equal(crossCheckAdjudicationSource({ ...carriedSource, refuted: [] }, { schemaVersion: 2, ...carriedFleet }, carriedBytes, { prNumber: 497, itemId: "497" }).ok, false);
 		assert.equal(
 			crossCheckAdjudicationSource(
 				{ ...source, survivorCount: 2, survivors: [survivor(), survivor({ finding: finding({ message: "other" }), fingerprint: reviewFindingFingerprint(finding({ message: "other" })) })] },
@@ -436,8 +657,8 @@ describe("source-hunk mapping", () => {
 			ok: true,
 			survivors: [located, missing],
 			verifications: new Map([
-				[reviewFindingFingerprint(located), { id: "C1", rationale: "A" }],
-				[reviewFindingFingerprint(missing), { id: "C2", rationale: "B" }],
+				[reviewFindingFingerprint(located), { id: "C1", decision: "survives" as const, rationale: "A" }],
+				[reviewFindingFingerprint(missing), { id: "C2", decision: "survives" as const, rationale: "B" }],
 			]),
 			inspectionDiff: inspectionDiff(),
 			changedFiles: ["src/a.ts"],

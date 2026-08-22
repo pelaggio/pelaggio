@@ -11,6 +11,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { parsePatch, type StructuredPatch } from "diff";
+import { escapeMarkdown } from "../helpers.js";
 import type { PrReviewAgreement } from "../pr-review-cli.js";
 import type { NewPrReviewOperatorGateRecord, PrReviewFindingDispositionEntry, PrReviewGateRecord } from "../pr-review-gate-record.js";
 import { type ClassificationResult, type ClassificationSignalKind, materializeAuthoringFinding, type ReviewFinding, type ReviewFindingClass, type ReviewFindingSeverity, reviewFindingFingerprint } from "./findings.js";
@@ -39,9 +40,10 @@ const SEVERITIES: readonly ReviewFindingSeverity[] = ["must-fix", "nice", "note"
 const TIERS: readonly FindingTier[] = ["safety", "judgment"];
 const CLASSIFICATION_SIGNALS: readonly ClassificationSignalKind[] = ["fingerprint", "cwe", "ruleId", "path", "classHint-elevation"];
 
-const DRAFT_KEYS = ["prNumber", "itemId", "reviewedSha", "agreement", "requiredCells", "completedCells", "survivorCount", "survivors"] as const;
+const DRAFT_KEYS = ["prNumber", "itemId", "reviewedSha", "agreement", "requiredCells", "completedCells", "survivorCount", "survivors", "refuted"] as const;
 const RECORD_KEYS = [...DRAFT_KEYS, "schemaVersion", "fleetRecordDigest"] as const;
 const SURVIVOR_KEYS = ["finding", "fingerprint", "class", "classification", "tier", "verification", "hunk"] as const;
+const REFUTED_KEYS = ["finding", "fingerprint", "verification"] as const;
 const FINDING_KEYS = ["severity", "message", "path", "line"] as const;
 const VERIFICATION_KEYS = ["id", "decision", "rationale"] as const;
 const HUNK_KEYS = ["path", "start", "end"] as const;
@@ -61,6 +63,26 @@ export interface PrAdjudicationVerification {
 	rationale: string;
 }
 
+/**
+ * A carried finding whose LATEST fleet verification refuted it (#525 must-fix). The gate's
+ * fail-closed invalid-summary rule re-adds every disposed finding to the carried set, so a
+ * disagreement record's `survivorCount` includes findings a complete, valid verification pass
+ * already refuted. Recording them here — with their refutation evidence — keeps the sidecar
+ * bindable (counts match the fleet record) without opening any edit region for them.
+ */
+export interface PrAdjudicationRefutedEntry {
+	finding: ReviewFinding;
+	fingerprint: string;
+	verification: { id: string; decision: "refuted"; rationale: string };
+}
+
+/** Latest-per-fingerprint verification evidence the draft builder consumes. */
+export interface CarriedVerificationEvidence {
+	id: string;
+	decision: "survives" | "refuted";
+	rationale: string;
+}
+
 export interface PrAdjudicationSurvivorEntry {
 	finding: ReviewFinding;
 	fingerprint: string;
@@ -71,15 +93,27 @@ export interface PrAdjudicationSurvivorEntry {
 	hunk: PrAdjudicationHunk;
 }
 
+/**
+ * Fleet agreements adjudication accepts (#525): every required cell completed a structurally
+ * valid review and rendered a genuine model verdict. `disagreement` exhausts with the breaker
+ * label `invalid-pass`, but with `ok: true` no review was invalid — the label marks a terminal
+ * verdict split. Actually-broken runs (parse/infra failure, incomplete matrix) carry
+ * `ok: false` and `agreement: "invalid"` and stay refused everywhere below.
+ */
+export type PrAdjudicableAgreement = "consensus-block" | "disagreement";
+
 export interface PrAdjudicationSourceDraft {
 	prNumber: number;
 	itemId: string;
 	reviewedSha: string;
-	agreement: "consensus-block";
+	agreement: PrAdjudicableAgreement;
 	requiredCells: number;
 	completedCells: number;
+	/** The fleet record's carried count: `survivors.length + refuted.length` (#525). */
 	survivorCount: number;
 	survivors: PrAdjudicationSurvivorEntry[];
+	/** Carried-but-refuted findings. Absent on legacy records; validated as empty. */
+	refuted: PrAdjudicationRefutedEntry[];
 }
 
 export interface PrAdjudicationSourceRecordV1 extends PrAdjudicationSourceDraft {
@@ -194,15 +228,27 @@ function validateClassification(value: unknown): ClassificationResult {
 	};
 }
 
-function validateVerification(value: unknown): PrAdjudicationVerification {
+function validateVerification<D extends "survives" | "refuted">(value: unknown, expected: D): { id: string; decision: D; rationale: string } {
 	if (!isRecord(value)) fail("verification");
 	requireClosedKeys(value, VERIFICATION_KEYS, "verification");
 	const id = requireNonEmptyString(value.id, "verification.id");
 	if (!CANDIDATE_ID_RE.test(id)) fail("verification.id");
-	if (value.decision !== "survives") fail("verification.decision");
+	if (value.decision !== expected) fail("verification.decision");
 	const rationale = requireNonEmptyString(value.rationale, "verification.rationale");
-	if (rationale.trim().length === 0) fail("verification.rationale");
-	return { id, decision: "survives", rationale };
+	// Single-line, matching validateFinding's message rule — trust-boundary validations are uniform.
+	if (rationale.trim().length === 0 || /[\r\n]/.test(rationale)) fail("verification.rationale");
+	return { id, decision: expected, rationale };
+}
+
+function validateRefutedEntry(value: unknown, seen: Set<string>): PrAdjudicationRefutedEntry {
+	if (!isRecord(value)) fail("refuted");
+	requireClosedKeys(value, REFUTED_KEYS, "refuted");
+	const finding = validateFinding(value.finding);
+	const fingerprint = requireNonEmptyString(value.fingerprint, "refuted.fingerprint");
+	// Shares `seen` with the survivor pass: one carried fingerprint is either surviving or refuted.
+	if (fingerprint !== reviewFindingFingerprint(finding) || seen.has(fingerprint)) fail("refuted.fingerprint");
+	seen.add(fingerprint);
+	return { finding, fingerprint, verification: validateVerification(value.verification, "refuted") };
 }
 
 function validateHunk(value: unknown): PrAdjudicationHunk {
@@ -228,7 +274,7 @@ function validateSurvivor(value: unknown, seen: Set<string>): PrAdjudicationSurv
 	const classification = validateClassification(value.classification);
 	if (classification.class !== classId) fail("class");
 	if (!TIERS.includes(value.tier as FindingTier)) fail("tier");
-	const verification = validateVerification(value.verification);
+	const verification = validateVerification(value.verification, "survives");
 	const hunk = validateHunk(value.hunk);
 	return {
 		finding,
@@ -245,25 +291,34 @@ function validateDraftFields(value: Record<string, unknown>): PrAdjudicationSour
 	const prNumber = requirePositiveInt(value.prNumber, "prNumber");
 	const itemId = requireNonEmptyString(value.itemId, "itemId");
 	const reviewedSha = requireSha40(value.reviewedSha, "reviewedSha");
-	if (value.agreement !== "consensus-block") fail("agreement");
+	if (value.agreement !== "consensus-block" && value.agreement !== "disagreement") fail("agreement");
 	const requiredCells = requirePositiveInt(value.requiredCells, "requiredCells");
 	const completedCells = requirePositiveInt(value.completedCells, "completedCells");
 	if (requiredCells !== completedCells) fail("completedCells");
 	const survivorCount = requirePositiveInt(value.survivorCount, "survivorCount");
 	if (!Array.isArray(value.survivors)) fail("survivors");
-	if (value.survivors.length > ADJUDICATION_SOURCE_MAX_SURVIVORS) fail("survivors");
-	if (value.survivors.length !== survivorCount || survivorCount < 1) fail("survivorCount");
+	const refutedRaw = value.refuted === undefined ? [] : value.refuted;
+	if (!Array.isArray(refutedRaw)) fail("refuted");
+	// survivorCount binds to the fleet record's carried count, which the gate's fail-closed
+	// invalid-summary rule pads with refuted findings (#525) — so the cap and the count cover
+	// survivors AND refuted, while at least one genuine survivor is required (nothing to
+	// adjudicate otherwise).
+	if (value.survivors.length < 1) fail("survivors");
+	if (value.survivors.length + refutedRaw.length > ADJUDICATION_SOURCE_MAX_SURVIVORS) fail("survivors");
+	if (value.survivors.length + refutedRaw.length !== survivorCount) fail("survivorCount");
 	const seen = new Set<string>();
 	const survivors = value.survivors.map((entry) => validateSurvivor(entry, seen));
+	const refuted = refutedRaw.map((entry) => validateRefutedEntry(entry, seen));
 	return {
 		prNumber,
 		itemId,
 		reviewedSha,
-		agreement: "consensus-block",
+		agreement: value.agreement,
 		requiredCells,
 		completedCells,
 		survivorCount,
 		survivors,
+		refuted,
 	};
 }
 
@@ -334,12 +389,16 @@ export function listAdjudicationSourceRecords(root: string): PrAdjudicationSourc
 	return records;
 }
 
-const INELIGIBLE_BREAKERS = new Set(["invalid-pass", "provider-diversity"]);
+const INELIGIBLE_BREAKERS = new Set(["provider-diversity"]);
 
 export function isEligibleFleetGateRecord(record: PrReviewGateRecord): boolean {
 	if (record.schemaVersion !== 2 || record.producer !== "fleet") return false;
 	if (record.gate !== "block" || record.ok !== true) return false;
-	if (record.agreement !== "consensus-block") return false;
+	// #525: `disagreement` is adjudicable alongside `consensus-block`. The convergence loop labels
+	// a terminal split's breaker `invalid-pass`, but with `ok: true` every required cell completed
+	// a structurally valid review — nothing was invalid, so the breaker is not disqualifying.
+	// Genuinely broken runs carry `ok: false` / `agreement: "invalid"` and are refused above/here.
+	if (record.agreement !== "consensus-block" && record.agreement !== "disagreement") return false;
 	if ((record.survivorCount ?? 0) < 1) return false;
 	if (record.breakerReason !== undefined && INELIGIBLE_BREAKERS.has(record.breakerReason)) return false;
 	return true;
@@ -369,15 +428,19 @@ export function selectUnambiguousFleetGateRecord(records: readonly PrReviewGateR
 }
 
 export function crossCheckAdjudicationSource(source: PrAdjudicationSourceRecordV1, fleet: PrReviewGateRecord, fleetBytes: Buffer | string, expected: { prNumber: number; itemId: string }): AdjudicationSourceBindResult {
-	if (!isEligibleFleetGateRecord(fleet)) return { ok: false, reason: "latest fleet outcome is not an adjudicable consensus-block" };
+	if (!isEligibleFleetGateRecord(fleet)) return { ok: false, reason: "latest fleet outcome is not an adjudicable complete blocked review" };
 	if (source.prNumber !== expected.prNumber || fleet.prNumber !== expected.prNumber) return { ok: false, reason: "source record PR does not match the targeted pull request" };
 	if (source.itemId !== expected.itemId || fleet.itemId !== expected.itemId) return { ok: false, reason: "source record item does not match the targeted pull request" };
 	if (source.reviewedSha !== fleet.headSha.toLowerCase()) return { ok: false, reason: "source record reviewed SHA does not match the fleet record" };
-	if (source.agreement !== "consensus-block" || (fleet.schemaVersion === 2 && fleet.producer === "fleet" && fleet.agreement !== "consensus-block")) {
+	// Exact agreement match (#525): eligibility above already pins the fleet record to an
+	// adjudicable v2 fleet agreement; the sidecar must claim the SAME one, not merely any of them.
+	const fleetAgreement = fleet.schemaVersion === 2 && fleet.producer === "fleet" ? fleet.agreement : null;
+	if (source.agreement !== fleetAgreement) {
 		return { ok: false, reason: "source record agreement does not match the fleet record" };
 	}
 	const fleetSurvivorCount = fleet.schemaVersion === 1 || (fleet.schemaVersion === 2 && fleet.producer === "fleet") ? (fleet.survivorCount ?? -1) : -1;
-	if (source.survivorCount !== source.survivors.length || source.survivorCount !== fleetSurvivorCount) {
+	// The fleet carried count includes refuted-retained findings (#525): survivors + refuted.
+	if (source.survivorCount !== source.survivors.length + source.refuted.length || source.survivorCount !== fleetSurvivorCount) {
 		return { ok: false, reason: "source record survivor count does not match the fleet record" };
 	}
 	if (source.fleetRecordDigest !== fleetRecordDigestOf(fleetBytes)) {
@@ -411,7 +474,8 @@ export function buildAdjudicationSourceDraft(opts: {
 	completedCells: number;
 	ok: boolean;
 	survivors: readonly ReviewFinding[];
-	verifications: ReadonlyMap<string, { id: string; rationale: string }>;
+	/** Latest-per-fingerprint disposition evidence for every carried finding (#525 must-fix). */
+	verifications: ReadonlyMap<string, CarriedVerificationEvidence>;
 	inspectionDiff: string;
 	changedFiles: readonly string[];
 	taxonomy: TaxonomyConfig;
@@ -419,7 +483,8 @@ export function buildAdjudicationSourceDraft(opts: {
 	if (!Number.isInteger(opts.prNumber) || opts.prNumber <= 0) return undefined;
 	if (typeof opts.itemId !== "string" || opts.itemId.trim() === "") return undefined;
 	if (!SHA40_RE.test(opts.reviewedSha)) return undefined;
-	if (opts.agreement !== "consensus-block" || !opts.ok) return undefined;
+	if ((opts.agreement !== "consensus-block" && opts.agreement !== "disagreement") || !opts.ok) return undefined;
+	const agreement: PrAdjudicableAgreement = opts.agreement;
 	if (!Number.isInteger(opts.requiredCells) || opts.requiredCells <= 0 || opts.requiredCells !== opts.completedCells) return undefined;
 	if (opts.survivors.length < 1 || opts.survivors.length > ADJUDICATION_SOURCE_MAX_SURVIVORS) return undefined;
 	let patches: StructuredPatch[];
@@ -430,22 +495,31 @@ export function buildAdjudicationSourceDraft(opts: {
 	}
 	const seen = new Set<string>();
 	const survivors: PrAdjudicationSurvivorEntry[] = [];
+	const refuted: PrAdjudicationRefutedEntry[] = [];
 	for (const finding of opts.survivors) {
 		const fingerprint = reviewFindingFingerprint(finding);
 		if (seen.has(fingerprint)) return undefined;
 		seen.add(fingerprint);
 		const verification = opts.verifications.get(fingerprint);
 		if (!verification) return undefined;
+		const bare: ReviewFinding = {
+			severity: finding.severity,
+			message: finding.message,
+			...(finding.path !== undefined ? { path: finding.path } : {}),
+			...(finding.line !== undefined ? { line: finding.line } : {}),
+		};
+		if (verification.decision === "refuted") {
+			// #525 must-fix: the gate's fail-closed invalid-summary rule re-adds refuted findings to
+			// the carried set. They are not survivors — record them with their refutation evidence
+			// instead of suppressing the whole sidecar, and open no edit region for their hunks.
+			refuted.push({ finding: bare, fingerprint, verification: { id: verification.id, decision: "refuted", rationale: verification.rationale } });
+			continue;
+		}
 		const hunk = mapFindingToInspectionHunk(finding, patches);
 		if (!hunk) return undefined;
 		const materialized = materializeAuthoringFinding(finding, { changedFiles: opts.changedFiles }, opts.taxonomy);
 		survivors.push({
-			finding: {
-				severity: finding.severity,
-				message: finding.message,
-				...(finding.path !== undefined ? { path: finding.path } : {}),
-				...(finding.line !== undefined ? { line: finding.line } : {}),
-			},
+			finding: bare,
 			fingerprint,
 			class: materialized.class,
 			classification: materialized.classification,
@@ -454,17 +528,18 @@ export function buildAdjudicationSourceDraft(opts: {
 			hunk,
 		});
 	}
-	if (survivors.length !== opts.survivors.length) return undefined;
+	if (survivors.length + refuted.length !== opts.survivors.length) return undefined;
 	try {
 		return validateDraftFields({
 			prNumber: opts.prNumber,
 			itemId: opts.itemId,
 			reviewedSha: opts.reviewedSha.toLowerCase(),
-			agreement: "consensus-block",
+			agreement,
 			requiredCells: opts.requiredCells,
 			completedCells: opts.completedCells,
-			survivorCount: survivors.length,
+			survivorCount: survivors.length + refuted.length,
 			survivors,
+			refuted,
 		});
 	} catch {
 		return undefined;
@@ -735,6 +810,22 @@ export function evaluateInterdiffPolicy(opts: { isAncestor: boolean; interdiff: 
 	return { kind: "eligible", digest, dispositions };
 }
 
+/** Model-authored path:line location, escaped for the public comment (line is a validated int). */
+function renderFindingLocation(finding: ReviewFinding): string {
+	return finding.path ? ` (\`${escapeMarkdown(finding.path)}${finding.line ? `:${finding.line}` : ""}\`)` : "";
+}
+
+/**
+ * PUBLIC comment surface: EVERY model-authored string is escaped at this render site with the
+ * one shared `escapeMarkdown` rule (#597 sweep) — finding.message, finding.path, and every
+ * rationale (disposition rationales embed live/fleet verifier text, and even the harness churn
+ * templates carry model-influenced hunk paths). An unescaped field would let an injected
+ * `<!-- pelaggio-pr-review -->` turn this trusted PASS comment into the newest
+ * fetchReviewFindings/revise-sweep scrape target. Deliberately NOT escaped (closed or validated
+ * grammars, or non-model provenance): severity and disposition enums, candidate ids
+ * (`^C[1-9]\d*$`), line numbers, SHAs/digests, the authenticated adjudicator login, and
+ * harness-authored constants.
+ */
 export function renderOperatorAdjudicationComment(opts: {
 	prNumber: number;
 	sourceSha: string;
@@ -742,13 +833,18 @@ export function renderOperatorAdjudicationComment(opts: {
 	interdiffDigest: string;
 	adjudicator: string;
 	survivors: readonly PrAdjudicationSurvivorEntry[];
+	refuted?: readonly PrAdjudicationRefutedEntry[];
 	dispositions: Record<string, PrReviewFindingDispositionEntry>;
 }): string {
 	const findings = opts.survivors.map((survivor) => {
-		const location = survivor.finding.path ? ` (\`${survivor.finding.path}${survivor.finding.line ? `:${survivor.finding.line}` : ""}\`)` : "";
+		const location = renderFindingLocation(survivor.finding);
 		const entry = opts.dispositions[survivor.fingerprint];
-		const disposition = entry ? ` — **${entry.disposition}** (${entry.rationale})` : "";
-		return `- **${survivor.finding.severity}**${location}: ${survivor.finding.message}${disposition}`;
+		const disposition = entry ? ` — **${entry.disposition}** (${escapeMarkdown(entry.rationale)})` : "";
+		return `- **${survivor.finding.severity}**${location}: ${escapeMarkdown(survivor.finding.message)}${disposition}`;
+	});
+	const refuted = (opts.refuted ?? []).map((entry) => {
+		const location = renderFindingLocation(entry.finding);
+		return `- **${entry.finding.severity}**${location}: ${escapeMarkdown(entry.finding.message)} — **refuted** by fleet isolated verification ${entry.verification.id} (${escapeMarkdown(entry.verification.rationale)}); no repair required`;
 	});
 	return [
 		PR_ADJUDICATION_MARKER,
@@ -761,6 +857,7 @@ export function renderOperatorAdjudicationComment(opts: {
 		"",
 		"### Findings",
 		...findings,
+		...(refuted.length > 0 ? ["", "### Carried findings already refuted by the fleet", ...refuted] : []),
 		"",
 		"If the `review` status was not posted, retry `npx pelaggio pr-adjudicate --pr " + String(opts.prNumber) + "`. Do not run `revise` to recover — any fleet findings comment above predates this adjudication.",
 		"",
