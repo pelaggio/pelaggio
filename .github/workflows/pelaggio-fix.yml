@@ -14,9 +14,15 @@ jobs:
       issues: write
 
     steps:
+      # Credential split (#594): seat steps (model workers) run inside this checkout
+      # (`--no-worktree`), so no token may persist into .git/config where a
+      # prompt-injected seat could read it — persist-credentials would store the
+      # job's contents:write token there for every later step. The harness's git
+      # network ops get the same token step-scoped on "Run pelaggio" below instead.
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
 
@@ -48,7 +54,23 @@ jobs:
           # commit status), so the in-cycle authoring loop is redundant here. Without
           # this the `local` mode fail-closes at pre-flight (CI is an unattended signal).
           PELAGGIO_AUTHORING_ENABLED: "off"
+          # Push credential for the harness's git network ops in this private repo —
+          # the freshness `git fetch origin main` and ship's `git push -u origin HEAD`
+          # (ship/pr-effects.ts). Same `github.token` the persisted checkout credential
+          # carried before #594; now injected below via git's env-based config
+          # (GIT_CONFIG_*) so it lives only in this step's process env, never on disk
+          # in .git/config and never in git argv (`-c` flags land in error messages
+          # and CI logs on failure). Step-scoped env, never job-level. The boundary:
+          # the HARNESS process legitimately holds tokens (it already holds GH_TOKEN
+          # above); SEAT children must not — seat-env denial is #554's half of that
+          # boundary; this split removes the on-disk copy env denial can never reach.
+          PELAGGIO_PUSH_TOKEN: ${{ github.token }}
         run: |
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+          GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf '%s' "x-access-token:${PELAGGIO_PUSH_TOKEN}" | base64 -w0)"
+          export GIT_CONFIG_VALUE_0
+          unset PELAGGIO_PUSH_TOKEN
           pnpm pelaggio \
             --item "${{ github.event.issue.number }}" \
             --no-worktree \
