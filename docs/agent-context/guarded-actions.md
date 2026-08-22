@@ -20,20 +20,21 @@ that split visible rather than closing it:
   had not been checked against (`blockForeignRootWrite`'s denied-root set; `softened`'s
   absence from the merge-gate path; `error_diff`'s zero-cell failure).
 
-**Superseded in part by [ADR-0026](../decisions/0026-stateful-guards-fence-reconcile-and-gate-disposition.md).**
-Those sections have since been decided. Where this document and ADR-0026 differ, **the ADR
-governs** — it carries later corrections (the disposition allowlist as two columns rather
-than one; `clearedBy` naming an actor on every blocking variant; the minimum shippable unit
-including attempt identity; the precise `blockForeignRootWrite` residual). This document
+**Division of authority with [ADR-0026](../decisions/0026-stateful-guards-fence-reconcile-and-gate-disposition.md), stated exactly.**
+The ADR owns the *semantic rules and constraints* (its ten decision slots and
+implementation constraints: fence-or-reconcile, typed recoverable blocking state,
+judgment/evidence/disposition separation, time-lease-is-not-liveness, the clearing actor
+belongs to the blocking state, …); its own Construction section designates **this
+document as the canonical construction/evidence home**. So there is no "route around
+§5–§10": constructions live here, and where a construction contradicts an ADR rule it is
+*defective here* and must be repaired *here*, against the ADR's rules as the test. This document
 remains the evidence base, the full guard audit, and the §8 new-guard checklist. Its earlier
 recommendation of "an ADR per primitive" was **not** taken, deliberately: the primitives are
-not independently decidable, and ADR-0026 records why. The v4 review pass *confirmed*
-internal defects in the superseded design sections — the §6 clearing contract conflicts
-with §7.2/§7.3's operator-remedy and retry edges; §7.1's `softened` plumbing would read
-incomplete seats as policy blocks; §7.2's evidence values entangle completeness with
-cause; §7.3's bounded retry rests on a lock §4 classifies as a hint — **do not implement
-from §5–§7; ADR-0026 is the sole authority there**, and these confirmations are recorded
-rather than repaired precisely because the ADR already decided past them.
+not independently decidable, and ADR-0026 records why. The v4/v5 review passes
+*confirmed* internal defects in the construction sections; because this document is the
+canonical construction home, **v6 repairs them in place** — each at its site, marked
+"(v6)": the §6 gate-block clearer is now typed per block class; §7.1 states the
+softened-split prerequisite; §7.3's retry counter is re-homed off the drain lock.
 
 ## 1. The complaint, stated precisely
 
@@ -299,8 +300,13 @@ The lifecycles:
   withholds progress — it is #453's stranded-PR state — and clears by
   `grant-additional-entitlement`, actor `human`. Without that edge P3 reproduces the
   defect it exists to fix.
-- **Gate evaluation**: §7. `block` clears by `new-head-sha`, actor `harness | human`;
-  `indeterminate` by `retry`, actor per §7.3.
+- **Gate evaluation**: §7 — the clearer is typed by block class (v6; ADR-0026's
+  clearing-actor constraint): an **artifact-judgment** `block` clears by `new-head-sha`
+  (the artifact changed), actor `harness | human`; a **policy** block (e.g.
+  `provider-diversity: require` unmet, §7.2 rule 4) clears by `operator-remedy` — a new
+  head sha changes nothing about unmet policy; **indeterminate** clears by `retry`,
+  actor per §7.3, and its exhaustion becomes a block with the named human clearer. One
+  clearer per class, never one clearer for all.
 
 ## 7. The gate: separating judgment from disposition
 
@@ -351,11 +357,16 @@ So diversity does not appear on the evidence axis at all. It enters the determin
 function as configuration, and `provider-diversity: require` + `softened` should resolve
 to `block`, not `merge`.
 
-**This is a prerequisite, not a description.** `DiversityStatus.softened` exists only in
-`review/loop.ts` — the authoring/doc-review path — and `pr-review-cli.ts` does not import
-it; the merge gate's `provider-diversity: require` is a binary preflight with no softened
-state. Plumbing realized diversity onto the merge-gate path is therefore work this design
-*requires*, and until it exists the rule above is unimplementable there.
+**This is a prerequisite, not a description — twice over (v6).** First:
+`DiversityStatus.softened` exists only in `review/loop.ts` — the authoring/doc-review
+path — and `pr-review-cli.ts` does not import it; the merge gate's
+`provider-diversity: require` is a binary preflight with no softened state. Second, and
+sharper: `review/loop.ts` sets `softened` for seat *incompletion* as well as for
+weaker-configured diversity, so plumbing it as-is would read missing evidence as a
+policy block — exactly the completeness/cause conflation ADR-0026 forbids.
+`softened-by-configuration` must be split from `softened-by-incompletion` upstream
+before `require` + `softened` → `block` can be policy; until both exist the rule above
+is unimplementable there.
 
 ### 7.2 `unavailable` is an allowlist, never a default
 
@@ -442,8 +453,12 @@ So the rules are:
    failure mode we are trying to eliminate, not a state we may enter. This requires
    **durable retry state with an atomic decrement**, and today's queue key
    `(prNumber, headSha)` does not carry one — re-draining the same request would produce
-   `indeterminate` forever. The counter must be persisted against that key and decremented
-   under the existing drain lock before the local-runner slice can be called shippable.
+   `indeterminate` forever. The counter must be persisted against that key and
+   decremented **in a harness-owned register with an atomic check-and-decrement** (the
+   G-series attempt/quota machinery), *not* merely under the drain file-lock — §4
+   classifies that lock as a hint, and its fixed lease is exactly the
+   time-lease-is-not-liveness shape ADR-0026 bars from carrying correctness (v6).
+   Until that register exists the local-runner slice is not shippable.
 4. It settles **observed** P2 spend and refunds only the unused remainder; it releases a
    P3 token only on a *pre-work* abort. An evaluation that died after billing has spent
    real money and burned real work.
@@ -517,8 +532,9 @@ As failure modes, checklist-style:
 10. **Late gate** — the check fires after work is invested when it could have fired
     before any exists. *Detector:* refusal cost scales with work done, not with the
     violation; verification is not the first act of the guarded unit. *Closes with:*
-    verification-before-work ordering (claims, resume checks, auth-class, admission all
-    precede the first seat spawn).
+    verification-before-work ordering — checks precede the guarded unit's expensive
+    act (the first seat spawn for execution gates; the merge/landing for artifact
+    gates, per the bar's artifact-review clause).
 11. **Broad refusal** — the gate refuses the work when only a dimension of it violates.
     *Detector:* the refusal message offers no proceed path; the check evaluates absolute
     state rather than the delta the guarded action introduced (the `.dev/`
@@ -531,16 +547,23 @@ As failure modes, checklist-style:
     state and the resume path. *Closes with:* the park-checkpoint discipline
     (`parkExit()`'s shape, not the literal closure — it is `runPipeline`-local today)
     generalized to every refusal exit, in whichever of three forms the refusal
-    permits: **checkpoint-and-park** where committing is safe; **quarantine**
-    (preserve without committing) where it is not — the confinement contract's
-    `error_confinement` is the named example: checkpointing may commit contaminated
-    state, so parking is forbidden there and preservation means quarantine;
-    **leave-intact** where the state is already durable. Refusal ≠ discard, in all
+    permits: **checkpoint-and-park** where committing is safe;
+    **preserve-without-commit** where it is not; **leave-intact** where the state is
+    already durable. Honesty about the second form (v6): the repo does not implement
+    it today — `quarantineCheckpoint` *commits* (`helpers.ts`), and
+    `error_confinement` exits via `finish()` with no preservation at all
+    (`pipeline.ts`) — so `error_confinement` is the **open instance of this failure
+    mode**, not its counter-example: committing is forbidden there (contaminated
+    state), and the missing remedy is a non-committing preserve (patch file, stash,
+    or worktree copy under a harness-owned register). Refusal ≠ discard, in all
     three forms.
 13. **Irreversible-too-early** — a tripped guard becomes final before any successor has
     consumed the contested resource. *Detector:* no reclaim window between trip and
-    consequence. *Closes with:* reversible-until-consumed (lease expiry reclaimable by
-    the holder until a successor is granted — the #606 work-preservation requirement;
+    consequence. *Closes with:* reversible-until-consumed (lease expiry reclaimable
+    by the holder until a successor is granted — the work-preservation *requirement
+    comment* on #606, which the spec item must reconcile with its own
+    revoke-grants-at-expiry rule: reclaim preserves the working state and returns the
+    lease at epoch+1 with **re-minted** grants, the originals having died at expiry;
     entitlements burn on outcome, not attempt — P3's twin).
 14. **Untested for false fire** — the gate ships with true-positive tests only.
     *Detector:* no test asserts the gate stays silent on legitimate input at the
@@ -620,6 +643,19 @@ Steps 1–3 are independently valuable if the rest is never built.
    defect.
 
 ## Revision log
+
+**v6** (2026-08-22) — v5 confirmation pass (3 seats), 7 must-fix accepted. The
+authority-cycle finding resolved by stating the ADR-0026 division exactly (the ADR owns
+rules/constraints; this document is the canonical construction home per the ADR's own
+Construction section) and repairing the confirmed construction defects in place: §6's
+gate-block clearer typed per block class; §7.1's second prerequisite (split
+softened-by-configuration from softened-by-incompletion); §7.3's retry counter re-homed
+to a harness-owned register off the drain-lock hint. §8.1 corrected against code
+reality: `quarantineCheckpoint` commits and `error_confinement` preserves nothing, so
+it is the open instance of item 12, and the missing form is a non-committing preserve;
+item 13's reclaim reconciled with revoke-at-expiry (re-minted grants) and attributed to
+the #606 requirement comment; item 10's ordering clause aligned with the
+artifact-review carve-out.
 
 **v5** (2026-08-22) — v4 `doc-review` pass (3 seats), 10 must-fix accepted: header
 re-dated with the verification-baseline staleness stated (cluster re-cut into the
