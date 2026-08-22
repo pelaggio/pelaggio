@@ -222,14 +222,20 @@ adjudication sidecar. The store is seat-denied exactly like the other evidence s
 
 **Prior selection (fail-closed).** A run for a new head selects at most one prior record:
 same PR + item, different SHA, proven ancestor of the reviewed head via
-`git merge-base --is-ancestor` in the trusted repo, reduced to the unique maximal record
-along the branch, then digest-bound to its fleet record bytes. Nothing inside the records
-orders candidates (`reviewedAt` is diagnostic only — a model-writable timestamp is not an
-ordering signal, #510). Any failure — malformed store file for the PR, force-push/rebase
-(no ancestors), a non-totally-ordered candidate set, a missing or non-matching fleet
-record, a prior that does not resolve in the diff checkout — degrades to today's cold
-behavior with a stderr diagnostic, never to a weaker gate. A first run (no priors) is
-byte-identical to today.
+`git merge-base --is-ancestor` in the trusted repo, ordered along the branch
+(ancestry-sort + adjacent-pair verification; the scan is bounded at 50 priors per PR —
+beyond that carry refuses with a prune hint, since there is no store GC in this item),
+then digest-bound to its fleet record bytes. A newer record that no longer binds —
+typically because a later `pr-adjudicate` rewrote the fleet gate record at that head — is
+skipped with a diagnostic naming the supersession, falling back to the next-oldest
+bindable ancestor; the skipped record's survivors still ride along as blocking-only
+overlay (they seed and veto auto-refutation of the same fingerprint, but nothing from an
+unbindable record ever clears a finding). Nothing inside the records orders candidates
+(`reviewedAt` is diagnostic only — a model-writable timestamp is not an ordering signal,
+#510). Any remaining failure — malformed store file for the PR, force-push/rebase (no
+ancestors), a non-totally-ordered candidate set, no bindable prior at all, a prior that
+does not resolve in the diff checkout — degrades to today's cold behavior with a stderr
+diagnostic, never to a weaker gate. A first run (no priors) is byte-identical to today.
 
 **What carries.**
 
@@ -245,20 +251,58 @@ byte-identical to today.
   dispositions whose refuting authority is the prior recorded report (harness-authored
   rationale; chained origin id + SHA). Anything touched, pathless, or safety-tier is
   re-verified fresh.
+
+  **Auto-refutation is DORMANT under the shipped default.** Production schema-v1 gate
+  findings carry only `severity`/`message`/`path`/`line`, so emission-time classification
+  resolves every recorded entry to the default-safety sink (`correctness-regression`) and
+  the I3 predicate excludes it — nothing is currently eligible. The withholding/synthesis
+  machinery is the seam a later classification enrichment lights up: eligibility requires
+  findings that reach the cold gate carrying classification evidence (`ruleId` / `cwe` /
+  `classHint`, as the schema-v3 authoring wire already does) whose class resolves
+  judgment-tier under the configured taxonomy. That enrichment is separate, uncharted
+  work. Seeding, narrowing, and refutation memory are taxonomy-independent and fully
+  live today.
 - **Discovery narrows to the interdiff**: the full drivers × labels fan-out reviews
   `prior..head` through the trusted-context refs, while the inspection diff, security
   classification, and sidecar anchoring keep the full PR range. An empty interdiff seeds
-  and auto-refutes but discovers cold. Cumulatively the whole final diff has full-fleet
-  coverage: the first head got the complete cold read, and every subsequent delta gets a
-  complete narrowed read.
+  and auto-refutes but discovers cold. Coverage across a series is cumulative only in the
+  best case: each delta gets a narrowed read by that run's fleet, but a run that fails
+  structural completeness (invalid cells, breaker exhaustion) still writes a record and
+  therefore still advances the narrowing base for the next selection — so "every line of
+  the final diff got a complete fleet read" is **not** guaranteed across a series
+  containing invalid runs. The deterministic full-head gates (typecheck ratchet, tests,
+  CI) are unaffected and run on every head.
 
 The gate comment and metrics marker carry a deterministic token —
-`carry=<sha7> seeded=<n> auto-refuted=<m>` or `carry=none` — so the operator can read
-from the PR why a run was narrow.
+`carry=<sha7> seeded=<n> auto-refutable=<k> auto-refuted=<m>` or `carry=none` — so the
+operator can read from the PR why a run was narrow. `auto-refutable` is the eligible
+count after the I3/interdiff filter: under the shipped default taxonomy it is always `0`
+(dormancy above), which is deliberately visible so `auto-refuted=0` never reads as
+"checked and none qualified".
 
-**Kill-switch.** `review.carry: false` in `.pelaggio.yml` restores per-push cold reviews
-exactly (no reads, no narrowing); records are still written so re-enabling has priors.
-Local runner only: CI neither reads nor writes the store.
+**Kill-switch — ships default OFF.** `review.carry` defaults to `false` (canary-off):
+carry makes these stores **authorization inputs**, and default-on requires the
+store-trust prerequisite below to hold for every provider in the local review pool.
+Records are still written while off, so enabling later has priors; `review.carry: true`
+turns on reads + narrowing. Local runner only: CI neither reads nor writes the store.
+
+**Store-trust prerequisite (why the default is off).** Local review/verify seats run at
+`cwd = REPO` — the trusted main checkout that also hosts the stores:
+
+- **Claude seats: closed.** The gate threads the foreign-root denial into every seat
+  regardless of cwd, so the step-runner installs its PreToolUse hooks — Write/Edit/Bash
+  denial on the gate-record, adjudication-source, finding-disposition, session, and
+  decision-log registers (#510 parity). Residual: hook-level Bash denial is textual (the
+  documented #510 opacity residual; ADR-0023 execution-jail territory).
+- **Codex review seats: closed at the OS boundary.** `pr-review`/`pr-verify` codex seats
+  run under the `read-only` sandbox (they produce a text report; repo checks/tests cannot
+  run under read-only — the Claude seats in the fleet still run checks).
+- **Grok seats: open, unverified.** The grok CLI sandbox profile extends grok's builtin
+  `strict` profile, whose filesystem write surface at the main-checkout cwd is not
+  verified here — and `providers.grok.allow-unsandboxed-fallback: true` removes the
+  sandbox entirely. Until grok's write surface against `MAIN_REPO/.dev` is verified
+  closed (or grok is excluded from local review pools), do not enable `review.carry` in a
+  pool containing grok.
 
 ## Operator adjudication — `pelaggio pr-adjudicate`
 

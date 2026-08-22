@@ -55,6 +55,21 @@ export const CODEX_SANDBOX_APPEND = [
 	"Your sandbox cannot write git metadata or reach the network. Do NOT run stateful git commands (`git add`, `commit`, `rm`, `restore`, `checkout`, `stash`, `push`, `merge`) and do NOT run network/roadmap CLIs (`gh ...`, `npx pelaggio roadmap ...`). Just create and edit files — the harness commits your work automatically after this step and owns all roadmap/forge effects. Read-only git (`git status`/`diff`/`log`/`show`) is fine.",
 ].join("\n");
 
+/**
+ * Review-class seats produce a TEXT report and have no legitimate write need — and in local
+ * review mode their cwd is the TRUSTED main checkout, so `workspace-write` would root the
+ * sandbox there and leave the harness's authorizing evidence stores (`.dev/pr-review-*`)
+ * seat-writable (#495 store-trust). Codex's `read-only` sandbox closes that at the OS boundary.
+ * Cost, stated honestly: repo checks/tests cannot run under read-only (their writes fail), so
+ * these seats review by reading; the Claude seats in the fleet still run checks.
+ */
+export const CODEX_READ_ONLY_STEPS: ReadonlySet<Step> = new Set<Step>(["pr-review", "pr-verify"]);
+
+export const CODEX_READ_ONLY_APPEND = [
+	"## Sandbox: read-only",
+	"Your sandbox is READ-ONLY: every file write and all network access fail. Do NOT attempt to write files, run installs/builds/tests, or run stateful git or network commands. Inspect with reads and read-only git (`git status`/`diff`/`log`/`show`), then emit your report as plain text in your final message — the harness owns all effects.",
+].join("\n");
+
 export function codexTimeoutMs(turns: number): number {
 	return Math.max(10 * 60_000, Math.min(90 * 60_000, turns * 60_000));
 }
@@ -85,8 +100,8 @@ export function codexEffort(effort: StepSettings["effort"]): "low" | "medium" | 
  * (`-c`, `model_reasoning_effort=<mapped>`) avoids shell quoting and lets `--config` parse it as a
  * TOML string literal. The `-c` pair sits just before the stdin `-` sentinel, after any `-m` model.
  */
-export function buildCodexExecArgs(opts: { cwd: string; outputPath: string; model?: string; effort: "low" | "medium" | "high" }): string[] {
-	return ["exec", "--json", "-C", opts.cwd, "-s", "workspace-write", "-o", opts.outputPath, ...(opts.model ? ["-m", opts.model] : []), "-c", `model_reasoning_effort=${opts.effort}`, "-"];
+export function buildCodexExecArgs(opts: { cwd: string; outputPath: string; model?: string; effort: "low" | "medium" | "high"; sandbox?: "read-only" | "workspace-write" }): string[] {
+	return ["exec", "--json", "-C", opts.cwd, "-s", opts.sandbox ?? "workspace-write", "-o", opts.outputPath, ...(opts.model ? ["-m", opts.model] : []), "-c", `model_reasoning_effort=${opts.effort}`, "-"];
 }
 
 function isObject(v: unknown): v is JsonObject {
@@ -430,12 +445,15 @@ const runStep: StepProvider["runStep"] = async (name, prompt, opts, emit) => {
 	}
 
 	const systemAppend = composeSystemAppend({ isWorktree, cwd: opts.cwd, repo: REPO, planBlockActive: name === "implement" });
-	const finalPrompt = `${prompt}\n\n${systemAppend}\n\n${CODEX_SANDBOX_APPEND}`;
+	// Review-class seats run under the read-only sandbox (see CODEX_READ_ONLY_STEPS) with a
+	// matching prompt append so the model does not fight failing writes.
+	const readOnly = CODEX_READ_ONLY_STEPS.has(name);
+	const finalPrompt = `${prompt}\n\n${systemAppend}\n\n${readOnly ? CODEX_READ_ONLY_APPEND : CODEX_SANDBOX_APPEND}`;
 	const tmp = mkdtempSync(join(tmpdir(), "pelaggio-codex-"));
 	const outputPath = join(tmp, "last-message.txt");
 	// Always forward the mapped reasoning effort, even when no Codex model is pinned, so a
 	// configured step effort reaches the CLI (issue #431).
-	const args = buildCodexExecArgs({ cwd: opts.cwd, outputPath, ...(codexModel ? { model: codexModel } : {}), effort: codexEffort(effort) });
+	const args = buildCodexExecArgs({ cwd: opts.cwd, outputPath, ...(codexModel ? { model: codexModel } : {}), effort: codexEffort(effort), sandbox: readOnly ? "read-only" : "workspace-write" });
 	// Deny-by-default env: the child gets only the allowlisted vars, never the full parent env, so
 	// a prompt-injected step cannot read/echo credentials it was never given (#237 / TC-014). The
 	// allowlist is provider-scoped: another provider's key var never reaches this child (#276).

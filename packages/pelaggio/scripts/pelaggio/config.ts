@@ -152,8 +152,12 @@ export interface ReviewConfig {
 	maxPasses: number;
 	budgetCap: number;
 	providerDiversity: ProviderDiversityPolicy;
-	/** Cross-push finding-disposition carry (#495). `false` restores per-push cold reviews
-	 *  exactly (no reads, no narrowing — disposition records are still written). */
+	/** Cross-push finding-disposition carry (#495). `false` (the shipped default — canary-off)
+	 *  restores per-push cold reviews exactly (no reads, no narrowing — disposition records are
+	 *  still written, so enabling later has priors). Default stays `false` until the store-trust
+	 *  prerequisite is met for every local review provider: the carry stores are AUTHORIZATION
+	 *  inputs, and the grok seat's write surface at main cwd is not yet verified closed (Claude
+	 *  seats get denial hooks; codex review seats run read-only — see docs/pr-review.md). */
 	carry: boolean;
 	authoring: AuthoringReviewConfig;
 	/** ADR-0016 safety/judgment taxonomy (baseline ADR table; owner-signed to contract the floor). */
@@ -230,7 +234,7 @@ export const DEFAULTS = {
 		maxPasses: 1,
 		budgetCap: 20,
 		providerDiversity: "off",
-		carry: true,
+		carry: false,
 		taxonomy: resolveTaxonomy({}),
 		authoring: {
 			enabled: "off",

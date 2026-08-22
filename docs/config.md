@@ -74,8 +74,10 @@ revise:                         # local revise sweep — auto-fix red-review PRs
 review:                         # PR review poster (issue #84)
   runner: ci                    # default: ci. values: ci | local
   statusless-after: 2h          # local-mode diagnostic threshold
-  carry: true                   # default: true. Cross-push finding-disposition carry (#495);
-                                # false restores per-push cold reviews (records still written)
+  carry: false                  # default: false (canary-off). Cross-push finding-disposition
+                                # carry (#495); records are written either way. Enable only when
+                                # the store-trust prerequisite holds for every local review
+                                # provider — see docs/pr-review.md "Cross-push carry"
   authoring:                    # opt-in pre-ship adversarial loop
     enabled: off                # off | local | keys; local permits subscription auth
                                 # checkouts under .dev/authoring-review-seats/ (#269)
@@ -849,7 +851,7 @@ the same command, so it is intentionally not looped.
 | `review.max-passes` | `1` | Independent review iterations, integer `1..3`. One preserves the safe rollout/current behavior. |
 | `review.budget-cap` | `20` | Positive finite aggregate dollar cap. A full required iteration is reserved before it starts. |
 | `review.provider-diversity` | `off` | `off`, `prefer`, or `require`; `require` blocks before agent work unless **at least one** review driver differs from the scalar verifier provider. |
-| `review.carry` | `true` | Cross-push finding-disposition carry (#495): a local re-review of a re-pushed PR seeds from the prior head's validated disposition record, auto-refutes untouched non-safety refuted findings, and narrows discovery to the interdiff. `false` restores per-push cold reviews exactly; disposition records are still written so re-enabling has priors. See `docs/pr-review.md` → "Cross-push carry". |
+| `review.carry` | `false` | Cross-push finding-disposition carry (#495): a local re-review of a re-pushed PR seeds from the prior head's validated disposition record and narrows discovery to the interdiff (auto-refutation exists but is dormant under the default taxonomy — production findings all classify safety-tier). Ships **off** because the carry stores are authorization inputs and the store-trust prerequisite is not yet met for every provider (the grok seat's write surface at main cwd is unverified); disposition records are still written while off, so enabling later has priors. See `docs/pr-review.md` → "Cross-push carry". |
 
 Local mode is only active in normal auto-pick runs for github-issues roadmaps and PR
 ship targets. Configure the model provider through the existing non-pipeline

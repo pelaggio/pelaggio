@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
-import { buildCodexExecArgs, buildCodexStepResult, CODEX_SANDBOX_APPEND, codexEffort, codexTimeoutMs, selectCodexModel } from "../codex-provider.js";
+import { buildCodexExecArgs, buildCodexStepResult, CODEX_READ_ONLY_APPEND, CODEX_READ_ONLY_STEPS, CODEX_SANDBOX_APPEND, codexEffort, codexTimeoutMs, selectCodexModel } from "../codex-provider.js";
 import { EDIT_LOOP_THRESHOLD } from "../step-runner-shared.js";
 
 function fixtureEvents(name: string): Record<string, unknown>[] {
@@ -272,5 +272,18 @@ describe("buildCodexExecArgs (#431)", () => {
 		assert.equal(args.filter((a) => a === "-c").length, 1);
 		assert.equal(args[args.indexOf("-c") + 1], "model_reasoning_effort=medium");
 		assert.equal(args[args.length - 1], "-");
+	});
+
+	it("review-class seats run under the read-only sandbox (#495 store-trust)", () => {
+		// Local review/verify seats run at cwd=REPO (the trusted main checkout); workspace-write
+		// would root the OS sandbox there and leave the harness's authorizing evidence stores
+		// (.dev/pr-review-*) seat-writable. Review seats produce text, not edits — read-only.
+		const args = buildCodexExecArgs({ cwd: "/main", outputPath: "/tmp/out.txt", effort: "high", sandbox: "read-only" });
+		assert.deepEqual(args.slice(0, 8), ["exec", "--json", "-C", "/main", "-s", "read-only", "-o", "/tmp/out.txt"]);
+		for (const step of ["pr-review", "pr-verify"] as const) assert.ok(CODEX_READ_ONLY_STEPS.has(step), `${step} is a read-only sandbox step`);
+		assert.equal(CODEX_READ_ONLY_STEPS.has("implement"), false, "authoring steps keep workspace-write");
+		// The matching prompt append tells the model not to fight failing writes or run tests.
+		assert.match(CODEX_READ_ONLY_APPEND, /READ-ONLY/);
+		assert.match(CODEX_READ_ONLY_APPEND, /Do NOT attempt to write files/);
 	});
 });

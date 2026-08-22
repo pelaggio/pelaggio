@@ -7,6 +7,7 @@ import { DEFAULTS } from "../config.js";
 import { fleetRecordDigestOf } from "../review/adjudication.js";
 import {
 	buildCarryDispositionDraft,
+	CARRY_MAX_PRIOR_CANDIDATES,
 	type CarrySourceSelection,
 	computeTouchedPaths,
 	FINDING_DISPOSITION_MAX_ENTRIES,
@@ -162,7 +163,7 @@ describe("selectCarrySource", () => {
 
 	it("selects a single ancestor prior and binds it to the exact fleet bytes", () => {
 		const prior = boundRecord(SHA_A);
-		assert.deepEqual(select([prior]), { kind: "selected", record: prior });
+		assert.deepEqual(select([prior]), { kind: "selected", record: prior, superseded: [], supersededSurvivors: [] });
 	});
 
 	it("returns none with no relevant priors; same-SHA and wrong pr/item records are excluded", () => {
@@ -182,7 +183,7 @@ describe("selectCarrySource", () => {
 	it("picks the maximal record of an ordered chain and refuses an unordered set", () => {
 		const older = boundRecord(SHA_A);
 		const newer = boundRecord(SHA_B);
-		assert.deepEqual(select([older, newer]), { kind: "selected", record: newer });
+		assert.deepEqual(select([older, newer]), { kind: "selected", record: newer, superseded: [], supersededSurvivors: [] });
 		// Unordered: two ancestors of HEAD with no ancestry between them (diverged-then-merged).
 		const divergent = (_ancestor: string, descendant: string): boolean => descendant === HEAD;
 		const selection = select([older, newer], { isAncestor: divergent });
@@ -194,16 +195,42 @@ describe("selectCarrySource", () => {
 	it("never consults reviewedAt: a forged future timestamp does not change selection", () => {
 		const older = boundRecord(SHA_A, { reviewedAt: "2099-01-01T00:00:00.000Z" });
 		const newer = boundRecord(SHA_B, { reviewedAt: "2020-01-01T00:00:00.000Z" });
-		assert.deepEqual(select([older, newer]), { kind: "selected", record: newer });
+		assert.deepEqual(select([older, newer]), { kind: "selected", record: newer, superseded: [], supersededSurvivors: [] });
 	});
 
-	it("refuses on a missing fleet record or a digest mismatch", () => {
+	it("refuses when no prior still binds, naming the supersession cause (not a bare digest complaint)", () => {
 		const missing = select([record({ headSha: SHA_A, fleetRecordDigest: "1".repeat(64) })], { readFleetBytes: () => null });
 		assert.equal(missing.kind, "refused");
-		assert.match((missing as { reason: string }).reason, /missing/);
+		assert.match((missing as { reason: string }).reason, /superseded — e.g. a later pr-adjudicate rewrote the gate record/);
 		const mismatch = select([record({ headSha: SHA_A, fleetRecordDigest: "1".repeat(64) })], { readFleetBytes: () => Buffer.from("different bytes") });
 		assert.equal(mismatch.kind, "refused");
-		assert.match((mismatch as { reason: string }).reason, /not bound to the exact on-disk fleet gate record/);
+		assert.match((mismatch as { reason: string }).reason, /no prior disposition record for PR 495 still binds/);
+		assert.match((mismatch as { reason: string }).reason, new RegExp(`495-${SHA_A}\\.json`));
+	});
+
+	it("falls back past a superseded newest record to the next bindable ancestor, keeping its blocking side", () => {
+		// The pr-adjudicate-overwrite shape: the fleet record at the NEWEST reviewed head was
+		// rewritten (operator record), so its disposition record no longer binds — but an older
+		// prior still does. Carry uses the older one; the superseded record's survivors ride
+		// along as blocking-only overlay.
+		const older = boundRecord(SHA_A);
+		const alive = survivor(finding("Still disputed.", "src/d.ts", 2));
+		const newerUnbindable = record({ headSha: SHA_B, fleetRecordDigest: "2".repeat(64), survived: [alive], refuted: [] });
+		fleetBytesFor.set(SHA_B, Buffer.from("operator-adjudication rewrote me"));
+		const selection = select([older, newerUnbindable]);
+		assert.equal(selection.kind, "selected");
+		if (selection.kind !== "selected") return;
+		assert.equal(selection.record, older);
+		assert.deepEqual(selection.superseded, [`495-${SHA_B}.json`]);
+		assert.deepEqual(selection.supersededSurvivors, [alive]);
+	});
+
+	it("bounds the ancestor scan: more than CARRY_MAX_PRIOR_CANDIDATES priors refuses with a prune hint", () => {
+		const many = Array.from({ length: CARRY_MAX_PRIOR_CANDIDATES + 1 }, (_, i) => boundRecord(`${i.toString(16).padStart(4, "0")}${"f".repeat(36)}`));
+		const selection = select(many);
+		assert.equal(selection.kind, "refused");
+		assert.match((selection as { reason: string }).reason, /carry scans at most 50/);
+		assert.match((selection as { reason: string }).reason, /prune/);
 	});
 
 	it("refuses when the store holds a malformed record for the targeted PR", () => {
@@ -270,6 +297,47 @@ describe("planCarry eligibility (I3 + D3)", () => {
 		const f = finding("Twice.", "src/t.ts", 1);
 		const forged = { ...record(), survived: [survivor(f)], refuted: [refuted(f)] };
 		assert.throws(() => planCarry(forged, new Set(), TAXONOMY), /both survived and refuted/);
+	});
+
+	it("a superseded-record overlay survivor seeds and vetoes auto-refutation of the same fingerprint", () => {
+		const f = finding("Re-raised later.", "src/o.ts", 3);
+		// The selected (older) record refuted f; a skipped newer unbindable record kept it alive.
+		const overlay = [survivor(f)];
+		const plan = planCarry(record({ survived: [], refuted: [refuted(f)] }), new Set(), TAXONOMY, overlay);
+		assert.deepEqual([...plan.seedSurvivors.keys()], [reviewFindingFingerprint(f)], "overlay survivor seeds toward blocking");
+		assert.equal(plan.autoRefutable.size, 0, "a finding alive more recently than the refutation must re-verify fresh");
+	});
+
+	it("PIN — production-shaped records are auto-refute DORMANT: bare findings classify safety and nothing is eligible", () => {
+		// Deliberate current limit (#495 round-2): production schema-v1 gate findings carry only
+		// severity/message/path/line, so buildCarryDispositionDraft's emission-time classification
+		// resolves every refuted entry to the default-safety sink and planCarry excludes it — the
+		// auto-refutation seam stays dormant until findings carry classification evidence
+		// (ruleId/cwe/classHint) whose class resolves judgment-tier. Seeding/narrowing/memory stay live.
+		const bare = finding("Plain production finding.", "src/p.ts", 4);
+		const fp = reviewFindingFingerprint(bare);
+		const draft = buildCarryDispositionDraft({
+			prNumber: 495,
+			itemId: "495",
+			reviewedSha: SHA_A,
+			gate: "block",
+			agreement: "consensus-block",
+			ok: true,
+			survivors: new Map(),
+			verifications: new Map(),
+			refutedThisRun: new Map([[fp, { id: "C1", finding: bare }]]),
+			autoRefutable: new Map(),
+			carriedForward: [],
+			changedFiles: ["src/p.ts"],
+			taxonomy: TAXONOMY,
+		});
+		assert.ok(draft);
+		assert.equal(draft.refuted[0]?.class, "correctness-regression", "bare finding classifies to the default-safety sink");
+		assert.equal(draft.refuted[0]?.tier, "safety");
+		const stored = validatePrFindingDispositionRecord({ ...draft, schemaVersion: 1, fleetRecordDigest: "0".repeat(64), reviewedAt: "2026-08-22T12:00:00.000Z" });
+		const plan = planCarry(stored, new Set(), TAXONOMY);
+		assert.equal(plan.autoRefutable.size, 0, "no production-shaped entry is auto-refutable — asserting the CURRENT limit deliberately");
+		assert.deepEqual(plan.carriedForward, []);
 	});
 });
 

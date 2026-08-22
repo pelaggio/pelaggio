@@ -289,15 +289,37 @@ export function listPrFindingDispositionRecords(root: string): PrFindingDisposit
 	return { records, invalid };
 }
 
-export type CarrySourceSelection = { kind: "none" } | { kind: "selected"; record: PrFindingDispositionRecordV1 } | { kind: "refused"; reason: string };
+/** Ancestor-scan bound: more prior records than this for one PR refuses (cold) with a prune
+ *  hint instead of growing the pairwise-ancestry cost without limit. No GC in this item. */
+export const CARRY_MAX_PRIOR_CANDIDATES = 50;
+
+export type CarrySourceSelection =
+	| { kind: "none" }
+	| {
+			kind: "selected";
+			record: PrFindingDispositionRecordV1;
+			/** File names of NEWER ancestor records skipped because they no longer bind to their
+			 *  on-disk fleet gate record (superseded — e.g. a later `pr-adjudicate` rewrote the
+			 *  gate record at that head). Their survivors ride `supersededSurvivors` below. */
+			superseded: string[];
+			/** Survivors from every skipped newer record. Toward blocking only: they seed the run
+			 *  and veto auto-refutation of the same fingerprint, but nothing from an unbindable
+			 *  record ever clears a finding. */
+			supersededSurvivors: PrCarrySurvivorEntry[];
+	  }
+	| { kind: "refused"; reason: string };
 
 /**
  * Fail-closed prior-record selection (D2). At most one prior may seed a run: candidates are
  * filtered by identity, proven ancestors of the reviewed head via the injected git predicate
  * (ground truth — nothing inside the records, notably `reviewedAt`, participates in ordering:
- * #510), and reduced to the unique maximal record along the branch. Any malformed store file for
- * the targeted PR, a non-totally-ordered candidate set, or a failed digest bind to the exact
- * on-disk fleet gate record refuses with a diagnostic — the caller runs cold.
+ * #510), ordered along the branch (ancestry-comparator sort + adjacent-pair verification —
+ * sound by transitivity, and O(n log n) instead of the pairwise-maximal scan), and bound to the
+ * newest record whose `fleetRecordDigest` still matches its on-disk fleet gate record. A newer
+ * record that no longer binds (superseded — typically `pr-adjudicate` rewriting the gate record
+ * at that head) is skipped with its survivors carried forward as blocking-only overlay; if no
+ * record binds, or the store is malformed/unordered/over the scan bound, the caller runs cold
+ * with a diagnostic.
  */
 export function selectCarrySource(
 	listing: Pick<PrFindingDispositionListing, "records" | "invalid">,
@@ -319,24 +341,41 @@ export function selectCarrySource(
 	// Same-SHA reruns are deliberately excluded — a re-review of the same head behaves as today.
 	const candidates = listing.records.filter((record) => record.prNumber === opts.prNumber && record.itemId === opts.itemId && record.headSha !== reviewedSha);
 	if (candidates.length === 0) return { kind: "none" };
+	if (candidates.length > CARRY_MAX_PRIOR_CANDIDATES) {
+		return { kind: "refused", reason: `disposition store holds ${candidates.length} prior records for PR ${opts.prNumber} (carry scans at most ${CARRY_MAX_PRIOR_CANDIDATES}); prune .dev/${PR_FINDING_DISPOSITIONS_DIR}/` };
+	}
 	const ancestors = candidates.filter((record) => opts.isAncestor(record.headSha, reviewedSha));
 	if (ancestors.length === 0) {
 		return { kind: "refused", reason: `no prior disposition record for PR ${opts.prNumber} is an ancestor of ${reviewedSha.slice(0, 7)} (force-push or rebase)` };
 	}
-	// The maximal candidate: every other ancestor candidate must precede it along the branch.
-	const maximal = ancestors.find((record) => ancestors.every((other) => other === record || opts.isAncestor(other.headSha, record.headSha)));
-	if (!maximal) {
-		const files = ancestors.map((record) => `${record.prNumber}-${record.headSha}.json`).sort();
-		return { kind: "refused", reason: `prior disposition records for PR ${opts.prNumber} are not totally ordered along the branch: ${files.join(", ")}` };
+	// Newest-first ancestry sort, then verify every ADJACENT pair. Ancestry is transitive, so an
+	// adjacent-ordered chain is a genuinely total chain even if the comparator saw a partial
+	// order during sorting; any unordered adjacent pair refuses.
+	const chain = [...ancestors].sort((a, b) => (a === b ? 0 : opts.isAncestor(a.headSha, b.headSha) ? 1 : -1));
+	for (let i = 0; i + 1 < chain.length; i++) {
+		const newer = chain[i];
+		const older = chain[i + 1];
+		if (newer && older && !opts.isAncestor(older.headSha, newer.headSha)) {
+			const files = ancestors.map((record) => `${record.prNumber}-${record.headSha}.json`).sort();
+			return { kind: "refused", reason: `prior disposition records for PR ${opts.prNumber} are not totally ordered along the branch: ${files.join(", ")}` };
+		}
 	}
-	const fleetBytes = opts.readFleetBytes(maximal.prNumber, maximal.headSha);
-	if (!fleetBytes) {
-		return { kind: "refused", reason: `fleet gate record for prior ${maximal.prNumber}-${maximal.headSha}.json is missing` };
+	const superseded: string[] = [];
+	const supersededSurvivors: PrCarrySurvivorEntry[] = [];
+	for (const record of chain) {
+		const fleetBytes = opts.readFleetBytes(record.prNumber, record.headSha);
+		if (fleetBytes && createHash("sha256").update(fleetBytes).digest("hex") === record.fleetRecordDigest) {
+			return { kind: "selected", record, superseded, supersededSurvivors };
+		}
+		// Fall back past a superseded newer record, but keep its blocking side: survivors seed,
+		// and nothing from an unbindable record may clear a finding (fail-closed).
+		superseded.push(`${record.prNumber}-${record.headSha}.json`);
+		supersededSurvivors.push(...record.survived);
 	}
-	if (createHash("sha256").update(fleetBytes).digest("hex") !== maximal.fleetRecordDigest) {
-		return { kind: "refused", reason: `disposition record ${maximal.prNumber}-${maximal.headSha}.json is not bound to the exact on-disk fleet gate record` };
-	}
-	return { kind: "selected", record: maximal };
+	return {
+		kind: "refused",
+		reason: `no prior disposition record for PR ${opts.prNumber} still binds to its on-disk fleet gate record (each was superseded — e.g. a later pr-adjudicate rewrote the gate record at that head): ${superseded.join(", ")}`,
+	};
 }
 
 /** Parse `git diff --no-renames --name-only -z` output into normalized touched paths. With
@@ -369,15 +408,31 @@ export interface CarryPlan {
  * a taxonomy edit between pushes cannot demote a safety finding into auto-refutable). Ineligible
  * refuted entries drop: their refutation could never auto-apply again, and a later re-discovery
  * is verified fresh — the safe direction.
+ *
+ * NOTE — dormant under the shipped default taxonomy: production schema-v1 gate findings carry
+ * only severity/message/path/line, so emission-time classification resolves every recorded
+ * entry to the default-safety sink and NOTHING is auto-refutable until findings carry
+ * classification evidence (ruleId/cwe/classHint reaching the cold gate) whose class resolves
+ * judgment-tier. Seeding, narrowing, and refutation memory are taxonomy-independent and live.
+ *
+ * `blockingOverlay` carries survivors from superseded newer records (selectCarrySource
+ * fallback): they seed like any survivor and VETO auto-refutation of the same fingerprint —
+ * a finding alive more recently than the selected record's refutation must re-verify fresh.
  */
-export function planCarry(record: PrFindingDispositionRecordV1, touchedPaths: ReadonlySet<string>, taxonomy: TaxonomyConfig): CarryPlan {
+export function planCarry(record: PrFindingDispositionRecordV1, touchedPaths: ReadonlySet<string>, taxonomy: TaxonomyConfig, blockingOverlay: readonly PrCarrySurvivorEntry[] = []): CarryPlan {
 	const seedSurvivors = new Map<string, ReviewFinding>();
 	for (const entry of record.survived) seedSurvivors.set(entry.fingerprint, entry.finding);
+	for (const entry of blockingOverlay) seedSurvivors.set(entry.fingerprint, entry.finding);
 	const autoRefutable = new Map<string, PrCarryRefutedEntry>();
 	for (const entry of record.refuted) {
 		// The validator forbids duplicate fingerprints across arrays; a violation here means a
 		// non-validated record leaked in, so refuse loudly rather than seed and refute one finding.
-		if (seedSurvivors.has(entry.fingerprint)) throw new Error(`carry plan: fingerprint in both survived and refuted: ${entry.fingerprint}`);
+		// Overlay survivors are exempt: a superseded newer record legitimately re-raises a
+		// fingerprint the selected record refuted — blocking wins.
+		if (seedSurvivors.has(entry.fingerprint)) {
+			if (blockingOverlay.some((survivor) => survivor.fingerprint === entry.fingerprint)) continue;
+			throw new Error(`carry plan: fingerprint in both survived and refuted: ${entry.fingerprint}`);
+		}
 		const path = normalizeGitPath(entry.finding.path);
 		if (path === null || touchedPaths.has(path)) continue;
 		if (entry.tier === "safety" || tierOf(entry.class, taxonomy) === "safety") continue;

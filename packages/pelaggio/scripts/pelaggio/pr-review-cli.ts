@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { CONFIG, modelForProvider, REPO, type ReviewConfig, ROADMAP_GITHUB, resolveDriverCandidates, resolveStepSettings, type StepSettings } from "./config.js";
 import { upsertMarkerComment } from "./github-posting.js";
-import { classifySecurityReviewDiff, escapeHtml, escapeMarkdown, expandPackagedSkill, formatReviewMetrics, mainWorktree, parseWaitFlag, resolveParkReset, type SecurityDiffSignal } from "./helpers.js";
+import { classifySecurityReviewDiff, escapeHtml, escapeMarkdown, expandPackagedSkill, formatReviewMetrics, listWorktreesIn, mainWorktree, parseWaitFlag, resolveParkReset, type SecurityDiffSignal } from "./helpers.js";
 import { gateRecordsDir, type NewPrReviewFleetGateRecord, writePrReviewGateRecord } from "./pr-review-gate-record.js";
 import { adjudicationSourcesDir, buildAdjudicationSourceDraft, fleetRecordDigestOf, normalizeGitPath, type PrAdjudicationSourceDraft, writeAdjudicationSourceRecord } from "./review/adjudication.js";
 import {
@@ -51,7 +51,7 @@ import {
 } from "./review/findings.js";
 import { CLAIM_BRANCH_RE } from "./revise-sweep.js";
 import type { GhRunner } from "./roadmap/github-issues.js";
-import type { RunStepFn } from "./step-runner.js";
+import type { ForeignRootDenial, RunStepFn } from "./step-runner.js";
 import { runStep } from "./step-runner.js";
 import type { ParkSignal, ProviderName, StepEmit, StepResult } from "./types.js";
 
@@ -151,6 +151,9 @@ export interface RunPrReviewGateOptions {
 	/** Cross-push carry input (#495), built by resolveCarryOptions from a validated prior
 	 *  disposition record. Absent → today's cold behavior, byte-identical. */
 	carry?: PrReviewCarryInput;
+	/** Override the seat write-denial (tests / callers with a richer worktree registry). When
+	 *  absent the gate resolves it itself — every seat gets the denial regardless of cwd. */
+	foreignRootDenial?: ForeignRootDenial;
 }
 
 /** Validated carry plan handed to the gate (#495). Eligibility (D3 + I3) is applied by
@@ -616,10 +619,22 @@ function retainParseFailureTail(label: ReviewLabel, phase: "discovery" | "verifi
 	return diagnosis;
 }
 
-async function runReviewPass(iteration: number, label: ReviewLabel, prompt: string, candidate: StepSettings, pr: string, opts: { cwd: string; runStep: RunStepFn; profile: string; parkSignal: ParkSignal }): Promise<ReviewPass> {
+async function runReviewPass(
+	iteration: number,
+	label: ReviewLabel,
+	prompt: string,
+	candidate: StepSettings,
+	pr: string,
+	opts: { cwd: string; runStep: RunStepFn; profile: string; parkSignal: ParkSignal; foreignRootDenial: ForeignRootDenial },
+): Promise<ReviewPass> {
 	const driver = driverIdentity(candidate);
 	process.stderr.write(`▶ pr-review ${label} · ${driverLabel(driver)}\n`);
-	const result = await opts.runStep("pr-review", prompt, { cwd: opts.cwd, profile: opts.profile, trace: false, parkSignal: opts.parkSignal, itemId: pr, executionOverride: executionOverrideFor(candidate) }, emit);
+	const result = await opts.runStep(
+		"pr-review",
+		prompt,
+		{ cwd: opts.cwd, profile: opts.profile, trace: false, parkSignal: opts.parkSignal, itemId: pr, executionOverride: executionOverrideFor(candidate), foreignRootDenial: opts.foreignRootDenial },
+		emit,
+	);
 	if (!result.ok) {
 		return {
 			iteration,
@@ -687,7 +702,7 @@ async function runVerificationPass(
 	carried: ReadonlyMap<string, ReviewFinding>,
 	profile: string,
 	pr: string,
-	opts: { cwd: string; runStep: RunStepFn; localContext: string; parkSignal: ParkSignal; verifySettings: StepSettings; autoRefutable?: ReadonlyMap<string, PrCarryRefutedEntry> },
+	opts: { cwd: string; runStep: RunStepFn; localContext: string; parkSignal: ParkSignal; verifySettings: StepSettings; foreignRootDenial: ForeignRootDenial; autoRefutable?: ReadonlyMap<string, PrCarryRefutedEntry> },
 ): Promise<void> {
 	if (!pass.report) return;
 	const unique = new Map(carried);
@@ -731,7 +746,7 @@ async function runVerificationPass(
 		result = await opts.runStep(
 			"pr-verify",
 			verificationPrompt(candidates, opts.localContext),
-			{ cwd: opts.cwd, profile, trace: false, parkSignal: opts.parkSignal, itemId: pr, executionOverride: executionOverrideFor(opts.verifySettings) },
+			{ cwd: opts.cwd, profile, trace: false, parkSignal: opts.parkSignal, itemId: pr, executionOverride: executionOverrideFor(opts.verifySettings), foreignRootDenial: opts.foreignRootDenial },
 			emit,
 		);
 	} catch (error) {
@@ -850,6 +865,16 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 	// trusted-context refs; the inspection diff, security signal, and verification context keep
 	// the full range — two ranges, two roles, both computed by the harness.
 	const discoveryContext = carry?.narrowed && options.reviewedSha ? trustedLocalContext({ diffCwd, diffBaseRef: carry.priorSha, diffHeadRef: options.reviewedSha }) : localContext;
+	// #495 store-trust: local review/verify seats historically ran at cwd=REPO (the trusted main
+	// checkout) with NO denial hooks installed — carry makes the .dev evidence stores
+	// AUTHORIZATION inputs, so a prompt-injected seat could forge a disposition + fleet-record
+	// pair. Thread the foreign-root denial into EVERY seat regardless of cwd: it activates the
+	// step-runner's PreToolUse hooks (Claude), denying Write/Edit/Bash on the gate-record,
+	// adjudication-source, finding-disposition, session, and decision-log registers plus foreign
+	// worktree roots. Codex review seats are closed at the OS boundary instead (read-only
+	// sandbox, codex-provider.ts); grok's strict-profile write surface at main cwd is an OPEN
+	// residual documented in docs/pr-review.md (why `review.carry` ships default-off).
+	const seatDenial: ForeignRootDenial = options.foreignRootDenial ?? { mainRepo: mainWorktree(REPO), registeredWorktrees: listWorktreesIn(REPO) };
 
 	for (let iteration = 1; iteration <= policy.maxPasses; iteration++) {
 		const iterationPasses: ReviewPass[] = [];
@@ -867,6 +892,7 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 					profile,
 					// children is built from the same reviewDrivers map, so index always lands.
 					parkSignal: children[index] ?? childParkSignal(),
+					foreignRootDenial: seatDenial,
 				}),
 			);
 			mergeChildParkSignals(signal, children);
@@ -918,7 +944,7 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 
 		// Sequential verify per driver pass that has candidate blockers (scalar pr-verify).
 		for (const pass of iterationPasses) {
-			await runVerificationPass(pass, carried, profile, options.pr, { cwd, runStep: runStepImpl, localContext, parkSignal: signal, verifySettings, autoRefutable: carry?.autoRefutable });
+			await runVerificationPass(pass, carried, profile, options.pr, { cwd, runStep: runStepImpl, localContext, parkSignal: signal, verifySettings, foreignRootDenial: seatDenial, autoRefutable: carry?.autoRefutable });
 			const parked = parkGateResult(signal, pass.verificationResult ?? pass.result, passes);
 			if (parked) return parked;
 		}
@@ -1038,7 +1064,11 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 			}
 		}
 	}
-	const carryToken = carry ? `carry=${carry.priorSha.slice(0, 7)} seeded=${carry.seedSurvivors.size} auto-refuted=${autoRefuted.size}` : "carry=none";
+	// `auto-refutable` is the ELIGIBLE count (post-I3/D3 filtering). Kept beside `auto-refuted`
+	// so `auto-refuted=0` cannot read as "checked and none qualified" — under the shipped default
+	// taxonomy nothing is eligible (production findings all classify safety-tier; see
+	// docs/pr-review.md), and this token says so honestly.
+	const carryToken = carry ? `carry=${carry.priorSha.slice(0, 7)} seeded=${carry.seedSurvivors.size} auto-refutable=${carry.autoRefutable.size} auto-refuted=${autoRefuted.size}` : "carry=none";
 	const summary = `Convergence: ${gate === "pass" ? "converged" : `exhausted (${breakerReason ?? "invalid-pass"})`} · agreement=${agreement} · iterations=${lastIteration} · survivors=${carried.size} · providers=${pairing} · ${carryToken} · aggregate cost=$${cost.toFixed(2)}`;
 	const body = buildComment(gate, passes, securitySignal, summary, {
 		iterations: lastIteration,
@@ -1217,6 +1247,12 @@ export function resolveCarryOptions(opts: {
 		return undefined;
 	}
 	const record = selection.record;
+	if (selection.superseded.length > 0) {
+		// A newer record no longer binds (typically a later pr-adjudicate rewrote the fleet gate
+		// record at that head). Its survivors still seed (toward blocking, via the overlay below);
+		// nothing from it clears a finding.
+		opts.warn(`carry: prior record(s) ${selection.superseded.join(", ")} no longer bind to their fleet gate records (superseded — e.g. by pr-adjudicate); falling back to ${record.prNumber}-${record.headSha}.json`);
+	}
 	// D3 preflight: the narrowed base ref must resolve in the seat-visible diff checkout. In
 	// practice it does (the drain's checkout shares the trusted repo's object store), so this is
 	// a cheap belt-and-braces guard, not a new fetch path.
@@ -1235,7 +1271,7 @@ export function resolveCarryOptions(opts: {
 		opts.warn(`carry disabled — could not compute the interdiff: ${e instanceof Error ? e.message : String(e)}; running a full cold review`);
 		return undefined;
 	}
-	const plan = planCarry(record, touchedPaths, opts.taxonomy);
+	const plan = planCarry(record, touchedPaths, opts.taxonomy, selection.supersededSurvivors);
 	return {
 		priorSha: record.headSha,
 		seedSurvivors: plan.seedSurvivors,

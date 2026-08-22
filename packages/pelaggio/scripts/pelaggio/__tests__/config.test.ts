@@ -849,10 +849,12 @@ describe("loadConfig — review", () => {
 	});
 
 	it("parses the review.carry kill-switch (#495) and rejects non-booleans", () => {
-		assert.equal(DEFAULTS.review.carry, true, "cross-push carry ships enabled");
+		// Canary-off default: the carry stores are authorization inputs and the grok seat's write
+		// surface at main cwd is not yet verified closed (see docs/pr-review.md store-trust note).
+		assert.equal(DEFAULTS.review.carry, false, "cross-push carry ships disabled until the store-trust prerequisite is met");
 		const repo = tmpRepo();
-		const path = writeYml(repo, "review:\n  carry: false\n");
-		assert.deepEqual(loadConfig({ repo, configPath: path }).review, { ...DEFAULTS.review, carry: false });
+		const path = writeYml(repo, "review:\n  carry: true\n");
+		assert.deepEqual(loadConfig({ repo, configPath: path }).review, { ...DEFAULTS.review, carry: true });
 		const bad = writeYml(repo, "review:\n  carry: definitely\n");
 		assert.throws(() => loadConfig({ repo, configPath: bad }), /review\.carry/);
 	});

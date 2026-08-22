@@ -47,6 +47,7 @@ interface RunCall {
 	cwd: string;
 	parkSignal: ParkSignal;
 	executionOverride?: { provider: ProviderName; model?: string; codexModel?: string };
+	foreignRootDenial?: { mainRepo: string; registeredWorktrees: readonly string[] };
 }
 
 function driver(provider: ProviderName, over: Partial<Omit<StepSettings, "provider">> = {}): StepSettings {
@@ -189,7 +190,7 @@ async function runCli(
 		throw new Error(`unexpected command: ${cmd} ${a}`);
 	}) as typeof import("node:child_process").execFileSync;
 	const runStep: RunStepFn = async (name, prompt, stepOpts, _emit: StepEmit) => {
-		calls.push({ name, prompt, cwd: stepOpts.cwd, parkSignal: stepOpts.parkSignal, executionOverride: stepOpts.executionOverride });
+		calls.push({ name, prompt, cwd: stepOpts.cwd, parkSignal: stepOpts.parkSignal, executionOverride: stepOpts.executionOverride, foreignRootDenial: stepOpts.foreignRootDenial });
 		const next = queued.shift();
 		assert.ok(next, "unexpected extra runStep call");
 		if (next instanceof Error) throw next;
@@ -650,6 +651,43 @@ describe("pr-review CLI aggregation", () => {
 		assert.match(out.comments[0], /Original message/);
 		assert.match(out.comments[0], /isolated verification: \*\*refuted\*\*/);
 		assert.match(out.comments[0], /cost=6\.00 turns=8/);
+	});
+
+	it("every review and verify seat carries the evidence-store write denial regardless of cwd (#495 store-trust)", async () => {
+		// Local seats run at cwd=REPO (the trusted main checkout), where no hooks installed before
+		// this fix — leaving the disposition + gate-record stores writable by a prompt-injected
+		// seat. The gate must thread foreignRootDenial into EVERY seat so the step-runner installs
+		// the denial hooks (evidence stores, sessions, decision-log, Bash registers).
+		const out = await runCli({
+			results: [result({ text: report("Candidate.", [{ severity: "must-fix", message: "Blocker.", path: "src/a.ts", line: 7 }]) }), verification([{ candidateId: "C1", decision: "refuted", rationale: "A guard rejects the input." }])],
+		});
+		assert.equal(out.code, 0);
+		assert.deepEqual(
+			out.calls.map((call) => call.name),
+			["pr-review", "pr-verify"],
+		);
+		for (const call of out.calls) {
+			assert.ok(call.foreignRootDenial, `${call.name} seat must receive foreignRootDenial`);
+			assert.ok(call.foreignRootDenial.mainRepo.length > 0, "denial names the main repo");
+			assert.ok(call.foreignRootDenial.registeredWorktrees.length > 0, "denial carries the worktree registry");
+		}
+		// A caller-pinned denial threads through unchanged (drain/tests override seam).
+		const pinned = { mainRepo: "/pinned/main", registeredWorktrees: ["/pinned/main"] };
+		const calls: RunCall[] = [];
+		const gate = await runPrReviewGate({
+			pr: "1",
+			reviewDrivers: [driver("claude")],
+			verifySettings: driver("claude"),
+			policy: reviewPolicy(),
+			foreignRootDenial: pinned,
+			execFileSync: plainDiffExec(),
+			runStep: async (name, prompt, stepOpts) => {
+				calls.push({ name, prompt, cwd: stepOpts.cwd, parkSignal: stepOpts.parkSignal, foreignRootDenial: stepOpts.foreignRootDenial });
+				return result();
+			},
+		});
+		assert.equal(gate.gate, "pass");
+		assert.equal(calls[0]?.foreignRootDenial, pinned);
 	});
 
 	it("does not verify nice or note findings", async () => {
@@ -1896,6 +1934,7 @@ describe("pr-review CLI cross-push carry (#495)", () => {
 	it("carry-refuted-untouched → auto-refute: withheld from the verifier, synthesized disposition, consensus-pass", async () => {
 		const git = carryGit({ touched: ["src/a.ts"] });
 		const out = await runCli({
+			policy: reviewPolicy({ carry: true }),
 			seed: (roots) => seedPrior(roots, { refuted: [judgmentRefuted(F)] }),
 			gitExtra: git.handler,
 			results: [result({ text: report("Block.", [F, G]) }), verification([{ candidateId: "C1", decision: "refuted", rationale: "A guard covers it." }])],
@@ -1913,7 +1952,7 @@ describe("pr-review CLI cross-push carry (#495)", () => {
 		const comment = out.comments[0] ?? "";
 		assert.match(comment, /Auto\\?-refuted by carry/);
 		assert.match(comment, /agreement=consensus-pass/);
-		assert.match(comment, /carry=eeeeeee seeded=0 auto-refuted=1/);
+		assert.match(comment, /carry=eeeeeee seeded=0 auto-refutable=1 auto-refuted=1/);
 		// The new record chains F (provenance carried, origin preserved) and adds G (verified here).
 		const stored = readPrFindingDispositionRecord(out.dispositionsRoot, 123, REVIEWED_SHA);
 		assert.ok(stored);
@@ -1926,6 +1965,7 @@ describe("pr-review CLI cross-push carry (#495)", () => {
 	it("a discovery pass whose every must-fix finding auto-refutes lands pass without a verifier call", async () => {
 		const git = carryGit({ touched: ["src/a.ts"] });
 		const out = await runCli({
+			policy: reviewPolicy({ carry: true }),
 			seed: (roots) => seedPrior(roots, { refuted: [judgmentRefuted(F)] }),
 			gitExtra: git.handler,
 			results: [result({ text: report("Block.", [F]) })],
@@ -1936,13 +1976,14 @@ describe("pr-review CLI cross-push carry (#495)", () => {
 			["pr-review"],
 			"no verifier call when every candidate auto-refutes",
 		);
-		assert.match(out.comments[0] ?? "", /carry=eeeeeee seeded=0 auto-refuted=1/);
+		assert.match(out.comments[0] ?? "", /carry=eeeeeee seeded=0 auto-refutable=1 auto-refuted=1/);
 		assert.match(out.comments[0] ?? "", /agreement=consensus-pass/);
 	});
 
 	it("carry-refuted-touched → re-verify: a touched anchoring path reaches the model verifier and can block", async () => {
 		const git = carryGit({ touched: ["src/other.ts"] });
 		const out = await runCli({
+			policy: reviewPolicy({ carry: true }),
 			seed: (roots) => seedPrior(roots, { refuted: [judgmentRefuted(F)] }),
 			gitExtra: git.handler,
 			results: [result({ text: report("Block.", [F]) }), verification([{ candidateId: "C1", decision: "survives", rationale: "Still real." }])],
@@ -1950,13 +1991,14 @@ describe("pr-review CLI cross-push carry (#495)", () => {
 		assert.equal(out.code, 1);
 		assert.match(out.calls[1]?.prompt ?? "", /Stale style worry/, "touched finding is re-verified fresh");
 		assert.doesNotMatch(out.comments[0] ?? "", /Auto\\?-refuted by carry/);
-		assert.match(out.comments[0] ?? "", /auto-refuted=0/);
+		assert.match(out.comments[0] ?? "", /auto-refutable=0 auto-refuted=0/);
 	});
 
 	it("safety-class findings never self-clear via carry, even with an untouched path", async () => {
 		const safetyF: ReviewFinding = { severity: "must-fix", message: "Real safety concern.", path: "src/other.ts", line: 5 };
 		const git = carryGit({ touched: ["src/a.ts"] });
 		const out = await runCli({
+			policy: reviewPolicy({ carry: true }),
 			seed: (roots) => seedPrior(roots, { refuted: [safetyRefuted(safetyF)] }),
 			gitExtra: git.handler,
 			results: [result({ text: report("Block.", [safetyF]) }), verification([{ candidateId: "C1", decision: "survives", rationale: "Confirmed." }])],
@@ -1964,13 +2006,14 @@ describe("pr-review CLI cross-push carry (#495)", () => {
 		assert.equal(out.code, 1);
 		assert.match(out.calls[1]?.prompt ?? "", /Real safety concern/, "safety finding is verified fresh");
 		assert.doesNotMatch(out.comments[0] ?? "", /Auto\\?-refuted by carry/);
-		assert.match(out.comments[0] ?? "", /auto-refuted=0/);
+		assert.match(out.comments[0] ?? "", /auto-refutable=0 auto-refuted=0/);
 	});
 
 	it("survivor persists absent explicit refutation, and only an explicit valid refutation clears it (I2)", async () => {
 		// (a) Verifier omission → invalid pass → survivor retained, BLOCK.
 		const gitA = carryGit({ touched: ["src/a.ts"] });
 		const retained = await runCli({
+			policy: reviewPolicy({ carry: true }),
 			seed: (roots) => seedPrior(roots, { survived: [seededSurvivor(S)] }),
 			gitExtra: gitA.handler,
 			results: [result(), verification([])],
@@ -1984,6 +2027,7 @@ describe("pr-review CLI cross-push carry (#495)", () => {
 		// (b) Explicit valid refutation → PASS; the record moves it to verified-refuted memory.
 		const gitB = carryGit({ touched: ["src/a.ts"] });
 		const cleared = await runCli({
+			policy: reviewPolicy({ carry: true }),
 			seed: (roots) => seedPrior(roots, { survived: [seededSurvivor(S)] }),
 			gitExtra: gitB.handler,
 			results: [result(), verification([{ candidateId: "C1", decision: "refuted", rationale: "Fixed at this head." }])],
@@ -1995,7 +2039,7 @@ describe("pr-review CLI cross-push carry (#495)", () => {
 	});
 
 	it("malformed, unbindable, or non-ancestor priors run cold with a diagnostic — byte-equal to a no-priors run", async () => {
-		const control = await runCli({ results: [result()] });
+		const control = await runCli({ policy: reviewPolicy({ carry: true }), results: [result()] });
 		assert.equal(control.code, 0);
 		assert.match(control.comments[0] ?? "", /carry=none/);
 
@@ -2010,8 +2054,8 @@ describe("pr-review CLI cross-push carry (#495)", () => {
 				git: carryGit(),
 			},
 			{
-				label: "digest mismatch",
-				diagnostic: /not bound to the exact on-disk fleet gate record/,
+				label: "digest mismatch (superseded fleet record, no older prior to fall back to)",
+				diagnostic: /no prior disposition record for PR 123 still binds .* superseded/,
 				seed: (roots) => seedPrior(roots, { fleetRecordDigest: "1".repeat(64) }),
 				git: carryGit(),
 			},
@@ -2023,7 +2067,7 @@ describe("pr-review CLI cross-push carry (#495)", () => {
 			},
 		];
 		for (const { label, diagnostic, seed, git } of cases) {
-			const out = await runCli({ seed, gitExtra: git.handler, results: [result()] });
+			const out = await runCli({ policy: reviewPolicy({ carry: true }), seed, gitExtra: git.handler, results: [result()] });
 			assert.equal(out.code, control.code, label);
 			assert.match(out.stderr, diagnostic, label);
 			assert.equal(out.comments[0], control.comments[0], `${label}: gate result byte-equal to a no-priors run`);
@@ -2033,7 +2077,7 @@ describe("pr-review CLI cross-push carry (#495)", () => {
 
 	it("first-run-no-priors: cold behavior unchanged, no carry git commands, record still written", async () => {
 		const git = carryGit();
-		const out = await runCli({ gitExtra: git.handler, results: [result()] });
+		const out = await runCli({ policy: reviewPolicy({ carry: true }), gitExtra: git.handler, results: [result()] });
 		assert.equal(out.code, 0);
 		assert.deepEqual(git.calls, [], "an empty store triggers no ancestry/interdiff resolution");
 		assert.match(out.comments[0] ?? "", /carry=none/);
@@ -2045,6 +2089,7 @@ describe("pr-review CLI cross-push carry (#495)", () => {
 	it("narrowing: discovery reviews prior..head while inspection and verification keep the full range", async () => {
 		const git = carryGit({ touched: ["src/a.ts"] });
 		const out = await runCli({
+			policy: reviewPolicy({ carry: true }),
 			seed: (roots) => seedPrior(roots, { refuted: [judgmentRefuted(F)] }),
 			gitExtra: git.handler,
 			results: [result({ text: report("Block.", [G]) }), verification([{ candidateId: "C1", decision: "refuted", rationale: "A guard covers it." }])],
@@ -2060,6 +2105,7 @@ describe("pr-review CLI cross-push carry (#495)", () => {
 	it("a prior unresolvable in the diff checkout runs cold with a diagnostic", async () => {
 		const git = carryGit({ resolvable: false });
 		const out = await runCli({
+			policy: reviewPolicy({ carry: true }),
 			seed: (roots) => seedPrior(roots, { refuted: [judgmentRefuted(F)] }),
 			gitExtra: git.handler,
 			results: [result()],
@@ -2072,6 +2118,7 @@ describe("pr-review CLI cross-push carry (#495)", () => {
 	it("an empty interdiff seeds survivors but does not narrow discovery", async () => {
 		const git = carryGit({ touched: [] });
 		const out = await runCli({
+			policy: reviewPolicy({ carry: true }),
 			seed: (roots) => seedPrior(roots, { survived: [seededSurvivor(S)] }),
 			gitExtra: git.handler,
 			results: [result(), verification([{ candidateId: "C1", decision: "refuted", rationale: "Fixed at this head." }])],
@@ -2099,6 +2146,7 @@ describe("pr-review CLI cross-push carry (#495)", () => {
 	it("park writes no disposition record; CI neither reads nor writes", async () => {
 		const gitPark = carryGit();
 		const parked = await runCli({
+			policy: reviewPolicy({ carry: true }),
 			seed: (roots) => seedPrior(roots, { refuted: [judgmentRefuted(F)] }),
 			gitExtra: gitPark.handler,
 			results: [result({ ok: false, subtype: "error_rate_limit", cost: 0, turns: 0 })],
@@ -2109,6 +2157,7 @@ describe("pr-review CLI cross-push carry (#495)", () => {
 		const gitCi = carryGit();
 		const ci = await runCli({
 			ci: true,
+			policy: reviewPolicy({ carry: true }),
 			seed: (roots) => seedPrior(roots, { refuted: [judgmentRefuted(F)] }),
 			gitExtra: gitCi.handler,
 			results: [result()],
@@ -2118,15 +2167,75 @@ describe("pr-review CLI cross-push carry (#495)", () => {
 		assert.equal(readPrFindingDispositionRecord(ci.dispositionsRoot, 123, REVIEWED_SHA), null, "CI writes no records");
 	});
 
+	it("falls back past a pr-adjudicate-superseded prior to an older bindable one, keeping its blocking side", async () => {
+		const OLDER_SHA = "c".repeat(40);
+		const git = {
+			handler: (a: string): string | undefined => {
+				if (a === `merge-base --is-ancestor ${PRIOR_SHA} ${REVIEWED_SHA}`) return "";
+				if (a === `merge-base --is-ancestor ${OLDER_SHA} ${REVIEWED_SHA}`) return "";
+				if (a === `merge-base --is-ancestor ${OLDER_SHA} ${PRIOR_SHA}`) return "";
+				if (a === `merge-base --is-ancestor ${PRIOR_SHA} ${OLDER_SHA}`) throw new Error("exit 1");
+				if (a === `rev-parse --verify ${OLDER_SHA}^{commit}`) return `${OLDER_SHA}\n`;
+				if (a === `diff --no-ext-diff --no-renames --name-only -z ${OLDER_SHA}..${REVIEWED_SHA} --`) return "src/a.ts\0";
+				return undefined;
+			},
+		};
+		const out = await runCli({
+			policy: reviewPolicy({ carry: true }),
+			seed: (roots) => {
+				// Older prior: digest-bound, carries refutation memory for F.
+				const fleetPath = writePrReviewGateRecord(roots.gateRecordsRoot, {
+					producer: "fleet",
+					prNumber: 123,
+					headSha: OLDER_SHA,
+					itemId: "123",
+					gate: "block",
+					ok: true,
+					subtype: "consensus-block",
+					agreement: "consensus-block",
+					survivorCount: 1,
+					cost: 1,
+					costEstimated: false,
+					turns: 2,
+					runner: "local",
+					reviewedAt: "2026-08-11T12:00:00.000Z",
+				});
+				writePrFindingDispositionRecord(roots.dispositionsRoot, {
+					schemaVersion: 1,
+					prNumber: 123,
+					itemId: "123",
+					headSha: OLDER_SHA,
+					gate: "block",
+					agreement: "consensus-block",
+					ok: true,
+					fleetRecordDigest: fleetRecordDigestOf(readFileSync(fleetPath)),
+					reviewedAt: "2026-08-11T12:00:00.000Z",
+					survived: [],
+					refuted: [judgmentRefuted(F)],
+				});
+				// Newer prior at PRIOR_SHA whose fleet record was rewritten (digest no longer
+				// matches — the pr-adjudicate-overwrite shape); its survivor S must still block.
+				seedPrior(roots, { fleetRecordDigest: "1".repeat(64), survived: [seededSurvivor(S)] });
+			},
+			gitExtra: git.handler,
+			results: [result(), verification([{ candidateId: "C1", decision: "survives", rationale: "Still present." }])],
+		});
+		assert.equal(out.code, 1, "the superseded record's survivor still blocks");
+		assert.match(out.stderr, /no longer bind to their fleet gate records \(superseded — e.g. by pr-adjudicate\)/);
+		assert.match(out.stderr, new RegExp(`falling back to 123-${OLDER_SHA}\\.json`));
+		assert.match(out.calls[1]?.prompt ?? "", /Unfixed bug/, "overlay survivor seeds the verification candidates");
+		assert.match(out.comments[0] ?? "", new RegExp(`carry=${OLDER_SHA.slice(0, 7)} seeded=1 auto-refutable=1`));
+	});
+
 	it("a carried run ending in the post-#592 disagreement split writes record + sidecar", async () => {
 		const parser: ReviewFinding = { severity: "must-fix", message: "Broken parser.", path: "src/a.ts", line: 10 };
 		const mappableDiff = ["diff --git a/src/a.ts b/src/a.ts", "index 1111111..2222222 100644", "--- a/src/a.ts", "+++ b/src/a.ts", "@@ -8,5 +8,5 @@", " context", " context", "-old", "+new", " context", " context", ""].join("\n");
 		const git = carryGit({ touched: ["src/a.ts"] });
 		const out = await runCli({
+			policy: reviewPolicy({ budgetCap: 40, carry: true }),
 			seed: (roots) => seedPrior(roots, { refuted: [judgmentRefuted(F)] }),
 			gitExtra: git.handler,
 			reviewDrivers: twoDrivers,
-			policy: reviewPolicy({ budgetCap: 40 }),
 			files: "src/a.ts\n",
 			diff: mappableDiff,
 			// claude discovers clean; codex blocks on [parser, F]; F auto-refutes, parser survives.
@@ -2135,7 +2244,7 @@ describe("pr-review CLI cross-push carry (#495)", () => {
 		assert.equal(out.code, 1);
 		const comment = out.comments[0] ?? "";
 		assert.match(comment, /agreement=disagreement/);
-		assert.match(comment, /carry=eeeeeee seeded=0 auto-refuted=1/);
+		assert.match(comment, /carry=eeeeeee seeded=0 auto-refutable=1 auto-refuted=1/);
 		// Sidecar: the surviving finding is mappable; the auto-refuted one carries its evidence.
 		const sidecar = readAdjudicationSourceRecord(out.adjudicationSourcesRoot, 123, REVIEWED_SHA);
 		assert.ok(sidecar, "disagreement terminal emits the SHA-bound sidecar");
