@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { CONFIG, modelForProvider, REPO, type ReviewConfig, ROADMAP_GITHUB, resolveDriverCandidates, resolveStepSettings, type StepSettings } from "./config.js";
 import { upsertMarkerComment } from "./github-posting.js";
-import { classifySecurityReviewDiff, escapeHtml, escapeMarkdown, expandPackagedSkill, formatReviewMetrics, mainWorktree, parseWaitFlag, resolveParkReset, type SecurityDiffSignal } from "./helpers.js";
+import { classifySecurityReviewDiff, escapeHtmlForSink, escapeMarkdown, escapeMarkdownForSink, expandPackagedSkill, formatReviewMetrics, mainWorktree, parseWaitFlag, resolveParkReset, type SecurityDiffSignal } from "./helpers.js";
 import { gateRecordsDir, type NewPrReviewFleetGateRecord, writePrReviewGateRecord } from "./pr-review-gate-record.js";
 import { adjudicationSourcesDir, buildAdjudicationSourceDraft, fleetRecordDigestOf, type PrAdjudicationSourceDraft, writeAdjudicationSourceRecord } from "./review/adjudication.js";
 import {
@@ -38,7 +38,7 @@ import {
 } from "./review/findings.js";
 import { CLAIM_BRANCH_RE } from "./revise-sweep.js";
 import type { GhRunner } from "./roadmap/github-issues.js";
-import { collectSecretEnvValues, makeSecretScrubber } from "./secret-hygiene.js";
+import { scrubForPublicSink } from "./secret-hygiene.js";
 import type { RunStepFn } from "./step-runner.js";
 import { runStep } from "./step-runner.js";
 import type { ParkSignal, ProviderName, StepEmit, StepResult } from "./types.js";
@@ -181,29 +181,34 @@ export function setPrReviewDepsForTests(overrides: Partial<PrReviewDeps>): () =>
 }
 
 /** Minimal stderr progress emitter — the pipeline's rich TUI renderer is not
- *  available (nor wanted) in a single-shot CI job. */
+ *  available (nor wanted) in a single-shot CI job. Model-controlled event fields
+ *  (tool brief/error, SDK error/warning text, block reason) reach this stderr sink, and the
+ *  denied seat still holds leftover CLI auth (#572), so every such field is scrubbed through
+ *  the shared public-sink wrapper before write (#554). Closed/harness fields (model, budget,
+ *  turns, limitType, ok/subtype/cost) are not model-controlled and pass through. */
 const emit: StepEmit = (event) => {
+	const scrub = (value: string): string => scrubForPublicSink(value, deps.env);
 	switch (event.type) {
 		case "step_header":
 			process.stderr.write(`▶ pr-review — model=${event.model} budget=$${event.budget} maxTurns=${event.maxTurns}\n`);
 			break;
 		case "tool_use":
-			process.stderr.write(`  · ${event.name} ${event.brief}\n`);
+			process.stderr.write(`  · ${scrub(event.name)} ${scrub(event.brief)}\n`);
 			break;
 		case "tool_error":
-			process.stderr.write(`  ✗ ${event.name}: ${event.error.slice(0, 200)}\n`);
+			process.stderr.write(`  ✗ ${scrub(event.name)}: ${scrub(event.error).slice(0, 200)}\n`);
 			break;
 		case "rate_limit":
 			process.stderr.write(`  ⏸ rate limit (${event.limitType})\n`);
 			break;
 		case "sdk_error":
-			process.stderr.write(`  ✗ SDK error: ${event.message}\n`);
+			process.stderr.write(`  ✗ SDK error: ${scrub(event.message)}\n`);
 			break;
 		case "sdk_warning":
-			process.stderr.write(`  ⚠ SDK warning: ${event.message}\n`);
+			process.stderr.write(`  ⚠ SDK warning: ${scrub(event.message)}\n`);
 			break;
 		case "blocked":
-			process.stderr.write(`  ⛔ blocked: ${event.reason}\n`);
+			process.stderr.write(`  ⛔ blocked: ${scrub(event.reason)}\n`);
 			break;
 		case "done":
 			process.stderr.write(`■ done — ok=${event.ok} subtype=${event.subtype} cost=$${event.cost.toFixed(2)} turns=${event.turns}\n`);
@@ -238,14 +243,19 @@ function renderPass(pass: ReviewPass): string {
 	const title = pass.label === "standard" ? "Standard Review" : "Adversarial Red-Team Review";
 	const heading = `## ${title} (Iteration ${pass.iteration} · ${escapeMarkdown(driverLabel(pass.driver))} · ${pass.effectiveVerdict})`;
 	if (pass.report) {
+		// Model-authored fields (summary, finding message/path, verifier rationale) are scrubbed
+		// for the public sink (#554): a schema-VALID report can carry a credential the seat still
+		// holds (#572). Closed/validated fields — severity/decision enums, the `^C\d+$` id, the
+		// harness-invariant verificationDiagnostic — use the plain escaper.
+		const md = (value: string): string => escapeMarkdownForSink(value, deps.env);
 		const findings = pass.report.findings.map((finding) => {
-			const location = finding.path ? ` (\`${escapeMarkdown(finding.path)}${finding.line ? `:${finding.line}` : ""}\`)` : "";
+			const location = finding.path ? ` (\`${md(finding.path)}${finding.line ? `:${finding.line}` : ""}\`)` : "";
 			const disposition = pass.dispositions?.find((item) => item.finding === finding);
-			const verification = disposition ? ` — isolated verification: **${disposition.decision}** (${escapeMarkdown(disposition.id)}: ${escapeMarkdown(disposition.rationale)})` : "";
+			const verification = disposition ? ` — isolated verification: **${disposition.decision}** (${escapeMarkdown(disposition.id)}: ${md(disposition.rationale)})` : "";
 			const retained = finding.severity === "must-fix" && pass.verificationDiagnostic ? ` — isolated verification failed; blocker retained (${escapeMarkdown(pass.verificationDiagnostic)})` : "";
-			return `- **${finding.severity}**${location}: ${escapeMarkdown(finding.message)}${verification}${retained}`;
+			return `- **${finding.severity}**${location}: ${md(finding.message)}${verification}${retained}`;
 		});
-		return [heading, "", escapeMarkdown(pass.report.summary), "", ...(findings.length > 0 ? findings : ["No findings."])].join("\n");
+		return [heading, "", md(pass.report.summary), "", ...(findings.length > 0 ? findings : ["No findings."])].join("\n");
 	}
 	// No structured report → discovery parse failure or infra failure. This comment is PUBLIC (and
 	// mirrored to CI stdout), so it must carry NEITHER `result.text` NOR `modelAuthoredText` NOR any
@@ -260,7 +270,10 @@ function renderPass(pass: ReviewPass): string {
 	// ReviewFindingsParseErrorCode. #554 closed the forge-status path; this sink stays invariant as
 	// defense in depth for leftover CLI auth (#536 / #572).
 	const diagnosis = pass.parseFailureDiagnosis
-		? ["", "Parse diagnosis (invariant: phase + a single constant `parse-failure` code, never the specific parse error; no model output retained — #536/#554):", "", `<pre>${escapeHtml(pass.parseFailureDiagnosis)}</pre>`]
+		? // The diagnosis is harness-invariant (phase + the constant `parse-failure` code, never
+			// model output), so escaping suffices; routed through the sink escaper anyway as a
+			// no-op belt over the shared wrapper.
+			["", "Parse diagnosis (invariant: phase + a single constant `parse-failure` code, never the specific parse error; no model output retained — #536/#554):", "", `<pre>${escapeHtmlForSink(pass.parseFailureDiagnosis, deps.env)}</pre>`]
 		: [];
 	return [heading, "", `${escapeMarkdown(pass.diagnostic ?? `Run did not complete cleanly (${pass.result.subtype}).`)} Failing this pass closed.`, ...diagnosis].join("\n");
 }
@@ -489,27 +502,14 @@ export function reviewedHeadFetchAuthEnv(env: NodeJS.ProcessEnv, host: string): 
 }
 
 /**
- * Scrub a crash message before it reaches the durable public sinks (stderr + the
- * fail-closed PR comment). Extends the generic env-value scrubber with the BASE64 forms of
- * the harness forge tokens: child-process error messages can embed argv/env-derived
- * strings, and the standard credential patterns do not match base64. Defense in depth —
- * the fetch credential no longer rides argv at all (reviewedHeadFetchAuthEnv), but the
- * crash path must stay safe even if a future channel re-encodes a token.
+ * Scrub a crash message before it reaches the durable public sinks (stderr + the fail-closed
+ * PR comment). Thin alias over the shared {@link scrubForPublicSink} wrapper (raw env-value
+ * scrubber + the base64 layer) so the crash path and the report/progress sinks share one
+ * implementation — a child-process error can embed argv/env-derived strings the standard
+ * credential patterns do not match.
  */
 export function scrubCrashMessage(message: string, env: NodeJS.ProcessEnv): string {
-	let scrubbed = makeSecretScrubber(env)(message);
-	// Base64 layer over EVERY secret-named env value present (collectSecretEnvValues), not just
-	// forge tokens: a child error message can embed any re-encoded credential the raw scrubber
-	// cannot see. Longest form first — base64("x-access-token:") is 15 bytes (3-byte aligned),
-	// so the basic-credential encoding literally ends with base64(value); redacting the short
-	// form first would split the long form and leave its prefix behind.
-	const encodedForms = collectSecretEnvValues(env)
-		.flatMap((value) => [Buffer.from(`x-access-token:${value}`).toString("base64"), Buffer.from(value).toString("base64")])
-		.sort((a, b) => b.length - a.length);
-	for (const encoded of encodedForms) {
-		scrubbed = scrubbed.split(encoded).join("[REDACTED]");
-	}
-	return scrubbed;
+	return scrubForPublicSink(message, env);
 }
 
 /** Resolve and pin the SHA to review + post to: the PR's *head* commit, fetched

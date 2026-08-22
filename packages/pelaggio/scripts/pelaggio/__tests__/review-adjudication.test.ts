@@ -239,7 +239,7 @@ describe("adjudication source store", () => {
 	});
 
 	/** One renderer input with an injection planted in exactly the given model-authored fields. */
-	function renderWithInjection(inject: { survivorMessage?: string; survivorPath?: string; refutedMessage?: string; refutedPath?: string; dispositionRationale?: string; liveRationale?: string }): string {
+	function renderWithInjection(inject: { survivorMessage?: string; survivorPath?: string; refutedMessage?: string; refutedPath?: string; dispositionRationale?: string; liveRationale?: string; env?: NodeJS.ProcessEnv }): string {
 		const survivorFinding = finding({
 			...(inject.survivorMessage !== undefined ? { message: inject.survivorMessage } : {}),
 			...(inject.survivorPath !== undefined ? { path: inject.survivorPath } : {}),
@@ -258,6 +258,7 @@ describe("adjudication source store", () => {
 			survivors: [survivorEntry],
 			refuted: [{ finding: goneFinding, fingerprint: reviewFindingFingerprint(goneFinding), verification: { id: "C2", decision: "refuted", rationale: inject.liveRationale ?? "Not reproducible." } }],
 			dispositions: { [survivorEntry.fingerprint]: { disposition: "fixed", rationale: inject.dispositionRationale ?? "Contained by the source hunk." } },
+			env: inject.env ?? {},
 		});
 	}
 
@@ -283,6 +284,27 @@ describe("adjudication source store", () => {
 				assert.match(body, /Carried findings already refuted by the fleet/, `${field}: refuted section intact`);
 			}
 		}
+	});
+
+	it("scrubs a credential out of every model-authored operator-comment field (#554)", () => {
+		// The operator PASS comment republishes fleet/verifier text (survivor message, disposition
+		// rationale) authored by a seat holding leftover CLI auth (#572); a valid finding could
+		// carry the key. The adjudicator's harness env sources the scrubber.
+		const apiKey = "sk-ant-adjudcommentkey246810";
+		const env = { ANTHROPIC_API_KEY: apiKey } as NodeJS.ProcessEnv;
+		const bodies = [
+			renderWithInjection({ survivorMessage: `bug leaking ${apiKey}`, env }),
+			renderWithInjection({ dispositionRationale: `Contained; verifier saw ${apiKey}`, env }),
+			renderWithInjection({ liveRationale: `not reproducible near ${apiKey}`, env }),
+		];
+		for (const body of bodies) {
+			assert.equal(body.includes("adjudcommentkey246810"), false, "the key must not reach the operator comment");
+			assert.match(body, /REDACTED/);
+			assert.match(body, /### Findings/, "comment still renders legibly");
+		}
+		// Without the secret in env, the same text is published verbatim (no over-redaction).
+		const clean = renderWithInjection({ survivorMessage: "ordinary finding text", env: {} });
+		assert.match(clean, /ordinary finding text/);
 	});
 
 	it("the actual revise-sweep marker matcher rejects a fully injected operator comment before any authority lookup (#597)", () => {
@@ -822,6 +844,7 @@ describe("zero-context interdiff policy", () => {
 			adjudicator: "chris",
 			survivors: [entry],
 			dispositions: result.dispositions,
+			env: {},
 		});
 		// #510: the operator comment carries its OWN marker. It must never contain the fleet
 		// marker that fetchReviewFindings scrapes into revise/implement prompts — a failed status

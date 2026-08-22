@@ -8,6 +8,7 @@ import { resolveArtifactRoot } from "./artifact-root.js";
 import { CONFIG, isPipelineStep, LOG_PATH, type PipelineStep, REPO, resolveProviderBin, STEPS, WORKTREE_PREFIX } from "./config.js";
 import { MarkdownRoadmap } from "./roadmap/markdown.js";
 import type { CreateItemOpts, RoadmapSource } from "./roadmap/types.js";
+import { makePublicSinkScrubber } from "./secret-hygiene.js";
 import type { CycleDisposition, CycleDriverProvenance, CycleGitBinding, CycleResult, CycleVersionProvenance, Decision, Mutex, ParkClass, ProviderName, Step, StepLog, StepResult } from "./types.js";
 
 export function parseDecisions(text: string): Decision[] {
@@ -839,6 +840,23 @@ export function escapeHtml(value: string): string {
  *  review/adjudication.ts can share it without a pr-review-cli → step-runner import cycle. */
 export function escapeMarkdown(value: string): string {
 	return escapeHtml(value).replace(/([\\`*_[\]{}()#+.!|>-])/g, "\\$1");
+}
+
+/**
+ * Escape model-authored text for a public sink AND scrub any harness credential out of it
+ * first (#554). Both the fleet review comment and the operator-adjudication comment publish
+ * model-controlled strings while the authoring seat holds leftover CLI auth, so a schema-valid
+ * finding could carry a key. Scrub BEFORE escaping — the markdown backslashes would otherwise
+ * split a literal credential and defeat the exact-substring match. The scrubber is memoized per
+ * env ({@link makePublicSinkScrubber}), so routing every field through this stays O(1) setup.
+ */
+export function escapeMarkdownForSink(value: string, env: NodeJS.ProcessEnv): string {
+	return escapeMarkdown(makePublicSinkScrubber(env)(value));
+}
+
+/** {@link escapeMarkdownForSink} for an HTML-only sink (e.g. a `<pre>` block). */
+export function escapeHtmlForSink(value: string, env: NodeJS.ProcessEnv): string {
+	return escapeHtml(makePublicSinkScrubber(env)(value));
 }
 
 // ── Blocked / stalled-ask parsing ──────────────────────────────────────

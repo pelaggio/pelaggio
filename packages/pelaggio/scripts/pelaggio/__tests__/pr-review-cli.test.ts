@@ -11,7 +11,7 @@ import { listPrReviewGateRecords, readPrReviewGateRecord, writePrReviewGateRecor
 import { isEligibleFleetGateRecord, readAdjudicationSourceRecord } from "../review/adjudication.js";
 import { reviewFindingFingerprint } from "../review/findings.js";
 import type { RunStepFn } from "../step-runner.js";
-import type { ParkSignal, ProviderName, StepEmit, StepResult } from "../types.js";
+import type { ParkSignal, ProviderName, StepEmit, StepEvent, StepResult } from "../types.js";
 
 const tmpDirs: string[] = [];
 after(() => {
@@ -156,6 +156,7 @@ async function runCli(
 		ci?: boolean;
 		env?: NodeJS.ProcessEnv;
 		originUrl?: string;
+		emitEvents?: StepEvent[];
 	} = {},
 ): Promise<{
 	code: number;
@@ -199,8 +200,10 @@ async function runCli(
 		if (a === `diff origin/main...${REVIEWED_SHA}`) return opts.diff ?? "+Clarify docs.\n";
 		throw new Error(`unexpected command: ${cmd} ${a}`);
 	}) as typeof import("node:child_process").execFileSync;
-	const runStep: RunStepFn = async (name, prompt, stepOpts, _emit: StepEmit) => {
+	const runStep: RunStepFn = async (name, prompt, stepOpts, emit: StepEmit) => {
 		calls.push({ name, prompt, cwd: stepOpts.cwd, parkSignal: stepOpts.parkSignal, executionOverride: stepOpts.executionOverride });
+		// Let a test drive the progress emitter (the stderr sink) with crafted events.
+		for (const event of opts.emitEvents ?? []) emit(event);
 		const next = queued.shift();
 		assert.ok(next, "unexpected extra runStep call");
 		if (next instanceof Error) throw next;
@@ -391,6 +394,24 @@ describe("pr-review CLI aggregation", () => {
 		// Non-secret model content is untouched.
 		assert.match(rendered, /Clean review with/);
 		assert.match(rendered, /spotted in config/);
+	});
+
+	it("scrubs model-controlled progress-emitter fields before the stderr sink (#554)", async () => {
+		// The progress emitter mirrors SDK/tool events to stderr; a prompt-injected step can put
+		// a credential the seat holds into a tool error / SDK message / block reason.
+		const apiKey = "sk-ant-emittersinkkey987654";
+		const out = await runCli({
+			env: { ANTHROPIC_API_KEY: apiKey },
+			emitEvents: [
+				{ type: "sdk_error", message: `boom ${apiKey} in sdk error` },
+				{ type: "blocked", reason: `blocked because ${apiKey}` },
+				{ type: "tool_error", name: "Bash", brief: "run", error: `failed with ${apiKey}` },
+			],
+		});
+		assert.equal(out.code, 0);
+		assert.equal(out.stderr.includes("emittersinkkey987654"), false, "the key must not reach the stderr progress sink");
+		assert.match(out.stderr, /SDK error: boom \[REDACTED\]/);
+		assert.match(out.stderr, /blocked: blocked because \[REDACTED\]/);
 	});
 
 	it("trims a whitespace-padded token before encoding the fetch credential (#554)", async () => {
@@ -1965,6 +1986,7 @@ describe("pr-review CLI local gate-evidence persistence (#497)", () => {
 			managedState: () => "managed",
 			isCi: false,
 			isSingleShot: false,
+			env: {},
 		};
 		return { deps, effects, comments };
 	}

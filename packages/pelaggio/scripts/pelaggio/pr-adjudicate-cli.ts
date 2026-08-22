@@ -89,6 +89,8 @@ export interface PrAdjudicateDeps {
 	managedState: (itemId: string) => "managed" | "unmanaged" | "unknown";
 	isCi: boolean;
 	isSingleShot: boolean;
+	/** Harness env — sources the public-sink credential scrubber for the operator comment (#554). */
+	env: NodeJS.ProcessEnv;
 }
 
 export type ParsedPrAdjudicateArgs = { kind: "run"; pr: number; profile: string } | { kind: "error"; message: string };
@@ -154,6 +156,7 @@ function defaultDeps(): PrAdjudicateDeps {
 		managedState: (itemId) => autopilotManagedState(gh, ghRepo, itemId, ROADMAP_GITHUB.label),
 		isCi: process.env.CI === "true",
 		isSingleShot: process.env.PELAGGIO_SINGLE_SHOT === "1",
+		env: process.env,
 	};
 }
 
@@ -475,6 +478,7 @@ export async function runPrAdjudication(pr: number, profile: string, deps: PrAdj
 			survivors: source.survivors,
 			refuted: source.refuted,
 			dispositions: finalDispositions,
+			env: deps.env,
 		});
 		if (!deps.upsertComment(deps.gh, deps.ghRepo, pr, body)) return refuse(deps, "failed to upsert the operator adjudication comment");
 

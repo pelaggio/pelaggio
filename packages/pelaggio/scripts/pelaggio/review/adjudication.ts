@@ -11,7 +11,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { parsePatch, type StructuredPatch } from "diff";
-import { escapeMarkdown } from "../helpers.js";
+import { escapeMarkdownForSink } from "../helpers.js";
 import type { PrReviewAgreement } from "../pr-review-cli.js";
 import type { NewPrReviewOperatorGateRecord, PrReviewFindingDispositionEntry, PrReviewGateRecord } from "../pr-review-gate-record.js";
 import { type ClassificationResult, type ClassificationSignalKind, materializeAuthoringFinding, type ReviewFinding, type ReviewFindingClass, type ReviewFindingSeverity, reviewFindingFingerprint } from "./findings.js";
@@ -810,18 +810,21 @@ export function evaluateInterdiffPolicy(opts: { isAncestor: boolean; interdiff: 
 	return { kind: "eligible", digest, dispositions };
 }
 
-/** Model-authored path:line location, escaped for the public comment (line is a validated int). */
-function renderFindingLocation(finding: ReviewFinding): string {
-	return finding.path ? ` (\`${escapeMarkdown(finding.path)}${finding.line ? `:${finding.line}` : ""}\`)` : "";
+/** Model-authored path:line location, escaped + credential-scrubbed for the public comment
+ *  (line is a validated int). */
+function renderFindingLocation(finding: ReviewFinding, env: NodeJS.ProcessEnv): string {
+	return finding.path ? ` (\`${escapeMarkdownForSink(finding.path, env)}${finding.line ? `:${finding.line}` : ""}\`)` : "";
 }
 
 /**
- * PUBLIC comment surface: EVERY model-authored string is escaped at this render site with the
- * one shared `escapeMarkdown` rule (#597 sweep) — finding.message, finding.path, and every
- * rationale (disposition rationales embed live/fleet verifier text, and even the harness churn
- * templates carry model-influenced hunk paths). An unescaped field would let an injected
- * `<!-- pelaggio-pr-review -->` turn this trusted PASS comment into the newest
- * fetchReviewFindings/revise-sweep scrape target. Deliberately NOT escaped (closed or validated
+ * PUBLIC comment surface: EVERY model-authored string is escaped AND credential-scrubbed at
+ * this render site with the one shared `escapeMarkdownForSink` wrapper (#597 sweep + #554
+ * scrub) — finding.message, finding.path, and every rationale (disposition rationales embed
+ * live/fleet verifier text, and even the harness churn templates carry model-influenced hunk
+ * paths). An unescaped field would let an injected `<!-- pelaggio-pr-review -->` turn this
+ * trusted PASS comment into the newest fetchReviewFindings/revise-sweep scrape target, and an
+ * unscrubbed one could republish a credential a review/verify seat embedded in a valid finding.
+ * Deliberately NOT escaped (closed or validated
  * grammars, or non-model provenance): severity and disposition enums, candidate ids
  * (`^C[1-9]\d*$`), line numbers, SHAs/digests, the authenticated adjudicator login, and
  * harness-authored constants.
@@ -835,16 +838,19 @@ export function renderOperatorAdjudicationComment(opts: {
 	survivors: readonly PrAdjudicationSurvivorEntry[];
 	refuted?: readonly PrAdjudicationRefutedEntry[];
 	dispositions: Record<string, PrReviewFindingDispositionEntry>;
+	/** Adjudicator harness env — sources the public-sink credential scrubber (#554). */
+	env: NodeJS.ProcessEnv;
 }): string {
+	const md = (value: string): string => escapeMarkdownForSink(value, opts.env);
 	const findings = opts.survivors.map((survivor) => {
-		const location = renderFindingLocation(survivor.finding);
+		const location = renderFindingLocation(survivor.finding, opts.env);
 		const entry = opts.dispositions[survivor.fingerprint];
-		const disposition = entry ? ` — **${entry.disposition}** (${escapeMarkdown(entry.rationale)})` : "";
-		return `- **${survivor.finding.severity}**${location}: ${escapeMarkdown(survivor.finding.message)}${disposition}`;
+		const disposition = entry ? ` — **${entry.disposition}** (${md(entry.rationale)})` : "";
+		return `- **${survivor.finding.severity}**${location}: ${md(survivor.finding.message)}${disposition}`;
 	});
 	const refuted = (opts.refuted ?? []).map((entry) => {
-		const location = renderFindingLocation(entry.finding);
-		return `- **${entry.finding.severity}**${location}: ${escapeMarkdown(entry.finding.message)} — **refuted** by fleet isolated verification ${entry.verification.id} (${escapeMarkdown(entry.verification.rationale)}); no repair required`;
+		const location = renderFindingLocation(entry.finding, opts.env);
+		return `- **${entry.finding.severity}**${location}: ${md(entry.finding.message)} — **refuted** by fleet isolated verification ${entry.verification.id} (${md(entry.verification.rationale)}); no repair required`;
 	});
 	return [
 		PR_ADJUDICATION_MARKER,

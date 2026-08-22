@@ -183,21 +183,39 @@ const SECRET_NAME = /(?:_|^)(?:API[_-]?KEY|KEY|TOKEN|SECRET|PASSWORD|PASSWD|CRED
 /** Collect the values of secret-named env vars, so their literal values can be scrubbed from logs
  *  even when they don't match a known credential pattern. Short values (<6 chars) are ignored to
  *  avoid redacting incidental substrings. */
-export function collectSecretEnvValues(source: NodeJS.ProcessEnv = process.env): string[] {
+/** Bare (colonless) proxy userinfo is treated as a token only past this length; shorter bare
+ *  userinfo (a human username like "operator") is not registered unless the proxy was
+ *  explicitly forwarded (allowlisted). Password-bearing userinfo is always a secret. */
+const MIN_BARE_PROXY_TOKEN_LENGTH = 12;
+
+export interface CollectSecretEnvOptions {
+	/** Proxy var NAMES the operator explicitly forwarded via `security.env-allowlist`. An
+	 *  allowlisted credentialed proxy's userinfo is sensitive by definition, so its FULL
+	 *  userinfo (colon or not, any length) is registered even without a password component. */
+	forwardedProxyNames?: ReadonlySet<string>;
+}
+
+export function collectSecretEnvValues(source: NodeJS.ProcessEnv = process.env, opts: CollectSecretEnvOptions = {}): string[] {
 	const values: string[] = [];
 	for (const [name, value] of Object.entries(source)) {
 		if (!value) continue;
 		if (value.length >= 6 && SECRET_NAME.test(name)) values.push(value);
 		// Proxy URL userinfo is a credential wherever the value appears — registered regardless
 		// of whether the var was forwarded, so an operator opt-in still scrubs logs/crash sinks.
-		// PASSWORD-carrying userinfo only: a bare username ("operator@proxy") is not a secret,
-		// and registering it would redact that word from unrelated logs. (Forwarding still
-		// drops ANY `@`-carrying value by default — classifyProxyValue is unchanged.)
+		// Registration rule (#554): a PASSWORD component (`user:pass`) is always a secret; a
+		// BARE (colonless) userinfo is registered only when it is long enough to be a token
+		// (an opaque bearer token) OR the proxy var was explicitly allowlisted — so a short
+		// human username like "operator" is not redacted from unrelated logs. (Forwarding still
+		// drops ANY `@`-carrying value by default unless allowlisted — classifyProxyValue.)
 		if (PROXY_URL_ENV_NAMES.has(name)) {
 			const userinfo = proxyUrlUserinfo(value);
-			if (userinfo?.includes(":")) {
-				values.push(value);
-				if (userinfo.length >= 6) values.push(userinfo);
+			if (userinfo !== undefined) {
+				const allowlisted = opts.forwardedProxyNames?.has(name) ?? false;
+				const isSecret = userinfo.includes(":") || allowlisted || userinfo.length >= MIN_BARE_PROXY_TOKEN_LENGTH;
+				if (isSecret) {
+					values.push(value);
+					if (userinfo.length >= 6) values.push(userinfo);
+				}
 			}
 		}
 	}
@@ -228,7 +246,44 @@ export function scrubSecrets(text: string, opts: ScrubOptions = {}): string {
  * at every log/stderr write site (redact-before-write). Collect once at construction so the
  * per-line cost is just the replace passes.
  */
-export function makeSecretScrubber(source: NodeJS.ProcessEnv = process.env): (text: string) => string {
-	const secretValues = collectSecretEnvValues(source);
+export function makeSecretScrubber(source: NodeJS.ProcessEnv = process.env, opts: CollectSecretEnvOptions = {}): (text: string) => string {
+	const secretValues = collectSecretEnvValues(source, opts);
 	return (text: string): string => scrubSecrets(text, { secretValues });
+}
+
+/** Per-env memo of the public-sink scrubber so a report render builds it ONCE and reuses it
+ *  across every field (keyed on the env object identity — `process.env` is one stable object). */
+const publicSinkScrubberCache = new WeakMap<NodeJS.ProcessEnv, (text: string) => string>();
+
+/**
+ * Build (once per env) the scrubber for any PUBLIC or durable sink that may carry
+ * model-controlled or child-process text — CI stdout, a PR/adjudication comment, a commit-
+ * status description, stderr diagnostics. Layers a BASE64 pass (both `base64(value)` and the
+ * `base64("x-access-token:" + value)` basic-credential form, longest-first so the long form
+ * is redacted before its own suffix) over {@link makeSecretScrubber}, because a re-encoded
+ * credential defeats the raw value/pattern scrubber. The env's secret values and their
+ * encodings are computed once and cached; per-field cost is just the replace passes.
+ */
+export function makePublicSinkScrubber(env: NodeJS.ProcessEnv, opts: CollectSecretEnvOptions = {}): (text: string) => string {
+	// Cache only the common no-options path (the memo is keyed on env identity, and the
+	// forwarded-proxy set is not part of the key); an explicit opts build is rare and cheap.
+	const cacheable = opts.forwardedProxyNames === undefined;
+	const cached = cacheable ? publicSinkScrubberCache.get(env) : undefined;
+	if (cached) return cached;
+	const base = makeSecretScrubber(env, opts);
+	const encodedForms = collectSecretEnvValues(env, opts)
+		.flatMap((value) => [Buffer.from(`x-access-token:${value}`).toString("base64"), Buffer.from(value).toString("base64")])
+		.sort((a, b) => b.length - a.length);
+	const scrubber = (text: string): string => {
+		let out = base(text);
+		for (const encoded of encodedForms) out = out.split(encoded).join(REDACTED);
+		return out;
+	};
+	if (cacheable) publicSinkScrubberCache.set(env, scrubber);
+	return scrubber;
+}
+
+/** One-shot convenience over {@link makePublicSinkScrubber} for a single field. */
+export function scrubForPublicSink(value: string, env: NodeJS.ProcessEnv): string {
+	return makePublicSinkScrubber(env)(value);
 }

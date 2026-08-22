@@ -116,7 +116,7 @@ describe("buildAgentEnv (#237) — deny-by-default env allowlist", () => {
 		} finally {
 			process.stderr.write = originalWrite;
 		}
-		// ...but a bare username is not a secret: unrelated mentions survive scrubbing.
+		// ...but a SHORT bare username is not a secret: unrelated mentions survive scrubbing.
 		assert.deepEqual(collectSecretEnvValues({ HTTPS_PROXY: bare }), []);
 		assert.equal(makeSecretScrubber({ HTTPS_PROXY: bare })("operator restarted the proxy"), "operator restarted the proxy");
 		// Password-carrying userinfo (and its full URL) stays registered.
@@ -124,6 +124,25 @@ describe("buildAgentEnv (#237) — deny-by-default env allowlist", () => {
 		const values = collectSecretEnvValues({ HTTPS_PROXY: credentialed });
 		assert.ok(values.includes(credentialed));
 		assert.ok(values.includes("operator:proxy-pass-9"));
+	});
+
+	it("registers a long bare (colonless) proxy token, and any allowlisted proxy userinfo, as a secret (#554)", () => {
+		// A long opaque bearer token in userinfo has no colon but IS a credential (≥12 chars).
+		const opaque = "http://gho_longopaquebearertoken1234@proxy.corp:3128";
+		const opaqueValues = collectSecretEnvValues({ HTTPS_PROXY: opaque });
+		assert.ok(opaqueValues.includes(opaque), "the full opaque-token URL must be registered");
+		assert.ok(opaqueValues.includes("gho_longopaquebearertoken1234"), "the long bare token must be registered");
+		assert.match(makeSecretScrubber({ HTTPS_PROXY: opaque })("using gho_longopaquebearertoken1234"), /\[REDACTED\]/);
+		// A SHORT bare token is registered too once the proxy var is explicitly ALLOWLISTED —
+		// an allowlisted credentialed proxy's userinfo is sensitive by definition (the hole the
+		// password-only rule left). Non-allowlisted short bare userinfo stays unregistered.
+		const shortTok = "http://shorttoken@proxy.corp:3128"; // "shorttoken" = 10 chars, below the ≥12 bare-token bar
+		const forwarded = new Set(["HTTPS_PROXY"]);
+		assert.deepEqual(collectSecretEnvValues({ HTTPS_PROXY: shortTok }), []);
+		const allowlisted = collectSecretEnvValues({ HTTPS_PROXY: shortTok }, { forwardedProxyNames: forwarded });
+		assert.ok(allowlisted.includes(shortTok));
+		assert.ok(allowlisted.includes("shorttoken"));
+		assert.match(makeSecretScrubber({ HTTPS_PROXY: shortTok }, { forwardedProxyNames: forwarded })("token shorttoken used"), /\[REDACTED\]/);
 	});
 
 	it("drops a relative XDG_CONFIG_HOME (XDG-invalid) while forwarding an absolute one", () => {

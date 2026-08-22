@@ -174,6 +174,7 @@ function harness(
 		reviewRunner?: "ci" | "local";
 		isCi?: boolean;
 		isSingleShot?: boolean;
+		env?: NodeJS.ProcessEnv;
 		mainWorktree?: string;
 		seed?: boolean;
 		/** Evidence-shape overrides threaded to seedEvidence (#525 disagreement coverage). */
@@ -327,6 +328,7 @@ function harness(
 		},
 		isCi: over.isCi ?? false,
 		isSingleShot: over.isSingleShot ?? false,
+		env: over.env ?? {},
 	};
 	return { deps, effects, stepCalls, logs, errs, repo, gateRoot, sourceRoot, heads };
 }
