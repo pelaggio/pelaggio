@@ -9,7 +9,7 @@
     "assumes": {"from": ["decision", "claim"], "to": ["assumption"]},
     "supersedes": {"from": ["decision"], "to": ["decision"]},
     "specializes": {"from": ["claim"], "to": ["claim"]},
-    "derived-from": {"from": ["construction", "external-claim"], "to": ["decision", "claim"]},
+    "derived-from": {"from": ["construction", "external-claim", "decision"], "to": ["decision", "claim"]},
     "projects": {"from": ["external-claim"], "to": ["claim", "decision"]},
     "supports": {"from": ["construction"], "to": ["claim"]},
     "challenges": {"from": ["construction"], "to": ["assumption", "claim"]}
@@ -33,7 +33,6 @@
     {"id":"CLM-0017","kind":"claim","slug":"mechanism-policy-separated","statement":"Stable enforcement mechanism and configurable policy remain distinct; policy changes cannot silently rewrite the authority boundary.","sources":["ADR-0014","ADR-0020","ADR-0021"]},
     {"id":"CLM-0018","kind":"claim","slug":"work-ownership-authoritative","statement":"Work ownership and exclusivity derive from one authoritative atomic state, not several mutually reconstructed indicators.","sources":["ADR-0009","ADR-0025","ADR-0026"]},
     {"id":"CLM-0019","kind":"claim","slug":"deterministic-safety-floor","statement":"Safety-floor conditions are enforced by deterministic harness-owned or independently enforced controls rather than probabilistic worker judgment.","sources":["ADR-0004","ADR-0014","ADR-0015","ADR-0016","ADR-0018","ADR-0026"]},
-
     {"id":"CON-0001","kind":"constraint","slug":"no-tool-input-trust","statement":"Enforcement cannot depend on parsing what the worker says it intends to do.","sources":["ADR-0001"]},
     {"id":"CON-0002","kind":"constraint","slug":"ambiguity-denies-authority","statement":"Unresolved attribution or authority ambiguity cannot become permission to perform a consequential action.","sources":["ADR-0001","ADR-0004","ADR-0016"]},
     {"id":"CON-0003","kind":"constraint","slug":"advisory-is-not-gate","statement":"Diagnostics, ordering mechanisms, and prechecks cannot be counted as load-bearing enforcement.","sources":["ADR-0001","ADR-0025","ADR-0026"]},
@@ -50,11 +49,9 @@
     {"id":"CON-0014","kind":"constraint","slug":"recovery-does-not-assume-replay","statement":"Recovery cannot depend on reproducing identical nondeterministic model behavior.","sources":["ADR-0019"]},
     {"id":"CON-0015","kind":"constraint","slug":"provider-capability-no-false-equivalence","statement":"Different enforcement capabilities cannot be collapsed into a false total order or silently polyfilled into equivalence.","sources":["ADR-0020","ADR-0021"]},
     {"id":"CON-0016","kind":"constraint","slug":"trust-projection-never-strengthens","statement":"A public trust projection may scope or weaken an internal claim but may never silently strengthen it.","sources":["docs/trust/trust-claims.yml"]},
-
     {"id":"ASM-0001","kind":"assumption","slug":"reversible-work-is-cheap","statement":"Planning and worktree-stage mistakes are cheap enough to retry or discard that heavy upstream gates usually cost more than they save.","sources":["ADR-0011","ADR-0013"]},
     {"id":"ASM-0002","kind":"assumption","slug":"diverse-review-earns-cost","statement":"Provider-diverse review improves defect detection enough to justify its incremental cost, latency, and failure surface.","sources":["ADR-0024"]},
     {"id":"ASM-0003","kind":"assumption","slug":"last-verified-surface-remains-safe-boundedly","statement":"A recently verified execution surface remains within the security boundary for a bounded interval while the current surface is unavailable.","sources":["ADR-0017"]},
-
     {"id":"DEC-0001","kind":"decision","slug":"pull-request-default","statement":"Ship target defaults to pull-request; direct push or autonomous merge is an explicit opt-in.","status":"current-product-default","sources":["ADR-0003"]},
     {"id":"DEC-0002","kind":"decision","slug":"branch-protection-landing-gate","statement":"Use GitHub branch protection as the platform-enforced auto-merge gate.","status":"historical-partially-superseded","sources":["ADR-0005","ADR-0025"]},
     {"id":"DEC-0003","kind":"decision","slug":"signed-tag-provenance-publish","statement":"Publish from signed tags with provenance using the selected trusted build posture.","status":"current-construction-choice","sources":["ADR-0007"]},
@@ -73,13 +70,11 @@
     {"id":"DEC-0016","kind":"decision","slug":"fence-or-reconcile-guard-model","statement":"Classify load-bearing guarded actions as fenced or reconciled; treat other coordination as hints.","status":"current-semantic-model","sources":["ADR-0026"]},
     {"id":"DEC-0017","kind":"decision","slug":"rigor-by-consequence","statement":"Size assurance effort primarily by consequence and reversibility rather than mechanically by lifecycle stage.","status":"current-policy-principle","sources":["ADR-0011","ADR-0012","ADR-0013"]},
     {"id":"DEC-0018","kind":"decision","slug":"human-value-judgment-at-charter","statement":"Keep value/negotiability as a human chartering judgment rather than an operational readiness computation.","status":"current-responsibility-choice","sources":["ADR-0012"]},
-
     {"id":"CTR-0001","kind":"construction","slug":"fixed-six-steps","statement":"The current pipeline enumerates six fixed delivery steps.","sources":["ADR-0022"],"codeEvidence":["packages/pelaggio/scripts/pelaggio/pipeline.ts","packages/pelaggio/scripts/pelaggio/__tests__/pipeline.test.ts"]},
     {"id":"CTR-0002","kind":"construction","slug":"two-review-orchestrators","statement":"Authoring review and cold PR review currently run through distinct orchestrators.","sources":["ADR-0022"],"codeEvidence":["packages/pelaggio/scripts/pelaggio/review/loop.ts","packages/pelaggio/scripts/pelaggio/pr-review-cli.ts"]},
     {"id":"CTR-0003","kind":"construction","slug":"n-reviewers-one-judge","statement":"Authoring review currently uses multiple reviewer seats and one configured Judge with bounded revise/re-review passes.","sources":["ADR-0024"],"codeEvidence":["packages/pelaggio/scripts/pelaggio/review/loop.ts","packages/pelaggio/scripts/pelaggio/review/bench.ts"]},
     {"id":"CTR-0004","kind":"construction","slug":"git-porcelain-confinement","statement":"Worktree confinement is currently implemented through observed Git-state snapshots/diffs plus provider-specific main protection.","sources":["ADR-0001"],"codeEvidence":["packages/pelaggio/scripts/pelaggio/pipeline.ts","packages/pelaggio/scripts/pelaggio/__tests__/pipeline.test.ts"]},
     {"id":"CTR-0005","kind":"construction","slug":"signed-owner-taxonomy-gate","statement":"Safety-taxonomy contraction is currently guarded through signed configuration verified against an out-of-band owner key.","sources":["ADR-0016"],"codeEvidence":["packages/pelaggio/scripts/pelaggio/review/taxonomy.ts"]},
-
     {"id":"TC-003","kind":"external-claim","slug":"trust-merge-gate-fails-closed","statement":"Existing public trust claim TC-003: merge review gating fails closed.","projection":{"status":"guarantee"},"sources":["docs/trust/trust-claims.yml","ADR-0004"]},
     {"id":"TC-004","kind":"external-claim","slug":"trust-passive-install","statement":"Existing public trust claim TC-004: published Pelaggio packages contain no install lifecycle scripts.","projection":{"status":"guarantee"},"sources":["docs/trust/trust-claims.yml","ADR-0006"]},
     {"id":"TC-005","kind":"external-claim","slug":"trust-release-provenance","statement":"Existing public trust claim TC-005: release workflow uses signed-tag/provenance controls with known limits.","projection":{"status":"best_effort","scope":"release workflow controls; downstream live attestation verification remains limited"},"sources":["docs/trust/trust-claims.yml","ADR-0007","ADR-0018"]},
@@ -107,14 +102,12 @@
     {"from":"CON-0013","relation":"constrains","to":"CLM-0002"},
     {"from":"CON-0014","relation":"constrains","to":"CLM-0012"},
     {"from":"CON-0015","relation":"constrains","to":"CLM-0015"},
-
     {"from":"CLM-0007","relation":"specializes","to":"CLM-0006"},
     {"from":"CLM-0009","relation":"specializes","to":"CLM-0019"},
     {"from":"CLM-0010","relation":"specializes","to":"CLM-0019"},
     {"from":"CLM-0013","relation":"specializes","to":"CLM-0006"},
     {"from":"CLM-0018","relation":"specializes","to":"CLM-0006"},
     {"from":"CLM-0019","relation":"specializes","to":"CLM-0006"},
-
     {"from":"DEC-0001","relation":"implements","to":"CLM-0013"},
     {"from":"DEC-0002","relation":"implements","to":"CLM-0007"},
     {"from":"DEC-0003","relation":"implements","to":"CLM-0008"},
@@ -137,13 +130,11 @@
     {"from":"DEC-0016","relation":"implements","to":"CLM-0010"},
     {"from":"DEC-0016","relation":"implements","to":"CLM-0011"},
     {"from":"DEC-0017","relation":"assumes","to":"ASM-0001"},
-
     {"from":"CTR-0001","relation":"derived-from","to":"DEC-0012"},
     {"from":"CTR-0002","relation":"derived-from","to":"DEC-0012"},
     {"from":"CTR-0003","relation":"derived-from","to":"DEC-0014"},
     {"from":"CTR-0004","relation":"implements","to":"CLM-0002"},
     {"from":"CTR-0005","relation":"implements","to":"CLM-0013"},
-
     {"from":"TC-003","relation":"projects","to":"CLM-0009"},
     {"from":"TC-004","relation":"projects","to":"CLM-0004"},
     {"from":"TC-005","relation":"projects","to":"CLM-0008"},
