@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { type ChildProcess, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
@@ -54,6 +54,8 @@ const AWS_MODE_CREDENTIAL_VARS = [
 	"AWS_WEB_IDENTITY_TOKEN_FILE",
 	"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
 	"AWS_CONTAINER_CREDENTIALS_FULL_URI",
+	"AWS_CONTAINER_AUTHORIZATION_TOKEN",
+	"AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
 	"AWS_PROFILE",
 	"AWS_SHARED_CREDENTIALS_FILE",
 	"AWS_CONFIG_FILE",
@@ -715,11 +717,33 @@ describe("buildClaudeSeatEnv", () => {
 			PELAGGIO_REPO: "/home/operator/repo",
 			PELAGGIO_WORKTREE_PREFIX: "custom-prefix-",
 			PELAGGIO_AUTHORING_ENABLED: "off",
+			// The out-of-band taxonomy trust anchor (a PUBLIC key): config load rejects signed
+			// taxonomy contractions without it, so seat-inner CLI commands need it too.
+			PELAGGIO_TAXONOMY_PUBKEY: "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA\n-----END PUBLIC KEY-----",
 		} as const;
 		const harnessSource = sdkShapedEnv({ ...harnessConfig });
 		for (const step of ALL_STEPS) {
 			const env = buildClaudeSeatEnv(harnessSource, step, allow);
 			for (const [name, value] of Object.entries(harnessConfig)) assert.equal(env[name], value, `${step} ${name}`);
+			assert.equal("SENTINEL_SECRET" in env, false);
+		}
+	});
+
+	it("forwards proxy configuration to every role via the shared default allowlist", () => {
+		const proxyConfig = {
+			HTTP_PROXY: "http://proxy.corp:3128",
+			HTTPS_PROXY: "http://proxy.corp:3128",
+			NO_PROXY: "localhost,127.0.0.1",
+			ALL_PROXY: "socks5://proxy.corp:1080",
+			http_proxy: "http://proxy.corp:3128",
+			https_proxy: "http://proxy.corp:3128",
+			no_proxy: "localhost,127.0.0.1",
+			all_proxy: "socks5://proxy.corp:1080",
+		} as const;
+		const proxySource = sdkShapedEnv({ ...proxyConfig });
+		for (const step of ALL_STEPS) {
+			const env = buildClaudeSeatEnv(proxySource, step, []);
+			for (const [name, value] of Object.entries(proxyConfig)) assert.equal(env[name], value, `${step} ${name}`);
 			assert.equal("SENTINEL_SECRET" in env, false);
 		}
 	});
@@ -923,10 +947,30 @@ describe("GitHub credential-directory masks", () => {
 		assert.deepEqual(tmpfsTargets(invocation.args), ["/run/pelaggio-signer"]);
 	});
 
-	it("fails closed on malformed, relative, non-directory, and wide GitHub credential targets", () => {
+	it("ignores relative XDG/GH_CONFIG_DIR candidates instead of failing closed, keeping absolute masks (#554)", () => {
+		// XDG basedir rule: a relative value is invalid-and-ignored; only that candidate is
+		// skipped — the home-derived absolute candidate must still be masked.
+		const homeRoot = tempDir("pelaggio-gh-relative-home-");
+		const homeGh = join(homeRoot, ".config", "gh");
+		plantGhConfig(homeGh, "planted-home-config-token");
+		const invocation = buildClaudeSeatInvocation(
+			{ command: "node", args: [], cwd },
+			deniedBuildOpts({
+				cwd,
+				bwrap,
+				socketPaths: [],
+				home: homeRoot,
+				xdgConfigHome: "relative/xdg-config",
+				ghConfigDir: "relative/gh",
+				tmpdir: "/tmp",
+			}),
+		);
+		assert.deepEqual(invocation.maskedDirectories, [realpathSync(homeGh)]);
+	});
+
+	it("fails closed on malformed, non-directory, and wide GitHub credential targets", () => {
 		const fileTarget = join(tempDir("pelaggio-gh-file-"), "hosts.yml");
 		writeFileSync(fileTarget, "not-a-directory\n");
-		assert.throws(() => buildClaudeSeatInvocation({ command: "node", args: [], cwd }, deniedBuildOpts({ cwd, bwrap, home: "/home/operator", tmpdir: "/tmp", ghConfigDir: "relative/gh" })), /path is not absolute/);
 		assert.throws(() => buildClaudeSeatInvocation({ command: "node", args: [], cwd }, deniedBuildOpts({ cwd, bwrap, home: "/home/operator", tmpdir: "/tmp", ghConfigDir: "/tmp/gh\0hidden" })), /forbidden characters/);
 		assert.throws(() => buildClaudeSeatInvocation({ command: "node", args: [], cwd }, deniedBuildOpts({ cwd, bwrap, home: "/home/operator", tmpdir: "/tmp", ghConfigDir: "/tmp/../etc/gh" })), /reserved segments/);
 		assert.throws(() => buildClaudeSeatInvocation({ command: "node", args: [], cwd }, deniedBuildOpts({ cwd, bwrap, home: "/home/operator", tmpdir: "/tmp", ghConfigDir: fileTarget })), /not a directory/);

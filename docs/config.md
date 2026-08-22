@@ -1054,9 +1054,10 @@ every Claude child independently of this allowlist because that child **is** the
 API client; they are not forge credentials. Forge/remote vars (`GH_TOKEN` and
 the rest of the GitHub/Linear/SSH set) are role-gated inside the seat: only
 `pick`/`ship`/`shipwreck` retain them. Non-key entries are forwarded unchanged.
-Proxy configuration (`HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` and lowercase
-variants) is **not** in the default allowlist: operators running behind a proxy
-must add the vars their drivers need via `security.env-allowlist`.
+Proxy configuration (`HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`/`ALL_PROXY` and
+their lowercase forms) is forwarded by default alongside the certificate vars —
+proxy endpoints are network configuration, not credentials, and dropping them
+would strand proxied operators.
 Independently, captured driver stderr and the verbose `.dev/*.log` transcript
 are **secret-scrubbed before write**: credential-shaped strings (JWTs, provider
 keys, tokens) and the values of secret-named env vars are replaced with

@@ -69,6 +69,8 @@ const AWS_MODE_CREDENTIAL_VARS = [
 	"AWS_WEB_IDENTITY_TOKEN_FILE",
 	"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
 	"AWS_CONTAINER_CREDENTIALS_FULL_URI",
+	"AWS_CONTAINER_AUTHORIZATION_TOKEN",
+	"AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
 	"AWS_PROFILE",
 	"AWS_SHARED_CREDENTIALS_FILE",
 	"AWS_CONFIG_FILE",
@@ -146,10 +148,13 @@ const CLAUDE_CLI_PROVIDER_CONFIG_VARS = [
  * CONFIG on import). Dropping these desynchronizes inner and outer config resolution:
  * an env-selected `PELAGGIO_WORKTREE_PREFIX` makes the inner `roadmap claim` create a
  * worktree under one prefix while the outer pipeline looks for another ("worktree
- * missing" with a stranded claim). Non-secret, fixed pass-through for every role.
- * `PELAGGIO_REVIEW_EVIDENCE_SIGNER_SOCKET` stays harness-only by design (#511).
+ * missing" with a stranded claim). `PELAGGIO_TAXONOMY_PUBKEY` is the operator's out-of-band
+ * taxonomy trust anchor (a PUBLIC key): without it, config load rejects signed taxonomy
+ * contractions and every seat-inner CLI command fails on such repos. Non-secret, fixed
+ * pass-through for every role. `PELAGGIO_REVIEW_EVIDENCE_SIGNER_SOCKET` stays harness-only
+ * by design (#511).
  */
-const PELAGGIO_HARNESS_CONFIG_VARS = ["PELAGGIO_REPO", "PELAGGIO_WORKTREE_PREFIX", "PELAGGIO_AUTHORING_ENABLED"] as const;
+const PELAGGIO_HARNESS_CONFIG_VARS = ["PELAGGIO_REPO", "PELAGGIO_WORKTREE_PREFIX", "PELAGGIO_AUTHORING_ENABLED", "PELAGGIO_TAXONOMY_PUBKEY"] as const;
 
 /** Documented GitHub CLI token variables plus remote-auth / config-location handles needed by roadmap/`gh`/`git`. */
 const FORGE_REMOTE_VARS = ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "LINEAR_API_KEY", "SSH_AUTH_SOCK", "GH_CONFIG_DIR", "GH_HOST", "GH_ENTERPRISE_HOST"] as const;
@@ -423,7 +428,21 @@ function resolveGitHubCredentialDirectories(options: ClaudeSeatBuildOptions, pro
 	if (home !== undefined) candidates.push(join(home, ".config", "gh"));
 	const existing: string[] = [];
 	for (const candidate of candidates) {
-		const normalized = validateAbsolutePath(candidate, "GitHub credential directory");
+		// XDG basedir rule: a RELATIVE value in these vars is invalid and must be IGNORED, not
+		// fatal — throwing here would fail every denied step closed on a harmless
+		// misconfiguration. Only the not-absolute verdict is downgraded to a skip; forbidden
+		// characters and reserved segments in absolute paths still fail closed, and the
+		// remaining absolute candidates still mask.
+		let normalized: string;
+		try {
+			normalized = validateAbsolutePath(candidate, "GitHub credential directory");
+		} catch (error) {
+			if (error instanceof Error && error.message.includes("path is not absolute")) {
+				process.stderr.write(`⚠ Claude seat: ignoring relative GitHub credential directory candidate ${JSON.stringify(candidate)} (XDG requires absolute paths)\n`);
+				continue;
+			}
+			throw error;
+		}
 		try {
 			const resolved = realpathSync(normalized);
 			if (!statSync(resolved).isDirectory()) {

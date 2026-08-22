@@ -62,6 +62,16 @@ export const DEFAULT_AGENT_ENV_ALLOWLIST: readonly string[] = [
 	"NODE_EXTRA_CA_CERTS",
 	"SSL_CERT_FILE",
 	"SSL_CERT_DIR",
+	// Proxy endpoints are network configuration, not credentials — dropping them strands
+	// proxied operators while the cert vars above pass, so they ride the same default list.
+	"HTTP_PROXY",
+	"HTTPS_PROXY",
+	"NO_PROXY",
+	"ALL_PROXY",
+	"http_proxy",
+	"https_proxy",
+	"no_proxy",
+	"all_proxy",
 ];
 
 export interface BuildAgentEnvOptions {

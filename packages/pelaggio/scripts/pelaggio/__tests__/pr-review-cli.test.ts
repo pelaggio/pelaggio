@@ -6,7 +6,7 @@ import { after, describe, it } from "node:test";
 import { buildClaudeSeatEnv } from "../claude-seat.js";
 import { DEFAULTS, type ReviewConfig, type StepSettings } from "../config.js";
 import { main as adjudicateMain, type PrAdjudicateDeps } from "../pr-adjudicate-cli.js";
-import { main, reviewedHeadFetchAuthEnv, runPrReviewGate, setPrReviewDepsForTests } from "../pr-review-cli.js";
+import { forgeTokenForHost, gitRemoteHost, main, reviewedHeadFetchAuthEnv, runPrReviewGate, setPrReviewDepsForTests } from "../pr-review-cli.js";
 import { listPrReviewGateRecords, readPrReviewGateRecord, writePrReviewGateRecord } from "../pr-review-gate-record.js";
 import { isEligibleFleetGateRecord, readAdjudicationSourceRecord } from "../review/adjudication.js";
 import { reviewFindingFingerprint } from "../review/findings.js";
@@ -155,6 +155,7 @@ async function runCli(
 		headRef?: string;
 		ci?: boolean;
 		env?: NodeJS.ProcessEnv;
+		originUrl?: string;
 	} = {},
 ): Promise<{
 	code: number;
@@ -187,6 +188,8 @@ async function runCli(
 			return `${JSON.stringify({ sha: REVIEWED_SHA, ref: opts.headRef ?? "feat/issue-123-fix" })}\n`;
 		}
 		assert.equal(cmd, "git");
+		// Host resolution for the fetch credential: runs only when a candidate token exists.
+		if (a === "remote get-url origin") return `${opts.originUrl ?? "git@github.com:pelaggio/pelaggio.git"}\n`;
 		if (a === "fetch --quiet origin main pull/123/head") {
 			if (opts.fetchError) throw opts.fetchError;
 			return "";
@@ -310,9 +313,61 @@ describe("pr-review CLI aggregation", () => {
 		const bare = await runCli({});
 		const bareFetch = bare.execCalls.find((call) => call.cmd === "git" && call.args.includes("fetch"));
 		assert.deepEqual(bareFetch?.args, ["fetch", "--quiet", "origin", "main", "pull/123/head"]);
-		// No token → no env override at all: the child inherits the harness env untouched.
+		// No token → no env override at all: the child inherits the harness env untouched,
+		// and the tokenless path never even looks up the remote host.
 		assert.equal(bareFetch?.env, undefined);
-		assert.equal(reviewedHeadFetchAuthEnv({}), undefined);
+		assert.equal(
+			bare.execCalls.some((call) => call.args.join(" ") === "remote get-url origin"),
+			false,
+		);
+		assert.equal(reviewedHeadFetchAuthEnv({}, "github.com"), undefined);
+	});
+
+	it("scopes the fetch credential to a GitHub Enterprise origin with gh's documented token precedence (#554)", async () => {
+		const gheOrigin = "git@ghe.example.com:pelaggio/pelaggio.git";
+		// Enterprise host + enterprise token → header scoped to that host, enterprise token selected
+		// even when a dotcom GH_TOKEN is also present (gh scopes GH_TOKEN to github.com/*.ghe.com).
+		const out = await runCli({ originUrl: gheOrigin, env: { GH_TOKEN: "ghp_dotcom_token_value", GH_ENTERPRISE_TOKEN: "ghe_enterprise_token_val" } });
+		const fetchCall = out.execCalls.find((call) => call.cmd === "git" && call.args.includes("fetch"));
+		assert.equal(fetchCall?.env?.GIT_CONFIG_KEY_0, "http.https://ghe.example.com/.extraheader");
+		const basic = fetchCall?.env?.GIT_CONFIG_VALUE_0?.match(/basic (.+)$/)?.[1];
+		assert.ok(basic);
+		assert.equal(Buffer.from(basic, "base64").toString("utf8"), "x-access-token:ghe_enterprise_token_val");
+		// GITHUB_ENTERPRISE_TOKEN is the documented fallback for enterprise hosts.
+		const fallback = await runCli({ originUrl: `https://ghe.example.com/pelaggio/pelaggio.git`, env: { GITHUB_ENTERPRISE_TOKEN: "ghe_fallback_token_val" } });
+		const fallbackFetch = fallback.execCalls.find((call) => call.cmd === "git" && call.args.includes("fetch"));
+		assert.equal(fallbackFetch?.env?.GIT_CONFIG_KEY_0, "http.https://ghe.example.com/.extraheader");
+		assert.equal(Buffer.from(fallbackFetch?.env?.GIT_CONFIG_VALUE_0?.match(/basic (.+)$/)?.[1] ?? "", "base64").toString("utf8"), "x-access-token:ghe_fallback_token_val");
+		// Enterprise host with ONLY a dotcom token: gh's documented precedence gives GH_TOKEN no
+		// authority over Enterprise Server hosts, so the fetch stays unauthenticated.
+		const dotcomOnly = await runCli({ originUrl: gheOrigin, env: { GH_TOKEN: "ghp_dotcom_token_value" } });
+		const dotcomOnlyFetch = dotcomOnly.execCalls.find((call) => call.cmd === "git" && call.args.includes("fetch"));
+		assert.equal(dotcomOnlyFetch?.env, undefined);
+		// And the reverse: a github.com origin never uses the enterprise tokens.
+		const enterpriseOnly = await runCli({ env: { GH_ENTERPRISE_TOKEN: "ghe_enterprise_token_val" } });
+		const enterpriseOnlyFetch = enterpriseOnly.execCalls.find((call) => call.cmd === "git" && call.args.includes("fetch"));
+		assert.equal(enterpriseOnlyFetch?.env, undefined);
+		// Host-parser unit coverage: https, ssh, scp-like, ghe.com tenants (dotcom-class), garbage.
+		assert.equal(gitRemoteHost("https://ghe.example.com/o/r.git"), "ghe.example.com");
+		assert.equal(gitRemoteHost("ssh://git@ghe.example.com/o/r.git"), "ghe.example.com");
+		assert.equal(gitRemoteHost("git@github.com:o/r.git"), "github.com");
+		assert.equal(gitRemoteHost(""), undefined);
+		assert.equal(forgeTokenForHost({ GH_TOKEN: "t" }, "tenant.ghe.com"), "t");
+		assert.equal(forgeTokenForHost({ GH_TOKEN: "t" }, "ghe.internal.corp"), undefined);
+	});
+
+	it("base64-scrubs every secret-named env value from the crash path, not just forge tokens (#554)", async () => {
+		const apiKey = "sk-ant-crash-scrub-value-1234";
+		const apiKeyB64 = Buffer.from(apiKey).toString("base64");
+		const fetchError = new Error(`git fetch exited 128: header carried ${apiKeyB64} for the API client`);
+		// No forge token in env: the auth path stays inert; ANTHROPIC_API_KEY is secret-NAMED,
+		// so collectSecretEnvValues feeds its base64 form into the crash scrubber.
+		const out = await runCli({ env: { ANTHROPIC_API_KEY: apiKey }, fetchError });
+		assert.equal(out.code, 1);
+		const rendered = [out.stderr, out.stdout, ...out.comments].join("\n");
+		assert.equal(rendered.includes(apiKey), false, "the raw key must not reach any rendered sink");
+		assert.equal(rendered.includes(apiKeyB64), false, "the base64 key must not reach any rendered sink");
+		assert.match(out.stderr, /\[REDACTED\]/);
 	});
 
 	it("scrubs the forge token and its base64 forms from crash stderr and the fail-closed comment (#554)", async () => {

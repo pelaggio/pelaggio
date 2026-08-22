@@ -38,7 +38,7 @@ import {
 } from "./review/findings.js";
 import { CLAIM_BRANCH_RE } from "./revise-sweep.js";
 import type { GhRunner } from "./roadmap/github-issues.js";
-import { makeSecretScrubber } from "./secret-hygiene.js";
+import { collectSecretEnvValues, makeSecretScrubber } from "./secret-hygiene.js";
 import type { RunStepFn } from "./step-runner.js";
 import { runStep } from "./step-runner.js";
 import type { ParkSignal, ProviderName, StepEmit, StepResult } from "./types.js";
@@ -420,27 +420,65 @@ function upsertCommentDefault(pr: string, body: string): void {
 }
 
 /**
+ * Hosts gh treats as github.com-class for token selection: github.com and its subdomains
+ * (e.g. gist.github.com) plus ghe.com subdomains (data-residency tenants — `gh help
+ * environment` scopes GH_TOKEN to "github.com or a subdomain of ghe.com"). Everything else
+ * is a GitHub Enterprise Server host.
+ */
+function isDotComClassHost(host: string): boolean {
+	return host === "github.com" || host.endsWith(".github.com") || host.endsWith(".ghe.com");
+}
+
+/**
+ * gh's documented token precedence (`gh help environment`): `GH_TOKEN` then `GITHUB_TOKEN`
+ * authenticate github.com-class targets; `GH_ENTERPRISE_TOKEN` then
+ * `GITHUB_ENTERPRISE_TOKEN` authenticate GitHub Enterprise Server hosts. The dotcom tokens
+ * deliberately do NOT apply to enterprise hosts, nor the reverse.
+ */
+export function forgeTokenForHost(env: NodeJS.ProcessEnv, host: string): string | undefined {
+	const token = isDotComClassHost(host) ? (env.GH_TOKEN ?? env.GITHUB_TOKEN) : (env.GH_ENTERPRISE_TOKEN ?? env.GITHUB_ENTERPRISE_TOKEN);
+	return token === undefined || token === "" ? undefined : token;
+}
+
+/** Hostname of a git remote URL — https://, ssh://, or scp-like (`git@host:owner/repo`). */
+export function gitRemoteHost(remoteUrl: string): string | undefined {
+	const trimmed = remoteUrl.trim();
+	if (trimmed === "") return undefined;
+	if (trimmed.includes("://")) {
+		try {
+			const host = new URL(trimmed).hostname;
+			return host === "" ? undefined : host.toLowerCase();
+		} catch {
+			return undefined;
+		}
+	}
+	return trimmed.match(/^(?:[^@/]+@)?([A-Za-z0-9.-]+):/)?.[1]?.toLowerCase();
+}
+
+/**
  * Process-scoped credential for the pinned-head fetch (#554). The CI review checkout uses
  * `persist-credentials: false` so the statuses:write job token never sits in `.git/config`
  * where the forge-denied seat could read it — which also strips the credential this
- * HARNESS-owned fetch previously rode. When the harness env holds a forge token, hand git
- * the extraheader through the ENVIRONMENT-based config of that single child
- * (`GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_0`/`GIT_CONFIG_VALUE_0`, actions/checkout's basic
- * `x-access-token:<token>` encoding). Environment, never argv: execFileSync embeds the
+ * HARNESS-owned fetch previously rode. When the harness env holds a forge token for `host`
+ * (gh precedence — see forgeTokenForHost), hand git the extraheader through the
+ * ENVIRONMENT-based config of that single child (`GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_0`/
+ * `GIT_CONFIG_VALUE_0`, actions/checkout's basic `x-access-token:<token>` encoding), with
+ * the header key scoped to that host. Environment, never argv: execFileSync embeds the
  * failed child's argv in `Error.message`, which main()'s fail-closed handler publishes to
  * stderr and the public PR comment, and argv is world-readable via `/proc/<pid>/cmdline`.
  * Harness plumbing only: never written to any git config file, and never part of a seat's
- * child env (`buildClaudeSeatEnv` strips GH_TOKEN/GITHUB_TOKEN from denied roles). No
- * token → `undefined` → the fetch child runs with the untouched inherited env (the
- * unchanged public-repo/local path).
+ * child env (`buildClaudeSeatEnv` strips the forge token vars from denied roles). No
+ * token for the host → `undefined` → the fetch child runs with the untouched inherited
+ * env (the unchanged public-repo/local path). GIT_CONFIG_COUNT=1 overrides any
+ * pre-existing env-based git config for this one child — accepted; the harness sets none.
  */
-export function reviewedHeadFetchAuthEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv | undefined {
-	const token = env.GH_TOKEN ?? env.GITHUB_TOKEN;
-	if (token === undefined || token === "") return undefined;
+export function reviewedHeadFetchAuthEnv(env: NodeJS.ProcessEnv, host: string): NodeJS.ProcessEnv | undefined {
+	const token = forgeTokenForHost(env, host);
+	if (token === undefined) return undefined;
 	const basic = Buffer.from(`x-access-token:${token}`).toString("base64");
 	return {
 		GIT_CONFIG_COUNT: "1",
-		GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
+		GIT_CONFIG_KEY_0: `http.https://${host}/.extraheader`,
 		GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${basic}`,
 	};
 }
@@ -455,15 +493,16 @@ export function reviewedHeadFetchAuthEnv(env: NodeJS.ProcessEnv): NodeJS.Process
  */
 export function scrubCrashMessage(message: string, env: NodeJS.ProcessEnv): string {
 	let scrubbed = makeSecretScrubber(env)(message);
-	for (const name of ["GH_TOKEN", "GITHUB_TOKEN"] as const) {
-		const token = env[name];
-		if (token === undefined || token.length < 6) continue;
-		// Longest form first: base64("x-access-token:") is 15 bytes (3-byte aligned), so the
-		// basic-credential encoding literally ends with base64(token) — redacting the short
-		// form first would split the long form and leave its prefix behind.
-		for (const encoded of [Buffer.from(`x-access-token:${token}`).toString("base64"), Buffer.from(token).toString("base64")]) {
-			scrubbed = scrubbed.split(encoded).join("[REDACTED]");
-		}
+	// Base64 layer over EVERY secret-named env value present (collectSecretEnvValues), not just
+	// forge tokens: a child error message can embed any re-encoded credential the raw scrubber
+	// cannot see. Longest form first — base64("x-access-token:") is 15 bytes (3-byte aligned),
+	// so the basic-credential encoding literally ends with base64(value); redacting the short
+	// form first would split the long form and leave its prefix behind.
+	const encodedForms = collectSecretEnvValues(env)
+		.flatMap((value) => [Buffer.from(`x-access-token:${value}`).toString("base64"), Buffer.from(value).toString("base64")])
+		.sort((a, b) => b.length - a.length);
+	for (const encoded of encodedForms) {
+		scrubbed = scrubbed.split(encoded).join("[REDACTED]");
 	}
 	return scrubbed;
 }
@@ -491,8 +530,21 @@ function resolveReviewedHead(exec: typeof execFileSync, pr: string, ghRepo: stri
 	const itemId = typeof head.ref === "string" ? head.ref.match(CLAIM_BRANCH_RE)?.[1] : undefined;
 	// Make origin/main and the pinned PR head reachable locally for the diff. `pull/<n>/head`
 	// always resolves for a GitHub PR (unlike a bare sha, which the server may refuse to serve).
-	// Auth (when the harness holds a token) rides only this one child's ENV — see reviewedHeadFetchAuthEnv.
-	const authEnv = reviewedHeadFetchAuthEnv(env);
+	// Auth (when the harness holds a token) rides only this one child's ENV, host-aware so a
+	// GitHub Enterprise origin authenticates too — see reviewedHeadFetchAuthEnv. The remote
+	// lookup runs only when a candidate token exists, keeping the tokenless path unchanged.
+	let authEnv: NodeJS.ProcessEnv | undefined;
+	if ([env.GH_TOKEN, env.GITHUB_TOKEN, env.GH_ENTERPRISE_TOKEN, env.GITHUB_ENTERPRISE_TOKEN].some((value) => value !== undefined && value !== "")) {
+		let originUrl = "";
+		try {
+			originUrl = git(["remote", "get-url", "origin"]);
+		} catch {
+			/* fall through to GH_HOST / github.com; the fetch below surfaces any real remote problem */
+		}
+		const ghHost = env.GH_HOST?.trim().toLowerCase();
+		const host = gitRemoteHost(originUrl) ?? (ghHost !== undefined && ghHost !== "" ? ghHost : "github.com");
+		authEnv = reviewedHeadFetchAuthEnv(env, host);
+	}
 	git(["fetch", "--quiet", "origin", "main", `pull/${pr}/head`], authEnv ? { ...env, ...authEnv } : undefined);
 	return { sha, ...(itemId ? { itemId } : {}) };
 }
