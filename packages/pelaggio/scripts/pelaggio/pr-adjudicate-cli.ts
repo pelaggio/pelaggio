@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { CONFIG, REPO, REVIEW_CONFIG, ROADMAP_GITHUB, resolveStepSettings, SHIP_TARGET, type StepSettings } from "./config.js";
 import { upsertMarkerComment } from "./github-posting.js";
-import { createMainCheckoutDeltaObserver, FORBIDDEN_ROOT_GONE, listWorktreesIn, type MainCheckoutDeltaObserver, mainWorktree, snapshotForbiddenRoot, snapshotRepoRefState, snapshotSiblingWorktree } from "./helpers.js";
+import { createMainCheckoutDeltaObserver, FORBIDDEN_ROOT_GONE, listWorktreesIn, type MainCheckoutDeltaObserver, mainWorktree, scrubReviewBoundary, snapshotForbiddenRoot, snapshotRepoRefState, snapshotSiblingWorktree } from "./helpers.js";
 import { executionOverrideFor, trustedLocalContext, verificationPrompt } from "./pr-review-cli.js";
 import { gateRecordsDir, listPrReviewGateRecords, type PrReviewFindingDispositionEntry, type PrReviewGateRecord, writePrReviewGateRecord } from "./pr-review-gate-record.js";
 import {
@@ -36,6 +36,7 @@ import { modelAuthoredText, parseReviewVerification, reconcileReviewVerification
 import { cleanupReviewHead, postReviewStatus, prepareReviewHead, type ReviewCandidate } from "./review-sweep.js";
 import { autopilotManagedState, CLAIM_BRANCH_RE } from "./revise-sweep.js";
 import { defaultGhRun, type GhRunner, parseGhJson } from "./roadmap/github-issues.js";
+import { scrubForPublicSink } from "./secret-hygiene.js";
 import { type RunStepFn, runStep } from "./step-runner.js";
 import type { ParkSignal, ShipTargetName } from "./types.js";
 
@@ -204,7 +205,11 @@ function snapshotPr(deps: PrAdjudicateDeps, pr: number): { kind: "ok"; snapshot:
 }
 
 function refuse(deps: PrAdjudicateDeps, message: string, code: 1 | 2 = 1): number {
-	deps.err(message);
+	// THE stderr chokepoint: every refuse() message reaches deps.err, and some embed
+	// model-controlled text (the verifier parse-error at the invalid-report path carries a
+	// model-authored unknown JSON key). The pr-verify seat holds leftover CLI auth (#572), so
+	// scrub every refuse message through the shared credential scrubber before it is written (#554).
+	deps.err(scrubForPublicSink(message, deps.env));
 	return code;
 }
 
@@ -469,17 +474,24 @@ export async function runPrAdjudication(pr: number, profile: string, deps: PrAdj
 			return refuse(deps, `could not persist operator gate record: ${e instanceof Error ? e.message : String(e)}`);
 		}
 
-		const body = renderOperatorAdjudicationComment({
-			prNumber: pr,
-			sourceSha: source.reviewedSha,
-			headSha,
-			interdiffDigest: churn.digest,
-			adjudicator,
-			survivors: source.survivors,
-			refuted: source.refuted,
-			dispositions: finalDispositions,
-			env: deps.env,
-		});
+		// Boundary scrub at the comment chokepoint (#554 §8.2): renderOperatorAdjudicationComment
+		// already per-field escapes/scrubs, but the whole assembled body passes the shared boundary
+		// scrubber (raw + base64 + markdown-escaped forms) once here so any field it assembles is
+		// covered by construction before the single upsert.
+		const body = scrubReviewBoundary(
+			renderOperatorAdjudicationComment({
+				prNumber: pr,
+				sourceSha: source.reviewedSha,
+				headSha,
+				interdiffDigest: churn.digest,
+				adjudicator,
+				survivors: source.survivors,
+				refuted: source.refuted,
+				dispositions: finalDispositions,
+				env: deps.env,
+			}),
+			deps.env,
+		);
 		if (!deps.upsertComment(deps.gh, deps.ghRepo, pr, body)) return refuse(deps, "failed to upsert the operator adjudication comment");
 
 		const beforeStatus = snapshotPr(deps, pr);

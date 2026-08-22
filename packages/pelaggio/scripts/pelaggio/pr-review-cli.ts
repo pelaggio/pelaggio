@@ -149,6 +149,10 @@ export interface RunPrReviewGateOptions {
 	reviewDrivers?: StepSettings[];
 	/** Scalar verifier for this run. Defaults to resolveStepSettings(CONFIG, profile, "pr-verify"). */
 	verifySettings?: StepSettings;
+	/** Harness env sourcing the return-body boundary scrubber (#554). Defaults to `deps.env`
+	 *  (`process.env` in production; pinned in tests). Injectable so a direct gate test can prove
+	 *  the RETURN VALUE is scrubbed against a secret-bearing env. */
+	env?: NodeJS.ProcessEnv;
 }
 
 export interface PrReviewGateResult {
@@ -842,7 +846,22 @@ async function runVerificationPass(
 	}
 }
 
+/**
+ * THE review-body boundary chokepoint (#554 §8.2). Every caller — CI `main()`, the local drain
+ * (pipeline.ts publishes `result.body` directly), preflight, and any future consumer — receives an
+ * ALREADY-SCRUBBED body because the gate scrubs it on the way out; the guarantee is that the RETURN
+ * VALUE is safe, not that each caller remembers to scrub. A chokepoint the codebase cannot force all
+ * paths through would be a false guarantee (guarded-actions.md §8.2 / #435); the gate return is the
+ * one point all publish paths funnel through. Idempotent — a caller that also scrubs (main's belt)
+ * is a no-op.
+ */
 export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<PrReviewGateResult> {
+	const result = await runPrReviewGateImpl(options);
+	return { ...result, body: scrubReviewBoundary(result.body, options.env ?? deps.env) };
+}
+
+async function runPrReviewGateImpl(options: RunPrReviewGateOptions): Promise<PrReviewGateResult> {
+	const scrubEnv = options.env ?? deps.env;
 	const profile = options.profile ?? "standard";
 	const cwd = options.cwd ?? REPO;
 	const diffCwd = options.diffCwd ?? cwd;
@@ -876,7 +895,7 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 		const msg = scrubCrashMessage(e instanceof Error ? e.message : String(e), deps.env);
 		const body = buildFailClosedComment("error_diff", `Could not inspect the PR diff for security-sensitive changes, so this gate blocks the merge.\n\n${msg}`);
 		process.stderr.write(`pr-review could not inspect diff — failing closed: ${msg}\n`);
-		options.upsertComment?.(options.pr, body);
+		options.upsertComment?.(options.pr, scrubReviewBoundary(body, scrubEnv));
 		return { gate: "block", body, cost: 0, costEstimated: false, turns: 0, ok: false, subtype: "standard:error_diff", agreement: "invalid" };
 	}
 
@@ -887,7 +906,7 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 	// require: at least one review driver must differ from the scalar verifier (independent-verifier guarantee).
 	if (policy.providerDiversity === "require" && reviewDrivers.every((driver) => driver.provider === verifySettings.provider)) {
 		const body = buildFailClosedComment("provider-diversity", `review.provider-diversity=require but every pr-review driver equals the pr-verify provider (${verifySettings.provider}; reviewers=${formatReviewerSet(reviewDrivers)}).`);
-		options.upsertComment?.(options.pr, body);
+		options.upsertComment?.(options.pr, scrubReviewBoundary(body, scrubEnv));
 		return { gate: "block", body, cost: 0, costEstimated: false, turns: 0, ok: false, subtype: "provider-diversity", agreement: "invalid", breakerReason: "provider-diversity" };
 	}
 	if (reservation > policy.budgetCap) {
@@ -895,7 +914,7 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 			"budget",
 			`A complete required review iteration reserves $${reservation} (${labels.length} labels × ${reviewDrivers.length} drivers × (review+verify)), exceeding review.budget-cap $${policy.budgetCap}.`,
 		);
-		options.upsertComment?.(options.pr, body);
+		options.upsertComment?.(options.pr, scrubReviewBoundary(body, scrubEnv));
 		return { gate: "block", body, cost: 0, costEstimated: false, turns: 0, ok: false, subtype: "budget", agreement: "invalid", breakerReason: "budget" };
 	}
 
@@ -1056,7 +1075,7 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 		providers: pairing,
 		agreement,
 	});
-	options.upsertComment?.(options.pr, body);
+	options.upsertComment?.(options.pr, scrubReviewBoundary(body, scrubEnv));
 	return { gate, body, cost, costEstimated, turns, ok, subtype, agreement, breakerReason, iterations: lastIteration, survivorCount: carried.size, ...(adjudicationSource ? { adjudicationSource } : {}) };
 }
 
@@ -1178,11 +1197,11 @@ export async function main(argv: string[]): Promise<number> {
 			execFileSync: deps.execFileSync,
 		});
 
-		// BOUNDARY scrub (#554): the two public output operations in the review path — this stdout
-		// write and the comment upserts below — pass the COMPLETE assembled body through one
-		// credential scrubber (raw + base64 + markdown-escaped forms). This is the security
-		// guarantee that covers every diagnostic field by construction (discovery-rejection,
-		// verifier-failure, execution-threw, and any future sink), independent of per-field scrubs.
+		// review.body is ALREADY boundary-scrubbed — runPrReviewGate scrubs on return, so every
+		// consumer (this CLI, the local drain) gets a safe body by construction (#554 §8.2). This
+		// belt re-applies the idempotent scrub (a no-op) so the two CLI writes stay self-evidently
+		// safe even if the gate contract ever changes; the crash path below is NOT gate-produced and
+		// relies on its own scrub.
 		const publishBody = (body: string): string => scrubReviewBoundary(body, deps.env);
 
 		// The review text goes to stdout unconditionally so the CI log always

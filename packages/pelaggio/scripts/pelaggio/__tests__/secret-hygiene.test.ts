@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { buildAgentEnv, classifyProxyValue, collectSecretEnvValues, makeSecretScrubber, PROVIDER_KEY_ENV, REDACTED, scopeEnvAllowlistToProvider, scrubSecrets, setForwardedProxyAllowlist } from "../secret-hygiene.js";
+import { buildAgentEnv, classifyProxyValue, collectSecretEnvValues, makePublicSinkScrubber, makeSecretScrubber, PROVIDER_KEY_ENV, REDACTED, scopeEnvAllowlistToProvider, scrubSecrets, setForwardedProxyAllowlist } from "../secret-hygiene.js";
 
 describe("buildAgentEnv (#237) — deny-by-default env allowlist", () => {
 	const source: NodeJS.ProcessEnv = {
@@ -143,6 +143,37 @@ describe("buildAgentEnv (#237) — deny-by-default env allowlist", () => {
 		assert.ok(allowlisted.includes(shortTok));
 		assert.ok(allowlisted.includes("shorttoken"));
 		assert.match(makeSecretScrubber({ HTTPS_PROXY: shortTok }, { forwardedProxyNames: forwarded })("token shorttoken used"), /\[REDACTED\]/);
+	});
+
+	it("registers the TRIMMED form of a padded secret-named token so its base64 credential is matched (#554 bug 1)", () => {
+		// forgeTokenForHost trims a whitespace-padded GH_* token before base64-encoding it into the
+		// fetch header, but the scrubber derives its forms from the env value — so the trimmed form
+		// must also be registered, or base64(x-access-token:TRIMMED) survives scrubbing.
+		const padded = "  ghs_padded_secret_token_value \n";
+		const trimmed = padded.trim();
+		const values = collectSecretEnvValues({ GH_TOKEN: padded });
+		assert.ok(values.includes(padded), "the raw padded value is registered");
+		assert.ok(values.includes(trimmed), "the trimmed form must also be registered");
+		// The base64 of the trimmed basic-auth credential (what actually rides the fetch header).
+		const basic = Buffer.from(`x-access-token:${trimmed}`).toString("base64");
+		const scrubbed = makePublicSinkScrubber({ GH_TOKEN: padded })(`AUTHORIZATION: basic ${basic}`);
+		assert.equal(scrubbed.includes(basic), false, "base64 of the trimmed credential must be redacted");
+		assert.match(scrubbed, /\[REDACTED\]/);
+	});
+
+	it("scrubs a SHORT password-bearing proxy userinfo at any length, without over-redacting a short bare username (#554 bug 2)", () => {
+		// user:pass shorter than the 6-char literal filter must still be redacted — the min-length
+		// guard applies ONLY to colonless bare usernames.
+		const shortPw = "http://u:p@proxy.corp:3128";
+		const values = collectSecretEnvValues({ HTTPS_PROXY: shortPw });
+		assert.ok(values.includes("u:p"), "password userinfo registered regardless of length");
+		assert.ok(values.includes(shortPw), "the full credentialed URL registered");
+		const scrub = makeSecretScrubber({ HTTPS_PROXY: shortPw });
+		assert.equal(scrub("creds u:p leaked in a log").includes("u:p"), false, "the short password must be redacted");
+		assert.match(scrub("creds u:p leaked in a log"), /\[REDACTED\]/);
+		// A short colonless bare username is still NOT over-redacted.
+		assert.deepEqual(collectSecretEnvValues({ HTTPS_PROXY: "http://op@proxy.corp:3128" }), []);
+		assert.equal(makeSecretScrubber({ HTTPS_PROXY: "http://op@proxy.corp:3128" })("op restarted the proxy"), "op restarted the proxy");
 	});
 
 	it("registers an allowlisted proxy's userinfo by default from CONFIG — no explicit forwardedProxyNames needed (#554)", () => {

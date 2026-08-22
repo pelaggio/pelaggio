@@ -824,6 +824,32 @@ describe("pr-review CLI aggregation", () => {
 		);
 	});
 
+	it("runPrReviewGate returns an ALREADY boundary-scrubbed body — the RETURN VALUE is the guarantee, so the local drain (which publishes result.body directly) is covered by construction (#554 §8.2)", async () => {
+		// A secret in an UNSCRUBBED diagnostic field (pass.diagnostic via a thrown discovery runStep)
+		// must be absent from the body the GATE RETURNS — not merely from what CI main() writes. This
+		// is the relocated chokepoint: pipeline.ts's drain does `body = result.body` and upserts it
+		// without any scrub of its own, so the gate return is the only place all publish paths funnel.
+		const secret = "ghp_gatereturn_secret-value-99";
+		const escaped = escapeMarkdown(secret);
+		const b64 = Buffer.from(secret).toString("base64");
+		const runStep: RunStepFn = async () => {
+			throw new Error(`gate boom ${secret} here`);
+		};
+		const review = await runPrReviewGate({
+			reviewDrivers: [driver("claude")],
+			verifySettings: driver("claude"),
+			pr: "1",
+			policy: reviewPolicy({ maxPasses: 1, budgetCap: 40, providerDiversity: "off" }),
+			execFileSync: plainDiffExec(),
+			runStep,
+			env: { GH_TOKEN: secret },
+		});
+		assert.equal(review.body.includes(secret), false, "raw secret must not be in the RETURNED body");
+		assert.equal(review.body.includes(escaped), false, "markdown-escaped secret must not be in the RETURNED body");
+		assert.equal(review.body.includes(b64), false, "base64 secret must not be in the RETURNED body");
+		assert.match(review.body, /Review execution threw: gate boom \[REDACTED\]/, "the diagnostic path ran and was scrubbed at the gate return");
+	});
+
 	it("library runner accepts trusted cwd with custom diff refs and does not post unless asked", async () => {
 		const calls: RunCall[] = [];
 		const gitCalls: { args: readonly string[]; cwd?: string }[] = [];

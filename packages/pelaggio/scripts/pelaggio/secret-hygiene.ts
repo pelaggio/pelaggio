@@ -219,23 +219,34 @@ export function collectSecretEnvValues(source: NodeJS.ProcessEnv = process.env, 
 	const values: string[] = [];
 	for (const [name, value] of Object.entries(source)) {
 		if (!value) continue;
-		if (value.length >= 6 && SECRET_NAME.test(name)) values.push(value);
+		if (value.length >= 6 && SECRET_NAME.test(name)) {
+			values.push(value);
+			// #554 bug 1: a token consumed after `.trim()` (forgeTokenForHost trims a padded GH_*
+			// token before base64-encoding it into the fetch header) — register the TRIMMED form too
+			// so its encodings match the credential actually used, not just the padded env literal.
+			const trimmed = value.trim();
+			if (trimmed !== value && trimmed.length >= 6) values.push(trimmed);
+		}
 		// Proxy URL userinfo is a credential wherever the value appears — registered regardless
 		// of whether the var was forwarded, so an operator opt-in still scrubs logs/crash sinks.
-		// Registration rule (#554): a PASSWORD component (`user:pass`) is always a secret; a
-		// BARE (colonless) userinfo is registered only when it is long enough to be a token
-		// (an opaque bearer token) OR the proxy var was explicitly allowlisted — so a short
-		// human username like "operator" is not redacted from unrelated logs. (Forwarding still
-		// drops ANY `@`-carrying value by default unless allowlisted — classifyProxyValue.)
+		// Registration rule (#554): a PASSWORD component (`user:pass`) is ALWAYS a secret, at ANY
+		// length (bug 2 — the min-length guard is not for passwords); a BARE (colonless) userinfo
+		// is registered only when it is long enough to be a token (an opaque bearer token) OR the
+		// proxy var was explicitly allowlisted — so a short human username like "operator" is not
+		// redacted from unrelated logs. (Forwarding still drops ANY `@`-value by default unless
+		// allowlisted — classifyProxyValue.)
 		if (PROXY_URL_ENV_NAMES.has(name)) {
 			const userinfo = proxyUrlUserinfo(value);
 			if (userinfo !== undefined) {
 				const forwarded = opts.forwardedProxyNames ?? defaultForwardedProxyNames;
 				const allowlisted = forwarded.has(name);
-				const isSecret = userinfo.includes(":") || allowlisted || userinfo.length >= MIN_BARE_PROXY_TOKEN_LENGTH;
+				const hasPassword = userinfo.includes(":");
+				const isSecret = hasPassword || allowlisted || userinfo.length >= MIN_BARE_PROXY_TOKEN_LENGTH;
 				if (isSecret) {
 					values.push(value);
-					if (userinfo.length >= 6) values.push(userinfo);
+					// Password-bearing userinfo is registered at any length (the short-literal filter
+					// is exempted for it in scrubSecrets); a bare token only when ≥6 to avoid noise.
+					if (hasPassword || userinfo.length >= 6) values.push(userinfo);
 				}
 			}
 		}
@@ -256,7 +267,10 @@ export interface ScrubOptions {
 export function scrubSecrets(text: string, opts: ScrubOptions = {}): string {
 	if (!text) return text;
 	let out = text;
-	const values = [...(opts.secretValues ?? [])].filter((v) => v.length >= 6).sort((a, b) => b.length - a.length);
+	// Short-literal filter avoids redacting incidental substrings — but it applies ONLY to
+	// colonless bare values (#554 bug 2). A value containing a colon is a deliberately-collected
+	// password-bearing credential (e.g. proxy `user:pass`) and must be redacted at any length.
+	const values = [...(opts.secretValues ?? [])].filter((v) => v.length >= 6 || v.includes(":")).sort((a, b) => b.length - a.length);
 	for (const value of values) out = out.split(value).join(REDACTED);
 	for (const pattern of SECRET_PATTERNS) out = out.replace(pattern, REDACTED);
 	return out;

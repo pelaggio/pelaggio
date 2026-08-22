@@ -130,6 +130,7 @@ interface Harness {
 	}>;
 	logs: string[];
 	errs: string[];
+	comments: string[];
 	repo: string;
 	gateRoot: string;
 	sourceRoot: string;
@@ -207,6 +208,7 @@ function harness(
 	const stepCalls: Harness["stepCalls"] = [];
 	const logs: string[] = [];
 	const errs: string[] = [];
+	const comments: string[] = [];
 	const heads = Array.isArray(over.prJson) ? [...over.prJson] : [];
 	const silentGh: GhRunner = (args) => {
 		effects.push(`gh:${args[0]}:${args[1] ?? ""}`);
@@ -314,8 +316,9 @@ function harness(
 				},
 			};
 		},
-		upsertComment: (_gh, _repo, prNumber, _body) => {
+		upsertComment: (_gh, _repo, prNumber, body) => {
 			effects.push(`comment:${prNumber}`);
+			comments.push(body);
 			return over.commentOk !== false;
 		},
 		postStatus: (_gh, _repo, sha, state) => {
@@ -330,7 +333,7 @@ function harness(
 		isSingleShot: over.isSingleShot ?? false,
 		env: over.env ?? {},
 	};
-	return { deps, effects, stepCalls, logs, errs, repo, gateRoot, sourceRoot, heads };
+	return { deps, effects, stepCalls, logs, errs, comments, repo, gateRoot, sourceRoot, heads };
 }
 
 describe("parsePrAdjudicateArgs", () => {
@@ -534,6 +537,38 @@ describe("pr-adjudicate CLI verification and effects", () => {
 		assert.match(h.stepCalls[0]?.prompt ?? "", /Null deref in the parser/);
 		assert.match(h.stepCalls[0]?.prompt ?? "", /"line":10/);
 		assert.match(h.stepCalls[0]?.prompt ?? "", /\/tmp\/adjudicate-head/);
+	});
+
+	it("scrubs a credential out of a verifier parse-error message before it reaches stderr (#554)", async () => {
+		// The verifier's parse error embeds a model-controlled UNKNOWN top-level JSON key (assertKeys);
+		// pr-adjudicate forwards "invalid verification report: …" to deps.err. The pr-verify seat holds
+		// leftover CLI auth (#572), so refuse() must scrub the message.
+		const secret = "sk-ant-adjstderrkey1234567";
+		const malformedText = `REVIEW_VERIFICATION\n${JSON.stringify({ schemaVersion: 1, decisions: [], [secret]: "x" })}\nEND_REVIEW_VERIFICATION`;
+		const malformed: StepResult = { ok: true, subtype: "success", cost: 1, turns: 2, text: malformedText, fullText: malformedText, assistantText: malformedText };
+		const h = harness({ verify: malformed, env: { ANTHROPIC_API_KEY: secret } });
+		assert.equal(await main(["--pr", "497"], h.deps), 1);
+		const err = h.errs.join("\n");
+		assert.match(err, /invalid verification report/, "the invalid-verification refuse path ran");
+		assert.equal(err.includes("adjstderrkey1234567"), false, "the secret must not reach stderr");
+		assert.match(err, /\[REDACTED\]/);
+	});
+
+	it("scrubs a credential out of the operator adjudication comment body before upsert (#554)", async () => {
+		const secret = "sk-ant-adjcommentkey7654321";
+		// Judgment-tier survivor skips the model and reaches the comment; the secret rides its message.
+		const judged = survivor({
+			tier: "judgment",
+			class: "judgment",
+			classification: { kind: "matched", class: "judgment", signal: "ruleId", ruleId: "rule-judgment-docs" },
+			finding: finding({ message: `Docs nit ${secret} in the header.` }),
+		});
+		const h = harness({ survivor: judged, env: { ANTHROPIC_API_KEY: secret } });
+		assert.equal(await main(["--pr", "497"], h.deps), 0);
+		assert.ok(h.effects.includes("comment:497"), "the operator comment was upserted");
+		const body = h.comments.join("\n");
+		assert.equal(body.includes("adjcommentkey7654321"), false, "the secret must not reach the upserted comment body");
+		assert.match(body, /REDACTED/);
 	});
 
 	it("refuses on verifier confinement violations without authorization effects (#510)", async () => {

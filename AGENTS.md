@@ -39,7 +39,7 @@ The invariants below share one spine: **determinism lives in the harness (mechan
 - Skill bodies must call `npx pelaggio ...`, never `pnpm pelaggio <subcommand>` (which re-enters the pipeline).
 - Model IDs live in `MODEL_PROFILES` in `config.ts`; skill/template bodies must not pin Claude model IDs.
 - Worktree isolation is load-bearing. Do not bypass guards that prevent writes to the main repo from sibling worktrees.
-- The Claude custom spawn is unconditional and fail-closed: every Claude SDK child starts through `spawnClaudeSeat` (Bubblewrap PID + mount namespace and detached terminal session). Do not bypass it, omit `--new-session`, gate it on `onChildSpawn`, or conflate it with Landlock / the full contained-execution jail.
+- The Claude custom spawn is unconditional and fail-closed: every Claude SDK child starts through `spawnClaudeSeat` (Bubblewrap PID + mount namespace and detached terminal session) with a deny-by-default child env whose forge authority is an **exhaustive per-`Step` policy** (`CLAUDE_SEAT_FORGE_AUTHORITY`; only pick/ship/shipwreck retain GitHub/Linear/SSH creds) — a new `Step` must classify itself there, not inherit forge authority. Do not bypass it, omit `--new-session`, gate it on `onChildSpawn`, widen the env allowlist to passthrough, or conflate it with Landlock / the full contained-execution jail.
 - During `implement`, plan documents under `docs/plans/` are read-only. The implement step executes the plan; it does not polish the plan.
 - Rate-limit paths must park through `parkExit()` so uncommitted work is checkpointed.
 - `ship.target` owns direct-push vs PR behavior. Do not hardcode merge behavior in TypeScript or skills.
