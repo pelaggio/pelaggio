@@ -1673,12 +1673,12 @@ describe("preparePrShipFreshness / verifyPrShipFreshness", () => {
 
 	/** Fabricated residual: a merge with the recorded parent pair but the WRONG tree left
 	 *  in HEAD's history, witnessed only by an unconfirmed intent record. */
-	function makeTaintedAncestry(): { worktree: string; origin: string; badMerge: string; originMainOid: string } {
+	function makeTaintedAncestry(): { worktree: string; origin: string; badMerge: string; originMainOid: string; headOid: string } {
 		const { worktree, origin, headOid, originMainOid, expectedTreeOid } = makeContentCopiedPair();
 		const badMerge = execSync(`git commit-tree "${originMainOid}^{tree}" -p ${headOid} -p ${originMainOid} -m fake-ours`, { cwd: worktree, encoding: "utf-8" }).trim();
 		execSync(`git reset -q --hard ${badMerge}`, { cwd: worktree });
 		writeFreshnessOursIntent(worktree, { branch: "feat/tool-99", headOid, originMainOid, expectedTreeOid, recordedAt: new Date().toISOString() });
-		return { worktree, origin, badMerge, originMainOid };
+		return { worktree, origin, badMerge, originMainOid, headOid };
 	}
 
 	it("a .gitmodules ignore=all cannot hide an upstream gitlink bump from the equivalence proof", () => {
@@ -1760,6 +1760,57 @@ describe("preparePrShipFreshness / verifyPrShipFreshness", () => {
 		if (result.kind !== "failed") return;
 		assert.match(result.detail, /unproven ours merge/);
 		assert.ok(result.detail.includes(badMerge));
+	});
+
+	it("a forged confirmed record missing its probe evidence is invalid and fails classification closed", () => {
+		const { worktree } = makeTaintedAncestry();
+		// Forge: flip the on-disk intent to state=confirmed with NO mergeOid/confirmedAt —
+		// no probe-bound evidence. It must read as invalid (and its head is reachable, so
+		// it fails closed), never be skipped-as-confirmed.
+		const path = join(worktree, ".dev", "freshness-ours-intents", `${encodeURIComponent("feat/tool-99")}.json`);
+		const forged = { ...JSON.parse(readFileSync(path, "utf-8")), state: "confirmed" };
+		writeFileSync(path, JSON.stringify(forged));
+		const result = preparePrShipFreshness(worktree);
+		assert.equal(result.kind, "failed");
+		if (result.kind !== "failed") return;
+		assert.match(result.detail, /cannot be ruled out/);
+		assert.match(result.detail, /failed schema validation/);
+		assert.equal(verifyPrShipFreshness(worktree, execSync("git rev-parse origin/main", { cwd: worktree, encoding: "utf-8" }).trim()).ok, false);
+	});
+
+	it("a probe execution failure cannot bypass an outstanding intent: classification fails closed", () => {
+		const { worktree, headOid } = makeTaintedAncestry();
+		const result = preparePrShipFreshness(worktree, (args, cwd) => {
+			if (args[0] === "merge-base" && args[1] === "--is-ancestor" && args[2] === headOid) {
+				throw Object.assign(new Error("object store i/o failure"), { status: 128 });
+			}
+			return execFileSync("git", [...args], { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+		});
+		// A collapsed probe would read as "not an ancestor", skip the record, and accept
+		// up-to-date over the unproven merge.
+		assert.equal(result.kind, "failed");
+		if (result.kind !== "failed") return;
+		assert.match(result.detail, /could not be checked against ancestry/);
+	});
+
+	it("a malformed record that cannot reach this HEAD degrades to a diagnostic instead of failing every branch", () => {
+		const { worktree } = makeFreshnessPair();
+		// A real commit OUTSIDE this HEAD's ancestry keys the malformed record.
+		execSync("git checkout -q -b throwaway", { cwd: worktree });
+		commitFile(worktree, "side.txt", "side\n", "side commit");
+		const sideOid = execSync("git rev-parse HEAD", { cwd: worktree, encoding: "utf-8" }).trim();
+		execSync("git checkout -q feat/tool-99", { cwd: worktree });
+		const dir = join(worktree, ".dev", "freshness-ours-intents");
+		mkdirSync(dir, { recursive: true });
+		// Parseable but schema-invalid (confirmed without probe evidence): it cannot
+		// launder what is not in our history, so this branch proceeds; the record still
+		// hard-fails the branch whose HEAD descends from its recorded head.
+		writeFileSync(
+			join(dir, `${encodeURIComponent("feat/other")}.json`),
+			JSON.stringify({ schemaVersion: 1, branch: "feat/other", headOid: sideOid, originMainOid: "f".repeat(40), expectedTreeOid: "e".repeat(40), state: "confirmed", recordedAt: new Date().toISOString() }),
+		);
+		const result = preparePrShipFreshness(worktree);
+		assert.equal(result.kind, "up-to-date");
 	});
 });
 

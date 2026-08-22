@@ -1255,10 +1255,14 @@ export function hasDeliverableCommits(worktree: string): boolean {
 		// (main..HEAD) would also include files main advanced past while the
 		// feat branch was dormant, which falsely credits the branch for work
 		// it didn't do.
+		// GIT_NO_REPLACE_OBJECTS mirrors the freshness runner: a worktree-planted
+		// refs/replace/* substitute could otherwise make a plan-only branch look
+		// deliverable (or hide real work) from this guard's diff.
 		const files = execSync("git diff --name-only main...HEAD", {
 			cwd: worktree,
 			encoding: "utf-8",
 			stdio: ["ignore", "pipe", "pipe"],
+			env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" },
 		}).trim();
 		if (!files) return false;
 		// docs/decision-log/ rows are harness bookkeeping (#386): a branch whose only
@@ -1357,6 +1361,26 @@ function oidIsAncestor(run: GitArgvExec, cwd: string, ancestor: string, descenda
 	return tryGitArgv(run, ["merge-base", "--is-ancestor", ancestor, descendant], cwd).ok;
 }
 
+type AncestryProbe = { kind: "ancestor" } | { kind: "not-ancestor" } | { kind: "error"; detail: string };
+
+/**
+ * `merge-base --is-ancestor` with exit-code discrimination: exit 1 is a CLEAN
+ * non-ancestor; anything else (missing object, fatal) is an execution error. The
+ * intent gate must not collapse errors into "not an ancestor" — its skip logic
+ * continues past `false`, so a collapsed probe failure would bypass an outstanding
+ * intent. Boolean `oidIsAncestor` stays correct only where `false` REFUSES
+ * (up-to-date check, verify, post-merge probes) — never where it skips.
+ */
+function probeOidAncestry(run: GitArgvExec, cwd: string, ancestor: string, descendant: string): AncestryProbe {
+	try {
+		run(["merge-base", "--is-ancestor", ancestor, descendant], cwd);
+		return { kind: "ancestor" };
+	} catch (error) {
+		if ((error as { status?: unknown }).status === 1) return { kind: "not-ancestor" };
+		return { kind: "error", detail: gitArgvDetail(error) };
+	}
+}
+
 function oidIsAncestorOfHead(run: GitArgvExec, cwd: string, oid: string): boolean {
 	return oidIsAncestor(run, cwd, oid, "HEAD");
 }
@@ -1444,12 +1468,33 @@ function gateUnconfirmedOursIntent(run: GitArgvExec, cwd: string): { ok: true } 
 	}
 	const mainRepo = dirname(commonDir.out);
 	const listing = listFreshnessOursIntents(mainRepo);
-	if (listing.unreadable.length > 0) {
-		return { ok: false, detail: `unconfirmed ours-merge intent cannot be ruled out: ${listing.unreadable.join("; ")} — refusing to trust ancestry` };
+	for (const issue of listing.issues) {
+		// Blast radius: a malformed entry can only launder ancestry it can reach. When its
+		// recorded head is salvageable and CLEANLY not an ancestor of this HEAD, degrade to
+		// a diagnostic here — the entry still hard-fails the branch it belongs to (that
+		// branch's HEAD descends from the recorded head) instead of every branch sharing
+		// the store. No salvageable head, a reachable head, or a probe execution error all
+		// fail closed: what cannot be ruled out is not ruled in.
+		if (issue.headOid) {
+			const reach = probeOidAncestry(run, cwd, issue.headOid, "HEAD");
+			if (reach.kind === "not-ancestor") continue;
+			if (reach.kind === "error") {
+				return { ok: false, detail: `ours-intent record ${issue.entry} could not be checked against ancestry: ${reach.detail} — refusing to trust ancestry` };
+			}
+		}
+		return { ok: false, detail: `unconfirmed ours-merge intent cannot be ruled out: ${issue.entry}: ${issue.detail} — refusing to trust ancestry` };
 	}
 	for (const record of listing.records) {
 		if (record.state !== "intent") continue;
-		if (!oidIsAncestor(run, cwd, record.headOid, "HEAD")) continue;
+		// Strict probe: a CLEAN exit-1 non-ancestor skips (the merge's first parent is the
+		// recorded head, so the merge provably is not in this history); an execution
+		// failure must fail closed — collapsing it to "not an ancestor" would let a broken
+		// probe bypass the outstanding intent.
+		const reach = probeOidAncestry(run, cwd, record.headOid, "HEAD");
+		if (reach.kind === "error") {
+			return { ok: false, detail: `unconfirmed ours-merge intent for ${record.headOid} could not be checked against ancestry: ${reach.detail}` };
+		}
+		if (reach.kind === "not-ancestor") continue;
 		const listed = tryGitArgv(run, ["rev-list", "--merges", "--parents", `${record.headOid}..HEAD`], cwd);
 		if (!listed.ok) {
 			return { ok: false, detail: `unconfirmed ours-merge intent for ${record.headOid} could not be checked against ancestry: ${listed.detail}` };

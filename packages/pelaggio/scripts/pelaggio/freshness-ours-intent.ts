@@ -14,13 +14,16 @@ import { resolve } from "node:path";
  * an unconfirmed intent's merge participates in it.
  *
  * Trust: the store is NOT block-only — an `intent` record only ever blocks, but a
- * FORGED `state: "confirmed"` record (or a deletion) would launder, because absent
- * and confirmed both allow. Writes therefore require main-repo `.dev/` access, the
- * seat-facing Bash denylist (`BASH_DENIED_DEV_REGISTERS`, #510 parity) names this
- * store to narrow seat access, and the residual is the same documented
- * literal-string-matching arms race as `.dev/freshness-gate-records/` (#424 → #511
- * harness-attested evidence is the chartered fix) plus the `.git/info/grafts`
- * class of main-repo writes outside the worktree guard's threat model.
+ * FORGED `state: "confirmed"` record (or a deletion; a deleted store reads empty and
+ * absent allows) would launder, because absent and confirmed both allow.
+ *
+ * ⚠ RESIDUAL, stated plainly: a seat with composed-path Bash write access to
+ * `MAIN_REPO/.dev` can delete or forge this store despite the literal-path deny
+ * register — the deny register NARROWS, #511 harness-attested evidence CLOSES.
+ * Until #511 lands (explicitly deferred with the #510/#424 arms-race cluster),
+ * this bracket defends against accidental and direct-path interference, not a
+ * determined in-jail adversary. The `.git/info/grafts` class of main-repo writes
+ * sits in the same conceded capability class.
  *
  * Single-writer: only the harness freshness path writes these records (one JSON file
  * per branch, atomic tmp+rename — no shared-file concurrent append). Readers are
@@ -74,9 +77,17 @@ function validate(value: unknown): FreshnessOursIntentV1 | null {
 	if (typeof record.originMainOid !== "string" || !OID_RE.test(record.originMainOid)) return null;
 	if (typeof record.expectedTreeOid !== "string" || !OID_RE.test(record.expectedTreeOid)) return null;
 	if (record.state !== "intent" && record.state !== "confirmed") return null;
-	if (record.mergeOid !== undefined && (typeof record.mergeOid !== "string" || !OID_RE.test(record.mergeOid))) return null;
+	// Strict conditional shape: "confirmed" REQUIRES a probe-bound mergeOid + confirmedAt
+	// (a confirmed record missing them carries no probe evidence and must read as invalid,
+	// never be skipped-as-confirmed); "intent" requires their ABSENCE — the writer never
+	// produces them, so their presence is tampering or corruption, not a variant.
+	if (record.state === "confirmed") {
+		if (typeof record.mergeOid !== "string" || !OID_RE.test(record.mergeOid)) return null;
+		if (typeof record.confirmedAt !== "string" || !Number.isFinite(Date.parse(record.confirmedAt))) return null;
+	} else if (record.mergeOid !== undefined || record.confirmedAt !== undefined) {
+		return null;
+	}
 	if (typeof record.recordedAt !== "string" || !Number.isFinite(Date.parse(record.recordedAt))) return null;
-	if (record.confirmedAt !== undefined && (typeof record.confirmedAt !== "string" || !Number.isFinite(Date.parse(record.confirmedAt)))) return null;
 	return {
 		schemaVersion: 1,
 		branch: record.branch,
@@ -113,8 +124,10 @@ export function writeFreshnessOursIntent(mainRepo: string, intent: NewFreshnessO
 export function confirmFreshnessOursIntent(mainRepo: string, branch: string, mergeOid: string): boolean {
 	const read = readFreshnessOursIntent(mainRepo, branch);
 	if (read.kind !== "record" || !OID_RE.test(mergeOid)) return false;
+	const complete = validate({ ...read.record, state: "confirmed", mergeOid, confirmedAt: new Date().toISOString() });
+	if (!complete) return false;
 	try {
-		atomicWrite(mainRepo, { ...read.record, state: "confirmed", mergeOid, confirmedAt: new Date().toISOString() });
+		atomicWrite(mainRepo, complete);
 		return true;
 	} catch {
 		return false;
@@ -150,42 +163,69 @@ export function clearFreshnessOursIntent(mainRepo: string, branch: string): void
 	}
 }
 
+/** A store entry that cannot be trusted as a record, with its recorded head OID
+ *  salvaged when the JSON still carries one — the ancestry key the gate uses to
+ *  scope the fail-closed blast radius to histories the entry can actually reach. */
+export type FreshnessOursIntentIssue = { entry: string; detail: string; headOid: string | null };
+
+function salvageHeadOid(parsed: unknown): string | null {
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+	const value = (parsed as Record<string, unknown>).headOid;
+	return typeof value === "string" && OID_RE.test(value) ? value : null;
+}
+
 /**
- * Every record in the store, with unreadable entries surfaced for fail-closed
- * handling. The ancestry gate scans ALL records — never just the current branch's
- * file — so a branch rename or detached HEAD after a failed probe cannot dodge it.
- * A missing store directory is a valid empty store; any other listing failure, an
- * undecodable filename, or a malformed record is diagnostic, never silently absent.
+ * Every record in the store, with untrustworthy entries surfaced as issues for the
+ * gate to handle. The ancestry gate scans ALL records — never just the current
+ * branch's file — so a branch rename or detached HEAD after a failed probe cannot
+ * dodge it. A missing store directory is a valid empty store; any other listing
+ * failure, an undecodable filename, a malformed record, or a filename/branch-field
+ * mismatch is an issue — diagnostic, never silently absent.
  */
-export function listFreshnessOursIntents(mainRepo: string): { records: FreshnessOursIntentV1[]; unreadable: string[] } {
+export function listFreshnessOursIntents(mainRepo: string): { records: FreshnessOursIntentV1[]; issues: FreshnessOursIntentIssue[] } {
 	let entries: string[];
 	try {
 		entries = readdirSync(freshnessOursIntentsDir(mainRepo));
 	} catch (error) {
 		const code = (error as { code?: string }).code;
-		if (code === "ENOENT") return { records: [], unreadable: [] };
-		return { records: [], unreadable: [`ours-intent store unreadable: ${error instanceof Error ? error.message : String(error)}`] };
+		if (code === "ENOENT") return { records: [], issues: [] };
+		return { records: [], issues: [{ entry: FRESHNESS_OURS_INTENTS_DIR, detail: `ours-intent store unreadable: ${error instanceof Error ? error.message : String(error)}`, headOid: null }] };
 	}
 	const records: FreshnessOursIntentV1[] = [];
-	const unreadable: string[] = [];
+	const issues: FreshnessOursIntentIssue[] = [];
 	for (const entry of entries) {
 		if (!entry.endsWith(".json")) continue; // atomic-write .tmp leftovers
 		let branch: string;
 		try {
 			branch = decodeURIComponent(entry.slice(0, -".json".length));
 		} catch {
-			unreadable.push(`${entry}: filename does not decode to a branch`);
+			issues.push({ entry, detail: "filename does not decode to a branch", headOid: null });
 			continue;
 		}
-		const read = readFreshnessOursIntent(mainRepo, branch);
-		if (read.kind === "record") {
-			if (read.record.branch !== branch) {
-				unreadable.push(`${entry}: record branch ${JSON.stringify(read.record.branch)} does not match its filename`);
-				continue;
-			}
-			records.push(read.record);
-		} else if (read.kind === "unreadable") unreadable.push(`${entry}: ${read.detail}`);
-		else unreadable.push(`${entry}: vanished during listing`);
+		let raw: string;
+		try {
+			raw = readFileSync(resolve(freshnessOursIntentsDir(mainRepo), entry), "utf-8");
+		} catch (error) {
+			issues.push({ entry, detail: `unreadable: ${error instanceof Error ? error.message : String(error)}`, headOid: null });
+			continue;
+		}
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(raw);
+		} catch {
+			issues.push({ entry, detail: "not valid JSON", headOid: null });
+			continue;
+		}
+		const record = validate(parsed);
+		if (!record) {
+			issues.push({ entry, detail: "failed schema validation", headOid: salvageHeadOid(parsed) });
+			continue;
+		}
+		if (record.branch !== branch) {
+			issues.push({ entry, detail: `record branch ${JSON.stringify(record.branch)} does not match its filename`, headOid: record.headOid });
+			continue;
+		}
+		records.push(record);
 	}
-	return { records, unreadable };
+	return { records, issues };
 }
