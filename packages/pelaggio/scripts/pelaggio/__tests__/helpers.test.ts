@@ -1812,6 +1812,83 @@ describe("preparePrShipFreshness / verifyPrShipFreshness", () => {
 		const result = preparePrShipFreshness(worktree);
 		assert.equal(result.kind, "up-to-date");
 	});
+
+	it("an ours merge that landed despite a reported failure is gated + retro-confirmed, never laundered through the ordinary merge", () => {
+		const { worktree } = makeContentCopiedPair();
+		let ordinaryMergeRan = false;
+		const result = preparePrShipFreshness(worktree, (args, cwd) => {
+			if (args[0] === "merge" && args.includes("--strategy=ours")) {
+				// The merge actually lands (HEAD advances to a faithful ours merge) but git is
+				// "killed" before the harness observes a clean exit — a non-zero, non-conflict
+				// failure with a committed HEAD.
+				execFileSync("git", [...args], { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+				throw Object.assign(new Error("killed after HEAD update"), { status: 137 });
+			}
+			if (args[0] === "merge" && !args.includes("--strategy=ours")) ordinaryMergeRan = true;
+			return execFileSync("git", [...args], { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+		});
+		// The landed merge is faithful, so it retro-confirms — it is NOT cleared and re-run
+		// through the ordinary merge over the already-advanced ancestry.
+		assert.equal(result.kind, "content-integrated");
+		assert.equal(ordinaryMergeRan, false, "must not fall through to the ordinary merge over the already-advanced ancestry");
+		const mergeOid = execSync("git rev-parse HEAD", { cwd: worktree, encoding: "utf-8" }).trim();
+		const record = readFreshnessOursIntent(worktree, "feat/tool-99");
+		assert.equal(record.kind, "record");
+		if (record.kind !== "record") return;
+		assert.equal(record.record.state, "confirmed");
+		assert.equal(record.record.mergeOid, mergeOid);
+	});
+
+	it("a landed-but-unfaithful ours merge after a reported failure fails closed instead of laundering the wrong tree", () => {
+		const { worktree, headOid, originMainOid } = makeContentCopiedPair();
+		let ordinaryMergeRan = false;
+		const result = preparePrShipFreshness(worktree, (args, cwd) => {
+			if (args[0] === "merge" && args.includes("--strategy=ours")) {
+				// Fabricate a WRONG-tree merge landing on HEAD (origin's tree — the feature
+				// work is dropped), then "die": a corrupt/interrupted merge that still moved HEAD.
+				const bad = execSync(`git commit-tree "${originMainOid}^{tree}" -p ${headOid} -p ${originMainOid} -m corrupt`, { cwd, encoding: "utf-8" }).trim();
+				execSync(`git reset -q --hard ${bad}`, { cwd });
+				throw Object.assign(new Error("killed after corrupt HEAD update"), { status: 137 });
+			}
+			if (args[0] === "merge" && !args.includes("--strategy=ours")) ordinaryMergeRan = true;
+			return execFileSync("git", [...args], { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+		});
+		assert.equal(result.kind, "failed");
+		if (result.kind !== "failed") return;
+		assert.match(result.detail, /HEAD tree changed/);
+		assert.equal(ordinaryMergeRan, false, "the unproven tree must never reach the ordinary merge");
+		// Rolled back to the pre-merge head — the corrupt merge is discarded, feature work restored.
+		assert.equal(execSync("git rev-parse HEAD", { cwd: worktree, encoding: "utf-8" }).trim(), headOid);
+		assert.equal(existsSync(join(worktree, "src/feature.ts")), true);
+	});
+
+	it("an orphaned intent whose head object is missing degrades to a diagnostic instead of wedging the store", () => {
+		const { worktree } = makeFreshnessPair();
+		// origin/main is trivially an ancestor (clone tip) → the up-to-date path, gated first.
+		writeFreshnessOursIntent(worktree, {
+			branch: "feat/other",
+			headOid: "a".repeat(40), // valid OID shape, but no such object exists
+			originMainOid: "b".repeat(40),
+			expectedTreeOid: "c".repeat(40),
+			recordedAt: new Date().toISOString(),
+		});
+		const result = preparePrShipFreshness(worktree);
+		// A missing head object means the recorded merge cannot be in our history, so this
+		// branch proceeds; a pre-fix `is-ancestor` on the missing object (exit 128) would
+		// have wedged every branch.
+		assert.equal(result.kind, "up-to-date");
+	});
+
+	it("a git exec failure while probing a pending intent still fails closed, never degrades", () => {
+		const { worktree } = makeTaintedAncestry();
+		const result = preparePrShipFreshness(worktree, (args, cwd) => {
+			if (args[0] === "cat-file" && args[1] === "-e") throw Object.assign(new Error("object store i/o error"), { status: 128 });
+			return execFileSync("git", [...args], { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+		});
+		assert.equal(result.kind, "failed");
+		if (result.kind !== "failed") return;
+		assert.match(result.detail, /could not be checked against ancestry/);
+	});
 });
 
 /** Local two-branch conflict on f.txt: worktree left mid-merge (MERGE_HEAD + markers). */

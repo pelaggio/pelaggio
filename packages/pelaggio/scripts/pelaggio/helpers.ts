@@ -1381,6 +1381,41 @@ function probeOidAncestry(run: GitArgvExec, cwd: string, ancestor: string, desce
 	}
 }
 
+/**
+ * `cat-file -e` object existence with exit-code discrimination: exit 0 present,
+ * exit 1 genuinely MISSING (pruned/orphaned object), anything else (usage error,
+ * i/o, not a repo) an execution error. The distinction matters because
+ * `merge-base --is-ancestor` on a missing object exits 128, not 1 — so an orphaned
+ * intent record whose head was pruned would otherwise wedge the whole store.
+ */
+function probeObjectExists(run: GitArgvExec, cwd: string, oid: string): { kind: "present" } | { kind: "missing" } | { kind: "error"; detail: string } {
+	try {
+		run(["cat-file", "-e", oid], cwd);
+		return { kind: "present" };
+	} catch (error) {
+		if ((error as { status?: unknown }).status === 1) return { kind: "missing" };
+		return { kind: "error", detail: gitArgvDetail(error) };
+	}
+}
+
+/**
+ * Whether a recorded intent's `headOid` can reach THIS HEAD — the ancestry key the
+ * gate uses to scope its fail-closed blast radius. `unreachable` covers both a
+ * pruned/missing head object (the merge, whose first parent is that head, cannot be
+ * in our history) and a CLEAN non-ancestor; either degrades to a diagnostic that
+ * touches only the record's own branch. `error` (git exec/i-o failure) stays fully
+ * fail-closed — what cannot be ruled out is not ruled in.
+ */
+function recordedHeadReach(run: GitArgvExec, cwd: string, headOid: string): { kind: "unreachable" } | { kind: "reachable" } | { kind: "error"; detail: string } {
+	const exists = probeObjectExists(run, cwd, headOid);
+	if (exists.kind === "missing") return { kind: "unreachable" };
+	if (exists.kind === "error") return { kind: "error", detail: exists.detail };
+	const ancestry = probeOidAncestry(run, cwd, headOid, "HEAD");
+	if (ancestry.kind === "not-ancestor") return { kind: "unreachable" };
+	if (ancestry.kind === "error") return { kind: "error", detail: ancestry.detail };
+	return { kind: "reachable" };
+}
+
 function oidIsAncestorOfHead(run: GitArgvExec, cwd: string, oid: string): boolean {
 	return oidIsAncestor(run, cwd, oid, "HEAD");
 }
@@ -1458,8 +1493,10 @@ function oursIntentContext(run: GitArgvExec, cwd: string): { branch: string; mai
  * or detaching the branch after a failed probe cannot dodge it (branch keying is a
  * write-side convention only). An unresolvable store root fails closed — never
  * silent success. The walk per record is bounded to `<headOid>..HEAD` and skipped
- * entirely when the recorded head is not an ancestor (the merge's first parent is
- * that head, so the merge provably is not in HEAD's history either).
+ * entirely when the recorded head is not reachable from HEAD — a clean non-ancestor
+ * OR a pruned/missing head object (an orphaned record then degrades to a diagnostic
+ * on its own branch instead of wedging every branch that shares the store); only a
+ * git execution failure fails the gate closed.
  */
 function gateUnconfirmedOursIntent(run: GitArgvExec, cwd: string): { ok: true } | { ok: false; detail: string } {
 	const commonDir = tryGitArgv(run, ["rev-parse", "--path-format=absolute", "--git-common-dir"], cwd);
@@ -1470,14 +1507,15 @@ function gateUnconfirmedOursIntent(run: GitArgvExec, cwd: string): { ok: true } 
 	const listing = listFreshnessOursIntents(mainRepo);
 	for (const issue of listing.issues) {
 		// Blast radius: a malformed entry can only launder ancestry it can reach. When its
-		// recorded head is salvageable and CLEANLY not an ancestor of this HEAD, degrade to
-		// a diagnostic here — the entry still hard-fails the branch it belongs to (that
-		// branch's HEAD descends from the recorded head) instead of every branch sharing
-		// the store. No salvageable head, a reachable head, or a probe execution error all
-		// fail closed: what cannot be ruled out is not ruled in.
+		// recorded head is salvageable and unreachable from this HEAD — a CLEAN non-ancestor
+		// OR a pruned/missing object — degrade to a diagnostic here: the entry still
+		// hard-fails the branch it belongs to (that branch's HEAD descends from the recorded
+		// head) instead of every branch sharing the store. No salvageable head, a reachable
+		// head, or a probe execution error all fail closed: what cannot be ruled out is not
+		// ruled in.
 		if (issue.headOid) {
-			const reach = probeOidAncestry(run, cwd, issue.headOid, "HEAD");
-			if (reach.kind === "not-ancestor") continue;
+			const reach = recordedHeadReach(run, cwd, issue.headOid);
+			if (reach.kind === "unreachable") continue;
 			if (reach.kind === "error") {
 				return { ok: false, detail: `ours-intent record ${issue.entry} could not be checked against ancestry: ${reach.detail} — refusing to trust ancestry` };
 			}
@@ -1486,15 +1524,16 @@ function gateUnconfirmedOursIntent(run: GitArgvExec, cwd: string): { ok: true } 
 	}
 	for (const record of listing.records) {
 		if (record.state !== "intent") continue;
-		// Strict probe: a CLEAN exit-1 non-ancestor skips (the merge's first parent is the
-		// recorded head, so the merge provably is not in this history); an execution
-		// failure must fail closed — collapsing it to "not an ancestor" would let a broken
-		// probe bypass the outstanding intent.
-		const reach = probeOidAncestry(run, cwd, record.headOid, "HEAD");
+		// Reachability, blast-radius-scoped: a CLEAN non-ancestor OR a pruned/missing head
+		// object skips (the merge's first parent is the recorded head, so the merge provably
+		// is not in this history — an orphaned record must degrade to a diagnostic on its own
+		// branch, never wedge the store). A git execution failure must fail closed —
+		// collapsing it to "not an ancestor" would let a broken probe bypass the intent.
+		const reach = recordedHeadReach(run, cwd, record.headOid);
 		if (reach.kind === "error") {
 			return { ok: false, detail: `unconfirmed ours-merge intent for ${record.headOid} could not be checked against ancestry: ${reach.detail}` };
 		}
-		if (reach.kind === "not-ancestor") continue;
+		if (reach.kind === "unreachable") continue;
 		const listed = tryGitArgv(run, ["rev-list", "--merges", "--parents", `${record.headOid}..HEAD`], cwd);
 		if (!listed.ok) {
 			return { ok: false, detail: `unconfirmed ours-merge intent for ${record.headOid} could not be checked against ancestry: ${listed.detail}` };
@@ -1539,6 +1578,13 @@ function gateUnconfirmedOursIntent(run: GitArgvExec, cwd: string): { ok: true } 
  * refuses `up-to-date` classification of ancestry the probes never vouched for —
  * even when the rollback could not run. An intent that cannot be durably recorded
  * skips the shortcut entirely.
+ *
+ * A non-zero `git merge` exit is not trusted to mean "no merge": on an ambiguous
+ * failure (no MERGE_HEAD, no unmerged paths) the harness re-reads HEAD and, if a
+ * merge commit actually landed, runs it through the same probes rather than
+ * returning `null` (which would clear the intent and let the ordinary merge accept
+ * the already-advanced, unproven ancestry). Only a HEAD unchanged from the recorded
+ * pre-merge OID proves the merge absent and returns `null`.
  */
 function tryRecordAlreadyPresentAncestry(run: GitArgvExec, cwd: string, originMainOid: string): PrShipFreshnessResult | null {
 	const headOid = resolveCommitOid(run, cwd, "HEAD");
@@ -1580,7 +1626,21 @@ function tryRecordAlreadyPresentAncestry(run: GitArgvExec, cwd: string, originMa
 				originMainOid,
 			};
 		}
-		return null;
+		// Ambiguous failure: git reported non-zero but left no MERGE_HEAD and no unmerged
+		// paths. A merge commit may STILL have landed — git can be killed after updating
+		// HEAD but before the harness observes the exit. Re-read HEAD before deciding, so a
+		// landed-but-unproven merge cannot be laundered by returning null (the caller would
+		// then clear the intent and run an ordinary merge over already-advanced ancestry).
+		const afterFailHead = resolveCommitOid(run, cwd, "HEAD");
+		if (!afterFailHead) {
+			return { kind: "failed", detail: "ours merge reported failure and HEAD could not be re-read — refusing to proceed over unknown state" };
+		}
+		// HEAD unchanged from the recorded pre-merge OID ⇒ merge PROVEN ABSENT: safe to skip
+		// the shortcut (the caller clears the intent and takes the ordinary merge).
+		if (afterFailHead === headOid) return null;
+		// HEAD advanced despite the reported failure — a merge landed. Fall through to the
+		// SAME parent/tree/ancestry probes as the success path; retain the intent so a
+		// probe failure is caught (rollback or fail-closed), never cleared as absent.
 	}
 	const newHead = resolveCommitOid(run, cwd, "HEAD");
 	const firstParent = newHead ? resolveCommitOid(run, cwd, `${newHead}^1`) : null;
