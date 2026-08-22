@@ -18,7 +18,7 @@ import { CONFIG, REPO, REVIEW_CONFIG, ROADMAP_GITHUB, resolveStepSettings, SHIP_
 import { upsertMarkerComment } from "./github-posting.js";
 import { createMainCheckoutDeltaObserver, FORBIDDEN_ROOT_GONE, listWorktreesIn, type MainCheckoutDeltaObserver, mainWorktree, snapshotForbiddenRoot, snapshotRepoRefState, snapshotSiblingWorktree } from "./helpers.js";
 import { executionOverrideFor, trustedLocalContext, verificationPrompt } from "./pr-review-cli.js";
-import { gateRecordsDir, listPrReviewGateRecords, type PrReviewGateRecord, writePrReviewGateRecord } from "./pr-review-gate-record.js";
+import { gateRecordsDir, listPrReviewGateRecords, type PrReviewFindingDispositionEntry, type PrReviewGateRecord, writePrReviewGateRecord } from "./pr-review-gate-record.js";
 import {
 	adjudicationSourcesDir,
 	bindLiveSafetyVerification,
@@ -290,8 +290,16 @@ export async function runPrAdjudication(pr: number, profile: string, deps: PrAdj
 		if (churn.kind === "refused") return refuse(deps, churn.reason);
 		// Durable dispositions: containment rationales from the churn predicate, with safety-tier
 		// entries rebound below to the LIVE adjudication-time verification evidence — never the
-		// stale red-review "survives" text (#497 must-fix).
-		let finalDispositions = churn.dispositions;
+		// stale red-review "survives" text (#497 must-fix). Carried-but-refuted findings (#525)
+		// are accounted with their fleet refutation evidence — they were counted in the fleet
+		// record's survivorCount, need no repair, and open no edit region.
+		let finalDispositions: Record<string, PrReviewFindingDispositionEntry> = { ...churn.dispositions };
+		for (const entry of source.refuted) {
+			finalDispositions[entry.fingerprint] = {
+				disposition: "refuted",
+				rationale: `Fleet isolated verification ${entry.verification.id} refuted the finding (${entry.verification.rationale}); retained only by the gate's fail-closed invalid-summary rule, no repair required.`,
+			};
+		}
 
 		const safety = source.survivors.filter((entry) => entry.tier === "safety");
 		if (safety.length > 0) {
@@ -416,7 +424,9 @@ export async function runPrAdjudication(pr: number, profile: string, deps: PrAdj
 				live.set(reviewFindingFingerprint(entry.finding), { id: entry.id, decision: "refuted", rationale: entry.rationale });
 			}
 			try {
-				finalDispositions = bindLiveSafetyVerification(source.survivors, churn.dispositions, live);
+				// Bind over finalDispositions (not churn.dispositions) so the refuted entries merged
+				// above survive the safety rebind; refuted fingerprints are disjoint from survivors.
+				finalDispositions = bindLiveSafetyVerification(source.survivors, finalDispositions, live);
 			} catch (e) {
 				return refuse(deps, `could not bind live verification evidence: ${e instanceof Error ? e.message : String(e)}`);
 			}
@@ -449,6 +459,7 @@ export async function runPrAdjudication(pr: number, profile: string, deps: PrAdj
 			interdiffDigest: churn.digest,
 			adjudicator,
 			survivors: source.survivors,
+			refuted: source.refuted,
 			dispositions: finalDispositions,
 		});
 		if (!deps.upsertComment(deps.gh, deps.ghRepo, pr, body)) return refuse(deps, "failed to upsert the operator adjudication comment");

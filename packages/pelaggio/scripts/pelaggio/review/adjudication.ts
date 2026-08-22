@@ -39,9 +39,10 @@ const SEVERITIES: readonly ReviewFindingSeverity[] = ["must-fix", "nice", "note"
 const TIERS: readonly FindingTier[] = ["safety", "judgment"];
 const CLASSIFICATION_SIGNALS: readonly ClassificationSignalKind[] = ["fingerprint", "cwe", "ruleId", "path", "classHint-elevation"];
 
-const DRAFT_KEYS = ["prNumber", "itemId", "reviewedSha", "agreement", "requiredCells", "completedCells", "survivorCount", "survivors"] as const;
+const DRAFT_KEYS = ["prNumber", "itemId", "reviewedSha", "agreement", "requiredCells", "completedCells", "survivorCount", "survivors", "refuted"] as const;
 const RECORD_KEYS = [...DRAFT_KEYS, "schemaVersion", "fleetRecordDigest"] as const;
 const SURVIVOR_KEYS = ["finding", "fingerprint", "class", "classification", "tier", "verification", "hunk"] as const;
+const REFUTED_KEYS = ["finding", "fingerprint", "verification"] as const;
 const FINDING_KEYS = ["severity", "message", "path", "line"] as const;
 const VERIFICATION_KEYS = ["id", "decision", "rationale"] as const;
 const HUNK_KEYS = ["path", "start", "end"] as const;
@@ -58,6 +59,26 @@ export interface PrAdjudicationHunk {
 export interface PrAdjudicationVerification {
 	id: string;
 	decision: "survives";
+	rationale: string;
+}
+
+/**
+ * A carried finding whose LATEST fleet verification refuted it (#525 must-fix). The gate's
+ * fail-closed invalid-summary rule re-adds every disposed finding to the carried set, so a
+ * disagreement record's `survivorCount` includes findings a complete, valid verification pass
+ * already refuted. Recording them here — with their refutation evidence — keeps the sidecar
+ * bindable (counts match the fleet record) without opening any edit region for them.
+ */
+export interface PrAdjudicationRefutedEntry {
+	finding: ReviewFinding;
+	fingerprint: string;
+	verification: { id: string; decision: "refuted"; rationale: string };
+}
+
+/** Latest-per-fingerprint verification evidence the draft builder consumes. */
+export interface CarriedVerificationEvidence {
+	id: string;
+	decision: "survives" | "refuted";
 	rationale: string;
 }
 
@@ -87,8 +108,11 @@ export interface PrAdjudicationSourceDraft {
 	agreement: PrAdjudicableAgreement;
 	requiredCells: number;
 	completedCells: number;
+	/** The fleet record's carried count: `survivors.length + refuted.length` (#525). */
 	survivorCount: number;
 	survivors: PrAdjudicationSurvivorEntry[];
+	/** Carried-but-refuted findings. Absent on legacy records; validated as empty. */
+	refuted: PrAdjudicationRefutedEntry[];
 }
 
 export interface PrAdjudicationSourceRecordV1 extends PrAdjudicationSourceDraft {
@@ -203,15 +227,26 @@ function validateClassification(value: unknown): ClassificationResult {
 	};
 }
 
-function validateVerification(value: unknown): PrAdjudicationVerification {
+function validateVerification<D extends "survives" | "refuted">(value: unknown, expected: D): { id: string; decision: D; rationale: string } {
 	if (!isRecord(value)) fail("verification");
 	requireClosedKeys(value, VERIFICATION_KEYS, "verification");
 	const id = requireNonEmptyString(value.id, "verification.id");
 	if (!CANDIDATE_ID_RE.test(id)) fail("verification.id");
-	if (value.decision !== "survives") fail("verification.decision");
+	if (value.decision !== expected) fail("verification.decision");
 	const rationale = requireNonEmptyString(value.rationale, "verification.rationale");
 	if (rationale.trim().length === 0) fail("verification.rationale");
-	return { id, decision: "survives", rationale };
+	return { id, decision: expected, rationale };
+}
+
+function validateRefutedEntry(value: unknown, seen: Set<string>): PrAdjudicationRefutedEntry {
+	if (!isRecord(value)) fail("refuted");
+	requireClosedKeys(value, REFUTED_KEYS, "refuted");
+	const finding = validateFinding(value.finding);
+	const fingerprint = requireNonEmptyString(value.fingerprint, "refuted.fingerprint");
+	// Shares `seen` with the survivor pass: one carried fingerprint is either surviving or refuted.
+	if (fingerprint !== reviewFindingFingerprint(finding) || seen.has(fingerprint)) fail("refuted.fingerprint");
+	seen.add(fingerprint);
+	return { finding, fingerprint, verification: validateVerification(value.verification, "refuted") };
 }
 
 function validateHunk(value: unknown): PrAdjudicationHunk {
@@ -237,7 +272,7 @@ function validateSurvivor(value: unknown, seen: Set<string>): PrAdjudicationSurv
 	const classification = validateClassification(value.classification);
 	if (classification.class !== classId) fail("class");
 	if (!TIERS.includes(value.tier as FindingTier)) fail("tier");
-	const verification = validateVerification(value.verification);
+	const verification = validateVerification(value.verification, "survives");
 	const hunk = validateHunk(value.hunk);
 	return {
 		finding,
@@ -260,10 +295,18 @@ function validateDraftFields(value: Record<string, unknown>): PrAdjudicationSour
 	if (requiredCells !== completedCells) fail("completedCells");
 	const survivorCount = requirePositiveInt(value.survivorCount, "survivorCount");
 	if (!Array.isArray(value.survivors)) fail("survivors");
-	if (value.survivors.length > ADJUDICATION_SOURCE_MAX_SURVIVORS) fail("survivors");
-	if (value.survivors.length !== survivorCount || survivorCount < 1) fail("survivorCount");
+	const refutedRaw = value.refuted === undefined ? [] : value.refuted;
+	if (!Array.isArray(refutedRaw)) fail("refuted");
+	// survivorCount binds to the fleet record's carried count, which the gate's fail-closed
+	// invalid-summary rule pads with refuted findings (#525) — so the cap and the count cover
+	// survivors AND refuted, while at least one genuine survivor is required (nothing to
+	// adjudicate otherwise).
+	if (value.survivors.length < 1) fail("survivors");
+	if (value.survivors.length + refutedRaw.length > ADJUDICATION_SOURCE_MAX_SURVIVORS) fail("survivors");
+	if (value.survivors.length + refutedRaw.length !== survivorCount) fail("survivorCount");
 	const seen = new Set<string>();
 	const survivors = value.survivors.map((entry) => validateSurvivor(entry, seen));
+	const refuted = refutedRaw.map((entry) => validateRefutedEntry(entry, seen));
 	return {
 		prNumber,
 		itemId,
@@ -273,6 +316,7 @@ function validateDraftFields(value: Record<string, unknown>): PrAdjudicationSour
 		completedCells,
 		survivorCount,
 		survivors,
+		refuted,
 	};
 }
 
@@ -393,7 +437,8 @@ export function crossCheckAdjudicationSource(source: PrAdjudicationSourceRecordV
 		return { ok: false, reason: "source record agreement does not match the fleet record" };
 	}
 	const fleetSurvivorCount = fleet.schemaVersion === 1 || (fleet.schemaVersion === 2 && fleet.producer === "fleet") ? (fleet.survivorCount ?? -1) : -1;
-	if (source.survivorCount !== source.survivors.length || source.survivorCount !== fleetSurvivorCount) {
+	// The fleet carried count includes refuted-retained findings (#525): survivors + refuted.
+	if (source.survivorCount !== source.survivors.length + source.refuted.length || source.survivorCount !== fleetSurvivorCount) {
 		return { ok: false, reason: "source record survivor count does not match the fleet record" };
 	}
 	if (source.fleetRecordDigest !== fleetRecordDigestOf(fleetBytes)) {
@@ -427,7 +472,8 @@ export function buildAdjudicationSourceDraft(opts: {
 	completedCells: number;
 	ok: boolean;
 	survivors: readonly ReviewFinding[];
-	verifications: ReadonlyMap<string, { id: string; rationale: string }>;
+	/** Latest-per-fingerprint disposition evidence for every carried finding (#525 must-fix). */
+	verifications: ReadonlyMap<string, CarriedVerificationEvidence>;
 	inspectionDiff: string;
 	changedFiles: readonly string[];
 	taxonomy: TaxonomyConfig;
@@ -447,22 +493,31 @@ export function buildAdjudicationSourceDraft(opts: {
 	}
 	const seen = new Set<string>();
 	const survivors: PrAdjudicationSurvivorEntry[] = [];
+	const refuted: PrAdjudicationRefutedEntry[] = [];
 	for (const finding of opts.survivors) {
 		const fingerprint = reviewFindingFingerprint(finding);
 		if (seen.has(fingerprint)) return undefined;
 		seen.add(fingerprint);
 		const verification = opts.verifications.get(fingerprint);
 		if (!verification) return undefined;
+		const bare: ReviewFinding = {
+			severity: finding.severity,
+			message: finding.message,
+			...(finding.path !== undefined ? { path: finding.path } : {}),
+			...(finding.line !== undefined ? { line: finding.line } : {}),
+		};
+		if (verification.decision === "refuted") {
+			// #525 must-fix: the gate's fail-closed invalid-summary rule re-adds refuted findings to
+			// the carried set. They are not survivors — record them with their refutation evidence
+			// instead of suppressing the whole sidecar, and open no edit region for their hunks.
+			refuted.push({ finding: bare, fingerprint, verification: { id: verification.id, decision: "refuted", rationale: verification.rationale } });
+			continue;
+		}
 		const hunk = mapFindingToInspectionHunk(finding, patches);
 		if (!hunk) return undefined;
 		const materialized = materializeAuthoringFinding(finding, { changedFiles: opts.changedFiles }, opts.taxonomy);
 		survivors.push({
-			finding: {
-				severity: finding.severity,
-				message: finding.message,
-				...(finding.path !== undefined ? { path: finding.path } : {}),
-				...(finding.line !== undefined ? { line: finding.line } : {}),
-			},
+			finding: bare,
 			fingerprint,
 			class: materialized.class,
 			classification: materialized.classification,
@@ -471,7 +526,7 @@ export function buildAdjudicationSourceDraft(opts: {
 			hunk,
 		});
 	}
-	if (survivors.length !== opts.survivors.length) return undefined;
+	if (survivors.length + refuted.length !== opts.survivors.length) return undefined;
 	try {
 		return validateDraftFields({
 			prNumber: opts.prNumber,
@@ -480,8 +535,9 @@ export function buildAdjudicationSourceDraft(opts: {
 			agreement,
 			requiredCells: opts.requiredCells,
 			completedCells: opts.completedCells,
-			survivorCount: survivors.length,
+			survivorCount: survivors.length + refuted.length,
 			survivors,
+			refuted,
 		});
 	} catch {
 		return undefined;
@@ -759,6 +815,7 @@ export function renderOperatorAdjudicationComment(opts: {
 	interdiffDigest: string;
 	adjudicator: string;
 	survivors: readonly PrAdjudicationSurvivorEntry[];
+	refuted?: readonly PrAdjudicationRefutedEntry[];
 	dispositions: Record<string, PrReviewFindingDispositionEntry>;
 }): string {
 	const findings = opts.survivors.map((survivor) => {
@@ -766,6 +823,10 @@ export function renderOperatorAdjudicationComment(opts: {
 		const entry = opts.dispositions[survivor.fingerprint];
 		const disposition = entry ? ` — **${entry.disposition}** (${entry.rationale})` : "";
 		return `- **${survivor.finding.severity}**${location}: ${survivor.finding.message}${disposition}`;
+	});
+	const refuted = (opts.refuted ?? []).map((entry) => {
+		const location = entry.finding.path ? ` (\`${entry.finding.path}${entry.finding.line ? `:${entry.finding.line}` : ""}\`)` : "";
+		return `- **${entry.finding.severity}**${location}: ${entry.finding.message} — **refuted** by fleet isolated verification ${entry.verification.id} (${entry.verification.rationale}); no repair required`;
 	});
 	return [
 		PR_ADJUDICATION_MARKER,
@@ -778,6 +839,7 @@ export function renderOperatorAdjudicationComment(opts: {
 		"",
 		"### Findings",
 		...findings,
+		...(refuted.length > 0 ? ["", "### Carried findings already refuted by the fleet", ...refuted] : []),
 		"",
 		"If the `review` status was not posted, retry `npx pelaggio pr-adjudicate --pr " + String(opts.prNumber) + "`. Do not run `revise` to recover — any fleet findings comment above predates this adjudication.",
 		"",

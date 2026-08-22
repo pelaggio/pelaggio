@@ -220,6 +220,16 @@ survivor’s v1 finding, recomputed fingerprint, emission-time class/tier, succe
 boundary. Locationless or unmappable survivors omit the whole sidecar — the ordinary red
 gate still stands.
 
+Dispositions are latest-per-fingerprint (#525): the latest iteration’s verification
+decision wins, and within one iteration a `survives` outranks a `refuted` (the same
+fail-closed dominance a valid summary gets). Carried findings whose latest decision is
+`refuted` — the gate’s fail-closed invalid-summary rule re-adds them to the carried set,
+so the fleet `survivorCount` includes them — are recorded in a separate `refuted` list
+with their refutation evidence; they need no hunk, open no edit region, and require no
+touch. `survivorCount` = `survivors.length + refuted.length`, binding the fleet record’s
+carried count; at least one genuine survivor is required. Adjudication disposes refuted
+entries as `refuted` in the operator record and comment.
+
 Forge comments are display/audit only. The command never scrapes Markdown or reconstructs
 evidence from a CI-only / legacy fleet run. Those cases refuse with a full-re-review
 instruction.
@@ -228,8 +238,8 @@ instruction.
 
 Eligible: a complete v2 `producer: "fleet"` record with `gate: "block"`, structural
 `ok: true`, `agreement: "consensus-block"` **or** `"disagreement"` (#525), `survivorCount
-≥ 1` matching the sidecar, and a matching digest — the sidecar's agreement must equal the
-fleet record's exactly. A `budget` / `max-passes` / `diminishing-returns` breaker is
+≥ 1` matching the sidecar (survivors + refuted), and a matching digest — the sidecar's
+agreement must equal the fleet record's exactly. A `budget` / `max-passes` / `diminishing-returns` breaker is
 eligible only with that complete matrix, and so is `invalid-pass`: the convergence loop
 labels a terminal verdict split's breaker `invalid-pass`, but with `ok: true` every
 required cell completed a structurally valid review — a genuinely broken run instead

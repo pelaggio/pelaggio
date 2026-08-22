@@ -8,7 +8,7 @@ import { DEFAULTS, type StepSettings } from "../config.js";
 import { FORBIDDEN_ROOT_GONE, type MainCheckoutDeltaResult } from "../helpers.js";
 import { main, type PrAdjudicateDeps, parsePrAdjudicateArgs } from "../pr-adjudicate-cli.js";
 import { listPrReviewGateRecords, type NewPrReviewFleetGateRecord, readPrReviewGateRecord, writePrReviewGateRecord } from "../pr-review-gate-record.js";
-import { type PrAdjudicationSourceRecordV1, type PrAdjudicationSurvivorEntry, readAdjudicationSourceRecord, writeAdjudicationSourceRecord } from "../review/adjudication.js";
+import { type PrAdjudicationRefutedEntry, type PrAdjudicationSourceRecordV1, type PrAdjudicationSurvivorEntry, readAdjudicationSourceRecord, writeAdjudicationSourceRecord } from "../review/adjudication.js";
 import { materializeAuthoringFinding, type ReviewFinding, reviewFindingFingerprint } from "../review/findings.js";
 import { BASELINE_TAXONOMY, tierOf } from "../review/taxonomy.js";
 import type { GhRunner } from "../roadmap/github-issues.js";
@@ -140,11 +140,12 @@ function seedEvidence(
 	gateRoot: string,
 	sourceRoot: string,
 	entry: PrAdjudicationSurvivorEntry = survivor(),
-	shape: { fleet?: Partial<NewPrReviewFleetGateRecord>; sourceAgreement?: "consensus-block" | "disagreement" } = {},
+	shape: { fleet?: Partial<NewPrReviewFleetGateRecord>; sourceAgreement?: "consensus-block" | "disagreement"; refuted?: PrAdjudicationRefutedEntry[] } = {},
 ): { digest: string } {
-	const path = writePrReviewGateRecord(gateRoot, fleet(shape.fleet));
+	const path = writePrReviewGateRecord(gateRoot, fleet({ survivorCount: 1 + (shape.refuted?.length ?? 0), ...shape.fleet }));
 	const bytes = readFileSync(path);
 	const digest = createHash("sha256").update(bytes).digest("hex");
+	const refuted = shape.refuted ?? [];
 	const record: PrAdjudicationSourceRecordV1 = {
 		schemaVersion: 1,
 		prNumber: 497,
@@ -153,8 +154,9 @@ function seedEvidence(
 		agreement: shape.sourceAgreement ?? "consensus-block",
 		requiredCells: 1,
 		completedCells: 1,
-		survivorCount: 1,
+		survivorCount: 1 + refuted.length,
 		survivors: [entry],
+		refuted,
 		fleetRecordDigest: digest,
 	};
 	writeAdjudicationSourceRecord(sourceRoot, record);
@@ -175,7 +177,7 @@ function harness(
 		mainWorktree?: string;
 		seed?: boolean;
 		/** Evidence-shape overrides threaded to seedEvidence (#525 disagreement coverage). */
-		evidenceShape?: { fleet?: Partial<NewPrReviewFleetGateRecord>; sourceAgreement?: "consensus-block" | "disagreement" };
+		evidenceShape?: { fleet?: Partial<NewPrReviewFleetGateRecord>; sourceAgreement?: "consensus-block" | "disagreement"; refuted?: PrAdjudicationRefutedEntry[] };
 		survivor?: PrAdjudicationSurvivorEntry;
 		interdiff?: string;
 		ancestor?: boolean;
@@ -400,6 +402,48 @@ describe("pr-adjudicate CLI config and eligibility", () => {
 		assert.equal(await main(["--pr", "497"], h.deps), 0);
 		const writes = h.effects.filter((e) => e.startsWith("write-gate:") || e.startsWith("comment:") || e.startsWith("status:"));
 		assert.deepEqual(writes, ["write-gate:operator-adjudication", "comment:497", `status:success:${HEAD}`]);
+	});
+
+	it("binds evidence carrying a refuted entry and accounts it in the operator record without opening its hunk (#525 must-fix)", async () => {
+		// The gate's fail-closed invalid-summary rule pads the fleet survivorCount with findings a
+		// complete verification already refuted; the sidecar carries them as refuted. Adjudication
+		// must bind (counts include them), fix only the genuine survivor, and dispose the refuted
+		// entry with its fleet refutation evidence.
+		const goneFinding: ReviewFinding = { severity: "must-fix", message: "Alleged bug, refuted.", path: "src/other.ts", line: 3 };
+		const gone: PrAdjudicationRefutedEntry = {
+			finding: goneFinding,
+			fingerprint: reviewFindingFingerprint(goneFinding),
+			verification: { id: "C2", decision: "refuted", rationale: "Not reproducible at the head." },
+		};
+		const h = harness({
+			evidenceShape: {
+				fleet: { subtype: "invalid-pass", agreement: "disagreement", breakerReason: "invalid-pass" },
+				sourceAgreement: "disagreement",
+				refuted: [gone],
+			},
+		});
+		// The interdiff (replacementDiff at src/a.ts:10) touches only the survivor's hunk; the
+		// refuted finding's file is never an allowed edit region and needs no touch.
+		assert.equal(await main(["--pr", "497"], h.deps), 0);
+		const stored = readPrReviewGateRecord(h.gateRoot, 497, HEAD);
+		assert.ok(stored && stored.schemaVersion === 2 && stored.producer === "operator-adjudication");
+		assert.equal(stored.dispositions[reviewFindingFingerprint(finding())]?.disposition, "fixed");
+		const refutedEntry = stored.dispositions[gone.fingerprint];
+		assert.equal(refutedEntry?.disposition, "refuted");
+		assert.match(refutedEntry?.rationale ?? "", /C2/);
+		assert.match(refutedEntry?.rationale ?? "", /Not reproducible at the head\./);
+		// An interdiff editing the refuted finding's file stays refused — no edit region opened.
+		const outOfRegion = harness({
+			evidenceShape: {
+				fleet: { subtype: "invalid-pass", agreement: "disagreement", breakerReason: "invalid-pass" },
+				sourceAgreement: "disagreement",
+				refuted: [gone],
+			},
+			interdiff: ["diff --git a/src/other.ts b/src/other.ts", "index 1111111..2222222 100644", "--- a/src/other.ts", "+++ b/src/other.ts", "@@ -3,1 +3,1 @@", "-old", "+new", ""].join("\n"),
+		});
+		assert.equal(await main(["--pr", "497"], outOfRegion.deps), 1);
+		assert.ok(outOfRegion.errs.some((e) => e.includes("extra file src/other.ts")));
+		assert.ok(!outOfRegion.effects.some((e) => e.startsWith("write-gate:") || e.startsWith("comment:") || e.startsWith("status:")));
 	});
 
 	it("refuses a broken invalid-pass record and a sidecar whose agreement mismatches the fleet record (#525)", async () => {

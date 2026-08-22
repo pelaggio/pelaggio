@@ -75,6 +75,7 @@ function draft(over: Partial<PrAdjudicationSourceDraft> = {}): PrAdjudicationSou
 		completedCells: 2,
 		survivorCount: 1,
 		survivors: [entry],
+		refuted: [],
 		...over,
 	};
 }
@@ -203,6 +204,33 @@ describe("adjudication source store", () => {
 		}
 	});
 
+	it("validates refuted entries: decision, fingerprint integrity, survivor overlap, and count binding (#525)", () => {
+		const entry = survivor();
+		const goneFinding = finding({ message: "Alleged bug, refuted." });
+		const gone = { finding: goneFinding, fingerprint: reviewFindingFingerprint(goneFinding), verification: { id: "C2", decision: "refuted" as const, rationale: "Not reproducible." } };
+		// Valid: survivorCount binds survivors + refuted (the fleet carried count).
+		const dir = root();
+		writeAdjudicationSourceRecord(dir, record({ refuted: [gone], survivorCount: 2 }));
+		assert.equal(readAdjudicationSourceRecord(dir, 497, REVIEWED)?.survivorCount, 2);
+		const invalid = [
+			// count not including the refuted entry
+			{ ...record(), refuted: [gone] },
+			// a refuted entry cannot claim survives
+			{ ...record(), refuted: [{ ...gone, verification: { ...gone.verification, decision: "survives" } }], survivorCount: 2 },
+			// one carried fingerprint cannot be both surviving and refuted
+			{ ...record(), refuted: [{ finding: finding(), fingerprint: entry.fingerprint, verification: gone.verification }], survivorCount: 2 },
+			// fingerprint must recompute from the finding
+			{ ...record(), refuted: [{ ...gone, fingerprint: "tampered" }], survivorCount: 2 },
+			// closed keys
+			{ ...record(), refuted: [{ ...gone, hunk: { path: "src/a.ts", start: 1, end: 2 } }], survivorCount: 2 },
+			// at least one genuine survivor
+			{ ...record(), survivors: [], refuted: [gone], survivorCount: 1 },
+		];
+		for (const value of invalid) {
+			assert.throws(() => writeAdjudicationSourceRecord(root(), value as unknown as PrAdjudicationSourceRecordV1));
+		}
+	});
+
 	it("rejects incomplete cells, non-surviving verification, and digest/count mismatches on read", () => {
 		const dir = root();
 		const path = writeAdjudicationSourceRecord(dir, record());
@@ -249,7 +277,7 @@ describe("emission-time classification", () => {
 			completedCells: 1,
 			ok: true,
 			survivors: [finding()],
-			verifications: new Map([[reviewFindingFingerprint(finding()), { id: "C1", rationale: "Still present." }]]),
+			verifications: new Map([[reviewFindingFingerprint(finding()), { id: "C1", decision: "survives" as const, rationale: "Still present." }]]),
 			inspectionDiff: inspectionDiff(),
 			changedFiles: ["src/a.ts"],
 			taxonomy: BASELINE_TAXONOMY,
@@ -272,7 +300,7 @@ describe("emission-time classification", () => {
 			completedCells: 1,
 			ok: true,
 			survivors: [judged],
-			verifications: new Map([[reviewFindingFingerprint(judged), { id: "C1", rationale: "Still present." }]]),
+			verifications: new Map([[reviewFindingFingerprint(judged), { id: "C1", decision: "survives" as const, rationale: "Still present." }]]),
 			inspectionDiff: inspectionDiff(),
 			changedFiles: ["src/a.ts"],
 			taxonomy,
@@ -291,7 +319,7 @@ describe("emission-time classification", () => {
 			completedCells: 3,
 			ok: true,
 			survivors: [finding()],
-			verifications: new Map([[reviewFindingFingerprint(finding()), { id: "C1", rationale: "Still present." }]]),
+			verifications: new Map([[reviewFindingFingerprint(finding()), { id: "C1", decision: "survives" as const, rationale: "Still present." }]]),
 			inspectionDiff: inspectionDiff(),
 			changedFiles: ["src/a.ts"],
 			taxonomy: BASELINE_TAXONOMY,
@@ -302,6 +330,53 @@ describe("emission-time classification", () => {
 		assert.equal(buildAdjudicationSourceDraft({ ...base, agreement: "consensus-pass" }), undefined);
 		assert.equal(buildAdjudicationSourceDraft({ ...base, agreement: "invalid" }), undefined);
 		assert.equal(buildAdjudicationSourceDraft({ ...base, agreement: "disagreement", ok: false }), undefined);
+	});
+
+	it("splits latest-refuted carried findings into refuted entries instead of suppressing the draft (#525 must-fix)", () => {
+		const surviving = finding();
+		// Unmappable on purpose (line outside every hunk): refuted entries need no hunk, so this
+		// must NOT suppress the draft the way an unmappable SURVIVOR does.
+		const gone = finding({ message: "Alleged bug, refuted.", line: 99 });
+		const base = {
+			prNumber: 497,
+			itemId: "497",
+			reviewedSha: REVIEWED,
+			agreement: "disagreement",
+			requiredCells: 3,
+			completedCells: 3,
+			ok: true,
+			survivors: [surviving, gone],
+			inspectionDiff: inspectionDiff(),
+			changedFiles: ["src/a.ts"],
+			taxonomy: BASELINE_TAXONOMY,
+		} as const;
+		const built = buildAdjudicationSourceDraft({
+			...base,
+			verifications: new Map([
+				[reviewFindingFingerprint(surviving), { id: "C1", decision: "survives" as const, rationale: "Still present." }],
+				[reviewFindingFingerprint(gone), { id: "C2", decision: "refuted" as const, rationale: "Fixed in the final iteration." }],
+			]),
+		});
+		assert.ok(built);
+		assert.equal(built.survivorCount, 2);
+		assert.equal(built.survivors.length, 1);
+		assert.equal(built.survivors[0]?.finding.message, surviving.message);
+		assert.deepEqual(built.refuted, [{ finding: gone, fingerprint: reviewFindingFingerprint(gone), verification: { id: "C2", decision: "refuted", rationale: "Fixed in the final iteration." } }]);
+		// Round-trips through the store and stays bindable.
+		const dir = root();
+		writeAdjudicationSourceRecord(dir, { ...built, fleetRecordDigest: DIGEST });
+		assert.equal(readAdjudicationSourceRecord(dir, 497, REVIEWED)?.refuted.length, 1);
+		// All-refuted leaves nothing to adjudicate — no draft.
+		assert.equal(
+			buildAdjudicationSourceDraft({
+				...base,
+				verifications: new Map([
+					[reviewFindingFingerprint(surviving), { id: "C1", decision: "refuted" as const, rationale: "Gone." }],
+					[reviewFindingFingerprint(gone), { id: "C2", decision: "refuted" as const, rationale: "Gone." }],
+				]),
+			}),
+			undefined,
+		);
 	});
 });
 
@@ -325,6 +400,14 @@ describe("fleet eligibility and binding", () => {
 		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ ok: false, agreement: "invalid", breakerReason: "invalid-pass" }) }), false);
 		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ agreement: "invalid", breakerReason: "invalid-pass" }) }), false);
 		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ ok: false, agreement: "disagreement", breakerReason: "invalid-pass" }) }), false);
+	});
+
+	it("pins the loop-unreachable consensus-block+invalid-pass combo as eligible on completeness alone (#525, deliberate)", () => {
+		// The convergence loop never emits breaker invalid-pass alongside consensus-block. If such
+		// a record appears anyway, eligibility keys on the completeness fields (ok, agreement,
+		// survivors) — refusing on the breaker token would add no integrity, since a forged record
+		// can name any breaker. Pinned so the INELIGIBLE_BREAKERS loosening stays deliberate.
+		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ breakerReason: "invalid-pass" }) }), true);
 	});
 
 	it("refuses v1, operator, pass, broken-review, diversity, zero-survivor, and mismatched-count cases", () => {
@@ -421,6 +504,15 @@ describe("fleet eligibility and binding", () => {
 		assert.deepEqual(crossCheckAdjudicationSource(splitSource, { schemaVersion: 2, ...splitFleet }, splitBytes, { prNumber: 497, itemId: "497" }), { ok: true });
 		assert.equal(crossCheckAdjudicationSource(source, { schemaVersion: 2, ...splitFleet }, splitBytes, { prNumber: 497, itemId: "497" }).ok, false);
 		assert.equal(crossCheckAdjudicationSource({ ...splitSource, agreement: "consensus-block" }, { schemaVersion: 2, ...splitFleet }, splitBytes, { prNumber: 497, itemId: "497" }).ok, false);
+		// The fleet carried count includes refuted-retained findings: survivors + refuted must bind it.
+		const goneFinding = finding({ message: "Alleged bug, refuted." });
+		const gone = { finding: goneFinding, fingerprint: reviewFindingFingerprint(goneFinding), verification: { id: "C2", decision: "refuted" as const, rationale: "Not reproducible." } };
+		const carriedFleet = fleet({ agreement: "disagreement", breakerReason: "invalid-pass", subtype: "invalid-pass", survivorCount: 2 });
+		const carriedPath = writePrReviewGateRecord(root(), carriedFleet);
+		const carriedBytes = readFileSync(carriedPath);
+		const carriedSource = record({ agreement: "disagreement", refuted: [gone], survivorCount: 2, fleetRecordDigest: fleetRecordDigestOf(carriedBytes) });
+		assert.deepEqual(crossCheckAdjudicationSource(carriedSource, { schemaVersion: 2, ...carriedFleet }, carriedBytes, { prNumber: 497, itemId: "497" }), { ok: true });
+		assert.equal(crossCheckAdjudicationSource({ ...carriedSource, refuted: [] }, { schemaVersion: 2, ...carriedFleet }, carriedBytes, { prNumber: 497, itemId: "497" }).ok, false);
 		assert.equal(
 			crossCheckAdjudicationSource(
 				{ ...source, survivorCount: 2, survivors: [survivor(), survivor({ finding: finding({ message: "other" }), fingerprint: reviewFindingFingerprint(finding({ message: "other" })) })] },
@@ -489,8 +581,8 @@ describe("source-hunk mapping", () => {
 			ok: true,
 			survivors: [located, missing],
 			verifications: new Map([
-				[reviewFindingFingerprint(located), { id: "C1", rationale: "A" }],
-				[reviewFindingFingerprint(missing), { id: "C2", rationale: "B" }],
+				[reviewFindingFingerprint(located), { id: "C1", decision: "survives" as const, rationale: "A" }],
+				[reviewFindingFingerprint(missing), { id: "C2", decision: "survives" as const, rationale: "B" }],
 			]),
 			inspectionDiff: inspectionDiff(),
 			changedFiles: ["src/a.ts"],

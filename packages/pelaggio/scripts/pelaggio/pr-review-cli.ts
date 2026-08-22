@@ -889,12 +889,19 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 	const lastIteration = passes.at(-1)?.iteration ?? 0;
 	const lastPasses = passes.filter((pass) => pass.iteration === lastIteration);
 	const completedCells = lastPasses.filter(passOk).length;
-	const verifications = new Map<string, { id: string; rationale: string }>();
-	for (const pass of [...passes].reverse()) {
+	// Latest-per-fingerprint disposition evidence (#525 must-fix). The latest iteration's decision
+	// wins; within one iteration any survives outranks refuted — the same fail-closed dominance
+	// applyReviewPass gives a valid summary. So a finding refuted in the FINAL iteration is
+	// recorded as refuted with that refutation's evidence, never as a survivor riding stale
+	// earlier survives evidence with its hunk opened as an edit region.
+	const verifications = new Map<string, { id: string; decision: "survives" | "refuted"; rationale: string; iteration: number }>();
+	for (const pass of passes) {
 		for (const disposition of pass.dispositions ?? []) {
-			if (disposition.decision !== "survives") continue;
 			const fingerprint = reviewFindingFingerprint(disposition.finding);
-			if (!verifications.has(fingerprint)) verifications.set(fingerprint, { id: disposition.id, rationale: disposition.rationale });
+			const existing = verifications.get(fingerprint);
+			if (existing && existing.iteration > pass.iteration) continue;
+			if (existing && existing.iteration === pass.iteration && existing.decision === "survives") continue;
+			verifications.set(fingerprint, { id: disposition.id, decision: disposition.decision, rationale: disposition.rationale, iteration: pass.iteration });
 		}
 	}
 	const prNumber = Number.parseInt(options.pr, 10);
