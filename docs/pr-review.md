@@ -199,6 +199,67 @@ Only the local drain persists fleet files today. A CI runner has a read-only tok
 ephemeral checkout, so its durable outcome remains the forge metrics marker until a later
 local materialization pass is implemented.
 
+## Cross-push carry — finding dispositions (#495)
+
+Without carry, every re-pushed head re-rolls the full drivers × labels fan-out from
+scratch: findings refuted at real cost in run N are re-discovered and re-verified in run
+N+1, and consensus-pass across fresh cold cells is an exponential bar in diff size. Carry
+mechanizes what the operator does by hand in pass-fix-go adjudication — read the
+interdiff, confirm each fix addresses its finding, and don't re-open the world — as
+deterministic harness logic (ADR-0014: no model ever decides whether or how far to
+narrow).
+
+**The record.** Every completed local gate run (pass **and** block; never on park, never
+on CI) writes `MAIN_REPO/.dev/pr-review-finding-dispositions/{prNumber}-{headSha40}.json`
+(schema v1, strict closed-key validation, atomic 0600 write): the run's surviving
+must-fix fingerprints (`survived`, with the latest survives-evidence or `null` when
+retained without verification) and its refutation memory (`refuted`, each entry carrying
+`provenance: "verified"` — refuted by this run's complete valid verification — or
+`"carried"` — chained back to a verified origin id + SHA). The record is digest-bound to
+the exact on-disk fleet gate record (`fleetRecordDigest`), the same discipline as the
+adjudication sidecar. The store is seat-denied exactly like the other evidence stores
+(#510): a seat that could write it could forge an auto-refutation.
+
+**Prior selection (fail-closed).** A run for a new head selects at most one prior record:
+same PR + item, different SHA, proven ancestor of the reviewed head via
+`git merge-base --is-ancestor` in the trusted repo, reduced to the unique maximal record
+along the branch, then digest-bound to its fleet record bytes. Nothing inside the records
+orders candidates (`reviewedAt` is diagnostic only — a model-writable timestamp is not an
+ordering signal, #510). Any failure — malformed store file for the PR, force-push/rebase
+(no ancestors), a non-totally-ordered candidate set, a missing or non-matching fleet
+record, a prior that does not resolve in the diff checkout — degrades to today's cold
+behavior with a stderr diagnostic, never to a weaker gate. A first run (no priors) is
+byte-identical to today.
+
+**What carries.**
+
+- **Survivors seed unconditionally** (toward blocking): they join the first verification
+  pass's candidates and persist under the omission-never-refutes rule until a complete,
+  valid verification report explicitly refutes them.
+- **Refuted findings auto-refute only when provably unaffected**: the anchoring file must
+  be wholly untouched by the two-dot `--no-renames` interdiff (`prior..head` — an
+  untouched file has an identical blob at both SHAs, so the recorded refutation examined
+  exactly the bytes present now), and the finding must be non-safety under **both** its
+  recorded tier and the current taxonomy's resolution of its recorded class. Eligible
+  fingerprints are withheld from the model verifier and contribute synthesized `refuted`
+  dispositions whose refuting authority is the prior recorded report (harness-authored
+  rationale; chained origin id + SHA). Anything touched, pathless, or safety-tier is
+  re-verified fresh.
+- **Discovery narrows to the interdiff**: the full drivers × labels fan-out reviews
+  `prior..head` through the trusted-context refs, while the inspection diff, security
+  classification, and sidecar anchoring keep the full PR range. An empty interdiff seeds
+  and auto-refutes but discovers cold. Cumulatively the whole final diff has full-fleet
+  coverage: the first head got the complete cold read, and every subsequent delta gets a
+  complete narrowed read.
+
+The gate comment and metrics marker carry a deterministic token —
+`carry=<sha7> seeded=<n> auto-refuted=<m>` or `carry=none` — so the operator can read
+from the PR why a run was narrow.
+
+**Kill-switch.** `review.carry: false` in `.pelaggio.yml` restores per-push cold reviews
+exactly (no reads, no narrowing); records are still written so re-enabling has priors.
+Local runner only: CI neither reads nor writes the store.
+
 ## Operator adjudication — `pelaggio pr-adjudicate`
 
 `npx pelaggio pr-adjudicate --pr <n> [--profile <name>]` is the local-runner “go” after a

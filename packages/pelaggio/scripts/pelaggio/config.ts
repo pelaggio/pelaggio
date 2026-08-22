@@ -152,6 +152,9 @@ export interface ReviewConfig {
 	maxPasses: number;
 	budgetCap: number;
 	providerDiversity: ProviderDiversityPolicy;
+	/** Cross-push finding-disposition carry (#495). `false` restores per-push cold reviews
+	 *  exactly (no reads, no narrowing — disposition records are still written). */
+	carry: boolean;
 	authoring: AuthoringReviewConfig;
 	/** ADR-0016 safety/judgment taxonomy (baseline ADR table; owner-signed to contract the floor). */
 	taxonomy: TaxonomyConfig;
@@ -227,6 +230,7 @@ export const DEFAULTS = {
 		maxPasses: 1,
 		budgetCap: 20,
 		providerDiversity: "off",
+		carry: true,
 		taxonomy: resolveTaxonomy({}),
 		authoring: {
 			enabled: "off",
@@ -727,6 +731,7 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 	let reviewMaxPasses: number = DEFAULTS.review.maxPasses;
 	let reviewBudgetCap: number = DEFAULTS.review.budgetCap;
 	let reviewProviderDiversity: ProviderDiversityPolicy = DEFAULTS.review.providerDiversity;
+	let reviewCarry: boolean = DEFAULTS.review.carry;
 	let reviewAuthoring: AuthoringReviewConfig = {
 		...DEFAULTS.review.authoring,
 		reviewers: DEFAULTS.review.authoring.reviewers.map((slot) => ({ ...slot })),
@@ -768,6 +773,11 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 			if (providerDiversity !== "off" && providerDiversity !== "prefer" && providerDiversity !== "require")
 				throw new Error(`${configPath}: expected \`review.provider-diversity\` to be one of off|prefer|require, got ${JSON.stringify(providerDiversity)}`);
 			reviewProviderDiversity = providerDiversity;
+		}
+		const carry = reviewBlock.carry;
+		if (carry !== undefined) {
+			if (typeof carry !== "boolean") throw new Error(`${configPath}: expected \`review.carry\` to be a boolean, got ${typeof carry}`);
+			reviewCarry = carry;
 		}
 		const authoring = reviewBlock.authoring;
 		if (authoring !== undefined) {
@@ -954,7 +964,16 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		park: { autoResume: parkAutoResume, maxWait: parkMaxWait, unknownResetWait: parkUnknownResetWait },
 		watch: { ...(watchDailyBudget !== undefined ? { dailyBudget: watchDailyBudget } : {}) },
 		revise: { local: reviseLocal },
-		review: { runner: reviewRunner, statuslessAfter: reviewStatuslessAfter, maxPasses: reviewMaxPasses, budgetCap: reviewBudgetCap, providerDiversity: reviewProviderDiversity, authoring: reviewAuthoring, taxonomy: reviewTaxonomy },
+		review: {
+			runner: reviewRunner,
+			statuslessAfter: reviewStatuslessAfter,
+			maxPasses: reviewMaxPasses,
+			budgetCap: reviewBudgetCap,
+			providerDiversity: reviewProviderDiversity,
+			carry: reviewCarry,
+			authoring: reviewAuthoring,
+			taxonomy: reviewTaxonomy,
+		},
 		confinement: { allowDirtyMain: confinementAllowDirtyMain },
 		security: { envAllowlist: securityEnvAllowlist },
 		notify: { url: notifyUrl, format: notifyFormat, events: notifyEvents },

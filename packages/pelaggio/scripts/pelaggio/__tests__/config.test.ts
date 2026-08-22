@@ -848,6 +848,15 @@ describe("loadConfig — review", () => {
 		assert.deepEqual(loadConfig({ repo, configPath: path }).review, { ...DEFAULTS.review, maxPasses: 3, budgetCap: 40.5, providerDiversity: "require" });
 	});
 
+	it("parses the review.carry kill-switch (#495) and rejects non-booleans", () => {
+		assert.equal(DEFAULTS.review.carry, true, "cross-push carry ships enabled");
+		const repo = tmpRepo();
+		const path = writeYml(repo, "review:\n  carry: false\n");
+		assert.deepEqual(loadConfig({ repo, configPath: path }).review, { ...DEFAULTS.review, carry: false });
+		const bad = writeYml(repo, "review:\n  carry: definitely\n");
+		assert.throws(() => loadConfig({ repo, configPath: bad }), /review\.carry/);
+	});
+
 	it("loads free safety extensions and elevations", () => {
 		const repo = tmpRepo();
 		const path = writeYml(repo, "review:\n  taxonomy:\n    judgment-default: park\n    classes:\n      my-extra: safety\n      style: safety\n");

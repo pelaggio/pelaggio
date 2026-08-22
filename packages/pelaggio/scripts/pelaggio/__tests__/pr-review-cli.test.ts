@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
@@ -7,8 +7,9 @@ import { DEFAULTS, type ReviewConfig, type StepSettings } from "../config.js";
 import { main as adjudicateMain, type PrAdjudicateDeps } from "../pr-adjudicate-cli.js";
 import { main, runPrReviewGate, setPrReviewDepsForTests } from "../pr-review-cli.js";
 import { listPrReviewGateRecords, readPrReviewGateRecord, writePrReviewGateRecord } from "../pr-review-gate-record.js";
-import { isEligibleFleetGateRecord, readAdjudicationSourceRecord } from "../review/adjudication.js";
-import { reviewFindingFingerprint } from "../review/findings.js";
+import { fleetRecordDigestOf, isEligibleFleetGateRecord, readAdjudicationSourceRecord } from "../review/adjudication.js";
+import { type PrCarryRefutedEntry, type PrCarrySurvivorEntry, type PrFindingDispositionRecordV1, readPrFindingDispositionRecord, writePrFindingDispositionRecord } from "../review/carry.js";
+import { type ReviewFinding, reviewFindingFingerprint } from "../review/findings.js";
 import type { RunStepFn } from "../step-runner.js";
 import type { ParkSignal, ProviderName, StepEmit, StepResult } from "../types.js";
 
@@ -23,13 +24,14 @@ function tmpRoot(prefix: string): string {
 }
 
 /** Minimal ReviewConfig for gate tests — full authoring/taxonomy from defaults. */
-function reviewPolicy(over: Partial<Pick<ReviewConfig, "maxPasses" | "budgetCap" | "providerDiversity">> = {}): ReviewConfig {
+function reviewPolicy(over: Partial<Pick<ReviewConfig, "maxPasses" | "budgetCap" | "providerDiversity" | "carry">> = {}): ReviewConfig {
 	return {
 		runner: DEFAULTS.review.runner,
 		statuslessAfter: DEFAULTS.review.statuslessAfter,
 		maxPasses: over.maxPasses ?? DEFAULTS.review.maxPasses,
 		budgetCap: over.budgetCap ?? DEFAULTS.review.budgetCap,
 		providerDiversity: over.providerDiversity ?? DEFAULTS.review.providerDiversity,
+		carry: over.carry ?? DEFAULTS.review.carry,
 		authoring: {
 			...DEFAULTS.review.authoring,
 			reviewers: DEFAULTS.review.authoring.reviewers.map((slot) => ({ ...slot })),
@@ -142,8 +144,23 @@ function assertConstantOnlyDiagnosis(out: { stderr: string; comments: string[] }
 const REVIEWED_SHA = "a".repeat(40);
 
 async function runCli(
-	opts: { files?: string; diff?: string; results?: Array<StepResult | Error>; diffError?: Error; statusPosted?: boolean; reviewDrivers?: StepSettings[]; verifySettings?: StepSettings; headRef?: string; ci?: boolean } = {},
-): Promise<{ code: number; calls: RunCall[]; comments: string[]; statuses: string[]; statusShas: string[]; stdout: string; stderr: string; gateRecordsRoot: string; adjudicationSourcesRoot: string }> {
+	opts: {
+		files?: string;
+		diff?: string;
+		results?: Array<StepResult | Error>;
+		diffError?: Error;
+		statusPosted?: boolean;
+		reviewDrivers?: StepSettings[];
+		verifySettings?: StepSettings;
+		headRef?: string;
+		ci?: boolean;
+		policy?: ReviewConfig;
+		/** Seed hook for carry tests: populate the hermetic evidence roots before main() runs. */
+		seed?: (roots: { gateRecordsRoot: string; adjudicationSourcesRoot: string; dispositionsRoot: string }) => void;
+		/** Extra git command handler for carry resolution (merge-base / rev-parse / interdiff). */
+		gitExtra?: (args: string) => string | undefined;
+	} = {},
+): Promise<{ code: number; calls: RunCall[]; comments: string[]; statuses: string[]; statusShas: string[]; stdout: string; stderr: string; gateRecordsRoot: string; adjudicationSourcesRoot: string; dispositionsRoot: string }> {
 	const calls: RunCall[] = [];
 	const comments: string[] = [];
 	const statuses: string[] = [];
@@ -152,6 +169,8 @@ async function runCli(
 	// Hermetic evidence roots: local persistence must never land in the host repo's .dev/.
 	const gateRecordsRoot = join(tmpRoot("pr-review-cli-evidence-"), "gates");
 	const adjudicationSourcesRoot = join(tmpRoot("pr-review-cli-evidence-"), "sources");
+	const dispositionsRoot = join(tmpRoot("pr-review-cli-evidence-"), "dispositions");
+	opts.seed?.({ gateRecordsRoot, adjudicationSourcesRoot, dispositionsRoot });
 	const execFileSync = ((cmd: string, args: readonly string[]) => {
 		const a = args.join(" ");
 		// resolveReviewedHead pins the PR head sha + claim branch via gh, then fetches — independent
@@ -162,6 +181,8 @@ async function runCli(
 		}
 		assert.equal(cmd, "git");
 		if (a === "fetch --quiet origin main pull/123/head") return "";
+		const extra = opts.gitExtra?.(a);
+		if (extra !== undefined) return extra;
 		if (opts.diffError) throw opts.diffError;
 		if (a === `diff --name-only origin/main...${REVIEWED_SHA}`) return opts.files ?? "docs/readme.md\n";
 		if (a === `diff origin/main...${REVIEWED_SHA}`) return opts.diff ?? "+Clarify docs.\n";
@@ -180,7 +201,7 @@ async function runCli(
 		// review config silently changes fan-out width and breaks every queued-result test.
 		reviewDrivers: opts.reviewDrivers ?? [driver("claude")],
 		verifySettings: opts.verifySettings ?? driver("claude"),
-		policy: reviewPolicy(),
+		policy: opts.policy ?? reviewPolicy(),
 		execFileSync,
 		runStep,
 		upsertComment: (_pr, body) => comments.push(body),
@@ -191,6 +212,7 @@ async function runCli(
 		},
 		gateRecordsRoot,
 		adjudicationSourcesRoot,
+		dispositionsRoot,
 		now: () => Date.parse("2026-08-13T12:00:00Z"),
 		// Pinned: the ambient env (a real CI job) must not decide whether persistence runs.
 		isCi: () => opts.ci ?? false,
@@ -209,7 +231,7 @@ async function runCli(
 	}) as typeof process.stderr.write;
 	try {
 		const code = await main(["--pr", "123"]);
-		return { code, calls, comments, statuses, statusShas, stdout, stderr, gateRecordsRoot, adjudicationSourcesRoot };
+		return { code, calls, comments, statuses, statusShas, stdout, stderr, gateRecordsRoot, adjudicationSourcesRoot, dispositionsRoot };
 	} finally {
 		process.stdout.write = originalStdout;
 		process.stderr.write = originalStderr;
@@ -1793,5 +1815,347 @@ describe("pr-review CLI local gate-evidence persistence (#497)", () => {
 		const parked = await runCli({ results: [result({ ok: false, subtype: "error_rate_limit", cost: 0, turns: 0 })] });
 		assert.equal(parked.code, 1);
 		assert.deepEqual(listPrReviewGateRecords(parked.gateRecordsRoot), []);
+	});
+});
+
+describe("pr-review CLI cross-push carry (#495)", () => {
+	const PRIOR_SHA = "e".repeat(40);
+	const F: ReviewFinding = { severity: "must-fix", message: "Stale style worry.", path: "src/other.ts", line: 5 };
+	const G: ReviewFinding = { severity: "must-fix", message: "Real new worry.", path: "src/a.ts", line: 3 };
+	const S: ReviewFinding = { severity: "must-fix", message: "Unfixed bug.", path: "src/a.ts", line: 7 };
+
+	function judgmentRefuted(finding: ReviewFinding): PrCarryRefutedEntry {
+		return { finding, fingerprint: reviewFindingFingerprint(finding), class: "judgment", tier: "judgment", refutation: { provenance: "verified", id: "C2", refutedAtSha: PRIOR_SHA } };
+	}
+	function safetyRefuted(finding: ReviewFinding): PrCarryRefutedEntry {
+		return { finding, fingerprint: reviewFindingFingerprint(finding), class: "correctness-regression", tier: "safety", refutation: { provenance: "verified", id: "C2", refutedAtSha: PRIOR_SHA } };
+	}
+	function seededSurvivor(finding: ReviewFinding): PrCarrySurvivorEntry {
+		return { finding, fingerprint: reviewFindingFingerprint(finding), class: "correctness-regression", tier: "safety", verification: { id: "C1", rationale: "Still present." } };
+	}
+
+	/** Seed a digest-bound prior (fleet record + disposition record) for (123, PRIOR_SHA). */
+	function seedPrior(roots: { gateRecordsRoot: string; dispositionsRoot: string }, over: Partial<PrFindingDispositionRecordV1> = {}): void {
+		const fleetPath = writePrReviewGateRecord(roots.gateRecordsRoot, {
+			producer: "fleet",
+			prNumber: 123,
+			headSha: PRIOR_SHA,
+			itemId: "123",
+			gate: "block",
+			ok: true,
+			subtype: "consensus-block",
+			agreement: "consensus-block",
+			survivorCount: 1,
+			cost: 1,
+			costEstimated: false,
+			turns: 2,
+			runner: "local",
+			reviewedAt: "2026-08-12T12:00:00.000Z",
+		});
+		writePrFindingDispositionRecord(roots.dispositionsRoot, {
+			schemaVersion: 1,
+			prNumber: 123,
+			itemId: "123",
+			headSha: PRIOR_SHA,
+			gate: "block",
+			agreement: "consensus-block",
+			ok: true,
+			fleetRecordDigest: fleetRecordDigestOf(readFileSync(fleetPath)),
+			reviewedAt: "2026-08-12T12:00:00.000Z",
+			survived: [],
+			refuted: [],
+			...over,
+		});
+	}
+
+	/** Deterministic git responder for the carry-resolution commands, with a call log. */
+	function carryGit(over: { ancestor?: boolean; resolvable?: boolean; touched?: string[] } = {}): { calls: string[]; handler: (args: string) => string | undefined } {
+		const calls: string[] = [];
+		return {
+			calls,
+			handler: (a: string): string | undefined => {
+				if (a === `merge-base --is-ancestor ${PRIOR_SHA} ${REVIEWED_SHA}`) {
+					calls.push(a);
+					if (over.ancestor === false) throw new Error("exit 1");
+					return "";
+				}
+				if (a === `rev-parse --verify ${PRIOR_SHA}^{commit}`) {
+					calls.push(a);
+					if (over.resolvable === false) throw new Error("fatal: bad object");
+					return `${PRIOR_SHA}\n`;
+				}
+				if (a === `diff --no-ext-diff --no-renames --name-only -z ${PRIOR_SHA}..${REVIEWED_SHA} --`) {
+					calls.push(a);
+					return (over.touched ?? ["src/a.ts"]).map((p) => `${p}\0`).join("");
+				}
+				return undefined;
+			},
+		};
+	}
+
+	it("carry-refuted-untouched → auto-refute: withheld from the verifier, synthesized disposition, consensus-pass", async () => {
+		const git = carryGit({ touched: ["src/a.ts"] });
+		const out = await runCli({
+			seed: (roots) => seedPrior(roots, { refuted: [judgmentRefuted(F)] }),
+			gitExtra: git.handler,
+			results: [result({ text: report("Block.", [F, G]) }), verification([{ candidateId: "C1", decision: "refuted", rationale: "A guard covers it." }])],
+		});
+		assert.equal(out.code, 0);
+		assert.deepEqual(out.statuses, ["pass"]);
+		assert.deepEqual(
+			out.calls.map((call) => call.name),
+			["pr-review", "pr-verify"],
+		);
+		// F is withheld from the verifier's candidate JSON; G reaches the model.
+		const verifyPrompt = out.calls[1]?.prompt ?? "";
+		assert.match(verifyPrompt, /Real new worry/);
+		assert.doesNotMatch(verifyPrompt, /Stale style worry/);
+		const comment = out.comments[0] ?? "";
+		assert.match(comment, /Auto\\?-refuted by carry/);
+		assert.match(comment, /agreement=consensus-pass/);
+		assert.match(comment, /carry=eeeeeee seeded=0 auto-refuted=1/);
+		// The new record chains F (provenance carried, origin preserved) and adds G (verified here).
+		const stored = readPrFindingDispositionRecord(out.dispositionsRoot, 123, REVIEWED_SHA);
+		assert.ok(stored);
+		assert.deepEqual(stored.survived, []);
+		const byFp = new Map(stored.refuted.map((entry) => [entry.fingerprint, entry]));
+		assert.deepEqual(byFp.get(reviewFindingFingerprint(F))?.refutation, { provenance: "carried", id: "C2", refutedAtSha: PRIOR_SHA });
+		assert.deepEqual(byFp.get(reviewFindingFingerprint(G))?.refutation, { provenance: "verified", id: "C1", refutedAtSha: REVIEWED_SHA });
+	});
+
+	it("a discovery pass whose every must-fix finding auto-refutes lands pass without a verifier call", async () => {
+		const git = carryGit({ touched: ["src/a.ts"] });
+		const out = await runCli({
+			seed: (roots) => seedPrior(roots, { refuted: [judgmentRefuted(F)] }),
+			gitExtra: git.handler,
+			results: [result({ text: report("Block.", [F]) })],
+		});
+		assert.equal(out.code, 0);
+		assert.deepEqual(
+			out.calls.map((call) => call.name),
+			["pr-review"],
+			"no verifier call when every candidate auto-refutes",
+		);
+		assert.match(out.comments[0] ?? "", /carry=eeeeeee seeded=0 auto-refuted=1/);
+		assert.match(out.comments[0] ?? "", /agreement=consensus-pass/);
+	});
+
+	it("carry-refuted-touched → re-verify: a touched anchoring path reaches the model verifier and can block", async () => {
+		const git = carryGit({ touched: ["src/other.ts"] });
+		const out = await runCli({
+			seed: (roots) => seedPrior(roots, { refuted: [judgmentRefuted(F)] }),
+			gitExtra: git.handler,
+			results: [result({ text: report("Block.", [F]) }), verification([{ candidateId: "C1", decision: "survives", rationale: "Still real." }])],
+		});
+		assert.equal(out.code, 1);
+		assert.match(out.calls[1]?.prompt ?? "", /Stale style worry/, "touched finding is re-verified fresh");
+		assert.doesNotMatch(out.comments[0] ?? "", /Auto\\?-refuted by carry/);
+		assert.match(out.comments[0] ?? "", /auto-refuted=0/);
+	});
+
+	it("safety-class findings never self-clear via carry, even with an untouched path", async () => {
+		const safetyF: ReviewFinding = { severity: "must-fix", message: "Real safety concern.", path: "src/other.ts", line: 5 };
+		const git = carryGit({ touched: ["src/a.ts"] });
+		const out = await runCli({
+			seed: (roots) => seedPrior(roots, { refuted: [safetyRefuted(safetyF)] }),
+			gitExtra: git.handler,
+			results: [result({ text: report("Block.", [safetyF]) }), verification([{ candidateId: "C1", decision: "survives", rationale: "Confirmed." }])],
+		});
+		assert.equal(out.code, 1);
+		assert.match(out.calls[1]?.prompt ?? "", /Real safety concern/, "safety finding is verified fresh");
+		assert.doesNotMatch(out.comments[0] ?? "", /Auto\\?-refuted by carry/);
+		assert.match(out.comments[0] ?? "", /auto-refuted=0/);
+	});
+
+	it("survivor persists absent explicit refutation, and only an explicit valid refutation clears it (I2)", async () => {
+		// (a) Verifier omission → invalid pass → survivor retained, BLOCK.
+		const gitA = carryGit({ touched: ["src/a.ts"] });
+		const retained = await runCli({
+			seed: (roots) => seedPrior(roots, { survived: [seededSurvivor(S)] }),
+			gitExtra: gitA.handler,
+			results: [result(), verification([])],
+		});
+		assert.equal(retained.code, 1);
+		assert.match(retained.calls[1]?.prompt ?? "", /Unfixed bug/, "seeded survivor joins the verification candidates");
+		assert.match(retained.comments[0] ?? "", /survivors=1/);
+		assert.match(retained.comments[0] ?? "", /carry=eeeeeee seeded=1/);
+		const retainedRecord = readPrFindingDispositionRecord(retained.dispositionsRoot, 123, REVIEWED_SHA);
+		assert.equal(retainedRecord?.survived[0]?.verification, null, "retention-without-verification records null evidence");
+		// (b) Explicit valid refutation → PASS; the record moves it to verified-refuted memory.
+		const gitB = carryGit({ touched: ["src/a.ts"] });
+		const cleared = await runCli({
+			seed: (roots) => seedPrior(roots, { survived: [seededSurvivor(S)] }),
+			gitExtra: gitB.handler,
+			results: [result(), verification([{ candidateId: "C1", decision: "refuted", rationale: "Fixed at this head." }])],
+		});
+		assert.equal(cleared.code, 0);
+		const clearedRecord = readPrFindingDispositionRecord(cleared.dispositionsRoot, 123, REVIEWED_SHA);
+		assert.deepEqual(clearedRecord?.survived, []);
+		assert.deepEqual(clearedRecord?.refuted[0]?.refutation, { provenance: "verified", id: "C1", refutedAtSha: REVIEWED_SHA });
+	});
+
+	it("malformed, unbindable, or non-ancestor priors run cold with a diagnostic — byte-equal to a no-priors run", async () => {
+		const control = await runCli({ results: [result()] });
+		assert.equal(control.code, 0);
+		assert.match(control.comments[0] ?? "", /carry=none/);
+
+		const cases: Array<{ label: string; diagnostic: RegExp; seed: (roots: { gateRecordsRoot: string; dispositionsRoot: string }) => void; git: ReturnType<typeof carryGit> }> = [
+			{
+				label: "malformed JSON",
+				diagnostic: /malformed record/,
+				seed: (roots) => {
+					mkdirSync(roots.dispositionsRoot, { recursive: true });
+					writeFileSync(join(roots.dispositionsRoot, `123-${PRIOR_SHA}.json`), "{not json");
+				},
+				git: carryGit(),
+			},
+			{
+				label: "digest mismatch",
+				diagnostic: /not bound to the exact on-disk fleet gate record/,
+				seed: (roots) => seedPrior(roots, { fleetRecordDigest: "1".repeat(64) }),
+				git: carryGit(),
+			},
+			{
+				label: "non-ancestor (force-push)",
+				diagnostic: /force-push or rebase/,
+				seed: (roots) => seedPrior(roots, { refuted: [judgmentRefuted(F)] }),
+				git: carryGit({ ancestor: false }),
+			},
+		];
+		for (const { label, diagnostic, seed, git } of cases) {
+			const out = await runCli({ seed, gitExtra: git.handler, results: [result()] });
+			assert.equal(out.code, control.code, label);
+			assert.match(out.stderr, diagnostic, label);
+			assert.equal(out.comments[0], control.comments[0], `${label}: gate result byte-equal to a no-priors run`);
+			assert.ok(readPrFindingDispositionRecord(out.dispositionsRoot, 123, REVIEWED_SHA), `${label}: a cold run still writes its own record`);
+		}
+	});
+
+	it("first-run-no-priors: cold behavior unchanged, no carry git commands, record still written", async () => {
+		const git = carryGit();
+		const out = await runCli({ gitExtra: git.handler, results: [result()] });
+		assert.equal(out.code, 0);
+		assert.deepEqual(git.calls, [], "an empty store triggers no ancestry/interdiff resolution");
+		assert.match(out.comments[0] ?? "", /carry=none/);
+		const stored = readPrFindingDispositionRecord(out.dispositionsRoot, 123, REVIEWED_SHA);
+		assert.ok(stored, "the first release starts writing records on the cold path");
+		assert.equal(stored.gate, "pass");
+	});
+
+	it("narrowing: discovery reviews prior..head while inspection and verification keep the full range", async () => {
+		const git = carryGit({ touched: ["src/a.ts"] });
+		const out = await runCli({
+			seed: (roots) => seedPrior(roots, { refuted: [judgmentRefuted(F)] }),
+			gitExtra: git.handler,
+			results: [result({ text: report("Block.", [G]) }), verification([{ candidateId: "C1", decision: "refuted", rationale: "A guard covers it." }])],
+		});
+		assert.equal(out.code, 0);
+		// Discovery seats get the narrowed trusted-context refs...
+		assert.match(out.calls[0]?.prompt ?? "", new RegExp(`Base ref: ${PRIOR_SHA}`));
+		assert.match(out.calls[0]?.prompt ?? "", new RegExp(`Head ref: ${REVIEWED_SHA}`));
+		// ...while the verifier keeps the full inspection range.
+		assert.match(out.calls[1]?.prompt ?? "", /Base ref: origin\/main/);
+	});
+
+	it("a prior unresolvable in the diff checkout runs cold with a diagnostic", async () => {
+		const git = carryGit({ resolvable: false });
+		const out = await runCli({
+			seed: (roots) => seedPrior(roots, { refuted: [judgmentRefuted(F)] }),
+			gitExtra: git.handler,
+			results: [result()],
+		});
+		assert.equal(out.code, 0);
+		assert.match(out.stderr, /does not resolve in the diff checkout/);
+		assert.match(out.comments[0] ?? "", /carry=none/);
+	});
+
+	it("an empty interdiff seeds survivors but does not narrow discovery", async () => {
+		const git = carryGit({ touched: [] });
+		const out = await runCli({
+			seed: (roots) => seedPrior(roots, { survived: [seededSurvivor(S)] }),
+			gitExtra: git.handler,
+			results: [result(), verification([{ candidateId: "C1", decision: "refuted", rationale: "Fixed at this head." }])],
+		});
+		assert.equal(out.code, 0);
+		assert.match(out.calls[0]?.prompt ?? "", /Base ref: origin\/main/, "no delta to scope to — discovery stays cold");
+		assert.match(out.calls[1]?.prompt ?? "", /Unfixed bug/, "seeding still applies");
+		assert.match(out.comments[0] ?? "", /carry=eeeeeee seeded=1/);
+	});
+
+	it("review.carry: false reads nothing and narrows nothing; the record is still written", async () => {
+		const git = carryGit();
+		const out = await runCli({
+			policy: reviewPolicy({ carry: false }),
+			seed: (roots) => seedPrior(roots, { refuted: [judgmentRefuted(F)], survived: [seededSurvivor(S)] }),
+			gitExtra: git.handler,
+			results: [result()],
+		});
+		assert.equal(out.code, 0);
+		assert.deepEqual(git.calls, [], "kill-switch off: no reads, no ancestry, no interdiff");
+		assert.match(out.comments[0] ?? "", /carry=none/);
+		assert.ok(readPrFindingDispositionRecord(out.dispositionsRoot, 123, REVIEWED_SHA), "records still written so re-enabling has priors");
+	});
+
+	it("park writes no disposition record; CI neither reads nor writes", async () => {
+		const gitPark = carryGit();
+		const parked = await runCli({
+			seed: (roots) => seedPrior(roots, { refuted: [judgmentRefuted(F)] }),
+			gitExtra: gitPark.handler,
+			results: [result({ ok: false, subtype: "error_rate_limit", cost: 0, turns: 0 })],
+		});
+		assert.equal(parked.code, 1);
+		assert.equal(readPrFindingDispositionRecord(parked.dispositionsRoot, 123, REVIEWED_SHA), null, "park persists nothing");
+
+		const gitCi = carryGit();
+		const ci = await runCli({
+			ci: true,
+			seed: (roots) => seedPrior(roots, { refuted: [judgmentRefuted(F)] }),
+			gitExtra: gitCi.handler,
+			results: [result()],
+		});
+		assert.equal(ci.code, 0);
+		assert.deepEqual(gitCi.calls, [], "CI performs no carry reads");
+		assert.equal(readPrFindingDispositionRecord(ci.dispositionsRoot, 123, REVIEWED_SHA), null, "CI writes no records");
+	});
+
+	it("a carried run ending in the post-#592 disagreement split writes record + sidecar", async () => {
+		const parser: ReviewFinding = { severity: "must-fix", message: "Broken parser.", path: "src/a.ts", line: 10 };
+		const mappableDiff = ["diff --git a/src/a.ts b/src/a.ts", "index 1111111..2222222 100644", "--- a/src/a.ts", "+++ b/src/a.ts", "@@ -8,5 +8,5 @@", " context", " context", "-old", "+new", " context", " context", ""].join("\n");
+		const git = carryGit({ touched: ["src/a.ts"] });
+		const out = await runCli({
+			seed: (roots) => seedPrior(roots, { refuted: [judgmentRefuted(F)] }),
+			gitExtra: git.handler,
+			reviewDrivers: twoDrivers,
+			policy: reviewPolicy({ budgetCap: 40 }),
+			files: "src/a.ts\n",
+			diff: mappableDiff,
+			// claude discovers clean; codex blocks on [parser, F]; F auto-refutes, parser survives.
+			results: [result(), result({ text: report("Block.", [parser, F]) }), verification([{ candidateId: "C1", decision: "survives", rationale: "Still present." }])],
+		});
+		assert.equal(out.code, 1);
+		const comment = out.comments[0] ?? "";
+		assert.match(comment, /agreement=disagreement/);
+		assert.match(comment, /carry=eeeeeee seeded=0 auto-refuted=1/);
+		// Sidecar: the surviving finding is mappable; the auto-refuted one carries its evidence.
+		const sidecar = readAdjudicationSourceRecord(out.adjudicationSourcesRoot, 123, REVIEWED_SHA);
+		assert.ok(sidecar, "disagreement terminal emits the SHA-bound sidecar");
+		assert.deepEqual(
+			sidecar.survivors.map((entry) => entry.finding.message),
+			["Broken parser."],
+		);
+		assert.deepEqual(
+			sidecar.refuted.map((entry) => entry.finding.message),
+			["Stale style worry."],
+		);
+		// Disposition record: the #525 fail-closed re-add keeps BOTH terminally carried — recorded
+		// as survivors (toward blocking); the auto-refuted one holds null evidence, not memory.
+		const stored = readPrFindingDispositionRecord(out.dispositionsRoot, 123, REVIEWED_SHA);
+		assert.ok(stored);
+		assert.equal(stored.agreement, "disagreement");
+		const survived = new Map(stored.survived.map((entry) => [entry.finding.message, entry]));
+		assert.deepEqual([...survived.keys()].sort(), ["Broken parser.", "Stale style worry."]);
+		assert.deepEqual(survived.get("Broken parser.")?.verification, { id: "C1", rationale: "Still present." });
+		assert.equal(survived.get("Stale style worry.")?.verification, null);
+		assert.deepEqual(stored.refuted, []);
 	});
 });
