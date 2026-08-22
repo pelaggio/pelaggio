@@ -44,6 +44,7 @@ The invariants below share one spine: **determinism lives in the harness (mechan
 - Rate-limit paths must park through `parkExit()` so uncommitted work is checkpointed.
 - `ship.target` owns direct-push vs PR behavior. Do not hardcode merge behavior in TypeScript or skills.
 - PR candidate blockers may be removed only by a complete, valid isolated verification report; verifier failure retains them.
+- Every blocking gate clears the gate-quality bar (`guarded-actions.md` §8.1): **early** (fires at the cheapest point — before further work compounds on the violation), **narrow** (refuses the violating dimension, never the work; delta-scoped, not absolute-state), **preserving** (a refusal checkpoints-and-parks, preserves-without-commit, or leaves state intact — and names the preserved state and resume path; refusal ≠ discard), **falsifiable** (no-false-fire tests ship with the gate). The bar governs how gates behave, never whether to add more.
 - The daemon is an authenticated authority boundary: `CONTROL_PLANE_TOKEN` is required on every bind, including loopback; only non-authority surfaces (health, the public trust manifest, and the static UI shell) bypass bearer auth.
 - Claims are git-native (`feat/<id>` branch); roadmap mutations self-serialize on `.dev/roadmap-mutation.lock`. Don't add call-site locking or a claims registry.
 - Access the roadmap via `npx pelaggio roadmap ...`; skills never read roadmap storage or issue trackers directly.

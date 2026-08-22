@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { CONFIG, modelForProvider, REPO, type ReviewConfig, ROADMAP_GITHUB, resolveDriverCandidates, resolveStepSettings, type StepSettings } from "./config.js";
 import { upsertMarkerComment } from "./github-posting.js";
-import { classifySecurityReviewDiff, expandPackagedSkill, formatReviewMetrics, mainWorktree, parseWaitFlag, resolveParkReset, type SecurityDiffSignal } from "./helpers.js";
+import { classifySecurityReviewDiff, escapeHtml, escapeMarkdown, expandPackagedSkill, formatReviewMetrics, mainWorktree, parseWaitFlag, resolveParkReset, type SecurityDiffSignal } from "./helpers.js";
 import { gateRecordsDir, type NewPrReviewFleetGateRecord, writePrReviewGateRecord } from "./pr-review-gate-record.js";
 import { adjudicationSourcesDir, buildAdjudicationSourceDraft, fleetRecordDigestOf, type PrAdjudicationSourceDraft, writeAdjudicationSourceRecord } from "./review/adjudication.js";
 import {
@@ -154,7 +154,8 @@ export interface PrReviewGateResult {
 	breakerReason?: ReviewExhaustionReason;
 	iterations?: number;
 	survivorCount?: number;
-	/** Present only for a complete findings-terminal consensus-block with mappable survivors. */
+	/** Present only for a complete findings-terminal block (consensus-block, or the disagreement
+	 *  split whose breaker is labeled `invalid-pass` — #525) with mappable survivors. */
 	adjudicationSource?: PrAdjudicationSourceDraft;
 }
 
@@ -262,22 +263,6 @@ function renderPass(pass: ReviewPass): string {
 		? ["", "Parse diagnosis (invariant: phase + a single constant `parse-failure` code, never the specific parse error; no model output retained — #536/#554):", "", `<pre>${escapeHtml(pass.parseFailureDiagnosis)}</pre>`]
 		: [];
 	return [heading, "", `${escapeMarkdown(pass.diagnostic ?? `Run did not complete cleanly (${pass.result.subtype}).`)} Failing this pass closed.`, ...diagnosis].join("\n");
-}
-
-function escapeHtml(value: string): string {
-	return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
-}
-
-function escapeMarkdown(value: string): string {
-	// Every model-authored field (summary, finding message/path, verification rationale,
-	// retained-blocker text) flows through here into the PUBLIC sinks — CI stdout and the PR
-	// comment. A schema-VALID report can carry a credential the seat still holds
-	// (ANTHROPIC_API_KEY — leftover CLI auth, #572), so scrub with the same scrubber as the
-	// crash sink (harness-env secret values + their base64 forms) BEFORE escaping: the
-	// markdown-escape backslashes would otherwise split a literal credential and defeat the
-	// exact-substring match. Defense in depth completing this PR's scrubbing story; the
-	// key-presence root cause stays #572.
-	return escapeHtml(scrubCrashMessage(value, deps.env)).replace(/([\\`*_[\]{}()#+.!|>-])/g, "\\$1");
 }
 
 /** Agreement over a completed required (driver × label) matrix. First match wins. */
@@ -1021,12 +1006,19 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 	const lastIteration = passes.at(-1)?.iteration ?? 0;
 	const lastPasses = passes.filter((pass) => pass.iteration === lastIteration);
 	const completedCells = lastPasses.filter(passOk).length;
-	const verifications = new Map<string, { id: string; rationale: string }>();
-	for (const pass of [...passes].reverse()) {
+	// Latest-per-fingerprint disposition evidence (#525 must-fix). The latest iteration's decision
+	// wins; within one iteration any survives outranks refuted — the same fail-closed dominance
+	// applyReviewPass gives a valid summary. So a finding refuted in the FINAL iteration is
+	// recorded as refuted with that refutation's evidence, never as a survivor riding stale
+	// earlier survives evidence with its hunk opened as an edit region.
+	const verifications = new Map<string, { id: string; decision: "survives" | "refuted"; rationale: string; iteration: number }>();
+	for (const pass of passes) {
 		for (const disposition of pass.dispositions ?? []) {
-			if (disposition.decision !== "survives") continue;
 			const fingerprint = reviewFindingFingerprint(disposition.finding);
-			if (!verifications.has(fingerprint)) verifications.set(fingerprint, { id: disposition.id, rationale: disposition.rationale });
+			const existing = verifications.get(fingerprint);
+			if (existing && existing.iteration > pass.iteration) continue;
+			if (existing && existing.iteration === pass.iteration && existing.decision === "survives") continue;
+			verifications.set(fingerprint, { id: disposition.id, decision: disposition.decision, rationale: disposition.rationale, iteration: pass.iteration });
 		}
 	}
 	const prNumber = Number.parseInt(options.pr, 10);

@@ -1700,7 +1700,11 @@ describe("pr-review CLI aggregation", () => {
 		assert.equal(review.adjudicationSource, undefined);
 	});
 
-	it("does not emit adjudicable evidence for disagreement, invalid, or unmappable survivors", async () => {
+	it("emits adjudicable evidence for the complete disagreement split — the invalid-pass breaker shape (#525)", async () => {
+		// The PR #589 shape: one reviewer blocks with a verified survivor, the other passes; every
+		// cell is structurally valid (ok=true), so the terminal split exhausts as `invalid-pass`
+		// even though no review was invalid. The split is the operator-drain case, so it must
+		// carry the same SHA-bound adjudication evidence a consensus-block carries.
 		const disagreement = await runPrReviewGate({
 			pr: "497",
 			itemId: "497",
@@ -1715,9 +1719,139 @@ describe("pr-review CLI aggregation", () => {
 				return verification([{ candidateId: "C1", decision: "survives", rationale: "Yes." }]);
 			},
 		});
+		assert.equal(disagreement.gate, "block");
+		assert.equal(disagreement.ok, true);
 		assert.equal(disagreement.agreement, "disagreement");
-		assert.equal(disagreement.adjudicationSource, undefined);
+		assert.equal(disagreement.breakerReason, "invalid-pass");
+		assert.equal(disagreement.subtype, "invalid-pass");
+		assert.ok(disagreement.adjudicationSource);
+		assert.equal(disagreement.adjudicationSource.agreement, "disagreement");
+		assert.equal(disagreement.adjudicationSource.reviewedSha, REVIEWED_HEAD);
+		assert.equal(disagreement.adjudicationSource.survivorCount, 1);
+		assert.deepEqual(disagreement.adjudicationSource.survivors[0]?.hunk, { path: "src/a.ts", start: 8, end: 12 });
+	});
 
+	it("carries a same-iteration refuted finding as a refuted entry instead of suppressing the sidecar (#525 must-fix)", async () => {
+		// The gate's fail-closed invalid-summary rule re-adds refuted findings to the carried set,
+		// so this disagreement's fleet survivorCount is 2 while only one finding genuinely
+		// survives. Requiring survives evidence for both suppressed the sidecar entirely, making
+		// the shape permanently non-adjudicable (re-running pr-review reproduces the suppression).
+		const survivorFinding = { severity: "must-fix" as const, message: "Broken parser.", path: "src/a.ts", line: 10 };
+		const refutedFinding = { severity: "must-fix" as const, message: "Alleged off-by-one.", path: "src/a.ts", line: 11 };
+		const review = await runPrReviewGate({
+			pr: "497",
+			itemId: "497",
+			reviewedSha: REVIEWED_HEAD,
+			reviewDrivers: twoDrivers,
+			policy: reviewPolicy({ maxPasses: 1, budgetCap: 40, providerDiversity: "off" }),
+			execFileSync: mappableDiffExec(),
+			runStep: async (name, _prompt, stepOpts) => {
+				if (name === "pr-review") {
+					return stepOpts.executionOverride?.provider === "claude" ? result({ text: report("Clean.") }) : result({ text: report("Block.", [survivorFinding, refutedFinding]) });
+				}
+				return verification([
+					{ candidateId: "C1", decision: "survives", rationale: "Still present." },
+					{ candidateId: "C2", decision: "refuted", rationale: "Not reproducible at the head." },
+				]);
+			},
+		});
+		assert.equal(review.agreement, "disagreement");
+		assert.equal(review.breakerReason, "invalid-pass");
+		assert.equal(review.ok, true);
+		assert.equal(review.survivorCount, 2);
+		assert.ok(review.adjudicationSource);
+		assert.equal(review.adjudicationSource.survivorCount, 2);
+		assert.equal(review.adjudicationSource.survivors.length, 1);
+		assert.equal(review.adjudicationSource.survivors[0]?.finding.message, survivorFinding.message);
+		assert.equal(review.adjudicationSource.refuted.length, 1);
+		assert.equal(review.adjudicationSource.refuted[0]?.finding.message, refutedFinding.message);
+		assert.deepEqual(review.adjudicationSource.refuted[0]?.verification, { id: "C2", decision: "refuted", rationale: "Not reproducible at the head." });
+	});
+
+	it("a finding refuted in the FINAL iteration is not a survivor and carries no stale earlier evidence (#525 must-fix)", async () => {
+		// max-passes 2: iteration 1 consensus-blocks on F (survives); iteration 2 splits — claude
+		// clean (its verify refutes carried F), codex blocks on new G (F refuted, G survives).
+		// Latest disposition wins: F must land in `refuted` with the FINAL iteration's refutation
+		// evidence, never as a survivor riding iteration-1 survives text with its hunk opened as
+		// an allowed edit region.
+		const findingF = { severity: "must-fix" as const, message: "Old bug F.", path: "src/a.ts", line: 10 };
+		const findingG = { severity: "must-fix" as const, message: "New bug G.", path: "src/b.ts", line: 5 };
+		const twoFileDiff = [
+			"diff --git a/src/a.ts b/src/a.ts",
+			"index 1111111..2222222 100644",
+			"--- a/src/a.ts",
+			"+++ b/src/a.ts",
+			"@@ -8,5 +8,5 @@",
+			" c",
+			" c",
+			"-old",
+			"+new",
+			" c",
+			" c",
+			"diff --git a/src/b.ts b/src/b.ts",
+			"index 1111111..2222222 100644",
+			"--- a/src/b.ts",
+			"+++ b/src/b.ts",
+			"@@ -3,5 +3,5 @@",
+			" c",
+			" c",
+			"-old",
+			"+new",
+			" c",
+			" c",
+			"",
+		].join("\n");
+		const exec = ((_: string, args: readonly string[]) => (args.includes("--name-only") ? "src/a.ts\nsrc/b.ts\n" : twoFileDiff)) as typeof import("node:child_process").execFileSync;
+		const discoveryCalls = new Map<string, number>();
+		let verifyCalls = 0;
+		const review = await runPrReviewGate({
+			pr: "497",
+			itemId: "497",
+			reviewedSha: REVIEWED_HEAD,
+			reviewDrivers: twoDrivers,
+			policy: reviewPolicy({ maxPasses: 2, budgetCap: 40, providerDiversity: "off" }),
+			execFileSync: exec,
+			runStep: async (name, _prompt, stepOpts) => {
+				const provider = stepOpts.executionOverride?.provider ?? "";
+				if (name === "pr-review") {
+					const n = (discoveryCalls.get(provider) ?? 0) + 1;
+					discoveryCalls.set(provider, n);
+					if (n === 1) return result({ text: report("Block.", [findingF]) });
+					return provider === "claude" ? result({ text: report("Clean.") }) : result({ text: report("Block.", [findingG]) });
+				}
+				// Sequential verify order: iter1 claude [F], iter1 codex [F], iter2 claude [F], iter2 codex [F, G].
+				verifyCalls++;
+				if (verifyCalls <= 2) return verification([{ candidateId: "C1", decision: "survives", rationale: "Confirmed in iteration one." }]);
+				if (verifyCalls === 3) return verification([{ candidateId: "C1", decision: "refuted", rationale: "Fixed before the final iteration." }]);
+				return verification([
+					{ candidateId: "C1", decision: "refuted", rationale: "Fixed before the final iteration." },
+					{ candidateId: "C2", decision: "survives", rationale: "New bug present." },
+				]);
+			},
+		});
+		assert.equal(review.iterations, 2);
+		assert.equal(review.agreement, "disagreement");
+		assert.equal(review.breakerReason, "invalid-pass");
+		assert.equal(review.ok, true);
+		assert.equal(review.survivorCount, 2);
+		assert.ok(review.adjudicationSource);
+		assert.deepEqual(
+			review.adjudicationSource.survivors.map((entry) => entry.finding.message),
+			[findingG.message],
+		);
+		// F's hunk is not an allowed edit region — only G's survives into the churn allowlist.
+		assert.deepEqual(
+			review.adjudicationSource.survivors.map((entry) => entry.hunk),
+			[{ path: "src/b.ts", start: 3, end: 7 }],
+		);
+		const refutedF = review.adjudicationSource.refuted[0];
+		assert.equal(review.adjudicationSource.refuted.length, 1);
+		assert.equal(refutedF?.finding.message, findingF.message);
+		assert.equal(refutedF?.verification.rationale, "Fixed before the final iteration.");
+		assert.notEqual(refutedF?.verification.rationale, "Confirmed in iteration one.");
+	});
+
+	it("does not emit adjudicable evidence for invalid runs or unmappable survivors", async () => {
 		const invalid = await runPrReviewGate({
 			pr: "497",
 			itemId: "497",
