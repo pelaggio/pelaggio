@@ -1399,18 +1399,17 @@ function probeObjectExists(run: GitArgvExec, cwd: string, oid: string): { kind: 
 }
 
 /**
- * Whether a recorded intent's `headOid` can reach THIS HEAD — the ancestry key the
- * gate uses to scope its fail-closed blast radius. `unreachable` covers both a
- * pruned/missing head object (the merge, whose first parent is that head, cannot be
- * in our history) and a CLEAN non-ancestor; either degrades to a diagnostic that
- * touches only the record's own branch. `error` (git exec/i-o failure) stays fully
- * fail-closed — what cannot be ruled out is not ruled in.
+ * Whether an OID can reach THIS HEAD — the ancestry key the gate uses to scope its
+ * fail-closed blast radius. `unreachable` covers both a pruned/missing object and a
+ * CLEAN non-ancestor; either degrades to a diagnostic that touches only the record
+ * it keys. `error` (git exec/i-o failure) stays fully fail-closed — what cannot be
+ * ruled out is not ruled in.
  */
-function recordedHeadReach(run: GitArgvExec, cwd: string, headOid: string): { kind: "unreachable" } | { kind: "reachable" } | { kind: "error"; detail: string } {
-	const exists = probeObjectExists(run, cwd, headOid);
+function oidReachFromHead(run: GitArgvExec, cwd: string, oid: string): { kind: "unreachable" } | { kind: "reachable" } | { kind: "error"; detail: string } {
+	const exists = probeObjectExists(run, cwd, oid);
 	if (exists.kind === "missing") return { kind: "unreachable" };
 	if (exists.kind === "error") return { kind: "error", detail: exists.detail };
-	const ancestry = probeOidAncestry(run, cwd, headOid, "HEAD");
+	const ancestry = probeOidAncestry(run, cwd, oid, "HEAD");
 	if (ancestry.kind === "not-ancestor") return { kind: "unreachable" };
 	if (ancestry.kind === "error") return { kind: "error", detail: ancestry.detail };
 	return { kind: "reachable" };
@@ -1480,23 +1479,44 @@ function oursIntentContext(run: GitArgvExec, cwd: string): { branch: string; mai
 
 /**
  * Refuse to trust origin/main ancestry while an unconfirmed ours-intent's merge
- * participates in it (#571 residual: a post-merge probe failure can leave the
- * unproven merge in history when rollback recognition fails — the `^2` probe itself
- * erroring, or a concurrent commit atop the merge). The UNCONFIRMED record is the
- * guarantee, not the rollback: this gate retrospectively completes the interrupted
- * bracket — it re-runs the exact probes on the recorded merge (parents = captured
- * OID + fetched OID, tree preserved) and confirms on success; a tree mismatch or an
- * unreadable record fails closed. Confirmed or absent records behave as before.
+ * participates in it (#571). The UNCONFIRMED record is the guarantee, not the
+ * rollback: this gate retrospectively completes the interrupted bracket.
  *
- * The gate reads ancestry, never a branch name: it scans EVERY record in the store
- * and gates any unconfirmed one whose merge appears in HEAD's history, so renaming
- * or detaching the branch after a failed probe cannot dodge it (branch keying is a
- * write-side convention only). An unresolvable store root fails closed — never
- * silent success. The walk per record is bounded to `<headOid>..HEAD` and skipped
- * entirely when the recorded head is not reachable from HEAD — a clean non-ancestor
- * OR a pruned/missing head object (an orphaned record then degrades to a diagnostic
- * on its own branch instead of wedging every branch that shares the store); only a
- * git execution failure fails the gate closed.
+ * Recognition is by SIGNATURE, not by the recorded first parent. An `-s ours` merge
+ * of the fetched main is, invariantly, a merge whose second parent is that main's
+ * OID — whatever its first parent turned out to be. Matching on the recorded first
+ * parent (`== headOid`) made every way HEAD can differ from the recorded pre-merge
+ * head a fresh escape (concurrent move, failed rollback, ...). Matching on the
+ * second parent (`== originMainOid`) subsumes the old first-parent match AND closes
+ * that whole class in one predicate: TOCTOU, tip-advance, rename, detach, crash,
+ * HEAD-moved, and failed-rollback all leave a merge whose second parent is still the
+ * fetched main.
+ *
+ * Disposition is by tree, correct-tree-wins. A candidate whose tree == the recorded
+ * proven tree is a PROVEN ours-merge (the equivalence proof established that tree
+ * already carries the fetched main's net write-set) — CONFIRM, however HEAD reached
+ * it. Only wrong-tree candidates with NO proven one present means every merge
+ * against this main carries a tree we never proved contains its content — FAIL
+ * CLOSED. A legitimate ordinary 3-way merge of the same main also matches by second
+ * parent; if one coexists with a still-pending intent whose proven tree differs and
+ * no proven ours-merge is present, the gate fails closed rather than guess. That is
+ * SAFE (never launders) and does not arise in the normal flow — the gate resolves
+ * every pending intent (confirm/fail) BEFORE any ordinary merge runs, and the
+ * ordinary-merge path clears the intent first; it can only follow a stale record
+ * left by a failed best-effort clear, which an operator resolves by removing the
+ * record. We prefer a self-healing refusal to any risk of laundering an unproven
+ * tree.
+ *
+ * Scope/blast-radius is keyed on `originMainOid` — the invariant parent — not the
+ * recorded head. If the fetched main is not reachable from HEAD (a clean
+ * non-ancestor OR a pruned/missing object), NO merge against it can be in this
+ * history, so the record degrades to a diagnostic on its own branch instead of
+ * wedging the store; only a git execution failure fails the gate closed. The walk is
+ * bounded to `<originMainOid>..HEAD` (every such merge is a descendant of that
+ * main). The gate reads ancestry, never a branch name — renaming or detaching cannot
+ * dodge it (branch keying is a write-side convention only); an unresolvable store
+ * root fails closed. Malformed store entries carry no trustworthy `originMainOid`,
+ * so they stay scoped on their salvaged head OID (best-effort, corruption-defensive).
  */
 function gateUnconfirmedOursIntent(run: GitArgvExec, cwd: string): { ok: true } | { ok: false; detail: string } {
 	const commonDir = tryGitArgv(run, ["rev-parse", "--path-format=absolute", "--git-common-dir"], cwd);
@@ -1506,15 +1526,12 @@ function gateUnconfirmedOursIntent(run: GitArgvExec, cwd: string): { ok: true } 
 	const mainRepo = dirname(commonDir.out);
 	const listing = listFreshnessOursIntents(mainRepo);
 	for (const issue of listing.issues) {
-		// Blast radius: a malformed entry can only launder ancestry it can reach. When its
-		// recorded head is salvageable and unreachable from this HEAD — a CLEAN non-ancestor
-		// OR a pruned/missing object — degrade to a diagnostic here: the entry still
-		// hard-fails the branch it belongs to (that branch's HEAD descends from the recorded
-		// head) instead of every branch sharing the store. No salvageable head, a reachable
-		// head, or a probe execution error all fail closed: what cannot be ruled out is not
-		// ruled in.
+		// A malformed entry carries no trustworthy originMainOid, so it is scoped on its
+		// salvaged head OID: unreachable (clean non-ancestor OR pruned object) degrades to a
+		// diagnostic on the branch it belongs to; no salvageable head, a reachable head, or a
+		// probe execution error all fail closed. What cannot be ruled out is not ruled in.
 		if (issue.headOid) {
-			const reach = recordedHeadReach(run, cwd, issue.headOid);
+			const reach = oidReachFromHead(run, cwd, issue.headOid);
 			if (reach.kind === "unreachable") continue;
 			if (reach.kind === "error") {
 				return { ok: false, detail: `ours-intent record ${issue.entry} could not be checked against ancestry: ${reach.detail} — refusing to trust ancestry` };
@@ -1524,37 +1541,49 @@ function gateUnconfirmedOursIntent(run: GitArgvExec, cwd: string): { ok: true } 
 	}
 	for (const record of listing.records) {
 		if (record.state !== "intent") continue;
-		// Reachability, blast-radius-scoped: a CLEAN non-ancestor OR a pruned/missing head
-		// object skips (the merge's first parent is the recorded head, so the merge provably
-		// is not in this history — an orphaned record must degrade to a diagnostic on its own
-		// branch, never wedge the store). A git execution failure must fail closed —
-		// collapsing it to "not an ancestor" would let a broken probe bypass the intent.
-		const reach = recordedHeadReach(run, cwd, record.headOid);
+		// Blast-radius scope on the invariant parent: if the fetched main is unreachable from
+		// HEAD (clean non-ancestor OR pruned/missing object), no merge against it is in this
+		// history — degrade to a diagnostic on this record's own branch. A git execution
+		// failure fails closed rather than let a broken probe bypass the intent.
+		const reach = oidReachFromHead(run, cwd, record.originMainOid);
 		if (reach.kind === "error") {
-			return { ok: false, detail: `unconfirmed ours-merge intent for ${record.headOid} could not be checked against ancestry: ${reach.detail}` };
+			return { ok: false, detail: `unconfirmed ours-merge intent for origin/main ${record.originMainOid} could not be checked against ancestry: ${reach.detail}` };
 		}
 		if (reach.kind === "unreachable") continue;
-		const listed = tryGitArgv(run, ["rev-list", "--merges", "--parents", `${record.headOid}..HEAD`], cwd);
+		const listed = tryGitArgv(run, ["rev-list", "--merges", "--parents", `${record.originMainOid}..HEAD`], cwd);
 		if (!listed.ok) {
-			return { ok: false, detail: `unconfirmed ours-merge intent for ${record.headOid} could not be checked against ancestry: ${listed.detail}` };
+			return { ok: false, detail: `unconfirmed ours-merge intent for origin/main ${record.originMainOid} could not be checked against ancestry: ${listed.detail}` };
 		}
-		const matches = listed.out
+		// Signature: a merge whose SECOND (or, defensively, any non-first) parent is the
+		// fetched main. `rev-list --parents` prints `<merge> <p1> <p2>...`.
+		const candidates = listed.out
 			.split("\n")
 			.map((line) => line.split(" ").filter(Boolean))
-			.filter((fields) => fields.length === 3 && fields[1] === record.headOid && fields[2] === record.originMainOid)
+			.filter((fields) => fields.length >= 3 && fields.slice(2).includes(record.originMainOid))
 			.map((fields) => fields[0] as string);
-		if (matches.length === 0) continue;
-		for (const mergeOid of matches) {
+		if (candidates.length === 0) continue; // the fetched main is an ancestor via ff/first-parent — no ours-merge to prove
+		let confirmedBy: string | null = null;
+		let firstWrong: { mergeOid: string; tree: string | null } | null = null;
+		for (const mergeOid of candidates) {
 			const tree = treeOidOf(run, cwd, mergeOid);
-			if (tree !== record.expectedTreeOid) {
-				return {
-					ok: false,
-					detail: `ancestry passes through unproven ours merge ${mergeOid}: its tree ${tree ?? "(unreadable)"} does not match the recorded pre-merge tree ${record.expectedTreeOid} — refusing to trust this history (unconfirmed intent for branch ${record.branch}, recorded ${record.recordedAt})`,
-				};
+			if (tree === null) {
+				return { ok: false, detail: `unconfirmed ours-merge intent for origin/main ${record.originMainOid}: tree of candidate merge ${mergeOid} could not be read — refusing to trust ancestry` };
 			}
+			if (tree === record.expectedTreeOid) {
+				confirmedBy = mergeOid;
+				break;
+			}
+			if (!firstWrong) firstWrong = { mergeOid, tree };
 		}
-		// Every recorded probe now holds for the merge(s) in ancestry — complete the bracket.
-		confirmFreshnessOursIntent(mainRepo, record.branch, matches[0] as string);
+		if (confirmedBy) {
+			// A proven-tree ours-merge landed, however HEAD reached it — complete the bracket.
+			confirmFreshnessOursIntent(mainRepo, record.branch, confirmedBy);
+			continue;
+		}
+		return {
+			ok: false,
+			detail: `ancestry passes through unproven merge ${firstWrong?.mergeOid} against origin/main ${record.originMainOid}: its tree ${firstWrong?.tree ?? "(unreadable)"} does not match the recorded proven tree ${record.expectedTreeOid} — refusing to trust this history (unconfirmed intent for branch ${record.branch}, recorded ${record.recordedAt})`,
+		};
 	}
 	return { ok: true };
 }

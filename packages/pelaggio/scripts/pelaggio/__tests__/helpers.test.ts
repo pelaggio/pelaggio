@@ -1576,7 +1576,7 @@ describe("preparePrShipFreshness / verifyPrShipFreshness", () => {
 		const result = preparePrShipFreshness(worktree);
 		assert.equal(result.kind, "failed");
 		if (result.kind !== "failed") return;
-		assert.match(result.detail, /unproven ours merge/);
+		assert.match(result.detail, /unproven merge/);
 		assert.ok(result.detail.includes(badMerge));
 		// Call site 2: the deterministic verification gate refuses the same ancestry.
 		const verified = verifyPrShipFreshness(worktree, originMainOid);
@@ -1681,6 +1681,71 @@ describe("preparePrShipFreshness / verifyPrShipFreshness", () => {
 		return { worktree, origin, badMerge, originMainOid, headOid };
 	}
 
+	// Structural recognition (#571): the gate recognizes an ours-merge by its SECOND parent
+	// (== originMainOid), not the recorded first parent — so a merge whose first parent is a
+	// concurrent mover (not headOid) is still caught. These pin the moved-first-parent cases.
+
+	it("(a) recognizes a FAITHFUL ours-merge whose first parent moved (empty mover) → retro-confirm, up-to-date", () => {
+		const { worktree, headOid, originMainOid, expectedTreeOid } = makeContentCopiedPair();
+		// Empty concurrent commit: moves HEAD off headOid but preserves the tree.
+		const mover = execSync(`git commit-tree "${headOid}^{tree}" -p ${headOid} -m empty-mover`, { cwd: worktree, encoding: "utf-8" }).trim();
+		// Ours-merge on the mover: first parent = mover (moved), second = originMainOid, tree = expectedTree.
+		const goodMerge = execSync(`git commit-tree "${headOid}^{tree}" -p ${mover} -p ${originMainOid} -m ours-moved-good`, { cwd: worktree, encoding: "utf-8" }).trim();
+		execSync(`git reset -q --hard ${goodMerge}`, { cwd: worktree });
+		writeFreshnessOursIntent(worktree, { branch: "feat/tool-99", headOid, originMainOid, expectedTreeOid, recordedAt: new Date().toISOString() });
+		const result = preparePrShipFreshness(worktree);
+		assert.equal(result.kind, "up-to-date");
+		const record = readFreshnessOursIntent(worktree, "feat/tool-99");
+		assert.equal(record.kind, "record");
+		if (record.kind !== "record") return;
+		assert.equal(record.record.state, "confirmed");
+		assert.equal(record.record.mergeOid, goodMerge);
+	});
+
+	it("(b) catches a WRONG-TREE ours-merge whose first parent moved → fail closed (the class-closing case)", () => {
+		const { worktree, headOid, originMainOid, expectedTreeOid } = makeContentCopiedPair();
+		// Concurrent commit that CHANGES the tree, then an ours-merge on top of it: the merge
+		// preserves the mover's tree (!= expectedTree) and its first parent is the mover.
+		writeFileSync(join(worktree, "moved.txt"), "moved\n");
+		execSync("git add moved.txt && git commit -q -m mover", { cwd: worktree });
+		const mover = execSync("git rev-parse HEAD", { cwd: worktree, encoding: "utf-8" }).trim();
+		const wrongMerge = execSync(`git commit-tree "${mover}^{tree}" -p ${mover} -p ${originMainOid} -m ours-moved-wrong`, { cwd: worktree, encoding: "utf-8" }).trim();
+		execSync(`git reset -q --hard ${wrongMerge}`, { cwd: worktree });
+		writeFreshnessOursIntent(worktree, { branch: "feat/tool-99", headOid, originMainOid, expectedTreeOid, recordedAt: new Date().toISOString() });
+		const result = preparePrShipFreshness(worktree);
+		assert.equal(result.kind, "failed");
+		if (result.kind !== "failed") return;
+		assert.match(result.detail, /unproven merge/);
+		assert.ok(result.detail.includes(wrongMerge), "must name the wrong-tree merge recognized by its second parent");
+		assert.ok(result.detail.includes(originMainOid));
+	});
+
+	it("(c) a legitimate ordinary merge coexisting with a stale pending intent fails closed — documented conservative disposition", () => {
+		const { worktree, origin } = makeFreshnessPair();
+		// origin carries a file the branch never copied; the branch has its own feature.
+		commitFile(origin, "src/only-upstream.ts", "export const u = 1;\n", "upstream only");
+		commitFile(worktree, "src/feature.ts", "export const feat = 1;\n", "feature");
+		execSync("git fetch -q origin main", { cwd: worktree });
+		const originMainOid = execSync("git rev-parse origin/main", { cwd: worktree, encoding: "utf-8" }).trim();
+		const headOid = execSync("git rev-parse HEAD", { cwd: worktree, encoding: "utf-8" }).trim();
+		const expectedTreeOid = execSync('git rev-parse "HEAD^{tree}"', { cwd: worktree, encoding: "utf-8" }).trim();
+		// A STALE pending intent (e.g. from a failed best-effort clear) for this exact main.
+		writeFreshnessOursIntent(worktree, { branch: "feat/tool-99", headOid, originMainOid, expectedTreeOid, recordedAt: new Date().toISOString() });
+		// A genuine ordinary 3-way merge integrates the upstream-only file — tree != expectedTree.
+		execSync("git merge -q --no-edit origin/main", { cwd: worktree });
+		const realMerge = execSync("git rev-parse HEAD", { cwd: worktree, encoding: "utf-8" }).trim();
+		assert.equal(existsSync(join(worktree, "src/only-upstream.ts")), true, "the ordinary merge genuinely integrated origin/main's content");
+		const result = preparePrShipFreshness(worktree);
+		// Disposition: a wrong-tree second-parent merge with no proven ours-merge present fails
+		// closed rather than guess. Safe (never launders), self-heals when the operator removes
+		// the stale record, and does not arise in the normal flow (the gate resolves pending
+		// intents before any ordinary merge runs, and that path clears the intent first).
+		assert.equal(result.kind, "failed");
+		if (result.kind !== "failed") return;
+		assert.match(result.detail, /unproven merge/);
+		assert.ok(result.detail.includes(realMerge));
+	});
+
 	it("a .gitmodules ignore=all cannot hide an upstream gitlink bump from the equivalence proof", () => {
 		const { worktree, origin } = makeFreshnessPair();
 		const sub1 = "1".repeat(40);
@@ -1712,7 +1777,7 @@ describe("preparePrShipFreshness / verifyPrShipFreshness", () => {
 		const result = preparePrShipFreshness(worktree);
 		assert.equal(result.kind, "failed");
 		if (result.kind !== "failed") return;
-		assert.match(result.detail, /unproven ours merge/);
+		assert.match(result.detail, /unproven merge/);
 		assert.ok(result.detail.includes(badMerge));
 		// Nothing integrated, nothing lost: HEAD and the unconfirmed record are intact.
 		assert.equal(execSync("git rev-parse HEAD", { cwd: worktree, encoding: "utf-8" }).trim(), badMerge);
@@ -1747,7 +1812,7 @@ describe("preparePrShipFreshness / verifyPrShipFreshness", () => {
 		const result = preparePrShipFreshness(worktree);
 		assert.equal(result.kind, "failed");
 		if (result.kind !== "failed") return;
-		assert.match(result.detail, /unproven ours merge/);
+		assert.match(result.detail, /unproven merge/);
 		assert.ok(result.detail.includes(badMerge));
 		assert.equal(verifyPrShipFreshness(worktree, originMainOid).ok, false);
 	});
@@ -1758,7 +1823,7 @@ describe("preparePrShipFreshness / verifyPrShipFreshness", () => {
 		const result = preparePrShipFreshness(worktree);
 		assert.equal(result.kind, "failed");
 		if (result.kind !== "failed") return;
-		assert.match(result.detail, /unproven ours merge/);
+		assert.match(result.detail, /unproven merge/);
 		assert.ok(result.detail.includes(badMerge));
 	});
 
@@ -1779,15 +1844,15 @@ describe("preparePrShipFreshness / verifyPrShipFreshness", () => {
 	});
 
 	it("a probe execution failure cannot bypass an outstanding intent: classification fails closed", () => {
-		const { worktree, headOid } = makeTaintedAncestry();
+		const { worktree, originMainOid } = makeTaintedAncestry();
 		const result = preparePrShipFreshness(worktree, (args, cwd) => {
-			if (args[0] === "merge-base" && args[1] === "--is-ancestor" && args[2] === headOid) {
+			// The gate scopes on the fetched-main OID (the invariant parent); a non-exit-1
+			// failure there must fail closed, not collapse to "not an ancestor" and skip.
+			if (args[0] === "merge-base" && args[1] === "--is-ancestor" && args[2] === originMainOid && args[3] === "HEAD") {
 				throw Object.assign(new Error("object store i/o failure"), { status: 128 });
 			}
 			return execFileSync("git", [...args], { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
 		});
-		// A collapsed probe would read as "not an ancestor", skip the record, and accept
-		// up-to-date over the unproven merge.
 		assert.equal(result.kind, "failed");
 		if (result.kind !== "failed") return;
 		assert.match(result.detail, /could not be checked against ancestry/);
