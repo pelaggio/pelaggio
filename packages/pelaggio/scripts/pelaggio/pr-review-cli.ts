@@ -423,10 +423,12 @@ function upsertCommentDefault(pr: string, body: string): void {
  * Hosts gh treats as github.com-class for token selection: github.com and its subdomains
  * (e.g. gist.github.com) plus ghe.com subdomains (data-residency tenants — `gh help
  * environment` scopes GH_TOKEN to "github.com or a subdomain of ghe.com"). Everything else
- * is a GitHub Enterprise Server host.
+ * is a GitHub Enterprise Server host. `host` may carry a port (preserved for the
+ * extraheader urlmatch); classification ignores it.
  */
 function isDotComClassHost(host: string): boolean {
-	return host === "github.com" || host.endsWith(".github.com") || host.endsWith(".ghe.com");
+	const hostname = host.replace(/:\d+$/, "");
+	return hostname === "github.com" || hostname.endsWith(".github.com") || hostname.endsWith(".ghe.com");
 }
 
 /**
@@ -440,13 +442,18 @@ export function forgeTokenForHost(env: NodeJS.ProcessEnv, host: string): string 
 	return token === undefined || token === "" ? undefined : token;
 }
 
-/** Hostname of a git remote URL — https://, ssh://, or scp-like (`git@host:owner/repo`). */
+/**
+ * Host (with any non-default port — `URL.host`, not `.hostname`) of a git remote URL:
+ * https://, ssh://, or scp-like (`git@host:owner/repo`, which cannot carry a port). The
+ * port must survive into the extraheader key or a GHES origin on a non-443 port never
+ * matches git's urlmatch for the header.
+ */
 export function gitRemoteHost(remoteUrl: string): string | undefined {
 	const trimmed = remoteUrl.trim();
 	if (trimmed === "") return undefined;
 	if (trimmed.includes("://")) {
 		try {
-			const host = new URL(trimmed).hostname;
+			const host = new URL(trimmed).host;
 			return host === "" ? undefined : host.toLowerCase();
 		} catch {
 			return undefined;
@@ -854,7 +861,9 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 		inspectionFiles = inspected.files;
 		inspectionDiff = inspected.diff;
 	} catch (e) {
-		const msg = e instanceof Error ? e.message : String(e);
+		// Same scrub as the main crash sink: a child git error can embed argv/env-derived
+		// strings, and this message reaches the PUBLIC comment and stderr.
+		const msg = scrubCrashMessage(e instanceof Error ? e.message : String(e), deps.env);
 		const body = buildFailClosedComment("error_diff", `Could not inspect the PR diff for security-sensitive changes, so this gate blocks the merge.\n\n${msg}`);
 		process.stderr.write(`pr-review could not inspect diff — failing closed: ${msg}\n`);
 		options.upsertComment?.(options.pr, body);

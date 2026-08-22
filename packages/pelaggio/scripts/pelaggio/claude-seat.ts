@@ -51,6 +51,10 @@ const CLAUDE_CLI_AUTH_VARS = [
 	"ANTHROPIC_ORGANIZATION_ID",
 	"ANTHROPIC_SERVICE_ACCOUNT_ID",
 	"ANTHROPIC_WORKSPACE_ID",
+	// Profile-based auth (`ant auth login` profiles).
+	"ANTHROPIC_CONFIG_DIR",
+	"ANTHROPIC_PROFILE",
+	"ANTHROPIC_SCOPE",
 ] as const;
 
 /**
@@ -136,6 +140,7 @@ const CLAUDE_CLI_PROVIDER_CONFIG_VARS = [
 	"ANTHROPIC_GOOGLE_CLOUD_WORKSPACE_ID",
 	"GCLOUD_PROJECT",
 	"GOOGLE_CLOUD_PROJECT",
+	"GOOGLE_CLOUD_QUOTA_PROJECT",
 	"CLOUD_ML_REGION",
 	"ANTHROPIC_BEDROCK_REGION_PREFIX",
 	"ANTHROPIC_BEDROCK_SERVICE_TIER",
@@ -158,6 +163,22 @@ const PELAGGIO_HARNESS_CONFIG_VARS = ["PELAGGIO_REPO", "PELAGGIO_WORKTREE_PREFIX
 
 /** Documented GitHub CLI token variables plus remote-auth / config-location handles needed by roadmap/`gh`/`git`. */
 const FORGE_REMOTE_VARS = ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "LINEAR_API_KEY", "SSH_AUTH_SOCK", "GH_CONFIG_DIR", "GH_HOST", "GH_ENTERPRISE_HOST"] as const;
+
+/**
+ * Union of every env name the Claude seat may forward — unconditional pass-through,
+ * mode-gated cloud credentials, and role-gated forge vars. Exported ONLY for the SDK
+ * env-surface conformance test (claude-seat-env-conformance.test.ts); runtime behavior
+ * always flows through {@link buildClaudeSeatEnv}, never this flat union.
+ */
+export const CLAUDE_SEAT_PASSTHROUGH_ENV_VARS: readonly string[] = [
+	...CLAUDE_SDK_CONTROL_VARS,
+	...CLAUDE_CLI_AUTH_VARS,
+	...CLAUDE_CLI_PROVIDER_CONFIG_VARS,
+	...PELAGGIO_HARNESS_CONFIG_VARS,
+	...AWS_MODE_CREDENTIAL_VARS,
+	...GOOGLE_MODE_CREDENTIAL_VARS,
+	...FORGE_REMOTE_VARS,
+];
 
 type ClaudeSeatForgeAuthority = "forge-capable" | "denied";
 

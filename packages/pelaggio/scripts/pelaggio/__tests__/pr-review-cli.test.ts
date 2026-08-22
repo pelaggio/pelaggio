@@ -356,6 +356,34 @@ describe("pr-review CLI aggregation", () => {
 		assert.equal(forgeTokenForHost({ GH_TOKEN: "t" }, "ghe.internal.corp"), undefined);
 	});
 
+	it("preserves a non-default origin port in the parsed host and the extraheader key (#554)", async () => {
+		// git's urlmatch for http.<url>.extraheader is port-sensitive: a GHES origin on a
+		// non-443 port must produce a key naming that port or the header never applies.
+		assert.equal(gitRemoteHost("https://ghe.example.com:8443/o/r.git"), "ghe.example.com:8443");
+		assert.equal(gitRemoteHost("https://ghe.example.com/o/r.git"), "ghe.example.com");
+		// Port is preserved for the key but ignored for token classification.
+		assert.equal(forgeTokenForHost({ GH_ENTERPRISE_TOKEN: "e" }, "ghe.example.com:8443"), "e");
+		assert.equal(forgeTokenForHost({ GH_TOKEN: "t" }, "github.com:8443"), "t");
+		const out = await runCli({ originUrl: "https://ghe.example.com:8443/pelaggio/pelaggio.git", env: { GH_ENTERPRISE_TOKEN: "ghe_ported_token_val" } });
+		const fetchCall = out.execCalls.find((call) => call.cmd === "git" && call.args.includes("fetch"));
+		assert.equal(fetchCall?.env?.GIT_CONFIG_KEY_0, "http.https://ghe.example.com:8443/.extraheader");
+		assert.equal(Buffer.from(fetchCall?.env?.GIT_CONFIG_VALUE_0?.match(/basic (.+)$/)?.[1] ?? "", "base64").toString("utf8"), "x-access-token:ghe_ported_token_val");
+	});
+
+	it("scrubs the diff-inspection failure path exactly like the main crash sink (#554)", async () => {
+		const token = "ghs_ci_job_token_value";
+		const basicB64 = Buffer.from(`x-access-token:${token}`).toString("base64");
+		const diffError = new Error(`git diff exited 128: AUTHORIZATION: basic ${basicB64} token=${token}`);
+		const out = await runCli({ env: { GH_TOKEN: token }, diffError });
+		assert.equal(out.code, 1);
+		const rendered = [out.stderr, out.stdout, ...out.comments].join("\n");
+		assert.equal(rendered.includes(token), false, "the raw token must not reach the diff-failure sinks");
+		assert.equal(rendered.includes(basicB64), false, "the base64 credential must not reach the diff-failure sinks");
+		assert.match(out.stderr, /could not inspect diff — failing closed/);
+		assert.match(rendered, /\[REDACTED\]/);
+		assert.match([out.stdout, ...out.comments].join("\n"), /Could not inspect the PR diff/);
+	});
+
 	it("base64-scrubs every secret-named env value from the crash path, not just forge tokens (#554)", async () => {
 		const apiKey = "sk-ant-crash-scrub-value-1234";
 		const apiKeyB64 = Buffer.from(apiKey).toString("base64");

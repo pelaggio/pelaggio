@@ -64,6 +64,8 @@ export const DEFAULT_AGENT_ENV_ALLOWLIST: readonly string[] = [
 	"SSL_CERT_DIR",
 	// Proxy endpoints are network configuration, not credentials — dropping them strands
 	// proxied operators while the cert vars above pass, so they ride the same default list.
+	// URL-valued proxy vars are additionally VALUE-conditional in buildAgentEnv: a value
+	// carrying URL userinfo credentials (or an unparseable value) is not forwarded by default.
 	"HTTP_PROXY",
 	"HTTPS_PROXY",
 	"NO_PROXY",
@@ -73,6 +75,30 @@ export const DEFAULT_AGENT_ENV_ALLOWLIST: readonly string[] = [
 	"no_proxy",
 	"all_proxy",
 ];
+
+/** Proxy vars whose value is a URL and can therefore embed credentials as userinfo.
+ *  NO_PROXY/no_proxy is a host list, never a URL — it stays unconditional. */
+const PROXY_URL_ENV_NAMES = new Set(["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]);
+
+/** Raw userinfo substring of a proxy URL value (`scheme://user:pass@host` → `user:pass`), if any. */
+function proxyUrlUserinfo(value: string): string | undefined {
+	return value.trim().match(/^(?:[A-Za-z][A-Za-z0-9+.-]*:\/\/)?([^/@\s]+)@/)?.[1];
+}
+
+/** Classify a URL-valued proxy var for default forwarding. Scheme-less values (`proxy.corp:3128`)
+ *  are normalized before parsing so common credential-less forms keep flowing. */
+export function classifyProxyValue(value: string): "forward" | "credentialed" | "unparseable" {
+	const trimmed = value.trim();
+	if (trimmed === "") return "forward";
+	if (proxyUrlUserinfo(trimmed) !== undefined) return "credentialed";
+	try {
+		// Side-effect-free parse for well-formedness only.
+		new URL(trimmed.includes("://") ? trimmed : `http://${trimmed}`);
+		return "forward";
+	} catch {
+		return "unparseable";
+	}
+}
 
 export interface BuildAgentEnvOptions {
 	/** Extra var names to forward beyond the default allowlist — e.g. a driver's auth var
@@ -92,11 +118,33 @@ export interface BuildAgentEnvOptions {
  */
 export function buildAgentEnv(opts: BuildAgentEnvOptions = {}): NodeJS.ProcessEnv {
 	const source = opts.source ?? process.env;
-	const allow = new Set<string>([...DEFAULT_AGENT_ENV_ALLOWLIST, ...(opts.allow ?? [])]);
+	const callerAllow = new Set<string>(opts.allow ?? []);
+	const allow = new Set<string>([...DEFAULT_AGENT_ENV_ALLOWLIST, ...callerAllow]);
 	const env: NodeJS.ProcessEnv = {};
 	for (const key of allow) {
 		const value = source[key];
-		if (value !== undefined) env[key] = value;
+		if (value === undefined) continue;
+		// Default proxy forwarding is VALUE-conditional: URL userinfo commonly carries proxy
+		// credentials, so a credentialed (or unparseable) value is dropped fail-closed unless
+		// the operator explicitly opted the name in via security.env-allowlist. The scrubber
+		// registers the credential either way (collectSecretEnvValues).
+		if (PROXY_URL_ENV_NAMES.has(key) && !callerAllow.has(key)) {
+			const verdict = classifyProxyValue(value);
+			if (verdict !== "forward") {
+				process.stderr.write(
+					`⚠ not forwarding ${key} to the agent subprocess (${verdict === "credentialed" ? "its URL userinfo carries proxy credentials" : "its value is not a parseable proxy URL"}); add ${key} to security.env-allowlist to forward it anyway\n`,
+				);
+				continue;
+			}
+		}
+		// XDG basedir rule: a relative XDG_CONFIG_HOME is invalid and ignored. The Claude seat
+		// already skips it for gh-config masking; forwarding it would let the child honor a
+		// directory the mask ignored, so it is skipped here under the same rule.
+		if (key === "XDG_CONFIG_HOME" && value !== "" && !value.startsWith("/")) {
+			process.stderr.write(`⚠ not forwarding relative XDG_CONFIG_HOME ${JSON.stringify(value)} to the agent subprocess (XDG requires absolute paths)\n`);
+			continue;
+		}
+		env[key] = value;
 	}
 	if (opts.extra) for (const [k, v] of Object.entries(opts.extra)) env[k] = v;
 	return env;
@@ -125,7 +173,17 @@ const SECRET_NAME = /(?:_|^)(?:API[_-]?KEY|KEY|TOKEN|SECRET|PASSWORD|PASSWD|CRED
 export function collectSecretEnvValues(source: NodeJS.ProcessEnv = process.env): string[] {
 	const values: string[] = [];
 	for (const [name, value] of Object.entries(source)) {
-		if (value && value.length >= 6 && SECRET_NAME.test(name)) values.push(value);
+		if (!value) continue;
+		if (value.length >= 6 && SECRET_NAME.test(name)) values.push(value);
+		// Proxy URL userinfo is a credential wherever the value appears — registered regardless
+		// of whether the var was forwarded, so an operator opt-in still scrubs logs/crash sinks.
+		if (PROXY_URL_ENV_NAMES.has(name)) {
+			const userinfo = proxyUrlUserinfo(value);
+			if (userinfo !== undefined) {
+				values.push(value);
+				if (userinfo.length >= 6) values.push(userinfo);
+			}
+		}
 	}
 	return values;
 }

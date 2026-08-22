@@ -38,6 +38,57 @@ describe("buildAgentEnv (#237) — deny-by-default env allowlist", () => {
 		const env = buildAgentEnv({ source, extra: { PATH: "/override" } });
 		assert.equal(env.PATH, "/override");
 	});
+
+	it("forwards credential-less proxy values but drops credentialed or unparseable ones by default (#554)", () => {
+		const clean = buildAgentEnv({ source: { PATH: "/bin", HTTP_PROXY: "http://proxy.corp:3128", https_proxy: "proxy.corp:3128", NO_PROXY: "localhost,127.0.0.1" } });
+		assert.equal(clean.HTTP_PROXY, "http://proxy.corp:3128");
+		assert.equal(clean.https_proxy, "proxy.corp:3128");
+		// NO_PROXY is a host list, never a URL — unconditional.
+		assert.equal(clean.NO_PROXY, "localhost,127.0.0.1");
+		const stderrWrites: string[] = [];
+		const originalWrite = process.stderr.write;
+		process.stderr.write = ((chunk: string | Uint8Array) => {
+			stderrWrites.push(String(chunk));
+			return true;
+		}) as typeof process.stderr.write;
+		try {
+			const credentialed = buildAgentEnv({ source: { PATH: "/bin", HTTPS_PROXY: "https://user:proxy-pass-1@proxy.corp:3128", ALL_PROXY: "http:// bad url" } });
+			assert.equal("HTTPS_PROXY" in credentialed, false, "a userinfo-carrying proxy URL must not be forwarded by default");
+			assert.equal("ALL_PROXY" in credentialed, false, "an unparseable proxy value must not be forwarded");
+		} finally {
+			process.stderr.write = originalWrite;
+		}
+		const diagnostics = stderrWrites.join("");
+		assert.match(diagnostics, /not forwarding HTTPS_PROXY .*userinfo carries proxy credentials.*security\.env-allowlist/);
+		assert.match(diagnostics, /not forwarding ALL_PROXY .*not a parseable proxy URL/);
+		// The diagnostic itself must not echo the credential.
+		assert.equal(diagnostics.includes("proxy-pass-1"), false);
+	});
+
+	it("security.env-allowlist opt-in forwards a credentialed proxy value (still scrubbed in sinks)", () => {
+		const value = "https://user:proxy-pass-2@proxy.corp:3128";
+		const env = buildAgentEnv({ source: { PATH: "/bin", HTTPS_PROXY: value }, allow: ["HTTPS_PROXY"] });
+		assert.equal(env.HTTPS_PROXY, value);
+		// Regardless of forwarding, the scrubber registers the userinfo and the full URL.
+		const scrub = makeSecretScrubber({ HTTPS_PROXY: value });
+		const scrubbed = scrub(`connecting via ${value} (auth user:proxy-pass-2)`);
+		assert.equal(scrubbed.includes("proxy-pass-2"), false);
+		assert.equal(scrubbed.includes(value), false);
+		assert.match(scrubbed, /\[REDACTED\]/);
+	});
+
+	it("drops a relative XDG_CONFIG_HOME (XDG-invalid) while forwarding an absolute one", () => {
+		const absolute = buildAgentEnv({ source: { PATH: "/bin", XDG_CONFIG_HOME: "/home/agent/.config" } });
+		assert.equal(absolute.XDG_CONFIG_HOME, "/home/agent/.config");
+		const originalWrite = process.stderr.write;
+		process.stderr.write = (() => true) as typeof process.stderr.write;
+		try {
+			const relative = buildAgentEnv({ source: { PATH: "/bin", XDG_CONFIG_HOME: "relative/config" } });
+			assert.equal("XDG_CONFIG_HOME" in relative, false, "a relative XDG_CONFIG_HOME must not be forwarded (the seat mask ignores it too)");
+		} finally {
+			process.stderr.write = originalWrite;
+		}
+	});
 });
 
 describe("scopeEnvAllowlistToProvider (#276) — per-provider key scoping", () => {
