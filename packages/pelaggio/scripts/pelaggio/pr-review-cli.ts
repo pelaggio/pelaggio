@@ -269,7 +269,15 @@ function escapeHtml(value: string): string {
 }
 
 function escapeMarkdown(value: string): string {
-	return escapeHtml(value).replace(/([\\`*_[\]{}()#+.!|>-])/g, "\\$1");
+	// Every model-authored field (summary, finding message/path, verification rationale,
+	// retained-blocker text) flows through here into the PUBLIC sinks — CI stdout and the PR
+	// comment. A schema-VALID report can carry a credential the seat still holds
+	// (ANTHROPIC_API_KEY — leftover CLI auth, #572), so scrub with the same scrubber as the
+	// crash sink (harness-env secret values + their base64 forms) BEFORE escaping: the
+	// markdown-escape backslashes would otherwise split a literal credential and defeat the
+	// exact-substring match. Defense in depth completing this PR's scrubbing story; the
+	// key-presence root cause stays #572.
+	return escapeHtml(scrubCrashMessage(value, deps.env)).replace(/([\\`*_[\]{}()#+.!|>-])/g, "\\$1");
 }
 
 /** Agreement over a completed required (driver × label) matrix. First match wins. */
@@ -442,7 +450,9 @@ export function forgeTokenForHost(env: NodeJS.ProcessEnv, host: string): string 
 	// suppress a populated GITHUB_TOKEN, turning the mandatory private-PR fetch
 	// unauthenticated. Empty/whitespace-only values are treated as unset.
 	const chain = isDotComClassHost(host) ? [env.GH_TOKEN, env.GITHUB_TOKEN] : [env.GH_ENTERPRISE_TOKEN, env.GITHUB_ENTERPRISE_TOKEN];
-	return chain.find((token) => token !== undefined && token.trim() !== "");
+	// Return the TRIMMED token: a whitespace-padded value would base64-encode the padding
+	// into the basic credential and silently fail auth.
+	return chain.find((token) => token !== undefined && token.trim() !== "")?.trim();
 }
 
 /**

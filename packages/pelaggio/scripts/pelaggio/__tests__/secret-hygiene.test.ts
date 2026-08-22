@@ -105,6 +105,27 @@ describe("buildAgentEnv (#237) — deny-by-default env allowlist", () => {
 		assert.equal(plain.https_proxy, "host:8080");
 	});
 
+	it("registers only password-carrying proxy userinfo as a secret; a bare username is not redacted (#554)", () => {
+		const bare = "http://operator@proxy.corp:3128";
+		const originalWrite = process.stderr.write;
+		process.stderr.write = (() => true) as typeof process.stderr.write;
+		try {
+			// Any @ still drops the value from default forwarding (conservative)...
+			const env = buildAgentEnv({ source: { PATH: "/bin", HTTPS_PROXY: bare } });
+			assert.equal("HTTPS_PROXY" in env, false);
+		} finally {
+			process.stderr.write = originalWrite;
+		}
+		// ...but a bare username is not a secret: unrelated mentions survive scrubbing.
+		assert.deepEqual(collectSecretEnvValues({ HTTPS_PROXY: bare }), []);
+		assert.equal(makeSecretScrubber({ HTTPS_PROXY: bare })("operator restarted the proxy"), "operator restarted the proxy");
+		// Password-carrying userinfo (and its full URL) stays registered.
+		const credentialed = "http://operator:proxy-pass-9@proxy.corp:3128";
+		const values = collectSecretEnvValues({ HTTPS_PROXY: credentialed });
+		assert.ok(values.includes(credentialed));
+		assert.ok(values.includes("operator:proxy-pass-9"));
+	});
+
 	it("drops a relative XDG_CONFIG_HOME (XDG-invalid) while forwarding an absolute one", () => {
 		const absolute = buildAgentEnv({ source: { PATH: "/bin", XDG_CONFIG_HOME: "/home/agent/.config" } });
 		assert.equal(absolute.XDG_CONFIG_HOME, "/home/agent/.config");

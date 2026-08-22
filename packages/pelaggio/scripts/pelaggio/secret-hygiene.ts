@@ -190,9 +190,12 @@ export function collectSecretEnvValues(source: NodeJS.ProcessEnv = process.env):
 		if (value.length >= 6 && SECRET_NAME.test(name)) values.push(value);
 		// Proxy URL userinfo is a credential wherever the value appears — registered regardless
 		// of whether the var was forwarded, so an operator opt-in still scrubs logs/crash sinks.
+		// PASSWORD-carrying userinfo only: a bare username ("operator@proxy") is not a secret,
+		// and registering it would redact that word from unrelated logs. (Forwarding still
+		// drops ANY `@`-carrying value by default — classifyProxyValue is unchanged.)
 		if (PROXY_URL_ENV_NAMES.has(name)) {
 			const userinfo = proxyUrlUserinfo(value);
-			if (userinfo !== undefined) {
+			if (userinfo?.includes(":")) {
 				values.push(value);
 				if (userinfo.length >= 6) values.push(userinfo);
 			}

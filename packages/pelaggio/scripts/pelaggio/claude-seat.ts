@@ -467,7 +467,11 @@ function resolveGitHubCredentialDirectories(options: ClaudeSeatBuildOptions, pro
 		try {
 			const resolved = realpathSync(normalized);
 			if (!statSync(resolved).isDirectory()) {
-				throw seatFailure(`cannot mask GitHub credential directory because it is not a directory: ${resolved}`);
+				// A candidate that names a FILE cannot be tmpfs-masked and is not a usable gh
+				// config dir; like the relative case, a misconfiguration skips (with a
+				// diagnostic) rather than bricking every denied step.
+				process.stderr.write(`⚠ Claude seat: ignoring GitHub credential directory candidate that is not a directory: ${resolved}\n`);
+				continue;
 			}
 			if (isWideOrSharedParent(resolved, protectedRoots)) {
 				throw seatFailure("rejected GitHub credential directory: parent directory is too wide to mask");
@@ -475,7 +479,14 @@ function resolveGitHubCredentialDirectories(options: ClaudeSeatBuildOptions, pro
 			existing.push(resolved);
 		} catch (error) {
 			if (error instanceof Error && error.message.startsWith("Claude seat isolation ")) throw error;
-			if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+			const code = (error as NodeJS.ErrnoException).code;
+			if (code === "ENOENT") continue;
+			if (code === "ENOTDIR") {
+				// E.g. XDG_CONFIG_HOME names a file, making the candidate `<file>/gh` — same
+				// misconfiguration class as above: skip, keep the remaining candidates.
+				process.stderr.write(`⚠ Claude seat: ignoring GitHub credential directory candidate under a non-directory path: ${normalized}\n`);
+				continue;
+			}
 			throw seatFailure(`could not resolve GitHub credential directory: ${normalized}`);
 		}
 	}

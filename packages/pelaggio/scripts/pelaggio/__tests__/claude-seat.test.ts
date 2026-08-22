@@ -975,13 +975,25 @@ describe("GitHub credential-directory masks", () => {
 		assert.deepEqual(invocation.maskedDirectories, [realpathSync(homeGh)]);
 	});
 
-	it("fails closed on malformed, non-directory, and wide GitHub credential targets", () => {
-		const fileTarget = join(tempDir("pelaggio-gh-file-"), "hosts.yml");
-		writeFileSync(fileTarget, "not-a-directory\n");
+	it("fails closed on malformed and wide GitHub credential targets", () => {
 		assert.throws(() => buildClaudeSeatInvocation({ command: "node", args: [], cwd }, deniedBuildOpts({ cwd, bwrap, home: "/home/operator", tmpdir: "/tmp", ghConfigDir: "/tmp/gh\0hidden" })), /forbidden characters/);
 		assert.throws(() => buildClaudeSeatInvocation({ command: "node", args: [], cwd }, deniedBuildOpts({ cwd, bwrap, home: "/home/operator", tmpdir: "/tmp", ghConfigDir: "/tmp/../etc/gh" })), /reserved segments/);
-		assert.throws(() => buildClaudeSeatInvocation({ command: "node", args: [], cwd }, deniedBuildOpts({ cwd, bwrap, home: "/home/operator", tmpdir: "/tmp", ghConfigDir: fileTarget })), /not a directory/);
 		assert.throws(() => buildClaudeSeatInvocation({ command: "node", args: [], cwd }, deniedBuildOpts({ cwd, bwrap, home: "/home/operator", tmpdir: "/tmp", ghConfigDir: "/tmp" })), /too wide to mask/);
+	});
+
+	it("skips non-directory GitHub credential candidates (misconfiguration) instead of failing every denied step (#554)", () => {
+		const homeRoot = tempDir("pelaggio-gh-notdir-home-");
+		const homeGh = join(homeRoot, ".config", "gh");
+		plantGhConfig(homeGh, "planted-home-config-token");
+		// GH_CONFIG_DIR names a FILE (not maskable, not a usable gh config dir) and
+		// XDG_CONFIG_HOME names a file (candidate `<file>/gh` resolves ENOTDIR): both skip
+		// with a diagnostic while the home-derived candidate still masks.
+		const fileTarget = join(tempDir("pelaggio-gh-file-"), "hosts.yml");
+		writeFileSync(fileTarget, "not-a-directory\n");
+		const xdgFile = join(tempDir("pelaggio-gh-xdgfile-"), "xdg-as-file");
+		writeFileSync(xdgFile, "file, not a directory\n");
+		const invocation = buildClaudeSeatInvocation({ command: "node", args: [], cwd }, deniedBuildOpts({ cwd, bwrap, socketPaths: [], home: homeRoot, xdgConfigHome: xdgFile, ghConfigDir: fileTarget, tmpdir: "/tmp" }));
+		assert.deepEqual(invocation.maskedDirectories, [realpathSync(homeGh)]);
 	});
 
 	it("fails closed when a GitHub credential directory symlink resolves to a wide root", () => {

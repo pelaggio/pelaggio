@@ -373,6 +373,34 @@ describe("pr-review CLI aggregation", () => {
 		assert.equal(emptyFetch?.env, undefined);
 	});
 
+	it("scrubs secrets out of a schema-VALID report before the stdout and comment sinks (#554)", async () => {
+		// A prompt-injected PR can place a credential the seat still holds (leftover CLI auth,
+		// #572) inside a well-formed finding; the rendered report body must scrub it.
+		const apiKey = "sk-ant-reportsinkkey123456";
+		const ghToken = "ghs_reportsinktoken4567890";
+		const summary = `Clean review with ${apiKey} embedded.`;
+		const findings = [{ severity: "nice", message: `Token ${ghToken} spotted in config`, path: "docs/readme.md" }];
+		const text = `REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 1, summary, findings })}\nEND_REVIEW_FINDINGS`;
+		const out = await runCli({ env: { ANTHROPIC_API_KEY: apiKey, GH_TOKEN: ghToken }, results: [result({ text })] });
+		assert.equal(out.code, 0);
+		// Assert on the actual rendered sinks: CI stdout and the upserted comment bodies.
+		const rendered = [out.stdout, ...out.comments].join("\n");
+		assert.equal(rendered.includes("reportsinkkey123456"), false, "the API key must not reach the rendered report body");
+		assert.equal(rendered.includes("reportsinktoken4567890"), false, "the forge token must not reach the rendered report body");
+		assert.match(rendered, /REDACTED/);
+		// Non-secret model content is untouched.
+		assert.match(rendered, /Clean review with/);
+		assert.match(rendered, /spotted in config/);
+	});
+
+	it("trims a whitespace-padded token before encoding the fetch credential (#554)", async () => {
+		const out = await runCli({ env: { GH_TOKEN: "  ghs_padded_token_value \n" } });
+		assert.equal(out.code, 0);
+		const fetchCall = out.execCalls.find((call) => call.cmd === "git" && call.args.includes("fetch"));
+		// The padding must not be base64-encoded into the basic credential.
+		assert.equal(Buffer.from(fetchCall?.env?.GIT_CONFIG_VALUE_0?.match(/basic (.+)$/)?.[1] ?? "", "base64").toString("utf8"), "x-access-token:ghs_padded_token_value");
+	});
+
 	it("preserves a non-default origin port in the parsed host and the extraheader key (#554)", async () => {
 		// git's urlmatch for http.<url>.extraheader is port-sensitive: a GHES origin on a
 		// non-443 port must produce a key naming that port or the header never applies.

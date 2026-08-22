@@ -1057,7 +1057,12 @@ the rest of the GitHub/Linear/SSH set) are role-gated inside the seat: only
 Proxy configuration (`HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`/`ALL_PROXY` and
 their lowercase forms) is forwarded by default alongside the certificate vars —
 proxy endpoints are network configuration, not credentials, and dropping them
-would strand proxied operators.
+would strand proxied operators. Default forwarding of the URL-valued vars is
+**value-conditional**: a value carrying URL userinfo credentials
+(`http://user:pass@proxy`, scheme-relative and slash-collapsed forms included)
+or one that does not parse as a proxy URL is dropped with a diagnostic; add the
+var to `security.env-allowlist` to forward it anyway (its credential is still
+scrubbed from logs). `NO_PROXY` is a host list and stays unconditional.
 Independently, captured driver stderr and the verbose `.dev/*.log` transcript
 are **secret-scrubbed before write**: credential-shaped strings (JWTs, provider
 keys, tokens) and the values of secret-named env vars are replaced with
