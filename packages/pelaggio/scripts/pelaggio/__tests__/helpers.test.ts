@@ -1251,7 +1251,8 @@ describe("preparePrShipFreshness / verifyPrShipFreshness", () => {
 			if (key === "fetch origin main") return "";
 			if (key === "rev-parse --verify origin/main") return "abc";
 			if (key === "merge-base --is-ancestor abc HEAD") throw new Error("behind");
-			if (key === "merge-base --all HEAD abc") return "baseoid";
+			if (key === "rev-parse --verify HEAD^{commit}") return "headoid";
+			if (key === "merge-base --all headoid abc") return "baseoid";
 			if (args[0] === "diff-tree") throw new Error("diff-tree failed");
 			if (key === "diff --name-only HEAD...abc") return "src/a.ts\n";
 			if (key === "merge --no-edit abc") return "";
@@ -1279,7 +1280,8 @@ describe("preparePrShipFreshness / verifyPrShipFreshness", () => {
 			if (key === "fetch origin main") return "";
 			if (key === "rev-parse --verify origin/main") return "abc";
 			if (key === "merge-base --is-ancestor abc HEAD") throw new Error("behind");
-			if (key === "merge-base --all HEAD abc") return "baseone\nbasetwo";
+			if (key === "rev-parse --verify HEAD^{commit}") return "headoid";
+			if (key === "merge-base --all headoid abc") return "baseone\nbasetwo";
 			if (key === "diff --name-only HEAD...abc") return "src/a.ts\n";
 			if (key === "merge --no-edit abc") return "";
 			throw new Error(`unexpected argv: ${key}`);
@@ -1290,9 +1292,9 @@ describe("preparePrShipFreshness / verifyPrShipFreshness", () => {
 		assert.ok(argv.some((a) => a[0] === "merge" && a[1] === "--no-edit" && a[2] === "abc"));
 	});
 
-	it("pins the successful-proof argv: unique base, NUL diff-tree, tree snapshot, ours merge, then tree+ancestry probes", () => {
+	it("pins the successful-proof argv: captured HEAD OID binds the proof, ours merge, then parent/tree/ancestry probes", () => {
 		const argv: string[][] = [];
-		let ancestorChecks = 0;
+		let headReads = 0;
 		const result = preparePrShipFreshness("/tmp/freshness-ours-argv", (args) => {
 			argv.push([...args]);
 			const key = args.join(" ");
@@ -1301,92 +1303,230 @@ describe("preparePrShipFreshness / verifyPrShipFreshness", () => {
 			if (key === "status --porcelain") return "";
 			if (key === "fetch origin main") return "";
 			if (key === "rev-parse --verify origin/main") return "abc";
-			if (key === "merge-base --is-ancestor abc HEAD") {
-				ancestorChecks += 1;
-				if (ancestorChecks === 1) throw new Error("behind");
-				return "";
+			if (key === "merge-base --is-ancestor abc HEAD") throw new Error("behind");
+			if (key === "rev-parse --verify HEAD^{commit}") {
+				headReads += 1;
+				return headReads === 1 ? "headoid" : "mergeoid";
 			}
-			if (key === "merge-base --all HEAD abc") return "baseoid";
+			if (key === "merge-base --all headoid abc") return "baseoid";
 			if (key === "diff-tree -r --name-only -z --no-renames baseoid abc") return "copied.ts\0";
-			if (key === "diff-tree -r --name-only -z --no-renames HEAD abc") return "feat.ts\0";
-			if (key === "rev-parse HEAD^{tree}") return "treeoid";
+			if (key === "diff-tree -r --name-only -z --no-renames headoid abc") return "feat.ts\0";
+			if (key === "rev-parse headoid^{tree}") return "treeoid";
 			if (key === "merge --no-edit --strategy=ours abc") return "";
+			if (key === "rev-parse --verify mergeoid^1^{commit}") return "headoid";
+			if (key === "rev-parse --verify mergeoid^2^{commit}") return "abc";
+			if (key === "rev-parse mergeoid^{tree}") return "treeoid";
+			if (key === "merge-base --is-ancestor abc mergeoid") return "";
 			throw new Error(`unexpected argv: ${key}`);
 		});
 		assert.equal(result.kind, "content-integrated");
 		if (result.kind !== "content-integrated") return;
 		assert.equal(result.originMainOid, "abc");
 		assert.deepEqual(result.upstreamTouchedFiles, ["copied.ts"]);
-		assert.equal(ancestorChecks, 2);
+		assert.equal(headReads, 2);
 		const keys = argv.map((a) => a.join(" "));
 		const isAncestor = keys.indexOf("merge-base --is-ancestor abc HEAD");
-		const allBases = keys.indexOf("merge-base --all HEAD abc");
+		const capture = keys.indexOf("rev-parse --verify HEAD^{commit}");
+		const allBases = keys.indexOf("merge-base --all headoid abc");
 		const upstreamDiff = keys.indexOf("diff-tree -r --name-only -z --no-renames baseoid abc");
-		const endpointDiff = keys.indexOf("diff-tree -r --name-only -z --no-renames HEAD abc");
-		const treeIdx = keys.indexOf("rev-parse HEAD^{tree}");
+		const endpointDiff = keys.indexOf("diff-tree -r --name-only -z --no-renames headoid abc");
+		const treeIdx = keys.indexOf("rev-parse headoid^{tree}");
 		const ours = keys.indexOf("merge --no-edit --strategy=ours abc");
-		const treeAgain = keys.lastIndexOf("rev-parse HEAD^{tree}");
-		const ancestorAgain = keys.lastIndexOf("merge-base --is-ancestor abc HEAD");
-		assert.ok(isAncestor >= 0 && allBases > isAncestor);
+		const reRead = keys.lastIndexOf("rev-parse --verify HEAD^{commit}");
+		const firstParent = keys.indexOf("rev-parse --verify mergeoid^1^{commit}");
+		const secondParent = keys.indexOf("rev-parse --verify mergeoid^2^{commit}");
+		const treeAgain = keys.indexOf("rev-parse mergeoid^{tree}");
+		const ancestorOnMerge = keys.indexOf("merge-base --is-ancestor abc mergeoid");
+		assert.ok(isAncestor >= 0 && capture > isAncestor && allBases > capture);
 		assert.ok(upstreamDiff > allBases && endpointDiff > upstreamDiff);
 		assert.ok(treeIdx > endpointDiff && ours > treeIdx);
-		assert.ok(treeAgain > ours && ancestorAgain > treeAgain);
+		assert.ok(reRead > ours && firstParent > reRead && secondParent > firstParent);
+		assert.ok(treeAgain > ours && ancestorOnMerge > treeAgain);
 		assert.ok(!argv.some((a) => a.includes("origin/main") && a[0] !== "rev-parse" && a[0] !== "fetch"));
-		assert.ok(argv.every((a) => Array.isArray(a)));
+		// Every post-merge probe binds to captured OIDs, never to symbolic HEAD.
+		assert.ok(!keys.slice(ours + 1).some((k) => k !== "rev-parse --verify HEAD^{commit}" && k.includes("HEAD")));
 		assert.ok(!keys.includes("merge --no-edit abc"));
+		assert.ok(!argv.some((a) => a[0] === "reset"));
 	});
 
-	// The two post-`ours` probes fail closed as `failed` — never `content-integrated`,
-	// never a silent fallthrough to the ordinary merge on the already-moved HEAD.
-	it("fails closed when the ours merge changed the HEAD tree instead of preserving it", () => {
-		let treeReads = 0;
-		const result = preparePrShipFreshness("/tmp/freshness-ours-tree-drift", (args) => {
+	/** Shared mock for the post-`ours` probe tests: proof passes bound to "headoid". */
+	function oursProbeExec(argv: string[][], overrides: (key: string) => string | null): (args: readonly string[]) => string {
+		return (args) => {
+			argv.push([...args]);
 			const key = args.join(" ");
+			const overridden = overrides(key);
+			if (overridden !== null) return overridden;
 			if (key === "rev-parse -q --verify MERGE_HEAD") throw new Error("no merge");
 			if (key === "diff --name-only --diff-filter=U") return "";
 			if (key === "status --porcelain") return "";
 			if (key === "fetch origin main") return "";
 			if (key === "rev-parse --verify origin/main") return "abc";
 			if (key === "merge-base --is-ancestor abc HEAD") throw new Error("behind");
-			if (key === "merge-base --all HEAD abc") return "baseoid";
+			if (key === "merge-base --all headoid abc") return "baseoid";
 			if (key === "diff-tree -r --name-only -z --no-renames baseoid abc") return "copied.ts\0";
-			if (key === "diff-tree -r --name-only -z --no-renames HEAD abc") return "feat.ts\0";
-			if (key === "rev-parse HEAD^{tree}") {
-				treeReads += 1;
-				return treeReads === 1 ? "treeoid" : "differenttree";
-			}
+			if (key === "diff-tree -r --name-only -z --no-renames headoid abc") return "feat.ts\0";
+			if (key === "rev-parse headoid^{tree}") return "treeoid";
 			if (key === "merge --no-edit --strategy=ours abc") return "";
+			if (key === "rev-parse --verify mergeoid^1^{commit}") return "headoid";
+			if (key === "rev-parse --verify mergeoid^2^{commit}") return "abc";
+			if (key === "rev-parse mergeoid^{tree}") return "treeoid";
+			if (key === "merge-base --is-ancestor abc mergeoid") return "";
 			throw new Error(`unexpected argv: ${key}`);
-		});
+		};
+	}
+
+	// The post-`ours` probes fail closed as `failed` — never `content-integrated`, never a
+	// silent fallthrough — and roll the tainted merge commit back to its first parent so a
+	// resume cannot launder the refused ancestry through `up-to-date`.
+	it("fails closed and rolls back when the ours merge changed the HEAD tree instead of preserving it", () => {
+		const argv: string[][] = [];
+		let headReads = 0;
+		const result = preparePrShipFreshness(
+			"/tmp/freshness-ours-tree-drift",
+			oursProbeExec(argv, (key) => {
+				if (key === "rev-parse --verify HEAD^{commit}") {
+					headReads += 1;
+					return headReads === 1 ? "headoid" : "mergeoid";
+				}
+				if (key === "rev-parse mergeoid^{tree}") return "differenttree";
+				if (key === "reset --keep headoid") return "";
+				return null;
+			}),
+		);
 		assert.equal(result.kind, "failed");
 		if (result.kind !== "failed") return;
 		assert.match(result.detail, /HEAD tree changed/);
+		assert.match(result.detail, /rolled the branch back to headoid/);
+		assert.ok(argv.some((a) => a.join(" ") === "reset --keep headoid"));
 	});
 
-	it("fails closed when the ours merge did not make the fetched OID an ancestor of HEAD", () => {
-		let ancestorChecks = 0;
-		const result = preparePrShipFreshness("/tmp/freshness-ours-no-ancestry", (args) => {
-			const key = args.join(" ");
-			if (key === "rev-parse -q --verify MERGE_HEAD") throw new Error("no merge");
-			if (key === "diff --name-only --diff-filter=U") return "";
-			if (key === "status --porcelain") return "";
-			if (key === "fetch origin main") return "";
-			if (key === "rev-parse --verify origin/main") return "abc";
-			if (key === "merge-base --is-ancestor abc HEAD") {
-				ancestorChecks += 1;
-				throw new Error("not an ancestor");
-			}
-			if (key === "merge-base --all HEAD abc") return "baseoid";
-			if (key === "diff-tree -r --name-only -z --no-renames baseoid abc") return "copied.ts\0";
-			if (key === "diff-tree -r --name-only -z --no-renames HEAD abc") return "feat.ts\0";
-			if (key === "rev-parse HEAD^{tree}") return "treeoid";
-			if (key === "merge --no-edit --strategy=ours abc") return "";
-			throw new Error(`unexpected argv: ${key}`);
-		});
+	it("fails closed and rolls back when the ours merge did not make the fetched OID an ancestor", () => {
+		const argv: string[][] = [];
+		let headReads = 0;
+		const result = preparePrShipFreshness(
+			"/tmp/freshness-ours-no-ancestry",
+			oursProbeExec(argv, (key) => {
+				if (key === "rev-parse --verify HEAD^{commit}") {
+					headReads += 1;
+					return headReads === 1 ? "headoid" : "mergeoid";
+				}
+				if (key === "merge-base --is-ancestor abc mergeoid") throw new Error("not an ancestor");
+				if (key === "reset --keep headoid") return "";
+				return null;
+			}),
+		);
 		assert.equal(result.kind, "failed");
 		if (result.kind !== "failed") return;
 		assert.match(result.detail, /not an ancestor of HEAD/);
-		assert.equal(ancestorChecks, 2);
+		assert.match(result.detail, /rolled the branch back to headoid/);
+		assert.ok(argv.some((a) => a.join(" ") === "reset --keep headoid"));
+	});
+
+	it("does not roll back a HEAD it does not recognize as its own ours merge commit", () => {
+		const argv: string[][] = [];
+		let headReads = 0;
+		// A foreign commit landed on top of the ours merge before the probes: HEAD's
+		// second parent is not the fetched OID, so the harness must not reset anything.
+		const result = preparePrShipFreshness(
+			"/tmp/freshness-ours-foreign-head",
+			oursProbeExec(argv, (key) => {
+				if (key === "rev-parse --verify HEAD^{commit}") {
+					headReads += 1;
+					return headReads === 1 ? "headoid" : "mergeoid";
+				}
+				if (key === "rev-parse --verify mergeoid^2^{commit}") throw new Error("no second parent");
+				return null;
+			}),
+		);
+		assert.equal(result.kind, "failed");
+		if (result.kind !== "failed") return;
+		assert.match(result.detail, /second parent/);
+		assert.match(result.detail, /branch left as-is/);
+		assert.ok(!argv.some((a) => a[0] === "reset"));
+	});
+
+	it("TOCTOU: a HEAD moved between the equivalence proof and the merge fails closed and leaves no recorded ancestry", () => {
+		const { worktree, origin } = makeFreshnessPair();
+		commitFile(origin, "src/up.ts", "export const up = 1;\n", "upstream");
+		commitFile(worktree, "src/feature.ts", "export const feat = 1;\n", "feature-only");
+		commitFile(worktree, "src/up.ts", "export const up = 1;\n", "copy up");
+		const capturedHead = execSync("git rev-parse HEAD", { cwd: worktree, encoding: "utf-8" }).trim();
+		let sneakOid = "";
+		let diffTrees = 0;
+		const result = preparePrShipFreshness(worktree, (args, cwd) => {
+			const out = execFileSync("git", [...args], { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+			if (args[0] === "diff-tree") {
+				diffTrees += 1;
+				if (diffTrees === 2) {
+					// Concurrent clean commit lands right after the equivalence proof's last
+					// read, REMOVING an upstream-touched path — the tree is no longer proven.
+					execSync("git rm -q src/up.ts && git commit -q -m sneak", { cwd: worktree });
+					sneakOid = execSync("git rev-parse HEAD", { cwd: worktree, encoding: "utf-8" }).trim();
+				}
+			}
+			return out;
+		});
+		assert.equal(result.kind, "failed");
+		if (result.kind !== "failed") return;
+		assert.match(result.detail, /HEAD moved between the equivalence proof and the merge/);
+		assert.notEqual(sneakOid, "");
+		assert.notEqual(sneakOid, capturedHead);
+		// Rollback restored the mover's commit — only the tainted merge commit is gone.
+		assert.equal(execSync("git rev-parse HEAD", { cwd: worktree, encoding: "utf-8" }).trim(), sneakOid);
+		assert.equal(existsSync(join(worktree, "src/up.ts")), false, "the mover's work survives the rollback");
+		const originMainOid = execSync("git rev-parse origin/main", { cwd: worktree, encoding: "utf-8" }).trim();
+		assert.throws(() => execFileSync("git", ["merge-base", "--is-ancestor", originMainOid, "HEAD"], { cwd: worktree, stdio: "ignore" }), "no ancestry may survive the refused probe");
+		assert.throws(() => execFileSync("git", ["rev-parse", "-q", "--verify", "MERGE_HEAD"], { cwd: worktree, stdio: "ignore" }));
+	});
+
+	it("a failed post-ours probe cannot be laundered by resume: the branch is restored and the next run re-proves", () => {
+		const { worktree, origin } = makeFreshnessPair();
+		commitFile(origin, "src/up.ts", "export const up = 1;\n", "upstream");
+		commitFile(worktree, "src/feature.ts", "export const feat = 1;\n", "feature-only");
+		commitFile(worktree, "src/up.ts", "export const up = 1;\n", "copy up");
+		const capturedHead = execSync("git rev-parse HEAD", { cwd: worktree, encoding: "utf-8" }).trim();
+		const first = preparePrShipFreshness(worktree, (args, cwd) => {
+			// Sabotage only the post-merge tree probe (any ^{tree} read of a commit other
+			// than the captured HEAD): the ours merge itself is real.
+			if (args[0] === "rev-parse" && args[1]?.endsWith("^{tree}") && args[1] !== `${capturedHead}^{tree}`) return "0000000000000000000000000000000000000000\n";
+			return execFileSync("git", [...args], { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+		});
+		assert.equal(first.kind, "failed");
+		if (first.kind !== "failed") return;
+		assert.match(first.detail, /HEAD tree changed/);
+		assert.match(first.detail, /rolled the branch back to/);
+		// The tainted merge commit is gone: HEAD is back at the captured OID and
+		// origin/main is NOT an ancestor, so a resume cannot classify `up-to-date`.
+		assert.equal(execSync("git rev-parse HEAD", { cwd: worktree, encoding: "utf-8" }).trim(), capturedHead);
+		const originMainOid = execSync("git rev-parse origin/main", { cwd: worktree, encoding: "utf-8" }).trim();
+		assert.throws(() => execFileSync("git", ["merge-base", "--is-ancestor", originMainOid, "HEAD"], { cwd: worktree, stdio: "ignore" }));
+		// The next evaluation re-proves from scratch and only then records ancestry.
+		const second = preparePrShipFreshness(worktree);
+		assert.equal(second.kind, "content-integrated");
+		if (second.kind !== "content-integrated") return;
+		assert.equal(execSync("git rev-parse HEAD^2", { cwd: worktree, encoding: "utf-8" }).trim(), second.originMainOid);
+	});
+
+	it("a planted replace ref cannot fake equivalence: the proof reads real objects and routes to the ordinary merge", () => {
+		const { worktree, origin } = makeFreshnessPair();
+		commitFile(origin, "src/up.ts", "export const up = 1;\n", "upstream change NOT copied");
+		commitFile(worktree, "src/feature.ts", "export const feat = 1;\n", "feature-only");
+		execSync("git fetch -q origin main", { cwd: worktree });
+		const realOriginMain = execSync("git rev-parse origin/main", { cwd: worktree, encoding: "utf-8" }).trim();
+		// Attack: replace the fetched origin/main commit with a fabricated commit whose
+		// tree equals HEAD's tree, so plain-git diff-trees would report equivalence.
+		const mergeBase = execSync(`git merge-base HEAD ${realOriginMain}`, { cwd: worktree, encoding: "utf-8" }).trim();
+		const fake = execSync(`git commit-tree "HEAD^{tree}" -p ${mergeBase} -m fake`, { cwd: worktree, encoding: "utf-8" }).trim();
+		execSync(`git replace ${realOriginMain} ${fake}`, { cwd: worktree });
+		// Sanity: with replace refs honored, the real upstream delta is invisible.
+		assert.equal(execSync(`git diff-tree -r --name-only HEAD ${realOriginMain}`, { cwd: worktree, encoding: "utf-8" }).trim(), "");
+		const result = preparePrShipFreshness(worktree);
+		assert.notEqual(result.kind, "content-integrated");
+		assert.equal(result.kind, "merged");
+		if (result.kind !== "merged") return;
+		assert.ok(result.upstreamTouchedFiles.includes("src/up.ts"), "the proof must see the real upstream write-set");
+		// The ordinary merge integrated the REAL upstream content, not the replacement.
+		assert.equal(readFileSync(join(worktree, "src/up.ts"), "utf-8"), "export const up = 1;\n");
 	});
 });
 

@@ -1267,7 +1267,12 @@ export function hasDeliverableCommits(worktree: string): boolean {
 /** Argv Git invoker. Same `(args, cwd) => string` shape as `GitExec` in review/seats.ts. */
 export type GitArgvExec = (args: readonly string[], cwd: string) => string;
 
-const defaultGitArgvExec: GitArgvExec = (args, cwd) => execFileSync("git", [...args], { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+// GIT_NO_REPLACE_OBJECTS: a worktree-planted `refs/replace/*` entry could otherwise
+// hide upstream deltas from the freshness equivalence proof (the ref still resolves to
+// the real OID while object reads see the replacement), letting `-s ours` record
+// ancestry over a tree that silently drops upstream content. Disable replace refs for
+// every invocation in the freshness proof/merge/verify path.
+const defaultGitArgvExec: GitArgvExec = (args, cwd) => execFileSync("git", [...args], { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" } });
 
 /**
  * Non-failed results retain `originMainOid` — the OID `origin/main` resolved to when this
@@ -1332,8 +1337,18 @@ function resolveOriginMainOid(run: GitArgvExec, cwd: string): string | null {
 	return result.ok && result.out !== "" ? result.out : null;
 }
 
+function oidIsAncestor(run: GitArgvExec, cwd: string, ancestor: string, descendant: string): boolean {
+	return tryGitArgv(run, ["merge-base", "--is-ancestor", ancestor, descendant], cwd).ok;
+}
+
 function oidIsAncestorOfHead(run: GitArgvExec, cwd: string, oid: string): boolean {
-	return tryGitArgv(run, ["merge-base", "--is-ancestor", oid, "HEAD"], cwd).ok;
+	return oidIsAncestor(run, cwd, oid, "HEAD");
+}
+
+/** Peeled commit OID for a revision, or null when it does not resolve to a commit. */
+function resolveCommitOid(run: GitArgvExec, cwd: string, revision: string): string | null {
+	const result = tryGitArgv(run, ["rev-parse", "--verify", `${revision}^{commit}`], cwd);
+	return result.ok && result.out !== "" ? result.out : null;
 }
 
 function upstreamTouchedFrom(run: GitArgvExec, cwd: string, incomingRef: string): string[] {
@@ -1343,16 +1358,16 @@ function upstreamTouchedFrom(run: GitArgvExec, cwd: string, incomingRef: string)
 	return gitNameOnly(run, ["diff", "--name-only", `HEAD...${incomingRef}`], cwd);
 }
 
-/** Unique merge-base of HEAD and the retained OID, or null on Git failure / 0 / 2+ bases. */
-function uniqueMergeBase(run: GitArgvExec, cwd: string, originMainOid: string): string | null {
-	const result = tryGitArgv(run, ["merge-base", "--all", "HEAD", originMainOid], cwd);
+/** Unique merge-base of the captured HEAD OID and the retained OID, or null on Git failure / 0 / 2+ bases. */
+function uniqueMergeBase(run: GitArgvExec, cwd: string, headOid: string, originMainOid: string): string | null {
+	const result = tryGitArgv(run, ["merge-base", "--all", headOid, originMainOid], cwd);
 	if (!result.ok) return null;
 	const oids = result.out.split("\n").filter(Boolean);
 	return oids.length === 1 ? (oids[0] ?? null) : null;
 }
 
-function headTreeOid(run: GitArgvExec, cwd: string): string | null {
-	const result = tryGitArgv(run, ["rev-parse", "HEAD^{tree}"], cwd);
+function treeOidOf(run: GitArgvExec, cwd: string, commitish: string): string | null {
+	const result = tryGitArgv(run, ["rev-parse", `${commitish}^{tree}`], cwd);
 	return result.ok && result.out !== "" ? result.out : null;
 }
 
@@ -1372,22 +1387,31 @@ function nulDiffTreePaths(run: GitArgvExec, cwd: string, a: string, b: string): 
 
 /**
  * If the net upstream write-set is already tree-entry equivalent at HEAD, record
- * ancestry with `-s ours` and return that outcome. Incomplete proof (ambiguous
- * base, unreadable diff-tree, pre-merge tree snapshot failure) returns `null` so
- * the caller takes the ordinary merge — not `kind: "failed"`. `failed` is reserved
- * for an `ours` merge that exited 0 and then failed the tree-OID or ancestry check.
+ * ancestry with `-s ours` and return that outcome. The proof binds to the HEAD
+ * commit OID captured up front — `git merge` itself operates on symbolic HEAD, so
+ * the post-merge probes require the created merge commit to sit exactly on the
+ * captured OID (first parent), carry the fetched OID as its second parent, and
+ * preserve the captured tree. Incomplete proof (unresolvable HEAD, ambiguous base,
+ * unreadable diff-tree, pre-merge tree snapshot failure) returns `null` so the
+ * caller takes the ordinary merge — not `kind: "failed"`. `failed` is reserved for
+ * an `ours` merge that exited 0 and then failed a probe; the harness then rolls
+ * the branch back to the merge's own first parent (`reset --keep`, discarding only
+ * its own tainted merge commit — never a HEAD it does not recognize) so a later
+ * resume cannot launder the unproven ancestry through the `up-to-date` path.
  */
 function tryRecordAlreadyPresentAncestry(run: GitArgvExec, cwd: string, originMainOid: string): PrShipFreshnessResult | null {
-	const mergeBase = uniqueMergeBase(run, cwd, originMainOid);
+	const headOid = resolveCommitOid(run, cwd, "HEAD");
+	if (!headOid) return null;
+	const mergeBase = uniqueMergeBase(run, cwd, headOid, originMainOid);
 	if (!mergeBase) return null;
 	const upstream = nulDiffTreePaths(run, cwd, mergeBase, originMainOid);
 	if (!upstream.ok) return null;
-	const endpoint = nulDiffTreePaths(run, cwd, "HEAD", originMainOid);
+	const endpoint = nulDiffTreePaths(run, cwd, headOid, originMainOid);
 	if (!endpoint.ok) return null;
 	const endpointSet = new Set(endpoint.paths);
 	if (upstream.paths.some((path) => endpointSet.has(path))) return null;
 
-	const preTree = headTreeOid(run, cwd);
+	const preTree = treeOidOf(run, cwd, headOid);
 	if (!preTree) return null;
 	const merged = tryGitArgv(run, ["merge", "--no-edit", "--strategy=ours", originMainOid], cwd);
 	if (!merged.ok) {
@@ -1402,15 +1426,37 @@ function tryRecordAlreadyPresentAncestry(run: GitArgvExec, cwd: string, originMa
 		}
 		return null;
 	}
-	const postTree = headTreeOid(run, cwd);
-	if (!postTree) {
-		return { kind: "failed", detail: "ours merge succeeded but HEAD tree could not be re-read" };
-	}
-	if (postTree !== preTree) {
-		return { kind: "failed", detail: "ours merge succeeded but HEAD tree changed — refusing to treat as content-integrated" };
-	}
-	if (!oidIsAncestorOfHead(run, cwd, originMainOid)) {
-		return { kind: "failed", detail: "ours merge succeeded but fetched origin/main is not an ancestor of HEAD" };
+	const newHead = resolveCommitOid(run, cwd, "HEAD");
+	const firstParent = newHead ? resolveCommitOid(run, cwd, `${newHead}^1`) : null;
+	const secondParent = newHead ? resolveCommitOid(run, cwd, `${newHead}^2`) : null;
+	const postTree = newHead ? treeOidOf(run, cwd, newHead) : null;
+	const probeFailure =
+		!newHead || !firstParent || !postTree
+			? "ours merge succeeded but the merge commit could not be re-read"
+			: secondParent !== originMainOid
+				? "ours merge succeeded but the merge commit does not carry the fetched origin/main OID as its second parent"
+				: firstParent !== headOid
+					? "ours merge succeeded but HEAD moved between the equivalence proof and the merge"
+					: postTree !== preTree
+						? "ours merge succeeded but HEAD tree changed — refusing to treat as content-integrated"
+						: !oidIsAncestor(run, cwd, originMainOid, newHead)
+							? "ours merge succeeded but fetched origin/main is not an ancestor of HEAD"
+							: null;
+	if (probeFailure) {
+		// Discard the tainted merge commit so a resume cannot classify the branch
+		// `up-to-date` on ancestry this probe just refused. Roll back only when HEAD is
+		// recognizably the harness's own ours merge of the fetched OID; the reset target
+		// is that merge's own first parent (== the captured OID unless HEAD moved
+		// mid-attempt, in which case the mover's commit is preserved). `--keep` refuses
+		// rather than clobbering local modifications.
+		if (newHead && firstParent && secondParent === originMainOid) {
+			const rolledBack = tryGitArgv(run, ["reset", "--keep", firstParent], cwd);
+			return {
+				kind: "failed",
+				detail: rolledBack.ok ? `${probeFailure}; rolled the branch back to ${firstParent}` : `${probeFailure}; rollback to ${firstParent} FAILED (${rolledBack.detail}) — branch retains an unproven merge commit`,
+			};
+		}
+		return { kind: "failed", detail: `${probeFailure}; branch left as-is (HEAD is not the expected ours merge commit)` };
 	}
 	return { kind: "content-integrated", upstreamTouchedFiles: upstream.paths, originMainOid };
 }
@@ -1427,7 +1473,8 @@ function tryRecordAlreadyPresentAncestry(run: GitArgvExec, cwd: string, originMa
  * instead of replaying content. Proof/Git ambiguity skips that shortcut and uses
  * the ordinary merge; it does not fail the cycle.
  *
- * Never runs `merge --abort`, reset, or clean.
+ * Never runs `merge --abort` or clean; the only reset is the post-probe rollback
+ * of the harness's own `ours` merge commit (`tryRecordAlreadyPresentAncestry`).
  */
 export function preparePrShipFreshness(worktree: string, exec?: GitArgvExec): PrShipFreshnessResult {
 	const run = exec ?? defaultGitArgvExec;
