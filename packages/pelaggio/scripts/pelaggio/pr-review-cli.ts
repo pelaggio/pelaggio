@@ -160,16 +160,18 @@ export interface RunPrReviewGateOptions {
 /** Validated carry plan handed to the gate (#495). Eligibility (D3 + I3) is applied by
  *  planCarry BEFORE the gate ever sees an entry — the gate only executes it. */
 export interface PrReviewCarryInput {
-	/** 40-hex prior reviewed head, a proven ancestor of this run's reviewedSha. */
-	priorSha: string;
+	/** 40-hex narrowing watermark (a proven complete ancestor). Absent in overlay-only mode —
+	 *  blockers seed with no watermark, so discovery runs cold (#495 round-5). Present ⇒ a
+	 *  watermark exists (narrowing is then gated additionally on a non-empty interdiff). */
+	priorSha?: string;
 	/** Prior survivors, fingerprint-keyed. Seeded unconditionally (toward blocking, I2). */
 	seedSurvivors: ReadonlyMap<string, ReviewFinding>;
 	/** Prior-refuted entries eligible for deterministic auto-refutation (untouched path, non-safety). */
 	autoRefutable: ReadonlyMap<string, PrCarryRefutedEntry>;
 	/** Rule-3 refutation memory for the new record. */
 	carriedForward: readonly PrCarryRefutedEntry[];
-	/** True iff carry validated AND the two-dot interdiff is non-empty: discovery seats review
-	 *  `priorSha..reviewedSha` instead of the full PR range (D5). */
+	/** True iff a watermark exists AND the two-dot interdiff is non-empty: discovery seats review
+	 *  `priorSha..reviewedSha` instead of the full PR range (D5). Always false in overlay-only. */
 	narrowed: boolean;
 }
 
@@ -877,7 +879,7 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 	// #495 D5: a narrowed run scopes DISCOVERY to the interdiff (prior..reviewedSha) via the
 	// trusted-context refs; the inspection diff, security signal, and verification context keep
 	// the full range — two ranges, two roles, both computed by the harness.
-	const discoveryContext = carry?.narrowed && options.reviewedSha ? trustedLocalContext({ diffCwd, diffBaseRef: carry.priorSha, diffHeadRef: options.reviewedSha }) : localContext;
+	const discoveryContext = carry?.narrowed && carry.priorSha && options.reviewedSha ? trustedLocalContext({ diffCwd, diffBaseRef: carry.priorSha, diffHeadRef: options.reviewedSha }) : localContext;
 	// #495 store-trust: local review/verify seats historically ran at cwd=REPO (the trusted main
 	// checkout) with NO denial hooks installed — carry makes the .dev evidence stores
 	// AUTHORIZATION inputs, so a prompt-injected seat could forge a disposition + fleet-record
@@ -1092,7 +1094,7 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 	// When carry was supplied but the pool is store-untrusted, the run went cold on purpose — say
 	// so, so `carry=none` is not misread as first-run.
 	const carryToken = carry
-		? `carry=${carry.priorSha.slice(0, 7)} seeded=${carry.seedSurvivors.size} auto-refutable=${carry.autoRefutable.size} auto-refuted=${autoRefuted.size}`
+		? `carry=${carry.priorSha ? carry.priorSha.slice(0, 7) : "overlay"} seeded=${carry.seedSurvivors.size} auto-refutable=${carry.autoRefutable.size} auto-refuted=${autoRefuted.size}`
 		: options.carry && !storeTrust.trusted
 			? "carry=refused-untrusted-pool"
 			: "carry=none";
@@ -1272,6 +1274,18 @@ export function resolveCarryOptions(opts: {
 	if (selection.kind === "refused") {
 		opts.warn(`carry disabled — ${selection.reason}; running a full cold review`);
 		return undefined;
+	}
+	if (selection.kind === "overlay-only") {
+		// No complete watermark ancestor → no narrowing base and no auto-refutation authority, but
+		// the non-watermark ancestors' retained blockers must still seed so an omission cannot green
+		// them (independent axes, round-5 must-fix). No git ancestry/interdiff work is needed.
+		const seedSurvivors = new Map<string, ReviewFinding>();
+		for (const entry of selection.overlaySurvivors) seedSurvivors.set(entry.fingerprint, entry.finding);
+		if (seedSurvivors.size === 0) return undefined;
+		opts.warn(
+			`carry: no complete watermark ancestor for PR ${opts.prNumber} — seeding ${seedSurvivors.size} blocker(s) from non-watermark record(s) [${selection.overlayNotes.join(", ")}] as blocking-only overlay; discovery runs cold (no narrowing)`,
+		);
+		return { seedSurvivors, autoRefutable: new Map(), carriedForward: [], narrowed: false };
 	}
 	const record = selection.record;
 	if (selection.overlayNotes.length > 0) {

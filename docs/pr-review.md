@@ -301,9 +301,17 @@ provider in the run's pool has a *proven* store-write denial — the check is
 store-writable, consumption is refused and the run goes cold (`carry=refused-untrusted-pool`
 in the comment token; a stderr diagnostic names the untrusted provider). Record *writing*
 is unaffected — the run still emits its own cold disposition record, it is simply not
-trusted for seeding/narrowing. So a poisoned record can never authorize a fail-open
-regardless of the `review.carry` default. Default-DENY: an unknown/new provider is
-store-writable until proven.
+trusted for seeding/narrowing. Default-DENY: an unknown/new provider is store-writable
+until proven.
+
+**Two honest limits on that guarantee.** (1) `poolStoreTrust` gates only the CURRENT run's
+pool; disposition records carry no producer-pool provenance, so a record written earlier by
+a store-writable pool (e.g. a grok-fallback run while carry was off) remains consumable by a
+later all-trusted run. That is the pre-enablement-priors residual below, whose discard is a
+#605 precondition — the current-pool gate is not a substitute for it. (2) The store-write
+denial's *completeness* rests on #511 (harness-attested evidence): the Claude seats' Bash
+register denial is textual (#510), so a composed-path shell command can still evade it until
+#511 makes the store non-forgeable. Both are why `review.carry` ships off.
 
 - **Store-trusted (proven denial): `claude`, `codex`.** Claude — the gate threads the
   foreign-root denial into every seat regardless of cwd, so the step-runner installs its
@@ -324,12 +332,12 @@ store-writable until proven.
   `providers.grok.allow-unsandboxed-fallback: true` removes the sandbox entirely; OpenCode
   has no semantic deny, no OS isolation, and ignores `foreignRootDenial`.
 
-The default is `false` (rather than `true`) as belt-and-braces canary while the mechanism
-proves out — not because consumption safety depends on it (it does not). **#605** narrows
-to exactly two things: prove grok's store-write denial at main cwd and add `grok` to the
-store-trusted set (else keep it excluded), and discard/re-validate pre-enablement priors
-(below) before flipping the default. It is no longer "gate every provider" — consumption
-is gated by construction.
+The default is `false` because the current-pool consumption gate is necessary but not
+sufficient on its own (the two limits above). **#605** narrows to: prove grok's store-write
+denial at main cwd and add `grok` to the store-trusted set (else keep it excluded), discard/
+re-validate pre-enablement priors (below) before flipping the default, and depends on #511
+for the non-forgeable store. The current-pool gate already narrows #605 from "gate every
+provider" to those residuals.
 
 **Pre-enablement priors are not automatically trustworthy.** Records are written while
 `review.carry` is off, including by pools that contained an unsandboxed or unverified seat

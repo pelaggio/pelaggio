@@ -9,6 +9,7 @@ import {
 	buildCarryDispositionDraft,
 	CARRY_MAX_PRIOR_CANDIDATES,
 	type CarrySourceSelection,
+	canonicalRepoRelPath,
 	computeTouchedPaths,
 	FINDING_DISPOSITION_MAX_ENTRIES,
 	isCompleteWatermark,
@@ -205,14 +206,24 @@ describe("selectCarrySource", () => {
 		}
 	});
 
-	it("skips an incomplete prior (ok=false) — not a valid narrowing watermark", () => {
-		// An infra/parse/preflight failure reviewed only a subset of the pool; narrowing to its head
-		// could PASS on code no complete fleet read. It is excluded from candidates entirely.
-		assert.deepEqual(select([boundRecord(SHA_A, { ok: false })]), { kind: "none" });
+	it("an incomplete prior is never a narrowing watermark; with no blockers it is `none`", () => {
+		// An infra/parse/preflight failure reviewed only a subset of the pool, so narrowing to its
+		// head could PASS on code no complete fleet read — it is never a watermark. With empty
+		// survived there is nothing to overlay either → `none` (byte-identical to first-run).
+		assert.deepEqual(select([boundRecord(SHA_A, { ok: false, survived: [], refuted: [] })]), { kind: "none" });
+		assert.deepEqual(select([boundRecord(SHA_A, { agreement: "invalid", survived: [], refuted: [] })]), { kind: "none" });
 	});
 
-	it("skips an incomplete prior (agreement=invalid) — not a valid narrowing watermark", () => {
-		assert.deepEqual(select([boundRecord(SHA_A, { agreement: "invalid" })]), { kind: "none" });
+	it("an incomplete-only prior WITH a blocker overlays it (no watermark, cold discovery — round-5 must-fix)", () => {
+		// Every reachable ancestor is incomplete but one carries a blocker from a completed cell of
+		// an otherwise-invalid run. The blocker MUST seed (independent axes) — dropping it would let
+		// an omission clear it without the complete valid refutation I2 requires.
+		const blocker = survivor(finding("From a completed cell.", "src/x.ts", 9));
+		const selection = select([boundRecord(SHA_A, { ok: false, agreement: "invalid", survived: [blocker], refuted: [] })]);
+		assert.equal(selection.kind, "overlay-only");
+		if (selection.kind !== "overlay-only") return;
+		assert.deepEqual(selection.overlaySurvivors, [blocker]);
+		assert.deepEqual(selection.overlayNotes, [`495-${SHA_A}.json (incomplete)`]);
 	});
 
 	it("walks past an incomplete newer prior to the next-oldest COMPLETE watermark BUT overlays its blockers (round-4 must-fix)", () => {
@@ -263,14 +274,30 @@ describe("selectCarrySource", () => {
 		assert.deepEqual(select([older, newer]), { kind: "selected", record: newer, overlaySurvivors: [], overlayNotes: [] });
 	});
 
-	it("refuses when no prior still binds, naming the supersession cause (not a bare digest complaint)", () => {
-		const missing = select([record({ headSha: SHA_A, fleetRecordDigest: "1".repeat(64) })], { readFleetBytes: () => null });
+	it("refuses when no prior binds AND there are no blockers to overlay (nothing to carry)", () => {
+		// A bind-failed complete record with EMPTY survived: no watermark, no overlay → refuse with
+		// the supersession diagnostic.
+		const empty = record({ headSha: SHA_A, fleetRecordDigest: "1".repeat(64), survived: [], refuted: [] });
+		const missing = select([empty], { readFleetBytes: () => null });
 		assert.equal(missing.kind, "refused");
 		assert.match((missing as { reason: string }).reason, /superseded — e.g. a later pr-adjudicate rewrote the gate record/);
-		const mismatch = select([record({ headSha: SHA_A, fleetRecordDigest: "1".repeat(64) })], { readFleetBytes: () => Buffer.from("different bytes") });
+		const mismatch = select([empty], { readFleetBytes: () => Buffer.from("different bytes") });
 		assert.equal(mismatch.kind, "refused");
 		assert.match((mismatch as { reason: string }).reason, /no complete prior disposition record for PR 495 still binds/);
 		assert.match((mismatch as { reason: string }).reason, new RegExp(`495-${SHA_A}\\.json`));
+	});
+
+	it("a bind-failed complete record WITH blockers overlays them (no watermark, seeds anyway — round-5)", () => {
+		// The superseded record carried a blocker; the fleet record no longer binds. There is no
+		// watermark, but the blocker must still seed as blocking-only overlay (independent axes),
+		// not be dropped.
+		const blocker = survivor(finding("Superseded but retained.", "src/s.ts", 3));
+		const supersededWithBlocker = record({ headSha: SHA_A, fleetRecordDigest: "1".repeat(64), survived: [blocker], refuted: [] });
+		const selection = select([supersededWithBlocker], { readFleetBytes: () => Buffer.from("rewrote-me") });
+		assert.equal(selection.kind, "overlay-only");
+		if (selection.kind !== "overlay-only") return;
+		assert.deepEqual(selection.overlaySurvivors, [blocker]);
+		assert.deepEqual(selection.overlayNotes, [`495-${SHA_A}.json (superseded)`]);
 	});
 
 	it("falls back past a superseded newest record to the next bindable ancestor, keeping its blocking side", () => {
@@ -307,8 +334,27 @@ describe("selectCarrySource", () => {
 	});
 });
 
+describe("canonicalRepoRelPath (#495 round-5 — untouched-predicate canonicalization)", () => {
+	it("resolves . / .. and collapses repeated slashes to a clean repo-relative path", () => {
+		assert.equal(canonicalRepoRelPath("a/../b.ts"), "b.ts");
+		assert.equal(canonicalRepoRelPath("a//b.ts"), "a/b.ts");
+		assert.equal(canonicalRepoRelPath("./a/b.ts"), "a/b.ts");
+		assert.equal(canonicalRepoRelPath("a/b/../../c.ts"), "c.ts");
+		assert.equal(canonicalRepoRelPath("src\\a.ts"), "src/a.ts");
+	});
+
+	it("rejects (null → treated as touched/ineligible) absolute paths and repo-escaping paths", () => {
+		assert.equal(canonicalRepoRelPath("/abs/b.ts"), null);
+		assert.equal(canonicalRepoRelPath("../escape.ts"), null);
+		assert.equal(canonicalRepoRelPath("a/../../x.ts"), null);
+		assert.equal(canonicalRepoRelPath(""), null);
+		assert.equal(canonicalRepoRelPath("/dev/null"), null);
+		assert.equal(canonicalRepoRelPath(undefined), null);
+	});
+});
+
 describe("computeTouchedPaths", () => {
-	it("parses NUL-separated name-only output through normalizeGitPath", () => {
+	it("parses NUL-separated name-only output and canonicalizes each path", () => {
 		const touched = computeTouchedPaths("src/a.ts\0./src/b.ts\0\0");
 		assert.deepEqual([...touched].sort(), ["src/a.ts", "src/b.ts"]);
 	});
@@ -343,6 +389,19 @@ describe("planCarry eligibility (I3 + D3)", () => {
 	it("a touched anchoring path forces fresh re-verification (not auto-refutable)", () => {
 		const plan = planCarry(record({ survived: [], refuted: [eligible] }), new Set(["src/other.ts"]), TAXONOMY);
 		assert.equal(plan.autoRefutable.size, 0);
+	});
+
+	it("canonicalizes the finding path before matching, so a non-canonical path cannot dodge a real change (#495 round-5)", () => {
+		// touchedPaths carries the canonical git output `b.ts`; a model-authored `a/../b.ts` must
+		// canonicalize to `b.ts` and match → NOT auto-refutable (the file really changed).
+		const nonCanonical = refuted(finding("Alleged fix.", "a/../b.ts", 2));
+		const touched = computeTouchedPaths("b.ts\0");
+		assert.equal(planCarry(record({ survived: [], refuted: [nonCanonical] }), touched, TAXONOMY).autoRefutable.size, 0, "a/../b.ts resolves to b.ts, which is touched");
+		// Absolute and repo-escaping paths never read as provably-unaffected (null → treated as touched).
+		for (const badPath of ["/abs/b.ts", "../escape.ts"]) {
+			const entry = refuted(finding("Alleged fix.", badPath, 2));
+			assert.equal(planCarry(record({ survived: [], refuted: [entry] }), new Set(), TAXONOMY).autoRefutable.size, 0, `${badPath} is fail-closed to touched`);
+		}
 	});
 
 	it("safety never self-clears — by recorded tier AND by current-taxonomy resolution of the class", () => {

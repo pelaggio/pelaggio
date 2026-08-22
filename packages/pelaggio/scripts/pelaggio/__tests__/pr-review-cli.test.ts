@@ -2103,6 +2103,34 @@ describe("pr-review CLI cross-push carry (#495)", () => {
 		assert.ok(readPrFindingDispositionRecord(out.dispositionsRoot, 123, REVIEWED_SHA), "the cold run still writes its own record");
 	});
 
+	it("seeds a blocker from an incomplete-ONLY ancestor (overlay), which cannot be silently omitted (round-5 must-fix)", async () => {
+		// Every reachable ancestor is incomplete; one carries blocker S from a completed cell. No
+		// complete watermark → cold discovery (no narrowing), but S MUST seed and can only clear by
+		// explicit refutation — an omission must NOT green it.
+		const gitA = carryGit();
+		const retained = await runCli({
+			policy: reviewPolicy({ carry: true }),
+			seed: (roots) => seedPrior(roots, { ok: false, agreement: "invalid", survived: [seededSurvivor(S)] }),
+			gitExtra: gitA.handler,
+			results: [result(), verification([])], // discovery clean; verifier omits S → invalid pass
+		});
+		assert.equal(retained.code, 1, "the overlay blocker is retained on omission — not silently cleared");
+		assert.match(retained.calls[1]?.prompt ?? "", /Unfixed bug/, "the overlay blocker reached the verifier");
+		assert.match(retained.comments[0] ?? "", /carry=overlay seeded=1 auto-refutable=0/, "overlay: seeded, no watermark, no narrowing");
+		assert.doesNotMatch(retained.calls[0]?.prompt ?? "", new RegExp(`Base ref: ${PRIOR_SHA}`), "cold discovery — no narrowing base");
+		assert.deepEqual(gitA.calls, [`merge-base --is-ancestor ${PRIOR_SHA} ${REVIEWED_SHA}`], "overlay-only performs ancestry only — no rev-parse/interdiff");
+
+		// Explicit valid refutation clears it (I2, the door out).
+		const gitB = carryGit();
+		const cleared = await runCli({
+			policy: reviewPolicy({ carry: true }),
+			seed: (roots) => seedPrior(roots, { ok: false, agreement: "invalid", survived: [seededSurvivor(S)] }),
+			gitExtra: gitB.handler,
+			results: [result(), verification([{ candidateId: "C1", decision: "refuted", rationale: "Fixed at this head." }])],
+		});
+		assert.equal(cleared.code, 0, "an explicit valid refutation clears the seeded overlay blocker");
+	});
+
 	it("narrowing: discovery reviews prior..head while inspection and verification keep the full range", async () => {
 		const git = carryGit({ touched: ["src/a.ts"] });
 		const out = await runCli({

@@ -353,6 +353,16 @@ export type CarrySourceSelection =
 			/** Diagnostic notes for the overlaid records: `<file> (incomplete)` / `<file> (superseded)`. */
 			overlayNotes: string[];
 	  }
+	| {
+			/** No complete bindable watermark exists, so there is no narrowing base — BUT one or more
+			 *  non-watermark ancestors (incomplete, or bind-failed) carry retained blockers. The two
+			 *  axes are independent (#495 round-5 must-fix): blockers seed as blocking-only overlay
+			 *  regardless of whether a narrowing watermark exists, so a blocker from a completed cell
+			 *  of an otherwise-invalid run cannot be silently omitted. Discovery runs cold. */
+			kind: "overlay-only";
+			overlaySurvivors: PrCarrySurvivorEntry[];
+			overlayNotes: string[];
+	  }
 	| { kind: "refused"; reason: string };
 
 /**
@@ -412,7 +422,11 @@ export function selectCarrySource(
 	}
 	// Role 1: watermark candidates are the COMPLETE ancestors only.
 	const completeAncestors = ancestors.filter(isCompleteWatermark);
-	if (completeAncestors.length === 0) return { kind: "none" };
+	if (completeAncestors.length === 0) {
+		// No complete watermark → no narrowing. But if incomplete ancestors carried blockers, those
+		// still seed (independent axes, round-5 must-fix); with none, behave as first-run.
+		return overlaySurvivors.length > 0 ? { kind: "overlay-only", overlaySurvivors, overlayNotes } : { kind: "none" };
+	}
 	// Newest-first ancestry sort, then verify every ADJACENT pair. Ancestry is transitive, so an
 	// adjacent-ordered chain is a genuinely total chain even if the comparator saw a partial
 	// order during sorting; any unordered adjacent pair refuses.
@@ -437,18 +451,51 @@ export function selectCarrySource(
 		overlaySurvivors.push(...record.survived);
 		overlayNotes.push(`${record.prNumber}-${record.headSha}.json (superseded)`);
 	}
+	// No complete bindable watermark. Seed any accumulated overlay blockers (from superseded and/or
+	// incomplete ancestors) with cold discovery (independent axes); with none to seed, refuse with
+	// the supersession diagnostic (genuinely nothing to carry).
+	if (overlaySurvivors.length > 0) return { kind: "overlay-only", overlaySurvivors, overlayNotes };
 	return {
 		kind: "refused",
 		reason: `no complete prior disposition record for PR ${opts.prNumber} still binds to its on-disk fleet gate record (each was superseded — e.g. a later pr-adjudicate rewrote the gate record at that head): ${superseded.join(", ")}`,
 	};
 }
 
-/** Parse `git diff --no-renames --name-only -z` output into normalized touched paths. With
+/**
+ * Canonical repo-relative form for the untouched-path predicate (#495 round-5). The
+ * eligibility gate compares a model-authored `finding.path` against `git --name-only` output;
+ * `normalizeGitPath` alone does not resolve `.`/`..`, collapse `//`, or reject absolutes, so a
+ * non-canonical model path (`a/../b.ts`, `a//b.ts`) would never match a real change to `b.ts`
+ * and read as "provably unaffected" while the file changed (fail-open). This canonicalizes both
+ * sides identically: strips backslashes/`./`, collapses repeated slashes, resolves `.`/`..`, and
+ * returns `null` — treated as touched / ineligible, fail-closed — for anything that does not
+ * reduce to a clean repo-relative path (absolute paths, or `..` escaping the repo root). Applied
+ * to BOTH `computeTouchedPaths` and the `planCarry` predicate so the two sides agree.
+ */
+export function canonicalRepoRelPath(path: string | undefined): string | null {
+	if (typeof path !== "string") return null;
+	const p = path.trim().replace(/\\/g, "/");
+	if (p === "" || p === "/dev/null") return null;
+	if (p.startsWith("/")) return null; // absolute → not a repo-relative path (fail-closed)
+	const out: string[] = [];
+	for (const segment of p.split("/")) {
+		if (segment === "" || segment === ".") continue; // collapse `//` and `.`
+		if (segment === "..") {
+			if (out.length === 0) return null; // escapes the repo root → fail-closed
+			out.pop();
+			continue;
+		}
+		out.push(segment);
+	}
+	return out.length > 0 ? out.join("/") : null;
+}
+
+/** Parse `git diff --no-renames --name-only -z` output into canonical touched paths. With
  *  `--no-renames` a rename is a delete + create, so BOTH sides land in the set (D3). */
 export function computeTouchedPaths(nameOnlyZOutput: string): Set<string> {
 	const touched = new Set<string>();
 	for (const raw of nameOnlyZOutput.split("\0")) {
-		const path = normalizeGitPath(raw);
+		const path = canonicalRepoRelPath(raw);
 		if (path !== null) touched.add(path);
 	}
 	return touched;
@@ -498,7 +545,10 @@ export function planCarry(record: PrFindingDispositionRecordV1, touchedPaths: Re
 			if (blockingOverlay.some((survivor) => survivor.fingerprint === entry.fingerprint)) continue;
 			throw new Error(`carry plan: fingerprint in both survived and refuted: ${entry.fingerprint}`);
 		}
-		const path = normalizeGitPath(entry.finding.path);
+		// Canonicalize the model-authored path the SAME way computeTouchedPaths canonicalizes the
+		// git output; a non-canonical, absolute, or repo-escaping path is null → treated as touched
+		// (ineligible), fail-closed — never "provably unaffected".
+		const path = canonicalRepoRelPath(entry.finding.path);
 		if (path === null || touchedPaths.has(path)) continue;
 		if (entry.tier === "safety" || tierOf(entry.class, taxonomy) === "safety") continue;
 		autoRefutable.set(entry.fingerprint, {
