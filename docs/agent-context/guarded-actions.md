@@ -467,6 +467,60 @@ The checklist a new guard must pass.
    *Detector:* an absorbing-without-progress state lacking `clearedBy`. *Closes with:*
    the §6 invariant, enforced by the §7 discriminated union.
 
+### 8.1 The over-refusal taxonomy — the second half of the checklist
+
+Items 1–9 catch guards that are **unsound** (they lose correctness). This half catches
+guards that are sound but **over-aggressive** (they lose work). The operating history
+funds it: the ship dirty-refusal exit stranding authored revision work, the confinement
+audit learned as a before/after delta rather than absolute-dirty, cycle aborts on
+sibling-worktree writes, `block (infra)` burning entitlements (§2.3), and — in the
+runner-protocol design — a transient heartbeat blip expiring a healthy lease. Each was
+re-derived separately; this section hoists the lesson so a new gate inherits it instead.
+
+The bar, one sentence, in §3's spirit:
+
+> **A gate earns its place by being *early* (it fires before work exists), *narrow* (it
+> refuses the violating dimension, never the work), *preserving* (a refusal never
+> destroys or strands state, and names the resume path), and *falsifiable* (it ships
+> with proof it does not fire on legitimate input).** Judgment informs and mechanism
+> gates (ADR-0014); this bar governs how gates behave, never whether to add more — the
+> check-ratchet hypothesis is refuted (`throughput-economy.md`), so the bar is a quality
+> floor for necessary gates, not a license to multiply them.
+
+As failure modes, checklist-style:
+
+10. **Late gate** — the check fires after work is invested when it could have fired
+    before any exists. *Detector:* refusal cost scales with work done, not with the
+    violation; verification is not the first act of the guarded unit. *Closes with:*
+    verification-before-work ordering (claims, resume checks, auth-class, admission all
+    precede the first seat spawn).
+11. **Broad refusal** — the gate refuses the work when only a dimension of it violates.
+    *Detector:* the refusal message offers no proceed path; the check evaluates absolute
+    state rather than the delta the guarded action introduced (the `.dev/`
+    confinement lesson: audit before/after, never absolute-dirty). *Closes with:*
+    redirect-over-discard (block the auth class, the target, the dimension — run the
+    work another way) and delta-scoped predicates.
+12. **Destructive refusal** — the refusal path destroys or strands uncommitted state.
+    *Detector:* a refusal exit that neither checkpoints/parks nor provably leaves local
+    state intact; a message that does not name the preserved state and the resume path.
+    *Closes with:* the `parkExit()` discipline as an invariant on every refusal exit —
+    refusal ≠ discard.
+13. **Irreversible-too-early** — a tripped guard becomes final before any successor has
+    consumed the contested resource. *Detector:* no reclaim window between trip and
+    consequence. *Closes with:* reversible-until-consumed (lease expiry reclaimable by
+    the holder until a successor is granted; entitlements burn on outcome, not attempt —
+    P3's twin).
+14. **Untested for false fire** — the gate ships with true-positive tests only.
+    *Detector:* no test asserts the gate stays silent on legitimate input at the
+    operating envelope's edge (budget-edge liveness, sub-reclaim-window blips,
+    clean-baseline deltas); no tracked false-refusal metric. *Closes with:* no-false-fire tests as a
+    shipping requirement — a gate that cannot afford its false-positive tests does not
+    ship.
+
+§2.3 is the bridge between the halves: collapsing "cannot evaluate" into "evaluated as
+bad" is simultaneously unsound (a verdict without evidence) and over-aggressive (work
+lost to an outage). A gate that passes both halves cannot make that collapse.
+
 ## 9. What this subsumes
 
 - P1 fence: #401, ADR-0025 implementation, #409/#410.
@@ -527,6 +581,12 @@ Steps 1–3 are independently valuable if the rest is never built.
    defect.
 
 ## Revision log
+
+**v4** (2026-08-22) — added §8.1, the over-refusal taxonomy: the gate-quality bar
+(early / narrow / preserving / falsifiable) and failure modes 10–14, hoisting the
+repeatedly re-derived lesson (ship dirty-refusal, delta-not-absolute confinement,
+lease-blip expiry from the runner-protocol design) into the new-guard checklist.
+Routed from the AGENTS.md invariant added in the same change.
 
 **v3** — second `doc-review` pass, 3/3 seats (claude + codex + grok), 13 must-fix and 8
 notes. Accepted:
