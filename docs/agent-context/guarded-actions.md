@@ -1,7 +1,13 @@
 # Guarded actions: a fencing/reconciliation model for pelaggio's locks and gates
 
-Status: design exploration, pre-decision. v3, revised across two provider-diverse review
-passes (see the revision log). Verified against `4a6ac3c` unless noted.
+Status: design exploration, superseded in part (see below). **v5** — v3 was revised
+across two provider-diverse review passes; v4 added §8.1 (2026-08-22); v5 applies the
+v4 review pass (see the revision log). **Verification baseline, honestly:** the
+code-referencing claims in §1–§7 were verified against `4a6ac3c` (2026-08-06) and have
+drifted — the issue cluster was closed and re-cut into the G-series on 2026-08-07
+(e.g. #466 "G3 — Token"), and `blockForeignRootWrite`'s denied-root set has grown. The
+audit's *shape* stands; treat its counts and issue pointers as the 2026-08-06 snapshot
+and follow the G-series for current work.
 
 **Scope of confidence.** These parts are not equally settled, and the review passes made
 that split visible rather than closing it:
@@ -21,7 +27,13 @@ than one; `clearedBy` naming an actor on every blocking variant; the minimum shi
 including attempt identity; the precise `blockForeignRootWrite` residual). This document
 remains the evidence base, the full guard audit, and the §8 new-guard checklist. Its earlier
 recommendation of "an ADR per primitive" was **not** taken, deliberately: the primitives are
-not independently decidable, and ADR-0026 records why.
+not independently decidable, and ADR-0026 records why. The v4 review pass *confirmed*
+internal defects in the superseded design sections — the §6 clearing contract conflicts
+with §7.2/§7.3's operator-remedy and retry edges; §7.1's `softened` plumbing would read
+incomplete seats as policy blocks; §7.2's evidence values entangle completeness with
+cause; §7.3's bounded retry rests on a lock §4 classifies as a hint — **do not implement
+from §5–§7; ADR-0026 is the sole authority there**, and these confirmations are recorded
+rather than repaired precisely because the ADR already decided past them.
 
 ## 1. The complaint, stated precisely
 
@@ -44,8 +56,11 @@ Evidence, measured:
   --include=*.ts | grep -v __tests__`; hyphen-only gives 38/21, the broadest
   case-insensitive variant 87/27). There is no shared type, no shared disposition, and no
   shared clearing contract behind any of them.
-- Open issues in this exact cluster: #401, #402, #435, #439, #444, #445, #450, #451,
-  #453, #455, #460, #461, plus the planned-but-unbuilt #409/#410 admission work.
+- Open issues in this exact cluster *(2026-08-06 snapshot — most closed as COMPLETED
+  on 2026-08-07 and re-cut into the G-series, e.g. #466 "G3 — Token"; the evidence
+  stands as history, the pointers do not route to current work)*: #401, #402, #435,
+  #439, #444, #445, #450, #451, #453, #455, #460, #461, plus the then-planned
+  #409/#410 admission work.
 - The cost is measurable, not theoretical. #453: *"6 open PRs hold ~$260 of stranded
   work-in-progress"* — created by a fail-closed edge with no release edge.
 
@@ -210,7 +225,10 @@ and the second is what makes the allocator trustworthy rather than merely atomic
 1. *Allocation is atomic* — concurrent resumptions cannot mint the same sequence.
 2. *The allocator lives in a harness-owned, agent-denied register.* An O_EXCL create in a
    generic `.dev/` path gives atomicity but **not authority**: `blockForeignRootWrite`
-   denies agent writes only under `MAIN_REPO/.dev/sessions/` and `docs/decision-log/`, so
+   denied agent writes at the 4a6ac3c baseline only under `MAIN_REPO/.dev/sessions/` and
+`docs/decision-log/` — the deny set has since grown (`step-runner.ts` now also denies
+the gate-records, adjudication-sources, and freshness-gate-records registers, with
+matching Bash patterns) — so
    anywhere else the very agent being fenced can unlink or forge the sequence. The
    allocator must join that denied set, on the same footing as session records.
 
@@ -474,18 +492,25 @@ guards that are sound but **over-aggressive** (they lose work). The operating hi
 funds it: the ship dirty-refusal exit stranding authored revision work, the confinement
 audit learned as a before/after delta rather than absolute-dirty, cycle aborts on
 sibling-worktree writes, `block (infra)` burning entitlements (§2.3), and — in the
-runner-protocol design — a transient heartbeat blip expiring a healthy lease. Each was
+runner-protocol design (recorded publicly as the work-preservation and no-false-refusal
+requirements on issues #606/#607; the design ADRs live in the operator's private
+notebook) — a transient heartbeat blip expiring a healthy lease. Each was
 re-derived separately; this section hoists the lesson so a new gate inherits it instead.
 
 The bar, one sentence, in §3's spirit:
 
-> **A gate earns its place by being *early* (it fires before work exists), *narrow* (it
-> refuses the violating dimension, never the work), *preserving* (a refusal never
-> destroys or strands state, and names the resume path), and *falsifiable* (it ships
-> with proof it does not fire on legitimate input).** Judgment informs and mechanism
-> gates (ADR-0014); this bar governs how gates behave, never whether to add more — the
-> check-ratchet hypothesis is refuted (`throughput-economy.md`), so the bar is a quality
-> floor for necessary gates, not a license to multiply them.
+> **A gate earns its place by being *early* (it fires at the cheapest point — no later
+> than the first moment the violation is knowable, before further work compounds on
+> it), *narrow* (it refuses the violating dimension, never the work), *preserving* (a
+> refusal never destroys or strands state, and names the resume path), and
+> *falsifiable* (it ships with proof it does not fire on legitimate input).** Judgment
+> informs and mechanism gates (ADR-0014); this bar governs how gates behave, never
+> whether to add more — the check-ratchet hypothesis was found unsupported at the
+> measured citation-edge proxy (`throughput-economy.md` §0/§1.3; a small residual
+> effect is not ruled out), so the bar is a quality floor for necessary gates, not a
+> license to multiply them. An artifact-review gate (pr-review, doc-review) meets
+> "early" by firing before the artifact's *next* investment — merge, revision, landing
+> — not by predating the artifact.
 
 As failure modes, checklist-style:
 
@@ -501,21 +526,30 @@ As failure modes, checklist-style:
     redirect-over-discard (block the auth class, the target, the dimension — run the
     work another way) and delta-scoped predicates.
 12. **Destructive refusal** — the refusal path destroys or strands uncommitted state.
-    *Detector:* a refusal exit that neither checkpoints/parks nor provably leaves local
-    state intact; a message that does not name the preserved state and the resume path.
-    *Closes with:* the `parkExit()` discipline as an invariant on every refusal exit —
-    refusal ≠ discard.
+    *Detector:* a refusal exit that neither checkpoints/parks, quarantines, nor
+    provably leaves local state intact; a message that does not name the preserved
+    state and the resume path. *Closes with:* the park-checkpoint discipline
+    (`parkExit()`'s shape, not the literal closure — it is `runPipeline`-local today)
+    generalized to every refusal exit, in whichever of three forms the refusal
+    permits: **checkpoint-and-park** where committing is safe; **quarantine**
+    (preserve without committing) where it is not — the confinement contract's
+    `error_confinement` is the named example: checkpointing may commit contaminated
+    state, so parking is forbidden there and preservation means quarantine;
+    **leave-intact** where the state is already durable. Refusal ≠ discard, in all
+    three forms.
 13. **Irreversible-too-early** — a tripped guard becomes final before any successor has
     consumed the contested resource. *Detector:* no reclaim window between trip and
     consequence. *Closes with:* reversible-until-consumed (lease expiry reclaimable by
-    the holder until a successor is granted; entitlements burn on outcome, not attempt —
-    P3's twin).
+    the holder until a successor is granted — the #606 work-preservation requirement;
+    entitlements burn on outcome, not attempt — P3's twin).
 14. **Untested for false fire** — the gate ships with true-positive tests only.
     *Detector:* no test asserts the gate stays silent on legitimate input at the
     operating envelope's edge (budget-edge liveness, sub-reclaim-window blips,
-    clean-baseline deltas); no tracked false-refusal metric. *Closes with:* no-false-fire tests as a
-    shipping requirement — a gate that cannot afford its false-positive tests does not
-    ship.
+    clean-baseline deltas). *Closes with:* no-false-fire tests as a shipping
+    requirement — a gate that cannot afford its false-positive tests does not ship;
+    where a conformance suite exists (the runner track, #607), a tracked
+    false-refusal metric joins the tests — the metric is the suite-level form of
+    this item, not a universal precondition.
 
 §2.3 is the bridge between the halves: collapsing "cannot evaluate" into "evaluated as
 bad" is simultaneously unsound (a verdict without evidence) and over-aggressive (work
@@ -539,6 +573,11 @@ lost to an outage). A gate that passes both halves cannot make that collapse.
   here is the honest outcome: the model collapses most of the cluster, not all of it.
 
 If a proposed model does not collapse most of that list, it is the wrong model.
+
+**Routing note (v5):** the issue numbers in §9 and below are the 2026-08-06 snapshot;
+that cluster closed on 2026-08-07 and was re-cut into the **G-series** (#466 and
+siblings). An implementer follows the G-series; these sections remain as the mapping
+from defect shapes to the primitives that closed them.
 
 ## 10. Sequencing
 
@@ -581,6 +620,17 @@ Steps 1–3 are independently valuable if the rest is never built.
    defect.
 
 ## Revision log
+
+**v5** (2026-08-22) — v4 `doc-review` pass (3 seats), 10 must-fix accepted: header
+re-dated with the verification-baseline staleness stated (cluster re-cut into the
+G-series 2026-08-07; `blockForeignRootWrite` deny-set growth); §1 issue list marked as
+snapshot; §9/§10 routed to the G-series; the §6/§7 internal defects the pass confirmed
+recorded under the ADR-0026 supersession note rather than repaired; §8.1's "early"
+relativized for artifact-review gates (and the AGENTS.md invariant reworded to match);
+the runner-protocol evidence cite grounded in #606/#607; item 12 given three
+preservation forms (park / quarantine / leave-intact — `error_confinement` may not
+park); item 14's metric scoped to conformance-suite contexts; the check-ratchet claim
+scoped to what `throughput-economy.md` measured.
 
 **v4** (2026-08-22) — added §8.1, the over-refusal taxonomy: the gate-quality bar
 (early / narrow / preserving / falsifiable) and failure modes 10–14, hoisting the
