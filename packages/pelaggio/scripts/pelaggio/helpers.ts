@@ -6,7 +6,7 @@ import { basename, dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveArtifactRoot } from "./artifact-root.js";
 import { CONFIG, isPipelineStep, LOG_PATH, type PipelineStep, REPO, resolveProviderBin, STEPS, WORKTREE_PREFIX } from "./config.js";
-import { clearFreshnessOursIntent, confirmFreshnessOursIntent, readFreshnessOursIntent, writeFreshnessOursIntent } from "./freshness-ours-intent.js";
+import { clearFreshnessOursIntent, confirmFreshnessOursIntent, listFreshnessOursIntents, writeFreshnessOursIntent } from "./freshness-ours-intent.js";
 import { MarkdownRoadmap } from "./roadmap/markdown.js";
 import type { CreateItemOpts, RoadmapSource } from "./roadmap/types.js";
 import type { CycleDisposition, CycleDriverProvenance, CycleGitBinding, CycleResult, CycleVersionProvenance, Decision, Mutex, ParkClass, ProviderName, Step, StepLog, StepResult } from "./types.js";
@@ -1277,7 +1277,7 @@ export type GitArgvExec = (args: readonly string[], cwd: string) => string;
 // Documented residual: `.git/info/grafts` can shift merge-base even with replace refs
 // disabled, but planting it requires a main-repo `.git` write — outside the worktree
 // write-guard's threat model. Documented, not defended.
-const defaultGitArgvExec: GitArgvExec = (args, cwd) => execFileSync("git", [...args], { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" } });
+const defaultGitArgvExec: GitArgvExec = (args, cwd) => execFileSync("git", [...args], { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 32 * 1024 * 1024, env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" } });
 
 /**
  * Non-failed results retain `originMainOid` — the OID `origin/main` resolved to when this
@@ -1380,10 +1380,15 @@ function treeOidOf(run: GitArgvExec, cwd: string, commitish: string): string | n
  * Plumbing `diff-tree` path set. Distinguishes Git failure from a valid empty set.
  * Does not trim: a leading/trailing newline can be a legal path component, and
  * `gitNameOnly` (newline-split, failure→`[]`) is display-grade only.
+ *
+ * `--ignore-submodules=none`: the diff family honors `submodule.<name>.ignore` from
+ * the TRACKED `.gitmodules`, so `ignore = all` would hide an upstream gitlink bump
+ * from BOTH proof path sets — the intersection passes vacuously and `-s ours`
+ * silently reverts the bump. The proof must see every tree-entry change.
  */
 function nulDiffTreePaths(run: GitArgvExec, cwd: string, a: string, b: string): { ok: true; paths: string[] } | { ok: false; detail: string } {
 	try {
-		const out = run(["diff-tree", "-r", "--name-only", "-z", "--no-renames", a, b], cwd);
+		const out = run(["diff-tree", "-r", "--name-only", "-z", "--no-renames", "--ignore-submodules=none", a, b], cwd);
 		return { ok: true, paths: out.split("\0").filter(Boolean) };
 	} catch (error) {
 		return { ok: false, detail: gitArgvDetail(error) };
@@ -1411,41 +1416,51 @@ function oursIntentContext(run: GitArgvExec, cwd: string): { branch: string; mai
  * guarantee, not the rollback: this gate retrospectively completes the interrupted
  * bracket — it re-runs the exact probes on the recorded merge (parents = captured
  * OID + fetched OID, tree preserved) and confirms on success; a tree mismatch or an
- * unreadable record fails closed. A confirmed or absent record behaves as before.
- * An unconfirmed record whose merge is NOT in this ancestry cannot launder anything
- * here and passes (it is superseded or cleared by the next integration attempt).
+ * unreadable record fails closed. Confirmed or absent records behave as before.
+ *
+ * The gate reads ancestry, never a branch name: it scans EVERY record in the store
+ * and gates any unconfirmed one whose merge appears in HEAD's history, so renaming
+ * or detaching the branch after a failed probe cannot dodge it (branch keying is a
+ * write-side convention only). An unresolvable store root fails closed — never
+ * silent success. The walk per record is bounded to `<headOid>..HEAD` and skipped
+ * entirely when the recorded head is not an ancestor (the merge's first parent is
+ * that head, so the merge provably is not in HEAD's history either).
  */
 function gateUnconfirmedOursIntent(run: GitArgvExec, cwd: string): { ok: true } | { ok: false; detail: string } {
-	const context = oursIntentContext(run, cwd);
-	if (!context) return { ok: true };
-	const read = readFreshnessOursIntent(context.mainRepo, context.branch);
-	if (read.kind === "absent") return { ok: true };
-	if (read.kind === "unreadable") {
-		return { ok: false, detail: `unconfirmed ours-merge intent cannot be ruled out: ${read.detail} — refusing up-to-date classification` };
+	const commonDir = tryGitArgv(run, ["rev-parse", "--path-format=absolute", "--git-common-dir"], cwd);
+	if (!commonDir.ok || commonDir.out === "") {
+		return { ok: false, detail: "cannot locate the ours-intent store (git-common-dir unresolvable) — refusing to trust ancestry" };
 	}
-	const record = read.record;
-	if (record.state === "confirmed") return { ok: true };
-	const listed = tryGitArgv(run, ["rev-list", "--merges", "--parents", "HEAD"], cwd);
-	if (!listed.ok) {
-		return { ok: false, detail: `unconfirmed ours-merge intent for ${record.headOid} could not be checked against ancestry: ${listed.detail}` };
+	const mainRepo = dirname(commonDir.out);
+	const listing = listFreshnessOursIntents(mainRepo);
+	if (listing.unreadable.length > 0) {
+		return { ok: false, detail: `unconfirmed ours-merge intent cannot be ruled out: ${listing.unreadable.join("; ")} — refusing to trust ancestry` };
 	}
-	const matches = listed.out
-		.split("\n")
-		.map((line) => line.split(" ").filter(Boolean))
-		.filter((fields) => fields.length === 3 && fields[1] === record.headOid && fields[2] === record.originMainOid)
-		.map((fields) => fields[0] as string);
-	if (matches.length === 0) return { ok: true };
-	for (const mergeOid of matches) {
-		const tree = treeOidOf(run, cwd, mergeOid);
-		if (tree !== record.expectedTreeOid) {
-			return {
-				ok: false,
-				detail: `ancestry passes through unproven ours merge ${mergeOid}: its tree ${tree ?? "(unreadable)"} does not match the recorded pre-merge tree ${record.expectedTreeOid} — refusing up-to-date classification (unconfirmed intent recorded ${record.recordedAt})`,
-			};
+	for (const record of listing.records) {
+		if (record.state !== "intent") continue;
+		if (!oidIsAncestor(run, cwd, record.headOid, "HEAD")) continue;
+		const listed = tryGitArgv(run, ["rev-list", "--merges", "--parents", `${record.headOid}..HEAD`], cwd);
+		if (!listed.ok) {
+			return { ok: false, detail: `unconfirmed ours-merge intent for ${record.headOid} could not be checked against ancestry: ${listed.detail}` };
 		}
+		const matches = listed.out
+			.split("\n")
+			.map((line) => line.split(" ").filter(Boolean))
+			.filter((fields) => fields.length === 3 && fields[1] === record.headOid && fields[2] === record.originMainOid)
+			.map((fields) => fields[0] as string);
+		if (matches.length === 0) continue;
+		for (const mergeOid of matches) {
+			const tree = treeOidOf(run, cwd, mergeOid);
+			if (tree !== record.expectedTreeOid) {
+				return {
+					ok: false,
+					detail: `ancestry passes through unproven ours merge ${mergeOid}: its tree ${tree ?? "(unreadable)"} does not match the recorded pre-merge tree ${record.expectedTreeOid} — refusing to trust this history (unconfirmed intent for branch ${record.branch}, recorded ${record.recordedAt})`,
+				};
+			}
+		}
+		// Every recorded probe now holds for the merge(s) in ancestry — complete the bracket.
+		confirmFreshnessOursIntent(mainRepo, record.branch, matches[0] as string);
 	}
-	// Every recorded probe now holds for the merge(s) in ancestry — complete the bracket.
-	confirmFreshnessOursIntent(context.mainRepo, context.branch, matches[0] as string);
 	return { ok: true };
 }
 
@@ -1591,21 +1606,24 @@ export function preparePrShipFreshness(worktree: string, exec?: GitArgvExec): Pr
 	// subsequent check (including the merge below) uses this OID, never the ref name.
 	const originMainOid = resolveOriginMainOid(run, worktree);
 	if (!originMainOid) return { kind: "failed", detail: "origin/main does not resolve after fetch" };
-	if (oidIsAncestorOfHead(run, worktree, originMainOid)) {
-		// #571 residual: ancestry alone is not proof — an interrupted ours-merge bracket
-		// must be retrospectively completed (or refused) before up-to-date is trusted.
-		const intentGate = gateUnconfirmedOursIntent(run, worktree);
-		if (!intentGate.ok) return { kind: "failed", detail: intentGate.detail };
-		return { kind: "up-to-date", originMainOid };
-	}
+	// #571 residual: ancestry alone is not proof, and an unproven merge already in HEAD's
+	// history must be retro-confirmed or refused BEFORE any newer-tip integration can
+	// clear or supersede its intent record — so the gate runs on every classification,
+	// not only when the freshly fetched tip is already an ancestor.
+	const intentGate = gateUnconfirmedOursIntent(run, worktree);
+	if (!intentGate.ok) return { kind: "failed", detail: intentGate.detail };
+	if (oidIsAncestorOfHead(run, worktree, originMainOid)) return { kind: "up-to-date", originMainOid };
 
 	const recorded = tryRecordAlreadyPresentAncestry(run, worktree, originMainOid);
 	if (recorded) return recorded;
 
-	// The ordinary merge below supersedes any earlier shortcut attempt: ancestry is
-	// absent here, so a prior unconfirmed intent's merge cannot be in this history —
-	// clear it so its recorded parent pair cannot false-match the REAL merge commit
-	// this path records (which would wrongly refuse later up-to-date classification).
+	// The ordinary merge below supersedes any earlier shortcut attempt. This clear is
+	// safe ONLY because the intent gate above already ran: a surviving unconfirmed
+	// record for this branch was proven merge-absent from HEAD's ancestry (else the
+	// gate confirmed or refused), which is the one condition under which the hygiene
+	// rule permits clearing — and it must be cleared, or its recorded parent pair
+	// could false-match the REAL merge commit this path records and wrongly refuse
+	// later up-to-date classification. Other branches' records are never touched.
 	const staleContext = oursIntentContext(run, worktree);
 	if (staleContext) clearFreshnessOursIntent(staleContext.mainRepo, staleContext.branch);
 
@@ -1624,7 +1642,8 @@ export function preparePrShipFreshness(worktree: string, exec?: GitArgvExec): Pr
  * Deterministic Git gate before PR pre-flight or ship. Accepts only a clean,
  * conflict-free worktree whose HEAD already contains the origin/main OID retained
  * at fetch time (`expectedOriginMainOid`, from `preparePrShipFreshness`).
- * Never aborts, resets, or cleans.
+ * Never aborts, resets, or cleans the worktree; its one write is to the ours-intent
+ * store, where the closing gate may retro-CONFIRM a completed bracket (never more).
  *
  * ADR-0025: verification binds to the fetched OID, never the mutable ref name — a
  * writable author step between fetch and this gate can move `origin/main` (e.g. to an

@@ -1113,6 +1113,10 @@ describe("preparePrShipFreshness / verifyPrShipFreshness", () => {
 			if (key === "rev-parse --verify origin/main") return "abc";
 			// Post-fetch checks and the merge itself run against the retained OID, never the ref name.
 			if (key === "merge-base --is-ancestor abc HEAD") throw new Error("behind");
+			if (key === "rev-parse --path-format=absolute --git-common-dir") return "/tmp/freshness-mock-store/.git";
+			if (key === "rev-parse --abbrev-ref HEAD") return "feat/tool-99";
+			if (key === "rev-parse --verify HEAD^{commit}") return "headoid";
+			if (key === "merge-base --all headoid abc") throw new Error("no common base");
 			if (key === "diff --name-only HEAD...abc") return "src/a.ts\n";
 			if (key === "merge --no-edit abc") throw Object.assign(new Error("not a fast-forward"), { stderr: "fatal: refusing to merge unrelated histories" });
 			throw new Error(`unexpected argv: ${key}`);
@@ -1325,8 +1329,8 @@ describe("preparePrShipFreshness / verifyPrShipFreshness", () => {
 			if (key === "rev-parse --verify origin/main") return OID_MAIN;
 			if (key === `merge-base --is-ancestor ${OID_MAIN} HEAD`) throw new Error("behind");
 			if (key === `merge-base --all ${OID_HEAD} ${OID_MAIN}`) return "baseoid";
-			if (key === `diff-tree -r --name-only -z --no-renames baseoid ${OID_MAIN}`) return "copied.ts\0";
-			if (key === `diff-tree -r --name-only -z --no-renames ${OID_HEAD} ${OID_MAIN}`) return "feat.ts\0";
+			if (key === `diff-tree -r --name-only -z --no-renames --ignore-submodules=none baseoid ${OID_MAIN}`) return "copied.ts\0";
+			if (key === `diff-tree -r --name-only -z --no-renames --ignore-submodules=none ${OID_HEAD} ${OID_MAIN}`) return "feat.ts\0";
 			if (key === `rev-parse ${OID_HEAD}^{tree}`) return OID_TREE;
 			if (key === "rev-parse --abbrev-ref HEAD") return MOCK_BRANCH;
 			if (key === "rev-parse --path-format=absolute --git-common-dir") return join(mainRepo, ".git");
@@ -1360,8 +1364,8 @@ describe("preparePrShipFreshness / verifyPrShipFreshness", () => {
 		const isAncestor = keys.indexOf(`merge-base --is-ancestor ${OID_MAIN} HEAD`);
 		const capture = keys.indexOf("rev-parse --verify HEAD^{commit}");
 		const allBases = keys.indexOf(`merge-base --all ${OID_HEAD} ${OID_MAIN}`);
-		const upstreamDiff = keys.indexOf(`diff-tree -r --name-only -z --no-renames baseoid ${OID_MAIN}`);
-		const endpointDiff = keys.indexOf(`diff-tree -r --name-only -z --no-renames ${OID_HEAD} ${OID_MAIN}`);
+		const upstreamDiff = keys.indexOf(`diff-tree -r --name-only -z --no-renames --ignore-submodules=none baseoid ${OID_MAIN}`);
+		const endpointDiff = keys.indexOf(`diff-tree -r --name-only -z --no-renames --ignore-submodules=none ${OID_HEAD} ${OID_MAIN}`);
 		const treeIdx = keys.indexOf(`rev-parse ${OID_HEAD}^{tree}`);
 		const ours = keys.indexOf(`merge --no-edit --strategy=ours ${OID_MAIN}`);
 		const reRead = keys.lastIndexOf("rev-parse --verify HEAD^{commit}");
@@ -1665,6 +1669,97 @@ describe("preparePrShipFreshness / verifyPrShipFreshness", () => {
 		assert.equal(result.kind, "failed");
 		if (result.kind !== "failed") return;
 		assert.match(result.detail, /cannot be ruled out/);
+	});
+
+	/** Fabricated residual: a merge with the recorded parent pair but the WRONG tree left
+	 *  in HEAD's history, witnessed only by an unconfirmed intent record. */
+	function makeTaintedAncestry(): { worktree: string; origin: string; badMerge: string; originMainOid: string } {
+		const { worktree, origin, headOid, originMainOid, expectedTreeOid } = makeContentCopiedPair();
+		const badMerge = execSync(`git commit-tree "${originMainOid}^{tree}" -p ${headOid} -p ${originMainOid} -m fake-ours`, { cwd: worktree, encoding: "utf-8" }).trim();
+		execSync(`git reset -q --hard ${badMerge}`, { cwd: worktree });
+		writeFreshnessOursIntent(worktree, { branch: "feat/tool-99", headOid, originMainOid, expectedTreeOid, recordedAt: new Date().toISOString() });
+		return { worktree, origin, badMerge, originMainOid };
+	}
+
+	it("a .gitmodules ignore=all cannot hide an upstream gitlink bump from the equivalence proof", () => {
+		const { worktree, origin } = makeFreshnessPair();
+		const sub1 = "1".repeat(40);
+		const sub2 = "2".repeat(40);
+		// Shared history carries the gitlink AND the tracked ignore=all that would hide
+		// its changes from the diff family without --ignore-submodules=none.
+		writeFileSync(join(origin, ".gitmodules"), '[submodule "sub"]\n\tpath = sub\n\turl = ./unused\n\tignore = all\n');
+		execSync("git add .gitmodules", { cwd: origin });
+		execSync(`git update-index --add --cacheinfo 160000,${sub1},sub`, { cwd: origin });
+		execSync("git commit -q -m gitlink-base", { cwd: origin });
+		execSync("git fetch -q origin main && git merge -q --no-edit origin/main", { cwd: worktree });
+		execSync(`git update-index --add --cacheinfo 160000,${sub2},sub`, { cwd: origin });
+		execSync("git commit -q -m gitlink-bump", { cwd: origin });
+		commitFile(worktree, "src/feature.ts", "export const feat = 1;\n", "feature-only");
+		const result = preparePrShipFreshness(worktree);
+		// A vacuous proof here would content-integrate and silently REVERT the bump.
+		assert.notEqual(result.kind, "content-integrated");
+		assert.equal(result.kind, "merged");
+		if (result.kind !== "merged") return;
+		assert.equal(execSync("git rev-parse HEAD:sub", { cwd: worktree, encoding: "utf-8" }).trim(), sub2, "the ordinary merge must carry the upstream gitlink bump");
+	});
+
+	it("an origin advance cannot clear or supersede an unproven merge: the gate refuses before newer-tip integration", () => {
+		const { worktree, origin, badMerge } = makeTaintedAncestry();
+		// origin moves past the recorded OID, so the fetched tip is NOT an ancestor — the
+		// gate must still run before the shortcut can overwrite or the ordinary path can
+		// clear the sole intent record for this branch.
+		commitFile(origin, "src/later.ts", "export const later = 1;\n", "upstream advance");
+		const result = preparePrShipFreshness(worktree);
+		assert.equal(result.kind, "failed");
+		if (result.kind !== "failed") return;
+		assert.match(result.detail, /unproven ours merge/);
+		assert.ok(result.detail.includes(badMerge));
+		// Nothing integrated, nothing lost: HEAD and the unconfirmed record are intact.
+		assert.equal(execSync("git rev-parse HEAD", { cwd: worktree, encoding: "utf-8" }).trim(), badMerge);
+		assert.equal(existsSync(join(worktree, "src/later.ts")), false);
+		const record = readFreshnessOursIntent(worktree, "feat/tool-99");
+		assert.equal(record.kind === "record" && record.record.state, "intent");
+	});
+
+	it("a faithful unproven merge is retro-confirmed before a newer origin tip integrates on top of it", () => {
+		const { worktree, origin } = makeContentCopiedPair();
+		const first = preparePrShipFreshness(worktree, (args, cwd) => {
+			if (args[0] === "rev-parse" && args[1] === "--verify" && args[2]?.endsWith("^2^{commit}")) throw new Error("probe infra failure");
+			return execFileSync("git", [...args], { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+		});
+		assert.equal(first.kind, "failed");
+		const faithfulMerge = execSync("git rev-parse HEAD", { cwd: worktree, encoding: "utf-8" }).trim();
+		commitFile(origin, "src/later.ts", "export const later = 1;\n", "upstream advance");
+		const second = preparePrShipFreshness(worktree);
+		// The pending O1 bracket is completed first (probes pass — faithful merge), and
+		// only then does the ordinary merge integrate the newer tip.
+		assert.equal(second.kind, "merged");
+		assert.equal(existsSync(join(worktree, "src/later.ts")), true);
+		assert.equal(execSync(`git merge-base --is-ancestor ${faithfulMerge} HEAD && echo yes`, { cwd: worktree, encoding: "utf-8" }).trim(), "yes");
+		// Confirmed on the way through, then superseded by the ordinary-path clear.
+		const record = readFreshnessOursIntent(worktree, "feat/tool-99");
+		assert.ok(record.kind === "absent" || (record.kind === "record" && record.record.state === "confirmed"));
+	});
+
+	it("a branch rename after a failed probe cannot dodge the gate: records are scanned store-wide", () => {
+		const { worktree, badMerge, originMainOid } = makeTaintedAncestry();
+		execSync("git branch -m feat/tool-99 feat/renamed", { cwd: worktree });
+		const result = preparePrShipFreshness(worktree);
+		assert.equal(result.kind, "failed");
+		if (result.kind !== "failed") return;
+		assert.match(result.detail, /unproven ours merge/);
+		assert.ok(result.detail.includes(badMerge));
+		assert.equal(verifyPrShipFreshness(worktree, originMainOid).ok, false);
+	});
+
+	it("a detached HEAD after a failed probe cannot dodge the gate", () => {
+		const { worktree, badMerge } = makeTaintedAncestry();
+		execSync("git checkout -q --detach", { cwd: worktree });
+		const result = preparePrShipFreshness(worktree);
+		assert.equal(result.kind, "failed");
+		if (result.kind !== "failed") return;
+		assert.match(result.detail, /unproven ours merge/);
+		assert.ok(result.detail.includes(badMerge));
 	});
 });
 

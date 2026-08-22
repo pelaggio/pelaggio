@@ -45,7 +45,8 @@ interface ExistingPr {
 
 // GIT_NO_REPLACE_OBJECTS mirrors the freshness runner (helpers.ts): the ancestry check
 // and merge-base the squash resets to must read real objects, not a worktree-planted
-// `refs/replace/*` substitute. Harmless for the `gh` calls sharing this runner.
+// `refs/replace/*` substitute. This runner carries only the git side; `gh` calls go
+// through `defaultGhRun`, which does not need (and does not get) the override.
 const defaultExec: ExecFn = (cmd, cwd) => {
 	return execSync(cmd, { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" } }).trim();
 };

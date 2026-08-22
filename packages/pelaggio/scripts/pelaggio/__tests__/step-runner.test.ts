@@ -331,6 +331,23 @@ describe("blockForeignRootWrite (#369 / #269 nested seats)", () => {
 		assert.equal(writeOut.decision, "block");
 		assert.match(String(writeOut.reason), /evidence store/);
 	});
+
+	it("blocks Bash mention and Write/Edit of the freshness ours-intent store (#571 forge path)", () => {
+		// This store is read back by the freshness classifications: a seat-forged
+		// state=confirmed record (or a deletion) would launder an unproven ours merge
+		// through up-to-date. The denylist covers Bash string mention and Write/Edit via
+		// this hook seam; the documented residual (variable-composed paths, host
+		// processes outside the hook system) stands until #511 harness-attested evidence.
+		const bashOut = blockForeignRootWrite(bash(`printf '{"state":"confirmed"}' > ${main}/.dev/freshness-ours-intents/feat%2Ftool-99.json`), sibling, main, registered, sibling);
+		assert.equal(bashOut.decision, "block");
+		assert.match(String(bashOut.reason), /harness-owned register/);
+		assert.equal(blockForeignRootWrite(bash("rm -rf .dev/freshness-ours-intents"), sibling, main, registered, sibling).decision, "block");
+		const writeOut = blockForeignRootWrite(write(`${main}/.dev/freshness-ours-intents/feat%2Ftool-99.json`), main, main, registered, sibling);
+		assert.equal(writeOut.decision, "block");
+		assert.match(String(writeOut.reason), /evidence store/);
+		const editOut = blockForeignRootWrite(edit(".dev/freshness-ours-intents/feat%2Ftool-99.json"), main, main, registered);
+		assert.equal(editOut.decision, "block");
+	});
 });
 
 describe("getProvider — registry + guard", () => {

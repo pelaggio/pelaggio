@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 /**
@@ -10,16 +10,17 @@ import { resolve } from "node:path";
  * rollback's HEAD-recognition precondition). Ancestry alone would then classify the
  * branch `up-to-date` on the very merge whose proof never completed. The harness
  * therefore durably records INTENT before creating the merge and CONFIRMS only after
- * every probe passes; the up-to-date classification refuses to trust ancestry while
+ * every probe passes; the freshness classifications refuse to trust ancestry while
  * an unconfirmed intent's merge participates in it.
  *
- * Trust direction — the opposite of `freshness-gate-record.ts`: that store must not
- * be read back because a planted record would AUTHORIZE skipping gates. This record
- * only ever BLOCKS: reading it from disk is safe because forging one can at worst
- * force a spurious re-proof or a fail-closed refusal (denial, never laundering).
- * Deleting a record to launder requires a main-repo `.dev/` write — the same
- * capability class as planting `.git/info/grafts`, outside the worktree
- * write-guard's threat model (documented residual, not defended here).
+ * Trust: the store is NOT block-only — an `intent` record only ever blocks, but a
+ * FORGED `state: "confirmed"` record (or a deletion) would launder, because absent
+ * and confirmed both allow. Writes therefore require main-repo `.dev/` access, the
+ * seat-facing Bash denylist (`BASH_DENIED_DEV_REGISTERS`, #510 parity) names this
+ * store to narrow seat access, and the residual is the same documented
+ * literal-string-matching arms race as `.dev/freshness-gate-records/` (#424 → #511
+ * harness-attested evidence is the chartered fix) plus the `.git/info/grafts`
+ * class of main-repo writes outside the worktree guard's threat model.
  *
  * Single-writer: only the harness freshness path writes these records (one JSON file
  * per branch, atomic tmp+rename — no shared-file concurrent append). Readers are
@@ -27,6 +28,10 @@ import { resolve } from "node:path";
  * `unreadable` for the caller to fail closed on, never as `absent`. An unconfirmed
  * record persists until an operator or a successful re-proof clears it — it is
  * never auto-expired into a pass.
+ *
+ * TODO(/tidy): confirmed records accumulate one file per branch until the branch's
+ * next integration clears them; teach `/tidy`'s stale-worktree sweep to prune
+ * confirmed records for deleted branches. Never prune `intent` records there.
  */
 export interface FreshnessOursIntentV1 {
 	schemaVersion: 1;
@@ -143,4 +148,44 @@ export function clearFreshnessOursIntent(mainRepo: string, branch: string): void
 	} catch {
 		// Best-effort by contract.
 	}
+}
+
+/**
+ * Every record in the store, with unreadable entries surfaced for fail-closed
+ * handling. The ancestry gate scans ALL records — never just the current branch's
+ * file — so a branch rename or detached HEAD after a failed probe cannot dodge it.
+ * A missing store directory is a valid empty store; any other listing failure, an
+ * undecodable filename, or a malformed record is diagnostic, never silently absent.
+ */
+export function listFreshnessOursIntents(mainRepo: string): { records: FreshnessOursIntentV1[]; unreadable: string[] } {
+	let entries: string[];
+	try {
+		entries = readdirSync(freshnessOursIntentsDir(mainRepo));
+	} catch (error) {
+		const code = (error as { code?: string }).code;
+		if (code === "ENOENT") return { records: [], unreadable: [] };
+		return { records: [], unreadable: [`ours-intent store unreadable: ${error instanceof Error ? error.message : String(error)}`] };
+	}
+	const records: FreshnessOursIntentV1[] = [];
+	const unreadable: string[] = [];
+	for (const entry of entries) {
+		if (!entry.endsWith(".json")) continue; // atomic-write .tmp leftovers
+		let branch: string;
+		try {
+			branch = decodeURIComponent(entry.slice(0, -".json".length));
+		} catch {
+			unreadable.push(`${entry}: filename does not decode to a branch`);
+			continue;
+		}
+		const read = readFreshnessOursIntent(mainRepo, branch);
+		if (read.kind === "record") {
+			if (read.record.branch !== branch) {
+				unreadable.push(`${entry}: record branch ${JSON.stringify(read.record.branch)} does not match its filename`);
+				continue;
+			}
+			records.push(read.record);
+		} else if (read.kind === "unreadable") unreadable.push(`${entry}: ${read.detail}`);
+		else unreadable.push(`${entry}: vanished during listing`);
+	}
+	return { records, unreadable };
 }

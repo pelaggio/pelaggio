@@ -8,6 +8,7 @@ import { CONFIG, REPO, resolveStepSettings } from "./config.js";
 import { sessionsDir } from "./confinement/sessions.js";
 import { emitDecisionsFromText } from "./decisions.js";
 import { FRESHNESS_GATE_RECORDS_DIR, freshnessGateRecordsDir } from "./freshness-gate-record.js";
+import { FRESHNESS_OURS_INTENTS_DIR, freshnessOursIntentsDir } from "./freshness-ours-intent.js";
 import { grokProvider } from "./grok-provider.js";
 import { classifyStepError, isRefusal, looksLikeStalledAsk, type MainCheckoutDeltaObserver, parseBlockedReason, parseWaitFlag, resolveParkReset } from "./helpers.js";
 import { opencodeProvider } from "./opencode-provider.js";
@@ -174,8 +175,13 @@ function pathUnderRoot(abs: string, root: string): boolean {
  * `.dev/freshness-gate-records/` (#424) joins the list as defense in depth: gate-skip trust
  * is in-process only (#511 — a forged disk record no longer authorizes anything), but the
  * observability register still must not be seat-writable.
+ * `.dev/freshness-ours-intents/` (#571) is NOT merely observability: the freshness
+ * classifications read it back, and a seat-forged `state: "confirmed"` record (or a
+ * deletion) would launder an unproven ours merge through `up-to-date` — so it must be
+ * seat-denied. Same documented residual as the others: literal-string matching until
+ * the #511 harness-attested evidence lands.
  */
-const BASH_DENIED_DEV_REGISTERS = ["sessions", PR_REVIEW_GATE_RECORDS_DIR, ADJUDICATION_SOURCES_DIR, FRESHNESS_GATE_RECORDS_DIR] as const;
+const BASH_DENIED_DEV_REGISTERS = ["sessions", PR_REVIEW_GATE_RECORDS_DIR, ADJUDICATION_SOURCES_DIR, FRESHNESS_GATE_RECORDS_DIR, FRESHNESS_OURS_INTENTS_DIR] as const;
 const BASH_DENIED_DEV_REGISTER_RE = new RegExp(`(^|[\\s"'=/])\\.dev/(${BASH_DENIED_DEV_REGISTERS.join("|")})(/|\\b)`);
 
 /**
@@ -204,7 +210,7 @@ export function blockForeignRootWrite(input: HookInput, cwd: string, mainRepo: s
 				decision: "block" as const,
 				reason:
 					"This Bash command references a harness-owned register (docs/decision-log/, .dev/sessions/, " +
-					`.dev/${PR_REVIEW_GATE_RECORDS_DIR}/, .dev/${ADJUDICATION_SOURCES_DIR}/, or .dev/${FRESHNESS_GATE_RECORDS_DIR}/). These are written only by the harness; ` +
+					`.dev/${PR_REVIEW_GATE_RECORDS_DIR}/, .dev/${ADJUDICATION_SOURCES_DIR}/, .dev/${FRESHNESS_GATE_RECORDS_DIR}/, or .dev/${FRESHNESS_OURS_INTENTS_DIR}/). These are written only by the harness; ` +
 					'emit a "DECISION:" line in your step output for decisions — review/adjudication evidence is produced only by the harness\'s own review commands.',
 			};
 		}
@@ -231,12 +237,14 @@ export function blockForeignRootWrite(input: HookInput, cwd: string, mainRepo: s
 	// `review=success` without a fleet run, so no seat may Write/Edit them — even when cwd
 	// or ownWorktree would otherwise allow the path. Freshness-gate records (#424) get the
 	// same treatment as defense in depth (gate-skip trust is in-process only — #511 — but
-	// the observability register still must not be seat-writable).
-	for (const evidenceRoot of [gateRecordsDir(mainAbs), adjudicationSourcesDir(mainAbs), freshnessGateRecordsDir(mainAbs)]) {
+	// the observability register still must not be seat-writable). Freshness ours-intents
+	// (#571) are read back by the freshness classifications, where a forged confirmed
+	// record or a deletion would launder an unproven ours merge — seat-denied outright.
+	for (const evidenceRoot of [gateRecordsDir(mainAbs), adjudicationSourcesDir(mainAbs), freshnessGateRecordsDir(mainAbs), freshnessOursIntentsDir(mainAbs)]) {
 		if (pathUnderRoot(abs, evidenceRoot)) {
 			return {
 				decision: "block" as const,
-				reason: `Path "${fp}" targets a harness-owned evidence store (${evidenceRoot}). Do not write gate, adjudication-source, or freshness-gate records from agent tools.`,
+				reason: `Path "${fp}" targets a harness-owned evidence store (${evidenceRoot}). Do not write gate, adjudication-source, freshness-gate, or ours-intent records from agent tools.`,
 			};
 		}
 	}
