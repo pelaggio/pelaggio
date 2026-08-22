@@ -986,8 +986,16 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 			}
 			for (const [fingerprint, group] of grouped) {
 				const surviving = group.find((item) => item.decision === "survives");
-				if (surviving) refutedThisRun.delete(fingerprint);
-				else if (group[0]) refutedThisRun.set(fingerprint, { id: group[0].id, finding: group[0].finding });
+				if (surviving) {
+					refutedThisRun.delete(fingerprint);
+					continue;
+				}
+				// No surviving disposition ⇒ every group member refuted it; record an ACTUAL refuting
+				// candidate's id (not just group[0], which the flatten-across-passes could otherwise
+				// make ambiguous) for traceability. `refutedAtSha` (this run's head) is the
+				// authoritative binding regardless.
+				const refuting = group.find((item) => item.decision === "refuted");
+				if (refuting) refutedThisRun.set(fingerprint, { id: refuting.id, finding: refuting.finding });
 			}
 		}
 		if (actualCost > policy.budgetCap) breakerReason = "budget";

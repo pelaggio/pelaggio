@@ -11,6 +11,7 @@ import {
 	type CarrySourceSelection,
 	computeTouchedPaths,
 	FINDING_DISPOSITION_MAX_ENTRIES,
+	isCompleteWatermark,
 	listPrFindingDispositionRecords,
 	type PrCarryRefutedEntry,
 	type PrCarrySurvivorEntry,
@@ -142,6 +143,17 @@ describe("finding-disposition record store", () => {
 	});
 });
 
+describe("isCompleteWatermark", () => {
+	it("accepts only ok=true with a non-invalid agreement", () => {
+		assert.equal(isCompleteWatermark({ ok: true, agreement: "consensus-pass" }), true);
+		assert.equal(isCompleteWatermark({ ok: true, agreement: "consensus-block" }), true);
+		assert.equal(isCompleteWatermark({ ok: true, agreement: "disagreement" }), true);
+		assert.equal(isCompleteWatermark({ ok: true, agreement: "invalid" }), false);
+		assert.equal(isCompleteWatermark({ ok: false, agreement: "consensus-block" }), false);
+		assert.equal(isCompleteWatermark({ ok: false, agreement: "invalid" }), false);
+	});
+});
+
 describe("selectCarrySource", () => {
 	/** Ancestry oracle over ordered SHAs: A → B → C → HEAD. */
 	const ORDER = [SHA_A, SHA_B, SHA_C, HEAD];
@@ -164,6 +176,33 @@ describe("selectCarrySource", () => {
 	it("selects a single ancestor prior and binds it to the exact fleet bytes", () => {
 		const prior = boundRecord(SHA_A);
 		assert.deepEqual(select([prior]), { kind: "selected", record: prior, superseded: [], supersededSurvivors: [] });
+	});
+
+	it("selects a complete disagreement/consensus-pass prior exactly as a consensus-block one", () => {
+		for (const agreement of ["consensus-pass", "consensus-block", "disagreement"] as const) {
+			const prior = boundRecord(SHA_A, { agreement, gate: agreement === "consensus-pass" ? "pass" : "block" });
+			const selection = select([prior]);
+			assert.equal(selection.kind, "selected", `${agreement} is a complete watermark`);
+		}
+	});
+
+	it("skips an incomplete prior (ok=false) — not a valid narrowing watermark", () => {
+		// An infra/parse/preflight failure reviewed only a subset of the pool; narrowing to its head
+		// could PASS on code no complete fleet read. It is excluded from candidates entirely.
+		assert.deepEqual(select([boundRecord(SHA_A, { ok: false })]), { kind: "none" });
+	});
+
+	it("skips an incomplete prior (agreement=invalid) — not a valid narrowing watermark", () => {
+		assert.deepEqual(select([boundRecord(SHA_A, { agreement: "invalid" })]), { kind: "none" });
+	});
+
+	it("walks past an incomplete newer prior to the next-oldest COMPLETE ancestor (inverted watermark)", () => {
+		// A→B→HEAD: complete at A, incomplete at B (the tip's last run failed structurally). The
+		// base must advance only to A, never to B — narrowing A..HEAD lets a full fleet review B's
+		// delta. (Pre-fix, B advanced the base and A..B's code could ride in unread.)
+		const completeOlder = boundRecord(SHA_A);
+		const incompleteNewer = boundRecord(SHA_B, { ok: false, agreement: "invalid" });
+		assert.deepEqual(select([completeOlder, incompleteNewer]), { kind: "selected", record: completeOlder, superseded: [], supersededSurvivors: [] });
 	});
 
 	it("returns none with no relevant priors; same-SHA and wrong pr/item records are excluded", () => {

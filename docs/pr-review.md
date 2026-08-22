@@ -265,13 +265,17 @@ diagnostic, never to a weaker gate. A first run (no priors) is byte-identical to
 - **Discovery narrows to the interdiff**: the full drivers × labels fan-out reviews
   `prior..head` through the trusted-context refs, while the inspection diff, security
   classification, and sidecar anchoring keep the full PR range. An empty interdiff seeds
-  and auto-refutes but discovers cold. Coverage across a series is cumulative only in the
-  best case: each delta gets a narrowed read by that run's fleet, but a run that fails
-  structural completeness (invalid cells, breaker exhaustion) still writes a record and
-  therefore still advances the narrowing base for the next selection — so "every line of
-  the final diff got a complete fleet read" is **not** guaranteed across a series
-  containing invalid runs. The deterministic full-head gates (typecheck ratchet, tests,
-  CI) are unaffected and run on every head.
+  and auto-refutes but discovers cold. **The narrowing base only ever advances on a
+  structurally complete run.** Prior selection requires the record's run to have been
+  complete — `ok: true` and a non-`invalid` agreement (`consensus-pass`/`consensus-block`/
+  `disagreement`); an `invalid` / `ok: false` run (infra error, parse failure, budget
+  preflight) still writes a record but is never selected as a watermark. So the base is
+  always a SHA a full fleet completely read, and the next push narrows to
+  `lastComplete..head` — whose delta (including any incompletely-reviewed intermediate
+  pushes) a full fleet then reviews. The residual gap to "every line got a complete fleet
+  read" is only the accepted per-finding anchoring exposure and the dormant-classification
+  auto-refute path above, not incomplete watermarks. The deterministic full-head gates
+  (typecheck ratchet, tests, CI) are unaffected and run on every head regardless.
 
 The gate comment and metrics marker carry a deterministic token —
 `carry=<sha7> seeded=<n> auto-refutable=<k> auto-refuted=<m>` or `carry=none` — so the
@@ -303,6 +307,16 @@ turns on reads + narrowing. Local runner only: CI neither reads nor writes the s
   sandbox entirely. Until grok's write surface against `MAIN_REPO/.dev` is verified
   closed (or grok is excluded from local review pools), do not enable `review.carry` in a
   pool containing grok.
+
+**Pre-enablement priors are not automatically trustworthy.** Records are written while
+`review.carry` is off, including by pools that contained an unsandboxed or unverified seat
+(grok fallback), so a poisoned disposition record could sit in the store before carry is
+ever read. The `ok: true` + non-`invalid` watermark gate above raises the bar — a forged
+record must now also look like a complete run to be selected — but it is not sufficient on
+its own. **The enablement flow (#605) MUST discard or re-validate every disposition record
+written before enablement whenever the pool that wrote it could contain an unsandboxed /
+store-writable seat; pre-enablement priors are never trusted implicitly.** This item
+documents the gate condition only; the discard/re-validation mechanism is #605.
 
 ## Operator adjudication — `pelaggio pr-adjudicate`
 

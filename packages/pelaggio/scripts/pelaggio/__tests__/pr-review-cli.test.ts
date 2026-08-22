@@ -2086,6 +2086,22 @@ describe("pr-review CLI cross-push carry (#495)", () => {
 		assert.equal(stored.gate, "pass");
 	});
 
+	it("an incomplete prior (ok=false) is not a watermark: runs cold, no ancestry/interdiff resolution", async () => {
+		// A structurally incomplete prior run is excluded from candidates before any git call, so
+		// the run is byte-identical to no-priors — its head never advances the narrowing base.
+		const git = carryGit();
+		const out = await runCli({
+			policy: reviewPolicy({ carry: true }),
+			seed: (roots) => seedPrior(roots, { ok: false, agreement: "invalid", refuted: [judgmentRefuted(F)] }),
+			gitExtra: git.handler,
+			results: [result()],
+		});
+		assert.equal(out.code, 0);
+		assert.deepEqual(git.calls, [], "an incomplete prior is filtered before ancestry/interdiff resolution");
+		assert.match(out.comments[0] ?? "", /carry=none/);
+		assert.ok(readPrFindingDispositionRecord(out.dispositionsRoot, 123, REVIEWED_SHA), "the cold run still writes its own record");
+	});
+
 	it("narrowing: discovery reviews prior..head while inspection and verification keep the full range", async () => {
 		const git = carryGit({ touched: ["src/a.ts"] });
 		const out = await runCli({

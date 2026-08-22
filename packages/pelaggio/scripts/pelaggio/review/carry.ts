@@ -293,6 +293,20 @@ export function listPrFindingDispositionRecords(root: string): PrFindingDisposit
  *  hint instead of growing the pairwise-ancestry cost without limit. No GC in this item. */
 export const CARRY_MAX_PRIOR_CANDIDATES = 50;
 
+/**
+ * A record is a valid narrowing WATERMARK only if its run was structurally complete: every
+ * required cell rendered a genuine verdict (`ok === true`) AND the terminal agreement is not
+ * `invalid` (an infra/parse/preflight failure). An incomplete run reviewed only a subset of the
+ * plausible-finding pool, so narrowing the NEXT push to `incompleteHead..current` could PASS on
+ * code no complete fleet ever read — the exact fail-open the gate exists to prevent. Records for
+ * incomplete runs are still written (they carry survivors toward blocking within their own run),
+ * but they never seed or narrow a later run. `consensus-pass`/`consensus-block`/`disagreement`
+ * are all complete; only `invalid` (and any `ok: false`) is disqualifying.
+ */
+export function isCompleteWatermark(record: Pick<PrFindingDispositionRecordV1, "ok" | "agreement">): boolean {
+	return record.ok === true && record.agreement !== "invalid";
+}
+
 export type CarrySourceSelection =
 	| { kind: "none" }
 	| {
@@ -311,15 +325,16 @@ export type CarrySourceSelection =
 
 /**
  * Fail-closed prior-record selection (D2). At most one prior may seed a run: candidates are
- * filtered by identity, proven ancestors of the reviewed head via the injected git predicate
- * (ground truth — nothing inside the records, notably `reviewedAt`, participates in ordering:
- * #510), ordered along the branch (ancestry-comparator sort + adjacent-pair verification —
- * sound by transitivity, and O(n log n) instead of the pairwise-maximal scan), and bound to the
- * newest record whose `fleetRecordDigest` still matches its on-disk fleet gate record. A newer
- * record that no longer binds (superseded — typically `pr-adjudicate` rewriting the gate record
- * at that head) is skipped with its survivors carried forward as blocking-only overlay; if no
- * record binds, or the store is malformed/unordered/over the scan bound, the caller runs cold
- * with a diagnostic.
+ * filtered by identity AND structural completeness (an incomplete run is not a valid narrowing
+ * watermark — see isCompleteWatermark), proven ancestors of the reviewed head via the injected
+ * git predicate (ground truth — nothing inside the records, notably `reviewedAt`, participates in
+ * ordering: #510), ordered along the branch (ancestry-comparator sort + adjacent-pair
+ * verification — sound by transitivity, and O(n log n) instead of the pairwise-maximal scan), and
+ * bound to the newest record whose `fleetRecordDigest` still matches its on-disk fleet gate
+ * record. A newer record that no longer binds (superseded — typically `pr-adjudicate` rewriting
+ * the gate record at that head) is skipped with its survivors carried forward as blocking-only
+ * overlay; if no complete record binds, or the store is malformed/unordered/over the scan bound,
+ * the caller runs cold with a diagnostic.
  */
 export function selectCarrySource(
 	listing: Pick<PrFindingDispositionListing, "records" | "invalid">,
@@ -339,7 +354,10 @@ export function selectCarrySource(
 		return { kind: "refused", reason: `disposition store holds malformed record(s) for PR ${opts.prNumber}: ${invalidForPr.sort().join(", ")}` };
 	}
 	// Same-SHA reruns are deliberately excluded — a re-review of the same head behaves as today.
-	const candidates = listing.records.filter((record) => record.prNumber === opts.prNumber && record.itemId === opts.itemId && record.headSha !== reviewedSha);
+	// Incomplete runs are excluded here (not merely skipped in the walk): they are not watermarks,
+	// so they never seed, narrow, or advance the base — a later push narrows only to the last
+	// COMPLETE ancestor, whose delta a full fleet then reviews.
+	const candidates = listing.records.filter((record) => record.prNumber === opts.prNumber && record.itemId === opts.itemId && record.headSha !== reviewedSha && isCompleteWatermark(record));
 	if (candidates.length === 0) return { kind: "none" };
 	if (candidates.length > CARRY_MAX_PRIOR_CANDIDATES) {
 		return { kind: "refused", reason: `disposition store holds ${candidates.length} prior records for PR ${opts.prNumber} (carry scans at most ${CARRY_MAX_PRIOR_CANDIDATES}); prune .dev/${PR_FINDING_DISPOSITIONS_DIR}/` };
