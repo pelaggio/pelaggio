@@ -80,13 +80,26 @@ export const DEFAULT_AGENT_ENV_ALLOWLIST: readonly string[] = [
  *  NO_PROXY/no_proxy is a host list, never a URL — it stays unconditional. */
 const PROXY_URL_ENV_NAMES = new Set(["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]);
 
-/** Raw userinfo substring of a proxy URL value (`scheme://user:pass@host` → `user:pass`), if any. */
+/**
+ * Best-effort userinfo of a proxy URL value, hardened against scheme-relative
+ * (`//user:pass@host`) and slash-collapsed (`http:///user:pass@host`) forms: strip any
+ * scheme plus ALL leading slashes, then take everything before the first `@`. Returns
+ * `undefined` only for values with no `@` at all — a proxy URL has no legitimate
+ * credential-free `@`, so callers treat ANY non-undefined result as credentialed
+ * (conservative: an `@` we cannot positively clear is a credential).
+ */
 function proxyUrlUserinfo(value: string): string | undefined {
-	return value.trim().match(/^(?:[A-Za-z][A-Za-z0-9+.-]*:\/\/)?([^/@\s]+)@/)?.[1];
+	const trimmed = value.trim();
+	if (!trimmed.includes("@")) return undefined;
+	// Strip a scheme only when slash-delimited so a scheme-less `user:pass@host` keeps its
+	// full userinfo; then strip ALL leading slashes (collapsed-slash and scheme-relative forms).
+	const authority = trimmed.replace(/^[A-Za-z][A-Za-z0-9+.-]*:(?=\/\/)/, "").replace(/^\/+/, "");
+	return authority.split("@", 1)[0] ?? "";
 }
 
 /** Classify a URL-valued proxy var for default forwarding. Scheme-less values (`proxy.corp:3128`)
- *  are normalized before parsing so common credential-less forms keep flowing. */
+ *  are normalized before parsing so common credential-less forms keep flowing; any value
+ *  containing an `@` is conservatively treated as credential-carrying. */
 export function classifyProxyValue(value: string): "forward" | "credentialed" | "unparseable" {
 	const trimmed = value.trim();
 	if (trimmed === "") return "forward";

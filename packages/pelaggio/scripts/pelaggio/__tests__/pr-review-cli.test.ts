@@ -356,6 +356,23 @@ describe("pr-review CLI aggregation", () => {
 		assert.equal(forgeTokenForHost({ GH_TOKEN: "t" }, "ghe.internal.corp"), undefined);
 	});
 
+	it("a set-but-empty token never suppresses its populated fallback (#554)", async () => {
+		// `??` treats "" as present; selection must take the first NON-EMPTY token per chain.
+		assert.equal(forgeTokenForHost({ GH_TOKEN: "", GITHUB_TOKEN: "ghp_fallback_populated" }, "github.com"), "ghp_fallback_populated");
+		assert.equal(forgeTokenForHost({ GH_TOKEN: "   ", GITHUB_TOKEN: "ghp_fallback_populated" }, "github.com"), "ghp_fallback_populated");
+		assert.equal(forgeTokenForHost({ GH_TOKEN: "", GITHUB_TOKEN: "" }, "github.com"), undefined);
+		assert.equal(forgeTokenForHost({ GH_ENTERPRISE_TOKEN: "", GITHUB_ENTERPRISE_TOKEN: "ghe_fallback_pop" }, "ghe.example.com"), "ghe_fallback_pop");
+		assert.equal(forgeTokenForHost({ GH_ENTERPRISE_TOKEN: "", GITHUB_ENTERPRISE_TOKEN: "" }, "ghe.example.com"), undefined);
+		const out = await runCli({ env: { GH_TOKEN: "", GITHUB_TOKEN: "ghp_fallback_populated" } });
+		assert.equal(out.code, 0);
+		const fetchCall = out.execCalls.find((call) => call.cmd === "git" && call.args.includes("fetch"));
+		assert.equal(Buffer.from(fetchCall?.env?.GIT_CONFIG_VALUE_0?.match(/basic (.+)$/)?.[1] ?? "", "base64").toString("utf8"), "x-access-token:ghp_fallback_populated");
+		// Every token empty → unauthenticated, exactly like no token at all.
+		const bothEmpty = await runCli({ env: { GH_TOKEN: "", GITHUB_TOKEN: "" } });
+		const emptyFetch = bothEmpty.execCalls.find((call) => call.cmd === "git" && call.args.includes("fetch"));
+		assert.equal(emptyFetch?.env, undefined);
+	});
+
 	it("preserves a non-default origin port in the parsed host and the extraheader key (#554)", async () => {
 		// git's urlmatch for http.<url>.extraheader is port-sensitive: a GHES origin on a
 		// non-443 port must produce a key naming that port or the header never applies.

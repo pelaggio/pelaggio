@@ -438,8 +438,11 @@ function isDotComClassHost(host: string): boolean {
  * deliberately do NOT apply to enterprise hosts, nor the reverse.
  */
 export function forgeTokenForHost(env: NodeJS.ProcessEnv, host: string): string | undefined {
-	const token = isDotComClassHost(host) ? (env.GH_TOKEN ?? env.GITHUB_TOKEN) : (env.GH_ENTERPRISE_TOKEN ?? env.GITHUB_ENTERPRISE_TOKEN);
-	return token === undefined || token === "" ? undefined : token;
+	// First NON-EMPTY token in the precedence chain: `??` would let a set-but-EMPTY GH_TOKEN
+	// suppress a populated GITHUB_TOKEN, turning the mandatory private-PR fetch
+	// unauthenticated. Empty/whitespace-only values are treated as unset.
+	const chain = isDotComClassHost(host) ? [env.GH_TOKEN, env.GITHUB_TOKEN] : [env.GH_ENTERPRISE_TOKEN, env.GITHUB_ENTERPRISE_TOKEN];
+	return chain.find((token) => token !== undefined && token.trim() !== "");
 }
 
 /**
@@ -541,7 +544,7 @@ function resolveReviewedHead(exec: typeof execFileSync, pr: string, ghRepo: stri
 	// GitHub Enterprise origin authenticates too — see reviewedHeadFetchAuthEnv. The remote
 	// lookup runs only when a candidate token exists, keeping the tokenless path unchanged.
 	let authEnv: NodeJS.ProcessEnv | undefined;
-	if ([env.GH_TOKEN, env.GITHUB_TOKEN, env.GH_ENTERPRISE_TOKEN, env.GITHUB_ENTERPRISE_TOKEN].some((value) => value !== undefined && value !== "")) {
+	if ([env.GH_TOKEN, env.GITHUB_TOKEN, env.GH_ENTERPRISE_TOKEN, env.GITHUB_ENTERPRISE_TOKEN].some((value) => value !== undefined && value.trim() !== "")) {
 		let originUrl = "";
 		try {
 			originUrl = git(["remote", "get-url", "origin"]);

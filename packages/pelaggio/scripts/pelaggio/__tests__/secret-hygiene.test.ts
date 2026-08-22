@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { buildAgentEnv, collectSecretEnvValues, makeSecretScrubber, PROVIDER_KEY_ENV, REDACTED, scopeEnvAllowlistToProvider, scrubSecrets } from "../secret-hygiene.js";
+import { buildAgentEnv, classifyProxyValue, collectSecretEnvValues, makeSecretScrubber, PROVIDER_KEY_ENV, REDACTED, scopeEnvAllowlistToProvider, scrubSecrets } from "../secret-hygiene.js";
 
 describe("buildAgentEnv (#237) — deny-by-default env allowlist", () => {
 	const source: NodeJS.ProcessEnv = {
@@ -75,6 +75,34 @@ describe("buildAgentEnv (#237) — deny-by-default env allowlist", () => {
 		assert.equal(scrubbed.includes("proxy-pass-2"), false);
 		assert.equal(scrubbed.includes(value), false);
 		assert.match(scrubbed, /\[REDACTED\]/);
+	});
+
+	it("catches scheme-relative and slash-collapsed credentialed proxy forms; any @ is conservatively credentialed (#554)", () => {
+		const originalWrite = process.stderr.write;
+		process.stderr.write = (() => true) as typeof process.stderr.write;
+		try {
+			// The two verified bypass shapes: no scheme (`//u:p@h`) and collapsed slashes (`http:///u:p@h`).
+			for (const value of ["//user:bypass-pass-3@proxy.corp:3128", "http:///user:bypass-pass-4@proxy.corp:3128"]) {
+				assert.equal(classifyProxyValue(value), "credentialed", value);
+				const env = buildAgentEnv({ source: { PATH: "/bin", HTTPS_PROXY: value } });
+				assert.equal("HTTPS_PROXY" in env, false, `${value} must not be forwarded by default`);
+				const scrubbed = makeSecretScrubber({ HTTPS_PROXY: value })(`via ${value} and creds user:${value.match(/bypass-pass-\d/)?.[0]}`);
+				assert.equal(scrubbed.includes("bypass-pass"), false, `${value} credentials must be scrubbed`);
+				assert.match(scrubbed, /\[REDACTED\]/);
+			}
+			// Any @ that cannot be positively cleared is credentialed — even in a path segment.
+			assert.equal(classifyProxyValue("http://proxy.corp/path@segment"), "credentialed");
+			const weird = buildAgentEnv({ source: { PATH: "/bin", ALL_PROXY: "http://proxy.corp/path@segment" } });
+			assert.equal("ALL_PROXY" in weird, false);
+		} finally {
+			process.stderr.write = originalWrite;
+		}
+		// Credential-free forms keep flowing untouched.
+		assert.equal(classifyProxyValue("http://host:8080"), "forward");
+		assert.equal(classifyProxyValue("host:8080"), "forward");
+		const plain = buildAgentEnv({ source: { PATH: "/bin", HTTP_PROXY: "http://host:8080", https_proxy: "host:8080" } });
+		assert.equal(plain.HTTP_PROXY, "http://host:8080");
+		assert.equal(plain.https_proxy, "host:8080");
 	});
 
 	it("drops a relative XDG_CONFIG_HOME (XDG-invalid) while forwarding an absolute one", () => {
