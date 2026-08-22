@@ -810,6 +810,22 @@ export function evaluateInterdiffPolicy(opts: { isAncestor: boolean; interdiff: 
 	return { kind: "eligible", digest, dispositions };
 }
 
+/** Model-authored path:line location, escaped for the public comment (line is a validated int). */
+function renderFindingLocation(finding: ReviewFinding): string {
+	return finding.path ? ` (\`${escapeMarkdown(finding.path)}${finding.line ? `:${finding.line}` : ""}\`)` : "";
+}
+
+/**
+ * PUBLIC comment surface: EVERY model-authored string is escaped at this render site with the
+ * one shared `escapeMarkdown` rule (#597 sweep) — finding.message, finding.path, and every
+ * rationale (disposition rationales embed live/fleet verifier text, and even the harness churn
+ * templates carry model-influenced hunk paths). An unescaped field would let an injected
+ * `<!-- pelaggio-pr-review -->` turn this trusted PASS comment into the newest
+ * fetchReviewFindings/revise-sweep scrape target. Deliberately NOT escaped (closed or validated
+ * grammars, or non-model provenance): severity and disposition enums, candidate ids
+ * (`^C[1-9]\d*$`), line numbers, SHAs/digests, the authenticated adjudicator login, and
+ * harness-authored constants.
+ */
 export function renderOperatorAdjudicationComment(opts: {
 	prNumber: number;
 	sourceSha: string;
@@ -821,16 +837,14 @@ export function renderOperatorAdjudicationComment(opts: {
 	dispositions: Record<string, PrReviewFindingDispositionEntry>;
 }): string {
 	const findings = opts.survivors.map((survivor) => {
-		const location = survivor.finding.path ? ` (\`${survivor.finding.path}${survivor.finding.line ? `:${survivor.finding.line}` : ""}\`)` : "";
+		const location = renderFindingLocation(survivor.finding);
 		const entry = opts.dispositions[survivor.fingerprint];
-		const disposition = entry ? ` — **${entry.disposition}** (${entry.rationale})` : "";
-		return `- **${survivor.finding.severity}**${location}: ${survivor.finding.message}${disposition}`;
+		const disposition = entry ? ` — **${entry.disposition}** (${escapeMarkdown(entry.rationale)})` : "";
+		return `- **${survivor.finding.severity}**${location}: ${escapeMarkdown(survivor.finding.message)}${disposition}`;
 	});
 	const refuted = (opts.refuted ?? []).map((entry) => {
-		const location = entry.finding.path ? ` (\`${entry.finding.path}${entry.finding.line ? `:${entry.finding.line}` : ""}\`)` : "";
-		// The rationale is model-authored: escape it so an injected marker (e.g. the fleet
-		// `<!-- pelaggio-pr-review -->` scrape target) cannot survive into this PUBLIC comment.
-		return `- **${entry.finding.severity}**${location}: ${entry.finding.message} — **refuted** by fleet isolated verification ${entry.verification.id} (${escapeMarkdown(entry.verification.rationale)}); no repair required`;
+		const location = renderFindingLocation(entry.finding);
+		return `- **${entry.finding.severity}**${location}: ${escapeMarkdown(entry.finding.message)} — **refuted** by fleet isolated verification ${entry.verification.id} (${escapeMarkdown(entry.verification.rationale)}); no repair required`;
 	});
 	return [
 		PR_ADJUDICATION_MARKER,

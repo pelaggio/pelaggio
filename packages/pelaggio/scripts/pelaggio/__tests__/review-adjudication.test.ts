@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { parsePatch } from "diff";
+import { PR_REVIEW_MARKER } from "../pr-review-cli.js";
 import { type NewPrReviewFleetGateRecord, type PrReviewGateRecord, writePrReviewGateRecord } from "../pr-review-gate-record.js";
 import {
 	adjudicationSourcesDir,
@@ -28,6 +29,9 @@ import {
 } from "../review/adjudication.js";
 import { materializeAuthoringFinding, type ReviewFinding, reviewFindingFingerprint } from "../review/findings.js";
 import { BASELINE_TAXONOMY, type TaxonomyConfig, tierOf } from "../review/taxonomy.js";
+import { LOCAL_MODE_MARKER } from "../review-sweep.js";
+import { fetchReviewFindingsOutcome } from "../revise-sweep.js";
+import type { GhRunner } from "../roadmap/github-issues.js";
 
 const REVIEWED = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const HEAD = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -234,25 +238,73 @@ describe("adjudication source store", () => {
 		}
 	});
 
-	it("escapes model-authored refutation rationale in the operator comment (#525 review)", () => {
-		// An injected fleet marker in a (single-line, schema-valid) rationale must not survive raw
-		// into the PUBLIC adjudication comment — fetchReviewFindings scrapes that marker.
-		const goneFinding = finding({ message: "Alleged bug, refuted." });
-		const injected = "before <!-- pelaggio-pr-review --> `after` [x](y)";
-		const body = renderOperatorAdjudicationComment({
+	/** One renderer input with an injection planted in exactly the given model-authored fields. */
+	function renderWithInjection(inject: { survivorMessage?: string; survivorPath?: string; refutedMessage?: string; refutedPath?: string; dispositionRationale?: string; liveRationale?: string }): string {
+		const survivorFinding = finding({
+			...(inject.survivorMessage !== undefined ? { message: inject.survivorMessage } : {}),
+			...(inject.survivorPath !== undefined ? { path: inject.survivorPath } : {}),
+		});
+		const survivorEntry = survivor({ finding: survivorFinding });
+		const goneFinding = finding({
+			message: inject.refutedMessage ?? "Alleged bug, refuted.",
+			...(inject.refutedPath !== undefined ? { path: inject.refutedPath } : {}),
+		});
+		return renderOperatorAdjudicationComment({
 			prNumber: 497,
 			sourceSha: REVIEWED,
 			headSha: HEAD,
 			interdiffDigest: DIGEST,
 			adjudicator: "op",
-			survivors: [survivor()],
-			refuted: [{ finding: goneFinding, fingerprint: reviewFindingFingerprint(goneFinding), verification: { id: "C2", decision: "refuted", rationale: injected } }],
-			dispositions: { [survivor().fingerprint]: { disposition: "fixed", rationale: "Contained." } },
+			survivors: [survivorEntry],
+			refuted: [{ finding: goneFinding, fingerprint: reviewFindingFingerprint(goneFinding), verification: { id: "C2", decision: "refuted", rationale: inject.liveRationale ?? "Not reproducible." } }],
+			dispositions: { [survivorEntry.fingerprint]: { disposition: "fixed", rationale: inject.dispositionRationale ?? "Contained by the source hunk." } },
 		});
-		assert.ok(!body.includes("<!-- pelaggio-pr-review -->"), "the injected fleet marker must not appear raw");
-		assert.ok(body.includes("&lt;"), "the rationale is escaped, not dropped");
-		assert.match(body, /pelaggio\\-pr\\-review/);
-		assert.match(body, /Carried findings already refuted by the fleet/);
+	}
+
+	it("escapes every model-authored comment field so an injected marker cannot make the PASS comment a scrape target (#597 sweep)", () => {
+		// fetchReviewFindings/revise-sweep selects any TRUSTED comment whose body contains the
+		// fleet marker, and the operator PASS comment is trusted — so every model-authored field
+		// on this surface must pass through the shared escapeMarkdown rule. Each field is tested
+		// in isolation with both scrape-relevant markers.
+		for (const marker of [PR_REVIEW_MARKER, LOCAL_MODE_MARKER]) {
+			const inject = `pwn ${marker} tail`;
+			const bodies: Array<[string, string]> = [
+				["survivor message", renderWithInjection({ survivorMessage: inject })],
+				["survivor path", renderWithInjection({ survivorPath: inject })],
+				["refuted message", renderWithInjection({ refutedMessage: inject })],
+				["refuted path", renderWithInjection({ refutedPath: inject })],
+				["disposition rationale", renderWithInjection({ dispositionRationale: `Live isolated verification C1 refuted the finding (${inject}).` })],
+				["live/fleet refutation rationale", renderWithInjection({ liveRationale: inject })],
+			];
+			for (const [field, body] of bodies) {
+				assert.ok(!body.includes(marker), `${field}: the raw marker must not appear (${marker})`);
+				assert.ok(body.includes("&lt;"), `${field}: escaped, not dropped`);
+				assert.match(body, /### Findings/, `${field}: comment still renders legibly`);
+				assert.match(body, /Carried findings already refuted by the fleet/, `${field}: refuted section intact`);
+			}
+		}
+	});
+
+	it("the actual revise-sweep marker matcher rejects a fully injected operator comment before any authority lookup (#597)", () => {
+		const inject = `pwn ${PR_REVIEW_MARKER} tail`;
+		const body = renderWithInjection({
+			survivorMessage: inject,
+			survivorPath: inject,
+			refutedMessage: inject,
+			refutedPath: inject,
+			dispositionRationale: inject,
+			liveRationale: inject,
+		});
+		const ghCalls: string[][] = [];
+		const gh: GhRunner = (args) => {
+			ghCalls.push([...args]);
+			return { stdout: JSON.stringify({ comments: [{ body, createdAt: "2026-08-21T00:00:00Z", author: { login: "someone" } }] }), stderr: "", status: 0 };
+		};
+		// The selector's marker filter (`body.includes(PR_REVIEW_MARKER)`) runs before the trust
+		// check; an escaped body must be rejected by the filter itself — exactly one gh call (the
+		// pr view), never an identity/permission lookup, and nothing written.
+		assert.equal(fetchReviewFindingsOutcome(gh, "o/r", 497, join(root(), "findings.md")), "no-trusted-comment");
+		assert.equal(ghCalls.length, 1, "the marker filter must reject before any authority lookup");
 	});
 
 	it("rejects incomplete cells, non-surviving verification, and digest/count mismatches on read", () => {
