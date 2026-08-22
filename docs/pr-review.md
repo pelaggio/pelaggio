@@ -227,8 +227,12 @@ fail-closed dominance a valid summary gets). Carried findings whose latest decis
 so the fleet `survivorCount` includes them — are recorded in a separate `refuted` list
 with their refutation evidence; they need no hunk, open no edit region, and require no
 touch. `survivorCount` = `survivors.length + refuted.length`, binding the fleet record’s
-carried count; at least one genuine survivor is required. Adjudication disposes refuted
-entries as `refuted` in the operator record and comment.
+carried count; at least one genuine survivor is required. The fleet refutation is bound
+to the **old** reviewed SHA and is provenance only, never the clearer: adjudication
+re-checks every refuted entry in the live verification pass at the repaired head (an
+allowed survivor-hunk edit can reactivate one), clears it only on a fresh live refuted
+decision — recorded as the disposition rationale in the operator record — and refuses if
+the live verifier finds it alive, exactly as for a surviving finding.
 
 Forge comments are display/audit only. The command never scrapes Markdown or reconstructs
 evidence from a CI-only / legacy fleet run. Those cases refuse with a full-re-review
@@ -267,9 +271,11 @@ uncovered survivor. Broad churn returns to full `pr-review` or `pelaggio revise`
 Today’s schema-v1 fleet survivors have no `ruleId`/`cwe`/`classHint`, so emission-time
 classification lands them in `correctness-regression` / safety. Live adjudication
 therefore always spends **one** bounded `pr-verify` seat (the `--profile` scalar
-`pr-verify` settings). A non-`ok`, parked, malformed, incomplete, or `survives` result
-refuses with no authorization effects. A judgment-only set (taxonomy extension / test)
-skips the model call. Line numbers are not remapped through the interdiff — they hint at
+`pr-verify` settings) whose candidates are every safety-tier survivor **plus every
+refuted entry** regardless of tier (#525: a refuted entry’s only clearing evidence is the
+live pass). A non-`ok`, parked, malformed, incomplete, or `survives` result refuses with
+no authorization effects. A judgment-only survivor set with no refuted entries (taxonomy
+extension / test) skips the model call. Line numbers are not remapped through the interdiff — they hint at
 the pre-fix location; the verifier inspects the current head.
 
 The verifier is confined the same way the pipeline confines its `pr-verify` seats: its cwd

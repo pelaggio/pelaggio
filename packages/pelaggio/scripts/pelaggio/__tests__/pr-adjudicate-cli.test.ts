@@ -404,11 +404,12 @@ describe("pr-adjudicate CLI config and eligibility", () => {
 		assert.deepEqual(writes, ["write-gate:operator-adjudication", "comment:497", `status:success:${HEAD}`]);
 	});
 
-	it("binds evidence carrying a refuted entry and accounts it in the operator record without opening its hunk (#525 must-fix)", async () => {
+	it("binds evidence carrying a refuted entry, live-verifies it at the repaired head, and opens no hunk for it (#525 must-fix)", async () => {
 		// The gate's fail-closed invalid-summary rule pads the fleet survivorCount with findings a
 		// complete verification already refuted; the sidecar carries them as refuted. Adjudication
-		// must bind (counts include them), fix only the genuine survivor, and dispose the refuted
-		// entry with its fleet refutation evidence.
+		// must bind (counts include them), fix only the genuine survivor, and clear the refuted
+		// entry ONLY on fresh live confirmation at the repaired head (round-3 must-fix): the fleet
+		// refutation is bound to the old reviewed SHA and never clears an entry by itself.
 		const goneFinding: ReviewFinding = { severity: "must-fix", message: "Alleged bug, refuted.", path: "src/other.ts", line: 3 };
 		const gone: PrAdjudicationRefutedEntry = {
 			finding: goneFinding,
@@ -421,17 +422,27 @@ describe("pr-adjudicate CLI config and eligibility", () => {
 				sourceAgreement: "disagreement",
 				refuted: [gone],
 			},
+			// Live candidates are the safety survivor (C1) AND the refuted entry (C2).
+			verify: verification([
+				{ candidateId: "C1", decision: "refuted", rationale: "Fixed in the current head." },
+				{ candidateId: "C2", decision: "refuted", rationale: "Still absent at the repaired head." },
+			]),
 		});
 		// The interdiff (replacementDiff at src/a.ts:10) touches only the survivor's hunk; the
 		// refuted finding's file is never an allowed edit region and needs no touch.
 		assert.equal(await main(["--pr", "497"], h.deps), 0);
+		// The one pr-verify call carries BOTH candidates.
+		assert.match(h.stepCalls[0]?.prompt ?? "", /"candidateId":"C2"/);
+		assert.match(h.stepCalls[0]?.prompt ?? "", /Alleged bug, refuted\./);
 		const stored = readPrReviewGateRecord(h.gateRoot, 497, HEAD);
 		assert.ok(stored && stored.schemaVersion === 2 && stored.producer === "operator-adjudication");
 		assert.equal(stored.dispositions[reviewFindingFingerprint(finding())]?.disposition, "fixed");
 		const refutedEntry = stored.dispositions[gone.fingerprint];
 		assert.equal(refutedEntry?.disposition, "refuted");
-		assert.match(refutedEntry?.rationale ?? "", /C2/);
-		assert.match(refutedEntry?.rationale ?? "", /Not reproducible at the head\./);
+		// Fresh evidence bound to the repaired head, replacing the stale fleet rationale.
+		assert.match(refutedEntry?.rationale ?? "", /Live isolated verification C2 at the repaired head/);
+		assert.match(refutedEntry?.rationale ?? "", /Still absent at the repaired head\./);
+		assert.doesNotMatch(refutedEntry?.rationale ?? "", /Not reproducible at the head\./);
 		// An interdiff editing the refuted finding's file stays refused — no edit region opened.
 		const outOfRegion = harness({
 			evidenceShape: {
@@ -444,6 +455,32 @@ describe("pr-adjudicate CLI config and eligibility", () => {
 		assert.equal(await main(["--pr", "497"], outOfRegion.deps), 1);
 		assert.ok(outOfRegion.errs.some((e) => e.includes("extra file src/other.ts")));
 		assert.ok(!outOfRegion.effects.some((e) => e.startsWith("write-gate:") || e.startsWith("comment:") || e.startsWith("status:")));
+	});
+
+	it("refuses when the live verifier finds a fleet-refuted finding alive at the repaired head (#525 round-3 must-fix)", async () => {
+		// An allowed survivor-hunk edit can REACTIVATE a finding the fleet refuted at the old
+		// reviewed SHA. The live pass re-checks refuted entries against current code; one found
+		// alive blocks exactly like a surviving finding — no record, comment, or success status.
+		const goneFinding: ReviewFinding = { severity: "must-fix", message: "Alleged bug, refuted.", path: "src/other.ts", line: 3 };
+		const gone: PrAdjudicationRefutedEntry = {
+			finding: goneFinding,
+			fingerprint: reviewFindingFingerprint(goneFinding),
+			verification: { id: "C2", decision: "refuted", rationale: "Not reproducible at the head." },
+		};
+		const h = harness({
+			evidenceShape: {
+				fleet: { subtype: "invalid-pass", agreement: "disagreement", breakerReason: "invalid-pass" },
+				sourceAgreement: "disagreement",
+				refuted: [gone],
+			},
+			verify: verification([
+				{ candidateId: "C1", decision: "refuted", rationale: "Fixed in the current head." },
+				{ candidateId: "C2", decision: "survives", rationale: "The repair reintroduced it." },
+			]),
+		});
+		assert.equal(await main(["--pr", "497"], h.deps), 1);
+		assert.ok(h.errs.some((e) => e.includes("surviving finding at the repaired head")));
+		assert.ok(!h.effects.some((e) => e.startsWith("write-gate:") || e.startsWith("comment:") || e.startsWith("status:")));
 	});
 
 	it("refuses a broken invalid-pass record and a sidecar whose agreement mismatches the fleet record (#525)", async () => {

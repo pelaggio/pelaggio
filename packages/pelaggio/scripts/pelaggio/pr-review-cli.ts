@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { CONFIG, modelForProvider, REPO, type ReviewConfig, ROADMAP_GITHUB, resolveDriverCandidates, resolveStepSettings, type StepSettings } from "./config.js";
 import { upsertMarkerComment } from "./github-posting.js";
-import { classifySecurityReviewDiff, expandPackagedSkill, formatReviewMetrics, mainWorktree, parseWaitFlag, resolveParkReset, type SecurityDiffSignal } from "./helpers.js";
+import { classifySecurityReviewDiff, escapeHtml, escapeMarkdown, expandPackagedSkill, formatReviewMetrics, mainWorktree, parseWaitFlag, resolveParkReset, type SecurityDiffSignal } from "./helpers.js";
 import { gateRecordsDir, type NewPrReviewFleetGateRecord, writePrReviewGateRecord } from "./pr-review-gate-record.js";
 import { adjudicationSourcesDir, buildAdjudicationSourceDraft, fleetRecordDigestOf, type PrAdjudicationSourceDraft, writeAdjudicationSourceRecord } from "./review/adjudication.js";
 import {
@@ -257,14 +257,6 @@ function renderPass(pass: ReviewPass): string {
 		? ["", "Parse diagnosis (invariant: phase + a single constant `parse-failure` code, never the specific parse error; no model output retained — #536/#554):", "", `<pre>${escapeHtml(pass.parseFailureDiagnosis)}</pre>`]
 		: [];
 	return [heading, "", `${escapeMarkdown(pass.diagnostic ?? `Run did not complete cleanly (${pass.result.subtype}).`)} Failing this pass closed.`, ...diagnosis].join("\n");
-}
-
-function escapeHtml(value: string): string {
-	return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
-}
-
-function escapeMarkdown(value: string): string {
-	return escapeHtml(value).replace(/([\\`*_[\]{}()#+.!|>-])/g, "\\$1");
 }
 
 /** Agreement over a completed required (driver × label) matrix. First match wins. */

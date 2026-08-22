@@ -290,20 +290,19 @@ export async function runPrAdjudication(pr: number, profile: string, deps: PrAdj
 		if (churn.kind === "refused") return refuse(deps, churn.reason);
 		// Durable dispositions: containment rationales from the churn predicate, with safety-tier
 		// entries rebound below to the LIVE adjudication-time verification evidence — never the
-		// stale red-review "survives" text (#497 must-fix). Carried-but-refuted findings (#525)
-		// are accounted with their fleet refutation evidence — they were counted in the fleet
-		// record's survivorCount, need no repair, and open no edit region.
+		// stale red-review "survives" text (#497 must-fix). Carried-but-refuted findings (#525
+		// round-3 must-fix) are cleared ONLY by live confirmation below: their fleet refutation is
+		// bound to the OLD reviewed SHA, and an allowed survivor-hunk edit at the repaired head can
+		// reactivate them — stale old-SHA evidence alone never clears an entry at a different SHA.
 		let finalDispositions: Record<string, PrReviewFindingDispositionEntry> = { ...churn.dispositions };
-		for (const entry of source.refuted) {
-			finalDispositions[entry.fingerprint] = {
-				disposition: "refuted",
-				rationale: `Fleet isolated verification ${entry.verification.id} refuted the finding (${entry.verification.rationale}); retained only by the gate's fail-closed invalid-summary rule, no repair required.`,
-			};
-		}
 
 		const safety = source.survivors.filter((entry) => entry.tier === "safety");
-		if (safety.length > 0) {
-			const candidates: VerificationCandidate[] = safety.map((entry, index) => ({ id: `C${index + 1}`, finding: entry.finding }));
+		// Live candidates at the repaired head: every safety-tier survivor AND every refuted entry
+		// (regardless of tier — a refuted entry's only clearing evidence is the live pass; one the
+		// verifier finds alive blocks exactly like a surviving finding).
+		const liveChecked = [...safety.map((entry) => entry.finding), ...source.refuted.map((entry) => entry.finding)];
+		if (liveChecked.length > 0) {
+			const candidates: VerificationCandidate[] = liveChecked.map((finding, index) => ({ id: `C${index + 1}`, finding }));
 			const parkSignal = emptyParkSignal();
 			const verifySettings = deps.resolveVerifySettings(profile);
 			const localContext = trustedLocalContext({ diffCwd: prepared.diffCwd, diffBaseRef: prepared.baseRef, diffHeadRef: prepared.headRef });
@@ -416,19 +415,34 @@ export async function runPrAdjudication(pr: number, profile: string, deps: PrAdj
 			} catch (e) {
 				return refuse(deps, `invalid verification report: ${e instanceof Error ? e.message : String(e)}`);
 			}
-			if (dispositions.some((entry) => entry.decision === "survives")) return refuse(deps, "safety verifier reported a surviving finding; run a full pr-review");
-			if (!dispositions.every((entry) => entry.decision === "refuted")) return refuse(deps, "safety verification was incomplete");
+			// A survives here covers BOTH classes: a safety survivor the repair did not fix, and a
+			// refuted entry the repair REACTIVATED at the repaired head (#525 round-3 must-fix).
+			if (dispositions.some((entry) => entry.decision === "survives")) return refuse(deps, "live verifier reported a surviving finding at the repaired head; run a full pr-review");
+			if (!dispositions.every((entry) => entry.decision === "refuted")) return refuse(deps, "live verification was incomplete");
 			const live = new Map<string, LiveSafetyRefutation>();
 			for (const entry of dispositions) {
 				if (entry.decision !== "refuted") continue;
 				live.set(reviewFindingFingerprint(entry.finding), { id: entry.id, decision: "refuted", rationale: entry.rationale });
 			}
 			try {
-				// Bind over finalDispositions (not churn.dispositions) so the refuted entries merged
-				// above survive the safety rebind; refuted fingerprints are disjoint from survivors.
 				finalDispositions = bindLiveSafetyVerification(source.survivors, finalDispositions, live);
 			} catch (e) {
 				return refuse(deps, `could not bind live verification evidence: ${e instanceof Error ? e.message : String(e)}`);
+			}
+			// Refuted entries clear only on FRESH evidence bound to the repaired head; the fleet
+			// refutation is provenance, never the clearer. Fail-closed: a missing live confirmation
+			// refuses (the completeness checks above should make this unreachable).
+			for (const entry of source.refuted) {
+				const evidence = live.get(entry.fingerprint);
+				if (evidence?.decision !== "refuted") {
+					return refuse(deps, "no live confirmation for a fleet-refuted finding at the repaired head; run a full pr-review");
+				}
+				finalDispositions[entry.fingerprint] = {
+					disposition: "refuted",
+					rationale:
+						`Live isolated verification ${evidence.id} at the repaired head confirmed the finding remains refuted (${evidence.rationale}). ` +
+						`Fleet verification ${entry.verification.id} first refuted it at the reviewed SHA; that stale evidence alone never clears an entry at a different SHA.`,
+				};
 			}
 		}
 

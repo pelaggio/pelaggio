@@ -11,6 +11,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { parsePatch, type StructuredPatch } from "diff";
+import { escapeMarkdown } from "../helpers.js";
 import type { PrReviewAgreement } from "../pr-review-cli.js";
 import type { NewPrReviewOperatorGateRecord, PrReviewFindingDispositionEntry, PrReviewGateRecord } from "../pr-review-gate-record.js";
 import { type ClassificationResult, type ClassificationSignalKind, materializeAuthoringFinding, type ReviewFinding, type ReviewFindingClass, type ReviewFindingSeverity, reviewFindingFingerprint } from "./findings.js";
@@ -234,7 +235,8 @@ function validateVerification<D extends "survives" | "refuted">(value: unknown, 
 	if (!CANDIDATE_ID_RE.test(id)) fail("verification.id");
 	if (value.decision !== expected) fail("verification.decision");
 	const rationale = requireNonEmptyString(value.rationale, "verification.rationale");
-	if (rationale.trim().length === 0) fail("verification.rationale");
+	// Single-line, matching validateFinding's message rule — trust-boundary validations are uniform.
+	if (rationale.trim().length === 0 || /[\r\n]/.test(rationale)) fail("verification.rationale");
 	return { id, decision: expected, rationale };
 }
 
@@ -826,7 +828,9 @@ export function renderOperatorAdjudicationComment(opts: {
 	});
 	const refuted = (opts.refuted ?? []).map((entry) => {
 		const location = entry.finding.path ? ` (\`${entry.finding.path}${entry.finding.line ? `:${entry.finding.line}` : ""}\`)` : "";
-		return `- **${entry.finding.severity}**${location}: ${entry.finding.message} — **refuted** by fleet isolated verification ${entry.verification.id} (${entry.verification.rationale}); no repair required`;
+		// The rationale is model-authored: escape it so an injected marker (e.g. the fleet
+		// `<!-- pelaggio-pr-review -->` scrape target) cannot survive into this PUBLIC comment.
+		return `- **${entry.finding.severity}**${location}: ${entry.finding.message} — **refuted** by fleet isolated verification ${entry.verification.id} (${escapeMarkdown(entry.verification.rationale)}); no repair required`;
 	});
 	return [
 		PR_ADJUDICATION_MARKER,

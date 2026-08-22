@@ -225,10 +225,34 @@ describe("adjudication source store", () => {
 			{ ...record(), refuted: [{ ...gone, hunk: { path: "src/a.ts", start: 1, end: 2 } }], survivorCount: 2 },
 			// at least one genuine survivor
 			{ ...record(), survivors: [], refuted: [gone], survivorCount: 1 },
+			// rationale must be single-line — same trust-boundary rule as finding.message
+			{ ...record(), refuted: [{ ...gone, verification: { ...gone.verification, rationale: "line one\nline two" } }], survivorCount: 2 },
+			{ ...record(), survivors: [{ ...entry, verification: { ...entry.verification, rationale: "line one\nline two" } }] },
 		];
 		for (const value of invalid) {
 			assert.throws(() => writeAdjudicationSourceRecord(root(), value as unknown as PrAdjudicationSourceRecordV1));
 		}
+	});
+
+	it("escapes model-authored refutation rationale in the operator comment (#525 review)", () => {
+		// An injected fleet marker in a (single-line, schema-valid) rationale must not survive raw
+		// into the PUBLIC adjudication comment — fetchReviewFindings scrapes that marker.
+		const goneFinding = finding({ message: "Alleged bug, refuted." });
+		const injected = "before <!-- pelaggio-pr-review --> `after` [x](y)";
+		const body = renderOperatorAdjudicationComment({
+			prNumber: 497,
+			sourceSha: REVIEWED,
+			headSha: HEAD,
+			interdiffDigest: DIGEST,
+			adjudicator: "op",
+			survivors: [survivor()],
+			refuted: [{ finding: goneFinding, fingerprint: reviewFindingFingerprint(goneFinding), verification: { id: "C2", decision: "refuted", rationale: injected } }],
+			dispositions: { [survivor().fingerprint]: { disposition: "fixed", rationale: "Contained." } },
+		});
+		assert.ok(!body.includes("<!-- pelaggio-pr-review -->"), "the injected fleet marker must not appear raw");
+		assert.ok(body.includes("&lt;"), "the rationale is escaped, not dropped");
+		assert.match(body, /pelaggio\\-pr\\-review/);
+		assert.match(body, /Carried findings already refuted by the fleet/);
 	});
 
 	it("rejects incomplete cells, non-surviving verification, and digest/count mismatches on read", () => {
