@@ -8,7 +8,7 @@ import { DEFAULTS, type StepSettings } from "../config.js";
 import { FORBIDDEN_ROOT_GONE, type MainCheckoutDeltaResult } from "../helpers.js";
 import { main, type PrAdjudicateDeps, parsePrAdjudicateArgs } from "../pr-adjudicate-cli.js";
 import { listPrReviewGateRecords, type NewPrReviewFleetGateRecord, readPrReviewGateRecord, writePrReviewGateRecord } from "../pr-review-gate-record.js";
-import { type PrAdjudicationSourceRecordV1, type PrAdjudicationSurvivorEntry, readAdjudicationSourceRecord, writeAdjudicationSourceRecord } from "../review/adjudication.js";
+import { type PrAdjudicationRefutedEntry, type PrAdjudicationSourceRecordV1, type PrAdjudicationSurvivorEntry, readAdjudicationSourceRecord, writeAdjudicationSourceRecord } from "../review/adjudication.js";
 import { materializeAuthoringFinding, type ReviewFinding, reviewFindingFingerprint } from "../review/findings.js";
 import { BASELINE_TAXONOMY, tierOf } from "../review/taxonomy.js";
 import type { GhRunner } from "../roadmap/github-issues.js";
@@ -136,20 +136,27 @@ interface Harness {
 	heads: string[];
 }
 
-function seedEvidence(gateRoot: string, sourceRoot: string, entry: PrAdjudicationSurvivorEntry = survivor()): { digest: string } {
-	const path = writePrReviewGateRecord(gateRoot, fleet());
+function seedEvidence(
+	gateRoot: string,
+	sourceRoot: string,
+	entry: PrAdjudicationSurvivorEntry = survivor(),
+	shape: { fleet?: Partial<NewPrReviewFleetGateRecord>; sourceAgreement?: "consensus-block" | "disagreement"; refuted?: PrAdjudicationRefutedEntry[] } = {},
+): { digest: string } {
+	const path = writePrReviewGateRecord(gateRoot, fleet({ survivorCount: 1 + (shape.refuted?.length ?? 0), ...shape.fleet }));
 	const bytes = readFileSync(path);
 	const digest = createHash("sha256").update(bytes).digest("hex");
+	const refuted = shape.refuted ?? [];
 	const record: PrAdjudicationSourceRecordV1 = {
 		schemaVersion: 1,
 		prNumber: 497,
 		itemId: "497",
 		reviewedSha: REVIEWED,
-		agreement: "consensus-block",
+		agreement: shape.sourceAgreement ?? "consensus-block",
 		requiredCells: 1,
 		completedCells: 1,
-		survivorCount: 1,
+		survivorCount: 1 + refuted.length,
 		survivors: [entry],
+		refuted,
 		fleetRecordDigest: digest,
 	};
 	writeAdjudicationSourceRecord(sourceRoot, record);
@@ -169,6 +176,8 @@ function harness(
 		isSingleShot?: boolean;
 		mainWorktree?: string;
 		seed?: boolean;
+		/** Evidence-shape overrides threaded to seedEvidence (#525 disagreement coverage). */
+		evidenceShape?: { fleet?: Partial<NewPrReviewFleetGateRecord>; sourceAgreement?: "consensus-block" | "disagreement"; refuted?: PrAdjudicationRefutedEntry[] };
 		survivor?: PrAdjudicationSurvivorEntry;
 		interdiff?: string;
 		ancestor?: boolean;
@@ -192,7 +201,7 @@ function harness(
 	const repo = tmp();
 	const gateRoot = join(repo, "gates");
 	const sourceRoot = join(repo, "sources");
-	if (over.seed !== false) seedEvidence(gateRoot, sourceRoot, over.survivor);
+	if (over.seed !== false) seedEvidence(gateRoot, sourceRoot, over.survivor, over.evidenceShape ?? {});
 	const effects: string[] = [];
 	const stepCalls: Harness["stepCalls"] = [];
 	const logs: string[] = [];
@@ -378,6 +387,118 @@ describe("pr-adjudicate CLI config and eligibility", () => {
 		assert.equal(await main(["--pr", "497"], h.deps), 0);
 		assert.ok(h.effects.includes("write-gate:operator-adjudication"));
 		assert.ok(h.effects.includes(`status:success:${HEAD}`));
+	});
+
+	it("adjudicates the complete disagreement/invalid-pass split end to end (#525)", async () => {
+		// The PR #589 shape: ok=true, agreement=disagreement, breaker labeled invalid-pass by the
+		// convergence loop although every review was structurally valid. The full effect chain
+		// (verify → record → comment → status) must run exactly as for a consensus-block.
+		const h = harness({
+			evidenceShape: {
+				fleet: { subtype: "invalid-pass", agreement: "disagreement", breakerReason: "invalid-pass", iterations: 1 },
+				sourceAgreement: "disagreement",
+			},
+		});
+		assert.equal(await main(["--pr", "497"], h.deps), 0);
+		const writes = h.effects.filter((e) => e.startsWith("write-gate:") || e.startsWith("comment:") || e.startsWith("status:"));
+		assert.deepEqual(writes, ["write-gate:operator-adjudication", "comment:497", `status:success:${HEAD}`]);
+	});
+
+	it("binds evidence carrying a refuted entry, live-verifies it at the repaired head, and opens no hunk for it (#525 must-fix)", async () => {
+		// The gate's fail-closed invalid-summary rule pads the fleet survivorCount with findings a
+		// complete verification already refuted; the sidecar carries them as refuted. Adjudication
+		// must bind (counts include them), fix only the genuine survivor, and clear the refuted
+		// entry ONLY on fresh live confirmation at the repaired head (round-3 must-fix): the fleet
+		// refutation is bound to the old reviewed SHA and never clears an entry by itself.
+		const goneFinding: ReviewFinding = { severity: "must-fix", message: "Alleged bug, refuted.", path: "src/other.ts", line: 3 };
+		const gone: PrAdjudicationRefutedEntry = {
+			finding: goneFinding,
+			fingerprint: reviewFindingFingerprint(goneFinding),
+			verification: { id: "C2", decision: "refuted", rationale: "Not reproducible at the head." },
+		};
+		const h = harness({
+			evidenceShape: {
+				fleet: { subtype: "invalid-pass", agreement: "disagreement", breakerReason: "invalid-pass" },
+				sourceAgreement: "disagreement",
+				refuted: [gone],
+			},
+			// Live candidates are the safety survivor (C1) AND the refuted entry (C2).
+			verify: verification([
+				{ candidateId: "C1", decision: "refuted", rationale: "Fixed in the current head." },
+				{ candidateId: "C2", decision: "refuted", rationale: "Still absent at the repaired head." },
+			]),
+		});
+		// The interdiff (replacementDiff at src/a.ts:10) touches only the survivor's hunk; the
+		// refuted finding's file is never an allowed edit region and needs no touch.
+		assert.equal(await main(["--pr", "497"], h.deps), 0);
+		// The one pr-verify call carries BOTH candidates.
+		assert.match(h.stepCalls[0]?.prompt ?? "", /"candidateId":"C2"/);
+		assert.match(h.stepCalls[0]?.prompt ?? "", /Alleged bug, refuted\./);
+		const stored = readPrReviewGateRecord(h.gateRoot, 497, HEAD);
+		assert.ok(stored && stored.schemaVersion === 2 && stored.producer === "operator-adjudication");
+		assert.equal(stored.dispositions[reviewFindingFingerprint(finding())]?.disposition, "fixed");
+		const refutedEntry = stored.dispositions[gone.fingerprint];
+		assert.equal(refutedEntry?.disposition, "refuted");
+		// Fresh evidence bound to the repaired head, replacing the stale fleet rationale.
+		assert.match(refutedEntry?.rationale ?? "", /Live isolated verification C2 at the repaired head/);
+		assert.match(refutedEntry?.rationale ?? "", /Still absent at the repaired head\./);
+		assert.doesNotMatch(refutedEntry?.rationale ?? "", /Not reproducible at the head\./);
+		// An interdiff editing the refuted finding's file stays refused — no edit region opened.
+		const outOfRegion = harness({
+			evidenceShape: {
+				fleet: { subtype: "invalid-pass", agreement: "disagreement", breakerReason: "invalid-pass" },
+				sourceAgreement: "disagreement",
+				refuted: [gone],
+			},
+			interdiff: ["diff --git a/src/other.ts b/src/other.ts", "index 1111111..2222222 100644", "--- a/src/other.ts", "+++ b/src/other.ts", "@@ -3,1 +3,1 @@", "-old", "+new", ""].join("\n"),
+		});
+		assert.equal(await main(["--pr", "497"], outOfRegion.deps), 1);
+		assert.ok(outOfRegion.errs.some((e) => e.includes("extra file src/other.ts")));
+		assert.ok(!outOfRegion.effects.some((e) => e.startsWith("write-gate:") || e.startsWith("comment:") || e.startsWith("status:")));
+	});
+
+	it("refuses when the live verifier finds a fleet-refuted finding alive at the repaired head (#525 round-3 must-fix)", async () => {
+		// An allowed survivor-hunk edit can REACTIVATE a finding the fleet refuted at the old
+		// reviewed SHA. The live pass re-checks refuted entries against current code; one found
+		// alive blocks exactly like a surviving finding — no record, comment, or success status.
+		const goneFinding: ReviewFinding = { severity: "must-fix", message: "Alleged bug, refuted.", path: "src/other.ts", line: 3 };
+		const gone: PrAdjudicationRefutedEntry = {
+			finding: goneFinding,
+			fingerprint: reviewFindingFingerprint(goneFinding),
+			verification: { id: "C2", decision: "refuted", rationale: "Not reproducible at the head." },
+		};
+		const h = harness({
+			evidenceShape: {
+				fleet: { subtype: "invalid-pass", agreement: "disagreement", breakerReason: "invalid-pass" },
+				sourceAgreement: "disagreement",
+				refuted: [gone],
+			},
+			verify: verification([
+				{ candidateId: "C1", decision: "refuted", rationale: "Fixed in the current head." },
+				{ candidateId: "C2", decision: "survives", rationale: "The repair reintroduced it." },
+			]),
+		});
+		assert.equal(await main(["--pr", "497"], h.deps), 1);
+		assert.ok(h.errs.some((e) => e.includes("surviving finding at the repaired head")));
+		assert.ok(!h.effects.some((e) => e.startsWith("write-gate:") || e.startsWith("comment:") || e.startsWith("status:")));
+	});
+
+	it("refuses a broken invalid-pass record and a sidecar whose agreement mismatches the fleet record (#525)", async () => {
+		// Genuinely broken review run: ok=false / agreement=invalid — never adjudicable.
+		const broken = harness({
+			evidenceShape: { fleet: { ok: false, agreement: "invalid", subtype: "invalid-pass", breakerReason: "invalid-pass" } },
+		});
+		assert.equal(await main(["--pr", "497"], broken.deps), 1);
+		assert.ok(broken.errs.some((e) => e.includes("not an adjudicable complete blocked review")));
+		assert.ok(!broken.effects.some((e) => e.startsWith("step:") || e.startsWith("comment:") || e.startsWith("status:")));
+
+		// Agreement mismatch: a consensus-block sidecar cannot bind a disagreement fleet record.
+		const mismatch = harness({
+			evidenceShape: { fleet: { subtype: "invalid-pass", agreement: "disagreement", breakerReason: "invalid-pass" }, sourceAgreement: "consensus-block" },
+		});
+		assert.equal(await main(["--pr", "497"], mismatch.deps), 1);
+		assert.ok(mismatch.errs.some((e) => e.includes("agreement does not match")));
+		assert.ok(!mismatch.effects.some((e) => e.startsWith("step:") || e.startsWith("comment:") || e.startsWith("status:")));
 	});
 });
 
