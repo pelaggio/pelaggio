@@ -30,6 +30,7 @@ import {
 	type PrCarryDispositionDraft,
 	type PrCarryRefutedEntry,
 	planCarry,
+	poolStoreTrust,
 	prFindingDispositionsDir,
 	selectCarrySource,
 	writePrFindingDispositionRecord,
@@ -847,11 +848,23 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 	}
 
 	const passes: ReviewPass[] = [];
+	// #495 round-4 store-trust: carry may CONSUME evidence (seed / narrow / auto-refute) only when
+	// EVERY provider in this run's pool has a proven store-write denial (claude via foreignRootDenial
+	// hooks, codex via the read-only sandbox). If any pool provider is store-writable
+	// (grok in any mode, opencode, an unknown future provider), a poisoned disposition/fleet record
+	// could authorize a fail-open, so consumption is refused and the run goes cold. Record WRITING
+	// below is unaffected — this run still emits its own dispositions; they are simply not TRUSTED
+	// for seeding/narrowing THIS run. Safe-by-construction regardless of the review.carry default.
+	const poolProviders = [...reviewDrivers.map((driver) => driver.provider), verifySettings.provider];
+	const storeTrust = poolStoreTrust(poolProviders);
+	const carry = options.carry && storeTrust.trusted ? options.carry : undefined;
+	if (options.carry && !storeTrust.trusted) {
+		process.stderr.write(`⚠ carry consumption refused — review pool contains store-writable provider(s) ${storeTrust.untrusted.join(", ")} without a proven .dev store-write denial; running cold (records still written, not consumed)\n`);
+	}
 	// #495: seeded survivors join the first verification pass's candidates and persist under
 	// applyReviewPass's omission-never-refutes rule; gate PASS still requires converged-empty +
 	// consensus-pass. A run whose complete valid verification refutes every seeded survivor
 	// passes — that is I2's explicit-refutation door, unchanged.
-	const carry = options.carry;
 	let carried = new Map<string, ReviewFinding>(carry?.seedSurvivors ?? []);
 	// Harness-side mirror of applyReviewPass's delete branch: fingerprints a VALID summary
 	// refuted this run, with the refuting candidate id (for the disposition record).
@@ -1076,7 +1089,13 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 	// so `auto-refuted=0` cannot read as "checked and none qualified" — under the shipped default
 	// taxonomy nothing is eligible (production findings all classify safety-tier; see
 	// docs/pr-review.md), and this token says so honestly.
-	const carryToken = carry ? `carry=${carry.priorSha.slice(0, 7)} seeded=${carry.seedSurvivors.size} auto-refutable=${carry.autoRefutable.size} auto-refuted=${autoRefuted.size}` : "carry=none";
+	// When carry was supplied but the pool is store-untrusted, the run went cold on purpose — say
+	// so, so `carry=none` is not misread as first-run.
+	const carryToken = carry
+		? `carry=${carry.priorSha.slice(0, 7)} seeded=${carry.seedSurvivors.size} auto-refutable=${carry.autoRefutable.size} auto-refuted=${autoRefuted.size}`
+		: options.carry && !storeTrust.trusted
+			? "carry=refused-untrusted-pool"
+			: "carry=none";
 	const summary = `Convergence: ${gate === "pass" ? "converged" : `exhausted (${breakerReason ?? "invalid-pass"})`} · agreement=${agreement} · iterations=${lastIteration} · survivors=${carried.size} · providers=${pairing} · ${carryToken} · aggregate cost=$${cost.toFixed(2)}`;
 	const body = buildComment(gate, passes, securitySignal, summary, {
 		iterations: lastIteration,
@@ -1255,11 +1274,12 @@ export function resolveCarryOptions(opts: {
 		return undefined;
 	}
 	const record = selection.record;
-	if (selection.superseded.length > 0) {
-		// A newer record no longer binds (typically a later pr-adjudicate rewrote the fleet gate
-		// record at that head). Its survivors still seed (toward blocking, via the overlay below);
-		// nothing from it clears a finding.
-		opts.warn(`carry: prior record(s) ${selection.superseded.join(", ")} no longer bind to their fleet gate records (superseded — e.g. by pr-adjudicate); falling back to ${record.prNumber}-${record.headSha}.json`);
+	if (selection.overlayNotes.length > 0) {
+		// Non-watermark ancestors (incomplete runs, or complete records whose fleet record no
+		// longer binds — e.g. a later pr-adjudicate rewrote it) still contribute their retained
+		// blockers as blocking-only overlay; nothing from them clears a finding. The narrowing
+		// watermark is the newest COMPLETE bindable ancestor below.
+		opts.warn(`carry: seeding blockers from ${selection.overlaySurvivors.length} non-watermark survivor(s) [${selection.overlayNotes.join(", ")}] as blocking-only overlay; watermark = ${record.prNumber}-${record.headSha}.json`);
 	}
 	// D3 preflight: the narrowed base ref must resolve in the seat-visible diff checkout. In
 	// practice it does (the drain's checkout shares the trusted repo's object store), so this is
@@ -1279,7 +1299,7 @@ export function resolveCarryOptions(opts: {
 		opts.warn(`carry disabled — could not compute the interdiff: ${e instanceof Error ? e.message : String(e)}; running a full cold review`);
 		return undefined;
 	}
-	const plan = planCarry(record, touchedPaths, opts.taxonomy, selection.supersededSurvivors);
+	const plan = planCarry(record, touchedPaths, opts.taxonomy, selection.overlaySurvivors);
 	return {
 		priorSha: record.headSha,
 		seedSurvivors: plan.seedSurvivors,

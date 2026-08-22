@@ -17,7 +17,9 @@ import {
 	type PrCarrySurvivorEntry,
 	type PrFindingDispositionRecordV1,
 	planCarry,
+	poolStoreTrust,
 	readPrFindingDispositionRecord,
+	STORE_TRUSTED_REVIEW_PROVIDERS,
 	selectCarrySource,
 	validatePrFindingDispositionRecord,
 	writePrFindingDispositionRecord,
@@ -143,6 +145,23 @@ describe("finding-disposition record store", () => {
 	});
 });
 
+describe("poolStoreTrust (#495 round-4 — carry consumption gate)", () => {
+	it("only claude and codex are store-trusted (default-deny)", () => {
+		assert.deepEqual([...STORE_TRUSTED_REVIEW_PROVIDERS].sort(), ["claude", "codex"]);
+	});
+
+	it("trusts a pool of only claude/codex", () => {
+		assert.deepEqual(poolStoreTrust(["claude"]), { trusted: true });
+		assert.deepEqual(poolStoreTrust(["claude", "codex", "claude"]), { trusted: true });
+	});
+
+	it("refuses any pool containing a store-writable provider, naming it", () => {
+		assert.deepEqual(poolStoreTrust(["claude", "grok"]), { trusted: false, untrusted: ["grok"] });
+		assert.deepEqual(poolStoreTrust(["opencode"]), { trusted: false, untrusted: ["opencode"] });
+		assert.deepEqual(poolStoreTrust(["claude", "grok", "opencode", "codex"]), { trusted: false, untrusted: ["grok", "opencode"] });
+	});
+});
+
 describe("isCompleteWatermark", () => {
 	it("accepts only ok=true with a non-invalid agreement", () => {
 		assert.equal(isCompleteWatermark({ ok: true, agreement: "consensus-pass" }), true);
@@ -175,7 +194,7 @@ describe("selectCarrySource", () => {
 
 	it("selects a single ancestor prior and binds it to the exact fleet bytes", () => {
 		const prior = boundRecord(SHA_A);
-		assert.deepEqual(select([prior]), { kind: "selected", record: prior, superseded: [], supersededSurvivors: [] });
+		assert.deepEqual(select([prior]), { kind: "selected", record: prior, overlaySurvivors: [], overlayNotes: [] });
 	});
 
 	it("selects a complete disagreement/consensus-pass prior exactly as a consensus-block one", () => {
@@ -196,13 +215,20 @@ describe("selectCarrySource", () => {
 		assert.deepEqual(select([boundRecord(SHA_A, { agreement: "invalid" })]), { kind: "none" });
 	});
 
-	it("walks past an incomplete newer prior to the next-oldest COMPLETE ancestor (inverted watermark)", () => {
-		// A→B→HEAD: complete at A, incomplete at B (the tip's last run failed structurally). The
-		// base must advance only to A, never to B — narrowing A..HEAD lets a full fleet review B's
-		// delta. (Pre-fix, B advanced the base and A..B's code could ride in unread.)
-		const completeOlder = boundRecord(SHA_A);
-		const incompleteNewer = boundRecord(SHA_B, { ok: false, agreement: "invalid" });
-		assert.deepEqual(select([completeOlder, incompleteNewer]), { kind: "selected", record: completeOlder, superseded: [], supersededSurvivors: [] });
+	it("walks past an incomplete newer prior to the next-oldest COMPLETE watermark BUT overlays its blockers (round-4 must-fix)", () => {
+		// A→B→HEAD: complete at A, incomplete at B carrying a retained blocker. The narrowing base
+		// must advance only to A (never B — narrowing A..HEAD lets a full fleet review B's delta),
+		// but B's blocker must STILL seed as blocking-only overlay: otherwise an omission at HEAD
+		// greens a blocker no complete valid report ever refuted.
+		const bBlocker = survivor(finding("Retained at incomplete B.", "src/b.ts", 4));
+		const completeOlder = boundRecord(SHA_A, { survived: [], refuted: [] });
+		const incompleteNewer = boundRecord(SHA_B, { ok: false, agreement: "invalid", survived: [bBlocker], refuted: [] });
+		const selection = select([completeOlder, incompleteNewer]);
+		assert.equal(selection.kind, "selected");
+		if (selection.kind !== "selected") return;
+		assert.equal(selection.record, completeOlder, "watermark is the complete ancestor, never the incomplete one");
+		assert.deepEqual(selection.overlaySurvivors, [bBlocker], "the incomplete ancestor's blocker seeds as overlay");
+		assert.deepEqual(selection.overlayNotes, [`495-${SHA_B}.json (incomplete)`]);
 	});
 
 	it("returns none with no relevant priors; same-SHA and wrong pr/item records are excluded", () => {
@@ -222,7 +248,7 @@ describe("selectCarrySource", () => {
 	it("picks the maximal record of an ordered chain and refuses an unordered set", () => {
 		const older = boundRecord(SHA_A);
 		const newer = boundRecord(SHA_B);
-		assert.deepEqual(select([older, newer]), { kind: "selected", record: newer, superseded: [], supersededSurvivors: [] });
+		assert.deepEqual(select([older, newer]), { kind: "selected", record: newer, overlaySurvivors: [], overlayNotes: [] });
 		// Unordered: two ancestors of HEAD with no ancestry between them (diverged-then-merged).
 		const divergent = (_ancestor: string, descendant: string): boolean => descendant === HEAD;
 		const selection = select([older, newer], { isAncestor: divergent });
@@ -234,7 +260,7 @@ describe("selectCarrySource", () => {
 	it("never consults reviewedAt: a forged future timestamp does not change selection", () => {
 		const older = boundRecord(SHA_A, { reviewedAt: "2099-01-01T00:00:00.000Z" });
 		const newer = boundRecord(SHA_B, { reviewedAt: "2020-01-01T00:00:00.000Z" });
-		assert.deepEqual(select([older, newer]), { kind: "selected", record: newer, superseded: [], supersededSurvivors: [] });
+		assert.deepEqual(select([older, newer]), { kind: "selected", record: newer, overlaySurvivors: [], overlayNotes: [] });
 	});
 
 	it("refuses when no prior still binds, naming the supersession cause (not a bare digest complaint)", () => {
@@ -243,7 +269,7 @@ describe("selectCarrySource", () => {
 		assert.match((missing as { reason: string }).reason, /superseded — e.g. a later pr-adjudicate rewrote the gate record/);
 		const mismatch = select([record({ headSha: SHA_A, fleetRecordDigest: "1".repeat(64) })], { readFleetBytes: () => Buffer.from("different bytes") });
 		assert.equal(mismatch.kind, "refused");
-		assert.match((mismatch as { reason: string }).reason, /no prior disposition record for PR 495 still binds/);
+		assert.match((mismatch as { reason: string }).reason, /no complete prior disposition record for PR 495 still binds/);
 		assert.match((mismatch as { reason: string }).reason, new RegExp(`495-${SHA_A}\\.json`));
 	});
 
@@ -260,8 +286,8 @@ describe("selectCarrySource", () => {
 		assert.equal(selection.kind, "selected");
 		if (selection.kind !== "selected") return;
 		assert.equal(selection.record, older);
-		assert.deepEqual(selection.superseded, [`495-${SHA_B}.json`]);
-		assert.deepEqual(selection.supersededSurvivors, [alive]);
+		assert.deepEqual(selection.overlaySurvivors, [alive]);
+		assert.deepEqual(selection.overlayNotes, [`495-${SHA_B}.json (superseded)`]);
 	});
 
 	it("bounds the ancestor scan: more than CARRY_MAX_PRIOR_CANDIDATES priors refuses with a prune hint", () => {

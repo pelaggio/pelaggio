@@ -2055,7 +2055,7 @@ describe("pr-review CLI cross-push carry (#495)", () => {
 			},
 			{
 				label: "digest mismatch (superseded fleet record, no older prior to fall back to)",
-				diagnostic: /no prior disposition record for PR 123 still binds .* superseded/,
+				diagnostic: /no complete prior disposition record for PR 123 still binds .* superseded/,
 				seed: (roots) => seedPrior(roots, { fleetRecordDigest: "1".repeat(64) }),
 				git: carryGit(),
 			},
@@ -2086,9 +2086,10 @@ describe("pr-review CLI cross-push carry (#495)", () => {
 		assert.equal(stored.gate, "pass");
 	});
 
-	it("an incomplete prior (ok=false) is not a watermark: runs cold, no ancestry/interdiff resolution", async () => {
-		// A structurally incomplete prior run is excluded from candidates before any git call, so
-		// the run is byte-identical to no-priors — its head never advances the narrowing base.
+	it("an incomplete prior (ok=false) is not a watermark: no narrowing, cold discovery, record still written", async () => {
+		// An incomplete prior is scanned for ancestry (its retained blockers may overlay — round-4)
+		// but is never a watermark, so with no complete ancestor there is no interdiff and no
+		// narrowing: carry=none, cold. This prior carries no survivors, so nothing overlays either.
 		const git = carryGit();
 		const out = await runCli({
 			policy: reviewPolicy({ carry: true }),
@@ -2097,7 +2098,7 @@ describe("pr-review CLI cross-push carry (#495)", () => {
 			results: [result()],
 		});
 		assert.equal(out.code, 0);
-		assert.deepEqual(git.calls, [], "an incomplete prior is filtered before ancestry/interdiff resolution");
+		assert.deepEqual(git.calls, [`merge-base --is-ancestor ${PRIOR_SHA} ${REVIEWED_SHA}`], "ancestry is checked (overlay harvest); no interdiff since no watermark");
 		assert.match(out.comments[0] ?? "", /carry=none/);
 		assert.ok(readPrFindingDispositionRecord(out.dispositionsRoot, 123, REVIEWED_SHA), "the cold run still writes its own record");
 	});
@@ -2237,10 +2238,59 @@ describe("pr-review CLI cross-push carry (#495)", () => {
 			results: [result(), verification([{ candidateId: "C1", decision: "survives", rationale: "Still present." }])],
 		});
 		assert.equal(out.code, 1, "the superseded record's survivor still blocks");
-		assert.match(out.stderr, /no longer bind to their fleet gate records \(superseded — e.g. by pr-adjudicate\)/);
-		assert.match(out.stderr, new RegExp(`falling back to 123-${OLDER_SHA}\\.json`));
+		assert.match(out.stderr, /seeding blockers from 1 non-watermark survivor/);
+		assert.match(out.stderr, new RegExp(`123-${PRIOR_SHA}\\.json \\(superseded\\)`));
+		assert.match(out.stderr, new RegExp(`watermark = 123-${OLDER_SHA}\\.json`));
 		assert.match(out.calls[1]?.prompt ?? "", /Unfixed bug/, "overlay survivor seeds the verification candidates");
 		assert.match(out.comments[0] ?? "", new RegExp(`carry=${OLDER_SHA.slice(0, 7)} seeded=1 auto-refutable=1`));
+	});
+
+	it("consumes carry (seeds + narrows) when every pool provider is store-trusted (claude + codex)", async () => {
+		const git = carryGit({ touched: ["src/a.ts"] });
+		const out = await runCli({
+			policy: reviewPolicy({ carry: true, budgetCap: 40 }),
+			reviewDrivers: [driver("claude"), driver("codex")],
+			verifySettings: driver("codex"),
+			seed: (roots) => seedPrior(roots, { survived: [seededSurvivor(S)] }),
+			gitExtra: git.handler,
+			// Both discovery passes clean; the seeded survivor forces a verify per pass — refuted → PASS.
+			results: [result(), result(), verification([{ candidateId: "C1", decision: "refuted", rationale: "Fixed at this head." }]), verification([{ candidateId: "C1", decision: "refuted", rationale: "Fixed at this head." }])],
+		});
+		assert.equal(out.code, 0);
+		assert.doesNotMatch(out.stderr, /carry consumption refused/);
+		assert.match(out.comments[0] ?? "", /carry=eeeeeee seeded=1/, "carry consumed: survivor seeded");
+		assert.match(out.calls[0]?.prompt ?? "", new RegExp(`Base ref: ${PRIOR_SHA}`), "carry consumed: discovery narrowed");
+		assert.ok(
+			out.calls.some((call) => call.name === "pr-verify" && /Unfixed bug/.test(call.prompt)),
+			"the seeded survivor reached the verifier",
+		);
+	});
+
+	it("refuses carry consumption when the pool contains a store-writable provider (grok): cold, diagnostic, record still written", async () => {
+		const git = carryGit({ touched: ["src/a.ts"] });
+		const out = await runCli({
+			policy: reviewPolicy({ carry: true, budgetCap: 40 }),
+			reviewDrivers: [driver("claude"), driver("grok")],
+			verifySettings: driver("claude"),
+			seed: (roots) => seedPrior(roots, { survived: [seededSurvivor(S)] }),
+			gitExtra: git.handler,
+			// Both discovery passes clean. If carry were consumed the seeded survivor would force a
+			// verify; refused → no verify, consensus-pass.
+			results: [result(), result()],
+		});
+		assert.equal(out.code, 0);
+		assert.match(out.stderr, /carry consumption refused .*\bgrok\b/, "diagnostic names the untrusted provider");
+		assert.match(out.comments[0] ?? "", /carry=refused-untrusted-pool/, "token flags the refusal, not first-run");
+		assert.deepEqual(
+			out.calls.map((call) => call.name),
+			["pr-review", "pr-review"],
+			"cold: no seeded survivor, so no verify pass runs",
+		);
+		assert.doesNotMatch(out.calls[0]?.prompt ?? "", new RegExp(`Base ref: ${PRIOR_SHA}`), "cold: discovery not narrowed");
+		// Record writing is unaffected: the run still emits its own (cold) disposition record.
+		const stored = readPrFindingDispositionRecord(out.dispositionsRoot, 123, REVIEWED_SHA);
+		assert.ok(stored, "records are still written under an untrusted pool — just not consumed");
+		assert.deepEqual(stored.survived, [], "the untrusted-pool record carries no seeded/carried memory");
 	});
 
 	it("a carried run ending in the post-#592 disagreement split writes record + sidecar", async () => {

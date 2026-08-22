@@ -220,22 +220,25 @@ the exact on-disk fleet gate record (`fleetRecordDigest`), the same discipline a
 adjudication sidecar. The store is seat-denied exactly like the other evidence stores
 (#510): a seat that could write it could forge an auto-refutation.
 
-**Prior selection (fail-closed).** A run for a new head selects at most one prior record:
-same PR + item, different SHA, proven ancestor of the reviewed head via
-`git merge-base --is-ancestor` in the trusted repo, ordered along the branch
-(ancestry-sort + adjacent-pair verification; the scan is bounded at 50 priors per PR —
-beyond that carry refuses with a prune hint, since there is no store GC in this item),
-then digest-bound to its fleet record bytes. A newer record that no longer binds —
-typically because a later `pr-adjudicate` rewrote the fleet gate record at that head — is
-skipped with a diagnostic naming the supersession, falling back to the next-oldest
-bindable ancestor; the skipped record's survivors still ride along as blocking-only
-overlay (they seed and veto auto-refutation of the same fingerprint, but nothing from an
-unbindable record ever clears a finding). Nothing inside the records orders candidates
-(`reviewedAt` is diagnostic only — a model-writable timestamp is not an ordering signal,
-#510). Any remaining failure — malformed store file for the PR, force-push/rebase (no
-ancestors), a non-totally-ordered candidate set, no bindable prior at all, a prior that
-does not resolve in the diff checkout — degrades to today's cold behavior with a stderr
-diagnostic, never to a weaker gate. A first run (no priors) is byte-identical to today.
+**Prior selection (fail-closed).** A run for a new head separates two roles. The
+**narrowing watermark** is the newest ancestor (same PR + item, different SHA, proven
+ancestor via `git merge-base --is-ancestor` in the trusted repo) that is BOTH structurally
+complete AND still digest-binds to its fleet record bytes; complete ancestors are ordered
+along the branch (ancestry-sort + adjacent-pair verification; the scan is bounded at 50
+priors per PR — beyond that carry refuses fail-closed with a prune hint, since there is no
+store GC in this item — chartered as #613). The **blocking-only survivor overlay** is drawn
+from every ancestor that CANNOT be a watermark — an incomplete run (its retained blockers
+must still block even though its head is not a valid narrowing base) OR a complete record
+whose fleet record no longer binds (superseded, typically by a later `pr-adjudicate`). Those
+survivors seed toward blocking and veto auto-refutation of the same fingerprint, but nothing
+from a non-watermark record ever CLEARS a finding — so `complete-A → incomplete-B(blocker)
+→ C` seeds B's blocker at C, and only a complete valid report can refute it (an omission
+cannot silently green it). Nothing inside the records orders candidates (`reviewedAt` is
+diagnostic only — a model-writable timestamp is not an ordering signal, #510). Any failure
+— malformed store file for the PR, force-push/rebase (no ancestors), a non-totally-ordered
+complete chain, no complete bindable watermark, a prior that does not resolve in the diff
+checkout — degrades to today's cold behavior with a stderr diagnostic, never to a weaker
+gate. A first run (no priors) is byte-identical to today.
 
 **What carries.**
 
@@ -278,35 +281,55 @@ diagnostic, never to a weaker gate. A first run (no priors) is byte-identical to
   (typecheck ratchet, tests, CI) are unaffected and run on every head regardless.
 
 The gate comment and metrics marker carry a deterministic token —
-`carry=<sha7> seeded=<n> auto-refutable=<k> auto-refuted=<m>` or `carry=none` — so the
-operator can read from the PR why a run was narrow. `auto-refutable` is the eligible
+`carry=<sha7> seeded=<n> auto-refutable=<k> auto-refuted=<m>`, `carry=none`, or
+`carry=refused-untrusted-pool` (a prior existed but the pool was store-writable, so
+consumption was refused and the run went cold) — so the operator can read from the PR why a
+run was narrow (or why it was not). `auto-refutable` is the eligible
 count after the I3/interdiff filter: under the shipped default taxonomy it is always `0`
 (dormancy above), which is deliberately visible so `auto-refuted=0` never reads as
 "checked and none qualified".
 
 **Kill-switch — ships default OFF.** `review.carry` defaults to `false` (canary-off):
-carry makes these stores **authorization inputs**, and default-on requires the
-store-trust prerequisite below to hold for every provider in the local review pool.
-Records are still written while off, so enabling later has priors; `review.carry: true`
-turns on reads + narrowing. Local runner only: CI neither reads nor writes the store.
+carry makes these stores **authorization inputs**. Records are still written while off, so
+enabling later has priors; `review.carry: true` turns on reads + narrowing. Local runner
+only: CI neither reads nor writes the store.
 
-**Store-trust prerequisite (why the default is off).** Local review/verify seats run at
-`cwd = REPO` — the trusted main checkout that also hosts the stores:
+**Store-trust is enforced by construction, not by the default.** Carry only *consumes*
+evidence (seeds survivors, narrows discovery, auto-refutes) when **every** review/verify
+provider in the run's pool has a *proven* store-write denial — the check is
+`poolStoreTrust(providers)` at the gate's consumption site. If any pool provider is
+store-writable, consumption is refused and the run goes cold (`carry=refused-untrusted-pool`
+in the comment token; a stderr diagnostic names the untrusted provider). Record *writing*
+is unaffected — the run still emits its own cold disposition record, it is simply not
+trusted for seeding/narrowing. So a poisoned record can never authorize a fail-open
+regardless of the `review.carry` default. Default-DENY: an unknown/new provider is
+store-writable until proven.
 
-- **Claude seats: closed.** The gate threads the foreign-root denial into every seat
-  regardless of cwd, so the step-runner installs its PreToolUse hooks — Write/Edit/Bash
-  denial on the gate-record, adjudication-source, finding-disposition, session, and
-  decision-log registers (#510 parity). Residual: hook-level Bash denial is textual (the
-  documented #510 opacity residual; ADR-0023 execution-jail territory).
-- **Codex review seats: closed at the OS boundary.** `pr-review`/`pr-verify` codex seats
-  run under the `read-only` sandbox (they produce a text report; repo checks/tests cannot
-  run under read-only — the Claude seats in the fleet still run checks).
-- **Grok seats: open, unverified.** The grok CLI sandbox profile extends grok's builtin
-  `strict` profile, whose filesystem write surface at the main-checkout cwd is not
-  verified here — and `providers.grok.allow-unsandboxed-fallback: true` removes the
-  sandbox entirely. Until grok's write surface against `MAIN_REPO/.dev` is verified
-  closed (or grok is excluded from local review pools), do not enable `review.carry` in a
-  pool containing grok.
+- **Store-trusted (proven denial): `claude`, `codex`.** Claude — the gate threads the
+  foreign-root denial into every seat regardless of cwd, so the step-runner installs its
+  PreToolUse hooks (Write/Edit/Bash denial on the gate-record, adjudication-source,
+  finding-disposition, session, and decision-log registers; #510 parity; residual:
+  hook-level Bash denial is textual, the documented #510 opacity residual). One accepted
+  side effect: a cold-gate Claude seat reviewing a PR that *touches* one of those registers
+  (e.g. `docs/decision-log/`) will have a `Bash` inspection command that literally names the
+  path denied — but the review reads the diff via `git diff origin/main...HEAD` (no path in
+  the command) and opens changed files with the `Read`/`Grep` tools (not `Bash`), so review
+  capability is not meaningfully degraded; it is the same fail-closed #510 tradeoff. Codex —
+  `pr-review`/`pr-verify` seats at the main checkout run under the `read-only` OS sandbox
+  (they produce a text report; repo checks/tests cannot run under read-only — the Claude
+  seats in the fleet still run checks).
+- **Store-writable (no proven denial), so any pool containing them refuses carry
+  consumption: `grok` (any mode), `opencode`, and every future/unknown provider.** Grok's
+  builtin `strict` profile's write surface at the main-checkout cwd is unverified and
+  `providers.grok.allow-unsandboxed-fallback: true` removes the sandbox entirely; OpenCode
+  has no semantic deny, no OS isolation, and ignores `foreignRootDenial`.
+
+The default is `false` (rather than `true`) as belt-and-braces canary while the mechanism
+proves out — not because consumption safety depends on it (it does not). **#605** narrows
+to exactly two things: prove grok's store-write denial at main cwd and add `grok` to the
+store-trusted set (else keep it excluded), and discard/re-validate pre-enablement priors
+(below) before flipping the default. It is no longer "gate every provider" — consumption
+is gated by construction.
 
 **Pre-enablement priors are not automatically trustworthy.** Records are written while
 `review.carry` is off, including by pools that contained an unsandboxed or unverified seat

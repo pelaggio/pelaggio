@@ -14,6 +14,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { PrReviewAgreement } from "../pr-review-cli.js";
+import type { ProviderName } from "../types.js";
 import { normalizeGitPath } from "./adjudication.js";
 import { materializeAuthoringFinding, type ReviewFinding, type ReviewFindingClass, type ReviewFindingSeverity, reviewFindingFingerprint } from "./findings.js";
 import { type FindingTier, isWellFormedClassId, type TaxonomyConfig, tierOf } from "./taxonomy.js";
@@ -290,8 +291,36 @@ export function listPrFindingDispositionRecords(root: string): PrFindingDisposit
 }
 
 /** Ancestor-scan bound: more prior records than this for one PR refuses (cold) with a prune
- *  hint instead of growing the pairwise-ancestry cost without limit. No GC in this item. */
+ *  hint instead of growing the pairwise-ancestry cost without limit. No GC in this item (#613). */
 export const CARRY_MAX_PRIOR_CANDIDATES = 50;
+
+/**
+ * Review/verify providers with a PROVEN store-write denial, so a seat of theirs cannot forge a
+ * disposition or fleet gate record while running at the trusted main checkout (#495 round-4
+ * store-trust). Default-DENY: any provider NOT listed here (grok in any mode — its strict-profile
+ * write surface at main cwd is unproven, #605; OpenCode — no semantic deny, no OS isolation,
+ * ignores `foreignRootDenial`; any future provider) is treated as store-writable.
+ *
+ * - `claude`: the step-runner's `foreignRootDenial` PreToolUse hooks are installed on every
+ *   cold-gate seat (threaded unconditionally by `runPrReviewGate`).
+ * - `codex`: review-class seats at the main checkout run under the `read-only` OS sandbox
+ *   (`codexUsesReadOnlySandbox`).
+ */
+export const STORE_TRUSTED_REVIEW_PROVIDERS: ReadonlySet<ProviderName> = new Set<ProviderName>(["claude", "codex"]);
+
+export type PoolStoreTrust = { trusted: true } | { trusted: false; untrusted: ProviderName[] };
+
+/**
+ * Carry may CONSUME evidence (seed survivors, narrow discovery, auto-refute) only when EVERY
+ * review/verify provider in the run's pool has a proven store-write denial. If any pool provider
+ * is store-writable, a poisoned disposition/fleet record could authorize a fail-open, so
+ * consumption is refused and the run goes cold — record WRITING is unaffected. This makes carry
+ * safe-by-construction regardless of the `review.carry` default.
+ */
+export function poolStoreTrust(providers: readonly ProviderName[]): PoolStoreTrust {
+	const untrusted = [...new Set(providers)].filter((provider) => !STORE_TRUSTED_REVIEW_PROVIDERS.has(provider));
+	return untrusted.length === 0 ? { trusted: true } : { trusted: false, untrusted };
+}
 
 /**
  * A record is a valid narrowing WATERMARK only if its run was structurally complete: every
@@ -311,30 +340,38 @@ export type CarrySourceSelection =
 	| { kind: "none" }
 	| {
 			kind: "selected";
+			/** The narrowing watermark: the newest COMPLETE, bindable ancestor. */
 			record: PrFindingDispositionRecordV1;
-			/** File names of NEWER ancestor records skipped because they no longer bind to their
-			 *  on-disk fleet gate record (superseded — e.g. a later `pr-adjudicate` rewrote the
-			 *  gate record at that head). Their survivors ride `supersededSurvivors` below. */
-			superseded: string[];
-			/** Survivors from every skipped newer record. Toward blocking only: they seed the run
-			 *  and veto auto-refutation of the same fingerprint, but nothing from an unbindable
-			 *  record ever clears a finding. */
-			supersededSurvivors: PrCarrySurvivorEntry[];
+			/** Blocking-only survivors seeded IN ADDITION to the watermark's own survivors, drawn
+			 *  from every ancestor that cannot be a watermark — incomplete runs (not a valid
+			 *  narrowing base, but their retained blockers must still block) AND complete records
+			 *  whose fleet record no longer binds (superseded, e.g. by `pr-adjudicate`). They seed
+			 *  toward blocking and veto auto-refutation of the same fingerprint; nothing from a
+			 *  non-watermark record ever CLEARS a finding, so an omission at the new head cannot
+			 *  green a blocker a complete valid report never refuted (#495 round-4 must-fix). */
+			overlaySurvivors: PrCarrySurvivorEntry[];
+			/** Diagnostic notes for the overlaid records: `<file> (incomplete)` / `<file> (superseded)`. */
+			overlayNotes: string[];
 	  }
 	| { kind: "refused"; reason: string };
 
 /**
- * Fail-closed prior-record selection (D2). At most one prior may seed a run: candidates are
- * filtered by identity AND structural completeness (an incomplete run is not a valid narrowing
- * watermark — see isCompleteWatermark), proven ancestors of the reviewed head via the injected
- * git predicate (ground truth — nothing inside the records, notably `reviewedAt`, participates in
- * ordering: #510), ordered along the branch (ancestry-comparator sort + adjacent-pair
- * verification — sound by transitivity, and O(n log n) instead of the pairwise-maximal scan), and
- * bound to the newest record whose `fleetRecordDigest` still matches its on-disk fleet gate
- * record. A newer record that no longer binds (superseded — typically `pr-adjudicate` rewriting
- * the gate record at that head) is skipped with its survivors carried forward as blocking-only
- * overlay; if no complete record binds, or the store is malformed/unordered/over the scan bound,
- * the caller runs cold with a diagnostic.
+ * Fail-closed prior-record selection (D2). Two roles, deliberately separated:
+ *
+ * 1. **Narrowing watermark** — the newest ancestor that is BOTH structurally complete
+ *    (`isCompleteWatermark`) AND still binds to its on-disk fleet gate record. An incomplete run
+ *    reviewed only a subset of the pool, so it is never a watermark: a later push narrows only to
+ *    the last COMPLETE ancestor, whose delta a full fleet then reviews.
+ * 2. **Blocking-only survivor overlay** — every ancestor that CANNOT be the watermark
+ *    (incomplete, or complete-but-bind-failed) still contributes its `survived` blockers as
+ *    overlay. They seed toward blocking (and veto auto-refutation) but never clear anything.
+ *    Without this, `complete-A → incomplete-B(blocker) → C` would select A, narrow `A..C`, and
+ *    silently green B's blocker on omission (round-4 must-fix).
+ *
+ * Ancestry is ground truth via the injected git predicate (nothing inside the records — notably
+ * `reviewedAt` — participates in ordering: #510). Complete watermark candidates are ordered along
+ * the branch (ancestry sort + adjacent-pair verification, sound by transitivity); an unordered
+ * set, a malformed store file, or an over-the-scan-bound store refuses (the caller runs cold).
  */
 export function selectCarrySource(
 	listing: Pick<PrFindingDispositionListing, "records" | "invalid">,
@@ -354,45 +391,55 @@ export function selectCarrySource(
 		return { kind: "refused", reason: `disposition store holds malformed record(s) for PR ${opts.prNumber}: ${invalidForPr.sort().join(", ")}` };
 	}
 	// Same-SHA reruns are deliberately excluded — a re-review of the same head behaves as today.
-	// Incomplete runs are excluded here (not merely skipped in the walk): they are not watermarks,
-	// so they never seed, narrow, or advance the base — a later push narrows only to the last
-	// COMPLETE ancestor, whose delta a full fleet then reviews.
-	const candidates = listing.records.filter((record) => record.prNumber === opts.prNumber && record.itemId === opts.itemId && record.headSha !== reviewedSha && isCompleteWatermark(record));
-	if (candidates.length === 0) return { kind: "none" };
-	if (candidates.length > CARRY_MAX_PRIOR_CANDIDATES) {
-		return { kind: "refused", reason: `disposition store holds ${candidates.length} prior records for PR ${opts.prNumber} (carry scans at most ${CARRY_MAX_PRIOR_CANDIDATES}); prune .dev/${PR_FINDING_DISPOSITIONS_DIR}/` };
+	// Every record for the PR is scanned (both roles above need ancestry), so the scan bound
+	// covers all of them.
+	const forPr = listing.records.filter((record) => record.prNumber === opts.prNumber && record.itemId === opts.itemId && record.headSha !== reviewedSha);
+	if (forPr.length === 0) return { kind: "none" };
+	if (forPr.length > CARRY_MAX_PRIOR_CANDIDATES) {
+		return { kind: "refused", reason: `disposition store holds ${forPr.length} prior records for PR ${opts.prNumber} (carry scans at most ${CARRY_MAX_PRIOR_CANDIDATES}); prune .dev/${PR_FINDING_DISPOSITIONS_DIR}/` };
 	}
-	const ancestors = candidates.filter((record) => opts.isAncestor(record.headSha, reviewedSha));
+	const ancestors = forPr.filter((record) => opts.isAncestor(record.headSha, reviewedSha));
 	if (ancestors.length === 0) {
 		return { kind: "refused", reason: `no prior disposition record for PR ${opts.prNumber} is an ancestor of ${reviewedSha.slice(0, 7)} (force-push or rebase)` };
 	}
+	// Role 2 seed: incomplete ancestors are never watermarks, but their retained blockers overlay.
+	const overlaySurvivors: PrCarrySurvivorEntry[] = [];
+	const overlayNotes: string[] = [];
+	for (const record of ancestors) {
+		if (isCompleteWatermark(record)) continue;
+		overlaySurvivors.push(...record.survived);
+		overlayNotes.push(`${record.prNumber}-${record.headSha}.json (incomplete)`);
+	}
+	// Role 1: watermark candidates are the COMPLETE ancestors only.
+	const completeAncestors = ancestors.filter(isCompleteWatermark);
+	if (completeAncestors.length === 0) return { kind: "none" };
 	// Newest-first ancestry sort, then verify every ADJACENT pair. Ancestry is transitive, so an
 	// adjacent-ordered chain is a genuinely total chain even if the comparator saw a partial
 	// order during sorting; any unordered adjacent pair refuses.
-	const chain = [...ancestors].sort((a, b) => (a === b ? 0 : opts.isAncestor(a.headSha, b.headSha) ? 1 : -1));
+	const chain = [...completeAncestors].sort((a, b) => (a === b ? 0 : opts.isAncestor(a.headSha, b.headSha) ? 1 : -1));
 	for (let i = 0; i + 1 < chain.length; i++) {
 		const newer = chain[i];
 		const older = chain[i + 1];
 		if (newer && older && !opts.isAncestor(older.headSha, newer.headSha)) {
-			const files = ancestors.map((record) => `${record.prNumber}-${record.headSha}.json`).sort();
+			const files = completeAncestors.map((record) => `${record.prNumber}-${record.headSha}.json`).sort();
 			return { kind: "refused", reason: `prior disposition records for PR ${opts.prNumber} are not totally ordered along the branch: ${files.join(", ")}` };
 		}
 	}
 	const superseded: string[] = [];
-	const supersededSurvivors: PrCarrySurvivorEntry[] = [];
 	for (const record of chain) {
 		const fleetBytes = opts.readFleetBytes(record.prNumber, record.headSha);
 		if (fleetBytes && createHash("sha256").update(fleetBytes).digest("hex") === record.fleetRecordDigest) {
-			return { kind: "selected", record, superseded, supersededSurvivors };
+			return { kind: "selected", record, overlaySurvivors, overlayNotes };
 		}
-		// Fall back past a superseded newer record, but keep its blocking side: survivors seed,
-		// and nothing from an unbindable record may clear a finding (fail-closed).
+		// Fall back past a superseded newer complete record, but keep its blocking side: survivors
+		// overlay, and nothing from an unbindable record may clear a finding (fail-closed).
 		superseded.push(`${record.prNumber}-${record.headSha}.json`);
-		supersededSurvivors.push(...record.survived);
+		overlaySurvivors.push(...record.survived);
+		overlayNotes.push(`${record.prNumber}-${record.headSha}.json (superseded)`);
 	}
 	return {
 		kind: "refused",
-		reason: `no prior disposition record for PR ${opts.prNumber} still binds to its on-disk fleet gate record (each was superseded — e.g. a later pr-adjudicate rewrote the gate record at that head): ${superseded.join(", ")}`,
+		reason: `no complete prior disposition record for PR ${opts.prNumber} still binds to its on-disk fleet gate record (each was superseded — e.g. a later pr-adjudicate rewrote the gate record at that head): ${superseded.join(", ")}`,
 	};
 }
 
