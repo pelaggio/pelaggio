@@ -32,30 +32,73 @@ const CLAUDE_SDK_CONTROL_VARS = [
 ] as const;
 
 /**
- * SDK-documented Claude CLI auth names. The spawned process *is* the API client, so every
- * role extra-passes these independently of `security.env-allowlist`. They are not forge credentials.
+ * SDK-documented Claude CLI auth names, including the workload-identity-federation
+ * activation set (names verified against the installed `@anthropic-ai/claude-agent-sdk`
+ * `sdk.mjs`/`bridge.mjs`). The spawned process *is* the API client, so every role
+ * extra-passes these independently of `security.env-allowlist`. They are not forge credentials.
  */
 const CLAUDE_CLI_AUTH_VARS = [
 	"ANTHROPIC_API_KEY",
 	"ANTHROPIC_AUTH_TOKEN",
 	"CLAUDE_CODE_OAUTH_TOKEN",
-	"AWS_BEARER_TOKEN_BEDROCK",
 	"ANTHROPIC_FOUNDRY_API_KEY",
 	"ANTHROPIC_FOUNDRY_AUTH_TOKEN",
 	"ANTHROPIC_AWS_API_KEY",
-	// Standard AWS credential chain for Bedrock deployments authenticated via env.
-	"AWS_ACCESS_KEY_ID",
-	"AWS_SECRET_ACCESS_KEY",
-	"AWS_SESSION_TOKEN",
+	// Workload-identity federation (first-party auth).
+	"ANTHROPIC_IDENTITY_TOKEN",
+	"ANTHROPIC_IDENTITY_TOKEN_FILE",
+	"ANTHROPIC_FEDERATION_RULE_ID",
+	"ANTHROPIC_ORGANIZATION_ID",
+	"ANTHROPIC_SERVICE_ACCOUNT_ID",
+	"ANTHROPIC_WORKSPACE_ID",
 ] as const;
 
 /**
- * Provider-mode selectors and configuration documented for the Claude CLI's Bedrock /
- * Vertex / Foundry deployments, plus the CLI config-dir handle. `buildAgentEnv` replaces
- * the inherited environment, so omitting these would start such deployments in the wrong
- * provider mode or without their region/project/endpoint configuration. Fixed, non-secret
- * allowlist — deny-by-default is unchanged. Per-model `VERTEX_REGION_CLAUDE_*` overrides
- * are deliberately not enumerated; operators add them via `security.env-allowlist`.
+ * AWS credential-chain inputs: static keys, STS web-identity, container credentials, and
+ * the profile/config/region handles that select among them. The CLI consumes these only in
+ * an AWS-flavored provider mode, so they pass **only when one of `AWS_MODE_SELECTORS` is
+ * truthy in the same bag** — a denied seat on a host that uses AWS for unrelated purposes
+ * must not inherit live AWS credentials.
+ */
+const AWS_MODE_CREDENTIAL_VARS = [
+	"AWS_BEARER_TOKEN_BEDROCK",
+	"AWS_ACCESS_KEY_ID",
+	"AWS_SECRET_ACCESS_KEY",
+	"AWS_SESSION_TOKEN",
+	"AWS_ROLE_ARN",
+	"AWS_WEB_IDENTITY_TOKEN_FILE",
+	"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+	"AWS_CONTAINER_CREDENTIALS_FULL_URI",
+	"AWS_PROFILE",
+	"AWS_SHARED_CREDENTIALS_FILE",
+	"AWS_CONFIG_FILE",
+	"AWS_REGION",
+	"AWS_DEFAULT_REGION",
+] as const;
+
+/** Google ADC credential locator — gated on a Google-flavored provider mode for the same reason. */
+const GOOGLE_MODE_CREDENTIAL_VARS = ["GOOGLE_APPLICATION_CREDENTIALS"] as const;
+
+const AWS_MODE_SELECTORS = ["CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_MANTLE", "CLAUDE_CODE_USE_ANTHROPIC_AWS"] as const;
+const GOOGLE_MODE_SELECTORS = ["CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD"] as const;
+
+/** Mirrors the CLI's own env-flag truthiness (sdk.mjs `ge()`): set and, lowercased/trimmed, one of 1/true/yes/on. */
+function providerModeEnabled(bag: NodeJS.ProcessEnv, selectors: readonly string[]): boolean {
+	return selectors.some((name) => {
+		const value = bag[name];
+		return value !== undefined && ["1", "true", "yes", "on"].includes(value.toLowerCase().trim());
+	});
+}
+
+/**
+ * Provider-mode selectors and non-secret configuration for the Claude CLI's third-party
+ * deployments (names verified against the installed SDK's provider env lists), plus the
+ * CLI config-dir handle. `buildAgentEnv` replaces the inherited environment, so omitting
+ * these would start such deployments in the wrong provider mode or without their
+ * region/project/endpoint configuration. Fixed, non-secret allowlist — deny-by-default is
+ * unchanged; credential-bearing AWS/Google vars live in the mode-gated lists above.
+ * Per-model `VERTEX_REGION_CLAUDE_*` overrides are deliberately not enumerated; operators
+ * add them via `security.env-allowlist`.
  */
 const CLAUDE_CLI_PROVIDER_CONFIG_VARS = [
 	"CLAUDE_CONFIG_DIR",
@@ -64,29 +107,34 @@ const CLAUDE_CLI_PROVIDER_CONFIG_VARS = [
 	"CLAUDE_CODE_USE_VERTEX",
 	"CLAUDE_CODE_USE_FOUNDRY",
 	"CLAUDE_CODE_USE_MANTLE",
+	"CLAUDE_CODE_USE_GATEWAY",
+	"CLAUDE_CODE_USE_ANTHROPIC_AWS",
+	"CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
 	// Gateway skip-auth flags.
 	"CLAUDE_CODE_SKIP_BEDROCK_AUTH",
 	"CLAUDE_CODE_SKIP_VERTEX_AUTH",
+	"CLAUDE_CODE_SKIP_FOUNDRY_AUTH",
 	"CLAUDE_CODE_SKIP_MANTLE_AUTH",
+	"CLAUDE_CODE_SKIP_ANTHROPIC_AWS_AUTH",
+	"CLAUDE_CODE_SKIP_ANTHROPIC_GOOGLE_CLOUD_AUTH",
 	// Endpoint overrides.
 	"ANTHROPIC_BASE_URL",
 	"ANTHROPIC_BEDROCK_BASE_URL",
 	"ANTHROPIC_BEDROCK_MANTLE_BASE_URL",
 	"ANTHROPIC_VERTEX_BASE_URL",
 	"ANTHROPIC_FOUNDRY_BASE_URL",
+	"ANTHROPIC_AWS_BASE_URL",
+	"ANTHROPIC_GOOGLE_CLOUD_BASE_URL",
 	"ANTHROPIC_FOUNDRY_RESOURCE",
-	// Vertex project/region + ADC locator.
+	// Project/region/workspace configuration.
 	"ANTHROPIC_VERTEX_PROJECT_ID",
+	"ANTHROPIC_AWS_WORKSPACE_ID",
+	"ANTHROPIC_GOOGLE_CLOUD_PROJECT",
+	"ANTHROPIC_GOOGLE_CLOUD_LOCATION",
+	"ANTHROPIC_GOOGLE_CLOUD_WORKSPACE_ID",
 	"GCLOUD_PROJECT",
 	"GOOGLE_CLOUD_PROJECT",
-	"GOOGLE_APPLICATION_CREDENTIALS",
 	"CLOUD_ML_REGION",
-	// AWS region/profile + config-file locators.
-	"AWS_REGION",
-	"AWS_DEFAULT_REGION",
-	"AWS_PROFILE",
-	"AWS_SHARED_CREDENTIALS_FILE",
-	"AWS_CONFIG_FILE",
 	"ANTHROPIC_BEDROCK_REGION_PREFIX",
 	"ANTHROPIC_BEDROCK_SERVICE_TIER",
 	"ANTHROPIC_SMALL_FAST_MODEL_AWS_REGION",
@@ -207,6 +255,9 @@ export function buildClaudeSeatEnv(source: NodeJS.ProcessEnv | undefined, step: 
 	copyPresent(bag, CLAUDE_CLI_AUTH_VARS, extra);
 	copyPresent(bag, CLAUDE_CLI_PROVIDER_CONFIG_VARS, extra);
 	copyPresent(bag, PELAGGIO_HARNESS_CONFIG_VARS, extra);
+	// Cloud-credential chains pass only when the matching provider mode is actually selected.
+	if (providerModeEnabled(bag, AWS_MODE_SELECTORS)) copyPresent(bag, AWS_MODE_CREDENTIAL_VARS, extra);
+	if (providerModeEnabled(bag, GOOGLE_MODE_SELECTORS)) copyPresent(bag, GOOGLE_MODE_CREDENTIAL_VARS, extra);
 	if (claudeSeatHoldsForgeAuthority(step)) copyPresent(bag, FORGE_REMOTE_VARS, extra);
 	const env = buildAgentEnv({
 		source: bag,

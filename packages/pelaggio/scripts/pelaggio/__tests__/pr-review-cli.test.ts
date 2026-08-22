@@ -6,7 +6,7 @@ import { after, describe, it } from "node:test";
 import { buildClaudeSeatEnv } from "../claude-seat.js";
 import { DEFAULTS, type ReviewConfig, type StepSettings } from "../config.js";
 import { main as adjudicateMain, type PrAdjudicateDeps } from "../pr-adjudicate-cli.js";
-import { main, reviewedHeadFetchAuthConfig, runPrReviewGate, setPrReviewDepsForTests } from "../pr-review-cli.js";
+import { main, reviewedHeadFetchAuthEnv, runPrReviewGate, setPrReviewDepsForTests } from "../pr-review-cli.js";
 import { listPrReviewGateRecords, readPrReviewGateRecord, writePrReviewGateRecord } from "../pr-review-gate-record.js";
 import { isEligibleFleetGateRecord, readAdjudicationSourceRecord } from "../review/adjudication.js";
 import { reviewFindingFingerprint } from "../review/findings.js";
@@ -148,6 +148,7 @@ async function runCli(
 		diff?: string;
 		results?: Array<StepResult | Error>;
 		diffError?: Error;
+		fetchError?: Error;
 		statusPosted?: boolean;
 		reviewDrivers?: StepSettings[];
 		verifySettings?: StepSettings;
@@ -155,9 +156,20 @@ async function runCli(
 		ci?: boolean;
 		env?: NodeJS.ProcessEnv;
 	} = {},
-): Promise<{ code: number; calls: RunCall[]; execCalls: Array<[string, string[]]>; comments: string[]; statuses: string[]; statusShas: string[]; stdout: string; stderr: string; gateRecordsRoot: string; adjudicationSourcesRoot: string }> {
+): Promise<{
+	code: number;
+	calls: RunCall[];
+	execCalls: Array<{ cmd: string; args: string[]; env?: NodeJS.ProcessEnv }>;
+	comments: string[];
+	statuses: string[];
+	statusShas: string[];
+	stdout: string;
+	stderr: string;
+	gateRecordsRoot: string;
+	adjudicationSourcesRoot: string;
+}> {
 	const calls: RunCall[] = [];
-	const execCalls: Array<[string, string[]]> = [];
+	const execCalls: Array<{ cmd: string; args: string[]; env?: NodeJS.ProcessEnv }> = [];
 	const comments: string[] = [];
 	const statuses: string[] = [];
 	const statusShas: string[] = [];
@@ -165,8 +177,8 @@ async function runCli(
 	// Hermetic evidence roots: local persistence must never land in the host repo's .dev/.
 	const gateRecordsRoot = join(tmpRoot("pr-review-cli-evidence-"), "gates");
 	const adjudicationSourcesRoot = join(tmpRoot("pr-review-cli-evidence-"), "sources");
-	const execFileSync = ((cmd: string, args: readonly string[]) => {
-		execCalls.push([cmd, [...args]]);
+	const execFileSync = ((cmd: string, args: readonly string[], options?: { env?: NodeJS.ProcessEnv }) => {
+		execCalls.push({ cmd, args: [...args], ...(options?.env ? { env: options.env } : {}) });
 		const a = args.join(" ");
 		// resolveReviewedHead pins the PR head sha + claim branch via gh, then fetches — independent
 		// of the diff, so it must resolve even when the diff inspection is being made to fail.
@@ -175,9 +187,10 @@ async function runCli(
 			return `${JSON.stringify({ sha: REVIEWED_SHA, ref: opts.headRef ?? "feat/issue-123-fix" })}\n`;
 		}
 		assert.equal(cmd, "git");
-		// With a pinned harness token the fetch argv gains a leading process-scoped `-c` auth
-		// pair; the fetch-auth tests assert on the exact recorded argv.
-		if (a.endsWith("fetch --quiet origin main pull/123/head")) return "";
+		if (a === "fetch --quiet origin main pull/123/head") {
+			if (opts.fetchError) throw opts.fetchError;
+			return "";
+		}
 		if (opts.diffError) throw opts.diffError;
 		if (a === `diff --name-only origin/main...${REVIEWED_SHA}`) return opts.files ?? "docs/readme.md\n";
 		if (a === `diff origin/main...${REVIEWED_SHA}`) return opts.diff ?? "+Clarify docs.\n";
@@ -253,23 +266,29 @@ describe("pr-review CLI aggregation", () => {
 		assert.deepEqual(out.statusShas, [REVIEWED_SHA]);
 	});
 
-	it("authenticates the pinned-head fetch process-scoped when the harness env holds a forge token (#554)", async () => {
+	it("authenticates the pinned-head fetch via per-invocation env config when the harness holds a forge token (#554)", async () => {
 		const token = "ghs_ci_job_token_value";
 		const out = await runCli({ env: { GH_TOKEN: token } });
 		assert.equal(out.code, 0);
-		const fetchCall = out.execCalls.find(([cmd, args]) => cmd === "git" && args.includes("fetch"));
+		const fetchCall = out.execCalls.find((call) => call.cmd === "git" && call.args.includes("fetch"));
 		assert.ok(fetchCall, "the pinned-head fetch must run");
-		const fetchArgs = fetchCall[1];
-		// The credential rides THIS invocation's argv as a `-c` pair — actions/checkout's encoding.
-		assert.deepEqual(fetchArgs.slice(2), ["fetch", "--quiet", "origin", "main", "pull/123/head"]);
-		assert.equal(fetchArgs[0], "-c");
-		const basic = fetchArgs[1]?.match(/^http\.https:\/\/github\.com\/\.extraheader=AUTHORIZATION: basic (.+)$/)?.[1];
-		assert.ok(basic, "the -c value must be a github.com http.extraheader basic credential");
+		// The argv carries NO credential material: execFileSync embeds argv in Error.message
+		// (published by the fail-closed crash path) and argv is world-readable via /proc.
+		assert.deepEqual(fetchCall.args, ["fetch", "--quiet", "origin", "main", "pull/123/head"]);
+		// The credential rides the child ENV of this one invocation as git env-based config.
+		assert.ok(fetchCall.env, "the fetch invocation must carry a dedicated child env");
+		assert.equal(fetchCall.env.GIT_CONFIG_COUNT, "1");
+		assert.equal(fetchCall.env.GIT_CONFIG_KEY_0, "http.https://github.com/.extraheader");
+		const basic = fetchCall.env.GIT_CONFIG_VALUE_0?.match(/^AUTHORIZATION: basic (.+)$/)?.[1];
+		assert.ok(basic, "the env config value must be a basic credential");
 		assert.equal(Buffer.from(basic, "base64").toString("utf8"), `x-access-token:${token}`);
-		// Process-scoped only: no `git config` write anywhere, and no other invocation carries it.
-		for (const [cmd, args] of out.execCalls) {
-			if (cmd === "git") assert.equal(args.includes("config"), false, "the credential must never be persisted via git config");
-			if (args !== fetchArgs) assert.equal(args.join(" ").includes("extraheader"), false, `header must ride only the fetch argv: ${cmd} ${args.join(" ")}`);
+		// Process-scoped only: no git config write, no argv anywhere carries credential material,
+		// and no OTHER invocation receives the env-based config.
+		for (const call of out.execCalls) {
+			if (call.cmd === "git") assert.equal(call.args.includes("config"), false, "the credential must never be persisted via git config");
+			const argv = call.args.join(" ");
+			assert.equal(argv.includes("extraheader") || argv.includes(basic) || argv.includes(token), false, `no argv may carry credential material: ${call.cmd} ${argv}`);
+			if (call !== fetchCall) assert.equal(call.env?.GIT_CONFIG_COUNT, undefined, `env-based config must ride only the fetch child: ${call.cmd}`);
 		}
 		// Harness plumbing only: neither the token nor its encoding may enter a denied seat's child env.
 		for (const step of ["pr-review", "pr-verify"] as const) {
@@ -278,20 +297,49 @@ describe("pr-review CLI aggregation", () => {
 				.map(([name, value]) => `${name}=${value}`)
 				.join("\n");
 			assert.equal(values.includes(token), false, `${step} child env must not carry the forge token`);
-			assert.equal(values.includes(basic), false, `${step} child env must not carry the encoded fetch header`);
+			assert.equal(values.includes(basic), false, `${step} child env must not carry the encoded fetch credential`);
 		}
 	});
 
 	it("falls back to GITHUB_TOKEN and stays unauthenticated when the harness holds no token", async () => {
 		const fallback = await runCli({ env: { GITHUB_TOKEN: "ghp_actions_default" } });
-		const fallbackFetch = fallback.execCalls.find(([cmd, args]) => cmd === "git" && args.includes("fetch"));
-		const basic = fallbackFetch?.[1][1]?.match(/basic (.+)$/)?.[1];
+		const fallbackFetch = fallback.execCalls.find((call) => call.cmd === "git" && call.args.includes("fetch"));
+		const basic = fallbackFetch?.env?.GIT_CONFIG_VALUE_0?.match(/basic (.+)$/)?.[1];
 		assert.ok(basic);
 		assert.equal(Buffer.from(basic, "base64").toString("utf8"), "x-access-token:ghp_actions_default");
 		const bare = await runCli({});
-		const bareFetch = bare.execCalls.find(([cmd, args]) => cmd === "git" && args.includes("fetch"));
-		assert.deepEqual(bareFetch?.[1], ["fetch", "--quiet", "origin", "main", "pull/123/head"]);
-		assert.deepEqual(reviewedHeadFetchAuthConfig({}), []);
+		const bareFetch = bare.execCalls.find((call) => call.cmd === "git" && call.args.includes("fetch"));
+		assert.deepEqual(bareFetch?.args, ["fetch", "--quiet", "origin", "main", "pull/123/head"]);
+		// No token → no env override at all: the child inherits the harness env untouched.
+		assert.equal(bareFetch?.env, undefined);
+		assert.equal(reviewedHeadFetchAuthEnv({}), undefined);
+	});
+
+	it("scrubs the forge token and its base64 forms from crash stderr and the fail-closed comment (#554)", async () => {
+		const token = "ghs_ci_job_token_value";
+		const basicB64 = Buffer.from(`x-access-token:${token}`).toString("base64");
+		const rawB64 = Buffer.from(token).toString("base64");
+		// Simulate an execFileSync failure whose message embeds child argv/env-derived strings —
+		// the exact shape that previously carried the credential into the public sinks.
+		const fetchError = new Error(`git fetch exited 128: AUTHORIZATION: basic ${basicB64} token=${token} raw=${rawB64}`);
+		const out = await runCli({ env: { GH_TOKEN: token }, fetchError });
+		assert.equal(out.code, 1);
+		// Assert on the actual rendered sinks: stderr as written, and the upserted comment bodies.
+		const rendered = [out.stderr, out.stdout, ...out.comments].join("\n");
+		assert.equal(rendered.includes(token), false, "the raw token must not reach any rendered sink");
+		assert.equal(rendered.includes(basicB64), false, "the base64 basic credential must not reach any rendered sink");
+		assert.equal(rendered.includes(rawB64), false, "the base64 token must not reach any rendered sink");
+		// Whole-string redaction: no partial remnant of the basic credential either (base64 of the
+		// "x-access-token:" prefix is 3-byte aligned, so a wrong scrub order leaves it behind).
+		assert.equal(rendered.includes(Buffer.from("x-access-token:").toString("base64")), false, "no partial base64 remnant may survive");
+		assert.match(out.stderr, /pr-review crashed — failing closed/);
+		assert.match(out.stderr, /\[REDACTED\]/);
+		const comment = out.comments.join("\n");
+		// The comment renderer markdown-escapes hyphens ("pr\-review"), so match the unescaped tail.
+		assert.match(comment, /crashed before producing a review/);
+		assert.equal(comment.includes(basicB64), false);
+		// Fail-closed shape is preserved: no status posted (sha never resolved), exit 1.
+		assert.deepEqual(out.statuses, []);
 	});
 
 	it("routes a Grok/OpenCode pool driver's realized model into the generic execution override (#431)", async () => {

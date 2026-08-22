@@ -38,6 +38,7 @@ import {
 } from "./review/findings.js";
 import { CLAIM_BRANCH_RE } from "./revise-sweep.js";
 import type { GhRunner } from "./roadmap/github-issues.js";
+import { makeSecretScrubber } from "./secret-hygiene.js";
 import type { RunStepFn } from "./step-runner.js";
 import { runStep } from "./step-runner.js";
 import type { ParkSignal, ProviderName, StepEmit, StepResult } from "./types.js";
@@ -422,18 +423,49 @@ function upsertCommentDefault(pr: string, body: string): void {
  * Process-scoped credential for the pinned-head fetch (#554). The CI review checkout uses
  * `persist-credentials: false` so the statuses:write job token never sits in `.git/config`
  * where the forge-denied seat could read it — which also strips the credential this
- * HARNESS-owned fetch previously rode. When the harness env holds a forge token, carry it
- * on the fetch invocation alone via a per-invocation `-c http.<host>.extraheader`
- * (actions/checkout's `basic x-access-token:<token>` encoding). Harness plumbing only:
- * the header exists solely in this one child argv — never written to git config, and never
- * part of a seat's child env (`buildClaudeSeatEnv` strips GH_TOKEN/GITHUB_TOKEN from
- * denied roles). No token → unauthenticated fetch, the unchanged public-repo/local path.
+ * HARNESS-owned fetch previously rode. When the harness env holds a forge token, hand git
+ * the extraheader through the ENVIRONMENT-based config of that single child
+ * (`GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_0`/`GIT_CONFIG_VALUE_0`, actions/checkout's basic
+ * `x-access-token:<token>` encoding). Environment, never argv: execFileSync embeds the
+ * failed child's argv in `Error.message`, which main()'s fail-closed handler publishes to
+ * stderr and the public PR comment, and argv is world-readable via `/proc/<pid>/cmdline`.
+ * Harness plumbing only: never written to any git config file, and never part of a seat's
+ * child env (`buildClaudeSeatEnv` strips GH_TOKEN/GITHUB_TOKEN from denied roles). No
+ * token → `undefined` → the fetch child runs with the untouched inherited env (the
+ * unchanged public-repo/local path).
  */
-export function reviewedHeadFetchAuthConfig(env: NodeJS.ProcessEnv): string[] {
+export function reviewedHeadFetchAuthEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv | undefined {
 	const token = env.GH_TOKEN ?? env.GITHUB_TOKEN;
-	if (!token) return [];
+	if (token === undefined || token === "") return undefined;
 	const basic = Buffer.from(`x-access-token:${token}`).toString("base64");
-	return ["-c", `http.https://github.com/.extraheader=AUTHORIZATION: basic ${basic}`];
+	return {
+		GIT_CONFIG_COUNT: "1",
+		GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
+		GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${basic}`,
+	};
+}
+
+/**
+ * Scrub a crash message before it reaches the durable public sinks (stderr + the
+ * fail-closed PR comment). Extends the generic env-value scrubber with the BASE64 forms of
+ * the harness forge tokens: child-process error messages can embed argv/env-derived
+ * strings, and the standard credential patterns do not match base64. Defense in depth —
+ * the fetch credential no longer rides argv at all (reviewedHeadFetchAuthEnv), but the
+ * crash path must stay safe even if a future channel re-encodes a token.
+ */
+export function scrubCrashMessage(message: string, env: NodeJS.ProcessEnv): string {
+	let scrubbed = makeSecretScrubber(env)(message);
+	for (const name of ["GH_TOKEN", "GITHUB_TOKEN"] as const) {
+		const token = env[name];
+		if (token === undefined || token.length < 6) continue;
+		// Longest form first: base64("x-access-token:") is 15 bytes (3-byte aligned), so the
+		// basic-credential encoding literally ends with base64(token) — redacting the short
+		// form first would split the long form and leave its prefix behind.
+		for (const encoded of [Buffer.from(`x-access-token:${token}`).toString("base64"), Buffer.from(token).toString("base64")]) {
+			scrubbed = scrubbed.split(encoded).join("[REDACTED]");
+		}
+	}
+	return scrubbed;
 }
 
 /** Resolve and pin the SHA to review + post to: the PR's *head* commit, fetched
@@ -443,7 +475,7 @@ export function reviewedHeadFetchAuthConfig(env: NodeJS.ProcessEnv): string[] {
  *  local checkout's HEAD instead posts to whatever happens to be checked out, greening
  *  the wrong commit while the PR head stays blocked (#282/#307). */
 function resolveReviewedHead(exec: typeof execFileSync, pr: string, ghRepo: string, env: NodeJS.ProcessEnv): { sha: string; itemId?: string } {
-	const git = (args: string[]): string => String(exec("git", args, { cwd: REPO, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] })).trim();
+	const git = (args: string[], invocationEnv?: NodeJS.ProcessEnv): string => String(exec("git", args, { cwd: REPO, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"], ...(invocationEnv ? { env: invocationEnv } : {}) })).trim();
 	const raw = String(exec("gh", ["api", `repos/${ghRepo}/pulls/${pr}`, "--jq", "{sha: .head.sha, ref: .head.ref}"], { cwd: REPO, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] })).trim();
 	let head: { sha?: unknown; ref?: unknown };
 	try {
@@ -459,8 +491,9 @@ function resolveReviewedHead(exec: typeof execFileSync, pr: string, ghRepo: stri
 	const itemId = typeof head.ref === "string" ? head.ref.match(CLAIM_BRANCH_RE)?.[1] : undefined;
 	// Make origin/main and the pinned PR head reachable locally for the diff. `pull/<n>/head`
 	// always resolves for a GitHub PR (unlike a bare sha, which the server may refuse to serve).
-	// Auth (when the harness holds a token) is per-invocation only — see reviewedHeadFetchAuthConfig.
-	git([...reviewedHeadFetchAuthConfig(env), "fetch", "--quiet", "origin", "main", `pull/${pr}/head`]);
+	// Auth (when the harness holds a token) rides only this one child's ENV — see reviewedHeadFetchAuthEnv.
+	const authEnv = reviewedHeadFetchAuthEnv(env);
+	git(["fetch", "--quiet", "origin", "main", `pull/${pr}/head`], authEnv ? { ...env, ...authEnv } : undefined);
 	return { sha, ...(itemId ? { itemId } : {}) };
 }
 
@@ -1102,7 +1135,9 @@ export async function main(argv: string[]): Promise<number> {
 		process.stderr.write(`gate: ${review.gate.toUpperCase()} (ok=${review.ok})\n`);
 		return review.gate === "pass" && statusPosted ? 0 : 1;
 	} catch (e) {
-		const msg = e instanceof Error ? e.message : String(e);
+		// Scrubbed BEFORE both durable sinks: a child-process error message can embed
+		// argv/env-derived strings (incl. base64-encoded credentials) — see scrubCrashMessage.
+		const msg = scrubCrashMessage(e instanceof Error ? e.message : String(e), deps.env);
 		process.stderr.write(`pr-review crashed — failing closed: ${msg}\n`);
 		if (reviewedSha) deps.postStatus("block", reviewedSha);
 		else process.stderr.write("✗ reviewed SHA unavailable; posting no status (absent required status keeps the PR blocked)\n");

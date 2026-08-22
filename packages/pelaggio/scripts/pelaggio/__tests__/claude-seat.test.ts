@@ -35,39 +35,63 @@ const CLAUDE_CLI_AUTH_VARS = [
 	"ANTHROPIC_API_KEY",
 	"ANTHROPIC_AUTH_TOKEN",
 	"CLAUDE_CODE_OAUTH_TOKEN",
-	"AWS_BEARER_TOKEN_BEDROCK",
 	"ANTHROPIC_FOUNDRY_API_KEY",
 	"ANTHROPIC_FOUNDRY_AUTH_TOKEN",
 	"ANTHROPIC_AWS_API_KEY",
+	"ANTHROPIC_IDENTITY_TOKEN",
+	"ANTHROPIC_IDENTITY_TOKEN_FILE",
+	"ANTHROPIC_FEDERATION_RULE_ID",
+	"ANTHROPIC_ORGANIZATION_ID",
+	"ANTHROPIC_SERVICE_ACCOUNT_ID",
+	"ANTHROPIC_WORKSPACE_ID",
+] as const;
+const AWS_MODE_CREDENTIAL_VARS = [
+	"AWS_BEARER_TOKEN_BEDROCK",
 	"AWS_ACCESS_KEY_ID",
 	"AWS_SECRET_ACCESS_KEY",
 	"AWS_SESSION_TOKEN",
+	"AWS_ROLE_ARN",
+	"AWS_WEB_IDENTITY_TOKEN_FILE",
+	"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+	"AWS_CONTAINER_CREDENTIALS_FULL_URI",
+	"AWS_PROFILE",
+	"AWS_SHARED_CREDENTIALS_FILE",
+	"AWS_CONFIG_FILE",
+	"AWS_REGION",
+	"AWS_DEFAULT_REGION",
 ] as const;
+const GOOGLE_MODE_CREDENTIAL_VARS = ["GOOGLE_APPLICATION_CREDENTIALS"] as const;
 const CLAUDE_CLI_PROVIDER_CONFIG_VARS = [
 	"CLAUDE_CONFIG_DIR",
 	"CLAUDE_CODE_USE_BEDROCK",
 	"CLAUDE_CODE_USE_VERTEX",
 	"CLAUDE_CODE_USE_FOUNDRY",
 	"CLAUDE_CODE_USE_MANTLE",
+	"CLAUDE_CODE_USE_GATEWAY",
+	"CLAUDE_CODE_USE_ANTHROPIC_AWS",
+	"CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
 	"CLAUDE_CODE_SKIP_BEDROCK_AUTH",
 	"CLAUDE_CODE_SKIP_VERTEX_AUTH",
+	"CLAUDE_CODE_SKIP_FOUNDRY_AUTH",
 	"CLAUDE_CODE_SKIP_MANTLE_AUTH",
+	"CLAUDE_CODE_SKIP_ANTHROPIC_AWS_AUTH",
+	"CLAUDE_CODE_SKIP_ANTHROPIC_GOOGLE_CLOUD_AUTH",
 	"ANTHROPIC_BASE_URL",
 	"ANTHROPIC_BEDROCK_BASE_URL",
 	"ANTHROPIC_BEDROCK_MANTLE_BASE_URL",
 	"ANTHROPIC_VERTEX_BASE_URL",
 	"ANTHROPIC_FOUNDRY_BASE_URL",
+	"ANTHROPIC_AWS_BASE_URL",
+	"ANTHROPIC_GOOGLE_CLOUD_BASE_URL",
 	"ANTHROPIC_FOUNDRY_RESOURCE",
 	"ANTHROPIC_VERTEX_PROJECT_ID",
+	"ANTHROPIC_AWS_WORKSPACE_ID",
+	"ANTHROPIC_GOOGLE_CLOUD_PROJECT",
+	"ANTHROPIC_GOOGLE_CLOUD_LOCATION",
+	"ANTHROPIC_GOOGLE_CLOUD_WORKSPACE_ID",
 	"GCLOUD_PROJECT",
 	"GOOGLE_CLOUD_PROJECT",
-	"GOOGLE_APPLICATION_CREDENTIALS",
 	"CLOUD_ML_REGION",
-	"AWS_REGION",
-	"AWS_DEFAULT_REGION",
-	"AWS_PROFILE",
-	"AWS_SHARED_CREDENTIALS_FILE",
-	"AWS_CONFIG_FILE",
 	"ANTHROPIC_BEDROCK_REGION_PREFIX",
 	"ANTHROPIC_BEDROCK_SERVICE_TIER",
 	"ANTHROPIC_SMALL_FAST_MODEL_AWS_REGION",
@@ -196,9 +220,18 @@ function sdkShapedEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
 		ANTHROPIC_FOUNDRY_API_KEY: "foundry-api-key-value",
 		ANTHROPIC_FOUNDRY_AUTH_TOKEN: "foundry-auth-token-value",
 		ANTHROPIC_AWS_API_KEY: "anthropic-aws-key-value",
+		ANTHROPIC_IDENTITY_TOKEN: "wif-identity-token-value",
+		ANTHROPIC_IDENTITY_TOKEN_FILE: "/run/wif/identity-token",
+		ANTHROPIC_FEDERATION_RULE_ID: "fedrule-01-value",
+		ANTHROPIC_ORGANIZATION_ID: "org-01-value",
+		ANTHROPIC_SERVICE_ACCOUNT_ID: "svcacct-01-value",
+		ANTHROPIC_WORKSPACE_ID: "wrkspc-01-value",
+		// AWS credential chain: present in the bag but expected DROPPED unless an
+		// AWS provider mode is selected (no CLAUDE_CODE_USE_BEDROCK/MANTLE/ANTHROPIC_AWS here).
 		AWS_ACCESS_KEY_ID: "AKIAEXAMPLEKEYID0000",
 		AWS_SECRET_ACCESS_KEY: "aws-secret-access-key-value",
 		AWS_SESSION_TOKEN: "aws-session-token-value",
+		GOOGLE_APPLICATION_CREDENTIALS: "/home/agent/gcp-adc.json",
 		SSH_AUTH_SOCK: "/run/ssh-agent.sock",
 		GH_CONFIG_DIR: "/home/agent/gh-config",
 		GH_HOST: "github.com",
@@ -688,6 +721,43 @@ describe("buildClaudeSeatEnv", () => {
 			const env = buildClaudeSeatEnv(harnessSource, step, allow);
 			for (const [name, value] of Object.entries(harnessConfig)) assert.equal(env[name], value, `${step} ${name}`);
 			assert.equal("SENTINEL_SECRET" in env, false);
+		}
+	});
+
+	it("drops the AWS credential chain and Google ADC for every role when no matching provider mode is selected", () => {
+		// sdkShapedEnv carries live-looking AWS/Google values but no truthy USE_* selector.
+		for (const step of ALL_STEPS) {
+			const env = buildClaudeSeatEnv(source, step, allow);
+			for (const name of AWS_MODE_CREDENTIAL_VARS) assert.equal(name in env, false, `${step} must drop ${name} outside AWS provider mode`);
+			for (const name of GOOGLE_MODE_CREDENTIAL_VARS) assert.equal(name in env, false, `${step} must drop ${name} outside Google provider mode`);
+		}
+		// A falsy or unrecognized selector value does not open the gate (mirrors the CLI's 1/true/yes/on).
+		for (const value of ["0", "false", "", "off", "provider-config-value-1"]) {
+			const env = buildClaudeSeatEnv(sdkShapedEnv({ CLAUDE_CODE_USE_BEDROCK: value }), "pr-review", allow);
+			assert.equal("AWS_ACCESS_KEY_ID" in env, false, `selector value ${JSON.stringify(value)} must not pass AWS credentials`);
+		}
+	});
+
+	it("passes the AWS credential chain (and Google ADC) to every role when the matching provider mode is selected", () => {
+		const awsValues = Object.fromEntries(AWS_MODE_CREDENTIAL_VARS.map((name, index) => [name, `aws-cred-value-${index}`]));
+		for (const selector of ["CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_MANTLE", "CLAUDE_CODE_USE_ANTHROPIC_AWS"]) {
+			for (const truthy of ["1", "true", "YES", " on "]) {
+				const bag = sdkShapedEnv({ ...awsValues, [selector]: truthy });
+				for (const step of ALL_STEPS) {
+					const env = buildClaudeSeatEnv(bag, step, allow);
+					for (const name of AWS_MODE_CREDENTIAL_VARS) assert.equal(env[name], bag[name], `${step} ${selector}=${truthy} ${name}`);
+					// Google ADC stays gated on ITS selectors, not the AWS ones.
+					assert.equal("GOOGLE_APPLICATION_CREDENTIALS" in env, false, `${step} must still drop Google ADC`);
+				}
+			}
+		}
+		for (const selector of ["CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD"]) {
+			const bag = sdkShapedEnv({ [selector]: "1" });
+			for (const step of ALL_STEPS) {
+				const env = buildClaudeSeatEnv(bag, step, allow);
+				assert.equal(env.GOOGLE_APPLICATION_CREDENTIALS, bag.GOOGLE_APPLICATION_CREDENTIALS, `${step} ${selector}`);
+				assert.equal("AWS_ACCESS_KEY_ID" in env, false, `${step} must still drop AWS credentials`);
+			}
 		}
 	});
 
