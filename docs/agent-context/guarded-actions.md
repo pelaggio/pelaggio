@@ -1,9 +1,9 @@
 # Guarded actions: a fencing/reconciliation model for pelaggio's locks and gates
 
 Status: living construction home under ADR-0026's semantic rules (see the Division
-of authority below). **v7** — v3 was revised across two provider-diverse review
-passes; v4 added §8.1; v5–v7 applied three further review passes (2026-08-22, see the
-revision log). **Verification baseline, honestly:** the
+of authority below). **v8** — v3 was revised across two provider-diverse review
+passes; v4 added §8.1; v5–v7 applied three further review passes; v8 added §8.2
+(2026-08-22, see the revision log). **Verification baseline, honestly:** the
 code-referencing claims in §1–§7 were verified against `4a6ac3c` (2026-08-06) and have
 drifted — the issue cluster was closed and re-cut into the G-series on 2026-08-07
 (e.g. #466 "G3 — Token"), and `blockForeignRootWrite`'s denied-root set has grown. The
@@ -607,6 +607,99 @@ As failure modes, checklist-style:
 bad" is simultaneously unsound (a verdict without evidence) and over-aggressive (work
 lost to an outage). A gate that passes both halves cannot make that collapse.
 
+### 8.2 Construction over enumeration — the structural companion
+
+§8 and §8.1 take an individual guard as given and constrain how it *behaves* — soundly
+(§8), and without losing work when it fires (§8.1). This section asks the prior
+question: **how is a guard structured so its guarantee is *complete*?** A guarantee has a
+*completeness surface* when there are many places the property could be violated — output
+sinks that might leak a secret, config vars that might pass an untriaged value, HEAD
+shapes that might smuggle an unproven merge. Enforced site-by-site, such a guard is never
+done: adversarial review keeps finding one more site, and each round buys one patch and
+no leverage — the §1 complaint, in the shape of a single guard rather than the whole
+cluster. This is hoisted from the multi-PR guard campaign, where the fix that repeatedly
+worked was not the next patch but lifting the guarantee to one chokepoint where it holds
+structurally.
+
+The bar, one sentence, in §3's spirit:
+
+> **When a guard's guarantee spans many sites, paths, or inputs, establish it at a single
+> construction-level chokepoint where it holds *by construction*, rather than enumerating
+> and patching each site. An enumerated guard is falsified by "one more site"; a
+> construction-level guard is falsified only by *escaping* the chokepoint — which the
+> control flow or type system makes visible and testable in one place.**
+
+**The diagnostic — when to hoist.** If review or testing keeps surfacing *one more*
+instance of the *same class* — one more unscrubbed sink, one more untriaged var, one more
+merge/HEAD shape — the guard is enumerated and its completeness is unbounded-in-practice.
+That recurrence *is* the signal to hoist, not to add the next patch. It is §1's "we pay
+full price for each one and bank no leverage," localized to one guarantee.
+
+**The moves.** Four, each named with a worked example from the campaign; they are not
+exclusive, and one guard may use several.
+
+- **Chokepoint enforcement** — put the guarantee at the boundary every path funnels
+  through, not at each producer. *Example:* scrub secrets over the fully-assembled output
+  at the public write boundary — the effectful writes (stdout, the PR-comment upsert),
+  where every diagnostic path terminates — instead of scrubbing at each render site and
+  missing the one the next review round finds. `secret-hygiene.ts`'s scrubber is the
+  mechanism (ADR-0010); the move is *where* it runs — the write, not the render — so a new
+  diagnostic path is covered without being enumerated.
+- **Extract-and-require (conformance)** — do not hand-maintain the allowed set against a
+  moving upstream; extract the full set mechanically and *require* every member be
+  explicitly triaged, so a *new* member fails CI rather than slipping through. *Example:* a
+  conformance test that scans the installed SDK for every env var it reads and asserts each
+  is either passed-through or excluded-with-a-reason — a var added at the next SDK bump
+  fails the test then, instead of surfacing as a production leak (the deny-by-default env
+  allowlist of ADR-0010, made complete against upstream drift rather than re-audited by
+  hand each bump).
+- **Default-deny allowlist** — trust is an explicit, small set; everything else, *including
+  unknown and future members*, is denied by construction. This is §7.2 already —
+  `unavailable` is an allowlist, never a default, and "*anything not listed* → block." The
+  move generalizes that row: consume evidence only from a store-trusted set, and let any
+  other or unknown source default to untrusted rather than enumerating distrust one member
+  at a time.
+- **Recognize-by-invariant, not by-shape** — identify a thing by the property that
+  *defines* it, not the incidental form it took this time. *Example:* recognize an unproven
+  `ours`-style merge by its merge-against-main second-parent signature plus a tree check,
+  so every way HEAD can diverge collapses into one recognition rule — rather than matching
+  each specific parent shape and missing the next one. §7.2's "the input must carry typed
+  *per-cell* causes" is the same move on the evidence axis: key disposition on the cause
+  that defines a cell, not on an aggregate label two materially different matrices happen
+  to share.
+
+**Relation to the spine and to §8.1.** This extends ADR-0014 (determinism lives in the
+harness) one step: from *the gate's decision is deterministic* to *the gate's completeness
+is structural, not enumerated*. It is the construction companion to §8.1's behavioral bar
+— §8.1 governs how a gate behaves *when it fires* (early / narrow / preserving /
+falsifiable); this governs how a guard is *structured so its guarantee is complete at all*.
+The two meet at §8.1's fourth property: a construction-level guard is inherently more
+**falsifiable**, because a chokepoint gives both its false-fire and its true-fire coverage
+a single locus. In particular the chokepoint is the one place a mutation test can disable
+to prove the *whole class* fails at once — which is exactly how you demonstrate that the
+chokepoint, and not scattered per-site logic, is the control. An enumerated guard cannot
+offer that test; its coverage is per-site and therefore never complete.
+
+The document already contains instances of the move without having named it — the same
+relation §3's rule bore to the guards §4 later sorted. §7.2's default-deny allowlist; the
+§7 discriminated union that makes the §6 `clearedBy` invariant *compiler-enforced* rather
+than a field every call site can fill with a stub; and §4's derived-exclusivity condition
+(b) — *the target is a total function of the fenced claim* — are each construction-level
+completeness, hoisted at the type or derivation level. Naming the move is what lets the
+next guard reach for it deliberately instead of re-deriving it under review.
+
+**Caveat — when not to over-reach.** Not every guard has a completeness surface worth
+hoisting; a genuinely single-site check stays single-site. The trigger is *recurrence of
+the same class*, not a prophylactic reflex — this section governs how a guard is
+structured, never whether to add one, the same humility §8.1 keeps. And the sharp failure
+of the move is a chokepoint the codebase cannot actually force all paths through: it reads
+as a guarantee and is not one. #435 is exactly this — `blockForeignRootWrite`'s
+derived-exclusivity chokepoint is a false guarantee for a `cwd=MAIN_REPO` step, because
+that path never funnels through a claim (§4 condition (b) fails before it is reached). So
+the requirement is explicit: **name the property that all paths funnel through the
+chokepoint, and make *that* the tested invariant** — an unenforced chokepoint is an
+enumerated guard wearing a structural mask.
+
 ## 9. What this subsumes
 
 - P1 fence: #401, ADR-0025 implementation, #409/#410.
@@ -672,6 +765,22 @@ Steps 1–3 are independently valuable if the rest is never built.
    defect.
 
 ## Revision log
+
+**v8** (2026-08-22) — added §8.2, the construction-over-enumeration principle ("type the
+invariant out of the pipeline"): the completeness-surface diagnostic (recurrence of "one
+more" instance of the *same class* is the signal to hoist) and the four moves — chokepoint
+enforcement, extract-and-require conformance, default-deny allowlist, recognize-by-invariant
+— each with a mechanism-true worked example. Hoisted from the multi-PR guard campaign where
+adversarial review kept surfacing one more site of the same class per round. Framed as
+§8.1's structural companion (§8.1 governs how a gate *behaves* when it fires; §8.2 how a
+guard is *structured* so its guarantee is complete) and as an extension of ADR-0014 from
+"the gate's decision is deterministic" to "the gate's completeness is structural." Names the
+pre-existing instances the section generalizes — §7.2's default-deny allowlist, the §7
+discriminated union that compiler-enforces the §6 `clearedBy` invariant, and §4's
+derived-exclusivity condition (b) / #435 as the false-chokepoint failure — so it reads as
+naming a move already in use, not a new claim. Routed from the AGENTS.md invariant added in
+the same change. Doc-only: no new decision slot — ADR-0026's Construction section already
+designates this document its canonical construction home.
 
 **v7** (2026-08-22) — v6 confirmation pass (3 seats), 11 must-fix triaged: factual
 fixes applied (header version tokens; §8.1 item 12 corrected against head —
