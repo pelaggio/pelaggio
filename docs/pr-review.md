@@ -226,7 +226,10 @@ fail-closed dominance a valid summary gets). Carried findings whose latest decis
 `refuted` — the gate’s fail-closed invalid-summary rule re-adds them to the carried set,
 so the fleet `survivorCount` includes them — are recorded in a separate `refuted` list
 with their refutation evidence; they need no hunk, open no edit region, and require no
-touch. `survivorCount` = `survivors.length + refuted.length`, binding the fleet record’s
+touch. This shape is not disagreement-only: a budget-cap overrun also invalidates the
+final summary, so a `consensus-block` record’s carried set gets the same padding and the
+`refuted` split un-suppresses its sidecar under the same evidence bar.
+`survivorCount` = `survivors.length + refuted.length`, binding the fleet record’s
 carried count; at least one genuine survivor is required. The fleet refutation is bound
 to the **old** reviewed SHA and is provenance only, never the clearer: adjudication
 re-checks every refuted entry in the live verification pass at the repaired head (an
