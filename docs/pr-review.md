@@ -220,6 +220,20 @@ survivor’s v1 finding, recomputed fingerprint, emission-time class/tier, succe
 boundary. Locationless or unmappable survivors omit the whole sidecar — the ordinary red
 gate still stands.
 
+Dispositions are latest-per-fingerprint (#525): the latest iteration’s verification
+decision wins, and within one iteration a `survives` outranks a `refuted` (the same
+fail-closed dominance a valid summary gets). Carried findings whose latest decision is
+`refuted` — the gate’s fail-closed invalid-summary rule re-adds them to the carried set,
+so the fleet `survivorCount` includes them — are recorded in a separate `refuted` list
+with their refutation evidence; they need no hunk, open no edit region, and require no
+touch. `survivorCount` = `survivors.length + refuted.length`, binding the fleet record’s
+carried count; at least one genuine survivor is required. The fleet refutation is bound
+to the **old** reviewed SHA and is provenance only, never the clearer: adjudication
+re-checks every refuted entry in the live verification pass at the repaired head (an
+allowed survivor-hunk edit can reactivate one), clears it only on a fresh live refuted
+decision — recorded as the disposition rationale in the operator record — and refuses if
+the live verifier finds it alive, exactly as for a surviving finding.
+
 Forge comments are display/audit only. The command never scrapes Markdown or reconstructs
 evidence from a CI-only / legacy fleet run. Those cases refuse with a full-re-review
 instruction.
@@ -227,11 +241,15 @@ instruction.
 ### Eligible / refusal matrix
 
 Eligible: a complete v2 `producer: "fleet"` record with `gate: "block"`, structural
-`ok: true`, `agreement: "consensus-block"`, `survivorCount ≥ 1` matching the sidecar, and
-a matching digest. A `budget` / `max-passes` / `diminishing-returns` breaker is eligible
-only with that complete matrix. The current head must be a descendant of the reviewed SHA,
-and every interdiff edit must fall in a recorded hunk (insertions may use the immediate
-start/end boundary).
+`ok: true`, `agreement: "consensus-block"` **or** `"disagreement"` (#525), `survivorCount
+≥ 1` matching the sidecar (survivors + refuted), and a matching digest — the sidecar's
+agreement must equal the fleet record's exactly. A `budget` / `max-passes` / `diminishing-returns` breaker is
+eligible only with that complete matrix, and so is `invalid-pass`: the convergence loop
+labels a terminal verdict split's breaker `invalid-pass`, but with `ok: true` every
+required cell completed a structurally valid review — a genuinely broken run instead
+carries `ok: false` / `agreement: "invalid"` and stays refused. The current head must be a
+descendant of the reviewed SHA, and every interdiff edit must fall in a recorded hunk
+(insertions may use the immediate start/end boundary).
 
 Churn bounds are threefold and fail-closed: per hunk, added lines are capped by the extent
 of the covering recorded hunks; across the whole interdiff, TOTAL added lines are capped by
@@ -240,8 +258,9 @@ per-hunk allowance); and each added line's UTF-8 byte length is capped by a per-
 ceiling derived from the hunk's own replaced lines, clamped to a 200-byte floor / 1000-byte
 ceiling (so one in-range line cannot be replaced with an arbitrarily large single line).
 
-Refuses: v1 / operator / pass / disagreement / `invalid-pass` / provider-diversity /
-preflight budget / zero-survivor / digest or identity mismatch / missing sidecar /
+Refuses: v1 / operator / pass / `agreement: "invalid"` or non-`ok` (the broken-review
+`invalid-pass` shape) / provider-diversity /
+preflight budget / zero-survivor / digest or agreement or identity mismatch / missing sidecar /
 force-push or rebase / extra file or hunk / binary, rename, copy, create, delete / any
 file-mode metadata change (executable-bit or file-type transition, with or without hunks) /
 per-hunk, aggregate, or byte churn-bound overrun / empty or malformed interdiff /
@@ -252,9 +271,11 @@ uncovered survivor. Broad churn returns to full `pr-review` or `pelaggio revise`
 Today’s schema-v1 fleet survivors have no `ruleId`/`cwe`/`classHint`, so emission-time
 classification lands them in `correctness-regression` / safety. Live adjudication
 therefore always spends **one** bounded `pr-verify` seat (the `--profile` scalar
-`pr-verify` settings). A non-`ok`, parked, malformed, incomplete, or `survives` result
-refuses with no authorization effects. A judgment-only set (taxonomy extension / test)
-skips the model call. Line numbers are not remapped through the interdiff — they hint at
+`pr-verify` settings) whose candidates are every safety-tier survivor **plus every
+refuted entry** regardless of tier (#525: a refuted entry’s only clearing evidence is the
+live pass). A non-`ok`, parked, malformed, incomplete, or `survives` result refuses with
+no authorization effects. A judgment-only survivor set with no refuted entries (taxonomy
+extension / test) skips the model call. Line numbers are not remapped through the interdiff — they hint at
 the pre-fix location; the verifier inspects the current head.
 
 The verifier is confined the same way the pipeline confines its `pr-verify` seats: its cwd

@@ -830,6 +830,17 @@ export function formatReviewMetrics(gate: "pass" | "block", ok: boolean, subtype
 	return `<!-- pr-review-metrics gate=${gate} ok=${ok} subtype=${subtype} cost=${cost.toFixed(2)} turns=${turns} -->`;
 }
 
+export function escapeHtml(value: string): string {
+	return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
+/** The single escaping rule for model-authored text on PUBLIC comment surfaces (the fleet
+ *  review comment and the operator-adjudication comment). Lives here — a leaf module — so
+ *  review/adjudication.ts can share it without a pr-review-cli → step-runner import cycle. */
+export function escapeMarkdown(value: string): string {
+	return escapeHtml(value).replace(/([\\`*_[\]{}()#+.!|>-])/g, "\\$1");
+}
+
 // ── Blocked / stalled-ask parsing ──────────────────────────────────────
 
 /**

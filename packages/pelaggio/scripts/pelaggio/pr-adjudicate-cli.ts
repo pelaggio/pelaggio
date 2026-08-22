@@ -18,7 +18,7 @@ import { CONFIG, REPO, REVIEW_CONFIG, ROADMAP_GITHUB, resolveStepSettings, SHIP_
 import { upsertMarkerComment } from "./github-posting.js";
 import { createMainCheckoutDeltaObserver, FORBIDDEN_ROOT_GONE, listWorktreesIn, type MainCheckoutDeltaObserver, mainWorktree, snapshotForbiddenRoot, snapshotRepoRefState, snapshotSiblingWorktree } from "./helpers.js";
 import { executionOverrideFor, trustedLocalContext, verificationPrompt } from "./pr-review-cli.js";
-import { gateRecordsDir, listPrReviewGateRecords, type PrReviewGateRecord, writePrReviewGateRecord } from "./pr-review-gate-record.js";
+import { gateRecordsDir, listPrReviewGateRecords, type PrReviewFindingDispositionEntry, type PrReviewGateRecord, writePrReviewGateRecord } from "./pr-review-gate-record.js";
 import {
 	adjudicationSourcesDir,
 	bindLiveSafetyVerification,
@@ -246,7 +246,7 @@ export async function runPrAdjudication(pr: number, profile: string, deps: PrAdj
 	}
 	const latest = selection.record;
 	if (!isEligibleFleetGateRecord(latest)) {
-		return refuse(deps, "latest fleet outcome is not an adjudicable complete consensus-block; run a full pr-review");
+		return refuse(deps, "latest fleet outcome is not an adjudicable complete blocked review (consensus-block or disagreement); run a full pr-review");
 	}
 
 	const source = deps.readAdjudicationSource(deps.adjudicationSourcesRoot, pr, latest.headSha);
@@ -290,12 +290,19 @@ export async function runPrAdjudication(pr: number, profile: string, deps: PrAdj
 		if (churn.kind === "refused") return refuse(deps, churn.reason);
 		// Durable dispositions: containment rationales from the churn predicate, with safety-tier
 		// entries rebound below to the LIVE adjudication-time verification evidence — never the
-		// stale red-review "survives" text (#497 must-fix).
-		let finalDispositions = churn.dispositions;
+		// stale red-review "survives" text (#497 must-fix). Carried-but-refuted findings (#525
+		// round-3 must-fix) are cleared ONLY by live confirmation below: their fleet refutation is
+		// bound to the OLD reviewed SHA, and an allowed survivor-hunk edit at the repaired head can
+		// reactivate them — stale old-SHA evidence alone never clears an entry at a different SHA.
+		let finalDispositions: Record<string, PrReviewFindingDispositionEntry> = { ...churn.dispositions };
 
 		const safety = source.survivors.filter((entry) => entry.tier === "safety");
-		if (safety.length > 0) {
-			const candidates: VerificationCandidate[] = safety.map((entry, index) => ({ id: `C${index + 1}`, finding: entry.finding }));
+		// Live candidates at the repaired head: every safety-tier survivor AND every refuted entry
+		// (regardless of tier — a refuted entry's only clearing evidence is the live pass; one the
+		// verifier finds alive blocks exactly like a surviving finding).
+		const liveChecked = [...safety.map((entry) => entry.finding), ...source.refuted.map((entry) => entry.finding)];
+		if (liveChecked.length > 0) {
+			const candidates: VerificationCandidate[] = liveChecked.map((finding, index) => ({ id: `C${index + 1}`, finding }));
 			const parkSignal = emptyParkSignal();
 			const verifySettings = deps.resolveVerifySettings(profile);
 			const localContext = trustedLocalContext({ diffCwd: prepared.diffCwd, diffBaseRef: prepared.baseRef, diffHeadRef: prepared.headRef });
@@ -408,17 +415,34 @@ export async function runPrAdjudication(pr: number, profile: string, deps: PrAdj
 			} catch (e) {
 				return refuse(deps, `invalid verification report: ${e instanceof Error ? e.message : String(e)}`);
 			}
-			if (dispositions.some((entry) => entry.decision === "survives")) return refuse(deps, "safety verifier reported a surviving finding; run a full pr-review");
-			if (!dispositions.every((entry) => entry.decision === "refuted")) return refuse(deps, "safety verification was incomplete");
+			// A survives here covers BOTH classes: a safety survivor the repair did not fix, and a
+			// refuted entry the repair REACTIVATED at the repaired head (#525 round-3 must-fix).
+			if (dispositions.some((entry) => entry.decision === "survives")) return refuse(deps, "live verifier reported a surviving finding at the repaired head; run a full pr-review");
+			if (!dispositions.every((entry) => entry.decision === "refuted")) return refuse(deps, "live verification was incomplete");
 			const live = new Map<string, LiveSafetyRefutation>();
 			for (const entry of dispositions) {
 				if (entry.decision !== "refuted") continue;
 				live.set(reviewFindingFingerprint(entry.finding), { id: entry.id, decision: "refuted", rationale: entry.rationale });
 			}
 			try {
-				finalDispositions = bindLiveSafetyVerification(source.survivors, churn.dispositions, live);
+				finalDispositions = bindLiveSafetyVerification(source.survivors, finalDispositions, live);
 			} catch (e) {
 				return refuse(deps, `could not bind live verification evidence: ${e instanceof Error ? e.message : String(e)}`);
+			}
+			// Refuted entries clear only on FRESH evidence bound to the repaired head; the fleet
+			// refutation is provenance, never the clearer. Fail-closed: a missing live confirmation
+			// refuses (the completeness checks above should make this unreachable).
+			for (const entry of source.refuted) {
+				const evidence = live.get(entry.fingerprint);
+				if (evidence?.decision !== "refuted") {
+					return refuse(deps, "no live confirmation for a fleet-refuted finding at the repaired head; run a full pr-review");
+				}
+				finalDispositions[entry.fingerprint] = {
+					disposition: "refuted",
+					rationale:
+						`Live isolated verification ${evidence.id} at the repaired head confirmed the finding remains refuted (${evidence.rationale}). ` +
+						`Fleet verification ${entry.verification.id} first refuted it at the reviewed SHA; that stale evidence alone never clears an entry at a different SHA.`,
+				};
 			}
 		}
 
@@ -449,6 +473,7 @@ export async function runPrAdjudication(pr: number, profile: string, deps: PrAdj
 			interdiffDigest: churn.digest,
 			adjudicator,
 			survivors: source.survivors,
+			refuted: source.refuted,
 			dispositions: finalDispositions,
 		});
 		if (!deps.upsertComment(deps.gh, deps.ghRepo, pr, body)) return refuse(deps, "failed to upsert the operator adjudication comment");

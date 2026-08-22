@@ -2481,6 +2481,11 @@ describe("runOrchestrator — mid-run review drain (#387)", () => {
 				verification: { id: string; decision: "survives"; rationale: string };
 				hunk: { path: string; start: number; end: number };
 			}>;
+			refuted: Array<{
+				finding: { severity: "must-fix"; message: string; path: string; line: number };
+				fingerprint: string;
+				verification: { id: string; decision: "refuted"; rationale: string };
+			}>;
 		};
 	};
 	type GateFn = (opts: { parkSignal?: { parked: boolean; resetsAt: number; limitType: string }; reviewedSha?: string; itemId?: string }) => Promise<GateResult>;
@@ -2506,6 +2511,7 @@ describe("runOrchestrator — mid-run review drain (#387)", () => {
 					hunk: { path: "src/a.ts", start: 8, end: 14 },
 				},
 			],
+			refuted: [],
 		};
 	}
 
