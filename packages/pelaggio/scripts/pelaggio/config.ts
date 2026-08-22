@@ -6,6 +6,7 @@ import { parse as parseYaml } from "yaml";
 import { NOTIFY_EVENTS, NOTIFY_FORMATS, type NotifyConfig, type NotifyEvent, type NotifyFormat } from "./notify.js";
 import { type RawTaxonomyInput, resolveTaxonomy, type TaxonomyConfig } from "./review/taxonomy.js";
 import { type GithubRoadmapConfig, isScope, type LinearRoadmapConfig, PLAN_LOCATIONS, type PlanLocation, ROADMAP_SOURCE_NAMES, type RoadmapSourceName, type Scope } from "./roadmap/types.js";
+import { setForwardedProxyAllowlist } from "./secret-hygiene.js";
 import type { ProviderName, ShipTargetName } from "./types.js";
 
 const SHIP_TARGET_NAMES: readonly ShipTargetName[] = ["direct-push", "pull-request", "auto-merge-pr"];
@@ -1048,6 +1049,12 @@ export function resolveProviderBin(config: ResolvedConfig, provider: ProviderNam
 // ── Resolved exports (populated at import time) ────────────────────────
 
 export const CONFIG = loadConfig();
+
+// Config-drive the forwarded-proxy secret set so every collectSecretEnvValues site (crash/report
+// boundary, provider stderr, Claude seat) registers an allowlisted proxy's userinfo as a secret
+// by default, with no per-call-site option to forget (#554). One-way edge config → secret-hygiene
+// (secret-hygiene imports only ./types), so no cycle.
+setForwardedProxyAllowlist(CONFIG.security.envAllowlist);
 
 export const WORKTREE_PREFIX = CONFIG.worktreePrefix;
 export const MODEL_PROFILES: Record<string, Partial<Record<Step, string>>> = CONFIG.modelProfiles;

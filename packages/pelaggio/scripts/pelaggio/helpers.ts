@@ -8,7 +8,7 @@ import { resolveArtifactRoot } from "./artifact-root.js";
 import { CONFIG, isPipelineStep, LOG_PATH, type PipelineStep, REPO, resolveProviderBin, STEPS, WORKTREE_PREFIX } from "./config.js";
 import { MarkdownRoadmap } from "./roadmap/markdown.js";
 import type { CreateItemOpts, RoadmapSource } from "./roadmap/types.js";
-import { makePublicSinkScrubber } from "./secret-hygiene.js";
+import { collectSecretEnvValues, makePublicSinkScrubber, REDACTED } from "./secret-hygiene.js";
 import type { CycleDisposition, CycleDriverProvenance, CycleGitBinding, CycleResult, CycleVersionProvenance, Decision, Mutex, ParkClass, ProviderName, Step, StepLog, StepResult } from "./types.js";
 
 export function parseDecisions(text: string): Decision[] {
@@ -857,6 +857,32 @@ export function escapeMarkdownForSink(value: string, env: NodeJS.ProcessEnv): st
 /** {@link escapeMarkdownForSink} for an HTML-only sink (e.g. a `<pre>` block). */
 export function escapeHtmlForSink(value: string, env: NodeJS.ProcessEnv): string {
 	return escapeHtml(makePublicSinkScrubber(env)(value));
+}
+
+/**
+ * BOUNDARY scrub for the review path's two public output operations — the stdout write of the
+ * assembled review body and the PR-comment upsert (#554). Per-field `escapeMarkdownForSink`
+ * covers model-authored fields, but diagnostic fields assembled into the body by other paths
+ * (discovery-rejection `pass.diagnostic`, verifier-failure `pass.verificationDiagnostic`, the
+ * "Review execution threw" sink, and any FUTURE one) have no per-field scrub. Scrubbing the
+ * COMPLETE assembled string once here makes those covered by construction — this is the security
+ * guarantee; per-field scrubbing is defense in depth.
+ *
+ * Matches three transforms of every harness secret value: the RAW value and its BASE64 forms
+ * (via {@link makePublicSinkScrubber}), plus the MARKDOWN-ESCAPED form — because a secret routed
+ * through `escapeMarkdown` earlier appears as e.g. `ghp\_xxx` (backslash-escaped `_`/`-`), which
+ * the raw scrubber would miss. Escaped forms are applied longest-first so a value containing
+ * another is fully covered.
+ */
+export function scrubReviewBoundary(body: string, env: NodeJS.ProcessEnv): string {
+	let out = makePublicSinkScrubber(env)(body); // raw + base64 forms
+	const escapedForms = collectSecretEnvValues(env)
+		.filter((value) => value.length >= 6)
+		.map((value) => escapeMarkdown(value))
+		.filter((escaped) => escaped.length >= 6)
+		.sort((a, b) => b.length - a.length);
+	for (const escaped of escapedForms) out = out.split(escaped).join(REDACTED);
+	return out;
 }
 
 // ── Blocked / stalled-ask parsing ──────────────────────────────────────

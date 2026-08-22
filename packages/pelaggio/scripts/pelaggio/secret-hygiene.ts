@@ -122,6 +122,10 @@ export interface BuildAgentEnvOptions {
 	extra?: Record<string, string>;
 	/** Env to draw from; defaults to `process.env`. Injectable for tests. */
 	source?: NodeJS.ProcessEnv;
+	/** Suppress the dropped-proxy / relative-XDG stderr diagnostics. The Claude seat builds its
+	 *  env twice per step (preflight probe + spawn); the preflight build sets this so the drop
+	 *  warning prints once per step, not twice. */
+	quiet?: boolean;
 }
 
 /**
@@ -144,9 +148,10 @@ export function buildAgentEnv(opts: BuildAgentEnvOptions = {}): NodeJS.ProcessEn
 		if (PROXY_URL_ENV_NAMES.has(key) && !callerAllow.has(key)) {
 			const verdict = classifyProxyValue(value);
 			if (verdict !== "forward") {
-				process.stderr.write(
-					`⚠ not forwarding ${key} to the agent subprocess (${verdict === "credentialed" ? "its URL userinfo carries proxy credentials" : "its value is not a parseable proxy URL"}); add ${key} to security.env-allowlist to forward it anyway\n`,
-				);
+				if (!opts.quiet)
+					process.stderr.write(
+						`⚠ not forwarding ${key} to the agent subprocess (${verdict === "credentialed" ? "its URL userinfo carries proxy credentials" : "its value is not a parseable proxy URL"}); add ${key} to security.env-allowlist to forward it anyway\n`,
+					);
 				continue;
 			}
 		}
@@ -154,7 +159,7 @@ export function buildAgentEnv(opts: BuildAgentEnvOptions = {}): NodeJS.ProcessEn
 		// already skips it for gh-config masking; forwarding it would let the child honor a
 		// directory the mask ignored, so it is skipped here under the same rule.
 		if (key === "XDG_CONFIG_HOME" && value !== "" && !value.startsWith("/")) {
-			process.stderr.write(`⚠ not forwarding relative XDG_CONFIG_HOME ${JSON.stringify(value)} to the agent subprocess (XDG requires absolute paths)\n`);
+			if (!opts.quiet) process.stderr.write(`⚠ not forwarding relative XDG_CONFIG_HOME ${JSON.stringify(value)} to the agent subprocess (XDG requires absolute paths)\n`);
 			continue;
 		}
 		env[key] = value;
@@ -191,8 +196,23 @@ const MIN_BARE_PROXY_TOKEN_LENGTH = 12;
 export interface CollectSecretEnvOptions {
 	/** Proxy var NAMES the operator explicitly forwarded via `security.env-allowlist`. An
 	 *  allowlisted credentialed proxy's userinfo is sensitive by definition, so its FULL
-	 *  userinfo (colon or not, any length) is registered even without a password component. */
+	 *  userinfo (colon or not, any length) is registered even without a password component.
+	 *  Defaults to {@link defaultForwardedProxyNames} (config-driven — see setForwardedProxyAllowlist)
+	 *  so every production scrub path registers allowlisted proxy creds with no per-call-site option
+	 *  to forget; tests/DI may still pass it explicitly. */
 	forwardedProxyNames?: ReadonlySet<string>;
+}
+
+/** Config-driven default for {@link CollectSecretEnvOptions.forwardedProxyNames}. Set once from
+ *  `CONFIG.security.envAllowlist` at config load (setForwardedProxyAllowlist) so an allowlisted
+ *  proxy's userinfo is registered as a secret by default at EVERY collection site — the crash/report
+ *  boundary, provider stderr, and the Claude seat — without each call passing the option. */
+let defaultForwardedProxyNames: ReadonlySet<string> = new Set();
+
+/** Register the operator's `security.env-allowlist` as the default forwarded-proxy set. Called once
+ *  at config load (config.ts, after CONFIG is built). Idempotent; last call wins. */
+export function setForwardedProxyAllowlist(names: Iterable<string>): void {
+	defaultForwardedProxyNames = new Set(names);
 }
 
 export function collectSecretEnvValues(source: NodeJS.ProcessEnv = process.env, opts: CollectSecretEnvOptions = {}): string[] {
@@ -210,7 +230,8 @@ export function collectSecretEnvValues(source: NodeJS.ProcessEnv = process.env, 
 		if (PROXY_URL_ENV_NAMES.has(name)) {
 			const userinfo = proxyUrlUserinfo(value);
 			if (userinfo !== undefined) {
-				const allowlisted = opts.forwardedProxyNames?.has(name) ?? false;
+				const forwarded = opts.forwardedProxyNames ?? defaultForwardedProxyNames;
+				const allowlisted = forwarded.has(name);
 				const isSecret = userinfo.includes(":") || allowlisted || userinfo.length >= MIN_BARE_PROXY_TOKEN_LENGTH;
 				if (isSecret) {
 					values.push(value);

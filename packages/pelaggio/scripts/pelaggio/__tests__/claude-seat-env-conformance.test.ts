@@ -111,8 +111,9 @@ const EXCLUDED: ReadonlyArray<{ reason: string; names: readonly string[] }> = [
 		],
 	},
 	{
-		reason: "debug/telemetry/trace-propagation control, deliberately dropped (fleet notes: DEBUG, TRACEPARENT/TRACESTATE)",
-		names: ["DEBUG", "DEBUG_SDK", "DISABLE_ERROR_REPORTING", "DISABLE_TELEMETRY", "DO_NOT_TRACK", "NODE_V8_COVERAGE", "TRACEPARENT", "TRACESTATE"],
+		reason:
+			"debug/trace-propagation control that ADDS output, deliberately dropped (fleet notes: DEBUG, TRACEPARENT/TRACESTATE). NOTE: privacy opt-outs that SUPPRESS output (DO_NOT_TRACK/DISABLE_TELEMETRY/DISABLE_ERROR_REPORTING/CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC) are pass-through, not excluded — a host that disabled telemetry stays disabled in seats (#554 finding 2).",
+		names: ["DEBUG", "DEBUG_SDK", "NODE_V8_COVERAGE", "TRACEPARENT", "TRACESTATE"],
 	},
 	{
 		reason: "code-injection vector (--require), deliberately dropped",
@@ -292,7 +293,6 @@ const EXCLUDED: ReadonlyArray<{ reason: string; names: readonly string[] }> = [
 			"CLAUDE_CODE_DISABLE_MOUSE",
 			"CLAUDE_CODE_DISABLE_MOUSE_CLICKS",
 			"CLAUDE_CODE_DISABLE_NESTED_CHAIN_IDLE",
-			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
 			"CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK",
 			"CLAUDE_CODE_DISABLE_NOTIFICATION_PRESENCE_CHECK",
 			"CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL",

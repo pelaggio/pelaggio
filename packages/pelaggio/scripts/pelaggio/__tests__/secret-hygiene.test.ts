@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { buildAgentEnv, classifyProxyValue, collectSecretEnvValues, makeSecretScrubber, PROVIDER_KEY_ENV, REDACTED, scopeEnvAllowlistToProvider, scrubSecrets } from "../secret-hygiene.js";
+import { buildAgentEnv, classifyProxyValue, collectSecretEnvValues, makeSecretScrubber, PROVIDER_KEY_ENV, REDACTED, scopeEnvAllowlistToProvider, scrubSecrets, setForwardedProxyAllowlist } from "../secret-hygiene.js";
 
 describe("buildAgentEnv (#237) — deny-by-default env allowlist", () => {
 	const source: NodeJS.ProcessEnv = {
@@ -143,6 +143,25 @@ describe("buildAgentEnv (#237) — deny-by-default env allowlist", () => {
 		assert.ok(allowlisted.includes(shortTok));
 		assert.ok(allowlisted.includes("shorttoken"));
 		assert.match(makeSecretScrubber({ HTTPS_PROXY: shortTok }, { forwardedProxyNames: forwarded })("token shorttoken used"), /\[REDACTED\]/);
+	});
+
+	it("registers an allowlisted proxy's userinfo by default from CONFIG — no explicit forwardedProxyNames needed (#554)", () => {
+		// config.ts calls setForwardedProxyAllowlist(CONFIG.security.envAllowlist) at load, so every
+		// production collectSecretEnvValues site (crash/report boundary, provider stderr, seat) picks
+		// up the allowlist with no per-call option to forget. Simulate that registration here.
+		const shortTok = "http://shorttoken@proxy.corp:3128";
+		try {
+			setForwardedProxyAllowlist(["HTTPS_PROXY", "OPENAI_API_KEY"]);
+			// No explicit forwardedProxyNames argument — the config default applies.
+			const values = collectSecretEnvValues({ HTTPS_PROXY: shortTok });
+			assert.ok(values.includes("shorttoken"), "config-driven allowlist must register the short bare token");
+			assert.match(makeSecretScrubber({ HTTPS_PROXY: shortTok })("token shorttoken used"), /\[REDACTED\]/);
+			// A proxy var NOT in the allowlist stays subject to the length/colon rule only.
+			assert.deepEqual(collectSecretEnvValues({ http_proxy: shortTok }), []);
+		} finally {
+			setForwardedProxyAllowlist([]); // reset the shared default so other tests are unaffected
+		}
+		assert.deepEqual(collectSecretEnvValues({ HTTPS_PROXY: shortTok }), [], "default cleared after reset");
 	});
 
 	it("drops a relative XDG_CONFIG_HOME (XDG-invalid) while forwarding an absolute one", () => {

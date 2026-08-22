@@ -736,6 +736,21 @@ describe("buildClaudeSeatEnv", () => {
 		}
 	});
 
+	it("forwards privacy/telemetry opt-out controls to every role so a host that disabled telemetry stays disabled (#554)", () => {
+		const privacy = {
+			DO_NOT_TRACK: "1",
+			DISABLE_TELEMETRY: "1",
+			DISABLE_ERROR_REPORTING: "1",
+			CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+		} as const;
+		const source = sdkShapedEnv({ ...privacy });
+		for (const step of ALL_STEPS) {
+			const env = buildClaudeSeatEnv(source, step, allow);
+			for (const [name, value] of Object.entries(privacy)) assert.equal(env[name], value, `${step} ${name}`);
+			assert.equal("SENTINEL_SECRET" in env, false);
+		}
+	});
+
 	it("forwards proxy configuration to every role via the shared default allowlist", () => {
 		const proxyConfig = {
 			HTTP_PROXY: "http://proxy.corp:3128",

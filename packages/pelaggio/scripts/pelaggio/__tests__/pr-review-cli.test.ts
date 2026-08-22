@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { after, describe, it } from "node:test";
 import { buildClaudeSeatEnv } from "../claude-seat.js";
 import { DEFAULTS, type ReviewConfig, type StepSettings } from "../config.js";
+import { escapeMarkdown } from "../helpers.js";
 import { main as adjudicateMain, type PrAdjudicateDeps } from "../pr-adjudicate-cli.js";
 import { forgeTokenForHost, gitRemoteHost, main, reviewedHeadFetchAuthEnv, runPrReviewGate, setPrReviewDepsForTests } from "../pr-review-cli.js";
 import { listPrReviewGateRecords, readPrReviewGateRecord, writePrReviewGateRecord } from "../pr-review-gate-record.js";
@@ -412,6 +413,38 @@ describe("pr-review CLI aggregation", () => {
 		assert.equal(out.stderr.includes("emittersinkkey987654"), false, "the key must not reach the stderr progress sink");
 		assert.match(out.stderr, /SDK error: boom \[REDACTED\]/);
 		assert.match(out.stderr, /blocked: blocked because \[REDACTED\]/);
+	});
+
+	it("BOUNDARY scrub: a secret in an UNSCRUBBED diagnostic field never reaches stdout or the comment — raw, markdown-escaped, or base64 (#554)", async () => {
+		// The proof of boundary coverage: pass.diagnostic and pass.verificationDiagnostic have NO
+		// per-field credential scrub, yet the complete assembled body is scrubbed once at the two
+		// public writes. Underscores + a hyphen so escapeMarkdown transforms the secret (backslashes),
+		// exercising the boundary's markdown-escaped-form match that a raw scrubber would miss.
+		const secret = "ghp_boundary_secret-value-1234";
+		const escaped = escapeMarkdown(secret);
+		const b64 = Buffer.from(secret).toString("base64");
+		assert.notEqual(escaped, secret, "the secret must actually be transformed by escapeMarkdown");
+
+		// (a) discovery runStep THROWS with the secret → pass.diagnostic "Review execution threw: …".
+		const a = await runCli({ env: { GH_TOKEN: secret }, results: [new Error(`kaboom ${secret} here`)] });
+		assert.equal(a.code, 1);
+		const aRendered = [a.stdout, ...a.comments].join("\n");
+		assert.equal(aRendered.includes(secret), false, "(a) raw secret must not reach the sinks");
+		assert.equal(aRendered.includes(escaped), false, "(a) markdown-escaped secret must not reach the sinks");
+		assert.equal(aRendered.includes(b64), false, "(a) base64 secret must not reach the sinks");
+		assert.match(aRendered, /Review execution threw: kaboom \[REDACTED\]/, "(a) diagnostic path ran and was scrubbed");
+
+		// (b) VERIFIER runStep throws with the secret → pass.verificationDiagnostic retained on a must-fix.
+		const b = await runCli({
+			env: { GH_TOKEN: secret },
+			results: [result({ text: report("Found a bug.", [{ severity: "must-fix", message: "Real bug." }]) }), new Error(`verify kaboom ${secret} here`)],
+		});
+		const bRendered = [b.stdout, ...b.comments].join("\n");
+		assert.equal(bRendered.includes(secret), false, "(b) raw secret must not reach the sinks");
+		assert.equal(bRendered.includes(escaped), false, "(b) markdown-escaped secret must not reach the sinks");
+		assert.equal(bRendered.includes(b64), false, "(b) base64 secret must not reach the sinks");
+		assert.match(bRendered, /blocker retained|Verifier execution threw/, "(b) verifier-diagnostic path ran");
+		assert.match(bRendered, /REDACTED/, "(b) the boundary redacted the verifier diagnostic secret");
 	});
 
 	it("trims a whitespace-padded token before encoding the fetch credential (#554)", async () => {

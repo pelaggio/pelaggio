@@ -19,7 +19,19 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { CONFIG, modelForProvider, REPO, type ReviewConfig, ROADMAP_GITHUB, resolveDriverCandidates, resolveStepSettings, type StepSettings } from "./config.js";
 import { upsertMarkerComment } from "./github-posting.js";
-import { classifySecurityReviewDiff, escapeHtmlForSink, escapeMarkdown, escapeMarkdownForSink, expandPackagedSkill, formatReviewMetrics, mainWorktree, parseWaitFlag, resolveParkReset, type SecurityDiffSignal } from "./helpers.js";
+import {
+	classifySecurityReviewDiff,
+	escapeHtmlForSink,
+	escapeMarkdown,
+	escapeMarkdownForSink,
+	expandPackagedSkill,
+	formatReviewMetrics,
+	mainWorktree,
+	parseWaitFlag,
+	resolveParkReset,
+	type SecurityDiffSignal,
+	scrubReviewBoundary,
+} from "./helpers.js";
 import { gateRecordsDir, type NewPrReviewFleetGateRecord, writePrReviewGateRecord } from "./pr-review-gate-record.js";
 import { adjudicationSourcesDir, buildAdjudicationSourceDraft, fleetRecordDigestOf, type PrAdjudicationSourceDraft, writeAdjudicationSourceRecord } from "./review/adjudication.js";
 import {
@@ -1166,10 +1178,17 @@ export async function main(argv: string[]): Promise<number> {
 			execFileSync: deps.execFileSync,
 		});
 
+		// BOUNDARY scrub (#554): the two public output operations in the review path — this stdout
+		// write and the comment upserts below — pass the COMPLETE assembled body through one
+		// credential scrubber (raw + base64 + markdown-escaped forms). This is the security
+		// guarantee that covers every diagnostic field by construction (discovery-rejection,
+		// verifier-failure, execution-threw, and any future sink), independent of per-field scrubs.
+		const publishBody = (body: string): string => scrubReviewBoundary(body, deps.env);
+
 		// The review text goes to stdout unconditionally so the CI log always
 		// carries the findings — a failed comment upsert (or a truncated run)
 		// must not be able to lose the only copy of a $-priced review.
-		process.stdout.write(`${review.body}\n`);
+		process.stdout.write(`${publishBody(review.body)}\n`);
 
 		// Local (non-CI) completed runs persist their gate evidence exactly as the drain does,
 		// so a red roll here is adjudicable: without this, `pr-adjudicate` either refuses or
@@ -1196,7 +1215,7 @@ export async function main(argv: string[]): Promise<number> {
 		// `park` specially (leaves the status pending and retries).
 		const statusGate: "pass" | "block" = review.gate === "pass" ? "pass" : "block";
 		const statusPosted = deps.postStatus(statusGate, reviewedSha);
-		deps.upsertComment(pr, review.body);
+		deps.upsertComment(pr, publishBody(review.body));
 
 		process.stderr.write(`gate: ${review.gate.toUpperCase()} (ok=${review.ok})\n`);
 		return review.gate === "pass" && statusPosted ? 0 : 1;
@@ -1207,7 +1226,9 @@ export async function main(argv: string[]): Promise<number> {
 		process.stderr.write(`pr-review crashed — failing closed: ${msg}\n`);
 		if (reviewedSha) deps.postStatus("block", reviewedSha);
 		else process.stderr.write("✗ reviewed SHA unavailable; posting no status (absent required status keeps the PR blocked)\n");
-		deps.upsertComment(pr, buildFailClosedComment("error_crash", `pr-review crashed before producing a review, so this gate blocks the merge.\n\n${msg}`));
+		// Boundary scrub on the crash sink too (publishBody is scoped to the try): `msg` is already
+		// scrubCrashMessage'd, and the whole body passes the same boundary guarantee.
+		deps.upsertComment(pr, scrubReviewBoundary(buildFailClosedComment("error_crash", `pr-review crashed before producing a review, so this gate blocks the merge.\n\n${msg}`), deps.env));
 		return 1;
 	}
 }

@@ -165,6 +165,14 @@ const PELAGGIO_HARNESS_CONFIG_VARS = ["PELAGGIO_REPO", "PELAGGIO_WORKTREE_PREFIX
 const FORGE_REMOTE_VARS = ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "LINEAR_API_KEY", "SSH_AUTH_SOCK", "GH_CONFIG_DIR", "GH_HOST", "GH_ENTERPRISE_HOST"] as const;
 
 /**
+ * Privacy / telemetry-opt-out controls the SDK reads. Non-secret and privacy-PRESERVING: a host
+ * that disabled telemetry or error reporting must stay disabled inside the seat, so these pass
+ * through for every role (#554 finding 2). Distinct from debug/trace controls (DEBUG,
+ * TRACEPARENT/TRACESTATE), which are deliberately dropped — those add output, these suppress it.
+ */
+const PRIVACY_CONTROL_VARS = ["DO_NOT_TRACK", "DISABLE_TELEMETRY", "DISABLE_ERROR_REPORTING", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] as const;
+
+/**
  * Union of every env name the Claude seat may forward — unconditional pass-through,
  * mode-gated cloud credentials, and role-gated forge vars. Exported ONLY for the SDK
  * env-surface conformance test (claude-seat-env-conformance.test.ts); runtime behavior
@@ -175,6 +183,7 @@ export const CLAUDE_SEAT_PASSTHROUGH_ENV_VARS: readonly string[] = [
 	...CLAUDE_CLI_AUTH_VARS,
 	...CLAUDE_CLI_PROVIDER_CONFIG_VARS,
 	...PELAGGIO_HARNESS_CONFIG_VARS,
+	...PRIVACY_CONTROL_VARS,
 	...AWS_MODE_CREDENTIAL_VARS,
 	...GOOGLE_MODE_CREDENTIAL_VARS,
 	...FORGE_REMOTE_VARS,
@@ -274,13 +283,14 @@ function copyPresent(source: NodeJS.ProcessEnv, names: readonly string[], extra:
  * Deny-by-default child environment for the unconditional Claude spawn seam.
  * Source is the SDK-built `SpawnOptions.env` bag (control markers live there), never a fresh `process.env` read.
  */
-export function buildClaudeSeatEnv(source: NodeJS.ProcessEnv | undefined, step: Step, configuredAllowlist: readonly string[] = []): NodeJS.ProcessEnv {
+export function buildClaudeSeatEnv(source: NodeJS.ProcessEnv | undefined, step: Step, configuredAllowlist: readonly string[] = [], opts: { quiet?: boolean } = {}): NodeJS.ProcessEnv {
 	const bag = source ?? {};
 	const extra: Record<string, string> = {};
 	copyPresent(bag, CLAUDE_SDK_CONTROL_VARS, extra);
 	copyPresent(bag, CLAUDE_CLI_AUTH_VARS, extra);
 	copyPresent(bag, CLAUDE_CLI_PROVIDER_CONFIG_VARS, extra);
 	copyPresent(bag, PELAGGIO_HARNESS_CONFIG_VARS, extra);
+	copyPresent(bag, PRIVACY_CONTROL_VARS, extra);
 	// Cloud-credential chains pass only when the matching provider mode is actually selected.
 	if (providerModeEnabled(bag, AWS_MODE_SELECTORS)) copyPresent(bag, AWS_MODE_CREDENTIAL_VARS, extra);
 	if (providerModeEnabled(bag, GOOGLE_MODE_SELECTORS)) copyPresent(bag, GOOGLE_MODE_CREDENTIAL_VARS, extra);
@@ -289,6 +299,7 @@ export function buildClaudeSeatEnv(source: NodeJS.ProcessEnv | undefined, step: 
 		source: bag,
 		allow: scopeEnvAllowlistToProvider(configuredAllowlist, "claude"),
 		extra,
+		...(opts.quiet ? { quiet: true } : {}),
 	});
 	if (!claudeSeatHoldsForgeAuthority(step)) {
 		for (const name of FORGE_REMOTE_VARS) delete env[name];
@@ -619,7 +630,8 @@ export function preflightClaudeSeat(options: ClaudeSeatPreflightOptions): Claude
 				}));
 		const result = probe(invocation.command, invocation.args, {
 			cwd: invocation.cwd,
-			env: buildClaudeSeatEnv(options.env ?? process.env, options.step, options.envAllowlist ?? []),
+			// quiet: the drop diagnostic prints on the spawn build; suppress the preflight duplicate.
+			env: buildClaudeSeatEnv(options.env ?? process.env, options.step, options.envAllowlist ?? [], { quiet: true }),
 		});
 		if (result.error) {
 			throw seatFailure(`could not run the Bubblewrap namespace probe: ${result.error.message}`);
