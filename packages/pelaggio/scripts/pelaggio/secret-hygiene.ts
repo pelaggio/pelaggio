@@ -240,14 +240,20 @@ export function collectSecretEnvValues(source: NodeJS.ProcessEnv = process.env, 
 			if (userinfo !== undefined) {
 				const forwarded = opts.forwardedProxyNames ?? defaultForwardedProxyNames;
 				const allowlisted = forwarded.has(name);
-				const hasPassword = userinfo.includes(":");
-				const isSecret = hasPassword || allowlisted || userinfo.length >= MIN_BARE_PROXY_TOKEN_LENGTH;
-				if (isSecret) {
+				// A REAL password requires a non-empty component on BOTH sides of the first colon —
+				// `:`, `u:`, `:p` are degenerate (#554): registering them would feed a lone colon to
+				// the scrubber and garble every colon in the output. A colonless value is a bare token.
+				const colon = userinfo.indexOf(":");
+				const hasPassword = colon > 0 && colon < userinfo.length - 1;
+				const isBareToken = colon === -1 && (allowlisted || userinfo.length >= MIN_BARE_PROXY_TOKEN_LENGTH);
+				if (hasPassword) {
 					values.push(value);
-					// Password-bearing userinfo is registered at any length (the short-literal filter
-					// is exempted for it in scrubSecrets); a bare token only when ≥6 to avoid noise.
-					if (hasPassword || userinfo.length >= 6) values.push(userinfo);
+					values.push(userinfo); // real user:pass — registered at any length
+				} else if (isBareToken) {
+					values.push(value);
+					if (userinfo.length >= 6) values.push(userinfo); // bare token — ≥6 to avoid noise
 				}
+				// degenerate colon userinfo (empty user or password) registers nothing
 			}
 		}
 	}
@@ -267,10 +273,11 @@ export interface ScrubOptions {
 export function scrubSecrets(text: string, opts: ScrubOptions = {}): string {
 	if (!text) return text;
 	let out = text;
-	// Short-literal filter avoids redacting incidental substrings — but it applies ONLY to
-	// colonless bare values (#554 bug 2). A value containing a colon is a deliberately-collected
-	// password-bearing credential (e.g. proxy `user:pass`) and must be redacted at any length.
-	const values = [...(opts.secretValues ?? [])].filter((v) => v.length >= 6 || v.includes(":")).sort((a, b) => b.length - a.length);
+	// Short-literal filter avoids redacting incidental substrings — but it is exempted for a REAL
+	// password-bearing credential (`user:pass`, a non-colon char on both sides of a colon), which
+	// must be redacted at any length (#554 bug 2). A degenerate lone/one-sided colon (`:`, `u:`,
+	// `:p`) is NOT exempted, so it can never force every colon in the output to be redacted (fold 2).
+	const values = [...(opts.secretValues ?? [])].filter((v) => v.length >= 6 || /[^:]:[^:]/.test(v)).sort((a, b) => b.length - a.length);
 	for (const value of values) out = out.split(value).join(REDACTED);
 	for (const pattern of SECRET_PATTERNS) out = out.replace(pattern, REDACTED);
 	return out;

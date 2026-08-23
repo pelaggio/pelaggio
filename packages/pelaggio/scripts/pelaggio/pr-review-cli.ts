@@ -449,8 +449,36 @@ function upsertCommentDefault(pr: string, body: string): void {
  * extraheader urlmatch); classification ignores it.
  */
 function isDotComClassHost(host: string): boolean {
-	const hostname = host.replace(/:\d+$/, "");
-	return hostname === "github.com" || hostname.endsWith(".github.com") || hostname.endsWith(".ghe.com");
+	return hostnameOf(host) === "github.com" || hostnameOf(host).endsWith(".github.com") || hostnameOf(host).endsWith(".ghe.com");
+}
+
+/** Hostname without any `:port`, for host-trust comparison (the extraheader key keeps the port). */
+function hostnameOf(host: string): string {
+	return host.replace(/:\d+$/, "").toLowerCase();
+}
+
+/** Operator-CONFIGURED enterprise hosts — `GH_HOST` / `GH_ENTERPRISE_HOST` from the HARNESS env,
+ *  values an injected seat cannot set (it is a child of this process). NOT the mutable `origin`. */
+function configuredEnterpriseHosts(env: NodeJS.ProcessEnv): string[] {
+	return [env.GH_HOST, env.GH_ENTERPRISE_HOST].flatMap((value) => {
+		const trimmed = value?.trim();
+		return trimmed ? [hostnameOf(trimmed)] : [];
+	});
+}
+
+/**
+ * Default-deny host trust for the fetch credential (#554). The token is attached ONLY when the
+ * resolved origin host is trusted: github.com-class (github.com + `*.ghe.com` tenants) OR an
+ * operator-CONFIGURED enterprise host (`GH_HOST`/`GH_ENTERPRISE_HOST` env). The worktree shares
+ * the main `.git` and the confinement audit snapshots only porcelain + ref state — NOT
+ * `.git/config` — so an earlier injected seat can rewrite `origin` to an attacker host with no
+ * tracked-tree delta. Decoupling the token destination from the mutable origin means such a fetch
+ * runs UNAUTHENTICATED (fails closed, blocks the gate) rather than disclosing GH_ENTERPRISE_TOKEN
+ * to the attacker host. The legit fetch still authenticates because the real host IS the
+ * dotcom/configured host.
+ */
+export function isTrustedFetchHost(host: string, env: NodeJS.ProcessEnv): boolean {
+	return isDotComClassHost(host) || configuredEnterpriseHosts(env).includes(hostnameOf(host));
 }
 
 /**
@@ -507,6 +535,9 @@ export function gitRemoteHost(remoteUrl: string): string | undefined {
  * pre-existing env-based git config for this one child — accepted; the harness sets none.
  */
 export function reviewedHeadFetchAuthEnv(env: NodeJS.ProcessEnv, host: string): NodeJS.ProcessEnv | undefined {
+	// Default-deny host trust FIRST: never disclose a token to a host the operator did not
+	// configure, even if the mutable origin points there (#554 — see isTrustedFetchHost).
+	if (!isTrustedFetchHost(host, env)) return undefined;
 	const token = forgeTokenForHost(env, host);
 	if (token === undefined) return undefined;
 	const basic = Buffer.from(`x-access-token:${token}`).toString("base64");

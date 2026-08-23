@@ -1370,6 +1370,62 @@ describe("runOrchestrator — revise sweep (issue #76)", () => {
 		assert.ok(prListCalls >= 2, `review sweep must list before revise sweep lists; got ${prListCalls}`);
 	});
 
+	it("the local drain's crash sink scrubs a credential out of the public PR comment (#554 fold 1)", async (t) => {
+		t.mock.method(console, "log", () => {});
+		t.mock.method(console, "error", () => {});
+		const secret = "sk-ant-draincrashsecret-12345";
+		const prevKey = process.env.ANTHROPIC_API_KEY;
+		process.env.ANTHROPIC_API_KEY = secret;
+		try {
+			const ghCalls: string[][] = [];
+			const gh: GhRunner = (args) => {
+				ghCalls.push(args);
+				if (args[0] === "pr" && args[1] === "list") {
+					return {
+						stdout: JSON.stringify([{ number: 201, isDraft: false, headRefName: "feat/issue-84-local-review", headRefOid: "abc123a", headRepository: { nameWithOwner: "o/r" }, updatedAt: "2026-07-08T12:00:00Z", statusCheckRollup: [] }]),
+						stderr: "",
+						status: 0,
+					};
+				}
+				if (args[0] === "issue" && args[1] === "view") return { stdout: JSON.stringify({ labels: [{ name: "autopilot" }] }), stderr: "", status: 0 };
+				if (args[0] === "api" && args[1]?.includes("/comments")) return { stdout: JSON.stringify([]), stderr: "", status: 0 };
+				return { stdout: "", stderr: "", status: 0 };
+			};
+			const { runPipeline } = createMockRunPipeline({ default: { completed: false, cost: 0, error: "pick:queue-empty" } });
+			await runOrchestrator(
+				{ ...baseFlags, target: "pull-request", cycles: "1" },
+				{
+					runPipeline,
+					resolveWorktree: resolveWt,
+					review: {
+						runner: "local",
+						ghRepo: "o/r",
+						gh,
+						queueRoot: mkdtempSync(join(tmpdir(), "review-queue-")),
+						gateRecordsRoot: mkdtempSync(join(tmpdir(), "review-gate-records-")),
+						statuslessAfter: "2h",
+						now: () => Date.parse("2026-07-08T12:05:00Z"),
+						prepareReviewHead: () => ({ diffCwd: "/tmp/pr-head", baseRef: "origin/main", headRef: "refs/pelaggio-review/pr-201" }),
+						cleanupReviewHead: () => {},
+						// The gate THROWS with a credentialed remote URL in the message — the exact channel
+						// the drain's crash sink must scrub (the gate's return-scrub can't cover a throw).
+						runReviewGate: async () => {
+							throw new Error(`git fatal: could not read from remote https://x-access-token:${secret}@github.com/o/r`);
+						},
+					},
+					revise: { local: true, ghRepo: "o/r", gh },
+				},
+			);
+			const crashBody = ghCalls.flat().find((arg) => typeof arg === "string" && arg.startsWith("body=") && arg.includes("crashed before producing"));
+			assert.ok(crashBody, "the drain upserted a fail-closed crash comment");
+			assert.equal(crashBody.includes("draincrashsecret-12345"), false, "the credential must not reach the public comment");
+			assert.match(crashBody, /\[REDACTED\]/);
+		} finally {
+			if (prevKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+			else process.env.ANTHROPIC_API_KEY = prevKey;
+		}
+	});
+
 	it("a halt-campaign-classed revise failure stops the pick pool (revise outcomes gate the campaign like cycle outcomes)", async (t) => {
 		t.mock.method(console, "log", () => {});
 		const gh: GhRunner = (args) => {

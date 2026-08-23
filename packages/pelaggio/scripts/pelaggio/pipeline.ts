@@ -97,6 +97,7 @@ import {
 	resolveWorktree,
 	revertPlanPolish,
 	reviewFindingsPreamble,
+	scrubReviewBoundary,
 	snapshotForbiddenRoots,
 	stepIndex,
 	uniqueDriverProvenance,
@@ -3644,7 +3645,11 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					}
 				} catch (e) {
 					const msg = e instanceof Error ? e.message : String(e);
-					body = buildFailClosedComment("error_crash", `local pr-review crashed before producing a review, so this gate blocks the merge.\n\n${msg}`);
+					// The gate THREW, so its return-scrub can't cover this — and a git failure message
+					// can embed a credentialed remote URL. Boundary-scrub the assembled crash body
+					// before it reaches the public PR comment, same class as main()'s crash path
+					// (#554; #615 will fully funnel the drain publish path).
+					body = scrubReviewBoundary(buildFailClosedComment("error_crash", `local pr-review crashed before producing a review, so this gate blocks the merge.\n\n${msg}`), process.env);
 					finalState = "failure";
 				} finally {
 					review.cleanupReviewHead(REPO, pr);

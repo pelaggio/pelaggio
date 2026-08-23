@@ -7,7 +7,7 @@ import { buildClaudeSeatEnv } from "../claude-seat.js";
 import { DEFAULTS, type ReviewConfig, type StepSettings } from "../config.js";
 import { escapeMarkdown } from "../helpers.js";
 import { main as adjudicateMain, type PrAdjudicateDeps } from "../pr-adjudicate-cli.js";
-import { forgeTokenForHost, gitRemoteHost, main, reviewedHeadFetchAuthEnv, runPrReviewGate, setPrReviewDepsForTests } from "../pr-review-cli.js";
+import { forgeTokenForHost, gitRemoteHost, isTrustedFetchHost, main, reviewedHeadFetchAuthEnv, runPrReviewGate, setPrReviewDepsForTests } from "../pr-review-cli.js";
 import { listPrReviewGateRecords, readPrReviewGateRecord, writePrReviewGateRecord } from "../pr-review-gate-record.js";
 import { isEligibleFleetGateRecord, readAdjudicationSourceRecord } from "../review/adjudication.js";
 import { reviewFindingFingerprint } from "../review/findings.js";
@@ -329,22 +329,24 @@ describe("pr-review CLI aggregation", () => {
 
 	it("scopes the fetch credential to a GitHub Enterprise origin with gh's documented token precedence (#554)", async () => {
 		const gheOrigin = "git@ghe.example.com:pelaggio/pelaggio.git";
-		// Enterprise host + enterprise token → header scoped to that host, enterprise token selected
-		// even when a dotcom GH_TOKEN is also present (gh scopes GH_TOKEN to github.com/*.ghe.com).
-		const out = await runCli({ originUrl: gheOrigin, env: { GH_TOKEN: "ghp_dotcom_token_value", GH_ENTERPRISE_TOKEN: "ghe_enterprise_token_val" } });
+		// Enterprise host must be operator-CONFIGURED (GH_HOST) to be trusted; then enterprise token
+		// → header scoped to that host, enterprise token selected even when a dotcom GH_TOKEN is also
+		// present (gh scopes GH_TOKEN to github.com/*.ghe.com).
+		const out = await runCli({ originUrl: gheOrigin, env: { GH_HOST: "ghe.example.com", GH_TOKEN: "ghp_dotcom_token_value", GH_ENTERPRISE_TOKEN: "ghe_enterprise_token_val" } });
 		const fetchCall = out.execCalls.find((call) => call.cmd === "git" && call.args.includes("fetch"));
 		assert.equal(fetchCall?.env?.GIT_CONFIG_KEY_0, "http.https://ghe.example.com/.extraheader");
 		const basic = fetchCall?.env?.GIT_CONFIG_VALUE_0?.match(/basic (.+)$/)?.[1];
 		assert.ok(basic);
 		assert.equal(Buffer.from(basic, "base64").toString("utf8"), "x-access-token:ghe_enterprise_token_val");
 		// GITHUB_ENTERPRISE_TOKEN is the documented fallback for enterprise hosts.
-		const fallback = await runCli({ originUrl: `https://ghe.example.com/pelaggio/pelaggio.git`, env: { GITHUB_ENTERPRISE_TOKEN: "ghe_fallback_token_val" } });
+		const fallback = await runCli({ originUrl: `https://ghe.example.com/pelaggio/pelaggio.git`, env: { GH_HOST: "ghe.example.com", GITHUB_ENTERPRISE_TOKEN: "ghe_fallback_token_val" } });
 		const fallbackFetch = fallback.execCalls.find((call) => call.cmd === "git" && call.args.includes("fetch"));
 		assert.equal(fallbackFetch?.env?.GIT_CONFIG_KEY_0, "http.https://ghe.example.com/.extraheader");
 		assert.equal(Buffer.from(fallbackFetch?.env?.GIT_CONFIG_VALUE_0?.match(/basic (.+)$/)?.[1] ?? "", "base64").toString("utf8"), "x-access-token:ghe_fallback_token_val");
-		// Enterprise host with ONLY a dotcom token: gh's documented precedence gives GH_TOKEN no
-		// authority over Enterprise Server hosts, so the fetch stays unauthenticated.
-		const dotcomOnly = await runCli({ originUrl: gheOrigin, env: { GH_TOKEN: "ghp_dotcom_token_value" } });
+		// Configured enterprise host with ONLY a dotcom token: gh's documented precedence gives
+		// GH_TOKEN no authority over Enterprise Server hosts, so the fetch stays unauthenticated
+		// (trusted host, but no applicable token).
+		const dotcomOnly = await runCli({ originUrl: gheOrigin, env: { GH_HOST: "ghe.example.com", GH_TOKEN: "ghp_dotcom_token_value" } });
 		const dotcomOnlyFetch = dotcomOnly.execCalls.find((call) => call.cmd === "git" && call.args.includes("fetch"));
 		assert.equal(dotcomOnlyFetch?.env, undefined);
 		// And the reverse: a github.com origin never uses the enterprise tokens.
@@ -455,6 +457,31 @@ describe("pr-review CLI aggregation", () => {
 		assert.equal(Buffer.from(fetchCall?.env?.GIT_CONFIG_VALUE_0?.match(/basic (.+)$/)?.[1] ?? "", "base64").toString("utf8"), "x-access-token:ghs_padded_token_value");
 	});
 
+	it("default-deny host trust: never discloses the fetch token to an untrusted (rewritten-origin) host (#554)", async () => {
+		// The worktree shares the main .git and confinement snapshots only porcelain/ref state, so an
+		// injected seat can rewrite `origin` to an attacker host with no tracked delta. The token must
+		// go ONLY to a trusted host: github.com-class OR an operator-CONFIGURED GH_HOST/GH_ENTERPRISE_HOST.
+		// (a) github.com origin + GH_TOKEN → trusted → auth attached.
+		assert.equal(isTrustedFetchHost("github.com", {}), true);
+		assert.equal(isTrustedFetchHost("tenant.ghe.com", {}), true);
+		const dotcom = await runCli({ env: { GH_TOKEN: "ghp_dotcom_token_value" } });
+		assert.ok(dotcom.execCalls.find((c) => c.cmd === "git" && c.args.includes("fetch"))?.env?.GIT_CONFIG_VALUE_0);
+		// (b) configured GH_HOST enterprise + GH_ENTERPRISE_TOKEN → trusted → auth attached.
+		assert.equal(isTrustedFetchHost("ghe.example.com", { GH_HOST: "ghe.example.com" }), true);
+		assert.equal(isTrustedFetchHost("ghe.example.com:8443", { GH_ENTERPRISE_HOST: "ghe.example.com" }), true);
+		// (c) origin rewritten to an UNCONFIGURED host with GH_ENTERPRISE_TOKEN set → NO auth: the
+		//     token is never disclosed to evil.example.com (the fetch runs unauthenticated / fails closed).
+		assert.equal(isTrustedFetchHost("evil.example.com", { GH_ENTERPRISE_TOKEN: "ghe_secret_token_val" }), false);
+		const evil = await runCli({ originUrl: "https://evil.example.com/pelaggio/pelaggio.git", env: { GH_ENTERPRISE_TOKEN: "ghe_secret_token_val" } });
+		const evilFetch = evil.execCalls.find((c) => c.cmd === "git" && c.args.includes("fetch"));
+		assert.equal(evilFetch?.env, undefined, "no extraheader for the untrusted host — the token is not disclosed");
+		assert.equal(reviewedHeadFetchAuthEnv({ GH_ENTERPRISE_TOKEN: "ghe_secret_token_val" }, "evil.example.com"), undefined);
+		// (d) enterprise token set but NO GH_HOST configured + non-dotcom origin → can't establish
+		//     trust → no auth (fail closed).
+		assert.equal(isTrustedFetchHost("ghe.corp.internal", { GH_ENTERPRISE_TOKEN: "ghe_secret_token_val" }), false);
+		assert.equal(reviewedHeadFetchAuthEnv({ GH_ENTERPRISE_TOKEN: "ghe_secret_token_val" }, "ghe.corp.internal"), undefined);
+	});
+
 	it("preserves a non-default origin port in the parsed host and the extraheader key (#554)", async () => {
 		// git's urlmatch for http.<url>.extraheader is port-sensitive: a GHES origin on a
 		// non-443 port must produce a key naming that port or the header never applies.
@@ -463,7 +490,8 @@ describe("pr-review CLI aggregation", () => {
 		// Port is preserved for the key but ignored for token classification.
 		assert.equal(forgeTokenForHost({ GH_ENTERPRISE_TOKEN: "e" }, "ghe.example.com:8443"), "e");
 		assert.equal(forgeTokenForHost({ GH_TOKEN: "t" }, "github.com:8443"), "t");
-		const out = await runCli({ originUrl: "https://ghe.example.com:8443/pelaggio/pelaggio.git", env: { GH_ENTERPRISE_TOKEN: "ghe_ported_token_val" } });
+		// GH_HOST configured as the bare hostname trusts the ported origin (trust ignores the port).
+		const out = await runCli({ originUrl: "https://ghe.example.com:8443/pelaggio/pelaggio.git", env: { GH_HOST: "ghe.example.com", GH_ENTERPRISE_TOKEN: "ghe_ported_token_val" } });
 		const fetchCall = out.execCalls.find((call) => call.cmd === "git" && call.args.includes("fetch"));
 		assert.equal(fetchCall?.env?.GIT_CONFIG_KEY_0, "http.https://ghe.example.com:8443/.extraheader");
 		assert.equal(Buffer.from(fetchCall?.env?.GIT_CONFIG_VALUE_0?.match(/basic (.+)$/)?.[1] ?? "", "base64").toString("utf8"), "x-access-token:ghe_ported_token_val");

@@ -20,6 +20,7 @@ import {
 	createMainCheckoutDeltaObserver,
 	diffForbiddenRootSnapshots,
 	ensureMainCheckoutOnBranch,
+	escapeMarkdown,
 	expandPackagedSkill,
 	expandSkill,
 	FORBIDDEN_ROOT_GONE,
@@ -55,6 +56,7 @@ import {
 	resolveParkReset,
 	revertPlanPolish,
 	reviewFindingsPreamble,
+	scrubReviewBoundary,
 	snapshotForbiddenRoot,
 	snapshotRepoRefState,
 	snapshotSiblingWorktree,
@@ -2110,5 +2112,27 @@ describe("cycle provenance helpers", () => {
 		writeFileSync(caller, "export {};\n");
 		const found = resolveClaudeSdkManifestPath(pathToFileURL(caller).href);
 		assert.equal(found, manifestPath);
+	});
+});
+
+describe("scrubReviewBoundary (#554)", () => {
+	it("redacts the MARKDOWN-ESCAPED form of a base64 credential reaching a plain-escaped field (fold 3)", () => {
+		// escapeMarkdown escapes base64's '+', so a base64 credential routed through a plain
+		// escapeMarkdown field (pass.diagnostic) appears as e.g. `abc\+def` — the raw base64 scrubber
+		// would miss it. Pick a secret whose base64 contains a '+'.
+		// Append '~' (base64("~~~") = "fn5+") until the encoding contains a '+'.
+		let secret = "sk-ant-boundary-belt-secret";
+		while (!Buffer.from(secret).toString("base64").includes("+")) secret += "~";
+		const b64 = Buffer.from(secret).toString("base64");
+		assert.ok(b64.includes("+"), "the chosen secret's base64 must contain a '+' to exercise the belt");
+		const escapedB64 = escapeMarkdown(b64);
+		assert.notEqual(escapedB64, b64, "escapeMarkdown must transform the base64 (escape the '+')");
+		const env = { ANTHROPIC_API_KEY: secret } as NodeJS.ProcessEnv;
+		// The escaped base64 sits in a field with NO per-field scrub (a diagnostic line).
+		const scrubbed = scrubReviewBoundary(`pass diagnostic: base64 cred ${escapedB64} tail`, env);
+		assert.equal(scrubbed.includes(escapedB64), false, "the escaped base64 credential must be redacted");
+		assert.equal(scrubbed.includes(b64), false, "the raw base64 must also be redacted");
+		assert.match(scrubbed, /\[REDACTED\]/);
+		assert.match(scrubbed, /pass diagnostic: base64 cred/, "non-secret content preserved");
 	});
 });

@@ -176,6 +176,22 @@ describe("buildAgentEnv (#237) — deny-by-default env allowlist", () => {
 		assert.equal(makeSecretScrubber({ HTTPS_PROXY: "http://op@proxy.corp:3128" })("op restarted the proxy"), "op restarted the proxy");
 	});
 
+	it("ignores DEGENERATE proxy userinfo (empty user or password) so a lone colon can't garble output (#554 fold 2)", () => {
+		// http://:@host registers userinfo ":", which — under the relaxed colon filter — would replace
+		// EVERY colon in the body. A real password needs a non-empty component on BOTH sides.
+		for (const degenerate of ["http://:@proxy.corp:3128", "http://u:@proxy.corp:3128", "http://:p@proxy.corp:3128"]) {
+			assert.deepEqual(collectSecretEnvValues({ HTTPS_PROXY: degenerate }), [], degenerate);
+			// Even allowlisted, a degenerate userinfo registers nothing.
+			assert.deepEqual(collectSecretEnvValues({ HTTPS_PROXY: degenerate }, { forwardedProxyNames: new Set(["HTTPS_PROXY"]) }), [], `${degenerate} (allowlisted)`);
+		}
+		// A body full of colons is preserved when only a degenerate proxy is present.
+		const scrub = makeSecretScrubber({ HTTPS_PROXY: "http://:@proxy.corp:3128" });
+		assert.equal(scrub("key: value; a:b; c:d"), "key: value; a:b; c:d");
+		// A REAL user:pass is still registered.
+		const values = collectSecretEnvValues({ HTTPS_PROXY: "http://u:p@proxy.corp:3128" });
+		assert.ok(values.includes("u:p"), "a real user:pass is registered");
+	});
+
 	it("registers an allowlisted proxy's userinfo by default from CONFIG — no explicit forwardedProxyNames needed (#554)", () => {
 		// config.ts calls setForwardedProxyAllowlist(CONFIG.security.envAllowlist) at load, so every
 		// production collectSecretEnvValues site (crash/report boundary, provider stderr, seat) picks

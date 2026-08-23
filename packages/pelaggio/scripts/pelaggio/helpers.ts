@@ -868,16 +868,18 @@ export function escapeHtmlForSink(value: string, env: NodeJS.ProcessEnv): string
  * COMPLETE assembled string once here makes those covered by construction — this is the security
  * guarantee; per-field scrubbing is defense in depth.
  *
- * Matches three transforms of every harness secret value: the RAW value and its BASE64 forms
- * (via {@link makePublicSinkScrubber}), plus the MARKDOWN-ESCAPED form — because a secret routed
- * through `escapeMarkdown` earlier appears as e.g. `ghp\_xxx` (backslash-escaped `_`/`-`), which
- * the raw scrubber would miss. Escaped forms are applied longest-first so a value containing
- * another is fully covered.
+ * Matches the FULL cross-product of every harness secret value: the RAW value and its BASE64
+ * forms (via {@link makePublicSinkScrubber}), plus the MARKDOWN-ESCAPED form of BOTH — because a
+ * secret (or a base64 credential, whose `+`/`_`/`-` chars escapeMarkdown escapes) routed through
+ * `escapeMarkdown` earlier appears as e.g. `ghp\_xxx` / `abc\+def`, which the raw scrubber would
+ * miss. Escaped forms are applied longest-first so a value containing another is fully covered.
  */
 export function scrubReviewBoundary(body: string, env: NodeJS.ProcessEnv): string {
 	let out = makePublicSinkScrubber(env)(body); // raw + base64 forms
-	const escapedForms = collectSecretEnvValues(env)
+	const rawAndBase64 = collectSecretEnvValues(env)
 		.filter((value) => value.length >= 6)
+		.flatMap((value) => [value, Buffer.from(value).toString("base64"), Buffer.from(`x-access-token:${value}`).toString("base64")]);
+	const escapedForms = [...new Set(rawAndBase64)]
 		.map((value) => escapeMarkdown(value))
 		.filter((escaped) => escaped.length >= 6)
 		.sort((a, b) => b.length - a.length);
