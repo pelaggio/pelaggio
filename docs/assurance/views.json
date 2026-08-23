@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "0.1.0",
+  "schemaVersion": "0.2.0",
   "status": "shadow",
   "views": [
     {
@@ -7,7 +7,9 @@
       "question": "What durable architectural intent does Pelaggio currently preserve?",
       "audience": ["operator", "developer", "public"],
       "mode": "all-of-kind",
-      "kinds": ["claim"],
+      "kinds": ["proposition"],
+      "roles": ["invariant"],
+      "visibility": ["internal"],
       "relations": ["specializes"]
     },
     {
@@ -21,7 +23,7 @@
     },
     {
       "id": "affected",
-      "question": "What intent could this decision, construction, ADR, or change affect?",
+      "question": "What intent could this decision, realization, ADR, or change affect?",
       "audience": ["operator", "developer"],
       "mode": "upstream-intent",
       "parameter": "node-or-source",
@@ -33,21 +35,22 @@
       "audience": ["operator", "developer"],
       "mode": "diagnostics",
       "checks": [
-        "orphan-construction",
-        "claim-without-realization",
+        "orphan-realization",
+        "invariant-without-realization",
         "decision-without-intent",
-        "assumption-without-assessment",
-        "challenged-assumption",
+        "unused-assumption",
         "stale-source-grounding",
         "projection-overreach"
       ]
     },
     {
       "id": "trust",
-      "question": "What public trust claims project from internal intent, at what scope and current evidence level?",
+      "question": "What public trust propositions project from internal intent, at what scope and current evidence level?",
       "audience": ["operator", "developer", "public"],
       "mode": "all-of-kind",
-      "kinds": ["external-claim"],
+      "kinds": ["proposition"],
+      "roles": ["invariant"],
+      "visibility": ["public"],
       "relations": ["projects"]
     },
     {
@@ -61,7 +64,7 @@
     },
     {
       "id": "landing",
-      "question": "What must remain true for landing to be safe if the current CAS construction changes?",
+      "question": "What must remain true for landing to be safe if the current CAS realization changes?",
       "audience": ["operator", "developer"],
       "mode": "seeded-neighborhood",
       "seeds": ["CLM-0007"],
