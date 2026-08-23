@@ -33,6 +33,7 @@
     {"id":"CLM-0017","kind":"claim","slug":"mechanism-policy-separated","statement":"Stable enforcement mechanism and configurable policy remain distinct; policy changes cannot silently rewrite the authority boundary.","sources":["ADR-0014","ADR-0020","ADR-0021"]},
     {"id":"CLM-0018","kind":"claim","slug":"work-ownership-authoritative","statement":"Work ownership and exclusivity derive from one authoritative atomic state, not several mutually reconstructed indicators.","sources":["ADR-0009","ADR-0025","ADR-0026"]},
     {"id":"CLM-0019","kind":"claim","slug":"deterministic-safety-floor","statement":"Safety-floor conditions are enforced by deterministic harness-owned or independently enforced controls rather than probabilistic worker judgment.","sources":["ADR-0004","ADR-0014","ADR-0015","ADR-0016","ADR-0018","ADR-0026"]},
+    {"id":"CLM-0020","kind":"claim","slug":"architectural-intent-single-source","statement":"Current architectural intent is represented once in machine-readable semantic form; narrative documents may explain and preserve history but do not independently define current intent.","sources":["ADR-0027"]},
     {"id":"CON-0001","kind":"constraint","slug":"no-tool-input-trust","statement":"Enforcement cannot depend on parsing what the worker says it intends to do.","sources":["ADR-0001"]},
     {"id":"CON-0002","kind":"constraint","slug":"ambiguity-denies-authority","statement":"Unresolved attribution or authority ambiguity cannot become permission to perform a consequential action.","sources":["ADR-0001","ADR-0004","ADR-0016"]},
     {"id":"CON-0003","kind":"constraint","slug":"advisory-is-not-gate","statement":"Diagnostics, ordering mechanisms, and prechecks cannot be counted as load-bearing enforcement.","sources":["ADR-0001","ADR-0025","ADR-0026"]},
@@ -49,6 +50,9 @@
     {"id":"CON-0014","kind":"constraint","slug":"recovery-does-not-assume-replay","statement":"Recovery cannot depend on reproducing identical nondeterministic model behavior.","sources":["ADR-0019"]},
     {"id":"CON-0015","kind":"constraint","slug":"provider-capability-no-false-equivalence","statement":"Different enforcement capabilities cannot be collapsed into a false total order or silently polyfilled into equivalence.","sources":["ADR-0020","ADR-0021"]},
     {"id":"CON-0016","kind":"constraint","slug":"trust-projection-never-strengthens","statement":"A public trust projection may scope or weaken an internal claim but may never silently strengthen it.","sources":["docs/trust/trust-claims.yml"]},
+    {"id":"CON-0017","kind":"constraint","slug":"narrative-no-duplicate-authority","statement":"Narrative documentation may explain intent and history but must not become a second independently maintained source of current architectural truth.","sources":["ADR-0027"]},
+    {"id":"CON-0018","kind":"constraint","slug":"semantic-churn-only-on-intent-change","statement":"Narrative, rationale, and construction-only edits must not require meaningless semantic-graph churn when architectural intent is unchanged.","sources":["ADR-0027"]},
+    {"id":"CON-0019","kind":"constraint","slug":"promotion-requires-drift-ratchet","statement":"The semantic graph cannot become authoritative until corpus coverage and authoring checks detect new or changed architectural intent that bypasses it.","sources":["ADR-0027"]},
     {"id":"ASM-0001","kind":"assumption","slug":"reversible-work-is-cheap","statement":"Planning and worktree-stage mistakes are cheap enough to retry or discard that heavy upstream gates usually cost more than they save.","sources":["ADR-0011","ADR-0013"]},
     {"id":"ASM-0002","kind":"assumption","slug":"diverse-review-earns-cost","statement":"Provider-diverse review improves defect detection enough to justify its incremental cost, latency, and failure surface.","sources":["ADR-0024"]},
     {"id":"ASM-0003","kind":"assumption","slug":"last-verified-surface-remains-safe-boundedly","statement":"A recently verified execution surface remains within the security boundary for a bounded interval while the current surface is unavailable.","sources":["ADR-0017"]},
@@ -70,6 +74,7 @@
     {"id":"DEC-0016","kind":"decision","slug":"fence-or-reconcile-guard-model","statement":"Classify load-bearing guarded actions as fenced or reconciled; treat other coordination as hints.","status":"current-semantic-model","sources":["ADR-0026"]},
     {"id":"DEC-0017","kind":"decision","slug":"rigor-by-consequence","statement":"Size assurance effort primarily by consequence and reversibility rather than mechanically by lifecycle stage.","status":"current-policy-principle","sources":["ADR-0011","ADR-0012","ADR-0013"]},
     {"id":"DEC-0018","kind":"decision","slug":"human-value-judgment-at-charter","statement":"Keep value/negotiability as a human chartering judgment rather than an operational readiness computation.","status":"current-responsibility-choice","sources":["ADR-0012"]},
+    {"id":"DEC-0019","kind":"decision","slug":"promote-assurance-graph-after-validation","statement":"Migrate architectural authority to the machine-readable assurance graph only after coverage, grounding, authoring, and drift checks demonstrate that it can remain aligned with lower maintenance burden than the prose constellation.","status":"proposed-migration-decision","sources":["ADR-0027"]},
     {"id":"CTR-0001","kind":"construction","slug":"fixed-six-steps","statement":"The current pipeline enumerates six fixed delivery steps.","sources":["ADR-0022"],"codeEvidence":["packages/pelaggio/scripts/pelaggio/pipeline.ts","packages/pelaggio/scripts/pelaggio/__tests__/pipeline.test.ts"]},
     {"id":"CTR-0002","kind":"construction","slug":"two-review-orchestrators","statement":"Authoring review and cold PR review currently run through distinct orchestrators.","sources":["ADR-0022"],"codeEvidence":["packages/pelaggio/scripts/pelaggio/review/loop.ts","packages/pelaggio/scripts/pelaggio/pr-review-cli.ts"]},
     {"id":"CTR-0003","kind":"construction","slug":"n-reviewers-one-judge","statement":"Authoring review currently uses multiple reviewer seats and one configured Judge with bounded revise/re-review passes.","sources":["ADR-0024"],"codeEvidence":["packages/pelaggio/scripts/pelaggio/review/loop.ts","packages/pelaggio/scripts/pelaggio/review/bench.ts"]},
@@ -102,6 +107,9 @@
     {"from":"CON-0013","relation":"constrains","to":"CLM-0002"},
     {"from":"CON-0014","relation":"constrains","to":"CLM-0012"},
     {"from":"CON-0015","relation":"constrains","to":"CLM-0015"},
+    {"from":"CON-0017","relation":"constrains","to":"CLM-0020"},
+    {"from":"CON-0018","relation":"constrains","to":"CLM-0020"},
+    {"from":"CON-0019","relation":"constrains","to":"CLM-0020"},
     {"from":"CLM-0007","relation":"specializes","to":"CLM-0006"},
     {"from":"CLM-0009","relation":"specializes","to":"CLM-0019"},
     {"from":"CLM-0010","relation":"specializes","to":"CLM-0019"},
@@ -130,6 +138,7 @@
     {"from":"DEC-0016","relation":"implements","to":"CLM-0010"},
     {"from":"DEC-0016","relation":"implements","to":"CLM-0011"},
     {"from":"DEC-0017","relation":"assumes","to":"ASM-0001"},
+    {"from":"DEC-0019","relation":"implements","to":"CLM-0020"},
     {"from":"CTR-0001","relation":"derived-from","to":"DEC-0012"},
     {"from":"CTR-0002","relation":"derived-from","to":"DEC-0012"},
     {"from":"CTR-0003","relation":"derived-from","to":"DEC-0014"},
@@ -170,7 +179,8 @@
     "ADR-0023":["CLM-0001","CLM-0002","CLM-0003","CON-0010","CON-0013","DEC-0013"],
     "ADR-0024":["CLM-0008","CLM-0009","CLM-0015","CLM-0016","CON-0008","ASM-0002","DEC-0014","CTR-0003"],
     "ADR-0025":["CLM-0006","CLM-0007","CLM-0012","CLM-0018","CON-0003","CON-0004","CON-0009","DEC-0015","TC-013"],
-    "ADR-0026":["CLM-0006","CLM-0007","CLM-0009","CLM-0010","CLM-0011","CLM-0012","CLM-0018","CLM-0019","CON-0003","CON-0004","CON-0005","CON-0006","CON-0007","CON-0008","CON-0009","DEC-0016"]
+    "ADR-0026":["CLM-0006","CLM-0007","CLM-0009","CLM-0010","CLM-0011","CLM-0012","CLM-0018","CLM-0019","CON-0003","CON-0004","CON-0005","CON-0006","CON-0007","CON-0008","CON-0009","DEC-0016"],
+    "ADR-0027":["CLM-0020","CON-0017","CON-0018","CON-0019","DEC-0019"]
   },
   "sourceGrounding": [
     {"node":"CLM-0002","path":"docs/decisions/0001-worktree-write-confinement.md","anchors":["hard gate on observed effect","Ambiguity resolves to violation"]},
@@ -179,11 +189,12 @@
     {"node":"CLM-0016","path":"docs/decisions/0022-pipeline-shape-and-review-orchestrators.md","anchors":["cold / out-of-context","product guarantee"]},
     {"node":"ASM-0002","path":"docs/decisions/0024-adversarial-authoring-review-loop.md","anchors":["fleet is not a free lunch","value must be benchmarked"]},
     {"node":"CON-0004","path":"docs/decisions/0026-stateful-guards-fence-reconcile-and-gate-disposition.md","anchors":["Ordering cannot substitute for authority"]},
+    {"node":"CLM-0020","path":"docs/decisions/0027-machine-readable-architectural-intent-graph.md","anchors":["one machine-readable semantic source of truth","Narrative documentation remains valuable but explanatory"]},
     {"node":"TC-005","path":"docs/trust/trust-claims.yml","anchors":["status: best_effort","live downstream attestation verification is not a local guarantee yet"]}
   ],
   "extraction": {
     "reviewed": false,
-    "method": "AI-assisted semantic compression of all 26 ADRs; source-grounding and typed-relation tests protect reviewed cuts from silent drift, but human/adversarial review is still required to ratify semantic interpretation.",
+    "method": "AI-assisted semantic compression of the ADR corpus; source-grounding and typed-relation tests protect reviewed cuts from silent drift, but human/adversarial review is still required to ratify semantic interpretation.",
     "openQuestions": [
       "Does assumption remain a first-class node kind after real evidence is attached?",
       "Are no-self-authorization and deterministic-safety-floor split at the right boundary?",
