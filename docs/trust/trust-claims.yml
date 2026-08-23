@@ -181,10 +181,10 @@ claims:
     evidence_command: "grep -rEn 'PreToolUse|parseReviewFindings|TURN_LIMITS|BUDGETS|SECURITY_PATHS|prompt injection' packages/pelaggio/scripts/pelaggio docs/trust"
     test_file: "planned — injection corpus / red-team fixtures"
     failure_mode: "bounded by the gates above, not by injection-specific detection"
-    known_limits: "This is the DEFINING threat and the honest weak point: the agent runs allow-all tools over attacker-reachable content. Hardening (least-privilege tools, human gates on risky file classes) is the roadmap headline."
+    known_limits: "This is the DEFINING threat and the honest weak point: the agent runs allow-all tools over attacker-reachable content. Hardening (least-privilege tools, human gates on risky file classes) is the roadmap headline. Review-CONTENT integrity assumes `origin` is not rewritten by a compromised seat: the local review resolves its diff base from the shared, seat-writable `.git/config` origin (which the confinement audit does not cover), so a prompt-injected seat that rewrites origin to an attacker-hosted repo presenting `main` at the real PR SHA can produce an EMPTY reviewed diff and green a malicious PR. The forge-WRITE denial, the fetch token-leak protections (the reviewed-head fetch strips ambient forge tokens, disables inherited credential helpers, and refuses prompts — #554), and public-sink scrubbing hold regardless; only review-CONTENT integrity against a compromised seat is affected. Closed by #617 (host-brokered review fetch — the harness prepares the reviewed checkout from a trusted remote; the seat never fetches). Residual is bounded in practice: it requires a targeted prompt-injection under autopilot review of untrusted external PRs with auto-merge armed; it does not affect supervised first-party review."
     standards: ["OWASP-LLM01", "OWASP-LLM05", "OWASP-Agentic-2025"]
     adr: "ADR-2"
-    last_verified: "2026-07-07"
+    last_verified: "2026-08-22"
 
   # ---- Supply-chain honesty -------------------------------------------------
   - id: TC-016

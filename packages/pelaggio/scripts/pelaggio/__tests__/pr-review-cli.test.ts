@@ -192,7 +192,8 @@ async function runCli(
 		assert.equal(cmd, "git");
 		// Host resolution for the fetch credential: runs only when a candidate token exists.
 		if (a === "remote get-url origin") return `${opts.originUrl ?? "git@github.com:pelaggio/pelaggio.git"}\n`;
-		if (a === "fetch --quiet origin main pull/123/head") {
+		// The fetch child is hardened: `-c credential.helper=` prefixes the subcommand.
+		if (a.endsWith("fetch --quiet origin main pull/123/head")) {
 			if (opts.fetchError) throw opts.fetchError;
 			return "";
 		}
@@ -279,16 +280,19 @@ describe("pr-review CLI aggregation", () => {
 		assert.equal(out.code, 0);
 		const fetchCall = out.execCalls.find((call) => call.cmd === "git" && call.args.includes("fetch"));
 		assert.ok(fetchCall, "the pinned-head fetch must run");
-		// The argv carries NO credential material: execFileSync embeds argv in Error.message
-		// (published by the fail-closed crash path) and argv is world-readable via /proc.
-		assert.deepEqual(fetchCall.args, ["fetch", "--quiet", "origin", "main", "pull/123/head"]);
-		// The credential rides the child ENV of this one invocation as git env-based config.
+		// The argv carries NO credential material (only the credential-helper disable); the
+		// credential rides the child ENV. execFileSync embeds argv in Error.message and /proc.
+		assert.deepEqual(fetchCall.args, ["-c", "credential.helper=", "fetch", "--quiet", "origin", "main", "pull/123/head"]);
 		assert.ok(fetchCall.env, "the fetch invocation must carry a dedicated child env");
 		assert.equal(fetchCall.env.GIT_CONFIG_COUNT, "1");
 		assert.equal(fetchCall.env.GIT_CONFIG_KEY_0, "http.https://github.com/.extraheader");
 		const basic = fetchCall.env.GIT_CONFIG_VALUE_0?.match(/^AUTHORIZATION: basic (.+)$/)?.[1];
 		assert.ok(basic, "the env config value must be a basic credential");
 		assert.equal(Buffer.from(basic, "base64").toString("utf8"), `x-access-token:${token}`);
+		// Hardened child: the ambient forge token is STRIPPED from the child env (auth rides only the
+		// explicit extraheader), and interactive prompts are refused.
+		assert.equal("GH_TOKEN" in fetchCall.env, false, "the ambient token must be stripped from the fetch child env");
+		assert.equal(fetchCall.env.GIT_TERMINAL_PROMPT, "0");
 		// Process-scoped only: no git config write, no argv anywhere carries credential material,
 		// and no OTHER invocation receives the env-based config.
 		for (const call of out.execCalls) {
@@ -316,10 +320,11 @@ describe("pr-review CLI aggregation", () => {
 		assert.equal(Buffer.from(basic, "base64").toString("utf8"), "x-access-token:ghp_actions_default");
 		const bare = await runCli({});
 		const bareFetch = bare.execCalls.find((call) => call.cmd === "git" && call.args.includes("fetch"));
-		assert.deepEqual(bareFetch?.args, ["fetch", "--quiet", "origin", "main", "pull/123/head"]);
-		// No token → no env override at all: the child inherits the harness env untouched,
-		// and the tokenless path never even looks up the remote host.
-		assert.equal(bareFetch?.env, undefined);
+		// No token → no extraheader, but the child is STILL hardened (credential-helper disabled,
+		// prompts refused, tokens stripped) so a rewritten origin cannot coax any credential.
+		assert.deepEqual(bareFetch?.args, ["-c", "credential.helper=", "fetch", "--quiet", "origin", "main", "pull/123/head"]);
+		assert.equal(bareFetch?.env?.GIT_CONFIG_COUNT, undefined, "no extraheader without a token");
+		assert.equal(bareFetch?.env?.GIT_TERMINAL_PROMPT, "0");
 		assert.equal(
 			bare.execCalls.some((call) => call.args.join(" ") === "remote get-url origin"),
 			false,
@@ -348,11 +353,13 @@ describe("pr-review CLI aggregation", () => {
 		// (trusted host, but no applicable token).
 		const dotcomOnly = await runCli({ originUrl: gheOrigin, env: { GH_HOST: "ghe.example.com", GH_TOKEN: "ghp_dotcom_token_value" } });
 		const dotcomOnlyFetch = dotcomOnly.execCalls.find((call) => call.cmd === "git" && call.args.includes("fetch"));
-		assert.equal(dotcomOnlyFetch?.env, undefined);
+		assert.equal(dotcomOnlyFetch?.env?.GIT_CONFIG_COUNT, undefined, "no extraheader — GH_TOKEN has no authority over an enterprise host");
+		assert.equal("GH_TOKEN" in (dotcomOnlyFetch?.env ?? {}), false, "the ambient token is stripped from the fetch child");
 		// And the reverse: a github.com origin never uses the enterprise tokens.
 		const enterpriseOnly = await runCli({ env: { GH_ENTERPRISE_TOKEN: "ghe_enterprise_token_val" } });
 		const enterpriseOnlyFetch = enterpriseOnly.execCalls.find((call) => call.cmd === "git" && call.args.includes("fetch"));
-		assert.equal(enterpriseOnlyFetch?.env, undefined);
+		assert.equal(enterpriseOnlyFetch?.env?.GIT_CONFIG_COUNT, undefined, "no extraheader — enterprise token has no authority over github.com");
+		assert.equal("GH_ENTERPRISE_TOKEN" in (enterpriseOnlyFetch?.env ?? {}), false, "the ambient enterprise token is stripped");
 		// Host-parser unit coverage: https, ssh, scp-like, ghe.com tenants (dotcom-class), garbage.
 		assert.equal(gitRemoteHost("https://ghe.example.com/o/r.git"), "ghe.example.com");
 		assert.equal(gitRemoteHost("ssh://git@ghe.example.com/o/r.git"), "ghe.example.com");
@@ -373,10 +380,10 @@ describe("pr-review CLI aggregation", () => {
 		assert.equal(out.code, 0);
 		const fetchCall = out.execCalls.find((call) => call.cmd === "git" && call.args.includes("fetch"));
 		assert.equal(Buffer.from(fetchCall?.env?.GIT_CONFIG_VALUE_0?.match(/basic (.+)$/)?.[1] ?? "", "base64").toString("utf8"), "x-access-token:ghp_fallback_populated");
-		// Every token empty → unauthenticated, exactly like no token at all.
+		// Every token empty → unauthenticated (no extraheader), exactly like no token at all.
 		const bothEmpty = await runCli({ env: { GH_TOKEN: "", GITHUB_TOKEN: "" } });
 		const emptyFetch = bothEmpty.execCalls.find((call) => call.cmd === "git" && call.args.includes("fetch"));
-		assert.equal(emptyFetch?.env, undefined);
+		assert.equal(emptyFetch?.env?.GIT_CONFIG_COUNT, undefined);
 	});
 
 	it("scrubs secrets out of a schema-VALID report before the stdout and comment sinks (#554)", async () => {
@@ -478,7 +485,15 @@ describe("pr-review CLI aggregation", () => {
 		assert.equal(isTrustedFetchHost("evil.example.com", { GH_ENTERPRISE_TOKEN: "ghe_secret_token_val" }), false);
 		const evil = await runCli({ originUrl: "https://evil.example.com/pelaggio/pelaggio.git", env: { GH_ENTERPRISE_TOKEN: "ghe_secret_token_val" } });
 		const evilFetch = evil.execCalls.find((c) => c.cmd === "git" && c.args.includes("fetch"));
-		assert.equal(evilFetch?.env, undefined, "no extraheader for the untrusted host — the token is not disclosed");
+		// No extraheader for the untrusted host, AND the child is hardened so the ambient token cannot
+		// leak via a credential helper: token stripped from env, credential.helper disabled, no prompt.
+		assert.equal(evilFetch?.env?.GIT_CONFIG_COUNT, undefined, "no extraheader for the untrusted host");
+		assert.equal("GH_ENTERPRISE_TOKEN" in (evilFetch?.env ?? {}), false, "the ambient token is stripped from the fetch child");
+		assert.equal(evilFetch?.env?.GITHUB_ENTERPRISE_TOKEN, undefined);
+		assert.equal(evilFetch?.env?.GIT_TERMINAL_PROMPT, "0", "interactive prompt refused");
+		assert.deepEqual(evilFetch?.args.slice(0, 2), ["-c", "credential.helper="], "inherited credential helpers disabled");
+		const evilRendered = [evil.stdout, ...evil.comments].join("\n");
+		assert.equal(evilRendered.includes("ghe_secret_token_val"), false, "the token never surfaces");
 		assert.equal(reviewedHeadFetchAuthEnv({ GH_ENTERPRISE_TOKEN: "ghe_secret_token_val" }, "evil.example.com"), undefined);
 		// (d) enterprise token set but NO GH_HOST configured + non-dotcom origin → can't establish
 		//     trust → no auth (fail closed).
@@ -489,7 +504,8 @@ describe("pr-review CLI aggregation", () => {
 		assert.equal(isTrustedFetchHost("evil.ghe.com", { GH_HOST: "tenant.ghe.com", GH_TOKEN: "ghp_dotcom_token_value" }), false);
 		const evilTenant = await runCli({ originUrl: "https://evil.ghe.com/pelaggio/pelaggio.git", env: { GH_HOST: "tenant.ghe.com", GH_TOKEN: "ghp_dotcom_token_value" } });
 		const evilTenantFetch = evilTenant.execCalls.find((c) => c.cmd === "git" && c.args.includes("fetch"));
-		assert.equal(evilTenantFetch?.env, undefined, "an unconfigured ghe.com tenant is not trusted — no token disclosed");
+		assert.equal(evilTenantFetch?.env?.GIT_CONFIG_COUNT, undefined, "an unconfigured ghe.com tenant is not trusted — no extraheader");
+		assert.equal("GH_TOKEN" in (evilTenantFetch?.env ?? {}), false, "the ambient token is stripped");
 	});
 
 	it("preserves a non-default origin port in the parsed host and the extraheader key (#554)", async () => {

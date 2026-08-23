@@ -547,6 +547,10 @@ export function gitRemoteHost(remoteUrl: string): string | undefined {
  * env (the unchanged public-repo/local path). GIT_CONFIG_COUNT=1 overrides any
  * pre-existing env-based git config for this one child — accepted; the harness sets none.
  */
+/** Ambient forge tokens stripped from the reviewed-head fetch child so a rewritten origin cannot
+ *  leak them via a credential helper; auth rides only the explicit host-scoped extraheader (#554). */
+const AMBIENT_FETCH_TOKEN_VARS = ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"] as const;
+
 export function reviewedHeadFetchAuthEnv(env: NodeJS.ProcessEnv, host: string): NodeJS.ProcessEnv | undefined {
 	// Default-deny host trust FIRST: never disclose a token to a host the operator did not
 	// configure, even if the mutable origin points there (#554 — see isTrustedFetchHost).
@@ -595,9 +599,8 @@ function resolveReviewedHead(exec: typeof execFileSync, pr: string, ghRepo: stri
 	const itemId = typeof head.ref === "string" ? head.ref.match(CLAIM_BRANCH_RE)?.[1] : undefined;
 	// Make origin/main and the pinned PR head reachable locally for the diff. `pull/<n>/head`
 	// always resolves for a GitHub PR (unlike a bare sha, which the server may refuse to serve).
-	// Auth (when the harness holds a token) rides only this one child's ENV, host-aware so a
-	// GitHub Enterprise origin authenticates too — see reviewedHeadFetchAuthEnv. The remote
-	// lookup runs only when a candidate token exists, keeping the tokenless path unchanged.
+	// Auth (when the harness holds a token AND the origin host is trusted) rides ONLY this one
+	// child's explicit host-scoped extraheader — see reviewedHeadFetchAuthEnv.
 	let authEnv: NodeJS.ProcessEnv | undefined;
 	if ([env.GH_TOKEN, env.GITHUB_TOKEN, env.GH_ENTERPRISE_TOKEN, env.GITHUB_ENTERPRISE_TOKEN].some((value) => value !== undefined && value.trim() !== "")) {
 		let originUrl = "";
@@ -610,7 +613,18 @@ function resolveReviewedHead(exec: typeof execFileSync, pr: string, ghRepo: stri
 		const host = gitRemoteHost(originUrl) ?? (ghHost !== undefined && ghHost !== "" ? ghHost : "github.com");
 		authEnv = reviewedHeadFetchAuthEnv(env, host);
 	}
-	git(["fetch", "--quiet", "origin", "main", `pull/${pr}/head`], authEnv ? { ...env, ...authEnv } : undefined);
+	// Harden the fetch child REGARDLESS of host trust (#554, token-leak half of the Tier-3 finding):
+	// strip ambient forge tokens from its env, disable inherited credential helpers (`-c
+	// credential.helper=`), and refuse interactive prompts (GIT_TERMINAL_PROMPT=0). So a rewritten
+	// `origin` pointing at an attacker host cannot coax any credential out of a `.git/config`
+	// credential.helper — it fails closed. Trusted-host auth is carried solely by the explicit
+	// host-scoped extraheader in `authEnv`, independent of the stripped ambient env. (The empty-diff
+	// review-CONTENT integrity half needs the host-brokered fetch — #617; see the trust docs.)
+	const childEnv: NodeJS.ProcessEnv = { ...env };
+	for (const name of AMBIENT_FETCH_TOKEN_VARS) delete childEnv[name];
+	childEnv.GIT_TERMINAL_PROMPT = "0";
+	if (authEnv) Object.assign(childEnv, authEnv);
+	git(["-c", "credential.helper=", "fetch", "--quiet", "origin", "main", `pull/${pr}/head`], childEnv);
 	return { sha, ...(itemId ? { itemId } : {}) };
 }
 
