@@ -461,9 +461,13 @@ describe("pr-review CLI aggregation", () => {
 		// The worktree shares the main .git and confinement snapshots only porcelain/ref state, so an
 		// injected seat can rewrite `origin` to an attacker host with no tracked delta. The token must
 		// go ONLY to a trusted host: github.com-class OR an operator-CONFIGURED GH_HOST/GH_ENTERPRISE_HOST.
-		// (a) github.com origin + GH_TOKEN → trusted → auth attached.
+		// (a) github.com origin + GH_TOKEN → trusted → auth attached. github.com subdomains too.
 		assert.equal(isTrustedFetchHost("github.com", {}), true);
-		assert.equal(isTrustedFetchHost("tenant.ghe.com", {}), true);
+		assert.equal(isTrustedFetchHost("gist.github.com", {}), true);
+		// An UNCONFIGURED *.ghe.com data-residency tenant is attacker-selectable → NOT trusted by
+		// the wildcard (#554 narrowing); trusted only when named as the operator's GH_HOST.
+		assert.equal(isTrustedFetchHost("tenant.ghe.com", {}), false);
+		assert.equal(isTrustedFetchHost("tenant.ghe.com", { GH_HOST: "tenant.ghe.com" }), true);
 		const dotcom = await runCli({ env: { GH_TOKEN: "ghp_dotcom_token_value" } });
 		assert.ok(dotcom.execCalls.find((c) => c.cmd === "git" && c.args.includes("fetch"))?.env?.GIT_CONFIG_VALUE_0);
 		// (b) configured GH_HOST enterprise + GH_ENTERPRISE_TOKEN → trusted → auth attached.
@@ -480,6 +484,12 @@ describe("pr-review CLI aggregation", () => {
 		//     trust → no auth (fail closed).
 		assert.equal(isTrustedFetchHost("ghe.corp.internal", { GH_ENTERPRISE_TOKEN: "ghe_secret_token_val" }), false);
 		assert.equal(reviewedHeadFetchAuthEnv({ GH_ENTERPRISE_TOKEN: "ghe_secret_token_val" }, "ghe.corp.internal"), undefined);
+		// (e) origin rewritten to a DIFFERENT ghe.com tenant than the configured one → not trusted
+		//     (the *.ghe.com wildcard no longer blanket-trusts, and it isn't the named GH_HOST).
+		assert.equal(isTrustedFetchHost("evil.ghe.com", { GH_HOST: "tenant.ghe.com", GH_TOKEN: "ghp_dotcom_token_value" }), false);
+		const evilTenant = await runCli({ originUrl: "https://evil.ghe.com/pelaggio/pelaggio.git", env: { GH_HOST: "tenant.ghe.com", GH_TOKEN: "ghp_dotcom_token_value" } });
+		const evilTenantFetch = evilTenant.execCalls.find((c) => c.cmd === "git" && c.args.includes("fetch"));
+		assert.equal(evilTenantFetch?.env, undefined, "an unconfigured ghe.com tenant is not trusted — no token disclosed");
 	});
 
 	it("preserves a non-default origin port in the parsed host and the extraheader key (#554)", async () => {

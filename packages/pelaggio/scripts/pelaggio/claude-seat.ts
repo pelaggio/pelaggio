@@ -165,6 +165,26 @@ const PELAGGIO_HARNESS_CONFIG_VARS = ["PELAGGIO_REPO", "PELAGGIO_WORKTREE_PREFIX
 const FORGE_REMOTE_VARS = ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "LINEAR_API_KEY", "SSH_AUTH_SOCK", "GH_CONFIG_DIR", "GH_HOST", "GH_ENTERPRISE_HOST"] as const;
 
 /**
+ * Git-NATIVE auth/config channels that grant equivalent forge WRITE authority even without a
+ * `GH_*` token: an injected `http.<host>.extraheader = Authorization: …` (GIT_CONFIG_COUNT +
+ * GIT_CONFIG_KEY_<n>/GIT_CONFIG_VALUE_<n>), an attacker-pointed config file
+ * (GIT_CONFIG/GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM), or a credential callback
+ * (GIT_ASKPASS/SSH_ASKPASS/GIT_SSH_COMMAND/GIT_CREDENTIAL_HELPER). Denied to non-forge roles in
+ * the SAME deny-by-default spirit as FORGE_REMOTE_VARS (#554) — otherwise `security.env-allowlist`
+ * could re-open forge write authority to a denied seat. The harness's OWN authenticated fetch is
+ * unaffected: reviewedHeadFetchAuthEnv sets GIT_CONFIG_COUNT/KEY_0/VALUE_0 directly on the
+ * pr-review CLI's fetch child, never via a seat's inherited allowlist. GIT_CONFIG_KEY_<n>/VALUE_<n>
+ * are indexed, so they are matched by PREFIX (not exact name).
+ */
+const GIT_AUTH_CHANNEL_VARS = ["GIT_CONFIG_COUNT", "GIT_CONFIG", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_ASKPASS", "SSH_ASKPASS", "GIT_SSH_COMMAND", "GIT_CREDENTIAL_HELPER"] as const;
+const GIT_AUTH_CHANNEL_PREFIXES = ["GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"] as const;
+
+/** True for a git-native auth/config channel var (exact name or an indexed GIT_CONFIG_KEY_/VALUE_). */
+export function isGitAuthChannelVar(name: string): boolean {
+	return (GIT_AUTH_CHANNEL_VARS as readonly string[]).includes(name) || GIT_AUTH_CHANNEL_PREFIXES.some((prefix) => name.startsWith(prefix));
+}
+
+/**
  * Privacy / telemetry-opt-out controls the SDK reads. Non-secret and privacy-PRESERVING: a host
  * that disabled telemetry or error reporting must stay disabled inside the seat, so these pass
  * through for every role (#554 finding 2). Distinct from debug/trace controls (DEBUG,
@@ -303,6 +323,9 @@ export function buildClaudeSeatEnv(source: NodeJS.ProcessEnv | undefined, step: 
 	});
 	if (!claudeSeatHoldsForgeAuthority(step)) {
 		for (const name of FORGE_REMOTE_VARS) delete env[name];
+		// Deny git-native auth/config channels too — the allowlist could otherwise re-open forge
+		// write authority (extraheader, attacker config, credential callback) to a denied seat.
+		for (const name of Object.keys(env)) if (isGitAuthChannelVar(name)) delete env[name];
 	}
 	return env;
 }

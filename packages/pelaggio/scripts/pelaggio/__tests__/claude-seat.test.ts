@@ -15,6 +15,7 @@ import {
 	type ClaudeSeatSpawner,
 	claudeSeatHoldsForgeAuthority,
 	HARNESS_ONLY_SOCKET_ENVS,
+	isGitAuthChannelVar,
 	preflightClaudeSeat,
 	resolveClaudeSeatBwrap,
 	resolveHarnessSocketPaths,
@@ -825,6 +826,45 @@ describe("buildClaudeSeatEnv", () => {
 			assert.equal("TRACEPARENT" in env, false);
 			assert.equal("NODE_OPTIONS" in env, false);
 		}
+	});
+
+	it("denied roles strip git-native auth/config channels even when the operator allowlists them (#554)", () => {
+		// The forge-denial invariant must hold against git's OWN auth channels, not just GH_* tokens:
+		// an allowlisted extraheader / attacker config / credential callback would re-open forge WRITE.
+		const gitAuthVars = {
+			GIT_CONFIG_COUNT: "2",
+			GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
+			GIT_CONFIG_VALUE_0: "Authorization: Basic ZXZpbC10b2tlbg==",
+			GIT_CONFIG_KEY_1: "credential.helper",
+			GIT_CONFIG_VALUE_1: "!f(){ echo password=leak; };f",
+			GIT_CONFIG: "/tmp/attacker/config",
+			GIT_CONFIG_GLOBAL: "/tmp/attacker/global",
+			GIT_CONFIG_SYSTEM: "/tmp/attacker/system",
+			GIT_ASKPASS: "/tmp/attacker/askpass.sh",
+			SSH_ASKPASS: "/tmp/attacker/ssh-askpass.sh",
+			GIT_SSH_COMMAND: "ssh -o StrictHostKeyChecking=no",
+			GIT_CREDENTIAL_HELPER: "store",
+		} as const;
+		const gitAuthSource = sdkShapedEnv({ ...gitAuthVars });
+		// The operator allowlists every one of them (the exact precondition the vuln needs).
+		const withGitAuth = [...Object.keys(gitAuthVars), "MY_CUSTOM_VAR"];
+		for (const step of DENIED_STEPS) {
+			const env = buildClaudeSeatEnv(gitAuthSource, step, withGitAuth);
+			for (const name of Object.keys(gitAuthVars)) assert.equal(name in env, false, `${step} must deny ${name} despite the allowlist`);
+			assert.equal(env.MY_CUSTOM_VAR, "configured-addition", `${step} still forwards a non-forge allowlisted var`);
+		}
+		// Forge-capable roles (which legitimately push) KEEP the allowlisted git-auth channels.
+		for (const step of FORGE_CAPABLE_STEPS) {
+			const env = buildClaudeSeatEnv(gitAuthSource, step, withGitAuth);
+			for (const name of Object.keys(gitAuthVars)) assert.equal(env[name], gitAuthSource[name], `${step} keeps ${name}`);
+		}
+		// Prefix classification: indexed GIT_CONFIG_KEY_<n>/VALUE_<n> match; unrelated GIT_* do not.
+		assert.equal(isGitAuthChannelVar("GIT_CONFIG_KEY_7"), true);
+		assert.equal(isGitAuthChannelVar("GIT_CONFIG_VALUE_12"), true);
+		assert.equal(isGitAuthChannelVar("GIT_CONFIG_COUNT"), true);
+		assert.equal(isGitAuthChannelVar("GIT_ASKPASS"), true);
+		assert.equal(isGitAuthChannelVar("GIT_AUTHOR_NAME"), false);
+		assert.equal(isGitAuthChannelVar("GITHUB_TOKEN"), false);
 	});
 });
 

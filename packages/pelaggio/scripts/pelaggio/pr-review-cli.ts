@@ -448,8 +448,20 @@ function upsertCommentDefault(pr: string, body: string): void {
  * is a GitHub Enterprise Server host. `host` may carry a port (preserved for the
  * extraheader urlmatch); classification ignores it.
  */
+/** github.com-CLASS for gh's TOKEN-CHAIN selection (forgeTokenForHost): github.com, its
+ *  GitHub-controlled subdomains, and `*.ghe.com` data-residency tenants — `gh help environment`
+ *  scopes GH_TOKEN to "github.com or a subdomain of ghe.com". This decides WHICH token to use, not
+ *  whether the host is trusted (see isTrustedFetchHost, which does NOT wildcard `*.ghe.com`). */
 function isDotComClassHost(host: string): boolean {
 	return hostnameOf(host) === "github.com" || hostnameOf(host).endsWith(".github.com") || hostnameOf(host).endsWith(".ghe.com");
+}
+
+/** github.com and its GitHub-controlled subdomains only — the hosts always TRUSTED for the fetch
+ *  credential. Deliberately EXCLUDES the `*.ghe.com` wildcard: a data-residency tenant host is
+ *  attacker-selectable, so a ghe.com tenant is trusted ONLY when it is the operator-configured
+ *  host (#554). */
+function isGithubDotComHost(host: string): boolean {
+	return hostnameOf(host) === "github.com" || hostnameOf(host).endsWith(".github.com");
 }
 
 /** Hostname without any `:port`, for host-trust comparison (the extraheader key keeps the port). */
@@ -468,17 +480,18 @@ function configuredEnterpriseHosts(env: NodeJS.ProcessEnv): string[] {
 
 /**
  * Default-deny host trust for the fetch credential (#554). The token is attached ONLY when the
- * resolved origin host is trusted: github.com-class (github.com + `*.ghe.com` tenants) OR an
- * operator-CONFIGURED enterprise host (`GH_HOST`/`GH_ENTERPRISE_HOST` env). The worktree shares
- * the main `.git` and the confinement audit snapshots only porcelain + ref state — NOT
- * `.git/config` — so an earlier injected seat can rewrite `origin` to an attacker host with no
- * tracked-tree delta. Decoupling the token destination from the mutable origin means such a fetch
- * runs UNAUTHENTICATED (fails closed, blocks the gate) rather than disclosing GH_ENTERPRISE_TOKEN
- * to the attacker host. The legit fetch still authenticates because the real host IS the
- * dotcom/configured host.
+ * resolved origin host is trusted: github.com + GitHub-controlled subdomains (NOT the
+ * attacker-selectable `*.ghe.com` wildcard) OR an operator-CONFIGURED enterprise host
+ * (`GH_HOST`/`GH_ENTERPRISE_HOST` env — which MAY be a ghe.com tenant the operator named). The
+ * worktree shares the main `.git` and the confinement audit snapshots only porcelain + ref state —
+ * NOT `.git/config` — so an earlier injected seat can rewrite `origin` to an attacker host (a
+ * `*.ghe.com` tenant included) with no tracked-tree delta. Decoupling the token destination from
+ * the mutable origin means such a fetch runs UNAUTHENTICATED (fails closed, blocks the gate) rather
+ * than disclosing the token to the attacker host. The legit fetch still authenticates because the
+ * real host IS github.com or the configured host.
  */
 export function isTrustedFetchHost(host: string, env: NodeJS.ProcessEnv): boolean {
-	return isDotComClassHost(host) || configuredEnterpriseHosts(env).includes(hostnameOf(host));
+	return isGithubDotComHost(host) || configuredEnterpriseHosts(env).includes(hostnameOf(host));
 }
 
 /**
@@ -922,8 +935,9 @@ async function runPrReviewGateImpl(options: RunPrReviewGateOptions): Promise<PrR
 		inspectionDiff = inspected.diff;
 	} catch (e) {
 		// Same scrub as the main crash sink: a child git error can embed argv/env-derived
-		// strings, and this message reaches the PUBLIC comment and stderr.
-		const msg = scrubCrashMessage(e instanceof Error ? e.message : String(e), deps.env);
+		// strings, and this message reaches the PUBLIC comment and stderr. Use scrubEnv
+		// (options.env ?? deps.env) for consistency with the sibling boundary scrub below.
+		const msg = scrubCrashMessage(e instanceof Error ? e.message : String(e), scrubEnv);
 		const body = buildFailClosedComment("error_diff", `Could not inspect the PR diff for security-sensitive changes, so this gate blocks the merge.\n\n${msg}`);
 		process.stderr.write(`pr-review could not inspect diff — failing closed: ${msg}\n`);
 		options.upsertComment?.(options.pr, scrubReviewBoundary(body, scrubEnv));
