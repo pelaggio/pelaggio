@@ -116,14 +116,19 @@ it implements it.
 When `docs/assurance/shadow-graph.json` exists, treat it as the semantic reconciliation target for
 architectural edits even while it remains explicitly shadow/non-authoritative.
 
-For an ADR or trust edit, ask whether the change alters a **durable claim, replacement constraint,
-architectural decision, empirical assumption, or the relationship between them**:
+For an ADR or trust edit, ask whether the change alters a **proposition role (invariant, replacement
+constraint, or empirical assumption), architectural decision, realization relationship, or the
+relationship between those things**:
 
 - **Yes** → update the corresponding graph primitive/edge in the same change, preserving stable IDs
   where the concept survives. Add a new primitive only when the intent is genuinely new; prefer an
-  existing node when the prose is another instance of the same intent.
+  existing proposition when the prose is another instance of the same intent.
 - **No** → do **not** churn the graph merely to mirror prose. Narrative clarification, spelling,
   rationale, examples, and construction-only changes can report `assurance graph impact: none`.
+
+The historical `CLM-*`, `CON-*`, `ASM-*`, `CTR-*`, and `TC-*` prefixes are stable identities, not
+instructions to create separate graph base classes. In the shadow model, invariant/constraint/
+assumption are proposition roles and current construction is represented as a realization.
 
 Do not infer semantic authority from the graph while its README says `experimental /
 non-authoritative`; current ADR/trust sources still govern until a later decision promotes the
