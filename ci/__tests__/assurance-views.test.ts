@@ -35,6 +35,13 @@ describe("assurance question catalog", () => {
     assert.match(view("affected").question, /what intent/i);
   });
 
+  it("separates semantic queries from presentation concerns", () => {
+    const forbidden = new Set(["color", "position", "x", "y", "layout", "icon", "shape", "renderer"]);
+    for (const candidate of catalog.views) {
+      for (const key of Object.keys(candidate as any)) assert.ok(!forbidden.has(key), `${candidate.id} leaks presentation key ${key} into semantic query definition`);
+    }
+  });
+
   it("architecture view is a projection of every durable claim", () => {
     const selected = selectView(graph, view("architecture"));
     const claims = graph.nodes.filter((node) => node.kind === "claim").map((node) => node.id).sort();
