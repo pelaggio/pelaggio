@@ -39,45 +39,29 @@ Durable claims deliberately do **not** contain source-code paths or symbols. A r
 
 This means ordinary construction tests do much of the implementation-validation duty, but only if Pelaggio knows which construction they evidence. The graph provides that association without duplicating test results into documentation.
 
-## Questions are first-class projections
+## Versioned questions and projections
 
-`views.json` versions the questions we expect the graph to answer. The initial catalog includes:
+`views.json` is a renderer-neutral catalog of questions Pelaggio should be able to answer from the graph. The first set is:
 
-- **architecture** — what durable architectural intent does Pelaggio preserve?
-- **why** — why does a node exist, what constrains it, and what realizes it today?
-- **affected** — what intent could a decision, construction, ADR, or change affect?
-- **debt** — what machinery or intent is unsupported, orphaned, stale, or contradictory?
-- **trust** — how do public trust claims project from internal intent and current evidence?
+- **architecture** — what durable intent does Pelaggio preserve?
+- **why** — why does this node exist, what constrains it, and what realizes it today?
+- **affected** — what intent could this node/source/change affect?
+- **debt** — what machinery or intent is orphaned, unsupported, stale, or contradictory?
+- **trust** — what public trust statements project from internal intent and at what status/scope?
 - **review** — why does the current review strategy exist and what survives if it changes?
-- **landing** — what must remain true if the current landing mechanism changes?
+- **landing** — what must remain true if the current landing construction changes?
 
-These are semantic queries, not UI definitions. A CLI, GitHub rendering, local web UI, hosted dashboard, or marketing site should consume the same query definitions.
+The query layer is deliberately separate from presentation. GitHub currently gets generated Mermaid projections for selected static views; a local or hosted explorer can consume the same selected subgraphs later without changing the semantic corpus.
 
-### Trial visualization
+## Stress-test findings
 
-`ci/assurance-views.ts` projects statically renderable views into Mermaid. GitHub can render the checked-in generated Markdown directly:
+The first stress pass intentionally tried to break the query/projection model rather than merely render it.
 
-- [`generated/architecture.md`](./generated/architecture.md) — the durable claim graph;
-- [`generated/review.md`](./generated/review.md) — review intent, strategy, assumption, and surrounding constraints.
+It found and corrected one concrete design failure: `why`, `affected`, and `debt` initially existed only as catalog entries while the query engine could execute only static views. The query engine now executes parameterized neighborhoods/source-impact traversal and diagnostics, and tests mutate the graph in memory to prove debt detection catches orphan construction and unused assumptions.
 
-Regenerate them with:
+The stress pass also keeps one unresolved signal visible rather than inventing edges to improve the picture: the top-level **architecture** view is sparse. Most durable claims are not naturally in a causal or specialization chain. That suggests the semantic graph should stay honest, while a marketing/product "story" may be a curated sequence or domain projection layered on top rather than a fake relation added to the ontology.
 
-```bash
-node --import tsx ci/assurance-views.ts --write
-```
-
-CI verifies the checked-in views are exactly derivable from the canonical graph and query catalog. Visualization-specific positions, colors, and grouping deliberately do not live in `shadow-graph.json`.
-
-## Audience / surface split
-
-The same graph should support different projections without creating different sources of truth:
-
-- **GitHub / OSS repo:** generated Mermaid/SVG-style views for review, architecture navigation, and public inspectability.
-- **Pelaggio local product:** the primary operator surface for `why`, `affected`, `debt`, and per-change assurance exploration. It should work without a hosted service.
-- **Hosted Pelaggio:** organization/repository aggregation, historical evidence, cross-repo posture, and richer interactive exploration. It consumes portable graph/evidence rather than owning local semantics.
-- **Marketing website:** curated public-safe projections such as the architecture/custody spine and an illustrative Change Dossier journey. These should be generated from the same public graph but are presentation, not authority.
-
-A future interactive explorer can use Cytoscape.js or a similar renderer over the same selected nodes/edges. The query layer should stabilize before the renderer does.
+Public view tests currently restrict public projections to durable claims and external trust claims. More granular sensitivity/export policy belongs with evidence/subject nodes once those exist.
 
 ## Why this is useful
 
@@ -97,7 +81,7 @@ Run the corpus tests with:
 pnpm test:ci
 ```
 
-`ci/__tests__/shadow-assurance.test.ts` validates graph integrity, relation typing, source grounding, construction evidence, and semantic question contracts. `ci/__tests__/assurance-views.test.ts` validates the versioned question catalog and generated visual projections. Semantic question tests protect a reviewed interpretation from accidental drift; source-grounding tests are a separate guard against the graph merely agreeing with itself.
+`ci/__tests__/shadow-assurance.test.ts` validates graph integrity, relation typing, source grounding, construction evidence, and semantic question contracts. `ci/__tests__/assurance-views.test.ts` stress-tests query execution, diagnostics, public projection boundaries, and generated views. Semantic question tests protect a reviewed interpretation from accidental drift; source-grounding tests are a separate guard against the graph merely agreeing with itself.
 
 ## Migration rule
 
@@ -109,7 +93,7 @@ Broad extraction, narrow commitment:
 4. Existing `TC-*` identifiers remain stable external identities and retain their own status/scope.
 5. ADRs remain valuable narrative/history, but should eventually reference graph primitives rather than independently restate architectural truth.
 6. Code paths belong on construction/evidence, never on durable claims.
-7. Queries/views are projections of the graph and may be freely regenerated or replaced.
+7. View/query definitions remain semantic and renderer-neutral; visual layout/style is not canonical graph state.
 8. No runtime or trust guarantee may cite this shadow graph until a later decision explicitly promotes it to an authoritative source.
 
 ## Current extraction caveats
