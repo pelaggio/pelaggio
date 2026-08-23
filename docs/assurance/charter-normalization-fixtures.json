@@ -1,0 +1,121 @@
+{
+  "status": "experimental-shadow-only",
+  "fixtures": [
+    {
+      "id": "issue-408-landing",
+      "source": "#408",
+      "rawMechanisms": ["bd merge-slot", "git ref CAS"],
+      "normalizedIntent": "A landing becomes authoritative only when the exact verified candidate is still valid against the authoritative current state despite competing actors.",
+      "counterexamples": [
+        "All Pelaggio workers hold bd merge-slot while an independent actor changes the authoritative ref.",
+        "A landing protocol serializes attempts but verifies one candidate and commits a different tip."
+      ],
+      "mustNotNormalizeTo": ["use bd merge-slot", "use git ref CAS"],
+      "materialNormalization": true,
+      "candidateGoal": "convergent-lifecycle"
+    },
+    {
+      "id": "issue-176-credential-broker",
+      "source": "#176",
+      "rawMechanisms": ["credentials outside the agent process", "credential brokerage"],
+      "normalizedIntent": "Agent-controlled execution cannot obtain or exercise ambient privileged authority beyond what the harness explicitly delegates.",
+      "counterexamples": [
+        "Credentials remain outside the process but an unrestricted broker exposes equivalent authority.",
+        "A narrowly scoped in-process capability satisfies the authority boundary without external credential material."
+      ],
+      "mustNotNormalizeTo": ["credentials outside the agent process", "use a credential broker"],
+      "materialNormalization": true,
+      "candidateGoal": "bounded-authority"
+    },
+    {
+      "id": "issue-337-provider-capabilities",
+      "source": "#337",
+      "rawMechanisms": ["ProviderCapabilities descriptor", "native capability routing", "uniform Node interface"],
+      "normalizedIntent": "Differences among supported providers must be explicit where they affect required semantics, and provider choice must not silently weaken an admitted contract.",
+      "counterexamples": [
+        "Every provider reports the same synthetic capability while one silently implements a weaker semantic boundary.",
+        "A uniform Node abstraction exists but preserves the same provider-specific orchestration divergence underneath."
+      ],
+      "mustNotNormalizeTo": ["add ProviderCapabilities", "add a uniform Node interface"],
+      "materialNormalization": true,
+      "candidateGoal": "substrate-independent-contract"
+    },
+    {
+      "id": "issue-579-temp-fixtures",
+      "source": "#579",
+      "rawMechanisms": ["shared fixture helper", "afterEach cleanup", "leak guard"],
+      "normalizedIntent": "Pelaggio-owned temporary test resources do not accumulate across successful, failed, or interrupted runs enough to impair the host, and reclamation does not destroy live or foreign resources.",
+      "counterexamples": [
+        "The process is SIGKILLed before afterEach runs.",
+        "A stale-directory sweep deletes a live or foreign fixture.",
+        "A new raw mkdtemp call bypasses the shared helper."
+      ],
+      "mustNotNormalizeTo": ["use afterEach everywhere", "use a shared fixture helper"],
+      "materialNormalization": true,
+      "candidateGoal": null
+    },
+    {
+      "id": "issue-500-loopback-authority",
+      "source": "#500",
+      "rawMechanisms": ["require auth", "Origin validation", "application/json content type"],
+      "normalizedIntent": "Untrusted browser-originated requests cannot exercise privileged daemon authority merely because the operator has a loopback control plane running.",
+      "counterexamples": [
+        "A content-type check lands but another browser-simple request path still triggers privileged execution.",
+        "Authentication is absent but an equivalent deterministic browser-origin boundary prevents ambient authority use."
+      ],
+      "mustNotNormalizeTo": ["require authentication", "validate Origin", "require application/json"],
+      "materialNormalization": true,
+      "candidateGoal": null
+    },
+    {
+      "id": "issue-186-ai-delivery",
+      "source": "#186",
+      "rawMechanisms": ["in-toto predicate", "DSSE", "Sigstore", "Rekor"],
+      "normalizedIntent": "A consequential delivery remains attributable and reconstructable without representing a signed claim as proof that the claimed execution or review actually occurred.",
+      "counterexamples": [
+        "A correctly signed predicate contains stale or unrelated evidence.",
+        "The attestation format is replaced while equivalent attribution and binding remain available."
+      ],
+      "mustNotNormalizeTo": ["use in-toto", "use DSSE"],
+      "materialNormalization": true,
+      "candidateGoal": "accountable-consequence"
+    },
+    {
+      "id": "issue-147-link-integrity",
+      "source": "#147",
+      "rawMechanisms": ["markdown link-integrity CI check"],
+      "normalizedIntent": "Dead internal links in trust documentation fail CI.",
+      "counterexamples": [],
+      "mustNotNormalizeTo": [],
+      "materialNormalization": false,
+      "candidateGoal": null
+    },
+    {
+      "id": "partial-mediation-subscription-capacity",
+      "source": "representative mediated intake",
+      "rawMechanisms": ["adapt to remaining usage", "control concurrency"],
+      "normalizedIntent": "Allocate finite subscription capacity so useful campaign progress is sustained while honoring operator reserve and throughput-versus-efficiency preferences.",
+      "counterexamples": [
+        "The system adapts dynamically but consumes capacity needed for mandatory review or future work.",
+        "The system never adapts mid-run, yet an initial allocation completes the campaign while preserving the requested reserve.",
+        "Maximum parallel throughput increases conflicts and repeated work enough to reduce useful work per subscription period."
+      ],
+      "mustNotNormalizeTo": ["implement adaptive concurrency scheduling", "always maximize concurrency", "always reserve a fixed percentage"],
+      "materialNormalization": true,
+      "candidateGoal": null,
+      "humanMediation": {
+        "addsPreferences": [
+          "prefer completing a campaign",
+          "sometimes reserve capacity for future work",
+          "otherwise maximize useful subscription-period utilization",
+          "balance throughput against conflict/rework efficiency"
+        ],
+        "residualsRemain": [
+          "the exact optimization objective is not fixed",
+          "the right reserve policy is not fixed",
+          "concurrency is a likely lever, not an admitted mechanism requirement"
+        ]
+      }
+    }
+  ]
+}
