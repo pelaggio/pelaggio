@@ -1,7 +1,15 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-export type GraphNode = { id: string; kind: string; slug: string; statement: string; sources?: string[] };
+export type GraphNode = {
+  id: string;
+  kind: string;
+  slug: string;
+  statement: string;
+  role?: string;
+  visibility?: string;
+  sources?: string[];
+};
 export type GraphEdge = { from: string; relation: string; to: string };
 export type AssuranceGraph = { schemaVersion: string; nodes: GraphNode[]; edges: GraphEdge[] };
 export type AssuranceView = {
@@ -10,6 +18,8 @@ export type AssuranceView = {
   mode: string;
   audience?: string[];
   kinds?: string[];
+  roles?: string[];
+  visibility?: string[];
   relations?: string[];
   seeds?: string[];
   depth?: number;
@@ -58,14 +68,14 @@ export function diagnostics(graph: AssuranceGraph): Diagnostic[] {
   const incoming = (id: string, rel?: string) => graph.edges.filter((e) => e.to === id && (!rel || e.relation === rel));
 
   for (const node of graph.nodes) {
-    if (node.kind === "construction" && !outgoing(node.id).some((e) => e.relation === "implements" || e.relation === "derived-from")) {
-      out.push({ check: "orphan-construction", node: node.id, message: "construction has no articulated intent or decision" });
+    if (node.kind === "realization" && !outgoing(node.id).some((e) => e.relation === "implements" || e.relation === "derived-from")) {
+      out.push({ check: "orphan-realization", node: node.id, message: "realization has no articulated intent or decision" });
     }
     if (node.kind === "decision" && !outgoing(node.id).some((e) => e.relation === "implements" || e.relation === "assumes" || e.relation === "derived-from" || e.relation === "supersedes")) {
       out.push({ check: "decision-without-intent", node: node.id, message: "decision has no semantic relationship" });
     }
-    if (node.kind === "assumption" && incoming(node.id, "assumes").length === 0) {
-      out.push({ check: "unused-assumption", node: node.id, message: "assumption is not relied upon by any decision or claim" });
+    if (node.kind === "proposition" && node.role === "assumption" && incoming(node.id, "assumes").length === 0) {
+      out.push({ check: "unused-assumption", node: node.id, message: "assumption is not relied upon by any decision or proposition" });
     }
   }
   return out.sort((a, b) => `${a.check}:${a.node}`.localeCompare(`${b.check}:${b.node}`));
@@ -76,7 +86,15 @@ export function selectView(graph: AssuranceGraph, view: AssuranceView, args: Que
 
   if (view.mode === "all-of-kind") {
     const kinds = new Set(view.kinds ?? []);
-    return induced(graph, new Set(graph.nodes.filter((node) => kinds.has(node.kind)).map((node) => node.id)), relations);
+    const roles = new Set(view.roles ?? []);
+    const visibility = new Set(view.visibility ?? []);
+    const selected = graph.nodes.filter((node) => {
+      if (kinds.size > 0 && !kinds.has(node.kind)) return false;
+      if (roles.size > 0 && !roles.has(node.role ?? "")) return false;
+      if (visibility.size > 0 && !visibility.has(node.visibility ?? "internal")) return false;
+      return true;
+    });
+    return induced(graph, new Set(selected.map((node) => node.id)), relations);
   }
 
   if (view.mode === "seeded-neighborhood") return neighborhood(graph, view.seeds ?? [], relations, view.depth ?? 1);
