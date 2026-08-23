@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, it } from "node:test";
 
@@ -41,11 +41,15 @@ describe("shadow assurance graph integrity", () => {
     }
   });
 
-  it("covers every ADR in the current 0001-0026 corpus", () => {
-    for (let i = 1; i <= 26; i++) {
-      const adr = `ADR-${String(i).padStart(4, "0")}`;
+  it("covers every ADR file that exists", () => {
+    const adrFiles = readdirSync(resolve(repo, "docs/decisions"))
+      .map((name) => name.match(/^(\d{4})-.*\.md$/)?.[1])
+      .filter((id): id is string => Boolean(id));
+    assert.ok(adrFiles.length > 0, "expected numbered ADR files");
+    for (const id of adrFiles) {
+      const adr = `ADR-${id}`;
       assert.ok(mapped(adr).length > 0, `${adr} must map to at least one primitive`);
-      for (const id of mapped(adr)) assert.ok(nodes.has(id), `${adr} references missing node ${id}`);
+      for (const nodeId of mapped(adr)) assert.ok(nodes.has(nodeId), `${adr} references missing node ${nodeId}`);
     }
   });
 
