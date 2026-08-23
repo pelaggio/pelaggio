@@ -2,7 +2,7 @@
 
 > What durable architectural intent does Pelaggio currently preserve?
 
-Generated from shadow-graph.json schema 0.2.0 via ci/assurance-views.ts. Do not edit this projection by hand.
+Generated from shadow-graph.json schema 0.3.0 via ci/assurance-views.ts. Do not edit this projection by hand.
 
 ```mermaid
 flowchart TB
