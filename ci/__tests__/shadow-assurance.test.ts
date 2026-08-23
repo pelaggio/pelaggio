@@ -29,8 +29,16 @@ function mapped(adr: string) {
 }
 
 describe("shadow assurance graph integrity", () => {
-  it("has unique stable ids and type-correct edges", () => {
+  it("has a minimal base ontology, stable ids, and type-correct edges", () => {
+    assert.deepEqual(graph.nodeKinds, ["proposition", "decision", "realization"]);
+    assert.deepEqual(graph.propositionRoles, ["invariant", "constraint", "assumption"]);
     assert.equal(nodes.size, graph.nodes.length, "node IDs must be unique");
+
+    for (const value of graph.nodes) {
+      assert.ok(graph.nodeKinds.includes(value.kind), `unknown node kind ${value.kind} on ${value.id}`);
+      if (value.kind === "proposition") assert.ok(graph.propositionRoles.includes(value.role), `${value.id} needs a valid proposition role`);
+    }
+
     for (const edge of edges) {
       const from = node(edge.from);
       const to = node(edge.to);
@@ -38,6 +46,9 @@ describe("shadow assurance graph integrity", () => {
       assert.ok(contract, `unknown edge relation ${edge.relation}`);
       assert.ok(contract.from.includes(from.kind), `${edge.relation} cannot originate at ${from.kind} ${from.id}`);
       assert.ok(contract.to.includes(to.kind), `${edge.relation} cannot target ${to.kind} ${to.id}`);
+      if (edge.relation === "constrains") assert.equal(from.role, "constraint", `${from.id} constrains but is not a constraint proposition`);
+      if (edge.relation === "assumes") assert.equal(to.role, "assumption", `${to.id} is assumed but is not an assumption proposition`);
+      if (edge.relation === "projects") assert.equal(from.visibility, "public", `${from.id} projects but is not a public proposition`);
     }
   });
 
@@ -69,13 +80,13 @@ describe("shadow assurance graph integrity", () => {
     }
   });
 
-  it("ties construction to current code or tests without putting code paths on durable claims", () => {
+  it("ties realizations to code/tests without putting code paths on propositions", () => {
     for (const value of graph.nodes) {
-      if (value.kind === "construction") {
-        assert.ok(Array.isArray(value.codeEvidence) && value.codeEvidence.length > 0, `${value.id} construction needs code evidence`);
+      if (value.kind === "realization") {
+        assert.ok(Array.isArray(value.codeEvidence) && value.codeEvidence.length > 0, `${value.id} realization needs code evidence`);
         for (const path of value.codeEvidence) assert.ok(existsSync(resolve(repo, path)), `${value.id} code evidence missing: ${path}`);
-      } else if (value.kind === "claim") {
-        assert.equal(value.codeEvidence, undefined, `${value.id} durable claim must not own brittle code locations`);
+      } else if (value.kind === "proposition") {
+        assert.equal(value.codeEvidence, undefined, `${value.id} proposition must not own brittle code locations`);
       }
     }
   });
@@ -83,18 +94,19 @@ describe("shadow assurance graph integrity", () => {
 
 describe("architectural question tests", () => {
   it("Q1: removing ADR-0022 topology preserves independent evaluation", () => {
-    const ids = mapped("ADR-0022");
-    assert.ok(ids.includes("CLM-0016"));
-    assert.equal(node("CTR-0001").kind, "construction");
-    assert.equal(node("CTR-0002").kind, "construction");
+    assert.ok(mapped("ADR-0022").includes("CLM-0016"));
+    assert.equal(node("CLM-0016").role, "invariant");
+    assert.equal(node("CTR-0001").kind, "realization");
+    assert.equal(node("CTR-0002").kind, "realization");
     assert.equal(node("DEC-0012").status, "historical-topology-under-reconsideration");
     assert.deepEqual(outgoing("DEC-0012", "implements").map((e) => e.to), ["CLM-0016"]);
   });
 
-  it("Q2: N+Judge is strategy resting on an explicitly challengeable empirical assumption", () => {
+  it("Q2: N+Judge is strategy resting on an empirical assumption proposition", () => {
     assert.equal(node("DEC-0014").kind, "decision");
-    assert.equal(node("CTR-0003").kind, "construction");
-    assert.equal(node("ASM-0002").kind, "assumption");
+    assert.equal(node("CTR-0003").kind, "realization");
+    assert.equal(node("ASM-0002").kind, "proposition");
+    assert.equal(node("ASM-0002").role, "assumption");
     assert.ok(outgoing("DEC-0014", "implements").some((e) => e.to === "CLM-0016"));
     assert.ok(outgoing("DEC-0014", "assumes").some((e) => e.to === "ASM-0002"));
     assert.match(node("ASM-0002").statement, /justify its incremental cost/i);
@@ -104,6 +116,7 @@ describe("architectural question tests", () => {
     const constraints = incoming("CLM-0007", "constrains").map((edge) => edge.from).sort();
     assert.ok(constraints.includes("CON-0004"));
     assert.ok(constraints.includes("CON-0009"));
+    assert.equal(node("CON-0004").role, "constraint");
     assert.ok(outgoing("CLM-0007", "specializes").some((e) => e.to === "CLM-0006"));
   });
 
@@ -115,17 +128,22 @@ describe("architectural question tests", () => {
     assert.match(node("CLM-0019").statement, /deterministic/i);
   });
 
-  it("Q5: public trust claims are scoped projections, not semantic aliases", () => {
-    assert.ok(outgoing("TC-011", "projects").some((e) => e.to === "CLM-0002"));
-    assert.ok(outgoing("TC-014", "projects").some((e) => e.to === "CLM-0003"));
+  it("Q5: public trust records are scoped propositions, not semantic aliases or a parallel class", () => {
+    for (const id of ["TC-003", "TC-004", "TC-005", "TC-010", "TC-011", "TC-012", "TC-013", "TC-014"]) {
+      assert.equal(node(id).kind, "proposition");
+      assert.equal(node(id).role, "invariant");
+      assert.equal(node(id).visibility, "public");
+      assert.equal(node(id).externalId, id);
+    }
     assert.ok(outgoing("TC-005", "projects").some((e) => e.to === "CLM-0008"));
     assert.equal(node("TC-005").projection.status, "best_effort");
     assert.equal(node("TC-013").projection.status, "planned");
-    assert.ok(!edges.some((edge) => edge.relation === "aliases"), "semantic aliases are intentionally unsupported");
+    assert.ok(!graph.nodeKinds.includes("external-claim"));
   });
 
   it("Q6: interruption recovery rejects deterministic LLM replay as a requirement", () => {
-    assert.equal(node("CLM-0012").kind, "claim");
+    assert.equal(node("CLM-0012").kind, "proposition");
+    assert.equal(node("CLM-0012").role, "invariant");
     assert.ok(incoming("CLM-0012", "constrains").some((e) => e.from === "CON-0014"));
     assert.ok(outgoing("DEC-0009", "implements").some((e) => e.to === "CLM-0012"));
   });
@@ -136,10 +154,11 @@ describe("architectural question tests", () => {
     assert.ok(incoming("CLM-0002", "constrains").some((e) => e.from === "CON-0010"));
   });
 
-  it("Q8: assumptions are empirical propositions rather than policy preferences", () => {
-    const assumptions = graph.nodes.filter((n: any) => n.kind === "assumption");
+  it("Q8: assumptions are proposition roles rather than policy preferences or base classes", () => {
+    const assumptions = graph.nodes.filter((n: any) => n.kind === "proposition" && n.role === "assumption");
     assert.equal(assumptions.length, 3);
     assert.ok(assumptions.every((a: any) => a.id.startsWith("ASM-")));
+    assert.ok(!graph.nodeKinds.includes("assumption"));
     assert.equal(node("DEC-0017").slug, "rigor-by-consequence");
     assert.equal(node("DEC-0018").slug, "human-value-judgment-at-charter");
   });
@@ -152,11 +171,31 @@ describe("architectural question tests", () => {
     assert.ok(mapped("ADR-0024").includes("CLM-0009"));
   });
 
-  it("Q10: every construction exists to implement or derive from a decision/claim", () => {
-    const constructions = graph.nodes.filter((n: any) => n.kind === "construction");
-    for (const construction of constructions) {
-      const semanticEdges = outgoing(construction.id).filter((e) => e.relation === "implements" || e.relation === "derived-from");
-      assert.ok(semanticEdges.length > 0, `${construction.id} is orphan machinery with no articulated purpose`);
+  it("Q10: every realization exists to implement or derive from a decision/proposition", () => {
+    const realizations = graph.nodes.filter((n: any) => n.kind === "realization");
+    for (const realization of realizations) {
+      const semanticEdges = outgoing(realization.id).filter((e) => e.relation === "implements" || e.relation === "derived-from");
+      assert.ok(semanticEdges.length > 0, `${realization.id} is orphan machinery with no articulated purpose`);
     }
+  });
+
+  it("Q11: stable IDs survive ontology reclassification", () => {
+    assert.equal(node("CLM-0006").kind, "proposition");
+    assert.equal(node("CON-0004").kind, "proposition");
+    assert.equal(node("ASM-0002").kind, "proposition");
+    assert.equal(node("CTR-0003").kind, "realization");
+  });
+
+  it("Q12: observations cannot directly support or challenge intent before Assessment exists", () => {
+    assert.equal(graph.relationKinds.supports, undefined);
+    assert.equal(graph.relationKinds.challenges, undefined);
+    assert.ok(!edges.some((edge) => edge.relation === "supports" || edge.relation === "challenges"));
+    assert.ok(mapped("ADR-0027").includes("CON-0021"));
+  });
+
+  it("Q13: consumer-owned graphs remain a first-class future boundary without specifying federation", () => {
+    assert.ok(mapped("ADR-0027").includes("CON-0025"));
+    assert.match(node("CON-0025").statement, /consumer repository can own and evolve/i);
+    assert.match(node("CON-0025").statement, /composition remains deliberately undecided/i);
   });
 });
