@@ -24,6 +24,7 @@ flowchart TB
   CLM_0017["mechanism-policy-separated"]
   CLM_0018["work-ownership-authoritative"]
   CLM_0019["deterministic-safety-floor"]
+  CLM_0020["architectural-intent-single-source"]
   CLM_0007 -->|specializes| CLM_0006
   CLM_0009 -->|specializes| CLM_0019
   CLM_0010 -->|specializes| CLM_0019
