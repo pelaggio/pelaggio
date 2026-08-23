@@ -35,11 +35,13 @@ describe("assurance question catalog", () => {
     for (const candidate of catalog.views) for (const key of Object.keys(candidate as any)) assert.ok(!forbidden.has(key), `${candidate.id} leaks presentation key ${key}`);
   });
 
-  it("keeps public views on public-safe semantic node kinds", () => {
-    const allowed = new Set(["claim", "external-claim"]);
+  it("keeps public views on projection-safe proposition nodes", () => {
     for (const candidate of catalog.views.filter((v) => v.audience?.includes("public"))) {
       const selected = selectView(graph, candidate);
-      for (const node of selected.nodes) assert.ok(allowed.has(node.kind), `${candidate.id} leaks ${node.kind} ${node.id} to public projection`);
+      for (const node of selected.nodes) {
+        assert.equal(node.kind, "proposition", `${candidate.id} leaks ${node.kind} ${node.id} to public projection`);
+        assert.equal(node.role, "invariant", `${candidate.id} exposes non-invariant proposition ${node.id}`);
+      }
     }
   });
 });
@@ -57,15 +59,15 @@ describe("query stress tests", () => {
     assert.ok(ids.has("CLM-0016"), "ADR-0022 changes must recover independent-evaluation intent");
   });
 
-  it("debt diagnostics detect an injected orphan construction", () => {
+  it("debt diagnostics detect an injected orphan realization", () => {
     const broken = structuredClone(graph) as AssuranceGraph;
-    broken.nodes.push({ id: "CTR-X", kind: "construction", slug: "orphan", statement: "Synthetic orphan for stress test." });
-    assert.ok(diagnostics(broken).some((issue) => issue.check === "orphan-construction" && issue.node === "CTR-X"));
+    broken.nodes.push({ id: "CTR-X", kind: "realization", slug: "orphan", statement: "Synthetic orphan for stress test." });
+    assert.ok(diagnostics(broken).some((issue) => issue.check === "orphan-realization" && issue.node === "CTR-X"));
   });
 
-  it("debt diagnostics detect an unused empirical assumption", () => {
+  it("debt diagnostics detect an unused empirical assumption role", () => {
     const broken = structuredClone(graph) as AssuranceGraph;
-    broken.nodes.push({ id: "ASM-X", kind: "assumption", slug: "unused", statement: "Synthetic unused assumption." });
+    broken.nodes.push({ id: "ASM-X", kind: "proposition", role: "assumption", visibility: "internal", slug: "unused", statement: "Synthetic unused assumption." });
     assert.ok(diagnostics(broken).some((issue) => issue.check === "unused-assumption" && issue.node === "ASM-X"));
   });
 
@@ -76,13 +78,22 @@ describe("query stress tests", () => {
 });
 
 describe("static projections", () => {
-  it("architecture view is a projection of every durable claim", () => {
+  it("architecture view is every internal invariant proposition, not every proposition", () => {
     const selected = selectView(graph, view("architecture"));
-    const claims = graph.nodes.filter((node) => node.kind === "claim").map((node) => node.id).sort();
-    assert.deepEqual(selected.nodes.map((node) => node.id), claims);
+    const invariants = graph.nodes
+      .filter((node) => node.kind === "proposition" && node.role === "invariant" && (node.visibility ?? "internal") === "internal")
+      .map((node) => node.id)
+      .sort();
+    assert.deepEqual(selected.nodes.map((node) => node.id), invariants);
   });
 
-  it("review view makes strategy, assumption, and surviving intent visible together", () => {
+  it("trust view is public proposition projections rather than an external-claim class", () => {
+    const selected = selectView(graph, view("trust"));
+    assert.ok(selected.nodes.length > 0);
+    assert.ok(selected.nodes.every((node) => node.kind === "proposition" && node.visibility === "public"));
+  });
+
+  it("review view makes strategy, assumption role, realization, and surviving intent visible together", () => {
     const selectedIds = new Set(selectView(graph, view("review")).nodes.map((node) => node.id));
     for (const id of ["DEC-0014", "CTR-0003", "ASM-0002", "CLM-0016", "CLM-0009", "CLM-0008"]) assert.ok(selectedIds.has(id), `review view must contain ${id}`);
   });
