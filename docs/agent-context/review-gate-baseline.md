@@ -124,36 +124,50 @@ and known outcomes.
 is *coverage and attachment*, not semantics — which is the useful result, because it names what has
 to change rather than whether to continue.
 
-### Fixture A — #625, the unwired seat env denial
+### Fixture A — #625: the premise was wrong, and the instrument is what found that out
 
-The proposition **exists and is correctly stated**: `TC-014` — *"driver child environments are
-minimized and captured logs are scrubbed"* — plus `CLM-0003` (*"workers receive only necessary
-credentials"*). Both are sourced from ADR-0010.
+**#625 is closed as invalid.** `buildClaudeSeatEnv` *is* wired: `spawnClaudeSeat` narrows the env at
+`claude-seat.ts:614` and passes `env: childEnv` to spawn, with a second call at `:671` for the
+preflight probe — the seat-boundary placement #625 proposed as its own fix. The finding came from a
+`git grep … | head` whose limit was filled by the test file's nine matches, hiding the production
+call sites, and I then reasoned from the truncated list.
 
-Both have **zero implementing realizations**. So would the reachability query — *"does every
-realization implementing P appear on a live call path?"* — have fired? **No. It would have found
-nothing to check and passed vacuously.**
+What is true, and is simply #589's job: **main** has no `buildClaudeSeatEnv` and `spawnClaudeSeat`
+forwards `spawnOpts.env` unchanged, so there is no Claude-seat env narrowing on main today; #589
+introduces *and wires* it. PR #602's gate finding — *"#554 env denial is not on the Claude path"* —
+is correct against **main**, the merge base it reviewed, and is a sequencing artifact rather than a
+permanent gap.
 
-| | |
-|---|---|
-| bucket | **authoring-cost gap** (not semantic) |
-| expressible? | yes — a `CTR-*` node with `codeEvidence` is exactly the shape |
-| authored? | no, and nothing forces it |
+The salvageable result is not the one intended. A reachability predicate was built for this fixture
+(`ci/assurance-reachability.ts`) and, run against the #589 tree, it reported `buildClaudeSeatEnv` as
+**reachable** — contradicting the charter, two rounds of my reasoning, and a public issue. **The
+mechanized structural check was right where the human read was wrong.** That is real evidence for
+mechanizing this class of question, but it is evidence about *grep-based reasoning being unreliable*,
+not about the assurance graph, which had no node for this mechanism either way.
 
-Coverage is the whole story:
+Two honest caveats on the predicate before anyone trusts it further:
+
+- Its first run reported the symbol reachable because **the checker's own doc comment named it** as
+  the worked example. Comments and string literals must be blanked before matching — the failure mode
+  the check exists to catch, reproduced by the check itself on its first execution.
+- It has a real false-positive class: `CLAUDE_SEAT_PASSTHROUGH_ENV_VARS` is genuinely
+  defined-but-unreferenced in production, and legitimately so — it is documented as exported *only*
+  for an env-surface conformance test. Deliberate test-only exports need an explicit allowlist, or
+  the check will cry wolf on correct code.
+
+**The coverage findings below were verified directly against the graph and do not depend on this
+fixture.** They are the part of the run that survived.
+
+### Coverage — verified independently of Fixture A
 
 - **5 realizations for 56 propositions**; only 14 propositions (25%) have any `implements` edge.
 - **All 8 public `TC-*` trust claims have zero implementing realizations** — TC-003, 004, 005, 010,
   011, 012, 013, 014. These are the guarantees the public trust manifest *publishes*.
-- The 5 realizations that exist cover pipeline topology and review orchestration — the areas #616
-  set out to demote from durable intent — not the security mechanisms.
-
-**The test that should have caught this points the wrong way.** `shadow-assurance.test.ts` Q10 is
-*"every realization exists to implement or derive from a decision/proposition"* — it iterates
-realizations and asserts each has a purpose edge. A proposition with **zero** realizations passes
-trivially. The direction that matters for #625 is the inverse: which propositions — especially
-published `TC-*` ones — claim a guarantee with no mechanism linked, and does that mechanism appear on
-a live path?
+- The 5 realizations that exist cover pipeline topology and review orchestration — the areas #616 set
+  out to demote from durable intent — not the security mechanisms.
+- `shadow-assurance.test.ts` **Q10 points the wrong way**: it iterates realizations and asserts each
+  has a purpose edge, so a proposition with *zero* realizations passes trivially. The direction that
+  matters is the inverse — which propositions claim a guarantee with no mechanism linked.
 
 ### Fixture B — the #589 construction lesson
 
@@ -202,13 +216,20 @@ Three specific, cheap, testable changes — each falsifiable against these fixtu
    lacks is a caller. Existence checks pass; reachability checks fail. That distinction is the whole
    finding.
 
-### Correction to the earlier reading
+### What the run actually established
 
-On first seeing #625 I said it was "hard evidence for the graph" because per-PR review inspects a
-diff and cannot see reachability. The first half holds — #589's own 15 rolls missed it and #602's
-roll found it by accident of which diff was under review. The second half does not: **the graph in
-its current form would have missed it too**, for a different reason. The class of query is right; the
-instance has no data to run on.
+Fixture A's premise collapsed. Fixtures B and C, and the coverage numbers, stand:
 
-That is a better outcome than a confirmation would have been. It converts "should we invest in this?"
-into three concrete changes with a pass/fail fixture attached to each.
+1. **Invert the coverage test** to proposition → realization. It fails 8-for-8 on published `TC-*`
+   claims today, which is the point — a standing red flag instead of a silent pass.
+2. **Make `realization` a legal relation target** so construction rules can bind mechanisms. Without
+   it the most transferable lesson of the day cannot be written down at all.
+3. **Reachability over `codeEvidence`** is cheap and its instrument now exists, but its motivating
+   example evaporated. Treat it as unproven: worth having, not yet shown to catch anything the
+   ordinary process missed.
+
+And a methodological note worth more than any of the three: **the single confirmed error of the day
+was mine, produced by a truncated grep, and it survived a charter, two PR comments, and a written
+analysis before a mechanized check contradicted it.** Whatever else the assurance work is for, the
+case for deterministic structural queries over hand-read evidence got stronger — and the case for
+trusting a confident narrative summary, including this document's, got weaker.
