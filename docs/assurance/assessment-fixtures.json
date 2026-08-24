@@ -1,0 +1,307 @@
+{
+	"status": "experimental-shadow-only",
+	"note": "Retrodicted from real episodes with known outcomes. Records are what a worker would have authored; facts are what the harness observed; justifiedCommit is the outcome history established. Face-value reads the last record's verdict, as a free-form review comment is read.",
+	"fixtures": [
+		{
+			"id": "stale-grep-625",
+			"source": "#625 / #589 — a truncated grep on main produced a 'no caller' finding that the reachability instrument on the #589 tree disproved (review-gate-baseline.md, Fixture A)",
+			"facts": {
+				"subject": "pr#589",
+				"currentSha": "589-head",
+				"requiredSurfaces": ["seat-wiring"],
+				"observations": [
+					{ "id": "grep-main-head-limited", "sha": "main-tip", "available": true },
+					{ "id": "reachability-589", "sha": "589-head", "available": true }
+				],
+				"carriedBlockers": []
+			},
+			"policy": { "consequence": "consequential", "onContradiction": "retry-escalate" },
+			"records": [
+				{
+					"id": "A-reachability",
+					"binding": { "subject": "pr#589", "sha": "589-head" },
+					"provenance": { "runId": "r1", "step": "pr-verify", "attempt": 1, "seat": "verifier", "provider": "claude" },
+					"completeness": { "covered": ["seat-wiring"] },
+					"assessment": {
+						"proposition": "Claude-seat env narrowing is wired on the candidate",
+						"basis": ["reachability-589"],
+						"conclusion": { "verdict": "holds", "rationale": "spawnClaudeSeat narrows env at claude-seat.ts:614 and :671" }
+					}
+				},
+				{
+					"id": "B-grep-charter",
+					"binding": { "subject": "pr#589", "sha": "main-tip" },
+					"provenance": { "runId": "r0", "step": "charter", "attempt": 1, "seat": "author", "provider": "claude" },
+					"completeness": { "covered": ["seat-wiring"] },
+					"assessment": {
+						"proposition": "Claude-seat env narrowing is wired on the candidate",
+						"basis": ["grep-main-head-limited"],
+						"conclusion": { "verdict": "violated", "rationale": "buildClaudeSeatEnv has a definition, tests, and no caller" }
+					},
+					"summary": "TC-014 narrowing never executes; charter #625 opened"
+				}
+			],
+			"justifiedCommit": true
+		},
+		{
+			"id": "carried-blocker-silence-495",
+			"source": "#495 carry — a re-pushed SHA whose review is clean says nothing about the prior roll's blocker; silence is not refutation (CON-0008)",
+			"facts": {
+				"subject": "pr#599",
+				"currentSha": "599-r2",
+				"requiredSurfaces": ["review"],
+				"observations": [{ "id": "review-r2", "sha": "599-r2", "available": true }],
+				"carriedBlockers": [{ "id": "BLK-1", "proposition": "#554 env denial is not on the Claude path" }]
+			},
+			"policy": { "consequence": "consequential", "onContradiction": "withhold" },
+			"records": [
+				{
+					"id": "R2",
+					"binding": { "subject": "pr#599", "sha": "599-r2" },
+					"provenance": { "runId": "r2", "step": "pr-review", "attempt": 2, "seat": "reviewer", "provider": "codex" },
+					"completeness": { "covered": ["review"] },
+					"assessment": {
+						"proposition": "the candidate is safe to land",
+						"basis": ["review-r2"],
+						"conclusion": { "verdict": "holds", "rationale": "no findings on this diff" }
+					},
+					"summary": "all clean, ready to merge"
+				}
+			],
+			"justifiedCommit": false
+		},
+		{
+			"id": "carried-blocker-refuted-495",
+			"source": "#495 carry — the same shape with an explicit, complete refutation of the carried blocker; the harness has judged the carry valid",
+			"facts": {
+				"subject": "pr#599",
+				"currentSha": "599-r2",
+				"requiredSurfaces": ["review"],
+				"observations": [
+					{ "id": "review-r2", "sha": "599-r2", "available": true },
+					{ "id": "untouched-path-report", "sha": "599-r2", "available": true }
+				],
+				"carriedBlockers": [{ "id": "BLK-1", "proposition": "#554 env denial is not on the Claude path", "refutedBy": "REF" }]
+			},
+			"policy": { "consequence": "consequential", "onContradiction": "withhold" },
+			"records": [
+				{
+					"id": "REF",
+					"binding": { "subject": "pr#599", "sha": "599-r2" },
+					"provenance": { "runId": "r2", "step": "pr-verify", "attempt": 2, "seat": "verifier", "provider": "claude" },
+					"completeness": { "covered": ["review"] },
+					"assessment": {
+						"proposition": "#554 env denial is not on the Claude path",
+						"basis": ["untouched-path-report"],
+						"conclusion": { "verdict": "violated", "rationale": "the path is untouched since the complete report that refuted it" }
+					}
+				},
+				{
+					"id": "R2",
+					"binding": { "subject": "pr#599", "sha": "599-r2" },
+					"provenance": { "runId": "r2", "step": "pr-review", "attempt": 2, "seat": "reviewer", "provider": "codex" },
+					"completeness": { "covered": ["review"] },
+					"assessment": {
+						"proposition": "the candidate is safe to land",
+						"basis": ["review-r2"],
+						"conclusion": { "verdict": "holds" }
+					}
+				}
+			],
+			"justifiedCommit": true
+		},
+		{
+			"id": "false-chokepoint-435",
+			"source": "#435 — blockForeignRootWrite's derived-exclusivity chokepoint is a false guarantee for a cwd=MAIN_REPO step that never funnels through a claim (guarded-actions.md §8.2)",
+			"facts": {
+				"subject": "pr#435",
+				"currentSha": "435-head",
+				"requiredSurfaces": ["confinement"],
+				"observations": [{ "id": "unit-test-blockForeignRootWrite", "sha": "435-head", "available": true }],
+				"carriedBlockers": []
+			},
+			"policy": { "consequence": "consequential", "onContradiction": "withhold" },
+			"records": [
+				{
+					"id": "G",
+					"binding": { "subject": "pr#435", "sha": "435-head" },
+					"provenance": { "runId": "r1", "step": "pr-review", "attempt": 1, "seat": "reviewer", "provider": "grok" },
+					"completeness": { "covered": ["confinement"] },
+					"assessment": {
+						"proposition": "foreign-root writes are blocked for every pipeline step",
+						"basis": ["unit-test-blockForeignRootWrite"],
+						"conclusion": { "verdict": "holds", "rationale": "the guard rejects every denied root in its unit tests" },
+						"residual": [{ "statement": "steps that run with cwd=MAIN_REPO do not pass through the claim chokepoint the guard keys on", "resolvedBy": "path-funnel-test" }]
+					}
+				}
+			],
+			"justifiedCommit": false
+		},
+		{
+			"id": "unavailable-observation-555",
+			"source": "#555 — a GitHub 503 left mergeability UNKNOWN while the review record was green; the playbook rule is UNKNOWN = do not merge, then retry the specific read",
+			"facts": {
+				"subject": "pr#555",
+				"currentSha": "555-head",
+				"requiredSurfaces": ["review", "mergeable-state"],
+				"observations": [
+					{ "id": "gate-record-555", "sha": "555-head", "available": true },
+					{ "id": "mergeable-state", "sha": "555-head", "available": false }
+				],
+				"carriedBlockers": []
+			},
+			"policy": { "consequence": "consequential", "onContradiction": "withhold" },
+			"records": [
+				{
+					"id": "L",
+					"binding": { "subject": "pr#555", "sha": "555-head" },
+					"provenance": { "runId": "r1", "step": "ship", "attempt": 1, "seat": "lander", "provider": "harness" },
+					"completeness": { "covered": ["review"] },
+					"assessment": {
+						"proposition": "the candidate may be made authoritative",
+						"basis": ["gate-record-555"],
+						"conclusion": { "verdict": "holds", "rationale": "review=success on the candidate SHA" }
+					}
+				}
+			],
+			"recovery": {
+				"facts": {
+					"subject": "pr#555",
+					"currentSha": "555-head",
+					"requiredSurfaces": ["review", "mergeable-state"],
+					"observations": [
+						{ "id": "gate-record-555", "sha": "555-head", "available": true },
+						{ "id": "mergeable-state", "sha": "555-head", "available": true }
+					],
+					"carriedBlockers": []
+				},
+				"records": [
+					{
+						"id": "L2",
+						"binding": { "subject": "pr#555", "sha": "555-head" },
+						"provenance": { "runId": "r1", "step": "ship", "attempt": 2, "seat": "lander", "provider": "harness" },
+						"completeness": { "covered": ["review", "mergeable-state"] },
+						"assessment": {
+							"proposition": "the candidate may be made authoritative",
+							"basis": ["gate-record-555", "mergeable-state"],
+							"conclusion": { "verdict": "holds" }
+						}
+					}
+				],
+				"justifiedCommit": true
+			},
+			"justifiedCommit": false
+		},
+		{
+			"id": "label-vs-split-593",
+			"source": "#593 / #525 — 57 complete disagreement splits stamped breaker=invalid-pass; the typed adjudicator accepts ok=true agreement=disagreement, the legacy label says invalid",
+			"facts": {
+				"subject": "gate-record#553-r4",
+				"currentSha": "553-r4",
+				"requiredSurfaces": ["eligibility"],
+				"observations": [
+					{ "id": "agreement-disagreement-ok-true", "sha": "553-r4", "available": true },
+					{ "id": "breaker-invalid-pass-label", "sha": "553-r4", "available": true },
+					{ "id": "typed-eligibility-check", "sha": "553-r4", "available": false }
+				],
+				"carriedBlockers": []
+			},
+			"policy": { "consequence": "consequential", "onContradiction": "retry-escalate" },
+			"records": [
+				{
+					"id": "H",
+					"binding": { "subject": "gate-record#553-r4", "sha": "553-r4" },
+					"provenance": { "runId": "r4", "step": "pr-adjudicate", "attempt": 1, "seat": "adjudicator", "provider": "claude" },
+					"completeness": { "covered": ["eligibility"] },
+					"assessment": {
+						"proposition": "this gate record is eligible for typed adjudication",
+						"basis": ["agreement-disagreement-ok-true"],
+						"conclusion": { "verdict": "holds", "rationale": "ok=true with a structurally valid split" }
+					}
+				},
+				{
+					"id": "V",
+					"binding": { "subject": "gate-record#553-r4", "sha": "553-r4" },
+					"provenance": { "runId": "r4", "step": "pr-adjudicate", "attempt": 1, "seat": "adjudicator", "provider": "codex" },
+					"completeness": { "covered": ["eligibility"] },
+					"assessment": {
+						"proposition": "this gate record is eligible for typed adjudication",
+						"basis": ["breaker-invalid-pass-label"],
+						"conclusion": { "verdict": "violated", "rationale": "the breaker stamped it invalid-pass" },
+						"residual": [{ "statement": "unless the typed adjudicator accepts ok=true disagreement records regardless of the legacy breaker label", "resolvedBy": "typed-eligibility-check" }]
+					}
+				}
+			],
+			"recovery": {
+				"facts": {
+					"subject": "gate-record#553-r4",
+					"currentSha": "553-r4",
+					"requiredSurfaces": ["eligibility"],
+					"observations": [
+						{ "id": "agreement-disagreement-ok-true", "sha": "553-r4", "available": true },
+						{ "id": "breaker-invalid-pass-label", "sha": "553-r4", "available": true },
+						{ "id": "typed-eligibility-check", "sha": "553-r4", "available": true }
+					],
+					"carriedBlockers": []
+				},
+				"records": [
+					{
+						"id": "H",
+						"binding": { "subject": "gate-record#553-r4", "sha": "553-r4" },
+						"provenance": { "runId": "r4", "step": "pr-adjudicate", "attempt": 1, "seat": "adjudicator", "provider": "claude" },
+						"completeness": { "covered": ["eligibility"] },
+						"assessment": {
+							"proposition": "this gate record is eligible for typed adjudication",
+							"basis": ["agreement-disagreement-ok-true", "typed-eligibility-check"],
+							"conclusion": { "verdict": "holds" }
+						}
+					},
+					{
+						"id": "V",
+						"binding": { "subject": "gate-record#553-r4", "sha": "553-r4" },
+						"provenance": { "runId": "r4", "step": "pr-adjudicate", "attempt": 1, "seat": "adjudicator", "provider": "codex" },
+						"completeness": { "covered": ["eligibility"] },
+						"assessment": {
+							"proposition": "this gate record is eligible for typed adjudication",
+							"basis": ["breaker-invalid-pass-label"],
+							"conclusion": { "verdict": "violated" },
+							"residual": [{ "statement": "unless the typed adjudicator accepts ok=true disagreement records regardless of the legacy breaker label", "resolvedBy": "typed-eligibility-check" }]
+						}
+					}
+				],
+				"justifiedCommit": true
+			},
+			"justifiedCommit": true
+		},
+		{
+			"id": "ambiguous-charter-mediation",
+			"source": "charter-normalization-fixtures.json partial-mediation-subscription-capacity — the human added preferences and explicitly left the optimization policy open",
+			"facts": {
+				"subject": "charter#capacity",
+				"currentSha": "intake-1",
+				"requiredSurfaces": ["intake"],
+				"observations": [
+					{ "id": "raw-request", "sha": "intake-1", "available": true },
+					{ "id": "mediation-transcript", "sha": "intake-1", "available": true }
+				],
+				"carriedBlockers": []
+			},
+			"policy": { "consequence": "consequential", "onContradiction": "withhold" },
+			"records": [
+				{
+					"id": "N",
+					"binding": { "subject": "charter#capacity", "sha": "intake-1" },
+					"provenance": { "runId": "r1", "step": "charter", "attempt": 1, "seat": "normalizer", "provider": "claude" },
+					"completeness": { "covered": ["intake"] },
+					"assessment": {
+						"proposition": "adaptive concurrency scheduling is the admitted intent",
+						"basis": ["raw-request", "mediation-transcript"],
+						"conclusion": { "verdict": "undetermined", "rationale": "concurrency is a likely lever, not an admitted requirement" },
+						"residual": [{ "statement": "the exact optimization objective and reserve policy are not fixed — a human-value choice" }]
+					}
+				}
+			],
+			"justifiedCommit": false
+		}
+	]
+}
