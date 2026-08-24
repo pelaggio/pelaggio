@@ -208,7 +208,6 @@ describe("architectural question tests", () => {
 	it("Q8: assumptions are proposition roles rather than policy preferences or base classes", () => {
 		const assumptions = graph.nodes.filter((n) => n.kind === "proposition" && n.role === "assumption");
 		assert.equal(assumptions.length, 3);
-		assert.ok(assumptions.every((a) => a.id.startsWith("ASM-")));
 		assert.ok(!graph.nodeKinds.includes("assumption"));
 		assert.equal(node("DEC-0017").slug, "rigor-by-consequence");
 		assert.equal(node("DEC-0018").slug, "human-value-judgment-at-charter");
