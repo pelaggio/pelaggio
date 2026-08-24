@@ -100,4 +100,44 @@ describe("shadow charter intent normalization", () => {
     requirePhrase("the same normalized charter plus a candidate Goal layer");
     requirePhrase("whether Goal materially improves durable explanations beyond proposition-only semantics");
   });
+
+  it("keeps the reviewer contract a derived projection rather than new ontology", () => {
+    for (const field of ["change", "invariant?", "evidence[]"]) requirePhrase(field);
+    requirePhrase("projection, not a new assurance ontology and not another independently-authored form");
+    requirePhrase("normalized charter + admitted plan");
+    requirePhrase("not from a mechanism hypothesis at intake");
+    requirePhrase("task-local invariant does not automatically become a durable architectural proposition");
+    requirePhrase("reference/derive from that semantic identity rather than duplicate its wording as a second source of truth");
+  });
+
+  it("does not confuse requested review evidence with assessment authority", () => {
+    requirePhrase("evidence requirement or expected observation surface");
+    requirePhrase("It is not an Assessment conclusion");
+    requirePhrase("does not become positive authority merely because a reviewer or model says the check passed");
+  });
+
+  it("keeps review-contract invariants optional and includes a negative control", () => {
+    requirePhrase("no non-obvious invariant");
+    requirePhrase("should not manufacture one for symmetry or ceremony");
+    requirePhrase("Bump an ordinary dependency with no semantic contract change");
+    requirePhrase("material review does not require inventing an invariant for every diff");
+  });
+
+  it("exercises review-contract examples across semantic preservation shapes", () => {
+    for (const example of [
+      "Replace a cache implementation",
+      "Replace retry machinery",
+      "Refactor authorization middleware",
+      "Replace a persistence adapter",
+      "Rework landing/commit coordination",
+    ]) requirePhrase(example);
+
+    for (const invariant of [
+      "Concurrent misses for one key still cause only one upstream fetch",
+      "Retries must not duplicate externally visible side effects",
+      "Untrusted callers cannot gain authority through an alternate path",
+      "Committed state remains reconstructable across interruption/restart",
+      "The exact verified candidate is still the candidate made authoritative",
+    ]) requirePhrase(invariant);
+  });
 });
