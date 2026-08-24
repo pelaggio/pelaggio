@@ -98,7 +98,9 @@ describe("architectural question tests", () => {
     assert.equal(node("CLM-0016").role, "invariant");
     assert.equal(node("CTR-0001").kind, "realization");
     assert.equal(node("CTR-0002").kind, "realization");
-    assert.equal(node("DEC-0012").status, "historical-topology-under-reconsideration");
+    // The topology is a current construction choice, not durable intent: ADR-0022 is accepted and
+    // unamended, so the graph may not label it historical or under reconsideration without a source.
+    assert.equal(node("DEC-0012").status, "current-construction-choice");
     assert.deepEqual(outgoing("DEC-0012", "implements").map((e) => e.to), ["CLM-0016"]);
   });
 
@@ -128,12 +130,15 @@ describe("architectural question tests", () => {
     assert.match(node("CLM-0019").statement, /deterministic/i);
   });
 
-  it("Q5: public trust records are scoped propositions, not semantic aliases or a parallel class", () => {
-    for (const id of ["TC-003", "TC-004", "TC-005", "TC-010", "TC-011", "TC-012", "TC-013", "TC-014"]) {
-      assert.equal(node(id).kind, "proposition");
+  it("Q5: every trust-registry record is a scoped public proposition — enumerated from the registry, not the graph", () => {
+    const registry = [...claimAssuranceStatus().keys()];
+    assert.ok(registry.length >= 15, "expected the full trust-claims.yml registry");
+    for (const id of registry) {
+      assert.equal(node(id).kind, "proposition", `${id} is published in trust-claims.yml but absent from the graph`);
       assert.equal(node(id).role, "invariant");
       assert.equal(node(id).visibility, "public");
       assert.equal(node(id).externalId, id);
+      assert.equal(node(id).projection?.status, claimAssuranceStatus().get(id), `${id} projection status must mirror the registry`);
     }
     assert.ok(outgoing("TC-005", "projects").some((e) => e.to === "CLM-0008"));
     assert.equal(node("TC-005").projection.status, "best_effort");
@@ -204,11 +209,13 @@ describe("architectural question tests", () => {
 
   /**
    * `guarantee`-status claims that name no implementing realization TODAY. This list may only
-   * SHRINK: linking a claim removes it, and a NEW unlinked guarantee fails. It starts at 6 — every
-   * unconditional guarantee the public trust manifest publishes currently names no mechanism in this
-   * graph — held as a standing red flag rather than a silent pass.
+   * SHRINK: linking a claim removes it, and a NEW unlinked guarantee fails. History: it started at 6
+   * over the eight claims the graph then carried; enumerating the full registry (Q5) added four
+   * guarantees and naming the mechanisms that exist (CTR-0006..0010) left these three — held as a
+   * standing red flag rather than a silent pass. TC-002 is an absence claim with no mechanism to
+   * name; TC-003 and TC-017 are real gaps.
    */
-  const GUARANTEES_WITHOUT_REALIZATION = ["TC-003", "TC-004", "TC-010", "TC-011", "TC-012", "TC-014"];
+  const GUARANTEES_WITHOUT_REALIZATION = ["TC-002", "TC-003", "TC-017"];
 
   it("Q14: a published GUARANTEE names the mechanism that implements it", () => {
     const status = claimAssuranceStatus();
@@ -232,7 +239,8 @@ describe("architectural question tests", () => {
     assert.ok(checked > 0, "no guarantee-status claims were checked — the status parse is broken");
     // Q10 checks realization -> purpose; a proposition with ZERO realizations passes it trivially.
     // This is the inverse direction, and the ratchet is the part that must not regress.
-    assert.ok(GUARANTEES_WITHOUT_REALIZATION.length <= 6, "the unlinked-guarantee baseline may only shrink");
+    assert.ok(GUARANTEES_WITHOUT_REALIZATION.length <= 3, "the unlinked-guarantee baseline may only shrink");
+    assert.equal(checked, [...status.values()].filter((v) => v === "guarantee").length, "every registry guarantee was checked, not only the ones the graph happened to carry");
   });
 
   it("Q15: a construction rule can bind a mechanism, not only intent", () => {
