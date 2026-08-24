@@ -275,7 +275,7 @@
 		},
 		{
 			"id": "ambiguous-charter-mediation",
-			"source": "a mediated subscription-capacity intake: the human supplied campaign-completion, reserve, and throughput-vs-efficiency preferences and explicitly left the optimization policy open (the stacked charter-normalization slice carries it as a fixture)",
+			"source": "a mediated subscription-capacity intake: the human supplied campaign-completion, reserve, and throughput-vs-efficiency preferences and explicitly left the optimization policy open (stacked slice #623 carries it as a fixture)",
 			"facts": {
 				"subject": "charter#capacity",
 				"currentSha": "intake-1",
