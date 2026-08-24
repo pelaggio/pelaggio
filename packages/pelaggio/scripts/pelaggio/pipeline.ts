@@ -105,10 +105,11 @@ import {
 	verifyShipLanded,
 } from "./helpers.js";
 import { type NotifyConfig, notifyCycle, notifyDecision as notifyDecisionEvent, notifyStrandedReview, sendNotification as sendNotificationDefault } from "./notify.js";
-import { buildFailClosedComment, type PrReviewGateResult, runPrReviewGate } from "./pr-review-cli.js";
+import { buildFailClosedComment, type PrReviewGateResult, resolveCarryOptions, runPrReviewGate } from "./pr-review-cli.js";
 import { gateRecordsDir, type NewPrReviewGateRecord, writePrReviewGateRecord } from "./pr-review-gate-record.js";
 import { capabilityMapFrom, detectUnattendedSignals, resolveAuthoringReviewConfig, resolveAuthoringReviewExecution } from "./provider-routing.js";
 import { adjudicationSourcesDir, fleetRecordDigestOf, writeAdjudicationSourceRecord } from "./review/adjudication.js";
+import { prFindingDispositionsDir, writePrFindingDispositionRecord } from "./review/carry.js";
 import { runReviewLoop } from "./review/loop.js";
 import { type ReviewRecord, renderReviewRecord, writeReviewRecord } from "./review/record.js";
 import { cleanupAuthoringReviewSeatsForSha, isAuthoringReviewSeatPath, prepareAuthoringReviewSeat } from "./review/seats.js";
@@ -2582,6 +2583,9 @@ export interface OrchestratorDeps {
 		writeGateRecord: typeof writePrReviewGateRecord;
 		adjudicationSourcesRoot: string;
 		writeAdjudicationSource: typeof writeAdjudicationSourceRecord;
+		dispositionsRoot: string;
+		writeDispositionRecord: typeof writePrFindingDispositionRecord;
+		resolveCarry: typeof resolveCarryOptions;
 	}>;
 	/**
 	 * Continuous-mode free queue probe (issue #82). Defaults to `listItems` + FlowPolicy
@@ -3469,6 +3473,11 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			writeGateRecord: writePrReviewGateRecord,
 			adjudicationSourcesRoot: hermeticQueueRoot(() => adjudicationSourcesDir(mainWorktree(REPO)), "adjudication-sources"),
 			writeAdjudicationSource: writeAdjudicationSourceRecord,
+			dispositionsRoot: hermeticQueueRoot(() => prFindingDispositionsDir(mainWorktree(REPO)), "finding-dispositions"),
+			// Not guarded: reads/writes only `dispositionsRoot` + `gateRecordsRoot` (hermetic by
+			// default above); with an empty store it returns before any git call.
+			writeDispositionRecord: writePrFindingDispositionRecord,
+			resolveCarry: resolveCarryOptions,
 			...deps.review,
 		};
 		const shipIsPr = shipTargetName === "pull-request" || shipTargetName === "auto-merge-pr";
@@ -3612,6 +3621,23 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				try {
 					const prepared = review.prepareReviewHead(REPO, pr);
 					if (!prepared) throw new Error("could not prepare PR head for local review");
+					// #495: cross-push carry — prior selection, interdiff, and eligibility resolve
+					// deterministically before the gate; any predicate failure runs cold with a warning.
+					const carry = review.policy.carry
+						? review.resolveCarry({
+								prNumber: pr.prNumber,
+								itemId: pr.itemId,
+								reviewedSha: pr.headSha,
+								repo: REPO,
+								diffCwd: prepared.diffCwd,
+								dispositionsRoot: review.dispositionsRoot,
+								gateRecordsRoot: review.gateRecordsRoot,
+								execFileSync,
+								readFileSync,
+								taxonomy: review.policy.taxonomy,
+								warn: (msg) => console.warn(`review ${pr.itemId}#${pr.prNumber} — ${msg}`),
+							})
+						: undefined;
 					const result = await review.runReviewGate({
 						pr: String(pr.prNumber),
 						itemId: pr.itemId,
@@ -3623,6 +3649,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						reviewedSha: pr.headSha,
 						policy: review.policy,
 						parkSignal, // shared: a rate-limit park sets this and flows into the wait+retry policy
+						...(carry ? { carry } : {}),
 					});
 					if (result.gate === "park") {
 						// Transient: leave the pending status as-is (do NOT upsert findings or post failure),
@@ -3728,6 +3755,33 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					} catch (e) {
 						const msg = e instanceof Error ? e.message : String(e);
 						console.warn(`review ${pr.itemId}#${pr.prNumber} — could not persist adjudication source: ${msg}`);
+					}
+				}
+				// #495: cross-push disposition record, next to the fleet record + sidecar. Written on
+				// pass AND block (a pass record keeps the refutation memory); best-effort — a failure
+				// warns and only ever means the next run on this PR reviews cold.
+				const dispositionDraft = gateResult?.dispositionDraft;
+				if (
+					fleetPath &&
+					dispositionDraft &&
+					gateRecord.producer === "fleet" &&
+					dispositionDraft.headSha === pr.headSha.toLowerCase() &&
+					dispositionDraft.prNumber === gateRecord.prNumber &&
+					dispositionDraft.itemId === gateRecord.itemId &&
+					dispositionDraft.gate === gateRecord.gate &&
+					dispositionDraft.agreement === gateRecord.agreement &&
+					dispositionDraft.ok === gateRecord.ok
+				) {
+					try {
+						const fleetBytes = readFileSync(fleetPath);
+						review.writeDispositionRecord(review.dispositionsRoot, {
+							...dispositionDraft,
+							fleetRecordDigest: fleetRecordDigestOf(fleetBytes),
+							reviewedAt: gateRecord.reviewedAt,
+						});
+					} catch (e) {
+						const msg = e instanceof Error ? e.message : String(e);
+						console.warn(`review ${pr.itemId}#${pr.prNumber} — could not persist finding dispositions: ${msg}`);
 					}
 				}
 				upsertReviewComment(review.gh, review.ghRepo, pr.prNumber, body);

@@ -74,6 +74,10 @@ revise:                         # local revise sweep — auto-fix red-review PRs
 review:                         # PR review poster (issue #84)
   runner: ci                    # default: ci. values: ci | local
   statusless-after: 2h          # local-mode diagnostic threshold
+  carry: false                  # default: false (canary-off). Cross-push finding-disposition
+                                # carry (#495); records are written either way. Enable only when
+                                # the store-trust prerequisite holds for every local review
+                                # provider — see docs/pr-review.md "Cross-push carry"
   authoring:                    # opt-in pre-ship adversarial loop
     enabled: off                # off | local | keys; local permits subscription auth
                                 # checkouts under .dev/authoring-review-seats/ (#269)
@@ -847,6 +851,7 @@ the same command, so it is intentionally not looped.
 | `review.max-passes` | `1` | Independent review iterations, integer `1..3`. One preserves the safe rollout/current behavior. |
 | `review.budget-cap` | `20` | Positive finite aggregate dollar cap. A full required iteration is reserved before it starts. |
 | `review.provider-diversity` | `off` | `off`, `prefer`, or `require`; `require` blocks before agent work unless **at least one** review driver differs from the scalar verifier provider. |
+| `review.carry` | `false` | Cross-push finding-disposition carry (#495): a local re-review of a re-pushed PR seeds from the prior head's validated disposition record and narrows discovery to the interdiff (auto-refutation exists but is dormant under the default taxonomy — production findings all classify safety-tier). The carry stores are authorization inputs, so carry only *consumes* evidence when every provider in the **current** run's pool has a proven store-write denial (`claude`, `codex`); a pool with any store-writable provider (`grok`, `opencode`, unknowns) runs cold. Two residuals keep it default-**off**: the current-pool gate carries no producer-pool provenance, so a poisoned pre-enablement prior stays consumable until discarded (a #605 precondition), and the denial's completeness rests on #511 (the Bash register denial is textual, #510). Records are written while off, so enabling later has priors. See `docs/pr-review.md` → "Cross-push carry". |
 
 Local mode is only active in normal auto-pick runs for github-issues roadmaps and PR
 ship targets. Configure the model provider through the existing non-pipeline

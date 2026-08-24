@@ -331,6 +331,19 @@ describe("blockForeignRootWrite (#369 / #269 nested seats)", () => {
 		assert.equal(writeOut.decision, "block");
 		assert.match(String(writeOut.reason), /evidence store/);
 	});
+
+	it("blocks Bash mention and Write/Edit of the finding-disposition store (#495 forge path)", () => {
+		// A forged disposition record would let carry auto-refute a real finding on the next push.
+		const bashOut = blockForeignRootWrite(bash(`printf '{}' > ${main}/.dev/pr-review-finding-dispositions/495-${"a".repeat(40)}.json`), sibling, main, registered, sibling);
+		assert.equal(bashOut.decision, "block");
+		assert.match(String(bashOut.reason), /harness-owned register/);
+		assert.equal(blockForeignRootWrite(bash("rm -rf .dev/pr-review-finding-dispositions"), sibling, main, registered, sibling).decision, "block");
+		const writeOut = blockForeignRootWrite(write(`${main}/.dev/pr-review-finding-dispositions/495-${"a".repeat(40)}.json`), main, main, registered, sibling);
+		assert.equal(writeOut.decision, "block");
+		assert.match(String(writeOut.reason), /evidence store/);
+		const editOut = blockForeignRootWrite(edit(".dev/pr-review-finding-dispositions/495-abc.json"), main, main, registered);
+		assert.equal(editOut.decision, "block");
+	});
 });
 
 describe("getProvider — registry + guard", () => {
