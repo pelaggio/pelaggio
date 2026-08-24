@@ -843,6 +843,12 @@ describe("buildClaudeSeatEnv", () => {
 			GIT_ASKPASS: "/tmp/attacker/askpass.sh",
 			SSH_ASKPASS: "/tmp/attacker/ssh-askpass.sh",
 			GIT_SSH_COMMAND: "ssh -o StrictHostKeyChecking=no",
+			// GIT_CONFIG_PARAMETERS is git's SERIALIZED `-c` channel: one variable carrying the same
+			// override the indexed GIT_CONFIG_KEY_<n>/VALUE_<n> pair does, so omitting it left an
+			// allowlistable path back to forge write authority.
+			GIT_CONFIG_PARAMETERS: "'http.https://github.com/.extraheader=Authorization: Basic ZXZpbC10b2tlbg=='",
+			GIT_SSH: "/tmp/attacker/ssh",
+			GIT_PROXY_COMMAND: "/tmp/attacker/proxy.sh",
 			GIT_CREDENTIAL_HELPER: "store",
 		} as const;
 		const gitAuthSource = sdkShapedEnv({ ...gitAuthVars });
@@ -863,7 +869,13 @@ describe("buildClaudeSeatEnv", () => {
 		assert.equal(isGitAuthChannelVar("GIT_CONFIG_VALUE_12"), true);
 		assert.equal(isGitAuthChannelVar("GIT_CONFIG_COUNT"), true);
 		assert.equal(isGitAuthChannelVar("GIT_ASKPASS"), true);
+		assert.equal(isGitAuthChannelVar("GIT_CONFIG_PARAMETERS"), true);
+		assert.equal(isGitAuthChannelVar("GIT_SSH"), true);
+		assert.equal(isGitAuthChannelVar("GIT_PROXY_COMMAND"), true);
 		assert.equal(isGitAuthChannelVar("GIT_AUTHOR_NAME"), false);
+		// No false fire: ordinary git identity/behaviour vars stay forwardable.
+		assert.equal(isGitAuthChannelVar("GIT_COMMITTER_EMAIL"), false);
+		assert.equal(isGitAuthChannelVar("GIT_PAGER"), false);
 		assert.equal(isGitAuthChannelVar("GITHUB_TOKEN"), false);
 	});
 });

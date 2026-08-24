@@ -7,7 +7,7 @@ import { buildClaudeSeatEnv } from "../claude-seat.js";
 import { DEFAULTS, type ReviewConfig, type StepSettings } from "../config.js";
 import { escapeMarkdown } from "../helpers.js";
 import { main as adjudicateMain, type PrAdjudicateDeps } from "../pr-adjudicate-cli.js";
-import { forgeTokenForHost, gitRemoteHost, isTrustedFetchHost, main, reviewedHeadFetchAuthEnv, runPrReviewGate, setPrReviewDepsForTests } from "../pr-review-cli.js";
+import { forgeTokenForHost, gitRemoteHost, isTrustedFetchHost, main, reviewedFetchRemote, reviewedHeadFetchAuthEnv, runPrReviewGate, setPrReviewDepsForTests } from "../pr-review-cli.js";
 import { listPrReviewGateRecords, readPrReviewGateRecord, writePrReviewGateRecord } from "../pr-review-gate-record.js";
 import { isEligibleFleetGateRecord, readAdjudicationSourceRecord } from "../review/adjudication.js";
 import { reviewFindingFingerprint } from "../review/findings.js";
@@ -157,6 +157,8 @@ async function runCli(
 		ci?: boolean;
 		env?: NodeJS.ProcessEnv;
 		originUrl?: string;
+		/** Pin what `ls-remote --get-url` resolves to, i.e. an `insteadOf` rewrite in `.git/config`. */
+		insteadOfUrl?: string;
 		emitEvents?: StepEvent[];
 	} = {},
 ): Promise<{
@@ -181,7 +183,9 @@ async function runCli(
 	const gateRecordsRoot = join(tmpRoot("pr-review-cli-evidence-"), "gates");
 	const adjudicationSourcesRoot = join(tmpRoot("pr-review-cli-evidence-"), "sources");
 	const execFileSync = ((cmd: string, args: readonly string[], options?: { env?: NodeJS.ProcessEnv }) => {
-		execCalls.push({ cmd, args: [...args], ...(options?.env ? { env: options.env } : {}) });
+		// Snapshot the env: a real spawn copies it, so a later mutation of the caller's object must
+		// not retroactively change what this invocation is recorded as having received.
+		execCalls.push({ cmd, args: [...args], ...(options?.env ? { env: { ...options.env } } : {}) });
 		const a = args.join(" ");
 		// resolveReviewedHead pins the PR head sha + claim branch via gh, then fetches — independent
 		// of the diff, so it must resolve even when the diff inspection is being made to fail.
@@ -190,10 +194,12 @@ async function runCli(
 			return `${JSON.stringify({ sha: REVIEWED_SHA, ref: opts.headRef ?? "feat/issue-123-fix" })}\n`;
 		}
 		assert.equal(cmd, "git");
-		// Host resolution for the fetch credential: runs only when a candidate token exists.
+		// Origin is only a candidate HOST for reviewedFetchRemote — never the fetch destination.
 		if (a === "remote get-url origin") return `${opts.originUrl ?? "git@github.com:pelaggio/pelaggio.git"}\n`;
+		// Offline `insteadOf` resolution: echo the URL back unless a test pins a rewrite.
+		if (a.startsWith("ls-remote --get-url ")) return `${opts.insteadOfUrl ?? a.slice("ls-remote --get-url ".length)}\n`;
 		// The fetch child is hardened: `-c credential.helper=` prefixes the subcommand.
-		if (a.endsWith("fetch --quiet origin main pull/123/head")) {
+		if (a.includes("fetch --quiet ")) {
 			if (opts.fetchError) throw opts.fetchError;
 			return "";
 		}
@@ -282,7 +288,9 @@ describe("pr-review CLI aggregation", () => {
 		assert.ok(fetchCall, "the pinned-head fetch must run");
 		// The argv carries NO credential material (only the credential-helper disable); the
 		// credential rides the child ENV. execFileSync embeds argv in Error.message and /proc.
-		assert.deepEqual(fetchCall.args, ["-c", "credential.helper=", "fetch", "--quiet", "origin", "main", "pull/123/head"]);
+		// Destination is the TRUSTED https URL built from ghRepo + host, not the `origin` remote name,
+		// and the refspecs are explicit because a URL carries no configured fetch refspec.
+		assert.deepEqual(fetchCall.args, ["-c", "credential.helper=", "fetch", "--quiet", "https://github.com/pelaggio/pelaggio.git", "+refs/heads/main:refs/remotes/origin/main", "+refs/pull/123/head:refs/pull/123/head"]);
 		assert.ok(fetchCall.env, "the fetch invocation must carry a dedicated child env");
 		assert.equal(fetchCall.env.GIT_CONFIG_COUNT, "1");
 		assert.equal(fetchCall.env.GIT_CONFIG_KEY_0, "http.https://github.com/.extraheader");
@@ -322,12 +330,15 @@ describe("pr-review CLI aggregation", () => {
 		const bareFetch = bare.execCalls.find((call) => call.cmd === "git" && call.args.includes("fetch"));
 		// No token → no extraheader, but the child is STILL hardened (credential-helper disabled,
 		// prompts refused, tokens stripped) so a rewritten origin cannot coax any credential.
-		assert.deepEqual(bareFetch?.args, ["-c", "credential.helper=", "fetch", "--quiet", "origin", "main", "pull/123/head"]);
+		// No token → the operator's own ssh scheme is preserved (a `gh auth login` repo keeps working),
+		// but the destination is still rebuilt from trusted config rather than taken from `origin`.
+		assert.deepEqual(bareFetch?.args, ["-c", "credential.helper=", "fetch", "--quiet", "git@github.com:pelaggio/pelaggio.git", "+refs/heads/main:refs/remotes/origin/main", "+refs/pull/123/head:refs/pull/123/head"]);
 		assert.equal(bareFetch?.env?.GIT_CONFIG_COUNT, undefined, "no extraheader without a token");
 		assert.equal(bareFetch?.env?.GIT_TERMINAL_PROMPT, "0");
+		// origin is now always read — as a candidate HOST for reviewedFetchRemote, never as the destination.
 		assert.equal(
 			bare.execCalls.some((call) => call.args.join(" ") === "remote get-url origin"),
-			false,
+			true,
 		);
 		assert.equal(reviewedHeadFetchAuthEnv({}, "github.com"), undefined);
 	});
@@ -504,8 +515,70 @@ describe("pr-review CLI aggregation", () => {
 		assert.equal(isTrustedFetchHost("evil.ghe.com", { GH_HOST: "tenant.ghe.com", GH_TOKEN: "ghp_dotcom_token_value" }), false);
 		const evilTenant = await runCli({ originUrl: "https://evil.ghe.com/pelaggio/pelaggio.git", env: { GH_HOST: "tenant.ghe.com", GH_TOKEN: "ghp_dotcom_token_value" } });
 		const evilTenantFetch = evilTenant.execCalls.find((c) => c.cmd === "git" && c.args.includes("fetch"));
-		assert.equal(evilTenantFetch?.env?.GIT_CONFIG_COUNT, undefined, "an unconfigured ghe.com tenant is not trusted — no extraheader");
+		// The untrusted tenant does not merely lose the token — it never becomes the destination at
+		// all. The fetch falls back to the CONFIGURED host, where the token legitimately applies.
+		assert.equal(evilTenantFetch?.args.includes("https://evil.ghe.com/pelaggio/pelaggio.git"), false, "the rewritten tenant is never fetched");
+		assert.ok(evilTenantFetch?.args.includes("https://tenant.ghe.com/pelaggio/pelaggio.git"), "the configured tenant is fetched instead");
+		assert.equal(evilTenantFetch?.env?.GIT_CONFIG_KEY_0, "http.https://tenant.ghe.com/.extraheader", "auth is scoped to the configured tenant, never the rewritten one");
 		assert.equal("GH_TOKEN" in (evilTenantFetch?.env ?? {}), false, "the ambient token is stripped");
+	});
+
+	it("derives the reviewed-head fetch destination from trusted config, never from a rewritten origin (#554)", async () => {
+		const GHE = { GH_HOST: "ghe.example.com", GH_ENTERPRISE_TOKEN: "ghe_enterprise_token_val" };
+		// A seat that rewrites `.git/config` origin cannot move the destination: the host falls back
+		// to the CONFIGURED one, and the path always comes from ghRepo.
+		assert.deepEqual(reviewedFetchRemote("https://evil.example.com/o/r.git", "pelaggio/pelaggio", { GH_TOKEN: "t" }), {
+			url: "https://github.com/pelaggio/pelaggio.git",
+			host: "github.com",
+		});
+		assert.deepEqual(reviewedFetchRemote("git@evil.example.com:o/r.git", "pelaggio/pelaggio", GHE), {
+			url: "https://ghe.example.com/pelaggio/pelaggio.git",
+			host: "ghe.example.com",
+		});
+		// No origin at all (the `remote get-url` throw path) still resolves to configured config.
+		assert.equal(reviewedFetchRemote("", "pelaggio/pelaggio", {}).url, "https://github.com/pelaggio/pelaggio.git");
+		// NOT a refusal of the work: a trusted origin keeps its own host, and without a token the
+		// operator's ssh scheme survives so a `gh auth login` repo fetches on the agent socket.
+		assert.deepEqual(reviewedFetchRemote("git@github.com:pelaggio/pelaggio.git", "pelaggio/pelaggio", {}), {
+			url: "git@github.com:pelaggio/pelaggio.git",
+			host: "github.com",
+		});
+		// A token means https, so the host-scoped extraheader actually applies.
+		assert.deepEqual(reviewedFetchRemote("git@github.com:pelaggio/pelaggio.git", "pelaggio/pelaggio", { GH_TOKEN: "t" }).url, "https://github.com/pelaggio/pelaggio.git");
+		// A trusted enterprise origin on a non-default port keeps the port, and scp-like syntax
+		// cannot carry one — so the ssh fallback switches to ssh:// rather than emitting a bad URL.
+		assert.deepEqual(reviewedFetchRemote("ssh://git@ghe.example.com:8443/o/r.git", "pelaggio/pelaggio", { GH_HOST: "ghe.example.com:8443" }), {
+			url: "ssh://git@ghe.example.com:8443/pelaggio/pelaggio.git",
+			host: "ghe.example.com:8443",
+		});
+		// End to end: the rewritten origin never reaches the fetch argv, and the ambient enterprise
+		// token is not disclosed to it.
+		const out = await runCli({ originUrl: "https://evil.example.com/pelaggio/pelaggio.git", env: GHE });
+		const fetchCall = out.execCalls.find((call) => call.cmd === "git" && call.args.includes("fetch"));
+		assert.equal(fetchCall?.args.includes("https://evil.example.com/pelaggio/pelaggio.git"), false, "the rewritten origin must never be fetched");
+		assert.ok(fetchCall?.args.includes("https://ghe.example.com/pelaggio/pelaggio.git"), "the configured host is fetched instead");
+		assert.equal(fetchCall?.env?.GIT_CONFIG_KEY_0, "http.https://ghe.example.com/.extraheader", "auth is scoped to the trusted host");
+	});
+
+	it("refuses the reviewed-head fetch when local git config redirects the trusted remote (#554)", async () => {
+		// `url.<base>.insteadOf` lives in the SEAT-WRITABLE `.git/config` and rewrites a command-line
+		// URL, so a trusted URL alone is not enough — resolution is checked before the fetch runs.
+		const redirected = await runCli({ env: { GH_TOKEN: "ghs_ci_job_token_value" }, insteadOfUrl: "https://evil.example.com/pelaggio/pelaggio.git" });
+		assert.equal(
+			redirected.execCalls.some((call) => call.cmd === "git" && call.args.includes("fetch")),
+			false,
+			"the fetch must not run once the resolved destination leaves the trusted host",
+		);
+		// Fail closed: resolution failure posts NO required status, which leaves the PR blocked.
+		assert.deepEqual(redirected.statuses, []);
+		assert.equal(redirected.stdout.includes("ghs_ci_job_token_value"), false, "the token never surfaces");
+		// No false fire: an insteadOf rewrite that stays on the trusted host proceeds normally.
+		const benign = await runCli({ env: { GH_TOKEN: "ghs_ci_job_token_value" }, insteadOfUrl: "https://github.com/pelaggio/pelaggio.git" });
+		assert.equal(benign.code, 0);
+		assert.ok(
+			benign.execCalls.some((call) => call.cmd === "git" && call.args.includes("fetch")),
+			"a trusted rewrite still fetches",
+		);
 	});
 
 	it("preserves a non-default origin port in the parsed host and the extraheader key (#554)", async () => {

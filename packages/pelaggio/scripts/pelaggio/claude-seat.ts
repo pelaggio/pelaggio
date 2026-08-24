@@ -168,15 +168,29 @@ const FORGE_REMOTE_VARS = ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "G
  * Git-NATIVE auth/config channels that grant equivalent forge WRITE authority even without a
  * `GH_*` token: an injected `http.<host>.extraheader = Authorization: …` (GIT_CONFIG_COUNT +
  * GIT_CONFIG_KEY_<n>/GIT_CONFIG_VALUE_<n>), an attacker-pointed config file
- * (GIT_CONFIG/GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM), or a credential callback
- * (GIT_ASKPASS/SSH_ASKPASS/GIT_SSH_COMMAND/GIT_CREDENTIAL_HELPER). Denied to non-forge roles in
+ * (GIT_CONFIG/GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM), the SERIALIZED `-c` channel that carries the
+ * same override in one variable (GIT_CONFIG_PARAMETERS), or a credential callback
+ * (GIT_ASKPASS/SSH_ASKPASS/GIT_SSH/GIT_SSH_COMMAND/GIT_PROXY_COMMAND/GIT_CREDENTIAL_HELPER).
+ * Denied to non-forge roles in
  * the SAME deny-by-default spirit as FORGE_REMOTE_VARS (#554) — otherwise `security.env-allowlist`
  * could re-open forge write authority to a denied seat. The harness's OWN authenticated fetch is
  * unaffected: reviewedHeadFetchAuthEnv sets GIT_CONFIG_COUNT/KEY_0/VALUE_0 directly on the
  * pr-review CLI's fetch child, never via a seat's inherited allowlist. GIT_CONFIG_KEY_<n>/VALUE_<n>
  * are indexed, so they are matched by PREFIX (not exact name).
  */
-const GIT_AUTH_CHANNEL_VARS = ["GIT_CONFIG_COUNT", "GIT_CONFIG", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_ASKPASS", "SSH_ASKPASS", "GIT_SSH_COMMAND", "GIT_CREDENTIAL_HELPER"] as const;
+const GIT_AUTH_CHANNEL_VARS = [
+	"GIT_CONFIG_COUNT",
+	"GIT_CONFIG",
+	"GIT_CONFIG_GLOBAL",
+	"GIT_CONFIG_SYSTEM",
+	"GIT_CONFIG_PARAMETERS",
+	"GIT_ASKPASS",
+	"SSH_ASKPASS",
+	"GIT_SSH",
+	"GIT_SSH_COMMAND",
+	"GIT_PROXY_COMMAND",
+	"GIT_CREDENTIAL_HELPER",
+] as const;
 const GIT_AUTH_CHANNEL_PREFIXES = ["GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"] as const;
 
 /** True for a git-native auth/config channel var (exact name or an indexed GIT_CONFIG_KEY_/VALUE_). */
