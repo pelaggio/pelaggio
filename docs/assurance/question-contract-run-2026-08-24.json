@@ -11,20 +11,34 @@
 	"judge": "realizationAsIntent counts must-survive items that name a concrete mechanism (CAS push, --force-with-lease, worktree, parkExit, codegen/verify interleave, seat configuration) rather than a property; judged by the session author, not a model — a known limitation.",
 	"aggregate": {
 		"graph": {
-			"tokens": 29135.6,
-			"filesRead": 5,
-			"toolUses": 6.1,
-			"seconds": 56,
+			"questions": "Q-a, Q-b, Q-c (arm 2 vs arm 1); Q-d excluded",
+			"tokens": 27028.3,
+			"filesRead": 4.5,
+			"toolUses": 5.7,
+			"seconds": 55,
 			"mustSurviveItems": 7.3,
 			"realizationAsIntentShare": 0.07
 		},
 		"raw": {
-			"tokens": 45390.8,
-			"filesRead": 11.3,
-			"toolUses": 11.1,
-			"seconds": 89,
+			"questions": "Q-a, Q-b, Q-c (arm 2 vs arm 1); Q-d excluded",
+			"tokens": 42437,
+			"filesRead": 8,
+			"toolUses": 10,
+			"seconds": 80,
 			"mustSurviveItems": 12.8,
 			"realizationAsIntentShare": 0.3
+		},
+		"Q-d (ad hoc, reported separately)": {
+			"graph": {
+				"tokens": 35457.5,
+				"filesRead": 6.5,
+				"seconds": 60
+			},
+			"raw": {
+				"tokens": 54252,
+				"filesRead": 21,
+				"seconds": 115
+			}
 		}
 	},
 	"crossModelConsistency": {
@@ -758,12 +772,40 @@
 			"DEC-0015",
 			"DEC-0016"
 		],
-		"Q-d": "all 20 decision nodes with outgoing edges"
+		"Q-d": {
+			"note": "NOT a named view: an ad-hoc premise set of every decision node (20 at commit 0d64a4c; 19 of them had outgoing edges — DEC-0018 had none) with each node's status, statement, sources and outgoing edges. Q-d is therefore outside arm 2 and excluded from the arm-2 aggregate.",
+			"ids": [
+				"DEC-0001",
+				"DEC-0002",
+				"DEC-0003",
+				"DEC-0004",
+				"DEC-0005",
+				"DEC-0006",
+				"DEC-0007",
+				"DEC-0008",
+				"DEC-0009",
+				"DEC-0010",
+				"DEC-0011",
+				"DEC-0012",
+				"DEC-0013",
+				"DEC-0014",
+				"DEC-0015",
+				"DEC-0016",
+				"DEC-0017",
+				"DEC-0018",
+				"DEC-0019",
+				"DEC-0020"
+			]
+		}
 	},
 	"confounds": [
 		"the matching view (affected/review/landing/all-decisions) was selected by the experimenter, not by a model normalizing the question — that is the probabilistic half the contract leaves outside the deterministic seam, and its cost is not in the table",
 		"graph Jaccard is over the node ids bracketed in items, which is a smaller set than the item count (an item may cite two ids; two items may cite one); raw Jaccard is over concepts hand-mapped by the experimenter",
-		"the experimenter judged realizationAsIntent for both conditions after seeing which condition produced each answer"
+		"the experimenter judged realizationAsIntent for both conditions after seeing which condition produced each answer",
+		"no recall measure: fewer must-survive items under the graph condition may be tighter boundedness or intent the bounded premise set omitted — represented-fact completeness was not scored",
+		"graph Jaccard is over a closed, experimenter-supplied id set; raw Jaccard over open-ended hand-mapped concepts — the units differ and the comparison is biased toward the graph condition",
+		"the reconciled Q-a agreement (1.00) is obtained by dropping DEC-0012, whose double classification traces to the unsourced status this run itself exposed",
+		"Q-b is challenge-shaped (a defeater of ASM-0002), not recover-shaped; no family was invoked in any run"
 	],
 	"rawConceptMapping": {
 		"Q-a": {
@@ -822,5 +864,8 @@
 			"DEC-0014 (cited on must-survive items as the decision that implements the invariant, and on may-change items as the decision that may change)"
 		],
 		"note": "a bracketed id is a citation, not a classification; where an id appears on both sides the item text on the must-survive side names an invariant and the id is its implementing decision or governing constraint. Reconciled Jaccard drops those ids from the must-survive set."
+	},
+	"qcWhatTheGraphRepliesActuallyMoved": {
+		"Q-c": "both raw replicas list CAS fence, --force-with-lease, ancestry check and isolated worktree as must-survive. Both graph replicas place the CAS implementation (DEC-0015) and the ordering layer under may-change; neither mentions the ancestry check or the isolated worktree at all — those are not in the landing view's premises."
 	}
 }
