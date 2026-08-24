@@ -179,8 +179,10 @@ contain them, but the graph agents could read ADR-0025 and one of them did (the 
 the retry ladder, admission lattice and receipt carriage from it), so their omission cannot be
 attributed to premise boundedness alone; a source-constrained rerun would be needed to separate
 "the premises framed the answer" from "the model chose not to list them". What the record does
-support is narrower: with premises supplied, neither replica presented a mechanism as intent, and
-without them both did. No recall measure was taken, so the smaller must-survive counts cannot be
+support is narrower: with premises supplied, neither replica presented the CAS fence, the lease, the
+ancestry check, or the worktree as intent, and without them both did; the one graph item the record
+does count as mechanism-shaped (opus's "load-bearing landing action remains fenced or reconciled
+[DEC-0016]", a decision cited as if it were a property) is what the 7% is made of. No recall measure was taken, so the smaller must-survive counts cannot be
 read as precision.
 
 Q-d cut the other way again. The raw replicas answered at ADR granularity (11 and 31 files read)
