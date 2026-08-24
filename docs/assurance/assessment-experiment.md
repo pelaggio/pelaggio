@@ -14,10 +14,16 @@ A worker emits only the semantic judgment:
 Assessment {
   proposition
   basis[]
-  conclusion
-  residual[]
+  conclusion        { verdict: holds | violated | undetermined, rationale? }
+  residual[]        { statement, resolvedBy? }
 }
 ```
+
+Two fields inside the four are typed because the harness consumes them and nothing else: `verdict` is
+the only part of a conclusion a deterministic policy reads (rationale is prose for humans and is
+never read), and `resolvedBy` names the observation whose arrival resolves a residual, which is what
+lets recovery be a harness-observed transition rather than a model's `suggestedAction`. A residual
+without `resolvedBy` can be cleared only by a principal.
 
 The harness wraps it with custody data it already owns:
 
@@ -147,31 +153,41 @@ The first implementation should stop before real gate behavior and compute a sha
 
 `ci/assessment-shadow.ts` is the first implementation this document asks for: a pure function from
 `(records, harness facts, policy)` to a disposition plus typed causes, touching no real gate. The
-worker-authored part of a record is exactly the four fields above; binding, provenance, completeness,
-observation availability, and carried blockers are `HarnessFacts` the worker cannot write. Rationale
-text, summaries, confidence fields, and unknown extension keys are read nowhere in the module, which
-is how wording invariance and unsupported-extension safety are established rather than tested for.
+worker-authored part of a record is exactly the four fields above; binding, provenance and
+completeness are the harness-owned envelope of each `AssessmentRecord`, and observation
+availability, required surfaces and carried blockers are `HarnessFacts` the worker cannot write.
+Rationale text, summaries and confidence fields are read nowhere in the module, which is how wording
+invariance is established rather than tested for. Unknown extension keys are read only to be listed
+as unsupported: they never contribute, and on evidence that would otherwise permit a consequential
+commit they fail closed (`withhold`), because the harness cannot know whether the extension would
+have weakened the record. A carried blocker is cleared only by a refutation that is itself current,
+complete, and not awaiting reassessment.
 
 `docs/assurance/assessment-fixtures.json` retrodicts seven episodes with known outcomes — the #625
 stale grep, #495 carry with and without an explicit refutation, the #435 false chokepoint, the #555
-GitHub 503, the #593 label-vs-split disagreement, and the partial-mediation charter — and
+GitHub 503, the #593 label-vs-split disagreement, and a mediated charter intake where the human
+supplied preferences and explicitly left the optimization policy open (the case the stacked
+charter-normalization slice carries as a fixture) — and
 `ci/__tests__/assessment-shadow.test.ts` demonstrates each of the eleven shadow-disposition
 properties against them. The risk–coverage table across the four conditions this document names:
 
 | condition | commits | unsupported commits | unnecessary withholding |
 |---|---|---|---|
-| face-value (read the last verdict as prose) | 4/7 | 3 | 2 |
+| face-value (the last record's verdict taken at face value, standing in for a free-form read — not a free-form review) | 4/7 | 3 | 2 |
 | proposition + basis + conclusion | 3/7 | 1 | 1 |
 | + residual | 2/7 | 0 | 1 |
 | + residual + evidence recovery | 4/7 | 0 | 0 |
 
-What this does and does not show. Binding and basis validation alone recover the justified landing
-that face-value withheld (#625: the stale charter was the last word) and refuse the two face-value
-commits that had no current evidence; they do **not** catch #435, whose unit tests were green and
-whose gap was a path the guard never saw — that is exactly the shape only a residual carries, and
-the residual condition withholds it at the cost of one justified commitment (#593, where the
-resolving observation was obtainable but not yet in hand). Recovery then reaches face-value coverage
-with zero unsupported commitments. Two caveats keep this an experiment rather than a result: the
+What this does and does not show. The second row is the full envelope minus residuals — binding,
+basis, completeness, carried blockers and contradiction handling. Binding rejection recovers the
+justified landing that face-value withheld (#625: the stale charter was the last word); carried-blocker
+survival refuses #495's silent re-push and completeness refuses #555's UNKNOWN mergeability — the two
+face-value commits that had no current evidence. That row still commits on #435, whose unit tests
+were green and whose gap was a path the guard never saw — exactly the shape only a residual carries —
+and it already withholds #593 as a contradiction, so the residual row's one unnecessary withholding is
+inherited, not introduced: residuals cost zero justified coverage in this corpus. Recovery then reaches
+face-value coverage with zero unsupported commitments, and the #593 recovery is a reassessment
+permitted by a resolved residual, not a residual clearing itself. Two caveats keep this an experiment rather than a result: the
 fixtures were authored with hindsight, so a residual is present wherever history showed one was
 needed — the open question is whether workers write material residuals *without* hindsight, which
 only live records can answer; and seven episodes is a demonstration, not a measurement.

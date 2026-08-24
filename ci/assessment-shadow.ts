@@ -179,8 +179,12 @@ export function shadowDisposition(records: AssessmentRecord[], facts: HarnessFac
 	let blockerSurvives = false;
 	for (const blocker of facts.carriedBlockers) {
 		const refutation = blocker.refutedBy ? recordById.get(blocker.refutedBy) : undefined;
+		// A refutation must itself be current and not awaiting reassessment: a stale record or one whose
+		// named residual has since resolved cannot be the authority that removes a blocker.
 		const refuted =
 			refutation !== undefined &&
+			refutation.current &&
+			refutation.resolvedResiduals.length === 0 &&
 			refutation.record.assessment.proposition === blocker.proposition &&
 			refutation.record.assessment.conclusion.verdict === "violated" &&
 			refutation.basisValid &&
@@ -204,6 +208,14 @@ export function shadowDisposition(records: AssessmentRecord[], facts: HarnessFac
 
 	if (policy.consequence === "reversible") return { disposition: "continue", causes, unsupported };
 	if (contradicted.size > 0) return { disposition: policy.onContradiction, causes, unsupported };
+	// Unknown semantics on authority-bearing evidence fail closed: the harness cannot know whether the
+	// extension would weaken the record, so ignoring it could strengthen the conclusion. Retained as
+	// unsupported, never consumed; the commit waits for a record without it or a policy that admits it.
+	const unsupportedPositive = positive.filter((c) => unsupported.some((key) => key.startsWith(`${c.record.id}:`)));
+	if (unsupportedPositive.length > 0) {
+		for (const c of unsupportedPositive) causes.push(`unsupported-extension-on-evidence:${c.record.id}`);
+		return { disposition: "withhold", causes, unsupported };
+	}
 	if (blockerSurvives || caution.some((c) => c.openResiduals.length > 0 || (c.basisValid && c.complete))) {
 		return { disposition: "withhold", causes, unsupported };
 	}

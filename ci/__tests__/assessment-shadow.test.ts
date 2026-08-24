@@ -60,6 +60,16 @@ describe("shadow disposition properties", () => {
 		assert.equal(shadowDisposition(refuted.records, refuted.facts, refuted.policy).disposition, "commit");
 		refuted.records[0].assessment.residual = [{ statement: "the report predates a touched path" }];
 		assert.equal(shadowDisposition(refuted.records, refuted.facts, refuted.policy).disposition, "withhold");
+		// A stale refutation — bound to an earlier SHA — is not the authority that removes a blocker.
+		const stale = fixture("carried-blocker-refuted-495");
+		stale.records[0].binding.sha = "599-r1";
+		const staleResult = shadowDisposition(stale.records, stale.facts, stale.policy);
+		assert.equal(staleResult.disposition, "withhold");
+		assert.ok(staleResult.causes.includes("carried-blocker:BLK-1"));
+		// Nor is one whose named residual has since resolved and awaits reassessment.
+		const pending = fixture("carried-blocker-refuted-495");
+		pending.records[0].assessment.residual = [{ statement: "unless the path was touched after the report", resolvedBy: "review-r2" }];
+		assert.equal(shadowDisposition(pending.records, pending.facts, pending.policy).disposition, "withhold");
 	});
 
 	it("contradictory-assessment handling: disagreement is an explicit policy state, not Judge sovereignty", () => {
@@ -130,7 +140,7 @@ describe("shadow disposition properties", () => {
 		assert.equal(shadowDisposition(f.records, f.facts, f.policy).disposition, "withhold");
 	});
 
-	it("unsupported-extension safety: an unknown extension is retained as unsupported and cannot strengthen anything", () => {
+	it("unsupported-extension safety: an unknown extension cannot strengthen a withheld record, and fails closed on committing evidence", () => {
 		const f = fixture("false-chokepoint-435");
 		const ext = f.records[0].assessment as unknown as Record<string, unknown>;
 		ext["x-residual-resolved"] = true;
@@ -138,6 +148,17 @@ describe("shadow disposition properties", () => {
 		const result = shadowDisposition(f.records, f.facts, f.policy);
 		assert.equal(result.disposition, "withhold");
 		assert.deepEqual(result.unsupported, ["G:x-residual-resolved", "G:x-verified"]);
+		// The load-bearing case: a record that WOULD commit carries an unknown extension. Ignoring it
+		// could strengthen the conclusion, so a consequential effect fails closed; reversible work continues.
+		const clean = fixture("stale-grep-625");
+		assert.equal(shadowDisposition(clean.records, clean.facts, clean.policy).disposition, "commit");
+		const tainted = fixture("stale-grep-625");
+		(tainted.records[0].assessment as unknown as Record<string, unknown>)["x-applicability"] = "linux-only";
+		const consequential = shadowDisposition(tainted.records, tainted.facts, tainted.policy);
+		assert.equal(consequential.disposition, "withhold");
+		assert.ok(consequential.causes.includes("unsupported-extension-on-evidence:A-reachability"));
+		assert.deepEqual(consequential.unsupported, ["A-reachability:x-applicability"]);
+		assert.equal(shadowDisposition(tainted.records, tainted.facts, { ...tainted.policy, consequence: "reversible" }).disposition, "continue");
 	});
 });
 
