@@ -166,11 +166,13 @@ Two caveats before trusting the predicate further:
 
 **Since this run (2026-08-24, #616 head).** The coverage figures above describe the graph as it was
 when the run happened. Reconciliation on the #616 branch since then: the trust registry is enumerated
-from its source (15 records; 7 were absent from the graph, four of them guarantees), five mechanisms
+from its source (15 records; 7 were absent from the graph, four of them guarantees), seven mechanisms
 that already existed were named as realizations (`claude-seat.ts`, `secret-hygiene.ts`, the daemon
-bearer auth, `check-publish.ts`, the pull-request ship default), so the Q14 unlinked-guarantee
-baseline is now **3** (TC-002/003/017) over the full registry rather than 6 over the represented
-subset; realizations are 10 for 68 propositions; ADR-0028 and the AGENTS.md invariant index are
+bearer auth, `check-publish.ts`, the pull-request ship default, the egress broker, the fail-closed
+verdict parsers), so the Q14 unlinked-guarantee baseline is now **1** (TC-002, an absence claim) over
+the full registry rather than 6 over the represented subset, and the baseline is frozen so it can only
+shrink; realizations are 12 for 69 propositions; `adrMap` is derived from node `sources` (they had
+drifted for five ADRs); ADR-0028 and the AGENTS.md invariant index are
 mapped (Q16); and the six debt checks the `debt` view declares are all implemented. `Q10 points the
 wrong way` still holds and is complemented, not replaced, by Q14.
 

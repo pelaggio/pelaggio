@@ -64,6 +64,16 @@ describe("shadow assurance graph integrity", () => {
     }
   });
 
+  it("adrMap is a derived index of node sources, not a second hand-maintained relation", () => {
+    // ADR-0027 decision 9: the ADR -> primitive relation is authored once, on the node's `sources`.
+    // The review of this ADR found the two had drifted for five ADRs; this keeps them equal.
+    const derived: Record<string, string[]> = {};
+    for (const value of graph.nodes) for (const source of value.sources ?? []) if (/^ADR-\d{4}$/.test(source)) (derived[source] ??= []).push(value.id);
+    for (const key of Object.keys(derived)) derived[key] = [...new Set(derived[key])].sort();
+    const keys = [...new Set([...Object.keys(graph.adrMap), ...Object.keys(derived)])].sort();
+    for (const key of keys) assert.deepEqual([...(graph.adrMap[key] ?? [])].sort(), derived[key] ?? [], `${key}: adrMap must equal the nodes whose sources name it`);
+  });
+
   it("keeps shadow extraction non-authoritative", () => {
     assert.equal(graph.status, "shadow");
     assert.match(graph.authority, /non-authoritative/i);
@@ -208,14 +218,15 @@ describe("architectural question tests", () => {
   }
 
   /**
-   * `guarantee`-status claims that name no implementing realization TODAY. This list may only
-   * SHRINK: linking a claim removes it, and a NEW unlinked guarantee fails. History: it started at 6
-   * over the eight claims the graph then carried; enumerating the full registry (Q5) added four
-   * guarantees and naming the mechanisms that exist (CTR-0006..0010) left these three — held as a
-   * standing red flag rather than a silent pass. TC-002 is an absence claim with no mechanism to
-   * name; TC-003 and TC-017 are real gaps.
+   * `guarantee`-status claims that name no implementing realization TODAY. The FROZEN set is the
+   * ceiling: the live list may only lose members (linking a claim removes it) and may never gain one,
+   * so a newly published guarantee with no mechanism fails here and cannot be waved through by
+   * editing the baseline. History: 6 over the eight claims the graph first carried; enumerating the
+   * full registry (Q5) added four guarantees; naming the mechanisms that exist (CTR-0006..0012)
+   * left TC-002 — an absence claim ("no telemetry") with no mechanism to name.
    */
-  const GUARANTEES_WITHOUT_REALIZATION = ["TC-002", "TC-003", "TC-017"];
+  const FROZEN_UNLINKED_GUARANTEES = new Set(["TC-002", "TC-003", "TC-017"]);
+  const GUARANTEES_WITHOUT_REALIZATION = ["TC-002"];
 
   it("Q14: a published GUARANTEE names the mechanism that implements it", () => {
     const status = claimAssuranceStatus();
@@ -239,7 +250,7 @@ describe("architectural question tests", () => {
     assert.ok(checked > 0, "no guarantee-status claims were checked — the status parse is broken");
     // Q10 checks realization -> purpose; a proposition with ZERO realizations passes it trivially.
     // This is the inverse direction, and the ratchet is the part that must not regress.
-    assert.ok(GUARANTEES_WITHOUT_REALIZATION.length <= 3, "the unlinked-guarantee baseline may only shrink");
+    for (const id of GUARANTEES_WITHOUT_REALIZATION) assert.ok(FROZEN_UNLINKED_GUARANTEES.has(id), `${id} is not in the frozen baseline — the list may only shrink, never admit a new unlinked guarantee`);
     assert.equal(checked, [...status.values()].filter((v) => v === "guarantee").length, "every registry guarantee was checked, not only the ones the graph happened to carry");
   });
 
