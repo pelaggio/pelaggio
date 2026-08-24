@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
-import { buildCodexExecArgs, buildCodexStepResult, CODEX_SANDBOX_APPEND, codexEffort, codexTimeoutMs, selectCodexModel } from "../codex-provider.js";
+import { buildCodexExecArgs, buildCodexStepResult, CODEX_READ_ONLY_APPEND, CODEX_SANDBOX_APPEND, codexEffort, codexTimeoutMs, codexUsesReadOnlySandbox, selectCodexModel } from "../codex-provider.js";
 import { EDIT_LOOP_THRESHOLD } from "../step-runner-shared.js";
 
 function fixtureEvents(name: string): Record<string, unknown>[] {
@@ -272,5 +272,37 @@ describe("buildCodexExecArgs (#431)", () => {
 		assert.equal(args.filter((a) => a === "-c").length, 1);
 		assert.equal(args[args.indexOf("-c") + 1], "model_reasoning_effort=medium");
 		assert.equal(args[args.length - 1], "-");
+	});
+
+	it("emits a read-only sandbox arg when asked", () => {
+		const args = buildCodexExecArgs({ cwd: "/main", outputPath: "/tmp/out.txt", effort: "high", sandbox: "read-only" });
+		assert.deepEqual(args.slice(0, 8), ["exec", "--json", "-C", "/main", "-s", "read-only", "-o", "/tmp/out.txt"]);
+		assert.match(CODEX_READ_ONLY_APPEND, /READ-ONLY/);
+		assert.match(CODEX_READ_ONLY_APPEND, /Do NOT attempt to write files/);
+	});
+});
+
+describe("codexUsesReadOnlySandbox (#495 store-trust — cwd-scoped, not step-name-scoped)", () => {
+	it("read-only ONLY for a review-class step at the trusted main checkout", () => {
+		// Cold PR-gate review/verify run at cwd=REPO (isWorktree=false): read-only, so
+		// workspace-write cannot root the sandbox at the checkout that hosts .dev/pr-review-*.
+		assert.equal(codexUsesReadOnlySandbox("pr-review", false), true);
+		assert.equal(codexUsesReadOnlySandbox("pr-verify", false), true);
+	});
+
+	it("keeps workspace-write for authoring-loop reviewer/judge seats (same step names, isolated worktree cwd)", () => {
+		// The authoring loop runs pr-review/pr-verify seats in isolated .dev/authoring-review-seats
+		// worktrees (isWorktree=true) whose skill mandates `pnpm check` / `pnpm -r test` — those must
+		// keep workspace-write. Read-only there would break the mandated checks AND contradict the
+		// read-only append. The cwd, not the step name, is the trust signal.
+		assert.equal(codexUsesReadOnlySandbox("pr-review", true), false);
+		assert.equal(codexUsesReadOnlySandbox("pr-verify", true), false);
+	});
+
+	it("never read-only for a non-review step, at either cwd", () => {
+		for (const worktree of [true, false]) {
+			assert.equal(codexUsesReadOnlySandbox("implement", worktree), false);
+			assert.equal(codexUsesReadOnlySandbox("plan", worktree), false);
+		}
 	});
 });

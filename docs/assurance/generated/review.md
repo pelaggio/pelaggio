@@ -17,6 +17,7 @@ flowchart TB
   DEC_0008["in-toto-envelope"]
   DEC_0012["fixed-six-step-two-review-orchestrators"]
   DEC_0014["multi-driver-judge-review-loop"]
+  DEC_0020["claim-scoped-delivery-packet"]
   CLM_0009 -->|specializes| CLM_0019
   CON_0008 -->|constrains| CLM_0009
   CTR_0003 -->|derived-from| DEC_0014
@@ -26,4 +27,5 @@ flowchart TB
   DEC_0014 -->|assumes| ASM_0002
   DEC_0014 -->|implements| CLM_0009
   DEC_0014 -->|implements| CLM_0016
+  DEC_0020 -->|implements| CLM_0008
 ```
