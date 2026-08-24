@@ -39,6 +39,11 @@ Numbered from the security audit's implicit-decision candidates.
 | [0024](./0024-adversarial-authoring-review-loop.md) | Review moves upstream: multi-driver panel + Judge, deterministic convergence, park-on-safety, provenance record | accepted | — |
 | [0025](./0025-landing-serialization-cas-fence-optional-ordering.md) | Landing serialization: CAS fence, optional ordering (amends 0005) | proposed | `TC-013` |
 | [0026](./0026-stateful-guards-fence-reconcile-and-gate-disposition.md) | Stateful guards: fence-or-reconcile classification; gate disposition splits judgment from evidence (amends 0004) | proposed | `TC-003`, `TC-013` |
+| [0028](./0028-delivery-packet-claim-scoped-provenance.md) | Delivery unit is the claim; intent-only packet carried on the landing surface joins — never copies — its evaluative record | proposed | — |
+
+**0027 is allocated, not missing.** It belongs to the machine-readable architectural intent
+graph ADR on the in-flight shadow-assurance branch (#616); the row and link land with that PR.
+Numbers are never reused, so the gap is a reservation rather than an invitation.
 
 *Status vocabulary:* `proposed` (decided, not yet implemented) · `accepted` (implemented) · `superseded`.
 
