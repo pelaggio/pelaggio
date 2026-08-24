@@ -20,7 +20,7 @@ The anchoring rule is:
 
 > Propositions say what we believe or require. Decisions say what we chose. Realizations say what exists. Observations say what happened. Assessments say what that means.
 
-The final two concepts are deliberately **future-facing**, not current node kinds; the candidate *artifact* grammar for an assessment (proposition, basis, conclusion, residual) is prototyped in the stacked `assessment-experiment.md`, not as a graph node. The evidence slice is expected to introduce **subject**, **observation**, **assessment**, and likely **actor** only when real custody queries require them. An observation must never intrinsically `support` or `challenge` intent; that interpretation belongs to an attributable assessment.
+The final two concepts are deliberately **future-facing**, not current node kinds; a candidate *artifact* grammar for an assessment (proposition, basis, conclusion, residual) is prototyped as a stacked slice (#622), not as a graph node. The evidence slice is expected to introduce **subject**, **observation**, **assessment**, and likely **actor** only when real custody queries require them. An observation must never intrinsically `support` or `challenge` intent; that interpretation belongs to an attributable assessment.
 
 Existing `CLM-*`, `CON-*`, `ASM-*`, `CTR-*`, and `TC-*` identifiers remain stable through the ontology collapse. Their prefixes are historical identities, not type declarations.
 
@@ -125,7 +125,7 @@ Run the corpus tests with:
 pnpm test:ci
 ```
 
-`ci/__tests__/shadow-assurance.test.ts` validates graph integrity, proposition roles, source grounding, realization evidence, ADR and AGENTS.md coverage, and the semantic questions Q1–Q16. `ci/__tests__/assurance-views.test.ts` stress-tests query execution, the six debt diagnostics, public projection boundaries, and generated views. `ci/__tests__/question-contract-experiment.test.ts` ratchets the boundaries of the candidate question grammar and binds its first-run table to its record. Each stacked experiment (assessment evidence, charter normalization, activity provenance) ships its own `ci/__tests__/<experiment>.test.ts` in the same shape, alongside any executable slice (`ci/assessment-shadow.ts`).
+`ci/__tests__/shadow-assurance.test.ts` validates graph integrity, proposition roles, source grounding, realization evidence, ADR and AGENTS.md coverage, and the semantic questions Q1–Q16. `ci/__tests__/assurance-views.test.ts` stress-tests query execution, the six debt diagnostics, public projection boundaries, and generated views. `ci/__tests__/question-contract-experiment.test.ts` ratchets the boundaries of the candidate question grammar and checks its run record is complete. The stacked slices (#622 assessment evidence; #623 charter normalization and activity provenance) each add their own experiment document, ratchet test, and run record to this directory when they land; nothing here depends on them.
 
 ## Migration rule
 
