@@ -1,0 +1,412 @@
+{
+	"status": "experimental-shadow-only",
+	"run": "2026-08-24",
+	"design": "4 authentic operator questions × 2 conditions (raw: docs/decisions + trust registry only; graph: deterministic premises from selectView supplied, ADRs readable for rationale) × 2 models (claude sonnet, claude opus). Read-only agents; answers ≤180 words + typed JSON. Cross-provider consistency was NOT measured — both models are one provider.",
+	"questions": {
+		"Q-a": "If the fixed six-step pipeline and the two separate review orchestrators were removed tomorrow, what architectural intent must survive, and what is free to change? (view: affected source=ADR-0022)",
+		"Q-b": "What would have to be true for provider-diverse review to no longer be worth its cost, and what evidence would show it? (view: review)",
+		"Q-c": "The landing executor is being replaced. What must remain true for landing to be safe regardless of the new mechanism? (view: landing)",
+		"Q-d": "Which recorded decisions are historical, superseded, or under reconsideration rather than current, and what current intent did each serve? (premises: all decisions)"
+	},
+	"judge": "realizationAsIntent counts must-survive items that name a concrete mechanism (CAS push, --force-with-lease, worktree, parkExit, codegen/verify interleave, seat configuration) rather than a property; judged by the session author, not a model — a known limitation.",
+	"aggregate": {
+		"graph": {
+			"tokens": 29135.6,
+			"filesRead": 5,
+			"toolUses": 6.1,
+			"seconds": 56,
+			"mustSurviveItems": 7.3,
+			"realizationAsIntentShare": 0.07
+		},
+		"raw": {
+			"tokens": 45390.8,
+			"filesRead": 11.3,
+			"toolUses": 11.1,
+			"seconds": 89,
+			"mustSurviveItems": 12.8,
+			"realizationAsIntentShare": 0.3
+		}
+	},
+	"crossModelConsistency": {
+		"graph": {
+			"Q-a": {
+				"mustSurvive": 0.67,
+				"mayChange": 0.6
+			},
+			"Q-b": {
+				"mustSurvive": 0.63,
+				"mayChange": 0.75
+			},
+			"Q-c": {
+				"mustSurvive": 0.9,
+				"mayChange": 0.75
+			}
+		},
+		"raw": {
+			"Q-a": {
+				"mustSurvive": 0.33,
+				"note": "hand-mapped concepts: 7 shared of 21"
+			},
+			"Q-b": {
+				"mustSurvive": 0.27,
+				"note": "3 shared of 11"
+			},
+			"Q-c": {
+				"mustSurvive": 0.4,
+				"note": "10 shared of 25"
+			}
+		}
+	},
+	"defectsInTheGraphSurfacedByTheRun": [
+		"supersedes was a declared relation with zero edges; ADR-0025 amends ADR-0005, so DEC-0015 supersedes DEC-0002 was authored (encoding-loss bucket: authoring-cost gap)",
+		"DEC-0012 carried status 'historical-topology-under-reconsideration' with no source; ADR-0022 is accepted and ADR-0025 says it is not amended — both raw replicas found no reconsideration. Relabelled current-construction-choice; the question is now an extraction.openQuestions entry (bucket: the graph overclaimed, which is the inverse of encoding loss and the one the source-grounding check cannot catch)"
+	],
+	"runs": [
+		{
+			"q": "Q-a",
+			"cond": "raw",
+			"model": "sonnet",
+			"mustSurvive": 8,
+			"mayChange": 4,
+			"unanswerable": 2,
+			"filesRead": 7,
+			"tokens": 45554,
+			"toolUses": 10,
+			"ms": 125401,
+			"realizationAsIntent": 1,
+			"nodes": null
+		},
+		{
+			"q": "Q-a",
+			"cond": "raw",
+			"model": "opus",
+			"mustSurvive": 20,
+			"mayChange": 12,
+			"unanswerable": 6,
+			"filesRead": 13,
+			"tokens": 43287,
+			"toolUses": 15,
+			"ms": 88929,
+			"realizationAsIntent": 3,
+			"nodes": null
+		},
+		{
+			"q": "Q-a",
+			"cond": "graph",
+			"model": "sonnet",
+			"mustSurvive": 4,
+			"mayChange": 3,
+			"unanswerable": 2,
+			"filesRead": 3,
+			"tokens": 29280,
+			"toolUses": 5,
+			"ms": 54255,
+			"realizationAsIntent": 0,
+			"nodes": {
+				"mustSurvive": [
+					"CLM-0016",
+					"CLM-0009",
+					"CON-0008",
+					"CLM-0019"
+				],
+				"mayChange": [
+					"CTR-0001",
+					"CTR-0002",
+					"DEC-0012"
+				]
+			}
+		},
+		{
+			"q": "Q-a",
+			"cond": "graph",
+			"model": "opus",
+			"mustSurvive": 8,
+			"mayChange": 5,
+			"unanswerable": 5,
+			"filesRead": 6,
+			"tokens": 26844,
+			"toolUses": 7,
+			"ms": 74113,
+			"realizationAsIntent": 1,
+			"nodes": {
+				"mustSurvive": [
+					"CLM-0016",
+					"DEC-0012",
+					"DEC-0014",
+					"CLM-0009",
+					"CON-0008",
+					"CLM-0019"
+				],
+				"mayChange": [
+					"CTR-0001",
+					"CTR-0002",
+					"CTR-0003",
+					"DEC-0012",
+					"DEC-0014"
+				]
+			}
+		},
+		{
+			"q": "Q-b",
+			"cond": "raw",
+			"model": "sonnet",
+			"mustSurvive": 6,
+			"mayChange": 5,
+			"unanswerable": 3,
+			"filesRead": 6,
+			"tokens": 48731,
+			"toolUses": 11,
+			"ms": 70168,
+			"realizationAsIntent": 2,
+			"nodes": null
+		},
+		{
+			"q": "Q-b",
+			"cond": "raw",
+			"model": "opus",
+			"mustSurvive": 8,
+			"mayChange": 6,
+			"unanswerable": 6,
+			"filesRead": 9,
+			"tokens": 36362,
+			"toolUses": 10,
+			"ms": 84114,
+			"realizationAsIntent": 1,
+			"nodes": null
+		},
+		{
+			"q": "Q-b",
+			"cond": "graph",
+			"model": "sonnet",
+			"mustSurvive": 4,
+			"mayChange": 3,
+			"unanswerable": 3,
+			"filesRead": 3,
+			"tokens": 29413,
+			"toolUses": 5,
+			"ms": 86367,
+			"realizationAsIntent": 0,
+			"nodes": {
+				"mustSurvive": [
+					"CLM-0016",
+					"CLM-0019",
+					"CLM-0009",
+					"CON-0008",
+					"CLM-0008"
+				],
+				"mayChange": [
+					"DEC-0014",
+					"CTR-0003",
+					"ASM-0002"
+				]
+			}
+		},
+		{
+			"q": "Q-b",
+			"cond": "graph",
+			"model": "opus",
+			"mustSurvive": 6,
+			"mayChange": 5,
+			"unanswerable": 4,
+			"filesRead": 6,
+			"tokens": 25457,
+			"toolUses": 6,
+			"ms": 37217,
+			"realizationAsIntent": 1,
+			"nodes": {
+				"mustSurvive": [
+					"CLM-0016",
+					"CLM-0009",
+					"CON-0008",
+					"CLM-0019",
+					"CLM-0008",
+					"DEC-0003",
+					"DEC-0008",
+					"DEC-0020"
+				],
+				"mayChange": [
+					"ASM-0002",
+					"CTR-0003",
+					"DEC-0014",
+					"DEC-0012"
+				]
+			}
+		},
+		{
+			"q": "Q-c",
+			"cond": "raw",
+			"model": "sonnet",
+			"mustSurvive": 12,
+			"mayChange": 5,
+			"unanswerable": 2,
+			"filesRead": 4,
+			"tokens": 40573,
+			"toolUses": 5,
+			"ms": 40889,
+			"realizationAsIntent": 6,
+			"nodes": null
+		},
+		{
+			"q": "Q-c",
+			"cond": "raw",
+			"model": "opus",
+			"mustSurvive": 23,
+			"mayChange": 8,
+			"unanswerable": 6,
+			"filesRead": 9,
+			"tokens": 40115,
+			"toolUses": 9,
+			"ms": 69128,
+			"realizationAsIntent": 10,
+			"nodes": null
+		},
+		{
+			"q": "Q-c",
+			"cond": "graph",
+			"model": "sonnet",
+			"mustSurvive": 11,
+			"mayChange": 4,
+			"unanswerable": 2,
+			"filesRead": 4,
+			"tokens": 23261,
+			"toolUses": 5,
+			"ms": 34743,
+			"realizationAsIntent": 0,
+			"nodes": {
+				"mustSurvive": [
+					"CLM-0006",
+					"CON-0012",
+					"CLM-0007",
+					"CON-0009",
+					"CLM-0018",
+					"CLM-0019",
+					"CLM-0013",
+					"CON-0004",
+					"CON-0003"
+				],
+				"mayChange": [
+					"DEC-0002",
+					"DEC-0015",
+					"CON-0004",
+					"DEC-0016"
+				]
+			}
+		},
+		{
+			"q": "Q-c",
+			"cond": "graph",
+			"model": "opus",
+			"mustSurvive": 11,
+			"mayChange": 5,
+			"unanswerable": 4,
+			"filesRead": 5,
+			"tokens": 27915,
+			"toolUses": 6,
+			"ms": 43477,
+			"realizationAsIntent": 1,
+			"nodes": {
+				"mustSurvive": [
+					"CLM-0006",
+					"CON-0012",
+					"CLM-0007",
+					"CON-0009",
+					"CLM-0018",
+					"CLM-0019",
+					"DEC-0016",
+					"CON-0004",
+					"CON-0003",
+					"CLM-0013"
+				],
+				"mayChange": [
+					"DEC-0002",
+					"DEC-0015",
+					"CON-0004"
+				]
+			}
+		},
+		{
+			"q": "Q-d",
+			"cond": "raw",
+			"model": "sonnet",
+			"historical": [
+				"ADR-0003",
+				"ADR-0004",
+				"ADR-0005",
+				"ADR-0026.3",
+				"ADR-0026.6",
+				"ADR-0026.9",
+				"ADR-0026.10"
+			],
+			"unanswerable": 3,
+			"filesRead": 11,
+			"tokens": 58463,
+			"toolUses": 15,
+			"ms": 113771
+		},
+		{
+			"q": "Q-d",
+			"cond": "raw",
+			"model": "opus",
+			"historical": [
+				"ADR-0026.3",
+				"ADR-0026.6",
+				"ADR-0026.9",
+				"ADR-0026.10",
+				"ADR-0003",
+				"ADR-0004",
+				"ADR-0005",
+				"ADR-0002",
+				"ADR-0001.alt",
+				"ADR-0015/0018.gate",
+				"ADR-0022.alts",
+				"beads-landing-half",
+				"ADR-0027",
+				"adr-shape-gate",
+				"ADR-0026.renumbering"
+			],
+			"unanswerable": 7,
+			"filesRead": 31,
+			"tokens": 50041,
+			"toolUses": 14,
+			"ms": 115746
+		},
+		{
+			"q": "Q-d",
+			"cond": "graph",
+			"model": "sonnet",
+			"historical": [
+				"DEC-0002",
+				"DEC-0012",
+				"DEC-0015",
+				"DEC-0019",
+				"DEC-0020"
+			],
+			"unanswerable": 1,
+			"filesRead": 6,
+			"tokens": 39241,
+			"toolUses": 8,
+			"ms": 68080
+		},
+		{
+			"q": "Q-d",
+			"cond": "graph",
+			"model": "opus",
+			"historical": [
+				"DEC-0002",
+				"DEC-0012"
+			],
+			"notYetCurrent": [
+				"DEC-0014",
+				"DEC-0015",
+				"DEC-0019",
+				"DEC-0020"
+			],
+			"unanswerable": 5,
+			"filesRead": 7,
+			"tokens": 31674,
+			"toolUses": 7,
+			"ms": 52731,
+			"surfaced": "supersedes relation declared but never authored; DEC-0015 over DEC-0002 lived only in ADR-0025 prose"
+		}
+	]
+}

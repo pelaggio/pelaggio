@@ -772,7 +772,7 @@
 			"kind": "decision",
 			"slug": "fixed-six-step-two-review-orchestrators",
 			"statement": "Use a fixed six-step pipeline with separate authoring and cold-review orchestrators.",
-			"status": "historical-topology-under-reconsideration",
+			"status": "current-construction-choice",
 			"sources": [
 				"ADR-0022"
 			]
@@ -1098,6 +1098,194 @@
 			"statement": "Delivery identity and grouping keys (lineage, initiative, supersede links) are recorded while the claim is live; they are never re-derived later by joining mutable git or provider state.",
 			"sources": [
 				"ADR-0028"
+			]
+		},
+		{
+			"id": "CLM-0021",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "internal",
+			"slug": "no-undeclared-egress",
+			"statement": "Pelaggio's own code sends data only to the configured model provider and explicitly enabled integrations; there is no telemetry or other undeclared network egress.",
+			"sources": [
+				"docs/trust/trust-claims.yml"
+			]
+		},
+		{
+			"id": "TC-001",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "public",
+			"externalId": "TC-001",
+			"slug": "trust-secrets-not-in-prompts-or-logs",
+			"statement": "Existing public trust claim TC-001: known secret environment variables are not interpolated into prompts or structured run logs.",
+			"projection": {
+				"status": "guarantee"
+			},
+			"sources": [
+				"docs/trust/trust-claims.yml",
+				"ADR-0010"
+			]
+		},
+		{
+			"id": "TC-002",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "public",
+			"externalId": "TC-002",
+			"slug": "trust-no-telemetry",
+			"statement": "Existing public trust claim TC-002: nothing phones home; there is no telemetry to turn off.",
+			"projection": {
+				"status": "guarantee"
+			},
+			"sources": [
+				"docs/trust/trust-claims.yml"
+			]
+		},
+		{
+			"id": "TC-006",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "public",
+			"externalId": "TC-006",
+			"slug": "trust-data-goes-only-where-pointed",
+			"statement": "Existing public trust claim TC-006: code goes only to the configured model provider and the roadmap/notify integrations that are enabled.",
+			"projection": {
+				"status": "default"
+			},
+			"sources": [
+				"docs/trust/trust-claims.yml"
+			]
+		},
+		{
+			"id": "TC-015",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "public",
+			"externalId": "TC-015",
+			"slug": "trust-untrusted-input",
+			"statement": "Existing public trust claim TC-015: repository, issue, and PR content is treated as untrusted input and bounds what the agent may do.",
+			"projection": {
+				"status": "best_effort",
+				"scope": "worktree hooks and gates today; no designed prompt-injection defense yet"
+			},
+			"sources": [
+				"docs/trust/trust-claims.yml",
+				"ADR-0002"
+			]
+		},
+		{
+			"id": "TC-016",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "public",
+			"externalId": "TC-016",
+			"slug": "trust-dependency-tree-honesty",
+			"statement": "Existing public trust claim TC-016: the package ships no install scripts, and transitive dependencies may still run theirs on a normal install.",
+			"projection": {
+				"status": "best_effort"
+			},
+			"sources": [
+				"docs/trust/trust-claims.yml",
+				"ADR-0006"
+			]
+		},
+		{
+			"id": "TC-017",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "public",
+			"externalId": "TC-017",
+			"slug": "trust-contained-egress-broker",
+			"statement": "Existing public trust claim TC-017: opt-in contained egress reaches only a reviewed provider route through a host-held, capped broker; the jail receives no provider key or upstream URL.",
+			"projection": {
+				"status": "guarantee",
+				"scope": "opt-in contained execution only"
+			},
+			"sources": [
+				"docs/trust/trust-claims.yml",
+				"ADR-0023"
+			]
+		},
+		{
+			"id": "TC-018",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "public",
+			"externalId": "TC-018",
+			"slug": "trust-claude-seat-namespace",
+			"statement": "Existing public trust claim TC-018: on Linux every Claude Agent SDK CLI child starts in a detached Bubblewrap PID + mount namespace; missing Bubblewrap or a non-Linux host fails the step closed.",
+			"projection": {
+				"status": "guarantee",
+				"scope": "Linux only; fails closed elsewhere"
+			},
+			"sources": [
+				"docs/trust/trust-claims.yml",
+				"ADR-0023"
+			]
+		},
+		{
+			"id": "CTR-0006",
+			"kind": "realization",
+			"slug": "bubblewrap-claude-seat",
+			"statement": "Every Claude SDK child is spawned through spawnClaudeSeat into a Bubblewrap PID + mount namespace with a detached terminal session; without Bubblewrap the step fails closed.",
+			"sources": [
+				"ADR-0023"
+			],
+			"codeEvidence": [
+				"packages/pelaggio/scripts/pelaggio/claude-seat.ts",
+				"packages/pelaggio/scripts/pelaggio/__tests__/claude-seat.test.ts"
+			]
+		},
+		{
+			"id": "CTR-0007",
+			"kind": "realization",
+			"slug": "secret-hygiene-scrub-and-env-allowlist",
+			"statement": "Child environments are built from a deny-by-default allowlist and durable output is scrubbed of credential-shaped text before it is written.",
+			"sources": [
+				"ADR-0010"
+			],
+			"codeEvidence": [
+				"packages/pelaggio/scripts/pelaggio/secret-hygiene.ts",
+				"packages/pelaggio/scripts/pelaggio/__tests__/secret-hygiene.test.ts"
+			]
+		},
+		{
+			"id": "CTR-0008",
+			"kind": "realization",
+			"slug": "control-plane-bearer-auth",
+			"statement": "The daemon refuses to bind without CONTROL_PLANE_TOKEN and requires the bearer on every authority-bearing route.",
+			"sources": [
+				"ADR-0008"
+			],
+			"codeEvidence": [
+				"packages/server/src/auth.ts",
+				"packages/server/src/config.ts"
+			]
+		},
+		{
+			"id": "CTR-0009",
+			"kind": "realization",
+			"slug": "publish-manifest-guard",
+			"statement": "check:publish verifies the published manifest declares no install lifecycle scripts.",
+			"sources": [
+				"ADR-0006"
+			],
+			"codeEvidence": [
+				"packages/pelaggio/scripts/check-publish.ts",
+				"packages/pelaggio/package.json"
+			]
+		},
+		{
+			"id": "CTR-0010",
+			"kind": "realization",
+			"slug": "ship-target-default-pull-request",
+			"statement": "DEFAULT_SHIP_TARGET is pull-request; direct-push and auto-merge are explicit configuration.",
+			"sources": [
+				"ADR-0003"
+			],
+			"codeEvidence": [
+				"packages/pelaggio/scripts/pelaggio/config.ts"
 			]
 		}
 	],
@@ -1486,6 +1674,111 @@
 			"from": "CON-0017",
 			"relation": "constrains",
 			"to": "DEC-0020"
+		},
+		{
+			"from": "DEC-0015",
+			"relation": "supersedes",
+			"to": "DEC-0002"
+		},
+		{
+			"from": "TC-001",
+			"relation": "projects",
+			"to": "CLM-0003"
+		},
+		{
+			"from": "TC-002",
+			"relation": "projects",
+			"to": "CLM-0021"
+		},
+		{
+			"from": "TC-006",
+			"relation": "projects",
+			"to": "CLM-0021"
+		},
+		{
+			"from": "TC-015",
+			"relation": "projects",
+			"to": "CLM-0001"
+		},
+		{
+			"from": "TC-016",
+			"relation": "projects",
+			"to": "CLM-0004"
+		},
+		{
+			"from": "TC-017",
+			"relation": "projects",
+			"to": "DEC-0013"
+		},
+		{
+			"from": "TC-017",
+			"relation": "projects",
+			"to": "CLM-0003"
+		},
+		{
+			"from": "TC-018",
+			"relation": "projects",
+			"to": "CLM-0002"
+		},
+		{
+			"from": "CTR-0006",
+			"relation": "implements",
+			"to": "TC-018"
+		},
+		{
+			"from": "CTR-0006",
+			"relation": "implements",
+			"to": "CLM-0002"
+		},
+		{
+			"from": "CTR-0007",
+			"relation": "implements",
+			"to": "TC-001"
+		},
+		{
+			"from": "CTR-0007",
+			"relation": "implements",
+			"to": "TC-014"
+		},
+		{
+			"from": "CTR-0007",
+			"relation": "implements",
+			"to": "CLM-0003"
+		},
+		{
+			"from": "CTR-0008",
+			"relation": "implements",
+			"to": "TC-010"
+		},
+		{
+			"from": "CTR-0008",
+			"relation": "implements",
+			"to": "CLM-0005"
+		},
+		{
+			"from": "CTR-0009",
+			"relation": "implements",
+			"to": "TC-004"
+		},
+		{
+			"from": "CTR-0009",
+			"relation": "implements",
+			"to": "CLM-0004"
+		},
+		{
+			"from": "CTR-0010",
+			"relation": "implements",
+			"to": "TC-012"
+		},
+		{
+			"from": "CTR-0010",
+			"relation": "derived-from",
+			"to": "DEC-0001"
+		},
+		{
+			"from": "CTR-0004",
+			"relation": "implements",
+			"to": "TC-011"
 		}
 	],
 	"adrMap": {
@@ -1498,9 +1791,11 @@
 			"TC-011"
 		],
 		"ADR-0002": [
-			"CLM-0001"
+			"CLM-0001",
+			"TC-015"
 		],
 		"ADR-0003": [
+			"CTR-0010",
 			"DEC-0001",
 			"TC-012"
 		],
@@ -1519,7 +1814,9 @@
 		],
 		"ADR-0006": [
 			"CLM-0004",
-			"TC-004"
+			"CTR-0009",
+			"TC-004",
+			"TC-016"
 		],
 		"ADR-0007": [
 			"CLM-0008",
@@ -1528,6 +1825,7 @@
 		],
 		"ADR-0008": [
 			"CLM-0005",
+			"CTR-0008",
 			"TC-010"
 		],
 		"ADR-0009": [
@@ -1538,11 +1836,13 @@
 		"ADR-0010": [
 			"CLM-0001",
 			"CLM-0003",
+			"CTR-0007",
+			"TC-001",
 			"TC-014"
 		],
 		"ADR-0011": [
-			"CLM-0011",
 			"ASM-0001",
+			"CLM-0011",
 			"DEC-0005",
 			"DEC-0017"
 		],
@@ -1552,8 +1852,8 @@
 			"DEC-0018"
 		],
 		"ADR-0013": [
-			"CLM-0013",
 			"ASM-0001",
+			"CLM-0013",
 			"DEC-0017"
 		],
 		"ADR-0014": [
@@ -1578,10 +1878,10 @@
 			"CTR-0005"
 		],
 		"ADR-0017": [
+			"ASM-0003",
 			"CLM-0011",
 			"CLM-0013",
-			"CON-0010",
-			"ASM-0003"
+			"CON-0010"
 		],
 		"ADR-0018": [
 			"CLM-0006",
@@ -1612,9 +1912,9 @@
 		],
 		"ADR-0022": [
 			"CLM-0016",
-			"DEC-0012",
 			"CTR-0001",
-			"CTR-0002"
+			"CTR-0002",
+			"DEC-0012"
 		],
 		"ADR-0023": [
 			"CLM-0001",
@@ -1622,17 +1922,20 @@
 			"CLM-0003",
 			"CON-0010",
 			"CON-0013",
-			"DEC-0013"
+			"CTR-0006",
+			"DEC-0013",
+			"TC-017",
+			"TC-018"
 		],
 		"ADR-0024": [
+			"ASM-0002",
 			"CLM-0008",
 			"CLM-0009",
 			"CLM-0015",
 			"CLM-0016",
 			"CON-0008",
-			"ASM-0002",
-			"DEC-0014",
-			"CTR-0003"
+			"CTR-0003",
+			"DEC-0014"
 		],
 		"ADR-0025": [
 			"CLM-0006",
@@ -1817,7 +2120,8 @@
 				"anchor": "The Claude custom spawn is unconditional and fail-closed",
 				"nodes": [
 					"DEC-0013",
-					"CLM-0002"
+					"CLM-0002",
+					"CTR-0006"
 				]
 			},
 			{
@@ -1854,7 +2158,8 @@
 				"anchor": "The daemon is an authenticated authority boundary",
 				"nodes": [
 					"CLM-0005",
-					"TC-010"
+					"TC-010",
+					"CTR-0008"
 				]
 			},
 			{
@@ -1885,7 +2190,8 @@
 			{
 				"anchor": "No `preinstall`, `install`, or `postinstall` scripts",
 				"nodes": [
-					"CLM-0004"
+					"CLM-0004",
+					"CTR-0009"
 				]
 			},
 			{
@@ -1950,7 +2256,8 @@
 			"Are no-self-authorization and deterministic-safety-floor split at the right boundary?",
 			"Which source-grounding anchors should become generated/digested rather than hand-selected?",
 			"Which existing TC projections need richer condition/scope metadata before migration?",
-			"When evidence plumbing lands, what minimum Actor and scope/context representation is earned by real custody queries?"
+			"When evidence plumbing lands, what minimum Actor and scope/context representation is earned by real custody queries?",
+			"Is ADR-0022's fixed six-step / two-orchestrator topology due for reconsideration? The corpus records ADR-0022 as accepted and unamended (ADR-0025 says so explicitly); an earlier extraction labelled DEC-0012 'historical-topology-under-reconsideration' with no source, and the question-contract run of 2026-08-24 caught the overclaim. The durable intent it implements is CLM-0016 either way."
 		]
 	}
 }
