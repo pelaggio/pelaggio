@@ -53,7 +53,7 @@ Current candidate meanings:
 
 - **explain** — expose why something exists/holds and the typed premises relevant to explaining it;
 - **trace** — follow explicit semantic relationships upstream/downstream without inventing implied edges;
-- **challenge** — expose attributable challenging/unresolved assessments or missing evidence without manufacturing a defeater ontology (presupposes assessment records, which the shadow graph does not yet hold — Q12; until the stacked assessment slice supplies them, `challenge` and the `epistemicPosture` qualifier retrieve nothing, and experiment arms 4–5 cannot exercise them);
+- **challenge** — expose attributable challenging/unresolved assessments or missing evidence without manufacturing a defeater ontology (its assessment half presupposes records the shadow graph does not yet hold — Q12; its missing-evidence half is already served by the `debt` diagnostics, so until the stacked assessment slice lands `challenge` degrades to those and the `epistemicPosture` qualifier retrieves nothing);
 - **recover** — identify what evidence/state transition would permit progress, while keeping clearing authority in runtime/control semantics rather than model suggestion;
 - **steer** — expose which decisions/policy/configuration may change within the constraints of durable intent and authority boundaries.
 
@@ -166,22 +166,28 @@ Reconciliation: in both Q-c graph replicas `CON-0004` is cited on a must-survive
 ordering never substitutes for a fence) and on a may-change item (the reason an ordering layer is
 optional); Q-a opus cites `DEC-0012`/`DEC-0014` on both sides as the decision implementing an
 invariant and as the decision that may change. A bracketed id is a citation, not a classification;
-the reconciled figures drop ids that appear on both sides — and the Q-a 1.00 is therefore
-downstream of the DEC-0012 status defect this same run exposed.
+the reconciled figures drop ids that appear on both sides. The Q-a 1.00 needs both drops:
+removing DEC-0012 alone (the status defect this run exposed) gives 0.80; DEC-0014's double citation
+is sourced and legitimate, and removing it too is what reaches 1.00.
 
 The sharpest result is Q-c. Asked what must remain true *regardless of the new landing mechanism*,
 both raw replicas listed the CAS fence, `--force-with-lease`, the ancestry check, and the isolated
 worktree as must-survive — realizations of DEC-0015 presented as intent, the conflation ADR-0027
 exists to prevent. Both graph replicas placed the CAS implementation and the optional ordering layer
-under may-change, and named neither the ancestry check nor the worktree at all, because the landing
-view's premises do not contain them. That is boundedness, and it cuts both ways: the graph answers
-did not conflate, and they also could not mention what the premises omitted — no recall measure was
-taken, so the smaller must-survive counts cannot be read as pure precision.
+under may-change, and named neither the ancestry check nor the worktree at all. The premises do not
+contain them, but the graph agents could read ADR-0025 and one of them did (the opus answer cites
+the retry ladder, admission lattice and receipt carriage from it), so their omission cannot be
+attributed to premise boundedness alone; a source-constrained rerun would be needed to separate
+"the premises framed the answer" from "the model chose not to list them". What the record does
+support is narrower: with premises supplied, neither replica presented a mechanism as intent, and
+without them both did. No recall measure was taken, so the smaller must-survive counts cannot be
+read as precision.
 
 Q-d cut the other way again. The raw replicas answered at ADR granularity (11 and 31 files read)
 because the corpus has no per-decision status, and in doing so exposed that the graph was **wrong**:
-both found ADR-0022 accepted and unamended, which the graph's "under reconsideration" label on
-DEC-0012 had no source for; the graph replicas repeated the label. Separately, the graph opus
+neither listed ADR-0022 as historical or under reconsideration (opus listed only its rejected
+alternatives), and ADR-0025 says it is unamended, so the graph's "under reconsideration" label on
+DEC-0012 had no source; the graph replicas repeated the label. Separately, the graph opus
 replica noticed `supersedes` was declared but never authored. Both defects are fixed on this branch;
 the run is the reason, and the first is a case the source-grounding check cannot catch because it is
 the graph overclaiming rather than the prose drifting.

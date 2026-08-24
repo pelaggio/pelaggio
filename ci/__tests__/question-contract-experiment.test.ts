@@ -10,6 +10,35 @@ function requirePhrase(phrase: string): void {
 	assert.ok(text.includes(phrase), `question-contract experiment lost boundary: ${phrase}`);
 }
 
+const record = JSON.parse(readFileSync(resolve(repo, "docs/assurance/question-contract-run-2026-08-24.json"), "utf8")) as {
+	runs: Array<{ q: string; cond: string; tokens: number; filesRead: number; ms: number; mustSurvive?: number; realizationAsIntent?: number }>;
+	aggregate: Record<string, { tokens?: number; filesRead?: number; seconds?: number; mustSurviveItems?: number; realizationAsIntentShare?: number }>;
+};
+
+describe("first-run record binds the document's table", () => {
+	const cell = (cond: string) => {
+		const rs = record.runs.filter((r) => r.cond === cond && r.q !== "Q-d");
+		const mean = (pick: (r: (typeof rs)[number]) => number) => rs.reduce((a, r) => a + pick(r), 0) / rs.length;
+		return {
+			tokensK: (mean((r) => r.tokens) / 1000).toFixed(1),
+			files: mean((r) => r.filesRead).toFixed(1),
+			seconds: Math.round(mean((r) => r.ms) / 1000),
+			items: mean((r) => r.mustSurvive ?? 0).toFixed(1),
+			share: Math.round((rs.reduce((a, r) => a + (r.realizationAsIntent ?? 0), 0) / rs.reduce((a, r) => a + (r.mustSurvive ?? 0), 0)) * 100),
+		};
+	};
+	it("the arm-2 vs arm-1 table re-derives from the runs array and the stored aggregate", () => {
+		const g = cell("graph");
+		const r = cell("raw");
+		requirePhrase(`| tokens per answer | ${g.tokensK}k | ${r.tokensK}k |`);
+		requirePhrase(`| files read | ${g.files} | ${r.files} |`);
+		requirePhrase(`| wall-clock | ${g.seconds} s | ${r.seconds} s |`);
+		requirePhrase(`| must-survive items per answer | ${g.items} | ${r.items} |`);
+		requirePhrase(`| must-survive items that name a mechanism rather than a property | ${g.share}% | ${r.share}% |`);
+		assert.equal(((record.aggregate.graph.tokens ?? 0) / 1000).toFixed(1), g.tokensK, "stored aggregate must match the runs it summarizes");
+	});
+});
+
 describe("semantic question contract experiment", () => {
 	it("keeps question-driven growth and failure classification explicit", () => {
 		requirePhrase("A new primitive, relation, or qualifier is earned only when an important question cannot be answered correctly, traceably, and economically");
