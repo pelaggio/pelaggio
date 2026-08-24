@@ -31,7 +31,7 @@
     },
     {
       "id": "debt",
-      "question": "What architectural machinery or intent has become unsupported, orphaned, stale, or contradictory?",
+      "question": "What architectural machinery or intent has become unsupported, orphaned, or stale?",
       "audience": ["operator", "developer"],
       "mode": "diagnostics",
       "checks": [
@@ -45,7 +45,7 @@
     },
     {
       "id": "trust",
-      "question": "What public trust propositions project from internal intent, at what scope and current evidence level?",
+      "question": "Which public trust propositions project onto internal intent, at what scope and current evidence level?",
       "audience": ["operator", "developer", "public"],
       "mode": "all-of-kind",
       "kinds": ["proposition"],

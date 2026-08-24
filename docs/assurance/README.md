@@ -76,7 +76,7 @@ The maintenance and interoperability rules — author the irreducible semantic f
 - **architecture** — what internal invariant propositions does Pelaggio currently preserve? (Public `TC-*` invariants are routed to **trust**.)
 - **why** — why does this node exist, what constrains it, and what realizes it today?
 - **affected** — what intent could this node/source/change affect?
-- **debt** — what realization or intent is orphaned, unsupported, stale, or contradictory?
+- **debt** — what realization or intent is orphaned, unsupported, or stale? (No check detects contradiction; that needs assessments.)
 - **trust** — which public propositions project onto internal intent — the `projects` edge originates at the public proposition — and at what status/scope?
 - **review** — why does the current review strategy exist and what survives if it changes?
 - **landing** — what must remain true if the current landing realization changes?
@@ -85,7 +85,7 @@ The query layer is separate from presentation. GitHub gets generated Mermaid pro
 
 ## Stress-test findings
 
-The first stress pass found that several high-value questions existed only in the view catalog. The query engine now executes parameterized `why` / `affected` traversal, and all six checks the `debt` view declares are implemented in `ci/assurance-views.ts`, bound to `views.json` by test (a declared check nothing implements fails), and fire through the view itself — `stale-source-grounding` reads the graph's own groundings from the repository by default. Tests mutate the graph in memory to prove each check fires. On the current corpus the diagnostics report 15 internal invariants that name no realization and one public guarantee whose projected intent nothing realizes (`projection-overreach`: TC-002) — the graph's own open debt, not a claim that the repository is wrong. Two earlier entries (a decision with no semantic relationship, an assumption nothing assumed) were encoding gaps in ADR-0012 and ADR-0017's decisions and were closed by authoring the missing, source-anchored nodes.
+The first stress pass found that several high-value questions existed only in the view catalog. The query engine now executes parameterized `why` / `affected` traversal, and all six checks the `debt` view declares are implemented in `ci/assurance-views.ts`, bound to `views.json` by test (a declared check nothing implements fails), and fire through the view itself — `stale-source-grounding` reads the graph's own groundings from the repository by default. Tests mutate the graph in memory to prove each check fires. On the current corpus the diagnostics report 15 internal invariants that name no realization and one public guarantee whose projected intent nothing realizes (`projection-overreach`: TC-002) — the graph's own open debt, not a claim that the repository is wrong. Unlike the Q14 set these two counts are not ratcheted and will drift as nodes are added; rerun `selectView(debt)` rather than trusting them. Two earlier entries (a decision with no semantic relationship, an assumption nothing assumed) were encoding gaps in ADR-0012 and ADR-0017's decisions and were closed by authoring the missing, source-anchored nodes.
 
 A second question/qualifier stress pass found that the ontology did not need to grow for most richer operator questions. Assumption lifecycle questions can be expressed through Assessment rather than `revisitOn`; generic Context/Actor/Policy/Defeater nodes remain unearned; recovery authority belongs to runtime/control state; and `what changed?` is primarily a semantic-diff/query problem.
 
@@ -107,7 +107,7 @@ Executable questions now include:
 - Can restart durability survive without deterministic LLM replay?
 - Is any realization orphan machinery with no articulated purpose?
 - Can the same semantic contract describe consumer-owned repository intent without depending on Pelaggio's own graph?
-- Does every public claim published as an unconditional guarantee name the mechanism that implements it? (Q14 — the registry is enumerated from `trust-claims.yml`, every record must be in the graph with its registry status (Q5), and one guarantee currently names no mechanism — TC-002, an absence claim; the live set is computed and checked against a frozen ceiling it can only shrink below.)
+- Does every public claim published as an unconditional guarantee name the mechanism that implements it? (Q14 — the registry is enumerated from `trust-claims.yml`, every record must be in the graph with its registry status (Q5), and one guarantee currently names no mechanism — TC-002, an absence claim; the live set is computed, pinned exactly by the test, and bounded by a frozen ceiling — naming a mechanism and admitting a gap are both visible test edits.)
 - Can a construction rule bind a mechanism, not only intent? (Q15 — `CON-0027` binds `CTR-0004`.)
 - Is every always-loaded AGENTS.md invariant either represented in the graph or explicitly a construction rule? (Q16 — `invariantIndex`, matched by anchor substring, with the same limitation as source grounding: a bullet strengthened or weakened around its anchor is not detected.)
 
