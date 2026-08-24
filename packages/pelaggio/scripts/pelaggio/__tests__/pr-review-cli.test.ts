@@ -7,12 +7,16 @@ import { buildClaudeSeatEnv } from "../claude-seat.js";
 import { DEFAULTS, type ReviewConfig, type StepSettings } from "../config.js";
 import { escapeMarkdown } from "../helpers.js";
 import { main as adjudicateMain, type PrAdjudicateDeps } from "../pr-adjudicate-cli.js";
-import { forgeTokenForHost, gitRemoteHost, isTrustedFetchHost, main, reviewedFetchRemote, reviewedHeadFetchAuthEnv, runPrReviewGate, setPrReviewDepsForTests } from "../pr-review-cli.js";
+import { forgeTokenForHost, gitRemoteHost, gitRemotePath, isTrustedFetchHost, main, reviewedFetchRemote, reviewedHeadFetchAuthEnv, runPrReviewGate, setPrReviewDepsForTests } from "../pr-review-cli.js";
 import { listPrReviewGateRecords, readPrReviewGateRecord, writePrReviewGateRecord } from "../pr-review-gate-record.js";
 import { isEligibleFleetGateRecord, readAdjudicationSourceRecord } from "../review/adjudication.js";
 import { reviewFindingFingerprint } from "../review/findings.js";
 import type { RunStepFn } from "../step-runner.js";
 import type { ParkSignal, ProviderName, StepEmit, StepEvent, StepResult } from "../types.js";
+
+/** Per-invocation overrides for every seat-writable git config channel the reviewed-head fetch
+ *  would otherwise honour: credential helpers, repository hooks, transport interception, ssh. */
+const FETCH_HARDENING = ["-c", "credential.helper=", "-c", "core.hooksPath=/dev/null", "-c", "http.proxy=", "-c", "http.sslVerify=true", "-c", "core.sshCommand=ssh"];
 
 const tmpDirs: string[] = [];
 after(() => {
@@ -290,7 +294,7 @@ describe("pr-review CLI aggregation", () => {
 		// credential rides the child ENV. execFileSync embeds argv in Error.message and /proc.
 		// Destination is the TRUSTED https URL built from ghRepo + host, not the `origin` remote name,
 		// and the refspecs are explicit because a URL carries no configured fetch refspec.
-		assert.deepEqual(fetchCall.args, ["-c", "credential.helper=", "fetch", "--quiet", "https://github.com/pelaggio/pelaggio.git", "+refs/heads/main:refs/remotes/origin/main", "+refs/pull/123/head:refs/pull/123/head"]);
+		assert.deepEqual(fetchCall.args, [...FETCH_HARDENING, "fetch", "--quiet", "https://github.com/pelaggio/pelaggio.git", "+refs/heads/main:refs/remotes/origin/main", "+refs/pull/123/head:refs/pull/123/head"]);
 		assert.ok(fetchCall.env, "the fetch invocation must carry a dedicated child env");
 		assert.equal(fetchCall.env.GIT_CONFIG_COUNT, "1");
 		assert.equal(fetchCall.env.GIT_CONFIG_KEY_0, "http.https://github.com/.extraheader");
@@ -332,7 +336,7 @@ describe("pr-review CLI aggregation", () => {
 		// prompts refused, tokens stripped) so a rewritten origin cannot coax any credential.
 		// No token → the operator's own ssh scheme is preserved (a `gh auth login` repo keeps working),
 		// but the destination is still rebuilt from trusted config rather than taken from `origin`.
-		assert.deepEqual(bareFetch?.args, ["-c", "credential.helper=", "fetch", "--quiet", "git@github.com:pelaggio/pelaggio.git", "+refs/heads/main:refs/remotes/origin/main", "+refs/pull/123/head:refs/pull/123/head"]);
+		assert.deepEqual(bareFetch?.args, [...FETCH_HARDENING, "fetch", "--quiet", "git@github.com:pelaggio/pelaggio.git", "+refs/heads/main:refs/remotes/origin/main", "+refs/pull/123/head:refs/pull/123/head"]);
 		assert.equal(bareFetch?.env?.GIT_CONFIG_COUNT, undefined, "no extraheader without a token");
 		assert.equal(bareFetch?.env?.GIT_TERMINAL_PROMPT, "0");
 		// origin is now always read — as a candidate HOST for reviewedFetchRemote, never as the destination.
@@ -502,7 +506,7 @@ describe("pr-review CLI aggregation", () => {
 		assert.equal("GH_ENTERPRISE_TOKEN" in (evilFetch?.env ?? {}), false, "the ambient token is stripped from the fetch child");
 		assert.equal(evilFetch?.env?.GITHUB_ENTERPRISE_TOKEN, undefined);
 		assert.equal(evilFetch?.env?.GIT_TERMINAL_PROMPT, "0", "interactive prompt refused");
-		assert.deepEqual(evilFetch?.args.slice(0, 2), ["-c", "credential.helper="], "inherited credential helpers disabled");
+		assert.deepEqual(evilFetch?.args.slice(0, FETCH_HARDENING.length), FETCH_HARDENING, "seat-writable config channels overridden per invocation");
 		const evilRendered = [evil.stdout, ...evil.comments].join("\n");
 		assert.equal(evilRendered.includes("ghe_secret_token_val"), false, "the token never surfaces");
 		assert.equal(reviewedHeadFetchAuthEnv({ GH_ENTERPRISE_TOKEN: "ghe_secret_token_val" }, "evil.example.com"), undefined);
@@ -560,6 +564,35 @@ describe("pr-review CLI aggregation", () => {
 		assert.equal(fetchCall?.env?.GIT_CONFIG_KEY_0, "http.https://ghe.example.com/.extraheader", "auth is scoped to the trusted host");
 	});
 
+	it("parses the scp-like host at git's first colon, so userinfo cannot smuggle a trusted name (#554)", () => {
+		// git splits `[user@]host:path` at the FIRST colon, so `evil.example:x@github.com:o/r.git`
+		// is host `evil.example`. Reading the name after the embedded `@` instead returned
+		// github.com — a trust check that approved the wrong host while git fetched the attacker's.
+		assert.equal(gitRemoteHost("evil.example:x@github.com:owner/repo.git"), "evil.example");
+		assert.equal(isTrustedFetchHost(gitRemoteHost("evil.example:x@github.com:owner/repo.git") ?? "", {}), false);
+		// No false fire: ordinary userinfo, plain scp-like, and URL forms still parse as before.
+		assert.equal(gitRemoteHost("git@github.com:pelaggio/pelaggio.git"), "github.com");
+		assert.equal(gitRemoteHost("github.com:pelaggio/pelaggio.git"), "github.com");
+		assert.equal(gitRemoteHost("https://github.com/pelaggio/pelaggio.git"), "github.com");
+		// Target identity is host AND repository; `.git`, leading slash, and case are normalised.
+		assert.equal(gitRemotePath("https://github.com/Pelaggio/Pelaggio.git"), "pelaggio/pelaggio");
+		assert.equal(gitRemotePath("git@github.com:pelaggio/pelaggio.git"), "pelaggio/pelaggio");
+		assert.equal(gitRemotePath("evil.example:x@github.com:owner/repo.git"), "x@github.com:owner/repo");
+		assert.equal(gitRemotePath(""), undefined);
+	});
+
+	it("falls back to GH_ENTERPRISE_HOST, not github.com, for a GHES operator (#554)", () => {
+		// isTrustedFetchHost accepts either handle, so reading only GH_HOST sent an operator who
+		// configured GH_ENTERPRISE_HOST alone to github.com whenever origin was missing/untrusted.
+		const env = { GH_ENTERPRISE_HOST: "ghe.corp.internal", GH_ENTERPRISE_TOKEN: "ghe_enterprise_token_val" };
+		assert.deepEqual(reviewedFetchRemote("https://evil.example.com/o/r.git", "pelaggio/pelaggio", env), {
+			url: "https://ghe.corp.internal/pelaggio/pelaggio.git",
+			host: "ghe.corp.internal",
+		});
+		// GH_HOST still wins when both are set.
+		assert.equal(reviewedFetchRemote("", "pelaggio/pelaggio", { ...env, GH_HOST: "ghe.example.com" }).host, "ghe.example.com");
+	});
+
 	it("refuses the reviewed-head fetch when local git config redirects the trusted remote (#554)", async () => {
 		// `url.<base>.insteadOf` lives in the SEAT-WRITABLE `.git/config` and rewrites a command-line
 		// URL, so a trusted URL alone is not enough — resolution is checked before the fetch runs.
@@ -572,12 +605,30 @@ describe("pr-review CLI aggregation", () => {
 		// Fail closed: resolution failure posts NO required status, which leaves the PR blocked.
 		assert.deepEqual(redirected.statuses, []);
 		assert.equal(redirected.stdout.includes("ghs_ci_job_token_value"), false, "the token never surfaces");
-		// No false fire: an insteadOf rewrite that stays on the trusted host proceeds normally.
+		// A SAME-HOST rewrite is the sharper case: it keeps the trusted host but swaps the
+		// repository, so `refs/heads/main` comes from an attacker-controlled repo that can serve
+		// the real head SHA as main and yield a false-empty diff. Host alone would have allowed it.
+		const sameHost = await runCli({ env: { GH_TOKEN: "ghs_ci_job_token_value" }, insteadOfUrl: "https://github.com/attacker/decoy.git" });
+		assert.equal(
+			sameHost.execCalls.some((call) => call.cmd === "git" && call.args.includes("fetch")),
+			false,
+			"a same-host repository swap must be refused, not just a host change",
+		);
+		assert.deepEqual(sameHost.statuses, []);
+		// No false fire (1): the common `insteadOf` ssh/https mapping rewrites the SCHEME of the
+		// same target and must still fetch — the guard compares identity, not the URL string.
+		const schemeRewrite = await runCli({ insteadOfUrl: "git@github.com:pelaggio/pelaggio.git" });
+		assert.equal(schemeRewrite.code, 0);
+		assert.ok(
+			schemeRewrite.execCalls.some((call) => call.cmd === "git" && call.args.includes("fetch")),
+			"a scheme-only rewrite of the same target still fetches",
+		);
+		// No false fire (2): no rewrite at all.
 		const benign = await runCli({ env: { GH_TOKEN: "ghs_ci_job_token_value" }, insteadOfUrl: "https://github.com/pelaggio/pelaggio.git" });
 		assert.equal(benign.code, 0);
 		assert.ok(
 			benign.execCalls.some((call) => call.cmd === "git" && call.args.includes("fetch")),
-			"a trusted rewrite still fetches",
+			"an unrewritten target still fetches",
 		);
 	});
 

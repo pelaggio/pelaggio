@@ -527,7 +527,10 @@ export function gitRemoteHost(remoteUrl: string): string | undefined {
 			return undefined;
 		}
 	}
-	return trimmed.match(/^(?:[^@/]+@)?([A-Za-z0-9.-]+):/)?.[1]?.toLowerCase();
+	// git's scp-like grammar splits at the FIRST colon, so the optional `user@` cannot contain
+	// one. Allowing it read `evil.example:x@github.com:o/r.git` as github.com while git fetched
+	// evil.example — a trusted-host check that passed for the wrong host.
+	return trimmed.match(/^(?:[^@/:]+@)?([A-Za-z0-9.-]+):/)?.[1]?.toLowerCase();
 }
 
 /**
@@ -569,9 +572,32 @@ const AMBIENT_FETCH_TOKEN_VARS = ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOK
  * host still serves whatever `refs/heads/main` it holds — which needs the host-brokered fetch
  * (#617); see the trust docs.
  */
+/** `owner/repo` of a git remote URL, lowercased and stripped of any `.git` suffix — the second
+ *  half of a fetch target's identity. A host check alone lets a same-host `insteadOf` swap the
+ *  repository and so the ref the diff is taken against. */
+export function gitRemotePath(remoteUrl: string): string | undefined {
+	const trimmed = remoteUrl.trim();
+	if (trimmed === "") return undefined;
+	const raw = trimmed.includes("://") ? tryUrlPath(trimmed) : trimmed.match(/^(?:[^@/:]+@)?[A-Za-z0-9.-]+:(.*)$/)?.[1];
+	const path = raw
+		?.replace(/^\/+/, "")
+		.replace(/\.git$/i, "")
+		.replace(/\/+$/, "");
+	return path === undefined || path === "" ? undefined : path.toLowerCase();
+}
+
+function tryUrlPath(url: string): string | undefined {
+	try {
+		return new URL(url).pathname;
+	} catch {
+		return undefined;
+	}
+}
+
 export function reviewedFetchRemote(originUrl: string, ghRepo: string, env: NodeJS.ProcessEnv): { url: string; host: string } {
-	const ghHost = env.GH_HOST?.trim().toLowerCase();
-	const configured = ghHost !== undefined && ghHost !== "" ? ghHost : "github.com";
+	// Both configured-host handles, since isTrustedFetchHost accepts either — reading only
+	// GH_HOST sent a GH_ENTERPRISE_HOST-only GHES operator to github.com.
+	const configured = [env.GH_HOST, env.GH_ENTERPRISE_HOST].map((value) => value?.trim().toLowerCase()).find((value) => value !== undefined && value !== "") ?? "github.com";
 	const originHost = gitRemoteHost(originUrl);
 	const host = originHost !== undefined && isTrustedFetchHost(originHost, env) ? originHost : configured;
 	// Only keep the operator's ssh scheme when the origin itself is the trusted host we resolved.
@@ -656,16 +682,29 @@ function resolveReviewedHead(exec: typeof execFileSync, pr: string, ghRepo: stri
 	childEnv.GIT_TERMINAL_PROMPT = "0";
 	// `url.<base>.insteadOf` in the seat-writable `.git/config` rewrites a command-line URL, so a
 	// trusted URL alone is not sufficient. Resolve what git will ACTUALLY contact and fail closed
-	// when the rewrite leaves the trusted host. Runs BEFORE authEnv is applied: the resolution is
-	// offline and needs no credential, so the extraheader keeps riding the fetch child alone.
-	const effectiveHost = gitRemoteHost(git(["ls-remote", "--get-url", remote.url], childEnv));
-	if (effectiveHost === undefined || !isTrustedFetchHost(effectiveHost, env)) {
-		throw new Error(`refusing reviewed-head fetch: local git config redirects the trusted remote to an untrusted host (${effectiveHost ?? "unparseable"})`);
+	// unless it is the SAME TARGET — host and repository. Host alone would let a same-host rewrite
+	// swap the repository, and so the `main` the diff is taken against. Identity, not string
+	// equality, so a legitimate scheme rewrite (the common `insteadOf` ssh/https mapping) still
+	// works. Runs BEFORE authEnv is applied: the resolution is offline and needs no credential, so
+	// the extraheader keeps riding the fetch child alone.
+	const effective = git(["ls-remote", "--get-url", remote.url], childEnv);
+	const effectiveHost = gitRemoteHost(effective);
+	const effectivePath = gitRemotePath(effective);
+	if (effectiveHost === undefined || !isTrustedFetchHost(effectiveHost, env) || effectivePath !== gitRemotePath(remote.url)) {
+		throw new Error(`refusing reviewed-head fetch: local git config redirects the trusted remote to a different target (${effectiveHost ?? "unparseable"}/${effectivePath ?? "unparseable"})`);
 	}
 	// Distinct object, not a mutation of childEnv: the extraheader must exist only in the env of
 	// the one child that fetches.
 	const fetchEnv: NodeJS.ProcessEnv = authEnv ? { ...childEnv, ...authEnv } : childEnv;
-	git(["-c", "credential.helper=", "fetch", "--quiet", remote.url, "+refs/heads/main:refs/remotes/origin/main", `+refs/pull/${pr}/head:refs/pull/${pr}/head`], fetchEnv);
+	// The rest of the seat-writable config that survives a correct destination: repository hooks
+	// (a reference-transaction hook runs during THIS fetch, with the credential in its env),
+	// transport interception (`http.proxy` + `http.sslVerify=false` reads the extraheader off the
+	// wire), and `core.sshCommand` on the ssh path. Overridden per-invocation, not repaired in the
+	// config, so nothing is written back into a tree the seat also writes. HTTPS_PROXY from the
+	// HARNESS env still applies — an empty `http.proxy` disables the config channel, not the
+	// operator's environment.
+	const fetchHardening = ["-c", "credential.helper=", "-c", "core.hooksPath=/dev/null", "-c", "http.proxy=", "-c", "http.sslVerify=true", "-c", "core.sshCommand=ssh"];
+	git([...fetchHardening, "fetch", "--quiet", remote.url, "+refs/heads/main:refs/remotes/origin/main", `+refs/pull/${pr}/head:refs/pull/${pr}/head`], fetchEnv);
 	return { sha, ...(itemId ? { itemId } : {}) };
 }
 
