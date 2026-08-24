@@ -60,6 +60,47 @@ An autonomous caller follows the same semantic procedure but cannot manufacture 
 
 Moving cheap counterexamples left must not collapse those later responsibilities into intake.
 
+## Derived review-contract projection
+
+Once planning has selected an admitted change, Pelaggio should be able to derive a compact reviewer-facing projection when a non-obvious preservation obligation exists:
+
+```text
+ReviewContract {
+  change
+  invariant?
+  evidence[]
+}
+```
+
+This is a **projection, not a new assurance ontology and not another independently-authored form**.
+
+- **change** comes from the admitted plan/realization delta, not from a mechanism hypothesis at intake;
+- **invariant** is the most consequential property the change must preserve, resolved from task-local constraints and/or an existing durable proposition when one applies;
+- **evidence** identifies the observations or checks expected to establish that the invariant survived.
+
+The projection therefore depends on **normalized charter + admitted plan**, not charter intake alone. Intake must not prematurely turn a proposed mechanism into `change` merely to fill this view.
+
+A task-local invariant does not automatically become a durable architectural proposition. Conversely, when a durable proposition already expresses the preservation obligation, the review projection should reference/derive from that semantic identity rather than duplicate its wording as a second source of truth.
+
+`Evidence` in this projection is an evidence requirement or expected observation surface. It is not an Assessment conclusion and does not become positive authority merely because a reviewer or model says the check passed. Observation, attributable Assessment, completeness, and deterministic disposition retain the boundaries exercised by the stacked assessment experiment.
+
+The projection is optional. A small bounded change may legitimately have **no non-obvious invariant** beyond ordinary correctness. In that case Pelaggio should not manufacture one for symmetry or ceremony.
+
+### Review-contract falsification examples
+
+The projection should survive at least these shapes without requiring new ontology primitives:
+
+| Change | Invariant | Evidence |
+| --- | --- | --- |
+| Replace a cache implementation | Concurrent misses for one key still cause only one upstream fetch | Concurrency-focused test/observation at the single-flight boundary |
+| Replace retry machinery | Retries must not duplicate externally visible side effects | Failure/retry fixture observing the external effect count |
+| Refactor authorization middleware | Untrusted callers cannot gain authority through an alternate path | Boundary tests across every privileged entry path |
+| Replace a persistence adapter | Committed state remains reconstructable across interruption/restart | Crash/restart recovery fixture over committed state |
+| Rework landing/commit coordination | The exact verified candidate is still the candidate made authoritative | Competing-actor/CAS fixture binding verification to authoritative commit |
+| Bump an ordinary dependency with no semantic contract change | _none beyond ordinary correctness_ | Existing tests/build plus dependency-specific checks when warranted |
+
+The last row is a negative control: **material review does not require inventing an invariant for every diff**.
+
 ## Goal-vs-proposition falsification
 
 This experiment is also the admission filter for the candidate `Goal` concept. A normalized outcome does **not** automatically become a Goal.
@@ -83,5 +124,7 @@ Compare at least:
 3. the same normalized charter plus a candidate Goal layer.
 
 Evaluate whether early normalization avoids historically known false commitments, preserves stated constraints and user intent, reduces downstream review churn, avoids needless abstraction for small work, allows partial human mediation without forced closure, and whether Goal materially improves durable explanations beyond proposition-only semantics.
+
+For the derived review contract, compare review with the ordinary plan/diff alone against review with the compact `Change → Invariant → Evidence` projection. Reject or narrow the projection if it duplicates authored semantics, encourages mechanism hypotheses to masquerade as admitted changes, promotes task-local invariants unnecessarily, confuses requested evidence with Assessment authority, or causes negative-control changes to acquire decorative invariants.
 
 Reject or narrow this experiment if normalization mostly restates the request, increases friction on bounded work, strips meaningful user constraints, causes independent models to invent incompatible objectives, coerces humans into false closure, or if a Goal layer adds no consequential answerability after normalization.
