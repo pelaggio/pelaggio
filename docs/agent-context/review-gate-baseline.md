@@ -113,3 +113,102 @@ challenges already visible:
   "negative replacement constraint" conflation `#616` itself flags;
 - a live 3-vs-1 disagreement on a falsifiable question (git config scope precedence for URL-specific
   keys) that no current node or edge can carry.
+
+## First run: retrodicting #589 / #602 / #625 (2026-08-24)
+
+Encoded against the graph as it stands on `docs/charter-normalization-experiment` (the top of the
+#616 → #622 → #623 stack, which carries all three slices). Three fixtures, all with complete records
+and known outcomes.
+
+**Headline: the graph as drafted would not have caught any of the three.** In every case the failure
+is *coverage and attachment*, not semantics — which is the useful result, because it names what has
+to change rather than whether to continue.
+
+### Fixture A — #625, the unwired seat env denial
+
+The proposition **exists and is correctly stated**: `TC-014` — *"driver child environments are
+minimized and captured logs are scrubbed"* — plus `CLM-0003` (*"workers receive only necessary
+credentials"*). Both are sourced from ADR-0010.
+
+Both have **zero implementing realizations**. So would the reachability query — *"does every
+realization implementing P appear on a live call path?"* — have fired? **No. It would have found
+nothing to check and passed vacuously.**
+
+| | |
+|---|---|
+| bucket | **authoring-cost gap** (not semantic) |
+| expressible? | yes — a `CTR-*` node with `codeEvidence` is exactly the shape |
+| authored? | no, and nothing forces it |
+
+Coverage is the whole story:
+
+- **5 realizations for 56 propositions**; only 14 propositions (25%) have any `implements` edge.
+- **All 8 public `TC-*` trust claims have zero implementing realizations** — TC-003, 004, 005, 010,
+  011, 012, 013, 014. These are the guarantees the public trust manifest *publishes*.
+- The 5 realizations that exist cover pipeline topology and review orchestration — the areas #616
+  set out to demote from durable intent — not the security mechanisms.
+
+**The test that should have caught this points the wrong way.** `shadow-assurance.test.ts` Q10 is
+*"every realization exists to implement or derive from a decision/proposition"* — it iterates
+realizations and asserts each has a purpose edge. A proposition with **zero** realizations passes
+trivially. The direction that matters for #625 is the inverse: which propositions — especially
+published `TC-*` ones — claim a guarantee with no mechanism linked, and does that mechanism appear on
+a live path?
+
+### Fixture B — the #589 construction lesson
+
+The durable lesson was *"a guard must not depend on validating state the adversary can write."*
+
+It has **no legal attachment point**. `constrains` runs `proposition → [proposition, decision]`, and
+across the whole relation vocabulary **`realization` is never a legal target of any relation**.
+Realizations can only point outward. So a rule governing how mechanisms may be *built* can only be
+encoded as a proposition constraining decisions, which loses its actual force — it applies to any
+future construction, including ones with no decision node.
+
+| | |
+|---|---|
+| bucket | **lossy flattening**, shading into semantic gap |
+| what is lost | that the rule binds construction, not intent |
+
+This is `#616`'s own flagged conflation — "negative replacement constraint" — showing up as a
+concrete miss rather than a stylistic worry.
+
+### Fixture C — the 3-vs-1 disagreement
+
+Unencodable, **by design**: Q12 asserts that observations cannot support or challenge intent before
+Assessment exists, and `supports`/`challenges` are deliberately absent.
+
+The part worth flagging is that **merging the full stack does not close this.** #622 defines the
+Assessment grammar but states *"Assurance graph impact: None"* — it adds no nodes, edges, or
+relations. So after #616 + #622 + #623 all land, the dominant epistemic state of this system (69% of
+rolls; see the baseline above) still has nowhere to live in the graph.
+
+| | |
+|---|---|
+| bucket | **semantic gap, deliberate** |
+| closed by the stack? | **no** — #622 is a grammar and a ratchet, not graph nodes |
+
+### What would have to change for the graph to earn its keep
+
+Three specific, cheap, testable changes — each falsifiable against these fixtures:
+
+1. **Invert the coverage test.** Assert proposition → realization, not realization → purpose. Start
+   by requiring every published `TC-*` claim to name a mechanism. Today that check fails 8 for 8,
+   which is the point: it would have been a standing red flag rather than a silent pass.
+2. **Make `realization` a legal relation target** so construction rules can bind mechanisms. Without
+   it, the single most transferable lesson of the day cannot be written down.
+3. **Add a reachability predicate over `codeEvidence`** — a named symbol must appear on a live call
+   path, not merely exist. `buildClaudeSeatEnv` has a file, a definition, and thorough tests; what it
+   lacks is a caller. Existence checks pass; reachability checks fail. That distinction is the whole
+   finding.
+
+### Correction to the earlier reading
+
+On first seeing #625 I said it was "hard evidence for the graph" because per-PR review inspects a
+diff and cannot see reachability. The first half holds — #589's own 15 rolls missed it and #602's
+roll found it by accident of which diff was under review. The second half does not: **the graph in
+its current form would have missed it too**, for a different reason. The class of query is right; the
+instance has no data to run on.
+
+That is a better outcome than a confirmation would have been. It converts "should we invest in this?"
+into three concrete changes with a pass/fail fixture attached to each.
