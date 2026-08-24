@@ -20,7 +20,7 @@ The anchoring rule is:
 
 > Propositions say what we believe or require. Decisions say what we chose. Realizations say what exists. Observations say what happened. Assessments say what that means.
 
-The final two concepts are deliberately **future-facing**, not current node kinds. The evidence slice is expected to introduce **subject**, **observation**, **assessment**, and likely **actor** only when real custody queries require them. An observation must never intrinsically `support` or `challenge` intent; that interpretation belongs to an attributable assessment.
+The final two concepts are deliberately **future-facing**, not current node kinds; the candidate *artifact* grammar for an assessment (proposition, basis, conclusion, residual) is prototyped in the stacked `assessment-experiment.md`, not as a graph node. The evidence slice is expected to introduce **subject**, **observation**, **assessment**, and likely **actor** only when real custody queries require them. An observation must never intrinsically `support` or `challenge` intent; that interpretation belongs to an attributable assessment.
 
 Existing `CLM-*`, `CON-*`, `ASM-*`, `CTR-*`, and `TC-*` identifiers remain stable through the ontology collapse. Their prefixes are historical identities, not type declarations.
 
@@ -35,7 +35,7 @@ The class collapse does not erase role semantics: `constrains` must originate at
 The graph has two independent maintenance checks:
 
 1. **Source grounding** protects semantic extraction. High-risk cuts carry source paths plus small textual anchors into the ADR/trust corpus. CI verifies only that each anchor substring still occurs somewhere in its source file: deleting or rewording an anchored sentence forces reconciliation; moving text within the file, or changing the proposition outside the anchored snippets, is **not** detected. The `stale-source-grounding` debt check reports the same condition as a diagnostic.
-2. **Realization evidence** protects current implementation. Realization nodes carry current code/test paths, and CI verifies those paths still exist.
+2. **Realization evidence** protects current implementation. Realization nodes carry current code/test paths, and CI verifies those paths still exist — existence only, not revision-bound evidence that the mechanism still does what the realization says (ADR-0027 keeps realization claims non-authoritative until they are bound or observation-backed).
 
 Propositions deliberately do **not** contain source-code paths or symbols. A refactor should be able to replace a realization without changing proposition identity. Code linkage belongs on realization/observation; tests and runtime artifacts can later become observations interpreted by assessments.
 
@@ -67,7 +67,7 @@ Semantic conformance is behavioral before structural: competency-question fixtur
 
 ## Author once; standardize meaning before representation
 
-The maintenance and interoperability rules — author the irreducible semantic fact once and derive indexes, projections, diagnostics, diffs and transport; standardize meaning before representation; consumer-owned corpora and undecided federation; extensions that may not silently strengthen a claim — are ADR-0027 decisions 5, 8 and 9 and its constraints, not restated here. In this corpus they show up concretely: `adrMap` is derived from each node's `sources` and a test keeps them equal, generated views are regenerated rather than edited, and a worker is never asked to author a fact the harness can observe.
+The maintenance and interoperability rules — author the irreducible semantic fact once and derive indexes, projections, diagnostics, diffs and transport; standardize meaning before representation; consumer-owned corpora and undecided federation; extensions that may not silently strengthen a claim — are ADR-0027 decisions 5, 8 and 9 and its constraints, not restated here. In this corpus they show up concretely: `adrMap` is generated from each node's `sources` by `node --import tsx ci/assurance-views.ts --write` (the same command that regenerates the Mermaid views) and a test fails when the stored copy is stale, so the ADR→primitive relation is authored once; a worker is never asked to author a fact the harness can observe.
 
 ## Versioned questions and projections
 
@@ -107,7 +107,7 @@ Executable questions now include:
 - Can restart durability survive without deterministic LLM replay?
 - Is any realization orphan machinery with no articulated purpose?
 - Can the same semantic contract describe consumer-owned repository intent without depending on Pelaggio's own graph?
-- Does every public claim published as an unconditional guarantee name the mechanism that implements it? (Q14 — the registry is enumerated from `trust-claims.yml`, every record must be in the graph with its registry status (Q5), and one guarantee currently names no mechanism — TC-002, an absence claim; the live set is computed, pinned exactly by the test, and bounded by a frozen ceiling — naming a mechanism and admitting a gap are both visible test edits.)
+- Does every public claim published as an unconditional guarantee name the mechanism that implements it? (Q14 — the registry is enumerated from `trust-claims.yml`, every record must be in the graph with its registry status (Q5), and one guarantee currently names no mechanism — TC-002, an absence claim; the live set is computed, pinned exactly by `deepEqual` in the test, and bounded by a frozen ceiling — naming a mechanism and admitting a gap are both visible test edits, and the pin is the stricter of the two.)
 - Can a constraint proposition bind a mechanism, not only intent? (Q15 — `CON-0027` constrains `CTR-0004`; a rule about how guards are built is intent, not a construction convention.)
 - Is every always-loaded AGENTS.md invariant either represented in the graph or explicitly a construction rule? (Q16 — `invariantIndex`, matched by anchor substring, with the same limitation as source grounding: a bullet strengthened or weakened around its anchor is not detected.)
 
@@ -125,7 +125,7 @@ Run the corpus tests with:
 pnpm test:ci
 ```
 
-`ci/__tests__/shadow-assurance.test.ts` validates graph integrity, proposition roles, source grounding, realization evidence, ADR and AGENTS.md coverage, and the semantic questions Q1–Q16. `ci/__tests__/assurance-views.test.ts` stress-tests query execution, the six debt diagnostics, public projection boundaries, and generated views. `ci/__tests__/question-contract-experiment.test.ts` ratchets the boundaries of the candidate question grammar.
+`ci/__tests__/shadow-assurance.test.ts` validates graph integrity, proposition roles, source grounding, realization evidence, ADR and AGENTS.md coverage, and the semantic questions Q1–Q16. `ci/__tests__/assurance-views.test.ts` stress-tests query execution, the six debt diagnostics, public projection boundaries, and generated views. `ci/__tests__/question-contract-experiment.test.ts` ratchets the boundaries of the candidate question grammar and binds its first-run table to its record. Each stacked experiment (assessment evidence, charter normalization, activity provenance) ships its own `ci/__tests__/<experiment>.test.ts` in the same shape, alongside any executable slice (`ci/assessment-shadow.ts`).
 
 ## Migration rule
 

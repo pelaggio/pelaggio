@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, it } from "node:test";
+import { adrMapFromSources } from "../assurance-views.ts";
 
 const repo = resolve(new URL("../..", import.meta.url).pathname);
 type ShadowNode = {
@@ -89,20 +90,10 @@ describe("shadow assurance graph integrity", () => {
 		}
 	});
 
-	it("adrMap is a derived index of node sources, not a second hand-maintained relation", () => {
-		// ADR-0027 decision 9: the ADR -> primitive relation is authored once, on the node's `sources`.
-		// The review of this ADR found the two had drifted for five ADRs; this keeps them equal.
-		const derived: Record<string, string[]> = {};
-		for (const value of graph.nodes) {
-			for (const source of value.sources ?? []) {
-				if (!/^ADR-\d{4}$/.test(source)) continue;
-				derived[source] ??= [];
-				derived[source].push(value.id);
-			}
-		}
-		for (const key of Object.keys(derived)) derived[key] = [...new Set(derived[key])].sort();
-		const keys = [...new Set([...Object.keys(graph.adrMap), ...Object.keys(derived)])].sort();
-		for (const key of keys) assert.deepEqual([...(graph.adrMap[key] ?? [])].sort(), derived[key] ?? [], `${key}: adrMap must equal the nodes whose sources name it`);
+	it("adrMap is generated from node sources — a stale stored copy fails, and the generator is the only writer", () => {
+		// ADR-0027 decision 9: the ADR -> primitive relation is authored once, on the node's `sources`;
+		// `node --import tsx ci/assurance-views.ts --write` regenerates adrMap. A hand edit that disagrees fails.
+		assert.deepEqual(graph.adrMap, adrMapFromSources(graph), "run node --import tsx ci/assurance-views.ts --write to regenerate adrMap");
 	});
 
 	it("keeps shadow extraction non-authoritative", () => {
