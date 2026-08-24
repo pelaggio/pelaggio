@@ -54,6 +54,8 @@ These ADRs are one lane of four; keep a decision in its lane rather than duplica
 - **`docs/decisions/*.md`** (this lane) — the settled decision and *why*.
 - **`docs/trust/*`** — the *what + proof*.
 
+A fifth, **shadow** lane — `docs/assurance/` (ADR-0027) — holds the machine-readable projection of this lane and the trust registry. It is derived-and-checked, not a place to author decisions; it stays non-authoritative until promoted.
+
 These lanes route whole documents. For what belongs where *inside* a single decision, see [the three layers](#what-belongs-in-an-adr--the-three-layers) and the cut test below.
 
 Keep the ADR bar where it is: write one only for a decision that is hard to reverse, spans concerns, carries real trade-offs, or has been re-debated. Do not lower it to log routine choices.

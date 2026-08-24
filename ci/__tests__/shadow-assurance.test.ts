@@ -249,6 +249,32 @@ describe("architectural question tests", () => {
     assert.ok(bound.includes("CTR-0004"), "the git-porcelain confinement realization is the motivating instance");
   });
 
+  /**
+   * The always-loaded AGENTS.md invariant index is a channel that can introduce load-bearing intent
+   * with no ADR home (ADR-0027 review, pass 1). Every bullet must resolve to graph primitives or be
+   * explicitly classified as a construction rule; a stale index entry fails too, so the index cannot
+   * rot into a list of anchors nobody re-reads.
+   */
+  it("Q16: every AGENTS.md project invariant is covered by the graph or classified as construction", () => {
+    const agents = readFileSync(resolve(repo, "AGENTS.md"), "utf8");
+    const section = agents.split("## Project Invariants")[1]?.split("\n## ")[0] ?? "";
+    const bullets = section.split("\n").filter((line) => line.startsWith("- ")).map((line) => line.slice(2));
+    assert.ok(bullets.length >= 20, "expected the Project Invariants bullet list");
+    const entries = graph.invariantIndex.entries as Array<{ anchor: string; nodes?: string[]; construction?: string }>;
+    const matched = new Set<number>();
+    for (const bullet of bullets) {
+      const hits = entries.map((e, i) => (bullet.includes(e.anchor) ? i : -1)).filter((i) => i >= 0);
+      assert.equal(hits.length, 1, `AGENTS.md invariant must match exactly one invariantIndex entry (matched ${hits.length}): ${bullet.slice(0, 90)}`);
+      matched.add(hits[0]);
+      const entry = entries[hits[0]];
+      assert.ok((entry.nodes && entry.nodes.length > 0) !== Boolean(entry.construction), `${entry.anchor}: classify as nodes XOR construction`);
+      for (const id of entry.nodes ?? []) assert.ok(nodes.has(id), `${entry.anchor} references missing node ${id}`);
+    }
+    for (const [i, entry] of entries.entries()) assert.ok(matched.has(i), `stale invariantIndex anchor no longer in AGENTS.md: ${entry.anchor}`);
+    const covered = entries.filter((e) => e.nodes).length;
+    assert.ok(covered >= 15, `graph-covered invariants may not silently drain into construction (${covered})`);
+  });
+
   it("Q11: stable IDs survive ontology reclassification", () => {
     assert.equal(node("CLM-0006").kind, "proposition");
     assert.equal(node("CON-0004").kind, "proposition");
