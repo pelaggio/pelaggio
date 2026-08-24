@@ -180,27 +180,59 @@ describe("architectural question tests", () => {
   });
 
   /**
-   * Published TC-* claims that name no implementing realization TODAY. This list may only SHRINK:
-   * linking a claim removes it, and a NEW unlinked public claim fails. It starts at 8 of 8 — every
-   * guarantee the public trust manifest publishes currently names no mechanism in this graph — which
-   * is the finding, held as a standing red flag rather than a silent pass.
+   * Projection status decides whether a published claim OWES a mechanism. `trust-claims.yml` is the
+   * authority — read, never duplicated here — because a claim published as `planned` or
+   * `best_effort` is honestly saying the mechanism does not fully exist yet. Demanding one anyway
+   * would fire on correct, intentionally-unimplemented state: an over-refusal under the
+   * `guarded-actions.md` §8.1 bar, which requires a gate to refuse the violating dimension only.
    */
-  const TC_WITHOUT_REALIZATION = ["TC-003", "TC-004", "TC-005", "TC-010", "TC-011", "TC-012", "TC-013", "TC-014"];
-
-  it("Q14: a published trust claim names the mechanism that implements it", () => {
-    const published = graph.nodes.filter((n: any) => n.kind === "proposition" && n.visibility === "public");
-    assert.ok(published.length > 0, "expected public trust propositions in the graph");
-    for (const claim of published) {
-      const implemented = incoming(claim.id, "implements").length > 0;
-      if (implemented) {
-        assert.ok(!TC_WITHOUT_REALIZATION.includes(claim.id), `${claim.id} now names a mechanism — remove it from TC_WITHOUT_REALIZATION`);
-      } else {
-        assert.ok(TC_WITHOUT_REALIZATION.includes(claim.id), `${claim.id} publishes a guarantee with no implementing realization`);
+  function claimAssuranceStatus(): Map<string, string> {
+    const source = readFileSync(resolve(repo, "docs/trust/trust-claims.yml"), "utf8");
+    const status = new Map<string, string>();
+    let current = "";
+    for (const line of source.split("\n")) {
+      const id = line.match(/^\s*-\s+id:\s*(TC-\d+)/);
+      if (id) current = id[1];
+      const value = line.match(/^\s*status:\s*(\S+)/);
+      if (value && current !== "") {
+        status.set(current, value[1]);
+        current = "";
       }
     }
+    return status;
+  }
+
+  /**
+   * `guarantee`-status claims that name no implementing realization TODAY. This list may only
+   * SHRINK: linking a claim removes it, and a NEW unlinked guarantee fails. It starts at 6 — every
+   * unconditional guarantee the public trust manifest publishes currently names no mechanism in this
+   * graph — held as a standing red flag rather than a silent pass.
+   */
+  const GUARANTEES_WITHOUT_REALIZATION = ["TC-003", "TC-004", "TC-010", "TC-011", "TC-012", "TC-014"];
+
+  it("Q14: a published GUARANTEE names the mechanism that implements it", () => {
+    const status = claimAssuranceStatus();
+    const published = graph.nodes.filter((n: any) => n.kind === "proposition" && n.visibility === "public");
+    assert.ok(published.length > 0, "expected public trust propositions in the graph");
+    let checked = 0;
+    for (const claim of published) {
+      // No false fire: `planned` / `best_effort` claims are honest about an absent mechanism.
+      if (status.get(claim.id) !== "guarantee") {
+        assert.ok(!GUARANTEES_WITHOUT_REALIZATION.includes(claim.id), `${claim.id} is ${status.get(claim.id)}, not a guarantee — drop it from the baseline`);
+        continue;
+      }
+      checked++;
+      const implemented = incoming(claim.id, "implements").length > 0;
+      if (implemented) {
+        assert.ok(!GUARANTEES_WITHOUT_REALIZATION.includes(claim.id), `${claim.id} now names a mechanism — remove it from GUARANTEES_WITHOUT_REALIZATION`);
+      } else {
+        assert.ok(GUARANTEES_WITHOUT_REALIZATION.includes(claim.id), `${claim.id} publishes an unconditional guarantee with no implementing realization`);
+      }
+    }
+    assert.ok(checked > 0, "no guarantee-status claims were checked — the status parse is broken");
     // Q10 checks realization -> purpose; a proposition with ZERO realizations passes it trivially.
     // This is the inverse direction, and the ratchet is the part that must not regress.
-    assert.ok(TC_WITHOUT_REALIZATION.length <= 8, "the unlinked-claim baseline may only shrink");
+    assert.ok(GUARANTEES_WITHOUT_REALIZATION.length <= 6, "the unlinked-guarantee baseline may only shrink");
   });
 
   it("Q15: a construction rule can bind a mechanism, not only intent", () => {
