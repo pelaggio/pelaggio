@@ -179,6 +179,44 @@ describe("architectural question tests", () => {
     }
   });
 
+  /**
+   * Published TC-* claims that name no implementing realization TODAY. This list may only SHRINK:
+   * linking a claim removes it, and a NEW unlinked public claim fails. It starts at 8 of 8 — every
+   * guarantee the public trust manifest publishes currently names no mechanism in this graph — which
+   * is the finding, held as a standing red flag rather than a silent pass.
+   */
+  const TC_WITHOUT_REALIZATION = ["TC-003", "TC-004", "TC-005", "TC-010", "TC-011", "TC-012", "TC-013", "TC-014"];
+
+  it("Q14: a published trust claim names the mechanism that implements it", () => {
+    const published = graph.nodes.filter((n: any) => n.kind === "proposition" && n.visibility === "public");
+    assert.ok(published.length > 0, "expected public trust propositions in the graph");
+    for (const claim of published) {
+      const implemented = incoming(claim.id, "implements").length > 0;
+      if (implemented) {
+        assert.ok(!TC_WITHOUT_REALIZATION.includes(claim.id), `${claim.id} now names a mechanism — remove it from TC_WITHOUT_REALIZATION`);
+      } else {
+        assert.ok(TC_WITHOUT_REALIZATION.includes(claim.id), `${claim.id} publishes a guarantee with no implementing realization`);
+      }
+    }
+    // Q10 checks realization -> purpose; a proposition with ZERO realizations passes it trivially.
+    // This is the inverse direction, and the ratchet is the part that must not regress.
+    assert.ok(TC_WITHOUT_REALIZATION.length <= 8, "the unlinked-claim baseline may only shrink");
+  });
+
+  it("Q15: a construction rule can bind a mechanism, not only intent", () => {
+    // `constrains` reaching realization is what lets a rule about how guards may be BUILT attach to
+    // the thing built. Without it CON-0027 could only constrain decisions, losing its actual force.
+    assert.ok(graph.relationKinds.constrains.to.includes("realization"), "constrains must be able to target a realization");
+    const rule = node("CON-0027");
+    assert.equal(rule.role, "constraint");
+    const bound = outgoing("CON-0027", "constrains").map((e) => e.to);
+    assert.ok(bound.length > 0, "CON-0027 must bind at least one mechanism");
+    for (const id of bound) assert.equal(node(id).kind, "realization", `CON-0027 should bind mechanisms; ${id} is not one`);
+    // CTR-0004 is the live instance: worktree confinement decides from observed Git porcelain/ref
+    // state, which the seat can write, and a `.git/config` rewrite produces no porcelain delta.
+    assert.ok(bound.includes("CTR-0004"), "the git-porcelain confinement realization is the motivating instance");
+  });
+
   it("Q11: stable IDs survive ontology reclassification", () => {
     assert.equal(node("CLM-0006").kind, "proposition");
     assert.equal(node("CON-0004").kind, "proposition");
