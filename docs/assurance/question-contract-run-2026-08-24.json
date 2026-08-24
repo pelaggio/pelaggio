@@ -1,7 +1,7 @@
 {
 	"status": "experimental-shadow-only",
 	"run": "2026-08-24",
-	"design": "4 authentic operator questions × 2 conditions (raw: docs/decisions + trust registry only; graph: deterministic premises from selectView supplied, ADRs readable for rationale) × 2 models (claude sonnet, claude opus). Read-only agents; answers ≤180 words + typed JSON. Cross-provider consistency was NOT measured — both models are one provider.",
+	"design": "4 authentic operator questions × 2 conditions × 2 models (claude sonnet, claude opus). raw: read-only agent over docs/decisions + docs/trust/trust-claims.yml only. graph: the experimenter chose the matching named view from views.json by hand and supplied the deterministic premises selectView returned (node ids, kinds, roles, statuses, statements, typed edges); the agent could also read ADRs for rationale. This is ARM 2 of the doc's comparison (today's flat named-view catalog) against ARM 1 (raw corpus). No operator family or qualifier was invoked, so arms 3–5 were NOT run and this record says nothing about the candidate grammar. Cross-provider consistency was not measured — both models are one provider.",
 	"questions": {
 		"Q-a": "If the fixed six-step pipeline and the two separate review orchestrators were removed tomorrow, what architectural intent must survive, and what is free to change? (view: affected source=ADR-0022)",
 		"Q-b": "What would have to be true for provider-diverse review to no longer be worth its cost, and what evidence would show it? (view: review)",
@@ -55,11 +55,16 @@
 				"mustSurvive": 0.4,
 				"note": "10 shared of 25"
 			}
+		},
+		"graphReconciled": {
+			"Q-a": 1,
+			"Q-b": 0.63,
+			"Q-c": 0.89
 		}
 	},
 	"defectsInTheGraphSurfacedByTheRun": [
-		"supersedes was a declared relation with zero edges; ADR-0025 amends ADR-0005, so DEC-0015 supersedes DEC-0002 was authored (encoding-loss bucket: authoring-cost gap)",
-		"DEC-0012 carried status 'historical-topology-under-reconsideration' with no source; ADR-0022 is accepted and ADR-0025 says it is not amended — both raw replicas found no reconsideration. Relabelled current-construction-choice; the question is now an extraction.openQuestions entry (bucket: the graph overclaimed, which is the inverse of encoding loss and the one the source-grounding check cannot catch)"
+		"supersedes was a declared relation with zero edges; the graph-condition opus replica on Q-d noted that DEC-0015 over DEC-0002 lived only in ADR-0025 prose. Authored (encoding-loss bucket: authoring-cost gap)",
+		"DEC-0012 carried status 'historical-topology-under-reconsideration' with no source. Both RAW replicas on Q-d found ADR-0022 accepted and unamended and did not list it; both GRAPH replicas repeated the label. Relabelled current-construction-choice and logged as an extraction.openQuestions entry (the graph overclaimed — the inverse of encoding loss, which the source-grounding check cannot catch, and which the raw condition caught)"
 	],
 	"runs": [
 		{
@@ -74,7 +79,25 @@
 			"toolUses": 10,
 			"ms": 125401,
 			"realizationAsIntent": 1,
-			"nodes": null
+			"nodes": null,
+			"items": {
+				"mustSurvive": [
+					"Blocking gate decisions stay deterministic, never model-adjudicated",
+					"Review stays policy-triggered, not an optional or skippable step",
+					"CI/PR gate keeps cold, out-of-context isolation as a guarantee",
+					"Merge gate fails closed on missing, invalid, or must-fix findings",
+					"Author, reviewer, and judge roles remain strictly separate",
+					"Safety-class findings hard-block via parkExit; Judge cannot downgrade",
+					"Validated findings survive until explicitly refuted, never by omission",
+					"implement's codegen/verify interleave stays unsplit to avoid cascading errors"
+				],
+				"mayChange": [
+					"STEPS' fixed six-step sequence, count, and step names",
+					"Number/structure of orchestrators: two code paths vs unified Node interface",
+					"Whether the cold CI gate emits typed provenance effects",
+					"Judge composition beyond v1's single fixed Judge (chartered extensions)"
+				]
+			}
 		},
 		{
 			"q": "Q-a",
@@ -88,7 +111,45 @@
 			"toolUses": 15,
 			"ms": 88929,
 			"realizationAsIntent": 3,
-			"nodes": null
+			"nodes": null,
+			"items": {
+				"mustSurvive": [
+					"Blocking gate stays deterministic; the model is policy input, never the gate",
+					"Policy expressed as data, not hard-coded into mechanism",
+					"Harness and worker meet only at a typed, fail-closed, capability-denied seam",
+					"Review gate fails closed; shakedown fails safe; two role-appropriate parsers",
+					"Roles stay separate: author, reviewer, and judge are distinct",
+					"Convergence uses deterministic fingerprint-survival; omission is never refutation",
+					"Statistical stability never gates the blocking set; majority vote rejected",
+					"Six safety classes hard-block to parkExit; no judge downgrade",
+					"Safety class assigned at emission by harness rules; ambiguity defaults to safety",
+					"Genuine reviewer verdict splits park pre-judge, fail-closed, for all targets",
+					"Diversity is prefer-not-require; degraded runs emit a visibly weaker record",
+					"Degrade on rigor only, never on the security or credential boundary",
+					"A cold, out-of-context review path outside the mutable checkpoint/effects lifecycle",
+					"Gate rigor sized by reversibility; heavy deterministic gates only at irreversible boundaries",
+					"Durability via checkpoint-restart at boundaries, not deterministic LLM replay",
+					"Codegen and verify stay interleaved, never split into separate scheduled nodes",
+					"Review provenance is a record, not an attestation, until separately bound",
+					"Capability routing fails closed; never emulate a missing capability",
+					"Architectural identity must survive replacement of its implementation",
+					"Fixed configured review seats stay authoritative over provider pool draws"
+				],
+				"mayChange": [
+					"The number, names, and ordering of pipeline steps",
+					"Whether review runs as one orchestrator or two",
+					"Uniform Node interface with trigger attribute — a rename, buying documentation only",
+					"Reviewer count and which providers occupy reviewer seats",
+					"Judge composition; v1's single fixed strong Judge is versioned",
+					"Whether the cold CI gate emits typed review effects",
+					"Judgment-band tolerance posture, configurable per project and over time",
+					"Storage shape, JSON representation, tool names, indexes, renderers",
+					"Chartered extensions: Defender role, cross-driver consensus, plan-stage convergence",
+					"Bounded parse tolerance, narrowing fail-close flakes without weakening the guarantee",
+					"Named views and projections, provided they derive from semantic definitions",
+					"Which provider natively satisfies a required capability"
+				]
+			}
 		},
 		{
 			"q": "Q-a",
@@ -113,6 +174,19 @@
 					"CTR-0001",
 					"CTR-0002",
 					"DEC-0012"
+				]
+			},
+			"items": {
+				"mustSurvive": [
+					"Independent evaluation never inherits mutable authoring context or reasoning [CLM-0016]",
+					"Established blocking evidence persists until explicitly refuted [CLM-0009, CON-0008]",
+					"Silence, omission, or partial evaluation cannot clear a blocker [CON-0008]",
+					"Safety-floor conditions enforced by deterministic harness controls, not worker judgment [CLM-0019]"
+				],
+				"mayChange": [
+					"The fixed six-step pipeline sequence [CTR-0001, DEC-0012]",
+					"Two distinct orchestrators for authoring vs cold review [CTR-0002, DEC-0012]",
+					"The overall topology recorded in DEC-0012, under reconsideration [DEC-0012]"
 				]
 			}
 		},
@@ -144,6 +218,25 @@
 					"DEC-0012",
 					"DEC-0014"
 				]
+			},
+			"items": {
+				"mustSurvive": [
+					"Independent evaluation inherits no mutable authoring reasoning or context [CLM-0016]",
+					"Cold out-of-context review isolation is a guarantee, not debt [CLM-0016, DEC-0012]",
+					"Author, reviewer, and judge roles remain separate [CLM-0016, DEC-0014]",
+					"Established blocking evidence survives until valid evidence explicitly refutes it [CLM-0009]",
+					"Silence, unavailability, or partial evaluation never clears a blocker [CON-0008]",
+					"Safety-floor enforcement stays deterministic and harness-owned, not worker judgment [CLM-0019]",
+					"Convergence rests on deterministic evidence survival, not model tallying [CLM-0009, DEC-0014]",
+					"Implement's codegen/verify interleave stays unsplit per ADR-0022 [DEC-0012]"
+				],
+				"mayChange": [
+					"Number, names, and enumeration of pipeline steps [CTR-0001, DEC-0012]",
+					"Two distinct orchestrators versus one unified review path [CTR-0002, DEC-0012]",
+					"Reviewer seat count, single-Judge choice, bounded pass limit [CTR-0003, DEC-0014]",
+					"The fixed-topology decision itself, explicitly flagged under reconsideration [DEC-0012]",
+					"Concurrent-reviewers-plus-Judge strategy, still labelled under validation [DEC-0014]"
+				]
 			}
 		},
 		{
@@ -158,7 +251,24 @@
 			"toolUses": 11,
 			"ms": 70168,
 			"realizationAsIntent": 2,
-			"nodes": null
+			"nodes": null,
+			"items": {
+				"mustSurvive": [
+					"ADR-0016 safety floor: six safety-class findings always hard-block, never Judge-downgradable",
+					"Role separation: author ≠ reviewer ≠ judge",
+					"Emission-time classification stays rule-based, not model discretion (anti-downgrade)",
+					"Provenance/record of whatever review strategy actually ran is honest, never laundered",
+					"Degraded (fewer-reviewer or same-provider) runs must emit a visibly weaker record, never the same badge",
+					"Fail-closed merge gate on must-fix findings survives (TC-003)"
+				],
+				"mayChange": [
+					"Number of reviewers N, or whether multiple reviewers run at all",
+					"Whether provider diversity is used vs same-provider degraded mode",
+					"The Judge role's specific implementation or convergence-loop mechanics",
+					"Provider diversity requirement level (already 'prefer', not 'require')",
+					"Fallback to fewer reviewers or best-effort plan.publish under rigor pressure"
+				]
+			}
 		},
 		{
 			"q": "Q-b",
@@ -172,7 +282,27 @@
 			"toolUses": 10,
 			"ms": 84114,
 			"realizationAsIntent": 1,
-			"nodes": null
+			"nodes": null,
+			"items": {
+				"mustSurvive": [
+					"Blocking gate stays deterministic and fail-closed; the model is never the gate",
+					"Safety-class findings hard-block and park; no lone judge downgrades them",
+					"Validated findings survive until explicitly refuted; omission is never refutation",
+					"Degrade on rigor only, never on the security/credential boundary",
+					"Degraded runs emit a visibly weaker record, never the same badge",
+					"Missing-finding residual stays carried, e.g. by post-merge verification",
+					"Heavy deterministic gates remain at the irreversible merge-to-main boundary",
+					"Reviewing authority stays out-of-context from the authoring session"
+				],
+				"mayChange": [
+					"Number of reviewer seats and which providers fill them",
+					"Provider diversity, already 'prefer' not 'require', may drop entirely",
+					"Judge synthesis as the consolidation mechanism",
+					"Review living upstream in authoring versus a post-hoc gate",
+					"Statistical-stability levers for the below-bar note distribution",
+					"Chartered extensions: Defender role, cross-driver consensus/veto aggregation"
+				]
+			}
 		},
 		{
 			"q": "Q-b",
@@ -198,6 +328,19 @@
 					"DEC-0014",
 					"CTR-0003",
 					"ASM-0002"
+				]
+			},
+			"items": {
+				"mustSurvive": [
+					"independent evaluation isolated from mutable authoring context [CLM-0016]",
+					"safety floors enforced deterministically by harness, not worker judgment [CLM-0019]",
+					"blocking evidence survives omission and partial evaluation until refuted [CLM-0009][CON-0008]",
+					"verifiable provenance ties shipped artifacts to source and execution evidence [CLM-0008]"
+				],
+				"mayChange": [
+					"the concurrent-N-reviewers-plus-Judge mechanism itself [DEC-0014][CTR-0003]",
+					"the assumption diversity justifies its incremental cost [ASM-0002]",
+					"provider diversity as prefer, including dropping to single agent [DEC-0014]"
 				]
 			}
 		},
@@ -230,6 +373,23 @@
 					"DEC-0014",
 					"DEC-0012"
 				]
+			},
+			"items": {
+				"mustSurvive": [
+					"evaluation stays independent of authoring reasoning and context [CLM-0016]",
+					"established blocking evidence survives omission and partial evaluation [CLM-0009, CON-0008]",
+					"silence or unavailability never clears a prior blocker [CON-0008]",
+					"safety floor enforced deterministically, not by model judgment [CLM-0019]",
+					"delivered artifacts keep independently verifiable provenance [CLM-0008, DEC-0003, DEC-0008]",
+					"evaluative facts join from the record owning them [DEC-0020]"
+				],
+				"mayChange": [
+					"reviewer seat count and provider diversity preference [ASM-0002, CTR-0003]",
+					"the configured Judge role and consolidation mechanism [DEC-0014, CTR-0003]",
+					"bounded revise/re-review pass count [CTR-0003]",
+					"separate authoring and cold-review orchestrator topology [DEC-0012]",
+					"the concurrent-reviewer strategy itself, still under validation [DEC-0014]"
+				]
 			}
 		},
 		{
@@ -244,7 +404,30 @@
 			"toolUses": 5,
 			"ms": 40889,
 			"realizationAsIntent": 6,
-			"nodes": null
+			"nodes": null,
+			"items": {
+				"mustSurvive": [
+					"Git ref CAS is the mandatory, fail-closed correctness fence for every push",
+					"Push uses explicit force-with-lease bound to observed SHA, never implicit force",
+					"Observed base must be verified ancestor of candidate before push (no rewind)",
+					"Any ordering primitive (locks, merge-slot) never replaces the CAS fence",
+					"Integration/verification runs in isolated worktree, never the shared checkout",
+					"Landing receipt is harness-owned, not a trust input, validated fail-closed",
+					"Reconciliation requires candidate descends from observedBase and matches actual remote",
+					"Claim retained until both landing and write-back succeed",
+					"Blocking/merge gate stays deterministic, never model-adjudicated",
+					"Merge/review gate fails closed on malformed, erroring, or refused output",
+					"Every load-bearing guarded action must be fenced or reconciled, not a hint",
+					"Ordering (locks/queues/serialization) cannot substitute for state-owning authority"
+				],
+				"mayChange": [
+					"Which primitive provides cross-process ordering (e.g. bd merge-slot)",
+					"Local file-lock contention-reducer mechanism and sizing",
+					"Retry-ladder attempt bound and re-merge policy",
+					"Admission lattice trigger/ordering resolution specifics",
+					"Dependency-isolation approach (shared fail-closed vs per-attempt install)"
+				]
+			}
 		},
 		{
 			"q": "Q-c",
@@ -258,7 +441,44 @@
 			"toolUses": 9,
 			"ms": 69128,
 			"realizationAsIntent": 10,
-			"nodes": null
+			"nodes": null,
+			"items": {
+				"mustSurvive": [
+					"Git ref compare-and-swap is the correctness fence, mandatory and fail-closed",
+					"Verification bound to the exact candidate SHA being pushed",
+					"Explicit --force-with-lease=main:<observed-sha>, never the implicit form",
+					"Independent ancestry check: candidate descends from observed base",
+					"Ordering/locks reduce contention, never substitute for the fence",
+					"Integration and verification in a detached worktree, not the shared checkout",
+					"Dependency mutation fenced for all sharers, or per-attempt dependency isolation",
+					"Landing receipt is harness-owned, outside model-writable trees, validated fail-closed",
+					"A receipt alone never authorizes Landed; remote confirmation required",
+					"Already-landed candidate returns Landed; never re-merge onto its own merge",
+					"Commit-producing write-back staged into the verified candidate before push",
+					"No unverified second push or post-landing write to default branch",
+					"Merge conflict or verification failure terminates Contended, claim retained",
+					"Every load-bearing guarded action is fenced or reconciled",
+					"Attempt freshness unforgeable by the agent; self-validation is not fencing",
+					"A time lease is not liveness; terminal effects stay fenced or reconcilable",
+					"Blocking states are typed, with a named clearing actor",
+					"Unavailable evidence cannot erase an unresolved blocker; omission is not refutation",
+					"The blocking gate is deterministic; the model is never the gate",
+					"Landing admission is run-scoped, resolved from fail-closed forge reads",
+					"no-forge requires positive evidence; never inferred from configuration",
+					"Pull-request remains the default; autonomous push is explicit opt-in",
+					"Auto-merge safety stays platform-enforced; the agent cannot merge around it"
+				],
+				"mayChange": [
+					"Whether a local file lock contention reducer is used",
+					"Whether bd merge-slot provides cross-process ordering",
+					"The optimistic-CAS versus pessimistic-slot shape of the seam",
+					"Retry ladder bound (currently three attempts)",
+					"Ordering mode: queue, latest-base, pelaggio-serial, or unordered",
+					"Which of fail-closed-for-sharers or per-attempt isolation is implemented",
+					"Contention-reducer sizing and stale-escape handling",
+					"Fast-forwarding MAIN_REPO after a confirmed push (warns, does not contend)"
+				]
+			}
 		},
 		{
 			"q": "Q-c",
@@ -289,6 +509,27 @@
 					"DEC-0015",
 					"CON-0004",
 					"DEC-0016"
+				]
+			},
+			"items": {
+				"mustSurvive": [
+					"Worker cannot self-authorize effects of its own work [CLM-0006]",
+					"Authorization facts come from authoritative observations, not the worker [CON-0012]",
+					"Stale or concurrent actor must not cause unintended landing [CLM-0007]",
+					"Success requires positive evidence bound to the intended candidate [CLM-0007]",
+					"Absence or disappearance is never proof of successful landing [CON-0009]",
+					"Ownership/exclusivity derives from one authoritative atomic state [CLM-0018]",
+					"Safety-floor enforcement is deterministic, harness-owned or independently enforced [CLM-0019]",
+					"Reducing human involvement is bounded by a non-negotiable safety floor [CLM-0013]",
+					"Lowering the safety floor requires authority outside the worker [CLM-0013]",
+					"Locks, queues, ordering, prechecks cannot substitute for a fence or reconciler [CON-0004]",
+					"Diagnostics, ordering, prechecks are never load-bearing enforcement [CON-0003]"
+				],
+				"mayChange": [
+					"Specific gating platform, e.g. branch protection, may be superseded [DEC-0002]",
+					"Concrete landing technique, e.g. candidate-bound CAS push, may change [DEC-0015]",
+					"Cross-process ordering mechanism, e.g. merge-slot, is optional and swappable [DEC-0015, CON-0004]",
+					"Fenced-vs-reconciled classification scheme may evolve with new actions [DEC-0016]"
 				]
 			}
 		},
@@ -322,6 +563,28 @@
 					"DEC-0015",
 					"CON-0004"
 				]
+			},
+			"items": {
+				"mustSurvive": [
+					"landing authorized by authority independent of the landing worker [CLM-0006]",
+					"authorizing facts are authoritative observations, not worker assertions [CON-0012]",
+					"landing requires positive evidence bound to the intended candidate [CLM-0007]",
+					"no stale or concurrent actor can cause unintended landing [CLM-0007]",
+					"absence or disappearance is never proof of successful landing [CON-0009]",
+					"exclusivity derives from one authoritative atomic state [CLM-0018]",
+					"safety floor enforced by deterministic harness-owned controls, not model judgment [CLM-0019, CON-0012]",
+					"load-bearing landing action remains fenced or reconciled, not a hint [DEC-0016]",
+					"locks, queues, prechecks reduce contention only; never the fence [CON-0004]",
+					"diagnostics, ordering, prechecks never counted as load-bearing enforcement [CON-0003]",
+					"human involvement reducible only above non-negotiable floor; lowering needs external authority [CLM-0013]"
+				],
+				"mayChange": [
+					"branch protection versus candidate-bound compare-and-swap as the fence implementation [DEC-0002, DEC-0015]",
+					"ordering layer presence: merge-slot, queue, or none, being optional [DEC-0015, CON-0004]",
+					"retry ladder shape and attempt bounds on contention [DEC-0015; ADR-0025 §3]",
+					"admission trigger and ordering resolution across the lattice [ADR-0025 §6]",
+					"the executor seam signature and receipt carriage details [ADR-0025 §§2, 8]"
+				]
 			}
 		},
 		{
@@ -341,7 +604,15 @@
 			"filesRead": 11,
 			"tokens": 58463,
 			"toolUses": 15,
-			"ms": 113771
+			"ms": 113771,
+			"items": {
+				"historical": [
+					"ADR-0003 (amended by ADR-0015)",
+					"ADR-0004 (amended by ADR-0026)",
+					"ADR-0005 (amended by ADR-0025)",
+					"ADR-0026 decisions 3, 6, 9, 10 (withdrawn)"
+				]
+			}
 		},
 		{
 			"q": "Q-d",
@@ -368,7 +639,23 @@
 			"filesRead": 31,
 			"tokens": 50041,
 			"toolUses": 14,
-			"ms": 115746
+			"ms": 115746,
+			"items": {
+				"historical": [
+					"ADR-0026 decisions 3, 6, 9, 10 (withdrawn in place)",
+					"ADR-0003 (amended by ADR-0015)",
+					"ADR-0004 (amended by ADR-0026)",
+					"ADR-0005 (amended by ADR-0025; TC-013 planned)",
+					"ADR-0002 (accepted with known gap)",
+					"ADR-0001 alternative revisited by ADR-0023",
+					"ADR-0015 condition 2 / ADR-0018 gate binding (target-state)",
+					"ADR-0022 alternatives (rejected)",
+					"Beads landing half (reversed by ADR-0025)",
+					"ADR-0027 (proposed; graph non-authoritative)",
+					"ADR shape-gate prototype (withdrawn)",
+					"ADR-0026 renumbering (reverted)"
+				]
+			}
 		},
 		{
 			"q": "Q-d",
@@ -385,7 +672,16 @@
 			"filesRead": 6,
 			"tokens": 39241,
 			"toolUses": 8,
-			"ms": 68080
+			"ms": 68080,
+			"items": {
+				"historical": [
+					"DEC-0002 historical-partially-superseded",
+					"DEC-0012 historical-topology-under-reconsideration",
+					"DEC-0015 target-construction-choice",
+					"DEC-0019 proposed-migration-decision",
+					"DEC-0020 proposed-construction-choice"
+				]
+			}
 		},
 		{
 			"q": "Q-d",
@@ -406,7 +702,125 @@
 			"tokens": 31674,
 			"toolUses": 7,
 			"ms": 52731,
-			"surfaced": "supersedes relation declared but never authored; DEC-0015 over DEC-0002 lived only in ADR-0025 prose"
+			"surfaced": "supersedes relation declared but never authored; DEC-0015 over DEC-0002 lived only in ADR-0025 prose",
+			"items": {
+				"historical": [
+					"DEC-0002 historical-partially-superseded",
+					"DEC-0012 historical-topology-under-reconsideration"
+				],
+				"notYetCurrent": [
+					"DEC-0014",
+					"DEC-0015",
+					"DEC-0019",
+					"DEC-0020"
+				]
+			}
 		}
-	]
+	],
+	"graphRevision": "premises computed at docs/shadow-assurance-graph commit 0d64a4c; the graph was changed afterwards by this run's own findings (supersedes edge, DEC-0012 status) and by later review passes, so re-running selectView at head returns a superset",
+	"premiseNodeIds": {
+		"Q-a": [
+			"CLM-0009",
+			"CLM-0016",
+			"CLM-0019",
+			"CON-0008",
+			"CTR-0001",
+			"CTR-0002",
+			"CTR-0003",
+			"DEC-0012",
+			"DEC-0014"
+		],
+		"Q-b": [
+			"ASM-0002",
+			"CLM-0008",
+			"CLM-0009",
+			"CLM-0016",
+			"CLM-0019",
+			"CON-0008",
+			"CTR-0003",
+			"DEC-0003",
+			"DEC-0008",
+			"DEC-0012",
+			"DEC-0014",
+			"DEC-0020"
+		],
+		"Q-c": [
+			"CLM-0006",
+			"CLM-0007",
+			"CLM-0013",
+			"CLM-0018",
+			"CLM-0019",
+			"CON-0003",
+			"CON-0004",
+			"CON-0009",
+			"CON-0012",
+			"DEC-0002",
+			"DEC-0015",
+			"DEC-0016"
+		],
+		"Q-d": "all 20 decision nodes with outgoing edges"
+	},
+	"confounds": [
+		"the matching view (affected/review/landing/all-decisions) was selected by the experimenter, not by a model normalizing the question — that is the probabilistic half the contract leaves outside the deterministic seam, and its cost is not in the table",
+		"graph Jaccard is over the node ids bracketed in items, which is a smaller set than the item count (an item may cite two ids; two items may cite one); raw Jaccard is over concepts hand-mapped by the experimenter",
+		"the experimenter judged realizationAsIntent for both conditions after seeing which condition produced each answer"
+	],
+	"rawConceptMapping": {
+		"Q-a": {
+			"shared": [
+				"deterministic gate / model never the gate",
+				"author-reviewer-judge role separation",
+				"safety classes hard-block (parkExit), no judge downgrade",
+				"findings survive until refuted; omission is not refutation",
+				"cold out-of-context review path",
+				"codegen/verify interleave stays unsplit",
+				"review gate fails closed"
+			],
+			"sonnetOnly": [
+				"review stays policy-triggered"
+			],
+			"opusOnly": 13,
+			"jaccard": 0.33
+		},
+		"Q-b": {
+			"shared": [
+				"safety floor hard-blocks, no judge downgrade",
+				"degraded runs emit a visibly weaker record",
+				"fail-closed / deterministic gate"
+			],
+			"sonnetOnly": 3,
+			"opusOnly": 5,
+			"jaccard": 0.27
+		},
+		"Q-c": {
+			"shared": [
+				"CAS fence",
+				"force-with-lease",
+				"ancestry check",
+				"ordering never substitutes for the fence",
+				"isolated worktree",
+				"receipt harness-owned",
+				"reconciliation / claim retained",
+				"deterministic gate",
+				"fails closed",
+				"fenced-or-reconciled"
+			],
+			"sonnetOnly": 2,
+			"opusOnly": 13,
+			"jaccard": 0.4
+		}
+	},
+	"doubleClassifiedIds": {
+		"Q-c graph sonnet": [
+			"CON-0004 (must-survive as the rule; may-change item cites it as the reason ordering is optional)"
+		],
+		"Q-c graph opus": [
+			"CON-0004 (same shape)"
+		],
+		"Q-a graph opus": [
+			"DEC-0012",
+			"DEC-0014 (cited on must-survive items as the decision that implements the invariant, and on may-change items as the decision that may change)"
+		],
+		"note": "a bracketed id is a citation, not a classification; where an id appears on both sides the item text on the must-survive side names an invariant and the id is its implementing decision or governing constraint. Reconciled Jaccard drops those ids from the must-survive set."
+	}
 }

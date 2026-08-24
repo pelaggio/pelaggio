@@ -83,7 +83,7 @@ explain(DEC-X)
   -> implements CLM-A
   -> assumes ASM-B
 
-explain(ASM-B, depth=recursive, epistemicPosture=unresolved)
+explain(ASM-B, depth=recursive)
   -> supporting assessments
   -> challenging assessments
   -> material residuals
@@ -140,38 +140,53 @@ The candidate grammar should be reduced if families collapse cleanly into retrie
 
 ## First run: four operator questions, two conditions, two models (2026-08-24)
 
-Record: `question-contract-run-2026-08-24.json`. Four authentic operator questions (the ADR-0022
+Record: `question-contract-run-2026-08-24.json` — every run's answer items, the premise node ids
+supplied, the graph revision, the hand-made concept mappings, and the reconciliation below, so the
+numbers can be re-derived from the artifact. Four authentic operator questions (the ADR-0022
 topology, the cost of provider-diverse review, replacing the landing executor, which decisions are
 no longer current) were each answered by read-only agents under two conditions — **raw**: the ADR
-corpus and trust registry only; **graph**: deterministic premises retrieved by `selectView` for the
-matching view, with the ADRs readable for rationale — by two models (claude sonnet, claude opus).
-This is arms 1 and 5 of the comparison above; arms 2–4 were not run.
+corpus and trust registry only; **graph**: the deterministic premises `selectView` returned for a
+named view in `views.json`, with the ADRs readable for rationale — by two models (claude sonnet,
+claude opus). In the terms of the comparison above this is **arm 2 (today's flat named-view
+catalog) against arm 1**; no operator family or qualifier was invoked, so arms 3–5 were not run and
+this record says nothing about the candidate grammar itself.
 
-| | graph premises | raw corpus |
+| | graph premises (arm 2) | raw corpus (arm 1) |
 |---|---|---|
 | tokens per answer | 29.1k | 45.4k |
 | files read | 5.0 | 11.3 |
 | wall-clock | 56 s | 89 s |
 | must-survive items per answer (Q-a–c) | 7.3 | 12.8 |
 | must-survive items that name a mechanism rather than a property | 7% | 30% |
-| cross-model agreement on must-survive (Jaccard, Q-a / Q-b / Q-c) | 0.67 / 0.63 / 0.90 | 0.33 / 0.27 / 0.40 |
+| cross-model agreement on must-survive (Jaccard, Q-a / Q-b / Q-c) | 0.67 / 0.63 / 0.90 — reconciled 1.00 / 0.63 / 0.89 | 0.33 / 0.27 / 0.40 |
+
+Reconciliation: in both Q-c graph replicas `CON-0004` is cited on a must-survive item (the rule that
+ordering never substitutes for a fence) and on a may-change item (the reason an ordering layer is
+optional); Q-a opus cites `DEC-0012`/`DEC-0014` on both sides as the decision implementing an
+invariant and as the decision that may change. A bracketed id is a citation, not a classification;
+the reconciled figures drop ids that appear on both sides from the must-survive set.
 
 The sharpest result is Q-c. Asked what must remain true *regardless of the new landing mechanism*,
 both raw replicas listed the CAS fence, `--force-with-lease`, the ancestry check, and the isolated
 worktree as must-survive — realizations of DEC-0015 presented as intent, the conflation ADR-0027
-exists to prevent — while both graph replicas placed them under may-change and agreed on nine of ten
-must-survive nodes. Q-d cut the other way: the raw replicas answered at ADR granularity (11 and 31
-files read) because the corpus has no per-decision status; the graph replicas answered directly,
-and one of them found that the graph was **wrong** — DEC-0012 carried "under reconsideration" with
-no source, and `supersedes` was declared but never authored. Both are fixed on this branch; the run
-is the reason.
+exists to prevent — while both graph replicas placed them under may-change. Q-d cut the other way:
+the raw replicas answered at ADR granularity (11 and 31 files read) because the corpus has no
+per-decision status, and in doing so exposed that the graph was **wrong** — both found ADR-0022
+accepted and unamended, which the graph's "under reconsideration" label on DEC-0012 had no source
+for; the graph replicas repeated the label. Separately, the graph opus replica noticed `supersedes`
+was declared but never authored. Both defects are fixed on this branch; the run is the reason, and
+the second is a case the source-grounding check cannot catch because it is the graph overclaiming
+rather than the prose drifting.
 
 Against the reduction trigger: the models did not perform equally well from the raw corpus at
-comparable cost — they cost 1.6× more, read 2.3× more files, and agreed with each other roughly half
-as often — but the honest reading is about boundedness and non-conflation, not correctness, since
-every raw answer was also defensible from its sources. Caveats: one provider (cross-provider
-consistency was not measured), four questions, the mechanism-naming judge is the session author,
-the raw Jaccard values are hand-mapped concepts, and the `challenge`/`recover` families could not be
-exercised because no assessment records exist yet.
+comparable cost — 1.6× the tokens, 2.3× the files, and roughly half the cross-model agreement — but
+the honest reading is boundedness and non-conflation, not correctness, since every raw answer was
+also defensible from its sources. Confounds and caveats, all recorded in the artifact: the matching
+view was chosen by the experimenter, which is the probabilistic normalization step this contract
+leaves outside the deterministic seam, and its cost is not in the table; the mechanism-naming judge
+and the raw concept mapping are the session author's; graph Jaccard is over cited node ids, a
+smaller set than the item counts; one provider, so cross-provider consistency was not measured;
+four questions. The `challenge` family and the `epistemicPosture` qualifier could not be exercised
+because no assessment records exist; `recover`-shaped questioning was exercised implicitly by Q-b.
 
 No question family, qualifier, answer schema, 5W1H field, federation mechanism, transport, or tool name is promoted by this document.
