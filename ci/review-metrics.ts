@@ -9,6 +9,7 @@
  * reported spend and is mostly notional against a subscription pool — read rolls and wall-clock as
  * the scarce resources, and cost as their proxy.
  */
+import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -145,16 +146,30 @@ export function summarize(records: readonly GateRecord[]): Baseline {
 	};
 }
 
+/** Stable fingerprint of the exact corpus a number was computed from. A baseline that cannot name
+ *  its inputs is not reproducible: this corpus grows while you work, and figures quoted from an
+ *  earlier run silently stop matching a later one. */
+export function corpusDigest(records: readonly GateRecord[]): string {
+	const ids = records.map((r) => `${r.prNumber}-${r.headSha}`).sort();
+	return `${ids.length}:${createHash("sha256").update(ids.join("\n")).digest("hex").slice(0, 12)}`;
+}
+
 function main(): void {
-	const dir = process.argv[2] ?? join(repoRoot(), ".dev", "pr-review-gate-records");
-	const records = loadGateRecords(dir);
+	const args = process.argv.slice(2);
+	const untilFlag = args.indexOf("--until");
+	// Freeze the cutoff to reproduce a published figure; omit it to measure the live corpus.
+	const until = untilFlag === -1 ? undefined : args[untilFlag + 1];
+	const dir = args.find((a) => !a.startsWith("--") && a !== until) ?? join(repoRoot(), ".dev", "pr-review-gate-records");
+	const all = loadGateRecords(dir);
+	const records = until === undefined ? all : all.filter((r) => (r.reviewedAt ?? "") < until);
 	if (records.length === 0) {
 		process.stdout.write(`no gate records under ${dir}\n`);
 		return;
 	}
 	const s = summarize(records);
 	const span = `${records[0].reviewedAt?.slice(0, 10)} → ${records[records.length - 1].reviewedAt?.slice(0, 10)}`;
-	process.stdout.write(`\nFleet gate baseline  (${span})\n${"─".repeat(72)}\n`);
+	const digest = corpusDigest(records);
+	process.stdout.write(`\nFleet gate baseline  (${span})\n  corpus ${digest}${until ? `  --until ${until}` : "  (live)"}\n${"─".repeat(72)}\n`);
 	process.stdout.write(`  PRs gated                ${s.prs}\n`);
 	process.stdout.write(`  rolls                    ${s.rolls}   (${s.rollsPerPr} per PR)\n`);
 	process.stdout.write(`  single-roll / repeat     ${s.singleRollPrs} / ${s.repeatRollPrs}\n`);

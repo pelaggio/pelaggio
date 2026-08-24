@@ -7,75 +7,95 @@ diataxis: explanation
 
 # Review-gate baseline (instrumentation)
 
-Reproduce with `npx tsx ci/review-metrics.ts`. Source is `.dev/pr-review-gate-records/` — one
-record per roll, written by the harness at gate time. This is measurement, not a check: the script
-exits 0 and prints a table.
+Reproduce with `npx tsx ci/review-metrics.ts --until 2026-08-25`. Source is
+`.dev/pr-review-gate-records/` — one record per roll, written by the harness at gate time. This is
+measurement, not a check: the script exits 0 and prints a table.
+
+**Corpus is frozen and fingerprinted: `82:e7615e16408b`.** The live corpus grows while you work, so a
+figure quoted without a cutoff stops matching its own reproduce command within hours — which happened
+to the first version of this document. Pass `--until` to reproduce a published figure; omit it to
+measure the live corpus.
 
 Cost is the fleet's own reported spend and is **mostly notional** against a subscription pool. Read
-*rolls* and *wall-clock* as the scarce resources; cost is their proxy.
+*rolls* as the scarce resource. Cost is an imperfect proxy for it, and **wall-clock is not measured
+here at all** — see the gap noted below before using this to judge anything latency-shaped.
 
-## Baseline as of 2026-08-24 (81 rolls, 29 PRs, 2026-08-05 → 2026-08-24)
+## Baseline (82 rolls, 30 PRs, 2026-08-05 → 2026-08-24)
 
 | Measure | Value |
 |---|---|
-| rolls per PR | **2.79** |
-| single-roll / repeat-roll PRs | 13 / 16 |
-| PRs that ever reached a pass | **11 of 29 (38%)** |
-| cost per roll | $37.47 |
-| cost per passing PR | **$275.92** |
+| **re-review rolls per landing** | **1.64** (target: ≤1) |
+| rolls per gated PR | 2.73 |
+| single-roll / repeat-roll PRs | 14 / 16 |
+| PRs that ever reached a pass | 11 of 30 |
+| cost per roll | $37.25 |
+| cost per passing PR | $277.65 |
 | survivors per block | 2.94 |
-| splits stamped `invalid-pass` | **56 of 81 (69%)** |
+| splits stamped `invalid-pass` | 57 of 82 |
 
-Against the campaign target of *≤1 re-review pass per landing*, actual is 2.79 rolls per PR. Against
-the ~$20/shipped-cycle budget heuristic, actual is $275.92 per passing PR.
+**Re-review rolls per landing is the figure to compare against the campaign target**, and it is the
+only one dimensionally equal to it: rolls beyond the first, counted over the 11 PRs that actually
+passed. Rolls-per-gated-PR (2.73) is a different quantity — it includes first rolls and the 19 PRs
+that never passed — and quoting it against a per-landing target overstates the miss. There are **zero
+same-SHA retries** in this corpus, so every roll is a genuine re-push rather than an infra retry.
 
-One PR dominates: #589 (#554) took **15 rolls and $784.79 — 26% of the entire corpus — and never
-passed**. Any median-based reading of this table understates the tail risk; the distribution is what
-matters, not the average.
+The cost is concentrated, and the median landing is fine: 5 of the 11 passing PRs landed on their
+first roll. The mean is carried by #553 (5 re-reviews), #599 (4), #592 (3), and #576 (3). Separately,
+#589 took 15 rolls and $784.79 — 26% of the corpus — and never passed at all.
 
-## The finding that matters: `consensus-block` has never occurred
+## `consensus-block` has never occurred — and that is by design
 
 | agreement | gate | rolls |
 |---|---|---|
 | `consensus-pass` | pass | 11 |
-| `disagreement` | block | 56 |
+| `disagreement` | block | 57 |
 | `invalid` | block | 14 |
 | `consensus-block` | block | **0** |
 
-Every pass was unanimous. **Every block was a split or a broken run.** In 81 rolls the fleet has
-never once agreed that something was broken.
+Every pass was unanimous; every block was a split or a broken run.
 
-Three consequences follow, and they are the reason this baseline exists.
+**This is the designed behaviour, not a divergence from it.** ADR-0024: *"A genuine split between
+successfully-parsed reviewer verdicts parks before the Judge, for all ship targets — a deterministic,
+fail-closed gate."* `roadmap-and-ship.md` likewise makes disagreement terminal and red. A split block
+is the contract working. An earlier draft of this document read the same table as evidence that the
+operating regime had drifted from the architecture; that reading was wrong, and the two are also
+different systems — these records come from the cold `pr-review` gate, while ADR-0024 governs the
+pre-commit authoring loop.
 
-**1. The operating regime is a one-vote veto, not convergence.** ADR-0024 describes review as a
-panel that resolves to convergence. What the records show is that a single reviewer blocks, the
-others pass, and the gate blocks. That may well be the correct fail-closed posture for a security
-gate — the point is that it is not what the architecture says it is, and cost therefore scales with
-the most pessimistic reviewer in the pool rather than with the defect rate.
+What the table does support is narrower and still useful:
+
+**1. The blocking decision is nearly always a minority one, and cost follows the most pessimistic
+reviewer.** That is intended for a security gate; the observable consequence is that fan-out width
+sets the block rate, which is what makes quorum-of-2 (#578) and seat parallelism (#547) worth
+measuring rather than assuming.
 
 **2. `ASM-0002` is now measurable, and it is under strain.** The shadow assurance graph records
 *"provider-diverse review improves defect detection enough to justify its incremental cost, latency,
-and failure surface"* as an assumption. This table is the first evidence against it: 62% of gated
-PRs never reached a pass, and the single most expensive PR never converged at all. That does not
-falsify it — the counterfactual (defects that diversity caught and a single reviewer would have
-missed) is not in this data, and #589's round-1 gate did catch a real bypassable parser. But the
-assumption can no longer be held without a `wrong-if:` that this table can test.
+and failure surface"* as an assumption. 19 of 30 gated PRs never reached a pass, and the most
+expensive never converged. This does **not** falsify it — the counterfactual (defects diversity
+caught that one reviewer would have missed) is absent from this data, and #589's round 1 caught a real
+bypassable parser. But the assumption now needs a `wrong-if:` this table can test.
 
-**3. The dominant epistemic state has no representation.** 69% of rolls are a complete, structurally
-valid split — `ok=true`, `agreement=disagreement` — stamped `breaker=invalid-pass` (#593). The
-adjudicator receives "invalid" for what is actually *"three reviewers say yes, one says no, and the
-disagreement is about a falsifiable question nobody settled."* This is not an edge case to be
-relabelled; it is the system's normal state, and the gate has no vocabulary for it.
+**3. The label is stale, though the adjudicator is not.** 57 of 82 rolls are complete, structurally
+valid splits (`ok=true`, `agreement=disagreement`) still stamped `breaker=invalid-pass` (#593). Since
+#525/#592 landed, `isEligibleFleetGateRecord` **accepts** that shape, so adjudication is no longer
+blocked by it. What remains is vocabulary: neither the record nor the graph can express *which*
+reviewers split or *over what*, so the rationale reaches a human only as prose in the gate comment.
+
+## Known gap: wall-clock is not instrumented
+
+This document calls wall-clock the scarce resource and then does not measure it. That matters most
+for exactly the interventions it names: **seat parallelism (#547) can improve landing latency without
+moving rolls-per-landing, ever-pass, or cost-per-landing at all.** So "a change that moved none of
+these did not improve throughput" is false as stated for latency-shaped changes. Gate records carry
+`reviewedAt` and `turns` but no elapsed duration; adding one is the obvious next instrument.
 
 ## What this baseline is for
 
-Any claim that a process change improves landing throughput — the assurance/assessment stack,
-`review.carry` (#605), seat parallelism (#547), quorum-of-2 (#578) — is testable against these
-numbers. The pre-change values to beat are **2.79 rolls/PR**, **38% ever-pass**, and
-**$275.92/passing PR**.
-
-Re-run after the change and compare. A change that moves none of them did not improve throughput,
-whatever else it improved.
+Claims that a process change improves landing throughput — the assurance/assessment stack,
+`review.carry` (#605), seat parallelism (#547), quorum-of-2 (#578) — are testable against these
+numbers. The values to beat: **1.64 re-review rolls per landing**, **11 of 30 ever-pass**,
+**$277.65 per passing PR** — with the wall-clock caveat above.
 
 ## Encoding loss: the second instrument
 
@@ -84,7 +104,7 @@ changing no metric above, so representational adequacy needs its own instrument 
 graded by the same judgment it exists to discipline.
 
 **Protocol.** Take a real episode with complete records and a known outcome. Encode it. Classify
-everything that does not survive the encoding:
+what does not survive:
 
 | bucket | meaning | verdict it supports |
 |---|---|---|
@@ -93,143 +113,98 @@ everything that does not survive the encoding:
 | **authoring-cost gap** | expressible, but nobody would have written it at the time | the model is correct and will not be used |
 | **no-value** | expressible, would have been authored, but the answer was already obvious | the model is decorative here |
 
-The last bucket is the one that kills ontologies, and it is `#624`'s *"findings that ordinary review
-or charter work already discovers just as well"* made countable.
+The last bucket is what kills ontologies, and it is `#624`'s *"findings ordinary review or charter
+work already discovers just as well"* made countable.
 
 **Prefer retrodiction to reconciliation for the first run.** Encoding a finished episode is cheap,
-has a control, and can fail. A broad reconciliation sweep over current HEAD is expensive and, absent
-an instrument, grades its own homework. If the model cannot losslessly hold an episode we already
-watched happen, a sweep will not produce a more trustworthy answer.
+has a control, and can fail. A sweep over current HEAD is expensive and, absent an instrument, grades
+its own homework.
 
-**First fixture: #589 / #554.** Complete records across 15 rolls, and three known encoding
-challenges already visible:
+## First run: retrodicting #589 / #602 (2026-08-24)
 
-- a false *operational* assumption recorded as settled fact (#617 stated the token-leak half was
-  closed; it was not) — the graph holds 56 propositions of which only **3** are assumptions, and all
-  three are architectural, so this class currently has nowhere to live. `charter-contract.md`'s
-  `A-n` + `wrong-if:` ledger models the same thing and the two do not reference each other;
-- a durable lesson that is neither invariant nor constraint — *a guard must not depend on validating
-  state the adversary can write* — a rule about how guards may be **built**, which is the
-  "negative replacement constraint" conflation `#616` itself flags;
-- a live 3-vs-1 disagreement on a falsifiable question (git config scope precedence for URL-specific
-  keys) that no current node or edge can carry.
+Encoded against the graph on `docs/charter-normalization-experiment` (top of the #616 → #622 → #623
+stack).
 
-## First run: retrodicting #589 / #602 / #625 (2026-08-24)
-
-Encoded against the graph as it stands on `docs/charter-normalization-experiment` (the top of the
-#616 → #622 → #623 stack, which carries all three slices). Three fixtures, all with complete records
-and known outcomes.
-
-**Headline: the graph as drafted would not have caught any of the three.** In every case the failure
-is *coverage and attachment*, not semantics — which is the useful result, because it names what has
-to change rather than whether to continue.
-
-### Fixture A — #625: the premise was wrong, and the instrument is what found that out
+### Fixture A — withdrawn. The premise was wrong, and the instrument found that out
 
 **#625 is closed as invalid.** `buildClaudeSeatEnv` *is* wired: `spawnClaudeSeat` narrows the env at
 `claude-seat.ts:614` and passes `env: childEnv` to spawn, with a second call at `:671` for the
 preflight probe — the seat-boundary placement #625 proposed as its own fix. The finding came from a
-`git grep … | head` whose limit was filled by the test file's nine matches, hiding the production
-call sites, and I then reasoned from the truncated list.
+`git grep … | head` whose limit was filled by the test file's matches, hiding the production call
+sites.
 
-What is true, and is simply #589's job: **main** has no `buildClaudeSeatEnv` and `spawnClaudeSeat`
-forwards `spawnOpts.env` unchanged, so there is no Claude-seat env narrowing on main today; #589
-introduces *and wires* it. PR #602's gate finding — *"#554 env denial is not on the Claude path"* —
-is correct against **main**, the merge base it reviewed, and is a sequencing artifact rather than a
-permanent gap.
+What is true, and is simply #589's job: **main** has no `buildClaudeSeatEnv`, so there is no
+Claude-seat env narrowing on main today; **#589 introduces and wires it**. PR #602's gate finding —
+*"#554 env denial is not on the Claude path"* — is correct against **main**, the merge base it
+reviewed, and is a sequencing artifact rather than a permanent gap.
 
-The salvageable result is not the one intended. A reachability predicate was built for this fixture
-(`ci/assurance-reachability.ts`) and, run against the #589 tree, it reported `buildClaudeSeatEnv` as
-**reachable** — contradicting the charter, two rounds of my reasoning, and a public issue. **The
-mechanized structural check was right where the human read was wrong.** That is real evidence for
-mechanizing this class of question, but it is evidence about *grep-based reasoning being unreliable*,
-not about the assurance graph, which had no node for this mechanism either way.
+The salvageable result is not the intended one. The reachability predicate built for this fixture
+(`ci/assurance-reachability.ts`), run against the #589 tree, reported the symbol **reachable** —
+contradicting the charter, two rounds of reasoning, and a public issue. **The mechanized check was
+right where the hand-read evidence was wrong.** That is evidence about grep-based reasoning being
+unreliable, not about the assurance graph, which had no node for this mechanism either way.
 
-Two honest caveats on the predicate before anyone trusts it further:
+Two caveats before trusting the predicate further:
 
 - Its first run reported the symbol reachable because **the checker's own doc comment named it** as
-  the worked example. Comments and string literals must be blanked before matching — the failure mode
-  the check exists to catch, reproduced by the check itself on its first execution.
-- It has a real false-positive class: `CLAUDE_SEAT_PASSTHROUGH_ENV_VARS` is genuinely
-  defined-but-unreferenced in production, and legitimately so — it is documented as exported *only*
-  for an env-surface conformance test. Deliberate test-only exports need an explicit allowlist, or
-  the check will cry wolf on correct code.
-
-**The coverage findings below were verified directly against the graph and do not depend on this
-fixture.** They are the part of the run that survived.
+  the worked example — the failure mode it exists to catch, reproduced by itself. Comments and string
+  literals are now blanked before matching.
+- `CLAUDE_SEAT_PASSTHROUGH_ENV_VARS` is genuinely defined-but-unreferenced and legitimately so, being
+  documented as exported only for a conformance test. Deliberate test-only exports need an allowlist.
 
 ### Coverage — verified independently of Fixture A
 
 - **5 realizations for 56 propositions**; only 14 propositions (25%) have any `implements` edge.
-- **All 8 public `TC-*` trust claims have zero implementing realizations** — TC-003, 004, 005, 010,
-  011, 012, 013, 014. These are the guarantees the public trust manifest *publishes*.
-- The 5 realizations that exist cover pipeline topology and review orchestration — the areas #616 set
-  out to demote from durable intent — not the security mechanisms.
+- **All 8 public `TC-*` claims have zero implementing realizations.** Six of those are
+  `status: guarantee` (TC-003/004/010/011/012/014); TC-005 is `best_effort` and TC-013 is `planned`,
+  and those two are honestly reporting an absent mechanism rather than a gap.
+- The five realizations are **not** all topology and review orchestration, as an earlier draft
+  claimed: CTR-0004 (worktree confinement) and CTR-0005 (the signed safety-taxonomy gate) are
+  security mechanisms. Three of five cover pipeline and review shape.
 - `shadow-assurance.test.ts` **Q10 points the wrong way**: it iterates realizations and asserts each
-  has a purpose edge, so a proposition with *zero* realizations passes trivially. The direction that
-  matters is the inverse — which propositions claim a guarantee with no mechanism linked.
+  has a purpose edge, so a proposition with *zero* realizations passes trivially.
 
 ### Fixture B — the #589 construction lesson
 
-The durable lesson was *"a guard must not depend on validating state the adversary can write."*
+The durable lesson: *"a guard must not depend on validating state the adversary can write."*
 
-It has **no legal attachment point**. `constrains` runs `proposition → [proposition, decision]`, and
-across the whole relation vocabulary **`realization` is never a legal target of any relation**.
-Realizations can only point outward. So a rule governing how mechanisms may be *built* can only be
-encoded as a proposition constraining decisions, which loses its actual force — it applies to any
-future construction, including ones with no decision node.
-
-| | |
-|---|---|
-| bucket | **lossy flattening**, shading into semantic gap |
-| what is lost | that the rule binds construction, not intent |
-
-This is `#616`'s own flagged conflation — "negative replacement constraint" — showing up as a
-concrete miss rather than a stylistic worry.
+It had **no legal attachment point**. `constrains` ran `proposition → [proposition, decision]`, and
+`realization` was never a legal target of any relation, so a rule governing how mechanisms are
+*built* could only be encoded as one governing intent. **Bucket: lossy flattening.** This is #616's
+own flagged "negative replacement constraint" conflation appearing as a concrete miss.
 
 ### Fixture C — the 3-vs-1 disagreement
 
-Unencodable, **by design**: Q12 asserts that observations cannot support or challenge intent before
-Assessment exists, and `supports`/`challenges` are deliberately absent.
+The vote split is **not** recoverable from the gate record. `agreement=disagreement` proves only that
+at least one reviewer passed and one blocked; it carries no counts and no rationale. The 3-vs-1 shape
+came from the gate's prose output, not from persisted structured evidence — which is itself the
+finding, and a sharper one than "the graph cannot hold it."
 
-The part worth flagging is that **merging the full stack does not close this.** #622 defines the
-Assessment grammar but states *"Assurance graph impact: None"* — it adds no nodes, edges, or
-relations. So after #616 + #622 + #623 all land, the dominant epistemic state of this system (69% of
-rolls; see the baseline above) still has nowhere to live in the graph.
+Unencodable in the graph by design: Q12 asserts observations cannot support or challenge intent
+before Assessment exists. **Merging the stack does not close this** — #622 states *"Assurance graph
+impact: None"*, adding no nodes or relations. **Bucket: semantic gap, deliberate.**
 
-| | |
-|---|---|
-| bucket | **semantic gap, deliberate** |
-| closed by the stack? | **no** — #622 is a grammar and a ratchet, not graph nodes |
+### What the run established, and what was done about it
 
-### What would have to change for the graph to earn its keep
+Fixture A's premise collapsed. Fixtures B and C and the coverage numbers stand, and two changes
+landed on the #616 branch in response:
 
-Three specific, cheap, testable changes — each falsifiable against these fixtures:
+1. **Q14 inverts the coverage direction** — does every published *guarantee* name a mechanism?
+   Baseline 6, ratcheted so it may only shrink. Scoped to `guarantee` status so it cannot fire on
+   claims honestly published as `planned` or `best_effort`, which would be an over-refusal under the
+   `guarded-actions.md` §8.1 bar.
+2. **`constrains` may target a realization**, and `CON-0027` is the first such rule. It binds
+   `CTR-0004` as a live instance rather than an illustration: worktree confinement decides from
+   observed Git porcelain/ref state, which the seat can write, and a `.git/config` rewrite produces
+   no porcelain delta at all.
 
-1. **Invert the coverage test.** Assert proposition → realization, not realization → purpose. Start
-   by requiring every published `TC-*` claim to name a mechanism. Today that check fails 8 for 8,
-   which is the point: it would have been a standing red flag rather than a silent pass.
-2. **Make `realization` a legal relation target** so construction rules can bind mechanisms. Without
-   it, the single most transferable lesson of the day cannot be written down.
-3. **Add a reachability predicate over `codeEvidence`** — a named symbol must appear on a live call
-   path, not merely exist. `buildClaudeSeatEnv` has a file, a definition, and thorough tests; what it
-   lacks is a caller. Existence checks pass; reachability checks fail. That distinction is the whole
-   finding.
+Reachability over `codeEvidence` is **not** proposed as a third change. Its instrument exists and is
+cheap, but its motivating example evaporated and it has not been shown to catch anything the ordinary
+process missed.
 
-### What the run actually established
-
-Fixture A's premise collapsed. Fixtures B and C, and the coverage numbers, stand:
-
-1. **Invert the coverage test** to proposition → realization. It fails 8-for-8 on published `TC-*`
-   claims today, which is the point — a standing red flag instead of a silent pass.
-2. **Make `realization` a legal relation target** so construction rules can bind mechanisms. Without
-   it the most transferable lesson of the day cannot be written down at all.
-3. **Reachability over `codeEvidence`** is cheap and its instrument now exists, but its motivating
-   example evaporated. Treat it as unproven: worth having, not yet shown to catch anything the
-   ordinary process missed.
-
-And a methodological note worth more than any of the three: **the single confirmed error of the day
-was mine, produced by a truncated grep, and it survived a charter, two PR comments, and a written
-analysis before a mechanized check contradicted it.** Whatever else the assurance work is for, the
-case for deterministic structural queries over hand-read evidence got stronger — and the case for
-trusting a confident narrative summary, including this document's, got weaker.
+A methodological note outlasts all three fixtures: **the confirmed errors of this run were in the
+analysis, not the system.** A truncated grep produced a false charter that survived two PR comments
+and a written document; a baseline table drifted from its own reproduce command within hours; a
+conclusion about architectural drift contradicted the ADR it cited. Each was caught by a mechanical
+check or an adversarial reader, none by re-reading. Whatever else the assurance work is for, that is
+the pattern it should be built to interrupt — including in documents like this one.
