@@ -1056,6 +1056,49 @@
 				"ADR-0023",
 				"ADR-0026"
 			]
+		},
+		{
+			"id": "DEC-0020",
+			"kind": "decision",
+			"slug": "claim-scoped-delivery-packet",
+			"statement": "Treat the claim as the unit of delivery: carry an intent-only packet (frame, references, identity manifest) frozen at compose time, and join every evaluative or carrier-determined fact from the record that owns it. Campaigns and releases are folds over packets, never stored objects; composition is deterministic harness work with no model authoring.",
+			"status": "proposed-construction-choice",
+			"sources": [
+				"ADR-0028"
+			]
+		},
+		{
+			"id": "CON-0028",
+			"kind": "proposition",
+			"role": "constraint",
+			"visibility": "internal",
+			"slug": "carried-artifact-excludes-carrier-facts",
+			"statement": "An artifact carried by a delivery cannot contain facts determined by or after its own carrier — the carrying commit's identity, verdicts, statuses, or terminal outcomes; those are joined at render time from the owning record, never copied into the carried artifact.",
+			"sources": [
+				"ADR-0028"
+			]
+		},
+		{
+			"id": "CON-0029",
+			"kind": "proposition",
+			"role": "constraint",
+			"visibility": "internal",
+			"slug": "identity-ambiguity-splits-never-merges",
+			"statement": "Recovery adopts an existing delivery identity only on positive corroboration between independent records; every ambiguous state mints a fresh identity marked degraded, because a wrongly split delivery can be merged later and a wrongly merged one cannot be unfused.",
+			"sources": [
+				"ADR-0028"
+			]
+		},
+		{
+			"id": "CON-0030",
+			"kind": "proposition",
+			"role": "constraint",
+			"visibility": "internal",
+			"slug": "keys-stamped-at-emission",
+			"statement": "Delivery identity and grouping keys (lineage, initiative, supersede links) are recorded while the claim is live; they are never re-derived later by joining mutable git or provider state.",
+			"sources": [
+				"ADR-0028"
+			]
 		}
 	],
 	"edges": [
@@ -1408,6 +1451,41 @@
 			"from": "CON-0027",
 			"relation": "constrains",
 			"to": "CTR-0004"
+		},
+		{
+			"from": "DEC-0020",
+			"relation": "implements",
+			"to": "CLM-0008"
+		},
+		{
+			"from": "CON-0028",
+			"relation": "constrains",
+			"to": "DEC-0020"
+		},
+		{
+			"from": "CON-0029",
+			"relation": "constrains",
+			"to": "DEC-0020"
+		},
+		{
+			"from": "CON-0030",
+			"relation": "constrains",
+			"to": "DEC-0020"
+		},
+		{
+			"from": "CON-0003",
+			"relation": "constrains",
+			"to": "DEC-0020"
+		},
+		{
+			"from": "CON-0016",
+			"relation": "constrains",
+			"to": "DEC-0020"
+		},
+		{
+			"from": "CON-0017",
+			"relation": "constrains",
+			"to": "DEC-0020"
 		}
 	],
 	"adrMap": {
@@ -1598,6 +1676,17 @@
 			"CON-0025",
 			"CON-0026",
 			"DEC-0019"
+		],
+		"ADR-0028": [
+			"CLM-0007",
+			"CLM-0008",
+			"CON-0003",
+			"CON-0016",
+			"CON-0017",
+			"CON-0028",
+			"CON-0029",
+			"CON-0030",
+			"DEC-0020"
 		]
 	},
 	"sourceGrounding": [
@@ -1678,6 +1767,21 @@
 			"anchors": [
 				"Consumer repositories must be able to own intent independently",
 				"composition / federation"
+			]
+		},
+		{
+			"node": "CON-0028",
+			"path": "docs/decisions/0028-delivery-packet-claim-scoped-provenance.md",
+			"anchors": [
+				"facts determined by or after its own",
+				"joined at render time"
+			]
+		},
+		{
+			"node": "CON-0029",
+			"path": "docs/decisions/0028-delivery-packet-claim-scoped-provenance.md",
+			"anchors": [
+				"Identity ambiguity must split, never merge"
 			]
 		}
 	],
