@@ -9,6 +9,7 @@ export type GraphNode = {
   role?: string;
   visibility?: string;
   sources?: string[];
+  projection?: { status?: string };
 };
 export type GraphEdge = { from: string; relation: string; to: string };
 export type AssuranceGraph = { schemaVersion: string; nodes: GraphNode[]; edges: GraphEdge[] };
@@ -27,6 +28,12 @@ export type AssuranceView = {
 };
 export type QueryArgs = { node?: string; source?: string };
 export type Diagnostic = { check: string; node: string; message: string };
+export type SourceGrounding = { node: string; path: string; anchors: string[] };
+/** Optional file access for the source-grounding check; omitted in pure in-memory stress tests. */
+export type DiagnosticsEnv = { readSource?: (path: string) => string | undefined; sourceGrounding?: SourceGrounding[] };
+
+/** Every check the `debt` view may declare. `views.json` is bound to this list by test. */
+export const DEBT_CHECKS = ["orphan-realization", "invariant-without-realization", "decision-without-intent", "unused-assumption", "stale-source-grounding", "projection-overreach"] as const;
 
 function index(graph: AssuranceGraph) {
   return new Map(graph.nodes.map((node) => [node.id, node]));
@@ -62,10 +69,12 @@ function neighborhood(graph: AssuranceGraph, seeds: string[], relations: Set<str
   return induced(graph, selected, relations);
 }
 
-export function diagnostics(graph: AssuranceGraph): Diagnostic[] {
+export function diagnostics(graph: AssuranceGraph, env: DiagnosticsEnv = {}): Diagnostic[] {
   const out: Diagnostic[] = [];
+  const byId = index(graph);
   const outgoing = (id: string, rel?: string) => graph.edges.filter((e) => e.from === id && (!rel || e.relation === rel));
   const incoming = (id: string, rel?: string) => graph.edges.filter((e) => e.to === id && (!rel || e.relation === rel));
+  const realized = (id: string) => incoming(id, "implements").some((e) => byId.get(e.from)?.kind === "realization");
 
   for (const node of graph.nodes) {
     if (node.kind === "realization" && !outgoing(node.id).some((e) => e.relation === "implements" || e.relation === "derived-from")) {
@@ -77,6 +86,25 @@ export function diagnostics(graph: AssuranceGraph): Diagnostic[] {
     if (node.kind === "proposition" && node.role === "assumption" && incoming(node.id, "assumes").length === 0) {
       out.push({ check: "unused-assumption", node: node.id, message: "assumption is not relied upon by any decision or proposition" });
     }
+    // Inverse of orphan-realization: intent that nothing in the repository currently implements. This is
+    // debt to look at, not an error — most invariants here are realized by mechanisms the graph has not
+    // named yet (see Q14 for the ratcheted public-guarantee subset).
+    if (node.kind === "proposition" && node.role === "invariant" && (node.visibility ?? "internal") === "internal" && !realized(node.id)) {
+      out.push({ check: "invariant-without-realization", node: node.id, message: "invariant names no implementing realization" });
+    }
+    // A public claim published as an unconditional guarantee whose projected internal intent has no
+    // implementing realization is stronger than what the graph can stand behind.
+    if (node.kind === "proposition" && node.visibility === "public" && node.projection?.status === "guarantee") {
+      const targets = outgoing(node.id, "projects").map((e) => e.to);
+      if (targets.length > 0 && !targets.some((t) => realized(t) || byId.get(t)?.kind === "decision")) {
+        out.push({ check: "projection-overreach", node: node.id, message: "public guarantee projects internal intent that names no implementing realization" });
+      }
+    }
+  }
+  for (const grounding of env.sourceGrounding ?? []) {
+    const text = env.readSource?.(grounding.path);
+    const lost = text === undefined ? grounding.anchors : grounding.anchors.filter((anchor) => !text.includes(anchor));
+    if (lost.length > 0) out.push({ check: "stale-source-grounding", node: grounding.node, message: `source anchor no longer present in ${grounding.path}: ${lost.join(" | ")}` });
   }
   return out.sort((a, b) => `${a.check}:${a.node}`.localeCompare(`${b.check}:${b.node}`));
 }
