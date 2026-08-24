@@ -93,9 +93,18 @@ describe("shadow disposition properties", () => {
 		assert.equal(pendingResult.disposition, "gather-evidence");
 		assert.ok(has(pendingResult.causes, "residual-resolved-needs-reassessment", "V"));
 		assert.ok(has(pendingResult.causes, "pending-reassessment-on-proposition", "V"));
-		// Only a reassessed V (here: holds, on the new basis) lets the proposition commit.
+		// Only a reassessment that SUPERSEDES V (harness-linked; V stays in the ledger) lets the proposition commit.
 		const after = shadowDisposition(split.recovery.records, split.recovery.facts, split.policy);
 		assert.equal(after.disposition, "commit");
+		assert.ok(
+			split.recovery.records.some((r) => r.id === "V"),
+			"the superseded record is retained, not dropped",
+		);
+		const unlinked = structuredClone(split.recovery);
+		const reassessed = unlinked.records.find((r) => r.id === "V-reassessed");
+		assert.ok(reassessed);
+		reassessed.supersedes = undefined;
+		assert.equal(shadowDisposition(unlinked.records, unlinked.facts, split.policy).disposition, "gather-evidence", "without the supersedes link the old V still pends");
 
 		const outage = fixture("unavailable-observation-555");
 		const first = shadowDisposition(outage.records, outage.facts, outage.policy);
@@ -112,6 +121,33 @@ describe("shadow disposition properties", () => {
 		assert.equal(consequential.disposition, "withhold");
 		assert.equal(reversible.disposition, "continue");
 		assert.deepEqual(reversible.causes, consequential.causes, "the causes are the same facts; only the consequence threshold differs");
+	});
+
+	it("basis causes name their clearing actor: unknown needs a principal, stale and unavailable are recoverable", () => {
+		const f = fixture("stale-grep-625");
+		f.records = [f.records[0]]; // no stale sibling record to re-observe, so nothing is recoverable
+		f.records[0].assessment.basis = ["no-such-observation"];
+		const unknown = shadowDisposition(f.records, f.facts, f.policy);
+		assert.equal(unknown.disposition, "withhold", "an unknown reference is not an evidence-recovery opportunity");
+		assert.ok(has(unknown.causes, "basis-unknown", "no-such-observation"));
+		f.records[0].assessment.basis = ["grep-main-head-limited"];
+		const stale = shadowDisposition(f.records, f.facts, f.policy);
+		assert.equal(stale.disposition, "gather-evidence");
+		assert.ok(has(stale.causes, "basis-stale", "grep-main-head-limited"));
+		const outage = fixture("unavailable-observation-555");
+		outage.records[0].assessment.basis = ["mergeable-state"];
+		const unavailable = shadowDisposition(outage.records, outage.facts, outage.policy);
+		assert.equal(unavailable.disposition, "gather-evidence");
+		assert.ok(has(unavailable.causes, "basis-unavailable", "mergeable-state"));
+	});
+
+	it("a principal's recorded clearance closes a residual without touching the record", () => {
+		const f = fixture("false-chokepoint-435");
+		assert.equal(shadowDisposition(f.records, f.facts, f.policy).disposition, "withhold");
+		const cleared = { ...f.facts, principalClearances: [{ record: "G", residual: f.records[0].assessment.residual?.[0].statement ?? "", actor: "operator" }] };
+		const snapshot = JSON.stringify(f.records);
+		assert.equal(shadowDisposition(f.records, cleared, f.policy).disposition, "commit");
+		assert.equal(JSON.stringify(f.records), snapshot, "clearance is a harness fact, not a record edit");
 	});
 
 	it("cold-handoff control: the ledger keeps every record; a cold seat receives only what policy admits", () => {

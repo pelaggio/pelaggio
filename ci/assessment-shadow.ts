@@ -21,6 +21,7 @@ export interface Residual {
 }
 
 export interface Assessment {
+	/** An IDENTITY, not prose: a graph node id, a finding fingerprint, or a harness-minted statement id. Matching is by identity; a paraphrase never matches. */
 	proposition: string;
 	basis: string[];
 	conclusion: { verdict: Verdict; rationale?: string };
@@ -34,6 +35,8 @@ export interface AssessmentRecord {
 	provenance: { runId: string; step: string; attempt: number; seat: string; provider: string };
 	completeness: { covered: string[] };
 	assessment: Assessment;
+	/** Harness-owned: the record this one reassesses. The superseded record stays in the ledger and stops counting as evidence. */
+	supersedes?: string;
 	/** Lossy human/model presentation. Never consulted by disposition. */
 	summary?: string;
 }
@@ -52,12 +55,20 @@ export interface CarriedBlocker {
 	refutedBy?: string;
 }
 
+/** A principal's recorded decision that a residual no longer blocks. Harness-owned; names the actor. */
+export interface PrincipalClearance {
+	record: string;
+	residual: string;
+	actor: string;
+}
+
 export interface HarnessFacts {
 	subject: string;
 	currentSha: string;
 	requiredSurfaces: string[];
 	observations: Observation[];
 	carriedBlockers: CarriedBlocker[];
+	principalClearances?: PrincipalClearance[];
 }
 
 export interface Policy {
@@ -70,7 +81,9 @@ export type Cause =
 	| { kind: "stale-binding"; record: string }
 	| { kind: "residual-resolved-needs-reassessment"; record: string }
 	| { kind: "pending-reassessment-on-proposition"; record: string; proposition: string }
-	| { kind: "unresolved-basis"; record: string }
+	| { kind: "basis-unknown"; record: string; ref: string }
+	| { kind: "basis-stale"; record: string; ref: string }
+	| { kind: "basis-unavailable"; record: string; ref: string }
 	| { kind: "incomplete"; record: string }
 	| { kind: "residual-recoverable"; record: string }
 	| { kind: "residual-open"; record: string }
@@ -107,6 +120,8 @@ interface Classified {
 	record: AssessmentRecord;
 	current: boolean;
 	basisValid: boolean;
+	/** Why the basis is not valid, per reference — each has a different clearing actor. */
+	basisIssues: Array<{ ref: string; kind: "basis-unknown" | "basis-stale" | "basis-unavailable" }>;
 	complete: boolean;
 	openResiduals: Residual[];
 	recoverableResiduals: Residual[];
@@ -121,19 +136,29 @@ function classify(record: AssessmentRecord, facts: HarnessFacts, unsupported: st
 		return Boolean(o?.available && o.sha === facts.currentSha);
 	};
 	const current = record.binding.sha === facts.currentSha && record.binding.subject === facts.subject;
-	const basisValid = record.assessment.basis.length > 0 && record.assessment.basis.every(currentAvailable);
+	const basisIssues: Classified["basisIssues"] = [];
+	for (const ref of record.assessment.basis) {
+		const o = byId.get(ref);
+		if (!o) basisIssues.push({ ref, kind: "basis-unknown" });
+		else if (o.sha !== facts.currentSha) basisIssues.push({ ref, kind: "basis-stale" });
+		else if (!o.available) basisIssues.push({ ref, kind: "basis-unavailable" });
+	}
+	const basisValid = record.assessment.basis.length > 0 && basisIssues.length === 0;
 	const covered = new Set(record.completeness.covered);
 	const complete = facts.requiredSurfaces.every((s) => covered.has(s));
 	const openResiduals: Residual[] = [];
 	const recoverableResiduals: Residual[] = [];
 	const resolvedResiduals: Residual[] = [];
+	const cleared = new Set((facts.principalClearances ?? []).filter((c) => c.record === record.id).map((c) => c.residual));
 	for (const residual of record.assessment.residual ?? []) {
+		// A principal's recorded clearance closes the residual; the record itself is untouched.
+		if (cleared.has(residual.statement)) continue;
 		if (!residual.resolvedBy) openResiduals.push(residual);
 		else if (currentAvailable(residual.resolvedBy)) resolvedResiduals.push(residual);
 		else if (byId.has(residual.resolvedBy)) recoverableResiduals.push(residual);
 		else openResiduals.push(residual);
 	}
-	return { record, current, basisValid, complete, openResiduals, recoverableResiduals, resolvedResiduals };
+	return { record, current, basisValid, basisIssues, complete, openResiduals, recoverableResiduals, resolvedResiduals };
 }
 
 /**
@@ -145,6 +170,8 @@ export function shadowDisposition(records: AssessmentRecord[], facts: HarnessFac
 	const unsupported: string[] = [];
 	const classified = records.map((r) => classify(r, facts, unsupported));
 	const recordById = new Map(classified.map((c) => [c.record.id, c]));
+	// Supersession keeps history: a superseded record stays in the ledger and stops counting as evidence.
+	const superseded = new Set(records.map((r) => r.supersedes).filter((id): id is string => typeof id === "string"));
 
 	// Positive evidence: current, valid basis, complete, verdict holds, no residual left in any state.
 	// A resolved residual means the condition the assessor named has since been observed; the record
@@ -160,6 +187,7 @@ export function shadowDisposition(records: AssessmentRecord[], facts: HarnessFac
 
 	for (const c of classified) {
 		const id = c.record.id;
+		if (superseded.has(id)) continue;
 		if (blockerPropositions.has(c.record.assessment.proposition)) continue;
 		if (!c.current) {
 			causes.push({ kind: "stale-binding", record: id });
@@ -174,8 +202,11 @@ export function shadowDisposition(records: AssessmentRecord[], facts: HarnessFac
 		}
 		const verdict = c.record.assessment.conclusion.verdict;
 		if (!c.basisValid) {
-			causes.push({ kind: "unresolved-basis", record: id });
-			recoverable = true;
+			// Three different clearing actors: an unknown reference needs a principal; a stale one can be
+			// re-observed; an unavailable one is an evidence-recovery opportunity. Only the last two are recoverable.
+			for (const issue of c.basisIssues) causes.push({ kind: issue.kind, record: id, ref: issue.ref });
+			if (c.basisIssues.some((i) => i.kind !== "basis-unknown")) recoverable = true;
+			if (c.record.assessment.basis.length === 0) causes.push({ kind: "basis-unknown", record: id, ref: "" });
 			// Caution survives a weak basis; positive authority does not.
 			if (verdict === "violated") caution.push(c);
 			continue;
@@ -213,6 +244,7 @@ export function shadowDisposition(records: AssessmentRecord[], facts: HarnessFac
 		// named residual has since resolved cannot be the authority that removes a blocker.
 		const refuted =
 			refutation !== undefined &&
+			!superseded.has(refutation.record.id) &&
 			refutation.current &&
 			// A refutation carrying semantics the harness does not understand cannot be the authority that
 			// removes a blocker: ignoring the extension could be what makes it look like a refutation.

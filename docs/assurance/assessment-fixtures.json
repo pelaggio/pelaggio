@@ -112,7 +112,7 @@
 		},
 		{
 			"id": "false-chokepoint-435",
-			"source": "#435 — blockForeignRootWrite's derived-exclusivity chokepoint is a false guarantee for a cwd=MAIN_REPO step that never funnels through a claim (guarded-actions.md §8.2)",
+			"source": "#435 — blockForeignRootWrite's derived-exclusivity chokepoint is a false guarantee for a cwd=MAIN_REPO step that never funnels through a claim (guarded-actions.md §4 classification map)",
 			"facts": {
 				"subject": "pr#435",
 				"currentSha": "435-head",
@@ -257,7 +257,20 @@
 						}
 					},
 					{
+						"id": "V",
+						"binding": { "subject": "gate-record#553-r4", "sha": "553-r4" },
+						"provenance": { "runId": "r4", "step": "pr-adjudicate", "attempt": 1, "seat": "adjudicator", "provider": "codex" },
+						"completeness": { "covered": ["eligibility"] },
+						"assessment": {
+							"proposition": "this gate record is eligible for typed adjudication",
+							"basis": ["breaker-invalid-pass-label"],
+							"conclusion": { "verdict": "violated", "rationale": "the breaker stamped it invalid-pass" },
+							"residual": [{ "statement": "unless the typed adjudicator accepts ok=true disagreement records regardless of the legacy breaker label", "resolvedBy": "typed-eligibility-check" }]
+						}
+					},
+					{
 						"id": "V-reassessed",
+						"supersedes": "V",
 						"binding": { "subject": "gate-record#553-r4", "sha": "553-r4" },
 						"provenance": { "runId": "r4", "step": "pr-adjudicate", "attempt": 2, "seat": "adjudicator", "provider": "codex" },
 						"completeness": { "covered": ["eligibility"] },
