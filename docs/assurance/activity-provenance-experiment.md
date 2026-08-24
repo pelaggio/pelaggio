@@ -49,7 +49,7 @@ ActivityView {
 
 Fields should be derived from owned records where possible. In particular, harness-observed execution identity, run/attempt context, git binding, provider/model/version, and durable receipt/evidence identity must not be re-authored by a model.
 
-`operation` is semantic (for example `charter.normalize`), not a tool/skill name. A `/charter` skill, a hosted form, or a consumer implementation may all perform the same operation. Today **no record owns `operation`**: every existing artifact identifies a step, provider, model, run, or flow transition, so projecting `charter.normalize` from them would mean inferring it from the carrier — the coupling this experiment exists to remove. There is no chokepoint every carrier passes through: a consumer-owned implementation uses its own storage, a direct caller can create items without normalizing, and the first run below normalized existing issues without creating anything. For the carriers the harness owns (`/charter` through the CLI, the pipeline), the harness can record the operation, the implementation identity/version, and — out of cycle — mint the execution identity the model must not author; for the others the contract can only require that *some* harness-equivalent records those bindings, which is the semantic-not-carrier requirement restated.
+`operation` is semantic (for example `charter.normalize`), not a tool/skill name. A `/charter` skill, a hosted form, or a consumer implementation may all perform the same operation. Today **no record owns `operation`**: every existing artifact identifies a step, provider, model, run, or flow transition, so projecting `charter.normalize` from them would mean inferring it from the carrier — the coupling this experiment exists to remove. There is no chokepoint every carrier passes through: a consumer-owned implementation uses its own storage, a direct caller can create items without normalizing, and the first run below normalized existing issues without creating anything. For the pipeline carrier the harness can record the operation, the implementation identity/version, and the execution identity; for an operator-invoked `/charter` the harness's only touchpoint today is `create-item`, which does not perform the normalization and so cannot honestly stamp it; for consumer-owned carriers the contract can only require that *some* harness-equivalent records those bindings — the semantic-not-carrier requirement restated.
 
 ## Invocation-mode test cases
 
@@ -96,31 +96,9 @@ Reject or narrow the Activity view if it requires independently re-authoring fac
 
 Promote a generic Activity primitive only if repeated real cases require durable identity/relations that cannot be represented as an execution/provenance projection. Never promote `SkillInvocation` merely because current clients happen to use skills.
 
-## First run: the eight blind normalization runs, from persisted artifacts only (2026-08-24)
+## Runs
 
-The runs were direct-service invocations (read-only agents, no skill, no pipeline cycle) — one
-carrier, so nothing below is *confirmed* under the rule above; these are candidate gaps observed on
-one carrier. The persisted artifact is `charter-normalization-run-2026-08-24.json`, which holds the
-sha256-stamped issue text each agent read and each model's full returned JSON (both added to the
-record after the runs by the author, from the input files the agents read and the outputs they
-returned — a copy, not a harness capture). Scoring uses the three-value vocabulary only:
-
-| # | question | scoring | from |
-|---|---|---|---|
-| 1 | what raw intent was supplied | answerable-but-model-authored | `rawInputs[issue].text` + sha256 — present, but placed there by the author, not stamped by a harness at read time |
-| 2 | which normalization activity transformed it | unanswerable | no record owns `operation`; the record's `design` prose is author narrative, not a binding |
-| 3 | which implementation/version performed it | answerable-but-model-authored | the model name, written by the author; no skill/service revision, no harness stamp |
-| 4 | which actor/principal initiated or mediated it | answerable-but-model-authored | the session author, written by the session author |
-| 5 | what repository/item/run/attempt context applied | answerable-but-model-authored | repository path and issue number, author-written; no run or attempt exists to bind |
-| 6 | which normalized output it produced | answerable | `runs[].output` — the model's returned JSON, verbatim |
-| 7 | which material residuals remained | answerable | `runs[].output.residuals` |
-| 8 | which principal resolved each residual | unanswerable | none were resolved and no resolution record shape exists |
-| 9 | reconstructable without knowing a skill existed | answerable | no skill was involved — which is also why this carrier cannot test carrier independence |
-
-Tally: three answerable (6, 7, 9), four answerable-but-model-authored (1, 3, 4, 5), two unanswerable
-(2, 8). The four author-authored rows are the bindings a harness-owned carrier would stamp (input
-digest, implementation identity/version, actor, execution context); the two unanswerable rows are
-the ones no existing record shape can hold on any carrier (operation identity, residual resolution).
-Nothing here argues for a `SkillInvocation` node — the missing facts are bindings, not a new kind of
-thing — but representation B is not yet answerable either, and the interactive human-mediated mode
-(the one that exercises questions 4 and 8 for real) has not been run.
+The eight blind normalization runs in `charter-normalization-run-2026-08-24.json` are the first
+corpus for the procedure above (one carrier: direct service). Scoring them against the nine
+questions, and what that says about the candidate gaps, is argued in the reconciliation campaign
+(#624), not here.
