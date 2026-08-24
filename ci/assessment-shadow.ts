@@ -73,7 +73,22 @@ export interface ShadowResult {
 	unsupported: string[];
 }
 
-const KNOWN_ASSESSMENT_KEYS = new Set(["proposition", "basis", "conclusion", "residual"]);
+const KNOWN_KEYS: Record<string, Set<string>> = {
+	assessment: new Set(["proposition", "basis", "conclusion", "residual"]),
+	conclusion: new Set(["verdict", "rationale"]),
+	residual: new Set(["statement", "resolvedBy"]),
+};
+
+/** Every key the grammar does not define, at any level of the worker-authored payload. */
+function unknownKeys(assessment: Assessment): string[] {
+	const out: string[] = [];
+	for (const key of Object.keys(assessment)) if (!KNOWN_KEYS.assessment.has(key)) out.push(key);
+	for (const key of Object.keys(assessment.conclusion ?? {})) if (!KNOWN_KEYS.conclusion.has(key)) out.push(`conclusion.${key}`);
+	(assessment.residual ?? []).forEach((residual, i) => {
+		for (const key of Object.keys(residual)) if (!KNOWN_KEYS.residual.has(key)) out.push(`residual[${i}].${key}`);
+	});
+	return out;
+}
 
 interface Classified {
 	record: AssessmentRecord;
@@ -86,7 +101,7 @@ interface Classified {
 }
 
 function classify(record: AssessmentRecord, facts: HarnessFacts, unsupported: string[]): Classified {
-	for (const key of Object.keys(record.assessment)) if (!KNOWN_ASSESSMENT_KEYS.has(key)) unsupported.push(`${record.id}:${key}`);
+	for (const key of unknownKeys(record.assessment)) unsupported.push(`${record.id}:${key}`);
 	const byId = new Map(facts.observations.map((o) => [o.id, o]));
 	const currentAvailable = (id: string): boolean => {
 		const o = byId.get(id);
@@ -184,6 +199,9 @@ export function shadowDisposition(records: AssessmentRecord[], facts: HarnessFac
 		const refuted =
 			refutation !== undefined &&
 			refutation.current &&
+			// A refutation carrying semantics the harness does not understand cannot be the authority that
+			// removes a blocker: ignoring the extension could be what makes it look like a refutation.
+			!unsupported.some((key) => key.startsWith(`${refutation.record.id}:`)) &&
 			refutation.resolvedResiduals.length === 0 &&
 			refutation.record.assessment.proposition === blocker.proposition &&
 			refutation.record.assessment.conclusion.verdict === "violated" &&

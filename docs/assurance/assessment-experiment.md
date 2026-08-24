@@ -157,11 +157,12 @@ worker-authored part of a record is exactly the four fields above; binding, prov
 completeness are the harness-owned envelope of each `AssessmentRecord`, and observation
 availability, required surfaces and carried blockers are `HarnessFacts` the worker cannot write.
 Rationale text, summaries and confidence fields are read nowhere in the module, which is how wording
-invariance is established rather than tested for. Unknown extension keys are read only to be listed
-as unsupported: they never contribute, and on evidence that would otherwise permit a consequential
-commit they fail closed (`withhold`), because the harness cannot know whether the extension would
-have weakened the record. A carried blocker is cleared only by a refutation that is itself current,
-complete, and not awaiting reassessment.
+invariance is established rather than tested for. Unknown extension keys — at any level of the four-field payload — are read only to be listed as
+unsupported: they never contribute, on evidence that would otherwise permit a consequential commit
+they fail closed (`withhold`), and a refutation that carries one cannot clear a carried blocker,
+because the harness cannot know whether the extension would have weakened the record. A carried
+blocker is cleared only by a refutation that is itself current, complete, extension-free, and not
+awaiting reassessment.
 
 `docs/assurance/assessment-fixtures.json` retrodicts seven episodes with known outcomes — the #625
 stale grep, #495 carry with and without an explicit refutation, the #435 false chokepoint, the #555
@@ -181,13 +182,15 @@ properties against them. The risk–coverage table across the four conditions th
 What this does and does not show. The second row is the full envelope minus residuals — binding,
 basis, completeness, carried blockers and contradiction handling. Binding rejection recovers the
 justified landing that face-value withheld (#625: the stale charter was the last word); carried-blocker
-survival refuses #495's silent re-push and completeness refuses #555's UNKNOWN mergeability — the two
-face-value commits that had no current evidence. That row still commits on #435, whose unit tests
+survival refuses #495's silent re-push (a current, complete, passing review that simply says nothing
+about the prior blocker — omission is not refutation) and completeness refuses #555's UNKNOWN
+mergeability — the two face-value commits that face value had no business making. That row still commits on #435, whose unit tests
 were green and whose gap was a path the guard never saw — exactly the shape only a residual carries —
 and it already withholds #593 as a contradiction, so the residual row's one unnecessary withholding is
 inherited, not introduced: residuals cost zero justified coverage in this corpus. Recovery then reaches
-face-value coverage with zero unsupported commitments, and the #593 recovery is a reassessment
-permitted by a resolved residual, not a residual clearing itself. Two caveats keep this an experiment rather than a result: the
+face-value coverage with zero unsupported commitments, and the #593 recovery works by parking the *violated* record once its named residual resolves —
+it then awaits reassessment and no longer contradicts — so the surviving `holds` record commits; the
+residual does not clear itself, and no reassessment of the `holds` record is needed. Two caveats keep this an experiment rather than a result: the
 fixtures were authored with hindsight, so a residual is present wherever history showed one was
 needed — the open question is whether workers write material residuals *without* hindsight, which
 only live records can answer; and seven episodes is a demonstration, not a measurement.

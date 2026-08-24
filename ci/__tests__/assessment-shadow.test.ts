@@ -159,6 +159,18 @@ describe("shadow disposition properties", () => {
 		assert.ok(consequential.causes.includes("unsupported-extension-on-evidence:A-reachability"));
 		assert.deepEqual(consequential.unsupported, ["A-reachability:x-applicability"]);
 		assert.equal(shadowDisposition(tainted.records, tainted.facts, { ...tainted.policy, consequence: "reversible" }).disposition, "continue");
+		// Nested unknown keys are found too, and an extension on a REFUTATION disqualifies it from clearing a blocker.
+		const nested = fixture("stale-grep-625");
+		(nested.records[0].assessment.conclusion as unknown as Record<string, unknown>)["x-confidence"] = 0.99;
+		nested.records[0].assessment.residual = [{ statement: "none material", "x-waived": true } as unknown as { statement: string }];
+		const nestedResult = shadowDisposition(nested.records, nested.facts, nested.policy);
+		assert.deepEqual(nestedResult.unsupported, ["A-reachability:conclusion.x-confidence", "A-reachability:residual[0].x-waived"]);
+		assert.equal(nestedResult.disposition, "withhold");
+		const taintedRefutation = fixture("carried-blocker-refuted-495");
+		(taintedRefutation.records[0].assessment as unknown as Record<string, unknown>)["x-untouched-path-verified"] = true;
+		const refResult = shadowDisposition(taintedRefutation.records, taintedRefutation.facts, taintedRefutation.policy);
+		assert.equal(refResult.disposition, "withhold");
+		assert.ok(refResult.causes.includes("carried-blocker:BLK-1"));
 	});
 });
 
