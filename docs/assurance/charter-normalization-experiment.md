@@ -16,6 +16,7 @@ The raw request remains preserved. Model-produced normalization is an interpreta
 
 The candidate intake procedure is intentionally small:
 
+0. **Ask the exit question first**, on the raw request, before any decomposition: *can the requested deliverable be completed exactly as stated while the apparent desired outcome still fails?* A confident **no** exits here with no material delta (see Early exit); anything else continues.
 1. **Decompose** the request into candidate desired outcome, stated constraints, proposed mechanisms, acceptance/evidence, assumptions, and unresolved ambiguity.
 2. **Attack** the candidate intent with four probes:
    - **mechanism substitution** — if the requested mechanism vanished tomorrow, what outcome would still be wanted?
@@ -34,7 +35,7 @@ The primary early-exit question is:
 
 > Can the requested deliverable be completed exactly as stated while the apparent desired outcome still fails?
 
-A confidently negative answer does not prove the charter correct; it only says this intake-specific falsification found no material normalization delta. Planning, implementation review, and reconciliation retain their own distinct falsification responsibilities.
+It is asked before decomposition (step 0) precisely so that bounded work pays for one question, not four probes. A confidently negative answer does not prove the charter correct; it only says this intake-specific falsification found no material normalization delta. Planning, implementation review, and reconciliation retain their own distinct falsification responsibilities.
 
 ## Human mediation without forced closure
 
@@ -115,51 +116,13 @@ Tiny repairs and maintenance work should normally resolve to existing semantics 
 
 These fixtures ratchet semantic expectations, not natural-language generation. CI does not claim it can derive the normalized statement from the raw issue text. Model interpretation remains probabilistic and should be evaluated separately across agents.
 
-## First run: blind normalization of four fresh issues (2026-08-24)
+## Runs
 
-Record: `charter-normalization-run-2026-08-24.json` — the exact issue text each agent read
-(sha256-stamped), every model's full returned JSON, and the author's judgments kept separate from
-both. Four open issues not in the fixture corpus (#611, #613, #615, #617) were normalized blind by
-two models each (claude sonnet, claude opus) running **steps 1–3 only**: decompose, the four
-probes, and the early-exit decision with the smallest surviving outcome. Step 4 — semantic
-resolution against represented propositions, decisions and realizations — was not run, because the
-agents had access to decisions and agent-context but not the graph; so this is a subset of
-falsification arm 2, and arm 1 (raw charter straight to planning) and arm 3 (a candidate Goal layer)
-were not run either.
-
-| measure | result |
-|---|---|
-| runs / early exits | 8 / 0 — including both runs on the S-scoped #613 |
-| requested mechanism leaked into the normalized outcome | 0 / 8 — instruction compliance (step 3 forbids it); without arm 1 there is no baseline leak rate to compare against |
-| cross-model outcome compatibility | 4 / 4 issues |
-| mean cost per normalization | 44k tokens, 12 files read, 149 s |
-| stale citation caught (`guarded-actions.md §8.2` is absent at head; the author verified it sits on unlanded PR #614) | 4 / 4 runs on the two issues that cite it |
-| dependency on a parked item caught (#572 is `deferred`) | 2 / 4 runs on the two issues that depend on it |
-
-What held: every outcome was a property, not the requested mechanism, and the two models' outcomes
-were compatible on every issue — the incompatible-objectives failure this document names did not
-appear. The counterexamples were the real value, and several are material to the issues as written:
-#613's fail-closed clause covers prune *failure*, but a *successful* FIFO prune can evict the record
-holding a retained, never-refuted blocker, so the next run carries warm with a truncated history
-(CON-0008 violated by the deliverable as specified); #611's binding credential on a
-subscription-authenticated seat is an OAuth token in `HOME`, not `ANTHROPIC_API_KEY`, so the charter
-as phrased is satisfiable while the seat still holds a reusable credential; #617 has a check-then-act
-window between verifying the PR head and preparing the checkout, and once the checkout is
-unimpeachable the integrity half migrates to the report the seat still authors.
-
-What did not hold: the early exit never fired. #613 is S-scoped and the request is written as an
-implementation directive, yet both runs found a legitimate false-success — so the scope label is not
-the bounded-work signal this document assumed, and the friction cost is real: ~44k tokens and two
-and a half minutes per intake, comparable to a review seat. The reduction trigger "mostly restates
-the request" is not met. The trigger "increases friction on bounded work" was undecidable as written
-— it named no threshold and no net-of-value clause — so it is narrowed here: it is met when an
-intake costs more than one review seat (~50k tokens) **and** produces no counterexample that would
-change the charter. On this corpus every intake produced one, including #613, so the narrowed
-trigger is not met; the early exit still needs a cheaper first probe, which is the change the next
-run should make.
-
-Caveats: one provider, one judge (the session author), four issues, no human mediation exercised, no
-downstream comparison of plan/review churn — which is the effect the hypothesis actually predicts.
+Raw runs are recorded as data, not interpreted here: `charter-normalization-run-2026-08-24.json`
+holds the sha256-stamped issue text each agent read, every model's full returned JSON, and the
+harness-observed cost per run (four fresh issues × two models, steps 1–3 only, blind). What those
+runs mean for this hypothesis is argued in the reconciliation campaign (#624), where it can be
+disagreed with without editing this contract.
 
 ## Falsification
 
@@ -173,4 +136,4 @@ Evaluate whether early normalization avoids historically known false commitments
 
 For the derived review contract, compare review with the ordinary plan/diff alone against review with the compact `Change → Invariant → Evidence` projection. Reject or narrow the projection if it duplicates authored semantics, encourages mechanism hypotheses to masquerade as admitted changes, promotes task-local invariants unnecessarily, confuses requested evidence with Assessment authority, or causes negative-control changes to acquire decorative invariants.
 
-Reject or narrow this experiment if normalization mostly restates the request, increases friction on bounded work, strips meaningful user constraints, causes independent models to invent incompatible objectives, coerces humans into false closure, or if a Goal layer adds no consequential answerability after normalization.
+Reject or narrow this experiment if normalization mostly restates the request, increases friction on bounded work (an intake that costs more than a review seat and yields no counterexample that would change the charter), strips meaningful user constraints, causes independent models to invent incompatible objectives, coerces humans into false closure, or if a Goal layer adds no consequential answerability after normalization.
