@@ -65,21 +65,9 @@ Natural-language phrasing, renderer needs, storage representation, and anticipat
 
 Semantic conformance is behavioral before structural: competency-question fixtures and invariant behavior are more important than field-for-field JSON identity. Different storage/query implementations may interoperate if they preserve semantic identity, relation meaning, and answer behavior; identical JSON interpreted differently is not semantic interoperability.
 
-## Author once, derive broadly
+## Author once; standardize meaning before representation
 
-Humans and workers should author the smallest irreducible semantic delta once at the layer that owns it.
-
-Reverse indexes, projections, diagnostics, semantic diffs, views, transport forms, and presentation should be generated or derived wherever possible rather than independently maintained. A feature that requires humans to maintain a second representation of something Pelaggio can already determine is presumptively a design smell.
-
-Likewise, a worker should not be asked to author facts that the harness can determine more reliably itself. Future observation/assessment records should receive identity, state binding, run/attempt/provider context, completeness, and authoritative execution outcomes from the harness rather than model prose.
-
-## Interoperability and extension posture
-
-Standardize meaning before representation. Stable semantic identity, relation meaning, competency-question behavior, and authority distinctions form the compatibility contract; JSON shape, graph database, indexes, query implementation, MCP/tool names, and renderers are replaceable choices.
-
-Consumer repositories must be able to own and evolve their corpora independently under the same semantic contract. They must not require Pelaggio's own graph or a global registry to understand local intent. Cross-graph composition/federation remains deliberately undecided; future composition must not implicitly transfer authority between graph owners.
-
-Optional extensions may add semantics but may not redefine existing semantics. An unknown extension may be ignored only when ignoring it cannot strengthen a claim, grant authority, erase uncertainty, or create false equivalence. Otherwise the result must remain explicitly unsupported/unknown, or fail closed if an authority-bearing decision depends on it.
+The maintenance and interoperability rules — author the irreducible semantic fact once and derive indexes, projections, diagnostics, diffs and transport; standardize meaning before representation; consumer-owned corpora and undecided federation; extensions that may not silently strengthen a claim — are ADR-0027 decisions 5, 8 and 9 and its constraints, not restated here. In this corpus they show up concretely: `adrMap` is derived from each node's `sources` and a test keeps them equal, generated views are regenerated rather than edited, and a worker is never asked to author a fact the harness can observe.
 
 ## Versioned questions and projections
 
@@ -97,7 +85,7 @@ The query layer is separate from presentation. GitHub gets generated Mermaid pro
 
 ## Stress-test findings
 
-The first stress pass found that several high-value questions existed only in the view catalog. The query engine now executes parameterized `why` / `affected` traversal, and all six checks the `debt` view declares are implemented in `ci/assurance-views.ts` and bound to `views.json` by test (a declared check nothing implements fails). Tests mutate the graph in memory to prove each check fires. On the current corpus the diagnostics report 15 internal invariants that name no realization, 2 public guarantees whose projected intent nothing realizes (`projection-overreach`: TC-002, TC-003), one decision with no semantic relationship (DEC-0018), and one unused assumption (ASM-0003) — the graph's own open debt, not a claim that the repository is wrong.
+The first stress pass found that several high-value questions existed only in the view catalog. The query engine now executes parameterized `why` / `affected` traversal, and all six checks the `debt` view declares are implemented in `ci/assurance-views.ts`, bound to `views.json` by test (a declared check nothing implements fails), and fire through the view itself — `stale-source-grounding` reads the graph's own groundings from the repository by default. Tests mutate the graph in memory to prove each check fires. On the current corpus the diagnostics report 15 internal invariants that name no realization and one public guarantee whose projected intent nothing realizes (`projection-overreach`: TC-002) — the graph's own open debt, not a claim that the repository is wrong. Two earlier entries (a decision with no semantic relationship, an assumption nothing assumed) were encoding gaps in ADR-0012 and ADR-0017's decisions and were closed by authoring the missing, source-anchored nodes.
 
 A second question/qualifier stress pass found that the ontology did not need to grow for most richer operator questions. Assumption lifecycle questions can be expressed through Assessment rather than `revisitOn`; generic Context/Actor/Policy/Defeater nodes remain unearned; recovery authority belongs to runtime/control state; and `what changed?` is primarily a semantic-diff/query problem.
 
@@ -105,7 +93,7 @@ The same pass found 5W1H more useful as an answer-completeness lens than as the 
 
 The top-level architecture view remains intentionally sparse. Most invariant propositions are not naturally a causal chain. Marketing/product story views may sequence them for explanation, but that sequence must not become a fake semantic relation.
 
-Public-audience views are constrained to proposition nodes with role `invariant` — that is the whole of "projection-safe" today, enforced in `assurance-views.test.ts`. The public-audience `architecture` view therefore publishes internal-visibility invariant *statements* into the checked-in Mermaid projection; a finer sensitivity/export policy belongs with observation/subject data once those exist.
+Public-audience views are constrained to proposition nodes with role `invariant` — that is the whole of "projection-safe" today, enforced in `assurance-views.test.ts`. The public-audience `architecture` view therefore publishes the slugs of internal-visibility invariants into the checked-in Mermaid projection (the renderer labels nodes by slug, not statement); a finer sensitivity/export policy belongs with observation/subject data once those exist.
 
 ## Why this is useful
 
@@ -119,7 +107,7 @@ Executable questions now include:
 - Can restart durability survive without deterministic LLM replay?
 - Is any realization orphan machinery with no articulated purpose?
 - Can the same semantic contract describe consumer-owned repository intent without depending on Pelaggio's own graph?
-- Does every public claim published as an unconditional guarantee name the mechanism that implements it? (Q14 — the registry is enumerated from `trust-claims.yml`, every record must be in the graph with its registry status (Q5), and three guarantees currently name no mechanism — TC-002, TC-003, TC-017; the set may only shrink.)
+- Does every public claim published as an unconditional guarantee name the mechanism that implements it? (Q14 — the registry is enumerated from `trust-claims.yml`, every record must be in the graph with its registry status (Q5), and one guarantee currently names no mechanism — TC-002, an absence claim; the live set is computed and checked against a frozen ceiling it can only shrink below.)
 - Can a construction rule bind a mechanism, not only intent? (Q15 — `CON-0027` binds `CTR-0004`.)
 - Is every always-loaded AGENTS.md invariant either represented in the graph or explicitly a construction rule? (Q16 — `invariantIndex`, matched by anchor substring, with the same limitation as source grounding: a bullet strengthened or weakened around its anchor is not detected.)
 
@@ -153,4 +141,4 @@ Broad extraction, narrow commitment. The ontology and interoperability constrain
 
 The corpus is AI-assisted and intentionally opinionated. Pre-review attacks have already split overbroad authority concepts, demoted policy from invariant status, converted public aliases to scoped projections, and collapsed claim/constraint/assumption/external-claim into one proposition base type while preserving semantic roles.
 
-Open ontology questions are recorded in `shadow-graph.json` under `extraction.openQuestions`. The loudest live finding is a coverage fact rather than an ontology question: three public `guarantee`-status claims (TC-002/003/017) name no implementing realization (Q14), and two of them project onto intent that nothing realizes (`projection-overreach`). The registry is fully enumerated, so a newly published guarantee fails Q5 until it is represented and Q14 until it names a mechanism or joins the baseline explicitly. Whether an unlinked guarantee is a documentation gap or an overstated guarantee is a question for the reconciliation campaign (#624), not something the graph decides.
+Open ontology questions are recorded in `shadow-graph.json` under `extraction.openQuestions`. The loudest live finding is a coverage fact rather than an ontology question: one public `guarantee`-status claim — TC-002, "no telemetry", an absence with no mechanism to name — has no implementing realization (Q14) and projects onto intent that nothing realizes (`projection-overreach`). The registry is fully enumerated and the live unlinked set is computed from the graph against a frozen ceiling in the test: a newly published guarantee fails Q5 until it is represented and Q14 until it names a mechanism, and admitting it instead requires editing the frozen set — a visible, reviewable diff, not a silent pass. Whether an unlinked guarantee is a documentation gap or an overstated guarantee is a question for the reconciliation campaign (#624), not something the graph decides.

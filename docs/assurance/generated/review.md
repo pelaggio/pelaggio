@@ -13,6 +13,7 @@ flowchart TB
   CLM_0019["deterministic-safety-floor"]
   CON_0008["omission-not-refutation"]
   CTR_0003["n-reviewers-one-judge"]
+  CTR_0012["fail-closed-review-verdict-parsers"]
   DEC_0003["signed-tag-provenance-publish"]
   DEC_0008["in-toto-envelope"]
   DEC_0012["fixed-six-step-two-review-orchestrators"]
@@ -21,6 +22,7 @@ flowchart TB
   CLM_0009 -->|specializes| CLM_0019
   CON_0008 -->|constrains| CLM_0009
   CTR_0003 -->|derived-from| DEC_0014
+  CTR_0012 -->|implements| CLM_0009
   DEC_0003 -->|implements| CLM_0008
   DEC_0008 -->|implements| CLM_0008
   DEC_0012 -->|implements| CLM_0016

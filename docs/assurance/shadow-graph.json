@@ -164,7 +164,8 @@
 			"sources": [
 				"ADR-0005",
 				"ADR-0025",
-				"ADR-0026"
+				"ADR-0026",
+				"ADR-0028"
 			]
 		},
 		{
@@ -177,7 +178,8 @@
 			"sources": [
 				"ADR-0007",
 				"ADR-0018",
-				"ADR-0024"
+				"ADR-0024",
+				"ADR-0028"
 			]
 		},
 		{
@@ -243,7 +245,8 @@
 			"sources": [
 				"ADR-0015",
 				"ADR-0016",
-				"ADR-0017"
+				"ADR-0017",
+				"ADR-0013"
 			]
 		},
 		{
@@ -358,7 +361,8 @@
 			"sources": [
 				"ADR-0001",
 				"ADR-0025",
-				"ADR-0026"
+				"ADR-0026",
+				"ADR-0028"
 			]
 		},
 		{
@@ -509,7 +513,8 @@
 			"slug": "trust-projection-never-strengthens",
 			"statement": "A public trust projection may scope or weaken an internal claim but may never silently strengthen it.",
 			"sources": [
-				"docs/trust/trust-claims.yml"
+				"docs/trust/trust-claims.yml",
+				"ADR-0028"
 			]
 		},
 		{
@@ -520,7 +525,8 @@
 			"slug": "narrative-no-duplicate-authority",
 			"statement": "Narrative documentation may explain intent and history but must not become a second independently maintained source of current architectural truth.",
 			"sources": [
-				"ADR-0027"
+				"ADR-0027",
+				"ADR-0028"
 			]
 		},
 		{
@@ -1287,6 +1293,55 @@
 			"codeEvidence": [
 				"packages/pelaggio/scripts/pelaggio/config.ts"
 			]
+		},
+		{
+			"id": "CTR-0011",
+			"kind": "realization",
+			"slug": "contained-execution-egress-broker",
+			"statement": "Opt-in contained execution runs the step in a network=none jail and routes provider traffic through a host-held, policy-capped egress broker that injects the key outside the jail.",
+			"sources": [
+				"ADR-0023"
+			],
+			"codeEvidence": [
+				"packages/pelaggio/scripts/pelaggio/contained-execution.ts",
+				"packages/pelaggio/scripts/pelaggio/egress-broker.ts",
+				"packages/pelaggio/scripts/pelaggio/egress-policies.ts",
+				"packages/pelaggio/scripts/pelaggio/__tests__/egress-broker.test.ts"
+			]
+		},
+		{
+			"id": "CTR-0012",
+			"kind": "realization",
+			"slug": "fail-closed-review-verdict-parsers",
+			"statement": "Reviewer, Judge, and verification output is parsed by role-specific parsers that classify malformed, absent, or refused output as a typed failure rather than a pass.",
+			"sources": [
+				"ADR-0004"
+			],
+			"codeEvidence": [
+				"packages/pelaggio/scripts/pelaggio/review/findings.ts",
+				"packages/pelaggio/scripts/pelaggio/__tests__/review-findings.test.ts"
+			]
+		},
+		{
+			"id": "DEC-0021",
+			"kind": "decision",
+			"slug": "degrade-rigor-only-bounded-fallback",
+			"statement": "When a provider surface is unavailable, degrade review rigor visibly (fewer reviewers, same-provider with a weaker attestation) rather than the security boundary; falling back to the last verified pin is permitted only under a staleness ceiling with continuous re-verification, parking rather than running indefinitely.",
+			"status": "current-policy-choice",
+			"sources": [
+				"ADR-0017"
+			]
+		},
+		{
+			"id": "CLM-0022",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "internal",
+			"slug": "value-and-negotiability-are-human",
+			"statement": "Whether work is valuable or negotiable is a human chartering judgment; the harness computes readiness from machine-checkable evidence and never infers value.",
+			"sources": [
+				"ADR-0012"
+			]
 		}
 	],
 	"edges": [
@@ -1779,6 +1834,61 @@
 			"from": "CTR-0004",
 			"relation": "implements",
 			"to": "TC-011"
+		},
+		{
+			"from": "CTR-0011",
+			"relation": "implements",
+			"to": "TC-017"
+		},
+		{
+			"from": "CTR-0011",
+			"relation": "implements",
+			"to": "CLM-0003"
+		},
+		{
+			"from": "CTR-0011",
+			"relation": "derived-from",
+			"to": "DEC-0013"
+		},
+		{
+			"from": "CTR-0012",
+			"relation": "implements",
+			"to": "TC-003"
+		},
+		{
+			"from": "CTR-0012",
+			"relation": "implements",
+			"to": "CLM-0009"
+		},
+		{
+			"from": "DEC-0021",
+			"relation": "assumes",
+			"to": "ASM-0003"
+		},
+		{
+			"from": "DEC-0021",
+			"relation": "implements",
+			"to": "CLM-0013"
+		},
+		{
+			"from": "DEC-0021",
+			"relation": "implements",
+			"to": "CLM-0011"
+		},
+		{
+			"from": "CON-0010",
+			"relation": "constrains",
+			"to": "DEC-0021"
+		},
+		{
+			"from": "DEC-0018",
+			"relation": "implements",
+			"to": "CLM-0022"
+		},
+		{
+			"from": "DEC-0006",
+			"relation": "implements",
+			"to": "CLM-0022"
 		}
 	],
 	"adrMap": {
@@ -1804,6 +1914,7 @@
 			"CLM-0010",
 			"CLM-0019",
 			"CON-0002",
+			"CTR-0012",
 			"TC-003"
 		],
 		"ADR-0005": [
@@ -1847,6 +1958,7 @@
 			"DEC-0017"
 		],
 		"ADR-0012": [
+			"CLM-0022",
 			"DEC-0006",
 			"DEC-0017",
 			"DEC-0018"
@@ -1881,7 +1993,8 @@
 			"ASM-0003",
 			"CLM-0011",
 			"CLM-0013",
-			"CON-0010"
+			"CON-0010",
+			"DEC-0021"
 		],
 		"ADR-0018": [
 			"CLM-0006",
@@ -1922,7 +2035,9 @@
 			"CLM-0003",
 			"CON-0010",
 			"CON-0013",
+			"CON-0027",
 			"CTR-0006",
+			"CTR-0011",
 			"DEC-0013",
 			"TC-017",
 			"TC-018"
@@ -1945,6 +2060,7 @@
 			"CON-0003",
 			"CON-0004",
 			"CON-0009",
+			"DEC-0002",
 			"DEC-0015",
 			"TC-013"
 		],
@@ -1964,6 +2080,7 @@
 			"CON-0007",
 			"CON-0008",
 			"CON-0009",
+			"CON-0027",
 			"DEC-0016"
 		],
 		"ADR-0027": [
@@ -2085,6 +2202,21 @@
 			"path": "docs/decisions/0028-delivery-packet-claim-scoped-provenance.md",
 			"anchors": [
 				"Identity ambiguity must split, never merge"
+			]
+		},
+		{
+			"node": "CLM-0022",
+			"path": "docs/decisions/0012-readiness-computed-not-groomed.md",
+			"anchors": [
+				"stay chartering-time human concerns"
+			]
+		},
+		{
+			"node": "DEC-0021",
+			"path": "docs/decisions/0017-graceful-degradation-rigor-only.md",
+			"anchors": [
+				"last verified pin",
+				"staleness ceiling"
 			]
 		}
 	],
