@@ -97,7 +97,7 @@ The query layer is separate from presentation. GitHub gets generated Mermaid pro
 
 ## Stress-test findings
 
-The first stress pass found that several high-value questions existed only in the view catalog. The query engine now executes parameterized `why` / `affected` traversal, and all six checks the `debt` view declares are implemented in `ci/assurance-views.ts` and bound to `views.json` by test (a declared check nothing implements fails). Tests mutate the graph in memory to prove each check fires. On the current corpus the diagnostics report 17 internal invariants that name no realization, 4 public guarantees whose projected intent nothing realizes (`projection-overreach`), one decision with no semantic relationship, and one unused assumption — the graph's own open debt, not a claim that the repository is wrong.
+The first stress pass found that several high-value questions existed only in the view catalog. The query engine now executes parameterized `why` / `affected` traversal, and all six checks the `debt` view declares are implemented in `ci/assurance-views.ts` and bound to `views.json` by test (a declared check nothing implements fails). Tests mutate the graph in memory to prove each check fires. On the current corpus the diagnostics report 15 internal invariants that name no realization, 2 public guarantees whose projected intent nothing realizes (`projection-overreach`: TC-002, TC-003), one decision with no semantic relationship (DEC-0018), and one unused assumption (ASM-0003) — the graph's own open debt, not a claim that the repository is wrong.
 
 A second question/qualifier stress pass found that the ontology did not need to grow for most richer operator questions. Assumption lifecycle questions can be expressed through Assessment rather than `revisitOn`; generic Context/Actor/Policy/Defeater nodes remain unearned; recovery authority belongs to runtime/control state; and `what changed?` is primarily a semantic-diff/query problem.
 
@@ -119,9 +119,9 @@ Executable questions now include:
 - Can restart durability survive without deterministic LLM replay?
 - Is any realization orphan machinery with no articulated purpose?
 - Can the same semantic contract describe consumer-owned repository intent without depending on Pelaggio's own graph?
-- Does every public claim published as an unconditional guarantee name the mechanism that implements it? (Q14 — six do not; the set is ratcheted so it may only shrink.)
+- Does every public claim published as an unconditional guarantee name the mechanism that implements it? (Q14 — the registry is enumerated from `trust-claims.yml`, every record must be in the graph with its registry status (Q5), and three guarantees currently name no mechanism — TC-002, TC-003, TC-017; the set may only shrink.)
 - Can a construction rule bind a mechanism, not only intent? (Q15 — `CON-0027` binds `CTR-0004`.)
-- Is every always-loaded AGENTS.md invariant either represented in the graph or explicitly a construction rule? (Q16 — `invariantIndex`.)
+- Is every always-loaded AGENTS.md invariant either represented in the graph or explicitly a construction rule? (Q16 — `invariantIndex`, matched by anchor substring, with the same limitation as source grounding: a bullet strengthened or weakened around its anchor is not detected.)
 
 The shadow question-contract experiment adds higher-order prompts such as:
 
@@ -153,4 +153,4 @@ Broad extraction, narrow commitment. The ontology and interoperability constrain
 
 The corpus is AI-assisted and intentionally opinionated. Pre-review attacks have already split overbroad authority concepts, demoted policy from invariant status, converted public aliases to scoped projections, and collapsed claim/constraint/assumption/external-claim into one proposition base type while preserving semantic roles.
 
-Open ontology questions are recorded in `shadow-graph.json` under `extraction.openQuestions`. The loudest live finding is a coverage fact rather than an ontology question: six public `guarantee`-status claims (TC-003/004/010/011/012/014) name no implementing realization (Q14), and four of them project onto intent that nothing realizes (`projection-overreach`). Whether that is a documentation gap or an overstated guarantee is a question for the reconciliation campaign (#624), not something the graph decides.
+Open ontology questions are recorded in `shadow-graph.json` under `extraction.openQuestions`. The loudest live finding is a coverage fact rather than an ontology question: three public `guarantee`-status claims (TC-002/003/017) name no implementing realization (Q14), and two of them project onto intent that nothing realizes (`projection-overreach`). The registry is fully enumerated, so a newly published guarantee fails Q5 until it is represented and Q14 until it names a mechanism or joins the baseline explicitly. Whether an unlinked guarantee is a documentation gap or an overstated guarantee is a question for the reconciliation campaign (#624), not something the graph decides.

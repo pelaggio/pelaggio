@@ -2,7 +2,7 @@
 
 Status: **experimental / shadow-only**.
 
-This experiment records a deliberately small candidate seam between probabilistic human/model interpretation and deterministic semantic retrieval. It does **not** define a public API, runtime protocol, storage format, transport, or authoritative query vocabulary.
+This experiment records a deliberately small candidate seam between probabilistic human/model interpretation and deterministic semantic retrieval over the shadow graph (`docs/assurance/shadow-graph.json`, ontology in `docs/assurance/README.md`, decision in `docs/decisions/0027-machine-readable-architectural-intent-graph.md`). It does **not** define a public API, runtime protocol, storage format, transport, or authoritative query vocabulary.
 
 The governing hypothesis is:
 
@@ -35,7 +35,7 @@ Question {
     recover
     steer
 
-  subject
+  subject        # any addressable semantic identity: a node id (DEC-0014), a source (ADR-0022), later a bound record id
 
   qualifiers?:
     direction
@@ -47,13 +47,13 @@ Question {
 }
 ```
 
-This grammar is intentionally **not ontology** and is not yet a stable/public API. Each family or qualifier must survive operator-prompt, paraphrase, composition, cross-agent, and deletion tests before promotion.
+`subject` is an addressable identity, not the future-facing Subject node kind the README reserves for the evidence slice. This grammar is intentionally **not ontology** and is not yet a stable/public API. Each family or qualifier must survive operator-prompt, paraphrase, composition, cross-agent, and deletion tests before promotion.
 
 Current candidate meanings:
 
 - **explain** — expose why something exists/holds and the typed premises relevant to explaining it;
 - **trace** — follow explicit semantic relationships upstream/downstream without inventing implied edges;
-- **challenge** — expose attributable challenging/unresolved assessments or missing evidence without manufacturing a defeater ontology;
+- **challenge** — expose attributable challenging/unresolved assessments or missing evidence without manufacturing a defeater ontology (presupposes assessment records, which the shadow graph does not yet hold — Q12; until the stacked assessment slice supplies them, `challenge` and the `epistemicPosture` qualifier retrieve nothing, and experiment arms 4–5 cannot exercise them);
 - **recover** — identify what evidence/state transition would permit progress, while keeping clearing authority in runtime/control semantics rather than model suggestion;
 - **steer** — expose which decisions/policy/configuration may change within the constraints of durable intent and authority boundaries.
 
@@ -83,13 +83,13 @@ explain(DEC-X)
   -> implements CLM-A
   -> assumes ASM-B
 
-expand(ASM-B)
+explain(ASM-B, depth=recursive, epistemicPosture=unresolved)
   -> supporting assessments
   -> challenging assessments
   -> material residuals
 ```
 
-No fixed number of expansions is meaningful, and competing explanatory branches must not be collapsed into a single causal chain.
+Expansion is a further `explain` with the `depth` qualifier, not a sixth family. No fixed number of expansions is meaningful, and competing explanatory branches must not be collapsed into a single causal chain.
 
 ## 5W1H as answer coverage, not API taxonomy
 
@@ -137,5 +137,41 @@ Use authentic operator prompts and compare at least:
 Evaluate intent fidelity, answerability, composability, semantic ownership, non-overclaiming, API economy, represented-fact completeness, token/tool effort, and cross-model consistency. Include paraphrase and conversational follow-up chains.
 
 The candidate grammar should be reduced if families collapse cleanly into retrieval/diff/qualifiers, if models perform equally well from the raw corpus at comparable cost and reliability, or if the semantic layer merely restates prose without improving boundedness, repeatability, temporal/authority distinctions, or cross-agent portability.
+
+## First run: four operator questions, two conditions, two models (2026-08-24)
+
+Record: `question-contract-run-2026-08-24.json`. Four authentic operator questions (the ADR-0022
+topology, the cost of provider-diverse review, replacing the landing executor, which decisions are
+no longer current) were each answered by read-only agents under two conditions — **raw**: the ADR
+corpus and trust registry only; **graph**: deterministic premises retrieved by `selectView` for the
+matching view, with the ADRs readable for rationale — by two models (claude sonnet, claude opus).
+This is arms 1 and 5 of the comparison above; arms 2–4 were not run.
+
+| | graph premises | raw corpus |
+|---|---|---|
+| tokens per answer | 29.1k | 45.4k |
+| files read | 5.0 | 11.3 |
+| wall-clock | 56 s | 89 s |
+| must-survive items per answer (Q-a–c) | 7.3 | 12.8 |
+| must-survive items that name a mechanism rather than a property | 7% | 30% |
+| cross-model agreement on must-survive (Jaccard, Q-a / Q-b / Q-c) | 0.67 / 0.63 / 0.90 | 0.33 / 0.27 / 0.40 |
+
+The sharpest result is Q-c. Asked what must remain true *regardless of the new landing mechanism*,
+both raw replicas listed the CAS fence, `--force-with-lease`, the ancestry check, and the isolated
+worktree as must-survive — realizations of DEC-0015 presented as intent, the conflation ADR-0027
+exists to prevent — while both graph replicas placed them under may-change and agreed on nine of ten
+must-survive nodes. Q-d cut the other way: the raw replicas answered at ADR granularity (11 and 31
+files read) because the corpus has no per-decision status; the graph replicas answered directly,
+and one of them found that the graph was **wrong** — DEC-0012 carried "under reconsideration" with
+no source, and `supersedes` was declared but never authored. Both are fixed on this branch; the run
+is the reason.
+
+Against the reduction trigger: the models did not perform equally well from the raw corpus at
+comparable cost — they cost 1.6× more, read 2.3× more files, and agreed with each other roughly half
+as often — but the honest reading is about boundedness and non-conflation, not correctness, since
+every raw answer was also defensible from its sources. Caveats: one provider (cross-provider
+consistency was not measured), four questions, the mechanism-naming judge is the session author,
+the raw Jaccard values are hand-mapped concepts, and the `challenge`/`recover` families could not be
+exercised because no assessment records exist yet.
 
 No question family, qualifier, answer schema, 5W1H field, federation mechanism, transport, or tool name is promoted by this document.
