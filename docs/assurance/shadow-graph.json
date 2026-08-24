@@ -1785,6 +1785,164 @@
 			]
 		}
 	],
+	"invariantIndex": {
+		"source": "AGENTS.md",
+		"section": "Project Invariants",
+		"rule": "Every bullet in the section resolves to graph primitives or is explicitly classified as a construction rule (repository convention, not architectural intent). A bullet that does neither is an uncovered channel for load-bearing intent and fails Q16.",
+		"entries": [
+			{
+				"anchor": "`STEPS` in `packages/pelaggio/scripts/pelaggio/config.ts` is the source of truth",
+				"construction": "config-shape convention for pipeline steps"
+			},
+			{
+				"anchor": "`expandSkill()` strips skill frontmatter",
+				"construction": "skill-substrate mechanics"
+			},
+			{
+				"anchor": "Skill bodies must call `npx pelaggio ...`",
+				"construction": "re-entrancy convention for skill bodies"
+			},
+			{
+				"anchor": "Model IDs live in `MODEL_PROFILES`",
+				"construction": "model-id placement convention"
+			},
+			{
+				"anchor": "Worktree isolation is load-bearing",
+				"nodes": [
+					"CLM-0002",
+					"CTR-0004"
+				]
+			},
+			{
+				"anchor": "The Claude custom spawn is unconditional and fail-closed",
+				"nodes": [
+					"DEC-0013",
+					"CLM-0002"
+				]
+			},
+			{
+				"anchor": "plan documents under `docs/plans/` are read-only",
+				"construction": "step-scoped write convention (plan-polish guard)"
+			},
+			{
+				"anchor": "Rate-limit paths must park through `parkExit()`",
+				"nodes": [
+					"DEC-0009",
+					"CLM-0012"
+				]
+			},
+			{
+				"anchor": "`ship.target` owns direct-push vs PR behavior",
+				"nodes": [
+					"DEC-0001"
+				]
+			},
+			{
+				"anchor": "PR candidate blockers may be removed only by a complete, valid isolated verification report",
+				"nodes": [
+					"CLM-0009",
+					"CON-0008"
+				]
+			},
+			{
+				"anchor": "Every blocking gate clears the gate-quality bar",
+				"nodes": [
+					"CLM-0011"
+				]
+			},
+			{
+				"anchor": "The daemon is an authenticated authority boundary",
+				"nodes": [
+					"CLM-0005",
+					"TC-010"
+				]
+			},
+			{
+				"anchor": "Claims are git-native (`feat/<id>` branch)",
+				"nodes": [
+					"DEC-0004",
+					"CLM-0018"
+				]
+			},
+			{
+				"anchor": "Access the roadmap via `npx pelaggio roadmap ...`",
+				"construction": "skill/CLI seam convention"
+			},
+			{
+				"anchor": "Review artifacts through the harness, never by shelling out to a provider CLI",
+				"construction": "provider-plumbing convention"
+			},
+			{
+				"anchor": "`npx pelaggio doc-review <path>` is the read-only review path",
+				"nodes": [
+					"CLM-0006"
+				]
+			},
+			{
+				"anchor": "`.agents/skills` must stay a symlink",
+				"construction": "skill-tree layout convention"
+			},
+			{
+				"anchor": "No `preinstall`, `install`, or `postinstall` scripts",
+				"nodes": [
+					"CLM-0004"
+				]
+			},
+			{
+				"anchor": "Flow projection is non-authoritative for current state",
+				"nodes": [
+					"CON-0030",
+					"DEC-0004"
+				]
+			},
+			{
+				"anchor": "Flow-event identity is a unique `eventId`",
+				"nodes": [
+					"CON-0012"
+				]
+			},
+			{
+				"anchor": "Flow events live under `.dev/flow-events/`",
+				"construction": "planned storage layout (flow-event-catalog.md)"
+			},
+			{
+				"anchor": "`FlowPolicy` is provider-neutral",
+				"construction": "planned policy/storage seam (flow.md)"
+			},
+			{
+				"anchor": "An initiative is a projected swimlane/`group`, never a pelaggio-owned object",
+				"nodes": [
+					"DEC-0020"
+				]
+			},
+			{
+				"anchor": "Write-back is typed and item-scoped",
+				"construction": "planned write-back mechanics (flow.md)"
+			},
+			{
+				"anchor": "Declared write-sets are enforced by the worktree write-guard",
+				"nodes": [
+					"CLM-0002",
+					"CTR-0004"
+				]
+			},
+			{
+				"anchor": "The landing queue is target-agnostic",
+				"nodes": [
+					"DEC-0015",
+					"CLM-0007",
+					"CON-0004"
+				]
+			},
+			{
+				"anchor": "Beads (`bd`) is the chosen work-store",
+				"nodes": [
+					"DEC-0004",
+					"CON-0004"
+				]
+			}
+		]
+	},
 	"extraction": {
 		"reviewed": false,
 		"method": "AI-assisted semantic compression of the ADR corpus; source-grounding and typed-relation tests protect reviewed cuts from silent drift, but human/adversarial review is still required to ratify semantic interpretation.",

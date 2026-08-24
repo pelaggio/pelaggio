@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, it } from "node:test";
-import { diagnostics, renderMermaid, selectView, type AssuranceGraph, type AssuranceView } from "../assurance-views.ts";
+import { type AssuranceGraph, type AssuranceView, DEBT_CHECKS, diagnostics, renderMermaid, selectView } from "../assurance-views.ts";
 
 const repo = resolve(new URL("../..", import.meta.url).pathname);
 const graph = JSON.parse(readFileSync(resolve(repo, "docs/assurance/shadow-graph.json"), "utf8")) as AssuranceGraph & { relationKinds: Record<string, unknown> };
@@ -46,6 +46,21 @@ describe("assurance question catalog", () => {
   });
 });
 
+/** Minimal in-memory mutation that should make `check` fire, for reachability of each declared check. */
+function injectDebtFor(check: string): AssuranceGraph {
+  const broken = structuredClone(graph) as AssuranceGraph;
+  if (check === "orphan-realization") broken.nodes.push({ id: "CTR-X", kind: "realization", slug: "orphan", statement: "s" });
+  if (check === "decision-without-intent") broken.nodes.push({ id: "DEC-X", kind: "decision", slug: "aimless", statement: "s" });
+  if (check === "unused-assumption") broken.nodes.push({ id: "ASM-X", kind: "proposition", role: "assumption", visibility: "internal", slug: "unused", statement: "s" });
+  if (check === "invariant-without-realization") broken.nodes.push({ id: "CLM-X", kind: "proposition", role: "invariant", visibility: "internal", slug: "unrealized", statement: "s" });
+  if (check === "projection-overreach") {
+    broken.nodes.push({ id: "CLM-X", kind: "proposition", role: "invariant", visibility: "internal", slug: "unrealized", statement: "s" });
+    broken.nodes.push({ id: "TC-X", kind: "proposition", role: "invariant", visibility: "public", slug: "overreach", statement: "s", projection: { status: "guarantee" } });
+    broken.edges.push({ from: "TC-X", relation: "projects", to: "CLM-X" });
+  }
+  return broken;
+}
+
 describe("query stress tests", () => {
   it("why executes as a parameterized neighborhood rather than a catalog promise", () => {
     const result = selectView(graph, view("why"), { node: "DEC-0014" });
@@ -69,6 +84,34 @@ describe("query stress tests", () => {
     const broken = structuredClone(graph) as AssuranceGraph;
     broken.nodes.push({ id: "ASM-X", kind: "proposition", role: "assumption", visibility: "internal", slug: "unused", statement: "Synthetic unused assumption." });
     assert.ok(diagnostics(broken).some((issue) => issue.check === "unused-assumption" && issue.node === "ASM-X"));
+  });
+
+  it("every check the debt view declares is implemented, and nothing is declared that is not", () => {
+    const declared = [...(view("debt").checks ?? [])].sort();
+    assert.deepEqual(declared, [...DEBT_CHECKS].sort(), "views.json debt.checks must equal the checks diagnostics() implements");
+    const produced = new Set(diagnostics(graph, { sourceGrounding: (graph as any).sourceGrounding, readSource: () => undefined }).map((issue) => issue.check));
+    // With every source unreadable, stale-source-grounding fires for each grounding; the structural checks
+    // fire on the live corpus wherever debt exists. Every declared check must be reachable by some input.
+    for (const check of DEBT_CHECKS) {
+      const reachable = produced.has(check) || diagnostics(injectDebtFor(check)).some((issue) => issue.check === check);
+      assert.ok(reachable, `${check} is declared but no input makes diagnostics() emit it`);
+    }
+  });
+
+  it("stale-source-grounding fires when an anchor leaves its source and stays silent when it remains", () => {
+    const grounding = [{ node: "CLM-0006", path: "x.md", anchors: ["determinism lives in the harness"] }];
+    assert.ok(diagnostics(graph, { sourceGrounding: grounding, readSource: () => "unrelated prose" }).some((i) => i.check === "stale-source-grounding" && i.node === "CLM-0006"));
+    assert.ok(!diagnostics(graph, { sourceGrounding: grounding, readSource: () => "determinism lives in the harness, judgment in the worker" }).some((i) => i.check === "stale-source-grounding"));
+  });
+
+  it("projection-overreach fires only for a guarantee whose projected intent nothing realizes", () => {
+    const broken = structuredClone(graph) as AssuranceGraph;
+    broken.nodes.push({ id: "CLM-X", kind: "proposition", role: "invariant", visibility: "internal", slug: "unrealized", statement: "Synthetic unrealized internal intent." });
+    broken.nodes.push({ id: "TC-X", kind: "proposition", role: "invariant", visibility: "public", slug: "overreach", statement: "Synthetic public guarantee.", projection: { status: "guarantee" } });
+    broken.edges.push({ from: "TC-X", relation: "projects", to: "CLM-X" });
+    assert.ok(diagnostics(broken).some((i) => i.check === "projection-overreach" && i.node === "TC-X"));
+    (broken.nodes.find((n) => n.id === "TC-X") as any).projection = { status: "best_effort" };
+    assert.ok(!diagnostics(broken).some((i) => i.check === "projection-overreach" && i.node === "TC-X"), "best_effort honestly reports an absent mechanism — no false fire");
   });
 
   it("query modes fail loudly when required parameters are absent or unknown", () => {

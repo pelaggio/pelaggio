@@ -34,7 +34,7 @@ The class collapse does not erase role semantics: `constrains` must originate at
 
 The graph has two independent maintenance checks:
 
-1. **Source grounding** protects semantic extraction. High-risk cuts carry source paths plus small textual anchors into the ADR/trust corpus. If the source proposition moves or changes, CI forces reconciliation rather than allowing graph and prose to drift silently.
+1. **Source grounding** protects semantic extraction. High-risk cuts carry source paths plus small textual anchors into the ADR/trust corpus. CI verifies only that each anchor substring still occurs somewhere in its source file: deleting or rewording an anchored sentence forces reconciliation; moving text within the file, or changing the proposition outside the anchored snippets, is **not** detected. The `stale-source-grounding` debt check reports the same condition as a diagnostic.
 2. **Realization evidence** protects current implementation. Realization nodes carry current code/test paths, and CI verifies those paths still exist.
 
 Propositions deliberately do **not** contain source-code paths or symbols. A refactor should be able to replace a realization without changing proposition identity. Code linkage belongs on realization/observation; tests and runtime artifacts can later become observations interpreted by assessments.
@@ -85,11 +85,11 @@ Optional extensions may add semantics but may not redefine existing semantics. A
 
 `views.json` is a renderer-neutral catalog of questions Pelaggio should answer from the graph:
 
-- **architecture** — what invariant propositions does Pelaggio currently preserve?
+- **architecture** — what internal invariant propositions does Pelaggio currently preserve? (Public `TC-*` invariants are routed to **trust**.)
 - **why** — why does this node exist, what constrains it, and what realizes it today?
 - **affected** — what intent could this node/source/change affect?
 - **debt** — what realization or intent is orphaned, unsupported, stale, or contradictory?
-- **trust** — what public propositions project from internal intent and at what status/scope?
+- **trust** — which public propositions project onto internal intent — the `projects` edge originates at the public proposition — and at what status/scope?
 - **review** — why does the current review strategy exist and what survives if it changes?
 - **landing** — what must remain true if the current landing realization changes?
 
@@ -97,7 +97,7 @@ The query layer is separate from presentation. GitHub gets generated Mermaid pro
 
 ## Stress-test findings
 
-The first stress pass found that several high-value questions existed only in the view catalog. The query engine now executes parameterized `why` / `affected` traversal and structural debt diagnostics, and tests mutate the graph in memory to prove diagnostics detect orphan realizations and unused assumptions.
+The first stress pass found that several high-value questions existed only in the view catalog. The query engine now executes parameterized `why` / `affected` traversal, and all six checks the `debt` view declares are implemented in `ci/assurance-views.ts` and bound to `views.json` by test (a declared check nothing implements fails). Tests mutate the graph in memory to prove each check fires. On the current corpus the diagnostics report 17 internal invariants that name no realization, 4 public guarantees whose projected intent nothing realizes (`projection-overreach`), one decision with no semantic relationship, and one unused assumption — the graph's own open debt, not a claim that the repository is wrong.
 
 A second question/qualifier stress pass found that the ontology did not need to grow for most richer operator questions. Assumption lifecycle questions can be expressed through Assessment rather than `revisitOn`; generic Context/Actor/Policy/Defeater nodes remain unearned; recovery authority belongs to runtime/control state; and `what changed?` is primarily a semantic-diff/query problem.
 
@@ -105,7 +105,7 @@ The same pass found 5W1H more useful as an answer-completeness lens than as the 
 
 The top-level architecture view remains intentionally sparse. Most invariant propositions are not naturally a causal chain. Marketing/product story views may sequence them for explanation, but that sequence must not become a fake semantic relation.
 
-Public views are constrained to projection-safe proposition data. More granular sensitivity/export policy belongs with observation/subject data once those exist.
+Public-audience views are constrained to proposition nodes with role `invariant` — that is the whole of "projection-safe" today, enforced in `assurance-views.test.ts`. The public-audience `architecture` view therefore publishes internal-visibility invariant *statements* into the checked-in Mermaid projection; a finer sensitivity/export policy belongs with observation/subject data once those exist.
 
 ## Why this is useful
 
@@ -119,6 +119,9 @@ Executable questions now include:
 - Can restart durability survive without deterministic LLM replay?
 - Is any realization orphan machinery with no articulated purpose?
 - Can the same semantic contract describe consumer-owned repository intent without depending on Pelaggio's own graph?
+- Does every public claim published as an unconditional guarantee name the mechanism that implements it? (Q14 — six do not; the set is ratcheted so it may only shrink.)
+- Can a construction rule bind a mechanism, not only intent? (Q15 — `CON-0027` binds `CTR-0004`.)
+- Is every always-loaded AGENTS.md invariant either represented in the graph or explicitly a construction rule? (Q16 — `invariantIndex`.)
 
 The shadow question-contract experiment adds higher-order prompts such as:
 
@@ -134,31 +137,20 @@ Run the corpus tests with:
 pnpm test:ci
 ```
 
-`ci/__tests__/shadow-assurance.test.ts` validates graph integrity, proposition roles, source grounding, realization evidence, and semantic question contracts. `ci/__tests__/assurance-views.test.ts` stress-tests query execution, diagnostics, public projection boundaries, and generated views.
+`ci/__tests__/shadow-assurance.test.ts` validates graph integrity, proposition roles, source grounding, realization evidence, ADR and AGENTS.md coverage, and the semantic questions Q1–Q16. `ci/__tests__/assurance-views.test.ts` stress-tests query execution, the six debt diagnostics, public projection boundaries, and generated views. `ci/__tests__/question-contract-experiment.test.ts` ratchets the boundaries of the candidate question grammar.
 
 ## Migration rule
 
-Broad extraction, narrow commitment:
+Broad extraction, narrow commitment. The ontology and interoperability constraints themselves live in ADR-0027 and are not restated here; what follows is the shadow-phase operating rule:
 
 1. Keep the graph shadow-only while ontology and deduplication are challenged.
-2. Prefer stable IDs plus mutable human-readable slugs; never renumber merely because classification changes.
-3. Treat invariant, constraint, and assumption as proposition roles, not separate base types.
-4. Keep proposition, decision, and realization semantically distinct.
-5. Do not copy machine observations into prose nodes; future observations should reference immutable run/test/PR subjects and be interpreted through assessments.
-6. Existing `TC-*` identifiers remain stable public proposition identities with their own status/scope.
-7. ADRs remain valuable narrative/history, but should eventually reference graph primitives rather than independently restate architectural truth.
-8. Code paths belong on realizations/observations, never on propositions.
-9. View/query definitions remain semantic and renderer-neutral; visual layout/style is not canonical graph state.
-10. Treat question meaning/behavior as the stable interoperability seam; keep question vocabulary experimental until usage earns promotion.
-11. Diagnose question failure before adding semantic primitives; prefer query/view changes when the facts already exist.
-12. Author irreducible semantic facts once and derive reversible indexes/projections/transport/presentation.
-13. Consumer repositories must be able to own their own intent graph under the same semantic contract; composition/federation remains deliberately undecided and must not imply authority transfer.
-14. Unknown extensions may be ignored only when doing so cannot strengthen authority/assurance or erase uncertainty.
-15. Do not import full SACM/GSN/PROV/ArchiMate class hierarchies unless Pelaggio usage demonstrates irreducible semantics that roles, attributes, or qualified relationships cannot represent.
-16. No runtime or trust guarantee may cite this shadow graph until a later decision explicitly promotes it to an authoritative source.
+2. Prefer stable IDs plus mutable human-readable slugs; never renumber merely because classification changes. Existing `TC-*` identifiers remain stable public proposition identities with their own status/scope.
+3. Do not copy machine observations into prose nodes; future observations should reference immutable run/test/PR subjects and be interpreted through assessments.
+4. ADRs remain valuable narrative/history, but should eventually reference graph primitives rather than independently restate architectural truth.
+5. No runtime or trust guarantee may cite this shadow graph until a later decision explicitly promotes it to an authoritative source.
 
 ## Current extraction caveats
 
 The corpus is AI-assisted and intentionally opinionated. Pre-review attacks have already split overbroad authority concepts, demoted policy from invariant status, converted public aliases to scoped projections, and collapsed claim/constraint/assumption/external-claim into one proposition base type while preserving semantic roles.
 
-Open ontology questions are recorded in `shadow-graph.json` under `extraction.openQuestions`.
+Open ontology questions are recorded in `shadow-graph.json` under `extraction.openQuestions`. The loudest live finding is a coverage fact rather than an ontology question: six public `guarantee`-status claims (TC-003/004/010/011/012/014) name no implementing realization (Q14), and four of them project onto intent that nothing realizes (`projection-overreach`). Whether that is a documentation gap or an overstated guarantee is a question for the reconciliation campaign (#624), not something the graph decides.
