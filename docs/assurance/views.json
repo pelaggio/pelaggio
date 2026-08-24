@@ -45,13 +45,13 @@
     },
     {
       "id": "trust",
-      "question": "Which public trust propositions project onto internal intent, at what scope and current evidence level?",
+      "question": "Which public trust propositions exist, at what projection status and scope?",
       "audience": ["operator", "developer", "public"],
       "mode": "all-of-kind",
       "kinds": ["proposition"],
       "roles": ["invariant"],
       "visibility": ["public"],
-      "relations": ["projects"]
+      "relations": []
     },
     {
       "id": "review",

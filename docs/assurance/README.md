@@ -77,7 +77,7 @@ The maintenance and interoperability rules — author the irreducible semantic f
 - **why** — why does this node exist, what constrains it, and what realizes it today?
 - **affected** — what intent could this node/source/change affect?
 - **debt** — what realization or intent is orphaned, unsupported, or stale? (No check detects contradiction; that needs assessments.)
-- **trust** — which public propositions project onto internal intent — the `projects` edge originates at the public proposition — and at what status/scope?
+- **trust** — which public propositions exist, at what projection status and scope? It is public-audience, so it lists public nodes only; the internal intent a `TC-*` projects onto (the `projects` edge originates at the public proposition) is reached per node through **why**, not through this view.
 - **review** — why does the current review strategy exist and what survives if it changes?
 - **landing** — what must remain true if the current landing realization changes?
 
@@ -108,7 +108,7 @@ Executable questions now include:
 - Is any realization orphan machinery with no articulated purpose?
 - Can the same semantic contract describe consumer-owned repository intent without depending on Pelaggio's own graph?
 - Does every public claim published as an unconditional guarantee name the mechanism that implements it? (Q14 — the registry is enumerated from `trust-claims.yml`, every record must be in the graph with its registry status (Q5), and one guarantee currently names no mechanism — TC-002, an absence claim; the live set is computed, pinned exactly by the test, and bounded by a frozen ceiling — naming a mechanism and admitting a gap are both visible test edits.)
-- Can a construction rule bind a mechanism, not only intent? (Q15 — `CON-0027` binds `CTR-0004`.)
+- Can a constraint proposition bind a mechanism, not only intent? (Q15 — `CON-0027` constrains `CTR-0004`; a rule about how guards are built is intent, not a construction convention.)
 - Is every always-loaded AGENTS.md invariant either represented in the graph or explicitly a construction rule? (Q16 — `invariantIndex`, matched by anchor substring, with the same limitation as source grounding: a bullet strengthened or weakened around its anchor is not detected.)
 
 The shadow question-contract experiment adds higher-order prompts such as:
@@ -141,4 +141,4 @@ Broad extraction, narrow commitment. The ontology and interoperability constrain
 
 The corpus is AI-assisted and intentionally opinionated. Pre-review attacks have already split overbroad authority concepts, demoted policy from invariant status, converted public aliases to scoped projections, and collapsed claim/constraint/assumption/external-claim into one proposition base type while preserving semantic roles.
 
-Open ontology questions are recorded in `shadow-graph.json` under `extraction.openQuestions`. The loudest live finding is a coverage fact rather than an ontology question: one public `guarantee`-status claim — TC-002, "no telemetry", an absence with no mechanism to name — has no implementing realization (Q14) and projects onto intent that nothing realizes (`projection-overreach`). The registry is fully enumerated and the live unlinked set is computed from the graph against a frozen ceiling in the test: a newly published guarantee fails Q5 until it is represented and Q14 until it names a mechanism, and admitting it instead requires editing the frozen set — a visible, reviewable diff, not a silent pass. Whether an unlinked guarantee is a documentation gap or an overstated guarantee is a question for the reconciliation campaign (#624), not something the graph decides.
+Open ontology questions are recorded in `shadow-graph.json` under `extraction.openQuestions`. The loudest live finding is a coverage fact rather than an ontology question: one public `guarantee`-status claim — TC-002, "no telemetry" — has no implementing realization in the graph (Q14); the registry names a grep/SDK-absence `evidence_command` that `pnpm check:trust` runs, so this is an unnamed check rather than an absent one, and naming it is authoring work and projects onto intent that nothing realizes (`projection-overreach`). The registry is fully enumerated and the live unlinked set is computed from the graph against a frozen ceiling in the test: a newly published guarantee fails Q5 until it is represented and Q14 until it names a mechanism, and admitting it instead requires editing the frozen set — a visible, reviewable diff, not a silent pass. Whether an unlinked guarantee is a documentation gap or an overstated guarantee is a question for the reconciliation campaign (#624), not something the graph decides.

@@ -284,7 +284,7 @@ describe("architectural question tests", () => {
 		assert.equal(checked, [...status.values()].filter((v) => v === "guarantee").length, "every registry guarantee was checked, not only the ones the graph happened to carry");
 	});
 
-	it("Q15: a construction rule can bind a mechanism, not only intent", () => {
+	it("Q15: a constraint proposition can bind a mechanism, not only intent", () => {
 		// `constrains` reaching realization is what lets a rule about how guards may be BUILT attach to
 		// the thing built. Without it CON-0027 could only constrain decisions, losing its actual force.
 		assert.ok(graph.relationKinds.constrains.to.includes("realization"), "constrains must be able to target a realization");
