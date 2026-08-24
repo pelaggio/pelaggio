@@ -164,6 +164,16 @@ Two caveats before trusting the predicate further:
 - `shadow-assurance.test.ts` **Q10 points the wrong way**: it iterates realizations and asserts each
   has a purpose edge, so a proposition with *zero* realizations passes trivially.
 
+**Since this run (2026-08-24, #616 head).** The coverage figures above describe the graph as it was
+when the run happened. Reconciliation on the #616 branch since then: the trust registry is enumerated
+from its source (15 records; 7 were absent from the graph, four of them guarantees), five mechanisms
+that already existed were named as realizations (`claude-seat.ts`, `secret-hygiene.ts`, the daemon
+bearer auth, `check-publish.ts`, the pull-request ship default), so the Q14 unlinked-guarantee
+baseline is now **3** (TC-002/003/017) over the full registry rather than 6 over the represented
+subset; realizations are 10 for 68 propositions; ADR-0028 and the AGENTS.md invariant index are
+mapped (Q16); and the six debt checks the `debt` view declares are all implemented. `Q10 points the
+wrong way` still holds and is complemented, not replaced, by Q14.
+
 ### Fixture B — the #589 construction lesson
 
 The durable lesson: *"a guard must not depend on validating state the adversary can write."*
