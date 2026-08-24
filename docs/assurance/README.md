@@ -20,7 +20,7 @@ The anchoring rule is:
 
 > Propositions say what we believe or require. Decisions say what we chose. Realizations say what exists. Observations say what happened. Assessments say what that means.
 
-The final two concepts are deliberately **future-facing**, not current node kinds. The evidence slice is expected to introduce **subject**, **observation**, **assessment**, and likely **actor** only when real custody queries require them. An observation must never intrinsically `support` or `challenge` intent; that interpretation belongs to an attributable assessment.
+The final two concepts are deliberately **future-facing**, not current node kinds; a candidate *artifact* grammar for an assessment (proposition, basis, conclusion, residual) is prototyped as a stacked slice (#622), not as a graph node. The evidence slice is expected to introduce **subject**, **observation**, **assessment**, and likely **actor** only when real custody queries require them. An observation must never intrinsically `support` or `challenge` intent; that interpretation belongs to an attributable assessment.
 
 Existing `CLM-*`, `CON-*`, `ASM-*`, `CTR-*`, and `TC-*` identifiers remain stable through the ontology collapse. Their prefixes are historical identities, not type declarations.
 
@@ -35,7 +35,7 @@ The class collapse does not erase role semantics: `constrains` must originate at
 The graph has two independent maintenance checks:
 
 1. **Source grounding** protects semantic extraction. High-risk cuts carry source paths plus small textual anchors into the ADR/trust corpus. CI verifies only that each anchor substring still occurs somewhere in its source file: deleting or rewording an anchored sentence forces reconciliation; moving text within the file, or changing the proposition outside the anchored snippets, is **not** detected. The `stale-source-grounding` debt check reports the same condition as a diagnostic.
-2. **Realization evidence** protects current implementation. Realization nodes carry current code/test paths, and CI verifies those paths still exist.
+2. **Realization evidence** protects current implementation. Realization nodes carry current code/test paths, and CI verifies those paths still exist — existence only, not revision-bound evidence that the mechanism still does what the realization says (ADR-0027 keeps realization claims non-authoritative until they are bound or observation-backed).
 
 Propositions deliberately do **not** contain source-code paths or symbols. A refactor should be able to replace a realization without changing proposition identity. Code linkage belongs on realization/observation; tests and runtime artifacts can later become observations interpreted by assessments.
 
@@ -67,7 +67,7 @@ Semantic conformance is behavioral before structural: competency-question fixtur
 
 ## Author once; standardize meaning before representation
 
-The maintenance and interoperability rules — author the irreducible semantic fact once and derive indexes, projections, diagnostics, diffs and transport; standardize meaning before representation; consumer-owned corpora and undecided federation; extensions that may not silently strengthen a claim — are ADR-0027 decisions 5, 8 and 9 and its constraints, not restated here. In this corpus they show up concretely: `adrMap` is derived from each node's `sources` and a test keeps them equal, generated views are regenerated rather than edited, and a worker is never asked to author a fact the harness can observe.
+The maintenance and interoperability rules — author the irreducible semantic fact once and derive indexes, projections, diagnostics, diffs and transport; standardize meaning before representation; consumer-owned corpora and undecided federation; extensions that may not silently strengthen a claim — are ADR-0027 decisions 5, 8 and 9 and its constraints, not restated here. In this corpus they show up concretely: `adrMap` is generated from each node's `sources` by `node --import tsx ci/assurance-views.ts --write` (the same command that regenerates the Mermaid views) and a test fails when the stored copy is stale, so the ADR→primitive relation is authored once; a worker is never asked to author a fact the harness can observe.
 
 ## Versioned questions and projections
 
@@ -76,8 +76,8 @@ The maintenance and interoperability rules — author the irreducible semantic f
 - **architecture** — what internal invariant propositions does Pelaggio currently preserve? (Public `TC-*` invariants are routed to **trust**.)
 - **why** — why does this node exist, what constrains it, and what realizes it today?
 - **affected** — what intent could this node/source/change affect?
-- **debt** — what realization or intent is orphaned, unsupported, stale, or contradictory?
-- **trust** — which public propositions project onto internal intent — the `projects` edge originates at the public proposition — and at what status/scope?
+- **debt** — what realization or intent is orphaned, unsupported, or stale? (No check detects contradiction; that needs assessments.)
+- **trust** — which public propositions exist, at what projection status and scope? It is public-audience, so it lists public nodes only; the internal intent a `TC-*` projects onto (the `projects` edge originates at the public proposition) is reached per node through **why**, not through this view.
 - **review** — why does the current review strategy exist and what survives if it changes?
 - **landing** — what must remain true if the current landing realization changes?
 
@@ -85,7 +85,7 @@ The query layer is separate from presentation. GitHub gets generated Mermaid pro
 
 ## Stress-test findings
 
-The first stress pass found that several high-value questions existed only in the view catalog. The query engine now executes parameterized `why` / `affected` traversal, and all six checks the `debt` view declares are implemented in `ci/assurance-views.ts`, bound to `views.json` by test (a declared check nothing implements fails), and fire through the view itself — `stale-source-grounding` reads the graph's own groundings from the repository by default. Tests mutate the graph in memory to prove each check fires. On the current corpus the diagnostics report 15 internal invariants that name no realization and one public guarantee whose projected intent nothing realizes (`projection-overreach`: TC-002) — the graph's own open debt, not a claim that the repository is wrong. Two earlier entries (a decision with no semantic relationship, an assumption nothing assumed) were encoding gaps in ADR-0012 and ADR-0017's decisions and were closed by authoring the missing, source-anchored nodes.
+The first stress pass found that several high-value questions existed only in the view catalog. The query engine now executes parameterized `why` / `affected` traversal, and all six checks the `debt` view declares are implemented in `ci/assurance-views.ts`, bound to `views.json` by test (a declared check nothing implements fails), and fire through the view itself — `stale-source-grounding` reads the graph's own groundings from the repository by default. Tests mutate the graph in memory to prove each check fires. On the current corpus the diagnostics report 15 internal invariants that name no realization and one public guarantee whose projected intent nothing realizes (`projection-overreach`: TC-002) — the graph's own open debt, not a claim that the repository is wrong. Unlike the Q14 set these two counts are not ratcheted and will drift as nodes are added; rerun `selectView(debt)` rather than trusting them. Two earlier entries (a decision with no semantic relationship, an assumption nothing assumed) were encoding gaps in ADR-0012 and ADR-0017's decisions and were closed by authoring the missing, source-anchored nodes.
 
 A second question/qualifier stress pass found that the ontology did not need to grow for most richer operator questions. Assumption lifecycle questions can be expressed through Assessment rather than `revisitOn`; generic Context/Actor/Policy/Defeater nodes remain unearned; recovery authority belongs to runtime/control state; and `what changed?` is primarily a semantic-diff/query problem.
 
@@ -107,8 +107,8 @@ Executable questions now include:
 - Can restart durability survive without deterministic LLM replay?
 - Is any realization orphan machinery with no articulated purpose?
 - Can the same semantic contract describe consumer-owned repository intent without depending on Pelaggio's own graph?
-- Does every public claim published as an unconditional guarantee name the mechanism that implements it? (Q14 — the registry is enumerated from `trust-claims.yml`, every record must be in the graph with its registry status (Q5), and one guarantee currently names no mechanism — TC-002, an absence claim; the live set is computed and checked against a frozen ceiling it can only shrink below.)
-- Can a construction rule bind a mechanism, not only intent? (Q15 — `CON-0027` binds `CTR-0004`.)
+- Does every public claim published as an unconditional guarantee name the mechanism that implements it? (Q14 — the registry is enumerated from `trust-claims.yml`, every record must be in the graph with its registry status (Q5), and one guarantee currently names no mechanism — TC-002, an absence claim; the live set is computed, pinned exactly by `deepEqual` in the test, and bounded by a frozen ceiling — naming a mechanism and admitting a gap are both visible test edits, and the pin is the stricter of the two.)
+- Can a constraint proposition bind a mechanism, not only intent? (Q15 — `CON-0027` constrains `CTR-0004`; a rule about how guards are built is intent, not a construction convention.)
 - Is every always-loaded AGENTS.md invariant either represented in the graph or explicitly a construction rule? (Q16 — `invariantIndex`, matched by anchor substring, with the same limitation as source grounding: a bullet strengthened or weakened around its anchor is not detected.)
 
 The shadow question-contract experiment adds higher-order prompts such as:
@@ -125,7 +125,7 @@ Run the corpus tests with:
 pnpm test:ci
 ```
 
-`ci/__tests__/shadow-assurance.test.ts` validates graph integrity, proposition roles, source grounding, realization evidence, ADR and AGENTS.md coverage, and the semantic questions Q1–Q16. `ci/__tests__/assurance-views.test.ts` stress-tests query execution, the six debt diagnostics, public projection boundaries, and generated views. `ci/__tests__/question-contract-experiment.test.ts` ratchets the boundaries of the candidate question grammar.
+`ci/__tests__/shadow-assurance.test.ts` validates graph integrity, proposition roles, source grounding, realization evidence, ADR and AGENTS.md coverage, and the semantic questions Q1–Q16. `ci/__tests__/assurance-views.test.ts` stress-tests query execution, the six debt diagnostics, public projection boundaries, and generated views. `ci/__tests__/question-contract-experiment.test.ts` ratchets the boundaries of the candidate question grammar and checks its run record is complete. The stacked slices (#622 assessment evidence; #623 charter normalization and activity provenance) each add their own experiment document, ratchet test, and run record to this directory when they land; nothing here depends on them.
 
 ## Migration rule
 
@@ -141,4 +141,4 @@ Broad extraction, narrow commitment. The ontology and interoperability constrain
 
 The corpus is AI-assisted and intentionally opinionated. Pre-review attacks have already split overbroad authority concepts, demoted policy from invariant status, converted public aliases to scoped projections, and collapsed claim/constraint/assumption/external-claim into one proposition base type while preserving semantic roles.
 
-Open ontology questions are recorded in `shadow-graph.json` under `extraction.openQuestions`. The loudest live finding is a coverage fact rather than an ontology question: one public `guarantee`-status claim — TC-002, "no telemetry", an absence with no mechanism to name — has no implementing realization (Q14) and projects onto intent that nothing realizes (`projection-overreach`). The registry is fully enumerated and the live unlinked set is computed from the graph against a frozen ceiling in the test: a newly published guarantee fails Q5 until it is represented and Q14 until it names a mechanism, and admitting it instead requires editing the frozen set — a visible, reviewable diff, not a silent pass. Whether an unlinked guarantee is a documentation gap or an overstated guarantee is a question for the reconciliation campaign (#624), not something the graph decides.
+Open ontology questions are recorded in `shadow-graph.json` under `extraction.openQuestions`. The loudest live finding is a coverage fact rather than an ontology question: one public `guarantee`-status claim — TC-002, "no telemetry" — has no implementing realization in the graph (Q14); the registry names a grep/SDK-absence `evidence_command` that `pnpm check:trust` runs, so this is an unnamed check rather than an absent one, and naming it is authoring work and projects onto intent that nothing realizes (`projection-overreach`). The registry is fully enumerated and the live unlinked set is computed from the graph against a frozen ceiling in the test: a newly published guarantee fails Q5 until it is represented and Q14 until it names a mechanism, and admitting it instead requires editing the frozen set — a visible, reviewable diff, not a silent pass. Whether an unlinked guarantee is a documentation gap or an overstated guarantee is a question for the reconciliation campaign (#624), not something the graph decides.

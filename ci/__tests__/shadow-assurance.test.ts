@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, it } from "node:test";
+import { adrMapFromSources } from "../assurance-views.ts";
 
 const repo = resolve(new URL("../..", import.meta.url).pathname);
 type ShadowNode = {
@@ -89,20 +90,10 @@ describe("shadow assurance graph integrity", () => {
 		}
 	});
 
-	it("adrMap is a derived index of node sources, not a second hand-maintained relation", () => {
-		// ADR-0027 decision 9: the ADR -> primitive relation is authored once, on the node's `sources`.
-		// The review of this ADR found the two had drifted for five ADRs; this keeps them equal.
-		const derived: Record<string, string[]> = {};
-		for (const value of graph.nodes) {
-			for (const source of value.sources ?? []) {
-				if (!/^ADR-\d{4}$/.test(source)) continue;
-				derived[source] ??= [];
-				derived[source].push(value.id);
-			}
-		}
-		for (const key of Object.keys(derived)) derived[key] = [...new Set(derived[key])].sort();
-		const keys = [...new Set([...Object.keys(graph.adrMap), ...Object.keys(derived)])].sort();
-		for (const key of keys) assert.deepEqual([...(graph.adrMap[key] ?? [])].sort(), derived[key] ?? [], `${key}: adrMap must equal the nodes whose sources name it`);
+	it("adrMap is generated from node sources — a stale stored copy fails, and the generator is the only writer", () => {
+		// ADR-0027 decision 9: the ADR -> primitive relation is authored once, on the node's `sources`;
+		// `node --import tsx ci/assurance-views.ts --write` regenerates adrMap. A hand edit that disagrees fails.
+		assert.deepEqual(graph.adrMap, adrMapFromSources(graph), "run node --import tsx ci/assurance-views.ts --write to regenerate adrMap");
 	});
 
 	it("keeps shadow extraction non-authoritative", () => {
@@ -208,7 +199,6 @@ describe("architectural question tests", () => {
 	it("Q8: assumptions are proposition roles rather than policy preferences or base classes", () => {
 		const assumptions = graph.nodes.filter((n) => n.kind === "proposition" && n.role === "assumption");
 		assert.equal(assumptions.length, 3);
-		assert.ok(assumptions.every((a) => a.id.startsWith("ASM-")));
 		assert.ok(!graph.nodeKinds.includes("assumption"));
 		assert.equal(node("DEC-0017").slug, "rigor-by-consequence");
 		assert.equal(node("DEC-0018").slug, "human-value-judgment-at-charter");
@@ -285,7 +275,7 @@ describe("architectural question tests", () => {
 		assert.equal(checked, [...status.values()].filter((v) => v === "guarantee").length, "every registry guarantee was checked, not only the ones the graph happened to carry");
 	});
 
-	it("Q15: a construction rule can bind a mechanism, not only intent", () => {
+	it("Q15: a constraint proposition can bind a mechanism, not only intent", () => {
 		// `constrains` reaching realization is what lets a rule about how guards may be BUILT attach to
 		// the thing built. Without it CON-0027 could only constrain decisions, losing its actual force.
 		assert.ok(graph.relationKinds.constrains.to.includes("realization"), "constrains must be able to target a realization");

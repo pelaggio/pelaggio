@@ -169,6 +169,21 @@ function escapeLabel(label: string): string {
 	return label.replaceAll('"', "'");
 }
 
+/** The ADR -> primitive index, derived from each node's `sources`. Never authored by hand. */
+export function adrMapFromSources(graph: AssuranceGraph): Record<string, string[]> {
+	const map: Record<string, string[]> = {};
+	for (const node of graph.nodes) {
+		for (const source of node.sources ?? []) {
+			if (!/^ADR-\d{4}$/.test(source)) continue;
+			map[source] ??= [];
+			map[source].push(node.id);
+		}
+	}
+	const sorted: Record<string, string[]> = {};
+	for (const key of Object.keys(map).sort()) sorted[key] = [...new Set(map[key])].sort();
+	return sorted;
+}
+
 export function renderMermaid(graph: AssuranceGraph, view: AssuranceView): string {
 	const selected = selectView(graph, view);
 	const lines = [
@@ -196,4 +211,9 @@ if (process.argv.includes("--write")) {
 		if (!view) throw new Error(`missing view ${id}`);
 		writeFileSync(resolve(repo, `docs/assurance/generated/${id}.md`), renderMermaid(graph, view));
 	}
+	// adrMap is generated output: regenerate it from node sources in place, keeping key order stable.
+	const stored = JSON.parse(readFileSync(resolve(repo, "docs/assurance/shadow-graph.json"), "utf8")) as Record<string, unknown>;
+	const regenerated: Record<string, unknown> = {};
+	for (const key of Object.keys(stored)) regenerated[key] = key === "adrMap" ? adrMapFromSources(graph) : stored[key];
+	writeFileSync(resolve(repo, "docs/assurance/shadow-graph.json"), `${JSON.stringify(regenerated, null, "\t")}\n`);
 }

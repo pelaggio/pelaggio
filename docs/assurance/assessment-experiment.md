@@ -14,10 +14,16 @@ A worker emits only the semantic judgment:
 Assessment {
   proposition
   basis[]
-  conclusion
-  residual[]
+  conclusion        { verdict: holds | violated | undetermined, rationale? }
+  residual[]        { statement, resolvedBy? }
 }
 ```
+
+Two fields inside the four are typed because the harness consumes them and nothing else: `verdict` is
+the only part of a conclusion a deterministic policy reads (rationale is prose for humans and is
+never read), and `resolvedBy` names the observation whose arrival resolves a residual, which is what
+lets recovery be a harness-observed transition rather than a model's `suggestedAction`. A residual
+without `resolvedBy` can be cleared only by a principal.
 
 The harness wraps it with custody data it already owns:
 
@@ -33,13 +39,15 @@ AssessmentRecord {
 
 The distinction is deliberate:
 
-- **proposition** — the statement being assessed;
+- **proposition** — the *identity* of the statement being assessed: a graph node id, a finding fingerprint, or a harness-minted statement id. Free text is not a proposition; contradiction and refutation are matched by identity, so a paraphrase never matches and an unrelated `holds` cannot satisfy a commit;
 - **basis** — references to attributable observations/artifacts used by the assessor;
 - **conclusion** — the assessor's probabilistic judgment about the proposition from that basis;
 - **residual** — a material unresolved condition whose resolution could change the conclusion or the permissible downstream consequence;
 - **binding** — the exact subject/state to which the record applies (for example SHA, finding fingerprint, attempt, worktree state); harness-owned;
 - **provenance** — run/step/attempt/seat/provider/model generation context; harness-owned;
-- **completeness** — whether the required evidence/assessment surface was covered; harness-owned and never inferred from model silence.
+- **completeness** — whether the required evidence/assessment surface was covered; harness-owned and never inferred from model silence;
+- **supersession** — a reassessment is a new record that the harness links to the record it replaces; the superseded record stays in the ledger and stops counting as evidence, so recovery never deletes history;
+- **principal clearance** — a residual that only a principal can resolve is closed by a harness-recorded decision naming the actor, not by editing the record.
 
 The candidate grammar is intentionally smaller than SACM/GSN-style argument models and does not attempt to encode warrants, confidence, applicability taxonomies, actor nodes, or full argument graphs. The experiment should earn any richer structure.
 
@@ -143,38 +151,13 @@ The first implementation should stop before real gate behavior and compute a sha
 - **summary non-authority** — a lossy human/model summary cannot substitute for the bound assessment record at a deterministic decision boundary;
 - **unsupported-extension safety** — an unknown assessment extension cannot be ignored in a way that strengthens authority or erases unresolved state.
 
-## First run: shadow dispositions over retrodicted episodes (2026-08-24)
+## Runs
 
-`ci/assessment-shadow.ts` is the first implementation this document asks for: a pure function from
-`(records, harness facts, policy)` to a disposition plus typed causes, touching no real gate. The
-worker-authored part of a record is exactly the four fields above; binding, provenance, completeness,
-observation availability, and carried blockers are `HarnessFacts` the worker cannot write. Rationale
-text, summaries, confidence fields, and unknown extension keys are read nowhere in the module, which
-is how wording invariance and unsupported-extension safety are established rather than tested for.
-
-`docs/assurance/assessment-fixtures.json` retrodicts seven episodes with known outcomes — the #625
-stale grep, #495 carry with and without an explicit refutation, the #435 false chokepoint, the #555
-GitHub 503, the #593 label-vs-split disagreement, and the partial-mediation charter — and
-`ci/__tests__/assessment-shadow.test.ts` demonstrates each of the eleven shadow-disposition
-properties against them. The risk–coverage table across the four conditions this document names:
-
-| condition | commits | unsupported commits | unnecessary withholding |
-|---|---|---|---|
-| face-value (read the last verdict as prose) | 4/7 | 3 | 2 |
-| proposition + basis + conclusion | 3/7 | 1 | 1 |
-| + residual | 2/7 | 0 | 1 |
-| + residual + evidence recovery | 4/7 | 0 | 0 |
-
-What this does and does not show. Binding and basis validation alone recover the justified landing
-that face-value withheld (#625: the stale charter was the last word) and refuse the two face-value
-commits that had no current evidence; they do **not** catch #435, whose unit tests were green and
-whose gap was a path the guard never saw — that is exactly the shape only a residual carries, and
-the residual condition withholds it at the cost of one justified commitment (#593, where the
-resolving observation was obtainable but not yet in hand). Recovery then reaches face-value coverage
-with zero unsupported commitments. Two caveats keep this an experiment rather than a result: the
-fixtures were authored with hindsight, so a residual is present wherever history showed one was
-needed — the open question is whether workers write material residuals *without* hindsight, which
-only live records can answer; and seven episodes is a demonstration, not a measurement.
+`ci/assessment-shadow.ts` and `docs/assurance/assessment-fixtures.json` are the first implementation
+and its retrodicted corpus; `ci/__tests__/assessment-shadow.test.ts` demonstrates the shadow
+disposition properties above against them, and `frontier()` reports the risk–coverage counts. What
+those counts mean, and the confounds in reading them, is argued in the reconciliation campaign
+(#624), not asserted here.
 
 ## Explicit omissions
 

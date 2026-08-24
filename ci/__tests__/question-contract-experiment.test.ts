@@ -10,6 +10,22 @@ function requirePhrase(phrase: string): void {
 	assert.ok(text.includes(phrase), `question-contract experiment lost boundary: ${phrase}`);
 }
 
+const record = JSON.parse(readFileSync(resolve(repo, "docs/assurance/question-contract-run-2026-08-24.json"), "utf8")) as {
+	runs: Array<{ q: string; cond: string; model: string; tokens: number; filesRead: number; ms: number; items?: unknown }>;
+	premiseNodeIds: Record<string, unknown>;
+};
+
+describe("first-run record is raw and complete", () => {
+	it("every run carries its answer items and harness-observed cost; every question its premises", () => {
+		assert.equal(record.runs.length, 16);
+		for (const r of record.runs) {
+			assert.ok(r.items, `${r.q}/${r.cond}/${r.model} has no persisted items`);
+			assert.ok(r.tokens > 0 && r.ms > 0);
+		}
+		for (const q of ["Q-a", "Q-b", "Q-c", "Q-d"]) assert.ok(record.premiseNodeIds[q], `${q} premises missing`);
+	});
+});
+
 describe("semantic question contract experiment", () => {
 	it("keeps question-driven growth and failure classification explicit", () => {
 		requirePhrase("A new primitive, relation, or qualifier is earned only when an important question cannot be answered correctly, traceably, and economically");
