@@ -1,0 +1,136 @@
+{
+	"status": "experimental-shadow-only",
+	"run": "2026-08-24",
+	"design": "4 fresh open issues (#611, #613, #615, #617 — none in the fixtures corpus; two mechanism-heavy, one bounded S-scoped, one root-cause) × 2 models (claude sonnet, claude opus), each running the intake procedure blind with read access to decisions/agent-context only. Arm 1 (raw charter → plan) and arm 3 (candidate Goal layer) were not run; this is arm 2's normalization step in isolation, judged by the session author.",
+	"crossModelCompatibility": {
+		"611": "compatible, opus stronger — sonnet: no long-lived exfiltrable credential in the seat; opus: nothing reusable reachable from inside the seat in whatever form auth takes",
+		"613": "compatible — both: bounded store + the cap is not an exit-less state + never drop a retained blocker",
+		"615": "compatible — both: no unscrubbed text reaches a sink, established structurally and mechanically verified",
+		"617": "compatible — both: verdict computed over head/base the seat cannot influence, on both paths"
+	},
+	"aggregate": {
+		"runs": 8,
+		"earlyExits": 0,
+		"mechanismLeakedIntoOutcome": 0,
+		"meanTokens": 43716,
+		"meanFilesRead": 11.9,
+		"meanSeconds": 149,
+		"staleCitationRunsOnCitingIssues": "4/4 (both #615 and #617 runs, both models)",
+		"parkedDependencyCaught": "2/4 runs on the #572-dependent issues (#611 sonnet, #617 opus)"
+	},
+	"runs": [
+		{
+			"issue": 617,
+			"model": "sonnet",
+			"earlyExit": false,
+			"tokens": 55352,
+			"filesRead": 15,
+			"ms": 176695,
+			"desiredOutcome": "On every fetch path pelaggio currently uses to gate a PR review (the `pr-review --pr` CLI path and the local drain's `review-sweep.ts` `prepareReviewHead` path), the diff/checkout basis the review or verify seat's pass/fail judgment is computed against must be derived from state that seat cannot influence or rewrite — so a prompt-injected seat cannot green a malicious PR by manipulating what gets fetched or diffed.",
+			"mechanismInOutcome": false,
+			"sharpestCounterexample": "the literal deliverable can ship for the CLI path alone while the configured local drain keeps fetching mutable origin (the requester already caught this once); a 'trusted config-derived remote' resolved through state an earlier step touched is a TOCTOU",
+			"staleCitationsCaught": [
+				"guarded-actions §8.2 does not exist at head"
+			],
+			"parkedDependencyCaught": false
+		},
+		{
+			"issue": 617,
+			"model": "opus",
+			"earlyExit": false,
+			"tokens": 34285,
+			"filesRead": 12,
+			"ms": 130767,
+			"desiredOutcome": "A review/verify seat cannot influence which commits its own work is judged against: on every review path this repo actually runs, the review verdict is computed over the true PR head and a trusted base as established outside the seat, so a prompt-injected seat cannot green a malicious PR by making the reviewed delta empty, narrowed, or otherwise attacker-chosen.",
+			"mechanismInOutcome": false,
+			"sharpestCounterexample": "force-push between the host verifying the PR head and preparing the checkout (check-then-act); and with an unimpeachable checkout the seat still authors the findings report, so the integrity half migrates from what is reviewed to what is reported",
+			"staleCitationsCaught": [
+				"guarded-actions §8.2 does not exist at head",
+				"five-vector inventory lives in comments not supplied"
+			],
+			"parkedDependencyCaught": true
+		},
+		{
+			"issue": 615,
+			"model": "sonnet",
+			"earlyExit": false,
+			"tokens": 34851,
+			"filesRead": 11,
+			"ms": 147419,
+			"desiredOutcome": "Every code path that publishes a review or adjudication body to a public sink (stdout or a PR-comment upsert), across all current call sites and any added later, is guaranteed by construction — not by per-site patching — to have the scrub applied before the body reaches the sink, and that guarantee is machine-verified rather than asserted, for both the pr-review gate and pr-adjudicate.",
+			"mechanismInOutcome": false,
+			"sharpestCounterexample": "early-exit fail-closed bodies and the crash-upsert path may run before the chokepoint's context exists, pressuring a parallel publish path that reintroduces the bypass; a lexical grep-guard cannot see a semantically equivalent reimplementation in a new module",
+			"staleCitationsCaught": [
+				"guarded-actions §8.2 does not exist at head"
+			],
+			"parkedDependencyCaught": false
+		},
+		{
+			"issue": 615,
+			"model": "opus",
+			"earlyExit": false,
+			"tokens": 43204,
+			"filesRead": 7,
+			"ms": 161481,
+			"desiredOutcome": "Review and adjudication text cannot become visible outside the harness (operator stdout, PR comment) without the review-boundary scrub having already been applied, and that property is established structurally rather than by patching an enumerated list of call sites — so a sink added later, in any of the involved modules or processes, either cannot bypass the scrub or is mechanically detected.",
+			"mechanismInOutcome": false,
+			"sharpestCounterexample": "a sole-publisher grep is the instrument class this repo has documented failing twice (vacuous after a rename; self-match on a doc comment); an exception or exit path can carry the body to stderr and CI logs without ever calling the funnel",
+			"staleCitationsCaught": [
+				"guarded-actions §8.2 arrives with PR #614, cited authority is in flight"
+			],
+			"parkedDependencyCaught": false
+		},
+		{
+			"issue": 613,
+			"model": "sonnet",
+			"earlyExit": false,
+			"tokens": 51934,
+			"filesRead": 23,
+			"ms": 146945,
+			"desiredOutcome": "`.dev/pr-review-finding-dispositions/` stops growing unboundedly, and the 'past the 50-complete-priors cap carry permanently refuses with nothing that ever clears it' dead end gets a bounded, recoverable resolution — without ever weakening the fail-closed carry-refusal guarantee and without a pruning pass discarding any record the watermark/survivor-overlay carry logic still needs.",
+			"mechanismInOutcome": false,
+			"sharpestCounterexample": "a still-open PR already past the cap has no forward path under a scheme that only prunes on a new watermark or on merge/close, since it may never produce another complete run",
+			"staleCitationsCaught": [],
+			"parkedDependencyCaught": false
+		},
+		{
+			"issue": 613,
+			"model": "opus",
+			"earlyExit": false,
+			"tokens": 46599,
+			"filesRead": 8,
+			"ms": 153136,
+			"desiredOutcome": "Disposition records stop accumulating without limit, and reaching the store's own limits stops being an exit-less state: a PR past the carry cap can be returned to carry-eligible by a clearing action that exists and is named at the point of refusal, while any bounding of the store never renders a retained (unrefuted) blocking finding unreachable to the next run — every failure, ambiguity, or truncation refusing carry instead of consuming a partial history.",
+			"mechanismInOutcome": false,
+			"sharpestCounterexample": "a SUCCESSFUL FIFO prune evicts the roll-2 record holding a retained, never-refuted blocker; the next run's survivor overlay has no source for it and carries warm — the stated fail-closed clause covers prune failure, not prune success",
+			"staleCitationsCaught": [],
+			"parkedDependencyCaught": false
+		},
+		{
+			"issue": 611,
+			"model": "sonnet",
+			"earlyExit": false,
+			"tokens": 45786,
+			"filesRead": 9,
+			"ms": 125637,
+			"desiredOutcome": "Review/verify seats stop holding a long-lived Anthropic API credential that anything running or emitted inside the seat can exfiltrate — closing the seat's own key exposure as the review/verify-seat slice of #572, not merely the known report-field publish-sink channel #589 already scrubbed.",
+			"mechanismInOutcome": false,
+			"sharpestCounterexample": "forge/signer/roadmap calls are pelaggio's own HTTP and trivially brokered; the Claude seat is the official third-party CLI dialling Anthropic itself over a shared host network namespace, so 'mirror the other brokers' may be mechanically unavailable",
+			"staleCitationsCaught": [],
+			"parkedDependencyCaught": true
+		},
+		{
+			"issue": 611,
+			"model": "opus",
+			"earlyExit": false,
+			"tokens": 37715,
+			"filesRead": 10,
+			"ms": 152834,
+			"desiredOutcome": "A prompt-injected review/verify seat cannot come away with a provider credential that is reusable outside that seat's own authorized model calls — in whatever form the seat's Anthropic auth actually takes (env API key, on-disk OAuth/token state, or a handle that replaces them) — while review/verify keeps running and #589's scrubbing stays in place.",
+			"mechanismInOutcome": false,
+			"sharpestCounterexample": "a subscription-authenticated seat: ANTHROPIC_API_KEY is not the binding credential — the CLI reads a long-lived OAuth token from HOME, which the env allowlist deliberately cannot remove — so the charter as phrased is fully satisfiable while the seat still holds a reusable credential",
+			"staleCitationsCaught": [],
+			"parkedDependencyCaught": false
+		}
+	]
+}

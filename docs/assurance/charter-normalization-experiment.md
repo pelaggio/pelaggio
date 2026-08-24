@@ -115,6 +115,44 @@ Tiny repairs and maintenance work should normally resolve to existing semantics 
 
 These fixtures ratchet semantic expectations, not natural-language generation. CI does not claim it can derive the normalized statement from the raw issue text. Model interpretation remains probabilistic and should be evaluated separately across agents.
 
+## First run: blind normalization of four fresh issues (2026-08-24)
+
+Record: `charter-normalization-run-2026-08-24.json`. Four open issues not in the fixture corpus
+(#611, #613, #615, #617) were normalized blind by two models each (claude sonnet, claude opus)
+following the procedure above, with read access to decisions and agent-context only. Arm 1 (raw
+charter straight to planning) and arm 3 (a candidate Goal layer) were not run; this isolates the
+normalization step.
+
+| measure | result |
+|---|---|
+| runs / early exits | 8 / 0 — including both runs on the S-scoped #613 |
+| requested mechanism leaked into the normalized outcome | 0 / 8 |
+| cross-model outcome compatibility | 4 / 4 issues |
+| mean cost per normalization | 44k tokens, 12 files read, 149 s |
+| stale citation caught (`guarded-actions.md §8.2`, which is on unlanded PR #614) | 4 / 4 runs on the two issues that cite it |
+| dependency on a parked item caught (#572 is `deferred`) | 2 / 4 runs on the two issues that depend on it |
+
+What held: every outcome was a property, not the requested mechanism, and the two models' outcomes
+were compatible on every issue — the incompatible-objectives failure this document names did not
+appear. The counterexamples were the real value, and several are material to the issues as written:
+#613's fail-closed clause covers prune *failure*, but a *successful* FIFO prune can evict the record
+holding a retained, never-refuted blocker, so the next run carries warm with a truncated history
+(CON-0008 violated by the deliverable as specified); #611's binding credential on a
+subscription-authenticated seat is an OAuth token in `HOME`, not `ANTHROPIC_API_KEY`, so the charter
+as phrased is satisfiable while the seat still holds a reusable credential; #617 has a check-then-act
+window between verifying the PR head and preparing the checkout, and once the checkout is
+unimpeachable the integrity half migrates to the report the seat still authors.
+
+What did not hold: the early exit never fired. #613 is S-scoped and the request is written as an
+implementation directive, yet both runs found a legitimate false-success — so the scope label is not
+the bounded-work signal this document assumed, and the friction cost is real: ~44k tokens and two
+and a half minutes per intake, comparable to a review seat. The reduction trigger "mostly restates
+the request" is not met; "increases friction on bounded work" is met on cost and not on value, and
+the document cannot yet say which of those the next run should optimize.
+
+Caveats: one provider, one judge (the session author), four issues, no human mediation exercised, no
+downstream comparison of plan/review churn — which is the effect the hypothesis actually predicts.
+
 ## Falsification
 
 Compare at least:
