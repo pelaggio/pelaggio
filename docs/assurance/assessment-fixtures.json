@@ -252,20 +252,19 @@
 						"completeness": { "covered": ["eligibility"] },
 						"assessment": {
 							"proposition": "this gate record is eligible for typed adjudication",
-							"basis": ["agreement-disagreement-ok-true", "typed-eligibility-check"],
-							"conclusion": { "verdict": "holds" }
+							"basis": ["agreement-disagreement-ok-true"],
+							"conclusion": { "verdict": "holds", "rationale": "ok=true with a structurally valid split" }
 						}
 					},
 					{
-						"id": "V",
+						"id": "V-reassessed",
 						"binding": { "subject": "gate-record#553-r4", "sha": "553-r4" },
-						"provenance": { "runId": "r4", "step": "pr-adjudicate", "attempt": 1, "seat": "adjudicator", "provider": "codex" },
+						"provenance": { "runId": "r4", "step": "pr-adjudicate", "attempt": 2, "seat": "adjudicator", "provider": "codex" },
 						"completeness": { "covered": ["eligibility"] },
 						"assessment": {
 							"proposition": "this gate record is eligible for typed adjudication",
-							"basis": ["breaker-invalid-pass-label"],
-							"conclusion": { "verdict": "violated" },
-							"residual": [{ "statement": "unless the typed adjudicator accepts ok=true disagreement records regardless of the legacy breaker label", "resolvedBy": "typed-eligibility-check" }]
+							"basis": ["breaker-invalid-pass-label", "typed-eligibility-check"],
+							"conclusion": { "verdict": "holds", "rationale": "the typed adjudicator accepts ok=true disagreement records; the legacy breaker label is not authoritative" }
 						}
 					}
 				],

@@ -65,10 +65,23 @@ export interface Policy {
 	onContradiction: "withhold" | "retry-escalate";
 }
 
+/** Exhaustive typed causes (ADR-0026's per-cell causes); prose is derived from these, never the reverse. */
+export type Cause =
+	| { kind: "stale-binding"; record: string }
+	| { kind: "residual-resolved-needs-reassessment"; record: string }
+	| { kind: "pending-reassessment-on-proposition"; record: string; proposition: string }
+	| { kind: "unresolved-basis"; record: string }
+	| { kind: "incomplete"; record: string }
+	| { kind: "residual-recoverable"; record: string }
+	| { kind: "residual-open"; record: string }
+	| { kind: "undetermined"; record: string }
+	| { kind: "carried-blocker"; blocker: string }
+	| { kind: "contradiction"; proposition: string }
+	| { kind: "unsupported-extension-on-evidence"; record: string };
+
 export interface ShadowResult {
 	disposition: Disposition;
-	/** Typed causes, in the spirit of ADR-0026's per-cell causes; the prose is derivable from these. */
-	causes: string[];
+	causes: Cause[];
 	/** Extension keys seen and ignored — retained as unsupported, never consumed. */
 	unsupported: string[];
 }
@@ -128,7 +141,7 @@ function classify(record: AssessmentRecord, facts: HarnessFacts, unsupported: st
  * explicit policy — never rationale, summary, confidence, or extension content.
  */
 export function shadowDisposition(records: AssessmentRecord[], facts: HarnessFacts, policy: Policy): ShadowResult {
-	const causes: string[] = [];
+	const causes: Cause[] = [];
 	const unsupported: string[] = [];
 	const classified = records.map((r) => classify(r, facts, unsupported));
 	const recordById = new Map(classified.map((c) => [c.record.id, c]));
@@ -138,6 +151,7 @@ export function shadowDisposition(records: AssessmentRecord[], facts: HarnessFac
 	// needs reassessment rather than silently counting for either side.
 	const positive: Classified[] = [];
 	const caution: Classified[] = [];
+	const awaitingReassessment: Classified[] = [];
 	let recoverable = false;
 
 	// A record about a carried blocker's own proposition is a refutation candidate, not evidence
@@ -148,44 +162,45 @@ export function shadowDisposition(records: AssessmentRecord[], facts: HarnessFac
 		const id = c.record.id;
 		if (blockerPropositions.has(c.record.assessment.proposition)) continue;
 		if (!c.current) {
-			causes.push(`stale-binding:${id}`);
+			causes.push({ kind: "stale-binding", record: id });
 			recoverable = true;
 			continue;
 		}
 		if (c.resolvedResiduals.length > 0) {
-			causes.push(`residual-resolved-needs-reassessment:${id}`);
+			causes.push({ kind: "residual-resolved-needs-reassessment", record: id });
+			awaitingReassessment.push(c);
 			recoverable = true;
 			continue;
 		}
 		const verdict = c.record.assessment.conclusion.verdict;
 		if (!c.basisValid) {
-			causes.push(`unresolved-basis:${id}`);
+			causes.push({ kind: "unresolved-basis", record: id });
 			recoverable = true;
 			// Caution survives a weak basis; positive authority does not.
 			if (verdict === "violated") caution.push(c);
 			continue;
 		}
 		if (!c.complete) {
-			causes.push(`incomplete:${id}`);
+			causes.push({ kind: "incomplete", record: id });
 			recoverable = true;
 			if (verdict === "violated") caution.push(c);
 			continue;
 		}
 		if (c.recoverableResiduals.length > 0) {
-			causes.push(`residual-recoverable:${id}`);
+			causes.push({ kind: "residual-recoverable", record: id });
 			recoverable = true;
 			if (verdict === "violated") caution.push(c);
 			continue;
 		}
 		if (c.openResiduals.length > 0) {
-			causes.push(`residual-open:${id}`);
+			causes.push({ kind: "residual-open", record: id });
 			caution.push(c);
 			continue;
 		}
 		if (verdict === "holds") positive.push(c);
 		else if (verdict === "violated") caution.push(c);
 		else {
-			causes.push(`undetermined:${id}`);
+			causes.push({ kind: "undetermined", record: id });
 			caution.push(c);
 		}
 	}
@@ -210,7 +225,7 @@ export function shadowDisposition(records: AssessmentRecord[], facts: HarnessFac
 			refutation.openResiduals.length === 0 &&
 			refutation.recoverableResiduals.length === 0;
 		if (!refuted) {
-			causes.push(`carried-blocker:${blocker.id}`);
+			causes.push({ kind: "carried-blocker", blocker: blocker.id });
 			blockerSurvives = true;
 		}
 	}
@@ -222,16 +237,28 @@ export function shadowDisposition(records: AssessmentRecord[], facts: HarnessFac
 			contradicted.add(p.record.assessment.proposition);
 		}
 	}
-	for (const proposition of contradicted) causes.push(`contradiction:${proposition}`);
+	for (const proposition of contradicted) causes.push({ kind: "contradiction", proposition });
+
+	// A record parked for reassessment is not silently on either side: while it is pending, a positive
+	// record on the SAME proposition cannot carry a consequential commit — the resolving observation
+	// may confirm the violation. Fail closed until someone reassesses.
+	let pending = false;
+	for (const c of awaitingReassessment) {
+		if (positive.some((p) => p.record.assessment.proposition === c.record.assessment.proposition)) {
+			causes.push({ kind: "pending-reassessment-on-proposition", record: c.record.id, proposition: c.record.assessment.proposition });
+			pending = true;
+		}
+	}
 
 	if (policy.consequence === "reversible") return { disposition: "continue", causes, unsupported };
 	if (contradicted.size > 0) return { disposition: policy.onContradiction, causes, unsupported };
+	if (pending) return { disposition: "gather-evidence", causes, unsupported };
 	// Unknown semantics on authority-bearing evidence fail closed: the harness cannot know whether the
 	// extension would weaken the record, so ignoring it could strengthen the conclusion. Retained as
 	// unsupported, never consumed; the commit waits for a record without it or a policy that admits it.
 	const unsupportedPositive = positive.filter((c) => unsupported.some((key) => key.startsWith(`${c.record.id}:`)));
 	if (unsupportedPositive.length > 0) {
-		for (const c of unsupportedPositive) causes.push(`unsupported-extension-on-evidence:${c.record.id}`);
+		for (const c of unsupportedPositive) causes.push({ kind: "unsupported-extension-on-evidence", record: c.record.id });
 		return { disposition: "withhold", causes, unsupported };
 	}
 	if (blockerSurvives || caution.some((c) => c.openResiduals.length > 0 || (c.basisValid && c.complete))) {
@@ -279,7 +306,7 @@ export interface Fixture {
 	justifiedCommit: boolean;
 }
 
-export type Condition = "face-value" | "proposition-basis-conclusion" | "with-residual" | "with-recovery";
+export type Condition = "face-value" | "proposition-basis-conclusion" | "with-residual" | "with-recovery" | "with-recovery-fixed-truth";
 
 export interface FrontierRow {
 	condition: Condition;
@@ -302,19 +329,23 @@ export function dispositionUnder(fixture: Fixture, condition: Condition): { disp
 			return { disposition: shadowDisposition(stripResiduals(fixture.records), fixture.facts, fixture.policy).disposition, ...base };
 		case "with-residual":
 			return { disposition: shadowDisposition(fixture.records, fixture.facts, fixture.policy).disposition, ...base };
-		case "with-recovery": {
+		case "with-recovery":
+		case "with-recovery-fixed-truth": {
 			const first = shadowDisposition(fixture.records, fixture.facts, fixture.policy);
 			// Recovery is only an opportunity when the harness knows of an obtainable observation.
 			if (first.disposition === "commit" || !fixture.recovery) return { disposition: first.disposition, ...base };
 			const after = shadowDisposition(fixture.recovery.records, fixture.recovery.facts, fixture.policy);
-			return { disposition: after.disposition, justified: fixture.recovery.justifiedCommit };
+			// Two ways to score a recovered commit: against the truth after the observation arrived (the
+			// episode's real outcome), or against the base truth every other row uses. Both are reported;
+			// the difference is the confound, not a result.
+			return { disposition: after.disposition, justified: condition === "with-recovery" ? fixture.recovery.justifiedCommit : fixture.justifiedCommit };
 		}
 	}
 }
 
 /** The risk–coverage table the experiment asks for. Counts, not a scalar score. */
 export function frontier(fixtures: Fixture[]): FrontierRow[] {
-	const conditions: Condition[] = ["face-value", "proposition-basis-conclusion", "with-residual", "with-recovery"];
+	const conditions: Condition[] = ["face-value", "proposition-basis-conclusion", "with-residual", "with-recovery", "with-recovery-fixed-truth"];
 	return conditions.map((condition) => {
 		const row: FrontierRow = { condition, commits: 0, unsupportedCommits: 0, unnecessaryWithholding: 0, total: fixtures.length };
 		for (const fixture of fixtures) {

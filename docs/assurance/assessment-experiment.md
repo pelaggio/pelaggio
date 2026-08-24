@@ -156,13 +156,17 @@ The first implementation should stop before real gate behavior and compute a sha
 worker-authored part of a record is exactly the four fields above; binding, provenance and
 completeness are the harness-owned envelope of each `AssessmentRecord`, and observation
 availability, required surfaces and carried blockers are `HarnessFacts` the worker cannot write.
-Rationale text, summaries and confidence fields are read nowhere in the module, which is how wording
-invariance is established rather than tested for. Unknown extension keys — at any level of the four-field payload — are read only to be listed as
+Rationale text and summaries are read nowhere in the module, which is how wording invariance is
+established rather than tested for; a `confidence` field is not in the grammar, so it is an unknown
+extension and is handled as one — listed, never consumed, and fail-closed on committing evidence. Unknown extension keys — at any level of the four-field payload — are read only to be listed as
 unsupported: they never contribute, on evidence that would otherwise permit a consequential commit
 they fail closed (`withhold`), and a refutation that carries one cannot clear a carried blocker,
 because the harness cannot know whether the extension would have weakened the record. A carried
 blocker is cleared only by a refutation that is itself current, complete, extension-free, and not
-awaiting reassessment.
+awaiting reassessment. Every disposition carries an exhaustive typed `Cause` union (stale binding,
+unresolved basis, incomplete, open/recoverable/resolved residual, pending reassessment, carried
+blocker, contradiction, unsupported extension) — prose is derived from the causes, never the
+reverse, which is ADR-0026's per-cell rule applied to a shadow.
 
 `docs/assurance/assessment-fixtures.json` retrodicts seven episodes with known outcomes — the #625
 stale grep, #495 carry with and without an explicit refutation, the #435 false chokepoint, the #555
@@ -175,22 +179,34 @@ properties against them. The risk–coverage table across the four conditions th
 | condition | commits | unsupported commits | unnecessary withholding |
 |---|---|---|---|
 | face-value (the last record's verdict taken at face value, standing in for a free-form read — not a free-form review) | 4/7 | 3 | 2 |
-| proposition + basis + conclusion | 3/7 | 1 | 1 |
+| full envelope minus residuals (binding, basis, completeness, carried blockers, contradiction) | 3/7 | 1 | 1 |
 | + residual | 2/7 | 0 | 1 |
-| + residual + evidence recovery | 4/7 | 0 | 0 |
+| + residual + evidence recovery, scored on post-recovery truth | 4/7 | 0 | 0 |
+| + residual + evidence recovery, scored on the fixed base truth the other rows use | 4/7 | 1 | 0 |
+
+The last two rows are the same dispositions scored two ways. #555's recovered commit is justified
+once mergeability was observed and unjustified on the base facts; reporting only the post-recovery
+row would hide that the recovery condition is not comparable to the others on fixed ground truth.
+Conditions 2–4 as written above name only worker fields; what was measured is the full harness
+envelope with residuals stripped, then present, then present with recovery — the protocol text is
+narrower than the run and should be read as the run.
 
 What this does and does not show. The second row is the full envelope minus residuals — binding,
 basis, completeness, carried blockers and contradiction handling. Binding rejection recovers the
 justified landing that face-value withheld (#625: the stale charter was the last word); carried-blocker
 survival refuses #495's silent re-push (a current, complete, passing review that simply says nothing
 about the prior blocker — omission is not refutation) and completeness refuses #555's UNKNOWN
-mergeability — the two face-value commits that face value had no business making. That row still commits on #435, whose unit tests
+mergeability — two of the three unsupported face-value commits; the third, #435, survives this row. That row still commits on #435, whose unit tests
 were green and whose gap was a path the guard never saw — exactly the shape only a residual carries —
-and it already withholds #593 as a contradiction, so the residual row's one unnecessary withholding is
-inherited, not introduced: residuals cost zero justified coverage in this corpus. Recovery then reaches
-face-value coverage with zero unsupported commitments, and the #593 recovery works by parking the *violated* record once its named residual resolves —
-it then awaits reassessment and no longer contradicts — so the surviving `holds` record commits; the
-residual does not clear itself, and no reassessment of the `holds` record is needed. Two caveats keep this an experiment rather than a result: the
+and it already parks #593 as a contradiction (`retry-escalate` under that fixture's policy — a distinct
+disposition from `withhold`), so the residual row's one unnecessary withholding is inherited, not
+introduced: residuals cost zero justified coverage in this corpus. Recovery then reaches
+face-value coverage with zero unsupported commitments, and the #593 recovery is fail-closed in two steps: when the named observation arrives, the
+*violated* record is parked for reassessment and, because a `holds` record exists on the same
+proposition, the disposition is `gather-evidence` — not commit — until someone reassesses; the
+fixture's recovery block then re-authors the violated record on the new basis (it now holds), and
+only then does the proposition commit. The residual does not clear itself, and the observation is
+never assumed to have gone the assessor's way. Two caveats keep this an experiment rather than a result: the
 fixtures were authored with hindsight, so a residual is present wherever history showed one was
 needed — the open question is whether workers write material residuals *without* hindsight, which
 only live records can answer; and seven episodes is a demonstration, not a measurement.

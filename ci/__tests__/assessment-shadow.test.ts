@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, it } from "node:test";
-import { dispositionUnder, type Fixture, faceValueDisposition, frontier, handoff, shadowDisposition } from "../assessment-shadow.ts";
+import { type Cause, dispositionUnder, type Fixture, faceValueDisposition, frontier, handoff, shadowDisposition } from "../assessment-shadow.ts";
+
+const has = (causes: Cause[], kind: Cause["kind"], id?: string) => causes.some((c) => c.kind === kind && (id === undefined || Object.values(c).includes(id)));
 
 const repo = resolve(new URL("../..", import.meta.url).pathname);
 const corpus = JSON.parse(readFileSync(resolve(repo, "docs/assurance/assessment-fixtures.json"), "utf8")) as { status: string; fixtures: Fixture[] };
@@ -39,7 +41,7 @@ describe("shadow disposition properties", () => {
 		const f = fixture("stale-grep-625");
 		const result = shadowDisposition(f.records, f.facts, f.policy);
 		assert.equal(result.disposition, "commit");
-		assert.ok(result.causes.includes("stale-binding:B-grep-charter"));
+		assert.ok(has(result.causes, "stale-binding", "B-grep-charter"));
 		// Face value read the last word — the stale charter — and withheld a justified landing.
 		assert.equal(faceValueDisposition(f.records, f.policy), "withhold");
 		// Make the only current positive record stale too: nothing current remains, so no commit.
@@ -51,7 +53,7 @@ describe("shadow disposition properties", () => {
 		const silent = fixture("carried-blocker-silence-495");
 		const result = shadowDisposition(silent.records, silent.facts, silent.policy);
 		assert.equal(result.disposition, "withhold");
-		assert.ok(result.causes.includes("carried-blocker:BLK-1"));
+		assert.ok(has(result.causes, "carried-blocker", "BLK-1"));
 		// `residual: []` and an absent residual are the same statement: "this assessor reported none".
 		silent.records[0].assessment.residual = [];
 		assert.deepEqual(shadowDisposition(silent.records, silent.facts, silent.policy), result);
@@ -65,7 +67,7 @@ describe("shadow disposition properties", () => {
 		stale.records[0].binding.sha = "599-r1";
 		const staleResult = shadowDisposition(stale.records, stale.facts, stale.policy);
 		assert.equal(staleResult.disposition, "withhold");
-		assert.ok(staleResult.causes.includes("carried-blocker:BLK-1"));
+		assert.ok(has(staleResult.causes, "carried-blocker", "BLK-1"));
 		// Nor is one whose named residual has since resolved and awaits reassessment.
 		const pending = fixture("carried-blocker-refuted-495");
 		pending.records[0].assessment.residual = [{ statement: "unless the path was touched after the report", resolvedBy: "review-r2" }];
@@ -77,7 +79,7 @@ describe("shadow disposition properties", () => {
 		const stripped = f.records.map((r) => ({ ...r, assessment: { ...r.assessment, residual: undefined } }));
 		const result = shadowDisposition(stripped, f.facts, f.policy);
 		assert.equal(result.disposition, "retry-escalate");
-		assert.ok(result.causes.some((c) => c.startsWith("contradiction:")));
+		assert.ok(has(result.causes, "contradiction"));
 		assert.equal(shadowDisposition(stripped, f.facts, { ...f.policy, onContradiction: "withhold" }).disposition, "withhold");
 	});
 
@@ -85,14 +87,20 @@ describe("shadow disposition properties", () => {
 		const split = fixture("label-vs-split-593");
 		assert.notEqual(shadowDisposition(split.records, split.facts, split.policy).disposition, "commit");
 		assert.ok(split.recovery);
+		// The observation arrives but nobody has reassessed V yet: fail closed, not commit — the
+		// resolving observation might have confirmed the violation.
+		const pendingResult = shadowDisposition(split.records, split.recovery.facts, split.policy);
+		assert.equal(pendingResult.disposition, "gather-evidence");
+		assert.ok(has(pendingResult.causes, "residual-resolved-needs-reassessment", "V"));
+		assert.ok(has(pendingResult.causes, "pending-reassessment-on-proposition", "V"));
+		// Only a reassessed V (here: holds, on the new basis) lets the proposition commit.
 		const after = shadowDisposition(split.recovery.records, split.recovery.facts, split.policy);
 		assert.equal(after.disposition, "commit");
-		assert.ok(after.causes.includes("residual-resolved-needs-reassessment:V"));
 
 		const outage = fixture("unavailable-observation-555");
 		const first = shadowDisposition(outage.records, outage.facts, outage.policy);
 		assert.equal(first.disposition, "gather-evidence");
-		assert.ok(first.causes.includes("incomplete:L"));
+		assert.ok(has(first.causes, "incomplete", "L"));
 		assert.ok(outage.recovery);
 		assert.equal(shadowDisposition(outage.recovery.records, outage.recovery.facts, outage.policy).disposition, "commit");
 	});
@@ -156,7 +164,7 @@ describe("shadow disposition properties", () => {
 		(tainted.records[0].assessment as unknown as Record<string, unknown>)["x-applicability"] = "linux-only";
 		const consequential = shadowDisposition(tainted.records, tainted.facts, tainted.policy);
 		assert.equal(consequential.disposition, "withhold");
-		assert.ok(consequential.causes.includes("unsupported-extension-on-evidence:A-reachability"));
+		assert.ok(has(consequential.causes, "unsupported-extension-on-evidence", "A-reachability"));
 		assert.deepEqual(consequential.unsupported, ["A-reachability:x-applicability"]);
 		assert.equal(shadowDisposition(tainted.records, tainted.facts, { ...tainted.policy, consequence: "reversible" }).disposition, "continue");
 		// Nested unknown keys are found too, and an extension on a REFUTATION disqualifies it from clearing a blocker.
@@ -170,7 +178,7 @@ describe("shadow disposition properties", () => {
 		(taintedRefutation.records[0].assessment as unknown as Record<string, unknown>)["x-untouched-path-verified"] = true;
 		const refResult = shadowDisposition(taintedRefutation.records, taintedRefutation.facts, taintedRefutation.policy);
 		assert.equal(refResult.disposition, "withhold");
-		assert.ok(refResult.causes.includes("carried-blocker:BLK-1"));
+		assert.ok(has(refResult.causes, "carried-blocker", "BLK-1"));
 	});
 });
 
@@ -200,5 +208,9 @@ describe("risk–coverage frontier over the retrodicted episodes", () => {
 		assert.equal(row("with-recovery").unsupportedCommits, 0);
 		assert.equal(row("with-recovery").unnecessaryWithholding, 0);
 		assert.ok(row("with-recovery").commits >= row("face-value").commits, "recovery reaches face-value coverage at zero unsupported commitments");
+		// Scored on the base truth every other row uses, the recovered #555 commit counts as unsupported:
+		// that difference is the ground-truth confound, reported rather than hidden.
+		assert.equal(row("with-recovery-fixed-truth").commits, row("with-recovery").commits);
+		assert.equal(row("with-recovery-fixed-truth").unsupportedCommits, 1);
 	});
 });
