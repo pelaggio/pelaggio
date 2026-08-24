@@ -24,6 +24,35 @@ function requirePhrase(phrase: string): void {
 	assert.ok(doc.includes(phrase), `charter-normalization experiment lost boundary: ${phrase}`);
 }
 
+const run = JSON.parse(readFileSync(resolve(repo, "docs/assurance/charter-normalization-run-2026-08-24.json"), "utf8")) as {
+	rawInputs: Record<string, { sha256: string; text: string }>;
+	runs: Array<{ issue: number; model: string; earlyExit: boolean; tokens: number; filesRead: number; ms: number; output?: { earlyExit: boolean; desiredOutcome: string; residuals: string[] } }>;
+	aggregate: { runs: number; earlyExits: number; mechanismLeakedIntoOutcome: number; meanTokens: number; meanFilesRead: number; meanSeconds: number };
+};
+
+describe("first-run record is auditable and binds the document's table", () => {
+	it("every run carries the model's full output and every issue its sha256-stamped raw input", () => {
+		for (const r of run.runs) {
+			assert.ok(r.output, `${r.issue}/${r.model} has no persisted output`);
+			assert.equal(r.output.earlyExit, r.earlyExit, `${r.issue}/${r.model} earlyExit must be the model's, not the author's`);
+			assert.ok(run.rawInputs[String(r.issue)]?.sha256.length === 64, `#${r.issue} raw input must be digest-stamped`);
+			assert.ok(run.rawInputs[String(r.issue)].text.length > 200);
+		}
+	});
+
+	it("the table's counts re-derive from the runs array", () => {
+		const early = run.runs.filter((r) => r.earlyExit).length;
+		const meanTokens = Math.round(run.runs.reduce((a, r) => a + r.tokens, 0) / run.runs.length);
+		const meanSeconds = Math.round(run.runs.reduce((a, r) => a + r.ms, 0) / run.runs.length / 1000);
+		assert.equal(run.aggregate.runs, run.runs.length);
+		assert.equal(run.aggregate.earlyExits, early);
+		assert.equal(run.aggregate.meanTokens, meanTokens);
+		requirePhrase(`| runs / early exits | ${run.runs.length} / ${early}`);
+		requirePhrase(`${Math.round(meanTokens / 1000)}k tokens`);
+		requirePhrase(`${meanSeconds} s |`);
+	});
+});
+
 describe("shadow charter intent normalization", () => {
 	it("remains shadow-only and preserves raw intent authority boundaries", () => {
 		assert.equal(corpus.status, "experimental-shadow-only");

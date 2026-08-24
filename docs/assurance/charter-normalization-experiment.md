@@ -47,7 +47,7 @@ When normalization exposes a material human-value distinction, an interactive ca
 - add operator preferences or trade-off levers;
 - explicitly leave the right policy uncertain.
 
-The normalized Assessment must preserve whichever residuals remain. A human saying "I am not sure, but I prefer X over Y in these circumstances" is additional attributable context, not authority to invent a closed objective function.
+The normalized intent record — carried as an Assessment in the stacked assessment slice's sense, i.e. probabilistic judgment with harness-owned binding, never charter truth — must preserve whichever residuals remain. A human saying "I am not sure, but I prefer X over Y in these circumstances" is additional attributable context, not authority to invent a closed objective function.
 
 An autonomous caller follows the same semantic procedure but cannot manufacture the missing human-value choice. It may preserve the residual and continue only to the degree permitted by downstream consequence policy.
 
@@ -117,19 +117,23 @@ These fixtures ratchet semantic expectations, not natural-language generation. C
 
 ## First run: blind normalization of four fresh issues (2026-08-24)
 
-Record: `charter-normalization-run-2026-08-24.json`. Four open issues not in the fixture corpus
-(#611, #613, #615, #617) were normalized blind by two models each (claude sonnet, claude opus)
-following the procedure above, with read access to decisions and agent-context only. Arm 1 (raw
-charter straight to planning) and arm 3 (a candidate Goal layer) were not run; this isolates the
-normalization step.
+Record: `charter-normalization-run-2026-08-24.json` — the exact issue text each agent read
+(sha256-stamped), every model's full returned JSON, and the author's judgments kept separate from
+both. Four open issues not in the fixture corpus (#611, #613, #615, #617) were normalized blind by
+two models each (claude sonnet, claude opus) running **steps 1–3 only**: decompose, the four
+probes, and the early-exit decision with the smallest surviving outcome. Step 4 — semantic
+resolution against represented propositions, decisions and realizations — was not run, because the
+agents had access to decisions and agent-context but not the graph; so this is a subset of
+falsification arm 2, and arm 1 (raw charter straight to planning) and arm 3 (a candidate Goal layer)
+were not run either.
 
 | measure | result |
 |---|---|
 | runs / early exits | 8 / 0 — including both runs on the S-scoped #613 |
-| requested mechanism leaked into the normalized outcome | 0 / 8 |
+| requested mechanism leaked into the normalized outcome | 0 / 8 — instruction compliance (step 3 forbids it); without arm 1 there is no baseline leak rate to compare against |
 | cross-model outcome compatibility | 4 / 4 issues |
 | mean cost per normalization | 44k tokens, 12 files read, 149 s |
-| stale citation caught (`guarded-actions.md §8.2`, which is on unlanded PR #614) | 4 / 4 runs on the two issues that cite it |
+| stale citation caught (`guarded-actions.md §8.2` is absent at head; the author verified it sits on unlanded PR #614) | 4 / 4 runs on the two issues that cite it |
 | dependency on a parked item caught (#572 is `deferred`) | 2 / 4 runs on the two issues that depend on it |
 
 What held: every outcome was a property, not the requested mechanism, and the two models' outcomes
@@ -147,8 +151,12 @@ What did not hold: the early exit never fired. #613 is S-scoped and the request 
 implementation directive, yet both runs found a legitimate false-success — so the scope label is not
 the bounded-work signal this document assumed, and the friction cost is real: ~44k tokens and two
 and a half minutes per intake, comparable to a review seat. The reduction trigger "mostly restates
-the request" is not met; "increases friction on bounded work" is met on cost and not on value, and
-the document cannot yet say which of those the next run should optimize.
+the request" is not met. The trigger "increases friction on bounded work" was undecidable as written
+— it named no threshold and no net-of-value clause — so it is narrowed here: it is met when an
+intake costs more than one review seat (~50k tokens) **and** produces no counterexample that would
+change the charter. On this corpus every intake produced one, including #613, so the narrowed
+trigger is not met; the early exit still needs a cheaper first probe, which is the change the next
+run should make.
 
 Caveats: one provider, one judge (the session author), four issues, no human mediation exercised, no
 downstream comparison of plan/review churn — which is the effect the hypothesis actually predicts.

@@ -49,7 +49,7 @@ ActivityView {
 
 Fields should be derived from owned records where possible. In particular, harness-observed execution identity, run/attempt context, git binding, provider/model/version, and durable receipt/evidence identity must not be re-authored by a model.
 
-`operation` is semantic (for example `charter.normalize`), not a tool/skill name. A `/charter` skill, a hosted form, or a consumer implementation may all perform the same operation. Today **no record owns `operation`**: every existing artifact identifies a step, provider, model, run, or flow transition, so projecting `charter.normalize` from them would mean inferring it from the carrier — the coupling this experiment exists to remove. The candidate binding point is the one chokepoint every carrier already passes through, `npx pelaggio roadmap create-item`, which the harness owns and which can record the operation, the implementation identity/version, and — for an out-of-cycle invocation — mint the execution identity the model must not author.
+`operation` is semantic (for example `charter.normalize`), not a tool/skill name. A `/charter` skill, a hosted form, or a consumer implementation may all perform the same operation. Today **no record owns `operation`**: every existing artifact identifies a step, provider, model, run, or flow transition, so projecting `charter.normalize` from them would mean inferring it from the carrier — the coupling this experiment exists to remove. There is no chokepoint every carrier passes through: a consumer-owned implementation uses its own storage, a direct caller can create items without normalizing, and the first run below normalized existing issues without creating anything. For the carriers the harness owns (`/charter` through the CLI, the pipeline), the harness can record the operation, the implementation identity/version, and — out of cycle — mint the execution identity the model must not author; for the others the contract can only require that *some* harness-equivalent records those bindings, which is the semantic-not-carrier requirement restated.
 
 ## Invocation-mode test cases
 
@@ -68,7 +68,7 @@ Current Pelaggio records carry context, but almost none of it attaches to a norm
 
 - `CycleProvenance.runId`, git binding, Pelaggio/driver versions, and execution receipts — exist for pipeline cycles only. `charter.normalize` is not a `STEPS` member; an interactive `/charter`, a direct `create-item`, or a consumer implementation emits no `CycleProvenance`, `StepLog`, or receipt.
 - `StepLog` step/provider/model/attempt/result provenance — same limit: step-scoped, in-cycle.
-- `FlowEventEnvelope.executionId`, `causationId`, item/claim identity, and attempt — **planned**, not existing (`AGENTS.md` still tags flow `(flow, planned)`); today's production emitters write item-less lifecycle events with `itemId: null` and never set `claimId`, `causationId`, or `attempt`.
+- `FlowEventEnvelope.executionId`, `causationId`, item/claim identity, and attempt — the envelope and a ULID `executionId` **ship** (`types.ts`, `createEventWriter` in `flow-events.ts`), so a model-independent execution identity does exist for anything the writer emits; but today's production emitters write item-less lifecycle events with `itemId: null` and never set `claimId`, `causationId`, or `attempt`, and nothing emits for a charter intake — the identity exists, the attachment does not.
 - review seat identity and `ReviewResolution.actor` — review-escalation only; no charter-intake analogue.
 - ai-delivery source mapping for authorship, run metadata, policy, evidence, and resolution — delivery-scoped, downstream of intake.
 
@@ -98,24 +98,29 @@ Promote a generic Activity primitive only if repeated real cases require durable
 
 ## First run: the eight blind normalization runs, from persisted artifacts only (2026-08-24)
 
-The runs were direct-service invocations (read-only agents, no skill, no pipeline cycle). Answering
-the nine questions from the run record alone:
+The runs were direct-service invocations (read-only agents, no skill, no pipeline cycle) — one
+carrier, so nothing below is *confirmed* under the rule above; these are candidate gaps observed on
+one carrier. The persisted artifact is `charter-normalization-run-2026-08-24.json`, which holds the
+sha256-stamped issue text each agent read and each model's full returned JSON (both added to the
+record after the runs by the author, from the input files the agents read and the outputs they
+returned — a copy, not a harness capture). Scoring uses the three-value vocabulary only:
 
-| # | question | answerable? | from |
+| # | question | scoring | from |
 |---|---|---|---|
-| 1 | what raw intent was supplied | yes | the issue body snapshot the run record points at |
-| 2 | which normalization activity transformed it | **unanswerable** | no record owns `operation`; the record's `design` prose says so, which is a model/author-authored statement, not a binding |
-| 3 | which implementation/version performed it | model-authored only | model name in the record; no skill/service revision, no harness stamp |
-| 4 | which actor/principal initiated or mediated it | model-authored only | the session author, written by the session author |
-| 5 | what repository/item/run/attempt context applied | partial | repository and issue number yes; no run or attempt exists to bind |
-| 6 | which normalized assessment/output it produced | yes | the JSON block per run |
-| 7 | which material residuals remained | yes | `residuals` per run |
-| 8 | which principal resolved each residual | unanswerable | none were resolved; no resolution record shape exists |
-| 9 | reconstructable without knowing a skill existed | yes, trivially | no skill was involved — which is why this mode cannot test carrier independence |
+| 1 | what raw intent was supplied | answerable-but-model-authored | `rawInputs[issue].text` + sha256 — present, but placed there by the author, not stamped by a harness at read time |
+| 2 | which normalization activity transformed it | unanswerable | no record owns `operation`; the record's `design` prose is author narrative, not a binding |
+| 3 | which implementation/version performed it | answerable-but-model-authored | the model name, written by the author; no skill/service revision, no harness stamp |
+| 4 | which actor/principal initiated or mediated it | answerable-but-model-authored | the session author, written by the session author |
+| 5 | what repository/item/run/attempt context applied | answerable-but-model-authored | repository path and issue number, author-written; no run or attempt exists to bind |
+| 6 | which normalized output it produced | answerable | `runs[].output` — the model's returned JSON, verbatim |
+| 7 | which material residuals remained | answerable | `runs[].output.residuals` |
+| 8 | which principal resolved each residual | unanswerable | none were resolved and no resolution record shape exists |
+| 9 | reconstructable without knowing a skill existed | answerable | no skill was involved — which is also why this carrier cannot test carrier independence |
 
-Three of nine answerable from harness-owned facts, three more only because the author wrote them
-down, three not at all. The three confirmed gaps are exactly the three the inventory above added:
-execution identity, operation identity, implementation/version binding. Nothing here argues for a
-`SkillInvocation` node — the missing facts are bindings a chokepoint can record, not a new kind of
+Tally: three answerable (6, 7, 9), four answerable-but-model-authored (1, 3, 4, 5), two unanswerable
+(2, 8). The four author-authored rows are the bindings a harness-owned carrier would stamp (input
+digest, implementation identity/version, actor, execution context); the two unanswerable rows are
+the ones no existing record shape can hold on any carrier (operation identity, residual resolution).
+Nothing here argues for a `SkillInvocation` node — the missing facts are bindings, not a new kind of
 thing — but representation B is not yet answerable either, and the interactive human-mediated mode
-(the one that exercises questions 4 and 8) has not been run.
+(the one that exercises questions 4 and 8 for real) has not been run.

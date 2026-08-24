@@ -1,7 +1,7 @@
 {
 	"status": "experimental-shadow-only",
 	"run": "2026-08-24",
-	"design": "4 fresh open issues (#611, #613, #615, #617 — none in the fixtures corpus; two mechanism-heavy, one bounded S-scoped, one root-cause) × 2 models (claude sonnet, claude opus), each running the intake procedure blind with read access to decisions/agent-context only. Arm 1 (raw charter → plan) and arm 3 (candidate Goal layer) were not run; this is arm 2's normalization step in isolation, judged by the session author.",
+	"design": "4 fresh open issues (#611, #613, #615, #617 — none in the fixtures corpus; two mechanism-heavy, one bounded S-scoped, one root-cause) × 2 models (claude sonnet, claude opus), each running intake steps 1–3 (decompose, four probes, early-exit decision + smallest surviving outcome) blind, with read access to docs/decisions and docs/agent-context only. Step 4 (semantic resolution against the represented propositions/decisions/realizations) was NOT run — the agents had no graph access — so this is a subset of falsification arm 2, not the arm as specified. Arm 1 (raw charter → plan) and arm 3 (candidate Goal layer) were not run. rawInputs holds the exact issue text every agent read (sha256-stamped); each run's `output` is the model's full returned JSON, verbatim. Judgments (mechanismInOutcome, compatibility, sharpestCounterexample) are the session author's.",
 	"crossModelCompatibility": {
 		"611": "compatible, opus stronger — sonnet: no long-lived exfiltrable credential in the seat; opus: nothing reusable reachable from inside the seat in whatever form auth takes",
 		"613": "compatible — both: bounded store + the cap is not an exit-less state + never drop a retained blocker",
@@ -32,7 +32,50 @@
 			"staleCitationsCaught": [
 				"guarded-actions §8.2 does not exist at head"
 			],
-			"parkedDependencyCaught": false
+			"parkedDependencyCaught": false,
+			"output": {
+				"earlyExit": false,
+				"desiredOutcome": "On every fetch path pelaggio currently uses to gate a PR review (the `pr-review --pr` CLI path and the local drain's `review-sweep.ts` `prepareReviewHead` path, which is the actually-configured runner here), the diff/checkout basis the review or verify seat's pass/fail judgment is computed against must be derived from state that seat cannot influence or rewrite — so a prompt-injected seat cannot green a malicious PR by manipulating what gets fetched or diffed (e.g. faking an empty `origin/main...head`).",
+				"constraints": [
+					"Must hold on BOTH fetch paths, not just one — the issue explicitly flags that hardening only the CLI path 'protects nothing here' because the local drain is the configured runner.",
+					"Acceptance is framed as a structural exclusion ('the seat cannot influence what is fetched or diffed') rather than an enumerated checklist of git-config channels closed one by one.",
+					"Must not reopen or regress the token-leak half already closed on #589 (ambient-token stripping from the fetch child).",
+					"Stated as depending on / part of #572 in the issue's own metadata and body ('Depends on: 572'; 'host-brokered forge/signer/roadmap capabilities' pattern).",
+					"Scope recorded as L.",
+					"Until this lands, the empty-diff integrity gap on #554/#589 is accepted only under a stated interim posture: supervised first-party PRs, not untrusted-external-with-auto-merge."
+				],
+				"mechanismHypotheses": [
+					"Host-brokered checkout (the '#572 pattern', called 'B' and asserted by Chris as 'unquestionably the fix'): the harness, outside the seat, resolves a trusted config-derived remote (not seat-writable `.git/config` origin), prepares a read-only reviewed checkout at the verified PR head plus a trusted base, and hands that checkout to the seat; the seat never fetches or touches auth.",
+					"This is framed as retiring the whole fetch-auth surface (mutable origin, ambient tokens, credential helpers, extraheader host-trust, empty-diff) rather than patching it vector by vector.",
+					"An existing internal precedent for part of this shape already ships: the in-cycle 'cold pre-flight' review gate (`runPrReviewGate()`/`prepareAuthoringReviewSeat` in pipeline.md) already reviews a detached, data-only checkout of the reviewed SHA prepared outside the live claim worktree, with reviewer seats denied write access to it — suggesting the requested mechanism generalizes an existing pattern to the two remaining fetch paths rather than inventing a new one."
+				],
+				"acceptanceEvidence": [
+					"Stated acceptance bar: 'the seat cannot influence what is fetched or diffed on either path' — explicitly NOT satisfied by neutralizing each known git-config channel individually.",
+					"The issue references 'the verified five-vector inventory in the comments' as evidence backing the widened scope; that inventory's contents were not present in the raw request text I read and were out of scope for me to chase (comments not supplied).",
+					"No test/CI acceptance criteria, fixture, or verification procedure is specified in the raw text beyond the structural bar above."
+				],
+				"assumptions": [
+					"That a `.git/config` origin rewrite by the seat is genuinely invisible to existing confinement (per ADR-0001, confinement snapshots porcelain/ref state, and per the issue, 'no tracked-tree delta') — i.e. this attack surface is real and not already caught by another guard.",
+					"That #572 is the correct or necessary umbrella to build the harness-side checkout-preparation capability under, rather than a narrower standalone construction achieving the same outcome.",
+					"That the token-leak half is durably closed by #589's fix and is out of this item's scope.",
+					"That a 'trusted config-derived remote' distinct from and unreachable by a seat that has rewritten `.git/config` actually exists or can be derived.",
+					"That the interim risk judgment ('acceptable now: supervised first-party PRs, not untrusted-external-with-auto-merge') accurately describes current operating posture and will hold until this lands."
+				],
+				"residuals": [
+					"The 'five-vector inventory in the comments' that the widened-scope note leans on for acceptance was not available in what I read; the concrete vector list this item must close is not fully specified here.",
+					"Whether #572 is a true blocking prerequisite for this fix or just the mechanism Chris has converged on is unresolved — the dependency is mechanism-coupled ('part of #572'), and #572 itself is scoped more broadly (forge/signer/roadmap capabilities) than this narrower review-fetch need.",
+					"The concrete construction of 'a trusted config-derived remote' (where it is sourced from, how it resists the same seat-writable-config attack) is left open — consistent with the issue calling this a 'construction-level fix' rather than specifying the build.",
+					"Scope of 'the seat' is not fully pinned down — the issue's diagnosis names 'the review/verify SEAT (or the pr-review harness on a seat-writable shared .git)' as the threat actor, but whether other seats (e.g. implement/revise) that might also fetch/diff against origin are in scope is not addressed.",
+					"'Guarded-actions §8.2' is cited as the applicable construction-level-fix rule, but the current guarded-actions.md numbering has no §8.2 (it runs §8, §8.1, §9) — the citation may be to a since-renumbered or differently-versioned section; not resolved by the docs available to me."
+				],
+				"probes": {
+					"mechanismSubstitution": "If the '#572 host-brokered checkout' pattern vanished tomorrow, the wanted outcome would persist unchanged: the review/verify seat's diff/checkout basis must be sourced from data the seat cannot manipulate, on both fetch paths, so a malicious PR cannot green itself via an empty-diff or origin-rewrite trick. The checkout-broker is one candidate construction for that, not the goal.",
+					"falseSuccess": "Yes, plausibly: the literal deliverable ('harness prepares the checkout, seat never fetches') can be built and shipped for the CLI path alone while the local drain's `review-sweep.ts` keeps fetching mutable origin and diffing `origin/main` — which the issue itself flags as leaving the actually-configured runner exploitable. It could also be built with the 'trusted config-derived remote' itself resolving through state an earlier step in the same run touched (a TOCTOU), technically matching the description while the integrity gap survives.",
+					"alternativeSuccess": "Plausibly yes: the outcome could be reached without a harness-prepared checkout replacing seat fetch — e.g. extending confinement to snapshot/diff `.git/config` (and other seat-writable git state) so an origin rewrite is caught as a violation; a harness-side post-hoc reconciliation that independently re-fetches and compares against what the seat reported; or sourcing verified head/base SHAs from the forge API rather than via git fetch/config trust at all. Chris's 'B is unquestionably the fix' signals a considered preference among alternatives already weighed, not that no alternative exists.",
+					"boundaryCounterexample": "The issue's own interim carve-out is the boundary case: it states the current empty-diff gap is 'acceptable now: supervised first-party PRs, not untrusted-external-with-auto-merge.' If no real deployment currently runs untrusted-external-with-auto-merge, the L-scoped fix is being justified against a threat model not yet active for any real usage — a case where the obvious 'build this now' reading collides with 'this is a documented, currently-accepted residual, not a live incident.' Separately, if the referenced five-vector inventory includes a vector attacking how 'verified PR head' or 'trusted base' is established (rather than the fetch step itself), the checkout-broker mechanism as described may not close it, undercutting the issue's own 'structural, not enumerated' acceptance bar."
+				},
+				"filesRead": 15
+			}
 		},
 		{
 			"issue": 617,
@@ -48,7 +91,62 @@
 				"guarded-actions §8.2 does not exist at head",
 				"five-vector inventory lives in comments not supplied"
 			],
-			"parkedDependencyCaught": true
+			"parkedDependencyCaught": true,
+			"output": {
+				"earlyExit": false,
+				"desiredOutcome": "A review/verify seat cannot influence which commits its own work is judged against: on every review path this repo actually runs, the review verdict is computed over the true PR head and a trusted base as established outside the seat, so a prompt-injected seat cannot green a malicious PR by making the reviewed delta empty, narrowed, or otherwise attacker-chosen.",
+				"constraints": [
+					"Both fetch paths are in scope: the `pr-review --pr` CLI path AND the local drain's `prepareReviewHead` in review-sweep.ts. The repo is configured `review.runner: local`, so a CLI-only fix protects nothing here and does not satisfy the request.",
+					"Acceptance is the property (seat cannot influence what is fetched or diffed), NOT an enumeration: individually neutralising each known git-config channel is explicitly rejected as the bar.",
+					"Whatever establishes the reviewed commits must derive from trusted configuration outside the seat's write reach — never from `.git/config` origin, which a seat can rewrite with no tracked-tree delta (ADR-0001 confinement observes tree effects, not `.git` porcelain, so this vector is invisible to it).",
+					"Token-scrubbing / auth hygiene alone is insufficient by construction: it closes the disclosure half (#589) and cannot close the integrity half.",
+					"Operator has pre-decided the fix class ('B is unquestionably the fix'): a construction-level removal of the seat's control, not further edge-patching of the fetch-auth surface.",
+					"Declared as depends-on / part-of #572 (host-brokered forge/signer/roadmap capabilities); should follow that pattern rather than invent a parallel brokering mechanism.",
+					"Any new blocking gate must clear the gate-quality bar (guarded-actions §8.1): early, narrow, preserving, falsifiable — notably it must not broadly refuse legitimate seat git/network use (revise sweep's findings fetch, tooling from local main).",
+					"Until this lands, #554/#589 ship with the empty-diff integrity residual documented as a known limitation, scoped to supervised first-party PRs — not untrusted-external-with-auto-merge.",
+					"Scope L, so a plan step is expected."
+				],
+				"mechanismHypotheses": [
+					"Harness, outside the seat, prepares a read-only reviewed checkout at the verified PR head plus a trusted base and hands the seat a checkout it cannot influence; the seat never fetches and never touches auth.",
+					"Resolve the remote from trusted config-derived state rather than `.git/config` origin.",
+					"Implement as a host-brokered capability in the #572 pattern (same shape as the host-side egress broker in ADR-0023: authority and credentials live outside the confined actor).",
+					"Retire the whole fetch-auth surface at once — mutable origin, ambient tokens, credential helpers, extraheader host-trust, empty-diff — rather than patching vectors as #589 did.",
+					"Make the prepared checkout read-only so the seat cannot rewrite what it reviews.",
+					"(implied, weaker) Use the verified five-vector inventory recorded in the issue comments as the derivation of the vectors, while keeping the property — not the inventory — as acceptance."
+				],
+				"acceptanceEvidence": [
+					"Demonstrated on BOTH paths (local drain `prepareReviewHead` and `pr-review --pr`) that a seat with full write access to its worktree and `.git` cannot change which commits are fetched or diffed.",
+					"Specifically: a seat that rewrites origin to an attacker host serving a fake `main` at the real PR SHA produces a review over the true delta, not an empty one — the #589 residual attack no longer greens a PR.",
+					"Property-level, adversarial evidence rather than a per-channel checklist — the ADR-0023 hostile-probe conformance suite is the in-repo precedent for the shape (N/N probes, fail-closed on any unanticipated change).",
+					"No-false-fire evidence per §8.1 item 14: legitimate reviews and the revise sweep still run at the operating envelope's edge.",
+					"The known-limitation note carried on #554/#589 can be retired.",
+					"NOT acceptable as evidence: 'each of the five listed git config channels is now neutralised.'"
+				],
+				"assumptions": [
+					"The harness process itself is outside the seat's write reach and is a sound authority for the fetch — i.e. the trust boundary is harness/seat, not host/network.",
+					"A truly seat-independent trusted remote exists; the config it derives from is not itself in the reviewed, seat-writable tree.",
+					"The forge's PR head SHA can be obtained host-side through a channel the seat cannot redirect.",
+					"Threat model is a prompt-injected first-party seat under supervision (ADR-0002 posture), not a hostile external contributor with auto-merge.",
+					"#572's brokering pattern is available to build on, or is co-delivered.",
+					"Handing the seat a prepared checkout is compatible with the local-review contract that trusted tooling executes from local main while the PR head is treated only as data."
+				],
+				"residuals": [
+					"The 'verified five-vector inventory' is cited as living in the issue comments, which are not present in the supplied artifact — the five vectors are unenumerated here, so the derivation cannot be checked against the acceptance property it is supposed to have produced.",
+					"'Construction-level fix per guarded-actions §8.2' does not resolve: the doc at head has §8 and §8.1 only (through v7). Either a newer section is assumed, or the intended reference is §8.1's bar / §8's checklist.",
+					"#572 is on the executed park list in throughput-economy §5 (`deferred`). Whether #617 unparks it, absorbs only its pattern, or blocks on it is unstated — a hard depends-on against a parked item.",
+					"'A trusted base' is unspecified: main tip at prepare time, the recorded PR base SHA, or the merge-base. The choice changes the reviewed delta and interacts with branch staleness (#571) and with the #602 correct-against-main lesson in review-gate-baseline.md.",
+					"Scope boundary among seat-facing git/forge reads: the request names two paths, but verify seats, `revise-sweep.ts`, `pr-adjudicate`, and `land` are not addressed — unclear whether they share the vector or are deliberately out of scope.",
+					"The enforcement mechanism for 'read-only' is unnamed (filesystem perms, bind mount, separate ownership), and its interaction with the seat's need to run tooling and install deps is unresolved.",
+					"'Relates to #556/#511 (harness-attested evidence)' is left as a relation, not a requirement — yet report-binding is where the residual attack surface migrates (see false-success probe)."
+				],
+				"probes": {
+					"mechanismSubstitution": "If host-brokered checkout preparation were unavailable tomorrow, the wanted outcome persists unchanged: the review verdict must be computed over the true PR head and a trusted base, with neither commit selectable by the reviewed seat. The checkout is the delivery vehicle for that property, not the property. Substitutes that would still satisfy it: the harness computing the diff host-side and handing the seat inert diff/file data (which is already the shape of the local-review contract), or harness-attested binding of the report to a host-observed (head, base) SHA pair (#511/#556).",
+					"falseSuccess": "YES — several distinct ways, which is why earlyExit is false. (1) The stated deliverable is built for the `pr-review --pr` CLI path and the local drain still fetches mutable origin — the requester already caught this once and widened scope on 2026-08-24, evidence the deliverable and the outcome come apart in practice. (2) The harness prepares the checkout from a 'trusted config-derived remote' whose config lives in the seat-writable tree, moving origin control rather than removing it. (3) The base is handed over as a ref name rather than a pinned SHA, or is resolved from a ref the seat can still update, and the empty-diff returns through the base rather than the head. (4) Most sharply: the checkout is unimpeachable and the seat still authors the findings report — a compromised seat then greens the PR by lying about what it found rather than about what it read, so the integrity half migrates from 'what is reviewed' to 'what is reported' and the deliverable is complete while a malicious PR still merges.",
+					"alternativeSuccess": "YES. The outcome is reachable without the harness preparing any checkout: (a) harness-side diff computation with the seat receiving only inert file/diff data; (b) host-side attestation that binds the emitted report to a host-observed head and base SHA, converting the guarantee from prevention to detection-before-merge (which is sufficient given the merge gate fails closed, ADR-0004); (c) running review in an environment where the fetch was never seat-adjacent at all. This is why the requested checkout mechanism is recorded as a hypothesis, while the two things the requester genuinely requires independent of mechanism — both paths covered, and a property-level rather than enumerated bar — are recorded as constraints.",
+					"boundaryCounterexample": "Force-push during the window between the host verifying the PR head and preparing the checkout. The 'verified PR head' is a check-then-act pair, exactly guarded-actions §8 item 1 (TOCTOU: the act does not carry the observed token) — the harness can honestly prepare a checkout at a SHA the forge no longer considers head, and the resulting green status attaches to a commit that is not what merges. This defeats the obvious interpretation without any origin rewrite, so 'the seat cannot influence what is fetched' is necessary but not sufficient; the report must be bound to the SHA pair actually reviewed and the merge must refuse a moved head. A second boundary: a stale branch whose true merge-base is far behind a main that advances mid-review — pinning base to main tip inflates the delta with other people's work, pinning the recorded PR base lets a rebase slide head out from under it. A third: 'the seat never fetches' stated bluntly over-refuses the revise sweep's legitimate findings fetch and seat dep/tooling network use, tripping §8.1 item 11 (broad refusal)."
+				},
+				"filesRead": 12
+			}
 		},
 		{
 			"issue": 615,
@@ -63,7 +161,50 @@
 			"staleCitationsCaught": [
 				"guarded-actions §8.2 does not exist at head"
 			],
-			"parkedDependencyCaught": false
+			"parkedDependencyCaught": false,
+			"output": {
+				"earlyExit": false,
+				"desiredOutcome": "Every code path that publishes a review or adjudication body to a public sink (stdout or a PR-comment upsert), across all current call sites and any added later, is guaranteed by construction — not by per-site patching — to have the scrub (scrubReviewBoundary) applied before the body reaches the sink, and that guarantee is machine-verified rather than asserted, for both the pr-review gate and pr-adjudicate.",
+				"constraints": [
+					"Must cover all currently enumerated publish sites: pr-review-cli.ts runPrReviewGate upserts (~742/753/761/922 early-exit + final bodies), main() stdout write (~1047), upsert (~1074), crash-upsert (~1083); pipeline.ts local-drain re-publish (~3733); pr-adjudicate-cli.ts publish (~479).",
+					"Must cover both pr-review and pr-adjudicate publishing, not review-gate alone.",
+					"The no-bypass guarantee must be enforced by an automated check (a grep-guard test or a type-level single-publisher constraint), not left to convention or manual review.",
+					"Wherever a body reaches a sink, existing scrub coverage (scrubReviewBoundary) must still apply in full — the fix must not narrow or skip scrubbing relative to today.",
+					"Sized as Scope: M — not a rewrite of the review/adjudication publishing surface beyond what closing this finding class requires."
+				],
+				"mechanismHypotheses": [
+					"Introduce a publishReviewBody(pr, body) chokepoint for review-gate output and a publishAdjudicationBody(pr, body) chokepoint for adjudication output.",
+					"Apply scrubReviewBoundary inside those chokepoint functions rather than at each call site.",
+					"Refactor every enumerated call site to route through the chokepoint instead of calling upsert/stdout directly.",
+					"Verify the funnel with either a grep-guard test or a type-level single-publisher constraint (requester leaves this choice open)."
+				],
+				"acceptanceEvidence": [
+					"An automated test/constraint that fails if any review or adjudication body reaches stdout or a PR-comment upsert without first passing through the scrub-applying chokepoint (\"asserting the chokepoint is the sole publisher\").",
+					"Demonstration that all ~7 enumerated call sites across pr-review-cli.ts, pipeline.ts, and pr-adjudicate-cli.ts route through the new mechanism, with no residual direct upsert/stdout write.",
+					"No recurrence of the #554/PR #589 rolls 7-10 pattern where adversarial review kept finding \"one more sink\" — i.e., the finding class is closed, not merely reduced."
+				],
+				"assumptions": [
+					"The cited file:line references (pr-review-cli.ts:742/753/761/922/1047/1074/1083; pipeline.ts:3733; pr-adjudicate-cli.ts:479) are treated as current; source was not opened to verify them, and the issue text itself hedges with \"~7\".",
+					"A `scrubReviewBoundary` function already exists and is the correct, complete scrub to centralize; not verified against source per this task's read-only/no-source scope.",
+					"guarded-actions.md §8.2 (\"false-chokepoint caveat\", \"construction over enumeration\") is assumed to be settled, citable doctrine. As read at the current head, guarded-actions.md has no section numbered 8.2 and no text under those names — §8 runs Failure-mode taxonomy → §8.1 over-refusal taxonomy → §9 directly. The nearest analogue is item 8, \"Broken derived exclusivity\" (#435, about actions assuming unique ownership not derived from a fenced claim, in the worktree-write-confinement context) — a different failure shape (fs ownership) from a publish-sink funnel. So this may cite a stale section number/doc revision, or be proposing to newly establish this caveat rather than dogfood an existing one.",
+					"#611 (ambient ANTHROPIC_API_KEY) and #492 (pipeline envelope decomposition) are correctly related-but-out-of-scope pointers, not blocking dependencies."
+				],
+				"residuals": [
+					"Enforcement mechanism is explicitly left as an either/or by the requester (\"grep-guard test or a type-level single-publisher constraint\") — a grep-guard is lexical and can miss a copy-paste reimplementation or a new module it doesn't scan; a type-level constraint is stronger but its shape (e.g., an opaque scrubbed-body type) is unspecified.",
+					"Whether \"no future sink can be added without going through it\" is meant literally against sink kinds not yet imagined (e.g., Slack, webhook, file log) or only against today's stdout/PR-comment sinks is unresolved.",
+					"Whether the pipeline.ts local-drain chokepoint call and the CLI-level chokepoint functions can share one module, or whether cross-package/import-boundary pressure forces either a shared lower layer or a second implementation that a naive grep-guard wouldn't catch, is unaddressed.",
+					"Whether main()'s crash-path publish (~1083, firing from a catch/finally where the pr/context needed by publishReviewBody(pr, body) may be only partially available) is expected to route through the same chokepoint, or needs a distinct guaranteed-scrubbed crash path, is unaddressed.",
+					"Whether documenting this pattern as a new subsection in guarded-actions.md is part of the deliverable (since §8.2 doesn't currently exist under that name) or this is code-only, is unspecified.",
+					"Whether the scrub must cover only the `body` argument or also any other fields (e.g., PR title, ancillary comment metadata) that could carry unscrubbed content through the same sinks is not addressed by the text, which speaks only of 'body'."
+				],
+				"probes": {
+					"mechanismSubstitution": "If the two named chokepoint functions vanished, the requester would still want it structurally impossible for any review/adjudication body to reach stdout or a PR comment without the scrub applied, verified by an automated check — the specific function names/signatures are not themselves the goal.",
+					"falseSuccess": "Yes, confidently possible: the two chokepoint functions could be added, most sites routed through them, and a grep-guard test written, while (a) one enumerated or future call site still bypasses them (e.g., the crash-upsert path reintroducing a raw fallback), (b) the guard only scans today's two/three files and misses a re-implementation elsewhere, or (c) the scrub is applied to `body` but a sibling field carrying unscrubbed content still leaks through the same sink — the literal deliverable ships while the scattered-sink class survives.",
+					"alternativeSuccess": "Yes: the outcome could be reached without the exact two named functions — e.g., a single kind-parameterized publish function, an opaque/branded 'already-scrubbed body' type that only scrubReviewBoundary can construct (making unscrubbed publishing a type error), or pushing the scrub into the shared low-level upsert/console utility both CLIs already funnel through, rather than inventing new review-specific publish functions.",
+					"boundaryCounterexample": "Early-exit fail-closed bodies (lines 742/753/761) or the crash-upsert path (1083) may run before the context a chokepoint like publishReviewBody(pr, body) needs is fully available, or need to fire even if the chokepoint itself throws — which pressures a lighter-weight parallel publish path that reintroduces exactly the bypass the fix is meant to eliminate; similarly a lexical grep-guard test cannot detect a semantically-equivalent reimplementation added in a new file/module later."
+				},
+				"filesRead": 11
+			}
 		},
 		{
 			"issue": 615,
@@ -78,7 +219,59 @@
 			"staleCitationsCaught": [
 				"guarded-actions §8.2 arrives with PR #614, cited authority is in flight"
 			],
-			"parkedDependencyCaught": false
+			"parkedDependencyCaught": false,
+			"output": {
+				"earlyExit": false,
+				"desiredOutcome": "Review and adjudication text cannot become visible outside the harness (operator stdout, PR comment) without the review-boundary scrub having already been applied, and that property is established structurally rather than by patching an enumerated list of call sites — so a sink added later, in any of the involved modules or processes, either cannot bypass the scrub or is mechanically detected. The operational goal is that 'you missed a sink' stops being a finding an adversarial reviewer can keep re-discovering against pr-review, pr-adjudicate, and the local drain.",
+				"constraints": [
+					"Covers review AND adjudication publishing, and the pipeline local-drain re-publish — one mechanism spanning all three, not per-CLI copies (the request names pr-adjudicate coverage as part of the point, not a nice-to-have).",
+					"Redact-before-write ordering per ADR-0010: no window in which an unscrubbed body exists at the sink; scrub must not be a post-hoc pass over already-published text.",
+					"Fail-closed publishing is preserved (ADR-0004): early-exit fail-closed bodies and the crash-path upsert must still publish, and the required `review` commit status must still be posted. A scrub or chokepoint failure must not silently degrade into 'nothing published'.",
+					"The published body stays machine-consumable: the revise sweep's findings-comment parsing and the required-status contract (roadmap-and-ship.md) keep working after scrubbing — the scrub refuses the credential dimension, never the finding (guarded-actions §8.1 'narrow').",
+					"Whatever enforces sole-publisher must itself be falsifiable and non-vacuous: a deliberately added bypass must fail it, and it must fail if its own target symbol/pattern disappears. review-gate-baseline.md records two live failures of exactly this instrument class (a `git grep | head` whose limit was filled by test-file matches, hiding production call sites; a reachability checker matched by its own doc comment).",
+					"Ships with no-false-fire tests (guarded-actions §8.1 item 14), including legitimate review bodies that legitimately quote credential-shaped text from a diff.",
+					"Defense-in-depth only: this does not close, and must not be described as closing, the ambient-credential exfil that #611 owns.",
+					"Scope discipline is part of the request's purpose: this is the durable home for sink safety, explicitly so that #554 stops scope-creeping into it; it does not absorb #492 envelope decomposition."
+				],
+				"mechanismHypotheses": [
+					"REQUESTED: publishReviewBody(pr, body) + publishAdjudicationBody(pr, body) as the two chokepoints, with scrubReviewBoundary applied inside, and all ~9 sites routed through them.",
+					"REQUESTED (alternative offered by the requester, undecided): a grep-guard test asserting the chokepoint is the sole publisher, OR a type-level single-publisher constraint.",
+					"Type-level form spelled out: an opaque/branded ScrubbedBody that only the scrubber can construct, required by every sink's signature — bypass becomes a compile error rather than a test failure, and it extends to sinks in modules the guard's file list never enumerated.",
+					"Wrap the transport instead of the callers: apply the scrub inside the single gh comment-upsert helper and the single stdout writer used for review output, so the funnel is at egress and needs no call-site discipline at all.",
+					"One unified publisher parameterized by surface (review vs adjudication, stdout vs comment) rather than two sibling functions."
+				],
+				"acceptanceEvidence": [
+					"Every named site — pr-review-cli.ts:742/753/761/922, main() stdout:1047 / upsert:1074 / crash-upsert:1083, pipeline.ts:3733, pr-adjudicate-cli.ts:479 — reaches its sink only through the chokepoint, asserted mechanically rather than by hand-reading (the request's own root-cause came from adversarial iteration, and the baseline doc's method lesson is that hand-reads are the unreliable step).",
+					"Negative/mutation evidence: a deliberately added direct sink, or a raw string handed to a sink, is rejected — compile error or failing guard.",
+					"Anti-vacuity evidence: the guard fails if the chokepoint symbol is renamed or deleted, so a passing guard cannot mean 'the pattern matched nothing'.",
+					"No-false-fire evidence: a legitimate body containing credential-shaped content from the diff still publishes usefully, and the revise sweep still consumes the resulting comment.",
+					"Idempotency evidence: early-exit body followed by the final body double-publishes without double-scrub corruption, and redaction markers do not themselves re-match the scrub patterns.",
+					"UNTESTABLE AS STATED: 'retires the entire scattered-sink finding class permanently'. Only 'no bypass exists at this head, and adding one fails a check' is evidenceable; permanence is an inference from construction, not an observation."
+				],
+				"assumptions": [
+					"The ~7-to-9 site inventory is the complete current sink set. It was root-caused during #554/PR #589 rolls 7-10, so the line numbers are a snapshot of a tree that has since moved. wrong-if: a mechanical sink census at head finds a publishing site absent from the list.",
+					"scrubReviewBoundary is safe to apply uniformly to every body class (final, early-exit fail-closed, crash) — i.e. no current site depends on unscrubbed output, and no downstream parser breaks on redacted text.",
+					"stdout and the PR comment want the same scrub policy. They have different audiences (local operator vs public forge), and the request funnels them together without arguing this.",
+					"pipeline.ts's drain can import the chokepoint without a layering inversion (CLI-owned helper pulled into pipeline).",
+					"'Public sink' means stdout + PR comment only. The required commit-status description, gate records under .dev/pr-review-gate-records/, cycle logs, flow events, and the .dev/*.log transcript are assumed out of scope or already covered by ADR-0010's separate log scrub.",
+					"A chokepoint is achievable in a language where any module can call the underlying gh/stdout primitives — i.e. 'sole publisher' is enforceable rather than merely asserted over a fixed file list."
+				],
+				"residuals": [
+					"grep-guard vs type-level constraint is left open by the requester, and the two differ materially: one detects after the fact within a file list, the other prevents across the whole type-checked surface. The choice determines whether the 'by construction' claim in the request is earned or aspirational.",
+					"One publisher or two (review vs adjudication) is unresolved; the request names two functions but the stated property is one property.",
+					"Behaviour when the scrub throws, or when the body is empty/degenerate after scrubbing, is unspecified — publish-redacted vs fail-closed is a live fork given ADR-0004.",
+					"Whether commit-status text and persisted gate records count as sinks is unstated; they carry review-derived text and are not in the named list.",
+					"Sequencing against #611 (the deeper exfil) and #492 (envelope decomposition) is asserted as 'relates to' with no ordering.",
+					"The requester's framing that this 'dogfoods §8.2 construction over enumeration' cites a section that does not exist in this tree's guarded-actions.md (which ends at §8.1 + §9); §8.2 arrives with PR #614, so the cited authority is in flight, not settled."
+				],
+				"probes": {
+					"mechanismSubstitution": "If publishReviewBody/publishAdjudicationBody were unavailable tomorrow, the requester would still want: no review or adjudication text reaches an external reader unscrubbed, and adding a new way to emit that text cannot silently skip the scrub. The funnel functions are one way to get that; scrubbing inside the transport helpers, or an opaque ScrubbedBody type that sinks are the only consumers of, deliver the same property. What is genuinely wanted is 'unscrubbed-at-a-sink is unrepresentable', not 'these two symbols exist'.",
+					"falseSuccess": "YES — confidently, which is why this is not an early exit. Both named functions can exist, all nine sites can route through them, and the sole-publisher test can pass, while the outcome still fails: (a) the guard is scoped to the three known files, so a publisher added in a fourth module or a different process bypasses it — the enumeration has moved from call sites to file lists, not been retired; (b) a grep-guard can pass vacuously after a rename or an over-broad pattern, and this repo has already produced both failure modes (review-gate-baseline.md: a truncated grep hid production call sites and produced a charter that was closed as invalid; the reachability checker's first run was satisfied by its own doc comment); (c) a body can leak before it ever reaches a sink — via a verbose transcript write, an exception message carrying the body, or stderr on the crash path — none of which is a call to the funnel. Conversely the deliverable can be built and the scrub itself can be the thing that fails, by redacting a credential-shaped string inside a real finding and corrupting what the reviewer needed to say.",
+					"alternativeSuccess": "YES. Scrubbing inside the one comment-upsert helper and the one stdout writer achieves the property with no call-site discipline and covers sinks nobody enumerated. A branded ScrubbedBody produced only by scrubReviewBoundary and demanded by every sink signature achieves it at compile time, spans pr-review / pr-adjudicate / pipeline uniformly, and does not depend on a text-matching test staying in sync with the code. Either satisfies the outcome without the two named functions existing.",
+					"boundaryCounterexample": "The obvious reading is 'route nine known sites through two new functions and assert sole-publisher with a grep test'. It is defeated by a sink that is not a call site the guard can see: an uncaught exception or process-exit path whose message carries the body to stderr and thence to CI logs, or the local drain / a future land or delivery-packet surface publishing the same body from a module the guard's file list never covered. In both cases the chokepoint is present, sole within its files, and bypassed. A second, sharper edge: the guard's own reliability. A sole-publisher grep is the same instrument class that this repo has documented failing twice — vacuous match after a rename, and self-match on a doc comment — so 'all paths funnel through it' would again be asserted rather than true by construction, which is precisely the false-chokepoint caveat the request cites as its motivation."
+				},
+				"filesRead": 7
+			}
 		},
 		{
 			"issue": 613,
@@ -91,7 +284,47 @@
 			"mechanismInOutcome": false,
 			"sharpestCounterexample": "a still-open PR already past the cap has no forward path under a scheme that only prunes on a new watermark or on merge/close, since it may never produce another complete run",
 			"staleCitationsCaught": [],
-			"parkedDependencyCaught": false
+			"parkedDependencyCaught": false,
+			"output": {
+				"earlyExit": false,
+				"desiredOutcome": "`.dev/pr-review-finding-dispositions/` stops growing unboundedly, and the 'a PR that exceeds the 50-complete-priors cap has carry permanently refuse (cold review) with nothing that ever clears it' dead end gets a bounded, recoverable resolution for both still-open/heavily-iterated PRs and merged/closed PRs — without ever weakening the existing fail-closed carry-refusal guarantee (an unprunable or still-over-cap state, or any prune failure, must keep refusing carry, never run warm) and without a pruning pass discarding any record the watermark/survivor-overlay carry logic still needs to avoid silently dropping a retained blocker.",
+				"constraints": [
+					"Fail-closed is non-negotiable and independent of mechanism: a prune failure, or the store still being over-cap after pruning, must result in carry refusing (cold review) — never fail-open.",
+					"Pruning/eviction must never remove a record still required by the existing carry semantics (newest-complete-ancestor watermark + blocking-only survivor overlay from non-watermark ancestors) — 'a retained blocker cannot be silently omitted' is an existing invariant, not new scope.",
+					"Scope is S — the requester expects a small, bounded piece of work, not a redesign of cross-push carry (#495/#605) or the watermark/survivor-overlay mechanism.",
+					"The disposition store is documented as seat-write-denied like the other evidence stores (gate-records, adjudication-sources, freshness-gate-records); any pruning mechanism should preserve that write-authority boundary rather than opening agent write access to satisfy GC.",
+					"Coordination with /tidy and the sibling freshness-gate-records/freshness-ours-intent.ts pruning TODO is explicitly hedged ('may cover both') — not a hard requirement that both be fixed in this issue."
+				],
+				"mechanismHypotheses": [
+					"Bounded pruning: keep the last N complete records per PR, FIFO-evicting older ones once a newer complete watermark supersedes them.",
+					"Age-based cleanup of records for PRs that are merged or closed.",
+					"A shared '.dev-store-GC pass' added to /tidy that also covers the sibling confirmed-record-pruning TODO in freshness-ours-intent.ts."
+				],
+				"acceptanceEvidence": [
+					"None given explicitly in the raw request — it is written as an implementation directive ('Add bounded pruning...Must stay fail-closed...'), not as testable acceptance criteria.",
+					"Given the repo's stated gate-quality bar (falsifiable no-false-fire tests ship with any gate-adjacent change) and that this touches the carry-refusal path, an acceptable implementation would need tests demonstrating: (a) a long-iterated PR that previously wedged past the cap can still get bounded, working carry after pruning; (b) a prune failure or persistent over-cap state still refuses/colds rather than warms; (c) pruning/cleanup never removes a record the watermark/survivor-overlay logic still needs."
+				],
+				"assumptions": [
+					"'Past 50 priors on one PR carry refuses with a prune hint' refers to an existing coded cap/behavior in the cross-push carry implementation (#495) that this issue was spun out of — not directly inspected, since source code was out of scope for this pass.",
+					"The 'sibling case' (freshness-ours-intent.ts confirmed-record-pruning TODO) targets a distinct store (`.dev/freshness-gate-records/`, per pipeline.md) from this issue's `.dev/pr-review-finding-dispositions/` — structurally similar (unbounded evidence-store growth) but not the same store.",
+					"This is fleet-flagged 'nice' severity (origin: PR #599 fleet nices, standard + red-team), consistent with Scope: S — a hygiene/robustness fix, not a correctness-blocking defect in current behavior.",
+					"'Cold review' (running without carry) remains an acceptable, already-designed fallback state today; this issue is about not needlessly staying stuck there forever for prunable reasons, not about eliminating cold review as an outcome."
+				],
+				"residuals": [
+					"No target value for N (records kept per PR) or the age threshold for merged/closed-PR cleanup is specified.",
+					"Trigger mechanism for age-based cleanup (webhook on merge/close, periodic /tidy sweep, opportunistic check at carry time) is unspecified.",
+					"Whether the '/tidy shared .dev-store-GC pass' is in-scope for this issue or deferred to a separate coordinating change is left open by the issue's own hedge ('may cover both').",
+					"Atomicity/partial-failure behavior of the prune operation itself (e.g., can it leave the store in a mixed state) is unstated beyond 'a prune failure...refuses carry.'",
+					"Boundary case: a still-open PR already past the cap has no forward path under a scheme that only prunes on arrival of a new complete watermark or on merge/close, since it may never produce another complete run — left unresolved by the issue text."
+				],
+				"probes": {
+					"mechanismSubstitution": "If FIFO N-cap eviction and age-based cleanup vanished as named mechanisms, the requester would still want: the store to stop growing unboundedly, and the cap-triggered carry refusal to be a recoverable/transient state rather than a permanent dead end for actively-iterated PRs — via whatever bounding strategy (TTL-only, watermark-relative retention, compact-on-write, etc.) achieves that without ever letting bounding logic drop a still-needed blocker record.",
+					"falseSuccess": "Yes, achievable. One could implement exactly 'keep last N complete records, FIFO-evict on new watermark, age-clean merged/closed PRs, refuse-cold on prune failure or cap breach' word-for-word, and still fail the apparent goal: e.g. the cleanup never actually executes because it's only reachable through a /tidy pass that no one runs against this store (so growth continues unabated in practice), or eviction discards a record the watermark/survivor-overlay logic still needed, silently weakening the very carry-safety guarantee the fail-closed language was meant to protect — all while matching the issue text literally.",
+					"alternativeSuccess": "Yes. The outcome (bounded store size; cap breach isn't a permanent dead end) could be reached without the named FIFO+age mechanism — e.g. a pure TTL/expiry scheme, or compacting/superseding pre-watermark records opportunistically at write time the moment a new complete watermark is established, with no separate scheduled GC pass at all.",
+					"boundaryCounterexample": "A PR that is still open, long-lived, and has already exceeded the 50-prior cap right now — a scheme that only FIFO-evicts on arrival of a new complete watermark, or only age-cleans merged/closed PRs, never helps this PR if it can't produce another complete run (plausibly why it's already stuck cold). The obvious literal reading ('prune on new watermark arrival, clean up on merge/close') has no path to unstick an already-wedged, still-open PR."
+				},
+				"filesRead": 23
+			}
 		},
 		{
 			"issue": 613,
@@ -104,7 +337,58 @@
 			"mechanismInOutcome": false,
 			"sharpestCounterexample": "a SUCCESSFUL FIFO prune evicts the roll-2 record holding a retained, never-refuted blocker; the next run's survivor overlay has no source for it and carries warm — the stated fail-closed clause covers prune failure, not prune success",
 			"staleCitationsCaught": [],
-			"parkedDependencyCaught": false
+			"parkedDependencyCaught": false,
+			"output": {
+				"earlyExit": false,
+				"desiredOutcome": "Disposition records under .dev/pr-review-finding-dispositions/ stop accumulating without limit, and reaching the store's own limits stops being an exit-less state: a PR whose prior history has exceeded the carry cap can be returned to carry-eligible by a clearing action that actually exists and is named at the point of refusal, while any bounding of the store never renders a retained (unrefuted) blocking finding unreachable to the next run — every failure, ambiguity, or truncation in that path refusing carry (cold review) instead of consuming a partial history.",
+				"constraints": [
+					"Fail-closed, stated by the requester and independent of the chosen mechanism: a prune failure, and the 50-prior cap, refuse carry (cold review) and never fail open.",
+					"Bounding must not become silent refutation: whatever is removed or compacted, a blocking finding that survived and was never explicitly refuted must still reach the next run, or the run must refuse. ADR-0026 decisions 5/7 and its 'omission is never refutation' constraint bind here, and the carry design's blocking-only survivor overlay over every non-watermark ancestor exists precisely to prevent this omission (docs/agent-context/roadmap-and-ship.md:93).",
+					"Deletion authority stays harness/operator-owned. The store is seat-write-denied like the other evidence stores; GC must not open a path by which an agent seat can destroy or forge disposition evidence (the .dev/sessions/ 'so agents cannot forge evidence' precedent, docs/agent-context/pipeline.md:95).",
+					"Any new blocking or refusing edge must clear the gate-quality bar in docs/agent-context/guarded-actions.md §8.1 — early, narrow, preserving (names the preserved state and the resume path), falsifiable (ships with no-false-fire tests, item 14).",
+					"Scope S — requester-set; the fix is expected to stay small, which bounds how much of the store can be re-shaped.",
+					"Records are written even while review.carry is off (canary/default-off), so GC must operate correctly over stores produced in the disabled state."
+				],
+				"mechanismHypotheses": [
+					"Keep the last N complete records per PR, FIFO-evicting older ones once a newer complete watermark supersedes them.",
+					"Age-based cleanup of records for merged/closed PRs.",
+					"A shared .dev-store-GC pass hosted in /tidy that also covers the sibling confirmed-record-pruning TODO in freshness-ours-intent.ts.",
+					"Implied but unstated: make the existing cap's 'prune hint' actionable by naming a prune command and an authorized actor that exist (ADR-0026 decision 4 / guarded-actions.md §4's absorbing-state invariant).",
+					"Not requested, and viable: bound by compaction rather than deletion — fold superseded priors into a monotone blocking-survivor ledger (the delivery-packet segments-plus-fold precedent, docs/agent-context/delivery-packet.md:228-243), or count only bindable ancestors / bound the ancestry walk instead of the record count."
+				],
+				"acceptanceEvidence": [
+					"A PR that has accumulated more rolls than the cap allows can consume carry again after the GC path runs; if it still refuses, the refusal names an existing clearing transition and an authorized actor rather than an unimplemented hint.",
+					"Per-PR record count is bounded by a stated N, and whole-PR trees for merged/closed PRs disappear past a stated age threshold.",
+					"Fail-closed tests: injected prune failure -> cold review; cap reached -> cold review; forge/status classification unavailable -> no deletion and no warm carry on a truncated store.",
+					"Preservation test (the load-bearing one, not stated by the requester): a blocking survivor present only in an evicted/compacted ancestor is either still applied by the next run, or the next run refuses — it is never silently absent from the survivor overlay.",
+					"No-false-fire tests per §8.1 item 14: GC does not delete records a live run is about to bind, and does not fire on a legitimately deep-but-under-cap PR.",
+					"Verifiable against the persisted corpus described in docs/agent-context/review-gate-baseline.md (82 rolls / 30 PRs, e.g. #589 at 15 rolls) — a real store that already exceeds a naive N."
+				],
+				"assumptions": [
+					"N is unspecified; pruning only relieves the operational symptom if N is materially below the 50-prior cap. Assumed intended.",
+					"The 50-prior cap is per PR and is what turns a long-lived/hot PR permanently cold; the requester's 'past 50 priors on one PR carry refuses' phrasing implies this.",
+					"'Complete' in 'keep the last N complete records' is the same completeness predicate carry uses for bindable-ancestor watermark selection, not a second definition.",
+					"The store is gitignored, local, single-machine and evaporates with .dev/, so unbounded disk growth is a hygiene hazard while the exit-less cap is the correctness/throughput hazard. The requester leads with accumulation, which may understate which one is load-bearing.",
+					"Deciding merged/closed requires a forge query that can be unavailable, so age-based cleanup has a third outcome beyond keep/delete.",
+					"'Coordinate with /tidy' is a placement suggestion, not a requirement; /tidy today is operator-invoked and never auto-deletes ('a habit, not a fence', guarded-actions.md:585), so hosting GC there inherits a manual trigger."
+				],
+				"residuals": [
+					"The request does not say whether pruning may remove records that still carry surviving blockers, nor whether eviction must first fold blocking survivors forward. This is the crux and it is unresolved in the raw request — preserved, not decided.",
+					"N and the age threshold are both unspecified.",
+					"Whether GC runs automatically in-harness per run or only via operator-invoked /tidy is left open ('may cover both').",
+					"Whether the sibling freshness-ours-intent.ts confirmed-record TODO is in scope or merely coordinated — 'coordinate with', not 'include'.",
+					"Interaction with #605's pre-enablement record discard: a second, differently-motivated deletion policy over the same store, with ownership and ordering between the two unstated.",
+					"Concurrency between a GC pass and a live run performing refuse-on-ambiguity watermark selection is not addressed.",
+					"Records for PRs that are reopened after closure, or whose branch no longer exists, are not addressed."
+				],
+				"probes": {
+					"mechanismSubstitution": "If keep-last-N FIFO and age-based deletion were unavailable tomorrow, two things would still be wanted: the store bounded on a local machine, and the 50-prior cap ceasing to be an absorbing state whose refusal points at a prune that does not exist. Both are reachable without deleting anything — fold superseded priors into a conservative blocking-survivor set, count only bindable ancestors against the cap, or bound the ancestry walk instead of the record population. So the outcome is 'the store is bounded and the cap is recoverable without losing retained blockers', not 'records are deleted'.",
+					"falseSuccess": "YES, in two independent ways. (1) Build keep-last-N-complete + FIFO + age cleanup for merged/closed PRs, fail-closed on prune failure exactly as specified — and a *successful* prune can evict a non-watermark ancestor that held a surviving blocking finding. The next run's blocking-only survivor overlay then has no source for it, discovery is narrowed to watermark..head, and a retained blocker vanishes with no refutation while the carry looks complete: the exact silent omission the overlay was built to prevent and that ADR-0026 forbids. The stated fail-closed constraint covers prune *failure*, not prune *success*, so it does not catch this. (2) Choose N at or above the 50-prior cap, or leave age cleanup scoped to merged/closed only, and a long-lived open PR stays permanently cold: the deliverable 'bounded pruning' is shipped verbatim and the symptom that motivated it is untouched. Also note per-PR bounding does not bound the aggregate PR-directory count.",
+					"alternativeSuccess": "YES. Narrow what the cap counts to bindable ancestors so it stops firing on records that could never be selected; compact rather than delete by folding superseded priors into a monotone blocking-survivor ledger (the delivery-packet append-segments-plus-fold pattern already in this repo); bound the ancestry walk budget instead of the stored population; or hang whole-PR tree removal off the existing claim/branch reap that /tidy already performs. Each bounds the store and restores carry eligibility without FIFO deletion of finding evidence.",
+					"boundaryCounterexample": "A PR at 12 rolls where a blocking finding was first raised at roll 2 and has been retained, never refuted, ever since. Roll 2's record is the oldest, is non-watermark, and may be incomplete — precisely what FIFO evicts first and what the survivor overlay is documented to still read. After eviction, roll 13 carries warm with a truncated history and drops a live blocker. Secondary edges that defeat the obvious reading: a merged PR whose records were age-deleted and is then reopened; a /tidy GC pass racing a live run's watermark selection (deleting the record about to be bound, converting a clean carry into refuse-on-ambiguity or a wrong watermark); mtime-based aging defeated by a copy/restore that resets mtimes, causing mass over- or under-deletion; and forge unreachability, where 'is this PR closed?' is unanswerable, so fail-closed means keeping everything and the store grows exactly when the operator cannot intervene."
+				},
+				"filesRead": 8
+			}
 		},
 		{
 			"issue": 611,
@@ -117,7 +401,49 @@
 			"mechanismInOutcome": false,
 			"sharpestCounterexample": "forge/signer/roadmap calls are pelaggio's own HTTP and trivially brokered; the Claude seat is the official third-party CLI dialling Anthropic itself over a shared host network namespace, so 'mirror the other brokers' may be mechanically unavailable",
 			"staleCitationsCaught": [],
-			"parkedDependencyCaught": true
+			"parkedDependencyCaught": true,
+			"output": {
+				"earlyExit": false,
+				"desiredOutcome": "Review/verify seats stop holding a long-lived Anthropic API credential that anything running or emitted inside the seat can exfiltrate — closing the seat's own key exposure as the review/verify-seat slice of #572, not merely the known report-field publish-sink channel #589 already scrubbed.",
+				"constraints": [
+					"Scope M — bounded to the review/verify-seat slice of #572, not the full host-brokered-capabilities program (forge/signer/roadmap brokering tracked separately under #572)",
+					"Depends on / part of #572 — this item's mechanism and landing are coupled to that broader effort",
+					"The model call must keep working: the seat still needs to authenticate to Anthropic somehow, so the fix cannot simply remove the credential without a working substitute",
+					"Must not regress the existing Claude SDK seat isolation (#557: unconditional bwrap spawn, shared host network namespace so the CLI can reach Anthropic) or the ADR-0010 env-allowlist/log-scrub baseline",
+					"Complements rather than duplicates or is blocked by #589's already-shipped defense-in-depth (report-body scrubbing at both publish sinks)",
+					"Operates under the standing threat model that all repo/issue/PR content is untrusted (ADR-0002) — the fix must not rely on the agent 'deciding correctly'"
+				],
+				"mechanismHypotheses": [
+					"Host-brokered capabilities per #572: the model call goes through a harness-held broker so the seat process never holds the raw Anthropic API key, mirroring forge/signer/roadmap credential brokering",
+					"Short-lived/scoped per-seat keys minted for one call and revoked immediately, bounding blast radius without full brokering",
+					"Routing the seat's model call through the ADR-0023 contained-execution egress broker (already designed: key injected at the broker, never in the container) rather than a bespoke new mechanism",
+					"Extending ADR-0010's redact-before-write scrubbing/env-allowlist model to guarantee the key can never reach any model-visible output surface, if the key must remain resident in the seat"
+				],
+				"acceptanceEvidence": [
+					"No explicit AC-n/verify: bindings are stated in the raw issue",
+					"Implied by analogy to ADR-0010's secret-hygiene.test.ts pattern: a test proving the Anthropic key (or equivalent) is absent from the review/verify seat's process environment while the seat still completes a model call",
+					"No stated success metric beyond 'the seat never holds the raw key'"
+				],
+				"assumptions": [
+					"That #572's broker mechanism, however it lands, extends to the Claude SDK/CLI seat path — even though that path is the official third-party `@anthropic-ai/claude-agent-sdk`/CLI reaching Anthropic directly over a shared host network namespace (pipeline.md #557), unlike forge/signer/roadmap calls which are pelaggio's own outbound HTTP and trivially interceptable",
+					"That the report-field exfil channel is the primary concern for review/verify seats specifically, though ADR-0010's env-allowlist already limits (but does not eliminate, since the key itself must remain) other channels like a Bash-readable env",
+					"That review/verify seats are the correct priority subset of 'seats' (vs. implement/plan seats, which also hold the key) because review/verify uniquely combines all-tools grant with untrusted PR content and a public, structured report output",
+					"That #572 is currently actionable, though throughput-economy.md records #572 as executed-parked (`deferred` label) alongside #565/#567 pending a bundled '#557-cluster hardening' decision — i.e., the dependency this item is 'part of' may itself be on hold"
+				],
+				"residuals": [
+					"Whether 'review/verify seats' is deliberately narrower than all Claude seats (e.g., implement is excluded because its output isn't published verbatim) is asserted by scope but never argued in the issue text",
+					"No design doc found (0010/0020/0021/0023 all discuss adjacent brokering) commits to a mechanism for brokering the official Claude CLI's own outbound model call specifically — ADR-0023 explicitly marks 'wiring provider step runners to this [egress-broker] transport' as chartered-not-built (#254)",
+					"Whether #611 should proceed as independently scoped work now, or wait on the bundled #557-cluster hardening decision that parked #572 itself, is unresolved by the raw text",
+					"Whether this item exists as ongoing root-cause work regardless of #589's state, or its urgency is conditioned on #589 being judged insufficient, is not stated"
+				],
+				"probes": {
+					"mechanismSubstitution": "If the #572-style broker were unavailable tomorrow (e.g. infeasible for the official Claude CLI path), the wanted outcome would persist unchanged: review/verify seats must not let a prompt-injected PR exfiltrate the Anthropic key through any channel reachable from inside the seat — via short-lived keys, seat-local key erasure post-auth, or an exfil-proof scrub layer instead of a broker.",
+					"falseSuccess": "Yes. A broker could be built that merely injects the key into the seat's env once at spawn — leaving it resident in the seat's process/env for the full call, exactly as today — which would 'complete #572's review/verify slice' as a ticket while the same exfil vector (a key readable from within the seat during the call) stays open. Pipeline.md's #557 note that the host network namespace stays shared specifically 'so the CLI can reach Anthropic' suggests the current architecture may not support the seat operating without directly holding a key at all.",
+					"alternativeSuccess": "Yes. Per-seat short-lived/scoped keys revoked immediately after use, routing the model call through the already-designed ADR-0023 contained-execution egress broker (key injected at the broker, never in the container), or hardening ADR-0010's scrub/allowlist coverage to guarantee the key can never reach any output surface — all would close the exfil root cause without the specific '#572 host-brokered capabilities' mechanism named in the issue.",
+					"boundaryCounterexample": "Forge/signer/roadmap calls are pelaggio's own outbound HTTP requests, trivially rerouted through a broker. The Claude seat instead runs the official third-party `@anthropic-ai/claude-agent-sdk`/CLI as a child process that itself dials Anthropic over the shared host network namespace — 'mirroring how forge/signer/roadmap ops are being brokered' may not be mechanically available unless the CLI supports external token injection/callback auth (not established in the docs read) or the call is forced through a not-yet-wired egress broker, defeating the obvious 'just add a broker like the others' reading."
+				},
+				"filesRead": 9
+			}
 		},
 		{
 			"issue": 611,
@@ -130,7 +456,81 @@
 			"mechanismInOutcome": false,
 			"sharpestCounterexample": "a subscription-authenticated seat: ANTHROPIC_API_KEY is not the binding credential — the CLI reads a long-lived OAuth token from HOME, which the env allowlist deliberately cannot remove — so the charter as phrased is fully satisfiable while the seat still holds a reusable credential",
 			"staleCitationsCaught": [],
-			"parkedDependencyCaught": false
+			"parkedDependencyCaught": false,
+			"output": {
+				"earlyExit": false,
+				"desiredOutcome": "A prompt-injected review/verify seat cannot come away with a provider credential that is reusable outside that seat's own authorized model calls — in whatever form the seat's Anthropic auth actually takes (env API key, on-disk OAuth/token state, or a handle that replaces them) — while review/verify keeps running and #589's report-body scrubbing stays in place as a second layer. The root-cause state wanted is 'nothing reusable is reachable from inside the seat', not merely 'ANTHROPIC_API_KEY is absent from the seat env'.",
+				"constraints": [
+					"Review/verify seats must still be able to run the model; the fix may not degrade gate function, the read-only capability profile of review seats (ADR-0021), or the fail-closed gate semantics (ADR-0004).",
+					"#589's publish-sink scrubbing is defense-in-depth and remains; landing the root fix does not authorize removing a layer.",
+					"Fail closed, never degrade: on a host or auth mode where the seat cannot be run without an ambient reusable credential, refuse/park rather than silently hand the seat a raw key (ADR-0023 'confinement must refuse, never degrade').",
+					"Whatever replaces the ambient key must not itself be a long-lived freely-replayable bearer handle — relocating the ambient credential one hop does not satisfy the outcome.",
+					"Requester-required mechanism family (independent of outcome): this is the Anthropic-key slice of #572 and must fit the same host-brokered-capability shape already being applied to forge/signer/roadmap ops; it depends on / is part of #572.",
+					"Seats gain no new host authority as a side effect of brokering (no broader tool grant, no host-side effects reachable through the new transport).",
+					"Any confinement/brokering claim carries its own conformance evidence per platform and auth mode; a probe for one may not stand in for the other (ADR-0023 platform-parity constraint, #564).",
+					"Scope M."
+				],
+				"mechanismHypotheses": [
+					"Route the review/verify seat's Claude model call through a harness-held broker that injects auth outside the seat boundary and strips response auth headers, so the seat holds only a handle (requester's proposal; ADR-0023's credential/egress-broker shape).",
+					"Express the model call as a passed capability handle under ADR-0021's ocap tool-mediation / host-owned effect-handler seam, mirroring forge/signer/roadmap brokering.",
+					"Mint a per-seat short-lived, scoped, spend-capped, revoked-at-seat-exit credential so an exfiltrated value is worthless rather than absent.",
+					"Place the removal at the existing seat env boundary (spawnClaudeSeat / buildClaudeSeatEnv from #589) rather than adding a new spawn path.",
+					"Broker-side path/method/model allowlist plus rate/token/spend caps, so a handle that is stolen or driven by an injected seat is bounded rather than open-ended."
+				],
+				"acceptanceEvidence": [
+					"Hostile-probe conformance: a seat deliberately instructed to exfiltrate its own credential finds nothing reusable in its env, /proc/self/environ, argv/process table, HOME token or SDK state files, or driver debug output; a planted sentinel is absent from report fields, logs, and tool output.",
+					"Replay test: a handle or token captured from a seat is rejected outside that seat's lifetime, against a non-allowlisted path/method/model, and beyond its spend cap.",
+					"Review/verify runs end-to-end on the brokered path with unchanged gate outcomes and no material cost/latency regression against the review-gate-baseline instrument.",
+					"Broker death and unbrokerable-host cases are shown to refuse-and-park (typed error, preserved state), never to fall back to an ambient raw key.",
+					"Evidence produced separately for each auth mode in scope (API key and subscription/OAuth) rather than one mode's probe standing in for both."
+				],
+				"assumptions": [
+					"Assumes the review/verify seat authenticates by API key. Wrong-if the seat is subscription-backed (pelaggio drains a Claude Max pool; ADR-0010 notes subscription auth works because CLIs read tokens from files under HOME) — then ANTHROPIC_API_KEY is not the binding credential and removing it changes nothing.",
+					"Assumes the Claude SDK/CLI can be pointed at a harness-held broker on its supported surface (official override + key auth) without a dummy credential file or reverse-engineered internals, which ADR-0023 requires.",
+					"Assumes #572's handle/capability model is stable enough to slice one credential out of it ahead of the general case.",
+					"Assumes report fields are the channel worth closing at the root; the Claude seat keeps host network and host filesystem (ADR-0023 constraints note), so unlike the contained jail there is no network=none backstop forcing traffic through the broker.",
+					"Assumes 'all-tools granted + public report output' is still the seat's actual posture at implementation time rather than a state #589 or later work already narrowed."
+				],
+				"residuals": [
+					"Which reading of 'the seat never holds the raw key' binds: absent from the seat env, unreachable from the seat by any means (including HOME token files and parent /proc), or present-but-scoped/short-lived so theft is worthless.",
+					"Whether subscription/OAuth-authenticated seats are in scope for this item or explicitly deferred; the request names only the Anthropic API key.",
+					"Whether preflight probe seats, verify (pr-verify) seats, and non-review Claude seats inherit this fix or are separately tracked.",
+					"Ordering relative to #572: whether this slice may land standalone or must wait for the general broker to define the handle type.",
+					"Whether the broker in scope is auth-injection only or also owns caps/metering/kill (ADR-0023 specifies a constrained gateway, not a transparent forwarder).",
+					"Platform scope — a Linux-only construction is tracked debt (#564), and this item does not say whether macOS parity is required before it counts as done.",
+					"Whether #589's scrubber is expected to remain permanently or is retired once the root cause is closed."
+				],
+				"probes": {
+					"mechanismSubstitution": "If host-brokered capabilities (#572) were abandoned tomorrow, the wanted state survives intact: a prompt-injected review/verify seat must not be able to walk away with a reusable provider credential. That could be reached by per-seat short-lived scoped tokens with instant revocation, by an isolation boundary that puts the credential out of the seat's reach entirely, or by the harness owning the transport — the broker is one construction of 'no reusable ambient credential reachable from the seat', not the thing wanted.",
+					"falseSuccess": "YES, and in several plausible ways — this is why early exit does not apply. (a) On a subscription-backed seat the deliverable completes perfectly (no ANTHROPIC_API_KEY in the env, model calls flow through the broker) while a long-lived OAuth refresh token still sits in a HOME file the seat can read and print. (b) The broker handle is itself long-lived and bearer-shaped with no per-seat binding, so the injected seat exfiltrates the handle instead — the ambient credential moved one hop and ADR-0023 warns precisely that 'holds no API key' feels safe without being safe. (c) The key leaves the seat's own env but stays readable via the parent's /proc/<pid>/environ, argv, or SDK on-disk state. (d) A naive forwarder passes provider auth headers back in responses, which ADR-0023 explicitly requires stripping.",
+					"alternativeSuccess": "Yes. Minting a per-seat credential that is short-lived, model/path-scoped, spend-capped and revoked at seat exit satisfies the outcome with no broker in the request's sense — an exfiltrated value buys nothing. So does making the seat's transport harness-owned, or putting the credential behind a boundary the seat cannot read. What does NOT satisfy it is channel-closing alone (more scrubbing, narrower report schema): the requester has already judged that insufficient, and ADR-0002 forbids resting safety on the model deciding correctly.",
+					"boundaryCounterexample": "The subscription-authenticated seat. ADR-0010 records that subscription auth keeps working under the deny-by-default env allowlist precisely because the CLIs read tokens from files under HOME — files the allowlist deliberately cannot remove — and provider-quota.md shows pelaggio routinely drains a Claude Max subscription pool. A charter phrased as 'broker the Anthropic API key so it leaves the seat env' is fully satisfiable on such a seat while the seat still holds a long-lived, reusable credential on disk. Secondary edge: the Claude seat keeps host network and host filesystem (it is the narrower #557 mechanism, not the contained jail), so there is no network=none backstop — any credential the seat obtains can be used directly against the provider, bypassing the broker's allowlist and caps entirely."
+				},
+				"filesRead": 10
+			}
 		}
-	]
+	],
+	"rawInputs": {
+		"611": {
+			"sha256": "db92514fb216208d966fad073a1e1bf73ff5b1192673e6db53fd9e88bc4bd1c4",
+			"capturedBy": "gh issue view --json title,body, fetched immediately before the runs; this is the exact text every agent read",
+			"text": "# Denied review/verify seats still hold ANTHROPIC_API_KEY (ambient-credential exfil root cause)\n\nSurfaced by PR #589's fleet (codex red-team must-fix, codex standard nice → #572). #554 denies FORGE credentials to review seats, but the Anthropic API key stays in the seat env because the seat needs it to run the model. With all-tools granted and public report output, a prompt-injected PR can carry the key into a schema-valid report field. PR #589 adds defense-in-depth (scrubs the rendered report body at both publish sinks, same scrubber as the crash path), which closes the known exfiltration channel but NOT the root cause: the seat holds an ambient long-lived credential at all. Root fix is #572 (host-brokered capabilities — replace ambient credentials with passed handles): the model call should go through a harness-held broker so the seat never holds the raw key, mirroring how forge/signer/roadmap ops are being brokered. This item tracks the Anthropic-key slice of #572 specifically for review/verify seats. Depends on / part of #572.\nScope: M"
+		},
+		"613": {
+			"sha256": "3031110f11b6ae56950f1831f8a8f790b8493c6a35294fb44aed33f3a9370b25",
+			"capturedBy": "gh issue view --json title,body, fetched immediately before the runs; this is the exact text every agent read",
+			"text": "# GC for .dev/pr-review-finding-dispositions/ (bounded prune, no fail-open)\n\nPR #599 (#495) writes disposition records under .dev/pr-review-finding-dispositions/ with no garbage collection (GC was a plan non-goal). Flagged twice by the fleet: records accumulate unboundedly; past 50 priors on one PR carry refuses with a prune hint but nothing ever prunes. Add bounded pruning: keep the last N complete records per PR (FIFO eviction of older ones once a newer complete watermark supersedes them), plus age-based cleanup for merged/closed PRs. Must stay fail-closed — a prune failure or the 50-prior cap refuses carry (cold review), never fails open. Coordinate with /tidy (the confirmed-record-pruning TODO in freshness-ours-intent.ts is the sibling case — a shared .dev-store-GC pass in /tidy may cover both). Origin: PR #599 fleet nices (claude standard + red-team).\nScope: S"
+		},
+		"615": {
+			"sha256": "ae45e7f40dc541f9db2a27ca64f4442ff005aa3849820385347eb29470801c59",
+			"capturedBy": "gh issue view --json title,body, fetched immediately before the runs; this is the exact text every agent read",
+			"text": "# Funnel review/adjudication publishing through one chokepoint (retire the scattered-sink class)\n\nRoot-caused during #554/PR #589's sink-scrubbing tail (rolls 7-10): review output reaches public sinks (stdout + PR comment) through ~7 independent call sites across 3 files with NO funnel — runPrReviewGate upserts at pr-review-cli.ts:742/753/761/922 (early-exit fail-closed bodies + final), main() writes stdout:1047 + upsert:1074 + crash-upsert:1083, the local drain re-publishes at pipeline.ts:3733, and pr-adjudicate publishes separately at pr-adjudicate-cli.ts:479. 'body' is finalized in multiple places and each caller re-publishes, so scrubbing is enumerated (patch each site) and adversarial review kept finding one-more-sink. This is a live instance of the guarded-actions.md §8.2 false-chokepoint caveat (PR #614) / #435. FIX (dogfoods §8.2 'construction over enumeration'): introduce a single publishReviewBody(pr, body) and publishAdjudicationBody(pr, body) chokepoint that EVERY stdout/upsert site routes through, with scrubReviewBoundary applied INSIDE it. Then no publish path can bypass the scrub and no future sink can be added without going through it — 'all paths funnel through it' becomes true by construction and is tested by asserting the chokepoint is the sole publisher (grep-guard test or a type-level single-publisher constraint). Retires the entire scattered-sink finding class permanently and covers pr-adjudicate too. Relates to #611 (ambient ANTHROPIC_API_KEY — the deeper exfil the scrub is defense-in-depth for) and #492 (pipeline envelope decomposition). This is the durable home for comprehensive sink-safety that #554 kept scope-creeping into.\nScope: M"
+		},
+		"617": {
+			"sha256": "11b20e3932d403b2f33a675099b559bc2310cf180a1dcbadf9656da69e5ec80d",
+			"capturedBy": "gh issue view --json title,body, fetched immediately before the runs; this is the exact text every agent read",
+			"text": "# Host-brokered review fetch: harness prepares the reviewed checkout, seat never fetches\n\nChris 2026-08-22: 'B is unquestionably the fix.' Root cause behind #589's fetch-auth tar-pit and its Tier-3 review-integrity residual: the review/verify SEAT (or the pr-review harness on a seat-writable shared .git) fetches the MUTABLE origin and diffs origin/main...head. A prompt-injected seat that rewrites .git/config origin (no tracked-tree delta — confinement snapshots only porcelain/ref state) can (a) point the authenticated fetch at an attacker host to disclose tokens [token-leak half — closed separately on #589 by stripping ambient tokens from the fetch child], and (b) host a fake 'main' at the real PR SHA so origin/main...head is EMPTY, greening a malicious PR [integrity half — THIS item]. No token-scrubbing fixes (b); only removing the seat's control over what is fetched does. FIX (host-brokered capability, #572 pattern): the HARNESS — outside the seat, from a trusted config-derived remote (NOT .git/config origin) — prepares a read-only reviewed checkout at the verified PR head + a trusted base, and hands the seat a checkout it cannot influence. The seat never fetches, never touches auth, and cannot rewrite what it reviews. This RETIRES the entire fetch-auth surface (mutable origin, ambient tokens, credential helpers, extraheader host-trust, empty-diff) that #589 kept edge-patching. Construction-level fix per guarded-actions §8.2. Depends on / part of #572 (host-brokered forge/signer/roadmap capabilities); relates to #556/#511 (harness-attested evidence). Until this lands, #554/#589 ships with the empty-diff integrity residual documented as a known limitation (acceptable now: supervised first-party PRs, not untrusted-external-with-auto-merge).\nDepends on: 572\nScope: L\n\nSCOPE (widened 2026-08-24 on PR #589 gate evidence): covers BOTH fetch paths — the `pr-review --pr` CLI path AND the local drain's `prepareReviewHead` in review-sweep.ts, which fetches from mutable `origin` and diffs `origin/main`. The local drain is this repo's configured runner (`review.runner: local`), so hardening the CLI path alone protects nothing here. Acceptance is that the seat cannot influence what is fetched or diffed on either path — NOT that each known git config channel is individually neutralised; see the verified five-vector inventory in the comments.\n"
+		}
+	},
+	"attributionNote": "'guarded-actions.md §8.2 is on unlanded PR #614' is the session author's verification (git show origin/docs/construction-over-enumeration:docs/agent-context/guarded-actions.md contains §8.2; main does not), not an agent claim — the agents reported only that §8.2 is absent at head, and one (#615 opus) guessed PR #614."
 }
