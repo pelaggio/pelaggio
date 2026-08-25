@@ -650,7 +650,7 @@
 			"sources": [
 				"ADR-0024"
 			],
-			"wrongIf": "A single strong reviewer at equal token budget reproduces the fleet's must-fix set on a sampled set of gated PRs (#270/#291), and cross-provider disagreement contributes no landed fixes over the same sample (#627's instrument). Until measured, the assumption stands: the 2026-08-24 rolls on #626 found eight real fail-open edges, six of them by one provider the others passed."
+			"wrongIf": "A single strong reviewer at equal token budget reproduces the fleet's must-fix set on a sampled set of gated PRs (#270/#291), and cross-provider disagreement contributes no landed fixes over the same sample (#627's instrument)."
 		},
 		{
 			"id": "ASM-0003",
@@ -1422,21 +1422,6 @@
 				".claude/skills/charter/SKILL.md",
 				"packages/pelaggio/scripts/pelaggio/flow-policy.ts"
 			]
-		},
-		{
-			"id": "CTR-0022",
-			"kind": "realization",
-			"slug": "required-review-status-gate",
-			"statement": "Branch protection requires a `review` status that only the cold review gate posts (pr-review-cli), so a candidate cannot be merged on its author's say-so; the red-merge guard in `land` reads that status back fail-closed.",
-			"sources": [
-				"ADR-0003",
-				"ADR-0004",
-				"ADR-0005"
-			],
-			"codeEvidence": [
-				"packages/pelaggio/scripts/pelaggio/pr-review-cli.ts",
-				"packages/pelaggio/scripts/pelaggio/land-cli.ts"
-			]
 		}
 	],
 	"edges": [
@@ -2074,16 +2059,6 @@
 			"from": "CTR-0012",
 			"relation": "implements",
 			"to": "CLM-0019"
-		},
-		{
-			"from": "CTR-0022",
-			"relation": "implements",
-			"to": "CLM-0006"
-		},
-		{
-			"from": "CTR-0022",
-			"relation": "derived-from",
-			"to": "DEC-0002"
 		}
 	],
 	"adrMap": {
@@ -2101,7 +2076,6 @@
 		],
 		"ADR-0003": [
 			"CTR-0010",
-			"CTR-0022",
 			"DEC-0001",
 			"TC-012"
 		],
@@ -2111,14 +2085,12 @@
 			"CLM-0019",
 			"CON-0002",
 			"CTR-0012",
-			"CTR-0022",
 			"TC-003"
 		],
 		"ADR-0005": [
 			"CLM-0006",
 			"CLM-0007",
 			"CTR-0013",
-			"CTR-0022",
 			"DEC-0002",
 			"TC-013"
 		],
