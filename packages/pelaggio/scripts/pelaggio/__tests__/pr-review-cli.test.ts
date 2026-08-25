@@ -156,6 +156,7 @@ async function runCli(
 		headRef?: string;
 		ci?: boolean;
 		policy?: ReviewConfig;
+		now?: () => number;
 		/** Seed hook for carry tests: populate the hermetic evidence roots before main() runs. */
 		seed?: (roots: { gateRecordsRoot: string; adjudicationSourcesRoot: string; dispositionsRoot: string }) => void;
 		/** Extra git command handler for carry resolution (merge-base / rev-parse / interdiff). */
@@ -214,7 +215,7 @@ async function runCli(
 		gateRecordsRoot,
 		adjudicationSourcesRoot,
 		dispositionsRoot,
-		now: () => Date.parse("2026-08-13T12:00:00Z"),
+		now: opts.now ?? (() => Date.parse("2026-08-13T12:00:00Z")),
 		// Pinned: the ambient env (a real CI job) must not decide whether persistence runs.
 		isCi: () => opts.ci ?? false,
 	});
@@ -1828,12 +1829,15 @@ describe("pr-review CLI local gate-evidence persistence (#497)", () => {
 	});
 
 	it("a clean local pass persists a drain-parity fleet record without adjudication source", async () => {
-		const out = await runCli();
+		const times = [Date.parse("2026-08-13T12:00:00.000Z"), Date.parse("2026-08-13T12:00:02.345Z"), Date.parse("2026-08-13T12:00:02.345Z")];
+		const out = await runCli({ now: () => times.shift() ?? Date.parse("2026-08-13T12:00:02.345Z") });
 		assert.equal(out.code, 0);
 		const record = readPrReviewGateRecord(out.gateRecordsRoot, 123, REVIEWED_SHA);
 		assert.ok(record && record.schemaVersion === 2 && record.producer === "fleet");
 		assert.equal(record.gate, "pass");
 		assert.equal(record.agreement, "consensus-pass");
+		assert.equal(record.elapsedMs, 2_345);
+		assert.equal(record.reviewedAt, "2026-08-13T12:00:02.345Z");
 		assert.equal(readAdjudicationSourceRecord(out.adjudicationSourcesRoot, 123, REVIEWED_SHA), null);
 	});
 
@@ -1887,6 +1891,7 @@ describe("pr-review CLI cross-push carry (#495)", () => {
 			cost: 1,
 			costEstimated: false,
 			turns: 2,
+			elapsedMs: 1_000,
 			runner: "local",
 			reviewedAt: "2026-08-12T12:00:00.000Z",
 		});
@@ -2242,6 +2247,7 @@ describe("pr-review CLI cross-push carry (#495)", () => {
 					cost: 1,
 					costEstimated: false,
 					turns: 2,
+					elapsedMs: 1_000,
 					runner: "local",
 					reviewedAt: "2026-08-11T12:00:00.000Z",
 				});

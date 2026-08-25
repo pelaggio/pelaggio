@@ -2524,6 +2524,7 @@ describe("runOrchestrator — mid-run review drain (#387)", () => {
 		writeGateRecord?: typeof writePrReviewGateRecord;
 		writeAdjudicationSource?: typeof writeAdjudicationSourceRecord;
 		writeDispositionRecord?: typeof writePrFindingDispositionRecord;
+		now?: () => number;
 	}) {
 		return {
 			runner: "local" as const,
@@ -2534,7 +2535,7 @@ describe("runOrchestrator — mid-run review drain (#387)", () => {
 			adjudicationSourcesRoot: join(over.main, ".dev", "pr-review-adjudication-sources"),
 			dispositionsRoot: join(over.main, ".dev", "pr-review-finding-dispositions"),
 			statuslessAfter: "2h",
-			now: () => Date.parse("2026-08-03T12:05:00Z"),
+			now: over.now ?? (() => Date.parse("2026-08-03T12:05:00Z")),
 			prepareReviewHead: () => ({ diffCwd: "/tmp/pr-head", baseRef: "origin/main", headRef: "refs/pelaggio-review/pr-201" }),
 			cleanupReviewHead: () => {},
 			runReviewGate: over.runReviewGate ?? passGate,
@@ -2561,6 +2562,7 @@ describe("runOrchestrator — mid-run review drain (#387)", () => {
 			return { stdout: "", stderr: "", status: 0 };
 		};
 		let gateCalls = 0;
+		let nowMs = Date.parse("2026-08-03T12:05:00.000Z");
 		const { runPipeline } = createMockRunPipeline({
 			byItem: { "387": { completed: true, cost: 0.5 } },
 			// The ship-tail enqueue lands the record in the main-tree queue as the cycle ships.
@@ -2576,10 +2578,12 @@ describe("runOrchestrator — mid-run review drain (#387)", () => {
 				review: reviewDeps({
 					gh,
 					main,
+					now: () => nowMs,
 					runReviewGate: async (opts) => {
 						assert.equal(opts.reviewedSha, HEAD);
 						assert.equal(opts.itemId, "387");
 						gateCalls++;
+						nowMs += 3_456;
 						return passGate();
 					},
 				}),
@@ -2605,8 +2609,9 @@ describe("runOrchestrator — mid-run review drain (#387)", () => {
 			cost: 0.2,
 			costEstimated: false,
 			turns: 3,
+			elapsedMs: 3_456,
 			runner: "local",
-			reviewedAt: "2026-08-03T12:05:00.000Z",
+			reviewedAt: "2026-08-03T12:05:03.456Z",
 		});
 	});
 

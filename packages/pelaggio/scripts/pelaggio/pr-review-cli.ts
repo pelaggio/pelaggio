@@ -1146,6 +1146,7 @@ export function persistLocalGateEvidence(opts: {
 	writeDispositionRecord: typeof writePrFindingDispositionRecord;
 	readFileSync: typeof readFileSync;
 	now: () => number;
+	elapsedMs: number;
 	warn: (msg: string) => void;
 }): void {
 	if (opts.review.gate === "park") return;
@@ -1164,6 +1165,7 @@ export function persistLocalGateEvidence(opts: {
 		cost: opts.review.cost,
 		costEstimated: opts.review.costEstimated,
 		turns: opts.review.turns,
+		elapsedMs: opts.elapsedMs,
 		runner: "local",
 		reviewedAt: new Date(opts.now()).toISOString(),
 	};
@@ -1383,6 +1385,7 @@ export async function main(argv: string[]): Promise<number> {
 				: undefined;
 		// Policy/pool are intentionally not passed: runPrReviewGate resolves them through
 		// options → deps → CONFIG, so the same defaults apply and tests can pin the seam.
+		const reviewStartedAt = deps.now();
 		const review = await runPrReviewGate({
 			pr,
 			...(head.itemId ? { itemId: head.itemId } : {}),
@@ -1395,6 +1398,7 @@ export async function main(argv: string[]): Promise<number> {
 			execFileSync: deps.execFileSync,
 			...(carry ? { carry } : {}),
 		});
+		const reviewElapsedMs = Math.max(0, Math.trunc(deps.now() - reviewStartedAt));
 
 		// The review text goes to stdout unconditionally so the CI log always
 		// carries the findings — a failed comment upsert (or a truncated run)
@@ -1419,6 +1423,7 @@ export async function main(argv: string[]): Promise<number> {
 				writeDispositionRecord: deps.writeDispositionRecord,
 				readFileSync: deps.readFileSync,
 				now: deps.now,
+				elapsedMs: reviewElapsedMs,
 				warn: (msg) => process.stderr.write(`⚠ ${msg}\n`),
 			});
 		}
