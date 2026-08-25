@@ -621,8 +621,10 @@ done: adversarial review keeps finding one more site, and each round buys one pa
 no leverage — the §1 complaint, in the shape of a single guard rather than the whole
 cluster. This is hoisted from the guard campaign of 2026-08 — #554 / PR #589 (rolls 7–10
 each found one more unscrubbed sink), #435 (a chokepoint the `cwd=MAIN_REPO` path never
-reached), #571 / PR #595 (one more HEAD shape) — where the fix that repeatedly worked was
-not the next patch but lifting the guarantee to one chokepoint where it holds structurally.
+reached), #571 / PR #595 (one more HEAD shape) — where what repeatedly *failed* was the
+next patch: each round closed the named sites and the next round found more. None of those
+guards has been hoisted yet (the examples below say so); lifting the guarantee to one
+chokepoint is the remedy this section proposes, with #615 as its first instance.
 The intent half of this section — a guard may not derive its verdict from state the
 guarded party can write, and enumerating such channels is no substitute — is recorded,
 **non-authoritatively**, as `CON-0027` in the shadow assurance graph. Its authoritative home
@@ -657,9 +659,11 @@ of its own caveat. Code-referencing claims in this section were verified against
   reach their public sinks (stdout, the PR-comment upsert) through roughly nine independent
   call sites with no funnel; `secret-hygiene.ts`'s scrubber (ADR-0010) runs at the driver
   capture and transcript sinks, not at those writes. Funnelling the writes buys "every sink is
-  scrubbed" — and only that: #536 records that scrubbing cannot close encoded covert
-  channels, so the property a write-boundary chokepoint can honestly promise is narrower
-  than "no secret leaves", and it is the narrower property that should be typed.
+  scrubbed" — and only that: the #554 / PR #589 gate record (and `pr-review-cli.ts`'s own
+  comment at its publish sites) established that sink-scrubbing cannot reverse padded or
+  base64-encoded covert channels, so the property a write-boundary chokepoint can honestly
+  promise is narrower than "no secret leaves", and it is the narrower property that should
+  be typed.
 - **Extract-and-require (conformance)** — do not hand-maintain the allowed set against a
   moving upstream; extract the full set mechanically and *require* every member be
   explicitly triaged, so a *new* member fails CI rather than slipping through. *Existing
