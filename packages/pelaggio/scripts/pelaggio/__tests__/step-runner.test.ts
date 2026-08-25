@@ -489,6 +489,12 @@ describe("composeSystemAppend", () => {
 		assert.ok(out.indexOf("## Operating autonomously") < out.indexOf("## CRITICAL"), "autonomy precedes CRITICAL");
 	});
 
+	it("does not tell a read-only worktree seat that it can write", () => {
+		const out = composeSystemAppend({ ...base, isWorktree: true, planBlockActive: false, workspaceAccess: "read-only" });
+		assert.match(out, /read here; the sandbox denies writes/);
+		assert.doesNotMatch(out, /read and write here/);
+	});
+
 	it("layers the plan block when planBlockActive", () => {
 		const out = composeSystemAppend({ ...base, isWorktree: false, planBlockActive: true });
 		assert.match(out, /## CRITICAL: Do not edit the plan/);

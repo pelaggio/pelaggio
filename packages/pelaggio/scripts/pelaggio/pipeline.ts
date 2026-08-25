@@ -133,7 +133,7 @@ import { cleanupShipBodyFile, parseShipDecisionEffect, shipBodyFile } from "./sh
 import { commitStrayBookkeeping, getShipTarget, isAutonomousRemotePush, isShipTargetName, runShipBookkeeping as runShipBookkeepingDefault, SHIP_TARGET_NAMES } from "./ship/index.js";
 import type { PrShipGateBinding } from "./ship/pr-effects.js";
 import { extractPrUrl } from "./ship/pull-request.js";
-import { getProvider, REGISTERED_PROVIDERS, type RunStepFn, runStep as runStepDefault } from "./step-runner.js";
+import { getProvider, REGISTERED_PROVIDERS, type RunStepFn, type RunStepOpts, runStep as runStepDefault } from "./step-runner.js";
 import { A, createStepRenderer, fmtElapsed, LiveStatus, StatusBar, TUI_ENABLED } from "./tui.js";
 import {
 	type CycleDisposition,
@@ -449,6 +449,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			ownWorktree,
 			executionOverride,
 			parkSignalOverride,
+			workspaceAccess,
 			preCheckpointGate,
 			shipGate,
 		}: {
@@ -460,6 +461,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			ownWorktree?: string;
 			executionOverride?: { provider: import("./types.js").ProviderName; model?: string; codexModel?: string };
 			parkSignalOverride?: ParkSignal;
+			workspaceAccess?: RunStepOpts["workspaceAccess"];
 			/** Deterministic gate run against the tree BEFORE the checkpoint's `git add -A` (#424
 			 *  review): a failing gate skips the checkpoint entirely so unresolved conflict state
 			 *  is never committed as resolved. Result classification is left untouched — the
@@ -682,6 +684,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 						trace: flags.trace,
 						itemId: itemId ?? undefined,
 						parkSignal: parkSignalOverride ?? parkSignal,
+						...(workspaceAccess ? { workspaceAccess } : {}),
 						...(executionOverride ? { executionOverride } : {}),
 						...(maxTurnsOverride !== undefined ? { maxTurnsOverride } : {}),
 						signal: stepAbort.signal,
@@ -2088,6 +2091,9 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			return step(name, prompt, seatCwd, {
 				executionOverride: opts.executionOverride,
 				parkSignalOverride: opts.parkSignal,
+				// runPrReviewGate owns this choice: its cold seats inspect data-only checkouts.
+				// Authoring-loop seats use a separate adapter and deliberately omit the intent.
+				workspaceAccess: opts.workspaceAccess,
 			});
 		};
 		let outcome: { kind: "review"; review: PrReviewGateResult };

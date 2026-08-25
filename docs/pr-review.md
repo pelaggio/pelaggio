@@ -323,9 +323,10 @@ register denial is textual (#510), so a composed-path shell command can still ev
   path denied — but the review reads the diff via `git diff origin/main...HEAD` (no path in
   the command) and opens changed files with the `Read`/`Grep` tools (not `Bash`), so review
   capability is not meaningfully degraded; it is the same fail-closed #510 tradeoff. Codex —
-  `pr-review`/`pr-verify` seats at the main checkout run under the `read-only` OS sandbox
-  (they produce a text report; repo checks/tests cannot run under read-only — the Claude
-  seats in the fleet still run checks).
+  cold `pr-review`/`pr-verify` seats carry a harness-owned read-only workspace intent, so
+  both main-checkout seats and data-only prepared PR-head worktrees run under the `read-only`
+  OS sandbox (they produce a text report; repo checks/tests cannot run under read-only — the
+  Claude seats in the fleet still run checks). Authoring-loop review worktrees remain writable.
 - **Store-writable (no proven denial), so any pool containing them refuses carry
   consumption: `grok` (any mode), `opencode`, and every future/unknown provider.** Grok's
   builtin `strict` profile's write surface at the main-checkout cwd is unverified and

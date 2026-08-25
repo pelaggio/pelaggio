@@ -635,7 +635,7 @@ async function runReviewPass(
 	const result = await opts.runStep(
 		"pr-review",
 		prompt,
-		{ cwd: opts.cwd, profile: opts.profile, trace: false, parkSignal: opts.parkSignal, itemId: pr, executionOverride: executionOverrideFor(candidate), foreignRootDenial: opts.foreignRootDenial },
+		{ cwd: opts.cwd, profile: opts.profile, trace: false, parkSignal: opts.parkSignal, itemId: pr, workspaceAccess: "read-only", executionOverride: executionOverrideFor(candidate), foreignRootDenial: opts.foreignRootDenial },
 		emit,
 	);
 	if (!result.ok) {
@@ -749,7 +749,7 @@ async function runVerificationPass(
 		result = await opts.runStep(
 			"pr-verify",
 			verificationPrompt(candidates, opts.localContext),
-			{ cwd: opts.cwd, profile, trace: false, parkSignal: opts.parkSignal, itemId: pr, executionOverride: executionOverrideFor(opts.verifySettings), foreignRootDenial: opts.foreignRootDenial },
+			{ cwd: opts.cwd, profile, trace: false, parkSignal: opts.parkSignal, itemId: pr, workspaceAccess: "read-only", executionOverride: executionOverrideFor(opts.verifySettings), foreignRootDenial: opts.foreignRootDenial },
 			emit,
 		);
 	} catch (error) {

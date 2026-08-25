@@ -159,7 +159,8 @@ export async function reviewDocument(options: DocReviewOptions): Promise<DocRevi
 		taxonomy: config.review.taxonomy,
 		safetyFloor: "disabled",
 		safetyFloorNote: DOC_REVIEW_SAFETY_FLOOR_NOTE,
-		runSeat: async ({ role, slot, prompt, parkSignal: child }) => runStepImpl(role === "judge" ? "pr-verify" : "pr-review", prompt, { cwd, profile, trace: false, parkSignal: child, executionOverride: executionOverrideFor(slot) }, emit),
+		runSeat: async ({ role, slot, prompt, parkSignal: child }) =>
+			runStepImpl(role === "judge" ? "pr-verify" : "pr-review", prompt, { cwd, profile, trace: false, parkSignal: child, workspaceAccess: "read-only", executionOverride: executionOverrideFor(slot) }, emit),
 		prompts: {
 			review: () => `${expandPackagedSkill("pr-review", "--document")}\n\n${documentBlock}`,
 			judge: (candidates) => `${expandPackagedSkill("pr-verify", "--authoring-loop-judge")}\n\nTRUSTED_CANDIDATE_DATA\n${JSON.stringify(candidates)}\nEND_TRUSTED_CANDIDATE_DATA`,

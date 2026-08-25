@@ -25,6 +25,7 @@ export interface WorkspaceEntry {
 
 export type DepsAction =
 	| { type: "noop" }
+	| { type: "skip-read-only" }
 	| { type: "link"; target: string }
 	| { type: "relink"; target: string }
 	| { type: "reinstall" }
@@ -50,6 +51,11 @@ export interface RepairReport {
 
 export interface Runner {
 	run: (cmd: string, cwd: string) => void;
+}
+
+export interface EnsureWorktreeDepsOptions {
+	runner?: Runner;
+	workspaceAccess?: "read-only";
 }
 
 /** Cross-process lock seam — injectable so tests don't wait on real lock timing. */
@@ -390,9 +396,10 @@ export function decideSubpackageAction(worktree: string, mainRepo: string, pkg: 
 	return { type: "noop" };
 }
 
-function applyAction(worktreeNm: string, action: DepsAction, worktreeCwd: string): void {
+function applyAction(worktreeNm: string, action: DepsAction, worktreeCwd: string, runner: Runner): void {
 	switch (action.type) {
 		case "noop":
+		case "skip-read-only":
 			return;
 		case "link":
 			mkdirSync(dirname(worktreeNm), { recursive: true });
@@ -404,10 +411,10 @@ function applyAction(worktreeNm: string, action: DepsAction, worktreeCwd: string
 			return;
 		case "reinstall":
 			unlinkSync(worktreeNm);
-			execSync("pnpm install --frozen-lockfile --silent", { cwd: worktreeCwd, stdio: "inherit" });
+			runner.run("pnpm install --frozen-lockfile --silent --ignore-scripts", worktreeCwd);
 			return;
 		case "install":
-			execSync("pnpm install --frozen-lockfile --silent", { cwd: worktreeCwd, stdio: "inherit" });
+			runner.run("pnpm install --frozen-lockfile --silent --ignore-scripts", worktreeCwd);
 			return;
 		case "restore":
 			// Only reachable when the decision confirmed the dir contains a `.pnpm/`
@@ -478,6 +485,9 @@ function applyAction(worktreeNm: string, action: DepsAction, worktreeCwd: string
  * Apply the decided actions: root first, then each workspace subpackage.
  * Returns the report of all actions taken so callers can log.
  *
+ * Read-only reviewed checkouts return before any provisioning or repair. Their
+ * seats inspect source and diffs without a resolved dependency tree.
+ *
  * MAIN is repaired before any of its dependency entries are shared with the
  * worktree, preventing an earlier worktree-side install from propagating
  * outbound symlinks into a fresh or resumed worktree.
@@ -485,14 +495,19 @@ function applyAction(worktreeNm: string, action: DepsAction, worktreeCwd: string
  * When the root decision is `install` or `reinstall`, subpackages are skipped
  * — the install will provision every subpackage in one pass.
  */
-export function ensureWorktreeDeps(worktree: string, mainRepo: string = REPO, runner: Runner = defaultRunner): DepsReport {
+export function ensureWorktreeDeps(worktree: string, mainRepo: string = REPO, options: EnsureWorktreeDepsOptions = {}): DepsReport {
+	if (options.workspaceAccess === "read-only") {
+		return { root: { type: "skip-read-only" }, subpackages: [] };
+	}
+
+	const runner = options.runner ?? defaultRunner;
 	repairMainNodeModules(mainRepo, runner);
 
 	const workspacePackages = listWorkspacePackageMap(mainRepo);
 	const root = decideDepsAction(worktree, mainRepo, workspacePackages);
 	const worktreeRootNm = resolve(worktree, "node_modules");
 
-	applyAction(worktreeRootNm, root, worktree);
+	applyAction(worktreeRootNm, root, worktree, runner);
 
 	if (root.type === "install" || root.type === "reinstall") {
 		return { root, subpackages: [] };
@@ -502,7 +517,7 @@ export function ensureWorktreeDeps(worktree: string, mainRepo: string = REPO, ru
 	const subpackages: Array<{ pkg: string; action: DepsAction }> = [];
 	for (const pkg of listWorkspaceSubpackages(mainRepo)) {
 		const action = decideSubpackageAction(worktree, mainRepo, pkg, rootWillRestore, workspacePackages);
-		applyAction(resolve(worktree, pkg, "node_modules"), action, worktree);
+		applyAction(resolve(worktree, pkg, "node_modules"), action, worktree, runner);
 		subpackages.push({ pkg, action });
 	}
 

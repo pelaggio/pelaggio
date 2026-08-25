@@ -309,8 +309,8 @@ export async function runPrAdjudication(pr: number, profile: string, deps: PrAdj
 			// #510 must-fix: the verifier consumes attacker-influenced text (finding messages, the
 			// inspected PR head), so it runs under the SAME confinement the pipeline threads into
 			// its pr-verify seats — never from the authenticated main checkout with allow-all tools:
-			//   - cwd is the DETACHED data-only review-head checkout prepared above, so Codex's
-			//     workspace-write sandbox roots there instead of in the trusted main tree;
+			//   - cwd is the DETACHED data-only review-head checkout prepared above, and the
+			//     harness marks it read-only so Codex enforces that intent even though it is a worktree;
 			//   - foreignRootDenial (the step-runner's PreToolUse hook seam, pipeline.ts fan-out
 			//     wiring) denies Write/Edit into main and every registered worktree, plus the
 			//     sessions/decision-log registers;
@@ -343,7 +343,8 @@ export async function runPrAdjudication(pr: number, profile: string, deps: PrAdj
 			// previously observed only main — opaque Bash could mutate an unaudited sibling and still
 			// reach the success status. Snapshot every REGISTERED worktree (the same enumeration the
 			// denial uses) except the main root (audited above, more strongly) and the verifier's own
-			// detached review-head cwd (its only permitted write surface). Residual: these audits
+			// detached review-head cwd (still a permitted write surface for providers without Codex's
+			// read-only sandbox). Residual: these audits
 			// observe outcomes; they do not confine execution. Opaque Bash outside the hook seam —
 			// providers without semantic deny, or effects beyond the audited roots — stays possible
 			// until the chartered ADR-0023 execution-jail work lands.
@@ -369,6 +370,7 @@ export async function runPrAdjudication(pr: number, profile: string, deps: PrAdj
 						trace: false,
 						parkSignal,
 						itemId,
+						workspaceAccess: "read-only",
 						executionOverride: executionOverrideFor(verifySettings),
 						foreignRootDenial: { mainRepo: deps.repo, registeredWorktrees },
 						mainCheckoutObserver: observer,
