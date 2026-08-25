@@ -1342,6 +1342,124 @@
 			"sources": [
 				"ADR-0012"
 			]
+		},
+		{
+			"id": "CTR-0013",
+			"kind": "realization",
+			"slug": "red-merge-guard-land",
+			"statement": "`land` reads the PR's required checks directly and refuses to merge unless every check completed green; the candidate-bound CAS fence (DEC-0015) is not built, so this realizes landing-fenced only as far as branch protection plus a fail-closed check reader.",
+			"sources": [
+				"ADR-0005",
+				"ADR-0025"
+			],
+			"codeEvidence": [
+				"packages/pelaggio/scripts/pelaggio/land-cli.ts",
+				"packages/pelaggio/scripts/pelaggio/__tests__/land-cli.test.ts"
+			]
+		},
+		{
+			"id": "CTR-0014",
+			"kind": "realization",
+			"slug": "execution-receipt-attestation",
+			"statement": "Execution receipts are emitted as in-toto-compatible statements binding a delivery to its source and execution evidence.",
+			"sources": [
+				"ADR-0018"
+			],
+			"codeEvidence": [
+				"packages/pelaggio/scripts/pelaggio/execution-receipt.ts",
+				"packages/pelaggio/scripts/pelaggio/__tests__/execution-receipt.test.ts"
+			]
+		},
+		{
+			"id": "CTR-0015",
+			"kind": "realization",
+			"slug": "typed-gate-record-and-adjudication",
+			"statement": "Gate records carry judgment, evidence completeness, breaker cause, and disposition as separate validated fields, and adjudication consumes them as typed sources rather than a single status.",
+			"sources": [
+				"ADR-0026"
+			],
+			"codeEvidence": [
+				"packages/pelaggio/scripts/pelaggio/review/record.ts",
+				"packages/pelaggio/scripts/pelaggio/review/adjudication.ts",
+				"packages/pelaggio/scripts/pelaggio/__tests__/review-adjudication.test.ts"
+			]
+		},
+		{
+			"id": "CTR-0016",
+			"kind": "realization",
+			"slug": "park-exit-checkpoint-resume",
+			"statement": "Rate-limit and blocked paths park through parkExit, checkpointing uncommitted work at a step boundary; `--resume` reconciles against the checkpoint and current repository state rather than replaying the model.",
+			"sources": [
+				"ADR-0019"
+			],
+			"codeEvidence": [
+				"packages/pelaggio/scripts/pelaggio/pipeline.ts",
+				"packages/pelaggio/scripts/pelaggio/__tests__/continuous.test.ts"
+			]
+		},
+		{
+			"id": "CTR-0017",
+			"kind": "realization",
+			"slug": "provider-capability-routing",
+			"statement": "Driver capabilities are declared as data and matched at routing time; an unmet hard capability fails closed instead of being emulated.",
+			"sources": [
+				"ADR-0020"
+			],
+			"codeEvidence": [
+				"packages/pelaggio/scripts/pelaggio/provider-routing.ts",
+				"packages/pelaggio/scripts/pelaggio/__tests__/provider-routing.test.ts"
+			]
+		},
+		{
+			"id": "CTR-0018",
+			"kind": "realization",
+			"slug": "git-branch-claim-token",
+			"statement": "A work-item claim is the existence of its `feat/<id>` branch, taken and released through git; there is no separate claims registry.",
+			"sources": [
+				"ADR-0009"
+			],
+			"codeEvidence": [
+				"packages/pelaggio/scripts/pelaggio/roadmap/git-claim.ts"
+			]
+		},
+		{
+			"id": "CTR-0019",
+			"kind": "realization",
+			"slug": "shadow-assurance-graph",
+			"statement": "The machine-readable intent graph and its coverage/question tests exist as a shadow, non-authoritative projection of the ADR corpus and trust registry.",
+			"sources": [
+				"ADR-0027"
+			],
+			"codeEvidence": [
+				"docs/assurance/shadow-graph.json",
+				"ci/__tests__/shadow-assurance.test.ts"
+			]
+		},
+		{
+			"id": "CTR-0020",
+			"kind": "realization",
+			"slug": "trust-claim-evidence-commands",
+			"statement": "Each public trust claim names an evidence command (for TC-002, a grep of production sources for analytics/telemetry SDKs expected to find none) that `check:trust` runs.",
+			"sources": [
+				"docs/trust/trust-claims.yml"
+			],
+			"codeEvidence": [
+				"ci/verify-claims.ts",
+				"docs/trust/trust-claims.yml"
+			]
+		},
+		{
+			"id": "CTR-0021",
+			"kind": "realization",
+			"slug": "charter-human-mediation",
+			"statement": "The /charter skill surfaces value, negotiability, and authority residuals to the human rather than deciding them, and readiness is computed by FlowPolicy from machine-checkable inputs.",
+			"sources": [
+				"ADR-0012"
+			],
+			"codeEvidence": [
+				".claude/skills/charter/SKILL.md",
+				"packages/pelaggio/scripts/pelaggio/flow-policy.ts"
+			]
 		}
 	],
 	"edges": [
@@ -1889,6 +2007,136 @@
 			"from": "DEC-0006",
 			"relation": "implements",
 			"to": "CLM-0022"
+		},
+		{
+			"from": "CTR-0013",
+			"relation": "implements",
+			"to": "CLM-0007"
+		},
+		{
+			"from": "CTR-0013",
+			"relation": "derived-from",
+			"to": "DEC-0002"
+		},
+		{
+			"from": "CTR-0014",
+			"relation": "implements",
+			"to": "CLM-0008"
+		},
+		{
+			"from": "CTR-0014",
+			"relation": "derived-from",
+			"to": "DEC-0008"
+		},
+		{
+			"from": "CTR-0015",
+			"relation": "implements",
+			"to": "CLM-0010"
+		},
+		{
+			"from": "CTR-0015",
+			"relation": "derived-from",
+			"to": "DEC-0016"
+		},
+		{
+			"from": "CTR-0016",
+			"relation": "implements",
+			"to": "CLM-0011"
+		},
+		{
+			"from": "CTR-0016",
+			"relation": "implements",
+			"to": "CLM-0012"
+		},
+		{
+			"from": "CTR-0016",
+			"relation": "derived-from",
+			"to": "DEC-0009"
+		},
+		{
+			"from": "CTR-0017",
+			"relation": "implements",
+			"to": "CLM-0015"
+		},
+		{
+			"from": "CTR-0017",
+			"relation": "derived-from",
+			"to": "DEC-0010"
+		},
+		{
+			"from": "CTR-0018",
+			"relation": "implements",
+			"to": "CLM-0018"
+		},
+		{
+			"from": "CTR-0018",
+			"relation": "derived-from",
+			"to": "DEC-0004"
+		},
+		{
+			"from": "CTR-0019",
+			"relation": "implements",
+			"to": "CLM-0020"
+		},
+		{
+			"from": "CTR-0019",
+			"relation": "derived-from",
+			"to": "DEC-0019"
+		},
+		{
+			"from": "CTR-0020",
+			"relation": "implements",
+			"to": "CLM-0021"
+		},
+		{
+			"from": "CTR-0020",
+			"relation": "implements",
+			"to": "TC-002"
+		},
+		{
+			"from": "CTR-0021",
+			"relation": "implements",
+			"to": "CLM-0022"
+		},
+		{
+			"from": "CTR-0021",
+			"relation": "derived-from",
+			"to": "DEC-0018"
+		},
+		{
+			"from": "CTR-0004",
+			"relation": "implements",
+			"to": "CLM-0001"
+		},
+		{
+			"from": "CTR-0002",
+			"relation": "implements",
+			"to": "CLM-0006"
+		},
+		{
+			"from": "CTR-0002",
+			"relation": "implements",
+			"to": "CLM-0016"
+		},
+		{
+			"from": "CTR-0003",
+			"relation": "implements",
+			"to": "CLM-0016"
+		},
+		{
+			"from": "CTR-0005",
+			"relation": "implements",
+			"to": "CLM-0017"
+		},
+		{
+			"from": "CTR-0005",
+			"relation": "implements",
+			"to": "CLM-0019"
+		},
+		{
+			"from": "CTR-0012",
+			"relation": "implements",
+			"to": "CLM-0019"
 		}
 	],
 	"adrMap": {
@@ -1920,6 +2168,7 @@
 		"ADR-0005": [
 			"CLM-0006",
 			"CLM-0007",
+			"CTR-0013",
 			"DEC-0002",
 			"TC-013"
 		],
@@ -1942,6 +2191,7 @@
 		"ADR-0009": [
 			"CLM-0018",
 			"CON-0004",
+			"CTR-0018",
 			"DEC-0004"
 		],
 		"ADR-0010": [
@@ -1959,6 +2209,7 @@
 		],
 		"ADR-0012": [
 			"CLM-0022",
+			"CTR-0021",
 			"DEC-0006",
 			"DEC-0017",
 			"DEC-0018"
@@ -2001,6 +2252,7 @@
 			"CLM-0008",
 			"CLM-0019",
 			"CON-0012",
+			"CTR-0014",
 			"DEC-0008",
 			"TC-005"
 		],
@@ -2008,6 +2260,7 @@
 			"CLM-0011",
 			"CLM-0012",
 			"CON-0014",
+			"CTR-0016",
 			"DEC-0009"
 		],
 		"ADR-0020": [
@@ -2015,6 +2268,7 @@
 			"CLM-0017",
 			"CON-0010",
 			"CON-0015",
+			"CTR-0017",
 			"DEC-0010"
 		],
 		"ADR-0021": [
@@ -2060,6 +2314,7 @@
 			"CON-0003",
 			"CON-0004",
 			"CON-0009",
+			"CTR-0013",
 			"DEC-0002",
 			"DEC-0015",
 			"TC-013"
@@ -2081,6 +2336,7 @@
 			"CON-0008",
 			"CON-0009",
 			"CON-0027",
+			"CTR-0015",
 			"DEC-0016"
 		],
 		"ADR-0027": [
@@ -2095,6 +2351,7 @@
 			"CON-0024",
 			"CON-0025",
 			"CON-0026",
+			"CTR-0019",
 			"DEC-0019"
 		],
 		"ADR-0028": [

@@ -271,7 +271,7 @@ describe("architectural question tests", () => {
 		// constant is the frozen ceiling, so admitting a new unlinked guarantee requires editing that
 		// set here — a visible, reviewable diff — rather than passing silently.
 		for (const id of unlinked) assert.ok(FROZEN_UNLINKED_GUARANTEES.has(id), `${id} publishes an unconditional guarantee with no implementing realization and is not in the frozen baseline`);
-		assert.deepEqual(unlinked, ["TC-002"], "the current unlinked-guarantee set (update when a mechanism is named; it may only shrink)");
+		assert.deepEqual(unlinked, [], "the current unlinked-guarantee set (update when a mechanism is named; it may only shrink)");
 		assert.equal(checked, [...status.values()].filter((v) => v === "guarantee").length, "every registry guarantee was checked, not only the ones the graph happened to carry");
 	});
 
