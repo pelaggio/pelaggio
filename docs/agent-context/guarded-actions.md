@@ -1,9 +1,9 @@
 # Guarded actions: a fencing/reconciliation model for pelaggio's locks and gates
 
 Status: living construction home under ADR-0026's semantic rules (see the Division
-of authority below). **v8** — v3 was revised across two provider-diverse review
-passes; v4 added §8.1; v5–v7 applied three further review passes; v8 added §8.2
-(2026-08-22, see the revision log). **Verification baseline, honestly:** the
+of authority below). **v9** — v3 was revised across two provider-diverse review
+passes; v4 added §8.1; v5–v7 applied three further review passes; v8 added §8.2; v9
+repaired §8.2's examples after its review (2026-08-24, see the revision log). **Verification baseline, honestly:** the
 code-referencing claims in §1–§7 were verified against `4a6ac3c` (2026-08-06) and have
 drifted — the issue cluster was closed and re-cut into the G-series on 2026-08-07
 (e.g. #466 "G3 — Token"), and `blockForeignRootWrite`'s denied-root set has grown. The
@@ -344,17 +344,25 @@ ClearedBy = { transition: ClearingTransition, actor: ClearingActor }
 
 // Deterministic function of (judgments, evidence, diversityStatus, config).
 // This is the only thing the merge path reads.
+// Each blocking reason carries the ONE clearer that is legal for it; the pairing is the
+// variant, so a reason cannot be assembled with the wrong actor.
+BlockCause =
+  | { reason: "must-fix-survives";   clearedBy: { transition: "revise",       actor: "author" } }
+  | { reason: "evidence-unavailable"; clearedBy: { transition: "retry",        actor: RetryActor } }
+  | { reason: "attempts-exhausted";  clearedBy: { transition: "human-review", actor: "human" } }
+  | { reason: "no-retry-actor";      clearedBy: { transition: "human-review", actor: "human" } }
+
 type Disposition =
   | { kind: "merge" }
-  | { kind: "block";         reason: BlockReason;      clearedBy: ClearedBy }
-  | { kind: "indeterminate"; cause: UnavailableCause;  clearedBy: ClearedBy;
-                             retryActor: RetryActor;   attemptsRemaining: number }
+  | { kind: "block";         cause: BlockCause }
+  | { kind: "indeterminate"; cause: UnavailableCause;  retryActor: RetryActor;
+                             attemptsRemaining: number }
 ```
 
-`merge` carries no clearing transition (it is progress). `block` and `indeterminate` both
-*require* one, with its authorized actor — a discriminated union, so the §6 invariant is
-enforced by the compiler rather than by an optional field every call site can fill with a
-stub.
+`merge` carries no clearing transition (it is progress). `block` *requires* one, and the
+reason and its legal clearer are one variant — so the §6 invariant ("the clearing actor
+belongs to the blocking state") is enforced by the compiler, not by a free `clearedBy` field
+any reason could be paired with. `indeterminate` names its retry actor and bound directly.
 
 ### 7.1 Evidence is not diversity
 
@@ -472,8 +480,9 @@ different status contracts and only one has a reconciler:
 So the rules are:
 
 1. `indeterminate` **never posts `success`**. It is not a pass.
-2. It posts nothing (leaves pending) **only where a retry actor exists**; otherwise it
-   posts `failure` and is a `block` with `clearedBy: retry`.
+2. It posts nothing (leaves pending) **only where a retry actor exists**; otherwise it is a
+   `block` from the start with `clearedBy: { transition: "human-review", actor: "human" }` —
+   there is no retry actor to name, so per §6 (v7) the clearing actor cannot be `retry`.
 3. `attemptsRemaining` is bounded; on exhaustion it becomes `block` with
    `clearedBy: { transition: "human-review", actor: "human" }`. Unbounded pending is the
    failure mode we are trying to eliminate, not a state we may enter. This requires
@@ -617,9 +626,12 @@ sinks that might leak a secret, config vars that might pass an untriaged value, 
 shapes that might smuggle an unproven merge. Enforced site-by-site, such a guard is never
 done: adversarial review keeps finding one more site, and each round buys one patch and
 no leverage — the §1 complaint, in the shape of a single guard rather than the whole
-cluster. This is hoisted from the multi-PR guard campaign, where the fix that repeatedly
-worked was not the next patch but lifting the guarantee to one chokepoint where it holds
-structurally.
+cluster. This is hoisted from the guard campaign of 2026-08 — #554 / PR #589 (rolls 7–10
+each found one more unscrubbed sink), #435 (a chokepoint the `cwd=MAIN_REPO` path never
+reached), #571 / PR #595 (one more HEAD shape) — where the fix that repeatedly worked was
+not the next patch but lifting the guarantee to one chokepoint where it holds structurally.
+The intent half of this section is already a graph proposition, `CON-0027` (sourced to
+ADR-0023/0026); this section is its construction home and promotes nothing.
 
 The bar, one sentence, in §3's spirit:
 
@@ -635,24 +647,32 @@ merge/HEAD shape — the guard is enumerated and its completeness is unbounded-i
 That recurrence *is* the signal to hoist, not to add the next patch. It is §1's "we pay
 full price for each one and bank no leverage," localized to one guarantee.
 
-**The moves.** Four, each named with a worked example from the campaign; they are not
-exclusive, and one guard may use several.
+**The moves.** Four. Where an example is an existing mechanism it is named as one; where it
+is a prerequisite that does not exist at head it is marked so, the way §7.1 and P4 mark theirs
+— a construction document that describes a mechanism it wishes existed is the false chokepoint
+of its own caveat. Code-referencing claims in this section were verified against
+`7c92b03` (2026-08-24). The moves are not exclusive, and one guard may use several.
 
 - **Chokepoint enforcement** — put the guarantee at the boundary every path funnels
-  through, not at each producer. *Example:* scrub secrets over the fully-assembled output
-  at the public write boundary — the effectful writes (stdout, the PR-comment upsert),
-  where every diagnostic path terminates — instead of scrubbing at each render site and
-  missing the one the next review round finds. `secret-hygiene.ts`'s scrubber is the
-  mechanism (ADR-0010); the move is *where* it runs — the write, not the render — so a new
-  diagnostic path is covered without being enumerated.
+  through, not at each producer. *Existing instance:* the §7 discriminated union — every
+  blocking variant must carry its `clearedBy`, so the §6 invariant holds at the type, not at
+  each call site. *Prerequisite, not a description (#615):* review and adjudication bodies
+  reach their public sinks (stdout, the PR-comment upsert) through roughly nine independent
+  call sites with no funnel; `secret-hygiene.ts`'s scrubber (ADR-0010) runs at the driver
+  capture and transcript sinks, not at those writes. Funnelling the writes buys "every sink is
+  scrubbed" — and only that: #536 records that scrubbing cannot close encoded covert
+  channels, so the property a write-boundary chokepoint can honestly promise is narrower
+  than "no secret leaves", and it is the narrower property that should be typed.
 - **Extract-and-require (conformance)** — do not hand-maintain the allowed set against a
   moving upstream; extract the full set mechanically and *require* every member be
-  explicitly triaged, so a *new* member fails CI rather than slipping through. *Example:* a
-  conformance test that scans the installed SDK for every env var it reads and asserts each
-  is either passed-through or excluded-with-a-reason — a var added at the next SDK bump
-  fails the test then, instead of surfacing as a production leak (the deny-by-default env
-  allowlist of ADR-0010, made complete against upstream drift rather than re-audited by
-  hand each bump).
+  explicitly triaged, so a *new* member fails CI rather than slipping through. *Existing
+  instance:* the ADR-0023 hostile-probe conformance suite (N/N probes, fail closed on any
+  unanticipated change) and `shadow-assurance.test.ts` Q5/Q16, which enumerate the trust
+  registry and the AGENTS.md invariant index from their sources and fail on an unclassified
+  member. *Prerequisite, not a description:* `DEFAULT_AGENT_ENV_ALLOWLIST` is a hand-maintained
+  constant and no test scans the installed SDK; nor can a source scan be complete — the SDK
+  reads `process.env[...]` dynamically and launches a native binary — so the honest form is an
+  authoritative manifest from upstream or an enforced runtime boundary, not a grep.
 - **Default-deny allowlist** — trust is an explicit, small set; everything else, *including
   unknown and future members*, is denied by construction. This is §7.2 already —
   `unavailable` is an allowlist, never a default, and "*anything not listed* → block." The
@@ -660,17 +680,17 @@ exclusive, and one guard may use several.
   other or unknown source default to untrusted rather than enumerating distrust one member
   at a time.
 - **Recognize-by-invariant, not by-shape** — identify a thing by the property that
-  *defines* it, not the incidental form it took this time. *Example:* recognize an unproven
-  `ours`-style merge by its merge-against-main second-parent signature plus a tree check,
-  so every way HEAD can diverge collapses into one recognition rule — rather than matching
-  each specific parent shape and missing the next one. §7.2's "the input must carry typed
-  *per-cell* causes" is the same move on the evidence axis: key disposition on the cause
-  that defines a cell, not on an aggregate label two materially different matrices happen
-  to share.
+  *defines* it, not the incidental form it took this time. *Existing instance:* §7.2's "the
+  input must carry typed *per-cell* causes" — disposition keys on the cause that defines a
+  cell, not on an aggregate label two materially different matrices happen to share.
+  *Prerequisite, not a description (#571 / PR #595):* recognize an unproven `ours`-style
+  merge by its merge-against-main second-parent signature plus a tree check, so every way
+  HEAD can diverge collapses into one recognition rule; no such recognizer exists at head.
 
-**Relation to the spine and to §8.1.** This extends ADR-0014 (determinism lives in the
-harness) one step: from *the gate's decision is deterministic* to *the gate's completeness
-is structural, not enumerated*. It is the construction companion to §8.1's behavioral bar
+**Relation to the spine and to §8.1.** This is the construction reading of ADR-0014
+(determinism lives in the harness): from *the gate's decision is deterministic* to *the
+gate's completeness is structural, not enumerated*. It decides nothing new — the rule it
+builds toward is `CON-0027`, already in the intent graph. It is the construction companion to §8.1's behavioral bar
 — §8.1 governs how a gate behaves *when it fires* (early / narrow / preserving /
 falsifiable); this governs how a guard is *structured so its guarantee is complete at all*.
 The two meet at §8.1's fourth property: a construction-level guard is inherently more
@@ -695,10 +715,15 @@ structured, never whether to add one, the same humility §8.1 keeps. And the sha
 of the move is a chokepoint the codebase cannot actually force all paths through: it reads
 as a guarantee and is not one. #435 is exactly this — `blockForeignRootWrite`'s
 derived-exclusivity chokepoint is a false guarantee for a `cwd=MAIN_REPO` step, because
-that path never funnels through a claim (§4 condition (b) fails before it is reached). So
+that path never funnels through a claim — §4's premise, condition (a), a fenced deriving
+claim, is absent, so (b) is never reached. So
 the requirement is explicit: **name the property that all paths funnel through the
 chokepoint, and make *that* the tested invariant** — an unenforced chokepoint is an
 enumerated guard wearing a structural mask.
+
+As a §8 checklist item: **enumerated guard with an unbounded completeness surface** —
+*Detector:* the same finding class recurs across review rounds ("one more sink / var /
+shape"). *Closes with:* hoist per this section, and test the funnel property itself.
 
 ## 9. What this subsumes
 
@@ -765,6 +790,18 @@ Steps 1–3 are independently valuable if the rest is never built.
    defect.
 
 ## Revision log
+
+**v9** (2026-08-24) — doc-review of v8 (3 seats, 9 must-fix) found §8.2's worked examples
+described mechanisms that do not exist at head: the scrub does not run at the public writes
+(and #536 says scrubbing cannot close covert channels), no SDK env-var conformance scan
+exists, no `ours`-merge recognizer exists. Each is now marked *prerequisite, not a
+description*, and the existing instances (§7 union, §7.2 default-deny, per-cell causes, the
+ADR-0023 probe suite, Q5/Q16) carry the examples. §8.2 is framed as the construction home
+of `CON-0027` rather than as extending ADR-0014 on its own authority, and the AGENTS.md
+bullet it adds is mapped to `CON-0027` in the intent graph's `invariantIndex` (Q16). Also
+repaired: §7.3 rule 2 (a no-retry-actor indeterminate is a human-cleared block from the
+start, not `clearedBy: retry`), the §7 sketch (reason and legal clearer are one variant),
+and the §4 misreport in §8.2's caveat (condition (a) is what #435 lacks).
 
 **v8** (2026-08-22) — added §8.2, the construction-over-enumeration principle ("type the
 invariant out of the pipeline"): the completeness-surface diagnostic (recurrence of "one

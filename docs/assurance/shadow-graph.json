@@ -2378,6 +2378,12 @@
 					"DEC-0004",
 					"CON-0004"
 				]
+			},
+			{
+				"anchor": "A guard whose guarantee has a *completeness surface*",
+				"nodes": [
+					"CON-0027"
+				]
 			}
 		]
 	},
