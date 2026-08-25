@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { isTrustedCommentAuthor } from "../github-posting.js";
 import { cleanupReviewHead, findReviewCandidates, LOCAL_MODE_MARKER, postLocalModeWorkflowComment, postReviewStatus, prepareReviewHead, reviewStatusForSha, upsertReviewComment } from "../review-sweep.js";
 import type { GhRunner } from "../roadmap/github-issues.js";
+import { makeTestTmpDir } from "./tmp-fixture.js";
 import { trustRoutes } from "./trust-routes.js";
 
 function stub(fn?: (args: string[]) => { stdout?: string; stderr?: string; status?: number } | undefined): { run: GhRunner; calls: string[][] } {
@@ -239,7 +239,7 @@ describe("isTrustedCommentAuthor", () => {
 
 describe("prepareReviewHead", () => {
 	it("fetches the PR head and creates a detached data worktree", () => {
-		const repo = mkdtempSync(join(tmpdir(), "review-head-"));
+		const repo = makeTestTmpDir("review-head-");
 		const cmds: string[] = [];
 		const out = prepareReviewHead(repo, { prNumber: 9, itemId: "84", branch: "feat/issue-84-x", headSha: "abc123", statusState: "missing" }, (cmd) => {
 			cmds.push(cmd);
@@ -254,7 +254,7 @@ describe("prepareReviewHead", () => {
 	});
 
 	it("bails without a worktree when the fetched head no longer matches the candidate SHA (moved branch)", () => {
-		const repo = mkdtempSync(join(tmpdir(), "review-head-moved-"));
+		const repo = makeTestTmpDir("review-head-moved-");
 		const cmds: string[] = [];
 		const out = prepareReviewHead(repo, { prNumber: 9, itemId: "84", branch: "feat/issue-84-x", headSha: "abc123", statusState: "missing" }, (cmd) => {
 			cmds.push(cmd);
@@ -269,7 +269,7 @@ describe("prepareReviewHead", () => {
 
 describe("cleanupReviewHead", () => {
 	it("removes the head worktree and deletes the fetched ref", () => {
-		const repo = mkdtempSync(join(tmpdir(), "review-clean-"));
+		const repo = makeTestTmpDir("review-clean-");
 		mkdirSync(join(repo, ".dev", "review-heads", "abc123"), { recursive: true });
 		const cmds: string[] = [];
 		cleanupReviewHead(repo, { prNumber: 9, itemId: "84", branch: "feat/issue-84-x", headSha: "abc123", statusState: "missing" }, (cmd) => {
@@ -281,7 +281,7 @@ describe("cleanupReviewHead", () => {
 	});
 
 	it("fetches and deletes an explicit adjudication ref without touching the drain ref", () => {
-		const repo = mkdtempSync(join(tmpdir(), "review-head-adj-"));
+		const repo = makeTestTmpDir("review-head-adj-");
 		const cmds: string[] = [];
 		const candidate = { prNumber: 9, itemId: "84", branch: "feat/issue-84-x", headSha: "abc123", statusState: "missing" as const };
 		const out = prepareReviewHead(
@@ -313,7 +313,7 @@ describe("cleanupReviewHead", () => {
 	});
 
 	it("keys the checkout directory by caller suffix so adjudication never removes the drain's same-SHA worktree (#510)", () => {
-		const repo = mkdtempSync(join(tmpdir(), "review-head-suffix-"));
+		const repo = makeTestTmpDir("review-head-suffix-");
 		const candidate = { prNumber: 9, itemId: "84", branch: "feat/issue-84-x", headSha: "abc123", statusState: "missing" as const };
 		const cmds: string[] = [];
 		const out = prepareReviewHead(
@@ -350,7 +350,7 @@ describe("cleanupReviewHead", () => {
 	});
 
 	it("skips the worktree remove when the path is absent and stays fail-soft on error", () => {
-		const repo = mkdtempSync(join(tmpdir(), "review-clean-"));
+		const repo = makeTestTmpDir("review-clean-");
 		const cmds: string[] = [];
 		cleanupReviewHead(repo, { prNumber: 9, itemId: "84", branch: "feat/issue-84-x", headSha: "gone", statusState: "missing" }, (cmd) => {
 			cmds.push(cmd);

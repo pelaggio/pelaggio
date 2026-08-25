@@ -1,20 +1,14 @@
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { describe, it } from "node:test";
 import { FifoPolicy } from "../flow-policy.js";
 import { AlreadyClaimedError, getRoadmapSource, MarkdownRoadmap, type RoadmapSourceName } from "../roadmap/index.js";
+import { makeTempRepoWithParent } from "./mocks.js";
 
 function seedRepo(): string {
-	const dir = mkdtempSync(join(tmpdir(), "pelaggio-roadmap-test-"));
-	execSync("git init -q -b main", { cwd: dir });
-	execSync("git config user.name t", { cwd: dir });
-	execSync("git config user.email t@t", { cwd: dir });
-	execSync("git config commit.gpgsign false", { cwd: dir });
-	execSync("git commit --allow-empty -q -m init", { cwd: dir });
-	return dir;
+	return makeTempRepoWithParent().repo;
 }
 
 function seedFile(dir: string, rel: string, body: string): void {

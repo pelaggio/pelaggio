@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
 import { DEFAULTS } from "../config.js";
@@ -26,13 +25,14 @@ import {
 	writePrFindingDispositionRecord,
 } from "../review/carry.js";
 import { type ReviewFinding, reviewFindingFingerprint } from "../review/findings.js";
+import { makeTestTmpDir } from "./tmp-fixture.js";
 
 const tmpDirs: string[] = [];
 after(() => {
 	for (const dir of tmpDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 function tmpRoot(): string {
-	const dir = mkdtempSync(join(tmpdir(), "review-carry-"));
+	const dir = makeTestTmpDir("review-carry-");
 	tmpDirs.push(dir);
 	return dir;
 }

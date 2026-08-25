@@ -8,7 +8,8 @@
 	"type": "module",
 	"scripts": {
 		"pelaggio": "pnpm --filter pelaggio pelaggio",
-		"test": "pnpm -r test",
+		"test": "node --import tsx ci/reap-test-tmp.ts; pnpm -r test",
+		"test:reap": "node --import tsx ci/reap-test-tmp.ts",
 		"test:ci": "node --import tsx --test --test-reporter=dot ci/__tests__/*.test.ts",
 		"typecheck": "pnpm --filter pelaggio typecheck && pnpm --filter @pelaggio/server typecheck && pnpm --filter @pelaggio/web check:types",
 		"typecheck:ratchet": "node --import tsx ci/typecheck-ratchet.ts",

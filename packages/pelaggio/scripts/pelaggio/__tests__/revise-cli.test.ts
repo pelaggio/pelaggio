@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { main, type ReviseCliDeps } from "../revise-cli.js";
 import { type ClaimRevisionOutcome, reviseFindingsPath } from "../revise-sweep.js";
 import type { GhRunner } from "../roadmap/github-issues.js";
 import type { CycleResult, Flags } from "../types.js";
+import { makeTestTmpDir } from "./tmp-fixture.js";
 
 const savedEnv: Record<string, string | undefined> = {};
 before(() => {
@@ -61,7 +61,7 @@ function harness(
 		repo?: string;
 	} = {},
 ): Harness {
-	const repo = over.repo ?? mkdtempSync(join(tmpdir(), "revise-cli-"));
+	const repo = over.repo ?? makeTestTmpDir("revise-cli-");
 	const findingsPath = reviseFindingsPath(repo, "498");
 	const effects: string[] = [];
 	const orchCalls: Harness["orchCalls"] = [];

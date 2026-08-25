@@ -1,5 +1,5 @@
 import { execSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { mock } from "node:test";
@@ -9,6 +9,7 @@ import type { PrReviewGateResult } from "../pr-review-cli.js";
 import type { RoadmapSource } from "../roadmap/index.js";
 import { LiveStatus, StatusBar } from "../tui.js";
 import type { CycleResult, Flags, ParkSignal, PipelineOpts, Step, StepResult } from "../types.js";
+import { makeTestTmpDir } from "./tmp-fixture.js";
 
 // Shared hermetic setup for test files that drive the real runPipeline (pipeline.test.ts,
 // ship.test.ts). These flow tests exercise pick/plan/implement/ship control flow, not the
@@ -211,7 +212,7 @@ export function defaultPrPreflightStubs(): Pick<
 }
 
 export function makeTempGitRepo(): string {
-	const dir = mkdtempSync(join(tmpdir(), "pelaggio-pipeline-test-"));
+	const dir = makeTestTmpDir("pelaggio-pipeline-test-");
 	execSync("git init -q -b main", { cwd: dir });
 	execSync("git config user.name t", { cwd: dir });
 	execSync("git config user.email t@t", { cwd: dir });
@@ -230,7 +231,7 @@ export function makeTempGitRepo(): string {
  *  that can't answer the pre-ship rev-parse). A plain non-git dir can't be used here — the audit
  *  fails closed on the unsnapshot-able root and aborts the first step before ship is reached. */
 export function makeGitDirWithoutMain(): string {
-	const dir = mkdtempSync(join(tmpdir(), "pelaggio-nomain-"));
+	const dir = makeTestTmpDir("pelaggio-nomain-");
 	execSync("git init -q -b work", { cwd: dir });
 	execSync("git config user.name t", { cwd: dir });
 	execSync("git config user.email t@t", { cwd: dir });
@@ -245,7 +246,7 @@ export function makeGitDirWithoutMain(): string {
  * production layout where `resolveWorktree` returns `resolve(REPO, "..", ...)`).
  */
 export function makeTempRepoWithParent(): { parent: string; repo: string } {
-	const parent = mkdtempSync(join(tmpdir(), "pelaggio-parent-"));
+	const parent = makeTestTmpDir("pelaggio-parent-");
 	const repo = join(parent, "repo");
 	mkdirSync(repo);
 	execSync("git init -q -b main", { cwd: repo });

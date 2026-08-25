@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -7,6 +7,7 @@ import { continuousCycleCap, DayBudgetTracker, dayKey, freeQueueProbe, isContinu
 import { DEFAULT_FLOW_POLICY } from "../flow-policy.js";
 import type { RoadmapItemStatus } from "../roadmap/types.js";
 import type { Flags } from "../types.js";
+import { makeTestTmpDir } from "./tmp-fixture.js";
 
 const baseFlags: Flags = {
 	cycles: "1",
@@ -221,7 +222,7 @@ describe("sumDaySpendFromLog", () => {
 	const localNoonIso = (y: number, m: number, d: number): string => new Date(y, m, d, 12, 0, 0).toISOString();
 
 	function withTempLog(lines: string[], run: (path: string) => void): void {
-		const dir = mkdtempSync(join(tmpdir(), "pelaggio-daylog-"));
+		const dir = makeTestTmpDir("pelaggio-daylog-");
 		const path = join(dir, "pelaggio-log.jsonl");
 		writeFileSync(path, lines.join("\n"));
 		try {
@@ -253,7 +254,7 @@ describe("sumDaySpendFromLog", () => {
 	// A directory at the ledger path exists but always fails readFileSync (EISDIR) — portable,
 	// unlike chmod, which a root-running CI ignores.
 	it("existing but unreadable ledger → throws rather than seeding $0", () => {
-		const dir = mkdtempSync(join(tmpdir(), "pelaggio-daylog-unreadable-"));
+		const dir = makeTestTmpDir("pelaggio-daylog-unreadable-");
 		const path = join(dir, "pelaggio-log.jsonl");
 		mkdirSync(path);
 		try {
@@ -267,7 +268,7 @@ describe("sumDaySpendFromLog", () => {
 	// directory denies traversal — so gating the read on it routed EACCES into the absent→0 path.
 	// Only ENOENT may mean zero; every other errno must throw.
 	it("unreadable parent directory → throws, not $0", () => {
-		const dir = mkdtempSync(join(tmpdir(), "pelaggio-daylog-noaccess-"));
+		const dir = makeTestTmpDir("pelaggio-daylog-noaccess-");
 		const sub = join(dir, "locked");
 		mkdirSync(sub);
 		const path = join(sub, "pelaggio-log.jsonl");

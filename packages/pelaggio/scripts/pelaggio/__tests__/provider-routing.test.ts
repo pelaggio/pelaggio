@@ -1,6 +1,4 @@
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { CODEX_CAPABILITIES } from "../codex-provider.js";
@@ -10,6 +8,7 @@ import { OPENCODE_CAPABILITIES } from "../opencode-provider.js";
 import { detectUnattendedSignals, matchEligibleProviders, matchesCapabilityPredicate, OPERATOR_ATTESTED_TTY_SUPPRESSION, resolveAuthoringReviewConfig, resolveAuthoringReviewExecution, softDegradedAxes } from "../provider-routing.js";
 import { CLAUDE_CAPABILITIES } from "../step-runner.js";
 import type { ProviderCapabilities, ProviderName } from "../types.js";
+import { makeTestTmpDir } from "./tmp-fixture.js";
 
 const ALL_CAPS: Record<ProviderName, ProviderCapabilities> = {
 	claude: CLAUDE_CAPABILITIES,
@@ -21,7 +20,7 @@ const ALL_CAPS: Record<ProviderName, ProviderCapabilities> = {
 };
 
 function baseConfig(over: Partial<ResolvedConfig["review"]["authoring"]> = {}): ResolvedConfig {
-	const repo = mkdtempSync(join(tmpdir(), "pelaggio-routing-"));
+	const repo = makeTestTmpDir("pelaggio-routing-");
 	const cfg = loadConfig({ repo, configPath: join(repo, ".pelaggio.yml") });
 	return {
 		...cfg,

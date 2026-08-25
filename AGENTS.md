@@ -22,7 +22,7 @@ pnpm pelaggio --dry-run --cycles 1
 pnpm pelaggio --cycles 1 --verbose
 pnpm pelaggio --item 80 --verbose
 pnpm pelaggio --resume 80
-pnpm -r test
+pnpm test
 pnpm check
 pnpm check:skills
 pnpm check:publish

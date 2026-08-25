@@ -1,15 +1,15 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
 import { resolveArtifactRoot } from "../artifact-root.js";
 import { lintAgentContext, lintAllSkills, lintSkillFile, lintTemplates, type Violation } from "../check-skills.js";
+import { makeTestTmpDir } from "./tmp-fixture.js";
 
 const REAL_REPO_ROOT = resolveArtifactRoot(import.meta.url);
 
 function makeRepoWithSkill(skillName: string, body: string, extras: Record<string, string> = {}): { repoRoot: string; skillFile: string } {
-	const repoRoot = mkdtempSync(join(tmpdir(), "pelaggio-lint-test-"));
+	const repoRoot = makeTestTmpDir("pelaggio-lint-test-");
 	const skillDir = join(repoRoot, ".claude/skills", skillName);
 	mkdirSync(skillDir, { recursive: true });
 	const skillFile = join(skillDir, "SKILL.md");
@@ -288,7 +288,7 @@ Branch pelaggio-19 runs on Claude Opus 4.8 by profile.
 
 describe("check-skills — lintTemplates", () => {
 	function makeRepoWithTemplate(rel: string, content: string): string {
-		const repoRoot = mkdtempSync(join(tmpdir(), "pelaggio-lint-tpl-"));
+		const repoRoot = makeTestTmpDir("pelaggio-lint-tpl-");
 		const full = join(repoRoot, ".claude-templates", rel);
 		mkdirSync(dirname(full), { recursive: true });
 		writeFileSync(full, content);
@@ -311,7 +311,7 @@ describe("check-skills — lintTemplates", () => {
 	});
 
 	it("returns [] when .claude-templates is absent", () => {
-		const repoRoot = mkdtempSync(join(tmpdir(), "pelaggio-lint-notpl-"));
+		const repoRoot = makeTestTmpDir("pelaggio-lint-notpl-");
 		assert.deepEqual(lintTemplates(repoRoot), []);
 	});
 
@@ -328,7 +328,7 @@ describe("check-skills — lintAllSkills", () => {
 	});
 
 	it("skips directories starting with _", () => {
-		const repoRoot = mkdtempSync(join(tmpdir(), "pelaggio-lint-all-"));
+		const repoRoot = makeTestTmpDir("pelaggio-lint-all-");
 		const underscoreDir = join(repoRoot, ".claude/skills/_shared");
 		mkdirSync(underscoreDir, { recursive: true });
 		writeFileSync(join(underscoreDir, "SKILL.md"), "no frontmatter");
@@ -341,7 +341,7 @@ describe("check-skills — lintAllSkills", () => {
 
 describe("check-skills — lintAgentContext", () => {
 	function makeRepoWithAgentContext(args: { claudeBody?: string; agentsBody?: string; omitAgents?: boolean; omitAgentDocs?: boolean; codexSkills?: "symlink" | "dir" | "wrong-target" | "missing" } = {}): string {
-		const repoRoot = mkdtempSync(join(tmpdir(), "pelaggio-lint-agent-"));
+		const repoRoot = makeTestTmpDir("pelaggio-lint-agent-");
 		mkdirSync(join(repoRoot, ".claude/skills"), { recursive: true });
 		mkdirSync(join(repoRoot, ".agents"), { recursive: true });
 		if (!args.omitAgentDocs) mkdirSync(join(repoRoot, "docs/agent-context"), { recursive: true });

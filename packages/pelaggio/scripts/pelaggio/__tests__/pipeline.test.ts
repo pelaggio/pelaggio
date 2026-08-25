@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it, mock } from "node:test";
@@ -29,6 +29,7 @@ import {
 	setupHermeticPipelineEnv,
 	teardownHermeticPipelineEnv,
 } from "./mocks.js";
+import { makeTestTmpDir } from "./tmp-fixture.js";
 
 /** PR-mode ship fixture using the fixed body-file transport (inline prBody removed in #303). */
 function prShipDecision(body = "Body"): { ok: true; writes: Record<string, string>; text: string } {
@@ -3241,7 +3242,7 @@ describe("runPipeline — pick step", () => {
 		// `p.includes(WORKTREE_PREFIX)` substring test selected the main repo as the "new" worktree,
 		// so the implement write never landed on feat/tool-99 and the phantom-ship guard fired.
 		// Basename-prefix matching skips it and correctly picks the real sibling worktree.
-		const base = mkdtempSync(join(tmpdir(), "wt-prefix-"));
+		const base = makeTestTmpDir("wt-prefix-");
 		const parent = join(base, `${WORKTREE_PREFIX}grp`); // prefix lives in a path component, not the basename
 		const repo = join(parent, "repo");
 		mkdirSync(repo, { recursive: true });
@@ -4598,7 +4599,7 @@ describe("runPipeline — PR pre-flight and freshness (#424)", () => {
 
 	it("soft-skips when the target repo has no typecheck:ratchet script, keeps a present script as a hard gate (#424 review)", async () => {
 		// Absent script → skip with detail (consumer repos don't ship ci/typecheck-ratchet.ts).
-		const noScript = mkdtempSync(join(tmpdir(), "pelaggio-ratchet-"));
+		const noScript = makeTestTmpDir("pelaggio-ratchet-");
 		writeFileSync(join(noScript, "package.json"), JSON.stringify({ name: "consumer", scripts: { test: "true" } }));
 		const skippedAbsent = await defaultTypecheckRatchet(noScript);
 		assert.equal(skippedAbsent.ok, true);
@@ -4606,17 +4607,17 @@ describe("runPipeline — PR pre-flight and freshness (#424)", () => {
 		assert.match(skippedAbsent.detail ?? "", /no typecheck:ratchet script/);
 
 		// Missing or unparseable package.json → also a soft skip, with the reason in the detail.
-		const noManifest = await defaultTypecheckRatchet(mkdtempSync(join(tmpdir(), "pelaggio-ratchet-")));
+		const noManifest = await defaultTypecheckRatchet(makeTestTmpDir("pelaggio-ratchet-"));
 		assert.equal(noManifest.ok, true);
 		assert.equal(noManifest.skipped, true);
-		const badManifestDir = mkdtempSync(join(tmpdir(), "pelaggio-ratchet-"));
+		const badManifestDir = makeTestTmpDir("pelaggio-ratchet-");
 		writeFileSync(join(badManifestDir, "package.json"), "{nope");
 		const badManifest = await defaultTypecheckRatchet(badManifestDir);
 		assert.equal(badManifest.ok, true);
 		assert.equal(badManifest.skipped, true);
 
 		// Present script → its failure stays a hard gate (never `skipped`), detail captured.
-		const gated = mkdtempSync(join(tmpdir(), "pelaggio-ratchet-"));
+		const gated = makeTestTmpDir("pelaggio-ratchet-");
 		writeFileSync(join(gated, "package.json"), JSON.stringify({ name: "x", scripts: { "typecheck:ratchet": "node -e \"console.error('TSFAIL');process.exit(3)\"" } }));
 		const red = await defaultTypecheckRatchet(gated);
 		assert.equal(red.ok, false);
@@ -4636,7 +4637,7 @@ describe("runPipeline — PR pre-flight and freshness (#424)", () => {
 
 		// #424 gate review: pnpm missing from PATH is an environment gap → soft skip, like a
 		// missing script — never a red gate.
-		const emptyPath = mkdtempSync(join(tmpdir(), "pelaggio-ratchet-empty-path-"));
+		const emptyPath = makeTestTmpDir("pelaggio-ratchet-empty-path-");
 		const savedPath = process.env.PATH;
 		process.env.PATH = emptyPath;
 		try {

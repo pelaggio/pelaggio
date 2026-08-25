@@ -1,17 +1,17 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
 import { createEventWriter, foldEvents, MAX_FLOW_EVENT_BYTES, PELAGGIO_EVENT_TYPES, projectEvents, readEventLog } from "../flow-events.js";
 import { computeStats } from "../stats.js";
 import type { FlowEventInput } from "../types.js";
+import { makeTestTmpDir } from "./tmp-fixture.js";
 
 const FIXTURES = join(dirname(new URL(import.meta.url).pathname), "fixtures", "flow-events");
 const IDS = Array.from({ length: 30 }, (_, index) => `01J${String(index).padStart(23, "0")}`);
 
 function tempRoot(): string {
-	return mkdtempSync(join(tmpdir(), "pelaggio-flow-events-"));
+	return makeTestTmpDir("pelaggio-flow-events-");
 }
 
 function copyFixture(root: string, fixture: string, target = fixture): string {

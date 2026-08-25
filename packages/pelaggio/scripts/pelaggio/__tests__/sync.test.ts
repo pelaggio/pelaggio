@@ -1,22 +1,22 @@
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { resolveArtifactRoot } from "../artifact-root.js";
 import { type Action, applyAction, type Prompter, planSync, resolveConsumerRoot, runSync, type SyncPlan } from "../sync.js";
+import { makeTestTmpDir } from "./tmp-fixture.js";
 
 const REAL_PKG_ROOT = resolveArtifactRoot(import.meta.url);
 
 function makeGitRepo(): string {
-	const dir = mkdtempSync(join(tmpdir(), "pelaggio-sync-test-"));
+	const dir = makeTestTmpDir("pelaggio-sync-test-");
 	execSync("git init -q", { cwd: dir });
 	return dir;
 }
 
 function makeFakePkg(skills: Record<string, string>, extras: Record<string, string> = {}): string {
-	const dir = mkdtempSync(join(tmpdir(), "pelaggio-sync-pkg-"));
+	const dir = makeTestTmpDir("pelaggio-sync-pkg-");
 	const skillsRoot = join(dir, ".claude/skills");
 	mkdirSync(skillsRoot, { recursive: true });
 	for (const [name, body] of Object.entries(skills)) {
@@ -331,7 +331,7 @@ describe("sync — resolveConsumerRoot", () => {
 	});
 
 	it("throws an informative error outside a git repo", () => {
-		const notARepo = mkdtempSync(join(tmpdir(), "pelaggio-sync-no-git-"));
+		const notARepo = makeTestTmpDir("pelaggio-sync-no-git-");
 		assert.throws(() => resolveConsumerRoot(notARepo), /git repository/);
 	});
 });

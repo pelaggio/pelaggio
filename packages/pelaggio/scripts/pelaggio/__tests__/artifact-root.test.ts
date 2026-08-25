@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, it } from "node:test";
 import { pathToFileURL } from "node:url";
 import { resolveArtifactRoot } from "../artifact-root.js";
+import { makeTestTmpDir } from "./tmp-fixture.js";
 
 function makeAnchor(root: string, child: string): string {
 	mkdirSync(resolve(root, ".claude/skills"), { recursive: true });
@@ -18,19 +18,19 @@ function makeAnchor(root: string, child: string): string {
 
 describe("resolveArtifactRoot", () => {
 	it("finds root when skills are siblings of the calling module", () => {
-		const root = mkdtempSync(join(tmpdir(), "artifact-root-flat-"));
+		const root = makeTestTmpDir("artifact-root-flat-");
 		const moduleUrl = makeAnchor(root, ".");
 		assert.equal(resolveArtifactRoot(moduleUrl), root);
 	});
 
 	it("walks up multiple levels to find root", () => {
-		const root = mkdtempSync(join(tmpdir(), "artifact-root-nested-"));
+		const root = makeTestTmpDir("artifact-root-nested-");
 		const moduleUrl = makeAnchor(root, "scripts/pelaggio");
 		assert.equal(resolveArtifactRoot(moduleUrl), root);
 	});
 
 	it("throws when no ancestor has both anchors", () => {
-		const root = mkdtempSync(join(tmpdir(), "artifact-root-missing-"));
+		const root = makeTestTmpDir("artifact-root-missing-");
 		const childDir = resolve(root, "deep/nested");
 		mkdirSync(childDir, { recursive: true });
 		const modulePath = resolve(childDir, "x.ts");
@@ -39,7 +39,7 @@ describe("resolveArtifactRoot", () => {
 	});
 
 	it("ignores ancestors that have only skills but no package.json", () => {
-		const root = mkdtempSync(join(tmpdir(), "artifact-root-partial-"));
+		const root = makeTestTmpDir("artifact-root-partial-");
 		mkdirSync(resolve(root, ".claude/skills"), { recursive: true });
 		// no package.json at root — should fail
 		const childDir = resolve(root, "child");

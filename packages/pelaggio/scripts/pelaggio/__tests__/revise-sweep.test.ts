@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
@@ -22,6 +22,7 @@ import {
 	verifyReviseWorktreeBinding,
 } from "../revise-sweep.js";
 import type { GhRunner } from "../roadmap/github-issues.js";
+import { makeTestTmpDir } from "./tmp-fixture.js";
 import { trustRoutes } from "./trust-routes.js";
 
 /** Records every gh call; `fn` returns the response (defaults to exit-0, empty stdout). */
@@ -200,7 +201,7 @@ describe("claimRevisionExclusive", () => {
 	const addCalls = (calls: string[][]) => calls.filter((c) => c[0] === "pr" && c[1] === "edit" && c.includes("--add-label"));
 
 	function tmpRepo(): string {
-		return mkdtempSync(join(tmpdir(), "revise-claim-"));
+		return makeTestTmpDir("revise-claim-");
 	}
 
 	it("claims when the label is absent: re-reads under the lock, then adds", async () => {
@@ -267,7 +268,7 @@ describe("claimRevisionExclusive", () => {
 
 describe("fetchReviewFindings", () => {
 	function tmpFile(): string {
-		return join(mkdtempSync(join(tmpdir(), "revise-findings-")), "findings.md");
+		return join(makeTestTmpDir("revise-findings-"), "findings.md");
 	}
 
 	it("writes the latest marker-bearing comment body and returns true", () => {
@@ -418,7 +419,7 @@ describe("fetchReviewFindingsOutcome (CI exit-code contract)", () => {
 	// gh/parse/fs tool failure). The workflow's park comment names the cause from the exit code,
 	// so the two non-written outcomes must never collapse.
 	function tmpFile(): string {
-		return join(mkdtempSync(join(tmpdir(), "revise-outcome-")), "findings.md");
+		return join(makeTestTmpDir("revise-outcome-"), "findings.md");
 	}
 
 	it("trusted comment → 'written'", () => {
@@ -464,7 +465,7 @@ describe("fetchReviewFindingsOutcome (CI exit-code contract)", () => {
 
 	it("unwritable findings path → 'error' (fs failure, not a trust verdict)", () => {
 		// The mkdtemp dir itself as the "file" path: writeFileSync fails with EISDIR.
-		const dir = mkdtempSync(join(tmpdir(), "revise-outcome-eisdir-"));
+		const dir = makeTestTmpDir("revise-outcome-eisdir-");
 		const comments = JSON.stringify({
 			comments: [{ body: "<!-- pelaggio-pr-review -->\nfindings", createdAt: "2026-01-01T00:00:00Z", author: { login: "operator" } }],
 		});
@@ -555,7 +556,7 @@ describe("CI revise trigger and SHA binding (#508 roll 4)", () => {
 
 describe("ensureReviseWorktree", () => {
 	it("returns the existing worktree path without invoking git", () => {
-		const dir = mkdtempSync(join(tmpdir(), "revise-wt-"));
+		const dir = makeTestTmpDir("revise-wt-");
 		let execRan = false;
 		const path = ensureReviseWorktree(dir, "feat/issue-76-x", {
 			repo: dir,
@@ -770,7 +771,7 @@ describe("recordReviseInvocation", () => {
 
 describe("acquireReviseExecution", () => {
 	function tmpRoot(): string {
-		return mkdtempSync(join(tmpdir(), "revise-exec-"));
+		return makeTestTmpDir("revise-exec-");
 	}
 
 	it("acquires when no lease exists; release removes the lease file", async () => {

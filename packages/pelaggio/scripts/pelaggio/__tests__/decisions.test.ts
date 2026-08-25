@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, it } from "node:test";
 import {
@@ -22,9 +21,10 @@ import {
 	validateOwner,
 } from "../decisions.js";
 import type { Decision, ReviewEscalation } from "../types.js";
+import { makeTestTmpDir } from "./tmp-fixture.js";
 
 function repo(): string {
-	const path = mkdtempSync(resolve(tmpdir(), "pelaggio-decisions-"));
+	const path = makeTestTmpDir("pelaggio-decisions-");
 	execFileSync("git", ["init", "-q", "-b", "main"], { cwd: path });
 	execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: path });
 	execFileSync("git", ["config", "user.name", "Test"], { cwd: path });
@@ -116,7 +116,7 @@ describe("decision log authority", () => {
 		seed(path);
 		const written = await appendDecisions(path, appendInput());
 		await resolveDecision(path, written.ids[0]!, { now: new Date("2026-02-01T00:00:00Z") });
-		const outside = mkdtempSync(resolve(tmpdir(), "pelaggio-decisions-outside-"));
+		const outside = makeTestTmpDir("pelaggio-decisions-outside-");
 		symlinkSync(outside, resolve(path, "docs/decision-log/archive"), "dir");
 
 		await assert.rejects(archiveResolvedDecisions(path, new Date("2026-03-15T00:00:00Z")), /archive directory escapes the repo/);
@@ -147,7 +147,7 @@ describe("decision log authority", () => {
 		const main = repo();
 		seed(main);
 		const mainHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: main, encoding: "utf8" }).trim();
-		const feature = mkdtempSync(resolve(tmpdir(), "pelaggio-decisions-worktree-"));
+		const feature = makeTestTmpDir("pelaggio-decisions-worktree-");
 		execFileSync("git", ["worktree", "add", "-q", "-b", "feature", feature], { cwd: main });
 		const featureHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: feature, encoding: "utf8" }).trim();
 
@@ -316,7 +316,7 @@ describe("decision log authority", () => {
 	it("resolve from main discovers a unique ID only present in a sibling worktree", async () => {
 		const main = repo();
 		seed(main);
-		const feature = mkdtempSync(resolve(tmpdir(), "pelaggio-decisions-resolve-wt-"));
+		const feature = makeTestTmpDir("pelaggio-decisions-resolve-wt-");
 		execFileSync("git", ["worktree", "add", "-q", "-b", "feat/42", feature], { cwd: main });
 		const decision = { fork: "discover me" };
 		const written = await appendDecisions(feature, {

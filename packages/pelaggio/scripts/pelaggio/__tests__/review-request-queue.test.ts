@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { mainWorktree } from "../helpers.js";
@@ -16,12 +15,13 @@ import {
 	reviewRequestsDir,
 	unclaimReviewRequest,
 } from "../review-request-queue.js";
+import { makeTestTmpDir } from "./tmp-fixture.js";
 
 const SHA_A = "a".repeat(40);
 const SHA_B = "b".repeat(40);
 
 function tmpMain(): string {
-	return mkdtempSync(join(tmpdir(), "pelaggio-review-queue-"));
+	return makeTestTmpDir("pelaggio-review-queue-");
 }
 
 function record(over: Partial<NewReviewRequest> = {}): NewReviewRequest {
@@ -75,7 +75,7 @@ describe("review-request-queue — enqueue", () => {
 
 describe("review-request-queue — enqueue redirects to the main worktree", () => {
 	it("a write resolved through mainWorktree(worktree) lands in main's .dev, not the sibling worktree", () => {
-		const parent = mkdtempSync(join(tmpdir(), "pelaggio-review-queue-wt-"));
+		const parent = makeTestTmpDir("pelaggio-review-queue-wt-");
 		const main = join(parent, "main");
 		mkdirSync(main);
 		execSync("git init -q -b main", { cwd: main });

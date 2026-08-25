@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync, realpathSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, realpathSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { describe, it } from "node:test";
 import { decideDepsAction, decideSubpackageAction, ensureWorktreeDeps, findOutboundMainSymlinks, findWorkspaceEntriesIn, listWorkspacePackageMap, listWorkspaceSubpackages, repairMainNodeModules, resolveMainRepo } from "../worktree-deps.js";
+import { makeTestTmpDir } from "./tmp-fixture.js";
 
 interface Setup {
 	main: string;
@@ -54,7 +54,7 @@ function buildLock(body: string | null | undefined, subpackages: SubpackageSpec[
 }
 
 function makeSetup(opts: { mainLock?: string | null; worktreeLock?: string | null; mainNm?: "dir" | null; worktreeNm?: "dir" | "symlink-to-main" | null; worktreePnpmStore?: boolean; subpackages?: SubpackageSpec[] }): Setup {
-	const root = mkdtempSync(join(tmpdir(), "worktree-deps-test-"));
+	const root = makeTestTmpDir("worktree-deps-test-");
 	const main = resolve(root, "main");
 	const worktree = resolve(root, "worktree");
 	mkdirSync(main, { recursive: true });
@@ -563,7 +563,7 @@ function plantMaterializedEntries(nmDir: string, mainNm: string, worktree: strin
 }
 
 function makeMaterializeSetup(opts: MaterializeOpts): MaterializeSetup {
-	const root = mkdtempSync(join(tmpdir(), "worktree-materialize-test-"));
+	const root = makeTestTmpDir("worktree-materialize-test-");
 	const main = resolve(root, "main");
 	const worktree = resolve(root, "worktree");
 	mkdirSync(main, { recursive: true });
@@ -688,7 +688,7 @@ describe("listWorkspacePackageMap", () => {
 
 describe("findWorkspaceEntriesIn", () => {
 	it("matches top-level workspace name entries", () => {
-		const root = mkdtempSync(join(tmpdir(), "find-ws-test-"));
+		const root = makeTestTmpDir("find-ws-test-");
 		const nm = join(root, "node_modules");
 		mkdirSync(nm);
 		symlinkSync(resolve(root, "external"), join(nm, "external"), "dir");
@@ -698,7 +698,7 @@ describe("findWorkspaceEntriesIn", () => {
 	});
 
 	it("matches @scope/pkg workspace entries", () => {
-		const root = mkdtempSync(join(tmpdir(), "find-ws-test-"));
+		const root = makeTestTmpDir("find-ws-test-");
 		const nm = join(root, "node_modules");
 		mkdirSync(join(nm, "@scope"), { recursive: true });
 		symlinkSync(resolve(root, "a"), join(nm, "@scope", "a"), "dir");
@@ -708,12 +708,12 @@ describe("findWorkspaceEntriesIn", () => {
 	});
 
 	it("returns [] when nmDir does not exist", () => {
-		const root = mkdtempSync(join(tmpdir(), "find-ws-test-"));
+		const root = makeTestTmpDir("find-ws-test-");
 		assert.deepEqual(findWorkspaceEntriesIn(join(root, "absent"), new Map()), []);
 	});
 
 	it("ignores dotfile entries (.pnpm, .bin, .modules.yaml)", () => {
-		const root = mkdtempSync(join(tmpdir(), "find-ws-test-"));
+		const root = makeTestTmpDir("find-ws-test-");
 		const nm = join(root, "node_modules");
 		mkdirSync(join(nm, ".pnpm"), { recursive: true });
 		writeFileSync(join(nm, ".modules.yaml"), "");
@@ -722,7 +722,7 @@ describe("findWorkspaceEntriesIn", () => {
 	});
 
 	it("returns no false positives when nm contains only externals", () => {
-		const root = mkdtempSync(join(tmpdir(), "find-ws-test-"));
+		const root = makeTestTmpDir("find-ws-test-");
 		const nm = join(root, "node_modules");
 		mkdirSync(join(nm, "tsx"), { recursive: true });
 		mkdirSync(join(nm, "@biomejs", "biome"), { recursive: true });
@@ -1040,7 +1040,7 @@ describe("ensureWorktreeDeps (materialize)", () => {
 });
 
 function makeMain(): string {
-	const root = mkdtempSync(join(tmpdir(), "outbound-symlinks-test-"));
+	const root = makeTestTmpDir("outbound-symlinks-test-");
 	const main = resolve(root, "main");
 	mkdirSync(join(main, "node_modules"), { recursive: true });
 	return main;
@@ -1048,7 +1048,7 @@ function makeMain(): string {
 
 describe("findOutboundMainSymlinks", () => {
 	it("returns empty list when main/node_modules is absent", () => {
-		const root = mkdtempSync(join(tmpdir(), "outbound-symlinks-test-"));
+		const root = makeTestTmpDir("outbound-symlinks-test-");
 		const main = resolve(root, "main");
 		mkdirSync(main, { recursive: true });
 		assert.deepEqual(findOutboundMainSymlinks(main), []);

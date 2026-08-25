@@ -1,17 +1,17 @@
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
 import { dispatchStepEffects, type EffectsDispatchContext, EffectsManifestError, effectManifestPath, loadAndValidateEffectsManifest, writeEffectsManifest } from "../effects.js";
 import { digestManifestBytes, executionReceiptPath } from "../execution-receipt.js";
 import type { NewReviewRequest } from "../review-request-queue.js";
 import { allCommitMessages, makeMockRoadmap, makeTempGitRepo } from "./mocks.js";
+import { makeTestTmpDir } from "./tmp-fixture.js";
 
 const FIXED_CHALLENGE = new Uint8Array(32).fill(7);
 
-function baseContext(cwd = mkdtempSync(join(tmpdir(), "pelaggio-effects-test-"))): EffectsDispatchContext {
+function baseContext(cwd = makeTestTmpDir("pelaggio-effects-test-")): EffectsDispatchContext {
 	return {
 		runId: "cycle-1-TOOL-99",
 		itemId: "TOOL-99",
@@ -32,7 +32,7 @@ function baseContext(cwd = mkdtempSync(join(tmpdir(), "pelaggio-effects-test-"))
 /** A committed repo on `feat/tool-99` with an origin remote, ready for `runShipPrEffects` to push. */
 function shipReadyRepo(): string {
 	const cwd = makeTempGitRepo();
-	const remote = mkdtempSync(join(tmpdir(), "pelaggio-effects-remote-"));
+	const remote = makeTestTmpDir("pelaggio-effects-remote-");
 	execSync("git init -q --bare", { cwd: remote });
 	execSync(`git remote add origin ${remote}`, { cwd });
 	writeFileSync(join(cwd, "src.txt"), "hello");
@@ -57,7 +57,7 @@ function shipGateFor(cwd: string): { gatedHeadOid: string; originMainOid: string
 
 /** Run `fn` with a fake `gh` on PATH that answers `pr list` empty and `pr create` with `prUrl`. */
 async function withFakeGh(opts: { prUrl: string }, fn: () => Promise<void>): Promise<void> {
-	const bin = mkdtempSync(join(tmpdir(), "pelaggio-effects-fakebin-"));
+	const bin = makeTestTmpDir("pelaggio-effects-fakebin-");
 	writeFileSync(join(bin, "gh"), `#!/bin/sh\ncase "$1 $2" in\n"pr list") echo '[]' ;;\n"pr create") echo '${opts.prUrl}' ;;\n*) echo "unexpected gh call: $*" >&2; exit 1 ;;\nesac\n`, { mode: 0o755 });
 	const savedPath = process.env.PATH;
 	process.env.PATH = `${bin}:${savedPath}`;
