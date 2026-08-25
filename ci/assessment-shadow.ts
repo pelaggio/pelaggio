@@ -172,8 +172,12 @@ export function shadowDisposition(records: AssessmentRecord[], facts: HarnessFac
 	const unsupported: string[] = [];
 	const classified = records.map((r) => classify(r, facts, unsupported));
 	const recordById = new Map(classified.map((c) => [c.record.id, c]));
-	// Supersession keeps history: a superseded record stays in the ledger and stops counting as evidence.
-	const superseded = new Set(records.map((r) => r.supersedes).filter((id): id is string => typeof id === "string"));
+	// Supersession keeps history: a superseded record stays in the ledger and stops counting as evidence —
+	// but only when the successor is itself a legitimate reassessment: current, valid basis, complete,
+	// extension-free, and carrying no residual in any state. A stale or hollow successor supersedes nothing.
+	const legitimateSuccessor = (c: Classified): boolean =>
+		c.current && c.basisValid && c.complete && c.openResiduals.length === 0 && c.recoverableResiduals.length === 0 && c.resolvedResiduals.length === 0 && !unsupported.some((key) => key.startsWith(`${c.record.id}:`));
+	const superseded = new Set(classified.filter((c) => typeof c.record.supersedes === "string" && legitimateSuccessor(c)).map((c) => c.record.supersedes as string));
 
 	// Positive evidence: current, valid basis, complete, verdict holds, no residual left in any state.
 	// A resolved residual means the condition the assessor named has since been observed; the record
@@ -279,9 +283,12 @@ export function shadowDisposition(records: AssessmentRecord[], facts: HarnessFac
 	// A record parked for reassessment is not silently on either side: while it is pending, a positive
 	// record on the SAME proposition cannot carry a consequential commit — the resolving observation
 	// may confirm the violation. Fail closed until someone reassesses.
+	// Any record parked for reassessment on this subject is unresolved state; a consequential commit
+	// waits for it whatever proposition it names, because the resolving observation may have gone
+	// against the assessor.
 	let pending = false;
 	for (const c of awaitingReassessment) {
-		if (positive.some((p) => p.record.assessment.proposition === c.record.assessment.proposition)) {
+		if (positive.length > 0) {
 			causes.push({ kind: "pending-reassessment-on-proposition", record: c.record.id, proposition: c.record.assessment.proposition });
 			pending = true;
 		}

@@ -105,6 +105,17 @@ describe("shadow disposition properties", () => {
 		assert.ok(reassessed);
 		reassessed.supersedes = undefined;
 		assert.equal(shadowDisposition(unlinked.records, unlinked.facts, split.policy).disposition, "gather-evidence", "without the supersedes link the old V still pends");
+		// A hollow successor supersedes nothing: stale binding, or a residual of its own, leaves V pending.
+		const hollow = structuredClone(split.recovery);
+		const bad = hollow.records.find((r) => r.id === "V-reassessed");
+		assert.ok(bad);
+		bad.binding.sha = "553-r3";
+		assert.equal(shadowDisposition(hollow.records, hollow.facts, split.policy).disposition, "gather-evidence", "a stale successor does not supersede");
+		const hollow2 = structuredClone(split.recovery);
+		const bad2 = hollow2.records.find((r) => r.id === "V-reassessed");
+		assert.ok(bad2);
+		bad2.assessment.residual = [{ statement: "unless the adjudicator config changed" }];
+		assert.equal(shadowDisposition(hollow2.records, hollow2.facts, split.policy).disposition, "gather-evidence", "a successor carrying its own residual does not supersede");
 
 		const outage = fixture("unavailable-observation-555");
 		const first = shadowDisposition(outage.records, outage.facts, outage.policy);
