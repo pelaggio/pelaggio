@@ -1100,9 +1100,13 @@ whose `chosen` differs from the current choice appends as a genuine re-decision,
 collapsing into the superseded `A`. Identity normalization collapses whitespace
 and ignores trailing sentence punctuation, but preserves case so technical
 choices such as `CONTROL_PLANE_TOKEN` and `control_plane_token` remain distinct.
-Resolved rows are the exception: an emission matching an already-resolved
-identity returns that row instead of reopening the decision as `default-taken`.
-ID or fingerprint collisions with unequal content fail closed. Review escalations
+Resolved rows are the exception, and only while the fork has no live Active
+choice: an emission matching an already-resolved identity then returns that row
+instead of reopening the decision as `default-taken`. Once the fork has a current
+Active choice, that choice decides, so a reversion to a once-resolved option
+still appends. The resolved lookup spans `docs/decision-log/archive/<owner>.md`
+as well as the authority file, so archiving a resolution does not make it
+re-openable. ID or alias collisions with unequal content fail closed. Review escalations
 keep evidence-bound `reviewEscalationId` hashes and remain outside ordinary
 fork-identity dedupe.
 

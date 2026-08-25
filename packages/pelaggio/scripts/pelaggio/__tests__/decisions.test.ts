@@ -501,6 +501,92 @@ describe("fork-identity dedupe", () => {
 		assert.match(body, /resolved/);
 	});
 
+	it("keeps an ARCHIVED resolution consumed, so archiving cannot reopen a decision", async () => {
+		const path = repo();
+		seed(path);
+		const decided: Decision = { fork: "eligible prior findings terminals", chosen: "accept only complete verified `consensus-block` fleet outcomes with at least one survivor" };
+		const first = await appendDecisions(path, {
+			itemId: "497",
+			runId: "r1",
+			step: "plan",
+			attempt: 1,
+			source: "497",
+			now: new Date("2026-01-01T00:00:00Z"),
+			decisions: [{ id: "49749749-7497-4497-8497-497497497490", contentFingerprint: contentFingerprint(decided), occurrence: 0, decision: decided }],
+		});
+		assert.equal(first.status, "written");
+		await resolveDecision(path, first.ids[0] as string, { now: new Date("2026-01-02T00:00:00Z") });
+		// Aged out of the authority file into docs/decision-log/archive/497.md.
+		assert.equal(await archiveResolvedDecisions(path, new Date("2026-06-01T00:00:00Z")), 1);
+		assert.equal(
+			readFileSync(resolve(path, "docs/decision-log/497.md"), "utf8")
+				.split("\n")
+				.filter((line) => line.startsWith("| eligible")).length,
+			0,
+		);
+
+		// Re-emitting the archived identity must still be a duplicate. Indexing only the live
+		// authority file would append a fresh `default-taken` row and silently reopen it.
+		const reEmitted: Decision = { fork: "eligible  prior findings terminals.", chosen: "accept only complete verified `consensus-block` fleet outcomes with at least one survivor." };
+		const second = await appendDecisions(path, {
+			itemId: "497",
+			runId: "r2",
+			step: "shakedown-plan",
+			attempt: 1,
+			source: "497",
+			decisions: [{ id: "49749749-7497-4497-8497-497497497491", contentFingerprint: contentFingerprint(reEmitted), occurrence: 0, decision: reEmitted }],
+		});
+		assert.equal(second.status, "duplicate");
+		assert.equal(second.ids[0], first.ids[0]);
+		assert.equal(
+			readFileSync(resolve(path, "docs/decision-log/497.md"), "utf8")
+				.split("\n")
+				.filter((line) => line.startsWith("| eligible")).length,
+			0,
+			"no reopened Active row",
+		);
+	});
+
+	it("appends a reversion to a once-resolved choice when the fork has a live current choice", async () => {
+		const path = repo();
+		seed(path);
+		const optionA: Decision = { fork: "eligible prior findings terminals", chosen: "accept only complete verified `consensus-block` fleet outcomes with at least one survivor" };
+		const optionB: Decision = { fork: "eligible prior findings terminals", chosen: "also adjudicate complete `ok: true` disagreement splits alongside consensus-block" };
+		const first = await appendDecisions(path, {
+			itemId: "497",
+			runId: "r1",
+			step: "plan",
+			attempt: 1,
+			source: "497",
+			decisions: [{ id: "49749749-7497-4497-8497-497497497490", contentFingerprint: contentFingerprint(optionA), occurrence: 0, decision: optionA }],
+		});
+		await resolveDecision(path, first.ids[0] as string, { now: new Date("2026-08-21T00:00:00Z") });
+		const second = await appendDecisions(path, {
+			itemId: "497",
+			runId: "r2",
+			step: "plan",
+			attempt: 1,
+			source: "497",
+			decisions: [{ id: "49749749-7497-4497-8497-497497497491", contentFingerprint: contentFingerprint(optionB), occurrence: 0, decision: optionB }],
+		});
+		assert.equal(second.status, "written");
+
+		// B is now the fork's live choice, so returning to A is a genuine reversion and must append.
+		// Checking resolved rows before the live choice would suppress it and leave the log asserting
+		// the superseded B as current.
+		const third = await appendDecisions(path, {
+			itemId: "497",
+			runId: "r3",
+			step: "shakedown-plan",
+			attempt: 1,
+			source: "497",
+			decisions: [{ id: "49749749-7497-4497-8497-497497497492", contentFingerprint: contentFingerprint(optionA), occurrence: 0, decision: optionA }],
+		});
+		assert.equal(third.status, "written");
+		assert.notEqual(third.ids[0], first.ids[0]);
+		assert.notEqual(third.ids[0], second.ids[0]);
+	});
+
 	it("dedupes a reworded re-emission against the fork's current choice", async () => {
 		const path = repo();
 		seed(path);

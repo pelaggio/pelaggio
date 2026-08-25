@@ -657,9 +657,14 @@ function isMainCheckout(repo: string): boolean {
  * leaving the log asserting a stale date and source for the live decision and
  * ordering A above the B it now supersedes.
  *
- * Resolved rows are the one place identity stays permanently consumed: an
- * emission matching a resolved identity returns that row rather than reopening a
- * dispositioned decision as `default-taken`. Shipped logs are append-only:
+ * Resolved rows consume an identity only while the fork has no live Active
+ * choice: an emission matching a resolved identity then returns that row rather
+ * than reopening a dispositioned decision as `default-taken`. Once the fork has a
+ * current Active choice, that choice decides — so a genuine reversion to a
+ * once-resolved option still appends. The resolved lookup spans the archive as
+ * well as the authority file, because archiveResolvedDecisions moves aged rows to
+ * archive/<owner>.md and reading only the live file would let an archived
+ * decision be reopened. Shipped logs are append-only:
  * pre-existing near-duplicate rows are never rewritten; the rule governs new
  * appends only. Escalation rows are excluded — their identity is
  * reviewEscalationId().
@@ -676,17 +681,35 @@ export async function appendDecisions(repo: string, input: AppendDecisionsInput)
 
 			// Fork-identity indexes, built once. `order` is document position, and the Active section
 			// precedes Resolved, so max-order is only append order WITHIN Active — never across the
-			// two. Hence the split: Resolved identities are matched as a set (position irrelevant),
-			// Active is reduced to each fork's current choice.
-			const resolvedIdentities = new Set<string>();
+			// two. Hence the split: Resolved identities are matched by identity (position
+			// irrelevant), Active is reduced to each fork's current choice.
+			const resolvedById = new Map<string, string>();
 			for (const entry of file.resolved) {
-				if (!entry.escalation) resolvedIdentities.add(forkIdentityKey(decisionFromCells(entry.cells)));
+				if (!entry.escalation) resolvedById.set(forkIdentityKey(decisionFromCells(entry.cells)), entry.id);
 			}
 			const currentByFork = new Map<string, { id: string; identity: string }>();
 			for (const entry of [...file.active].filter((e) => !e.escalation).sort((a, b) => a.order - b.order)) {
 				const stored = decisionFromCells(entry.cells);
 				currentByFork.set(normalizeIdentity(stored.fork), { id: entry.id, identity: forkIdentityKey(stored) });
 			}
+			// `archiveResolvedDecisions` moves aged resolved rows out of the authority file into
+			// archive/<owner>.md, so the live file alone cannot answer "was this identity ever
+			// resolved?" — reading only it would let an archived decision be reopened as a fresh
+			// `default-taken` row. Loaded lazily: it is consulted only for a fork with NO current
+			// Active choice, so the common append path never pays the read.
+			let archivedById: Map<string, string> | undefined;
+			const archivedIdFor = (identity: string): string | undefined => {
+				if (!archivedById) {
+					archivedById = new Map();
+					const aPath = archivePath(repo, owner);
+					if (existsSync(aPath)) {
+						for (const entry of readAuthorityFile(aPath, owner).resolved) {
+							if (!entry.escalation) archivedById.set(forkIdentityKey(decisionFromCells(entry.cells)), entry.id);
+						}
+					}
+				}
+				return archivedById.get(identity);
+			};
 
 			for (const row of input.decisions) {
 				const id = validateDecisionId(row.id);
@@ -710,20 +733,27 @@ export async function appendDecisions(repo: string, input: AppendDecisionsInput)
 				// Fork-identity dedupe (see doc comment). Matching the fork's CURRENT choice rather
 				// than all of its history is what lets a reversion append: after A -> B, a further A
 				// differs from the current choice and is a genuine re-decision, not a duplicate of the
-				// superseded row. A resolved identity stays consumed so re-emission cannot reopen it.
+				// superseded row.
+				//
+				// The live choice is therefore consulted FIRST. Resolved/archived rows suppress only a
+				// fork with no live Active choice — reopening a dispositioned decision that nothing has
+				// superseded. Checking resolved first instead would suppress a genuine reversion to a
+				// once-resolved choice and leave the log asserting the superseded Active row as live,
+				// contradicting the append-on-difference rule above.
 				const identity = forkIdentityKey(row.decision);
 				const forkOf = normalizeIdentity(row.decision.fork);
-				if (resolvedIdentities.has(identity)) {
-					const resolvedRow = file.resolved.find((e) => !e.escalation && forkIdentityKey(decisionFromCells(e.cells)) === identity);
-					if (resolvedRow) {
-						ids.push(resolvedRow.id);
+				const current = currentByFork.get(forkOf);
+				if (current) {
+					if (current.identity === identity) {
+						ids.push(current.id);
 						continue;
 					}
-				}
-				const current = currentByFork.get(forkOf);
-				if (current && current.identity === identity) {
-					ids.push(current.id);
-					continue;
+				} else {
+					const consumed = resolvedById.get(identity) ?? archivedIdFor(identity);
+					if (consumed) {
+						ids.push(consumed);
+						continue;
+					}
 				}
 
 				ids.push(id);
