@@ -649,7 +649,8 @@
 			"statement": "Provider-diverse review improves defect detection enough to justify its incremental cost, latency, and failure surface.",
 			"sources": [
 				"ADR-0024"
-			]
+			],
+			"wrongIf": "A single strong reviewer at equal token budget reproduces the fleet's must-fix set on a sampled set of gated PRs (#270/#291), and cross-provider disagreement contributes no landed fixes over the same sample (#627's instrument)."
 		},
 		{
 			"id": "ASM-0003",
@@ -2035,16 +2036,6 @@
 			"to": "DEC-0018"
 		},
 		{
-			"from": "CTR-0004",
-			"relation": "implements",
-			"to": "CLM-0001"
-		},
-		{
-			"from": "CTR-0002",
-			"relation": "implements",
-			"to": "CLM-0006"
-		},
-		{
 			"from": "CTR-0002",
 			"relation": "implements",
 			"to": "CLM-0016"
@@ -2580,8 +2571,10 @@
 			"Are no-self-authorization and deterministic-safety-floor split at the right boundary?",
 			"Which source-grounding anchors should become generated/digested rather than hand-selected?",
 			"Which existing TC projections need richer condition/scope metadata before migration?",
-			"When evidence plumbing lands, what minimum Actor and scope/context representation is earned by real custody queries?",
-			"Is ADR-0022's fixed six-step / two-orchestrator topology due for reconsideration? The corpus records ADR-0022 as accepted and unamended (ADR-0025 says so explicitly); an earlier extraction labelled DEC-0012 'historical-topology-under-reconsideration' with no source, and the question-contract run of 2026-08-24 caught the overclaim. The durable intent it implements is CLM-0016 either way."
+			"When evidence plumbing lands, what minimum Actor and scope/context representation is earned by real custody queries?"
+		],
+		"decided": [
+			"2026-08-24 (#624): ADR-0022's fixed six-step / two-orchestrator topology stays a current construction choice (DEC-0012); nothing revisits it until a consumer question or a measured cost forces it."
 		]
 	}
 }
