@@ -35,7 +35,7 @@ export type SourceGrounding = { node: string; path: string; anchors: string[] };
 export type DiagnosticsEnv = { readSource?: (path: string) => string | undefined; sourceGrounding?: SourceGrounding[] };
 
 /** Every check the `debt` view may declare. `views.json` is bound to this list by test. */
-export const DEBT_CHECKS = ["orphan-realization", "invariant-without-realization", "decision-without-intent", "unused-assumption", "stale-source-grounding", "projection-overreach"] as const;
+export const DEBT_CHECKS = ["orphan-realization", "invariant-without-realization", "decision-without-intent", "unused-assumption", "stale-source-grounding", "projection-overreach", "constraint-without-enforcement"] as const;
 
 function index(graph: AssuranceGraph) {
 	return new Map(graph.nodes.map((node) => [node.id, node]));
@@ -92,6 +92,7 @@ export function diagnostics(graph: AssuranceGraph, env: DiagnosticsEnv = default
 	const outgoing = (id: string, rel?: string) => graph.edges.filter((e) => e.from === id && (!rel || e.relation === rel));
 	const incoming = (id: string, rel?: string) => graph.edges.filter((e) => e.to === id && (!rel || e.relation === rel));
 	const realized = (id: string) => incoming(id, "implements").some((e) => byId.get(e.from)?.kind === "realization");
+	const constrainsRealization = (id: string) => outgoing(id, "constrains").some((e) => byId.get(e.to)?.kind === "realization");
 
 	for (const node of graph.nodes) {
 		if (node.kind === "realization" && !outgoing(node.id).some((e) => e.relation === "implements" || e.relation === "derived-from")) {
@@ -108,6 +109,12 @@ export function diagnostics(graph: AssuranceGraph, env: DiagnosticsEnv = default
 		// named yet (see Q14 for the ratcheted public-guarantee subset).
 		if (node.kind === "proposition" && node.role === "invariant" && (node.visibility ?? "internal") === "internal" && !realized(node.id)) {
 			out.push({ check: "invariant-without-realization", node: node.id, message: "invariant names no implementing realization" });
+		}
+		// Endpoint kind is load-bearing: a constraint is enforced only by a realization, via either
+		// encoding (constraint constrains realization, or realization implements constraint).
+		// constrains → proposition/decision is intent-only; decision implements constraint is a choice.
+		if (node.kind === "proposition" && node.role === "constraint" && !realized(node.id) && !constrainsRealization(node.id)) {
+			out.push({ check: "constraint-without-enforcement", node: node.id, message: "constraint names no enforcing realization" });
 		}
 		// A public claim published as an unconditional guarantee whose projected internal intent has no
 		// implementing realization is stronger than what the graph can stand behind.

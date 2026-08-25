@@ -58,6 +58,7 @@ function injectDebtFor(check: string): AssuranceGraph {
 		broken.nodes.push({ id: "TC-X", kind: "proposition", role: "invariant", visibility: "public", slug: "overreach", statement: "s", projection: { status: "guarantee" } });
 		broken.edges.push({ from: "TC-X", relation: "projects", to: "CLM-X" });
 	}
+	if (check === "constraint-without-enforcement") broken.nodes.push({ id: "CON-X", kind: "proposition", role: "constraint", slug: "unbound", statement: "s" });
 	return broken;
 }
 
@@ -122,6 +123,60 @@ describe("query stress tests", () => {
 		assert.ok(overreaching);
 		overreaching.projection = { status: "best_effort" };
 		assert.ok(!diagnostics(broken).some((i) => i.check === "projection-overreach" && i.node === "TC-X"), "best_effort honestly reports an absent mechanism — no false fire");
+	});
+
+	it("constraint-without-enforcement fires", () => {
+		const intentOnly: AssuranceGraph = {
+			schemaVersion: "0.2.0",
+			nodes: [
+				{ id: "CON-X", kind: "proposition", role: "constraint", slug: "unbound", statement: "s" },
+				{ id: "DEC-Y", kind: "decision", slug: "intent", statement: "s" },
+			],
+			edges: [{ from: "CON-X", relation: "constrains", to: "DEC-Y" }],
+		};
+		const intentHits = (selectView(intentOnly, view("debt")).diagnostics ?? []).filter((d) => d.check === "constraint-without-enforcement");
+		assert.ok(
+			intentHits.some((d) => d.node === "CON-X"),
+			"constrains → decision is intent-only, not enforcement",
+		);
+		assert.equal(intentHits.length, 1);
+
+		const decisionImplements: AssuranceGraph = {
+			schemaVersion: "0.2.0",
+			nodes: [
+				{ id: "CON-X", kind: "proposition", role: "constraint", slug: "unbound", statement: "s" },
+				{ id: "DEC-Y", kind: "decision", slug: "choice", statement: "s" },
+			],
+			edges: [{ from: "DEC-Y", relation: "implements", to: "CON-X" }],
+		};
+		const choiceHits = (selectView(decisionImplements, view("debt")).diagnostics ?? []).filter((d) => d.check === "constraint-without-enforcement");
+		assert.ok(
+			choiceHits.some((d) => d.node === "CON-X"),
+			"decision implements constraint is a choice, not a mechanism",
+		);
+		assert.equal(choiceHits.length, 1);
+	});
+
+	it("constraint-without-enforcement accepts either encoding", () => {
+		const viaConstrains: AssuranceGraph = {
+			schemaVersion: "0.2.0",
+			nodes: [
+				{ id: "CON-X", kind: "proposition", role: "constraint", slug: "bound", statement: "s" },
+				{ id: "CTR-Y", kind: "realization", slug: "mech", statement: "s" },
+			],
+			edges: [{ from: "CON-X", relation: "constrains", to: "CTR-Y" }],
+		};
+		assert.ok(!(selectView(viaConstrains, view("debt")).diagnostics ?? []).some((d) => d.check === "constraint-without-enforcement"));
+
+		const viaImplements: AssuranceGraph = {
+			schemaVersion: "0.2.0",
+			nodes: [
+				{ id: "CON-X", kind: "proposition", role: "constraint", slug: "bound", statement: "s" },
+				{ id: "CTR-Y", kind: "realization", slug: "mech", statement: "s" },
+			],
+			edges: [{ from: "CTR-Y", relation: "implements", to: "CON-X" }],
+		};
+		assert.ok(!(selectView(viaImplements, view("debt")).diagnostics ?? []).some((d) => d.check === "constraint-without-enforcement"));
 	});
 
 	it("query modes fail loudly when required parameters are absent or unknown", () => {
