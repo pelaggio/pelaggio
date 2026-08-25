@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, it } from "node:test";
-import { adrMapFromSources } from "../assurance-views.ts";
+import { type AssuranceGraph, adrMapFromSources, diagnostics } from "../assurance-views.ts";
 
 const repo = resolve(new URL("../..", import.meta.url).pathname);
 type ShadowNode = {
@@ -287,6 +287,82 @@ describe("architectural question tests", () => {
 		// CTR-0004 is the live instance: worktree confinement decides from observed Git porcelain/ref
 		// state, which the seat can write, and a `.git/config` rewrite produces no porcelain delta.
 		assert.ok(bound.includes("CTR-0004"), "the git-porcelain confinement realization is the motivating instance");
+	});
+
+	/**
+	 * The ceiling: constraints that name no enforcing realization TODAY. It may only SHRINK — the
+	 * membership check below stops a new unenforced constraint slipping in, and the exact pin stops
+	 * the set rotting once mechanisms are bound. Admitting a new member is therefore a visible,
+	 * reviewer-audited edit here, and binding one is equally visible.
+	 *
+	 * CON-0027 is deliberately ABSENT: it binds CTR-0004 (Q15) and so is not unenforced. Keeping a
+	 * bound ID in a set named "unenforced" would make the exact pin lie about the corpus, which is
+	 * the drift this check exists to prevent. That is a narrower reading than Q14's
+	 * FROZEN_UNLINKED_GUARANTEES, which still lists TC-003 / TC-017 after those gained mechanisms;
+	 * the pin is the stricter of the two and this set follows it.
+	 *
+	 * Counted from graph.nodes at implement time: CON-0001 through CON-0030, one bound (CON-0027),
+	 * 29 unenforced. #650 is the binding pass that should reduce this to 8.
+	 */
+	const FROZEN_UNENFORCED_CONSTRAINTS = new Set([
+		"CON-0001",
+		"CON-0002",
+		"CON-0003",
+		"CON-0004",
+		"CON-0005",
+		"CON-0006",
+		"CON-0007",
+		"CON-0008",
+		"CON-0009",
+		"CON-0010",
+		"CON-0011",
+		"CON-0012",
+		"CON-0013",
+		"CON-0014",
+		"CON-0015",
+		"CON-0016",
+		"CON-0017",
+		"CON-0018",
+		"CON-0019",
+		"CON-0020",
+		"CON-0021",
+		"CON-0022",
+		"CON-0023",
+		"CON-0024",
+		"CON-0025",
+		"CON-0026",
+		"CON-0028",
+		"CON-0029",
+		"CON-0030",
+	]);
+
+	it("Q17: unenforced-constraint ceiling", () => {
+		const corpus = graph as unknown as AssuranceGraph;
+		const live = diagnostics(corpus)
+			.filter((d) => d.check === "constraint-without-enforcement")
+			.map((d) => d.node);
+		for (const id of live) {
+			assert.ok(FROZEN_UNENFORCED_CONSTRAINTS.has(id), `${id} names no enforcing realization and is not in the frozen ceiling; bind a realization, or explicitly amend the frozen set`);
+		}
+
+		// The other half of the ratchet, and the half that makes the ceiling shrink. The membership
+		// check above only stops a NEW unenforced constraint slipping in; on its own it lets the frozen
+		// set rot, because binding a mechanism would silently leave a stale member behind. Pinning the
+		// computed live set exactly means binding one FAILS here until the ceiling is updated, so the
+		// set can only ever get smaller. Same shape as Q14's `deepEqual(unlinked, ...)`.
+		// Compared as sorted sets: the pin is about membership, not about the order `graph.nodes`
+		// happens to list constraints in, which is not a property this gate should fire on.
+		assert.deepEqual([...live].sort(), [...FROZEN_UNENFORCED_CONSTRAINTS].sort(), "the current unenforced-constraint set (update when a mechanism is bound; it may only shrink)");
+
+		const injected = structuredClone(corpus);
+		injected.nodes.push({ id: "CON-X", kind: "proposition", role: "constraint", slug: "unbound", statement: "s" });
+		const injectedLive = new Set(
+			diagnostics(injected)
+				.filter((d) => d.check === "constraint-without-enforcement")
+				.map((d) => d.node),
+		);
+		assert.ok(injectedLive.has("CON-X"), "an unbound constraint absent from the frozen ceiling must fire");
+		assert.ok(!FROZEN_UNENFORCED_CONSTRAINTS.has("CON-X"), "CON-X is the ceiling true-fire: live diagnostic plus absence from the frozen set");
 	});
 
 	/**
