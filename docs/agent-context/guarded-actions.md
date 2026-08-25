@@ -158,9 +158,8 @@ the first draft and is the one that fails silently.
 *fenced* claim (a worktree path is a total function of `feat/<id>`). This is sound, and
 it is not a hint. But it is sound only under three conditions: (a) the deriving claim is
 fenced, (b) the target is a total function of the claim, (c) liveness is verified before
-any reuse or destruction. #435 is exactly a (b) violation: `pick` runs with
-`cwd=MAIN_REPO`, which is derived from no claim at all — so the premise fails before (b) is
-reached, `blockForeignRootWrite` permits main-tree mutation, and the audit only trips
+any reuse or destruction. #435 fails at (a): `pick` runs with `cwd=MAIN_REPO`, which is
+derived from no claim at all — there is no fenced deriving claim, so (b) is never reached, `blockForeignRootWrite` permits main-tree mutation, and the audit only trips
 later, in a different cycle.
 
 | Guard | Authority | Class | Status |
@@ -344,25 +343,19 @@ ClearedBy = { transition: ClearingTransition, actor: ClearingActor }
 
 // Deterministic function of (judgments, evidence, diversityStatus, config).
 // This is the only thing the merge path reads.
-// Each blocking reason carries the ONE clearer that is legal for it; the pairing is the
-// variant, so a reason cannot be assembled with the wrong actor.
-BlockCause =
-  | { reason: "must-fix-survives";   clearedBy: { transition: "revise",       actor: "author" } }
-  | { reason: "evidence-unavailable"; clearedBy: { transition: "retry",        actor: RetryActor } }
-  | { reason: "attempts-exhausted";  clearedBy: { transition: "human-review", actor: "human" } }
-  | { reason: "no-retry-actor";      clearedBy: { transition: "human-review", actor: "human" } }
-
 type Disposition =
   | { kind: "merge" }
-  | { kind: "block";         cause: BlockCause }
-  | { kind: "indeterminate"; cause: UnavailableCause;  retryActor: RetryActor;
-                             attemptsRemaining: number }
+  | { kind: "block";         reason: BlockReason;      clearedBy: ClearedBy }
+  | { kind: "indeterminate"; cause: UnavailableCause;  clearedBy: ClearedBy;
+                             retryActor: RetryActor;   attemptsRemaining: number }
 ```
 
-`merge` carries no clearing transition (it is progress). `block` *requires* one, and the
-reason and its legal clearer are one variant — so the §6 invariant ("the clearing actor
-belongs to the blocking state") is enforced by the compiler, not by a free `clearedBy` field
-any reason could be paired with. `indeterminate` names its retry actor and bound directly.
+`merge` carries no clearing transition (it is progress). `block` and `indeterminate` both
+*require* one, with its authorized actor — a discriminated union, so the §6 invariant is
+enforced by the compiler rather than by an optional field every call site can fill with a
+stub. (Known gap, unchanged since v7: this sketch pairs any `BlockReason` with any
+`ClearedBy`; binding each reason to its one legal clearer per §6/§7.2 is G-series work and
+must be done against the clearer table there, not improvised here.)
 
 ### 7.1 Evidence is not diversity
 
@@ -630,8 +623,11 @@ cluster. This is hoisted from the guard campaign of 2026-08 — #554 / PR #589 (
 each found one more unscrubbed sink), #435 (a chokepoint the `cwd=MAIN_REPO` path never
 reached), #571 / PR #595 (one more HEAD shape) — where the fix that repeatedly worked was
 not the next patch but lifting the guarantee to one chokepoint where it holds structurally.
-The intent half of this section is already a graph proposition, `CON-0027` (sourced to
-ADR-0023/0026); this section is its construction home and promotes nothing.
+The intent half of this section — a guard may not derive its verdict from state the
+guarded party can write, and enumerating such channels is no substitute — is recorded,
+**non-authoritatively**, as `CON-0027` in the shadow assurance graph. Its authoritative home
+would be an amendment to ADR-0026; this document proposes that and does not make it, and
+cites the graph as an index of the proposal, never as authority.
 
 The bar, one sentence, in §3's spirit:
 
@@ -654,9 +650,10 @@ of its own caveat. Code-referencing claims in this section were verified against
 `7c92b03` (2026-08-24). The moves are not exclusive, and one guard may use several.
 
 - **Chokepoint enforcement** — put the guarantee at the boundary every path funnels
-  through, not at each producer. *Existing instance:* the §7 discriminated union — every
-  blocking variant must carry its `clearedBy`, so the §6 invariant holds at the type, not at
-  each call site. *Prerequisite, not a description (#615):* review and adjudication bodies
+  through, not at each producer. *Target, not yet built:* the §7 discriminated union — every
+  blocking variant carrying its `clearedBy` so the §6 invariant holds at the type — is a
+  sketch whose clearers §6 still lists as incomplete, not a shipped chokepoint.
+  *Prerequisite, not a description (#615):* review and adjudication bodies
   reach their public sinks (stdout, the PR-comment upsert) through roughly nine independent
   call sites with no funnel; `secret-hygiene.ts`'s scrubber (ADR-0010) runs at the driver
   capture and transcript sinks, not at those writes. Funnelling the writes buys "every sink is
@@ -666,10 +663,11 @@ of its own caveat. Code-referencing claims in this section were verified against
 - **Extract-and-require (conformance)** — do not hand-maintain the allowed set against a
   moving upstream; extract the full set mechanically and *require* every member be
   explicitly triaged, so a *new* member fails CI rather than slipping through. *Existing
-  instance:* the ADR-0023 hostile-probe conformance suite (N/N probes, fail closed on any
-  unanticipated change) and `shadow-assurance.test.ts` Q5/Q16, which enumerate the trust
-  registry and the AGENTS.md invariant index from their sources and fail on an unclassified
-  member. *Prerequisite, not a description:* `DEFAULT_AGENT_ENV_ALLOWLIST` is a hand-maintained
+  instance:* `shadow-assurance.test.ts` Q5 and Q16, which enumerate the trust registry and the
+  AGENTS.md invariant index from their sources and fail on any record or bullet that is not
+  classified (the ADR-0023 hostile-probe suite is *not* one: its cases are a fixed,
+  manually invoked set, not an extraction of a moving upstream). *Prerequisite, not a
+  description:* `DEFAULT_AGENT_ENV_ALLOWLIST` is a hand-maintained
   constant and no test scans the installed SDK; nor can a source scan be complete — the SDK
   reads `process.env[...]` dynamically and launches a native binary — so the honest form is an
   authoritative manifest from upstream or an enforced runtime boundary, not a grep.
@@ -680,17 +678,18 @@ of its own caveat. Code-referencing claims in this section were verified against
   other or unknown source default to untrusted rather than enumerating distrust one member
   at a time.
 - **Recognize-by-invariant, not by-shape** — identify a thing by the property that
-  *defines* it, not the incidental form it took this time. *Existing instance:* §7.2's "the
-  input must carry typed *per-cell* causes" — disposition keys on the cause that defines a
-  cell, not on an aggregate label two materially different matrices happen to share.
-  *Prerequisite, not a description (#571 / PR #595):* recognize an unproven `ours`-style
+  *defines* it, not the incidental form it took this time. *The shape, as a prerequisite:*
+  §7.2's "the input must carry typed *per-cell* causes" — key disposition on the cause that
+  defines a cell, not on an aggregate label two materially different matrices happen to
+  share; §7.1 records that the current sketch still aggregates evidence and the per-cell
+  seam is G-series work. *Prerequisite, not a description (#571 / PR #595):* recognize an unproven `ours`-style
   merge by its merge-against-main second-parent signature plus a tree check, so every way
   HEAD can diverge collapses into one recognition rule; no such recognizer exists at head.
 
 **Relation to the spine and to §8.1.** This is the construction reading of ADR-0014
 (determinism lives in the harness): from *the gate's decision is deterministic* to *the
-gate's completeness is structural, not enumerated*. It decides nothing new — the rule it
-builds toward is `CON-0027`, already in the intent graph. It is the construction companion to §8.1's behavioral bar
+gate's completeness is structural, not enumerated*. It decides nothing new; the rule it
+builds toward is the ADR-0026 amendment proposed above. It is the construction companion to §8.1's behavioral bar
 — §8.1 governs how a gate behaves *when it fires* (early / narrow / preserving /
 falsifiable); this governs how a guard is *structured so its guarantee is complete at all*.
 The two meet at §8.1's fourth property: a construction-level guard is inherently more
@@ -791,17 +790,18 @@ Steps 1–3 are independently valuable if the rest is never built.
 
 ## Revision log
 
-**v9** (2026-08-24) — doc-review of v8 (3 seats, 9 must-fix) found §8.2's worked examples
+**v9** (2026-08-24) — two doc-review passes (3 seats each) found §8.2's worked examples
 described mechanisms that do not exist at head: the scrub does not run at the public writes
 (and #536 says scrubbing cannot close covert channels), no SDK env-var conformance scan
-exists, no `ours`-merge recognizer exists. Each is now marked *prerequisite, not a
-description*, and the existing instances (§7 union, §7.2 default-deny, per-cell causes, the
-ADR-0023 probe suite, Q5/Q16) carry the examples. §8.2 is framed as the construction home
-of `CON-0027` rather than as extending ADR-0014 on its own authority, and the AGENTS.md
-bullet it adds is mapped to `CON-0027` in the intent graph's `invariantIndex` (Q16). Also
-repaired: §7.3 rule 2 (a no-retry-actor indeterminate is a human-cleared block from the
-start, not `clearedBy: retry`), the §7 sketch (reason and legal clearer are one variant),
-and the §4 misreport in §8.2's caveat (condition (a) is what #435 lacks).
+exists, no `ours`-merge recognizer exists, the §7 union is a sketch, the per-cell seam is
+unbuilt, and the ADR-0023 probe suite is a fixed spike. Everything unbuilt is now marked
+*prerequisite* or *target*; the only claimed existing instances are §7.2's default-deny row,
+§4's derived-exclusivity condition, and the source-enumerating Q5/Q16 tests. The intent half
+is pointed at as a *proposed* ADR-0026 amendment (indexed non-authoritatively as `CON-0027`
+in the shadow graph, which is also where the AGENTS.md bullet maps under Q16). Also repaired:
+§7.3 rule 2 (a no-retry-actor indeterminate is a human-cleared block from the start) and
+§4's #435 sentence (it fails at (a), not (b)). The §7 sketch is left as v7 with its known
+gap stated rather than re-guessed.
 
 **v8** (2026-08-22) — added §8.2, the construction-over-enumeration principle ("type the
 invariant out of the pipeline"): the completeness-surface diagnostic (recurrence of "one
