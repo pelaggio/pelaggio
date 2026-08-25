@@ -102,6 +102,7 @@ function fleet(over: Partial<NewPrReviewFleetGateRecord> = {}): NewPrReviewFleet
 		cost: 1,
 		costEstimated: false,
 		turns: 4,
+		elapsedMs: 1_000,
 		runner: "local",
 		reviewedAt: "2026-08-13T12:00:00.000Z",
 		...over,

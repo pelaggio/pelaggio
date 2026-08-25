@@ -3618,6 +3618,8 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				let reviewCostEstimated = false;
 				let parked = false;
 				let gateResult: PrReviewGateResult | null = null;
+				let gateStartedAt: number | undefined;
+				let elapsedMs = 0;
 				try {
 					const prepared = review.prepareReviewHead(REPO, pr);
 					if (!prepared) throw new Error("could not prepare PR head for local review");
@@ -3638,6 +3640,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 								warn: (msg) => console.warn(`review ${pr.itemId}#${pr.prNumber} — ${msg}`),
 							})
 						: undefined;
+					gateStartedAt = review.now();
 					const result = await review.runReviewGate({
 						pr: String(pr.prNumber),
 						itemId: pr.itemId,
@@ -3651,6 +3654,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						parkSignal, // shared: a rate-limit park sets this and flows into the wait+retry policy
 						...(carry ? { carry } : {}),
 					});
+					elapsedMs = Math.max(0, Math.trunc(review.now() - gateStartedAt));
 					if (result.gate === "park") {
 						// Transient: leave the pending status as-is (do NOT upsert findings or post failure),
 						// charge the partial cost, hand the record back, and stop starting new reviews this pass.
@@ -3670,6 +3674,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						reviewCostEstimated = result.costEstimated;
 					}
 				} catch (e) {
+					if (gateStartedAt !== undefined) elapsedMs = Math.max(0, Math.trunc(review.now() - gateStartedAt));
 					const msg = e instanceof Error ? e.message : String(e);
 					body = buildFailClosedComment("error_crash", `local pr-review crashed before producing a review, so this gate blocks the merge.\n\n${msg}`);
 					finalState = "failure";
@@ -3696,6 +3701,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 							cost: gateResult.cost,
 							costEstimated: gateResult.costEstimated,
 							turns: gateResult.turns,
+							elapsedMs,
 							runner: "local",
 							reviewedAt: new Date(review.now()).toISOString(),
 						}
@@ -3711,6 +3717,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 							cost: 0,
 							costEstimated: false,
 							turns: 0,
+							elapsedMs,
 							runner: "local",
 							reviewedAt: new Date(review.now()).toISOString(),
 						};

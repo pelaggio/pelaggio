@@ -40,6 +40,7 @@ function fleetRecord(overrides: Partial<NewPrReviewFleetGateRecord> = {}): NewPr
 		cost: 0.25,
 		costEstimated: false,
 		turns: 3,
+		elapsedMs: 12_345,
 		runner: "local",
 		reviewedAt: "2026-08-05T12:00:00.000Z",
 		...overrides,
@@ -196,6 +197,16 @@ describe("PR review gate record store", () => {
 		]);
 	});
 
+	it("reads historical v2 fleet records without elapsed time but requires it on new writes", () => {
+		const historical = { schemaVersion: 2, ...fleetRecord() } as Record<string, unknown>;
+		delete historical.elapsedMs;
+		const validated = validatePrReviewGateRecord(historical);
+		assert.ok(validated.schemaVersion === 2 && validated.producer === "fleet");
+		assert.equal(validated.elapsedMs, undefined);
+
+		assert.throws(() => writePrReviewGateRecord(root(), { ...fleetRecord(), elapsedMs: undefined } as unknown as NewPrReviewFleetGateRecord), /invalid elapsedMs/);
+	});
+
 	it("returns stored fleet agreement and never treats operator gate pass as consensus", () => {
 		const v1 = validatePrReviewGateRecord(v1Fixture({ agreement: "disagreement" }));
 		const fleet = validatePrReviewGateRecord({ schemaVersion: 2, ...fleetRecord({ agreement: "consensus-block" }) });
@@ -235,6 +246,9 @@ describe("PR review gate record store", () => {
 			{ ...validFleet, producer: "operator-adjudication" },
 			{ ...validFleet, producer: "human" },
 			{ ...validFleet, agreement: "not-run" },
+			{ ...validFleet, elapsedMs: -1 },
+			{ ...validFleet, elapsedMs: 1.5 },
+			{ ...validFleet, elapsedMs: Number.POSITIVE_INFINITY },
 			{ ...validFleet, adjudicator: "alice" },
 			{ ...validOperator, agreement: "consensus-pass" },
 			{ ...validOperator, agreement: "consensus-block" },

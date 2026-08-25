@@ -45,6 +45,8 @@ export interface PrReviewFleetGateRecordV2 {
 	cost: number;
 	costEstimated: boolean;
 	turns: number;
+	/** Wall-clock duration of the fleet gate invocation. Absent on historical v2 records. */
+	elapsedMs?: number;
 	runner: "local";
 	reviewedAt: string;
 }
@@ -69,7 +71,7 @@ export type PrReviewGateRecordV2 = PrReviewFleetGateRecordV2 | PrReviewOperatorG
 export type PrReviewGateRecord = PrReviewGateRecordV1 | PrReviewGateRecordV2;
 
 // Per-branch Omit: mapped Omit on the v2 union would keep only shared keys and erase the producer branch.
-export type NewPrReviewFleetGateRecord = Omit<PrReviewFleetGateRecordV2, "schemaVersion">;
+export type NewPrReviewFleetGateRecord = Omit<PrReviewFleetGateRecordV2, "schemaVersion" | "elapsedMs"> & { elapsedMs: number };
 export type NewPrReviewOperatorGateRecord = Omit<PrReviewOperatorGateRecordV2, "schemaVersion">;
 export type NewPrReviewGateRecord = NewPrReviewFleetGateRecord | NewPrReviewOperatorGateRecord;
 
@@ -83,7 +85,26 @@ const AGREEMENTS: readonly PrReviewAgreement[] = ["consensus-pass", "consensus-b
 const BREAKER_REASONS: readonly ReviewExhaustionReason[] = ["max-passes", "budget", "diminishing-returns", "invalid-pass", "provider-diversity"];
 const DISPOSITIONS: readonly PrReviewFindingDisposition[] = ["fixed", "refuted", "accepted"];
 
-const FLEET_V2_KEYS = ["schemaVersion", "producer", "prNumber", "headSha", "itemId", "gate", "ok", "subtype", "agreement", "breakerReason", "iterations", "survivorCount", "cost", "costEstimated", "turns", "runner", "reviewedAt"] as const;
+const FLEET_V2_KEYS = [
+	"schemaVersion",
+	"producer",
+	"prNumber",
+	"headSha",
+	"itemId",
+	"gate",
+	"ok",
+	"subtype",
+	"agreement",
+	"breakerReason",
+	"iterations",
+	"survivorCount",
+	"cost",
+	"costEstimated",
+	"turns",
+	"elapsedMs",
+	"runner",
+	"reviewedAt",
+] as const;
 const OPERATOR_V2_KEYS = ["schemaVersion", "producer", "agreement", "prNumber", "itemId", "headSha", "gate", "runner", "reviewedAt", "adjudicator", "reviewedSourceSha", "interdiffDigest", "dispositions"] as const;
 const DISPOSITION_ENTRY_KEYS = ["disposition", "rationale"] as const;
 
@@ -156,6 +177,12 @@ function requireOptionalCount(value: unknown, field: string): number | undefined
 	return value;
 }
 
+function requireOptionalNonNegativeInt(value: unknown, field: string): number | undefined {
+	if (value === undefined) return undefined;
+	if (!Number.isInteger(value) || (value as number) < 0) fail(field);
+	return value as number;
+}
+
 function validateCommonIdentity(value: Record<string, unknown>): {
 	prNumber: number;
 	headSha: string;
@@ -184,6 +211,7 @@ function validateFleetMetrics(value: Record<string, unknown>): {
 	cost: number;
 	costEstimated: boolean;
 	turns: number;
+	elapsedMs?: number;
 } {
 	if (typeof value.ok !== "boolean") fail("ok");
 	const subtype = requireNonEmptyString(value.subtype, "subtype");
@@ -194,6 +222,7 @@ function validateFleetMetrics(value: Record<string, unknown>): {
 	if (!isNonNegativeFinite(value.cost)) fail("cost");
 	if (typeof value.costEstimated !== "boolean") fail("costEstimated");
 	if (!isNonNegativeFinite(value.turns)) fail("turns");
+	const elapsedMs = requireOptionalNonNegativeInt(value.elapsedMs, "elapsedMs");
 	return {
 		ok: value.ok,
 		subtype,
@@ -204,6 +233,7 @@ function validateFleetMetrics(value: Record<string, unknown>): {
 		cost: value.cost,
 		costEstimated: value.costEstimated,
 		turns: value.turns,
+		...(elapsedMs !== undefined ? { elapsedMs } : {}),
 	};
 }
 
@@ -291,6 +321,7 @@ function readRecord(path: string): PrReviewGateRecord | null {
 }
 
 export function writePrReviewGateRecord(root: string, record: NewPrReviewGateRecord): string {
+	if (record.producer === "fleet" && record.elapsedMs === undefined) fail("elapsedMs");
 	const complete = validatePrReviewGateRecord({ ...record, schemaVersion: 2 });
 	mkdirSync(root, { recursive: true });
 	const path = recordPath(root, complete.prNumber, complete.headSha);
