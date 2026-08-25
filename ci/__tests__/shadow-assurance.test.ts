@@ -350,7 +350,9 @@ describe("architectural question tests", () => {
 		// set rot, because binding a mechanism would silently leave a stale member behind. Pinning the
 		// computed live set exactly means binding one FAILS here until the ceiling is updated, so the
 		// set can only ever get smaller. Same shape as Q14's `deepEqual(unlinked, ...)`.
-		assert.deepEqual(live, [...FROZEN_UNENFORCED_CONSTRAINTS], "the current unenforced-constraint set (update when a mechanism is bound; it may only shrink)");
+		// Compared as sorted sets: the pin is about membership, not about the order `graph.nodes`
+		// happens to list constraints in, which is not a property this gate should fire on.
+		assert.deepEqual([...live].sort(), [...FROZEN_UNENFORCED_CONSTRAINTS].sort(), "the current unenforced-constraint set (update when a mechanism is bound; it may only shrink)");
 
 		const injected = structuredClone(corpus);
 		injected.nodes.push({ id: "CON-X", kind: "proposition", role: "constraint", slug: "unbound", statement: "s" });
