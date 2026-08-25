@@ -1825,7 +1825,6 @@ describe("runPipeline — worktree confinement audit", () => {
 			},
 			parkSignal,
 		);
-
 		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", shipTarget: getShipTarget("direct-push") }, parkSignal, baseFlags, {
 			runStep,
 			mainRepo,
@@ -3536,7 +3535,7 @@ describe("runPipeline — authoring review capability seating + effects (#337)",
 		const parkSignal = makeParkSignal();
 		const manifests: Array<{ attempt: number; step: string; effects: unknown[] }> = [];
 		const dispatches: Array<{ attempt: number; step: string }> = [];
-		const { runStep, calls } = createMockRunStep(
+		const { runStep: mockRunStep, calls } = createMockRunStep(
 			{
 				implement: { ok: true, writes: { "impl.txt": "x" } },
 				"pr-review": { ok: true, text: cleanFindings, fullText: cleanFindings },
@@ -3553,6 +3552,11 @@ describe("runPipeline — authoring review capability seating + effects (#337)",
 			},
 			parkSignal,
 		);
+		const authoringWorkspaceAccess: Array<{ name: string; workspaceAccess?: "read-only" }> = [];
+		const runStep: RunStepFn = async (name, prompt, opts, emit) => {
+			if (name === "pr-review" || name === "pr-verify") authoringWorkspaceAccess.push({ name, workspaceAccess: opts.workspaceAccess });
+			return mockRunStep(name, prompt, opts, emit);
+		};
 
 		try {
 			const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement" }, parkSignal, baseFlags, {
@@ -3581,6 +3585,8 @@ describe("runPipeline — authoring review capability seating + effects (#337)",
 				calls.some((c) => c.step === "pr-verify"),
 				"expected pr-verify judge call",
 			);
+			assert.ok(authoringWorkspaceAccess.length >= 2);
+			for (const call of authoringWorkspaceAccess) assert.equal(call.workspaceAccess, undefined, `${call.name} authoring seat must remain writable`);
 			const aggregate = manifests.find((m) => m.step === "shakedown-code" && m.attempt === 0);
 			assert.ok(aggregate, `expected shakedown-code attempt 0 manifest; got ${JSON.stringify(manifests)}`);
 			assert.equal(aggregate.effects[0] && (aggregate.effects[0] as { kind: string }).kind, "review.Verdict");
@@ -4517,17 +4523,19 @@ describe("runPipeline — PR pre-flight and freshness (#424)", () => {
 	it("pre-flight reviewer seats carry no claim-worktree write authorization (detached, read-only)", async () => {
 		const worktree = makeDeliverableRepo();
 		const parkSignal = makeParkSignal();
-		const denials: Array<{ ownWorktree?: string; registeredWorktrees: readonly string[] } | undefined> = [];
+		const seats: Array<{ name: string; workspaceAccess?: "read-only"; denial?: { ownWorktree?: string; registeredWorktrees: readonly string[] } }> = [];
 		const { runStep } = createMockRunStep({ ship: prShipDecision() }, parkSignal);
 		const wrapped: RunStepFn = async (name, prompt, opts, emit) => {
-			if (name === "pr-review") denials.push(opts.foreignRootDenial);
+			if (name === "pr-review" || name === "pr-verify") seats.push({ name, workspaceAccess: opts.workspaceAccess, denial: opts.foreignRootDenial });
 			return runStep(name, prompt, opts, emit);
 		};
 		const result = await runPipeline(shipFrom(worktree), parkSignal, baseFlags, {
 			runStep: wrapped,
 			...defaultPrPreflightStubs(),
 			runPrReviewGate: async (opts) => {
-				await opts.runStep!("pr-review", "inspect", { cwd: opts.cwd ?? "", profile: "standard", trace: false, parkSignal: opts.parkSignal ?? parkSignal, executionOverride: { provider: "claude" } }, () => {});
+				for (const name of ["pr-review", "pr-verify"] as const) {
+					await opts.runStep!(name, "inspect", { cwd: opts.cwd ?? "", profile: "standard", trace: false, parkSignal: opts.parkSignal ?? parkSignal, workspaceAccess: "read-only", executionOverride: { provider: "codex" } }, () => {});
+				}
 				return passGate();
 			},
 			listWorktrees: () => [worktree],
@@ -4535,12 +4543,15 @@ describe("runPipeline — PR pre-flight and freshness (#424)", () => {
 			dispatchStepEffects: async () => ({ appendText: "https://example.test/pull/1" }),
 		});
 		assert.equal(result.completed, true, `expected completed; error=${result.error}`);
-		assert.equal(denials.length, 1);
-		assert.ok(denials[0], "seat steps still install foreign-root denial");
+		assert.equal(seats.length, 2);
+		for (const seat of seats) {
+			assert.equal(seat.workspaceAccess, "read-only", `${seat.name} pre-flight seat must preserve harness access intent`);
+			assert.ok(seat.denial, "seat steps still install foreign-root denial");
+		}
 		// #424 fix: the live claim worktree is a DENIED foreign root for reviewer seats, not an
 		// ownWorktree write grant (only its registration keeps it in the denied set).
-		assert.equal(denials[0]?.ownWorktree, undefined);
-		assert.ok(denials[0]?.registeredWorktrees.includes(worktree));
+		assert.equal(seats[0]?.denial?.ownWorktree, undefined);
+		assert.ok(seats[0]?.denial?.registeredWorktrees.includes(worktree));
 	});
 
 	it("a clean commit into the live claim worktree during pre-flight fails the cycle before ship", async () => {
