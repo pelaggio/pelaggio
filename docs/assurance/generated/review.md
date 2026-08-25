@@ -15,7 +15,6 @@ flowchart TB
   CTR_0002["two-review-orchestrators"]
   CTR_0003["n-reviewers-one-judge"]
   CTR_0012["fail-closed-review-verdict-parsers"]
-  CTR_0014["execution-receipt-attestation"]
   DEC_0003["signed-tag-provenance-publish"]
   DEC_0008["in-toto-envelope"]
   DEC_0012["fixed-six-step-two-review-orchestrators"]
@@ -29,8 +28,6 @@ flowchart TB
   CTR_0003 -->|implements| CLM_0016
   CTR_0012 -->|implements| CLM_0009
   CTR_0012 -->|implements| CLM_0019
-  CTR_0014 -->|derived-from| DEC_0008
-  CTR_0014 -->|implements| CLM_0008
   DEC_0003 -->|implements| CLM_0008
   DEC_0008 -->|implements| CLM_0008
   DEC_0012 -->|implements| CLM_0016

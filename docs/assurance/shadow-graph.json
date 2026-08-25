@@ -1358,28 +1358,15 @@
 			]
 		},
 		{
-			"id": "CTR-0014",
-			"kind": "realization",
-			"slug": "execution-receipt-attestation",
-			"statement": "Execution receipts are emitted as in-toto-compatible statements binding a delivery to its source and execution evidence.",
-			"sources": [
-				"ADR-0018"
-			],
-			"codeEvidence": [
-				"packages/pelaggio/scripts/pelaggio/execution-receipt.ts",
-				"packages/pelaggio/scripts/pelaggio/__tests__/execution-receipt.test.ts"
-			]
-		},
-		{
 			"id": "CTR-0015",
 			"kind": "realization",
 			"slug": "typed-gate-record-and-adjudication",
-			"statement": "Gate records carry judgment, evidence completeness, breaker cause, and disposition as separate validated fields, and adjudication consumes them as typed sources rather than a single status.",
+			"statement": "Gate records carry ok, agreement, breaker cause, and gate disposition as separate validated fields, and adjudication consumes them as typed sources rather than a single status.",
 			"sources": [
 				"ADR-0026"
 			],
 			"codeEvidence": [
-				"packages/pelaggio/scripts/pelaggio/review/record.ts",
+				"packages/pelaggio/scripts/pelaggio/pr-review-gate-record.ts",
 				"packages/pelaggio/scripts/pelaggio/review/adjudication.ts",
 				"packages/pelaggio/scripts/pelaggio/__tests__/review-adjudication.test.ts"
 			]
@@ -1388,7 +1375,7 @@
 			"id": "CTR-0016",
 			"kind": "realization",
 			"slug": "park-exit-checkpoint-resume",
-			"statement": "Rate-limit and blocked paths park through parkExit, checkpointing uncommitted work at a step boundary; `--resume` reconciles against the checkpoint and current repository state rather than replaying the model.",
+			"statement": "Rate-limit paths park through parkExit and blocked outcomes quarantine through quarantineExit; both checkpoint uncommitted work at a step boundary, and `--resume` reconciles against the checkpoint and current repository state rather than replaying the model.",
 			"sources": [
 				"ADR-0019"
 			],
@@ -1420,32 +1407,6 @@
 			],
 			"codeEvidence": [
 				"packages/pelaggio/scripts/pelaggio/roadmap/git-claim.ts"
-			]
-		},
-		{
-			"id": "CTR-0019",
-			"kind": "realization",
-			"slug": "shadow-assurance-graph",
-			"statement": "The machine-readable intent graph and its coverage/question tests exist as a shadow, non-authoritative projection of the ADR corpus and trust registry.",
-			"sources": [
-				"ADR-0027"
-			],
-			"codeEvidence": [
-				"docs/assurance/shadow-graph.json",
-				"ci/__tests__/shadow-assurance.test.ts"
-			]
-		},
-		{
-			"id": "CTR-0020",
-			"kind": "realization",
-			"slug": "trust-claim-evidence-commands",
-			"statement": "Each public trust claim names an evidence command (for TC-002, a grep of production sources for analytics/telemetry SDKs expected to find none) that `check:trust` runs.",
-			"sources": [
-				"docs/trust/trust-claims.yml"
-			],
-			"codeEvidence": [
-				"ci/verify-claims.ts",
-				"docs/trust/trust-claims.yml"
 			]
 		},
 		{
@@ -2019,16 +1980,6 @@
 			"to": "DEC-0002"
 		},
 		{
-			"from": "CTR-0014",
-			"relation": "implements",
-			"to": "CLM-0008"
-		},
-		{
-			"from": "CTR-0014",
-			"relation": "derived-from",
-			"to": "DEC-0008"
-		},
-		{
 			"from": "CTR-0015",
 			"relation": "implements",
 			"to": "CLM-0010"
@@ -2072,26 +2023,6 @@
 			"from": "CTR-0018",
 			"relation": "derived-from",
 			"to": "DEC-0004"
-		},
-		{
-			"from": "CTR-0019",
-			"relation": "implements",
-			"to": "CLM-0020"
-		},
-		{
-			"from": "CTR-0019",
-			"relation": "derived-from",
-			"to": "DEC-0019"
-		},
-		{
-			"from": "CTR-0020",
-			"relation": "implements",
-			"to": "CLM-0021"
-		},
-		{
-			"from": "CTR-0020",
-			"relation": "implements",
-			"to": "TC-002"
 		},
 		{
 			"from": "CTR-0021",
@@ -2252,7 +2183,6 @@
 			"CLM-0008",
 			"CLM-0019",
 			"CON-0012",
-			"CTR-0014",
 			"DEC-0008",
 			"TC-005"
 		],
@@ -2351,7 +2281,6 @@
 			"CON-0024",
 			"CON-0025",
 			"CON-0026",
-			"CTR-0019",
 			"DEC-0019"
 		],
 		"ADR-0028": [
