@@ -55,13 +55,20 @@ Every Claude child still receives the SDK-listed Anthropic/CLI auth names so the
 
 ### Review-content integrity residual (`#617`)
 
-Two review paths fetch the reviewed head, and only one of them is hardened.
+Both review paths fetch the reviewed head from the mutable `origin` in the shared, seat-writable
+`.git/config`, which the confinement audit (porcelain + ref state) does not cover. A prompt-injected
+seat that rewrites origin can point the fetch at an attacker-hosted repository presenting `main` at
+the real PR SHA, producing an **empty reviewed diff**. This is the case `TC-015` describes, and it is
+unchanged by this slice: forge-credential denial narrows what a seat can *do* with the forge, not
+where the review fetch *goes*.
 
-**`pelaggio pr-review --pr <n>` (the CI path).** The destination is no longer taken from the shared, seat-writable `.git/config` origin (which the confinement audit — porcelain + ref state — does not cover). It is rebuilt from trusted config: the path from the configured `ghRepo`, the host from the configured host (`GH_HOST` or `GH_ENTERPRISE_HOST`) unless the origin's own host is already trusted (`#554`). A seat that rewrites origin therefore cannot choose where this fetch goes, so it can neither disclose an ambient credential to an attacker host (SSH agent, askpass, `~/.ssh`, an inherited `GIT_CONFIG_PARAMETERS` extraheader — none of which the earlier token strip covered) nor substitute the `main` this path diffs against. `url.<base>.insteadOf` is resolved offline before the fetch and refused unless it names the same target — host *and* repository, since a same-host repository swap also replaces `refs/heads/main`. The remaining seat-writable channels are overridden per invocation rather than repaired in the config: repository hooks (`core.hooksPath`, whose reference-transaction hook would otherwise run during this fetch with the credential in its env), transport interception (`http.proxy`, `http.sslVerify`), `core.sshCommand`, and credential helpers. Auth still rides only that one child's host-scoped extraheader, with ambient forge tokens stripped and prompts refused.
-
-**The local drain (`review.runner: local`, this repo's configured runner).** Unchanged and *not* covered by the above: `prepareReviewHead` fetches `refs/pull/<n>/head` from the mutable `origin` and diffs against `origin/main`, so a prompt-injected seat that rewrites origin can still point it at an attacker-hosted repo presenting `main` at the real PR SHA and produce an **empty reviewed diff**. This is the case `TC-015` describes.
-
-`#617` (host-brokered review fetch — the harness prepares a read-only reviewed checkout from a trusted remote and hands it to a seat that never fetches) is the durable fix, and must cover **both** paths: validating a configuration the seat can write is a losing construction, which is why the CI path above overrides five separate channels to close one vector. Bounded in practice: exploitation requires a targeted prompt-injection under **autopilot** review of **untrusted external PRs with auto-merge armed**; it does not affect supervised first-party review.
+Rebuilding the fetch destination from trusted config, and the related channel overrides, are a
+separate `#554` slice and are **not** claimed here. `#617` (host-brokered review fetch — the harness
+prepares a read-only reviewed checkout from a trusted remote and hands it to a seat that never
+fetches) is the durable fix, because validating a configuration the seat can write is a losing
+construction. Bounded in practice: exploitation requires a targeted prompt-injection under
+**autopilot** review of **untrusted external PRs with auto-merge armed**; it does not affect
+supervised first-party review.
 
 ## Configuration Gates
 
