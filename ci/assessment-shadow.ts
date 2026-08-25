@@ -74,6 +74,8 @@ export interface HarnessFacts {
 export interface Policy {
 	consequence: Consequence;
 	onContradiction: "withhold" | "retry-escalate";
+	/** The proposition the consequential effect requires to hold. Positive evidence on any other proposition is not evidence for it. */
+	proposition: string;
 }
 
 /** Exhaustive typed causes (ADR-0026's per-cell causes); prose is derived from these, never the reverse. */
@@ -228,8 +230,11 @@ export function shadowDisposition(records: AssessmentRecord[], facts: HarnessFac
 			caution.push(c);
 			continue;
 		}
-		if (verdict === "holds") positive.push(c);
-		else if (verdict === "violated") caution.push(c);
+		// Positive authority is only ever about the policy's target proposition; a `holds` on anything
+		// else is context, never a commit. Caution is not so scoped: a violated finding anywhere counts.
+		if (verdict === "holds") {
+			if (c.record.assessment.proposition === policy.proposition) positive.push(c);
+		} else if (verdict === "violated") caution.push(c);
 		else {
 			causes.push({ kind: "undetermined", record: id });
 			caution.push(c);
@@ -283,6 +288,9 @@ export function shadowDisposition(records: AssessmentRecord[], facts: HarnessFac
 	}
 
 	if (policy.consequence === "reversible") return { disposition: "continue", causes, unsupported };
+	// Blocker-first aggregation (ADR-0026, guarded-actions §7): a retained blocker wins over every
+	// other state — a contradiction or a pending reassessment elsewhere cannot downgrade it.
+	if (blockerSurvives) return { disposition: "withhold", causes, unsupported };
 	if (contradicted.size > 0) return { disposition: policy.onContradiction, causes, unsupported };
 	if (pending) return { disposition: "gather-evidence", causes, unsupported };
 	// Unknown semantics on authority-bearing evidence fail closed: the harness cannot know whether the
@@ -293,7 +301,7 @@ export function shadowDisposition(records: AssessmentRecord[], facts: HarnessFac
 		for (const c of unsupportedPositive) causes.push({ kind: "unsupported-extension-on-evidence", record: c.record.id });
 		return { disposition: "withhold", causes, unsupported };
 	}
-	if (blockerSurvives || caution.some((c) => c.openResiduals.length > 0 || (c.basisValid && c.complete))) {
+	if (caution.some((c) => c.openResiduals.length > 0 || (c.basisValid && c.complete))) {
 		return { disposition: "withhold", causes, unsupported };
 	}
 	if (positive.length === 0) return { disposition: recoverable ? "gather-evidence" : "withhold", causes, unsupported };

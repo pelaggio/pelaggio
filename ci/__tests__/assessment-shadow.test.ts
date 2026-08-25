@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, it } from "node:test";
-import { type Cause, dispositionUnder, type Fixture, faceValueDisposition, frontier, handoff, shadowDisposition } from "../assessment-shadow.ts";
+import { type Cause, dispositionUnder, type Fixture, faceValueDisposition, frontier, handoff, renderFrontier, shadowDisposition } from "../assessment-shadow.ts";
 
 const has = (causes: Cause[], kind: Cause["kind"], id?: string) => causes.some((c) => c.kind === kind && (id === undefined || Object.values(c).includes(id)));
 
@@ -21,7 +21,7 @@ describe("shadow disposition properties", () => {
 	it("fixtures are shadow-only retrodictions of real episodes", () => {
 		assert.equal(corpus.status, "experimental-shadow-only");
 		for (const f of corpus.fixtures) {
-			assert.match(f.source, /#\d{3}|charter-normalization-fixtures/, `${f.id} must cite the episode it retrodicts`);
+			assert.match(f.source, /#\d{3}/, `${f.id} must cite the episode it retrodicts`);
 			const observations = new Set(f.facts.observations.map((o) => o.id));
 			for (const r of f.records) for (const b of r.assessment.basis) assert.ok(observations.has(b), `${f.id}/${r.id} basis ${b} is not a harness observation`);
 		}
@@ -150,6 +150,23 @@ describe("shadow disposition properties", () => {
 		assert.equal(JSON.stringify(f.records), snapshot, "clearance is a harness fact, not a record edit");
 	});
 
+	it("positive evidence is scoped to the policy's target proposition; a blocker wins over every other state", () => {
+		const f = fixture("stale-grep-625");
+		// A current, complete, extension-free `holds` on an UNRELATED proposition is not evidence for the target.
+		f.records[0].assessment.proposition = "some other proposition entirely";
+		const unrelated = shadowDisposition(f.records, f.facts, f.policy);
+		assert.notEqual(unrelated.disposition, "commit");
+		// Blocker-first: a contradiction elsewhere cannot downgrade a retained blocker to retry-escalate.
+		const blocked = fixture("carried-blocker-silence-495");
+		const contradictor = structuredClone(blocked.records[0]);
+		contradictor.id = "R2b";
+		contradictor.assessment.conclusion = { verdict: "violated" };
+		const result = shadowDisposition([...blocked.records, contradictor], blocked.facts, { ...blocked.policy, onContradiction: "retry-escalate" });
+		assert.equal(result.disposition, "withhold");
+		assert.ok(has(result.causes, "carried-blocker", "BLK-1"));
+		assert.ok(has(result.causes, "contradiction"));
+	});
+
 	it("cold-handoff control: the ledger keeps every record; a cold seat receives only what policy admits", () => {
 		const f = fixture("stale-grep-625");
 		const { ledger, delivered } = handoff(f.records, (r) => r.provenance.step !== "charter");
@@ -163,9 +180,9 @@ describe("shadow disposition properties", () => {
 	it("selection-policy separation: changing consequence policy changes disposition without mutating the assessment", () => {
 		const f = fixture("label-vs-split-593");
 		const snapshot = JSON.stringify(f.records);
-		const a = shadowDisposition(f.records, f.facts, { consequence: "consequential", onContradiction: "retry-escalate" });
-		const b = shadowDisposition(f.records, f.facts, { consequence: "consequential", onContradiction: "withhold" });
-		const c = shadowDisposition(f.records, f.facts, { consequence: "reversible", onContradiction: "withhold" });
+		const a = shadowDisposition(f.records, f.facts, { ...f.policy, consequence: "consequential", onContradiction: "retry-escalate" });
+		const b = shadowDisposition(f.records, f.facts, { ...f.policy, consequence: "consequential", onContradiction: "withhold" });
+		const c = shadowDisposition(f.records, f.facts, { ...f.policy, consequence: "reversible", onContradiction: "withhold" });
 		assert.deepEqual([a.disposition, b.disposition, c.disposition], ["retry-escalate", "withhold", "continue"]);
 		assert.equal(JSON.stringify(f.records), snapshot);
 	});
@@ -220,6 +237,9 @@ describe("shadow disposition properties", () => {
 
 describe("risk–coverage frontier over the retrodicted episodes", () => {
 	const rows = frontier(corpus.fixtures);
+	it("renders as a five-row table", () => {
+		assert.equal(renderFrontier(rows).split("\n").length, 7);
+	});
 	const row = (condition: string) => {
 		const r = rows.find((candidate) => candidate.condition === condition);
 		assert.ok(r, `missing frontier row ${condition}`);
