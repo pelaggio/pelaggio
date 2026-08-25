@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
-import { buildCodexExecArgs, buildCodexStepResult, CODEX_READ_ONLY_APPEND, CODEX_SANDBOX_APPEND, codexEffort, codexTimeoutMs, codexUsesReadOnlySandbox, selectCodexModel } from "../codex-provider.js";
+import { buildCodexExecArgs, buildCodexStepResult, CODEX_READ_ONLY_APPEND, CODEX_SANDBOX_APPEND, codexEffort, codexProvider, codexTimeoutMs, codexUsesReadOnlySandbox, selectCodexModel } from "../codex-provider.js";
+import { CONFIG } from "../config.js";
 import { EDIT_LOOP_THRESHOLD } from "../step-runner-shared.js";
+import type { StepEvent } from "../types.js";
 
 function fixtureEvents(name: string): Record<string, unknown>[] {
 	return readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf-8")
@@ -282,7 +286,7 @@ describe("buildCodexExecArgs (#431)", () => {
 	});
 });
 
-describe("codexUsesReadOnlySandbox (#495 store-trust — cwd-scoped, not step-name-scoped)", () => {
+describe("codexUsesReadOnlySandbox (#495/#631 store-trust)", () => {
 	it("read-only ONLY for a review-class step at the trusted main checkout", () => {
 		// Cold PR-gate review/verify run at cwd=REPO (isWorktree=false): read-only, so
 		// workspace-write cannot root the sandbox at the checkout that hosts .dev/pr-review-*.
@@ -299,10 +303,72 @@ describe("codexUsesReadOnlySandbox (#495 store-trust — cwd-scoped, not step-na
 		assert.equal(codexUsesReadOnlySandbox("pr-verify", true), false);
 	});
 
+	it("honors harness access intent for data-only PR-head worktrees", () => {
+		assert.equal(codexUsesReadOnlySandbox("pr-review", true, "read-only"), true);
+		assert.equal(codexUsesReadOnlySandbox("pr-verify", true, "read-only"), true);
+	});
+
 	it("never read-only for a non-review step, at either cwd", () => {
 		for (const worktree of [true, false]) {
 			assert.equal(codexUsesReadOnlySandbox("implement", worktree), false);
 			assert.equal(codexUsesReadOnlySandbox("plan", worktree), false);
+			assert.equal(codexUsesReadOnlySandbox("implement", worktree, "read-only"), false);
+		}
+	});
+
+	it("starts a read-only review seat without installing for a drifted checkout", async () => {
+		const root = mkdtempSync(join(tmpdir(), "pelaggio-codex-read-only-"));
+		const checkout = join(root, "pr-head");
+		const bin = join(root, "bin");
+		const installSentinel = join(root, "install-ran");
+		const fakePnpm = join(bin, "pnpm");
+		const fakeCodex = join(bin, "codex");
+		mkdirSync(checkout);
+		mkdirSync(bin);
+		writeFileSync(join(checkout, "pnpm-lock.yaml"), "attacker-controlled-lockfile-drift\n");
+		writeFileSync(fakePnpm, `#!/bin/sh\ntouch "${installSentinel}"\n`);
+		writeFileSync(
+			fakeCodex,
+			`#!/bin/sh
+output=""
+while [ "$#" -gt 0 ]; do
+	if [ "$1" = "-o" ]; then
+		shift
+		output="$1"
+	fi
+	shift
+done
+cat >/dev/null
+printf '%s\\n' '{"type":"turn.started"}' '{"type":"item.completed","item":{"type":"agent_message","text":"review completed"}}' '{"type":"turn.completed"}'
+printf '%s' 'review completed' > "$output"
+`,
+		);
+		chmodSync(fakePnpm, 0o700);
+		chmodSync(fakeCodex, 0o700);
+
+		const previousBin = CONFIG.providerBins.codex;
+		const previousPath = process.env.PATH;
+		CONFIG.providerBins.codex = fakeCodex;
+		process.env.PATH = `${bin}:${previousPath ?? ""}`;
+		const events: StepEvent[] = [];
+		try {
+			const result = await codexProvider.runStep(
+				"pr-review",
+				"Review this checkout.",
+				{ cwd: checkout, profile: "standard", trace: false, parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" }, workspaceAccess: "read-only" },
+				(event) => events.push(event),
+			);
+
+			assert.equal(result.ok, true, JSON.stringify(result));
+			assert.equal(result.text, "review completed");
+			assert.equal(existsSync(installSentinel), false, "read-only review must not invoke dependency provisioning");
+			assert.ok(events.some((event) => event.type === "done" && event.ok));
+		} finally {
+			if (previousBin === undefined) delete CONFIG.providerBins.codex;
+			else CONFIG.providerBins.codex = previousBin;
+			if (previousPath === undefined) delete process.env.PATH;
+			else process.env.PATH = previousPath;
+			rmSync(root, { recursive: true, force: true });
 		}
 	});
 });

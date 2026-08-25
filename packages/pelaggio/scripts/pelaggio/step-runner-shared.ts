@@ -26,7 +26,7 @@ export function isWorktreePath(cwd: string, repo: string): boolean {
 /** Composes the per-step system-prompt append. The autonomy block is
  * unconditional; the worktree-isolation and plan-polish blocks layer on when
  * their conditions hold. Exported for testing. */
-export function composeSystemAppend(args: { isWorktree: boolean; cwd: string; repo: string; planBlockActive: boolean }): string {
+export function composeSystemAppend(args: { isWorktree: boolean; cwd: string; repo: string; planBlockActive: boolean; workspaceAccess?: "read-only" }): string {
 	const worktreeAppend = args.isWorktree
 		? [
 				"",
@@ -35,7 +35,9 @@ export function composeSystemAppend(args: { isWorktree: boolean; cwd: string; re
 				`The main repository is at: ${args.repo}`,
 				"You MUST use relative paths or paths under your working directory for ALL file operations.",
 				`NEVER use absolute paths starting with ${args.repo}/ — those point to the main worktree and will corrupt another workspace.`,
-				"Use $PWD-relative paths, or resolve from your cwd. The codebase in your worktree is identical — read and write here.",
+				args.workspaceAccess === "read-only"
+					? "Use $PWD-relative paths, or resolve from your cwd. The codebase in your worktree is identical — read here; the sandbox denies writes."
+					: "Use $PWD-relative paths, or resolve from your cwd. The codebase in your worktree is identical — read and write here.",
 			].join("\n")
 		: undefined;
 

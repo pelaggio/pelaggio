@@ -303,7 +303,8 @@ export const CARRY_MAX_PRIOR_CANDIDATES = 50;
  *
  * - `claude`: the step-runner's `foreignRootDenial` PreToolUse hooks are installed on every
  *   cold-gate seat (threaded unconditionally by `runPrReviewGate`).
- * - `codex`: review-class seats at the main checkout run under the `read-only` OS sandbox
+ * - `codex`: cold review-class seats run under the `read-only` OS sandbox, either from the main
+ *   checkout or from a data-only worktree carrying the harness access intent
  *   (`codexUsesReadOnlySandbox`).
  */
 export const STORE_TRUSTED_REVIEW_PROVIDERS: ReadonlySet<ProviderName> = new Set<ProviderName>(["claude", "codex"]);

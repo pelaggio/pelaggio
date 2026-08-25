@@ -49,6 +49,9 @@ export interface RunStepOpts {
 	trace: boolean;
 	itemId?: string;
 	parkSignal: ParkSignal;
+	/** Harness-owned workspace access intent. Codex review checkouts prepared as data stay read-only
+	 * even when they are Git worktrees; authoring-review seats omit this and remain writable. */
+	workspaceAccess?: "read-only";
 	/** Per-call override for the step's `maxTurns`. Used by `implement` to size the
 	 * budget from the plan's file count (see `computeImplementTurns` in helpers.ts).
 	 * When undefined, falls back to the profile-resolved turn limit. */
@@ -323,7 +326,7 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 	// commands (pnpm test, pnpm check) run downstream.
 	if (isWorktree) {
 		try {
-			const report = ensureWorktreeDeps(opts.cwd, REPO);
+			const report = ensureWorktreeDeps(opts.cwd, REPO, { workspaceAccess: opts.workspaceAccess });
 			if (report.root.type === "restore") {
 				emit({
 					type: "sdk_error",

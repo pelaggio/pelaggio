@@ -436,6 +436,41 @@ describe("ensureWorktreeDeps", () => {
 		assert.equal(decideDepsAction(worktree, main).type, "install");
 	});
 
+	it("skips all provisioning for a read-only reviewed checkout with lockfile drift", () => {
+		// Security property: all dependency provisioning funnels through
+		// ensureWorktreeDeps, so this direct guard covers every current and future caller.
+		const { main, worktree } = makeSetup({
+			mainLock: "A",
+			worktreeLock: "B",
+			mainNm: "dir",
+			worktreeNm: null,
+		});
+		const calls: Array<{ cmd: string; cwd: string }> = [];
+		const runner = { run: (cmd: string, cwd: string) => calls.push({ cmd, cwd }) };
+
+		const report = ensureWorktreeDeps(worktree, main, { runner, workspaceAccess: "read-only" });
+
+		assert.deepEqual(report, { root: { type: "skip-read-only" }, subpackages: [] });
+		assert.deepEqual(calls, []);
+		assert.equal(existsSync(resolve(worktree, "node_modules")), false);
+	});
+
+	it("passes --ignore-scripts to the worktree install runner", () => {
+		const { main, worktree } = makeSetup({
+			mainLock: "A",
+			worktreeLock: "B",
+			mainNm: "dir",
+			worktreeNm: null,
+		});
+		const calls: Array<{ cmd: string; cwd: string }> = [];
+		const runner = { run: (cmd: string, cwd: string) => calls.push({ cmd, cwd }) };
+
+		const report = ensureWorktreeDeps(worktree, main, { runner });
+
+		assert.equal(report.root.type, "install");
+		assert.deepEqual(calls, [{ cmd: "pnpm install --frozen-lockfile --silent --ignore-scripts", cwd: worktree }]);
+	});
+
 	it("leaves a subpackage real dir alone when root decision is noop", () => {
 		const { main, worktree } = makeSetup({
 			mainLock: "A",
@@ -1191,7 +1226,7 @@ describe("ensureWorktreeDeps main repair", () => {
 		const calls: Array<{ cmd: string; cwd: string }> = [];
 		const runner = { run: (cmd: string, cwd: string) => calls.push({ cmd, cwd }) };
 
-		ensureWorktreeDeps(root.worktree, root.main, runner);
+		ensureWorktreeDeps(root.worktree, root.main, { runner });
 
 		assert.deepEqual(calls, [{ cmd: "pnpm install --frozen-lockfile --ignore-scripts", cwd: root.main }]);
 	});

@@ -6,7 +6,7 @@ import { CONFIG, REPO, resolveProviderBin, resolveStepSettings, type StepSetting
 import { emitDecisionsFromText } from "./decisions.js";
 import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseWaitFlag, resolveParkReset } from "./helpers.js";
 import { buildAgentEnv, makeSecretScrubber, scopeEnvAllowlistToProvider } from "./secret-hygiene.js";
-import type { StepProvider } from "./step-runner.js";
+import type { RunStepOpts, StepProvider } from "./step-runner.js";
 import { composeSystemAppend, createStepTextProjection, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "./step-runner-shared.js";
 import { MUTATING_TOOLS, toolBrief } from "./tui.js";
 import type { ParkSignal, ProviderCapabilities, Step, StepEvent, StepResult, TokenUsage } from "./types.js";
@@ -56,25 +56,27 @@ export const CODEX_SANDBOX_APPEND = [
 ].join("\n");
 
 /**
- * Review-class step names whose codex seat runs read-only ONLY when its cwd is the trusted main
- * checkout (see `codexUsesReadOnlySandbox`). The cold PR-gate review/verify runs there and
+ * Review-class step names whose codex seat can run read-only (see
+ * `codexUsesReadOnlySandbox`). The cold PR-gate review/verify runs at the trusted main checkout and
  * produces a TEXT report with no legitimate write need, so `workspace-write` would needlessly
  * root the sandbox at the checkout that hosts the harness's authorizing evidence stores
  * (`.dev/pr-review-*`) and leave them seat-writable (#495 store-trust); `read-only` closes that
  * at the OS boundary. But the SAME step names run the authoring-loop reviewer/judge seats in
  * ISOLATED `.dev/authoring-review-seats/` worktrees whose skill mode mandates running
- * `pnpm check` / `pnpm -r test` — those must keep `workspace-write`. The cwd, not the step name,
- * is the trust signal: read-only applies at the main checkout, never in an isolated worktree.
+ * `pnpm check` / `pnpm -r test` — those must keep `workspace-write`. A harness-prepared PR-head
+ * checkout is also a worktree but is data-only, so the harness can explicitly mark it read-only.
  */
 export const CODEX_READ_ONLY_STEPS: ReadonlySet<Step> = new Set<Step>(["pr-review", "pr-verify"]);
 
 /**
- * True iff this codex seat should run under the `read-only` sandbox: a review-class step AND a
- * cwd that IS the trusted main checkout (`!isWorktree`). Authoring-loop seats (isolated worktree
- * cwd) and any non-review step keep `workspace-write` and their mandated checks.
+ * True iff this codex seat should run under the `read-only` sandbox. An explicit harness access
+ * intent wins over the cwd fallback so data-only PR-head worktrees cannot be mistaken for writable
+ * authoring seats. The fallback preserves direct callers: review-class steps at main are read-only,
+ * while isolated authoring-loop worktrees remain writable.
  */
-export function codexUsesReadOnlySandbox(name: Step, isWorktree: boolean): boolean {
-	return CODEX_READ_ONLY_STEPS.has(name) && !isWorktree;
+export function codexUsesReadOnlySandbox(name: Step, isWorktree: boolean, workspaceAccess?: RunStepOpts["workspaceAccess"]): boolean {
+	if (!CODEX_READ_ONLY_STEPS.has(name)) return false;
+	return workspaceAccess === "read-only" || !isWorktree;
 }
 
 export const CODEX_READ_ONLY_APPEND = [
@@ -450,19 +452,20 @@ const runStep: StepProvider["runStep"] = async (name, prompt, opts, emit) => {
 	const isWorktree = isWorktreePath(opts.cwd, REPO);
 	if (isWorktree) {
 		try {
-			ensureWorktreeDeps(opts.cwd, REPO);
+			ensureWorktreeDeps(opts.cwd, REPO, { workspaceAccess: opts.workspaceAccess });
 		} catch (err) {
 			emit({ type: "sdk_error", message: `worktree-deps guard failed: ${err instanceof Error ? err.message : String(err)}` });
 		}
 	}
 
-	const systemAppend = composeSystemAppend({ isWorktree, cwd: opts.cwd, repo: REPO, planBlockActive: name === "implement" });
-	// Cold PR-gate review/verify at the trusted main checkout runs read-only (see
-	// codexUsesReadOnlySandbox) with a matching append so the model does not fight failing writes.
+	const readOnly = codexUsesReadOnlySandbox(name, isWorktree, opts.workspaceAccess);
+	const systemAppend = composeSystemAppend({ isWorktree, cwd: opts.cwd, repo: REPO, planBlockActive: name === "implement", ...(readOnly ? { workspaceAccess: "read-only" } : {}) });
+	// Cold PR-gate review/verify at the trusted main checkout or in a harness-marked data-only
+	// worktree runs read-only (see codexUsesReadOnlySandbox) with a matching append so the model
+	// does not fight failing writes.
 	// Authoring-loop reviewer/judge seats share the step names but run in isolated worktrees —
 	// they keep workspace-write AND the ordinary sandbox append (whose "the harness owns git"
 	// guidance is correct there), never the contradictory read-only "do not run tests" append.
-	const readOnly = codexUsesReadOnlySandbox(name, isWorktree);
 	const finalPrompt = `${prompt}\n\n${systemAppend}\n\n${readOnly ? CODEX_READ_ONLY_APPEND : CODEX_SANDBOX_APPEND}`;
 	const tmp = mkdtempSync(join(tmpdir(), "pelaggio-codex-"));
 	const outputPath = join(tmp, "last-message.txt");

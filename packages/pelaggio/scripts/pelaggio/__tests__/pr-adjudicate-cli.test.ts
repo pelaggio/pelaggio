@@ -125,6 +125,7 @@ interface Harness {
 		prompt: string;
 		cwd: string;
 		parkSignal: ParkSignal;
+		workspaceAccess?: "read-only";
 		executionOverride?: { provider: string; model?: string };
 		foreignRootDenial?: { mainRepo: string; registeredWorktrees: readonly string[]; ownWorktree?: string };
 		hasObserver: boolean;
@@ -225,6 +226,7 @@ function harness(
 			prompt,
 			cwd: stepOpts.cwd,
 			parkSignal: stepOpts.parkSignal,
+			workspaceAccess: stepOpts.workspaceAccess,
 			executionOverride: stepOpts.executionOverride,
 			foreignRootDenial: stepOpts.foreignRootDenial,
 			hasObserver: stepOpts.mainCheckoutObserver !== undefined,
@@ -526,6 +528,7 @@ describe("pr-adjudicate CLI verification and effects", () => {
 		// #510 must-fix: the verifier's cwd is the DETACHED data-only review-head checkout — never
 		// the authenticated main checkout — with the pipeline's confinement wiring threaded in.
 		assert.equal(h.stepCalls[0]?.cwd, "/tmp/adjudicate-head");
+		assert.equal(h.stepCalls[0]?.workspaceAccess, "read-only");
 		assert.deepEqual(h.stepCalls[0]?.foreignRootDenial, { mainRepo: h.repo, registeredWorktrees: [h.repo] });
 		assert.equal(h.stepCalls[0]?.hasObserver, true);
 		assert.deepEqual(h.stepCalls[0]?.executionOverride, { provider: "claude", model: "claude-opus-4-8" });

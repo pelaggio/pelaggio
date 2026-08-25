@@ -31,9 +31,9 @@ const CLEAN = findings([]);
 const BLOCK = findings([{ severity: "must-fix", message: "section 2 contradicts section 4", ruleId: "pelaggio/judgment/style" }]);
 
 /** Canned runStep: reviewers (pr-review) → findings, judge (pr-verify) → judge report. */
-const cannedRunStep = (reviewer: string, judgeBody: string, sink?: Array<{ name: string; prompt: string; cwd: string; itemId?: string }>) => {
+const cannedRunStep = (reviewer: string, judgeBody: string, sink?: Array<{ name: string; prompt: string; cwd: string; itemId?: string; workspaceAccess?: "read-only" }>) => {
 	return (async (name, prompt, opts) => {
-		sink?.push({ name, prompt, cwd: opts.cwd, itemId: opts.itemId });
+		sink?.push({ name, prompt, cwd: opts.cwd, itemId: opts.itemId, workspaceAccess: opts.workspaceAccess });
 		return ok(name === "pr-verify" ? judgeBody : reviewer);
 	}) as Parameters<typeof reviewDocument>[0]["runStep"];
 };
@@ -97,7 +97,7 @@ describe("doc-review CLI (#384)", () => {
 	it("seats run as pr-review/pr-verify on the plain cwd with --document args, no author role, no itemId, no seat worktree", async () => {
 		const path = writeDoc("seats.md", "# Design\n\nInspect me.\n");
 		const snapshot = snapshotDocument(path);
-		const calls: Array<{ name: string; prompt: string; cwd: string; itemId?: string }> = [];
+		const calls: Array<{ name: string; prompt: string; cwd: string; itemId?: string; workspaceAccess?: "read-only" }> = [];
 		await reviewDocument({ snapshot, cwd: dir, config: TEST_CONFIG, runStep: cannedRunStep(CLEAN, judge([]), calls), clock });
 		assert.ok(calls.length >= 2);
 		// Only pr-review / pr-verify — never an author (shakedown-code) or any other step.
@@ -107,6 +107,7 @@ describe("doc-review CLI (#384)", () => {
 			assert.equal(call.cwd, dir);
 			assert.doesNotMatch(call.cwd, /authoring-review-seats/);
 			assert.equal(call.itemId, undefined);
+			assert.equal(call.workspaceAccess, "read-only");
 		}
 		const reviewerCall = calls.find((c) => c.name === "pr-review");
 		assert.ok(reviewerCall);

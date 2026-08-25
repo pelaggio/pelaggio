@@ -46,6 +46,7 @@ interface RunCall {
 	prompt: string;
 	cwd: string;
 	parkSignal: ParkSignal;
+	workspaceAccess?: "read-only";
 	executionOverride?: { provider: ProviderName; model?: string; codexModel?: string };
 	foreignRootDenial?: { mainRepo: string; registeredWorktrees: readonly string[] };
 }
@@ -191,7 +192,7 @@ async function runCli(
 		throw new Error(`unexpected command: ${cmd} ${a}`);
 	}) as typeof import("node:child_process").execFileSync;
 	const runStep: RunStepFn = async (name, prompt, stepOpts, _emit: StepEmit) => {
-		calls.push({ name, prompt, cwd: stepOpts.cwd, parkSignal: stepOpts.parkSignal, executionOverride: stepOpts.executionOverride, foreignRootDenial: stepOpts.foreignRootDenial });
+		calls.push({ name, prompt, cwd: stepOpts.cwd, parkSignal: stepOpts.parkSignal, workspaceAccess: stepOpts.workspaceAccess, executionOverride: stepOpts.executionOverride, foreignRootDenial: stepOpts.foreignRootDenial });
 		const next = queued.shift();
 		assert.ok(next, "unexpected extra runStep call");
 		if (next instanceof Error) throw next;
@@ -668,6 +669,7 @@ describe("pr-review CLI aggregation", () => {
 			["pr-review", "pr-verify"],
 		);
 		for (const call of out.calls) {
+			assert.equal(call.workspaceAccess, "read-only", `${call.name} seat must carry harness read-only intent`);
 			assert.ok(call.foreignRootDenial, `${call.name} seat must receive foreignRootDenial`);
 			assert.ok(call.foreignRootDenial.mainRepo.length > 0, "denial names the main repo");
 			assert.ok(call.foreignRootDenial.registeredWorktrees.length > 0, "denial carries the worktree registry");
