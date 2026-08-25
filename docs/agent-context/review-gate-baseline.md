@@ -169,9 +169,11 @@ when the run happened. Reconciliation on the #616 branch since then: the trust r
 from its source (15 records; 7 were absent from the graph, four of them guarantees), seven mechanisms
 that already existed were named as realizations (`claude-seat.ts`, `secret-hygiene.ts`, the daemon
 bearer auth, `check-publish.ts`, the pull-request ship default, the egress broker, the fail-closed
-verdict parsers), so the Q14 unlinked-guarantee baseline is now **1** (TC-002, an absence claim) over
-the full registry rather than 6 over the represented subset, and the baseline is frozen so it can only
-shrink; realizations are 12 for 69 propositions; `adrMap` is derived from node `sources` (they had
+verdict parsers), so the Q14 unlinked-guarantee baseline is now **1** (TC-002, whose registry evidence command
+is a denylist grep — evidence, not enforcement) over the full registry rather than 6 over the
+represented subset, and the baseline is frozen so it can only shrink; realizations are 18 for 69
+propositions, and three internal invariants honestly name none (verifiable custody, single-source
+intent, no undeclared egress); `adrMap` is derived from node `sources` (they had
 drifted for five ADRs); ADR-0028 and the AGENTS.md invariant index are
 mapped (Q16); and the six debt checks the `debt` view declares are all implemented. `Q10 points the
 wrong way` still holds and is complemented, not replaced, by Q14.
