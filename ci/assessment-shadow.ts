@@ -177,7 +177,16 @@ export function shadowDisposition(records: AssessmentRecord[], facts: HarnessFac
 	// extension-free, and carrying no residual in any state. A stale or hollow successor supersedes nothing.
 	const legitimateSuccessor = (c: Classified): boolean =>
 		c.current && c.basisValid && c.complete && c.openResiduals.length === 0 && c.recoverableResiduals.length === 0 && c.resolvedResiduals.length === 0 && !unsupported.some((key) => key.startsWith(`${c.record.id}:`));
-	const superseded = new Set(classified.filter((c) => typeof c.record.supersedes === "string" && legitimateSuccessor(c)).map((c) => c.record.supersedes as string));
+	// ...and the link must point at a different, existing record about the SAME proposition; anything
+	// else is not a reassessment of that record and supersedes nothing.
+	const superseded = new Set(
+		classified
+			.filter((c) => {
+				const target = typeof c.record.supersedes === "string" ? recordById.get(c.record.supersedes) : undefined;
+				return target !== undefined && target.record.id !== c.record.id && target.record.assessment.proposition === c.record.assessment.proposition && legitimateSuccessor(c);
+			})
+			.map((c) => c.record.supersedes as string),
+	);
 
 	// Positive evidence: current, valid basis, complete, verdict holds, no residual left in any state.
 	// A resolved residual means the condition the assessor named has since been observed; the record
@@ -213,7 +222,7 @@ export function shadowDisposition(records: AssessmentRecord[], facts: HarnessFac
 			for (const issue of c.basisIssues) causes.push({ kind: issue.kind, record: id, ref: issue.ref });
 			if (c.basisIssues.some((i) => i.kind !== "basis-unknown")) recoverable = true;
 			if (c.record.assessment.basis.length === 0) causes.push({ kind: "basis-unknown", record: id, ref: "" });
-			// Caution survives a weak basis; positive authority does not.
+			// Caution survives a weak basis (it blocks commit below); positive authority does not.
 			if (verdict === "violated") caution.push(c);
 			continue;
 		}
@@ -280,9 +289,9 @@ export function shadowDisposition(records: AssessmentRecord[], facts: HarnessFac
 	}
 	for (const proposition of contradicted) causes.push({ kind: "contradiction", proposition });
 
-	// A record parked for reassessment is not silently on either side: while it is pending, a positive
-	// record on the SAME proposition cannot carry a consequential commit — the resolving observation
-	// may confirm the violation. Fail closed until someone reassesses.
+	// A record parked for reassessment is not silently on either side: while any is pending, no positive
+	// record can carry a consequential commit — the resolving observation may confirm the violation.
+	// Fail closed until someone reassesses.
 	// Any record parked for reassessment on this subject is unresolved state; a consequential commit
 	// waits for it whatever proposition it names, because the resolving observation may have gone
 	// against the assessor.
@@ -308,9 +317,14 @@ export function shadowDisposition(records: AssessmentRecord[], facts: HarnessFac
 		for (const c of unsupportedPositive) causes.push({ kind: "unsupported-extension-on-evidence", record: c.record.id });
 		return { disposition: "withhold", causes, unsupported };
 	}
+	// Caution of any kind blocks a consequential commit. A valid, complete violated finding or an open
+	// residual withholds outright; a violated finding on a weak basis (stale, unavailable, unknown
+	// reference, incomplete surface) is unresolved state — recoverable if anything can be re-observed,
+	// otherwise withheld — and is never bypassed by a positive record.
 	if (caution.some((c) => c.openResiduals.length > 0 || (c.basisValid && c.complete))) {
 		return { disposition: "withhold", causes, unsupported };
 	}
+	if (caution.length > 0) return { disposition: recoverable ? "gather-evidence" : "withhold", causes, unsupported };
 	if (positive.length === 0) return { disposition: recoverable ? "gather-evidence" : "withhold", causes, unsupported };
 	return { disposition: "commit", causes, unsupported };
 }

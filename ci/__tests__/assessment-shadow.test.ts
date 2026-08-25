@@ -116,6 +116,17 @@ describe("shadow disposition properties", () => {
 		assert.ok(bad2);
 		bad2.assessment.residual = [{ statement: "unless the adjudicator config changed" }];
 		assert.equal(shadowDisposition(hollow2.records, hollow2.facts, split.policy).disposition, "gather-evidence", "a successor carrying its own residual does not supersede");
+		// A supersession must name a different, existing record about the SAME proposition.
+		const wrongTarget = structuredClone(split.recovery);
+		const wt = wrongTarget.records.find((r) => r.id === "V-reassessed");
+		assert.ok(wt);
+		wt.assessment.proposition = "an unrelated proposition";
+		assert.equal(shadowDisposition(wrongTarget.records, wrongTarget.facts, split.policy).disposition, "gather-evidence", "a successor on another proposition supersedes nothing");
+		const selfRef = structuredClone(split.recovery);
+		const sr = selfRef.records.find((r) => r.id === "V-reassessed");
+		assert.ok(sr);
+		sr.supersedes = "V-reassessed";
+		assert.equal(shadowDisposition(selfRef.records, selfRef.facts, split.policy).disposition, "gather-evidence", "a self-referential link supersedes nothing");
 
 		const outage = fixture("unavailable-observation-555");
 		const first = shadowDisposition(outage.records, outage.facts, outage.policy);
@@ -159,6 +170,20 @@ describe("shadow disposition properties", () => {
 		const snapshot = JSON.stringify(f.records);
 		assert.equal(shadowDisposition(f.records, cleared, f.policy).disposition, "commit");
 		assert.equal(JSON.stringify(f.records), snapshot, "clearance is a harness fact, not a record edit");
+	});
+
+	it("a violated finding on a weak basis is never bypassed by a positive record", () => {
+		const f = fixture("stale-grep-625");
+		// A is current, complete, holds. Add a violated finding whose only basis is unavailable: unresolved, not ignorable.
+		f.facts.observations.push({ id: "pending-probe", sha: "589-head", available: false });
+		f.records.push({ ...structuredClone(f.records[0]), id: "C-weak", assessment: { proposition: f.policy.proposition, basis: ["pending-probe"], conclusion: { verdict: "violated" } } });
+		const weak = shadowDisposition(f.records, f.facts, f.policy);
+		assert.equal(weak.disposition, "gather-evidence");
+		assert.ok(has(weak.causes, "basis-unavailable", "pending-probe"));
+		// With an unknown reference and nothing recoverable elsewhere, it withholds.
+		const g = fixture("stale-grep-625");
+		g.records = [g.records[0], { ...structuredClone(g.records[0]), id: "C-unknown", assessment: { proposition: g.policy.proposition, basis: ["no-such-observation"], conclusion: { verdict: "violated" } } }];
+		assert.equal(shadowDisposition(g.records, g.facts, g.policy).disposition, "withhold");
 	});
 
 	it("positive evidence is scoped to the policy's target proposition; a blocker wins over every other state", () => {
