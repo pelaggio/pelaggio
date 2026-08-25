@@ -445,18 +445,88 @@ describe("fork-identity dedupe", () => {
 		});
 		assert.equal(second.status, "written");
 		assert.notEqual(second.ids[0], first.ids[0]);
-		// Same normalized fork + chosen equal after canonicalization → duplicate, not a third row.
-		const rewordedSame: Decision = { fork: "eligible  prior findings terminals.", chosen: "accept only complete verified `consensus-block` fleet outcomes with at least one survivor." };
+		// A -> B -> A is a REVERSION, not a duplicate: it differs from the fork's current choice (B),
+		// so it appends with its own lifecycle ID, date, and source. Collapsing it into the original A
+		// would leave the log asserting r1's provenance for a decision actually made at r3, and would
+		// order that row above the B it now supersedes.
+		const reverted: Decision = { fork: "eligible  prior findings terminals.", chosen: "accept only complete verified `consensus-block` fleet outcomes with at least one survivor." };
 		const third = await appendDecisions(path, {
 			itemId: "497",
 			runId: "r3",
 			step: "shakedown-plan",
 			attempt: 1,
 			source: "497",
-			decisions: [{ id: "49749749-7497-4497-8497-497497497492", contentFingerprint: contentFingerprint(rewordedSame), occurrence: 0, decision: rewordedSame }],
+			decisions: [{ id: "49749749-7497-4497-8497-497497497492", contentFingerprint: contentFingerprint(reverted), occurrence: 0, decision: reverted }],
 		});
-		assert.equal(third.status, "duplicate");
-		assert.equal(third.ids[0], first.ids[0]);
+		assert.equal(third.status, "written");
+		assert.notEqual(third.ids[0], first.ids[0]);
+		assert.notEqual(third.ids[0], second.ids[0]);
+		const rows = readFileSync(resolve(path, "docs/decision-log/497.md"), "utf8")
+			.split("\n")
+			.filter((line) => line.startsWith("| eligible"));
+		assert.equal(rows.length, 3, "reversion is a third row, and the superseded rows are left intact");
+	});
+
+	it("keeps a resolved identity consumed so re-emission cannot reopen it", async () => {
+		const path = repo();
+		seed(path);
+		const decided: Decision = { fork: "eligible prior findings terminals", chosen: "accept only complete verified `consensus-block` fleet outcomes with at least one survivor" };
+		const first = await appendDecisions(path, {
+			itemId: "497",
+			runId: "r1",
+			step: "plan",
+			attempt: 1,
+			source: "497",
+			decisions: [{ id: "49749749-7497-4497-8497-497497497490", contentFingerprint: contentFingerprint(decided), occurrence: 0, decision: decided }],
+		});
+		assert.equal(first.status, "written");
+		await resolveDecision(path, first.ids[0] as string, { now: new Date("2026-08-21T00:00:00Z") });
+
+		// Resolved rows are the one place identity stays permanently consumed: the fork has no current
+		// Active choice, but re-emitting the resolved pair must return that row rather than reopening a
+		// dispositioned decision as `default-taken`.
+		const reEmitted: Decision = { fork: "eligible  prior findings terminals.", chosen: "accept only complete verified `consensus-block` fleet outcomes with at least one survivor." };
+		const second = await appendDecisions(path, {
+			itemId: "497",
+			runId: "r2",
+			step: "shakedown-plan",
+			attempt: 1,
+			source: "497",
+			decisions: [{ id: "49749749-7497-4497-8497-497497497491", contentFingerprint: contentFingerprint(reEmitted), occurrence: 0, decision: reEmitted }],
+		});
+		assert.equal(second.status, "duplicate");
+		assert.equal(second.ids[0], first.ids[0]);
+		const body = readFileSync(resolve(path, "docs/decision-log/497.md"), "utf8");
+		assert.equal(body.split("\n").filter((line) => line.startsWith("| eligible")).length, 1, "no reopened Active row");
+		assert.match(body, /resolved/);
+	});
+
+	it("dedupes a reworded re-emission against the fork's current choice", async () => {
+		const path = repo();
+		seed(path);
+		const original: Decision = { fork: "eligible prior findings terminals", chosen: "accept only complete verified `consensus-block` fleet outcomes with at least one survivor" };
+		const first = await appendDecisions(path, {
+			itemId: "497",
+			runId: "r1",
+			step: "plan",
+			attempt: 1,
+			source: "497",
+			decisions: [{ id: "49749749-7497-4497-8497-497497497490", contentFingerprint: contentFingerprint(original), occurrence: 0, decision: original }],
+		});
+		assert.equal(first.status, "written");
+		// Same normalized fork + chosen equal after canonicalization, with no intervening choice →
+		// duplicate. This is the cross-step collapse the fork-identity key exists for.
+		const rewordedSame: Decision = { fork: "eligible  prior findings terminals.", chosen: "accept only complete verified `consensus-block` fleet outcomes with at least one survivor." };
+		const second = await appendDecisions(path, {
+			itemId: "497",
+			runId: "r2",
+			step: "shakedown-plan",
+			attempt: 1,
+			source: "497",
+			decisions: [{ id: "49749749-7497-4497-8497-497497497491", contentFingerprint: contentFingerprint(rewordedSame), occurrence: 0, decision: rewordedSame }],
+		});
+		assert.equal(second.status, "duplicate");
+		assert.equal(second.ids[0], first.ids[0]);
 	});
 
 	it("preserves case-sensitive technical choices and forks as distinct decisions", async () => {
@@ -548,7 +618,10 @@ describe("fork-identity dedupe", () => {
 		execFileSync("git", ["add", "-A"], { cwd: path });
 		execFileSync("git", ["commit", "-q", "-m", "shipped near-duplicates"], { cwd: path });
 
-		// A fresh rewording dedupes against the first shipped row; the shipped duplicate stays (append-only).
+		// A fresh rewording dedupes against the fork's CURRENT choice — the last Active row of that
+		// identity, not the oldest. Both shipped rows carry the same normalized (fork, chosen); the
+		// returned ID is the live row rather than the stale one it superseded. No third row is added
+		// and neither shipped row is rewritten (append-only).
 		const implementRow: Decision = { ...planRow, alternatives: "grant only the issue-named `pick`/`ship` and break `shipwreck` recovery, or build the per-operation broker deferred to #572" };
 		const third = await appendDecisions(path, {
 			itemId: "554",
@@ -559,7 +632,7 @@ describe("fork-identity dedupe", () => {
 			decisions: [{ id: "55455455-4554-4554-8554-554554554553", contentFingerprint: contentFingerprint(implementRow), occurrence: 0, decision: implementRow }],
 		});
 		assert.equal(third.status, "duplicate");
-		assert.equal(third.ids[0], "96304096-a73f-4b4f-b6ed-8efc852411a3");
+		assert.equal(third.ids[0], "a669b3db-51e6-435d-93cd-e19f610b61ff");
 		const after = readFileSync(resolve(path, "docs/decision-log/554.md"), "utf8");
 		assert.match(after, /decision:a669b3db-51e6-435d-93cd-e19f610b61ff/);
 		assert.equal(after.split("\n").filter((line) => line.startsWith("| interim Claude forge-authority role set |")).length, 2);

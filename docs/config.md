@@ -1091,14 +1091,20 @@ Lifecycle and projection commands:
 | `npx pelaggio decisions rebuild-index` | Cold-path projection of all non-archive authority files into `docs/decisions.md` |
 
 Ordinary emissions use an opaque UUID lifecycle ID plus a separate content
-fingerprint. Within one owner's log, emissions with the same case-sensitive
-`(fork, chosen)` identity are idempotent across runs, steps, attempts,
-occurrences, sources, and alternatives. Identity normalization collapses
-whitespace and ignores trailing sentence punctuation, but preserves case so
-technical choices such as `CONTROL_PLANE_TOKEN` and `control_plane_token`
-remain distinct. ID or fingerprint collisions with unequal content fail closed.
-Review escalations keep evidence-bound `reviewEscalationId` hashes and remain
-outside ordinary fork-identity dedupe.
+fingerprint. Within one owner's log, an emission matching a fork's **current
+choice** — the latest Active row for that fork — is idempotent across runs,
+steps, attempts, occurrences, sources, and alternatives. A same-fork emission
+whose `chosen` differs from the current choice appends as a genuine re-decision,
+*including a reversion to a choice recorded earlier*: after `A → B`, a further
+`A` is the live decision and gets its own row, date, and source rather than
+collapsing into the superseded `A`. Identity normalization collapses whitespace
+and ignores trailing sentence punctuation, but preserves case so technical
+choices such as `CONTROL_PLANE_TOKEN` and `control_plane_token` remain distinct.
+Resolved rows are the exception: an emission matching an already-resolved
+identity returns that row instead of reopening the decision as `default-taken`.
+ID or fingerprint collisions with unequal content fail closed. Review escalations
+keep evidence-bound `reviewEscalationId` hashes and remain outside ordinary
+fork-identity dedupe.
 
 **Parked items after migration ships:** worktrees that predate the merged
 cutover must merge/rebase main (or re-run `decisions migrate` in that worktree)
