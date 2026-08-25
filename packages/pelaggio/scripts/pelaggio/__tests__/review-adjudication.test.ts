@@ -201,6 +201,9 @@ describe("adjudication source store", () => {
 			{ ...record(), survivors: [{ ...entry, tier: "maybe" }] },
 			{ ...record(), survivors: [{ ...entry, verification: { ...entry.verification, decision: "refuted" } }] },
 			{ ...record(), survivors: [{ ...entry, fingerprint: "tampered" }] },
+			// hunk.path must be single-line — same trust-boundary rule as finding.path (#598)
+			{ ...record(), survivors: [{ ...entry, hunk: { ...entry.hunk, path: "src/a\n.ts" } }] },
+			{ ...record(), survivors: [{ ...entry, hunk: { ...entry.hunk, path: "src/a\r.ts" } }] },
 			{ ...record(), extra: true },
 			{ ...record(), fleetRecordDigest: "nope" },
 		];
@@ -835,5 +838,71 @@ describe("zero-context interdiff policy", () => {
 		assert.match(body, /chris/);
 		assert.match(body, /fixed/);
 		assert.match(body, /pr-adjudicate --pr 497/);
+	});
+
+	it("cites the live at-head confirmation on refuted lines, not only the stale fleet refutation (#598)", () => {
+		const goneFinding = finding({ message: "Alleged bug, refuted." });
+		const gone = { finding: goneFinding, fingerprint: reviewFindingFingerprint(goneFinding), verification: { id: "C9", decision: "refuted" as const, rationale: "Not reproducible." } };
+		const base = {
+			prNumber: 497,
+			sourceSha: REVIEWED,
+			headSha: HEAD,
+			interdiffDigest: DIGEST,
+			adjudicator: "op",
+			survivors: [entry],
+			refuted: [gone],
+		};
+		const liveBound = renderOperatorAdjudicationComment({
+			...base,
+			dispositions: {
+				[entry.fingerprint]: { disposition: "fixed", rationale: "Contained by the source hunk." },
+				[gone.fingerprint]: {
+					disposition: "refuted",
+					rationale:
+						"Live isolated verification C2 at the repaired head confirmed the finding remains refuted (Still absent at the repaired head.). " +
+						"Fleet verification C9 first refuted it at the reviewed SHA; that stale evidence alone never clears an entry at a different SHA.",
+				},
+			},
+		});
+		const line = liveBound.split("\n").find((text) => text.includes("Alleged bug")) ?? "";
+		// The line cites the LIVE confirmation (id + head-bound phrasing) that authorized the
+		// clearance, with the fleet refutation as provenance — never the stale fleet text alone.
+		assert.match(line, /\*\*refuted\*\*/);
+		assert.match(line, /Live isolated verification C2 at the repaired head/);
+		assert.match(line, /Fleet verification C9 first refuted it at the reviewed SHA/);
+		assert.match(line, /no repair required/);
+		assert.doesNotMatch(line, /by fleet isolated verification C9/);
+		assert.doesNotMatch(line, /Not reproducible/);
+		// Without a bound disposition the renderer falls back to the fleet provenance, escaped.
+		const fallback = renderOperatorAdjudicationComment({ ...base, dispositions: { [entry.fingerprint]: { disposition: "fixed", rationale: "Contained by the source hunk." } } });
+		const fallbackLine = fallback.split("\n").find((text) => text.includes("Alleged bug")) ?? "";
+		assert.match(fallbackLine, /\*\*refuted\*\* by fleet isolated verification C9/);
+	});
+
+	it("renders model-authored paths in a code span a literal backtick cannot terminate (#598)", () => {
+		const render = (path: string): string =>
+			renderOperatorAdjudicationComment({
+				prNumber: 497,
+				sourceSha: REVIEWED,
+				headSha: HEAD,
+				interdiffDigest: DIGEST,
+				adjudicator: "op",
+				survivors: [survivor({ finding: finding({ path }) })],
+				dispositions: {},
+			});
+		const body = render("src/`weird`.ts");
+		// Space-padded double-backtick fence, intact around the whole location.
+		const span = body.match(/\(`` (.+?) ``\)/);
+		assert.ok(span, "location renders inside a space-padded double-backtick span");
+		const content = span?.[1] ?? "";
+		assert.ok(content.includes("weird"));
+		assert.ok(content.includes(":10"), "the line number stays inside the span");
+		// escapeMarkdown backslash-prefixes every backtick, so the content never carries the
+		// adjacent pair that would terminate the fence.
+		assert.ok(!content.includes("``"), "no double-backtick run inside the span content");
+		// Marker injection through a backtick-laden path stays blocked by the shared escape.
+		const evil = render(`a\`\` ${PR_REVIEW_MARKER} \`\`b`);
+		assert.ok(!evil.includes(PR_REVIEW_MARKER));
+		assert.match(evil, /\(`` (.+?) ``\)/, "the injected path still renders inside an intact span");
 	});
 });
