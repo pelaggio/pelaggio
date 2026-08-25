@@ -290,13 +290,19 @@ describe("architectural question tests", () => {
 	});
 
 	/**
-	 * Ceiling, not the computed live set: entries may be removed as mechanisms are bound; adding an
-	 * entry is a visible reviewer-audited admission of new debt. CON-0027 is included because this
-	 * item freezes the pre-binding corpus of 30 IDs, not the live unenforced set of 29 — the same Q14
-	 * shape (FROZEN_UNLINKED_GUARANTEES still contains TC-003 / TC-017 after those claims gained
-	 * mechanisms). Bound IDs are currently no-op members of the membership check; the binding pass
-	 * should drop them when it binds. Re-counted from graph.nodes at implement time: still CON-0001
-	 * through CON-0030, one bound (CON-0027).
+	 * The ceiling: constraints that name no enforcing realization TODAY. It may only SHRINK — the
+	 * membership check below stops a new unenforced constraint slipping in, and the exact pin stops
+	 * the set rotting once mechanisms are bound. Admitting a new member is therefore a visible,
+	 * reviewer-audited edit here, and binding one is equally visible.
+	 *
+	 * CON-0027 is deliberately ABSENT: it binds CTR-0004 (Q15) and so is not unenforced. Keeping a
+	 * bound ID in a set named "unenforced" would make the exact pin lie about the corpus, which is
+	 * the drift this check exists to prevent. That is a narrower reading than Q14's
+	 * FROZEN_UNLINKED_GUARANTEES, which still lists TC-003 / TC-017 after those gained mechanisms;
+	 * the pin is the stricter of the two and this set follows it.
+	 *
+	 * Counted from graph.nodes at implement time: CON-0001 through CON-0030, one bound (CON-0027),
+	 * 29 unenforced. #650 is the binding pass that should reduce this to 8.
 	 */
 	const FROZEN_UNENFORCED_CONSTRAINTS = new Set([
 		"CON-0001",
@@ -325,7 +331,6 @@ describe("architectural question tests", () => {
 		"CON-0024",
 		"CON-0025",
 		"CON-0026",
-		"CON-0027",
 		"CON-0028",
 		"CON-0029",
 		"CON-0030",
@@ -339,6 +344,13 @@ describe("architectural question tests", () => {
 		for (const id of live) {
 			assert.ok(FROZEN_UNENFORCED_CONSTRAINTS.has(id), `${id} names no enforcing realization and is not in the frozen ceiling; bind a realization, or explicitly amend the frozen set`);
 		}
+
+		// The other half of the ratchet, and the half that makes the ceiling shrink. The membership
+		// check above only stops a NEW unenforced constraint slipping in; on its own it lets the frozen
+		// set rot, because binding a mechanism would silently leave a stale member behind. Pinning the
+		// computed live set exactly means binding one FAILS here until the ceiling is updated, so the
+		// set can only ever get smaller. Same shape as Q14's `deepEqual(unlinked, ...)`.
+		assert.deepEqual(live, [...FROZEN_UNENFORCED_CONSTRAINTS], "the current unenforced-constraint set (update when a mechanism is bound; it may only shrink)");
 
 		const injected = structuredClone(corpus);
 		injected.nodes.push({ id: "CON-X", kind: "proposition", role: "constraint", slug: "unbound", statement: "s" });
