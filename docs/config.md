@@ -1091,10 +1091,14 @@ Lifecycle and projection commands:
 | `npx pelaggio decisions rebuild-index` | Cold-path projection of all non-archive authority files into `docs/decisions.md` |
 
 Ordinary emissions use an opaque UUID lifecycle ID plus a separate content
-fingerprint; retries with the same run/step/occurrence/fingerprint are
-idempotent (attempt is ignored). ID or fingerprint collisions with unequal
-content fail closed. Review escalations keep evidence-bound
-`reviewEscalationId` hashes.
+fingerprint. Within one owner's log, emissions with the same case-sensitive
+`(fork, chosen)` identity are idempotent across runs, steps, attempts,
+occurrences, sources, and alternatives. Identity normalization collapses
+whitespace and ignores trailing sentence punctuation, but preserves case so
+technical choices such as `CONTROL_PLANE_TOKEN` and `control_plane_token`
+remain distinct. ID or fingerprint collisions with unequal content fail closed.
+Review escalations keep evidence-bound `reviewEscalationId` hashes and remain
+outside ordinary fork-identity dedupe.
 
 **Parked items after migration ships:** worktrees that predate the merged
 cutover must merge/rebase main (or re-run `decisions migrate` in that worktree)

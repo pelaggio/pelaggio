@@ -112,6 +112,19 @@ function normalize(value: string): string {
 	return value.trim().replace(/\s+/g, " ");
 }
 
+/** Deterministic, case-preserving canonicalization for fork identity: collapse whitespace and strip trailing sentence punctuation. Never semantic. */
+function normalizeIdentity(value: string): string {
+	return value
+		.replace(/\s+/g, " ")
+		.trim()
+		.replace(/[\s.,;:!?]+$/, "");
+}
+
+/** Fork-identity dedupe key: the normalized (fork, chosen) pair. Alternatives are deliberately excluded. */
+function forkIdentityKey(decision: Decision): string {
+	return [normalizeIdentity(decision.fork), normalizeIdentity(decision.chosen ?? "")].join("\0");
+}
+
 function unescapeCell(value: string): string {
 	return value.replace(/\\\|/g, "|").replace(/\\\\/g, "\\");
 }
@@ -607,10 +620,6 @@ function decisionFromCells(cells: string[]): Decision {
 	return { fork, ...(chosen ? { chosen } : {}), ...(alternatives ? { alternatives } : {}) };
 }
 
-function dedupeKey(runId: string, step: string, occurrence: number, fingerprint: string): string {
-	return [runId, step, String(occurrence), fingerprint].join("\0");
-}
-
 function scanRepoForId(repo: string, id: string): Array<{ repo: string; owner: string; entry: StoredDecision; file: AuthorityFile }> {
 	const hits: Array<{ repo: string; owner: string; entry: StoredDecision; file: AuthorityFile }> = [];
 	for (const owner of listOwnerFiles(repo)) {
@@ -629,6 +638,21 @@ function isMainCheckout(repo: string): boolean {
 	}
 }
 
+/**
+ * Append emitted decisions to the per-owner authority file.
+ *
+ * Dedupe rule (fork identity, deterministic): within one owner's log a decision's
+ * identity is the normalized, case-sensitive (fork, chosen) pair —
+ * normalizeIdentity() text canonicalization only, never fuzzy or semantic
+ * matching. Re-emissions of the same identity collapse into the existing row
+ * regardless of run, step, attempt, occurrence, source, or alternatives; the
+ * surviving row keeps its first-emission provenance and alternatives. A same-fork
+ * emission whose normalized chosen differs, including by case, is a genuine
+ * re-decision and appends (supersession material). Shipped logs are append-only:
+ * pre-existing near-duplicate rows are never rewritten; the rule governs new
+ * appends only. Escalation rows are excluded — their identity is
+ * reviewEscalationId().
+ */
 export async function appendDecisions(repo: string, input: AppendDecisionsInput): Promise<DecisionWriteResult> {
 	try {
 		const owner = ownerForEmission(input);
@@ -658,21 +682,14 @@ export async function appendDecisions(repo: string, input: AppendDecisionsInput)
 					continue;
 				}
 
-				// Retry dedupe: same run + step + occurrence + fingerprint (attempt ignored)
-				const key = dedupeKey(input.runId, input.step, row.occurrence, fingerprint);
-				const byDedupe = allEntries(file).find((e) => e.meta.dedupe && dedupeKey(e.meta.dedupe.runId, e.meta.dedupe.step, e.meta.dedupe.occurrence, e.meta.contentFingerprint ?? "") === key);
-				if (byDedupe) {
-					if ((byDedupe.meta.contentFingerprint ?? "") !== fingerprint) {
-						throw new Error(`dedupe key collision with unequal fingerprint: ${id}`);
-					}
-					ids.push(byDedupe.id);
+				// Fork-identity dedupe (see doc comment): same normalized (fork, chosen)
+				// is one decision across steps, runs, and rewordings of alternatives.
+				const identity = forkIdentityKey(row.decision);
+				const byIdentity = [...allEntries(file), ...fresh].find((e) => !e.escalation && forkIdentityKey(decisionFromCells(e.cells)) === identity);
+				if (byIdentity) {
+					ids.push(byIdentity.id);
 					continue;
 				}
-
-				// Dedupe-key collision across different fingerprints already handled; also reject
-				// same coords with different fingerprint when coords match without fingerprint.
-				const coordClash = allEntries(file).find((e) => e.meta.dedupe && e.meta.dedupe.runId === input.runId && e.meta.dedupe.step === input.step && e.meta.dedupe.occurrence === row.occurrence && e.meta.contentFingerprint !== fingerprint);
-				if (coordClash) throw new Error(`dedupe key collision with unequal fingerprint: ${id}`);
 
 				ids.push(id);
 				fresh.push({
