@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, it } from "node:test";
-import { adrMapFromSources } from "../assurance-views.ts";
+import { type AssuranceGraph, adrMapFromSources, diagnostics } from "../assurance-views.ts";
 
 const repo = resolve(new URL("../..", import.meta.url).pathname);
 type ShadowNode = {
@@ -287,6 +287,68 @@ describe("architectural question tests", () => {
 		// CTR-0004 is the live instance: worktree confinement decides from observed Git porcelain/ref
 		// state, which the seat can write, and a `.git/config` rewrite produces no porcelain delta.
 		assert.ok(bound.includes("CTR-0004"), "the git-porcelain confinement realization is the motivating instance");
+	});
+
+	/**
+	 * Ceiling, not the computed live set: entries may be removed as mechanisms are bound; adding an
+	 * entry is a visible reviewer-audited admission of new debt. CON-0027 is included because this
+	 * item freezes the pre-binding corpus of 30 IDs, not the live unenforced set of 29 — the same Q14
+	 * shape (FROZEN_UNLINKED_GUARANTEES still contains TC-003 / TC-017 after those claims gained
+	 * mechanisms). Bound IDs are currently no-op members of the membership check; the binding pass
+	 * should drop them when it binds. Re-counted from graph.nodes at implement time: still CON-0001
+	 * through CON-0030, one bound (CON-0027).
+	 */
+	const FROZEN_UNENFORCED_CONSTRAINTS = new Set([
+		"CON-0001",
+		"CON-0002",
+		"CON-0003",
+		"CON-0004",
+		"CON-0005",
+		"CON-0006",
+		"CON-0007",
+		"CON-0008",
+		"CON-0009",
+		"CON-0010",
+		"CON-0011",
+		"CON-0012",
+		"CON-0013",
+		"CON-0014",
+		"CON-0015",
+		"CON-0016",
+		"CON-0017",
+		"CON-0018",
+		"CON-0019",
+		"CON-0020",
+		"CON-0021",
+		"CON-0022",
+		"CON-0023",
+		"CON-0024",
+		"CON-0025",
+		"CON-0026",
+		"CON-0027",
+		"CON-0028",
+		"CON-0029",
+		"CON-0030",
+	]);
+
+	it("Q17: unenforced-constraint ceiling", () => {
+		const corpus = graph as unknown as AssuranceGraph;
+		const live = diagnostics(corpus)
+			.filter((d) => d.check === "constraint-without-enforcement")
+			.map((d) => d.node);
+		for (const id of live) {
+			assert.ok(FROZEN_UNENFORCED_CONSTRAINTS.has(id), `${id} names no enforcing realization and is not in the frozen ceiling; bind a realization, or explicitly amend the frozen set`);
+		}
+
+		const injected = structuredClone(corpus);
+		injected.nodes.push({ id: "CON-X", kind: "proposition", role: "constraint", slug: "unbound", statement: "s" });
+		const injectedLive = new Set(
+			diagnostics(injected)
+				.filter((d) => d.check === "constraint-without-enforcement")
+				.map((d) => d.node),
+		);
+		assert.ok(injectedLive.has("CON-X"), "an unbound constraint absent from the frozen ceiling must fire");
+		assert.ok(!FROZEN_UNENFORCED_CONSTRAINTS.has("CON-X"), "CON-X is the ceiling true-fire: live diagnostic plus absence from the frozen set");
 	});
 
 	/**

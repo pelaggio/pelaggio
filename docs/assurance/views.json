@@ -40,7 +40,8 @@
         "decision-without-intent",
         "unused-assumption",
         "stale-source-grounding",
-        "projection-overreach"
+        "projection-overreach",
+        "constraint-without-enforcement"
       ]
     },
     {
