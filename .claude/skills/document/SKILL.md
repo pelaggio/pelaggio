@@ -111,6 +111,30 @@ The invariant may instead be something like "policy may reduce rigor but must ne
 execution authority". Record that invariant; do not constitutionalize today's table merely because
 it implements it.
 
+### Assurance graph impact
+
+When `docs/assurance/shadow-graph.json` exists, treat it as the semantic reconciliation target for
+architectural edits even while it remains explicitly shadow/non-authoritative.
+
+For an ADR or trust edit, ask whether the change alters a **proposition role (invariant, replacement
+constraint, or empirical assumption), architectural decision, realization relationship, or the
+relationship between those things**:
+
+- **Yes** → update the corresponding graph primitive/edge in the same change, preserving stable IDs
+  where the concept survives. Add a new primitive only when the intent is genuinely new; prefer an
+  existing proposition when the prose is another instance of the same intent.
+- **No** → do **not** churn the graph merely to mirror prose. Narrative clarification, spelling,
+  rationale, examples, and construction-only changes can report `assurance graph impact: none`.
+
+The historical `CLM-*`, `CON-*`, `ASM-*`, `CTR-*`, and `TC-*` prefixes are stable identities, not
+instructions to create separate graph base classes. In the shadow model, invariant/constraint/
+assumption are proposition roles and current construction is represented as a realization.
+
+Do not infer semantic authority from the graph while its README says `experimental /
+non-authoritative`; current ADR/trust sources still govern until a later decision promotes the
+graph. The purpose of this step is to prove that authoring and drift reconciliation are cheap
+enough to support that promotion.
+
 ## Step 3 — Write it
 
 For an ADR, start from `docs/decisions/_TEMPLATE.md` and keep its six sections in order
@@ -148,6 +172,7 @@ Conversely, passing the checks is not evidence that a document says the right th
 pnpm check:links        # link resolution
 pnpm check:doc-claims   # TC-ids resolve
 pnpm check              # formatting
+pnpm test:ci            # includes assurance graph/query checks when the shadow corpus exists
 ```
 
 (`pnpm check:adr` — the proposed ADR shape + ratchet check — does not exist yet; it is #481's
@@ -158,7 +183,8 @@ If you superseded or folded an ADR that governs a `TC-` claim, rebind it in
 claim is a broken trust cross-link, and no check will infer the new owner for you.
 
 Report which lane you wrote to, what moved between layers, what known failure each retained
-constraint protects against, and anything you back-ported from the ADR into its construction home.
+constraint protects against, anything you back-ported from the ADR into its construction home, and
+`assurance graph impact: <updated nodes/edges | none>`.
 
 ---
 
@@ -182,6 +208,9 @@ when its detail doc lands, alongside the feature polish that produced it — nev
    `construction:` frontmatter to the home.
 6. **Re-read the remainder using the governing test.** Every surviving sentence should still be
    useful if the current mechanism vanished tomorrow.
+7. **Reconcile the assurance graph impact.** Update the existing semantic primitive/edge if intent
+   changed; otherwise explicitly report that the cut was narrative/construction-only and required
+   no graph change.
 
 There is no ratchet bookkeeping yet: `ci/adr-shape-baseline.json` and `pnpm check:adr` are #481's
 chartered work (see [Absent artifacts](#absent-artifacts--do-not-execute) below). Verify with the
