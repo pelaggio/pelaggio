@@ -700,11 +700,11 @@ chokepoint, and not scattered per-site logic, is the control. An enumerated guar
 offer that test; its coverage is per-site and therefore never complete.
 
 The document already contains instances of the move without having named it — the same
-relation §3's rule bore to the guards §4 later sorted. §7.2's default-deny allowlist; the
-§7 discriminated union that makes the §6 `clearedBy` invariant *compiler-enforced* rather
-than a field every call site can fill with a stub; and §4's derived-exclusivity condition
-(b) — *the target is a total function of the fenced claim* — are each construction-level
-completeness, hoisted at the type or derivation level. Naming the move is what lets the
+relation §3's rule bore to the guards §4 later sorted. §7.2's default-deny allowlist and
+§4's derived-exclusivity condition (b) — *the target is a total function of the fenced
+claim* — are construction-level completeness hoisted at the derivation level; the §7
+discriminated union *would* make the §6 `clearedBy` invariant compiler-enforced rather
+than a field every call site can fill with a stub, once it is built (it is a sketch today). Naming the move is what lets the
 next guard reach for it deliberately instead of re-deriving it under review.
 
 **Caveat — when not to over-reach.** Not every guard has a completeness surface worth

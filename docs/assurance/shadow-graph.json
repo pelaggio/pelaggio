@@ -2381,9 +2381,7 @@
 			},
 			{
 				"anchor": "A guard whose guarantee has a *completeness surface*",
-				"nodes": [
-					"CON-0027"
-				]
+				"construction": "proposed construction rule (guarded-actions §8.2) about how guards are structured; its intent half is CON-0027, its authoritative form would be an ADR-0026 amendment not yet made"
 			}
 		]
 	},
