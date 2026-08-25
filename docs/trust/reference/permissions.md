@@ -5,7 +5,7 @@ status: draft
 diataxis: reference
 sidebar:
   order: 11
-last_reviewed: 2026-07-08
+last_reviewed: 2026-08-19
 ---
 
 # Permissions Reference
@@ -14,7 +14,7 @@ last_reviewed: 2026-07-08
 |---|---|---|---|---|
 | `repo.read` | Allowed | Local repo/config/roadmap read | Repo/issue/PR/tool-output text is untrusted input. | `TC-015` |
 | `repo.write.worktree` | Allowed | Item worktree by convention/hooks | By default the audit fails on main or sibling changes; dirty-main mode uses Claude tool-window attribution or Codex workspace exclusion for main and retains siblings. Not an OS sandbox. | `TC-011`, `TC-015` |
-| `shell.exec.worktree` | Allowed | Item worktree, budget/turn bounded | High-trust capability; child env allowlist is planned. | `TC-011`, `TC-014`, `TC-015` |
+| `shell.exec.worktree` | Allowed | Item worktree, budget/turn bounded | High-trust capability. Child env is deny-by-default (`buildAgentEnv`) at every driver spawn, including Claude at `spawnClaudeSeat`. Claude forge vars are role-gated; Anthropic CLI auth still reaches the child because it is the API client. | `TC-011`, `TC-014`, `TC-015` |
 | `pr.open` | Allowed | Ship default | Opens PR in `pull-request` mode. | `TC-003`, `TC-012` |
 | `git.push.default_branch` | Denied by default | Explicit `ship.target=direct-push` | Emits a warning banner when configured. | `TC-012` |
 | `pr.automerge` | Denied by default | Explicit `ship.target=auto-merge-pr` | Requires external branch protection today; in-code verification planned. | `TC-013` |

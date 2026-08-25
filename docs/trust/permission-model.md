@@ -5,7 +5,7 @@ status: draft
 diataxis: explanation
 sidebar:
   order: 3
-last_reviewed: 2026-07-08
+last_reviewed: 2026-08-19
 ---
 
 # Permission Model
@@ -40,6 +40,28 @@ Pelaggio's permission model is a manifest-backed description of current capabili
 | `shipwreck` | Recovery path after ship failure; may inspect and repair local ship state. | `TC-011`, `TC-012`, `TC-015` |
 | `roadmap` CLI | Adapter-backed list/get/claim/plan/mark-done/archive commands used by skills and harness. | `TC-006`, `TC-015` |
 | `worktree-deps` | Symlink/install dependencies for a worktree and repair shared dependency layout. | `TC-011`, `TC-016` |
+
+## Claude seat forge authority
+
+The Claude child is an untrusted seat. Forge/remote credentials are an exhaustive internal `Step` policy, not operator configuration (`TC-014`, `TC-018`):
+
+| Role | Forge / remote recovery credentials | Why |
+|---|---|---|
+| `pick`, `ship`, `shipwreck` | Retained (GitHub token vars, `LINEAR_API_KEY`, `SSH_AUTH_SOCK`, GitHub CLI config location) | Source-proven roadmap claim, landing, and recovery commands run inside those seats. |
+| `plan`, `shakedown-plan`, `implement`, `shakedown-code`, `pr-review`, `pr-verify` | Denied: token env vars stripped; existing GitHub CLI config directories (`GH_CONFIG_DIR`, `$XDG_CONFIG_HOME/gh`, `$HOME/.config/gh`) **mount-masked** (a tmpfs over the mount namespace — not capability denial; a seat that nests its own user+mount namespace could unmount to re-expose them via the bound host root, the same userns residual as the socket mask) | Authoring and review/verify seats must not be able to post a forge status or mutate the tracker with harness-provided credentials. Leftover host credential files (`~/.git-credentials`, `~/.netrc`, `~/.ssh`) remain readable through the bound host root until `#572`, so the denial covers what the harness hands the seat, not every credential on the host. |
+| Outer harness (`pr-review-cli`, `pr-adjudicate-cli`, workflow status steps) | Retains `GH_TOKEN` / `gh` | Deterministic comment and `review` status effects run after the untrusted seat exits. |
+
+Every Claude child still receives the SDK-listed Anthropic/CLI auth names so the CLI can authenticate. Residual model-key exfil is bounded on the malformed-report shape: MALFORMED reports surface only the invariant parse-failure sink (`#536`). Model-authored fields in a VALID report are NOT yet scrubbed before the CI stdout and PR-comment sinks — that boundary scrub is a separate `#554` slice and is not claimed here. That the seat holds the key at all remains `#572` work, not a reason to give the seat forge authority. The same `#572` residual scopes the denied rows above: the seat keeps the host network and a bound host root outside the masked directories, so credentials in leftover host files (`~/.git-credentials`, `~/.netrc`, `~/.ssh`) are denied by convention, not by the mask (see [sandboxing](./sandboxing.md) and [threat model](./threat-model.md)).
+
+### Review-content integrity residual (`#617`)
+
+Two review paths fetch the reviewed head, and only one of them is hardened.
+
+**`pelaggio pr-review --pr <n>` (the CI path).** The destination is no longer taken from the shared, seat-writable `.git/config` origin (which the confinement audit — porcelain + ref state — does not cover). It is rebuilt from trusted config: the path from the configured `ghRepo`, the host from the configured host (`GH_HOST` or `GH_ENTERPRISE_HOST`) unless the origin's own host is already trusted (`#554`). A seat that rewrites origin therefore cannot choose where this fetch goes, so it can neither disclose an ambient credential to an attacker host (SSH agent, askpass, `~/.ssh`, an inherited `GIT_CONFIG_PARAMETERS` extraheader — none of which the earlier token strip covered) nor substitute the `main` this path diffs against. `url.<base>.insteadOf` is resolved offline before the fetch and refused unless it names the same target — host *and* repository, since a same-host repository swap also replaces `refs/heads/main`. The remaining seat-writable channels are overridden per invocation rather than repaired in the config: repository hooks (`core.hooksPath`, whose reference-transaction hook would otherwise run during this fetch with the credential in its env), transport interception (`http.proxy`, `http.sslVerify`), `core.sshCommand`, and credential helpers. Auth still rides only that one child's host-scoped extraheader, with ambient forge tokens stripped and prompts refused.
+
+**The local drain (`review.runner: local`, this repo's configured runner).** Unchanged and *not* covered by the above: `prepareReviewHead` fetches `refs/pull/<n>/head` from the mutable `origin` and diffs against `origin/main`, so a prompt-injected seat that rewrites origin can still point it at an attacker-hosted repo presenting `main` at the real PR SHA and produce an **empty reviewed diff**. This is the case `TC-015` describes.
+
+`#617` (host-brokered review fetch — the harness prepares a read-only reviewed checkout from a trusted remote and hands it to a seat that never fetches) is the durable fix, and must cover **both** paths: validating a configuration the seat can write is a losing construction, which is why the CI path above overrides five separate channels to close one vector. Bounded in practice: exploitation requires a targeted prompt-injection under **autopilot** review of **untrusted external PRs with auto-merge armed**; it does not affect supervised first-party review.
 
 ## Configuration Gates
 
