@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, it } from "node:test";
-import { type Cause, dispositionUnder, type Fixture, faceValueDisposition, frontier, handoff, shadowDisposition } from "../assessment-shadow.ts";
+import { type Cause, dispositionUnder, type Fixture, faceValueDisposition, frontier, handoff, renderFrontier, shadowDisposition } from "../assessment-shadow.ts";
 
 const has = (causes: Cause[], kind: Cause["kind"], id?: string) => causes.some((c) => c.kind === kind && (id === undefined || Object.values(c).includes(id)));
 
@@ -21,7 +21,7 @@ describe("shadow disposition properties", () => {
 	it("fixtures are shadow-only retrodictions of real episodes", () => {
 		assert.equal(corpus.status, "experimental-shadow-only");
 		for (const f of corpus.fixtures) {
-			assert.match(f.source, /#\d{3}|charter-normalization-fixtures/, `${f.id} must cite the episode it retrodicts`);
+			assert.match(f.source, /#\d{3}/, `${f.id} must cite the episode it retrodicts`);
 			const observations = new Set(f.facts.observations.map((o) => o.id));
 			for (const r of f.records) for (const b of r.assessment.basis) assert.ok(observations.has(b), `${f.id}/${r.id} basis ${b} is not a harness observation`);
 		}
@@ -105,6 +105,28 @@ describe("shadow disposition properties", () => {
 		assert.ok(reassessed);
 		reassessed.supersedes = undefined;
 		assert.equal(shadowDisposition(unlinked.records, unlinked.facts, split.policy).disposition, "gather-evidence", "without the supersedes link the old V still pends");
+		// A hollow successor supersedes nothing: stale binding, or a residual of its own, leaves V pending.
+		const hollow = structuredClone(split.recovery);
+		const bad = hollow.records.find((r) => r.id === "V-reassessed");
+		assert.ok(bad);
+		bad.binding.sha = "553-r3";
+		assert.equal(shadowDisposition(hollow.records, hollow.facts, split.policy).disposition, "gather-evidence", "a stale successor does not supersede");
+		const hollow2 = structuredClone(split.recovery);
+		const bad2 = hollow2.records.find((r) => r.id === "V-reassessed");
+		assert.ok(bad2);
+		bad2.assessment.residual = [{ statement: "unless the adjudicator config changed" }];
+		assert.equal(shadowDisposition(hollow2.records, hollow2.facts, split.policy).disposition, "gather-evidence", "a successor carrying its own residual does not supersede");
+		// A supersession must name a different, existing record about the SAME proposition.
+		const wrongTarget = structuredClone(split.recovery);
+		const wt = wrongTarget.records.find((r) => r.id === "V-reassessed");
+		assert.ok(wt);
+		wt.assessment.proposition = "an unrelated proposition";
+		assert.equal(shadowDisposition(wrongTarget.records, wrongTarget.facts, split.policy).disposition, "gather-evidence", "a successor on another proposition supersedes nothing");
+		const selfRef = structuredClone(split.recovery);
+		const sr = selfRef.records.find((r) => r.id === "V-reassessed");
+		assert.ok(sr);
+		sr.supersedes = "V-reassessed";
+		assert.equal(shadowDisposition(selfRef.records, selfRef.facts, split.policy).disposition, "gather-evidence", "a self-referential link supersedes nothing");
 
 		const outage = fixture("unavailable-observation-555");
 		const first = shadowDisposition(outage.records, outage.facts, outage.policy);
@@ -144,10 +166,48 @@ describe("shadow disposition properties", () => {
 	it("a principal's recorded clearance closes a residual without touching the record", () => {
 		const f = fixture("false-chokepoint-435");
 		assert.equal(shadowDisposition(f.records, f.facts, f.policy).disposition, "withhold");
-		const cleared = { ...f.facts, principalClearances: [{ record: "G", residual: f.records[0].assessment.residual?.[0].statement ?? "", actor: "operator" }] };
+		const cleared = { ...f.facts, principalClearances: [{ record: "G", residualIndex: 0, actor: "operator" }] };
 		const snapshot = JSON.stringify(f.records);
 		assert.equal(shadowDisposition(f.records, cleared, f.policy).disposition, "commit");
 		assert.equal(JSON.stringify(f.records), snapshot, "clearance is a harness fact, not a record edit");
+	});
+
+	it("a violated finding on a weak basis is never bypassed by a positive record", () => {
+		const f = fixture("stale-grep-625");
+		// A is current, complete, holds. Add a violated finding whose only basis is unavailable: unresolved, not ignorable.
+		f.facts.observations.push({ id: "pending-probe", sha: "589-head", available: false });
+		f.records.push({ ...structuredClone(f.records[0]), id: "C-weak", assessment: { proposition: f.policy.proposition, basis: ["pending-probe"], conclusion: { verdict: "violated" } } });
+		const weak = shadowDisposition(f.records, f.facts, f.policy);
+		assert.equal(weak.disposition, "gather-evidence");
+		assert.ok(has(weak.causes, "basis-unavailable", "pending-probe"));
+		// With an unknown reference and nothing recoverable elsewhere, it withholds.
+		const g = fixture("stale-grep-625");
+		g.records = [g.records[0], { ...structuredClone(g.records[0]), id: "C-unknown", assessment: { proposition: g.policy.proposition, basis: ["no-such-observation"], conclusion: { verdict: "violated" } } }];
+		assert.equal(shadowDisposition(g.records, g.facts, g.policy).disposition, "withhold");
+	});
+
+	it("positive evidence is scoped to the policy's target proposition; a blocker wins over every other state", () => {
+		const f = fixture("stale-grep-625");
+		// A current, complete, extension-free `holds` on an UNRELATED proposition is not evidence for the target.
+		f.records[0].assessment.proposition = "some other proposition entirely";
+		const unrelated = shadowDisposition(f.records, f.facts, f.policy);
+		assert.notEqual(unrelated.disposition, "commit");
+		// A second valid record CONFIRMING the blocker keeps it alive beside the refutation, as a contradiction.
+		const confirmedToo = fixture("carried-blocker-refuted-495");
+		confirmedToo.records.push({ ...structuredClone(confirmedToo.records[0]), id: "CONFIRM", assessment: { proposition: "#554 env denial is not on the Claude path", basis: ["review-r2"], conclusion: { verdict: "holds" } } });
+		const confirmedResult = shadowDisposition(confirmedToo.records, confirmedToo.facts, confirmedToo.policy);
+		assert.equal(confirmedResult.disposition, "withhold");
+		assert.ok(has(confirmedResult.causes, "carried-blocker", "BLK-1"));
+		assert.ok(has(confirmedResult.causes, "contradiction", "#554 env denial is not on the Claude path"));
+		// Blocker-first: a contradiction elsewhere cannot downgrade a retained blocker to retry-escalate.
+		const blocked = fixture("carried-blocker-silence-495");
+		const contradictor = structuredClone(blocked.records[0]);
+		contradictor.id = "R2b";
+		contradictor.assessment.conclusion = { verdict: "violated" };
+		const result = shadowDisposition([...blocked.records, contradictor], blocked.facts, { ...blocked.policy, onContradiction: "retry-escalate" });
+		assert.equal(result.disposition, "withhold");
+		assert.ok(has(result.causes, "carried-blocker", "BLK-1"));
+		assert.ok(has(result.causes, "contradiction"));
 	});
 
 	it("cold-handoff control: the ledger keeps every record; a cold seat receives only what policy admits", () => {
@@ -163,9 +223,9 @@ describe("shadow disposition properties", () => {
 	it("selection-policy separation: changing consequence policy changes disposition without mutating the assessment", () => {
 		const f = fixture("label-vs-split-593");
 		const snapshot = JSON.stringify(f.records);
-		const a = shadowDisposition(f.records, f.facts, { consequence: "consequential", onContradiction: "retry-escalate" });
-		const b = shadowDisposition(f.records, f.facts, { consequence: "consequential", onContradiction: "withhold" });
-		const c = shadowDisposition(f.records, f.facts, { consequence: "reversible", onContradiction: "withhold" });
+		const a = shadowDisposition(f.records, f.facts, { ...f.policy, consequence: "consequential", onContradiction: "retry-escalate" });
+		const b = shadowDisposition(f.records, f.facts, { ...f.policy, consequence: "consequential", onContradiction: "withhold" });
+		const c = shadowDisposition(f.records, f.facts, { ...f.policy, consequence: "reversible", onContradiction: "withhold" });
 		assert.deepEqual([a.disposition, b.disposition, c.disposition], ["retry-escalate", "withhold", "continue"]);
 		assert.equal(JSON.stringify(f.records), snapshot);
 	});
@@ -220,6 +280,14 @@ describe("shadow disposition properties", () => {
 
 describe("risk–coverage frontier over the retrodicted episodes", () => {
 	const rows = frontier(corpus.fixtures);
+	it("renders as a five-row table carrying all five experiment metrics", () => {
+		const rendered = renderFrontier(rows);
+		assert.equal(rendered.split("\n").length, 7);
+		assert.ok(rendered.includes("evidence recovered") && rendered.includes("post-commit residual discovery"));
+		assert.equal(row("proposition-basis-conclusion").postCommitResidualDiscovery, 1, "#435's residual is the one discovered after the fact");
+		assert.equal(row("with-recovery").evidenceRecovered, 2);
+		assert.equal(row("with-residual").evidenceRecovered, 0);
+	});
 	const row = (condition: string) => {
 		const r = rows.find((candidate) => candidate.condition === condition);
 		assert.ok(r, `missing frontier row ${condition}`);
