@@ -166,7 +166,7 @@ describe("shadow disposition properties", () => {
 	it("a principal's recorded clearance closes a residual without touching the record", () => {
 		const f = fixture("false-chokepoint-435");
 		assert.equal(shadowDisposition(f.records, f.facts, f.policy).disposition, "withhold");
-		const cleared = { ...f.facts, principalClearances: [{ record: "G", residual: f.records[0].assessment.residual?.[0].statement ?? "", actor: "operator" }] };
+		const cleared = { ...f.facts, principalClearances: [{ record: "G", residualIndex: 0, actor: "operator" }] };
 		const snapshot = JSON.stringify(f.records);
 		assert.equal(shadowDisposition(f.records, cleared, f.policy).disposition, "commit");
 		assert.equal(JSON.stringify(f.records), snapshot, "clearance is a harness fact, not a record edit");
@@ -192,6 +192,13 @@ describe("shadow disposition properties", () => {
 		f.records[0].assessment.proposition = "some other proposition entirely";
 		const unrelated = shadowDisposition(f.records, f.facts, f.policy);
 		assert.notEqual(unrelated.disposition, "commit");
+		// A second valid record CONFIRMING the blocker keeps it alive beside the refutation, as a contradiction.
+		const confirmedToo = fixture("carried-blocker-refuted-495");
+		confirmedToo.records.push({ ...structuredClone(confirmedToo.records[0]), id: "CONFIRM", assessment: { proposition: "#554 env denial is not on the Claude path", basis: ["review-r2"], conclusion: { verdict: "holds" } } });
+		const confirmedResult = shadowDisposition(confirmedToo.records, confirmedToo.facts, confirmedToo.policy);
+		assert.equal(confirmedResult.disposition, "withhold");
+		assert.ok(has(confirmedResult.causes, "carried-blocker", "BLK-1"));
+		assert.ok(has(confirmedResult.causes, "contradiction", "#554 env denial is not on the Claude path"));
 		// Blocker-first: a contradiction elsewhere cannot downgrade a retained blocker to retry-escalate.
 		const blocked = fixture("carried-blocker-silence-495");
 		const contradictor = structuredClone(blocked.records[0]);
@@ -273,8 +280,13 @@ describe("shadow disposition properties", () => {
 
 describe("risk–coverage frontier over the retrodicted episodes", () => {
 	const rows = frontier(corpus.fixtures);
-	it("renders as a five-row table", () => {
-		assert.equal(renderFrontier(rows).split("\n").length, 7);
+	it("renders as a five-row table carrying all five experiment metrics", () => {
+		const rendered = renderFrontier(rows);
+		assert.equal(rendered.split("\n").length, 7);
+		assert.ok(rendered.includes("evidence recovered") && rendered.includes("post-commit residual discovery"));
+		assert.equal(row("proposition-basis-conclusion").postCommitResidualDiscovery, 1, "#435's residual is the one discovered after the fact");
+		assert.equal(row("with-recovery").evidenceRecovered, 2);
+		assert.equal(row("with-residual").evidenceRecovered, 0);
 	});
 	const row = (condition: string) => {
 		const r = rows.find((candidate) => candidate.condition === condition);

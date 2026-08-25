@@ -58,7 +58,8 @@ export interface CarriedBlocker {
 /** A principal's recorded decision that a residual no longer blocks. Harness-owned; names the actor. */
 export interface PrincipalClearance {
 	record: string;
-	residual: string;
+	/** Index into the record's residual[] — identity, not the residual's prose. */
+	residualIndex: number;
 	actor: string;
 }
 
@@ -151,10 +152,10 @@ function classify(record: AssessmentRecord, facts: HarnessFacts, unsupported: st
 	const openResiduals: Residual[] = [];
 	const recoverableResiduals: Residual[] = [];
 	const resolvedResiduals: Residual[] = [];
-	const cleared = new Set((facts.principalClearances ?? []).filter((c) => c.record === record.id).map((c) => c.residual));
-	for (const residual of record.assessment.residual ?? []) {
+	const cleared = new Set((facts.principalClearances ?? []).filter((c) => c.record === record.id).map((c) => c.residualIndex));
+	for (const [index, residual] of (record.assessment.residual ?? []).entries()) {
 		// A principal's recorded clearance closes the residual; the record itself is untouched.
-		if (cleared.has(residual.statement)) continue;
+		if (cleared.has(index)) continue;
 		if (!residual.resolvedBy) openResiduals.push(residual);
 		else if (currentAvailable(residual.resolvedBy)) resolvedResiduals.push(residual);
 		else if (byId.has(residual.resolvedBy)) recoverableResiduals.push(residual);
@@ -257,10 +258,15 @@ export function shadowDisposition(records: AssessmentRecord[], facts: HarnessFac
 	// Carried blockers survive silence. Only an explicit, current, valid, complete refutation clears one.
 	let blockerSurvives = false;
 	for (const blocker of facts.carriedBlockers) {
+		// A current, valid, complete record CONFIRMING the blocker keeps it alive even beside a refutation:
+		// that is a contradiction on the blocker's proposition, and it fails closed.
+		const confirmed = classified.some((c) => !superseded.has(c.record.id) && c.record.assessment.proposition === blocker.proposition && c.record.assessment.conclusion.verdict === "holds" && c.current && c.basisValid && c.complete);
+		if (confirmed) causes.push({ kind: "contradiction", proposition: blocker.proposition });
 		const refutation = blocker.refutedBy ? recordById.get(blocker.refutedBy) : undefined;
 		// A refutation must itself be current and not awaiting reassessment: a stale record or one whose
 		// named residual has since resolved cannot be the authority that removes a blocker.
 		const refuted =
+			!confirmed &&
 			refutation !== undefined &&
 			!superseded.has(refutation.record.id) &&
 			refutation.current &&
@@ -374,6 +380,11 @@ export interface FrontierRow {
 	commits: number;
 	unsupportedCommits: number;
 	unnecessaryWithholding: number;
+	/** Episodes with an obtainable observation where this condition actually acquired it and reached a justified commit. */
+	evidenceRecovered: number;
+	evidenceRecoverable: number;
+	/** Commits made while the assessor's own residual was stripped or ignored and the outcome was unjustified — the gap found after the fact. */
+	postCommitResidualDiscovery: number;
 	total: number;
 }
 
@@ -408,12 +419,18 @@ export function dispositionUnder(fixture: Fixture, condition: Condition): { disp
 export function frontier(fixtures: Fixture[]): FrontierRow[] {
 	const conditions: Condition[] = ["face-value", "proposition-basis-conclusion", "with-residual", "with-recovery", "with-recovery-fixed-truth"];
 	return conditions.map((condition) => {
-		const row: FrontierRow = { condition, commits: 0, unsupportedCommits: 0, unnecessaryWithholding: 0, total: fixtures.length };
+		const row: FrontierRow = { condition, commits: 0, unsupportedCommits: 0, unnecessaryWithholding: 0, evidenceRecovered: 0, evidenceRecoverable: 0, postCommitResidualDiscovery: 0, total: fixtures.length };
 		for (const fixture of fixtures) {
 			const { disposition, justified } = dispositionUnder(fixture, condition);
+			const hasResidual = fixture.records.some((r) => (r.assessment.residual ?? []).length > 0);
+			if (fixture.recovery) row.evidenceRecoverable++;
 			if (disposition === "commit") {
 				row.commits++;
-				if (!justified) row.unsupportedCommits++;
+				if (!justified) {
+					row.unsupportedCommits++;
+					if (hasResidual && (condition === "face-value" || condition === "proposition-basis-conclusion")) row.postCommitResidualDiscovery++;
+				}
+				if (fixture.recovery && justified && condition.startsWith("with-recovery")) row.evidenceRecovered++;
 			} else if (justified && disposition !== "continue") {
 				row.unnecessaryWithholding++;
 			}
@@ -423,7 +440,7 @@ export function frontier(fixtures: Fixture[]): FrontierRow[] {
 }
 
 export function renderFrontier(rows: FrontierRow[]): string {
-	const lines = ["| condition | commits | unsupported commits | unnecessary withholding |", "|---|---|---|---|"];
-	for (const r of rows) lines.push(`| ${r.condition} | ${r.commits}/${r.total} | ${r.unsupportedCommits} | ${r.unnecessaryWithholding} |`);
+	const lines = ["| condition | commits | unsupported commits | unnecessary withholding | evidence recovered | post-commit residual discovery |", "|---|---|---|---|---|---|"];
+	for (const r of rows) lines.push(`| ${r.condition} | ${r.commits}/${r.total} | ${r.unsupportedCommits} | ${r.unnecessaryWithholding} | ${r.evidenceRecovered}/${r.evidenceRecoverable} | ${r.postCommitResidualDiscovery} |`);
 	return lines.join("\n");
 }
