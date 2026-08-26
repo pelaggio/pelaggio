@@ -22,6 +22,7 @@ flowchart TB
   DEC_0020["claim-scoped-delivery-packet"]
   CLM_0009 -->|specializes| CLM_0019
   CON_0008 -->|constrains| CLM_0009
+  CON_0008 -->|constrains| CTR_0012
   CTR_0002 -->|derived-from| DEC_0012
   CTR_0002 -->|implements| CLM_0016
   CTR_0003 -->|derived-from| DEC_0014

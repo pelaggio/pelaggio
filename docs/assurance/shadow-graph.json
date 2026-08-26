@@ -1422,6 +1422,45 @@
 				".claude/skills/charter/SKILL.md",
 				"packages/pelaggio/scripts/pelaggio/flow-policy.ts"
 			]
+		},
+		{
+			"id": "CTR-0022",
+			"kind": "realization",
+			"slug": "shadow-assurance-conformance-suite",
+			"statement": "The shadow corpus is held by a conformance suite that pins the ontology exactly, forbids interpretive relations, requires every published trust record to be a scoped public proposition, indexes the always-loaded AGENTS.md invariant channel, and pins the graph's own status to shadow.",
+			"sources": [
+				"ADR-0027"
+			],
+			"codeEvidence": [
+				"ci/__tests__/shadow-assurance.test.ts",
+				"ci/assurance-views.ts"
+			]
+		},
+		{
+			"id": "CTR-0023",
+			"kind": "realization",
+			"slug": "harness-allocated-attempt-identity",
+			"statement": "Attempt identity is allocated and advanced by the harness rather than supplied by the worker.",
+			"sources": [
+				"ADR-0011"
+			],
+			"codeEvidence": [
+				"packages/pelaggio/scripts/pelaggio/attempt-identity.ts",
+				"packages/pelaggio/scripts/pelaggio/__tests__/attempt-identity.test.ts"
+			]
+		},
+		{
+			"id": "CTR-0024",
+			"kind": "realization",
+			"slug": "trust-manifest-drift-rejection",
+			"statement": "The published trust manifest is regenerated from the registry and a divergence between the two fails the check rather than publishing the drifted copy.",
+			"sources": [
+				"ADR-0018"
+			],
+			"codeEvidence": [
+				"ci/trust-manifest.ts",
+				"ci/__tests__/trust-manifest.test.ts"
+			]
 		}
 	],
 	"edges": [
@@ -2059,6 +2098,151 @@
 			"from": "CTR-0012",
 			"relation": "implements",
 			"to": "CLM-0019"
+		},
+		{
+			"from": "CON-0017",
+			"relation": "constrains",
+			"to": "CTR-0022"
+		},
+		{
+			"from": "CON-0019",
+			"relation": "constrains",
+			"to": "CTR-0022"
+		},
+		{
+			"from": "CON-0020",
+			"relation": "constrains",
+			"to": "CTR-0022"
+		},
+		{
+			"from": "CON-0021",
+			"relation": "constrains",
+			"to": "CTR-0022"
+		},
+		{
+			"from": "CON-0022",
+			"relation": "constrains",
+			"to": "CTR-0022"
+		},
+		{
+			"from": "CON-0023",
+			"relation": "constrains",
+			"to": "CTR-0022"
+		},
+		{
+			"from": "CON-0026",
+			"relation": "constrains",
+			"to": "CTR-0022"
+		},
+		{
+			"from": "CON-0007",
+			"relation": "constrains",
+			"to": "CTR-0023"
+		},
+		{
+			"from": "CON-0001",
+			"relation": "constrains",
+			"to": "CTR-0004"
+		},
+		{
+			"from": "CON-0002",
+			"relation": "constrains",
+			"to": "CTR-0012"
+		},
+		{
+			"from": "CON-0002",
+			"relation": "constrains",
+			"to": "CTR-0004"
+		},
+		{
+			"from": "CON-0003",
+			"relation": "constrains",
+			"to": "CTR-0015"
+		},
+		{
+			"from": "CON-0003",
+			"relation": "constrains",
+			"to": "CTR-0013"
+		},
+		{
+			"from": "CON-0005",
+			"relation": "constrains",
+			"to": "CTR-0018"
+		},
+		{
+			"from": "CON-0006",
+			"relation": "constrains",
+			"to": "CTR-0018"
+		},
+		{
+			"from": "CON-0008",
+			"relation": "constrains",
+			"to": "CTR-0012"
+		},
+		{
+			"from": "CON-0008",
+			"relation": "constrains",
+			"to": "CTR-0015"
+		},
+		{
+			"from": "CON-0009",
+			"relation": "constrains",
+			"to": "CTR-0013"
+		},
+		{
+			"from": "CON-0010",
+			"relation": "constrains",
+			"to": "CTR-0006"
+		},
+		{
+			"from": "CON-0010",
+			"relation": "constrains",
+			"to": "CTR-0005"
+		},
+		{
+			"from": "CON-0011",
+			"relation": "constrains",
+			"to": "CTR-0005"
+		},
+		{
+			"from": "CON-0012",
+			"relation": "constrains",
+			"to": "CTR-0004"
+		},
+		{
+			"from": "CON-0012",
+			"relation": "constrains",
+			"to": "CTR-0015"
+		},
+		{
+			"from": "CON-0013",
+			"relation": "constrains",
+			"to": "CTR-0011"
+		},
+		{
+			"from": "CON-0014",
+			"relation": "constrains",
+			"to": "CTR-0016"
+		},
+		{
+			"from": "CON-0015",
+			"relation": "constrains",
+			"to": "CTR-0017"
+		},
+		{
+			"from": "CTR-0022",
+			"relation": "derived-from",
+			"to": "DEC-0019"
+		},
+		{
+			"from": "CTR-0023",
+			"relation": "implements",
+			"to": "CLM-0012"
+		},
+		{
+			"from": "CTR-0024",
+			"relation": "implements",
+			"to": "CON-0016"
 		}
 	],
 	"adrMap": {
@@ -2126,6 +2310,7 @@
 		"ADR-0011": [
 			"ASM-0001",
 			"CLM-0011",
+			"CTR-0023",
 			"DEC-0005",
 			"DEC-0017"
 		],
@@ -2174,6 +2359,7 @@
 			"CLM-0008",
 			"CLM-0019",
 			"CON-0012",
+			"CTR-0024",
 			"DEC-0008",
 			"TC-005"
 		],
@@ -2272,6 +2458,7 @@
 			"CON-0024",
 			"CON-0025",
 			"CON-0026",
+			"CTR-0022",
 			"DEC-0019"
 		],
 		"ADR-0028": [
@@ -2574,7 +2761,22 @@
 			"When evidence plumbing lands, what minimum Actor and scope/context representation is earned by real custody queries?"
 		],
 		"decided": [
-			"2026-08-24 (#624): ADR-0022's fixed six-step / two-orchestrator topology stays a current construction choice (DEC-0012); nothing revisits it until a consumer question or a measured cost forces it."
-		]
+			"2026-08-24 (#624): ADR-0022's fixed six-step / two-orchestrator topology stays a current construction choice (DEC-0012); nothing revisits it until a consumer question or a measured cost forces it.",
+			"2026-08-26 (#650): CON-0005 time-is-not-liveness and CON-0006 self-validation-not-freshness bind CTR-0018 by ENFORCEMENT-BY-ABSENCE. git-claim.ts states it has no claims file, owner pid, or staleness lifecycle by design, so the prohibition is satisfied by the mechanism not containing the forbidden thing rather than by an active check. Recorded because a bind of this shape reads like active coverage and is not: reintroducing staleness-based reclaim would not fail a test today.",
+			"2026-08-26 (#650): CON-0019 promotion-requires-drift-ratchet binds CTR-0022 on the strength of the pinned `status: shadow` assertion, which fails if the graph is promoted. The suite supplies the coverage and drift checks the constraint names as the precondition, but does NOT gate promotion on their adequacy — promotion is blocked outright rather than conditioned. Bound rather than left unenforced because the violation does fail an assertion; recorded because the mechanism is broader and blunter than the constraint's conditional wording.",
+			"2026-08-26 (#650): CLM-0014, CTR-0014, CTR-0019 and CTR-0020 are absent by deliberate removal in the #616 reconciliation — three realizations and one claim that review showed were not what their nodes claimed, removed rather than softened. Their IDs are permanent gaps: reuse would silently rebind a retired identity, so new nodes continue past the current maxima."
+		],
+		"unenforcedConstraints": {
+			"note": "Constraints that name no enforcing realization today, each with the reason it stays unbound. Mirrors the Q17 frozen ceiling in ci/__tests__/shadow-assurance.test.ts; the two are checked against each other.",
+			"entries": {
+				"CON-0004": "Genuine gap. ADR-0025 is `proposed` and the landing fence is unbuilt; the only --force-with-lease in the tree (ship/pr-effects.ts) is a feature-branch push retry, not a landing fence, and does not claim to be one. Note the asymmetry this exposes: CON-0004 and CON-0009 both constrain CLM-0007 and Q3 asserts both edges, yet only CON-0009 has a mechanism.",
+				"CON-0018": "Intent-only. A rule about when semantic churn is warranted governs authoring judgment; no mechanism can decide whether an edit changed architectural intent.",
+				"CON-0024": "Intent-only, and forward-looking. It reserves extensibility for actors and context that the ontology deliberately has not added (ADR-0027 decision 6); there is nothing yet to enforce.",
+				"CON-0025": "Intent-only. Q13 regex-matches this constraint's own statement text, which is source grounding rather than enforcement and must not be recorded as a bind. No consumer-owned graph exists to hold the boundary against.",
+				"CON-0028": "Genuine gap. ADR-0028 is `proposed` and the delivery packet is unbuilt.",
+				"CON-0029": "Genuine gap. ADR-0028 is `proposed` and the delivery packet is unbuilt.",
+				"CON-0030": "Genuine gap. ADR-0028 is `proposed` and the delivery packet is unbuilt."
+			}
+		}
 	}
 }
