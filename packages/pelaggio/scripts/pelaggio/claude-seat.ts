@@ -317,7 +317,7 @@ function copyPresent(source: NodeJS.ProcessEnv, names: readonly string[], extra:
  * Deny-by-default child environment for the unconditional Claude spawn seam.
  * Source is the SDK-built `SpawnOptions.env` bag (control markers live there), never a fresh `process.env` read.
  */
-export function buildClaudeSeatEnv(source: NodeJS.ProcessEnv | undefined, step: Step, configuredAllowlist: readonly string[] = [], opts: { quiet?: boolean } = {}): NodeJS.ProcessEnv {
+export function buildClaudeSeatEnv(source: NodeJS.ProcessEnv | undefined, step: Step, configuredAllowlist: readonly string[] = []): NodeJS.ProcessEnv {
 	const bag = source ?? {};
 	const extra: Record<string, string> = {};
 	copyPresent(bag, CLAUDE_SDK_CONTROL_VARS, extra);
@@ -333,7 +333,6 @@ export function buildClaudeSeatEnv(source: NodeJS.ProcessEnv | undefined, step: 
 		source: bag,
 		allow: scopeEnvAllowlistToProvider(configuredAllowlist, "claude"),
 		extra,
-		...(opts.quiet ? { quiet: true } : {}),
 	});
 	if (!claudeSeatHoldsForgeAuthority(step)) {
 		for (const name of FORGE_REMOTE_VARS) delete env[name];
@@ -667,8 +666,7 @@ export function preflightClaudeSeat(options: ClaudeSeatPreflightOptions): Claude
 				}));
 		const result = probe(invocation.command, invocation.args, {
 			cwd: invocation.cwd,
-			// quiet: the drop diagnostic prints on the spawn build; suppress the preflight duplicate.
-			env: buildClaudeSeatEnv(options.env ?? process.env, options.step, options.envAllowlist ?? [], { quiet: true }),
+			env: buildClaudeSeatEnv(options.env ?? process.env, options.step, options.envAllowlist ?? []),
 		});
 		if (result.error) {
 			throw seatFailure(`could not run the Bubblewrap namespace probe: ${result.error.message}`);
