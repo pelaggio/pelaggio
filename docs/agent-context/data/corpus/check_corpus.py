@@ -100,13 +100,39 @@ for n in C["nodes"]:
 # --- thesis smuggling (finding 6 / 8) ---------------------------------------
 CAUSAL = ("raises", "reduces", "improves", "lowers", "increases", "decreases",
           "faster", "cheaper", "fewer", "more often", "less often", "drives", "causes")
-for n in C["nodes"]:
-    s = n.get("statement", "").lower()
-    hits = [w for w in CAUSAL if w in s]
-    if hits and n.get("role") != "assumption":
-        errs.append(f"{n['id']}: causal-outcome language {hits} outside an assumption — the corpus has no node kind for a thesis")
-    elif hits:
-        warns.append(f"{n['id']}: causal language {hits}; confirm its condition tests the causal claim, not just the outcome")
+# Node statements were the only prose this read, so the corpus's own `scope` carried
+# "reduce blast radius" past a guard whose whole point is that no such claim exists outside
+# an assumption. An assumption's own text is the one place the language is admitted, so the
+# walk exempts those nodes and reads everything else, including fields not yet invented.
+ASSUMPTION_TEXT = {
+    json.dumps(n.get(k))
+    for n in C["nodes"]
+    if n.get("role") == "assumption"
+    for k in ("statement", "wrongIf", "revisitIf")
+    if n.get(k)
+}
+
+def scan_causal(path, text, node_id=None):
+    hits = [w for w in CAUSAL if w in text.lower()]
+    if not hits:
+        return
+    if node_id and N.get(node_id, {}).get("role") == "assumption":
+        warns.append(f"{path}: causal language {hits}; confirm its condition tests the causal claim, not just the outcome")
+    else:
+        errs.append(f"{path}: causal-outcome language {hits} outside an assumption — the corpus has no node kind for a thesis")
+
+def walk_causal(path, value, node_id=None):
+    if isinstance(value, str):
+        scan_causal(path or "corpus", value, node_id)
+    elif isinstance(value, dict):
+        nid = value.get("id") if isinstance(value.get("id"), str) else node_id
+        for key, item in value.items():
+            walk_causal(f"{path}.{key}" if path else key, item, nid)
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            walk_causal(f"{path}[{index}]", item, node_id)
+
+walk_causal("", C)
 
 
 # --- prose must not name a node that does not exist --------------------------
@@ -115,14 +141,16 @@ for n in C["nodes"]:
 # renderers left this file and the corpus's own text unchecked, and this file was in
 # fact citing a node it had retired.
 HERE = os.path.dirname(os.path.abspath(__file__))
-# One or two digits only. The antecedent repo numbers its nodes to four (`CON-0003`), and
-# `sources` is precisely where such external references are supposed to live — matching them
-# here would make the field that exists to carry them the field that cannot.
-ID = re.compile(r"\b(?:INV|CON|ASM|DEC)-\d{1,2}\b")
+# Any number of digits, so a permitted three-digit id stays visible after retirement.
+# External references are told apart by zero-padding rather than by length: the antecedent
+# repo pads to four (`CON-0003`) and this corpus never pads, so a leading zero marks a
+# foreign namespace — which `sources` exists to carry and this guard must not claim.
+ID = re.compile(r"\b(?:INV|CON|ASM|DEC)-\d+\b")
+FOREIGN = re.compile(r"^(?:INV|CON|ASM|DEC)-0\d{3}$")
 
 def cite(where, text):
     for tok in sorted(set(ID.findall(text))):
-        if tok not in N:
+        if tok not in N and not FOREIGN.match(tok):
             errs.append(f"{where}: prose names {tok}, which is not a corpus node")
 
 for fn in sorted(os.listdir(HERE)):

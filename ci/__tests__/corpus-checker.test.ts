@@ -69,6 +69,20 @@ describe("successor corpus checker", () => {
 		["edge endpoint that is not a node", (c) => (c.edges[0].to = "INV-99"), /not a corpus node|target not a corpus node/],
 		["causal language outside an assumption", (c) => (constraint(c).statement += " This reduces cost."), /causal-outcome language/],
 		["a retired id cited in prose", (c) => (c.authority += " see CON-99"), /prose names CON-99/],
+		// Both guards read node statements only, so the corpus's own `scope` and `note` sat outside
+		// them — `scope.doesNotClaim` was carrying "reduce blast radius" past the thesis guard.
+		["causal language in scope", (c) => (c.scope.doesNotClaim += " This reduces risk."), /scope\.doesNotClaim: causal-outcome/],
+		["causal language in a top-level note", (c) => (c.note += " It improves recall."), /note: causal-outcome/],
+		// The id regex was narrowed to two digits to spare foreign refs, which blinded it to a
+		// permitted three-digit id. Zero-padding is the discriminator, not length.
+		["a retired three-digit id", (c) => (c.authority += " see INV-100"), /prose names INV-100/],
+	];
+
+	// The same narrowing must not resume flagging the antecedent repo's ids, which `sources` exists
+	// to carry — a guard that rejects the field built for external references is worse than none.
+	const permitted: [string, (c) => void][] = [
+		["a zero-padded foreign id in sources", (c) => c.nodes[0].sources.push("pelaggio CON-0003")],
+		["a zero-padded foreign id in authority", (c) => (c.authority += " see pelaggio DEC-0012")],
 	];
 
 	for (const [label, mutate, expected] of violations) {
@@ -76,6 +90,13 @@ describe("successor corpus checker", () => {
 			const result = check(mutate);
 			assert.notEqual(result.status, 0, `expected a non-zero exit for ${label}`);
 			assert.match(result.stdout, expected);
+		});
+	}
+
+	for (const [label, mutate] of permitted) {
+		it(`still admits ${label}`, () => {
+			const result = check(mutate);
+			assert.equal(result.status, 0, `expected a clean exit for ${label}:\n${result.stdout}`);
 		});
 	}
 });

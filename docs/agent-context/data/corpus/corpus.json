@@ -731,7 +731,7 @@
   ],
   "scope": {
     "claims": "Bounded delivery of software work by cooperating agents under an operator's authority.",
-    "doesNotClaim": "Safety against a determined adversarial model or a compromised host. The tool surface bounds what a callee can do and the band decides what needs authority beyond the run; neither is a guarantee against an adversary who controls the callee's reasoning. Controls here reduce blast radius and make actions legible. They are not a security product and must not be cited as one.",
+    "doesNotClaim": "Safety against a determined adversarial model or a compromised host. The tool surface bounds what a callee can do and the band decides what needs authority beyond the run; neither is a guarantee against an adversary who controls the callee's reasoning. Controls here bound what a callee can reach and keep its acts legible. They are not a security product and must not be cited as one.",
     "unrealized": [
       {
         "intent": "Ingress isolation — a granted tool that reaches the network can carry instruction inward.",

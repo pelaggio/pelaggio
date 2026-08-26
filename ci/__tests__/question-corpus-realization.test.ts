@@ -44,7 +44,10 @@ describe("question corpus against the materialized graph", () => {
 	it("every declared view answers — a broken seed is a silently unaskable question", () => {
 		for (const view of catalog.views) {
 			assert.doesNotThrow(() => answer(graph, view), `view ${view.id} does not answer`);
-			assert.ok(answer(graph, view) > 0, `view ${view.id} answers empty`);
+			// A diagnostics view reports debt, and no debt is the answer we are working toward — so
+			// requiring a positive count here would make paying the last one down turn this gate red.
+			// What must hold is that the question is askable, which `doesNotThrow` already covers.
+			if (view.mode !== "diagnostics") assert.ok(answer(graph, view) > 0, `view ${view.id} answers empty`);
 		}
 	});
 
