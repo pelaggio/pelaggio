@@ -84,42 +84,37 @@ reviewers split or *over what*, so the rationale reaches a human only as prose i
 
 ## Cycle-side view: what a gate outcome costs the pipeline (2026-08-26)
 
-The baseline above measures the gate from its own records. This section measures the same
-phenomenon from the **cycle log** — the other end of the same loop — and is reported here as data.
-Interpretation belongs on the campaign item, not in this document.
+The baseline above measures the gate from its own records. The **cycle log** measures the same loop
+from the other end, and `npx pelaggio stats` already reports it — park cause is a closed
+classification (`ParkClass`, see `classifyParkReason`) persisted on the record and rendered by
+cause. Read that command first; the figures below are one reading of it, frozen so this section's
+claims stay checkable.
 
-Reproduce by grouping `.dev/pelaggio-log.jsonl` on `ts` by ISO week and reading `completed`,
-`parked`, `parkReason`, `error`, and the terminal entry of `steps`. Join to merged PRs on
-`^(feat|fix)/(issue-)?(\d+)`. **Corpora frozen: cycle log `208:758e3652c593`, PR list
-`256:d5920706a550`, roadmap snapshot `351:2a8b73a361da`.**
+**Corpora frozen: cycle log `208:758e3652c593`, PR list `256:d5920706a550`.**
 
 | Measure | Value |
 |---|---|
-| cycles logged (2026-07-13 → 2026-08-24) | 208 |
-| completed / parked / failed | 97 / 51 / 60 |
-| parks by cause — review escalation / untyped / quota | 25 / 22 / 4 |
-| untyped parks whose terminal step was `pr-review` or `pr-verify` | 22 of 22 |
+| cycles (2026-07-13 → 2026-08-24) | 208 — completed 97, failed 60, parked 51 |
+| parked by cause | `review-escalation` 13 · `review-blocked` 11 · `rate-limit` 5 · `unrecorded` 22 |
 | distinct items that ever parked | 33 |
-| park → next-cycle-completion latency (median) | 0.9 h |
-| parked items that completed a later cycle | 26 of 33 |
+| parked items that completed a later cycle | 26 of 33 (median park → completion 0.9 h) |
 | **parked items whose PR merged** | **0 of 33** |
 | **cycles consumed by those 33 items** | **117 of 208** |
 
-Two encoding hazards are load-bearing for anyone re-running this, and both produced wrong readings
-before they were found:
+The `unrecorded` 22 predate park classification; `stats` shows them as unknown rather than folding
+them into a real class, so they are not evidence for any cause. Their terminal step is
+`pr-review` or `pr-verify` in all 22 cases, which is suggestive and not a classification.
 
-- `error` carries the literal string `parked` on a parked cycle, so a naive count of non-empty
-  `error` reports 111 failures where there are 60. Parks must be excluded before any failure rate.
-- `parkReason` is unpopulated for every park in the 2026-08-03 week (22 of 51). Those parks are not
-  causeless: all 22 terminate at `pr-review` or `pr-verify`. Cause must be recovered from the
-  terminal step, not read from the field.
+Two reader's notes, because both produced wrong readings before they were found:
 
-Genuine failures (n=60), classified by the text of `error`: dependency/typecheck environment 10,
-confinement violation 9, worktree/checkout state 8, freshness merge conflict 5, andon block 5,
-rethink verdict 4, config/attendance 3, typed misc 2, and 14 carrying no reason beyond
-`"<step> failed"`.
+- `CycleResult.error` carries the literal string `parked` on a parked cycle (its docstring says so).
+  A count of non-empty `error` therefore reports 111 failures where there are 60. `stats` already
+  separates the two; a hand-rolled parser will not.
+- Failure cause is **not stored** — `stats` derives "failed by cause" by prefixing the free-text
+  `error`, so it is as coarse as those strings. Park cause, by contrast, is stored and closed. The
+  asymmetry is the open half.
 
-Weekly genuine-failure rate, parks excluded: 26%, 29%, 27%, 28%, 46%.
+Genuine failure rate by week, parks excluded: 26%, 29%, 27%, 28%, 46%.
 
 ## Known gap: wall-clock is not instrumented
 
