@@ -173,6 +173,49 @@ export function deduplicateCandidates(findings: readonly { finding: AuthoringRev
 	return [...byFingerprint.values()].sort((a, b) => a.fingerprint.localeCompare(b.fingerprint)).map((candidate, index) => ({ ...candidate, candidateId: `C${index + 1}` }));
 }
 
+const RULING_RANK: Record<JudgeRuling, number> = { "fixable-blocker": 1, "judgment-dissent": 2, "unfixable-blocker": 3 };
+
+/**
+ * Collapse candidates the Judge marked `sameAs` into one representative each.
+ *
+ * Provider diversity multiplies findings: the fingerprint is [message, path, line], so two seats
+ * reporting one defect in different words never collide and both carry. Only a model can see that
+ * they are the same defect; only the harness may decide which survives.
+ *
+ * `rulings` is mutated: the representative inherits the strongest ruling in its group, because
+ * `unfixable-blocker` is orthogonal to blockingRank and would otherwise be dropped by the merge —
+ * turning a park-for-a-human into another revision cycle.
+ */
+export function collapseSemanticGroups(survivors: readonly ReviewCandidate[], report: JudgeReport | undefined, rulings: Map<string, JudgeRuling>, taxonomy: TaxonomyConfig = BASELINE_TAXONOMY): ReviewCandidate[] {
+	const root = new Map<string, string>();
+	for (const decision of report?.decisions ?? []) if (decision.sameAs !== undefined) root.set(decision.candidateId, decision.sameAs);
+	if (root.size === 0) return [...survivors];
+	const groups = new Map<string, ReviewCandidate[]>();
+	for (const candidate of survivors) {
+		const key = root.get(candidate.candidateId) ?? candidate.candidateId;
+		const members = groups.get(key);
+		if (members) members.push(candidate);
+		else groups.set(key, [candidate]);
+	}
+	const collapsed: ReviewCandidate[] = [];
+	for (const members of groups.values()) {
+		if (members.length === 1) {
+			collapsed.push(members[0]);
+			continue;
+		}
+		let representative = members[0];
+		for (const member of members) if (blockingRank(member.finding, taxonomy) > blockingRank(representative.finding, taxonomy)) representative = member;
+		let strongest: JudgeRuling | undefined;
+		for (const member of members) {
+			const ruling = rulings.get(member.candidateId);
+			if (ruling && (!strongest || RULING_RANK[ruling] > RULING_RANK[strongest])) strongest = ruling;
+		}
+		if (strongest) rulings.set(representative.candidateId, strongest);
+		collapsed.push({ ...representative, sources: [...new Set(members.flatMap((member) => member.sources))] });
+	}
+	return collapsed.sort((a, b) => a.fingerprint.localeCompare(b.fingerprint));
+}
+
 export function classifyReviewOutcome(
 	survivors: readonly ReviewCandidate[],
 	notes: readonly ReviewCandidate[],
@@ -283,24 +326,12 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 		}
 		const candidates = deduplicateCandidates(discovered, taxonomy);
 		const disagreement = classifyReviewDisagreement(pass, reviewerRecords, candidates, taxonomy, safetyFloor);
-		if (disagreement) {
-			passes.push({
-				pass,
-				reviewers: reviewerRecords,
-				judge: { identity: identity("judge", policy.judge, pass), valid: false, cost: 0, turns: 0, diagnostic: "skipped: human adjudication required" },
-				carriedBefore: discovered.filter((item) => item.source === "carried").map((item) => reviewFindingFingerprint(item.finding)),
-				carriedAfter: candidates.filter((candidate) => candidate.finding.severity === "must-fix").map((candidate) => candidate.fingerprint),
-			});
-			return withFloor({
-				outcome: disagreement.hasSafetyBlocker ? "hard-block" : "dissent",
-				diversity,
-				passes,
-				survivors: candidates.filter((candidate) => candidate.finding.severity === "must-fix"),
-				notes: candidates.filter((candidate) => candidate.finding.severity !== "must-fix"),
-				cost,
-				disagreement,
-			});
-		}
+		// A cross-model verdict split is adjudicated by a human, never by a model (ADR-0014: the model is
+		// a policy input, never the gate) — so the OUTCOME below is still `dissent`. But the Judge does not
+		// emit a verdict; it emits per-candidate decisions that a deterministic rule then counts. Skipping
+		// it on a split withheld semantic reduction exactly where the evidence is richest, and inverted the
+		// trust gradient: under consensus the Judge may refute every candidate, under dissent it was
+		// trusted with none. It now runs on both paths and decides neither.
 		const judgeSignal = childSignal();
 		let judgeResult: StepResult;
 		try {
@@ -335,6 +366,15 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 				})
 			)
 				throw new Error("Judge decisions are incomplete, duplicated, downgrade a safety class, or contain unknown candidates");
+			// `sameAs` grouping, fail-closed. One level only: a target that is itself grouped would make the
+			// representative depend on traversal order, so chains and cycles are rejected outright rather
+			// than resolved. Self-reference is already rejected at parse.
+			const grouped = new Set(report.decisions.filter((decision) => decision.sameAs !== undefined).map((decision) => decision.candidateId));
+			for (const decision of report.decisions) {
+				if (decision.sameAs === undefined) continue;
+				if (!candidates.some((candidate) => candidate.candidateId === decision.sameAs)) throw new Error(`Judge decision ${decision.candidateId} is sameAs ${decision.sameAs}, which is not a candidate`);
+				if (grouped.has(decision.sameAs)) throw new Error(`Judge decision ${decision.candidateId} is sameAs ${decision.sameAs}, which is itself grouped — sameAs is one level only`);
+			}
 		} catch (error) {
 			// Completeness/parse failure must invalidate the whole pass (fail-closed):
 			// `report` may already hold the parsed-but-incomplete value, so clear it or
@@ -356,8 +396,18 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 					return decision.decision === "survives";
 				})
 			: candidates;
-		notes = candidates.filter((candidate) => candidate.finding.severity !== "must-fix");
-		carried = next.filter((candidate) => candidate.finding.severity === "must-fix");
+		// Collapse runs over `next` — the set that already survived refutation and the #272 safety
+		// retention — so it can never resurrect a refuted finding, and a group vanishes only when every
+		// member was independently refuted. The representative is the highest blockingRank member, so a
+		// safety must-fix cannot be merged into a lesser one.
+		const reduced = collapseSemanticGroups(next, report, rulings, taxonomy);
+		notes = collapseSemanticGroups(
+			candidates.filter((candidate) => candidate.finding.severity !== "must-fix"),
+			report,
+			rulings,
+			taxonomy,
+		);
+		carried = reduced.filter((candidate) => candidate.finding.severity === "must-fix");
 		passes.push({
 			pass,
 			reviewers: reviewerRecords,
@@ -365,6 +415,17 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 			carriedBefore: discovered.filter((item) => item.source === "carried").map((item) => reviewFindingFingerprint(item.finding)),
 			carriedAfter: carried.map((item) => item.fingerprint),
 		});
+		if (disagreement) {
+			return withFloor({
+				outcome: disagreement.hasSafetyBlocker ? "hard-block" : "dissent",
+				diversity,
+				passes,
+				survivors: carried,
+				notes,
+				cost,
+				disagreement,
+			});
+		}
 		const outcome = classifyReviewOutcome(carried, notes, rulings, Boolean(report), pass, taxonomy, safetyFloor);
 		// Escalate-early: revise->re-review only when the carried set can actually converge — i.e. EVERY
 		// surviving must-fix is fixable-by-the-loop. A survivor is unclearable when it is safety-class

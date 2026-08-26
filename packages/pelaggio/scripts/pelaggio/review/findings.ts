@@ -124,7 +124,7 @@ export const CLASSIFICATION_RULES: readonly ClassificationRule[] = [
 export type JudgeRuling = "fixable-blocker" | "unfixable-blocker" | "judgment-dissent";
 export interface JudgeReport {
 	schemaVersion: 1;
-	decisions: Array<{ candidateId: string; decision: ReviewVerificationDecision; rationale: string; class?: ReviewFindingClass; ruling?: JudgeRuling }>;
+	decisions: Array<{ candidateId: string; decision: ReviewVerificationDecision; rationale: string; class?: ReviewFindingClass; ruling?: JudgeRuling; sameAs?: string }>;
 }
 
 export type ReviewVerificationDecision = "refuted" | "survives";
@@ -340,6 +340,7 @@ export type ReviewFindingsParseErrorCode =
 	| "not-json-object"
 	| "invalid-json"
 	| "unknown-key"
+	| "invalid-same-as"
 	| "missing-field"
 	| "unsupported-schema-version"
 	| "findings-not-array"
@@ -630,14 +631,27 @@ export function parseJudgeReport(text: string): JudgeReport {
 		if (!isRecord(value)) throw new ReviewFindingsParseError("not-json-object", `Judge decision ${index + 1} must be an object`);
 		// #280: `class` is optional — candidate already carries harness-owned effective class.
 		// When present it is validated; loop.ts blocks a safety→non-safety downgrade (#272).
-		assertKeys(value, ["candidateId", "decision", "rationale", "class", "ruling"], ["candidateId", "decision", "rationale"], `Judge decision ${index + 1}`);
-		const { class: _class, ruling: _ruling, ...verification } = value;
+		assertKeys(value, ["candidateId", "decision", "rationale", "class", "ruling", "sameAs"], ["candidateId", "decision", "rationale"], `Judge decision ${index + 1}`);
+		const { class: _class, ruling: _ruling, sameAs: _sameAs, ...verification } = value;
 		const base = parseVerificationDecision(verification, index);
 		if (value.class !== undefined && (typeof value.class !== "string" || !isWellFormedClassId(value.class))) throw new ReviewFindingsParseError("invalid-class", `Judge decision ${index + 1} has an invalid class`);
 		if (value.ruling !== undefined && !JUDGE_RULINGS.includes(value.ruling as JudgeRuling)) throw new ReviewFindingsParseError("invalid-ruling", `Judge decision ${index + 1} has an invalid ruling`);
 		if (value.ruling === "judgment-dissent" && value.class !== undefined && value.class !== "judgment") throw new ReviewFindingsParseError("judgment-dissent-misuse", "judgment-dissent is only valid for judgment findings");
 		if (base.decision === "survives" && value.ruling === undefined) throw new ReviewFindingsParseError("missing-ruling", `surviving Judge decision ${base.candidateId} requires a ruling`);
-		return { ...base, ...(value.class !== undefined ? { class: value.class as ReviewFindingClass } : {}), ...(value.ruling ? { ruling: value.ruling as JudgeRuling } : {}) };
+		// `sameAs` says "this candidate and that one are the same defect, worded differently" — the
+		// fingerprint is [message, path, line], so two seats finding one defect never collide. It is a
+		// PROPOSAL: loop.ts picks the surviving representative by blockingRank, exactly as
+		// deduplicateCandidates does for exact collisions. The Judge never chooses which one survives.
+		if (value.sameAs !== undefined) {
+			if (typeof value.sameAs !== "string" || value.sameAs.trim() === "") throw new ReviewFindingsParseError("invalid-same-as", `Judge decision ${index + 1} has an invalid sameAs`);
+			if (value.sameAs === base.candidateId) throw new ReviewFindingsParseError("invalid-same-as", `Judge decision ${base.candidateId} declares itself sameAs`);
+		}
+		return {
+			...base,
+			...(value.class !== undefined ? { class: value.class as ReviewFindingClass } : {}),
+			...(value.ruling ? { ruling: value.ruling as JudgeRuling } : {}),
+			...(value.sameAs !== undefined ? { sameAs: value.sameAs as string } : {}),
+		};
 	});
 	// Fail closed on the parroted Judge example. Rationale-only: the packaged example is
 	// `survives`, so a full-tuple match would miss a `refuted` flip of the same sentinel.

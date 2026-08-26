@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { AuthoringReviewConfig } from "../config.js";
 import { type AuthoringReviewFinding, isSafetyClass, type JudgeRuling, materializeAuthoringFinding, type ReviewFindingClass, SAFETY_CLASSES } from "../review/findings.js";
-import { classifyReviewDisagreement, classifyReviewOutcome, type DriverIdentity, deduplicateCandidates, type ReviewCandidate, type ReviewPassRecord, runReviewLoop } from "../review/loop.js";
+import { classifyReviewDisagreement, classifyReviewOutcome, collapseSemanticGroups, type DriverIdentity, deduplicateCandidates, type ReviewCandidate, type ReviewPassRecord, runReviewLoop } from "../review/loop.js";
 import { renderReviewRecord } from "../review/record.js";
 import { BASELINE_TAXONOMY, resolveTaxonomy } from "../review/taxonomy.js";
 import type { StepResult } from "../types.js";
@@ -155,7 +155,7 @@ describe("authoring review loop controller", () => {
 		assert.ok(result.survivors.some((survivor) => survivor.finding.class === "security-and-secrets"));
 	});
 
-	it("escalates a stable pass/block split before invoking the Judge", async () => {
+	it("runs the Judge on a pass/block split but still escalates to a human", async () => {
 		let judgeCalls = 0;
 		const policy = {
 			...basePolicy,
@@ -178,8 +178,12 @@ describe("authoring review loop controller", () => {
 			},
 			prompts: { review: () => "r", judge: () => "j", revise: () => "rev" },
 		});
+		// The Judge REDUCES on a split (semantic dedup, severity) and DECIDES nothing: the outcome is
+		// `dissent` whatever it returns, so a model can never resolve a cross-model split (ADR-0014).
+		// The seat here emits no parseable Judge block, which is the strongest form of the property —
+		// even a Judge that fails entirely leaves the escalation intact.
 		assert.equal(result.outcome, "dissent");
-		assert.equal(judgeCalls, 0);
+		assert.equal(judgeCalls, 1);
 		assert.deepEqual(
 			result.disagreement?.drivers.map(({ verdict }) => verdict),
 			["pass", "block"],
@@ -470,7 +474,8 @@ describe("authoring review loop controller", () => {
 		});
 		assert.equal(result.outcome, "dissent");
 		assert.equal(result.passes.length, 1);
-		assert.equal(judgeCalls, 0);
+		// Escalation is immediate: the Judge runs once to reduce, and no revision cycle is attempted.
+		assert.equal(judgeCalls, 1);
 		assert.equal(authorCalls, 0);
 	});
 
@@ -765,5 +770,110 @@ describe("authoring review loop — no-revise + safety floor (#384)", () => {
 			runSeat: async (request) => ok(request.role === "judge" ? judgeReport([]) : clean),
 		});
 		assert.equal(softened.diversity.state, "softened");
+	});
+});
+
+describe("Judge semantic grouping (sameAs)", () => {
+	const groupPolicy: AuthoringReviewConfig = {
+		enabled: "local",
+		reviewers: [{ id: "grok", provider: "grok" }],
+		judge: { id: "judge", provider: "claude" },
+		blockingBar: "must-fix",
+		maxPasses: 1,
+		maxRevisions: 0,
+		budgetCap: 1000,
+		providerDiversity: "prefer",
+	};
+	const seat = (fullText: string): StepResult => ({ ok: true, subtype: "success", text: fullText, fullText, assistantText: fullText, cost: 0, turns: 0 });
+	const cand = (id: string, className: ReviewFindingClass, message: string, severity: "must-fix" | "note" = "must-fix"): ReviewCandidate => ({
+		candidateId: id,
+		fingerprint: `fp-${id}`,
+		sources: [`seat-${id}`],
+		finding: effective(className, severity, message),
+	});
+	const report = (decisions: unknown[]) => ({ schemaVersion: 1 as const, decisions: decisions as never });
+
+	it("collapses two wordings of one defect and unions their sources", () => {
+		// The fingerprint is [message, path, line], so two seats describing one defect never collide —
+		// which is the whole reason a model has to say they are the same.
+		const survivors = [cand("C1", "judgment", "table omits a primitive"), cand("C2", "judgment", "Phase I table is missing Evidence")];
+		const collapsed = collapseSemanticGroups(survivors, report([{ candidateId: "C2", decision: "survives", rationale: "r", sameAs: "C1" }]), new Map());
+		assert.equal(collapsed.length, 1);
+		assert.deepEqual([...collapsed[0].sources].sort(), ["seat-C1", "seat-C2"]);
+	});
+
+	it("keeps the highest-blockingRank member, so a safety must-fix is never merged away", () => {
+		const survivors = [cand("C1", "judgment", "worded one way"), cand("C2", "security-and-secrets", "worded another")];
+		const collapsed = collapseSemanticGroups(survivors, report([{ candidateId: "C2", decision: "survives", rationale: "r", sameAs: "C1" }]), new Map());
+		assert.equal(collapsed.length, 1);
+		assert.equal(collapsed[0].finding.class, "security-and-secrets");
+	});
+
+	it("propagates the strongest ruling to the representative", () => {
+		// `unfixable-blocker` is orthogonal to blockingRank: without propagation the merge would turn a
+		// park-for-a-human into another revision cycle.
+		const rulings = new Map<string, JudgeRuling>([
+			["C1", "fixable-blocker"],
+			["C2", "unfixable-blocker"],
+		]);
+		const survivors = [cand("C1", "correctness-regression", "a"), cand("C2", "judgment", "b")];
+		const collapsed = collapseSemanticGroups(survivors, report([{ candidateId: "C2", decision: "survives", rationale: "r", sameAs: "C1" }]), rulings);
+		assert.equal(collapsed.length, 1);
+		assert.equal(rulings.get(collapsed[0].candidateId), "unfixable-blocker");
+	});
+
+	it("drops a group only when every member was independently refuted", () => {
+		// Collapse runs over the already-filtered survivor set, so a refuted member is simply absent;
+		// a group can never resurrect one, and never vanishes while any member survives.
+		const collapsed = collapseSemanticGroups([cand("C1", "judgment", "survivor")], report([{ candidateId: "C2", decision: "refuted", rationale: "r", sameAs: "C1" }]), new Map());
+		assert.equal(collapsed.length, 1);
+		assert.equal(collapseSemanticGroups([], report([{ candidateId: "C2", decision: "refuted", rationale: "r", sameAs: "C1" }]), new Map()).length, 0);
+	});
+
+	it("invalidates the whole report when a group is malformed, so every candidate carries", async () => {
+		// A bad `sameAs` is fail-closed like every other completeness failure: the report clears to
+		// undefined and both candidates survive. A dangling target or a chain must never silently
+		// collapse a blocker, which is why neither is resolved — both are rejected.
+		const two = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({
+			schemaVersion: 3,
+			summary: "s",
+			findings: [
+				{ severity: "must-fix", message: "first wording", ruleId: "pelaggio/judgment/style" },
+				{ severity: "must-fix", message: "second wording", ruleId: "pelaggio/judgment/style" },
+			],
+		})}\nEND_AUTHORING_REVIEW_FINDINGS`;
+		const judge = (decisions: unknown[]) => `AUTHORING_REVIEW_JUDGE\n${JSON.stringify({ schemaVersion: 1, decisions })}\nEND_AUTHORING_REVIEW_JUDGE`;
+		const runWith = (decisions: unknown[]) =>
+			runReviewLoop({
+				policy: groupPolicy,
+				author: { provider: "codex" },
+				parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" },
+				classificationContext: emptyClassification,
+				taxonomy: BASELINE_TAXONOMY,
+				runSeat: async (request) => seat(request.role === "reviewer" ? two : judge(decisions)),
+				prompts: { review: () => "r", judge: () => "j", revise: () => "rev" },
+			});
+
+		const dangling = await runWith([
+			{ candidateId: "C1", decision: "survives", rationale: "r", ruling: "fixable-blocker" },
+			{ candidateId: "C2", decision: "survives", rationale: "r", ruling: "fixable-blocker", sameAs: "C9" },
+		]);
+		assert.equal(dangling.outcome, "hard-block");
+		assert.equal(dangling.survivors.length, 2);
+		assert.match(dangling.passes[0].judge.diagnostic ?? "", /not a candidate/);
+
+		const chained = await runWith([
+			{ candidateId: "C1", decision: "survives", rationale: "r", ruling: "fixable-blocker", sameAs: "C2" },
+			{ candidateId: "C2", decision: "survives", rationale: "r", ruling: "fixable-blocker", sameAs: "C1" },
+		]);
+		assert.equal(chained.outcome, "hard-block");
+		assert.equal(chained.survivors.length, 2);
+		assert.match(chained.passes[0].judge.diagnostic ?? "", /one level only/);
+	});
+
+	it("is a no-op when the Judge groups nothing", () => {
+		const survivors = [cand("C1", "judgment", "a"), cand("C2", "judgment", "b")];
+		assert.equal(collapseSemanticGroups(survivors, report([{ candidateId: "C1", decision: "survives", rationale: "r" }]), new Map()).length, 2);
+		assert.equal(collapseSemanticGroups(survivors, undefined, new Map()).length, 2);
 	});
 });

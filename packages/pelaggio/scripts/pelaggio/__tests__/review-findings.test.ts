@@ -740,3 +740,21 @@ describe("ReviewFindingsParseError codes (#536)", () => {
 		assert.equal(parseFailureCode(new ReviewFindingsParseError("unknown-key", "review findings report contains unknown key: leaked")), "unknown-key");
 	});
 });
+
+describe("Judge sameAs parsing", () => {
+	const judge = (decision: Record<string, unknown>) => `AUTHORING_REVIEW_JUDGE\n${JSON.stringify({ schemaVersion: 1, decisions: [decision] })}\nEND_AUTHORING_REVIEW_JUDGE`;
+
+	it("accepts an optional sameAs without a schema bump", () => {
+		// Additive and optional: an old report stays valid and a new one is a superset, so the version
+		// does not move. Only the key allowlist had to admit it.
+		const report = parseJudgeReport(judge({ candidateId: "C2", decision: "survives", rationale: "same defect as C1", ruling: "fixable-blocker", sameAs: "C1" }));
+		assert.equal(report.schemaVersion, 1);
+		assert.equal(report.decisions[0].sameAs, "C1");
+		assert.equal(parseJudgeReport(judge({ candidateId: "C1", decision: "survives", rationale: "r", ruling: "fixable-blocker" })).decisions[0].sameAs, undefined);
+	});
+
+	it("rejects a self-referential or empty sameAs", () => {
+		assert.throws(() => parseJudgeReport(judge({ candidateId: "C1", decision: "survives", rationale: "r", ruling: "fixable-blocker", sameAs: "C1" })), /declares itself sameAs/);
+		assert.throws(() => parseJudgeReport(judge({ candidateId: "C1", decision: "survives", rationale: "r", ruling: "fixable-blocker", sameAs: "  " })), /invalid sameAs/);
+	});
+});

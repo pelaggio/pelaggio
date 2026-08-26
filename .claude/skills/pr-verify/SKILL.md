@@ -29,11 +29,22 @@ safety class, and never clear one by refutation: a **safety-class must-fix**
 regardless of a `refuted` decision. Mark it `survives` with `fixable-blocker` (the
 author should resolve it in revision) or `unfixable-blocker` (it can't be). Either way
 the orchestrator keeps it as a blocker and the run parks for a human to confirm the fix
-— the loop never self-clears a safety must-fix. End with exactly:
+— the loop never self-clears a safety must-fix.
+
+**Semantic grouping.** Provider-diverse seats routinely report one defect in several
+wordings; the harness fingerprints a finding by message, path and line, so those never
+collapse on their own and each carries as a separate blocker. When two candidates are the
+same defect differently worded, set `sameAs` on the duplicate to the candidate ID it
+restates. This is a *proposal*: the orchestrator picks which member survives, unions their
+sources, and keeps the strongest ruling — you never choose. Group only genuine restatements
+of one defect, never two defects that merely share a location or a theme. `sameAs` is one
+level deep: point every member of a group at the same target, and never at a candidate that
+itself carries `sameAs`. Still emit a full decision for a grouped candidate — a dangling
+target, a chain, or a self-reference fails the whole report closed. End with exactly:
 
 ```text
 AUTHORING_REVIEW_JUDGE
-{"schemaVersion":1,"decisions":[{"candidateId":"C1","decision":"survives","rationale":"Concrete single-line evidence.","class":"correctness-regression","ruling":"fixable-blocker"}]}
+{"schemaVersion":1,"decisions":[{"candidateId":"C1","decision":"survives","rationale":"Concrete single-line evidence.","class":"correctness-regression","ruling":"fixable-blocker"},{"candidateId":"C2","decision":"survives","rationale":"Concrete single-line evidence.","ruling":"fixable-blocker","sameAs":"C1"}]}
 END_AUTHORING_REVIEW_JUDGE
 ```
 
