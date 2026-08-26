@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, it } from "node:test";
-import { type AssuranceGraph, type AssuranceView, type QueryArgs, diagnostics, selectView } from "../assurance-views.ts";
+import { type AssuranceGraph, type AssuranceView, diagnostics, type QueryArgs, selectView } from "../assurance-views.ts";
 
 const repo = resolve(new URL("../..", import.meta.url).pathname);
 const graph = JSON.parse(readFileSync(resolve(repo, "docs/assurance/shadow-graph.json"), "utf8")) as AssuranceGraph;
@@ -84,7 +84,10 @@ describe("A-1: does the kernel reduction survive the question corpus? (#670)", (
 			}
 		});
 		assert.ok(broken.length > 0, "expected a view seeded on a realization");
-		assert.deepEqual(broken.map((view) => view.id), ["review"]);
+		assert.deepEqual(
+			broken.map((view) => view.id),
+			["review"],
+		);
 	});
 
 	it("debt inverts rather than shrinks — the checks stop discriminating", () => {
