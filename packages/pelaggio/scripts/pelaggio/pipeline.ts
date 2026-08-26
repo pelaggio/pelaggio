@@ -869,10 +869,10 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				// Write into the step worktree (per-item authority); never redirect to main.
 				await appendDecisions(cwd, {
 					...(itemId ? { itemId } : {}),
-					// Attempt-scoped: decision dedupe keys on (runId, step, occurrence) WITHOUT the
-					// fingerprint (decisions.ts), so an unsalted runId makes a resumed attempt's
-					// decision collide with its predecessor's in the same slot and be dropped from
-					// the durable record.
+					// Dedupe is fork identity within the item authority (decisions.ts): a
+					// re-emission of the same normalized (fork, chosen) — from a later step,
+					// a resumed attempt, or with reworded alternatives — collapses into the
+					// existing row. runId/step/occurrence are recorded provenance, not the key.
 					runId: itemRunId(),
 					step: name,
 					attempt,

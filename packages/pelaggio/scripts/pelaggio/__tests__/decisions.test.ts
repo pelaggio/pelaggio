@@ -123,7 +123,7 @@ describe("decision log authority", () => {
 		assert.equal(existsSync(resolve(outside, "85.md")), false);
 	});
 
-	it("keeps identical occurrences distinct", async () => {
+	it("collapses identical occurrences within one batch into a single row", async () => {
 		const path = repo();
 		seed(path);
 		const decision = { fork: "same" };
@@ -139,8 +139,9 @@ describe("decision log authority", () => {
 			],
 		});
 		assert.equal(result.status, "written");
-		assert.notEqual(result.ids[0], result.ids[1]);
-		assert.match(readFileSync(resolve(path, "docs/decision-log/run-unclaimed-run.md"), "utf8"), /same/);
+		assert.equal(result.ids[0], result.ids[1]);
+		const body = readFileSync(resolve(path, "docs/decision-log/run-unclaimed-run.md"), "utf8");
+		assert.equal(body.split("\n").filter((line) => line.startsWith("| same |")).length, 1);
 	});
 
 	it("writes and commits only the item authority file in the feature worktree", async () => {
@@ -175,7 +176,7 @@ describe("decision log authority", () => {
 		assert.throws(() => validateOwner(""), /unsafe/);
 	});
 
-	it("dedupes retries by run+step+occurrence+fingerprint while ignoring attempt and emission id", async () => {
+	it("dedupes retries on fork identity while ignoring attempt and emission id", async () => {
 		const path = repo();
 		seed(path);
 		const decision = { fork: "retry me", chosen: "once" };
@@ -337,6 +338,418 @@ describe("decision log authority", () => {
 		assert.notEqual(execFileSync("git", ["rev-parse", "HEAD"], { cwd: feature, encoding: "utf8" }).trim(), featureHeadBefore);
 		// Main branch tip unchanged (commit landed on feature branch).
 		assert.equal(execFileSync("git", ["rev-parse", "main"], { cwd: main, encoding: "utf8" }).trim(), mainHeadBefore);
+	});
+});
+
+describe("fork-identity dedupe", () => {
+	it("collapses an identical re-emission from a later step into one row (571 specimen)", async () => {
+		const path = repo();
+		seed(path);
+		const decision: Decision = {
+			fork: "stale-branch integration mechanism",
+			chosen: "extend the existing PR freshness harness with a fail-closed content-equivalence proof and a host-created `ours`-strategy merge, while retaining ordinary host merge/conflict handoff for genuine differences",
+			alternatives: "add a public `pelaggio refresh` command; only diagnose and refuse content-without-ancestry",
+		};
+		const fp = contentFingerprint(decision);
+		const first = await appendDecisions(path, {
+			itemId: "571",
+			runId: "cycle-1-571-a1",
+			step: "plan",
+			attempt: 1,
+			source: "571",
+			decisions: [{ id: "57157157-1571-4571-8571-571571571570", contentFingerprint: fp, occurrence: 0, decision }],
+		});
+		assert.equal(first.status, "written");
+		const second = await appendDecisions(path, {
+			itemId: "571",
+			runId: "cycle-1-571-a1",
+			step: "shakedown-plan",
+			attempt: 1,
+			source: "571",
+			decisions: [{ id: "57157157-1571-4571-8571-571571571571", contentFingerprint: fp, occurrence: 0, decision }],
+		});
+		assert.equal(second.status, "duplicate");
+		assert.equal(second.ids[0], first.ids[0]);
+		const body = readFileSync(resolve(path, "docs/decision-log/571.md"), "utf8");
+		assert.equal(body.split("\n").filter((line) => line.startsWith("| stale-branch integration mechanism |")).length, 1);
+	});
+
+	it("collapses reworded re-emissions with the same fork and chosen (554 specimen)", async () => {
+		const path = repo();
+		seed(path);
+		// Wording lifted from docs/decision-log/554.md: chosen identical across steps, alternatives reworded each time.
+		const plan: Decision = {
+			fork: "interim Claude forge-authority role set",
+			chosen: "grant `pick`, `ship`, and `shipwreck`; deny every other current `Step`",
+			alternatives: "grant only `pick`/`ship` and break source-proven `shipwreck` recovery, or build the broker deferred to #572",
+		};
+		const shakedown: Decision = { ...plan, alternatives: "grant only the issue-named `pick`/`ship` and break source-proven `shipwreck` fetch/bookkeeping recovery, or build the per-operation broker deferred to #572" };
+		const implement: Decision = { ...plan, alternatives: "grant only the issue-named `pick`/`ship` and break `shipwreck` recovery, or build the per-operation broker deferred to #572" };
+		assert.notEqual(contentFingerprint(plan), contentFingerprint(shakedown));
+
+		const first = await appendDecisions(path, {
+			itemId: "554",
+			runId: "cycle-1-554-a1",
+			step: "plan",
+			attempt: 1,
+			source: "554",
+			decisions: [{ id: "55455455-4554-4554-8554-554554554550", contentFingerprint: contentFingerprint(plan), occurrence: 0, decision: plan }],
+		});
+		assert.equal(first.status, "written");
+		const second = await appendDecisions(path, {
+			itemId: "554",
+			runId: "cycle-1-554-a1",
+			step: "shakedown-plan",
+			attempt: 1,
+			source: "554",
+			decisions: [{ id: "55455455-4554-4554-8554-554554554551", contentFingerprint: contentFingerprint(shakedown), occurrence: 0, decision: shakedown }],
+		});
+		assert.equal(second.status, "duplicate");
+		assert.equal(second.ids[0], first.ids[0]);
+		const third = await appendDecisions(path, {
+			itemId: "554",
+			runId: "cycle-1-554-a1",
+			step: "implement",
+			attempt: 1,
+			source: "554",
+			decisions: [{ id: "55455455-4554-4554-8554-554554554552", contentFingerprint: contentFingerprint(implement), occurrence: 0, decision: implement }],
+		});
+		assert.equal(third.status, "duplicate");
+		assert.equal(third.ids[0], first.ids[0]);
+		const body = readFileSync(resolve(path, "docs/decision-log/554.md"), "utf8");
+		assert.equal(body.split("\n").filter((line) => line.startsWith("| interim Claude forge-authority role set |")).length, 1);
+	});
+
+	it("appends a same-fork re-decision whose chosen differs materially", async () => {
+		const path = repo();
+		seed(path);
+		const original: Decision = { fork: "eligible prior findings terminals", chosen: "accept only complete verified `consensus-block` fleet outcomes with at least one survivor" };
+		const redecided: Decision = { fork: "eligible  prior findings terminals.", chosen: "also adjudicate complete `ok: true` disagreement splits alongside consensus-block" };
+		const first = await appendDecisions(path, {
+			itemId: "497",
+			runId: "r1",
+			step: "plan",
+			attempt: 1,
+			source: "497",
+			decisions: [{ id: "49749749-7497-4497-8497-497497497490", contentFingerprint: contentFingerprint(original), occurrence: 0, decision: original }],
+		});
+		assert.equal(first.status, "written");
+		// Same normalized fork (whitespace/trailing punctuation) + materially different chosen → real re-decision.
+		const second = await appendDecisions(path, {
+			itemId: "497",
+			runId: "r2",
+			step: "plan",
+			attempt: 1,
+			source: "497",
+			decisions: [{ id: "49749749-7497-4497-8497-497497497491", contentFingerprint: contentFingerprint(redecided), occurrence: 0, decision: redecided }],
+		});
+		assert.equal(second.status, "written");
+		assert.notEqual(second.ids[0], first.ids[0]);
+		// A -> B -> A is a REVERSION, not a duplicate: it differs from the fork's current choice (B),
+		// so it appends with its own lifecycle ID, date, and source. Collapsing it into the original A
+		// would leave the log asserting r1's provenance for a decision actually made at r3, and would
+		// order that row above the B it now supersedes.
+		const reverted: Decision = { fork: "eligible  prior findings terminals.", chosen: "accept only complete verified `consensus-block` fleet outcomes with at least one survivor." };
+		const third = await appendDecisions(path, {
+			itemId: "497",
+			runId: "r3",
+			step: "shakedown-plan",
+			attempt: 1,
+			source: "497",
+			decisions: [{ id: "49749749-7497-4497-8497-497497497492", contentFingerprint: contentFingerprint(reverted), occurrence: 0, decision: reverted }],
+		});
+		assert.equal(third.status, "written");
+		assert.notEqual(third.ids[0], first.ids[0]);
+		assert.notEqual(third.ids[0], second.ids[0]);
+		const rows = readFileSync(resolve(path, "docs/decision-log/497.md"), "utf8")
+			.split("\n")
+			.filter((line) => line.startsWith("| eligible"));
+		assert.equal(rows.length, 3, "reversion is a third row, and the superseded rows are left intact");
+	});
+
+	it("keeps a resolved identity consumed so re-emission cannot reopen it", async () => {
+		const path = repo();
+		seed(path);
+		const decided: Decision = { fork: "eligible prior findings terminals", chosen: "accept only complete verified `consensus-block` fleet outcomes with at least one survivor" };
+		const first = await appendDecisions(path, {
+			itemId: "497",
+			runId: "r1",
+			step: "plan",
+			attempt: 1,
+			source: "497",
+			decisions: [{ id: "49749749-7497-4497-8497-497497497490", contentFingerprint: contentFingerprint(decided), occurrence: 0, decision: decided }],
+		});
+		assert.equal(first.status, "written");
+		await resolveDecision(path, first.ids[0] as string, { now: new Date("2026-08-21T00:00:00Z") });
+
+		// Resolved rows are the one place identity stays permanently consumed: the fork has no current
+		// Active choice, but re-emitting the resolved pair must return that row rather than reopening a
+		// dispositioned decision as `default-taken`.
+		const reEmitted: Decision = { fork: "eligible  prior findings terminals.", chosen: "accept only complete verified `consensus-block` fleet outcomes with at least one survivor." };
+		const second = await appendDecisions(path, {
+			itemId: "497",
+			runId: "r2",
+			step: "shakedown-plan",
+			attempt: 1,
+			source: "497",
+			decisions: [{ id: "49749749-7497-4497-8497-497497497491", contentFingerprint: contentFingerprint(reEmitted), occurrence: 0, decision: reEmitted }],
+		});
+		assert.equal(second.status, "duplicate");
+		assert.equal(second.ids[0], first.ids[0]);
+		const body = readFileSync(resolve(path, "docs/decision-log/497.md"), "utf8");
+		assert.equal(body.split("\n").filter((line) => line.startsWith("| eligible")).length, 1, "no reopened Active row");
+		assert.match(body, /resolved/);
+	});
+
+	it("keeps an ARCHIVED resolution consumed, so archiving cannot reopen a decision", async () => {
+		const path = repo();
+		seed(path);
+		const decided: Decision = { fork: "eligible prior findings terminals", chosen: "accept only complete verified `consensus-block` fleet outcomes with at least one survivor" };
+		const first = await appendDecisions(path, {
+			itemId: "497",
+			runId: "r1",
+			step: "plan",
+			attempt: 1,
+			source: "497",
+			now: new Date("2026-01-01T00:00:00Z"),
+			decisions: [{ id: "49749749-7497-4497-8497-497497497490", contentFingerprint: contentFingerprint(decided), occurrence: 0, decision: decided }],
+		});
+		assert.equal(first.status, "written");
+		await resolveDecision(path, first.ids[0] as string, { now: new Date("2026-01-02T00:00:00Z") });
+		// Aged out of the authority file into docs/decision-log/archive/497.md.
+		assert.equal(await archiveResolvedDecisions(path, new Date("2026-06-01T00:00:00Z")), 1);
+		assert.equal(
+			readFileSync(resolve(path, "docs/decision-log/497.md"), "utf8")
+				.split("\n")
+				.filter((line) => line.startsWith("| eligible")).length,
+			0,
+		);
+
+		// Re-emitting the archived identity must still be a duplicate. Indexing only the live
+		// authority file would append a fresh `default-taken` row and silently reopen it.
+		const reEmitted: Decision = { fork: "eligible  prior findings terminals.", chosen: "accept only complete verified `consensus-block` fleet outcomes with at least one survivor." };
+		const second = await appendDecisions(path, {
+			itemId: "497",
+			runId: "r2",
+			step: "shakedown-plan",
+			attempt: 1,
+			source: "497",
+			decisions: [{ id: "49749749-7497-4497-8497-497497497491", contentFingerprint: contentFingerprint(reEmitted), occurrence: 0, decision: reEmitted }],
+		});
+		assert.equal(second.status, "duplicate");
+		assert.equal(second.ids[0], first.ids[0]);
+		assert.equal(
+			readFileSync(resolve(path, "docs/decision-log/497.md"), "utf8")
+				.split("\n")
+				.filter((line) => line.startsWith("| eligible")).length,
+			0,
+			"no reopened Active row",
+		);
+	});
+
+	it("appends a reversion to a once-resolved choice when the fork has a live current choice", async () => {
+		const path = repo();
+		seed(path);
+		const optionA: Decision = { fork: "eligible prior findings terminals", chosen: "accept only complete verified `consensus-block` fleet outcomes with at least one survivor" };
+		const optionB: Decision = { fork: "eligible prior findings terminals", chosen: "also adjudicate complete `ok: true` disagreement splits alongside consensus-block" };
+		const first = await appendDecisions(path, {
+			itemId: "497",
+			runId: "r1",
+			step: "plan",
+			attempt: 1,
+			source: "497",
+			decisions: [{ id: "49749749-7497-4497-8497-497497497490", contentFingerprint: contentFingerprint(optionA), occurrence: 0, decision: optionA }],
+		});
+		await resolveDecision(path, first.ids[0] as string, { now: new Date("2026-08-21T00:00:00Z") });
+		const second = await appendDecisions(path, {
+			itemId: "497",
+			runId: "r2",
+			step: "plan",
+			attempt: 1,
+			source: "497",
+			decisions: [{ id: "49749749-7497-4497-8497-497497497491", contentFingerprint: contentFingerprint(optionB), occurrence: 0, decision: optionB }],
+		});
+		assert.equal(second.status, "written");
+
+		// B is now the fork's live choice, so returning to A is a genuine reversion and must append.
+		// Checking resolved rows before the live choice would suppress it and leave the log asserting
+		// the superseded B as current.
+		const third = await appendDecisions(path, {
+			itemId: "497",
+			runId: "r3",
+			step: "shakedown-plan",
+			attempt: 1,
+			source: "497",
+			decisions: [{ id: "49749749-7497-4497-8497-497497497492", contentFingerprint: contentFingerprint(optionA), occurrence: 0, decision: optionA }],
+		});
+		assert.equal(third.status, "written");
+		assert.notEqual(third.ids[0], first.ids[0]);
+		assert.notEqual(third.ids[0], second.ids[0]);
+	});
+
+	it("dedupes a reworded re-emission against the fork's current choice", async () => {
+		const path = repo();
+		seed(path);
+		const original: Decision = { fork: "eligible prior findings terminals", chosen: "accept only complete verified `consensus-block` fleet outcomes with at least one survivor" };
+		const first = await appendDecisions(path, {
+			itemId: "497",
+			runId: "r1",
+			step: "plan",
+			attempt: 1,
+			source: "497",
+			decisions: [{ id: "49749749-7497-4497-8497-497497497490", contentFingerprint: contentFingerprint(original), occurrence: 0, decision: original }],
+		});
+		assert.equal(first.status, "written");
+		// Same normalized fork + chosen equal after canonicalization, with no intervening choice →
+		// duplicate. This is the cross-step collapse the fork-identity key exists for.
+		const rewordedSame: Decision = { fork: "eligible  prior findings terminals.", chosen: "accept only complete verified `consensus-block` fleet outcomes with at least one survivor." };
+		const second = await appendDecisions(path, {
+			itemId: "497",
+			runId: "r2",
+			step: "shakedown-plan",
+			attempt: 1,
+			source: "497",
+			decisions: [{ id: "49749749-7497-4497-8497-497497497491", contentFingerprint: contentFingerprint(rewordedSame), occurrence: 0, decision: rewordedSame }],
+		});
+		assert.equal(second.status, "duplicate");
+		assert.equal(second.ids[0], first.ids[0]);
+	});
+
+	it("preserves case-sensitive technical choices and forks as distinct decisions", async () => {
+		const path = repo();
+		seed(path);
+		const original: Decision = { fork: "environment variable name", chosen: "`CONTROL_PLANE_TOKEN`" };
+		const chosenCase: Decision = { fork: "environment variable name", chosen: "`control_plane_token`" };
+		const forkCase: Decision = { fork: "Environment variable name", chosen: "`CONTROL_PLANE_TOKEN`" };
+		const append = (decision: Decision, id: string, runId: string) =>
+			appendDecisions(path, {
+				itemId: "596",
+				runId,
+				step: "implement",
+				attempt: 1,
+				source: "596",
+				decisions: [{ id, contentFingerprint: contentFingerprint(decision), occurrence: 0, decision }],
+			});
+
+		const first = await append(original, "59659659-6596-4596-8596-596596596590", "r1");
+		const second = await append(chosenCase, "59659659-6596-4596-8596-596596596591", "r2");
+		const third = await append(forkCase, "59659659-6596-4596-8596-596596596592", "r3");
+
+		assert.equal(first.status, "written");
+		assert.equal(second.status, "written");
+		assert.equal(third.status, "written");
+		assert.equal(new Set([...first.ids, ...second.ids, ...third.ids]).size, 3);
+	});
+
+	it("appends decisions whose forks differ even when chosen matches", async () => {
+		const path = repo();
+		seed(path);
+		const a: Decision = { fork: "review gate provider", chosen: "keep the harness seam" };
+		const b: Decision = { fork: "verify gate provider", chosen: "keep the harness seam" };
+		const first = await appendDecisions(path, {
+			itemId: "12",
+			runId: "r",
+			step: "plan",
+			attempt: 1,
+			source: "12",
+			decisions: [{ id: "12121212-1212-4121-8121-121212121210", contentFingerprint: contentFingerprint(a), occurrence: 0, decision: a }],
+		});
+		const second = await appendDecisions(path, {
+			itemId: "12",
+			runId: "r",
+			step: "shakedown-plan",
+			attempt: 1,
+			source: "12",
+			decisions: [{ id: "12121212-1212-4121-8121-121212121211", contentFingerprint: contentFingerprint(b), occurrence: 0, decision: b }],
+		});
+		assert.equal(first.status, "written");
+		assert.equal(second.status, "written");
+		assert.notEqual(second.ids[0], first.ids[0]);
+	});
+
+	it("keeps reading shipped logs holding near-duplicate rows and dedupes new appends against them", async () => {
+		const path = repo();
+		seed(path);
+		const meta = (payload: Record<string, unknown>) => `<!-- decision-meta:${Buffer.from(JSON.stringify(payload)).toString("base64url")} -->`;
+		const planRow: Decision = {
+			fork: "interim Claude forge-authority role set",
+			chosen: "grant `pick`, `ship`, and `shipwreck`; deny every other current `Step`",
+			alternatives: "grant only `pick`/`ship` and break source-proven `shipwreck` recovery, or build the broker deferred to #572",
+		};
+		const shakedownRow: Decision = { ...planRow, alternatives: "grant only the issue-named `pick`/`ship` and break source-proven `shipwreck` fetch/bookkeeping recovery, or build the per-operation broker deferred to #572" };
+		const body = [
+			"# Decision log — 554",
+			"",
+			"Status values are `default-taken`, `resolved`, or `resolved→ADR-nnnn`. Source is an item, pull request, or review-note reference.",
+			"",
+			"## Active",
+			"",
+			DECISIONS_HEADER,
+			RULE,
+			`| ${planRow.fork} | default-taken | ${planRow.chosen} | ${planRow.alternatives} | 554 | 2026-08-19 |`,
+			"<!-- decision:96304096-a73f-4b4f-b6ed-8efc852411a3 -->",
+			meta({ contentFingerprint: contentFingerprint(planRow), dedupe: { runId: "cycle-1-554-a1", step: "plan", occurrence: 0 } }),
+			`| ${shakedownRow.fork} | default-taken | ${shakedownRow.chosen} | ${shakedownRow.alternatives} | 554 | 2026-08-19 |`,
+			"<!-- decision:a669b3db-51e6-435d-93cd-e19f610b61ff -->",
+			meta({ contentFingerprint: contentFingerprint(shakedownRow), dedupe: { runId: "cycle-1-554-a1", step: "shakedown-plan", occurrence: 0 } }),
+			"",
+			"## Resolved",
+			"",
+			DECISIONS_HEADER,
+			RULE,
+			"",
+		].join("\n");
+		mkdirSync(resolve(path, "docs/decision-log"), { recursive: true });
+		writeFileSync(resolve(path, "docs/decision-log/554.md"), body);
+		execFileSync("git", ["add", "-A"], { cwd: path });
+		execFileSync("git", ["commit", "-q", "-m", "shipped near-duplicates"], { cwd: path });
+
+		// A fresh rewording dedupes against the fork's CURRENT choice — the last Active row of that
+		// identity, not the oldest. Both shipped rows carry the same normalized (fork, chosen); the
+		// returned ID is the live row rather than the stale one it superseded. No third row is added
+		// and neither shipped row is rewritten (append-only).
+		const implementRow: Decision = { ...planRow, alternatives: "grant only the issue-named `pick`/`ship` and break `shipwreck` recovery, or build the per-operation broker deferred to #572" };
+		const third = await appendDecisions(path, {
+			itemId: "554",
+			runId: "cycle-1-554-a1",
+			step: "implement",
+			attempt: 1,
+			source: "554",
+			decisions: [{ id: "55455455-4554-4554-8554-554554554553", contentFingerprint: contentFingerprint(implementRow), occurrence: 0, decision: implementRow }],
+		});
+		assert.equal(third.status, "duplicate");
+		assert.equal(third.ids[0], "a669b3db-51e6-435d-93cd-e19f610b61ff");
+		const after = readFileSync(resolve(path, "docs/decision-log/554.md"), "utf8");
+		assert.match(after, /decision:a669b3db-51e6-435d-93cd-e19f610b61ff/);
+		assert.equal(after.split("\n").filter((line) => line.startsWith("| interim Claude forge-authority role set |")).length, 2);
+
+		// Lifecycle lookups over the duplicated file still resolve by ID.
+		await resolveDecision(path, "a669b3db-51e6-435d-93cd-e19f610b61ff", { now: new Date("2026-08-21T00:00:00Z") });
+		assert.match(readFileSync(resolve(path, "docs/decision-log/554.md"), "utf8"), /resolved.*2026-08-21/);
+	});
+
+	it("leaves escalation rows outside fork-identity dedupe", async () => {
+		const path = repo();
+		seed(path);
+		const esc = escalation({ itemId: "300" });
+		assert.equal((await appendReviewEscalation(path, writeInput(esc))).status, "written");
+
+		// A decision whose text matches the escalation row's rendered cells still appends.
+		const decision: Decision = { fork: "Cross-model review split for 300", chosen: "Human adjudication required" };
+		const written = await appendDecisions(path, {
+			itemId: "300",
+			runId: "r",
+			step: "shakedown-code",
+			attempt: 1,
+			source: "300",
+			decisions: [{ id: "30030030-0300-4300-8300-300300300300", contentFingerprint: contentFingerprint(decision), occurrence: 0, decision }],
+		});
+		assert.equal(written.status, "written");
+
+		// Escalation idempotency and lookup are unchanged.
+		assert.equal((await appendReviewEscalation(path, writeInput(esc))).status, "duplicate");
+		const found = lookupReviewEscalation(path, "300", "a".repeat(40));
+		assert.equal(found.state, "active");
 	});
 });
 
