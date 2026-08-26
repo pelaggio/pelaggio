@@ -1,0 +1,750 @@
+{
+  "schemaVersion": 1,
+  "status": "draft",
+  "authority": "none — successor-scoped, unregistered, cites nothing as authority",
+  "kernel": [
+    "proposition",
+    "decision",
+    "evidence"
+  ],
+  "propositionRoles": [
+    "invariant",
+    "constraint",
+    "assumption"
+  ],
+  "relationKinds": {
+    "constrains": {
+      "from": [
+        "proposition"
+      ],
+      "to": [
+        "proposition",
+        "decision"
+      ]
+    },
+    "implements": {
+      "from": [
+        "decision"
+      ],
+      "to": [
+        "proposition"
+      ]
+    },
+    "assumes": {
+      "from": [
+        "decision",
+        "proposition"
+      ],
+      "to": [
+        "proposition"
+      ],
+      "toRole": [
+        "assumption"
+      ]
+    },
+    "supersedes": {
+      "from": [
+        "decision"
+      ],
+      "to": [
+        "decision"
+      ]
+    },
+    "evidences": {
+      "from": [
+        "evidence"
+      ],
+      "to": [
+        "proposition",
+        "decision"
+      ]
+    }
+  },
+  "note": "External references (ADRs, pelaggio node ids) are recorded in a node's `sources` field, never as edge targets. An edge target must resolve to a node in this corpus.",
+  "nodes": [
+    {
+      "id": "INV-1",
+      "kind": "proposition",
+      "role": "invariant",
+      "statement": "A worker cannot cause a consequential effect. What it may do is bounded by what it is given, and where it cannot act it may declare intent; causing the effect is the harness's act.",
+      "sources": [
+        "pelaggio CLM-0006 (partial — see INV-2)"
+      ]
+    },
+    {
+      "id": "INV-13",
+      "kind": "proposition",
+      "role": "invariant",
+      "statement": "What a caller knows of what a callee did is bounded by what the callee declared, and is never established by observing the callee.",
+      "sources": [
+        "ADR-0014"
+      ]
+    },
+    {
+      "id": "INV-2",
+      "kind": "proposition",
+      "role": "invariant",
+      "statement": "The authority required to permit an effect is determined by the harness from what the effect can do, the harm class of what it can carry, and what the run has already realized. Below a stated band that authority is internal to the run; at or above it, it is not.",
+      "sources": [
+        "pelaggio CLM-0006",
+        "ADR-0013",
+        "ADR-0016"
+      ]
+    },
+    {
+      "id": "INV-12",
+      "kind": "proposition",
+      "role": "invariant",
+      "statement": "A refusal is computed by the harness from typed inputs. A judgment may be an input to that computation; it is never the computation. The absence of a required input is a refusal, not a pass.",
+      "sources": [
+        "ADR-0014",
+        "ADR-0004",
+        "ADR-0008"
+      ]
+    },
+    {
+      "id": "INV-3",
+      "kind": "proposition",
+      "role": "invariant",
+      "statement": "Every dispatched effect is witnessed by a record the declaring party can neither produce nor alter.",
+      "sources": [
+        "ADR-0018"
+      ]
+    },
+    {
+      "id": "INV-4",
+      "kind": "proposition",
+      "role": "invariant",
+      "statement": "A refusal never destroys authored work. Any path that ends an attempt without advancing it names the state it preserved and the handle that resumes it.",
+      "sources": []
+    },
+    {
+      "id": "INV-5",
+      "kind": "proposition",
+      "role": "invariant",
+      "statement": "The execution environment is a function of its declared inputs. Its state at the start of an attempt does not depend on what any previous attempt did within it.",
+      "sources": []
+    },
+    {
+      "id": "INV-6",
+      "kind": "proposition",
+      "role": "invariant",
+      "statement": "Every terminal outcome carries a type sufficient to select its response.",
+      "sources": []
+    },
+    {
+      "id": "INV-7",
+      "kind": "proposition",
+      "role": "invariant",
+      "statement": "Intent quality is established by attempting the work, never by refusing admission to it.",
+      "sources": [
+        "ADR-0011"
+      ]
+    },
+    {
+      "id": "INV-8",
+      "kind": "proposition",
+      "role": "invariant",
+      "statement": "A repair stays inside the property its item owns. Work outside that property becomes separate work with a recorded relation, unless this delivery caused it.",
+      "sources": []
+    },
+    {
+      "id": "INV-9",
+      "kind": "proposition",
+      "role": "invariant",
+      "statement": "At most one integration may be in effect at a time, and which one is never a matter of reconstruction.",
+      "sources": [
+        "ADR-0009",
+        "ADR-0025"
+      ]
+    },
+    {
+      "id": "INV-10",
+      "kind": "proposition",
+      "role": "invariant",
+      "statement": "What reaches a human is bounded. What is recorded is not.",
+      "sources": []
+    },
+    {
+      "id": "INV-11",
+      "kind": "proposition",
+      "role": "invariant",
+      "statement": "A guarantee that must hold at many sites holds at sites not yet written. A violation site added later is subject to it without that site being amended.",
+      "sources": []
+    },
+    {
+      "id": "INV-15",
+      "kind": "proposition",
+      "role": "invariant",
+      "statement": "Authority to command the harness is presented with a request, never inferred from it. Network position, process locality, and the absence of a configured check are not authority.",
+      "sources": [
+        "pelaggio AGENTS.md — the daemon is an authenticated authority boundary"
+      ]
+    },
+    {
+      "id": "INV-16",
+      "kind": "proposition",
+      "role": "invariant",
+      "statement": "Two attempts running at the same time cannot alter each other's outcome. Whether two attempts may run at the same time is settled before either starts, and is never established by watching them run.",
+      "sources": [
+        "pelaggio AGENTS.md — declared write-sets, worktree write-guard"
+      ]
+    },
+    {
+      "id": "INV-17",
+      "kind": "proposition",
+      "role": "invariant",
+      "statement": "Consumption of compute and inference is bounded per run, and the bound holds across everything the run spawns.",
+      "sources": [
+        "pelaggio review-gate-baseline.md"
+      ]
+    },
+    {
+      "id": "CON-21",
+      "kind": "proposition",
+      "role": "constraint",
+      "statement": "An objection a callee makes — interference, inability, refusal — is an outcome kind, and every kind maps to a response in the same table outcome kinds map through. A kind the surface admits with no response in that table is a schema error, not a logged event.",
+      "sources": [
+        "ADR-0014"
+      ],
+      "binds": "harness"
+    },
+    {
+      "id": "CON-4",
+      "kind": "proposition",
+      "role": "constraint",
+      "statement": "Whether a signal is required or advisory is assigned by the harness from the signal's kind, never by the party producing it. An advisory signal's absence changes nothing, and a refusal for a missing required signal is distinguishable from an adverse evaluation.",
+      "sources": [],
+      "binds": "harness"
+    },
+    {
+      "id": "CON-6",
+      "kind": "proposition",
+      "role": "constraint",
+      "statement": "Recovery may not depend on reproducing nondeterministic behaviour, and a resumed attempt may not adopt a prior identity without positive corroboration.",
+      "sources": [
+        "ADR-0019"
+      ],
+      "binds": "harness"
+    },
+    {
+      "id": "CON-7",
+      "kind": "proposition",
+      "role": "constraint",
+      "statement": "The witness of a dispatch is durable before the effect is acknowledged. Where an effect may have occurred without acknowledgement the outcome is unresolved, and an unresolved outcome names the authority that can resolve it against ground truth; it is never cleared by elapsed time or by retry.",
+      "sources": [
+        "ADR-0018",
+        "ADR-0026"
+      ],
+      "binds": "harness"
+    },
+    {
+      "id": "CON-18",
+      "kind": "proposition",
+      "role": "constraint",
+      "statement": "Delivery of a record to a consumer is separable from producing it, and may degrade to omission with that omission recorded.",
+      "sources": [
+        "ADR-0028"
+      ],
+      "binds": "harness"
+    },
+    {
+      "id": "CON-15",
+      "kind": "proposition",
+      "role": "constraint",
+      "statement": "The bound on what reaches a human covers the number of crossings and the size of each, and may not be adjusted by any party subject to it.",
+      "sources": [],
+      "binds": "harness"
+    },
+    {
+      "id": "CON-12",
+      "kind": "proposition",
+      "role": "constraint",
+      "statement": "The band is computed by the harness from all three inputs together, and is monotonic in each: a higher value on any input cannot yield a lower band. No party seeking to act under a band may supply, withhold, or lower any input to it. An assessment entering the computation is named and reproducible, is never the sole ground, and is grounds for a stricter band, never a laxer one.",
+      "sources": [
+        "ADR-0011",
+        "ADR-0013",
+        "ADR-0016",
+        "ADR-0017"
+      ],
+      "binds": "harness"
+    },
+    {
+      "id": "CON-13",
+      "kind": "proposition",
+      "role": "constraint",
+      "statement": "The declared inputs of an environment may not include state a previous attempt left behind. Work an attempt authored and preserved under INV-4 is not such residue: it is carried as a declared input, or it is not carried at all.",
+      "sources": [],
+      "binds": "harness"
+    },
+    {
+      "id": "CON-24",
+      "kind": "proposition",
+      "role": "constraint",
+      "statement": "A callee is not given a value it does not need in order to act, whether or not the route by which that value could be disclosed is open. Need is decided by the caller from the callee's role, never asserted by the callee.",
+      "sources": [],
+      "binds": "harness"
+    },
+    {
+      "id": "CON-26",
+      "kind": "proposition",
+      "role": "constraint",
+      "binds": "harness",
+      "statement": "Surfaces that admit a request without authority are a closed declared set, and a surface outside that set is refused rather than admitted. An unauthenticated surface exposes only what is already public, and no surface may waive the check for itself.",
+      "sources": []
+    },
+    {
+      "id": "CON-27",
+      "kind": "proposition",
+      "role": "constraint",
+      "binds": "harness",
+      "statement": "What an attempt may write is declared among its inputs and bounded at the point of writing. An attempt writing outside its declaration is refused, and two attempts whose declarations intersect are ordered rather than overlapped.",
+      "sources": []
+    },
+    {
+      "id": "CON-28",
+      "kind": "proposition",
+      "role": "constraint",
+      "binds": "harness",
+      "statement": "Establishing an execution environment does not run code carried by its declared inputs. Code from an input runs only where the harness dispatches it, at a point the input cannot select.",
+      "sources": [
+        "pelaggio AGENTS.md — no preinstall, install, or postinstall scripts"
+      ]
+    },
+    {
+      "id": "CON-29",
+      "kind": "proposition",
+      "role": "constraint",
+      "binds": "harness",
+      "statement": "The bound on compute and inference is aggregate over a run and everything it spawns. No party drawing on it may adjust it, or stay within it by moving work onto what reaches a human.",
+      "sources": []
+    },
+    {
+      "id": "ASM-1",
+      "kind": "proposition",
+      "role": "assumption",
+      "statement": "The inputs to band classification are observable before dispatch.",
+      "wrongIf": "An effect's band turns on state that cannot be observed until after it is dispatched, or the harness cannot compute a band at all without performing the effect.",
+      "sources": []
+    },
+    {
+      "id": "ASM-2",
+      "kind": "proposition",
+      "role": "assumption",
+      "statement": "Resolving environment divergence without consulting the diverged state is affordable at cycle frequency.",
+      "sources": [],
+      "revisitIf": "Re-derivation is observed to cost more per cycle than the failures it removes, or to run longer than the cycle budget it sits inside."
+    },
+    {
+      "id": "ASM-3",
+      "kind": "proposition",
+      "role": "assumption",
+      "statement": "Human attention binds progress, and is bounded independently of how many faults occur.",
+      "sources": [],
+      "revisitIf": "Attention demand is seen to track fault volume rather than saturate, or progress stays bounded while attention is available and unspent."
+    },
+    {
+      "id": "ASM-4",
+      "kind": "proposition",
+      "role": "assumption",
+      "statement": "Review internal to a cycle surfaces the findings that would change a landing decision.",
+      "sources": [],
+      "revisitIf": "A sample where internal and external review both ran shows external review surfacing a finding that changed a landing decision and internal review did not."
+    },
+    {
+      "id": "ASM-5",
+      "kind": "proposition",
+      "role": "assumption",
+      "statement": "Three dispositions, applied in order to findings that hold, cover the space of holding findings.",
+      "wrongIf": "A holding finding matches none of the three, or the ordering leaves a real finding routed somewhere its subject does not belong.",
+      "sources": []
+    },
+    {
+      "id": "ASM-6",
+      "kind": "proposition",
+      "role": "assumption",
+      "statement": "A bounded tool surface is sufficient against steering: a callee influenced by what it reads can still only make calls the surface admits, and the consequential ones are banded.",
+      "sources": [],
+      "revisitIf": "A callee is found to have caused harm through a granted tool used as designed but for an unintended purpose, or the surface is asked to inspect call arguments for intent in order to stay safe."
+    },
+    {
+      "id": "ASM-7",
+      "kind": "proposition",
+      "role": "assumption",
+      "statement": "The consequential acts a callee may take are enumerable as a closed set of kinds, so declaring one is always available where performing one would be.",
+      "wrongIf": "An act with consequences outside the run is found that no kind expresses — so the callee can only take it by performing it directly, and INV-1 holds only for the acts we happened to think of.",
+      "sources": []
+    },
+    {
+      "id": "ASM-8",
+      "kind": "proposition",
+      "role": "assumption",
+      "statement": "The entry points through which the harness can be commanded are enumerable, so every one of them is subject to the check by construction rather than by having been remembered.",
+      "wrongIf": "A reachable entry point is found that no bind declared — so the check covers the surfaces that were thought of rather than the surfaces that exist.",
+      "sources": []
+    },
+    {
+      "id": "ASM-9",
+      "kind": "proposition",
+      "role": "assumption",
+      "statement": "The region an attempt will write can be declared before the work is attempted, closely enough that declaring it is worth something over declaring everything.",
+      "revisitIf": "Attempts are routinely found to need a region their declaration did not cover, so declarations widen until they no longer separate anything.",
+      "sources": []
+    },
+    {
+      "id": "ASM-10",
+      "kind": "proposition",
+      "role": "assumption",
+      "statement": "Pinning an input by identity is sufficient to know what it contributes, without re-reading its contents at each derivation.",
+      "revisitIf": "An input is observed to serve different content under one identity, or a derivation's result turns on when or where it ran.",
+      "sources": []
+    },
+    {
+      "id": "ASM-11",
+      "kind": "proposition",
+      "role": "assumption",
+      "statement": "Human attention and inference are substitutable at the margin: attention spent on steering stands in for inference spent on search, and a run can be moved along either way by deliberate choice.",
+      "revisitIf": "The trade is found to run only one way, or a floor is found below which no amount of inference stands in for attention.",
+      "sources": []
+    },
+    {
+      "id": "DEC-2",
+      "kind": "decision",
+      "statement": "A single harness-owned classifier computes an effect's band from its declared kind, its harm class, and the run's realized effects. Below the band, permission is the classifier's own output; at or above it, permission additionally requires an authority outside the run, whose absence is a refusal.",
+      "sources": [
+        "ADR-0013",
+        "ADR-0015",
+        "ADR-0016"
+      ]
+    },
+    {
+      "id": "DEC-11",
+      "kind": "decision",
+      "statement": "A refusal is produced by evaluating typed inputs to a decision procedure the harness owns. Judgments enter that procedure as typed inputs carrying their author; a missing required input evaluates to refusal, and a procedure that cannot evaluate yields an unresolved outcome rather than either verdict.",
+      "sources": [
+        "ADR-0014",
+        "ADR-0004"
+      ]
+    },
+    {
+      "id": "DEC-12",
+      "kind": "decision",
+      "statement": "A callee is given a bounded tool surface and nothing else. Every consequential act, every result, and every objection is a call against that surface; the callee holds no other means to affect or inform the caller. Granting a capability is adding a tool with a schema, so the tools are the closed set of kinds and the surface is the whole contract in both directions. A call is a declaration dispatched at a single seam, never an act performed in place.",
+      "sources": [
+        "ADR-0014",
+        "ADR-0021"
+      ]
+    },
+    {
+      "id": "DEC-3",
+      "kind": "decision",
+      "statement": "The witness is a content-addressed record written at the dispatch boundary before the declaration is destroyed, binding the declaration, the realized actor, and the source revision.",
+      "sources": [
+        "ADR-0018"
+      ]
+    },
+    {
+      "id": "DEC-4",
+      "kind": "decision",
+      "statement": "A suspended outcome carries a kind; the kind selects the response, and every kind discharges a preservation obligation before that response is taken. Each kind's schema carries the fields its route requires, so a kind that cannot be substantiated cannot be expressed. A retry is attempted only where a retry could change the result.",
+      "sources": [
+        "ADR-0011"
+      ]
+    },
+    {
+      "id": "DEC-6",
+      "kind": "decision",
+      "statement": "Faults are handled by nested supervision: respond at the narrowest scope that could resolve the fault, and escalate outward when repeated response does not. Crossings of the human boundary are drawn from one budget shared across all concurrent lineages, and a crossing withheld for budget is recorded, not discarded.",
+      "sources": []
+    },
+    {
+      "id": "DEC-7",
+      "kind": "decision",
+      "statement": "An execution environment is established by derivation from declared inputs. Divergence is resolved by re-derivation, preceded by preserving anything authored within it.",
+      "sources": []
+    },
+    {
+      "id": "DEC-8",
+      "kind": "decision",
+      "statement": "A surviving finding is first tested for whether it holds at this revision; one that does not is refuted and routes to adjudication. A holding finding then carries exactly one of three dispositions — caused by this delivery, inside the item's property, or outside it — resolved in that order.",
+      "sources": []
+    },
+    {
+      "id": "DEC-9",
+      "kind": "decision",
+      "statement": "Integration order is serialized by compare-and-swap against observed authoritative state, with verification bound to the candidate and ancestry established independently.",
+      "sources": [
+        "ADR-0025"
+      ]
+    },
+    {
+      "id": "DEC-10",
+      "kind": "decision",
+      "statement": "A guarantee over many sites is established by making one path the only path, and the exclusivity of that path is asserted by a check that fails when a second appears.",
+      "sources": [
+        "pelaggio guarded-actions §8.2"
+      ]
+    },
+    {
+      "id": "DEC-13",
+      "kind": "decision",
+      "statement": "Bounds are established at primitives the host already provides. A bespoke enforcement mechanism is admitted only with a recorded reason naming the host primitive it could not use and why.",
+      "sources": [
+        "ADR-0023"
+      ]
+    },
+    {
+      "id": "DEC-14",
+      "kind": "decision",
+      "statement": "Authority at an entry point is a credential presented per request and checked before routing, held by the operator and supplied when the entry point is established. An entry point that cannot obtain its credential does not start, rather than starting without one.",
+      "sources": []
+    },
+    {
+      "id": "DEC-15",
+      "kind": "decision",
+      "statement": "Concurrent attempts are placed in disjoint derived environments, and the writable region of each is declared as an input to its derivation. Ordering between intersecting declarations is settled before dispatch, by the same authority that dispatches them.",
+      "sources": []
+    },
+    {
+      "id": "DEC-16",
+      "kind": "decision",
+      "statement": "Compute and inference are drawn from one budget held by the harness and charged at dispatch, so anything a lineage spawns inherits the remainder rather than a fresh allowance.",
+      "sources": []
+    }
+  ],
+  "edges": [
+    {
+      "from": "CON-12",
+      "relation": "constrains",
+      "to": "INV-2"
+    },
+    {
+      "from": "CON-7",
+      "relation": "constrains",
+      "to": "INV-3"
+    },
+    {
+      "from": "CON-6",
+      "relation": "constrains",
+      "to": "INV-4"
+    },
+    {
+      "from": "DEC-12",
+      "relation": "implements",
+      "to": "INV-1"
+    },
+    {
+      "from": "DEC-2",
+      "relation": "implements",
+      "to": "INV-2"
+    },
+    {
+      "from": "DEC-3",
+      "relation": "implements",
+      "to": "INV-3"
+    },
+    {
+      "from": "DEC-4",
+      "relation": "implements",
+      "to": "INV-7"
+    },
+    {
+      "from": "DEC-4",
+      "relation": "implements",
+      "to": "INV-4"
+    },
+    {
+      "from": "DEC-4",
+      "relation": "implements",
+      "to": "INV-6"
+    },
+    {
+      "from": "DEC-6",
+      "relation": "implements",
+      "to": "INV-10"
+    },
+    {
+      "from": "DEC-7",
+      "relation": "implements",
+      "to": "INV-5"
+    },
+    {
+      "from": "DEC-8",
+      "relation": "implements",
+      "to": "INV-8"
+    },
+    {
+      "from": "DEC-9",
+      "relation": "implements",
+      "to": "INV-9"
+    },
+    {
+      "from": "DEC-10",
+      "relation": "implements",
+      "to": "INV-11"
+    },
+    {
+      "from": "DEC-2",
+      "relation": "assumes",
+      "to": "ASM-1"
+    },
+    {
+      "from": "DEC-6",
+      "relation": "assumes",
+      "to": "ASM-3"
+    },
+    {
+      "from": "DEC-7",
+      "relation": "assumes",
+      "to": "ASM-2"
+    },
+    {
+      "from": "DEC-8",
+      "relation": "assumes",
+      "to": "ASM-4"
+    },
+    {
+      "from": "DEC-8",
+      "relation": "assumes",
+      "to": "ASM-5"
+    },
+    {
+      "from": "CON-13",
+      "relation": "constrains",
+      "to": "INV-5"
+    },
+    {
+      "from": "CON-15",
+      "relation": "constrains",
+      "to": "INV-10"
+    },
+    {
+      "from": "CON-15",
+      "relation": "constrains",
+      "to": "DEC-6"
+    },
+    {
+      "from": "CON-4",
+      "relation": "constrains",
+      "to": "INV-12"
+    },
+    {
+      "from": "CON-18",
+      "relation": "constrains",
+      "to": "INV-3"
+    },
+    {
+      "from": "DEC-11",
+      "relation": "implements",
+      "to": "INV-12"
+    },
+    {
+      "from": "CON-21",
+      "relation": "constrains",
+      "to": "INV-13"
+    },
+    {
+      "from": "DEC-12",
+      "relation": "implements",
+      "to": "INV-13"
+    },
+    {
+      "from": "CON-24",
+      "relation": "constrains",
+      "to": "INV-1"
+    },
+    {
+      "from": "DEC-12",
+      "relation": "assumes",
+      "to": "ASM-6"
+    },
+    {
+      "from": "DEC-12",
+      "relation": "assumes",
+      "to": "ASM-7"
+    },
+    {
+      "from": "CON-21",
+      "relation": "constrains",
+      "to": "INV-6"
+    },
+    {
+      "from": "DEC-13",
+      "relation": "implements",
+      "to": "INV-1"
+    },
+    {
+      "from": "CON-26",
+      "relation": "constrains",
+      "to": "INV-15"
+    },
+    {
+      "from": "DEC-14",
+      "relation": "implements",
+      "to": "INV-15"
+    },
+    {
+      "from": "DEC-14",
+      "relation": "assumes",
+      "to": "ASM-8"
+    },
+    {
+      "from": "CON-27",
+      "relation": "constrains",
+      "to": "INV-16"
+    },
+    {
+      "from": "DEC-15",
+      "relation": "implements",
+      "to": "INV-16"
+    },
+    {
+      "from": "DEC-15",
+      "relation": "assumes",
+      "to": "ASM-9"
+    },
+    {
+      "from": "CON-28",
+      "relation": "constrains",
+      "to": "INV-5"
+    },
+    {
+      "from": "DEC-7",
+      "relation": "assumes",
+      "to": "ASM-10"
+    },
+    {
+      "from": "CON-29",
+      "relation": "constrains",
+      "to": "INV-17"
+    },
+    {
+      "from": "DEC-16",
+      "relation": "implements",
+      "to": "INV-17"
+    },
+    {
+      "from": "DEC-16",
+      "relation": "assumes",
+      "to": "ASM-11"
+    }
+  ],
+  "scope": {
+    "claims": "Bounded delivery of software work by cooperating agents under an operator's authority.",
+    "doesNotClaim": "Safety against a determined adversarial model or a compromised host. The tool surface bounds what a callee can do and the band decides what needs authority beyond the run; neither is a guarantee against an adversary who controls the callee's reasoning. Controls here bound what a callee can reach and keep its acts legible. They are not a security product and must not be cited as one.",
+    "unrealized": [
+      {
+        "intent": "Ingress isolation — a granted tool that reaches the network can carry instruction inward.",
+        "state": "open",
+        "reason": "Closing it requires network unsharing plus a brokered route per provider; the engineering is real and the payoff is bounded by ASM-6 holding.",
+        "revisitIf": "ASM-6 is revisited on its own trigger, or a seat runs unattended against input the operator did not author."
+      },
+      {
+        "intent": "Authority at the harness boundary — an entry point admits a request only on presented authority, and surfaces exempt from it are a closed declared set (INV-15, CON-26, DEC-14, ASM-8).",
+        "state": "open",
+        "reason": "Deferred, not dropped. The successor's entry points are not yet drawn, and a credential regime chosen before them would be built against a guess. Stated here so the intent is legible rather than rediscovered.",
+        "revisitIf": "An entry point is exposed beyond the operator's own machine, or a second party is given a way to command a run."
+      }
+    ]
+  }
+}

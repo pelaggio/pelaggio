@@ -1,0 +1,558 @@
+{
+  "schemaVersion": 1,
+  "status": "draft",
+  "authority": "none \u2014 successor-scoped, unregistered, cites nothing as authority",
+  "kernel": [
+    "proposition",
+    "decision",
+    "evidence"
+  ],
+  "propositionRoles": [
+    "invariant",
+    "constraint",
+    "assumption"
+  ],
+  "relationKinds": {
+    "constrains": {
+      "from": [
+        "proposition"
+      ],
+      "to": [
+        "proposition",
+        "decision"
+      ]
+    },
+    "implements": {
+      "from": [
+        "decision"
+      ],
+      "to": [
+        "proposition"
+      ]
+    },
+    "assumes": {
+      "from": [
+        "decision",
+        "proposition"
+      ],
+      "to": [
+        "proposition"
+      ],
+      "toRole": [
+        "assumption"
+      ]
+    },
+    "specializes": {
+      "from": [
+        "proposition"
+      ],
+      "to": [
+        "proposition"
+      ],
+      "sameRole": true
+    },
+    "supersedes": {
+      "from": [
+        "decision"
+      ],
+      "to": [
+        "decision"
+      ]
+    },
+    "evidences": {
+      "from": [
+        "evidence"
+      ],
+      "to": [
+        "proposition",
+        "decision"
+      ]
+    }
+  },
+  "note": "External references (ADRs, pelaggio node ids) are recorded in a node's `sources` field, never as edge targets. An edge target must resolve to a node in this corpus.",
+  "nodes": [
+    {
+      "id": "INV-1",
+      "kind": "proposition",
+      "role": "invariant",
+      "statement": "A worker cannot cause a consequential effect. It may declare intent; causing the effect is the harness's act.",
+      "sources": [
+        "pelaggio CLM-0006 (partial \u2014 see INV-2)"
+      ]
+    },
+    {
+      "id": "INV-2",
+      "kind": "proposition",
+      "role": "invariant",
+      "statement": "The authority required to permit an effect scales with the effect's reversibility. An irreversible effect cannot proceed on the declaring party's authority alone, and every dispatch resolves to a named authority that could have refused it.",
+      "sources": [
+        "pelaggio CLM-0006",
+        "ADR-0013"
+      ]
+    },
+    {
+      "id": "INV-3",
+      "kind": "proposition",
+      "role": "invariant",
+      "statement": "Every dispatched effect is witnessed by a record the declaring party can neither produce nor alter.",
+      "sources": [
+        "ADR-0018"
+      ]
+    },
+    {
+      "id": "INV-4",
+      "kind": "proposition",
+      "role": "invariant",
+      "statement": "A refusal never destroys authored work. Every terminal path names the state it preserved and the handle that resumes it.",
+      "sources": []
+    },
+    {
+      "id": "INV-5",
+      "kind": "proposition",
+      "role": "invariant",
+      "statement": "The execution environment is a function of its declared inputs, and any divergence from that function is resolved without consulting the diverged state.",
+      "sources": []
+    },
+    {
+      "id": "INV-6",
+      "kind": "proposition",
+      "role": "invariant",
+      "statement": "Every terminal outcome carries a type sufficient to select its response.",
+      "sources": []
+    },
+    {
+      "id": "INV-7",
+      "kind": "proposition",
+      "role": "invariant",
+      "statement": "Intent quality is recorded when work is chartered. Where it is insufficient, that is established by attempting the work and failing to produce, never by refusing admission.",
+      "sources": [
+        "ADR-0011"
+      ]
+    },
+    {
+      "id": "INV-8",
+      "kind": "proposition",
+      "role": "invariant",
+      "statement": "A repair stays inside the property its item owns. Work outside that property becomes separate work with a recorded relation, unless this delivery caused it.",
+      "sources": []
+    },
+    {
+      "id": "INV-9",
+      "kind": "proposition",
+      "role": "invariant",
+      "statement": "Integration order derives from one authoritative atomic state, not from several mutually reconstructed ones.",
+      "sources": [
+        "ADR-0009",
+        "ADR-0025"
+      ]
+    },
+    {
+      "id": "INV-10",
+      "kind": "proposition",
+      "role": "invariant",
+      "statement": "What reaches a human is bounded. What is recorded is not.",
+      "sources": []
+    },
+    {
+      "id": "INV-11",
+      "kind": "proposition",
+      "role": "invariant",
+      "statement": "A guarantee that must hold at many sites is established by a property of the system, not by the conformance of each site.",
+      "sources": []
+    },
+    {
+      "id": "CON-1",
+      "kind": "proposition",
+      "role": "constraint",
+      "statement": "Enforcement may not depend on a surface the harness strips before execution, nor on a declaration the guarded party could have authored.",
+      "sources": []
+    },
+    {
+      "id": "CON-2",
+      "kind": "proposition",
+      "role": "constraint",
+      "statement": "A guard may not destroy an actor's work on evidence it cannot attribute to that actor. Refusing an action because a target precondition no longer holds is permitted; discarding authored work on an ambient delta is not.",
+      "sources": []
+    },
+    {
+      "id": "CON-3",
+      "kind": "proposition",
+      "role": "constraint",
+      "statement": "Below the reversibility threshold at which INV-2 requires independent authority, a guard may refuse only on observed state, never on an assessment of the work's quality.",
+      "sources": [
+        "ADR-0013",
+        "ADR-0017"
+      ]
+    },
+    {
+      "id": "CON-4",
+      "kind": "proposition",
+      "role": "constraint",
+      "statement": "An advisory signal may not change a disposition on its own, and an absent or empty signal yields no refusal.",
+      "sources": [
+        "pelaggio CON-0003"
+      ]
+    },
+    {
+      "id": "CON-5",
+      "kind": "proposition",
+      "role": "constraint",
+      "statement": "A model may not narrow human-owned intent. A narrowing requires supersede through human re-chartering, never an in-flight decision record.",
+      "sources": []
+    },
+    {
+      "id": "CON-6",
+      "kind": "proposition",
+      "role": "constraint",
+      "statement": "Recovery may not depend on reproducing nondeterministic behaviour, and a resumed attempt may not adopt a prior identity without positive corroboration.",
+      "sources": [
+        "ADR-0019"
+      ]
+    },
+    {
+      "id": "CON-7",
+      "kind": "proposition",
+      "role": "constraint",
+      "statement": "Witnessing may not become a precondition of the effect it witnesses; the witness is written before the effect is acknowledged, so an unwitnessed effect is an undispatched one. Delivery of that record to any downstream consumer is separable and may degrade to omission.",
+      "sources": [
+        "ADR-0028"
+      ]
+    },
+    {
+      "id": "CON-8",
+      "kind": "proposition",
+      "role": "constraint",
+      "statement": "A self-asserted outcome kind must name the resolvable entity it collided with. A claim that cannot name one is not of that kind.",
+      "sources": []
+    },
+    {
+      "id": "CON-9",
+      "kind": "proposition",
+      "role": "constraint",
+      "statement": "An outcome type may not be recovered by interpreting free text at the point of consumption. Kinds that differ in their correct response are distinguishable by value.",
+      "sources": []
+    },
+    {
+      "id": "CON-10",
+      "kind": "proposition",
+      "role": "constraint",
+      "statement": "Diagnostics, ordering mechanisms and prechecks may not be counted as load-bearing enforcement.",
+      "sources": [
+        "pelaggio CON-0003"
+      ]
+    },
+    {
+      "id": "CON-11",
+      "kind": "proposition",
+      "role": "constraint",
+      "statement": "A bound on what reaches a human may not be the only record of what it withheld, and may not be adjusted by the party it protects without that adjustment being observable.",
+      "sources": []
+    },
+    {
+      "id": "CON-12",
+      "kind": "proposition",
+      "role": "constraint",
+      "statement": "A reversibility classification is assigned by the harness from the effect's own kind, never by the party seeking to perform it.",
+      "sources": [
+        "ADR-0013"
+      ]
+    },
+    {
+      "id": "CON-13",
+      "kind": "proposition",
+      "role": "constraint",
+      "statement": "The declared inputs of an environment may not include state produced within a previous instance of that environment. A derivation that consults its own residue is a repair wearing derivation's name.",
+      "sources": []
+    },
+    {
+      "id": "ASM-1",
+      "kind": "proposition",
+      "role": "assumption",
+      "statement": "Reversibility is decidable from an effect's kind at declaration time, without executing it.",
+      "wrongIf": "An effect class is found whose reversibility depends on runtime state the harness cannot observe before dispatch.",
+      "sources": []
+    },
+    {
+      "id": "ASM-2",
+      "kind": "proposition",
+      "role": "assumption",
+      "statement": "Resolving environment divergence without consulting the diverged state is affordable at cycle frequency.",
+      "wrongIf": "Re-derivation cost per cycle exceeds the cost of the failures it removes.",
+      "sources": []
+    },
+    {
+      "id": "ASM-3",
+      "kind": "proposition",
+      "role": "assumption",
+      "statement": "Human attention is the binding constraint on progress, and is bounded independently of how many faults occur.",
+      "wrongIf": "Attention demand tracks fault volume rather than saturating, or progress is bounded by something else while attention remains available.",
+      "sources": []
+    },
+    {
+      "id": "ASM-4",
+      "kind": "proposition",
+      "role": "assumption",
+      "statement": "Review internal to a cycle surfaces enough for the disposition set to operate on.",
+      "wrongIf": "Disposition counts collapse toward zero without an external reviewer.",
+      "sources": []
+    },
+    {
+      "id": "ASM-5",
+      "kind": "proposition",
+      "role": "assumption",
+      "statement": "The four dispositions named in DEC-8 partition the space of surviving findings.",
+      "wrongIf": "A real finding fits none of the four, or one proves an attribute of another rather than a peer.",
+      "sources": []
+    },
+    {
+      "id": "DEC-1",
+      "kind": "decision",
+      "statement": "Consequential intent is expressed as a declared manifest over a closed set of kinds, dispatched at a single seam, rather than performed in place.",
+      "sources": [
+        "ADR-0014"
+      ]
+    },
+    {
+      "id": "DEC-2",
+      "kind": "decision",
+      "statement": "Each effect kind carries a harness-assigned reversibility class. Classes above the threshold require an authority independent of the declaring party; classes below dispatch on the harness's own authority, and that grant is itself recorded.",
+      "sources": [
+        "ADR-0013",
+        "ADR-0015"
+      ]
+    },
+    {
+      "id": "DEC-3",
+      "kind": "decision",
+      "statement": "The witness is a content-addressed record written at the dispatch boundary before the declaration is destroyed, binding the declaration, the realized actor, and the source revision.",
+      "sources": [
+        "ADR-0018"
+      ]
+    },
+    {
+      "id": "DEC-4",
+      "kind": "decision",
+      "statement": "Charter quality is a recorded lint. A worker that cannot produce a correct result emits a typed outcome naming the anchor it failed against, rather than proceeding on a guess.",
+      "sources": [
+        "ADR-0011"
+      ]
+    },
+    {
+      "id": "DEC-5",
+      "kind": "decision",
+      "statement": "A suspended outcome carries a kind; the kind selects the response, and every kind discharges a preservation obligation before that response is taken. A retry is attempted only where a retry could change the result.",
+      "sources": []
+    },
+    {
+      "id": "DEC-6",
+      "kind": "decision",
+      "statement": "Faults are handled by nested supervision: respond at the narrowest scope that could resolve the fault, escalate to the enclosing scope when repeated response fails to resolve it, and cross the human boundary once, carrying the lineage.",
+      "sources": []
+    },
+    {
+      "id": "DEC-7",
+      "kind": "decision",
+      "statement": "An execution environment is established by derivation from declared inputs. Divergence is resolved by re-derivation, preceded by preserving anything authored within it.",
+      "sources": []
+    },
+    {
+      "id": "DEC-8",
+      "kind": "decision",
+      "statement": "Every surviving finding carries one of four dispositions \u2014 inside the item's property, outside it, a claim broader than its mechanism, or not holding at this revision \u2014 and the disposition selects the route.",
+      "sources": []
+    },
+    {
+      "id": "DEC-9",
+      "kind": "decision",
+      "statement": "Integration order is serialized by compare-and-swap against observed authoritative state, with verification bound to the candidate and ancestry established independently.",
+      "sources": [
+        "ADR-0025"
+      ]
+    },
+    {
+      "id": "DEC-10",
+      "kind": "decision",
+      "statement": "A guarantee over many sites is established by making one path the only path, and the exclusivity of that path is asserted by a check that fails when a second appears.",
+      "sources": [
+        "pelaggio guarded-actions \u00a78.2"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": "INV-1",
+      "relation": "specializes",
+      "to": "INV-2"
+    },
+    {
+      "from": "CON-1",
+      "relation": "constrains",
+      "to": "INV-1"
+    },
+    {
+      "from": "CON-12",
+      "relation": "constrains",
+      "to": "INV-2"
+    },
+    {
+      "from": "CON-3",
+      "relation": "constrains",
+      "to": "INV-2"
+    },
+    {
+      "from": "CON-7",
+      "relation": "constrains",
+      "to": "INV-3"
+    },
+    {
+      "from": "CON-2",
+      "relation": "constrains",
+      "to": "INV-4"
+    },
+    {
+      "from": "CON-6",
+      "relation": "constrains",
+      "to": "INV-4"
+    },
+    {
+      "from": "CON-9",
+      "relation": "constrains",
+      "to": "INV-6"
+    },
+    {
+      "from": "CON-8",
+      "relation": "constrains",
+      "to": "INV-6"
+    },
+    {
+      "from": "CON-5",
+      "relation": "constrains",
+      "to": "INV-7"
+    },
+    {
+      "from": "CON-4",
+      "relation": "constrains",
+      "to": "INV-8"
+    },
+    {
+      "from": "CON-5",
+      "relation": "constrains",
+      "to": "INV-8"
+    },
+    {
+      "from": "CON-10",
+      "relation": "constrains",
+      "to": "INV-9"
+    },
+    {
+      "from": "CON-11",
+      "relation": "constrains",
+      "to": "INV-10"
+    },
+    {
+      "from": "CON-10",
+      "relation": "constrains",
+      "to": "INV-11"
+    },
+    {
+      "from": "CON-2",
+      "relation": "constrains",
+      "to": "DEC-7"
+    },
+    {
+      "from": "CON-8",
+      "relation": "constrains",
+      "to": "DEC-5"
+    },
+    {
+      "from": "CON-5",
+      "relation": "constrains",
+      "to": "DEC-8"
+    },
+    {
+      "from": "DEC-1",
+      "relation": "implements",
+      "to": "INV-1"
+    },
+    {
+      "from": "DEC-2",
+      "relation": "implements",
+      "to": "INV-2"
+    },
+    {
+      "from": "DEC-3",
+      "relation": "implements",
+      "to": "INV-3"
+    },
+    {
+      "from": "DEC-4",
+      "relation": "implements",
+      "to": "INV-7"
+    },
+    {
+      "from": "DEC-5",
+      "relation": "implements",
+      "to": "INV-4"
+    },
+    {
+      "from": "DEC-5",
+      "relation": "implements",
+      "to": "INV-6"
+    },
+    {
+      "from": "DEC-6",
+      "relation": "implements",
+      "to": "INV-10"
+    },
+    {
+      "from": "DEC-7",
+      "relation": "implements",
+      "to": "INV-5"
+    },
+    {
+      "from": "DEC-8",
+      "relation": "implements",
+      "to": "INV-8"
+    },
+    {
+      "from": "DEC-9",
+      "relation": "implements",
+      "to": "INV-9"
+    },
+    {
+      "from": "DEC-10",
+      "relation": "implements",
+      "to": "INV-11"
+    },
+    {
+      "from": "DEC-2",
+      "relation": "assumes",
+      "to": "ASM-1"
+    },
+    {
+      "from": "DEC-6",
+      "relation": "assumes",
+      "to": "ASM-3"
+    },
+    {
+      "from": "DEC-7",
+      "relation": "assumes",
+      "to": "ASM-2"
+    },
+    {
+      "from": "DEC-8",
+      "relation": "assumes",
+      "to": "ASM-4"
+    },
+    {
+      "from": "DEC-8",
+      "relation": "assumes",
+      "to": "ASM-5"
+    },
+    {
+      "from": "CON-13",
+      "relation": "constrains",
+      "to": "INV-5"
+    }
+  ]
+}
