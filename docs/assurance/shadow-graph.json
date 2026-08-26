@@ -1448,19 +1448,6 @@
 				"packages/pelaggio/scripts/pelaggio/attempt-identity.ts",
 				"packages/pelaggio/scripts/pelaggio/__tests__/attempt-identity.test.ts"
 			]
-		},
-		{
-			"id": "CTR-0024",
-			"kind": "realization",
-			"slug": "trust-manifest-drift-rejection",
-			"statement": "The published trust manifest is regenerated from the registry and a divergence between the two fails the check rather than publishing the drifted copy.",
-			"sources": [
-				"ADR-0018"
-			],
-			"codeEvidence": [
-				"ci/trust-manifest.ts",
-				"ci/__tests__/trust-manifest.test.ts"
-			]
 		}
 	],
 	"edges": [
@@ -2135,11 +2122,6 @@
 			"to": "CTR-0022"
 		},
 		{
-			"from": "CON-0007",
-			"relation": "constrains",
-			"to": "CTR-0023"
-		},
-		{
 			"from": "CON-0001",
 			"relation": "constrains",
 			"to": "CTR-0004"
@@ -2238,11 +2220,6 @@
 			"from": "CTR-0023",
 			"relation": "implements",
 			"to": "CLM-0012"
-		},
-		{
-			"from": "CTR-0024",
-			"relation": "implements",
-			"to": "CON-0016"
 		}
 	],
 	"adrMap": {
@@ -2359,7 +2336,6 @@
 			"CLM-0008",
 			"CLM-0019",
 			"CON-0012",
-			"CTR-0024",
 			"DEC-0008",
 			"TC-005"
 		],
@@ -2764,12 +2740,15 @@
 			"2026-08-24 (#624): ADR-0022's fixed six-step / two-orchestrator topology stays a current construction choice (DEC-0012); nothing revisits it until a consumer question or a measured cost forces it.",
 			"2026-08-26 (#650): CON-0005 time-is-not-liveness and CON-0006 self-validation-not-freshness bind CTR-0018 by ENFORCEMENT-BY-ABSENCE. git-claim.ts states it has no claims file, owner pid, or staleness lifecycle by design, so the prohibition is satisfied by the mechanism not containing the forbidden thing rather than by an active check. Recorded because a bind of this shape reads like active coverage and is not: reintroducing staleness-based reclaim would not fail a test today.",
 			"2026-08-26 (#650): CON-0019 promotion-requires-drift-ratchet binds CTR-0022 on the strength of the pinned `status: shadow` assertion, which fails if the graph is promoted. The suite supplies the coverage and drift checks the constraint names as the precondition, but does NOT gate promotion on their adequacy — promotion is blocked outright rather than conditioned. Bound rather than left unenforced because the violation does fail an assertion; recorded because the mechanism is broader and blunter than the constraint's conditional wording.",
-			"2026-08-26 (#650): CLM-0014, CTR-0014, CTR-0019 and CTR-0020 are absent by deliberate removal in the #616 reconciliation — three realizations and one claim that review showed were not what their nodes claimed, removed rather than softened. Their IDs are permanent gaps: reuse would silently rebind a retired identity, so new nodes continue past the current maxima."
+			"2026-08-26 (#650): CLM-0014, CTR-0014, CTR-0019 and CTR-0020 are absent by deliberate removal in the #616 reconciliation — three realizations and one claim that review showed were not what their nodes claimed, removed rather than softened. Their IDs are permanent gaps: reuse would silently rebind a retired identity, so new nodes continue past the current maxima.",
+			"2026-08-26 (#650): CTR-0024 was authored as trust-manifest drift rejection, then removed after review showed that manifest generation and byte-drift rejection do not enforce CON-0016's projection-strength rule. Its ID is a permanent gap, like CTR-0014, CTR-0019 and CTR-0020, and must never be reused."
 		],
 		"unenforcedConstraints": {
 			"note": "Constraints that name no enforcing realization today, each with the reason it stays unbound. Mirrors the Q17 frozen ceiling in ci/__tests__/shadow-assurance.test.ts; the two are checked against each other.",
 			"entries": {
 				"CON-0004": "Genuine gap. ADR-0025 is `proposed` and the landing fence is unbuilt; the only --force-with-lease in the tree (ship/pr-effects.ts) is a feature-branch push retry, not a landing fence, and does not claim to be one. Note the asymmetry this exposes: CON-0004 and CON-0009 both constrain CLM-0007 and Q3 asserts both edges, yet only CON-0009 has a mechanism.",
+				"CON-0007": "attempt-identity.ts delivers atomic allocation only. Properties 2 and 3 — an agent-denied anti-rollback register and consumer-side fencing — are unbuilt, so an attempt number remains identity rather than authority and the constraint's authority requirement is unmet.",
+				"CON-0016": "Manifest generation plus byte-drift rejection is not projection-strength enforcement: nothing compares a public claim's semantics against the internal claim it projects, so silent strengthening remains unenforced.",
 				"CON-0018": "Intent-only. A rule about when semantic churn is warranted governs authoring judgment; no mechanism can decide whether an edit changed architectural intent.",
 				"CON-0024": "Intent-only, and forward-looking. It reserves extensibility for actors and context that the ontology deliberately has not added (ADR-0027 decision 6); there is nothing yet to enforce.",
 				"CON-0025": "Intent-only. Q13 regex-matches this constraint's own statement text, which is source grounding rather than enforcement and must not be recorded as a bind. No consumer-owned graph exists to hold the boundary against.",

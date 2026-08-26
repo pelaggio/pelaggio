@@ -300,12 +300,12 @@ describe("architectural question tests", () => {
 	 * is a narrower reading than Q14's FROZEN_UNLINKED_GUARANTEES, which still lists TC-003 / TC-017
 	 * after those gained mechanisms; the pin is the stricter of the two and this set follows it.
 	 *
-	 * #650 reduced this from 29 to 7 by binding 22 constraints — seven to the conformance suite, one
-	 * each to attempt-identity and trust-manifest, and thirteen to existing realizations. The 7 that
+	 * #650 reduced this from 29 to 9 by binding 20 constraints — seven to the conformance suite and
+	 * thirteen to existing realizations. The 9 that
 	 * remain each carry a written reason in the corpus at `extraction.unenforcedConstraints`, pinned
 	 * against this set below: a reason without a member, or a member without a reason, fails.
 	 */
-	const FROZEN_UNENFORCED_CONSTRAINTS = new Set(["CON-0004", "CON-0018", "CON-0024", "CON-0025", "CON-0028", "CON-0029", "CON-0030"]);
+	const FROZEN_UNENFORCED_CONSTRAINTS = new Set(["CON-0004", "CON-0007", "CON-0016", "CON-0018", "CON-0024", "CON-0025", "CON-0028", "CON-0029", "CON-0030"]);
 
 	it("Q17: unenforced-constraint ceiling", () => {
 		const corpus = graph as unknown as AssuranceGraph;
