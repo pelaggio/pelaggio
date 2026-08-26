@@ -5,12 +5,14 @@ Every relation shown is read from `edges`. Nothing is hand-written twice — whi
 the whole point: findings 2, 17 and 19 of the last review were three encodings of the
 same 35 edges disagreeing inside one document.
 """
-import json, subprocess, sys, html, collections
+import json, os, subprocess, sys, html, collections
+
+HERE = os.path.dirname(os.path.abspath(__file__))
 
 CORPUS = sys.argv[1] if len(sys.argv) > 1 else "corpus.json"
 OUT = sys.argv[2] if len(sys.argv) > 2 else "minimal-viable-bones.html"
 
-if subprocess.run([sys.executable, "check_corpus.py", CORPUS]).returncode:
+if subprocess.run([sys.executable, os.path.join(HERE, "check_corpus.py"), CORPUS]).returncode:
     sys.exit("corpus invalid — refusing to render")
 
 C = json.load(open(CORPUS))
@@ -41,6 +43,8 @@ def rel_line(nid):
     asm = [e for e in in_e[nid] if e["relation"] == "assumes"]
     if asm:
         bits.append(f'<span><b>assumed by</b> {esc(", ".join(e["from"] for e in asm))}</span>')
+    if N[nid].get("binds"):
+        bits.insert(0, f'<span><b>binds</b> {esc(N[nid]["binds"])}</span>')
     src = N[nid].get("sources") or []
     if src:
         bits.append(f'<span><b>sources</b> {esc(" · ".join(src))}</span>')
@@ -50,6 +54,8 @@ def node_html(n):
     extra = ""
     if n.get("wrongIf"):
         extra = f'<span class="wi"><b>wrong-if</b> {esc(n["wrongIf"])}</span>'
+    elif n.get("revisitIf"):
+        extra = f'<span class="wi"><b>revisit-if</b> {esc(n["revisitIf"])}</span>'
     return (f'<div class="node"><span class="nid">{esc(n["id"])}</span><div class="nb">'
             f'<span class="nt">{esc(n["statement"])}</span>{extra}{rel_line(n["id"])}</div></div>')
 
@@ -73,11 +79,9 @@ edge_rows = "".join(
     f'<tr><td class="k">{esc(e["from"])}</td><td>{esc(e["relation"])}</td><td class="k">{esc(e["to"])}</td></tr>'
     for e in sorted(E, key=lambda x: (x["relation"], x["from"])))
 
-counts = collections.Counter(n["kind"] for n in C["nodes"])
-roles = collections.Counter(n.get("role") for n in C["nodes"] if n["kind"] == "proposition")
 unused = [k for k in C["relationKinds"] if k not in {e["relation"] for e in E}]
 
-CSS = open("corpus.css").read()
+CSS = open(os.path.join(HERE, "corpus.css")).read()
 doc = f"""<title>Minimal Viable Bones</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -85,21 +89,19 @@ doc = f"""<title>Minimal Viable Bones</title>
 <style>{CSS}</style>
 <div class="page">
 <header class="masthead">
-  <p class="eyebrow">Successor architecture · project corpus · draft 5 · generated</p>
+  <p class="eyebrow">Successor architecture · project corpus · generated</p>
   <h1>Minimal Viable Bones</h1>
   <p class="standfirst">The governing knowledge of a successor harness, authored once as data and rendered from it. Every relation on this page is read from the corpus; none is written twice.</p>
   <div class="pins">
     <span><b>Kernel</b> {esc(" · ".join(C["kernel"]))}</span>
-    <span><b>Nodes</b> {len(C["nodes"])}</span>
-    <span><b>Edges</b> {len(E)}</span>
     <span><b>Authority</b> none</span>
   </div>
 </header>
 
 <section><div class="sec-head"><span class="sec-num">§0</span><h2>Why this is generated</h2></div>
 <p>The previous draft hand-maintained node annotations, an edge table and a coverage table. A provider-diverse review found all three disagreeing — inside one document, authored in one sitting, arguing for author-once-derive-everything. Three of its twenty-one findings were that drift.</p>
-<p>This page is emitted by a renderer that refuses to run on an invalid corpus. A domain checker enforces the relation contract — source and target kinds, assumption targets, matching roles for <code>specializes</code> — and rejects an edge whose endpoint is not a corpus node, which is how external references stopped being edge targets and became a <code>sources</code> field. It also fails on causal-outcome language outside an assumption, because the corpus has no node kind for a thesis.</p>
-<p>Counts: {esc(dict(counts))}, roles {esc(dict(roles))}. Relation kinds declared but unused: {esc(", ".join(unused) or "none")}.</p>
+<p>This page is emitted by a renderer that refuses to run on an invalid corpus. A domain checker enforces the relation contract — source and target kinds, assumption targets — and rejects an edge whose endpoint is not a corpus node, which is how external references stopped being edge targets and became a <code>sources</code> field. It fails on causal-outcome language outside an assumption, because the corpus has no node kind for a thesis. And it fails on a constraint that binds anything other than the harness, because a bound on a callee is either already impossible or is a bound on the caller that granted it.</p>
+<p>Relation kinds declared but unused: {esc(", ".join(unused) or "none")}.</p>
 </section>
 
 <section><div class="sec-head"><span class="sec-num">§1</span><h2>Invariants</h2></div>
@@ -108,12 +110,12 @@ doc = f"""<title>Minimal Viable Bones</title>
 </section>
 
 <section><div class="sec-head"><span class="sec-num">§2</span><h2>Constraints</h2></div>
-<p>What any implementation may not do.</p>
+<p>Predicates the harness is evaluated against. Each names the party it binds, and the checker admits only <code>harness</code>: a constraint on the callee is surplus under DEC-12, and a rule about the corpus or about design method belongs in the checker or the RFC, not here.</p>
 {set_html("con", "proposition · constraint", by("proposition", "constraint"))}
 </section>
 
 <section><div class="sec-head"><span class="sec-num">§3</span><h2>Assumptions</h2></div>
-<p>The only node kind that may carry a claim about consequences. Each is falsifiable and each is depended upon by something — an assumption nothing rests on is deleted.</p>
+<p>The only node kind that may carry a claim about consequences, and each is depended upon by something — an assumption nothing rests on is deleted. Each carries exactly one condition: a <b>wrong-if</b> where a single counterexample settles the claim, a <b>revisit-if</b> where nothing would settle it and the honest commitment is to look again. Most things worth assuming only ever get the second.</p>
 {set_html("asm", "proposition · assumption", by("proposition", "assumption"))}
 </section>
 
