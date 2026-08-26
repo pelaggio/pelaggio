@@ -82,6 +82,15 @@
       ]
     },
     {
+      "id": "INV-13",
+      "kind": "proposition",
+      "role": "invariant",
+      "statement": "At every boundary a caller crosses to a callee, what the callee may do is bounded by what it is given, and what the caller knows of what it did is bounded by what the callee declared. Neither is established by observing the callee.",
+      "sources": [
+        "ADR-0014"
+      ]
+    },
+    {
       "id": "INV-2",
       "kind": "proposition",
       "role": "invariant",
@@ -174,27 +183,22 @@
       "sources": []
     },
     {
-      "id": "CON-1",
-      "kind": "proposition",
-      "role": "constraint",
-      "statement": "A declaration authored by the guarded party may select among closed, harness-owned operations, but may not supply an authorization, a proof, or a verdict.",
-      "sources": []
-    },
-    {
       "id": "CON-16",
       "kind": "proposition",
       "role": "constraint",
-      "statement": "An operation outside the closed set is not merely unauthorized but unavailable: the worker holds no capability by which to perform it. A boundary that forbids without withholding is a policy, not a boundary.",
+      "statement": "A bound is established by construction, never by observation: a callee that must not perform an operation holds no means to perform it, and a claim that must not be made has no shape in which to make it. Detection after the fact is a diagnostic \u2014 and a rule that checks what a contract could have made unrepresentable is surplus, and is removed rather than kept for emphasis.",
       "sources": [
         "ADR-0021"
       ]
     },
     {
-      "id": "CON-2",
+      "id": "CON-21",
       "kind": "proposition",
       "role": "constraint",
-      "statement": "A guard may not destroy an actor's work on evidence it cannot attribute to that actor. Refusing an action because a target precondition no longer holds is permitted; discarding authored work on an ambient delta is not.",
-      "sources": []
+      "statement": "An objection from a callee \u2014 interference, inability, refusal \u2014 is acted on, not merely recorded. A channel whose signals change nothing is not a channel.",
+      "sources": [
+        "ADR-0014"
+      ]
     },
     {
       "id": "CON-3",
@@ -221,13 +225,6 @@
       "kind": "proposition",
       "role": "constraint",
       "statement": "Whether a signal is required or advisory is assigned by the harness from the signal's kind, never by the party producing it. An advisory signal's absence changes nothing; a required signal's absence is a refusal, and that refusal is distinguishable from an adverse evaluation.",
-      "sources": []
-    },
-    {
-      "id": "CON-5",
-      "kind": "proposition",
-      "role": "constraint",
-      "statement": "A model may not narrow human-owned intent. A narrowing requires supersede through human re-chartering, never an in-flight decision record.",
       "sources": []
     },
     {
@@ -259,13 +256,6 @@
       ]
     },
     {
-      "id": "CON-8",
-      "kind": "proposition",
-      "role": "constraint",
-      "statement": "A self-asserted outcome kind must name the resolvable entity it collided with. A claim that cannot name one is not of that kind.",
-      "sources": []
-    },
-    {
       "id": "CON-14",
       "kind": "proposition",
       "role": "constraint",
@@ -276,7 +266,7 @@
       "id": "CON-9",
       "kind": "proposition",
       "role": "constraint",
-      "statement": "An outcome type may not be recovered by interpreting free text at the point of consumption. Kinds that differ in their correct response are distinguishable by value.",
+      "statement": "Structure is declared by the party that produced it, never recovered by the party that consumes it. A caller may not parse prose, match a pattern, or diff ambient state to learn what a callee did.",
       "sources": []
     },
     {
@@ -320,6 +310,27 @@
       "sources": []
     },
     {
+      "id": "CON-22",
+      "kind": "proposition",
+      "role": "constraint",
+      "statement": "A callee's output reaches the caller by an explicit call the callee makes, never by the caller reading a location the callee wrote. Output the callee did not declare does not exist, and the caller does not go looking for it.",
+      "sources": []
+    },
+    {
+      "id": "CON-23",
+      "kind": "proposition",
+      "role": "constraint",
+      "statement": "The bound is drawn where the host already offers one. A sandbox that requires bespoke enforcement to hold is weaker than one that inherits the platform's, and the obligation is to use the available primitive fully before building a new one.",
+      "sources": []
+    },
+    {
+      "id": "CON-24",
+      "kind": "proposition",
+      "role": "constraint",
+      "statement": "A callee is not given a value it does not need in order to act, whether or not the route by which that value could be disclosed is open. Need is decided by the caller from the callee's role, never asserted by the callee.",
+      "sources": []
+    },
+    {
       "id": "ASM-1",
       "kind": "proposition",
       "role": "assumption",
@@ -360,6 +371,22 @@
       "sources": []
     },
     {
+      "id": "ASM-6",
+      "kind": "proposition",
+      "role": "assumption",
+      "statement": "A bounded tool surface is sufficient against steering: a callee influenced by what it reads can still only make calls the surface admits, and the consequential ones are banded.",
+      "wrongIf": "A callee causes harm through a granted tool used as designed but for an unintended purpose, or the surface must inspect call arguments for intent to stay safe \u2014 either of which puts the guarantee inside the callee rather than at the boundary.",
+      "sources": []
+    },
+    {
+      "id": "ASM-7",
+      "kind": "proposition",
+      "role": "assumption",
+      "statement": "The consequential acts a callee may take are enumerable as a closed set of kinds, so declaring one is always available where performing one would be.",
+      "wrongIf": "An act with consequences outside the run is found that no kind expresses \u2014 so the callee can only take it by performing it directly, and INV-1 holds only for the acts we happened to think of.",
+      "sources": []
+    },
+    {
       "id": "CON-20",
       "kind": "proposition",
       "role": "constraint",
@@ -394,6 +421,15 @@
       ]
     },
     {
+      "id": "DEC-12",
+      "kind": "decision",
+      "statement": "A callee is given a bounded tool surface and nothing else. Every consequential act, every result, and every objection is a call against that surface; the callee holds no other means to affect or inform the caller. Granting a capability is adding a tool with a schema, and the surface is the whole contract in both directions.",
+      "sources": [
+        "ADR-0014",
+        "ADR-0021"
+      ]
+    },
+    {
       "id": "DEC-3",
       "kind": "decision",
       "statement": "The witness is a content-addressed record written at the dispatch boundary before the declaration is destroyed, binding the declaration, the realized actor, and the source revision.",
@@ -404,7 +440,7 @@
     {
       "id": "DEC-4",
       "kind": "decision",
-      "statement": "Charter quality is a recorded lint. A worker that cannot produce a correct result emits a typed outcome naming the anchor it failed against, rather than proceeding on a guess.",
+      "statement": "A suspended outcome carries a kind; the kind selects the response, and every kind discharges a preservation obligation before that response is taken. Each kind's schema carries the fields its route requires, so a kind that cannot be substantiated cannot be expressed. A retry is attempted only where a retry could change the result.",
       "sources": [
         "ADR-0011"
       ]
@@ -452,11 +488,6 @@
   ],
   "edges": [
     {
-      "from": "CON-1",
-      "relation": "constrains",
-      "to": "INV-1"
-    },
-    {
       "from": "CON-12",
       "relation": "constrains",
       "to": "INV-2"
@@ -472,11 +503,6 @@
       "to": "INV-3"
     },
     {
-      "from": "CON-2",
-      "relation": "constrains",
-      "to": "INV-4"
-    },
-    {
       "from": "CON-6",
       "relation": "constrains",
       "to": "INV-4"
@@ -485,21 +511,6 @@
       "from": "CON-9",
       "relation": "constrains",
       "to": "INV-6"
-    },
-    {
-      "from": "CON-8",
-      "relation": "constrains",
-      "to": "INV-6"
-    },
-    {
-      "from": "CON-5",
-      "relation": "constrains",
-      "to": "INV-7"
-    },
-    {
-      "from": "CON-5",
-      "relation": "constrains",
-      "to": "INV-8"
     },
     {
       "from": "CON-10",
@@ -515,21 +526,6 @@
       "from": "CON-10",
       "relation": "constrains",
       "to": "INV-11"
-    },
-    {
-      "from": "CON-2",
-      "relation": "constrains",
-      "to": "DEC-7"
-    },
-    {
-      "from": "CON-8",
-      "relation": "constrains",
-      "to": "DEC-5"
-    },
-    {
-      "from": "CON-5",
-      "relation": "constrains",
-      "to": "DEC-8"
     },
     {
       "from": "DEC-1",
@@ -637,19 +633,9 @@
       "to": "DEC-6"
     },
     {
-      "from": "CON-1",
-      "relation": "constrains",
-      "to": "INV-12"
-    },
-    {
       "from": "CON-4",
       "relation": "constrains",
       "to": "INV-12"
-    },
-    {
-      "from": "CON-16",
-      "relation": "constrains",
-      "to": "INV-1"
     },
     {
       "from": "CON-18",
@@ -670,6 +656,68 @@
       "from": "CON-20",
       "relation": "constrains",
       "to": "INV-12"
+    },
+    {
+      "from": "CON-16",
+      "relation": "constrains",
+      "to": "INV-13"
+    },
+    {
+      "from": "CON-9",
+      "relation": "constrains",
+      "to": "INV-13"
+    },
+    {
+      "from": "CON-21",
+      "relation": "constrains",
+      "to": "INV-13"
+    },
+    {
+      "from": "CON-22",
+      "relation": "constrains",
+      "to": "INV-13"
+    },
+    {
+      "from": "CON-22",
+      "relation": "constrains",
+      "to": "INV-4"
+    },
+    {
+      "from": "DEC-12",
+      "relation": "implements",
+      "to": "INV-13"
+    },
+    {
+      "from": "CON-23",
+      "relation": "constrains",
+      "to": "INV-13"
+    },
+    {
+      "from": "CON-24",
+      "relation": "constrains",
+      "to": "INV-2"
+    },
+    {
+      "from": "DEC-12",
+      "relation": "assumes",
+      "to": "ASM-6"
+    },
+    {
+      "from": "DEC-1",
+      "relation": "assumes",
+      "to": "ASM-7"
     }
-  ]
+  ],
+  "scope": {
+    "claims": "Bounded delivery of software work by cooperating agents under an operator's authority.",
+    "doesNotClaim": "Safety against a determined adversarial model or a compromised host. The tool surface bounds what a callee can do and the band decides what needs authority beyond the run; neither is a guarantee against an adversary who controls the callee's reasoning. Controls here reduce blast radius and make actions legible. They are not a security product and must not be cited as one.",
+    "unrealized": [
+      {
+        "intent": "Ingress isolation \u2014 a granted tool that reaches the network can carry instruction inward.",
+        "state": "open",
+        "reason": "Closing it requires network unsharing plus a brokered route per provider; the engineering is real and the payoff is bounded by ASM-6 holding.",
+        "revisitIf": "ASM-6 is falsified, or a seat runs unattended against input the operator did not author."
+      }
+    ]
+  }
 }

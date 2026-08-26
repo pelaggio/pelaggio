@@ -1,4 +1,4 @@
-# Corpus experiment (2026-08-26)
+# Successor corpus
 
 Artifacts from the four-pass experiment recorded in
 [`../../corpus-convergence.md`](../../corpus-convergence.md) §5. **This corpus is a result, not a

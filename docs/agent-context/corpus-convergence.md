@@ -69,15 +69,26 @@ re-founded kernel to reference, that is discovered for the cost of one skill edi
 
 A successor-scoped corpus was authored **as data** — nodes and edges in one file, with a domain
 checker and a renderer — and put through four provider-diverse review passes. Artifacts and
-per-pass snapshots are in [`data/corpus-experiment/`](./data/corpus-experiment/).
+per-pass snapshots are in [`data/corpus/`](./data/corpus/).
 
-### 5.1 What it does not show
+### 5.1 It did not converge, and it is no longer an experiment
 
-**It did not converge.** Findings by pass: **17 → 15 → 13 → 17**. Node count rose 39 → 47 and
-nothing was ever removed. Per-node churn shows 20 nodes stable across all four passes and 21
-edited, with the five most-edited all belonging to one idea.
+Findings by pass: **17 → 15 → 13 → 17**. Node count rose 39 → 47 and nothing was ever removed. Twenty
+nodes were stable across all four passes; the five most-edited all belonged to one idea.
 
-The experiment is recorded as a result, not as a proposal. Its corpus is not offered for adoption.
+The loop was stopped at four rather than the planned five: a series that returns to its starting count
+is not converging, and buying a fifth pass would have been the re-review the repo's own economics warn
+against.
+
+**What changed after the loop is the part that matters.** A single rule — *a bound is established by
+construction, never by observation; a rule that checks what a contract could have made unrepresentable
+is surplus* — retired four propositions in four edits, and the corpus shrank for the first time:
+54 → 50. Review found defects one at a time; one constraint on surface area removed a class.
+
+So `data/corpus/` is no longer offered as a failed experiment. **It is the living artifact this RFC
+is refined against**, carrying its own provenance: per-pass snapshots `corpus.p1..p4.json` are the
+review-driven state, `corpus.json` is current, and the diff between them is the record of what
+reviewing bought versus what a principle bought.
 
 ### 5.2 What it does show
 
