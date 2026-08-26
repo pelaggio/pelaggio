@@ -101,7 +101,7 @@ for n in C["nodes"]:
 CAUSAL = ("raises", "reduces", "improves", "lowers", "increases", "decreases",
           "faster", "cheaper", "fewer", "more often", "less often", "drives", "causes")
 for n in C["nodes"]:
-    s = n["statement"].lower()
+    s = n.get("statement", "").lower()
     hits = [w for w in CAUSAL if w in s]
     if hits and n.get("role") != "assumption":
         errs.append(f"{n['id']}: causal-outcome language {hits} outside an assumption — the corpus has no node kind for a thesis")
@@ -128,13 +128,24 @@ def cite(where, text):
 for fn in sorted(os.listdir(HERE)):
     if fn.endswith((".py", ".md")):
         cite(fn, open(os.path.join(HERE, fn)).read())
-for n in C["nodes"]:
-    for k in ("statement", "wrongIf", "revisitIf"):
-        if n.get(k):
-            cite(f"{n['id']}.{k}", n[k])
-    for src in n.get("sources", []):
-        cite(f"{n['id']}.sources", src)
-cite("scope", json.dumps(C.get("scope", {})))
+def walk(path, value):
+    """Every string in the corpus, wherever it lives.
+
+    Enumerating the prose-bearing fields is what this guard did first, and it was
+    fail-open by construction: `authority`, the top-level `note` and each relation's
+    `note` are prose too, so a retired id cited in any of them passed. A field list
+    has to be extended for every field added; a walk does not.
+    """
+    if isinstance(value, str):
+        cite(path or "corpus", value)
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            walk(f"{path}.{key}" if path else key, item)
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            walk(f"{path}[{index}]", item)
+
+walk("", C)
 
 # --- report -----------------------------------------------------------------
 k = collections.Counter(n["kind"] for n in C["nodes"])
