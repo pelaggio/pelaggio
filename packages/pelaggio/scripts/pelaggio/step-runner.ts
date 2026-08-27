@@ -374,7 +374,7 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 
 	// Fail closed before query() so a missing Bubblewrap / non-Linux host cannot
 	// become a retried error_sdk. There is no unisolated Claude fallback.
-	const seatPreflight = preflightClaudeSeat({ cwd: opts.cwd });
+	const seatPreflight = preflightClaudeSeat({ cwd: opts.cwd, step: name, envAllowlist: CONFIG.security.envAllowlist });
 	if (!seatPreflight.ok) {
 		emit({ type: "sdk_error", message: seatPreflight.message });
 		emit({ type: "done", ok: false, subtype: "error_confinement", cost: 0, turns: 0, elapsed: Date.now() - t0 });
@@ -465,6 +465,8 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 		spawnClaudeSeat(spawnOpts, {
 			cwd: opts.cwd,
 			bwrap: seatPreflight.bwrap,
+			step: name,
+			envAllowlist: CONFIG.security.envAllowlist,
 			...(opts.onChildSpawn ? { onChildSpawn: opts.onChildSpawn } : {}),
 		});
 
