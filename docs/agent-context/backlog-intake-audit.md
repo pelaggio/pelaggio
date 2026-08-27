@@ -151,6 +151,8 @@ to rediscover:
 
 ## 5. What was executed
 
+**Instrumentation and evidence** (commit `4a52a7d`):
+
 - `ci/backlog-audit.ts` + `ci/__tests__/backlog-audit.test.ts` — the report-only instrument, with
   no-false-fire tests on the two signals most likely to over-fire: `autopilot` as live vocabulary
   (the label and the run mode are current, only renamed package/path ids are drift), and prose
@@ -158,20 +160,37 @@ to rediscover:
 - `data/backlog-signals-2026-08-27.json` — the pinned derived snapshot at `423:ced7d044cf7a`.
 - This document.
 
+**Tracker mutations**, on the operator's decision, after the pin was taken. Each is recorded here
+because §1's snapshot is frozen at the pre-mutation corpus by design: re-running the instrument
+against a live dump now reports `DRIFT: pinned 423:ced7d044cf7a (198 open) vs live … (197 open)`,
+which is the intended behaviour, not a fault.
+
+| Action | Items | Rationale |
+|---|---|---|
+| add `autopilot` | #64, #70, #624 | make the pickup label match the work; these were never a queue-arming question |
+| add `autopilot` + `deferred` | #153 | EPIC — visible on the roadmap, not claimable, matching the open-EPIC convention of #295/#306 |
+| close as duplicate of #261 | #265 | both empty-bodied, filed 26 minutes apart, same deliverable; #265's scope wording carried into #261 rather than dropped |
+| rewrite charter | #261 | absorbs #265, states the outcome, records the unresolved step boundary as a residual, and notes the closed `Depends on: 257` |
+| revise charter | #521 | item 1 is complete; item 2 is now two collisions (§2.1); records the four relabels done under its authority and why #154/#155 were not |
+
 ## 6. What was deliberately not executed
 
 - **No bulk close.** `throughput-economy.md` §5 already refused this once, on two grounds that
   both still hold: `deferred` is a park mechanism and not a graveyard, and `npx pelaggio roadmap`
   exposes no close subcommand — only `mark-done`, which asserts completion. Closing 38 empty
   charters as `not_planned` would assert a judgment this audit has not made about any of them.
-  Typed closure reasons are **#519**.
-- **No relabelling of the six unpickable items.** Adding `autopilot` to #154 or #155 does not
-  merely make them visible — it makes them *claimable by an unattended cycle*, and #154 is a
-  security control whose own charter says it will block legitimate self-modification work. That
-  is an operator decision about queue contents, not a hygiene edit. #521 chartered this exact
-  class as OPERATOR-EXECUTED for the same reason.
+  Typed closure reasons are **#519**. The one close executed above is a duplicate, which is a
+  claim about two items being the same, not a claim that either is unwanted.
+- **#154 and #155 were left unlabelled.** Adding `autopilot` to them does not merely make them
+  visible — it makes them *claimable by an unattended cycle*, and #154 is a security control whose
+  own charter says it will block legitimate self-modification work. That is an operator decision
+  about queue contents, not a hygiene edit; #521 reserves this exact class for the same reason.
+  They are therefore the two items still invisible to `/pick` after this audit, deliberately.
+- **No comment on the 34 unblocked items.** Recomputing readiness when a dependency closes is a
+  harness job (#296), not 34 hand-written comments that would themselves go stale on the next
+  close.
 - **No intake gate, of any kind.** See §0.
-- **No detector for the six-item unpickable population.** #521's reasoning applies unchanged: the
+- **No detector for the unpickable population.** #521's reasoning applies unchanged: the
   population is small and finite, so fix the data, not the tooling.
 
 ## 7. What would falsify this
