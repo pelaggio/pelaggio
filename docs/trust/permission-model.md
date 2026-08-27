@@ -5,7 +5,7 @@ status: draft
 diataxis: explanation
 sidebar:
   order: 3
-last_reviewed: 2026-07-08
+last_reviewed: 2026-08-19
 ---
 
 # Permission Model
@@ -40,6 +40,35 @@ Pelaggio's permission model is a manifest-backed description of current capabili
 | `shipwreck` | Recovery path after ship failure; may inspect and repair local ship state. | `TC-011`, `TC-012`, `TC-015` |
 | `roadmap` CLI | Adapter-backed list/get/claim/plan/mark-done/archive commands used by skills and harness. | `TC-006`, `TC-015` |
 | `worktree-deps` | Symlink/install dependencies for a worktree and repair shared dependency layout. | `TC-011`, `TC-016` |
+
+## Claude seat forge authority
+
+The Claude child is an untrusted seat. Forge/remote credentials are an exhaustive internal `Step` policy, not operator configuration (`TC-014`, `TC-018`):
+
+| Role | Forge / remote recovery credentials | Why |
+|---|---|---|
+| `pick`, `ship`, `shipwreck` | Retained (GitHub token vars, `LINEAR_API_KEY`, `SSH_AUTH_SOCK`, GitHub CLI config location) | Source-proven roadmap claim, landing, and recovery commands run inside those seats. |
+| `plan`, `shakedown-plan`, `implement`, `shakedown-code`, `pr-review`, `pr-verify` | Denied: token env vars stripped; existing GitHub CLI config directories (`GH_CONFIG_DIR`, `$XDG_CONFIG_HOME/gh`, `$HOME/.config/gh`) **mount-masked** (a tmpfs over the mount namespace — not capability denial; a seat that nests its own user+mount namespace could unmount to re-expose them via the bound host root, the same userns residual as the socket mask) | Authoring and review/verify seats must not be able to post a forge status or mutate the tracker with harness-provided credentials. Leftover host credential files (`~/.git-credentials`, `~/.netrc`, `~/.ssh`) remain readable through the bound host root until `#572`, so the denial covers what the harness hands the seat, not every credential on the host. A CI-persisted checkout credential is another stated limit: `actions/checkout` writes the job token as an `http.<host>.extraheader` in the checkout's `.git/config`, which remains readable through the bound host root, so a denied `pr-review`/`pr-verify` seat can still recover it and post a commit status until `#658` splits it out of the checkout. |
+| Outer harness (`pr-review-cli`, `pr-adjudicate-cli`, workflow status steps) | Retains `GH_TOKEN` / `gh` | Deterministic comment and `review` status effects run after the untrusted seat exits. |
+
+Every Claude child still receives the SDK-listed Anthropic/CLI WIF and profile inputs so the CLI can authenticate. Direct token variables (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`) pass only when no Foundry, AWS, or Google mode is active; third-party credentials pass only in their matching mode, so unrelated seats do not inherit them. Residual model-key exfil is bounded on the malformed-report shape: MALFORMED reports surface only the invariant parse-failure sink (`#536`). Model-authored fields in a VALID report are NOT yet scrubbed before the CI stdout and PR-comment sinks — that boundary scrub is a separate `#554` slice and is not claimed here. That the seat holds the selected key at all remains `#572` work, not a reason to give the seat forge authority. The same `#572` residual scopes the denied rows above: the seat keeps the host network and a bound host root outside the masked directories, so credentials in leftover host files (`~/.git-credentials`, `~/.netrc`, `~/.ssh`) are denied by convention, not by the mask (see [sandboxing](./sandboxing.md) and [threat model](./threat-model.md)).
+
+### Review-content integrity residual (`#617`)
+
+Both review paths fetch the reviewed head from the mutable `origin` in the shared, seat-writable
+`.git/config`, which the confinement audit (porcelain + ref state) does not cover. A prompt-injected
+seat that rewrites origin can point the fetch at an attacker-hosted repository presenting `main` at
+the real PR SHA, producing an **empty reviewed diff**. This is the case `TC-015` describes, and it is
+unchanged by this slice: forge-credential denial narrows what a seat can *do* with the forge, not
+where the review fetch *goes*.
+
+Rebuilding the fetch destination from trusted config, and the related channel overrides, are a
+separate `#554` slice and are **not** claimed here. `#617` (host-brokered review fetch — the harness
+prepares a read-only reviewed checkout from a trusted remote and hands it to a seat that never
+fetches) is the durable fix, because validating a configuration the seat can write is a losing
+construction. Bounded in practice: exploitation requires a targeted prompt-injection under
+**autopilot** review of **untrusted external PRs with auto-merge armed**; it does not affect
+supervised first-party review.
 
 ## Configuration Gates
 

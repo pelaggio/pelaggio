@@ -1030,11 +1030,12 @@ bypasses only the one-pass `autopilot:revised` label.
 
 ## Spawned-agent env allowlist
 
-Driver subprocesses (codex today, grok next) run work influenced by untrusted
-repo/issue/PR text. To stop a prompt-injected step from reading credentials, they
-are spawned with a **deny-by-default environment**: only a fixed allowlist
-(`PATH`, `HOME`, locale/cert vars) plus any names you add here is forwarded — the
-child never inherits the full parent environment (issue #237, TC-014).
+Driver subprocesses run work influenced by untrusted repo/issue/PR text. To stop
+a prompt-injected step from reading unrelated credentials, they are spawned with
+a **deny-by-default environment**: only a fixed allowlist (`PATH`, `HOME`,
+locale/cert vars), provider-required values, and permitted names you add here
+are forwarded. The child never inherits the full parent environment (issue
+#237, TC-014).
 
 Subscription auth keeps working out of the box because codex/grok read their
 tokens from files under `HOME`. Add a var only when a driver needs it in the
@@ -1047,14 +1048,26 @@ security:
 
 `security.env-allowlist` must be an array of strings. At launch the allowlist is
 additionally **provider-scoped**: a subprocess driver receives its own key var
-but never a sibling provider's — `OPENAI_API_KEY` never reaches Grok,
-`XAI_API_KEY` never reaches Codex, and `ANTHROPIC_API_KEY` (consumed in-process
-by the Claude SDK) reaches no subprocess driver — so a multi-provider review
-never exposes one seat to another provider's credential. Non-key entries are
-forwarded unchanged. Independently, captured
-driver stderr and the verbose `.dev/*.log` transcript are **secret-scrubbed
-before write**: credential-shaped strings (JWTs, provider keys, tokens) and the
-values of secret-named env vars are replaced with `[REDACTED]`.
+but never a sibling provider's — `OPENAI_API_KEY` never reaches Grok and
+`XAI_API_KEY` never reaches Codex. Claude is different because its spawned CLI
+is the model API client: in direct Anthropic mode every Claude role receives the
+direct token inputs, including `ANTHROPIC_API_KEY`, independently of this
+setting. Other SDK-listed WIF/profile inputs remain provider-independent.
+
+The Claude seat applies two further restrictions after operator configuration.
+Direct Anthropic token auth is stripped when a Foundry, AWS, or Google provider
+mode is active; those modes receive their matching credential family. Adding
+mode-gated credential names to `security.env-allowlist` cannot enable an
+inactive mode. Forge-denied roles
+(`plan`, authoring/review/verification, and implementation roles) strip GitHub,
+Linear, SSH-agent, and git-native authentication channels even when they are
+listed here. Other allowlisted entries are forwarded unchanged unless another
+documented provider or role policy denies them.
+
+Independently, captured driver stderr and the verbose `.dev/*.log` transcript
+are **secret-scrubbed before write**: credential-shaped strings (JWTs, provider
+keys, tokens) and the values of secret-named env vars are replaced with
+`[REDACTED]`.
 
 ## Notifications
 
