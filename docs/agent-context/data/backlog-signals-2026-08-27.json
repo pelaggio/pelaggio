@@ -1,0 +1,3286 @@
+{
+	"fingerprint": "423:ced7d044cf7a",
+	"observedAt": "2026-08-27",
+	"openCount": 198,
+	"trend": [
+		{
+			"period": "2026-04-H2",
+			"filed": 7,
+			"empty": 1,
+			"withAcceptance": 4
+		},
+		{
+			"period": "2026-07-H1",
+			"filed": 123,
+			"empty": 25,
+			"withAcceptance": 21
+		},
+		{
+			"period": "2026-07-H2",
+			"filed": 72,
+			"empty": 25,
+			"withAcceptance": 12
+		},
+		{
+			"period": "2026-08-H1",
+			"filed": 110,
+			"empty": 21,
+			"withAcceptance": 16
+		},
+		{
+			"period": "2026-08-H2",
+			"filed": 111,
+			"empty": 10,
+			"withAcceptance": 51
+		}
+	],
+	"items": [
+		{
+			"number": 40,
+			"title": "Surface externally-launched autopilot runs as read-only rows in the dashboard Runs view",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-07-07T00:43:04Z",
+			"updatedAt": "2026-08-03T04:30:02Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": true,
+			"declaredDeps": []
+		},
+		{
+			"number": 41,
+			"title": "Register repos without daemon restart: hot-reload repos.yml plus add-repo affordance in the UI",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-07-07T00:43:40Z",
+			"updatedAt": "2026-08-03T04:30:00Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": true,
+			"declaredDeps": []
+		},
+		{
+			"number": 42,
+			"title": "Enrich bare item ids with roadmap titles in dashboard stats and runs views",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-07-07T00:43:42Z",
+			"updatedAt": "2026-08-03T04:29:59Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": true,
+			"declaredDeps": []
+		},
+		{
+			"number": 44,
+			"title": "charter interrogation step: AskUserQuestion round for operator-owned decisions before item creation (interactive sessions only)",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-07-07T00:55:32Z",
+			"updatedAt": "2026-08-03T04:29:57Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 57,
+			"title": "Doc standard v2: ship ADR layer, precedence rule, and canonical vocabulary in .claude-templates",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-07-07T13:52:56Z",
+			"updatedAt": "2026-08-03T04:29:56Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": true,
+			"declaredDeps": []
+		},
+		{
+			"number": 58,
+			"title": "Doc standard v2: frontmatter convention + scaffold-version stamp (with markdown-adapter tolerance test)",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-07-07T13:53:16Z",
+			"updatedAt": "2026-08-03T04:29:54Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				57
+			]
+		},
+		{
+			"number": 59,
+			"title": "/tidy doc-lint pass: link integrity, orphans, staleness sampling, scaffold-version drift",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-07-07T13:53:40Z",
+			"updatedAt": "2026-08-14T06:33:30Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				1,
+				3,
+				5,
+				58
+			]
+		},
+		{
+			"number": 64,
+			"title": "MarkdownRoadmap.markDone throws for task-index-only items that list/claim happily serve",
+			"labels": [
+				"autopilot:fix"
+			],
+			"createdAt": "2026-07-07T19:04:33Z",
+			"updatedAt": "2026-07-08T01:14:32Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": true,
+			"unblocked": false,
+			"legacyVocabulary": true,
+			"declaredDeps": []
+		},
+		{
+			"number": 70,
+			"title": "Harden PR review gate: run the judge from the base ref, not the PR tree",
+			"labels": [
+				"autopilot:fix"
+			],
+			"createdAt": "2026-07-07T22:55:52Z",
+			"updatedAt": "2026-07-08T00:50:30Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": true,
+			"unblocked": false,
+			"legacyVocabulary": true,
+			"declaredDeps": []
+		},
+		{
+			"number": 87,
+			"title": "Sweep review-gate non-blocking notes into the decisions register",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-07-08T01:02:01Z",
+			"updatedAt": "2026-08-03T04:29:50Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": true,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				85
+			]
+		},
+		{
+			"number": 150,
+			"title": "OSS security surface: SECURITY.md + /.well-known/security.txt + private-disclosure policy",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-07-09T03:05:36Z",
+			"updatedAt": "2026-08-03T04:29:49Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 151,
+			"title": "OSS community files: CONTRIBUTING + CODE_OF_CONDUCT (Contributor Covenant 2.1) + GOVERNANCE",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-07-09T03:05:37Z",
+			"updatedAt": "2026-08-03T04:29:47Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 152,
+			"title": "OSS signals: OpenSSF Scorecard + CHANGELOG + llms.txt/llms-full.txt",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-07-09T03:05:38Z",
+			"updatedAt": "2026-08-03T04:29:46Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 153,
+			"title": "TC-015 injection hardening (epic): bound the action, not detect the injection",
+			"labels": [
+				"enhancement"
+			],
+			"createdAt": "2026-07-09T03:21:00Z",
+			"updatedAt": "2026-07-09T03:41:20Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": true,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 154,
+			"title": "TC-017: protected-path lock + crown-jewel self-modification gate",
+			"labels": [
+				"enhancement"
+			],
+			"createdAt": "2026-07-09T03:21:11Z",
+			"updatedAt": "2026-07-09T03:21:11Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": true,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 155,
+			"title": "TC-018: per-step capability profiles (retire canUseTool allow-all)",
+			"labels": [
+				"enhancement"
+			],
+			"createdAt": "2026-07-09T03:21:12Z",
+			"updatedAt": "2026-07-09T03:21:12Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": true,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 164,
+			"title": "Migrate shakedown-code (and ship/pick) checkpoints off the legacy commitLabel path onto the effects seam",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-07-09T05:18:34Z",
+			"updatedAt": "2026-07-09T05:18:34Z",
+			"emptyCharter": true,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": true,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				162
+			]
+		},
+		{
+			"number": 172,
+			"title": "Flow 3: typed, item-scoped, off-hot-path write-back seam (annotate)",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-07-13T13:24:34Z",
+			"updatedAt": "2026-08-03T04:29:44Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				170,
+				177
+			]
+		},
+		{
+			"number": 173,
+			"title": "Flow 4: declared, enforced write-sets + scheduler co-schedule guard",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-07-13T13:24:47Z",
+			"updatedAt": "2026-08-03T04:29:43Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": true,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				170,
+				171
+			]
+		},
+		{
+			"number": 174,
+			"title": "Flow 5: formalize the landing queue (direct-push owns; PR mode defers to provider merge queue)",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-07-13T13:25:03Z",
+			"updatedAt": "2026-08-03T04:29:41Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				173,
+				181
+			]
+		},
+		{
+			"number": 177,
+			"title": "Flow 1b: flow-event emission + three-producer wiring + normative metrics",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-07-14T01:22:46Z",
+			"updatedAt": "2026-08-03T04:29:39Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": true,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				170
+			]
+		},
+		{
+			"number": 178,
+			"title": "Flow 1c: flow-event subscription + consumer extension seam",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-07-14T01:22:48Z",
+			"updatedAt": "2026-08-03T04:29:38Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": true,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				170
+			]
+		},
+		{
+			"number": 187,
+			"title": "Emit the ai-delivery attestation from the pipeline (dogfood)",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-07-14T16:24:10Z",
+			"updatedAt": "2026-08-14T06:33:35Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": true,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				186
+			]
+		},
+		{
+			"number": 190,
+			"title": "Spike: evaluate zonot-core for intent logs (rationale/why capture)",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-07-14T16:24:15Z",
+			"updatedAt": "2026-08-03T04:29:35Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 203,
+			"title": "Render pr-review finding locations without stray markdown-escape backslashes (escape inline-code by backtick, not full markdown)",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-07-14T21:35:52Z",
+			"updatedAt": "2026-07-14T21:35:52Z",
+			"emptyCharter": true,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 246,
+			"title": "Pool-aware concurrent cycle scheduling across driver subscription pools (Claude/Codex/Grok)",
+			"labels": [
+				"autopilot",
+				"priority:high"
+			],
+			"createdAt": "2026-07-18T23:54:14Z",
+			"updatedAt": "2026-08-03T04:29:15Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				173,
+				174
+			]
+		},
+		{
+			"number": 261,
+			"title": "Contained execution: wire run-contained into pipeline verify step + real-host self-test",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-07-19T20:36:02Z",
+			"updatedAt": "2026-07-19T20:36:02Z",
+			"emptyCharter": true,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": true,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				257
+			]
+		},
+		{
+			"number": 262,
+			"title": "Contained execution: compute dependencyTargets to bind symlinked node_modules read-only into the jail",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-07-19T20:36:04Z",
+			"updatedAt": "2026-07-19T20:36:04Z",
+			"emptyCharter": true,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": true,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				257
+			]
+		},
+		{
+			"number": 263,
+			"title": "Contained execution: podman image-backed jail path for steps that require an image",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-07-19T20:36:05Z",
+			"updatedAt": "2026-07-19T20:36:05Z",
+			"emptyCharter": true,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": true,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				257
+			]
+		},
+		{
+			"number": 265,
+			"title": "Wire run-contained seam into implement's test/build/verify step (live-container integration)",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-07-19T21:02:15Z",
+			"updatedAt": "2026-07-19T21:02:15Z",
+			"emptyCharter": true,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": true,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				257
+			]
+		},
+		{
+			"number": 266,
+			"title": "Accept the resolved interpreter's real dir as a bounded runtime root so nvm/non-/usr node passes run-contained self-test and command checks",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-07-19T21:02:16Z",
+			"updatedAt": "2026-07-19T21:02:16Z",
+			"emptyCharter": true,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": true,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				257
+			]
+		},
+		{
+			"number": 268,
+			"title": "Record realized provider diversity in the authoring review record (downgrade to softened when a configured reviewer seat fails to run, not just when fewer than three providers are configured)",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-07-19T22:34:59Z",
+			"updatedAt": "2026-07-19T22:34:59Z",
+			"emptyCharter": true,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": true,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				259
+			]
+		},
+		{
+			"number": 273,
+			"title": "Derive contained-egress key auth header/scheme from provider policy instead of hardcoding authorization/Bearer in the CLI",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-07-20T00:44:23Z",
+			"updatedAt": "2026-07-20T00:44:23Z",
+			"emptyCharter": true,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": true,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				260
+			]
+		},
+		{
+			"number": 277,
+			"title": "Authoring review loop: extend panel+Judge convergence to the plan stage (shakedown-plan)",
+			"labels": [
+				"autopilot",
+				"deferred",
+				"priority:high"
+			],
+			"createdAt": "2026-07-20T02:34:10Z",
+			"updatedAt": "2026-08-21T09:44:21Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 279,
+			"title": "Grok: route grok through the #260 egress broker for a true L7 hostname-allowlist (cli-chat-proxy)",
+			"labels": [
+				"autopilot",
+				"deferred",
+				"in-progress"
+			],
+			"createdAt": "2026-07-20T02:49:54Z",
+			"updatedAt": "2026-08-26T12:59:51Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 295,
+			"title": "EPIC: complete the blocked seam for runtime Andon (produce-or-escalate)",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-07-20T06:51:42Z",
+			"updatedAt": "2026-08-03T04:29:32Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 296,
+			"title": "Readiness as a computed FlowPolicy verdict (soft DoR): INVEST I/T/S/E over a #170 snapshot",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-07-20T06:51:43Z",
+			"updatedAt": "2026-08-03T04:29:30Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 297,
+			"title": "First-class tolerance policy: flag-vs-move / park-vs-note per finding-class (default permissive)",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-07-20T06:51:44Z",
+			"updatedAt": "2026-08-03T04:29:29Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": true,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				3,
+				15,
+				16
+			]
+		},
+		{
+			"number": 306,
+			"title": "EPIC: agent-as-caller — typed tool-call coordination seam (replace prose-scrape ship/pick/ship-merged)",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-07-20T14:44:18Z",
+			"updatedAt": "2026-08-03T04:29:27Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 329,
+			"title": "Attestation sink: optional POST of signed ai-delivery attestations to a configured endpoint (buffered, fail-open)",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-07-22T02:06:18Z",
+			"updatedAt": "2026-08-21T09:44:28Z",
+			"emptyCharter": true,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				187
+			]
+		},
+		{
+			"number": 345,
+			"title": "test: prove pr-review merge gate uses PACKAGED skill even when consumer .claude/skills diverges (#286 follow-up)",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-07-22T13:22:10Z",
+			"updatedAt": "2026-08-18T03:58:03Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 350,
+			"title": "Add DSSE signing, Rekor transparency logging, and forge upload for ai-delivery attestations",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-07-22T15:08:12Z",
+			"updatedAt": "2026-07-22T15:08:12Z",
+			"emptyCharter": true,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": true,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				186
+			]
+		},
+		{
+			"number": 354,
+			"title": "Taxonomy contraction gate: scope-binding + judgment-dissent layering (follow-up to #294)",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-07-22T18:19:05Z",
+			"updatedAt": "2026-08-21T09:44:26Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 355,
+			"title": "Add hard capability requirements and native routing to pipeline steps",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-07-22T18:29:28Z",
+			"updatedAt": "2026-07-22T18:29:28Z",
+			"emptyCharter": true,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": true,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				337
+			]
+		},
+		{
+			"number": 356,
+			"title": "Emit per-step realized provider capabilities to the flow-event stream",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-07-22T18:29:29Z",
+			"updatedAt": "2026-07-22T18:29:29Z",
+			"emptyCharter": true,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": true,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				337
+			]
+		},
+		{
+			"number": 359,
+			"title": "Regression tests for #337 capability-seam fail-closed paths (follow-up to #358)",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-07-22T19:41:13Z",
+			"updatedAt": "2026-08-18T03:58:09Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 367,
+			"title": "Add charter-review gate: config-driven adversarial review for chartered work (execution-bound, verdict-advisory)",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-08-03T05:34:29Z",
+			"updatedAt": "2026-08-21T09:44:17Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 379,
+			"title": "Bind review and test gate evidence to revision-scoped execution receipts",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-08-03T12:37:43Z",
+			"updatedAt": "2026-08-03T12:37:43Z",
+			"emptyCharter": true,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": true,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				188
+			]
+		},
+		{
+			"number": 380,
+			"title": "Enforce one-time evidence challenges and attestation verification at merge",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-08-03T12:37:45Z",
+			"updatedAt": "2026-08-14T06:33:36Z",
+			"emptyCharter": true,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": true,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				188
+			]
+		},
+		{
+			"number": 381,
+			"title": "Add provider-issued or trusted-runner evidence identities to AI delivery attestations",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-08-03T12:37:46Z",
+			"updatedAt": "2026-08-03T12:37:46Z",
+			"emptyCharter": true,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": true,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				188
+			]
+		},
+		{
+			"number": 390,
+			"title": "Upstream triad-review workflow hardening: parse string args + deterministic fail-closed empty-artifact guard",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-03T14:51:46Z",
+			"updatedAt": "2026-08-03T14:51:46Z",
+			"emptyCharter": true,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 405,
+			"title": "Account CI-runner review spend against the budget invariant (review.runner: ci bills out-of-process)",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-03T20:58:02Z",
+			"updatedAt": "2026-08-03T20:58:02Z",
+			"emptyCharter": true,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 406,
+			"title": "Widen shared-write allowlist beyond pnpm-lock.yaml to generated files and the markdown roadmap file (flow.md:272-276)",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-03T20:58:04Z",
+			"updatedAt": "2026-08-03T20:58:04Z",
+			"emptyCharter": true,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 407,
+			"title": "notify.ts: add dedupe, throttle and quiet-hours so 3-pool overnight runs do not produce an ignorable notification storm",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-03T20:58:06Z",
+			"updatedAt": "2026-08-03T20:58:06Z",
+			"emptyCharter": true,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 419,
+			"title": "Escalation authority split: harness-owned .dev/escalations with token-proof resolutions (decision docs stay committed)",
+			"labels": [
+				"autopilot",
+				"priority:high"
+			],
+			"createdAt": "2026-08-04T00:44:38Z",
+			"updatedAt": "2026-08-04T00:44:51Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": true,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				386
+			]
+		},
+		{
+			"number": 422,
+			"title": "Runbook + script updates from the 2026-08-03 supervised run post-mortem (supervised-run.md, testing docs, relay guidance)",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-04T02:13:16Z",
+			"updatedAt": "2026-08-08T17:30:42Z",
+			"emptyCharter": true,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 423,
+			"title": "Wire doc-review into the charter path: /charter and roadmap create-item offer/require a provider-diverse panel pass on the charter body before creation",
+			"labels": [
+				"autopilot",
+				"deferred",
+				"priority:high"
+			],
+			"createdAt": "2026-08-04T02:31:08Z",
+			"updatedAt": "2026-08-21T09:44:19Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 432,
+			"title": "Add models.default-profile and ship named cost-balance presets",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-04T23:27:47Z",
+			"updatedAt": "2026-08-04T23:29:06Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": true,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				431
+			]
+		},
+		{
+			"number": 433,
+			"title": "Re-tune effort defaults and step prompts for Opus 5 behavior shifts",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-04T23:27:52Z",
+			"updatedAt": "2026-08-04T23:29:07Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 435,
+			"title": "Confinement gap: pick-step agents can silently mutate the main checkout (cwd=main)",
+			"labels": [
+				"autopilot",
+				"priority:high"
+			],
+			"createdAt": "2026-08-05T00:25:58Z",
+			"updatedAt": "2026-08-11T13:07:38Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 438,
+			"title": "Run-root main auto-sync + staleness preflight (enables the operator/run-root split)",
+			"labels": [
+				"autopilot",
+				"priority:high"
+			],
+			"createdAt": "2026-08-05T06:43:41Z",
+			"updatedAt": "2026-08-08T17:30:23Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				435
+			]
+		},
+		{
+			"number": 440,
+			"title": "Runbook: operator workbench vs run root — widen the separate-clone practice to all operator work",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-05T06:44:38Z",
+			"updatedAt": "2026-08-05T06:44:38Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				435,
+				438
+			]
+		},
+		{
+			"number": 443,
+			"title": "Countersign charter-review records in supervised daemon runs",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-08-05T10:49:55Z",
+			"updatedAt": "2026-08-05T10:49:55Z",
+			"emptyCharter": true,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				367
+			]
+		},
+		{
+			"number": 445,
+			"title": "file-lock multi-process race test is flaky on CI runners",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-05T18:35:27Z",
+			"updatedAt": "2026-08-05T18:35:27Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 454,
+			"title": "Cycle log records model:\"default\" instead of the realized provider model",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-06T03:31:57Z",
+			"updatedAt": "2026-08-06T03:31:57Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 458,
+			"title": "Sustained SDK-outage parks are never persisted with parkClass sdk-outage in serial runs",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-06T04:54:20Z",
+			"updatedAt": "2026-08-06T04:54:20Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 461,
+			"title": "Trustworthy session-liveness primitive: a reader destructive reconcilers can rely on",
+			"labels": [
+				"autopilot",
+				"priority:high"
+			],
+			"createdAt": "2026-08-07T01:32:21Z",
+			"updatedAt": "2026-08-08T17:20:42Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 462,
+			"title": "Make config.ts module-init side-effect-free: REPO/CONFIG lazy or injected",
+			"labels": [
+				"autopilot",
+				"priority:high"
+			],
+			"createdAt": "2026-08-07T01:35:59Z",
+			"updatedAt": "2026-08-08T00:30:58Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 464,
+			"title": "G1 — Fence: authority-validated compare-and-swap seam",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-07T22:07:16Z",
+			"updatedAt": "2026-08-25T04:45:40Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 465,
+			"title": "G2 — Quota: reserve / settle-observed / refund-unused ledger",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-07T22:07:33Z",
+			"updatedAt": "2026-08-11T15:46:00Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 466,
+			"title": "G3 — Token: one-shot entitlement with pre-work/post-work split",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-07T22:07:35Z",
+			"updatedAt": "2026-08-11T15:46:02Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 468,
+			"title": "G5 — Gate disposition: judgment/evidence split, default-deny allowlist, bounded indeterminate",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-07T22:08:07Z",
+			"updatedAt": "2026-08-11T15:46:04Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				465,
+				467
+			]
+		},
+		{
+			"number": 470,
+			"title": "G6b — Reconcilers over off-process transitions",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-07T22:08:54Z",
+			"updatedAt": "2026-08-11T13:07:35Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 473,
+			"title": "roadmap CLI has no update-item / link: relationships are expressible only at creation time",
+			"labels": [
+				"autopilot",
+				"priority:normal"
+			],
+			"createdAt": "2026-08-07T23:11:20Z",
+			"updatedAt": "2026-08-07T23:11:20Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 478,
+			"title": "Audit for vacuous tests: five found in one session that asserted nothing they claimed",
+			"labels": [
+				"autopilot",
+				"priority:high"
+			],
+			"createdAt": "2026-08-08T17:29:48Z",
+			"updatedAt": "2026-08-08T17:29:48Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 481,
+			"title": "ADR shape gate: verify supersession back-links and status vocabulary",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-08-09T02:03:00Z",
+			"updatedAt": "2026-08-21T09:44:24Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 485,
+			"title": "Route the claude adapter through buildAgentEnv; add a per-driver authority conformance test",
+			"labels": [
+				"autopilot",
+				"priority:high"
+			],
+			"createdAt": "2026-08-11T13:05:37Z",
+			"updatedAt": "2026-08-11T13:05:37Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 486,
+			"title": "Claim-release edge on non-recoverable abort; move the in-progress marker after the pinned-item check",
+			"labels": [
+				"autopilot",
+				"priority:high"
+			],
+			"createdAt": "2026-08-11T13:05:41Z",
+			"updatedAt": "2026-08-11T13:05:41Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 487,
+			"title": "Suppress model-authored Closes #N in the ship decision boundary",
+			"labels": [
+				"autopilot",
+				"priority:high"
+			],
+			"createdAt": "2026-08-11T13:05:45Z",
+			"updatedAt": "2026-08-11T13:05:45Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 489,
+			"title": "Doc honesty pass: status-tag agent-context, correct skills.md includes, reword the AGENTS.md CAS bullet",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-11T13:06:19Z",
+			"updatedAt": "2026-08-11T13:06:19Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 490,
+			"title": "Consolidate duplicate gh runners and delete dead provider/ship code",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-11T13:06:22Z",
+			"updatedAt": "2026-08-14T06:33:32Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 491,
+			"title": "Durable evidence home: write receipts, review records and gate records at emission, keyed by attemptRunId",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-11T13:06:55Z",
+			"updatedAt": "2026-08-14T06:33:33Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 492,
+			"title": "Decompose the pipeline envelope: CycleContext, phase functions, and one StepPolicy record",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-11T13:06:59Z",
+			"updatedAt": "2026-08-11T15:46:07Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 501,
+			"title": "init.planCopies() must honor consumer: false (sync-only exclusion today)",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-11T17:56:33Z",
+			"updatedAt": "2026-08-11T17:56:33Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 503,
+			"title": "Daemon hardening residuals from the #502 gate: UI-shell headers, 404-vs-401 fallthrough, IPv6 wildcard denylist aliases, empty-token runtime guard, boot-error remediation text",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-11T19:42:26Z",
+			"updatedAt": "2026-08-11T19:42:26Z",
+			"emptyCharter": true,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 505,
+			"title": "Rubric: add Complete + Safe dimensions, assertion-strength testing, house-style/convention split, skills-are-code preamble",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-13T17:46:39Z",
+			"updatedAt": "2026-08-13T17:46:50Z",
+			"emptyCharter": true,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 509,
+			"title": "revise --pr entitlement ergonomics: verify binding before claiming, survive audit-comment failure, name the spent label in errors",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-13T20:03:25Z",
+			"updatedAt": "2026-08-13T20:03:25Z",
+			"emptyCharter": true,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 511,
+			"title": "Harness-attested gate-record evidence: adjudication authorization must not trust agent-writable .dev records",
+			"labels": [
+				"autopilot",
+				"deferred",
+				"in-progress"
+			],
+			"createdAt": "2026-08-13T23:19:05Z",
+			"updatedAt": "2026-08-26T12:59:58Z",
+			"emptyCharter": true,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 512,
+			"title": "Run the adjudication-time verifier inside the contained-execution jail (ADR-0023)",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-13T23:19:08Z",
+			"updatedAt": "2026-08-13T23:19:08Z",
+			"emptyCharter": true,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 515,
+			"title": "Vocabulary ADR: detector vs guarded action vs router; rename guarded-actions.md 'Detector:' to 'smell'",
+			"labels": [
+				"autopilot",
+				"track:backlog-integrity"
+			],
+			"createdAt": "2026-08-14T00:32:22Z",
+			"updatedAt": "2026-08-14T00:33:22Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 516,
+			"title": "Ternary commit trailers (Closes-Item/Partial-Item/Related-Item) + stale-scan port off bare mentions",
+			"labels": [
+				"autopilot",
+				"track:backlog-integrity"
+			],
+			"createdAt": "2026-08-14T00:32:25Z",
+			"updatedAt": "2026-08-14T00:33:24Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 517,
+			"title": "Finding type + SARIF 2.1.0 emitter + pelaggio detect skeleton (always exit 0)",
+			"labels": [
+				"autopilot",
+				"deferred",
+				"track:backlog-integrity"
+			],
+			"createdAt": "2026-08-14T00:32:28Z",
+			"updatedAt": "2026-08-21T09:44:08Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				515
+			]
+		},
+		{
+			"number": 518,
+			"title": "Re-emit existing checks as SARIF findings (check-skills, verify-links, verify-doc-claims, check-publish, stale-scan)",
+			"labels": [
+				"autopilot",
+				"deferred",
+				"track:backlog-integrity"
+			],
+			"createdAt": "2026-08-14T00:32:31Z",
+			"updatedAt": "2026-08-21T09:44:06Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				516,
+				517
+			]
+		},
+		{
+			"number": 519,
+			"title": "Record a typed closure reason: thread required completed/not_planned/duplicate through every close path",
+			"labels": [
+				"autopilot",
+				"track:backlog-integrity"
+			],
+			"createdAt": "2026-08-14T00:33:03Z",
+			"updatedAt": "2026-08-14T00:33:31Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 520,
+			"title": "Bring ci/verify-claims.ts evidence_command execution under ADR-0023, or record an accepted risk",
+			"labels": [
+				"autopilot",
+				"priority:high",
+				"track:backlog-integrity"
+			],
+			"createdAt": "2026-08-14T00:33:06Z",
+			"updatedAt": "2026-08-14T00:33:39Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 521,
+			"title": "Operator: label the three unlabelled issues, resolve the TC-017/TC-018/TC-019 registry collisions",
+			"labels": [
+				"autopilot",
+				"track:backlog-integrity"
+			],
+			"createdAt": "2026-08-14T00:33:09Z",
+			"updatedAt": "2026-08-14T00:33:35Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 522,
+			"title": "Render deferred items distinctly in roadmap list and stats (39 of 100 open items are parked)",
+			"labels": [
+				"autopilot",
+				"track:backlog-integrity"
+			],
+			"createdAt": "2026-08-14T00:33:12Z",
+			"updatedAt": "2026-08-14T00:33:37Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 524,
+			"title": "Authoring/doc-review loop still fans reviewer seats with bare Promise.allSettled — same concurrent-boot race #434 fixed in the cold gate",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-14T01:19:12Z",
+			"updatedAt": "2026-08-14T01:19:12Z",
+			"emptyCharter": true,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 527,
+			"title": "parseJudgeReport screens the Judge example rationale but not the sibling verification example — same fail-open direction",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-14T06:05:41Z",
+			"updatedAt": "2026-08-14T06:05:41Z",
+			"emptyCharter": true,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 528,
+			"title": "RoadmapSource.listItems: populate body/labels and paginate past the 200-item cap",
+			"labels": [
+				"autopilot",
+				"track:backlog-integrity"
+			],
+			"createdAt": "2026-08-14T06:31:53Z",
+			"updatedAt": "2026-08-14T06:32:50Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 529,
+			"title": "unwired-symbol detector: exported symbols with no non-test caller",
+			"labels": [
+				"autopilot",
+				"deferred",
+				"track:backlog-integrity"
+			],
+			"createdAt": "2026-08-14T06:31:56Z",
+			"updatedAt": "2026-08-21T09:44:10Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 530,
+			"title": "citation-drift detector: issue-body file-path and symbol citations that no longer resolve",
+			"labels": [
+				"autopilot",
+				"deferred",
+				"track:backlog-integrity"
+			],
+			"createdAt": "2026-08-14T06:32:32Z",
+			"updatedAt": "2026-08-21T09:44:12Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				528
+			]
+		},
+		{
+			"number": 531,
+			"title": "duplicate-claim detector (exact tier): surface likely duplicate items at filing time",
+			"labels": [
+				"autopilot",
+				"deferred",
+				"track:backlog-integrity"
+			],
+			"createdAt": "2026-08-14T06:32:35Z",
+			"updatedAt": "2026-08-21T09:44:14Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 537,
+			"title": "Invert the root README and sync the npm front door",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-16T04:14:23Z",
+			"updatedAt": "2026-08-16T04:14:23Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 538,
+			"title": "Dry-run flight plan: pure-preview first-run ritual",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-16T04:14:26Z",
+			"updatedAt": "2026-08-16T04:14:26Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 539,
+			"title": "Cost receipts in default output and embeddable stats snapshot",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-16T04:14:30Z",
+			"updatedAt": "2026-08-16T04:14:30Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				538
+			]
+		},
+		{
+			"number": 540,
+			"title": "Web UI adopts the brand palette",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-16T04:14:33Z",
+			"updatedAt": "2026-08-16T04:14:33Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 541,
+			"title": "Hero demo GIF via VHS filling the reserved README slots",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-16T04:14:37Z",
+			"updatedAt": "2026-08-16T04:14:37Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				537,
+				538,
+				539
+			]
+		},
+		{
+			"number": 546,
+			"title": "Cycle elapsed time must distinguish compute from host-suspension: monotonic-vs-wall heartbeat, typed pause segments",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-17T04:34:24Z",
+			"updatedAt": "2026-08-17T04:34:24Z",
+			"emptyCharter": true,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 547,
+			"title": "Restore review-seat parallelism: boot-scoped grok serialization, jailed-boot concurrency retest, root-cause optional",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-17T04:55:21Z",
+			"updatedAt": "2026-08-17T04:55:21Z",
+			"emptyCharter": true,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 551,
+			"title": "Bind revise findings to the reviewed run/artifact SHA — trusted-author-login is insufficient when CI runs PR-head code as that author",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-17T13:04:28Z",
+			"updatedAt": "2026-08-17T13:04:28Z",
+			"emptyCharter": true,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 554,
+			"title": "Deny GH_TOKEN to every seat except pick/ship/shipwreck (Anthropic seat auth deferred to #572)",
+			"labels": [
+				"autopilot",
+				"deferred",
+				"in-progress"
+			],
+			"createdAt": "2026-08-17T22:07:09Z",
+			"updatedAt": "2026-08-24T19:42:24Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 555,
+			"title": "Gate must classify GitHub API transport failure (5xx/timeout) as infra-retry, not a review block",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-18T00:56:08Z",
+			"updatedAt": "2026-08-18T00:56:08Z",
+			"emptyCharter": true,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 558,
+			"title": "CORRECTION addendum to #557: isolation primitive is PID/mount namespaces + PR_SET_DUMPABLE + SO_PEERCRED — NOT Landlock; works on WSL2",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-18T12:57:11Z",
+			"updatedAt": "2026-08-18T12:57:11Z",
+			"emptyCharter": true,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 559,
+			"title": "Jail attended local Codex subscription seats behind a conformance-locked ChatGPT route",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-08-18T14:13:15Z",
+			"updatedAt": "2026-08-18T14:13:15Z",
+			"emptyCharter": true,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": true,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				557
+			]
+		},
+		{
+			"number": 560,
+			"title": "Jail Claude SDK worker seats with provider-specific key and local-subscription egress adapters",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-08-18T14:13:18Z",
+			"updatedAt": "2026-08-18T14:13:18Z",
+			"emptyCharter": true,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": true,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				557
+			]
+		},
+		{
+			"number": 561,
+			"title": "Jail OpenCode worker seats with explicit backend-specific egress policies",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-08-18T14:13:21Z",
+			"updatedAt": "2026-08-18T14:13:21Z",
+			"emptyCharter": true,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": true,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				557
+			]
+		},
+		{
+			"number": 562,
+			"title": "Enforce and attest the cluster-wide worker-seat isolation tier across all registered providers",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-08-18T14:13:24Z",
+			"updatedAt": "2026-08-18T14:13:24Z",
+			"emptyCharter": true,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": true,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				557
+			]
+		},
+		{
+			"number": 564,
+			"title": "macOS: Claude provider is fail-closed unusable after #557 (default install is dead on Darwin)",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-19T04:32:13Z",
+			"updatedAt": "2026-08-19T04:42:46Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": true,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				557
+			]
+		},
+		{
+			"number": 565,
+			"title": "Register every harness-only unix socket in HARNESS_ONLY_SOCKET_ENVS and prove the registry is complete",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-08-19T04:40:36Z",
+			"updatedAt": "2026-08-21T09:44:30Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": true,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				557
+			]
+		},
+		{
+			"number": 567,
+			"title": "Close or record the .dev evidence-store write boundary for jailed and unjailed seats",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-08-19T04:40:59Z",
+			"updatedAt": "2026-08-21T09:44:33Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": true,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				557
+			]
+		},
+		{
+			"number": 568,
+			"title": "Signer authenticator lifecycle: one-shot token file breaks multi-run daemons",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-19T04:52:29Z",
+			"updatedAt": "2026-08-19T04:52:29Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				511
+			]
+		},
+		{
+			"number": 571,
+			"title": "Pipeline cannot bring a stale branch forward: implement can't merge, freshness can't handle content-without-ancestry",
+			"labels": [
+				"autopilot",
+				"deferred",
+				"priority:high",
+				"in-progress"
+			],
+			"createdAt": "2026-08-19T13:31:51Z",
+			"updatedAt": "2026-08-26T13:00:06Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 572,
+			"title": "Host-brokered capabilities for forge, signer, and roadmap operations — replace ambient credentials with passed handles",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-08-19T14:04:09Z",
+			"updatedAt": "2026-08-21T09:44:35Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": true,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				557
+			]
+		},
+		{
+			"number": 573,
+			"title": "Decide node_modules ownership: pnpm owns every checkout (restore-only), dependency change becomes a gated operation",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-19T14:04:35Z",
+			"updatedAt": "2026-08-19T14:41:46Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": true,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				548
+			]
+		},
+		{
+			"number": 574,
+			"title": "Applied review-findings files are never cleaned up, and auto-resume re-injects them",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-19T16:18:53Z",
+			"updatedAt": "2026-08-19T16:18:53Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 575,
+			"title": "Enforce declared write-sets so a scoped item cannot silently expand its blast radius",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-19T16:46:02Z",
+			"updatedAt": "2026-08-19T16:46:02Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 577,
+			"title": "Bind the effective spec to the artifact, and separate repair instructions from design amendments",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-19T22:14:15Z",
+			"updatedAt": "2026-08-19T22:23:04Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 578,
+			"title": "Review fleet: degrade gracefully on quota/infra seat loss down to a quorum of 2, never to 1",
+			"labels": [
+				"autopilot",
+				"priority:high"
+			],
+			"createdAt": "2026-08-20T02:26:11Z",
+			"updatedAt": "2026-08-21T09:45:48Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 579,
+			"title": "Test suite leaks ~25k /tmp inodes per run and never reaps them — exhausts the host and fails silently",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-20T02:48:08Z",
+			"updatedAt": "2026-08-25T14:06:05Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 581,
+			"title": "Retain Claude rate-limit telemetry and type park window identity",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-21T00:51:13Z",
+			"updatedAt": "2026-08-21T00:51:13Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 582,
+			"title": "Type Codex and Grok limit faults at emission",
+			"labels": [
+				"autopilot",
+				"priority:high"
+			],
+			"createdAt": "2026-08-21T00:51:43Z",
+			"updatedAt": "2026-08-21T09:45:53Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				578,
+				581
+			]
+		},
+		{
+			"number": 583,
+			"title": "Project per-pool quota state and add the pelaggio usage command",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-21T00:51:46Z",
+			"updatedAt": "2026-08-21T00:51:46Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				581
+			]
+		},
+		{
+			"number": 584,
+			"title": "Probe Codex pool state via app-server account rateLimits read",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-21T00:52:24Z",
+			"updatedAt": "2026-08-21T00:52:24Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				581,
+				583
+			]
+		},
+		{
+			"number": 585,
+			"title": "Spike: find a programmatic Grok balance surface over ACP",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-21T00:52:28Z",
+			"updatedAt": "2026-08-21T00:52:28Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 586,
+			"title": "Add the quota strategy seam: registry, chain config, allocation evidence",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-21T00:52:32Z",
+			"updatedAt": "2026-08-21T00:52:32Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				2,
+				246,
+				465,
+				583
+			]
+		},
+		{
+			"number": 588,
+			"title": "decisions.ts commit() uses a path-scoped commit that git refuses mid-merge, stranding staged content",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-21T10:10:25Z",
+			"updatedAt": "2026-08-21T10:10:25Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 590,
+			"title": "SECURITY_PATHS omits six security-critical modules, including the claude-seat forge jail",
+			"labels": [
+				"autopilot",
+				"priority:high"
+			],
+			"createdAt": "2026-08-21T14:00:09Z",
+			"updatedAt": "2026-08-21T14:00:09Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 591,
+			"title": "Forge denial is Claude-seat only: Codex and Grok review seats still read ~/.config/gh",
+			"labels": [
+				"autopilot",
+				"priority:high"
+			],
+			"createdAt": "2026-08-21T14:00:28Z",
+			"updatedAt": "2026-08-21T14:00:28Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 593,
+			"title": "Relabel genuine verdict-split exhaustion as 'disagreement' instead of 'invalid-pass'",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-21T23:08:42Z",
+			"updatedAt": "2026-08-21T23:08:42Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 594,
+			"title": "pelaggio-fix.yml: denied seats inherit the persisted contents:write checkout token its ship push depends on",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-08-21T23:08:46Z",
+			"updatedAt": "2026-08-24T20:57:06Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 604,
+			"title": "Classification evidence on cold-gate findings (#495 auto-refutation activation)",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-22T14:43:37Z",
+			"updatedAt": "2026-08-22T14:43:37Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 605,
+			"title": "Verify grok seat write surface at main-cwd; then enable review.carry by default",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-22T14:43:42Z",
+			"updatedAt": "2026-08-22T14:43:42Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 606,
+			"title": "Publish the runner protocol spec and typed schemas (v1)",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-22T16:11:25Z",
+			"updatedAt": "2026-08-22T18:45:27Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": true,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				170
+			]
+		},
+		{
+			"number": 607,
+			"title": "Build the runner-protocol conformance suite",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-22T16:11:58Z",
+			"updatedAt": "2026-08-22T18:14:09Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				606
+			]
+		},
+		{
+			"number": 608,
+			"title": "Add forge-fenced claims and push-at-checkpoint runner modes",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-22T16:12:02Z",
+			"updatedAt": "2026-08-22T16:12:02Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 609,
+			"title": "Implement the runner protocol server-side in packages/server (single-tenant)",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-22T16:12:27Z",
+			"updatedAt": "2026-08-22T16:12:27Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				170,
+				606,
+				607
+			]
+		},
+		{
+			"number": 610,
+			"title": "Implement the pelaggio runner agent",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-22T16:12:30Z",
+			"updatedAt": "2026-08-22T16:12:30Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				606,
+				607,
+				608
+			]
+		},
+		{
+			"number": 611,
+			"title": "Denied review/verify seats still hold ANTHROPIC_API_KEY (ambient-credential exfil root cause)",
+			"labels": [
+				"autopilot",
+				"priority:high"
+			],
+			"createdAt": "2026-08-22T17:11:18Z",
+			"updatedAt": "2026-08-26T14:19:27Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 612,
+			"title": "Review-seat forge denial is bounded by node_modules/.bin binary-hijack of post-seat gh calls",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-22T19:34:03Z",
+			"updatedAt": "2026-08-22T19:34:03Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 613,
+			"title": "GC for .dev/pr-review-finding-dispositions/ (bounded prune, no fail-open)",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-22T19:58:06Z",
+			"updatedAt": "2026-08-24T23:32:36Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 615,
+			"title": "Funnel review/adjudication publishing through one chokepoint (retire the scattered-sink class)",
+			"labels": [
+				"autopilot",
+				"priority:high"
+			],
+			"createdAt": "2026-08-22T22:51:38Z",
+			"updatedAt": "2026-08-22T22:53:50Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 617,
+			"title": "Host-brokered review fetch: harness prepares the reviewed checkout, seat never fetches",
+			"labels": [
+				"autopilot",
+				"priority:high"
+			],
+			"createdAt": "2026-08-23T01:55:10Z",
+			"updatedAt": "2026-08-25T04:45:39Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 618,
+			"title": "Delivery identity: durable claimId mint, executionId in attempts, grouping keys (delivery-packet slice 1)",
+			"labels": [
+				"autopilot",
+				"priority:high"
+			],
+			"createdAt": "2026-08-23T02:41:10Z",
+			"updatedAt": "2026-08-23T02:41:10Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 619,
+			"title": "Delivery packet store + forge carrier (delivery-packet slice 2)",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-23T02:41:22Z",
+			"updatedAt": "2026-08-23T02:41:22Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				618
+			]
+		},
+		{
+			"number": 620,
+			"title": "delivery show + campaign/release folds (delivery-packet slice 3)",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-08-23T02:41:33Z",
+			"updatedAt": "2026-08-23T02:41:33Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				618,
+				619
+			]
+		},
+		{
+			"number": 621,
+			"title": "ai-delivery predicate vNext: should claimId + grouping enter deliveryDefinition? (question for the #186-189 cluster)",
+			"labels": [
+				"autopilot",
+				"deferred"
+			],
+			"createdAt": "2026-08-23T02:41:38Z",
+			"updatedAt": "2026-08-23T02:41:38Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 624,
+			"title": "dogfood: recursively reconcile architectural intent against current realization",
+			"labels": [],
+			"createdAt": "2026-08-23T22:26:22Z",
+			"updatedAt": "2026-08-25T12:17:56Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": true,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 627,
+			"title": "Measure graph premises in a cold review seat against the review-gate baseline",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-25T02:23:16Z",
+			"updatedAt": "2026-08-25T04:45:43Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 629,
+			"title": "Bind shadow-graph realizations to harness-owned observations so realization claims can be promoted",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-25T04:40:15Z",
+			"updatedAt": "2026-08-25T04:45:42Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 632,
+			"title": "local drain prepareReviewHead: the same seat-independent reviewed checkout (617 slice b)",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-25T04:45:15Z",
+			"updatedAt": "2026-08-25T04:45:15Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": true,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				631
+			]
+		},
+		{
+			"number": 633,
+			"title": "Bind the review report to the reviewed (head, base) pair; land refuses a moved head (617 slice c)",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-25T04:45:18Z",
+			"updatedAt": "2026-08-25T04:45:18Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": true,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				631
+			]
+		},
+		{
+			"number": 634,
+			"title": "Landing admission resolver + config-matrix tests over the fence seam (464 follow-on)",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-25T04:45:22Z",
+			"updatedAt": "2026-08-25T04:45:22Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				464
+			]
+		},
+		{
+			"number": 635,
+			"title": "Realization observations: field, existence/freshness check, stale-realization diagnostic (629 slice a)",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-25T04:45:25Z",
+			"updatedAt": "2026-08-25T04:45:25Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 636,
+			"title": "Realization observations: mutation test proves the binding detects a hollowed mechanism (629 slice b)",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-25T04:45:28Z",
+			"updatedAt": "2026-08-25T04:45:28Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				635
+			]
+		},
+		{
+			"number": 638,
+			"title": "Premises block in the reviewer prompt behind a flag, shadow seat only (627 slice b)",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-25T04:45:34Z",
+			"updatedAt": "2026-08-25T04:45:34Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 639,
+			"title": "Pre-registered comparison: premised vs standard seat over the next N gated PRs (627 slice c)",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-25T04:45:37Z",
+			"updatedAt": "2026-08-25T04:45:37Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				637,
+				638
+			]
+		},
+		{
+			"number": 640,
+			"title": "Gate records carry per-seat elapsed wall-clock (627 slice a2)",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-25T05:22:45Z",
+			"updatedAt": "2026-08-25T05:24:46Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				637,
+				638
+			]
+		},
+		{
+			"number": 643,
+			"title": "Test fixtures: one owned root, grouped per run, reaped by the owning process (579 slice a)",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-25T14:04:53Z",
+			"updatedAt": "2026-08-25T14:19:24Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 644,
+			"title": "Test fixtures: conformance test + fail-on-leak guard keep the helper the only allocator (579 slice b)",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-25T14:05:16Z",
+			"updatedAt": "2026-08-25T14:19:41Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				643
+			]
+		},
+		{
+			"number": 645,
+			"title": "Test fixtures: reclaim hard-kill orphans, scoped to the owned root, liveness by lock (579 slice c)",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-25T14:05:42Z",
+			"updatedAt": "2026-08-25T14:20:05Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				643
+			]
+		},
+		{
+			"number": 646,
+			"title": "guarded-actions §8.2: a decomposition corollary — make the ingress uniform in one slice, don't fallback per path",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-25T14:27:12Z",
+			"updatedAt": "2026-08-25T14:42:20Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 647,
+			"title": "Authoring-review seats must not leave a checkout's dependency tree dangling",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-25T15:02:23Z",
+			"updatedAt": "2026-08-25T15:02:23Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 648,
+			"title": "Resolve the claim worktree by its branch, not by its directory name",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-25T18:01:46Z",
+			"updatedAt": "2026-08-25T18:01:46Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 651,
+			"title": "Attempt identity is rewritable by the worker it numbers — CON-0007 placement gap",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-25T20:29:12Z",
+			"updatedAt": "2026-08-25T20:29:12Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 652,
+			"title": "Decision status is an unvalidated free-text vocabulary — declare it and fail on unknown members",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-25T20:29:38Z",
+			"updatedAt": "2026-08-25T20:29:38Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 653,
+			"title": "Wire or explicitly park ci/assurance-reachability.ts — unexercised instrumentation with undocumented preconditions",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-25T20:30:12Z",
+			"updatedAt": "2026-08-25T20:30:12Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 656,
+			"title": "Deny forge authority to Claude seats outside pick/ship/shipwreck (#554 slice 1: seat env denial)",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-26T00:17:07Z",
+			"updatedAt": "2026-08-26T00:17:07Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 657,
+			"title": "Revision loop: conditional boundary-scoped plan step between review feedback and fix",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-26T00:18:45Z",
+			"updatedAt": "2026-08-26T00:33:11Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": true,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 658,
+			"title": "Split persisted checkout credentials out of every seat-spawning workflow + conformance guard",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-26T00:21:10Z",
+			"updatedAt": "2026-08-26T00:21:10Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 659,
+			"title": "Claim-branch grammar: make bypassing the adapter's branch constructor fail loudly, not silently",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-26T00:24:39Z",
+			"updatedAt": "2026-08-26T03:16:33Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 660,
+			"title": "S1: finding-disposition grammar + scoped-findings file format",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-26T00:26:02Z",
+			"updatedAt": "2026-08-26T00:26:02Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				657
+			]
+		},
+		{
+			"number": 661,
+			"title": "S2: shakedown findings mode — classify surviving review findings",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-26T00:26:15Z",
+			"updatedAt": "2026-08-26T00:26:15Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				660
+			]
+		},
+		{
+			"number": 662,
+			"title": "S3: pipeline conditional — a findings-driven resume may enter at plan, not always implement",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-26T00:26:27Z",
+			"updatedAt": "2026-08-26T00:32:50Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				660,
+				661
+			]
+		},
+		{
+			"number": 663,
+			"title": "S4: boundary-scoped plan prompt for the revision path",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-26T00:26:38Z",
+			"updatedAt": "2026-08-26T00:26:38Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				662
+			]
+		},
+		{
+			"number": 664,
+			"title": "S5: graph boundary hint — affected(finding.source) intersect intent(item), advisory and fail-open",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-26T00:26:52Z",
+			"updatedAt": "2026-08-26T00:26:52Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				661
+			]
+		},
+		{
+			"number": 665,
+			"title": "Supervisor session bootstrap — one entry point for driving the primitives, forked away from substeps",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-26T00:27:47Z",
+			"updatedAt": "2026-08-26T00:27:47Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 668,
+			"title": "Record the escalation-cost measurement and add ADR-0024's escalation wrong-if",
+			"labels": [
+				"autopilot",
+				"in-progress"
+			],
+			"createdAt": "2026-08-26T12:27:27Z",
+			"updatedAt": "2026-08-27T02:05:05Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 672,
+			"title": "Store failure class and blocked kind; make the cycle outcome a discriminated union",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-26T12:48:38Z",
+			"updatedAt": "2026-08-26T12:48:38Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 673,
+			"title": "Seat env conformance: make the predicate conditionality-aware, so a grant is triaged at its gating",
+			"labels": [
+				"autopilot",
+				"priority:high"
+			],
+			"createdAt": "2026-08-26T13:43:43Z",
+			"updatedAt": "2026-08-26T13:49:57Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 675,
+			"title": "Give ADR-0014's seam properties operational tests, and inventory every caller-callee seam against them",
+			"labels": [
+				"autopilot",
+				"priority:high"
+			],
+			"createdAt": "2026-08-26T15:29:53Z",
+			"updatedAt": "2026-08-26T15:29:53Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 676,
+			"title": "Gate-quality bar: add the 'complete' leg — a gate's completeness surface is tested per member",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-27T00:00:25Z",
+			"updatedAt": "2026-08-27T00:00:25Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 677,
+			"title": "Review seats drop their findings block in ~30% of runs — diagnose and fix",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-27T00:00:49Z",
+			"updatedAt": "2026-08-27T00:00:49Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 678,
+			"title": "Judge reduces on a split and collapses one defect reported twice (sameAs)",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-27T00:01:22Z",
+			"updatedAt": "2026-08-27T00:01:22Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				677
+			]
+		},
+		{
+			"number": 679,
+			"title": "Type the unenforced-constraint ceiling so it cannot hold a permanent member",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-27T02:05:48Z",
+			"updatedAt": "2026-08-27T03:00:41Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": []
+		},
+		{
+			"number": 680,
+			"title": "Reclassify CON-0024 as an assumption without renumbering it",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-27T02:06:08Z",
+			"updatedAt": "2026-08-27T02:06:08Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				679
+			]
+		},
+		{
+			"number": 681,
+			"title": "Bind CON-0018 to a no-false-fire fixture over intent-preserving edits",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-27T02:06:31Z",
+			"updatedAt": "2026-08-27T02:06:31Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				680
+			]
+		},
+		{
+			"number": 682,
+			"title": "Bind CON-0025 to a second-owner fixture and make Q13 behavioral",
+			"labels": [
+				"autopilot"
+			],
+			"createdAt": "2026-08-27T02:06:55Z",
+			"updatedAt": "2026-08-27T02:06:55Z",
+			"emptyCharter": false,
+			"noAcceptanceEvidence": false,
+			"unpickable": false,
+			"unblocked": false,
+			"legacyVocabulary": false,
+			"declaredDeps": [
+				681
+			]
+		}
+	]
+}
