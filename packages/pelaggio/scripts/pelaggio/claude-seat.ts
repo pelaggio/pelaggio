@@ -19,6 +19,7 @@ const WIDE_SOCKET_PARENTS = new Set(["/", "/tmp", "/var", "/var/tmp", "/run", "/
 const MAX_BUFFERED_STDERR_BYTES = 64 * 1024;
 const SOCKET_MASK_CANARY_PREFIX = "pelaggio-claude-seat-mask-";
 const SOCKET_MASK_CANARY_VISIBLE_EXIT = 73;
+const HARNESS_GIT_CONFIG_ENV = "GIT_CONFIG";
 
 export type ClaudeSeatSpawner = typeof spawn;
 
@@ -254,13 +255,21 @@ export function buildClaudeSeatInvocation(spawnOpts: Pick<SpawnOptions, "command
 export function spawnClaudeSeat(spawnOpts: SpawnOptions, options: ClaudeSeatSpawnOptions): SpawnedProcess {
 	const invocation = buildClaudeSeatInvocation(spawnOpts, options);
 	const spawnFn = options.spawn ?? spawn;
+	const sourceEnv = spawnOpts.env as NodeJS.ProcessEnv;
+	const seatEnv = { ...sourceEnv };
+	// The harness may carry an ephemeral Git extraheader for fetch/push. Never give
+	// that capability to a prompt-controlled seat, including alternate GIT_CONFIG_*
+	// encodings such as GIT_CONFIG_PARAMETERS.
+	for (const name of Object.keys(seatEnv)) {
+		if (name === HARNESS_GIT_CONFIG_ENV || name.startsWith(`${HARNESS_GIT_CONFIG_ENV}_`)) delete seatEnv[name];
+	}
 	const child: ChildProcess = spawnFn(invocation.command, [...invocation.args], {
 		cwd: invocation.cwd,
-		env: spawnOpts.env as NodeJS.ProcessEnv,
+		env: seatEnv,
 		stdio: ["pipe", "pipe", "pipe"],
 		signal: spawnOpts.signal,
 	});
-	child.stderr?.pipe(createScrubbedStderrStream(spawnOpts.env as NodeJS.ProcessEnv)).pipe(options.stderr ?? process.stderr, { end: false });
+	child.stderr?.pipe(createScrubbedStderrStream(sourceEnv)).pipe(options.stderr ?? process.stderr, { end: false });
 	const pid = child.pid;
 	if (typeof pid === "number" && pid > 0) {
 		options.onChildSpawn?.({ pid, cwd: invocation.cwd });

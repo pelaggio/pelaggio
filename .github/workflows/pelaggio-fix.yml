@@ -62,13 +62,14 @@ jobs:
           # in .git/config and never in git argv (`-c` flags land in error messages
           # and CI logs on failure). Step-scoped env, never job-level. The boundary:
           # the HARNESS process legitimately holds tokens (it already holds GH_TOKEN
-          # above); SEAT children must not — seat-env denial is #554's half of that
-          # boundary; this split removes the on-disk copy env denial can never reach.
+          # above); SEAT children must not — spawnClaudeSeat strips GIT_CONFIG_*
+          # while preserving it for the harness process that owns Git effects.
           PELAGGIO_PUSH_TOKEN: ${{ github.token }}
         run: |
           export GIT_CONFIG_COUNT=1
           export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
           GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf '%s' "x-access-token:${PELAGGIO_PUSH_TOKEN}" | base64 -w0)"
+          echo "::add-mask::${GIT_CONFIG_VALUE_0}"
           export GIT_CONFIG_VALUE_0
           unset PELAGGIO_PUSH_TOKEN
           pnpm pelaggio \

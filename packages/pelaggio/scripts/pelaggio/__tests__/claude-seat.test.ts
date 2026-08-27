@@ -208,9 +208,17 @@ describe("buildClaudeSeatInvocation", () => {
 });
 
 describe("spawnClaudeSeat", () => {
-	it("preserves cwd/env/stdio/signal, returns the same child, and reports only a positive wrapper PID", () => {
+	it("preserves ordinary SDK env while denying harness Git config, and reports only a positive wrapper PID", () => {
 		const cwd = resolve(tempDir("pelaggio-seat-cwd-"));
-		const env: NodeJS.ProcessEnv = { PATH: "/usr/bin", CLAUDE_FROM_SDK: "1" };
+		const env: NodeJS.ProcessEnv = {
+			PATH: "/usr/bin",
+			CLAUDE_FROM_SDK: "1",
+			GIT_CONFIG_COUNT: "1",
+			GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
+			GIT_CONFIG_VALUE_0: "AUTHORIZATION: basic credential",
+			GIT_CONFIG_PARAMETERS: "'credential.helper'='helper'",
+			GIT_CONFIG: "/tmp/attacker-controlled-config",
+		};
 		const signal = new AbortController().signal;
 		const seen: Array<{ command: string; args: readonly string[]; options: { cwd?: string; env?: NodeJS.ProcessEnv; stdio?: unknown; signal?: AbortSignal } }> = [];
 		const fakeStderr = new PassThrough();
@@ -235,13 +243,15 @@ describe("spawnClaudeSeat", () => {
 		assert.equal(seen.length, 1);
 		assert.equal(seen[0]?.command, "/usr/bin/bwrap");
 		assert.equal(seen[0]?.options.cwd, cwd);
-		assert.equal(seen[0]?.options.env, env);
+		assert.deepEqual(seen[0]?.options.env, { PATH: "/usr/bin", CLAUDE_FROM_SDK: "1" });
+		assert.equal(seen[0]?.options.env === env, false, "seat filtering must not mutate the SDK env bag");
 		assert.deepEqual(seen[0]?.options.stdio, ["pipe", "pipe", "pipe"]);
 		assert.equal(fakeStderr.readableFlowing, true, "the wrapper must drain custom-spawn stderr");
 		assert.equal(seen[0]?.options.signal, signal);
 		assert.deepEqual(afterSeparator(seen[0]?.args ?? []), ["node", "--eval", "ok"]);
 		assert.deepEqual(reported, [{ pid: 4242, cwd }]);
 		assert.equal(env.PELAGGIO_REVIEW_EVIDENCE_SIGNER_SOCKET, undefined);
+		assert.equal(env.GIT_CONFIG_VALUE_0, "AUTHORIZATION: basic credential", "the harness must retain its Git credential");
 	});
 
 	it("scrubs SDK-environment credentials from stderr even when split across chunks", async () => {
