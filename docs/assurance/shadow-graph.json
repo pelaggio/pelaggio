@@ -12,6 +12,13 @@
 		"constraint",
 		"assumption"
 	],
+	"decisionStatuses": [
+		"current-construction-choice",
+		"current-policy-choice",
+		"target-construction-choice",
+		"proposed-construction-choice",
+		"historical-construction-choice"
+	],
 	"relationKinds": {
 		"constrains": {
 			"from": [
@@ -671,7 +678,7 @@
 			"kind": "decision",
 			"slug": "pull-request-default",
 			"statement": "Ship target defaults to pull-request; direct push or autonomous merge is an explicit opt-in.",
-			"status": "current-product-default",
+			"status": "current-policy-choice",
 			"sources": [
 				"ADR-0003"
 			]
@@ -681,7 +688,7 @@
 			"kind": "decision",
 			"slug": "branch-protection-landing-gate",
 			"statement": "Use GitHub branch protection as the platform-enforced auto-merge gate.",
-			"status": "historical-partially-superseded",
+			"status": "historical-construction-choice",
 			"sources": [
 				"ADR-0005",
 				"ADR-0025"
@@ -742,7 +749,7 @@
 			"kind": "decision",
 			"slug": "in-toto-envelope",
 			"statement": "Represent machine-checkable custody attestations using an in-toto-compatible statement envelope rather than a bespoke format.",
-			"status": "current-interoperability-choice",
+			"status": "current-construction-choice",
 			"sources": [
 				"ADR-0018"
 			]
@@ -802,7 +809,7 @@
 			"kind": "decision",
 			"slug": "multi-driver-judge-review-loop",
 			"statement": "Use concurrent reviewers, a configured Judge, and bounded revision to implement adversarial authoring review.",
-			"status": "current-strategy-under-validation",
+			"status": "current-construction-choice",
 			"sources": [
 				"ADR-0024"
 			]
@@ -822,7 +829,7 @@
 			"kind": "decision",
 			"slug": "fence-or-reconcile-guard-model",
 			"statement": "Classify load-bearing guarded actions as fenced or reconciled; treat other coordination as hints.",
-			"status": "current-semantic-model",
+			"status": "current-construction-choice",
 			"sources": [
 				"ADR-0026"
 			]
@@ -832,7 +839,7 @@
 			"kind": "decision",
 			"slug": "rigor-by-consequence",
 			"statement": "Size assurance effort primarily by consequence and reversibility rather than mechanically by lifecycle stage.",
-			"status": "current-policy-principle",
+			"status": "current-policy-choice",
 			"sources": [
 				"ADR-0011",
 				"ADR-0012",
@@ -844,7 +851,7 @@
 			"kind": "decision",
 			"slug": "human-value-judgment-at-charter",
 			"statement": "Keep value/negotiability as a human chartering judgment rather than an operational readiness computation.",
-			"status": "current-responsibility-choice",
+			"status": "current-policy-choice",
 			"sources": [
 				"ADR-0012"
 			]
@@ -854,7 +861,7 @@
 			"kind": "decision",
 			"slug": "promote-assurance-graph-after-validation",
 			"statement": "Migrate architectural authority to the machine-readable assurance graph only after coverage, grounding, authoring, and drift checks demonstrate that it can remain aligned with lower maintenance burden than the prose constellation.",
-			"status": "proposed-migration-decision",
+			"status": "proposed-construction-choice",
 			"sources": [
 				"ADR-0027"
 			]

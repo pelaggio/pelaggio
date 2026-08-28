@@ -63,6 +63,7 @@ function injectDebtFor(check: string): AssuranceGraph {
 		broken.edges.push({ from: "TC-X", relation: "projects", to: "CLM-X" });
 	}
 	if (check === "constraint-without-enforcement") broken.nodes.push({ id: "CON-X", kind: "proposition", role: "constraint", slug: "unbound", statement: "s" });
+	if (check === "decision-without-realization") broken.nodes.push({ id: "DEC-X", kind: "decision", slug: "unrealized", statement: "s", status: "current-construction-choice" });
 	return broken;
 }
 
@@ -261,6 +262,94 @@ describe("query stress tests", () => {
 			edges: [{ from: "CTR-Y", relation: "implements", to: "CON-X" }],
 		};
 		assert.ok(!(selectView(viaImplements, view("debt")).diagnostics ?? []).some((d) => d.check === "constraint-without-enforcement"));
+	});
+
+	it("decision-without-realization fires", () => {
+		const unrealized: AssuranceGraph = {
+			schemaVersion: "0.2.0",
+			nodes: [
+				{ id: "DEC-X", kind: "decision", slug: "choice", statement: "s", status: "current-construction-choice" },
+				{ id: "CLM-X", kind: "proposition", role: "invariant", slug: "intent", statement: "s" },
+			],
+			edges: [{ from: "DEC-X", relation: "implements", to: "CLM-X" }],
+		};
+		const hits = (selectView(unrealized, view("debt")).diagnostics ?? []).filter((d) => d.check === "decision-without-realization");
+		assert.ok(
+			hits.some((d) => d.node === "DEC-X"),
+			"a current construction choice with only an intent edge is unrealized",
+		);
+		assert.equal(hits.length, 1);
+		assert.ok(!(selectView(unrealized, view("debt")).diagnostics ?? []).some((d) => d.check === "decision-without-intent"), "the intent edge isolates the realization check");
+	});
+
+	it("decision-without-realization accepts incoming realization derived-from", () => {
+		const realized: AssuranceGraph = {
+			schemaVersion: "0.2.0",
+			nodes: [
+				{ id: "DEC-X", kind: "decision", slug: "choice", statement: "s", status: "current-construction-choice" },
+				{ id: "CLM-X", kind: "proposition", role: "invariant", slug: "intent", statement: "s" },
+				{ id: "CTR-Y", kind: "realization", slug: "mech", statement: "s" },
+			],
+			edges: [
+				{ from: "DEC-X", relation: "implements", to: "CLM-X" },
+				{ from: "CTR-Y", relation: "derived-from", to: "DEC-X" },
+			],
+		};
+		assert.ok(!(selectView(realized, view("debt")).diagnostics ?? []).some((d) => d.check === "decision-without-realization"));
+	});
+
+	it("decision-without-realization stays silent for policy, target, proposed, and historical statuses", () => {
+		const base: AssuranceGraph = {
+			schemaVersion: "0.2.0",
+			nodes: [
+				{ id: "DEC-X", kind: "decision", slug: "choice", statement: "s", status: "current-construction-choice" },
+				{ id: "CLM-X", kind: "proposition", role: "invariant", slug: "intent", statement: "s" },
+			],
+			edges: [{ from: "DEC-X", relation: "implements", to: "CLM-X" }],
+		};
+		for (const status of ["current-policy-choice", "target-construction-choice", "proposed-construction-choice", "historical-construction-choice"] as const) {
+			const copy = structuredClone(base);
+			const decision = copy.nodes.find((n) => n.id === "DEC-X");
+			assert.ok(decision);
+			decision.status = status;
+			assert.ok(!diagnostics(copy).some((d) => d.check === "decision-without-realization"), `${status} must not fire`);
+		}
+	});
+
+	it("decision-without-realization does not treat choice-to-choice or outgoing edges as realization", () => {
+		const choiceToChoice: AssuranceGraph = {
+			schemaVersion: "0.2.0",
+			nodes: [
+				{ id: "DEC-X", kind: "decision", slug: "choice", statement: "s", status: "current-construction-choice" },
+				{ id: "DEC-Y", kind: "decision", slug: "other", statement: "s", status: "current-policy-choice" },
+				{ id: "CLM-X", kind: "proposition", role: "invariant", slug: "intent", statement: "s" },
+			],
+			edges: [
+				{ from: "DEC-X", relation: "implements", to: "CLM-X" },
+				{ from: "DEC-Y", relation: "derived-from", to: "DEC-X" },
+			],
+		};
+		assert.ok(
+			diagnostics(choiceToChoice).some((d) => d.check === "decision-without-realization" && d.node === "DEC-X"),
+			"decision derived-from decision is choice-to-choice, not a realization",
+		);
+
+		const outgoingDerived: AssuranceGraph = {
+			schemaVersion: "0.2.0",
+			nodes: [
+				{ id: "DEC-X", kind: "decision", slug: "choice", statement: "s", status: "current-construction-choice" },
+				{ id: "DEC-Y", kind: "decision", slug: "other", statement: "s", status: "current-policy-choice" },
+				{ id: "CLM-X", kind: "proposition", role: "invariant", slug: "intent", statement: "s" },
+			],
+			edges: [
+				{ from: "DEC-X", relation: "implements", to: "CLM-X" },
+				{ from: "DEC-X", relation: "derived-from", to: "DEC-Y" },
+			],
+		};
+		assert.ok(
+			diagnostics(outgoingDerived).some((d) => d.check === "decision-without-realization" && d.node === "DEC-X"),
+			"outgoing derived-from from the decision does not realize it",
+		);
 	});
 
 	it("query modes fail loudly when required parameters are absent or unknown", () => {
