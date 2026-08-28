@@ -84,7 +84,8 @@
 				"visibility": "internal",
 				"slug": "authors-keep-inputs-complete",
 				"statement": "Recipe authors keep input lists complete.",
-				"sources": ["OWN-DOC"]
+				"sources": ["OWN-DOC"],
+				"wrongIf": "A published recipe is found, on a sampled set of recorded releases, whose omitted input changes the built artifact relative to the recipe's declared input list."
 			},
 			{
 				"id": "OWN-A2",
@@ -167,6 +168,7 @@
 		{ "check": "orphan-realization", "node": "OWN-R2" },
 		{ "check": "projection-overreach", "node": "OWN-P1" },
 		{ "check": "stale-source-grounding", "node": "OWN-I1" },
-		{ "check": "unused-assumption", "node": "OWN-A2" }
+		{ "check": "unused-assumption", "node": "OWN-A2" },
+		{ "check": "assumption-without-falsifier", "node": "OWN-A2" }
 	]
 }

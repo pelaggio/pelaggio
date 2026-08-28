@@ -41,7 +41,8 @@
         "unused-assumption",
         "stale-source-grounding",
         "projection-overreach",
-        "constraint-without-enforcement"
+        "constraint-without-enforcement",
+        "assumption-without-falsifier"
       ]
     },
     {

@@ -639,7 +639,8 @@
 			"sources": [
 				"ADR-0011",
 				"ADR-0013"
-			]
+			],
+			"wrongIf": "On a sampled set of landed items, measured plan-step plus worktree-stage discard and retry spend per landing exceeds the measured spend of the upstream hard gate that would have prevented that rework, using the spend accounting in review-gate-baseline.md."
 		},
 		{
 			"id": "ASM-0002",
@@ -662,7 +663,8 @@
 			"statement": "A recently verified execution surface remains within the security boundary for a bounded interval while the current surface is unavailable.",
 			"sources": [
 				"ADR-0017"
-			]
+			],
+			"wrongIf": "A security incident or retrospective shows that a last-verified pin accepted under ADR-0017's staleness ceiling was already outside the security boundary during that accepted interval."
 		},
 		{
 			"id": "DEC-0001",
