@@ -1758,7 +1758,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 							const prepare = seatPrepareChain.then(() => {
 								const seatSha = getArtifactHeadSha(worktree!) ?? reviewedSha;
 								preparedSeatShas.add(seatSha);
-								return prepareAuthoringReviewSeat(mainRepo, { sha: seatSha, seatId: slot.id, pass });
+								return prepareAuthoringReviewSeatFn(mainRepo, { sha: seatSha, seatId: slot.id, pass });
 							});
 							seatPrepareChain = prepare.then(
 								() => undefined,
@@ -2082,7 +2082,9 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			const seatId = `${provider}-${name}-${seatIndex++}`;
 			let seatCwd: string;
 			try {
-				seatCwd = prepareAuthoringReviewSeatFn(mainRepo, { sha, seatId, pass });
+				// Data-only: cold pre-flight inspects source/diffs and already carries
+				// workspaceAccess: "read-only". Skip private dep provisioning.
+				seatCwd = prepareAuthoringReviewSeatFn(mainRepo, { sha, seatId, pass }, { dependencyLayout: "skip" });
 			} catch (e) {
 				const message = e instanceof Error ? e.message : String(e);
 				log(`⚠ pre-flight seat prepare failed (${seatId}): ${message}`);
@@ -2104,7 +2106,8 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			// Same shape as the per-seat checkouts and keyed under the same sha, so the
 			// sha-wide cleanup below tears it down. A prepare failure throws into the catch
 			// (advisory infra BLOCK) rather than falling back to the live tree.
-			const diffCwd = prepareAuthoringReviewSeatFn(mainRepo, { sha, seatId: "preflight-diff", pass });
+			// Same data-only skip as reviewer/verifier pre-flight seats above.
+			const diffCwd = prepareAuthoringReviewSeatFn(mainRepo, { sha, seatId: "preflight-diff", pass }, { dependencyLayout: "skip" });
 			const review = await runPrReviewGateFn({
 				pr: "preflight",
 				itemId: itemId!,

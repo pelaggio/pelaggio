@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
+import { ensureWorktreeDeps } from "../worktree-deps.js";
 
 /**
  * Per-seat detached checkouts for concurrent authoring-loop reviewers (#269).
@@ -22,6 +23,13 @@ export type AuthoringReviewSeatKey = { sha: string; seatId: string; pass: number
  * `execFileSync("git", args, ...)`. Tests inject a fake to assert on the argv.
  */
 export type GitExec = (args: string[], cwd: string) => string;
+
+export interface AuthoringReviewSeatOptions {
+	gitExec?: GitExec;
+	/** Private lock-bound deps are the safe default. Cold pre-flight seats pass `"skip"`. */
+	dependencyLayout?: "private" | "skip";
+	provisionDeps?: (seatPath: string) => void;
+}
 
 const defaultGitExec: GitExec = (args, cwd) => execFileSync("git", args, { cwd, encoding: "utf-8" });
 
@@ -82,8 +90,8 @@ function isValidPinnedSeat(mainRepo: string, path: string, sha: string, run: Git
 	}
 }
 
-export function prepareAuthoringReviewSeat(mainRepo: string, key: AuthoringReviewSeatKey, exec?: GitExec): string {
-	const run = exec ?? defaultGitExec;
+export function prepareAuthoringReviewSeat(mainRepo: string, key: AuthoringReviewSeatKey, opts: AuthoringReviewSeatOptions = {}): string {
+	const run = opts.gitExec ?? defaultGitExec;
 	if (!/^[0-9a-f]{7,40}$/i.test(key.sha)) throw new Error(`authoring review seat: invalid reviewed sha ${key.sha}`);
 	const path = authoringReviewSeatPath(mainRepo, key);
 	mkdirSync(resolve(path, ".."), { recursive: true });
@@ -91,13 +99,34 @@ export function prepareAuthoringReviewSeat(mainRepo: string, key: AuthoringRevie
 		// A present dir is not proof of a valid seat after a crash/partial-create.
 		// Reuse only a registered worktree pinned to key.sha with a clean tree;
 		// otherwise force-remove and recreate (fail-closed to a correct seat).
-		if (isValidPinnedSeat(mainRepo, path, key.sha, run)) return path;
+		if (isValidPinnedSeat(mainRepo, path, key.sha, run)) {
+			provisionSeatDeps(path, mainRepo, opts, run);
+			return path;
+		}
 		forceRemoveWorktree(path, mainRepo, run);
 	}
 	// Detached, throwaway, pinned to the reviewed commit — same shape as review-heads.
 	// sha is hex-validated above; execFileSync passes argv with no shell.
 	run(["worktree", "add", "--detach", path, key.sha], mainRepo);
+	provisionSeatDeps(path, mainRepo, opts, run);
 	return path;
+}
+
+/** Private deps by default. Fail-closed: a provision error force-removes the seat so
+ *  a provider never starts against a partially linked checkout. */
+function provisionSeatDeps(path: string, mainRepo: string, opts: AuthoringReviewSeatOptions, run: GitExec): void {
+	if (opts.dependencyLayout === "skip") return;
+	const provision =
+		opts.provisionDeps ??
+		((seatPath: string) => {
+			ensureWorktreeDeps(seatPath, mainRepo);
+		});
+	try {
+		provision(path);
+	} catch (err) {
+		forceRemoveWorktree(path, mainRepo, run);
+		throw err;
+	}
 }
 
 /** Force-remove a worktree registration + its tree; tolerate an unregistered leftover dir. */

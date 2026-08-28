@@ -11,6 +11,7 @@ import { FifoPolicy } from "../flow-policy.js";
 import { defaultTypecheckRatchet, type RunStepFn, runOrchestrator, runPipeline } from "../pipeline.js";
 import type { PrReviewGateResult, RunPrReviewGateOptions } from "../pr-review-cli.js";
 import { OPERATOR_ATTESTED_TTY_SUPPRESSION } from "../provider-routing.js";
+import { prepareAuthoringReviewSeat as prepareAuthoringReviewSeatImpl } from "../review/seats.js";
 import { shipBodyFile } from "../ship/decision.js";
 import type { ShipBookkeepingResult } from "../ship/index.js";
 import { getShipTarget } from "../ship/index.js";
@@ -29,6 +30,11 @@ import {
 	setupHermeticPipelineEnv,
 	teardownHermeticPipelineEnv,
 } from "./mocks.js";
+
+/** Fixture seats still use real git worktree add; skip private pnpm so tmp repos stay offline. */
+function prepareAuthoringSeatSkippingDeps(): typeof prepareAuthoringReviewSeatImpl {
+	return (main, key, opts) => prepareAuthoringReviewSeatImpl(main, key, { ...opts, dependencyLayout: "skip" });
+}
 
 /** PR-mode ship fixture using the fixed body-file transport (inline prBody removed in #303). */
 function prShipDecision(body = "Body"): { ok: true; writes: Record<string, string>; text: string } {
@@ -3559,12 +3565,17 @@ describe("runPipeline — authoring review capability seating + effects (#337)",
 		};
 
 		try {
+			const authoringLayouts: Array<"private" | "skip" | undefined> = [];
 			const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement" }, parkSignal, baseFlags, {
 				runStep,
 				mainRepo: worktree,
 				listWorktrees: () => [worktree],
 				appendLog: () => {},
 				runShipBookkeeping: noopBookkeeping,
+				prepareAuthoringReviewSeat: (main, key, opts) => {
+					authoringLayouts.push(opts?.dependencyLayout);
+					return prepareAuthoringSeatSkippingDeps()(main, key, opts);
+				},
 				writeEffectsManifest: (ctx, effects) => {
 					manifests.push({ attempt: ctx.attempt, step: ctx.step, effects: [...effects] });
 					writeEffectsManifest(ctx, effects);
@@ -3587,6 +3598,10 @@ describe("runPipeline — authoring review capability seating + effects (#337)",
 			);
 			assert.ok(authoringWorkspaceAccess.length >= 2);
 			for (const call of authoringWorkspaceAccess) assert.equal(call.workspaceAccess, undefined, `${call.name} authoring seat must remain writable`);
+			assert.ok(authoringLayouts.length >= 2, "reviewer and Judge seats must be prepared");
+			for (const layout of authoringLayouts) {
+				assert.notEqual(layout, "skip", "authoring-loop seats retain the private-deps default");
+			}
 			const aggregate = manifests.find((m) => m.step === "shakedown-code" && m.attempt === 0);
 			assert.ok(aggregate, `expected shakedown-code attempt 0 manifest; got ${JSON.stringify(manifests)}`);
 			assert.equal(aggregate.effects[0] && (aggregate.effects[0] as { kind: string }).kind, "review.Verdict");
@@ -3741,6 +3756,7 @@ describe("runPipeline — authoring review capability seating + effects (#337)",
 				listWorktrees: () => [worktree],
 				appendLog: (entry) => appended.push(entry),
 				runShipBookkeeping: noopBookkeeping,
+				prepareAuthoringReviewSeat: prepareAuthoringSeatSkippingDeps(),
 			});
 
 			assert.equal(result.completed, true, `expected completed cycle; error=${result.error}`);
@@ -3998,6 +4014,7 @@ describe("runPipeline — authoring review split packet (#580)", () => {
 				runShipBookkeeping: noopBookkeeping,
 				writeEffectsManifest: () => {},
 				dispatchStepEffects: async () => ({}),
+				prepareAuthoringReviewSeat: prepareAuthoringSeatSkippingDeps(),
 				appendReviewEscalation: async (repo, input) => {
 					captured = input;
 					return appendReviewEscalation(repo, input);
@@ -4552,6 +4569,37 @@ describe("runPipeline — PR pre-flight and freshness (#424)", () => {
 		// ownWorktree write grant (only its registration keeps it in the denied set).
 		assert.equal(seats[0]?.denial?.ownWorktree, undefined);
 		assert.ok(seats[0]?.denial?.registeredWorktrees.includes(worktree));
+	});
+
+	it("pre-flight seats pass dependencyLayout skip; authoring-loop prepare omits skip (private default)", async () => {
+		const worktree = makeDeliverableRepo();
+		const parkSignal = makeParkSignal();
+		const prepareOpts: Array<{ seatId: string; dependencyLayout?: "private" | "skip" }> = [];
+		const { runStep } = createMockRunStep({ ship: prShipDecision() }, parkSignal);
+		const result = await runPipeline(shipFrom(worktree), parkSignal, baseFlags, {
+			runStep,
+			...defaultPrPreflightStubs(),
+			prepareAuthoringReviewSeat: (_main, key, opts) => {
+				prepareOpts.push({ seatId: key.seatId, dependencyLayout: opts?.dependencyLayout });
+				return join(tmpdir(), `preflight-seat-${key.seatId}`);
+			},
+			runPrReviewGate: async (opts) => {
+				await opts.runStep!("pr-review", "inspect", { cwd: opts.cwd ?? "", profile: "standard", trace: false, parkSignal: opts.parkSignal ?? parkSignal, workspaceAccess: "read-only", executionOverride: { provider: "codex" } }, () => {});
+				await opts.runStep!("pr-verify", "inspect", { cwd: opts.cwd ?? "", profile: "standard", trace: false, parkSignal: opts.parkSignal ?? parkSignal, workspaceAccess: "read-only", executionOverride: { provider: "grok" } }, () => {});
+				return passGate();
+			},
+			listWorktrees: () => [],
+			appendLog: () => {},
+			dispatchStepEffects: async () => ({ appendText: "https://example.test/pull/1" }),
+		});
+		assert.equal(result.completed, true, `expected completed; error=${result.error}`);
+		assert.ok(prepareOpts.length >= 3, "diff checkout + reviewer + verifier");
+		assert.equal(prepareOpts[0]?.seatId, "preflight-diff");
+		for (const seen of prepareOpts) {
+			assert.equal(seen.dependencyLayout, "skip", `${seen.seatId} pre-flight seat must skip private deps`);
+		}
+		// Authoring-loop reviewer/Judge seats omit skip (private default); asserted on the
+		// shakedown-code authoring path in "emits aggregate review.Verdict…".
 	});
 
 	it("a clean commit into the live claim worktree during pre-flight fails the cycle before ship", async () => {

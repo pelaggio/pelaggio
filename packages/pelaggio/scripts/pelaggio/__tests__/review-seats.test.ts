@@ -4,7 +4,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { forbiddenRootsForConfinement } from "../confinement/roots.js";
-import { authoringReviewSeatPath, authoringReviewSeatsRoot, authoringReviewSeatToken, cleanupAuthoringReviewSeat, cleanupAuthoringReviewSeatsForSha, isAuthoringReviewSeatPath, prepareAuthoringReviewSeat } from "../review/seats.js";
+import {
+	type AuthoringReviewSeatOptions,
+	authoringReviewSeatPath,
+	authoringReviewSeatsRoot,
+	authoringReviewSeatToken,
+	cleanupAuthoringReviewSeat,
+	cleanupAuthoringReviewSeatsForSha,
+	type GitExec,
+	isAuthoringReviewSeatPath,
+	prepareAuthoringReviewSeat,
+} from "../review/seats.js";
 import { isReviewHeadPath } from "../review-sweep.js";
 
 describe("authoring review seats (#269)", () => {
@@ -102,32 +112,44 @@ describe("authoring review seats (#269)", () => {
 		assert.equal(isReviewHeadPath(authoringReviewSeatPath(repo, { sha: "abc", seatId: "x", pass: 1 }), repo), false);
 	});
 
+	function skipLayout(gitExec: GitExec, extra: AuthoringReviewSeatOptions = {}): AuthoringReviewSeatOptions {
+		return { gitExec, dependencyLayout: "skip", ...extra };
+	}
+
 	it("prepare creates a detached worktree once and validates before reuse", () => {
 		const repo = mkdtempSync(join(tmpdir(), "authoring-seat-"));
 		const key = { sha: "abc1234def", seatId: "grok", pass: 1 };
 		const path = authoringReviewSeatPath(repo, key);
 		const cmds: string[][] = [];
-		const out1 = prepareAuthoringReviewSeat(repo, key, (args) => {
-			cmds.push(args);
-			if (args[0] === "worktree" && args[1] === "add") mkdirSync(path, { recursive: true });
-			return "";
-		});
+		const out1 = prepareAuthoringReviewSeat(
+			repo,
+			key,
+			skipLayout((args) => {
+				cmds.push(args);
+				if (args[0] === "worktree" && args[1] === "add") mkdirSync(path, { recursive: true });
+				return "";
+			}),
+		);
 		assert.equal(out1, path);
 		assert.deepEqual(cmds, [["worktree", "add", "--detach", path, "abc1234def"]]);
 
 		// Second call: path exists → validate (worktree list + rev-parse + status)
 		// and, when valid+clean+pinned, reuse without re-adding.
 		const cmds2: string[][] = [];
-		const out2 = prepareAuthoringReviewSeat(repo, key, (args, cwd) => {
-			cmds2.push(args);
-			if (args[0] === "worktree" && args[1] === "list") return [`worktree ${path}`, "HEAD abc1234def", "detached", ""].join("\n");
-			if (args[0] === "rev-parse") {
-				assert.equal(cwd, path);
-				return "abc1234def\n";
-			}
-			if (args[0] === "status") return "";
-			return "";
-		});
+		const out2 = prepareAuthoringReviewSeat(
+			repo,
+			key,
+			skipLayout((args, cwd) => {
+				cmds2.push(args);
+				if (args[0] === "worktree" && args[1] === "list") return [`worktree ${path}`, "HEAD abc1234def", "detached", ""].join("\n");
+				if (args[0] === "rev-parse") {
+					assert.equal(cwd, path);
+					return "abc1234def\n";
+				}
+				if (args[0] === "status") return "";
+				return "";
+			}),
+		);
 		assert.equal(out2, path);
 		// No `worktree add` on reuse.
 		assert.ok(!cmds2.some((a) => a[0] === "worktree" && a[1] === "add"));
@@ -141,14 +163,18 @@ describe("authoring review seats (#269)", () => {
 		// Simulate a leftover dir from a crashed pass.
 		mkdirSync(path, { recursive: true });
 		const cmds: string[][] = [];
-		const out = prepareAuthoringReviewSeat(repo, key, (args) => {
-			cmds.push(args);
-			if (args[0] === "worktree" && args[1] === "list") return [`worktree ${path}`, "HEAD abc1234def", "detached", ""].join("\n");
-			if (args[0] === "rev-parse") return "abc1234def\n";
-			// Dirty tree — a stray edit from the crashed pass.
-			if (args[0] === "status") return " M packages/x.ts\n";
-			return "";
-		});
+		const out = prepareAuthoringReviewSeat(
+			repo,
+			key,
+			skipLayout((args) => {
+				cmds.push(args);
+				if (args[0] === "worktree" && args[1] === "list") return [`worktree ${path}`, "HEAD abc1234def", "detached", ""].join("\n");
+				if (args[0] === "rev-parse") return "abc1234def\n";
+				// Dirty tree — a stray edit from the crashed pass.
+				if (args[0] === "status") return " M packages/x.ts\n";
+				return "";
+			}),
+		);
 		assert.equal(out, path);
 		// Validation ran, found it dirty, removed, then re-added.
 		assert.ok(
@@ -175,14 +201,18 @@ describe("authoring review seats (#269)", () => {
 		const path = authoringReviewSeatPath(repo, key);
 		mkdirSync(path, { recursive: true });
 		const cmds: string[][] = [];
-		prepareAuthoringReviewSeat(repo, key, (args) => {
-			cmds.push(args);
-			// Not in the worktree list → unregistered leftover.
-			if (args[0] === "worktree" && args[1] === "list") return [`worktree ${repo}`, "HEAD main", ""].join("\n");
-			// `worktree remove` refuses an unregistered dir → prune + rmSync fallback.
-			if (args[0] === "worktree" && args[1] === "remove") throw new Error("not a working tree");
-			return "";
-		});
+		prepareAuthoringReviewSeat(
+			repo,
+			key,
+			skipLayout((args) => {
+				cmds.push(args);
+				// Not in the worktree list → unregistered leftover.
+				if (args[0] === "worktree" && args[1] === "list") return [`worktree ${repo}`, "HEAD main", ""].join("\n");
+				// `worktree remove` refuses an unregistered dir → prune + rmSync fallback.
+				if (args[0] === "worktree" && args[1] === "remove") throw new Error("not a working tree");
+				return "";
+			}),
+		);
 		const seq = cmds.map((a) => `${a[0]}:${a[1] ?? ""}`);
 		assert.ok(seq.includes("worktree:remove"), "attempts force-remove");
 		assert.ok(seq.includes("worktree:prune"), "prunes stale admin state on remove failure");
@@ -196,13 +226,17 @@ describe("authoring review seats (#269)", () => {
 		const path = authoringReviewSeatPath(repo, key);
 		mkdirSync(path, { recursive: true });
 		const cmds: string[][] = [];
-		prepareAuthoringReviewSeat(repo, key, (args) => {
-			cmds.push(args);
-			if (args[0] === "worktree" && args[1] === "list") return [`worktree ${path}`, "HEAD abc1234def", "detached", ""].join("\n");
-			// HEAD points elsewhere → not pinned → recreate.
-			if (args[0] === "rev-parse") return "0000000feedface\n";
-			return "";
-		});
+		prepareAuthoringReviewSeat(
+			repo,
+			key,
+			skipLayout((args) => {
+				cmds.push(args);
+				if (args[0] === "worktree" && args[1] === "list") return [`worktree ${path}`, "HEAD abc1234def", "detached", ""].join("\n");
+				// HEAD points elsewhere → not pinned → recreate.
+				if (args[0] === "rev-parse") return "0000000feedface\n";
+				return "";
+			}),
+		);
 		assert.ok(
 			cmds.some((a) => a[0] === "worktree" && a[1] === "remove"),
 			"wrong-HEAD seat force-removed",
@@ -216,7 +250,86 @@ describe("authoring review seats (#269)", () => {
 
 	it("prepare rejects a non-hex sha fail-closed", () => {
 		const repo = mkdtempSync(join(tmpdir(), "authoring-seat-bad-"));
-		assert.throws(() => prepareAuthoringReviewSeat(repo, { sha: "not-a-sha", seatId: "x", pass: 1 }, () => ""), /invalid reviewed sha/);
+		assert.throws(() => prepareAuthoringReviewSeat(repo, { sha: "not-a-sha", seatId: "x", pass: 1 }, { gitExec: () => "", dependencyLayout: "skip" }), /invalid reviewed sha/);
+		rmSync(repo, { recursive: true, force: true });
+	});
+
+	it("valid-seat reuse skips git worktree add but still invokes private-layout provision", () => {
+		const repo = mkdtempSync(join(tmpdir(), "authoring-seat-provision-reuse-"));
+		const key = { sha: "abc1234def", seatId: "grok", pass: 1 };
+		const path = authoringReviewSeatPath(repo, key);
+		const provisioned: string[] = [];
+		const gitExec: GitExec = (args) => {
+			if (args[0] === "worktree" && args[1] === "add") mkdirSync(path, { recursive: true });
+			if (args[0] === "worktree" && args[1] === "list") return [`worktree ${path}`, "HEAD abc1234def", "detached", ""].join("\n");
+			if (args[0] === "rev-parse") return "abc1234def\n";
+			if (args[0] === "status") return "";
+			return "";
+		};
+		prepareAuthoringReviewSeat(repo, key, { gitExec, provisionDeps: (seat) => provisioned.push(seat) });
+		assert.deepEqual(provisioned, [path]);
+
+		const cmds: string[][] = [];
+		prepareAuthoringReviewSeat(repo, key, {
+			gitExec: (args, cwd) => {
+				cmds.push(args);
+				return gitExec(args, cwd);
+			},
+			provisionDeps: (seat) => provisioned.push(`reuse:${seat}`),
+		});
+		assert.ok(!cmds.some((a) => a[0] === "worktree" && a[1] === "add"), "reuse must not re-add");
+		assert.deepEqual(provisioned, [path, `reuse:${path}`]);
+		rmSync(repo, { recursive: true, force: true });
+	});
+
+	it("a dependency-provisioning error removes the seat and propagates", () => {
+		const repo = mkdtempSync(join(tmpdir(), "authoring-seat-provision-fail-"));
+		const key = { sha: "abc1234def", seatId: "grok", pass: 1 };
+		const path = authoringReviewSeatPath(repo, key);
+		const cmds: string[][] = [];
+		assert.throws(
+			() =>
+				prepareAuthoringReviewSeat(repo, key, {
+					gitExec: (args) => {
+						cmds.push(args);
+						if (args[0] === "worktree" && args[1] === "add") mkdirSync(path, { recursive: true });
+						if (args[0] === "worktree" && args[1] === "remove") {
+							rmSync(path, { recursive: true, force: true });
+							return "";
+						}
+						return "";
+					},
+					provisionDeps: () => {
+						throw new Error("pnpm install failed");
+					},
+				}),
+			/pnpm install failed/,
+		);
+		const addIdx = cmds.findIndex((a) => a[0] === "worktree" && a[1] === "add");
+		const removeIdx = cmds.findIndex((a) => a[0] === "worktree" && a[1] === "remove");
+		assert.ok(addIdx !== -1, "seat was created before provision");
+		assert.ok(removeIdx !== -1, "failed provision force-removes the seat");
+		assert.ok(addIdx < removeIdx, "remove follows the failed provision");
+		assert.equal(existsSync(path), false);
+		rmSync(repo, { recursive: true, force: true });
+	});
+
+	it("skip layout never invokes provisionDeps", () => {
+		const repo = mkdtempSync(join(tmpdir(), "authoring-seat-skip-"));
+		const key = { sha: "abc1234def", seatId: "grok", pass: 1 };
+		const path = authoringReviewSeatPath(repo, key);
+		let provisioned = 0;
+		prepareAuthoringReviewSeat(repo, key, {
+			gitExec: (args) => {
+				if (args[0] === "worktree" && args[1] === "add") mkdirSync(path, { recursive: true });
+				return "";
+			},
+			dependencyLayout: "skip",
+			provisionDeps: () => {
+				provisioned += 1;
+			},
+		});
+		assert.equal(provisioned, 0);
 		rmSync(repo, { recursive: true, force: true });
 	});
 

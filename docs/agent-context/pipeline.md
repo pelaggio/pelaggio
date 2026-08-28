@@ -49,6 +49,8 @@ Worktrees share `MAIN_REPO`'s `node_modules` when lockfiles match — by symlink
 - Without workspace entries, the simpler symlink-the-whole-dir path runs (`<worktree>/node_modules → <MAIN_REPO>/node_modules`).
 - On drift or missing main `node_modules`, it falls through to `pnpm install --frozen-lockfile --silent`.
 - Materialize is idempotent, including rematerializing a pelaggio-owned layer when MAIN gains entries after the worktree snapshot. The real-dir vs symlink test is `lstatSync().isSymbolicLink()`; the pnpm-store presence test is `isRealDir(.pnpm)` (lstat-based, **not** `existsSync`, which would follow the post-materialize symlink and falsely re-flag corruption). Real, user-managed `node_modules` without pelaggio's emitted shape is left alone.
+- Ordinary claim worktrees still share MAIN when lockfiles match (the bullets above). Authoring-review seats under `.dev/authoring-review-seats/` are a different checkout class: the same `ensureWorktreeDeps` chokepoint path-recognizes them after the read-only early-out and gives each a private lock-bound tree (`isolated`). They never `materialize` / `link` / `restore` onto MAIN. Cleanup of a seat reclaims that private state; it is not the correctness boundary — the host was never linked into the seat.
+- Cold pre-flight seats stay `skip-read-only` (data-only; no dependency tree).
 
 ## Plan-Polish Guard
 
