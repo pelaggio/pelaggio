@@ -305,7 +305,7 @@ describe("architectural question tests", () => {
 	 * remain each carry a written reason in the corpus at `extraction.unenforcedConstraints`, pinned
 	 * against this set below: a reason without a member, or a member without a reason, fails.
 	 */
-	const FROZEN_UNENFORCED_CONSTRAINTS = new Set(["CON-0004", "CON-0007", "CON-0016", "CON-0018", "CON-0024", "CON-0025", "CON-0028", "CON-0029", "CON-0030"]);
+	const FROZEN_UNENFORCED_CONSTRAINTS: ReadonlySet<string> = new Set(["CON-0004", "CON-0007", "CON-0016", "CON-0018", "CON-0024", "CON-0025", "CON-0028", "CON-0029", "CON-0030"]);
 
 	it("Q17: unenforced-constraint ceiling", () => {
 		const corpus = graph as unknown as AssuranceGraph;
