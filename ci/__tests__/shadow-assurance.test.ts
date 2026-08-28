@@ -113,6 +113,107 @@ describe("shadow assurance graph integrity", () => {
 		}
 	});
 
+	it("does not false-fire source-grounding on intent-preserving edits, and still fires when a unique anchor is removed", () => {
+		const table: Record<string, { snippet: string; replacement: string }> = {
+			"docs/decisions/0001-worktree-write-confinement.md": {
+				snippet: "Enumerated main and sibling roots are in scope",
+				replacement: "Main and sibling roots that are enumerated stay in scope",
+			},
+			"docs/decisions/0012-readiness-computed-not-groomed.md": {
+				snippet: "the harness computes readiness on-read and refines by escalation",
+				replacement: "the harness computes readiness on-read and refines it by escalation",
+			},
+			"docs/decisions/0014-mechanism-policy-separation-spine.md": {
+				snippet: "they meet only at a typed, fail-closed, capability-denied seam",
+				replacement: "they meet only at a typed, fail-closed, capability-denied boundary",
+			},
+			"docs/decisions/0016-severity-taxonomy-and-owner.md": {
+				snippet: "a finding whose class is uncertain is treated as safety-class",
+				replacement: "a finding whose class is uncertain is treated as a safety-class finding",
+			},
+			"docs/decisions/0017-graceful-degradation-rigor-only.md": {
+				snippet: "it is still inside the deterministic gate",
+				replacement: "it remains inside the deterministic gate",
+			},
+			"docs/decisions/0022-pipeline-shape-and-review-orchestrators.md": {
+				snippet: "outside the mutable `step()` checkpoint/effects lifecycle",
+				replacement: "outside the mutable `step()` checkpoint and effects lifecycle",
+			},
+			"docs/decisions/0024-adversarial-authoring-review-loop.md": {
+				snippet: "voids the blind-spot guarantee",
+				replacement: "voids the blind-spot promise",
+			},
+			"docs/decisions/0026-stateful-guards-fence-reconcile-and-gate-disposition.md": {
+				snippet: "may reduce contention but cannot replace a fence/reconciler",
+				replacement: "may reduce contention but cannot stand in for a fence/reconciler",
+			},
+			"docs/decisions/0027-machine-readable-architectural-intent-graph.md": {
+				snippet: "must not require reconciliation across independent prose registries",
+				replacement: "must not need reconciliation across independent prose registries",
+			},
+			"docs/decisions/0028-delivery-packet-claim-scoped-provenance.md": {
+				snippet: "no bolt-on gives an agent-landed, review-excluded file real integrity",
+				replacement: "no bolt-on gives an agent-landed, review-excluded file genuine integrity",
+			},
+			"docs/trust/trust-claims.yml": {
+				snippet: "publish.yml verifies an SSH-signed tag",
+				replacement: "publish.yml checks an SSH-signed tag",
+			},
+		};
+		const livePaths = [...new Set(graph.sourceGrounding.map((g) => g.path))].sort();
+		assert.deepEqual(Object.keys(table).sort(), livePaths, "mutation table must cover every live grounded source, and no others");
+
+		const mutated = new Map<string, string>();
+		for (const [path, { snippet, replacement }] of Object.entries(table)) {
+			const original = readFileSync(resolve(repo, path), "utf8");
+			assert.equal(original.split(snippet).length, 2, `${path}: snippet must occur exactly once`);
+			const pathAnchors = graph.sourceGrounding.filter((g) => g.path === path).flatMap((g) => g.anchors);
+			for (const anchor of pathAnchors) {
+				assert.ok(!snippet.includes(anchor) && !anchor.includes(snippet), `${path}: snippet overlaps live anchor '${anchor}'`);
+			}
+			assert.ok(original.includes(snippet), `${path}: snippet missing from source`);
+			const append = path.endsWith(".yml")
+				? "\n# Additional rationale for a construction-only edit that does not change architectural intent.\n"
+				: "\n\nThis paragraph records additional rationale for a construction-only edit that does not change architectural intent.\n";
+			const next = `${original.replace(snippet, replacement)}${append}`;
+			assert.notEqual(next, original, `${path}: mutation must change the source`);
+			mutated.set(path, next);
+		}
+
+		for (const grounding of graph.sourceGrounding) {
+			const text = mutated.get(grounding.path);
+			assert.ok(text !== undefined, `mutated map missing ${grounding.path}`);
+			for (const anchor of grounding.anchors) {
+				assert.ok(text.includes(anchor), `${grounding.node} lost source anchor '${anchor}' after intent-preserving mutation of ${grounding.path}`);
+			}
+		}
+
+		const readSource = (path: string) => mutated.get(path);
+		const env = { sourceGrounding: graph.sourceGrounding, readSource };
+		assert.ok(!diagnostics(graph, env).some((d) => d.check === "stale-source-grounding"), "intent-preserving edits must not emit stale-source-grounding");
+		assert.deepEqual(adrMapFromSources(graph), graph.adrMap);
+
+		const clone = structuredClone(graph);
+		const ctr = clone.nodes.find((n) => n.id === "CTR-0022");
+		assert.ok(ctr?.codeEvidence, "CTR-0022 must carry code evidence");
+		const evidenceIdx = ctr.codeEvidence.indexOf("ci/assurance-views.ts");
+		assert.ok(evidenceIdx >= 0, "CTR-0022 must name ci/assurance-views.ts so the path-change case can retarget a sibling");
+		ctr.codeEvidence[evidenceIdx] = "ci/__tests__/assurance-views.test.ts";
+		assert.deepEqual(adrMapFromSources(clone), adrMapFromSources(graph), "realization-only codeEvidence path change must not move adrMap");
+
+		const trueFirePath = "docs/decisions/0001-worktree-write-confinement.md";
+		const uniqueAnchor = "hard gate on observed effect";
+		const trueFireSource = mutated.get(trueFirePath);
+		assert.ok(trueFireSource, `mutated map missing ${trueFirePath}`);
+		assert.equal(trueFireSource.split(uniqueAnchor).length, 2, `${uniqueAnchor} must be unique in the mutated source`);
+		const trueFireText = trueFireSource.replace(uniqueAnchor, "");
+		const trueFireRead = (path: string) => (path === trueFirePath ? trueFireText : mutated.get(path));
+		assert.ok(
+			diagnostics(graph, { sourceGrounding: graph.sourceGrounding, readSource: trueFireRead }).some((d) => d.check === "stale-source-grounding" && d.node === "CLM-0002" && d.message.includes(trueFirePath)),
+			"removing a unique live anchor through the same env assembly must emit stale-source-grounding for that grounding",
+		);
+	});
+
 	it("ties realizations to code/tests without putting code paths on propositions", () => {
 		for (const value of graph.nodes) {
 			if (value.kind === "realization") {
@@ -307,11 +408,12 @@ describe("architectural question tests", () => {
 	 *
 	 * #650 reduced this from 29 to 9 by binding 20 constraints — seven to the conformance suite and
 	 * thirteen to existing realizations. #680 reduced it from 9 to 8 by correcting one forward-looking
-	 * kernel-sufficiency claim to an assumption in ADR-0027 and its shadow node. The 8 that remain each
-	 * carry a written reason in the corpus at `extraction.unenforcedConstraints`, pinned against this
-	 * set below: a reason without a member, or a member without a reason, fails.
+	 * kernel-sufficiency claim to an assumption in ADR-0027 and its shadow node. #681 reduced it from
+	 * 8 to 7 by binding CON-0018 to CTR-0022. The 7 that remain each carry a written reason in the
+	 * corpus at `extraction.unenforcedConstraints`, pinned against this set below: a reason without a
+	 * member, or a member without a reason, fails.
 	 */
-	const FROZEN_UNENFORCED_CONSTRAINTS: ReadonlySet<string> = new Set(["CON-0004", "CON-0007", "CON-0016", "CON-0018", "CON-0025", "CON-0028", "CON-0029", "CON-0030"]);
+	const FROZEN_UNENFORCED_CONSTRAINTS: ReadonlySet<string> = new Set(["CON-0004", "CON-0007", "CON-0016", "CON-0025", "CON-0028", "CON-0029", "CON-0030"]);
 
 	it("Q17: unenforced-constraint ceiling", () => {
 		const corpus = graph as unknown as AssuranceGraph;
