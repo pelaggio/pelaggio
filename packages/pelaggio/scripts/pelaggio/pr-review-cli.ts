@@ -15,13 +15,26 @@
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { CONFIG, modelForProvider, REPO, type ReviewConfig, ROADMAP_GITHUB, resolveDriverCandidates, resolveStepSettings, type StepSettings } from "./config.js";
 import { upsertMarkerComment } from "./github-posting.js";
-import { classifySecurityReviewDiff, escapeHtml, escapeMarkdown, expandPackagedSkill, formatReviewMetrics, mainWorktree, parseWaitFlag, resolveParkReset, type SecurityDiffSignal } from "./helpers.js";
+import { classifySecurityReviewDiff, escapeHtml, escapeMarkdown, expandPackagedSkill, formatReviewMetrics, listWorktreesIn, mainWorktree, parseWaitFlag, resolveParkReset, type SecurityDiffSignal } from "./helpers.js";
 import { gateRecordsDir, type NewPrReviewFleetGateRecord, writePrReviewGateRecord } from "./pr-review-gate-record.js";
-import { adjudicationSourcesDir, buildAdjudicationSourceDraft, fleetRecordDigestOf, type PrAdjudicationSourceDraft, writeAdjudicationSourceRecord } from "./review/adjudication.js";
+import { adjudicationSourcesDir, buildAdjudicationSourceDraft, fleetRecordDigestOf, normalizeGitPath, type PrAdjudicationSourceDraft, writeAdjudicationSourceRecord } from "./review/adjudication.js";
+import {
+	buildCarryDispositionDraft,
+	computeTouchedPaths,
+	listPrFindingDispositionRecords,
+	type PrCarryDispositionDraft,
+	type PrCarryRefutedEntry,
+	planCarry,
+	poolStoreTrust,
+	prFindingDispositionsDir,
+	selectCarrySource,
+	writePrFindingDispositionRecord,
+} from "./review/carry.js";
 import {
 	evaluateReviewConvergence,
 	modelAuthoredText,
@@ -33,12 +46,13 @@ import {
 	reconcileReviewVerification,
 	reviewFindingFingerprint,
 	reviewFindingsGate,
+	type TaxonomyConfig,
 	type VerificationCandidate,
 	type VerificationDisposition,
 } from "./review/findings.js";
 import { CLAIM_BRANCH_RE } from "./revise-sweep.js";
 import type { GhRunner } from "./roadmap/github-issues.js";
-import type { RunStepFn } from "./step-runner.js";
+import type { ForeignRootDenial, RunStepFn } from "./step-runner.js";
 import { runStep } from "./step-runner.js";
 import type { ParkSignal, ProviderName, StepEmit, StepResult } from "./types.js";
 
@@ -97,9 +111,11 @@ interface PrReviewDeps {
 	 *  MUST pin them so a test run never writes into the host repo's `.dev/`. */
 	writeGateRecord: typeof writePrReviewGateRecord;
 	writeAdjudicationSource: typeof writeAdjudicationSourceRecord;
+	writeDispositionRecord: typeof writePrFindingDispositionRecord;
 	readFileSync: typeof readFileSync;
 	gateRecordsRoot?: string;
 	adjudicationSourcesRoot?: string;
+	dispositionsRoot?: string;
 	now: () => number;
 	/** CI runs post the red/green status but never claim `runner: "local"` evidence. */
 	isCi: () => boolean;
@@ -133,6 +149,30 @@ export interface RunPrReviewGateOptions {
 	reviewDrivers?: StepSettings[];
 	/** Scalar verifier for this run. Defaults to resolveStepSettings(CONFIG, profile, "pr-verify"). */
 	verifySettings?: StepSettings;
+	/** Cross-push carry input (#495), built by resolveCarryOptions from a validated prior
+	 *  disposition record. Absent → today's cold behavior, byte-identical. */
+	carry?: PrReviewCarryInput;
+	/** Override the seat write-denial (tests / callers with a richer worktree registry). When
+	 *  absent the gate resolves it itself — every seat gets the denial regardless of cwd. */
+	foreignRootDenial?: ForeignRootDenial;
+}
+
+/** Validated carry plan handed to the gate (#495). Eligibility (D3 + I3) is applied by
+ *  planCarry BEFORE the gate ever sees an entry — the gate only executes it. */
+export interface PrReviewCarryInput {
+	/** 40-hex narrowing watermark (a proven complete ancestor). Absent in overlay-only mode —
+	 *  blockers seed with no watermark, so discovery runs cold (#495 round-5). Present ⇒ a
+	 *  watermark exists (narrowing is then gated additionally on a non-empty interdiff). */
+	priorSha?: string;
+	/** Prior survivors, fingerprint-keyed. Seeded unconditionally (toward blocking, I2). */
+	seedSurvivors: ReadonlyMap<string, ReviewFinding>;
+	/** Prior-refuted entries eligible for deterministic auto-refutation (untouched path, non-safety). */
+	autoRefutable: ReadonlyMap<string, PrCarryRefutedEntry>;
+	/** Rule-3 refutation memory for the new record. */
+	carriedForward: readonly PrCarryRefutedEntry[];
+	/** True iff a watermark exists AND the two-dot interdiff is non-empty: discovery seats review
+	 *  `priorSha..reviewedSha` instead of the full PR range (D5). Always false in overlay-only. */
+	narrowed: boolean;
 }
 
 export interface PrReviewGateResult {
@@ -153,6 +193,9 @@ export interface PrReviewGateResult {
 	/** Present only for a complete findings-terminal block (consensus-block, or the disagreement
 	 *  split whose breaker is labeled `invalid-pass` — #525) with mappable survivors. */
 	adjudicationSource?: PrAdjudicationSourceDraft;
+	/** Cross-push disposition draft (#495): survived + refuted memory for this reviewed head.
+	 *  Present on completed runs with identity (itemId + 40-hex reviewedSha); never on park. */
+	dispositionDraft?: PrCarryDispositionDraft;
 }
 
 let deps: PrReviewDeps = {
@@ -162,6 +205,7 @@ let deps: PrReviewDeps = {
 	postStatus: postStatusDefault,
 	writeGateRecord: writePrReviewGateRecord,
 	writeAdjudicationSource: writeAdjudicationSourceRecord,
+	writeDispositionRecord: writePrFindingDispositionRecord,
 	readFileSync,
 	now: () => Date.now(),
 	isCi: () => process.env.CI === "true",
@@ -350,7 +394,7 @@ export function buildComment(
 	passes: readonly ReviewPass[],
 	securitySignal: SecurityDiffSignal,
 	summary?: string,
-	convergence?: { iterations: number; survivors: number; breaker?: ReviewExhaustionReason; providers: string; agreement?: PrReviewAgreement },
+	convergence?: { iterations: number; survivors: number; breaker?: ReviewExhaustionReason; providers: string; agreement?: PrReviewAgreement; carry?: string },
 ): string {
 	const header = gate === "pass" ? "✅ **Automated review: PASS**" : "🚫 **Automated review: BLOCK**";
 	const ok = passes.every(passOk);
@@ -362,8 +406,9 @@ export function buildComment(
 	// the report parser (which reads the agent's model-authored text, not this comment).
 	const baseMetrics = formatReviewMetrics(gate, ok, subtype, cost, turns);
 	const agreementToken = convergence?.agreement ? ` agreement=${convergence.agreement}` : "";
+	const carryToken = convergence?.carry ? ` ${convergence.carry}` : "";
 	const metrics = convergence
-		? baseMetrics.replace(" -->", ` iterations=${convergence.iterations} survivors=${convergence.survivors} breaker=${convergence.breaker ?? "none"} providers=${convergence.providers}${agreementToken} -->`)
+		? baseMetrics.replace(" -->", ` iterations=${convergence.iterations} survivors=${convergence.survivors} breaker=${convergence.breaker ?? "none"} providers=${convergence.providers}${agreementToken}${carryToken} -->`)
 		: baseMetrics;
 	const redTeamLine = securitySignal.triggered ? `Triggered: ${securitySignal.reasons.map(escapeMarkdown).join(", ")}` : "Adversarial red-team pass: not triggered (no security-sensitive paths or diff signals).";
 	const verdictLines =
@@ -577,10 +622,22 @@ function retainParseFailureTail(label: ReviewLabel, phase: "discovery" | "verifi
 	return diagnosis;
 }
 
-async function runReviewPass(iteration: number, label: ReviewLabel, prompt: string, candidate: StepSettings, pr: string, opts: { cwd: string; runStep: RunStepFn; profile: string; parkSignal: ParkSignal }): Promise<ReviewPass> {
+async function runReviewPass(
+	iteration: number,
+	label: ReviewLabel,
+	prompt: string,
+	candidate: StepSettings,
+	pr: string,
+	opts: { cwd: string; runStep: RunStepFn; profile: string; parkSignal: ParkSignal; foreignRootDenial: ForeignRootDenial },
+): Promise<ReviewPass> {
 	const driver = driverIdentity(candidate);
 	process.stderr.write(`▶ pr-review ${label} · ${driverLabel(driver)}\n`);
-	const result = await opts.runStep("pr-review", prompt, { cwd: opts.cwd, profile: opts.profile, trace: false, parkSignal: opts.parkSignal, itemId: pr, executionOverride: executionOverrideFor(candidate) }, emit);
+	const result = await opts.runStep(
+		"pr-review",
+		prompt,
+		{ cwd: opts.cwd, profile: opts.profile, trace: false, parkSignal: opts.parkSignal, itemId: pr, workspaceAccess: "read-only", executionOverride: executionOverrideFor(candidate), foreignRootDenial: opts.foreignRootDenial },
+		emit,
+	);
 	if (!result.ok) {
 		return {
 			iteration,
@@ -648,13 +705,41 @@ async function runVerificationPass(
 	carried: ReadonlyMap<string, ReviewFinding>,
 	profile: string,
 	pr: string,
-	opts: { cwd: string; runStep: RunStepFn; localContext: string; parkSignal: ParkSignal; verifySettings: StepSettings },
+	opts: { cwd: string; runStep: RunStepFn; localContext: string; parkSignal: ParkSignal; verifySettings: StepSettings; foreignRootDenial: ForeignRootDenial; autoRefutable?: ReadonlyMap<string, PrCarryRefutedEntry> },
 ): Promise<void> {
 	if (!pass.report) return;
 	const unique = new Map(carried);
 	for (const finding of pass.report.findings.filter((finding) => finding.severity === "must-fix")) unique.set(reviewFindingFingerprint(finding), finding);
-	const candidates = [...unique.values()].map((finding, index) => ({ id: `C${index + 1}`, finding }));
-	if (candidates.length === 0) return;
+	// #495 D4-2: fingerprints eligible for deterministic auto-refutation are WITHHELD from the
+	// model verifier's candidate set; each contributes a synthesized refuted disposition whose
+	// refuting authority is the prior run's complete valid verification report (chained via the
+	// origin candidate id + SHA). The rationale is harness-authored from already-published values
+	// only — no prior model text is re-quoted, so no new #536-class channel opens.
+	const withheld: Array<{ finding: ReviewFinding; entry: PrCarryRefutedEntry }> = [];
+	const modelFindings: ReviewFinding[] = [];
+	for (const [fingerprint, finding] of unique) {
+		const entry = opts.autoRefutable?.get(fingerprint);
+		if (entry) withheld.push({ finding, entry });
+		else modelFindings.push(finding);
+	}
+	const candidates = modelFindings.map((finding, index) => ({ id: `C${index + 1}`, finding }));
+	const synthesized: VerificationDisposition[] = withheld.map(({ finding, entry }, index) => ({
+		id: `C${candidates.length + index + 1}`,
+		finding,
+		decision: "refuted",
+		rationale: `Auto-refuted by carry: refuted at ${entry.refutation.refutedAtSha.slice(0, 7)} (${entry.refutation.id}); ${normalizeGitPath(entry.finding.path) ?? ""} untouched by the interdiff.`,
+	}));
+	if (candidates.length === 0 && synthesized.length === 0) return;
+	if (candidates.length === 0) {
+		// Every must-fix candidate auto-refuted: no verifier call; the verdict computes from the
+		// synthesized dispositions alone (all refuted → pass). Without this, a discovery pass whose
+		// only findings were previously refuted would dead-end as an unverified block.
+		pass.dispositions = synthesized;
+		pass.gate = "pass";
+		pass.effectiveVerdict = "pass";
+		pass.failureKind = undefined;
+		return;
+	}
 	process.stderr.write(`▶ pr-verify ${pass.label} · ${driverLabel(pass.driver)}\n`);
 	let result: StepResult;
 	try {
@@ -664,7 +749,7 @@ async function runVerificationPass(
 		result = await opts.runStep(
 			"pr-verify",
 			verificationPrompt(candidates, opts.localContext),
-			{ cwd: opts.cwd, profile, trace: false, parkSignal: opts.parkSignal, itemId: pr, executionOverride: executionOverrideFor(opts.verifySettings) },
+			{ cwd: opts.cwd, profile, trace: false, parkSignal: opts.parkSignal, itemId: pr, workspaceAccess: "read-only", executionOverride: executionOverrideFor(opts.verifySettings), foreignRootDenial: opts.foreignRootDenial },
 			emit,
 		);
 	} catch (error) {
@@ -685,7 +770,9 @@ async function runVerificationPass(
 		return;
 	}
 	try {
-		pass.dispositions = reconcileReviewVerification(candidates, parseReviewVerification(modelAuthoredText(result)));
+		// The effective verdict is computed over the MERGED disposition set (model + synthesized),
+		// so an auto-refutation participates in convergence exactly like a model refutation.
+		pass.dispositions = [...reconcileReviewVerification(candidates, parseReviewVerification(modelAuthoredText(result))), ...synthesized];
 		const survives = pass.dispositions.some((disposition) => disposition.decision === "survives");
 		pass.gate = survives ? "block" : "pass";
 		pass.effectiveVerdict = survives ? "block" : "pass";
@@ -763,12 +850,46 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 	}
 
 	const passes: ReviewPass[] = [];
-	let carried = new Map<string, ReviewFinding>();
+	// #495 round-4 store-trust: carry may CONSUME evidence (seed / narrow / auto-refute) only when
+	// EVERY provider in this run's pool has a proven store-write denial (claude via foreignRootDenial
+	// hooks, codex via the read-only sandbox). If any pool provider is store-writable
+	// (grok in any mode, opencode, an unknown future provider), a poisoned disposition/fleet record
+	// could authorize a fail-open, so consumption is refused and the run goes cold. Record WRITING
+	// below is unaffected — this run still emits its own dispositions; they are simply not TRUSTED
+	// for seeding/narrowing THIS run. Safe-by-construction regardless of the review.carry default.
+	const poolProviders = [...reviewDrivers.map((driver) => driver.provider), verifySettings.provider];
+	const storeTrust = poolStoreTrust(poolProviders);
+	const carry = options.carry && storeTrust.trusted ? options.carry : undefined;
+	if (options.carry && !storeTrust.trusted) {
+		process.stderr.write(`⚠ carry consumption refused — review pool contains store-writable provider(s) ${storeTrust.untrusted.join(", ")} without a proven .dev store-write denial; running cold (records still written, not consumed)\n`);
+	}
+	// #495: seeded survivors join the first verification pass's candidates and persist under
+	// applyReviewPass's omission-never-refutes rule; gate PASS still requires converged-empty +
+	// consensus-pass. A run whose complete valid verification refutes every seeded survivor
+	// passes — that is I2's explicit-refutation door, unchanged.
+	let carried = new Map<string, ReviewFinding>(carry?.seedSurvivors ?? []);
+	// Harness-side mirror of applyReviewPass's delete branch: fingerprints a VALID summary
+	// refuted this run, with the refuting candidate id (for the disposition record).
+	const refutedThisRun = new Map<string, { id: string; finding: ReviewFinding }>();
 	let previousSurvivorCount: number | undefined;
 	let breakerReason: ReviewExhaustionReason | undefined;
 	let agreement: PrReviewAgreement = "invalid";
 	let gate: "pass" | "block" = "block";
 	const requiredCells = labels.length * reviewDrivers.length;
+	// #495 D5: a narrowed run scopes DISCOVERY to the interdiff (prior..reviewedSha) via the
+	// trusted-context refs; the inspection diff, security signal, and verification context keep
+	// the full range — two ranges, two roles, both computed by the harness.
+	const discoveryContext = carry?.narrowed && carry.priorSha && options.reviewedSha ? trustedLocalContext({ diffCwd, diffBaseRef: carry.priorSha, diffHeadRef: options.reviewedSha }) : localContext;
+	// #495 store-trust: local review/verify seats historically ran at cwd=REPO (the trusted main
+	// checkout) with NO denial hooks installed — carry makes the .dev evidence stores
+	// AUTHORIZATION inputs, so a prompt-injected seat could forge a disposition + fleet-record
+	// pair. Thread the foreign-root denial into EVERY seat regardless of cwd: it activates the
+	// step-runner's PreToolUse hooks (Claude), denying Write/Edit/Bash on the gate-record,
+	// adjudication-source, finding-disposition, session, and decision-log registers plus foreign
+	// worktree roots. Codex review seats are closed at the OS boundary instead (read-only
+	// sandbox, codex-provider.ts); grok's strict-profile write surface at main cwd is an OPEN
+	// residual documented in docs/pr-review.md (why `review.carry` ships default-off).
+	const seatDenial: ForeignRootDenial = options.foreignRootDenial ?? { mainRepo: mainWorktree(REPO), registeredWorktrees: listWorktreesIn(REPO) };
 
 	for (let iteration = 1; iteration <= policy.maxPasses; iteration++) {
 		const iterationPasses: ReviewPass[] = [];
@@ -777,7 +898,7 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 			const args = label === "standard" ? skillArgs : `${skillArgs} --red-team --security-reasons ${JSON.stringify(securitySignal.reasons.join(", "))}`;
 			// One shared prompt; configured-order aggregation. When Claude and Grok share the
 			// pool, non-Grok seats start immediately and Grok waits for every Claude promise to settle.
-			const prompt = `${expandPackagedSkill("pr-review", args)}${localContext}`;
+			const prompt = `${expandPackagedSkill("pr-review", args)}${discoveryContext}`;
 			const children = reviewDrivers.map(() => childParkSignal());
 			const settled = await settleDiscoveryLaunches(reviewDrivers, (candidate, index) =>
 				runReviewPass(iteration, label, prompt, candidate, options.pr, {
@@ -786,6 +907,7 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 					profile,
 					// children is built from the same reviewDrivers map, so index always lands.
 					parkSignal: children[index] ?? childParkSignal(),
+					foreignRootDenial: seatDenial,
 				}),
 			);
 			mergeChildParkSignals(signal, children);
@@ -837,7 +959,7 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 
 		// Sequential verify per driver pass that has candidate blockers (scalar pr-verify).
 		for (const pass of iterationPasses) {
-			await runVerificationPass(pass, carried, profile, options.pr, { cwd, runStep: runStepImpl, localContext, parkSignal: signal, verifySettings });
+			await runVerificationPass(pass, carried, profile, options.pr, { cwd, runStep: runStepImpl, localContext, parkSignal: signal, verifySettings, foreignRootDenial: seatDenial, autoRefutable: carry?.autoRefutable });
 			const parked = parkGateResult(signal, pass.verificationResult ?? pass.result, passes);
 			if (parked) return parked;
 		}
@@ -856,14 +978,41 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 				.map((finding, index) => ({ id: `C${index + 1}`, finding, decision: "survives" as const, rationale: "Retained because the required pass was incomplete." }));
 		});
 		const hasNextPass = iteration < policy.maxPasses;
+		const summaryValid = structuralOk && actualCost <= policy.budgetCap && !terminalSplit;
 		const decision = evaluateReviewConvergence({
 			carried,
-			summary: { valid: structuralOk && actualCost <= policy.budgetCap && !terminalSplit, dispositions, cost: actualCost },
+			summary: { valid: summaryValid, dispositions, cost: actualCost },
 			previousSurvivorCount,
 			hasNextPass,
 			nextPassAffordable: actualCost + reservation <= policy.budgetCap,
 		});
 		carried = new Map(decision.survivors);
+		// #495: refutation-memory mirror of applyReviewPass — per-pass-validity granularity, so an
+		// early valid iteration's refutation is recorded even when a later iteration invalidates
+		// the whole run. An invalid summary contributes nothing (its dispositions are the
+		// synthesized retained-because-incomplete entries and stay blocking).
+		if (summaryValid) {
+			const grouped = new Map<string, VerificationDisposition[]>();
+			for (const disposition of dispositions) {
+				const fingerprint = reviewFindingFingerprint(disposition.finding);
+				const group = grouped.get(fingerprint) ?? [];
+				group.push(disposition);
+				grouped.set(fingerprint, group);
+			}
+			for (const [fingerprint, group] of grouped) {
+				const surviving = group.find((item) => item.decision === "survives");
+				if (surviving) {
+					refutedThisRun.delete(fingerprint);
+					continue;
+				}
+				// No surviving disposition ⇒ every group member refuted it; record an ACTUAL refuting
+				// candidate's id (not just group[0], which the flatten-across-passes could otherwise
+				// make ambiguous) for traceability. `refutedAtSha` (this run's head) is the
+				// authoritative binding regardless.
+				const refuting = group.find((item) => item.decision === "refuted");
+				if (refuting) refutedThisRun.set(fingerprint, { id: refuting.id, finding: refuting.finding });
+			}
+		}
 		if (actualCost > policy.budgetCap) breakerReason = "budget";
 		else if (decision.state === "converged" && agreement === "consensus-pass") {
 			gate = "pass";
@@ -911,16 +1060,69 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 		changedFiles: inspectionFiles,
 		taxonomy: policy.taxonomy,
 	});
-	const summary = `Convergence: ${gate === "pass" ? "converged" : `exhausted (${breakerReason ?? "invalid-pass"})`} · agreement=${agreement} · iterations=${lastIteration} · survivors=${carried.size} · providers=${pairing} · aggregate cost=$${cost.toFixed(2)}`;
+	// #495: emitted on pass AND block (a pass-record has empty survived and keeps the refutation
+	// memory); park short-circuits above and never reaches this aggregation.
+	const dispositionDraft = buildCarryDispositionDraft({
+		prNumber,
+		itemId: options.itemId ?? "",
+		reviewedSha: options.reviewedSha ?? "",
+		gate,
+		agreement,
+		ok,
+		survivors: carried,
+		verifications,
+		refutedThisRun,
+		autoRefutable: carry?.autoRefutable ?? new Map(),
+		carriedForward: carry?.carriedForward ?? [],
+		changedFiles: inspectionFiles,
+		taxonomy: policy.taxonomy,
+	});
+	// Deterministic operator-legibility token: why this run was narrow (or cold).
+	const autoRefuted = new Set<string>();
+	if (carry) {
+		for (const pass of passes) {
+			for (const disposition of pass.dispositions ?? []) {
+				const fingerprint = reviewFindingFingerprint(disposition.finding);
+				if (carry.autoRefutable.has(fingerprint)) autoRefuted.add(fingerprint);
+			}
+		}
+	}
+	// `auto-refutable` is the ELIGIBLE count (post-I3/D3 filtering). Kept beside `auto-refuted`
+	// so `auto-refuted=0` cannot read as "checked and none qualified" — under the shipped default
+	// taxonomy nothing is eligible (production findings all classify safety-tier; see
+	// docs/pr-review.md), and this token says so honestly.
+	// When carry was supplied but the pool is store-untrusted, the run went cold on purpose — say
+	// so, so `carry=none` is not misread as first-run.
+	const carryToken = carry
+		? `carry=${carry.priorSha ? carry.priorSha.slice(0, 7) : "overlay"} seeded=${carry.seedSurvivors.size} auto-refutable=${carry.autoRefutable.size} auto-refuted=${autoRefuted.size}`
+		: options.carry && !storeTrust.trusted
+			? "carry=refused-untrusted-pool"
+			: "carry=none";
+	const summary = `Convergence: ${gate === "pass" ? "converged" : `exhausted (${breakerReason ?? "invalid-pass"})`} · agreement=${agreement} · iterations=${lastIteration} · survivors=${carried.size} · providers=${pairing} · ${carryToken} · aggregate cost=$${cost.toFixed(2)}`;
 	const body = buildComment(gate, passes, securitySignal, summary, {
 		iterations: lastIteration,
 		survivors: carried.size,
 		breaker: breakerReason,
 		providers: pairing,
 		agreement,
+		carry: carryToken,
 	});
 	options.upsertComment?.(options.pr, body);
-	return { gate, body, cost, costEstimated, turns, ok, subtype, agreement, breakerReason, iterations: lastIteration, survivorCount: carried.size, ...(adjudicationSource ? { adjudicationSource } : {}) };
+	return {
+		gate,
+		body,
+		cost,
+		costEstimated,
+		turns,
+		ok,
+		subtype,
+		agreement,
+		breakerReason,
+		iterations: lastIteration,
+		survivorCount: carried.size,
+		...(adjudicationSource ? { adjudicationSource } : {}),
+		...(dispositionDraft ? { dispositionDraft } : {}),
+	};
 }
 
 /**
@@ -938,10 +1140,13 @@ export function persistLocalGateEvidence(opts: {
 	review: PrReviewGateResult;
 	gateRecordsRoot: string;
 	adjudicationSourcesRoot: string;
+	dispositionsRoot: string;
 	writeGateRecord: typeof writePrReviewGateRecord;
 	writeAdjudicationSource: typeof writeAdjudicationSourceRecord;
+	writeDispositionRecord: typeof writePrFindingDispositionRecord;
 	readFileSync: typeof readFileSync;
 	now: () => number;
+	elapsedMs: number;
 	warn: (msg: string) => void;
 }): void {
 	if (opts.review.gate === "park") return;
@@ -960,6 +1165,7 @@ export function persistLocalGateEvidence(opts: {
 		cost: opts.review.cost,
 		costEstimated: opts.review.costEstimated,
 		turns: opts.review.turns,
+		elapsedMs: opts.elapsedMs,
 		runner: "local",
 		reviewedAt: new Date(opts.now()).toISOString(),
 	};
@@ -990,6 +1196,135 @@ export function persistLocalGateEvidence(opts: {
 			opts.warn(`could not persist adjudication source: ${e instanceof Error ? e.message : String(e)}`);
 		}
 	}
+	// #495: persist the cross-push disposition record on pass AND block (park returned above),
+	// digest-bound to the exact fleet-record bytes and under the same identity-consistency guard
+	// style as the sidecar. Best-effort: a failure only ever means a future cold run.
+	const dispositionDraft = opts.review.dispositionDraft;
+	if (
+		dispositionDraft &&
+		dispositionDraft.headSha === opts.headSha.toLowerCase() &&
+		dispositionDraft.prNumber === gateRecord.prNumber &&
+		dispositionDraft.itemId === gateRecord.itemId &&
+		dispositionDraft.gate === gateRecord.gate &&
+		dispositionDraft.agreement === gateRecord.agreement &&
+		dispositionDraft.ok === gateRecord.ok
+	) {
+		try {
+			const fleetBytes = opts.readFileSync(fleetPath);
+			opts.writeDispositionRecord(opts.dispositionsRoot, {
+				...dispositionDraft,
+				fleetRecordDigest: fleetRecordDigestOf(fleetBytes),
+				reviewedAt: gateRecord.reviewedAt,
+			});
+		} catch (e) {
+			opts.warn(`could not persist finding dispositions: ${e instanceof Error ? e.message : String(e)}`);
+		}
+	}
+}
+
+const CARRY_SHA40_RE = /^[0-9a-f]{40}$/i;
+
+/**
+ * Resolve the cross-push carry input for a run (#495 D2/D3/D6): select at most one prior
+ * disposition record by git ancestry, bind it to its exact fleet-record bytes, compute the
+ * two-dot `--no-renames` interdiff's touched paths, and apply eligibility via planCarry.
+ * Returns undefined — today's cold behavior, byte-identical — on first-run (no priors, silent)
+ * and on EVERY carry-predicate failure (force-push/non-ancestor, malformed/ambiguous/unbindable
+ * record, unresolvable prior in the diff checkout), each with a stderr diagnostic via `warn`.
+ * Shared by the direct CLI (`main`) and the pipeline review drain.
+ */
+export function resolveCarryOptions(opts: {
+	prNumber: number;
+	itemId: string;
+	reviewedSha: string;
+	/** Trusted local repo for ancestry + interdiff git calls (never the PR-head data checkout). */
+	repo: string;
+	/** Seat-visible diff checkout — the narrowed refs must resolve where seats will read them. */
+	diffCwd: string;
+	dispositionsRoot: string;
+	gateRecordsRoot: string;
+	execFileSync: typeof execFileSync;
+	readFileSync: typeof readFileSync;
+	taxonomy: TaxonomyConfig;
+	warn: (msg: string) => void;
+}): PrReviewCarryInput | undefined {
+	// Carry binds to a full reviewed head; anything else (including a short SHA) disables it.
+	if (!Number.isInteger(opts.prNumber) || opts.prNumber <= 0 || !CARRY_SHA40_RE.test(opts.reviewedSha)) return undefined;
+	const listing = listPrFindingDispositionRecords(opts.dispositionsRoot);
+	if (listing.records.length === 0 && listing.invalid.length === 0) return undefined;
+	const git = (args: string[], cwd: string): string => String(opts.execFileSync("git", args, { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }));
+	// One call proves object presence AND ancestry in the trusted repo; any git failure drops
+	// the candidate (fail-closed toward cold).
+	const isAncestor = (ancestor: string, descendant: string): boolean => {
+		try {
+			git(["merge-base", "--is-ancestor", ancestor, descendant], opts.repo);
+			return true;
+		} catch {
+			return false;
+		}
+	};
+	const readFleetBytes = (prNumber: number, headSha: string): Buffer | null => {
+		try {
+			const raw = opts.readFileSync(resolve(opts.gateRecordsRoot, `${prNumber}-${headSha}.json`));
+			return Buffer.isBuffer(raw) ? raw : Buffer.from(String(raw), "utf8");
+		} catch {
+			return null;
+		}
+	};
+	const selection = selectCarrySource(listing, { prNumber: opts.prNumber, itemId: opts.itemId, reviewedSha: opts.reviewedSha, isAncestor, readFleetBytes });
+	if (selection.kind === "none") return undefined;
+	if (selection.kind === "refused") {
+		opts.warn(`carry disabled — ${selection.reason}; running a full cold review`);
+		return undefined;
+	}
+	if (selection.kind === "overlay-only") {
+		// No complete watermark ancestor → no narrowing base and no auto-refutation authority, but
+		// the non-watermark ancestors' retained blockers must still seed so an omission cannot green
+		// them (independent axes, round-5 must-fix). No git ancestry/interdiff work is needed.
+		const seedSurvivors = new Map<string, ReviewFinding>();
+		for (const entry of selection.overlaySurvivors) seedSurvivors.set(entry.fingerprint, entry.finding);
+		if (seedSurvivors.size === 0) return undefined;
+		opts.warn(
+			`carry: no complete watermark ancestor for PR ${opts.prNumber} — seeding ${seedSurvivors.size} blocker(s) from non-watermark record(s) [${selection.overlayNotes.join(", ")}] as blocking-only overlay; discovery runs cold (no narrowing)`,
+		);
+		return { seedSurvivors, autoRefutable: new Map(), carriedForward: [], narrowed: false };
+	}
+	const record = selection.record;
+	if (selection.overlayNotes.length > 0) {
+		// Non-watermark ancestors (incomplete runs, or complete records whose fleet record no
+		// longer binds — e.g. a later pr-adjudicate rewrote it) still contribute their retained
+		// blockers as blocking-only overlay; nothing from them clears a finding. The narrowing
+		// watermark is the newest COMPLETE bindable ancestor below.
+		opts.warn(`carry: seeding blockers from ${selection.overlaySurvivors.length} non-watermark survivor(s) [${selection.overlayNotes.join(", ")}] as blocking-only overlay; watermark = ${record.prNumber}-${record.headSha}.json`);
+	}
+	// D3 preflight: the narrowed base ref must resolve in the seat-visible diff checkout. In
+	// practice it does (the drain's checkout shares the trusted repo's object store), so this is
+	// a cheap belt-and-braces guard, not a new fetch path.
+	try {
+		git(["rev-parse", "--verify", `${record.headSha}^{commit}`], opts.diffCwd);
+	} catch {
+		opts.warn(`carry disabled — prior reviewed commit ${record.headSha.slice(0, 7)} does not resolve in the diff checkout; running a full cold review`);
+		return undefined;
+	}
+	let touchedPaths: Set<string>;
+	try {
+		// Two-dot (tree-to-tree byte identity, fail-closed after freshness merges) with
+		// --no-renames (a rename is a delete + create; both paths count as touched).
+		touchedPaths = computeTouchedPaths(git(["diff", "--no-ext-diff", "--no-renames", "--name-only", "-z", `${record.headSha}..${opts.reviewedSha}`, "--"], opts.repo));
+	} catch (e) {
+		opts.warn(`carry disabled — could not compute the interdiff: ${e instanceof Error ? e.message : String(e)}; running a full cold review`);
+		return undefined;
+	}
+	const plan = planCarry(record, touchedPaths, opts.taxonomy, selection.overlaySurvivors);
+	return {
+		priorSha: record.headSha,
+		seedSurvivors: plan.seedSurvivors,
+		autoRefutable: plan.autoRefutable,
+		carriedForward: plan.carriedForward,
+		// An empty interdiff still seeds and auto-refutes but discovers cold — there is no delta
+		// to scope discovery to (D5).
+		narrowed: touchedPaths.size > 0,
+	};
 }
 
 export async function main(argv: string[]): Promise<number> {
@@ -1027,8 +1362,30 @@ export async function main(argv: string[]): Promise<number> {
 	try {
 		const head = resolveReviewedHead(deps.execFileSync, pr, ROADMAP_GITHUB.ghRepo);
 		reviewedSha = head.sha;
+		// #495: cross-push carry is a local-runner mechanism (I4) behind the review.carry
+		// kill-switch. CI, non-claim heads, and `review.carry: false` read nothing — the run is
+		// byte-identical to today (records are still written below, so re-enabling has priors).
+		const policy = deps.policy ?? CONFIG.review;
+		const dispositionsRoot = deps.dispositionsRoot ?? prFindingDispositionsDir(mainWorktree(REPO));
+		const carry =
+			!deps.isCi() && head.itemId && policy.carry
+				? resolveCarryOptions({
+						prNumber: Number.parseInt(pr, 10),
+						itemId: head.itemId,
+						reviewedSha,
+						repo: REPO,
+						diffCwd: REPO,
+						dispositionsRoot,
+						gateRecordsRoot: deps.gateRecordsRoot ?? gateRecordsDir(mainWorktree(REPO)),
+						execFileSync: deps.execFileSync,
+						readFileSync: deps.readFileSync,
+						taxonomy: policy.taxonomy,
+						warn: (msg) => process.stderr.write(`⚠ ${msg}\n`),
+					})
+				: undefined;
 		// Policy/pool are intentionally not passed: runPrReviewGate resolves them through
 		// options → deps → CONFIG, so the same defaults apply and tests can pin the seam.
+		const reviewStartedAt = deps.now();
 		const review = await runPrReviewGate({
 			pr,
 			...(head.itemId ? { itemId: head.itemId } : {}),
@@ -1039,7 +1396,9 @@ export async function main(argv: string[]): Promise<number> {
 			reviewedSha,
 			runStep: deps.runStep,
 			execFileSync: deps.execFileSync,
+			...(carry ? { carry } : {}),
 		});
+		const reviewElapsedMs = Math.max(0, Math.trunc(deps.now() - reviewStartedAt));
 
 		// The review text goes to stdout unconditionally so the CI log always
 		// carries the findings — a failed comment upsert (or a truncated run)
@@ -1058,10 +1417,13 @@ export async function main(argv: string[]): Promise<number> {
 				review,
 				gateRecordsRoot: deps.gateRecordsRoot ?? gateRecordsDir(mainWorktree(REPO)),
 				adjudicationSourcesRoot: deps.adjudicationSourcesRoot ?? adjudicationSourcesDir(mainWorktree(REPO)),
+				dispositionsRoot,
 				writeGateRecord: deps.writeGateRecord,
 				writeAdjudicationSource: deps.writeAdjudicationSource,
+				writeDispositionRecord: deps.writeDispositionRecord,
 				readFileSync: deps.readFileSync,
 				now: deps.now,
+				elapsedMs: reviewElapsedMs,
 				warn: (msg) => process.stderr.write(`⚠ ${msg}\n`),
 			});
 		}

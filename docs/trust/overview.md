@@ -5,7 +5,7 @@ status: draft
 diataxis: explanation
 sidebar:
   order: 1
-last_reviewed: 2026-08-18
+last_reviewed: 2026-08-19
 threat_model_ref: ./threat-model.md
 ---
 
@@ -21,7 +21,7 @@ By default, no. `ship.target` resolves to `pull-request`, so the shipped default
 
 ### 2. What can it write?
 
-Pelaggio is designed around item worktrees, and mutating steps receive hooks/conventions that steer writes into the claimed worktree; by default, a shipped post-step confinement audit then fails the step if any change lands in the main checkout or a sibling worktree (`TC-011`, [sandboxing](./sandboxing.md), [`ADR-0001`](../decisions/0001-worktree-write-confinement.md)). With `confinement.allow-dirty-main`, Claude attributes main Git-state deltas across mutating-tool windows, Codex excludes main through its workspace boundary, and siblings remain whole-step audited. On Linux, a Claude step also wraps the SDK CLI in a detached Bubblewrap PID + mount namespace so the seat cannot inherit the harness controlling terminal, read host `/proc/<harness-pid>`, or see configured harness-only socket directories (`TC-018`). That wrap is not a full OS/container sandbox: the seat still has the host network, a bound host root outside those masks, and its supplied child environment (`TC-011`, `TC-015`, `TC-018`).
+Pelaggio is designed around item worktrees, and mutating steps receive hooks/conventions that steer writes into the claimed worktree; by default, a shipped post-step confinement audit then fails the step if any change lands in the main checkout or a sibling worktree (`TC-011`, [sandboxing](./sandboxing.md), [`ADR-0001`](../decisions/0001-worktree-write-confinement.md)). With `confinement.allow-dirty-main`, Claude attributes main Git-state deltas across mutating-tool windows, Codex excludes main through its workspace boundary, and siblings remain whole-step audited. On Linux, a Claude step also wraps the SDK CLI in a detached Bubblewrap PID + mount namespace so the seat cannot inherit the harness controlling terminal, read host `/proc/<harness-pid>`, or see configured harness-only socket directories; the child env is deny-by-default, and forge-denied roles lose GitHub token variables and existing GitHub CLI config directories (`TC-014`, `TC-018`). That wrap is not a full OS/container sandbox: the seat still has the host network, a bound host root outside those masks (including leftover host credential files), and Anthropic/CLI auth names because the child is the API client (`TC-011`, `TC-015`, `TC-018`).
 
 ### 3. What leaves my machine?
 

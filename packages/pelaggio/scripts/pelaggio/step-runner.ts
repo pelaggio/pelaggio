@@ -13,6 +13,7 @@ import { classifyStepError, isRefusal, looksLikeStalledAsk, type MainCheckoutDel
 import { opencodeProvider } from "./opencode-provider.js";
 import { gateRecordsDir, PR_REVIEW_GATE_RECORDS_DIR } from "./pr-review-gate-record.js";
 import { ADJUDICATION_SOURCES_DIR, adjudicationSourcesDir } from "./review/adjudication.js";
+import { PR_FINDING_DISPOSITIONS_DIR, prFindingDispositionsDir } from "./review/carry.js";
 import { composeSystemAppend, createStepTextProjection, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath, type StepTextProjection } from "./step-runner-shared.js";
 import { MUTATING_TOOLS, toolBrief } from "./tui.js";
 import type { ParkSignal, ProviderCapabilities, ProviderName, Step, StepEmit, StepResult, TokenUsage } from "./types.js";
@@ -48,6 +49,9 @@ export interface RunStepOpts {
 	trace: boolean;
 	itemId?: string;
 	parkSignal: ParkSignal;
+	/** Harness-owned workspace access intent. Codex review checkouts prepared as data stay read-only
+	 * even when they are Git worktrees; authoring-review seats omit this and remain writable. */
+	workspaceAccess?: "read-only";
 	/** Per-call override for the step's `maxTurns`. Used by `implement` to size the
 	 * budget from the plan's file count (see `computeImplementTurns` in helpers.ts).
 	 * When undefined, falls back to the profile-resolved turn limit. */
@@ -174,8 +178,10 @@ function pathUnderRoot(abs: string, root: string): boolean {
  * `.dev/freshness-gate-records/` (#424) joins the list as defense in depth: gate-skip trust
  * is in-process only (#511 — a forged disk record no longer authorizes anything), but the
  * observability register still must not be seat-writable.
+ * `.dev/pr-review-finding-dispositions/` (#495) joins for the same reason as the adjudication
+ * stores: a seat that could write it could forge an auto-refutation of a real finding.
  */
-const BASH_DENIED_DEV_REGISTERS = ["sessions", PR_REVIEW_GATE_RECORDS_DIR, ADJUDICATION_SOURCES_DIR, FRESHNESS_GATE_RECORDS_DIR] as const;
+const BASH_DENIED_DEV_REGISTERS = ["sessions", PR_REVIEW_GATE_RECORDS_DIR, ADJUDICATION_SOURCES_DIR, PR_FINDING_DISPOSITIONS_DIR, FRESHNESS_GATE_RECORDS_DIR] as const;
 const BASH_DENIED_DEV_REGISTER_RE = new RegExp(`(^|[\\s"'=/])\\.dev/(${BASH_DENIED_DEV_REGISTERS.join("|")})(/|\\b)`);
 
 /**
@@ -204,7 +210,7 @@ export function blockForeignRootWrite(input: HookInput, cwd: string, mainRepo: s
 				decision: "block" as const,
 				reason:
 					"This Bash command references a harness-owned register (docs/decision-log/, .dev/sessions/, " +
-					`.dev/${PR_REVIEW_GATE_RECORDS_DIR}/, .dev/${ADJUDICATION_SOURCES_DIR}/, or .dev/${FRESHNESS_GATE_RECORDS_DIR}/). These are written only by the harness; ` +
+					`.dev/${PR_REVIEW_GATE_RECORDS_DIR}/, .dev/${ADJUDICATION_SOURCES_DIR}/, .dev/${PR_FINDING_DISPOSITIONS_DIR}/, or .dev/${FRESHNESS_GATE_RECORDS_DIR}/). These are written only by the harness; ` +
 					'emit a "DECISION:" line in your step output for decisions — review/adjudication evidence is produced only by the harness\'s own review commands.',
 			};
 		}
@@ -232,11 +238,11 @@ export function blockForeignRootWrite(input: HookInput, cwd: string, mainRepo: s
 	// or ownWorktree would otherwise allow the path. Freshness-gate records (#424) get the
 	// same treatment as defense in depth (gate-skip trust is in-process only — #511 — but
 	// the observability register still must not be seat-writable).
-	for (const evidenceRoot of [gateRecordsDir(mainAbs), adjudicationSourcesDir(mainAbs), freshnessGateRecordsDir(mainAbs)]) {
+	for (const evidenceRoot of [gateRecordsDir(mainAbs), adjudicationSourcesDir(mainAbs), prFindingDispositionsDir(mainAbs), freshnessGateRecordsDir(mainAbs)]) {
 		if (pathUnderRoot(abs, evidenceRoot)) {
 			return {
 				decision: "block" as const,
-				reason: `Path "${fp}" targets a harness-owned evidence store (${evidenceRoot}). Do not write gate, adjudication-source, or freshness-gate records from agent tools.`,
+				reason: `Path "${fp}" targets a harness-owned evidence store (${evidenceRoot}). Do not write gate, adjudication-source, finding-disposition, or freshness-gate records from agent tools.`,
 			};
 		}
 	}
@@ -320,7 +326,7 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 	// commands (pnpm test, pnpm check) run downstream.
 	if (isWorktree) {
 		try {
-			const report = ensureWorktreeDeps(opts.cwd, REPO);
+			const report = ensureWorktreeDeps(opts.cwd, REPO, { workspaceAccess: opts.workspaceAccess });
 			if (report.root.type === "restore") {
 				emit({
 					type: "sdk_error",
@@ -368,7 +374,7 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 
 	// Fail closed before query() so a missing Bubblewrap / non-Linux host cannot
 	// become a retried error_sdk. There is no unisolated Claude fallback.
-	const seatPreflight = preflightClaudeSeat({ cwd: opts.cwd });
+	const seatPreflight = preflightClaudeSeat({ cwd: opts.cwd, step: name, envAllowlist: CONFIG.security.envAllowlist });
 	if (!seatPreflight.ok) {
 		emit({ type: "sdk_error", message: seatPreflight.message });
 		emit({ type: "done", ok: false, subtype: "error_confinement", cost: 0, turns: 0, elapsed: Date.now() - t0 });
@@ -459,6 +465,8 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 		spawnClaudeSeat(spawnOpts, {
 			cwd: opts.cwd,
 			bwrap: seatPreflight.bwrap,
+			step: name,
+			envAllowlist: CONFIG.security.envAllowlist,
 			...(opts.onChildSpawn ? { onChildSpawn: opts.onChildSpawn } : {}),
 		});
 

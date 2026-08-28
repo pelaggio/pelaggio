@@ -105,10 +105,11 @@ import {
 	verifyShipLanded,
 } from "./helpers.js";
 import { type NotifyConfig, notifyCycle, notifyDecision as notifyDecisionEvent, notifyStrandedReview, sendNotification as sendNotificationDefault } from "./notify.js";
-import { buildFailClosedComment, type PrReviewGateResult, runPrReviewGate } from "./pr-review-cli.js";
+import { buildFailClosedComment, type PrReviewGateResult, resolveCarryOptions, runPrReviewGate } from "./pr-review-cli.js";
 import { gateRecordsDir, type NewPrReviewGateRecord, writePrReviewGateRecord } from "./pr-review-gate-record.js";
 import { capabilityMapFrom, detectUnattendedSignals, resolveAuthoringReviewConfig, resolveAuthoringReviewExecution } from "./provider-routing.js";
 import { adjudicationSourcesDir, fleetRecordDigestOf, writeAdjudicationSourceRecord } from "./review/adjudication.js";
+import { prFindingDispositionsDir, writePrFindingDispositionRecord } from "./review/carry.js";
 import { runReviewLoop } from "./review/loop.js";
 import { type ReviewRecord, renderReviewRecord, writeReviewRecord } from "./review/record.js";
 import { cleanupAuthoringReviewSeatsForSha, isAuthoringReviewSeatPath, prepareAuthoringReviewSeat } from "./review/seats.js";
@@ -132,7 +133,7 @@ import { cleanupShipBodyFile, parseShipDecisionEffect, shipBodyFile } from "./sh
 import { commitStrayBookkeeping, getShipTarget, isAutonomousRemotePush, isShipTargetName, runShipBookkeeping as runShipBookkeepingDefault, SHIP_TARGET_NAMES } from "./ship/index.js";
 import type { PrShipGateBinding } from "./ship/pr-effects.js";
 import { extractPrUrl } from "./ship/pull-request.js";
-import { getProvider, REGISTERED_PROVIDERS, type RunStepFn, runStep as runStepDefault } from "./step-runner.js";
+import { getProvider, REGISTERED_PROVIDERS, type RunStepFn, type RunStepOpts, runStep as runStepDefault } from "./step-runner.js";
 import { A, createStepRenderer, fmtElapsed, LiveStatus, StatusBar, TUI_ENABLED } from "./tui.js";
 import {
 	type CycleDisposition,
@@ -448,6 +449,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			ownWorktree,
 			executionOverride,
 			parkSignalOverride,
+			workspaceAccess,
 			preCheckpointGate,
 			shipGate,
 		}: {
@@ -459,6 +461,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			ownWorktree?: string;
 			executionOverride?: { provider: import("./types.js").ProviderName; model?: string; codexModel?: string };
 			parkSignalOverride?: ParkSignal;
+			workspaceAccess?: RunStepOpts["workspaceAccess"];
 			/** Deterministic gate run against the tree BEFORE the checkpoint's `git add -A` (#424
 			 *  review): a failing gate skips the checkpoint entirely so unresolved conflict state
 			 *  is never committed as resolved. Result classification is left untouched — the
@@ -681,6 +684,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 						trace: flags.trace,
 						itemId: itemId ?? undefined,
 						parkSignal: parkSignalOverride ?? parkSignal,
+						...(workspaceAccess ? { workspaceAccess } : {}),
 						...(executionOverride ? { executionOverride } : {}),
 						...(maxTurnsOverride !== undefined ? { maxTurnsOverride } : {}),
 						signal: stepAbort.signal,
@@ -865,10 +869,10 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				// Write into the step worktree (per-item authority); never redirect to main.
 				await appendDecisions(cwd, {
 					...(itemId ? { itemId } : {}),
-					// Attempt-scoped: decision dedupe keys on (runId, step, occurrence) WITHOUT the
-					// fingerprint (decisions.ts), so an unsalted runId makes a resumed attempt's
-					// decision collide with its predecessor's in the same slot and be dropped from
-					// the durable record.
+					// Dedupe is fork identity within the item authority (decisions.ts): a
+					// re-emission of the same normalized (fork, chosen) — from a later step,
+					// a resumed attempt, or with reworded alternatives — collapses into the
+					// existing row. runId/step/occurrence are recorded provenance, not the key.
 					runId: itemRunId(),
 					step: name,
 					attempt,
@@ -2087,6 +2091,9 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			return step(name, prompt, seatCwd, {
 				executionOverride: opts.executionOverride,
 				parkSignalOverride: opts.parkSignal,
+				// runPrReviewGate owns this choice: its cold seats inspect data-only checkouts.
+				// Authoring-loop seats use a separate adapter and deliberately omit the intent.
+				workspaceAccess: opts.workspaceAccess,
 			});
 		};
 		let outcome: { kind: "review"; review: PrReviewGateResult };
@@ -2582,6 +2589,9 @@ export interface OrchestratorDeps {
 		writeGateRecord: typeof writePrReviewGateRecord;
 		adjudicationSourcesRoot: string;
 		writeAdjudicationSource: typeof writeAdjudicationSourceRecord;
+		dispositionsRoot: string;
+		writeDispositionRecord: typeof writePrFindingDispositionRecord;
+		resolveCarry: typeof resolveCarryOptions;
 	}>;
 	/**
 	 * Continuous-mode free queue probe (issue #82). Defaults to `listItems` + FlowPolicy
@@ -3469,6 +3479,11 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			writeGateRecord: writePrReviewGateRecord,
 			adjudicationSourcesRoot: hermeticQueueRoot(() => adjudicationSourcesDir(mainWorktree(REPO)), "adjudication-sources"),
 			writeAdjudicationSource: writeAdjudicationSourceRecord,
+			dispositionsRoot: hermeticQueueRoot(() => prFindingDispositionsDir(mainWorktree(REPO)), "finding-dispositions"),
+			// Not guarded: reads/writes only `dispositionsRoot` + `gateRecordsRoot` (hermetic by
+			// default above); with an empty store it returns before any git call.
+			writeDispositionRecord: writePrFindingDispositionRecord,
+			resolveCarry: resolveCarryOptions,
 			...deps.review,
 		};
 		const shipIsPr = shipTargetName === "pull-request" || shipTargetName === "auto-merge-pr";
@@ -3609,9 +3624,29 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				let reviewCostEstimated = false;
 				let parked = false;
 				let gateResult: PrReviewGateResult | null = null;
+				let gateStartedAt: number | undefined;
+				let elapsedMs = 0;
 				try {
 					const prepared = review.prepareReviewHead(REPO, pr);
 					if (!prepared) throw new Error("could not prepare PR head for local review");
+					// #495: cross-push carry — prior selection, interdiff, and eligibility resolve
+					// deterministically before the gate; any predicate failure runs cold with a warning.
+					const carry = review.policy.carry
+						? review.resolveCarry({
+								prNumber: pr.prNumber,
+								itemId: pr.itemId,
+								reviewedSha: pr.headSha,
+								repo: REPO,
+								diffCwd: prepared.diffCwd,
+								dispositionsRoot: review.dispositionsRoot,
+								gateRecordsRoot: review.gateRecordsRoot,
+								execFileSync,
+								readFileSync,
+								taxonomy: review.policy.taxonomy,
+								warn: (msg) => console.warn(`review ${pr.itemId}#${pr.prNumber} — ${msg}`),
+							})
+						: undefined;
+					gateStartedAt = review.now();
 					const result = await review.runReviewGate({
 						pr: String(pr.prNumber),
 						itemId: pr.itemId,
@@ -3623,7 +3658,9 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						reviewedSha: pr.headSha,
 						policy: review.policy,
 						parkSignal, // shared: a rate-limit park sets this and flows into the wait+retry policy
+						...(carry ? { carry } : {}),
 					});
+					elapsedMs = Math.max(0, Math.trunc(review.now() - gateStartedAt));
 					if (result.gate === "park") {
 						// Transient: leave the pending status as-is (do NOT upsert findings or post failure),
 						// charge the partial cost, hand the record back, and stop starting new reviews this pass.
@@ -3643,6 +3680,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						reviewCostEstimated = result.costEstimated;
 					}
 				} catch (e) {
+					if (gateStartedAt !== undefined) elapsedMs = Math.max(0, Math.trunc(review.now() - gateStartedAt));
 					const msg = e instanceof Error ? e.message : String(e);
 					body = buildFailClosedComment("error_crash", `local pr-review crashed before producing a review, so this gate blocks the merge.\n\n${msg}`);
 					finalState = "failure";
@@ -3669,6 +3707,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 							cost: gateResult.cost,
 							costEstimated: gateResult.costEstimated,
 							turns: gateResult.turns,
+							elapsedMs,
 							runner: "local",
 							reviewedAt: new Date(review.now()).toISOString(),
 						}
@@ -3684,6 +3723,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 							cost: 0,
 							costEstimated: false,
 							turns: 0,
+							elapsedMs,
 							runner: "local",
 							reviewedAt: new Date(review.now()).toISOString(),
 						};
@@ -3728,6 +3768,33 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					} catch (e) {
 						const msg = e instanceof Error ? e.message : String(e);
 						console.warn(`review ${pr.itemId}#${pr.prNumber} — could not persist adjudication source: ${msg}`);
+					}
+				}
+				// #495: cross-push disposition record, next to the fleet record + sidecar. Written on
+				// pass AND block (a pass record keeps the refutation memory); best-effort — a failure
+				// warns and only ever means the next run on this PR reviews cold.
+				const dispositionDraft = gateResult?.dispositionDraft;
+				if (
+					fleetPath &&
+					dispositionDraft &&
+					gateRecord.producer === "fleet" &&
+					dispositionDraft.headSha === pr.headSha.toLowerCase() &&
+					dispositionDraft.prNumber === gateRecord.prNumber &&
+					dispositionDraft.itemId === gateRecord.itemId &&
+					dispositionDraft.gate === gateRecord.gate &&
+					dispositionDraft.agreement === gateRecord.agreement &&
+					dispositionDraft.ok === gateRecord.ok
+				) {
+					try {
+						const fleetBytes = readFileSync(fleetPath);
+						review.writeDispositionRecord(review.dispositionsRoot, {
+							...dispositionDraft,
+							fleetRecordDigest: fleetRecordDigestOf(fleetBytes),
+							reviewedAt: gateRecord.reviewedAt,
+						});
+					} catch (e) {
+						const msg = e instanceof Error ? e.message : String(e);
+						console.warn(`review ${pr.itemId}#${pr.prNumber} — could not persist finding dispositions: ${msg}`);
 					}
 				}
 				upsertReviewComment(review.gh, review.ghRepo, pr.prNumber, body);

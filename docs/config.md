@@ -74,6 +74,10 @@ revise:                         # local revise sweep — auto-fix red-review PRs
 review:                         # PR review poster (issue #84)
   runner: ci                    # default: ci. values: ci | local
   statusless-after: 2h          # local-mode diagnostic threshold
+  carry: false                  # default: false (canary-off). Cross-push finding-disposition
+                                # carry (#495); records are written either way. Enable only when
+                                # the store-trust prerequisite holds for every local review
+                                # provider — see docs/pr-review.md "Cross-push carry"
   authoring:                    # opt-in pre-ship adversarial loop
     enabled: off                # off | local | keys; local permits subscription auth
                                 # checkouts under .dev/authoring-review-seats/ (#269)
@@ -847,6 +851,7 @@ the same command, so it is intentionally not looped.
 | `review.max-passes` | `1` | Independent review iterations, integer `1..3`. One preserves the safe rollout/current behavior. |
 | `review.budget-cap` | `20` | Positive finite aggregate dollar cap. A full required iteration is reserved before it starts. |
 | `review.provider-diversity` | `off` | `off`, `prefer`, or `require`; `require` blocks before agent work unless **at least one** review driver differs from the scalar verifier provider. |
+| `review.carry` | `false` | Cross-push finding-disposition carry (#495): a local re-review of a re-pushed PR seeds from the prior head's validated disposition record and narrows discovery to the interdiff (auto-refutation exists but is dormant under the default taxonomy — production findings all classify safety-tier). The carry stores are authorization inputs, so carry only *consumes* evidence when every provider in the **current** run's pool has a proven store-write denial (`claude`, `codex`); a pool with any store-writable provider (`grok`, `opencode`, unknowns) runs cold. Two residuals keep it default-**off**: the current-pool gate carries no producer-pool provenance, so a poisoned pre-enablement prior stays consumable until discarded (a #605 precondition), and the denial's completeness rests on #511 (the Bash register denial is textual, #510). Records are written while off, so enabling later has priors. See `docs/pr-review.md` → "Cross-push carry". |
 
 Local mode is only active in normal auto-pick runs for github-issues roadmaps and PR
 ship targets. Configure the model provider through the existing non-pipeline
@@ -1025,11 +1030,12 @@ bypasses only the one-pass `autopilot:revised` label.
 
 ## Spawned-agent env allowlist
 
-Driver subprocesses (codex today, grok next) run work influenced by untrusted
-repo/issue/PR text. To stop a prompt-injected step from reading credentials, they
-are spawned with a **deny-by-default environment**: only a fixed allowlist
-(`PATH`, `HOME`, locale/cert vars) plus any names you add here is forwarded — the
-child never inherits the full parent environment (issue #237, TC-014).
+Driver subprocesses run work influenced by untrusted repo/issue/PR text. To stop
+a prompt-injected step from reading unrelated credentials, they are spawned with
+a **deny-by-default environment**: only a fixed allowlist (`PATH`, `HOME`,
+locale/cert vars), provider-required values, and permitted names you add here
+are forwarded. The child never inherits the full parent environment (issue
+#237, TC-014).
 
 Subscription auth keeps working out of the box because codex/grok read their
 tokens from files under `HOME`. Add a var only when a driver needs it in the
@@ -1042,14 +1048,26 @@ security:
 
 `security.env-allowlist` must be an array of strings. At launch the allowlist is
 additionally **provider-scoped**: a subprocess driver receives its own key var
-but never a sibling provider's — `OPENAI_API_KEY` never reaches Grok,
-`XAI_API_KEY` never reaches Codex, and `ANTHROPIC_API_KEY` (consumed in-process
-by the Claude SDK) reaches no subprocess driver — so a multi-provider review
-never exposes one seat to another provider's credential. Non-key entries are
-forwarded unchanged. Independently, captured
-driver stderr and the verbose `.dev/*.log` transcript are **secret-scrubbed
-before write**: credential-shaped strings (JWTs, provider keys, tokens) and the
-values of secret-named env vars are replaced with `[REDACTED]`.
+but never a sibling provider's — `OPENAI_API_KEY` never reaches Grok and
+`XAI_API_KEY` never reaches Codex. Claude is different because its spawned CLI
+is the model API client: in direct Anthropic mode every Claude role receives the
+direct token inputs, including `ANTHROPIC_API_KEY`, independently of this
+setting. Other SDK-listed WIF/profile inputs remain provider-independent.
+
+The Claude seat applies two further restrictions after operator configuration.
+Direct Anthropic token auth is stripped when a Foundry, AWS, or Google provider
+mode is active; those modes receive their matching credential family. Adding
+mode-gated credential names to `security.env-allowlist` cannot enable an
+inactive mode. Forge-denied roles
+(`plan`, authoring/review/verification, and implementation roles) strip GitHub,
+Linear, SSH-agent, and git-native authentication channels even when they are
+listed here. Other allowlisted entries are forwarded unchanged unless another
+documented provider or role policy denies them.
+
+Independently, captured driver stderr and the verbose `.dev/*.log` transcript
+are **secret-scrubbed before write**: credential-shaped strings (JWTs, provider
+keys, tokens) and the values of secret-named env vars are replaced with
+`[REDACTED]`.
 
 ## Notifications
 
@@ -1086,10 +1104,24 @@ Lifecycle and projection commands:
 | `npx pelaggio decisions rebuild-index` | Cold-path projection of all non-archive authority files into `docs/decisions.md` |
 
 Ordinary emissions use an opaque UUID lifecycle ID plus a separate content
-fingerprint; retries with the same run/step/occurrence/fingerprint are
-idempotent (attempt is ignored). ID or fingerprint collisions with unequal
-content fail closed. Review escalations keep evidence-bound
-`reviewEscalationId` hashes.
+fingerprint. Within one owner's log, an emission matching a fork's **current
+choice** — the latest Active row for that fork — is idempotent across runs,
+steps, attempts, occurrences, sources, and alternatives. A same-fork emission
+whose `chosen` differs from the current choice appends as a genuine re-decision,
+*including a reversion to a choice recorded earlier*: after `A → B`, a further
+`A` is the live decision and gets its own row, date, and source rather than
+collapsing into the superseded `A`. Identity normalization collapses whitespace
+and ignores trailing sentence punctuation, but preserves case so technical
+choices such as `CONTROL_PLANE_TOKEN` and `control_plane_token` remain distinct.
+Resolved rows are the exception, and only while the fork has no live Active
+choice: an emission matching an already-resolved identity then returns that row
+instead of reopening the decision as `default-taken`. Once the fork has a current
+Active choice, that choice decides, so a reversion to a once-resolved option
+still appends. The resolved lookup spans `docs/decision-log/archive/<owner>.md`
+as well as the authority file, so archiving a resolution does not make it
+re-openable. ID or alias collisions with unequal content fail closed. Review escalations
+keep evidence-bound `reviewEscalationId` hashes and remain outside ordinary
+fork-identity dedupe.
 
 **Parked items after migration ships:** worktrees that predate the merged
 cutover must merge/rebase main (or re-run `decisions migrate` in that worktree)

@@ -27,7 +27,7 @@ The PR number is on the `Arguments:` line at the bottom of this prompt (`--pr <n
 You are checked out at the PR head with full history; `origin/main` is the merge base.
 
 - Changed files: `git diff --name-only origin/main...HEAD` (three-dot: only what this branch introduced).
-- The diff itself: `git diff origin/main...HEAD` — or `gh pr diff <n>` for the same thing.
+- The diff itself: `git diff origin/main...HEAD`. (`gh pr diff <n>` will NOT work here: review seats are denied forge credentials, so `gh` has no auth — use the git path.)
 - Read the repo's `CLAUDE.md` (if present) for load-bearing project invariants, and any `docs/` the change touches.
 
 ## Quality rubric

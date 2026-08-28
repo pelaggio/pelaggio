@@ -331,6 +331,19 @@ describe("blockForeignRootWrite (#369 / #269 nested seats)", () => {
 		assert.equal(writeOut.decision, "block");
 		assert.match(String(writeOut.reason), /evidence store/);
 	});
+
+	it("blocks Bash mention and Write/Edit of the finding-disposition store (#495 forge path)", () => {
+		// A forged disposition record would let carry auto-refute a real finding on the next push.
+		const bashOut = blockForeignRootWrite(bash(`printf '{}' > ${main}/.dev/pr-review-finding-dispositions/495-${"a".repeat(40)}.json`), sibling, main, registered, sibling);
+		assert.equal(bashOut.decision, "block");
+		assert.match(String(bashOut.reason), /harness-owned register/);
+		assert.equal(blockForeignRootWrite(bash("rm -rf .dev/pr-review-finding-dispositions"), sibling, main, registered, sibling).decision, "block");
+		const writeOut = blockForeignRootWrite(write(`${main}/.dev/pr-review-finding-dispositions/495-${"a".repeat(40)}.json`), main, main, registered, sibling);
+		assert.equal(writeOut.decision, "block");
+		assert.match(String(writeOut.reason), /evidence store/);
+		const editOut = blockForeignRootWrite(edit(".dev/pr-review-finding-dispositions/495-abc.json"), main, main, registered);
+		assert.equal(editOut.decision, "block");
+	});
 });
 
 describe("getProvider — registry + guard", () => {
@@ -474,6 +487,12 @@ describe("composeSystemAppend", () => {
 		assert.match(out, /git worktree at: \/tmp\/wt/);
 		assert.match(out, /main repository is at: \/home\/user\/repo/);
 		assert.ok(out.indexOf("## Operating autonomously") < out.indexOf("## CRITICAL"), "autonomy precedes CRITICAL");
+	});
+
+	it("does not tell a read-only worktree seat that it can write", () => {
+		const out = composeSystemAppend({ ...base, isWorktree: true, planBlockActive: false, workspaceAccess: "read-only" });
+		assert.match(out, /read here; the sandbox denies writes/);
+		assert.doesNotMatch(out, /read and write here/);
 	});
 
 	it("layers the plan block when planBlockActive", () => {

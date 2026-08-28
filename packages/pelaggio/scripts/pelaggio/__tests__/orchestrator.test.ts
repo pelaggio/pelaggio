@@ -8,6 +8,7 @@ import type { NotifyPayload } from "../notify.js";
 import { hermeticDefault, hermeticQueueRoot, PARKED_EXIT_CODE, runOrchestrator } from "../pipeline.js";
 import { gateRecordsDir, readPrReviewGateRecord, writePrReviewGateRecord } from "../pr-review-gate-record.js";
 import { fleetRecordDigestOf, readAdjudicationSourceRecord, writeAdjudicationSourceRecord } from "../review/adjudication.js";
+import { type PrCarryDispositionDraft, readPrFindingDispositionRecord, writePrFindingDispositionRecord } from "../review/carry.js";
 import { reviewFindingFingerprint } from "../review/findings.js";
 import { enqueueReviewRequest, type NewReviewRequest, reviewRequestsDir } from "../review-request-queue.js";
 import { type AcquireReviseExecutionResult, reviseFindingsPath } from "../revise-sweep.js";
@@ -2487,6 +2488,7 @@ describe("runOrchestrator — mid-run review drain (#387)", () => {
 				verification: { id: string; decision: "refuted"; rationale: string };
 			}>;
 		};
+		dispositionDraft?: PrCarryDispositionDraft;
 	};
 	type GateFn = (opts: { parkSignal?: { parked: boolean; resetsAt: number; limitType: string }; reviewedSha?: string; itemId?: string }) => Promise<GateResult>;
 
@@ -2515,7 +2517,15 @@ describe("runOrchestrator — mid-run review drain (#387)", () => {
 		};
 	}
 
-	function reviewDeps(over: { gh: GhRunner; main: string; runReviewGate?: GateFn; writeGateRecord?: typeof writePrReviewGateRecord; writeAdjudicationSource?: typeof writeAdjudicationSourceRecord }) {
+	function reviewDeps(over: {
+		gh: GhRunner;
+		main: string;
+		runReviewGate?: GateFn;
+		writeGateRecord?: typeof writePrReviewGateRecord;
+		writeAdjudicationSource?: typeof writeAdjudicationSourceRecord;
+		writeDispositionRecord?: typeof writePrFindingDispositionRecord;
+		now?: () => number;
+	}) {
 		return {
 			runner: "local" as const,
 			ghRepo: "o/r",
@@ -2523,13 +2533,15 @@ describe("runOrchestrator — mid-run review drain (#387)", () => {
 			queueRoot: reviewRequestsDir(over.main),
 			gateRecordsRoot: gateRecordsDir(over.main),
 			adjudicationSourcesRoot: join(over.main, ".dev", "pr-review-adjudication-sources"),
+			dispositionsRoot: join(over.main, ".dev", "pr-review-finding-dispositions"),
 			statuslessAfter: "2h",
-			now: () => Date.parse("2026-08-03T12:05:00Z"),
+			now: over.now ?? (() => Date.parse("2026-08-03T12:05:00Z")),
 			prepareReviewHead: () => ({ diffCwd: "/tmp/pr-head", baseRef: "origin/main", headRef: "refs/pelaggio-review/pr-201" }),
 			cleanupReviewHead: () => {},
 			runReviewGate: over.runReviewGate ?? passGate,
 			writeGateRecord: over.writeGateRecord ?? writePrReviewGateRecord,
 			writeAdjudicationSource: over.writeAdjudicationSource ?? writeAdjudicationSourceRecord,
+			writeDispositionRecord: over.writeDispositionRecord ?? writePrFindingDispositionRecord,
 		};
 	}
 
@@ -2550,6 +2562,7 @@ describe("runOrchestrator — mid-run review drain (#387)", () => {
 			return { stdout: "", stderr: "", status: 0 };
 		};
 		let gateCalls = 0;
+		let nowMs = Date.parse("2026-08-03T12:05:00.000Z");
 		const { runPipeline } = createMockRunPipeline({
 			byItem: { "387": { completed: true, cost: 0.5 } },
 			// The ship-tail enqueue lands the record in the main-tree queue as the cycle ships.
@@ -2565,10 +2578,12 @@ describe("runOrchestrator — mid-run review drain (#387)", () => {
 				review: reviewDeps({
 					gh,
 					main,
+					now: () => nowMs,
 					runReviewGate: async (opts) => {
 						assert.equal(opts.reviewedSha, HEAD);
 						assert.equal(opts.itemId, "387");
 						gateCalls++;
+						nowMs += 3_456;
 						return passGate();
 					},
 				}),
@@ -2594,8 +2609,9 @@ describe("runOrchestrator — mid-run review drain (#387)", () => {
 			cost: 0.2,
 			costEstimated: false,
 			turns: 3,
+			elapsedMs: 3_456,
 			runner: "local",
-			reviewedAt: "2026-08-03T12:05:00.000Z",
+			reviewedAt: "2026-08-03T12:05:03.456Z",
 		});
 	});
 
@@ -2671,6 +2687,120 @@ describe("runOrchestrator — mid-run review drain (#387)", () => {
 		const fleetBytes = readFileSync(join(gateRecordsDir(main), `201-${HEAD}.json`));
 		assert.equal(source.fleetRecordDigest, fleetRecordDigestOf(fleetBytes));
 		assert.equal(source.survivorCount, 1);
+	});
+
+	function carryDraft(): PrCarryDispositionDraft {
+		const finding = { severity: "must-fix" as const, message: "Broken parser.", path: "src/a.ts", line: 10 };
+		return {
+			prNumber: 201,
+			itemId: "387",
+			headSha: HEAD,
+			gate: "block",
+			agreement: "consensus-block",
+			ok: true,
+			survived: [{ finding, fingerprint: reviewFindingFingerprint(finding), class: "correctness-regression", tier: "safety", verification: { id: "C1", rationale: "Confirmed." } }],
+			refuted: [],
+		};
+	}
+
+	it("persists the cross-push disposition record next to the fleet record and sidecar (#495)", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const main = mainDir();
+		enqueueReviewRequest(main, record());
+		const gh: GhRunner = (args) => {
+			if (args[0] === "pr" && args[1] === "list") return { stdout: "[]", stderr: "", status: 0 };
+			if (args[0] === "issue" && args[1] === "view") return { stdout: JSON.stringify({ labels: [{ name: "autopilot" }] }), stderr: "", status: 0 };
+			if (args[0] === "api" && args[1]?.includes("/commits/") && args[1]?.endsWith("/status")) return { stdout: JSON.stringify({ statuses: [] }), stderr: "", status: 0 };
+			if (args[0] === "api" && args[1]?.includes("/comments")) return { stdout: "[]", stderr: "", status: 0 };
+			return { stdout: "", stderr: "", status: 0 };
+		};
+		const { runPipeline } = createMockRunPipeline({ default: { completed: false, cost: 0, error: "pick:queue-empty" } });
+		await runOrchestrator(
+			{ ...baseFlags, target: "pull-request", cycles: "1" },
+			{
+				runPipeline,
+				resolveWorktree: () => "/fake/wt",
+				review: reviewDeps({
+					gh,
+					main,
+					runReviewGate: async () => ({
+						gate: "block",
+						body: "blocked",
+						cost: 0.4,
+						costEstimated: false,
+						turns: 5,
+						ok: true,
+						subtype: "consensus-block",
+						agreement: "consensus-block",
+						survivorCount: 1,
+						adjudicationSource: blockDraft(),
+						dispositionDraft: carryDraft(),
+					}),
+				}),
+			},
+		);
+		assert.ok(readPrReviewGateRecord(gateRecordsDir(main), 201, HEAD));
+		assert.ok(readAdjudicationSourceRecord(join(main, ".dev", "pr-review-adjudication-sources"), 201, HEAD));
+		const disposition = readPrFindingDispositionRecord(join(main, ".dev", "pr-review-finding-dispositions"), 201, HEAD);
+		assert.ok(disposition, "disposition record persisted next to gate record + sidecar");
+		const fleetBytes = readFileSync(join(gateRecordsDir(main), `201-${HEAD}.json`));
+		assert.equal(disposition.fleetRecordDigest, fleetRecordDigestOf(fleetBytes), "digest-bound to the exact fleet record bytes");
+		assert.equal(disposition.reviewedAt, "2026-08-03T12:05:00.000Z");
+		assert.equal(disposition.survived[0]?.finding.message, "Broken parser.");
+	});
+
+	it("still posts the ordinary red gate when disposition persistence fails (#495)", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const warned: string[] = [];
+		t.mock.method(console, "warn", (msg: string) => {
+			warned.push(String(msg));
+		});
+		const main = mainDir();
+		enqueueReviewRequest(main, record());
+		const ghCalls: string[][] = [];
+		const gh: GhRunner = (args) => {
+			ghCalls.push(args);
+			if (args[0] === "pr" && args[1] === "list") return { stdout: "[]", stderr: "", status: 0 };
+			if (args[0] === "issue" && args[1] === "view") return { stdout: JSON.stringify({ labels: [{ name: "autopilot" }] }), stderr: "", status: 0 };
+			if (args[0] === "api" && args[1] === `repos/o/r/commits/${HEAD}/status`) return { stdout: JSON.stringify({ statuses: [] }), stderr: "", status: 0 };
+			if (args[0] === "api" && args[1]?.includes("/comments")) return { stdout: "[]", stderr: "", status: 0 };
+			return { stdout: "", stderr: "", status: 0 };
+		};
+		const { runPipeline } = createMockRunPipeline({ default: { completed: false, cost: 0, error: "pick:queue-empty" } });
+		await runOrchestrator(
+			{ ...baseFlags, target: "pull-request", cycles: "1" },
+			{
+				runPipeline,
+				resolveWorktree: () => "/fake/wt",
+				review: reviewDeps({
+					gh,
+					main,
+					runReviewGate: async () => ({
+						gate: "block",
+						body: "blocked",
+						cost: 0.4,
+						costEstimated: false,
+						turns: 5,
+						ok: true,
+						subtype: "consensus-block",
+						agreement: "consensus-block",
+						survivorCount: 1,
+						dispositionDraft: carryDraft(),
+					}),
+					writeDispositionRecord: () => {
+						throw new Error("disposition disk full");
+					},
+				}),
+			},
+		);
+		assert.ok(readPrReviewGateRecord(gateRecordsDir(main), 201, HEAD), "fleet record persisted");
+		assert.equal(readPrFindingDispositionRecord(join(main, ".dev", "pr-review-finding-dispositions"), 201, HEAD), null);
+		assert.ok(
+			warned.some((msg) => msg.includes("could not persist finding dispositions")),
+			"best-effort failure warns",
+		);
+		const statuses = ghCalls.filter((a) => a[0] === "api" && a[1] === `repos/o/r/statuses/${HEAD}`).map((a) => a.find((x) => x.startsWith("state=")));
+		assert.ok(statuses.includes("state=failure"), "ordinary red gate still posts");
 	});
 
 	it("still posts the ordinary red gate when adjudication source persistence fails", async (t) => {

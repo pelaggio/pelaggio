@@ -65,10 +65,12 @@ export interface PrAdjudicationVerification {
 
 /**
  * A carried finding whose LATEST fleet verification refuted it (#525 must-fix). The gate's
- * fail-closed invalid-summary rule re-adds every disposed finding to the carried set, so a
- * disagreement record's `survivorCount` includes findings a complete, valid verification pass
- * already refuted. Recording them here — with their refutation evidence — keeps the sidecar
- * bindable (counts match the fleet record) without opening any edit region for them.
+ * fail-closed invalid-summary rule re-adds every disposed finding to the carried set — on a
+ * disagreement split AND on a `consensus-block` whose final summary a budget-cap overrun
+ * invalidated — so a findings-terminal record's `survivorCount` includes findings a complete,
+ * valid verification pass already refuted. Recording them here — with their refutation
+ * evidence — keeps the sidecar bindable (counts match the fleet record) without opening any
+ * edit region for them.
  */
 export interface PrAdjudicationRefutedEntry {
 	finding: ReviewFinding;
@@ -255,7 +257,8 @@ function validateHunk(value: unknown): PrAdjudicationHunk {
 	if (!isRecord(value)) fail("hunk");
 	requireClosedKeys(value, HUNK_KEYS, "hunk");
 	const path = requireNonEmptyString(value.path, "hunk.path");
-	if (path.length > ADJUDICATION_SOURCE_MAX_PATH || normalizeGitPath(path) === null) fail("hunk.path");
+	// Single-line, matching validateFinding's path rule — trust-boundary validations are uniform.
+	if (path.length > ADJUDICATION_SOURCE_MAX_PATH || /[\r\n]/.test(path) || normalizeGitPath(path) === null) fail("hunk.path");
 	const start = requirePositiveInt(value.start, "hunk.start");
 	const end = requirePositiveInt(value.end, "hunk.end");
 	if (start > end) fail("hunk.range");
@@ -810,9 +813,20 @@ export function evaluateInterdiffPolicy(opts: { isAncestor: boolean; interdiff: 
 	return { kind: "eligible", digest, dispositions };
 }
 
+/**
+ * Code span for escaped model-authored content. Backslash escapes are inert inside a code
+ * span, so a single-backtick span still terminates on a literal backtick in the content.
+ * `escapeMarkdown` backslash-prefixes every backtick, so the escaped text never contains two
+ * ADJACENT backticks — a double-backtick fence (space-padded, per CommonMark) can therefore
+ * never be terminated from inside.
+ */
+function renderCodeSpan(escaped: string): string {
+	return `\`\` ${escaped} \`\``;
+}
+
 /** Model-authored path:line location, escaped for the public comment (line is a validated int). */
 function renderFindingLocation(finding: ReviewFinding): string {
-	return finding.path ? ` (\`${escapeMarkdown(finding.path)}${finding.line ? `:${finding.line}` : ""}\`)` : "";
+	return finding.path ? ` (${renderCodeSpan(`${escapeMarkdown(finding.path)}${finding.line ? `:${finding.line}` : ""}`)})` : "";
 }
 
 /**
@@ -844,7 +858,15 @@ export function renderOperatorAdjudicationComment(opts: {
 	});
 	const refuted = (opts.refuted ?? []).map((entry) => {
 		const location = renderFindingLocation(entry.finding);
-		return `- **${entry.finding.severity}**${location}: ${escapeMarkdown(entry.finding.message)} — **refuted** by fleet isolated verification ${entry.verification.id} (${escapeMarkdown(entry.verification.rationale)}); no repair required`;
+		// The clearance authority is the LIVE at-head confirmation bound into the disposition
+		// (#525 round-3): its rationale cites the live verification id with head-bound phrasing
+		// and keeps the fleet refutation as provenance. Cite THAT, never only the stale fleet
+		// text; the fleet-only fallback covers a renderer call without a bound disposition.
+		const entryDisposition = opts.dispositions[entry.fingerprint];
+		const evidence = entryDisposition
+			? `**${entryDisposition.disposition}** (${escapeMarkdown(entryDisposition.rationale)})`
+			: `**refuted** by fleet isolated verification ${entry.verification.id} (${escapeMarkdown(entry.verification.rationale)})`;
+		return `- **${entry.finding.severity}**${location}: ${escapeMarkdown(entry.finding.message)} — ${evidence}; no repair required`;
 	});
 	return [
 		PR_ADJUDICATION_MARKER,

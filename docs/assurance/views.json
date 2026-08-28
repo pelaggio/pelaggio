@@ -1,0 +1,76 @@
+{
+  "schemaVersion": "0.2.0",
+  "status": "shadow",
+  "views": [
+    {
+      "id": "architecture",
+      "question": "What durable architectural intent does Pelaggio currently preserve?",
+      "audience": ["operator", "developer", "public"],
+      "mode": "all-of-kind",
+      "kinds": ["proposition"],
+      "roles": ["invariant"],
+      "visibility": ["internal"],
+      "relations": ["specializes"]
+    },
+    {
+      "id": "why",
+      "question": "Why does this node exist, what constrains it, and what realizes it today?",
+      "audience": ["operator", "developer"],
+      "mode": "neighborhood",
+      "parameter": "node",
+      "depth": 2,
+      "relations": ["constrains", "implements", "assumes", "specializes", "derived-from", "projects"]
+    },
+    {
+      "id": "affected",
+      "question": "What intent could this decision, realization, ADR, or change affect?",
+      "audience": ["operator", "developer"],
+      "mode": "upstream-intent",
+      "parameter": "node-or-source",
+      "relations": ["implements", "specializes", "constrains", "derived-from"]
+    },
+    {
+      "id": "debt",
+      "question": "What architectural machinery or intent has become unsupported, orphaned, or stale?",
+      "audience": ["operator", "developer"],
+      "mode": "diagnostics",
+      "checks": [
+        "orphan-realization",
+        "invariant-without-realization",
+        "decision-without-intent",
+        "unused-assumption",
+        "stale-source-grounding",
+        "projection-overreach",
+        "constraint-without-enforcement"
+      ]
+    },
+    {
+      "id": "trust",
+      "question": "Which public trust propositions exist, at what projection status and scope?",
+      "audience": ["operator", "developer", "public"],
+      "mode": "all-of-kind",
+      "kinds": ["proposition"],
+      "roles": ["invariant"],
+      "visibility": ["public"],
+      "relations": []
+    },
+    {
+      "id": "review",
+      "question": "Why does the current review strategy exist, what assumptions does it rely on, and what survives if the strategy changes?",
+      "audience": ["operator", "developer"],
+      "mode": "seeded-neighborhood",
+      "seeds": ["CLM-0016", "CLM-0009", "CLM-0008", "ASM-0002", "DEC-0014", "CTR-0003"],
+      "depth": 1,
+      "relations": ["implements", "assumes", "constrains", "specializes", "derived-from"]
+    },
+    {
+      "id": "landing",
+      "question": "What must remain true for landing to be safe if the current CAS realization changes?",
+      "audience": ["operator", "developer"],
+      "mode": "seeded-neighborhood",
+      "seeds": ["CLM-0007"],
+      "depth": 2,
+      "relations": ["constrains", "implements", "specializes", "derived-from"]
+    }
+  ]
+}

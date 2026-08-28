@@ -39,6 +39,9 @@ Numbered from the security audit's implicit-decision candidates.
 | [0024](./0024-adversarial-authoring-review-loop.md) | Review moves upstream: multi-driver panel + Judge, deterministic convergence, park-on-safety, provenance record | accepted | — |
 | [0025](./0025-landing-serialization-cas-fence-optional-ordering.md) | Landing serialization: CAS fence, optional ordering (amends 0005) | proposed | `TC-013` |
 | [0026](./0026-stateful-guards-fence-reconcile-and-gate-disposition.md) | Stateful guards: fence-or-reconcile classification; gate disposition splits judgment from evidence (amends 0004) | proposed | `TC-003`, `TC-013` |
+| [0027](./0027-machine-readable-architectural-intent-graph.md) | Architectural intent converges on one machine-readable graph; prose remains narrative/history | proposed | — |
+| [0028](./0028-delivery-packet-claim-scoped-provenance.md) | Delivery unit is the claim; intent-only packet carried on the landing surface joins — never copies — its evaluative record | proposed | — |
+
 
 *Status vocabulary:* `proposed` (decided, not yet implemented) · `accepted` (implemented) · `superseded`.
 
@@ -50,6 +53,8 @@ These ADRs are one lane of four; keep a decision in its lane rather than duplica
 - **`docs/agent-context/*.md`** — the design / RFC lane (exploration, tagged `(design)` / `(flow, planned)`) **and operator how-tos** (e.g. `supervised-run.md`). **RFC-before-ADR** — design docs explore; an ADR records the settled decision they converged on.
 - **`docs/decisions/*.md`** (this lane) — the settled decision and *why*.
 - **`docs/trust/*`** — the *what + proof*.
+
+A fifth, **shadow** lane — `docs/assurance/` (ADR-0027) — holds the machine-readable projection of this lane and the trust registry. It is derived-and-checked, not a place to author decisions; it stays non-authoritative until promoted.
 
 These lanes route whole documents. For what belongs where *inside* a single decision, see [the three layers](#what-belongs-in-an-adr--the-three-layers) and the cut test below.
 

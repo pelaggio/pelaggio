@@ -362,7 +362,7 @@ export const runStep: StepProvider["runStep"] = async (name, prompt, opts, emit)
 	const isWorktree = isWorktreePath(opts.cwd, REPO);
 	if (isWorktree) {
 		try {
-			ensureWorktreeDeps(opts.cwd, REPO);
+			ensureWorktreeDeps(opts.cwd, REPO, { workspaceAccess: opts.workspaceAccess });
 		} catch (err) {
 			emit({ type: "sdk_error", message: `worktree-deps guard failed: ${err instanceof Error ? err.message : String(err)}` });
 		}

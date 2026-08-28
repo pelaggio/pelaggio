@@ -112,6 +112,19 @@ function normalize(value: string): string {
 	return value.trim().replace(/\s+/g, " ");
 }
 
+/** Deterministic, case-preserving canonicalization for fork identity: collapse whitespace and strip trailing sentence punctuation. Never semantic. */
+function normalizeIdentity(value: string): string {
+	return value
+		.replace(/\s+/g, " ")
+		.trim()
+		.replace(/[\s.,;:!?]+$/, "");
+}
+
+/** Fork-identity dedupe key: the normalized (fork, chosen) pair. Alternatives are deliberately excluded. */
+function forkIdentityKey(decision: Decision): string {
+	return [normalizeIdentity(decision.fork), normalizeIdentity(decision.chosen ?? "")].join("\0");
+}
+
 function unescapeCell(value: string): string {
 	return value.replace(/\\\|/g, "|").replace(/\\\\/g, "\\");
 }
@@ -607,10 +620,6 @@ function decisionFromCells(cells: string[]): Decision {
 	return { fork, ...(chosen ? { chosen } : {}), ...(alternatives ? { alternatives } : {}) };
 }
 
-function dedupeKey(runId: string, step: string, occurrence: number, fingerprint: string): string {
-	return [runId, step, String(occurrence), fingerprint].join("\0");
-}
-
 function scanRepoForId(repo: string, id: string): Array<{ repo: string; owner: string; entry: StoredDecision; file: AuthorityFile }> {
 	const hits: Array<{ repo: string; owner: string; entry: StoredDecision; file: AuthorityFile }> = [];
 	for (const owner of listOwnerFiles(repo)) {
@@ -629,6 +638,37 @@ function isMainCheckout(repo: string): boolean {
 	}
 }
 
+/**
+ * Append emitted decisions to the per-owner authority file.
+ *
+ * Dedupe rule (fork identity, deterministic): within one owner's log a decision's
+ * identity is the normalized, case-sensitive (fork, chosen) pair —
+ * normalizeIdentity() text canonicalization only, never fuzzy or semantic
+ * matching. An emission is a duplicate when it matches the fork's CURRENT choice
+ * — the latest Active row for that fork — regardless of run, step, attempt,
+ * occurrence, source, or alternatives; the surviving row keeps its
+ * first-emission provenance and alternatives. A same-fork emission whose
+ * normalized chosen differs from that current choice, including by case, is a
+ * genuine re-decision and appends (supersession material).
+ *
+ * Identity is matched against the fork's current choice, NOT against all of its
+ * history, and the difference is load-bearing: after A -> B, a further A is a
+ * reversion. Matching all history would collapse it into the superseded A row,
+ * leaving the log asserting a stale date and source for the live decision and
+ * ordering A above the B it now supersedes.
+ *
+ * Resolved rows consume an identity only while the fork has no live Active
+ * choice: an emission matching a resolved identity then returns that row rather
+ * than reopening a dispositioned decision as `default-taken`. Once the fork has a
+ * current Active choice, that choice decides — so a genuine reversion to a
+ * once-resolved option still appends. The resolved lookup spans the archive as
+ * well as the authority file, because archiveResolvedDecisions moves aged rows to
+ * archive/<owner>.md and reading only the live file would let an archived
+ * decision be reopened. Shipped logs are append-only:
+ * pre-existing near-duplicate rows are never rewritten; the rule governs new
+ * appends only. Escalation rows are excluded — their identity is
+ * reviewEscalationId().
+ */
 export async function appendDecisions(repo: string, input: AppendDecisionsInput): Promise<DecisionWriteResult> {
 	try {
 		const owner = ownerForEmission(input);
@@ -638,6 +678,38 @@ export async function appendDecisions(repo: string, input: AppendDecisionsInput)
 			const ids: string[] = [];
 			const fresh: StoredDecision[] = [];
 			const date = (input.now ?? new Date()).toISOString().slice(0, 10);
+
+			// Fork-identity indexes, built once. `order` is document position, and the Active section
+			// precedes Resolved, so max-order is only append order WITHIN Active — never across the
+			// two. Hence the split: Resolved identities are matched by identity (position
+			// irrelevant), Active is reduced to each fork's current choice.
+			const resolvedById = new Map<string, string>();
+			for (const entry of file.resolved) {
+				if (!entry.escalation) resolvedById.set(forkIdentityKey(decisionFromCells(entry.cells)), entry.id);
+			}
+			const currentByFork = new Map<string, { id: string; identity: string }>();
+			for (const entry of [...file.active].filter((e) => !e.escalation).sort((a, b) => a.order - b.order)) {
+				const stored = decisionFromCells(entry.cells);
+				currentByFork.set(normalizeIdentity(stored.fork), { id: entry.id, identity: forkIdentityKey(stored) });
+			}
+			// `archiveResolvedDecisions` moves aged resolved rows out of the authority file into
+			// archive/<owner>.md, so the live file alone cannot answer "was this identity ever
+			// resolved?" — reading only it would let an archived decision be reopened as a fresh
+			// `default-taken` row. Loaded lazily: it is consulted only for a fork with NO current
+			// Active choice, so the common append path never pays the read.
+			let archivedById: Map<string, string> | undefined;
+			const archivedIdFor = (identity: string): string | undefined => {
+				if (!archivedById) {
+					archivedById = new Map();
+					const aPath = archivePath(repo, owner);
+					if (existsSync(aPath)) {
+						for (const entry of readAuthorityFile(aPath, owner).resolved) {
+							if (!entry.escalation) archivedById.set(forkIdentityKey(decisionFromCells(entry.cells)), entry.id);
+						}
+					}
+				}
+				return archivedById.get(identity);
+			};
 
 			for (const row of input.decisions) {
 				const id = validateDecisionId(row.id);
@@ -658,21 +730,31 @@ export async function appendDecisions(repo: string, input: AppendDecisionsInput)
 					continue;
 				}
 
-				// Retry dedupe: same run + step + occurrence + fingerprint (attempt ignored)
-				const key = dedupeKey(input.runId, input.step, row.occurrence, fingerprint);
-				const byDedupe = allEntries(file).find((e) => e.meta.dedupe && dedupeKey(e.meta.dedupe.runId, e.meta.dedupe.step, e.meta.dedupe.occurrence, e.meta.contentFingerprint ?? "") === key);
-				if (byDedupe) {
-					if ((byDedupe.meta.contentFingerprint ?? "") !== fingerprint) {
-						throw new Error(`dedupe key collision with unequal fingerprint: ${id}`);
+				// Fork-identity dedupe (see doc comment). Matching the fork's CURRENT choice rather
+				// than all of its history is what lets a reversion append: after A -> B, a further A
+				// differs from the current choice and is a genuine re-decision, not a duplicate of the
+				// superseded row.
+				//
+				// The live choice is therefore consulted FIRST. Resolved/archived rows suppress only a
+				// fork with no live Active choice — reopening a dispositioned decision that nothing has
+				// superseded. Checking resolved first instead would suppress a genuine reversion to a
+				// once-resolved choice and leave the log asserting the superseded Active row as live,
+				// contradicting the append-on-difference rule above.
+				const identity = forkIdentityKey(row.decision);
+				const forkOf = normalizeIdentity(row.decision.fork);
+				const current = currentByFork.get(forkOf);
+				if (current) {
+					if (current.identity === identity) {
+						ids.push(current.id);
+						continue;
 					}
-					ids.push(byDedupe.id);
-					continue;
+				} else {
+					const consumed = resolvedById.get(identity) ?? archivedIdFor(identity);
+					if (consumed) {
+						ids.push(consumed);
+						continue;
+					}
 				}
-
-				// Dedupe-key collision across different fingerprints already handled; also reject
-				// same coords with different fingerprint when coords match without fingerprint.
-				const coordClash = allEntries(file).find((e) => e.meta.dedupe && e.meta.dedupe.runId === input.runId && e.meta.dedupe.step === input.step && e.meta.dedupe.occurrence === row.occurrence && e.meta.contentFingerprint !== fingerprint);
-				if (coordClash) throw new Error(`dedupe key collision with unequal fingerprint: ${id}`);
 
 				ids.push(id);
 				fresh.push({
@@ -686,6 +768,7 @@ export async function appendDecisions(repo: string, input: AppendDecisionsInput)
 					},
 					order: allEntries(file).length + fresh.length,
 				});
+				currentByFork.set(forkOf, { id, identity });
 			}
 
 			if (!fresh.length) return { status: "duplicate" as const, ids };

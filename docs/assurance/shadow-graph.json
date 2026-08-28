@@ -1,0 +1,2761 @@
+{
+	"schemaVersion": "0.3.0",
+	"status": "shadow",
+	"authority": "non-authoritative experimental projection of docs/decisions and docs/trust/trust-claims.yml",
+	"nodeKinds": [
+		"proposition",
+		"decision",
+		"realization"
+	],
+	"propositionRoles": [
+		"invariant",
+		"constraint",
+		"assumption"
+	],
+	"relationKinds": {
+		"constrains": {
+			"from": [
+				"proposition"
+			],
+			"to": [
+				"proposition",
+				"decision",
+				"realization"
+			]
+		},
+		"implements": {
+			"from": [
+				"decision",
+				"realization"
+			],
+			"to": [
+				"proposition"
+			]
+		},
+		"assumes": {
+			"from": [
+				"decision",
+				"proposition"
+			],
+			"to": [
+				"proposition"
+			]
+		},
+		"supersedes": {
+			"from": [
+				"decision"
+			],
+			"to": [
+				"decision"
+			]
+		},
+		"specializes": {
+			"from": [
+				"proposition"
+			],
+			"to": [
+				"proposition"
+			]
+		},
+		"derived-from": {
+			"from": [
+				"realization",
+				"decision"
+			],
+			"to": [
+				"decision",
+				"proposition"
+			]
+		},
+		"projects": {
+			"from": [
+				"proposition"
+			],
+			"to": [
+				"proposition",
+				"decision"
+			]
+		}
+	},
+	"nodes": [
+		{
+			"id": "CLM-0001",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "internal",
+			"slug": "untrusted-input",
+			"statement": "Agent-reachable repository, issue, and pull-request content is untrusted; safety must not depend on the worker recognizing hostile instructions.",
+			"sources": [
+				"ADR-0002",
+				"ADR-0010",
+				"ADR-0023"
+			]
+		},
+		{
+			"id": "CLM-0002",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "internal",
+			"slug": "bounded-execution",
+			"statement": "Autonomous work cannot exercise authority outside its permitted execution boundary; when that boundary cannot be enforced, execution refuses rather than silently degrading.",
+			"sources": [
+				"ADR-0001",
+				"ADR-0023"
+			]
+		},
+		{
+			"id": "CLM-0003",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "internal",
+			"slug": "secret-minimization",
+			"statement": "Workers receive only necessary credentials and durable Pelaggio output must not disclose secrets.",
+			"sources": [
+				"ADR-0010",
+				"ADR-0023"
+			]
+		},
+		{
+			"id": "CLM-0004",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "internal",
+			"slug": "passive-install",
+			"statement": "Installing Pelaggio executes no Pelaggio-authored lifecycle code.",
+			"sources": [
+				"ADR-0006"
+			]
+		},
+		{
+			"id": "CLM-0005",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "internal",
+			"slug": "control-authority-authenticated",
+			"statement": "Unauthenticated actors cannot invoke authority-bearing control-plane operations.",
+			"sources": [
+				"ADR-0008"
+			]
+		},
+		{
+			"id": "CLM-0006",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "internal",
+			"slug": "no-self-authorization",
+			"statement": "A worker cannot unilaterally authorize consequential effects of its own work or judgment; authorization must come from authority independent of that worker.",
+			"sources": [
+				"ADR-0005",
+				"ADR-0014",
+				"ADR-0015",
+				"ADR-0016",
+				"ADR-0018",
+				"ADR-0025",
+				"ADR-0026"
+			]
+		},
+		{
+			"id": "CLM-0007",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "internal",
+			"slug": "landing-fenced",
+			"statement": "A stale or concurrent actor cannot cause an unintended landing; successful landing requires positive evidence bound to the intended candidate.",
+			"sources": [
+				"ADR-0005",
+				"ADR-0025",
+				"ADR-0026",
+				"ADR-0028"
+			]
+		},
+		{
+			"id": "CLM-0008",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "internal",
+			"slug": "verifiable-custody",
+			"statement": "Delivered and published artifacts carry independently verifiable provenance tying them to source and execution evidence.",
+			"sources": [
+				"ADR-0007",
+				"ADR-0018",
+				"ADR-0024",
+				"ADR-0028"
+			]
+		},
+		{
+			"id": "CLM-0009",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "internal",
+			"slug": "blocker-survives-until-refuted",
+			"statement": "Established blocking evidence survives omission, partial evaluation, and unavailability until valid evidence explicitly refutes it.",
+			"sources": [
+				"ADR-0004",
+				"ADR-0016",
+				"ADR-0024",
+				"ADR-0026"
+			]
+		},
+		{
+			"id": "CLM-0010",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "internal",
+			"slug": "evidence-judgment-disposition-separated",
+			"statement": "Judgment, evidence completeness, failure cause, and final disposition are distinct facts and must not be collapsed into one status.",
+			"sources": [
+				"ADR-0004",
+				"ADR-0026"
+			]
+		},
+		{
+			"id": "CLM-0011",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "internal",
+			"slug": "recoverable-stops",
+			"statement": "Non-terminal blocking states identify how they can be cleared and by whom; retryable states are bounded and actionable.",
+			"sources": [
+				"ADR-0011",
+				"ADR-0017",
+				"ADR-0019",
+				"ADR-0026"
+			]
+		},
+		{
+			"id": "CLM-0012",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "internal",
+			"slug": "resume-by-reconciliation",
+			"statement": "Interruption recovery reconciles against authoritative current state rather than assuming nondeterministic model execution can be replayed identically.",
+			"sources": [
+				"ADR-0019",
+				"ADR-0025",
+				"ADR-0026"
+			]
+		},
+		{
+			"id": "CLM-0013",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "internal",
+			"slug": "autonomy-above-safety-floor",
+			"statement": "Human involvement may be reduced only above a non-negotiable safety floor; lowering that floor requires authority outside the autonomous worker.",
+			"sources": [
+				"ADR-0015",
+				"ADR-0016",
+				"ADR-0017",
+				"ADR-0013"
+			]
+		},
+		{
+			"id": "CLM-0015",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "internal",
+			"slug": "provider-differences-explicit",
+			"statement": "Material driver capabilities and degradations are explicit; unmet hard capabilities fail closed and are never silently emulated into equivalence.",
+			"sources": [
+				"ADR-0020",
+				"ADR-0021",
+				"ADR-0024"
+			]
+		},
+		{
+			"id": "CLM-0016",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "internal",
+			"slug": "independent-evaluation",
+			"statement": "When an evaluation is intended to be independent, it does not inherit mutable authoring reasoning or context that would compromise that independence.",
+			"sources": [
+				"ADR-0022",
+				"ADR-0024"
+			]
+		},
+		{
+			"id": "CLM-0017",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "internal",
+			"slug": "mechanism-policy-separated",
+			"statement": "Stable enforcement mechanism and configurable policy remain distinct; policy changes cannot silently rewrite the authority boundary.",
+			"sources": [
+				"ADR-0014",
+				"ADR-0020",
+				"ADR-0021"
+			]
+		},
+		{
+			"id": "CLM-0018",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "internal",
+			"slug": "work-ownership-authoritative",
+			"statement": "Work ownership and exclusivity derive from one authoritative atomic state, not several mutually reconstructed indicators.",
+			"sources": [
+				"ADR-0009",
+				"ADR-0025",
+				"ADR-0026"
+			]
+		},
+		{
+			"id": "CLM-0019",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "internal",
+			"slug": "deterministic-safety-floor",
+			"statement": "Safety-floor conditions are enforced by deterministic harness-owned or independently enforced controls rather than probabilistic worker judgment.",
+			"sources": [
+				"ADR-0004",
+				"ADR-0014",
+				"ADR-0015",
+				"ADR-0016",
+				"ADR-0018",
+				"ADR-0026"
+			]
+		},
+		{
+			"id": "CLM-0020",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "internal",
+			"slug": "architectural-intent-single-source",
+			"statement": "Current architectural intent is represented once in machine-readable semantic form; narrative documents may explain and preserve history but do not independently define current intent.",
+			"sources": [
+				"ADR-0027"
+			]
+		},
+		{
+			"id": "CON-0001",
+			"kind": "proposition",
+			"role": "constraint",
+			"visibility": "internal",
+			"slug": "no-tool-input-trust",
+			"statement": "Enforcement cannot depend on parsing what the worker says it intends to do.",
+			"sources": [
+				"ADR-0001"
+			]
+		},
+		{
+			"id": "CON-0002",
+			"kind": "proposition",
+			"role": "constraint",
+			"visibility": "internal",
+			"slug": "ambiguity-denies-authority",
+			"statement": "Unresolved attribution or authority ambiguity cannot become permission to perform a consequential action.",
+			"sources": [
+				"ADR-0001",
+				"ADR-0004",
+				"ADR-0016"
+			]
+		},
+		{
+			"id": "CON-0003",
+			"kind": "proposition",
+			"role": "constraint",
+			"visibility": "internal",
+			"slug": "advisory-is-not-gate",
+			"statement": "Diagnostics, ordering mechanisms, and prechecks cannot be counted as load-bearing enforcement.",
+			"sources": [
+				"ADR-0001",
+				"ADR-0025",
+				"ADR-0026",
+				"ADR-0028"
+			]
+		},
+		{
+			"id": "CON-0004",
+			"kind": "proposition",
+			"role": "constraint",
+			"visibility": "internal",
+			"slug": "ordering-is-not-authority",
+			"statement": "Locks, queues, serialization, and prechecks may reduce contention but cannot substitute for an authoritative fence or reconciler.",
+			"sources": [
+				"ADR-0009",
+				"ADR-0025",
+				"ADR-0026"
+			]
+		},
+		{
+			"id": "CON-0005",
+			"kind": "proposition",
+			"role": "constraint",
+			"visibility": "internal",
+			"slug": "time-is-not-liveness",
+			"statement": "Fixed expiry alone cannot establish that an actor is dead or authorize destructive reclaim.",
+			"sources": [
+				"ADR-0026"
+			]
+		},
+		{
+			"id": "CON-0006",
+			"kind": "proposition",
+			"role": "constraint",
+			"visibility": "internal",
+			"slug": "self-validation-not-freshness",
+			"statement": "An actor cannot establish its own continuing authority or freshness.",
+			"sources": [
+				"ADR-0026"
+			]
+		},
+		{
+			"id": "CON-0007",
+			"kind": "proposition",
+			"role": "constraint",
+			"visibility": "internal",
+			"slug": "attempt-freshness-harness-owned",
+			"statement": "Attempt identity used as authority is allocated from harness-owned state the worker cannot rewrite or roll back.",
+			"sources": [
+				"ADR-0026"
+			]
+		},
+		{
+			"id": "CON-0008",
+			"kind": "proposition",
+			"role": "constraint",
+			"visibility": "internal",
+			"slug": "omission-not-refutation",
+			"statement": "Silence, unavailable evidence, or a partial evaluation cannot clear a previously established blocker.",
+			"sources": [
+				"ADR-0024",
+				"ADR-0026"
+			]
+		},
+		{
+			"id": "CON-0009",
+			"kind": "proposition",
+			"role": "constraint",
+			"visibility": "internal",
+			"slug": "positive-completion-required",
+			"statement": "Absence or disappearance is not proof of success; terminal completion requires positive authoritative evidence.",
+			"sources": [
+				"ADR-0025",
+				"ADR-0026"
+			]
+		},
+		{
+			"id": "CON-0010",
+			"kind": "proposition",
+			"role": "constraint",
+			"visibility": "internal",
+			"slug": "no-silent-security-degradation",
+			"statement": "Availability or rigor may degrade only where explicitly permitted; the security boundary never silently weakens.",
+			"sources": [
+				"ADR-0017",
+				"ADR-0020",
+				"ADR-0023"
+			]
+		},
+		{
+			"id": "CON-0011",
+			"kind": "proposition",
+			"role": "constraint",
+			"visibility": "internal",
+			"slug": "safety-floor-contracts-outside-agent",
+			"statement": "Shrinking the safety floor requires an authority the autonomous worker cannot exercise for itself.",
+			"sources": [
+				"ADR-0016"
+			]
+		},
+		{
+			"id": "CON-0012",
+			"kind": "proposition",
+			"role": "constraint",
+			"visibility": "internal",
+			"slug": "authorization-facts-harness-observed",
+			"statement": "Facts used to authorize consequential actions come from authoritative observations, not assertions supplied by the worker being authorized.",
+			"sources": [
+				"ADR-0015",
+				"ADR-0018"
+			]
+		},
+		{
+			"id": "CON-0013",
+			"kind": "proposition",
+			"role": "constraint",
+			"visibility": "internal",
+			"slug": "platform-claims-require-platform-evidence",
+			"statement": "A guarantee cannot silently extend across materially different execution platforms without evidence for each claimed platform.",
+			"sources": [
+				"ADR-0023"
+			]
+		},
+		{
+			"id": "CON-0014",
+			"kind": "proposition",
+			"role": "constraint",
+			"visibility": "internal",
+			"slug": "recovery-does-not-assume-replay",
+			"statement": "Recovery cannot depend on reproducing identical nondeterministic model behavior.",
+			"sources": [
+				"ADR-0019"
+			]
+		},
+		{
+			"id": "CON-0015",
+			"kind": "proposition",
+			"role": "constraint",
+			"visibility": "internal",
+			"slug": "provider-capability-no-false-equivalence",
+			"statement": "Different enforcement capabilities cannot be collapsed into a false total order or silently polyfilled into equivalence.",
+			"sources": [
+				"ADR-0020",
+				"ADR-0021"
+			]
+		},
+		{
+			"id": "CON-0016",
+			"kind": "proposition",
+			"role": "constraint",
+			"visibility": "internal",
+			"slug": "trust-projection-never-strengthens",
+			"statement": "A public trust projection may scope or weaken an internal claim but may never silently strengthen it.",
+			"sources": [
+				"docs/trust/trust-claims.yml",
+				"ADR-0028"
+			]
+		},
+		{
+			"id": "CON-0017",
+			"kind": "proposition",
+			"role": "constraint",
+			"visibility": "internal",
+			"slug": "narrative-no-duplicate-authority",
+			"statement": "Narrative documentation may explain intent and history but must not become a second independently maintained source of current architectural truth.",
+			"sources": [
+				"ADR-0027",
+				"ADR-0028"
+			]
+		},
+		{
+			"id": "CON-0018",
+			"kind": "proposition",
+			"role": "constraint",
+			"visibility": "internal",
+			"slug": "semantic-churn-only-on-intent-change",
+			"statement": "Narrative, rationale, and construction-only edits must not require meaningless semantic-graph churn when architectural intent is unchanged.",
+			"sources": [
+				"ADR-0027"
+			]
+		},
+		{
+			"id": "CON-0019",
+			"kind": "proposition",
+			"role": "constraint",
+			"visibility": "internal",
+			"slug": "promotion-requires-drift-ratchet",
+			"statement": "The semantic graph cannot become authoritative until corpus coverage and authoring checks detect new or changed architectural intent that bypasses it.",
+			"sources": [
+				"ADR-0027"
+			]
+		},
+		{
+			"id": "CON-0020",
+			"kind": "proposition",
+			"role": "constraint",
+			"visibility": "internal",
+			"slug": "propositional-roles-share-base-type",
+			"statement": "Invariant, constraint, and assumption remain semantically distinguishable roles of a common proposition type; the model must not require separate base node classes for those roles.",
+			"sources": [
+				"ADR-0027"
+			]
+		},
+		{
+			"id": "CON-0021",
+			"kind": "proposition",
+			"role": "constraint",
+			"visibility": "internal",
+			"slug": "epistemic-interpretation-is-attributable",
+			"statement": "Observation and interpretation remain separate: an observation cannot intrinsically support or challenge intent, and judgment-bearing support/challenge must remain attributable and qualifiable.",
+			"sources": [
+				"ADR-0027"
+			]
+		},
+		{
+			"id": "CON-0022",
+			"kind": "proposition",
+			"role": "constraint",
+			"visibility": "internal",
+			"slug": "choice-proposition-realization-distinct",
+			"statement": "A decision, a proposition, and its current realization remain distinct semantic objects; choosing or implementing something must not make that choice or mechanism architectural truth.",
+			"sources": [
+				"ADR-0027"
+			]
+		},
+		{
+			"id": "CON-0023",
+			"kind": "proposition",
+			"role": "constraint",
+			"visibility": "internal",
+			"slug": "public-scope-not-parallel-ontology",
+			"statement": "Public trust statements use the same proposition model with explicit scope and projection metadata rather than a parallel external-claim ontology.",
+			"sources": [
+				"ADR-0027"
+			]
+		},
+		{
+			"id": "CON-0024",
+			"kind": "proposition",
+			"role": "constraint",
+			"visibility": "internal",
+			"slug": "agency-and-context-remain-extensible",
+			"statement": "The model must be able to add attributable actors and reusable scope/context to decisions, observations, assessments, executions, and authorization without redesigning the core intent graph.",
+			"sources": [
+				"ADR-0027"
+			]
+		},
+		{
+			"id": "CON-0025",
+			"kind": "proposition",
+			"role": "constraint",
+			"visibility": "internal",
+			"slug": "consumer-owned-graphs-first-class",
+			"statement": "The intent model must not assume Pelaggio is the only graph owner: a consumer repository can own and evolve its architectural intent independently under the same semantic contract; cross-graph composition remains deliberately undecided.",
+			"sources": [
+				"ADR-0027"
+			]
+		},
+		{
+			"id": "CON-0026",
+			"kind": "proposition",
+			"role": "constraint",
+			"visibility": "internal",
+			"slug": "ontology-expands-only-when-earned",
+			"statement": "The ontology must stay smaller than the assurance, provenance, and enterprise metamodels that inform it; new base classes are added only when Pelaggio usage requires semantics that roles, attributes, or qualified relationships cannot carry.",
+			"sources": [
+				"ADR-0027"
+			]
+		},
+		{
+			"id": "ASM-0001",
+			"kind": "proposition",
+			"role": "assumption",
+			"visibility": "internal",
+			"slug": "reversible-work-is-cheap",
+			"statement": "Planning and worktree-stage mistakes are cheap enough to retry or discard that heavy upstream gates usually cost more than they save.",
+			"sources": [
+				"ADR-0011",
+				"ADR-0013"
+			]
+		},
+		{
+			"id": "ASM-0002",
+			"kind": "proposition",
+			"role": "assumption",
+			"visibility": "internal",
+			"slug": "diverse-review-earns-cost",
+			"statement": "Provider-diverse review improves defect detection enough to justify its incremental cost, latency, and failure surface.",
+			"sources": [
+				"ADR-0024"
+			],
+			"wrongIf": "A single strong reviewer at equal token budget reproduces the fleet's must-fix set on a sampled set of gated PRs (#270/#291), and cross-provider disagreement contributes no landed fixes over the same sample (#627's instrument)."
+		},
+		{
+			"id": "ASM-0003",
+			"kind": "proposition",
+			"role": "assumption",
+			"visibility": "internal",
+			"slug": "last-verified-surface-remains-safe-boundedly",
+			"statement": "A recently verified execution surface remains within the security boundary for a bounded interval while the current surface is unavailable.",
+			"sources": [
+				"ADR-0017"
+			]
+		},
+		{
+			"id": "DEC-0001",
+			"kind": "decision",
+			"slug": "pull-request-default",
+			"statement": "Ship target defaults to pull-request; direct push or autonomous merge is an explicit opt-in.",
+			"status": "current-product-default",
+			"sources": [
+				"ADR-0003"
+			]
+		},
+		{
+			"id": "DEC-0002",
+			"kind": "decision",
+			"slug": "branch-protection-landing-gate",
+			"statement": "Use GitHub branch protection as the platform-enforced auto-merge gate.",
+			"status": "historical-partially-superseded",
+			"sources": [
+				"ADR-0005",
+				"ADR-0025"
+			]
+		},
+		{
+			"id": "DEC-0003",
+			"kind": "decision",
+			"slug": "signed-tag-provenance-publish",
+			"statement": "Publish from signed tags with provenance using the selected trusted build posture.",
+			"status": "current-construction-choice",
+			"sources": [
+				"ADR-0007"
+			]
+		},
+		{
+			"id": "DEC-0004",
+			"kind": "decision",
+			"slug": "git-branch-work-claims",
+			"statement": "Represent a work-item claim through authoritative git branch state rather than a separate claim registry.",
+			"status": "current-construction-choice",
+			"sources": [
+				"ADR-0009"
+			]
+		},
+		{
+			"id": "DEC-0005",
+			"kind": "decision",
+			"slug": "runtime-andon",
+			"statement": "Handle specification insufficiency by runtime produce-or-escalate behavior rather than an upstream hard Definition-of-Ready gate.",
+			"status": "current-policy-choice",
+			"sources": [
+				"ADR-0011"
+			]
+		},
+		{
+			"id": "DEC-0006",
+			"kind": "decision",
+			"slug": "computed-readiness",
+			"statement": "Compute operational readiness from machine-checkable evidence rather than human grooming.",
+			"status": "current-policy-choice",
+			"sources": [
+				"ADR-0012"
+			]
+		},
+		{
+			"id": "DEC-0007",
+			"kind": "decision",
+			"slug": "tolerance-dial",
+			"statement": "Expose configurable human-involvement tolerance above the fixed safety floor.",
+			"status": "current-policy-choice",
+			"sources": [
+				"ADR-0015"
+			]
+		},
+		{
+			"id": "DEC-0008",
+			"kind": "decision",
+			"slug": "in-toto-envelope",
+			"statement": "Represent machine-checkable custody attestations using an in-toto-compatible statement envelope rather than a bespoke format.",
+			"status": "current-interoperability-choice",
+			"sources": [
+				"ADR-0018"
+			]
+		},
+		{
+			"id": "DEC-0009",
+			"kind": "decision",
+			"slug": "checkpoint-step-boundaries",
+			"statement": "Implement durability through checkpoint/restart at step boundaries rather than deterministic replay.",
+			"status": "current-construction-choice",
+			"sources": [
+				"ADR-0019"
+			]
+		},
+		{
+			"id": "DEC-0010",
+			"kind": "decision",
+			"slug": "provider-capability-descriptor",
+			"statement": "Represent driver capability differences through explicit data-only capability descriptors and matching.",
+			"status": "current-construction-choice",
+			"sources": [
+				"ADR-0020"
+			]
+		},
+		{
+			"id": "DEC-0011",
+			"kind": "decision",
+			"slug": "ocap-effects-placement",
+			"statement": "Use object-capability-style mediation for tool authority and harness-owned effect handlers for deterministic boundary-crossing work.",
+			"status": "current-construction-choice",
+			"sources": [
+				"ADR-0021"
+			]
+		},
+		{
+			"id": "DEC-0012",
+			"kind": "decision",
+			"slug": "fixed-six-step-two-review-orchestrators",
+			"statement": "Use a fixed six-step pipeline with separate authoring and cold-review orchestrators.",
+			"status": "current-construction-choice",
+			"sources": [
+				"ADR-0022"
+			]
+		},
+		{
+			"id": "DEC-0013",
+			"kind": "decision",
+			"slug": "contained-jail-egress-broker",
+			"statement": "Use an execution jail plus constrained host-side egress brokerage for contained autonomous execution.",
+			"status": "current-construction-choice",
+			"sources": [
+				"ADR-0023"
+			]
+		},
+		{
+			"id": "DEC-0014",
+			"kind": "decision",
+			"slug": "multi-driver-judge-review-loop",
+			"statement": "Use concurrent reviewers, a configured Judge, and bounded revision to implement adversarial authoring review.",
+			"status": "current-strategy-under-validation",
+			"sources": [
+				"ADR-0024"
+			]
+		},
+		{
+			"id": "DEC-0015",
+			"kind": "decision",
+			"slug": "cas-landing-executor",
+			"statement": "Use candidate-bound compare-and-swap style landing with positive reconciliation evidence and optional ordering.",
+			"status": "target-construction-choice",
+			"sources": [
+				"ADR-0025"
+			]
+		},
+		{
+			"id": "DEC-0016",
+			"kind": "decision",
+			"slug": "fence-or-reconcile-guard-model",
+			"statement": "Classify load-bearing guarded actions as fenced or reconciled; treat other coordination as hints.",
+			"status": "current-semantic-model",
+			"sources": [
+				"ADR-0026"
+			]
+		},
+		{
+			"id": "DEC-0017",
+			"kind": "decision",
+			"slug": "rigor-by-consequence",
+			"statement": "Size assurance effort primarily by consequence and reversibility rather than mechanically by lifecycle stage.",
+			"status": "current-policy-principle",
+			"sources": [
+				"ADR-0011",
+				"ADR-0012",
+				"ADR-0013"
+			]
+		},
+		{
+			"id": "DEC-0018",
+			"kind": "decision",
+			"slug": "human-value-judgment-at-charter",
+			"statement": "Keep value/negotiability as a human chartering judgment rather than an operational readiness computation.",
+			"status": "current-responsibility-choice",
+			"sources": [
+				"ADR-0012"
+			]
+		},
+		{
+			"id": "DEC-0019",
+			"kind": "decision",
+			"slug": "promote-assurance-graph-after-validation",
+			"statement": "Migrate architectural authority to the machine-readable assurance graph only after coverage, grounding, authoring, and drift checks demonstrate that it can remain aligned with lower maintenance burden than the prose constellation.",
+			"status": "proposed-migration-decision",
+			"sources": [
+				"ADR-0027"
+			]
+		},
+		{
+			"id": "CTR-0001",
+			"kind": "realization",
+			"slug": "fixed-six-steps",
+			"statement": "The current pipeline enumerates six fixed delivery steps.",
+			"sources": [
+				"ADR-0022"
+			],
+			"codeEvidence": [
+				"packages/pelaggio/scripts/pelaggio/pipeline.ts",
+				"packages/pelaggio/scripts/pelaggio/__tests__/pipeline.test.ts"
+			]
+		},
+		{
+			"id": "CTR-0002",
+			"kind": "realization",
+			"slug": "two-review-orchestrators",
+			"statement": "Authoring review and cold PR review currently run through distinct orchestrators.",
+			"sources": [
+				"ADR-0022"
+			],
+			"codeEvidence": [
+				"packages/pelaggio/scripts/pelaggio/review/loop.ts",
+				"packages/pelaggio/scripts/pelaggio/pr-review-cli.ts"
+			]
+		},
+		{
+			"id": "CTR-0003",
+			"kind": "realization",
+			"slug": "n-reviewers-one-judge",
+			"statement": "Authoring review currently uses multiple reviewer seats and one configured Judge with bounded revise/re-review passes.",
+			"sources": [
+				"ADR-0024"
+			],
+			"codeEvidence": [
+				"packages/pelaggio/scripts/pelaggio/review/loop.ts",
+				"packages/pelaggio/scripts/pelaggio/review/bench.ts"
+			]
+		},
+		{
+			"id": "CTR-0004",
+			"kind": "realization",
+			"slug": "git-porcelain-confinement",
+			"statement": "Worktree confinement is currently implemented through observed Git-state snapshots/diffs plus provider-specific main protection.",
+			"sources": [
+				"ADR-0001"
+			],
+			"codeEvidence": [
+				"packages/pelaggio/scripts/pelaggio/pipeline.ts",
+				"packages/pelaggio/scripts/pelaggio/__tests__/pipeline.test.ts"
+			]
+		},
+		{
+			"id": "CTR-0005",
+			"kind": "realization",
+			"slug": "signed-owner-taxonomy-gate",
+			"statement": "Safety-taxonomy contraction is currently guarded through signed configuration verified against an out-of-band owner key.",
+			"sources": [
+				"ADR-0016"
+			],
+			"codeEvidence": [
+				"packages/pelaggio/scripts/pelaggio/review/taxonomy.ts"
+			]
+		},
+		{
+			"id": "TC-003",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "public",
+			"externalId": "TC-003",
+			"slug": "trust-merge-gate-fails-closed",
+			"statement": "Existing public trust claim TC-003: merge review gating fails closed.",
+			"projection": {
+				"status": "guarantee"
+			},
+			"sources": [
+				"docs/trust/trust-claims.yml",
+				"ADR-0004"
+			]
+		},
+		{
+			"id": "TC-004",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "public",
+			"externalId": "TC-004",
+			"slug": "trust-passive-install",
+			"statement": "Existing public trust claim TC-004: published Pelaggio packages contain no install lifecycle scripts.",
+			"projection": {
+				"status": "guarantee"
+			},
+			"sources": [
+				"docs/trust/trust-claims.yml",
+				"ADR-0006"
+			]
+		},
+		{
+			"id": "TC-005",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "public",
+			"externalId": "TC-005",
+			"slug": "trust-release-provenance",
+			"statement": "Existing public trust claim TC-005: release workflow uses signed-tag/provenance controls with known limits.",
+			"projection": {
+				"status": "best_effort",
+				"scope": "release workflow controls; downstream live attestation verification remains limited"
+			},
+			"sources": [
+				"docs/trust/trust-claims.yml",
+				"ADR-0007",
+				"ADR-0018"
+			]
+		},
+		{
+			"id": "TC-010",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "public",
+			"externalId": "TC-010",
+			"slug": "trust-control-plane-auth",
+			"statement": "Existing public trust claim TC-010: authority-bearing control-plane use requires authentication.",
+			"projection": {
+				"status": "guarantee"
+			},
+			"sources": [
+				"docs/trust/trust-claims.yml",
+				"ADR-0008"
+			]
+		},
+		{
+			"id": "TC-011",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "public",
+			"externalId": "TC-011",
+			"slug": "trust-worktree-confinement",
+			"statement": "Existing public trust claim TC-011: writes are confined to the work item's permitted worktree boundary under the documented scope.",
+			"projection": {
+				"status": "guarantee",
+				"scope": "documented Git-root observation boundary"
+			},
+			"sources": [
+				"docs/trust/trust-claims.yml",
+				"ADR-0001"
+			]
+		},
+		{
+			"id": "TC-012",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "public",
+			"externalId": "TC-012",
+			"slug": "trust-human-gated-default",
+			"statement": "Existing public trust claim TC-012: out of the box Pelaggio opens a pull request rather than autonomously pushing main.",
+			"projection": {
+				"status": "guarantee"
+			},
+			"sources": [
+				"docs/trust/trust-claims.yml",
+				"ADR-0003"
+			]
+		},
+		{
+			"id": "TC-013",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "public",
+			"externalId": "TC-013",
+			"slug": "trust-auto-merge-gate",
+			"statement": "Existing public trust claim TC-013: auto-merge gating is planned/partially external and must not be overstated.",
+			"projection": {
+				"status": "planned"
+			},
+			"sources": [
+				"docs/trust/trust-claims.yml",
+				"ADR-0005",
+				"ADR-0025"
+			]
+		},
+		{
+			"id": "TC-014",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "public",
+			"externalId": "TC-014",
+			"slug": "trust-secret-hygiene",
+			"statement": "Existing public trust claim TC-014: driver child environments are minimized and captured logs are scrubbed.",
+			"projection": {
+				"status": "guarantee"
+			},
+			"sources": [
+				"docs/trust/trust-claims.yml",
+				"ADR-0010"
+			]
+		},
+		{
+			"id": "CON-0027",
+			"kind": "proposition",
+			"role": "constraint",
+			"visibility": "internal",
+			"slug": "guards-may-not-validate-adversary-writable-state",
+			"statement": "A guard may not derive its verdict from state the guarded party can write. Enumerating and neutralising known channels of such state is not a substitute: each pass closes the named channels and the next finds more, so the mechanism must be placed where the guarded party cannot reach the input.",
+			"sources": [
+				"ADR-0023",
+				"ADR-0026"
+			]
+		},
+		{
+			"id": "DEC-0020",
+			"kind": "decision",
+			"slug": "claim-scoped-delivery-packet",
+			"statement": "Treat the claim as the unit of delivery: carry an intent-only packet (frame, references, identity manifest) frozen at compose time, and join every evaluative or carrier-determined fact from the record that owns it. Campaigns and releases are folds over packets, never stored objects; composition is deterministic harness work with no model authoring.",
+			"status": "proposed-construction-choice",
+			"sources": [
+				"ADR-0028"
+			]
+		},
+		{
+			"id": "CON-0028",
+			"kind": "proposition",
+			"role": "constraint",
+			"visibility": "internal",
+			"slug": "carried-artifact-excludes-carrier-facts",
+			"statement": "An artifact carried by a delivery cannot contain facts determined by or after its own carrier — the carrying commit's identity, verdicts, statuses, or terminal outcomes; those are joined at render time from the owning record, never copied into the carried artifact.",
+			"sources": [
+				"ADR-0028"
+			]
+		},
+		{
+			"id": "CON-0029",
+			"kind": "proposition",
+			"role": "constraint",
+			"visibility": "internal",
+			"slug": "identity-ambiguity-splits-never-merges",
+			"statement": "Recovery adopts an existing delivery identity only on positive corroboration between independent records; every ambiguous state mints a fresh identity marked degraded, because a wrongly split delivery can be merged later and a wrongly merged one cannot be unfused.",
+			"sources": [
+				"ADR-0028"
+			]
+		},
+		{
+			"id": "CON-0030",
+			"kind": "proposition",
+			"role": "constraint",
+			"visibility": "internal",
+			"slug": "keys-stamped-at-emission",
+			"statement": "Delivery identity and grouping keys (lineage, initiative, supersede links) are recorded while the claim is live; they are never re-derived later by joining mutable git or provider state.",
+			"sources": [
+				"ADR-0028"
+			]
+		},
+		{
+			"id": "CLM-0021",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "internal",
+			"slug": "no-undeclared-egress",
+			"statement": "Pelaggio's own code sends data only to the configured model provider and explicitly enabled integrations; there is no telemetry or other undeclared network egress.",
+			"sources": [
+				"docs/trust/trust-claims.yml"
+			]
+		},
+		{
+			"id": "TC-001",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "public",
+			"externalId": "TC-001",
+			"slug": "trust-secrets-not-in-prompts-or-logs",
+			"statement": "Existing public trust claim TC-001: known secret environment variables are not interpolated into prompts or structured run logs.",
+			"projection": {
+				"status": "guarantee"
+			},
+			"sources": [
+				"docs/trust/trust-claims.yml",
+				"ADR-0010"
+			]
+		},
+		{
+			"id": "TC-002",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "public",
+			"externalId": "TC-002",
+			"slug": "trust-no-telemetry",
+			"statement": "Existing public trust claim TC-002: nothing phones home; there is no telemetry to turn off.",
+			"projection": {
+				"status": "guarantee"
+			},
+			"sources": [
+				"docs/trust/trust-claims.yml"
+			]
+		},
+		{
+			"id": "TC-006",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "public",
+			"externalId": "TC-006",
+			"slug": "trust-data-goes-only-where-pointed",
+			"statement": "Existing public trust claim TC-006: code goes only to the configured model provider and the roadmap/notify integrations that are enabled.",
+			"projection": {
+				"status": "default"
+			},
+			"sources": [
+				"docs/trust/trust-claims.yml"
+			]
+		},
+		{
+			"id": "TC-015",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "public",
+			"externalId": "TC-015",
+			"slug": "trust-untrusted-input",
+			"statement": "Existing public trust claim TC-015: repository, issue, and PR content is treated as untrusted input and bounds what the agent may do.",
+			"projection": {
+				"status": "best_effort",
+				"scope": "worktree hooks and gates today; no designed prompt-injection defense yet"
+			},
+			"sources": [
+				"docs/trust/trust-claims.yml",
+				"ADR-0002"
+			]
+		},
+		{
+			"id": "TC-016",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "public",
+			"externalId": "TC-016",
+			"slug": "trust-dependency-tree-honesty",
+			"statement": "Existing public trust claim TC-016: the package ships no install scripts, and transitive dependencies may still run theirs on a normal install.",
+			"projection": {
+				"status": "best_effort"
+			},
+			"sources": [
+				"docs/trust/trust-claims.yml",
+				"ADR-0006"
+			]
+		},
+		{
+			"id": "TC-017",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "public",
+			"externalId": "TC-017",
+			"slug": "trust-contained-egress-broker",
+			"statement": "Existing public trust claim TC-017: opt-in contained egress reaches only a reviewed provider route through a host-held, capped broker; the jail receives no provider key or upstream URL.",
+			"projection": {
+				"status": "guarantee",
+				"scope": "opt-in contained execution only"
+			},
+			"sources": [
+				"docs/trust/trust-claims.yml",
+				"ADR-0023"
+			]
+		},
+		{
+			"id": "TC-018",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "public",
+			"externalId": "TC-018",
+			"slug": "trust-claude-seat-namespace",
+			"statement": "Existing public trust claim TC-018: on Linux every Claude Agent SDK CLI child starts in a detached Bubblewrap PID + mount namespace; missing Bubblewrap or a non-Linux host fails the step closed.",
+			"projection": {
+				"status": "guarantee",
+				"scope": "Linux only; fails closed elsewhere"
+			},
+			"sources": [
+				"docs/trust/trust-claims.yml",
+				"ADR-0023"
+			]
+		},
+		{
+			"id": "CTR-0006",
+			"kind": "realization",
+			"slug": "bubblewrap-claude-seat",
+			"statement": "Every Claude SDK child is spawned through spawnClaudeSeat into a Bubblewrap PID + mount namespace with a detached terminal session; without Bubblewrap the step fails closed.",
+			"sources": [
+				"ADR-0023"
+			],
+			"codeEvidence": [
+				"packages/pelaggio/scripts/pelaggio/claude-seat.ts",
+				"packages/pelaggio/scripts/pelaggio/__tests__/claude-seat.test.ts"
+			]
+		},
+		{
+			"id": "CTR-0007",
+			"kind": "realization",
+			"slug": "secret-hygiene-scrub-and-env-allowlist",
+			"statement": "Child environments are built from a deny-by-default allowlist and durable output is scrubbed of credential-shaped text before it is written.",
+			"sources": [
+				"ADR-0010"
+			],
+			"codeEvidence": [
+				"packages/pelaggio/scripts/pelaggio/secret-hygiene.ts",
+				"packages/pelaggio/scripts/pelaggio/__tests__/secret-hygiene.test.ts"
+			]
+		},
+		{
+			"id": "CTR-0008",
+			"kind": "realization",
+			"slug": "control-plane-bearer-auth",
+			"statement": "The daemon refuses to bind without CONTROL_PLANE_TOKEN and requires the bearer on every authority-bearing route.",
+			"sources": [
+				"ADR-0008"
+			],
+			"codeEvidence": [
+				"packages/server/src/auth.ts",
+				"packages/server/src/config.ts"
+			]
+		},
+		{
+			"id": "CTR-0009",
+			"kind": "realization",
+			"slug": "publish-manifest-guard",
+			"statement": "check:publish verifies the published manifest declares no install lifecycle scripts.",
+			"sources": [
+				"ADR-0006"
+			],
+			"codeEvidence": [
+				"packages/pelaggio/scripts/check-publish.ts",
+				"packages/pelaggio/package.json"
+			]
+		},
+		{
+			"id": "CTR-0010",
+			"kind": "realization",
+			"slug": "ship-target-default-pull-request",
+			"statement": "DEFAULT_SHIP_TARGET is pull-request; direct-push and auto-merge are explicit configuration.",
+			"sources": [
+				"ADR-0003"
+			],
+			"codeEvidence": [
+				"packages/pelaggio/scripts/pelaggio/config.ts"
+			]
+		},
+		{
+			"id": "CTR-0011",
+			"kind": "realization",
+			"slug": "contained-execution-egress-broker",
+			"statement": "Opt-in contained execution runs the step in a network=none jail and routes provider traffic through a host-held, policy-capped egress broker that injects the key outside the jail.",
+			"sources": [
+				"ADR-0023"
+			],
+			"codeEvidence": [
+				"packages/pelaggio/scripts/pelaggio/contained-execution.ts",
+				"packages/pelaggio/scripts/pelaggio/egress-broker.ts",
+				"packages/pelaggio/scripts/pelaggio/egress-policies.ts",
+				"packages/pelaggio/scripts/pelaggio/__tests__/egress-broker.test.ts"
+			]
+		},
+		{
+			"id": "CTR-0012",
+			"kind": "realization",
+			"slug": "fail-closed-review-verdict-parsers",
+			"statement": "Reviewer, Judge, and verification output is parsed by role-specific parsers that classify malformed, absent, or refused output as a typed failure rather than a pass.",
+			"sources": [
+				"ADR-0004"
+			],
+			"codeEvidence": [
+				"packages/pelaggio/scripts/pelaggio/review/findings.ts",
+				"packages/pelaggio/scripts/pelaggio/__tests__/review-findings.test.ts"
+			]
+		},
+		{
+			"id": "DEC-0021",
+			"kind": "decision",
+			"slug": "degrade-rigor-only-bounded-fallback",
+			"statement": "When a provider surface is unavailable, degrade review rigor visibly (fewer reviewers, same-provider with a weaker attestation) rather than the security boundary; falling back to the last verified pin is permitted only under a staleness ceiling with continuous re-verification, parking rather than running indefinitely.",
+			"status": "current-policy-choice",
+			"sources": [
+				"ADR-0017"
+			]
+		},
+		{
+			"id": "CLM-0022",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "internal",
+			"slug": "value-and-negotiability-are-human",
+			"statement": "Whether work is valuable or negotiable is a human chartering judgment; the harness computes readiness from machine-checkable evidence and never infers value.",
+			"sources": [
+				"ADR-0012"
+			]
+		},
+		{
+			"id": "CTR-0013",
+			"kind": "realization",
+			"slug": "red-merge-guard-land",
+			"statement": "`land` reads the PR's required checks directly and refuses to merge unless every check completed green; the candidate-bound CAS fence (DEC-0015) is not built, so this realizes landing-fenced only as far as branch protection plus a fail-closed check reader.",
+			"sources": [
+				"ADR-0005",
+				"ADR-0025"
+			],
+			"codeEvidence": [
+				"packages/pelaggio/scripts/pelaggio/land-cli.ts",
+				"packages/pelaggio/scripts/pelaggio/__tests__/land-cli.test.ts"
+			]
+		},
+		{
+			"id": "CTR-0015",
+			"kind": "realization",
+			"slug": "typed-gate-record-and-adjudication",
+			"statement": "Gate records carry ok, agreement, breaker cause, and gate disposition as separate validated fields, and adjudication consumes them as typed sources rather than a single status.",
+			"sources": [
+				"ADR-0026"
+			],
+			"codeEvidence": [
+				"packages/pelaggio/scripts/pelaggio/pr-review-gate-record.ts",
+				"packages/pelaggio/scripts/pelaggio/review/adjudication.ts",
+				"packages/pelaggio/scripts/pelaggio/__tests__/review-adjudication.test.ts"
+			]
+		},
+		{
+			"id": "CTR-0016",
+			"kind": "realization",
+			"slug": "park-exit-checkpoint-resume",
+			"statement": "Rate-limit paths park through parkExit and blocked outcomes quarantine through quarantineExit; both checkpoint uncommitted work at a step boundary, and `--resume` reconciles against the checkpoint and current repository state rather than replaying the model.",
+			"sources": [
+				"ADR-0019"
+			],
+			"codeEvidence": [
+				"packages/pelaggio/scripts/pelaggio/pipeline.ts",
+				"packages/pelaggio/scripts/pelaggio/__tests__/continuous.test.ts"
+			]
+		},
+		{
+			"id": "CTR-0017",
+			"kind": "realization",
+			"slug": "provider-capability-routing",
+			"statement": "Driver capabilities are declared as data and matched at routing time; an unmet hard capability fails closed instead of being emulated.",
+			"sources": [
+				"ADR-0020"
+			],
+			"codeEvidence": [
+				"packages/pelaggio/scripts/pelaggio/provider-routing.ts",
+				"packages/pelaggio/scripts/pelaggio/__tests__/provider-routing.test.ts"
+			]
+		},
+		{
+			"id": "CTR-0018",
+			"kind": "realization",
+			"slug": "git-branch-claim-token",
+			"statement": "A work-item claim is the existence of its `feat/<id>` branch, taken and released through git; there is no separate claims registry.",
+			"sources": [
+				"ADR-0009"
+			],
+			"codeEvidence": [
+				"packages/pelaggio/scripts/pelaggio/roadmap/git-claim.ts"
+			]
+		},
+		{
+			"id": "CTR-0021",
+			"kind": "realization",
+			"slug": "charter-human-mediation",
+			"statement": "The /charter skill surfaces value, negotiability, and authority residuals to the human rather than deciding them, and readiness is computed by FlowPolicy from machine-checkable inputs.",
+			"sources": [
+				"ADR-0012"
+			],
+			"codeEvidence": [
+				".claude/skills/charter/SKILL.md",
+				"packages/pelaggio/scripts/pelaggio/flow-policy.ts"
+			]
+		},
+		{
+			"id": "CTR-0022",
+			"kind": "realization",
+			"slug": "shadow-assurance-conformance-suite",
+			"statement": "The shadow corpus is held by a conformance suite that pins the ontology exactly, forbids interpretive relations, requires every published trust record to be a scoped public proposition, indexes the always-loaded AGENTS.md invariant channel, and pins the graph's own status to shadow.",
+			"sources": [
+				"ADR-0027"
+			],
+			"codeEvidence": [
+				"ci/__tests__/shadow-assurance.test.ts",
+				"ci/assurance-views.ts"
+			]
+		},
+		{
+			"id": "CTR-0023",
+			"kind": "realization",
+			"slug": "harness-allocated-attempt-identity",
+			"statement": "Attempt identity is allocated and advanced by the harness rather than supplied by the worker.",
+			"sources": [
+				"ADR-0011"
+			],
+			"codeEvidence": [
+				"packages/pelaggio/scripts/pelaggio/attempt-identity.ts",
+				"packages/pelaggio/scripts/pelaggio/__tests__/attempt-identity.test.ts"
+			]
+		}
+	],
+	"edges": [
+		{
+			"from": "CON-0001",
+			"relation": "constrains",
+			"to": "CLM-0002"
+		},
+		{
+			"from": "CON-0002",
+			"relation": "constrains",
+			"to": "CLM-0019"
+		},
+		{
+			"from": "CON-0003",
+			"relation": "constrains",
+			"to": "CLM-0006"
+		},
+		{
+			"from": "CON-0004",
+			"relation": "constrains",
+			"to": "CLM-0007"
+		},
+		{
+			"from": "CON-0005",
+			"relation": "constrains",
+			"to": "CLM-0018"
+		},
+		{
+			"from": "CON-0006",
+			"relation": "constrains",
+			"to": "CLM-0018"
+		},
+		{
+			"from": "CON-0007",
+			"relation": "constrains",
+			"to": "CLM-0012"
+		},
+		{
+			"from": "CON-0008",
+			"relation": "constrains",
+			"to": "CLM-0009"
+		},
+		{
+			"from": "CON-0009",
+			"relation": "constrains",
+			"to": "CLM-0007"
+		},
+		{
+			"from": "CON-0010",
+			"relation": "constrains",
+			"to": "CLM-0002"
+		},
+		{
+			"from": "CON-0010",
+			"relation": "constrains",
+			"to": "CLM-0013"
+		},
+		{
+			"from": "CON-0011",
+			"relation": "constrains",
+			"to": "CLM-0013"
+		},
+		{
+			"from": "CON-0012",
+			"relation": "constrains",
+			"to": "CLM-0006"
+		},
+		{
+			"from": "CON-0012",
+			"relation": "constrains",
+			"to": "CLM-0019"
+		},
+		{
+			"from": "CON-0013",
+			"relation": "constrains",
+			"to": "CLM-0002"
+		},
+		{
+			"from": "CON-0014",
+			"relation": "constrains",
+			"to": "CLM-0012"
+		},
+		{
+			"from": "CON-0015",
+			"relation": "constrains",
+			"to": "CLM-0015"
+		},
+		{
+			"from": "CON-0017",
+			"relation": "constrains",
+			"to": "CLM-0020"
+		},
+		{
+			"from": "CON-0018",
+			"relation": "constrains",
+			"to": "CLM-0020"
+		},
+		{
+			"from": "CON-0019",
+			"relation": "constrains",
+			"to": "CLM-0020"
+		},
+		{
+			"from": "CLM-0007",
+			"relation": "specializes",
+			"to": "CLM-0006"
+		},
+		{
+			"from": "CLM-0009",
+			"relation": "specializes",
+			"to": "CLM-0019"
+		},
+		{
+			"from": "CLM-0010",
+			"relation": "specializes",
+			"to": "CLM-0019"
+		},
+		{
+			"from": "CLM-0013",
+			"relation": "specializes",
+			"to": "CLM-0006"
+		},
+		{
+			"from": "CLM-0018",
+			"relation": "specializes",
+			"to": "CLM-0006"
+		},
+		{
+			"from": "CLM-0019",
+			"relation": "specializes",
+			"to": "CLM-0006"
+		},
+		{
+			"from": "DEC-0001",
+			"relation": "implements",
+			"to": "CLM-0013"
+		},
+		{
+			"from": "DEC-0002",
+			"relation": "implements",
+			"to": "CLM-0007"
+		},
+		{
+			"from": "DEC-0003",
+			"relation": "implements",
+			"to": "CLM-0008"
+		},
+		{
+			"from": "DEC-0004",
+			"relation": "implements",
+			"to": "CLM-0018"
+		},
+		{
+			"from": "DEC-0005",
+			"relation": "implements",
+			"to": "CLM-0011"
+		},
+		{
+			"from": "DEC-0005",
+			"relation": "assumes",
+			"to": "ASM-0001"
+		},
+		{
+			"from": "DEC-0006",
+			"relation": "derived-from",
+			"to": "DEC-0018"
+		},
+		{
+			"from": "DEC-0007",
+			"relation": "implements",
+			"to": "CLM-0013"
+		},
+		{
+			"from": "DEC-0008",
+			"relation": "implements",
+			"to": "CLM-0008"
+		},
+		{
+			"from": "DEC-0009",
+			"relation": "implements",
+			"to": "CLM-0012"
+		},
+		{
+			"from": "DEC-0010",
+			"relation": "implements",
+			"to": "CLM-0015"
+		},
+		{
+			"from": "DEC-0011",
+			"relation": "implements",
+			"to": "CLM-0017"
+		},
+		{
+			"from": "DEC-0012",
+			"relation": "implements",
+			"to": "CLM-0016"
+		},
+		{
+			"from": "DEC-0013",
+			"relation": "implements",
+			"to": "CLM-0002"
+		},
+		{
+			"from": "DEC-0014",
+			"relation": "implements",
+			"to": "CLM-0016"
+		},
+		{
+			"from": "DEC-0014",
+			"relation": "implements",
+			"to": "CLM-0009"
+		},
+		{
+			"from": "DEC-0014",
+			"relation": "assumes",
+			"to": "ASM-0002"
+		},
+		{
+			"from": "DEC-0015",
+			"relation": "implements",
+			"to": "CLM-0007"
+		},
+		{
+			"from": "DEC-0016",
+			"relation": "implements",
+			"to": "CLM-0006"
+		},
+		{
+			"from": "DEC-0016",
+			"relation": "implements",
+			"to": "CLM-0010"
+		},
+		{
+			"from": "DEC-0016",
+			"relation": "implements",
+			"to": "CLM-0011"
+		},
+		{
+			"from": "DEC-0017",
+			"relation": "assumes",
+			"to": "ASM-0001"
+		},
+		{
+			"from": "DEC-0019",
+			"relation": "implements",
+			"to": "CLM-0020"
+		},
+		{
+			"from": "CTR-0001",
+			"relation": "derived-from",
+			"to": "DEC-0012"
+		},
+		{
+			"from": "CTR-0002",
+			"relation": "derived-from",
+			"to": "DEC-0012"
+		},
+		{
+			"from": "CTR-0003",
+			"relation": "derived-from",
+			"to": "DEC-0014"
+		},
+		{
+			"from": "CTR-0004",
+			"relation": "implements",
+			"to": "CLM-0002"
+		},
+		{
+			"from": "CTR-0005",
+			"relation": "implements",
+			"to": "CLM-0013"
+		},
+		{
+			"from": "TC-003",
+			"relation": "projects",
+			"to": "CLM-0009"
+		},
+		{
+			"from": "TC-004",
+			"relation": "projects",
+			"to": "CLM-0004"
+		},
+		{
+			"from": "TC-005",
+			"relation": "projects",
+			"to": "CLM-0008"
+		},
+		{
+			"from": "TC-010",
+			"relation": "projects",
+			"to": "CLM-0005"
+		},
+		{
+			"from": "TC-011",
+			"relation": "projects",
+			"to": "CLM-0002"
+		},
+		{
+			"from": "TC-012",
+			"relation": "projects",
+			"to": "DEC-0001"
+		},
+		{
+			"from": "TC-013",
+			"relation": "projects",
+			"to": "CLM-0007"
+		},
+		{
+			"from": "TC-014",
+			"relation": "projects",
+			"to": "CLM-0003"
+		},
+		{
+			"from": "CON-0020",
+			"relation": "constrains",
+			"to": "CLM-0020"
+		},
+		{
+			"from": "CON-0021",
+			"relation": "constrains",
+			"to": "CLM-0020"
+		},
+		{
+			"from": "CON-0022",
+			"relation": "constrains",
+			"to": "CLM-0020"
+		},
+		{
+			"from": "CON-0023",
+			"relation": "constrains",
+			"to": "CLM-0020"
+		},
+		{
+			"from": "CON-0024",
+			"relation": "constrains",
+			"to": "CLM-0020"
+		},
+		{
+			"from": "CON-0025",
+			"relation": "constrains",
+			"to": "CLM-0020"
+		},
+		{
+			"from": "CON-0026",
+			"relation": "constrains",
+			"to": "CLM-0020"
+		},
+		{
+			"from": "CON-0027",
+			"relation": "constrains",
+			"to": "CTR-0004"
+		},
+		{
+			"from": "DEC-0020",
+			"relation": "implements",
+			"to": "CLM-0008"
+		},
+		{
+			"from": "CON-0028",
+			"relation": "constrains",
+			"to": "DEC-0020"
+		},
+		{
+			"from": "CON-0029",
+			"relation": "constrains",
+			"to": "DEC-0020"
+		},
+		{
+			"from": "CON-0030",
+			"relation": "constrains",
+			"to": "DEC-0020"
+		},
+		{
+			"from": "CON-0003",
+			"relation": "constrains",
+			"to": "DEC-0020"
+		},
+		{
+			"from": "CON-0016",
+			"relation": "constrains",
+			"to": "DEC-0020"
+		},
+		{
+			"from": "CON-0017",
+			"relation": "constrains",
+			"to": "DEC-0020"
+		},
+		{
+			"from": "DEC-0015",
+			"relation": "supersedes",
+			"to": "DEC-0002"
+		},
+		{
+			"from": "TC-001",
+			"relation": "projects",
+			"to": "CLM-0003"
+		},
+		{
+			"from": "TC-002",
+			"relation": "projects",
+			"to": "CLM-0021"
+		},
+		{
+			"from": "TC-006",
+			"relation": "projects",
+			"to": "CLM-0021"
+		},
+		{
+			"from": "TC-015",
+			"relation": "projects",
+			"to": "CLM-0001"
+		},
+		{
+			"from": "TC-016",
+			"relation": "projects",
+			"to": "CLM-0004"
+		},
+		{
+			"from": "TC-017",
+			"relation": "projects",
+			"to": "DEC-0013"
+		},
+		{
+			"from": "TC-017",
+			"relation": "projects",
+			"to": "CLM-0003"
+		},
+		{
+			"from": "TC-018",
+			"relation": "projects",
+			"to": "CLM-0002"
+		},
+		{
+			"from": "CTR-0006",
+			"relation": "implements",
+			"to": "TC-018"
+		},
+		{
+			"from": "CTR-0006",
+			"relation": "implements",
+			"to": "CLM-0002"
+		},
+		{
+			"from": "CTR-0007",
+			"relation": "implements",
+			"to": "TC-001"
+		},
+		{
+			"from": "CTR-0007",
+			"relation": "implements",
+			"to": "TC-014"
+		},
+		{
+			"from": "CTR-0007",
+			"relation": "implements",
+			"to": "CLM-0003"
+		},
+		{
+			"from": "CTR-0008",
+			"relation": "implements",
+			"to": "TC-010"
+		},
+		{
+			"from": "CTR-0008",
+			"relation": "implements",
+			"to": "CLM-0005"
+		},
+		{
+			"from": "CTR-0009",
+			"relation": "implements",
+			"to": "TC-004"
+		},
+		{
+			"from": "CTR-0009",
+			"relation": "implements",
+			"to": "CLM-0004"
+		},
+		{
+			"from": "CTR-0010",
+			"relation": "implements",
+			"to": "TC-012"
+		},
+		{
+			"from": "CTR-0010",
+			"relation": "derived-from",
+			"to": "DEC-0001"
+		},
+		{
+			"from": "CTR-0004",
+			"relation": "implements",
+			"to": "TC-011"
+		},
+		{
+			"from": "CTR-0011",
+			"relation": "implements",
+			"to": "TC-017"
+		},
+		{
+			"from": "CTR-0011",
+			"relation": "implements",
+			"to": "CLM-0003"
+		},
+		{
+			"from": "CTR-0011",
+			"relation": "derived-from",
+			"to": "DEC-0013"
+		},
+		{
+			"from": "CTR-0012",
+			"relation": "implements",
+			"to": "TC-003"
+		},
+		{
+			"from": "CTR-0012",
+			"relation": "implements",
+			"to": "CLM-0009"
+		},
+		{
+			"from": "DEC-0021",
+			"relation": "assumes",
+			"to": "ASM-0003"
+		},
+		{
+			"from": "DEC-0021",
+			"relation": "implements",
+			"to": "CLM-0013"
+		},
+		{
+			"from": "DEC-0021",
+			"relation": "implements",
+			"to": "CLM-0011"
+		},
+		{
+			"from": "CON-0010",
+			"relation": "constrains",
+			"to": "DEC-0021"
+		},
+		{
+			"from": "DEC-0018",
+			"relation": "implements",
+			"to": "CLM-0022"
+		},
+		{
+			"from": "DEC-0006",
+			"relation": "implements",
+			"to": "CLM-0022"
+		},
+		{
+			"from": "CTR-0013",
+			"relation": "implements",
+			"to": "CLM-0007"
+		},
+		{
+			"from": "CTR-0013",
+			"relation": "derived-from",
+			"to": "DEC-0002"
+		},
+		{
+			"from": "CTR-0015",
+			"relation": "implements",
+			"to": "CLM-0010"
+		},
+		{
+			"from": "CTR-0015",
+			"relation": "derived-from",
+			"to": "DEC-0016"
+		},
+		{
+			"from": "CTR-0016",
+			"relation": "implements",
+			"to": "CLM-0011"
+		},
+		{
+			"from": "CTR-0016",
+			"relation": "implements",
+			"to": "CLM-0012"
+		},
+		{
+			"from": "CTR-0016",
+			"relation": "derived-from",
+			"to": "DEC-0009"
+		},
+		{
+			"from": "CTR-0017",
+			"relation": "implements",
+			"to": "CLM-0015"
+		},
+		{
+			"from": "CTR-0017",
+			"relation": "derived-from",
+			"to": "DEC-0010"
+		},
+		{
+			"from": "CTR-0018",
+			"relation": "implements",
+			"to": "CLM-0018"
+		},
+		{
+			"from": "CTR-0018",
+			"relation": "derived-from",
+			"to": "DEC-0004"
+		},
+		{
+			"from": "CTR-0021",
+			"relation": "implements",
+			"to": "CLM-0022"
+		},
+		{
+			"from": "CTR-0021",
+			"relation": "derived-from",
+			"to": "DEC-0018"
+		},
+		{
+			"from": "CTR-0002",
+			"relation": "implements",
+			"to": "CLM-0016"
+		},
+		{
+			"from": "CTR-0003",
+			"relation": "implements",
+			"to": "CLM-0016"
+		},
+		{
+			"from": "CTR-0005",
+			"relation": "implements",
+			"to": "CLM-0017"
+		},
+		{
+			"from": "CTR-0005",
+			"relation": "implements",
+			"to": "CLM-0019"
+		},
+		{
+			"from": "CTR-0012",
+			"relation": "implements",
+			"to": "CLM-0019"
+		},
+		{
+			"from": "CON-0017",
+			"relation": "constrains",
+			"to": "CTR-0022"
+		},
+		{
+			"from": "CON-0019",
+			"relation": "constrains",
+			"to": "CTR-0022"
+		},
+		{
+			"from": "CON-0020",
+			"relation": "constrains",
+			"to": "CTR-0022"
+		},
+		{
+			"from": "CON-0021",
+			"relation": "constrains",
+			"to": "CTR-0022"
+		},
+		{
+			"from": "CON-0022",
+			"relation": "constrains",
+			"to": "CTR-0022"
+		},
+		{
+			"from": "CON-0023",
+			"relation": "constrains",
+			"to": "CTR-0022"
+		},
+		{
+			"from": "CON-0026",
+			"relation": "constrains",
+			"to": "CTR-0022"
+		},
+		{
+			"from": "CON-0001",
+			"relation": "constrains",
+			"to": "CTR-0004"
+		},
+		{
+			"from": "CON-0002",
+			"relation": "constrains",
+			"to": "CTR-0012"
+		},
+		{
+			"from": "CON-0002",
+			"relation": "constrains",
+			"to": "CTR-0004"
+		},
+		{
+			"from": "CON-0003",
+			"relation": "constrains",
+			"to": "CTR-0015"
+		},
+		{
+			"from": "CON-0003",
+			"relation": "constrains",
+			"to": "CTR-0013"
+		},
+		{
+			"from": "CON-0005",
+			"relation": "constrains",
+			"to": "CTR-0018"
+		},
+		{
+			"from": "CON-0006",
+			"relation": "constrains",
+			"to": "CTR-0018"
+		},
+		{
+			"from": "CON-0008",
+			"relation": "constrains",
+			"to": "CTR-0012"
+		},
+		{
+			"from": "CON-0008",
+			"relation": "constrains",
+			"to": "CTR-0015"
+		},
+		{
+			"from": "CON-0009",
+			"relation": "constrains",
+			"to": "CTR-0013"
+		},
+		{
+			"from": "CON-0010",
+			"relation": "constrains",
+			"to": "CTR-0006"
+		},
+		{
+			"from": "CON-0010",
+			"relation": "constrains",
+			"to": "CTR-0005"
+		},
+		{
+			"from": "CON-0011",
+			"relation": "constrains",
+			"to": "CTR-0005"
+		},
+		{
+			"from": "CON-0012",
+			"relation": "constrains",
+			"to": "CTR-0004"
+		},
+		{
+			"from": "CON-0012",
+			"relation": "constrains",
+			"to": "CTR-0015"
+		},
+		{
+			"from": "CON-0013",
+			"relation": "constrains",
+			"to": "CTR-0011"
+		},
+		{
+			"from": "CON-0014",
+			"relation": "constrains",
+			"to": "CTR-0016"
+		},
+		{
+			"from": "CON-0015",
+			"relation": "constrains",
+			"to": "CTR-0017"
+		},
+		{
+			"from": "CTR-0022",
+			"relation": "derived-from",
+			"to": "DEC-0019"
+		},
+		{
+			"from": "CTR-0023",
+			"relation": "implements",
+			"to": "CLM-0012"
+		}
+	],
+	"adrMap": {
+		"ADR-0001": [
+			"CLM-0002",
+			"CON-0001",
+			"CON-0002",
+			"CON-0003",
+			"CTR-0004",
+			"TC-011"
+		],
+		"ADR-0002": [
+			"CLM-0001",
+			"TC-015"
+		],
+		"ADR-0003": [
+			"CTR-0010",
+			"DEC-0001",
+			"TC-012"
+		],
+		"ADR-0004": [
+			"CLM-0009",
+			"CLM-0010",
+			"CLM-0019",
+			"CON-0002",
+			"CTR-0012",
+			"TC-003"
+		],
+		"ADR-0005": [
+			"CLM-0006",
+			"CLM-0007",
+			"CTR-0013",
+			"DEC-0002",
+			"TC-013"
+		],
+		"ADR-0006": [
+			"CLM-0004",
+			"CTR-0009",
+			"TC-004",
+			"TC-016"
+		],
+		"ADR-0007": [
+			"CLM-0008",
+			"DEC-0003",
+			"TC-005"
+		],
+		"ADR-0008": [
+			"CLM-0005",
+			"CTR-0008",
+			"TC-010"
+		],
+		"ADR-0009": [
+			"CLM-0018",
+			"CON-0004",
+			"CTR-0018",
+			"DEC-0004"
+		],
+		"ADR-0010": [
+			"CLM-0001",
+			"CLM-0003",
+			"CTR-0007",
+			"TC-001",
+			"TC-014"
+		],
+		"ADR-0011": [
+			"ASM-0001",
+			"CLM-0011",
+			"CTR-0023",
+			"DEC-0005",
+			"DEC-0017"
+		],
+		"ADR-0012": [
+			"CLM-0022",
+			"CTR-0021",
+			"DEC-0006",
+			"DEC-0017",
+			"DEC-0018"
+		],
+		"ADR-0013": [
+			"ASM-0001",
+			"CLM-0013",
+			"DEC-0017"
+		],
+		"ADR-0014": [
+			"CLM-0006",
+			"CLM-0017",
+			"CLM-0019"
+		],
+		"ADR-0015": [
+			"CLM-0006",
+			"CLM-0013",
+			"CLM-0019",
+			"CON-0012",
+			"DEC-0007"
+		],
+		"ADR-0016": [
+			"CLM-0006",
+			"CLM-0009",
+			"CLM-0013",
+			"CLM-0019",
+			"CON-0002",
+			"CON-0011",
+			"CTR-0005"
+		],
+		"ADR-0017": [
+			"ASM-0003",
+			"CLM-0011",
+			"CLM-0013",
+			"CON-0010",
+			"DEC-0021"
+		],
+		"ADR-0018": [
+			"CLM-0006",
+			"CLM-0008",
+			"CLM-0019",
+			"CON-0012",
+			"DEC-0008",
+			"TC-005"
+		],
+		"ADR-0019": [
+			"CLM-0011",
+			"CLM-0012",
+			"CON-0014",
+			"CTR-0016",
+			"DEC-0009"
+		],
+		"ADR-0020": [
+			"CLM-0015",
+			"CLM-0017",
+			"CON-0010",
+			"CON-0015",
+			"CTR-0017",
+			"DEC-0010"
+		],
+		"ADR-0021": [
+			"CLM-0015",
+			"CLM-0017",
+			"CON-0015",
+			"DEC-0011"
+		],
+		"ADR-0022": [
+			"CLM-0016",
+			"CTR-0001",
+			"CTR-0002",
+			"DEC-0012"
+		],
+		"ADR-0023": [
+			"CLM-0001",
+			"CLM-0002",
+			"CLM-0003",
+			"CON-0010",
+			"CON-0013",
+			"CON-0027",
+			"CTR-0006",
+			"CTR-0011",
+			"DEC-0013",
+			"TC-017",
+			"TC-018"
+		],
+		"ADR-0024": [
+			"ASM-0002",
+			"CLM-0008",
+			"CLM-0009",
+			"CLM-0015",
+			"CLM-0016",
+			"CON-0008",
+			"CTR-0003",
+			"DEC-0014"
+		],
+		"ADR-0025": [
+			"CLM-0006",
+			"CLM-0007",
+			"CLM-0012",
+			"CLM-0018",
+			"CON-0003",
+			"CON-0004",
+			"CON-0009",
+			"CTR-0013",
+			"DEC-0002",
+			"DEC-0015",
+			"TC-013"
+		],
+		"ADR-0026": [
+			"CLM-0006",
+			"CLM-0007",
+			"CLM-0009",
+			"CLM-0010",
+			"CLM-0011",
+			"CLM-0012",
+			"CLM-0018",
+			"CLM-0019",
+			"CON-0003",
+			"CON-0004",
+			"CON-0005",
+			"CON-0006",
+			"CON-0007",
+			"CON-0008",
+			"CON-0009",
+			"CON-0027",
+			"CTR-0015",
+			"DEC-0016"
+		],
+		"ADR-0027": [
+			"CLM-0020",
+			"CON-0017",
+			"CON-0018",
+			"CON-0019",
+			"CON-0020",
+			"CON-0021",
+			"CON-0022",
+			"CON-0023",
+			"CON-0024",
+			"CON-0025",
+			"CON-0026",
+			"CTR-0022",
+			"DEC-0019"
+		],
+		"ADR-0028": [
+			"CLM-0007",
+			"CLM-0008",
+			"CON-0003",
+			"CON-0016",
+			"CON-0017",
+			"CON-0028",
+			"CON-0029",
+			"CON-0030",
+			"DEC-0020"
+		]
+	},
+	"sourceGrounding": [
+		{
+			"node": "CLM-0002",
+			"path": "docs/decisions/0001-worktree-write-confinement.md",
+			"anchors": [
+				"hard gate on observed effect",
+				"Ambiguity resolves to violation"
+			]
+		},
+		{
+			"node": "CLM-0006",
+			"path": "docs/decisions/0014-mechanism-policy-separation-spine.md",
+			"anchors": [
+				"determinism lives in the harness",
+				"judgment lives in the worker"
+			]
+		},
+		{
+			"node": "CLM-0019",
+			"path": "docs/decisions/0016-severity-taxonomy-and-owner.md",
+			"anchors": [
+				"not* reachable by the tolerance dial",
+				"default-to-safety-on-ambiguity"
+			]
+		},
+		{
+			"node": "CLM-0016",
+			"path": "docs/decisions/0022-pipeline-shape-and-review-orchestrators.md",
+			"anchors": [
+				"cold / out-of-context",
+				"product guarantee"
+			]
+		},
+		{
+			"node": "ASM-0002",
+			"path": "docs/decisions/0024-adversarial-authoring-review-loop.md",
+			"anchors": [
+				"fleet is not a free lunch",
+				"value must be benchmarked"
+			]
+		},
+		{
+			"node": "CON-0004",
+			"path": "docs/decisions/0026-stateful-guards-fence-reconcile-and-gate-disposition.md",
+			"anchors": [
+				"Ordering cannot substitute for authority"
+			]
+		},
+		{
+			"node": "CLM-0020",
+			"path": "docs/decisions/0027-machine-readable-architectural-intent-graph.md",
+			"anchors": [
+				"one machine-readable semantic source of truth",
+				"Narrative documentation remains valuable but explanatory"
+			]
+		},
+		{
+			"node": "TC-005",
+			"path": "docs/trust/trust-claims.yml",
+			"anchors": [
+				"status: best_effort",
+				"live downstream attestation verification is not a local guarantee yet"
+			]
+		},
+		{
+			"node": "CON-0021",
+			"path": "docs/decisions/0027-machine-readable-architectural-intent-graph.md",
+			"anchors": [
+				"Observation and interpretation must remain separate",
+				"support or challenge"
+			]
+		},
+		{
+			"node": "CON-0025",
+			"path": "docs/decisions/0027-machine-readable-architectural-intent-graph.md",
+			"anchors": [
+				"Consumer repositories must be able to own intent independently",
+				"composition / federation"
+			]
+		},
+		{
+			"node": "CON-0028",
+			"path": "docs/decisions/0028-delivery-packet-claim-scoped-provenance.md",
+			"anchors": [
+				"facts determined by or after its own",
+				"joined at render time"
+			]
+		},
+		{
+			"node": "CON-0029",
+			"path": "docs/decisions/0028-delivery-packet-claim-scoped-provenance.md",
+			"anchors": [
+				"Identity ambiguity must split, never merge"
+			]
+		},
+		{
+			"node": "CLM-0022",
+			"path": "docs/decisions/0012-readiness-computed-not-groomed.md",
+			"anchors": [
+				"stay chartering-time human concerns"
+			]
+		},
+		{
+			"node": "DEC-0021",
+			"path": "docs/decisions/0017-graceful-degradation-rigor-only.md",
+			"anchors": [
+				"last verified pin",
+				"staleness ceiling"
+			]
+		}
+	],
+	"invariantIndex": {
+		"source": "AGENTS.md",
+		"section": "Project Invariants",
+		"rule": "Every bullet in the section resolves to graph primitives or is explicitly classified as a construction rule (repository convention, not architectural intent). A bullet that does neither is an uncovered channel for load-bearing intent and fails Q16.",
+		"entries": [
+			{
+				"anchor": "`STEPS` in `packages/pelaggio/scripts/pelaggio/config.ts` is the source of truth",
+				"construction": "config-shape convention for pipeline steps"
+			},
+			{
+				"anchor": "`expandSkill()` strips skill frontmatter",
+				"construction": "skill-substrate mechanics"
+			},
+			{
+				"anchor": "Skill bodies must call `npx pelaggio ...`",
+				"construction": "re-entrancy convention for skill bodies"
+			},
+			{
+				"anchor": "Model IDs live in `MODEL_PROFILES`",
+				"construction": "model-id placement convention"
+			},
+			{
+				"anchor": "Worktree isolation is load-bearing",
+				"nodes": [
+					"CLM-0002",
+					"CTR-0004"
+				]
+			},
+			{
+				"anchor": "The Claude custom spawn is unconditional and fail-closed",
+				"nodes": [
+					"DEC-0013",
+					"CLM-0002",
+					"CTR-0006"
+				]
+			},
+			{
+				"anchor": "plan documents under `docs/plans/` are read-only",
+				"construction": "step-scoped write convention (plan-polish guard)"
+			},
+			{
+				"anchor": "Rate-limit paths must park through `parkExit()`",
+				"nodes": [
+					"DEC-0009",
+					"CLM-0012"
+				]
+			},
+			{
+				"anchor": "`ship.target` owns direct-push vs PR behavior",
+				"nodes": [
+					"DEC-0001"
+				]
+			},
+			{
+				"anchor": "PR candidate blockers may be removed only by a complete, valid isolated verification report",
+				"nodes": [
+					"CLM-0009",
+					"CON-0008"
+				]
+			},
+			{
+				"anchor": "Every blocking gate clears the gate-quality bar",
+				"nodes": [
+					"CLM-0011"
+				]
+			},
+			{
+				"anchor": "The daemon is an authenticated authority boundary",
+				"nodes": [
+					"CLM-0005",
+					"TC-010",
+					"CTR-0008"
+				]
+			},
+			{
+				"anchor": "Claims are git-native (`feat/<id>` branch)",
+				"nodes": [
+					"DEC-0004",
+					"CLM-0018"
+				]
+			},
+			{
+				"anchor": "Access the roadmap via `npx pelaggio roadmap ...`",
+				"construction": "skill/CLI seam convention"
+			},
+			{
+				"anchor": "Review artifacts through the harness, never by shelling out to a provider CLI",
+				"construction": "provider-plumbing convention"
+			},
+			{
+				"anchor": "`npx pelaggio doc-review <path>` is the read-only review path",
+				"nodes": [
+					"CLM-0006"
+				]
+			},
+			{
+				"anchor": "`.agents/skills` must stay a symlink",
+				"construction": "skill-tree layout convention"
+			},
+			{
+				"anchor": "No `preinstall`, `install`, or `postinstall` scripts",
+				"nodes": [
+					"CLM-0004",
+					"CTR-0009"
+				]
+			},
+			{
+				"anchor": "Flow projection is non-authoritative for current state",
+				"nodes": [
+					"CON-0030",
+					"DEC-0004"
+				]
+			},
+			{
+				"anchor": "Flow-event identity is a unique `eventId`",
+				"nodes": [
+					"CON-0012"
+				]
+			},
+			{
+				"anchor": "Flow events live under `.dev/flow-events/`",
+				"construction": "planned storage layout (flow-event-catalog.md)"
+			},
+			{
+				"anchor": "`FlowPolicy` is provider-neutral",
+				"construction": "planned policy/storage seam (flow.md)"
+			},
+			{
+				"anchor": "An initiative is a projected swimlane/`group`, never a pelaggio-owned object",
+				"nodes": [
+					"DEC-0020"
+				]
+			},
+			{
+				"anchor": "Write-back is typed and item-scoped",
+				"construction": "planned write-back mechanics (flow.md)"
+			},
+			{
+				"anchor": "Declared write-sets are enforced by the worktree write-guard",
+				"nodes": [
+					"CLM-0002",
+					"CTR-0004"
+				]
+			},
+			{
+				"anchor": "The landing queue is target-agnostic",
+				"nodes": [
+					"DEC-0015",
+					"CLM-0007",
+					"CON-0004"
+				]
+			},
+			{
+				"anchor": "Beads (`bd`) is the chosen work-store",
+				"nodes": [
+					"DEC-0004",
+					"CON-0004"
+				]
+			},
+			{
+				"anchor": "A guard whose guarantee has a *completeness surface*",
+				"nodes": [
+					"CON-0027"
+				]
+			}
+		]
+	},
+	"extraction": {
+		"reviewed": false,
+		"method": "AI-assisted semantic compression of the ADR corpus; source-grounding and typed-relation tests protect reviewed cuts from silent drift, but human/adversarial review is still required to ratify semantic interpretation.",
+		"openQuestions": [
+			"Are no-self-authorization and deterministic-safety-floor split at the right boundary?",
+			"Which source-grounding anchors should become generated/digested rather than hand-selected?",
+			"Which existing TC projections need richer condition/scope metadata before migration?",
+			"When evidence plumbing lands, what minimum Actor and scope/context representation is earned by real custody queries?"
+		],
+		"decided": [
+			"2026-08-24 (#624): ADR-0022's fixed six-step / two-orchestrator topology stays a current construction choice (DEC-0012); nothing revisits it until a consumer question or a measured cost forces it.",
+			"2026-08-26 (#650): CON-0005 time-is-not-liveness and CON-0006 self-validation-not-freshness bind CTR-0018 by ENFORCEMENT-BY-ABSENCE. git-claim.ts states it has no claims file, owner pid, or staleness lifecycle by design, so the prohibition is satisfied by the mechanism not containing the forbidden thing rather than by an active check. Recorded because a bind of this shape reads like active coverage and is not: reintroducing staleness-based reclaim would not fail a test today.",
+			"2026-08-26 (#650): CON-0019 promotion-requires-drift-ratchet binds CTR-0022 on the strength of the pinned `status: shadow` assertion, which fails if the graph is promoted. The suite supplies the coverage and drift checks the constraint names as the precondition, but does NOT gate promotion on their adequacy — promotion is blocked outright rather than conditioned. Bound rather than left unenforced because the violation does fail an assertion; recorded because the mechanism is broader and blunter than the constraint's conditional wording.",
+			"2026-08-26 (#650): CLM-0014, CTR-0014, CTR-0019 and CTR-0020 are absent by deliberate removal in the #616 reconciliation — three realizations and one claim that review showed were not what their nodes claimed, removed rather than softened. Their IDs are permanent gaps: reuse would silently rebind a retired identity, so new nodes continue past the current maxima.",
+			"2026-08-26 (#650): CTR-0024 was authored as trust-manifest drift rejection, then removed after review showed that manifest generation and byte-drift rejection do not enforce CON-0016's projection-strength rule. Its ID is a permanent gap, like CTR-0014, CTR-0019 and CTR-0020, and must never be reused."
+		],
+		"unenforcedConstraints": {
+			"note": "Constraints that name no enforcing realization today, each with the reason it stays unbound. Mirrors the Q17 frozen ceiling in ci/__tests__/shadow-assurance.test.ts; the two are checked against each other.",
+			"entries": {
+				"CON-0004": "Genuine gap. ADR-0025 is `proposed` and the landing fence is unbuilt; the only --force-with-lease in the tree (ship/pr-effects.ts) is a feature-branch push retry, not a landing fence, and does not claim to be one. Note the asymmetry this exposes: CON-0004 and CON-0009 both constrain CLM-0007 and Q3 asserts both edges, yet only CON-0009 has a mechanism.",
+				"CON-0007": "attempt-identity.ts delivers atomic allocation only. Properties 2 and 3 — an agent-denied anti-rollback register and consumer-side fencing — are unbuilt, so an attempt number remains identity rather than authority and the constraint's authority requirement is unmet.",
+				"CON-0016": "Manifest generation plus byte-drift rejection is not projection-strength enforcement: nothing compares a public claim's semantics against the internal claim it projects, so silent strengthening remains unenforced.",
+				"CON-0018": "Intent-only. A rule about when semantic churn is warranted governs authoring judgment; no mechanism can decide whether an edit changed architectural intent.",
+				"CON-0024": "Intent-only, and forward-looking. It reserves extensibility for actors and context that the ontology deliberately has not added (ADR-0027 decision 6); there is nothing yet to enforce.",
+				"CON-0025": "Intent-only. Q13 regex-matches this constraint's own statement text, which is source grounding rather than enforcement and must not be recorded as a bind. No consumer-owned graph exists to hold the boundary against.",
+				"CON-0028": "Genuine gap. ADR-0028 is `proposed` and the delivery packet is unbuilt.",
+				"CON-0029": "Genuine gap. ADR-0028 is `proposed` and the delivery packet is unbuilt.",
+				"CON-0030": "Genuine gap. ADR-0028 is `proposed` and the delivery packet is unbuilt."
+			}
+		}
+	}
+}
