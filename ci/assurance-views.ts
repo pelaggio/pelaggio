@@ -1,5 +1,5 @@
-import { readFileSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 
 const REPO_ROOT = resolve(new URL("..", import.meta.url).pathname);
 
@@ -27,8 +27,9 @@ export type AssuranceView = {
 	seeds?: string[];
 	depth?: number;
 	checks?: string[];
+	parameter?: "node" | "node-or-source";
 };
-export type QueryArgs = { node?: string; source?: string };
+export type QueryArgs = { node?: string; source?: string; seeds?: string[] };
 export type Diagnostic = { check: string; node: string; message: string };
 export type SourceGrounding = { node: string; path: string; anchors: string[] };
 /** Optional file access for the source-grounding check; omitted in pure in-memory stress tests. */
@@ -39,6 +40,24 @@ export const DEBT_CHECKS = ["orphan-realization", "invariant-without-realization
 
 function index(graph: AssuranceGraph) {
 	return new Map(graph.nodes.map((node) => [node.id, node]));
+}
+
+function isWithinRoot(root: string, candidate: string): boolean {
+	const pathFromRoot = relative(root, candidate);
+	return pathFromRoot !== ".." && !pathFromRoot.startsWith(`..${sep}`) && !isAbsolute(pathFromRoot);
+}
+
+export function readSourceWithinRoot(root: string, path: string): string | undefined {
+	const candidate = resolve(root, path);
+	if (!isWithinRoot(root, candidate)) return undefined;
+	try {
+		const realRoot = realpathSync(root);
+		const realCandidate = realpathSync(candidate);
+		if (!isWithinRoot(realRoot, realCandidate)) return undefined;
+		return readFileSync(realCandidate, "utf8");
+	} catch {
+		return undefined;
+	}
 }
 
 function induced(graph: AssuranceGraph, selected: Set<string>, relations: Set<string>) {
@@ -76,13 +95,7 @@ function neighborhood(graph: AssuranceGraph, seeds: string[], relations: Set<str
 export function defaultDiagnosticsEnv(graph: AssuranceGraph): DiagnosticsEnv {
 	return {
 		sourceGrounding: graph.sourceGrounding ?? [],
-		readSource: (path) => {
-			try {
-				return readFileSync(resolve(REPO_ROOT, path), "utf8");
-			} catch {
-				return undefined;
-			}
-		},
+		readSource: (path) => readSourceWithinRoot(REPO_ROOT, path),
 	};
 }
 
@@ -133,7 +146,7 @@ export function diagnostics(graph: AssuranceGraph, env: DiagnosticsEnv = default
 	return out.sort((a, b) => `${a.check}:${a.node}`.localeCompare(`${b.check}:${b.node}`));
 }
 
-export function selectView(graph: AssuranceGraph, view: AssuranceView, args: QueryArgs = {}): { nodes: GraphNode[]; edges: GraphEdge[]; diagnostics?: Diagnostic[] } {
+export function selectView(graph: AssuranceGraph, view: AssuranceView, args: QueryArgs = {}, diagnosticsEnv?: DiagnosticsEnv): { nodes: GraphNode[]; edges: GraphEdge[]; diagnostics?: Diagnostic[] } {
 	const relations = new Set(view.relations ?? []);
 
 	if (view.mode === "all-of-kind") {
@@ -149,7 +162,11 @@ export function selectView(graph: AssuranceGraph, view: AssuranceView, args: Que
 		return induced(graph, new Set(selected.map((node) => node.id)), relations);
 	}
 
-	if (view.mode === "seeded-neighborhood") return neighborhood(graph, view.seeds ?? [], relations, view.depth ?? 1);
+	if (view.mode === "seeded-neighborhood") {
+		const seeds = args.seeds ?? view.seeds ?? [];
+		if (seeds.length === 0) throw new Error(`view ${view.id} requires seeds`);
+		return neighborhood(graph, seeds, relations, view.depth ?? 1);
+	}
 
 	if (view.mode === "neighborhood") {
 		if (!args.node) throw new Error(`view ${view.id} requires node`);
@@ -164,7 +181,7 @@ export function selectView(graph: AssuranceGraph, view: AssuranceView, args: Que
 		return neighborhood(graph, [...seeds], relations, view.depth ?? 3);
 	}
 
-	if (view.mode === "diagnostics") return { nodes: [], edges: [], diagnostics: diagnostics(graph) };
+	if (view.mode === "diagnostics") return { nodes: [], edges: [], diagnostics: diagnostics(graph, diagnosticsEnv) };
 
 	throw new Error(`unsupported view mode ${view.mode}`);
 }

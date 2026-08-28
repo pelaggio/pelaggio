@@ -1428,13 +1428,15 @@
 			"id": "CTR-0022",
 			"kind": "realization",
 			"slug": "shadow-assurance-conformance-suite",
-			"statement": "The shadow corpus is held by a conformance suite that pins the ontology exactly, forbids interpretive relations, requires every published trust record to be a scoped public proposition, indexes the always-loaded AGENTS.md invariant channel, and pins the graph's own status to shadow. The suite also holds a paired no-false-fire/true-fire fixture over intent-preserving source and realization-path edits.",
+			"statement": "The shadow corpus is held by a conformance suite that pins the ontology exactly, forbids interpretive relations, requires every published trust record to be a scoped public proposition, indexes the always-loaded AGENTS.md invariant channel, and pins the graph's own status to shadow. The suite also holds a paired no-false-fire/true-fire fixture over intent-preserving source and realization-path edits. Q13 additionally exercises those same schema, query, view, and diagnostic checks against a second-owner graph in docs/assurance/owner-independence-fixture.json, including valid source grounding relative to that owner's root and a paired rejection under Pelaggio's root.",
 			"sources": [
 				"ADR-0027"
 			],
 			"codeEvidence": [
 				"ci/__tests__/shadow-assurance.test.ts",
-				"ci/assurance-views.ts"
+				"ci/assurance-views.ts",
+				"docs/assurance/owner-independence-fixture.json",
+				"docs/assurance/owner-independence-consumer/acme/intent.md"
 			]
 		},
 		{
@@ -2123,6 +2125,11 @@
 			"to": "CTR-0022"
 		},
 		{
+			"from": "CON-0025",
+			"relation": "constrains",
+			"to": "CTR-0022"
+		},
+		{
 			"from": "CON-0026",
 			"relation": "constrains",
 			"to": "CTR-0022"
@@ -2756,7 +2763,8 @@
 			"2026-08-26 (#650): CON-0019 promotion-requires-drift-ratchet binds CTR-0022 on the strength of the pinned `status: shadow` assertion, which fails if the graph is promoted. The suite supplies the coverage and drift checks the constraint names as the precondition, but does NOT gate promotion on their adequacy — promotion is blocked outright rather than conditioned. Bound rather than left unenforced because the violation does fail an assertion; recorded because the mechanism is broader and blunter than the constraint's conditional wording.",
 			"2026-08-26 (#650): CLM-0014, CTR-0014, CTR-0019 and CTR-0020 are absent by deliberate removal in the #616 reconciliation — three realizations and one claim that review showed were not what their nodes claimed, removed rather than softened. Their IDs are permanent gaps: reuse would silently rebind a retired identity, so new nodes continue past the current maxima.",
 			"2026-08-26 (#650): CTR-0024 was authored as trust-manifest drift rejection, then removed after review showed that manifest generation and byte-drift rejection do not enforce CON-0016's projection-strength rule. Its ID is a permanent gap, like CTR-0014, CTR-0019 and CTR-0020, and must never be reused.",
-			"2026-08-27 (#681): CON-0018 binds CTR-0022 on the strength of the no-false-fire fixture over the enumerated mutations (rationale append, nearby non-anchor rewording, realization `codeEvidence` path change) plus a true-fire control that removes a live unique anchor. Recorded because a bind of this shape reads like a proof that every intent-preserving edit is accepted and is not: anchored-sentence edits still require `sourceGrounding` reconciliation, which is out of scope as a verification artifact."
+			"2026-08-27 (#681): CON-0018 binds CTR-0022 on the strength of the no-false-fire fixture over the enumerated mutations (rationale append, nearby non-anchor rewording, realization `codeEvidence` path change) plus a true-fire control that removes a live unique anchor. Recorded because a bind of this shape reads like a proof that every intent-preserving edit is accepted and is not: anchored-sentence edits still require `sourceGrounding` reconciliation, which is out of scope as a verification artifact.",
+			"2026-08-28 (#682): CON-0025 binds CTR-0022 because Q13 now exercises the live schema, query engine, views, and diagnostics against an independently named second-owner fixture rather than this constraint's own statement. The second-owner source grounding resolves and validates from the consumer fixture root, while a paired run against Pelaggio's root diagnoses the same relative path. The bind is valid because that fixture is independently named material the live checks operate on; it does not settle ADR-0027 decision 7 (no versioned competency-question contract, no interoperability claim)."
 		],
 		"unenforcedConstraints": {
 			"note": "Constraints that name no enforcing realization today, each with the reason it stays unbound. Mirrors the Q17 frozen ceiling in ci/__tests__/shadow-assurance.test.ts; the two are checked against each other.",
@@ -2764,7 +2772,6 @@
 				"CON-0004": "Genuine gap. ADR-0025 is `proposed` and the landing fence is unbuilt; the only --force-with-lease in the tree (ship/pr-effects.ts) is a feature-branch push retry, not a landing fence, and does not claim to be one. Note the asymmetry this exposes: CON-0004 and CON-0009 both constrain CLM-0007 and Q3 asserts both edges, yet only CON-0009 has a mechanism.",
 				"CON-0007": "attempt-identity.ts delivers atomic allocation only. Properties 2 and 3 — an agent-denied anti-rollback register and consumer-side fencing — are unbuilt, so an attempt number remains identity rather than authority and the constraint's authority requirement is unmet.",
 				"CON-0016": "Manifest generation plus byte-drift rejection is not projection-strength enforcement: nothing compares a public claim's semantics against the internal claim it projects, so silent strengthening remains unenforced.",
-				"CON-0025": "Intent-only. Q13 regex-matches this constraint's own statement text, which is source grounding rather than enforcement and must not be recorded as a bind. No consumer-owned graph exists to hold the boundary against.",
 				"CON-0028": "Genuine gap. ADR-0028 is `proposed` and the delivery packet is unbuilt.",
 				"CON-0029": "Genuine gap. ADR-0028 is `proposed` and the delivery packet is unbuilt.",
 				"CON-0030": "Genuine gap. ADR-0028 is `proposed` and the delivery packet is unbuilt."
