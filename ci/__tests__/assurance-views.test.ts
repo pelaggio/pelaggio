@@ -105,6 +105,8 @@ describe("query stress tests", () => {
 		const broken = structuredClone(graph) as AssuranceGraph;
 		broken.sourceGrounding = [{ node: "CLM-0006", path: "docs/decisions/0014-mechanism-policy-separation-spine.md", anchors: ["this phrase is not in the ADR"] }];
 		assert.ok((selectView(broken, view("debt")).diagnostics ?? []).some((i) => i.check === "stale-source-grounding" && i.node === "CLM-0006"));
+		const consumerEnv = { sourceGrounding: broken.sourceGrounding, readSource: () => "this phrase is not in the ADR" };
+		assert.ok(!(selectView(broken, view("debt"), {}, consumerEnv).diagnostics ?? []).some((i) => i.check === "stale-source-grounding"), "debt view must use an explicitly supplied grounding environment");
 	});
 
 	it("stale-source-grounding fires when an anchor leaves its source and stays silent when it remains", () => {
@@ -182,6 +184,22 @@ describe("query stress tests", () => {
 	it("query modes fail loudly when required parameters are absent or unknown", () => {
 		assert.throws(() => selectView(graph, view("why")), /requires node/);
 		assert.throws(() => selectView(graph, view("affected"), { source: "ADR-9999" }), /resolvable/);
+	});
+
+	it("seeded-neighborhood prefers QueryArgs.seeds over catalog seeds", () => {
+		const review = view("review");
+		const catalogIds = new Set(selectView(graph, review).nodes.map((node) => node.id));
+		assert.ok(catalogIds.has("DEC-0014"), "catalog review seeds must still resolve");
+		const overridden = selectView(graph, review, { seeds: ["CLM-0002"] });
+		const ids = new Set(overridden.nodes.map((node) => node.id));
+		assert.ok(ids.has("CLM-0002"), "override seed must appear in the selected neighborhood");
+		assert.notDeepEqual([...ids].sort(), [...catalogIds].sort(), "caller seeds must replace catalog seeds rather than union with them");
+	});
+
+	it("seeded-neighborhood fails loudly when neither override nor catalog seeds are present", () => {
+		const seedless: AssuranceView = { ...view("review"), seeds: undefined };
+		assert.throws(() => selectView(graph, seedless), /requires seeds/);
+		assert.throws(() => selectView(graph, view("review"), { seeds: [] }), /requires seeds/);
 	});
 });
 

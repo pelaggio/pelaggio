@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, it } from "node:test";
-import { type AssuranceGraph, adrMapFromSources, diagnostics } from "../assurance-views.ts";
+import { type AssuranceGraph, type AssuranceView, adrMapFromSources, DEBT_CHECKS, diagnostics, type QueryArgs, readSourceWithinRoot, selectView } from "../assurance-views.ts";
 
 const repo = resolve(new URL("../..", import.meta.url).pathname);
 type ShadowNode = {
@@ -55,28 +55,42 @@ function mapped(adr: string) {
 	return value as string[];
 }
 
+const OWNER_INDEPENDENCE_ONLY = "owner-independence of the current checks/views/diagnostics only; not semantic conformance or interoperability";
+
+function assertGraphSchema(
+	candidate: { nodes: Array<{ id: string; kind: string; role?: string; visibility?: string }>; edges: Array<{ from: string; relation: string; to: string }> },
+	ontology: { nodeKinds: string[]; propositionRoles: string[]; relationKinds: Record<string, { from: string[]; to: string[] }> },
+	qualifier = "",
+) {
+	const note = qualifier ? `; ${qualifier}` : "";
+	const byId = new Map(candidate.nodes.map((value) => [value.id, value]));
+	assert.equal(byId.size, candidate.nodes.length, `node IDs must be unique${note}`);
+	for (const value of candidate.nodes) {
+		assert.ok(ontology.nodeKinds.includes(value.kind), `unknown node kind ${value.kind} on ${value.id}${note}`);
+		if (value.kind === "proposition") {
+			assert.ok(value.role !== undefined && ontology.propositionRoles.includes(value.role), `${value.id} needs a valid proposition role${note}`);
+		}
+	}
+	for (const edge of candidate.edges) {
+		const from = byId.get(edge.from);
+		const to = byId.get(edge.to);
+		assert.ok(from, `edge originates at missing node ${edge.from}${note}`);
+		assert.ok(to, `edge targets missing node ${edge.to}${note}`);
+		const contract = ontology.relationKinds[edge.relation];
+		assert.ok(contract, `unknown edge relation ${edge.relation}${note}`);
+		assert.ok(contract.from.includes(from.kind), `${edge.relation} cannot originate at ${from.kind} ${from.id}${note}`);
+		assert.ok(contract.to.includes(to.kind), `${edge.relation} cannot target ${to.kind} ${to.id}${note}`);
+		if (edge.relation === "constrains") assert.equal(from.role, "constraint", `${from.id} constrains but is not a constraint proposition${note}`);
+		if (edge.relation === "assumes") assert.equal(to.role, "assumption", `${to.id} is assumed but is not an assumption proposition${note}`);
+		if (edge.relation === "projects") assert.equal(from.visibility, "public", `${from.id} projects but is not a public proposition${note}`);
+	}
+}
+
 describe("shadow assurance graph integrity", () => {
 	it("has a minimal base ontology, stable ids, and type-correct edges", () => {
 		assert.deepEqual(graph.nodeKinds, ["proposition", "decision", "realization"]);
 		assert.deepEqual(graph.propositionRoles, ["invariant", "constraint", "assumption"]);
-		assert.equal(nodes.size, graph.nodes.length, "node IDs must be unique");
-
-		for (const value of graph.nodes) {
-			assert.ok(graph.nodeKinds.includes(value.kind), `unknown node kind ${value.kind} on ${value.id}`);
-			if (value.kind === "proposition") assert.ok(graph.propositionRoles.includes(value.role), `${value.id} needs a valid proposition role`);
-		}
-
-		for (const edge of edges) {
-			const from = node(edge.from);
-			const to = node(edge.to);
-			const contract = graph.relationKinds[edge.relation];
-			assert.ok(contract, `unknown edge relation ${edge.relation}`);
-			assert.ok(contract.from.includes(from.kind), `${edge.relation} cannot originate at ${from.kind} ${from.id}`);
-			assert.ok(contract.to.includes(to.kind), `${edge.relation} cannot target ${to.kind} ${to.id}`);
-			if (edge.relation === "constrains") assert.equal(from.role, "constraint", `${from.id} constrains but is not a constraint proposition`);
-			if (edge.relation === "assumes") assert.equal(to.role, "assumption", `${to.id} is assumed but is not an assumption proposition`);
-			if (edge.relation === "projects") assert.equal(from.visibility, "public", `${from.id} projects but is not a public proposition`);
-		}
+		assertGraphSchema(graph, graph);
 	});
 
 	it("covers every ADR file that exists", () => {
@@ -409,11 +423,12 @@ describe("architectural question tests", () => {
 	 * #650 reduced this from 29 to 9 by binding 20 constraints — seven to the conformance suite and
 	 * thirteen to existing realizations. #680 reduced it from 9 to 8 by correcting one forward-looking
 	 * kernel-sufficiency claim to an assumption in ADR-0027 and its shadow node. #681 reduced it from
-	 * 8 to 7 by binding CON-0018 to CTR-0022. The 7 that remain each carry a written reason in the
+	 * 8 to 7 by binding CON-0018 to CTR-0022. #682 reduced it from 7 to 6 by binding CON-0025 to
+	 * CTR-0022 via a second-owner fixture. The 6 that remain each carry a written reason in the
 	 * corpus at `extraction.unenforcedConstraints`, pinned against this set below: a reason without a
 	 * member, or a member without a reason, fails.
 	 */
-	const FROZEN_UNENFORCED_CONSTRAINTS: ReadonlySet<string> = new Set(["CON-0004", "CON-0007", "CON-0016", "CON-0025", "CON-0028", "CON-0029", "CON-0030"]);
+	const FROZEN_UNENFORCED_CONSTRAINTS: ReadonlySet<string> = new Set(["CON-0004", "CON-0007", "CON-0016", "CON-0028", "CON-0029", "CON-0030"]);
 
 	it("Q17: unenforced-constraint ceiling", () => {
 		const corpus = graph as unknown as AssuranceGraph;
@@ -495,9 +510,104 @@ describe("architectural question tests", () => {
 		assert.ok(mapped("ADR-0027").includes("CON-0021"));
 	});
 
-	it("Q13: consumer-owned graphs remain a first-class future boundary without specifying federation", () => {
+	it("Q13: current checks/views/diagnostics operate on a second-owner graph", () => {
 		assert.ok(mapped("ADR-0027").includes("CON-0025"));
-		assert.match(node("CON-0025").statement, /consumer repository can own and evolve/i);
-		assert.match(node("CON-0025").statement, /composition remains deliberately undecided/i);
+		assert.ok(
+			outgoing("CON-0025", "constrains").some((edge) => edge.to === "CLM-0020"),
+			"CON-0025 retains its intent-only constrains edge to CLM-0020",
+		);
+		assert.ok(
+			outgoing("CON-0025", "constrains").some((edge) => edge.to === "CTR-0022"),
+			"CON-0025 is enforced by constraining realization CTR-0022",
+		);
+		assert.ok(graph.relationKinds.constrains.to.includes("realization"), "constrains → realization is type-correct");
+
+		const fixturePath = resolve(repo, "docs/assurance/owner-independence-fixture.json");
+		const fixtureRaw = readFileSync(fixturePath, "utf8");
+		assert.doesNotMatch(fixtureRaw, /(ASM|CLM|CON|CTR|DEC|TC)-/, `fixture must not carry Pelaggio ID prefixes; ${OWNER_INDEPENDENCE_ONLY}`);
+		assert.ok(!fixtureRaw.includes("docs/decisions"), `fixture must not name docs/decisions; ${OWNER_INDEPENDENCE_ONLY}`);
+		assert.ok(!fixtureRaw.includes("pelaggio."), `fixture must not name the pelaggio. namespace; ${OWNER_INDEPENDENCE_ONLY}`);
+
+		type OwnerIndependenceFixture = {
+			status: string;
+			note: string;
+			graph: AssuranceGraph;
+			queryArgs: Record<string, QueryArgs>;
+			expectedDiagnostics: Array<{ check: string; node: string }>;
+		};
+		const fixture = JSON.parse(fixtureRaw) as OwnerIndependenceFixture;
+		assert.equal(fixture.status, "experimental-shadow-only");
+		assertGraphSchema(fixture.graph, graph, OWNER_INDEPENDENCE_ONLY);
+
+		const catalog = JSON.parse(readFileSync(resolve(repo, "docs/assurance/views.json"), "utf8")) as { views: AssuranceView[] };
+		assert.deepEqual(Object.keys(fixture.queryArgs).sort(), catalog.views.map((view) => view.id).sort(), `fixture queryArgs must cover every views.json id; ${OWNER_INDEPENDENCE_ONLY}`);
+
+		const pairKey = (item: { check: string; node: string }) => `${item.check}:${item.node}`;
+		const expectedForeignRootPairs = [...fixture.expectedDiagnostics].sort((a, b) => pairKey(a).localeCompare(pairKey(b)));
+		const expectedConsumerPairs = expectedForeignRootPairs.filter((item) => item.check !== "stale-source-grounding");
+		assert.equal(expectedForeignRootPairs.length - expectedConsumerPairs.length, 1, `fixture must pin one foreign-root source diagnostic; ${OWNER_INDEPENDENCE_ONLY}`);
+
+		const consumerRoot = resolve(repo, "docs/assurance/owner-independence-consumer");
+		const consumerDiagnosticsEnv = {
+			sourceGrounding: fixture.graph.sourceGrounding ?? [],
+			readSource: (path: string) => readSourceWithinRoot(consumerRoot, path),
+		};
+		for (const grounding of consumerDiagnosticsEnv.sourceGrounding) {
+			const source = consumerDiagnosticsEnv.readSource(grounding.path);
+			assert.ok(source !== undefined, `consumer source must resolve from its own root: ${grounding.path}; ${OWNER_INDEPENDENCE_ONLY}`);
+			for (const anchor of grounding.anchors) {
+				assert.ok(source.includes(anchor), `consumer source must contain its own grounding anchor: ${grounding.path}; ${OWNER_INDEPENDENCE_ONLY}`);
+			}
+		}
+		const traversalIssues = diagnostics(fixture.graph, {
+			sourceGrounding: [{ node: "OWN-I1", path: "../README.md", anchors: ["# Shadow assurance corpus"] }],
+			readSource: consumerDiagnosticsEnv.readSource,
+		});
+		assert.ok(
+			traversalIssues.some((issue) => issue.check === "stale-source-grounding" && issue.node === "OWN-I1"),
+			`consumer source grounding must reject paths outside the consumer root; ${OWNER_INDEPENDENCE_ONLY}`,
+		);
+
+		for (const view of catalog.views) {
+			const result = selectView(fixture.graph, view, fixture.queryArgs[view.id] ?? {}, consumerDiagnosticsEnv);
+			if (view.mode === "diagnostics") {
+				const actualPairs = (result.diagnostics ?? []).map(({ check, node }) => ({ check, node })).sort((a, b) => pairKey(a).localeCompare(pairKey(b)));
+				assert.deepEqual(actualPairs, expectedConsumerPairs, `debt view must accept source grounding from the consumer root; ${OWNER_INDEPENDENCE_ONLY}`);
+			} else {
+				assert.ok(result.nodes.length > 0, `view ${view.id} must return nodes on the foreign graph; ${OWNER_INDEPENDENCE_ONLY}`);
+			}
+		}
+
+		const consumerIssues = diagnostics(fixture.graph, consumerDiagnosticsEnv);
+		assert.ok(!consumerIssues.some((issue) => issue.check === "stale-source-grounding"), `consumer-owned valid grounding must not be diagnosed as stale; ${OWNER_INDEPENDENCE_ONLY}`);
+		assert.deepEqual(
+			consumerIssues.map(({ check, node }) => ({ check, node })).sort((a, b) => pairKey(a).localeCompare(pairKey(b))),
+			expectedConsumerPairs,
+			`direct diagnostics() must accept source grounding from the consumer root; ${OWNER_INDEPENDENCE_ONLY}`,
+		);
+
+		const foreignRootIssues = diagnostics(fixture.graph);
+		assert.deepEqual([...new Set(foreignRootIssues.map((issue) => issue.check))].sort(), [...DEBT_CHECKS].sort(), `the paired foreign-root control must fire every declared check; ${OWNER_INDEPENDENCE_ONLY}`);
+		assert.deepEqual(
+			foreignRootIssues.map(({ check, node }) => ({ check, node })).sort((a, b) => pairKey(a).localeCompare(pairKey(b))),
+			expectedForeignRootPairs,
+			`the paired foreign-root control must diagnose the consumer-relative path; ${OWNER_INDEPENDENCE_ONLY}`,
+		);
+		const debtView = catalog.views.find((view) => view.id === "debt");
+		assert.ok(debtView, "debt view must exist in the catalog");
+		assert.deepEqual(
+			(selectView(fixture.graph, debtView).diagnostics ?? []).map(({ check, node }) => ({ check, node })).sort((a, b) => pairKey(a).localeCompare(pairKey(b))),
+			expectedForeignRootPairs,
+			`the default debt view must retain the foreign-root diagnostic control; ${OWNER_INDEPENDENCE_ONLY}`,
+		);
+
+		const reviewView = catalog.views.find((view) => view.id === "review");
+		const landingView = catalog.views.find((view) => view.id === "landing");
+		assert.ok(reviewView, "review view must exist in the catalog");
+		assert.ok(landingView, "landing view must exist in the catalog");
+		assert.throws(() => selectView(fixture.graph, reviewView), /missing query seed/, `catalog review seeds must fail on the foreign graph; ${OWNER_INDEPENDENCE_ONLY}`);
+		assert.throws(() => selectView(fixture.graph, landingView), /missing query seed/, `catalog landing seeds must fail on the foreign graph; ${OWNER_INDEPENDENCE_ONLY}`);
+		assert.ok(selectView(fixture.graph, reviewView, fixture.queryArgs.review).nodes.length > 0, `fixture review seeds must answer; ${OWNER_INDEPENDENCE_ONLY}`);
+		assert.ok(selectView(fixture.graph, landingView, fixture.queryArgs.landing).nodes.length > 0, `fixture landing seeds must answer; ${OWNER_INDEPENDENCE_ONLY}`);
 	});
 });
