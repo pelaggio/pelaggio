@@ -877,6 +877,13 @@
 			"codeEvidence": [
 				"packages/pelaggio/scripts/pelaggio/pipeline.ts",
 				"packages/pelaggio/scripts/pelaggio/__tests__/pipeline.test.ts"
+			],
+			"observations": [
+				{
+					"kind": "test",
+					"id": "pick success — runs all six steps and lands the worktree under the injected parent",
+					"path": "packages/pelaggio/scripts/pelaggio/__tests__/pipeline.test.ts"
+				}
 			]
 		},
 		{
@@ -890,6 +897,13 @@
 			"codeEvidence": [
 				"packages/pelaggio/scripts/pelaggio/review/loop.ts",
 				"packages/pelaggio/scripts/pelaggio/pr-review-cli.ts"
+			],
+			"observations": [
+				{
+					"kind": "test",
+					"id": "excludes the artifact author from configured review seats",
+					"path": "packages/pelaggio/scripts/pelaggio/__tests__/review-loop.test.ts"
+				}
 			]
 		},
 		{
@@ -903,6 +917,13 @@
 			"codeEvidence": [
 				"packages/pelaggio/scripts/pelaggio/review/loop.ts",
 				"packages/pelaggio/scripts/pelaggio/review/bench.ts"
+			],
+			"observations": [
+				{
+					"kind": "test",
+					"id": "escalates a stable pass/block split before invoking the Judge",
+					"path": "packages/pelaggio/scripts/pelaggio/__tests__/review-loop.test.ts"
+				}
 			]
 		},
 		{
@@ -916,6 +937,13 @@
 			"codeEvidence": [
 				"packages/pelaggio/scripts/pelaggio/pipeline.ts",
 				"packages/pelaggio/scripts/pelaggio/__tests__/pipeline.test.ts"
+			],
+			"observations": [
+				{
+					"kind": "test",
+					"id": "sessionWorktrees cannot exempt main; allowDirtyMain still drops main independently",
+					"path": "packages/pelaggio/scripts/pelaggio/__tests__/confinement-sessions.test.ts"
+				}
 			]
 		},
 		{
@@ -928,6 +956,13 @@
 			],
 			"codeEvidence": [
 				"packages/pelaggio/scripts/pelaggio/review/taxonomy.ts"
+			],
+			"observations": [
+				{
+					"kind": "test",
+					"id": "signs and verifies a contraction payload; rejects tamper and wrong key",
+					"path": "packages/pelaggio/scripts/pelaggio/__tests__/taxonomy.test.ts"
+				}
 			]
 		},
 		{
@@ -1252,6 +1287,13 @@
 			"codeEvidence": [
 				"packages/pelaggio/scripts/pelaggio/claude-seat.ts",
 				"packages/pelaggio/scripts/pelaggio/__tests__/claude-seat.test.ts"
+			],
+			"observations": [
+				{
+					"kind": "test",
+					"id": "emits the documented argv order, detached session, device-capable root bind, fresh proc, and -- separated command/args with spaces",
+					"path": "packages/pelaggio/scripts/pelaggio/__tests__/claude-seat.test.ts"
+				}
 			]
 		},
 		{
@@ -1268,6 +1310,13 @@
 				"packages/pelaggio/scripts/pelaggio/claude-seat.ts",
 				"packages/pelaggio/scripts/pelaggio/__tests__/claude-seat.test.ts",
 				"packages/pelaggio/scripts/pelaggio/__tests__/claude-seat-env-conformance.test.ts"
+			],
+			"observations": [
+				{
+					"kind": "test",
+					"id": "every env name the installed SDK mentions is triaged",
+					"path": "packages/pelaggio/scripts/pelaggio/__tests__/claude-seat-env-conformance.test.ts"
+				}
 			]
 		},
 		{
@@ -1281,6 +1330,13 @@
 			"codeEvidence": [
 				"packages/server/src/auth.ts",
 				"packages/server/src/config.ts"
+			],
+			"observations": [
+				{
+					"kind": "test",
+					"id": "correct token authenticates state changes",
+					"path": "packages/server/__tests__/auth.test.ts"
+				}
 			]
 		},
 		{
@@ -1294,6 +1350,13 @@
 			"codeEvidence": [
 				"packages/pelaggio/scripts/check-publish.ts",
 				"packages/pelaggio/package.json"
+			],
+			"observations": [
+				{
+					"kind": "test",
+					"id": "flags each install-script hook",
+					"path": "packages/pelaggio/scripts/pelaggio/__tests__/check-publish.test.ts"
+				}
 			]
 		},
 		{
@@ -1306,6 +1369,13 @@
 			],
 			"codeEvidence": [
 				"packages/pelaggio/scripts/pelaggio/config.ts"
+			],
+			"observations": [
+				{
+					"kind": "test",
+					"id": "defaults to pull-request when ship block absent",
+					"path": "packages/pelaggio/scripts/pelaggio/__tests__/ship.test.ts"
+				}
 			]
 		},
 		{
@@ -1321,6 +1391,13 @@
 				"packages/pelaggio/scripts/pelaggio/egress-broker.ts",
 				"packages/pelaggio/scripts/pelaggio/egress-policies.ts",
 				"packages/pelaggio/scripts/pelaggio/__tests__/egress-broker.test.ts"
+			],
+			"observations": [
+				{
+					"kind": "test",
+					"id": "enforces exact routes, key replacement, response filtering, and redacted decisions",
+					"path": "packages/pelaggio/scripts/pelaggio/__tests__/egress-broker.test.ts"
+				}
 			]
 		},
 		{
@@ -1334,6 +1411,13 @@
 			"codeEvidence": [
 				"packages/pelaggio/scripts/pelaggio/review/findings.ts",
 				"packages/pelaggio/scripts/pelaggio/__tests__/review-findings.test.ts"
+			],
+			"observations": [
+				{
+					"kind": "test",
+					"id": "tags each parse failure with a FIXED, enumerated code — never model-derived text",
+					"path": "packages/pelaggio/scripts/pelaggio/__tests__/review-findings.test.ts"
+				}
 			]
 		},
 		{
@@ -1369,6 +1453,13 @@
 			"codeEvidence": [
 				"packages/pelaggio/scripts/pelaggio/land-cli.ts",
 				"packages/pelaggio/scripts/pelaggio/__tests__/land-cli.test.ts"
+			],
+			"observations": [
+				{
+					"kind": "test",
+					"id": "refuses to merge a red PR even with --admin (#292)",
+					"path": "packages/pelaggio/scripts/pelaggio/__tests__/land-cli.test.ts"
+				}
 			]
 		},
 		{
@@ -1383,6 +1474,13 @@
 				"packages/pelaggio/scripts/pelaggio/pr-review-gate-record.ts",
 				"packages/pelaggio/scripts/pelaggio/review/adjudication.ts",
 				"packages/pelaggio/scripts/pelaggio/__tests__/review-adjudication.test.ts"
+			],
+			"observations": [
+				{
+					"kind": "test",
+					"id": "writes and reads a validated record with 0o600 and atomic replacement",
+					"path": "packages/pelaggio/scripts/pelaggio/__tests__/review-adjudication.test.ts"
+				}
 			]
 		},
 		{
@@ -1396,6 +1494,23 @@
 			"codeEvidence": [
 				"packages/pelaggio/scripts/pelaggio/pipeline.ts",
 				"packages/pelaggio/scripts/pelaggio/__tests__/continuous.test.ts"
+			],
+			"observations": [
+				{
+					"kind": "test",
+					"id": "parks on shakedown-plan, checkpoints dirty work, stops before implement",
+					"path": "packages/pelaggio/scripts/pelaggio/__tests__/pipeline.test.ts"
+				},
+				{
+					"kind": "test",
+					"id": "implement blocked → completed:false, reason surfaced, no attempt-2 retry, no park, subtype logged",
+					"path": "packages/pelaggio/scripts/pelaggio/__tests__/pipeline.test.ts"
+				},
+				{
+					"kind": "test",
+					"id": "success: resumes after wait, uses detectResumeStep startFrom, exitCode 0",
+					"path": "packages/pelaggio/scripts/pelaggio/__tests__/orchestrator.test.ts"
+				}
 			]
 		},
 		{
@@ -1409,6 +1524,13 @@
 			"codeEvidence": [
 				"packages/pelaggio/scripts/pelaggio/provider-routing.ts",
 				"packages/pelaggio/scripts/pelaggio/__tests__/provider-routing.test.ts"
+			],
+			"observations": [
+				{
+					"kind": "test",
+					"id": "fails closed when a fixed seat fails a hard review requirement",
+					"path": "packages/pelaggio/scripts/pelaggio/__tests__/provider-routing.test.ts"
+				}
 			]
 		},
 		{
@@ -1421,6 +1543,13 @@
 			],
 			"codeEvidence": [
 				"packages/pelaggio/scripts/pelaggio/roadmap/git-claim.ts"
+			],
+			"observations": [
+				{
+					"kind": "test",
+					"id": "requires registered worktree, exact branch, and attribution",
+					"path": "packages/pelaggio/scripts/pelaggio/__tests__/confinement-sessions.test.ts"
+				}
 			]
 		},
 		{
@@ -1434,6 +1563,13 @@
 			"codeEvidence": [
 				".claude/skills/charter/SKILL.md",
 				"packages/pelaggio/scripts/pelaggio/flow-policy.ts"
+			],
+			"observations": [
+				{
+					"kind": "test",
+					"id": "treats the native ready set as authoritative",
+					"path": "packages/pelaggio/scripts/pelaggio/__tests__/flow-policy.test.ts"
+				}
 			]
 		},
 		{
@@ -1449,6 +1585,13 @@
 				"ci/assurance-views.ts",
 				"docs/assurance/owner-independence-fixture.json",
 				"docs/assurance/owner-independence-consumer/acme/intent.md"
+			],
+			"observations": [
+				{
+					"kind": "test",
+					"id": "ties realizations to code/tests without putting code paths on propositions",
+					"path": "ci/__tests__/shadow-assurance.test.ts"
+				}
 			]
 		},
 		{
@@ -1462,6 +1605,13 @@
 			"codeEvidence": [
 				"packages/pelaggio/scripts/pelaggio/attempt-identity.ts",
 				"packages/pelaggio/scripts/pelaggio/__tests__/attempt-identity.test.ts"
+			],
+			"observations": [
+				{
+					"kind": "test",
+					"id": "allocates monotonically per item, starting at 1",
+					"path": "packages/pelaggio/scripts/pelaggio/__tests__/attempt-identity.test.ts"
+				}
 			]
 		}
 	],

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, it } from "node:test";
+import type { AssuranceObservation } from "../assurance-observations.js";
 import { type AssuranceGraph, type AssuranceView, adrMapFromSources, DEBT_CHECKS, diagnostics, type QueryArgs, readSourceWithinRoot, selectView } from "../assurance-views.ts";
 
 const repo = resolve(new URL("../..", import.meta.url).pathname);
@@ -17,6 +18,7 @@ type ShadowNode = {
 	projection?: { status?: string; scope?: string };
 	sources?: string[];
 	codeEvidence?: string[];
+	observations?: AssuranceObservation[];
 	wrongIf?: string;
 	revisitIf?: string;
 };
@@ -259,6 +261,12 @@ describe("shadow assurance graph integrity", () => {
 			if (value.kind === "realization") {
 				assert.ok(Array.isArray(value.codeEvidence) && value.codeEvidence.length > 0, `${value.id} realization needs code evidence`);
 				for (const path of value.codeEvidence) assert.ok(existsSync(resolve(repo, path)), `${value.id} code evidence missing: ${path}`);
+				assert.ok(Array.isArray(value.observations) && value.observations.length > 0, `${value.id} realization needs a harness observation`);
+				for (const observation of value.observations) {
+					assert.equal(observation.kind, "test", `${value.id} observation kind has no harness resolver`);
+					assert.ok(observation.id.trim().length > 0, `${value.id} observation needs an id`);
+					assert.ok(existsSync(resolve(repo, observation.path)), `${value.id} observation missing: ${observation.path}`);
+				}
 			} else if (value.kind === "proposition") {
 				assert.equal(value.codeEvidence, undefined, `${value.id} proposition must not own brittle code locations`);
 			}

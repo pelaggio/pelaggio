@@ -172,6 +172,8 @@
 		{ "check": "invariant-without-realization", "node": "OWN-I2" },
 		{ "check": "orphan-realization", "node": "OWN-R2" },
 		{ "check": "projection-overreach", "node": "OWN-P1" },
+		{ "check": "stale-realization", "node": "OWN-R1" },
+		{ "check": "stale-realization", "node": "OWN-R2" },
 		{ "check": "stale-source-grounding", "node": "OWN-I1" },
 		{ "check": "unused-assumption", "node": "OWN-A2" },
 		{ "check": "assumption-without-falsifier", "node": "OWN-A2" }
