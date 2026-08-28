@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, it } from "node:test";
@@ -9,6 +9,28 @@ const repo = resolve(new URL("../..", import.meta.url).pathname);
 const dir = resolve(repo, "docs/agent-context/data/corpus");
 const checker = resolve(dir, "check_corpus.py");
 const corpusPath = resolve(dir, "corpus.json");
+const renderMd = resolve(dir, "render_md.py");
+const renderCorpus = resolve(dir, "render_corpus.py");
+const corpusCss = resolve(dir, "corpus.css");
+
+const htmlEscape = (value: string) => value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#x27;");
+
+const renderers = [
+	{
+		path: renderMd,
+		constraintStart: "## Constraints",
+		constraintEnd: "## Assumptions",
+		encodeStatement: (value: string) => value,
+	},
+	{
+		path: renderCorpus,
+		constraintStart: "<h2>Constraints</h2>",
+		constraintEnd: "<h2>Assumptions</h2>",
+		encodeStatement: htmlEscape,
+	},
+];
+
+type Renderer = (typeof renderers)[number];
 
 const run = (target: string) => spawnSync("python3", [checker, target], { encoding: "utf8" });
 const corpus = () => JSON.parse(readFileSync(corpusPath, "utf8"));
@@ -25,6 +47,43 @@ function check(mutate: (c: Record<string, never>) => void) {
 const constraint = (c) => c.nodes.find((n) => n.role === "constraint");
 const assumption = (c) => c.nodes.find((n) => n.role === "assumption");
 
+function constraintSection(emitted: string, renderer: Renderer) {
+	const start = emitted.indexOf(renderer.constraintStart);
+	assert.notEqual(start, -1, `constraint heading missing from ${renderer.path} output`);
+	const end = emitted.indexOf(renderer.constraintEnd, start + renderer.constraintStart.length);
+	assert.notEqual(end, -1, `heading after constraints missing from ${renderer.path} output`);
+	return emitted.slice(start, end);
+}
+
+function assertConstraintsProjected(renderer: Renderer) {
+	const outputPath = join(mkdtempSync(join(tmpdir(), "corpus-render-")), "out");
+	const result = spawnSync("python3", [renderer.path, corpusPath, outputPath], { encoding: "utf8" });
+	assert.equal(result.status, 0, `renderer failed:\n${result.stdout}${result.stderr}`);
+
+	const section = constraintSection(readFileSync(outputPath, "utf8"), renderer);
+	const liveCorpus = corpus();
+	const polarityConstraint = liveCorpus.nodes.find((node) => node.id === "CON-30");
+	assert.ok(polarityConstraint, "CON-30 is missing from the live corpus");
+	assert.match(section, /\bCON-30\b/, `CON-30 missing from ${renderer.path} Constraints section`);
+	assert.ok(section.includes(renderer.encodeStatement(polarityConstraint.statement)), `CON-30 statement missing from ${renderer.path} Constraints section`);
+
+	for (const id of liveCorpus.nodes.filter((node) => node.role === "constraint").map((node) => node.id)) {
+		assert.match(section, new RegExp(`\\b${id}\\b`), `${id} missing from ${renderer.path} Constraints section`);
+	}
+}
+
+function withoutConstraintSelection(renderer: Renderer): Renderer {
+	const scratch = mkdtempSync(join(tmpdir(), "corpus-render-mutant-"));
+	copyFileSync(checker, join(scratch, "check_corpus.py"));
+	copyFileSync(corpusCss, join(scratch, "corpus.css"));
+	const source = readFileSync(renderer.path, "utf8");
+	const selector = 'by("proposition", "constraint")';
+	assert.equal(source.split(selector).length - 1, 1, `expected one constraint selector in ${renderer.path}`);
+	const mutatedPath = join(scratch, "renderer.py");
+	writeFileSync(mutatedPath, source.replace(selector, "[]"));
+	return { ...renderer, path: mutatedPath };
+}
+
 describe("successor corpus checker", () => {
 	// `check_corpus.py` was invoked by nothing — not the workflow, not a package script, not a
 	// test — so every rule it enforces held only when an author remembered to run it. By
@@ -39,6 +98,20 @@ describe("successor corpus checker", () => {
 		// Without this a rename turns every assertion here into a silent spawn failure.
 		assert.ok(existsSync(checker), "check_corpus.py is missing");
 		assert.ok(existsSync(corpusPath), "corpus.json is missing");
+		assert.ok(existsSync(renderMd), "render_md.py is missing");
+		assert.ok(existsSync(renderCorpus), "render_corpus.py is missing");
+	});
+
+	it("both renderers project every live constraint id", () => {
+		for (const renderer of renderers) {
+			assertConstraintsProjected(renderer);
+		}
+	});
+
+	it("fails when either renderer drops its constraint selection", () => {
+		for (const renderer of renderers) {
+			assert.throws(() => assertConstraintsProjected(withoutConstraintSelection(renderer)), /CON-30 missing from .* Constraints section/);
+		}
 	});
 
 	// Each rule is injected individually. Asserting only that SOME invalid corpus exits non-zero
