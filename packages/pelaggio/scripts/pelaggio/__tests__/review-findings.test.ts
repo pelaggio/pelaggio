@@ -15,6 +15,7 @@ import {
 	normalizeCwe,
 	parseAuthoringReviewFindings,
 	parseFailureCode,
+	parseFailureDiagnostic,
 	parseJudgeReport,
 	parseReviewFindings,
 	parseReviewVerification,
@@ -23,6 +24,7 @@ import {
 	ReviewFindingsParseError,
 	type ReviewFindingsParseErrorCode,
 	reconcileReviewVerification,
+	reviewBlockMarkers,
 	reviewFindingFingerprint,
 	reviewFindingsGate,
 	SAFETY_CLASSES,
@@ -738,5 +740,39 @@ describe("ReviewFindingsParseError codes (#536)", () => {
 		assert.equal(parseFailureCode(new Error("boom with a secret sk-ant-xyz")), "parse-error");
 		assert.equal(parseFailureCode("not even an error"), "parse-error");
 		assert.equal(parseFailureCode(new ReviewFindingsParseError("unknown-key", "review findings report contains unknown key: leaked")), "unknown-key");
+	});
+
+	it("maps parse failures to code-invariant, role-specific public prose", () => {
+		assert.equal(parseFailureDiagnostic("reviewer"), "authoring review findings parse failure");
+		assert.equal(parseFailureDiagnostic("judge"), "authoring review Judge parse failure");
+	});
+});
+
+describe("reviewBlockMarkers", () => {
+	const startOnly = (start: string, body = '{"schemaVersion":3}') => `${start}\n${body}`;
+	const endOnly = (end: string) => `prose only\n${end}`;
+	const neither = "ordinary prose with no delimiters";
+
+	it("pins start-only, end-only, both, and neither for reviewer tokens", () => {
+		const both = authoringBlock({ schemaVersion: 3, summary: "Ok.", findings: [] });
+		assert.deepEqual(reviewBlockMarkers(startOnly("AUTHORING_REVIEW_FINDINGS"), "reviewer"), { hasStartMarker: true, hasEndMarker: false });
+		assert.deepEqual(reviewBlockMarkers(endOnly("END_AUTHORING_REVIEW_FINDINGS"), "reviewer"), { hasStartMarker: false, hasEndMarker: true });
+		assert.deepEqual(reviewBlockMarkers(both, "reviewer"), { hasStartMarker: true, hasEndMarker: true });
+		assert.deepEqual(reviewBlockMarkers(neither, "reviewer"), { hasStartMarker: false, hasEndMarker: false });
+		assert.equal(hasAuthoringReviewFindingsBlock(both), true);
+		assert.equal(hasAuthoringReviewFindingsBlock(startOnly("AUTHORING_REVIEW_FINDINGS")), false, "start-only is the unclosed case a complete-match probe cannot see");
+	});
+
+	it("pins start-only, end-only, both, and neither for Judge tokens", () => {
+		const both = judgeBlock({ schemaVersion: 1, decisions: [] });
+		assert.deepEqual(reviewBlockMarkers(startOnly("AUTHORING_REVIEW_JUDGE", '{"schemaVersion":1,"decisions":[]}'), "judge"), { hasStartMarker: true, hasEndMarker: false });
+		assert.deepEqual(reviewBlockMarkers(endOnly("END_AUTHORING_REVIEW_JUDGE"), "judge"), { hasStartMarker: false, hasEndMarker: true });
+		assert.deepEqual(reviewBlockMarkers(both, "judge"), { hasStartMarker: true, hasEndMarker: true });
+		assert.deepEqual(reviewBlockMarkers(neither, "judge"), { hasStartMarker: false, hasEndMarker: false });
+	});
+
+	it("does not treat the END token as a start (END_ contains the start token as a suffix)", () => {
+		assert.equal(reviewBlockMarkers("END_AUTHORING_REVIEW_FINDINGS", "reviewer").hasStartMarker, false);
+		assert.equal(reviewBlockMarkers("END_AUTHORING_REVIEW_JUDGE", "judge").hasStartMarker, false);
 	});
 });

@@ -986,7 +986,7 @@ Run it from the **main checkout** (the same station as `land` / `pr-review`) so 
 ## Document review — `pelaggio doc-review <path>` (#384)
 
 ```bash
-npx pelaggio doc-review docs/plans/384.md [--profile <name>] [--json] [--out <report.json>]
+npx pelaggio doc-review docs/plans/384.md [--profile <name>] [--json] [--out <report.json>] [--capture-failed-seats]
 ```
 
 A read-only, provider-diverse review of an **arbitrary document** (a design/plan/spec) — the same
@@ -1014,6 +1014,56 @@ construction** (the no-revise options union has no `revise` prompt), not merely 
 
 The reviewer seats run the `pr-review` skill in `--document` mode; the Judge runs `pr-verify`
 `--authoring-loop-judge` (same wire format as the authoring loop).
+
+### Seat readability diagnostics (#677)
+
+Unreadable reviewer/Judge output is observed at `runReviewLoop` as a typed attempt (readable
+empty/non-empty vs unreadable parse code plus structural source facts: character length and
+whether the role's start/end delimiters appear). Gate semantics are unchanged: an unreadable
+reviewer still softens diversity; an unreadable Judge still clears no candidates.
+Rendered review provenance uses one code-invariant parse-failure diagnostic per role; specific
+parse codes and output-derived source facts remain confined to the structured local observation.
+
+1. **Capture (operator-side).** Run `npx pelaggio doc-review <path> --capture-failed-seats` on a
+   fixed document cohort. The implement sandbox cannot reach providers. Capture writes model-authored
+   `assistantText` only for *unreadable* returned seats to
+   `.dev/doc-review-transcripts/<runId>.json` (owner-only `0700` directory, mode `0600` file,
+   sha256 of the serialized bytes). It does
+   not include prompts, document bytes, tool input/results, `fullText`, or `outputTail`. All-readable
+   runs write no transcript. The ordinary record, `--json`, and `--out` carry only a POSIX-relative
+   `{ path, sha256 }` descriptor.
+2. **Measure.** Run `npx tsx ci/doc-review-corpus.ts` to print exact fractions over the tracked
+   fixture, or the richer in-memory projection when live `.dev/doc-review-records/` are present.
+   Typed attempt codes and source facts are measured only from that live local projection. The
+   tracked fixture at `106:d079b12dce4d` remains unchanged and supports only its legacy diagnostic
+   baseline; it does not carry the new recovery evidence.
+3. **Evidence.** For each `block-not-found`, the local projected-corpus evidence is the typed parse
+   code plus `source` facts (empty vs start-without-end vs neither marker). Operator inspection of
+   the digest-bound local transcript is how a reviewer confirms AC-1 — cite run/seat/pass, subtype,
+   turns, and the decisive text. Neither the local projection nor `.dev/` transcript files are
+   inputs available in a later claim worktree.
+4. **Select a narrow remedy only after that evidence:**
+   - parser change — valid-but-misframed blocks;
+   - reserved/final-response behavior — `subtype: error_max_turns` plus empty or start-without-end text;
+   - bounded retry — completed-but-unframed seats (`ok` / `success` plus `chars > 0` and
+     `hasStartMarker: false`);
+   - provider-specific adaptation — only if the same contract succeeds on other providers under
+     comparable conditions.
+   Do not revive the tail-rule or configured-60 hypotheses unless new records show
+   `trailing-after-close` or `turns === 60`. The 106-run fixture already falsifies both as causes of
+   the current `block-not-found` rate.
+5. **Re-measure.** Re-run the same fixed cohort and report first-attempt and final readability with
+   the same script over identical seat IDs. A recovery must not improve the rate by dropping a failed
+   seat.
+
+**Deferred.** Exporting typed attempt/source evidence across the tracked-corpus boundary is a
+separate chartered item. This change deliberately leaves `buildCorpus()`, `--write`, and
+`ci/doc-review-seat-corpus.json` at their existing export contract; the recovery item must not claim
+that the tracked fixture already provides worktree-consumable evidence.
+
+Transcript artifacts may contain model-authored document material. They are local diagnostic data,
+must not be committed or attached to public reports, and may be deleted after the diagnosis is
+reduced to non-sensitive codes and source facts.
 
 ## Follow-ups (not in this gate)
 

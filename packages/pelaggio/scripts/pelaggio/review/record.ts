@@ -1,6 +1,8 @@
-import { mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { chmodSync, lstatSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { ReviewLoopResult } from "./loop.js";
+import type { ReviewFindingsParseErrorCode } from "./findings.js";
+import type { ReviewLoopResult, UnreadableSource } from "./loop.js";
 
 export interface ReviewRecord {
 	schemaVersion: 1;
@@ -26,6 +28,29 @@ export interface DocReviewRecord {
 	safetyFloor: "disabled";
 	safetyFloorNote: string;
 	result: ReviewLoopResult;
+	/** POSIX-relative pointer at a private failed-seat transcript; never the transcript bytes. */
+	failedSeatTranscript?: { path: string; sha256: string };
+}
+
+export interface DocReviewSeatTranscriptEntry {
+	role: "reviewer" | "judge";
+	seatId: string;
+	provider: string;
+	model?: string;
+	pass: number;
+	attempt: number;
+	subtype: string;
+	turns: number;
+	parseCode: ReviewFindingsParseErrorCode;
+	source: UnreadableSource;
+	assistantText: string;
+}
+
+export interface DocReviewSeatTranscriptRecord {
+	schemaVersion: 1;
+	runId: string;
+	createdAt: string;
+	seats: DocReviewSeatTranscriptEntry[];
 }
 
 export function validateReviewRecord(value: ReviewRecord): ReviewRecord {
@@ -39,6 +64,22 @@ export function validateDocReviewRecord(value: DocReviewRecord): DocReviewRecord
 	if (value.safetyFloor !== "disabled") throw new Error("doc review record safety floor must be disabled");
 	if (!value.document?.path || !/^[a-f0-9]{64}$/.test(value.document.digest) || !Number.isInteger(value.document.byteLength) || value.document.byteLength < 0) throw new Error("invalid doc review record document binding");
 	if (Number.isNaN(Date.parse(value.createdAt))) throw new Error("invalid doc review record timestamp");
+	if (value.failedSeatTranscript !== undefined) validateFailedSeatTranscriptDescriptor(value.failedSeatTranscript);
+	return value;
+}
+
+function validateFailedSeatTranscriptDescriptor(value: { path: string; sha256: string }): void {
+	if (!/^[a-f0-9]{64}$/.test(value.sha256)) throw new Error("invalid doc review record transcript digest");
+	if (value.path.includes("..") || !/^\.dev\/doc-review-transcripts\/[^/]+$/.test(value.path)) throw new Error("invalid doc review record transcript path");
+}
+
+export function validateDocReviewSeatTranscriptRecord(value: DocReviewSeatTranscriptRecord): DocReviewSeatTranscriptRecord {
+	if (value.schemaVersion !== 1 || !value.runId || !Array.isArray(value.seats) || value.seats.length === 0) throw new Error("invalid doc review seat transcript");
+	if (Number.isNaN(Date.parse(value.createdAt))) throw new Error("invalid doc review seat transcript timestamp");
+	for (const seat of value.seats) {
+		if (seat.role !== "reviewer" && seat.role !== "judge") throw new Error("invalid doc review seat transcript role");
+		if (typeof seat.assistantText !== "string") throw new Error("invalid doc review seat transcript text");
+	}
 	return value;
 }
 
@@ -52,12 +93,55 @@ export function writeDocReviewRecord(root: string, record: DocReviewRecord): str
 	return atomicWriteJson(join(root, ".dev", "doc-review-records", `${valid.runId}.json`), valid);
 }
 
+/**
+ * Private failed-seat transcript: serialize once, hash those bytes, write those bytes.
+ * Returns a POSIX-relative path from the write root — never an absolute path.
+ */
+export function writeDocReviewSeatTranscript(root: string, record: DocReviewSeatTranscriptRecord): { path: string; sha256: string } {
+	const valid = validateDocReviewSeatTranscriptRecord(record);
+	const relativePath = `.dev/doc-review-transcripts/${valid.runId}.json`;
+	const body = `${JSON.stringify(valid, null, 2)}\n`;
+	const sha256 = createHash("sha256").update(body).digest("hex");
+	const directory = ensurePrivateTranscriptDirectory(root);
+	chmodSync(directory, 0o700);
+	atomicReplaceText(join(directory, `${valid.runId}.json`), body);
+	return { path: relativePath, sha256 };
+}
+
+/** Create each repository-controlled component separately and refuse links before any raw text write. */
+function ensurePrivateTranscriptDirectory(root: string): string {
+	const devDirectory = join(root, ".dev");
+	const transcriptDirectory = join(devDirectory, "doc-review-transcripts");
+	for (const directory of [devDirectory, transcriptDirectory]) {
+		try {
+			mkdirSync(directory, { mode: 0o700 });
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+		}
+		const stat = lstatSync(directory);
+		if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`private transcript path component must be a plain directory: ${directory}`);
+	}
+	return transcriptDirectory;
+}
+
 /** Shared atomic write: tmp + rename, mode 0o600. */
-function atomicWriteJson(path: string, value: unknown): string {
+function atomicWriteText(path: string, body: string): void {
 	mkdirSync(dirname(path), { recursive: true });
+	atomicReplaceText(path, body);
+}
+
+/** Atomic replacement once the caller has established the destination directory. */
+function atomicReplaceText(path: string, body: string): void {
 	const temporary = `${path}.tmp-${process.pid}`;
-	writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+	// Refuse a stale/predicted temp path instead of reopening it: `mode` is ignored for an
+	// existing file, which could otherwise turn a permissive inode into the published transcript.
+	writeFileSync(temporary, body, { encoding: "utf8", flag: "wx", mode: 0o600 });
+	chmodSync(temporary, 0o600);
 	renameSync(temporary, path);
+}
+
+function atomicWriteJson(path: string, value: unknown): string {
+	atomicWriteText(path, `${JSON.stringify(value, null, 2)}\n`);
 	return path;
 }
 
@@ -102,5 +186,6 @@ export function renderDocReviewRecord(record: DocReviewRecord): string {
 	const valid = validateDocReviewRecord(record);
 	// The safety-floor pin is rendered prominently so the badge cannot be mistaken for a code-diff
 	// safety-floor run: the code-diff path-signal taxonomy is not applied to a bare document.
-	return `## Document review record\n\nThis is an unbound review record, not a cryptographic attestation.\n\n- Document: \`${valid.document.path}\` (\`${valid.document.digest}\`, ${valid.document.byteLength} bytes)\n- Safety floor: **${valid.safetyFloor}** — ${valid.safetyFloorNote}\n- Outcome: **${valid.result.outcome}**\n${renderDiversity(valid.result)}\n- Cost: $${valid.result.cost.toFixed(2)}\n\n${renderResultDetail(valid.result)}`;
+	const evidence = valid.failedSeatTranscript ? `\n- Failed-seat transcript (local diagnostic, do not commit): \`${valid.failedSeatTranscript.path}\` (\`${valid.failedSeatTranscript.sha256}\`)` : "";
+	return `## Document review record\n\nThis is an unbound review record, not a cryptographic attestation.\n\n- Document: \`${valid.document.path}\` (\`${valid.document.digest}\`, ${valid.document.byteLength} bytes)\n- Safety floor: **${valid.safetyFloor}** — ${valid.safetyFloorNote}\n- Outcome: **${valid.result.outcome}**\n${renderDiversity(valid.result)}\n- Cost: $${valid.result.cost.toFixed(2)}${evidence}\n\n${renderResultDetail(valid.result)}`;
 }
