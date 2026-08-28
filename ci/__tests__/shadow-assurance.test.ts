@@ -17,6 +17,7 @@ type ShadowNode = {
 	projection?: { status?: string; scope?: string };
 	sources?: string[];
 	codeEvidence?: string[];
+	wrongIf?: string;
 };
 type ShadowGraph = {
 	status: string;
@@ -198,10 +199,14 @@ describe("architectural question tests", () => {
 
 	it("Q8: assumptions are proposition roles rather than policy preferences or base classes", () => {
 		const assumptions = graph.nodes.filter((n) => n.kind === "proposition" && n.role === "assumption");
-		assert.equal(assumptions.length, 3);
+		assert.equal(assumptions.length, 4);
 		assert.ok(!graph.nodeKinds.includes("assumption"));
 		assert.equal(node("DEC-0017").slug, "rigor-by-consequence");
 		assert.equal(node("DEC-0018").slug, "human-value-judgment-at-charter");
+		assert.equal(node("CON-0024").role, "assumption", "stable IDs do not encode proposition roles");
+		assert.match(node("CON-0024").statement, /kernel can accommodate attributable actors/i);
+		assert.match(node("CON-0024").wrongIf ?? "", /first real custody query/i);
+		assert.ok(outgoing("DEC-0019", "assumes").some((edge) => edge.to === "CON-0024"));
 	});
 
 	it("Q9: N+Judge can disappear without deleting blocker persistence or custody intent", () => {
@@ -301,11 +306,12 @@ describe("architectural question tests", () => {
 	 * after those gained mechanisms; the pin is the stricter of the two and this set follows it.
 	 *
 	 * #650 reduced this from 29 to 9 by binding 20 constraints — seven to the conformance suite and
-	 * thirteen to existing realizations. The 9 that
-	 * remain each carry a written reason in the corpus at `extraction.unenforcedConstraints`, pinned
-	 * against this set below: a reason without a member, or a member without a reason, fails.
+	 * thirteen to existing realizations. #680 reduced it from 9 to 8 by correcting one forward-looking
+	 * kernel-sufficiency claim to an assumption in ADR-0027 and its shadow node. The 8 that remain each
+	 * carry a written reason in the corpus at `extraction.unenforcedConstraints`, pinned against this
+	 * set below: a reason without a member, or a member without a reason, fails.
 	 */
-	const FROZEN_UNENFORCED_CONSTRAINTS: ReadonlySet<string> = new Set(["CON-0004", "CON-0007", "CON-0016", "CON-0018", "CON-0024", "CON-0025", "CON-0028", "CON-0029", "CON-0030"]);
+	const FROZEN_UNENFORCED_CONSTRAINTS: ReadonlySet<string> = new Set(["CON-0004", "CON-0007", "CON-0016", "CON-0018", "CON-0025", "CON-0028", "CON-0029", "CON-0030"]);
 
 	it("Q17: unenforced-constraint ceiling", () => {
 		const corpus = graph as unknown as AssuranceGraph;
