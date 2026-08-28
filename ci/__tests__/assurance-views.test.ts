@@ -52,6 +52,10 @@ function injectDebtFor(check: string): AssuranceGraph {
 	if (check === "orphan-realization") broken.nodes.push({ id: "CTR-X", kind: "realization", slug: "orphan", statement: "s" });
 	if (check === "decision-without-intent") broken.nodes.push({ id: "DEC-X", kind: "decision", slug: "aimless", statement: "s" });
 	if (check === "unused-assumption") broken.nodes.push({ id: "ASM-X", kind: "proposition", role: "assumption", visibility: "internal", slug: "unused", statement: "s" });
+	if (check === "assumption-without-falsifier") {
+		broken.nodes.push({ id: "ASM-X", kind: "proposition", role: "assumption", visibility: "internal", slug: "unfalsified", statement: "s" });
+		broken.edges.push({ from: "DEC-0001", relation: "assumes", to: "ASM-X" });
+	}
 	if (check === "invariant-without-realization") broken.nodes.push({ id: "CLM-X", kind: "proposition", role: "invariant", visibility: "internal", slug: "unrealized", statement: "s" });
 	if (check === "projection-overreach") {
 		broken.nodes.push({ id: "CLM-X", kind: "proposition", role: "invariant", visibility: "internal", slug: "unrealized", statement: "s" });
@@ -157,6 +161,84 @@ describe("query stress tests", () => {
 			"decision implements constraint is a choice, not a mechanism",
 		);
 		assert.equal(choiceHits.length, 1);
+	});
+
+	it("assumption-without-falsifier fires when neither accountability condition is substantive", () => {
+		const missing: AssuranceGraph = {
+			schemaVersion: "0.2.0",
+			nodes: [
+				{ id: "DEC-Y", kind: "decision", slug: "choice", statement: "s" },
+				{ id: "ASM-X", kind: "proposition", role: "assumption", slug: "unfalsified", statement: "s" },
+			],
+			edges: [{ from: "DEC-Y", relation: "assumes", to: "ASM-X" }],
+		};
+		assert.ok(diagnostics(missing).some((d) => d.check === "assumption-without-falsifier" && d.node === "ASM-X"));
+
+		const blank = structuredClone(missing);
+		const blankNode = blank.nodes.find((n) => n.id === "ASM-X");
+		assert.ok(blankNode);
+		blankNode.wrongIf = "   \n\t  ";
+		assert.ok(diagnostics(blank).some((d) => d.check === "assumption-without-falsifier" && d.node === "ASM-X"));
+
+		const short = structuredClone(missing);
+		const shortNode = short.nodes.find((n) => n.id === "ASM-X");
+		assert.ok(shortNode);
+		shortNode.wrongIf = "x".repeat(39);
+		assert.ok(diagnostics(short).some((d) => d.check === "assumption-without-falsifier" && d.node === "ASM-X"));
+
+		const shortRevisit = structuredClone(missing);
+		const shortRevisitNode = shortRevisit.nodes.find((n) => n.id === "ASM-X");
+		assert.ok(shortRevisitNode);
+		shortRevisitNode.revisitIf = "x".repeat(39);
+		assert.ok(diagnostics(shortRevisit).some((d) => d.check === "assumption-without-falsifier" && d.node === "ASM-X"));
+	});
+
+	it("assumption-without-falsifier fires when both accountability conditions are present", () => {
+		const observation = "x".repeat(40);
+		const ambiguous: AssuranceGraph = {
+			schemaVersion: "0.2.0",
+			nodes: [
+				{ id: "DEC-Y", kind: "decision", slug: "choice", statement: "s" },
+				{ id: "ASM-X", kind: "proposition", role: "assumption", slug: "ambiguous", statement: "s", wrongIf: observation, revisitIf: observation },
+			],
+			edges: [{ from: "DEC-Y", relation: "assumes", to: "ASM-X" }],
+		};
+		assert.ok(diagnostics(ambiguous).some((d) => d.check === "assumption-without-falsifier" && d.node === "ASM-X"));
+	});
+
+	it("assumption-without-falsifier accepts a substantive wrongIf or revisitIf at the inclusive floor", () => {
+		const observation = "x".repeat(40);
+		const floor: AssuranceGraph = {
+			schemaVersion: "0.2.0",
+			nodes: [
+				{ id: "DEC-Y", kind: "decision", slug: "choice", statement: "s" },
+				{ id: "ASM-X", kind: "proposition", role: "assumption", slug: "falsified", statement: "s", wrongIf: observation },
+			],
+			edges: [{ from: "DEC-Y", relation: "assumes", to: "ASM-X" }],
+		};
+		assert.ok(!diagnostics(floor).some((d) => d.check === "assumption-without-falsifier"));
+
+		const longer: AssuranceGraph = {
+			...floor,
+			nodes: floor.nodes.map((n) => (n.id === "ASM-X" ? { ...n, wrongIf: `${observation} and then some` } : n)),
+		};
+		assert.ok(!diagnostics(longer).some((d) => d.check === "assumption-without-falsifier"));
+
+		const padded: AssuranceGraph = {
+			...floor,
+			nodes: floor.nodes.map((n) => (n.id === "ASM-X" ? { ...n, wrongIf: `  ${observation}  ` } : n)),
+		};
+		assert.ok(!diagnostics(padded).some((d) => d.check === "assumption-without-falsifier"), "surrounding whitespace is trimmed before the floor");
+
+		const revisitOnly: AssuranceGraph = {
+			schemaVersion: "0.2.0",
+			nodes: [
+				{ id: "DEC-Y", kind: "decision", slug: "choice", statement: "s" },
+				{ id: "ASM-X", kind: "proposition", role: "assumption", slug: "revisited", statement: "s", revisitIf: observation },
+			],
+			edges: [{ from: "DEC-Y", relation: "assumes", to: "ASM-X" }],
+		};
+		assert.ok(!diagnostics(revisitOnly).some((d) => d.check === "assumption-without-falsifier"), "a revisit-only assumption is accountable without claiming a counterexample");
 	});
 
 	it("constraint-without-enforcement accepts either encoding", () => {

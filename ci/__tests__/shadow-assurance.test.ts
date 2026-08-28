@@ -18,6 +18,7 @@ type ShadowNode = {
 	sources?: string[];
 	codeEvidence?: string[];
 	wrongIf?: string;
+	revisitIf?: string;
 };
 type ShadowGraph = {
 	status: string;
@@ -321,6 +322,7 @@ describe("architectural question tests", () => {
 		assert.equal(node("CON-0024").role, "assumption", "stable IDs do not encode proposition roles");
 		assert.match(node("CON-0024").statement, /kernel can accommodate attributable actors/i);
 		assert.match(node("CON-0024").wrongIf ?? "", /first real custody query/i);
+		assert.equal(node("CON-0024").revisitIf, undefined, "ADR-0027 defines the first unrepresentable custody query as a settling counterexample");
 		assert.ok(outgoing("DEC-0019", "assumes").some((edge) => edge.to === "CON-0024"));
 	});
 
@@ -465,6 +467,34 @@ describe("architectural question tests", () => {
 		);
 		assert.ok(injectedLive.has("CON-X"), "an unbound constraint absent from the frozen ceiling must fire");
 		assert.ok(!FROZEN_UNENFORCED_CONSTRAINTS.has("CON-X"), "CON-X is the ceiling true-fire: live diagnostic plus absence from the frozen set");
+	});
+
+	it("Q18: every assumption proposition names a counterexample or revisit trigger", () => {
+		const corpus = graph as unknown as AssuranceGraph;
+		const liveHits = diagnostics(corpus).filter((d) => d.check === "assumption-without-falsifier");
+		assert.equal(liveHits.length, 0, "live assumption propositions must carry a non-trivial wrongIf or revisitIf; invariants and constraints are not required to");
+		assert.ok(!liveHits.some((d) => d.node === "CON-0024"), "CON-0024's wrongIf alone must satisfy the accountability rule");
+
+		const injected = structuredClone(corpus);
+		injected.nodes.push({ id: "ASM-X", kind: "proposition", role: "assumption", slug: "unfalsified", statement: "s" });
+		assert.ok(
+			diagnostics(injected).some((d) => d.check === "assumption-without-falsifier" && d.node === "ASM-X"),
+			"an assumption with neither wrongIf nor revisitIf must fire",
+		);
+
+		const blank = structuredClone(corpus);
+		blank.nodes.push({ id: "ASM-X", kind: "proposition", role: "assumption", slug: "unfalsified", statement: "s", wrongIf: "   " });
+		assert.ok(
+			diagnostics(blank).some((d) => d.check === "assumption-without-falsifier" && d.node === "ASM-X"),
+			"whitespace-only wrongIf is not a falsifier",
+		);
+
+		const short = structuredClone(corpus);
+		short.nodes.push({ id: "ASM-X", kind: "proposition", role: "assumption", slug: "unfalsified", statement: "s", wrongIf: "x".repeat(39) });
+		assert.ok(
+			diagnostics(short).some((d) => d.check === "assumption-without-falsifier" && d.node === "ASM-X"),
+			"a 39-character placeholder is not a falsifier",
+		);
 	});
 
 	/**

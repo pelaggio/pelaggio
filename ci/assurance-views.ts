@@ -11,6 +11,8 @@ export type GraphNode = {
 	role?: string;
 	visibility?: string;
 	sources?: string[];
+	wrongIf?: string;
+	revisitIf?: string;
 	projection?: { status?: string };
 };
 export type GraphEdge = { from: string; relation: string; to: string };
@@ -36,7 +38,16 @@ export type SourceGrounding = { node: string; path: string; anchors: string[] };
 export type DiagnosticsEnv = { readSource?: (path: string) => string | undefined; sourceGrounding?: SourceGrounding[] };
 
 /** Every check the `debt` view may declare. `views.json` is bound to this list by test. */
-export const DEBT_CHECKS = ["orphan-realization", "invariant-without-realization", "decision-without-intent", "unused-assumption", "stale-source-grounding", "projection-overreach", "constraint-without-enforcement"] as const;
+export const DEBT_CHECKS = [
+	"orphan-realization",
+	"invariant-without-realization",
+	"decision-without-intent",
+	"unused-assumption",
+	"stale-source-grounding",
+	"projection-overreach",
+	"constraint-without-enforcement",
+	"assumption-without-falsifier",
+] as const;
 
 function index(graph: AssuranceGraph) {
 	return new Map(graph.nodes.map((node) => [node.id, node]));
@@ -116,6 +127,14 @@ export function diagnostics(graph: AssuranceGraph, env: DiagnosticsEnv = default
 		}
 		if (node.kind === "proposition" && node.role === "assumption" && incoming(node.id, "assumes").length === 0) {
 			out.push({ check: "unused-assumption", node: node.id, message: "assumption is not relied upon by any decision or proposition" });
+		}
+		if (node.kind === "proposition" && node.role === "assumption") {
+			const hasWrongIf = node.wrongIf !== undefined;
+			const hasRevisitIf = node.revisitIf !== undefined;
+			const accountabilityCondition = node.wrongIf ?? node.revisitIf ?? "";
+			if (hasWrongIf === hasRevisitIf || accountabilityCondition.trim().length < 40) {
+				out.push({ check: "assumption-without-falsifier", node: node.id, message: "assumption must name exactly one substantive falsifying observation or revisit trigger" });
+			}
 		}
 		// Inverse of orphan-realization: intent that nothing in the repository currently implements. This is
 		// debt to look at, not an error — most invariants here are realized by mechanisms the graph has not
