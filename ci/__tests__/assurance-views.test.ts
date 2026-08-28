@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { describe, it } from "node:test";
+import { type AssuranceObservation, type ObservationTestResultEvent, observationKey, resolveObservations, resolveTestObservationEvents } from "../assurance-observations.js";
 import { type AssuranceGraph, type AssuranceView, DEBT_CHECKS, diagnostics, renderMermaid, selectView } from "../assurance-views.ts";
 
 const repo = resolve(new URL("../..", import.meta.url).pathname);
@@ -64,6 +66,7 @@ function injectDebtFor(check: string): AssuranceGraph {
 	}
 	if (check === "constraint-without-enforcement") broken.nodes.push({ id: "CON-X", kind: "proposition", role: "constraint", slug: "unbound", statement: "s" });
 	if (check === "decision-without-realization") broken.nodes.push({ id: "DEC-X", kind: "decision", slug: "unrealized", statement: "s", status: "current-construction-choice" });
+	if (check === "stale-realization") broken.nodes.push({ id: "CTR-X", kind: "realization", slug: "stale", statement: "s" });
 	return broken;
 }
 
@@ -118,6 +121,105 @@ describe("query stress tests", () => {
 		const grounding = [{ node: "CLM-0006", path: "x.md", anchors: ["determinism lives in the harness"] }];
 		assert.ok(diagnostics(graph, { sourceGrounding: grounding, readSource: () => "unrelated prose" }).some((i) => i.check === "stale-source-grounding" && i.node === "CLM-0006"));
 		assert.ok(!diagnostics(graph, { sourceGrounding: grounding, readSource: () => "determinism lives in the harness, judgment in the worker" }).some((i) => i.check === "stale-source-grounding"));
+	});
+
+	it("stale-realization reports a missing observation and a failed harness result", () => {
+		const unresolved = resolveObservations(repo, [{ kind: "test", id: "missing test", path: "ci/__tests__/does-not-exist.test.ts" }]);
+		assert.ok([...unresolved.values()].some((result) => !result.ok && result.reason.includes("no longer exists")));
+		const liveObservations = graph.nodes.filter((node) => node.kind === "realization").flatMap((node) => node.observations ?? []);
+		const attested = diagnostics(graph, { resolveObservations: (observations) => resolveObservations(repo, observations, new Set(liveObservations.map(observationKey))) });
+		assert.ok(!attested.some((issue) => issue.check === "stale-realization"), "exact receipts keep current realization observations clean");
+
+		const missing = structuredClone(graph) as AssuranceGraph;
+		const realization = missing.nodes.find((node) => node.kind === "realization");
+		assert.ok(realization);
+		realization.observations = [];
+		assert.ok(diagnostics(missing, {}).some((issue) => issue.check === "stale-realization" && issue.node === realization.id));
+
+		const failed = structuredClone(graph) as AssuranceGraph;
+		const observed = failed.nodes.find((node) => node.kind === "realization");
+		assert.ok(observed?.observations?.[0]);
+		const failedKey = observationKey(observed.observations[0]);
+		const issues = diagnostics(failed, {
+			resolveObservations: (observations) => new Map(observations.map((observation) => [observationKey(observation), observationKey(observation) === failedKey ? { ok: false as const, reason: "test failed at head" } : { ok: true as const }])),
+		});
+		assert.ok(issues.some((issue) => issue.check === "stale-realization" && issue.node === observed.id && issue.message.includes("test failed at head")));
+	});
+
+	it("stale-realization fails closed when a diagnostics environment omits its resolver", () => {
+		const issue = diagnostics(graph, {}).find((candidate) => candidate.check === "stale-realization");
+		assert.ok(issue);
+		assert.match(issue.message, /no harness observation resolver result/);
+	});
+
+	it("observation resolution is checkout-scoped", () => {
+		const parent = mkdtempSync(join(tmpdir(), "pelaggio-assurance-roots-"));
+		const first = join(parent, "first");
+		const second = join(parent, "second");
+		mkdirSync(first);
+		mkdirSync(second);
+		writeFileSync(join(first, "observed.test.ts"), "// first checkout only\n");
+		const observation: AssuranceObservation = { kind: "test", id: "checkout-specific test", path: "observed.test.ts" };
+		try {
+			assert.deepEqual(resolveObservations(first, [observation], new Set([observationKey(observation)])).get(observationKey(observation)), { ok: true });
+			const absent = resolveObservations(second, [observation], new Set([observationKey(observation)])).get(observationKey(observation));
+			assert.ok(absent?.ok === false);
+			assert.match(absent.reason, /no longer exists/);
+		} finally {
+			rmSync(parent, { force: true, recursive: true });
+		}
+	});
+
+	it("observation keys keep colon-bearing identities distinct", () => {
+		const root = mkdtempSync(join(tmpdir(), "pelaggio-assurance-keys-"));
+		const first: AssuranceObservation = { kind: "test", id: "a:b", path: "c.test.ts" };
+		const second: AssuranceObservation = { kind: "test", id: "a", path: "b:c.test.ts" };
+		writeFileSync(join(root, first.path), "// first observation\n");
+		writeFileSync(join(root, second.path), "// second observation\n");
+		try {
+			const firstKey = observationKey(first);
+			const secondKey = observationKey(second);
+			assert.notEqual(firstKey, secondKey);
+			const resolutions = resolveObservations(root, [first, second], new Set([firstKey]));
+			assert.equal(resolutions.size, 2);
+			assert.deepEqual(resolutions.get(firstKey), { ok: true });
+			assert.deepEqual(resolutions.get(secondKey), { ok: false, reason: "no current exact harness test result" });
+		} finally {
+			rmSync(root, { force: true, recursive: true });
+		}
+	});
+
+	it("observation receipts require an exact, unskipped node:test pass event", () => {
+		const root = mkdtempSync(join(tmpdir(), "pelaggio-assurance-events-"));
+		const file = join(root, "observed.test.ts");
+		const observation: AssuranceObservation = { kind: "test", id: "must actually run", path: "observed.test.ts" };
+		writeFileSync(file, '// "must actually run" in a comment is not execution evidence\n');
+		const pass: ObservationTestResultEvent = {
+			type: "test:pass",
+			data: { details: { duration_ms: 1, type: "test" }, file, name: observation.id, nesting: 0, testNumber: 1 },
+		};
+		try {
+			const missing = resolveTestObservationEvents(root, [observation], []).get(observationKey(observation));
+			assert.ok(missing?.ok === false, "source text without a result event must stay stale");
+			const skipped = resolveTestObservationEvents(root, [observation], [{ ...pass, data: { ...pass.data, skip: true } }]).get(observationKey(observation));
+			assert.ok(skipped?.ok === false);
+			assert.match(skipped.reason, /skipped/);
+			const emptyReasonSkip = resolveTestObservationEvents(root, [observation], [{ ...pass, data: { ...pass.data, skip: "" } }]).get(observationKey(observation));
+			assert.ok(emptyReasonSkip?.ok === false);
+			assert.match(emptyReasonSkip.reason, /skipped/);
+			const emptyReasonTodo = resolveTestObservationEvents(root, [observation], [{ ...pass, data: { ...pass.data, todo: "" } }]).get(observationKey(observation));
+			assert.ok(emptyReasonTodo?.ok === false);
+			assert.match(emptyReasonTodo.reason, /TODO/);
+			assert.deepEqual(resolveTestObservationEvents(root, [observation], [pass]).get(observationKey(observation)), { ok: true });
+			const ambiguous = resolveTestObservationEvents(root, [observation], [pass, pass]).get(observationKey(observation));
+			assert.ok(ambiguous?.ok === false);
+			assert.match(ambiguous.reason, /not unique/);
+			const stickySkip = resolveTestObservationEvents(root, [observation], [{ ...pass, data: { ...pass.data, skip: true } }, pass]).get(observationKey(observation));
+			assert.ok(stickySkip?.ok === false);
+			assert.match(stickySkip.reason, /skipped/);
+		} finally {
+			rmSync(root, { force: true, recursive: true });
+		}
 	});
 
 	it("projection-overreach fires only for a guarantee whose projected intent nothing realizes", () => {

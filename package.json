@@ -9,7 +9,7 @@
 	"scripts": {
 		"pelaggio": "pnpm --filter pelaggio pelaggio",
 		"test": "pnpm -r test",
-		"test:ci": "node --import tsx --test --test-reporter=dot ci/__tests__/*.test.ts",
+		"test:ci": "bash ci/test-assurance.test.sh && bash ci/test-assurance.sh",
 		"typecheck": "pnpm --filter pelaggio typecheck && pnpm --filter @pelaggio/server typecheck && pnpm --filter @pelaggio/web check:types",
 		"typecheck:ratchet": "node --import tsx ci/typecheck-ratchet.ts",
 		"check": "biome check",

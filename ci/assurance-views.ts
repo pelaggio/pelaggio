@@ -1,5 +1,9 @@
-import { readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { readFileSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { type AssuranceObservation, type ObservationResolution, observationKey, resolveObservations } from "./assurance-observations.js";
+import { readSourceWithinRoot } from "./root-files.js";
+
+export { readSourceWithinRoot };
 
 const REPO_ROOT = resolve(new URL("..", import.meta.url).pathname);
 
@@ -15,6 +19,7 @@ export type GraphNode = {
 	wrongIf?: string;
 	revisitIf?: string;
 	projection?: { status?: string };
+	observations?: AssuranceObservation[];
 };
 export type GraphEdge = { from: string; relation: string; to: string };
 export type AssuranceGraph = { schemaVersion: string; nodes: GraphNode[]; edges: GraphEdge[]; sourceGrounding?: SourceGrounding[] };
@@ -35,8 +40,12 @@ export type AssuranceView = {
 export type QueryArgs = { node?: string; source?: string; seeds?: string[] };
 export type Diagnostic = { check: string; node: string; message: string };
 export type SourceGrounding = { node: string; path: string; anchors: string[] };
-/** Optional file access for the source-grounding check; omitted in pure in-memory stress tests. */
-export type DiagnosticsEnv = { readSource?: (path: string) => string | undefined; sourceGrounding?: SourceGrounding[] };
+/** Optional harness inputs for diagnostics; omitted in pure in-memory stress tests. */
+export type DiagnosticsEnv = {
+	readSource?: (path: string) => string | undefined;
+	resolveObservations?: (observations: readonly AssuranceObservation[]) => Map<string, ObservationResolution>;
+	sourceGrounding?: SourceGrounding[];
+};
 
 /** Every check the `debt` view may declare. `views.json` is bound to this list by test. */
 export const DEBT_CHECKS = [
@@ -45,6 +54,7 @@ export const DEBT_CHECKS = [
 	"decision-without-intent",
 	"unused-assumption",
 	"stale-source-grounding",
+	"stale-realization",
 	"projection-overreach",
 	"constraint-without-enforcement",
 	"assumption-without-falsifier",
@@ -53,24 +63,6 @@ export const DEBT_CHECKS = [
 
 function index(graph: AssuranceGraph) {
 	return new Map(graph.nodes.map((node) => [node.id, node]));
-}
-
-function isWithinRoot(root: string, candidate: string): boolean {
-	const pathFromRoot = relative(root, candidate);
-	return pathFromRoot !== ".." && !pathFromRoot.startsWith(`..${sep}`) && !isAbsolute(pathFromRoot);
-}
-
-export function readSourceWithinRoot(root: string, path: string): string | undefined {
-	const candidate = resolve(root, path);
-	if (!isWithinRoot(root, candidate)) return undefined;
-	try {
-		const realRoot = realpathSync(root);
-		const realCandidate = realpathSync(candidate);
-		if (!isWithinRoot(realRoot, realCandidate)) return undefined;
-		return readFileSync(realCandidate, "utf8");
-	} catch {
-		return undefined;
-	}
 }
 
 function induced(graph: AssuranceGraph, selected: Set<string>, relations: Set<string>) {
@@ -109,6 +101,7 @@ export function defaultDiagnosticsEnv(graph: AssuranceGraph): DiagnosticsEnv {
 	return {
 		sourceGrounding: graph.sourceGrounding ?? [],
 		readSource: (path) => readSourceWithinRoot(REPO_ROOT, path),
+		resolveObservations: (observations) => resolveObservations(REPO_ROOT, observations),
 	};
 }
 
@@ -119,8 +112,21 @@ export function diagnostics(graph: AssuranceGraph, env: DiagnosticsEnv = default
 	const incoming = (id: string, rel?: string) => graph.edges.filter((e) => e.to === id && (!rel || e.relation === rel));
 	const realized = (id: string) => incoming(id, "implements").some((e) => byId.get(e.from)?.kind === "realization");
 	const constrainsRealization = (id: string) => outgoing(id, "constrains").some((e) => byId.get(e.to)?.kind === "realization");
+	const realizationObservations = graph.nodes.filter((node) => node.kind === "realization").flatMap((node) => node.observations ?? []);
+	const observationResolutions = env.resolveObservations?.(realizationObservations);
 
 	for (const node of graph.nodes) {
+		if (node.kind === "realization") {
+			const observations = node.observations ?? [];
+			const stale =
+				observations.length === 0
+					? ["names no harness observation"]
+					: observations
+							.map((observation) => observationResolutions?.get(observationKey(observation)) ?? { ok: false as const, reason: "no harness observation resolver result" })
+							.filter((result): result is { ok: false; reason: string } => !result.ok)
+							.map((result) => result.reason);
+			if (stale.length > 0) out.push({ check: "stale-realization", node: node.id, message: stale.join(" | ") });
+		}
 		if (node.kind === "realization" && !outgoing(node.id).some((e) => e.relation === "implements" || e.relation === "derived-from")) {
 			out.push({ check: "orphan-realization", node: node.id, message: "realization has no articulated intent or decision" });
 		}
