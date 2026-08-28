@@ -195,6 +195,10 @@ describe("shadow assurance graph integrity", () => {
 				snippet: "publish.yml verifies an SSH-signed tag",
 				replacement: "publish.yml checks an SSH-signed tag",
 			},
+			"docs/agent-context/guarded-actions.md": {
+				snippet: "the issue cluster was closed and re-cut into the G-series on 2026-08-07",
+				replacement: "the issue cluster was closed and then re-cut into the G-series on 2026-08-07",
+			},
 		};
 		const livePaths = [...new Set(graph.sourceGrounding.map((g) => g.path))].sort();
 		assert.deepEqual(Object.keys(table).sort(), livePaths, "mutation table must cover every live grounded source, and no others");
@@ -259,6 +263,10 @@ describe("shadow assurance graph integrity", () => {
 				assert.equal(value.codeEvidence, undefined, `${value.id} proposition must not own brittle code locations`);
 			}
 		}
+		const ctr7 = node("CTR-0007");
+		assert.equal(ctr7.slug, "secret-hygiene-scrub-and-env-allowlist");
+		assert.deepEqual(ctr7.sources, ["ADR-0010"]);
+		assert.ok(!(ctr7.codeEvidence ?? []).some((path) => path.endsWith("step-runner.ts")), "CTR-0007 must not cite step-runner.ts; CTR-0006 owns spawnClaudeSeat wiring");
 	});
 });
 
@@ -428,8 +436,22 @@ describe("architectural question tests", () => {
 		assert.ok(bound.length > 0, "CON-0027 must bind at least one mechanism");
 		for (const id of bound) assert.equal(node(id).kind, "realization", `CON-0027 should bind mechanisms; ${id} is not one`);
 		// CTR-0004 is the live instance: worktree confinement decides from observed Git porcelain/ref
-		// state, which the seat can write, and a `.git/config` rewrite produces no porcelain delta.
+		// state, which the seat can write. Two observation failures of that snapshot are in evidence:
+		// a `.git/config` origin rewrite produces no porcelain delta, and an ignored `.dev/` write is
+		// structurally invisible to `git status --porcelain`.
 		assert.ok(bound.includes("CTR-0004"), "the git-porcelain confinement realization is the motivating instance");
+		const grounding = graph.sourceGrounding.filter((entry) => entry.node === "CON-0027");
+		assert.ok(grounding.length > 0, "CON-0027 must be source-grounded");
+		const joinedAnchors = grounding.flatMap((entry) => entry.anchors).join("\n");
+		assert.match(joinedAnchors, /\.git\/config/, "CON-0027 grounding must name the origin-rewrite / .git/config channel");
+		assert.match(joinedAnchors, /\.dev\//, "CON-0027 grounding must name the porcelain-blind .dev/ channel");
+		for (const entry of grounding) {
+			assert.equal(entry.path, "docs/agent-context/guarded-actions.md");
+			const text = readFileSync(resolve(repo, entry.path), "utf8");
+			for (const anchor of entry.anchors) {
+				assert.equal(text.split(anchor).length, 2, `CON-0027 anchor must occur exactly once in ${entry.path}: ${anchor}`);
+			}
+		}
 	});
 
 	/**

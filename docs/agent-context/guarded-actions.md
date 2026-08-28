@@ -1,9 +1,10 @@
 # Guarded actions: a fencing/reconciliation model for pelaggio's locks and gates
 
 Status: living construction home under ADR-0026's semantic rules (see the Division
-of authority below). **v9** — v3 was revised across two provider-diverse review
+of authority below). **v10** — v3 was revised across two provider-diverse review
 passes; v4 added §8.1; v5–v7 applied three further review passes; v8 added §8.2; v9
-repaired §8.2's examples after its review (2026-08-24, see the revision log). **Verification baseline, honestly:** the
+repaired §8.2's examples after its review (2026-08-24); v10 records the two-channel
+Git-porcelain snapshot (2026-08-27, see the revision log). **Verification baseline, honestly:** the
 code-referencing claims in §1–§7 were verified against `4a6ac3c` (2026-08-06) and have
 drifted — the issue cluster was closed and re-cut into the G-series on 2026-08-07
 (e.g. #466 "G3 — Token"), and `blockForeignRootWrite`'s denied-root set has grown. The
@@ -631,6 +632,18 @@ guarded party can write, and enumerating such channels is no substitute — is r
 would be an amendment to ADR-0026; this document proposes that and does not make it, and
 cites the graph as an index of the proposal, never as authority.
 
+The Git-porcelain confinement snapshot is the motivating completeness-surface measurement
+for that second sentence. Two distinct observation failures of the same snapshot are
+already in evidence:
+
+- `.git/config` origin rewrite is state the guarded party can write that the snapshot does not report
+- ignored `.dev/` write is state the guarded party can write that `git status --porcelain` is structurally unable to observe
+
+Channel enumeration cannot close while whole path classes sit outside the snapshot's
+observation surface — evidence for CON-0027's existing construction-over-enumeration
+sentence, not a new constraint, and not the same finding as §8.1 item 11's delta-scoped
+`.dev/` lesson (audit before/after, never absolute-dirty).
+
 The bar, one sentence, in §3's spirit:
 
 > **When a guard's guarantee spans many sites, paths, or inputs, establish it at a single
@@ -793,6 +806,11 @@ Steps 1–3 are independently valuable if the rest is never built.
    defect.
 
 ## Revision log
+
+**v10** (2026-08-27) — added the two-channel Git-porcelain confinement-snapshot
+measurement under §8.2 as grounded evidence for CON-0027's existing second sentence
+(whole path classes outside the snapshot's observation surface). Distinct from
+§8.1 item 11's delta-scoped `.dev/` lesson. Does not promote §8.2 or amend ADR-0026.
 
 **v9** (2026-08-24) — two doc-review passes (3 seats each) found §8.2's worked examples
 described mechanisms that do not exist at head: the scrub does not run at the public writes

@@ -1258,13 +1258,16 @@
 			"id": "CTR-0007",
 			"kind": "realization",
 			"slug": "secret-hygiene-scrub-and-env-allowlist",
-			"statement": "Child environments are built from a deny-by-default allowlist and durable output is scrubbed of credential-shaped text before it is written.",
+			"statement": "All spawned-driver environments use buildAgentEnv()'s deny-by-default construction and durable-output scrubbing from secret-hygiene.ts. Claude seats additionally apply an exhaustive per-Step forge-authority policy: buildClaudeSeatEnv(source, step, configuredAllowlist) admits cloud credential families only for their selected provider mode and prevents the operator allowlist from reopening mode-gated values; denied Claude roles remove forge variables and exact/prefix-classified git auth/config channels, including GIT_CONFIG_KEY_<n> / GIT_CONFIG_VALUE_<n>; and buildClaudeSeatInvocation() tmpfs-masks resolved GitHub CLI config directories for denied roles.",
 			"sources": [
 				"ADR-0010"
 			],
 			"codeEvidence": [
 				"packages/pelaggio/scripts/pelaggio/secret-hygiene.ts",
-				"packages/pelaggio/scripts/pelaggio/__tests__/secret-hygiene.test.ts"
+				"packages/pelaggio/scripts/pelaggio/__tests__/secret-hygiene.test.ts",
+				"packages/pelaggio/scripts/pelaggio/claude-seat.ts",
+				"packages/pelaggio/scripts/pelaggio/__tests__/claude-seat.test.ts",
+				"packages/pelaggio/scripts/pelaggio/__tests__/claude-seat-env-conformance.test.ts"
 			]
 		},
 		{
@@ -2587,6 +2590,14 @@
 			"anchors": [
 				"last verified pin",
 				"staleness ceiling"
+			]
+		},
+		{
+			"node": "CON-0027",
+			"path": "docs/agent-context/guarded-actions.md",
+			"anchors": [
+				"`.git/config` origin rewrite is state the guarded party can write that the snapshot does not report",
+				"ignored `.dev/` write is state the guarded party can write that `git status --porcelain` is structurally unable to observe"
 			]
 		}
 	],
