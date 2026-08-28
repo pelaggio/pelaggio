@@ -101,6 +101,7 @@
 				"kind": "decision",
 				"slug": "versioned-manifest-recipes",
 				"statement": "Recipes are stored as versioned manifests.",
+				"status": "current-construction-choice",
 				"sources": ["OWN-DOC"]
 			},
 			{
@@ -108,6 +109,7 @@
 				"kind": "decision",
 				"slug": "sketched-second-cache",
 				"statement": "A second cache backend was sketched and never related to intent.",
+				"status": "current-construction-choice",
 				"sources": ["OWN-DOC"]
 			},
 			{
@@ -115,6 +117,7 @@
 				"kind": "decision",
 				"slug": "manifest-revisions-follow-recipes",
 				"statement": "Manifest revisions are derived from the recipe decision.",
+				"status": "current-policy-choice",
 				"sources": ["OWN-DOC"]
 			},
 			{
@@ -142,7 +145,8 @@
 			{ "from": "OWN-R1", "relation": "implements", "to": "OWN-I1" },
 			{ "from": "OWN-R1", "relation": "implements", "to": "OWN-I3" },
 			{ "from": "OWN-R1", "relation": "implements", "to": "OWN-I4" },
-			{ "from": "OWN-R1", "relation": "implements", "to": "OWN-I5" }
+			{ "from": "OWN-R1", "relation": "implements", "to": "OWN-I5" },
+			{ "from": "OWN-R1", "relation": "derived-from", "to": "OWN-D1" }
 		],
 		"sourceGrounding": [
 			{
@@ -164,6 +168,7 @@
 	"expectedDiagnostics": [
 		{ "check": "constraint-without-enforcement", "node": "OWN-C2" },
 		{ "check": "decision-without-intent", "node": "OWN-D2" },
+		{ "check": "decision-without-realization", "node": "OWN-D2" },
 		{ "check": "invariant-without-realization", "node": "OWN-I2" },
 		{ "check": "orphan-realization", "node": "OWN-R2" },
 		{ "check": "projection-overreach", "node": "OWN-P1" },

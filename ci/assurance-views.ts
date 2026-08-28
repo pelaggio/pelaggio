@@ -9,6 +9,7 @@ export type GraphNode = {
 	slug: string;
 	statement: string;
 	role?: string;
+	status?: string;
 	visibility?: string;
 	sources?: string[];
 	wrongIf?: string;
@@ -47,6 +48,7 @@ export const DEBT_CHECKS = [
 	"projection-overreach",
 	"constraint-without-enforcement",
 	"assumption-without-falsifier",
+	"decision-without-realization",
 ] as const;
 
 function index(graph: AssuranceGraph) {
@@ -124,6 +126,12 @@ export function diagnostics(graph: AssuranceGraph, env: DiagnosticsEnv = default
 		}
 		if (node.kind === "decision" && !outgoing(node.id).some((e) => e.relation === "implements" || e.relation === "assumes" || e.relation === "derived-from" || e.relation === "supersedes")) {
 			out.push({ check: "decision-without-intent", node: node.id, message: "decision has no semantic relationship" });
+		}
+		// Inverse of orphan-realization for current construction: a choice that currently builds
+		// something, named only when an incoming derived-from originates at a realization.
+		// Choice-to-choice derived-from and outgoing implements/derived-from do not count.
+		if (node.kind === "decision" && node.status === "current-construction-choice" && !incoming(node.id, "derived-from").some((e) => byId.get(e.from)?.kind === "realization")) {
+			out.push({ check: "decision-without-realization", node: node.id, message: "current construction choice names no realizing machinery" });
 		}
 		if (node.kind === "proposition" && node.role === "assumption" && incoming(node.id, "assumes").length === 0) {
 			out.push({ check: "unused-assumption", node: node.id, message: "assumption is not relied upon by any decision or proposition" });

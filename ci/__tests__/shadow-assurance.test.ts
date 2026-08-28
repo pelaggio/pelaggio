@@ -25,6 +25,7 @@ type ShadowGraph = {
 	authority: string;
 	nodeKinds: string[];
 	propositionRoles: string[];
+	decisionStatuses: string[];
 	relationKinds: Record<string, { from: string[]; to: string[] }>;
 	nodes: ShadowNode[];
 	edges: Array<{ from: string; relation: string; to: string }>;
@@ -59,8 +60,8 @@ function mapped(adr: string) {
 const OWNER_INDEPENDENCE_ONLY = "owner-independence of the current checks/views/diagnostics only; not semantic conformance or interoperability";
 
 function assertGraphSchema(
-	candidate: { nodes: Array<{ id: string; kind: string; role?: string; visibility?: string }>; edges: Array<{ from: string; relation: string; to: string }> },
-	ontology: { nodeKinds: string[]; propositionRoles: string[]; relationKinds: Record<string, { from: string[]; to: string[] }> },
+	candidate: { nodes: Array<{ id: string; kind: string; role?: string; status?: string; visibility?: string }>; edges: Array<{ from: string; relation: string; to: string }> },
+	ontology: { nodeKinds: string[]; propositionRoles: string[]; decisionStatuses: string[]; relationKinds: Record<string, { from: string[]; to: string[] }> },
 	qualifier = "",
 ) {
 	const note = qualifier ? `; ${qualifier}` : "";
@@ -70,6 +71,9 @@ function assertGraphSchema(
 		assert.ok(ontology.nodeKinds.includes(value.kind), `unknown node kind ${value.kind} on ${value.id}${note}`);
 		if (value.kind === "proposition") {
 			assert.ok(value.role !== undefined && ontology.propositionRoles.includes(value.role), `${value.id} needs a valid proposition role${note}`);
+		}
+		if (value.kind === "decision") {
+			assert.ok(value.status !== undefined && ontology.decisionStatuses.includes(value.status), `${value.id} needs a valid decision status${note}`);
 		}
 	}
 	for (const edge of candidate.edges) {
@@ -91,7 +95,24 @@ describe("shadow assurance graph integrity", () => {
 	it("has a minimal base ontology, stable ids, and type-correct edges", () => {
 		assert.deepEqual(graph.nodeKinds, ["proposition", "decision", "realization"]);
 		assert.deepEqual(graph.propositionRoles, ["invariant", "constraint", "assumption"]);
+		assert.deepEqual(graph.decisionStatuses, ["current-construction-choice", "current-policy-choice", "target-construction-choice", "proposed-construction-choice", "historical-construction-choice"]);
 		assertGraphSchema(graph, graph);
+	});
+
+	it("rejects a retired decision status label", () => {
+		const retired = structuredClone(graph);
+		const decision = retired.nodes.find((value) => value.kind === "decision");
+		assert.ok(decision);
+		decision.status = "current-interoperability-choice";
+		assert.throws(() => assertGraphSchema(retired, graph), /needs a valid decision status/);
+	});
+
+	it("rejects a decision with no status", () => {
+		const missing = structuredClone(graph);
+		const decision = missing.nodes.find((value) => value.kind === "decision");
+		assert.ok(decision);
+		delete decision.status;
+		assert.throws(() => assertGraphSchema(missing, graph), /needs a valid decision status/);
 	});
 
 	it("covers every ADR file that exists", () => {
@@ -495,6 +516,22 @@ describe("architectural question tests", () => {
 			diagnostics(short).some((d) => d.check === "assumption-without-falsifier" && d.node === "ASM-X"),
 			"a 39-character placeholder is not a falsifier",
 		);
+	});
+
+	const FROZEN_UNREALIZED_CONSTRUCTION: ReadonlySet<string> = new Set(["DEC-0003", "DEC-0008", "DEC-0011"]);
+
+	it("Q19: current-construction choices without a realizing derived-from", () => {
+		const corpus = graph as unknown as AssuranceGraph;
+		const live = diagnostics(corpus)
+			.filter((d) => d.check === "decision-without-realization")
+			.map((d) => d.node);
+		for (const id of live) {
+			assert.ok(FROZEN_UNREALIZED_CONSTRUCTION.has(id), `${id} is an unrealized current construction and is not in the frozen set; bind a realization, or explicitly amend the frozen set`);
+		}
+		assert.deepEqual([...live].sort(), [...FROZEN_UNREALIZED_CONSTRUCTION].sort(), "the current unrealized-construction set (update when a mechanism is bound; it may only shrink)");
+
+		assert.equal(node("DEC-0015").status, "target-construction-choice");
+		assert.equal(node("DEC-0020").status, "proposed-construction-choice");
 	});
 
 	/**
