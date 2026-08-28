@@ -598,13 +598,14 @@
 		{
 			"id": "CON-0024",
 			"kind": "proposition",
-			"role": "constraint",
+			"role": "assumption",
 			"visibility": "internal",
 			"slug": "agency-and-context-remain-extensible",
-			"statement": "The model must be able to add attributable actors and reusable scope/context to decisions, observations, assessments, executions, and authorization without redesigning the core intent graph.",
+			"statement": "The current semantic kernel can accommodate attributable actors and reusable scope/context for decisions, observations, assessments, executions, and authorizations by adding an earned node, attribute, or qualified relation without changing the core proposition, decision, or realization semantics.",
 			"sources": [
 				"ADR-0027"
-			]
+			],
+			"wrongIf": "The first real custody query that requires an actor or reusable scope/context cannot be represented by adding an earned node, attribute, or qualified relation without changing the core proposition, decision, or realization semantics."
 		},
 		{
 			"id": "CON-0025",
@@ -1697,6 +1698,11 @@
 			"to": "CLM-0020"
 		},
 		{
+			"from": "DEC-0019",
+			"relation": "assumes",
+			"to": "CON-0024"
+		},
+		{
 			"from": "CTR-0001",
 			"relation": "derived-from",
 			"to": "DEC-0012"
@@ -1778,11 +1784,6 @@
 		},
 		{
 			"from": "CON-0023",
-			"relation": "constrains",
-			"to": "CLM-0020"
-		},
-		{
-			"from": "CON-0024",
 			"relation": "constrains",
 			"to": "CLM-0020"
 		},
@@ -2522,6 +2523,14 @@
 			]
 		},
 		{
+			"node": "CON-0024",
+			"path": "docs/decisions/0027-machine-readable-architectural-intent-graph.md",
+			"anchors": [
+				"The promotion decision relies on a forward-looking assumption",
+				"This assumption is defeasible rather than a constraint on every implementation"
+			]
+		},
+		{
 			"node": "CON-0025",
 			"path": "docs/decisions/0027-machine-readable-architectural-intent-graph.md",
 			"anchors": [
@@ -2750,7 +2759,6 @@
 				"CON-0007": "attempt-identity.ts delivers atomic allocation only. Properties 2 and 3 — an agent-denied anti-rollback register and consumer-side fencing — are unbuilt, so an attempt number remains identity rather than authority and the constraint's authority requirement is unmet.",
 				"CON-0016": "Manifest generation plus byte-drift rejection is not projection-strength enforcement: nothing compares a public claim's semantics against the internal claim it projects, so silent strengthening remains unenforced.",
 				"CON-0018": "Intent-only. A rule about when semantic churn is warranted governs authoring judgment; no mechanism can decide whether an edit changed architectural intent.",
-				"CON-0024": "Intent-only, and forward-looking. It reserves extensibility for actors and context that the ontology deliberately has not added (ADR-0027 decision 6); there is nothing yet to enforce.",
 				"CON-0025": "Intent-only. Q13 regex-matches this constraint's own statement text, which is source grounding rather than enforcement and must not be recorded as a bind. No consumer-owned graph exists to hold the boundary against.",
 				"CON-0028": "Genuine gap. ADR-0028 is `proposed` and the delivery packet is unbuilt.",
 				"CON-0029": "Genuine gap. ADR-0028 is `proposed` and the delivery packet is unbuilt.",
