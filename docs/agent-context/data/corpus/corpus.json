@@ -320,6 +320,16 @@
       "sources": []
     },
     {
+      "id": "CON-30",
+      "kind": "proposition",
+      "role": "constraint",
+      "binds": "harness",
+      "statement": "For every value the harness withholds while constructing an execution environment, the resulting environment preserves every bound that the value's presence establishes. A value whose presence disables or suppresses behaviour is part of the bound; withholding it is not a denial.",
+      "sources": [
+        "pelaggio PR #667 — AWS_EC2_METADATA_DISABLED omitted from the seat environment"
+      ]
+    },
+    {
       "id": "ASM-1",
       "kind": "proposition",
       "role": "assumption",
@@ -727,6 +737,11 @@
       "from": "DEC-16",
       "relation": "assumes",
       "to": "ASM-11"
+    },
+    {
+      "from": "CON-30",
+      "relation": "constrains",
+      "to": "INV-5"
     }
   ],
   "scope": {
