@@ -386,8 +386,13 @@ export function parseFailureCode(error: unknown): ReviewFindingsParseErrorCode {
 
 const REPORT_RE = /(?:^|\n)REVIEW_FINDINGS[ \t]*\n([\s\S]*?)\nEND_REVIEW_FINDINGS(?=\n|$)/g;
 const VERIFICATION_RE = /(?:^|\n)REVIEW_VERIFICATION[ \t]*\n([\s\S]*?)\nEND_REVIEW_VERIFICATION(?=\n|$)/g;
-const AUTHORING_RE = /(?:^|\n)AUTHORING_REVIEW_FINDINGS[ \t]*\n([\s\S]*?)\nEND_AUTHORING_REVIEW_FINDINGS(?=\n|$)/g;
-const JUDGE_RE = /(?:^|\n)AUTHORING_REVIEW_JUDGE[ \t]*\n([\s\S]*?)\nEND_AUTHORING_REVIEW_JUDGE(?=\n|$)/g;
+/** Start/end tokens as they appear in the block regexes — shared with {@link reviewBlockMarkers}. */
+const AUTHORING_START = "AUTHORING_REVIEW_FINDINGS";
+const AUTHORING_END = "END_AUTHORING_REVIEW_FINDINGS";
+const JUDGE_START = "AUTHORING_REVIEW_JUDGE";
+const JUDGE_END = "END_AUTHORING_REVIEW_JUDGE";
+const AUTHORING_RE = new RegExp(`(?:^|\\n)${AUTHORING_START}[ \\t]*\\n([\\s\\S]*?)\\n${AUTHORING_END}(?=\\n|$)`, "g");
+const JUDGE_RE = new RegExp(`(?:^|\\n)${JUDGE_START}[ \\t]*\\n([\\s\\S]*?)\\n${JUDGE_END}(?=\\n|$)`, "g");
 const SEVERITIES: readonly ReviewFindingSeverity[] = ["must-fix", "nice", "note"];
 const VERIFICATION_DECISIONS: readonly ReviewVerificationDecision[] = ["refuted", "survives"];
 const CANDIDATE_ID_RE = /^C[1-9]\d*$/;
@@ -559,6 +564,31 @@ function parseRawAuthoringFinding(value: unknown, index: number): RawAuthoringRe
 export function hasAuthoringReviewFindingsBlock(text: string): boolean {
 	// AUTHORING_RE is /g and therefore stateful; `matchAll` does not mutate lastIndex.
 	return [...text.matchAll(AUTHORING_RE)].length > 0;
+}
+
+export type ReviewBlockRole = "reviewer" | "judge";
+
+/**
+ * Structural delimiter facts for an unreadable seat. Tests start and end tokens
+ * separately as whole lines — the same tokens {@link AUTHORING_RE} / {@link JUDGE_RE}
+ * use — so an unclosed start is visible even when {@link hasAuthoringReviewFindingsBlock}
+ * is false. Line-anchored so `END_AUTHORING_REVIEW_FINDINGS` does not count as a start
+ * (it contains the start token as a suffix).
+ */
+export function reviewBlockMarkers(text: string, role: ReviewBlockRole): { hasStartMarker: boolean; hasEndMarker: boolean } {
+	const start = role === "judge" ? JUDGE_START : AUTHORING_START;
+	const end = role === "judge" ? JUDGE_END : AUTHORING_END;
+	const asLine = (token: string) => new RegExp(`(?:^|\\n)${token}[ \\t]*(?:\\n|$)`).test(text);
+	return { hasStartMarker: asLine(start), hasEndMarker: asLine(end) };
+}
+
+/**
+ * Public parse-failure prose. The role is harness-selected; the specific parse code is not
+ * accepted because a credential-holding model can choose among codes to exfiltrate bits through
+ * rendered review provenance. Typed observations and private transcripts retain the code.
+ */
+export function parseFailureDiagnostic(role: ReviewBlockRole): string {
+	return role === "judge" ? "authoring review Judge parse failure" : "authoring review findings parse failure";
 }
 
 /**

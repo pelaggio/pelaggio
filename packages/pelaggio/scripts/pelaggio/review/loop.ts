@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { AuthoringReviewConfig, ReviewSlot } from "../config.js";
+import { makeSecretScrubber } from "../secret-hygiene.js";
 import type { ParkSignal, ProviderName, ReviewOutcome, StepResult } from "../types.js";
 import {
 	type AuthoringReviewFinding,
@@ -9,8 +10,12 @@ import {
 	materializeAuthoringFinding,
 	modelAuthoredText,
 	parseAuthoringReviewFindings,
+	parseFailureCode,
+	parseFailureDiagnostic,
 	parseJudgeReport,
 	type ReviewFindingClass,
+	type ReviewFindingsParseErrorCode,
+	reviewBlockMarkers,
 	reviewFindingFingerprint,
 	reviewFindingsGate,
 } from "./findings.js";
@@ -39,10 +44,25 @@ export interface ReviewCandidate {
 	finding: AuthoringReviewFinding;
 	sources: string[];
 }
+/** Structural facts from assistantText without retaining the text. */
+export type UnreadableSource = { chars: number; hasStartMarker: boolean; hasEndMarker: boolean };
+export type SeatOutputObservation = { state: "readable"; payload: "empty" | "non-empty" } | { state: "unreadable"; code: ReviewFindingsParseErrorCode; source: UnreadableSource };
+export type SeatAttemptRecord =
+	| { completion: "returned"; attempt: number; ok: boolean; subtype: string; cost: number; turns: number; output: SeatOutputObservation }
+	| { completion: "rejected"; attempt: number; reason: "seat-rejected"; cost: 0; turns: 0 };
+export type JudgeSkipReason = "no-reviewer-completed" | "cross-model-split";
+export interface SeatAttemptObservation {
+	role: "reviewer" | "judge";
+	identity: DriverIdentity;
+	pass: number;
+	attempt: number;
+	output: SeatOutputObservation;
+	result: StepResult;
+}
 export interface ReviewPassRecord {
 	pass: number;
-	reviewers: Array<{ identity: DriverIdentity; ok: boolean; cost: number; turns: number; verdict?: DriverReviewVerdict; diagnostic?: string }>;
-	judge: { identity: DriverIdentity; valid: boolean; cost: number; turns: number; diagnostic?: string };
+	reviewers: Array<{ identity: DriverIdentity; ok: boolean; cost: number; turns: number; verdict?: DriverReviewVerdict; diagnostic?: string; attempts?: SeatAttemptRecord[] }>;
+	judge: { identity: DriverIdentity; valid: boolean; cost: number; turns: number; diagnostic?: string; attempts?: SeatAttemptRecord[]; skipped?: JudgeSkipReason };
 	carriedBefore: string[];
 	carriedAfter: string[];
 }
@@ -92,6 +112,12 @@ type ReviewLoopBase = {
 	safetyFloor?: SafetyFloor;
 	/** Optional explanation stamped on the result when the floor is disabled. */
 	safetyFloorNote?: string;
+	/**
+	 * Invoked after a seat returns and its parser result is known. Skipped Judges and
+	 * promise rejections do not fire (no StepResult / no assistantText). Ordinary
+	 * pipeline callers omit this; doc-review uses it for failed-seat capture.
+	 */
+	onSeatAttempt?: (observation: SeatAttemptObservation) => void;
 };
 /**
  * `mode: "revise"` (default) is the pipeline authoring loop: an artifact author is present and the
@@ -134,6 +160,32 @@ const identity = (role: DriverIdentity["role"], slot: ReviewSlot, pass: number):
 	sessionId: `${role}-${slot.id}-p${pass}`,
 });
 const childSignal = (): ParkSignal => ({ parked: false, resetsAt: 0, limitType: "", triggerWorker: "" });
+const rejectedAttempt = (attempt = 1): Extract<SeatAttemptRecord, { completion: "rejected" }> => ({ completion: "rejected", attempt, reason: "seat-rejected", cost: 0, turns: 0 });
+
+type ParsedSeatOutput = { readable: true; empty: boolean } | { readable: false; error: unknown };
+
+/** Observe a returned seat: parse outcome is already known. Completeness is a later check. */
+function observeSeatAttempt(options: {
+	onSeatAttempt?: ReviewLoopBase["onSeatAttempt"];
+	role: "reviewer" | "judge";
+	identity: DriverIdentity;
+	pass: number;
+	result: StepResult;
+	parsed: ParsedSeatOutput;
+	attempt?: number;
+}): Extract<SeatAttemptRecord, { completion: "returned" }> {
+	const attempt = options.attempt ?? 1;
+	const assistantText = modelAuthoredText(options.result);
+	const output: SeatOutputObservation = options.parsed.readable
+		? { state: "readable", payload: options.parsed.empty ? "empty" : "non-empty" }
+		: {
+				state: "unreadable",
+				code: parseFailureCode(options.parsed.error),
+				source: { chars: assistantText.length, ...reviewBlockMarkers(assistantText, options.role) },
+			};
+	options.onSeatAttempt?.({ role: options.role, identity: options.identity, pass: options.pass, attempt, output, result: options.result });
+	return { completion: "returned", attempt, ok: options.result.ok, subtype: options.result.subtype, cost: options.result.cost, turns: options.result.turns, output };
+}
 
 export function classifyReviewDisagreement(
 	pass: number,
@@ -191,6 +243,7 @@ export function classifyReviewOutcome(
 
 export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewLoopResult> {
 	const { policy, classificationContext, taxonomy } = options;
+	const scrubDiagnostic = makeSecretScrubber();
 	// no-revise: the author is optional and the revision branch is unreachable — force the effective
 	// revision budget to 0 and drop the revise prompt so a mutating seat cannot be reached at all.
 	const author = options.author;
@@ -219,47 +272,80 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 	for (let pass = 1; pass <= policy.maxPasses; pass++) {
 		const phaseReservation = configuredReviewers.length * 5 + 5;
 		if (cost + phaseReservation > policy.budgetCap) return withFloor({ outcome: "budget", diversity, passes, survivors: carried, notes, cost });
-		const children = configuredReviewers.map(() => childSignal());
-		const settled = await Promise.allSettled(configuredReviewers.map((slot, index) => options.runSeat({ role: "reviewer", slot, pass, prompt: options.prompts.review(pass), parkSignal: children[index] })));
-		for (const child of children) if (child.parked) Object.assign(options.parkSignal, child);
+		const reviewerJobs = configuredReviewers.map((slot) => ({ slot, parkSignal: childSignal() }));
+		const settled = await Promise.allSettled(reviewerJobs.map(({ slot, parkSignal }) => options.runSeat({ role: "reviewer", slot, pass, prompt: options.prompts.review(pass), parkSignal })));
+		for (const job of reviewerJobs) if (job.parkSignal.parked) Object.assign(options.parkSignal, job.parkSignal);
 		const reviewerRecords: ReviewPassRecord["reviewers"] = [];
 		// Carried candidates already have harness-owned class + classification reason.
 		const discovered: Array<{ finding: AuthoringReviewFinding; source: string }> = carried.map((candidate) => ({ finding: candidate.finding, source: "carried" }));
 		settled.forEach((result, index) => {
-			const slot = configuredReviewers[index];
+			const job = reviewerJobs[index];
+			if (!job) return;
+			const slot = job.slot;
+			const reviewerIdentity = identity("reviewer", slot, pass);
 			if (result.status === "rejected") {
-				reviewerRecords.push({ identity: identity("reviewer", slot, pass), ok: false, cost: 0, turns: 0, diagnostic: String(result.reason) });
+				reviewerRecords.push({ identity: reviewerIdentity, ok: false, cost: 0, turns: 0, diagnostic: scrubDiagnostic(String(result.reason)), attempts: [rejectedAttempt()] });
 				return;
 			}
 			cost += result.value.cost;
+			let report: ReturnType<typeof parseAuthoringReviewFindings>;
 			try {
 				// Model-authored final message only — never the transcript (see modelAuthoredText).
-				const report = parseAuthoringReviewFindings(modelAuthoredText(result.value));
-				// Ingest parseable findings even from a non-ok seat (max-turns/errored): a security
-				// must-fix a seat did emit must still block and feed hasSafetyBlocker. Only the
-				// pass/block VERDICT is ok-gated below, since an incomplete seat has no trustworthy
-				// overall verdict for disagreement.
-				//
-				// A seat whose model-authored text carries no parseable block is now dropped rather
-				// than scavenged from the transcript. That is not a fail-open: the seat's required
-				// (driver × label) cell stays uncompleted and the all-pass gate cannot reach
-				// consensus-pass with an uncompleted cell.
-				// Classify at the emission boundary before dedup/ingestion (#293).
-				for (const raw of report.findings) {
-					discovered.push({ finding: materializeAuthoringFinding(raw, classificationContext, taxonomy), source: slot.id });
-				}
+				report = parseAuthoringReviewFindings(modelAuthoredText(result.value));
+			} catch (error) {
+				const attempts = [
+					observeSeatAttempt({
+						onSeatAttempt: options.onSeatAttempt,
+						role: "reviewer",
+						identity: reviewerIdentity,
+						pass,
+						result: result.value,
+						parsed: { readable: false, error },
+					}),
+				];
 				reviewerRecords.push({
-					identity: identity("reviewer", slot, pass),
-					ok: result.value.ok,
+					identity: reviewerIdentity,
+					ok: false,
 					cost: result.value.cost,
 					turns: result.value.turns,
-					// A parseable but non-ok seat (max-turns / provider-reported failure) has no trustworthy
-					// verdict — record WHY (subtype + turns) so it isn't a reasonless `ok:false` (#268 legibility).
-					...(result.value.ok ? { verdict: { verdict: reviewFindingsGate(report), rationale: report.summary } } : { diagnostic: `seat did not complete: ${result.value.subtype} (${result.value.turns} turns)` }),
+					diagnostic: parseFailureDiagnostic("reviewer"),
+					attempts,
 				});
-			} catch (error) {
-				reviewerRecords.push({ identity: identity("reviewer", slot, pass), ok: false, cost: result.value.cost, turns: result.value.turns, diagnostic: error instanceof Error ? error.message : String(error) });
+				return;
 			}
+			const attempts = [
+				observeSeatAttempt({
+					onSeatAttempt: options.onSeatAttempt,
+					role: "reviewer",
+					identity: reviewerIdentity,
+					pass,
+					result: result.value,
+					parsed: { readable: true, empty: report.findings.length === 0 },
+				}),
+			];
+			// Ingest parseable findings even from a non-ok seat (max-turns/errored): a security
+			// must-fix a seat did emit must still block and feed hasSafetyBlocker. Only the
+			// pass/block VERDICT is ok-gated below, since an incomplete seat has no trustworthy
+			// overall verdict for disagreement.
+			//
+			// A seat whose model-authored text carries no parseable block is now dropped rather
+			// than scavenged from the transcript. That is not a fail-open: the seat's required
+			// (driver × label) cell stays uncompleted and the all-pass gate cannot reach
+			// consensus-pass with an uncompleted cell.
+			// Classify at the emission boundary before dedup/ingestion (#293).
+			for (const raw of report.findings) {
+				discovered.push({ finding: materializeAuthoringFinding(raw, classificationContext, taxonomy), source: slot.id });
+			}
+			reviewerRecords.push({
+				identity: reviewerIdentity,
+				ok: result.value.ok,
+				cost: result.value.cost,
+				turns: result.value.turns,
+				attempts,
+				// A parseable but non-ok seat (max-turns / provider-reported failure) has no trustworthy
+				// verdict — record WHY (subtype + turns) so it isn't a reasonless `ok:false` (#268 legibility).
+				...(result.value.ok ? { verdict: { verdict: reviewFindingsGate(report), rationale: report.summary } } : { diagnostic: `seat did not complete: ${result.value.subtype} (${result.value.turns} turns)` }),
+			});
 		});
 		const incompleteSeats = reviewerRecords.filter((record) => !record.ok).map((record) => record.identity.seatId);
 		if (incompleteSeats.length > 0) {
@@ -275,7 +361,7 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 			passes.push({
 				pass,
 				reviewers: reviewerRecords,
-				judge: { identity: identity("judge", policy.judge, pass), valid: false, cost: 0, turns: 0, diagnostic: "skipped: no reviewer seat completed" },
+				judge: { identity: identity("judge", policy.judge, pass), valid: false, cost: 0, turns: 0, diagnostic: "skipped: no reviewer seat completed", attempts: [], skipped: "no-reviewer-completed" },
 				carriedBefore: discovered.filter((item) => item.source === "carried").map((item) => reviewFindingFingerprint(item.finding)),
 				carriedAfter: carried.filter((candidate) => candidate.finding.severity === "must-fix").map((candidate) => candidate.fingerprint),
 			});
@@ -287,7 +373,7 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 			passes.push({
 				pass,
 				reviewers: reviewerRecords,
-				judge: { identity: identity("judge", policy.judge, pass), valid: false, cost: 0, turns: 0, diagnostic: "skipped: human adjudication required" },
+				judge: { identity: identity("judge", policy.judge, pass), valid: false, cost: 0, turns: 0, diagnostic: "skipped: human adjudication required", attempts: [], skipped: "cross-model-split" },
 				carriedBefore: discovered.filter((item) => item.source === "carried").map((item) => reviewFindingFingerprint(item.finding)),
 				carriedAfter: candidates.filter((candidate) => candidate.finding.severity === "must-fix").map((candidate) => candidate.fingerprint),
 			});
@@ -302,45 +388,83 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 			});
 		}
 		const judgeSignal = childSignal();
+		const judgeIdentity = identity("judge", policy.judge, pass);
+		const carriedBefore = discovered.filter((item) => item.source === "carried").map((item) => reviewFindingFingerprint(item.finding));
 		let judgeResult: StepResult;
 		try {
 			judgeResult = await options.runSeat({ role: "judge", slot: policy.judge, pass, prompt: options.prompts.judge(candidates, pass), parkSignal: judgeSignal });
-		} catch {
+		} catch (reason) {
+			passes.push({
+				pass,
+				reviewers: reviewerRecords,
+				judge: { identity: judgeIdentity, valid: false, cost: 0, turns: 0, diagnostic: scrubDiagnostic(String(reason)), attempts: [rejectedAttempt()] },
+				carriedBefore,
+				carriedAfter: candidates.filter((candidate) => candidate.finding.severity === "must-fix").map((candidate) => candidate.fingerprint),
+			});
 			return withFloor({ outcome: "hard-block", diversity, passes, survivors: candidates, notes, cost });
 		}
 		if (judgeSignal.parked) Object.assign(options.parkSignal, judgeSignal);
 		cost += judgeResult.cost;
 		let report: JudgeReport | undefined;
 		let diagnostic: string | undefined;
+		let judgeAttempts: SeatAttemptRecord[];
 		try {
 			// Same rule as the reviewer seats: the Judge's ruling is model-authored text only. Parsing
 			// the transcript here would leave the identical tool-output injection class on the Judge.
 			report = parseJudgeReport(modelAuthoredText(judgeResult));
-			// Fail-closed completeness: exactly one decision per candidate, no duplicates, no unknowns.
-			// The distinct-count check alone accepts a duplicate that still covers every id (e.g.
-			// [{C1,refuted},{C1,survives}] for two candidates); the survivor filter's `.find` would then
-			// silently take the first (refuted) decision and drop a real blocker — the duplicate fail-open
-			// that reconcileReviewVerification already rejects.
-			if (
-				report.decisions.length !== candidates.length ||
-				new Set(report.decisions.map((d) => d.candidateId)).size !== candidates.length ||
-				report.decisions.some((decision) => {
-					const candidate = candidates.find((item) => item.candidateId === decision.candidateId);
-					if (!candidate) return true;
-					// #280: `class` is optional and inherits the candidate's class when omitted — a redundant
-					// echo the Judge shouldn't have to restate. #272: but the Judge must not DOWNGRADE a
-					// harness safety-class candidate to a non-safety class (a reclassify-to-ship evasion);
-					// restating the same class or elevating a non-safety candidate stays allowed.
-					return decision.class !== undefined && isSafetyFloorClass(candidate.finding.class, taxonomy, safetyFloor) && !isSafetyClass(decision.class, taxonomy);
-				})
-			)
-				throw new Error("Judge decisions are incomplete, duplicated, downgrade a safety class, or contain unknown candidates");
+			judgeAttempts = [
+				observeSeatAttempt({
+					onSeatAttempt: options.onSeatAttempt,
+					role: "judge",
+					identity: judgeIdentity,
+					pass,
+					result: judgeResult,
+					parsed: { readable: true, empty: report.decisions.length === 0 },
+				}),
+			];
 		} catch (error) {
-			// Completeness/parse failure must invalidate the whole pass (fail-closed):
-			// `report` may already hold the parsed-but-incomplete value, so clear it or
-			// `Boolean(report)` would read a malformed Judge report as valid and ship it.
 			report = undefined;
-			diagnostic = error instanceof Error ? error.message : String(error);
+			diagnostic = parseFailureDiagnostic("judge");
+			judgeAttempts = [
+				observeSeatAttempt({
+					onSeatAttempt: options.onSeatAttempt,
+					role: "judge",
+					identity: judgeIdentity,
+					pass,
+					result: judgeResult,
+					parsed: { readable: false, error },
+				}),
+			];
+		}
+		if (report) {
+			try {
+				// Fail-closed completeness: exactly one decision per candidate, no duplicates, no unknowns.
+				// The distinct-count check alone accepts a duplicate that still covers every id (e.g.
+				// [{C1,refuted},{C1,survives}] for two candidates); the survivor filter's `.find` would then
+				// silently take the first (refuted) decision and drop a real blocker — the duplicate fail-open
+				// that reconcileReviewVerification already rejects.
+				if (
+					report.decisions.length !== candidates.length ||
+					new Set(report.decisions.map((d) => d.candidateId)).size !== candidates.length ||
+					report.decisions.some((decision) => {
+						const candidate = candidates.find((item) => item.candidateId === decision.candidateId);
+						if (!candidate) return true;
+						// #280: `class` is optional and inherits the candidate's class when omitted — a redundant
+						// echo the Judge shouldn't have to restate. #272: but the Judge must not DOWNGRADE a
+						// harness safety-class candidate to a non-safety class (a reclassify-to-ship evasion);
+						// restating the same class or elevating a non-safety candidate stays allowed.
+						return decision.class !== undefined && isSafetyFloorClass(candidate.finding.class, taxonomy, safetyFloor) && !isSafetyClass(decision.class, taxonomy);
+					})
+				)
+					throw new Error("Judge decisions are incomplete, duplicated, downgrade a safety class, or contain unknown candidates");
+			} catch (error) {
+				// Completeness failure must invalidate the whole pass (fail-closed):
+				// `report` already holds the parsed-but-incomplete value, so clear it or
+				// `Boolean(report)` would read a malformed Judge report as valid and ship it.
+				// Observation stays readable — completeness is not a parse code.
+				report = undefined;
+				diagnostic = error instanceof Error ? error.message : String(error);
+			}
 		}
 		const rulings = new Map<string, JudgeRuling>();
 		const next = report
@@ -361,8 +485,8 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 		passes.push({
 			pass,
 			reviewers: reviewerRecords,
-			judge: { identity: identity("judge", policy.judge, pass), valid: Boolean(report), cost: judgeResult.cost, turns: judgeResult.turns, ...(diagnostic ? { diagnostic } : {}) },
-			carriedBefore: discovered.filter((item) => item.source === "carried").map((item) => reviewFindingFingerprint(item.finding)),
+			judge: { identity: judgeIdentity, valid: Boolean(report), cost: judgeResult.cost, turns: judgeResult.turns, attempts: judgeAttempts, ...(diagnostic ? { diagnostic } : {}) },
+			carriedBefore,
 			carriedAfter: carried.map((item) => item.fingerprint),
 		});
 		const outcome = classifyReviewOutcome(carried, notes, rulings, Boolean(report), pass, taxonomy, safetyFloor);

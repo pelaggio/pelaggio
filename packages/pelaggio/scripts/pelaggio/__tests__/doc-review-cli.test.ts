@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, afterEach, before, describe, it } from "node:test";
@@ -13,6 +14,8 @@ import type { StepResult } from "../types.js";
 // (e.g. a provider's balance running out).
 const TEST_CONFIG = ((): typeof CONFIG => {
 	const c = JSON.parse(JSON.stringify(CONFIG)) as typeof CONFIG;
+	// JSON cloning isolates mutable seating arrays but cannot preserve the resolved taxonomy's Map.
+	c.review.taxonomy = CONFIG.review.taxonomy;
 	for (const selections of Object.values(c.profileProviders)) {
 		if (selections["pr-review"]) selections["pr-review"] = ["claude", "codex", "grok"];
 	}
@@ -170,5 +173,111 @@ describe("doc-review CLI (#384)", () => {
 		const stdout = chunks.join("");
 		assert.match(stdout, /"schemaVersion": 1/);
 		assert.match(stdout, /"safetyFloor": "disabled"/);
+	});
+
+	it("does not write a transcript or descriptor when capture is disabled", async () => {
+		const path = writeDoc("no-capture.md", "# Design\n\nAll good.\n");
+		const snapshot = snapshotDocument(path);
+		const result = await reviewDocument({ snapshot, cwd: dir, config: TEST_CONFIG, runStep: cannedRunStep("no block here", "no judge block"), clock });
+		assert.equal(result.record?.failedSeatTranscript, undefined);
+		assert.equal(existsSync(join(dir, ".dev", "doc-review-transcripts")), false);
+	});
+
+	it("does not write an empty transcript when capture is enabled and every seat is readable", async () => {
+		const path = writeDoc("all-readable.md", "# Design\n\nAll good.\n");
+		const snapshot = snapshotDocument(path);
+		const result = await reviewDocument({ snapshot, cwd: dir, config: TEST_CONFIG, runStep: cannedRunStep(CLEAN, judge([])), clock, captureFailedSeats: true });
+		assert.equal(result.exitCode, 0);
+		assert.equal(result.record?.failedSeatTranscript, undefined);
+		assert.equal(existsSync(join(dir, ".dev", "doc-review-transcripts")), false);
+	});
+
+	it("writes a private digest-bound transcript for unreadable seats and keeps raw text off the ordinary record", async () => {
+		const planted = "PLANTED_SECRET=sk-planted-not-real ordinary prose";
+		const path = writeDoc("unreadable.md", "# Design\n\nInspect me.\n");
+		const snapshot = snapshotDocument(path);
+		const result = await reviewDocument({
+			snapshot,
+			cwd: dir,
+			config: TEST_CONFIG,
+			runStep: cannedRunStep(planted, planted),
+			clock,
+			captureFailedSeats: true,
+		});
+		assert.ok(result.record?.failedSeatTranscript);
+		const descriptor = result.record.failedSeatTranscript;
+		assert.equal(descriptor.path, `.dev/doc-review-transcripts/${result.record.runId}.json`);
+		assert.match(descriptor.sha256, /^[a-f0-9]{64}$/);
+		const transcriptPath = join(dir, descriptor.path);
+		assert.equal(statSync(transcriptPath).mode & 0o777, 0o600);
+		const body = readFileSync(transcriptPath, "utf-8");
+		assert.equal(createHash("sha256").update(body).digest("hex"), descriptor.sha256);
+		const parsed = JSON.parse(body);
+		assert.equal(parsed.schemaVersion, 1);
+		assert.equal(parsed.runId, result.record.runId);
+		assert.ok(parsed.seats.length > 0);
+		for (const seat of parsed.seats) {
+			assert.equal(typeof seat.assistantText, "string");
+			assert.equal(seat.parseCode, "block-not-found");
+			assert.equal("prompt" in seat, false);
+			assert.equal("fullText" in seat, false);
+			assert.equal("outputTail" in seat, false);
+		}
+		assert.match(body, /PLANTED_SECRET=sk-planted-not-real/);
+		const ordinary = JSON.stringify(result.record);
+		assert.equal(ordinary.includes("PLANTED_SECRET"), false);
+		assert.equal(ordinary.includes("assistantText"), false);
+		assert.doesNotMatch(result.body, /PLANTED_SECRET/);
+		assert.match(result.body, /Failed-seat transcript \(local diagnostic, do not commit\)/);
+	});
+
+	it("keeps a planted secret out of --json and --out while capture is enabled", async () => {
+		const planted = "PLANTED_SECRET=sk-planted-not-real";
+		const path = writeDoc("secret-json.md", "# Plan\n\nsecret\n");
+		const outPath = join(dir, "secret-report.json");
+		const restore = setDocReviewDepsForTests({ runStep: cannedRunStep(planted, planted), clock });
+		const previousCwd = process.cwd();
+		const chunks: string[] = [];
+		const originalWrite = process.stdout.write;
+		process.stdout.write = ((chunk: string | Uint8Array) => {
+			chunks.push(String(chunk));
+			return true;
+		}) as typeof process.stdout.write;
+		try {
+			process.chdir(dir);
+			await main([path, "--json", "--out", outPath, "--capture-failed-seats"]);
+		} finally {
+			process.stdout.write = originalWrite;
+			process.chdir(previousCwd);
+			restore();
+		}
+		const stdout = chunks.join("");
+		assert.equal(stdout.includes("PLANTED_SECRET"), false);
+		assert.equal(readFileSync(outPath, "utf-8").includes("PLANTED_SECRET"), false);
+	});
+
+	it("digest-changed still writes no success record; a captured transcript cannot authorize success", async () => {
+		const planted = "PLANTED_SECRET=sk-planted-not-real";
+		const path = writeDoc("mutate-capture.md", "# Original\n\nv1\n");
+		const snapshot = snapshotDocument(path);
+		writeFileSync(path, "# Tampered\n\nv2\n", "utf-8");
+		const result = await reviewDocument({
+			snapshot,
+			cwd: dir,
+			config: TEST_CONFIG,
+			runStep: cannedRunStep(planted, planted),
+			clock,
+			captureFailedSeats: true,
+		});
+		assert.equal(result.exitCode, 1);
+		assert.equal(result.outcome, "digest-changed");
+		assert.equal(result.record, undefined);
+		assert.equal(result.recordPath, undefined);
+		const recordsDir = join(dir, ".dev", "doc-review-records");
+		const written = existsSync(recordsDir) ? readdirSync(recordsDir) : [];
+		assert.ok(!written.some((f) => f.includes(snapshot.digest.slice(0, 12))));
+		const runId = `doc-${snapshot.digest.slice(0, 12)}-${T.toString(36)}`;
+		assert.equal(existsSync(join(dir, ".dev", "doc-review-transcripts", `${runId}.json`)), true, "orphaned capture remains a local diagnostic and must not authorize success");
+		assert.doesNotMatch(result.body, /PLANTED_SECRET/);
 	});
 });

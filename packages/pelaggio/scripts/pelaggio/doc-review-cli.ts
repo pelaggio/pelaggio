@@ -19,9 +19,9 @@ import { parseArgs } from "node:util";
 import { type AuthoringReviewConfig, CONFIG, modelForProvider, type ResolvedConfig, type ReviewSlot, resolveStepSettings, type StepSettings } from "./config.js";
 import { expandPackagedSkill } from "./helpers.js";
 import { assertDocumentUnchanged, type DocumentSnapshot, documentInjectionState, formatDocumentUnderReview, snapshotDocument } from "./review/document.js";
-import type { ReviewOutcome } from "./review/loop.js";
+import type { ReviewOutcome, SeatAttemptObservation } from "./review/loop.js";
 import { runReviewLoop } from "./review/loop.js";
-import { type DocReviewRecord, renderDocReviewRecord, writeDocReviewRecord } from "./review/record.js";
+import { type DocReviewRecord, type DocReviewSeatTranscriptEntry, renderDocReviewRecord, writeDocReviewRecord, writeDocReviewSeatTranscript } from "./review/record.js";
 import { type RunStepFn, runStep } from "./step-runner.js";
 import type { ParkSignal, StepEmit } from "./types.js";
 
@@ -31,7 +31,7 @@ export const DOC_REVIEW_SAFETY_FLOOR_NOTE = "document review: code-diff path-sig
 /** Outcomes that clear the gate (exit 0). Everything else exits 1. */
 const PASS_OUTCOMES = new Set<ReviewOutcome>(["converged-clean", "converged-with-notes", "ceiling"]);
 
-const USAGE = "usage: pelaggio doc-review <path> [--profile <name>] [--json] [--out <report.json>]";
+const USAGE = "usage: pelaggio doc-review <path> [--profile <name>] [--json] [--out <report.json>] [--capture-failed-seats]";
 
 interface DocReviewDeps {
 	runStep: RunStepFn;
@@ -123,6 +123,8 @@ export interface DocReviewOptions {
 	config?: ResolvedConfig;
 	runStep?: RunStepFn;
 	clock?: () => number;
+	/** Write unreadable seat assistantText to a private digest-bound transcript. */
+	captureFailedSeats?: boolean;
 }
 
 export interface DocReviewResult {
@@ -148,6 +150,28 @@ export async function reviewDocument(options: DocReviewOptions): Promise<DocRevi
 	const policy = resolveDocReviewPolicy(config, profile);
 	const parkSignal = emptyParkSignal();
 	const documentBlock = formatDocumentUnderReview(snapshot, documentInjectionState(snapshot));
+	const ms = clock();
+	const runId = `doc-${snapshot.digest.slice(0, 12)}-${ms.toString(36)}`;
+	const createdAt = new Date(ms).toISOString();
+	const captured: DocReviewSeatTranscriptEntry[] = [];
+	const onSeatAttempt = options.captureFailedSeats
+		? (event: SeatAttemptObservation) => {
+				if (event.output.state !== "unreadable") return;
+				captured.push({
+					role: event.role,
+					seatId: event.identity.seatId,
+					provider: event.identity.provider,
+					...(event.identity.model ? { model: event.identity.model } : {}),
+					pass: event.pass,
+					attempt: event.attempt,
+					subtype: event.result.subtype,
+					turns: event.result.turns,
+					parseCode: event.output.code,
+					source: event.output.source,
+					assistantText: event.result.assistantText,
+				});
+			}
+		: undefined;
 
 	const loop = await runReviewLoop({
 		policy,
@@ -165,10 +189,17 @@ export async function reviewDocument(options: DocReviewOptions): Promise<DocRevi
 			review: () => `${expandPackagedSkill("pr-review", "--document")}\n\n${documentBlock}`,
 			judge: (candidates) => `${expandPackagedSkill("pr-verify", "--authoring-loop-judge")}\n\nTRUSTED_CANDIDATE_DATA\n${JSON.stringify(candidates)}\nEND_TRUSTED_CANDIDATE_DATA`,
 		},
+		onSeatAttempt,
 	});
+
+	let failedSeatTranscript: { path: string; sha256: string } | undefined;
+	if (captured.length > 0) {
+		failedSeatTranscript = writeDocReviewSeatTranscript(cwd, { schemaVersion: 1, runId, createdAt, seats: captured });
+	}
 
 	// Re-verify the digest before writing a success-bound report. A file changed / removed during the
 	// review invalidates the binding — fail closed with no report (exit 1), never a stale success.
+	// A transcript already written is an orphaned local diagnostic and must not authorize success.
 	try {
 		deps.assertDocumentUnchanged(snapshot);
 	} catch (error) {
@@ -176,17 +207,16 @@ export async function reviewDocument(options: DocReviewOptions): Promise<DocRevi
 		return { exitCode: 1, outcome: "digest-changed", body: `🚫 doc-review aborted — ${message}\n\nNo report written: the reviewed bytes no longer match the file on disk.` };
 	}
 
-	const ms = clock();
-	const runId = `doc-${snapshot.digest.slice(0, 12)}-${ms.toString(36)}`;
 	const record: DocReviewRecord = {
 		schemaVersion: 1,
 		runId,
-		createdAt: new Date(ms).toISOString(),
+		createdAt,
 		document: { path: snapshot.path, digest: snapshot.digest, byteLength: snapshot.byteLength },
 		blockingBar: "must-fix",
 		safetyFloor: "disabled",
 		safetyFloorNote: DOC_REVIEW_SAFETY_FLOOR_NOTE,
 		result: loop,
+		...(failedSeatTranscript ? { failedSeatTranscript } : {}),
 	};
 	const recordPath = writeDocReviewRecord(cwd, record);
 	const exitCode: 0 | 1 = PASS_OUTCOMES.has(loop.outcome) ? 0 : 1;
@@ -195,12 +225,12 @@ export async function reviewDocument(options: DocReviewOptions): Promise<DocRevi
 }
 
 export async function main(argv: string[]): Promise<number> {
-	let values: { profile?: string; json?: boolean; out?: string };
+	let values: { profile?: string; json?: boolean; out?: string; "capture-failed-seats"?: boolean };
 	let positionals: string[];
 	try {
 		({ values, positionals } = parseArgs({
 			args: argv,
-			options: { profile: { type: "string" }, json: { type: "boolean" }, out: { type: "string" } },
+			options: { profile: { type: "string" }, json: { type: "boolean" }, out: { type: "string" }, "capture-failed-seats": { type: "boolean" } },
 			allowPositionals: true,
 		}));
 	} catch (e) {
@@ -221,7 +251,7 @@ export async function main(argv: string[]): Promise<number> {
 	}
 
 	try {
-		const result = await reviewDocument({ snapshot, profile: values.profile });
+		const result = await reviewDocument({ snapshot, profile: values.profile, captureFailedSeats: values["capture-failed-seats"] });
 		if (values.out && result.record) writeFileSync(values.out, `${JSON.stringify(result.record, null, 2)}\n`, "utf-8");
 		process.stdout.write(`${values.json && result.record ? JSON.stringify(result.record, null, 2) : result.body}\n`);
 		process.stderr.write(`doc-review: ${result.outcome} (exit ${result.exitCode})\n`);

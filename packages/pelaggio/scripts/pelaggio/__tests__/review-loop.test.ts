@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { AuthoringReviewConfig } from "../config.js";
 import { type AuthoringReviewFinding, isSafetyClass, type JudgeRuling, materializeAuthoringFinding, type ReviewFindingClass, SAFETY_CLASSES } from "../review/findings.js";
-import { classifyReviewDisagreement, classifyReviewOutcome, type DriverIdentity, deduplicateCandidates, type ReviewCandidate, type ReviewPassRecord, runReviewLoop } from "../review/loop.js";
+import { classifyReviewDisagreement, classifyReviewOutcome, type DriverIdentity, deduplicateCandidates, type ReviewCandidate, type ReviewLoopResult, type ReviewPassRecord, runReviewLoop, type SeatAttemptRecord } from "../review/loop.js";
 import { renderReviewRecord } from "../review/record.js";
 import { BASELINE_TAXONOMY, resolveTaxonomy } from "../review/taxonomy.js";
 import type { StepResult } from "../types.js";
@@ -221,7 +221,9 @@ describe("authoring review loop controller", () => {
 		assert.equal(result.survivors.length, 0);
 		const codexRecord = result.passes[0].reviewers.find((r) => r.identity.seatId === "codex");
 		assert.equal(codexRecord?.ok, false);
-		assert.match(codexRecord?.diagnostic ?? "", /schema example/);
+		assert.equal(codexRecord?.diagnostic, "authoring review findings parse failure");
+		const attempt = codexRecord?.attempts?.[0];
+		assert.equal(attempt?.completion === "returned" && attempt.output.state === "unreadable" && attempt.output.code, "schema-example-parroted");
 		assert.deepEqual(result.diversity, { state: "softened", explanation: "reviewer seats did not complete: codex" });
 	});
 
@@ -765,5 +767,319 @@ describe("authoring review loop — no-revise + safety floor (#384)", () => {
 			runSeat: async (request) => ok(request.role === "judge" ? judgeReport([]) : clean),
 		});
 		assert.equal(softened.diversity.state, "softened");
+	});
+});
+
+describe("authoring review loop — seat output observations (#677)", () => {
+	const ok = (fullText: string, extra: Partial<StepResult> = {}): StepResult => ({
+		ok: true,
+		subtype: "success",
+		text: fullText,
+		fullText,
+		assistantText: fullText,
+		cost: 0,
+		turns: 0,
+		...extra,
+	});
+	const findings = (raw: unknown[]) => `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 3, summary: "s", findings: raw })}\nEND_AUTHORING_REVIEW_FINDINGS`;
+	const judgeReport = (decisions: unknown[]) => `AUTHORING_REVIEW_JUDGE\n${JSON.stringify({ schemaVersion: 1, decisions })}\nEND_AUTHORING_REVIEW_JUDGE`;
+	const parkSignal = () => ({ parked: false, resetsAt: 0, limitType: "", triggerWorker: "" });
+	const policy: AuthoringReviewConfig = {
+		enabled: "local",
+		reviewers: [{ id: "grok", provider: "grok" }],
+		judge: { id: "judge", provider: "claude" },
+		blockingBar: "must-fix",
+		maxPasses: 1,
+		maxRevisions: 0,
+		budgetCap: 1000,
+		providerDiversity: "prefer",
+	};
+	const loopOpts = (runSeat: Parameters<typeof runReviewLoop>[0]["runSeat"], extra: { policy?: AuthoringReviewConfig; onSeatAttempt?: NonNullable<Parameters<typeof runReviewLoop>[0]["onSeatAttempt"]> } = {}) => ({
+		policy: extra.policy ?? policy,
+		parkSignal: parkSignal(),
+		classificationContext: emptyClassification,
+		taxonomy: BASELINE_TAXONOMY,
+		mode: "no-revise" as const,
+		prompts: { review: () => "r", judge: () => "j" },
+		runSeat,
+		...(extra.onSeatAttempt ? { onSeatAttempt: extra.onSeatAttempt } : {}),
+	});
+	const firstPass = (result: ReviewLoopResult) => {
+		const pass = result.passes[0];
+		if (!pass) throw new Error("expected a recorded pass");
+		return pass;
+	};
+	const firstReviewer = (result: ReviewLoopResult) => {
+		const reviewer = firstPass(result).reviewers[0];
+		if (!reviewer) throw new Error("expected a reviewer record");
+		return reviewer;
+	};
+	const firstReturned = (record: { attempts?: SeatAttemptRecord[] }) => {
+		const attempt = record.attempts?.[0];
+		if (attempt?.completion !== "returned") throw new Error("expected a returned attempt");
+		return attempt;
+	};
+
+	it("records readable/empty for a successful reviewer with findings:[] and does not soften diversity", async () => {
+		const result = await runReviewLoop(
+			loopOpts(async (request) => ok(request.role === "judge" ? judgeReport([]) : findings([])), {
+				policy: {
+					...policy,
+					reviewers: [
+						{ id: "grok", provider: "grok" },
+						{ id: "claude", provider: "claude" },
+						{ id: "codex", provider: "codex" },
+					],
+				},
+			}),
+		);
+		const reviewer = firstReviewer(result);
+		assert.equal(reviewer.ok, true);
+		assert.deepEqual(reviewer.attempts, [{ completion: "returned", attempt: 1, ok: true, subtype: "success", cost: 0, turns: 0, output: { state: "readable", payload: "empty" } }]);
+		assert.deepEqual(result.diversity, { state: "met" });
+	});
+
+	it("records readable/empty for a successful Judge with decisions:[] and zero candidates (completeness 0===0)", async () => {
+		const result = await runReviewLoop(loopOpts(async (request) => ok(request.role === "judge" ? judgeReport([]) : findings([]))));
+		const judge = firstPass(result).judge;
+		assert.equal(judge.valid, true);
+		assert.deepEqual(judge.attempts, [{ completion: "returned", attempt: 1, ok: true, subtype: "success", cost: 0, turns: 0, output: { state: "readable", payload: "empty" } }]);
+		assert.equal(result.outcome, "converged-clean");
+	});
+
+	it("records readable/non-empty for valid non-empty reviewer and Judge blocks", async () => {
+		const result = await runReviewLoop(
+			loopOpts(async (request) =>
+				ok(request.role === "judge" ? judgeReport([{ candidateId: "C1", decision: "survives", rationale: "keep", ruling: "fixable-blocker" }]) : findings([{ severity: "must-fix", message: "boom", ruleId: "pelaggio/judgment/style" }])),
+			),
+		);
+		const reviewerOut = firstReturned(firstReviewer(result)).output;
+		assert.equal(reviewerOut.state === "readable" && reviewerOut.payload, "non-empty");
+		const judgeOut = firstReturned(firstPass(result).judge).output;
+		assert.equal(judgeOut.state === "readable" && judgeOut.payload, "non-empty");
+	});
+
+	it("distinguishes empty text, prose without delimiters, and an unclosed start marker as unreadable/block-not-found", async () => {
+		const cases: Array<{ text: string; chars: number; hasStartMarker: boolean; hasEndMarker: boolean }> = [
+			{ text: "", chars: 0, hasStartMarker: false, hasEndMarker: false },
+			{ text: "ordinary prose with no delimiters", chars: "ordinary prose with no delimiters".length, hasStartMarker: false, hasEndMarker: false },
+			{ text: 'AUTHORING_REVIEW_FINDINGS\n{"schemaVersion":3}', chars: 'AUTHORING_REVIEW_FINDINGS\n{"schemaVersion":3}'.length, hasStartMarker: true, hasEndMarker: false },
+		];
+		for (const fixture of cases) {
+			const result = await runReviewLoop(loopOpts(async (request) => ok(request.role === "reviewer" ? fixture.text : judgeReport([]))));
+			const reviewer = firstReviewer(result);
+			const attempt = firstReturned(reviewer);
+			if (attempt.output.state !== "unreadable") throw new Error("expected unreadable");
+			assert.equal(attempt.output.code, "block-not-found");
+			assert.deepEqual(attempt.output.source, { chars: fixture.chars, hasStartMarker: fixture.hasStartMarker, hasEndMarker: fixture.hasEndMarker });
+			assert.equal(reviewer.diagnostic, "authoring review findings parse failure");
+		}
+	});
+
+	it("keeps a malformed block's fixed parse code out of rendered review provenance", async () => {
+		const leaked = 'AUTHORING_REVIEW_FINDINGS\n{"schemaVersion":3,"summary":"s","findings":[],"sk-planted":"nope"}\nEND_AUTHORING_REVIEW_FINDINGS';
+		const result = await runReviewLoop(loopOpts(async (request) => ok(request.role === "reviewer" ? leaked : judgeReport([]))));
+		const reviewer = firstReviewer(result);
+		const attempt = firstReturned(reviewer);
+		assert.equal(attempt.output.state === "unreadable" && attempt.output.code, "unknown-key");
+		assert.equal(reviewer.diagnostic, "authoring review findings parse failure");
+		assert.doesNotMatch(reviewer.diagnostic ?? "", /sk-planted/);
+		const rendered = renderReviewRecord({ schemaVersion: 1, runId: "cycle-parse-failure", itemId: "677", createdAt: new Date("2026-08-28T00:00:00Z").toISOString(), blockingBar: "must-fix", result });
+		assert.doesNotMatch(rendered, /unknown-key|sk-planted/);
+		assert.match(rendered, /authoring review findings parse failure/);
+	});
+
+	it("keeps a parsed-but-incomplete Judge readable with valid:false and the harness completeness diagnostic", async () => {
+		const incomplete = await runReviewLoop(loopOpts(async (request) => ok(request.role === "judge" ? judgeReport([]) : findings([{ severity: "must-fix", message: "boom", ruleId: "pelaggio/judgment/style" }]))));
+		const judge = firstPass(incomplete).judge;
+		assert.equal(judge.valid, false);
+		assert.match(judge.diagnostic ?? "", /incomplete/);
+		assert.doesNotMatch(judge.diagnostic ?? "", /parse-error/);
+		const output = firstReturned(judge).output;
+		assert.equal(output.state, "readable");
+		assert.equal(output.state === "readable" && output.payload, "empty");
+	});
+
+	it("skips the Judge on cross-model split with attempts:[] and does not invoke the callback", async () => {
+		const observed: string[] = [];
+		const pass = findings([]);
+		const block = findings([{ severity: "must-fix", message: "boom", ruleId: "pelaggio/judgment/style" }]);
+		const result = await runReviewLoop(
+			loopOpts(
+				async (request) => {
+					if (request.role === "judge") throw new Error("judge must not run");
+					return ok(request.slot.id === "a" ? pass : block);
+				},
+				{
+					policy: {
+						...policy,
+						reviewers: [
+							{ id: "a", provider: "grok" },
+							{ id: "b", provider: "claude" },
+						],
+					},
+					onSeatAttempt: (event) => observed.push(event.role),
+				},
+			),
+		);
+		const judge = firstPass(result).judge;
+		assert.equal(judge.skipped, "cross-model-split");
+		assert.deepEqual(judge.attempts, []);
+		assert.equal(judge.diagnostic, "skipped: human adjudication required");
+		assert.deepEqual(observed, ["reviewer", "reviewer"]);
+	});
+
+	it("skips the Judge when no reviewer completes, with attempts:[] and skipped: no-reviewer-completed", async () => {
+		const observed: string[] = [];
+		const result = await runReviewLoop(
+			loopOpts(
+				async () => {
+					throw new Error("provider crashed: ECONNRESET");
+				},
+				{ onSeatAttempt: (event) => observed.push(event.role) },
+			),
+		);
+		const pass = firstPass(result);
+		assert.equal(pass.judge.skipped, "no-reviewer-completed");
+		assert.deepEqual(pass.judge.attempts, []);
+		assert.equal(pass.judge.diagnostic, "skipped: no reviewer seat completed");
+		assert.deepEqual(observed, []);
+		const reviewer = firstReviewer(result);
+		assert.equal(reviewer.attempts?.[0]?.completion, "rejected");
+		assert.equal(reviewer.diagnostic, "Error: provider crashed: ECONNRESET");
+	});
+
+	it("scrubs rejected reviewer provider errors before persisting them", async () => {
+		const planted = "sk-proj-abcdefghijklmnop";
+		const result = await runReviewLoop(
+			loopOpts(async () => {
+				throw new Error(`reviewer crashed with ${planted}`);
+			}),
+		);
+		const diagnostic = firstReviewer(result).diagnostic ?? "";
+		assert.doesNotMatch(diagnostic, new RegExp(planted));
+		assert.match(diagnostic, /\[REDACTED\]/);
+	});
+
+	it("persists the in-flight pass when the Judge runSeat throws, then hard-blocks", async () => {
+		const result = await runReviewLoop(
+			loopOpts(async (request) => {
+				if (request.role === "judge") throw new Error("judge crashed");
+				return ok(findings([]));
+			}),
+		);
+		assert.equal(result.outcome, "hard-block");
+		assert.equal(result.passes.length, 1);
+		const pass = firstPass(result);
+		assert.equal(firstReviewer(result).ok, true);
+		assert.equal(pass.judge.valid, false);
+		assert.equal(pass.judge.attempts?.[0]?.completion, "rejected");
+		assert.match(pass.judge.diagnostic ?? "", /judge crashed/);
+	});
+
+	it("scrubs a rejected Judge provider error before persisting or rendering it", async () => {
+		const planted = "sk-proj-abcdefghijklmnop";
+		const result = await runReviewLoop(
+			loopOpts(async (request) => {
+				if (request.role === "judge") throw new Error(`judge crashed with ${planted}`);
+				return ok(findings([]));
+			}),
+		);
+		const diagnostic = firstPass(result).judge.diagnostic ?? "";
+		assert.doesNotMatch(diagnostic, new RegExp(planted));
+		assert.match(diagnostic, /\[REDACTED\]/);
+		const rendered = renderReviewRecord({ schemaVersion: 1, runId: "cycle-judge-rejection", itemId: "677", createdAt: new Date("2026-08-28T00:00:00Z").toISOString(), blockingBar: "must-fix", result });
+		assert.doesNotMatch(rendered, new RegExp(planted));
+	});
+
+	it("records subtype:error_max_turns plus unreadable output when a provider hits the cap with no block", async () => {
+		const result = await runReviewLoop(
+			loopOpts(async (request) => {
+				if (request.role === "judge") return ok(judgeReport([]));
+				return { ok: false, subtype: "error_max_turns", text: "", fullText: "", assistantText: "", cost: 0, turns: 12 };
+			}),
+		);
+		const attempt = firstReturned(firstReviewer(result));
+		assert.equal(attempt.subtype, "error_max_turns");
+		assert.equal(attempt.output.state === "unreadable" && attempt.output.code, "block-not-found");
+		assert.equal(attempt.output.state === "unreadable" && attempt.output.source.chars, 0);
+	});
+
+	it("ingests a parseable safety finding from a non-ok seat and still blocks", async () => {
+		const safety = findings([{ severity: "must-fix", message: "unsafe", ruleId: "pelaggio/security/secret-leak" }]);
+		const result = await runReviewLoop(
+			loopOpts(
+				async (request) => {
+					if (request.role === "judge") return ok(judgeReport([{ candidateId: "C1", decision: "refuted", rationale: "r", class: "security-and-secrets" }]));
+					if (request.slot.id === "grok") return ok(findings([]));
+					return { ok: false, subtype: "error_max_turns", text: safety, fullText: safety, assistantText: safety, cost: 0, turns: 12 };
+				},
+				{
+					policy: {
+						...policy,
+						reviewers: [
+							{ id: "grok", provider: "grok" },
+							{ id: "codex", provider: "codex" },
+						],
+					},
+				},
+			),
+		);
+		assert.notEqual(result.outcome, "converged-clean");
+		assert.ok(result.survivors.some((s) => s.finding.class === "security-and-secrets"));
+		const codex = firstPass(result).reviewers.find((r) => r.identity.seatId === "codex");
+		if (!codex) throw new Error("expected codex reviewer");
+		const attempt = firstReturned(codex);
+		assert.equal(attempt.ok, false);
+		assert.equal(attempt.output.state === "readable" && attempt.output.payload, "non-empty");
+	});
+
+	it("excludes an unreadable reviewer from verdicts and softens diversity", async () => {
+		const result = await runReviewLoop(
+			loopOpts(
+				async (request) => {
+					if (request.role === "judge") return ok(judgeReport([]));
+					if (request.slot.id === "broken") return ok("no block here");
+					return ok(findings([]));
+				},
+				{
+					policy: {
+						...policy,
+						reviewers: [
+							{ id: "grok", provider: "grok" },
+							{ id: "broken", provider: "claude" },
+						],
+					},
+				},
+			),
+		);
+		const broken = firstPass(result).reviewers.find((r) => r.identity.seatId === "broken");
+		if (!broken) throw new Error("expected broken reviewer");
+		assert.equal(broken.ok, false);
+		assert.equal(broken.verdict, undefined);
+		assert.equal(result.diversity.state, "softened");
+	});
+
+	it("treats an unreadable Judge as invalid and carries every candidate unchanged", async () => {
+		const result = await runReviewLoop(
+			loopOpts(async (request) => {
+				if (request.role === "judge") return ok("Judge prose with no delimiters");
+				return ok(findings([{ severity: "must-fix", message: "boom", ruleId: "pelaggio/judgment/style" }]));
+			}),
+		);
+		const judge = firstPass(result).judge;
+		assert.equal(judge.valid, false);
+		assert.equal(judge.diagnostic, "authoring review Judge parse failure");
+		assert.equal(result.survivors.length, 1);
+		assert.equal(result.outcome, "hard-block");
+	});
+
+	it("invokes the observation callback once per returned seat and never for retries in this slice", async () => {
+		const events: Array<{ role: string; attempt: number }> = [];
+		await runReviewLoop(loopOpts(async (request) => ok(request.role === "judge" ? judgeReport([]) : findings([])), { onSeatAttempt: (event) => events.push({ role: event.role, attempt: event.attempt }) }));
+		assert.deepEqual(events, [
+			{ role: "reviewer", attempt: 1 },
+			{ role: "judge", attempt: 1 },
+		]);
 	});
 });
