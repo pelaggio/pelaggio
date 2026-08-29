@@ -398,9 +398,9 @@ Eligible: a complete v2 `producer: "fleet"` record with `gate: "block"`, structu
 `ok: true`, `agreement: "consensus-block"` **or** `"disagreement"` (#525), `survivorCount
 ≥ 1` matching the sidecar (survivors + refuted), and a matching digest — the sidecar's
 agreement must equal the fleet record's exactly. A `budget` / `max-passes` / `diminishing-returns` breaker is
-eligible only with that complete matrix, and so is `invalid-pass`: the convergence loop
-labels a terminal verdict split's breaker `invalid-pass`, but with `ok: true` every
-required cell completed a structurally valid review — a genuinely broken run instead
+eligible only with that complete matrix, and so is `verdict-split` (plus historical
+`invalid-pass` records): with `ok: true` every required cell completed a structurally valid
+review — a genuinely broken run instead
 carries `ok: false` / `agreement: "invalid"` and stays refused. The current head must be a
 descendant of the reviewed SHA, and every interdiff edit must fall in a recorded hunk
 (insertions may use the immediate start/end boundary).
@@ -567,7 +567,7 @@ verification input even when discovery omits them; only an explicit complete `re
 decision removes one. The first blocking iteration establishes a baseline. A later
 iteration continues only when the carried count strictly falls; an unchanged/larger
 count or same-size replacement trips `diminishing-returns`. `max-passes`, `budget`,
-`invalid-pass`, and `provider-diversity` are the other breaker reasons. No breaker can
+`invalid-pass`, `verdict-split`, and `provider-diversity` are the other breaker reasons. No breaker can
 yield PASS.
 
 Before each iteration the CLI reserves the resolved discovery and verifier caps for

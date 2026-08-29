@@ -1292,6 +1292,8 @@ describe("pr-review CLI aggregation", () => {
 			});
 			assert.equal(review.gate, "block");
 			assert.equal(review.agreement, "invalid", `expected invalid for ${bad instanceof Error ? bad.message : bad.subtype}`);
+			assert.equal(review.breakerReason, "invalid-pass");
+			assert.equal(review.subtype, "invalid-pass");
 			assert.match(review.body, /claude/);
 			assert.match(review.body, /Clean/);
 		}
@@ -1528,10 +1530,10 @@ describe("pr-review CLI aggregation", () => {
 		assert.equal(review.adjudicationSource, undefined);
 	});
 
-	it("emits adjudicable evidence for the complete disagreement split — the invalid-pass breaker shape (#525)", async () => {
+	it("labels a complete disagreement as a verdict split and emits adjudicable evidence (#593)", async () => {
 		// The PR #589 shape: one reviewer blocks with a verified survivor, the other passes; every
-		// cell is structurally valid (ok=true), so the terminal split exhausts as `invalid-pass`
-		// even though no review was invalid. The split is the operator-drain case, so it must
+		// cell is structurally valid (ok=true), so the terminal split exhausts as `verdict-split`.
+		// The split is the operator-drain case, so it must
 		// carry the same SHA-bound adjudication evidence a consensus-block carries.
 		const disagreement = await runPrReviewGate({
 			pr: "497",
@@ -1550,8 +1552,8 @@ describe("pr-review CLI aggregation", () => {
 		assert.equal(disagreement.gate, "block");
 		assert.equal(disagreement.ok, true);
 		assert.equal(disagreement.agreement, "disagreement");
-		assert.equal(disagreement.breakerReason, "invalid-pass");
-		assert.equal(disagreement.subtype, "invalid-pass");
+		assert.equal(disagreement.breakerReason, "verdict-split");
+		assert.equal(disagreement.subtype, "verdict-split");
 		assert.ok(disagreement.adjudicationSource);
 		assert.equal(disagreement.adjudicationSource.agreement, "disagreement");
 		assert.equal(disagreement.adjudicationSource.reviewedSha, REVIEWED_HEAD);
@@ -1584,7 +1586,7 @@ describe("pr-review CLI aggregation", () => {
 			},
 		});
 		assert.equal(review.agreement, "disagreement");
-		assert.equal(review.breakerReason, "invalid-pass");
+		assert.equal(review.breakerReason, "verdict-split");
 		assert.equal(review.ok, true);
 		assert.equal(review.survivorCount, 2);
 		assert.ok(review.adjudicationSource);
@@ -1659,7 +1661,7 @@ describe("pr-review CLI aggregation", () => {
 		});
 		assert.equal(review.iterations, 2);
 		assert.equal(review.agreement, "disagreement");
-		assert.equal(review.breakerReason, "invalid-pass");
+		assert.equal(review.breakerReason, "verdict-split");
 		assert.equal(review.ok, true);
 		assert.equal(review.survivorCount, 2);
 		assert.ok(review.adjudicationSource);

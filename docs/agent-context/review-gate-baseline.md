@@ -76,11 +76,13 @@ expensive never converged. This does **not** falsify it — the counterfactual (
 caught that one reviewer would have missed) is absent from this data, and #589's round 1 caught a real
 bypassable parser. But the assumption now needs a `wrong-if:` this table can test.
 
-**3. The label is stale, though the adjudicator is not.** 57 of 82 rolls are complete, structurally
-valid splits (`ok=true`, `agreement=disagreement`) still stamped `breaker=invalid-pass` (#593). Since
-#525/#592 landed, `isEligibleFleetGateRecord` **accepts** that shape, so adjudication is no longer
-blocked by it. What remains is vocabulary: neither the record nor the graph can express *which*
-reviewers split or *over what*, so the rationale reaches a human only as prose in the gate comment.
+**3. The baseline label was stale, though the adjudicator was not.** 57 of 82 rolls are complete,
+structurally valid splits (`ok=true`, `agreement=disagreement`) stamped
+`breaker=invalid-pass`. #593 relabels new records as `breaker=verdict-split` while preserving parser
+support for historical records. Since #525/#592 landed, `isEligibleFleetGateRecord` **accepts** both
+shapes, so adjudication is not blocked by the label. The remaining vocabulary gap is that neither
+the record nor the graph can express *which* reviewers split or *over what*, so the rationale reaches
+a human only as prose in the gate comment.
 
 ## Known gap: wall-clock is not instrumented
 

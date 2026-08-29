@@ -98,8 +98,8 @@ export interface PrAdjudicationSurvivorEntry {
 /**
  * Fleet agreements adjudication accepts (#525): every required cell completed a structurally
  * valid review and rendered a genuine model verdict. `disagreement` exhausts with the breaker
- * label `invalid-pass`, but with `ok: true` no review was invalid — the label marks a terminal
- * verdict split. Actually-broken runs (parse/infra failure, incomplete matrix) carry
+ * label `verdict-split`; historical records used `invalid-pass` despite no review being invalid.
+ * Actually-broken runs (parse/infra failure, incomplete matrix) carry
  * `ok: false` and `agreement: "invalid"` and stay refused everywhere below.
  */
 export type PrAdjudicableAgreement = "consensus-block" | "disagreement";
@@ -397,9 +397,9 @@ const INELIGIBLE_BREAKERS = new Set(["provider-diversity"]);
 export function isEligibleFleetGateRecord(record: PrReviewGateRecord): boolean {
 	if (record.schemaVersion !== 2 || record.producer !== "fleet") return false;
 	if (record.gate !== "block" || record.ok !== true) return false;
-	// #525: `disagreement` is adjudicable alongside `consensus-block`. The convergence loop labels
-	// a terminal split's breaker `invalid-pass`, but with `ok: true` every required cell completed
-	// a structurally valid review — nothing was invalid, so the breaker is not disqualifying.
+	// #525/#593: `disagreement` is adjudicable alongside `consensus-block`. Current records label
+	// a terminal split `verdict-split`; historical records used `invalid-pass`. With `ok: true`,
+	// every required cell completed a structurally valid review, so neither label is disqualifying.
 	// Genuinely broken runs carry `ok: false` / `agreement: "invalid"` and are refused above/here.
 	if (record.agreement !== "consensus-block" && record.agreement !== "disagreement") return false;
 	if ((record.survivorCount ?? 0) < 1) return false;

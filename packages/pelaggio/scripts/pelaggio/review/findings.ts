@@ -148,7 +148,7 @@ export interface VerificationDisposition extends VerificationCandidate {
 	rationale: string;
 }
 
-export type ReviewExhaustionReason = "max-passes" | "budget" | "diminishing-returns" | "invalid-pass" | "provider-diversity";
+export type ReviewExhaustionReason = "max-passes" | "budget" | "diminishing-returns" | "invalid-pass" | "verdict-split" | "provider-diversity";
 
 export interface ReviewPassSummary {
 	valid: boolean;

@@ -190,8 +190,8 @@ export interface PrReviewGateResult {
 	breakerReason?: ReviewExhaustionReason;
 	iterations?: number;
 	survivorCount?: number;
-	/** Present only for a complete findings-terminal block (consensus-block, or the disagreement
-	 *  split whose breaker is labeled `invalid-pass` — #525) with mappable survivors. */
+	/** Present only for a complete findings-terminal block (consensus-block, or a `verdict-split`
+	 *  disagreement — #525/#593) with mappable survivors. */
 	adjudicationSource?: PrAdjudicationSourceDraft;
 	/** Cross-push disposition draft (#495): survived + refuted memory for this reviewed head.
 	 *  Present on completed runs with identity (itemId + 40-hex reviewedSha); never on park. */
@@ -1017,7 +1017,9 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 		else if (decision.state === "converged" && agreement === "consensus-pass") {
 			gate = "pass";
 			break;
-		} else if (decision.state === "exhausted") breakerReason = decision.reason;
+		} else if (decision.state === "exhausted") {
+			breakerReason = structuralOk && agreement === "disagreement" ? "verdict-split" : decision.reason;
+		}
 		if (decision.state !== "continue" || terminalSplit) break;
 		previousSurvivorCount = carried.size;
 	}

@@ -392,13 +392,12 @@ describe("pr-adjudicate CLI config and eligibility", () => {
 		assert.ok(h.effects.includes(`status:success:${HEAD}`));
 	});
 
-	it("adjudicates the complete disagreement/invalid-pass split end to end (#525)", async () => {
-		// The PR #589 shape: ok=true, agreement=disagreement, breaker labeled invalid-pass by the
-		// convergence loop although every review was structurally valid. The full effect chain
+	it("adjudicates a complete verdict-split disagreement end to end (#593)", async () => {
+		// A current ok=true, agreement=disagreement record is labeled verdict-split. The full effect chain
 		// (verify → record → comment → status) must run exactly as for a consensus-block.
 		const h = harness({
 			evidenceShape: {
-				fleet: { subtype: "invalid-pass", agreement: "disagreement", breakerReason: "invalid-pass", iterations: 1 },
+				fleet: { subtype: "verdict-split", agreement: "disagreement", breakerReason: "verdict-split", iterations: 1 },
 				sourceAgreement: "disagreement",
 			},
 		});

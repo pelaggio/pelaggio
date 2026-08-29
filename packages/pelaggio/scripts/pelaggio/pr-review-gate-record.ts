@@ -82,7 +82,7 @@ const SHA_RE = /^[0-9a-f]{7,40}$/i;
 const DIGEST_RE = /^[a-f0-9]{64}$/;
 const RECORD_RE = /^(\d+)-([0-9a-f]{7,40})\.json$/i;
 const AGREEMENTS: readonly PrReviewAgreement[] = ["consensus-pass", "consensus-block", "disagreement", "invalid"];
-const BREAKER_REASONS: readonly ReviewExhaustionReason[] = ["max-passes", "budget", "diminishing-returns", "invalid-pass", "provider-diversity"];
+const BREAKER_REASONS: readonly ReviewExhaustionReason[] = ["max-passes", "budget", "diminishing-returns", "invalid-pass", "verdict-split", "provider-diversity"];
 const DISPOSITIONS: readonly PrReviewFindingDisposition[] = ["fixed", "refuted", "accepted"];
 
 const FLEET_V2_KEYS = [
