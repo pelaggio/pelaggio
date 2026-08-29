@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { after, before, describe, it } from "node:test";
+import { after, before, beforeEach, describe, it } from "node:test";
 import { REPO, REVIEW_CONFIG } from "../config.js";
 import { createEventWriter, readEventLog } from "../flow-events.js";
 import type { NotifyPayload } from "../notify.js";
-import { hermeticDefault, hermeticQueueRoot, PARKED_EXIT_CODE, runOrchestrator } from "../pipeline.js";
+import { hermeticDefault, hermeticQueueRoot, type OrchestratorDeps, PARKED_EXIT_CODE, runOrchestrator } from "../pipeline.js";
 import { gateRecordsDir, readPrReviewGateRecord, writePrReviewGateRecord } from "../pr-review-gate-record.js";
 import { fleetRecordDigestOf, readAdjudicationSourceRecord, writeAdjudicationSourceRecord } from "../review/adjudication.js";
 import { type PrCarryDispositionDraft, readPrFindingDispositionRecord, writePrFindingDispositionRecord } from "../review/carry.js";
@@ -228,6 +228,11 @@ describe("runOrchestrator — CI resume + review-findings (issue #60)", () => {
 describe("runOrchestrator — operator-revision mode (#498)", () => {
 	const findingsPath = "/tmp/pelaggio-op-rev/review-findings-498.md";
 	const resumeFlags = (): Flags => ({ ...baseFlags, resume: "498", "review-findings": findingsPath });
+	beforeEach(() => {
+		mkdirSync(join(tmpdir(), "pelaggio-op-rev"), { recursive: true });
+		writeFileSync(findingsPath, "review findings\n");
+	});
+	after(() => rmSync(join(tmpdir(), "pelaggio-op-rev"), { recursive: true, force: true }));
 
 	it("parks then resumes from implement with the same findings path, notifies per attempt, and exits 0", async (t) => {
 		t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
@@ -327,6 +332,83 @@ describe("runOrchestrator — operator-revision mode (#498)", () => {
 		);
 	});
 
+	it("does not re-inject consumed findings when a later-step park auto-resumes", async (t) => {
+		t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
+		t.mock.method(console, "log", () => {});
+		const baseNow = 1_700_000_000_000;
+		t.mock.timers.setTime(baseNow);
+		const calls: Array<{ startFrom: string | undefined; findings: string | undefined }> = [];
+		let invocation = 0;
+		const runPipeline: NonNullable<OrchestratorDeps["runPipeline"]> = async (opts, parkSignal, flags, deps) => {
+			calls.push({ startFrom: opts.startFrom, findings: flags["review-findings"] });
+			invocation++;
+			if (invocation === 1) {
+				deps?.onReviewFindingsConsumed?.("498");
+				delete flags["review-findings"];
+				unlinkSync(findingsPath);
+				Object.assign(parkSignal, { parked: true, resetsAt: baseNow + 60_000, limitType: "5h" });
+				return { itemId: "498", completed: false, cost: 0.2, error: "parked" };
+			}
+			return { itemId: "498", completed: true, cost: 0.5 };
+		};
+
+		const promise = runOrchestrator(resumeFlags(), {
+			runPipeline,
+			detectResumeStep: () => "shakedown-code",
+			resolveWorktree: fakeResolveWorktree,
+			mode: "operator-revision",
+		});
+		for (let i = 0; i < 5; i++) await new Promise(setImmediate);
+		t.mock.timers.tick(60_000 + 30_000);
+		for (let i = 0; i < 5; i++) await new Promise(setImmediate);
+		const { exitCode } = await promise;
+
+		assert.equal(exitCode, 0);
+		assert.deepEqual(calls, [
+			{ startFrom: "implement", findings: findingsPath },
+			{ startFrom: "shakedown-code", findings: undefined },
+		]);
+	});
+
+	it("prints a plain resume after an auto-resume archives findings and parks again", async (t) => {
+		t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
+		const logs: string[] = [];
+		t.mock.method(console, "log", (...args: unknown[]) => logs.push(args.join(" ")));
+		const baseNow = 1_700_000_000_000;
+		t.mock.timers.setTime(baseNow);
+		let invocation = 0;
+		const runPipeline: NonNullable<OrchestratorDeps["runPipeline"]> = async (opts, parkSignal, flags, deps) => {
+			invocation++;
+			if (invocation === 1) {
+				Object.assign(parkSignal, { parked: true, resetsAt: baseNow + 60_000, limitType: "5h" });
+			} else {
+				deps?.onReviewFindingsConsumed?.("498");
+				delete flags["review-findings"];
+				unlinkSync(findingsPath);
+				Object.assign(parkSignal, { parked: true, resetsAt: 0, limitType: "paused" });
+			}
+			return { itemId: opts.itemId ?? null, completed: false, cost: 0.1, error: "parked" };
+		};
+
+		const promise = runOrchestrator(resumeFlags(), {
+			runPipeline,
+			detectResumeStep: fakeDetectResumeStep,
+			resolveWorktree: fakeResolveWorktree,
+			mode: "operator-revision",
+		});
+		for (let i = 0; i < 5; i++) await new Promise(setImmediate);
+		t.mock.timers.tick(60_000 + 30_000);
+		for (let i = 0; i < 5; i++) await new Promise(setImmediate);
+		const { exitCode } = await promise;
+
+		assert.equal(exitCode, PARKED_EXIT_CODE);
+		assert.equal(invocation, 2);
+		const resumeLine = logs.findLast((line) => line.includes("Resume:")) ?? "";
+		assert.ok(resumeLine.includes("pnpm pelaggio --resume 498"));
+		assert.ok(!resumeLine.includes("--review-findings"), `archived findings must not be advertised: ${resumeLine}`);
+		assert.ok(!resumeLine.includes(findingsPath), `deleted findings path must not be advertised: ${resumeLine}`);
+	});
+
 	it("a standard --resume --review-findings attempt is leased: acquire before the pipeline, release after (#507 round 3)", async (t) => {
 		t.mock.method(console, "log", () => {});
 		const events: string[] = [];
@@ -408,6 +490,31 @@ describe("runOrchestrator — operator-revision mode (#498)", () => {
 			`expected findings-driven resume hint; got:\n${logs.join("\n")}`,
 		);
 		assert.ok(!logs.some((l) => /summary/i.test(l) && l.includes("cycle")), "must not fall through to the campaign summary");
+	});
+
+	it("autoResume: false hands back without a consumed findings path", async (t) => {
+		const logs: string[] = [];
+		t.mock.method(console, "log", (...args: unknown[]) => logs.push(args.join(" ")));
+		const runPipeline: NonNullable<OrchestratorDeps["runPipeline"]> = async (opts, parkSignal, flags, deps) => {
+			deps?.onReviewFindingsConsumed?.("498");
+			delete flags["review-findings"];
+			unlinkSync(findingsPath);
+			Object.assign(parkSignal, { parked: true, resetsAt: 1_700_000_060_000, limitType: "5h" });
+			return { itemId: opts.itemId ?? null, completed: false, cost: 0.1, error: "parked" };
+		};
+
+		const { exitCode } = await runOrchestrator(resumeFlags(), {
+			runPipeline,
+			detectResumeStep: fakeDetectResumeStep,
+			resolveWorktree: fakeResolveWorktree,
+			mode: "operator-revision",
+			park: { autoResume: false },
+		});
+
+		assert.equal(exitCode, PARKED_EXIT_CODE);
+		const resumeLine = logs.find((line) => line.includes("Resume:")) ?? "";
+		assert.ok(resumeLine.includes("pnpm pelaggio --resume 498"));
+		assert.ok(!resumeLine.includes("--review-findings"), `consumed path must not be advertised: ${resumeLine}`);
 	});
 
 	it("no reset time hands back with the findings-driven resume hint", async (t) => {
@@ -1659,6 +1766,8 @@ describe("runOrchestrator — revise sweep (issue #76)", () => {
 		for (let i = 0; i < 10; i++) await new Promise(setImmediate);
 		await promise;
 		assert.deepEqual(events, ["acquire:76", "pipeline", "release:76", "acquire:76", "pipeline", "release:76"], "the sweep releases the lease when the revision parks; the shared auto-resume loop must reacquire it around the resumed attempt");
+		assert.ok(inner.calls[0].flags["review-findings"]?.endsWith("review-findings-76.md"));
+		assert.equal(inner.calls[1].flags["review-findings"], inner.calls[0].flags["review-findings"], "a parked findings pass must leave the canonical file for auto-resume to re-inject");
 	});
 
 	it("off-switch: revise.local:false skips the sweep and goes straight to picking", async (t) => {
