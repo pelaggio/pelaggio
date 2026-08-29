@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import type { ChildProcess } from "node:child_process";
+import { type ChildProcess, spawn as childProcessSpawn, type SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -32,9 +32,9 @@ function makeFakeChild(pid: number): FakeChild {
 	return ee;
 }
 
-type Spawned = { cmd: string; args: string[]; opts: { cwd: string; env: Record<string, string> }; child: FakeChild };
+type Spawned = { cmd: string; args: string[]; opts: { cwd: string; detached?: boolean; env: Record<string, string> }; child: FakeChild };
 
-function setup() {
+function setup(opts: { repoCommandTimeoutMs?: number } = {}) {
 	const dir = mkdtempSync(join(tmpdir(), "supervisor-"));
 	const store = new StateStore(join(dir, "state.json"));
 	const broker = new LogBroker();
@@ -42,7 +42,7 @@ function setup() {
 	let nextPid = 1000;
 	const spawn = ((cmd: string, args: string[], opts: unknown) => {
 		const child = makeFakeChild(nextPid++);
-		spawned.push({ cmd, args, opts: opts as { cwd: string; env: Record<string, string> }, child });
+		spawned.push({ cmd, args, opts: opts as { cwd: string; detached?: boolean; env: Record<string, string> }, child });
 		return child as unknown as ChildProcess;
 	}) as unknown as typeof import("node:child_process").spawn;
 	const registry = new Registry([{ slug: "main", path: dir }]);
@@ -53,6 +53,7 @@ function setup() {
 		logDir: join(dir, "logs"),
 		spawn,
 		now: () => new Date("2026-04-19T00:00:00.000Z"),
+		...(opts.repoCommandTimeoutMs !== undefined ? { repoCommandTimeoutMs: opts.repoCommandTimeoutMs } : {}),
 	});
 	return { dir, store, broker, spawn, spawned, supervisor, registry };
 }
@@ -62,6 +63,20 @@ function at(spawned: Spawned[], index: number): Spawned {
 	const entry = spawned[index];
 	assert.ok(entry, `expected spawn at index ${index}`);
 	return entry;
+}
+
+async function waitForProcessExit(pid: number): Promise<void> {
+	const deadline = Date.now() + 2_000;
+	while (Date.now() < deadline) {
+		try {
+			process.kill(pid, 0);
+		} catch (error) {
+			if (error instanceof Error && "code" in error && error.code === "ESRCH") return;
+			throw error;
+		}
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	assert.fail(`process ${pid} survived the roadmap timeout`);
 }
 
 describe("Supervisor.start", () => {
@@ -85,6 +100,7 @@ describe("Supervisor.start", () => {
 		assert.equal(s0.opts.env.PELAGGIO_SUPERVISED_RUN, "1");
 		assert.equal(s0.opts.env.PELAGGIO_EXECUTION_ID, run.id);
 		assert.equal(s0.opts.env.PELAGGIO_EVENT_STREAM_ID, run.id);
+		assert.equal(s0.opts.detached, undefined);
 	});
 
 	it("strips CONTROL_PLANE_TOKEN from the spawned run environment but passes non-credential vars through", () => {
@@ -134,6 +150,80 @@ describe("Supervisor.start", () => {
 			() => supervisor.start({ repo: "missing", item: "TOOL-1" }),
 			(err: unknown) => err instanceof SupervisorError && err.code === "unknown-repo",
 		);
+	});
+});
+
+describe("Supervisor.listRoadmap", () => {
+	it("uses the run spawn helper posture and strips the control-plane token", async () => {
+		const previousToken = process.env.CONTROL_PLANE_TOKEN;
+		process.env.CONTROL_PLANE_TOKEN = "daemon-secret";
+		try {
+			const { dir, supervisor, spawned } = setup();
+			const listed = supervisor.listRoadmap("main");
+			const child = at(spawned, 0);
+			assert.equal(child.cmd, "npx");
+			assert.deepEqual(child.args, ["pelaggio", "roadmap", "list", "--include-done", "--json"]);
+			assert.equal(child.opts.cwd, dir);
+			assert.equal(child.opts.env.PELAGGIO_REPO, dir);
+			assert.equal(child.opts.env.PELAGGIO_PLAIN, "1");
+			assert.equal(child.opts.env.PELAGGIO_SUPERVISED_RUN, "1");
+			assert.equal(child.opts.detached, true);
+			assert.ok(!("CONTROL_PLANE_TOKEN" in child.opts.env));
+			child.child.stdout.write('[{"id":"42","title":"Title"}]');
+			child.child.emit("close", 0);
+			assert.equal(await listed, '[{"id":"42","title":"Title"}]');
+		} finally {
+			if (previousToken === undefined) delete process.env.CONTROL_PLANE_TOKEN;
+			else process.env.CONTROL_PLANE_TOKEN = previousToken;
+		}
+	});
+
+	it("kills a roadmap fixture's process group and rejects on timeout", async (t) => {
+		if (process.platform === "win32") {
+			t.skip("negative process-group PIDs are POSIX-only");
+			return;
+		}
+		const dir = mkdtempSync(join(tmpdir(), "supervisor-process-group-"));
+		const grandchildPidPath = join(dir, "grandchild.pid");
+		const fixture = [
+			'const { spawn } = require("node:child_process");',
+			'const { writeFileSync } = require("node:fs");',
+			'const grandchild = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });',
+			"writeFileSync(process.argv[1], String(grandchild.pid));",
+			"setInterval(() => {}, 1000);",
+		].join("\n");
+		let refreshPid: number | undefined;
+		let grandchildPid: number | undefined;
+		const spawnFixture = ((_cmd: string, _args: string[], options: SpawnOptions) => {
+			const child = childProcessSpawn(process.execPath, ["-e", fixture, grandchildPidPath], options);
+			refreshPid = child.pid;
+			return child;
+		}) as typeof childProcessSpawn;
+		t.after(() => {
+			if (refreshPid !== undefined) {
+				try {
+					process.kill(-refreshPid, "SIGKILL");
+				} catch {}
+			}
+			if (grandchildPid !== undefined) {
+				try {
+					process.kill(grandchildPid, "SIGKILL");
+				} catch {}
+			}
+		});
+		const supervisor = new Supervisor({
+			store: new StateStore(join(dir, "state.json")),
+			broker: new LogBroker(),
+			registry: new Registry([{ slug: "main", path: dir }]),
+			logDir: join(dir, "logs"),
+			spawn: spawnFixture,
+			repoCommandTimeoutMs: 500,
+		});
+
+		await assert.rejects(supervisor.listRoadmap("main"), /roadmap list timed out/);
+		grandchildPid = Number(readFileSync(grandchildPidPath, "utf8"));
+		assert.ok(Number.isInteger(grandchildPid) && grandchildPid > 0);
+		await waitForProcessExit(grandchildPid);
 	});
 });
 

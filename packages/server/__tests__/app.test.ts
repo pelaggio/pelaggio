@@ -10,7 +10,7 @@ import type { RoadmapItem, RoadmapSource } from "pelaggio";
 import { createApp } from "../src/app.js";
 import { LogBroker } from "../src/log-broker.js";
 import { Registry } from "../src/registry.js";
-import { RoadmapCache } from "../src/roadmap-cache.js";
+import { RoadmapCache, type RoadmapList } from "../src/roadmap-cache.js";
 import { StateStore } from "../src/state-store.js";
 import { Supervisor } from "../src/supervisor.js";
 
@@ -25,14 +25,28 @@ function fakeSpawn(): typeof import("node:child_process").spawn {
 	}) as unknown as typeof import("node:child_process").spawn;
 }
 
-function makeRoadmap(items: RoadmapItem[]): RoadmapSource {
+type RoadmapItemStatus = NonNullable<Awaited<ReturnType<RoadmapSource["getItem"]>>>;
+
+interface CycleLogFixture {
+	ts: string;
+	cycle: number;
+	item: string | null;
+	quick: boolean;
+	steps: unknown[];
+	total_cost: number;
+	verdict: string | null;
+	completed: boolean;
+	error: string | null;
+}
+
+function makeRoadmap(items: RoadmapItemStatus[]): RoadmapSource {
 	return {
 		name: "markdown",
-		listOpenItems: async () => items,
-		listItems: async () => items.map((i) => ({ ...i, status: "open" as const })),
+		listOpenItems: async () => items.filter((item) => item.status === "open"),
+		listItems: async () => items,
 		getItem: async (id) => {
 			const found = items.find((i) => i.id === id);
-			return found ? { ...found, status: "open" as const } : null;
+			return found ?? null;
 		},
 		claimItem: async () => ({ branch: "x", worktree: "x" }),
 		markDone: async () => {},
@@ -46,12 +60,47 @@ function makeRoadmap(items: RoadmapItem[]): RoadmapSource {
 	} satisfies RoadmapSource;
 }
 
-function setup(opts: { token?: string; webDist?: string; trustManifestPath?: string; repos?: Record<string, string> } = {}) {
+function writeCycleLog(repo: string, entries: CycleLogFixture[]): void {
+	const devDir = join(repo, ".dev");
+	mkdirSync(devDir, { recursive: true });
+	writeFileSync(join(devDir, "pelaggio-log.jsonl"), `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+}
+
+function cycle(partial: Partial<CycleLogFixture> & { cycle: number }): CycleLogFixture {
+	return {
+		ts: "2026-04-19T00:00:00.000Z",
+		item: null,
+		quick: false,
+		steps: [],
+		total_cost: 0,
+		verdict: null,
+		completed: false,
+		error: null,
+		...partial,
+	};
+}
+
+function tick(): Promise<void> {
+	return new Promise((resolve) => setImmediate(resolve));
+}
+
+function setup(opts: { token?: string; webDist?: string; trustManifestPath?: string; repos?: Record<string, string>; roadmapFactory?: (repoPath: string) => RoadmapSource; roadmapList?: RoadmapList; titleTtlMs?: number } = {}) {
 	const dir = mkdtempSync(join(tmpdir(), "app-test-"));
 	const repos = opts.repos ?? { main: dir };
 	const registry = new Registry(Object.entries(repos).map(([slug, path]) => ({ slug, path })));
-	const items: RoadmapItem[] = [{ id: "TOOL-1", title: "x", deps: "—", sourceRef: "x" }];
-	const roadmapCache = new RoadmapCache({ registry, factory: () => makeRoadmap(items) });
+	const items: RoadmapItemStatus[] = [{ id: "TOOL-1", title: "x", deps: "—", sourceRef: "x", status: "open" }];
+	const roadmapFactory = opts.roadmapFactory ?? (() => makeRoadmap(items));
+	const roadmapCache = new RoadmapCache({
+		registry,
+		factory: roadmapFactory,
+		listRoadmap:
+			opts.roadmapList ??
+			(async (slug) => {
+				const roadmap = roadmapFactory(registry.path(slug));
+				return JSON.stringify(await roadmap.listItems({ includeDone: true }));
+			}),
+		...(opts.titleTtlMs !== undefined ? { titleTtlMs: opts.titleTtlMs } : {}),
+	});
 	const store = new StateStore(join(dir, "state.json"));
 	const broker = new LogBroker();
 	const supervisor = new Supervisor({
@@ -71,7 +120,7 @@ function setup(opts: { token?: string; webDist?: string; trustManifestPath?: str
 			return rawApp.request(path, { ...init, headers });
 		},
 	};
-	return { app, rawApp, supervisor, store, dir, registry };
+	return { app, rawApp, supervisor, store, dir, registry, roadmapCache };
 }
 
 describe("createApp", () => {
@@ -139,6 +188,107 @@ describe("createApp", () => {
 		const body = (await res.json()) as { totalCycles: number; itemsDelivered: unknown[] };
 		assert.equal(typeof body.totalCycles, "number");
 		assert.ok(Array.isArray(body.itemsDelivered));
+	});
+
+	it("GET /repos/:slug/stats enriches closed delivered and open failed items from one cached list", async () => {
+		let calls = 0;
+		const { app, dir } = setup({
+			roadmapList: async () => {
+				calls++;
+				return JSON.stringify([
+					{ id: "42", title: "Delivered item", status: "done" },
+					{ id: "43", title: "Open item", status: "open" },
+				]);
+			},
+		});
+		writeCycleLog(dir, [cycle({ cycle: 1, item: "42", completed: true }), cycle({ cycle: 2, item: "43", error: "implement failed" })]);
+
+		const cold = await app.request("/repos/main/stats");
+		assert.equal(cold.status, 200);
+		await tick();
+		const res = await app.request("/repos/main/stats");
+		assert.equal(res.status, 200);
+		const body = (await res.json()) as { itemsDelivered: Array<{ id: string; itemTitle?: string }>; recentFailures: Array<{ item: string | null; itemTitle?: string }> };
+		assert.equal(body.itemsDelivered[0]?.itemTitle, "Delivered item");
+		assert.equal(body.recentFailures[0]?.itemTitle, "Open item");
+		assert.equal(calls, 1);
+	});
+
+	it("stats and runs preserve ID-only payloads when roadmap list fails", async () => {
+		const { app, dir, supervisor } = setup({ roadmapList: async () => Promise.reject(new Error("provider unavailable")) });
+		writeCycleLog(dir, [cycle({ cycle: 1, item: "42", completed: true })]);
+		supervisor.start({ repo: "main", item: "42" });
+
+		const statsRes = await app.request("/repos/main/stats");
+		const runsRes = await app.request("/runs");
+		assert.equal(statsRes.status, 200);
+		assert.equal(runsRes.status, 200);
+		const stats = (await statsRes.json()) as { itemsDelivered: Array<{ id: string; itemTitle?: string }> };
+		const runs = (await runsRes.json()) as { runs: Array<{ item?: string; itemTitle?: string }> };
+		assert.deepEqual(
+			stats.itemsDelivered.map(({ id, itemTitle }) => ({ id, itemTitle })),
+			[{ id: "42", itemTitle: undefined }],
+		);
+		assert.deepEqual(
+			runs.runs.map(({ item, itemTitle }) => ({ item, itemTitle })),
+			[{ item: "42", itemTitle: undefined }],
+		);
+		assert.equal(
+			stats.itemsDelivered.every((item) => !Object.hasOwn(item, "itemTitle")),
+			true,
+		);
+		assert.equal(
+			runs.runs.every((run) => !Object.hasOwn(run, "itemTitle")),
+			true,
+		);
+	});
+
+	it("omits itemTitle when the title is blank", async () => {
+		const { app, dir, supervisor } = setup({ roadmapList: async () => JSON.stringify([{ id: "blank", title: "   " }]) });
+		writeCycleLog(dir, [cycle({ cycle: 1, item: "blank", completed: true })]);
+		supervisor.start({ repo: "main", item: "blank" });
+
+		const statsRes = await app.request("/repos/main/stats");
+		const runsRes = await app.request("/runs");
+		assert.equal(statsRes.status, 200);
+		assert.equal(runsRes.status, 200);
+		const stats = (await statsRes.json()) as { itemsDelivered: Array<Record<string, unknown>> };
+		const runs = (await runsRes.json()) as { runs: Array<Record<string, unknown>> };
+		assert.equal(stats.itemsDelivered.length, 1);
+		assert.equal(runs.runs.length, 1);
+		assert.equal(
+			stats.itemsDelivered.every((item) => !Object.hasOwn(item, "itemTitle")),
+			true,
+		);
+		assert.equal(
+			runs.runs.every((run) => !Object.hasOwn(run, "itemTitle")),
+			true,
+		);
+	});
+
+	it("renders an id absent from the bounded title snapshot bare without error", async () => {
+		const { app, dir, supervisor } = setup({ roadmapList: async () => JSON.stringify([{ id: "inside-window", title: "Known" }]) });
+		writeCycleLog(dir, [cycle({ cycle: 1, item: "outside-window", completed: true })]);
+		supervisor.start({ repo: "main", item: "outside-window" });
+
+		await app.request("/repos/main/stats");
+		await tick();
+		const statsRes = await app.request("/repos/main/stats");
+		const runsRes = await app.request("/runs");
+		assert.equal(statsRes.status, 200);
+		assert.equal(runsRes.status, 200);
+		const stats = (await statsRes.json()) as { itemsDelivered: Array<Record<string, unknown>> };
+		const runs = (await runsRes.json()) as { runs: Array<Record<string, unknown>> };
+		assert.deepEqual(
+			stats.itemsDelivered.map(({ id, itemTitle }) => ({ id, itemTitle })),
+			[{ id: "outside-window", itemTitle: undefined }],
+		);
+		assert.deepEqual(
+			runs.runs.map(({ item, itemTitle }) => ({ item, itemTitle })),
+			[{ item: "outside-window", itemTitle: undefined }],
+		);
+		assert.equal(Object.hasOwn(stats.itemsDelivered[0] ?? {}, "itemTitle"), false);
+		assert.equal(Object.hasOwn(runs.runs[0] ?? {}, "itemTitle"), false);
 	});
 
 	it("GET /repos/missing/stats returns 404", async () => {
@@ -304,11 +454,95 @@ describe("createApp", () => {
 	it("GET /runs lists current runs", async () => {
 		const { app, supervisor } = setup();
 		supervisor.start({ repo: "main", item: "TOOL-1" });
+		await app.request("/runs");
+		await tick();
 		const res = await app.request("/runs");
 		assert.equal(res.status, 200);
-		const body = (await res.json()) as { runs: Array<{ source: string }> };
+		const body = (await res.json()) as { runs: Array<{ source: string; itemTitle?: string }> };
 		assert.equal(body.runs.length, 1);
 		assert.equal(body.runs[0]?.source, "supervised");
+		assert.equal(body.runs[0]?.itemTitle, "x");
+	});
+
+	it("GET /runs keeps persisted rows whose repository was removed", async () => {
+		const { app, store, dir } = setup();
+		store.upsert({
+			id: "persisted-removed-repo",
+			repo: "removed",
+			item: "42",
+			status: "completed",
+			pid: null,
+			startedAt: "2026-04-18T00:00:00.000Z",
+			logPath: join(dir, "removed.log"),
+			cwd: dir,
+		});
+
+		const res = await app.request("/runs");
+		assert.equal(res.status, 200);
+		const body = (await res.json()) as { runs: Array<{ repo: string; item?: string; itemTitle?: string }> };
+		assert.deepEqual(body.runs, [
+			{
+				id: "persisted-removed-repo",
+				repo: "removed",
+				item: "42",
+				status: "completed",
+				startedAt: "2026-04-18T00:00:00.000Z",
+				source: "supervised",
+			},
+		]);
+	});
+
+	it("1000 historical ids trigger one non-blocking roadmap list per repo", async (t) => {
+		let listCalls = 0;
+		const { app, dir, supervisor } = setup({
+			roadmapList: () => {
+				listCalls++;
+				return new Promise(() => {});
+			},
+		});
+		const historical = Array.from({ length: 1_000 }, (_, index) => ({
+			id: `historical-${index}`,
+			repo: "main",
+			item: String(index),
+			status: "completed" as const,
+			pid: null,
+			startedAt: new Date(index).toISOString(),
+			logPath: join(dir, `${index}.log`),
+			cwd: dir,
+		}));
+		t.mock.method(supervisor, "list", () => historical);
+
+		const response = await Promise.race([Promise.resolve(app.request("/runs")), new Promise<"timed-out">((resolve) => setTimeout(() => resolve("timed-out"), 250))]);
+		assert.notEqual(response, "timed-out");
+		assert.equal((response as Response).status, 200);
+		const second = await app.request("/runs");
+		assert.equal(second.status, 200);
+		assert.equal(listCalls, 1);
+		const body = (await second.json()) as { runs: Array<{ itemTitle?: string }> };
+		assert.equal(
+			body.runs.every((run) => !Object.hasOwn(run, "itemTitle")),
+			true,
+		);
+	});
+
+	it("GET /runs resolves identical item ids against each run's repository", async (t) => {
+		t.mock.method(console, "warn");
+		const dirA = mkdtempSync(join(tmpdir(), "repo-a-"));
+		const dirB = mkdtempSync(join(tmpdir(), "repo-b-"));
+		const { app, supervisor } = setup({
+			repos: { a: dirA, b: dirB },
+			roadmapFactory: (repoPath) => makeRoadmap([{ id: "42", title: repoPath === dirA ? "Title A" : "Title B", deps: "—", sourceRef: repoPath, status: "open" }]),
+		});
+		supervisor.start({ repo: "a", item: "42" });
+		supervisor.start({ repo: "b", item: "42" });
+
+		await app.request("/runs");
+		await tick();
+		const res = await app.request("/runs");
+		assert.equal(res.status, 200);
+		const body = (await res.json()) as { runs: Array<{ repo: string; itemTitle?: string }> };
+		assert.equal(body.runs.find((run) => run.repo === "a")?.itemTitle, "Title A");
+		assert.equal(body.runs.find((run) => run.repo === "b")?.itemTitle, "Title B");
 	});
 
 	it("GET /runs merges external summaries, stamps source, and sorts startedAt desc / id asc", async () => {

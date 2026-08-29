@@ -1,5 +1,5 @@
-import type { ContinuousMode, PersistedRun, RepoEntry, RunSummary, ShipTargetName } from "@pelaggio/server/types";
-import type { RoadmapItem, Stats } from "pelaggio";
+import type { ContinuousMode, PersistedRun, RepoEntry, RunSummary, ShipTargetName, StatsResponse } from "@pelaggio/server/types";
+import type { RoadmapItem } from "pelaggio";
 import { getToken, markTokenRejected, promptForToken } from "./token.js";
 
 export type { RepoEntry };
@@ -133,5 +133,5 @@ export const pauseRun = (id: string): Promise<PersistedRun> => fetchJson(`/runs/
 export const resumeRun = (id: string): Promise<PersistedRun> => fetchJson(`/runs/${encodeURIComponent(id)}/resume`, { method: "POST" });
 export const stopRun = (id: string): Promise<PersistedRun> => fetchJson(`/runs/${encodeURIComponent(id)}/stop`, { method: "POST" });
 export const getRoadmap = (repo: string): Promise<RoadmapResponse> => fetchJson(`/repos/${encodeURIComponent(repo)}/roadmap`);
-export const getStats = (repo: string): Promise<Stats> => fetchJson(`/repos/${encodeURIComponent(repo)}/stats`);
+export const getStats = (repo: string): Promise<StatsResponse> => fetchJson(`/repos/${encodeURIComponent(repo)}/stats`);
 export const getRepoConfig = (repo: string): Promise<RepoConfigResponse> => fetchJson(`/repos/${encodeURIComponent(repo)}/config`);

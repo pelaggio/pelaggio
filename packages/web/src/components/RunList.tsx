@@ -148,6 +148,7 @@ function GroupedTable({ runs, repoOrder }: { runs: RunSummary[]; repoOrder: stri
 
 function RunRow({ r }: { r: RunSummary }) {
 	const stateLabel = formatRunState(r.status, r.activity);
+	// `formatRunTitle` preserves continuous-mode labels while enriching item-backed rows.
 	const title = formatRunTitle(r);
 	return (
 		<tr>

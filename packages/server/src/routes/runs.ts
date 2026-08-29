@@ -2,6 +2,7 @@ import type { Context, Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { listExternalRuns } from "../external-runs.js";
 import type { Registry } from "../registry.js";
+import type { RoadmapCache } from "../roadmap-cache.js";
 import type { Supervisor } from "../supervisor.js";
 import { SupervisorError } from "../supervisor.js";
 import type { ContinuousMode, PersistedRun, RunSummary, ShipTargetName } from "../types.js";
@@ -41,10 +42,11 @@ function summarize(run: PersistedRun): RunSummary {
 export interface RunRoutesDeps {
 	supervisor: Supervisor;
 	registry: Registry;
+	roadmapCache: RoadmapCache;
 }
 
 export function registerRunRoutes(app: Hono, deps: RunRoutesDeps): void {
-	const { supervisor, registry } = deps;
+	const { supervisor, registry, roadmapCache } = deps;
 	app.post("/runs", async (c) => {
 		let body: StartBody;
 		try {
@@ -134,7 +136,15 @@ export function registerRunRoutes(app: Hono, deps: RunRoutesDeps): void {
 			supervised: filteredSupervised,
 			...(repoFilter !== undefined ? { repo: repoFilter } : {}),
 		});
-		const runs = [...filteredSupervised.map(summarize), ...external];
+		const summaries = [...filteredSupervised.map(summarize), ...external];
+		const titlesByRepo = new Map<string, ReadonlyMap<string, string>>();
+		for (const run of summaries) {
+			if (!titlesByRepo.has(run.repo)) titlesByRepo.set(run.repo, roadmapCache.getTitles(run.repo));
+		}
+		const runs = summaries.map((run) => {
+			const itemTitle = run.item === undefined ? undefined : titlesByRepo.get(run.repo)?.get(run.item);
+			return { ...run, ...(itemTitle !== undefined ? { itemTitle } : {}) };
+		});
 		runs.sort((a, b) => b.startedAt.localeCompare(a.startedAt) || a.id.localeCompare(b.id));
 		return c.json({ runs });
 	});

@@ -256,7 +256,12 @@ AUTOPILOT_SERVER_HOST=100.x.x.x               # tailnet IP (NOT 0.0.0.0 or :: â€
 AUTOPILOT_SERVER_PORT=7777
 # AUTOPILOT_SERVER_REGISTRY=/abs/path/repos.yml  # optional override; default $XDG_CONFIG_HOME/pelaggio-server/repos.yml
 CONTROL_PLANE_TOKEN=...                       # REQUIRED on every bind; bearer-gates every authority-bearing API route
+# AUTOPILOT_SERVER_ROADMAP_TITLE_TTL_MS=60000 # optional title-snapshot refresh interval
 ```
+
+Dashboard title coverage is bounded by `RoadmapSource.listItems`'s window;
+widening it is #528. Historical IDs outside that window remain valid and render
+bare rather than failing the stats or runs response.
 
 The repo registry itself lives separately at
 `~/.config/pelaggio-server/repos.yml` â€” see

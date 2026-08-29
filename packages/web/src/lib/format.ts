@@ -38,9 +38,14 @@ export function formatItemId(id: string, repo: string | null | undefined): strin
 	return `${repo}#${id}`;
 }
 
+export function formatItemLabel(id: string, repo: string | null | undefined, title?: string): string {
+	const formattedId = formatItemId(id, repo);
+	return title?.trim() ? `${formattedId} — ${title}` : formattedId;
+}
+
 /** Title for list/detail: item id when present, else continuous mode × parallel, else auto-pick. */
-export function formatRunTitle(run: { item?: string; mode?: ContinuousMode; parallel?: number; repo: string }): string {
-	if (run.item) return formatItemId(run.item, run.repo);
+export function formatRunTitle(run: { item?: string; itemTitle?: string; mode?: ContinuousMode; parallel?: number; repo: string }): string {
+	if (run.item) return formatItemLabel(run.item, run.repo, run.itemTitle);
 	if (run.mode) {
 		const p = run.parallel;
 		if (p != null && p > 1) return `${run.mode} ×${p}`;
