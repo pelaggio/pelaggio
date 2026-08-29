@@ -2,6 +2,8 @@ import type { ShipTargetName } from "pelaggio";
 
 export type RunStatus = "running" | "completed" | "failed" | "parked" | "paused" | "abandoned";
 
+export type RunSource = "supervised" | "external";
+
 export type ContinuousMode = "drain" | "watch";
 
 /** Live activity orthogonal to terminal process `RunStatus` (issue #83). */
@@ -44,6 +46,8 @@ export interface RunSummary {
 	lastCost?: number;
 	mode?: ContinuousMode;
 	activity?: RunActivity;
+	/** List-projection provenance. Not persisted on `PersistedRun`. */
+	source: RunSource;
 }
 
 export interface RepoEntry {

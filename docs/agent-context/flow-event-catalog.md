@@ -94,7 +94,7 @@ cycle-log, carries:
 }
 ```
 
-- **Ordering key is `(streamId, seq)`.** `seq` resets per writer process. Cross-stream order is
+- **Ordering key is `(streamId, seq)`.** `seq` resets per writer execution context. Cross-stream order is
   best-effort `(ts, streamId, seq)` and is explicitly **not** a total order. The server spawns an
   independent child process per run (`packages/server/src/supervisor.ts`) against the same repo's
   flow storage (each writing its own segment), so a global counter is unachievable without a
@@ -112,9 +112,9 @@ cycle-log, carries:
 ## Storage: per-writer segment files, separate from the cycle-log
 
 Flow events live under **`.dev/flow-events/`** as **one append-only segment file per writer
-process** (`<streamId>.jsonl`), *not* interleaved into `.dev/pelaggio-log.jsonl`. The logical "flow
-log" is the set of segments; the reader globs and folds them. The common CLI run is a single writer
-= a single segment.
+execution context** (`<streamId>.jsonl`), *not* interleaved into `.dev/pelaggio-log.jsonl`. The
+logical "flow log" is the set of segments; the reader globs and folds them. A CLI run has a
+lifecycle-worker segment and may have a second, execution-correlated activity segment.
 
 - **Why separate from the cycle-log.** `computeStats` (`packages/pelaggio/scripts/pelaggio/stats.ts`)
   is a *published cross-package API* — `packages/server` serves it at `/repos/:slug/stats`. Rewriting
@@ -128,9 +128,10 @@ log" is the set of segments; the reader globs and folds them. The common CLI run
   the shared decoder is optional cleanup, so "stats is a projection too" is a *reader-layer*
   aspiration, not a claim that the two readers are already one.
 - **Append integrity by single-writer-per-file — no shared-file concurrent append.** Each writer
-  *process* mints one `streamId` and appends only to **its own** segment (`<streamId>.jsonl`), with a
-  per-process atomic `seq` allocator (in-process `--parallel` workers share it via the single event
-  loop). Because no two processes ever write the same file, there is no cross-process interleaving to
+  execution context mints one `streamId` and appends only to **its own** segment
+  (`<streamId>.jsonl`), with a writer-local atomic `seq` allocator (in-process `--parallel` workers
+  share the activity writer via the single event loop). Because no two writers ever use the same
+  file, there is no cross-writer interleaving to
   prove and **no reliance on `PIPE_BUF`** (a pipe/FIFO guarantee that does not hold for `O_APPEND` on
   a regular file, and does not apply on Windows at all). A per-record size cap still applies so a
   crash mid-write truncates at most the tail record (the reader drops a malformed trailing line with
@@ -143,18 +144,44 @@ log" is the set of segments; the reader globs and folds them. The common CLI run
   delivers single-machine, current-window metrics only; do not review it as if it ships durable
   history.
 
-### Minimal vocabulary (the closed `pelaggio.*` set #170 ships)
+### Minimal vocabulary (the closed `pelaggio.*` set)
 
-#170 ships the registry and these core type constants (a closed set; growth beyond it is deferred
-and non-breaking under the tolerant reader). Emission of most of them is wired in #177 — #170 only
-needs the registry, the `cycle-completed` legacy bridge, and enough of the set to exercise the
-reader/projection:
+`PELAGGIO_EVENT_TYPES` is a closed, core-validated registry. Unknown types stay
+tolerant-with-diagnostic; new names are additive. The set currently contains:
 
-`pelaggio.cycle-completed` (legacy-bridge, emitted by the decoder), `pelaggio.became-ready`,
-`pelaggio.claimed`, `pelaggio.plan-published`, `pelaggio.plan-rejected`, `pelaggio.shakedown-fail`,
-`pelaggio.suspended`, `pelaggio.resumed`, `pelaggio.in-review`, `pelaggio.blocked-discovered`,
-`pelaggio.claim-released`, `pelaggio.shipped`, plus the observation types `pelaggio.effect-failed`,
-`pelaggio.state-observed`, and `pelaggio.state-corrected`.
+- **#170 item-flow / observation:** `pelaggio.cycle-completed` (legacy-bridge, emitted by the
+  decoder), `pelaggio.became-ready`, `pelaggio.claimed`, `pelaggio.plan-published`,
+  `pelaggio.plan-rejected`, `pelaggio.shakedown-fail`, `pelaggio.suspended`, `pelaggio.resumed`,
+  `pelaggio.in-review`, `pelaggio.blocked-discovered`, `pelaggio.claim-released`,
+  `pelaggio.shipped`, `pelaggio.effect-failed`, `pelaggio.state-observed`,
+  `pelaggio.state-corrected`.
+- **#83 process-level continuous activity** (not item-flow suspensions): `pelaggio.watch-idle`,
+  `pelaggio.watch-wake`, `pelaggio.budget-idle`, `pelaggio.budget-wake`.
+- **#40 process lifecycle** (every CLI `orchestrate()` invocation, not only continuous runs):
+  `pelaggio.run-started`, `pelaggio.run-heartbeat`, `pelaggio.run-finished`.
+
+Emission of most #170 item-flow names is still wired in #177. #83 and #40 emit from the
+orchestrator / `orchestrate()` wrapper.
+
+### Process lifecycle (#40)
+
+These are process-level events (same class as `pelaggio.watch-idle`), not item-flow transitions.
+They live in the existing per-writer segments. `orchestrate()` mints or reuses the correlated
+`executionId` (the daemon env ULID when valid). A lifecycle worker owns one segment for
+start/heartbeat/finish; `runOrchestrator` may use another segment with the same execution identity
+for continuous activity. Each segment still has exactly one writer. `revise-cli.ts` does not emit
+process lifecycle (it calls `runOrchestrator` in-process, not `orchestrate()`).
+
+| Type | Payload (beyond the envelope) | Role |
+|---|---|---|
+| `pelaggio.run-started` | `heartbeatMs` (positive integer, 1000..300000); `mode?: "drain" \| "watch"` (omit for ordinary item/resume/auto-pick); `resumed?: true` (present only on `--resume`) | Launch identity. Envelope `itemId` is `--item` / `--resume` or null. Envelope `executionId` is the run identity. |
+| `pelaggio.run-heartbeat` | none | Proves the writer process is alive and advances `seq`/`ts`. Default interval 15s, advertised on `run-started` so readers trust the event, not a copied constant. The lifecycle worker remains schedulable during synchronous main-thread steps. |
+| `pelaggio.run-finished` | `outcome: "completed" \| "failed" \| "parked"`; `exitCode` (safe integer) | Terminal fact. Always wins over freshness. |
+
+Do not invent `abandoned` as a finish outcome: a missing finish plus a stale last-event `ts`
+projects `abandoned` on read. Freshness is **non-authoritative** — a crash fallback, never a
+substitute for `run-finished`. SIGINT's 2s `process.exit(130)` path (and a second Ctrl-C) can
+skip finish; that is the heartbeat fallback. Do not hook `process.on("exit")` to write finish.
 
 ## The reader: a dual-format decoder (prevents silent history erasure)
 
@@ -359,7 +386,7 @@ into the substrate item.**
 - `type` is namespaced: `pelaggio.*` is closed/core-validated; consumer events carry a vendor prefix
   and register a schema. The reader is tolerant-with-diagnostic, never silent, and back-compatibly
   reads untyped legacy cycle records.
-- Flow events live under `.dev/flow-events/` as one append-only segment per writer process
+- Flow events live under `.dev/flow-events/` as one append-only segment per writer execution context
   (`<streamId>.jsonl`, single-writer-per-file — no shared-file concurrent append), separate from the
   cycle-log, sharing one envelope + reader library; they are local-only telemetry; durable/portable
   memory is write-back (#172), and raw events are never fanned into the tracker.

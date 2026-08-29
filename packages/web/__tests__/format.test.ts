@@ -87,6 +87,9 @@ describe("formatRunTitle", () => {
 		assert.equal(formatRunTitle({ mode: "drain", parallel: 1, repo: "pelaggio" }), "drain");
 		assert.equal(formatRunTitle({ mode: "drain", repo: "pelaggio" }), "drain");
 	});
+	it("uses auto-pick when item and mode are both absent", () => {
+		assert.equal(formatRunTitle({ repo: "pelaggio" }), "auto-pick");
+	});
 });
 
 describe("formatRunState", () => {

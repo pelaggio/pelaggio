@@ -48,7 +48,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function projectActivity(event: Record<string, unknown>): RunActivity | null {
+export function projectRunActivity(event: Record<string, unknown>): RunActivity | null {
 	const type = event.type;
 	if (type === "pelaggio.watch-idle") {
 		const probeAt = event.probeAt;
@@ -101,7 +101,7 @@ export function createFlowEventTailer(deps: FlowEventTailerDeps): FlowEventTaile
 		if (!isRecord(parsed) || parsed.v !== 1 || typeof parsed.type !== "string") return;
 		if (!LIFECYCLE_TYPES.has(parsed.type)) return;
 		if (parsed.executionId !== deps.executionId) return;
-		const activity = projectActivity(parsed);
+		const activity = projectRunActivity(parsed);
 		if (activity) emit(activity);
 	};
 

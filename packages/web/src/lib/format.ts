@@ -38,13 +38,15 @@ export function formatItemId(id: string, repo: string | null | undefined): strin
 	return `${repo}#${id}`;
 }
 
-/** Title for list/detail: item id when present, else continuous mode × parallel. */
+/** Title for list/detail: item id when present, else continuous mode × parallel, else auto-pick. */
 export function formatRunTitle(run: { item?: string; mode?: ContinuousMode; parallel?: number; repo: string }): string {
 	if (run.item) return formatItemId(run.item, run.repo);
-	const mode = run.mode ?? "drain";
-	const p = run.parallel;
-	if (p != null && p > 1) return `${mode} ×${p}`;
-	return mode;
+	if (run.mode) {
+		const p = run.parallel;
+		if (p != null && p > 1) return `${run.mode} ×${p}`;
+		return run.mode;
+	}
+	return "auto-pick";
 }
 
 /**

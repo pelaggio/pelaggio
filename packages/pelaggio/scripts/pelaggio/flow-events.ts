@@ -25,6 +25,9 @@ export const PELAGGIO_EVENT_TYPES = [
 	"pelaggio.watch-wake",
 	"pelaggio.budget-idle",
 	"pelaggio.budget-wake",
+	"pelaggio.run-started",
+	"pelaggio.run-heartbeat",
+	"pelaggio.run-finished",
 ] as const satisfies readonly PelaggioEventType[];
 
 const EVENT_TYPE_COVERAGE: Record<PelaggioEventType, true> = Object.fromEntries(PELAGGIO_EVENT_TYPES.map((type) => [type, true])) as Record<PelaggioEventType, true>;
@@ -84,7 +87,27 @@ function decodeV1(value: unknown): FlowEvent | undefined {
 	)
 		return undefined;
 	if (value.type === "pelaggio.cycle-completed" && !isCycleFields(value)) return undefined;
+	if (value.type === "pelaggio.run-started" && !isRunStartedPayload(value)) return undefined;
+	if (value.type === "pelaggio.run-finished" && !isRunFinishedPayload(value)) return undefined;
 	return value as FlowEvent;
+}
+
+const RUN_MODES = new Set(["drain", "watch"]);
+const RUN_OUTCOMES = new Set(["completed", "failed", "parked"]);
+const MIN_HEARTBEAT_MS = 1_000;
+const MAX_HEARTBEAT_MS = 300_000;
+
+function isRunStartedPayload(value: UnknownRecord): boolean {
+	if (typeof value.heartbeatMs !== "number" || !Number.isInteger(value.heartbeatMs) || value.heartbeatMs < MIN_HEARTBEAT_MS || value.heartbeatMs > MAX_HEARTBEAT_MS) {
+		return false;
+	}
+	if (value.mode !== undefined && (typeof value.mode !== "string" || !RUN_MODES.has(value.mode))) return false;
+	if (value.resumed !== undefined && value.resumed !== true) return false;
+	return true;
+}
+
+function isRunFinishedPayload(value: UnknownRecord): boolean {
+	return typeof value.outcome === "string" && RUN_OUTCOMES.has(value.outcome) && Number.isSafeInteger(value.exitCode);
 }
 
 export interface CreateEventWriterOptions {

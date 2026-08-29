@@ -1,5 +1,7 @@
 import type { Context, Hono } from "hono";
 import { streamSSE } from "hono/streaming";
+import { listExternalRuns } from "../external-runs.js";
+import type { Registry } from "../registry.js";
 import type { Supervisor } from "../supervisor.js";
 import { SupervisorError } from "../supervisor.js";
 import type { ContinuousMode, PersistedRun, RunSummary, ShipTargetName } from "../types.js";
@@ -32,10 +34,17 @@ function summarize(run: PersistedRun): RunSummary {
 		...(run.endedAt ? { endedAt: run.endedAt } : {}),
 		...(run.mode ? { mode: run.mode } : {}),
 		...(run.activity ? { activity: run.activity } : {}),
+		source: "supervised",
 	};
 }
 
-export function registerRunRoutes(app: Hono, supervisor: Supervisor): void {
+export interface RunRoutesDeps {
+	supervisor: Supervisor;
+	registry: Registry;
+}
+
+export function registerRunRoutes(app: Hono, deps: RunRoutesDeps): void {
+	const { supervisor, registry } = deps;
 	app.post("/runs", async (c) => {
 		let body: StartBody;
 		try {
@@ -118,9 +127,16 @@ export function registerRunRoutes(app: Hono, supervisor: Supervisor): void {
 
 	app.get("/runs", (c) => {
 		const repoFilter = c.req.query("repo");
-		const runs = supervisor.list();
-		const filtered = repoFilter ? runs.filter((r) => r.repo === repoFilter) : runs;
-		return c.json({ runs: filtered.map(summarize) });
+		const supervised = supervisor.list();
+		const filteredSupervised = repoFilter ? supervised.filter((r) => r.repo === repoFilter) : supervised;
+		const external = listExternalRuns({
+			registry,
+			supervised: filteredSupervised,
+			...(repoFilter !== undefined ? { repo: repoFilter } : {}),
+		});
+		const runs = [...filteredSupervised.map(summarize), ...external];
+		runs.sort((a, b) => b.startedAt.localeCompare(a.startedAt) || a.id.localeCompare(b.id));
+		return c.json({ runs });
 	});
 
 	app.get("/runs/:id", (c) => {

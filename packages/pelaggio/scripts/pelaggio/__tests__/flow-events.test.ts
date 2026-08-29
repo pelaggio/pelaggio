@@ -148,6 +148,48 @@ describe("flow event writer", () => {
 			[...types],
 		);
 	});
+
+	it("round-trips process-level run lifecycle types", () => {
+		const root = tempRoot();
+		let index = 0;
+		const writer = createEventWriter({ root, idFactory: () => IDS[index++], now: () => new Date("2026-07-13T12:00:00.000Z") });
+		const start = writer.append({ type: "pelaggio.run-started", heartbeatMs: 15_000, mode: "drain", resumed: true, itemId: "40" });
+		const beat = writer.append({ type: "pelaggio.run-heartbeat" });
+		const finish = writer.append({ type: "pelaggio.run-finished", outcome: "parked", exitCode: 75 });
+		assert.equal(start.type, "pelaggio.run-started");
+		if (start.type === "pelaggio.run-started") {
+			assert.equal(start.heartbeatMs, 15_000);
+			assert.equal(start.mode, "drain");
+			assert.equal(start.resumed, true);
+		}
+		assert.equal(start.itemId, "40");
+		assert.equal(beat.type, "pelaggio.run-heartbeat");
+		assert.equal(finish.type, "pelaggio.run-finished");
+		if (finish.type === "pelaggio.run-finished") {
+			assert.equal(finish.outcome, "parked");
+			assert.equal(finish.exitCode, 75);
+		}
+		const read = readEventLog({ root, cycleLogPath: null });
+		assert.deepEqual(
+			read.events.map((e) => e.type),
+			["pelaggio.run-started", "pelaggio.run-heartbeat", "pelaggio.run-finished"],
+		);
+	});
+
+	it("rejects invalid run-lifecycle payloads as malformed", () => {
+		const root = tempRoot();
+		let index = 0;
+		const writer = createEventWriter({ root, idFactory: () => IDS[index++] });
+		assert.throws(() => writer.append({ type: "pelaggio.run-started", heartbeatMs: 999 }), /Invalid flow event/);
+		assert.throws(() => writer.append({ type: "pelaggio.run-started", heartbeatMs: 300_001 }), /Invalid flow event/);
+		assert.throws(() => writer.append({ type: "pelaggio.run-started", heartbeatMs: 15_000.5 } as FlowEventInput), /Invalid flow event/);
+		assert.throws(() => writer.append({ type: "pelaggio.run-started", heartbeatMs: 15_000, mode: "forever" } as unknown as FlowEventInput), /Invalid flow event/);
+		assert.throws(() => writer.append({ type: "pelaggio.run-started", heartbeatMs: 15_000, resumed: false } as unknown as FlowEventInput), /Invalid flow event/);
+		assert.throws(() => writer.append({ type: "pelaggio.run-finished", outcome: "abandoned", exitCode: 1 } as unknown as FlowEventInput), /Invalid flow event/);
+		assert.throws(() => writer.append({ type: "pelaggio.run-finished", outcome: "failed", exitCode: 1.5 } as FlowEventInput), /Invalid flow event/);
+		const recovered = writer.append({ type: "pelaggio.run-heartbeat" });
+		assert.equal(recovered.seq, 1);
+	});
 });
 
 describe("dual-format reader", () => {
@@ -228,6 +270,8 @@ describe("dual-format reader", () => {
 		const records = PELAGGIO_EVENT_TYPES.map((type, index) => {
 			const value = envelope(type, { eventId: IDS[index], seq: index + 1 });
 			if (type === "pelaggio.cycle-completed") Object.assign(value, { cycle: 1, item: "170", quick: false, steps: [], total_cost: 0, verdict: null, completed: true, error: null });
+			if (type === "pelaggio.run-started") Object.assign(value, { heartbeatMs: 15_000, mode: "watch" });
+			if (type === "pelaggio.run-finished") Object.assign(value, { outcome: "completed", exitCode: 0 });
 			return JSON.stringify(value);
 		});
 		writeFileSync(path, `${records.join("\n")}\n`);

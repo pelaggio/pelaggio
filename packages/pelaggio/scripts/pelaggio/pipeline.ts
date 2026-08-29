@@ -129,6 +129,7 @@ import {
 } from "./revise-sweep.js";
 import { defaultGhRun, type GhRunner } from "./roadmap/github-issues.js";
 import { getRoadmapSource, type RoadmapSource } from "./roadmap/index.js";
+import { RUN_HEARTBEAT_MS, startRunLifecycle } from "./run-lifecycle.js";
 import { cleanupShipBodyFile, parseShipDecisionEffect, shipBodyFile } from "./ship/decision.js";
 import { commitStrayBookkeeping, getShipTarget, isAutonomousRemotePush, isShipTargetName, runShipBookkeeping as runShipBookkeepingDefault, SHIP_TARGET_NAMES } from "./ship/index.js";
 import type { PrShipGateBinding } from "./ship/pr-effects.js";
@@ -141,6 +142,7 @@ import {
 	type CycleResult,
 	type CycleStatus,
 	type CycleVersionProvenance,
+	type EventWriter,
 	type ExecutionReceiptDescriptor,
 	type Flags,
 	type ParkSignal,
@@ -2603,6 +2605,12 @@ export interface OrchestratorDeps {
 	sleep?: (ms: number) => Promise<void>;
 	/** Clock for day-budget accounting (defaults to `Date.now`). */
 	now?: () => number;
+	/**
+	 * Shared activity-event writer for this process. CLI `orchestrate()` injects a writer
+	 * correlated with the lifecycle worker by executionId; fallback creation stays continuous-only so ordinary
+	 * `runOrchestrator` tests do not write `.dev/flow-events/` under `REPO`.
+	 */
+	eventWriter?: EventWriter;
 	/** Roadmap + flow policy used by the default free queue probe. */
 	roadmap?: RoadmapSource;
 	flowPolicy?: FlowPolicy;
@@ -2704,6 +2712,19 @@ const ULID_ENV_PATTERN = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 /** True when `value` is a ULID-shaped string (flow writer correlation env). */
 function isUlidEnv(value: string | undefined): value is string {
 	return typeof value === "string" && ULID_ENV_PATTERN.test(value);
+}
+
+function eventWriterCorrelation(): { streamId?: string; executionId?: string } {
+	return {
+		...(isUlidEnv(process.env.PELAGGIO_EVENT_STREAM_ID) ? { streamId: process.env.PELAGGIO_EVENT_STREAM_ID } : {}),
+		...(isUlidEnv(process.env.PELAGGIO_EXECUTION_ID) ? { executionId: process.env.PELAGGIO_EXECUTION_ID } : {}),
+	};
+}
+
+function finishOutcome(exitCode: number): { outcome: "completed" | "failed" | "parked"; exitCode: number } {
+	if (exitCode === 0) return { outcome: "completed", exitCode: 0 };
+	if (exitCode === PARKED_EXIT_CODE) return { outcome: "parked", exitCode: PARKED_EXIT_CODE };
+	return { outcome: "failed", exitCode };
 }
 
 async function awaitParkReset(parkSignal: ParkSignal, opts: { maxWaitMs: number; itemsLabel?: string }): Promise<"resumed" | "handback"> {
@@ -3020,16 +3041,12 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		let continuousIdle: "none" | "watch-idle" | "budget-idle" = "none";
 		// Emit at most one suspended per park interval (peers may all observe park).
 		let continuousSuspendedEmitted = false;
-		// Correlate supervised continuous runs with `.dev/flow-events/<streamId>.jsonl`.
-		const continuousWriter = continuous
-			? createEventWriter({
-					...(isUlidEnv(process.env.PELAGGIO_EVENT_STREAM_ID) ? { streamId: process.env.PELAGGIO_EVENT_STREAM_ID } : {}),
-					...(isUlidEnv(process.env.PELAGGIO_EXECUTION_ID) ? { executionId: process.env.PELAGGIO_EXECUTION_ID } : {}),
-				})
-			: undefined;
-		const emitContinuous = (input: Parameters<NonNullable<typeof continuousWriter>["append"]>[0]): void => {
+		// Correlate activity with this process's lifecycle executionId. CLI `orchestrate()`
+		// injects the activity writer; fallback stays continuous-only.
+		const writer = deps.eventWriter ?? (continuous ? createEventWriter(eventWriterCorrelation()) : undefined);
+		const emitContinuous = (input: Parameters<NonNullable<typeof writer>["append"]>[0]): void => {
 			try {
-				continuousWriter?.append(input);
+				writer?.append(input);
 			} catch (e) {
 				const msg = e instanceof Error ? e.message : String(e);
 				console.log(`${A.dim(`flow-event emit failed: ${msg}`)}`);
@@ -4266,6 +4283,16 @@ export async function orchestrate(flags: Flags): Promise<void> {
 		}, 2_000).unref();
 	});
 
-	const { exitCode } = await runOrchestrator(flags, {}, statusBar, controller.signal);
-	process.exit(exitCode);
+	const writer = createEventWriter(eventWriterCorrelation());
+	const lifecycle = startRunLifecycle({ flags, executionId: writer.executionId, heartbeatMs: RUN_HEARTBEAT_MS });
+	try {
+		const { exitCode } = await runOrchestrator(flags, { eventWriter: writer }, statusBar, controller.signal);
+		lifecycle.finish(finishOutcome(exitCode));
+		lifecycle.stop();
+		process.exit(exitCode);
+	} catch (error) {
+		lifecycle.finish({ outcome: "failed", exitCode: 1 });
+		lifecycle.stop();
+		throw error;
+	}
 }
