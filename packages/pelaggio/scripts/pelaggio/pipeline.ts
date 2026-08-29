@@ -113,6 +113,7 @@ import { prFindingDispositionsDir, writePrFindingDispositionRecord } from "./rev
 import { runReviewLoop } from "./review/loop.js";
 import { type ReviewRecord, renderReviewRecord, writeReviewRecord } from "./review/record.js";
 import { cleanupAuthoringReviewSeatsForSha, isAuthoringReviewSeatPath, prepareAuthoringReviewSeat } from "./review/seats.js";
+import { archiveAppliedReviewFindings, reviewFindingsDigest } from "./review-findings-archive.js";
 import { claimReviewRequest, completeReviewRequest, listReviewRequests, type ReviewRequestRecord, reclaimStaleReviewClaims, reviewDrainLockPath, reviewRequestsDir, unclaimReviewRequest } from "./review-request-queue.js";
 import { cleanupReviewHead, findReviewCandidates, isReviewHeadPath, postLocalModeWorkflowComment, postReviewStatus, prepareReviewHead, type ReviewCandidate, reviewStatusForSha, upsertReviewComment } from "./review-sweep.js";
 import {
@@ -172,6 +173,29 @@ type StepEffects = Effect[] | ((result: StepResult) => Effect[]);
 function appendResultText(text: string, appendText: string): string {
 	if (text.trim() === "") return appendText;
 	return `${text}\n${appendText}`;
+}
+
+export function archiveReviewFindingsAfterImplement(
+	flags: Flags,
+	mainRepo: string,
+	itemId: string,
+	findingsSha256: string,
+	appliedOnSha: string,
+	deps: { archive?: typeof archiveAppliedReviewFindings } = {},
+): { ok: true } | { ok: false; path: string; detail: string } {
+	const findingsPath = flags["review-findings"];
+	if (!findingsPath) return { ok: true };
+
+	const ownedFindingsPath = reviseFindingsPath(mainRepo, itemId);
+	if (resolve(findingsPath) === ownedFindingsPath) {
+		try {
+			(deps.archive ?? archiveAppliedReviewFindings)(mainRepo, itemId, findingsSha256, appliedOnSha, ownedFindingsPath);
+		} catch (err) {
+			return { ok: false, path: ownedFindingsPath, detail: err instanceof Error ? err.message : String(err) };
+		}
+	}
+	delete flags["review-findings"];
+	return { ok: true };
 }
 
 const TRANSIENT_MAX_ATTEMPTS = 3;
@@ -250,6 +274,9 @@ export interface PipelineDeps {
 	/** Test seam: per-invocation cold seats around pre-flight. */
 	prepareAuthoringReviewSeat?: typeof prepareAuthoringReviewSeat;
 	cleanupAuthoringReviewSeatsForSha?: typeof cleanupAuthoringReviewSeatsForSha;
+	/** Mark a one-shot findings task consumed after implement succeeds. The orchestrator uses
+	 *  this to retain the revision lease if a later step parks without re-injecting findings. */
+	onReviewFindingsConsumed?: (itemId: string) => void;
 }
 
 /** Upper bound for one deterministic ratchet run (a full-monorepo tsc pass fits comfortably). */
@@ -1529,6 +1556,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		// input cannot be read: continuing would silently ask the worker to revise without its task.
 		let reviewNote = "";
 		const findingsPath = flags["review-findings"];
+		let findingsSha256: string | undefined;
 		// Any DEFINED value is a findings-driven resume — `--review-findings ""` must not
 		// slip past a truthiness check into the generic plan prompt.
 		if (findingsPath !== undefined && findingsPath.trim() === "") {
@@ -1536,7 +1564,9 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		}
 		if (findingsPath) {
 			try {
-				reviewNote = reviewFindingsPreamble(readFileSync(findingsPath, "utf-8"));
+				const findingsBytes = readFileSync(findingsPath);
+				findingsSha256 = reviewFindingsDigest(findingsBytes);
+				reviewNote = reviewFindingsPreamble(findingsBytes.toString("utf-8"));
 			} catch (err) {
 				const detail = err instanceof Error ? err.message : String(err);
 				return finish({ itemId, completed: false, cost, error: `could not read review findings ${JSON.stringify(findingsPath)}: ${detail}` });
@@ -1644,6 +1674,48 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			executionOverride: implementationAuthor,
 		});
 		if (outcome.kind === "terminal") return outcome.cycleResult;
+		if (findingsPath && findingsSha256) {
+			// Archive the canonical findings only after the implement checkpoint commits.
+			// A failed or parked implement returns above and leaves the source in place for retry;
+			// an operator-supplied path remains caller-owned.
+			try {
+				const pending = execSync("git status --porcelain", { cwd: worktree!, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+				if (pending) {
+					return finish({
+						itemId,
+						completed: false,
+						cost,
+						error: "review findings were applied but the implementation checkpoint did not commit cleanly; findings preserved for retry",
+					});
+				}
+			} catch (err) {
+				return finish({
+					itemId,
+					completed: false,
+					cost,
+					error: `review findings were applied but the implementation checkpoint could not be verified: ${err instanceof Error ? err.message : String(err)}; findings preserved for retry`,
+				});
+			}
+			const appliedOnSha = getHeadSha(worktree!);
+			if (!appliedOnSha) {
+				return finish({
+					itemId,
+					completed: false,
+					cost,
+					error: "review findings were applied but the revision HEAD could not be read; findings preserved for a fail-closed retry",
+				});
+			}
+			const archived = archiveReviewFindingsAfterImplement(flags, mainRepo, itemId!, findingsSha256, appliedOnSha);
+			if (!archived.ok) {
+				return finish({
+					itemId,
+					completed: false,
+					cost,
+					error: `review findings were applied but archival failed for ${JSON.stringify(archived.path)}: ${archived.detail}; implementation checkpoint and findings were preserved`,
+				});
+			}
+			deps.onReviewFindingsConsumed?.(itemId!);
+		}
 		recordArtifactAuthor(assignment, "implementation", implementationAuthor);
 	}
 
@@ -2796,6 +2868,14 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 	const _runPipeline = deps.runPipeline ?? runPipeline;
 	const _detectResumeStep = deps.detectResumeStep ?? detectResumeStep;
 	const _resolveWorktree = deps.resolveWorktree ?? resolveWorktree;
+	// Preserve the entry value after runPipeline consumes the one-shot flag. Operator-revision
+	// auto-resumes still need the revision lease, and a park handback must name the durable input
+	// when implement has not completed yet.
+	const entryReviewFindingsPath = flags["review-findings"];
+	const consumedReviewFindingsItems = new Set<string>();
+	const reviewFindingsLifecycleDeps: PipelineDeps = {
+		onReviewFindingsConsumed: (itemId) => consumedReviewFindingsItems.add(itemId.toUpperCase()),
+	};
 
 	const liveStatus = new LiveStatus(statusBar);
 	const parkSignal: ParkSignal = { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" };
@@ -3268,6 +3348,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					},
 					parkSignal,
 					flags,
+					reviewFindingsLifecycleDeps,
 				);
 
 				// Sustained-outage detection (#128): a lone "transient sdk error" cycle stays
@@ -3401,12 +3482,13 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		// (it used to be declared only inside the later campaign `if (parkSignal.parked)` block).
 		const resumeOne = async (id: string, i: number): Promise<CycleResult> => {
 			const wt = noWorktree ? REPO : _resolveWorktree(id);
-			// Findings survival across park→auto-resume (issue #76): if the sweep-written
+			// Findings survival across an implement park (issue #76): if the sweep-written
 			// findings file still exists on disk, re-inject it before choosing the restart step so
 			// the resumed item routes through implement and still fixes the specific blockers.
+			// Successful implement consumes the flag and archives this local file, so a park in a
+			// later step follows the normal logged-step resume path instead of reapplying findings.
 			// Inert for non-revision items — no findings file is present, so `flags` passes
-			// through unchanged. Operator-revision always passes the absolute path, so
-			// re-injection is the flag itself.
+			// through unchanged.
 			let resumeFlags = flags;
 			if (!flags["review-findings"]) {
 				const fp = reviseFindingsPath(REPO, id);
@@ -3415,7 +3497,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			// A findings-driven resume is a revision attempt in the item's claim worktree, so it
 			// reacquires the execution lease released by the parked attempt (#507 round 3).
 			let releaseLease: (() => Promise<void>) | undefined;
-			if (resumeFlags["review-findings"]) {
+			if (resumeFlags["review-findings"] || consumedReviewFindingsItems.has(id.toUpperCase()) || orchestratorMode === "operator-revision") {
 				const leased = await acquireRevisionResumeLease(id);
 				if (!leased.ok) {
 					console.log(`${A.red("✗")} resume ${id} — ${leased.refusal}`);
@@ -3456,6 +3538,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					},
 					parkSignal,
 					resumeFlags,
+					reviewFindingsLifecycleDeps,
 				);
 				await notify(r, resumeLogPath ?? LOG_PATH);
 				st.status = resultStatus(r);
@@ -3846,22 +3929,35 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			const id = flags.resume.toUpperCase();
 			const worktree = noWorktree ? REPO : _resolveWorktree(id);
 			const v = flags.verbose;
+			if (flags.from !== undefined && (!isPipelineStep(flags.from) || flags.from === "pick")) {
+				console.error(`invalid --from ${JSON.stringify(flags.from)}; valid: ${STEPS.filter((s) => s !== "pick").join(", ")}`);
+				return { exitCode: 2, results };
+			}
+			if (flags["review-findings"] !== undefined && flags.from !== undefined && flags.from !== "implement") {
+				console.error(`--review-findings requires --from implement (got ${JSON.stringify(flags.from)}): the findings are read and validated by the implement step`);
+				return { exitCode: 2, results };
+			}
+			if (flags["review-findings"] !== undefined) {
+				const findingsPath = flags["review-findings"];
+				if (findingsPath.trim() === "") {
+					console.error("empty --review-findings path — refusing a findings-driven resume without findings");
+					return { exitCode: 1, results };
+				}
+				try {
+					readFileSync(findingsPath);
+				} catch (err) {
+					if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+						console.error(`findings file not found; refusing a findings-driven resume without findings: ${JSON.stringify(findingsPath)}`);
+					} else {
+						const detail = err instanceof Error ? err.message : String(err);
+						console.error(`could not read review findings ${JSON.stringify(findingsPath)}: ${detail}`);
+					}
+					return { exitCode: 1, results };
+				}
+			}
 
 			let startFrom: Step;
 			if (flags.from !== undefined) {
-				// "pick" is excluded: resume mode starts with the worktree already resolved,
-				// so the pick step (worktree/branch creation) never executes — accepting it
-				// would silently start at plan instead of honoring the override.
-				if (!isPipelineStep(flags.from) || flags.from === "pick") {
-					console.error(`invalid --from ${JSON.stringify(flags.from)}; valid: ${STEPS.filter((s) => s !== "pick").join(", ")}`);
-					return { exitCode: 2, results };
-				}
-				// A findings-driven resume must run implement, where the findings file is read
-				// and validated; any later --from would silently skip the revision task.
-				if (flags["review-findings"] !== undefined && flags.from !== "implement") {
-					console.error(`--review-findings requires --from implement (got ${JSON.stringify(flags.from)}): the findings are read and validated by the implement step`);
-					return { exitCode: 2, results };
-				}
 				startFrom = flags.from;
 				console.log(`${A.bold("resume")} ${id} from ${A.bold(startFrom)} ${A.dim("(--from override)")}`);
 			} else if (flags["review-findings"] !== undefined) {
@@ -3880,7 +3976,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			// loop's `resumeOne` reacquires per attempt. Fail-soft: refuse naming the holder,
 			// never proceed unleased.
 			let releaseResumeLease: (() => Promise<void>) | undefined;
-			if (flags["review-findings"] !== undefined || orchestratorMode === "operator-revision") {
+			if (flags["review-findings"] !== undefined || consumedReviewFindingsItems.has(id) || orchestratorMode === "operator-revision") {
 				const leased = await acquireRevisionResumeLease(id);
 				if (!leased.ok) {
 					console.error(leased.refusal);
@@ -3916,6 +4012,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					},
 					parkSignal,
 					flags,
+					reviewFindingsLifecycleDeps,
 				);
 			} finally {
 				await releaseResumeLease?.();
@@ -3936,11 +4033,14 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			// out into pick, the revise sweep, or campaign-start drain. Ordinary `--resume`
 			// (mode default `"standard"`) still returns after one attempt.
 			if (orchestratorMode === "operator-revision" && parkSignal.parked) {
-				const findingsPath = flags["review-findings"];
-				// The advertised continuation is itself a LEASED resume: a findings-driven
-				// `--resume` re-enters this branch, which reacquires the execution lease before
-				// touching the worktree (#507 round 3) — no unleased command is advertised.
+				// The advertised continuation is itself LEASED: a findings-driven resume carries
+				// the flag; operator-revision mode keeps consumed later-step continuations leased.
 				const printOperatorHandback = (): void => {
+					// Re-evaluate after every resume round: implement may have consumed and archived
+					// the canonical file before a later step parked again.
+					const candidate = consumedReviewFindingsItems.has(id) ? undefined : (flags["review-findings"] ?? entryReviewFindingsPath);
+					const canonicalPath = reviseFindingsPath(REPO, id);
+					const findingsPath = candidate && (resolve(candidate) !== canonicalPath || existsSync(canonicalPath)) ? candidate : undefined;
 					const hint = findingsPath ? `pnpm pelaggio --resume ${id} --review-findings ${findingsPath}` : formatResumeHint([id]);
 					console.log(`  Parked: ${id}`);
 					console.log(`  Resume: ${A.bold(hint)}`);
@@ -4089,6 +4189,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						},
 						parkSignal,
 						{ ...flags, "review-findings": findingsPath }, // per-item findings injection
+						reviewFindingsLifecycleDeps,
 					);
 					totalSpent += r.cost;
 					dayBudgetTracker.add(r.cost);

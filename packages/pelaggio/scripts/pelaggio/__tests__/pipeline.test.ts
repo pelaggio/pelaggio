@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it, mock } from "node:test";
@@ -8,9 +8,10 @@ import { REVIEW_CONFIG, WORKTREE_PREFIX } from "../config.js";
 import { appendReviewEscalation, type ReviewEscalationWriteInput, resolveDecision, reviewEscalationCommands, reviewEscalationId } from "../decisions.js";
 import { dispatchStepEffects, EffectsManifestError, writeEffectsManifest } from "../effects.js";
 import { FifoPolicy } from "../flow-policy.js";
-import { defaultTypecheckRatchet, type RunStepFn, runOrchestrator, runPipeline } from "../pipeline.js";
+import { archiveReviewFindingsAfterImplement, defaultTypecheckRatchet, type RunStepFn, runOrchestrator, runPipeline } from "../pipeline.js";
 import type { PrReviewGateResult, RunPrReviewGateOptions } from "../pr-review-cli.js";
 import { OPERATOR_ATTESTED_TTY_SUPPRESSION } from "../provider-routing.js";
+import { appliedReviewFindingsArchivePath, reviewFindingsDigest } from "../review-findings-archive.js";
 import { shipBodyFile } from "../ship/decision.js";
 import type { ShipBookkeepingResult } from "../ship/index.js";
 import { getShipTarget } from "../ship/index.js";
@@ -90,6 +91,58 @@ const noopBookkeeping = async (): Promise<ShipBookkeepingResult> => ({
 	cleanedUp: true,
 	warnings: [],
 	ok: true,
+});
+
+describe("archiveReviewFindingsAfterImplement", () => {
+	it("moves the canonical findings file to the applied-findings archive", () => {
+		const repo = mkdtempSync(join(tmpdir(), "pelaggio-findings-test-"));
+		const path = join(repo, ".dev", "review-findings-tool-99.md");
+		mkdirSync(join(repo, ".dev"));
+		writeFileSync(path, "findings\n");
+		const flags: Flags = { ...baseFlags, "review-findings": path };
+		const digest = reviewFindingsDigest(readFileSync(path));
+		const appliedOnSha = "a".repeat(40);
+		const archivePath = appliedReviewFindingsArchivePath(repo, "TOOL-99", digest, appliedOnSha);
+
+		assert.deepEqual(archiveReviewFindingsAfterImplement(flags, repo, "TOOL-99", digest, appliedOnSha), { ok: true });
+		assert.equal(existsSync(path), false);
+		assert.equal(readFileSync(archivePath, "utf-8"), "findings\n");
+		assert.equal(flags["review-findings"], undefined);
+		rmSync(repo, { recursive: true, force: true });
+	});
+
+	it("consumes caller-owned input without deleting it", () => {
+		const repo = mkdtempSync(join(tmpdir(), "pelaggio-findings-test-"));
+		const path = join(repo, "operator-notes.md");
+		writeFileSync(path, "findings\n");
+		const flags: Flags = { ...baseFlags, "review-findings": path };
+		const digest = reviewFindingsDigest(readFileSync(path));
+
+		assert.deepEqual(archiveReviewFindingsAfterImplement(flags, repo, "TOOL-99", digest, "b".repeat(40)), { ok: true });
+		assert.equal(existsSync(path), true);
+		assert.equal(flags["review-findings"], undefined);
+		rmSync(repo, { recursive: true, force: true });
+	});
+
+	it("fails closed and retains the canonical file when archival fails", () => {
+		const repo = mkdtempSync(join(tmpdir(), "pelaggio-findings-test-"));
+		const path = join(repo, ".dev", "review-findings-tool-99.md");
+		mkdirSync(join(repo, ".dev"));
+		writeFileSync(path, "findings\n");
+		const flags: Flags = { ...baseFlags, "review-findings": path };
+		const digest = reviewFindingsDigest(readFileSync(path));
+
+		const result = archiveReviewFindingsAfterImplement(flags, repo, "TOOL-99", digest, "c".repeat(40), {
+			archive: () => {
+				throw new Error("permission denied");
+			},
+		});
+
+		assert.deepEqual(result, { ok: false, path, detail: "permission denied" });
+		assert.equal(existsSync(path), true);
+		assert.equal(flags["review-findings"], path);
+		rmSync(repo, { recursive: true, force: true });
+	});
 });
 
 describe("runPipeline — pick divergence gate (#332)", () => {
@@ -310,6 +363,88 @@ describe("runPipeline — happy path", () => {
 });
 
 describe("runPipeline — review findings revision prompt", () => {
+	it("archives the canonical findings file after implement succeeds, before a later step can park", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const findingsPath = join(worktree, ".dev", "review-findings-tool-99.md");
+		mkdirSync(join(worktree, ".dev"), { recursive: true });
+		writeFileSync(findingsPath, "- blocker: fix the implementation\n");
+		const findingsSha256 = reviewFindingsDigest(readFileSync(findingsPath));
+		const flags: Flags = { ...baseFlags, "review-findings": findingsPath };
+		const { runStep } = createMockRunStep(
+			{
+				implement: { ok: true, writes: { "implemented.txt": "fixed\n" } },
+				"shakedown-code": { ok: false, subtype: "blocked", text: "stop after implement" },
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement" }, parkSignal, flags, {
+			runStep,
+			mainRepo: worktree,
+			listWorktrees: () => [],
+			appendLog: () => {},
+			roadmap: makeMockRoadmap(),
+		});
+
+		assert.equal(result.completed, false, "the later blocked shakedown still ends the cycle");
+		const appliedOnSha = execSync("git rev-parse HEAD", { cwd: worktree, encoding: "utf-8" }).trim();
+		const archivePath = appliedReviewFindingsArchivePath(worktree, "TOOL-99", findingsSha256, appliedOnSha);
+		assert.equal(existsSync(findingsPath), false, "successful implement must move the auto-discovered local findings file");
+		assert.equal(readFileSync(archivePath, "utf-8"), "- blocker: fix the implementation\n");
+		assert.equal(flags["review-findings"], undefined, "a later auto-resume must not inject the applied findings again");
+	});
+
+	it("consumes caller-owned findings once without deleting the caller's file", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const findingsPath = join(worktree, "operator-notes.md");
+		writeFileSync(findingsPath, "- blocker: fix the implementation\n");
+		const flags: Flags = { ...baseFlags, "review-findings": findingsPath };
+		const { runStep } = createMockRunStep(
+			{
+				implement: { ok: true, writes: { "implemented.txt": "fixed\n" } },
+				"shakedown-code": { ok: false, subtype: "blocked", text: "stop after implement" },
+			},
+			parkSignal,
+		);
+
+		await runPipeline({ ...baseOpts(worktree), startFrom: "implement" }, parkSignal, flags, {
+			runStep,
+			mainRepo: worktree,
+			listWorktrees: () => [],
+			appendLog: () => {},
+			roadmap: makeMockRoadmap(),
+		});
+
+		assert.equal(existsSync(findingsPath), true, "the harness must not delete an arbitrary operator-owned input path");
+		assert.equal(flags["review-findings"], undefined, "the applied input is still one-shot for this run");
+	});
+
+	it("keeps canonical findings when the implementation checkpoint does not commit cleanly", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const findingsPath = join(worktree, ".dev", "review-findings-tool-99.md");
+		mkdirSync(join(worktree, ".dev"), { recursive: true });
+		writeFileSync(findingsPath, "- blocker: fix the implementation\n");
+		const flags: Flags = { ...baseFlags, "review-findings": findingsPath };
+		const { runStep } = createMockRunStep({ implement: { ok: true, writes: { "implemented.txt": "uncommitted\n" } } }, parkSignal);
+
+		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement" }, parkSignal, flags, {
+			runStep,
+			mainRepo: worktree,
+			listWorktrees: () => [],
+			appendLog: () => {},
+			roadmap: makeMockRoadmap(),
+			dispatchStepEffects: async () => ({}),
+		});
+
+		assert.equal(result.completed, false);
+		assert.match(result.error ?? "", /checkpoint did not commit cleanly/);
+		assert.equal(existsSync(findingsPath), true);
+		assert.equal(flags["review-findings"], findingsPath);
+	});
+
 	it("fails closed when the review findings file cannot be read", async () => {
 		const worktree = makeTempGitRepo();
 		const parkSignal = makeParkSignal();
@@ -395,6 +530,7 @@ describe("runPipeline — review findings revision prompt", () => {
 		);
 
 		assert.equal(result.completed, false);
+		assert.equal(existsSync(findingsPath), true, "an unsuccessful implement must preserve findings for retry");
 		const implementPrompt = calls.find((c) => c.step === "implement")?.prompt ?? "";
 		assert.match(implementPrompt, /Revision pass/);
 		assert.match(implementPrompt, /primary task/);
@@ -3394,22 +3530,26 @@ describe("runPipeline — SIGINT cancellation", () => {
 });
 
 describe("runOrchestrator — resume review findings routing", () => {
-	it("prints the failure reason when a findings-driven resume fails", async (t) => {
-		const consoleLog = t.mock.method(console, "log", () => {});
-		const { runPipeline: mockRun } = createMockRunPipeline({ default: { completed: false, cost: 0, error: 'could not read review findings "missing.md"' } });
+	it("fails closed on a missing findings file before implement", async (t) => {
+		const consoleError = t.mock.method(console, "error", () => {});
+		const { runPipeline: mockRun, calls } = createMockRunPipeline({ default: { completed: true, cost: 0 } });
 
 		const result = await runOrchestrator({ ...baseFlags, resume: "108", "review-findings": "missing.md" }, { runPipeline: mockRun, resolveWorktree: () => "/tmp/pelaggio-resume-review-findings" });
 
 		assert.equal(result.exitCode, 1);
-		assert.ok(consoleLog.mock.calls.some((call) => String(call.arguments[0]).includes("could not read review findings")));
+		assert.equal(calls.length, 0);
+		assert.ok(consoleError.mock.calls.some((call) => String(call.arguments[0]).includes("findings file not found; refusing a findings-driven resume without findings")));
 	});
 
-	it("defaults resume with review findings to implement when --from is absent", async () => {
+	it("runs the revision when explicit findings are present, even past implement", async () => {
 		const { runPipeline: mockRun, calls } = createMockRunPipeline({ default: { completed: true, cost: 0 } });
 		const worktree = "/tmp/pelaggio-resume-review-findings";
+		const repo = mkdtempSync(join(tmpdir(), "pelaggio-resume-findings-"));
+		const findingsPath = join(repo, "findings.md");
+		writeFileSync(findingsPath, "must fix\n");
 
 		const result = await runOrchestrator(
-			{ ...baseFlags, resume: "108", "review-findings": "findings.md" },
+			{ ...baseFlags, resume: "108", "review-findings": findingsPath },
 			{
 				runPipeline: mockRun,
 				resolveWorktree: () => worktree,
@@ -3420,16 +3560,20 @@ describe("runOrchestrator — resume review findings routing", () => {
 		assert.equal(result.exitCode, 0);
 		assert.equal(calls.length, 1);
 		assert.equal(calls[0].opts.startFrom, "implement");
-		assert.equal(calls[0].flags["review-findings"], "findings.md");
+		assert.equal(calls[0].flags["review-findings"], findingsPath);
+		rmSync(repo, { recursive: true, force: true });
 	});
 
 	it("rejects a non-implement --from when review findings are present (exit 2)", async (t) => {
 		t.mock.method(console, "error", () => {});
 		const { runPipeline: mockRun, calls } = createMockRunPipeline({ default: { completed: true, cost: 0 } });
 		const worktree = "/tmp/pelaggio-resume-review-findings";
+		const repo = mkdtempSync(join(tmpdir(), "pelaggio-resume-findings-"));
+		const findingsPath = join(repo, "findings.md");
+		writeFileSync(findingsPath, "must fix\n");
 
 		const result = await runOrchestrator(
-			{ ...baseFlags, resume: "108", from: "shakedown-code", "review-findings": "findings.md" },
+			{ ...baseFlags, resume: "108", from: "shakedown-code", "review-findings": findingsPath },
 			{
 				runPipeline: mockRun,
 				resolveWorktree: () => worktree,
@@ -3441,14 +3585,18 @@ describe("runOrchestrator — resume review findings routing", () => {
 		// findings — the combination fails closed before any pipeline spend.
 		assert.equal(result.exitCode, 2);
 		assert.equal(calls.length, 0);
+		rmSync(repo, { recursive: true, force: true });
 	});
 
-	it("allows --from implement combined with review findings", async () => {
+	it("allows --from implement combined with explicit review findings", async () => {
 		const { runPipeline: mockRun, calls } = createMockRunPipeline({ default: { completed: true, cost: 0 } });
 		const worktree = "/tmp/pelaggio-resume-review-findings";
+		const repo = mkdtempSync(join(tmpdir(), "pelaggio-resume-findings-"));
+		const findingsPath = join(repo, "findings.md");
+		writeFileSync(findingsPath, "must fix\n");
 
 		const result = await runOrchestrator(
-			{ ...baseFlags, resume: "108", from: "implement", "review-findings": "findings.md" },
+			{ ...baseFlags, resume: "108", from: "implement", "review-findings": findingsPath },
 			{
 				runPipeline: mockRun,
 				resolveWorktree: () => worktree,
@@ -3459,7 +3607,8 @@ describe("runOrchestrator — resume review findings routing", () => {
 		assert.equal(result.exitCode, 0);
 		assert.equal(calls.length, 1);
 		assert.equal(calls[0].opts.startFrom, "implement");
-		assert.equal(calls[0].flags["review-findings"], "findings.md");
+		assert.equal(calls[0].flags["review-findings"], findingsPath);
+		rmSync(repo, { recursive: true, force: true });
 	});
 });
 

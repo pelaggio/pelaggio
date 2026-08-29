@@ -830,9 +830,11 @@ point is:
 pnpm pelaggio --resume <id> --review-findings path/to/findings.md
 ```
 
-When `--review-findings` is present, `--resume` defaults to the `implement` step so the revision
-cannot auto-detect a later restart point and skip the findings. An explicit valid `--from` still wins
-for advanced recovery.
+When `--review-findings` is present, the file must exist and be readable. `--resume` runs the
+`implement` step even if ordinary resume detection says the item is already past implement; the
+explicit file is authoritative and is never suppressed as already applied. `--from` retains its
+normal resume semantics; with findings, `implement` is the only valid explicit restart step because
+that step reads and applies the file.
 
 There are **three** paths that use this same seam and the same one-pass bound (the
 `autopilot:revised` PR label). The two automated paths also share the handoff marker
@@ -869,12 +871,17 @@ run is `roadmap.source: github-issues` + a PR ship target + pure auto-pick mode 
   idempotent human-handoff comment instead. The label doubles as a manual kill switch and its
   absence gates the revise, exactly as in CI.
 - **Reuses the resume plumbing** — each revision runs with a `--review-findings` file fetched from
-  the PR-review comment. Findings imply `startFrom: "implement"` unless the caller explicitly passes
-  `--from`, so parking, notifications, cost accounting, and the ship target all apply for free.
+  the PR-review comment. Findings imply `startFrom: "implement"`; if the caller explicitly passes
+  `--from`, `implement` is the only accepted value. Parking, notifications, cost accounting, and the
+  ship target all apply for free.
   Revisions don't consume `--cycles` but do count toward `--budget`.
-- **Findings survive a park** — the findings file is written under `.dev/` (gitignored). If a revision
-  parks and later auto-resumes, `resumeOne` re-injects the on-disk findings so the resumed implement
-  still fixes the specific blockers.
+- **Findings survive an implement park** — the findings file is written under `.dev/` (gitignored).
+  If implement parks and later auto-resumes, `resumeOne` re-injects the on-disk findings so the
+  retry still fixes the specific blockers. After implement successfully checkpoints its revision,
+  Pelaggio atomically moves the canonical file to
+  `.dev/archive/applied-findings/<id>-<sha256-prefix>-<applied-sha>.md`. A failed or parked implement
+  leaves the canonical file in place; after archival, a plain resume follows the logged next step
+  because there is no canonical file to re-inject.
 - **Fail-soft** — any `gh`/git error in the sweep logs a warning and skips (that candidate or the whole
   sweep); the normal pick loop proceeds regardless.
 - **Cross-process atomicity** (local vs a re-enabled CI) is out of scope: it is safe only because CI is
@@ -917,9 +924,9 @@ re-implements from the findings and re-pushes so the gate re-runs.
   PR-head code may run in this privileged job, so the PR head (and the PAT) enter the job only
   **after** that trust decision. Post-gate, the workflow checks out the PR head and runs
   `pelaggio --resume <id> --no-worktree --target pull-request --review-findings <path>`.
-  `--review-findings` is a **resume-only** flag: it reads the file best-effort and injects the findings
-  into the implement step as revision input. With no explicit `--from`, it routes the resume to
-  `implement`; an absent/unreadable file never crashes the resume. The `pull-request` ship is
+  `--review-findings` is a **resume-only** flag: it fails closed when the file is absent, unreadable,
+  or empty, and otherwise injects the findings into the implement step as revision input. An
+  explicit path always routes the resume to `implement`. The `pull-request` ship is
   idempotent — it skips `gh pr create` when a PR is already open and just pushes to the existing
   branch.
 - **PAT push is load-bearing** — commits pushed with the default `GITHUB_TOKEN` do **not** trigger
@@ -951,8 +958,14 @@ Run it from the **main checkout** (the same station as `land` / `pr-review`) so 
   configured ship target must be `pull-request` or `auto-merge-pr`. Drafts, closed/merged PRs,
   forks, green/pending/missing review, unmanaged issues, `direct-push`, and `CI` /
   `PELAGGIO_SINGLE_SHOT` / `--no-worktree` all refuse before paid work.
-- **Durable findings** — the marked gate comment is written verbatim under `.dev/` and left in
-  place on every later outcome so a parked/retried revision keeps its task.
+- **Durable findings** — the marked gate comment is written verbatim under `.dev/` and retained
+  while implement fails or parks so a retry keeps its task. Once implement succeeds, the
+  harness atomically moves `.dev/review-findings-<id>.md` to
+  `.dev/archive/applied-findings/<id>-<sha256-prefix>-<applied-sha>.md` at the commit point. A park in
+  a later step therefore resumes from that step instead of injecting the already-applied findings.
+  Caller-owned paths supplied directly to `--review-findings` are never moved or deleted. Missing
+  explicit files fail closed, and every present explicit file starts a revision; `pelaggio revise
+  --pr --allow-repeat` uses that same behavior without a separate override.
 - **Execution exclusivity** — every revision attempt (a first pass, an `--allow-repeat`
   repeat, an in-run sweep revision, and every findings-driven resume — the auto-resume
   after a park and the advertised manual `--resume <id> --review-findings <path>`
@@ -976,10 +989,11 @@ Run it from the **main checkout** (the same station as `land` / `pr-review`) so 
   revision work).
 - **`--allow-repeat`** bypasses only the `autopilot:revised` label — never the execution
   lease. It does not remove the label, skip review, or change the ship target.
-- **Park handback** — a parked first pass is not a repeat. Continue it with the printed
-  `pnpm pelaggio --resume <id> --review-findings <abs-path>`, which reacquires the execution
-  lease before touching the worktree; running `revise --pr` again is a new pass and needs
-  `--allow-repeat`.
+- **Park handback** — a parked first pass is not a repeat. While implement has not completed, the
+  printed continuation is `pnpm pelaggio --resume <id> --review-findings <abs-path>`. After a
+  successful implement archives the findings, a later-step park prints plain `--resume <id>` so it
+  cannot advertise the deleted canonical path. Either continuation reacquires the execution lease
+  before touching the worktree; running `revise --pr` again is a new pass and needs `--allow-repeat`.
 - **Exit** — `0` success, `1` refused/unavailable/failed revision, `2` usage or ambient
   single-shot / missing repo / non-PR ship target.
 
