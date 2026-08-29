@@ -128,21 +128,61 @@ function listModules(dir = ROOT): string[] {
 	return out.sort();
 }
 
+/**
+ * Blank out comments and template-literal bodies so import-like text inside documentation
+ * never creates an edge (no false fire) and a comment inside an import can't hide one (no
+ * bypass). Quoted specifiers survive because plain string literals are left intact.
+ */
+export function stripCommentsAndTemplates(src: string): string {
+	let out = "";
+	let i = 0;
+	while (i < src.length) {
+		const two = src.slice(i, i + 2);
+		if (two === "/*") {
+			const end = src.indexOf("*/", i + 2);
+			const stop = end < 0 ? src.length : end + 2;
+			out += src.slice(i, stop).replace(/[^\n]/g, " ");
+			i = stop;
+		} else if (two === "//") {
+			const end = src.indexOf("\n", i);
+			const stop = end < 0 ? src.length : end;
+			out += " ".repeat(stop - i);
+			i = stop;
+		} else if (src[i] === "`") {
+			let j = i + 1;
+			while (j < src.length && src[j] !== "`") j += src[j] === "\\" ? 2 : 1;
+			out += src.slice(i, j + 1).replace(/[^\n]/g, " ");
+			i = j + 1;
+		} else if (src[i] === '"' || src[i] === "'") {
+			const q = src[i];
+			let j = i + 1;
+			while (j < src.length && src[j] !== q && src[j] !== "\n") j += src[j] === "\\" ? 2 : 1;
+			out += src.slice(i, j + 1);
+			i = j + 1;
+		} else {
+			out += src[i];
+			i += 1;
+		}
+	}
+	return out;
+}
+
 /** Every import syntax that creates a module edge — each pattern is covered by the bypass test below. */
 const EDGE_PATTERNS: readonly RegExp[] = [
 	// `import { a } from "./x.js"`, `import type …`, `export { a } from "./x.js"`
 	/(?:^|\n)\s*(?:import|export)\s[^;'"]*?from\s*["'](\.[^"']+)["']/g,
 	// side-effect import: `import "./x.js"`
 	/(?:^|\n)\s*import\s*["'](\.[^"']+)["']/g,
-	// inline type expression or dynamic import: `import("./x.js")`
+	// inline type expression or dynamic import: `import("./x.js")` (comments already blanked)
 	/\bimport\(\s*["'](\.[^"']+)["']\s*\)/g,
 ];
 
 /** Relative import specifiers in one module's source, resolved to module paths (`.js` → `.ts`). */
 export function edgesFromSource(from: string, src: string): Array<[string, string]> {
 	const edges: Array<[string, string]> = [];
+	const code = stripCommentsAndTemplates(src);
 	for (const re of EDGE_PATTERNS) {
-		for (const m of src.matchAll(re)) {
+		for (const m of code.matchAll(re)) {
 			const spec = m[1];
 			if (!spec) continue;
 			let to = normalize(join(dirname(from), spec));
@@ -231,12 +271,30 @@ describe("module layering", () => {
 			'import "./d.js";',
 			'type E = import("./e.js").E;',
 			'const f = await import("./f.js");',
-			'import g from "node:fs";',
-			'import { h } from "some-package";',
+			'const g = await import(/* why */ "./g.js");',
+			'import h from "node:fs";',
+			'import { i } from "some-package";',
 		].join("\n");
 		assert.deepEqual(
 			edgesFromSource("x/y.ts", src).map(([, to]) => to),
-			["x/a.ts", "x/b.ts", "x/c.ts", "x/d.ts", "x/e.ts", "x/f.ts"],
+			["x/a.ts", "x/b.ts", "x/c.ts", "x/d.ts", "x/e.ts", "x/f.ts", "x/g.ts"],
+		);
+	});
+
+	it("does not fire on import-like text inside comments or template literals (no false fire)", () => {
+		const src = [
+			'// import { a } from "./pipeline.js"',
+			'/* import("./pipeline.js") */',
+			"/** Example:",
+			' *   import "./pipeline.js";',
+			" */",
+			'const doc = `import { x } from "./pipeline.js"`;',
+			'const s = "not an import: from \\"./pipeline.js\\"";',
+			'import { real } from "./real.js";',
+		].join("\n");
+		assert.deepEqual(
+			edgesFromSource("x/y.ts", src).map(([, to]) => to),
+			["x/real.ts"],
 		);
 	});
 });
