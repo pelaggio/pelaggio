@@ -1,4 +1,4 @@
-import type { Step } from "./config.js";
+import type { Step } from "./step-names.js";
 
 export type { Step };
 
@@ -546,7 +546,7 @@ export interface PipelineOpts {
 	 * The orchestrator may pre-capture once per process and thread the same object
 	 * into every worker. Typed object — not a boolean flag.
 	 */
-	sessionEvaluator?: import("./confinement/sessions.js").SessionEvaluatorContext;
+	sessionEvaluator?: SessionEvaluatorContext;
 	workerStatus?: CycleStatus;
 	logPath?: string;
 	/** Required for creating step renderers — injected by orchestrate() */
@@ -651,4 +651,28 @@ export type StepEmit = (event: StepEvent) => void;
 export interface Mutex {
 	acquire(): Promise<void>;
 	release(): void;
+}
+
+// ── Confinement sessions (types only; behaviour in confinement/sessions.ts) ──
+
+export interface SessionIdentity {
+	sessionId: string;
+	claimedItem: string;
+	claimBranch: string;
+	worktreePath: string;
+}
+
+export interface SessionInventory {
+	identities: readonly SessionIdentity[];
+}
+
+/**
+ * Captured once per evaluator run (or once per process by the orchestrator).
+ * starttimeJiffies is boot-relative from /proc/self/stat field 22 — never wall-clock.
+ */
+export interface SessionEvaluatorContext {
+	inventory: SessionInventory;
+	/** Boot-relative jiffies; unset on non-Linux → only inventory fallback can accept. */
+	starttimeJiffies?: number;
+	mainRepo: string;
 }

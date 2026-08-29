@@ -34,7 +34,7 @@ Run targeted tests with `npx tsx --test <test-file>`. Tests use `node:test`, not
 
 The invariants below share one spine: **determinism lives in the harness (mechanism), judgment lives in the worker (the LLM), and they meet only at a typed, fail-closed, capability-denied seam** — the blocking gate is always deterministic; the model is a policy input, never the gate (see `docs/decisions/0014-mechanism-policy-separation-spine.md`).
 
-- `STEPS` in `packages/pelaggio/scripts/pelaggio/config.ts` is the source of truth for pipeline steps. Adding a step requires updating every step-indexed config map.
+- `STEPS` in `packages/pelaggio/scripts/pelaggio/step-names.ts` is the source of truth for pipeline steps. Adding a step requires updating every step-indexed config map.
 - `expandSkill()` strips skill frontmatter before sending skill bodies to the SDK. Do not rely on frontmatter inside pipeline prompts.
 - Skill bodies must call `npx pelaggio ...`, never `pnpm pelaggio <subcommand>` (which re-enters the pipeline).
 - Model IDs live in `MODEL_PROFILES` in `config.ts`; skill/template bodies must not pin Claude model IDs.

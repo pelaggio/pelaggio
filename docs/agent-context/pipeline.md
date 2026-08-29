@@ -10,7 +10,7 @@ pick -> plan -> shakedown-plan -> implement -> shakedown-code -> ship
 
 ## Step Configuration
 
-`STEPS`, `ALL_STEPS`, defaults, model profiles, effort, turn limits, budgets, and providers are defined in `packages/pelaggio/scripts/pelaggio/config.ts`.
+`STEPS` and `ALL_STEPS` are defined in `packages/pelaggio/scripts/pelaggio/step-names.ts`; defaults, model profiles, effort, turn limits, budgets, and providers are defined in `packages/pelaggio/scripts/pelaggio/config.ts`.
 
 `STEPS` is the source of truth. Adding a step requires updating every step-indexed map — `BUDGETS`, `TURN_LIMITS`, `EFFORT`, and every `MODEL_PROFILES[profile]` entry — plus the relevant tests. Missing keys crash late, so fail loudly.
 

@@ -9,10 +9,8 @@ import {
 	CONFIG,
 	CONFINEMENT_CONFIG,
 	DEFAULT_SHIP_TARGET,
-	isPipelineStep,
 	LOG_PATH,
 	modelForProvider,
-	type PipelineStep,
 	REPO,
 	REVIEW_CONFIG,
 	REVISE_LOCAL,
@@ -24,7 +22,6 @@ import {
 	resolveProviderBin,
 	resolveStepSettings,
 	SHIP_TARGET,
-	STEPS,
 	WORKTREE_PREFIX,
 } from "./config.js";
 import { forbiddenRootsForConfinement } from "./confinement/roots.js";
@@ -135,6 +132,7 @@ import { cleanupShipBodyFile, parseShipDecisionEffect, shipBodyFile } from "./sh
 import { commitStrayBookkeeping, getShipTarget, isAutonomousRemotePush, isShipTargetName, runShipBookkeeping as runShipBookkeepingDefault, SHIP_TARGET_NAMES } from "./ship/index.js";
 import type { PrShipGateBinding } from "./ship/pr-effects.js";
 import { extractPrUrl } from "./ship/pull-request.js";
+import { isPipelineStep, type PipelineStep, STEPS } from "./step-names.js";
 import { getProvider, REGISTERED_PROVIDERS, type RunStepFn, type RunStepOpts, runStep as runStepDefault } from "./step-runner.js";
 import { A, createStepRenderer, fmtElapsed, LiveStatus, StatusBar, TUI_ENABLED } from "./tui.js";
 import {
