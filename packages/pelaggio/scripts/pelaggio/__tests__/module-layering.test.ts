@@ -117,6 +117,7 @@ const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {
 };
 
 const ENTRY_IMPORTERS = new Set(["index.ts", "main.ts"]);
+const PACKAGE_NAME: string = JSON.parse(readFileSync(join(ROOT, "..", "..", "package.json"), "utf8")).name;
 
 function listModules(dir = ROOT): string[] {
 	const out: string[] = [];
@@ -137,6 +138,7 @@ function listModules(dir = ROOT): string[] {
  */
 export function edgesFromSource(from: string, src: string): Array<[string, string]> {
 	const specs: string[] = [];
+	const computed: string[] = [];
 	const sf = ts.createSourceFile(from, src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 	const literal = (n: ts.Node | undefined): string | undefined => (n && (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) ? n.text : undefined);
 	const visit = (n: ts.Node): void => {
@@ -150,14 +152,25 @@ export function edgesFromSource(from: string, src: string): Array<[string, strin
 			const callee = n.expression;
 			const isImport = callee.kind === ts.SyntaxKind.ImportKeyword;
 			const isRequire = ts.isIdentifier(callee) && callee.text === "require";
-			const t = isImport || isRequire ? literal(n.arguments[0]) : undefined;
-			if (t) specs.push(t);
+			if (isImport || isRequire) {
+				const t = literal(n.arguments[0]);
+				if (t) specs.push(t);
+				else computed.push(n.getText(sf));
+			}
 		}
 		ts.forEachChild(n, visit);
 	};
 	visit(sf);
+	// Default-deny: a specifier the scanner cannot resolve statically is not an edge it can miss — it
+	// is a violation. Computed import()/require() arguments are refused in this package.
+	if (computed.length) throw new Error(`${from}: computed import specifier(s) are not allowed: ${computed.join("; ")}`);
 	const edges: Array<[string, string]> = [];
 	for (const spec of specs) {
+		// The package's own name resolves through `exports` to the L5 barrel — an edge like any other.
+		if (spec === PACKAGE_NAME || spec.startsWith(`${PACKAGE_NAME}/`)) {
+			edges.push([from, "index.ts"]);
+			continue;
+		}
 		if (!spec.startsWith(".")) continue;
 		let to = normalize(join(dirname(from), spec));
 		if (to.endsWith(".js")) to = `${to.slice(0, -3)}.ts`;
@@ -247,13 +260,20 @@ describe("module layering", () => {
 			'const g = await import(/* why */ "./g.js");',
 			`const h = \`$${"{"}(await import("./h.js")).name}\`;`,
 			'const i = require("./i.js");',
+			'import { run } from "pelaggio";',
 			'import j from "node:fs";',
 			'import { k } from "some-package";',
 		].join("\n");
 		assert.deepEqual(
 			edgesFromSource("x/y.ts", src).map(([, to]) => to),
-			["x/a.ts", "x/b.ts", "x/c.ts", "x/d.ts", "x/e.ts", "x/f.ts", "x/g.ts", "x/h.ts", "x/i.ts"],
+			["x/a.ts", "x/b.ts", "x/c.ts", "x/d.ts", "x/e.ts", "x/f.ts", "x/g.ts", "x/h.ts", "x/i.ts", "index.ts"],
 		);
+	});
+
+	it("refuses computed import specifiers instead of silently missing them (default-deny)", () => {
+		for (const src of ['const t = "./pipeline.js"; await import(t);', 'await import("./" + "pipeline.js");', "require(name);"]) {
+			assert.throws(() => edgesFromSource("x/y.ts", src), /computed import specifier/);
+		}
 	});
 
 	it("does not fire on import-like text inside comments or template literals (no false fire)", () => {
