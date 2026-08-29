@@ -42,7 +42,7 @@ Mechanism is at the right latitude. Judgment is at the right latitude — forcin
 it deterministic is the opposite error. The whole problem is the middle band:
 coordination is expressed as skill prose the harness executes and then
 regex-scrapes back into an enum (`parsePickResult`, `parseShipMerged`,
-`parseBlockedReason` in `helpers.ts`). The defensive comments on those parsers
+`parseBlockedReason` in `outcome-classify.ts`). The defensive comments on those parsers
 (*"first-match-wins is a fail-open hole"*, *"prose 'the task is blocked' never
 matches"*) are the seam telling you the value is in the wrong place: a
 control-flow decision is being transported as English, calibrated to one model's

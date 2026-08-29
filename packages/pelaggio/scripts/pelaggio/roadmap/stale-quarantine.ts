@@ -21,7 +21,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { mainWorktree } from "../helpers.js";
+import { mainWorktree } from "../git.js";
 import { withMutationLock } from "./mutation-lock.js";
 import type { StaleHit } from "./stale-scan.js";
 import type { RoadmapItemStatus } from "./types.js";

@@ -23,6 +23,7 @@ const BASELINE_PATH = join(ROOT, "__tests__", "fixtures", "module-layering-basel
 const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {
 	// L0 foundation — types/config/argv/terminal/pure utilities; read-only fs probing ok, no `.dev` writes.
 	"types.ts": 0,
+	"text.ts": 0,
 	"step-names.ts": 0,
 	"cycle-errors.ts": 0,
 	"notify-schema.ts": 0,
@@ -37,6 +38,9 @@ const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {
 	// L1 infra — writes a register, takes a lock, runs git, or confines; never policy.
 	"attempt-identity.ts": 1,
 	"file-lock.ts": 1,
+	"git.ts": 1,
+	"outcome-classify.ts": 1,
+	"skills.ts": 1,
 	"flow-events.ts": 1,
 	"execution-receipt.ts": 1,
 	"freshness-gate-record.ts": 1,
@@ -77,6 +81,9 @@ const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {
 	"driver-assignment.ts": 2,
 	"flow-policy.ts": 2,
 	"flow-snapshot.ts": 2,
+	"cycle-outcome.ts": 2,
+	"pick-parse.ts": 2,
+	"ship/freshness.ts": 2,
 	"continuous.ts": 2,
 	"stats.ts": 2,
 	"notify.ts": 2,
@@ -101,7 +108,7 @@ const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {
 	// L4 orchestration — sequences steps or seats end-to-end.
 	"pipeline.ts": 4,
 	"pr-review-gate.ts": 4,
-	"helpers.ts": 4, // dissolved in plan step 4
+	"cycle-support.ts": 4,
 	// L5 entry — parses argv and exits. Importable only by index.ts / main.ts.
 	"index.ts": 5,
 	"main.ts": 5,

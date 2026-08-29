@@ -240,7 +240,7 @@ there is no harness land mutex, the merge is performed by the model inside the o
 shared `MAIN_REPO` checkout (`ship/direct-push.ts:8`, `roadmap/git-claim.ts:73`),
 the post-pull `verify` hook is unset in production (`pipeline.ts:1786`), and
 `verifyShipLanded` accepts any advance of `main` so a sibling's merge satisfies
-another worker's phantom-ship gate (`helpers.ts:1109-1112`). Tier 1 still lightens
+another worker's phantom-ship gate (`verifyShipLanded` in `ship/freshness.ts`). Tier 1 still lightens
 Tier 2's load: disjoint write-sets mean the queue rarely bounces on text and can
 spend verify budget on semantic hazards.
 

@@ -24,10 +24,12 @@ import {
 	SHIP_TARGET,
 	WORKTREE_PREFIX,
 } from "./config.js";
-import { forbiddenRootsForConfinement } from "./confinement/roots.js";
+import { createMainCheckoutDeltaObserver, diffForbiddenRootSnapshots, forbiddenRootsForConfinement, snapshotForbiddenRoots } from "./confinement/roots.js";
 import { type AcceptedSession, captureEvaluatorContext, createSessionController, firstDiffPathsByRoot, resolveEligibleSessions, revalidateChangedRoot, type SessionController, type SessionEvaluatorContext } from "./confinement/sessions.js";
 import { continuousCycleCap, DayBudgetTracker, dayKey, freeQueueProbe, nextLocalMidnightMs, resolveContinuousConfig, sumDaySpendFromLog } from "./continuous.js";
 import { RECOVERABLE_ERRORS } from "./cycle-errors.js";
+import { canRetryWithinBudget, classifyCycleDisposition, classifyOutcome, parseVerdict } from "./cycle-outcome.js";
+import { buildReviewDiffBlock, computeImplementTurns, createMutex, detectResumeStep, readRuntimeVersions, revertPlanPolish, stepIndex, uniqueDriverProvenance } from "./cycle-support.js";
 import {
 	appendDecisions as appendDecisionsDefault,
 	appendReviewEscalation as appendReviewEscalationDefault,
@@ -48,61 +50,26 @@ import {
 } from "./effects.js";
 import { digestChallenge } from "./execution-receipt.js";
 import { tryWithFileLock, withFileLock } from "./file-lock.js";
-import { createEventWriter } from "./flow-events.js";
+import { appendLog as appendLogDefault, createEventWriter, findLoggedArtifactAuthor } from "./flow-events.js";
 import { DEFAULT_FLOW_POLICY, type FlowPolicy } from "./flow-policy.js";
 import { readFreshnessGateRecord, writeFreshnessGateRecord } from "./freshness-gate-record.js";
 import {
-	appendLog as appendLogDefault,
-	buildReviewDiffBlock,
-	buildStepArgs,
-	canRetryWithinBudget,
-	captureShipState,
 	checkpoint,
-	classifyCycleDisposition,
-	classifyOutcome,
-	classifyParkReason,
-	computeImplementTurns,
-	createMainCheckoutDeltaObserver,
-	createMutex,
-	detectResumeStep,
-	diffForbiddenRootSnapshots,
 	ensureCheckpointed,
-	ensureMainCheckoutOnBranch,
-	expandSkill,
 	filesChangedSince,
-	findLoggedArtifactAuthor,
-	fmtWait,
-	formatResumeHint,
 	getArtifactHeadSha,
 	getHeadSha,
 	gitDiffNameOnly,
 	hasDeliverableCommits,
-	isTransientSdkError,
 	listWorktrees as listWorktreesDefault,
 	mainWorktree,
-	type PrShipFreshnessResult,
-	parseDeferredItems,
-	parsePickItem,
-	parsePickResult,
-	parseShipMerged,
-	parseVerdict,
-	parseWaitFlag,
-	pickDivergedFromPin,
-	preparePrShipFreshness,
 	quarantineCheckpoint,
 	readGitBinding,
-	readRuntimeVersions,
 	resolveWorktree,
-	revertPlanPolish,
-	reviewFindingsPreamble,
-	snapshotForbiddenRoots,
-	stepIndex,
-	uniqueDriverProvenance,
-	verifyConflictRepairComplete,
-	verifyPrShipFreshness,
-	verifyShipLanded,
-} from "./helpers.js";
+} from "./git.js";
 import { type NotifyConfig, notifyCycle, notifyDecision as notifyDecisionEvent, notifyStrandedReview, sendNotification as sendNotificationDefault } from "./notify.js";
+import { classifyParkReason, isTransientSdkError, parseWaitFlag } from "./outcome-classify.js";
+import { parseDeferredItems, parsePickItem, parsePickResult, pickDivergedFromPin } from "./pick-parse.js";
 import { buildFailClosedComment, type PrReviewGateResult, resolveCarryOptions, runPrReviewGate } from "./pr-review-gate.js";
 import { gateRecordsDir, type NewPrReviewGateRecord, writePrReviewGateRecord } from "./pr-review-gate-record.js";
 import { capabilityMapFrom, detectUnattendedSignals, resolveAuthoringReviewConfig, resolveAuthoringReviewExecution } from "./provider-routing.js";
@@ -130,11 +97,14 @@ import { defaultGhRun, type GhRunner } from "./roadmap/github-issues.js";
 import { getRoadmapSource, type RoadmapSource } from "./roadmap/index.js";
 import { RUN_HEARTBEAT_MS, startRunLifecycle } from "./run-lifecycle.js";
 import { cleanupShipBodyFile, parseShipDecisionEffect, shipBodyFile } from "./ship/decision.js";
+import { captureShipState, ensureMainCheckoutOnBranch, type PrShipFreshnessResult, parseShipMerged, preparePrShipFreshness, verifyConflictRepairComplete, verifyPrShipFreshness, verifyShipLanded } from "./ship/freshness.js";
 import { commitStrayBookkeeping, getShipTarget, isAutonomousRemotePush, isShipTargetName, runShipBookkeeping as runShipBookkeepingDefault, SHIP_TARGET_NAMES } from "./ship/index.js";
 import type { PrShipGateBinding } from "./ship/pr-effects.js";
 import { extractPrUrl } from "./ship/pull-request.js";
+import { buildStepArgs, expandSkill, reviewFindingsPreamble } from "./skills.js";
 import { isPipelineStep, type PipelineStep, STEPS } from "./step-names.js";
 import { getProvider, REGISTERED_PROVIDERS, type RunStepFn, type RunStepOpts, runStep as runStepDefault } from "./step-runner.js";
+import { fmtWait, formatResumeHint } from "./text.js";
 import { A, createStepRenderer, fmtElapsed, LiveStatus, StatusBar, TUI_ENABLED } from "./tui.js";
 import type { CycleDisposition, CycleGitBinding, CycleResult, CycleStatus, CycleVersionProvenance, EventWriter, ExecutionReceiptDescriptor, Flags, ParkSignal, PipelineOpts, ShipTargetName, Step, StepLog, StepResult } from "./types.js";
 

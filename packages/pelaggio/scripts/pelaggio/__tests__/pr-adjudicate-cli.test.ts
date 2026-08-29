@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { DEFAULTS, type StepSettings } from "../config.js";
-import { FORBIDDEN_ROOT_GONE, type MainCheckoutDeltaResult } from "../helpers.js";
+import { FORBIDDEN_ROOT_GONE, type MainCheckoutDeltaResult } from "../confinement/roots.js";
 import { main, type PrAdjudicateDeps, parsePrAdjudicateArgs } from "../pr-adjudicate-cli.js";
 import { listPrReviewGateRecords, type NewPrReviewFleetGateRecord, readPrReviewGateRecord, writePrReviewGateRecord } from "../pr-review-gate-record.js";
 import { type PrAdjudicationRefutedEntry, type PrAdjudicationSourceRecordV1, type PrAdjudicationSurvivorEntry, readAdjudicationSourceRecord, writeAdjudicationSourceRecord } from "../review/adjudication.js";

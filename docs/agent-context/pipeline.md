@@ -109,7 +109,7 @@ Parks come in two families and the cycle log records both. *Signal-driven* parks
 park persisted `parkReason: null` and a park's cause was unrecoverable after the
 fact. `parkExit()` now retains the reason and the log record carries both the
 free-form `parkReason` detail and a closed `parkClass` (`classifyParkReason` in
-`helpers.ts`) that `pelaggio stats` groups on. `limitType` wins when present.
+`outcome-classify.ts`) that `pelaggio stats` groups on. `limitType` wins when present.
 Records written before classification existed report as `unrecorded` in stats
 rather than being folded into a real class.
 

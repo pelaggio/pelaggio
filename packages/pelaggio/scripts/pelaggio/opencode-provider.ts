@@ -21,7 +21,7 @@
 import { spawn } from "node:child_process";
 import { CONFIG, REPO, resolveProviderBin, resolveStepSettings, type StepSettings } from "./config.js";
 import { emitDecisionsFromText } from "./decisions.js";
-import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseWaitFlag, resolveParkReset } from "./helpers.js";
+import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseWaitFlag, resolveParkReset } from "./outcome-classify.js";
 import { buildAgentEnv, makeSecretScrubber, scopeEnvAllowlistToProvider } from "./secret-hygiene.js";
 import type { StepProvider } from "./step-runner.js";
 import { composeSystemAppend, createStepTextProjection, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "./step-runner-shared.js";

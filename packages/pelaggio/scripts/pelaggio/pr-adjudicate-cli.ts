@@ -15,8 +15,9 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { CONFIG, REPO, REVIEW_CONFIG, ROADMAP_GITHUB, resolveStepSettings, SHIP_TARGET, type StepSettings } from "./config.js";
+import { createMainCheckoutDeltaObserver, FORBIDDEN_ROOT_GONE, type MainCheckoutDeltaObserver, snapshotForbiddenRoot, snapshotRepoRefState, snapshotSiblingWorktree } from "./confinement/roots.js";
+import { listWorktreesIn, mainWorktree } from "./git.js";
 import { upsertMarkerComment } from "./github-posting.js";
-import { createMainCheckoutDeltaObserver, FORBIDDEN_ROOT_GONE, listWorktreesIn, type MainCheckoutDeltaObserver, mainWorktree, snapshotForbiddenRoot, snapshotRepoRefState, snapshotSiblingWorktree } from "./helpers.js";
 import { executionOverrideFor, trustedLocalContext, verificationPrompt } from "./pr-review-gate.js";
 import { gateRecordsDir, listPrReviewGateRecords, type PrReviewFindingDispositionEntry, type PrReviewGateRecord, writePrReviewGateRecord } from "./pr-review-gate-record.js";
 import {

@@ -17,11 +17,11 @@ import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { type AuthoringReviewConfig, CONFIG, modelForProvider, type ResolvedConfig, type ReviewSlot, resolveStepSettings, type StepSettings } from "./config.js";
-import { expandPackagedSkill } from "./helpers.js";
 import { assertDocumentUnchanged, type DocumentSnapshot, documentInjectionState, formatDocumentUnderReview, snapshotDocument } from "./review/document.js";
 import type { ReviewOutcome, SeatAttemptObservation } from "./review/loop.js";
 import { runReviewLoop } from "./review/loop.js";
 import { type DocReviewRecord, type DocReviewSeatTranscriptEntry, renderDocReviewRecord, writeDocReviewRecord, writeDocReviewSeatTranscript } from "./review/record.js";
+import { expandPackagedSkill } from "./skills.js";
 import { type RunStepFn, runStep } from "./step-runner.js";
 import type { ParkSignal, StepEmit } from "./types.js";
 
