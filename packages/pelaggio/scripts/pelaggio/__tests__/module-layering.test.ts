@@ -20,19 +20,19 @@ const BASELINE_PATH = join(ROOT, "__tests__", "fixtures", "module-layering-basel
 
 /** Admission questions per layer live in the plan §2; this table is the path-anchored answer. */
 export const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {
-	// L0 foundation — pure types/config/util; no I/O beyond config load, no `.dev` writes.
+	// L0 foundation — types/config/argv/terminal/pure utilities; read-only fs probing ok, no `.dev` writes.
 	"types.ts": 0,
 	"config.ts": 0,
 	"cli.ts": 0,
 	"tui.ts": 0,
 	"secret-hygiene.ts": 0,
-	"file-lock.ts": 0,
 	"artifact-root.ts": 0,
-	"attempt-identity.ts": 0,
 	"review/taxonomy.ts": 0,
 	"review/document.ts": 0,
 	"roadmap/types.ts": 0,
-	// L1 infra — registers, git, confinement; never policy.
+	// L1 infra — writes a register, takes a lock, runs git, or confines; never policy.
+	"attempt-identity.ts": 1,
+	"file-lock.ts": 1,
 	"flow-events.ts": 1,
 	"execution-receipt.ts": 1,
 	"freshness-gate-record.ts": 1,
