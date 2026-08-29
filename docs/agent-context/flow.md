@@ -330,7 +330,7 @@ saturates near N=6–7, so ordering is affordable and retry policy is what matte
 A clean re-merge with passing verification retries mechanically; a merge conflict or
 verification failure is a judgment act (`ship/SKILL.md:110`, `:116`) and terminates
 as `Contended`, routed to the existing `shipwreck`-style action — `Step` already
-admits non-`STEPS` actions (`config.ts:53`), so `STEPS` stays the fixed six.
+admits non-`STEPS` actions (`step-names.ts`), so `STEPS` stays the fixed six.
 
 **Admission placement.** Landing admission is *run-scoped*, resolved before workers
 start, reusing `ship/ci-guard.ts`'s fail-closed forge-read helpers. It does not

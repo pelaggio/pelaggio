@@ -3,9 +3,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
-import { NOTIFY_EVENTS, NOTIFY_FORMATS, type NotifyConfig, type NotifyEvent, type NotifyFormat } from "./notify.js";
+import { NOTIFY_EVENTS, NOTIFY_FORMATS, type NotifyConfig, type NotifyEvent, type NotifyFormat } from "./notify-schema.js";
 import { type RawTaxonomyInput, resolveTaxonomy, type TaxonomyConfig } from "./review/taxonomy.js";
 import { type GithubRoadmapConfig, isScope, type LinearRoadmapConfig, PLAN_LOCATIONS, type PlanLocation, ROADMAP_SOURCE_NAMES, type RoadmapSourceName, type Scope } from "./roadmap/types.js";
+import { ALL_STEPS, type Step } from "./step-names.js";
 import type { ProviderName, ShipTargetName } from "./types.js";
 
 const SHIP_TARGET_NAMES: readonly ShipTargetName[] = ["direct-push", "pull-request", "auto-merge-pr"];
@@ -44,20 +45,6 @@ export function resolveRepo(): string {
 
 export const REPO = resolveRepo();
 export const LOG_PATH = resolve(REPO, ".dev", "pelaggio-log.jsonl");
-
-// ── Pipeline steps ─────────────────────────────────────────────────────
-
-export const STEPS = ["pick", "plan", "shakedown-plan", "implement", "shakedown-code", "ship"] as const;
-export type PipelineStep = (typeof STEPS)[number];
-/** Pipeline steps + non-pipeline actions. These carry per-step config but are absent from `STEPS`. */
-export type Step = PipelineStep | "shipwreck" | "pr-review" | "pr-verify";
-
-/** Type guard for a valid pipeline step. Excludes all non-pipeline actions — see `--from` validation in pipeline.ts. */
-export function isPipelineStep(s: string): s is PipelineStep {
-	return (STEPS as readonly string[]).includes(s);
-}
-
-const ALL_STEPS: readonly Step[] = [...STEPS, "shipwreck", "pr-review", "pr-verify"];
 
 // ── Model literals ─────────────────────────────────────────────────────
 
@@ -132,8 +119,8 @@ export type ProviderSelection = ProviderName | ProviderPool;
 
 export type ProviderDiversityPolicy = "off" | "prefer" | "require";
 export type AuthoringReviewMode = "off" | "local" | "keys";
-/** @deprecated Prefer `ReviewFindingClass` from `./review/findings.js` — single source of truth. */
-export type { ReviewFindingClass as AuthoringFindingClass } from "./review/findings.js";
+/** @deprecated Prefer `ReviewFindingClass` from `./review/findings.js` (an alias of this id type). */
+export type { FindingClassId as AuthoringFindingClass } from "./review/taxonomy.js";
 export type AuthoringBlockingBar = "must-fix";
 export type ReviewSlot = { id: string; provider: "claude" | "grok" | "opencode"; model?: string } | { id: string; provider: "codex"; codexModel?: string };
 export interface AuthoringReviewConfig {

@@ -21,7 +21,7 @@ import {
 	resolveHarnessSocketPaths,
 	spawnClaudeSeat,
 } from "../claude-seat.js";
-import { STEPS } from "../config.js";
+import { STEPS } from "../step-names.js";
 import type { Step } from "../types.js";
 
 const temps: string[] = [];
