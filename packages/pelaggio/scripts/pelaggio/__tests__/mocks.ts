@@ -5,7 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { mock } from "node:test";
 import { REVIEW_CONFIG } from "../config.js";
 import { __setProviderAvailableForTests, type PipelineDeps, type RunStepFn, type runPipeline } from "../pipeline.js";
-import type { PrReviewGateResult } from "../pr-review-cli.js";
+import type { PrReviewGateResult } from "../pr-review-gate.js";
 import type { RoadmapSource } from "../roadmap/index.js";
 import { LiveStatus, StatusBar } from "../tui.js";
 import type { CycleResult, Flags, ParkSignal, PipelineOpts, Step, StepResult } from "../types.js";

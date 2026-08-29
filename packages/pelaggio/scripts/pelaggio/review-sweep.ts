@@ -1,8 +1,7 @@
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
-import { hasMarkerComment, postCommitStatus, runGhSoft, upsertMarkerComment } from "./github-posting.js";
-import { PR_REVIEW_MARKER } from "./pr-review-cli.js";
+import { hasMarkerComment, PR_REVIEW_MARKER, postCommitStatus, runGhSoft, upsertMarkerComment } from "./github-posting.js";
 import { type GhRunner, parseGhJson } from "./roadmap/github-issues.js";
 
 const REVIEW_CONTEXT = "review";

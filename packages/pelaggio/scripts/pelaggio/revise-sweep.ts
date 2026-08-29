@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { withFileLock } from "./file-lock.js";
-import { isTrustedCommentAuthor } from "./github-posting.js";
+import { isTrustedCommentAuthor, PR_REVIEW_MARKER } from "./github-posting.js";
 import { type GhRunner, parseGhJson } from "./roadmap/github-issues.js";
 
 // ── Local revise sweep (issue #76) ─────────────────────────────────────
@@ -21,7 +21,6 @@ const REVISED_LABEL = "autopilot:revised";
 /** The `review` job name in `pr-review.yml` surfaces as the check-run `name` in statusCheckRollup. */
 const REVIEW_CHECK_NAME = "review";
 /** Marker the pr-review CLI upserts on its findings comment (`pr-review-cli.ts`). */
-const PR_REVIEW_MARKER = "<!-- pelaggio-pr-review -->";
 /** Human-handoff marker — reused from CI so CI and local never double-post a park comment. */
 const PARK_MARKER = "<!-- pelaggio-revise-parked -->";
 /** Append-only operator-invocation audit — never upserted (`gh pr comment` POST, not PATCH). */

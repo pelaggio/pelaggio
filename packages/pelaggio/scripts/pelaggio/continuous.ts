@@ -8,8 +8,8 @@
 
 import { readFileSync } from "node:fs";
 import type { FlowPolicy } from "./flow-policy.js";
+import { buildFlowSnapshot } from "./flow-snapshot.js";
 import type { RoadmapSource } from "./roadmap/index.js";
-import { buildFlowSnapshot } from "./roadmap-cli.js";
 import type { Flags } from "./types.js";
 
 export const CONTINUOUS_PRESETS = ["drain", "watch"] as const;

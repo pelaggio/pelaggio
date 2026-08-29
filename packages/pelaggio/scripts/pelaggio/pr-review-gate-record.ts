@@ -1,7 +1,7 @@
 import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import type { PrReviewAgreement } from "./pr-review-cli.js";
 import type { ReviewExhaustionReason } from "./review/findings.js";
+import type { PrReviewAgreement } from "./types.js";
 
 export type PrReviewFindingDisposition = "fixed" | "refuted" | "accepted";
 

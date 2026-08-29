@@ -9,7 +9,7 @@ import { appendReviewEscalation, type ReviewEscalationWriteInput, resolveDecisio
 import { dispatchStepEffects, EffectsManifestError, writeEffectsManifest } from "../effects.js";
 import { FifoPolicy } from "../flow-policy.js";
 import { archiveReviewFindingsAfterImplement, defaultTypecheckRatchet, type RunStepFn, runOrchestrator, runPipeline } from "../pipeline.js";
-import type { PrReviewGateResult, RunPrReviewGateOptions } from "../pr-review-cli.js";
+import type { PrReviewGateResult, RunPrReviewGateOptions } from "../pr-review-gate.js";
 import { OPERATOR_ATTESTED_TTY_SUPPRESSION } from "../provider-routing.js";
 import { appliedReviewFindingsArchivePath, reviewFindingsDigest } from "../review-findings-archive.js";
 import { shipBodyFile } from "../ship/decision.js";
