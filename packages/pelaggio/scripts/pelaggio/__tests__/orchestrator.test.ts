@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { REPO, REVIEW_CONFIG } from "../config.js";
+import { createEventWriter, readEventLog } from "../flow-events.js";
 import type { NotifyPayload } from "../notify.js";
 import { hermeticDefault, hermeticQueueRoot, PARKED_EXIT_CODE, runOrchestrator } from "../pipeline.js";
 import { gateRecordsDir, readPrReviewGateRecord, writePrReviewGateRecord } from "../pr-review-gate-record.js";
@@ -1878,6 +1879,42 @@ describe("runOrchestrator — continuous mode (issue #82)", () => {
 		assert.equal(calls.length, 2, "two work cycles under --cycles 2 ceiling");
 		assert.ok(sleeps.length >= 1, "watch must sleep on empty free probe");
 		assert.equal(sleeps[0], 60_000);
+	});
+
+	it("injects a shared eventWriter for continuous emissions (one stream, increasing seq)", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const root = mkdtempSync(join(tmpdir(), "orch-event-writer-"));
+		const writer = createEventWriter({ root });
+		const { runPipeline, calls } = createMockRunPipeline({
+			default: { completed: true, cost: 0.2 },
+		});
+		let probes = 0;
+		const { exitCode } = await runOrchestrator(
+			{ ...baseFlags, continuous: true, preset: "watch", "probe-interval": "1m", cycles: "2" },
+			{
+				runPipeline,
+				eventWriter: writer,
+				queueProbe: async () => {
+					probes++;
+					if (probes === 1) return { empty: true, readyCount: 0 };
+					if (probes === 2) return { empty: false, readyCount: 1 };
+					if (probes === 3) return { empty: false, readyCount: 1 };
+					return { empty: true, readyCount: 0 };
+				},
+				sleep: async () => {},
+			},
+		);
+		assert.equal(exitCode, 0);
+		assert.equal(calls.length, 2);
+		const read = readEventLog({ root, cycleLogPath: null });
+		assert.ok(read.events.length >= 2);
+		assert.ok(read.events.every((event) => event.streamId === writer.streamId && event.executionId === writer.executionId));
+		assert.ok(!read.events.some((event) => event.type === "pelaggio.run-started"), "lifecycle wrapping lives in orchestrate(), not runOrchestrator");
+		const seqs = read.events.map((event) => event.seq);
+		for (let i = 1; i < seqs.length; i++) assert.ok((seqs[i] ?? 0) > (seqs[i - 1] ?? 0));
+		const types = read.events.map((event) => event.type);
+		assert.ok(types.includes("pelaggio.watch-idle"));
+		assert.ok(types.includes("pelaggio.watch-wake"));
 	});
 
 	it("watch: day-budget idles to local midnight then probes again", async (t) => {

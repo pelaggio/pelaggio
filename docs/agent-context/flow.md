@@ -101,7 +101,7 @@ These are not a new store. The projection folds a **purpose-built flow-event
 log** (`#170`). pelaggio today writes only a *cycle-outcome summary*
 (`.dev/pelaggio-log.jsonl`, one terminal line per cycle), **not** the transition
 log this needs; #170 adds `.dev/flow-events/` (one append-only segment file per
-writer process) as *separate* storage sharing one envelope and one reader library
+writer execution context) as *separate* storage sharing one envelope and one reader library
 with the summary log. The memory hierarchy:
 
 ```
@@ -415,7 +415,7 @@ here so they do not have to be re-litigated.
   per-process. Events emit harness-side by three producers — effect-confirmed
   (manifest-sourced), git-mutation (intent/confirmation bracket), and derived
   (readiness-diff) — never from "the step completed."
-- Flow events live under `.dev/flow-events/` as one segment per writer process
+- Flow events live under `.dev/flow-events/` as one segment per writer execution context
   (single-writer-per-file, no shared-file concurrent append), separate from the
   cycle-log, sharing one envelope + reader library; they are local-only telemetry;
   `type` is namespaced (`pelaggio.*` closed/core-validated, consumer events

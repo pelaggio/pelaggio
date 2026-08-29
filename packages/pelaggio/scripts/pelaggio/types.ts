@@ -281,7 +281,11 @@ export type PelaggioEventType =
 	| "pelaggio.watch-idle"
 	| "pelaggio.watch-wake"
 	| "pelaggio.budget-idle"
-	| "pelaggio.budget-wake";
+	| "pelaggio.budget-wake"
+	// Process-level run identity / liveness (issue #40) — not item-flow transitions.
+	| "pelaggio.run-started"
+	| "pelaggio.run-heartbeat"
+	| "pelaggio.run-finished";
 
 export interface FlowEventEnvelope {
 	v: 1;
@@ -300,8 +304,27 @@ export interface FlowEventEnvelope {
 
 export type CycleCompletedEvent = FlowEventEnvelope & CycleLogEntry & { type: "pelaggio.cycle-completed"; legacy?: false };
 export type LegacyCycleCompletedEvent = FlowEventEnvelope & CycleLogEntry & { type: "pelaggio.cycle-completed"; legacy: true };
-export type CoreFlowEvent = FlowEventEnvelope & { type: Exclude<PelaggioEventType, "pelaggio.cycle-completed">; [key: string]: unknown };
-export type FlowEvent = CycleCompletedEvent | LegacyCycleCompletedEvent | CoreFlowEvent;
+
+export type RunMode = "drain" | "watch";
+export type RunFinishOutcome = "completed" | "failed" | "parked";
+
+export type RunStartedEvent = FlowEventEnvelope & {
+	type: "pelaggio.run-started";
+	heartbeatMs: number;
+	mode?: RunMode;
+	resumed?: true;
+};
+export type RunHeartbeatEvent = FlowEventEnvelope & { type: "pelaggio.run-heartbeat" };
+export type RunFinishedEvent = FlowEventEnvelope & {
+	type: "pelaggio.run-finished";
+	outcome: RunFinishOutcome;
+	exitCode: number;
+};
+
+type ExplicitPelaggioEventType = "pelaggio.cycle-completed" | "pelaggio.run-started" | "pelaggio.run-heartbeat" | "pelaggio.run-finished";
+
+export type CoreFlowEvent = FlowEventEnvelope & { type: Exclude<PelaggioEventType, ExplicitPelaggioEventType>; [key: string]: unknown };
+export type FlowEvent = CycleCompletedEvent | LegacyCycleCompletedEvent | RunStartedEvent | RunHeartbeatEvent | RunFinishedEvent | CoreFlowEvent;
 
 export type EventLogDiagnosticKind = "malformed" | "truncatedTail" | "unknownType" | "duplicateEventId" | "duplicateSequence" | "regressingSequence" | "sequenceGap";
 
@@ -325,7 +348,13 @@ export interface ReadEventLogResult {
 
 type FlowEventCorrelations = Partial<Pick<FlowEventEnvelope, "itemId" | "claimId" | "readinessEpisodeId" | "causationId" | "attempt">>;
 export type FlowEventInput = FlowEventCorrelations &
-	(({ type: "pelaggio.cycle-completed"; ts?: string } & Omit<CycleLogEntry, "ts">) | ({ type: Exclude<PelaggioEventType, "pelaggio.cycle-completed">; ts?: string } & Record<string, unknown>));
+	(
+		| ({ type: "pelaggio.cycle-completed"; ts?: string } & Omit<CycleLogEntry, "ts">)
+		| { type: "pelaggio.run-started"; ts?: string; heartbeatMs: number; mode?: RunMode; resumed?: true }
+		| { type: "pelaggio.run-heartbeat"; ts?: string }
+		| { type: "pelaggio.run-finished"; ts?: string; outcome: RunFinishOutcome; exitCode: number }
+		| ({ type: Exclude<PelaggioEventType, ExplicitPelaggioEventType>; ts?: string } & Record<string, unknown>)
+	);
 
 export interface EventWriter {
 	readonly streamId: string;

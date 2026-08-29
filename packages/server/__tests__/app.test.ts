@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -13,7 +13,6 @@ import { Registry } from "../src/registry.js";
 import { RoadmapCache } from "../src/roadmap-cache.js";
 import { StateStore } from "../src/state-store.js";
 import { Supervisor } from "../src/supervisor.js";
-import type { PersistedRun } from "../src/types.js";
 
 function fakeSpawn(): typeof import("node:child_process").spawn {
 	return ((_cmd: string, _args: string[]) => {
@@ -307,8 +306,91 @@ describe("createApp", () => {
 		supervisor.start({ repo: "main", item: "TOOL-1" });
 		const res = await app.request("/runs");
 		assert.equal(res.status, 200);
-		const body = (await res.json()) as { runs: PersistedRun[] };
+		const body = (await res.json()) as { runs: Array<{ source: string }> };
 		assert.equal(body.runs.length, 1);
+		assert.equal(body.runs[0]?.source, "supervised");
+	});
+
+	it("GET /runs merges external summaries, stamps source, and sorts startedAt desc / id asc", async () => {
+		const { app, supervisor, dir } = setup();
+		const run = supervisor.start({ repo: "main", item: "TOOL-1" });
+		const eventsDir = join(dir, ".dev", "flow-events");
+		mkdirSync(eventsDir, { recursive: true });
+		const exec = "01J00000000000000000000099";
+		const stream = "01J00000000000000000000098";
+		const earlier = "2026-04-18T00:00:00.000Z";
+		writeFileSync(
+			join(eventsDir, `${stream}.jsonl`),
+			`${JSON.stringify({
+				v: 1,
+				type: "pelaggio.run-started",
+				eventId: "01J00000000000000000000097",
+				streamId: stream,
+				seq: 1,
+				ts: earlier,
+				itemId: "EXT-1",
+				claimId: null,
+				readinessEpisodeId: null,
+				executionId: exec,
+				causationId: null,
+				heartbeatMs: 15_000,
+			})}\n`,
+		);
+		const res = await app.request("/runs");
+		assert.equal(res.status, 200);
+		const body = (await res.json()) as { runs: Array<{ id: string; source: string; startedAt: string; item?: string }> };
+		assert.equal(body.runs.length, 2);
+		assert.equal(body.runs[0]?.id, run.id);
+		assert.equal(body.runs[0]?.source, "supervised");
+		assert.equal(body.runs[1]?.source, "external");
+		assert.equal(body.runs[1]?.item, "EXT-1");
+		assert.ok(body.runs[0]!.startedAt >= body.runs[1]!.startedAt);
+	});
+
+	it("GET /runs?repo=<slug> filters both supervised and external rows", async (t) => {
+		t.mock.method(console, "warn");
+		const dirA = mkdtempSync(join(tmpdir(), "repo-a-"));
+		const dirB = mkdtempSync(join(tmpdir(), "repo-b-"));
+		const eventsDir = join(dirB, ".dev", "flow-events");
+		mkdirSync(eventsDir, { recursive: true });
+		writeFileSync(
+			join(eventsDir, "01J00000000000000000000088.jsonl"),
+			`${JSON.stringify({
+				v: 1,
+				type: "pelaggio.run-started",
+				eventId: "01J00000000000000000000087",
+				streamId: "01J00000000000000000000088",
+				seq: 1,
+				ts: "2026-04-18T00:00:00.000Z",
+				itemId: "EXT-B",
+				claimId: null,
+				readinessEpisodeId: null,
+				executionId: "01J00000000000000000000089",
+				causationId: null,
+				heartbeatMs: 15_000,
+			})}\n`,
+		);
+		const { app, supervisor } = setup({ repos: { main: dirA, other: dirB } });
+		supervisor.start({ repo: "main", item: "A" });
+		const main = await app.request("/runs?repo=main");
+		const other = await app.request("/runs?repo=other");
+		const mainBody = (await main.json()) as { runs: Array<{ repo: string; source: string }> };
+		const otherBody = (await other.json()) as { runs: Array<{ repo: string; source: string }> };
+		assert.equal(mainBody.runs.length, 1);
+		assert.equal(mainBody.runs[0]?.source, "supervised");
+		assert.equal(otherBody.runs.length, 1);
+		assert.equal(otherBody.runs[0]?.source, "external");
+		assert.equal(otherBody.runs[0]?.repo, "other");
+	});
+
+	it("external ids are 404 on get/pause/resume/stop/log", async () => {
+		const { app } = setup();
+		const id = "external:main:01J00000000000000000000001";
+		assert.equal((await app.request(`/runs/${id}`)).status, 404);
+		assert.equal((await app.request(`/runs/${id}/pause`, { method: "POST" })).status, 404);
+		assert.equal((await app.request(`/runs/${id}/resume`, { method: "POST" })).status, 404);
+		assert.equal((await app.request(`/runs/${id}/stop`, { method: "POST" })).status, 404);
+		assert.equal((await app.request(`/runs/${id}/log`)).status, 404);
 	});
 
 	it("GET /runs?repo=<slug> filters by repo", async (t) => {

@@ -148,12 +148,20 @@ function GroupedTable({ runs, repoOrder }: { runs: RunSummary[]; repoOrder: stri
 
 function RunRow({ r }: { r: RunSummary }) {
 	const stateLabel = formatRunState(r.status, r.activity);
+	const title = formatRunTitle(r);
 	return (
 		<tr>
 			<td>
-				<a href={`/ui/runs/?id=${encodeURIComponent(r.id)}`} className="block min-h-[44px] py-2">
-					{formatRunTitle(r)}
-				</a>
+				{r.source === "supervised" ? (
+					<a href={`/ui/runs/?id=${encodeURIComponent(r.id)}`} className="block min-h-[44px] py-2">
+						{title}
+					</a>
+				) : (
+					<span className="block min-h-[44px] py-2">
+						{title}
+						<span className="ml-2 inline-block rounded px-2 py-0.5 text-xs font-medium bg-slate-100 text-slate-600">external</span>
+					</span>
+				)}
 			</td>
 			<td>{r.lastStep ?? "—"}</td>
 			<td>

@@ -44,6 +44,9 @@ export type {
 	PelaggioEventType,
 	PipelineOpts,
 	ReadEventLogResult,
+	RunFinishedEvent,
+	RunHeartbeatEvent,
+	RunStartedEvent,
 	ShipTargetName,
 	Step,
 } from "./types.js";

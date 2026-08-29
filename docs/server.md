@@ -61,9 +61,47 @@ Supervisor argv:
 
 ### `GET /runs`
 ```jsonc
-{ "runs": [{ "id", "repo", "item"?, "status", "startedAt", "endedAt"?, "mode"?, "activity"? }] }
+{ "runs": [{ "id", "repo", "item"?, "status", "startedAt", "endedAt"?, "mode"?, "activity"?, "lastStep"?, "lastCost"?, "source": "supervised" | "external" }] }
 ```
-`?repo=<slug>` filters to runs from that registry entry. Unknown slug returns `{ "runs": [] }`.
+`source` is required list-projection metadata, not daemon-owned persisted state. Supervised
+rows come from `StateStore`; external rows are projected on demand from each registered
+repo's `.dev/flow-events/` lifecycle segments and, for pre-lifecycle history, `legacy: true`
+cycle-log rows.
+
+The merged list is sorted by `startedAt` descending, then `id` ascending. That reorders the
+former supervised-only insertion-order list; mixed sources would otherwise be
+nondeterministic.
+
+`?repo=<slug>` filters both sources before the scan (`registry` entries + supervised rows).
+Unknown slug returns `{ "runs": [] }`.
+
+External ids are `external:<slug>:<executionId>` (lifecycle) or
+`external:<slug>:cycle:<eventId>` (legacy cycle fallback). They are list-only: `GET /runs/:id`,
+pause, resume, stop, and log remain supervisor-owned and return 404 for an external id —
+capability-denied at the route, not a disabled button. Daemon-supervised streams are
+exact-suppressed from the external set when `executionId` equals a `PersistedRun.id` for that
+repo.
+
+**Freshness.** A dedicated lifecycle worker emits heartbeats even while the CLI main thread is in
+a synchronous step. Open lifecycle groups (no `run-finished`) are `running` while
+`now - lastEventTs <= 3 * heartbeatMs` (`heartbeatMs` from `run-started`, else 15s). Stale
+open groups project `abandoned` with `endedAt` = last event `ts`. A `run-finished` terminal
+always wins over freshness. Heartbeat freshness is a crash fallback, not ground truth.
+
+**Legacy activity-only segments** (watch/budget/park events with no start/finish) surface as
+`running` only if the last event is within a 15-minute live window; stale ones are omitted
+(not `abandoned` ghosts). In-flight pre-upgrade watch/budget-idle processes may drop off the
+list until they restart under the new binary. `mode: "watch"` is inferred only when
+watch/budget-idle evidence exists.
+
+**Cycle-log fallback** promotes `legacy: true` `pelaggio.cycle-completed` rows only (typed
+segment copies are ignored). Day-budget receipts never appear. A cycle row is suppressed when
+its item matches a lifecycle group and its `ts` falls inside that group's
+`[startedAt, endedAt ?? lastEventTs]`, or when a same-repo supervised run has a matching item and
+the cycle `ts` is inside that run's interval. Item-less lifecycle and supervised runs do not cover
+every cycle in their window: an auto-pick cycle may therefore appear beside its lifecycle row,
+but a concurrent run is never hidden by time overlap alone. Concurrent pre-lifecycle same-item
+processes cannot be perfectly disambiguated.
 
 ### `GET /runs/:id`
 Full `PersistedRun` (see `src/types.ts`). Includes optional `mode`, `watchDailyBudget`,
