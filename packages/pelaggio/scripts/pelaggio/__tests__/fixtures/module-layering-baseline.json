@@ -1,0 +1,23 @@
+{
+	"edges": [
+		"codex-provider.ts -> helpers.ts (L3 -> L4)",
+		"config.ts -> notify.ts (L0 -> L2)",
+		"config.ts -> review/findings.ts (L0 -> L1)",
+		"continuous.ts -> roadmap-cli.ts (entry module imported)",
+		"decisions.ts -> helpers.ts (L2 -> L4)",
+		"effects.ts -> helpers.ts (L2 -> L4)",
+		"execution-receipt.ts -> effects.ts (L1 -> L2)",
+		"grok-provider.ts -> helpers.ts (L3 -> L4)",
+		"opencode-provider.ts -> helpers.ts (L3 -> L4)",
+		"pipeline.ts -> pr-review-cli.ts (entry module imported)",
+		"pr-adjudicate-cli.ts -> pr-review-cli.ts (entry module imported)",
+		"pr-review-gate-record.ts -> pr-review-cli.ts (entry module imported)",
+		"review-sweep.ts -> pr-review-cli.ts (entry module imported)",
+		"review/adjudication.ts -> helpers.ts (L2 -> L4)",
+		"review/adjudication.ts -> pr-review-cli.ts (entry module imported)",
+		"review/carry.ts -> pr-review-cli.ts (entry module imported)",
+		"review/record.ts -> review/loop.ts (L1 -> L2)",
+		"roadmap/stale-quarantine.ts -> helpers.ts (L1 -> L4)",
+		"step-runner.ts -> helpers.ts (L3 -> L4)"
+	]
+}
