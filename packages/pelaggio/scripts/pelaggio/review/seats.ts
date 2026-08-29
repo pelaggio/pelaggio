@@ -1,6 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
+import { repairMainNodeModules } from "../worktree-deps.js";
+import { snapshotAuthoringReviewHostDependencies } from "./seat-deps.js";
 
 /**
  * Per-seat detached checkouts for concurrent authoring-loop reviewers (#269).
@@ -26,6 +28,16 @@ export type GitExec = (args: string[], cwd: string) => string;
 const defaultGitExec: GitExec = (args, cwd) => execFileSync("git", args, { cwd, encoding: "utf-8" });
 
 const SEATS_DIR = "authoring-review-seats";
+
+function finishSeatPreparation(path: string, mainRepo: string, run: GitExec): string {
+	try {
+		snapshotAuthoringReviewHostDependencies(mainRepo);
+		return path;
+	} catch (error) {
+		forceRemoveWorktree(path, mainRepo, run);
+		throw new Error(`authoring review seat: could not snapshot host dependency links`, { cause: error });
+	}
+}
 
 export function authoringReviewSeatsRoot(mainRepo: string): string {
 	return resolve(mainRepo, ".dev", SEATS_DIR);
@@ -91,13 +103,15 @@ export function prepareAuthoringReviewSeat(mainRepo: string, key: AuthoringRevie
 		// A present dir is not proof of a valid seat after a crash/partial-create.
 		// Reuse only a registered worktree pinned to key.sha with a clean tree;
 		// otherwise force-remove and recreate (fail-closed to a correct seat).
-		if (isValidPinnedSeat(mainRepo, path, key.sha, run)) return path;
+		if (isValidPinnedSeat(mainRepo, path, key.sha, run)) {
+			return finishSeatPreparation(path, mainRepo, run);
+		}
 		forceRemoveWorktree(path, mainRepo, run);
 	}
 	// Detached, throwaway, pinned to the reviewed commit — same shape as review-heads.
 	// sha is hex-validated above; execFileSync passes argv with no shell.
 	run(["worktree", "add", "--detach", path, key.sha], mainRepo);
-	return path;
+	return finishSeatPreparation(path, mainRepo, run);
 }
 
 /** Force-remove a worktree registration + its tree; tolerate an unregistered leftover dir. */
@@ -120,23 +134,30 @@ function forceRemoveWorktree(path: string, mainRepo: string, run: GitExec): void
 	}
 }
 
-/** Best-effort remove of one seat worktree. A leaked seat is inert (under gitignored `.dev/`). */
-export function cleanupAuthoringReviewSeat(mainRepo: string, key: AuthoringReviewSeatKey, exec?: GitExec): void {
+/** Best-effort cleanup. Dependency repair is serialized with every other MAIN repair. */
+export async function cleanupAuthoringReviewSeat(mainRepo: string, key: AuthoringReviewSeatKey, exec?: GitExec, repair: typeof repairMainNodeModules = repairMainNodeModules): Promise<void> {
 	const run = exec ?? defaultGitExec;
 	const path = authoringReviewSeatPath(mainRepo, key);
 	try {
 		if (existsSync(path)) run(["worktree", "remove", "--force", path], mainRepo);
 	} catch {
 		// best-effort
+	} finally {
+		try {
+			await repair(mainRepo);
+		} catch {
+			// A teardown failure must not replace the review outcome. The pre-ship
+			// read-side repair retries and fails closed before the typecheck.
+		}
 	}
 }
 
 /** Remove every seat worktree under a reviewed SHA (all seats for one authoring-loop run). */
-export function cleanupAuthoringReviewSeatsForSha(mainRepo: string, sha: string, exec?: GitExec): void {
+export async function cleanupAuthoringReviewSeatsForSha(mainRepo: string, sha: string, exec?: GitExec, repair: typeof repairMainNodeModules = repairMainNodeModules): Promise<void> {
 	const run = exec ?? defaultGitExec;
 	const dir = resolve(authoringReviewSeatsRoot(mainRepo), sha);
-	if (!existsSync(dir)) return;
 	try {
+		if (!existsSync(dir)) return;
 		// List registered worktrees and drop any whose path sits under this sha dir.
 		const porcelain = run(["worktree", "list", "--porcelain"], mainRepo);
 		const paths = porcelain
@@ -153,5 +174,11 @@ export function cleanupAuthoringReviewSeatsForSha(mainRepo: string, sha: string,
 		}
 	} catch {
 		// best-effort
+	} finally {
+		try {
+			await repair(mainRepo);
+		} catch {
+			// See cleanupAuthoringReviewSeat: never throw from a pipeline finally.
+		}
 	}
 }

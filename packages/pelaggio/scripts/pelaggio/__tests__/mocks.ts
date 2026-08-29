@@ -186,7 +186,15 @@ export const STUB_ORIGIN_MAIN_OID = "f".repeat(40);
  *  pre-flight diff/seat checkouts) run `git worktree add` against the HOST repo. */
 export function defaultPrPreflightStubs(): Pick<
 	PipelineDeps,
-	"preparePrShipFreshness" | "runPrReviewGate" | "runTypecheckRatchet" | "verifyPrShipFreshness" | "readFreshnessGateRecord" | "writeFreshnessGateRecord" | "prepareAuthoringReviewSeat" | "cleanupAuthoringReviewSeatsForSha"
+	| "preparePrShipFreshness"
+	| "runPrReviewGate"
+	| "runTypecheckRatchet"
+	| "verifyPrShipFreshness"
+	| "readFreshnessGateRecord"
+	| "writeFreshnessGateRecord"
+	| "prepareAuthoringReviewSeat"
+	| "cleanupAuthoringReviewSeatsForSha"
+	| "repairMainNodeModules"
 > {
 	return {
 		preparePrShipFreshness: () => ({ kind: "up-to-date", originMainOid: STUB_ORIGIN_MAIN_OID }),
@@ -194,7 +202,8 @@ export function defaultPrPreflightStubs(): Pick<
 		readFreshnessGateRecord: () => null,
 		writeFreshnessGateRecord: () => "",
 		prepareAuthoringReviewSeat: (_main, key) => join(tmpdir(), `pelaggio-test-seat-${key.seatId}-p${key.pass}`),
-		cleanupAuthoringReviewSeatsForSha: () => {},
+		cleanupAuthoringReviewSeatsForSha: async () => {},
+		repairMainNodeModules: async () => ({ ranInstall: false, repaired: [] }),
 		runPrReviewGate: async (): Promise<PrReviewGateResult> => ({
 			gate: "pass",
 			body: "preflight pass",

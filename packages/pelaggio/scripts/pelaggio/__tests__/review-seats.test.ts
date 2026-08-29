@@ -220,13 +220,13 @@ describe("authoring review seats (#269)", () => {
 		rmSync(repo, { recursive: true, force: true });
 	});
 
-	it("cleanup removes a seat worktree when present", () => {
+	it("cleanup removes a seat worktree when present", async () => {
 		const repo = mkdtempSync(join(tmpdir(), "authoring-seat-clean-"));
 		const key = { sha: "abc1234", seatId: "claude", pass: 1 };
 		const path = authoringReviewSeatPath(repo, key);
 		mkdirSync(path, { recursive: true });
 		const cmds: string[][] = [];
-		cleanupAuthoringReviewSeat(repo, key, (args) => {
+		await cleanupAuthoringReviewSeat(repo, key, (args) => {
 			cmds.push(args);
 			return "";
 		});
@@ -234,7 +234,7 @@ describe("authoring review seats (#269)", () => {
 		rmSync(repo, { recursive: true, force: true });
 	});
 
-	it("cleanupAuthoringReviewSeatsForSha removes every registered seat under the sha", () => {
+	it("cleanupAuthoringReviewSeatsForSha removes every registered seat under the sha", async () => {
 		const repo = mkdtempSync(join(tmpdir(), "authoring-seat-sha-"));
 		const sha = "abcdef1";
 		const a = authoringReviewSeatPath(repo, { sha, seatId: "a", pass: 1 });
@@ -244,7 +244,7 @@ describe("authoring review seats (#269)", () => {
 		mkdirSync(b, { recursive: true });
 		mkdirSync(other, { recursive: true });
 		const cmds: string[][] = [];
-		cleanupAuthoringReviewSeatsForSha(repo, sha, (args) => {
+		await cleanupAuthoringReviewSeatsForSha(repo, sha, (args) => {
 			cmds.push(args);
 			if (args[0] === "worktree" && args[1] === "list") {
 				return [`worktree ${a}`, "HEAD abc", "", `worktree ${b}`, "HEAD abc", "", `worktree ${other}`, "HEAD def", "", `worktree ${repo}`, "HEAD main", ""].join("\n");
@@ -258,16 +258,16 @@ describe("authoring review seats (#269)", () => {
 		rmSync(repo, { recursive: true, force: true });
 	});
 
-	it("cleanup is fail-soft when git throws", () => {
+	it("cleanup is fail-soft when git throws", async () => {
 		const repo = mkdtempSync(join(tmpdir(), "authoring-seat-soft-"));
 		const key = { sha: "abc1234", seatId: "x", pass: 1 };
 		mkdirSync(authoringReviewSeatPath(repo, key), { recursive: true });
-		assert.doesNotThrow(() =>
+		await assert.doesNotReject(() =>
 			cleanupAuthoringReviewSeat(repo, key, () => {
 				throw new Error("locked");
 			}),
 		);
-		assert.doesNotThrow(() =>
+		await assert.doesNotReject(() =>
 			cleanupAuthoringReviewSeatsForSha(repo, key.sha, () => {
 				throw new Error("locked");
 			}),

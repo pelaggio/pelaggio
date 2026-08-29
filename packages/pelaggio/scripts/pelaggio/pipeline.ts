@@ -151,6 +151,7 @@ import {
 	type StepLog,
 	type StepResult,
 } from "./types.js";
+import { repairMainNodeModules } from "./worktree-deps.js";
 
 // ── Pipeline ───────────────────────────────────────────────────────────
 
@@ -248,6 +249,8 @@ export interface PipelineDeps {
 	/** Test seam: per-invocation cold seats around pre-flight. */
 	prepareAuthoringReviewSeat?: typeof prepareAuthoringReviewSeat;
 	cleanupAuthoringReviewSeatsForSha?: typeof cleanupAuthoringReviewSeatsForSha;
+	/** Read-side self-heal before the ship-candidate typecheck. */
+	repairMainNodeModules?: typeof repairMainNodeModules;
 }
 
 /** Upper bound for one deterministic ratchet run (a full-monorepo tsc pass fits comfortably). */
@@ -339,6 +342,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	const writeFreshnessGateRecordFn = deps.writeFreshnessGateRecord ?? writeFreshnessGateRecord;
 	const prepareAuthoringReviewSeatFn = deps.prepareAuthoringReviewSeat ?? prepareAuthoringReviewSeat;
 	const cleanupAuthoringReviewSeatsForShaFn = deps.cleanupAuthoringReviewSeatsForSha ?? cleanupAuthoringReviewSeatsForSha;
+	const repairMainNodeModulesFn = deps.repairMainNodeModules ?? repairMainNodeModules;
 	// Per-cycle challenge for execution receipts (#188). Held in process memory only;
 	// only challengeDigest is persisted on receipts / cycle provenance.
 	const cycleChallenge = randomBytes(32);
@@ -1758,7 +1762,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 							const prepare = seatPrepareChain.then(() => {
 								const seatSha = getArtifactHeadSha(worktree!) ?? reviewedSha;
 								preparedSeatShas.add(seatSha);
-								return prepareAuthoringReviewSeat(mainRepo, { sha: seatSha, seatId: slot.id, pass });
+								return prepareAuthoringReviewSeatFn(mainRepo, { sha: seatSha, seatId: slot.id, pass });
 							});
 							seatPrepareChain = prepare.then(
 								() => undefined,
@@ -1793,7 +1797,13 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 						else if (!loop.diversity.explanation.includes(explanation)) loop.diversity = { state: "softened", explanation: `${loop.diversity.explanation}; ${explanation}` };
 					}
 				} finally {
-					for (const sha of preparedSeatShas) cleanupAuthoringReviewSeatsForSha(mainRepo, sha);
+					for (const sha of preparedSeatShas) {
+						try {
+							await cleanupAuthoringReviewSeatsForShaFn(mainRepo, sha);
+						} catch (e) {
+							log(`⚠ authoring review seat cleanup failed (${sha.slice(0, 12)}): ${e instanceof Error ? e.message : String(e)}`);
+						}
+					}
 				}
 			}
 			if (!loop) {
@@ -2131,7 +2141,13 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				review: { gate: "block", body: `pre-flight threw: ${message}`, cost: 0, costEstimated: false, turns: 0, ok: false, subtype: "error_crash", agreement: "invalid" },
 			};
 		} finally {
-			for (const prepared of preparedShas) cleanupAuthoringReviewSeatsForShaFn(mainRepo, prepared);
+			for (const prepared of preparedShas) {
+				try {
+					await cleanupAuthoringReviewSeatsForShaFn(mainRepo, prepared);
+				} catch (e) {
+					log(`⚠ pre-flight seat cleanup failed (${prepared.slice(0, 12)}): ${e instanceof Error ? e.message : String(e)}`);
+				}
+			}
 		}
 		// #424 gate fix: deterministic clean-commit guard (see preflightHeadBefore above).
 		// Checked on every exit from the gate — including the thrown-advisory path — and
@@ -2172,12 +2188,25 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 
 	// PR-only pre-ship tail (#424): freshness + cold pre-flight. Not a PipelineStep.
 	if (!opts.dryRun && (target.name === "pull-request" || target.name === "auto-merge-pr")) {
+		const repairMainBeforeTypecheck = async (context: string): Promise<CycleResult | null> => {
+			try {
+				const repair = await repairMainNodeModulesFn(mainRepo);
+				if (repair.ranInstall) log(`repaired ${repair.repaired.length} outbound MAIN dependency link(s) ${context}`);
+				return null;
+			} catch (e) {
+				const detail = e instanceof Error ? e.message : String(e);
+				log(`⚠ MAIN dependency repair failed ${context}: ${detail}`);
+				return finish({ itemId, completed: false, cost, verdict, error: `MAIN dependency repair failed ${context}: ${detail}` });
+			}
+		};
 		// Deterministic freshness gates (typecheck:ratchet backstop + Git verification), with
 		// completion recorded per head SHA (#424 review): a gate failure ends the cycle AFTER
 		// the freshness merge is already committed, so a resume classifies the branch
 		// `up-to-date` — gate completion must be a recorded fact, never inferred from that
 		// state, or the resume would skip the very gates that failed.
 		const runFreshnessGates = async (context: string, fetchedOriginMainOid: string): Promise<CycleResult | null> => {
+			const repairFailure = await repairMainBeforeTypecheck(context);
+			if (repairFailure) return repairFailure;
 			const typecheck = await runTypecheckRatchetFn(worktree!);
 			if (!typecheck.ok) {
 				const detail = typecheck.detail ? `: ${typecheck.detail}` : "";
@@ -2277,6 +2306,8 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			// pre-flight author revision — the earlier freshness-gate run bound to the
 			// PRE-revision head, so without this a type-breaking revision still opens the PR.
 			// Run it before spending the recheck's review budget.
+			const repairFailure = await repairMainBeforeTypecheck("after pre-flight revision");
+			if (repairFailure) return repairFailure;
 			const revisionTypecheck = await runTypecheckRatchetFn(worktree!);
 			if (!revisionTypecheck.ok) {
 				const detail = revisionTypecheck.detail ? `: ${revisionTypecheck.detail}` : "";

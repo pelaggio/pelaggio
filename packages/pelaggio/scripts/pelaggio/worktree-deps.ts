@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { REPO } from "./config.js";
 import { withFileLock } from "./file-lock.js";
+import { authoringReviewHostDependencyRepair, restoreAuthoringReviewHostDependencies, snapshotAuthoringReviewHostDependencies } from "./review/seat-deps.js";
 
 export interface WorkspaceEntry {
 	name: string;
@@ -592,10 +593,11 @@ const REPAIR_LOCK_TIMEOUT_MS = Number(process.env.PELAGGIO_NODE_MODULES_LOCK_TIM
 const defaultLock: LockFn = (path, fn) => withFileLock(path, fn, { label: "node_modules repair lock", staleMs: REPAIR_LOCK_STALE_MS, acquireTimeoutMs: REPAIR_LOCK_TIMEOUT_MS });
 
 /**
- * Detect-and-repair: if `findOutboundMainSymlinks` reports any entries, run
- * `pnpm install --frozen-lockfile --ignore-scripts` in `mainRepo` to re-stitch
- * the layout from the lockfile without running lifecycle scripts. No-op when
- * clean.
+ * Detect-and-repair: first restore the durable authoring-seat package-link
+ * snapshot when needed; then, if `findOutboundMainSymlinks` reports entries,
+ * run `pnpm install --frozen-lockfile --ignore-scripts` in `mainRepo` to
+ * re-stitch the layout from the lockfile without lifecycle scripts. No-op when
+ * both surfaces are clean.
  *
  * Guarded by a cross-process lock (`file-lock.ts`) keyed on `mainRepo`:
  * concurrent `--parallel` workers otherwise race `pnpm install` against the
@@ -607,12 +609,20 @@ const defaultLock: LockFn = (path, fn) => withFileLock(path, fn, { label: "node_
  * waiting on real lock timing.
  */
 export async function repairMainNodeModules(mainRepo: string, runner: Runner = defaultRunner, lock: LockFn = defaultLock): Promise<RepairReport> {
-	if (findOutboundMainSymlinks(mainRepo).length === 0) return { ranInstall: false, repaired: [] };
+	if (findOutboundMainSymlinks(mainRepo).length === 0 && authoringReviewHostDependencyRepair(mainRepo) === "none") return { ranInstall: false, repaired: [] };
 	return lock(resolve(mainRepo, ".dev", "node-modules-repair.lock"), () => {
+		const packageRepair = authoringReviewHostDependencyRepair(mainRepo);
+		const restored = packageRepair === "restore" ? restoreAuthoringReviewHostDependencies(mainRepo) : [];
 		const outbound = findOutboundMainSymlinks(mainRepo);
-		if (outbound.length === 0) return { ranInstall: false, repaired: [] };
+		if (packageRepair !== "install" && outbound.length === 0) return { ranInstall: false, repaired: restored };
 		runner.run("pnpm install --frozen-lockfile --ignore-scripts", mainRepo);
-		return { ranInstall: true, repaired: outbound };
+		if (packageRepair === "install") {
+			snapshotAuthoringReviewHostDependencies(mainRepo);
+			if (authoringReviewHostDependencyRepair(mainRepo) !== "none") {
+				throw new Error("node_modules repair: pnpm install did not restore packages/pelaggio dependency links and .bin shims");
+			}
+		}
+		return { ranInstall: true, repaired: [...restored, ...outbound] };
 	});
 }
 

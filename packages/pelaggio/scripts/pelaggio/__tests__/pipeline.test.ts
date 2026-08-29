@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { after, before, describe, it, mock } from "node:test";
 import { REVIEW_CONFIG, WORKTREE_PREFIX } from "../config.js";
 import { appendReviewEscalation, type ReviewEscalationWriteInput, resolveDecision, reviewEscalationCommands, reviewEscalationId } from "../decisions.js";
@@ -11,10 +11,12 @@ import { FifoPolicy } from "../flow-policy.js";
 import { defaultTypecheckRatchet, type RunStepFn, runOrchestrator, runPipeline } from "../pipeline.js";
 import type { PrReviewGateResult, RunPrReviewGateOptions } from "../pr-review-cli.js";
 import { OPERATOR_ATTESTED_TTY_SUPPRESSION } from "../provider-routing.js";
+import { snapshotAuthoringReviewHostDependencies } from "../review/seat-deps.js";
 import { shipBodyFile } from "../ship/decision.js";
 import type { ShipBookkeepingResult } from "../ship/index.js";
 import { getShipTarget } from "../ship/index.js";
 import type { Flags, ParkSignal, PipelineOpts, ReviewEscalation } from "../types.js";
+import { repairMainNodeModules as repairMainNodeModulesImpl } from "../worktree-deps.js";
 import {
 	allCommitMessages,
 	createMockRunPipeline,
@@ -4297,6 +4299,61 @@ function shipFrom(worktree: string): PipelineOpts {
 }
 
 describe("runPipeline — PR pre-flight and freshness (#424)", () => {
+	it("repairs MAIN after a skipped teardown before the ship-candidate ratchet", async () => {
+		const worktree = makeDeliverableRepo();
+		const parkSignal = makeParkSignal();
+		const order: string[] = [];
+		const packageNodeModules = resolve(worktree, "packages", "pelaggio", "node_modules");
+		const canonicalTargets = new Map<string, string>();
+		mkdirSync(packageNodeModules, { recursive: true });
+		writeFileSync(resolve(worktree, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+		execSync("git add pnpm-lock.yaml && git commit -q -m lock", { cwd: worktree });
+		for (const name of ["diff", "tsx", "ulid", "yaml"]) {
+			const target = resolve(worktree, "node_modules", ".pnpm", `${name}@1.0.0`, "node_modules", name);
+			mkdirSync(target, { recursive: true });
+			writeFileSync(resolve(target, "package.json"), JSON.stringify({ name }));
+			const link = resolve(packageNodeModules, name);
+			const relativeTarget = relative(packageNodeModules, target);
+			symlinkSync(relativeTarget, link, "dir");
+			canonicalTargets.set(name, relativeTarget);
+		}
+		snapshotAuthoringReviewHostDependencies(worktree);
+		const yamlLink = resolve(packageNodeModules, "yaml");
+		const crashedSeatTarget = resolve(worktree, ".dev", "authoring-review-seats", "crashed", "node_modules", ".pnpm", "yaml");
+		mkdirSync(crashedSeatTarget, { recursive: true });
+		rmSync(yamlLink);
+		symlinkSync(crashedSeatTarget, yamlLink, "dir");
+
+		const lockPaths: string[] = [];
+		const runnerCalls: string[] = [];
+		const { runStep } = createMockRunStep({ ship: prShipDecision() }, parkSignal);
+		const result = await runPipeline(shipFrom(worktree), parkSignal, baseFlags, {
+			runStep,
+			...defaultPrPreflightStubs(),
+			mainRepo: worktree,
+			repairMainNodeModules: async (main) => {
+				assert.equal(main, worktree);
+				order.push("repair");
+				return repairMainNodeModulesImpl(main, { run: (cmd) => runnerCalls.push(cmd) }, async (path, fn) => {
+					lockPaths.push(path);
+					return fn();
+				});
+			},
+			runTypecheckRatchet: async () => {
+				order.push("ratchet");
+				assert.equal(readlinkSync(yamlLink), canonicalTargets.get("yaml"), "read-side repair must finish before the ratchet");
+				return { ok: true };
+			},
+			listWorktrees: () => [],
+			appendLog: () => {},
+			dispatchStepEffects: async () => ({ appendText: "https://example.test/pull/1" }),
+		});
+		assert.equal(result.completed, true, `expected completed; error=${result.error}`);
+		assert.deepEqual(order.slice(0, 2), ["repair", "ratchet"]);
+		assert.deepEqual(lockPaths, [resolve(worktree, ".dev", "node-modules-repair.lock")]);
+		assert.deepEqual(runnerCalls, [], "restoring the recorded package links does not need pnpm");
+	});
+
 	it("up-to-date path runs one cold gate before ship with origin/main pin and no comment callback", async () => {
 		const worktree = makeDeliverableRepo();
 		const parkSignal = makeParkSignal();
@@ -4344,7 +4401,7 @@ describe("runPipeline — PR pre-flight and freshness (#424)", () => {
 				seats.push(key.seatId);
 				return join(tmpdir(), `preflight-seat-${key.seatId}`);
 			},
-			cleanupAuthoringReviewSeatsForSha: (_main, sha) => {
+			cleanupAuthoringReviewSeatsForSha: async (_main, sha) => {
 				cleaned.push(sha);
 			},
 			runPrReviewGate: async (opts) => {
@@ -4500,7 +4557,7 @@ describe("runPipeline — PR pre-flight and freshness (#424)", () => {
 			prepareAuthoringReviewSeat: () => {
 				throw new Error("seat boom");
 			},
-			cleanupAuthoringReviewSeatsForSha: (_main, sha) => {
+			cleanupAuthoringReviewSeatsForSha: async (_main, sha) => {
 				cleaned.push(sha);
 			},
 			runPrReviewGate: async () => {
@@ -4554,13 +4611,16 @@ describe("runPipeline — PR pre-flight and freshness (#424)", () => {
 		assert.ok(seats[0]?.denial?.registeredWorktrees.includes(worktree));
 	});
 
-	it("a clean commit into the live claim worktree during pre-flight fails the cycle before ship", async () => {
+	it("a cleanup failure cannot bypass the pre-flight HEAD-movement guard", async () => {
 		const worktree = makeDeliverableRepo();
 		const parkSignal = makeParkSignal();
 		const { runStep, calls } = createMockRunStep({ ship: prShipDecision() }, parkSignal);
 		const result = await runPipeline(shipFrom(worktree), parkSignal, baseFlags, {
 			runStep,
 			...defaultPrPreflightStubs(),
+			cleanupAuthoringReviewSeatsForSha: async () => {
+				throw new Error("repair lock unavailable");
+			},
 			runPrReviewGate: async () => {
 				// Porcelain-invisible mutation: a clean commit leaves `git status` empty, so only
 				// the pre/post HEAD compare can catch it.
@@ -4668,7 +4728,7 @@ describe("runPipeline — PR pre-flight and freshness (#424)", () => {
 		const result = await runPipeline(shipFrom(worktree), parkSignal, baseFlags, {
 			runStep,
 			...defaultPrPreflightStubs(),
-			cleanupAuthoringReviewSeatsForSha: (_main, sha) => {
+			cleanupAuthoringReviewSeatsForSha: async (_main, sha) => {
 				cleaned.push(sha);
 			},
 			runPrReviewGate: async () => {
