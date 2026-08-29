@@ -26,18 +26,20 @@ function seed(dir: string, rel: string, body: string): void {
 }
 
 function captureStdout<T>(run: () => Promise<T>): Promise<{ code: T; stdout: string; stderr: string }> {
-	const origOut = process.stdout.write.bind(process.stdout);
-	const origErr = process.stderr.write.bind(process.stderr);
+	const origOut = process.stdout.write;
+	const origErr = process.stderr.write;
 	let out = "";
 	let err = "";
-	(process.stdout as unknown as { write: (s: string) => boolean }).write = ((s: string) => {
-		out += typeof s === "string" ? s : String(s);
+	(process.stdout as unknown as { write: (s: string | Uint8Array) => boolean }).write = function (this: NodeJS.WriteStream, s: string | Uint8Array, ...args: unknown[]) {
+		if (typeof s !== "string") return Reflect.apply(origOut, this, [s, ...args]) as boolean;
+		out += s;
 		return true;
-	}) as typeof process.stdout.write;
-	(process.stderr as unknown as { write: (s: string) => boolean }).write = ((s: string) => {
-		err += typeof s === "string" ? s : String(s);
+	} as typeof process.stdout.write;
+	(process.stderr as unknown as { write: (s: string | Uint8Array) => boolean }).write = function (this: NodeJS.WriteStream, s: string | Uint8Array, ...args: unknown[]) {
+		if (typeof s !== "string") return Reflect.apply(origErr, this, [s, ...args]) as boolean;
+		err += s;
 		return true;
-	}) as typeof process.stderr.write;
+	} as typeof process.stderr.write;
 	return run()
 		.then((code) => ({ code, stdout: out, stderr: err }))
 		.finally(() => {
