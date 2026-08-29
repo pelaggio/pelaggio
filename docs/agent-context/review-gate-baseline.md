@@ -138,19 +138,59 @@ Claude-seat env narrowing on main today; **#589 introduces and wires it**. PR #6
 *"#554 env denial is not on the Claude path"* — is correct against **main**, the merge base it
 reviewed, and is a sequencing artifact rather than a permanent gap.
 
-The salvageable result is not the intended one. The reachability predicate built for this fixture
-(`ci/assurance-reachability.ts`), run against the #589 tree, reported the symbol **reachable** —
-contradicting the charter, two rounds of reasoning, and a public issue. **The mechanized check was
-right where the hand-read evidence was wrong.** That is evidence about grep-based reasoning being
-unreliable, not about the assurance graph, which had no node for this mechanism either way.
+The salvageable result is not the intended one. A one-off reachability predicate built for this
+fixture, run against the #589 tree, reported the symbol **reachable** — contradicting the charter,
+two rounds of reasoning, and a public issue. **The mechanized check was right where the hand-read
+evidence was wrong.** That is evidence about grep-based reasoning being unreliable, not about the
+assurance graph, which had no node for this mechanism either way.
 
-Two caveats before trusting the predicate further:
+The probe exposed two preconditions that made it unsuitable as a standing check:
 
 - Its first run reported the symbol reachable because **the checker's own doc comment named it** as
-  the worked example — the failure mode it exists to catch, reproduced by itself. Comments and string
-  literals are now blanked before matching.
+  the worked example — the failure mode it existed to catch, reproduced by itself. The corrected run
+  blanked comments and string literals before matching.
 - `CLAUDE_SEAT_PASSTHROUGH_ENV_VARS` is genuinely defined-but-unreferenced and legitimately so, being
   documented as exported only for a conformance test. Deliberate test-only exports need an allowlist.
+
+**Parked, not a CI gate (#653).** The experimental implementation is kept at
+`ci/assurance-reachability.ts` and explicitly marks itself parked: no test, script, CI job, or
+production entry point invokes its exported APIs. Running the first wiring slice produced 50
+candidates, classified as 23 deliberate test-only exports requiring an allowlist, 5 genuinely
+unreferenced production exports that a default-deny check should report, and 22 live production
+symbols falsely reported as unreachable.
+
+The 23-name allowlist is `CLAUDE_SEAT_PASSTHROUGH_ENV_VARS`, `DEBT_CHECKS`,
+`GROK_EGRESS_ENDPOINT`, `SAFETY_CLASSES`,
+`__clearFreshnessGateRecordsForTests`, `__setFetcherForTests`,
+`__setProviderAvailableForTests`, `__setStorageForTests`, `cleanupAuthoringReviewSeat`,
+`currentAttempt`, `fleetAgreementOf`, `formatDuration`, `handoff`,
+`hasAuthoringReviewFindingsBlock`, `isContraction`, `listAdjudicationSourceRecords`,
+`matchEligibleProviders`, `readPrFindingDispositionRecord`, `readPrReviewGateRecord`,
+`renderFrontier`, `setDocReviewDepsForTests`, `setPrReviewDepsForTests`, and
+`verifyExecutionReceipt`. (`__setStorageForTests` is defined in two modules, so there are 23 unique
+names.) The five reportable exports are `DECISIONS_SKELETON`, `loadSessionRecord`, `MODEL_PROFILES`,
+`normalizeWorktreeIdentity`, and `useCurrentRepo`; exempting them would invert the allowlist.
+
+The 22 false reports falsify the scanner's standing-check premise. Six are live React components —
+`RepoNav`, `RunDetailFromQuery`, `RunList`, `StartForm`, `StatsView`, and `TokenPrompt` — whose `.tsx`
+definitions and `.astro` imports are outside its `.ts`-only source discovery. The other 16 are
+missed because the comment/string stripper blanks whole template literals, including `${...}`
+expressions, and can desynchronize before later code; confirmed examples are
+`GROK_SANDBOX_APPEND`, used in a prompt interpolation, and `ownerForEmission`, called from
+`appendDecisions` later in the same module.
+
+The predicate also has no production-export enumeration primitive: a human must supply one
+TypeScript identifier. Tests are excluded, and any remaining non-comment textual reference —
+including a re-export or reference from dead production code — counts as reachable. A correct
+default-deny gate therefore needs export enumeration, extension coverage, a repaired or replaced
+stripper, and the explicit allowlist above. Wiring this predicate into `pnpm test:ci` would promote a
+useful retrospective probe into a claim it cannot establish; #653 parks it instead.
+
+The retained lesson is the falsified hand-reading above. Current realization evidence instead names
+harness-owned test observations in `docs/assurance/shadow-graph.json`; `ci/assurance-observations.ts`
+requires exact, unskipped `node:test` receipts for them, and `ci/test-realization-mutation.sh` proves
+one graph-declared observation fails when its mechanism is hollowed. That successor is still not a
+general call-graph proof, and the corpus documentation says so.
 
 ### Coverage — verified independently of Fixture A
 

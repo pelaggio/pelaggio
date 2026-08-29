@@ -3,14 +3,41 @@
  *
  * A realization claims a proposition is *implemented*. Existence checks — the file is present, the
  * function is defined, the unit tests pass — cannot distinguish an implemented mechanism from a
- * defined-but-uncalled one. #625 is the worked example: `buildClaudeSeatEnv` had a file, a
- * definition, and thorough tests, and no caller, so a documented trust guarantee never executed.
- * Fifteen review rolls on its own PR did not surface it, because per-PR review reads a diff.
+ * defined-but-uncalled one. This probe was created after #625 incorrectly claimed that
+ * `buildClaudeSeatEnv` had no production caller. The claim was disproven: `spawnClaudeSeat` calls it
+ * for both the child process and preflight probe. The episode remains an example of hand-read grep
+ * evidence failing, not an uncalled realization.
  *
  * Reachable here means "referenced from production source other than its own definition". That is a
  * deliberately weak proxy for real call-graph reachability: it is cheap, has no false negatives for
- * the #625 shape (zero references is zero references), and its false POSITIVES — a symbol referenced
- * only from dead code — are a smaller problem than the silence it replaces.
+ * a defined-but-unreferenced shape (zero references is zero references), and its false POSITIVES — a
+ * symbol referenced only from dead code — are a smaller problem than the silence it replaces.
+ */
+/**
+ * PARKED (#653): no test, script, CI job, or production entry point invokes these exported APIs;
+ * `productionSources` is used only inside this parked module. That is deliberate. Wiring this
+ * module requires a default-deny export enumerator and an explicit allowlist for these 23 test-only
+ * exports:
+ *
+ * `CLAUDE_SEAT_PASSTHROUGH_ENV_VARS`, `DEBT_CHECKS`, `GROK_EGRESS_ENDPOINT`, `SAFETY_CLASSES`,
+ * `__clearFreshnessGateRecordsForTests`, `__setFetcherForTests`,
+ * `__setProviderAvailableForTests`, `__setStorageForTests`, `cleanupAuthoringReviewSeat`,
+ * `currentAttempt`, `fleetAgreementOf`, `formatDuration`, `handoff`,
+ * `hasAuthoringReviewFindingsBlock`, `isContraction`, `listAdjudicationSourceRecords`,
+ * `matchEligibleProviders`, `readPrFindingDispositionRecord`, `readPrReviewGateRecord`,
+ * `renderFrontier`, `setDocReviewDepsForTests`, `setPrReviewDepsForTests`, and
+ * `verifyExecutionReceipt`.
+ *
+ * The current scanner cannot enumerate production exports, scans `.ts` but misses `.tsx` and the
+ * `.astro` imports that make web components live, and blanks whole template literals rather than
+ * preserving `${...}` expressions. The latter can desynchronize scanning and hide later ordinary
+ * calls; `GROK_SANDBOX_APPEND` and `ownerForEmission` are confirmed examples. These limitations
+ * produce known false reports, while the weak-proxy caveat above still permits references from dead
+ * production code to count as reachable.
+ *
+ * See `docs/agent-context/review-gate-baseline.md` for the retraction and triage history. The
+ * realization-observation mechanism described there is adjacent evidence, not a call-graph
+ * replacement.
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { extname, join, relative } from "node:path";
@@ -51,10 +78,10 @@ export function productionSources(repo: string, roots: readonly string[]): strin
 /**
  * Blank out comments and string literals so prose cannot vouch for a symbol.
  *
- * This checker's own doc comment names `buildClaudeSeatEnv` as its worked example, which made the
- * unreachable symbol report as reachable on the first run — the failure mode the check exists to
- * catch, reproduced by the check itself. Replaced with spaces rather than removed so line numbers
- * and the definition-line regex still see the original layout.
+ * The first version of this checker's own doc comment repeated #625's disproven claim and named
+ * `buildClaudeSeatEnv`, which made the probe's own text count as reachability. Comments and strings
+ * are replaced with spaces rather than removed so line numbers and the definition-line regex still
+ * see the original layout.
  */
 export function stripCommentsAndStrings(source: string): string {
 	const out = source.split("");
