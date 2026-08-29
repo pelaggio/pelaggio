@@ -27,6 +27,7 @@ import {
 import { forbiddenRootsForConfinement } from "./confinement/roots.js";
 import { type AcceptedSession, captureEvaluatorContext, createSessionController, firstDiffPathsByRoot, resolveEligibleSessions, revalidateChangedRoot, type SessionController, type SessionEvaluatorContext } from "./confinement/sessions.js";
 import { continuousCycleCap, DayBudgetTracker, dayKey, freeQueueProbe, nextLocalMidnightMs, resolveContinuousConfig, sumDaySpendFromLog } from "./continuous.js";
+import { RECOVERABLE_ERRORS } from "./cycle-errors.js";
 import {
 	appendDecisions as appendDecisionsDefault,
 	appendReviewEscalation as appendReviewEscalationDefault,
@@ -135,23 +136,7 @@ import { extractPrUrl } from "./ship/pull-request.js";
 import { isPipelineStep, type PipelineStep, STEPS } from "./step-names.js";
 import { getProvider, REGISTERED_PROVIDERS, type RunStepFn, type RunStepOpts, runStep as runStepDefault } from "./step-runner.js";
 import { A, createStepRenderer, fmtElapsed, LiveStatus, StatusBar, TUI_ENABLED } from "./tui.js";
-import {
-	type CycleDisposition,
-	type CycleGitBinding,
-	type CycleResult,
-	type CycleStatus,
-	type CycleVersionProvenance,
-	type EventWriter,
-	type ExecutionReceiptDescriptor,
-	type Flags,
-	type ParkSignal,
-	type PipelineOpts,
-	RECOVERABLE_ERRORS,
-	type ShipTargetName,
-	type Step,
-	type StepLog,
-	type StepResult,
-} from "./types.js";
+import type { CycleDisposition, CycleGitBinding, CycleResult, CycleStatus, CycleVersionProvenance, EventWriter, ExecutionReceiptDescriptor, Flags, ParkSignal, PipelineOpts, ShipTargetName, Step, StepLog, StepResult } from "./types.js";
 
 // ── Pipeline ───────────────────────────────────────────────────────────
 
