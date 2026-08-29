@@ -2,15 +2,15 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CONFIG, REPO, resolveProviderBin, resolveStepSettings, type StepSettings } from "./config.js";
-import { emitDecisionsFromText } from "./decisions.js";
-import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseWaitFlag, resolveParkReset } from "./outcome-classify.js";
-import { buildAgentEnv, makeSecretScrubber, scopeEnvAllowlistToProvider } from "./secret-hygiene.js";
-import type { RunStepOpts, StepProvider } from "./step-runner.js";
-import { composeSystemAppend, createStepTextProjection, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "./step-runner-shared.js";
-import { MUTATING_TOOLS, toolBrief } from "./tui.js";
-import type { ParkSignal, ProviderCapabilities, Step, StepEvent, StepResult, TokenUsage } from "./types.js";
-import { ensureWorktreeDeps } from "./worktree-deps.js";
+import { CONFIG, REPO, resolveProviderBin, resolveStepSettings, type StepSettings } from "../config.js";
+import { emitDecisionsFromText } from "../decisions.js";
+import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseWaitFlag, resolveParkReset } from "../outcome-classify.js";
+import { buildAgentEnv, makeSecretScrubber, scopeEnvAllowlistToProvider } from "../secret-hygiene.js";
+import { composeSystemAppend, createStepTextProjection, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "../step-runner-shared.js";
+import { MUTATING_TOOLS, toolBrief } from "../tui.js";
+import type { ParkSignal, ProviderCapabilities, Step, StepEvent, StepResult, TokenUsage } from "../types.js";
+import { ensureWorktreeDeps } from "../worktree-deps.js";
+import type { RunStepOpts, StepProvider } from "./types.js";
 
 /** Codex: workspace-write sandbox, estimated cost, cache counters, JSONL + final-message output. */
 export const CODEX_CAPABILITIES: ProviderCapabilities = {

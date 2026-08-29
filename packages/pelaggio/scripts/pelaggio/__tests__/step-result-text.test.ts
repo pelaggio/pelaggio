@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { buildCodexStepResult } from "../codex-provider.js";
 import { emitDecisionsFromText } from "../decisions.js";
-import { buildGrokStepResult } from "../grok-provider.js";
-import { buildOpenCodeStepResult } from "../opencode-provider.js";
+import { buildCodexStepResult } from "../providers/codex.js";
+import { buildGrokStepResult } from "../providers/grok.js";
+import { buildOpenCodeStepResult } from "../providers/opencode.js";
 import { createStepTextProjection, projectClaudeAssistantBlocks, REGISTERED_PROVIDERS } from "../step-runner.js";
 import type { EmittedDecision, ProviderName } from "../types.js";
 

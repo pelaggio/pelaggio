@@ -3,8 +3,8 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { buildCodexExecArgs, buildCodexStepResult, CODEX_READ_ONLY_APPEND, CODEX_SANDBOX_APPEND, codexEffort, codexProvider, codexTimeoutMs, codexUsesReadOnlySandbox, selectCodexModel } from "../codex-provider.js";
 import { CONFIG } from "../config.js";
+import { buildCodexExecArgs, buildCodexStepResult, CODEX_READ_ONLY_APPEND, CODEX_SANDBOX_APPEND, codexEffort, codexProvider, codexTimeoutMs, codexUsesReadOnlySandbox, selectCodexModel } from "../providers/codex.js";
 import { EDIT_LOOP_THRESHOLD } from "../step-runner-shared.js";
 import type { StepEvent } from "../types.js";
 

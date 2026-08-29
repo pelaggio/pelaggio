@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { HookInput } from "@anthropic-ai/claude-agent-sdk";
-import { codexProvider } from "../codex-provider.js";
 import { CONFIG } from "../config.js";
 import type { MainCheckoutDeltaObserver, MainCheckoutDeltaResult } from "../confinement/roots.js";
-import { grokCapabilities } from "../grok-provider.js";
-import { OPENCODE_CAPABILITIES, opencodeProvider } from "../opencode-provider.js";
+import { codexProvider } from "../providers/codex.js";
+import { grokCapabilities } from "../providers/grok.js";
+import { OPENCODE_CAPABILITIES, opencodeProvider } from "../providers/opencode.js";
 import {
 	beginMainCheckoutAttribution,
 	blockForeignRootWrite,

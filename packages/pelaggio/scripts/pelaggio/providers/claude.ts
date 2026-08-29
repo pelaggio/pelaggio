@@ -1,0 +1,644 @@
+/** Claude step provider (L3): the SDK seat, its PreToolUse guards, and the main-checkout attribution hooks. */
+import { lstatSync } from "node:fs";
+import { join, resolve } from "node:path";
+import type { HookInput, HookJSONOutput, SDKAssistantMessage, SDKRateLimitEvent, SDKResultMessage, SDKSystemMessage, SpawnedProcess, SpawnOptions, SyncHookJSONOutput } from "@anthropic-ai/claude-agent-sdk";
+import { query } from "@anthropic-ai/claude-agent-sdk";
+import { preflightClaudeSeat, spawnClaudeSeat } from "../claude-seat.js";
+import { CONFIG, REPO, resolveStepSettings } from "../config.js";
+import type { MainCheckoutDeltaObserver } from "../confinement/roots.js";
+import { sessionsDir } from "../confinement/sessions.js";
+import { emitDecisionsFromText } from "../decisions.js";
+import { FRESHNESS_GATE_RECORDS_DIR, freshnessGateRecordsDir } from "../freshness-gate-record.js";
+import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseWaitFlag, resolveParkReset } from "../outcome-classify.js";
+import { gateRecordsDir, PR_REVIEW_GATE_RECORDS_DIR } from "../pr-review-gate-record.js";
+import { ADJUDICATION_SOURCES_DIR, adjudicationSourcesDir } from "../review/adjudication.js";
+import { PR_FINDING_DISPOSITIONS_DIR, prFindingDispositionsDir } from "../review/carry.js";
+import { composeSystemAppend, createStepTextProjection, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath, type StepTextProjection } from "../step-runner-shared.js";
+import { MUTATING_TOOLS, toolBrief } from "../tui.js";
+import type { ProviderCapabilities, TokenUsage } from "../types.js";
+import { ensureWorktreeDeps } from "../worktree-deps.js";
+import type { RunStepFn, StepProvider } from "./types.js";
+
+export type { StepTextProjection } from "../step-runner-shared.js";
+export { composeSystemAppend, createStepTextProjection, isWorktreePath } from "../step-runner-shared.js";
+
+/** Pure walker over Claude assistant content blocks. Tests feed synthetic blocks; `claudeRunStep` calls this on each message. */
+export function projectClaudeAssistantBlocks(blocks: ReadonlyArray<{ type: string; text?: string; input?: unknown }>, projection: StepTextProjection): void {
+	for (const block of blocks) {
+		if (block.type === "text") {
+			if (typeof block.text === "string") projection.appendAssistant(block.text);
+		} else if (block.type === "tool_use") {
+			projection.appendToolInput(block.input);
+		}
+	}
+}
+
+// ── Step runner ────────────────────────────────────────────────────────
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
+/** Preserve the SDK's structured turn-limit signal when the child-process exit
+ * error arrives after the result message and carries only a generic message. */
+export function isClaudeMaxTurnsError(error: unknown, resultSubtype: string): boolean {
+	if (resultSubtype === "error_max_turns") return true;
+	if (!isRecord(error)) return false;
+	const attachments = Array.isArray(error.attachments) ? error.attachments : [];
+	return attachments.some((attachment) => {
+		if (attachment === "max_turns_reached") return true;
+		if (!isRecord(attachment)) return false;
+		return attachment.type === "max_turns_reached" || attachment.subtype === "error_max_turns";
+	});
+}
+
+/** Claude: native semantic deny via PreToolUse hooks; billed USD; cache counters; stream events. */
+export const CLAUDE_CAPABILITIES: ProviderCapabilities = {
+	semanticDeny: true,
+	isolation: [],
+	costMeter: { kind: "usd-billed" },
+	cacheReporting: true,
+	outputTransport: "stream",
+	sessionResume: false,
+};
+
+// Worktree-side install guard: the worktree shares MAIN_REPO's `node_modules`
+// via symlink, so any in-worktree `pnpm install` (or equivalent) re-points the
+// shared symlinks into the worktree's `.pnpm` store and corrupts main once the
+// worktree is removed. The escape hatch is the explicit `worktree-deps
+// --repair-main` invocation, which restores the layout from the lockfile.
+const INSTALL_PATTERN = /\b(pnpm\s+(install|i|add|update|up|upgrade|remove|rm)|npm\s+(install|i|ci))\b/;
+
+export function blockWorktreeInstall(input: HookInput): SyncHookJSONOutput {
+	const tn = "tool_name" in input ? String(input.tool_name) : "";
+	if (tn !== "Bash") return {};
+	const ti = ("tool_input" in input ? input.tool_input : {}) as Record<string, unknown>;
+	const cmd = String(ti.command ?? "");
+	if (!cmd) return {};
+	if (cmd.includes("worktree-deps") && cmd.includes("--repair-main")) return {};
+	if (!INSTALL_PATTERN.test(cmd)) return {};
+	return {
+		decision: "block" as const,
+		reason:
+			"Worktree-side `pnpm install` (or equivalent) is blocked: this worktree shares MAIN_REPO's `node_modules` via symlink, and a worktree-side install re-points the symlinks into the worktree's `.pnpm` store, which corrupts the main repo when the worktree is removed. If you genuinely need a dep change, raise it in your final message — dep updates are managed via Renovate / patch-bump cadence, not in-cycle.",
+	};
+}
+
+// Plan-polish guard: during `implement`, block writes to docs/plans/ so the model
+// executes the plan instead of editing it. Surfaced as a named helper because the
+// reason — not the mechanics — is the non-obvious part worth locating.
+export function blockPlanPolish(input: HookInput, cwd: string): SyncHookJSONOutput {
+	const tn = "tool_name" in input ? String(input.tool_name) : "";
+	if (tn !== "Write" && tn !== "Edit") return {};
+	const ti = ("tool_input" in input ? input.tool_input : {}) as Record<string, unknown>;
+	const fp = String(ti.file_path ?? "");
+	if (!fp) return {};
+	const abs = fp.startsWith("/") ? fp : resolve(cwd, fp);
+	if (!/\/docs\/plans\//.test(abs)) return {};
+	return {
+		decision: "block" as const,
+		reason: `"${fp}" is under docs/plans/, which is READ-ONLY during implement. Execute the plan by writing code to other files — do not edit the plan itself. If the plan is genuinely wrong, stop and report the issue instead of editing around it.`,
+	};
+}
+
+function pathUnderRoot(abs: string, root: string): boolean {
+	const a = resolve(abs);
+	const r = resolve(root);
+	return a === r || a.startsWith(`${r}/`);
+}
+
+/**
+ * #510 must-fix (1a): `MAIN_REPO/.dev/` registers whose mere mention in an opaque Bash command is
+ * denied outright — the session-evidence store plus BOTH pr-adjudicate evidence stores
+ * (`pelaggio pr-adjudicate` consumes gate records and adjudication-source records as
+ * authorization, so a seat that can shell-redirect into either can forge a consensus-block
+ * record + matching source and turn a red review green without fleet evidence). Names come from
+ * the canonical storage modules so the deny list cannot drift from the real paths.
+ * `.dev/freshness-gate-records/` (#424) joins the list as defense in depth: gate-skip trust
+ * is in-process only (#511 — a forged disk record no longer authorizes anything), but the
+ * observability register still must not be seat-writable.
+ * `.dev/pr-review-finding-dispositions/` (#495) joins for the same reason as the adjudication
+ * stores: a seat that could write it could forge an auto-refutation of a real finding.
+ */
+const BASH_DENIED_DEV_REGISTERS = ["sessions", PR_REVIEW_GATE_RECORDS_DIR, ADJUDICATION_SOURCES_DIR, PR_FINDING_DISPOSITIONS_DIR, FRESHNESS_GATE_RECORDS_DIR] as const;
+const BASH_DENIED_DEV_REGISTER_RE = new RegExp(`(^|[\\s"'=/])\\.dev/(${BASH_DENIED_DEV_REGISTERS.join("|")})(/|\\b)`);
+
+/**
+ * #369: Block Write/Edit into main and every known foreign Git worktree root,
+ * while allowing the step cwd and an explicitly threaded own item worktree.
+ * Nested authoring-review seats under `MAIN_REPO/.dev/authoring-review-seats/`
+ * remain allowed as cwd (#269). Separately denies Write/Edit into
+ * `MAIN_REPO/.dev/sessions/` so agents cannot forge session evidence.
+ * Bash residual for general paths remains (the command string is opaque), but a
+ * Bash command that mentions a harness-owned register (`docs/decision-log/`,
+ * `.dev/sessions/`) is denied outright (#386, fail closed): a shell redirect is
+ * how an agent would forge decision or escalation authority in its own worktree,
+ * and reads of those registers are supplied by the harness, never self-served.
+ */
+export function blockForeignRootWrite(input: HookInput, cwd: string, mainRepo: string, registeredWorktrees: readonly string[], ownWorktree?: string): SyncHookJSONOutput {
+	const tn = "tool_name" in input ? String(input.tool_name) : "";
+	if (tn === "Bash") {
+		const ti = ("tool_input" in input ? input.tool_input : {}) as Record<string, unknown>;
+		const cmd = String(ti.command ?? "");
+		// Residual (#510 1a, documented): this denial covers pipeline seats reached through this
+		// hook seam only. Host processes and un-jailed Bash outside the hook system can still
+		// write these registers until the chartered ADR-0018/#419 harness-attested-evidence and
+		// ADR-0023 execution-jail work lands.
+		if (/(^|[\s"'=/])docs\/decision-log(\/|\b)/.test(cmd) || BASH_DENIED_DEV_REGISTER_RE.test(cmd)) {
+			return {
+				decision: "block" as const,
+				reason:
+					"This Bash command references a harness-owned register (docs/decision-log/, .dev/sessions/, " +
+					`.dev/${PR_REVIEW_GATE_RECORDS_DIR}/, .dev/${ADJUDICATION_SOURCES_DIR}/, .dev/${PR_FINDING_DISPOSITIONS_DIR}/, or .dev/${FRESHNESS_GATE_RECORDS_DIR}/). These are written only by the harness; ` +
+					'emit a "DECISION:" line in your step output for decisions — review/adjudication evidence is produced only by the harness\'s own review commands.',
+			};
+		}
+		return {};
+	}
+	if (tn !== "Write" && tn !== "Edit") return {};
+	const ti = ("tool_input" in input ? input.tool_input : {}) as Record<string, unknown>;
+	const fp = String(ti.file_path ?? "");
+	if (!fp) return {};
+	const cwdAbs = resolve(cwd);
+	const mainAbs = resolve(mainRepo);
+	const abs = fp.startsWith("/") ? resolve(fp) : resolve(cwdAbs, fp);
+
+	// Sessions-dir denial is absolute — even when cwd/own would otherwise allow.
+	const sessionsAbs = sessionsDir(mainAbs);
+	if (pathUnderRoot(abs, sessionsAbs)) {
+		return {
+			decision: "block" as const,
+			reason: `Path "${fp}" targets the session-record directory (${sessionsAbs}), which is harness-owned evidence. Do not write session records from agent tools.`,
+		};
+	}
+
+	// Adjudication-evidence denial is likewise absolute (#510 1a): these stores authorize
+	// `review=success` without a fleet run, so no seat may Write/Edit them — even when cwd
+	// or ownWorktree would otherwise allow the path. Freshness-gate records (#424) get the
+	// same treatment as defense in depth (gate-skip trust is in-process only — #511 — but
+	// the observability register still must not be seat-writable).
+	for (const evidenceRoot of [gateRecordsDir(mainAbs), adjudicationSourcesDir(mainAbs), prFindingDispositionsDir(mainAbs), freshnessGateRecordsDir(mainAbs)]) {
+		if (pathUnderRoot(abs, evidenceRoot)) {
+			return {
+				decision: "block" as const,
+				reason: `Path "${fp}" targets a harness-owned evidence store (${evidenceRoot}). Do not write gate, adjudication-source, finding-disposition, or freshness-gate records from agent tools.`,
+			};
+		}
+	}
+
+	// Decision-log denial is likewise absolute (#386): docs/decision-log/ holds
+	// harness-recorded operational decisions and review-escalation adjudications.
+	// Agents emit DECISION: lines; only the harness writes the register.
+	if (/(^|\/)docs\/decision-log(\/|$)/.test(abs)) {
+		return {
+			decision: "block" as const,
+			reason: `Path "${fp}" targets the decision-log register, which is harness-owned. Emit a "DECISION:" line in your step output instead of editing docs/decision-log/ directly.`,
+		};
+	}
+
+	// Always allow writes inside the step cwd (sibling worktree or nested seat).
+	if (pathUnderRoot(abs, cwdAbs)) return {};
+	// Explicit own item worktree (shipwreck from main cwd).
+	if (ownWorktree && pathUnderRoot(abs, ownWorktree)) return {};
+
+	const foreignRoots = new Set<string>();
+	foreignRoots.add(mainAbs);
+	for (const wt of registeredWorktrees) foreignRoots.add(resolve(wt));
+	if (ownWorktree) foreignRoots.delete(resolve(ownWorktree));
+	foreignRoots.delete(cwdAbs);
+
+	for (const root of foreignRoots) {
+		if (pathUnderRoot(abs, root)) {
+			const ownHint = ownWorktree ? resolve(ownWorktree) : cwdAbs;
+			const rel = abs.slice(root.length + (abs === root ? 0 : 1));
+			const safe = resolve(ownHint, rel);
+			const label = root === mainAbs ? "main repo" : `foreign worktree ${root}`;
+			return {
+				decision: "block" as const,
+				reason: `Path "${fp}" targets ${label}. Use "${safe}" (own worktree) instead.`,
+			};
+		}
+	}
+	return {};
+}
+
+export function beginMainCheckoutAttribution(input: HookInput, toolUseId: string | undefined, observer?: MainCheckoutDeltaObserver): SyncHookJSONOutput {
+	const toolName = "tool_name" in input ? String(input.tool_name) : "";
+	if (!observer || !MUTATING_TOOLS.has(toolName)) return {};
+	const outcome = observer.beforeTool(toolUseId ?? "");
+	return outcome.kind === "error" ? { decision: "block" as const, reason: `Confinement attribution failed: ${outcome.message}` } : {};
+}
+
+export function endMainCheckoutAttribution(input: HookInput, toolUseId: string | undefined, observer?: MainCheckoutDeltaObserver): HookJSONOutput {
+	const toolName = "tool_name" in input ? String(input.tool_name) : "";
+	if (observer && MUTATING_TOOLS.has(toolName)) observer.afterTool(toolUseId ?? "");
+	return {};
+}
+
+// The Claude SDK-driven runner — the original `runStep` body, verbatim, rebound as a
+// named const so it can be registered as the `"claude"` provider. The exported
+// `runStep` below is now the dispatcher; this is what it calls for the default provider.
+const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
+	const resolved = resolveStepSettings(CONFIG, opts.profile, name);
+	const { budget, turns: baseTurns, effort } = resolved;
+	const model = opts.executionOverride?.model ?? resolved.model;
+	const turns = opts.maxTurnsOverride ?? baseTurns;
+
+	const modelLabel = model ? model.replace("claude-", "") : "default";
+	emit({
+		type: "step_header",
+		name,
+		model: modelLabel,
+		budget,
+		maxTurns: turns,
+		prompt: opts.trace ? prompt : undefined,
+	});
+
+	const t0 = Date.now();
+
+	// Worktree guardrail: block mutating tools that target the main repo
+	const isWorktree = isWorktreePath(opts.cwd, REPO);
+
+	// Mid-cycle drift guard: re-evaluate the shared-node_modules decision
+	// before each worktree-cwd step. If the branch bumped pnpm-lock.yaml,
+	// the stale symlink is replaced by a real install before verification
+	// commands (pnpm test, pnpm check) run downstream.
+	if (isWorktree) {
+		try {
+			const report = ensureWorktreeDeps(opts.cwd, REPO, { workspaceAccess: opts.workspaceAccess });
+			if (report.root.type === "restore") {
+				emit({
+					type: "sdk_error",
+					message: "worktree node_modules was a real directory with .pnpm/ — restored symlink to MAIN_REPO (lockfiles match; recovered from worktree-side pnpm install)",
+				});
+			}
+			for (const { pkg, action } of report.subpackages) {
+				if (action.type === "restore") {
+					emit({
+						type: "sdk_error",
+						message: `worktree ${pkg}/node_modules was a real directory — restored symlink to MAIN_REPO (coupled to root restore; lockfiles match)`,
+					});
+				}
+			}
+			// TOOL-52 corruption signature: noop + real-dir worktree-nm + a *real*
+			// `.pnpm/` directory inside (lstat — not existsSync, since after a
+			// materialize `.pnpm` is a symlink to MAIN's store and existsSync would
+			// follow it, producing a spurious warning every step).
+			// `restore` already covers the lockfiles-match case; this branch warns when
+			// lockfile drift prevents safe restoration and ship-time repair is the
+			// remaining safety net.
+			if (report.root.type === "noop") {
+				const wtNm = resolve(opts.cwd, "node_modules");
+				try {
+					const s = lstatSync(wtNm);
+					if (s.isDirectory() && !s.isSymbolicLink()) {
+						let pnpmIsRealDir = false;
+						try {
+							const ps = lstatSync(join(wtNm, ".pnpm"));
+							pnpmIsRealDir = ps.isDirectory() && !ps.isSymbolicLink();
+						} catch {}
+						if (pnpmIsRealDir) {
+							emit({
+								type: "sdk_error",
+								message: "worktree node_modules became a real directory mid-cycle (pnpm install re-installed locally) and lockfile drift prevents safe restore; main repo will be repaired at ship time",
+							});
+						}
+					}
+				} catch {}
+			}
+		} catch (err) {
+			emit({ type: "sdk_error", message: `worktree-deps guard failed: ${err instanceof Error ? err.message : String(err)}` });
+		}
+	}
+
+	// Fail closed before query() so a missing Bubblewrap / non-Linux host cannot
+	// become a retried error_sdk. There is no unisolated Claude fallback.
+	const seatPreflight = preflightClaudeSeat({ cwd: opts.cwd, step: name, envAllowlist: CONFIG.security.envAllowlist });
+	if (!seatPreflight.ok) {
+		emit({ type: "sdk_error", message: seatPreflight.message });
+		emit({ type: "done", ok: false, subtype: "error_confinement", cost: 0, turns: 0, elapsed: Date.now() - t0 });
+		return { ok: false, subtype: "error_confinement", text: seatPreflight.message, fullText: "", assistantText: "", cost: 0, turns: 0 };
+	}
+
+	const planBlockActive = name === "implement";
+	const systemAppend = composeSystemAppend({ isWorktree, cwd: opts.cwd, repo: REPO, planBlockActive });
+
+	const mainAbs = resolve(REPO) + "/";
+	const worktreeCwd = resolve(opts.cwd);
+	const foreignDenial = opts.foreignRootDenial;
+	// #369: install hooks for main-cwd steps that supply foreign-root denial (shipwreck)
+	// or sessions-dir protection — not only when isWorktree.
+	const installHooks = isWorktree || planBlockActive || !!opts.mainCheckoutObserver || !!foreignDenial;
+	const closeAttributedTool = async (input: HookInput, toolUseId: string | undefined): Promise<HookJSONOutput> => {
+		return endMainCheckoutAttribution(input, toolUseId, opts.mainCheckoutObserver);
+	};
+	const hooks = installHooks
+		? {
+				PreToolUse: [
+					{
+						hooks: [
+							async (input: HookInput, toolUseId: string | undefined): Promise<HookJSONOutput> => {
+								const tn = "tool_name" in input ? String(input.tool_name) : "";
+								const ti = ("tool_input" in input ? input.tool_input : {}) as Record<string, unknown>;
+
+								if (foreignDenial) {
+									const foreignOut = blockForeignRootWrite(input, worktreeCwd, foreignDenial.mainRepo, foreignDenial.registeredWorktrees, foreignDenial.ownWorktree);
+									if (foreignOut.decision === "block") return foreignOut;
+								} else if (isWorktree) {
+									// Fallback when pipeline did not thread foreignRootDenial (tests /
+									// direct callers): still protect main via the generalized helper.
+									const foreignOut = blockForeignRootWrite(input, worktreeCwd, REPO, [REPO], worktreeCwd);
+									if (foreignOut.decision === "block") return foreignOut;
+								}
+
+								if (isWorktree && tn === "Bash") {
+									const installOut = blockWorktreeInstall(input);
+									if (installOut.decision === "block") return installOut;
+
+									const cmd = String(ti.command ?? "");
+									if (cmd.includes(mainAbs) && !cmd.includes(worktreeCwd)) {
+										return {
+											decision: "block" as const,
+											reason: `Command references main repo "${REPO}". Use worktree "${opts.cwd}" paths instead.`,
+										};
+									}
+								}
+
+								if (planBlockActive) {
+									const out = blockPlanPolish(input, worktreeCwd);
+									if (out.decision === "block") return out;
+								}
+
+								const attribution = beginMainCheckoutAttribution(input, toolUseId, opts.mainCheckoutObserver);
+								if (attribution.decision === "block") return attribution;
+
+								return {};
+							},
+						],
+					},
+				],
+				PostToolUse: [{ hooks: [closeAttributedTool] }],
+				PostToolUseFailure: [{ hooks: [closeAttributedTool] }],
+			}
+		: undefined;
+
+	// Adapt the parent AbortSignal into a child controller for the SDK: `query()`
+	// wants an AbortController, but the public type chain carries a signal so
+	// downstream callers don't gain `.abort()` authority. The listener is removed
+	// explicitly on happy-path completion — `{ once: true }` alone only covers the
+	// fired case, leaving a closure leak across N steps when abort never fires.
+	const sdkCtrl = new AbortController();
+	let onParentAbort: (() => void) | undefined;
+	if (opts.signal) {
+		if (opts.signal.aborted) sdkCtrl.abort();
+		else {
+			onParentAbort = () => sdkCtrl.abort();
+			opts.signal.addEventListener("abort", onParentAbort, { once: true });
+		}
+	}
+
+	// Unconditional seat wrap: every Claude SDK child starts under Bubblewrap.
+	// onChildSpawn is observation-only (#369 outer bwrap PID); it does not gate the seam.
+	// Pass the SDK's forwarded `signal` so force-kill stays after the stdin-EOF + grace window.
+	const spawnClaudeCodeProcess = (spawnOpts: SpawnOptions): SpawnedProcess =>
+		spawnClaudeSeat(spawnOpts, {
+			cwd: opts.cwd,
+			bwrap: seatPreflight.bwrap,
+			step: name,
+			envAllowlist: CONFIG.security.envAllowlist,
+			...(opts.onChildSpawn ? { onChildSpawn: opts.onChildSpawn } : {}),
+		});
+
+	const gen = query({
+		prompt,
+		options: {
+			cwd: opts.cwd,
+			// canUseTool allow-all instead of `permissionMode: "bypassPermissions"`: the SDK
+			// hardcodes a deny for writes to `.claude/skills/*` that survives bypassPermissions
+			// and allowDangerouslySkipPermissions. canUseTool is the only knob that reaches
+			// past it (TOOL-27). Hooks still fire — PreToolUse is evaluated after the allow.
+			canUseTool: async (_tool, input) => ({ behavior: "allow" as const, updatedInput: input }),
+			maxBudgetUsd: budget,
+			maxTurns: turns,
+			effort,
+			abortController: sdkCtrl,
+			...(model ? { model } : {}),
+			systemPrompt: {
+				type: "preset" as const,
+				preset: "claude_code" as const,
+				append: systemAppend,
+			},
+			...(hooks ? { hooks } : {}),
+			spawnClaudeCodeProcess,
+		},
+	});
+
+	let text = "";
+	const projection = createStepTextProjection({ assistantSeparator: "\n" });
+	let cost = 0;
+	let resultTurns = 0;
+	let ok = true;
+	let subtype = "unknown";
+	let stalledAsk = false;
+	// True only when a rate-limit event drove the park — gates the #68 estimate so a manual
+	// pause (SIGUSR2), which mutates the same parkSignal to resetsAt=0, still hands back.
+	let rateLimitPark = false;
+	let lastToolName = "";
+	let tokens: TokenUsage | undefined;
+
+	// Edit loop detection
+	const editCounts = new Map<string, number>();
+	const toolCounts = new Map<string, number>();
+	let loopFile: string | null = null;
+
+	try {
+		for await (const msg of gen) {
+			// System events
+			if (msg.type === "system") {
+				const sys = msg as SDKSystemMessage;
+				if (sys.subtype === "init") {
+					emit({ type: "init", model: sys.model, toolCount: sys.tools?.length ?? 0 });
+				}
+				if ((msg as { subtype: string }).subtype === "compact_boundary") {
+					emit({ type: "compact" });
+				}
+			}
+
+			// Rate limit events
+			if (msg.type === "rate_limit_event") {
+				const rle = msg as SDKRateLimitEvent;
+				const info = rle.rate_limit_info;
+				const overageAvailable = info?.overageStatus === "allowed" || info?.overageStatus === "allowed_warning";
+				if (info?.status === "rejected" && !opts.parkSignal.parked && !overageAvailable) {
+					// Record the reset faithfully; the estimate for a missing reset is a last resort
+					// applied in the backfill below (#68), after the text-parse recovery gets a shot.
+					opts.parkSignal.parked = true;
+					opts.parkSignal.resetsAt = info.resetsAt ?? 0;
+					opts.parkSignal.limitType = info.rateLimitType ?? "unknown";
+					opts.parkSignal.triggerWorker = opts.itemId ?? "";
+					rateLimitPark = true;
+					emit({ type: "rate_limit", limitType: opts.parkSignal.limitType, resetsAt: opts.parkSignal.resetsAt });
+				} else if (info?.status === "rejected" && overageAvailable) {
+					emit({ type: "rate_limit", limitType: `${info.rateLimitType ?? "unknown"} (continuing on extra usage)`, resetsAt: 0 });
+				}
+			}
+
+			// Assistant turns
+			if (msg.type === "assistant") {
+				const assistant = msg as SDKAssistantMessage;
+				emit({ type: "turn" });
+				const content = assistant.message?.content ?? [];
+				projectClaudeAssistantBlocks(content, projection);
+				for (const block of content) {
+					if (block.type === "text" && "text" in block) {
+						const blockText = (block as { text: string }).text;
+						if (blockText.trim()) {
+							emit({ type: "text", content: blockText });
+						}
+					}
+					if (block.type === "tool_use" && "name" in block) {
+						const toolName = (block as { name: string }).name;
+						const input = (block as { input: Record<string, unknown> }).input;
+						const brief = toolBrief(toolName, input);
+						const mutating = MUTATING_TOOLS.has(toolName);
+
+						toolCounts.set(toolName, (toolCounts.get(toolName) ?? 0) + 1);
+
+						// Track edits per file (skipped for plan-editing steps)
+						if (toolName === "Edit" && input.file_path && !EDIT_LOOP_EXEMPT_STEPS.has(name)) {
+							const fp = String(input.file_path);
+							const count = (editCounts.get(fp) ?? 0) + 1;
+							editCounts.set(fp, count);
+							if (count >= EDIT_LOOP_THRESHOLD) {
+								loopFile = fp;
+								emit({ type: "edit_loop", file: fp, count });
+								break;
+							}
+						}
+
+						emit({ type: "tool_use", name: toolName, brief, mutating });
+						lastToolName = toolName;
+					}
+				}
+				if (loopFile) break;
+			}
+
+			// User messages (tool results with errors)
+			if (msg.type === "user") {
+				const u = msg as { isSynthetic?: boolean; message?: { content?: Array<{ type: string; is_error?: boolean; content?: unknown }> } };
+				if (u.isSynthetic) {
+					for (const block of u.message?.content ?? []) {
+						if (block.type === "tool_result" && block.is_error) {
+							const body = Array.isArray(block.content) ? (block.content as Array<{ text?: string }>).map((c) => c.text ?? "").join("") : String(block.content ?? "");
+							emit({ type: "tool_error", name: lastToolName, brief: "", error: body });
+						}
+					}
+				}
+			}
+
+			// Final result
+			if (msg.type === "result") {
+				const r = msg as SDKResultMessage;
+				text = "result" in r ? String(r.result) : "";
+				cost = r.total_cost_usd ?? 0;
+				resultTurns = r.num_turns ?? 0;
+				subtype = r.subtype ?? "unknown";
+				ok = subtype === "success";
+				// A safety-classifier decline arrives as subtype:"success" with
+				// stop_reason:"refusal" (or, rarely, refusal-shaped text and no
+				// stop_reason). Downgrade to a terminal error_refusal so the pipeline
+				// neither ships it as done nor parks it as a rate limit.
+				if (ok && isRefusal(r.stop_reason, text)) {
+					ok = false;
+					subtype = "error_refusal";
+					emit({ type: "sdk_error", message: "model refused / declined the task" });
+				}
+				// `usage` is NonNullableUsage: token counts are numbers, but
+				// `cache_creation` is an object (BetaCacheCreation) — read only the
+				// numeric per-category token fields, never the object.
+				const u: SDKResultMessage["usage"] | undefined = r.usage;
+				if (u) {
+					tokens = {
+						input: u.input_tokens ?? 0,
+						output: u.output_tokens ?? 0,
+						cacheCreation: u.cache_creation_input_tokens ?? 0,
+						cacheRead: u.cache_read_input_tokens ?? 0,
+					};
+				}
+			}
+		}
+	} catch (err) {
+		ok = false;
+		const errMsg = err instanceof Error ? err.message : String(err);
+		// Preserve classification only. The pipeline owns the bounded max-turns
+		// retry policy; parkSignal is reserved for actual rate-limit handbacks.
+		const maxTurns = isClaudeMaxTurnsError(err, subtype);
+		subtype = maxTurns ? "error_max_turns" : classifyStepError(errMsg, opts.parkSignal.parked);
+		text = errMsg;
+		emit({ type: "sdk_error", message: errMsg });
+	}
+
+	// Edit loop override
+	if (loopFile) {
+		ok = false;
+		subtype = "edit_loop";
+		text = `Edit loop detected: ${loopFile} edited ${editCounts.get(loopFile)} times`;
+	}
+
+	// Structured stall contract (AUTONOMY_APPEND): a step that self-reports it can't
+	// finish ends with a trailing `BLOCKED: <reason>` line. The SDK reports this as
+	// subtype:"success", so reclassify out-of-band — but only when the step otherwise
+	// succeeded (edit-loop / refusal / errors already own `ok` + `subtype`).
+	if (ok) {
+		const blockedReason = parseBlockedReason(text);
+		if (blockedReason) {
+			ok = false;
+			subtype = "blocked";
+			text = blockedReason;
+			emit({ type: "blocked", reason: blockedReason });
+		} else if (looksLikeStalledAsk(text)) {
+			stalledAsk = true;
+			emit({ type: "stalled_ask", tail: text.replace(/\s+$/, "").slice(-160) });
+		}
+	}
+
+	// Resolve the park reset by precedence: event reset > reset parsed from text > conservative
+	// estimate for a rate-limit park with no reset anywhere (#68). See resolveParkReset.
+	if (opts.parkSignal.parked) {
+		const resolved = resolveParkReset(opts.parkSignal.resetsAt, rateLimitPark, opts.parkSignal.limitType, text, Date.now(), parseWaitFlag(CONFIG.park.unknownResetWait));
+		opts.parkSignal.resetsAt = resolved.resetsAt;
+		opts.parkSignal.limitType = resolved.limitType;
+	}
+
+	if (onParentAbort) opts.signal?.removeEventListener("abort", onParentAbort);
+
+	const { assistantText, fullText } = projection.read();
+	const decisions = emitDecisionsFromText(assistantText);
+	for (const emitted of decisions) emit({ type: "decision", decision: emitted.decision });
+	const elapsed = Date.now() - t0;
+	emit({ type: "done", ok, subtype, cost, turns: resultTurns, elapsed });
+
+	const outputTail = text ? text.replace(/\x1b\[[0-9;]*m/g, "").slice(-200) : undefined;
+	const toolCountsObj = toolCounts.size > 0 ? Object.fromEntries(toolCounts) : undefined;
+
+	return {
+		ok,
+		subtype,
+		text,
+		fullText,
+		assistantText,
+		cost,
+		turns: resultTurns,
+		...(tokens ? { tokens } : {}),
+		...(toolCountsObj ? { toolCounts: toolCountsObj } : {}),
+		...(outputTail ? { outputTail } : {}),
+		...(stalledAsk ? { stalledAsk: true } : {}),
+		...(decisions.length ? { decisions } : {}),
+	};
+};
+
+// ── Provider registry ──────────────────────────────────────────────────
+
+/** The default provider — the Claude SDK runner above. Exported so the registry
+ *  unit test can assert `getProvider("claude") === claudeProvider`. */
+export const claudeProvider: StepProvider = { name: "claude", capabilities: CLAUDE_CAPABILITIES, runStep: claudeRunStep };

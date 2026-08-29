@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { CONFIG, REPO, type StepSettings } from "../config.js";
-import { buildGrokStepResult, grokEffort, grokServerRequestResponse, grokTimeoutMs, runStep, selectGrokModel } from "../grok-provider.js";
 import { detectLandlock } from "../grok-sandbox.js";
+import { buildGrokStepResult, grokEffort, grokServerRequestResponse, grokTimeoutMs, runStep, selectGrokModel } from "../providers/grok.js";
 import type { StepEvent } from "../types.js";
 
 type JsonObject = Record<string, unknown>;

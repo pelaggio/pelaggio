@@ -19,15 +19,15 @@
 // flip `outputTransport` to "final" and drop edit-loop detection per the plan's §6 contingency).
 
 import { spawn } from "node:child_process";
-import { CONFIG, REPO, resolveProviderBin, resolveStepSettings, type StepSettings } from "./config.js";
-import { emitDecisionsFromText } from "./decisions.js";
-import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseWaitFlag, resolveParkReset } from "./outcome-classify.js";
-import { buildAgentEnv, makeSecretScrubber, scopeEnvAllowlistToProvider } from "./secret-hygiene.js";
-import type { StepProvider } from "./step-runner.js";
-import { composeSystemAppend, createStepTextProjection, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "./step-runner-shared.js";
-import { MUTATING_TOOLS, toolBrief } from "./tui.js";
-import type { ParkSignal, ProviderCapabilities, Step, StepEvent, StepResult, TokenUsage } from "./types.js";
-import { ensureWorktreeDeps } from "./worktree-deps.js";
+import { CONFIG, REPO, resolveProviderBin, resolveStepSettings, type StepSettings } from "../config.js";
+import { emitDecisionsFromText } from "../decisions.js";
+import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseWaitFlag, resolveParkReset } from "../outcome-classify.js";
+import { buildAgentEnv, makeSecretScrubber, scopeEnvAllowlistToProvider } from "../secret-hygiene.js";
+import { composeSystemAppend, createStepTextProjection, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "../step-runner-shared.js";
+import { MUTATING_TOOLS, toolBrief } from "../tui.js";
+import type { ParkSignal, ProviderCapabilities, Step, StepEvent, StepResult, TokenUsage } from "../types.js";
+import { ensureWorktreeDeps } from "../worktree-deps.js";
+import type { StepProvider } from "./types.js";
 
 /**
  * OpenCode: no PreToolUse semantic deny; `OPENCODE_PERMISSION` is a permission-policy env, NOT an OS

@@ -10,17 +10,17 @@
 // Landlock is available. A config-gated fallback exists for externally contained, supervised runs
 // on Landlock-less hosts. Permission prompts remain auto-allowed because confinement is external.
 
-import { type AcpIncomingRequest, AcpRpcError, spawnAcpAgent } from "./acp-client.js";
-import { CONFIG, REPO, resolveProviderBin, resolveStepSettings, type StepSettings } from "./config.js";
-import { emitDecisionsFromText } from "./decisions.js";
-import { buildGrokArgs, detectLandlock, installGrokSandboxProfile } from "./grok-sandbox.js";
-import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseWaitFlag, resolveParkReset } from "./outcome-classify.js";
-import { buildAgentEnv, makeSecretScrubber, scopeEnvAllowlistToProvider } from "./secret-hygiene.js";
-import type { StepProvider } from "./step-runner.js";
-import { composeSystemAppend, createStepTextProjection, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "./step-runner-shared.js";
-import { MUTATING_TOOLS, toolBrief } from "./tui.js";
-import type { ParkSignal, ProviderCapabilities, Step, StepEvent, StepResult, TokenUsage } from "./types.js";
-import { ensureWorktreeDeps } from "./worktree-deps.js";
+import { type AcpIncomingRequest, AcpRpcError, spawnAcpAgent } from "../acp-client.js";
+import { CONFIG, REPO, resolveProviderBin, resolveStepSettings, type StepSettings } from "../config.js";
+import { emitDecisionsFromText } from "../decisions.js";
+import { buildGrokArgs, detectLandlock, installGrokSandboxProfile } from "../grok-sandbox.js";
+import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseWaitFlag, resolveParkReset } from "../outcome-classify.js";
+import { buildAgentEnv, makeSecretScrubber, scopeEnvAllowlistToProvider } from "../secret-hygiene.js";
+import { composeSystemAppend, createStepTextProjection, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "../step-runner-shared.js";
+import { MUTATING_TOOLS, toolBrief } from "../tui.js";
+import type { ParkSignal, ProviderCapabilities, Step, StepEvent, StepResult, TokenUsage } from "../types.js";
+import { ensureWorktreeDeps } from "../worktree-deps.js";
+import type { StepProvider } from "./types.js";
 
 /**
  * Grok: Landlock isolation when declared native, pool-quota ticks (token-price fallback
