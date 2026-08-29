@@ -1,5 +1,6 @@
+import { RECOVERABLE_ERRORS } from "./cycle-errors.js";
 import type { NotifyConfig, NotifyEvent, NotifyFormat } from "./notify-schema.js";
-import { type CycleResult, type Decision, RECOVERABLE_ERRORS, type ReviewEscalation, type Step } from "./types.js";
+import type { CycleResult, Decision, ReviewEscalation, Step } from "./types.js";
 
 export { NOTIFY_EVENTS, NOTIFY_FORMATS, type NotifyConfig, type NotifyEvent, type NotifyFormat } from "./notify-schema.js";
 

@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { RECOVERABLE_ERRORS } from "../cycle-errors.js";
 import { buildRequest, type CycleNotifyPayload, classifyEvent, formatText, NOTIFY_EVENTS, type NotifyConfig, type NotifyFormat, type NotifyPayload, notifyCycle, notifyDecision, sendNotification } from "../notify.js";
-import { type CycleResult, RECOVERABLE_ERRORS } from "../types.js";
+import type { CycleResult } from "../types.js";
 
 function result(overrides: Partial<CycleResult> = {}): CycleResult {
 	return { itemId: "34", completed: false, cost: 0, ...overrides };
