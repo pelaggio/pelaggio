@@ -1,7 +1,7 @@
 #!/usr/bin/env tsx
 
 import { parseCli } from "./cli.js";
-import { orchestrate } from "./pipeline.js";
+import { orchestrate } from "./orchestrator.js";
 import { runStatsCommand } from "./stats.js";
 
 const intent = parseCli(process.argv.slice(2));

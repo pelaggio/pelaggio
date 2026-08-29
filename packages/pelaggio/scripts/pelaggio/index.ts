@@ -20,7 +20,7 @@ export type { CreateEventWriterOptions, ReadEventLogOptions } from "./flow-event
 export { createEventWriter, foldEvents, MAX_EVENT_DIAGNOSTIC_DETAILS, MAX_FLOW_EVENT_BYTES, PELAGGIO_EVENT_TYPE_SET, PELAGGIO_EVENT_TYPES, projectEvents, readEventLog } from "./flow-events.js";
 export type { FlowCandidate, FlowDependency, FlowEligibleCandidate, FlowEvaluation, FlowItemVerdict, FlowPolicy, FlowReadiness, FlowSnapshot, FlowVerdictReason, QuickScopeInput } from "./flow-policy.js";
 export { DEFAULT_FLOW_POLICY, FifoPolicy } from "./flow-policy.js";
-export { orchestrate as run } from "./pipeline.js";
+export { orchestrate as run } from "./orchestrator.js";
 export type { RoadmapItem, RoadmapSource, RoadmapSourceName, Scope } from "./roadmap/index.js";
 export { getRoadmapSource } from "./roadmap/index.js";
 export type { Stats } from "./stats.js";

@@ -30,7 +30,7 @@ import { parseArgs } from "node:util";
 import { parseCli } from "./cli.js";
 import { REPO, ROADMAP_GITHUB, SHIP_TARGET } from "./config.js";
 import { resolveWorktree } from "./git.js";
-import { type OrchestratorDeps, runOrchestrator } from "./pipeline.js";
+import { type OrchestratorDeps, runOrchestrator } from "./orchestrator.js";
 import {
 	type AcquireReviseExecutionResult,
 	acquireReviseExecution,
