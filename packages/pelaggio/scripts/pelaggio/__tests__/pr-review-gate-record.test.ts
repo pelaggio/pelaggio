@@ -216,6 +216,17 @@ describe("PR review gate record store", () => {
 		assert.equal(fleetAgreementOf(operatorPass), null);
 	});
 
+	it("accepts the verdict-split breaker while retaining historical invalid-pass records", () => {
+		for (const breakerReason of ["verdict-split", "invalid-pass"] as const) {
+			const record = validatePrReviewGateRecord({
+				schemaVersion: 2,
+				...fleetRecord({ agreement: "disagreement", subtype: breakerReason, breakerReason }),
+			});
+			if (record.schemaVersion !== 2 || record.producer !== "fleet") assert.fail("expected fleet record");
+			assert.equal(record.breakerReason, breakerReason);
+		}
+	});
+
 	it("rejects every invalid wire field", () => {
 		const validV1 = v1Fixture();
 		const validFleet = { schemaVersion: 2 as const, ...fleetRecord() };

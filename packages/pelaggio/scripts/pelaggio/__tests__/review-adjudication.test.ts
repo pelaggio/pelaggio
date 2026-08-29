@@ -335,7 +335,7 @@ describe("adjudication source store", () => {
 		assert.equal(readAdjudicationSourceRecord(dir, 497, REVIEWED), null);
 	});
 
-	it("round-trips a disagreement record — the invalid-pass split shape (#525)", () => {
+	it("round-trips a disagreement adjudication source record", () => {
 		const dir = root();
 		writeAdjudicationSourceRecord(dir, record({ agreement: "disagreement" }));
 		assert.equal(readAdjudicationSourceRecord(dir, 497, REVIEWED)?.agreement, "disagreement");
@@ -468,13 +468,14 @@ describe("fleet eligibility and binding", () => {
 		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ breakerReason: "diminishing-returns" }) }), true);
 	});
 
-	it("accepts the complete disagreement/invalid-pass split — the PR #589 shape (#525)", () => {
+	it("accepts current verdict-split and historical invalid-pass disagreement records (#593)", () => {
 		// Live shape from .dev/pr-review-gate-records/589-c0051a…json: a genuine verdict split
-		// (claude=pass, codex=block, grok=pass) whose breaker the convergence loop labels
-		// `invalid-pass` even though ok=true proves every review was structurally valid.
+		// (claude=pass, codex=block, grok=pass) historically labeled `invalid-pass` even though
+		// ok=true proves every review was structurally valid.
 		const prShape = fleet({ subtype: "invalid-pass", agreement: "disagreement", breakerReason: "invalid-pass", iterations: 1, survivorCount: 4 });
 		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...prShape }), true);
 		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ agreement: "disagreement" }) }), true);
+		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ subtype: "verdict-split", breakerReason: "verdict-split", agreement: "disagreement" }) }), true);
 		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ breakerReason: "invalid-pass", agreement: "disagreement" }) }), true);
 		// A genuinely broken run (parse/infra failure) keeps ok=false / agreement=invalid — refused.
 		assert.equal(isEligibleFleetGateRecord({ schemaVersion: 2, ...fleet({ ok: false, agreement: "invalid", breakerReason: "invalid-pass" }) }), false);
