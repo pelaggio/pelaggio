@@ -19,7 +19,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const BASELINE_PATH = join(ROOT, "__tests__", "fixtures", "module-layering-baseline.json");
 
 /** Admission questions per layer live in the plan §2; this table is the path-anchored answer. */
-export const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {
+const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {
 	// L0 foundation — types/config/argv/terminal/pure utilities; read-only fs probing ok, no `.dev` writes.
 	"types.ts": 0,
 	"config.ts": 0,
@@ -128,17 +128,24 @@ function listModules(dir = ROOT): string[] {
 	return out.sort();
 }
 
-const IMPORT_RE = /(?:^|\n)\s*(?:import|export)\s[^;'"]*?from\s*["'](\.[^"']+)["']/g;
-/** Inline `import("./x.js")` type expressions and dynamic imports are edges too. */
-const INLINE_IMPORT_RE = /\bimport\(\s*["'](\.[^"']+)["']\s*\)/g;
+/** Every import syntax that creates a module edge — each pattern is covered by the bypass test below. */
+const EDGE_PATTERNS: readonly RegExp[] = [
+	// `import { a } from "./x.js"`, `import type …`, `export { a } from "./x.js"`
+	/(?:^|\n)\s*(?:import|export)\s[^;'"]*?from\s*["'](\.[^"']+)["']/g,
+	// side-effect import: `import "./x.js"`
+	/(?:^|\n)\s*import\s*["'](\.[^"']+)["']/g,
+	// inline type expression or dynamic import: `import("./x.js")`
+	/\bimport\(\s*["'](\.[^"']+)["']\s*\)/g,
+];
 
-/** Relative import edges, resolved to module paths; `.js` specifiers map to `.ts` sources. */
-export function importEdges(modules: string[]): Array<[string, string]> {
+/** Relative import specifiers in one module's source, resolved to module paths (`.js` → `.ts`). */
+export function edgesFromSource(from: string, src: string): Array<[string, string]> {
 	const edges: Array<[string, string]> = [];
-	for (const from of modules) {
-		const src = readFileSync(join(ROOT, from), "utf8");
-		for (const m of [...src.matchAll(IMPORT_RE), ...src.matchAll(INLINE_IMPORT_RE)]) {
-			let to = normalize(join(dirname(from), m[1]));
+	for (const re of EDGE_PATTERNS) {
+		for (const m of src.matchAll(re)) {
+			const spec = m[1];
+			if (!spec) continue;
+			let to = normalize(join(dirname(from), spec));
 			if (to.endsWith(".js")) to = `${to.slice(0, -3)}.ts`;
 			if (to.endsWith(".mjs")) to = `${to.slice(0, -4)}.ts`;
 			edges.push([from, to]);
@@ -147,7 +154,11 @@ export function importEdges(modules: string[]): Array<[string, string]> {
 	return edges;
 }
 
-export function violations(modules: string[], edges: Array<[string, string]>): string[] {
+function importEdges(modules: string[]): Array<[string, string]> {
+	return modules.flatMap((from) => edgesFromSource(from, readFileSync(join(ROOT, from), "utf8")));
+}
+
+function violations(modules: string[], edges: Array<[string, string]>): string[] {
 	const out = new Set<string>();
 	for (const [from, to] of edges) {
 		if (!modules.includes(to)) continue; // non-.ts sibling (e.g. worker .mjs shim) — not a module edge
@@ -175,7 +186,8 @@ function intraLayerCycles(edges: Array<[string, string]>): string[] {
 			for (const t of adj.get(n) ?? []) {
 				if (t === start) {
 					// Canonicalize rotations so each cycle prints once.
-					const i = path.indexOf([...path].sort()[0]);
+					const first = [...path].sort()[0];
+					const i = first ? path.indexOf(first) : 0;
 					const rotated = [...path.slice(i), ...path.slice(0, i)];
 					found.add([...rotated, rotated[0]].join(" -> "));
 				} else if (!path.includes(t) && path.length < 5) stack.push([t, [...path, t]]);
@@ -198,7 +210,10 @@ describe("module layering", () => {
 
 	it("violating edges match the baseline exactly (ratchet)", () => {
 		const current = violations(modules, edges);
-		if (process.env.MODULE_LAYERING_WRITE) {
+		const cycles = intraLayerCycles(edges);
+		if (cycles.length) console.log(`[module-layering] ${cycles.length} intra-layer cycle path(s) (diagnostic, not gated):\n  ${cycles.join("\n  ")}`);
+		// Regen is a local authoring convenience; under CI it would make this assertion vacuous.
+		if (process.env.MODULE_LAYERING_WRITE && !process.env.CI) {
 			writeFileSync(BASELINE_PATH, `${JSON.stringify({ edges: current }, null, "\t")}\n`);
 		}
 		const baseline: string[] = JSON.parse(readFileSync(BASELINE_PATH, "utf8")).edges;
@@ -208,8 +223,20 @@ describe("module layering", () => {
 		assert.deepEqual(fixed, [], `baseline edges no longer violate — remove them from the fixture:\n  ${fixed.join("\n  ")}`);
 	});
 
-	it("reports intra-layer cycles as a diagnostic", () => {
-		const cycles = intraLayerCycles(edges);
-		if (cycles.length) console.log(`[module-layering] ${cycles.length} intra-layer cycle path(s):\n  ${cycles.join("\n  ")}`);
+	it("recognizes every import syntax that creates an edge (no scanner bypass)", () => {
+		const src = [
+			'import { a } from "./a.js";',
+			'import type { B } from "./b.js";',
+			'export { c } from "./c.js";',
+			'import "./d.js";',
+			'type E = import("./e.js").E;',
+			'const f = await import("./f.js");',
+			'import g from "node:fs";',
+			'import { h } from "some-package";',
+		].join("\n");
+		assert.deepEqual(
+			edgesFromSource("x/y.ts", src).map(([, to]) => to),
+			["x/a.ts", "x/b.ts", "x/c.ts", "x/d.ts", "x/e.ts", "x/f.ts"],
+		);
 	});
 });
