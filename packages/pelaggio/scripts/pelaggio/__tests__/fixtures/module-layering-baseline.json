@@ -18,6 +18,7 @@
 		"review/carry.ts -> pr-review-cli.ts (entry module imported)",
 		"review/record.ts -> review/loop.ts (L1 -> L2)",
 		"roadmap/stale-quarantine.ts -> helpers.ts (L1 -> L4)",
-		"step-runner.ts -> helpers.ts (L3 -> L4)"
+		"step-runner.ts -> helpers.ts (L3 -> L4)",
+		"types.ts -> confinement/sessions.ts (L0 -> L1)"
 	]
 }

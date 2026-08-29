@@ -129,13 +129,15 @@ function listModules(dir = ROOT): string[] {
 }
 
 const IMPORT_RE = /(?:^|\n)\s*(?:import|export)\s[^;'"]*?from\s*["'](\.[^"']+)["']/g;
+/** Inline `import("./x.js")` type expressions and dynamic imports are edges too. */
+const INLINE_IMPORT_RE = /\bimport\(\s*["'](\.[^"']+)["']\s*\)/g;
 
 /** Relative import edges, resolved to module paths; `.js` specifiers map to `.ts` sources. */
 export function importEdges(modules: string[]): Array<[string, string]> {
 	const edges: Array<[string, string]> = [];
 	for (const from of modules) {
 		const src = readFileSync(join(ROOT, from), "utf8");
-		for (const m of src.matchAll(IMPORT_RE)) {
+		for (const m of [...src.matchAll(IMPORT_RE), ...src.matchAll(INLINE_IMPORT_RE)]) {
 			let to = normalize(join(dirname(from), m[1]));
 			if (to.endsWith(".js")) to = `${to.slice(0, -3)}.ts`;
 			if (to.endsWith(".mjs")) to = `${to.slice(0, -4)}.ts`;
