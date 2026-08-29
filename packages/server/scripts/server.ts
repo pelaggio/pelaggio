@@ -19,8 +19,14 @@ const stateLock = acquireStatePathLock(cfg.statePath);
 process.once("exit", () => stateLock.release());
 
 const registry = loadRegistry(cfg.registryPath);
+const store = new StateStore(cfg.statePath);
+const broker = new LogBroker();
+const supervisor = new Supervisor({ store, broker, registry, logDir: cfg.logDir });
+supervisor.bootReattach();
 const roadmapCache = new RoadmapCache({
 	registry,
+	listRoadmap: (slug) => supervisor.listRoadmap(slug),
+	titleTtlMs: cfg.roadmapTitleTtlMs,
 	factory: (repo) => {
 		const autopilotCfg = loadConfig({ repo });
 		return getRoadmapSource(autopilotCfg.roadmapSource, {
@@ -30,11 +36,6 @@ const roadmapCache = new RoadmapCache({
 		});
 	},
 });
-
-const store = new StateStore(cfg.statePath);
-const broker = new LogBroker();
-const supervisor = new Supervisor({ store, broker, registry, logDir: cfg.logDir });
-supervisor.bootReattach();
 
 const app = createApp({
 	supervisor,

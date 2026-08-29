@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { formatDate, formatDuration, formatItemId, formatRunState, formatRunTitle, formatTokens, formatUsd, runStateBadgeClass, statusBadgeClass } from "../src/lib/format.js";
+import { formatDate, formatDuration, formatItemId, formatItemLabel, formatRunState, formatRunTitle, formatTokens, formatUsd, runStateBadgeClass, statusBadgeClass } from "../src/lib/format.js";
 
 describe("formatDate", () => {
 	it("returns em-dash on undefined", () => {
@@ -69,6 +69,21 @@ describe("formatItemId", () => {
 	});
 });
 
+describe("formatItemLabel", () => {
+	it("appends a title to repo-qualified numeric ids", () => {
+		assert.equal(formatItemLabel("30", "pelaggio", "pipeline-owned post-merge ship bookkeeping"), "pelaggio#30 — pipeline-owned post-merge ship bookkeeping");
+	});
+	it("appends a title while preserving adapter-native and repo-less ids", () => {
+		assert.equal(formatItemLabel("TOOL-47", "pelaggio", "fix roadmap parsing"), "TOOL-47 — fix roadmap parsing");
+		assert.equal(formatItemLabel("30", undefined, "fix roadmap parsing"), "30 — fix roadmap parsing");
+	});
+	it("preserves the existing id label for missing or blank titles", () => {
+		assert.equal(formatItemLabel("30", "pelaggio"), "pelaggio#30");
+		assert.equal(formatItemLabel("30", "pelaggio", ""), "pelaggio#30");
+		assert.equal(formatItemLabel("30", "pelaggio", "   "), "pelaggio#30");
+	});
+});
+
 describe("statusBadgeClass", () => {
 	it("returns a string class for every known status", () => {
 		for (const s of ["running", "completed", "failed", "parked", "paused", "abandoned"] as const) {
@@ -80,6 +95,7 @@ describe("statusBadgeClass", () => {
 describe("formatRunTitle", () => {
 	it("uses formatItemId when item is present", () => {
 		assert.equal(formatRunTitle({ item: "30", repo: "pelaggio" }), "pelaggio#30");
+		assert.equal(formatRunTitle({ item: "30", itemTitle: "roadmap title", repo: "pelaggio" }), "pelaggio#30 — roadmap title");
 	});
 	it("renders continuous labels without item", () => {
 		assert.equal(formatRunTitle({ mode: "drain", parallel: 2, repo: "pelaggio" }), "drain ×2");

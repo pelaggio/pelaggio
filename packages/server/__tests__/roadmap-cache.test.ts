@@ -24,51 +24,137 @@ function fakeSource(name: string): RoadmapSource {
 	} satisfies RoadmapSource;
 }
 
-describe("RoadmapCache", () => {
-	it("first get builds via factory; second get returns the same instance", () => {
-		const registry = new Registry([{ slug: "main", path: "/tmp/main" }]);
-		let calls = 0;
-		const factory = (path: string) => {
-			calls++;
-			return fakeSource(`for-${path}`);
-		};
-		const cache = new RoadmapCache({ registry, factory });
-		const first = cache.get("main");
-		const second = cache.get("main");
-		assert.equal(calls, 1);
-		assert.strictEqual(first, second);
-	});
+function tick(): Promise<void> {
+	return new Promise((resolve) => setImmediate(resolve));
+}
 
-	it("different slugs yield different instances and call factory once each", () => {
+describe("RoadmapCache", () => {
+	it("caches one roadmap source instance per registry slug", () => {
 		const registry = new Registry([
 			{ slug: "a", path: "/tmp/a" },
 			{ slug: "b", path: "/tmp/b" },
 		]);
 		const seen: string[] = [];
-		const factory = (path: string) => {
-			seen.push(path);
-			return fakeSource(path);
-		};
-		const cache = new RoadmapCache({ registry, factory });
+		const cache = new RoadmapCache({
+			registry,
+			factory: (path) => {
+				seen.push(path);
+				return fakeSource(path);
+			},
+			listRoadmap: async () => "[]",
+		});
+
 		const a = cache.get("a");
-		const b = cache.get("b");
-		assert.notStrictEqual(a, b);
-		assert.deepEqual(seen, ["/tmp/a", "/tmp/b"]);
-		// Re-fetch caches both
 		assert.strictEqual(cache.get("a"), a);
-		assert.strictEqual(cache.get("b"), b);
-		assert.equal(seen.length, 2);
+		assert.notStrictEqual(cache.get("b"), a);
+		assert.deepEqual(seen, ["/tmp/a", "/tmp/b"]);
 	});
 
-	it("unknown slug propagates registry error; factory never called", () => {
+	it("keeps source lookup strict but title enrichment fail-open for unknown slugs", () => {
 		const registry = new Registry([{ slug: "main", path: "/tmp/main" }]);
-		let called = false;
-		const factory = () => {
-			called = true;
-			return fakeSource("never");
-		};
-		const cache = new RoadmapCache({ registry, factory });
+		let listCalls = 0;
+		const cache = new RoadmapCache({
+			registry,
+			factory: () => fakeSource("main"),
+			listRoadmap: async () => {
+				listCalls++;
+				return "[]";
+			},
+		});
+
 		assert.throws(() => cache.get("missing"));
-		assert.equal(called, false);
+		assert.equal(cache.getTitles("missing").size, 0);
+		assert.equal(listCalls, 0);
+	});
+
+	it("coalesces every item read into one non-blocking list refresh per repo and TTL", async () => {
+		const registry = new Registry([{ slug: "main", path: "/tmp/main" }]);
+		let now = 1_000;
+		let calls = 0;
+		let release: ((output: string) => void) | undefined;
+		const cache = new RoadmapCache({
+			registry,
+			factory: () => fakeSource("main"),
+			now: () => now,
+			titleTtlMs: 60_000,
+			listRoadmap: () => {
+				calls++;
+				return new Promise((resolve) => {
+					release = resolve;
+				});
+			},
+		});
+
+		const first = cache.getTitles("main");
+		assert.equal(first.size, 0, "the request must not await an uncached refresh");
+		for (let id = 0; id < 1_000; id++) cache.getTitles("main").get(String(id));
+		await Promise.resolve();
+		assert.equal(calls, 1);
+
+		release?.(JSON.stringify([{ id: "42", title: "Cached title" }]));
+		await tick();
+		assert.equal(cache.getTitles("main").get("42"), "Cached title");
+		assert.equal(calls, 1);
+
+		now += 60_001;
+		cache.getTitles("main");
+		cache.getTitles("main");
+		await Promise.resolve();
+		assert.equal(calls, 2);
+	});
+
+	it("keeps the last good map when refresh fails or returns invalid JSON", async () => {
+		const registry = new Registry([{ slug: "main", path: "/tmp/main" }]);
+		let now = 1_000;
+		let calls = 0;
+		const cache = new RoadmapCache({
+			registry,
+			factory: () => fakeSource("main"),
+			now: () => now,
+			titleTtlMs: 100,
+			listRoadmap: async () => {
+				calls++;
+				if (calls === 1) return JSON.stringify([{ id: "42", title: "Last good" }]);
+				if (calls === 2) throw new Error("provider unavailable");
+				return "not-json";
+			},
+		});
+
+		cache.getTitles("main");
+		await tick();
+		assert.equal(cache.getTitles("main").get("42"), "Last good");
+		now += 101;
+		cache.getTitles("main");
+		await tick();
+		assert.equal(cache.getTitles("main").get("42"), "Last good");
+		assert.equal(calls, 2);
+		now += 101;
+		cache.getTitles("main");
+		await tick();
+		assert.equal(cache.getTitles("main").get("42"), "Last good");
+		assert.equal(calls, 3);
+	});
+
+	it("keeps repository title maps independent and omits blank titles", async () => {
+		const registry = new Registry([
+			{ slug: "a", path: "/tmp/a" },
+			{ slug: "b", path: "/tmp/b" },
+		]);
+		const cache = new RoadmapCache({
+			registry,
+			factory: (path) => fakeSource(path),
+			listRoadmap: async (slug) =>
+				JSON.stringify([
+					{ id: "42", title: `Title ${slug}` },
+					{ id: "blank", title: "   " },
+				]),
+		});
+
+		cache.getTitles("a");
+		cache.getTitles("b");
+		await tick();
+		assert.equal(cache.getTitles("a").get("42"), "Title a");
+		assert.equal(cache.getTitles("b").get("42"), "Title b");
+		assert.equal(cache.getTitles("a").has("blank"), false);
 	});
 });

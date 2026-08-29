@@ -5,7 +5,7 @@ import { computeStats, loadConfig } from "pelaggio";
 import type { Registry } from "../registry.js";
 import { RegistryError } from "../registry.js";
 import type { RoadmapCache } from "../roadmap-cache.js";
-import type { RepoEntry } from "../types.js";
+import type { RepoEntry, StatsResponse } from "../types.js";
 
 export interface ReposDeps {
 	registry: Registry;
@@ -48,7 +48,20 @@ export function registerReposRoutes(app: Hono, deps: ReposDeps): void {
 			throw err;
 		}
 		const logPath = join(repoPath, ".dev", "pelaggio-log.jsonl");
-		return c.json(computeStats({ logPath }));
+		const stats = computeStats({ logPath });
+		const titles = deps.roadmapCache.getTitles(slug);
+		const response: StatsResponse = {
+			...stats,
+			itemsDelivered: stats.itemsDelivered.map((item) => {
+				const itemTitle = titles.get(item.id);
+				return { ...item, ...(itemTitle !== undefined ? { itemTitle } : {}) };
+			}),
+			recentFailures: stats.recentFailures.map((failure) => {
+				const itemTitle = failure.item === null ? undefined : titles.get(failure.item);
+				return { ...failure, ...(itemTitle !== undefined ? { itemTitle } : {}) };
+			}),
+		};
+		return c.json(response);
 	});
 
 	/** Narrow config projection for StartForm prefill (issue #83). No full ResolvedConfig. */

@@ -15,6 +15,19 @@ function baseEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
 }
 
 describe("loadServerConfig", () => {
+	it("defaults the roadmap title TTL to 60 seconds and accepts a positive override", () => {
+		const defaults = loadServerConfig(baseEnv(), { webDistDefault: join(tmpdir(), "no-such-dist") });
+		assert.equal(defaults.roadmapTitleTtlMs, 60_000);
+		const overridden = loadServerConfig(baseEnv({ AUTOPILOT_SERVER_ROADMAP_TITLE_TTL_MS: "2500" }), { webDistDefault: join(tmpdir(), "no-such-dist") });
+		assert.equal(overridden.roadmapTitleTtlMs, 2_500);
+	});
+
+	it("rejects a non-positive or non-integer roadmap title TTL", () => {
+		for (const value of ["0", "-1", "1.5", "nope"]) {
+			assert.throws(() => loadServerConfig(baseEnv({ AUTOPILOT_SERVER_ROADMAP_TITLE_TTL_MS: value }), { webDistDefault: join(tmpdir(), "no-such-dist") }), /AUTOPILOT_SERVER_ROADMAP_TITLE_TTL_MS must be a positive integer/);
+		}
+	});
+
 	it("registryPath defaults to $XDG_CONFIG_HOME/pelaggio-server/repos.yml", () => {
 		const xdg = mkdtempSync(join(tmpdir(), "xdg-cfg-"));
 		const cfg = loadServerConfig(baseEnv({ XDG_CONFIG_HOME: xdg }), { webDistDefault: join(tmpdir(), "no-such-dist") });

@@ -6,6 +6,7 @@ import { createFlowEventTailer, type FlowEventTailer } from "./flow-event-tailer
 import type { LogBroker, LogSubscriber } from "./log-broker.js";
 import type { Registry } from "./registry.js";
 import { RegistryError } from "./registry.js";
+import { createRepoChildEnv } from "./repo-child-env.js";
 import type { StateStore } from "./state-store.js";
 import type { ContinuousMode, PersistedRun, ShipTargetName } from "./types.js";
 
@@ -16,6 +17,15 @@ export interface SupervisorDeps {
 	logDir: string;
 	spawn?: typeof childProcessSpawn;
 	now?: () => Date;
+	/** Test seam for bounded repo-scoped read commands. */
+	repoCommandTimeoutMs?: number;
+}
+
+const REPO_COMMAND_TIMEOUT_MS = 35_000;
+
+interface SpawnRepoChildOptions {
+	detached?: boolean;
+	env?: NodeJS.ProcessEnv;
 }
 
 export interface StartOpts {
@@ -37,6 +47,7 @@ export class Supervisor {
 	private readonly logDir: string;
 	private readonly spawn: typeof childProcessSpawn;
 	private readonly now: () => Date;
+	private readonly repoCommandTimeoutMs: number;
 	private readonly children = new Map<string, ChildProcess>();
 	private readonly tailers = new Map<string, FlowEventTailer>();
 
@@ -47,6 +58,7 @@ export class Supervisor {
 		this.logDir = deps.logDir;
 		this.spawn = deps.spawn ?? childProcessSpawn;
 		this.now = deps.now ?? (() => new Date());
+		this.repoCommandTimeoutMs = deps.repoCommandTimeoutMs ?? REPO_COMMAND_TIMEOUT_MS;
 		mkdirSync(this.logDir, { recursive: true });
 	}
 
@@ -63,26 +75,11 @@ export class Supervisor {
 		const id = ulid();
 		const logPath = resolve(this.logDir, `${id}.log`);
 		const args = this.buildArgs(opts, resumedFrom);
-		const env: NodeJS.ProcessEnv = {
-			...process.env,
-			PELAGGIO_REPO: repoCwd,
-			PELAGGIO_PLAIN: "1",
-			// Daemon-spawned children are unattended; the local subscription-auth
-			// authoring-review mode must refuse this execution context.
-			PELAGGIO_SUPERVISED_RUN: "1",
-			PELAGGIO_EXECUTION_ID: id,
-			PELAGGIO_EVENT_STREAM_ID: id,
-		};
-		// The daemon requires CONTROL_PLANE_TOKEN (config.ts), but nothing a run
-		// executes consumes it, and children (including SDK subprocesses) inherit
-		// this env; strip it so prompt-injected code in the run's subtree cannot
-		// read the credential and call back into the control-plane API. Server
-		// host/port vars are not credentials and pass through untouched.
-		delete env.CONTROL_PLANE_TOKEN;
-		const child = this.spawn("pnpm", args, {
-			cwd: repoCwd,
-			env,
-			stdio: ["ignore", "pipe", "pipe"],
+		const child = this.spawnRepoChild(repoCwd, "pnpm", args, {
+			env: {
+				PELAGGIO_EXECUTION_ID: id,
+				PELAGGIO_EVENT_STREAM_ID: id,
+			},
 		});
 		const startedAt = this.now().toISOString();
 		const run: PersistedRun = {
@@ -110,6 +107,71 @@ export class Supervisor {
 		this.startTailer(run);
 		child.on("exit", (code) => this.handleExit(id, code));
 		return run;
+	}
+
+	/** Run the one bounded roadmap read used by cosmetic dashboard enrichment. */
+	listRoadmap(slug: string): Promise<string> {
+		const repoCwd = this.resolveRepo(slug);
+		const child = this.spawnRepoChild(repoCwd, "npx", ["pelaggio", "roadmap", "list", "--include-done", "--json"], { detached: true });
+		return new Promise((resolve, reject) => {
+			let settled = false;
+			let stdout = "";
+			let stderr = "";
+			child.stdout?.on("data", (chunk: Buffer) => {
+				stdout += chunk.toString();
+			});
+			child.stderr?.on("data", (chunk: Buffer) => {
+				stderr += chunk.toString();
+			});
+			const timer = setTimeout(() => {
+				if (settled) return;
+				settled = true;
+				if (child.pid !== undefined) {
+					try {
+						process.kill(-child.pid, "SIGKILL");
+					} catch (error) {
+						if (!(error instanceof Error && "code" in error && error.code === "ESRCH")) {
+							reject(error);
+							return;
+						}
+					}
+				}
+				reject(new Error(`roadmap list timed out after ${this.repoCommandTimeoutMs / 1_000}s`));
+			}, this.repoCommandTimeoutMs);
+			child.once("error", (error) => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				reject(error);
+			});
+			child.once("close", (code) => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				if (code === 0) {
+					resolve(stdout);
+					return;
+				}
+				reject(new Error(`roadmap list exited with code ${code ?? "unknown"}${stderr.trim() ? `: ${stderr.trim()}` : ""}`));
+			});
+		});
+	}
+
+	private spawnRepoChild(repoCwd: string, command: string, args: string[], options: SpawnRepoChildOptions = {}): ChildProcess {
+		const env = createRepoChildEnv({
+			PELAGGIO_REPO: repoCwd,
+			PELAGGIO_PLAIN: "1",
+			// Daemon-spawned children are unattended; the local subscription-auth
+			// authoring-review mode must refuse this execution context.
+			PELAGGIO_SUPERVISED_RUN: "1",
+			...options.env,
+		});
+		return this.spawn(command, args, {
+			cwd: repoCwd,
+			env,
+			stdio: ["ignore", "pipe", "pipe"],
+			...(options.detached === true ? { detached: true } : {}),
+		});
 	}
 
 	private resolveRepo(slug: string): string {

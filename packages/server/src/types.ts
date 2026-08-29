@@ -1,4 +1,4 @@
-import type { ShipTargetName } from "pelaggio";
+import type { ShipTargetName, Stats } from "pelaggio";
 
 export type RunStatus = "running" | "completed" | "failed" | "parked" | "paused" | "abandoned";
 
@@ -39,6 +39,7 @@ export interface RunSummary {
 	id: string;
 	repo: string;
 	item?: string;
+	itemTitle?: string;
 	status: RunStatus;
 	startedAt: string;
 	endedAt?: string;
@@ -49,6 +50,11 @@ export interface RunSummary {
 	/** List-projection provenance. Not persisted on `PersistedRun`. */
 	source: RunSource;
 }
+
+export type StatsResponse = Omit<Stats, "itemsDelivered" | "recentFailures"> & {
+	itemsDelivered: Array<Stats["itemsDelivered"][number] & { itemTitle?: string }>;
+	recentFailures: Array<Stats["recentFailures"][number] & { itemTitle?: string }>;
+};
 
 export interface RepoEntry {
 	slug: string;

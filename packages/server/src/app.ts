@@ -52,7 +52,7 @@ export function createApp(deps: AppDeps): Hono {
 
 	const guarded = new Hono();
 	guarded.use("*", bearerAuth(deps.token));
-	registerRunRoutes(guarded, { supervisor: deps.supervisor, registry: deps.registry });
+	registerRunRoutes(guarded, { supervisor: deps.supervisor, registry: deps.registry, roadmapCache: deps.roadmapCache });
 	registerReposRoutes(guarded, { registry: deps.registry, roadmapCache: deps.roadmapCache });
 	app.route("/", guarded);
 
