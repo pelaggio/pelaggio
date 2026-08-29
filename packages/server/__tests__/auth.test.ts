@@ -12,6 +12,12 @@ function makeApp(token: string): Hono {
 }
 
 describe("bearerAuth", () => {
+	it("rejects an empty token at runtime", () => {
+		for (const token of ["", "   ", "\n"]) {
+			assert.throws(() => bearerAuth(token), /bearer token must not be empty/);
+		}
+	});
+
 	it("missing Authorization header: 401", async () => {
 		const app = makeApp("secret");
 		const res = await app.request("/x");

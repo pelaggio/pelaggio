@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { isIP } from "node:net";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,6 +23,19 @@ function required(name: string, value: string | undefined): string {
 	return value;
 }
 
+function isWildcardHost(host: string): boolean {
+	if (host === "0.0.0.0") return true;
+	const unwrapped = host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
+	return isIP(unwrapped) === 6 && unwrapped.replace(/[0:]/g, "") === "";
+}
+
+function requiredControlPlaneToken(value: string | undefined): string {
+	if (value === undefined || value === "") {
+		throw new Error("CONTROL_PLANE_TOKEN is required; set a non-empty token in ~/.config/pelaggio-server.env before starting pelaggio-server");
+	}
+	return value;
+}
+
 // Resolved relative to this file: packages/server/src/ → ../../web/dist = packages/web/dist
 const packageRelativeWebDist = fileURLToPath(new URL("../../web/dist", import.meta.url));
 
@@ -35,7 +49,7 @@ function xdgStateHome(env: NodeJS.ProcessEnv): string {
 
 export function loadServerConfig(env: NodeJS.ProcessEnv = process.env, { webDistDefault = packageRelativeWebDist }: { webDistDefault?: string } = {}): ServerConfig {
 	const host = required("AUTOPILOT_SERVER_HOST", env.AUTOPILOT_SERVER_HOST);
-	if (host === "0.0.0.0" || host === "::") {
+	if (isWildcardHost(host)) {
 		throw new Error(`AUTOPILOT_SERVER_HOST must be a specific interface (e.g. tailnet IP), not ${host}`);
 	}
 	const portRaw = required("AUTOPILOT_SERVER_PORT", env.AUTOPILOT_SERVER_PORT);
@@ -54,8 +68,8 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env, { webDist
 		throw new Error(`AUTOPILOT_SERVER_ROADMAP_TITLE_TTL_MS must be a positive integer; got ${JSON.stringify(roadmapTitleTtlRaw)}`);
 	}
 	// Trim so a stray trailing space/newline in the operator env file cannot 401 every
-	// request; a whitespace-only value trims to "" and still fails closed via required().
-	const token = required("CONTROL_PLANE_TOKEN", env.CONTROL_PLANE_TOKEN?.trim());
+	// request; a whitespace-only value trims to "" and still fails closed.
+	const token = requiredControlPlaneToken(env.CONTROL_PLANE_TOKEN?.trim());
 	const webDistCandidate = env.AUTOPILOT_SERVER_WEB_DIST ? resolve(env.AUTOPILOT_SERVER_WEB_DIST) : webDistDefault;
 	const webDist = existsSync(webDistCandidate) ? webDistCandidate : undefined;
 	return { host, port, registryPath, token, statePath, logDir, webDist, trustManifestPath, roadmapTitleTtlMs };

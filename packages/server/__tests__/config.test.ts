@@ -99,8 +99,15 @@ describe("loadServerConfig", () => {
 	});
 
 	it("rejects wildcard bind hosts", () => {
-		for (const host of ["0.0.0.0", "::"]) {
+		for (const host of ["0.0.0.0", "::", "[::]", "0:0:0:0:0:0:0:0", "[0:0:0:0:0:0:0:0]", "::0", "0::0"]) {
 			assert.throws(() => loadServerConfig({ AUTOPILOT_SERVER_HOST: host, AUTOPILOT_SERVER_PORT: "7777" }), /specific interface.*not/, host);
+		}
+	});
+
+	it("accepts specific IPv6 bind hosts", () => {
+		for (const host of ["::1", "2001:db8::1", "fd7a:115c:a1e0::1"]) {
+			const cfg = loadServerConfig(baseEnv({ AUTOPILOT_SERVER_HOST: host }), { webDistDefault: join(tmpdir(), "no-such-dist") });
+			assert.equal(cfg.host, host);
 		}
 	});
 
@@ -119,6 +126,10 @@ describe("loadServerConfig", () => {
 
 	it("whitespace-only token fails closed", () => {
 		assert.throws(() => loadServerConfig(baseEnv({ CONTROL_PLANE_TOKEN: "   " }), { webDistDefault: join(tmpdir(), "no-such-dist") }), /CONTROL_PLANE_TOKEN is required/);
+	});
+
+	it("missing-token startup error names the operator remediation", () => {
+		assert.throws(() => loadServerConfig(baseEnv({ CONTROL_PLANE_TOKEN: undefined }), { webDistDefault: join(tmpdir(), "no-such-dist") }), /CONTROL_PLANE_TOKEN.*~\/\.config\/pelaggio-server\.env.*before starting pelaggio-server/);
 	});
 
 	it("token set on a non-loopback host is unchanged (does not throw; token preserved)", () => {

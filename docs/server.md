@@ -24,7 +24,7 @@ Module boundaries (`packages/server/src/`):
 |---|---|
 | `scripts/server.ts` | Entry: env → registry → `createApp(deps)` → `serve(...)`. |
 | `src/app.ts` | Composition. `/healthz` is registered outside the auth chain. |
-| `src/config.ts` | Env parsing. Refuses `AUTOPILOT_SERVER_HOST=0.0.0.0` and refuses to start without `CONTROL_PLANE_TOKEN`, including on loopback. XDG-aware defaults for registry/state/log paths. |
+| `src/config.ts` | Env parsing. Refuses IPv4 and IPv6 wildcard bind aliases and refuses to start without `CONTROL_PLANE_TOKEN`, including on loopback. XDG-aware defaults for registry/state/log paths. |
 | `src/registry.ts` | Loads + validates `repos.yml`. `Registry.path(slug)` resolves slug → absolute repo path. |
 | `src/roadmap-cache.ts` | Lazy `Map<slug, RoadmapSource>`; first hit per slug instantiates via injected factory. |
 | `src/auth.ts` | Bearer middleware; constant-time compare via `crypto.timingSafeEqual`. Its input token is required by type. |
@@ -304,7 +304,9 @@ token parameter is also required by type, so alternate app-factory callers
 cannot instantiate an unauthenticated API. Live deployments can bind the daemon
 to a tailnet-only interface and front it with Cloudflare Tunnel (see below).
 Comparison uses `crypto.timingSafeEqual` and rejects length mismatches before
-the compare so attackers can't probe length via timing.
+the compare so attackers can't probe length via timing. `bearerAuth()` also
+rejects empty and whitespace-only tokens at runtime, preserving the fail-closed
+boundary for callers outside `loadServerConfig()`.
 
 Rotate the token by editing `~/.config/pelaggio-server.env` and running
 `systemctl --user restart pelaggio-server`. SSE streams reconnect with the
@@ -312,9 +314,10 @@ new token on the next page load.
 
 ## Tailnet bind
 
-`AUTOPILOT_SERVER_HOST=0.0.0.0` (and its IPv6 wildcard equivalent `::`) is
-rejected at startup. The intent is that deploy environments specify the
-tailnet interface explicitly. Local dev can use `127.0.0.1`.
+`AUTOPILOT_SERVER_HOST=0.0.0.0` and every spelling of the IPv6 unspecified
+address (`::`, `0:0:0:0:0:0:0:0`, and bracketed aliases) are rejected at
+startup. The intent is that deploy environments specify the tailnet interface
+explicitly. Local dev can use `127.0.0.1`.
 
 Every bind, including loopback (`127.0.0.1`, `localhost`, `::1`), requires
 `CONTROL_PLANE_TOKEN`. There is deliberately no unauthenticated local-dev flag:
@@ -331,7 +334,10 @@ handler — pre-build deploys still come up.
 
 Static serving is unauthenticated but bounded to the configured `webDist`
 directory: pointing `AUTOPILOT_SERVER_WEB_DIST` at a broader directory would
-publish those files without auth (operator-controlled).
+publish those files without auth (operator-controlled). The shell and its
+assets receive browser-hardening headers, including a same-origin content
+security policy, clickjacking denial, MIME sniffing denial, and no-referrer
+policy.
 
 URL layout:
 

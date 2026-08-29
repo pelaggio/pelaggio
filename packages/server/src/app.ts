@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
+import { secureHeaders } from "hono/secure-headers";
 import { bearerAuth } from "./auth.js";
 import type { Registry } from "./registry.js";
 import type { RoadmapCache } from "./roadmap-cache.js";
@@ -20,6 +21,7 @@ export interface AppDeps {
 
 export function createApp(deps: AppDeps): Hono {
 	const app = new Hono();
+	const authenticate = bearerAuth(deps.token);
 
 	// Health bypasses auth.
 	registerHealthRoutes(app);
@@ -37,9 +39,28 @@ export function createApp(deps: AppDeps): Hono {
 	});
 
 	// The static shell must load before the operator can enter a bearer token.
-	// It carries no authority; every API route remains in the guarded sub-app.
+	// It carries no authority; every API route remains in guarded route families.
 	if (deps.webDist !== undefined) {
 		const root = deps.webDist;
+		const protectShell = secureHeaders({
+			contentSecurityPolicy: {
+				defaultSrc: ["'self'"],
+				baseUri: ["'none'"],
+				connectSrc: ["'self'"],
+				fontSrc: ["'self'"],
+				formAction: ["'self'"],
+				frameAncestors: ["'none'"],
+				imgSrc: ["'self'", "data:"],
+				manifestSrc: ["'self'"],
+				objectSrc: ["'none'"],
+				// Astro emits its island bootstrap and styles inline in the static shell.
+				scriptSrc: ["'self'", "'unsafe-inline'"],
+				styleSrc: ["'self'", "'unsafe-inline'"],
+			},
+			xFrameOptions: "DENY",
+		});
+		app.use("/", protectShell);
+		app.use("/ui/*", protectShell);
 		app.get("/", (c) => c.redirect("/ui/", 302));
 		app.get(
 			"/ui/*",
@@ -50,11 +71,15 @@ export function createApp(deps: AppDeps): Hono {
 		);
 	}
 
-	const guarded = new Hono();
-	guarded.use("*", bearerAuth(deps.token));
-	registerRunRoutes(guarded, { supervisor: deps.supervisor, registry: deps.registry, roadmapCache: deps.roadmapCache });
-	registerReposRoutes(guarded, { registry: deps.registry, roadmapCache: deps.roadmapCache });
-	app.route("/", guarded);
+	// Scope auth to the authority-bearing route families. A global guarded
+	// sub-app turns every unknown URL into a misleading 401 before Hono can
+	// produce its 404 fallback.
+	app.use("/runs", authenticate);
+	app.use("/runs/*", authenticate);
+	app.use("/repos", authenticate);
+	app.use("/repos/*", authenticate);
+	registerRunRoutes(app, { supervisor: deps.supervisor, registry: deps.registry, roadmapCache: deps.roadmapCache });
+	registerReposRoutes(app, { registry: deps.registry, roadmapCache: deps.roadmapCache });
 
 	return app;
 }
