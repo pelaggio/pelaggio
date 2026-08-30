@@ -16,7 +16,7 @@ export {
 	rebuildDecisionIndex,
 	resolveDecision,
 } from "./decisions.js";
-export type { CreateEventWriterOptions, ReadEventLogOptions } from "./flow-events.js";
+export type { CreateEventWriterOptions, EventStreamSlice, EventStreamTail, ReadEventLogOptions, ReadEventStreamSlice } from "./flow-events.js";
 export {
 	createEventWriter,
 	decodeFlowEvent,
@@ -30,6 +30,8 @@ export {
 	PELAGGIO_EVENT_TYPES,
 	projectEvents,
 	readEventLog,
+	readEventStreamSlice,
+	tailEventStream,
 } from "./flow-events.js";
 export type { FlowCandidate, FlowDependency, FlowEligibleCandidate, FlowEvaluation, FlowItemVerdict, FlowPolicy, FlowReadiness, FlowSnapshot, FlowVerdictReason, QuickScopeInput } from "./flow-policy.js";
 export { DEFAULT_FLOW_POLICY, FifoPolicy } from "./flow-policy.js";

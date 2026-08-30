@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { ulid } from "ulid";
 import { LOG_PATH, logPathFor, REPO } from "./config.js";
@@ -105,6 +105,64 @@ export function decodeFlowEventLine(line: string): FlowEvent | undefined {
 		return undefined;
 	}
 	return decodeFlowEvent(parsed);
+}
+
+export type EventStreamSlice = { data: string; eof: boolean };
+export type ReadEventStreamSlice = (path: string, offset: number) => EventStreamSlice;
+
+/** Default slice reader: the bytes appended since `offset`, `eof` when nothing new (or no file yet). */
+export function readEventStreamSlice(path: string, offset: number): EventStreamSlice {
+	if (!existsSync(path)) return { data: "", eof: true };
+	const fd = openSync(path, "r");
+	try {
+		const size = fstatSync(fd).size;
+		if (offset >= size) return { data: "", eof: true };
+		const length = size - offset;
+		const buffer = Buffer.alloc(length);
+		const read = readSync(fd, buffer, 0, length, offset);
+		return { data: buffer.subarray(0, read).toString("utf8"), eof: offset + read >= size };
+	} finally {
+		closeSync(fd);
+	}
+}
+
+export interface EventStreamTail {
+	/** Decode every complete line appended since the last call (fail closed per line). */
+	next(): FlowEvent[];
+	/** Bytes consumed so far — resume a tail later with `fromOffset`. */
+	readonly offset: number;
+}
+
+/**
+ * Incremental reader over one segment file (`eventStreamPath`): keeps the byte offset and holds a
+ * truncated final line until its newline arrives, so a consumer polling a live writer never sees
+ * a half record. This is the package-level tail the control plane consumes (plan step 8).
+ */
+export function tailEventStream(path: string, options: { fromOffset?: number; readSlice?: ReadEventStreamSlice } = {}): EventStreamTail {
+	const readSlice = options.readSlice ?? readEventStreamSlice;
+	let offset = options.fromOffset ?? 0;
+	let pending = "";
+	return {
+		get offset() {
+			return offset;
+		},
+		next() {
+			const { data } = readSlice(path, offset);
+			if (!data) return [];
+			offset += Buffer.byteLength(data, "utf8");
+			pending += data;
+			const events: FlowEvent[] = [];
+			let idx = pending.indexOf("\n");
+			while (idx !== -1) {
+				const line = pending.slice(0, idx);
+				pending = pending.slice(idx + 1);
+				const event = decodeFlowEventLine(line);
+				if (event) events.push(event);
+				idx = pending.indexOf("\n");
+			}
+			return events;
+		},
+	};
 }
 
 /** `<root>/.dev/flow-events` */

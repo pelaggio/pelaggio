@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
-import { createEventWriter, decodeFlowEventLine, eventStreamPath, foldEvents, MAX_FLOW_EVENT_BYTES, PELAGGIO_EVENT_TYPES, projectEvents, readEventLog } from "../flow-events.js";
+import { createEventWriter, decodeFlowEventLine, eventStreamPath, foldEvents, MAX_FLOW_EVENT_BYTES, PELAGGIO_EVENT_TYPES, projectEvents, readEventLog, tailEventStream } from "../flow-events.js";
 import { computeStats } from "../stats.js";
 import type { FlowEventInput } from "../types.js";
 
@@ -372,5 +372,50 @@ describe("decodeFlowEventLine", () => {
 		});
 		assert.equal(decodeFlowEventLine(line)?.type, "pelaggio.watch-idle");
 		assert.equal(eventStreamPath("/r", "01ARZ3NDEKTSV4RRFFQ69G5FAW"), "/r/.dev/flow-events/01ARZ3NDEKTSV4RRFFQ69G5FAW.jsonl");
+	});
+});
+
+describe("tailEventStream", () => {
+	it("decodes complete lines incrementally, holds a truncated line, and advances its offset", () => {
+		const base = {
+			v: 1,
+			eventId: "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+			streamId: "01ARZ3NDEKTSV4RRFFQ69G5FAW",
+			seq: 0,
+			ts: "2026-08-30T00:00:00.000Z",
+			itemId: null,
+			claimId: null,
+			readinessEpisodeId: null,
+			executionId: "01ARZ3NDEKTSV4RRFFQ69G5FAX",
+			causationId: null,
+		};
+		const a = `${JSON.stringify({ ...base, type: "pelaggio.watch-idle" })}\n`;
+		const b = `${JSON.stringify({ ...base, eventId: "01ARZ3NDEKTSV4RRFFQ69G5FAY", seq: 1, type: "pelaggio.watch-wake" })}\n`;
+		const chunks = [a + b.slice(0, 10), b.slice(10), "garbage\n"];
+		let served = 0;
+		const readSlice = (_path: string, offset: number) => {
+			assert.equal(
+				offset,
+				chunks.slice(0, served).reduce((n, c) => n + Buffer.byteLength(c, "utf8"), 0),
+			);
+			const data = chunks[served] ?? "";
+			if (served < chunks.length) served += 1;
+			return { data, eof: served >= chunks.length };
+		};
+		const tail = tailEventStream("/nowhere/stream.jsonl", { readSlice });
+		assert.deepEqual(
+			tail.next().map((e) => e.type),
+			["pelaggio.watch-idle"],
+		);
+		assert.deepEqual(
+			tail.next().map((e) => e.type),
+			["pelaggio.watch-wake"],
+		);
+		assert.deepEqual(tail.next(), []);
+		assert.deepEqual(tail.next(), []);
+		assert.equal(
+			tail.offset,
+			chunks.reduce((n, c) => n + Buffer.byteLength(c, "utf8"), 0),
+		);
 	});
 });
