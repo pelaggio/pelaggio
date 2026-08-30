@@ -8,65 +8,40 @@ import { allocateAttempt, attemptRunId } from "./attempt-identity.js";
 import { CONFIG, CONFINEMENT_CONFIG, LOG_PATH, modelForProvider, REPO, REVIEW_CONFIG, ROADMAP_GITHUB, ROADMAP_LINEAR, ROADMAP_SOURCE, resolveDriverCandidates, resolveProviderBin, resolveStepSettings, WORKTREE_PREFIX } from "./config.js";
 import { createMainCheckoutDeltaObserver, diffForbiddenRootSnapshots, forbiddenRootsForConfinement, snapshotForbiddenRoots } from "./confinement/roots.js";
 import { type AcceptedSession, captureEvaluatorContext, createSessionController, firstDiffPathsByRoot, resolveEligibleSessions, revalidateChangedRoot, type SessionController, type SessionEvaluatorContext } from "./confinement/sessions.js";
-import { canRetryWithinBudget, classifyOutcome, parseVerdict } from "./cycle-outcome.js";
-import { buildReviewDiffBlock, computeImplementTurns, readRuntimeVersions, revertPlanPolish, stepIndex, uniqueDriverProvenance } from "./cycle-support.js";
-import {
-	appendDecisions as appendDecisionsDefault,
-	appendReviewEscalation as appendReviewEscalationDefault,
-	lookupReviewEscalation as lookupReviewEscalationDefault,
-	type ReviewEscalationAdjudication,
-	reviewEscalationCommands,
-} from "./decisions.js";
-import { createDriverAssignmentState, type DriverIdentity, recordArtifactAuthor, resolveStaticAuthor, selectAuthor, selectReviewers } from "./driver-assignment.js";
-import {
-	dispatchStepEffects as dispatchStepEffectsDefault,
-	type Effect,
-	type EffectsContext,
-	EffectsManifestError,
-	type ReviewEscalationEffect,
-	type ReviewSeatIdentity,
-	type ReviewVerdictEffect,
-	writeEffectsManifest as writeEffectsManifestDefault,
-} from "./effects.js";
+import { canRetryWithinBudget, classifyOutcome } from "./cycle-outcome.js";
+import { readRuntimeVersions, revertPlanPolish, stepIndex, uniqueDriverProvenance } from "./cycle-support.js";
+import { appendDecisions as appendDecisionsDefault, appendReviewEscalation as appendReviewEscalationDefault, lookupReviewEscalation as lookupReviewEscalationDefault } from "./decisions.js";
+import { createDriverAssignmentState, type DriverIdentity, recordArtifactAuthor, resolveStaticAuthor } from "./driver-assignment.js";
+import { dispatchStepEffects as dispatchStepEffectsDefault, type Effect, EffectsManifestError, writeEffectsManifest as writeEffectsManifestDefault } from "./effects.js";
 import { digestChallenge } from "./execution-receipt.js";
 import { appendLog as appendLogDefault, findLoggedArtifactAuthor } from "./flow-events.js";
 import { DEFAULT_FLOW_POLICY, type FlowPolicy } from "./flow-policy.js";
 import { readFreshnessGateRecord, writeFreshnessGateRecord } from "./freshness-gate-record.js";
-import {
-	checkpoint,
-	ensureCheckpointed,
-	filesChangedSince,
-	getArtifactHeadSha,
-	getHeadSha,
-	gitDiffNameOnly,
-	hasDeliverableCommits,
-	listWorktrees as listWorktreesDefault,
-	quarantineCheckpoint,
-	readGitBinding,
-	resolveWorktree,
-} from "./git.js";
+import { checkpoint, ensureCheckpointed, filesChangedSince, getArtifactHeadSha, getHeadSha, hasDeliverableCommits, listWorktrees as listWorktreesDefault, quarantineCheckpoint, readGitBinding, resolveWorktree } from "./git.js";
 import { classifyParkReason, isTransientSdkError } from "./outcome-classify.js";
-import { parseDeferredItems, parsePickItem, parsePickResult, pickDivergedFromPin } from "./pick-parse.js";
+import { parsePickItem, parsePickResult, pickDivergedFromPin } from "./pick-parse.js";
 import { type PrReviewGateResult, runPrReviewGate } from "./pr-review-gate.js";
-import { capabilityMapFrom, resolveAuthoringReviewConfig, resolveAuthoringReviewExecution } from "./provider-routing.js";
-import { registerPath, registerRelativePath } from "./registers.js";
-import { runReviewLoop } from "./review/loop.js";
-import { type ReviewRecord, renderReviewRecord, writeReviewRecord } from "./review/record.js";
 import { cleanupAuthoringReviewSeatsForSha, isAuthoringReviewSeatPath, prepareAuthoringReviewSeat } from "./review/seats.js";
-import { archiveAppliedReviewFindings, reviewFindingsDigest } from "./review-findings-archive.js";
 import { isReviewHeadPath } from "./review-sweep.js";
-import { reviseFindingsPath } from "./revise-sweep.js";
 import { getRoadmapSource, type RoadmapSource } from "./roadmap/index.js";
 import { cleanupShipBodyFile, parseShipDecisionEffect, shipBodyFile } from "./ship/decision.js";
 import { captureShipState, ensureMainCheckoutOnBranch, type PrShipFreshnessResult, parseShipMerged, preparePrShipFreshness, verifyConflictRepairComplete, verifyPrShipFreshness, verifyShipLanded } from "./ship/freshness.js";
 import { commitStrayBookkeeping, runShipBookkeeping as runShipBookkeepingDefault } from "./ship/index.js";
 import type { PrShipGateBinding } from "./ship/pr-effects.js";
 import { extractPrUrl } from "./ship/pull-request.js";
-import { buildStepArgs, expandSkill, reviewFindingsPreamble } from "./skills.js";
+import { expandSkill } from "./skills.js";
 import type { PipelineStep } from "./step-names.js";
-import { getProvider, REGISTERED_PROVIDERS, type RunStepFn, type RunStepOpts, runStep as runStepDefault } from "./step-runner.js";
+import { type RunStepFn, runStep as runStepDefault } from "./step-runner.js";
+import type { CycleContext, CycleHelpers, RunStepWithRetryConfig, StepAttempt, StepRunOptions } from "./steps/context.js";
+import { archiveReviewFindingsAfterImplement, runImplement } from "./steps/implement.js";
+import { runPlan } from "./steps/plan.js";
+import { runShakedownCode } from "./steps/shakedown-code.js";
+import { runShakedownPlan } from "./steps/shakedown-plan.js";
 import { A, createStepRenderer, fmtElapsed } from "./tui.js";
 import type { CycleDisposition, CycleGitBinding, CycleResult, CycleVersionProvenance, ExecutionReceiptDescriptor, Flags, ParkSignal, PipelineOpts, Step, StepLog, StepResult } from "./types.js";
+
+// Re-exported for pipeline.test.ts; the implementation moved with the implement step (plan step 9).
+export { archiveReviewFindingsAfterImplement };
 
 // ── Pipeline ───────────────────────────────────────────────────────────
 
@@ -80,35 +55,10 @@ export type { RunStepFn };
  * max-turns exhaustion / budget-gated retry skip). A discriminated union rather
  * than a sentinel bool so "terminal vs continue" is explicit at each call site.
  */
-type StepAttempt = { kind: "ok"; result: StepResult } | { kind: "terminal"; cycleResult: CycleResult };
-type StepEffects = Effect[] | ((result: StepResult) => Effect[]);
 
 function appendResultText(text: string, appendText: string): string {
 	if (text.trim() === "") return appendText;
 	return `${text}\n${appendText}`;
-}
-
-export function archiveReviewFindingsAfterImplement(
-	flags: Flags,
-	mainRepo: string,
-	itemId: string,
-	findingsSha256: string,
-	appliedOnSha: string,
-	deps: { archive?: typeof archiveAppliedReviewFindings } = {},
-): { ok: true } | { ok: false; path: string; detail: string } {
-	const findingsPath = flags["review-findings"];
-	if (!findingsPath) return { ok: true };
-
-	const ownedFindingsPath = reviseFindingsPath(mainRepo, itemId);
-	if (resolve(findingsPath) === ownedFindingsPath) {
-		try {
-			(deps.archive ?? archiveAppliedReviewFindings)(mainRepo, itemId, findingsSha256, appliedOnSha, ownedFindingsPath);
-		} catch (err) {
-			return { ok: false, path: ownedFindingsPath, detail: err instanceof Error ? err.message : String(err) };
-		}
-	}
-	delete flags["review-findings"];
-	return { ok: true };
 }
 
 const TRANSIENT_MAX_ATTEMPTS = 3;
@@ -374,37 +324,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		name: Step,
 		prompt: string,
 		cwd: string,
-		{
-			attempt = 1,
-			commitLabel,
-			effects,
-			maxTurnsOverride,
-			retriedMaxTurns = false,
-			ownWorktree,
-			executionOverride,
-			parkSignalOverride,
-			workspaceAccess,
-			preCheckpointGate,
-			shipGate,
-		}: {
-			attempt?: number;
-			commitLabel?: string;
-			effects?: StepEffects;
-			maxTurnsOverride?: number;
-			retriedMaxTurns?: boolean;
-			ownWorktree?: string;
-			executionOverride?: { provider: import("./types.js").ProviderName; model?: string; codexModel?: string };
-			parkSignalOverride?: ParkSignal;
-			workspaceAccess?: RunStepOpts["workspaceAccess"];
-			/** Deterministic gate run against the tree BEFORE the checkpoint's `git add -A` (#424
-			 *  review): a failing gate skips the checkpoint entirely so unresolved conflict state
-			 *  is never committed as resolved. Result classification is left untouched — the
-			 *  caller re-checks the same tree state and fails with the gate's detail. */
-			preCheckpointGate?: () => { ok: true } | { ok: false; detail: string };
-			/** Gated-OID binding threaded into the effects dispatch for `ship.ShipDecision`
-			 *  (ADR-0025 applied to the PR-ship path). Ship step only. */
-			shipGate?: PrShipGateBinding;
-		} = {},
+		{ attempt = 1, commitLabel, effects, maxTurnsOverride, retriedMaxTurns = false, ownWorktree, executionOverride, parkSignalOverride, workspaceAccess, preCheckpointGate, shipGate }: StepRunOptions = {},
 	): Promise<StepResult> {
 		const settings = resolveStepSettings(CONFIG, profile, name);
 		// Normalize into a realized driver identity for logging + effects attribution. An
@@ -1194,29 +1114,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	 * the prior failure (not `attempt > 1`) so an edit-loop retry is distinguished from a
 	 * turn-exhaustion retry in the step log.
 	 */
-	async function runStepWithRetry(cfg: {
-		name: Step;
-		/** `resolveStepSettings(...).budget` for the dollar gate on a max-turns retry. */
-		stepBudget: number;
-		buildPrompt: (attempt: number, ctx: { lastLoopFile: string | null }) => string;
-		logAttempt: (attempt: number) => void;
-		/** Exact per-step refusal wording (task vs review noun) — preserved for tests. */
-		refusedError: string;
-		maxAttempts?: number;
-		/** implement / shakedown-code only: checkpoint label per attempt. */
-		commitLabel?: (attempt: number) => string;
-		/** Success-dispatched effects; checkpoint effects also preserve work on non-confinement failures. */
-		effects?: (attempt: number) => Effect[];
-		/** implement only: dynamic turn budget (scaled by plan file count). */
-		maxTurnsOverride?: number;
-		/** implement only: retry (un-budget-gated) with a fresh-approach prompt on edit_loop. */
-		retryOnEditLoop?: boolean;
-		/** Turn-limit log noun; defaults to `name` (shakedown-code logs "shakedown"). */
-		turnLimitNoun?: string;
-		executionOverride?: DriverIdentity;
-		/** Threaded to step(): deterministic pre-`git add -A` gate on the checkpoint (#424 review). */
-		preCheckpointGate?: () => { ok: true } | { ok: false; detail: string };
-	}): Promise<StepAttempt> {
+	async function runStepWithRetry(cfg: RunStepWithRetryConfig): Promise<StepAttempt> {
 		const maxAttempts = cfg.maxAttempts ?? 2;
 		const noun = cfg.turnLimitNoun ?? cfg.name;
 		let lastLoopFile: string | null = null;
@@ -1352,75 +1250,57 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		reconstructAuthor("plan", "plan");
 	}
 
-	if (shouldRun("plan")) {
-		const existingPlan = roadmap.resolvePlanPath({ id: itemId!, worktree: worktree! });
-		if (!opts.dryRun && existsSync(existingPlan)) {
-			log(`plan exists at ${existingPlan} — skipping plan generation`);
-			reconstructAuthor("plan", "plan");
-		} else {
-			const selected = selectAuthor(assignment, driverCandidates("plan"), available);
-			if (!selected.ok) return finish({ itemId, completed: false, cost, error: `plan assignment failed: ${selected.reason}` });
-			const planAuthor = selected.drivers[0];
-			// Inject the item's requirements into the plan prompt in the harness (#103): a sandboxed
-			// model (Codex) can't run `roadmap get` / `gh issue view` (no network, and the roadmap CLI
-			// dies on tsx-IPC in the sandbox), so it would otherwise plan blind. The harness has an
-			// injected RoadmapSource with network access — fetch here and pass it in.
-			const planArgs = await buildStepArgs(roadmap, itemId!);
-			const outcome = await runStepWithRetry({
-				name: "plan",
-				stepBudget: resolveStepSettings(CONFIG, profile, "plan").budget,
-				buildPrompt: () => expandSkill("plan", planArgs),
-				logAttempt: (attempt) => log(attempt === 1 ? "planning..." : "continuing plan (attempt 2)..."),
-				refusedError: "plan refused (model declined the task)",
-				effects: () => [{ kind: "checkpoint", label: "plan" }, { kind: "plan.publish" }],
-				executionOverride: planAuthor,
-			});
-			if (outcome.kind === "terminal") return outcome.cycleResult;
-			recordArtifactAuthor(assignment, "plan", planAuthor);
+	// Step modules (plan step 9) read the cycle through a live view and call its helpers; see steps/context.ts.
+	const cycle: CycleContext = {
+		opts,
+		flags,
+		parkSignal,
+		mainRepo,
+		roadmap,
+		assignment,
+		available,
+		steps,
+		executionReceipts,
+		deferredItemTitles,
+		cycleChallenge,
+		now,
+		writeEffectsManifest,
+		dispatchStepEffects,
+		appendReviewEscalation,
+		lookupReviewEscalation,
+		onReviewFindingsConsumed: deps.onReviewFindingsConsumed,
+		get itemId() {
+			return itemId!;
+		},
+		get worktree() {
+			return worktree!;
+		},
+		get profile() {
+			return profile;
+		},
+		get verdict() {
+			return verdict;
+		},
+		get shakedownPlanText() {
+			return shakedownPlanText;
+		},
+		cost: () => cost,
+		addCost: (delta) => {
+			cost += delta;
+		},
+	};
+	const cycleHelpers: CycleHelpers = { log, finish, parkExit, runStepWithRetry, step, driverCandidates, itemRunId, observeGitForReceipt, reconstructAuthor };
 
-			// Plan-time decomposition: a plan that judges the item too large for one cycle emits
-			// `deferred-item: {json}` markers for the slices it splits off, and scopes THIS cycle to a
-			// coherent first slice instead of starving at the implement turn wall. Decomposition is the
-			// preferred path for large items; the raised implement turn ceiling is the escape hatch for
-			// changes that don't decompose cleanly. Best-effort, mirrors the shakedown-code deferral (#115).
-			if (!opts.dryRun) {
-				for (const d of parseDeferredItems(outcome.result.assistantText, deferredItemTitles)) {
-					try {
-						const created = await roadmap.createItem(d);
-						log(`plan deferred → ${created.id}: ${d.title}`);
-					} catch (e) {
-						log(`deferred-item create failed (non-fatal): ${e instanceof Error ? e.message : String(e)}`);
-					}
-				}
-			}
-		}
-		const planPath = await roadmap.getItemPlan({ worktree: worktree! });
-		if (planPath) log(`plan: file://${planPath}`);
+	if (shouldRun("plan")) {
+		const outcome = await runPlan(cycle, cycleHelpers);
+		if (outcome.kind === "terminal") return outcome.result;
 	}
 
 	if (shouldRun("shakedown-plan")) {
-		const planAuthor = assignment.authors.plan;
-		if (!planAuthor) return finish({ itemId, completed: false, cost, error: "shakedown-plan assignment failed: plan author attribution is unavailable" });
-		const selected = selectReviewers(assignment, driverCandidates("shakedown-plan"), planAuthor, 1, available);
-		if (!selected.ok) return finish({ itemId, completed: false, cost, error: `shakedown-plan assignment failed: ${selected.reason}` });
-		const shakedownPlanArgs = await buildStepArgs(roadmap, itemId!, "plan-review");
-		const outcome = await runStepWithRetry({
-			name: "shakedown-plan",
-			stepBudget: resolveStepSettings(CONFIG, profile, "shakedown-plan").budget,
-			buildPrompt: () => expandSkill("shakedown", shakedownPlanArgs),
-			logAttempt: (attempt) => log(attempt === 1 ? "shakedown (plan)..." : "continuing shakedown-plan (attempt 2)..."),
-			refusedError: "shakedown-plan refused (model declined the review)",
-			executionOverride: selected.drivers[0],
-		});
-		if (outcome.kind === "terminal") return outcome.cycleResult;
-
-		const shakedown = outcome.result;
-		verdict = parseVerdict(shakedown.text);
-		shakedownPlanText = shakedown.text;
-		const lastStep = steps[steps.length - 1];
-		if (lastStep && lastStep.name === "shakedown-plan") lastStep.verdict = verdict;
-		log(`verdict: ${verdict}`);
-		if (verdict === "RETHINK") return finish({ itemId, completed: false, cost, verdict, error: "plan needs rethink" });
+		const outcome = await runShakedownPlan(cycle, cycleHelpers);
+		if (outcome.kind === "terminal") return outcome.result;
+		verdict = outcome.verdict;
+		shakedownPlanText = outcome.shakedownPlanText;
 	}
 
 	// ── Implement ──
@@ -1433,543 +1313,17 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	}
 
 	if (shouldRun("implement")) {
-		const selected = selectAuthor(assignment, driverCandidates("implement"), available);
-		if (!selected.ok) return finish({ itemId, completed: false, cost, error: `implement assignment failed: ${selected.reason}` });
-		const implementationAuthor = selected.drivers[0];
-		const parked = parkExit();
-		if (parked) return parked;
-		const planPath = await roadmap.getItemPlan({ worktree: worktree! });
-		// Dynamic implement budget: scale turns with the plan's file count.
-		// Plan absent (e.g. quick mode, resume without plan on disk) → static fallback.
-		let planBody: string | null = null;
-		if (planPath) {
-			try {
-				planBody = readFileSync(planPath, "utf-8");
-			} catch {
-				planBody = null;
-			}
-		}
-		const implementTurns = computeImplementTurns(planBody, resolveStepSettings(CONFIG, profile, "implement").turns);
-		const planRef = planPath ? `Read the plan at \`${planPath}\`.` : `Find the plan in \`${registerPath(REPO, "plans")}/\` (filename matches branch without \`feat/\` prefix).`;
-		const worktreeHint = [
-			`**Your working directory is**: \`${worktree}\`.`,
-			`Any path the plan writes as \`foo/bar\` (project-relative) means \`${worktree}/foo/bar\` — use that absolute form when calling Edit/Write/Bash, so the worktree-isolation hook does not mistake it for a main-repo reference.`,
-		].join("\n");
-
-		// Revision input (issue #60): on a resume driven by a red PR review, `--review-findings <path>`
-		// points at a findings file the closed-loop workflow wrote. Fail closed when that explicit
-		// input cannot be read: continuing would silently ask the worker to revise without its task.
-		let reviewNote = "";
-		const findingsPath = flags["review-findings"];
-		let findingsSha256: string | undefined;
-		// Any DEFINED value is a findings-driven resume — `--review-findings ""` must not
-		// slip past a truthiness check into the generic plan prompt.
-		if (findingsPath !== undefined && findingsPath.trim() === "") {
-			return finish({ itemId, completed: false, cost, error: "empty --review-findings path — refusing a findings-driven resume without findings" });
-		}
-		if (findingsPath) {
-			try {
-				const findingsBytes = readFileSync(findingsPath);
-				findingsSha256 = reviewFindingsDigest(findingsBytes);
-				reviewNote = reviewFindingsPreamble(findingsBytes.toString("utf-8"));
-			} catch (err) {
-				const detail = err instanceof Error ? err.message : String(err);
-				return finish({ itemId, completed: false, cost, error: `could not read review findings ${JSON.stringify(findingsPath)}: ${detail}` });
-			}
-			// A readable but empty/whitespace-only findings file yields no preamble; the
-			// prompt selection below would silently fall back to the generic plan prompt
-			// and revise without its task. Same failure class as unreadable — fail closed.
-			if (!reviewNote) {
-				return finish({ itemId, completed: false, cost, error: `review findings ${JSON.stringify(findingsPath)} is empty — refusing a findings-driven resume without findings` });
-			}
-		}
-
-		const buildRevisionPrompt = (continued: boolean): string =>
-			[
-				worktreeHint,
-				...(continued ? ["", "The previous implementation session ran out of turns. Code has been committed to disk. Continue the revision from the current worktree state."] : []),
-				"",
-				reviewNote,
-				"",
-				"## Plan context",
-				planRef,
-				"The plan is historical context for the branch. Use it to understand intended scope, but do not let it override the review findings.",
-				"",
-				"## CRITICAL — revise the already-implemented branch",
-				"Do not no-op because the approved plan appears complete. The deliverable is a branch that resolves the review findings.",
-				"Do NOT edit the plan file itself to refine wording or add detail. Edit the target code/docs named by the findings and any directly related files needed for a correct fix.",
-				"Before finishing, confirm `git diff --name-only main...HEAD` lists target files, not only `docs/plans/*`.",
-				"",
-				"## Verification strategy",
-				"1. Read the review findings first and identify every blocking item.",
-				"2. Inspect the named files and related code before editing.",
-				"3. Implement one logical fix at a time, then run the verification commands from `.claude/skills/_rubric.md`'s Verification section.",
-				"4. If the same error persists after 3 fix attempts, commit what works, skip the problematic piece, and note it.",
-				"5. Run all verification commands from the rubric before finishing.",
-			].join("\n");
-
-		const buildPlanPrompt = (continued: boolean): string => {
-			if (profile === "quick") {
-				const quickBase = `${worktreeHint}\n\nThis is a small-scope item (bug fix or scope S). Implement it directly — no formal plan needed. Read the roadmap entry for ${itemId} to understand the requirements. Edit the target files the roadmap names; do NOT create or edit a plan file.`;
-				return continued
-					? `${worktreeHint}\n\nThe previous implementation session ran out of turns. Code has been committed to disk.\n\nContinue the small-scope implementation from the current worktree state. Do NOT create or edit a plan file. Run all verification commands from the rubric before finishing.`
-					: quickBase;
-			}
-			return [
-				worktreeHint,
-				...(continued ? ["", "The previous implementation session ran out of turns. Code has been committed to disk."] : []),
-				"",
-				continued ? "" : verdict === "APPROVE" ? "Plan approved." : `Shakedown requested revisions:\n${shakedownPlanText.slice(0, 2000)}${shakedownPlanText.length > 2000 ? "\n...(truncated)" : ""}\nAddress the feedback, then implement.`,
-				"",
-				"## Plan",
-				planRef,
-				"",
-				"## CRITICAL — execute the plan, do not polish it",
-				continued
-					? "The plan file is your **reference only**. Your deliverables are the **target files the plan names**. Do NOT edit the plan file itself to refine wording — that is not progress. Before finishing, confirm `git diff --name-only main...HEAD` lists target files, not only `docs/plans/*`."
-					: "The plan file is your **reference only**; it is already approved and locked. Your deliverables are the **target files the plan names** (look for a `Files to change` table or file paths under headings). Do NOT edit the plan file itself to refine wording or add detail — that is not progress, it is plan-polishing and it will fail the cycle.",
-				...(continued ? [] : ["Before finishing, confirm `git diff --name-only main...HEAD` lists target files, not only `docs/plans/*`."]),
-				"",
-				continued ? "## Instructions" : "## Strategy — work incrementally",
-				...(continued
-					? [
-							"1. Run the verification commands from `.claude/skills/_rubric.md`'s Verification section to see the current state.",
-							"2. Read the plan and compare against what's already implemented.",
-							"3. Identify what's missing or broken and finish the remaining work.",
-							"4. Follow the same incremental strategy — one chunk at a time, verify between.",
-							"5. Run all verification commands from the rubric before finishing.",
-						]
-					: [
-							"1. Read the full plan first. Identify the target files and the implementation order.",
-							"2. Implement one logical chunk at a time (e.g., one target file, one new function, one section). For doc-only items the 'chunk' is a specific file or section edit.",
-							"3. After each chunk, run the verification commands from `.claude/skills/_rubric.md`'s Verification section. Fix errors before moving on.",
-							"4. If the same error persists after 3 fix attempts, commit what works, skip the problematic piece, and note it.",
-							"5. Run all verification commands from the rubric before finishing.",
-							"6. Do NOT implement all files first and verify at the end — that causes cascading errors.",
-						]),
-			].join("\n");
-		};
-
-		const implementPrompt = reviewNote ? buildRevisionPrompt(false) : buildPlanPrompt(false);
-		const continuePrompt = reviewNote ? buildRevisionPrompt(true) : buildPlanPrompt(true);
-
-		const outcome = await runStepWithRetry({
-			name: "implement",
-			stepBudget: resolveStepSettings(CONFIG, profile, "implement").budget,
-			maxTurnsOverride: implementTurns,
-			retryOnEditLoop: true,
-			refusedError: "implement refused (model declined the task)",
-			logAttempt: (attempt) => log(attempt === 1 ? "implementing..." : "continuing implementation (attempt 2)..."),
-			effects: (attempt) => [{ kind: "checkpoint", label: attempt === 1 ? "implementation checkpoint" : "implementation continued" }],
-			buildPrompt: (attempt, { lastLoopFile }) => {
-				if (attempt === 1) return implementPrompt;
-				return lastLoopFile
-					? [
-							continuePrompt,
-							"",
-							`## ⚠ IMPORTANT: The previous session got stuck editing \`${lastLoopFile}\` in a loop.`,
-							"Take a DIFFERENT approach to fix the type errors:",
-							"- Read the file and the actual error message carefully before editing",
-							"- Consider if the type/interface needs to change upstream instead",
-							"- If a component prop type is wrong, fix the type definition, not the call site repeatedly",
-							"- If stuck after 2 attempts on the same error, skip it and move on",
-						].join("\n")
-					: continuePrompt;
-			},
-			executionOverride: implementationAuthor,
-		});
-		if (outcome.kind === "terminal") return outcome.cycleResult;
-		if (findingsPath && findingsSha256) {
-			// Archive the canonical findings only after the implement checkpoint commits.
-			// A failed or parked implement returns above and leaves the source in place for retry;
-			// an operator-supplied path remains caller-owned.
-			try {
-				const pending = execSync("git status --porcelain", { cwd: worktree!, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }).trim();
-				if (pending) {
-					return finish({
-						itemId,
-						completed: false,
-						cost,
-						error: "review findings were applied but the implementation checkpoint did not commit cleanly; findings preserved for retry",
-					});
-				}
-			} catch (err) {
-				return finish({
-					itemId,
-					completed: false,
-					cost,
-					error: `review findings were applied but the implementation checkpoint could not be verified: ${err instanceof Error ? err.message : String(err)}; findings preserved for retry`,
-				});
-			}
-			const appliedOnSha = getHeadSha(worktree!);
-			if (!appliedOnSha) {
-				return finish({
-					itemId,
-					completed: false,
-					cost,
-					error: "review findings were applied but the revision HEAD could not be read; findings preserved for a fail-closed retry",
-				});
-			}
-			const archived = archiveReviewFindingsAfterImplement(flags, mainRepo, itemId!, findingsSha256, appliedOnSha);
-			if (!archived.ok) {
-				return finish({
-					itemId,
-					completed: false,
-					cost,
-					error: `review findings were applied but archival failed for ${JSON.stringify(archived.path)}: ${archived.detail}; implementation checkpoint and findings were preserved`,
-				});
-			}
-			deps.onReviewFindingsConsumed?.(itemId!);
-		}
-		recordArtifactAuthor(assignment, "implementation", implementationAuthor);
+		const outcome = await runImplement(cycle, cycleHelpers);
+		if (outcome.kind === "terminal") return outcome.result;
 	}
 
 	// ── Shakedown-code ──
 	let reviewRecordMarkdown: string | undefined;
 
 	if (shouldRun("shakedown-code")) {
-		const implementationAuthor = assignment.authors.implementation;
-		if (!implementationAuthor) return finish({ itemId, completed: false, cost, error: "shakedown-code assignment failed: implementation author attribution is unavailable" });
-		const planPath = await roadmap.getItemPlan({ worktree: worktree! });
-		// The retry (attempt 2) points at the plan file only — NOT "the roadmap entry", which a
-		// sandboxed provider can't fetch (#103/#115); the plan already carries the scope.
-		const shakedownPlanRef = planPath ? `Read the plan at \`${planPath}\` to understand the scope.` : `Find the plan in \`${resolve(REPO, "docs", "plans")}/\`.`;
-		const shakedownCodeArgs = await buildStepArgs(roadmap, itemId!, "code-review");
-
-		let shakedownResult: StepResult;
-		if (REVIEW_CONFIG.authoring.enabled !== "off") {
-			const reviewedSha = getArtifactHeadSha(worktree!);
-			if (!reviewedSha) return parkExit("adversarial review could not bind current HEAD")!;
-			const existingEscalation = lookupReviewEscalation(worktree!, itemId!, reviewedSha);
-			if (existingEscalation.state === "active") {
-				const commands = reviewEscalationCommands(existingEscalation.id, existingEscalation.escalation);
-				return parkExit(`adversarial review escalation active\n${commands.proceedResolve}\n${commands.resume}\n${commands.blockResolve}`)!;
-			}
-			if (existingEscalation.state === "resolved-block" || existingEscalation.state === "invalid") return parkExit(`adversarial review escalation ${existingEscalation.state}`)!;
-			// A committed resolution remains untrusted policy input until an operator binds
-			// this resume to its evidence. Issue #419 owns the successor authority design.
-			if (existingEscalation.state === "resolved-proceed") {
-				// Both sides must be present strings: a record missing its fingerprint and
-				// an omitted flag are each undefined, and undefined must never satisfy the gate.
-				const evidenceFp = existingEscalation.escalation.evidenceFingerprint;
-				const ackFlag = flags["acknowledge-escalation"];
-				if (typeof evidenceFp !== "string" || evidenceFp.length === 0) {
-					return parkExit("adversarial review escalation record lacks an evidence fingerprint — treated as active; re-escalate through the review loop")!;
-				}
-				if (typeof ackFlag !== "string" || ackFlag !== evidenceFp) {
-					const commands = reviewEscalationCommands(existingEscalation.id, existingEscalation.escalation);
-					return parkExit(`adversarial review escalation active\n${commands.resume}`)!;
-				}
-			}
-			if (existingEscalation.state === "resolved-proceed" && existingEscalation.escalation.hasSafetyBlocker) return parkExit("adversarial review safety blocker")!;
-			// Capability-aware fixed-seat resolution (#337): fill configured seats via settings
-			// inheritance + capability matcher; fail before seat worktrees when ineligible.
-			const authorSettings = implementationAuthor;
-			const authorIdentity = {
-				provider: authorSettings.provider,
-				...(authorSettings.provider === "codex" ? (authorSettings.codexModel ? { model: authorSettings.codexModel } : {}) : authorSettings.model ? { model: authorSettings.model } : {}),
-			};
-			const seating = resolveAuthoringReviewConfig({
-				config: CONFIG,
-				profile,
-				author: authorIdentity,
-				capabilities: capabilityMapFrom(getProvider, REGISTERED_PROVIDERS),
-			});
-			if (!seating.ok) return finish({ itemId, completed: false, cost, error: `shakedown-code assignment failed: ${seating.reason}` });
-			const execution = resolveAuthoringReviewExecution(seating.policy, {
-				// Orchestrator-computed evidence (CI/single-shot, daemon marker, multi-cycle,
-				// headless). Fallback for direct callers keeps the legacy single-shot-only signal.
-				unattendedSignals: opts.unattendedSignals ?? (opts.noWorktree === true ? ["CI/single-shot (--no-worktree)"] : []),
-				suppressedSignals: opts.unattendedSignalSuppressions ?? [],
-				// Keys mode validates the author revision seat's key with the same fail-closed
-				// rule as Judge/reviewers — before any seat runs (#276 follow-up).
-				author: seating.author,
-				envAllowlist: CONFIG.security.envAllowlist,
-			});
-			if (!execution.ok) return finish({ itemId, completed: false, cost, error: `shakedown-code execution context failed: ${execution.reason}` });
-			if (!execution.enabled) return finish({ itemId, completed: false, cost, error: "shakedown-code execution context unexpectedly disabled the authoring loop" });
-			const policy = execution.policy;
-			log(`authoring review capability realizations: ${JSON.stringify(seating.realizations)}`);
-			// Attestation audit: every operator-attested suppression is logged at resolution time
-			// so a run that used PELAGGIO_OPERATOR_ATTENDED is reconstructible from the cycle log.
-			if (execution.suppressedSignals.length > 0) log(execution.suppressedSignals.join("; "));
-			if (execution.softened.length > 0) log(`authoring review key-mode softening: ${execution.softened.join("; ")}`);
-			// Hand every reviewer seat the actual branch diff so a single-turn seat that never runs
-			// `git diff` (codex) still reviews real code instead of parroting the skill example.
-			// Recomputed per pass inside the `review` prompt: the author revision seat advances HEAD
-			// between passes, so a once-computed block would show pass 2+ reviewers pre-revision code.
-			// Concurrent reviewer seats get isolated detached checkouts so they no longer race on
-			// the shared artifact worktree's index.lock (#269). Author revisions stay on the real
-			// worktree (they must commit). Seat SHAs are re-read from the artifact HEAD so a
-			// post-revision pass reviews the new commit, not the pre-revision tree. Seats are
-			// torn down after the loop. `git worktree add` is serialized (shared main-repo lock)
-			// while the seat agents still fan out via Promise.allSettled once checkouts exist.
-			let loop: Awaited<ReturnType<typeof runReviewLoop>> | undefined;
-			if (existingEscalation.state === "resolved-proceed") {
-				loop = undefined;
-			} else {
-				let seatPrepareChain: Promise<void> = Promise.resolve();
-				const preparedSeatShas = new Set<string>([reviewedSha]);
-				try {
-					loop = await runReviewLoop({
-						policy,
-						author: authorIdentity,
-						parkSignal,
-						// Plain changed-file list for emission-time classification; path signals are derived pure-side.
-						classificationContext: { changedFiles: gitDiffNameOnly(worktree!) },
-						// Resolved ADR-0016 taxonomy: the deterministic safety floor consulted by the loop.
-						taxonomy: REVIEW_CONFIG.taxonomy,
-						runSeat: async ({ role, slot, pass, prompt, parkSignal: child }) => {
-							const executionOverride = { provider: slot.provider, ...(slot.provider === "codex" ? (slot.codexModel ? { codexModel: slot.codexModel } : {}) : slot.model ? { model: slot.model } : {}) };
-							if (role === "author") {
-								return step("shakedown-code", prompt, worktree!, {
-									attempt: pass,
-									parkSignalOverride: child,
-									executionOverride,
-									commitLabel: "adversarial review revision",
-								});
-							}
-							// Reviewer + Judge: cold seats pinned to the artifact HEAD at seat start
-							// (post-revision pass 2 must not re-review the pre-revision tree).
-							// Do NOT pass ownWorktree: artifact — confinement is change-based;
-							// exempting the artifact would let a seat mutate it unaudited. Peer
-							// seats are skipped via isEphemeralReviewWorktree in forbiddenRootsForStep.
-							const prepare = seatPrepareChain.then(() => {
-								const seatSha = getArtifactHeadSha(worktree!) ?? reviewedSha;
-								preparedSeatShas.add(seatSha);
-								return prepareAuthoringReviewSeat(mainRepo, { sha: seatSha, seatId: slot.id, pass });
-							});
-							seatPrepareChain = prepare.then(
-								() => undefined,
-								() => undefined,
-							);
-							let seatCwd: string;
-							try {
-								seatCwd = await prepare;
-							} catch (e) {
-								const message = e instanceof Error ? e.message : String(e);
-								log(`⚠ authoring review seat prepare failed (${slot.id} p${pass}): ${message}`);
-								return { ok: false, subtype: "error", text: `authoring review seat prepare failed: ${message}`, fullText: "", assistantText: "", cost: 0, turns: 0 };
-							}
-							return step(role === "reviewer" ? "pr-review" : "pr-verify", prompt, seatCwd, {
-								attempt: pass,
-								parkSignalOverride: child,
-								executionOverride,
-							});
-						},
-						prompts: {
-							review: () => `${expandSkill("pr-review", "--authoring-loop")}\n\n${buildReviewDiffBlock(worktree!)}`,
-							judge: (candidates) => `${expandSkill("pr-verify", "--authoring-loop-judge")}\n\nTRUSTED_CANDIDATE_DATA\n${JSON.stringify(candidates)}\nEND_TRUSTED_CANDIDATE_DATA`,
-							revise: (survivors) => `${expandSkill("shakedown", shakedownCodeArgs)}\n\nThe Judge retained these blockers:\n${JSON.stringify(survivors)}`,
-						},
-					});
-					if (execution.softened.length > 0) {
-						// Key-mode softening joins — never replaces — the loop's own diversity
-						// explanation (e.g. "reviewer seats did not complete"), mirroring the
-						// merge rule inside runReviewLoop.
-						const explanation = execution.softened.join("; ");
-						if (loop.diversity.state === "met") loop.diversity = { state: "softened", explanation };
-						else if (!loop.diversity.explanation.includes(explanation)) loop.diversity = { state: "softened", explanation: `${loop.diversity.explanation}; ${explanation}` };
-					}
-				} finally {
-					for (const sha of preparedSeatShas) cleanupAuthoringReviewSeatsForSha(mainRepo, sha);
-				}
-			}
-			if (!loop) {
-				// loop is only skipped for resolved-proceed; narrow before reading audit fields.
-				if (existingEscalation.state !== "resolved-proceed") return parkExit("adversarial review produced no loop result")!;
-				reviewRecordMarkdown = `## Adversarial review escalation\n\nDecision **${existingEscalation.id}** was resolved **proceed** by ${existingEscalation.resolution.actor}.\n\nRationale: ${existingEscalation.resolution.rationale}\n\nReviewed commit: \`${reviewedSha}\`. Evidence fingerprint: \`${existingEscalation.escalation.evidenceFingerprint}\`.`;
-				shakedownResult = { ok: true, subtype: "success", text: "resolved-proceed", fullText: "", assistantText: "", cost: 0, turns: 0 };
-			} else {
-				cost += loop.cost;
-				const finalReviewedSha = getArtifactHeadSha(worktree!);
-				if (!finalReviewedSha) return parkExit("adversarial review could not bind final reviewed HEAD")!;
-				const reviewRunId = itemRunId();
-				const record: ReviewRecord = { schemaVersion: 1, runId: reviewRunId, itemId: itemId!, createdAt: new Date().toISOString(), blockingBar: "must-fix", result: loop };
-				const recordPath = writeReviewRecord(worktree!, record);
-				reviewRecordMarkdown = renderReviewRecord(record);
-				log(`review record → ${recordPath}`);
-				const reviewRecordSource = registerRelativePath("review-records", `${record.runId}.json`);
-				// Aggregate authoring-review provenance at reserved attempt 0 (seat step() calls
-				// use 1-indexed pass as attempt; effectManifestPath is `${step}-${attempt}.json`).
-				const seats: ReviewSeatIdentity[] = [
-					{ role: "author", seatId: "author", provider: authorIdentity.provider, ...(authorIdentity.model ? { model: authorIdentity.model } : {}) },
-					...policy.reviewers.map((slot) => ({
-						role: "reviewer" as const,
-						seatId: slot.id,
-						provider: slot.provider,
-						...(slot.provider === "codex" ? (slot.codexModel ? { model: slot.codexModel } : {}) : slot.model ? { model: slot.model } : {}),
-					})),
-					{
-						role: "judge",
-						seatId: policy.judge.id,
-						provider: policy.judge.provider,
-						...(policy.judge.provider === "codex" ? (policy.judge.codexModel ? { model: policy.judge.codexModel } : {}) : policy.judge.model ? { model: policy.judge.model } : {}),
-					},
-				];
-				const verdictEffect: ReviewVerdictEffect = {
-					kind: "review.Verdict",
-					itemId: itemId!,
-					reviewedSha: finalReviewedSha,
-					reviewRecordSource,
-					outcome: loop.outcome,
-					seats,
-				};
-				const reviewEffects: Effect[] = [verdictEffect];
-				if (loop.disagreement) {
-					const escalationEffect: ReviewEscalationEffect = {
-						kind: "review.Escalation",
-						itemId: itemId!,
-						reviewedSha: finalReviewedSha,
-						reviewRecordSource,
-						evidenceFingerprint: loop.disagreement.evidenceFingerprint,
-						hasSafetyBlocker: loop.disagreement.hasSafetyBlocker,
-					};
-					reviewEffects.push(escalationEffect);
-				}
-				const effectsCtx: EffectsContext = {
-					runId: reviewRunId,
-					itemId: itemId!,
-					step: "shakedown-code",
-					attempt: 0,
-					cwd: worktree!,
-					preSha: finalReviewedSha,
-				};
-				let escalationParkReason: string | undefined;
-				if (loop.disagreement) {
-					const escalation = {
-						kind: "review-escalation" as const,
-						itemId: itemId!,
-						step: "shakedown-code" as const,
-						reviewedSha: finalReviewedSha,
-						evidenceFingerprint: loop.disagreement.evidenceFingerprint,
-						reviewRecordSource,
-						hasSafetyBlocker: loop.disagreement.hasSafetyBlocker,
-						drivers: loop.disagreement.drivers.map((driver) => ({ ...driver, identity: { ...driver.identity, role: "reviewer" as const } })),
-					};
-					try {
-						// The durable safety action precedes effect attestation. A manifest write or
-						// dispatch failure below must never swallow the escalation or skip parking.
-						const adjudication: ReviewEscalationAdjudication = {
-							spend: { amount: cost, estimated: steps.some((s) => s.costEstimated) },
-							evidenceFingerprint: escalation.evidenceFingerprint,
-							...(escalation.hasSafetyBlocker
-								? {
-										recommendedDefault: {
-											disposition: "block" as const,
-											source: "deterministic-policy" as const,
-											rationale: "A safety-class must-fix is on the record; the safety floor cannot be acknowledged through.",
-										},
-									}
-								: {}),
-						};
-						const written = await appendReviewEscalation(worktree!, { escalation, adjudication });
-						if (written.status !== "failed")
-							await opts.notifyDecision?.({
-								itemId,
-								decision: { fork: `Cross-model review split (${written.ids[0]})`, chosen: "human adjudication required", alternatives: "proceed or block" },
-								step: "shakedown-code",
-								source: escalation.reviewRecordSource,
-								logPath: opts.logPath ?? LOG_PATH,
-								escalation: { ...escalation, id: written.ids[0] },
-							});
-						const state = lookupReviewEscalation(worktree!, itemId!, finalReviewedSha);
-						if (written.status === "failed") escalationParkReason = "adversarial review escalation write-failed";
-						else if (state.state !== "resolved-proceed" || escalation.hasSafetyBlocker) {
-							const decisionId = written.ids[0];
-							if (state.state === "active" && decisionId) {
-								const commands = reviewEscalationCommands(decisionId, escalation);
-								escalationParkReason = `adversarial review escalation active\n${commands.proceedResolve}\n${commands.resume}\n${commands.blockResolve}`;
-							} else {
-								escalationParkReason = `adversarial review escalation ${state.state}`;
-							}
-						}
-					} catch (error) {
-						log(`⚠ adversarial review escalation write failed: ${error instanceof Error ? error.message : String(error)}`);
-						return parkExit("adversarial review escalation write-failed")!;
-					}
-				}
-				if (!opts.dryRun) {
-					try {
-						writeEffectsManifest(effectsCtx, reviewEffects);
-						// Aggregate authoring-review uses reserved attempt 0; provider/model from the
-						// configured judge seat when present, else the shakedown-code step settings.
-						const reviewSettings = resolveStepSettings(CONFIG, profile, "shakedown-code");
-						const reviewProvider = policy.judge.provider;
-						// Non-Codex judge: prefer the realized seat model; else the judge provider's own
-						// step-settings slot (never the top-level Claude `model` slot) (#431).
-						const reviewModel = policy.judge.provider === "codex" ? (policy.judge.codexModel ?? "default") : (policy.judge.model ?? modelForProvider(reviewSettings, reviewProvider) ?? "default");
-						const reviewEffectsResult = await dispatchStepEffects({
-							...effectsCtx,
-							roadmap,
-							log,
-							challenge: cycleChallenge,
-							provider: reviewProvider,
-							model: reviewModel,
-							observeGit: () => observeGitForReceipt(worktree!),
-						});
-						if (reviewEffectsResult.receipt) executionReceipts.push(reviewEffectsResult.receipt);
-					} catch (e) {
-						const code = e instanceof EffectsManifestError ? e.code : "effect_failed";
-						const message = e instanceof Error ? e.message : String(e);
-						const text = `${code}: ${message}`;
-						if (loop.disagreement) return parkExit(`shakedown-code effects failed after escalation: ${text}`)!;
-						return finish({ itemId, completed: false, cost, error: `shakedown-code effects failed: ${text}` });
-					}
-				}
-				if (escalationParkReason) return parkExit(escalationParkReason)!;
-				// A reviewer-split `dissent` already escalated + parked in the `loop.disagreement` block above.
-				// A Judge-ruled judgment-dissent (no disagreement, non-safety) keeps its pre-#244 posture:
-				// park only for direct-push; in PR mode ship with the dissent recorded (the PR is the veto).
-				if (loop.outcome === "budget" || loop.outcome === "hard-block" || (loop.outcome === "dissent" && opts.shipTarget.name === "direct-push")) return parkExit(`adversarial review ${loop.outcome}`)!;
-				shakedownResult = { ok: true, subtype: "success", text: loop.outcome, fullText: "", assistantText: "", cost: 0, turns: 0 };
-			}
-		} else {
-			const selected = selectReviewers(assignment, driverCandidates("shakedown-code"), implementationAuthor, 1, available);
-			if (!selected.ok) return finish({ itemId, completed: false, cost, error: `shakedown-code assignment failed: ${selected.reason}` });
-			const outcome = await runStepWithRetry({
-				name: "shakedown-code",
-				stepBudget: resolveStepSettings(CONFIG, profile, "shakedown-code").budget,
-				commitLabel: () => "shakedown checkpoint",
-				refusedError: "shakedown-code refused (model declined the review)",
-				turnLimitNoun: "shakedown",
-				executionOverride: selected.drivers[0],
-				logAttempt: (attempt) => log(attempt === 1 ? "shakedown (code)..." : "continuing shakedown (attempt 2)..."),
-				buildPrompt: (attempt) =>
-					attempt === 1
-						? expandSkill("shakedown", shakedownCodeArgs)
-						: [
-								"The previous shakedown session ran out of turns. Work has been committed to disk.",
-								"",
-								"## Context",
-								shakedownPlanRef,
-								"",
-								"## Instructions",
-								"1. Run the verification commands from `.claude/skills/_rubric.md`'s Verification section to see the current state.",
-								"2. Check what's already been fixed vs. what remains.",
-								"3. Focus on fix-now items only (type errors, test failures, lint errors, bugs).",
-								'4. Skip near-term items (missing tests, i18n gaps, refactoring) — list each as a `deferred-item: {"title": "...", "scope": "..."}` marker line; the harness creates them (do not run `roadmap create-item`).',
-								"5. Re-run the verification commands before finishing.",
-							].join("\n"),
-			});
-			if (outcome.kind === "terminal") return outcome.cycleResult;
-			shakedownResult = outcome.result;
-		}
-
-		// Harness owns deferred-item creation (#115): under pelaggio the model lists follow-ups as
-		// `deferred-item: {json}` markers instead of running `roadmap create-item` (a sandboxed
-		// provider can't). Create them in-process, best-effort — a failure logs and continues (they're
-		// backlog niceties, not the cycle's deliverable). Skipped in dry-run (no real backlog writes).
-		if (!opts.dryRun) {
-			for (const d of parseDeferredItems(shakedownResult.assistantText, deferredItemTitles)) {
-				try {
-					const created = await roadmap.createItem(d);
-					log(`deferred → ${created.id}: ${d.title}`);
-				} catch (e) {
-					log(`deferred-item create failed (non-fatal): ${e instanceof Error ? e.message : String(e)}`);
-				}
-			}
-		}
+		const outcome = await runShakedownCode(cycle, cycleHelpers);
+		if (outcome.kind === "terminal") return outcome.result;
+		reviewRecordMarkdown = outcome.reviewRecordMarkdown;
 	}
 
 	function isAuthorActionablePreflight(review: PrReviewGateResult): boolean {
