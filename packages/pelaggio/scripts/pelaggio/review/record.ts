@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
-import { chmodSync, lstatSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { writeAtomically, writeJsonAtomically } from "../record-store.js";
 import { registerPath, registerRelativePath } from "../registers.js";
 import { escapeRegExp } from "../text.js";
 import type { ReviewFindingsParseErrorCode } from "./findings.js";
@@ -106,7 +107,7 @@ export function writeDocReviewSeatTranscript(root: string, record: DocReviewSeat
 	const sha256 = createHash("sha256").update(body).digest("hex");
 	const directory = ensurePrivateTranscriptDirectory(root);
 	chmodSync(directory, 0o700);
-	atomicReplaceText(join(directory, `${valid.runId}.json`), body);
+	writeAtomically(join(directory, `${valid.runId}.json`), body, { mode: 0o600 });
 	return { path: relativePath, sha256 };
 }
 
@@ -126,24 +127,13 @@ function ensurePrivateTranscriptDirectory(root: string): string {
 	return transcriptDirectory;
 }
 
-/** Shared atomic write: tmp + rename, mode 0o600. */
-function atomicWriteText(path: string, body: string): void {
-	mkdirSync(dirname(path), { recursive: true });
-	atomicReplaceText(path, body);
-}
-
-/** Atomic replacement once the caller has established the destination directory. */
-function atomicReplaceText(path: string, body: string): void {
-	const temporary = `${path}.tmp-${process.pid}`;
-	// Refuse a stale/predicted temp path instead of reopening it: `mode` is ignored for an
-	// existing file, which could otherwise turn a permissive inode into the published transcript.
-	writeFileSync(temporary, body, { encoding: "utf8", flag: "wx", mode: 0o600 });
-	chmodSync(temporary, 0o600);
-	renameSync(temporary, path);
+/** Shared atomic write, mode 0o600 (see `record-store.ts`). */
+function _atomicWriteText(path: string, body: string): void {
+	writeAtomically(path, body, { mode: 0o600 });
 }
 
 function atomicWriteJson(path: string, value: unknown): string {
-	atomicWriteText(path, `${JSON.stringify(value, null, 2)}\n`);
+	writeJsonAtomically(path, value, { mode: 0o600 });
 	return path;
 }
 

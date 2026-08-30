@@ -1,5 +1,6 @@
-import { mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
+import { writeAtomically } from "./record-store.js";
 import { type RegisterName, registerPath } from "./registers.js";
 
 /**
@@ -73,9 +74,7 @@ export function writeFreshnessGateRecord(mainRepo: string, record: NewFreshnessG
 	const dir = freshnessGateRecordsDir(mainRepo);
 	mkdirSync(dir, { recursive: true });
 	const path = recordPath(mainRepo, complete.headSha);
-	const tmp = `${path}.${process.pid}.tmp`;
-	writeFileSync(tmp, `${JSON.stringify(complete, null, 2)}\n`, { mode: 0o600 });
-	renameSync(tmp, path);
+	writeAtomically(path, `${JSON.stringify(complete, null, 2)}\n`, { mode: 0o600 });
 	return path;
 }
 

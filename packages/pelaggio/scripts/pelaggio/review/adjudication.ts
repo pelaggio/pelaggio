@@ -8,10 +8,11 @@
  */
 
 import { createHash } from "node:crypto";
-import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { parsePatch, type StructuredPatch } from "diff";
 import type { NewPrReviewOperatorGateRecord, PrReviewFindingDispositionEntry, PrReviewGateRecord } from "../pr-review-gate-record.js";
+import { writeAtomically } from "../record-store.js";
 import { type RegisterName, registerPath } from "../registers.js";
 import { escapeMarkdown } from "../text.js";
 import type { PrReviewAgreement } from "../types.js";
@@ -360,9 +361,7 @@ export function writeAdjudicationSourceRecord(root: string, record: PrAdjudicati
 	if (Buffer.byteLength(serialized, "utf8") > ADJUDICATION_SOURCE_MAX_BYTES) fail("size");
 	mkdirSync(root, { recursive: true });
 	const path = recordPath(root, complete.prNumber, complete.reviewedSha);
-	const tmp = `${path}.${process.pid}.tmp`;
-	writeFileSync(tmp, serialized, { mode: 0o600 });
-	renameSync(tmp, path);
+	writeAtomically(path, serialized, { mode: 0o600 });
 	return path;
 }
 
