@@ -30,7 +30,10 @@ describe("writeAtomically", () => {
 		const path = join(d, "q.json");
 		writeAtomically(path, "{}\n");
 		assert.ok(existsSync(path));
-		assert.notEqual(statSync(path).mode & 0o777, 0o600);
+		// Node creates with 0o666 through the active umask (so 0o600 under umask 0o077 is correct, not a leak).
+		const umask = process.umask();
+		process.umask(umask);
+		assert.equal(statSync(path).mode & 0o777, 0o666 & ~umask);
 	});
 
 	it("overwrites an existing record atomically", () => {
