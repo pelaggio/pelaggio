@@ -6,8 +6,14 @@
 # This file is a SECURITY_PATHS entry: its archive scope and test list decide what the hook sees.
 set -euo pipefail
 root=$(git rev-parse --show-toplevel)
-tmp=$(mktemp -d "${TMPDIR:-/tmp}/pelaggio-guards.XXXXXX")
-trap 'rm -rf "$tmp"' EXIT
+tmpbase="${TMPDIR:-/tmp}"
+# Self-healing: a snapshot older than 10 minutes can only be an orphan (a killed hook); sweep it.
+find "$tmpbase" -maxdepth 1 -type d -name 'pelaggio-guards.*' -mmin +10 -exec rm -rf {} + 2>/dev/null || true
+tmp=$(mktemp -d "$tmpbase/pelaggio-guards.XXXXXX")
+cleanup() { rm -rf "$tmp"; }
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM HUP
 tree=$(git write-tree)
 git archive "$tree" packages/pelaggio packages/server package.json tsconfig.base.json | tar -x -C "$tmp"
 ln -s "$root/node_modules" "$tmp/node_modules"
