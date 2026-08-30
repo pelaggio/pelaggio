@@ -12,8 +12,8 @@ import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSy
 import { resolve } from "node:path";
 import { parsePatch, type StructuredPatch } from "diff";
 import { escapeMarkdown } from "../helpers.js";
-import type { PrReviewAgreement } from "../pr-review-cli.js";
 import type { NewPrReviewOperatorGateRecord, PrReviewFindingDispositionEntry, PrReviewGateRecord } from "../pr-review-gate-record.js";
+import type { PrReviewAgreement } from "../types.js";
 import { type ClassificationResult, type ClassificationSignalKind, materializeAuthoringFinding, type ReviewFinding, type ReviewFindingClass, type ReviewFindingSeverity, reviewFindingFingerprint } from "./findings.js";
 import { type FindingTier, isWellFormedClassId, type TaxonomyConfig, tierOf } from "./taxonomy.js";
 

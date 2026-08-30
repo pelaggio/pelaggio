@@ -13,8 +13,7 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import type { PrReviewAgreement } from "../pr-review-cli.js";
-import type { ProviderName } from "../types.js";
+import type { ProviderName, PrReviewAgreement } from "../types.js";
 import { normalizeGitPath } from "./adjudication.js";
 import { materializeAuthoringFinding, type ReviewFinding, type ReviewFindingClass, type ReviewFindingSeverity, reviewFindingFingerprint } from "./findings.js";
 import { type FindingTier, isWellFormedClassId, type TaxonomyConfig, tierOf } from "./taxonomy.js";

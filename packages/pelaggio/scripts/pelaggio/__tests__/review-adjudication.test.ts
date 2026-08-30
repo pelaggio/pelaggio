@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { parsePatch } from "diff";
-import { PR_REVIEW_MARKER } from "../pr-review-cli.js";
+import { PR_REVIEW_MARKER } from "../github-posting.js";
 import { type NewPrReviewFleetGateRecord, type PrReviewGateRecord, writePrReviewGateRecord } from "../pr-review-gate-record.js";
 import {
 	adjudicationSourcesDir,

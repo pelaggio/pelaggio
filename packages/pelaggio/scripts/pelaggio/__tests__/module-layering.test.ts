@@ -73,6 +73,7 @@ const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {
 	"provider-routing.ts": 2,
 	"driver-assignment.ts": 2,
 	"flow-policy.ts": 2,
+	"flow-snapshot.ts": 2,
 	"continuous.ts": 2,
 	"stats.ts": 2,
 	"notify.ts": 2,
@@ -96,6 +97,7 @@ const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {
 	"grok-sandbox.ts": 3,
 	// L4 orchestration — sequences steps or seats end-to-end.
 	"pipeline.ts": 4,
+	"pr-review-gate.ts": 4,
 	"helpers.ts": 4, // dissolved in plan step 4
 	// L5 entry — parses argv and exits. Importable only by index.ts / main.ts.
 	"index.ts": 5,

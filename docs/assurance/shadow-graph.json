@@ -896,7 +896,7 @@
 			],
 			"codeEvidence": [
 				"packages/pelaggio/scripts/pelaggio/review/loop.ts",
-				"packages/pelaggio/scripts/pelaggio/pr-review-cli.ts"
+				"packages/pelaggio/scripts/pelaggio/pr-review-gate.ts"
 			],
 			"observations": [
 				{

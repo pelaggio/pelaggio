@@ -17,7 +17,7 @@ import { parseArgs } from "node:util";
 import { CONFIG, REPO, REVIEW_CONFIG, ROADMAP_GITHUB, resolveStepSettings, SHIP_TARGET, type StepSettings } from "./config.js";
 import { upsertMarkerComment } from "./github-posting.js";
 import { createMainCheckoutDeltaObserver, FORBIDDEN_ROOT_GONE, listWorktreesIn, type MainCheckoutDeltaObserver, mainWorktree, snapshotForbiddenRoot, snapshotRepoRefState, snapshotSiblingWorktree } from "./helpers.js";
-import { executionOverrideFor, trustedLocalContext, verificationPrompt } from "./pr-review-cli.js";
+import { executionOverrideFor, trustedLocalContext, verificationPrompt } from "./pr-review-gate.js";
 import { gateRecordsDir, listPrReviewGateRecords, type PrReviewFindingDispositionEntry, type PrReviewGateRecord, writePrReviewGateRecord } from "./pr-review-gate-record.js";
 import {
 	adjudicationSourcesDir,
