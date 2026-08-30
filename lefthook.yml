@@ -11,5 +11,5 @@ pre-commit:
       # authoring time so a layering violation or an unregistered .dev path is refused before a
       # gate roll, not $40 later (guarded-actions.md §8.1 "early"). Delta-scoped: the script
       # tests the staged tree, so unstaged state elsewhere cannot cause a refusal (§8.1 "narrow").
-      glob: "{packages/pelaggio/scripts/**/*.ts,packages/server/src/**/*.ts}"
+      glob: "{packages/pelaggio/scripts/**/*.{ts,mjs},packages/server/src/**/*.{ts,mjs},ci/guards-staged.sh}"
       run: bash ci/guards-staged.sh

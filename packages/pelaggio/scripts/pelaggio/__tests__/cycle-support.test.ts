@@ -494,7 +494,7 @@ describe("guard config in the security signal", () => {
 	const fileDiff = (file: string, ...lines: string[]): string => [`diff --git a/${file} b/${file}`, `--- a/${file}`, `+++ b/${file}`, "@@ -1 +1 @@", ...lines].join("\n");
 
 	it("guard config files are security paths even without a keyword (path-only)", () => {
-		for (const file of [LAYERING, REGISTERS, "lefthook.yml"]) {
+		for (const file of [LAYERING, REGISTERS, "lefthook.yml", "ci/guards-staged.sh"]) {
 			const signal = classifySecurityReviewDiff([file], fileDiff(file, "+// comment"));
 			assert.equal(signal.triggered, true, file);
 			assert.ok(signal.reasons.includes(`path:${file}`), file);

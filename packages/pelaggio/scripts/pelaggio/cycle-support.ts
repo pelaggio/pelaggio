@@ -111,6 +111,7 @@ const SECURITY_PATHS: readonly RegExp[] = [
 	/^packages\/pelaggio\/scripts\/pelaggio\/__tests__\/module-layering\.test\.ts$/,
 	/^packages\/pelaggio\/scripts\/pelaggio\/registers\.ts$/,
 	/^lefthook\.yml$/,
+	/^ci\/guards-staged\.sh$/,
 	/^packages\/pelaggio\/scripts\/pelaggio\/(?:ship|roadmap|confinement)\//,
 	/^\.claude\/skills\/(?:pr-review|pr-verify|shakedown|ship|implement)\/SKILL\.md$/,
 	/^\.agents\/skills\/(?:pr-review|pr-verify|shakedown|ship|implement)\/SKILL\.md$/,
