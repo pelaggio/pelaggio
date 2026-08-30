@@ -246,6 +246,20 @@ describe("classifySecurityReviewDiff", () => {
 		assert.ok(signal.reasons.includes("path:packages/server/src/config.ts"));
 	});
 
+	it("triggers for the merge-gate body and the helpers.ts split even without a security keyword (path-only)", () => {
+		for (const file of [
+			"packages/pelaggio/scripts/pelaggio/pr-review-gate.ts",
+			"packages/pelaggio/scripts/pelaggio/pr-review-cli.ts",
+			"packages/pelaggio/scripts/pelaggio/git.ts",
+			"packages/pelaggio/scripts/pelaggio/outcome-classify.ts",
+			"packages/pelaggio/scripts/pelaggio/cycle-support.ts",
+		]) {
+			const signal = classifySecurityReviewDiff([file], `diff --git a/${file} b/${file}\n+const label = "standard";\n`);
+			assert.equal(signal.triggered, true, file);
+			assert.ok(signal.reasons.includes(`path:${file}`), file);
+		}
+	});
+
 	it("triggers for security keywords on added and removed hunk lines", () => {
 		const signal = classifySecurityReviewDiff(["docs/setup.md"], hunk("-CONTROL_PLANE_TOKEN allowed loopback access.", "+Reject hosts under 127.0.0.1.example.com."));
 
@@ -264,11 +278,11 @@ describe("classifySecurityReviewDiff", () => {
 	});
 
 	it("triggers for workflow and exec/tool changes", () => {
-		const signal = classifySecurityReviewDiff([".github/workflows/pr-review.yml", "packages/pelaggio/scripts/pelaggio/helpers.ts"], hunk("+execFileSync('gh', ['workflow', 'run'])", "+spawn('bash', ['-lc', command])"));
+		const signal = classifySecurityReviewDiff([".github/workflows/pr-review.yml", "packages/pelaggio/scripts/pelaggio/git.ts"], hunk("+execFileSync('gh', ['workflow', 'run'])", "+spawn('bash', ['-lc', command])"));
 
 		assert.equal(signal.triggered, true);
 		assert.ok(signal.reasons.includes("path:.github/workflows/pr-review.yml"));
-		assert.ok(signal.reasons.includes("path:packages/pelaggio/scripts/pelaggio/helpers.ts"));
+		assert.ok(signal.reasons.includes("path:packages/pelaggio/scripts/pelaggio/git.ts"));
 		assert.ok(signal.reasons.includes("keyword:exec"));
 	});
 
