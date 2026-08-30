@@ -180,7 +180,8 @@ export function extractDiffPathSignals(path: string | undefined): DiffPathSignal
 	if (/(^|\/)(?:pnpm-lock\.yaml|package-lock\.json|yarn\.lock)$/.test(p)) signals.push("dependency-lock");
 	if (
 		/(?:^|\/)(?:step-runner|secret-hygiene|worktree-deps)\.ts$/.test(p) ||
-		/packages\/pelaggio\/scripts\/pelaggio\/(?:step-runner|helpers|secret-hygiene|codex-provider)\.ts$/.test(p) ||
+		/packages\/pelaggio\/scripts\/pelaggio\/(?:step-runner|step-runner-shared|git|skills|cycle-support|secret-hygiene)\.ts$/.test(p) ||
+		/packages\/pelaggio\/scripts\/pelaggio\/providers\/(?:claude|codex|grok|opencode|index|types)\.ts$/.test(p) ||
 		/packages\/pelaggio\/scripts\/pelaggio\/review\/(?:findings|taxonomy)\.ts$/.test(p) ||
 		/(?:write-guard|egress|confinement|sandbox)/i.test(p)
 	) {
