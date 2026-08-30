@@ -1,8 +1,9 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { REVIEW_CONFIG, type ReviewRunner, ROADMAP_GITHUB, ROADMAP_SOURCE } from "./config.js";
 import { buildEffectsManifestReceipt, ExecutionReceiptError, type GitRevisionBinding, writeExecutionReceipt } from "./execution-receipt.js";
 import { checkpoint, ensureCheckpointed, mainWorktree } from "./git.js";
+import { writeJsonAtomically } from "./record-store.js";
 import { registerPath } from "./registers.js";
 import { enqueueReviewRequest, type NewReviewRequest } from "./review-request-queue.js";
 import type { RoadmapSource } from "./roadmap/index.js";
@@ -249,7 +250,7 @@ export function writeEffectsManifest(ctx: EffectsContext, effects: readonly Effe
 		preSha: ctx.preSha,
 		effects: [...effects],
 	};
-	writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`);
+	writeJsonAtomically(path, manifest);
 }
 
 export function loadAndValidateEffectsManifest(ctx: EffectsContext): LoadedEffectsManifest {

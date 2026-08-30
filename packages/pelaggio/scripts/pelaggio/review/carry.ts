@@ -11,8 +11,9 @@
  */
 
 import { createHash } from "node:crypto";
-import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
+import { writeAtomically } from "../record-store.js";
 import { DEV_DIR, type RegisterName, registerPath } from "../registers.js";
 import type { ProviderName, PrReviewAgreement } from "../types.js";
 import { normalizeGitPath } from "./adjudication.js";
@@ -234,9 +235,7 @@ export function writePrFindingDispositionRecord(root: string, record: PrFindingD
 	if (Buffer.byteLength(serialized, "utf8") > FINDING_DISPOSITION_MAX_BYTES) fail("size");
 	mkdirSync(root, { recursive: true });
 	const path = recordPath(root, complete.prNumber, complete.headSha);
-	const tmp = `${path}.${process.pid}.tmp`;
-	writeFileSync(tmp, serialized, { mode: 0o600 });
-	renameSync(tmp, path);
+	writeAtomically(path, serialized, { mode: 0o600 });
 	return path;
 }
 

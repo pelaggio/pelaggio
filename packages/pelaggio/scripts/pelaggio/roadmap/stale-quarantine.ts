@@ -19,9 +19,10 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { mainWorktree } from "../git.js";
+import { writeAtomically } from "../record-store.js";
 import { type RegisterName, registerPath } from "../registers.js";
 import { withMutationLock } from "./mutation-lock.js";
 import type { StaleHit } from "./stale-scan.js";
@@ -87,9 +88,7 @@ export function loadQuarantine(repo: string): StaleQuarantineFile {
 function writeQuarantineAt(mainRepo: string, file: StaleQuarantineFile): void {
 	const path = quarantinePath(mainRepo);
 	mkdirSync(dirname(path), { recursive: true });
-	const tmp = `${path}.${process.pid}.tmp`;
-	writeFileSync(tmp, `${JSON.stringify(file, null, 2)}\n`);
-	renameSync(tmp, path);
+	writeAtomically(path, `${JSON.stringify(file, null, 2)}\n`);
 }
 
 /**
