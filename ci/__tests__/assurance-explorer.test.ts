@@ -217,7 +217,10 @@ describe("assurance HTML explorer payload", () => {
 		const built = buildExplorerPayload(doctored, catalog, { commitSha: COMMIT_SHA, diagnosticsEnv: env, adrFiles });
 		const node = built.nodes.find((candidate) => candidate.id === "CTR-9999");
 		assert.ok(node);
-		assert.deepEqual(node.codeEvidence, hostile.map((label) => ({ label, href: undefined })));
+		assert.deepEqual(
+			node.codeEvidence,
+			hostile.map((label) => ({ label, href: undefined })),
+		);
 		const safe = built.nodes.find((candidate) => candidate.id === "CTR-0001");
 		assert.ok(safe && safe.codeEvidence.every((entry) => entry.href?.startsWith("../../../")));
 	});
