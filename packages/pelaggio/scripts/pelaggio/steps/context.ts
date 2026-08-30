@@ -1,27 +1,20 @@
 /**
  * The seam between one cycle (`pipeline.ts`) and its step modules (`steps/<step>.ts`; plan step 9).
  *
- * A step module receives a live, read-only view of the cycle's closure state (`CycleContext` —
- * getters, so bindings that move during the cycle are always current) and the cycle's nested
- * helpers (`CycleHelpers`). It returns a `StepOutcome`: `terminal` carries a finished
- * `CycleResult` the cycle must return immediately; `continue` carries whatever the next step
- * needs. Steps never assign closure state — the two mutations that exist go through `addCost`
- * and the shared `executionReceipts` array.
- *
- * `CycleContext` / `CycleHelpers` are the *catalogue* of what the cycle can offer; each step
- * declares its own `<Step>Input = Pick<CycleContext, …>` / `<Step>Deps = Pick<CycleHelpers, …>`
- * naming exactly what it reads and calls, so the coupling is visible per step and grows only by
- * an explicit widening of that step's type. The cycle passes its full objects; TypeScript's
- * structural typing does the narrowing at the boundary.
+ * A step module receives a plain value `<Step>Input` the cycle builds at the call site — only the
+ * bindings that step reads, snapshotted when it starts — and a `<Step>Deps` of the cycle helpers
+ * it calls. There is no shared state view: a step that needs one more binding widens its own
+ * `Input` interface, and the cycle passes it explicitly. It returns a `StepOutcome`: `terminal`
+ * carries a finished `CycleResult` the cycle must return immediately; `continue` carries whatever
+ * the next step needs (the cycle owns the binding it lands in). Steps never assign cycle state —
+ * the running cost total moves only through `addCost`, and the receipts array is pushed to,
+ * never replaced.
  */
-import type { appendReviewEscalation as appendReviewEscalationDefault, lookupReviewEscalation as lookupReviewEscalationDefault } from "../decisions.js";
-import type { DriverAssignmentState, DriverIdentity } from "../driver-assignment.js";
-import type { dispatchStepEffects as dispatchStepEffectsDefault, Effect, writeEffectsManifest as writeEffectsManifestDefault } from "../effects.js";
-import type { RoadmapSource } from "../roadmap/index.js";
+import type { DriverIdentity } from "../driver-assignment.js";
+import type { Effect } from "../effects.js";
 import type { PrShipGateBinding } from "../ship/pr-effects.js";
 import type { RunStepOpts } from "../step-runner.js";
-import type { CycleResult, ExecutionReceiptDescriptor, Flags, ParkSignal, PipelineOpts, ProviderName, Step, StepLog, StepResult } from "../types.js";
-
+import type { CycleResult, ParkSignal, ProviderName, Step, StepResult } from "../types.js";
 /**
  * Outcome of a step run through `runStepWithRetry`: either a success carrying the `StepResult`
  * for step-specific follow-up (verdict parse, etc.), or a terminal cycle result the caller should
@@ -76,44 +69,19 @@ export interface RunStepWithRetryConfig {
 
 export type StepOutcome<T extends object = Record<never, never>> = { kind: "terminal"; result: CycleResult } | ({ kind: "continue" } & T);
 
-/** Live, read-only view of the cycle closure a step module may read. */
-export interface CycleContext {
-	readonly opts: PipelineOpts;
-	readonly flags: Flags;
-	readonly parkSignal: ParkSignal;
-	readonly mainRepo: string;
-	readonly roadmap: RoadmapSource;
-	readonly assignment: DriverAssignmentState;
-	readonly available: (candidate: DriverIdentity) => boolean;
-	readonly steps: readonly StepLog[];
-	/** Shared with the cycle; steps push receipts, never replace the array. */
-	readonly executionReceipts: ExecutionReceiptDescriptor[];
-	readonly deferredItemTitles: Set<string>;
-	readonly cycleChallenge: Buffer;
-	readonly now: () => number;
-	readonly writeEffectsManifest: typeof writeEffectsManifestDefault;
-	readonly dispatchStepEffects: typeof dispatchStepEffectsDefault;
-	readonly appendReviewEscalation: typeof appendReviewEscalationDefault;
-	readonly lookupReviewEscalation: typeof lookupReviewEscalationDefault;
-	readonly onReviewFindingsConsumed?: (itemId: string) => void;
-	/** Bound once `pick` has claimed an item; steps after pick may rely on both. */
-	readonly itemId: string;
-	readonly worktree: string;
-	readonly profile: string;
-	readonly verdict: "APPROVE" | "REVISE" | "RETHINK";
-	readonly shakedownPlanText: string;
-	readonly cost: () => number;
-	readonly addCost: (delta: number) => void;
-}
-
-/** The cycle's nested helpers a step module may call. */
+/** The cycle's capabilities a step module may call; each step `Pick`s exactly the ones it uses. */
 export interface CycleHelpers {
 	readonly log: (msg: string) => void;
+	/** Running cost total (read) and the only way a step adds to it. */
+	readonly cost: () => number;
+	readonly addCost: (delta: number) => void;
 	readonly finish: (result: CycleResult) => CycleResult;
 	readonly parkExit: (reason?: string) => CycleResult | null;
 	readonly runStepWithRetry: (cfg: RunStepWithRetryConfig) => Promise<StepAttempt>;
 	readonly step: (name: Step, prompt: string, cwd: string, options?: StepRunOptions) => Promise<StepResult>;
 	readonly driverCandidates: (name: Step) => DriverIdentity[];
+	/** Whether a driver may still be assigned this cycle (pool/quota policy). */
+	readonly available: (candidate: DriverIdentity) => boolean;
 	readonly itemRunId: () => string;
 	readonly observeGitForReceipt: (cwd: string) => { worktree: string | null; headSha: string | null; branch: string | null };
 	/** Re-attribute an artifact author from the cycle log on a resume that skips its authoring step. */
