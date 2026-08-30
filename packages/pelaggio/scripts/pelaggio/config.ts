@@ -45,7 +45,11 @@ export function resolveRepo(): string {
 }
 
 export const REPO = resolveRepo();
-export const LOG_PATH = registerPath(REPO, "pelaggio-log.jsonl");
+/** The cycle log for any checkout root — the server reads other repos' logs through this. */
+export function logPathFor(root: string): string {
+	return registerPath(root, "pelaggio-log.jsonl");
+}
+export const LOG_PATH = logPathFor(REPO);
 
 // ── Model literals ─────────────────────────────────────────────────────
 

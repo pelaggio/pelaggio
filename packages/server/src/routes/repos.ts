@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import type { Context, Hono } from "hono";
-import { computeStats, loadConfig, registerPath } from "pelaggio";
+import { computeStats, loadConfig, logPathFor } from "pelaggio";
 import type { Registry } from "../registry.js";
 import { RegistryError } from "../registry.js";
 import type { RoadmapCache } from "../roadmap-cache.js";
@@ -46,7 +46,7 @@ export function registerReposRoutes(app: Hono, deps: ReposDeps): void {
 			if (err instanceof RegistryError) return notFound(c, slug);
 			throw err;
 		}
-		const logPath = registerPath(repoPath, "pelaggio-log.jsonl");
+		const logPath = logPathFor(repoPath);
 		const stats = computeStats({ logPath });
 		const titles = deps.roadmapCache.getTitles(slug);
 		const response: StatsResponse = {

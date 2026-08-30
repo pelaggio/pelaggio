@@ -4,7 +4,7 @@
  */
 
 import { closeSync, existsSync, fstatSync, openSync, readSync } from "node:fs";
-import { registerPath } from "pelaggio";
+import { decodeFlowEventLine, eventStreamPath } from "pelaggio";
 import type { RunActivity } from "./types.js";
 
 const LIFECYCLE_TYPES = new Set(["pelaggio.watch-idle", "pelaggio.watch-wake", "pelaggio.budget-idle", "pelaggio.budget-wake", "pelaggio.suspended", "pelaggio.resumed"]);
@@ -44,7 +44,7 @@ function defaultReadSlice(path: string, offset: number): { data: string; eof: bo
 	}
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+function _isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -74,7 +74,7 @@ export function projectRunActivity(event: Record<string, unknown>): RunActivity 
 }
 
 export function createFlowEventTailer(deps: FlowEventTailerDeps): FlowEventTailer {
-	const path = registerPath(deps.cwd, "flow-events", `${deps.runId}.jsonl`);
+	const path = eventStreamPath(deps.cwd, deps.runId);
 	const readSlice = deps.readSlice ?? defaultReadSlice;
 	const intervalMs = deps.intervalMs ?? 1000;
 	let offset = 0;
@@ -90,18 +90,11 @@ export function createFlowEventTailer(deps: FlowEventTailerDeps): FlowEventTaile
 	};
 
 	const ingestLine = (line: string): void => {
-		const trimmed = line.trim();
-		if (!trimmed) return;
-		let parsed: unknown;
-		try {
-			parsed = JSON.parse(trimmed);
-		} catch {
-			return; // fail closed
-		}
-		if (!isRecord(parsed) || parsed.v !== 1 || typeof parsed.type !== "string") return;
-		if (!LIFECYCLE_TYPES.has(parsed.type)) return;
-		if (parsed.executionId !== deps.executionId) return;
-		const activity = projectRunActivity(parsed);
+		const event = decodeFlowEventLine(line); // fail closed: unparsable / non-v1 lines are dropped
+		if (!event) return;
+		if (!LIFECYCLE_TYPES.has(event.type)) return;
+		if (event.executionId !== deps.executionId) return;
+		const activity = projectRunActivity(event as unknown as Record<string, unknown>);
 		if (activity) emit(activity);
 	};
 
