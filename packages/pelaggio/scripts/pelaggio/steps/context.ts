@@ -11,8 +11,10 @@
  * the running cost total moves only through `addCost`, and the receipts array is pushed to,
  * never replaced.
  */
+import type { createSessionController as createSessionControllerDefault } from "../confinement/sessions.js";
 import type { DriverIdentity } from "../driver-assignment.js";
 import type { Effect } from "../effects.js";
+import type { FlowPolicy } from "../flow-policy.js";
 import type { RoadmapSource } from "../roadmap/index.js";
 import type { PrShipGateBinding } from "../ship/pr-effects.js";
 import type { RunStepOpts } from "../step-runner.js";
@@ -87,7 +89,15 @@ export interface CycleHelpers {
 	/** Whether a driver may still be assigned this cycle (pool/quota policy). */
 	readonly available: (candidate: DriverIdentity) => boolean;
 	readonly itemRunId: () => string;
+	/** Attempt run id for an explicit item — for the pick, which resolves the item before the cycle adopts it. */
+	readonly itemRunIdFor: (itemId: string) => string;
 	readonly observeGitForReceipt: (cwd: string) => { worktree: string | null; headSha: string | null; branch: string | null };
 	/** Re-attribute an artifact author from the cycle log on a resume that skips its authoring step. */
 	readonly reconstructAuthor: (artifact: "plan" | "implementation", step: "plan" | "implement") => void;
+	/** Rename the cycle's log label once the item is known (pick). */
+	readonly setLogLabel: (label: string) => void;
+	readonly listWorktrees: () => string[];
+	readonly resolveWorktree: (itemId: string) => string;
+	readonly createSessionController: typeof createSessionControllerDefault;
+	readonly isQuickScope: FlowPolicy["isQuickScope"];
 }

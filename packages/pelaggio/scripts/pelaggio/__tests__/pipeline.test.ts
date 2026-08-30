@@ -2226,6 +2226,7 @@ describe("runPipeline — cross-process session records (#369)", () => {
 			captureEvaluatorContext: (repo) => ({ inventory: { identities: [] }, mainRepo: repo }),
 			createSessionController: (args) => {
 				events.push(`create:${args.claimedItem}:${args.claimBranch}`);
+				events.push(`session:${args.sessionId}`);
 				return {
 					sessionId: args.sessionId,
 					identity: {
@@ -2245,6 +2246,11 @@ describe("runPipeline — cross-process session records (#369)", () => {
 			},
 		});
 
+		// The record id is item + attempt scoped, never the cycle's unclaimed id (#738 review).
+		assert.ok(
+			events.some((e) => /^session:cycle-\d+-TOOL-99-a\d+$/.test(e)),
+			`expected an item-scoped session id; got ${events.join(",")}`,
+		);
 		assert.ok(
 			events.some((e) => e.startsWith("create:TOOL-99:feat/tool-99")),
 			`expected create; got ${events.join(",")}`,
@@ -2817,6 +2823,7 @@ describe("runPipeline — pick step", () => {
 			parkSignal,
 		);
 
+		const sessionIds: string[] = [];
 		const result = await runPipeline(pickOpts(), parkSignal, baseFlags, {
 			runStep,
 			mainRepo: repo,
@@ -2826,10 +2833,22 @@ describe("runPipeline — pick step", () => {
 				logs.push(e);
 			},
 			runShipBookkeeping: noopBookkeeping,
+			createSessionController: (args) => {
+				sessionIds.push(args.sessionId);
+				return { sessionId: args.sessionId, identity: { sessionId: args.sessionId, claimedItem: args.claimedItem, claimBranch: args.claimBranch, worktreePath: args.worktreePath }, updateChild: () => {}, dispose: () => {} };
+			},
 		});
 
 		assert.equal(result.completed, true);
 		assert.equal(result.itemId, "TOOL-99");
+		// Auto-pick resolves the item inside the pick step; the #369 session record must still be
+		// item + attempt scoped (`cycle-N-TOOL-99-aN`), never the cycle's `cycle-N-unclaimed` id —
+		// concurrent cycles at the same number would otherwise overwrite one another's record (#738 review).
+		assert.deepEqual(
+			sessionIds.map((id) => id.replace(/^cycle-\d+-/, "")),
+			["TOOL-99-a1"],
+			`session ids: ${sessionIds.join(",")}`,
+		);
 		assert.deepEqual(
 			calls.map((c) => c.step),
 			["pick", "plan", "shakedown-plan", "implement", "shakedown-code", "ship"],
