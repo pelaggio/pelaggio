@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, it } from "node:test";
+import { loadShadowGraph, loadViews } from "../assurance-graph.js";
 import { type AssuranceGraph, type AssuranceView, diagnostics, type QueryArgs, selectView } from "../assurance-views.ts";
 
 const repo = resolve(new URL("../..", import.meta.url).pathname);
-const graph = JSON.parse(readFileSync(resolve(repo, "docs/assurance/shadow-graph.json"), "utf8")) as AssuranceGraph;
-const catalog = JSON.parse(readFileSync(resolve(repo, "docs/assurance/views.json"), "utf8")) as { views: AssuranceView[] };
+const graph = loadShadowGraph(repo);
+const catalog = loadViews(repo);
 
 /** Realization removed as a node kind — the reduction `corpus-convergence.md` §2 leaves unresolved. */
 function withoutRealization(source: AssuranceGraph): AssuranceGraph {

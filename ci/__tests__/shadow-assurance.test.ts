@@ -2,40 +2,11 @@ import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, it } from "node:test";
-import type { AssuranceObservation } from "../assurance-observations.js";
-import { type AssuranceGraph, type AssuranceView, adrMapFromSources, DEBT_CHECKS, diagnostics, type QueryArgs, readSourceWithinRoot, selectView } from "../assurance-views.ts";
+import { loadShadowGraph, loadViews } from "../assurance-graph.js";
+import { type AssuranceGraph, adrMapFromSources, DEBT_CHECKS, diagnostics, type QueryArgs, readSourceWithinRoot, selectView } from "../assurance-views.ts";
 
 const repo = resolve(new URL("../..", import.meta.url).pathname);
-type ShadowNode = {
-	id: string;
-	kind: string;
-	role?: string;
-	visibility?: string;
-	slug?: string;
-	statement: string;
-	status?: string;
-	externalId?: string;
-	projection?: { status?: string; scope?: string };
-	sources?: string[];
-	codeEvidence?: string[];
-	observations?: AssuranceObservation[];
-	wrongIf?: string;
-	revisitIf?: string;
-};
-type ShadowGraph = {
-	status: string;
-	authority: string;
-	nodeKinds: string[];
-	propositionRoles: string[];
-	decisionStatuses: string[];
-	relationKinds: Record<string, { from: string[]; to: string[] }>;
-	nodes: ShadowNode[];
-	edges: Array<{ from: string; relation: string; to: string }>;
-	adrMap: Record<string, string[]>;
-	sourceGrounding: Array<{ node: string; path: string; anchors: string[] }>;
-	invariantIndex: { entries: Array<{ anchor: string; nodes?: string[]; construction?: string }> };
-};
-const graph = JSON.parse(readFileSync(resolve(repo, "docs/assurance/shadow-graph.json"), "utf8")) as ShadowGraph;
+const graph = loadShadowGraph(repo);
 const nodes = new Map(graph.nodes.map((node) => [node.id, node]));
 const edges = graph.edges as Array<{ from: string; relation: string; to: string }>;
 
@@ -636,7 +607,7 @@ describe("architectural question tests", () => {
 		assert.equal(fixture.status, "experimental-shadow-only");
 		assertGraphSchema(fixture.graph, graph, OWNER_INDEPENDENCE_ONLY);
 
-		const catalog = JSON.parse(readFileSync(resolve(repo, "docs/assurance/views.json"), "utf8")) as { views: AssuranceView[] };
+		const catalog = loadViews(repo);
 		assert.deepEqual(Object.keys(fixture.queryArgs).sort(), catalog.views.map((view) => view.id).sort(), `fixture queryArgs must cover every views.json id; ${OWNER_INDEPENDENCE_ONLY}`);
 
 		const pairKey = (item: { check: string; node: string }) => `${item.check}:${item.node}`;
