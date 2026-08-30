@@ -1110,6 +1110,21 @@ describe("authoring review loop — seat output observations (#677)", () => {
 		assert.deepEqual(options.parkSignal, { parked: true, resetsAt: 123, limitType: "tokens", triggerWorker: "judge" });
 	});
 
+	it("preserves a reviewer-seat rate-limit park as budget, and a non-parked reviewer never trips the guard", async () => {
+		const parked = loopOpts(async (request) => {
+			if (request.role === "reviewer") Object.assign(request.parkSignal, { parked: true, resetsAt: 456, limitType: "tokens", triggerWorker: "reviewer" });
+			return ok(request.role === "judge" ? judgeReport([]) : findings([]));
+		});
+		const parkedResult = await runReviewLoop(parked);
+		assert.equal(parkedResult.outcome, "budget");
+		assert.deepEqual(parked.parkSignal, { parked: true, resetsAt: 456, limitType: "tokens", triggerWorker: "reviewer" });
+
+		const clean = loopOpts(async (request) => ok(request.role === "judge" ? judgeReport([]) : findings([])));
+		const cleanResult = await runReviewLoop(clean);
+		assert.equal(cleanResult.outcome, "converged-clean");
+		assert.equal(clean.parkSignal.parked, false);
+	});
+
 	it("invokes the observation callback once per returned seat and never for retries in this slice", async () => {
 		const events: Array<{ role: string; attempt: number }> = [];
 		await runReviewLoop(loopOpts(async (request) => ok(request.role === "judge" ? judgeReport([]) : findings([])), { onSeatAttempt: (event) => events.push({ role: event.role, attempt: event.attempt }) }));
