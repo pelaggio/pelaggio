@@ -61,7 +61,18 @@ describe("step inputs", () => {
 			const src = readFileSync(join(STEPS, f), "utf8");
 			const iface = src.match(/export interface \w+Input \{([\s\S]*?)\n\}/)?.[1] ?? "";
 			const body = iface.replace(/\/\*\*[\s\S]*?\*\//g, "");
-			const members = [...body.matchAll(/^\s*readonly (\w+)\??: ([^;]+);/gm)];
+			// Every non-blank line must be a `readonly name: Type;` member — a non-readonly property, a
+			// method signature, an index signature or a call signature is refused, not skipped.
+			const lines = body
+				.split("\n")
+				.map((l) => l.trim())
+				.filter(Boolean);
+			const members: Array<[string, string, string]> = [];
+			for (const line of lines) {
+				const m = line.match(/^readonly (\w+)\??: ([^;]+);$/);
+				assert.ok(m, `${f}: Input line \`${line}\` is not a \`readonly name: Type;\` data member`);
+				members.push([line, m?.[1] ?? "", m?.[2] ?? ""]);
+			}
 			assert.ok(members.length > 0, `${f}: Input declares members`);
 			for (const [, name, type] of members) {
 				const t = (type ?? "").trim();
@@ -76,6 +87,12 @@ describe("step inputs", () => {
 			const decl = declarationOf(type, file);
 			assert.doesNotMatch(decl, /=>/, `${type} (${file}) declares an arrow-typed member`);
 			assert.doesNotMatch(decl, /^\s*\w+\??\s*\(/m, `${type} (${file}) declares a method signature`);
+		}
+	});
+
+	it("the line rule is falsifiable: non-readonly members, method and index signatures are refused", () => {
+		for (const line of ["roadmap: RoadmapSource;", "getItemPlan(): Promise<string>;", "[key: string]: unknown;", "(): void;", "readonly ok: string"]) {
+			assert.equal(/^readonly (\w+)\??: ([^;]+);$/.test(line), false, line);
 		}
 	});
 
