@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { CONFIG, REPO, resolveStepSettings } from "../config.js";
 import { computeImplementTurns } from "../cycle-support.js";
+import type { DriverAssignmentState } from "../driver-assignment.js";
 import { recordArtifactAuthor, selectAuthor } from "../driver-assignment.js";
 import { getHeadSha } from "../git.js";
 import { registerPath } from "../registers.js";
@@ -11,7 +12,7 @@ import { archiveAppliedReviewFindings, reviewFindingsDigest } from "../review-fi
 import { reviseFindingsPath } from "../revise-sweep.js";
 import { reviewFindingsPreamble } from "../skills.js";
 import type { Flags } from "../types.js";
-import type { CycleContext, CycleHelpers, StepOutcome } from "./context.js";
+import type { CycleHelpers, StepOutcome } from "./context.js";
 
 export function archiveReviewFindingsAfterImplement(
 	flags: Flags,
@@ -37,15 +38,28 @@ export function archiveReviewFindingsAfterImplement(
 }
 
 /** Exactly the cycle state `runImplement` reads — a step that needs more must widen this type, visibly. */
-export type ImplementInput = Pick<CycleContext, "flags" | "mainRepo" | "roadmap" | "assignment" | "available" | "itemId" | "worktree" | "profile" | "verdict" | "shakedownPlanText" | "cost" | "onReviewFindingsConsumed">;
+/** The cycle bindings `runImplement` reads — plain values, built by the cycle at the call site. */
+export interface ImplementInput {
+	readonly flags: Flags;
+	readonly mainRepo: string;
+	readonly assignment: DriverAssignmentState;
+	readonly itemId: string;
+	readonly worktree: string;
+	readonly profile: string;
+	readonly verdict: "APPROVE" | "REVISE" | "RETHINK";
+	readonly shakedownPlanText: string;
+}
 /** Exactly the cycle helpers `runImplement` calls. */
-export type ImplementDeps = Pick<CycleHelpers, "log" | "finish" | "parkExit" | "runStepWithRetry" | "driverCandidates">;
+export type ImplementDeps = Pick<CycleHelpers, "roadmap" | "available" | "log" | "finish" | "parkExit" | "runStepWithRetry" | "driverCandidates" | "cost"> & {
+	/** Notified after review findings were applied and archived. */
+	readonly onReviewFindingsConsumed?: (itemId: string) => void;
+};
 
 export async function runImplement(ctx: ImplementInput, helpers: ImplementDeps): Promise<StepOutcome> {
-	const { flags, mainRepo, roadmap, assignment, available, itemId, worktree, profile, verdict, shakedownPlanText } = ctx;
-	const { log, finish, parkExit, runStepWithRetry, driverCandidates } = helpers;
+	const { flags, mainRepo, assignment, itemId, worktree, profile, verdict, shakedownPlanText } = ctx;
+	const { roadmap, available, log, finish, parkExit, runStepWithRetry, driverCandidates } = helpers;
 	const selected = selectAuthor(assignment, driverCandidates("implement"), available);
-	if (!selected.ok) return { kind: "terminal", result: finish({ itemId, completed: false, cost: ctx.cost(), error: `implement assignment failed: ${selected.reason}` }) };
+	if (!selected.ok) return { kind: "terminal", result: finish({ itemId, completed: false, cost: helpers.cost(), error: `implement assignment failed: ${selected.reason}` }) };
 	const implementationAuthor = selected.drivers[0];
 	const parked = parkExit();
 	if (parked) return { kind: "terminal", result: parked };
@@ -76,7 +90,7 @@ export async function runImplement(ctx: ImplementInput, helpers: ImplementDeps):
 	// Any DEFINED value is a findings-driven resume — `--review-findings ""` must not
 	// slip past a truthiness check into the generic plan prompt.
 	if (findingsPath !== undefined && findingsPath.trim() === "") {
-		return { kind: "terminal", result: finish({ itemId, completed: false, cost: ctx.cost(), error: "empty --review-findings path — refusing a findings-driven resume without findings" }) };
+		return { kind: "terminal", result: finish({ itemId, completed: false, cost: helpers.cost(), error: "empty --review-findings path — refusing a findings-driven resume without findings" }) };
 	}
 	if (findingsPath) {
 		try {
@@ -85,13 +99,13 @@ export async function runImplement(ctx: ImplementInput, helpers: ImplementDeps):
 			reviewNote = reviewFindingsPreamble(findingsBytes.toString("utf-8"));
 		} catch (err) {
 			const detail = err instanceof Error ? err.message : String(err);
-			return { kind: "terminal", result: finish({ itemId, completed: false, cost: ctx.cost(), error: `could not read review findings ${JSON.stringify(findingsPath)}: ${detail}` }) };
+			return { kind: "terminal", result: finish({ itemId, completed: false, cost: helpers.cost(), error: `could not read review findings ${JSON.stringify(findingsPath)}: ${detail}` }) };
 		}
 		// A readable but empty/whitespace-only findings file yields no preamble; the
 		// prompt selection below would silently fall back to the generic plan prompt
 		// and revise without its task. Same failure class as unreadable — fail closed.
 		if (!reviewNote) {
-			return { kind: "terminal", result: finish({ itemId, completed: false, cost: ctx.cost(), error: `review findings ${JSON.stringify(findingsPath)} is empty — refusing a findings-driven resume without findings` }) };
+			return { kind: "terminal", result: finish({ itemId, completed: false, cost: helpers.cost(), error: `review findings ${JSON.stringify(findingsPath)} is empty — refusing a findings-driven resume without findings` }) };
 		}
 	}
 
@@ -202,7 +216,7 @@ export async function runImplement(ctx: ImplementInput, helpers: ImplementDeps):
 					result: finish({
 						itemId,
 						completed: false,
-						cost: ctx.cost(),
+						cost: helpers.cost(),
 						error: "review findings were applied but the implementation checkpoint did not commit cleanly; findings preserved for retry",
 					}),
 				};
@@ -213,7 +227,7 @@ export async function runImplement(ctx: ImplementInput, helpers: ImplementDeps):
 				result: finish({
 					itemId,
 					completed: false,
-					cost: ctx.cost(),
+					cost: helpers.cost(),
 					error: `review findings were applied but the implementation checkpoint could not be verified: ${err instanceof Error ? err.message : String(err)}; findings preserved for retry`,
 				}),
 			};
@@ -225,7 +239,7 @@ export async function runImplement(ctx: ImplementInput, helpers: ImplementDeps):
 				result: finish({
 					itemId,
 					completed: false,
-					cost: ctx.cost(),
+					cost: helpers.cost(),
 					error: "review findings were applied but the revision HEAD could not be read; findings preserved for a fail-closed retry",
 				}),
 			};
@@ -237,12 +251,12 @@ export async function runImplement(ctx: ImplementInput, helpers: ImplementDeps):
 				result: finish({
 					itemId,
 					completed: false,
-					cost: ctx.cost(),
+					cost: helpers.cost(),
 					error: `review findings were applied but archival failed for ${JSON.stringify(archived.path)}: ${archived.detail}; implementation checkpoint and findings were preserved`,
 				}),
 			};
 		}
-		ctx.onReviewFindingsConsumed?.(itemId);
+		helpers.onReviewFindingsConsumed?.(itemId);
 	}
 	recordArtifactAuthor(assignment, "implementation", implementationAuthor);
 	return { kind: "continue" };

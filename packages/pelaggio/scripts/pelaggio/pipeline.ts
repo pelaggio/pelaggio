@@ -32,7 +32,7 @@ import { extractPrUrl } from "./ship/pull-request.js";
 import { expandSkill } from "./skills.js";
 import type { PipelineStep } from "./step-names.js";
 import { type RunStepFn, runStep as runStepDefault } from "./step-runner.js";
-import type { CycleContext, CycleHelpers, RunStepWithRetryConfig, StepAttempt, StepRunOptions } from "./steps/context.js";
+import type { CycleHelpers, RunStepWithRetryConfig, StepAttempt, StepRunOptions } from "./steps/context.js";
 import { archiveReviewFindingsAfterImplement, runImplement } from "./steps/implement.js";
 import { runPlan } from "./steps/plan.js";
 import { runShakedownCode } from "./steps/shakedown-code.js";
@@ -1250,54 +1250,33 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		reconstructAuthor("plan", "plan");
 	}
 
-	// Step modules (plan step 9) read the cycle through a live view and call its helpers; see steps/context.ts.
-	const cycle: CycleContext = {
-		opts,
-		flags,
-		parkSignal,
-		mainRepo,
+	// Step modules (plan step 9): each gets a plain value Input built here from the current bindings,
+	// and the capabilities it Picks from the cycle's helpers; see steps/context.ts.
+	const cycleHelpers: CycleHelpers = {
+		log,
 		roadmap,
-		assignment,
+		finish,
+		parkExit,
+		runStepWithRetry,
+		step,
+		driverCandidates,
 		available,
-		steps,
-		executionReceipts,
-		deferredItemTitles,
-		cycleChallenge,
-		now,
-		writeEffectsManifest,
-		dispatchStepEffects,
-		appendReviewEscalation,
-		lookupReviewEscalation,
-		onReviewFindingsConsumed: deps.onReviewFindingsConsumed,
-		get itemId() {
-			return itemId!;
-		},
-		get worktree() {
-			return worktree!;
-		},
-		get profile() {
-			return profile;
-		},
-		get verdict() {
-			return verdict;
-		},
-		get shakedownPlanText() {
-			return shakedownPlanText;
-		},
+		itemRunId,
+		observeGitForReceipt,
+		reconstructAuthor,
 		cost: () => cost,
-		addCost: (delta) => {
+		addCost: (delta: number) => {
 			cost += delta;
 		},
 	};
-	const cycleHelpers: CycleHelpers = { log, finish, parkExit, runStepWithRetry, step, driverCandidates, itemRunId, observeGitForReceipt, reconstructAuthor };
 
 	if (shouldRun("plan")) {
-		const outcome = await runPlan(cycle, cycleHelpers);
+		const outcome = await runPlan({ dryRun: opts.dryRun === true, assignment, deferredItemTitles, itemId: itemId!, worktree: worktree!, profile }, cycleHelpers);
 		if (outcome.kind === "terminal") return outcome.result;
 	}
 
 	if (shouldRun("shakedown-plan")) {
-		const outcome = await runShakedownPlan(cycle, cycleHelpers);
+		const outcome = await runShakedownPlan({ assignment, steps, itemId: itemId!, profile }, cycleHelpers);
 		if (outcome.kind === "terminal") return outcome.result;
 		verdict = outcome.verdict;
 		shakedownPlanText = outcome.shakedownPlanText;
@@ -1313,7 +1292,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	}
 
 	if (shouldRun("implement")) {
-		const outcome = await runImplement(cycle, cycleHelpers);
+		const outcome = await runImplement({ flags, mainRepo, assignment, itemId: itemId!, worktree: worktree!, profile, verdict, shakedownPlanText }, { ...cycleHelpers, onReviewFindingsConsumed: deps.onReviewFindingsConsumed });
 		if (outcome.kind === "terminal") return outcome.result;
 	}
 
@@ -1321,7 +1300,10 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	let reviewRecordMarkdown: string | undefined;
 
 	if (shouldRun("shakedown-code")) {
-		const outcome = await runShakedownCode(cycle, cycleHelpers);
+		const outcome = await runShakedownCode(
+			{ flags, parkSignal, mainRepo, assignment, steps, executionReceipts, deferredItemTitles, cycleChallenge, itemId: itemId!, worktree: worktree!, profile },
+			{ ...cycleHelpers, opts, writeEffectsManifest, dispatchStepEffects, appendReviewEscalation, lookupReviewEscalation },
+		);
 		if (outcome.kind === "terminal") return outcome.result;
 		reviewRecordMarkdown = outcome.reviewRecordMarkdown;
 	}

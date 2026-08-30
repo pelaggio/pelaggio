@@ -1,22 +1,30 @@
 /** The `shakedown-plan` step (plan step 9): one reviewer seat over the plan; yields the verdict the implement prompt reads. Moved verbatim from `runPipeline`; see `steps/context.ts`. */
 import { CONFIG, resolveStepSettings } from "../config.js";
 import { parseVerdict } from "../cycle-outcome.js";
+import type { DriverAssignmentState } from "../driver-assignment.js";
 import { selectReviewers } from "../driver-assignment.js";
 import { buildStepArgs, expandSkill } from "../skills.js";
-import type { CycleContext, CycleHelpers, StepOutcome } from "./context.js";
+import type { StepLog } from "../types.js";
+import type { CycleHelpers, StepOutcome } from "./context.js";
 
 /** Exactly the cycle state `runShakedownPlan` reads — a step that needs more must widen this type, visibly. */
-export type ShakedownPlanInput = Pick<CycleContext, "roadmap" | "assignment" | "available" | "steps" | "itemId" | "profile" | "cost">;
+/** The cycle bindings `runShakedownPlan` reads — plain values, built by the cycle at the call site. */
+export interface ShakedownPlanInput {
+	readonly assignment: DriverAssignmentState;
+	readonly steps: readonly StepLog[];
+	readonly itemId: string;
+	readonly profile: string;
+}
 /** Exactly the cycle helpers `runShakedownPlan` calls. */
-export type ShakedownPlanDeps = Pick<CycleHelpers, "log" | "finish" | "runStepWithRetry" | "driverCandidates">;
+export type ShakedownPlanDeps = Pick<CycleHelpers, "roadmap" | "available" | "log" | "finish" | "runStepWithRetry" | "driverCandidates" | "cost">;
 
 export async function runShakedownPlan(ctx: ShakedownPlanInput, helpers: ShakedownPlanDeps): Promise<StepOutcome<{ verdict: "APPROVE" | "REVISE" | "RETHINK"; shakedownPlanText: string }>> {
-	const { roadmap, assignment, available, steps, itemId, profile } = ctx;
-	const { log, finish, runStepWithRetry, driverCandidates } = helpers;
+	const { assignment, steps, itemId, profile } = ctx;
+	const { roadmap, available, log, finish, runStepWithRetry, driverCandidates } = helpers;
 	const planAuthor = assignment.authors.plan;
-	if (!planAuthor) return { kind: "terminal", result: finish({ itemId, completed: false, cost: ctx.cost(), error: "shakedown-plan assignment failed: plan author attribution is unavailable" }) };
+	if (!planAuthor) return { kind: "terminal", result: finish({ itemId, completed: false, cost: helpers.cost(), error: "shakedown-plan assignment failed: plan author attribution is unavailable" }) };
 	const selected = selectReviewers(assignment, driverCandidates("shakedown-plan"), planAuthor, 1, available);
-	if (!selected.ok) return { kind: "terminal", result: finish({ itemId, completed: false, cost: ctx.cost(), error: `shakedown-plan assignment failed: ${selected.reason}` }) };
+	if (!selected.ok) return { kind: "terminal", result: finish({ itemId, completed: false, cost: helpers.cost(), error: `shakedown-plan assignment failed: ${selected.reason}` }) };
 	const shakedownPlanArgs = await buildStepArgs(roadmap, itemId!, "plan-review");
 	const outcome = await runStepWithRetry({
 		name: "shakedown-plan",
@@ -34,6 +42,6 @@ export async function runShakedownPlan(ctx: ShakedownPlanInput, helpers: Shakedo
 	const lastStep = steps[steps.length - 1];
 	if (lastStep && lastStep.name === "shakedown-plan") lastStep.verdict = verdict;
 	log(`verdict: ${verdict}`);
-	if (verdict === "RETHINK") return { kind: "terminal", result: finish({ itemId, completed: false, cost: ctx.cost(), verdict, error: "plan needs rethink" }) };
+	if (verdict === "RETHINK") return { kind: "terminal", result: finish({ itemId, completed: false, cost: helpers.cost(), verdict, error: "plan needs rethink" }) };
 	return { kind: "continue", verdict, shakedownPlanText };
 }

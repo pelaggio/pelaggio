@@ -1,26 +1,35 @@
 /** The `plan` step (plan step 9): reuse an existing plan or author one, then plan-time decomposition. Moved verbatim from `runPipeline`; see `steps/context.ts`. */
 import { existsSync } from "node:fs";
 import { CONFIG, resolveStepSettings } from "../config.js";
+import type { DriverAssignmentState } from "../driver-assignment.js";
 import { recordArtifactAuthor, selectAuthor } from "../driver-assignment.js";
 import { parseDeferredItems } from "../pick-parse.js";
 import { buildStepArgs, expandSkill } from "../skills.js";
-import type { CycleContext, CycleHelpers, StepOutcome } from "./context.js";
+import type { CycleHelpers, StepOutcome } from "./context.js";
 
 /** Exactly the cycle state `runPlan` reads — a step that needs more must widen this type, visibly. */
-export type PlanInput = Pick<CycleContext, "opts" | "roadmap" | "assignment" | "available" | "deferredItemTitles" | "itemId" | "worktree" | "profile" | "cost">;
+/** The cycle bindings `runPlan` reads — plain values, built by the cycle at the call site. */
+export interface PlanInput {
+	readonly dryRun: boolean;
+	readonly assignment: DriverAssignmentState;
+	readonly deferredItemTitles: Set<string>;
+	readonly itemId: string;
+	readonly worktree: string;
+	readonly profile: string;
+}
 /** Exactly the cycle helpers `runPlan` calls. */
-export type PlanDeps = Pick<CycleHelpers, "log" | "finish" | "runStepWithRetry" | "driverCandidates" | "reconstructAuthor">;
+export type PlanDeps = Pick<CycleHelpers, "roadmap" | "available" | "log" | "finish" | "runStepWithRetry" | "driverCandidates" | "reconstructAuthor" | "cost">;
 
 export async function runPlan(ctx: PlanInput, helpers: PlanDeps): Promise<StepOutcome> {
-	const { opts, roadmap, assignment, available, deferredItemTitles, itemId, worktree, profile } = ctx;
-	const { log, finish, runStepWithRetry, driverCandidates, reconstructAuthor } = helpers;
+	const { dryRun, assignment, deferredItemTitles, itemId, worktree, profile } = ctx;
+	const { roadmap, available, log, finish, runStepWithRetry, driverCandidates, reconstructAuthor } = helpers;
 	const existingPlan = roadmap.resolvePlanPath({ id: itemId!, worktree: worktree! });
-	if (!opts.dryRun && existsSync(existingPlan)) {
+	if (!dryRun && existsSync(existingPlan)) {
 		log(`plan exists at ${existingPlan} — skipping plan generation`);
 		reconstructAuthor("plan", "plan");
 	} else {
 		const selected = selectAuthor(assignment, driverCandidates("plan"), available);
-		if (!selected.ok) return { kind: "terminal", result: finish({ itemId, completed: false, cost: ctx.cost(), error: `plan assignment failed: ${selected.reason}` }) };
+		if (!selected.ok) return { kind: "terminal", result: finish({ itemId, completed: false, cost: helpers.cost(), error: `plan assignment failed: ${selected.reason}` }) };
 		const planAuthor = selected.drivers[0];
 		// Inject the item's requirements into the plan prompt in the harness (#103): a sandboxed
 		// model (Codex) can't run `roadmap get` / `gh issue view` (no network, and the roadmap CLI
@@ -44,7 +53,7 @@ export async function runPlan(ctx: PlanInput, helpers: PlanDeps): Promise<StepOu
 		// coherent first slice instead of starving at the implement turn wall. Decomposition is the
 		// preferred path for large items; the raised implement turn ceiling is the escape hatch for
 		// changes that don't decompose cleanly. Best-effort, mirrors the shakedown-code deferral (#115).
-		if (!opts.dryRun) {
+		if (!dryRun) {
 			for (const d of parseDeferredItems(outcome.result.assistantText, deferredItemTitles)) {
 				try {
 					const created = await roadmap.createItem(d);

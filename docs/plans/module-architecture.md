@@ -110,6 +110,15 @@ Steps 7a/7b/8 and 10 are independent of 5/6/9 and may interleave once 4 is in.
   owns these files; a fence (base-config evaluation, seat denial, signed
   tables) was considered and rejected as friction that blocks every PR adding
   a module (see the guard-hooks PR).
+- **Step inputs are values (step 9 as designed).** Step 9 first landed a
+  `CycleContext` — 24 getters over the cycle closure, `Pick`ed per step. The
+  step-inputs PR replaced it: each `steps/<step>.ts` declares an explicit
+  `<Step>Input` interface of plain values the cycle builds at the call site
+  (`itemId`, `worktree`, `profile`, `verdict`, … snapshotted when the step
+  starts) and a `<Step>Deps = Pick<CycleHelpers, …>` for the capabilities it
+  calls (`cost`/`addCost`, `available`, the effects seam, callbacks). A
+  falsifier (`__tests__/steps-inputs.test.ts`) fails on any cycle-state view
+  type, any `Input` declared as a `Pick`, or any function-typed `Input` member.
 - **Authoring hooks.** A lefthook `pre-commit` `guards` command runs the
   layering and register conformance tests (~1 s each) on any staged TS under
   either package; the rubric's Verification section already runs them in-cycle.

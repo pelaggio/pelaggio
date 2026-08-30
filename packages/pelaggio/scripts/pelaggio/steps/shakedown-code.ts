@@ -2,8 +2,11 @@
 import { resolve } from "node:path";
 import { CONFIG, LOG_PATH, modelForProvider, REPO, REVIEW_CONFIG, resolveStepSettings } from "../config.js";
 import { buildReviewDiffBlock } from "../cycle-support.js";
+import type { appendReviewEscalation as appendReviewEscalationDefault, lookupReviewEscalation as lookupReviewEscalationDefault } from "../decisions.js";
 import { type ReviewEscalationAdjudication, reviewEscalationCommands } from "../decisions.js";
+import type { DriverAssignmentState } from "../driver-assignment.js";
 import { selectReviewers } from "../driver-assignment.js";
+import type { dispatchStepEffects as dispatchStepEffectsDefault, writeEffectsManifest as writeEffectsManifestDefault } from "../effects.js";
 import { type Effect, type EffectsContext, EffectsManifestError, type ReviewEscalationEffect, type ReviewSeatIdentity, type ReviewVerdictEffect } from "../effects.js";
 import { getArtifactHeadSha, gitDiffNameOnly } from "../git.js";
 import { parseDeferredItems } from "../pick-parse.js";
@@ -14,61 +17,42 @@ import { type ReviewRecord, renderReviewRecord, writeReviewRecord } from "../rev
 import { cleanupAuthoringReviewSeatsForSha, prepareAuthoringReviewSeat } from "../review/seats.js";
 import { buildStepArgs, expandSkill } from "../skills.js";
 import { getProvider, REGISTERED_PROVIDERS } from "../step-runner.js";
-import type { StepResult } from "../types.js";
-import type { CycleContext, CycleHelpers, StepOutcome } from "./context.js";
+import type { ExecutionReceiptDescriptor, Flags, ParkSignal, PipelineOpts, StepLog, StepResult } from "../types.js";
+import type { CycleHelpers, StepOutcome } from "./context.js";
 
 /** Exactly the cycle state `runShakedownCode` reads — a step that needs more must widen this type, visibly. */
-export type ShakedownCodeInput = Pick<
-	CycleContext,
-	| "opts"
-	| "flags"
-	| "parkSignal"
-	| "mainRepo"
-	| "roadmap"
-	| "assignment"
-	| "available"
-	| "steps"
-	| "executionReceipts"
-	| "deferredItemTitles"
-	| "cycleChallenge"
-	| "writeEffectsManifest"
-	| "dispatchStepEffects"
-	| "appendReviewEscalation"
-	| "lookupReviewEscalation"
-	| "itemId"
-	| "worktree"
-	| "profile"
-	| "addCost"
-	| "cost"
->;
+/** The cycle bindings `runShakedownCode` reads — plain values, built by the cycle at the call site. */
+export interface ShakedownCodeInput {
+	readonly flags: Flags;
+	readonly parkSignal: ParkSignal;
+	readonly mainRepo: string;
+	readonly assignment: DriverAssignmentState;
+	readonly steps: readonly StepLog[];
+	/** Shared with the cycle; the step pushes receipts, never replaces the array. */
+	readonly executionReceipts: ExecutionReceiptDescriptor[];
+	readonly deferredItemTitles: Set<string>;
+	readonly cycleChallenge: Buffer;
+	readonly itemId: string;
+	readonly worktree: string;
+	readonly profile: string;
+}
 /** Exactly the cycle helpers `runShakedownCode` calls. */
-export type ShakedownCodeDeps = Pick<CycleHelpers, "log" | "finish" | "parkExit" | "runStepWithRetry" | "step" | "driverCandidates" | "itemRunId" | "observeGitForReceipt">;
+export type ShakedownCodeDeps = Pick<CycleHelpers, "roadmap" | "available" | "log" | "finish" | "parkExit" | "runStepWithRetry" | "step" | "driverCandidates" | "itemRunId" | "observeGitForReceipt" | "cost" | "addCost"> & {
+	/** Run options: carry `notifyDecision` and the ship target (callables), so they ride as a Dep. */
+	readonly opts: PipelineOpts;
+	/** Effects seam and escalation ledger, injected so tests can observe them. */
+	readonly writeEffectsManifest: typeof writeEffectsManifestDefault;
+	readonly dispatchStepEffects: typeof dispatchStepEffectsDefault;
+	readonly appendReviewEscalation: typeof appendReviewEscalationDefault;
+	readonly lookupReviewEscalation: typeof lookupReviewEscalationDefault;
+};
 
 export async function runShakedownCode(ctx: ShakedownCodeInput, helpers: ShakedownCodeDeps): Promise<StepOutcome<{ reviewRecordMarkdown: string | undefined }>> {
-	const {
-		opts,
-		flags,
-		parkSignal,
-		mainRepo,
-		roadmap,
-		assignment,
-		available,
-		steps,
-		executionReceipts,
-		deferredItemTitles,
-		cycleChallenge,
-		writeEffectsManifest,
-		dispatchStepEffects,
-		appendReviewEscalation,
-		lookupReviewEscalation,
-		itemId,
-		worktree,
-		profile,
-	} = ctx;
-	const { log, finish, parkExit, runStepWithRetry, step, driverCandidates, itemRunId, observeGitForReceipt } = helpers;
+	const { flags, parkSignal, mainRepo, assignment, steps, executionReceipts, deferredItemTitles, cycleChallenge, itemId, worktree, profile } = ctx;
+	const { opts, roadmap, available, log, finish, parkExit, runStepWithRetry, step, driverCandidates, itemRunId, observeGitForReceipt, writeEffectsManifest, dispatchStepEffects, appendReviewEscalation, lookupReviewEscalation } = helpers;
 	let reviewRecordMarkdown: string | undefined;
 	const implementationAuthor = assignment.authors.implementation;
-	if (!implementationAuthor) return { kind: "terminal", result: finish({ itemId, completed: false, cost: ctx.cost(), error: "shakedown-code assignment failed: implementation author attribution is unavailable" }) };
+	if (!implementationAuthor) return { kind: "terminal", result: finish({ itemId, completed: false, cost: helpers.cost(), error: "shakedown-code assignment failed: implementation author attribution is unavailable" }) };
 	const planPath = await roadmap.getItemPlan({ worktree: worktree! });
 	// The retry (attempt 2) points at the plan file only — NOT "the roadmap entry", which a
 	// sandboxed provider can't fetch (#103/#115); the plan already carries the scope.
@@ -114,7 +98,7 @@ export async function runShakedownCode(ctx: ShakedownCodeInput, helpers: Shakedo
 			author: authorIdentity,
 			capabilities: capabilityMapFrom(getProvider, REGISTERED_PROVIDERS),
 		});
-		if (!seating.ok) return { kind: "terminal", result: finish({ itemId, completed: false, cost: ctx.cost(), error: `shakedown-code assignment failed: ${seating.reason}` }) };
+		if (!seating.ok) return { kind: "terminal", result: finish({ itemId, completed: false, cost: helpers.cost(), error: `shakedown-code assignment failed: ${seating.reason}` }) };
 		const execution = resolveAuthoringReviewExecution(seating.policy, {
 			// Orchestrator-computed evidence (CI/single-shot, daemon marker, multi-cycle,
 			// headless). Fallback for direct callers keeps the legacy single-shot-only signal.
@@ -125,8 +109,8 @@ export async function runShakedownCode(ctx: ShakedownCodeInput, helpers: Shakedo
 			author: seating.author,
 			envAllowlist: CONFIG.security.envAllowlist,
 		});
-		if (!execution.ok) return { kind: "terminal", result: finish({ itemId, completed: false, cost: ctx.cost(), error: `shakedown-code execution context failed: ${execution.reason}` }) };
-		if (!execution.enabled) return { kind: "terminal", result: finish({ itemId, completed: false, cost: ctx.cost(), error: "shakedown-code execution context unexpectedly disabled the authoring loop" }) };
+		if (!execution.ok) return { kind: "terminal", result: finish({ itemId, completed: false, cost: helpers.cost(), error: `shakedown-code execution context failed: ${execution.reason}` }) };
+		if (!execution.enabled) return { kind: "terminal", result: finish({ itemId, completed: false, cost: helpers.cost(), error: "shakedown-code execution context unexpectedly disabled the authoring loop" }) };
 		const policy = execution.policy;
 		log(`authoring review capability realizations: ${JSON.stringify(seating.realizations)}`);
 		// Attestation audit: every operator-attested suppression is logged at resolution time
@@ -220,7 +204,7 @@ export async function runShakedownCode(ctx: ShakedownCodeInput, helpers: Shakedo
 			reviewRecordMarkdown = `## Adversarial review escalation\n\nDecision **${existingEscalation.id}** was resolved **proceed** by ${existingEscalation.resolution.actor}.\n\nRationale: ${existingEscalation.resolution.rationale}\n\nReviewed commit: \`${reviewedSha}\`. Evidence fingerprint: \`${existingEscalation.escalation.evidenceFingerprint}\`.`;
 			shakedownResult = { ok: true, subtype: "success", text: "resolved-proceed", fullText: "", assistantText: "", cost: 0, turns: 0 };
 		} else {
-			ctx.addCost(loop.cost);
+			helpers.addCost(loop.cost);
 			const finalReviewedSha = getArtifactHeadSha(worktree!);
 			if (!finalReviewedSha) return { kind: "terminal", result: parkExit("adversarial review could not bind final reviewed HEAD")! };
 			const reviewRunId = itemRunId();
@@ -290,7 +274,7 @@ export async function runShakedownCode(ctx: ShakedownCodeInput, helpers: Shakedo
 					// The durable safety action precedes effect attestation. A manifest write or
 					// dispatch failure below must never swallow the escalation or skip parking.
 					const adjudication: ReviewEscalationAdjudication = {
-						spend: { amount: ctx.cost(), estimated: steps.some((s) => s.costEstimated) },
+						spend: { amount: helpers.cost(), estimated: steps.some((s) => s.costEstimated) },
 						evidenceFingerprint: escalation.evidenceFingerprint,
 						...(escalation.hasSafetyBlocker
 							? {
@@ -353,7 +337,7 @@ export async function runShakedownCode(ctx: ShakedownCodeInput, helpers: Shakedo
 					const message = e instanceof Error ? e.message : String(e);
 					const text = `${code}: ${message}`;
 					if (loop.disagreement) return { kind: "terminal", result: parkExit(`shakedown-code effects failed after escalation: ${text}`)! };
-					return { kind: "terminal", result: finish({ itemId, completed: false, cost: ctx.cost(), error: `shakedown-code effects failed: ${text}` }) };
+					return { kind: "terminal", result: finish({ itemId, completed: false, cost: helpers.cost(), error: `shakedown-code effects failed: ${text}` }) };
 				}
 			}
 			if (escalationParkReason) return { kind: "terminal", result: parkExit(escalationParkReason)! };
@@ -365,7 +349,7 @@ export async function runShakedownCode(ctx: ShakedownCodeInput, helpers: Shakedo
 		}
 	} else {
 		const selected = selectReviewers(assignment, driverCandidates("shakedown-code"), implementationAuthor, 1, available);
-		if (!selected.ok) return { kind: "terminal", result: finish({ itemId, completed: false, cost: ctx.cost(), error: `shakedown-code assignment failed: ${selected.reason}` }) };
+		if (!selected.ok) return { kind: "terminal", result: finish({ itemId, completed: false, cost: helpers.cost(), error: `shakedown-code assignment failed: ${selected.reason}` }) };
 		const outcome = await runStepWithRetry({
 			name: "shakedown-code",
 			stepBudget: resolveStepSettings(CONFIG, profile, "shakedown-code").budget,
