@@ -12,10 +12,10 @@
 		"test": "tsx --test --test-timeout=60000 __tests__/*.test.ts"
 	},
 	"dependencies": {
-		"@astrojs/react": "^6.0.2",
+		"@astrojs/react": "^6.0.4",
 		"@pelaggio/server": "workspace:*",
 		"@tailwindcss/vite": "^4.3.3",
-		"astro": "^7.1.6",
+		"astro": "^7.2.9",
 		"pelaggio": "workspace:*",
 		"react": "^19.2.8",
 		"react-dom": "^19.2.8",
@@ -26,8 +26,8 @@
 		"@resvg/resvg-js": "^2.6.2",
 		"@types/node": "^24.13.3",
 		"@types/react": "^19.2.18",
-		"@types/react-dom": "^19.2.4",
-		"tsx": "^4.23.1",
+		"@types/react-dom": "^19.2.5",
+		"tsx": "^4.23.12",
 		"typescript": "^6.0.3"
 	}
 }
