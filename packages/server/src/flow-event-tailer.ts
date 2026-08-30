@@ -3,8 +3,7 @@
  * Isolated from LogBroker — stdout remains an operator log only (issue #83).
  */
 
-import { closeSync, existsSync, fstatSync, openSync, readSync } from "node:fs";
-import { registerPath } from "pelaggio";
+import { eventStreamPath, type ReadEventStreamSlice, tailEventStream } from "pelaggio";
 import type { RunActivity } from "./types.js";
 
 const LIFECYCLE_TYPES = new Set(["pelaggio.watch-idle", "pelaggio.watch-wake", "pelaggio.budget-idle", "pelaggio.budget-wake", "pelaggio.suspended", "pelaggio.resumed"]);
@@ -18,8 +17,8 @@ export interface FlowEventTailerDeps {
 	intervalMs?: number;
 	/** Clock for tests. */
 	now?: () => number;
-	/** Injectable file reader — defaults to fs offset reads. */
-	readSlice?: (path: string, offset: number) => { data: string; eof: boolean };
+	/** Injectable slice reader — defaults to the package's fs offset reads. */
+	readSlice?: ReadEventStreamSlice;
 }
 
 export interface FlowEventTailer {
@@ -29,22 +28,7 @@ export interface FlowEventTailer {
 	tick(): void;
 }
 
-function defaultReadSlice(path: string, offset: number): { data: string; eof: boolean } {
-	if (!existsSync(path)) return { data: "", eof: true };
-	const fd = openSync(path, "r");
-	try {
-		const size = fstatSync(fd).size;
-		if (offset >= size) return { data: "", eof: true };
-		const length = size - offset;
-		const buf = Buffer.alloc(length);
-		const n = readSync(fd, buf, 0, length, offset);
-		return { data: buf.subarray(0, n).toString("utf8"), eof: true };
-	} finally {
-		closeSync(fd);
-	}
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
+function _isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -74,11 +58,9 @@ export function projectRunActivity(event: Record<string, unknown>): RunActivity 
 }
 
 export function createFlowEventTailer(deps: FlowEventTailerDeps): FlowEventTailer {
-	const path = registerPath(deps.cwd, "flow-events", `${deps.runId}.jsonl`);
-	const readSlice = deps.readSlice ?? defaultReadSlice;
+	const path = eventStreamPath(deps.cwd, deps.runId);
 	const intervalMs = deps.intervalMs ?? 1000;
-	let offset = 0;
-	let pending = "";
+	const tail = tailEventStream(path, { readSlice: deps.readSlice });
 	let timer: ReturnType<typeof setInterval> | null = null;
 	let lastActivityKey = "";
 
@@ -89,35 +71,13 @@ export function createFlowEventTailer(deps: FlowEventTailerDeps): FlowEventTaile
 		deps.onActivity(activity);
 	};
 
-	const ingestLine = (line: string): void => {
-		const trimmed = line.trim();
-		if (!trimmed) return;
-		let parsed: unknown;
-		try {
-			parsed = JSON.parse(trimmed);
-		} catch {
-			return; // fail closed
-		}
-		if (!isRecord(parsed) || parsed.v !== 1 || typeof parsed.type !== "string") return;
-		if (!LIFECYCLE_TYPES.has(parsed.type)) return;
-		if (parsed.executionId !== deps.executionId) return;
-		const activity = projectRunActivity(parsed);
-		if (activity) emit(activity);
-	};
-
 	const tick = (): void => {
-		const { data } = readSlice(path, offset);
-		if (!data) return;
-		offset += Buffer.byteLength(data, "utf8");
-		pending += data;
-		let idx = pending.indexOf("\n");
-		while (idx !== -1) {
-			const line = pending.slice(0, idx);
-			pending = pending.slice(idx + 1);
-			ingestLine(line);
-			idx = pending.indexOf("\n");
+		for (const event of tail.next()) {
+			if (!LIFECYCLE_TYPES.has(event.type)) continue;
+			if (event.executionId !== deps.executionId) continue;
+			const activity = projectRunActivity(event as unknown as Record<string, unknown>);
+			if (activity) emit(activity);
 		}
-		// Hold truncated final line in `pending` until the next newline.
 	};
 
 	return {

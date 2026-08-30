@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { ulid } from "ulid";
-import { LOG_PATH, REPO } from "./config.js";
+import { LOG_PATH, logPathFor, REPO } from "./config.js";
 import { ensureDevRoot, registerPath } from "./registers.js";
 import type { CycleLogEntry, EventLogDiagnostic, EventLogDiagnosticKind, EventLogDiagnostics, EventWriter, FlowEvent, FlowEventInput, FlowEventProjection, PelaggioEventType, ReadEventLogResult } from "./types.js";
 
@@ -71,7 +71,8 @@ function isCycleFields(value: UnknownRecord): value is UnknownRecord & CycleLogE
 	);
 }
 
-function decodeV1(value: unknown): FlowEvent | undefined {
+/** Validate one parsed `v: 1` envelope (fail closed). Exported so consumers never re-implement the check. */
+export function decodeFlowEvent(value: unknown): FlowEvent | undefined {
 	if (!isRecord(value) || value.v !== 1 || typeof value.type !== "string" || !PELAGGIO_EVENT_TYPE_SET.has(value.type as PelaggioEventType)) return undefined;
 	if (
 		!isUlid(value.eventId) ||
@@ -91,6 +92,87 @@ function decodeV1(value: unknown): FlowEvent | undefined {
 	if (value.type === "pelaggio.run-started" && !isRunStartedPayload(value)) return undefined;
 	if (value.type === "pelaggio.run-finished" && !isRunFinishedPayload(value)) return undefined;
 	return value as FlowEvent;
+}
+
+/** Decode one JSONL line: unparsable or non-conforming lines yield `undefined`, never throw. */
+export function decodeFlowEventLine(line: string): FlowEvent | undefined {
+	const trimmed = line.trim();
+	if (!trimmed) return undefined;
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(trimmed);
+	} catch {
+		return undefined;
+	}
+	return decodeFlowEvent(parsed);
+}
+
+export type EventStreamSlice = { data: string; eof: boolean };
+export type ReadEventStreamSlice = (path: string, offset: number) => EventStreamSlice;
+
+/** Default slice reader: the bytes appended since `offset`, `eof` when nothing new (or no file yet). */
+export function readEventStreamSlice(path: string, offset: number): EventStreamSlice {
+	if (!existsSync(path)) return { data: "", eof: true };
+	const fd = openSync(path, "r");
+	try {
+		const size = fstatSync(fd).size;
+		if (offset >= size) return { data: "", eof: true };
+		const length = size - offset;
+		const buffer = Buffer.alloc(length);
+		const read = readSync(fd, buffer, 0, length, offset);
+		return { data: buffer.subarray(0, read).toString("utf8"), eof: offset + read >= size };
+	} finally {
+		closeSync(fd);
+	}
+}
+
+export interface EventStreamTail {
+	/** Decode every complete line appended since the last call (fail closed per line). */
+	next(): FlowEvent[];
+	/** Bytes consumed so far — resume a tail later with `fromOffset`. */
+	readonly offset: number;
+}
+
+/**
+ * Incremental reader over one segment file (`eventStreamPath`): keeps the byte offset and holds a
+ * truncated final line until its newline arrives, so a consumer polling a live writer never sees
+ * a half record. This is the package-level tail the control plane consumes (plan step 8).
+ */
+export function tailEventStream(path: string, options: { fromOffset?: number; readSlice?: ReadEventStreamSlice } = {}): EventStreamTail {
+	const readSlice = options.readSlice ?? readEventStreamSlice;
+	let offset = options.fromOffset ?? 0;
+	let pending = "";
+	return {
+		get offset() {
+			return offset;
+		},
+		next() {
+			const { data } = readSlice(path, offset);
+			if (!data) return [];
+			offset += Buffer.byteLength(data, "utf8");
+			pending += data;
+			const events: FlowEvent[] = [];
+			let idx = pending.indexOf("\n");
+			while (idx !== -1) {
+				const line = pending.slice(0, idx);
+				pending = pending.slice(idx + 1);
+				const event = decodeFlowEventLine(line);
+				if (event) events.push(event);
+				idx = pending.indexOf("\n");
+			}
+			return events;
+		},
+	};
+}
+
+/** `<root>/.dev/flow-events` */
+export function flowEventsDir(root: string): string {
+	return registerPath(root, "flow-events");
+}
+
+/** Segment file for one writer stream — the contract the server tailer and the writer share. */
+export function eventStreamPath(root: string, streamId: string): string {
+	return registerPath(root, "flow-events", `${streamId}.jsonl`);
 }
 
 const RUN_MODES = new Set(["drain", "watch"]);
@@ -127,7 +209,7 @@ export function createEventWriter(options: CreateEventWriterOptions = {}): Event
 	const streamId = options.streamId ?? idFactory();
 	const executionId = options.executionId ?? idFactory();
 	if (!isUlid(streamId) || !isUlid(executionId)) throw new Error("Flow writer IDs must be ULID-shaped");
-	const segmentPath = registerPath(root, "flow-events", `${streamId}.jsonl`);
+	const segmentPath = eventStreamPath(root, streamId);
 	let seq = 0;
 	return {
 		streamId,
@@ -148,11 +230,11 @@ export function createEventWriter(options: CreateEventWriterOptions = {}): Event
 				executionId,
 				causationId: input.causationId ?? null,
 			};
-			const event = decodeV1(candidate);
+			const event = decodeFlowEvent(candidate);
 			if (!event) throw new Error("Invalid flow event");
 			const record = `${JSON.stringify(event)}\n`;
 			if (Buffer.byteLength(record, "utf8") > MAX_FLOW_EVENT_BYTES) throw new Error(`Flow event exceeds ${MAX_FLOW_EVENT_BYTES} byte limit`);
-			mkdirSync(registerPath(root, "flow-events"), { recursive: true });
+			mkdirSync(flowEventsDir(root), { recursive: true });
 			appendFileSync(segmentPath, record, "utf8");
 			seq = event.seq;
 			return event;
@@ -192,7 +274,7 @@ function digestId(domain: string, value: string): string {
 
 function legacyEvent(record: UnknownRecord & CycleLogEntry, source: string, line: number, bytes: string, seq: number): FlowEvent | undefined {
 	const key = `${source}\0${line}\0${bytes}`;
-	return decodeV1({
+	return decodeFlowEvent({
 		...record,
 		v: 1,
 		type: "pelaggio.cycle-completed",
@@ -248,7 +330,7 @@ function readFileEvents(path: string, diagnostics: EventLogDiagnostics): FlowEve
 			diagnose(diagnostics, { kind: "unknownType", source, line, observedType: value.type, message: `Unknown event type: ${value.type}` });
 			continue;
 		}
-		const event = decodeV1(value);
+		const event = decodeFlowEvent(value);
 		if (event) events.push(event);
 		else diagnose(diagnostics, { kind: "malformed", source, line, message: "Invalid event envelope or payload" });
 	}
@@ -263,8 +345,8 @@ export interface ReadEventLogOptions {
 
 export function readEventLog(options: ReadEventLogOptions = {}): ReadEventLogResult {
 	const root = options.root ?? REPO;
-	const eventsDir = options.eventsDir ?? registerPath(root, "flow-events");
-	const cycleLogPath = options.cycleLogPath === undefined ? (root === REPO ? LOG_PATH : registerPath(root, "pelaggio-log.jsonl")) : options.cycleLogPath;
+	const eventsDir = options.eventsDir ?? flowEventsDir(root);
+	const cycleLogPath = options.cycleLogPath === undefined ? logPathFor(root) : options.cycleLogPath;
 	const diagnostics = emptyDiagnostics();
 	const events: FlowEvent[] = [];
 	if (existsSync(eventsDir)) {

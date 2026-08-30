@@ -5,7 +5,7 @@
  * The package ships `.ts` source; plain Node / bundler consumers need a `.ts` loader.
  */
 
-export { loadConfig } from "./config.js";
+export { loadConfig, logPathFor } from "./config.js";
 export type { AppendDecisionsInput, DecisionAppendInput, DecisionWriteResult, MigrateDecisionsResult, RebuildIndexResult } from "./decisions.js";
 export {
 	appendDecisions,
@@ -16,8 +16,23 @@ export {
 	rebuildDecisionIndex,
 	resolveDecision,
 } from "./decisions.js";
-export type { CreateEventWriterOptions, ReadEventLogOptions } from "./flow-events.js";
-export { createEventWriter, foldEvents, MAX_EVENT_DIAGNOSTIC_DETAILS, MAX_FLOW_EVENT_BYTES, PELAGGIO_EVENT_TYPE_SET, PELAGGIO_EVENT_TYPES, projectEvents, readEventLog } from "./flow-events.js";
+export type { CreateEventWriterOptions, EventStreamSlice, EventStreamTail, ReadEventLogOptions, ReadEventStreamSlice } from "./flow-events.js";
+export {
+	createEventWriter,
+	decodeFlowEvent,
+	decodeFlowEventLine,
+	eventStreamPath,
+	flowEventsDir,
+	foldEvents,
+	MAX_EVENT_DIAGNOSTIC_DETAILS,
+	MAX_FLOW_EVENT_BYTES,
+	PELAGGIO_EVENT_TYPE_SET,
+	PELAGGIO_EVENT_TYPES,
+	projectEvents,
+	readEventLog,
+	readEventStreamSlice,
+	tailEventStream,
+} from "./flow-events.js";
 export type { FlowCandidate, FlowDependency, FlowEligibleCandidate, FlowEvaluation, FlowItemVerdict, FlowPolicy, FlowReadiness, FlowSnapshot, FlowVerdictReason, QuickScopeInput } from "./flow-policy.js";
 export { DEFAULT_FLOW_POLICY, FifoPolicy } from "./flow-policy.js";
 export { orchestrate as run } from "./orchestrator.js";
