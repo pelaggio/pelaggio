@@ -861,7 +861,9 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 	const storeTrust = poolStoreTrust(poolProviders);
 	const carry = options.carry && storeTrust.trusted ? options.carry : undefined;
 	if (options.carry && !storeTrust.trusted) {
-		process.stderr.write(`⚠ carry consumption refused — review pool contains store-writable provider(s) ${storeTrust.untrusted.join(", ")} without a proven .dev store-write denial; running cold (records still written, not consumed)\n`);
+		process.stderr.write(
+			`⚠ carry consumption refused — review pool contains store-writable provider(s) ${storeTrust.untrusted.join(", ")} without a proven harness-register store-write denial; running cold (records still written, not consumed)\n`,
+		);
 	}
 	// #495: seeded survivors join the first verification pass's candidates and persist under
 	// applyReviewPass's omission-never-refutes rule; gate PASS still requires converged-empty +

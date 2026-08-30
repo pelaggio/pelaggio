@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { type EgressAuth, type EgressBrokerHandle, type EgressRequester, startEgressBroker } from "./egress-broker.js";
 import { resolveEgressPolicy } from "./egress-policies.js";
+import { registerPath } from "./registers.js";
 import { buildAgentEnv, makeSecretScrubber } from "./secret-hygiene.js";
 
 export type ContainedRunMode = { kind: "command"; argv: readonly [string, ...string[]] } | { kind: "self-test" };
@@ -373,7 +374,7 @@ export async function runContained(options: ContainedRunOptions, deps: Contained
 		if (execution.signal) throw new Error(`contained launcher terminated by ${execution.signal}`);
 		const writeSet = await computeWriteSet(before, worktree, deps);
 		if (options.debug) {
-			artifactDir = join(worktree, ".dev", "contained-runs", basename(privateDir));
+			artifactDir = registerPath(worktree, "contained-runs", basename(privateDir));
 			await mkdir(artifactDir, { recursive: true });
 			await chmod(gitMask, 0o600);
 			await cp(gitMask, join(artifactDir, "git-mask"));

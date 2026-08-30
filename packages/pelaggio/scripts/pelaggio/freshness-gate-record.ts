@@ -1,5 +1,6 @@
 import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { type RegisterName, registerPath } from "./registers.js";
 
 /**
  * Record that the deterministic PR-mode freshness gates (`typecheck:ratchet` backstop +
@@ -34,7 +35,7 @@ export type NewFreshnessGateRecord = Omit<FreshnessGateRecordV1, "schemaVersion"
 
 /** Store directory name under `MAIN_REPO/.dev/`. Exported so the step-runner's Bash register
  *  denial names the exact same path as the store — the deny list must not drift. */
-export const FRESHNESS_GATE_RECORDS_DIR = "freshness-gate-records";
+export const FRESHNESS_GATE_RECORDS_DIR: RegisterName = "freshness-gate-records";
 const SHA_RE = /^[0-9a-f]{7,40}$/i;
 
 /** #511: the only trusted source — process-local, seeded exclusively by `writeFreshnessGateRecord`. */
@@ -45,7 +46,7 @@ function registryKey(mainRepo: string, headSha: string): string {
 }
 
 export function freshnessGateRecordsDir(mainRepo: string): string {
-	return resolve(mainRepo, ".dev", FRESHNESS_GATE_RECORDS_DIR);
+	return registerPath(mainRepo, FRESHNESS_GATE_RECORDS_DIR);
 }
 
 function recordPath(mainRepo: string, headSha: string): string {

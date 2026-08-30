@@ -8,10 +8,11 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { REPO } from "./config.js";
 import { sessionsDir, sweepExpiredSessions } from "./confinement/sessions.js";
+import { registerRelativePath } from "./registers.js";
 
 export function sessionsSweepMain(args = process.argv.slice(2), mainRepo = REPO): number {
 	if (args.includes("--help") || args.includes("-h")) {
-		console.log("Usage: pelaggio sessions-sweep\n\nRemove content-expired session records under MAIN_REPO/.dev/sessions/.\nRetains live, unreadable, and malformed records fail-closed.");
+		console.log(`Usage: pelaggio sessions-sweep\n\nRemove content-expired session records under MAIN_REPO/${registerRelativePath("sessions")}/.\nRetains live, unreadable, and malformed records fail-closed.`);
 		return 0;
 	}
 	const result = sweepExpiredSessions(mainRepo);

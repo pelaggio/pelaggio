@@ -21,6 +21,7 @@ export { createEventWriter, foldEvents, MAX_EVENT_DIAGNOSTIC_DETAILS, MAX_FLOW_E
 export type { FlowCandidate, FlowDependency, FlowEligibleCandidate, FlowEvaluation, FlowItemVerdict, FlowPolicy, FlowReadiness, FlowSnapshot, FlowVerdictReason, QuickScopeInput } from "./flow-policy.js";
 export { DEFAULT_FLOW_POLICY, FifoPolicy } from "./flow-policy.js";
 export { orchestrate as run } from "./orchestrator.js";
+export { REGISTERS, type RegisterName, registerPath, registerRelativePath } from "./registers.js";
 export type { RoadmapItem, RoadmapSource, RoadmapSourceName, Scope } from "./roadmap/index.js";
 export { getRoadmapSource } from "./roadmap/index.js";
 export type { Stats } from "./stats.js";

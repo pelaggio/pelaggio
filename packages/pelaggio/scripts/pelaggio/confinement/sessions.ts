@@ -15,6 +15,7 @@ import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { registerPath } from "../registers.js";
 import type { SessionEvaluatorContext, SessionIdentity, SessionInventory } from "../types.js";
 
 export type { SessionEvaluatorContext, SessionIdentity, SessionInventory } from "../types.js";
@@ -96,7 +97,7 @@ export interface SweepResult {
 // ── Paths ──────────────────────────────────────────────────────────────
 
 export function sessionsDir(mainRepo: string): string {
-	return resolve(mainRepo, ".dev", "sessions");
+	return registerPath(mainRepo, "sessions");
 }
 
 export function sessionRecordPath(mainRepo: string, sessionId: string): string {

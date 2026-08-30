@@ -255,9 +255,12 @@ describe("parseShipDecisionEffect", () => {
 		// itemId is harness-controlled today, but the reader must not depend on that: a crafted id that
 		// resolves outside the worktree is rejected by the lexical containment check before any open.
 		const evilId = "x/../../../../../../../../etc/evil";
-		const bodyFile = shipBodyFile(evilId);
+		// Since plan step 7a the path builder itself refuses a traversal segment (registers.ts fails
+		// closed); the parser's lexical containment check remains the backstop for a crafted block.
+		assert.throws(() => shipBodyFile(evilId), /would leave the register/);
+		const bodyFile = `.dev/ship/pr-body-${evilId}.md`;
 		const dec = `SHIP_DECISION\n{"target":"pull-request","itemId":${JSON.stringify(evilId)},"headBranch":"feat/x","prTitle":"Ship","prBodyFile":${JSON.stringify(bodyFile)}}\nEND_SHIP_DECISION`;
-		assert.throws(() => parseShipDecisionEffect(step(dec), { itemId: evilId, target: "pull-request", worktree: wt }), /escapes the worktree/);
+		assert.throws(() => parseShipDecisionEffect(step(dec), { itemId: evilId, target: "pull-request", worktree: wt }), /escapes the worktree|would leave the register/);
 	});
 
 	it("rejects missing block, bad JSON, item mismatch, target mismatch, and missing prBodyFile", () => {

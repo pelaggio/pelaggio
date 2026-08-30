@@ -22,6 +22,7 @@ import { type PipelineDeps, runPipeline } from "./pipeline.js";
 import { buildFailClosedComment, type PrReviewGateResult, resolveCarryOptions, runPrReviewGate } from "./pr-review-gate.js";
 import { gateRecordsDir, type NewPrReviewGateRecord, writePrReviewGateRecord } from "./pr-review-gate-record.js";
 import { detectUnattendedSignals, resolveAuthoringReviewExecution } from "./provider-routing.js";
+import { ensureDevRoot, registerFamilyPath, registerFamilyRelativePath } from "./registers.js";
 import { adjudicationSourcesDir, fleetRecordDigestOf, writeAdjudicationSourceRecord } from "./review/adjudication.js";
 import { prFindingDispositionsDir, writePrFindingDispositionRecord } from "./review/carry.js";
 import { claimReviewRequest, completeReviewRequest, listReviewRequests, type ReviewRequestRecord, reclaimStaleReviewClaims, reviewDrainLockPath, reviewRequestsDir, unclaimReviewRequest } from "./review-request-queue.js";
@@ -516,7 +517,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			`${A.bold("pelaggio")}  ${cyclesLabel} cycle(s)${isParallel ? `  ${A.dim("×")}${parallel} parallel` : ""}  ${A.dim("budget")} $${maxBudget.toFixed(2)}${continuousBanner}${targetBanner}${dryRun ? `  ${A.yellow("[DRY RUN]")}` : ""}`,
 		);
 		if (isParallel && v) {
-			console.log(`${A.dim("logs")}  .dev/pelaggio-{N}.log`);
+			console.log(`${A.dim("logs")}  ${registerFamilyRelativePath("pelaggio-", "{N}.log")}`);
 		}
 		console.log("");
 
@@ -747,8 +748,8 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 
 				let logPath: string | undefined;
 				if (isParallel && v) {
-					mkdirSync(resolve(REPO, ".dev"), { recursive: true });
-					logPath = resolve(REPO, ".dev", `pelaggio-${cycle}.log`);
+					ensureDevRoot(REPO);
+					logPath = registerFamilyPath(REPO, "pelaggio-", `${cycle}.log`);
 					appendFileSync(logPath, `${"=".repeat(60)}\nautopilot cycle ${cycle} — ${new Date().toISOString()}\n${"=".repeat(60)}\n`);
 				}
 
@@ -825,7 +826,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				status.step = undefined;
 				status.turns = undefined;
 
-				const logRef = logPath ? `  ${A.dim(`→ .dev/pelaggio-${cycle}.log`)}` : "";
+				const logRef = logPath ? `  ${A.dim(`→ ${registerFamilyRelativePath("pelaggio-", `${cycle}.log`)}`)}` : "";
 				const detail = resultDetail(result);
 				console.log(`${resultIcon(result)} cycle ${cycle}: ${A.bold(result.itemId ?? "?")} — ${result.costEstimated ? "~" : ""}$${result.cost.toFixed(2)}${detail ? `  ${A.dim(detail)}` : ""}${logRef}`);
 
@@ -938,7 +939,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				if (v) liveStatus.render();
 				let resumeLogPath: string | undefined;
 				if (isParallel && v) {
-					resumeLogPath = resolve(REPO, ".dev", `pelaggio-resume-${id.toLowerCase()}.log`);
+					resumeLogPath = registerFamilyPath(REPO, "pelaggio-", `resume-${id.toLowerCase()}.log`);
 					appendFileSync(resumeLogPath, `${"=".repeat(60)}\nresume ${id} — ${new Date().toISOString()}\n${"=".repeat(60)}\n`);
 				}
 				const sf = resumeFlags["review-findings"] ? "implement" : _detectResumeStep(id, wt);

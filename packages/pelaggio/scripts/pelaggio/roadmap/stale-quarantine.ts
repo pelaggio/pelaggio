@@ -20,8 +20,9 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname } from "node:path";
 import { mainWorktree } from "../git.js";
+import { type RegisterName, registerPath } from "../registers.js";
 import { withMutationLock } from "./mutation-lock.js";
 import type { StaleHit } from "./stale-scan.js";
 import type { RoadmapItemStatus } from "./types.js";
@@ -44,7 +45,7 @@ export interface StaleQuarantineFile {
 	readonly entries: Readonly<Record<string, StaleQuarantineEntry>>;
 }
 
-const QUARANTINE_FILE = "stale-quarantine.json";
+const QUARANTINE_FILE: RegisterName = "stale-quarantine.json";
 const EMPTY: StaleQuarantineFile = { version: 1, entries: {} };
 
 function normalize(value: string): string {
@@ -62,7 +63,7 @@ export function itemFingerprint(item: Pick<RoadmapItemStatus, "id" | "title" | "
 
 /** Pure: file location for an already-resolved main repo. */
 export function quarantinePath(mainRepo: string): string {
-	return resolve(mainRepo, ".dev", QUARANTINE_FILE);
+	return registerPath(mainRepo, QUARANTINE_FILE);
 }
 
 function readFileAt(mainRepo: string): StaleQuarantineFile {

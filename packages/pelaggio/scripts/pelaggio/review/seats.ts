@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
+import { type RegisterName, registerPath } from "../registers.js";
 
 /**
  * Per-seat detached checkouts for concurrent authoring-loop reviewers (#269).
@@ -25,10 +26,10 @@ export type GitExec = (args: string[], cwd: string) => string;
 
 const defaultGitExec: GitExec = (args, cwd) => execFileSync("git", args, { cwd, encoding: "utf-8" });
 
-const SEATS_DIR = "authoring-review-seats";
+const SEATS_DIR: RegisterName = "authoring-review-seats";
 
 export function authoringReviewSeatsRoot(mainRepo: string): string {
-	return resolve(mainRepo, ".dev", SEATS_DIR);
+	return registerPath(mainRepo, SEATS_DIR);
 }
 
 /**

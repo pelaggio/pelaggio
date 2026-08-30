@@ -8,11 +8,8 @@ import { CONFIG, REPO, resolveStepSettings } from "../config.js";
 import type { MainCheckoutDeltaObserver } from "../confinement/roots.js";
 import { sessionsDir } from "../confinement/sessions.js";
 import { emitDecisionsFromText } from "../decisions.js";
-import { FRESHNESS_GATE_RECORDS_DIR, freshnessGateRecordsDir } from "../freshness-gate-record.js";
 import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseWaitFlag, resolveParkReset } from "../outcome-classify.js";
-import { gateRecordsDir, PR_REVIEW_GATE_RECORDS_DIR } from "../pr-review-gate-record.js";
-import { ADJUDICATION_SOURCES_DIR, adjudicationSourcesDir } from "../review/adjudication.js";
-import { PR_FINDING_DISPOSITIONS_DIR, prFindingDispositionsDir } from "../review/carry.js";
+import { bashDeniedRegisterPattern, bashDeniedRegisters, registerRelativePath, writeDeniedRegisterFor } from "../registers.js";
 import { composeSystemAppend, createStepTextProjection, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath, type StepTextProjection } from "../step-runner-shared.js";
 import { MUTATING_TOOLS, toolBrief } from "../tui.js";
 import type { ProviderCapabilities, TokenUsage } from "../types.js";
@@ -112,16 +109,17 @@ function pathUnderRoot(abs: string, root: string): boolean {
  * denied outright — the session-evidence store plus BOTH pr-adjudicate evidence stores
  * (`pelaggio pr-adjudicate` consumes gate records and adjudication-source records as
  * authorization, so a seat that can shell-redirect into either can forge a consensus-block
- * record + matching source and turn a red review green without fleet evidence). Names come from
- * the canonical storage modules so the deny list cannot drift from the real paths.
+ * record + matching source and turn a red review green without fleet evidence). The set is
+ * derived from `registers.ts` (every harness-written register a skill does not read), so a new
+ * harness register is denied by construction — plan step 7a; nothing is hand-listed here.
  * `.dev/freshness-gate-records/` (#424) joins the list as defense in depth: gate-skip trust
  * is in-process only (#511 — a forged disk record no longer authorizes anything), but the
  * observability register still must not be seat-writable.
  * `.dev/pr-review-finding-dispositions/` (#495) joins for the same reason as the adjudication
  * stores: a seat that could write it could forge an auto-refutation of a real finding.
  */
-const BASH_DENIED_DEV_REGISTERS = ["sessions", PR_REVIEW_GATE_RECORDS_DIR, ADJUDICATION_SOURCES_DIR, PR_FINDING_DISPOSITIONS_DIR, FRESHNESS_GATE_RECORDS_DIR] as const;
-const BASH_DENIED_DEV_REGISTER_RE = new RegExp(`(^|[\\s"'=/])\\.dev/(${BASH_DENIED_DEV_REGISTERS.join("|")})(/|\\b)`);
+const BASH_DENIED_DEV_REGISTERS = bashDeniedRegisters();
+const BASH_DENIED_DEV_REGISTER_RE = bashDeniedRegisterPattern();
 
 /**
  * #369: Block Write/Edit into main and every known foreign Git worktree root,
@@ -148,8 +146,7 @@ export function blockForeignRootWrite(input: HookInput, cwd: string, mainRepo: s
 			return {
 				decision: "block" as const,
 				reason:
-					"This Bash command references a harness-owned register (docs/decision-log/, .dev/sessions/, " +
-					`.dev/${PR_REVIEW_GATE_RECORDS_DIR}/, .dev/${ADJUDICATION_SOURCES_DIR}/, .dev/${PR_FINDING_DISPOSITIONS_DIR}/, or .dev/${FRESHNESS_GATE_RECORDS_DIR}/). These are written only by the harness; ` +
+					`This Bash command references a harness-owned register (docs/decision-log/ or one of ${BASH_DENIED_DEV_REGISTERS.map((name) => `${registerRelativePath(name)}/`).join(", ")}). These are written only by the harness; ` +
 					'emit a "DECISION:" line in your step output for decisions — review/adjudication evidence is produced only by the harness\'s own review commands.',
 			};
 		}
@@ -163,27 +160,27 @@ export function blockForeignRootWrite(input: HookInput, cwd: string, mainRepo: s
 	const mainAbs = resolve(mainRepo);
 	const abs = fp.startsWith("/") ? resolve(fp) : resolve(cwdAbs, fp);
 
-	// Sessions-dir denial is absolute — even when cwd/own would otherwise allow.
+	// Harness-register denial is absolute — even when cwd/own would otherwise allow. The set is
+	// derived from `registers.ts` (every harness-written register: the session-evidence store
+	// #386, both pr-adjudicate evidence stores and finding dispositions #510 1a / #495,
+	// freshness-gate records #424, effects, receipts, attempts, flow events, review records,
+	// the locks and the cycle log). It is checked under every root a seat could reach — the main
+	// checkout, the step cwd, and the own worktree — because effects, receipts and review records
+	// are written under the item WORKTREE, which the cwd exemption below would otherwise allow.
 	const sessionsAbs = sessionsDir(mainAbs);
-	if (pathUnderRoot(abs, sessionsAbs)) {
-		return {
-			decision: "block" as const,
-			reason: `Path "${fp}" targets the session-record directory (${sessionsAbs}), which is harness-owned evidence. Do not write session records from agent tools.`,
-		};
-	}
-
-	// Adjudication-evidence denial is likewise absolute (#510 1a): these stores authorize
-	// `review=success` without a fleet run, so no seat may Write/Edit them — even when cwd
-	// or ownWorktree would otherwise allow the path. Freshness-gate records (#424) get the
-	// same treatment as defense in depth (gate-skip trust is in-process only — #511 — but
-	// the observability register still must not be seat-writable).
-	for (const evidenceRoot of [gateRecordsDir(mainAbs), adjudicationSourcesDir(mainAbs), prFindingDispositionsDir(mainAbs), freshnessGateRecordsDir(mainAbs)]) {
-		if (pathUnderRoot(abs, evidenceRoot)) {
+	for (const root of new Set([mainAbs, cwdAbs, ...(ownWorktree ? [resolve(ownWorktree)] : [])])) {
+		const denied = writeDeniedRegisterFor(root, abs);
+		if (!denied) continue;
+		if (denied.path === sessionsAbs) {
 			return {
 				decision: "block" as const,
-				reason: `Path "${fp}" targets a harness-owned evidence store (${evidenceRoot}). Do not write gate, adjudication-source, finding-disposition, or freshness-gate records from agent tools.`,
+				reason: `Path "${fp}" targets the session-record directory (${sessionsAbs}), which is harness-owned evidence. Do not write session records from agent tools.`,
 			};
 		}
+		return {
+			decision: "block" as const,
+			reason: `Path "${fp}" targets a harness-owned evidence store (${denied.path}). Harness registers (gate, adjudication-source, finding-disposition, freshness-gate, effects, receipt, attempt, flow-event and review records, locks and the cycle log) are written only by the harness, never from agent tools.`,
+		};
 	}
 
 	// Decision-log denial is likewise absolute (#386): docs/decision-log/ holds

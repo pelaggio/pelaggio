@@ -6,6 +6,7 @@ import type { MainCheckoutDeltaObserver, MainCheckoutDeltaResult } from "../conf
 import { codexProvider } from "../providers/codex.js";
 import { grokCapabilities } from "../providers/grok.js";
 import { OPENCODE_CAPABILITIES, opencodeProvider } from "../providers/opencode.js";
+import { bashDeniedRegisters } from "../registers.js";
 import {
 	beginMainCheckoutAttribution,
 	blockForeignRootWrite,
@@ -284,6 +285,57 @@ describe("blockForeignRootWrite (#369 / #269 nested seats)", () => {
 	it("respects path-component boundaries (prefix sibling names)", () => {
 		const almost = "/home/user/my-repo-269-extra";
 		assert.deepEqual(blockForeignRootWrite(write(`${almost}/x.ts`), almost, main, [main, sibling, almost], almost), {});
+	});
+
+	it("denies Bash mention of every derived harness register, including the four step 7a adds (effects, receipts, attempts, flow-events)", () => {
+		const main = "/tmp/main";
+		const wt = "/tmp/main-wt-12";
+		for (const name of bashDeniedRegisters()) {
+			assert.equal(blockForeignRootWrite(bash(`cat > .dev/${name}/x.json`), wt, main, [main, wt], wt).decision, "block", name);
+		}
+		for (const name of ["effects", "execution-receipts", "attempts", "flow-events"]) {
+			assert.equal(blockForeignRootWrite(bash(`echo '{}' >> .dev/${name}/run/1.json`), wt, main, [main, wt], wt).decision, "block", name);
+		}
+		for (const cmd of ["cat > .dev//effects/run/1.json", "cat > .dev/./effects/run/1.json", "cat > .dev/././execution-receipts/x"]) assert.equal(blockForeignRootWrite(bash(cmd), wt, main, [main, wt], wt).decision, "block", cmd);
+		for (const cmd of ["cat .dev/effects-old/x", "cat .dev/pr-review-gate-records.backup"]) assert.deepEqual(blockForeignRootWrite(bash(cmd), wt, main, [main, wt], wt), {}, cmd);
+	});
+
+	it("denies Write/Edit into harness registers under the step cwd and own worktree, not only under main (#730 review)", () => {
+		const main = "/tmp/main";
+		const wt = "/tmp/main-wt-12";
+		// Effects, receipts and review records are written under the item WORKTREE: the cwd
+		// exemption must not reach them.
+		for (const rel of [".dev/effects/run/plan-1.json", ".dev/execution-receipts/run/plan-1.json", ".dev/review-records/run.json", ".dev/flow-events/01J.jsonl", ".dev/attempts/12/1.json"]) {
+			assert.equal(blockForeignRootWrite(edit(`${wt}/${rel}`), wt, main, [main, wt], wt).decision, "block", `cwd ${rel}`);
+			assert.equal(blockForeignRootWrite(edit(rel), wt, main, [main, wt], wt).decision, "block", `relative ${rel}`);
+			assert.equal(blockForeignRootWrite(write(`${wt}/${rel}`), main, main, [main, wt], wt).decision, "block", `own worktree ${rel}`);
+		}
+		// File-shaped harness registers too — including the ones skills may READ.
+		for (const rel of [".dev/roadmap-mutation.lock", ".dev/revise-claim.lock", ".dev/node-modules-repair.lock", ".dev/pelaggio-log.jsonl", ".dev/stale-quarantine.json", ".dev/pelaggio-3.log", ".dev/pelaggio-resume-12.log"]) {
+			assert.equal(blockForeignRootWrite(edit(`${main}/${rel}`), main, main, [main]).decision, "block", rel);
+		}
+	});
+
+	it("never fires on skill-read, agent-written or seat-tree registers (no false fire)", () => {
+		const main = "/tmp/main";
+		const wt = "/tmp/main-wt-12";
+		for (const cmd of [
+			"tail -n 20 .dev/pelaggio-log.jsonl",
+			"cat .dev/pelaggio-3.log",
+			"cat .dev/stale-quarantine.json",
+			"ls .dev/plans && cat .dev/plans/12.md",
+			"cat .dev/ship/pr-body-12.md",
+			"cat .dev/review-findings-12.md",
+			"cd .dev/authoring-review-seats/abc/seat-p1 && pnpm test",
+			"git -C .dev/review-heads/abc status",
+		]) {
+			assert.deepEqual(blockForeignRootWrite(bash(cmd), wt, main, [main, wt], wt), {}, cmd);
+		}
+		// Agent-written registers under the step cwd stay writable; harness registers do not.
+		for (const rel of [".dev/plans/12.md", ".dev/ship/pr-body-12.md", ".dev/review-findings-12.md", "src/index.ts"]) {
+			assert.deepEqual(blockForeignRootWrite(edit(`${wt}/${rel}`), wt, main, [main, wt], wt), {}, rel);
+		}
+		assert.equal(blockForeignRootWrite(edit(`${wt}/.dev/effects/run/plan-1.json`), wt, main, [main, wt], wt).decision, "block");
 	});
 
 	it("ignores Bash commands that do not touch harness-owned registers (residual)", () => {

@@ -49,6 +49,7 @@ import { classifyParkReason, isTransientSdkError } from "./outcome-classify.js";
 import { parseDeferredItems, parsePickItem, parsePickResult, pickDivergedFromPin } from "./pick-parse.js";
 import { type PrReviewGateResult, runPrReviewGate } from "./pr-review-gate.js";
 import { capabilityMapFrom, resolveAuthoringReviewConfig, resolveAuthoringReviewExecution } from "./provider-routing.js";
+import { registerPath, registerRelativePath } from "./registers.js";
 import { runReviewLoop } from "./review/loop.js";
 import { type ReviewRecord, renderReviewRecord, writeReviewRecord } from "./review/record.js";
 import { cleanupAuthoringReviewSeatsForSha, isAuthoringReviewSeatPath, prepareAuthoringReviewSeat } from "./review/seats.js";
@@ -1449,7 +1450,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			}
 		}
 		const implementTurns = computeImplementTurns(planBody, resolveStepSettings(CONFIG, profile, "implement").turns);
-		const planRef = planPath ? `Read the plan at \`${planPath}\`.` : `Find the plan in \`${resolve(REPO, ".dev", "plans")}/\` (filename matches branch without \`feat/\` prefix).`;
+		const planRef = planPath ? `Read the plan at \`${planPath}\`.` : `Find the plan in \`${registerPath(REPO, "plans")}/\` (filename matches branch without \`feat/\` prefix).`;
 		const worktreeHint = [
 			`**Your working directory is**: \`${worktree}\`.`,
 			`Any path the plan writes as \`foo/bar\` (project-relative) means \`${worktree}/foo/bar\` — use that absolute form when calling Edit/Write/Bash, so the worktree-isolation hook does not mistake it for a main-repo reference.`,
@@ -1788,7 +1789,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				const recordPath = writeReviewRecord(worktree!, record);
 				reviewRecordMarkdown = renderReviewRecord(record);
 				log(`review record → ${recordPath}`);
-				const reviewRecordSource = `.dev/review-records/${record.runId}.json`;
+				const reviewRecordSource = registerRelativePath("review-records", `${record.runId}.json`);
 				// Aggregate authoring-review provenance at reserved attempt 0 (seat step() calls
 				// use 1-indexed pass as attempt; effectManifestPath is `${step}-${attempt}.json`).
 				const seats: ReviewSeatIdentity[] = [

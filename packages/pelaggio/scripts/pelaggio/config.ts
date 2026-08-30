@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { basename, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { NOTIFY_EVENTS, NOTIFY_FORMATS, type NotifyConfig, type NotifyEvent, type NotifyFormat } from "./notify-schema.js";
+import { registerPath } from "./registers.js";
 import { type RawTaxonomyInput, resolveTaxonomy, type TaxonomyConfig } from "./review/taxonomy.js";
 import { type GithubRoadmapConfig, isScope, type LinearRoadmapConfig, PLAN_LOCATIONS, type PlanLocation, ROADMAP_SOURCE_NAMES, type RoadmapSourceName, type Scope } from "./roadmap/types.js";
 import { ALL_STEPS, type Step } from "./step-names.js";
@@ -44,7 +45,7 @@ export function resolveRepo(): string {
 }
 
 export const REPO = resolveRepo();
-export const LOG_PATH = resolve(REPO, ".dev", "pelaggio-log.jsonl");
+export const LOG_PATH = registerPath(REPO, "pelaggio-log.jsonl");
 
 // ── Model literals ─────────────────────────────────────────────────────
 

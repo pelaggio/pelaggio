@@ -1,6 +1,7 @@
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync, unlinkSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import { EffectsManifestError, type ShipDecisionEffect } from "../effects.js";
+import { registerRelativePath } from "../registers.js";
 import type { ShipTargetName, StepResult } from "../types.js";
 import { SHIP_TARGET_NAMES } from "./index.js";
 
@@ -10,7 +11,7 @@ const MAX_PR_BODY_BYTES = 512 * 1024;
 
 /** The fixed, harness-owned location the ship worker writes the PR body to, relative to the worktree. */
 export function shipBodyFile(itemId: string): string {
-	return `.dev/ship/pr-body-${itemId}.md`;
+	return registerRelativePath("ship", `pr-body-${itemId}.md`);
 }
 
 /**

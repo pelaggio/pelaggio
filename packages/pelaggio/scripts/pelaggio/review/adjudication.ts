@@ -12,6 +12,7 @@ import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSy
 import { resolve } from "node:path";
 import { parsePatch, type StructuredPatch } from "diff";
 import type { NewPrReviewOperatorGateRecord, PrReviewFindingDispositionEntry, PrReviewGateRecord } from "../pr-review-gate-record.js";
+import { type RegisterName, registerPath } from "../registers.js";
 import { escapeMarkdown } from "../text.js";
 import type { PrReviewAgreement } from "../types.js";
 import { type ClassificationResult, type ClassificationSignalKind, materializeAuthoringFinding, type ReviewFinding, type ReviewFindingClass, type ReviewFindingSeverity, reviewFindingFingerprint } from "./findings.js";
@@ -27,7 +28,7 @@ import { type FindingTier, isWellFormedClassId, type TaxonomyConfig, tierOf } fr
  */
 export const PR_ADJUDICATION_MARKER = "<!-- pelaggio-pr-adjudication -->";
 
-export const ADJUDICATION_SOURCES_DIR = "pr-review-adjudication-sources";
+export const ADJUDICATION_SOURCES_DIR: RegisterName = "pr-review-adjudication-sources";
 export const ADJUDICATION_SOURCE_MAX_BYTES = 1024 * 1024;
 export const ADJUDICATION_SOURCE_MAX_SURVIVORS = 64;
 export const ADJUDICATION_SOURCE_MAX_PATH = 512;
@@ -128,7 +129,7 @@ export type InterdiffEvaluation = { kind: "eligible"; digest: string; dispositio
 export type AdjudicationSourceBindResult = { ok: true } | { ok: false; reason: string };
 
 export function adjudicationSourcesDir(mainRepo: string): string {
-	return resolve(mainRepo, ".dev", ADJUDICATION_SOURCES_DIR);
+	return registerPath(mainRepo, ADJUDICATION_SOURCES_DIR);
 }
 
 export function fleetRecordDigestOf(bytes: Buffer | string): string {

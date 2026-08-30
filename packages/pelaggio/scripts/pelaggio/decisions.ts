@@ -3,7 +3,9 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import { listWorktreesIn } from "./git.js";
+import { registerRelativePath } from "./registers.js";
 import { withMutationLock } from "./roadmap/mutation-lock.js";
+import { escapeRegExp } from "./text.js";
 import type { Decision, EmittedDecision, ReviewEscalation, ReviewResolution, Step } from "./types.js";
 
 export const DECISIONS_HEADER = "| Decision | Status | Chosen/leaning | Alternatives | Source | Date |";
@@ -990,7 +992,7 @@ function ownerFromSource(source: string, escalationItemId?: string): string {
 	}
 	const issue = source.match(/github\.com\/[^/]+\/[^/]+\/issues\/(\d+)/i);
 	if (issue?.[1]) return validateOwner(issue[1]);
-	const review = source.match(/\.dev\/review-records\/[^/]*-(\d+)\.json$/);
+	const review = source.match(new RegExp(`^${escapeRegExp(registerRelativePath("review-records"))}/[^/]*-(\\d+)\\.json$`));
 	if (review?.[1]) return validateOwner(review[1]);
 	if (/^\d+$/.test(source.trim())) return validateOwner(source.trim());
 	const bare = source.match(/^#?(\d+)$/);
