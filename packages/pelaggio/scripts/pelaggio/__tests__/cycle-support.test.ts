@@ -253,6 +253,8 @@ describe("classifySecurityReviewDiff", () => {
 			"packages/pelaggio/scripts/pelaggio/git.ts",
 			"packages/pelaggio/scripts/pelaggio/outcome-classify.ts",
 			"packages/pelaggio/scripts/pelaggio/cycle-support.ts",
+			"packages/pelaggio/scripts/pelaggio/confinement/roots.ts",
+			"packages/pelaggio/scripts/pelaggio/text.ts",
 		]) {
 			const signal = classifySecurityReviewDiff([file], `diff --git a/${file} b/${file}\n+const label = "standard";\n`);
 			assert.equal(signal.triggered, true, file);
