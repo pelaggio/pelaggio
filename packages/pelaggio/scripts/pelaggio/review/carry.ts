@@ -13,6 +13,7 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { DEV_DIR, type RegisterName, registerPath } from "../registers.js";
 import type { ProviderName, PrReviewAgreement } from "../types.js";
 import { normalizeGitPath } from "./adjudication.js";
 import { materializeAuthoringFinding, type ReviewFinding, type ReviewFindingClass, type ReviewFindingSeverity, reviewFindingFingerprint } from "./findings.js";
@@ -20,7 +21,7 @@ import { type FindingTier, isWellFormedClassId, type TaxonomyConfig, tierOf } fr
 
 /** Store directory name under `MAIN_REPO/.dev/`. Exported so the step-runner's Bash register
  *  denial (#510) names the exact same path as the store — the deny list must not drift. */
-export const PR_FINDING_DISPOSITIONS_DIR = "pr-review-finding-dispositions";
+export const PR_FINDING_DISPOSITIONS_DIR: RegisterName = "pr-review-finding-dispositions";
 export const FINDING_DISPOSITION_MAX_BYTES = 1024 * 1024;
 export const FINDING_DISPOSITION_MAX_ENTRIES = 128;
 export const FINDING_DISPOSITION_MAX_PATH = 512;
@@ -88,7 +89,7 @@ export interface PrFindingDispositionRecordV1 {
 export type PrCarryDispositionDraft = Omit<PrFindingDispositionRecordV1, "schemaVersion" | "fleetRecordDigest" | "reviewedAt">;
 
 export function prFindingDispositionsDir(mainRepo: string): string {
-	return resolve(mainRepo, ".dev", PR_FINDING_DISPOSITIONS_DIR);
+	return registerPath(mainRepo, PR_FINDING_DISPOSITIONS_DIR);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -406,7 +407,7 @@ export function selectCarrySource(
 	const forPr = listing.records.filter((record) => record.prNumber === opts.prNumber && record.itemId === opts.itemId && record.headSha !== reviewedSha);
 	if (forPr.length === 0) return { kind: "none" };
 	if (forPr.length > CARRY_MAX_PRIOR_CANDIDATES) {
-		return { kind: "refused", reason: `disposition store holds ${forPr.length} prior records for PR ${opts.prNumber} (carry scans at most ${CARRY_MAX_PRIOR_CANDIDATES}); prune .dev/${PR_FINDING_DISPOSITIONS_DIR}/` };
+		return { kind: "refused", reason: `disposition store holds ${forPr.length} prior records for PR ${opts.prNumber} (carry scans at most ${CARRY_MAX_PRIOR_CANDIDATES}); prune ${DEV_DIR}/${PR_FINDING_DISPOSITIONS_DIR}/` };
 	}
 	const ancestors = forPr.filter((record) => opts.isAncestor(record.headSha, reviewedSha));
 	if (ancestors.length === 0) {

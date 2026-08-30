@@ -6,6 +6,7 @@ import type { MainCheckoutDeltaObserver, MainCheckoutDeltaResult } from "../conf
 import { codexProvider } from "../providers/codex.js";
 import { grokCapabilities } from "../providers/grok.js";
 import { OPENCODE_CAPABILITIES, opencodeProvider } from "../providers/opencode.js";
+import { bashDeniedRegisters } from "../registers.js";
 import {
 	beginMainCheckoutAttribution,
 	blockForeignRootWrite,
@@ -284,6 +285,37 @@ describe("blockForeignRootWrite (#369 / #269 nested seats)", () => {
 	it("respects path-component boundaries (prefix sibling names)", () => {
 		const almost = "/home/user/my-repo-269-extra";
 		assert.deepEqual(blockForeignRootWrite(write(`${almost}/x.ts`), almost, main, [main, sibling, almost], almost), {});
+	});
+
+	it("denies Bash mention of every derived harness register, including the four step 7a adds (effects, receipts, attempts, flow-events)", () => {
+		const main = "/tmp/main";
+		for (const name of bashDeniedRegisters()) {
+			const out = blockForeignRootWrite(bash(`cat > .dev/${name}/x.json`), main, main, [main]);
+			assert.equal(out.decision, "block", name);
+		}
+		for (const name of ["effects", "execution-receipts", "attempts", "flow-events"]) {
+			assert.equal(blockForeignRootWrite(bash(`echo '{}' >> .dev/${name}/run/1.json`), main, main, [main]).decision, "block", name);
+		}
+	});
+
+	it("never fires on skill-read, agent-written or seat-tree registers (no false fire)", () => {
+		const main = "/tmp/main";
+		for (const cmd of [
+			"tail -n 20 .dev/pelaggio-log.jsonl",
+			"cat .dev/pelaggio-3.log",
+			"cat .dev/stale-quarantine.json",
+			"ls .dev/plans && cat .dev/plans/12.md",
+			"cat .dev/ship/pr-body-12.md",
+			"cat .dev/review-findings-12.md",
+			"cd .dev/authoring-review-seats/abc/seat-p1 && pnpm test",
+			"git -C .dev/review-heads/abc status",
+		]) {
+			assert.deepEqual(blockForeignRootWrite(bash(cmd), main, main, [main]), {}, cmd);
+		}
+		// Write/Edit into agent-written registers under the step cwd stays allowed; harness registers do not.
+		assert.deepEqual(blockForeignRootWrite(edit(".dev/plans/12.md"), main, main, [main]), {});
+		assert.equal(blockForeignRootWrite(edit(".dev/effects/run/plan-1.json"), main, main, [main]).decision, "block");
+		assert.equal(blockForeignRootWrite(edit(".dev/flow-events/01J.jsonl"), main, main, [main]).decision, "block");
 	});
 
 	it("ignores Bash commands that do not touch harness-owned registers (residual)", () => {

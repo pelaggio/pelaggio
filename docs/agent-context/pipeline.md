@@ -33,6 +33,8 @@ Normal cycles run in sibling git worktrees. Mutating operations must target the 
 
 `providers/claude.ts` (the Claude seat runner) installs PreToolUse hooks that block writes to `MAIN_REPO` paths when running in a worktree, preventing sibling-worktree corruption. Do not bypass this.
 
+Every `.dev/` child is declared once in `registers.ts` (name, `harness` / `agent` / `seat-tree`, shape); paths are built only through `registerPath()` / `registerRelativePath()`, and `registers.test.ts` fails on any `.dev` literal elsewhere in either package. The seat guards derive from that table: a Bash command that *mentions* a harness-written register a skill does not read is denied outright, and Write/Edit into any such directory is denied absolutely — so adding a harness register denies it by construction. Skill-read registers (`pelaggio-log.jsonl`, `stale-quarantine.json`, `pelaggio-<n>.log`) stay Bash-readable; agent registers (`plans`, `ship`, `review-findings-*.md`) and seat trees stay writable.
+
 Claude currently gets SDK hook enforcement plus system prompt guidance. Codex support must preserve the invariant through its sandbox and post-step checks.
 
 ### Claude SDK seat isolation (#557)

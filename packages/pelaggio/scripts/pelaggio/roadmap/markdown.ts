@@ -1,6 +1,7 @@
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
+import { registerPath } from "../registers.js";
 import { claimedIds, createClaimWorkspace } from "./git-claim.js";
 import { withMutationLock } from "./mutation-lock.js";
 import type { CreateItemOpts, ItemStatus, MarkDoneContext, MarkdownRoadmapFormat, RoadmapItem, RoadmapItemStatus, RoadmapSource, RoadmapSourceName } from "./types.js";
@@ -357,7 +358,7 @@ export class MarkdownRoadmap implements RoadmapSource {
 	 * `getItemPlan()` on the interface where possible.
 	 */
 	findPlanFile(slug: string): string | null {
-		const dirs = [resolve(this.repo, "docs", "plans"), resolve(this.repo, ".dev", "plans")];
+		const dirs = [resolve(this.repo, "docs", "plans"), registerPath(this.repo, "plans")];
 		for (const dir of dirs) {
 			const exact = resolve(dir, `${slug}.md`);
 			if (existsSync(exact)) return exact;

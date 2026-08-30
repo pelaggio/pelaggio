@@ -2,6 +2,7 @@ import { execSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { hasMarkerComment, PR_REVIEW_MARKER, postCommitStatus, runGhSoft, upsertMarkerComment } from "./github-posting.js";
+import { registerPath } from "./registers.js";
 import { type GhRunner, parseGhJson } from "./roadmap/github-issues.js";
 
 const REVIEW_CONTEXT = "review";
@@ -150,7 +151,7 @@ export function postLocalModeWorkflowComment(gh: GhRunner, ghRepo: string, prNum
  *  from a concurrent step's confinement audit — and an orphaned (crashed-cleanup) one that stays
  *  registered in `git worktree list` must not trip the snapshot. (#308) */
 export function isReviewHeadPath(root: string, repo: string): boolean {
-	const headsRoot = resolve(repo, ".dev", "review-heads");
+	const headsRoot = registerPath(repo, "review-heads");
 	const abs = resolve(root);
 	return abs === headsRoot || abs.startsWith(`${headsRoot}/`);
 }
@@ -166,9 +167,9 @@ export function prepareReviewHead(
 	pathSuffix = "",
 ): { diffCwd: string; baseRef: string; headRef: string } | null {
 	const run = exec ?? ((cmd, cwd) => execSync(cmd, { cwd, encoding: "utf-8" }));
-	const path = resolve(repo, ".dev", "review-heads", `${candidate.headSha}${pathSuffix}`);
+	const path = registerPath(repo, "review-heads", `${candidate.headSha}${pathSuffix}`);
 	try {
-		mkdirSync(resolve(repo, ".dev", "review-heads"), { recursive: true });
+		mkdirSync(registerPath(repo, "review-heads"), { recursive: true });
 		run(`git fetch origin refs/pull/${candidate.prNumber}/head:${headRef}`, repo);
 		// The status will be posted for candidate.headSha — the reviewed ref MUST be
 		// that exact commit. If the branch moved between listing and fetch, reviewing
@@ -189,7 +190,7 @@ export function prepareReviewHead(
  *  a leaked worktree is inert (gitignored, unreferenced) and is retried on the next same-SHA sweep. */
 export function cleanupReviewHead(repo: string, candidate: ReviewCandidate, exec?: (cmd: string, cwd: string) => string, headRef = `refs/pelaggio-review/pr-${candidate.prNumber}`, pathSuffix = ""): void {
 	const run = exec ?? ((cmd, cwd) => execSync(cmd, { cwd, encoding: "utf-8" }));
-	const path = resolve(repo, ".dev", "review-heads", `${candidate.headSha}${pathSuffix}`);
+	const path = registerPath(repo, "review-heads", `${candidate.headSha}${pathSuffix}`);
 	try {
 		if (existsSync(path)) run(`git worktree remove --force ${path}`, repo);
 		run(`git update-ref -d ${headRef}`, repo);

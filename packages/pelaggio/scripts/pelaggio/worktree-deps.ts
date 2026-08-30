@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { REPO } from "./config.js";
 import { withFileLock } from "./file-lock.js";
+import { registerPath } from "./registers.js";
 
 export interface WorkspaceEntry {
 	name: string;
@@ -608,7 +609,7 @@ const defaultLock: LockFn = (path, fn) => withFileLock(path, fn, { label: "node_
  */
 export async function repairMainNodeModules(mainRepo: string, runner: Runner = defaultRunner, lock: LockFn = defaultLock): Promise<RepairReport> {
 	if (findOutboundMainSymlinks(mainRepo).length === 0) return { ranInstall: false, repaired: [] };
-	return lock(resolve(mainRepo, ".dev", "node-modules-repair.lock"), () => {
+	return lock(registerPath(mainRepo, "node-modules-repair.lock"), () => {
 		const outbound = findOutboundMainSymlinks(mainRepo);
 		if (outbound.length === 0) return { ranInstall: false, repaired: [] };
 		runner.run("pnpm install --frozen-lockfile --ignore-scripts", mainRepo);

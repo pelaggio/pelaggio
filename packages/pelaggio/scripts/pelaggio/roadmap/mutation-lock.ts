@@ -1,5 +1,5 @@
-import { resolve } from "node:path";
 import { withFileLock } from "../file-lock.js";
+import { type RegisterName, registerPath } from "../registers.js";
 
 /**
  * Serializes mutations of shared roadmap files across processes on one host.
@@ -22,14 +22,14 @@ import { withFileLock } from "../file-lock.js";
  * path and timing envelope.
  */
 
-const LOCK_FILE = "roadmap-mutation.lock";
+const LOCK_FILE: RegisterName = "roadmap-mutation.lock";
 // Holders do file edits + one git commit — usually sub-second, but 2 minutes
 // covers cold-cache git on slow filesystems (WSL2 drvfs). Env overrides for tests.
 const STALE_MS = Number(process.env.AUTOPILOT_LOCK_STALE_MS) || 120_000;
 const ACQUIRE_TIMEOUT_MS = Number(process.env.AUTOPILOT_LOCK_TIMEOUT_MS) || 30_000;
 
 function lockPath(repo: string): string {
-	return resolve(repo, ".dev", LOCK_FILE);
+	return registerPath(repo, LOCK_FILE);
 }
 
 export function withMutationLock<T>(repo: string, fn: () => Promise<T> | T): Promise<T> {

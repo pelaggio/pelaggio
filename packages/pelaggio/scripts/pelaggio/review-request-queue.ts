@@ -22,6 +22,7 @@
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { type RegisterName, registerPath } from "./registers.js";
 
 export interface ReviewRequestRecord {
 	schemaVersion: 1;
@@ -50,7 +51,7 @@ export interface ListedReviewRequest {
  */
 export const REVIEW_CLAIM_STALE_MS = 4 * 60 * 60 * 1000;
 
-const QUEUE_DIR = "review-requests";
+const QUEUE_DIR: RegisterName = "review-requests";
 const DRAIN_LOCK = ".drain.lock";
 const SHA_RE = /^[0-9a-f]{7,40}$/i;
 const PENDING_RE = /^(\d+)-([0-9a-f]{7,40})\.json$/i;
@@ -58,7 +59,7 @@ const CLAIMED_SUFFIX = ".claimed";
 
 /** Directory holding the review-request queue for an already-resolved main repo. */
 export function reviewRequestsDir(mainRepo: string): string {
-	return resolve(mainRepo, ".dev", QUEUE_DIR);
+	return registerPath(mainRepo, QUEUE_DIR);
 }
 
 /** Lock file guarding one drain round (see `withFileLock` / `tryWithFileLock`). */

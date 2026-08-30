@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { chmodSync, lstatSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { devRoot, registerPath, registerRelativePath } from "../registers.js";
+import { escapeRegExp } from "../text.js";
 import type { ReviewFindingsParseErrorCode } from "./findings.js";
 import type { ReviewLoopResult, UnreadableSource } from "./loop.js";
 
@@ -70,7 +72,7 @@ export function validateDocReviewRecord(value: DocReviewRecord): DocReviewRecord
 
 function validateFailedSeatTranscriptDescriptor(value: { path: string; sha256: string }): void {
 	if (!/^[a-f0-9]{64}$/.test(value.sha256)) throw new Error("invalid doc review record transcript digest");
-	if (value.path.includes("..") || !/^\.dev\/doc-review-transcripts\/[^/]+$/.test(value.path)) throw new Error("invalid doc review record transcript path");
+	if (value.path.includes("..") || !new RegExp(`^${escapeRegExp(registerRelativePath("doc-review-transcripts"))}/[^/]+$`).test(value.path)) throw new Error("invalid doc review record transcript path");
 }
 
 export function validateDocReviewSeatTranscriptRecord(value: DocReviewSeatTranscriptRecord): DocReviewSeatTranscriptRecord {
@@ -85,12 +87,12 @@ export function validateDocReviewSeatTranscriptRecord(value: DocReviewSeatTransc
 
 export function writeReviewRecord(root: string, record: ReviewRecord): string {
 	const valid = validateReviewRecord(record);
-	return atomicWriteJson(join(root, ".dev", "review-records", `${valid.runId}.json`), valid);
+	return atomicWriteJson(registerPath(root, "review-records", `${valid.runId}.json`), valid);
 }
 
 export function writeDocReviewRecord(root: string, record: DocReviewRecord): string {
 	const valid = validateDocReviewRecord(record);
-	return atomicWriteJson(join(root, ".dev", "doc-review-records", `${valid.runId}.json`), valid);
+	return atomicWriteJson(registerPath(root, "doc-review-records", `${valid.runId}.json`), valid);
 }
 
 /**
@@ -99,7 +101,7 @@ export function writeDocReviewRecord(root: string, record: DocReviewRecord): str
  */
 export function writeDocReviewSeatTranscript(root: string, record: DocReviewSeatTranscriptRecord): { path: string; sha256: string } {
 	const valid = validateDocReviewSeatTranscriptRecord(record);
-	const relativePath = `.dev/doc-review-transcripts/${valid.runId}.json`;
+	const relativePath = registerRelativePath("doc-review-transcripts", `${valid.runId}.json`);
 	const body = `${JSON.stringify(valid, null, 2)}\n`;
 	const sha256 = createHash("sha256").update(body).digest("hex");
 	const directory = ensurePrivateTranscriptDirectory(root);
@@ -110,7 +112,7 @@ export function writeDocReviewSeatTranscript(root: string, record: DocReviewSeat
 
 /** Create each repository-controlled component separately and refuse links before any raw text write. */
 function ensurePrivateTranscriptDirectory(root: string): string {
-	const devDirectory = join(root, ".dev");
+	const devDirectory = devRoot(root);
 	const transcriptDirectory = join(devDirectory, "doc-review-transcripts");
 	for (const directory of [devDirectory, transcriptDirectory]) {
 		try {

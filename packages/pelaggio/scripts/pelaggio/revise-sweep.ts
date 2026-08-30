@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "
 import { dirname, resolve } from "node:path";
 import { withFileLock } from "./file-lock.js";
 import { isTrustedCommentAuthor, PR_REVIEW_MARKER } from "./github-posting.js";
+import { type RegisterName, registerFamilyPath, registerPath } from "./registers.js";
 import { type GhRunner, parseGhJson } from "./roadmap/github-issues.js";
 
 // ── Local revise sweep (issue #76) ─────────────────────────────────────
@@ -129,7 +130,7 @@ function runGhSoft(gh: GhRunner, args: string[]): string | null {
  * shared.
  */
 export function reviseFindingsPath(repo: string, id: string): string {
-	return resolve(repo, ".dev", `review-findings-${id.toLowerCase()}.md`);
+	return registerFamilyPath(repo, "review-findings-", `${id.toLowerCase()}.md`);
 }
 
 /**
@@ -275,7 +276,7 @@ export function claimRevision(gh: GhRunner, ghRepo: string, prNumber: number): b
 }
 
 /** Lock file guarding the revised-label test-and-set; lives beside the roadmap mutation lock. */
-const CLAIM_LOCK_FILE = "revise-claim.lock";
+const CLAIM_LOCK_FILE: RegisterName = "revise-claim.lock";
 // Critical section is three gh calls (label re-read, best-effort label create, label add),
 // each bounded by gh's own 30s timeout; 120s covers worst-case network stalls. Env overrides
 // for tests, read per call so `node --test` can set them without module-reload games.
@@ -284,7 +285,7 @@ const claimLockTimeoutMs = () => Number(process.env.PELAGGIO_REVISE_CLAIM_LOCK_T
 
 /** Exposed for tests and diagnostics — the single serialization point for revision claims. */
 export function reviseClaimLockPath(mainRepo: string): string {
-	return resolve(mainRepo, ".dev", CLAIM_LOCK_FILE);
+	return registerPath(mainRepo, CLAIM_LOCK_FILE);
 }
 
 export type ClaimRevisionOutcome = "claimed" | "already-claimed" | "unavailable";
@@ -343,7 +344,7 @@ export async function claimRevisionExclusive(gh: GhRunner, ghRepo: string, mainR
 
 /** Directory of per-item execution leases; `<root>/.lock` serializes every lease mutation. */
 export function reviseExecLeaseRoot(mainRepo: string): string {
-	return resolve(mainRepo, ".dev", "revise-exec");
+	return registerPath(mainRepo, "revise-exec");
 }
 
 // The short lock guards only a few fs operations per mutation; sizes mirror the claim lock.

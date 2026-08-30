@@ -4,7 +4,7 @@
  */
 
 import { closeSync, existsSync, fstatSync, openSync, readSync } from "node:fs";
-import { join } from "node:path";
+import { registerPath } from "pelaggio";
 import type { RunActivity } from "./types.js";
 
 const LIFECYCLE_TYPES = new Set(["pelaggio.watch-idle", "pelaggio.watch-wake", "pelaggio.budget-idle", "pelaggio.budget-wake", "pelaggio.suspended", "pelaggio.resumed"]);
@@ -74,7 +74,7 @@ export function projectRunActivity(event: Record<string, unknown>): RunActivity 
 }
 
 export function createFlowEventTailer(deps: FlowEventTailerDeps): FlowEventTailer {
-	const path = join(deps.cwd, ".dev", "flow-events", `${deps.runId}.jsonl`);
+	const path = registerPath(deps.cwd, "flow-events", `${deps.runId}.jsonl`);
 	const readSlice = deps.readSlice ?? defaultReadSlice;
 	const intervalMs = deps.intervalMs ?? 1000;
 	let offset = 0;

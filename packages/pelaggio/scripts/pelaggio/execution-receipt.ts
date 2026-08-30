@@ -12,8 +12,9 @@
  */
 import { createHash, randomBytes as nodeRandomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, relative } from "node:path";
 import type { Effect } from "./effects.js";
+import { registerPath, registerRelativePath } from "./registers.js";
 import type { ExecutionReceiptDescriptor, ProviderName, Step } from "./types.js";
 
 export const EXECUTION_RECEIPT_SCHEMA_VERSION = 1 as const;
@@ -161,12 +162,12 @@ export function digestExecutionReceipt(fileBytes: string | Buffer): string {
 
 /** Worktree-relative receipt path: `.dev/execution-receipts/{runId}/{step}-{attempt}.json`. */
 export function executionReceiptPath(cwd: string, runId: string, step: Step, attempt: number): string {
-	return join(cwd, ".dev", "execution-receipts", runId, `${step}-${attempt}.json`);
+	return registerPath(cwd, "execution-receipts", runId, `${step}-${attempt}.json`);
 }
 
 /** Worktree-relative locator for evidence registry / StepLog. */
 export function executionReceiptRelativePath(runId: string, step: Step, attempt: number): string {
-	return `.dev/execution-receipts/${runId}/${step}-${attempt}.json`;
+	return registerRelativePath("execution-receipts", runId, `${step}-${attempt}.json`);
 }
 
 /**

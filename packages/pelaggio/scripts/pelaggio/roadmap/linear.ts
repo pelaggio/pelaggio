@@ -1,6 +1,7 @@
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { registerPath } from "../registers.js";
 import { createClaimWorkspace } from "./git-claim.js";
 import type { CreateItemOpts, ItemStatus, LinearRoadmapConfig, MarkDoneContext, PlanLocation, RoadmapItem, RoadmapItemStatus, RoadmapSource, RoadmapSourceName } from "./types.js";
 
@@ -121,7 +122,7 @@ export class LinearRoadmap implements RoadmapSource {
 	}
 
 	resolvePlanPath(ctx: { id: string; worktree: string }): string {
-		return resolve(ctx.worktree, ".dev", "plans", `${ctx.id.toLowerCase()}.md`);
+		return registerPath(ctx.worktree, "plans", `${ctx.id.toLowerCase()}.md`);
 	}
 
 	async publishPlan(body: string, ctx: { id: string; worktree: string }): Promise<void> {
@@ -233,7 +234,7 @@ export class LinearRoadmap implements RoadmapSource {
 
 		const body = stripMarker(match.body);
 		const destRoot = ref.worktree ?? this.repo;
-		const destPath = resolve(destRoot, ".dev", "plans", `${id.toLowerCase()}.md`);
+		const destPath = registerPath(destRoot, "plans", `${id.toLowerCase()}.md`);
 		mkdirSync(dirname(destPath), { recursive: true });
 		writeFileSync(destPath, body);
 		return destPath;
@@ -258,7 +259,7 @@ export class LinearRoadmap implements RoadmapSource {
 
 	private findPlanFile(id: string, root: string): string | null {
 		const lower = id.toLowerCase();
-		const dirs = [resolve(root, "docs", "plans"), resolve(root, ".dev", "plans")];
+		const dirs = [resolve(root, "docs", "plans"), registerPath(root, "plans")];
 		const prefix = `${lower}-`;
 		for (const dir of dirs) {
 			const exact = resolve(dir, `${lower}.md`);

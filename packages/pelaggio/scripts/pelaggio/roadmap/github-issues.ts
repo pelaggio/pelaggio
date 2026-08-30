@@ -1,6 +1,7 @@
 import { execSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { registerPath } from "../registers.js";
 import { createClaimWorkspace } from "./git-claim.js";
 import type { CreateItemOpts, GithubRoadmapConfig, ItemStatus, MarkDoneContext, PlanLocation, PriorityLabelBackfillResult, RoadmapItem, RoadmapItemStatus, RoadmapSource, RoadmapSourceName } from "./types.js";
 import { isScope, type Scope } from "./types.js";
@@ -133,7 +134,7 @@ export class GitHubIssuesRoadmap implements RoadmapSource {
 	}
 
 	resolvePlanPath(ctx: { id: string; worktree: string }): string {
-		return resolve(ctx.worktree, ".dev", "plans", `${ctx.id}.md`);
+		return registerPath(ctx.worktree, "plans", `${ctx.id}.md`);
 	}
 
 	async publishPlan(body: string, ctx: { id: string; worktree: string }): Promise<void> {
@@ -323,7 +324,7 @@ export class GitHubIssuesRoadmap implements RoadmapSource {
 
 		const body = stripMarker(match.body);
 		const destRoot = ref.worktree ?? this.repo;
-		const destPath = resolve(destRoot, ".dev", "plans", `${n}.md`);
+		const destPath = registerPath(destRoot, "plans", `${n}.md`);
 		mkdirSync(dirname(destPath), { recursive: true });
 		writeFileSync(destPath, body);
 		return destPath;
@@ -347,7 +348,7 @@ export class GitHubIssuesRoadmap implements RoadmapSource {
 	}
 
 	private findPlanFile(n: string, root: string): string | null {
-		const dirs = [resolve(root, "docs", "plans"), resolve(root, ".dev", "plans")];
+		const dirs = [resolve(root, "docs", "plans"), registerPath(root, "plans")];
 		const prefix = `issue-${n}-`;
 		for (const dir of dirs) {
 			const exact = resolve(dir, `${n}.md`);

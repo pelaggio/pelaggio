@@ -1,8 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { REVIEW_CONFIG, type ReviewRunner, ROADMAP_GITHUB, ROADMAP_SOURCE } from "./config.js";
 import { buildEffectsManifestReceipt, ExecutionReceiptError, type GitRevisionBinding, writeExecutionReceipt } from "./execution-receipt.js";
 import { checkpoint, ensureCheckpointed, mainWorktree } from "./git.js";
+import { registerPath } from "./registers.js";
 import { enqueueReviewRequest, type NewReviewRequest } from "./review-request-queue.js";
 import type { RoadmapSource } from "./roadmap/index.js";
 import { SHIP_TARGET_NAMES } from "./ship/index.js";
@@ -232,7 +233,7 @@ function maybeEnqueueReviewRequest(effect: ShipDecisionEffect, ctx: EffectsDispa
 }
 
 export function effectManifestPath(ctx: EffectsContext): string {
-	return join(ctx.cwd, ".dev", "effects", ctx.runId, `${ctx.step}-${ctx.attempt}.json`);
+	return registerPath(ctx.cwd, "effects", ctx.runId, `${ctx.step}-${ctx.attempt}.json`);
 }
 
 export function writeEffectsManifest(ctx: EffectsContext, effects: readonly Effect[]): void {

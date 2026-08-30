@@ -1,5 +1,6 @@
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
+import { type RegisterName, registerPath } from "./registers.js";
 
 /**
  * Attempt identity (#467 / ADR-0026 decision 10, property 1).
@@ -33,7 +34,7 @@ import { join, resolve } from "node:path";
  * they land the attempt number is an identity, never an authorization.
  */
 
-const ATTEMPTS_DIR = "attempts";
+const ATTEMPTS_DIR: RegisterName = "attempts";
 /**
  * Monotonic high-water marks: a directory of empty files named for each value ever
  * allocated, created with O_EXCL and never rewritten.
@@ -69,7 +70,7 @@ const SAFE_ID = /[^a-z0-9._-]+/gi;
 
 /** Directory holding attempt records for an already-resolved main repo. */
 export function attemptsDir(mainRepo: string): string {
-	return resolve(mainRepo, ".dev", ATTEMPTS_DIR);
+	return registerPath(mainRepo, ATTEMPTS_DIR);
 }
 
 /**

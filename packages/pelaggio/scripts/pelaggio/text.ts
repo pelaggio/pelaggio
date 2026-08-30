@@ -30,3 +30,8 @@ export function fmtWait(ms: number): string {
 export function formatResumeHint(ids: string[]): string {
 	return ids.map((id) => `pnpm pelaggio --resume ${id}`).join("\n          ");
 }
+
+/** Escape a literal for use inside a `RegExp` source. */
+export function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}

@@ -3,6 +3,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statS
 import { isAbsolute, join, resolve } from "node:path";
 import { ulid } from "ulid";
 import { LOG_PATH, REPO } from "./config.js";
+import { devRoot, registerPath } from "./registers.js";
 import type { CycleLogEntry, EventLogDiagnostic, EventLogDiagnosticKind, EventLogDiagnostics, EventWriter, FlowEvent, FlowEventInput, FlowEventProjection, PelaggioEventType, ReadEventLogResult } from "./types.js";
 
 export const PELAGGIO_EVENT_TYPES = [
@@ -126,7 +127,7 @@ export function createEventWriter(options: CreateEventWriterOptions = {}): Event
 	const streamId = options.streamId ?? idFactory();
 	const executionId = options.executionId ?? idFactory();
 	if (!isUlid(streamId) || !isUlid(executionId)) throw new Error("Flow writer IDs must be ULID-shaped");
-	const segmentPath = join(root, ".dev", "flow-events", `${streamId}.jsonl`);
+	const segmentPath = registerPath(root, "flow-events", `${streamId}.jsonl`);
 	let seq = 0;
 	return {
 		streamId,
@@ -151,7 +152,7 @@ export function createEventWriter(options: CreateEventWriterOptions = {}): Event
 			if (!event) throw new Error("Invalid flow event");
 			const record = `${JSON.stringify(event)}\n`;
 			if (Buffer.byteLength(record, "utf8") > MAX_FLOW_EVENT_BYTES) throw new Error(`Flow event exceeds ${MAX_FLOW_EVENT_BYTES} byte limit`);
-			mkdirSync(join(root, ".dev", "flow-events"), { recursive: true });
+			mkdirSync(registerPath(root, "flow-events"), { recursive: true });
 			appendFileSync(segmentPath, record, "utf8");
 			seq = event.seq;
 			return event;
@@ -262,8 +263,8 @@ export interface ReadEventLogOptions {
 
 export function readEventLog(options: ReadEventLogOptions = {}): ReadEventLogResult {
 	const root = options.root ?? REPO;
-	const eventsDir = options.eventsDir ?? join(root, ".dev", "flow-events");
-	const cycleLogPath = options.cycleLogPath === undefined ? (root === REPO ? LOG_PATH : join(root, ".dev", "pelaggio-log.jsonl")) : options.cycleLogPath;
+	const eventsDir = options.eventsDir ?? registerPath(root, "flow-events");
+	const cycleLogPath = options.cycleLogPath === undefined ? (root === REPO ? LOG_PATH : registerPath(root, "pelaggio-log.jsonl")) : options.cycleLogPath;
 	const diagnostics = emptyDiagnostics();
 	const events: FlowEvent[] = [];
 	if (existsSync(eventsDir)) {
@@ -366,6 +367,6 @@ export function findLoggedArtifactAuthor(itemId: string, step: "plan" | "impleme
 }
 
 export function appendLog(entry: Record<string, unknown>): void {
-	mkdirSync(resolve(REPO, ".dev"), { recursive: true });
+	mkdirSync(devRoot(REPO), { recursive: true });
 	appendFileSync(LOG_PATH, `${JSON.stringify(entry)}\n`);
 }
