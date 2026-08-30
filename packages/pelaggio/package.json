@@ -1,7 +1,7 @@
 {
 	"name": "pelaggio",
 	"version": "0.1.0",
-	"description": "Extend how much one developer can ship: autonomous plan → implement → review → ship cycles with Claude Code, Codex, Grok, or OpenCode — worktree-isolated, budget-capped, PR-gated, fail-closed",
+	"description": "Extend how much one developer can ship: autonomous plan \u2192 implement \u2192 review \u2192 ship cycles with Claude Code, Codex, Grok, or OpenCode \u2014 worktree-isolated, budget-capped, PR-gated, fail-closed",
 	"keywords": [
 		"ai",
 		"agent",
@@ -81,5 +81,8 @@
 		"@linear/sdk": {
 			"optional": true
 		}
+	},
+	"devDependencies": {
+		"typescript": "^6.0.3"
 	}
 }
