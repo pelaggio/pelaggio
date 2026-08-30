@@ -46,9 +46,11 @@ formal analysis of that cohort.
 
 `review.authoring.enabled: local` replaces the single `shakedown-code` session with
 two bounded cold-review/Judge passes and at most one author revision. Omission never
-clears a carried fingerprint; malformed or incomplete Judge output fails closed.
-Safety-class survivors always hard-block. Judgment dissent may continue only for PR
-ship targets; direct-push parks.
+clears a carried fingerprint; malformed, incomplete, or unavailable Judge output is
+recorded as softened provenance and clears no candidate. The retained findings, not
+Judge availability, determine the verdict, so must-fix survivors still hard-block while
+a clean reviewer result stays clean. Judgment dissent may continue only for PR ship
+targets; direct-push parks.
 
 Concurrent reviewer (and Judge) seats each run in a throwaway detached worktree under
 `.dev/authoring-review-seats/<reviewed-sha>/` pinned to the reviewed commit, so
@@ -1033,8 +1035,9 @@ The reviewer seats run the `pr-review` skill in `--document` mode; the Judge run
 
 Unreadable reviewer/Judge output is observed at `runReviewLoop` as a typed attempt (readable
 empty/non-empty vs unreadable parse code plus structural source facts: character length and
-whether the role's start/end delimiters appear). Gate semantics are unchanged: an unreadable
-reviewer still softens diversity; an unreadable Judge still clears no candidates.
+whether the role's start/end delimiters appear). An unreadable reviewer leaves its verdict cell
+incomplete; an unreadable Judge softens provenance and clears no candidates, but its absence does
+not manufacture a blocking verdict. A Judge rate-limit signal still parks the run.
 Rendered review provenance uses one code-invariant parse-failure diagnostic per role; specific
 parse codes and output-derived source facts remain confined to the structured local observation.
 

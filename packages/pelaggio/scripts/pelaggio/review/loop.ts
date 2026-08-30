@@ -111,6 +111,10 @@ const classRank = (value: ReviewFindingClass, taxonomy: TaxonomyConfig): number 
 	return idx >= 0 ? order.length - idx : isSafetyClass(value, taxonomy) ? 1 : 0;
 };
 const blockingRank = (finding: AuthoringReviewFinding, taxonomy: TaxonomyConfig): number => (finding.severity === "must-fix" ? 2 * (safetyClasses(taxonomy).length + 1) : 0) + classRank(finding.class, taxonomy);
+const softenDiversity = (current: DiversityStatus, explanation: string): DiversityStatus => {
+	if (current.state === "met") return { state: "softened", explanation };
+	return current.explanation.includes(explanation) ? current : { state: "softened", explanation: `${current.explanation}; ${explanation}` };
+};
 /**
  * Effective safety predicate for the gate. With the floor disabled, no class is treated as a safety
  * floor for retention / hard-block / downgrade-invalidation — the deterministic code-diff taxonomy is
@@ -195,12 +199,11 @@ export function classifyReviewOutcome(
 	survivors: readonly ReviewCandidate[],
 	notes: readonly ReviewCandidate[],
 	rulings: ReadonlyMap<string, JudgeRuling>,
-	judgeValid: boolean,
 	pass: number,
 	taxonomy: TaxonomyConfig = BASELINE_TAXONOMY,
 	safetyFloor: SafetyFloor = "enabled",
 ): ReviewOutcome {
-	if (!judgeValid || survivors.some((candidate) => isSafetyFloorClass(candidate.finding.class, taxonomy, safetyFloor) || rulings.get(candidate.candidateId) === "unfixable-blocker")) return "hard-block";
+	if (survivors.some((candidate) => isSafetyFloorClass(candidate.finding.class, taxonomy, safetyFloor) || rulings.get(candidate.candidateId) === "unfixable-blocker")) return "hard-block";
 	if (survivors.some((candidate) => rulings.get(candidate.candidateId) === "judgment-dissent")) return "dissent";
 	if (survivors.length > 0) return "hard-block";
 	if (notes.length === 0) return "converged-clean";
@@ -316,8 +319,7 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 		const incompleteSeats = reviewerRecords.filter((record) => !record.ok).map((record) => record.identity.seatId);
 		if (incompleteSeats.length > 0) {
 			const explanation = `reviewer seats did not complete: ${incompleteSeats.join(", ")}`;
-			if (diversity.state === "met") diversity = { state: "softened", explanation };
-			else if (!diversity.explanation.includes(explanation)) diversity = { state: "softened", explanation: `${diversity.explanation}; ${explanation}` };
+			diversity = softenDiversity(diversity, explanation);
 		}
 		if (!reviewerRecords.some((record) => record.ok)) {
 			// No reviewer seat completed. Persist the pass so each seat's `diagnostic` (WHY it failed —
@@ -360,14 +362,18 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 		try {
 			judgeResult = await options.runSeat({ role: "judge", slot: policy.judge, pass, prompt: options.prompts.judge(candidates, pass), parkSignal: judgeSignal });
 		} catch (reason) {
+			if (judgeSignal.parked) Object.assign(options.parkSignal, judgeSignal);
+			diversity = softenDiversity(diversity, `judge seat did not complete: ${policy.judge.id}`);
+			notes = candidates.filter((candidate) => candidate.finding.severity !== "must-fix");
+			carried = candidates.filter((candidate) => candidate.finding.severity === "must-fix");
 			passes.push({
 				pass,
 				reviewers: reviewerRecords,
 				judge: { identity: judgeIdentity, valid: false, cost: 0, turns: 0, diagnostic: scrubDiagnostic(String(reason)), attempts: [rejectedAttempt()] },
 				carriedBefore,
-				carriedAfter: candidates.filter((candidate) => candidate.finding.severity === "must-fix").map((candidate) => candidate.fingerprint),
+				carriedAfter: carried.map((candidate) => candidate.fingerprint),
 			});
-			return withFloor({ outcome: "hard-block", diversity, passes, survivors: candidates, notes, cost });
+			return withFloor({ outcome: options.parkSignal.parked ? "budget" : classifyReviewOutcome(carried, notes, new Map(), pass, taxonomy, safetyFloor), diversity, passes, survivors: carried, notes, cost });
 		}
 		if (judgeSignal.parked) Object.assign(options.parkSignal, judgeSignal);
 		cost += judgeResult.cost;
@@ -432,6 +438,9 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 				diagnostic = error instanceof Error ? error.message : String(error);
 			}
 		}
+		if (!report) {
+			diversity = softenDiversity(diversity, `judge seat did not complete: ${policy.judge.id}`);
+		}
 		const rulings = new Map<string, JudgeRuling>();
 		const next = report
 			? candidates.filter((candidate) => {
@@ -455,7 +464,7 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 			carriedBefore,
 			carriedAfter: carried.map((item) => item.fingerprint),
 		});
-		const outcome = classifyReviewOutcome(carried, notes, rulings, Boolean(report), pass, taxonomy, safetyFloor);
+		const outcome = options.parkSignal.parked ? "budget" : classifyReviewOutcome(carried, notes, rulings, pass, taxonomy, safetyFloor);
 		// Escalate-early: revise->re-review only when the carried set can actually converge — i.e. EVERY
 		// surviving must-fix is fixable-by-the-loop. A survivor is unclearable when it is safety-class
 		// (retained every pass by #272, a lone Judge can never clear it) or the Judge ruled it
