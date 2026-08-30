@@ -4,8 +4,6 @@ import type { CycleResult, Decision, ReviewEscalation, Step } from "./types.js";
 
 export { NOTIFY_EVENTS, NOTIFY_FORMATS, type NotifyConfig, type NotifyEvent, type NotifyFormat } from "./notify-schema.js";
 
-// ── Events & formats ───────────────────────────────────────────────────
-
 // ── Payload & wire request ─────────────────────────────────────────────
 
 interface NotifyPayloadBase {

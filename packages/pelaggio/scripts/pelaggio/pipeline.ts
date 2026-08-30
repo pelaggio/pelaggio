@@ -3144,7 +3144,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		let consecutiveTransientErrors = 0;
 		let consecutiveQuarantines = 0;
 		let campaignHalted = false;
-		// Single-sourced with `notify.ts`'s classifier via `RECOVERABLE_ERRORS` (types.ts) to
+		// Single-sourced with `notify.ts`'s classifier via `RECOVERABLE_ERRORS` (cycle-errors.ts) to
 		// prevent drift. `pick:unknown-id` and `pick:blocked` are intentionally *absent* — fatal
 		// so typos in `--item X,Y,Z` and user-requested blocked items halt loudly instead of
 		// silently skipping. `pick:unknown` (parser fallback) stays recoverable.

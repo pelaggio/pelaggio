@@ -11,7 +11,8 @@ Six dimensions — apply when planning, reviewing, or fixing code in this repo. 
 **Well-tested** — Pure helpers in `helpers.ts` have unit tests in `__tests__/helpers.test.ts` via `node:test` + `npx tsx --test`. Pipeline integration is harder to test (it spawns real SDK sessions) — acceptable to leave untested until a mocking approach emerges. Edge cases matter especially in `parseResetTime`, `parseWaitFlag`, `parseItemId`, `parseVerdict` — all of which are regex-driven and failure-prone.
 
 **Well-factored** — Strict module boundaries:
-- `config.ts` — static configuration (BUDGETS, TURN_LIMITS, EFFORT, MODEL_PROFILES, STEPS, REPO path). No business logic. No hardcoded model strings anywhere else.
+- `step-names.ts` — `STEPS` / `Step`: the source of truth for step names; adding a step means updating every step-indexed map in `config.ts`.
+- `config.ts` — static configuration (BUDGETS, TURN_LIMITS, EFFORT, MODEL_PROFILES, REPO path). No business logic. No hardcoded model strings anywhere else.
 - `helpers.ts` — pure functions and shell wrappers (git, fs). No SDK calls, no event emission.
 - `types.ts` — type-only. No runtime code.
 - `step-runner.ts` — owns the SDK `query()` loop, hook installation, event streaming. No business logic.

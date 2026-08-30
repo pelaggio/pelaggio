@@ -45,12 +45,13 @@ function fields(source: string, name: string): { field: string; optional: boolea
 }
 
 const config = src("config.ts");
+const stepNames = src("step-names.ts");
 const stepRunner = src("step-runner.ts");
 const types = src("types.ts");
 const pipeline = src("pipeline.ts");
 
-const pipelineSteps = /export const STEPS = \[([^\]]*)\]/.exec(config)?.[1].match(/"([^"]+)"/g)?.map((s) => s.slice(1, -1)) ?? [];
-const extraSteps = /export type Step = PipelineStep \| ([^;]*);/.exec(config)?.[1].match(/"([^"]+)"/g)?.map((s) => s.slice(1, -1)) ?? [];
+const pipelineSteps = /export const STEPS = \[([^\]]*)\]/.exec(stepNames)?.[1].match(/"([^"]+)"/g)?.map((s) => s.slice(1, -1)) ?? [];
+const extraSteps = /export type Step = PipelineStep \| ([^;]*);/.exec(stepNames)?.[1].match(/"([^"]+)"/g)?.map((s) => s.slice(1, -1)) ?? [];
 const stepIndexedMaps = [...config.matchAll(/^\t*(?:readonly )?(\w+): (?:Readonly<)?(?:Partial<)?Record<(?:string, (?:Partial<)?)?Record<Step,|^\t*(\w+): (?:Partial<)?Record<Step,/gm)].map((m) => m[1] ?? m[2]);
 const perStepBranches = (pipeline.match(/step === "|name === "|stepName === "/g) ?? []).length;
 

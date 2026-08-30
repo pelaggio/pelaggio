@@ -44,7 +44,6 @@ export interface SessionRecord {
 	writeSet?: string[];
 }
 
-/** Immutable identity for inventory / fallback eligibility. pid and expiresAt are excluded. */
 export type SessionEligibilityLeg = "binding" | "fallback";
 
 export interface AcceptedSession {

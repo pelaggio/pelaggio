@@ -1,5 +1,6 @@
-/** Closed set of recoverable cycle error classifications (L0 runtime constant; `types.ts` stays type-only). */
 /**
+ * L0 runtime constant — lives here rather than in `types.ts` so that file stays type-only.
+ *
  * Cycle `error` strings that are recoverable / informational — a worker keeps pulling
  * subsequent cycles instead of halting, and (per `notify.ts`) they never page a human.
  * Single-sourced here so the orchestrator's `RECOVERABLE` set and the notification

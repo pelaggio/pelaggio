@@ -1,7 +1,6 @@
-import type { RECOVERABLE_ERRORS } from "./cycle-errors.js";
 import type { Step } from "./step-names.js";
 
-export type { RECOVERABLE_ERRORS, Step };
+export type { Step };
 
 // ── Step results ───────────────────────────────────────────────────────
 
@@ -644,6 +643,7 @@ export interface Mutex {
 
 // ── Confinement sessions (types only; behaviour in confinement/sessions.ts) ──
 
+/** Immutable identity for inventory / fallback eligibility. pid and expiresAt are excluded. */
 export interface SessionIdentity {
 	sessionId: string;
 	claimedItem: string;
